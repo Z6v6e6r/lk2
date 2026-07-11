@@ -1,0 +1,83 @@
+name: phub-production
+
+x-runtime: &runtime
+  env_file:
+    - ${RUNTIME_ENV_FILE:-/etc/phub/runtime.env}
+  restart: unless-stopped
+  networks:
+    - application
+  logging:
+    driver: local
+    options:
+      max-size: 20m
+      max-file: '5'
+
+services:
+  api:
+    <<: *runtime
+    image: ${REGISTRY}/phub-api@${API_IMAGE_DIGEST}
+    ports:
+      - '${APP_BIND_ADDRESS:-127.0.0.1}:3000:3000'
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3000/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    stop_grace_period: 30s
+    profiles: [app]
+
+  realtime:
+    <<: *runtime
+    image: ${REGISTRY}/phub-realtime@${REALTIME_IMAGE_DIGEST}
+    ports:
+      - '${APP_BIND_ADDRESS:-127.0.0.1}:3001:3001'
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3001/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    stop_grace_period: 30s
+    profiles: [app]
+
+  worker:
+    <<: *runtime
+    image: ${REGISTRY}/phub-worker@${WORKER_IMAGE_DIGEST}
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3002/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    stop_grace_period: 60s
+    profiles: [worker]
+
+  migrator:
+    <<: *runtime
+    image: ${REGISTRY}/phub-migrator@${MIGRATOR_IMAGE_DIGEST}
+    restart: 'no'
+    profiles: [migration]
+
+networks:
+  application:
+    external: true
+    name: phub-private

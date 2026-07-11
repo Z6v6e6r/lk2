@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.json",
+  "include": [
+    "apps/web/**/*.ts",
+    "apps/web/**/*.tsx",
+    "packages/api-sdk/**/*.ts",
+    "packages/ui/**/*.tsx"
+  ],
+  "exclude": ["node_modules", "dist"]
+}

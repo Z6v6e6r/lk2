@@ -1,0 +1,20 @@
+openapi: 3.1.0
+info:
+  title: PadlHub Admin API
+  version: 1.0.0
+  description: Canonical CUP boundary. Operations remain closed until audit and authorization are implemented.
+  license:
+    name: Proprietary
+    identifier: LicenseRef-Proprietary
+servers:
+  - url: https://api.padlhub.ru/admin/api/v1
+security:
+  - PadlHubAdminJwt: []
+paths: {}
+components:
+  securitySchemes:
+    PadlHubAdminJwt:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: PadlHub-issued staff JWT with the dedicated phub-admin audience.

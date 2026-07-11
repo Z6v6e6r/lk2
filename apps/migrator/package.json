@@ -1,0 +1,14 @@
+{
+  "name": "@phub/migrator",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsup --config tsup.config.ts",
+    "start": "node dist/main.js"
+  },
+  "dependencies": {
+    "@phub/database": "0.1.0",
+    "pg": "8.22.0"
+  }
+}

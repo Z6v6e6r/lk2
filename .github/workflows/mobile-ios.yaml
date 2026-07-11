@@ -1,0 +1,25 @@
+name: iOS TestFlight build
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['mobile-v*']
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-latest
+    environment: mobile-ios
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: test -d apps/mobile/ios || { echo 'Generate and review the native iOS project first.'; exit 1; }
+      - run: npm ci
+      - run: npm run build -w @phub/mobile && npm run cap:sync -w @phub/mobile
+      - name: Native signing and TestFlight upload
+        run: echo "Connect the approved App Store Connect signing workflow before the first release."

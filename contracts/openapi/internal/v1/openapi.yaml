@@ -1,0 +1,20 @@
+openapi: 3.1.0
+info:
+  title: PadlHub Internal API
+  version: 1.0.0
+  description: Service-only boundary; never exposed to web, mobile, Tilda or CUP clients.
+  license:
+    name: Proprietary
+    identifier: LicenseRef-Proprietary
+servers:
+  - url: https://internal.padlhub.ru/internal/api/v1
+security:
+  - PadlHubInternalJwt: []
+paths: {}
+components:
+  securitySchemes:
+    PadlHubInternalJwt:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Short-lived service JWT with the dedicated phub-internal audience.

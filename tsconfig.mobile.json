@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.json",
+  "include": [
+    "apps/mobile/**/*.ts",
+    "apps/mobile/**/*.tsx",
+    "packages/api-sdk/**/*.ts",
+    "packages/auth/**/*.ts",
+    "packages/ui/**/*.tsx",
+    "packages/viva-client-adapter/**/*.ts"
+  ],
+  "exclude": ["node_modules", "dist", "apps/mobile/android", "apps/mobile/ios"]
+}

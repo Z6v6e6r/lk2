@@ -1,0 +1,247 @@
+name: phub
+
+x-node-service: &node-service
+  build:
+    context: .
+    dockerfile: infra/docker/Dockerfile.dev
+  env_file:
+    - .env
+  environment:
+    DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+    REDIS_URL: redis://redis:6379
+    RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672
+    S3_ENDPOINT: http://minio:9000
+    OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+  volumes:
+    - .:/workspace
+    - workspace_node_modules:/workspace/node_modules
+  restart: unless-stopped
+  networks:
+    - edge
+    - data
+
+services:
+  api:
+    <<: *node-service
+    command: npm run dev:api
+    ports:
+      - '${PHUB_BIND_ADDRESS:-127.0.0.1}:3000:3000'
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3000/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  worker:
+    <<: *node-service
+    command: npm run dev:worker
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3002/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  realtime:
+    <<: *node-service
+    command: npm run dev:realtime
+    ports:
+      - '${PHUB_BIND_ADDRESS:-127.0.0.1}:3001:3001'
+    depends_on:
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3001/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  migrator:
+    <<: *node-service
+    command: npm run db:migrate
+    profiles: [tools]
+    restart: 'no'
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  web:
+    <<: *node-service
+    command: npm run dev:web
+    environment:
+      PHUB_DEV_API_PROXY_TARGET: http://api:3000
+    profiles: [clients]
+    ports:
+      - '${PHUB_BIND_ADDRESS:-127.0.0.1}:5173:5173'
+
+  cup-admin:
+    <<: *node-service
+    command: npm run dev:cup
+    profiles: [clients]
+    ports:
+      - '${PHUB_BIND_ADDRESS:-127.0.0.1}:5174:5174'
+
+  mobile:
+    <<: *node-service
+    command: npm run dev:mobile
+    profiles: [clients]
+    ports:
+      - '${PHUB_BIND_ADDRESS:-127.0.0.1}:5175:5175'
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - '127.0.0.1:5432:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    networks:
+      - data
+
+  redis:
+    image: redis:7-alpine
+    command: ['redis-server', '--appendonly', 'yes', '--save', '60', '1']
+    ports:
+      - '127.0.0.1:6379:6379'
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+    networks:
+      - data
+
+  rabbitmq:
+    image: rabbitmq:4-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
+    ports:
+      - '127.0.0.1:5672:5672'
+      - '127.0.0.1:15672:15672'
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ['CMD', 'rabbitmq-diagnostics', '-q', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    networks:
+      - data
+
+  minio:
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    command: server /data --console-address :9001
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    ports:
+      - '127.0.0.1:9000:9000'
+      - '127.0.0.1:9001:9001'
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://127.0.0.1:9000/minio/health/live']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    networks:
+      - data
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.120.0
+    command: ['--config=/etc/otelcol-contrib/config.yaml']
+    volumes:
+      - ./infra/monitoring/otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro
+    ports:
+      - '127.0.0.1:4317:4317'
+      - '127.0.0.1:4318:4318'
+      - '127.0.0.1:8889:8889'
+    restart: unless-stopped
+    networks:
+      - edge
+      - data
+
+  prometheus:
+    image: prom/prometheus:v3.2.1
+    profiles: [monitoring]
+    volumes:
+      - ./infra/monitoring/prometheus.yaml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - '127.0.0.1:9090:9090'
+    networks:
+      - data
+
+  grafana:
+    image: grafana/grafana:11.5.2
+    profiles: [monitoring]
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./infra/monitoring/grafana-datasources.yaml:/etc/grafana/provisioning/datasources/datasources.yaml:ro
+    ports:
+      - '127.0.0.1:3101:3000'
+    networks:
+      - data
+
+networks:
+  edge:
+  data:
+    name: phub-local-data
+
+volumes:
+  workspace_node_modules:
+  postgres_data:
+  redis_data:
+  rabbitmq_data:
+  minio_data:
+  prometheus_data:
+  grafana_data:

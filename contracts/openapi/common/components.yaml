@@ -1,0 +1,118 @@
+components:
+  schemas:
+    ApiError:
+      type: object
+      additionalProperties: false
+      required: [code, message, correlationId]
+      properties:
+        code:
+          type: string
+          pattern: '^[A-Z][A-Z0-9_]*$'
+        message:
+          type: string
+        correlationId:
+          type: string
+          pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$'
+    UserContext:
+      type: object
+      additionalProperties: false
+      required: [tenantId, userId, roles, permissions]
+      properties:
+        tenantId:
+          type: string
+          format: uuid
+        userId:
+          type: string
+          format: uuid
+        roles:
+          type: array
+          items:
+            type: string
+        permissions:
+          type: array
+          items:
+            type: string
+  parameters:
+    CorrelationId:
+      name: X-Correlation-ID
+      in: header
+      required: false
+      description: Caller-provided safe identifier; PadlHub generates one when absent or invalid.
+      schema:
+        type: string
+        pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$'
+    TenantKey:
+      name: tenantKey
+      in: path
+      required: true
+      description: Stable public tenant key resolved and authorized by PadlHub.
+      schema:
+        type: string
+        pattern: '^[a-z0-9][a-z0-9-]{1,62}$'
+  headers:
+    CorrelationId:
+      description: Sanitized request correlation identifier.
+      required: true
+      schema:
+        type: string
+        pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$'
+  responses:
+    BadRequest:
+      description: Path, header or request data is invalid.
+      headers:
+        X-Correlation-ID:
+          $ref: '#/components/headers/CorrelationId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+    Unauthorized:
+      description: PadlHub JWT is missing or invalid.
+      headers:
+        X-Correlation-ID:
+          $ref: '#/components/headers/CorrelationId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+    Forbidden:
+      description: The principal has no access to the resolved tenant.
+      headers:
+        X-Correlation-ID:
+          $ref: '#/components/headers/CorrelationId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+    NotFound:
+      description: The requested tenant or resource was not found.
+      headers:
+        X-Correlation-ID:
+          $ref: '#/components/headers/CorrelationId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+    TooManyRequests:
+      description: Tenant or principal rate limit exceeded.
+      headers:
+        X-Correlation-ID:
+          $ref: '#/components/headers/CorrelationId'
+        Retry-After:
+          description: Seconds before a bounded retry.
+          schema:
+            type: integer
+            minimum: 1
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+    ServiceUnavailable:
+      description: A required dependency or safe source is unavailable.
+      headers:
+        X-Correlation-ID:
+          $ref: '#/components/headers/CorrelationId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'

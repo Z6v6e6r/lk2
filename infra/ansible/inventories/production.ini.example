@@ -1,0 +1,13 @@
+[app]
+production-app-a ansible_host=192.0.2.20
+production-app-b ansible_host=192.0.2.21
+
+[worker]
+production-worker-1 ansible_host=192.0.2.22
+
+[phub:children]
+app
+worker
+
+[phub:vars]
+ansible_user=deploy-bootstrap

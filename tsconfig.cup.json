@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.json",
+  "include": [
+    "apps/cup-admin/**/*.ts",
+    "apps/cup-admin/**/*.tsx",
+    "packages/api-sdk/**/*.ts",
+    "packages/ui/**/*.tsx"
+  ],
+  "exclude": ["node_modules", "dist"]
+}

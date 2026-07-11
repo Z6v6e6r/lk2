@@ -1,0 +1,33 @@
+:root {
+  color: #ecf6ef;
+  background: #102117;
+  font-family: Inter, system-ui, sans-serif;
+}
+body {
+  margin: 0;
+}
+main {
+  min-height: 100vh;
+  display: grid;
+  align-content: center;
+  gap: 16px;
+  padding: clamp(28px, 8vw, 96px);
+}
+span {
+  color: #71d380;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+h1 {
+  margin: 0;
+  font-size: clamp(44px, 10vw, 110px);
+  line-height: 0.9;
+  max-width: 8ch;
+}
+p {
+  color: #aec2b3;
+  font-size: 19px;
+  line-height: 1.5;
+  max-width: 620px;
+}

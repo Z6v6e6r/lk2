@@ -1,0 +1,375 @@
+openapi: 3.1.0
+info:
+  title: PadlHub User API
+  version: 1.0.0
+  description: Canonical user-facing API. Public identifiers are PadlHub UUIDs.
+  license:
+    name: Proprietary
+    identifier: LicenseRef-Proprietary
+servers:
+  - url: https://api.padlhub.ru/user/api/v1
+security:
+  - PadlHubUserJwt: []
+paths:
+  /{tenantKey}/auth/challenges:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/IdempotencyKey'
+    post:
+      operationId: createAuthChallenge
+      summary: Request a provider-neutral authentication challenge
+      description: |
+        Starts phone authentication without exposing the active identity provider.
+        The public request and response remain PadlHub-owned when that provider changes.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AuthChallengeRequest'
+      responses:
+        '202':
+          description: The one-time-code challenge was accepted.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthChallenge'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/auth/challenges/{challengeId}/verify:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/ChallengeId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+    post:
+      operationId: verifyAuthChallenge
+      summary: Verify a challenge and create a PadlHub session
+      description: |
+        Verifies the one-time code through the active identity provider, maps the
+        provider subject to a PadlHub UUID and returns only a PadlHub access JWT.
+        The rotating refresh token is delivered exclusively through the HttpOnly
+        `phub_refresh` cookie; external identity tokens are never returned to clients.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VerifyAuthChallengeRequest'
+      responses:
+        '200':
+          description: The challenge was verified and a PadlHub session was created.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+            Set-Cookie:
+              $ref: '#/components/headers/RefreshCookie'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthenticatedSession'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: '#/components/responses/AuthenticationRejected'
+        '409':
+          $ref: '#/components/responses/AuthenticationRejected'
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '410':
+          $ref: '#/components/responses/AuthenticationRejected'
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/auth/session/refresh:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/RefreshSessionIntent'
+      - $ref: '#/components/parameters/IdempotencyKey'
+    post:
+      operationId: refreshAuthSession
+      summary: Rotate the refresh cookie and issue a new PadlHub access JWT
+      description: |
+        Uses the HttpOnly `phub_refresh` cookie. The refresh credential is rotated
+        through `Set-Cookie` and is never exposed in the response body.
+      security:
+        - PadlHubRefreshCookie: []
+      responses:
+        '200':
+          description: The session was refreshed and its cookie was rotated.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+            Set-Cookie:
+              $ref: '#/components/headers/RefreshCookie'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthenticatedSession'
+        '401':
+          $ref: '#/components/responses/AuthenticationRejected'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '409':
+          $ref: '#/components/responses/AuthenticationRejected'
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/auth/session:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/LogoutSessionIntent'
+      - $ref: '#/components/parameters/IdempotencyKey'
+    delete:
+      operationId: revokeAuthSession
+      summary: Revoke the current PadlHub refresh session
+      description: |
+        Revokes the session identified by the HttpOnly `phub_refresh` cookie and
+        expires that cookie. The operation never forwards an external identity token.
+      security: []
+      responses:
+        '204':
+          description: The session was revoked or was already absent.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+            Set-Cookie:
+              $ref: '#/components/headers/RefreshCookie'
+        '401':
+          $ref: '#/components/responses/AuthenticationRejected'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/context:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+    get:
+      operationId: getUserContext
+      summary: Resolve the authenticated user and tenant context
+      responses:
+        '200':
+          description: Authorized context resolved by PadlHub.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserContext'
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+components:
+  schemas:
+    AuthChallengeRequest:
+      type: object
+      additionalProperties: false
+      required: [method, phone]
+      properties:
+        method:
+          type: string
+          const: phone_otp
+          description: Product-level authentication method; never an upstream provider name.
+        phone:
+          type: string
+          pattern: '^\+7[0-9]{10}$'
+          description: Phone number in E.164 format.
+          example: '+79991234567'
+    AuthChallenge:
+      type: object
+      additionalProperties: false
+      required: [challengeId, expiresAt, resendAfterSeconds]
+      properties:
+        challengeId:
+          type: string
+          format: uuid
+        expiresAt:
+          type: string
+          format: date-time
+        resendAfterSeconds:
+          type: integer
+          minimum: 0
+          maximum: 3600
+    VerifyAuthChallengeRequest:
+      type: object
+      additionalProperties: false
+      required: [code]
+      properties:
+        code:
+          type: string
+          pattern: '^[0-9]{4}$'
+          description: One-time code supplied to the user.
+    AuthenticatedSession:
+      type: object
+      additionalProperties: false
+      required: [accessToken, tokenType, expiresAt, user, context]
+      properties:
+        accessToken:
+          type: string
+          minLength: 20
+          maxLength: 8192
+          description: Short-lived PadlHub JWT with audience `phub-api`.
+        tokenType:
+          type: string
+          const: Bearer
+        expiresAt:
+          type: string
+          format: date-time
+        user:
+          $ref: '#/components/schemas/AuthenticatedUser'
+        context:
+          $ref: '#/components/schemas/UserContext'
+    AuthenticatedUser:
+      type: object
+      additionalProperties: false
+      required: [id, displayName]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Stable PadlHub user identifier.
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 200
+        firstName:
+          type: [string, 'null']
+          maxLength: 100
+        lastName:
+          type: [string, 'null']
+          maxLength: 100
+        avatarUrl:
+          type: [string, 'null']
+          format: uri
+    UserContext:
+      type: object
+      additionalProperties: false
+      required: [tenantId, userId, displayName, roles, permissions]
+      properties:
+        tenantId:
+          type: string
+          format: uuid
+        userId:
+          type: string
+          format: uuid
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 200
+        phoneLast4:
+          type: string
+          pattern: '^[0-9]{4}$'
+          description: Last four digits only; the access JWT and context never expose the full phone.
+        roles:
+          type: array
+          items:
+            type: string
+        permissions:
+          type: array
+          items:
+            type: string
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: Stable client operation key used for retry-safe authentication commands.
+      schema:
+        type: string
+        minLength: 16
+        maxLength: 128
+        pattern: '^[A-Za-z0-9._:-]+$'
+    ChallengeId:
+      name: challengeId
+      in: path
+      required: true
+      description: Opaque PadlHub authentication challenge UUID.
+      schema:
+        type: string
+        format: uuid
+    RefreshSessionIntent:
+      name: X-Session-Intent
+      in: header
+      required: true
+      description: Explicit refresh intent required alongside the HttpOnly cookie.
+      schema:
+        type: string
+        const: refresh
+    LogoutSessionIntent:
+      name: X-Session-Intent
+      in: header
+      required: true
+      description: Explicit logout intent required alongside the HttpOnly cookie.
+      schema:
+        type: string
+        const: logout
+  headers:
+    RefreshCookie:
+      description: |
+        Rotated or expired `phub_refresh` cookie. It is HttpOnly and SameSite;
+        production also sets Secure. Browser JavaScript cannot read its value.
+      required: true
+      schema:
+        type: string
+  responses:
+    AuthenticationRejected:
+      description: The challenge, refresh cookie or PadlHub session credential is invalid.
+      headers:
+        X-Correlation-ID:
+          $ref: ../../common/components.yaml#/components/headers/CorrelationId
+      content:
+        application/json:
+          schema:
+            $ref: ../../common/components.yaml#/components/schemas/ApiError
+  securitySchemes:
+    PadlHubUserJwt:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: PadlHub-issued JWT; audience phub-api, UUID subject and authorized tenant UUIDs.
+    PadlHubRefreshCookie:
+      type: apiKey
+      in: cookie
+      name: phub_refresh
+      description: Rotating PadlHub refresh credential stored only as an HttpOnly cookie.

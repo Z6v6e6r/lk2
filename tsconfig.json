@@ -1,0 +1,36 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "useUnknownInCatchVariables": true,
+    "allowJs": false,
+    "resolveJsonModule": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "baseUrl": ".",
+    "paths": {
+      "@phub/api-contracts": ["packages/api-contracts/src/index.ts"],
+      "@phub/api-sdk": ["packages/api-sdk/src/index.ts"],
+      "@phub/auth": ["packages/auth/src/index.ts"],
+      "@phub/config": ["packages/config/src/index.ts"],
+      "@phub/database": ["packages/database/src/index.ts"],
+      "@phub/domain": ["packages/domain/src/index.ts"],
+      "@phub/observability": ["packages/observability/src/index.ts"],
+      "@phub/testing": ["packages/testing/src/index.ts"],
+      "@phub/ui": ["packages/ui/src/index.tsx"],
+      "@phub/viva-adapter": ["packages/viva-adapter/src/index.ts"],
+      "@phub/viva-client-adapter": ["packages/viva-client-adapter/src/index.ts"]
+    },
+    "types": ["node", "vitest/globals"]
+  },
+  "include": ["apps", "packages", "scripts", "*.ts"],
+  "exclude": ["node_modules", "dist", "apps/mobile/android", "apps/mobile/ios"]
+}

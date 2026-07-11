@@ -1,0 +1,10 @@
+node_modules
+dist
+coverage
+package-lock.json
+packages/api-contracts/src/generated*.ts
+contracts/imported/
+*.drawio
+.env
+apps/mobile/android
+apps/mobile/ios

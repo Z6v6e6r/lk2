@@ -1,0 +1,6 @@
+---
+- name: Configure PadlHub application hosts
+  hosts: phub
+  become: true
+  roles:
+    - phub_host

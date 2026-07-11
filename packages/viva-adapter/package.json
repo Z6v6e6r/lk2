@@ -1,0 +1,16 @@
+{
+  "name": "@phub/viva-adapter",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./src/index.ts",
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --dts --sourcemap --clean"
+  },
+  "dependencies": {
+    "@phub/domain": "0.1.0",
+    "jose": "6.2.3",
+    "zod": "4.4.3"
+  }
+}

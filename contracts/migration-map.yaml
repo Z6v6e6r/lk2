@@ -1,0 +1,37 @@
+source:
+  artifact: contracts/imported/cabinet-api/0.2.0/openapi.yaml
+  version: 0.2.0
+  sha256: 8bd76396dd012f80b697ee7c39b0ccb080f0df1bd46fa6dacea5bd39554ac921
+
+targetRules:
+  openapi: 3.1.0
+  userPrefix: /user/api/v1/{tenantKey}
+  adminPrefix: /admin/api/v1/{tenantKey}
+  internalPrefix: /internal/api/v1
+  publicIdentifiers: uuid
+  requiredRequestHeaders: [X-Correlation-ID]
+  criticalCommandHeaders: [Idempotency-Key]
+
+operations:
+  getCurrentUser:
+    target: user
+    status: mapped-read-only
+    canonicalOperationId: getUserContext
+  getProfile: { target: user, status: planned }
+  getDashboard: { target: user, status: planned }
+  listStations: { target: user, status: planned }
+  getStationAvailability: { target: user, status: planned }
+  listGames: { target: user, status: planned }
+  createGame: { target: user, status: blocked-by-idempotency }
+  getGameById: { target: user, status: planned }
+  joinGame: { target: user, status: blocked-by-idempotency }
+  leaveGame: { target: user, status: blocked-by-idempotency }
+  cancelGame:
+    target: split-user-and-admin
+    status: blocked-by-audit-and-idempotency
+  submitGameScore: { target: user, status: blocked-by-idempotency }
+  listTournaments: { target: user, status: planned }
+  getTournamentById: { target: user, status: planned }
+  joinTournament: { target: user, status: blocked-by-idempotency }
+  createPaymentIntent: { target: user, status: blocked-by-idempotency-and-audit }
+  listSubscriptions: { target: user, status: planned }

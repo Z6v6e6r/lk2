@@ -1,0 +1,61 @@
+---
+- name: Install host packages
+  ansible.builtin.apt:
+    name:
+      - ca-certificates
+      - curl
+      - docker.io
+      - docker-compose-v2
+      - fail2ban
+      - unattended-upgrades
+    state: present
+    update_cache: true
+
+- name: Enable Docker
+  ansible.builtin.service:
+    name: docker
+    state: started
+    enabled: true
+
+- name: Create deployment group
+  ansible.builtin.group:
+    name: phub-deploy
+    system: true
+
+- name: Create deployment user
+  ansible.builtin.user:
+    name: phub-deploy
+    group: phub-deploy
+    groups: docker
+    append: true
+    create_home: true
+    shell: /bin/bash
+    system: true
+
+- name: Create deployment directory
+  ansible.builtin.file:
+    path: /opt/phub
+    state: directory
+    owner: phub-deploy
+    group: phub-deploy
+    mode: '0750'
+
+- name: Create private Docker network
+  community.docker.docker_network:
+    name: phub-private
+    # "internal" would also block the API/worker from managed data services,
+    # Viva and telemetry exporters. Ingress is constrained by private bind
+    # addresses and the provider firewall instead.
+    internal: false
+
+- name: Disable password SSH authentication
+  ansible.builtin.copy:
+    dest: /etc/ssh/sshd_config.d/60-phub-hardening.conf
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      PasswordAuthentication no
+      PermitRootLogin no
+      PubkeyAuthentication yes
+  notify: Restart ssh

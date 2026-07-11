@@ -1,0 +1,121 @@
+name: Promote verified digests to production
+
+on:
+  workflow_dispatch:
+    inputs:
+      staging_run_id:
+        description: Successful staging workflow run to promote
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+  packages: read
+
+concurrency:
+  group: production
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Resolve and verify the successful staging release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.staging_run_id }}
+        run: |
+          case "$RUN_ID" in *[!0-9]*|'') exit 64 ;; esac
+          run_json="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID")"
+          test "$(jq -r .conclusion <<<"$run_json")" = success
+          test "$(jq -r .head_branch <<<"$run_json")" = main
+          test "$(jq -r .path <<<"$run_json")" = .github/workflows/deploy-staging.yaml
+          echo "RELEASE=$(jq -r .head_sha <<<"$run_json")" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: digest-*
+          path: digests
+          merge-multiple: true
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.staging_run_id }}
+      - name: Reject mutable image references
+        env:
+          API: ${{ hashFiles('digests/api') }}
+        run: |
+          test -n "$API"
+          for file in api worker realtime migrator; do
+            digest="$(cat "digests/$file")"
+            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || exit 64
+          done
+      - name: Configure audited SSH
+        env:
+          DEPLOY_KEY: ${{ secrets.PRODUCTION_DEPLOY_KEY }}
+          KNOWN_HOSTS: ${{ secrets.PRODUCTION_KNOWN_HOSTS }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+      - name: Prepare immutable release definition
+        run: |
+          {
+            echo "REGISTRY=ghcr.io/${{ github.repository_owner }}"
+            echo "API_IMAGE_DIGEST=$(cat digests/api)"
+            echo "WORKER_IMAGE_DIGEST=$(cat digests/worker)"
+            echo "REALTIME_IMAGE_DIGEST=$(cat digests/realtime)"
+            echo "MIGRATOR_IMAGE_DIGEST=$(cat digests/migrator)"
+            echo "RELEASE=$RELEASE"
+          } > release.env
+      - name: Verify latest recoverable backup
+        env:
+          HOST: ${{ secrets.PRODUCTION_WORKER_NODE }}
+          CHECK_COMMAND: ${{ secrets.PRODUCTION_BACKUP_CHECK_COMMAND }}
+        run: |
+          test -n "$CHECK_COMMAND"
+          ssh "phub-deploy@$HOST" "$CHECK_COMMAND"
+      - name: Run backward-compatible migration job once
+        env:
+          HOST: ${{ secrets.PRODUCTION_WORKER_NODE }}
+        run: |
+          scp deploy/compose.production.yaml "phub-deploy@$HOST:/opt/phub/compose.yaml"
+          scp release.env "phub-deploy@$HOST:/opt/phub/release.env"
+          ssh "phub-deploy@$HOST" 'cd /opt/phub && docker compose --env-file release.env --profile migration run --rm migrator'
+      - name: Deploy app nodes sequentially
+        env:
+          NODE_A: ${{ secrets.PRODUCTION_APP_NODE_A }}
+          NODE_B: ${{ secrets.PRODUCTION_APP_NODE_B }}
+          NODE_A_BIND: ${{ secrets.PRODUCTION_APP_NODE_A_BIND_ADDRESS }}
+          NODE_B_BIND: ${{ secrets.PRODUCTION_APP_NODE_B_BIND_ADDRESS }}
+        run: |
+          deploy_node() {
+            host="$1"
+            bind_address="$2"
+            test -n "$host"
+            case "$bind_address" in *[!0-9.]*|'') exit 64 ;; esac
+            cp release.env node-release.env
+            printf 'APP_BIND_ADDRESS=%s\n' "$bind_address" >> node-release.env
+            scp deploy/compose.production.yaml "phub-deploy@$host:/opt/phub/compose.yaml"
+            scp node-release.env "phub-deploy@$host:/opt/phub/release.env"
+            ssh "phub-deploy@$host" 'cd /opt/phub && docker compose --env-file release.env --profile app pull && docker compose --env-file release.env --profile app up -d'
+            ssh "phub-deploy@$host" 'cd /opt/phub && docker compose --env-file release.env exec -T api node -e "fetch(\"http://127.0.0.1:3000/health/ready\").then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"'
+            ssh "phub-deploy@$host" 'cd /opt/phub && docker compose --env-file release.env exec -T realtime node -e "fetch(\"http://127.0.0.1:3001/health/ready\").then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"'
+          }
+          deploy_node "$NODE_A" "$NODE_A_BIND"
+          deploy_node "$NODE_B" "$NODE_B_BIND"
+      - name: Deploy workers after app compatibility checks
+        env:
+          HOST: ${{ secrets.PRODUCTION_WORKER_NODE }}
+        run: |
+          ssh "phub-deploy@$HOST" 'cd /opt/phub && docker compose --env-file release.env --profile worker pull && docker compose --env-file release.env --profile worker up -d'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Post-deploy smoke test
+        env:
+          SMOKE_BASE_URL: ${{ vars.PRODUCTION_BASE_URL }}
+        run: npm ci --ignore-scripts && npm run smoke

@@ -1,0 +1,60 @@
+name: phub-staging
+
+x-runtime: &runtime
+  env_file:
+    - ${RUNTIME_ENV_FILE:-/etc/phub/staging.env}
+  restart: unless-stopped
+  networks:
+    - application
+
+services:
+  api:
+    <<: *runtime
+    image: ${REGISTRY}/phub-api@${API_IMAGE_DIGEST}
+    ports:
+      - '127.0.0.1:3000:3000'
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3000/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  realtime:
+    <<: *runtime
+    image: ${REGISTRY}/phub-realtime@${REALTIME_IMAGE_DIGEST}
+    ports:
+      - '127.0.0.1:3001:3001'
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3001/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  worker:
+    <<: *runtime
+    image: ${REGISTRY}/phub-worker@${WORKER_IMAGE_DIGEST}
+
+  migrator:
+    <<: *runtime
+    image: ${REGISTRY}/phub-migrator@${MIGRATOR_IMAGE_DIGEST}
+    restart: 'no'
+    profiles: [migration]
+
+networks:
+  application:
+    external: true
+    name: phub-private

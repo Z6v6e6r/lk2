@@ -1,0 +1,14 @@
+{
+  "name": "@phub/ui",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./src/index.tsx",
+  "scripts": {
+    "build": "tsup src/index.tsx --format esm --dts --sourcemap --clean --external react"
+  },
+  "peerDependencies": {
+    "react": ">=19.0.0"
+  }
+}

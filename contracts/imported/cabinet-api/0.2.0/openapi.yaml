@@ -1,0 +1,2084 @@
+openapi: 3.0.3
+
+info:
+  title: Padel Hub Cabinet API
+  version: 0.2.0
+  description: |
+    Контракт API личного кабинета сети падел-центров.
+
+    API описывает пользовательские бизнес-сценарии, а не структуру Viva CRM
+    и не свойства интерфейса. Денежные суммы передаются в минимальных единицах
+    валюты, а публичные идентификаторы не зависят от внутренних ID CRM.
+
+servers:
+  - url: /api/v1
+    description: Current environment
+  - url: http://localhost:3000/api/v1
+    description: Local development
+
+tags:
+  - name: auth
+    description: Проверка текущей сессии и авторизация.
+  - name: profile
+    description: Профиль и персональные данные пользователя.
+  - name: dashboard
+    description: Агрегированные данные главной страницы личного кабинета.
+  - name: stations
+    description: Станции, корты и доступность слотов.
+  - name: games
+    description: Создание игр, участие, отмена и результаты.
+  - name: tournaments
+    description: Турниры и регистрация участников.
+  - name: payments
+    description: Создание платежных интентов.
+  - name: subscriptions
+    description: Подписки и абонементы пользователя.
+
+security:
+  - bearerAuth: []
+
+paths:
+  /auth/me:
+    get:
+      tags: [auth]
+      summary: Получить текущего авторизованного пользователя
+      operationId: getCurrentUser
+      responses:
+        '200':
+          description: Пользовательская сессия активна.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthMeResponse'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /profile:
+    get:
+      tags: [profile]
+      summary: Получить профиль пользователя
+      operationId: getProfile
+      responses:
+        '200':
+          description: Профиль успешно получен.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfileResponse'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /dashboard:
+    get:
+      tags: [dashboard]
+      summary: Получить данные главной страницы
+      description: |
+        Возвращает агрегированные данные для построения главной страницы:
+        профиль, быстрые действия, сообщества, расписание, подписки,
+        промо и рекомендуемые станции.
+
+        Метод не возвращает цвета, размеры, отступы, шрифты и другие
+        свойства интерфейса.
+      operationId: getDashboard
+      parameters:
+        - $ref: '#/components/parameters/DashboardDateParameter'
+        - $ref: '#/components/parameters/ActivityTypeParameter'
+      responses:
+        '200':
+          description: Данные главной страницы сформированы.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DashboardResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /stations:
+    get:
+      tags: [stations]
+      summary: Получить список станций
+      operationId: listStations
+      parameters:
+        - $ref: '#/components/parameters/CityParameter'
+        - $ref: '#/components/parameters/SearchParameter'
+      responses:
+        '200':
+          description: Список станций получен.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StationListResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /stations/{stationId}/availability:
+    get:
+      tags: [stations]
+      summary: Получить доступность станции
+      operationId: getStationAvailability
+      parameters:
+        - $ref: '#/components/parameters/StationIdParameter'
+        - $ref: '#/components/parameters/RequiredDateParameter'
+      responses:
+        '200':
+          description: Доступность станции получена.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StationAvailabilityResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /games:
+    get:
+      tags: [games]
+      summary: Получить список игр
+      operationId: listGames
+      parameters:
+        - $ref: '#/components/parameters/StationIdQueryParameter'
+        - $ref: '#/components/parameters/DateParameter'
+        - $ref: '#/components/parameters/GameStatusParameter'
+      responses:
+        '200':
+          description: Список игр получен.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GameListResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+    post:
+      tags: [games]
+      summary: Создать игру
+      operationId: createGame
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateGameRequest'
+      responses:
+        '201':
+          description: Игра создана.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GameResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '409':
+          $ref: '#/components/responses/ConflictError'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /games/{gameId}:
+    get:
+      tags: [games]
+      summary: Получить детали игры
+      operationId: getGameById
+      parameters:
+        - $ref: '#/components/parameters/GameIdParameter'
+      responses:
+        '200':
+          description: Детали игры получены.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GameResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /games/{gameId}/join:
+    post:
+      tags: [games]
+      summary: Присоединиться к игре
+      operationId: joinGame
+      parameters:
+        - $ref: '#/components/parameters/GameIdParameter'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JoinGameRequest'
+      responses:
+        '200':
+          description: Пользователь присоединился к игре.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GameParticipationResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '409':
+          $ref: '#/components/responses/ConflictError'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /games/{gameId}/participants/me:
+    delete:
+      tags: [games]
+      summary: Отменить своё участие в игре
+      operationId: leaveGame
+      parameters:
+        - $ref: '#/components/parameters/GameIdParameter'
+      responses:
+        '204':
+          description: Участие отменено.
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '409':
+          $ref: '#/components/responses/ConflictError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /games/{gameId}/cancel:
+    post:
+      tags: [games]
+      summary: Отменить игру
+      description: Доступно только организатору или сотруднику с соответствующими правами.
+      operationId: cancelGame
+      parameters:
+        - $ref: '#/components/parameters/GameIdParameter'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CancelGameRequest'
+      responses:
+        '200':
+          description: Игра отменена.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GameResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '409':
+          $ref: '#/components/responses/ConflictError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /games/{gameId}/score:
+    post:
+      tags: [games]
+      summary: Передать результат игры
+      operationId: submitGameScore
+      parameters:
+        - $ref: '#/components/parameters/GameIdParameter'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubmitGameScoreRequest'
+      responses:
+        '200':
+          description: Результат игры принят.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GameScoreResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '409':
+          $ref: '#/components/responses/ConflictError'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /tournaments:
+    get:
+      tags: [tournaments]
+      summary: Получить список турниров
+      operationId: listTournaments
+      parameters:
+        - $ref: '#/components/parameters/StationIdQueryParameter'
+        - $ref: '#/components/parameters/DateParameter'
+      responses:
+        '200':
+          description: Список турниров получен.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TournamentListResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /tournaments/{tournamentId}:
+    get:
+      tags: [tournaments]
+      summary: Получить детали турнира
+      operationId: getTournamentById
+      parameters:
+        - $ref: '#/components/parameters/TournamentIdParameter'
+      responses:
+        '200':
+          description: Детали турнира получены.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TournamentResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /tournaments/{tournamentId}/join:
+    post:
+      tags: [tournaments]
+      summary: Зарегистрироваться на турнир
+      operationId: joinTournament
+      parameters:
+        - $ref: '#/components/parameters/TournamentIdParameter'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JoinTournamentRequest'
+      responses:
+        '200':
+          description: Регистрация на турнир обработана.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TournamentJoinResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '409':
+          $ref: '#/components/responses/ConflictError'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /payments/intents:
+    post:
+      tags: [payments]
+      summary: Создать платежный интент
+      description: |
+        Сумма и валюта рассчитываются сервером по targetType и targetId.
+        Клиент не может передавать или изменять стоимость оплачиваемого продукта.
+      operationId: createPaymentIntent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreatePaymentIntentRequest'
+      responses:
+        '201':
+          description: Платежный интент создан.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentIntentResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '409':
+          $ref: '#/components/responses/ConflictError'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /subscriptions:
+    get:
+      tags: [subscriptions]
+      summary: Получить подписки и абонементы пользователя
+      operationId: listSubscriptions
+      parameters:
+        - $ref: '#/components/parameters/StationIdQueryParameter'
+      responses:
+        '200':
+          description: Подписки получены.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubscriptionListResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    StationIdParameter:
+      name: stationId
+      in: path
+      required: true
+      description: Публичный идентификатор станции.
+      schema:
+        type: string
+
+    StationIdQueryParameter:
+      name: stationId
+      in: query
+      required: false
+      description: Фильтр по станции.
+      schema:
+        type: string
+
+    GameIdParameter:
+      name: gameId
+      in: path
+      required: true
+      description: Публичный идентификатор игры.
+      schema:
+        type: string
+
+    TournamentIdParameter:
+      name: tournamentId
+      in: path
+      required: true
+      description: Публичный идентификатор турнира.
+      schema:
+        type: string
+
+    DateParameter:
+      name: date
+      in: query
+      required: false
+      description: Дата в формате ISO 8601.
+      schema:
+        type: string
+        format: date
+
+    RequiredDateParameter:
+      name: date
+      in: query
+      required: true
+      description: Дата в формате ISO 8601.
+      schema:
+        type: string
+        format: date
+
+    DashboardDateParameter:
+      name: date
+      in: query
+      required: false
+      description: |
+        Дата, для которой нужно получить активности.
+        Если параметр не передан, используется текущая дата пользователя.
+      schema:
+        type: string
+        format: date
+
+    ActivityTypeParameter:
+      name: activityType
+      in: query
+      required: false
+      description: Фильтр активностей на главной странице.
+      schema:
+        $ref: '#/components/schemas/ActivityType'
+
+    CityParameter:
+      name: city
+      in: query
+      required: false
+      description: Фильтр по городу.
+      schema:
+        type: string
+
+    SearchParameter:
+      name: search
+      in: query
+      required: false
+      description: Поиск по названию или адресу станции.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 100
+
+    GameStatusParameter:
+      name: status
+      in: query
+      required: false
+      description: Фильтр по статусу игры.
+      schema:
+        type: string
+        enum:
+          - draft
+          - open
+          - full
+          - completed
+          - cancelled
+
+  responses:
+    BadRequestError:
+      description: Ошибка в параметрах запроса.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+
+    UnauthorizedError:
+      description: Требуется авторизация.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+
+    ForbiddenError:
+      description: Доступ запрещён.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+
+    NotFoundError:
+      description: Ресурс не найден.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+
+    ConflictError:
+      description: Действие конфликтует с текущим бизнес-состоянием.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+
+    ValidationError:
+      description: Данные не прошли бизнес-валидацию.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+
+    InternalServerError:
+      description: Внутренняя ошибка сервиса.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+
+  schemas:
+    ApiError:
+      type: object
+      additionalProperties: false
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: string
+          example: GAME_ALREADY_FULL
+        message:
+          type: string
+          example: В игре больше нет свободных мест.
+        details:
+          type: array
+          items:
+            $ref: '#/components/schemas/ApiErrorDetail'
+        traceId:
+          type: string
+          example: req_b8f0ab8c4a82
+
+    ApiErrorDetail:
+      type: object
+      additionalProperties: false
+      required:
+        - issue
+      properties:
+        field:
+          type: string
+          nullable: true
+          example: participants
+        issue:
+          type: string
+          example: В игре больше нет свободных мест.
+
+    AuthMeResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - user
+      properties:
+        user:
+          $ref: '#/components/schemas/UserSummary'
+
+    ProfileResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - profile
+      properties:
+        profile:
+          $ref: '#/components/schemas/Profile'
+
+    DashboardResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - generatedAt
+        - selectedDate
+        - profile
+        - quickActions
+        - communities
+        - schedule
+        - subscriptions
+        - promotions
+        - stations
+      properties:
+        generatedAt:
+          type: string
+          format: date-time
+          description: Время формирования ответа.
+        selectedDate:
+          type: string
+          format: date
+          description: Дата, для которой сформировано расписание.
+        profile:
+          $ref: '#/components/schemas/DashboardProfile'
+        quickActions:
+          type: array
+          items:
+            $ref: '#/components/schemas/QuickAction'
+        communities:
+          $ref: '#/components/schemas/DashboardCommunities'
+        schedule:
+          $ref: '#/components/schemas/DashboardSchedule'
+        subscriptions:
+          $ref: '#/components/schemas/DashboardSubscriptions'
+        promotions:
+          $ref: '#/components/schemas/DashboardPromotions'
+        stations:
+          $ref: '#/components/schemas/DashboardStations'
+
+    DashboardProfile:
+      type: object
+      additionalProperties: false
+      required:
+        - user
+        - wallet
+        - notifications
+      properties:
+        user:
+          $ref: '#/components/schemas/DashboardUser'
+        wallet:
+          $ref: '#/components/schemas/WalletSummary'
+        notifications:
+          $ref: '#/components/schemas/NotificationSummary'
+
+    DashboardUser:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - displayName
+        - level
+      properties:
+        id:
+          type: string
+          example: client_123
+        displayName:
+          type: string
+          example: Алексей Петров
+        avatarUrl:
+          type: string
+          format: uri
+          nullable: true
+        level:
+          $ref: '#/components/schemas/PlayerLevel'
+
+    PlayerLevel:
+      type: object
+      additionalProperties: false
+      required:
+        - code
+      properties:
+        code:
+          type: string
+          enum:
+            - D
+            - D+
+            - C
+            - C+
+            - B
+            - B+
+            - A
+        numericValue:
+          type: number
+          format: double
+          nullable: true
+          example: 3.64
+
+    WalletSummary:
+      type: object
+      additionalProperties: false
+      required:
+        - amountMinor
+        - currency
+      properties:
+        amountMinor:
+          type: integer
+          format: int64
+          description: Сумма в минимальных единицах валюты.
+          example: 245000
+        currency:
+          type: string
+          minLength: 3
+          maxLength: 3
+          example: RUB
+
+    NotificationSummary:
+      type: object
+      additionalProperties: false
+      required:
+        - unreadCount
+      properties:
+        unreadCount:
+          type: integer
+          minimum: 0
+          example: 2
+
+    QuickAction:
+      type: object
+      additionalProperties: false
+      required:
+        - code
+        - enabled
+      properties:
+        code:
+          type: string
+          enum:
+            - games
+            - tournaments
+            - individual_trainings
+            - group_trainings
+        enabled:
+          type: boolean
+        badgeCount:
+          type: integer
+          minimum: 0
+          nullable: true
+
+    DashboardCommunities:
+      type: object
+      additionalProperties: false
+      required:
+        - visible
+        - unreadCount
+        - items
+      properties:
+        visible:
+          type: boolean
+        unreadCount:
+          type: integer
+          minimum: 0
+        items:
+          type: array
+          maxItems: 5
+          items:
+            $ref: '#/components/schemas/CommunityPreview'
+
+    CommunityPreview:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - name
+        - membersCount
+        - unreadCount
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+          example: Ясенево D+ / C
+        avatarUrl:
+          type: string
+          format: uri
+          nullable: true
+        membersCount:
+          type: integer
+          minimum: 0
+        unreadCount:
+          type: integer
+          minimum: 0
+        newGamesCount:
+          type: integer
+          minimum: 0
+        lastActivityAt:
+          type: string
+          format: date-time
+          nullable: true
+
+    DashboardSchedule:
+      type: object
+      additionalProperties: false
+      required:
+        - selectedActivityType
+        - dates
+        - items
+        - hasMore
+      properties:
+        selectedActivityType:
+          $ref: '#/components/schemas/ActivityType'
+        dates:
+          type: array
+          items:
+            $ref: '#/components/schemas/DashboardDate'
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/DashboardActivity'
+        hasMore:
+          type: boolean
+        nextCursor:
+          type: string
+          nullable: true
+
+    ActivityType:
+      type: string
+      default: all
+      enum:
+        - all
+        - games
+        - trainings
+        - tournaments
+
+    DashboardDate:
+      type: object
+      additionalProperties: false
+      required:
+        - date
+        - hasEvents
+      properties:
+        date:
+          type: string
+          format: date
+        hasEvents:
+          type: boolean
+
+    DashboardActivity:
+      oneOf:
+        - $ref: '#/components/schemas/DashboardGameActivity'
+        - $ref: '#/components/schemas/DashboardTournamentActivity'
+        - $ref: '#/components/schemas/DashboardTrainingActivity'
+      discriminator:
+        propertyName: type
+        mapping:
+          game: '#/components/schemas/DashboardGameActivity'
+          tournament: '#/components/schemas/DashboardTournamentActivity'
+          individual_training: '#/components/schemas/DashboardTrainingActivity'
+          group_training: '#/components/schemas/DashboardTrainingActivity'
+
+    DashboardGameActivity:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - type
+        - title
+        - gameKind
+        - startsAt
+        - endsAt
+        - station
+        - participants
+        - capacity
+        - status
+        - allowedActions
+      properties:
+        id:
+          type: string
+        type:
+          type: string
+          enum: [game]
+        title:
+          type: string
+        gameKind:
+          type: string
+          enum:
+            - friendly
+            - rating
+            - private
+            - coach_game
+        startsAt:
+          type: string
+          format: date-time
+        endsAt:
+          type: string
+          format: date-time
+        station:
+          $ref: '#/components/schemas/ActivityStation'
+        participants:
+          type: array
+          items:
+            $ref: '#/components/schemas/ParticipantPreview'
+        capacity:
+          $ref: '#/components/schemas/ActivityCapacity'
+        price:
+          allOf:
+            - $ref: '#/components/schemas/Money'
+          nullable: true
+        status:
+          type: string
+          enum:
+            - open
+            - full
+            - joined
+            - registration_closed
+            - cancelled
+            - completed
+        allowedActions:
+          type: array
+          uniqueItems: true
+          items:
+            type: string
+            enum:
+              - open
+              - join
+              - leave
+              - cancel
+              - submit_score
+              - pay
+
+    DashboardTournamentActivity:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - type
+        - title
+        - startsAt
+        - station
+        - status
+        - allowedActions
+      properties:
+        id:
+          type: string
+        type:
+          type: string
+          enum: [tournament]
+        title:
+          type: string
+        tournamentFormat:
+          type: string
+          enum:
+            - americano
+            - mexicano
+            - classic
+            - mini_tournament
+        startsAt:
+          type: string
+          format: date-time
+        endsAt:
+          type: string
+          format: date-time
+          nullable: true
+        station:
+          $ref: '#/components/schemas/ActivityStation'
+        capacity:
+          allOf:
+            - $ref: '#/components/schemas/ActivityCapacity'
+          nullable: true
+        status:
+          type: string
+          enum:
+            - registration_open
+            - waitlist
+            - joined
+            - registration_closed
+            - in_progress
+            - completed
+            - cancelled
+        allowedActions:
+          type: array
+          uniqueItems: true
+          items:
+            type: string
+            enum:
+              - open
+              - join
+              - leave
+              - pay
+
+    DashboardTrainingActivity:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - type
+        - title
+        - startsAt
+        - endsAt
+        - station
+        - status
+        - allowedActions
+      properties:
+        id:
+          type: string
+        type:
+          type: string
+          enum:
+            - individual_training
+            - group_training
+        title:
+          type: string
+        coach:
+          allOf:
+            - $ref: '#/components/schemas/CoachPreview'
+          nullable: true
+        startsAt:
+          type: string
+          format: date-time
+        endsAt:
+          type: string
+          format: date-time
+        station:
+          $ref: '#/components/schemas/ActivityStation'
+        capacity:
+          allOf:
+            - $ref: '#/components/schemas/ActivityCapacity'
+          nullable: true
+        price:
+          allOf:
+            - $ref: '#/components/schemas/Money'
+          nullable: true
+        status:
+          type: string
+          enum:
+            - available
+            - joined
+            - full
+            - cancelled
+            - completed
+        allowedActions:
+          type: array
+          uniqueItems: true
+          items:
+            type: string
+            enum:
+              - open
+              - join
+              - leave
+              - pay
+
+    ActivityStation:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - name
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        address:
+          type: string
+          nullable: true
+        courtId:
+          type: string
+          nullable: true
+        courtName:
+          type: string
+          nullable: true
+
+    ParticipantPreview:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - displayName
+        - level
+      properties:
+        id:
+          type: string
+        displayName:
+          type: string
+        avatarUrl:
+          type: string
+          format: uri
+          nullable: true
+        level:
+          $ref: '#/components/schemas/PlayerLevel'
+
+    CoachPreview:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - displayName
+      properties:
+        id:
+          type: string
+        displayName:
+          type: string
+        avatarUrl:
+          type: string
+          format: uri
+          nullable: true
+
+    ActivityCapacity:
+      type: object
+      additionalProperties: false
+      required:
+        - occupied
+        - total
+      properties:
+        occupied:
+          type: integer
+          minimum: 0
+        total:
+          type: integer
+          minimum: 1
+
+    DashboardSubscriptions:
+      type: object
+      additionalProperties: false
+      required:
+        - visible
+        - items
+      properties:
+        visible:
+          type: boolean
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/SubscriptionPreview'
+
+    SubscriptionPreview:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - name
+        - status
+        - allowedActions
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        status:
+          type: string
+          enum:
+            - active
+            - expiring
+            - expired
+            - frozen
+        validUntil:
+          type: string
+          format: date-time
+          nullable: true
+        remainingVisits:
+          type: integer
+          minimum: 0
+          nullable: true
+        allowedActions:
+          type: array
+          uniqueItems: true
+          items:
+            type: string
+            enum:
+              - open
+              - renew
+              - freeze
+
+    DashboardPromotions:
+      type: object
+      additionalProperties: false
+      required:
+        - visible
+        - items
+      properties:
+        visible:
+          type: boolean
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/PromotionPreview'
+
+    PromotionPreview:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - type
+        - title
+        - imageUrl
+      properties:
+        id:
+          type: string
+        type:
+          type: string
+          enum:
+            - promotion
+            - advertisement
+            - gift_certificate
+            - recommendation
+        title:
+          type: string
+        description:
+          type: string
+          nullable: true
+        imageUrl:
+          type: string
+          format: uri
+        target:
+          allOf:
+            - $ref: '#/components/schemas/NavigationTarget'
+          nullable: true
+        startsAt:
+          type: string
+          format: date-time
+          nullable: true
+        endsAt:
+          type: string
+          format: date-time
+          nullable: true
+
+    NavigationTarget:
+      type: object
+      additionalProperties: false
+      required:
+        - type
+      properties:
+        type:
+          type: string
+          enum:
+            - internal
+            - external
+        route:
+          type: string
+          nullable: true
+          example: /gift-certificates
+        url:
+          type: string
+          format: uri
+          nullable: true
+
+    DashboardStations:
+      type: object
+      additionalProperties: false
+      required:
+        - total
+        - items
+      properties:
+        total:
+          type: integer
+          minimum: 0
+        items:
+          type: array
+          maxItems: 10
+          items:
+            $ref: '#/components/schemas/StationPreview'
+
+    StationPreview:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - name
+        - courtsCount
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        address:
+          type: string
+          nullable: true
+        courtsCount:
+          type: integer
+          minimum: 0
+        imageUrl:
+          type: string
+          format: uri
+          nullable: true
+
+    Money:
+      type: object
+      additionalProperties: false
+      required:
+        - amountMinor
+        - currency
+      properties:
+        amountMinor:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Сумма в минимальных единицах валюты.
+        currency:
+          type: string
+          minLength: 3
+          maxLength: 3
+          example: RUB
+
+    StationListResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Station'
+
+    StationAvailabilityResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - stationId
+        - date
+        - slots
+      properties:
+        stationId:
+          type: string
+        date:
+          type: string
+          format: date
+        slots:
+          type: array
+          items:
+            $ref: '#/components/schemas/AvailabilitySlot'
+
+    GameListResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/GameCard'
+
+    GameResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - game
+      properties:
+        game:
+          $ref: '#/components/schemas/Game'
+
+    GameParticipationResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - gameId
+        - status
+      properties:
+        gameId:
+          type: string
+        status:
+          type: string
+          enum:
+            - joined
+            - waitlisted
+        availableSpots:
+          type: integer
+          minimum: 0
+
+    GameScoreResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - gameId
+        - status
+        - submittedAt
+      properties:
+        gameId:
+          type: string
+        status:
+          type: string
+          enum:
+            - pending_review
+            - accepted
+        submittedAt:
+          type: string
+          format: date-time
+
+    TournamentListResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/TournamentCard'
+
+    TournamentResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - tournament
+      properties:
+        tournament:
+          $ref: '#/components/schemas/Tournament'
+
+    TournamentJoinResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - tournamentId
+        - status
+        - paymentRequired
+      properties:
+        tournamentId:
+          type: string
+        status:
+          type: string
+          enum:
+            - confirmed
+            - waitlisted
+        paymentRequired:
+          type: boolean
+
+    PaymentIntentResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - amount
+        - status
+      properties:
+        id:
+          type: string
+          example: payment_intent_123
+        amount:
+          $ref: '#/components/schemas/Money'
+        status:
+          type: string
+          enum:
+            - pending
+            - requires_action
+            - processing
+            - succeeded
+            - failed
+            - cancelled
+        confirmationUrl:
+          type: string
+          format: uri
+          nullable: true
+        expiresAt:
+          type: string
+          format: date-time
+          nullable: true
+
+    SubscriptionListResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Subscription'
+
+    CreateGameRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - stationId
+        - startsAt
+        - durationMinutes
+        - gameKind
+        - visibility
+        - paymentMode
+        - capacity
+      properties:
+        stationId:
+          type: string
+        courtId:
+          type: string
+          nullable: true
+        startsAt:
+          type: string
+          format: date-time
+        durationMinutes:
+          type: integer
+          minimum: 30
+          maximum: 240
+          example: 90
+        gameKind:
+          type: string
+          enum:
+            - friendly
+            - rating
+            - private
+            - coach_game
+        visibility:
+          type: string
+          enum:
+            - public
+            - private
+            - community
+        paymentMode:
+          type: string
+          enum:
+            - split
+            - full_court
+        capacity:
+          type: integer
+          minimum: 2
+          maximum: 4
+          default: 4
+        levelFrom:
+          $ref: '#/components/schemas/PlayerLevelCode'
+        levelTo:
+          $ref: '#/components/schemas/PlayerLevelCode'
+        communityId:
+          type: string
+          nullable: true
+        notes:
+          type: string
+          maxLength: 500
+          nullable: true
+
+    PlayerLevelCode:
+      type: string
+      enum:
+        - D
+        - D+
+        - C
+        - C+
+        - B
+        - B+
+        - A
+
+    JoinGameRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        message:
+          type: string
+          maxLength: 280
+          nullable: true
+
+    CancelGameRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        reason:
+          type: string
+          maxLength: 280
+          nullable: true
+
+    SubmitGameScoreRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - winnerTeam
+        - sets
+      properties:
+        winnerTeam:
+          type: string
+          enum:
+            - team_a
+            - team_b
+        sets:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/GameSetScore'
+        comment:
+          type: string
+          maxLength: 280
+          nullable: true
+
+    JoinTournamentRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        divisionId:
+          type: string
+          nullable: true
+        partnerUserId:
+          type: string
+          nullable: true
+        comment:
+          type: string
+          maxLength: 280
+          nullable: true
+
+    CreatePaymentIntentRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - targetType
+        - targetId
+        - paymentMethod
+      properties:
+        targetType:
+          type: string
+          enum:
+            - game_participation
+            - full_court
+            - tournament_participation
+            - subscription
+        targetId:
+          type: string
+        paymentMethod:
+          type: string
+          enum:
+            - bank_card
+            - sbp
+            - wallet
+
+    UserSummary:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - displayName
+      properties:
+        id:
+          type: string
+        displayName:
+          type: string
+          example: Алексей Иванов
+        avatarUrl:
+          type: string
+          format: uri
+          nullable: true
+        level:
+          allOf:
+            - $ref: '#/components/schemas/PlayerLevel'
+          nullable: true
+
+    Profile:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - firstName
+        - lastName
+        - phone
+      properties:
+        id:
+          type: string
+        firstName:
+          type: string
+        lastName:
+          type: string
+        phone:
+          type: string
+          example: '+79991234567'
+        email:
+          type: string
+          format: email
+          nullable: true
+        city:
+          type: string
+          nullable: true
+        preferredStationId:
+          type: string
+          nullable: true
+        level:
+          allOf:
+            - $ref: '#/components/schemas/PlayerLevel'
+          nullable: true
+        memberships:
+          type: array
+          items:
+            $ref: '#/components/schemas/Subscription'
+
+    Station:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - name
+        - city
+        - courtsCount
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+          example: Padel Hub Skolkovo
+        city:
+          type: string
+          example: Москва
+        address:
+          type: string
+          nullable: true
+        coverImageUrl:
+          type: string
+          format: uri
+          nullable: true
+        courtsCount:
+          type: integer
+          minimum: 0
+          example: 6
+        amenities:
+          type: array
+          items:
+            type: string
+
+    AvailabilitySlot:
+      type: object
+      additionalProperties: false
+      required:
+        - courtId
+        - startsAt
+        - endsAt
+        - available
+      properties:
+        courtId:
+          type: string
+        startsAt:
+          type: string
+          format: date-time
+        endsAt:
+          type: string
+          format: date-time
+        available:
+          type: boolean
+        price:
+          allOf:
+            - $ref: '#/components/schemas/Money'
+          nullable: true
+
+    GameCard:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - station
+        - startsAt
+        - endsAt
+        - status
+        - capacity
+      properties:
+        id:
+          type: string
+        station:
+          $ref: '#/components/schemas/ActivityStation'
+        startsAt:
+          type: string
+          format: date-time
+        endsAt:
+          type: string
+          format: date-time
+        status:
+          type: string
+          enum:
+            - draft
+            - open
+            - full
+            - completed
+            - cancelled
+        gameKind:
+          type: string
+          enum:
+            - friendly
+            - rating
+            - private
+            - coach_game
+        levelFrom:
+          allOf:
+            - $ref: '#/components/schemas/PlayerLevelCode'
+          nullable: true
+        levelTo:
+          allOf:
+            - $ref: '#/components/schemas/PlayerLevelCode'
+          nullable: true
+        capacity:
+          $ref: '#/components/schemas/ActivityCapacity'
+        pricePerPlayer:
+          allOf:
+            - $ref: '#/components/schemas/Money'
+          nullable: true
+
+    Game:
+      allOf:
+        - $ref: '#/components/schemas/GameCard'
+        - type: object
+          additionalProperties: false
+          required:
+            - visibility
+            - paymentMode
+            - participants
+            - allowedActions
+          properties:
+            visibility:
+              type: string
+              enum:
+                - public
+                - private
+                - community
+            paymentMode:
+              type: string
+              enum:
+                - split
+                - full_court
+            notes:
+              type: string
+              nullable: true
+            participants:
+              type: array
+              items:
+                $ref: '#/components/schemas/UserSummary'
+            score:
+              type: array
+              items:
+                $ref: '#/components/schemas/GameSetScore'
+            allowedActions:
+              type: array
+              uniqueItems: true
+              items:
+                type: string
+                enum:
+                  - join
+                  - leave
+                  - cancel
+                  - submit_score
+                  - pay
+
+    GameSetScore:
+      type: object
+      additionalProperties: false
+      required:
+        - teamA
+        - teamB
+      properties:
+        teamA:
+          type: integer
+          minimum: 0
+          maximum: 99
+        teamB:
+          type: integer
+          minimum: 0
+          maximum: 99
+
+    TournamentCard:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - title
+        - station
+        - startsAt
+        - status
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        station:
+          $ref: '#/components/schemas/ActivityStation'
+        startsAt:
+          type: string
+          format: date-time
+        endsAt:
+          type: string
+          format: date-time
+          nullable: true
+        status:
+          type: string
+          enum:
+            - registration_open
+            - waitlist
+            - registration_closed
+            - in_progress
+            - completed
+            - cancelled
+        entryFee:
+          allOf:
+            - $ref: '#/components/schemas/Money'
+          nullable: true
+
+    Tournament:
+      allOf:
+        - $ref: '#/components/schemas/TournamentCard'
+        - type: object
+          additionalProperties: false
+          properties:
+            description:
+              type: string
+              nullable: true
+            format:
+              type: string
+              enum:
+                - americano
+                - mexicano
+                - classic
+                - mini_tournament
+            participantsLimit:
+              type: integer
+              minimum: 2
+            registeredParticipants:
+              type: integer
+              minimum: 0
+            allowedActions:
+              type: array
+              uniqueItems: true
+              items:
+                type: string
+                enum:
+                  - join
+                  - leave
+                  - pay
+
+    Subscription:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - name
+        - type
+        - status
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        type:
+          type: string
+          enum:
+            - monthly
+            - class_pack
+            - seasonal
+        status:
+          type: string
+          enum:
+            - active
+            - expiring
+            - expired
+            - frozen
+            - available
+        description:
+          type: string
+          nullable: true
+        price:
+          allOf:
+            - $ref: '#/components/schemas/Money'
+          nullable: true
+        stationId:
+          type: string
+          nullable: true
+        validUntil:
+          type: string
+          format: date-time
+          nullable: true
+        remainingVisits:
+          type: integer
+          minimum: 0
+          nullable: true
+        benefits:
+          type: array
+          items:
+            type: string

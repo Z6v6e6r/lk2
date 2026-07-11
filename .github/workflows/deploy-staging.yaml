@@ -1,0 +1,96 @@
+name: Build and deploy staging
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: staging
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: [api, worker, realtime, migrator]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/${{ matrix.service }}/Dockerfile
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/phub-${{ matrix.service }}:sha-${{ github.sha }}
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+      - run: |
+          mkdir -p digests
+          printf '%s' '${{ steps.image.outputs.digest }}' > digests/${{ matrix.service }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.service }}
+          path: digests/${{ matrix.service }}
+          retention-days: 30
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: digest-*
+          path: digests
+          merge-multiple: true
+      - name: Configure audited SSH
+        env:
+          DEPLOY_KEY: ${{ secrets.STAGING_DEPLOY_KEY }}
+          KNOWN_HOSTS: ${{ secrets.STAGING_KNOWN_HOSTS }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+      - name: Install release definition
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+        run: |
+          scp deploy/compose.staging.yaml "phub-deploy@$HOST:/opt/phub/compose.yaml"
+          {
+            echo "REGISTRY=ghcr.io/${{ github.repository_owner }}"
+            echo "API_IMAGE_DIGEST=$(cat digests/api)"
+            echo "WORKER_IMAGE_DIGEST=$(cat digests/worker)"
+            echo "REALTIME_IMAGE_DIGEST=$(cat digests/realtime)"
+            echo "MIGRATOR_IMAGE_DIGEST=$(cat digests/migrator)"
+            echo "RELEASE=${{ github.sha }}"
+          } > release.env
+          scp release.env "phub-deploy@$HOST:/opt/phub/release.env"
+      - name: Migrate and deploy the same image digests
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+        run: |
+          ssh "phub-deploy@$HOST" 'cd /opt/phub && docker compose --env-file release.env --profile migration run --rm migrator'
+          ssh "phub-deploy@$HOST" 'cd /opt/phub && docker compose --env-file release.env pull'
+          ssh "phub-deploy@$HOST" 'cd /opt/phub && docker compose --env-file release.env up -d --remove-orphans'
+      - name: Staging smoke test
+        env:
+          SMOKE_BASE_URL: ${{ vars.STAGING_BASE_URL }}
+        run: npm ci --ignore-scripts && npm run smoke

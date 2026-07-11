@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.json",
+  "include": [
+    "apps/api/**/*.ts",
+    "apps/worker/**/*.ts",
+    "apps/realtime/**/*.ts",
+    "apps/migrator/**/*.ts",
+    "packages/config/**/*.ts",
+    "packages/database/**/*.ts",
+    "packages/domain/**/*.ts",
+    "packages/observability/**/*.ts",
+    "packages/viva-adapter/**/*.ts"
+  ],
+  "exclude": ["node_modules", "dist"]
+}

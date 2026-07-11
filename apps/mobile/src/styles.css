@@ -1,0 +1,33 @@
+:root {
+  color: #172019;
+  background: #f4f7f2;
+  font-family: Inter, system-ui, sans-serif;
+}
+body {
+  margin: 0;
+}
+main {
+  min-height: 100vh;
+  display: grid;
+  align-content: center;
+  gap: 14px;
+  padding: max(30px, env(safe-area-inset-top)) 24px max(30px, env(safe-area-inset-bottom));
+}
+span {
+  color: #2f7d3f;
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+h1 {
+  margin: 0;
+  font-size: clamp(58px, 19vw, 96px);
+  letter-spacing: -0.06em;
+}
+p {
+  margin: 0 0 14px;
+  color: #627067;
+  font-size: 18px;
+  line-height: 1.5;
+}
