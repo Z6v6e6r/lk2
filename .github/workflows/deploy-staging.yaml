@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        service: [api, worker, realtime, migrator]
+        service: [web, api, worker, realtime, migrator]
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
@@ -75,13 +75,15 @@ jobs:
           printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
           printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
-      - name: Install release definition
+      - name: Install release and ingress definitions
         env:
           HOST: ${{ secrets.STAGING_HOST }}
         run: |
           scp deploy/compose.staging.yaml "phub-deploy@$HOST:/opt/phub/compose.yaml"
+          scp deploy/jetson/nginx/default.conf "phub-deploy@$HOST:/opt/phub/nginx/default.conf"
           {
             echo "REGISTRY=ghcr.io/z6v6e6r"
+            echo "WEB_IMAGE_DIGEST=$(cat digests/web)"
             echo "API_IMAGE_DIGEST=$(cat digests/api)"
             echo "WORKER_IMAGE_DIGEST=$(cat digests/worker)"
             echo "REALTIME_IMAGE_DIGEST=$(cat digests/realtime)"
@@ -102,7 +104,13 @@ jobs:
             docker compose --env-file release.env pull
             docker compose --env-file release.env --profile migration run --rm migrator
             docker compose --env-file release.env up -d --remove-orphans
+            docker compose --env-file infrastructure.env -f compose.infrastructure.yaml up -d nginx
           '
+      - name: Verify the web entrypoint
+        env:
+          SMOKE_BASE_URL: ${{ vars.STAGING_BASE_URL }}
+        run: |
+          curl --fail --silent --show-error "$SMOKE_BASE_URL/" | grep -q 'id="phub-app"'
       - name: Staging smoke test
         env:
           SMOKE_BASE_URL: ${{ vars.STAGING_BASE_URL }}

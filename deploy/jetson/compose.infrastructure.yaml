@@ -1,0 +1,180 @@
+name: phub-jetson-infrastructure
+
+x-private-service: &private-service
+  restart: unless-stopped
+  networks: [phub-private]
+  logging:
+    driver: local
+    options:
+      max-size: 10m
+      max-file: '3'
+
+services:
+  nginx:
+    <<: *private-service
+    image: ${NGINX_IMAGE}@${NGINX_IMAGE_DIGEST}
+    ports:
+      - '80:80'
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+
+  postgres:
+    <<: *private-service
+    image: ${POSTGRES_IMAGE}@${POSTGRES_IMAGE_DIGEST}
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    <<: *private-service
+    image: ${REDIS_IMAGE}@${REDIS_IMAGE_DIGEST}
+    command:
+      [
+        'redis-server',
+        '--appendonly',
+        'yes',
+        '--save',
+        '60',
+        '1',
+        '--maxmemory',
+        '128mb',
+        '--maxmemory-policy',
+        'noeviction',
+      ]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  rabbitmq:
+    <<: *private-service
+    image: ${RABBITMQ_IMAGE}@${RABBITMQ_IMAGE_DIGEST}
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
+    ports:
+      - '127.0.0.1:15672:15672'
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ['CMD', 'rabbitmq-diagnostics', '-q', 'ping']
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  minio:
+    <<: *private-service
+    image: ${MINIO_IMAGE}@${MINIO_IMAGE_DIGEST}
+    command: server /data --console-address :9001
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    ports:
+      - '127.0.0.1:9001:9001'
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ['CMD', 'curl', '-fsS', 'http://127.0.0.1:9000/minio/health/live']
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  otel-collector:
+    <<: *private-service
+    image: ${OTEL_IMAGE}@${OTEL_IMAGE_DIGEST}
+    command: ['--config=/etc/otelcol-contrib/config.yaml']
+    volumes:
+      - ./monitoring/otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro
+
+  prometheus:
+    <<: *private-service
+    image: ${PROMETHEUS_IMAGE}@${PROMETHEUS_IMAGE_DIGEST}
+    ports:
+      - '127.0.0.1:9090:9090'
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.retention.time=7d'
+      - '--storage.tsdb.retention.size=1GB'
+    volumes:
+      - ./monitoring/prometheus.yaml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+
+  loki:
+    <<: *private-service
+    image: ${LOKI_IMAGE}@${LOKI_IMAGE_DIGEST}
+    command: ['-config.file=/etc/loki/local-config.yaml']
+    volumes:
+      - ./monitoring/loki.yaml:/etc/loki/local-config.yaml:ro
+      - loki_data:/loki
+
+  grafana:
+    <<: *private-service
+    image: ${GRAFANA_IMAGE}@${GRAFANA_IMAGE_DIGEST}
+    ports:
+      - '127.0.0.1:3101:3000'
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+      GF_USERS_ALLOW_SIGN_UP: 'false'
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana-datasources.yaml:/etc/grafana/provisioning/datasources/datasources.yaml:ro
+
+  portainer:
+    <<: *private-service
+    image: ${PORTAINER_IMAGE}@${PORTAINER_IMAGE_DIGEST}
+    command: ['--http-disabled']
+    ports:
+      - '127.0.0.1:9443:9443'
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - portainer_data:/data
+
+  swagger-ui:
+    <<: *private-service
+    image: ${SWAGGER_UI_IMAGE}@${SWAGGER_UI_IMAGE_DIGEST}
+    environment:
+      URL: /spec/user/v1/openapi.yaml
+      TRY_IT_OUT_ENABLED: 'false'
+      SUPPORTED_SUBMIT_METHODS: '[]'
+      PERSIST_AUTHORIZATION: 'false'
+      VALIDATOR_URL: ''
+    ports:
+      - '127.0.0.1:18080:8080'
+    volumes:
+      - ./contracts/openapi:/usr/share/nginx/html/spec:ro
+
+  swagger-editor:
+    <<: *private-service
+    image: ${SWAGGER_EDITOR_IMAGE}@${SWAGGER_EDITOR_IMAGE_DIGEST}
+    ports:
+      - '127.0.0.1:18082:80'
+    volumes:
+      - ./contracts/openapi:/usr/share/nginx/html/spec:ro
+      - ./swagger/swagger-editor.conf:/etc/nginx/conf.d/default.conf:ro
+
+networks:
+  phub-private:
+    external: true
+    name: phub-private
+
+volumes:
+  postgres_data:
+  redis_data:
+  rabbitmq_data:
+  minio_data:
+  prometheus_data:
+  loki_data:
+  grafana_data:
+  portainer_data:

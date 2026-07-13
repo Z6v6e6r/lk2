@@ -8,6 +8,16 @@ x-runtime: &runtime
     - application
 
 services:
+  web:
+    <<: *runtime
+    image: ${REGISTRY}/phub-web@${WEB_IMAGE_DIGEST}
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -q -O /dev/null http://127.0.0.1:8080/healthz']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
   api:
     <<: *runtime
     image: ${REGISTRY}/phub-api@${API_IMAGE_DIGEST}
