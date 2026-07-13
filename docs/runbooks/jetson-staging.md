@@ -4,6 +4,12 @@ The Jetson Nano is an ARM64 staging node, not a build host. CI builds the
 application images once for `linux/arm64`, publishes them, and deploys the
 resulting digests. The node only pulls images by digest and runs Compose.
 
+Node services keep their runtime dependencies external to their ESM output.
+This is required for OpenTelemetry's Node instrumentation, which uses dynamic
+module loading and cannot run from an esbuild-bundled ESM artifact. Each
+immutable image therefore contains the compiled service and its production
+dependency tree.
+
 ## Network boundary
 
 - Public WAN forwarding targets only Nginx on ports 80 and, after a domain and

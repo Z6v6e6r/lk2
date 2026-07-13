@@ -5,9 +5,6 @@ export default defineConfig({
   format: ['esm'],
   target: 'node22',
   platform: 'node',
-  bundle: true,
-  splitting: false,
   sourcemap: true,
   clean: true,
-  noExternal: [/^@phub\//],
 });
