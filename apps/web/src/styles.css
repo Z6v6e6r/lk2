@@ -287,6 +287,92 @@ label {
   transform: translateY(-1px);
 }
 
+.viva-login-options {
+  display: grid;
+  gap: 12px;
+}
+
+.viva-login-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 56px;
+  gap: 12px;
+  padding: 12px 18px;
+  border: 1px solid #bdc9bd;
+  border-radius: 15px;
+  background: #fff;
+  color: #172019;
+  cursor: pointer;
+  font-weight: 780;
+  transition:
+    border-color 150ms ease,
+    box-shadow 150ms ease,
+    transform 150ms ease;
+}
+
+.viva-login-button:hover:not(:disabled) {
+  border-color: #2f7d3f;
+  box-shadow: 0 8px 18px rgba(47, 125, 63, 0.1);
+  transform: translateY(-1px);
+}
+
+.viva-provider-icon {
+  display: inline-grid;
+  width: 25px;
+  height: 25px;
+  place-items: center;
+  border-radius: 8px;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.viva-provider-icon--vk {
+  background: #0077ff;
+}
+
+.viva-provider-icon--yandex {
+  background: #fc3f1d;
+  font-size: 15px;
+}
+
+.legal-acceptances {
+  display: grid;
+  gap: 12px;
+  margin-top: 22px;
+}
+
+.legal-acceptance {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 0;
+  color: #5e6b61;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.45;
+}
+
+.legal-acceptance input {
+  width: 18px;
+  height: 18px;
+  margin: 1px 0 0;
+  accent-color: #2f7d3f;
+}
+
+.legal-acceptance a {
+  color: #2f6e3c;
+  font-weight: 750;
+}
+
+.auth-alternative {
+  display: block;
+  width: fit-content;
+  margin: 22px auto 0;
+}
+
 .form-actions {
   display: flex;
   flex-wrap: wrap;

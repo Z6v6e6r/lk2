@@ -242,7 +242,10 @@ export async function buildApp(options: BuildAppOptions) {
   });
 
   if (options.authService) {
-    registerAuthRoutes(app as unknown as FastifyInstance, options.authService, options.config);
+    registerAuthRoutes(app as unknown as FastifyInstance, options.authService, options.config, [
+      authenticate,
+      resolveTenant,
+    ]);
   }
 
   app.get(

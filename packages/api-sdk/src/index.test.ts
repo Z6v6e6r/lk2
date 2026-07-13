@@ -110,10 +110,10 @@ describe('PadlHubApiClient authentication boundary', () => {
     });
   });
 
-  it('creates valid operation keys when an embedded browser omits Web Crypto', async () => {
-    let observedHeaders: Headers | undefined;
+  it('creates valid operation keys when an embedded browser omits Web Crypto and Headers', async () => {
+    let observedHeaders: HeadersInit | undefined;
     const fetchImplementation: typeof fetch = (_input, init) => {
-      observedHeaders = new Headers(init?.headers);
+      observedHeaders = init?.headers;
       return Promise.resolve(
         jsonResponse(
           {
@@ -126,7 +126,9 @@ describe('PadlHubApiClient authentication boundary', () => {
       );
     };
     const originalCrypto = globalThis.crypto;
+    const originalHeaders = globalThis.Headers;
     vi.stubGlobal('crypto', undefined);
+    vi.stubGlobal('Headers', undefined);
 
     try {
       await createClient(fetchImplementation).createAuthChallenge({
@@ -135,10 +137,44 @@ describe('PadlHubApiClient authentication boundary', () => {
       });
     } finally {
       vi.stubGlobal('crypto', originalCrypto);
+      vi.stubGlobal('Headers', originalHeaders);
     }
 
-    expect(observedHeaders?.get('X-Correlation-ID')).toMatch(/^phub-[A-Za-z0-9-]{16,}$/);
-    expect(observedHeaders?.get('Idempotency-Key')).toMatch(/^phub-[A-Za-z0-9-]{16,}$/);
+    const headers = new Headers(observedHeaders);
+    expect(headers.get('X-Correlation-ID')).toMatch(/^phub-[A-Za-z0-9-]{16,}$/);
+    expect(headers.get('Idempotency-Key')).toMatch(/^phub-[A-Za-z0-9-]{16,}$/);
+  });
+
+  it('calls native fetch with the global receiver required by embedded browsers', async () => {
+    const originalFetch = globalThis.fetch;
+    let called = false;
+    vi.stubGlobal('fetch', function (this: unknown): Promise<Response> {
+      if (this !== globalThis) throw new Error('Native fetch lost its global receiver');
+      called = true;
+      return Promise.resolve(
+        jsonResponse(
+          {
+            challengeId: 'ac378ca8-b329-4dc1-bb72-da797db725c3',
+            expiresAt: '2026-07-11T12:05:00.000Z',
+            resendAfterSeconds: 60,
+          },
+          202,
+        ),
+      );
+    });
+
+    try {
+      await new PadlHubApiClient({
+        baseUrl: 'https://api.padlhub.test',
+        tenantKey: 'local-padel',
+        platform: 'web',
+        appVersion: '1.2.3',
+      }).createAuthChallenge({ method: 'phone_otp', phone: '+79991234567' });
+    } finally {
+      vi.stubGlobal('fetch', originalFetch);
+    }
+
+    expect(called).toBe(true);
   });
 
   it('stores only the returned PadlHub access token in memory after verification', async () => {

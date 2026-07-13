@@ -8,6 +8,7 @@ import Redis from 'ioredis';
 import { buildApp } from './app.js';
 import { AuthService } from './auth/auth-service.js';
 import { RedisAuthChallengeStore } from './auth/challenge-store.js';
+import { RedisVivaOAuthStateStore } from './auth/oauth-state-store.js';
 import { PostgresAuthRepository } from './auth/postgres-auth-repository.js';
 
 const config = loadConfig();
@@ -26,6 +27,7 @@ const vivaIdentityProvider = new VivaIdentityProvider({
   mode: config.VIVA_MODE,
   baseUrl: config.VIVA_AUTH_BASE_URL,
   profileApiBaseUrl: config.VIVA_AUTH_PROFILE_API_URL,
+  oauthScopes: config.VIVA_OAUTH_SCOPES,
   realm: config.VIVA_AUTH_REALM,
   clientId: config.VIVA_AUTH_CLIENT_ID,
   channel: config.VIVA_AUTH_CHANNEL,
@@ -41,6 +43,8 @@ const authService = new AuthService({
   config,
   repository: new PostgresAuthRepository(pool),
   challengeStore: new RedisAuthChallengeStore(redis),
+  vivaOAuthProvider: vivaIdentityProvider,
+  vivaOAuthStateStore: new RedisVivaOAuthStateStore(redis),
   providers,
 });
 const app = await buildApp({

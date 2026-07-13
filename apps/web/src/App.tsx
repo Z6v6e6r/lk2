@@ -3,10 +3,15 @@ import { PrimaryButton } from '@phub/ui';
 import { useEffect, useReducer, useRef, useState } from 'react';
 import type { ChangeEvent, FormEvent } from 'react';
 
-import type { AuthGateway, AuthenticatedSession, PhoneChallenge } from './auth-gateway.js';
+import type {
+  AuthGateway,
+  AuthenticatedSession,
+  PhoneChallenge,
+  VivaOAuthProvider,
+} from './auth-gateway.js';
 
-type View = 'restoring' | 'phone' | 'otp' | 'home';
-type BusyAction = 'request-code' | 'verify-code' | 'logout' | null;
+type View = 'restoring' | 'oauth' | 'phone' | 'otp' | 'home';
+type BusyAction = 'start-viva' | 'request-code' | 'verify-code' | 'logout' | null;
 
 interface AuthState {
   readonly view: View;
@@ -18,13 +23,18 @@ interface AuthState {
   readonly session: AuthenticatedSession | null;
   readonly error: string | null;
   readonly notice: string | null;
+  readonly publicOfferAccepted: boolean;
+  readonly personalDataPolicyAccepted: boolean;
 }
 
 type AuthAction =
   | { readonly type: 'restore-completed'; readonly session: AuthenticatedSession | null }
   | { readonly type: 'restore-failed'; readonly message: string }
+  | { readonly type: 'oauth-view' }
   | { readonly type: 'phone-changed'; readonly value: string }
+  | { readonly type: 'acceptance-toggled'; readonly acceptance: 'public-offer' | 'personal-data' }
   | { readonly type: 'code-changed'; readonly value: string }
+  | { readonly type: 'oauth-started' }
   | { readonly type: 'request-started' }
   | {
       readonly type: 'request-completed';
@@ -49,6 +59,8 @@ const initialState: AuthState = {
   session: null,
   error: null,
   notice: null,
+  publicOfferAccepted: false,
+  personalDataPolicyAccepted: false,
 };
 
 function reducer(state: AuthState, action: AuthAction): AuthState {
@@ -56,13 +68,21 @@ function reducer(state: AuthState, action: AuthAction): AuthState {
     case 'restore-completed':
       return action.session
         ? { ...state, view: 'home', session: action.session, error: null }
-        : { ...state, view: 'phone', session: null, error: null };
+        : { ...state, view: 'oauth', session: null, error: null };
     case 'restore-failed':
-      return { ...state, view: 'phone', error: action.message };
+      return { ...state, view: 'oauth', error: action.message };
+    case 'oauth-view':
+      return { ...state, view: 'oauth', busy: null, error: null, notice: null };
     case 'phone-changed':
       return { ...state, phoneInput: action.value, error: null };
+    case 'acceptance-toggled':
+      return action.acceptance === 'public-offer'
+        ? { ...state, publicOfferAccepted: !state.publicOfferAccepted, error: null }
+        : { ...state, personalDataPolicyAccepted: !state.personalDataPolicyAccepted, error: null };
     case 'code-changed':
       return { ...state, code: action.value, error: null };
+    case 'oauth-started':
+      return { ...state, busy: 'start-viva', error: null, notice: null };
     case 'request-started':
       return { ...state, busy: 'request-code', error: null, notice: null };
     case 'request-completed':
@@ -114,7 +134,7 @@ function reducer(state: AuthState, action: AuthAction): AuthState {
     case 'logout-completed':
       return {
         ...initialState,
-        view: 'phone',
+        view: 'oauth',
         phoneInput: state.phoneInput,
         error: action.message ?? null,
         notice: action.message ? null : 'Вы вышли из аккаунта',
@@ -129,7 +149,7 @@ function errorCode(error: unknown): string | undefined {
 
 function userMessage(
   error: unknown,
-  operation: 'restore' | 'request' | 'verify' | 'logout',
+  operation: 'restore' | 'request' | 'verify' | 'oauth' | 'logout',
 ): string {
   switch (errorCode(error)) {
     case 'PHONE_INVALID':
@@ -149,6 +169,10 @@ function userMessage(
     case 'AUTH_REQUIRED':
     case 'AUTH_TOKEN_INVALID':
       return 'Сессия завершилась. Войдите ещё раз.';
+    case 'AUTH_PROVIDER_UNAVAILABLE':
+      return 'Вход через Viva сейчас недоступен. Проверьте настройку OAuth или повторите позже.';
+    case 'LEGAL_ACCEPTANCE_REQUIRED':
+      return 'Подтвердите публичную оферту и обработку персональных данных.';
   }
 
   if (operation === 'restore') {
@@ -156,6 +180,9 @@ function userMessage(
   }
   if (operation === 'logout') {
     return 'Не удалось выйти: сессия осталась активной. Проверьте связь и повторите.';
+  }
+  if (operation === 'oauth') {
+    return 'Не удалось открыть вход через Viva. Попробуйте ещё раз.';
   }
   return operation === 'request'
     ? 'Не удалось отправить код. Проверьте связь и попробуйте снова.'
@@ -175,17 +202,35 @@ function Brand(): React.JSX.Element {
 
 function BusyStatus({ action }: { readonly action: BusyAction }): React.JSX.Element {
   const message =
-    action === 'request-code'
-      ? 'Отправляем код…'
-      : action === 'verify-code'
-        ? 'Проверяем код…'
-        : action === 'logout'
-          ? 'Завершаем сессию…'
-          : '';
+    action === 'start-viva'
+      ? 'Открываем вход через Viva…'
+      : action === 'request-code'
+        ? 'Отправляем код…'
+        : action === 'verify-code'
+          ? 'Проверяем код…'
+          : action === 'logout'
+            ? 'Завершаем сессию…'
+            : '';
   return (
     <p className="sr-only" role="status" aria-live="polite">
       {message}
     </p>
+  );
+}
+
+function VivaProviderIcon({
+  provider,
+}: {
+  readonly provider: VivaOAuthProvider;
+}): React.JSX.Element {
+  return provider === 'vkid' ? (
+    <span className="viva-provider-icon viva-provider-icon--vk" aria-hidden="true">
+      VK
+    </span>
+  ) : (
+    <span className="viva-provider-icon viva-provider-icon--yandex" aria-hidden="true">
+      Я
+    </span>
   );
 }
 
@@ -231,8 +276,9 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
     dispatch({ type: 'request-started' });
     void gateway.requestCode(phoneE164).then(
       (challenge) => dispatch({ type: 'request-completed', phoneE164, challenge }),
-      (error: unknown) =>
-        dispatch({ type: 'operation-failed', message: userMessage(error, 'request') }),
+      (error: unknown) => {
+        dispatch({ type: 'operation-failed', message: userMessage(error, 'request') });
+      },
     );
   }
 
@@ -255,13 +301,39 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
     dispatch({ type: 'verify-started' });
     void gateway.verifyCode({ challengeId: state.challenge.challengeId, code: state.code }).then(
       (session) => dispatch({ type: 'verify-completed', session }),
-      (error: unknown) =>
-        dispatch({ type: 'operation-failed', message: userMessage(error, 'verify') }),
+      (error: unknown) => {
+        dispatch({ type: 'operation-failed', message: userMessage(error, 'verify') });
+      },
     );
   }
 
   function handlePhoneChange(event: ChangeEvent<HTMLInputElement>): void {
     dispatch({ type: 'phone-changed', value: event.currentTarget.value });
+  }
+
+  function startVivaOAuth(provider: VivaOAuthProvider): void {
+    if (!state.publicOfferAccepted || !state.personalDataPolicyAccepted) {
+      dispatch({
+        type: 'operation-failed',
+        message: 'Подтвердите публичную оферту и согласие на обработку персональных данных.',
+      });
+      return;
+    }
+    dispatch({ type: 'oauth-started' });
+    void gateway
+      .startVivaOAuth({
+        provider,
+        acceptance: {
+          publicOfferAccepted: state.publicOfferAccepted,
+          personalDataPolicyAccepted: state.personalDataPolicyAccepted,
+        },
+      })
+      .catch((error: unknown) => {
+        dispatch({
+          type: 'operation-failed',
+          message: userMessage(error, 'oauth'),
+        });
+      });
   }
 
   function handleCodeChange(event: ChangeEvent<HTMLInputElement>): void {
@@ -273,8 +345,9 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
     dispatch({ type: 'logout-started' });
     void gateway.logout().then(
       () => dispatch({ type: 'logout-completed' }),
-      (error: unknown) =>
-        dispatch({ type: 'logout-failed', message: userMessage(error, 'logout') }),
+      (error: unknown) => {
+        dispatch({ type: 'logout-failed', message: userMessage(error, 'logout') });
+      },
     );
   }
 
@@ -340,6 +413,7 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
 
   const isRequesting = state.busy === 'request-code';
   const isVerifying = state.busy === 'verify-code';
+  const isStartingViva = state.busy === 'start-viva';
   const resendSeconds = state.challenge
     ? Math.max(0, Math.ceil((Date.parse(state.challenge.resendAt) - currentTime) / 1000))
     : 0;
@@ -359,7 +433,86 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
 
       <section className="auth-panel">
         <div className="auth-card">
-          {state.view === 'phone' ? (
+          {state.view === 'oauth' ? (
+            <>
+              <span className="step-label">Вход через Viva</span>
+              <h1 id="auth-title">Войти в личный кабинет</h1>
+              <p className="form-lead">
+                Используйте привычный аккаунт Viva. После входа мы безопасно откроем ваш кабинет
+                ПадлХАБ.
+              </p>
+
+              <div className="viva-login-options" aria-label="Способ входа через Viva">
+                <button
+                  className="viva-login-button"
+                  type="button"
+                  disabled={isStartingViva}
+                  onClick={() => startVivaOAuth('vkid')}
+                >
+                  <VivaProviderIcon provider="vkid" />
+                  <span>VK ID или Mail.ru</span>
+                </button>
+                <button
+                  className="viva-login-button"
+                  type="button"
+                  disabled={isStartingViva}
+                  onClick={() => startVivaOAuth('yandex')}
+                >
+                  <VivaProviderIcon provider="yandex" />
+                  <span>Yandex</span>
+                </button>
+              </div>
+
+              <div className="legal-acceptances">
+                <label className="legal-acceptance">
+                  <input
+                    type="checkbox"
+                    checked={state.publicOfferAccepted}
+                    disabled={isStartingViva}
+                    onChange={() =>
+                      dispatch({ type: 'acceptance-toggled', acceptance: 'public-offer' })
+                    }
+                  />
+                  <span>
+                    Принимаю условия{' '}
+                    <a href="/documents/public-offer" target="_blank" rel="noreferrer">
+                      публичной оферты
+                    </a>
+                  </span>
+                </label>
+                <label className="legal-acceptance">
+                  <input
+                    type="checkbox"
+                    checked={state.personalDataPolicyAccepted}
+                    disabled={isStartingViva}
+                    onChange={() =>
+                      dispatch({ type: 'acceptance-toggled', acceptance: 'personal-data' })
+                    }
+                  />
+                  <span>
+                    Даю согласие на{' '}
+                    <a href="/documents/personal-data-policy" target="_blank" rel="noreferrer">
+                      обработку персональных данных
+                    </a>
+                  </span>
+                </label>
+              </div>
+
+              {state.error ? (
+                <p id="auth-error" className="error-message" role="alert">
+                  {state.error}
+                </p>
+              ) : null}
+              <button
+                className="text-button auth-alternative"
+                type="button"
+                disabled={isStartingViva}
+                onClick={() => dispatch({ type: 'edit-phone' })}
+              >
+                Войти по номеру телефона
+              </button>
+            </>
+          ) : state.view === 'phone' ? (
             <>
               <span className="step-label">Шаг 1 из 2</span>
               <h1 id="auth-title">Вход по номеру</h1>
@@ -411,6 +564,13 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
               {import.meta.env.DEV ? (
                 <p className="dev-hint">Тестовый вход: +79990000001 / 0000</p>
               ) : null}
+              <button
+                className="text-button auth-alternative"
+                type="button"
+                onClick={() => dispatch({ type: 'oauth-view' })}
+              >
+                ← Войти через Viva
+              </button>
             </>
           ) : (
             <>

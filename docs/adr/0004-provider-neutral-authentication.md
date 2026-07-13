@@ -3,6 +3,7 @@
 - Status: accepted
 - Date: 2026-07-11
 - Extends: [ADR 0002](0002-viva-boundary.md)
+- Partially extended by: [ADR 0005](0005-viva-user-delegation-and-direct-transport.md)
 
 ## Context
 
@@ -27,8 +28,10 @@ The API resolves one authentication-provider binding for the verified tenant:
   unchanged.
 
 Provider configuration and secrets remain server-side. Viva access and refresh tokens are scoped
-to the adapter call: they never leave `@phub/viva-adapter`, enter a PadlHub response, session row,
-log, trace or metric.
+to the adapter call and never enter a normal PadlHub response, session row, log, trace or metric.
+The only narrowly defined exception is the feature-gated user delegation in ADR 0005: an
+allowlisted, short-lived Viva access-token may be delivered to browser memory for approved
+direct-Viva operations; a Viva refresh-token remains envelope-encrypted on the server.
 
 ## Identity mapping
 

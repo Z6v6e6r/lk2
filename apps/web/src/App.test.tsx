@@ -35,6 +35,9 @@ function createGateway(overrides: Partial<AuthGateway> = {}): AuthGateway {
       resendAt: '2026-07-11T12:01:00.000Z',
     }),
     verifyCode: vi.fn().mockResolvedValue(session),
+    startVivaOAuth: vi.fn().mockResolvedValue(undefined),
+    getVivaAccessToken: vi.fn().mockReturnValue(undefined),
+    refreshVivaAccessToken: vi.fn().mockResolvedValue('viva-access-token'),
     logout: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
@@ -43,6 +46,10 @@ function createGateway(overrides: Partial<AuthGateway> = {}): AuthGateway {
 afterEach(() => {
   cleanup();
 });
+
+async function openPhoneLogin(user: ReturnType<typeof userEvent.setup>): Promise<void> {
+  await user.click(await screen.findByRole('button', { name: 'Войти по номеру телефона' }));
+}
 
 describe('PadlHub web authentication', () => {
   it('restores an HttpOnly-cookie-backed session before showing protected home', async () => {
@@ -53,7 +60,7 @@ describe('PadlHub web authentication', () => {
     expect(screen.getByRole('status')).toHaveTextContent('Проверяем сессию');
     expect(await screen.findByRole('heading', { name: 'Анна Петрова' })).toBeVisible();
     expect(screen.getByText('ПаделХАБ', { selector: 'dd' })).toBeVisible();
-    expect(screen.queryByRole('textbox', { name: 'Номер телефона' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'VK ID или Mail.ru' })).not.toBeInTheDocument();
     expect(gateway.restoreSession).toHaveBeenCalledOnce();
   });
 
@@ -63,6 +70,7 @@ describe('PadlHub web authentication', () => {
 
     render(<App gateway={gateway} tenantKey="padlhub" />);
 
+    await openPhoneLogin(user);
     const phone = await screen.findByRole('textbox', { name: 'Номер телефона' });
     await user.clear(phone);
     await user.type(phone, '+7 999 000-00-01');
@@ -88,7 +96,7 @@ describe('PadlHub web authentication', () => {
     await user.click(screen.getByRole('button', { name: 'Выйти' }));
 
     expect(gateway.logout).toHaveBeenCalledOnce();
-    expect(await screen.findByRole('heading', { name: 'Вход по номеру' })).toBeVisible();
+    expect(await screen.findByRole('heading', { name: 'Войти в личный кабинет' })).toBeVisible();
     expect(screen.queryByText('Анна Петрова')).not.toBeInTheDocument();
   });
 
@@ -116,6 +124,7 @@ describe('PadlHub web authentication', () => {
 
     render(<App gateway={gateway} tenantKey="padlhub" />);
 
+    await openPhoneLogin(user);
     const phone = await screen.findByRole('textbox', { name: 'Номер телефона' });
     await user.clear(phone);
     await user.type(phone, '+79990000001');
@@ -138,6 +147,25 @@ describe('PadlHub web authentication', () => {
     render(<App gateway={gateway} tenantKey="padlhub" />);
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Не удалось проверить сессию');
-    expect(screen.getByRole('textbox', { name: 'Номер телефона' })).toHaveFocus();
+    expect(screen.getByRole('heading', { name: 'Войти в личный кабинет' })).toBeVisible();
+  });
+
+  it('requires both legal acceptances before beginning Viva OAuth', async () => {
+    const gateway = createGateway();
+    const user = userEvent.setup();
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+
+    const vkButton = await screen.findByRole('button', { name: 'VK ID или Mail.ru' });
+    await user.click(vkButton);
+    expect(await screen.findByRole('alert')).toHaveTextContent('Подтвердите публичную оферту');
+    expect(gateway.startVivaOAuth).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole('checkbox', { name: /публичной оферты/i }));
+    await user.click(screen.getByRole('checkbox', { name: /обработку персональных данных/i }));
+    await user.click(vkButton);
+    expect(gateway.startVivaOAuth).toHaveBeenCalledWith({
+      provider: 'vkid',
+      acceptance: { publicOfferAccepted: true, personalDataPolicyAccepted: true },
+    });
   });
 });

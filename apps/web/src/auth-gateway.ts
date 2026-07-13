@@ -35,6 +35,13 @@ export interface PhoneChallenge {
   readonly resendAt: string;
 }
 
+export type VivaOAuthProvider = 'vkid' | 'yandex';
+
+export interface LegalAcceptance {
+  readonly publicOfferAccepted: boolean;
+  readonly personalDataPolicyAccepted: boolean;
+}
+
 export interface AuthGateway {
   readonly restoreSession: () => Promise<AuthenticatedSession | null>;
   readonly requestCode: (phoneE164: string) => Promise<PhoneChallenge>;
@@ -42,6 +49,17 @@ export interface AuthGateway {
     readonly challengeId: string;
     readonly code: string;
   }) => Promise<AuthenticatedSession>;
+  /**
+   * Starts a server-owned OAuth Authorization Code + PKCE flow. The redirect
+   * URL is deliberately obtained from PadlHub rather than constructed in the
+   * browser: state, PKCE verifier and legal-acceptance intent are server-side.
+   */
+  readonly startVivaOAuth: (input: {
+    readonly provider: VivaOAuthProvider;
+    readonly acceptance: LegalAcceptance;
+  }) => Promise<void>;
+  readonly getVivaAccessToken: () => string | undefined;
+  readonly refreshVivaAccessToken: () => Promise<string>;
   readonly logout: () => Promise<void>;
 }
 
@@ -89,6 +107,30 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     ...(options.fetchImplementation ? { fetchImplementation: options.fetchImplementation } : {}),
   };
   const client = new PadlHubApiClient(clientOptions);
+  let vivaAccessToken: string | undefined;
+  let vivaAccessExpiresAt = 0;
+
+  async function applyVivaAccess(handoffCode?: string): Promise<string> {
+    const access = await client.issueVivaAccessToken(handoffCode ? { handoffCode } : {});
+    vivaAccessToken = access.accessToken;
+    vivaAccessExpiresAt = Date.parse(access.expiresAt);
+    return access.accessToken;
+  }
+
+  async function consumeVivaHandoff(): Promise<void> {
+    if (typeof window === 'undefined') return;
+    const currentUrl = new URL(window.location.href);
+    const fragment = new URLSearchParams(currentUrl.hash.replace(/^#/, ''));
+    const handoffCode = fragment.get('viva_handoff');
+    if (!handoffCode) return;
+    try {
+      await applyVivaAccess(handoffCode);
+    } finally {
+      fragment.delete('viva_handoff');
+      currentUrl.hash = fragment.toString();
+      window.history.replaceState({}, '', currentUrl.toString());
+    }
+  }
 
   function normalizeSession(session: ApiAuthenticatedSession): AuthenticatedSession {
     return { context: normalizeContext(session.context, options.tenantKey) };
@@ -96,7 +138,9 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
 
   async function restore(): Promise<AuthenticatedSession | null> {
     try {
-      return normalizeSession(await client.refreshSession());
+      const session = normalizeSession(await client.refreshSession());
+      await consumeVivaHandoff().catch(() => undefined);
+      return session;
     } catch (error) {
       client.clearAccessToken();
       if (isUnauthorized(error)) return null;
@@ -129,8 +173,32 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       return normalizeSession(session);
     },
 
+    async startVivaOAuth(input) {
+      if (!input.acceptance.publicOfferAccepted || !input.acceptance.personalDataPolicyAccepted) {
+        throw new Error('Required legal acceptance is missing');
+      }
+      const response = await client.createVivaOAuthAuthorization({
+        provider: input.provider,
+        acceptance: { publicOfferAccepted: true, personalDataPolicyAccepted: true },
+      });
+      if (!response.redirectUrl) throw new Error('Viva OAuth redirect is unavailable');
+      window.location.assign(response.redirectUrl);
+    },
+
+    getVivaAccessToken() {
+      return vivaAccessToken && vivaAccessExpiresAt > Date.now() + 30_000
+        ? vivaAccessToken
+        : undefined;
+    },
+
+    async refreshVivaAccessToken() {
+      return applyVivaAccess();
+    },
+
     async logout() {
       await client.revokeSession();
+      vivaAccessToken = undefined;
+      vivaAccessExpiresAt = 0;
     },
   };
 }

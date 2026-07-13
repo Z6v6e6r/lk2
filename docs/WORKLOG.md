@@ -1,5 +1,27 @@
 # Worklog
 
+## 2026-07-12 — Viva OAuth cabinet entry and delegation design
+
+- Reworked the web authentication entry screen around Viva OAuth through VK ID/Mail.ru and Yandex,
+  while retaining SMS as an explicit fallback.
+- Implemented the feature-gated server-owned OAuth start/callback, one-time Redis PKCE state,
+  authorization-code exchange in the Viva adapter, PadlHub session issuance and encrypted
+  server-side Viva refresh-token persistence.
+- Added a one-time callback handoff and authenticated Viva access broker: the browser keeps only a
+  short-lived access-token in memory, while multi-node refresh is serialized by a Redis lease and
+  rotated refresh credentials are encrypted before replacement. Logout revokes the local Viva
+  delegation alongside the PadlHub refresh session.
+- Added required public-offer and personal-data-policy confirmations before an OAuth start request;
+  the browser sends only the confirmation intent to the PadlHub-owned OAuth start endpoint.
+- Persisted that confirmation immediately as a tenant-scoped legal intent keyed by a hash of OAuth
+  state; a successful callback binds it to the PadlHub user and creates the two final versioned
+  document-acceptance rows.
+- Recorded the feature-gated Viva user-delegation model: server-encrypted Viva refresh-token,
+  in-memory short-lived browser access-token, refresh/revocation behavior and the direct-Viva
+  allowlist for profile, slots, purchase and cancellation.
+- Documented an immediate per-tenant/per-operation switch from `DIRECT_VIVA` to `LOCAL`,
+  `SERVER_VIVA`, or `UNAVAILABLE`, including reconciliation for already pending commands.
+
 ## 2026-07-11 — platform baseline
 
 - Imported and hashed the pre-existing Cabinet OpenAPI draft without altering it.

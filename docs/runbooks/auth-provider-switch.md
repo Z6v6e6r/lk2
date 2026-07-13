@@ -5,11 +5,14 @@ Viva mock locally. The client contract is provider-neutral; no web, mobile, Tild
 part of a provider switch.
 
 See [ADR 0004](../adr/0004-provider-neutral-authentication.md) for the session and identity
-invariants.
+invariants and [ADR 0005](../adr/0005-viva-user-delegation-and-direct-transport.md) for the
+feature-gated OAuth delegation and direct-Viva transport.
 
 ## Non-negotiable guardrails
 
-- Clients call only PadlHub APIs and never receive or store Viva credentials or identifiers.
+- Clients call only PadlHub product APIs and never receive a Viva system key, identifier as a primary
+  identifier, or Viva refresh-token. The ADR 0005 exception permits only a short-lived Viva
+  user access-token in browser memory for explicitly allowlisted direct routes.
 - Change one tenant binding at a time. Do not introduce fallback merging or parallel verification
   across providers.
 - Preserve the PadlHub user UUID. Never equate provider accounts by phone alone.
@@ -18,6 +21,42 @@ invariants.
 - Do not delete users, integration mappings or session history during switch or rollback.
 - This runbook covers authentication and the home context only. Do not include schedule data in its
   smoke tests or success criteria.
+
+## Enable Viva OAuth delegation and direct transport
+
+This is separate from a provider-binding switch. It is disabled by default and is enabled one tenant
+and one operation at a time.
+
+1. Obtain Viva's written confirmation for the exact PKCE redirect URI, `vkid` and `yandex` aliases,
+   required scopes (including refresh/offline scope), access-token audience, refresh policy, revoke
+   endpoint and permitted browser CORS origins.
+2. In staging, verify that the OAuth callback creates a stable PadlHub UUID from Viva
+   `(issuer, subject)`, writes the two document-version acceptances, creates a PadlHub session and
+   stores the Viva refresh-token only in encrypted delegation storage.
+3. Inspect browser storage, response bodies, logs, traces and metrics. The only permitted Viva
+   credential in the browser is a current access-token held in memory. It must not appear in cookies,
+   LocalStorage, SessionStorage, URLs, error reports or analytics.
+4. Verify token rotation in two browser tabs: exactly one refresh reaches Viva, the replacement
+   refresh-token is persisted atomically, and both tabs receive a usable short-lived access-token.
+5. Enable profile first, then available-slot read. Confirm direct browser requests have the approved
+   route/method/scope only and PadlHub continues to return its own DTOs and UUIDs.
+6. Enable purchase/cancellation only after a command-intent audit, Viva idempotency mapping and a
+   reconciliation source are live. Simulate a lost browser acknowledgement; the command must remain
+   `PENDING_RECONCILIATION`, never become successful merely from a client claim.
+7. Record release, actor, tenant, operation flag and correlation IDs. Monitor OAuth callback errors,
+   delegation refresh failures, direct-route errors and reconciliation lag throughout the soak window.
+
+### Emergency disable / switch to PadlHub
+
+1. Disable the `DIRECT_VIVA` flag for the affected tenant and operation. New browser Viva
+   access-tokens must stop being issued immediately; do not revoke unrelated PadlHub sessions.
+2. Set the server-side operation policy to `LOCAL`, if its PadlHub implementation is ready, or to
+   `UNAVAILABLE` with a stable user error. Use `SERVER_VIVA` only when Viva explicitly approves that
+   fallback traffic.
+3. Existing browser access-tokens are not renewable and expire naturally. Revoke all server-side
+   delegations only for a credential compromise or explicit user-security event.
+4. Reconcile commands in `PENDING_RECONCILIATION`, preserve evidence and audit history, then run the
+   operation-specific smoke test against the selected replacement source.
 
 ## Pre-switch checklist
 

@@ -49,6 +49,14 @@ const environmentSchema = z.object({
   VIVA_AUTH_CLIENT_ID: z.string().min(1).default('widget'),
   VIVA_AUTH_TENANT_KEY: z.string().min(1).default('iSkq6G'),
   VIVA_AUTH_CHANNEL: z.string().min(1).default('cascade'),
+  VIVA_OAUTH_ENABLED: booleanFromEnvironment,
+  VIVA_OAUTH_REDIRECT_URI: z.string().url().optional().or(z.literal('')),
+  VIVA_OAUTH_SUCCESS_REDIRECT_URL: z.string().url().optional().or(z.literal('')),
+  VIVA_OAUTH_SCOPES: z.string().min(1).default('openid'),
+  VIVA_DELEGATION_ENCRYPTION_KEY: z.string().optional(),
+  VIVA_DELEGATION_KEY_VERSION: z.string().min(1).default('v1'),
+  PUBLIC_OFFER_VERSION: z.string().min(1).default('pending'),
+  PERSONAL_DATA_POLICY_VERSION: z.string().min(1).default('pending'),
   OTEL_SERVICE_NAMESPACE: z.string().default('phub'),
   OTEL_EXPORTER_OTLP_ENDPOINT: z.string().url().optional().or(z.literal('')),
   SENTRY_DSN: z.string().url().optional().or(z.literal('')),
@@ -73,6 +81,14 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
   }
   if (parsed.data.APP_ENV === 'production' && !parsed.data.TRUSTED_PROXY_CIDRS.trim()) {
     throw new Error('TRUSTED_PROXY_CIDRS is required in production');
+  }
+  if (parsed.data.VIVA_OAUTH_ENABLED) {
+    if (!parsed.data.VIVA_OAUTH_REDIRECT_URI || !parsed.data.VIVA_OAUTH_SUCCESS_REDIRECT_URL) {
+      throw new Error('Viva OAuth redirect URLs are required when VIVA_OAUTH_ENABLED=true');
+    }
+    if (!parsed.data.VIVA_DELEGATION_ENCRYPTION_KEY) {
+      throw new Error('Viva delegation encryption key is required when VIVA_OAUTH_ENABLED=true');
+    }
   }
   if (
     parsed.data.APP_ENV === 'production' &&

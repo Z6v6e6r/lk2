@@ -57,7 +57,7 @@ export type IdentityProviderKey = 'VIVA' | 'LOCAL';
 export interface VerifiedExternalIdentity {
   readonly issuer: string;
   readonly subject: string;
-  readonly phoneE164: string;
+  readonly phoneE164?: string;
   readonly displayName: string;
 }
 
@@ -74,6 +74,40 @@ export interface IdentityProviderPort {
     readonly providerTenantKey: string;
     readonly correlationId: string;
   }): Promise<VerifiedExternalIdentity>;
+}
+
+export type VivaOAuthProvider = 'vkid' | 'yandex';
+
+export interface VivaOAuthProviderPort {
+  createAuthorizationUrl(input: {
+    readonly provider: VivaOAuthProvider;
+    readonly tenantKey: string;
+    readonly redirectUri: string;
+    readonly state: string;
+    readonly codeChallenge: string;
+  }): string;
+  exchangeAuthorizationCode(input: {
+    readonly code: string;
+    readonly codeVerifier: string;
+    readonly providerTenantKey: string;
+    readonly redirectUri: string;
+    readonly correlationId: string;
+  }): Promise<{
+    readonly identity: VerifiedExternalIdentity;
+    readonly accessToken: string;
+    readonly accessExpiresIn?: number;
+    readonly refreshToken: string;
+    readonly refreshExpiresIn?: number;
+  }>;
+  refreshUserDelegation(input: {
+    readonly refreshToken: string;
+    readonly correlationId: string;
+  }): Promise<{
+    readonly accessToken: string;
+    readonly accessExpiresIn?: number;
+    readonly refreshToken?: string;
+    readonly refreshExpiresIn?: number;
+  }>;
 }
 
 export type IdentityProviderErrorCode =

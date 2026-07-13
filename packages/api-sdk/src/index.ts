@@ -10,6 +10,8 @@ export type UserContext = components['schemas']['UserContext'];
 export type RequestAuthMode = 'none' | 'required';
 export type SessionIntent = 'refresh' | 'logout';
 
+export type VivaOAuthProvider = 'vkid' | 'yandex';
+
 export type ApiRequestInit = RequestInit & {
   readonly auth?: RequestAuthMode;
   readonly idempotencyKey?: string;
@@ -47,6 +49,8 @@ interface RequestPolicy {
   readonly requestInit: RequestInit;
 }
 
+type HeaderRecord = Record<string, string>;
+
 let fallbackRequestSequence = 0;
 
 function createCorrelationId(): string {
@@ -60,6 +64,44 @@ function createCorrelationId(): string {
   return `phub-${Date.now().toString(36)}-${fallbackRequestSequence.toString(36)}-${Math.random()
     .toString(36)
     .slice(2, 14)}`;
+}
+
+function createHeaderRecord(init: HeadersInit | undefined): HeaderRecord {
+  if (!init) return {};
+  if (Array.isArray(init)) {
+    return Object.fromEntries(init.map(([name, value]) => [name, String(value)]));
+  }
+
+  const possibleHeaders = init as { readonly forEach?: unknown };
+  if (typeof possibleHeaders.forEach === 'function') {
+    const values: HeaderRecord = {};
+    (possibleHeaders as { forEach(callback: (value: string, name: string) => void): void }).forEach(
+      (value, name) => {
+        values[name] = value;
+      },
+    );
+    return values;
+  }
+
+  return Object.fromEntries(
+    Object.entries(init as Record<string, string>).map(([name, value]) => [name, String(value)]),
+  );
+}
+
+function findHeaderName(headers: HeaderRecord, name: string): string | undefined {
+  const normalizedName = name.toLowerCase();
+  return Object.keys(headers).find((candidate) => candidate.toLowerCase() === normalizedName);
+}
+
+function setHeader(headers: HeaderRecord, name: string, value: string): void {
+  const existingName = findHeaderName(headers, name);
+  if (existingName) delete headers[existingName];
+  headers[name] = value;
+}
+
+function deleteHeader(headers: HeaderRecord, name: string): void {
+  const existingName = findHeaderName(headers, name);
+  if (existingName) delete headers[existingName];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -91,7 +133,8 @@ export class PadlHubApiClient {
   private refreshInFlight: Promise<AuthenticatedSession> | undefined;
 
   public constructor(private readonly options: ApiClientOptions) {
-    this.fetchImplementation = options.fetchImplementation ?? fetch;
+    this.fetchImplementation =
+      options.fetchImplementation ?? ((input, init) => globalThis.fetch(input, init));
     this.apiRoot = `${options.baseUrl.replace(/\/$/, '')}/user/api/v1/${encodeURIComponent(options.tenantKey)}`;
     this.accessToken = options.initialAccessToken?.trim() || undefined;
   }
@@ -159,6 +202,41 @@ export class PadlHubApiClient {
     );
     this.applyAuthenticatedSession(session);
     return session;
+  }
+
+  public createVivaOAuthAuthorization(input: {
+    readonly provider: VivaOAuthProvider;
+    readonly acceptance: {
+      readonly publicOfferAccepted: true;
+      readonly personalDataPolicyAccepted: true;
+    };
+  }): Promise<{ readonly redirectUrl: string }> {
+    const idempotencyKey = createCorrelationId();
+    return this.request<{ readonly redirectUrl: string }>('/auth/viva/authorize', {
+      method: 'POST',
+      auth: 'none',
+      credentials: 'include',
+      idempotencyKey,
+      body: jsonRequestBody(input),
+    });
+  }
+
+  public issueVivaAccessToken(
+    input: {
+      readonly handoffCode?: string;
+    } = {},
+  ): Promise<{ readonly accessToken: string; readonly expiresAt: string }> {
+    const idempotencyKey = createCorrelationId();
+    return this.request<{ readonly accessToken: string; readonly expiresAt: string }>(
+      '/auth/viva/access',
+      {
+        method: 'POST',
+        auth: 'required',
+        credentials: 'include',
+        idempotencyKey,
+        body: jsonRequestBody(input),
+      },
+    );
   }
 
   public refreshSession(): Promise<AuthenticatedSession> {
@@ -249,24 +327,24 @@ export class PadlHubApiClient {
     correlationId: string,
     allowRefresh: boolean,
   ): Promise<TResponse> {
-    const headers = new Headers(policy.requestInit.headers);
-    headers.set('Accept', 'application/json');
-    headers.set('X-Correlation-ID', correlationId);
-    headers.set('X-App-Platform', this.options.platform);
-    headers.set('X-App-Version', this.options.appVersion);
-    if (this.options.appBuild) headers.set('X-App-Build', this.options.appBuild);
-    if (policy.idempotencyKey) headers.set('Idempotency-Key', policy.idempotencyKey);
-    if (policy.sessionIntent) headers.set('X-Session-Intent', policy.sessionIntent);
-    if (policy.requestInit.body && !headers.has('Content-Type')) {
-      headers.set('Content-Type', 'application/json');
+    const headers = createHeaderRecord(policy.requestInit.headers);
+    setHeader(headers, 'Accept', 'application/json');
+    setHeader(headers, 'X-Correlation-ID', correlationId);
+    setHeader(headers, 'X-App-Platform', this.options.platform);
+    setHeader(headers, 'X-App-Version', this.options.appVersion);
+    if (this.options.appBuild) setHeader(headers, 'X-App-Build', this.options.appBuild);
+    if (policy.idempotencyKey) setHeader(headers, 'Idempotency-Key', policy.idempotencyKey);
+    if (policy.sessionIntent) setHeader(headers, 'X-Session-Intent', policy.sessionIntent);
+    if (policy.requestInit.body && !findHeaderName(headers, 'Content-Type')) {
+      setHeader(headers, 'Content-Type', 'application/json');
     }
 
     if (policy.auth === 'required') {
       const accessToken = this.getAccessToken();
-      if (accessToken) headers.set('Authorization', `Bearer ${accessToken}`);
-      else headers.delete('Authorization');
+      if (accessToken) setHeader(headers, 'Authorization', `Bearer ${accessToken}`);
+      else deleteHeader(headers, 'Authorization');
     } else {
-      headers.delete('Authorization');
+      deleteHeader(headers, 'Authorization');
     }
 
     const normalizedPath = path.startsWith('/') ? path : `/${path}`;

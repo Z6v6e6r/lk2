@@ -5,6 +5,8 @@ import {
   normalizePhoneE164,
   type IdentityProviderPort,
   type VerifiedExternalIdentity,
+  type VivaOAuthProvider,
+  type VivaOAuthProviderPort,
 } from '@phub/auth';
 import { createRemoteJWKSet, customFetch, jwtVerify, type JWTPayload } from 'jose';
 import { z } from 'zod';
@@ -16,6 +18,7 @@ export interface VivaIdentityProviderOptions {
   readonly clientId: string;
   readonly channel: string;
   readonly profileApiBaseUrl: string;
+  readonly oauthScopes: string;
   readonly timeoutMs: number;
   readonly devPhoneE164: string;
   readonly devOtpCode: string;
@@ -63,7 +66,7 @@ function stringClaim(payload: JWTPayload, names: readonly string[]): string | un
   return undefined;
 }
 
-export class VivaIdentityProvider implements IdentityProviderPort {
+export class VivaIdentityProvider implements IdentityProviderPort, VivaOAuthProviderPort {
   public readonly key = 'VIVA' as const;
   private readonly fetchImplementation: typeof fetch;
   private readonly issuer: string;
@@ -204,6 +207,151 @@ export class VivaIdentityProvider implements IdentityProviderPort {
       'Игрок ПаделхАБ';
     const phoneE164 = normalizePhoneE164(profile.phone ?? '') ?? fallbackPhone;
     return { issuer: this.issuer, subject: payload.sub, phoneE164, displayName };
+  }
+
+  private async resolveOAuthIdentity(accessToken: string): Promise<VerifiedExternalIdentity> {
+    const { payload } = await jwtVerify(accessToken, this.jwks, {
+      issuer: this.issuer,
+      algorithms: ['RS256'],
+    });
+    if (payload.azp !== this.options.clientId || typeof payload.sub !== 'string' || !payload.sub) {
+      throw new IdentityProviderError('AUTH_PROVIDER_UNAVAILABLE');
+    }
+    const displayName =
+      stringClaim(payload, ['name', 'preferred_username']) ||
+      [stringClaim(payload, ['given_name']), stringClaim(payload, ['family_name'])]
+        .filter(Boolean)
+        .join(' ') ||
+      'Игрок ПадлхАБ';
+    const phoneE164 = normalizePhoneE164(
+      stringClaim(payload, ['phone_number', 'phoneNumber', 'phone']) ?? '',
+    );
+    return {
+      issuer: this.issuer,
+      subject: payload.sub,
+      displayName,
+      ...(phoneE164 ? { phoneE164 } : {}),
+    };
+  }
+
+  public createAuthorizationUrl(input: {
+    readonly provider: VivaOAuthProvider;
+    readonly tenantKey: string;
+    readonly redirectUri: string;
+    readonly state: string;
+    readonly codeChallenge: string;
+  }): string {
+    this.ensureAvailable();
+    const url = new URL(`${this.issuer}/protocol/openid-connect/auth`);
+    url.search = new URLSearchParams({
+      client_id: this.options.clientId,
+      redirect_uri: input.redirectUri,
+      response_type: 'code',
+      scope: this.options.oauthScopes,
+      kc_idp_hint: input.provider,
+      tenant_key: input.tenantKey,
+      state: input.state,
+      code_challenge: input.codeChallenge,
+      code_challenge_method: 'S256',
+    }).toString();
+    return url.toString();
+  }
+
+  public async exchangeAuthorizationCode(input: {
+    readonly code: string;
+    readonly codeVerifier: string;
+    readonly providerTenantKey: string;
+    readonly redirectUri: string;
+    readonly correlationId: string;
+  }): Promise<{
+    readonly identity: VerifiedExternalIdentity;
+    readonly accessToken: string;
+    readonly accessExpiresIn?: number;
+    readonly refreshToken: string;
+    readonly refreshExpiresIn?: number;
+  }> {
+    this.ensureAvailable();
+    let response: Response;
+    try {
+      response = await this.fetchWithPolicy(
+        new URL(`${this.issuer}/protocol/openid-connect/token`),
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'X-Correlation-ID': input.correlationId,
+          },
+          body: new URLSearchParams({
+            grant_type: 'authorization_code',
+            client_id: this.options.clientId,
+            code: input.code,
+            redirect_uri: input.redirectUri,
+            code_verifier: input.codeVerifier,
+          }).toString(),
+        },
+      );
+    } catch {
+      throw new IdentityProviderError('AUTH_PROVIDER_UNAVAILABLE');
+    }
+    if (response.status === 400 || response.status === 401) {
+      throw new IdentityProviderError('AUTH_CODE_INVALID');
+    }
+    if (response.status === 429) throw new IdentityProviderError('AUTH_RATE_LIMITED');
+    if (!response.ok) throw new IdentityProviderError('AUTH_PROVIDER_UNAVAILABLE');
+    const tokens = tokenResponseSchema.parse(await response.json());
+    if (!tokens.refresh_token) throw new IdentityProviderError('AUTH_PROVIDER_UNAVAILABLE');
+    const identity = await this.resolveOAuthIdentity(tokens.access_token);
+    return {
+      identity,
+      accessToken: tokens.access_token,
+      ...(tokens.expires_in ? { accessExpiresIn: tokens.expires_in } : {}),
+      refreshToken: tokens.refresh_token,
+      ...(tokens.refresh_expires_in ? { refreshExpiresIn: tokens.refresh_expires_in } : {}),
+    };
+  }
+
+  public async refreshUserDelegation(input: {
+    readonly refreshToken: string;
+    readonly correlationId: string;
+  }): Promise<{
+    readonly accessToken: string;
+    readonly accessExpiresIn?: number;
+    readonly refreshToken?: string;
+    readonly refreshExpiresIn?: number;
+  }> {
+    this.ensureAvailable();
+    let response: Response;
+    try {
+      response = await this.fetchWithPolicy(
+        new URL(`${this.issuer}/protocol/openid-connect/token`),
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'X-Correlation-ID': input.correlationId,
+          },
+          body: new URLSearchParams({
+            grant_type: 'refresh_token',
+            client_id: this.options.clientId,
+            refresh_token: input.refreshToken,
+          }).toString(),
+        },
+      );
+    } catch {
+      throw new IdentityProviderError('AUTH_PROVIDER_UNAVAILABLE');
+    }
+    if (response.status === 400 || response.status === 401) {
+      throw new IdentityProviderError('AUTH_CODE_INVALID');
+    }
+    if (response.status === 429) throw new IdentityProviderError('AUTH_RATE_LIMITED');
+    if (!response.ok) throw new IdentityProviderError('AUTH_PROVIDER_UNAVAILABLE');
+    const tokens = tokenResponseSchema.parse(await response.json());
+    return {
+      accessToken: tokens.access_token,
+      ...(tokens.expires_in ? { accessExpiresIn: tokens.expires_in } : {}),
+      ...(tokens.refresh_token ? { refreshToken: tokens.refresh_token } : {}),
+      ...(tokens.refresh_expires_in ? { refreshExpiresIn: tokens.refresh_expires_in } : {}),
+    };
   }
 
   public async requestPhoneCode(input: {

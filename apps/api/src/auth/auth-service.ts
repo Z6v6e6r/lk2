@@ -1,4 +1,11 @@
-import { createHmac, randomUUID } from 'node:crypto';
+import {
+  createCipheriv,
+  createDecipheriv,
+  createHash,
+  createHmac,
+  randomBytes,
+  randomUUID,
+} from 'node:crypto';
 
 import {
   IdentityProviderError,
@@ -6,11 +13,14 @@ import {
   type IdentityProviderKey,
   type IdentityProviderPort,
   type VerifiedExternalIdentity,
+  type VivaOAuthProvider,
+  type VivaOAuthProviderPort,
 } from '@phub/auth';
 import type { AppConfig } from '@phub/config';
 import { SignJWT } from 'jose';
 
 import type { AuthChallenge, AuthChallengeStore } from './challenge-store.js';
+import type { VivaOAuthStateStore } from './oauth-state-store.js';
 
 const TENANT_KEY_PATTERN = /^[a-z0-9][a-z0-9-]{1,62}$/;
 const OTP_PATTERN = /^\d{4}$/;
@@ -69,11 +79,54 @@ export interface AuthRepository {
     tokenHash: string,
     correlationId: string,
   ): Promise<boolean>;
+  revokeVivaDelegationForRefreshSession(
+    tenantKey: string,
+    tokenHash: string,
+    correlationId: string,
+  ): Promise<void>;
   findRefreshSessionById(
     tenantKey: string,
     sessionId: string,
   ): Promise<RefreshSessionIdentity | undefined>;
   getUserContext(tenantId: string, userId: string): Promise<AuthUser | undefined>;
+  saveVivaDelegation(input: {
+    readonly tenantId: string;
+    readonly userId: string;
+    readonly issuer: string;
+    readonly subject: string;
+    readonly refreshTokenCiphertext: string;
+    readonly encryptionKeyVersion: string;
+    readonly grantedScopes: readonly string[];
+    readonly refreshExpiresAt?: Date;
+    readonly correlationId: string;
+  }): Promise<void>;
+  getVivaDelegation(input: { readonly tenantId: string; readonly userId: string }): Promise<
+    | {
+        readonly issuer: string;
+        readonly subject: string;
+        readonly refreshTokenCiphertext: string;
+        readonly encryptionKeyVersion: string;
+        readonly refreshExpiresAt?: string;
+      }
+    | undefined
+  >;
+  recordLegalAcceptances(input: {
+    readonly tenantId: string;
+    readonly userId: string;
+    readonly correlationId: string;
+    readonly source: 'VIVA_OAUTH';
+    readonly publicOfferVersion: string;
+    readonly personalDataPolicyVersion: string;
+    readonly oauthStateHash: string;
+  }): Promise<void>;
+  recordLegalAcceptanceIntent(input: {
+    readonly tenantId: string;
+    readonly provider: VivaOAuthProvider;
+    readonly stateHash: string;
+    readonly correlationId: string;
+    readonly publicOfferVersion: string;
+    readonly personalDataPolicyVersion: string;
+  }): Promise<void>;
 }
 
 export type AuthServiceErrorCode =
@@ -85,6 +138,9 @@ export type AuthServiceErrorCode =
   | 'AUTH_PROVIDER_UNAVAILABLE'
   | 'AUTH_SESSION_REVOKED'
   | 'AUTH_REFRESH_RACE'
+  | 'VIVA_REAUTH_REQUIRED'
+  | 'VIVA_DELEGATION_BUSY'
+  | 'LEGAL_ACCEPTANCE_REQUIRED'
   | 'IDEMPOTENCY_KEY_CONFLICT'
   | 'TENANT_KEY_INVALID'
   | 'TENANT_NOT_FOUND';
@@ -98,6 +154,9 @@ const errorStatus: Readonly<Record<AuthServiceErrorCode, number>> = {
   AUTH_PROVIDER_UNAVAILABLE: 503,
   AUTH_SESSION_REVOKED: 401,
   AUTH_REFRESH_RACE: 409,
+  VIVA_REAUTH_REQUIRED: 401,
+  VIVA_DELEGATION_BUSY: 409,
+  LEGAL_ACCEPTANCE_REQUIRED: 400,
   IDEMPOTENCY_KEY_CONFLICT: 409,
   TENANT_KEY_INVALID: 400,
   TENANT_NOT_FOUND: 404,
@@ -127,6 +186,8 @@ export interface AuthServiceOptions {
   readonly repository: AuthRepository;
   readonly challengeStore: AuthChallengeStore;
   readonly providers: ReadonlyMap<IdentityProviderKey, IdentityProviderPort>;
+  readonly vivaOAuthProvider?: VivaOAuthProviderPort;
+  readonly vivaOAuthStateStore?: VivaOAuthStateStore;
   readonly now?: () => Date;
 }
 
@@ -177,6 +238,275 @@ export class AuthService {
 
   private deriveRefreshToken(label: string, values: readonly string[]): string {
     return this.deriveSecret(label, values).toString('base64url');
+  }
+
+  private encryptVivaRefreshToken(value: string): string {
+    const keyText = this.options.config.VIVA_DELEGATION_ENCRYPTION_KEY;
+    if (!keyText) throw new AuthServiceError('AUTH_PROVIDER_UNAVAILABLE');
+    const key = Buffer.from(keyText, 'base64url');
+    if (key.length !== 32) throw new AuthServiceError('AUTH_PROVIDER_UNAVAILABLE');
+    const iv = randomBytes(12);
+    const cipher = createCipheriv('aes-256-gcm', key, iv);
+    const ciphertext = Buffer.concat([cipher.update(value, 'utf8'), cipher.final()]);
+    const tag = cipher.getAuthTag();
+    return Buffer.concat([iv, tag, ciphertext]).toString('base64url');
+  }
+
+  private decryptVivaRefreshToken(value: string, keyVersion: string): string {
+    if (keyVersion !== this.options.config.VIVA_DELEGATION_KEY_VERSION) {
+      throw new AuthServiceError('VIVA_REAUTH_REQUIRED');
+    }
+    const keyText = this.options.config.VIVA_DELEGATION_ENCRYPTION_KEY;
+    if (!keyText) throw new AuthServiceError('AUTH_PROVIDER_UNAVAILABLE');
+    const key = Buffer.from(keyText, 'base64url');
+    const packed = Buffer.from(value, 'base64url');
+    if (key.length !== 32 || packed.length <= 28) {
+      throw new AuthServiceError('VIVA_REAUTH_REQUIRED');
+    }
+    const decipher = createDecipheriv('aes-256-gcm', key, packed.subarray(0, 12));
+    decipher.setAuthTag(packed.subarray(12, 28));
+    try {
+      return Buffer.concat([decipher.update(packed.subarray(28)), decipher.final()]).toString(
+        'utf8',
+      );
+    } catch {
+      throw new AuthServiceError('VIVA_REAUTH_REQUIRED');
+    }
+  }
+
+  public async startVivaOAuth(input: {
+    readonly tenantKey: string;
+    readonly provider: VivaOAuthProvider;
+    readonly publicOfferAccepted: boolean;
+    readonly personalDataPolicyAccepted: boolean;
+    readonly correlationId: string;
+  }): Promise<{ redirectUrl: string }> {
+    if (
+      !this.options.config.VIVA_OAUTH_ENABLED ||
+      !this.options.vivaOAuthProvider ||
+      !this.options.vivaOAuthStateStore
+    ) {
+      throw new AuthServiceError('AUTH_PROVIDER_UNAVAILABLE');
+    }
+    if (!input.publicOfferAccepted || !input.personalDataPolicyAccepted) {
+      throw new AuthServiceError('LEGAL_ACCEPTANCE_REQUIRED');
+    }
+    const redirectUri = this.options.config.VIVA_OAUTH_REDIRECT_URI;
+    if (!redirectUri) throw new AuthServiceError('AUTH_PROVIDER_UNAVAILABLE');
+    const binding = await this.binding(input.tenantKey);
+    if (binding.provider !== 'VIVA') throw new AuthServiceError('AUTH_PROVIDER_UNAVAILABLE');
+    const state = randomBytes(24).toString('base64url');
+    const codeVerifier = randomBytes(48).toString('base64url');
+    const codeChallenge = createHash('sha256').update(codeVerifier).digest('base64url');
+    const stateHash = createHash('sha256').update(state).digest('hex');
+    await this.options.repository.recordLegalAcceptanceIntent({
+      tenantId: binding.tenantId,
+      provider: input.provider,
+      stateHash,
+      correlationId: input.correlationId,
+      publicOfferVersion: this.options.config.PUBLIC_OFFER_VERSION,
+      personalDataPolicyVersion: this.options.config.PERSONAL_DATA_POLICY_VERSION,
+    });
+    await this.options.vivaOAuthStateStore.put(
+      {
+        state,
+        tenantKey: binding.tenantKey,
+        provider: input.provider,
+        codeVerifier,
+        publicOfferAccepted: true,
+        personalDataPolicyAccepted: true,
+        publicOfferVersion: this.options.config.PUBLIC_OFFER_VERSION,
+        personalDataPolicyVersion: this.options.config.PERSONAL_DATA_POLICY_VERSION,
+      },
+      this.options.config.AUTH_CHALLENGE_TTL_SECONDS,
+    );
+    return {
+      redirectUrl: this.options.vivaOAuthProvider.createAuthorizationUrl({
+        provider: input.provider,
+        tenantKey: binding.providerTenantKey,
+        redirectUri,
+        state,
+        codeChallenge,
+      }),
+    };
+  }
+
+  public async completeVivaOAuth(input: {
+    readonly tenantKey: string;
+    readonly state: string;
+    readonly code: string;
+    readonly correlationId: string;
+    readonly idempotencyKey: string;
+  }): Promise<AuthSessionResult & { readonly vivaHandoffCode: string }> {
+    if (
+      !this.options.config.VIVA_OAUTH_ENABLED ||
+      !this.options.vivaOAuthProvider ||
+      !this.options.vivaOAuthStateStore
+    ) {
+      throw new AuthServiceError('AUTH_PROVIDER_UNAVAILABLE');
+    }
+    const redirectUri = this.options.config.VIVA_OAUTH_REDIRECT_URI;
+    if (!redirectUri) throw new AuthServiceError('AUTH_PROVIDER_UNAVAILABLE');
+    const pending = await this.options.vivaOAuthStateStore.take(input.state);
+    if (!pending || pending.tenantKey !== input.tenantKey || !input.code) {
+      throw new AuthServiceError('AUTH_CODE_EXPIRED');
+    }
+    const binding = await this.binding(input.tenantKey);
+    if (binding.provider !== 'VIVA') throw new AuthServiceError('AUTH_CODE_EXPIRED');
+    let result: Awaited<ReturnType<VivaOAuthProviderPort['exchangeAuthorizationCode']>>;
+    try {
+      result = await this.options.vivaOAuthProvider.exchangeAuthorizationCode({
+        code: input.code,
+        codeVerifier: pending.codeVerifier,
+        providerTenantKey: binding.providerTenantKey,
+        redirectUri,
+        correlationId: input.correlationId,
+      });
+    } catch (error) {
+      this.mapProviderError(error);
+    }
+    const user = await this.options.repository.upsertExternalIdentity({
+      binding,
+      identity: result.identity,
+      correlationId: input.correlationId,
+    });
+    await this.options.repository.recordLegalAcceptances({
+      tenantId: binding.tenantId,
+      userId: user.id,
+      correlationId: input.correlationId,
+      source: 'VIVA_OAUTH',
+      publicOfferVersion: pending.publicOfferVersion,
+      personalDataPolicyVersion: pending.personalDataPolicyVersion,
+      oauthStateHash: createHash('sha256').update(input.state).digest('hex'),
+    });
+    await this.options.repository.saveVivaDelegation({
+      tenantId: binding.tenantId,
+      userId: user.id,
+      issuer: result.identity.issuer,
+      subject: result.identity.subject,
+      refreshTokenCiphertext: this.encryptVivaRefreshToken(result.refreshToken),
+      encryptionKeyVersion: this.options.config.VIVA_DELEGATION_KEY_VERSION,
+      grantedScopes: this.options.config.VIVA_OAUTH_SCOPES.split(/\s+/).filter(Boolean),
+      ...(result.refreshExpiresIn
+        ? { refreshExpiresAt: new Date(this.now().getTime() + result.refreshExpiresIn * 1000) }
+        : {}),
+      correlationId: input.correlationId,
+    });
+    const sessionId = this.deriveUuid('viva-oauth-session', [
+      input.tenantKey,
+      input.state,
+      input.idempotencyKey,
+    ]);
+    const refreshToken = this.deriveRefreshToken('viva-oauth-refresh', [
+      input.tenantKey,
+      input.state,
+      input.idempotencyKey,
+    ]);
+    await this.options.repository.createRefreshSession({
+      sessionId,
+      tenantId: binding.tenantId,
+      userId: user.id,
+      tokenHash: this.refreshTokenHash(refreshToken),
+      expiresAt: new Date(
+        this.now().getTime() + this.options.config.AUTH_REFRESH_TTL_SECONDS * 1000,
+      ),
+      correlationId: input.correlationId,
+    });
+    const vivaHandoffCode = randomBytes(24).toString('base64url');
+    await this.options.vivaOAuthStateStore.putHandoff(
+      {
+        code: vivaHandoffCode,
+        tenantId: binding.tenantId,
+        userId: user.id,
+        accessToken: result.accessToken,
+        expiresAt: new Date(
+          this.now().getTime() + (result.accessExpiresIn ?? 300) * 1000,
+        ).toISOString(),
+      },
+      120,
+    );
+    const session = await this.sessionResult(
+      { sessionId, tenantId: binding.tenantId, tenantKey: binding.tenantKey, user },
+      refreshToken,
+    );
+    return { ...session, vivaHandoffCode };
+  }
+
+  public async issueVivaAccessToken(input: {
+    readonly tenantId: string;
+    readonly userId: string;
+    readonly handoffCode?: string;
+    readonly correlationId: string;
+  }): Promise<{ accessToken: string; expiresAt: string }> {
+    if (
+      !this.options.config.VIVA_OAUTH_ENABLED ||
+      !this.options.vivaOAuthProvider ||
+      !this.options.vivaOAuthStateStore
+    ) {
+      throw new AuthServiceError('AUTH_PROVIDER_UNAVAILABLE');
+    }
+    if (input.handoffCode) {
+      const handoff = await this.options.vivaOAuthStateStore.takeHandoff(input.handoffCode);
+      if (!handoff || handoff.tenantId !== input.tenantId || handoff.userId !== input.userId) {
+        throw new AuthServiceError('VIVA_REAUTH_REQUIRED');
+      }
+      return { accessToken: handoff.accessToken, expiresAt: handoff.expiresAt };
+    }
+
+    const claimId = randomUUID();
+    const lockKey = `${input.tenantId}:${input.userId}`;
+    const claimed = await this.options.vivaOAuthStateStore.claimRefresh(lockKey, claimId, 15);
+    if (!claimed) throw new AuthServiceError('VIVA_DELEGATION_BUSY');
+    try {
+      const delegation = await this.options.repository.getVivaDelegation(input);
+      if (
+        !delegation ||
+        (delegation.refreshExpiresAt &&
+          Date.parse(delegation.refreshExpiresAt) <= this.now().getTime())
+      ) {
+        throw new AuthServiceError('VIVA_REAUTH_REQUIRED');
+      }
+      const refreshToken = this.decryptVivaRefreshToken(
+        delegation.refreshTokenCiphertext,
+        delegation.encryptionKeyVersion,
+      );
+      let refreshed: Awaited<ReturnType<VivaOAuthProviderPort['refreshUserDelegation']>>;
+      try {
+        refreshed = await this.options.vivaOAuthProvider.refreshUserDelegation({
+          refreshToken,
+          correlationId: input.correlationId,
+        });
+      } catch (error) {
+        if (error instanceof IdentityProviderError && error.code === 'AUTH_CODE_INVALID') {
+          throw new AuthServiceError('VIVA_REAUTH_REQUIRED');
+        }
+        this.mapProviderError(error);
+      }
+      const nextRefreshToken = refreshed.refreshToken ?? refreshToken;
+      await this.options.repository.saveVivaDelegation({
+        tenantId: input.tenantId,
+        userId: input.userId,
+        issuer: delegation.issuer,
+        subject: delegation.subject,
+        refreshTokenCiphertext: this.encryptVivaRefreshToken(nextRefreshToken),
+        encryptionKeyVersion: this.options.config.VIVA_DELEGATION_KEY_VERSION,
+        grantedScopes: this.options.config.VIVA_OAUTH_SCOPES.split(/\s+/).filter(Boolean),
+        ...(refreshed.refreshExpiresIn
+          ? { refreshExpiresAt: new Date(this.now().getTime() + refreshed.refreshExpiresIn * 1000) }
+          : delegation.refreshExpiresAt
+            ? { refreshExpiresAt: new Date(delegation.refreshExpiresAt) }
+            : {}),
+        correlationId: input.correlationId,
+      });
+      return {
+        accessToken: refreshed.accessToken,
+        expiresAt: new Date(
+          this.now().getTime() + (refreshed.accessExpiresIn ?? 300) * 1000,
+        ).toISOString(),
+      };
+    } finally {
+      await this.options.vivaOAuthStateStore.releaseRefresh(lockKey, claimId);
+    }
   }
 
   private async issueAccessToken(identity: RefreshSessionIdentity): Promise<{
@@ -436,11 +766,13 @@ export class AuthService {
     correlationId: string,
   ): Promise<void> {
     await this.binding(tenantKey);
-    await this.options.repository.revokeRefreshSession(
+    const tokenHash = this.refreshTokenHash(refreshToken);
+    await this.options.repository.revokeVivaDelegationForRefreshSession(
       tenantKey,
-      this.refreshTokenHash(refreshToken),
+      tokenHash,
       correlationId,
     );
+    await this.options.repository.revokeRefreshSession(tenantKey, tokenHash, correlationId);
   }
 
   public getUserContext(tenantId: string, userId: string): Promise<AuthUser | undefined> {

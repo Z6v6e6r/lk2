@@ -118,9 +118,42 @@ services:
   mobile:
     <<: *node-service
     command: npm run dev:mobile
+    environment:
+      PHUB_DEV_API_PROXY_TARGET: http://api:3000
     profiles: [clients]
     ports:
       - '${PHUB_BIND_ADDRESS:-127.0.0.1}:5175:5175'
+
+  swagger-ui:
+    image: docker.swagger.io/swaggerapi/swagger-ui@sha256:1ece6f19ca5709fb5fbab9bf43adee2916144fb21e82b7bafba568124e8c8930
+    pull_policy: never
+    profiles: [docs]
+    environment:
+      URL: /spec/user/v1/openapi.yaml
+      TRY_IT_OUT_ENABLED: 'false'
+      SUPPORTED_SUBMIT_METHODS: '[]'
+      PERSIST_AUTHORIZATION: 'false'
+      VALIDATOR_URL: ''
+    volumes:
+      - ./contracts/openapi:/usr/share/nginx/html/spec:ro
+    ports:
+      - '127.0.0.1:18080:8080'
+    restart: unless-stopped
+    networks:
+      - edge
+
+  swagger-editor:
+    image: docker.swagger.io/swaggerapi/swagger-editor@sha256:376bb9afa3fc87dfa0dbc3d4c86c80bc004432168696ed22ce66e94d9b149e80
+    pull_policy: never
+    profiles: [docs]
+    volumes:
+      - ./contracts/openapi:/usr/share/nginx/html/spec:ro
+      - ./infra/swagger/swagger-editor.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - '127.0.0.1:18082:80'
+    restart: unless-stopped
+    networks:
+      - edge
 
   postgres:
     image: postgres:16-alpine

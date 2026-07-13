@@ -17,6 +17,7 @@ function options() {
     clientId: 'widget',
     channel: 'cascade',
     profileApiBaseUrl: 'https://api.vivacrm.invalid/end-user/api/v1',
+    oauthScopes: 'openid',
     timeoutMs: 100,
     devPhoneE164: '+79990000001',
     devOtpCode: '0000',

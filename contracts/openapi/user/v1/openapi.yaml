@@ -11,6 +11,109 @@ servers:
 security:
   - PadlHubUserJwt: []
 paths:
+  /{tenantKey}/auth/viva/authorize:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/IdempotencyKey'
+    post:
+      operationId: createVivaOAuthAuthorization
+      summary: Start server-owned Viva OAuth with PKCE
+      description: Creates an opaque, one-time OAuth state and returns the Viva authorization URL. No Viva credential is returned.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VivaOAuthAuthorizationRequest'
+      responses:
+        '200':
+          description: Redirect URL for the selected Viva identity provider.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VivaOAuthAuthorization'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/auth/viva/callback:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+    get:
+      operationId: completeVivaOAuthAuthorization
+      summary: Complete Viva OAuth callback and create a PadlHub session
+      security: []
+      parameters:
+        - name: state
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: code
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '302':
+          description: PadlHub refresh cookie is set and the browser is redirected to the configured cabinet URL.
+          headers:
+            Set-Cookie:
+              $ref: '#/components/headers/RefreshCookie'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: '#/components/responses/AuthenticationRejected'
+        '410':
+          $ref: '#/components/responses/AuthenticationRejected'
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/auth/viva/access:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/IdempotencyKey'
+    post:
+      operationId: issueVivaDelegatedAccessToken
+      summary: Issue a short-lived Viva user access token
+      description: |
+        Exchanges a one-time callback handoff or the server-encrypted Viva refresh delegation.
+        The Viva refresh token is never returned. The access token is restricted to browser memory
+        and the approved direct-Viva operation allowlist.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VivaDelegatedAccessRequest'
+      responses:
+        '200':
+          description: Short-lived Viva access token for the authenticated PadlHub user.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VivaDelegatedAccess'
+        '401':
+          $ref: '#/components/responses/AuthenticationRejected'
+        '409':
+          $ref: '#/components/responses/AuthenticationRejected'
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
   /{tenantKey}/auth/challenges:
     parameters:
       - $ref: ../../common/components.yaml#/components/parameters/TenantKey
@@ -240,6 +343,55 @@ components:
           type: string
           pattern: '^[0-9]{4}$'
           description: One-time code supplied to the user.
+    VivaOAuthAuthorizationRequest:
+      type: object
+      additionalProperties: false
+      required: [provider, acceptance]
+      properties:
+        provider:
+          type: string
+          enum: [vkid, yandex]
+        acceptance:
+          type: object
+          additionalProperties: false
+          required: [publicOfferAccepted, personalDataPolicyAccepted]
+          properties:
+            publicOfferAccepted:
+              type: boolean
+              const: true
+            personalDataPolicyAccepted:
+              type: boolean
+              const: true
+    VivaOAuthAuthorization:
+      type: object
+      additionalProperties: false
+      required: [redirectUrl]
+      properties:
+        redirectUrl:
+          type: string
+          format: uri
+    VivaDelegatedAccessRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        handoffCode:
+          type: string
+          minLength: 20
+          maxLength: 256
+          description: One-time opaque callback handoff. Omit to refresh the stored delegation.
+    VivaDelegatedAccess:
+      type: object
+      additionalProperties: false
+      required: [accessToken, expiresAt]
+      properties:
+        accessToken:
+          type: string
+          minLength: 20
+          maxLength: 8192
+          description: Short-lived Viva user access token. Never persist outside browser memory.
+        expiresAt:
+          type: string
+          format: date-time
     AuthenticatedSession:
       type: object
       additionalProperties: false

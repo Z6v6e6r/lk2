@@ -3,7 +3,7 @@ import { createHmac } from 'node:crypto';
 import { normalizePhoneE164 } from '@phub/auth';
 import type { AppConfig } from '@phub/config';
 import { isValidIdempotencyKey } from '@phub/domain';
-import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest, preHandlerHookHandler } from 'fastify';
 import { z } from 'zod';
 
 import { sendApiError } from '../http-errors.js';
@@ -16,6 +16,18 @@ const challengeBodySchema = z.object({
   phone: z.string().min(5).max(32),
 });
 const verifyBodySchema = z.object({ code: z.string().regex(/^\d{4}$/) });
+const vivaOAuthStartBodySchema = z.object({
+  provider: z.enum(['vkid', 'yandex']),
+  acceptance: z.object({
+    publicOfferAccepted: z.literal(true),
+    personalDataPolicyAccepted: z.literal(true),
+  }),
+});
+const vivaOAuthCallbackQuerySchema = z.object({
+  state: z.string().min(20).max(512),
+  code: z.string().min(1).max(4096),
+});
+const vivaAccessBodySchema = z.object({ handoffCode: z.string().min(20).max(256).optional() });
 const paramsSchema = z.object({
   tenantKey: z.string(),
 });
@@ -56,6 +68,9 @@ function errorMessage(code: string): string {
     AUTH_PROVIDER_UNAVAILABLE: 'Вход временно недоступен. Повторите позже.',
     AUTH_SESSION_REVOKED: 'Сессия завершена. Войдите снова.',
     AUTH_REFRESH_RACE: 'Сессия обновляется в другой вкладке. Повторите запрос.',
+    VIVA_REAUTH_REQUIRED: 'Сессия Viva завершена. Войдите через Viva снова.',
+    VIVA_DELEGATION_BUSY: 'Сессия Viva обновляется в другой вкладке. Повторите запрос.',
+    LEGAL_ACCEPTANCE_REQUIRED: 'Подтвердите публичную оферту и обработку персональных данных.',
     IDEMPOTENCY_KEY_CONFLICT: 'Этот ключ операции уже использован с другими данными.',
     TENANT_KEY_INVALID: 'Некорректный идентификатор организации.',
     TENANT_NOT_FOUND: 'Организация не найдена.',
@@ -145,7 +160,79 @@ export function registerAuthRoutes(
   app: FastifyInstance,
   authService: AuthService,
   config: AppConfig,
+  authenticatedPreHandlers: readonly preHandlerHookHandler[] = [],
 ): void {
+  app.post(
+    '/user/api/v1/:tenantKey/auth/viva/authorize',
+    { preHandler: requireAuthIdempotency },
+    async (request, reply) => {
+      try {
+        const { tenantKey } = paramsSchema.parse(request.params);
+        const body = vivaOAuthStartBodySchema.parse(request.body);
+        const result = await authService.startVivaOAuth({
+          tenantKey,
+          provider: body.provider,
+          publicOfferAccepted: body.acceptance.publicOfferAccepted,
+          personalDataPolicyAccepted: body.acceptance.personalDataPolicyAccepted,
+          correlationId: request.id,
+        });
+        return reply.status(200).send(result);
+      } catch (error) {
+        return handleAuthError(error, request, reply);
+      }
+    },
+  );
+
+  app.get('/user/api/v1/:tenantKey/auth/viva/callback', async (request, reply) => {
+    try {
+      const { tenantKey } = paramsSchema.parse(request.params);
+      const query = vivaOAuthCallbackQuerySchema.parse(request.query);
+      const session = await authService.completeVivaOAuth({
+        tenantKey,
+        state: query.state,
+        code: query.code,
+        correlationId: request.id,
+        idempotencyKey: query.state,
+      });
+      setRefreshCookie(reply, config, tenantKey, session);
+      preventCredentialCaching(reply);
+      const redirectUrl = config.VIVA_OAUTH_SUCCESS_REDIRECT_URL;
+      if (!redirectUrl) throw new AuthServiceError('AUTH_PROVIDER_UNAVAILABLE');
+      const target = new URL(redirectUrl);
+      const fragment = new URLSearchParams(target.hash.replace(/^#/, ''));
+      fragment.set('viva_handoff', session.vivaHandoffCode);
+      target.hash = fragment.toString();
+      return reply.redirect(target.toString());
+    } catch (error) {
+      return handleAuthError(error, request, reply);
+    }
+  });
+
+  app.post(
+    '/user/api/v1/:tenantKey/auth/viva/access',
+    { preHandler: [...authenticatedPreHandlers, requireAuthIdempotency] },
+    async (request, reply) => {
+      try {
+        const body = vivaAccessBodySchema.parse(request.body ?? {});
+        const tenantId = request.tenantId;
+        const userId = request.padlHubClaims?.sub;
+        if (!tenantId || !userId) {
+          return sendApiError(request, reply, 401, 'AUTH_REQUIRED', 'Требуется авторизация.');
+        }
+        const access = await authService.issueVivaAccessToken({
+          tenantId,
+          userId,
+          ...(body.handoffCode ? { handoffCode: body.handoffCode } : {}),
+          correlationId: request.id,
+        });
+        preventCredentialCaching(reply);
+        return reply.send(access);
+      } catch (error) {
+        return handleAuthError(error, request, reply);
+      }
+    },
+  );
+
   app.post(
     '/user/api/v1/:tenantKey/auth/challenges',
     {

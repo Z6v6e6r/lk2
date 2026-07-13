@@ -1,4 +1,8 @@
-import type { IdentityProviderPort, VerifiedExternalIdentity } from '@phub/auth';
+import type {
+  IdentityProviderPort,
+  VerifiedExternalIdentity,
+  VivaOAuthProviderPort,
+} from '@phub/auth';
 import { loadConfig } from '@phub/config';
 import { createLogger } from '@phub/observability';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -12,6 +16,7 @@ import {
   type TenantAuthBinding,
 } from './auth-service.js';
 import { MemoryAuthChallengeStore } from './challenge-store.js';
+import { MemoryVivaOAuthStateStore } from './oauth-state-store.js';
 
 const config = loadConfig({
   APP_ENV: 'ci',
@@ -41,6 +46,15 @@ class FakeRepository implements AuthRepository {
   private tokenHash: string | undefined;
   private sessionId: string | undefined;
   private bindingValue: TenantAuthBinding = binding;
+  private vivaDelegation:
+    | {
+        issuer: string;
+        subject: string;
+        refreshTokenCiphertext: string;
+        encryptionKeyVersion: string;
+        refreshExpiresAt?: string;
+      }
+    | undefined;
 
   public setBinding(nextBinding: TenantAuthBinding): void {
     this.bindingValue = nextBinding;
@@ -91,12 +105,46 @@ class FakeRepository implements AuthRepository {
     return Promise.resolve(revoked);
   }
 
+  public revokeVivaDelegationForRefreshSession(): Promise<void> {
+    return Promise.resolve();
+  }
+
   public getUserContext(tenantId: string, userId: string): Promise<AuthUser | undefined> {
     return Promise.resolve(tenantId === user.tenantId && userId === user.id ? user : undefined);
   }
 
   public findRefreshSessionById(): Promise<undefined> {
     return Promise.resolve(undefined);
+  }
+
+  public saveVivaDelegation(input: {
+    readonly issuer: string;
+    readonly subject: string;
+    readonly refreshTokenCiphertext: string;
+    readonly encryptionKeyVersion: string;
+    readonly grantedScopes: readonly string[];
+    readonly refreshExpiresAt?: Date;
+  }): Promise<void> {
+    this.vivaDelegation = {
+      issuer: input.issuer,
+      subject: input.subject,
+      refreshTokenCiphertext: input.refreshTokenCiphertext,
+      encryptionKeyVersion: input.encryptionKeyVersion,
+      ...(input.refreshExpiresAt ? { refreshExpiresAt: input.refreshExpiresAt.toISOString() } : {}),
+    };
+    return Promise.resolve();
+  }
+
+  public getVivaDelegation(): Promise<typeof this.vivaDelegation> {
+    return Promise.resolve(this.vivaDelegation);
+  }
+
+  public recordLegalAcceptances(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  public recordLegalAcceptanceIntent(): Promise<void> {
+    return Promise.resolve();
   }
 }
 
@@ -114,6 +162,31 @@ const provider: IdentityProviderPort = {
   },
 };
 
+const oauthProvider: VivaOAuthProviderPort = {
+  createAuthorizationUrl: (input) =>
+    `https://identity.example.test/auth?state=${encodeURIComponent(input.state)}`,
+  exchangeAuthorizationCode: () =>
+    Promise.resolve({
+      identity: {
+        issuer: 'https://identity.example.test',
+        subject: 'external-user-1',
+        phoneE164: '+79990000001',
+        displayName: user.displayName,
+      },
+      accessToken: 'initial-viva-access-token',
+      accessExpiresIn: 300,
+      refreshToken: 'initial-viva-refresh-token',
+      refreshExpiresIn: 3600,
+    }),
+  refreshUserDelegation: () =>
+    Promise.resolve({
+      accessToken: 'refreshed-viva-access-token',
+      accessExpiresIn: 300,
+      refreshToken: 'rotated-viva-refresh-token',
+      refreshExpiresIn: 3600,
+    }),
+};
+
 const apps: Awaited<ReturnType<typeof buildApp>>[] = [];
 
 afterEach(async () => {
@@ -121,6 +194,102 @@ afterEach(async () => {
 });
 
 describe('provider-neutral authentication routes', () => {
+  it('hands off the initial Viva access token once and refreshes it from encrypted delegation', async () => {
+    const oauthConfig = loadConfig({
+      APP_ENV: 'ci',
+      DATABASE_URL: 'postgresql://phub:test@localhost:5432/phub',
+      REDIS_URL: 'redis://localhost:6379',
+      RABBITMQ_URL: 'amqp://phub:test@localhost:5672',
+      JWT_ISSUER: 'phub-identity',
+      JWT_AUDIENCE: 'phub-api',
+      JWT_ACCESS_SECRET: 'test-access-secret-at-least-32-characters',
+      JWT_REFRESH_SECRET: 'test-refresh-secret-at-least-32-characters',
+      VIVA_OAUTH_ENABLED: 'true',
+      VIVA_OAUTH_REDIRECT_URI:
+        'https://api.example.test/user/api/v1/local-padel/auth/viva/callback',
+      VIVA_OAUTH_SUCCESS_REDIRECT_URL: 'https://app.example.test/',
+      VIVA_DELEGATION_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString('base64url'),
+    });
+    const repository = new FakeRepository();
+    const stateStore = new MemoryVivaOAuthStateStore();
+    const service = new AuthService({
+      config: oauthConfig,
+      repository,
+      challengeStore: new MemoryAuthChallengeStore(),
+      providers: new Map([['VIVA', provider]]),
+      vivaOAuthProvider: oauthProvider,
+      vivaOAuthStateStore: stateStore,
+    });
+
+    const started = await service.startVivaOAuth({
+      tenantKey: binding.tenantKey,
+      provider: 'vkid',
+      publicOfferAccepted: true,
+      personalDataPolicyAccepted: true,
+      correlationId: 'oauth-start-correlation',
+    });
+    const state = new URL(started.redirectUrl).searchParams.get('state');
+    expect(state).toBeTruthy();
+    const completed = await service.completeVivaOAuth({
+      tenantKey: binding.tenantKey,
+      state: state ?? '',
+      code: 'authorization-code',
+      correlationId: 'oauth-complete-correlation',
+      idempotencyKey: 'oauth-complete-idempotency',
+    });
+
+    const initialAccess = await service.issueVivaAccessToken({
+      tenantId: binding.tenantId,
+      userId: user.id,
+      handoffCode: completed.vivaHandoffCode,
+      correlationId: 'oauth-handoff-correlation',
+    });
+    expect(initialAccess.accessToken).toBe('initial-viva-access-token');
+    await expect(
+      service.issueVivaAccessToken({
+        tenantId: binding.tenantId,
+        userId: user.id,
+        handoffCode: completed.vivaHandoffCode,
+        correlationId: 'oauth-handoff-replay',
+      }),
+    ).rejects.toMatchObject({ code: 'VIVA_REAUTH_REQUIRED' });
+
+    const refreshedAccess = await service.issueVivaAccessToken({
+      tenantId: binding.tenantId,
+      userId: user.id,
+      correlationId: 'oauth-refresh-correlation',
+    });
+    expect(refreshedAccess.accessToken).toBe('refreshed-viva-access-token');
+  });
+
+  it('keeps Viva OAuth disabled until the server-side delegation feature is configured', async () => {
+    const authService = new AuthService({
+      config,
+      repository: new FakeRepository(),
+      challengeStore: new MemoryAuthChallengeStore(),
+      providers: new Map([['VIVA', provider]]),
+    });
+    const app = await buildApp({
+      config,
+      logger: createLogger('api-viva-oauth-disabled-test', 'silent'),
+      authService,
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/user/api/v1/local-padel/auth/viva/authorize',
+      headers: { 'idempotency-key': 'viva-oauth-start-disabled-001' },
+      payload: {
+        provider: 'vkid',
+        acceptance: { publicOfferAccepted: true, personalDataPolicyAccepted: true },
+      },
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toMatchObject({ code: 'AUTH_PROVIDER_UNAVAILABLE' });
+  });
+
   it('creates a PadlHub session, rotates it via cookie and never exposes an external token', async () => {
     const authService = new AuthService({
       config,

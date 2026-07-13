@@ -35,7 +35,10 @@ Authentication is provider-neutral. A server-side tenant binding selects `VIVA` 
 clients always use PadlHub challenge/session endpoints. A verified `(tenant_id, issuer, subject)`
 maps to a stable PadlHub user UUID. The web app holds the short-lived PadlHub access JWT only in
 memory; an opaque rotating refresh credential is carried in an `HttpOnly` cookie and stored only as
-a hash. Viva tokens never leave `@phub/viva-adapter`. See [ADR 0004](../adr/0004-provider-neutral-authentication.md).
+a hash. Viva OAuth may additionally create a server-encrypted user delegation; only a feature-gated
+short-lived Viva access-token for an allowlisted direct route can enter browser memory. See
+[ADR 0004](../adr/0004-provider-neutral-authentication.md) and
+[ADR 0005](../adr/0005-viva-user-delegation-and-direct-transport.md).
 
 Authentication commands are correlated, audited and retry-safe by idempotency key. Redis provides
 shared rate limits, challenge cooldowns and short verification leases; PostgreSQL remains the
@@ -58,7 +61,12 @@ Each `tenant + domain` has one ownership mode:
 3. `LOCAL_PRIMARY`: PostgreSQL commits state and outbox event atomically; Viva may receive an asynchronous projection.
 4. `LOCAL_ONLY`: Viva is absent from the operation.
 
-`SourceRouter` can return `LOCAL`, `SERVER_VIVA`, `DIRECT_VIVA`, `STALE_LOCAL` or `UNAVAILABLE`. `DIRECT_VIVA` is disabled by default, mobile-only, read-only, feature-flagged and requires Viva-supported short-lived user delegation. Web direct reads remain disabled until safe CORS and delegation exist. Client-returned data is untrusted and cannot authorize bookings, prices, payments or rights.
+`SourceRouter` can return `LOCAL`, `SERVER_VIVA`, `DIRECT_VIVA`, `STALE_LOCAL` or `UNAVAILABLE`.
+`DIRECT_VIVA` is disabled by default and requires Viva-supported short-lived user delegation, route
+allowlisting and a per-tenant feature flag. Its approved browser routes are profile, available slots
+and the purchase/cancellation transport described in ADR 0005. Client-returned command completion
+is untrusted and remains pending until webhook/provider-receipt/reconciliation confirmation;
+therefore it cannot itself authorize bookings, prices, payments or rights.
 
 ## Reliability and observability
 
