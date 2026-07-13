@@ -32,6 +32,7 @@ jobs:
         with:
           context: .
           file: apps/${{ matrix.service }}/Dockerfile
+          platforms: linux/arm64
           push: true
           tags: ghcr.io/${{ github.repository_owner }}/phub-${{ matrix.service }}:sha-${{ github.sha }}
           cache-from: type=gha,scope=${{ matrix.service }}
@@ -60,6 +61,11 @@ jobs:
           pattern: digest-*
           path: digests
           merge-multiple: true
+      - name: Join the staging tailnet
+        uses: tailscale/github-action@v4
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+          ping: ${{ secrets.STAGING_HOST }}
       - name: Configure audited SSH
         env:
           DEPLOY_KEY: ${{ secrets.STAGING_DEPLOY_KEY }}
@@ -83,13 +89,20 @@ jobs:
             echo "RELEASE=${{ github.sha }}"
           } > release.env
           scp release.env "phub-deploy@$HOST:/opt/phub/release.env"
-      - name: Migrate and deploy the same image digests
+      - name: Pull, migrate and deploy the same image digests
         env:
           HOST: ${{ secrets.STAGING_HOST }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          ssh "phub-deploy@$HOST" 'cd /opt/phub && docker compose --env-file release.env --profile migration run --rm migrator'
-          ssh "phub-deploy@$HOST" 'cd /opt/phub && docker compose --env-file release.env pull'
-          ssh "phub-deploy@$HOST" 'cd /opt/phub && docker compose --env-file release.env up -d --remove-orphans'
+          printf '%s' "$GHCR_TOKEN" | ssh "phub-deploy@$HOST" '
+            set -eu
+            trap "docker logout ghcr.io >/dev/null 2>&1 || true" EXIT
+            docker login ghcr.io --username "${{ github.actor }}" --password-stdin
+            cd /opt/phub
+            docker compose --env-file release.env pull
+            docker compose --env-file release.env --profile migration run --rm migrator
+            docker compose --env-file release.env up -d --remove-orphans
+          '
       - name: Staging smoke test
         env:
           SMOKE_BASE_URL: ${{ vars.STAGING_BASE_URL }}
