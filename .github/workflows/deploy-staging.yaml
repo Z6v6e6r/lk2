@@ -104,7 +104,9 @@ jobs:
             docker compose --env-file release.env pull
             docker compose --env-file release.env --profile migration run --rm migrator
             docker compose --env-file release.env up -d --remove-orphans
-            docker compose --env-file infrastructure.env -f compose.infrastructure.yaml up -d nginx
+            # The ingress configuration is bind-mounted. Recreate this one
+            # stateless container so it loads the newly copied configuration.
+            docker compose --env-file infrastructure.env -f compose.infrastructure.yaml up -d --force-recreate nginx
           '
       - name: Verify the web entrypoint
         env:
