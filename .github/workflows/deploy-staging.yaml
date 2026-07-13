@@ -34,7 +34,7 @@ jobs:
           file: apps/${{ matrix.service }}/Dockerfile
           platforms: linux/arm64
           push: true
-          tags: ghcr.io/${{ github.repository_owner }}/phub-${{ matrix.service }}:sha-${{ github.sha }}
+          tags: ghcr.io/z6v6e6r/phub-${{ matrix.service }}:sha-${{ github.sha }}
           cache-from: type=gha,scope=${{ matrix.service }}
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}
       - run: |
@@ -81,7 +81,7 @@ jobs:
         run: |
           scp deploy/compose.staging.yaml "phub-deploy@$HOST:/opt/phub/compose.yaml"
           {
-            echo "REGISTRY=ghcr.io/${{ github.repository_owner }}"
+            echo "REGISTRY=ghcr.io/z6v6e6r"
             echo "API_IMAGE_DIGEST=$(cat digests/api)"
             echo "WORKER_IMAGE_DIGEST=$(cat digests/worker)"
             echo "REALTIME_IMAGE_DIGEST=$(cat digests/realtime)"
