@@ -93,6 +93,21 @@ function safeCorrelationId(header: string | readonly string[] | undefined): stri
   return typeof header === 'string' && CORRELATION_ID_PATTERN.test(header) ? header : randomUUID();
 }
 
+export function sanitizeRequestLogUrl(value: string): string {
+  const queryIndex = value.indexOf('?');
+  return queryIndex === -1 ? value : value.slice(0, queryIndex);
+}
+
+function requestLogSerializer(request: FastifyRequest) {
+  return {
+    method: request.method,
+    url: sanitizeRequestLogUrl(request.url),
+    host: request.headers.host,
+    remoteAddress: request.ip,
+    remotePort: request.socket.remotePort,
+  };
+}
+
 function correlationIdFromHeader(request: FastifyRequest): string {
   return request.id;
 }
@@ -205,8 +220,12 @@ declare module 'fastify' {
 export async function buildApp(options: BuildAppOptions) {
   const clientRoutingPlanRepository = options.clientRoutingPlanRepository;
   const trustedProxies = parseTrustedProxies(options.config.TRUSTED_PROXY_CIDRS);
+  const requestSafeLogger = options.logger.child(
+    {},
+    { serializers: { req: requestLogSerializer } },
+  );
   const app = Fastify({
-    loggerInstance: options.logger,
+    loggerInstance: requestSafeLogger,
     trustProxy: trustedProxies.length > 0 ? [...trustedProxies] : false,
     requestIdHeader: false,
     genReqId: (request) => safeCorrelationId(request.headers['x-correlation-id']),

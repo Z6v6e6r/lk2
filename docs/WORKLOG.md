@@ -1,5 +1,22 @@
 # Worklog
 
+## 2026-07-16 — Repeat Viva OAuth delegation repair
+
+- Diagnosed callback failure `23505` after a successful Viva token exchange: a legacy delegation
+  still belonged to a duplicate PadlHub user while the canonical Viva profile resolved to the
+  reconciled user.
+- Made delegation persistence idempotent by serializing replacement per canonical user/issuer,
+  removing an obsolete subject for that user, and transferring the issuer/subject-owned row to the
+  canonical PadlHub user in the same transaction.
+- Added a regression test covering the canonical-user transfer conflict path.
+- Removed query strings from structured request logs so OAuth `code`/`state` values and other
+  sensitive query parameters never enter application logs.
+- Scoped profile-photo storage validation to the worker so enabling Home synchronization cannot
+  crash API/realtime processes that never receive MinIO credentials.
+- Wired the staging worker to the existing private Nano MinIO using Compose-time credential
+  projection, kept the bucket private behind signed URLs, and added bounded multi-process readiness
+  diagnostics before public smoke tests.
+
 ## 2026-07-16 — first in-app notification vertical slice
 
 - Added a tenant-gated RabbitMQ notification projector that resolves active rules/templates,

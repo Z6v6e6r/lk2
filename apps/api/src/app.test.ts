@@ -4,7 +4,7 @@ import { SignJWT } from 'jose';
 import type { Pool } from 'pg';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { buildApp, requireIdempotencyKey } from './app.js';
+import { buildApp, requireIdempotencyKey, sanitizeRequestLogUrl } from './app.js';
 import { buildMockHomeDashboard } from './home/home-dashboard.js';
 
 const config = loadConfig({
@@ -51,6 +51,15 @@ afterEach(async () => {
 });
 
 describe('health endpoints', () => {
+  it('removes OAuth and other query parameters from request logs', () => {
+    expect(
+      sanitizeRequestLogUrl(
+        '/user/api/v1/local-padel/auth/viva/callback?state=secret&code=one-time-code',
+      ),
+    ).toBe('/user/api/v1/local-padel/auth/viva/callback');
+    expect(sanitizeRequestLogUrl('/health/ready')).toBe('/health/ready');
+  });
+
   it('returns liveness and propagates a correlation ID', async () => {
     const app = await buildApp({ config, logger: createLogger('api-test', 'silent') });
     apps.push(app);

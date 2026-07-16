@@ -54,16 +54,34 @@ describe('loadConfig', () => {
 
   it('requires private object storage for the real Home photo projection', () => {
     expect(() =>
-      loadConfig({
-        ...validEnvironment,
-        VIVA_MODE: 'sandbox',
-        VIVA_OAUTH_ENABLED: 'true',
-        VIVA_OAUTH_REDIRECT_URI: 'https://lk.padlhub.test/oauth/callback',
-        VIVA_OAUTH_SUCCESS_REDIRECT_URL: 'https://lk.padlhub.test/',
-        VIVA_DELEGATION_ENCRYPTION_KEY: 'test-delegation-key-at-least-32-characters',
-        HOME_VIVA_SYNC_ENABLED: 'true',
-      }),
+      loadConfig(
+        {
+          ...validEnvironment,
+          VIVA_MODE: 'sandbox',
+          VIVA_OAUTH_ENABLED: 'true',
+          VIVA_OAUTH_REDIRECT_URI: 'https://lk.padlhub.test/oauth/callback',
+          VIVA_OAUTH_SUCCESS_REDIRECT_URL: 'https://lk.padlhub.test/',
+          VIVA_DELEGATION_ENCRYPTION_KEY: 'test-delegation-key-at-least-32-characters',
+          HOME_VIVA_SYNC_ENABLED: 'true',
+        },
+        { profilePhotoStorage: true },
+      ),
     ).toThrow('HOME_VIVA_SYNC_ENABLED requires profile photo storage');
+  });
+
+  it('does not expose worker-only storage requirements to API and realtime', () => {
+    const config = loadConfig({
+      ...validEnvironment,
+      VIVA_MODE: 'sandbox',
+      VIVA_OAUTH_ENABLED: 'true',
+      VIVA_OAUTH_REDIRECT_URI: 'https://lk.padlhub.test/oauth/callback',
+      VIVA_OAUTH_SUCCESS_REDIRECT_URL: 'https://lk.padlhub.test/',
+      VIVA_DELEGATION_ENCRYPTION_KEY: 'test-delegation-key-at-least-32-characters',
+      HOME_VIVA_SYNC_ENABLED: 'true',
+    });
+
+    expect(config.HOME_VIVA_SYNC_ENABLED).toBe(true);
+    expect(config.S3_ENDPOINT).toBeUndefined();
   });
 
   it('rejects incomplete secrets', () => {

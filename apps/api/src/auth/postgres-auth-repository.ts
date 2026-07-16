@@ -181,15 +181,34 @@ export class PostgresAuthRepository implements AuthRepository {
     readonly correlationId: string;
   }): Promise<void> {
     return this.withTenant(input.tenantId, async (client) => {
+      // A canonical Viva profile can become linked to a newer OAuth subject/user
+      // after legacy duplicate users are reconciled. Serialize all delegation
+      // replacements for the canonical PadlHub user, remove an obsolete subject
+      // already attached to that user, then transfer the subject-owned row.
+      await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
+        `${input.tenantId}\u001f${input.userId}\u001fVIVA\u001f${input.issuer}`,
+      ]);
+      await client.query(
+        `
+          delete from integration.user_delegations
+          where tenant_id = $1
+            and user_id = $2
+            and provider = 'VIVA'
+            and issuer = $3
+            and subject <> $4
+        `,
+        [input.tenantId, input.userId, input.issuer, input.subject],
+      );
       await client.query(
         `
           insert into integration.user_delegations (
             tenant_id, user_id, provider, issuer, subject, refresh_token_ciphertext,
             encryption_key_version, granted_scopes, refresh_expires_at, last_refreshed_at
           ) values ($1, $2, 'VIVA', $3, $4, $5, $6, $7, $8, now())
-          on conflict (tenant_id, user_id, provider, issuer)
+          on conflict (tenant_id, issuer, subject)
           do update set
-            subject = excluded.subject,
+            user_id = excluded.user_id,
+            provider = excluded.provider,
             refresh_token_ciphertext = excluded.refresh_token_ciphertext,
             encryption_key_version = excluded.encryption_key_version,
             granted_scopes = excluded.granted_scopes,

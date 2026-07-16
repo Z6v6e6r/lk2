@@ -36,6 +36,12 @@ dependency tree.
    `/etc/phub/staging.env`. Run migrations once from the CI-published migrator
    digest, then deploy web, API, realtime and worker.
 
+The staging application Compose file passes only the existing MinIO credentials from
+`infrastructure.env` into the worker. API and realtime never receive object-storage credentials.
+The worker uses the private `http://minio:9000` endpoint and publishes short-lived signed URLs
+through the private `phub-media` bucket exposed by Nginx. The bucket is not public; unsigned reads
+must remain denied.
+
 ## GitHub Actions access
 
 GitHub-hosted runners reach the private Nano through the Tailscale action, not
@@ -50,10 +56,15 @@ expiry. Configure these GitHub environment `staging` secrets:
 - `STAGING_KNOWN_HOSTS`, the Nano host key for `100.70.62.47`.
 
 The staging workflow joins the tailnet as an ephemeral `tag:ci` node, verifies
-the Nano with Tailscale ping, then uploads the digest-only release definition.
+the Nano with Tailscale ping, then uploads the digest-pinned release definition and the non-secret
+public media endpoint.
 It uses the job-scoped `GITHUB_TOKEN` only through standard input to pull the
 GHCR image digests and logs the Nano out of GHCR immediately afterward. Do not
 create or store a long-lived registry token on the node.
+
+After switching containers, the workflow waits for API, realtime and worker readiness before the
+public smoke test. If readiness does not converge, it prints bounded startup logs and container
+status, then fails the release instead of reporting an ambiguous Nginx `502`.
 
 ## Application ingress
 

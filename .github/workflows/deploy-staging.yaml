@@ -89,6 +89,7 @@ jobs:
             echo "REALTIME_IMAGE_DIGEST=$(cat digests/realtime)"
             echo "MIGRATOR_IMAGE_DIGEST=$(cat digests/migrator)"
             echo "RELEASE=${{ github.sha }}"
+            echo "S3_PUBLIC_ENDPOINT=${{ vars.STAGING_BASE_URL }}"
           } > release.env
           scp release.env "phub-deploy@$HOST:/opt/phub/release.env"
       - name: Pull, migrate and deploy the same image digests
@@ -101,12 +102,33 @@ jobs:
             trap "docker logout ghcr.io >/dev/null 2>&1 || true" EXIT
             docker login ghcr.io --username "${{ github.actor }}" --password-stdin
             cd /opt/phub
-            docker compose --env-file release.env pull
-            docker compose --env-file release.env --profile migration run --rm migrator
-            docker compose --env-file release.env up -d --remove-orphans
+            compose() {
+              docker compose --env-file infrastructure.env --env-file release.env "$@"
+            }
+            compose pull
+            compose --profile migration run --rm migrator
+            compose up -d --remove-orphans
             # The ingress configuration is bind-mounted. Recreate this one
             # stateless container so it loads the newly copied configuration.
             docker compose --env-file infrastructure.env -f compose.infrastructure.yaml up -d --force-recreate nginx
+
+            ready=0
+            attempt=0
+            while [ "$attempt" -lt 36 ]; do
+              if compose exec -T api node -e "fetch('http://127.0.0.1:3000/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" >/dev/null 2>&1 \
+                && compose exec -T realtime node -e "fetch('http://127.0.0.1:3001/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" >/dev/null 2>&1 \
+                && compose exec -T worker node -e "fetch('http://127.0.0.1:3002/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" >/dev/null 2>&1; then
+                ready=1
+                break
+              fi
+              attempt=$((attempt + 1))
+              sleep 5
+            done
+            if [ "$ready" -ne 1 ]; then
+              compose ps -a
+              compose logs --no-color --tail=160 api worker realtime
+              exit 1
+            fi
           '
       - name: Verify the web entrypoint
         env:

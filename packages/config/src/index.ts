@@ -104,7 +104,14 @@ const environmentSchema = z.object({
 
 export type AppConfig = z.infer<typeof environmentSchema>;
 
-export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppConfig {
+export interface ConfigRequirements {
+  readonly profilePhotoStorage?: boolean;
+}
+
+export function loadConfig(
+  environment: NodeJS.ProcessEnv = process.env,
+  requirements: ConfigRequirements = {},
+): AppConfig {
   const parsed = environmentSchema.safeParse(environment);
   if (!parsed.success) {
     const issues = parsed.error.issues
@@ -139,7 +146,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
   if (parsed.data.HOME_VIVA_SYNC_ENABLED && !parsed.data.VIVA_OAUTH_ENABLED) {
     throw new Error('HOME_VIVA_SYNC_ENABLED requires VIVA_OAUTH_ENABLED=true');
   }
-  if (parsed.data.HOME_VIVA_SYNC_ENABLED) {
+  if (parsed.data.HOME_VIVA_SYNC_ENABLED && requirements.profilePhotoStorage) {
     const missingStorage = [
       ['S3_ENDPOINT', parsed.data.S3_ENDPOINT],
       ['S3_PUBLIC_ENDPOINT', parsed.data.S3_PUBLIC_ENDPOINT],

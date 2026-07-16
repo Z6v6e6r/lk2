@@ -13,7 +13,7 @@ import { publishOutboxBatch } from './outbox-publisher.js';
 import { S3ProfilePhotoObjectStore } from './profile-photo-sync.js';
 import { runVivaHomeSyncCycle } from './viva-home-sync.js';
 
-const config = loadConfig();
+const config = loadConfig(process.env, { profilePhotoStorage: true });
 const logger = createLogger('worker', config.LOG_LEVEL, process.env.RELEASE);
 const telemetry = startTelemetry({
   serviceName: 'worker',
