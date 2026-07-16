@@ -120,6 +120,55 @@ function Chevron(): React.JSX.Element {
   return <span className="fh-chevron" aria-hidden="true" />;
 }
 
+const levelSegmentIndexes = [0, 1, 2, 3] as const;
+
+function filledLevelSegments(level: HomeDashboard['profile']['level']): number {
+  if (level.assessmentRequired) return 0;
+  const fractionalProgress = level.value - Math.floor(level.value);
+  return Math.min(levelSegmentIndexes.length, Math.round(fractionalProgress * 4));
+}
+
+function LevelAvatar({
+  profile,
+}: {
+  readonly profile: HomeDashboard['profile'];
+}): React.JSX.Element {
+  const filledSegments = filledLevelSegments(profile.level);
+  const usesFallbackAvatar = !profile.avatarUrl;
+  const levelLabel = profile.level.assessmentRequired ? '?' : profile.level.label;
+  const levelDescription = profile.level.assessmentRequired
+    ? 'Уровень не определён: заполнено 0 из 4 секторов'
+    : `Уровень ${profile.level.label}: заполнено ${filledSegments} из 4 секторов`;
+
+  return (
+    <span className="fh-profile-avatar" role="img" aria-label={levelDescription}>
+      <svg className="fh-profile-level-ring" viewBox="0 0 48 48" aria-hidden="true">
+        {levelSegmentIndexes.map((segmentIndex) => (
+          <circle
+            className={segmentIndex < filledSegments ? 'is-filled' : undefined}
+            cx="24"
+            cy="24"
+            r="22"
+            pathLength="100"
+            strokeDasharray="20 80"
+            strokeDashoffset={-segmentIndex * 25}
+            transform="rotate(90 24 24)"
+            key={segmentIndex}
+          />
+        ))}
+      </svg>
+      <span className="fh-profile-avatar-image">
+        <img
+          className={usesFallbackAvatar ? 'is-fallback' : undefined}
+          src={profile.avatarUrl ?? profileUrl}
+          alt=""
+        />
+      </span>
+      <span className="fh-profile-level">{levelLabel}</span>
+    </span>
+  );
+}
+
 function communityInitials(title: string): string {
   return title
     .trim()
@@ -236,8 +285,8 @@ export function HomeDashboardPage({
         <section className="fh-hero">
           <header className="fh-profile-row">
             <a className="fh-profile" href="/profile">
-              <img src={dashboard.profile.avatarUrl ?? profileUrl} alt="" />
-              <span>
+              <LevelAvatar profile={dashboard.profile} />
+              <span className="fh-profile-copy">
                 <h1>{dashboard.profile.displayName}</h1>
                 <small>
                   <Glyph name="wallet" />

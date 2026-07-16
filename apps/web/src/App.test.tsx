@@ -173,6 +173,18 @@ describe('PadlHub web authentication', () => {
     expect(await screen.findByRole('heading', { name: 'Анна Петрова' })).toBeVisible();
     expect(screen.getAllByText('ПаделХАБ').length).toBeGreaterThan(0);
     expect(screen.getByRole('heading', { name: 'Сообщества' })).toBeVisible();
+    const levelAvatar = screen.getByRole('img', {
+      name: 'Уровень C+: заполнено 3 из 4 секторов',
+    });
+    expect(levelAvatar).toBeVisible();
+    const levelSegments = levelAvatar.querySelectorAll('.fh-profile-level-ring circle');
+    expect(levelSegments).toHaveLength(4);
+    expect(levelAvatar.querySelectorAll('.fh-profile-level-ring circle.is-filled')).toHaveLength(3);
+    expect(levelSegments[0]).toHaveAttribute('transform', 'rotate(90 24 24)');
+    expect(levelSegments[0]).toHaveAttribute('stroke-dashoffset', '0');
+    expect(levelSegments[1]).toHaveAttribute('stroke-dashoffset', '-25');
+    expect(levelAvatar.querySelector('.fh-profile-avatar-image > img')).toHaveClass('is-fallback');
+    expect(levelAvatar.querySelector('.fh-profile-level')).toHaveTextContent('C+');
     expect(screen.queryByRole('button', { name: 'VK ID или Mail.ru' })).not.toBeInTheDocument();
     expect(gateway.restoreSession).toHaveBeenCalledOnce();
     expect(gateway.getHomeDashboard).toHaveBeenCalledOnce();

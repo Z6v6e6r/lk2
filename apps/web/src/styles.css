@@ -2095,15 +2095,91 @@ label {
   gap: 8px;
 }
 
-.fh-profile > img {
+.fh-profile-avatar {
+  position: relative;
+  isolation: isolate;
   display: block;
   width: 48px;
   height: 51px;
   flex: 0 0 48px;
-  object-fit: fill;
 }
 
-.fh-profile > span {
+.fh-profile-level-ring {
+  position: absolute;
+  z-index: 2;
+  top: 0;
+  left: 0;
+  width: 48px;
+  height: 48px;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.fh-profile-level-ring circle {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.24);
+  stroke-linecap: round;
+  stroke-width: 3;
+}
+
+.fh-profile-level-ring circle.is-filled {
+  stroke: #fff;
+}
+
+.fh-profile-avatar-image {
+  position: absolute;
+  z-index: 1;
+  top: 4px;
+  left: 4px;
+  display: block;
+  width: 40px;
+  height: 40px;
+  overflow: hidden;
+  border-radius: 40px;
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.fh-profile-avatar-image > img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.fh-profile-avatar-image > img.is-fallback {
+  position: absolute;
+  top: -8px;
+  left: 50%;
+  width: 72px;
+  height: auto;
+  max-width: none;
+  transform: translateX(-50%);
+}
+
+.fh-profile-level {
+  position: absolute;
+  z-index: 3;
+  top: 37px;
+  left: 13px;
+  display: flex;
+  width: 22px;
+  height: 14px;
+  box-sizing: border-box;
+  align-items: center;
+  justify-content: center;
+  padding: 0 4px;
+  border-radius: 44px;
+  background: #fafafa;
+  color: #1f1e20;
+  font-family: 'RF Dewi', 'Inter Display', sans-serif;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 11px;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.fh-profile-copy {
   display: flex;
   min-width: 0;
   height: 47px;
