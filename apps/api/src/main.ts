@@ -1,6 +1,11 @@
 import type { IdentityProviderKey, IdentityProviderPort } from '@phub/auth';
 import { loadConfig } from '@phub/config';
-import { createDatabasePool } from '@phub/database';
+import {
+  createClientRoutingPlanRepository,
+  createDatabasePool,
+  createHomeDashboardProjectionRepository,
+  createNotificationInboxRepository,
+} from '@phub/database';
 import { createLogger, startTelemetry } from '@phub/observability';
 import { VivaIdentityProvider } from '@phub/viva-adapter';
 import Redis from 'ioredis';
@@ -19,6 +24,7 @@ const telemetry = startTelemetry({
   ...(config.OTEL_EXPORTER_OTLP_ENDPOINT ? { endpoint: config.OTEL_EXPORTER_OTLP_ENDPOINT } : {}),
 });
 const pool = createDatabasePool(config.DATABASE_URL);
+const clientRoutingPlanRepository = createClientRoutingPlanRepository(pool);
 const redis = new Redis(config.REDIS_URL, {
   enableOfflineQueue: false,
   maxRetriesPerRequest: 1,
@@ -52,6 +58,9 @@ const app = await buildApp({
   logger,
   pool,
   authService,
+  homeDashboardRepository: createHomeDashboardProjectionRepository(pool),
+  clientRoutingPlanRepository,
+  notificationRepository: createNotificationInboxRepository(pool),
   authDependencyReady: async () => (await redis.ping()) === 'PONG',
   rateLimitRedis: redis,
 });

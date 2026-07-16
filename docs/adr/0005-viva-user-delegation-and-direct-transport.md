@@ -1,13 +1,13 @@
 # ADR 0005: Viva user delegation and direct user transport
 
-- Status: accepted, feature-gated
+- Status: accepted, direct-command portion superseded by ADR 0008
 - Date: 2026-07-12
 - Extends: [ADR 0004](0004-provider-neutral-authentication.md)
 
 ## Context
 
-The first Viva-backed cabinet operations are profile, available schedule slots, booking purchase and
-booking cancellation. Running all of these operations from a shared PadlHub egress can trigger Viva
+The first Viva-backed cabinet operations are profile, available schedule slots and booking reads.
+Running all of these read operations from a shared PadlHub egress can trigger Viva
 rate or anti-abuse controls and does not preserve the practical "act as this customer" behavior of
 the existing Viva cabinet.
 
@@ -19,8 +19,11 @@ path from Viva. A browser must not receive a Viva system key or a durable creden
 Viva OAuth Authorization Code with PKCE is the primary cabinet sign-in. The user chooses `vkid` or
 `yandex`; the browser starts a PadlHub endpoint, which owns the OAuth `state`, `nonce`, PKCE verifier,
 return URL allowlist and legal-acceptance intent. The callback is handled by PadlHub, which verifies
-the Viva response, resolves `(tenant_id, issuer, subject)`, and issues the normal PadlHub access JWT
-and rotating `HttpOnly` refresh cookie.
+the Viva response, verifies `(issuer, subject)`, reads the stable Viva client profile ID and resolves
+that integration-only identifier to one PadlHub user UUID before issuing the normal PadlHub access
+JWT and rotating `HttpOnly` refresh cookie. Different VK ID/Yandex subjects for the same Viva client
+are identity links of that one user; phone and email are never account-linking keys. A conflicting
+pre-existing mapping fails closed for audited reconciliation instead of creating or merging users.
 
 The successful callback may also create or rotate a **Viva user delegation**. It is not a PadlHub
 session and never changes the public PadlHub user UUID.
@@ -51,21 +54,15 @@ are single-flight/locked per delegation.
 
 While a tenant's operation policy is `VIVA_PRIMARY` and the corresponding feature flag is enabled,
 the browser may call Viva directly with the short-lived user access-token for exactly these
-operations:
-
-1. profile read;
-2. available-slot read;
-3. purchase and cancellation commands.
+operations defined by the current server routing plan. ADR 0008 narrows the deployed vocabulary to
+profile, booking-list, booking-detail, subscription and schedule reads.
 
 The browser receives neither a Viva system key nor a Viva refresh-token. It does not select the
 source: PadlHub returns a signed operation policy/capability for an approved route, tenant, user,
 HTTP method and expiry. Any other Viva URL, scope or command is rejected by the client adapter.
 
-For purchase and cancellation, the browser first creates a PadlHub command intent with an
-`Idempotency-Key`; PadlHub authorizes it and records a security audit. The direct Viva result is
-`PENDING_RECONCILIATION` until a Viva webhook, provider receipt verification, or scheduled
-reconciliation proves the resulting Viva state. Client-supplied success is never sufficient to
-authorize a booking, price, payment or right.
+Purchase, cancellation and every other command stay behind PadlHub APIs. Direct client command
+transport is not enabled by this ADR.
 
 ## Refresh, revocation and expiry
 
@@ -97,12 +94,12 @@ Viva confirms that scope for the production client.
 The client calls the PadlHub operation contract and consumes PadlHub DTOs. It never embeds Viva IDs
 as primary identifiers. A tenant/operation policy selects one of:
 
-- `DIRECT_VIVA`: current Viva route is executed by the user agent using a short-lived delegation;
+- `DIRECT_VIVA`: an allowlisted read route is executed by the user agent using a short-lived delegation;
 - `SERVER_VIVA`: a controlled emergency fallback where Viva accepts server traffic;
 - `LOCAL`: the PadlHub implementation is the source and command owner;
 - `UNAVAILABLE`: block the operation with a stable error rather than silently merge data.
 
-The policy is evaluated server-side and feature-gated per tenant and operation. Replacing Viva is
+The policy is evaluated server-side and returned as the short-lived plan defined by ADR 0008. Replacing Viva is
 therefore a configuration/rollout change after the PadlHub implementation reaches parity; the login
 screen, PadlHub session and public DTOs do not change. Disabling `DIRECT_VIVA` immediately stops
 issuance of browser Viva access-tokens. Existing tokens remain short-lived and cannot be renewed.

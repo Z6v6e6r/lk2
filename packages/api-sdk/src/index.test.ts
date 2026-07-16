@@ -346,3 +346,43 @@ describe('PadlHubApiClient authentication boundary', () => {
     expect(calls).toBe(1);
   });
 });
+
+describe('PadlHubApiClient notification boundary', () => {
+  it('uses the canonical inbox query and an idempotent read-cursor command', async () => {
+    const calls: Array<{ input: Parameters<typeof fetch>[0]; init?: RequestInit }> = [];
+    const fetchImplementation: typeof fetch = (input, init) => {
+      calls.push({ input, ...(init === undefined ? {} : { init }) });
+      return Promise.resolve(
+        requestUrl(input).includes('/read-cursor')
+          ? jsonResponse({
+              outcome: 'updated',
+              readThrough: {
+                id: '11111111-1111-4111-8111-111111111111',
+                createdAt: '2026-07-16T12:00:00.000Z',
+              },
+              changedCount: 1,
+              replayed: false,
+            })
+          : jsonResponse({ items: [], unreadCount: 0 }),
+      );
+    };
+    const client = createClient(fetchImplementation, {
+      initialAccessToken: authenticatedSession.accessToken,
+    });
+
+    await client.listNotifications({ limit: 25, unreadOnly: true, cursor: 'opaque-cursor' });
+    await client.markNotificationsRead('11111111-1111-4111-8111-111111111111');
+
+    expect(requestUrl(calls[0]?.input ?? '')).toBe(
+      'https://api.padlhub.test/user/api/v1/local-padel/notifications?limit=25&unreadOnly=true&cursor=opaque-cursor',
+    );
+    expect(requestUrl(calls[1]?.input ?? '')).toBe(
+      'https://api.padlhub.test/user/api/v1/local-padel/notifications/read-cursor',
+    );
+    const headers = new Headers(calls[1]?.init?.headers);
+    expect(headers.get('Idempotency-Key')).toMatch(/^[A-Za-z0-9-]{16,}$/);
+    expect(JSON.parse(stringRequestBody(calls[1]?.init?.body))).toEqual({
+      throughId: '11111111-1111-4111-8111-111111111111',
+    });
+  });
+});

@@ -1,0 +1,215 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="Electron" version="26.0.0">
+  <diagram id="phub-messaging-notifications" name="Chats and notifications">
+    <mxGraphModel dx="1600" dy="1100" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1700" pageHeight="1200" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="layer_clients" value="Клиенты" style="swimlane;startSize=30;container=1;pointerEvents=0;rounded=1;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="40" y="30" width="1520" height="140" as="geometry" />
+        </mxCell>
+        <mxCell id="client_apps" value="Web / iOS / Android&#xa;чаты · inbox · Web Push / APNs / FCM" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6c8ebf;" vertex="1" parent="layer_clients">
+          <mxGeometry x="180" y="50" width="360" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="client_cup" value="ЦУП&#xa;support · триггеры · delivery status · moderation" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6c8ebf;" vertex="1" parent="layer_clients">
+          <mxGeometry x="980" y="50" width="360" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="layer_domains" value="PadlHub API и доменные модули" style="swimlane;startSize=30;container=1;pointerEvents=0;rounded=1;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="40" y="210" width="1520" height="220" as="geometry" />
+        </mxCell>
+        <mxCell id="api_boundary" value="User / Admin / Webhook API&#xa;JWT · tenant · idempotency · audit" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#9673a6;fontStyle=1;" vertex="1" parent="layer_domains">
+          <mxGeometry x="20" y="80" width="230" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="messaging_domain" value="Messaging&#xa;conversation · membership&#xa;server sequence · read cursor" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#9673a6;fontStyle=1;" vertex="1" parent="layer_domains">
+          <mxGeometry x="290" y="70" width="230" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="notifications_domain" value="Notifications&#xa;rules · templates · intents&#xa;in-app inbox · preferences" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#9673a6;fontStyle=1;" vertex="1" parent="layer_domains">
+          <mxGeometry x="560" y="70" width="230" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="moderation_domain" value="Moderation / control&#xa;reports · policies · cases&#xa;PadlHub decisions · quarantine" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontStyle=1;" vertex="1" parent="layer_domains">
+          <mxGeometry x="830" y="70" width="250" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="integration_adapters" value="Integration adapters&#xa;connector mappings · encrypted endpoints&#xa;timeouts · retry · circuit breaker" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;" vertex="1" parent="layer_domains">
+          <mxGeometry x="1120" y="70" width="320" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="layer_delivery" value="Асинхронная и realtime-доставка" style="swimlane;startSize=30;container=1;pointerEvents=0;rounded=1;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="40" y="470" width="1520" height="170" as="geometry" />
+        </mxCell>
+        <mxCell id="worker" value="Worker&#xa;outbox publish · trigger fanout&#xa;delivery jobs · retry / DLQ" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d6b656;" vertex="1" parent="layer_delivery">
+          <mxGeometry x="150" y="50" width="320" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="rabbitmq" value="RabbitMQ&#xa;identifier-only events&#xa;retry · DLQ" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontStyle=1;" vertex="1" parent="layer_delivery">
+          <mxGeometry x="600" y="50" width="300" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="realtime" value="Realtime Gateway&#xa;ticket auth · membership check&#xa;sequence gap recovery" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d6b656;" vertex="1" parent="layer_delivery">
+          <mxGeometry x="1050" y="50" width="320" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="layer_data" value="Источники состояния" style="swimlane;startSize=30;container=1;pointerEvents=0;rounded=1;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="40" y="680" width="1520" height="170" as="geometry" />
+        </mxCell>
+        <mxCell id="postgres" value="PostgreSQL&#xa;единственный source of truth&#xa;RLS · audit · outbox" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#82b366;fontStyle=1;" vertex="1" parent="layer_data">
+          <mxGeometry x="180" y="50" width="300" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="redis" value="Redis&#xa;presence · typing · connection routing&#xa;rate limits · short locks" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#82b366;" vertex="1" parent="layer_data">
+          <mxGeometry x="610" y="50" width="300" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="object_storage" value="S3-compatible storage&#xa;private attachments&#xa;signed URL · malware scan" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#82b366;" vertex="1" parent="layer_data">
+          <mxGeometry x="1040" y="50" width="300" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="layer_external" value="Внешние каналы доставки" style="swimlane;startSize=30;container=1;pointerEvents=0;rounded=1;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="40" y="890" width="1520" height="150" as="geometry" />
+        </mxCell>
+        <mxCell id="chat_connectors" value="Мессенджер-коннекторы&#xa;MAX / Telegram / другие adapters" style="rounded=1;whiteSpace=wrap;html=1;dashed=1;fillColor=#ffffff;strokeColor=#666666;" vertex="1" parent="layer_external">
+          <mxGeometry x="100" y="50" width="330" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="notification_providers" value="Push providers&#xa;Web Push / VAPID · APNs · FCM&#xa;accepted / delivered receipts" style="rounded=1;whiteSpace=wrap;html=1;dashed=1;fillColor=#ffffff;strokeColor=#666666;" vertex="1" parent="layer_external">
+          <mxGeometry x="590" y="40" width="340" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="moderation_providers" value="Внешний контроль / moderation&#xa;signed signals · recommendations only" style="rounded=1;whiteSpace=wrap;html=1;dashed=1;fillColor=#ffffff;strokeColor=#666666;" vertex="1" parent="layer_external">
+          <mxGeometry x="1090" y="50" width="330" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="e1" value="HTTPS commands / history" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.35;exitY=1;entryX=0.35;entryY=0;" edge="1" parent="1" source="client_apps" target="api_boundary">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e2" value="Admin API" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;entryX=0.65;entryY=0;" edge="1" parent="1" source="client_cup" target="api_boundary">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1200" y="190" />
+              <mxPoint x="275" y="190" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e3" value="authorized use cases" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.35;entryX=0;entryY=0.35;" edge="1" parent="1" source="api_boundary" target="messaging_domain">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e4" value="trigger/admin use cases" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.75;entryX=0;entryY=0.75;" edge="1" parent="1" source="api_boundary" target="notifications_domain">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="410" y="375" />
+              <mxPoint x="800" y="375" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e5" value="connector ports" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.35;entryX=0;entryY=0.35;" edge="1" parent="1" source="notifications_domain" target="integration_adapters">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e6" value="thread / message mapping" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.75;entryX=0;entryY=0.75;" edge="1" parent="1" source="messaging_domain" target="integration_adapters">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="740" y="405" />
+              <mxPoint x="1160" y="405" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e7" value="transaction: state + audit + outbox" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.35;exitY=1;entryX=0.4;entryY=0;" edge="1" parent="1" source="messaging_domain" target="postgres">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="540" y="450" />
+              <mxPoint x="540" y="660" />
+              <mxPoint x="380" y="660" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e8" value="intents + inbox + delivery state" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.65;exitY=1;entryX=0.65;entryY=0;" edge="1" parent="1" source="notifications_domain" target="postgres">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="980" y="450" />
+              <mxPoint x="980" y="660" />
+              <mxPoint x="435" y="660" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e9" value="poll outbox / persist attempts" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.45;exitY=1;entryX=0.45;entryY=0;" edge="1" parent="1" source="worker" target="postgres">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e10" value="publish / consume" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="worker" target="rabbitmq">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e11" value="ordered events" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="rabbitmq" target="realtime">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e12" value="presence / routing TTL" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.35;exitY=1;entryX=0.65;entryY=0;" edge="1" parent="1" source="realtime" target="redis">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1200" y="660" />
+              <mxPoint x="845" y="660" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e13" value="WebSocket events" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=1;entryY=0.5;" edge="1" parent="1" source="realtime" target="client_apps">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1530" y="565" />
+              <mxPoint x="1530" y="100" />
+              <mxPoint x="580" y="100" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e14" value="signed upload / scan" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.75;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="messaging_domain" target="object_storage">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="650" y="450" />
+              <mxPoint x="650" y="670" />
+              <mxPoint x="1230" y="670" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e15" value="inbound webhook / outbound delivery" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;startArrow=block;startFill=1;endArrow=block;endFill=1;exitX=1;exitY=0.75;entryX=1;entryY=0.5;" edge="1" parent="1" source="integration_adapters" target="chat_connectors">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1540" y="360" />
+              <mxPoint x="1540" y="975" />
+              <mxPoint x="690" y="975" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e16" value="push / email / SMS" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.65;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="integration_adapters" target="notification_providers">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1370" y="450" />
+              <mxPoint x="1370" y="870" />
+              <mxPoint x="1080" y="870" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e17" value="resolve canonical content" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.8;exitY=0;entryX=0.4;entryY=1;" edge="1" parent="1" source="worker" target="integration_adapters">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="450" y="450" />
+              <mxPoint x="1280" y="450" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e18" value="signal / recommendation ports" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="moderation_domain" target="integration_adapters">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e19" value="report / authorized action" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;startArrow=block;startFill=1;endArrow=block;endFill=1;exitX=0.5;exitY=0;entryX=0.5;entryY=0;" edge="1" parent="1" source="messaging_domain" target="moderation_domain">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="445" y="260" />
+              <mxPoint x="995" y="260" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e20" value="mTLS / service JWT" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;startArrow=block;startFill=1;endArrow=block;endFill=1;exitX=1;exitY=0.5;entryX=1;entryY=0.5;" edge="1" parent="1" source="integration_adapters" target="moderation_providers">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1510" y="325" />
+              <mxPoint x="1510" y="975" />
+              <mxPoint x="1460" y="975" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e21" value="cases + immutable actions" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;entryX=0.85;entryY=0;" edge="1" parent="1" source="moderation_domain" target="postgres">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="995" y="450" />
+              <mxPoint x="995" y="650" />
+              <mxPoint x="475" y="650" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

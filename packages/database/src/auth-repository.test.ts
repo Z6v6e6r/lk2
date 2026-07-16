@@ -128,6 +128,61 @@ describe('identity auth repository', () => {
     expect(identityLookup).not.toContain('phone_e164 =');
   });
 
+  it('links another OAuth subject to the canonical Viva profile user', async () => {
+    const statements: { text: string; values: readonly unknown[] }[] = [];
+    const { repository } = repositoryWithClient((text, values) => {
+      statements.push({ text, values });
+      if (text.includes('from integration.external_identity_map e')) return { rows: [] };
+      if (text.includes('from integration.external_entity_map e')) {
+        return {
+          rows: [
+            {
+              id: userId,
+              tenant_id: tenantId,
+              display_name: 'Алексей',
+              phone_last_4: '4567',
+            },
+          ],
+        };
+      }
+      if (text.includes('insert into integration.external_entity_map')) {
+        return { rows: [{ internal_id: userId }], rowCount: 1 };
+      }
+      if (text.includes('from identity.users u')) {
+        return {
+          rows: [
+            {
+              id: userId,
+              tenant_id: tenantId,
+              display_name: 'Алексей',
+              phone_last_4: '4567',
+            },
+          ],
+        };
+      }
+      return { rows: [], rowCount: 1 };
+    });
+
+    await expect(
+      repository.upsertExternalUser({
+        tenantId,
+        provider: 'VIVA',
+        issuer: 'https://kc.vivacrm.ru/realms/clients',
+        subject: 'second-social-subject',
+        providerUserId: 'viva-profile-42',
+        displayName: 'Алексей',
+        phoneE164: '+79991234567',
+        correlationId: 'canonical-link-correlation',
+      }),
+    ).resolves.toMatchObject({ id: userId, tenantId });
+
+    expect(statements.some(({ text }) => text.includes('insert into identity.users'))).toBe(false);
+    const linkedIdentity = statements.find(({ text }) =>
+      text.includes('insert into integration.external_identity_map'),
+    );
+    expect(linkedIdentity?.values).toContain(userId);
+  });
+
   it('creates an opaque hashed refresh session with an explicit JWT sid', async () => {
     const { repository, query } = repositoryWithClient((text, values) => {
       if (text.includes('insert into identity.refresh_sessions')) {

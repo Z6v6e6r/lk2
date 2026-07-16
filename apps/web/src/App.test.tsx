@@ -6,7 +6,13 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { App } from './App.js';
-import type { AuthGateway, AuthenticatedSession } from './auth-gateway.js';
+import type {
+  AuthGateway,
+  AuthenticatedSession,
+  HomeDashboard,
+  UserProfile,
+  UserUpcomingBookings,
+} from './auth-gateway.js';
 
 const session: AuthenticatedSession = {
   context: {
@@ -25,6 +31,101 @@ const session: AuthenticatedSession = {
   },
 };
 
+const homeDashboard: HomeDashboard = {
+  snapshot: {
+    version: 'home-v1-test',
+    generatedAt: '2026-07-15T09:00:00.000Z',
+    staleAt: '2026-07-15T09:01:00.000Z',
+    source: 'LOCAL_MOCK',
+  },
+  profile: {
+    userId: session.context.user.id,
+    displayName: session.context.user.displayName,
+    firstName: 'Анна',
+    avatarUrl: null,
+    phoneLast4: '0001',
+    balanceMinor: 54000,
+    currency: 'RUB',
+    level: { label: 'C+', value: 3.8, assessmentRequired: false },
+  },
+  counters: { unreadChats: 2, upcomingEvents: 1, activeSubscriptions: 1 },
+  quickActions: [
+    {
+      id: 'play',
+      title: 'Найти игру',
+      subtitle: 'Открытые игры рядом',
+      route: '/games',
+      tone: 'violet',
+    },
+  ],
+  upcoming: [
+    {
+      id: '751fe6a8-b0b1-4b2b-873d-a2d785c4e191',
+      kind: 'game',
+      title: 'Американо · уровень C',
+      startsAt: '2026-07-16T18:00:00.000Z',
+      venue: 'ПаделХАБ · корт 2',
+      status: 'confirmed',
+      route: '/games/751fe6a8-b0b1-4b2b-873d-a2d785c4e191',
+    },
+  ],
+  subscriptions: [
+    {
+      id: '24793a5a-0931-4a76-8600-267015be0ac9',
+      title: 'Лето · Падел · Спорт',
+      status: 'active',
+      remainingUnits: 8,
+      validUntil: '2026-09-15T00:00:00.000Z',
+      route: '/subscriptions/24793a5a-0931-4a76-8600-267015be0ac9',
+    },
+  ],
+  communities: [
+    {
+      id: '42c05c91-da23-4dc5-bf97-3d136a2d12bd',
+      title: 'Padel Friends',
+      description: 'Игры, встречи и новые партнёры',
+      memberCount: 124,
+      role: 'member',
+      unreadCount: 2,
+      accent: '#B9A1FF',
+      logoUrl: null,
+      route: '/communities/42c05c91-da23-4dc5-bf97-3d136a2d12bd',
+    },
+  ],
+  promotion: null,
+  locations: [
+    {
+      id: 'a8df730b-6a67-41a5-8772-48bca84f73bc',
+      title: 'Селигерская',
+      courtCount: 5,
+      imageUrl: null,
+      route: '/locations/a8df730b-6a67-41a5-8772-48bca84f73bc',
+    },
+  ],
+  additionalLinks: [
+    { id: 'promotions', title: 'Все акции', route: '/promotions' },
+    {
+      id: 'gift_certificates',
+      title: 'Подарочные сертификаты',
+      route: '/gift-certificates',
+    },
+    { id: 'offers', title: 'Предложения', route: '/offers' },
+  ],
+  capabilities: {
+    canCreateGame: true,
+    canManageTournaments: false,
+    canViewCommunities: true,
+  },
+};
+
+const userProfile: UserProfile = homeDashboard.profile;
+const upcomingBookings: UserUpcomingBookings = {
+  version: homeDashboard.snapshot.version,
+  generatedAt: homeDashboard.snapshot.generatedAt,
+  staleAt: homeDashboard.snapshot.staleAt,
+  items: homeDashboard.upcoming,
+};
+
 function createGateway(overrides: Partial<AuthGateway> = {}): AuthGateway {
   return {
     restoreSession: vi.fn().mockResolvedValue(null),
@@ -38,6 +139,16 @@ function createGateway(overrides: Partial<AuthGateway> = {}): AuthGateway {
     startVivaOAuth: vi.fn().mockResolvedValue(undefined),
     getVivaAccessToken: vi.fn().mockReturnValue(undefined),
     refreshVivaAccessToken: vi.fn().mockResolvedValue('viva-access-token'),
+    getRoutingPlan: vi.fn().mockResolvedValue({
+      revision: '1',
+      mode: 'PADLHUB_ONLY',
+      issuedAt: '2026-07-15T08:00:00.000Z',
+      expiresAt: '2099-07-15T08:01:00.000Z',
+      operations: [],
+    }),
+    getUserProfile: vi.fn().mockResolvedValue(userProfile),
+    getUpcomingBookings: vi.fn().mockResolvedValue(upcomingBookings),
+    getHomeDashboard: vi.fn().mockResolvedValue(homeDashboard),
     logout: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
@@ -45,6 +156,7 @@ function createGateway(overrides: Partial<AuthGateway> = {}): AuthGateway {
 
 afterEach(() => {
   cleanup();
+  window.history.replaceState({}, '', '/');
 });
 
 async function openPhoneLogin(user: ReturnType<typeof userEvent.setup>): Promise<void> {
@@ -59,9 +171,63 @@ describe('PadlHub web authentication', () => {
 
     expect(screen.getByRole('status')).toHaveTextContent('Проверяем сессию');
     expect(await screen.findByRole('heading', { name: 'Анна Петрова' })).toBeVisible();
-    expect(screen.getByText('ПаделХАБ', { selector: 'dd' })).toBeVisible();
+    expect(screen.getAllByText('ПаделХАБ').length).toBeGreaterThan(0);
+    expect(screen.getByRole('heading', { name: 'Сообщества' })).toBeVisible();
     expect(screen.queryByRole('button', { name: 'VK ID или Mail.ru' })).not.toBeInTheDocument();
     expect(gateway.restoreSession).toHaveBeenCalledOnce();
+    expect(gateway.getHomeDashboard).toHaveBeenCalledOnce();
+  });
+
+  it('loads the profile route through the profile gateway without requesting Home', async () => {
+    window.history.replaceState({}, '', '/profile');
+    const gateway = createGateway({ restoreSession: vi.fn().mockResolvedValue(session) });
+
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+
+    expect(await screen.findByRole('heading', { name: 'Анна Петрова' })).toBeVisible();
+    expect(screen.getByText('540 ₽')).toBeVisible();
+    expect(screen.getByText('Рейтинг 3,8')).toBeVisible();
+    expect(gateway.getUserProfile).toHaveBeenCalledWith(session.context.user.id);
+    expect(gateway.getHomeDashboard).not.toHaveBeenCalled();
+  });
+
+  it('loads the bookings route as a separate PadlHub aggregate without requesting Home', async () => {
+    window.history.replaceState({}, '', '/bookings');
+    const gateway = createGateway({ restoreSession: vi.fn().mockResolvedValue(session) });
+
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+
+    expect(await screen.findByRole('heading', { name: 'Мои записи' })).toBeVisible();
+    expect(screen.getByText('Американо · уровень C')).toBeVisible();
+    expect(screen.getByText('Подтверждено')).toBeVisible();
+    expect(gateway.getUpcomingBookings).toHaveBeenCalledOnce();
+    expect(gateway.getHomeDashboard).not.toHaveBeenCalled();
+    expect(gateway.getUserProfile).not.toHaveBeenCalled();
+  });
+
+  it('does not fall through from a known section route to Home', async () => {
+    window.history.replaceState({}, '', '/promotions');
+    const gateway = createGateway({ restoreSession: vi.fn().mockResolvedValue(session) });
+
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+
+    expect(await screen.findByRole('heading', { name: 'Акции' })).toBeVisible();
+    expect(screen.getByText('Раздел подключается к API ПаделХАБ.')).toBeVisible();
+    expect(gateway.getHomeDashboard).not.toHaveBeenCalled();
+    expect(gateway.getUpcomingBookings).not.toHaveBeenCalled();
+    expect(gateway.getUserProfile).not.toHaveBeenCalled();
+  });
+
+  it('shows a not-found screen for an unknown protected route without requesting Home', async () => {
+    window.history.replaceState({}, '', '/unknown');
+    const gateway = createGateway({ restoreSession: vi.fn().mockResolvedValue(session) });
+
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+
+    expect(await screen.findByRole('heading', { name: 'Страница не найдена' })).toBeVisible();
+    expect(gateway.getHomeDashboard).not.toHaveBeenCalled();
+    expect(gateway.getUpcomingBookings).not.toHaveBeenCalled();
+    expect(gateway.getUserProfile).not.toHaveBeenCalled();
   });
 
   it('logs in with a normalized phone and a four-digit code', async () => {

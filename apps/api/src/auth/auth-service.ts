@@ -1,11 +1,4 @@
-import {
-  createCipheriv,
-  createDecipheriv,
-  createHash,
-  createHmac,
-  randomBytes,
-  randomUUID,
-} from 'node:crypto';
+import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
 
 import {
   IdentityProviderError,
@@ -16,6 +9,11 @@ import {
   type VivaOAuthProvider,
   type VivaOAuthProviderPort,
 } from '@phub/auth';
+import {
+  VivaDelegationCryptoError,
+  decryptVivaDelegationToken,
+  encryptVivaDelegationToken,
+} from '@phub/auth/viva-delegation';
 import type { AppConfig } from '@phub/config';
 import { SignJWT } from 'jose';
 
@@ -141,6 +139,7 @@ export type AuthServiceErrorCode =
   | 'VIVA_REAUTH_REQUIRED'
   | 'VIVA_DELEGATION_BUSY'
   | 'LEGAL_ACCEPTANCE_REQUIRED'
+  | 'AUTH_IDENTITY_CONFLICT'
   | 'IDEMPOTENCY_KEY_CONFLICT'
   | 'TENANT_KEY_INVALID'
   | 'TENANT_NOT_FOUND';
@@ -157,6 +156,7 @@ const errorStatus: Readonly<Record<AuthServiceErrorCode, number>> = {
   VIVA_REAUTH_REQUIRED: 401,
   VIVA_DELEGATION_BUSY: 409,
   LEGAL_ACCEPTANCE_REQUIRED: 400,
+  AUTH_IDENTITY_CONFLICT: 409,
   IDEMPOTENCY_KEY_CONFLICT: 409,
   TENANT_KEY_INVALID: 400,
   TENANT_NOT_FOUND: 404,
@@ -218,6 +218,13 @@ export class AuthService {
     throw new AuthServiceError('AUTH_PROVIDER_UNAVAILABLE');
   }
 
+  private mapIdentityRepositoryError(error: unknown): never {
+    if (error instanceof Error && error.message === 'AUTH_CANONICAL_IDENTITY_CONFLICT') {
+      throw new AuthServiceError('AUTH_IDENTITY_CONFLICT');
+    }
+    throw error;
+  }
+
   private refreshTokenHash(token: string): string {
     return createHmac('sha256', this.options.config.JWT_REFRESH_SECRET).update(token).digest('hex');
   }
@@ -241,35 +248,25 @@ export class AuthService {
   }
 
   private encryptVivaRefreshToken(value: string): string {
-    const keyText = this.options.config.VIVA_DELEGATION_ENCRYPTION_KEY;
-    if (!keyText) throw new AuthServiceError('AUTH_PROVIDER_UNAVAILABLE');
-    const key = Buffer.from(keyText, 'base64url');
-    if (key.length !== 32) throw new AuthServiceError('AUTH_PROVIDER_UNAVAILABLE');
-    const iv = randomBytes(12);
-    const cipher = createCipheriv('aes-256-gcm', key, iv);
-    const ciphertext = Buffer.concat([cipher.update(value, 'utf8'), cipher.final()]);
-    const tag = cipher.getAuthTag();
-    return Buffer.concat([iv, tag, ciphertext]).toString('base64url');
+    try {
+      return encryptVivaDelegationToken(value, this.options.config.VIVA_DELEGATION_ENCRYPTION_KEY);
+    } catch {
+      throw new AuthServiceError('AUTH_PROVIDER_UNAVAILABLE');
+    }
   }
 
   private decryptVivaRefreshToken(value: string, keyVersion: string): string {
-    if (keyVersion !== this.options.config.VIVA_DELEGATION_KEY_VERSION) {
-      throw new AuthServiceError('VIVA_REAUTH_REQUIRED');
-    }
-    const keyText = this.options.config.VIVA_DELEGATION_ENCRYPTION_KEY;
-    if (!keyText) throw new AuthServiceError('AUTH_PROVIDER_UNAVAILABLE');
-    const key = Buffer.from(keyText, 'base64url');
-    const packed = Buffer.from(value, 'base64url');
-    if (key.length !== 32 || packed.length <= 28) {
-      throw new AuthServiceError('VIVA_REAUTH_REQUIRED');
-    }
-    const decipher = createDecipheriv('aes-256-gcm', key, packed.subarray(0, 12));
-    decipher.setAuthTag(packed.subarray(12, 28));
     try {
-      return Buffer.concat([decipher.update(packed.subarray(28)), decipher.final()]).toString(
-        'utf8',
-      );
-    } catch {
+      return decryptVivaDelegationToken({
+        value,
+        keyText: this.options.config.VIVA_DELEGATION_ENCRYPTION_KEY,
+        keyVersion,
+        expectedKeyVersion: this.options.config.VIVA_DELEGATION_KEY_VERSION,
+      });
+    } catch (error) {
+      if (error instanceof VivaDelegationCryptoError && error.code === 'KEY_UNAVAILABLE') {
+        throw new AuthServiceError('AUTH_PROVIDER_UNAVAILABLE');
+      }
       throw new AuthServiceError('VIVA_REAUTH_REQUIRED');
     }
   }
@@ -365,11 +362,16 @@ export class AuthService {
     } catch (error) {
       this.mapProviderError(error);
     }
-    const user = await this.options.repository.upsertExternalIdentity({
-      binding,
-      identity: result.identity,
-      correlationId: input.correlationId,
-    });
+    let user: AuthUser;
+    try {
+      user = await this.options.repository.upsertExternalIdentity({
+        binding,
+        identity: result.identity,
+        correlationId: input.correlationId,
+      });
+    } catch (error) {
+      this.mapIdentityRepositoryError(error);
+    }
     await this.options.repository.recordLegalAcceptances({
       tenantId: binding.tenantId,
       userId: user.id,
@@ -695,11 +697,16 @@ export class AuthService {
       providerTenantKey: challenge.providerTenantKey,
     };
     try {
-      const user = await this.options.repository.upsertExternalIdentity({
-        binding,
-        identity: externalIdentity,
-        correlationId: input.correlationId,
-      });
+      let user: AuthUser;
+      try {
+        user = await this.options.repository.upsertExternalIdentity({
+          binding,
+          identity: externalIdentity,
+          correlationId: input.correlationId,
+        });
+      } catch (error) {
+        this.mapIdentityRepositoryError(error);
+      }
       const refreshToken = this.deriveRefreshToken('auth-login-refresh', [
         input.tenantKey,
         input.challengeId,

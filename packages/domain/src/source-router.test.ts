@@ -32,7 +32,7 @@ describe('SourceRouter', () => {
     expect(new SourceRouter().decide(readPolicy, baseContext).strategy).toBe('LOCAL');
   });
 
-  it('allows delegated reads only on supported mobile clients', () => {
+  it('allows delegated reads on supported user clients', () => {
     const decision = new SourceRouter().decide(readPolicy, {
       ...baseContext,
       localState: 'missing',
@@ -57,7 +57,7 @@ describe('SourceRouter', () => {
     expect(decision.strategy).toBe('SERVER_VIVA');
   });
 
-  it('does not enable browser direct reads', () => {
+  it('allows browser direct reads only when every server capability is present', () => {
     const decision = new SourceRouter().decide(readPolicy, {
       ...baseContext,
       platform: 'web',
@@ -66,7 +66,7 @@ describe('SourceRouter', () => {
       serverVivaRateLimitRemaining: 0,
     });
 
-    expect(decision.strategy).toBe('UNAVAILABLE');
+    expect(decision.strategy).toBe('DIRECT_VIVA');
   });
 
   it('uses stale local data only through the declared fallback', () => {
@@ -76,6 +76,7 @@ describe('SourceRouter', () => {
       localState: 'stale',
       serverVivaAvailable: false,
       serverVivaRateLimitRemaining: 0,
+      directVivaFeatureEnabled: false,
     });
 
     expect(decision.strategy).toBe('STALE_LOCAL');

@@ -1,9 +1,25 @@
 import { ApiClientError, PadlHubApiClient } from '@phub/api-sdk';
 import type {
   AuthenticatedSession as ApiAuthenticatedSession,
+  ClientRoutingPlan,
+  HomeDashboard,
+  UserProfile,
+  UserUpcomingBookings,
   UserContext as ApiUserContext,
 } from '@phub/api-sdk';
+export type {
+  ClientRoutingPlan,
+  HomeDashboard,
+  UserProfile,
+  UserUpcomingBookings,
+} from '@phub/api-sdk';
 import { maskPhone } from '@phub/auth';
+import {
+  createClientTransportExecutor,
+  normalizePadlHubUpcomingBookings,
+  normalizePadlHubUserProfile,
+  normalizeVivaUserProfile,
+} from '@phub/viva-client-adapter';
 
 export interface NormalizedUser {
   readonly id: string;
@@ -60,6 +76,10 @@ export interface AuthGateway {
   }) => Promise<void>;
   readonly getVivaAccessToken: () => string | undefined;
   readonly refreshVivaAccessToken: () => Promise<string>;
+  readonly getRoutingPlan: (forceRefresh?: boolean) => Promise<ClientRoutingPlan>;
+  readonly getUserProfile: (userId: string) => Promise<UserProfile>;
+  readonly getUpcomingBookings: () => Promise<UserUpcomingBookings>;
+  readonly getHomeDashboard: () => Promise<HomeDashboard>;
   readonly logout: () => Promise<void>;
 }
 
@@ -109,6 +129,11 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
   const client = new PadlHubApiClient(clientOptions);
   let vivaAccessToken: string | undefined;
   let vivaAccessExpiresAt = 0;
+  let homeDashboardPromise: Promise<HomeDashboard> | undefined;
+  let routingPlan: ClientRoutingPlan | undefined;
+  let routingPlanPromise: Promise<ClientRoutingPlan> | undefined;
+  let userProfilePromise: Promise<UserProfile> | undefined;
+  let upcomingBookingsPromise: Promise<UserUpcomingBookings> | undefined;
 
   async function applyVivaAccess(handoffCode?: string): Promise<string> {
     const access = await client.issueVivaAccessToken(handoffCode ? { handoffCode } : {});
@@ -135,6 +160,41 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
   function normalizeSession(session: ApiAuthenticatedSession): AuthenticatedSession {
     return { context: normalizeContext(session.context, options.tenantKey) };
   }
+
+  function loadRoutingPlan(forceRefresh = false): Promise<ClientRoutingPlan> {
+    if (!forceRefresh && routingPlan && Date.parse(routingPlan.expiresAt) > Date.now() + 5_000) {
+      return Promise.resolve(routingPlan);
+    }
+    if (!forceRefresh && routingPlanPromise) return routingPlanPromise;
+    const request = client
+      .getClientRoutingPlan()
+      .then((result) => {
+        routingPlan = result;
+        return result;
+      })
+      .finally(() => {
+        if (routingPlanPromise === request) routingPlanPromise = undefined;
+      });
+    routingPlanPromise = request;
+    return request;
+  }
+
+  const transportExecutor = createClientTransportExecutor({
+    getRoutingPlan: loadRoutingPlan,
+    getVivaAccessToken: () =>
+      vivaAccessToken && vivaAccessExpiresAt > Date.now() + 30_000 ? vivaAccessToken : undefined,
+    refreshVivaAccessToken: () => applyVivaAccess(),
+    executePadlHub: (request) => {
+      if (request.operation === 'profile.read') {
+        return client.getUserProfile();
+      }
+      if (request.operation === 'bookings.read') {
+        return client.getUpcomingBookings();
+      }
+      return Promise.reject(new Error(`PadlHub operation ${request.operation} is not connected`));
+    },
+    ...(options.fetchImplementation ? { fetchImplementation: options.fetchImplementation } : {}),
+  });
 
   async function restore(): Promise<AuthenticatedSession | null> {
     try {
@@ -195,10 +255,57 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       return applyVivaAccess();
     },
 
+    getRoutingPlan(forceRefresh = false) {
+      return loadRoutingPlan(forceRefresh);
+    },
+
+    getUserProfile(userId) {
+      userProfilePromise ??= transportExecutor
+        .executeRead({
+          request: { operation: 'profile.read' },
+          normalizePadlHub: normalizePadlHubUserProfile,
+          normalizeViva: (payload) => normalizeVivaUserProfile(payload, userId),
+        })
+        .catch((error: unknown) => {
+          userProfilePromise = undefined;
+          throw error;
+        });
+      return userProfilePromise;
+    },
+
+    getUpcomingBookings() {
+      upcomingBookingsPromise ??= transportExecutor
+        .executeRead({
+          request: { operation: 'bookings.read', page: 0, size: 6 },
+          normalizePadlHub: normalizePadlHubUpcomingBookings,
+          normalizeViva: () => {
+            throw new Error('DIRECT_VIVA_BOOKINGS_CONTRACT_NOT_READY');
+          },
+        })
+        .catch((error: unknown) => {
+          upcomingBookingsPromise = undefined;
+          throw error;
+        });
+      return upcomingBookingsPromise;
+    },
+
+    getHomeDashboard() {
+      homeDashboardPromise ??= client.getHomeDashboard().catch((error: unknown) => {
+        homeDashboardPromise = undefined;
+        throw error;
+      });
+      return homeDashboardPromise;
+    },
+
     async logout() {
       await client.revokeSession();
       vivaAccessToken = undefined;
       vivaAccessExpiresAt = 0;
+      homeDashboardPromise = undefined;
+      routingPlan = undefined;
+      routingPlanPromise = undefined;
+      userProfilePromise = undefined;
+      upcomingBookingsPromise = undefined;
     },
   };
 }

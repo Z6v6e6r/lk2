@@ -17,6 +17,51 @@ export const SOURCE_STRATEGIES = [
 
 export type SourceStrategy = (typeof SOURCE_STRATEGIES)[number];
 
+export const CLIENT_ROUTING_MODES = ['PADLHUB_ONLY', 'MIXED_END_USER_READS'] as const;
+export type ClientRoutingMode = (typeof CLIENT_ROUTING_MODES)[number];
+
+export const DIRECT_VIVA_READ_OPERATIONS = [
+  'profile.read',
+  'bookings.read',
+  'bookings.details.read',
+  'subscriptions.read',
+  'schedule.read',
+] as const;
+export type DirectVivaReadOperation = (typeof DIRECT_VIVA_READ_OPERATIONS)[number];
+
+/**
+ * Direct transport is enabled only after an operation can return PadlHub-owned
+ * identifiers without exposing provider identifiers to a client. Viva profile
+ * is currently the only end-user contract that meets that boundary: its
+ * provider id is discarded and the authenticated PadlHub user id is retained.
+ */
+export const DIRECT_VIVA_CONTRACT_READY_OPERATIONS = [
+  'profile.read',
+] as const satisfies readonly DirectVivaReadOperation[];
+
+export type ClientRoutingTransport = 'PADLHUB_API' | 'DIRECT_VIVA';
+export type ClientRoutingFallback = 'PADLHUB_API' | 'UNAVAILABLE';
+
+export interface ClientRoutingOperationPlan {
+  readonly operation: DirectVivaReadOperation;
+  readonly transport: ClientRoutingTransport;
+  readonly fallback: ClientRoutingFallback;
+}
+
+export interface ClientRoutingPlan {
+  readonly revision: string;
+  readonly mode: ClientRoutingMode;
+  readonly issuedAt: string;
+  readonly expiresAt: string;
+  readonly operations: readonly ClientRoutingOperationPlan[];
+  readonly directViva?: {
+    readonly apiBaseUrl: string;
+    readonly providerTenantKey: string;
+    readonly accessTokenPath: '/auth/viva/access';
+    readonly allowedRequestHeaders: readonly ['Authorization'];
+  };
+}
+
 export type ClientPlatform = 'web' | 'ios' | 'android' | 'cup-admin' | 'internal';
 
 export type DomainName =
@@ -30,7 +75,8 @@ export type DomainName =
   | 'tournaments'
   | 'community'
   | 'messaging'
-  | 'notifications';
+  | 'notifications'
+  | 'moderation';
 
 export interface SourcePolicy {
   readonly operation: string;
@@ -77,7 +123,6 @@ function canUseStrategy(
         context.directVivaFeatureEnabled &&
         context.directVivaDelegationSupported &&
         context.clientSupportsDirectViva &&
-        context.platform !== 'web' &&
         context.platform !== 'cup-admin' &&
         context.platform !== 'internal'
       );

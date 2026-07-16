@@ -11,6 +11,8 @@ x-node-service: &node-service
     REDIS_URL: redis://redis:6379
     RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672
     S3_ENDPOINT: http://minio:9000
+    S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-http://127.0.0.1:9000}
+    S3_AUTO_CREATE_BUCKET: ${S3_AUTO_CREATE_BUCKET:-true}
     OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
   volumes:
     - .:/workspace

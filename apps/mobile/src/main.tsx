@@ -4,6 +4,9 @@ import { StrictMode, useMemo, useState } from 'react';
 import type { FormEvent } from 'react';
 import { createRoot } from 'react-dom/client';
 
+import padlHubLogoUrl from './assets/padlhub-logo.svg';
+import vkIconUrl from './assets/vk-auth.svg';
+import yandexIconUrl from './assets/yandex-auth.svg';
 import './styles.css';
 
 type AuthView = 'welcome' | 'phone' | 'code' | 'signed-in';
@@ -15,34 +18,22 @@ interface PhoneChallengeState {
 }
 
 function VkIcon(): React.JSX.Element {
-  return (
-    <span className="social-icon social-icon--vk" aria-hidden="true">
-      VK
-    </span>
-  );
+  return <img className="social-icon" src={vkIconUrl} alt="" aria-hidden="true" />;
 }
 
 function YandexIcon(): React.JSX.Element {
   return (
-    <span className="social-icon social-icon--yandex" aria-hidden="true">
-      Я
-    </span>
+    <img
+      className="social-icon social-icon--yandex"
+      src={yandexIconUrl}
+      alt=""
+      aria-hidden="true"
+    />
   );
 }
 
 function PadlHubLogo(): React.JSX.Element {
-  return (
-    <div className="ph-logo" aria-label="ПадлХАБ">
-      <div className="ph-logo__top">падл</div>
-      <div className="ph-logo__bottom">
-        <span className="ph-logo__accent">Х</span>
-        <span>АБ</span>
-        <span className="ph-logo__mark" aria-hidden="true">
-          !
-        </span>
-      </div>
-    </div>
-  );
+  return <img className="ph-logo" src={padlHubLogoUrl} alt="ПадлХАБ" />;
 }
 
 function platform(): 'web' | 'ios' | 'android' {

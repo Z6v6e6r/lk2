@@ -6,7 +6,12 @@ import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
 import type { AppConfig } from '@phub/config';
 import { checkDatabaseReady } from '@phub/database';
-import { isValidIdempotencyKey } from '@phub/domain';
+import type {
+  ClientRoutingPlanRepository,
+  HomeDashboardProjectionRepository,
+  NotificationInboxRepository,
+} from '@phub/database';
+import { isValidIdempotencyKey, type ClientPlatform } from '@phub/domain';
 import type { Logger } from 'pino';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import type Redis from 'ioredis';
@@ -15,7 +20,11 @@ import type { Pool } from 'pg';
 
 import { registerAuthRoutes } from './auth/auth-routes.js';
 import type { AuthService } from './auth/auth-service.js';
+import { buildMockHomeDashboard } from './home/home-dashboard.js';
+import { homeDashboardSchema, type HomeDashboard } from './home/home-dashboard-schema.js';
 import { sendApiError } from './http-errors.js';
+import { registerNotificationRoutes } from './notifications/notification-routes.js';
+import { buildClientRoutingPlan, canUseDirectViva } from './routing/client-routing-plan.js';
 
 interface PadlHubClaims extends JWTPayload {
   readonly sub: string;
@@ -42,7 +51,26 @@ export interface BuildAppOptions {
   readonly pool?: Pool;
   readonly authService?: AuthService;
   readonly authDependencyReady?: () => Promise<boolean>;
+  readonly homeDashboardRepository?: Pick<HomeDashboardProjectionRepository, 'get'>;
+  readonly clientRoutingPlanRepository?: Pick<ClientRoutingPlanRepository, 'get'>;
+  readonly notificationRepository?: NotificationInboxRepository;
   readonly rateLimitRedis?: Redis;
+}
+
+function clientPlatform(request: FastifyRequest): ClientPlatform {
+  const value = request.headers['x-app-platform'];
+  return value === 'web' || value === 'ios' || value === 'android' || value === 'cup-admin'
+    ? value
+    : 'internal';
+}
+
+function upcomingBookingsResponse(dashboard: HomeDashboard) {
+  return {
+    version: dashboard.snapshot.version,
+    generatedAt: dashboard.snapshot.generatedAt,
+    staleAt: dashboard.snapshot.staleAt,
+    items: dashboard.upcoming,
+  };
 }
 
 function parseAllowedOrigins(value: string): ReadonlySet<string> {
@@ -175,6 +203,7 @@ declare module 'fastify' {
 }
 
 export async function buildApp(options: BuildAppOptions) {
+  const clientRoutingPlanRepository = options.clientRoutingPlanRepository;
   const trustedProxies = parseTrustedProxies(options.config.TRUSTED_PROXY_CIDRS);
   const app = Fastify({
     loggerInstance: options.logger,
@@ -242,11 +271,57 @@ export async function buildApp(options: BuildAppOptions) {
   });
 
   if (options.authService) {
-    registerAuthRoutes(app as unknown as FastifyInstance, options.authService, options.config, [
-      authenticate,
-      resolveTenant,
-    ]);
+    registerAuthRoutes(
+      app as unknown as FastifyInstance,
+      options.authService,
+      options.config,
+      [authenticate, resolveTenant],
+      clientRoutingPlanRepository
+        ? async (tenantId, userId, platform) =>
+            canUseDirectViva({
+              config: options.config,
+              stored: await clientRoutingPlanRepository.get(tenantId, userId),
+              platform,
+            })
+        : undefined,
+    );
   }
+
+  registerNotificationRoutes(app as unknown as FastifyInstance, {
+    ...(options.notificationRepository ? { repository: options.notificationRepository } : {}),
+    authenticatedTenantHandlers: [authenticate, resolveTenant],
+    commandHandlers: [authenticate, resolveTenant, requireIdempotencyKey],
+  });
+
+  app.get(
+    '/user/api/v1/:tenantKey/routing-plan',
+    { preHandler: [authenticate, resolveTenant] },
+    async (request, reply) => {
+      const tenantId = request.tenantId;
+      const userId = request.padlHubClaims?.sub;
+      if (!tenantId || !userId) {
+        return sendApiError(request, reply, 401, 'AUTH_REQUIRED', 'Требуется авторизация.');
+      }
+      const stored = await clientRoutingPlanRepository?.get(tenantId, userId);
+      if (!stored) {
+        return sendApiError(
+          request,
+          reply,
+          503,
+          'ROUTING_PLAN_UNAVAILABLE',
+          'Схема подключения временно недоступна.',
+        );
+      }
+      const plan = buildClientRoutingPlan({
+        config: options.config,
+        stored,
+        platform: clientPlatform(request),
+      });
+      const maxAge = Math.max(0, Math.min(30, Math.floor(stored.validForSeconds / 2)));
+      reply.header('Cache-Control', `private, max-age=${maxAge}`);
+      return plan;
+    },
+  );
 
   app.get(
     '/user/api/v1/:tenantKey/context',
@@ -272,6 +347,251 @@ export async function buildApp(options: BuildAppOptions) {
         roles: request.padlHubClaims?.roles,
         permissions: request.padlHubClaims?.permissions,
       };
+    },
+  );
+
+  app.get(
+    '/user/api/v1/:tenantKey/profile',
+    { preHandler: [authenticate, resolveTenant] },
+    async (request, reply) => {
+      const tenantId = request.tenantId;
+      const userId = request.padlHubClaims?.sub;
+      if (!tenantId || !userId) {
+        return sendApiError(request, reply, 401, 'AUTH_REQUIRED', 'Требуется авторизация.');
+      }
+      const user = options.authService
+        ? await options.authService.getUserContext(tenantId, userId)
+        : undefined;
+      if (options.authService && !user) {
+        return sendApiError(request, reply, 401, 'AUTH_SESSION_REVOKED', 'Сессия завершена.');
+      }
+
+      if (options.config.HOME_READ_MODE === 'mock') {
+        reply.header('Cache-Control', 'private, max-age=15, stale-while-revalidate=45');
+        return buildMockHomeDashboard({
+          tenantId,
+          userId,
+          displayName: user?.displayName ?? 'Игрок ПадлХАБ',
+          phoneLast4: user?.phoneLast4 ?? '0000',
+          roles: request.padlHubClaims?.roles ?? [],
+          permissions: request.padlHubClaims?.permissions ?? [],
+        }).profile;
+      }
+
+      const projection = await options.homeDashboardRepository?.get(tenantId, userId);
+      if (!projection) {
+        return sendApiError(
+          request,
+          reply,
+          503,
+          'PROFILE_PROJECTION_NOT_READY',
+          'Профиль ещё не подготовлен.',
+        );
+      }
+      const parsedDashboard = homeDashboardSchema.safeParse(projection.payload);
+      if (
+        !parsedDashboard.success ||
+        parsedDashboard.data.snapshot.source !== 'LOCAL_PROJECTION' ||
+        parsedDashboard.data.snapshot.version !== projection.snapshotVersion ||
+        parsedDashboard.data.profile.userId !== userId
+      ) {
+        return sendApiError(
+          request,
+          reply,
+          503,
+          'PROFILE_PROJECTION_INVALID',
+          'Профиль временно недоступен.',
+        );
+      }
+      const staleAt = Date.parse(parsedDashboard.data.snapshot.staleAt);
+      if (Date.now() > staleAt + options.config.HOME_PROJECTION_MAX_STALE_SECONDS * 1_000) {
+        return sendApiError(
+          request,
+          reply,
+          503,
+          'PROFILE_PROJECTION_STALE',
+          'Профиль обновляется.',
+        );
+      }
+      reply.header(
+        'Cache-Control',
+        Date.now() > staleAt
+          ? 'private, max-age=0, stale-while-revalidate=45'
+          : 'private, max-age=15, stale-while-revalidate=45',
+      );
+      return parsedDashboard.data.profile;
+    },
+  );
+
+  app.get(
+    '/user/api/v1/:tenantKey/bookings/upcoming',
+    { preHandler: [authenticate, resolveTenant] },
+    async (request, reply) => {
+      const tenantId = request.tenantId;
+      const userId = request.padlHubClaims?.sub;
+      if (!tenantId || !userId) {
+        return sendApiError(request, reply, 401, 'AUTH_REQUIRED', 'Требуется авторизация.');
+      }
+      const user = options.authService
+        ? await options.authService.getUserContext(tenantId, userId)
+        : undefined;
+      if (options.authService && !user) {
+        return sendApiError(request, reply, 401, 'AUTH_SESSION_REVOKED', 'Сессия завершена.');
+      }
+
+      if (options.config.HOME_READ_MODE === 'mock') {
+        reply.header('Cache-Control', 'private, max-age=15, stale-while-revalidate=45');
+        return upcomingBookingsResponse(
+          buildMockHomeDashboard({
+            tenantId,
+            userId,
+            displayName: user?.displayName ?? 'Игрок ПадлХАБ',
+            phoneLast4: user?.phoneLast4 ?? '0000',
+            roles: request.padlHubClaims?.roles ?? [],
+            permissions: request.padlHubClaims?.permissions ?? [],
+          }),
+        );
+      }
+
+      const projection = await options.homeDashboardRepository?.get(tenantId, userId);
+      if (!projection) {
+        return sendApiError(
+          request,
+          reply,
+          503,
+          'BOOKINGS_PROJECTION_NOT_READY',
+          'Записи ещё не подготовлены.',
+        );
+      }
+      const parsedDashboard = homeDashboardSchema.safeParse(projection.payload);
+      if (
+        !parsedDashboard.success ||
+        parsedDashboard.data.snapshot.source !== 'LOCAL_PROJECTION' ||
+        parsedDashboard.data.snapshot.version !== projection.snapshotVersion ||
+        Date.parse(parsedDashboard.data.snapshot.generatedAt) !==
+          Date.parse(projection.generatedAt) ||
+        Date.parse(parsedDashboard.data.snapshot.staleAt) !== Date.parse(projection.staleAt) ||
+        parsedDashboard.data.profile.userId !== userId
+      ) {
+        return sendApiError(
+          request,
+          reply,
+          503,
+          'BOOKINGS_PROJECTION_INVALID',
+          'Записи временно недоступны.',
+        );
+      }
+      const staleAt = Date.parse(parsedDashboard.data.snapshot.staleAt);
+      if (Date.now() > staleAt + options.config.HOME_PROJECTION_MAX_STALE_SECONDS * 1_000) {
+        return sendApiError(
+          request,
+          reply,
+          503,
+          'BOOKINGS_PROJECTION_STALE',
+          'Записи обновляются.',
+        );
+      }
+      reply.header(
+        'Cache-Control',
+        Date.now() > staleAt
+          ? 'private, max-age=0, stale-while-revalidate=45'
+          : 'private, max-age=15, stale-while-revalidate=45',
+      );
+      return upcomingBookingsResponse(parsedDashboard.data);
+    },
+  );
+
+  app.get(
+    '/user/api/v1/:tenantKey/home',
+    { preHandler: [authenticate, resolveTenant] },
+    async (request, reply) => {
+      const tenantId = request.tenantId;
+      const userId = request.padlHubClaims?.sub;
+      if (!tenantId || !userId) {
+        return sendApiError(request, reply, 401, 'AUTH_REQUIRED', 'Требуется авторизация.');
+      }
+      const user = options.authService
+        ? await options.authService.getUserContext(tenantId, userId)
+        : undefined;
+      if (options.authService && !user) {
+        return sendApiError(request, reply, 401, 'AUTH_SESSION_REVOKED', 'Сессия завершена.');
+      }
+
+      if (options.config.HOME_READ_MODE === 'mock') {
+        reply.header('Cache-Control', 'private, max-age=15, stale-while-revalidate=45');
+        return buildMockHomeDashboard({
+          tenantId,
+          userId,
+          displayName: user?.displayName ?? 'Игрок ПадлХАБ',
+          phoneLast4: user?.phoneLast4 ?? '0000',
+          roles: request.padlHubClaims?.roles ?? [],
+          permissions: request.padlHubClaims?.permissions ?? [],
+        });
+      }
+
+      const projection = await options.homeDashboardRepository?.get(tenantId, userId);
+      if (!projection) {
+        return sendApiError(
+          request,
+          reply,
+          503,
+          'HOME_PROJECTION_NOT_READY',
+          'Данные главной страницы ещё не подготовлены.',
+        );
+      }
+
+      const parsedDashboard = homeDashboardSchema.safeParse(projection.payload);
+      if (
+        !parsedDashboard.success ||
+        parsedDashboard.data.snapshot.source !== 'LOCAL_PROJECTION' ||
+        parsedDashboard.data.snapshot.version !== projection.snapshotVersion ||
+        Date.parse(parsedDashboard.data.snapshot.generatedAt) !==
+          Date.parse(projection.generatedAt) ||
+        Date.parse(parsedDashboard.data.snapshot.staleAt) !== Date.parse(projection.staleAt) ||
+        parsedDashboard.data.profile.userId !== userId
+      ) {
+        request.log.error(
+          {
+            tenantId,
+            userId,
+            sourceRevision: projection.sourceRevision,
+            validationIssues: parsedDashboard.success
+              ? undefined
+              : parsedDashboard.error.issues.map((issue) => ({
+                  path: issue.path.join('.'),
+                  code: issue.code,
+                })),
+          },
+          'invalid Home projection rejected',
+        );
+        return sendApiError(
+          request,
+          reply,
+          503,
+          'HOME_PROJECTION_INVALID',
+          'Данные главной страницы временно недоступны.',
+        );
+      }
+
+      const staleAt = Date.parse(parsedDashboard.data.snapshot.staleAt);
+      const staleGraceMs = options.config.HOME_PROJECTION_MAX_STALE_SECONDS * 1_000;
+      if (Date.now() > staleAt + staleGraceMs) {
+        return sendApiError(
+          request,
+          reply,
+          503,
+          'HOME_PROJECTION_STALE',
+          'Данные главной страницы обновляются.',
+        );
+      }
+
+      reply.header(
+        'Cache-Control',
+        Date.now() > staleAt
+          ? 'private, max-age=0, stale-while-revalidate=45'
+          : 'private, max-age=15, stale-while-revalidate=45',
+      );
+      return parsedDashboard.data;
     },
   );
 

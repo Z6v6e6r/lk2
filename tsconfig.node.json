@@ -8,6 +8,7 @@
     "packages/config/**/*.ts",
     "packages/database/**/*.ts",
     "packages/domain/**/*.ts",
+    "packages/notifications/**/*.ts",
     "packages/observability/**/*.ts",
     "packages/viva-adapter/**/*.ts"
   ],

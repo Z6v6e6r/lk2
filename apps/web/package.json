@@ -12,6 +12,7 @@
     "@phub/api-sdk": "0.1.0",
     "@phub/auth": "0.1.0",
     "@phub/ui": "0.1.0",
+    "@phub/viva-client-adapter": "0.1.0",
     "react": "19.2.7",
     "react-dom": "19.2.7"
   }

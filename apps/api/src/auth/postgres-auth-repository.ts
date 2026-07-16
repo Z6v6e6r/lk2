@@ -50,6 +50,7 @@ export class PostgresAuthRepository implements AuthRepository {
     readonly identity: {
       readonly issuer: string;
       readonly subject: string;
+      readonly providerUserId?: string;
       readonly displayName: string;
       readonly phoneE164?: string;
     };
@@ -60,6 +61,7 @@ export class PostgresAuthRepository implements AuthRepository {
       provider: input.binding.provider,
       issuer: input.identity.issuer,
       subject: input.identity.subject,
+      ...(input.identity.providerUserId ? { providerUserId: input.identity.providerUserId } : {}),
       displayName: input.identity.displayName,
       ...(input.identity.phoneE164 ? { phoneE164: input.identity.phoneE164 } : {}),
       correlationId: input.correlationId,

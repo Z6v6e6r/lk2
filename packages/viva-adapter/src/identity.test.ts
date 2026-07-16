@@ -1,4 +1,5 @@
 import type { IdentityProviderError } from '@phub/auth';
+import { exportJWK, generateKeyPair, SignJWT } from 'jose';
 import { describe, expect, it, vi } from 'vitest';
 
 import { VivaIdentityProvider } from './identity.js';
@@ -87,6 +88,62 @@ describe('VivaIdentityProvider', () => {
     expect(verifyBody).toContain('grant_type=password');
     expect(verifyBody).toContain('client_id=widget');
     expect(identity.subject).toBe('viva-user-42');
+  });
+
+  it('binds OAuth subjects to the stable Viva profile identifier', async () => {
+    const { publicKey, privateKey } = await generateKeyPair('RS256');
+    const jwk = { ...(await exportJWK(publicKey)), kid: 'test-key', use: 'sig', alg: 'RS256' };
+    const accessToken = await new SignJWT({
+      azp: 'widget',
+      name: 'Social Account Name',
+    })
+      .setProtectedHeader({ alg: 'RS256', kid: 'test-key' })
+      .setIssuer('https://kc.vivacrm.invalid/realms/clients')
+      .setSubject('provider-specific-subject')
+      .setExpirationTime('5m')
+      .sign(privateKey);
+    const fetchImplementation = vi.fn<typeof fetch>((request) => {
+      const url = fetchUrl(request);
+      if (url.pathname.endsWith('/protocol/openid-connect/token')) {
+        return Promise.resolve(
+          Response.json({ access_token: accessToken, refresh_token: 'external-refresh' }),
+        );
+      }
+      if (url.pathname.endsWith('/protocol/openid-connect/certs')) {
+        return Promise.resolve(Response.json({ keys: [jwk] }));
+      }
+      if (url.pathname.endsWith('/iSkq6G/profile')) {
+        return Promise.resolve(
+          Response.json({
+            id: 'viva-profile-42',
+            firstName: 'Алексей',
+            lastName: 'Сергеев',
+            phone: '+79603073190',
+          }),
+        );
+      }
+      return Promise.resolve(new Response(null, { status: 404 }));
+    });
+    const provider = new VivaIdentityProvider({
+      ...options(),
+      mode: 'sandbox',
+      fetchImplementation,
+    });
+
+    const result = await provider.exchangeAuthorizationCode({
+      code: 'authorization-code',
+      codeVerifier: 'pkce-verifier',
+      providerTenantKey: 'iSkq6G',
+      redirectUri: 'https://app.example.test/callback',
+      correlationId: 'oauth-correlation-123',
+    });
+
+    expect(result.identity).toMatchObject({
+      subject: 'provider-specific-subject',
+      providerUserId: 'viva-profile-42',
+      displayName: 'Алексей Сергеев',
+      phoneE164: '+79603073190',
+    });
   });
 
   it('opens its circuit after bounded upstream failures', async () => {

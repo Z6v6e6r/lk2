@@ -4,7 +4,10 @@
 
 PadlHub begins as a modular monolith with asynchronous workers and a separate realtime gateway. All clients call only PadlHub APIs and use PadlHub UUIDs. Viva is a temporary external owner for selected domains behind an anti-corruption layer; it never defines our public contract or database model.
 
-The editable system diagram is [system-context.drawio](system-context.drawio).
+The editable system diagram is [system-context.drawio](system-context.drawio). The dedicated chat,
+notification and moderation flow is documented in
+[messaging-notifications.drawio](messaging-notifications.drawio) and
+[the domain design](../domains/chats-and-notifications.md).
 
 ## Runtime processes
 
@@ -52,6 +55,60 @@ PostgreSQL is the operational source of truth. Logical schemas mirror domains, n
 
 Every tenant-owned row contains `tenant_id`; row-level security is part of defense in depth. Modules own their tables and migrations and communicate through public domain interfaces.
 
+Provider-hosted profile photos cross the integration boundary only in `apps/worker`. They are
+allowlisted, size-limited, normalized to metadata-free WebP and stored under immutable SHA-256 keys.
+PostgreSQL keeps the tenant/user object mapping and provider change validators; clients receive only
+short-lived signed URLs to PadlHub-owned objects. A profile/media update and its Home outbox event
+share one transaction, while superseded-object deletion is queued until signed URLs and stale
+projections can no longer reference it.
+
+## Chats, notifications and moderation
+
+Chats and notifications are one product area with two domain aggregates and a cross-cutting control
+module:
+
+- `messaging` owns conversations, participants, ordered messages, attachment metadata, edit
+  history and read cursors;
+- `notifications` owns versioned templates, trigger rules, recipient intents, the durable in-app
+  inbox, user preferences and delivery history;
+- `moderation` owns reports, policies, review cases and immutable PadlHub enforcement decisions;
+- `integration` owns connector accounts, encrypted delivery endpoints and all external thread,
+  contact and provider-message identifiers, including external moderation-signal IDs.
+
+Direct user chats, game chats, tournament chats, community chats and CUP support conversations use
+the same conversation/message engine. A notification does not implicitly become a chat message and
+a connector does not own a conversation. Product policy may explicitly project a domain event into
+either or both aggregates.
+
+Push is implemented as three explicit transports behind the notification delivery port: Web Push
+with VAPID and a service worker, APNs for iOS, and FCM for Android. Endpoint payloads are encrypted
+at rest, rotate independently per installation and never enter events or telemetry. Provider
+acceptance, provider delivery (when available), client display and user open are separate receipts;
+the platform never claims that an accepted push was seen.
+
+CUP owns the PadlHub moderation control plane. Optional external moderation systems may submit a
+signed signal or recommendation through a service boundary, but they cannot directly mutate a
+conversation. PadlHub policy or an authorized moderator converts a signal into an audited,
+idempotent action. Emergency quarantine is a PadlHub-owned policy action with an explicit expiry
+and review queue, not an external provider side effect.
+
+PostgreSQL is the only source of truth. A message command locks its conversation, assigns a
+monotonic sequence, writes the message, audit record and outbox event in one transaction. RabbitMQ
+then carries identifier-only events to the worker and realtime gateway. WebSocket delivery is an
+optimization: clients detect sequence gaps and recover through the User API. Redis holds only
+short-lived presence, typing indicators, connection routing and rate limits.
+
+Inbound connector webhooks are signature-verified and deduplicated by the external message ID held
+inside `integration`. Outbound delivery is at-least-once with a stable provider idempotency key,
+bounded retries and a DLQ. Attachments are private objects in S3-compatible storage and become
+readable only after validation and malware scanning. Message bodies, rendered notification content,
+addresses and connector payloads are excluded from logs, metrics and broker events.
+
+See [ADR 0006](../adr/0006-chats-and-notifications-contour.md) for the decision and
+[the domain design](../domains/chats-and-notifications.md) for commands, events, access rules,
+failure handling and rollout phases. Operational enablement and rollback are defined in the
+[runbook](../runbooks/chats-notifications-moderation.md).
+
 ## Viva transition
 
 Each `tenant + domain` has one ownership mode:
@@ -63,10 +120,11 @@ Each `tenant + domain` has one ownership mode:
 
 `SourceRouter` can return `LOCAL`, `SERVER_VIVA`, `DIRECT_VIVA`, `STALE_LOCAL` or `UNAVAILABLE`.
 `DIRECT_VIVA` is disabled by default and requires Viva-supported short-lived user delegation, route
-allowlisting and a per-tenant feature flag. Its approved browser routes are profile, available slots
-and the purchase/cancellation transport described in ADR 0005. Client-returned command completion
-is untrusted and remains pending until webhook/provider-receipt/reconciliation confirmation;
-therefore it cannot itself authorize bookings, prices, payments or rights.
+allowlisting, a global gate and a tenant routing plan. The LK reads a versioned, short-lived plan;
+it never chooses a source. The temporary direct vocabulary is read-only: profile, bookings,
+booking details, subscriptions and schedule. Commands, unknown operations, CUP/internal traffic and
+expired plans always use PadlHub APIs. Details, switch semantics and rollback are defined in
+[ADR 0008](../adr/0008-server-owned-client-routing-plan.md).
 
 ## Reliability and observability
 

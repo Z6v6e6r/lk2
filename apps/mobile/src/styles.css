@@ -288,24 +288,14 @@ button:disabled {
   opacity: 0.66;
 }
 .social-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
   flex: 0 0 38px;
   width: 38px;
   height: 38px;
-  border-radius: 12px;
-  color: #fff;
-  font-size: 16px;
-  font-weight: 800;
-}
-.social-icon--vk {
-  background: #1877f2;
 }
 .social-icon--yandex {
-  background: #ff5a36;
-  font-family: Georgia, serif;
-  font-size: 25px;
+  width: 32px;
+  height: 32px;
+  margin: 3px;
 }
 .auth-consents {
   display: grid;
@@ -358,33 +348,10 @@ button:disabled {
   text-underline-offset: 4px;
 }
 .ph-logo {
-  display: inline-block;
-  line-height: 1;
+  display: block;
+  width: 166px;
+  height: auto;
   user-select: none;
-}
-.ph-logo__top {
-  margin-bottom: 2px;
-  color: #111;
-  font-size: 28px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: lowercase;
-}
-.ph-logo__bottom {
-  display: flex;
-  align-items: flex-end;
-  gap: 2px;
-  color: #111;
-  font-size: 52px;
-  font-weight: 900;
-  letter-spacing: -0.06em;
-}
-.ph-logo__accent {
-  color: var(--purple);
-}
-.ph-logo__mark {
-  display: inline-block;
-  transform: translateY(-1px);
 }
 .auth-step {
   display: grid;
@@ -492,9 +459,10 @@ button:disabled {
 }
 @media (max-width: 767px) {
   .login-page {
-    background:
-      radial-gradient(circle at top left, rgba(255, 255, 255, 0.9), transparent 45%),
-      linear-gradient(180deg, #f8f8f6 0%, #f4f5f1 100%);
+    background: #f9f8f7 url('./assets/login-mobile-background.webp') center top / cover no-repeat;
+  }
+  .login-page__bg {
+    display: none;
   }
   .login-layout {
     display: block;
@@ -545,11 +513,8 @@ button:disabled {
     margin-top: 32px;
     font-size: 17px;
   }
-  .ph-logo__top {
-    font-size: 24px;
-  }
-  .ph-logo__bottom {
-    font-size: 44px;
+  .ph-logo {
+    width: 132px;
   }
   .racket-outline {
     top: 54px;

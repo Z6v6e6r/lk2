@@ -33,7 +33,7 @@ export interface VivaIdentityProviderOptions {
 }
 
 export interface VivaIdentityMetric {
-  readonly operation: 'request_code' | 'verify_code';
+  readonly operation: 'request_code' | 'verify_code' | 'oauth_exchange' | 'delegation_refresh';
   readonly outcome: 'success' | 'invalid' | 'rate_limited' | 'unavailable';
   readonly status?: number;
   readonly durationMs: number;
@@ -177,6 +177,34 @@ export class VivaIdentityProvider implements IdentityProviderPort, VivaOAuthProv
       throw new IdentityProviderError('AUTH_PROVIDER_UNAVAILABLE');
     }
 
+    const profile = await this.resolveVivaProfile(accessToken, providerTenantKey, correlationId);
+    const profileName = [profile.firstName, profile.middleName, profile.lastName]
+      .map((part) => part?.trim())
+      .filter(Boolean)
+      .join(' ');
+    const tokenName = [stringClaim(payload, ['given_name']), stringClaim(payload, ['family_name'])]
+      .filter(Boolean)
+      .join(' ');
+    const displayName =
+      profileName ||
+      stringClaim(payload, ['name', 'preferred_username']) ||
+      tokenName ||
+      'Игрок ПаделхАБ';
+    const phoneE164 = normalizePhoneE164(profile.phone ?? '') ?? fallbackPhone;
+    return {
+      issuer: this.issuer,
+      subject: payload.sub,
+      providerUserId: String(profile.id),
+      phoneE164,
+      displayName,
+    };
+  }
+
+  private async resolveVivaProfile(
+    accessToken: string,
+    providerTenantKey: string,
+    correlationId: string,
+  ): Promise<z.infer<typeof profileResponseSchema> & { readonly id: string | number }> {
     const profileUrl = new URL(
       `${this.options.profileApiBaseUrl.replace(/\/$/, '')}/${encodeURIComponent(providerTenantKey)}/profile`,
     );
@@ -193,23 +221,15 @@ export class VivaIdentityProvider implements IdentityProviderPort, VivaOAuthProv
     );
     if (!profileResponse.ok) throw new IdentityProviderError('AUTH_PROVIDER_UNAVAILABLE');
     const profile = profileResponseSchema.parse(await profileResponse.json());
-    const profileName = [profile.firstName, profile.middleName, profile.lastName]
-      .map((part) => part?.trim())
-      .filter(Boolean)
-      .join(' ');
-    const tokenName = [stringClaim(payload, ['given_name']), stringClaim(payload, ['family_name'])]
-      .filter(Boolean)
-      .join(' ');
-    const displayName =
-      profileName ||
-      stringClaim(payload, ['name', 'preferred_username']) ||
-      tokenName ||
-      'Игрок ПаделхАБ';
-    const phoneE164 = normalizePhoneE164(profile.phone ?? '') ?? fallbackPhone;
-    return { issuer: this.issuer, subject: payload.sub, phoneE164, displayName };
+    if (profile.id === undefined) throw new IdentityProviderError('AUTH_PROVIDER_UNAVAILABLE');
+    return profile as z.infer<typeof profileResponseSchema> & { readonly id: string | number };
   }
 
-  private async resolveOAuthIdentity(accessToken: string): Promise<VerifiedExternalIdentity> {
+  private async resolveOAuthIdentity(
+    accessToken: string,
+    providerTenantKey: string,
+    correlationId: string,
+  ): Promise<VerifiedExternalIdentity> {
     const { payload } = await jwtVerify(accessToken, this.jwks, {
       issuer: this.issuer,
       algorithms: ['RS256'],
@@ -217,18 +237,25 @@ export class VivaIdentityProvider implements IdentityProviderPort, VivaOAuthProv
     if (payload.azp !== this.options.clientId || typeof payload.sub !== 'string' || !payload.sub) {
       throw new IdentityProviderError('AUTH_PROVIDER_UNAVAILABLE');
     }
+    const profile = await this.resolveVivaProfile(accessToken, providerTenantKey, correlationId);
+    const profileName = [profile.firstName, profile.middleName, profile.lastName]
+      .map((part) => part?.trim())
+      .filter(Boolean)
+      .join(' ');
     const displayName =
+      profileName ||
       stringClaim(payload, ['name', 'preferred_username']) ||
       [stringClaim(payload, ['given_name']), stringClaim(payload, ['family_name'])]
         .filter(Boolean)
         .join(' ') ||
       'Игрок ПадлхАБ';
     const phoneE164 = normalizePhoneE164(
-      stringClaim(payload, ['phone_number', 'phoneNumber', 'phone']) ?? '',
+      profile.phone ?? stringClaim(payload, ['phone_number', 'phoneNumber', 'phone']) ?? '',
     );
     return {
       issuer: this.issuer,
       subject: payload.sub,
+      providerUserId: String(profile.id),
       displayName,
       ...(phoneE164 ? { phoneE164 } : {}),
     };
@@ -270,6 +297,7 @@ export class VivaIdentityProvider implements IdentityProviderPort, VivaOAuthProv
     readonly refreshToken: string;
     readonly refreshExpiresIn?: number;
   }> {
+    const startedAt = Date.now();
     this.ensureAvailable();
     let response: Response;
     try {
@@ -291,16 +319,41 @@ export class VivaIdentityProvider implements IdentityProviderPort, VivaOAuthProv
         },
       );
     } catch {
+      this.emit({ operation: 'oauth_exchange', outcome: 'unavailable' }, startedAt);
       throw new IdentityProviderError('AUTH_PROVIDER_UNAVAILABLE');
     }
     if (response.status === 400 || response.status === 401) {
+      this.emit(
+        { operation: 'oauth_exchange', outcome: 'invalid', status: response.status },
+        startedAt,
+      );
       throw new IdentityProviderError('AUTH_CODE_INVALID');
     }
-    if (response.status === 429) throw new IdentityProviderError('AUTH_RATE_LIMITED');
-    if (!response.ok) throw new IdentityProviderError('AUTH_PROVIDER_UNAVAILABLE');
+    if (response.status === 429) {
+      this.emit(
+        { operation: 'oauth_exchange', outcome: 'rate_limited', status: response.status },
+        startedAt,
+      );
+      throw new IdentityProviderError('AUTH_RATE_LIMITED');
+    }
+    if (!response.ok) {
+      this.emit(
+        { operation: 'oauth_exchange', outcome: 'unavailable', status: response.status },
+        startedAt,
+      );
+      throw new IdentityProviderError('AUTH_PROVIDER_UNAVAILABLE');
+    }
     const tokens = tokenResponseSchema.parse(await response.json());
     if (!tokens.refresh_token) throw new IdentityProviderError('AUTH_PROVIDER_UNAVAILABLE');
-    const identity = await this.resolveOAuthIdentity(tokens.access_token);
+    const identity = await this.resolveOAuthIdentity(
+      tokens.access_token,
+      input.providerTenantKey,
+      input.correlationId,
+    );
+    this.emit(
+      { operation: 'oauth_exchange', outcome: 'success', status: response.status },
+      startedAt,
+    );
     return {
       identity,
       accessToken: tokens.access_token,
@@ -319,6 +372,7 @@ export class VivaIdentityProvider implements IdentityProviderPort, VivaOAuthProv
     readonly refreshToken?: string;
     readonly refreshExpiresIn?: number;
   }> {
+    const startedAt = Date.now();
     this.ensureAvailable();
     let response: Response;
     try {
@@ -338,14 +392,35 @@ export class VivaIdentityProvider implements IdentityProviderPort, VivaOAuthProv
         },
       );
     } catch {
+      this.emit({ operation: 'delegation_refresh', outcome: 'unavailable' }, startedAt);
       throw new IdentityProviderError('AUTH_PROVIDER_UNAVAILABLE');
     }
     if (response.status === 400 || response.status === 401) {
+      this.emit(
+        { operation: 'delegation_refresh', outcome: 'invalid', status: response.status },
+        startedAt,
+      );
       throw new IdentityProviderError('AUTH_CODE_INVALID');
     }
-    if (response.status === 429) throw new IdentityProviderError('AUTH_RATE_LIMITED');
-    if (!response.ok) throw new IdentityProviderError('AUTH_PROVIDER_UNAVAILABLE');
+    if (response.status === 429) {
+      this.emit(
+        { operation: 'delegation_refresh', outcome: 'rate_limited', status: response.status },
+        startedAt,
+      );
+      throw new IdentityProviderError('AUTH_RATE_LIMITED');
+    }
+    if (!response.ok) {
+      this.emit(
+        { operation: 'delegation_refresh', outcome: 'unavailable', status: response.status },
+        startedAt,
+      );
+      throw new IdentityProviderError('AUTH_PROVIDER_UNAVAILABLE');
+    }
     const tokens = tokenResponseSchema.parse(await response.json());
+    this.emit(
+      { operation: 'delegation_refresh', outcome: 'success', status: response.status },
+      startedAt,
+    );
     return {
       accessToken: tokens.access_token,
       ...(tokens.expires_in ? { accessExpiresIn: tokens.expires_in } : {}),

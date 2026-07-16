@@ -57,6 +57,8 @@ export type IdentityProviderKey = 'VIVA' | 'LOCAL';
 export interface VerifiedExternalIdentity {
   readonly issuer: string;
   readonly subject: string;
+  /** Stable provider-owned person identifier used only inside the integration boundary. */
+  readonly providerUserId?: string;
   readonly phoneE164?: string;
   readonly displayName: string;
 }

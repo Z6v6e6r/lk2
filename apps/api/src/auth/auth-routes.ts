@@ -2,7 +2,7 @@ import { createHmac } from 'node:crypto';
 
 import { normalizePhoneE164 } from '@phub/auth';
 import type { AppConfig } from '@phub/config';
-import { isValidIdempotencyKey } from '@phub/domain';
+import { isValidIdempotencyKey, type ClientPlatform } from '@phub/domain';
 import type { FastifyInstance, FastifyReply, FastifyRequest, preHandlerHookHandler } from 'fastify';
 import { z } from 'zod';
 
@@ -71,6 +71,8 @@ function errorMessage(code: string): string {
     VIVA_REAUTH_REQUIRED: 'Сессия Viva завершена. Войдите через Viva снова.',
     VIVA_DELEGATION_BUSY: 'Сессия Viva обновляется в другой вкладке. Повторите запрос.',
     LEGAL_ACCEPTANCE_REQUIRED: 'Подтвердите публичную оферту и обработку персональных данных.',
+    AUTH_IDENTITY_CONFLICT:
+      'Профиль уже связан с другим аккаунтом ПаделХАБ. Обратитесь в поддержку.',
     IDEMPOTENCY_KEY_CONFLICT: 'Этот ключ операции уже использован с другими данными.',
     TENANT_KEY_INVALID: 'Некорректный идентификатор организации.',
     TENANT_NOT_FOUND: 'Организация не найдена.',
@@ -161,6 +163,11 @@ export function registerAuthRoutes(
   authService: AuthService,
   config: AppConfig,
   authenticatedPreHandlers: readonly preHandlerHookHandler[] = [],
+  directVivaAccessAllowed?: (
+    tenantId: string,
+    userId: string,
+    platform: ClientPlatform,
+  ) => Promise<boolean>,
 ): void {
   app.post(
     '/user/api/v1/:tenantKey/auth/viva/authorize',
@@ -218,6 +225,26 @@ export function registerAuthRoutes(
         const userId = request.padlHubClaims?.sub;
         if (!tenantId || !userId) {
           return sendApiError(request, reply, 401, 'AUTH_REQUIRED', 'Требуется авторизация.');
+        }
+        const platformHeader = request.headers['x-app-platform'];
+        const platform: ClientPlatform =
+          platformHeader === 'web' ||
+          platformHeader === 'ios' ||
+          platformHeader === 'android' ||
+          platformHeader === 'cup-admin'
+            ? platformHeader
+            : 'internal';
+        if (
+          !directVivaAccessAllowed ||
+          !(await directVivaAccessAllowed(tenantId, userId, platform))
+        ) {
+          return sendApiError(
+            request,
+            reply,
+            403,
+            'DIRECT_VIVA_DISABLED',
+            'Прямое подключение к Viva отключено сервером.',
+          );
         }
         const access = await authService.issueVivaAccessToken({
           tenantId,

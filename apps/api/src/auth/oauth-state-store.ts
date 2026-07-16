@@ -1,6 +1,7 @@
 import type Redis from 'ioredis';
 
 import type { VivaOAuthProvider } from '@phub/auth';
+import { vivaRefreshLockRedisKey } from '@phub/auth/viva-delegation';
 
 export interface VivaOAuthState {
   readonly state: string;
@@ -32,7 +33,6 @@ export interface VivaAccessHandoff {
 
 const PREFIX = 'phub:auth:viva-oauth:';
 const HANDOFF_PREFIX = 'phub:auth:viva-handoff:';
-const REFRESH_LOCK_PREFIX = 'phub:auth:viva-refresh-lock:';
 
 export class RedisVivaOAuthStateStore implements VivaOAuthStateStore {
   public constructor(private readonly redis: Redis) {}
@@ -73,8 +73,7 @@ export class RedisVivaOAuthStateStore implements VivaOAuthStateStore {
 
   public async claimRefresh(key: string, claimId: string, ttlSeconds: number): Promise<boolean> {
     return (
-      (await this.redis.set(`${REFRESH_LOCK_PREFIX}${key}`, claimId, 'EX', ttlSeconds, 'NX')) ===
-      'OK'
+      (await this.redis.set(vivaRefreshLockRedisKey(key), claimId, 'EX', ttlSeconds, 'NX')) === 'OK'
     );
   }
 
@@ -82,7 +81,7 @@ export class RedisVivaOAuthStateStore implements VivaOAuthStateStore {
     await this.redis.eval(
       "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) end return 0",
       1,
-      `${REFRESH_LOCK_PREFIX}${key}`,
+      vivaRefreshLockRedisKey(key),
       claimId,
     );
   }

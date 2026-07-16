@@ -3,15 +3,57 @@ import { PrimaryButton } from '@phub/ui';
 import { useEffect, useReducer, useRef, useState } from 'react';
 import type { ChangeEvent, FormEvent } from 'react';
 
+import padlHubLogoUrl from './assets/padlhub-logo.svg';
+import vkIconUrl from './assets/vk-auth.svg';
+import yandexIconUrl from './assets/yandex-auth.svg';
+import { BookingsPage } from './BookingsPage.js';
+import { HomeDashboardPage } from './HomeDashboardPage.js';
+import { ProfilePage } from './ProfilePage.js';
 import type {
   AuthGateway,
   AuthenticatedSession,
+  HomeDashboard,
   PhoneChallenge,
+  UserProfile,
+  UserUpcomingBookings,
   VivaOAuthProvider,
 } from './auth-gateway.js';
 
 type View = 'restoring' | 'oauth' | 'phone' | 'otp' | 'home';
 type BusyAction = 'start-viva' | 'request-code' | 'verify-code' | 'logout' | null;
+
+type ProtectedRoute =
+  | { readonly kind: 'home' }
+  | { readonly kind: 'profile' }
+  | { readonly kind: 'bookings' }
+  | { readonly kind: 'section'; readonly title: string }
+  | { readonly kind: 'not-found' };
+
+const protectedSections = [
+  ['/games', 'Игры'],
+  ['/trainings', 'Тренировки'],
+  ['/tournaments', 'Турниры'],
+  ['/coaches', 'Тренеры'],
+  ['/subscriptions', 'Абонементы'],
+  ['/communities', 'Сообщества'],
+  ['/locations', 'Локации'],
+  ['/promotions', 'Акции'],
+  ['/gift-certificates', 'Подарочные сертификаты'],
+  ['/offers', 'Предложения'],
+  ['/chats', 'Чаты'],
+  ['/notifications', 'Уведомления'],
+] as const;
+
+function resolveProtectedRoute(pathname: string): ProtectedRoute {
+  const normalizedPath = pathname.length > 1 ? pathname.replace(/\/+$/, '') : pathname;
+  if (normalizedPath === '/') return { kind: 'home' };
+  if (normalizedPath === '/profile') return { kind: 'profile' };
+  if (normalizedPath === '/bookings') return { kind: 'bookings' };
+  const section = protectedSections.find(
+    ([prefix]) => normalizedPath === prefix || normalizedPath.startsWith(`${prefix}/`),
+  );
+  return section ? { kind: 'section', title: section[1] } : { kind: 'not-found' };
+}
 
 interface AuthState {
   readonly view: View;
@@ -190,14 +232,7 @@ function userMessage(
 }
 
 function Brand(): React.JSX.Element {
-  return (
-    <div className="brand" aria-label="PadlHub">
-      <span className="brand-mark" aria-hidden="true">
-        P
-      </span>
-      <span>PadlHub</span>
-    </div>
-  );
+  return <img className="brand" src={padlHubLogoUrl} alt="ПадлХАБ" />;
 }
 
 function BusyStatus({ action }: { readonly action: BusyAction }): React.JSX.Element {
@@ -224,13 +259,14 @@ function VivaProviderIcon({
   readonly provider: VivaOAuthProvider;
 }): React.JSX.Element {
   return provider === 'vkid' ? (
-    <span className="viva-provider-icon viva-provider-icon--vk" aria-hidden="true">
-      VK
-    </span>
+    <img className="viva-provider-icon" src={vkIconUrl} alt="" aria-hidden="true" />
   ) : (
-    <span className="viva-provider-icon viva-provider-icon--yandex" aria-hidden="true">
-      Я
-    </span>
+    <img
+      className="viva-provider-icon viva-provider-icon--yandex"
+      src={yandexIconUrl}
+      alt=""
+      aria-hidden="true"
+    />
   );
 }
 
@@ -242,6 +278,15 @@ export interface AppProps {
 export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
   const [state, dispatch] = useReducer(reducer, initialState);
   const [currentTime, setCurrentTime] = useState(() => Date.now());
+  const [homeDashboard, setHomeDashboard] = useState<HomeDashboard | null>(null);
+  const [homeError, setHomeError] = useState<string | null>(null);
+  const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
+  const [profileError, setProfileError] = useState<string | null>(null);
+  const [upcomingBookings, setUpcomingBookings] = useState<UserUpcomingBookings | null>(null);
+  const [bookingsError, setBookingsError] = useState<string | null>(null);
+  const protectedRoute = resolveProtectedRoute(
+    typeof window === 'undefined' ? '/' : window.location.pathname,
+  );
   const phoneInput = useRef<HTMLInputElement>(null);
   const codeInput = useRef<HTMLInputElement>(null);
 
@@ -259,6 +304,58 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
       active = false;
     };
   }, [gateway]);
+
+  useEffect(() => {
+    if (state.view !== 'home' || !state.session) return;
+    let active = true;
+    if (protectedRoute.kind === 'profile') {
+      void gateway.getUserProfile(state.session.context.user.id).then(
+        (profile) => {
+          if (active) {
+            setUserProfile(profile);
+            setProfileError(null);
+          }
+        },
+        () => {
+          if (active) setProfileError('Не удалось загрузить профиль. Проверьте связь и повторите.');
+        },
+      );
+      return () => {
+        active = false;
+      };
+    }
+    if (protectedRoute.kind === 'bookings') {
+      void gateway.getUpcomingBookings().then(
+        (bookings) => {
+          if (active) {
+            setUpcomingBookings(bookings);
+            setBookingsError(null);
+          }
+        },
+        () => {
+          if (active) setBookingsError('Не удалось загрузить записи. Проверьте связь и повторите.');
+        },
+      );
+      return () => {
+        active = false;
+      };
+    }
+    if (protectedRoute.kind !== 'home') return;
+    void gateway.getHomeDashboard().then(
+      (dashboard) => {
+        if (active) {
+          setHomeDashboard(dashboard);
+          setHomeError(null);
+        }
+      },
+      () => {
+        if (active) setHomeError('Не удалось загрузить Главную. Проверьте связь и повторите.');
+      },
+    );
+    return () => {
+      active = false;
+    };
+  }, [gateway, protectedRoute.kind, state.session, state.view]);
 
   useEffect(() => {
     if (state.busy) return;
@@ -344,7 +441,15 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
   function handleLogout(): void {
     dispatch({ type: 'logout-started' });
     void gateway.logout().then(
-      () => dispatch({ type: 'logout-completed' }),
+      () => {
+        setHomeDashboard(null);
+        setHomeError(null);
+        setUserProfile(null);
+        setProfileError(null);
+        setUpcomingBookings(null);
+        setBookingsError(null);
+        dispatch({ type: 'logout-completed' });
+      },
       (error: unknown) => {
         dispatch({ type: 'logout-failed', message: userMessage(error, 'logout') });
       },
@@ -366,48 +471,114 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
 
   if (state.view === 'home' && state.session) {
     const { context } = state.session;
-    return (
-      <main className="app-shell home-shell" aria-labelledby="home-title">
-        <header className="topbar">
+    if (protectedRoute.kind === 'profile') {
+      if (!userProfile) {
+        return (
+          <main className="app-shell app-shell-loading" aria-labelledby="profile-loading-title">
+            <Brand />
+            <section className="loading-card" aria-busy={!profileError}>
+              {profileError ? null : <span className="loader" aria-hidden="true" />}
+              <h1 id="profile-loading-title">
+                {profileError ? 'Профиль недоступен' : 'Загружаем профиль'}
+              </h1>
+              {profileError ? (
+                <p className="error-message" role="alert">
+                  {profileError}
+                </p>
+              ) : (
+                <p role="status">Проверяем серверную схему подключения…</p>
+              )}
+            </section>
+          </main>
+        );
+      }
+      return (
+        <ProfilePage
+          profile={userProfile}
+          tenantName={context.tenant.name}
+          logoutBusy={state.busy === 'logout'}
+          error={state.error}
+          onLogout={handleLogout}
+        />
+      );
+    }
+    if (protectedRoute.kind === 'bookings') {
+      if (!upcomingBookings) {
+        return (
+          <main className="app-shell app-shell-loading" aria-labelledby="bookings-loading-title">
+            <Brand />
+            <section className="loading-card" aria-busy={!bookingsError}>
+              {bookingsError ? null : <span className="loader" aria-hidden="true" />}
+              <h1 id="bookings-loading-title">
+                {bookingsError ? 'Записи недоступны' : 'Загружаем записи'}
+              </h1>
+              {bookingsError ? (
+                <p className="error-message" role="alert">
+                  {bookingsError}
+                </p>
+              ) : (
+                <p role="status">Получаем актуальные данные ПаделХАБ…</p>
+              )}
+            </section>
+          </main>
+        );
+      }
+      return <BookingsPage bookings={upcomingBookings} tenantName={context.tenant.name} />;
+    }
+    if (protectedRoute.kind === 'section' || protectedRoute.kind === 'not-found') {
+      const title =
+        protectedRoute.kind === 'section' ? protectedRoute.title : 'Страница не найдена';
+      return (
+        <main className="app-shell app-shell-loading" aria-labelledby="route-title">
           <Brand />
-          <span className="tenant-chip">{context.tenant.name}</span>
-        </header>
-
-        <section className="home-card">
-          <div className="home-copy">
-            <span className="eyebrow">Личный кабинет</span>
-            <h1 id="home-title">{context.user.displayName}</h1>
-            <p>Вы вошли в PadlHub. Профиль и контекст клуба загружены из защищённого API.</p>
-          </div>
-
-          <dl className="context-list" aria-label="Данные аккаунта">
-            <div>
-              <dt>Клуб</dt>
-              <dd>{context.tenant.name}</dd>
-            </div>
-            <div>
-              <dt>Профиль</dt>
-              <dd>{context.user.phoneMasked ?? 'Номер подтверждён'}</dd>
-            </div>
-          </dl>
-
-          <button
-            className="secondary-button logout-button"
-            type="button"
-            disabled={state.busy === 'logout'}
-            aria-busy={state.busy === 'logout'}
-            onClick={handleLogout}
-          >
-            {state.busy === 'logout' ? 'Выходим…' : 'Выйти'}
-          </button>
-          {state.error ? (
-            <p className="error-message" role="alert">
-              {state.error}
+          <section className="loading-card">
+            <h1 id="route-title">{title}</h1>
+            <p>
+              {protectedRoute.kind === 'section'
+                ? 'Раздел подключается к API ПаделХАБ.'
+                : 'Проверьте адрес или вернитесь на Главную.'}
             </p>
-          ) : null}
-          <BusyStatus action={state.busy} />
-        </section>
-      </main>
+            <a className="secondary-button logout-button" href="/">
+              Вернуться на Главную
+            </a>
+          </section>
+        </main>
+      );
+    }
+    if (!homeDashboard) {
+      return (
+        <main className="app-shell app-shell-loading" aria-labelledby="home-loading-title">
+          <Brand />
+          <section className="loading-card" aria-busy={!homeError}>
+            {homeError ? null : <span className="loader" aria-hidden="true" />}
+            <h1 id="home-loading-title">{homeError ? 'Главная недоступна' : 'Собираем Главную'}</h1>
+            {homeError ? (
+              <p className="error-message" role="alert">
+                {homeError}
+              </p>
+            ) : (
+              <p role="status">Загружаем один актуальный снимок…</p>
+            )}
+            <button
+              className="secondary-button logout-button"
+              type="button"
+              disabled={state.busy === 'logout'}
+              onClick={handleLogout}
+            >
+              {state.busy === 'logout' ? 'Выходим…' : 'Выйти'}
+            </button>
+          </section>
+        </main>
+      );
+    }
+    return (
+      <HomeDashboardPage
+        dashboard={homeDashboard}
+        tenantName={context.tenant.name}
+        logoutBusy={state.busy === 'logout'}
+        error={state.error}
+        onLogout={handleLogout}
+      />
     );
   }
 
@@ -420,27 +591,15 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
   const errorId = state.error ? 'auth-error' : undefined;
 
   return (
-    <main className="auth-layout" aria-labelledby="auth-title">
-      <section className="auth-intro" aria-label="PadlHub">
-        <Brand />
-        <div>
-          <span className="eyebrow">Всё для игры</span>
-          <p className="intro-title">Ваш падел в одном месте</p>
-          <p className="intro-copy">Один аккаунт для клуба, игр и турниров.</p>
-        </div>
-        <span className="tenant-note">{tenantKey}</span>
-      </section>
-
+    <main className="auth-layout" aria-labelledby="auth-title" data-tenant-key={tenantKey}>
       <section className="auth-panel">
         <div className="auth-card">
+          <Brand />
           {state.view === 'oauth' ? (
             <>
-              <span className="step-label">Вход через Viva</span>
-              <h1 id="auth-title">Войти в личный кабинет</h1>
-              <p className="form-lead">
-                Используйте привычный аккаунт Viva. После входа мы безопасно откроем ваш кабинет
-                ПадлХАБ.
-              </p>
+              <h1 id="auth-title" className="auth-badge">
+                Войти в личный кабинет
+              </h1>
 
               <div className="viva-login-options" aria-label="Способ входа через Viva">
                 <button

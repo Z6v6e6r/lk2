@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 export * from './identity.js';
+export * from './home-source.js';
 
 export interface InternalAvailableSlot {
   readonly id: string;

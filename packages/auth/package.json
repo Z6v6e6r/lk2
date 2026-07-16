@@ -6,6 +6,6 @@
   "main": "./dist/index.js",
   "types": "./src/index.ts",
   "scripts": {
-    "build": "tsup src/index.ts --format esm --dts --sourcemap --clean"
+    "build": "tsup src/index.ts src/viva-delegation.ts --format esm --dts --sourcemap --clean"
   }
 }

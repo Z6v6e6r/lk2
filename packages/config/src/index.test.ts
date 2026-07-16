@@ -15,7 +15,55 @@ const validEnvironment = {
 
 describe('loadConfig', () => {
   it('parses safe defaults', () => {
-    expect(loadConfig(validEnvironment)).toMatchObject({ APP_ENV: 'ci', VIVA_MODE: 'mock' });
+    expect(loadConfig(validEnvironment)).toMatchObject({
+      APP_ENV: 'ci',
+      VIVA_MODE: 'mock',
+      HOME_READ_MODE: 'mock',
+      HOME_PROJECTION_TTL_SECONDS: 300,
+      HOME_VIVA_SYNC_ENABLED: false,
+      HOME_VIVA_SYNC_INTERVAL_MS: 120_000,
+      HOME_VIVA_SYNC_FAILURE_BACKOFF_MS: 300_000,
+      S3_FORCE_PATH_STYLE: true,
+      S3_AUTO_CREATE_BUCKET: false,
+      PROFILE_PHOTO_WEBP_QUALITY: 82,
+    });
+  });
+
+  it('keeps real Viva Home synchronization explicitly feature-gated', () => {
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        VIVA_MODE: 'sandbox',
+        HOME_VIVA_SYNC_ENABLED: 'true',
+      }),
+    ).toThrow('HOME_VIVA_SYNC_ENABLED requires VIVA_OAUTH_ENABLED=true');
+  });
+
+  it('keeps browser Viva reads behind both the real provider and OAuth delegation gates', () => {
+    expect(() => loadConfig({ ...validEnvironment, VIVA_DIRECT_READ_ENABLED: 'true' })).toThrow(
+      'VIVA_DIRECT_READ_ENABLED requires VIVA_MODE=sandbox or production',
+    );
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        VIVA_MODE: 'sandbox',
+        VIVA_DIRECT_READ_ENABLED: 'true',
+      }),
+    ).toThrow('VIVA_DIRECT_READ_ENABLED requires VIVA_OAUTH_ENABLED=true');
+  });
+
+  it('requires private object storage for the real Home photo projection', () => {
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        VIVA_MODE: 'sandbox',
+        VIVA_OAUTH_ENABLED: 'true',
+        VIVA_OAUTH_REDIRECT_URI: 'https://lk.padlhub.test/oauth/callback',
+        VIVA_OAUTH_SUCCESS_REDIRECT_URL: 'https://lk.padlhub.test/',
+        VIVA_DELEGATION_ENCRYPTION_KEY: 'test-delegation-key-at-least-32-characters',
+        HOME_VIVA_SYNC_ENABLED: 'true',
+      }),
+    ).toThrow('HOME_VIVA_SYNC_ENABLED requires profile photo storage');
   });
 
   it('rejects incomplete secrets', () => {
@@ -57,5 +105,19 @@ describe('loadConfig', () => {
         TRUSTED_PROXY_CIDRS: '10.0.0.0/24',
       }),
     ).toThrow('Production JWT secrets must be distinct non-placeholder values');
+  });
+
+  it('requires the persisted Home projection in production', () => {
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        APP_ENV: 'production',
+        VIVA_MODE: 'production',
+        AUTH_COOKIE_SECURE: 'true',
+        TRUSTED_PROXY_CIDRS: '10.0.0.0/24',
+        JWT_ACCESS_SECRET: 'prod-access-secret-very-long-and-random-123',
+        JWT_REFRESH_SECRET: 'prod-refresh-secret-very-long-and-random-456',
+      }),
+    ).toThrow('HOME_READ_MODE=projection is required in production');
   });
 });

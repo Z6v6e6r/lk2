@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: PadlHub User API
-  version: 1.0.0
+  version: 1.5.0
   description: Canonical user-facing API. Public identifiers are PadlHub UUIDs.
   license:
     name: Proprietary
@@ -108,6 +108,8 @@ paths:
                 $ref: '#/components/schemas/VivaDelegatedAccess'
         '401':
           $ref: '#/components/responses/AuthenticationRejected'
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
         '409':
           $ref: '#/components/responses/AuthenticationRejected'
         '429':
@@ -303,8 +305,302 @@ paths:
           $ref: ../../common/components.yaml#/components/responses/TooManyRequests
         '503':
           $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/routing-plan:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+    get:
+      operationId: getClientRoutingPlan
+      summary: Resolve the server-owned client transport plan
+      description: |
+        Returns a short-lived, versioned routing decision. A client may call Viva
+        directly only for operations explicitly marked DIRECT_VIVA. Commands,
+        unknown operations and expired plans always use the PadlHub API.
+      responses:
+        '200':
+          description: Effective routing plan for this user, tenant and client platform.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClientRoutingPlan'
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/profile:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+    get:
+      operationId: getUserProfile
+      summary: Load the authenticated PadlHub user profile
+      description: |
+        Returns one normalized profile aggregate with a PadlHub user UUID.
+        The transport may be selected by the routing plan, but the public DTO is stable.
+      responses:
+        '200':
+          description: Normalized user profile.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProfile'
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/bookings/upcoming:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+    get:
+      operationId: getUpcomingBookings
+      summary: Load the authenticated user's upcoming bookings
+      description: |
+        Returns one bookings aggregate containing PadlHub UUIDs only. Provider
+        identifiers remain in integration storage and never cross this boundary.
+      responses:
+        '200':
+          description: Upcoming bookings from one PadlHub-owned projection version.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserUpcomingBookings'
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/home:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+    get:
+      operationId: getHomeDashboard
+      summary: Load the complete authenticated home dashboard snapshot
+      description: |
+        Returns every above-the-fold home block from one PadlHub-owned read model.
+        Community feed, rankings, history and item details are intentionally excluded
+        and loaded only after explicit navigation. Clients never fan out to Viva or
+        choose a source for individual blocks.
+      responses:
+        '200':
+          description: One consistent home dashboard snapshot.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HomeDashboard'
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/notifications:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+    get:
+      operationId: listNotifications
+      summary: List the authenticated user's durable in-app notifications
+      description: |
+        Returns only PadlHub-owned inbox state for the JWT subject. The cursor is opaque,
+        pagination is newest-first, and unreadCount is calculated independently of the page.
+        The route stays closed until in-app notifications are enabled for the tenant.
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: unreadOnly
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
+        - name: cursor
+          in: query
+          required: false
+          description: Opaque cursor returned by the preceding page.
+          schema:
+            type: string
+            minLength: 16
+            maxLength: 512
+      responses:
+        '200':
+          description: One tenant/user-scoped page of in-app notifications.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationInboxPage'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/notifications/read-cursor:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/IdempotencyKey'
+    put:
+      operationId: updateNotificationReadCursor
+      summary: Mark in-app notifications as read through one inbox item
+      description: |
+        Monotonically advances the authenticated user's cursor and marks every older unread item
+        in the same transaction. Repeating the same Idempotency-Key returns the stored result;
+        reusing it with another throughId is rejected.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NotificationReadCursorRequest'
+      responses:
+        '200':
+          description: Stored result of the idempotent cursor command.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationReadCursorResult'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/CommandConflict'
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
 components:
   schemas:
+    ClientRoutingPlan:
+      type: object
+      additionalProperties: false
+      required: [revision, mode, issuedAt, expiresAt, operations]
+      properties:
+        revision:
+          type: string
+          pattern: '^[0-9]+$'
+        mode:
+          type: string
+          enum: [PADLHUB_ONLY, MIXED_END_USER_READS]
+        issuedAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+        operations:
+          type: array
+          minItems: 5
+          maxItems: 5
+          items:
+            $ref: '#/components/schemas/ClientRoutingOperationPlan'
+        directViva:
+          $ref: '#/components/schemas/DirectVivaTransport'
+    ClientRoutingOperationPlan:
+      type: object
+      additionalProperties: false
+      required: [operation, transport, fallback]
+      properties:
+        operation:
+          type: string
+          enum:
+            [profile.read, bookings.read, bookings.details.read, subscriptions.read, schedule.read]
+        transport:
+          type: string
+          enum: [PADLHUB_API, DIRECT_VIVA]
+        fallback:
+          type: string
+          enum: [PADLHUB_API, UNAVAILABLE]
+    DirectVivaTransport:
+      type: object
+      additionalProperties: false
+      required: [apiBaseUrl, providerTenantKey, accessTokenPath, allowedRequestHeaders]
+      properties:
+        apiBaseUrl:
+          type: string
+          format: uri
+        providerTenantKey:
+          type: string
+          minLength: 1
+          maxLength: 128
+        accessTokenPath:
+          type: string
+          const: /auth/viva/access
+        allowedRequestHeaders:
+          type: array
+          minItems: 1
+          maxItems: 1
+          prefixItems:
+            - type: string
+              const: Authorization
+          items: false
+    UserProfile:
+      $ref: '#/components/schemas/HomeProfile'
     AuthChallengeRequest:
       type: object
       additionalProperties: false
@@ -461,6 +757,429 @@ components:
           type: array
           items:
             type: string
+    HomeDashboard:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          snapshot,
+          profile,
+          counters,
+          quickActions,
+          upcoming,
+          subscriptions,
+          communities,
+          promotion,
+          locations,
+          additionalLinks,
+          capabilities,
+        ]
+      properties:
+        snapshot:
+          $ref: '#/components/schemas/HomeSnapshot'
+        profile:
+          $ref: '#/components/schemas/HomeProfile'
+        counters:
+          $ref: '#/components/schemas/HomeCounters'
+        quickActions:
+          type: array
+          maxItems: 4
+          items:
+            $ref: '#/components/schemas/HomeQuickAction'
+        upcoming:
+          type: array
+          maxItems: 6
+          items:
+            $ref: '#/components/schemas/HomeUpcomingItem'
+        subscriptions:
+          type: array
+          maxItems: 6
+          items:
+            $ref: '#/components/schemas/HomeSubscription'
+        communities:
+          type: array
+          maxItems: 8
+          items:
+            $ref: '#/components/schemas/HomeCommunity'
+        promotion:
+          oneOf:
+            - $ref: '#/components/schemas/HomePromotion'
+            - type: 'null'
+        locations:
+          type: array
+          maxItems: 8
+          items:
+            $ref: '#/components/schemas/HomeLocation'
+        additionalLinks:
+          type: array
+          maxItems: 6
+          items:
+            $ref: '#/components/schemas/HomeAdditionalLink'
+        capabilities:
+          $ref: '#/components/schemas/HomeCapabilities'
+    HomeSnapshot:
+      type: object
+      additionalProperties: false
+      required: [version, generatedAt, staleAt, source]
+      properties:
+        version:
+          type: string
+          minLength: 1
+          maxLength: 100
+        generatedAt:
+          type: string
+          format: date-time
+        staleAt:
+          type: string
+          format: date-time
+        source:
+          type: string
+          enum: [LOCAL_PROJECTION, LOCAL_MOCK]
+          description: Server-owned read-model source; clients must not branch on this value.
+    HomeProfile:
+      type: object
+      additionalProperties: false
+      required: [userId, displayName, balanceMinor, currency, level]
+      properties:
+        userId:
+          type: string
+          format: uuid
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 200
+        firstName:
+          type: [string, 'null']
+          maxLength: 100
+        avatarUrl:
+          type: [string, 'null']
+          format: uri
+        phoneLast4:
+          type: string
+          pattern: '^[0-9]{4}$'
+        balanceMinor:
+          type: integer
+          description: Signed balance in minor currency units; a negative value represents debt.
+        currency:
+          type: string
+          pattern: '^[A-Z]{3}$'
+        level:
+          $ref: '#/components/schemas/HomePlayerLevel'
+    HomePlayerLevel:
+      type: object
+      additionalProperties: false
+      required: [label, value, assessmentRequired]
+      properties:
+        label:
+          type: string
+          minLength: 1
+          maxLength: 20
+        value:
+          type: number
+          minimum: 0
+          maximum: 10
+        assessmentRequired:
+          type: boolean
+    HomeCounters:
+      type: object
+      additionalProperties: false
+      required: [unreadChats, upcomingEvents, activeSubscriptions]
+      properties:
+        unreadChats:
+          type: integer
+          minimum: 0
+        upcomingEvents:
+          type: integer
+          minimum: 0
+        activeSubscriptions:
+          type: integer
+          minimum: 0
+    HomeQuickAction:
+      type: object
+      additionalProperties: false
+      required: [id, title, route, tone]
+      properties:
+        id:
+          type: string
+          enum: [play, group_training, tournament, individual_training]
+        title:
+          type: string
+          minLength: 1
+          maxLength: 80
+        subtitle:
+          type: [string, 'null']
+          maxLength: 120
+        route:
+          type: string
+          pattern: '^/'
+        tone:
+          type: string
+          enum: [violet, lime, mint, sand]
+    HomeUpcomingItem:
+      type: object
+      additionalProperties: false
+      required: [id, kind, title, startsAt, venue, status, route]
+      properties:
+        id:
+          type: string
+          format: uuid
+        kind:
+          type: string
+          enum: [game, training, tournament]
+        title:
+          type: string
+          minLength: 1
+          maxLength: 160
+        startsAt:
+          type: string
+          format: date-time
+        venue:
+          type: string
+          minLength: 1
+          maxLength: 160
+        status:
+          type: string
+          enum: [confirmed, waitlist, payment_required]
+        route:
+          type: string
+          pattern: '^/'
+    UserUpcomingBookings:
+      type: object
+      additionalProperties: false
+      required: [version, generatedAt, staleAt, items]
+      properties:
+        version:
+          type: string
+          minLength: 1
+          maxLength: 100
+        generatedAt:
+          type: string
+          format: date-time
+        staleAt:
+          type: string
+          format: date-time
+        items:
+          type: array
+          maxItems: 6
+          items:
+            $ref: '#/components/schemas/HomeUpcomingItem'
+    HomeSubscription:
+      type: object
+      additionalProperties: false
+      required: [id, title, status, remainingUnits, validUntil, route]
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+          minLength: 1
+          maxLength: 160
+        status:
+          type: string
+          enum: [active, scheduled, paused, exhausted, expired]
+        remainingUnits:
+          type: integer
+          minimum: 0
+        validUntil:
+          type: [string, 'null']
+          format: date-time
+        route:
+          type: string
+          pattern: '^/'
+    HomeCommunity:
+      type: object
+      additionalProperties: false
+      required: [id, title, memberCount, role, unreadCount, accent, route]
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+          minLength: 1
+          maxLength: 120
+        description:
+          type: [string, 'null']
+          maxLength: 220
+        memberCount:
+          type: integer
+          minimum: 1
+        role:
+          type: string
+          enum: [owner, admin, moderator, member]
+        unreadCount:
+          type: integer
+          minimum: 0
+        accent:
+          type: string
+          pattern: '^#[0-9A-Fa-f]{6}$'
+        logoUrl:
+          type: [string, 'null']
+          format: uri
+        route:
+          type: string
+          pattern: '^/'
+    HomePromotion:
+      type: object
+      additionalProperties: false
+      required: [id, eyebrow, title, description, actionLabel, route, tone]
+      properties:
+        id:
+          type: string
+          format: uuid
+        eyebrow:
+          type: string
+          minLength: 1
+          maxLength: 40
+        title:
+          type: string
+          minLength: 1
+          maxLength: 120
+        description:
+          type: string
+          minLength: 1
+          maxLength: 220
+        actionLabel:
+          type: string
+          minLength: 1
+          maxLength: 60
+        route:
+          type: string
+          pattern: '^/'
+        tone:
+          type: string
+          enum: [violet, lime, mint, sand]
+        imageUrl:
+          type: [string, 'null']
+          format: uri
+    HomeLocation:
+      type: object
+      additionalProperties: false
+      required: [id, title, courtCount, imageUrl, route]
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+          minLength: 1
+          maxLength: 120
+        courtCount:
+          type: integer
+          minimum: 1
+        imageUrl:
+          type: [string, 'null']
+          format: uri
+        route:
+          type: string
+          pattern: '^/'
+    HomeAdditionalLink:
+      type: object
+      additionalProperties: false
+      required: [id, title, route]
+      properties:
+        id:
+          type: string
+          enum: [promotions, gift_certificates, offers]
+        title:
+          type: string
+          minLength: 1
+          maxLength: 80
+        route:
+          type: string
+          pattern: '^/'
+    HomeCapabilities:
+      type: object
+      additionalProperties: false
+      required: [canCreateGame, canManageTournaments, canViewCommunities]
+      properties:
+        canCreateGame:
+          type: boolean
+        canManageTournaments:
+          type: boolean
+        canViewCommunities:
+          type: boolean
+    NotificationInboxPage:
+      type: object
+      additionalProperties: false
+      required: [items, unreadCount]
+      properties:
+        items:
+          type: array
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/NotificationInboxItem'
+        unreadCount:
+          type: integer
+          minimum: 0
+        nextCursor:
+          type: string
+          minLength: 16
+          maxLength: 512
+    NotificationInboxItem:
+      type: object
+      additionalProperties: false
+      required: [id, category, title, body, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        category:
+          type: string
+          pattern: '^[A-Z][A-Z0-9_]{1,63}$'
+        title:
+          type: string
+          minLength: 1
+          maxLength: 300
+        body:
+          type: string
+          minLength: 1
+          maxLength: 8000
+        deepLink:
+          type: string
+          pattern: '^/'
+          maxLength: 2000
+        createdAt:
+          type: string
+          format: date-time
+        readAt:
+          type: string
+          format: date-time
+    NotificationReadCursorRequest:
+      type: object
+      additionalProperties: false
+      required: [throughId]
+      properties:
+        throughId:
+          type: string
+          format: uuid
+    NotificationReadCursorResult:
+      type: object
+      additionalProperties: false
+      required: [outcome, readThrough, changedCount, replayed]
+      properties:
+        outcome:
+          type: string
+          const: updated
+        readThrough:
+          $ref: '#/components/schemas/NotificationInboxPosition'
+        changedCount:
+          type: integer
+          minimum: 0
+        replayed:
+          type: boolean
+    NotificationInboxPosition:
+      type: object
+      additionalProperties: false
+      required: [id, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
   parameters:
     IdempotencyKey:
       name: Idempotency-Key
@@ -505,6 +1224,15 @@ components:
       schema:
         type: string
   responses:
+    CommandConflict:
+      description: The idempotency key was already used for another command.
+      headers:
+        X-Correlation-ID:
+          $ref: ../../common/components.yaml#/components/headers/CorrelationId
+      content:
+        application/json:
+          schema:
+            $ref: ../../common/components.yaml#/components/schemas/ApiError
     AuthenticationRejected:
       description: The challenge, refresh cookie or PadlHub session credential is invalid.
       headers:

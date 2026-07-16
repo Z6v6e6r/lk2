@@ -17,7 +17,7 @@
   },
   "scripts": {
     "build": "npm run contracts:generate && npm run build:packages && npm run build:apps",
-    "build:packages": "npm run build -w @phub/domain && npm run build -w @phub/config && npm run build -w @phub/database && npm run build -w @phub/api-contracts && npm run build -w @phub/api-sdk && npm run build -w @phub/auth && npm run build -w @phub/observability && npm run build -w @phub/viva-adapter && npm run build -w @phub/viva-client-adapter && npm run build -w @phub/ui && npm run build -w @phub/testing",
+    "build:packages": "npm run build -w @phub/domain && npm run build -w @phub/config && npm run build -w @phub/notifications && npm run build -w @phub/database && npm run build -w @phub/home-projection && npm run build -w @phub/api-contracts && npm run build -w @phub/api-sdk && npm run build -w @phub/auth && npm run build -w @phub/observability && npm run build -w @phub/viva-adapter && npm run build -w @phub/viva-client-adapter && npm run build -w @phub/ui && npm run build -w @phub/testing",
     "build:apps": "npm run build -w @phub/api && npm run build -w @phub/worker && npm run build -w @phub/realtime && npm run build -w @phub/migrator && npm run build -w @phub/web && npm run build -w @phub/mobile && npm run build -w @phub/cup-admin",
     "build:api": "npm run build -w @phub/api",
     "build:worker": "npm run build -w @phub/worker",
@@ -41,6 +41,10 @@
     "contracts:generate": "openapi-typescript contracts/openapi/user/v1/openapi.yaml -o packages/api-contracts/src/generated-user.ts",
     "db:migrate": "node --env-file-if-exists=.env --import tsx scripts/migrate.ts",
     "db:migrate:check": "node --import tsx scripts/check-migrations.ts",
+    "home:projection:import": "node --env-file-if-exists=.env --import tsx scripts/import-home-projection.ts",
+    "home:component:enqueue": "node --env-file-if-exists=.env --import tsx scripts/enqueue-home-component.ts",
+    "routing:plan:set": "node --env-file-if-exists=.env --import tsx scripts/set-client-routing-plan.ts",
+    "notifications:runtime:set": "node --env-file-if-exists=.env --import tsx scripts/set-notification-runtime.ts",
     "smoke": "node --env-file-if-exists=.env --import tsx scripts/smoke-test.ts",
     "smoke:auth": "node --env-file-if-exists=.env --import tsx scripts/auth-smoke.ts"
   },

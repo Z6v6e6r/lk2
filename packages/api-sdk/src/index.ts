@@ -6,6 +6,12 @@ export type VerifyAuthChallengeRequest = components['schemas']['VerifyAuthChalle
 export type AuthenticatedSession = components['schemas']['AuthenticatedSession'];
 export type AuthenticatedUser = components['schemas']['AuthenticatedUser'];
 export type UserContext = components['schemas']['UserContext'];
+export type HomeDashboard = components['schemas']['HomeDashboard'];
+export type ClientRoutingPlan = components['schemas']['ClientRoutingPlan'];
+export type UserProfile = components['schemas']['UserProfile'];
+export type UserUpcomingBookings = components['schemas']['UserUpcomingBookings'];
+export type NotificationInboxPage = components['schemas']['NotificationInboxPage'];
+export type NotificationReadCursorResult = components['schemas']['NotificationReadCursorResult'];
 
 export type RequestAuthMode = 'none' | 'required';
 export type SessionIntent = 'refresh' | 'logout';
@@ -266,6 +272,48 @@ export class PadlHubApiClient {
 
   public getUserContext(): Promise<UserContext> {
     return this.request<UserContext>('/context');
+  }
+
+  public getClientRoutingPlan(): Promise<ClientRoutingPlan> {
+    return this.request<ClientRoutingPlan>('/routing-plan');
+  }
+
+  public getUserProfile(): Promise<UserProfile> {
+    return this.request<UserProfile>('/profile');
+  }
+
+  public getUpcomingBookings(): Promise<UserUpcomingBookings> {
+    return this.request<UserUpcomingBookings>('/bookings/upcoming');
+  }
+
+  public getHomeDashboard(): Promise<HomeDashboard> {
+    return this.request<HomeDashboard>('/home');
+  }
+
+  public listNotifications(
+    input: {
+      readonly limit?: number;
+      readonly unreadOnly?: boolean;
+      readonly cursor?: string;
+    } = {},
+  ): Promise<NotificationInboxPage> {
+    const query = new URLSearchParams();
+    if (input.limit !== undefined) query.set('limit', String(input.limit));
+    if (input.unreadOnly !== undefined) query.set('unreadOnly', String(input.unreadOnly));
+    if (input.cursor) query.set('cursor', input.cursor);
+    const suffix = query.size > 0 ? `?${query.toString()}` : '';
+    return this.request<NotificationInboxPage>(`/notifications${suffix}`);
+  }
+
+  public markNotificationsRead(throughId: string): Promise<NotificationReadCursorResult> {
+    const idempotencyKey = createCorrelationId();
+    return this.retryOnceOnNetworkFailure(() =>
+      this.request<NotificationReadCursorResult>('/notifications/read-cursor', {
+        method: 'PUT',
+        idempotencyKey,
+        body: jsonRequestBody({ throughId }),
+      }),
+    );
   }
 
   private async performSessionRefresh(): Promise<AuthenticatedSession> {

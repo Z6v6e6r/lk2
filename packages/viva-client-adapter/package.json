@@ -9,6 +9,8 @@
     "build": "tsup src/index.ts --format esm --dts --sourcemap --clean"
   },
   "dependencies": {
+    "@phub/api-sdk": "0.1.0",
+    "@phub/domain": "0.1.0",
     "zod": "4.4.3"
   }
 }

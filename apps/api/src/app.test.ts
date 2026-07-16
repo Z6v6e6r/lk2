@@ -2,9 +2,10 @@ import { loadConfig } from '@phub/config';
 import { createLogger } from '@phub/observability';
 import { SignJWT } from 'jose';
 import type { Pool } from 'pg';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { buildApp, requireIdempotencyKey } from './app.js';
+import { buildMockHomeDashboard } from './home/home-dashboard.js';
 
 const config = loadConfig({
   APP_ENV: 'ci',
@@ -112,6 +113,284 @@ describe('health endpoints', () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({ tenantId, roles: ['client'] });
+  });
+
+  it('returns the effective server-owned routing plan for the authenticated client', async () => {
+    const app = await buildApp({
+      config: { ...config, VIVA_DIRECT_READ_ENABLED: true },
+      logger: createLogger('api-test', 'silent'),
+      pool: fakePool(),
+      clientRoutingPlanRepository: {
+        get: () =>
+          Promise.resolve({
+            mode: 'MIXED_END_USER_READS',
+            revision: '3',
+            validForSeconds: 60,
+            directOperations: ['profile.read'],
+            providerTenantKey: 'iSkq6G',
+            delegationReady: true,
+          }),
+      },
+    });
+    apps.push(app);
+    const response = await app.inject({
+      method: 'GET',
+      url: '/user/api/v1/local-padel/routing-plan',
+      headers: {
+        authorization: `Bearer ${await accessToken()}`,
+        'x-app-platform': 'web',
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['cache-control']).toBe('private, max-age=30');
+    expect(response.json()).toMatchObject({
+      revision: '3',
+      mode: 'MIXED_END_USER_READS',
+      directViva: {
+        providerTenantKey: 'iSkq6G',
+        allowedRequestHeaders: ['Authorization'],
+      },
+    });
+  });
+
+  it('fails closed for administrative clients even when the tenant is mixed', async () => {
+    const app = await buildApp({
+      config: { ...config, VIVA_DIRECT_READ_ENABLED: true },
+      logger: createLogger('api-test', 'silent'),
+      pool: fakePool(),
+      clientRoutingPlanRepository: {
+        get: () =>
+          Promise.resolve({
+            mode: 'MIXED_END_USER_READS',
+            revision: '3',
+            validForSeconds: 60,
+            directOperations: ['profile.read'],
+            providerTenantKey: 'iSkq6G',
+            delegationReady: true,
+          }),
+      },
+    });
+    apps.push(app);
+    const response = await app.inject({
+      method: 'GET',
+      url: '/user/api/v1/local-padel/routing-plan',
+      headers: {
+        authorization: `Bearer ${await accessToken()}`,
+        'x-app-platform': 'cup-admin',
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ mode: 'PADLHUB_ONLY' });
+    expect(response.json()).not.toHaveProperty('directViva');
+  });
+
+  it('stops delegated Viva token issuance when the effective plan is PadlHub-only', async () => {
+    const issueVivaAccessToken = vi.fn().mockResolvedValue({
+      accessToken: 'must-not-be-issued',
+      expiresAt: '2099-01-01T00:00:00.000Z',
+    });
+    const app = await buildApp({
+      config,
+      logger: createLogger('api-test', 'silent'),
+      pool: fakePool(),
+      authService: { issueVivaAccessToken } as never,
+      clientRoutingPlanRepository: {
+        get: () =>
+          Promise.resolve({
+            mode: 'PADLHUB_ONLY',
+            revision: '4',
+            validForSeconds: 60,
+            directOperations: [],
+            delegationReady: true,
+          }),
+      },
+    });
+    apps.push(app);
+    const response = await app.inject({
+      method: 'POST',
+      url: '/user/api/v1/local-padel/auth/viva/access',
+      headers: {
+        authorization: `Bearer ${await accessToken()}`,
+        'x-app-platform': 'web',
+        'idempotency-key': 'viva-access-disabled-test-0001',
+      },
+      payload: {},
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toMatchObject({ code: 'DIRECT_VIVA_DISABLED' });
+    expect(issueVivaAccessToken).not.toHaveBeenCalled();
+  });
+
+  it('returns one normalized PadlHub profile aggregate', async () => {
+    const app = await buildApp({
+      config,
+      logger: createLogger('api-test', 'silent'),
+      pool: fakePool(),
+    });
+    apps.push(app);
+    const response = await app.inject({
+      method: 'GET',
+      url: '/user/api/v1/local-padel/profile',
+      headers: { authorization: `Bearer ${await accessToken()}` },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      userId: '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca',
+      displayName: 'Игрок ПадлХАБ',
+      currency: 'RUB',
+      level: { assessmentRequired: false },
+    });
+  });
+
+  it('returns upcoming bookings with PadlHub UUIDs from one projection version', async () => {
+    const app = await buildApp({
+      config,
+      logger: createLogger('api-test', 'silent'),
+      pool: fakePool(),
+    });
+    apps.push(app);
+    const response = await app.inject({
+      method: 'GET',
+      url: '/user/api/v1/local-padel/bookings/upcoming',
+      headers: { authorization: `Bearer ${await accessToken()}` },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['cache-control']).toContain('private');
+    const body = response.json<{
+      version: string;
+      generatedAt: string;
+      staleAt: string;
+      items: { id: string; route: string }[];
+    }>();
+    expect(body.version).toBeTruthy();
+    expect(body.generatedAt).toBeTruthy();
+    expect(body.staleAt).toBeTruthy();
+    expect(body.items).toHaveLength(2);
+    expect(body.items[0]?.id).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+    );
+    expect(body.items[0]?.route).toMatch(/^\/(?:bookings|games)\//);
+    expect(body.items[0]?.route).toContain(body.items[0]?.id);
+    expect(JSON.stringify(body)).not.toContain('externalId');
+  });
+
+  it('returns the complete home dashboard as one protected snapshot', async () => {
+    const app = await buildApp({
+      config,
+      logger: createLogger('api-test', 'silent'),
+      pool: fakePool(),
+    });
+    apps.push(app);
+    const response = await app.inject({
+      method: 'GET',
+      url: '/user/api/v1/local-padel/home',
+      headers: { authorization: `Bearer ${await accessToken()}` },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['cache-control']).toContain('private');
+    const body = response.json<{
+      snapshot: { source: string };
+      profile: { userId: string };
+      counters: { unreadChats: number };
+      capabilities: { canViewCommunities: boolean };
+      quickActions: unknown[];
+      communities: unknown[];
+    }>();
+    expect(body).toMatchObject({
+      snapshot: { source: 'LOCAL_MOCK' },
+      profile: { userId: '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca' },
+      counters: { unreadChats: 3 },
+      capabilities: { canViewCommunities: true },
+    });
+    expect(body.quickActions).toHaveLength(4);
+    expect(body.communities).toHaveLength(3);
+  });
+
+  it('serves a validated persisted Home projection independently of Viva mode', async () => {
+    const projectionConfig = {
+      ...config,
+      HOME_READ_MODE: 'projection' as const,
+      VIVA_MODE: 'sandbox' as const,
+    };
+    const userId = '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca';
+    const generatedAt = new Date();
+    const dashboard = buildMockHomeDashboard({
+      tenantId,
+      userId,
+      displayName: 'Алексей',
+      phoneLast4: '3190',
+      roles: ['client'],
+      permissions: ['profile.read'],
+      now: generatedAt,
+    });
+    const payload = {
+      ...dashboard,
+      snapshot: { ...dashboard.snapshot, source: 'LOCAL_PROJECTION' as const },
+    };
+    const app = await buildApp({
+      config: projectionConfig,
+      logger: createLogger('api-test', 'silent'),
+      pool: fakePool(),
+      homeDashboardRepository: {
+        get: () =>
+          Promise.resolve({
+            tenantId,
+            userId,
+            sourceRevision: '1',
+            sourceEventId: '55555555-5555-4555-8555-555555555555',
+            producer: 'HOME_IMPORT',
+            snapshotVersion: payload.snapshot.version,
+            payload,
+            payloadChecksum: 'a'.repeat(64),
+            generatedAt: payload.snapshot.generatedAt,
+            staleAt: payload.snapshot.staleAt,
+            updatedAt: payload.snapshot.generatedAt,
+          }),
+      },
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/user/api/v1/local-padel/home',
+      headers: { authorization: `Bearer ${await accessToken()}` },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      snapshot: { source: 'LOCAL_PROJECTION' },
+      profile: { userId, displayName: 'Алексей' },
+    });
+  });
+
+  it('does not fall back to mock data when a real Home projection is absent', async () => {
+    const projectionConfig = {
+      ...config,
+      HOME_READ_MODE: 'projection' as const,
+      VIVA_MODE: 'sandbox' as const,
+    };
+    const app = await buildApp({
+      config: projectionConfig,
+      logger: createLogger('api-test', 'silent'),
+      pool: fakePool(),
+      homeDashboardRepository: { get: () => Promise.resolve(undefined) },
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/user/api/v1/local-padel/home',
+      headers: { authorization: `Bearer ${await accessToken()}` },
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toMatchObject({ code: 'HOME_PROJECTION_NOT_READY' });
   });
 
   it('rejects a token that does not contain the resolved tenant', async () => {
