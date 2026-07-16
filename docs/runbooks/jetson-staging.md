@@ -62,9 +62,11 @@ It uses the job-scoped `GITHUB_TOKEN` only through standard input to pull the
 GHCR image digests and logs the Nano out of GHCR immediately afterward. Do not
 create or store a long-lived registry token on the node.
 
-After switching containers, the workflow waits for API, realtime and worker readiness before the
-public smoke test. If readiness does not converge, it prints bounded startup logs and container
-status, then fails the release instead of reporting an ambiguous Nginx `502`.
+After switching containers, the workflow waits until Docker reports API, realtime and worker
+healthchecks as `healthy` before the public smoke test. The container healthchecks call each
+process's private readiness endpoint, so the deploy gate does not depend on a second ad hoc command
+inside a running container. If readiness does not converge, the workflow prints bounded startup
+logs and container status, then fails the release instead of reporting an ambiguous Nginx `502`.
 
 ## Application ingress
 
