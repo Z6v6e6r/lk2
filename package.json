@@ -36,7 +36,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "check": "npm run format:check && npm run lint && npm run typecheck && npm run contracts:lint && npm test && npm run build",
+    "check": "npm run format:check && npm run lint && npm run typecheck && npm run contracts:lint && npm test && npm run build && npm run runtime:imports",
     "contracts:lint": "node --import tsx scripts/verify-imported-contract.ts && redocly lint openapi.yaml contracts/openapi/user/v1/openapi.yaml contracts/openapi/admin/v1/openapi.yaml contracts/openapi/internal/v1/openapi.yaml",
     "contracts:generate": "openapi-typescript contracts/openapi/user/v1/openapi.yaml -o packages/api-contracts/src/generated-user.ts",
     "db:migrate": "node --env-file-if-exists=.env --import tsx scripts/migrate.ts",
@@ -45,6 +45,7 @@
     "home:component:enqueue": "node --env-file-if-exists=.env --import tsx scripts/enqueue-home-component.ts",
     "routing:plan:set": "node --env-file-if-exists=.env --import tsx scripts/set-client-routing-plan.ts",
     "notifications:runtime:set": "node --env-file-if-exists=.env --import tsx scripts/set-notification-runtime.ts",
+    "runtime:imports": "node --input-type=module -e \"await Promise.all([import('@phub/auth'), import('@phub/auth/viva-delegation')])\"",
     "smoke": "node --env-file-if-exists=.env --import tsx scripts/smoke-test.ts",
     "smoke:auth": "node --env-file-if-exists=.env --import tsx scripts/auth-smoke.ts"
   },

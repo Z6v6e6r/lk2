@@ -16,6 +16,9 @@
 - Wired the staging worker to the existing private Nano MinIO using Compose-time credential
   projection, kept the bucket private behind signed URLs, and added bounded multi-process readiness
   diagnostics before public smoke tests.
+- Added explicit ESM package exports for `@phub/auth/viva-delegation` and a post-build runtime import
+  gate after the ARM64 image exposed that dev-time TypeScript resolution had masked the missing
+  production subpath contract.
 
 ## 2026-07-16 — first in-app notification vertical slice
 
