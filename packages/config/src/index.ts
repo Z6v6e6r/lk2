@@ -232,11 +232,11 @@ export function loadConfig(
     throw new Error(`Invalid application configuration: ${issues}`);
   }
 
-  if (parsed.data.APP_ENV === 'production' && parsed.data.VIVA_MODE === 'mock') {
-    throw new Error('VIVA_MODE=mock is forbidden in production');
-  }
   if (parsed.data.APP_ENV === 'production' && parsed.data.GAMES_READ_ENABLED) {
     throw new Error('GAMES_READ_ENABLED is staging-only until the Games production gate passes');
+  }
+  if (parsed.data.APP_ENV === 'production' && parsed.data.VIVA_MODE === 'mock') {
+    throw new Error('VIVA_MODE=mock is forbidden in production');
   }
   if (parsed.data.APP_ENV === 'production' && !parsed.data.AUTH_COOKIE_SECURE) {
     throw new Error('AUTH_COOKIE_SECURE=true is required in production');

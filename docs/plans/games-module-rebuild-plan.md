@@ -1,7 +1,7 @@
 # Games module rebuild plan
 
 Status: working plan
-Date: 2026-07-17
+Date: 2026-07-18
 Architecture: [Games domain](../domains/games.md) and [ADR 0010](../adr/0010-games-domain-and-card-state-model.md)
 
 ## Implementation progress
@@ -11,16 +11,18 @@ The first Phase 1 slice started on 2026-07-17 after the implementation go-ahead.
 | Slice                     | State       | Evidence                                                                 | Remaining before the gate                                               |
 | ------------------------- | ----------- | ------------------------------------------------------------------------ | ----------------------------------------------------------------------- |
 | Pure domain kernel        | Implemented | `@phub/games`; 83 domain and contract policy tests                       | product review of policies; result/cancellation authorization policy    |
-| Public discovery contract | In progress | safe runtime list/detail, strict filters and query-bound keyset cursor   | clean-PostgreSQL rerun, load evidence and production runtime gate       |
+| Public discovery contract | In progress | safe list/detail, bound cursor, PG/load and staging-mode HTTP evidence   | card UI, visual/accessibility QA and production runtime gate            |
 | User API contract         | In progress | viewer list/detail plus four roster handlers and durable operation reads | create/publish/cancel/result handlers and Commerce next-action wiring   |
 | Internal event contract   | Implemented | 19 events, 6 commands, 8 consumer routes and generated Internal types    | broker/outbox/inbox runtime integration and replay tests                |
-| Database foundation       | In progress | `0023_games_foundation.sql`; forced RLS; atomic create and roster writes | result command repository, restore rehearsal and load tests             |
+| Database foundation       | In progress | forced RLS, atomic writes, clean PG projector and 10k-card load evidence | result command repository and backup/restore rehearsal                  |
 | Roster command slice      | Implemented | join/reserve/waitlist/leave/expiry/promotion, User API and PG races      | Commerce confirmation adapter, card refresh and production runtime gate |
-| Projector and scheduler   | In progress | atomic inbox projector, monotonic cards and bounded command claims       | clean-PostgreSQL rerun, load evidence and lifecycle command handlers    |
+| Projector and scheduler   | In progress | atomic inbox projector, monotonic cards and clean PG replay evidence     | lifecycle command handlers and production runtime gate                  |
 
-The persistence and roster foundations are runnable and verified on clean PostgreSQL, but this is
-not Gate P2: Commerce confirmation, remaining commands, clean-PostgreSQL projector rerun, load
-tests, lifecycle command handlers and backup/restore evidence remain.
+The persistence, roster and read foundations are runnable and verified on clean PostgreSQL. The
+read load gate passed with 10,000 cards, 20 concurrent callers and a 200 ms local p95 target, and a
+staging-mode HTTP process returned the safe public DTO. This is still not Gate P2/P3: Commerce
+confirmation, remaining commands, card UI/visual QA, lifecycle handlers, backup/restore evidence
+and an immutable staging image promotion remain.
 
 ## 1. Target outcome
 

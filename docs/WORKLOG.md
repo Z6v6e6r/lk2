@@ -122,6 +122,29 @@
   script was prepared, but its rerun was blocked by the execution approval usage limit; the empty
   temporary database was dropped and this postcheck remains open.
 
+## 2026-07-18 — games read PostgreSQL, load and staging-mode gates
+
+- Applied all 25 migrations to a disposable `_verify` database and passed the complete roster and
+  projector scenario: one final-seat winner, durable rejection/replay, deterministic waitlist
+  promotion, one reservation expiry, projector `applied` then `duplicate`, a two-player snapshot
+  and the viewer-owned upcoming read.
+- Removed overlapping `pg` queries from the projector transaction. Participant, reservation and
+  waitlist dependencies now read sequentially on the single transaction connection.
+- Added a reproducible 10,000-card read load script. At concurrency 20 over 200 operations per
+  surface, public p95 was 85.2 ms and viewer p95 was 56.9 ms against a 200 ms target; two keyset
+  pages returned 200 unique cards.
+- Added `GAMES_READ_ENABLED=false` as a fail-closed runtime gate. It may be enabled in staging but
+  configuration rejects it in production until the production gate is explicitly lifted.
+- Started a separate staging-mode API process against the verify database and received readiness
+  `200` plus a public Games list `200` with 20 cards, a next cursor, the public cache policy and no
+  participant user UUID. The temporary process was stopped after the smoke.
+- The required full `npm run check` gate passed: formatting, lint, all TypeScript targets, OpenAPI,
+  66 test files with 364 tests, all packages/apps builds and runtime imports. The three existing
+  OpenAPI warnings remain non-blocking.
+- Dropped `phub_games_cards_20260718_verify` after the checks, confirmed it is absent and confirmed
+  the normal local PostgreSQL service remains healthy. No remote staging or production runtime was
+  changed by this verification.
+
 ## 2026-07-17 — viewer-filtered player profiles
 
 - Added the canonical `/profiles/{padlHubUserId}` User API while retaining `/profile` as the

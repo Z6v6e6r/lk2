@@ -37,8 +37,14 @@ it does not alter or delete legacy records and does not enable user-facing write
    winning user's operation is readable through tenant/actor ownership.
 8. The same verification script creates local profile/station dependencies, projects the final
    game fact twice and verifies `applied` then `duplicate`, a two-player public snapshot and a
-   viewer-owned upcoming list. This extended projector assertion must be rerun on clean PostgreSQL
-   before enabling the read runtime.
+   viewer-owned upcoming list.
+9. In the same disposable database, run `npm run games:read:load`. The default gate creates 10,000
+   future projections, verifies two unique keyset pages, then executes 200 public and 200 viewer
+   reads with concurrency 20. Both p95 values must be at most 200 ms. Override the scale only with
+   the bounded `GAMES_LOAD_*` variables and record the exact values with the release evidence.
+10. Start an isolated API process with `APP_ENV=staging` and `GAMES_READ_ENABLED=true`. Verify
+    readiness and a public list response, including cursor, cache header and absence of participant
+    PadlHub UUIDs. Stop the isolated process after the smoke.
 
 ## Isolation and safety checks
 
@@ -51,9 +57,9 @@ it does not alter or delete legacy records and does not enable user-facing write
 - Keep production Games repository injection off until Commerce can supply a durable payment next
   action. A paid reservation may be reported as `PROCESSING`, but the API must never fabricate a
   URL or claim payment success.
-- Keep public and User Games read repository injection off until the extended projector script has
-  passed on clean PostgreSQL for the release digest. An empty projection is not permission to fall
-  back to Viva, mock cards or a client-selected source.
+- `GAMES_READ_ENABLED` is false by default and rejected in `APP_ENV=production` during this rollout.
+  Enable it only in staging after the clean PostgreSQL and load gates pass. An empty projection is
+  not permission to fall back to Viva, mock cards or a client-selected source.
 - Verify due commands are claimed with `FOR UPDATE SKIP LOCKED`, `attempts < 20` and `locked_by`.
 
 ## Rollback

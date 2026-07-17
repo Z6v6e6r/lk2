@@ -761,7 +761,7 @@ export function createGameRepository(pool: Pool): GameRepository {
         // transaction never attempts overlapping client.query calls (deprecated by pg and not
         // actually parallel on the wire).
         const participants = await client.query<ProjectionParticipantRow>(
-            `select p.user_id,
+          `select p.user_id,
                     coalesce(nullif(btrim(summary.display_name), ''), 'Игрок') as display_name,
                     summary.photo_url, p.role, p.payment_state
                from games.participations p
@@ -769,22 +769,22 @@ export function createGameRepository(pool: Pool): GameRepository {
                  on summary.tenant_id = p.tenant_id and summary.user_id = p.user_id
               where p.tenant_id = $1 and p.game_id = $2 and p.state = 'ACTIVE'
               order by case p.role when 'ORGANIZER' then 0 else 1 end, p.joined_at, p.id`,
-            [input.tenantId, input.gameId],
-          );
+          [input.tenantId, input.gameId],
+        );
         const reservations = await client.query<ProjectionReservationRow>(
-            `select id, user_id, expires_at, payment_state
+          `select id, user_id, expires_at, payment_state
                from games.seat_reservations
               where tenant_id = $1 and game_id = $2 and state = 'ACTIVE'
               order by created_at, id`,
-            [input.tenantId, input.gameId],
-          );
+          [input.tenantId, input.gameId],
+        );
         const waitlist = await client.query<ProjectionWaitlistRow>(
-            `select user_id, position
+          `select user_id, position
                from games.waitlist_entries
               where tenant_id = $1 and game_id = $2 and state = 'ACTIVE'
               order by position, created_at, id`,
-            [input.tenantId, input.gameId],
-          );
+          [input.tenantId, input.gameId],
+        );
 
         let result: GameCardProjectionInput['result'];
         if (game.resultState !== 'NOT_AVAILABLE') {
