@@ -3,7 +3,11 @@ import { describe, expect, it } from 'vitest';
 import {
   buildHomeProjection,
   HOME_PROJECTION_COMPONENT_EVENT,
+  homeDashboardSchema,
   homeProjectionEventSchema,
+  homeProjectionComponentPayloadSchema,
+  normalizeHomeDashboardPayload,
+  normalizeHomeProjectionComponentPayload,
   type HomeProjectionComponentPayload,
 } from './index.js';
 
@@ -63,7 +67,12 @@ const components: readonly HomeProjectionComponentPayload[] = [
     ],
   },
   { userId, component: 'communities', componentRevision: '1', value: [] },
-  { userId, component: 'promotion', componentRevision: '3', value: null },
+  {
+    userId,
+    component: 'promotion',
+    componentRevision: '3',
+    value: { rotationEnabled: false, intervalSeconds: 6, items: [] },
+  },
   { userId, component: 'locations', componentRevision: '1', value: [] },
   {
     userId,
@@ -115,6 +124,8 @@ describe('Home projection contract and builder', () => {
           staleAt: '2026-07-15T12:05:00.000Z',
         },
         counters: { unreadChats: 3, upcomingEvents: 1, activeSubscriptions: 1 },
+        promotion: null,
+        promotions: { rotationEnabled: false, intervalSeconds: 6, items: [] },
       },
     });
   });
@@ -131,5 +142,76 @@ describe('Home projection contract and builder', () => {
     });
 
     expect(parsed.success).toBe(false);
+  });
+
+  it('reads persisted legacy community summaries during the expand/migrate rollout', () => {
+    const legacyCommunity = {
+      id: '42c05c91-da23-4dc5-bf97-3d136a2d12bd',
+      title: 'Старое сообщество',
+      description: 'Поле старого контракта',
+      memberCount: 124,
+      role: 'member',
+      unreadCount: 2,
+      accent: '#B9A1FF',
+      route: '/communities/42c05c91-da23-4dc5-bf97-3d136a2d12bd',
+    };
+    const dashboard = buildHomeProjection({
+      components,
+      sourceRevision: '10',
+      generatedAt: new Date('2026-07-15T12:00:00.000Z'),
+      ttlSeconds: 300,
+    });
+    expect(dashboard.ready).toBe(true);
+    if (!dashboard.ready) return;
+
+    const normalizedDashboard = homeDashboardSchema.parse(
+      normalizeHomeDashboardPayload({ ...dashboard.dashboard, communities: [legacyCommunity] }),
+    );
+    expect(normalizedDashboard.communities).toEqual([
+      {
+        id: legacyCommunity.id,
+        title: legacyCommunity.title,
+        logoUrl: null,
+        isVerified: false,
+        unreadChatCount: 2,
+        route: legacyCommunity.route,
+      },
+    ]);
+
+    const normalizedComponent = homeProjectionComponentPayloadSchema.parse(
+      normalizeHomeProjectionComponentPayload({
+        userId,
+        component: 'communities',
+        componentRevision: '1',
+        value: [legacyCommunity],
+      }),
+    );
+    expect(normalizedComponent.value).toEqual(normalizedDashboard.communities);
+  });
+
+  it('expands an older single promotion into a non-rotating deck', () => {
+    const legacyPromotion = {
+      id: '391e45be-5941-4668-81bc-b2ce1d73b200',
+      eyebrow: 'Акция',
+      title: 'Летняя акция',
+      description: 'Старый одиночный баннер.',
+      actionLabel: 'Подробнее',
+      route: '/promotions/summer',
+      tone: 'lime',
+      imageUrl: null,
+    };
+    const normalizedComponent = homeProjectionComponentPayloadSchema.parse(
+      normalizeHomeProjectionComponentPayload({
+        userId,
+        component: 'promotion',
+        componentRevision: '3',
+        value: legacyPromotion,
+      }),
+    );
+    expect(normalizedComponent.value).toEqual({
+      rotationEnabled: false,
+      intervalSeconds: 6,
+      items: [legacyPromotion],
+    });
   });
 });

@@ -205,6 +205,25 @@ export interface ApiErrorBody {
   readonly details?: readonly { readonly field?: string; readonly issue: string }[];
 }
 
+export const PROFILE_ACTION_POLICIES = ['AUTHORIZED', 'NOBODY'] as const;
+export type ProfileActionPolicy = (typeof PROFILE_ACTION_POLICIES)[number];
+
+export interface ProfilePrivacySettings {
+  readonly contactPolicy: ProfileActionPolicy;
+  readonly chatPolicy: ProfileActionPolicy;
+  readonly version: number;
+  readonly updatedAt: string | null;
+}
+
+export const DEFAULT_PROFILE_PRIVACY_SETTINGS: ProfilePrivacySettings = {
+  contactPolicy: 'AUTHORIZED',
+  chatPolicy: 'AUTHORIZED',
+  version: 0,
+  updatedAt: null,
+};
+
+export const PROFILE_PRIVACY_CHANGED_EVENT = 'profile.privacy.changed.v1' as const;
+
 export function isValidIdempotencyKey(value: string): boolean {
   return value.length >= 16 && value.length <= 128 && /^[A-Za-z0-9._:-]+$/.test(value);
 }

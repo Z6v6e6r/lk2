@@ -2,16 +2,36 @@ import { ApiClientError, PadlHubApiClient } from '@phub/api-sdk';
 import type {
   AuthenticatedSession as ApiAuthenticatedSession,
   ClientRoutingPlan,
+  CommunityMembershipPage,
   HomeDashboard,
+  LocationDetail,
+  LocationList,
+  NotificationInboxPage,
+  PlayerProfileView,
+  ProfilePrivacySettings,
+  ProfilePrivacyUpdateRequest,
   UserProfile,
   UserUpcomingBookings,
   UserContext as ApiUserContext,
+  WebPushConfiguration,
+  WebPushEndpointCommandResult,
+  WebPushEndpointRegistration,
 } from '@phub/api-sdk';
 export type {
   ClientRoutingPlan,
+  CommunityMembershipPage,
   HomeDashboard,
+  LocationDetail,
+  LocationList,
+  NotificationInboxPage,
+  PlayerProfileView,
+  ProfilePrivacySettings,
+  ProfilePrivacyUpdateRequest,
   UserProfile,
   UserUpcomingBookings,
+  WebPushConfiguration,
+  WebPushEndpointCommandResult,
+  WebPushEndpointRegistration,
 } from '@phub/api-sdk';
 import { maskPhone } from '@phub/auth';
 import {
@@ -78,8 +98,23 @@ export interface AuthGateway {
   readonly refreshVivaAccessToken: () => Promise<string>;
   readonly getRoutingPlan: (forceRefresh?: boolean) => Promise<ClientRoutingPlan>;
   readonly getUserProfile: (userId: string) => Promise<UserProfile>;
+  readonly getPlayerProfile: (userId: string) => Promise<PlayerProfileView>;
+  readonly getProfilePrivacy: () => Promise<ProfilePrivacySettings>;
+  readonly updateProfilePrivacy: (
+    input: ProfilePrivacyUpdateRequest,
+  ) => Promise<ProfilePrivacySettings>;
   readonly getUpcomingBookings: () => Promise<UserUpcomingBookings>;
   readonly getHomeDashboard: () => Promise<HomeDashboard>;
+  readonly listLocations: () => Promise<LocationList>;
+  readonly getLocation: (locationId: string) => Promise<LocationDetail>;
+  readonly listMyCommunities: (cursor?: string) => Promise<CommunityMembershipPage>;
+  readonly listNotifications: () => Promise<NotificationInboxPage>;
+  readonly markNotificationsRead: (throughId: string) => Promise<void>;
+  readonly getWebPushConfiguration: () => Promise<WebPushConfiguration>;
+  readonly registerWebPushEndpoint: (
+    input: WebPushEndpointRegistration,
+  ) => Promise<WebPushEndpointCommandResult>;
+  readonly revokeWebPushEndpoint: (installationId: string) => Promise<WebPushEndpointCommandResult>;
   readonly logout: () => Promise<void>;
 }
 
@@ -130,9 +165,13 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
   let vivaAccessToken: string | undefined;
   let vivaAccessExpiresAt = 0;
   let homeDashboardPromise: Promise<HomeDashboard> | undefined;
+  let locationsPromise: Promise<LocationList> | undefined;
+  let communityMembershipsPromise: Promise<CommunityMembershipPage> | undefined;
   let routingPlan: ClientRoutingPlan | undefined;
   let routingPlanPromise: Promise<ClientRoutingPlan> | undefined;
   let userProfilePromise: Promise<UserProfile> | undefined;
+  const playerProfilePromises = new Map<string, Promise<PlayerProfileView>>();
+  let profilePrivacyPromise: Promise<ProfilePrivacySettings> | undefined;
   let upcomingBookingsPromise: Promise<UserUpcomingBookings> | undefined;
 
   async function applyVivaAccess(handoffCode?: string): Promise<string> {
@@ -273,6 +312,31 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       return userProfilePromise;
     },
 
+    getPlayerProfile(userId) {
+      const cached = playerProfilePromises.get(userId);
+      if (cached) return cached;
+      const request = client.getPlayerProfile(userId).catch((error: unknown) => {
+        if (playerProfilePromises.get(userId) === request) playerProfilePromises.delete(userId);
+        throw error;
+      });
+      playerProfilePromises.set(userId, request);
+      return request;
+    },
+
+    getProfilePrivacy() {
+      profilePrivacyPromise ??= client.getProfilePrivacySettings().catch((error: unknown) => {
+        profilePrivacyPromise = undefined;
+        throw error;
+      });
+      return profilePrivacyPromise;
+    },
+
+    async updateProfilePrivacy(input) {
+      const settings = await client.updateProfilePrivacySettings(input);
+      profilePrivacyPromise = Promise.resolve(settings);
+      return settings;
+    },
+
     getUpcomingBookings() {
       upcomingBookingsPromise ??= transportExecutor
         .executeRead({
@@ -290,11 +354,55 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     },
 
     getHomeDashboard() {
-      homeDashboardPromise ??= client.getHomeDashboard().catch((error: unknown) => {
-        homeDashboardPromise = undefined;
-        throw error;
+      if (homeDashboardPromise) return homeDashboardPromise;
+      const request = client.getHomeDashboard().finally(() => {
+        if (homeDashboardPromise === request) homeDashboardPromise = undefined;
       });
-      return homeDashboardPromise;
+      homeDashboardPromise = request;
+      return request;
+    },
+
+    listLocations() {
+      if (locationsPromise) return locationsPromise;
+      const request = client.listLocations().finally(() => {
+        if (locationsPromise === request) locationsPromise = undefined;
+      });
+      locationsPromise = request;
+      return request;
+    },
+
+    getLocation(locationId) {
+      return client.getLocation(locationId);
+    },
+
+    listMyCommunities(cursor) {
+      if (cursor) return client.listMyCommunities({ limit: 20, cursor });
+      if (communityMembershipsPromise) return communityMembershipsPromise;
+      const request = client.listMyCommunities({ limit: 20 }).finally(() => {
+        if (communityMembershipsPromise === request) communityMembershipsPromise = undefined;
+      });
+      communityMembershipsPromise = request;
+      return request;
+    },
+
+    listNotifications() {
+      return client.listNotifications({ limit: 50 });
+    },
+
+    async markNotificationsRead(throughId) {
+      await client.markNotificationsRead(throughId);
+    },
+
+    getWebPushConfiguration() {
+      return client.getWebPushConfiguration();
+    },
+
+    registerWebPushEndpoint(input) {
+      return client.registerWebPushEndpoint(input);
+    },
+
+    revokeWebPushEndpoint(installationId) {
+      return client.revokeWebPushEndpoint(installationId);
     },
 
     async logout() {
@@ -302,9 +410,13 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       vivaAccessToken = undefined;
       vivaAccessExpiresAt = 0;
       homeDashboardPromise = undefined;
+      locationsPromise = undefined;
+      communityMembershipsPromise = undefined;
       routingPlan = undefined;
       routingPlanPromise = undefined;
       userProfilePromise = undefined;
+      playerProfilePromises.clear();
+      profilePrivacyPromise = undefined;
       upcomingBookingsPromise = undefined;
     },
   };

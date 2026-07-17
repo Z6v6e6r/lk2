@@ -1,0 +1,1054 @@
+paths:
+  /{tenantKey}/games:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+    get:
+      tags: [games]
+      operationId: listMyGames
+      summary: List viewer-aware game cards
+      description: |
+        Returns one tenant/user-scoped card projection version. Identity comes only from the
+        verified PadlHub JWT; phone, clientId and provider identifiers are not accepted.
+      parameters:
+        - name: scope
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [UPCOMING, HISTORY]
+            default: UPCOMING
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 20
+        - name: cursor
+          in: query
+          required: false
+          description: Opaque keyset cursor returned by the preceding page.
+          schema:
+            type: string
+            minLength: 16
+            maxLength: 512
+      responses:
+        '200':
+          description: One page of viewer-aware cards from a consistent projection revision.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GameCardPage'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+    post:
+      tags: [games]
+      operationId: createGame
+      summary: Start idempotent game creation
+      description: |
+        Commits the PadlHub command and returns a durable operation. Booking and payment provider
+        work continues asynchronously; a browser redirect never marks the operation paid.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateGameRequest'
+      responses:
+        '202':
+          $ref: '#/components/responses/GameCommandAccepted'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/GameCommandRejected'
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+
+  /{tenantKey}/games/{gameId}:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/GameId'
+    get:
+      tags: [games]
+      operationId: getGame
+      summary: Get viewer-aware game details
+      description: Returns one aggregate/card projection revision and server-computed actions.
+      responses:
+        '200':
+          description: Viewer-filtered game details.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GameCardResponse'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+
+  /{tenantKey}/games/{gameId}/publish:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - $ref: '#/components/parameters/GameId'
+    post:
+      tags: [games]
+      operationId: publishGame
+      summary: Publish a provisioned game
+      responses:
+        '200':
+          $ref: '#/components/responses/GameCommandCompleted'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/GameCommandRejected'
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+
+  /{tenantKey}/games/{gameId}/join:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - $ref: '#/components/parameters/GameId'
+    post:
+      tags: [games]
+      operationId: joinGame
+      summary: Reserve or occupy one game seat
+      description: |
+        The server locks the game and derives identity, capacity, cutoff and payment policy. The
+        caller cannot submit roster arrays or claim another user.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JoinGameRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/GameCommandCompleted'
+        '202':
+          $ref: '#/components/responses/GameCommandAccepted'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/GameCommandRejected'
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+
+  /{tenantKey}/games/{gameId}/participants/me:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - $ref: '#/components/parameters/GameId'
+    delete:
+      tags: [games]
+      operationId: leaveGame
+      summary: Leave a game as the authenticated participant
+      description: Organizers use the explicit cancellation command; identity is JWT-derived.
+      responses:
+        '200':
+          $ref: '#/components/responses/GameCommandCompleted'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/GameCommandRejected'
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+
+  /{tenantKey}/games/{gameId}/waitlist:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - $ref: '#/components/parameters/GameId'
+    post:
+      tags: [games]
+      operationId: joinGameWaitlist
+      summary: Join the server-ordered waitlist
+      responses:
+        '200':
+          $ref: '#/components/responses/GameCommandCompleted'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/GameCommandRejected'
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+
+  /{tenantKey}/games/{gameId}/waitlist/me:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - $ref: '#/components/parameters/GameId'
+    delete:
+      tags: [games]
+      operationId: leaveGameWaitlist
+      summary: Leave the waitlist as the authenticated user
+      responses:
+        '200':
+          $ref: '#/components/responses/GameCommandCompleted'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/GameCommandRejected'
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+
+  /{tenantKey}/games/{gameId}/cancel:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - $ref: '#/components/parameters/GameId'
+    post:
+      tags: [games]
+      operationId: cancelGame
+      summary: Cancel a game with an audited reason
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CancelGameRequest'
+      responses:
+        '202':
+          $ref: '#/components/responses/GameCommandAccepted'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/GameCommandRejected'
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+
+  /{tenantKey}/games/{gameId}/result-submissions:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - $ref: '#/components/parameters/GameId'
+    post:
+      tags: [games]
+      operationId: submitGameResult
+      summary: Submit an immutable result proposal
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubmitGameResultRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/GameCommandCompleted'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/GameCommandRejected'
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+
+  /{tenantKey}/games/{gameId}/result-submissions/{submissionId}/confirm:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - $ref: '#/components/parameters/GameId'
+      - $ref: '#/components/parameters/SubmissionId'
+    post:
+      tags: [games]
+      operationId: confirmGameResult
+      summary: Confirm one immutable result submission
+      responses:
+        '200':
+          $ref: '#/components/responses/GameCommandCompleted'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/GameCommandRejected'
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+
+  /{tenantKey}/games/{gameId}/result-submissions/{submissionId}/dispute:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - $ref: '#/components/parameters/GameId'
+      - $ref: '#/components/parameters/SubmissionId'
+    post:
+      tags: [games]
+      operationId: disputeGameResult
+      summary: Dispute one immutable result submission
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DisputeGameResultRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/GameCommandCompleted'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/GameCommandRejected'
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+
+  /{tenantKey}/game-operations/{operationId}:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/OperationId'
+    get:
+      tags: [games]
+      operationId: getGameOperation
+      summary: Get durable game command progress
+      responses:
+        '200':
+          description: Current operation state, safe next action and latest committed game card.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GameCommandResult'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+
+components:
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: Stable client key. Replays return the stored result; payload reuse is rejected.
+      schema:
+        type: string
+        minLength: 16
+        maxLength: 128
+        pattern: '^[A-Za-z0-9._:-]+$'
+    GameId:
+      name: gameId
+      in: path
+      required: true
+      description: Stable PadlHub game UUID.
+      schema:
+        type: string
+        format: uuid
+    SubmissionId:
+      name: submissionId
+      in: path
+      required: true
+      description: Stable PadlHub result submission UUID.
+      schema:
+        type: string
+        format: uuid
+    OperationId:
+      name: operationId
+      in: path
+      required: true
+      description: Stable PadlHub game operation UUID.
+      schema:
+        type: string
+        format: uuid
+
+  responses:
+    GameCommandAccepted:
+      description: The idempotent command was committed and durable processing continues.
+      headers:
+        X-Correlation-ID:
+          $ref: ../../common/components.yaml#/components/headers/CorrelationId
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/GameCommandResult'
+    GameCommandCompleted:
+      description: Stored result of the completed idempotent command.
+      headers:
+        X-Correlation-ID:
+          $ref: ../../common/components.yaml#/components/headers/CorrelationId
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/GameCommandResult'
+    GameCommandRejected:
+      description: The game state, revision, policy or idempotency payload conflicts with the command.
+      headers:
+        X-Correlation-ID:
+          $ref: ../../common/components.yaml#/components/headers/CorrelationId
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/GameCommandError'
+
+  schemas:
+    GameCardPage:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          maxItems: 50
+          items:
+            $ref: '#/components/schemas/GameCardView'
+        nextCursor:
+          type: [string, 'null']
+          minLength: 16
+          maxLength: 512
+    GameCardResponse:
+      type: object
+      additionalProperties: false
+      required: [game]
+      properties:
+        game:
+          $ref: '#/components/schemas/GameCardView'
+    GameCardView:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - revision
+        - surface
+        - displayState
+        - title
+        - kind
+        - visibility
+        - startsAt
+        - endsAt
+        - timezone
+        - station
+        - levelRange
+        - rosterState
+        - capacity
+        - participants
+        - priceSummary
+        - viewerRelation
+        - viewerPaymentState
+        - resultSummary
+        - badges
+        - allowedActions
+        - deepLink
+        - conversation
+      properties:
+        id:
+          type: string
+          format: uuid
+        revision:
+          type: integer
+          minimum: 0
+        surface:
+          type: string
+          enum: [MY_UPCOMING, HISTORY, INVITE]
+        displayState:
+          $ref: '#/components/schemas/GameCardDisplayState'
+        title:
+          type: string
+          minLength: 1
+          maxLength: 160
+        kind:
+          $ref: '#/components/schemas/GameKind'
+        visibility:
+          $ref: '#/components/schemas/GameVisibility'
+        startsAt:
+          type: string
+          format: date-time
+        endsAt:
+          type: string
+          format: date-time
+        timezone:
+          type: string
+          minLength: 1
+          maxLength: 64
+        station:
+          $ref: '#/components/schemas/GameStationView'
+        levelRange:
+          oneOf:
+            - $ref: '#/components/schemas/GameLevelRange'
+            - type: 'null'
+        rosterState:
+          type: string
+          enum: [OPEN, LAST_SPOT, FULL, WAITLIST_ONLY, LOCKED]
+        capacity:
+          $ref: '#/components/schemas/GameCapacityView'
+        participants:
+          type: array
+          maxItems: 4
+          items:
+            $ref: '#/components/schemas/GameParticipantView'
+        priceSummary:
+          oneOf:
+            - $ref: '#/components/schemas/GamePriceSummary'
+            - type: 'null'
+        viewerRelation:
+          type: string
+          enum: [NONE, ORGANIZER, SEAT_RESERVED, PARTICIPANT, WAITLISTED]
+        viewerPaymentState:
+          type: string
+          enum:
+            - NOT_REQUIRED
+            - REQUIRES_ACTION
+            - PROCESSING
+            - PAID
+            - FAILED
+            - EXPIRED
+            - REFUND_PENDING
+            - REFUNDED
+        resultSummary:
+          oneOf:
+            - $ref: '#/components/schemas/GameResultSummary'
+            - type: 'null'
+        badges:
+          type: array
+          uniqueItems: true
+          items:
+            type: string
+            enum: [RATING, PRIVATE, WAITLISTED, VIEWER_ORGANIZER, REFUND_PENDING]
+        allowedActions:
+          type: array
+          uniqueItems: true
+          items:
+            $ref: '#/components/schemas/GameAllowedAction'
+        deepLink:
+          type: string
+          pattern: '^/(?!/)'
+          maxLength: 2000
+        conversation:
+          oneOf:
+            - $ref: '#/components/schemas/GameConversationSummary'
+            - type: 'null'
+    GameCardDisplayState:
+      type: string
+      enum:
+        - FINDING_PLAYERS
+        - ONE_SPOT_LEFT
+        - ROSTER_READY
+        - SEAT_PAYMENT_REQUIRED
+        - STARTING_SOON
+        - REGISTRATION_CLOSED
+        - IN_PROGRESS
+        - RESULT_REQUIRED
+        - RESULT_PENDING
+        - RESULT_DISPUTED
+        - COMPLETED
+        - CANCELLED
+    GameAllowedAction:
+      type: string
+      enum:
+        - OPEN_DETAILS
+        - JOIN
+        - JOIN_WAITLIST
+        - LEAVE_WAITLIST
+        - LEAVE
+        - PAY
+        - RETRY_PAYMENT
+        - INVITE
+        - EDIT
+        - CANCEL
+        - SUBMIT_RESULT
+        - CONFIRM_RESULT
+        - DISPUTE_RESULT
+        - OPEN_CHAT
+        - VIEW_RESULT
+        - OPEN_DISPUTE
+    GameKind:
+      type: string
+      enum: [FRIENDLY, RATING, PRIVATE, COACH_GAME]
+    GameVisibility:
+      type: string
+      enum: [PUBLIC, PRIVATE, COMMUNITY]
+    GamePlayerLevel:
+      type: string
+      enum: [D, D+, C, C+, B, B+, A]
+    GameLevelRange:
+      type: object
+      additionalProperties: false
+      required: [from, to]
+      properties:
+        from:
+          oneOf:
+            - $ref: '#/components/schemas/GamePlayerLevel'
+            - type: 'null'
+        to:
+          oneOf:
+            - $ref: '#/components/schemas/GamePlayerLevel'
+            - type: 'null'
+    GameStationView:
+      type: object
+      additionalProperties: false
+      required: [id, name]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          minLength: 1
+          maxLength: 160
+        shortAddress:
+          type: [string, 'null']
+          minLength: 1
+          maxLength: 240
+    GameCapacityView:
+      type: object
+      additionalProperties: false
+      required: [total, occupied, reserved, open, waitlistCount]
+      properties:
+        total:
+          type: integer
+          enum: [2, 4]
+        occupied:
+          type: integer
+          minimum: 0
+          maximum: 4
+        reserved:
+          type: integer
+          minimum: 0
+          maximum: 4
+        open:
+          type: integer
+          minimum: 0
+          maximum: 4
+        waitlistCount:
+          type: integer
+          minimum: 0
+    GameParticipantView:
+      type: object
+      additionalProperties: false
+      required: [userId, displayName, avatarUrl, level, role]
+      properties:
+        userId:
+          type: string
+          format: uuid
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 120
+        avatarUrl:
+          type: [string, 'null']
+          format: uri
+          maxLength: 2048
+        level:
+          oneOf:
+            - $ref: '#/components/schemas/GamePlayerLevel'
+            - type: 'null'
+        role:
+          type: string
+          enum: [ORGANIZER, PLAYER]
+    GamePriceSummary:
+      type: object
+      additionalProperties: false
+      required: [amountMinor, currency]
+      properties:
+        amountMinor:
+          type: integer
+          minimum: 0
+        currency:
+          type: string
+          const: RUB
+    GameResultSummary:
+      type: object
+      additionalProperties: false
+      required: [state]
+      properties:
+        state:
+          type: string
+          enum:
+            - AWAITING_SUBMISSION
+            - PENDING_CONFIRMATION
+            - CONFIRMED
+            - DISPUTED
+            - VOID
+        sets:
+          type: array
+          minItems: 1
+          maxItems: 9
+          items:
+            $ref: '#/components/schemas/GameSetScore'
+    GameSetScore:
+      type: object
+      additionalProperties: false
+      required: [teamA, teamB]
+      properties:
+        teamA:
+          type: integer
+          minimum: 0
+          maximum: 99
+        teamB:
+          type: integer
+          minimum: 0
+          maximum: 99
+    GameConversationSummary:
+      type: object
+      additionalProperties: false
+      required: [conversationId, unreadCount]
+      properties:
+        conversationId:
+          type: string
+          format: uuid
+        unreadCount:
+          type: integer
+          minimum: 0
+    CreateGameRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - title
+        - kind
+        - visibility
+        - stationId
+        - startsAt
+        - endsAt
+        - timezone
+        - capacity
+        - paymentMode
+        - waitlistEnabled
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 160
+        kind:
+          $ref: '#/components/schemas/GameKind'
+        visibility:
+          $ref: '#/components/schemas/GameVisibility'
+        stationId:
+          type: string
+          format: uuid
+        courtId:
+          type: [string, 'null']
+          format: uuid
+        startsAt:
+          type: string
+          format: date-time
+        endsAt:
+          type: string
+          format: date-time
+        timezone:
+          type: string
+          minLength: 1
+          maxLength: 64
+        capacity:
+          type: integer
+          enum: [2, 4]
+        levelRange:
+          oneOf:
+            - $ref: '#/components/schemas/GameLevelRange'
+            - type: 'null'
+        paymentMode:
+          type: string
+          enum: [ORGANIZER_PAYS, SPLIT, SUBSCRIPTION, NO_PAYMENT]
+        waitlistEnabled:
+          type: boolean
+    JoinGameRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        expectedRevision:
+          type: integer
+          minimum: 0
+    CancelGameRequest:
+      type: object
+      additionalProperties: false
+      required: [reasonCode]
+      properties:
+        reasonCode:
+          type: string
+          enum: [ORGANIZER_REQUEST, VENUE_UNAVAILABLE, WEATHER, SAFETY, OTHER]
+        note:
+          type: [string, 'null']
+          maxLength: 500
+    SubmitGameResultRequest:
+      type: object
+      additionalProperties: false
+      required: [sets]
+      properties:
+        sets:
+          type: array
+          minItems: 1
+          maxItems: 9
+          items:
+            $ref: '#/components/schemas/GameSetScore'
+    DisputeGameResultRequest:
+      type: object
+      additionalProperties: false
+      required: [reasonCode]
+      properties:
+        reasonCode:
+          type: string
+          enum: [SCORE_INCORRECT, ROSTER_INCORRECT, GAME_NOT_PLAYED, OTHER]
+        note:
+          type: [string, 'null']
+          maxLength: 500
+    GameCommandResult:
+      type: object
+      additionalProperties: false
+      required: [commandId, operation, game, replayed]
+      properties:
+        commandId:
+          type: string
+          format: uuid
+        operation:
+          $ref: '#/components/schemas/GameOperation'
+        game:
+          oneOf:
+            - $ref: '#/components/schemas/GameCardView'
+            - type: 'null'
+        replayed:
+          type: boolean
+    GameOperation:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - type
+        - status
+        - gameId
+        - aggregateRevision
+        - createdAt
+        - updatedAt
+        - nextAction
+        - error
+      properties:
+        id:
+          type: string
+          format: uuid
+        type:
+          type: string
+          enum:
+            - CREATE_GAME
+            - PUBLISH_GAME
+            - JOIN_GAME
+            - LEAVE_GAME
+            - JOIN_WAITLIST
+            - LEAVE_WAITLIST
+            - CANCEL_GAME
+            - SUBMIT_RESULT
+            - CONFIRM_RESULT
+            - DISPUTE_RESULT
+        status:
+          type: string
+          enum: [ACCEPTED, PROCESSING, SUCCEEDED, FAILED]
+        gameId:
+          type: [string, 'null']
+          format: uuid
+        aggregateRevision:
+          type: [integer, 'null']
+          minimum: 0
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        nextAction:
+          $ref: '#/components/schemas/GameNextAction'
+        error:
+          oneOf:
+            - $ref: '#/components/schemas/GameOperationError'
+            - type: 'null'
+    GameNextAction:
+      oneOf:
+        - $ref: '#/components/schemas/GameNextActionNone'
+        - $ref: '#/components/schemas/GameNextActionPayment'
+      discriminator:
+        propertyName: type
+        mapping:
+          NONE: '#/components/schemas/GameNextActionNone'
+          OPEN_PAYMENT: '#/components/schemas/GameNextActionPayment'
+    GameNextActionNone:
+      type: object
+      additionalProperties: false
+      required: [type]
+      properties:
+        type:
+          type: string
+          const: NONE
+    GameNextActionPayment:
+      type: object
+      additionalProperties: false
+      required: [type, url, expiresAt]
+      properties:
+        type:
+          type: string
+          const: OPEN_PAYMENT
+        url:
+          type: string
+          format: uri
+          pattern: '^https://'
+          maxLength: 2048
+        expiresAt:
+          type: string
+          format: date-time
+    GameOperationError:
+      type: object
+      additionalProperties: false
+      required: [code, message]
+      properties:
+        code:
+          $ref: '#/components/schemas/GameErrorCode'
+        message:
+          type: string
+          maxLength: 500
+    GameCommandError:
+      type: object
+      additionalProperties: false
+      required: [code, message, correlationId]
+      properties:
+        code:
+          $ref: '#/components/schemas/GameErrorCode'
+        message:
+          type: string
+          maxLength: 500
+        correlationId:
+          type: string
+          pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$'
+    GameErrorCode:
+      type: string
+      enum:
+        - IDEMPOTENCY_KEY_REUSED
+        - GAME_NOT_FOUND
+        - GAME_ILLEGAL_LIFECYCLE_TRANSITION
+        - GAME_NOT_PUBLISHABLE
+        - GAME_ALREADY_PUBLISHED
+        - GAME_NOT_JOINABLE
+        - GAME_JOIN_CUTOFF_PASSED
+        - GAME_ALREADY_JOINED
+        - GAME_ALREADY_RESERVED
+        - GAME_ALREADY_WAITLISTED
+        - GAME_FULL
+        - GAME_WAITLIST_DISABLED
+        - GAME_WAITLIST_NOT_AVAILABLE
+        - GAME_NOT_LEAVABLE
+        - GAME_ORGANIZER_MUST_CANCEL
+        - GAME_NOT_WAITLISTED
+        - GAME_NOT_CANCELLABLE
+        - GAME_PAYMENT_REQUIRED
+        - GAME_RESULT_NOT_SUBMITTABLE
+        - GAME_RESULT_NOT_CONFIRMABLE
+        - GAME_RESULT_NOT_DISPUTABLE
+        - GAME_REVISION_CONFLICT
+        - GAME_OPERATION_NOT_FOUND

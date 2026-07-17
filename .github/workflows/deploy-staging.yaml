@@ -35,6 +35,8 @@ jobs:
           platforms: linux/arm64
           push: true
           tags: ghcr.io/z6v6e6r/phub-${{ matrix.service }}:sha-${{ github.sha }}
+          build-args: |
+            PHUB_RELEASE=${{ github.sha }}
           cache-from: type=gha,scope=${{ matrix.service }}
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}
       - run: |
@@ -141,6 +143,18 @@ jobs:
           SMOKE_BASE_URL: ${{ vars.STAGING_BASE_URL }}
         run: |
           curl --fail --silent --show-error "$SMOKE_BASE_URL/" | grep -q 'id="phub-app"'
+          curl --fail --silent --show-error "${SMOKE_BASE_URL%/}/manifest.json" | node -e '
+            let input = "";
+            process.stdin.setEncoding("utf8");
+            process.stdin.on("data", (chunk) => { input += chunk; });
+            process.stdin.on("end", () => {
+              const manifest = JSON.parse(input);
+              if (manifest.release !== process.env.GITHUB_SHA) {
+                console.error(`Expected web release ${process.env.GITHUB_SHA}, received ${manifest.release}`);
+                process.exit(1);
+              }
+            });
+          '
       - name: Staging smoke test
         env:
           SMOKE_BASE_URL: ${{ vars.STAGING_BASE_URL }}

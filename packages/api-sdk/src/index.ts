@@ -7,11 +7,21 @@ export type AuthenticatedSession = components['schemas']['AuthenticatedSession']
 export type AuthenticatedUser = components['schemas']['AuthenticatedUser'];
 export type UserContext = components['schemas']['UserContext'];
 export type HomeDashboard = components['schemas']['HomeDashboard'];
+export type LocationList = components['schemas']['LocationList'];
+export type LocationDetail = components['schemas']['LocationDetail'];
+export type CommunityMembershipPage = components['schemas']['CommunityMembershipPage'];
 export type ClientRoutingPlan = components['schemas']['ClientRoutingPlan'];
 export type UserProfile = components['schemas']['UserProfile'];
+export type PlayerProfileView = components['schemas']['PlayerProfileView'];
+export type ProfileActionCapability = components['schemas']['ProfileActionCapability'];
+export type ProfilePrivacySettings = components['schemas']['ProfilePrivacySettings'];
+export type ProfilePrivacyUpdateRequest = components['schemas']['ProfilePrivacyUpdateRequest'];
 export type UserUpcomingBookings = components['schemas']['UserUpcomingBookings'];
 export type NotificationInboxPage = components['schemas']['NotificationInboxPage'];
 export type NotificationReadCursorResult = components['schemas']['NotificationReadCursorResult'];
+export type WebPushConfiguration = components['schemas']['WebPushConfiguration'];
+export type WebPushEndpointRegistration = components['schemas']['WebPushEndpointRegistration'];
+export type WebPushEndpointCommandResult = components['schemas']['WebPushEndpointCommandResult'];
 
 export type RequestAuthMode = 'none' | 'required';
 export type SessionIntent = 'refresh' | 'logout';
@@ -282,12 +292,51 @@ export class PadlHubApiClient {
     return this.request<UserProfile>('/profile');
   }
 
+  public getPlayerProfile(userId: string): Promise<PlayerProfileView> {
+    return this.request<PlayerProfileView>(`/profiles/${encodeURIComponent(userId)}`);
+  }
+
+  public getProfilePrivacySettings(): Promise<ProfilePrivacySettings> {
+    return this.request<ProfilePrivacySettings>('/profile/privacy');
+  }
+
+  public updateProfilePrivacySettings(
+    input: ProfilePrivacyUpdateRequest,
+  ): Promise<ProfilePrivacySettings> {
+    const idempotencyKey = createCorrelationId();
+    return this.retryOnceOnNetworkFailure(() =>
+      this.request<ProfilePrivacySettings>('/profile/privacy', {
+        method: 'PUT',
+        idempotencyKey,
+        body: jsonRequestBody(input),
+      }),
+    );
+  }
+
   public getUpcomingBookings(): Promise<UserUpcomingBookings> {
     return this.request<UserUpcomingBookings>('/bookings/upcoming');
   }
 
   public getHomeDashboard(): Promise<HomeDashboard> {
     return this.request<HomeDashboard>('/home');
+  }
+
+  public listLocations(): Promise<LocationList> {
+    return this.request<LocationList>('/locations');
+  }
+
+  public getLocation(locationId: string): Promise<LocationDetail> {
+    return this.request<LocationDetail>(`/locations/${encodeURIComponent(locationId)}`);
+  }
+
+  public listMyCommunities(
+    input: { readonly limit?: number; readonly cursor?: string } = {},
+  ): Promise<CommunityMembershipPage> {
+    const query = new URLSearchParams();
+    if (input.limit !== undefined) query.set('limit', String(input.limit));
+    if (input.cursor) query.set('cursor', input.cursor);
+    const suffix = query.size > 0 ? `?${query.toString()}` : '';
+    return this.request<CommunityMembershipPage>(`/communities/mine${suffix}`);
   }
 
   public listNotifications(
@@ -313,6 +362,36 @@ export class PadlHubApiClient {
         idempotencyKey,
         body: jsonRequestBody({ throughId }),
       }),
+    );
+  }
+
+  public getWebPushConfiguration(): Promise<WebPushConfiguration> {
+    return this.request<WebPushConfiguration>('/notification-endpoints/web/config');
+  }
+
+  public registerWebPushEndpoint(
+    input: WebPushEndpointRegistration,
+  ): Promise<WebPushEndpointCommandResult> {
+    const idempotencyKey = createCorrelationId();
+    return this.retryOnceOnNetworkFailure(() =>
+      this.request<WebPushEndpointCommandResult>('/notification-endpoints/web', {
+        method: 'POST',
+        idempotencyKey,
+        body: jsonRequestBody(input),
+      }),
+    );
+  }
+
+  public revokeWebPushEndpoint(installationId: string): Promise<WebPushEndpointCommandResult> {
+    const idempotencyKey = createCorrelationId();
+    return this.retryOnceOnNetworkFailure(() =>
+      this.request<WebPushEndpointCommandResult>(
+        `/notification-endpoints/web/${encodeURIComponent(installationId)}`,
+        {
+          method: 'DELETE',
+          idempotencyKey,
+        },
+      ),
     );
   }
 

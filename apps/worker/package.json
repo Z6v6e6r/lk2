@@ -13,16 +13,20 @@
     "@aws-sdk/client-s3": "3.1088.0",
     "@aws-sdk/s3-request-presigner": "3.1088.0",
     "@phub/auth": "0.1.0",
+    "@phub/communities": "0.1.0",
     "@phub/config": "0.1.0",
     "@phub/database": "0.1.0",
     "@phub/domain": "0.1.0",
     "@phub/home-projection": "0.1.0",
+    "@phub/locations": "0.1.0",
     "@phub/notifications": "0.1.0",
+    "zod": "4.4.3",
     "@phub/observability": "0.1.0",
     "@phub/viva-adapter": "0.1.0",
     "amqplib": "2.0.1",
     "ioredis": "5.11.1",
     "pg": "8.22.0",
-    "sharp": "0.35.3"
+    "sharp": "0.35.3",
+    "web-push": "3.6.7"
   }
 }

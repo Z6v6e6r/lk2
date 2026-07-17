@@ -11,6 +11,7 @@ interface TenantRow extends QueryResultRow {
 
 interface RuntimeRow extends QueryResultRow {
   readonly in_app_enabled: boolean;
+  readonly web_push_enabled: boolean;
 }
 
 function argument(name: string): string | undefined {
@@ -26,7 +27,8 @@ if (!connectionString) throw new Error('DATABASE_URL is required');
 
 const tenantKey = argument('tenant-key');
 const actorId = argument('actor-id');
-const inApp = argument('in-app');
+const inApp = argument('in-app') ?? 'keep';
+const webPush = argument('web-push') ?? 'keep';
 const confirm = argument('confirm');
 if (!tenantKey || !TENANT_KEY_PATTERN.test(tenantKey)) {
   throw new Error('--tenant-key must be a valid PadlHub tenant key');
@@ -34,9 +36,16 @@ if (!tenantKey || !TENANT_KEY_PATTERN.test(tenantKey)) {
 if (!actorId || !UUID_PATTERN.test(actorId)) {
   throw new Error('--actor-id must be an active PadlHub user UUID in the tenant');
 }
-if (inApp !== 'on' && inApp !== 'off') throw new Error('--in-app must be on or off');
+if (inApp !== 'on' && inApp !== 'off' && inApp !== 'keep') {
+  throw new Error('--in-app must be on, off or keep');
+}
+if (webPush !== 'on' && webPush !== 'off' && webPush !== 'keep') {
+  throw new Error('--web-push must be on, off or keep');
+}
+if (inApp === 'keep' && webPush === 'keep') {
+  throw new Error('At least one of --in-app or --web-push must be on or off');
+}
 
-const desired = inApp === 'on';
 const pool = createDatabasePool(connectionString);
 try {
   const tenant = await pool.query<TenantRow>(
@@ -56,19 +65,25 @@ try {
     if (actor.rowCount === 0) throw new Error('Actor is not an active user in the tenant');
     return queryOne<RuntimeRow>(
       client,
-      `select in_app_enabled
+      `select in_app_enabled, web_push_enabled
          from notifications.tenant_runtime_settings
         where tenant_id = $1`,
       [tenantId],
     );
   });
+  const currentInAppEnabled = current?.in_app_enabled ?? false;
+  const currentWebPushEnabled = current?.web_push_enabled ?? false;
+  const desiredInAppEnabled = inApp === 'keep' ? currentInAppEnabled : inApp === 'on';
+  const desiredWebPushEnabled = webPush === 'keep' ? currentWebPushEnabled : webPush === 'on';
   const preview = {
     mode: confirm === CONFIRMATION_TOKEN ? 'apply' : 'dry-run',
     tenantKey,
     tenantId,
     actorId,
-    currentInAppEnabled: current?.in_app_enabled ?? false,
-    desiredInAppEnabled: desired,
+    currentInAppEnabled,
+    desiredInAppEnabled,
+    currentWebPushEnabled,
+    desiredWebPushEnabled,
   };
   if (confirm !== CONFIRMATION_TOKEN) {
     process.stdout.write(`${JSON.stringify(preview, null, 2)}\n`);
@@ -89,7 +104,7 @@ try {
 
       const lockedCurrent = await queryOne<RuntimeRow>(
         client,
-        `select in_app_enabled
+        `select in_app_enabled, web_push_enabled
            from notifications.tenant_runtime_settings
           where tenant_id = $1
           for update`,
@@ -98,13 +113,14 @@ try {
 
       await client.query(
         `insert into notifications.tenant_runtime_settings (
-           tenant_id, in_app_enabled, updated_by
-         ) values ($1, $2, $3)
+           tenant_id, in_app_enabled, web_push_enabled, updated_by
+         ) values ($1, $2, $3, $4)
          on conflict (tenant_id) do update set
            in_app_enabled = excluded.in_app_enabled,
+           web_push_enabled = excluded.web_push_enabled,
            updated_by = excluded.updated_by,
            updated_at = now()`,
-        [tenantId, desired, actorId],
+        [tenantId, desiredInAppEnabled, desiredWebPushEnabled, actorId],
       );
       await client.query(
         `insert into audit.audit_log (
@@ -116,8 +132,14 @@ try {
           tenantId,
           actorId,
           `notification-runtime-${Date.now()}`,
-          JSON.stringify({ inAppEnabled: lockedCurrent?.in_app_enabled ?? false }),
-          JSON.stringify({ inAppEnabled: desired }),
+          JSON.stringify({
+            inAppEnabled: lockedCurrent?.in_app_enabled ?? false,
+            webPushEnabled: lockedCurrent?.web_push_enabled ?? false,
+          }),
+          JSON.stringify({
+            inAppEnabled: desiredInAppEnabled,
+            webPushEnabled: desiredWebPushEnabled,
+          }),
         ],
       );
     });

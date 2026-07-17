@@ -80,7 +80,10 @@ routes. It also exposes these application routes:
 
 The web image is built in CI for `linux/arm64`, pinned by digest in the release
 file, and served by an internal Nginx container. The Jetson never builds the
-client and has no direct web-container port published.
+client and has no direct web-container port published. CI passes the deployed
+commit SHA into the web build as `PHUB_RELEASE`; the post-deploy gate reads
+`/manifest.json` through public ingress and requires its `release` field to
+match the same GitHub commit before the release can succeed.
 
 ## Management access
 

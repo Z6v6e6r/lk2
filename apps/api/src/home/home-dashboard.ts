@@ -26,6 +26,17 @@ export function buildMockHomeDashboard(input: HomeDashboardInput) {
   const canManageTournaments =
     input.roles.some((role) => ['admin', 'manager'].includes(role)) ||
     input.permissions.includes('tournaments.manage');
+  const promotion = {
+    id: '391e45be-5941-4668-81bc-b2ce1d73b200',
+    eyebrow: 'Акция',
+    title: 'Лето. Падел. Дружба.',
+    description: 'Летняя серия игр, турниров и специальных предложений.',
+    actionLabel: 'Все акции',
+    route: '/promotions',
+    tone: 'lime' as const,
+    imageUrl: null,
+    mobileImageUrl: null,
+  };
 
   return {
     snapshot: {
@@ -113,46 +124,33 @@ export function buildMockHomeDashboard(input: HomeDashboardInput) {
       {
         id: '42c05c91-da23-4dc5-bf97-3d136a2d12bd',
         title: 'Padel Friends',
-        description: 'Игры, встречи и новые партнёры',
-        memberCount: 124,
-        role: 'member' as const,
-        unreadCount: 2,
-        accent: '#B9A1FF',
         logoUrl: null,
+        isVerified: true,
+        unreadChatCount: 2,
         route: '/communities/42c05c91-da23-4dc5-bf97-3d136a2d12bd',
       },
       {
         id: 'c522103f-05aa-4ef1-a3a4-645d9a78b397',
         title: 'Команда Север',
-        description: 'Собираемся по будням после работы',
-        memberCount: 38,
-        role: 'admin' as const,
-        unreadCount: 1,
-        accent: '#C9F66F',
         logoUrl: null,
+        isVerified: false,
+        unreadChatCount: 1,
         route: '/communities/c522103f-05aa-4ef1-a3a4-645d9a78b397',
       },
       {
         id: '92e25178-32e4-4fed-8964-5e758f858b0e',
         title: 'Турнирный клуб',
-        description: 'Рейтинговые матчи и турниры',
-        memberCount: 86,
-        role: 'member' as const,
-        unreadCount: 0,
-        accent: '#8EDDC4',
         logoUrl: null,
+        isVerified: true,
+        unreadChatCount: 0,
         route: '/communities/92e25178-32e4-4fed-8964-5e758f858b0e',
       },
     ],
-    promotion: {
-      id: '391e45be-5941-4668-81bc-b2ce1d73b200',
-      eyebrow: 'Акция',
-      title: 'Лето. Падел. Дружба.',
-      description: 'Летняя серия игр, турниров и специальных предложений.',
-      actionLabel: 'Все акции',
-      route: '/promotions',
-      tone: 'lime' as const,
-      imageUrl: null,
+    promotion,
+    promotions: {
+      rotationEnabled: false,
+      intervalSeconds: 6,
+      items: [promotion],
     },
     locations: [
       {

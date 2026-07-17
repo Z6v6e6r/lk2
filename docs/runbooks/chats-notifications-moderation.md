@@ -56,9 +56,179 @@ npm run notifications:runtime:set -- \
   --confirm=APPLY_NOTIFICATION_RUNTIME
 ```
 
-The command validates the actor inside the tenant, changes only the in-app gate and appends an audit
-record. Web/APNs/FCM gates remain off. Use the same command with `--in-app=off` for the producer and
-User API rollback before draining the projector queue.
+The command validates the actor inside the tenant, preserves every gate passed as `keep` or omitted,
+and appends an audit record. Use `--in-app=off` for the producer and User API rollback before
+draining the projector queue.
+
+### Web Push sandbox gate
+
+Generate one VAPID key pair and keep it stable for the lifetime of existing subscriptions. Store
+the private key and the 32-byte endpoint-encryption key in the runtime secret manager; never put
+them in Git, a client bundle or the provider-account row. Before enabling a tenant, deploy API and
+worker with:
+
+```text
+WEB_PUSH_ENABLED=true
+WEB_PUSH_ENVIRONMENT=SANDBOX
+WEB_PUSH_APP_ID=padlhub-web
+WEB_PUSH_VAPID_SUBJECT=mailto:<operations-address>
+WEB_PUSH_VAPID_PUBLIC_KEY=<public-vapid-key>
+WEB_PUSH_VAPID_PRIVATE_KEY=<secret-manager-value>
+NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS={"v1":"<32-byte-base64-key>"}
+NOTIFICATION_ENDPOINT_ACTIVE_KEY_ID=v1
+```
+
+For local Docker Compose, create protected files outside the repository and a Compose override that
+mounts them as Docker secrets. The command refuses to overwrite an existing key set:
+
+```bash
+npm run notifications:web-push:secrets:provision -- \
+  --directory=/Users/<operator>/.config/padlhub/secrets/web-push-local \
+  --subject=mailto:<operations-address>
+
+docker compose \
+  -f compose.yaml \
+  -f /Users/<operator>/.config/padlhub/secrets/web-push-local/compose.web-push.yaml \
+  config
+```
+
+The runtime also accepts `WEB_PUSH_VAPID_PRIVATE_KEY_FILE` and
+`NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS_FILE`. Direct secret values remain supported for external
+secret-injection systems, but must not be written to shared environment files.
+
+Preview and then apply the non-secret provider-account record:
+
+```bash
+npm run notifications:web-push:provider:set -- \
+  --tenant-key=local-padel \
+  --actor-id=<padlhub-user-uuid> \
+  --state=on \
+  --app-id=padlhub-web \
+  --environment=SANDBOX
+
+npm run notifications:web-push:provider:set -- \
+  --tenant-key=local-padel \
+  --actor-id=<padlhub-user-uuid> \
+  --state=on \
+  --app-id=padlhub-web \
+  --environment=SANDBOX \
+  --confirm=APPLY_WEB_PUSH_PROVIDER
+```
+
+Only after the API capability route reports the expected provider state, preview and apply the
+tenant gate without changing in-app delivery:
+
+```bash
+npm run notifications:runtime:set -- \
+  --tenant-key=local-padel \
+  --actor-id=<padlhub-user-uuid> \
+  --web-push=on
+
+npm run notifications:runtime:set -- \
+  --tenant-key=local-padel \
+  --actor-id=<padlhub-user-uuid> \
+  --web-push=on \
+  --confirm=APPLY_NOTIFICATION_RUNTIME
+```
+
+Rollback order is tenant gate off first, then provider account off. Keep `WEB_PUSH_ENABLED=true`
+while already-created jobs reach a terminal state; disable the global flag only for a process-wide
+incident. `PROVIDER_ACCEPTED` is not a display or open receipt. The current Web slice does not yet
+collect client `DISPLAYED`/`OPENED` receipts.
+
+After enablement, verify the live loopback API without exposing JWT or subscription material:
+
+```bash
+npm run notifications:web-push:live-smoke -- \
+  --tenant-key=local-padel \
+  --tenant-id=<padlhub-tenant-uuid> \
+  --user-id=<active-padlhub-user-uuid>
+```
+
+The smoke checks capability, encrypted registration, idempotent replay, revocation and durable
+command state. It uses a synthetic endpoint and does not create a delivery; final provider
+acceptance/display requires a user-granted browser subscription from the `/notifications` screen.
+
+### CUP manual notification gate
+
+The CUP client uses the same HttpOnly PadlHub refresh session but requests an access token with the
+dedicated `phub-admin` audience. Grant access only through the audited dry-run/apply command; never
+put an admin allowlist in frontend code or issue Admin API tokens to every authenticated user.
+
+When the local API must keep `VIVA_MODE=sandbox` for real projections, a single synthetic CUP OTP
+may be enabled without changing normal user authentication:
+
+```text
+APP_ENV=local
+CUP_DEV_AUTH_ENABLED=true
+CUP_DEV_AUTH_PHONE_E164=<one-explicit-local-operator-phone>
+CUP_DEV_AUTH_OTP_CODE=<four-digit-local-code>
+```
+
+Configuration rejects this switch outside `APP_ENV=local`. The bypass applies only to requests
+with platform `cup-admin`, resolves exactly one existing active PadlHub user by the configured
+phone and still requires role `admin` plus `notifications.manage`. It never creates a user from a
+phone and never bypasses Admin API authorization. Keep the switch disabled in shared staging and
+production.
+
+Preview:
+
+```bash
+npm run user:access:set -- \
+  --tenant-key=local-padel \
+  --actor-id=<active-operator-user-uuid> \
+  --user-id=<target-operator-user-uuid> \
+  --roles=client,admin \
+  --permissions=profile.read,notifications.manage
+```
+
+Apply after reviewing current and desired access:
+
+```bash
+npm run user:access:set -- \
+  --tenant-key=local-padel \
+  --actor-id=<active-operator-user-uuid> \
+  --user-id=<target-operator-user-uuid> \
+  --roles=client,admin \
+  --permissions=profile.read,notifications.manage \
+  --confirm=APPLY_USER_ACCESS
+```
+
+The canonical local operator surface is the `phab-api-local` CUP at
+`http://127.0.0.1:3001/api/ui/admin`. Its built-in **Notifications** tab calls the PadlHub Admin API
+directly from the browser. Configure the CUP container with:
+
+```text
+PADLHUB_NOTIFICATION_API_BASE_URL=http://127.0.0.1:3000
+PADLHUB_NOTIFICATION_TENANT_KEY=local-padel
+```
+
+The PadlHub API must allow both `http://localhost:3001` and `http://127.0.0.1:3001` in
+`CORS_ORIGINS`. Start API/worker with the Web Push secret override first, then rebuild the local CUP
+from `/Users/<operator>/Desktop/ph-ab`:
+
+```bash
+docker compose \
+  -f compose.yaml \
+  -f /Users/<operator>/.config/padlhub/secrets/web-push-local/compose.web-push.yaml \
+  up -d api worker
+
+docker compose -f deploy/docker-compose.local.yml up -d --build phab-api-local
+```
+
+The standalone `apps/cup-admin` client on port `5174` remains a development harness, not the active
+CUP entry point. Open the local CUP on port `3001` and verify that Web Push and in-app reflect live
+capability, while Android and iOS remain disabled until the FCM/APNs adapters and provider
+credentials exist. Resolve a known internal phone, send one test campaign, then verify:
+
+- one `notifications.admin_campaigns` row and one recipient row;
+- one inbox item when `IN_APP` is selected;
+- one pending push delivery per active Web endpoint, eventually `SENT` or a stable failure;
+- the same `Idempotency-Key` returns the original campaign with `replayed=true`;
+- logs and RabbitMQ contain no title, body, phone or endpoint material.
+
+Revoke access by applying the desired non-admin roles/permissions. Disable the affected tenant
+channel before stopping the delivery worker during an incident.
 
 ## Required smoke tests
 
@@ -70,12 +240,18 @@ User API rollback before draining the projector queue.
 - Submit the same connector webhook twice and confirm one canonical message/external mapping.
 - Register, rotate and invalidate one Web Push subscription, APNs token and FCM token. Confirm a
   provider acceptance is not shown as `DISPLAYED` or `OPENED` until a client receipt arrives.
+- For Web Push, verify `GET /notification-endpoints/web/config`, registration replay with the same
+  `Idempotency-Key`, conflict with a reused key and different subscription, logout revocation, a
+  synthetic accepted send, retryable provider failure and HTTP 404/410 endpoint invalidation.
 - Trigger one notification twice with the same source event/dedupe key; create one intent.
 - Read `GET /user/api/v1/{tenantKey}/notifications`; verify newest-first pagination, a correct
   tenant/user-scoped unread count and `Cache-Control: no-store`.
 - Repeat `PUT /user/api/v1/{tenantKey}/notifications/read-cursor` with the same `Idempotency-Key`;
   verify the stored result is replayed. Reuse that key with another item and expect the stable
   `IDEMPOTENCY_KEY_REUSED` conflict.
+- Use a `phub-api` token against Admin API and expect 401; use a `phub-admin` token without
+  `notifications.manage` and expect 403. Resolve recipients by phone and verify only masked values
+  return. Repeat a manual campaign with the same key and verify one campaign/intent/delivery set.
 - Submit the same external moderation signal twice; create one case. Confirm the external service
   cannot redact a message or block a user directly.
 - Apply and reverse/expire quarantine through an authorized CUP account and inspect the immutable

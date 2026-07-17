@@ -347,6 +347,44 @@ describe('PadlHubApiClient authentication boundary', () => {
   });
 });
 
+describe('PadlHubApiClient profile privacy boundary', () => {
+  it('uses one idempotency key when a privacy update is retried after a network failure', async () => {
+    const calls: Array<{ input: Parameters<typeof fetch>[0]; init?: RequestInit }> = [];
+    let attempt = 0;
+    const fetchImplementation: typeof fetch = (input, init) => {
+      calls.push({ input, ...(init === undefined ? {} : { init }) });
+      attempt += 1;
+      if (attempt === 1) return Promise.reject(new TypeError('temporary network failure'));
+      return Promise.resolve(
+        jsonResponse({
+          contactPolicy: 'AUTHORIZED',
+          chatPolicy: 'NOBODY',
+          version: 2,
+          updatedAt: '2026-07-17T12:00:00.000Z',
+        }),
+      );
+    };
+    const client = createClient(fetchImplementation, {
+      initialAccessToken: authenticatedSession.accessToken,
+    });
+
+    await client.updateProfilePrivacySettings({
+      expectedVersion: 1,
+      contactPolicy: 'AUTHORIZED',
+      chatPolicy: 'NOBODY',
+    });
+
+    expect(calls).toHaveLength(2);
+    expect(requestUrl(calls[0]?.input ?? '')).toBe(
+      'https://api.padlhub.test/user/api/v1/local-padel/profile/privacy',
+    );
+    const firstHeaders = new Headers(calls[0]?.init?.headers);
+    const secondHeaders = new Headers(calls[1]?.init?.headers);
+    expect(firstHeaders.get('Idempotency-Key')).toBeTruthy();
+    expect(secondHeaders.get('Idempotency-Key')).toBe(firstHeaders.get('Idempotency-Key'));
+  });
+});
+
 describe('PadlHubApiClient notification boundary', () => {
   it('uses the canonical inbox query and an idempotent read-cursor command', async () => {
     const calls: Array<{ input: Parameters<typeof fetch>[0]; init?: RequestInit }> = [];
@@ -384,5 +422,80 @@ describe('PadlHubApiClient notification boundary', () => {
     expect(JSON.parse(stringRequestBody(calls[1]?.init?.body))).toEqual({
       throughId: '11111111-1111-4111-8111-111111111111',
     });
+  });
+
+  it('registers and revokes one Web Push installation through retry-safe commands', async () => {
+    const calls: Array<{ input: Parameters<typeof fetch>[0]; init?: RequestInit }> = [];
+    const installationId = '22222222-2222-4222-8222-222222222222';
+    const fetchImplementation: typeof fetch = (input, init) => {
+      calls.push({ input, ...(init === undefined ? {} : { init }) });
+      const url = requestUrl(input);
+      if (url.endsWith('/config')) {
+        return Promise.resolve(
+          jsonResponse({ enabled: true, publicKey: 'public-vapid-key-value' }),
+        );
+      }
+      return Promise.resolve(
+        jsonResponse({
+          outcome: 'updated',
+          endpointId: '33333333-3333-4333-8333-333333333333',
+          installationId,
+          status: init?.method === 'DELETE' ? 'REVOKED' : 'ACTIVE',
+          replayed: false,
+        }),
+      );
+    };
+    const client = createClient(fetchImplementation, {
+      initialAccessToken: authenticatedSession.accessToken,
+    });
+
+    await client.getWebPushConfiguration();
+    await client.registerWebPushEndpoint({
+      installationId,
+      subscription: {
+        endpoint: 'https://push.example.test/subscription/abc',
+        expirationTime: null,
+        keys: { p256dh: 'B'.repeat(65), auth: 'a'.repeat(22) },
+      },
+    });
+    await client.revokeWebPushEndpoint(installationId);
+
+    expect(requestUrl(calls[0]?.input ?? '')).toBe(
+      'https://api.padlhub.test/user/api/v1/local-padel/notification-endpoints/web/config',
+    );
+    expect(requestUrl(calls[1]?.input ?? '')).toBe(
+      'https://api.padlhub.test/user/api/v1/local-padel/notification-endpoints/web',
+    );
+    expect(calls[1]?.init?.method).toBe('POST');
+    expect(new Headers(calls[1]?.init?.headers).get('Idempotency-Key')).toBeTruthy();
+    expect(JSON.parse(stringRequestBody(calls[1]?.init?.body))).toMatchObject({
+      installationId,
+      subscription: { endpoint: 'https://push.example.test/subscription/abc' },
+    });
+    expect(requestUrl(calls[2]?.input ?? '')).toBe(
+      `https://api.padlhub.test/user/api/v1/local-padel/notification-endpoints/web/${installationId}`,
+    );
+    expect(calls[2]?.init?.method).toBe('DELETE');
+    expect(new Headers(calls[2]?.init?.headers).get('Idempotency-Key')).toBeTruthy();
+  });
+
+  it('loads the next page of current-user communities without sending identity selectors', async () => {
+    const calls: Array<{ input: Parameters<typeof fetch>[0]; init?: RequestInit }> = [];
+    const fetchImplementation: typeof fetch = (input, init) => {
+      calls.push({ input, ...(init === undefined ? {} : { init }) });
+      return Promise.resolve(jsonResponse({ items: [] }));
+    };
+    const client = createClient(fetchImplementation, {
+      initialAccessToken: authenticatedSession.accessToken,
+    });
+
+    await client.listMyCommunities({ limit: 20, cursor: 'opaque-community-cursor' });
+
+    const url = requestUrl(calls[0]?.input ?? '');
+    expect(url).toBe(
+      'https://api.padlhub.test/user/api/v1/local-padel/communities/mine?limit=20&cursor=opaque-community-cursor',
+    );
+    expect(url).not.toContain('phone');
+    expect(url).not.toContain('clientId');
   });
 });

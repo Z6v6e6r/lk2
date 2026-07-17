@@ -1,4 +1,5 @@
 import { loadConfig } from '@phub/config';
+import type { ProfilePrivacyRepository } from '@phub/database';
 import { createLogger } from '@phub/observability';
 import { SignJWT } from 'jose';
 import type { Pool } from 'pg';
@@ -31,11 +32,14 @@ function fakePool(): Pool {
   } as unknown as Pool;
 }
 
-async function accessToken(tenants: readonly string[] = [tenantId]): Promise<string> {
+async function accessToken(
+  tenants: readonly string[] = [tenantId],
+  permissions: readonly string[] = ['profile.read'],
+): Promise<string> {
   return new SignJWT({
     tenants,
     roles: ['client'],
-    permissions: ['profile.read'],
+    permissions,
     sid: '55555555-5555-4555-8555-555555555555',
   })
     .setProtectedHeader({ alg: 'HS256' })
@@ -253,6 +257,215 @@ describe('health endpoints', () => {
       currency: 'RUB',
       level: { assessmentRequired: false },
     });
+  });
+
+  it('loads the authenticated owner privacy policy with no-store caching', async () => {
+    const settings = {
+      contactPolicy: 'AUTHORIZED' as const,
+      chatPolicy: 'NOBODY' as const,
+      version: 2,
+      updatedAt: '2026-07-17T12:00:00.000Z',
+    };
+    const get = vi.fn().mockResolvedValue(settings);
+    const app = await buildApp({
+      config,
+      logger: createLogger('api-test', 'silent'),
+      pool: fakePool(),
+      profilePrivacyRepository: { get, update: vi.fn() },
+    });
+    apps.push(app);
+    const response = await app.inject({
+      method: 'GET',
+      url: '/user/api/v1/local-padel/profile/privacy',
+      headers: { authorization: `Bearer ${await accessToken()}` },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['cache-control']).toBe('no-store');
+    expect(response.json()).toEqual(settings);
+    expect(get).toHaveBeenCalledWith(tenantId, '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca');
+  });
+
+  it('updates owner privacy through an idempotent optimistic command', async () => {
+    const settings = {
+      contactPolicy: 'NOBODY' as const,
+      chatPolicy: 'AUTHORIZED' as const,
+      version: 3,
+      updatedAt: '2026-07-17T12:01:00.000Z',
+    };
+    const update = vi.fn<ProfilePrivacyRepository['update']>().mockResolvedValue({
+      outcome: 'applied' as const,
+      settings,
+      replayed: false,
+    });
+    const app = await buildApp({
+      config,
+      logger: createLogger('api-test', 'silent'),
+      pool: fakePool(),
+      profilePrivacyRepository: { get: vi.fn(), update },
+    });
+    apps.push(app);
+    const response = await app.inject({
+      method: 'PUT',
+      url: '/user/api/v1/local-padel/profile/privacy',
+      headers: {
+        authorization: `Bearer ${await accessToken()}`,
+        'idempotency-key': 'profile-privacy-api-test-0001',
+        'x-correlation-id': 'profile-privacy-correlation-0001',
+      },
+      payload: {
+        expectedVersion: 2,
+        contactPolicy: 'NOBODY',
+        chatPolicy: 'AUTHORIZED',
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['x-idempotent-replayed']).toBe('false');
+    expect(response.json()).toEqual(settings);
+    const updateInput = update.mock.calls[0]?.[0];
+    expect(updateInput).toMatchObject({
+      tenantId,
+      userId: '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca',
+      actorUserId: '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca',
+      idempotencyKey: 'profile-privacy-api-test-0001',
+      correlationId: 'profile-privacy-correlation-0001',
+      expectedVersion: 2,
+      contactPolicy: 'NOBODY',
+      chatPolicy: 'AUTHORIZED',
+    });
+    expect(updateInput?.requestHash).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('returns a self profile view with private account data', async () => {
+    const app = await buildApp({
+      config,
+      logger: createLogger('api-test', 'silent'),
+      pool: fakePool(),
+    });
+    apps.push(app);
+    const response = await app.inject({
+      method: 'GET',
+      url: '/user/api/v1/local-padel/profiles/49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca',
+      headers: { authorization: `Bearer ${await accessToken()}` },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      profile: {
+        userId: '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca',
+        level: { label: 'C+', value: 3.8 },
+      },
+      privateAccount: { balanceMinor: 245_000, currency: 'RUB' },
+      access: {
+        audience: 'SELF',
+        tier: 'SELF',
+        contact: { status: 'HIDDEN', reason: 'SELF_PROFILE' },
+      },
+    });
+  });
+
+  it('filters another player profile before it reaches a basic client', async () => {
+    const targetUserId = '6a81e965-c508-4321-812c-4be323606a70';
+    const app = await buildApp({
+      config,
+      logger: createLogger('api-test', 'silent'),
+      pool: fakePool(),
+    });
+    apps.push(app);
+    const response = await app.inject({
+      method: 'GET',
+      url: `/user/api/v1/local-padel/profiles/${targetUserId}`,
+      headers: { authorization: `Bearer ${await accessToken()}` },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json<{
+      profile: { level: { value?: number } };
+      privateAccount?: unknown;
+      access: { tier: string; contact: unknown; chat: unknown };
+    }>();
+    expect(body.profile.level).not.toHaveProperty('value');
+    expect(body).not.toHaveProperty('privateAccount');
+    expect(body.access).toMatchObject({
+      tier: 'BASIC',
+      contact: { status: 'LOCKED', reason: 'ACCESS_REQUIRED' },
+      chat: { status: 'LOCKED', reason: 'ACCESS_REQUIRED' },
+    });
+    expect(JSON.stringify(body)).not.toContain('0000');
+    expect(JSON.stringify(body)).not.toContain('245000');
+  });
+
+  it('exposes contact and chat actions only from server-side entitlements', async () => {
+    const targetUserId = '6a81e965-c508-4321-812c-4be323606a70';
+    const app = await buildApp({
+      config,
+      logger: createLogger('api-test', 'silent'),
+      pool: fakePool(),
+    });
+    apps.push(app);
+    const response = await app.inject({
+      method: 'GET',
+      url: `/user/api/v1/local-padel/profiles/${targetUserId}`,
+      headers: {
+        authorization: `Bearer ${await accessToken(
+          [tenantId],
+          [
+            'profile.read',
+            'profile.extended.read',
+            'profile.contact.request',
+            'chat.direct.create',
+          ],
+        )}`,
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      profile: { level: { value: 3.8 } },
+      access: {
+        audience: 'OTHER',
+        tier: 'INTERACTION',
+        contact: { status: 'AVAILABLE' },
+        chat: { status: 'AVAILABLE' },
+      },
+    });
+  });
+
+  it('lets the target privacy policy override viewer entitlements', async () => {
+    const targetUserId = '6a81e965-c508-4321-812c-4be323606a70';
+    const get = vi.fn().mockResolvedValue({
+      contactPolicy: 'NOBODY',
+      chatPolicy: 'NOBODY',
+      version: 4,
+      updatedAt: '2026-07-17T12:00:00.000Z',
+    });
+    const app = await buildApp({
+      config,
+      logger: createLogger('api-test', 'silent'),
+      pool: fakePool(),
+      profilePrivacyRepository: { get, update: vi.fn() },
+    });
+    apps.push(app);
+    const response = await app.inject({
+      method: 'GET',
+      url: `/user/api/v1/local-padel/profiles/${targetUserId}`,
+      headers: {
+        authorization: `Bearer ${await accessToken(
+          [tenantId],
+          ['profile.read', 'profile.contact.request', 'chat.direct.create'],
+        )}`,
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      access: {
+        contact: { status: 'LOCKED', reason: 'PROFILE_RESTRICTED' },
+        chat: { status: 'LOCKED', reason: 'PROFILE_RESTRICTED' },
+      },
+    });
+    expect(get).toHaveBeenCalledWith(tenantId, targetUserId);
   });
 
   it('returns upcoming bookings with PadlHub UUIDs from one projection version', async () => {

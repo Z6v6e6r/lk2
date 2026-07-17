@@ -5,13 +5,21 @@ import cookie from '@fastify/cookie';
 import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
 import type { AppConfig } from '@phub/config';
+import type { CommunityDirectoryService } from '@phub/communities';
 import { checkDatabaseReady } from '@phub/database';
 import type {
   ClientRoutingPlanRepository,
+  AdminNotificationRepository,
   HomeDashboardProjectionRepository,
+  GameRosterRepository,
+  GameRepository,
+  LocationRepository,
+  NotificationEndpointRepository,
   NotificationInboxRepository,
+  ProfilePrivacyRepository,
 } from '@phub/database';
 import { isValidIdempotencyKey, type ClientPlatform } from '@phub/domain';
+import type { NotificationEndpointCipher } from '@phub/notifications';
 import type { Logger } from 'pino';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import type Redis from 'ioredis';
@@ -19,11 +27,24 @@ import { jwtVerify, type JWTPayload } from 'jose';
 import type { Pool } from 'pg';
 
 import { registerAuthRoutes } from './auth/auth-routes.js';
+import { registerAdminNotificationRoutes } from './admin/notification-admin-routes.js';
+import { registerLocationAdminRoutes } from './admin/location-admin-routes.js';
 import type { AuthService } from './auth/auth-service.js';
+import { registerCommunityRoutes } from './communities/community-routes.js';
+import { registerGameRoutes } from './games/game-routes.js';
+import { registerGameReadRoutes } from './games/game-read-routes.js';
 import { buildMockHomeDashboard } from './home/home-dashboard.js';
-import { homeDashboardSchema, type HomeDashboard } from './home/home-dashboard-schema.js';
+import {
+  homeDashboardSchema,
+  normalizeHomeDashboardPayload,
+  type HomeDashboard,
+} from './home/home-dashboard-schema.js';
 import { sendApiError } from './http-errors.js';
+import { registerLocationRoutes } from './locations/location-routes.js';
 import { registerNotificationRoutes } from './notifications/notification-routes.js';
+import { registerWebPushRoutes } from './notifications/web-push-routes.js';
+import { registerProfilePrivacyRoutes } from './profile/profile-privacy-routes.js';
+import { buildPlayerProfileView } from './profile/profile-view.js';
 import { buildClientRoutingPlan, canUseDirectViva } from './routing/client-routing-plan.js';
 
 interface PadlHubClaims extends JWTPayload {
@@ -51,9 +72,23 @@ export interface BuildAppOptions {
   readonly pool?: Pool;
   readonly authService?: AuthService;
   readonly authDependencyReady?: () => Promise<boolean>;
+  readonly communityDirectory?: CommunityDirectoryService;
   readonly homeDashboardRepository?: Pick<HomeDashboardProjectionRepository, 'get'>;
+  readonly gameRosterRepository?: Pick<
+    GameRosterRepository,
+    'join' | 'joinWaitlist' | 'leave' | 'leaveWaitlist' | 'getOperation'
+  >;
+  readonly gameReadRepository?: Pick<
+    GameRepository,
+    'getCardProjection' | 'listPublicCardProjections' | 'listViewerCardProjections'
+  >;
   readonly clientRoutingPlanRepository?: Pick<ClientRoutingPlanRepository, 'get'>;
   readonly notificationRepository?: NotificationInboxRepository;
+  readonly notificationEndpointRepository?: NotificationEndpointRepository;
+  readonly notificationEndpointCipher?: NotificationEndpointCipher;
+  readonly adminNotificationRepository?: AdminNotificationRepository;
+  readonly locationRepository?: LocationRepository;
+  readonly profilePrivacyRepository?: ProfilePrivacyRepository;
   readonly rateLimitRedis?: Redis;
 }
 
@@ -134,7 +169,11 @@ export function requireIdempotencyKey(request: FastifyRequest, reply: FastifyRep
   return Promise.resolve();
 }
 
-async function authenticate(request: FastifyRequest, reply: FastifyReply): Promise<void> {
+async function authenticateForAudience(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  audience: string,
+): Promise<void> {
   const authorization = request.headers.authorization;
   if (!authorization?.startsWith('Bearer ')) {
     sendApiError(request, reply, 401, 'AUTH_REQUIRED', 'Требуется авторизация.');
@@ -146,7 +185,7 @@ async function authenticate(request: FastifyRequest, reply: FastifyReply): Promi
     const result = await jwtVerify(
       authorization.slice('Bearer '.length),
       new TextEncoder().encode(config.JWT_ACCESS_SECRET),
-      { issuer: config.JWT_ISSUER, audience: config.JWT_AUDIENCE, algorithms: ['HS256'] },
+      { issuer: config.JWT_ISSUER, audience, algorithms: ['HS256'] },
     );
     const payload = result.payload as Partial<PadlHubClaims>;
     if (
@@ -167,6 +206,43 @@ async function authenticate(request: FastifyRequest, reply: FastifyReply): Promi
   } catch {
     sendApiError(request, reply, 401, 'AUTH_TOKEN_INVALID', 'Сессия недействительна.');
   }
+}
+
+async function authenticate(request: FastifyRequest, reply: FastifyReply): Promise<void> {
+  return authenticateForAudience(request, reply, request.server.config.JWT_AUDIENCE);
+}
+
+async function authenticateAdmin(request: FastifyRequest, reply: FastifyReply): Promise<void> {
+  return authenticateForAudience(request, reply, request.server.config.JWT_ADMIN_AUDIENCE);
+}
+
+function authorizeNotificationAdmin(request: FastifyRequest, reply: FastifyReply): Promise<void> {
+  if (reply.sent) return Promise.resolve();
+  if (request.headers['x-app-platform'] !== 'cup-admin') {
+    sendApiError(request, reply, 403, 'ADMIN_CLIENT_REQUIRED', 'Операция доступна только из ЦУП.');
+    return Promise.resolve();
+  }
+  if (
+    !request.padlHubClaims?.roles.includes('admin') ||
+    !request.padlHubClaims.permissions.includes('notifications.manage')
+  ) {
+    sendApiError(
+      request,
+      reply,
+      403,
+      'ADMIN_PERMISSION_REQUIRED',
+      'Нет права на отправку уведомлений.',
+    );
+  }
+  return Promise.resolve();
+}
+
+function authorizeGamesPlayer(request: FastifyRequest, reply: FastifyReply): Promise<void> {
+  if (reply.sent) return Promise.resolve();
+  if (!request.padlHubClaims?.permissions.includes('games.play')) {
+    sendApiError(request, reply, 403, 'GAME_PERMISSION_REQUIRED', 'Нет права на участие в играх.');
+  }
+  return Promise.resolve();
 }
 
 async function resolveTenant(request: FastifyRequest, reply: FastifyReply): Promise<void> {
@@ -205,6 +281,42 @@ async function resolveTenant(request: FastifyRequest, reply: FastifyReply): Prom
   }
   if (!request.padlHubClaims?.tenants.includes(tenantId)) {
     sendApiError(request, reply, 403, 'TENANT_ACCESS_DENIED', 'Доступ к организации запрещён.');
+    return;
+  }
+  request.tenantId = tenantId;
+}
+
+async function resolvePublicTenant(request: FastifyRequest, reply: FastifyReply): Promise<void> {
+  if (reply.sent) return;
+  const tenantKey = (request.params as { tenantKey?: string }).tenantKey;
+  const pool = request.server.pool;
+  if (!tenantKey || !pool) {
+    sendApiError(
+      request,
+      reply,
+      503,
+      'TENANT_CONTEXT_UNAVAILABLE',
+      'Контекст организации недоступен.',
+    );
+    return;
+  }
+  if (!TENANT_KEY_PATTERN.test(tenantKey)) {
+    sendApiError(
+      request,
+      reply,
+      400,
+      'TENANT_KEY_INVALID',
+      'Некорректный идентификатор организации.',
+    );
+    return;
+  }
+  const result = await pool.query<{ id: string }>(
+    'select id from identity.tenants where tenant_key = $1 and active = true',
+    [tenantKey],
+  );
+  const tenantId = result.rows[0]?.id;
+  if (!tenantId) {
+    sendApiError(request, reply, 404, 'TENANT_NOT_FOUND', 'Организация не найдена.');
     return;
   }
   request.tenantId = tenantId;
@@ -311,6 +423,65 @@ export async function buildApp(options: BuildAppOptions) {
     authenticatedTenantHandlers: [authenticate, resolveTenant],
     commandHandlers: [authenticate, resolveTenant, requireIdempotencyKey],
   });
+  registerCommunityRoutes(app as unknown as FastifyInstance, {
+    ...(options.communityDirectory ? { service: options.communityDirectory } : {}),
+    authenticatedTenantHandlers: [authenticate, resolveTenant],
+  });
+  registerGameRoutes(app as unknown as FastifyInstance, {
+    ...(options.gameRosterRepository ? { repository: options.gameRosterRepository } : {}),
+    authenticatedTenantHandlers: [authenticate, authorizeGamesPlayer, resolveTenant],
+    commandHandlers: [authenticate, authorizeGamesPlayer, resolveTenant, requireIdempotencyKey],
+  });
+  registerGameReadRoutes(app as unknown as FastifyInstance, {
+    ...(options.gameReadRepository ? { repository: options.gameReadRepository } : {}),
+    publicTenantHandlers: [resolvePublicTenant],
+    authenticatedTenantHandlers: [authenticate, authorizeGamesPlayer, resolveTenant],
+  });
+  registerWebPushRoutes(app as unknown as FastifyInstance, {
+    ...(options.notificationEndpointRepository
+      ? { repository: options.notificationEndpointRepository }
+      : {}),
+    ...(options.notificationEndpointCipher ? { cipher: options.notificationEndpointCipher } : {}),
+    enabledGlobally: options.config.WEB_PUSH_ENABLED,
+    ...(options.config.WEB_PUSH_VAPID_PUBLIC_KEY
+      ? { publicKey: options.config.WEB_PUSH_VAPID_PUBLIC_KEY }
+      : {}),
+    selector: {
+      appId: options.config.WEB_PUSH_APP_ID,
+      environment: options.config.WEB_PUSH_ENVIRONMENT,
+    },
+    authenticatedTenantHandlers: [authenticate, resolveTenant],
+    commandHandlers: [authenticate, resolveTenant, requireIdempotencyKey],
+  });
+  registerAdminNotificationRoutes(app as unknown as FastifyInstance, {
+    ...(options.adminNotificationRepository
+      ? { repository: options.adminNotificationRepository }
+      : {}),
+    webPushGloballyEnabled: options.config.WEB_PUSH_ENABLED,
+    webPushAppId: options.config.WEB_PUSH_APP_ID,
+    webPushEnvironment: options.config.WEB_PUSH_ENVIRONMENT,
+    authenticatedTenantHandlers: [authenticateAdmin, authorizeNotificationAdmin, resolveTenant],
+    commandHandlers: [
+      authenticateAdmin,
+      authorizeNotificationAdmin,
+      resolveTenant,
+      requireIdempotencyKey,
+    ],
+  });
+  registerLocationAdminRoutes(app as unknown as FastifyInstance, {
+    ...(options.locationRepository ? { repository: options.locationRepository } : {}),
+    authenticatedTenantHandlers: [authenticateAdmin, resolveTenant],
+    commandHandlers: [authenticateAdmin, resolveTenant, requireIdempotencyKey],
+  });
+  registerLocationRoutes(app as unknown as FastifyInstance, {
+    ...(options.locationRepository ? { repository: options.locationRepository } : {}),
+    authenticatedTenantHandlers: [authenticate, resolveTenant],
+  });
+  registerProfilePrivacyRoutes(app as unknown as FastifyInstance, {
+    ...(options.profilePrivacyRepository ? { repository: options.profilePrivacyRepository } : {}),
+    authenticatedTenantHandlers: [authenticate, resolveTenant],
+    commandHandlers: [authenticate, resolveTenant, requireIdempotencyKey],
+  });
 
   app.get(
     '/user/api/v1/:tenantKey/routing-plan',
@@ -407,7 +578,9 @@ export async function buildApp(options: BuildAppOptions) {
           'Профиль ещё не подготовлен.',
         );
       }
-      const parsedDashboard = homeDashboardSchema.safeParse(projection.payload);
+      const parsedDashboard = homeDashboardSchema.safeParse(
+        normalizeHomeDashboardPayload(projection.payload),
+      );
       if (
         !parsedDashboard.success ||
         parsedDashboard.data.snapshot.source !== 'LOCAL_PROJECTION' ||
@@ -439,6 +612,109 @@ export async function buildApp(options: BuildAppOptions) {
           : 'private, max-age=15, stale-while-revalidate=45',
       );
       return parsedDashboard.data.profile;
+    },
+  );
+
+  app.get(
+    '/user/api/v1/:tenantKey/profiles/:userId',
+    { preHandler: [authenticate, resolveTenant] },
+    async (request, reply) => {
+      const tenantId = request.tenantId;
+      const viewerUserId = request.padlHubClaims?.sub;
+      const permissions = request.padlHubClaims?.permissions ?? [];
+      const targetUserId = (request.params as { userId?: string }).userId;
+      if (!tenantId || !viewerUserId) {
+        return sendApiError(request, reply, 401, 'AUTH_REQUIRED', 'Требуется авторизация.');
+      }
+      if (!permissions.includes('profile.read')) {
+        return sendApiError(
+          request,
+          reply,
+          403,
+          'PROFILE_READ_DENIED',
+          'Нет доступа к профилям игроков.',
+        );
+      }
+      if (!targetUserId || !UUID_PATTERN.test(targetUserId)) {
+        return sendApiError(
+          request,
+          reply,
+          400,
+          'PROFILE_ID_INVALID',
+          'Некорректный идентификатор профиля.',
+        );
+      }
+      const privacyPolicy =
+        targetUserId === viewerUserId
+          ? undefined
+          : await options.profilePrivacyRepository?.get(tenantId, targetUserId);
+
+      if (options.config.HOME_READ_MODE === 'mock') {
+        const isSelf = targetUserId === viewerUserId;
+        const user =
+          isSelf && options.authService
+            ? await options.authService.getUserContext(tenantId, viewerUserId)
+            : undefined;
+        const profile = buildMockHomeDashboard({
+          tenantId,
+          userId: targetUserId,
+          displayName: user?.displayName ?? 'Игрок ПадлХАБ',
+          phoneLast4: user?.phoneLast4 ?? '0000',
+          roles: request.padlHubClaims?.roles ?? [],
+          permissions,
+        }).profile;
+        reply.header('Cache-Control', 'private, max-age=15, stale-while-revalidate=45');
+        return buildPlayerProfileView({
+          profile,
+          viewerUserId,
+          permissions,
+          ...(privacyPolicy ? { policy: privacyPolicy } : {}),
+        });
+      }
+
+      const projection = await options.homeDashboardRepository?.get(tenantId, targetUserId);
+      if (!projection) {
+        return sendApiError(request, reply, 404, 'PROFILE_NOT_FOUND', 'Профиль игрока не найден.');
+      }
+      const parsedDashboard = homeDashboardSchema.safeParse(
+        normalizeHomeDashboardPayload(projection.payload),
+      );
+      if (
+        !parsedDashboard.success ||
+        parsedDashboard.data.snapshot.source !== 'LOCAL_PROJECTION' ||
+        parsedDashboard.data.snapshot.version !== projection.snapshotVersion ||
+        parsedDashboard.data.profile.userId !== targetUserId
+      ) {
+        return sendApiError(
+          request,
+          reply,
+          503,
+          'PROFILE_VIEW_PROJECTION_INVALID',
+          'Профиль временно недоступен.',
+        );
+      }
+      const staleAt = Date.parse(parsedDashboard.data.snapshot.staleAt);
+      if (Date.now() > staleAt + options.config.HOME_PROJECTION_MAX_STALE_SECONDS * 1_000) {
+        return sendApiError(
+          request,
+          reply,
+          503,
+          'PROFILE_VIEW_PROJECTION_STALE',
+          'Профиль обновляется.',
+        );
+      }
+      reply.header(
+        'Cache-Control',
+        Date.now() > staleAt
+          ? 'private, max-age=0, stale-while-revalidate=45'
+          : 'private, max-age=15, stale-while-revalidate=45',
+      );
+      return buildPlayerProfileView({
+        profile: parsedDashboard.data.profile,
+        viewerUserId,
+        permissions,
+        ...(privacyPolicy ? { policy: privacyPolicy } : {}),
+      });
     },
   );
 
@@ -482,7 +758,9 @@ export async function buildApp(options: BuildAppOptions) {
           'Записи ещё не подготовлены.',
         );
       }
-      const parsedDashboard = homeDashboardSchema.safeParse(projection.payload);
+      const parsedDashboard = homeDashboardSchema.safeParse(
+        normalizeHomeDashboardPayload(projection.payload),
+      );
       if (
         !parsedDashboard.success ||
         parsedDashboard.data.snapshot.source !== 'LOCAL_PROJECTION' ||
@@ -559,7 +837,9 @@ export async function buildApp(options: BuildAppOptions) {
         );
       }
 
-      const parsedDashboard = homeDashboardSchema.safeParse(projection.payload);
+      const parsedDashboard = homeDashboardSchema.safeParse(
+        normalizeHomeDashboardPayload(projection.payload),
+      );
       if (
         !parsedDashboard.success ||
         parsedDashboard.data.snapshot.source !== 'LOCAL_PROJECTION' ||

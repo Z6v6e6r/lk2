@@ -6,6 +6,7 @@ import type {
   AuthUser,
   RefreshSessionRotation,
   TenantAuthBinding,
+  UserAccessProfile,
 } from './auth-service.js';
 
 export class PostgresAuthRepository implements AuthRepository {
@@ -167,6 +168,85 @@ export class PostgresAuthRepository implements AuthRepository {
 
   public getUserContext(tenantId: string, userId: string): Promise<AuthUser | undefined> {
     return this.repository.getAuthUser(tenantId, userId);
+  }
+
+  public getUserAccessProfile(
+    tenantId: string,
+    userId: string,
+  ): Promise<UserAccessProfile | undefined> {
+    return this.withTenant(tenantId, async (client) => {
+      const result = await client.query<{
+        roles: string[];
+        permissions: string[];
+      }>(
+        `select
+           coalesce(a.roles, array['client']::text[]) as roles,
+           coalesce(a.permissions, array['profile.read']::text[]) as permissions
+         from identity.users u
+         left join identity.user_access_profiles a
+           on a.tenant_id = u.tenant_id and a.user_id = u.id
+        where u.tenant_id = $1 and u.id = $2 and u.status = 'ACTIVE'`,
+        [tenantId, userId],
+      );
+      const row = result.rows[0];
+      return row ? { roles: row.roles, permissions: row.permissions } : undefined;
+    });
+  }
+
+  public getUserByPhone(tenantId: string, phoneE164: string): Promise<AuthUser | undefined> {
+    return this.withTenant(tenantId, async (client) => {
+      const result = await client.query<{
+        id: string;
+        tenant_id: string;
+        display_name: string;
+        phone_last_4: string;
+      }>(
+        `select u.id, u.tenant_id, p.display_name, right(p.phone_e164, 4) as phone_last_4
+           from identity.users u
+           join profile.user_summaries p
+             on p.tenant_id = u.tenant_id and p.user_id = u.id
+          where u.tenant_id = $1
+            and u.status = 'ACTIVE'
+            and p.phone_e164 = $2
+          order by u.id
+          limit 2`,
+        [tenantId, phoneE164],
+      );
+      if (result.rows.length !== 1) return undefined;
+      const row = result.rows[0];
+      return row
+        ? {
+            id: row.id,
+            tenantId: row.tenant_id,
+            displayName: row.display_name,
+            phoneLast4: row.phone_last_4,
+          }
+        : undefined;
+    });
+  }
+
+  public async getRefreshSessionPrincipal(
+    tenantKey: string,
+    tokenHash: string,
+  ): Promise<{ readonly tenantId: string; readonly userId: string } | undefined> {
+    const context = await this.repository.resolveTenantAuthConfig(tenantKey);
+    if (!context) return undefined;
+    return this.withTenant(context.tenantId, async (client) => {
+      const result = await client.query<{ tenant_id: string; user_id: string }>(
+        `select rs.tenant_id, rs.user_id
+           from identity.refresh_sessions rs
+           join identity.users u
+             on u.tenant_id = rs.tenant_id and u.id = rs.user_id
+          where rs.tenant_id = $1
+            and rs.token_hash = $2
+            and rs.revoked_at is null
+            and rs.expires_at > now()
+            and u.status = 'ACTIVE'`,
+        [context.tenantId, tokenHash],
+      );
+      const row = result.rows[0];
+      return row ? { tenantId: row.tenant_id, userId: row.user_id } : undefined;
+    });
   }
 
   public saveVivaDelegation(input: {

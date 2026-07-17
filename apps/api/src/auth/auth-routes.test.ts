@@ -46,6 +46,7 @@ class FakeRepository implements AuthRepository {
   private tokenHash: string | undefined;
   private sessionId: string | undefined;
   private bindingValue: TenantAuthBinding = binding;
+  private vivaDelegationRevocationCount = 0;
   private vivaDelegation:
     | {
         issuer: string;
@@ -58,6 +59,10 @@ class FakeRepository implements AuthRepository {
 
   public setBinding(nextBinding: TenantAuthBinding): void {
     this.bindingValue = nextBinding;
+  }
+
+  public get vivaDelegationRevocations(): number {
+    return this.vivaDelegationRevocationCount;
   }
 
   public resolveTenantAuthBinding(tenantKey: string): Promise<TenantAuthBinding | undefined> {
@@ -106,11 +111,28 @@ class FakeRepository implements AuthRepository {
   }
 
   public revokeVivaDelegationForRefreshSession(): Promise<void> {
+    this.vivaDelegationRevocationCount += 1;
     return Promise.resolve();
   }
 
   public getUserContext(tenantId: string, userId: string): Promise<AuthUser | undefined> {
     return Promise.resolve(tenantId === user.tenantId && userId === user.id ? user : undefined);
+  }
+
+  public getUserByPhone(tenantId: string, phoneE164: string): Promise<AuthUser | undefined> {
+    return Promise.resolve(
+      tenantId === user.tenantId && phoneE164 === '+79990000001' ? user : undefined,
+    );
+  }
+
+  public getUserAccessProfile(): Promise<{
+    readonly roles: readonly string[];
+    readonly permissions: readonly string[];
+  }> {
+    return Promise.resolve({
+      roles: ['client', 'admin'],
+      permissions: ['profile.read', 'notifications.manage'],
+    });
   }
 
   public findRefreshSessionById(): Promise<undefined> {
@@ -391,6 +413,95 @@ describe('provider-neutral authentication routes', () => {
       },
     });
     expect(logoutResponse.statusCode).toBe(204);
+  });
+
+  it('uses the explicit local CUP code without calling Viva sandbox', async () => {
+    const cupConfig = loadConfig({
+      APP_ENV: 'local',
+      DATABASE_URL: 'postgresql://phub:test@localhost:5432/phub',
+      REDIS_URL: 'redis://localhost:6379',
+      RABBITMQ_URL: 'amqp://phub:test@localhost:5672',
+      JWT_ISSUER: 'phub-identity',
+      JWT_AUDIENCE: 'phub-api',
+      JWT_ADMIN_AUDIENCE: 'phub-admin',
+      JWT_ACCESS_SECRET: 'test-access-secret-at-least-32-characters',
+      JWT_REFRESH_SECRET: 'test-refresh-secret-at-least-32-characters',
+      VIVA_MODE: 'sandbox',
+      CUP_DEV_AUTH_ENABLED: 'true',
+      CUP_DEV_AUTH_PHONE_E164: '+79990000001',
+      CUP_DEV_AUTH_OTP_CODE: '0000',
+    });
+    const requestPhoneCode = vi.fn();
+    const verifyPhoneCode = vi.fn();
+    const repository = new FakeRepository();
+    const authService = new AuthService({
+      config: cupConfig,
+      repository,
+      challengeStore: new MemoryAuthChallengeStore(),
+      providers: new Map([
+        [
+          'VIVA',
+          {
+            key: 'VIVA' as const,
+            requestPhoneCode,
+            verifyPhoneCode,
+          },
+        ],
+      ]),
+    });
+    const app = await buildApp({
+      config: cupConfig,
+      logger: createLogger('api-cup-dev-auth-test', 'silent'),
+      authService,
+    });
+    apps.push(app);
+
+    const challengeResponse = await app.inject({
+      method: 'POST',
+      url: '/user/api/v1/local-padel/auth/challenges',
+      headers: {
+        'idempotency-key': 'cup-dev-challenge-test-0001',
+        'x-app-platform': 'cup-admin',
+      },
+      payload: { method: 'phone_otp', phone: '+79990000001' },
+    });
+    expect(challengeResponse.statusCode).toBe(202);
+    const challenge = challengeResponse.json<{ challengeId: string }>();
+
+    const verifyResponse = await app.inject({
+      method: 'POST',
+      url: `/user/api/v1/local-padel/auth/challenges/${challenge.challengeId}/verify`,
+      headers: {
+        'idempotency-key': 'cup-dev-verify-test-000001',
+        'x-app-platform': 'cup-admin',
+      },
+      payload: { code: '0000' },
+    });
+
+    expect(verifyResponse.statusCode).toBe(200);
+    expect(verifyResponse.json()).toMatchObject({
+      context: {
+        userId: user.id,
+        roles: ['client', 'admin'],
+        permissions: ['profile.read', 'notifications.manage'],
+      },
+    });
+    expect(requestPhoneCode).not.toHaveBeenCalled();
+    expect(verifyPhoneCode).not.toHaveBeenCalled();
+
+    const cookie = String(verifyResponse.headers['set-cookie']).split(';')[0];
+    const logoutResponse = await app.inject({
+      method: 'DELETE',
+      url: '/user/api/v1/local-padel/auth/session',
+      headers: {
+        cookie,
+        'idempotency-key': 'cup-dev-logout-test-000001',
+        'x-app-platform': 'cup-admin',
+        'x-session-intent': 'logout',
+      },
+    });
+    expect(logoutResponse.statusCode).toBe(204);
+    expect(repository.vivaDelegationRevocations).toBe(0);
   });
 
   it('allows only one concurrent verification to consume a challenge', async () => {

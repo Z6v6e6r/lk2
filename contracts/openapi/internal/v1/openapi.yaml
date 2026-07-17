@@ -10,7 +10,14 @@ servers:
   - url: https://internal.padlhub.ru/internal/api/v1
 security:
   - PadlHubInternalJwt: []
-paths: {}
+tags:
+  - name: games
+    description: Service-only Games commands and outbox diagnostics.
+paths:
+  /{tenantKey}/game-commands:
+    $ref: ./games.yaml#/paths/~1{tenantKey}~1game-commands
+  /{tenantKey}/game-events/{eventId}:
+    $ref: ./games.yaml#/paths/~1{tenantKey}~1game-events~1{eventId}
 components:
   securitySchemes:
     PadlHubInternalJwt:

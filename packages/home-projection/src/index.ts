@@ -1,3 +1,4 @@
+import { communitySummarySchema } from '@phub/communities';
 import { z } from 'zod';
 
 const uuid = z.string().uuid();
@@ -5,6 +6,19 @@ const dateTime = z.string().datetime({ offset: true });
 const route = z.string().startsWith('/');
 const nullableUrl = z.string().url().nullable();
 const positiveRevision = z.string().regex(/^[1-9]\d*$/);
+const promotionHref = z
+  .string()
+  .min(1)
+  .max(4_000)
+  .refine((value) => {
+    if (/^(?:\/|#|mailto:|tel:)/i.test(value)) return !/^\/\//.test(value);
+    try {
+      const url = new URL(value);
+      return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password;
+    } catch {
+      return false;
+    }
+  }, 'Promotion link must use a supported safe protocol');
 
 export const homeSnapshotSchema = z
   .object({
@@ -78,20 +92,37 @@ export const homeSubscriptionSchema = z
   })
   .strict();
 
-export const homeCommunitySchema = z
-  .object({
-    id: uuid,
-    title: z.string().min(1).max(120),
-    description: z.string().max(220).nullable().optional(),
-    memberCount: z.number().int().min(1),
-    role: z.enum(['owner', 'admin', 'moderator', 'member']),
-    unreadCount: z.number().int().nonnegative(),
-    accent: z.string().regex(/^#[0-9A-Fa-f]{6}$/),
-    logoUrl: nullableUrl.optional(),
-    route,
-  })
-  .strict();
+export const homeCommunitySchema = communitySummarySchema;
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function normalizeCommunitySummaries(value: unknown): unknown {
+  if (!Array.isArray(value)) return value;
+  return (value as readonly unknown[]).slice(0, 5).map((community) => {
+    if (!isRecord(community)) return community;
+    if ('isVerified' in community && 'unreadChatCount' in community) return community;
+    return {
+      id: community.id,
+      title: community.title,
+      logoUrl: community.logoUrl ?? null,
+      // The previous Home projection did not own verification truth. Fail closed until
+      // the community read model refreshes this component.
+      isVerified: false,
+      unreadChatCount:
+        typeof community.unreadCount === 'number' && Number.isInteger(community.unreadCount)
+          ? Math.max(0, community.unreadCount)
+          : 0,
+      route: community.route,
+    };
+  });
+}
+
+/**
+ * Expand/migrate compatibility for Home snapshots persisted before the community summary was
+ * reduced. This can be removed after every stored snapshot has been rebuilt with the new shape.
+ */
 export const homePromotionSchema = z
   .object({
     id: uuid,
@@ -99,11 +130,64 @@ export const homePromotionSchema = z
     title: z.string().min(1).max(120),
     description: z.string().min(1).max(220),
     actionLabel: z.string().min(1).max(60),
-    route,
+    route: promotionHref,
     tone: z.enum(['violet', 'lime', 'mint', 'sand']),
     imageUrl: nullableUrl.optional(),
+    mobileImageUrl: nullableUrl.optional(),
   })
   .strict();
+
+export const homePromotionDeckSchema = z
+  .object({
+    rotationEnabled: z.boolean(),
+    intervalSeconds: z.number().int().min(3).max(30),
+    items: z.array(homePromotionSchema).max(20),
+  })
+  .strict();
+
+function normalizePromotionDeck(value: unknown): unknown {
+  if (isRecord(value) && Array.isArray(value.items)) return value;
+  if (value === null || value === undefined) {
+    return { rotationEnabled: false, intervalSeconds: 6, items: [] };
+  }
+  return { rotationEnabled: false, intervalSeconds: 6, items: [value] };
+}
+
+function firstPromotion(value: unknown): unknown {
+  if (!isRecord(value) || !Array.isArray(value.items)) return null;
+  const items = value.items as readonly unknown[];
+  return items[0] ?? null;
+}
+
+/**
+ * Expand/migrate compatibility for Home snapshots persisted before communities were reduced and
+ * before the CUP advertising placement became a rotatable deck. Remove only after every stored
+ * snapshot has been rebuilt with the expanded contract.
+ */
+export function normalizeHomeDashboardPayload(value: unknown): unknown {
+  if (!isRecord(value)) return value;
+  const promotions = normalizePromotionDeck(value.promotions ?? value.promotion);
+  return {
+    ...value,
+    ...('communities' in value
+      ? { communities: normalizeCommunitySummaries(value.communities) }
+      : {}),
+    promotions,
+    promotion: value.promotion ?? firstPromotion(promotions),
+  };
+}
+
+/** Compatibility for component rows that can outlive the API process during rollout. */
+export function normalizeHomeProjectionComponentPayload(value: unknown): unknown {
+  if (!isRecord(value)) return value;
+  if (value.component === 'communities') {
+    return { ...value, value: normalizeCommunitySummaries(value.value) };
+  }
+  if (value.component === 'promotion') {
+    return { ...value, value: normalizePromotionDeck(value.value) };
+  }
+  return value;
+}
 
 export const homeLocationSchema = z
   .object({
@@ -139,8 +223,10 @@ export const homeDashboardSchema = z
     quickActions: z.array(homeQuickActionSchema).max(4),
     upcoming: z.array(homeUpcomingSchema).max(6),
     subscriptions: z.array(homeSubscriptionSchema).max(6),
-    communities: z.array(homeCommunitySchema).max(8),
+    communities: z.array(homeCommunitySchema).max(5),
+    /** @deprecated Kept during the expand/migrate window for older clients. */
     promotion: homePromotionSchema.nullable(),
+    promotions: homePromotionDeckSchema,
     locations: z.array(homeLocationSchema).max(8),
     additionalLinks: z.array(homeAdditionalLinkSchema).max(6),
     capabilities: homeCapabilitiesSchema,
@@ -192,11 +278,11 @@ export const homeProjectionComponentPayloadSchema = z.discriminatedUnion('compon
   componentBaseSchema
     .extend({
       component: z.literal('communities'),
-      value: z.array(homeCommunitySchema).max(8),
+      value: z.array(homeCommunitySchema).max(5),
     })
     .strict(),
   componentBaseSchema
-    .extend({ component: z.literal('promotion'), value: homePromotionSchema.nullable() })
+    .extend({ component: z.literal('promotion'), value: homePromotionDeckSchema })
     .strict(),
   componentBaseSchema
     .extend({ component: z.literal('locations'), value: z.array(homeLocationSchema).max(8) })
@@ -274,6 +360,7 @@ export function buildHomeProjection(input: {
     .parse(values.get('messaging'));
   const upcoming = z.array(homeUpcomingSchema).max(6).parse(values.get('upcoming'));
   const subscriptions = z.array(homeSubscriptionSchema).max(6).parse(values.get('subscriptions'));
+  const promotions = homePromotionDeckSchema.parse(values.get('promotion'));
   const navigation = z
     .object({
       quickActions: z.array(homeQuickActionSchema).max(4),
@@ -302,7 +389,8 @@ export function buildHomeProjection(input: {
       upcoming,
       subscriptions,
       communities: values.get('communities'),
-      promotion: values.get('promotion'),
+      promotion: promotions.items[0] ?? null,
+      promotions,
       locations: values.get('locations'),
       additionalLinks: navigation.additionalLinks,
       capabilities: values.get('capabilities'),

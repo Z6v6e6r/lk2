@@ -13,5 +13,6 @@ interface Window {
     readonly tenantKey: string;
     readonly release: string;
     readonly apiBaseUrl?: string;
+    readonly serviceWorkerUrl?: string;
   };
 }

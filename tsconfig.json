@@ -21,9 +21,11 @@
       "@phub/api-sdk": ["packages/api-sdk/src/index.ts"],
       "@phub/auth": ["packages/auth/src/index.ts"],
       "@phub/auth/viva-delegation": ["packages/auth/src/viva-delegation.ts"],
+      "@phub/communities": ["packages/communities/src/index.ts"],
       "@phub/config": ["packages/config/src/index.ts"],
       "@phub/database": ["packages/database/src/index.ts"],
       "@phub/domain": ["packages/domain/src/index.ts"],
+      "@phub/games": ["packages/games/src/index.ts"],
       "@phub/home-projection": ["packages/home-projection/src/index.ts"],
       "@phub/notifications": ["packages/notifications/src/index.ts"],
       "@phub/observability": ["packages/observability/src/index.ts"],
@@ -35,5 +37,5 @@
     "types": ["node", "vitest/globals"]
   },
   "include": ["apps", "packages", "scripts", "*.ts"],
-  "exclude": ["node_modules", "dist", "apps/mobile/android", "apps/mobile/ios"]
+  "exclude": ["node_modules", "**/dist/**", "apps/mobile/android", "apps/mobile/ios"]
 }

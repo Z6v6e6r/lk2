@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+
 import { z } from 'zod';
 
 const booleanFromEnvironment = z
@@ -48,6 +50,7 @@ const environmentSchema = z.object({
   PROFILE_PHOTO_GC_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(20),
   JWT_ISSUER: z.string().min(1),
   JWT_AUDIENCE: z.string().min(1),
+  JWT_ADMIN_AUDIENCE: z.string().min(1).default('phub-admin'),
   JWT_REALTIME_AUDIENCE: z.string().min(1).default('phub-realtime'),
   JWT_ACCESS_SECRET: z.string().min(32),
   JWT_REFRESH_SECRET: z.string().min(32),
@@ -65,8 +68,18 @@ const environmentSchema = z.object({
     .string()
     .regex(/^\d{4}$/)
     .default('0000'),
+  CUP_DEV_AUTH_ENABLED: booleanFromEnvironment,
+  CUP_DEV_AUTH_PHONE_E164: z
+    .string()
+    .regex(/^\+7\d{10}$/)
+    .optional(),
+  CUP_DEV_AUTH_OTP_CODE: z
+    .string()
+    .regex(/^\d{4}$/)
+    .optional(),
   VIVA_MODE: z.enum(['mock', 'sandbox', 'production', 'disabled']).default('mock'),
   HOME_READ_MODE: z.enum(['mock', 'projection']).default('mock'),
+  GAMES_READ_ENABLED: booleanFromEnvironment,
   HOME_PROJECTION_MAX_STALE_SECONDS: z.coerce.number().int().nonnegative().max(86_400).default(300),
   HOME_PROJECTION_TTL_SECONDS: z.coerce.number().int().min(30).max(86_400).default(300),
   HOME_VIVA_SYNC_ENABLED: booleanFromEnvironment,
@@ -78,6 +91,73 @@ const environmentSchema = z.object({
     .min(30_000)
     .max(86_400_000)
     .default(300_000),
+  COMMUNITIES_READ_MODE: z.enum(['mock', 'legacy', 'local']).default('mock'),
+  COMMUNITIES_LEGACY_BASE_URL: z.string().url().default('https://padlhub.su'),
+  COMMUNITIES_LEGACY_TIMEOUT_MS: z.coerce.number().int().min(500).max(30_000).default(10_000),
+  COMMUNITIES_LEGACY_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(2).default(2),
+  COMMUNITIES_LEGACY_CIRCUIT_FAILURE_THRESHOLD: z.coerce.number().int().min(1).max(20).default(3),
+  COMMUNITIES_LEGACY_CIRCUIT_RESET_MS: z.coerce
+    .number()
+    .int()
+    .min(1_000)
+    .max(3_600_000)
+    .default(30_000),
+  COMMUNITIES_LEGACY_CACHE_TTL_MS: z.coerce.number().int().min(0).max(300_000).default(30_000),
+  COMMUNITY_LOGO_ALLOWED_HOSTS: z
+    .string()
+    .min(1)
+    .default('padlhub.su,lk-reserve.89-108-64-209.sslip.io'),
+  COMMUNITY_LOGO_MAX_BYTES: z.coerce
+    .number()
+    .int()
+    .min(64 * 1_024)
+    .max(20 * 1_024 * 1_024)
+    .default(5 * 1_024 * 1_024),
+  COMMUNITY_LOGO_MAX_DIMENSION: z.coerce.number().int().min(128).max(1_024).default(512),
+  COMMUNITY_LOGO_WEBP_QUALITY: z.coerce.number().int().min(40).max(95).default(82),
+  COMMUNITY_LOGO_GC_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(20),
+  PROMOTIONS_READ_MODE: z.enum(['mock', 'legacy']).default('mock'),
+  PROMOTIONS_LEGACY_BASE_URL: z.string().url().default('https://padlhub.su'),
+  PROMOTIONS_LEGACY_TIMEOUT_MS: z.coerce.number().int().min(500).max(30_000).default(5_000),
+  PROMOTIONS_LEGACY_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(2).default(2),
+  PROMOTIONS_LEGACY_CIRCUIT_FAILURE_THRESHOLD: z.coerce.number().int().min(1).max(20).default(3),
+  PROMOTIONS_LEGACY_CIRCUIT_RESET_MS: z.coerce
+    .number()
+    .int()
+    .min(1_000)
+    .max(3_600_000)
+    .default(30_000),
+  PROMOTIONS_SYNC_INTERVAL_MS: z.coerce.number().int().min(30_000).max(3_600_000).default(120_000),
+  PROMOTIONS_SYNC_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(20),
+  PROMOTION_ROTATION_INTERVAL_SECONDS: z.coerce.number().int().min(3).max(30).default(6),
+  PROMOTION_IMAGE_ALLOWED_HOSTS: z.string().min(1).default('padlhub.su'),
+  PROMOTION_IMAGE_MAX_BYTES: z.coerce
+    .number()
+    .int()
+    .min(64 * 1_024)
+    .max(20 * 1_024 * 1_024)
+    .default(10 * 1_024 * 1_024),
+  PROMOTION_IMAGE_DESKTOP_MAX_WIDTH: z.coerce.number().int().min(375).max(2_048).default(1_600),
+  PROMOTION_IMAGE_DESKTOP_MAX_HEIGHT: z.coerce.number().int().min(240).max(2_048).default(900),
+  PROMOTION_IMAGE_MOBILE_WIDTH: z.coerce.number().int().min(375).max(1_200).default(750),
+  PROMOTION_IMAGE_MOBILE_HEIGHT: z.coerce.number().int().min(240).max(1_200).default(480),
+  PROMOTION_IMAGE_WEBP_QUALITY: z.coerce.number().int().min(40).max(95).default(80),
+  PROMOTION_MEDIA_GC_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(20),
+  WEB_PUSH_ENABLED: booleanFromEnvironment,
+  WEB_PUSH_ENVIRONMENT: z.enum(['SANDBOX', 'PRODUCTION']).default('SANDBOX'),
+  WEB_PUSH_APP_ID: z.string().min(1).max(300).default('padlhub-web'),
+  WEB_PUSH_VAPID_SUBJECT: z.string().optional(),
+  WEB_PUSH_VAPID_PUBLIC_KEY: z.string().optional(),
+  WEB_PUSH_VAPID_PRIVATE_KEY: z.string().optional(),
+  WEB_PUSH_TTL_SECONDS: z.coerce.number().int().min(0).max(2_419_200).default(300),
+  WEB_PUSH_TIMEOUT_MS: z.coerce.number().int().min(500).max(30_000).default(5_000),
+  WEB_PUSH_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(20).default(5),
+  WEB_PUSH_RETRY_BASE_MS: z.coerce.number().int().min(1_000).max(3_600_000).default(5_000),
+  WEB_PUSH_POLL_INTERVAL_MS: z.coerce.number().int().min(250).max(60_000).default(1_000),
+  WEB_PUSH_CIRCUIT_FAILURE_THRESHOLD: z.coerce.number().int().min(1).max(100).default(5),
+  WEB_PUSH_CIRCUIT_RESET_MS: z.coerce.number().int().min(1_000).max(3_600_000).default(30_000),
+  NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS: z.string().optional(),
+  NOTIFICATION_ENDPOINT_ACTIVE_KEY_ID: z.string().min(1).max(64).default('v1'),
   VIVA_API_URL: z.string().url().optional().or(z.literal('')),
   VIVA_API_KEY: z.string().optional(),
   VIVA_TIMEOUT_MS: z.coerce.number().int().positive().max(30_000).default(3000),
@@ -108,11 +188,43 @@ export interface ConfigRequirements {
   readonly profilePhotoStorage?: boolean;
 }
 
+function materializeFileSecret(
+  environment: NodeJS.ProcessEnv,
+  valueName: string,
+  fileName: string,
+): string | undefined {
+  const directValue = environment[valueName];
+  if (directValue?.trim()) return directValue;
+  const path = environment[fileName]?.trim();
+  if (!path) return directValue;
+  let value: string;
+  try {
+    value = readFileSync(path, 'utf8').trim();
+  } catch {
+    throw new Error(`${fileName} could not be read`);
+  }
+  if (!value) throw new Error(`${fileName} points to an empty secret`);
+  return value;
+}
+
 export function loadConfig(
   environment: NodeJS.ProcessEnv = process.env,
   requirements: ConfigRequirements = {},
 ): AppConfig {
-  const parsed = environmentSchema.safeParse(environment);
+  const resolvedEnvironment: NodeJS.ProcessEnv = {
+    ...environment,
+    WEB_PUSH_VAPID_PRIVATE_KEY: materializeFileSecret(
+      environment,
+      'WEB_PUSH_VAPID_PRIVATE_KEY',
+      'WEB_PUSH_VAPID_PRIVATE_KEY_FILE',
+    ),
+    NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS: materializeFileSecret(
+      environment,
+      'NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS',
+      'NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS_FILE',
+    ),
+  };
+  const parsed = environmentSchema.safeParse(resolvedEnvironment);
   if (!parsed.success) {
     const issues = parsed.error.issues
       .map((issue) => `${issue.path.join('.')}: ${issue.message}`)
@@ -123,11 +235,22 @@ export function loadConfig(
   if (parsed.data.APP_ENV === 'production' && parsed.data.VIVA_MODE === 'mock') {
     throw new Error('VIVA_MODE=mock is forbidden in production');
   }
+  if (parsed.data.APP_ENV === 'production' && parsed.data.GAMES_READ_ENABLED) {
+    throw new Error('GAMES_READ_ENABLED is staging-only until the Games production gate passes');
+  }
   if (parsed.data.APP_ENV === 'production' && !parsed.data.AUTH_COOKIE_SECURE) {
     throw new Error('AUTH_COOKIE_SECURE=true is required in production');
   }
   if (parsed.data.APP_ENV === 'production' && !parsed.data.TRUSTED_PROXY_CIDRS.trim()) {
     throw new Error('TRUSTED_PROXY_CIDRS is required in production');
+  }
+  if (parsed.data.CUP_DEV_AUTH_ENABLED) {
+    if (parsed.data.APP_ENV !== 'local') {
+      throw new Error('CUP_DEV_AUTH_ENABLED is allowed only in APP_ENV=local');
+    }
+    if (!parsed.data.CUP_DEV_AUTH_PHONE_E164 || !parsed.data.CUP_DEV_AUTH_OTP_CODE) {
+      throw new Error('CUP dev auth requires an explicit phone and OTP code');
+    }
   }
   if (parsed.data.VIVA_OAUTH_ENABLED) {
     if (!parsed.data.VIVA_OAUTH_REDIRECT_URI || !parsed.data.VIVA_OAUTH_SUCCESS_REDIRECT_URL) {
@@ -162,6 +285,22 @@ export function loadConfig(
       );
     }
   }
+  if (parsed.data.PROMOTIONS_READ_MODE === 'legacy' && requirements.profilePhotoStorage) {
+    const missingStorage = [
+      ['S3_ENDPOINT', parsed.data.S3_ENDPOINT],
+      ['S3_PUBLIC_ENDPOINT', parsed.data.S3_PUBLIC_ENDPOINT],
+      ['S3_BUCKET', parsed.data.S3_BUCKET],
+      ['S3_ACCESS_KEY', parsed.data.S3_ACCESS_KEY],
+      ['S3_SECRET_KEY', parsed.data.S3_SECRET_KEY],
+    ]
+      .filter(([, value]) => !value)
+      .map(([name]) => name);
+    if (missingStorage.length > 0) {
+      throw new Error(
+        `PROMOTIONS_READ_MODE=legacy requires media storage: ${missingStorage.join(', ')}`,
+      );
+    }
+  }
   if (
     parsed.data.VIVA_DIRECT_READ_ENABLED &&
     (parsed.data.VIVA_MODE === 'mock' || parsed.data.VIVA_MODE === 'disabled')
@@ -170,6 +309,45 @@ export function loadConfig(
   }
   if (parsed.data.VIVA_DIRECT_READ_ENABLED && !parsed.data.VIVA_OAUTH_ENABLED) {
     throw new Error('VIVA_DIRECT_READ_ENABLED requires VIVA_OAUTH_ENABLED=true');
+  }
+  if (parsed.data.WEB_PUSH_ENABLED) {
+    const missingWebPush = [
+      ['WEB_PUSH_VAPID_SUBJECT', parsed.data.WEB_PUSH_VAPID_SUBJECT],
+      ['WEB_PUSH_VAPID_PUBLIC_KEY', parsed.data.WEB_PUSH_VAPID_PUBLIC_KEY],
+      ['WEB_PUSH_VAPID_PRIVATE_KEY', parsed.data.WEB_PUSH_VAPID_PRIVATE_KEY],
+      ['NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS', parsed.data.NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS],
+    ]
+      .filter(([, value]) => !value)
+      .map(([name]) => name);
+    if (missingWebPush.length > 0) {
+      throw new Error(`WEB_PUSH_ENABLED requires runtime secrets: ${missingWebPush.join(', ')}`);
+    }
+    if (
+      !parsed.data.WEB_PUSH_VAPID_SUBJECT?.startsWith('mailto:') &&
+      !parsed.data.WEB_PUSH_VAPID_SUBJECT?.startsWith('https://')
+    ) {
+      throw new Error('WEB_PUSH_VAPID_SUBJECT must use mailto: or https:');
+    }
+    let endpointKeys: unknown;
+    try {
+      endpointKeys = JSON.parse(parsed.data.NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS as string);
+    } catch {
+      throw new Error('NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS must be a JSON object');
+    }
+    if (!endpointKeys || typeof endpointKeys !== 'object' || Array.isArray(endpointKeys)) {
+      throw new Error('NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS must be a JSON object');
+    }
+    const activeKey = (endpointKeys as Record<string, unknown>)[
+      parsed.data.NOTIFICATION_ENDPOINT_ACTIVE_KEY_ID
+    ];
+    if (
+      typeof activeKey !== 'string' ||
+      Buffer.from(activeKey, 'base64').length !== 32 ||
+      Buffer.from(activeKey, 'base64').toString('base64').replace(/=+$/, '') !==
+        activeKey.replace(/=+$/, '')
+    ) {
+      throw new Error('Active notification endpoint encryption key must be 32-byte base64');
+    }
   }
   if (
     parsed.data.APP_ENV === 'production' &&
@@ -181,6 +359,18 @@ export function loadConfig(
   }
   if (parsed.data.APP_ENV === 'production' && parsed.data.HOME_READ_MODE !== 'projection') {
     throw new Error('HOME_READ_MODE=projection is required in production');
+  }
+  if (parsed.data.APP_ENV === 'production' && parsed.data.COMMUNITIES_READ_MODE === 'mock') {
+    throw new Error('COMMUNITIES_READ_MODE=mock is forbidden in production');
+  }
+  if (parsed.data.APP_ENV === 'production' && parsed.data.PROMOTIONS_READ_MODE === 'mock') {
+    throw new Error('PROMOTIONS_READ_MODE=mock is forbidden in production');
+  }
+  if (
+    parsed.data.APP_ENV === 'production' &&
+    new URL(parsed.data.PROMOTIONS_LEGACY_BASE_URL).protocol !== 'https:'
+  ) {
+    throw new Error('PROMOTIONS_LEGACY_BASE_URL must use https in production');
   }
 
   return parsed.data;

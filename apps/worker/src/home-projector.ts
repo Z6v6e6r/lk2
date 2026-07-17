@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import {
   buildHomeProjection,
   homeProjectionComponentPayloadSchema,
+  normalizeHomeProjectionComponentPayload,
   type HomeProjectionComponent,
   type HomeProjectionEvent,
 } from '@phub/home-projection';
@@ -148,12 +149,14 @@ export async function applyHomeProjectionEvent(options: {
       [event.tenantId, event.payload.userId],
     );
     const components = rows.rows.map((row) =>
-      homeProjectionComponentPayloadSchema.parse({
-        userId: event.payload.userId,
-        component: row.component,
-        componentRevision: row.component_revision,
-        value: row.payload,
-      }),
+      homeProjectionComponentPayloadSchema.parse(
+        normalizeHomeProjectionComponentPayload({
+          userId: event.payload.userId,
+          component: row.component,
+          componentRevision: row.component_revision,
+          value: row.payload,
+        }),
+      ),
     );
 
     if (!isVivaHomeSourceBatchCoherent(rows.rows)) {

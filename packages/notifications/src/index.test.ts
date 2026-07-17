@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  canonicalWebPushSubscription,
+  createNotificationEndpointCipher,
   notificationAudienceSelectorSchema,
   notificationSourceEventSchema,
   renderNotificationTemplate,
   resolveNotificationRecipients,
+  webPushSubscriptionSchema,
 } from './index.js';
 
 const event = notificationSourceEventSchema.parse({
@@ -19,6 +22,42 @@ const event = notificationSourceEventSchema.parse({
     game: { title: 'Игра на Селигерской' },
     startsAt: '19:00',
   },
+});
+
+describe('Web Push endpoint protection', () => {
+  it('validates and canonicalizes the browser subscription shape', () => {
+    const subscription = webPushSubscriptionSchema.parse({
+      endpoint: 'https://push.example.test/subscriptions/abc',
+      expirationTime: null,
+      keys: {
+        p256dh: 'B'.repeat(65),
+        auth: 'a'.repeat(22),
+      },
+    });
+    expect(canonicalWebPushSubscription(subscription)).toBe(
+      `{"endpoint":"https://push.example.test/subscriptions/abc","expirationTime":null,"keys":{"p256dh":"${'B'.repeat(
+        65,
+      )}","auth":"${'a'.repeat(22)}"}}`,
+    );
+  });
+
+  it('encrypts endpoint material with key IDs and rejects tampering', () => {
+    const cipher = createNotificationEndpointCipher({
+      serializedKeys: JSON.stringify({
+        previous: Buffer.alloc(32, 1).toString('base64'),
+        current: Buffer.alloc(32, 2).toString('base64'),
+      }),
+      activeKeyId: 'current',
+    });
+    const encrypted = cipher.encrypt('subscription-secret');
+    expect(encrypted.keyId).toBe('current');
+    expect(encrypted.ciphertext.toString('utf8')).not.toContain('subscription-secret');
+    expect(cipher.decrypt(encrypted.ciphertext, encrypted.keyId)).toBe('subscription-secret');
+
+    const tampered = Buffer.from(encrypted.ciphertext);
+    tampered[15] = (tampered[15] ?? 0) ^ 1;
+    expect(() => cipher.decrypt(tampered, encrypted.keyId)).toThrow();
+  });
 });
 
 describe('notification domain contracts', () => {
@@ -55,5 +94,21 @@ describe('notification domain contracts', () => {
         payload: {},
       }),
     ).toThrow('NOTIFICATION_TEMPLATE_VALUE_MISSING');
+    expect(() =>
+      renderNotificationTemplate({
+        titleTemplate: 'Игра',
+        bodyTemplate: 'Открыть',
+        deepLinkTemplate: '//evil.example.test',
+        payload: {},
+      }),
+    ).toThrow('NOTIFICATION_DEEP_LINK_INVALID');
+    expect(() =>
+      renderNotificationTemplate({
+        titleTemplate: 'Игра',
+        bodyTemplate: 'Открыть',
+        deepLinkTemplate: '/\\evil.example.test',
+        payload: {},
+      }),
+    ).toThrow('NOTIFICATION_DEEP_LINK_INVALID');
   });
 });

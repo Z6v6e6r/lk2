@@ -85,3 +85,16 @@ event cannot publish a snapshot that mixes two Viva sync cycles.
   switch Home reads; `HOME_READ_MODE=projection` remains blocked until all nine components are ready.
 - Any future Home block must first be added to the OpenAPI snapshot and ownership documentation; it
   must not add an independent initial client request.
+
+## Advertising placement expansion
+
+The existing CUP `cabinet_home` placement remains the temporary operator source while Home moves to
+PadlHub. `apps/worker` reads its public active-card snapshot behind an explicit legacy mode, maps
+legacy IDs into PadlHub UUIDs, creates private desktop/mobile WebP derivatives and publishes one
+tenant/user Home component through the outbox. Browsers neither call legacy advertising routes nor
+load legacy assets. The expanded `promotions` deck carries ordered active cards and rotation policy;
+the old singular `promotion` field mirrors its first item only for rollout compatibility.
+
+This bridge is read-only and does not create another advertising write owner. Source failure keeps
+the last valid component, while immutable media replacement and deletion observe the signed-URL and
+projection-staleness grace period.

@@ -49,11 +49,44 @@ source of truth for users, integration identity mappings and rotating session fa
 
 The pre-existing Cabinet OpenAPI is an immutable imported draft. It is migrated operation by operation into OpenAPI 3.1 rather than silently becoming the platform boundary.
 
+Player profile reads are viewer-aware. `/profile` remains the migration-compatible self aggregate,
+while `/profiles/{padlHubUserId}` returns a server-filtered `PlayerProfileView`. Balance and phone
+suffix are serialized only for self; extended rating, mediated contact and direct-chat actions are
+controlled by server-derived permissions and target privacy. The source of those permissions is
+intentionally not assigned to subscriptions or memberships in this release. The browser never
+receives a full profile and then hides fields, and action commands revalidate current permission. Cross-user
+profiles are PadlHub-API-only. See
+[ADR 0011](../adr/0011-viewer-filtered-player-profiles.md) and the
+[profiles domain](../domains/profiles.md).
+
+Profile privacy is an independently owned `LOCAL_ONLY` aggregate under tenant RLS. The owner-only
+`/profile/privacy` command uses optimistic versioning and idempotency, and commits the policy,
+audit record and `profile.privacy.changed.v1` outbox event atomically. Viewer profile reads apply
+that stored target policy after permission evaluation, so privacy can only reduce access.
+
 ## Data and domains
 
 PostgreSQL is the operational source of truth. Logical schemas mirror domains, not services or Viva response shapes. Redis stores only ephemeral cache, locks, rate-limit state and counters. RabbitMQ transports events/retries/DLQ. Files use signed URLs to S3-compatible storage.
 
 Every tenant-owned row contains `tenant_id`; row-level security is part of defense in depth. Modules own their tables and migrations and communicate through public domain interfaces.
+
+The communities module owns canonical community and membership rows. Home projects no more than
+five summaries; the full authenticated directory uses a separate keyset-paginated User API read.
+While the legacy LK store still contains current membership data, an API-side anti-corruption
+adapter may read it under an explicit server mode, map source IDs inside `integration` and expose
+only PadlHub UUIDs. Browser-supplied identity selectors, direct legacy calls and dual-write are
+forbidden. The worker also projects the first five normalized memberships into Home in the
+background on a cycle independent of Viva profile synchronization; the Home request never merges a
+live external response with its local snapshot. See
+[ADR 0009](../adr/0009-community-directory-and-legacy-read-bridge.md) and the
+[communities domain](../domains/communities.md).
+
+Legacy community logo URLs are worker-only integration hints. Missing local assets are fetched from
+an HTTPS allowlist, bounded, normalized to metadata-free WebP and stored under immutable
+`community-logos/{tenant}/{community}/{sha256}.webp` keys. PostgreSQL keeps the source/object mapping
+and short-lived signed delivery URL; the mapping and Home component outbox event share one tenant
+transaction. Browsers never load legacy media directly, and superseded objects are deleted only
+after signed URLs and stale projections have expired.
 
 Provider-hosted profile photos cross the integration boundary only in `apps/worker`. They are
 allowlisted, size-limited, normalized to metadata-free WebP and stored under immutable SHA-256 keys.
@@ -84,7 +117,15 @@ Push is implemented as three explicit transports behind the notification deliver
 with VAPID and a service worker, APNs for iOS, and FCM for Android. Endpoint payloads are encrypted
 at rest, rotate independently per installation and never enter events or telemetry. Provider
 acceptance, provider delivery (when available), client display and user open are separate receipts;
-the platform never claims that an accepted push was seen.
+the platform never claims that an accepted push was seen. The Web Push transport is the first
+implemented platform slice and remains behind independent global, tenant and provider-account
+gates; APNs/FCM and client display/open receipts are not enabled yet.
+
+Manual CUP notifications use a separate `phub-admin` JWT audience and the tenant-scoped
+`notifications.manage` permission. Phone inputs are lookup-only and are never stored in campaign,
+audit or broker payloads. The command writes campaign, recipient UUIDs, notification intents,
+inbox/push deliveries, audit and outbox atomically; the worker continues to own external Web Push
+delivery. Android/iOS remain capability-visible but fail closed until FCM/APNs adapters exist.
 
 CUP owns the PadlHub moderation control plane. Optional external moderation systems may submit a
 signed signal or recommendation through a service boundary, but they cannot directly mutate a

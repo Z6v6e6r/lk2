@@ -30,7 +30,7 @@ The previous LK Home component performs orchestration in the browser:
 | Games              | active and recent/result windows loaded in parallel                                       | two overlapping reads on startup           | only upcoming summaries in the projection                  |
 | Tournament access  | mechanics request plus a date-by-date scan across roughly 22 days                         | up to 23 reads to calculate one capability | precomputed `capabilities.canManageTournaments`            |
 | Communities        | summary loaded at startup; selected community can also warm detail, feed pages and rating | remote widget owns another request graph   | bounded membership summaries only; feed/rating remain lazy |
-| Promotion          | independent advertising-settings request                                                  | another source and loading state           | selected `promotion` in the snapshot                       |
+| Promotion          | independent advertising-settings request                                                  | another source and loading state           | active `promotions` deck in the snapshot                   |
 | Chat counter       | initial request followed by 12-second polling                                             | permanent background traffic               | `counters.unreadChats`, later updated by realtime events   |
 | History            | full history may be reloaded with bookings                                                | large non-critical payload                 | explicit navigation only                                   |
 
@@ -48,11 +48,15 @@ Home request after session restoration.
 - `upcoming`: at most six game, training or tournament summaries.
 - `subscriptions`: at most six normalized subscription summaries, including a distinct `paused`
   state for Viva `HOLD` records.
-- `communities`: at most eight current memberships with member/unread counts and an optional
-  PadlHub-served logo URL; never feed posts, rankings or external identifiers.
-- `promotion`: optional server-selected Home promotion.
+- `communities`: at most five current memberships with title, verification, chat unread count,
+  route and nullable PadlHub-served logo URL; never roles, member totals, feed posts, rankings or
+  external identifiers.
+- `promotions`: up to twenty active CUP cards in operator order, with the CUP rotation flag,
+  a bounded interval and separate desktop/mobile PadlHub WebP URLs. `promotion` temporarily mirrors
+  the first card for older clients during expand/migrate rollout.
 - `locations`: at most eight PadlHub locations with PadlHub UUIDs, court counts and optional
-  display images.
+  display images. They come from published `LOCAL_ONLY` location profiles, not from a live Viva
+  station lookup.
 - `additionalLinks`: server-approved routes for promotions, gift certificates and offers.
 - `capabilities`: precomputed feature/capability flags; the client never scans source data to infer
   them.
@@ -134,13 +138,52 @@ The web gateway coalesces concurrent Home reads, including React StrictMode star
 private-cacheable for 15 seconds and may be used stale for 45 seconds while the browser revalidates.
 This cache is a delivery optimization; the source of truth remains the server-owned projection.
 
-The community list is part of the first snapshot because it is visible on Home. Community detail,
-feed pages, rankings, member management and chat history are fetched only after the user opens a
-community. The same rule applies to booking history and item details.
+The first five community summaries are part of the snapshot because they are visible on Home. Home
+does not carry a continuation cursor and does not make a second startup request. The explicit
+`/communities` route loads active memberships in pages of 20 through
+`GET /user/api/v1/{tenantKey}/communities/mine`; community detail, feed pages, rankings, member
+management and chat history remain lazy. The same rule applies to booking history and item details.
+
+When `COMMUNITIES_READ_MODE=legacy` or `local`, the worker reads the same server-owned community
+directory in its own bounded synchronization cycle and publishes the first five summaries as the
+`communities` component through the transactional outbox. The cycle selects active Home users
+without calling or waiting for Viva, so a profile-provider outage cannot block community or logo
+updates. The Home API never overlays a live legacy response onto a stored snapshot. A failed
+community refresh leaves the last valid component in place and does not fail the independent Viva
+profile/upcoming/subscription synchronization.
+
+In legacy mode, a missing local community logo is copied by the worker before the component is
+published. The source URL stays in integration storage; only an allowlisted, bounded image is
+converted to WebP and stored under the PadlHub community UUID in private object storage. The logo
+mapping and community outbox component commit together. Home therefore loads a short-lived signed
+PadlHub URL from its existing snapshot and never calls the legacy media endpoint from the browser.
+An unchanged legacy asset URL reuses the local object, while a failed refresh retains the previous
+logo and a removed source schedules the superseded object for delayed deletion.
+
+When `PROMOTIONS_READ_MODE=legacy`, the worker reads the existing public CUP placement once per
+tenant from `GET /api/advertising/cabinet-home`; the web client never calls that endpoint. The
+bridge accepts only the active, ordered public items returned by CUP, maps source IDs through
+`integration.external_entity_map`, and publishes the strict `promotion` component independently of
+Viva. `rotationEnabled=false` fixes the first active item; `true` rotates only when at least two
+items exist. A failed source or media refresh leaves the last valid Home component in place.
+
+Legacy advertising image URLs remain integration-only. For every active card the worker downloads
+an HTTPS-allowlisted, byte/pixel-bounded source and creates metadata-free WebP derivatives: a
+desktop image bounded to 1600×900 and an exact 750×480 mobile crop by default. Both objects are
+content-addressed under `promotion-media/{tenant}/{promotion}/{variant}/{sha256}.webp`; Home carries
+only short-lived PadlHub delivery URLs and the web uses `<picture>` to select the mobile derivative.
+Replaced or deactivated assets enter delayed garbage collection after signed URLs and stale Home
+snapshots can no longer reference them.
 
 The web presentation follows the canonical Figma Home frame `743:2014` at 375 logical pixels wide.
 The communities strip sits directly below the profile on the purple Hero surface and consumes the
 existing `communities` projection; it must not introduce a second startup request.
+
+Published location profile commands emit `locations.profile.changed.v1` in their business
+transaction. The locations worker rebuilds the tenant's bounded, ordered Home component and fans a
+strict component event to existing Home users. The web row is a touch-native, scroll-snapped
+carousel and links to the separate Location User API detail; it does not fetch a second source to
+hydrate Home cards.
 
 ## Current delivery stage
 
@@ -163,3 +206,7 @@ bounded batch, interval and failure backoff. It does not change `HOME_READ_MODE`
 the projector's `waiting` state until messaging, communities, promotion, locations, navigation and
 capabilities are also present. Duplicate PadlHub users resolving to one Viva profile are rejected as
 `EXTERNAL_ID_MAPPING_CONFLICT`; the producer never silently reassigns the profile mapping.
+
+`PROMOTIONS_READ_MODE=legacy` independently activates the CUP advertising producer and requires
+private object storage. Production forbids `PROMOTIONS_READ_MODE=mock`; operators continue to add,
+order, activate and deactivate cards in the existing CUP advertising screen.

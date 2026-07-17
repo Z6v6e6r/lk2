@@ -1,0 +1,355 @@
+openapi: 3.1.0
+info:
+  title: PadlHub Public API
+  version: 1.0.0
+  description: Anonymous read-only PadlHub boundary. Responses contain allowlisted public data only.
+  license:
+    name: Proprietary
+    identifier: LicenseRef-Proprietary
+servers:
+  - url: https://api.padlhub.ru/public/api/v1
+security: []
+tags:
+  - name: games
+    description: Anonymous discovery of public scheduled games.
+paths:
+  /{tenantKey}/games:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+    get:
+      tags: [games]
+      operationId: listPublicGames
+      summary: Discover public scheduled games
+      description: |
+        Returns one keyset-paginated card projection version. The operation never selects phones,
+        provider identifiers, booking identifiers, payment references, raw metadata or audit data.
+      parameters:
+        - name: stationId
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: startsFrom
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - name: startsTo
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - name: kind
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/GameKind'
+        - name: levelFrom
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/GamePlayerLevel'
+        - name: levelTo
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/GamePlayerLevel'
+        - name: availability
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [JOINABLE, INCLUDE_FULL]
+            default: JOINABLE
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 20
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 16
+            maxLength: 512
+      responses:
+        '200':
+          description: One page of safe public game cards.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicGameCardPage'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/games/{gameId}:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - name: gameId
+        in: path
+        required: true
+        description: Stable PadlHub game UUID.
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [games]
+      operationId: getPublicGame
+      summary: Load safe public game details
+      description: |
+        Returns only the public projection. Private invitation access will use a separate hashed,
+        expiring token operation; this route never accepts or resolves a provider identifier.
+      responses:
+        '200':
+          description: Safe public game details.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicGameCardResponse'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+components:
+  schemas:
+    PublicGameCardPage:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          maxItems: 50
+          items:
+            $ref: '#/components/schemas/PublicGameCard'
+        nextCursor:
+          type: [string, 'null']
+          minLength: 16
+          maxLength: 512
+    PublicGameCardResponse:
+      type: object
+      additionalProperties: false
+      required: [game]
+      properties:
+        game:
+          $ref: '#/components/schemas/PublicGameCard'
+    PublicGameCard:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - revision
+        - surface
+        - displayState
+        - title
+        - kind
+        - visibility
+        - startsAt
+        - endsAt
+        - timezone
+        - station
+        - rosterState
+        - capacity
+        - participants
+        - viewerRelation
+        - viewerPaymentState
+        - badges
+        - allowedActions
+        - deepLink
+      properties:
+        id:
+          type: string
+          format: uuid
+        revision:
+          type: integer
+          minimum: 0
+        surface:
+          type: string
+          const: DISCOVER
+        displayState:
+          $ref: '#/components/schemas/GameCardDisplayState'
+        title:
+          type: string
+          minLength: 1
+          maxLength: 160
+        kind:
+          $ref: '#/components/schemas/GameKind'
+        visibility:
+          type: string
+          const: PUBLIC
+        startsAt:
+          type: string
+          format: date-time
+        endsAt:
+          type: string
+          format: date-time
+        timezone:
+          type: string
+          minLength: 1
+          maxLength: 64
+        station:
+          $ref: '#/components/schemas/PublicGameStation'
+        levelRange:
+          oneOf:
+            - $ref: '#/components/schemas/GameLevelRange'
+            - type: 'null'
+        rosterState:
+          $ref: '#/components/schemas/GameRosterState'
+        capacity:
+          $ref: '#/components/schemas/GameCapacity'
+        participants:
+          type: array
+          maxItems: 4
+          items:
+            $ref: '#/components/schemas/PublicGameParticipant'
+        priceSummary:
+          oneOf:
+            - $ref: '#/components/schemas/GamePriceSummary'
+            - type: 'null'
+        viewerRelation:
+          type: string
+          const: ANONYMOUS
+        viewerPaymentState:
+          type: string
+          const: NOT_REQUIRED
+        badges:
+          type: array
+          uniqueItems: true
+          items:
+            type: string
+            const: RATING
+        allowedActions:
+          type: array
+          uniqueItems: true
+          items:
+            type: string
+            enum: [OPEN_DETAILS, JOIN, JOIN_WAITLIST]
+        deepLink:
+          type: string
+          pattern: '^/(?!/)'
+          maxLength: 2000
+    GameCardDisplayState:
+      type: string
+      enum:
+        - FINDING_PLAYERS
+        - ONE_SPOT_LEFT
+        - ROSTER_READY
+        - STARTING_SOON
+        - REGISTRATION_CLOSED
+    GameKind:
+      type: string
+      enum: [FRIENDLY, RATING, PRIVATE, COACH_GAME]
+    GameRosterState:
+      type: string
+      enum: [OPEN, LAST_SPOT, FULL, WAITLIST_ONLY, LOCKED]
+    GamePlayerLevel:
+      type: string
+      enum: [D, D+, C, C+, B, B+, A]
+    GameLevelRange:
+      type: object
+      additionalProperties: false
+      required: [from, to]
+      properties:
+        from:
+          oneOf:
+            - $ref: '#/components/schemas/GamePlayerLevel'
+            - type: 'null'
+        to:
+          oneOf:
+            - $ref: '#/components/schemas/GamePlayerLevel'
+            - type: 'null'
+    PublicGameStation:
+      type: object
+      additionalProperties: false
+      required: [id, name]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          minLength: 1
+          maxLength: 160
+        shortAddress:
+          type: [string, 'null']
+          minLength: 1
+          maxLength: 240
+    GameCapacity:
+      type: object
+      additionalProperties: false
+      required: [total, occupied, reserved, open, waitlistCount]
+      properties:
+        total:
+          type: integer
+          minimum: 2
+          maximum: 4
+        occupied:
+          type: integer
+          minimum: 0
+          maximum: 4
+        reserved:
+          type: integer
+          minimum: 0
+          maximum: 4
+        open:
+          type: integer
+          minimum: 0
+          maximum: 4
+        waitlistCount:
+          type: integer
+          minimum: 0
+    PublicGameParticipant:
+      type: object
+      additionalProperties: false
+      required: [displayName, avatarUrl, level, role]
+      properties:
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 120
+        avatarUrl:
+          type: [string, 'null']
+          format: uri
+          maxLength: 2048
+        level:
+          oneOf:
+            - $ref: '#/components/schemas/GamePlayerLevel'
+            - type: 'null'
+        role:
+          type: string
+          enum: [ORGANIZER, PLAYER]
+    GamePriceSummary:
+      type: object
+      additionalProperties: false
+      required: [amountMinor, currency]
+      properties:
+        amountMinor:
+          type: integer
+          minimum: 0
+        currency:
+          type: string
+          const: RUB

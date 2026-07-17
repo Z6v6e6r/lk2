@@ -6,6 +6,7 @@
   var mountId = (script && script.getAttribute('data-mount-id')) || 'phub-app';
   var tenantKey = script && script.getAttribute('data-tenant-key');
   var apiBaseUrl = script && script.getAttribute('data-api-base-url');
+  var serviceWorkerUrl = script && script.getAttribute('data-service-worker-url');
 
   if (!manifestUrl || !tenantKey || !document.getElementById(mountId)) {
     console.error('PadlHub loader requires data-manifest, data-tenant-key and a mount element.');
@@ -22,6 +23,7 @@
         tenantKey: tenantKey,
         release: manifest.release,
         apiBaseUrl: apiBaseUrl || window.location.origin,
+        serviceWorkerUrl: serviceWorkerUrl || '/phub-notification-sw.js',
       });
       (manifest.styles || []).forEach(function addStylesheet(url) {
         var link = document.createElement('link');

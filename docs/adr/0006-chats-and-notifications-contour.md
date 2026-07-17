@@ -48,6 +48,12 @@ Push uses distinct Web Push/VAPID, APNs and FCM adapters behind one notification
 Registration records are encrypted per installation. Provider acceptance, delivery receipts,
 client display and user open are different facts and must not be collapsed into one success state.
 
+Manual CUP campaigns are notification commands, not synthetic chat messages or client-side
+provider calls. They require a dedicated `phub-admin` token, explicit tenant-scoped permission,
+idempotency and audit. Phone numbers may be used to resolve an active PadlHub UUID but are not
+campaign identifiers and are not persisted in command state or broker events. Campaign state,
+recipient UUIDs, intents, inbox items, deliveries and outbox are committed atomically.
+
 ## Consequences
 
 - Direct, contextual and support chats share one authorization and ordering engine.

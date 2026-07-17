@@ -1,11 +1,17 @@
 import type { IdentityProviderKey, IdentityProviderPort } from '@phub/auth';
 import { loadConfig } from '@phub/config';
 import {
+  createAdminNotificationRepository,
   createClientRoutingPlanRepository,
   createDatabasePool,
+  createGameRepository,
   createHomeDashboardProjectionRepository,
+  createLocationRepository,
+  createNotificationEndpointRepository,
   createNotificationInboxRepository,
+  createProfilePrivacyRepository,
 } from '@phub/database';
+import { createNotificationEndpointCipher } from '@phub/notifications';
 import { createLogger, startTelemetry } from '@phub/observability';
 import { VivaIdentityProvider } from '@phub/viva-adapter';
 import Redis from 'ioredis';
@@ -14,6 +20,7 @@ import { buildApp } from './app.js';
 import { AuthService } from './auth/auth-service.js';
 import { RedisAuthChallengeStore } from './auth/challenge-store.js';
 import { RedisVivaOAuthStateStore } from './auth/oauth-state-store.js';
+import { createCommunityDirectoryRuntime } from './communities/community-runtime.js';
 import { PostgresAuthRepository } from './auth/postgres-auth-repository.js';
 
 const config = loadConfig();
@@ -25,6 +32,13 @@ const telemetry = startTelemetry({
 });
 const pool = createDatabasePool(config.DATABASE_URL);
 const clientRoutingPlanRepository = createClientRoutingPlanRepository(pool);
+const notificationEndpointCipher =
+  config.WEB_PUSH_ENABLED && config.NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS
+    ? createNotificationEndpointCipher({
+        serializedKeys: config.NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS,
+        activeKeyId: config.NOTIFICATION_ENDPOINT_ACTIVE_KEY_ID,
+      })
+    : undefined;
 const redis = new Redis(config.REDIS_URL, {
   enableOfflineQueue: false,
   maxRetriesPerRequest: 1,
@@ -58,9 +72,16 @@ const app = await buildApp({
   logger,
   pool,
   authService,
+  communityDirectory: createCommunityDirectoryRuntime({ config, pool, logger }),
   homeDashboardRepository: createHomeDashboardProjectionRepository(pool),
   clientRoutingPlanRepository,
   notificationRepository: createNotificationInboxRepository(pool),
+  notificationEndpointRepository: createNotificationEndpointRepository(pool),
+  adminNotificationRepository: createAdminNotificationRepository(pool),
+  locationRepository: createLocationRepository(pool),
+  profilePrivacyRepository: createProfilePrivacyRepository(pool),
+  ...(config.GAMES_READ_ENABLED ? { gameReadRepository: createGameRepository(pool) } : {}),
+  ...(notificationEndpointCipher ? { notificationEndpointCipher } : {}),
   authDependencyReady: async () => (await redis.ping()) === 'PONG',
   rateLimitRedis: redis,
 });

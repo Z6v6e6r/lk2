@@ -39,7 +39,11 @@ const componentRows = [
   { component: 'upcoming', component_revision: '1', payload: [] },
   { component: 'subscriptions', component_revision: '1', payload: [] },
   { component: 'communities', component_revision: '1', payload: [] },
-  { component: 'promotion', component_revision: '1', payload: null },
+  {
+    component: 'promotion',
+    component_revision: '1',
+    payload: { rotationEnabled: false, intervalSeconds: 6, items: [] },
+  },
   { component: 'locations', component_revision: '1', payload: [] },
   {
     component: 'navigation',

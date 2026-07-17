@@ -12,6 +12,10 @@ async function handleMessage(options: {
   readonly pool: Pool;
   readonly logger: Logger;
   readonly message: ConsumeMessage;
+  readonly webPush?: {
+    readonly appId: string;
+    readonly environment: 'SANDBOX' | 'PRODUCTION';
+  };
 }): Promise<void> {
   let decoded: unknown;
   try {
@@ -42,7 +46,11 @@ async function handleMessage(options: {
   }
 
   try {
-    const result = await applyNotificationSourceEvent({ pool: options.pool, event: parsed.data });
+    const result = await applyNotificationSourceEvent({
+      pool: options.pool,
+      event: parsed.data,
+      ...(options.webPush ? { webPush: options.webPush } : {}),
+    });
     options.channel.ack(options.message);
     options.logger.info(
       {
@@ -71,6 +79,10 @@ export async function registerNotificationProjectorConsumer(options: {
   readonly channel: Channel;
   readonly pool: Pool;
   readonly logger: Logger;
+  readonly webPush?: {
+    readonly appId: string;
+    readonly environment: 'SANDBOX' | 'PRODUCTION';
+  };
 }): Promise<string> {
   await options.channel.assertQueue(NOTIFICATION_PROJECTOR_QUEUE, {
     durable: true,

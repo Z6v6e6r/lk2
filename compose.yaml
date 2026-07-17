@@ -113,6 +113,8 @@ services:
   cup-admin:
     <<: *node-service
     command: npm run dev:cup
+    environment:
+      PHUB_DEV_API_PROXY_TARGET: http://api:3000
     profiles: [clients]
     ports:
       - '${PHUB_BIND_ADDRESS:-127.0.0.1}:5174:5174'

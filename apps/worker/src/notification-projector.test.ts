@@ -107,6 +107,7 @@ describe('notification intent projector', () => {
       outcome: 'processed',
       created: 1,
       suppressed: 0,
+      pushQueued: 0,
       skippedRules: 0,
     });
     expect(

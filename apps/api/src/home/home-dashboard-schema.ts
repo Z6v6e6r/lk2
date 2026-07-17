@@ -1,1 +1,5 @@
-export { homeDashboardSchema, type HomeDashboard } from '@phub/home-projection';
+export {
+  homeDashboardSchema,
+  normalizeHomeDashboardPayload,
+  type HomeDashboard,
+} from '@phub/home-projection';

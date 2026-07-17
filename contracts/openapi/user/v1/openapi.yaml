@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: PadlHub User API
-  version: 1.5.0
+  version: 1.11.0
   description: Canonical user-facing API. Public identifiers are PadlHub UUIDs.
   license:
     name: Proprietary
@@ -10,6 +10,13 @@ servers:
   - url: https://api.padlhub.ru/user/api/v1
 security:
   - PadlHubUserJwt: []
+tags:
+  - name: profiles
+    description: Viewer-filtered profiles and owner-managed privacy policy.
+  - name: games
+    description: Viewer-aware game reads and explicit idempotent commands.
+  - name: locations
+    description: Published PadlHub location cards and detail views.
 paths:
   /{tenantKey}/auth/viva/authorize:
     parameters:
@@ -370,6 +377,119 @@ paths:
           $ref: ../../common/components.yaml#/components/responses/TooManyRequests
         '503':
           $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/profile/privacy:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+    get:
+      tags: [profiles]
+      operationId: getProfilePrivacySettings
+      summary: Load the authenticated user's profile privacy settings
+      description: Missing persisted settings allow actions only after a separate server-side access decision.
+      responses:
+        '200':
+          description: Current versioned owner privacy policy.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfilePrivacySettings'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+    put:
+      tags: [profiles]
+      operationId: updateProfilePrivacySettings
+      summary: Replace the authenticated user's profile privacy settings
+      description: |
+        Applies an optimistic, idempotent owner command. The policy can only control mediated
+        contact and direct-chat capabilities; raw phone or account data is never disclosed.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProfilePrivacyUpdateRequest'
+      responses:
+        '200':
+          description: Persisted privacy settings. An idempotent replay returns the same version.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+            X-Idempotent-Replayed:
+              description: Whether the stored result was replayed for the same command key.
+              schema:
+                type: string
+                enum: ['true', 'false']
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfilePrivacySettings'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '409':
+          $ref: '#/components/responses/CommandConflict'
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/profiles/{userId}:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - name: userId
+        in: path
+        required: true
+        description: Stable PadlHub UUID of the profile owner.
+        schema:
+          type: string
+          format: uuid
+    get:
+      operationId: getPlayerProfileView
+      summary: Load a viewer-filtered player profile
+      description: |
+        Returns only fields that the authenticated viewer may receive. Self-only account data is
+        emitted in `privateAccount`; other users never receive it. Contact and direct-chat access
+        are server-derived capabilities. This contract intentionally does not define which product
+        or account state grants them. The client must not infer access from player data and every
+        eventual contact/chat command must revalidate the current server-side permission.
+      responses:
+        '200':
+          description: Viewer-filtered profile and server-derived action capabilities.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlayerProfileView'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
   /{tenantKey}/bookings/upcoming:
     parameters:
       - $ref: ../../common/components.yaml#/components/parameters/TenantKey
@@ -428,6 +548,56 @@ paths:
           $ref: ../../common/components.yaml#/components/responses/Unauthorized
         '400':
           $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/communities/mine:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+    get:
+      operationId: listMyCommunities
+      summary: List active community memberships for the authenticated user
+      description: |
+        Returns PadlHub community UUIDs only. The cursor is opaque and follows the server-owned
+        order: pinned memberships first, then latest activity. During migration the server may
+        normalize this read from the current LK community store; clients never call that store or
+        provide phone, clientId or another identity selector.
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 20
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 16
+            maxLength: 512
+      responses:
+        '200':
+          description: One page of active community memberships.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommunityMembershipPage'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
         '403':
           $ref: ../../common/components.yaml#/components/responses/Forbidden
         '404':
@@ -534,6 +704,189 @@ paths:
           $ref: ../../common/components.yaml#/components/responses/TooManyRequests
         '503':
           $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/notification-endpoints/web/config:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+    get:
+      operationId: getWebPushConfiguration
+      summary: Get the effective Web Push capability for the authenticated installation
+      responses:
+        '200':
+          description: Public VAPID configuration when global, tenant and provider gates are ready.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebPushConfiguration'
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/notification-endpoints/web:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/IdempotencyKey'
+    post:
+      operationId: registerWebPushEndpoint
+      summary: Register or rotate the authenticated user's Web Push installation
+      description: |
+        Stores the PushSubscription encrypted at rest. The client supplies a stable PadlHub
+        installation UUID; provider account selection and encryption key IDs remain server-owned.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WebPushEndpointRegistration'
+      responses:
+        '200':
+          description: Stored result of the idempotent registration command.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebPushEndpointCommandResult'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/CommandConflict'
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/notification-endpoints/web/{installationId}:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - name: installationId
+        in: path
+        required: true
+        description: Stable PadlHub UUID generated once for this browser installation.
+        schema:
+          type: string
+          format: uuid
+    delete:
+      operationId: revokeWebPushEndpoint
+      summary: Revoke Web Push for one authenticated browser installation
+      responses:
+        '200':
+          description: Stored result of the idempotent revoke command.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebPushEndpointCommandResult'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/CommandConflict'
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/games:
+    $ref: ./games.yaml#/paths/~1{tenantKey}~1games
+  /{tenantKey}/games/{gameId}:
+    $ref: ./games.yaml#/paths/~1{tenantKey}~1games~1{gameId}
+  /{tenantKey}/games/{gameId}/publish:
+    $ref: ./games.yaml#/paths/~1{tenantKey}~1games~1{gameId}~1publish
+  /{tenantKey}/games/{gameId}/join:
+    $ref: ./games.yaml#/paths/~1{tenantKey}~1games~1{gameId}~1join
+  /{tenantKey}/games/{gameId}/participants/me:
+    $ref: ./games.yaml#/paths/~1{tenantKey}~1games~1{gameId}~1participants~1me
+  /{tenantKey}/games/{gameId}/waitlist:
+    $ref: ./games.yaml#/paths/~1{tenantKey}~1games~1{gameId}~1waitlist
+  /{tenantKey}/games/{gameId}/waitlist/me:
+    $ref: ./games.yaml#/paths/~1{tenantKey}~1games~1{gameId}~1waitlist~1me
+  /{tenantKey}/games/{gameId}/cancel:
+    $ref: ./games.yaml#/paths/~1{tenantKey}~1games~1{gameId}~1cancel
+  /{tenantKey}/games/{gameId}/result-submissions:
+    $ref: ./games.yaml#/paths/~1{tenantKey}~1games~1{gameId}~1result-submissions
+  /{tenantKey}/games/{gameId}/result-submissions/{submissionId}/confirm:
+    $ref: ./games.yaml#/paths/~1{tenantKey}~1games~1{gameId}~1result-submissions~1{submissionId}~1confirm
+  /{tenantKey}/games/{gameId}/result-submissions/{submissionId}/dispute:
+    $ref: ./games.yaml#/paths/~1{tenantKey}~1games~1{gameId}~1result-submissions~1{submissionId}~1dispute
+  /{tenantKey}/game-operations/{operationId}:
+    $ref: ./games.yaml#/paths/~1{tenantKey}~1game-operations~1{operationId}
+  /{tenantKey}/locations:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+    get:
+      tags: [locations]
+      operationId: listLocations
+      summary: List published PadlHub locations
+      responses:
+        '200':
+          description: Published location summaries ordered for display
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocationList'
+        '401':
+          $ref: '#/components/responses/AuthenticationRejected'
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/locations/{locationId}:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - name: locationId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [locations]
+      operationId: getLocation
+      summary: Get a published PadlHub location detail
+      responses:
+        '200':
+          description: Location detail with computed operating status
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocationDetail'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: '#/components/responses/AuthenticationRejected'
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
 components:
   schemas:
     ClientRoutingPlan:
@@ -601,6 +954,137 @@ components:
           items: false
     UserProfile:
       $ref: '#/components/schemas/HomeProfile'
+    ProfilePrivacySettings:
+      type: object
+      additionalProperties: false
+      required: [contactPolicy, chatPolicy, version, updatedAt]
+      properties:
+        contactPolicy:
+          $ref: '#/components/schemas/ProfileActionPolicy'
+        chatPolicy:
+          $ref: '#/components/schemas/ProfileActionPolicy'
+        version:
+          type: integer
+          minimum: 0
+          description: Zero means no explicit row exists and server defaults are in effect.
+        updatedAt:
+          type: [string, 'null']
+          format: date-time
+    ProfilePrivacyUpdateRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, contactPolicy, chatPolicy]
+      properties:
+        expectedVersion:
+          type: integer
+          minimum: 0
+        contactPolicy:
+          $ref: '#/components/schemas/ProfileActionPolicy'
+        chatPolicy:
+          $ref: '#/components/schemas/ProfileActionPolicy'
+    ProfileActionPolicy:
+      type: string
+      enum: [AUTHORIZED, NOBODY]
+      description: Target-owner policy evaluated after a separate server-side access decision.
+    PlayerProfileView:
+      type: object
+      additionalProperties: false
+      required: [profile, access]
+      properties:
+        profile:
+          $ref: '#/components/schemas/PlayerProfile'
+        privateAccount:
+          $ref: '#/components/schemas/PlayerPrivateAccount'
+        access:
+          $ref: '#/components/schemas/PlayerProfileAccess'
+    PlayerProfile:
+      type: object
+      additionalProperties: false
+      required: [userId, displayName, level]
+      properties:
+        userId:
+          type: string
+          format: uuid
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 200
+        firstName:
+          type: [string, 'null']
+          maxLength: 100
+        avatarUrl:
+          type: [string, 'null']
+          format: uri
+        level:
+          $ref: '#/components/schemas/PlayerProfileLevel'
+    PlayerProfileLevel:
+      type: object
+      additionalProperties: false
+      required: [label, assessmentRequired]
+      properties:
+        label:
+          type: string
+          minLength: 1
+          maxLength: 20
+        value:
+          type: number
+          minimum: 0
+          maximum: 10
+          description: Omitted unless the viewer has extended-profile access.
+        assessmentRequired:
+          type: boolean
+    PlayerPrivateAccount:
+      type: object
+      additionalProperties: false
+      required: [balanceMinor, currency]
+      description: Self-only fields; the property is omitted for every other viewer.
+      properties:
+        phoneLast4:
+          type: string
+          pattern: '^[0-9]{4}$'
+        balanceMinor:
+          type: integer
+          description: Signed balance in minor currency units.
+        currency:
+          type: string
+          pattern: '^[A-Z]{3}$'
+    PlayerProfileAccess:
+      type: object
+      additionalProperties: false
+      required: [audience, tier, visibleSections, contact, chat]
+      properties:
+        audience:
+          type: string
+          enum: [SELF, OTHER]
+        tier:
+          type: string
+          enum: [BASIC, EXTENDED, INTERACTION, SELF]
+          description: Server-derived viewer tier; never calculated from fields in the browser.
+        visibleSections:
+          type: array
+          uniqueItems: true
+          items:
+            type: string
+            enum: [BASIC, PLAYER_LEVEL, PLAYER_RATING, PRIVATE_ACCOUNT]
+        contact:
+          $ref: '#/components/schemas/ProfileActionCapability'
+        chat:
+          $ref: '#/components/schemas/ProfileActionCapability'
+    ProfileActionCapability:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [AVAILABLE, LOCKED, HIDDEN]
+        reason:
+          type: string
+          enum: [ACCESS_REQUIRED, PROFILE_RESTRICTED, SELF_PROFILE]
+        route:
+          type: string
+          pattern: '^/'
+          description: Present only when the action is available; generated by PadlHub.
     AuthChallengeRequest:
       type: object
       additionalProperties: false
@@ -770,6 +1254,7 @@ components:
           subscriptions,
           communities,
           promotion,
+          promotions,
           locations,
           additionalLinks,
           capabilities,
@@ -798,13 +1283,17 @@ components:
             $ref: '#/components/schemas/HomeSubscription'
         communities:
           type: array
-          maxItems: 8
+          maxItems: 5
           items:
-            $ref: '#/components/schemas/HomeCommunity'
+            $ref: '#/components/schemas/CommunitySummary'
         promotion:
+          deprecated: true
+          description: First active item retained during the expand/migrate compatibility window.
           oneOf:
             - $ref: '#/components/schemas/HomePromotion'
             - type: 'null'
+        promotions:
+          $ref: '#/components/schemas/HomePromotionDeck'
         locations:
           type: array
           maxItems: 8
@@ -987,10 +1476,10 @@ components:
         route:
           type: string
           pattern: '^/'
-    HomeCommunity:
+    CommunitySummary:
       type: object
       additionalProperties: false
-      required: [id, title, memberCount, role, unreadCount, accent, route]
+      required: [id, title, logoUrl, isVerified, unreadChatCount, route]
       properties:
         id:
           type: string
@@ -999,27 +1488,31 @@ components:
           type: string
           minLength: 1
           maxLength: 120
-        description:
-          type: [string, 'null']
-          maxLength: 220
-        memberCount:
-          type: integer
-          minimum: 1
-        role:
-          type: string
-          enum: [owner, admin, moderator, member]
-        unreadCount:
-          type: integer
-          minimum: 0
-        accent:
-          type: string
-          pattern: '^#[0-9A-Fa-f]{6}$'
         logoUrl:
           type: [string, 'null']
           format: uri
+        isVerified:
+          type: boolean
+        unreadChatCount:
+          type: integer
+          minimum: 0
         route:
           type: string
           pattern: '^/'
+    CommunityMembershipPage:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          maxItems: 50
+          items:
+            $ref: '#/components/schemas/CommunitySummary'
+        nextCursor:
+          type: string
+          minLength: 16
+          maxLength: 512
     HomePromotion:
       type: object
       additionalProperties: false
@@ -1046,13 +1539,34 @@ components:
           maxLength: 60
         route:
           type: string
-          pattern: '^/'
+          minLength: 1
+          maxLength: 4000
+          pattern: '^(https?://|/|#|mailto:|tel:)'
         tone:
           type: string
           enum: [violet, lime, mint, sand]
         imageUrl:
           type: [string, 'null']
           format: uri
+        mobileImageUrl:
+          type: [string, 'null']
+          format: uri
+    HomePromotionDeck:
+      type: object
+      additionalProperties: false
+      required: [rotationEnabled, intervalSeconds, items]
+      properties:
+        rotationEnabled:
+          type: boolean
+        intervalSeconds:
+          type: integer
+          minimum: 3
+          maximum: 30
+        items:
+          type: array
+          maxItems: 20
+          items:
+            $ref: '#/components/schemas/HomePromotion'
     HomeLocation:
       type: object
       additionalProperties: false
@@ -1138,7 +1652,7 @@ components:
           maxLength: 8000
         deepLink:
           type: string
-          pattern: '^/'
+          pattern: '^/(?!/)'
           maxLength: 2000
         createdAt:
           type: string
@@ -1180,12 +1694,316 @@ components:
         createdAt:
           type: string
           format: date-time
+    WebPushConfiguration:
+      type: object
+      additionalProperties: false
+      required: [enabled]
+      properties:
+        enabled:
+          type: boolean
+        publicKey:
+          type: string
+          minLength: 20
+          maxLength: 256
+          description: Public URL-safe VAPID key. No private provider credential is exposed.
+        reason:
+          type: string
+          enum:
+            [
+              GLOBAL_GATE_DISABLED,
+              TENANT_GATE_DISABLED,
+              PROVIDER_NOT_CONFIGURED,
+              RUNTIME_UNAVAILABLE,
+            ]
+    WebPushEndpointRegistration:
+      type: object
+      additionalProperties: false
+      required: [installationId, subscription]
+      properties:
+        installationId:
+          type: string
+          format: uuid
+        subscription:
+          $ref: '#/components/schemas/WebPushSubscription'
+    WebPushSubscription:
+      type: object
+      additionalProperties: false
+      required: [endpoint, keys]
+      properties:
+        endpoint:
+          type: string
+          format: uri
+          pattern: '^https://'
+          maxLength: 2048
+        expirationTime:
+          type: [integer, 'null']
+          minimum: 0
+        keys:
+          type: object
+          additionalProperties: false
+          required: [p256dh, auth]
+          properties:
+            p256dh:
+              type: string
+              minLength: 40
+              maxLength: 256
+              pattern: '^[A-Za-z0-9_-]+={0,2}$'
+            auth:
+              type: string
+              minLength: 16
+              maxLength: 256
+              pattern: '^[A-Za-z0-9_-]+={0,2}$'
+    WebPushEndpointCommandResult:
+      type: object
+      additionalProperties: false
+      required: [outcome, endpointId, installationId, status, replayed]
+      properties:
+        outcome:
+          type: string
+          const: updated
+        endpointId:
+          type: string
+          format: uuid
+        installationId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [ACTIVE, REVOKED]
+        replayed:
+          type: boolean
+    LocationWeekday:
+      type: string
+      enum: [MON, TUE, WED, THU, FRI, SAT, SUN]
+    LocationAmenityIcon:
+      type: string
+      enum:
+        [
+          PARKING,
+          CAFE,
+          CHANGING_ROOM,
+          SHOWER,
+          SAUNA,
+          RENTAL,
+          SHOP,
+          ACCESSIBILITY,
+          KIDS,
+          LOUNGE,
+          OTHER,
+        ]
+    LocationHoursInterval:
+      type: object
+      additionalProperties: false
+      required: [opensAt, closesAt]
+      properties:
+        opensAt:
+          type: string
+          pattern: '^(?:[01]\d|2[0-3]):[0-5]\d$'
+        closesAt:
+          type: string
+          pattern: '^(?:[01]\d|2[0-3]):[0-5]\d$'
+    LocationWeeklyHoursEntry:
+      type: object
+      additionalProperties: false
+      required: [weekday, closed, intervals]
+      properties:
+        weekday:
+          $ref: '#/components/schemas/LocationWeekday'
+        closed:
+          type: boolean
+        intervals:
+          type: array
+          maxItems: 3
+          items:
+            $ref: '#/components/schemas/LocationHoursInterval'
+    LocationAmenity:
+      type: object
+      additionalProperties: false
+      required: [key, icon, title, description, sortOrder]
+      properties:
+        key:
+          type: string
+          pattern: '^[a-z][a-z0-9-]{1,62}$'
+        icon:
+          $ref: '#/components/schemas/LocationAmenityIcon'
+        title:
+          type: string
+          minLength: 1
+          maxLength: 120
+        description:
+          type: [string, 'null']
+          maxLength: 300
+        sortOrder:
+          type: integer
+          minimum: 0
+          maximum: 99
+    LocationGalleryImage:
+      type: object
+      additionalProperties: false
+      required: [url, alt, isCover, sortOrder]
+      properties:
+        url:
+          type: string
+          format: uri
+          pattern: '^https://'
+          maxLength: 2000
+        alt:
+          type: string
+          maxLength: 180
+        isCover:
+          type: boolean
+        sortOrder:
+          type: integer
+          minimum: 0
+          maximum: 99
+    LocationSummary:
+      type: object
+      additionalProperties: false
+      required: [id, title, city, courtCount, coverImageUrl, route]
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+          minLength: 1
+          maxLength: 120
+        city:
+          type: [string, 'null']
+          maxLength: 120
+        courtCount:
+          type: integer
+          minimum: 0
+        coverImageUrl:
+          type: [string, 'null']
+          format: uri
+        route:
+          type: string
+          pattern: '^/'
+    LocationList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/LocationSummary'
+    LocationCoordinates:
+      type: object
+      additionalProperties: false
+      required: [latitude, longitude]
+      properties:
+        latitude:
+          type: number
+          minimum: -90
+          maximum: 90
+        longitude:
+          type: number
+          minimum: -180
+          maximum: 180
+    LocationMetro:
+      type: object
+      additionalProperties: false
+      required: [name, distanceMeters]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 160
+        distanceMeters:
+          type: [integer, 'null']
+          minimum: 0
+    LocationDetail:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - slug
+        - title
+        - shortTitle
+        - city
+        - courtCount
+        - address
+        - coordinates
+        - timezone
+        - metro
+        - phoneE164
+        - gallery
+        - amenities
+        - workingHours
+        - openNow
+        - workingHoursSummary
+        - navigationUrl
+        - route
+      properties:
+        id:
+          type: string
+          format: uuid
+        slug:
+          type: string
+        title:
+          type: string
+          minLength: 1
+          maxLength: 120
+        shortTitle:
+          type: [string, 'null']
+          maxLength: 80
+        city:
+          type: [string, 'null']
+          maxLength: 120
+        courtCount:
+          type: integer
+          minimum: 0
+        address:
+          type: [string, 'null']
+          maxLength: 500
+        coordinates:
+          oneOf:
+            - $ref: '#/components/schemas/LocationCoordinates'
+            - type: 'null'
+        timezone:
+          type: string
+        metro:
+          oneOf:
+            - $ref: '#/components/schemas/LocationMetro'
+            - type: 'null'
+        phoneE164:
+          type: [string, 'null']
+        gallery:
+          type: array
+          maxItems: 12
+          items:
+            $ref: '#/components/schemas/LocationGalleryImage'
+        amenities:
+          type: array
+          maxItems: 16
+          items:
+            $ref: '#/components/schemas/LocationAmenity'
+        workingHours:
+          type: array
+          maxItems: 7
+          items:
+            $ref: '#/components/schemas/LocationWeeklyHoursEntry'
+        openNow:
+          type: boolean
+        workingHoursSummary:
+          type: string
+          minLength: 1
+          maxLength: 160
+        navigationUrl:
+          type: [string, 'null']
+          format: uri
+        route:
+          type: string
+          pattern: '^/'
   parameters:
     IdempotencyKey:
       name: Idempotency-Key
       in: header
       required: true
-      description: Stable client operation key used for retry-safe authentication commands.
+      description: Stable client operation key used for retry-safe commands.
       schema:
         type: string
         minLength: 16

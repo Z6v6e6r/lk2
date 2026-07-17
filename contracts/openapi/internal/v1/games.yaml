@@ -1,0 +1,367 @@
+paths:
+  /{tenantKey}/game-commands:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/IdempotencyKey'
+    post:
+      tags: [games]
+      operationId: submitGameInternalCommand
+      summary: Submit a trusted provider-neutral game command
+      description: |
+        Scheduler, process-manager and reconciliation callers submit PadlHub identifiers only.
+        The game write owner validates and commits state, audit and outbox atomically.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GameInternalCommand'
+      responses:
+        '202':
+          description: Command accepted for idempotent processing.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GameInternalCommandAccepted'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/InternalCommandConflict'
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+
+  /{tenantKey}/game-events/{eventId}:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/EventId'
+    get:
+      tags: [games]
+      operationId: inspectGameDomainEvent
+      summary: Inspect one persisted Games outbox event
+      description: Read-only operator/service diagnostics; never available to user-facing clients.
+      responses:
+        '200':
+          description: Strict versioned Games event using the standard outbox envelope.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GameDomainEvent'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+
+components:
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: Stable service command key; raw values are not copied to domain events.
+      schema:
+        type: string
+        minLength: 16
+        maxLength: 128
+        pattern: '^[A-Za-z0-9._:-]+$'
+    EventId:
+      name: eventId
+      in: path
+      required: true
+      description: Persisted outbox event UUID.
+      schema:
+        type: string
+        format: uuid
+
+  responses:
+    InternalCommandConflict:
+      description: Command ID, idempotency payload, revision or current aggregate state conflicts.
+      headers:
+        X-Correlation-ID:
+          $ref: ../../common/components.yaml#/components/headers/CorrelationId
+      content:
+        application/json:
+          schema:
+            $ref: ../../common/components.yaml#/components/schemas/ApiError
+
+  schemas:
+    GameInternalCommand:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - type
+        - aggregateId
+        - tenantId
+        - createdAt
+        - correlationId
+        - causationId
+        - requestedBy
+        - attempt
+        - payload
+      properties:
+        id:
+          type: string
+          format: uuid
+        type:
+          $ref: '#/components/schemas/GameInternalCommandType'
+        aggregateId:
+          type: string
+          format: uuid
+        tenantId:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        correlationId:
+          type: string
+          pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$'
+        causationId:
+          type: [string, 'null']
+          format: uuid
+        requestedBy:
+          type: string
+          enum: [SYSTEM, WORKER, OPERATOR]
+        attempt:
+          type: integer
+          minimum: 1
+          maximum: 20
+        payload:
+          oneOf:
+            - $ref: '#/components/schemas/GameProvisioningAdvancePayload'
+            - $ref: '#/components/schemas/GameReservationExpirePayload'
+            - $ref: '#/components/schemas/GameWaitlistPromotePayload'
+            - $ref: '#/components/schemas/GameLifecycleCommandPayload'
+            - $ref: '#/components/schemas/GameIntegrationReconcilePayload'
+    GameInternalCommandType:
+      type: string
+      enum:
+        - game.provisioning.advance.v1
+        - game.reservation.expire.v1
+        - game.waitlist.promote.v1
+        - game.lifecycle.start.v1
+        - game.lifecycle.finish.v1
+        - game.integration.reconcile.v1
+    GameProvisioningAdvancePayload:
+      type: object
+      additionalProperties: false
+      required: [gameId, operationId]
+      properties:
+        gameId:
+          type: string
+          format: uuid
+        operationId:
+          type: string
+          format: uuid
+    GameReservationExpirePayload:
+      type: object
+      additionalProperties: false
+      required: [gameId, reservationId]
+      properties:
+        gameId:
+          type: string
+          format: uuid
+        reservationId:
+          type: string
+          format: uuid
+    GameWaitlistPromotePayload:
+      type: object
+      additionalProperties: false
+      required: [gameId, waitlistEntryId]
+      properties:
+        gameId:
+          type: string
+          format: uuid
+        waitlistEntryId:
+          type: string
+          format: uuid
+    GameLifecycleCommandPayload:
+      type: object
+      additionalProperties: false
+      required: [gameId, expectedRevision]
+      properties:
+        gameId:
+          type: string
+          format: uuid
+        expectedRevision:
+          type: string
+          pattern: '^[1-9][0-9]*$'
+    GameIntegrationReconcilePayload:
+      type: object
+      additionalProperties: false
+      required: [gameId, resourceType, resourceId]
+      properties:
+        gameId:
+          type: string
+          format: uuid
+        resourceType:
+          type: string
+          enum: [BOOKING, PAYMENT_OBLIGATION, RATING_PROJECTION]
+        resourceId:
+          type: string
+          format: uuid
+    GameInternalCommandAccepted:
+      type: object
+      additionalProperties: false
+      required: [commandId, status, replayed]
+      properties:
+        commandId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [ACCEPTED, PROCESSING, SUCCEEDED]
+        replayed:
+          type: boolean
+    GameDomainEvent:
+      type: object
+      additionalProperties: false
+      required: [id, type, aggregateId, tenantId, occurredAt, correlationId, payload]
+      properties:
+        id:
+          type: string
+          format: uuid
+        type:
+          $ref: '#/components/schemas/GameDomainEventType'
+        aggregateId:
+          type: string
+          format: uuid
+        tenantId:
+          type: string
+          format: uuid
+        occurredAt:
+          type: string
+          format: date-time
+        correlationId:
+          type: string
+          pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$'
+        payload:
+          $ref: '#/components/schemas/GameDomainEventPayload'
+    GameDomainEventType:
+      type: string
+      enum:
+        - game.created.v1
+        - game.provisioning.requested.v1
+        - game.scheduled.v1
+        - game.published.v1
+        - game.participation.reserved.v1
+        - game.participation.confirmed.v1
+        - game.participation.expired.v1
+        - game.participation.left.v1
+        - game.waitlist.joined.v1
+        - game.waitlist.left.v1
+        - game.waitlist.promoted.v1
+        - game.roster.completed.v1
+        - game.roster.reopened.v1
+        - game.started.v1
+        - game.finished.v1
+        - game.result.submitted.v1
+        - game.result.confirmed.v1
+        - game.result.disputed.v1
+        - game.cancelled.v1
+    GameDomainEventPayload:
+      type: object
+      additionalProperties: false
+      required: [gameId, aggregateRevision, causationId, actorUserId]
+      properties:
+        gameId:
+          type: string
+          format: uuid
+        aggregateRevision:
+          type: string
+          pattern: '^[1-9][0-9]*$'
+        causationId:
+          type: string
+          format: uuid
+        actorUserId:
+          type: [string, 'null']
+          format: uuid
+        organizerUserId:
+          type: string
+          format: uuid
+        userId:
+          type: string
+          format: uuid
+        participantUserIds:
+          type: array
+          uniqueItems: true
+          maxItems: 4
+          items:
+            type: string
+            format: uuid
+        requiredConfirmationUserIds:
+          type: array
+          uniqueItems: true
+          maxItems: 4
+          items:
+            type: string
+            format: uuid
+        operationId:
+          type: string
+          format: uuid
+        reservationId:
+          type: string
+          format: uuid
+        participationId:
+          type: string
+          format: uuid
+        waitlistEntryId:
+          type: string
+          format: uuid
+        position:
+          type: integer
+          minimum: 1
+        targetRelation:
+          type: string
+          enum: [SEAT_RESERVED, PARTICIPANT]
+        targetId:
+          type: string
+          format: uuid
+        submissionId:
+          type: string
+          format: uuid
+        resultId:
+          type: string
+          format: uuid
+        submittedByUserId:
+          type: string
+          format: uuid
+        disputedByUserId:
+          type: string
+          format: uuid
+        expiresAt:
+          type: string
+          format: date-time
+        kind:
+          type: string
+          enum: [FRIENDLY, RATING, PRIVATE, COACH_GAME]
+        visibility:
+          type: string
+          enum: [PUBLIC, PRIVATE, COMMUNITY]
+        reasonCode:
+          type: string
+          pattern: '^[A-Z][A-Z0-9_]*$'

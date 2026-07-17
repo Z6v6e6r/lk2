@@ -7,25 +7,50 @@ import padlHubLogoUrl from './assets/padlhub-logo.svg';
 import vkIconUrl from './assets/vk-auth.svg';
 import yandexIconUrl from './assets/yandex-auth.svg';
 import { BookingsPage } from './BookingsPage.js';
+import { CommunitiesPage } from './CommunitiesPage.js';
+import {
+  isIOSBrowser,
+  preferredAuthEntryView,
+  type AuthEntryView,
+} from './browser-auth-context.js';
 import { HomeDashboardPage } from './HomeDashboardPage.js';
+import { LocationDetailPage } from './LocationDetailPage.js';
+import { LocationsPage } from './LocationsPage.js';
+import { NotificationsPage } from './NotificationsPage.js';
 import { ProfilePage } from './ProfilePage.js';
 import type {
   AuthGateway,
   AuthenticatedSession,
   HomeDashboard,
+  LocationDetail,
+  LocationList,
+  NotificationInboxPage,
+  PlayerProfileView,
   PhoneChallenge,
-  UserProfile,
+  ProfilePrivacySettings,
+  ProfilePrivacyUpdateRequest,
   UserUpcomingBookings,
   VivaOAuthProvider,
+  WebPushConfiguration,
 } from './auth-gateway.js';
+import {
+  disableWebPush,
+  enableWebPush,
+  getWebPushBrowserState,
+  type WebPushBrowserState,
+} from './web-push-client.js';
 
 type View = 'restoring' | 'oauth' | 'phone' | 'otp' | 'home';
 type BusyAction = 'start-viva' | 'request-code' | 'verify-code' | 'logout' | null;
 
 type ProtectedRoute =
   | { readonly kind: 'home' }
-  | { readonly kind: 'profile' }
+  | { readonly kind: 'profile'; readonly userId?: string }
   | { readonly kind: 'bookings' }
+  | { readonly kind: 'notifications' }
+  | { readonly kind: 'communities' }
+  | { readonly kind: 'locations' }
+  | { readonly kind: 'location'; readonly locationId: string }
   | { readonly kind: 'section'; readonly title: string }
   | { readonly kind: 'not-found' };
 
@@ -36,19 +61,28 @@ const protectedSections = [
   ['/coaches', 'Тренеры'],
   ['/subscriptions', 'Абонементы'],
   ['/communities', 'Сообщества'],
-  ['/locations', 'Локации'],
   ['/promotions', 'Акции'],
   ['/gift-certificates', 'Подарочные сертификаты'],
   ['/offers', 'Предложения'],
   ['/chats', 'Чаты'],
-  ['/notifications', 'Уведомления'],
 ] as const;
 
 function resolveProtectedRoute(pathname: string): ProtectedRoute {
   const normalizedPath = pathname.length > 1 ? pathname.replace(/\/+$/, '') : pathname;
   if (normalizedPath === '/') return { kind: 'home' };
   if (normalizedPath === '/profile') return { kind: 'profile' };
+  const profileMatch = normalizedPath.match(
+    /^\/profile\/([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i,
+  );
+  if (profileMatch?.[1]) return { kind: 'profile', userId: profileMatch[1] };
   if (normalizedPath === '/bookings') return { kind: 'bookings' };
+  if (normalizedPath === '/notifications') return { kind: 'notifications' };
+  if (normalizedPath === '/communities') return { kind: 'communities' };
+  if (normalizedPath === '/locations') return { kind: 'locations' };
+  const locationMatch = normalizedPath.match(
+    /^\/locations\/([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i,
+  );
+  if (locationMatch?.[1]) return { kind: 'location', locationId: locationMatch[1] };
   const section = protectedSections.find(
     ([prefix]) => normalizedPath === prefix || normalizedPath.startsWith(`${prefix}/`),
   );
@@ -70,8 +104,12 @@ interface AuthState {
 }
 
 type AuthAction =
-  | { readonly type: 'restore-completed'; readonly session: AuthenticatedSession | null }
-  | { readonly type: 'restore-failed'; readonly message: string }
+  | {
+      readonly type: 'restore-completed';
+      readonly session: AuthenticatedSession | null;
+      readonly entryView: AuthEntryView;
+    }
+  | { readonly type: 'restore-failed'; readonly message: string; readonly entryView: AuthEntryView }
   | { readonly type: 'oauth-view' }
   | { readonly type: 'phone-changed'; readonly value: string }
   | { readonly type: 'acceptance-toggled'; readonly acceptance: 'public-offer' | 'personal-data' }
@@ -89,7 +127,11 @@ type AuthAction =
   | { readonly type: 'edit-phone' }
   | { readonly type: 'logout-started' }
   | { readonly type: 'logout-failed'; readonly message: string }
-  | { readonly type: 'logout-completed'; readonly message?: string };
+  | {
+      readonly type: 'logout-completed';
+      readonly entryView: AuthEntryView;
+      readonly message?: string;
+    };
 
 const initialState: AuthState = {
   view: 'restoring',
@@ -110,9 +152,9 @@ function reducer(state: AuthState, action: AuthAction): AuthState {
     case 'restore-completed':
       return action.session
         ? { ...state, view: 'home', session: action.session, error: null }
-        : { ...state, view: 'oauth', session: null, error: null };
+        : { ...state, view: action.entryView, session: null, error: null };
     case 'restore-failed':
-      return { ...state, view: 'oauth', error: action.message };
+      return { ...state, view: action.entryView, error: action.message };
     case 'oauth-view':
       return { ...state, view: 'oauth', busy: null, error: null, notice: null };
     case 'phone-changed':
@@ -176,7 +218,7 @@ function reducer(state: AuthState, action: AuthAction): AuthState {
     case 'logout-completed':
       return {
         ...initialState,
-        view: 'oauth',
+        view: action.entryView,
         phoneInput: state.phoneInput,
         error: action.message ?? null,
         notice: action.message ? null : 'Вы вышли из аккаунта',
@@ -275,18 +317,43 @@ export interface AppProps {
   readonly tenantKey: string;
 }
 
+const HOME_REFRESH_INTERVAL_MS = 30_000;
+const NOTIFICATIONS_REFRESH_INTERVAL_MS = 15_000;
+
 export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
   const [state, dispatch] = useReducer(reducer, initialState);
+  const browserNavigator = typeof navigator === 'undefined' ? undefined : navigator;
+  const iosBrowser = isIOSBrowser(browserNavigator);
+  const entryView = preferredAuthEntryView(browserNavigator);
   const [currentTime, setCurrentTime] = useState(() => Date.now());
   const [homeDashboard, setHomeDashboard] = useState<HomeDashboard | null>(null);
   const [homeError, setHomeError] = useState<string | null>(null);
-  const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
+  const [locations, setLocations] = useState<LocationList | null>(null);
+  const [locationDetail, setLocationDetail] = useState<LocationDetail | null>(null);
+  const [locationsError, setLocationsError] = useState<string | null>(null);
+  const [userProfile, setUserProfile] = useState<PlayerProfileView | null>(null);
   const [profileError, setProfileError] = useState<string | null>(null);
+  const [profilePrivacy, setProfilePrivacy] = useState<ProfilePrivacySettings | null>(null);
+  const [profilePrivacyBusy, setProfilePrivacyBusy] = useState(false);
+  const [profilePrivacyError, setProfilePrivacyError] = useState<string | null>(null);
+  const [profilePrivacyNotice, setProfilePrivacyNotice] = useState<string | null>(null);
   const [upcomingBookings, setUpcomingBookings] = useState<UserUpcomingBookings | null>(null);
   const [bookingsError, setBookingsError] = useState<string | null>(null);
+  const [notifications, setNotifications] = useState<NotificationInboxPage | null>(null);
+  const [webPushConfiguration, setWebPushConfiguration] = useState<WebPushConfiguration | null>(
+    null,
+  );
+  const [webPushBrowserState, setWebPushBrowserState] =
+    useState<WebPushBrowserState>('unsupported');
+  const [notificationsError, setNotificationsError] = useState<string | null>(null);
+  const [notificationsBusy, setNotificationsBusy] = useState(false);
   const protectedRoute = resolveProtectedRoute(
     typeof window === 'undefined' ? '/' : window.location.pathname,
   );
+  const requestedProfileUserId =
+    protectedRoute.kind === 'profile' ? protectedRoute.userId : undefined;
+  const requestedLocationId =
+    protectedRoute.kind === 'location' ? protectedRoute.locationId : undefined;
   const phoneInput = useRef<HTMLInputElement>(null);
   const codeInput = useRef<HTMLInputElement>(null);
 
@@ -294,26 +361,56 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
     let active = true;
     void gateway.restoreSession().then(
       (session) => {
-        if (active) dispatch({ type: 'restore-completed', session });
+        if (active) dispatch({ type: 'restore-completed', session, entryView });
       },
       (error: unknown) => {
-        if (active) dispatch({ type: 'restore-failed', message: userMessage(error, 'restore') });
+        if (active) {
+          dispatch({
+            type: 'restore-failed',
+            message: userMessage(error, 'restore'),
+            entryView,
+          });
+        }
       },
     );
     return () => {
       active = false;
     };
-  }, [gateway]);
+  }, [entryView, gateway]);
 
   useEffect(() => {
     if (state.view !== 'home' || !state.session) return;
     let active = true;
     if (protectedRoute.kind === 'profile') {
-      void gateway.getUserProfile(state.session.context.user.id).then(
+      const targetUserId = requestedProfileUserId ?? state.session.context.user.id;
+      const isSelfProfile = targetUserId === state.session.context.user.id;
+      if (isSelfProfile) {
+        void gateway.getProfilePrivacy().then(
+          (settings) => {
+            if (active) {
+              setProfilePrivacy(settings);
+              setProfilePrivacyError(null);
+              setProfilePrivacyNotice(null);
+            }
+          },
+          () => {
+            if (active) {
+              setProfilePrivacyError('Не удалось загрузить настройки приватности.');
+              setProfilePrivacyNotice(null);
+            }
+          },
+        );
+      }
+      void gateway.getPlayerProfile(targetUserId).then(
         (profile) => {
           if (active) {
             setUserProfile(profile);
             setProfileError(null);
+            if (!isSelfProfile) {
+              setProfilePrivacy(null);
+              setProfilePrivacyError(null);
+              setProfilePrivacyNotice(null);
+            }
           }
         },
         () => {
@@ -340,22 +437,148 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
         active = false;
       };
     }
-    if (protectedRoute.kind !== 'home') return;
-    void gateway.getHomeDashboard().then(
-      (dashboard) => {
-        if (active) {
-          setHomeDashboard(dashboard);
-          setHomeError(null);
+    if (protectedRoute.kind === 'notifications') {
+      const serviceWorkerUrl =
+        window.__PHUB_BOOTSTRAP__?.serviceWorkerUrl ?? '/phub-notification-sw.js';
+      const refreshNotifications = (): void => {
+        void gateway.listNotifications().then(
+          (page) => {
+            if (!active) return;
+            setNotifications(page);
+            setNotificationsError((current) => {
+              const next = current?.replace('Лента оповещений временно недоступна.', '').trim();
+              return next || null;
+            });
+          },
+          () => undefined,
+        );
+      };
+      const refreshVisibleNotifications = (): void => {
+        if (document.visibilityState === 'visible') refreshNotifications();
+      };
+      void Promise.allSettled([
+        gateway.listNotifications(),
+        gateway.getWebPushConfiguration(),
+        getWebPushBrowserState(serviceWorkerUrl),
+      ]).then(([pageResult, pushConfigurationResult, browserStateResult]) => {
+        if (!active) return;
+        const errors: string[] = [];
+        if (pageResult.status === 'fulfilled') {
+          setNotifications(pageResult.value);
+        } else {
+          setNotifications({ items: [], unreadCount: 0 });
+          errors.push('Лента оповещений временно недоступна.');
         }
-      },
-      () => {
-        if (active) setHomeError('Не удалось загрузить Главную. Проверьте связь и повторите.');
-      },
+        if (pushConfigurationResult.status === 'fulfilled') {
+          setWebPushConfiguration(pushConfigurationResult.value);
+        } else {
+          setWebPushConfiguration({ enabled: false, reason: 'RUNTIME_UNAVAILABLE' });
+          errors.push('Настройки Web Push временно недоступны.');
+        }
+        if (browserStateResult.status === 'fulfilled') {
+          setWebPushBrowserState(browserStateResult.value);
+        } else {
+          setWebPushBrowserState('unsupported');
+          errors.push('Не удалось проверить поддержку Web Push.');
+        }
+        setNotificationsError(errors.length > 0 ? errors.join(' ') : null);
+      });
+      const refreshInterval = window.setInterval(
+        refreshNotifications,
+        NOTIFICATIONS_REFRESH_INTERVAL_MS,
+      );
+      window.addEventListener('focus', refreshNotifications);
+      document.addEventListener('visibilitychange', refreshVisibleNotifications);
+      return () => {
+        active = false;
+        window.clearInterval(refreshInterval);
+        window.removeEventListener('focus', refreshNotifications);
+        document.removeEventListener('visibilitychange', refreshVisibleNotifications);
+      };
+    }
+    if (protectedRoute.kind === 'locations') {
+      void gateway.listLocations().then(
+        (result) => {
+          if (!active) return;
+          setLocations(result);
+          setLocationsError(null);
+        },
+        () => {
+          if (active)
+            setLocationsError('Не удалось загрузить локации. Проверьте связь и повторите.');
+        },
+      );
+      return () => {
+        active = false;
+      };
+    }
+    if (protectedRoute.kind === 'location' && requestedLocationId) {
+      void gateway.getLocation(requestedLocationId).then(
+        (result) => {
+          if (!active) return;
+          setLocationDetail(result);
+          setLocationsError(null);
+        },
+        () => {
+          if (active) setLocationsError('Не удалось загрузить карточку локации.');
+        },
+      );
+      return () => {
+        active = false;
+      };
+    }
+    if (protectedRoute.kind !== 'home') return;
+    const refreshHome = (): void => {
+      void gateway.getHomeDashboard().then(
+        (dashboard) => {
+          if (active) {
+            setHomeDashboard(dashboard);
+            setHomeError(null);
+          }
+        },
+        () => {
+          if (active) setHomeError('Не удалось загрузить Главную. Проверьте связь и повторите.');
+        },
+      );
+    };
+    const refreshNotificationBadge = (): void => {
+      void gateway.listNotifications().then(
+        (page) => {
+          if (active) setNotifications(page);
+        },
+        () => undefined,
+      );
+    };
+    const refreshHomeContent = (): void => {
+      refreshHome();
+      refreshNotificationBadge();
+    };
+    const refreshVisibleHome = (): void => {
+      if (document.visibilityState === 'visible') refreshHomeContent();
+    };
+    refreshHomeContent();
+    const homeRefreshInterval = window.setInterval(refreshHome, HOME_REFRESH_INTERVAL_MS);
+    const notificationRefreshInterval = window.setInterval(
+      refreshNotificationBadge,
+      NOTIFICATIONS_REFRESH_INTERVAL_MS,
     );
+    window.addEventListener('focus', refreshHomeContent);
+    document.addEventListener('visibilitychange', refreshVisibleHome);
     return () => {
       active = false;
+      window.clearInterval(homeRefreshInterval);
+      window.clearInterval(notificationRefreshInterval);
+      window.removeEventListener('focus', refreshHomeContent);
+      document.removeEventListener('visibilitychange', refreshVisibleHome);
     };
-  }, [gateway, protectedRoute.kind, state.session, state.view]);
+  }, [
+    gateway,
+    protectedRoute.kind,
+    requestedLocationId,
+    requestedProfileUserId,
+    state.session,
+    state.view,
+  ]);
 
   useEffect(() => {
     if (state.busy) return;
@@ -440,18 +663,114 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
 
   function handleLogout(): void {
     dispatch({ type: 'logout-started' });
-    void gateway.logout().then(
+    const serviceWorkerUrl =
+      window.__PHUB_BOOTSTRAP__?.serviceWorkerUrl ?? '/phub-notification-sw.js';
+    void disableWebPush({ gateway, serviceWorkerUrl })
+      .catch(() => undefined)
+      .then(() => gateway.logout())
+      .then(
+        () => {
+          setHomeDashboard(null);
+          setHomeError(null);
+          setLocations(null);
+          setLocationDetail(null);
+          setLocationsError(null);
+          setUserProfile(null);
+          setProfileError(null);
+          setUpcomingBookings(null);
+          setBookingsError(null);
+          setNotifications(null);
+          setWebPushConfiguration(null);
+          setNotificationsError(null);
+          dispatch({ type: 'logout-completed', entryView });
+        },
+        (error: unknown) => {
+          dispatch({ type: 'logout-failed', message: userMessage(error, 'logout') });
+        },
+      );
+  }
+
+  function handleEnableWebPush(): void {
+    if (!webPushConfiguration?.enabled || !webPushConfiguration.publicKey) return;
+    setNotificationsBusy(true);
+    setNotificationsError(null);
+    void enableWebPush({
+      gateway,
+      publicKey: webPushConfiguration.publicKey,
+      serviceWorkerUrl: window.__PHUB_BOOTSTRAP__?.serviceWorkerUrl ?? '/phub-notification-sw.js',
+    }).then(
       () => {
-        setHomeDashboard(null);
-        setHomeError(null);
-        setUserProfile(null);
-        setProfileError(null);
-        setUpcomingBookings(null);
-        setBookingsError(null);
-        dispatch({ type: 'logout-completed' });
+        setWebPushBrowserState('subscribed');
+        setNotificationsBusy(false);
       },
-      (error: unknown) => {
-        dispatch({ type: 'logout-failed', message: userMessage(error, 'logout') });
+      () => {
+        const notificationPermission =
+          typeof Notification === 'undefined' ? 'default' : Notification.permission;
+        setNotificationsError(
+          notificationPermission === 'denied'
+            ? 'Браузер запретил уведомления. Разрешите их в настройках сайта.'
+            : 'Не удалось включить Web Push.',
+        );
+        setNotificationsBusy(false);
+      },
+    );
+  }
+
+  function handleDisableWebPush(): void {
+    setNotificationsBusy(true);
+    setNotificationsError(null);
+    void disableWebPush({
+      gateway,
+      serviceWorkerUrl: window.__PHUB_BOOTSTRAP__?.serviceWorkerUrl ?? '/phub-notification-sw.js',
+    }).then(
+      () => {
+        setWebPushBrowserState('ready');
+        setNotificationsBusy(false);
+      },
+      () => {
+        setNotificationsError('Не удалось отключить Web Push.');
+        setNotificationsBusy(false);
+      },
+    );
+  }
+
+  function handleMarkAllNotificationsRead(): void {
+    const newest = notifications?.items[0];
+    if (!newest) return;
+    setNotificationsBusy(true);
+    void gateway
+      .markNotificationsRead(newest.id)
+      .then(
+        () => gateway.listNotifications(),
+        () => {
+          throw new Error('NOTIFICATION_READ_FAILED');
+        },
+      )
+      .then(
+        (page) => {
+          setNotifications(page);
+          setNotificationsBusy(false);
+        },
+        () => {
+          setNotificationsError('Не удалось отметить оповещения прочитанными.');
+          setNotificationsBusy(false);
+        },
+      );
+  }
+
+  function handleSaveProfilePrivacy(input: ProfilePrivacyUpdateRequest): void {
+    setProfilePrivacyBusy(true);
+    setProfilePrivacyError(null);
+    setProfilePrivacyNotice(null);
+    void gateway.updateProfilePrivacy(input).then(
+      (settings) => {
+        setProfilePrivacy(settings);
+        setProfilePrivacyBusy(false);
+        setProfilePrivacyNotice('Настройки сохранены');
+      },
+      () => {
+        setProfilePrivacyBusy(false);
+        setProfilePrivacyError('Не удалось сохранить. Обновите профиль и повторите.');
       },
     );
   }
@@ -497,7 +816,12 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
           profile={userProfile}
           tenantName={context.tenant.name}
           logoutBusy={state.busy === 'logout'}
+          privacySettings={profilePrivacy}
+          privacyBusy={profilePrivacyBusy}
+          privacyError={profilePrivacyError}
+          privacyNotice={profilePrivacyNotice}
           error={state.error}
+          onSavePrivacy={handleSaveProfilePrivacy}
           onLogout={handleLogout}
         />
       );
@@ -524,6 +848,96 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
         );
       }
       return <BookingsPage bookings={upcomingBookings} tenantName={context.tenant.name} />;
+    }
+    if (protectedRoute.kind === 'notifications') {
+      if (!notifications || !webPushConfiguration) {
+        return (
+          <main
+            className="app-shell app-shell-loading"
+            aria-labelledby="notifications-loading-title"
+          >
+            <Brand />
+            <section className="loading-card" aria-busy={!notificationsError}>
+              {notificationsError ? null : <span className="loader" aria-hidden="true" />}
+              <h1 id="notifications-loading-title">
+                {notificationsError ? 'Оповещения недоступны' : 'Загружаем оповещения'}
+              </h1>
+              {notificationsError ? (
+                <p className="error-message" role="alert">
+                  {notificationsError}
+                </p>
+              ) : (
+                <p role="status">Проверяем ленту и Web Push…</p>
+              )}
+            </section>
+          </main>
+        );
+      }
+      return (
+        <NotificationsPage
+          page={notifications}
+          webPush={webPushConfiguration}
+          browserState={webPushBrowserState}
+          busy={notificationsBusy}
+          error={notificationsError}
+          onEnableWebPush={handleEnableWebPush}
+          onDisableWebPush={handleDisableWebPush}
+          onMarkAllRead={handleMarkAllNotificationsRead}
+        />
+      );
+    }
+    if (protectedRoute.kind === 'communities') {
+      return (
+        <CommunitiesPage tenantName={context.tenant.name} loadPage={gateway.listMyCommunities} />
+      );
+    }
+    if (protectedRoute.kind === 'locations') {
+      if (!locations) {
+        return (
+          <main className="app-shell app-shell-loading" aria-labelledby="locations-loading-title">
+            <Brand />
+            <section className="loading-card" aria-busy={!locationsError}>
+              {locationsError ? null : <span className="loader" aria-hidden="true" />}
+              <h1 id="locations-loading-title">
+                {locationsError ? 'Локации недоступны' : 'Загружаем локации'}
+              </h1>
+              <p className={locationsError ? 'error-message' : undefined}>
+                {locationsError ?? 'Собираем опубликованные карточки…'}
+              </p>
+              {locationsError ? (
+                <a className="secondary-button logout-button" href="/">
+                  На Главную
+                </a>
+              ) : null}
+            </section>
+          </main>
+        );
+      }
+      return <LocationsPage locations={locations} />;
+    }
+    if (protectedRoute.kind === 'location') {
+      if (!locationDetail || locationDetail.id !== protectedRoute.locationId) {
+        return (
+          <main className="app-shell app-shell-loading" aria-labelledby="location-loading-title">
+            <Brand />
+            <section className="loading-card" aria-busy={!locationsError}>
+              {locationsError ? null : <span className="loader" aria-hidden="true" />}
+              <h1 id="location-loading-title">
+                {locationsError ? 'Карточка недоступна' : 'Открываем локацию'}
+              </h1>
+              <p className={locationsError ? 'error-message' : undefined}>
+                {locationsError ?? 'Загружаем фотографии, график и адрес…'}
+              </p>
+              {locationsError ? (
+                <a className="secondary-button logout-button" href="/locations">
+                  К локациям
+                </a>
+              ) : null}
+            </section>
+          </main>
+        );
+      }
+      return <LocationDetailPage location={locationDetail} />;
     }
     if (protectedRoute.kind === 'section' || protectedRoute.kind === 'not-found') {
       const title =
@@ -575,6 +989,8 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
       <HomeDashboardPage
         dashboard={homeDashboard}
         tenantName={context.tenant.name}
+        notificationUnreadCount={notifications?.unreadCount ?? 0}
+        loadCommunityPage={gateway.listMyCommunities}
         logoutBusy={state.busy === 'logout'}
         error={state.error}
         onLogout={handleLogout}
@@ -601,10 +1017,21 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
                 Войти в личный кабинет
               </h1>
 
+              {iosBrowser ? (
+                <div id="ios-oauth-guidance" className="ios-auth-guidance" role="note">
+                  <strong>На iPhone откройте сайт в Safari</strong>
+                  <span>
+                    Во встроенном браузере Telegram вход через VK ID или Yandex может потерять
+                    сессию. Нажмите ••• → «Открыть в Safari» и начните вход с исходной страницы.
+                  </span>
+                </div>
+              ) : null}
+
               <div className="viva-login-options" aria-label="Способ входа через Viva">
                 <button
                   className="viva-login-button"
                   type="button"
+                  aria-describedby={iosBrowser ? 'ios-oauth-guidance' : undefined}
                   disabled={isStartingViva}
                   onClick={() => startVivaOAuth('vkid')}
                 >
@@ -614,6 +1041,7 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
                 <button
                   className="viva-login-button"
                   type="button"
+                  aria-describedby={iosBrowser ? 'ios-oauth-guidance' : undefined}
                   disabled={isStartingViva}
                   onClick={() => startVivaOAuth('yandex')}
                 >
@@ -676,6 +1104,16 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
               <span className="step-label">Шаг 1 из 2</span>
               <h1 id="auth-title">Вход по номеру</h1>
               <p className="form-lead">Мы отправим короткий код для подтверждения.</p>
+
+              {iosBrowser ? (
+                <div className="ios-auth-guidance ios-auth-guidance--phone" role="note">
+                  <strong>Для iPhone выбран надёжный способ входа</strong>
+                  <span>
+                    Вход по номеру работает внутри Telegram. Для VK ID или Yandex откройте исходную
+                    страницу в Safari.
+                  </span>
+                </div>
+              ) : null}
 
               <form onSubmit={handlePhoneSubmit} noValidate aria-busy={isRequesting}>
                 <label htmlFor="phone">Номер телефона</label>

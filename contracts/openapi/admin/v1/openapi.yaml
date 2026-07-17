@@ -1,16 +1,204 @@
 openapi: 3.1.0
 info:
   title: PadlHub Admin API
-  version: 1.0.0
-  description: Canonical CUP boundary. Operations remain closed until audit and authorization are implemented.
+  version: 1.2.0
+  description: Canonical tenant-scoped CUP boundary for audited operator commands.
   license:
     name: Proprietary
     identifier: LicenseRef-Proprietary
 servers:
-  - url: https://api.padlhub.ru/admin/api/v1
+  - url: https://api.padlhub.ru
 security:
   - PadlHubAdminJwt: []
-paths: {}
+tags:
+  - name: Notifications
+    description: Audited manual notification operations available to authorized CUP staff.
+  - name: Locations
+    description: Tenant-scoped editorial profiles for PadlHub public locations.
+paths:
+  /admin/api/v1/{tenantKey}/notifications/capabilities:
+    get:
+      tags: [Notifications]
+      operationId: getAdminNotificationCapabilities
+      summary: Return the effective notification channels available to CUP
+      parameters:
+        - $ref: '#/components/parameters/TenantKey'
+      responses:
+        '200':
+          description: Effective channel availability
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminNotificationCapabilities'
+        '401':
+          $ref: '#/components/responses/ApiError'
+        '403':
+          $ref: '#/components/responses/ApiError'
+  /admin/api/v1/{tenantKey}/notifications/recipients/resolve:
+    post:
+      tags: [Notifications]
+      operationId: resolveAdminNotificationRecipients
+      summary: Resolve active PadlHub recipients by phone number without persisting the input
+      parameters:
+        - $ref: '#/components/parameters/TenantKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PhoneRecipientRequest'
+      responses:
+        '200':
+          description: Resolved recipients and masked unresolved inputs
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminNotificationRecipientResolution'
+        '400':
+          $ref: '#/components/responses/ApiError'
+        '401':
+          $ref: '#/components/responses/ApiError'
+        '403':
+          $ref: '#/components/responses/ApiError'
+  /admin/api/v1/{tenantKey}/notifications/campaigns:
+    post:
+      tags: [Notifications]
+      operationId: createAdminNotificationCampaign
+      summary: Create an audited idempotent notification campaign
+      parameters:
+        - $ref: '#/components/parameters/TenantKey'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateAdminNotificationCampaign'
+      responses:
+        '202':
+          description: Campaign accepted and projected to inbox and delivery queues
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminNotificationCampaignAccepted'
+        '400':
+          $ref: '#/components/responses/ApiError'
+        '401':
+          $ref: '#/components/responses/ApiError'
+        '403':
+          $ref: '#/components/responses/ApiError'
+        '409':
+          $ref: '#/components/responses/ApiError'
+        '422':
+          $ref: '#/components/responses/ApiError'
+  /admin/api/v1/{tenantKey}/locations:
+    get:
+      tags: [Locations]
+      operationId: listAdminLocations
+      summary: List every location profile visible to CUP
+      parameters:
+        - $ref: '#/components/parameters/TenantKey'
+      responses:
+        '200':
+          description: Location profiles ordered for editorial work
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminLocationList'
+        '401':
+          $ref: '#/components/responses/ApiError'
+        '403':
+          $ref: '#/components/responses/ApiError'
+        '503':
+          $ref: '#/components/responses/ApiError'
+    post:
+      tags: [Locations]
+      operationId: createAdminLocation
+      summary: Create an audited idempotent location profile
+      parameters:
+        - $ref: '#/components/parameters/TenantKey'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LocationProfileInput'
+      responses:
+        '201':
+          description: Location profile created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminLocationCommandResult'
+        '400':
+          $ref: '#/components/responses/ApiError'
+        '401':
+          $ref: '#/components/responses/ApiError'
+        '403':
+          $ref: '#/components/responses/ApiError'
+        '409':
+          $ref: '#/components/responses/ApiError'
+        '422':
+          $ref: '#/components/responses/ApiError'
+        '503':
+          $ref: '#/components/responses/ApiError'
+  /admin/api/v1/{tenantKey}/locations/{locationId}:
+    parameters:
+      - $ref: '#/components/parameters/TenantKey'
+      - $ref: '#/components/parameters/LocationId'
+    get:
+      tags: [Locations]
+      operationId: getAdminLocation
+      summary: Get one location editor profile
+      responses:
+        '200':
+          description: Location profile
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminLocation'
+        '400':
+          $ref: '#/components/responses/ApiError'
+        '401':
+          $ref: '#/components/responses/ApiError'
+        '403':
+          $ref: '#/components/responses/ApiError'
+        '404':
+          $ref: '#/components/responses/ApiError'
+    patch:
+      tags: [Locations]
+      operationId: updateAdminLocation
+      summary: Replace editable fields using optimistic versioning
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateAdminLocationRequest'
+      responses:
+        '200':
+          description: Location profile updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminLocationCommandResult'
+        '400':
+          $ref: '#/components/responses/ApiError'
+        '401':
+          $ref: '#/components/responses/ApiError'
+        '403':
+          $ref: '#/components/responses/ApiError'
+        '404':
+          $ref: '#/components/responses/ApiError'
+        '409':
+          $ref: '#/components/responses/ApiError'
+        '422':
+          $ref: '#/components/responses/ApiError'
+        '503':
+          $ref: '#/components/responses/ApiError'
 components:
   securitySchemes:
     PadlHubAdminJwt:
@@ -18,3 +206,485 @@ components:
       scheme: bearer
       bearerFormat: JWT
       description: PadlHub-issued staff JWT with the dedicated phub-admin audience.
+  parameters:
+    TenantKey:
+      name: tenantKey
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: '^[a-z0-9][a-z0-9-]{1,62}$'
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema:
+        type: string
+        minLength: 16
+        maxLength: 128
+    LocationId:
+      name: locationId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+  responses:
+    ApiError:
+      description: Stable PadlHub API error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+  schemas:
+    LocationPublicationStatus:
+      type: string
+      enum: [DRAFT, PUBLISHED, ARCHIVED]
+    LocationWeekday:
+      type: string
+      enum: [MON, TUE, WED, THU, FRI, SAT, SUN]
+    LocationAmenityIcon:
+      type: string
+      enum:
+        [
+          PARKING,
+          CAFE,
+          CHANGING_ROOM,
+          SHOWER,
+          SAUNA,
+          RENTAL,
+          SHOP,
+          ACCESSIBILITY,
+          KIDS,
+          LOUNGE,
+          OTHER,
+        ]
+    LocationHoursInterval:
+      type: object
+      additionalProperties: false
+      required: [opensAt, closesAt]
+      properties:
+        opensAt:
+          type: string
+          pattern: '^(?:[01]\d|2[0-3]):[0-5]\d$'
+        closesAt:
+          type: string
+          pattern: '^(?:[01]\d|2[0-3]):[0-5]\d$'
+    LocationWeeklyHoursEntry:
+      type: object
+      additionalProperties: false
+      required: [weekday, closed, intervals]
+      properties:
+        weekday:
+          $ref: '#/components/schemas/LocationWeekday'
+        closed:
+          type: boolean
+        intervals:
+          type: array
+          maxItems: 3
+          items:
+            $ref: '#/components/schemas/LocationHoursInterval'
+    LocationAmenity:
+      type: object
+      additionalProperties: false
+      required: [key, icon, title, description, sortOrder]
+      properties:
+        key:
+          type: string
+          pattern: '^[a-z][a-z0-9-]{1,62}$'
+        icon:
+          $ref: '#/components/schemas/LocationAmenityIcon'
+        title:
+          type: string
+          minLength: 1
+          maxLength: 120
+        description:
+          type: [string, 'null']
+          minLength: 1
+          maxLength: 300
+        sortOrder:
+          type: integer
+          minimum: 0
+          maximum: 99
+    LocationGalleryImage:
+      type: object
+      additionalProperties: false
+      required: [url, alt, isCover, sortOrder]
+      properties:
+        url:
+          type: string
+          format: uri
+          pattern: '^https://'
+          maxLength: 2000
+        alt:
+          type: string
+          maxLength: 180
+        isCover:
+          type: boolean
+        sortOrder:
+          type: integer
+          minimum: 0
+          maximum: 99
+    LocationProfileInput:
+      type: object
+      additionalProperties: false
+      required:
+        - slug
+        - title
+        - shortTitle
+        - city
+        - courtCount
+        - address
+        - latitude
+        - longitude
+        - timezone
+        - metroName
+        - metroDistanceMeters
+        - phoneE164
+        - workingHours
+        - amenities
+        - gallery
+        - publicationStatus
+        - showOnHome
+        - sortOrder
+      properties:
+        slug:
+          type: string
+          pattern: '^[a-z0-9][a-z0-9-]{1,78}$'
+        title:
+          type: string
+          minLength: 1
+          maxLength: 120
+        shortTitle:
+          type: [string, 'null']
+          minLength: 1
+          maxLength: 80
+        city:
+          type: [string, 'null']
+          minLength: 1
+          maxLength: 120
+        courtCount:
+          type: integer
+          minimum: 0
+          maximum: 999
+        address:
+          type: [string, 'null']
+          minLength: 1
+          maxLength: 500
+        latitude:
+          type: [number, 'null']
+          minimum: -90
+          maximum: 90
+        longitude:
+          type: [number, 'null']
+          minimum: -180
+          maximum: 180
+        timezone:
+          type: string
+          minLength: 1
+          maxLength: 100
+        metroName:
+          type: [string, 'null']
+          minLength: 1
+          maxLength: 160
+        metroDistanceMeters:
+          type: [integer, 'null']
+          minimum: 0
+          maximum: 100000
+        phoneE164:
+          type: [string, 'null']
+          pattern: '^\+[1-9]\d{7,14}$'
+        workingHours:
+          type: array
+          maxItems: 7
+          items:
+            $ref: '#/components/schemas/LocationWeeklyHoursEntry'
+        amenities:
+          type: array
+          maxItems: 16
+          items:
+            $ref: '#/components/schemas/LocationAmenity'
+        gallery:
+          type: array
+          maxItems: 12
+          items:
+            $ref: '#/components/schemas/LocationGalleryImage'
+        publicationStatus:
+          $ref: '#/components/schemas/LocationPublicationStatus'
+        showOnHome:
+          type: boolean
+        sortOrder:
+          type: integer
+          minimum: 0
+          maximum: 9999
+    LocationCompleteness:
+      type: object
+      additionalProperties: false
+      required: [percent, readyToPublish, missingFields]
+      properties:
+        percent:
+          type: integer
+          minimum: 0
+          maximum: 100
+        readyToPublish:
+          type: boolean
+        missingFields:
+          type: array
+          items:
+            type: string
+            enum: [cover, city, courts, address, coordinates, phone, working_hours]
+    AdminLocation:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - slug
+        - title
+        - shortTitle
+        - city
+        - courtCount
+        - address
+        - latitude
+        - longitude
+        - timezone
+        - metroName
+        - metroDistanceMeters
+        - phoneE164
+        - workingHours
+        - amenities
+        - gallery
+        - publicationStatus
+        - showOnHome
+        - sortOrder
+        - version
+        - completeness
+        - createdAt
+        - updatedAt
+        - publishedAt
+        - archivedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        slug:
+          $ref: '#/components/schemas/LocationProfileInput/properties/slug'
+        title:
+          $ref: '#/components/schemas/LocationProfileInput/properties/title'
+        shortTitle:
+          $ref: '#/components/schemas/LocationProfileInput/properties/shortTitle'
+        city:
+          $ref: '#/components/schemas/LocationProfileInput/properties/city'
+        courtCount:
+          $ref: '#/components/schemas/LocationProfileInput/properties/courtCount'
+        address:
+          $ref: '#/components/schemas/LocationProfileInput/properties/address'
+        latitude:
+          $ref: '#/components/schemas/LocationProfileInput/properties/latitude'
+        longitude:
+          $ref: '#/components/schemas/LocationProfileInput/properties/longitude'
+        timezone:
+          $ref: '#/components/schemas/LocationProfileInput/properties/timezone'
+        metroName:
+          $ref: '#/components/schemas/LocationProfileInput/properties/metroName'
+        metroDistanceMeters:
+          $ref: '#/components/schemas/LocationProfileInput/properties/metroDistanceMeters'
+        phoneE164:
+          $ref: '#/components/schemas/LocationProfileInput/properties/phoneE164'
+        workingHours:
+          $ref: '#/components/schemas/LocationProfileInput/properties/workingHours'
+        amenities:
+          $ref: '#/components/schemas/LocationProfileInput/properties/amenities'
+        gallery:
+          $ref: '#/components/schemas/LocationProfileInput/properties/gallery'
+        publicationStatus:
+          $ref: '#/components/schemas/LocationProfileInput/properties/publicationStatus'
+        showOnHome:
+          $ref: '#/components/schemas/LocationProfileInput/properties/showOnHome'
+        sortOrder:
+          $ref: '#/components/schemas/LocationProfileInput/properties/sortOrder'
+        version:
+          type: integer
+          minimum: 1
+        completeness:
+          $ref: '#/components/schemas/LocationCompleteness'
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        publishedAt:
+          type: [string, 'null']
+          format: date-time
+        archivedAt:
+          type: [string, 'null']
+          format: date-time
+        replayed:
+          type: boolean
+    AdminLocationList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          maxItems: 500
+          items:
+            $ref: '#/components/schemas/AdminLocation'
+    AdminLocationCommandResult:
+      allOf:
+        - $ref: '#/components/schemas/AdminLocation'
+        - type: object
+          required: [replayed]
+    UpdateAdminLocationRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, profile]
+      properties:
+        expectedVersion:
+          type: integer
+          minimum: 1
+        profile:
+          $ref: '#/components/schemas/LocationProfileInput'
+    AdminNotificationChannel:
+      type: string
+      enum: [IN_APP, WEB_PUSH, IOS_PUSH, ANDROID_PUSH]
+    PhoneRecipientRequest:
+      type: object
+      additionalProperties: false
+      required: [phones]
+      properties:
+        phones:
+          type: array
+          minItems: 1
+          maxItems: 100
+          uniqueItems: true
+          items:
+            type: string
+            minLength: 5
+            maxLength: 32
+    AdminNotificationChannelCapability:
+      type: object
+      additionalProperties: false
+      required: [channel, enabled]
+      properties:
+        channel:
+          $ref: '#/components/schemas/AdminNotificationChannel'
+        enabled:
+          type: boolean
+        reason:
+          type: string
+        tenantEnabled:
+          type: boolean
+    AdminNotificationCapabilities:
+      type: object
+      additionalProperties: false
+      required: [channels]
+      properties:
+        channels:
+          type: array
+          items:
+            $ref: '#/components/schemas/AdminNotificationChannelCapability'
+    AdminNotificationRecipient:
+      type: object
+      additionalProperties: false
+      required: [userId, displayName, phoneMasked, availableChannels]
+      properties:
+        userId:
+          type: string
+          format: uuid
+        displayName:
+          type: string
+        phoneMasked:
+          type: string
+        availableChannels:
+          type: array
+          items:
+            $ref: '#/components/schemas/AdminNotificationChannel'
+    AdminNotificationRecipientResolution:
+      type: object
+      additionalProperties: false
+      required: [matched, unresolvedPhones]
+      properties:
+        matched:
+          type: array
+          items:
+            $ref: '#/components/schemas/AdminNotificationRecipient'
+        unresolvedPhones:
+          type: array
+          items:
+            type: string
+    CreateAdminNotificationCampaign:
+      allOf:
+        - $ref: '#/components/schemas/PhoneRecipientRequest'
+        - type: object
+          additionalProperties: false
+          required: [title, body, channels]
+          properties:
+            title:
+              type: string
+              minLength: 1
+              maxLength: 300
+            body:
+              type: string
+              minLength: 1
+              maxLength: 8000
+            deepLink:
+              type: string
+              minLength: 1
+              maxLength: 2000
+              pattern: '^/(?!/).*'
+            channels:
+              type: array
+              minItems: 1
+              maxItems: 4
+              uniqueItems: true
+              items:
+                $ref: '#/components/schemas/AdminNotificationChannel'
+    AdminNotificationCampaignAccepted:
+      type: object
+      additionalProperties: false
+      required:
+        - outcome
+        - campaignId
+        - matchedCount
+        - unresolvedCount
+        - inAppCreatedCount
+        - pushQueuedCount
+        - suppressedCount
+        - replayed
+      properties:
+        outcome:
+          type: string
+          const: accepted
+        campaignId:
+          type: string
+          format: uuid
+        matchedCount:
+          type: integer
+          minimum: 0
+        unresolvedCount:
+          type: integer
+          minimum: 0
+        inAppCreatedCount:
+          type: integer
+          minimum: 0
+        pushQueuedCount:
+          type: integer
+          minimum: 0
+        suppressedCount:
+          type: integer
+          minimum: 0
+        replayed:
+          type: boolean
+    ApiError:
+      type: object
+      additionalProperties: false
+      required: [code, message, correlationId]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        correlationId:
+          type: string

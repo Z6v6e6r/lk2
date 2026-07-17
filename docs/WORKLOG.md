@@ -1,5 +1,253 @@
 # Worklog
 
+## 2026-07-18 — verifiable Nano release identity
+
+- Passed the immutable Git commit SHA into ARM64 image builds as `PHUB_RELEASE`, so the web
+  bootstrap manifest identifies the exact source release instead of the generic `development`
+  fallback.
+- Added a public post-deploy manifest check to the staging workflow. A Nano rollout now fails if
+  the served `/manifest.json` release differs from the commit whose image digests were deployed.
+
+## 2026-07-17 — CUP advertising on the LK Home page
+
+- Expanded Home from one placeholder promotion to an ordered deck of active CUP cards while
+  retaining the first-card field for backward-compatible rollout.
+- Added a bounded worker-side bridge to the existing public CUP `cabinet_home` placement, stable
+  PadlHub UUID mapping, tenant-RLS producer state, transactional Home outbox events and delayed
+  media garbage collection. The browser still performs only the single authenticated Home request.
+- Added metadata-free content-addressed WebP delivery with separate bounded desktop and exact
+  750×480 mobile derivatives; legacy asset URLs never reach the client.
+- Added accessible automatic rotation that honors the CUP switch, pauses during interaction and for
+  reduced motion, plus manual pagination controls and focused source/media/UI regression tests.
+
+## 2026-07-17 — locations editorial vertical slice
+
+- Added a tenant-RLS `LOCAL_ONLY` public location profile aggregate, idempotent/versioned admin
+  commands, audit metadata and transactional `locations.profile.changed.v1` events without Viva IDs.
+- Published separate CUP Admin and authenticated User Location APIs with PadlHub UUIDs, draft and
+  archive isolation, completeness-gated publication and server-computed open status/navigation.
+- Added ЦУП → Настройки → Станции with list, search, create/edit, HTTPS gallery, weekly hours,
+  amenities, contacts, Home order, publication controls and a mobile card preview.
+- Added the cabinet location directory and reference-shaped detail card, plus a touch-native
+  scroll-snapped Home locations carousel backed by the stored Home projection.
+- Added the worker fan-out from published tenant profiles to existing user Home components, strict
+  contracts, regression tests, ADR, domain ownership documentation and a publication runbook.
+
+## 2026-07-17 — games domain and API contract foundation
+
+- Added the dependency-free `@phub/games` kernel with independent lifecycle, roster, viewer,
+  payment, result and presentation states plus strict aggregate/card invariants.
+- Added one server-owned card policy with explicit registration-closed and waitlist-leave states,
+  stable actions and separate safe anonymous projection.
+- Published anonymous discovery and authenticated Games OpenAPI contracts. Ten state-changing User
+  API commands require correlation, PadlHub JWT, `Idempotency-Key` and stable conflict codes.
+- Added durable operation resources for booking/payment work without exposing Viva, booking,
+  payment or caller-selected identity identifiers.
+- Added 16 strict Games domain events, six provider-neutral internal commands and an explicit
+  consumer routing matrix. Events reuse the standard outbox envelope and expose no PII/provider
+  fields or complete card payloads.
+- Added service-only command submission and read-only event inspection to Internal OpenAPI, with
+  generated public/User/Internal types and contract/domain drift tests. No database, handlers or UI
+  are enabled by this foundation release.
+
+## 2026-07-17 — games persistence and command foundation
+
+- Added expand-only migration `0023_games_foundation.sql` with twelve Games-owned tables for the
+  aggregate, roster/reservations/waitlist, immutable result workflow, invitations, operations,
+  card projections, idempotency and scheduled commands.
+- Added tenant-aware foreign keys, capacity/active-membership uniqueness constraints, discovery and
+  due-work indexes, forced RLS on every table and `LOCAL_PRIMARY` Games ownership.
+- Implemented an atomic create repository that stores canonical `PROVISIONING` state, organizer,
+  operation, replayable command result, audit, `game.created.v1`,
+  `game.provisioning.requested.v1` and the process-manager command in one transaction.
+- Added monotonic card projection writes, public keyset reads, bounded `SKIP LOCKED` scheduling and
+  worker-owned completion/retry operations.
+- Verified all migrations against a clean PostgreSQL 16 database, forced-RLS visibility with two
+  tenants, exact idempotent replay/conflict behavior and one aggregate transaction producing one
+  audit row and two safe outbox events without the raw idempotency key.
+
+## 2026-07-17 — games concurrent roster commands
+
+- Added persistence-safe join, waitlist, leave and waitlist-leave policies that use canonical game
+  facts rather than presentation cards and keep capacity, cutoff and membership rules in one domain
+  policy.
+- Implemented transactionally serialized roster commands. A final seat can be won only once;
+  no-payment/organizer-paid joins become participants, while split/subscription joins create a
+  15-minute reservation and a durable expiry command.
+- Persisted both successful and rejected user commands with matching idempotent replay, audit rows,
+  aggregate revision changes and safe outbox facts in the same PostgreSQL transaction.
+- Added explicit waitlist joined, left and promoted facts. Leave and expiry reopen capacity and
+  schedule process-manager promotion; promotion revalidates the locked queue head and capacity
+  before creating a participant or reservation.
+- Added process-manager expiry/promotion handlers with a service principal, replay safety and
+  no-op/not-due behavior, plus domain/repository tests for all paths.
+- Verified real PostgreSQL races in a disposable `_verify` database: parallel final-seat joins and
+  reservations each had exactly one winner, waitlist promotion happened once, reservation expiry
+  happened once, and the final audit/outbox state matched the asserted transaction history.
+
+## 2026-07-17 — games roster User API foundation
+
+- Registered explicit join, join-waitlist, leave and leave-waitlist User API handlers backed by the
+  roster repository; no generic roster mutation or caller-selected user identity was introduced.
+- Required verified JWT tenant membership, the server-issued `games.play` permission,
+  `Idempotency-Key`, strict request fields and server-generated correlation/request hashes before
+  any command reaches persistence.
+- Added stable domain/idempotency error mapping and runtime validation of the operation-shaped HTTP
+  response. Immediate commands return `200`; paid reservations return an honest `202 PROCESSING`
+  with no fabricated payment URL.
+- Added tenant-and-actor-scoped durable operation reads from command idempotency, including exact
+  committed timestamps and replayed results.
+- Kept production Games repository injection disabled until Commerce can create a durable payment
+  next action and consume verified payment confirmation; unconfigured routes fail closed with 503.
+- Re-ran the disposable PostgreSQL race scenario and additionally proved the winning operation can
+  be read only through its tenant/user ownership; the temporary verification database was dropped.
+
+## 2026-07-17 — games card projector and read API slice
+
+- Added an atomic Games card projector consumer on a bounded quorum queue. Inbox deduplication,
+  aggregate/roster dependency reads, monotonic projection write and inbox completion share one
+  tenant transaction.
+- Built one canonical projection snapshot from Games, active roster/reservations/waitlist, local
+  profile summaries and station presentation; no Viva/provider identifiers or client-selected
+  sources enter the card.
+- Added anonymous public list/detail reads with future public/scheduled isolation, strict filters,
+  bounded scan and filter-bound opaque keyset cursors. Public cards remove PadlHub user UUIDs and
+  the private result summary before serialization.
+- Added authenticated upcoming/history list and owned-detail reads. Viewer membership is selected
+  from the same versioned projection JSON; outsiders receive not found, and Messaging-owned
+  conversation data remains explicitly null.
+- Kept both public/User read repositories unconfigured in production wiring, so the new routes fail
+  closed until release verification and load evidence are complete.
+- Unit, API, domain, lint and TypeScript checks passed. The extended clean-PostgreSQL projector
+  script was prepared, but its rerun was blocked by the execution approval usage limit; the empty
+  temporary database was dropped and this postcheck remains open.
+
+## 2026-07-17 — viewer-filtered player profiles
+
+- Added the canonical `/profiles/{padlHubUserId}` User API while retaining `/profile` as the
+  migration-compatible self aggregate.
+- Introduced a server-owned `PlayerProfileView` policy with `BASIC`, `EXTENDED`, `INTERACTION` and
+  `SELF` access tiers and stable capability lock reasons.
+- Moved balance and phone suffix into an optional self-only `privateAccount`; other viewers never
+  receive those fields, and numeric rating is omitted without extended access.
+- Added separate server permissions for extended data, mediated contact and direct chat. Target
+  privacy can still fail closed, and future commands must revalidate current access.
+- Added `/profile/{userId}` UI routing, neutral locked-action states and privacy wording
+  without loading or merging the Home dashboard.
+- Updated the canonical OpenAPI, generated SDK contract, policy/API/web regression tests, ADR and
+  profile domain documentation.
+- Added the `LOCAL_ONLY` tenant-RLS profile privacy aggregate with `AUTHORIZED`/`NOBODY` policy,
+  optimistic/idempotent self-service updates, audit and transactional outbox event.
+- Applied persisted target policy to viewer-filtered reads and added owner switches for contact and
+  direct chat on `/profile` without exposing raw contact data.
+- Explicitly left the source of interaction permissions outside the profile contour: subscriptions
+  and memberships are not read, inferred or connected until a separate architecture decision.
+
+## 2026-07-17 — community directory foundation and legacy read bridge
+
+- Reduced the Home community summary to five stable fields plus PadlHub UUID/route, removed role,
+  member count and presentation color, and kept continuation cursors out of the Home response.
+- Added canonical tenant-RLS community and membership tables that prevent duplicate active owners
+  and provide an expand-only `LOCAL_ONLY` ownership foundation.
+- Added a shared community domain package with strict summaries, deterministic pinned/activity
+  ordering and opaque keyset pagination.
+- Published the protected `/communities/mine` User API/OpenAPI/SDK operation and a responsive LK
+  directory that loads 20 memberships and continues on demand without requesting Home.
+- Added an explicit temporary legacy read mode. Server-resolved identity is sent only from the API;
+  returned memberships are mapped to PadlHub UUIDs and stripped of phones, client IDs, members,
+  graph connections, invites and legacy media URLs.
+- Added response limits, timeout, bounded retry, circuit breaker, redacted metrics and normalized
+  short caching around the current LK source. Mock memberships are forbidden in production.
+- Kept rollout backward-compatible with persisted Home snapshots by normalizing the previous
+  community-card shape until all projections have been rebuilt.
+- Applied migration `0018` locally, activated `COMMUNITIES_READ_MODE=legacy`, recreated the API
+  with the existing Web Push secrets override and verified the authenticated `/communities` page:
+  18 current memberships, PadlHub UUID routes, no UI error and a successful redacted legacy read.
+- Replaced the seeded Home community component with a background producer fed by the same real
+  directory. The worker persists a five-item normalized source component, advances safely beyond
+  older revisions and emits it through outbox/projector without adding legacy fan-out to Home.
+- Applied migration `0019` locally and verified the full projection path: worker source revision 2
+  produced `home-v1-236`, and authenticated Home rendered five real memberships with no seeded
+  community cards remaining.
+- Added the community-logo media bridge: legacy logo URLs stay worker-only, while allowlisted images
+  are bounded, converted to WebP and stored under content-addressed PadlHub UUID object keys.
+- Added tenant-RLS logo mapping and delayed object-GC state in migration `0020`. Logo metadata and
+  the Home community component commit together; unchanged assets are reused and transient failures
+  retain the last local logo.
+- Split community projection into its own bounded worker cycle so a Viva authentication/provider
+  outage cannot block community membership or logo refresh.
+- Applied migration `0020` locally and imported all five visible Home logos from legacy relative
+  media paths. Verified private `image/webp` objects at 512 by 512, component revision 5,
+  `home-v1-243`, five rendered Home images and the same five local images in the 18-item directory.
+- Made Home community labels deterministic two-line captions with balanced word-boundary splits,
+  per-line ellipsis for long text and vertical centering for single-word names without changing the
+  fixed community-section height.
+- Turned the Home community row into a touch-native horizontal carousel. It keeps the five-item
+  Home snapshot as an immediate fallback, hydrates the row from the real membership directory and
+  automatically requests the next opaque-cursor page when the user swipes near the end.
+- Extended the bounded community worker read across every directory page so local WebP logo
+  mappings are prepared for carousel items beyond the five summaries retained in the Home snapshot.
+- Added explicit desktop mouse dragging to the Home carousel. Native touch/trackpad scrolling stays
+  enabled, drag movement suppresses the following link click, and scroll snapping pauses while the
+  pointer is held so the row follows the cursor directly.
+
+## 2026-07-16 — CUP manual notification campaigns
+
+- Replaced the CUP placeholder with an authenticated notification workspace at port `5174`:
+  recipient phone preview, Web Push/Android/iOS capability cards, optional in-app delivery,
+  message composition and accepted-campaign result.
+- Added the dedicated `phub-admin` JWT audience. Admin API requires both role `admin`, permission
+  `notifications.manage` and the CUP platform header; normal client tokens have administrative
+  claims stripped.
+- Added tenant-RLS access profiles and manual campaign/recipient/idempotency tables. Phone inputs
+  are normalized for lookup but are not persisted; ambiguous duplicates fail closed.
+- Added capability, recipient-resolution and idempotent campaign Admin API operations. Campaign,
+  intents, inbox, push deliveries, audit and identifier-only outbox events commit in one
+  transaction; APNs/FCM remain explicitly unavailable.
+- Added a dry-run/apply/audited access-grant command and documented CUP enablement and rollback.
+- Added a fail-closed local-only CUP OTP override so Docker can keep Viva sandbox projections while
+  one explicitly configured, already-authorized operator signs in without a real SMS. Non-local
+  configuration is rejected and normal web/mobile auth remains on Viva.
+- Applied migration `0017` locally, granted the internal operator, started the Docker CUP and ran a
+  live campaign: one inbox delivery reached `DELIVERED`, one Web Push reached `SENT`, and the same
+  idempotency key replayed the original campaign.
+
+## 2026-07-16 — iPhone-safe authentication entry
+
+- Diagnosed the Viva OAuth failure before the PadlHub callback: iPhone attempts launched from
+  Telegram reached Keycloak but lost its restart cookie during the external identity-provider
+  round trip.
+- Made phone OTP the default unauthenticated entry on iPhone and iPadOS while preserving explicit
+  access to VK ID and Yandex OAuth.
+- Added visible Safari guidance before external OAuth on iOS, kept the same preference after logout
+  and covered iPhone, iPadOS desktop mode and non-iOS behavior with regression tests.
+
+## 2026-07-16 — Web Push/VAPID notification vertical slice
+
+- Added encrypted, per-installation Web Push subscription storage with durable registration and
+  revocation idempotency, tenant RLS, user attribution and audit records that never contain the
+  plaintext endpoint or subscription keys.
+- Added protected User API/OpenAPI/SDK operations for capabilities, subscription registration and
+  revocation, plus a browser notification screen, explicit permission flow and same-origin service
+  worker for display and deep-link navigation.
+- Extended notification projection to create PUSH deliveries only when both the tenant Web Push
+  gate and an active matching provider account exist; in-app delivery remains independently
+  available.
+- Added the VAPID adapter with bounded payloads, timeout, retry/backoff, a provider-account circuit
+  breaker, terminal subscription invalidation, delivery attempts and honest `PROVIDER_ACCEPTED`
+  receipts.
+- Added dry-run-by-default commands for the provider account and tenant gate. Global, tenant and
+  provider gates remain disabled until sandbox credentials and the rollout smoke tests are approved.
+- Added file-backed runtime secret loading and a local provisioner that creates protected VAPID and
+  endpoint-encryption files outside Git, then mounts them through a Docker Compose secrets override.
+- Applied migration 0016 to the local development database, recreated API/worker/web with the
+  sandbox override, activated the `local-padel` Web provider account and tenant gate, and verified
+  live capability plus encrypted register/replay/revoke behavior. Provider acceptance/display still
+  requires a real user-granted browser subscription.
+- Enabled the matching in-app gate after the live `/notifications` screen exposed a `404` inbox
+  dependency, and made the Web screen tolerate independent inbox/config/browser-state failures
+  instead of replacing all working controls with one generic error.
+
 ## 2026-07-16 — Repeat Viva OAuth delegation repair
 
 - Diagnosed callback failure `23505` after a successful Viva token exchange: a legacy delegation

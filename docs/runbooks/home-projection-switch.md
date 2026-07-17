@@ -116,6 +116,29 @@ docker compose exec -T worker node -e \
   "fetch('http://127.0.0.1:3002/health/ready').then(async r=>{console.log(r.status,await r.text());process.exit(r.ok?0:1)})"
 ```
 
+Enable the existing CUP Home advertising placement as an independent producer:
+
+```dotenv
+PROMOTIONS_READ_MODE=legacy
+PROMOTIONS_LEGACY_BASE_URL=https://padlhub.su
+PROMOTIONS_SYNC_INTERVAL_MS=120000
+PROMOTIONS_SYNC_BATCH_SIZE=20
+PROMOTION_ROTATION_INTERVAL_SECONDS=6
+PROMOTION_IMAGE_ALLOWED_HOSTS=padlhub.su
+PROMOTION_IMAGE_DESKTOP_MAX_WIDTH=1600
+PROMOTION_IMAGE_DESKTOP_MAX_HEIGHT=900
+PROMOTION_IMAGE_MOBILE_WIDTH=750
+PROMOTION_IMAGE_MOBILE_HEIGHT=480
+PROMOTION_IMAGE_WEBP_QUALITY=80
+```
+
+Recreate only the worker after changing this gate. Verify a `promotion` row for the test user in
+`home.dashboard_components`, then verify that its payload contains only PadlHub UUIDs and signed
+PadlHub object URLs. Toggle or reorder a card in CUP and wait one sync interval; the Home snapshot
+revision must advance without a browser request to `/api/advertising/cabinet-home`. Roll back by
+setting `PROMOTIONS_READ_MODE=mock` outside production or by promoting the previous worker image;
+the last valid projected component remains readable until explicitly replaced.
+
 Verify source revisions and projector input without printing payloads:
 
 ```sql

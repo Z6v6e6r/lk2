@@ -66,6 +66,7 @@ function errorMessage(code: string): string {
     AUTH_CHALLENGE_IN_PROGRESS: 'Код уже проверяется. Подождите и повторите.',
     AUTH_RATE_LIMITED: 'Слишком много попыток. Повторите позже.',
     AUTH_PROVIDER_UNAVAILABLE: 'Вход временно недоступен. Повторите позже.',
+    AUTH_ADMIN_ACCESS_DENIED: 'Для этой учётной записи доступ в ЦУП не выдан.',
     AUTH_SESSION_REVOKED: 'Сессия завершена. Войдите снова.',
     AUTH_REFRESH_RACE: 'Сессия обновляется в другой вкладке. Повторите запрос.',
     VIVA_REAUTH_REQUIRED: 'Сессия Viva завершена. Войдите через Viva снова.',
@@ -123,10 +124,14 @@ function publicSession(result: AuthSessionResult) {
       userId: result.user.id,
       displayName: result.user.displayName,
       ...(result.user.phoneLast4 ? { phoneLast4: result.user.phoneLast4 } : {}),
-      roles: ['client'],
-      permissions: ['profile.read'],
+      roles: result.roles,
+      permissions: result.permissions,
     },
   };
+}
+
+function accessAudience(request: FastifyRequest): 'client' | 'admin' {
+  return request.headers['x-app-platform'] === 'cup-admin' ? 'admin' : 'client';
 }
 
 function preventCredentialCaching(reply: FastifyReply): void {
@@ -282,6 +287,7 @@ export function registerAuthRoutes(
           phone: body.phone,
           correlationId: request.id,
           idempotencyKey: idempotencyKey(request),
+          accessAudience: accessAudience(request),
         });
         return reply.status(202).send(challenge);
       } catch (error) {
@@ -313,6 +319,7 @@ export function registerAuthRoutes(
           code: body.code,
           correlationId: request.id,
           idempotencyKey: idempotencyKey(request),
+          accessAudience: accessAudience(request),
         });
         setRefreshCookie(reply, config, tenantKey, session);
         preventCredentialCaching(reply);
@@ -354,12 +361,16 @@ export function registerAuthRoutes(
           token,
           request.id,
           idempotencyKey(request),
+          accessAudience(request),
         );
         setRefreshCookie(reply, config, tenantKey, session);
         preventCredentialCaching(reply);
         return reply.send(publicSession(session));
       } catch (error) {
-        if (!(error instanceof AuthServiceError) || error.code !== 'AUTH_REFRESH_RACE') {
+        if (
+          !(error instanceof AuthServiceError) ||
+          (error.code !== 'AUTH_REFRESH_RACE' && error.code !== 'AUTH_ADMIN_ACCESS_DENIED')
+        ) {
           clearRefreshCookie(
             reply,
             config,
@@ -396,7 +407,14 @@ export function registerAuthRoutes(
           );
         }
         const token = request.cookies[REFRESH_COOKIE_NAME];
-        if (token) await authService.revokeSession(tenantKey, token, request.id);
+        if (token) {
+          await authService.revokeSession(
+            tenantKey,
+            token,
+            request.id,
+            request.headers['x-app-platform'] !== 'cup-admin',
+          );
+        }
         clearRefreshCookie(reply, config, tenantKey);
         return reply.status(204).send();
       } catch (error) {
