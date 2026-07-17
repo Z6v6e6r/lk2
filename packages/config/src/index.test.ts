@@ -174,7 +174,7 @@ describe('loadConfig', () => {
           VIVA_OAUTH_ENABLED: 'true',
           VIVA_OAUTH_REDIRECT_URI: 'https://lk.padlhub.test/oauth/callback',
           VIVA_OAUTH_SUCCESS_REDIRECT_URL: 'https://lk.padlhub.test/',
-          VIVA_DELEGATION_ENCRYPTION_KEY: 'test-delegation-key-at-least-32-characters',
+          VIVA_DELEGATION_ENCRYPTION_KEY: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
           HOME_VIVA_SYNC_ENABLED: 'true',
         },
         { profilePhotoStorage: true },
@@ -189,12 +189,25 @@ describe('loadConfig', () => {
       VIVA_OAUTH_ENABLED: 'true',
       VIVA_OAUTH_REDIRECT_URI: 'https://lk.padlhub.test/oauth/callback',
       VIVA_OAUTH_SUCCESS_REDIRECT_URL: 'https://lk.padlhub.test/',
-      VIVA_DELEGATION_ENCRYPTION_KEY: 'test-delegation-key-at-least-32-characters',
+      VIVA_DELEGATION_ENCRYPTION_KEY: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
       HOME_VIVA_SYNC_ENABLED: 'true',
     });
 
     expect(config.HOME_VIVA_SYNC_ENABLED).toBe(true);
     expect(config.S3_ENDPOINT).toBeUndefined();
+  });
+
+  it('rejects a Viva delegation key that is not 32-byte base64url', () => {
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        VIVA_MODE: 'sandbox',
+        VIVA_OAUTH_ENABLED: 'true',
+        VIVA_OAUTH_REDIRECT_URI: 'https://lk.padlhub.test/oauth/callback',
+        VIVA_OAUTH_SUCCESS_REDIRECT_URL: 'https://lk.padlhub.test/',
+        VIVA_DELEGATION_ENCRYPTION_KEY: 'not-a-valid-key',
+      }),
+    ).toThrow('Viva delegation encryption key must be 32-byte base64url');
   });
 
   it('requires private responsive-media storage when legacy CUP promotions are enabled', () => {
@@ -261,6 +274,21 @@ describe('loadConfig', () => {
     ).toThrow('HOME_READ_MODE=projection is required in production');
   });
 
+  it('requires published legal document versions in production', () => {
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        APP_ENV: 'production',
+        VIVA_MODE: 'production',
+        AUTH_COOKIE_SECURE: 'true',
+        TRUSTED_PROXY_CIDRS: '10.0.0.0/24',
+        JWT_ACCESS_SECRET: 'prod-access-secret-very-long-and-random-123',
+        JWT_REFRESH_SECRET: 'prod-refresh-secret-very-long-and-random-456',
+        HOME_READ_MODE: 'projection',
+      }),
+    ).toThrow('Published legal document versions are required in production');
+  });
+
   it('forbids synthetic community memberships in production', () => {
     expect(() =>
       loadConfig({
@@ -272,6 +300,8 @@ describe('loadConfig', () => {
         JWT_ACCESS_SECRET: 'prod-access-secret-very-long-and-random-123',
         JWT_REFRESH_SECRET: 'prod-refresh-secret-very-long-and-random-456',
         HOME_READ_MODE: 'projection',
+        PUBLIC_OFFER_VERSION: '2026-07-18',
+        PERSONAL_DATA_POLICY_VERSION: '2026-07-18',
       }),
     ).toThrow('COMMUNITIES_READ_MODE=mock is forbidden in production');
   });

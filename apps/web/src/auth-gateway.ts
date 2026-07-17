@@ -84,6 +84,7 @@ export interface AuthGateway {
   readonly verifyCode: (input: {
     readonly challengeId: string;
     readonly code: string;
+    readonly acceptance: LegalAcceptance;
   }) => Promise<AuthenticatedSession>;
   /**
    * Starts a server-owned OAuth Authorization Code + PKCE flow. The redirect
@@ -268,7 +269,16 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     },
 
     async verifyCode(input) {
-      const session = await client.verifyAuthChallenge(input.challengeId, { code: input.code });
+      if (!input.acceptance.publicOfferAccepted || !input.acceptance.personalDataPolicyAccepted) {
+        throw new Error('Required legal acceptance is missing');
+      }
+      const session = await client.verifyAuthChallenge(input.challengeId, {
+        code: input.code,
+        acceptance: {
+          publicOfferAccepted: true,
+          personalDataPolicyAccepted: true,
+        },
+      });
       return normalizeSession(session);
     },
 

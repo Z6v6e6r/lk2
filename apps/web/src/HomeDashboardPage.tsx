@@ -3,10 +3,6 @@ import type { MouseEvent as ReactMouseEvent, UIEvent } from 'react';
 
 import type { CommunityMembershipPage, HomeDashboard } from './auth-gateway.js';
 import locationSeligerUrl from './assets/home/location-seliger.png';
-import player1Url from './assets/home/player-1.png';
-import player2Url from './assets/home/player-2.png';
-import player3Url from './assets/home/player-3.png';
-import player4Url from './assets/home/player-4.png';
 import promoUrl from './assets/home/promo.png';
 import { PlayerLevelAvatar } from './PlayerLevelAvatar.js';
 
@@ -23,6 +19,23 @@ interface HomeDashboardPageProps {
 type HomeCommunity = HomeDashboard['communities'][number];
 
 type HomeActionIconName = 'games' | 'tournaments' | 'trainings';
+
+const implementedMvpRoutes = new Set([
+  '/',
+  '/profile',
+  '/bookings',
+  '/notifications',
+  '/communities',
+  '/locations',
+]);
+
+function isImplementedMvpRoute(route: string): boolean {
+  const pathname = route.split(/[?#]/, 1)[0] ?? '';
+  if (implementedMvpRoutes.has(pathname)) return true;
+  return /^\/(?:profile|locations)\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    pathname,
+  );
+}
 
 function HomeActionIcon({ name }: { readonly name: HomeActionIconName }): React.JSX.Element {
   switch (name) {
@@ -438,10 +451,10 @@ function HomeCommunityCarousel({
       onDragStart={(event) => event.preventDefault()}
     >
       {items.map((community) => (
-        <a
-          href={community.route}
+        <div
+          className="fh-community-card"
           key={community.id}
-          draggable={false}
+          role="group"
           aria-label={`${community.title}${
             community.unreadChatCount > 0
               ? `, непрочитанных сообщений: ${community.unreadChatCount}`
@@ -450,7 +463,7 @@ function HomeCommunityCarousel({
         >
           <CommunityLogo community={community} />
           <CommunityTitle title={community.title} />
-        </a>
+        </div>
       ))}
     </div>
   );
@@ -529,50 +542,58 @@ function HomePromotionCarousel({
   );
 }
 
-const dates = [
-  ['13', 'пн'],
-  ['14', 'вт'],
-  ['15', 'ср'],
-  ['16', 'чт'],
-  ['17', 'пт'],
-  ['18', 'сб'],
-  ['19', 'вс'],
-] as const;
+type HomeUpcomingItem = HomeDashboard['upcoming'][number];
 
-const playerImages = [player1Url, player2Url, player3Url, player4Url];
+const upcomingKindLabel: Readonly<Record<HomeUpcomingItem['kind'], string>> = {
+  game: 'Игра',
+  training: 'Тренировка',
+  tournament: 'Турнир',
+};
 
-function EventCard({
-  item,
-  index,
-}: {
-  readonly item: HomeDashboard['upcoming'][number] | undefined;
-  readonly index: number;
-}): React.JSX.Element {
-  const isRating = index === 1;
-  return (
-    <a className="fh-event" href={item?.route ?? '/games'}>
-      <time>
-        <strong>{isRating ? '14:00' : '12:00'}</strong>
-        <span>{isRating ? 'до 15:00' : 'до 13:00'}</span>
+const upcomingStatusLabel: Readonly<Record<HomeUpcomingItem['status'], string>> = {
+  confirmed: 'Подтверждено',
+  waitlist: 'Лист ожидания',
+  payment_required: 'Нужна оплата',
+};
+
+const upcomingTimeFormatter = new Intl.DateTimeFormat('ru-RU', {
+  hour: '2-digit',
+  minute: '2-digit',
+});
+
+const upcomingDateFormatter = new Intl.DateTimeFormat('ru-RU', {
+  day: 'numeric',
+  month: 'short',
+});
+
+function EventCard({ item }: { readonly item: HomeUpcomingItem }): React.JSX.Element {
+  const startsAt = new Date(item.startsAt);
+  const content = (
+    <>
+      <time dateTime={item.startsAt}>
+        <strong>{upcomingTimeFormatter.format(startsAt)}</strong>
+        <span>{upcomingDateFormatter.format(startsAt)}</span>
       </time>
       <span className="fh-event__main">
         <span className="fh-event__header">
-          <span className={`fh-event__tag ${isRating ? 'is-rating' : ''}`}>
-            <span aria-hidden="true">{isRating ? '★' : '●'}</span>
-            {isRating ? 'Рейтинговая игра' : 'Френдли игра'}
+          <span className={`fh-event__tag is-${item.status.replace('_', '-')}`}>
+            {upcomingKindLabel[item.kind]} · {upcomingStatusLabel[item.status]}
           </span>
-          <Chevron />
-          <strong>{item?.title ?? (isRating ? 'Название игры #2' : 'Название игры')}</strong>
-          <small>Ясенево · Паустовского, 4А</small>
-        </span>
-        <span className="fh-players" aria-label="Участники игры">
-          {playerImages.slice(0, isRating ? 3 : 4).map((src, playerIndex) => (
-            <img src={src} alt="" aria-hidden="true" key={`${index}-${playerIndex}`} />
-          ))}
-          {isRating ? <span className="fh-player-add">+</span> : null}
+          {isImplementedMvpRoute(item.route) ? <Chevron /> : null}
+          <strong>{item.title}</strong>
+          <small>{item.venue}</small>
         </span>
       </span>
+    </>
+  );
+  return isImplementedMvpRoute(item.route) ? (
+    <a className="fh-event" href={item.route}>
+      {content}
     </a>
+  ) : (
+    <article className="fh-event" aria-label={item.title}>
+      {content}
+    </article>
   );
 }
 
@@ -585,23 +606,17 @@ export function HomeDashboardPage({
   error,
   onLogout,
 }: HomeDashboardPageProps): React.JSX.Element {
-  const actionRoute = (id: HomeDashboard['quickActions'][number]['id'], fallback: string): string =>
-    dashboard.quickActions.find((action) => action.id === id)?.route ?? fallback;
-  const actions = [
-    { id: 'games', label: 'Игры', icon: 'games', route: actionRoute('play', '/games') },
-    {
-      id: 'tournaments',
-      label: 'Турниры',
-      icon: 'tournaments',
-      route: actionRoute('tournament', '/tournaments'),
-    },
-    {
-      id: 'trainings',
-      label: 'Тренировки',
-      icon: 'trainings',
-      route: actionRoute('group_training', '/trainings'),
-    },
-  ] as const;
+  const actionIcons: Readonly<
+    Record<HomeDashboard['quickActions'][number]['id'], HomeActionIconName>
+  > = {
+    play: 'games',
+    tournament: 'tournaments',
+    group_training: 'trainings',
+    individual_training: 'trainings',
+  };
+  const actions = dashboard.quickActions
+    .filter((action) => isImplementedMvpRoute(action.route))
+    .map((action) => ({ ...action, icon: actionIcons[action.id] }));
   const balance = new Intl.NumberFormat('ru-RU').format(dashboard.profile.balanceMinor / 100);
 
   return (
@@ -655,53 +670,42 @@ export function HomeDashboardPage({
             </section>
           ) : null}
 
-          <nav className="fh-actions" aria-label="Разделы клуба">
-            {actions.map((action) => (
-              <a href={action.route} key={action.id}>
-                <span className="fh-action-icon">
-                  <HomeActionIcon name={action.icon} />
-                </span>
-                <span>{action.label}</span>
-                <Chevron />
-              </a>
-            ))}
-          </nav>
+          {actions.length > 0 ? (
+            <nav className="fh-actions" aria-label="Разделы клуба">
+              {actions.map((action) => (
+                <a href={action.route} key={action.id}>
+                  <span className="fh-action-icon">
+                    <HomeActionIcon name={action.icon} />
+                  </span>
+                  <span>{action.title}</span>
+                  <Chevron />
+                </a>
+              ))}
+            </nav>
+          ) : null}
 
-          <div className="fh-tabs" role="tablist" aria-label="Раздел записей">
-            <button type="button" role="tab" aria-selected="true">
-              Мои записи
-            </button>
-            <button type="button" role="tab" aria-selected="false">
-              Абонементы
-            </button>
+          <div className="fh-tabs">
+            <strong>Мои записи</strong>
           </div>
         </section>
 
         <section className="fh-main-box">
           <section className="fh-bookings" aria-label="Мои записи">
-            <div className="fh-filters">
-              <div className="fh-calendar">
-                {dates.map(([date, day], index) => (
-                  <button className={index === 1 ? 'is-selected' : ''} type="button" key={date}>
-                    <strong>{date}</strong>
-                    <small>{day}</small>
-                    {index === 6 ? <i /> : null}
-                  </button>
+            {dashboard.upcoming.length > 0 ? (
+              <div className="fh-bookings-list">
+                {dashboard.upcoming.map((item, index) => (
+                  <div className="fh-booking-entry" key={item.id}>
+                    {index > 0 ? <div className="fh-divider" /> : null}
+                    <EventCard item={item} />
+                  </div>
                 ))}
               </div>
-              <div className="fh-filter-pills">
-                <button className="is-selected" type="button">
-                  Все
-                </button>
-                <button type="button">Игры</button>
-                <button type="button">Тренировки</button>
-                <button type="button">Турниры</button>
+            ) : (
+              <div className="fh-bookings-empty" role="status">
+                <strong>Ближайших записей нет</strong>
+                <p>Когда появятся ближайшие записи, они отобразятся здесь.</p>
               </div>
-            </div>
-            <div className="fh-divider" />
-            <EventCard item={dashboard.upcoming[0]} index={0} />
-            <div className="fh-divider" />
-            <EventCard item={dashboard.upcoming[1]} index={1} />
+            )}
             <div className="fh-bookings-footer">
               <div className="fh-divider" />
               <a href="/bookings">Все записи</a>
@@ -742,14 +746,18 @@ export function HomeDashboardPage({
               </div>
             </section>
 
-            <nav className="fh-additional" aria-label="Дополнительные разделы">
-              {dashboard.additionalLinks.map((link) => (
-                <a href={link.route} key={link.id}>
-                  <span>{link.title}</span>
-                  <Chevron />
-                </a>
-              ))}
-            </nav>
+            {dashboard.additionalLinks.some((link) => isImplementedMvpRoute(link.route)) ? (
+              <nav className="fh-additional" aria-label="Дополнительные разделы">
+                {dashboard.additionalLinks
+                  .filter((link) => isImplementedMvpRoute(link.route))
+                  .map((link) => (
+                    <a href={link.route} key={link.id}>
+                      <span>{link.title}</span>
+                      <Chevron />
+                    </a>
+                  ))}
+              </nav>
+            ) : null}
           </section>
         </section>
 
@@ -757,13 +765,10 @@ export function HomeDashboardPage({
           <a href="/" aria-current="page" aria-label="Главная">
             <BottomNavIcon name="home" />
           </a>
-          <a href="/games" aria-label="Игры">
+          <a href="/bookings" aria-label="Записи">
             <BottomNavIcon name="games" />
           </a>
-          <a className="fh-create" href="/games/new" aria-label="Создать игру">
-            <BottomNavIcon name="create" />
-          </a>
-          <a href="/chats" aria-label="Чаты">
+          <a href="/notifications" aria-label="Оповещения">
             <BottomNavIcon name="chat" />
           </a>
           <a href="/profile" aria-label="Профиль">

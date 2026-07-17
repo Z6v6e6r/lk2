@@ -45,4 +45,29 @@ describe('PostgresAuthRepository Viva delegations', () => {
     );
     expect(release).toHaveBeenCalledOnce();
   });
+
+  it('records both phone-login legal acceptances and an audit event', async () => {
+    const query = vi.fn().mockResolvedValue({ rows: [], rowCount: 1 });
+    const release = vi.fn();
+    const pool = {
+      connect: vi.fn().mockResolvedValue({ query, release }),
+    };
+    const repository = new PostgresAuthRepository(pool as never);
+
+    await repository.recordPhoneLegalAcceptances({
+      tenantId,
+      userId,
+      publicOfferVersion: '2026-07-18',
+      personalDataPolicyVersion: '2026-07-18',
+      correlationId: 'phone-legal-correlation',
+    });
+
+    const statements = query.mock.calls.map(([text]) => String(text));
+    expect(statements.some((text) => text.includes("'PHONE_OTP'"))).toBe(true);
+    expect(statements.some((text) => text.includes('PHONE_OTP_LEGAL_ACCEPTANCE_RECORDED'))).toBe(
+      true,
+    );
+    expect(statements).toContain('commit');
+    expect(release).toHaveBeenCalledOnce();
+  });
 });

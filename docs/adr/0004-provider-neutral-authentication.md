@@ -32,6 +32,11 @@ to the adapter call and never enter a normal PadlHub response, session row, log,
 The only narrowly defined exception is the feature-gated user delegation in ADR 0005: an
 allowlisted, short-lived Viva access-token may be delivered to browser memory for approved
 direct-Viva operations; a Viva refresh-token remains envelope-encrypted on the server.
+When a verified Viva phone-code exchange returns a refresh-token, the adapter returns it only to
+the authentication service, which stores the same encrypted delegation used by the Home worker.
+If the deployment requires Viva Home synchronization but the exchange supplies no refresh-token,
+authentication fails closed with `VIVA_REAUTH_REQUIRED` instead of creating a session whose Home
+can never become ready.
 
 ## Identity mapping
 
@@ -50,6 +55,10 @@ link; it must not infer equivalence from an unverified phone number.
 - Challenge, verification, refresh and logout commands require a client idempotency key. Login and
   refresh credentials are derived server-side for safe replay of a lost response; a different
   concurrent refresh receives a short race response instead of revoking a healthy token family.
+- Client phone verification requires both current legal acceptances. The API records versioned
+  `PHONE_OTP` acceptance rows against the verified PadlHub UUID before creating the refresh
+  session. CUP-admin authentication is a separate audience and does not create consumer legal
+  acceptance rows.
 - The browser keeps the short-lived PadlHub access JWT only in memory. Reload recovery calls the
   PadlHub refresh endpoint; browser storage never contains access, refresh or Viva tokens.
 - Refresh credentials are random opaque values in an `HttpOnly` cookie. The credential rotates on

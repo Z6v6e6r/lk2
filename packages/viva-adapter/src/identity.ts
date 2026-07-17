@@ -4,6 +4,7 @@ import {
   IdentityProviderError,
   normalizePhoneE164,
   type IdentityProviderPort,
+  type PhoneVerificationResult,
   type VerifiedExternalIdentity,
   type VivaOAuthProvider,
   type VivaOAuthProviderPort,
@@ -485,7 +486,7 @@ export class VivaIdentityProvider implements IdentityProviderPort, VivaOAuthProv
     readonly code: string;
     readonly providerTenantKey: string;
     readonly correlationId: string;
-  }): Promise<VerifiedExternalIdentity> {
+  }): Promise<PhoneVerificationResult> {
     const startedAt = Date.now();
     this.ensureAvailable();
     if (this.options.mode === 'mock') {
@@ -561,7 +562,19 @@ export class VivaIdentityProvider implements IdentityProviderPort, VivaOAuthProv
         { operation: 'verify_code', outcome: 'success', status: response.status },
         startedAt,
       );
-      return identity;
+      return {
+        identity,
+        ...(tokens.refresh_token
+          ? {
+              delegation: {
+                refreshToken: tokens.refresh_token,
+                ...(tokens.refresh_expires_in
+                  ? { refreshExpiresIn: tokens.refresh_expires_in }
+                  : {}),
+              },
+            }
+          : {}),
+      };
     } catch (error) {
       if (error instanceof IdentityProviderError) throw error;
       this.emit(

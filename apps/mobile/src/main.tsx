@@ -140,7 +140,13 @@ function MobileApp(): React.JSX.Element {
     setBusy(true);
     setError(null);
     try {
-      const session = await api.verifyAuthChallenge(challenge.id, { code });
+      const session = await api.verifyAuthChallenge(challenge.id, {
+        code,
+        acceptance: {
+          publicOfferAccepted: true,
+          personalDataPolicyAccepted: true,
+        },
+      });
       setSignedInName(session.user.displayName);
       setView('signed-in');
     } catch (requestError) {

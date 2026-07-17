@@ -71,6 +71,9 @@ security decisions are recorded in [ADR 0004](docs/adr/0004-provider-neutral-aut
 After the local services are ready, `npm run smoke:auth` verifies the full authentication and
 session lifecycle without exposing credentials in its output.
 
+The executable boundary, acceptance evidence, feature gates and GO/NO-GO rules for the first web
+release are defined in the [web-first MVP release plan](docs/plans/mvp-release-plan.md).
+
 ## Repository map
 
 ```text

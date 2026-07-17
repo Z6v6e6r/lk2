@@ -26,8 +26,9 @@ microservice.
 
 ## 2. Domain boundary and ownership
 
-Games are `LOCAL_ONLY`: PostgreSQL is the source of truth for the game aggregate. Related domains
-retain their own owners:
+Games are `LOCAL_PRIMARY`: PostgreSQL is the source of truth for the game aggregate. Business state
+and the outbox event are committed in one transaction; external-domain projections are asynchronous
+and must not become an independent dual-write path. Related domains retain their own owners:
 
 | Concern                              | Owner                                       | Games stores                                          |
 | ------------------------------------ | ------------------------------------------- | ----------------------------------------------------- |

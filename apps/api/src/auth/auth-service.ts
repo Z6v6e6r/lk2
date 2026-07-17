@@ -5,6 +5,7 @@ import {
   normalizePhoneE164,
   type IdentityProviderKey,
   type IdentityProviderPort,
+  type VerifiedPhoneAuthentication,
   type VerifiedExternalIdentity,
   type VivaOAuthProvider,
   type VivaOAuthProviderPort,
@@ -136,6 +137,13 @@ export interface AuthRepository {
     readonly publicOfferVersion: string;
     readonly personalDataPolicyVersion: string;
     readonly oauthStateHash: string;
+  }): Promise<void>;
+  recordPhoneLegalAcceptances(input: {
+    readonly tenantId: string;
+    readonly userId: string;
+    readonly correlationId: string;
+    readonly publicOfferVersion: string;
+    readonly personalDataPolicyVersion: string;
   }): Promise<void>;
   recordLegalAcceptanceIntent(input: {
     readonly tenantId: string;
@@ -719,8 +727,19 @@ export class AuthService {
     readonly correlationId: string;
     readonly idempotencyKey: string;
     readonly accessAudience?: AccessTokenAudience;
+    readonly acceptance?: {
+      readonly publicOfferAccepted: boolean;
+      readonly personalDataPolicyAccepted: boolean;
+    };
   }): Promise<AuthSessionResult> {
     if (!OTP_PATTERN.test(input.code)) throw new AuthServiceError('AUTH_CODE_INVALID');
+    const audience = input.accessAudience ?? 'client';
+    if (
+      audience === 'client' &&
+      (!input.acceptance?.publicOfferAccepted || !input.acceptance.personalDataPolicyAccepted)
+    ) {
+      throw new AuthServiceError('LEGAL_ACCEPTANCE_REQUIRED');
+    }
     const sessionId = this.deriveUuid('auth-login-session', [
       input.tenantKey,
       input.challengeId,
@@ -768,6 +787,7 @@ export class AuthService {
       input.accessAudience,
     );
     let user: AuthUser;
+    let phoneDelegation: VerifiedPhoneAuthentication['delegation'];
     if (cupDevAuthentication) {
       if (input.code !== this.options.config.CUP_DEV_AUTH_OTP_CODE) {
         const attempts = await this.options.challengeStore.incrementAttempts(challenge.id);
@@ -790,12 +810,18 @@ export class AuthService {
     } else {
       let externalIdentity: VerifiedExternalIdentity;
       try {
-        externalIdentity = await this.provider(challenge.provider).verifyPhoneCode({
+        const verification = await this.provider(challenge.provider).verifyPhoneCode({
           phoneE164: challenge.phoneE164,
           code: input.code,
           providerTenantKey: challenge.providerTenantKey,
           correlationId: input.correlationId,
         });
+        if ('identity' in verification) {
+          externalIdentity = verification.identity;
+          phoneDelegation = verification.delegation;
+        } else {
+          externalIdentity = verification;
+        }
       } catch (error) {
         if (error instanceof IdentityProviderError && error.code === 'AUTH_CODE_INVALID') {
           const attempts = await this.options.challengeStore.incrementAttempts(challenge.id);
@@ -827,13 +853,39 @@ export class AuthService {
       } catch (error) {
         this.mapIdentityRepositoryError(error);
       }
+      if (audience === 'client') {
+        await this.options.repository.recordPhoneLegalAcceptances({
+          tenantId: challenge.tenantId,
+          userId: user.id,
+          correlationId: input.correlationId,
+          publicOfferVersion: this.options.config.PUBLIC_OFFER_VERSION,
+          personalDataPolicyVersion: this.options.config.PERSONAL_DATA_POLICY_VERSION,
+        });
+      }
+      if (challenge.provider === 'VIVA' && phoneDelegation) {
+        await this.options.repository.saveVivaDelegation({
+          tenantId: challenge.tenantId,
+          userId: user.id,
+          issuer: externalIdentity.issuer,
+          subject: externalIdentity.subject,
+          refreshTokenCiphertext: this.encryptVivaRefreshToken(phoneDelegation.refreshToken),
+          encryptionKeyVersion: this.options.config.VIVA_DELEGATION_KEY_VERSION,
+          grantedScopes: this.options.config.VIVA_OAUTH_SCOPES.split(/\s+/).filter(Boolean),
+          ...(phoneDelegation.refreshExpiresIn
+            ? {
+                refreshExpiresAt: new Date(
+                  this.now().getTime() + phoneDelegation.refreshExpiresIn * 1000,
+                ),
+              }
+            : {}),
+          correlationId: input.correlationId,
+        });
+      } else if (challenge.provider === 'VIVA' && this.options.config.HOME_VIVA_SYNC_ENABLED) {
+        throw new AuthServiceError('VIVA_REAUTH_REQUIRED');
+      }
     }
     try {
-      await this.assertUserAudienceAccess(
-        challenge.tenantId,
-        user.id,
-        input.accessAudience ?? 'client',
-      );
+      await this.assertUserAudienceAccess(challenge.tenantId, user.id, audience);
       const refreshToken = this.deriveRefreshToken('auth-login-refresh', [
         input.tenantKey,
         input.challengeId,

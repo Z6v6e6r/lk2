@@ -51,21 +51,7 @@ type ProtectedRoute =
   | { readonly kind: 'communities' }
   | { readonly kind: 'locations' }
   | { readonly kind: 'location'; readonly locationId: string }
-  | { readonly kind: 'section'; readonly title: string }
   | { readonly kind: 'not-found' };
-
-const protectedSections = [
-  ['/games', 'Игры'],
-  ['/trainings', 'Тренировки'],
-  ['/tournaments', 'Турниры'],
-  ['/coaches', 'Тренеры'],
-  ['/subscriptions', 'Абонементы'],
-  ['/communities', 'Сообщества'],
-  ['/promotions', 'Акции'],
-  ['/gift-certificates', 'Подарочные сертификаты'],
-  ['/offers', 'Предложения'],
-  ['/chats', 'Чаты'],
-] as const;
 
 function resolveProtectedRoute(pathname: string): ProtectedRoute {
   const normalizedPath = pathname.length > 1 ? pathname.replace(/\/+$/, '') : pathname;
@@ -83,10 +69,7 @@ function resolveProtectedRoute(pathname: string): ProtectedRoute {
     /^\/locations\/([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i,
   );
   if (locationMatch?.[1]) return { kind: 'location', locationId: locationMatch[1] };
-  const section = protectedSections.find(
-    ([prefix]) => normalizedPath === prefix || normalizedPath.startsWith(`${prefix}/`),
-  );
-  return section ? { kind: 'section', title: section[1] } : { kind: 'not-found' };
+  return { kind: 'not-found' };
 }
 
 interface AuthState {
@@ -604,6 +587,13 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
 
   function handlePhoneSubmit(event: FormEvent<HTMLFormElement>): void {
     event.preventDefault();
+    if (!state.publicOfferAccepted || !state.personalDataPolicyAccepted) {
+      dispatch({
+        type: 'operation-failed',
+        message: 'Подтвердите публичную оферту и обработку персональных данных.',
+      });
+      return;
+    }
     const phoneE164 = normalizePhoneE164(state.phoneInput);
     if (!phoneE164) {
       dispatch({ type: 'operation-failed', message: 'Введите российский номер в формате +7.' });
@@ -619,12 +609,21 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
       return;
     }
     dispatch({ type: 'verify-started' });
-    void gateway.verifyCode({ challengeId: state.challenge.challengeId, code: state.code }).then(
-      (session) => dispatch({ type: 'verify-completed', session }),
-      (error: unknown) => {
-        dispatch({ type: 'operation-failed', message: userMessage(error, 'verify') });
-      },
-    );
+    void gateway
+      .verifyCode({
+        challengeId: state.challenge.challengeId,
+        code: state.code,
+        acceptance: {
+          publicOfferAccepted: state.publicOfferAccepted,
+          personalDataPolicyAccepted: state.personalDataPolicyAccepted,
+        },
+      })
+      .then(
+        (session) => dispatch({ type: 'verify-completed', session }),
+        (error: unknown) => {
+          dispatch({ type: 'operation-failed', message: userMessage(error, 'verify') });
+        },
+      );
   }
 
   function handlePhoneChange(event: ChangeEvent<HTMLInputElement>): void {
@@ -939,19 +938,13 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
       }
       return <LocationDetailPage location={locationDetail} />;
     }
-    if (protectedRoute.kind === 'section' || protectedRoute.kind === 'not-found') {
-      const title =
-        protectedRoute.kind === 'section' ? protectedRoute.title : 'Страница не найдена';
+    if (protectedRoute.kind === 'not-found') {
       return (
         <main className="app-shell app-shell-loading" aria-labelledby="route-title">
           <Brand />
           <section className="loading-card">
-            <h1 id="route-title">{title}</h1>
-            <p>
-              {protectedRoute.kind === 'section'
-                ? 'Раздел подключается к API ПаделХАБ.'
-                : 'Проверьте адрес или вернитесь на Главную.'}
-            </p>
+            <h1 id="route-title">Страница не найдена</h1>
+            <p>Проверьте адрес или вернитесь на Главную.</p>
             <a className="secondary-button logout-button" href="/">
               Вернуться на Главную
             </a>
@@ -1136,6 +1129,41 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
                 <p id="phone-help" className="field-help">
                   Укажите российский номер с кодом +7.
                 </p>
+
+                <div className="legal-acceptances">
+                  <label className="legal-acceptance">
+                    <input
+                      type="checkbox"
+                      checked={state.publicOfferAccepted}
+                      disabled={isRequesting}
+                      onChange={() =>
+                        dispatch({ type: 'acceptance-toggled', acceptance: 'public-offer' })
+                      }
+                    />
+                    <span>
+                      Принимаю условия{' '}
+                      <a href="/documents/public-offer" target="_blank" rel="noreferrer">
+                        публичной оферты
+                      </a>
+                    </span>
+                  </label>
+                  <label className="legal-acceptance">
+                    <input
+                      type="checkbox"
+                      checked={state.personalDataPolicyAccepted}
+                      disabled={isRequesting}
+                      onChange={() =>
+                        dispatch({ type: 'acceptance-toggled', acceptance: 'personal-data' })
+                      }
+                    />
+                    <span>
+                      Даю согласие на{' '}
+                      <a href="/documents/personal-data-policy" target="_blank" rel="noreferrer">
+                        обработку персональных данных
+                      </a>
+                    </span>
+                  </label>
+                </div>
 
                 {state.error ? (
                   <p id="auth-error" className="error-message" role="alert">

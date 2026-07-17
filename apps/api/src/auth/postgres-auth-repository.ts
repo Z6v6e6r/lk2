@@ -401,6 +401,41 @@ export class PostgresAuthRepository implements AuthRepository {
     });
   }
 
+  public recordPhoneLegalAcceptances(input: {
+    readonly tenantId: string;
+    readonly userId: string;
+    readonly correlationId: string;
+    readonly publicOfferVersion: string;
+    readonly personalDataPolicyVersion: string;
+  }): Promise<void> {
+    return this.withTenant(input.tenantId, async (client) => {
+      await client.query(
+        `
+          insert into legal.document_acceptances (
+            tenant_id, user_id, document_kind, document_version, correlation_id, source
+          ) values
+            ($1, $2, 'PUBLIC_OFFER', $3, $5, 'PHONE_OTP'),
+            ($1, $2, 'PERSONAL_DATA_POLICY', $4, $5, 'PHONE_OTP')
+          on conflict (tenant_id, user_id, document_kind, document_version) do nothing
+        `,
+        [
+          input.tenantId,
+          input.userId,
+          input.publicOfferVersion,
+          input.personalDataPolicyVersion,
+          input.correlationId,
+        ],
+      );
+      await client.query(
+        `insert into audit.audit_log (
+           tenant_id, actor_id, action, resource_type, result, correlation_id
+         ) values ($1, $2, 'PHONE_OTP_LEGAL_ACCEPTANCE_RECORDED', 'LEGAL_ACCEPTANCE',
+                   'SUCCESS', $3)`,
+        [input.tenantId, input.userId, input.correlationId],
+      );
+    });
+  }
+
   public recordLegalAcceptanceIntent(input: {
     readonly tenantId: string;
     readonly provider: 'vkid' | 'yandex';

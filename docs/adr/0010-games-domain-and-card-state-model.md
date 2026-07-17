@@ -11,8 +11,9 @@ functions. Participant arrays are replaced from browser snapshots, identity sele
 by callers, public reads expose overly broad records and payment return handling can promote local
 state before authoritative provider verification.
 
-The new PadlHub platform already defines Games as `LOCAL_ONLY`, PostgreSQL as the operational source
-of truth, PadlHub APIs as the only client boundary and Viva traffic as an adapter-only concern.
+The new PadlHub platform defines Games as `LOCAL_PRIMARY`, PostgreSQL as the operational source of
+truth, PadlHub APIs as the only client boundary and Viva traffic as an adapter-only concern. Games
+business state and its outbox event are committed in one transaction.
 
 The design also needs one reusable card family covering discovery, upcoming games, invitations and
 history. A single game status cannot accurately represent roster, viewer relation, payment and

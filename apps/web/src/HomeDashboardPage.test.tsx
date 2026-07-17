@@ -2,7 +2,7 @@
 
 import '@testing-library/jest-dom/vitest';
 
-import { act, render, screen } from '@testing-library/react';
+import { act, cleanup, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { HomeDashboard } from './auth-gateway.js';
@@ -67,6 +67,7 @@ const dashboard: HomeDashboard = {
 };
 
 afterEach(() => {
+  cleanup();
   vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -108,5 +109,83 @@ describe('Home promotion carousel', () => {
       'aria-current',
       'true',
     );
+  });
+});
+
+describe('Home upcoming bookings', () => {
+  it('shows an honest empty state instead of placeholder cards', () => {
+    const { container } = render(
+      <HomeDashboardPage
+        dashboard={dashboard}
+        tenantName="ПадлХАБ"
+        notificationUnreadCount={0}
+        loadCommunityPage={() => Promise.resolve({ items: [] })}
+        logoutBusy={false}
+        onLogout={vi.fn()}
+      />,
+    );
+
+    const bookings = screen.getByRole('region', { name: 'Мои записи' });
+    expect(within(bookings).getByRole('status')).toHaveTextContent('Ближайших записей нет');
+    expect(container.querySelectorAll('.fh-event')).toHaveLength(0);
+    expect(screen.queryByText('Название игры')).not.toBeInTheDocument();
+    expect(screen.queryByText('Ясенево · Паустовского, 4А')).not.toBeInTheDocument();
+  });
+
+  it('renders every card only from the server upcoming fields', () => {
+    const upcoming: HomeDashboard['upcoming'] = [
+      {
+        id: '33333333-3333-4333-8333-333333333333',
+        kind: 'training',
+        title: 'Тренировка с Марией',
+        startsAt: '2026-07-18T10:15:00.000Z',
+        venue: 'Селигерская · корт 1',
+        status: 'waitlist',
+        route: '/trainings/33333333-3333-4333-8333-333333333333',
+      },
+      {
+        id: '44444444-4444-4444-8444-444444444444',
+        kind: 'tournament',
+        title: 'Кубок выходного дня',
+        startsAt: '2026-07-19T08:30:00.000Z',
+        venue: 'ПаделХАБ · центральный корт',
+        status: 'payment_required',
+        route: '/tournaments/44444444-4444-4444-8444-444444444444',
+      },
+    ];
+    const { container } = render(
+      <HomeDashboardPage
+        dashboard={{ ...dashboard, upcoming }}
+        tenantName="ПадлХАБ"
+        notificationUnreadCount={0}
+        loadCommunityPage={() => Promise.resolve({ items: [] })}
+        logoutBusy={false}
+        onLogout={vi.fn()}
+      />,
+    );
+
+    const cards = container.querySelectorAll('.fh-event');
+    expect(cards).toHaveLength(2);
+
+    const trainingCard = screen.getByRole('article', { name: 'Тренировка с Марией' });
+    expect(within(trainingCard).getByText('Тренировка · Лист ожидания')).toBeInTheDocument();
+    expect(within(trainingCard).getByText('Селигерская · корт 1')).toBeInTheDocument();
+    expect(trainingCard.querySelector('time')).toHaveAttribute('datetime', upcoming[0]?.startsAt);
+    expect(
+      within(trainingCard).getByText(
+        new Intl.DateTimeFormat('ru-RU', { hour: '2-digit', minute: '2-digit' }).format(
+          new Date(upcoming[0]?.startsAt ?? ''),
+        ),
+      ),
+    ).toBeInTheDocument();
+
+    const tournamentCard = screen.getByRole('article', { name: 'Кубок выходного дня' });
+    expect(within(tournamentCard).getByText('Турнир · Нужна оплата')).toBeInTheDocument();
+    expect(within(tournamentCard).getByText('ПаделХАБ · центральный корт')).toBeInTheDocument();
+    expect(tournamentCard.querySelector('time')).toHaveAttribute('datetime', upcoming[1]?.startsAt);
+
+    expect(container.querySelectorAll('.fh-event img')).toHaveLength(0);
+    expect(container.querySelectorAll('.fh-event[href]')).toHaveLength(0);
+    expect(screen.queryByText(/Рейтинговая игра|Френдли игра/)).not.toBeInTheDocument();
   });
 });

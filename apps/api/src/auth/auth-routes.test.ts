@@ -29,6 +29,25 @@ const config = loadConfig({
   JWT_REFRESH_SECRET: 'test-refresh-secret-at-least-32-characters',
 });
 
+function loadPhoneProjectionConfig() {
+  return loadConfig({
+    APP_ENV: 'ci',
+    DATABASE_URL: 'postgresql://phub:test@localhost:5432/phub',
+    REDIS_URL: 'redis://localhost:6379',
+    RABBITMQ_URL: 'amqp://phub:test@localhost:5672',
+    JWT_ISSUER: 'phub-identity',
+    JWT_AUDIENCE: 'phub-api',
+    JWT_ACCESS_SECRET: 'test-access-secret-at-least-32-characters',
+    JWT_REFRESH_SECRET: 'test-refresh-secret-at-least-32-characters',
+    VIVA_MODE: 'sandbox',
+    VIVA_OAUTH_ENABLED: 'true',
+    VIVA_OAUTH_REDIRECT_URI: 'https://app.example.test/oauth/callback',
+    VIVA_OAUTH_SUCCESS_REDIRECT_URL: 'https://app.example.test/',
+    VIVA_DELEGATION_ENCRYPTION_KEY: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+    HOME_VIVA_SYNC_ENABLED: 'true',
+  });
+}
+
 const binding: TenantAuthBinding = {
   tenantId: '86afbe01-0318-4dd2-bc25-303b7bf0d430',
   tenantKey: 'local-padel',
@@ -47,6 +66,7 @@ class FakeRepository implements AuthRepository {
   private sessionId: string | undefined;
   private bindingValue: TenantAuthBinding = binding;
   private vivaDelegationRevocationCount = 0;
+  private phoneLegalAcceptanceCount = 0;
   private vivaDelegation:
     | {
         issuer: string;
@@ -63,6 +83,14 @@ class FakeRepository implements AuthRepository {
 
   public get vivaDelegationRevocations(): number {
     return this.vivaDelegationRevocationCount;
+  }
+
+  public get phoneLegalAcceptances(): number {
+    return this.phoneLegalAcceptanceCount;
+  }
+
+  public get hasVivaDelegation(): boolean {
+    return this.vivaDelegation !== undefined;
   }
 
   public resolveTenantAuthBinding(tenantKey: string): Promise<TenantAuthBinding | undefined> {
@@ -162,6 +190,11 @@ class FakeRepository implements AuthRepository {
   }
 
   public recordLegalAcceptances(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  public recordPhoneLegalAcceptances(): Promise<void> {
+    this.phoneLegalAcceptanceCount += 1;
     return Promise.resolve();
   }
 
@@ -313,9 +346,10 @@ describe('provider-neutral authentication routes', () => {
   });
 
   it('creates a PadlHub session, rotates it via cookie and never exposes an external token', async () => {
+    const repository = new FakeRepository();
     const authService = new AuthService({
       config,
-      repository: new FakeRepository(),
+      repository,
       challengeStore: new MemoryAuthChallengeStore(),
       providers: new Map([['VIVA', provider]]),
     });
@@ -335,11 +369,23 @@ describe('provider-neutral authentication routes', () => {
     expect(challengeResponse.statusCode).toBe(202);
     const challenge = challengeResponse.json<{ challengeId: string }>();
 
+    const missingAcceptance = await app.inject({
+      method: 'POST',
+      url: `/user/api/v1/local-padel/auth/challenges/${challenge.challengeId}/verify`,
+      headers: { 'idempotency-key': 'auth-verify-no-legal-0001' },
+      payload: { code: '0000' },
+    });
+    expect(missingAcceptance.statusCode).toBe(400);
+    expect(missingAcceptance.json()).toMatchObject({ code: 'LEGAL_ACCEPTANCE_REQUIRED' });
+
     const verifyResponse = await app.inject({
       method: 'POST',
       url: `/user/api/v1/local-padel/auth/challenges/${challenge.challengeId}/verify`,
       headers: { 'idempotency-key': 'auth-verify-test-0000001' },
-      payload: { code: '0000' },
+      payload: {
+        code: '0000',
+        acceptance: { publicOfferAccepted: true, personalDataPolicyAccepted: true },
+      },
     });
     expect(verifyResponse.statusCode).toBe(200);
     expect(verifyResponse.json()).toMatchObject({
@@ -352,6 +398,7 @@ describe('provider-neutral authentication routes', () => {
     }>();
     expect(Object.keys(verifiedBody.user).sort()).toEqual(['displayName', 'id']);
     expect(verifiedBody.context).toMatchObject({ tenantId: binding.tenantId, phoneLast4: '0001' });
+    expect(repository.phoneLegalAcceptances).toBe(1);
     expect(verifyResponse.body).not.toContain('refreshToken');
     expect(verifyResponse.body).not.toContain('external-user-1');
     const firstSetCookie = String(verifyResponse.headers['set-cookie']);
@@ -413,6 +460,98 @@ describe('provider-neutral authentication routes', () => {
       },
     });
     expect(logoutResponse.statusCode).toBe(204);
+  });
+
+  it('persists the server-only Viva refresh delegation from phone authentication', async () => {
+    const phoneProjectionConfig = loadPhoneProjectionConfig();
+    const repository = new FakeRepository();
+    const phoneProvider: IdentityProviderPort = {
+      key: 'VIVA',
+      requestPhoneCode: () => Promise.resolve(),
+      verifyPhoneCode: (input) =>
+        Promise.resolve({
+          identity: {
+            issuer: 'https://identity.example.test',
+            subject: 'external-user-1',
+            phoneE164: input.phoneE164,
+            displayName: user.displayName,
+          },
+          delegation: {
+            refreshToken: 'server-only-phone-refresh-token',
+            refreshExpiresIn: 3600,
+          },
+        }),
+    };
+    const authService = new AuthService({
+      config: phoneProjectionConfig,
+      repository,
+      challengeStore: new MemoryAuthChallengeStore(),
+      providers: new Map([['VIVA', phoneProvider]]),
+    });
+    const app = await buildApp({
+      config: phoneProjectionConfig,
+      logger: createLogger('api-phone-delegation-test', 'silent'),
+      authService,
+    });
+    apps.push(app);
+
+    const challengeResponse = await app.inject({
+      method: 'POST',
+      url: '/user/api/v1/local-padel/auth/challenges',
+      headers: { 'idempotency-key': 'phone-delegation-challenge-01' },
+      payload: { method: 'phone_otp', phone: '+79990000001' },
+    });
+    const challenge = challengeResponse.json<{ challengeId: string }>();
+    const verifyResponse = await app.inject({
+      method: 'POST',
+      url: `/user/api/v1/local-padel/auth/challenges/${challenge.challengeId}/verify`,
+      headers: { 'idempotency-key': 'phone-delegation-verify-0001' },
+      payload: {
+        code: '0000',
+        acceptance: { publicOfferAccepted: true, personalDataPolicyAccepted: true },
+      },
+    });
+
+    expect(verifyResponse.statusCode).toBe(200);
+    expect(repository.hasVivaDelegation).toBe(true);
+    expect(verifyResponse.body).not.toContain('server-only-phone-refresh-token');
+  });
+
+  it('fails closed when a Viva phone login cannot seed the required Home delegation', async () => {
+    const phoneProjectionConfig = loadPhoneProjectionConfig();
+    const authService = new AuthService({
+      config: phoneProjectionConfig,
+      repository: new FakeRepository(),
+      challengeStore: new MemoryAuthChallengeStore(),
+      providers: new Map([['VIVA', provider]]),
+    });
+    const app = await buildApp({
+      config: phoneProjectionConfig,
+      logger: createLogger('api-phone-delegation-required-test', 'silent'),
+      authService,
+    });
+    apps.push(app);
+
+    const challengeResponse = await app.inject({
+      method: 'POST',
+      url: '/user/api/v1/local-padel/auth/challenges',
+      headers: { 'idempotency-key': 'phone-no-delegation-challenge-1' },
+      payload: { method: 'phone_otp', phone: '+79990000001' },
+    });
+    const challenge = challengeResponse.json<{ challengeId: string }>();
+    const verifyResponse = await app.inject({
+      method: 'POST',
+      url: `/user/api/v1/local-padel/auth/challenges/${challenge.challengeId}/verify`,
+      headers: { 'idempotency-key': 'phone-no-delegation-verify-001' },
+      payload: {
+        code: '0000',
+        acceptance: { publicOfferAccepted: true, personalDataPolicyAccepted: true },
+      },
+    });
+
+    expect(verifyResponse.statusCode).toBe(401);
+    expect(verifyResponse.json()).toMatchObject({ code: 'VIVA_REAUTH_REQUIRED' });
+    expect(verifyResponse.headers['set-cookie']).toBeUndefined();
   });
 
   it('uses the explicit local CUP code without calling Viva sandbox', async () => {
@@ -548,14 +687,20 @@ describe('provider-neutral authentication routes', () => {
       method: 'POST',
       url: `/user/api/v1/local-padel/auth/challenges/${challengeId}/verify`,
       headers: { 'idempotency-key': 'auth-concurrent-verify-01' },
-      payload: { code: '0000' },
+      payload: {
+        code: '0000',
+        acceptance: { publicOfferAccepted: true, personalDataPolicyAccepted: true },
+      },
     });
     await vi.waitFor(() => expect(verificationCalls).toBe(1));
     const second = await app.inject({
       method: 'POST',
       url: `/user/api/v1/local-padel/auth/challenges/${challengeId}/verify`,
       headers: { 'idempotency-key': 'auth-concurrent-verify-02' },
-      payload: { code: '0000' },
+      payload: {
+        code: '0000',
+        acceptance: { publicOfferAccepted: true, personalDataPolicyAccepted: true },
+      },
     });
 
     expect(second.statusCode).toBe(409);
@@ -633,7 +778,10 @@ describe('provider-neutral authentication routes', () => {
       method: 'POST',
       url: `/user/api/v1/local-padel/auth/challenges/${createdChallenge.challengeId}/verify`,
       headers: { 'idempotency-key': 'auth-binding-verify-0001' },
-      payload: { code: '0000' },
+      payload: {
+        code: '0000',
+        acceptance: { publicOfferAccepted: true, personalDataPolicyAccepted: true },
+      },
     });
 
     expect(response.statusCode).toBe(410);

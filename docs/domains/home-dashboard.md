@@ -99,6 +99,11 @@ the same Redis lease used by the API, calls only Viva End User endpoints through
 `integration.external_entity_map`, and atomically advances the component source revision plus an
 outbox event. The browser never participates in this fan-out.
 
+Both Viva OAuth and the provider-neutral phone grant may seed that encrypted delegation. A phone
+login is rejected before session creation when Viva Home synchronization is required and the
+provider does not return a refresh credential; this prevents a fresh authenticated user from being
+left permanently at `HOME_PROJECTION_NOT_READY`.
+
 The upstream read sequence is bounded: profile, active booking IDs, one enriched booking-list read
 when IDs exist, and active subscriptions. Viva's live subscription response currently returns
 `unitsLeft=null` for non-unit variants although its OpenAPI declares a number; the adapter accepts

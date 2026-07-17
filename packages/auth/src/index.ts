@@ -63,6 +63,21 @@ export interface VerifiedExternalIdentity {
   readonly displayName: string;
 }
 
+/**
+ * Normalized result of a phone-code exchange. Identity providers may attach a
+ * server-only refresh credential when the same exchange can also authorize
+ * user-scoped reads. The credential never crosses a PadlHub public contract.
+ */
+export interface VerifiedPhoneAuthentication {
+  readonly identity: VerifiedExternalIdentity;
+  readonly delegation?: {
+    readonly refreshToken: string;
+    readonly refreshExpiresIn?: number;
+  };
+}
+
+export type PhoneVerificationResult = VerifiedExternalIdentity | VerifiedPhoneAuthentication;
+
 export interface IdentityProviderPort {
   readonly key: IdentityProviderKey;
   requestPhoneCode(input: {
@@ -75,7 +90,7 @@ export interface IdentityProviderPort {
     readonly code: string;
     readonly providerTenantKey: string;
     readonly correlationId: string;
-  }): Promise<VerifiedExternalIdentity>;
+  }): Promise<PhoneVerificationResult>;
 }
 
 export type VivaOAuthProvider = 'vkid' | 'yandex';

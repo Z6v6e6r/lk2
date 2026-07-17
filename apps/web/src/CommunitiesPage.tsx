@@ -116,7 +116,7 @@ export function CommunitiesPage({ tenantName, loadPage }: CommunitiesPageProps):
           <ul className="community-directory-list">
             {items.map((community) => (
               <li key={community.id}>
-                <a href={community.route}>
+                <div className="community-directory-card">
                   <CommunityAvatar community={community} />
                   <span>
                     <strong>{community.title}</strong>
@@ -126,8 +126,7 @@ export function CommunitiesPage({ tenantName, loadPage }: CommunitiesPageProps):
                         : 'Нет новых сообщений'}
                     </small>
                   </span>
-                  <b aria-hidden="true">›</b>
-                </a>
+                </div>
               </li>
             ))}
           </ul>

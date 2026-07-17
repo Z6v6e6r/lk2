@@ -79,7 +79,7 @@ describe('VivaIdentityProvider', () => {
     });
 
     await provider.requestPhoneCode(input);
-    const identity = await provider.verifyPhoneCode({ ...input, code: '1234' });
+    const verification = await provider.verifyPhoneCode({ ...input, code: '1234' });
 
     const sendUrl = fetchUrl(fetchImplementation.mock.calls[0]?.[0]);
     expect(sendUrl.pathname).toBe('/realms/clients/sms/authentication-code');
@@ -87,7 +87,11 @@ describe('VivaIdentityProvider', () => {
     const verifyBody = requestBody(fetchImplementation.mock.calls[1]?.[1]?.body);
     expect(verifyBody).toContain('grant_type=password');
     expect(verifyBody).toContain('client_id=widget');
-    expect(identity.subject).toBe('viva-user-42');
+    expect(verification).toMatchObject({
+      identity: { subject: 'viva-user-42' },
+      delegation: { refreshToken: 'external-refresh' },
+    });
+    expect(verification).not.toHaveProperty('accessToken');
   });
 
   it('binds OAuth subjects to the stable Viva profile identifier', async () => {

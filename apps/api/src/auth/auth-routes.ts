@@ -15,7 +15,15 @@ const challengeBodySchema = z.object({
   method: z.literal('phone_otp'),
   phone: z.string().min(5).max(32),
 });
-const verifyBodySchema = z.object({ code: z.string().regex(/^\d{4}$/) });
+const verifyBodySchema = z.object({
+  code: z.string().regex(/^\d{4}$/),
+  acceptance: z
+    .object({
+      publicOfferAccepted: z.literal(true),
+      personalDataPolicyAccepted: z.literal(true),
+    })
+    .optional(),
+});
 const vivaOAuthStartBodySchema = z.object({
   provider: z.enum(['vkid', 'yandex']),
   acceptance: z.object({
@@ -320,6 +328,7 @@ export function registerAuthRoutes(
           correlationId: request.id,
           idempotencyKey: idempotencyKey(request),
           accessAudience: accessAudience(request),
+          ...(body.acceptance ? { acceptance: body.acceptance } : {}),
         });
         setRefreshCookie(reply, config, tenantKey, session);
         preventCredentialCaching(reply);

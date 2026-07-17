@@ -1,5 +1,27 @@
 # Worklog
 
+## 2026-07-18 — MVP Home and phone-auth launch safety
+
+- Removed synthetic Home event cards and made the web dashboard render only the bounded server
+  `upcoming` projection, including an honest empty state.
+- Made client phone verification require and persist versioned legal acceptances, while production
+  now rejects unpublished `pending` document versions.
+- Preserved a Viva phone grant refresh-token only as an encrypted server-side delegation so the
+  worker can build a fresh user's Home projection. Required Viva Home deployments fail closed when
+  the provider does not return that credential.
+- Added an executable web-first MVP scope, acceptance matrix and release NO-GO gates.
+- Removed placeholder section screens and links to unfinished create-game, chat, training,
+  tournament, subscription and community-detail journeys; unsupported deep links now fail closed
+  at the web router until their complete client vertical is enabled.
+
+## 2026-07-18 — Nano Public and Admin ingress guard
+
+- Routed the PadlHub Public and CUP Admin API boundaries through the Jetson Nginx ingress while
+  keeping the Internal API private and preserving User API, realtime and SPA fallback behavior.
+- Strengthened the deployment smoke test to require JSON, exact HTTP status and stable semantic
+  codes from Public and Admin probes, preventing a successful HTML SPA fallback from masking an
+  ingress regression.
+
 ## 2026-07-18 — verifiable Nano release identity
 
 - Passed the immutable Git commit SHA into ARM64 image builds as `PHUB_RELEASE`, so the web

@@ -43,10 +43,14 @@ const verifyHeaders = operationHeaders({
   'Content-Type': 'application/json',
   'Idempotency-Key': randomUUID(),
 });
+const verifyPayload = {
+  code,
+  acceptance: { publicOfferAccepted: true, personalDataPolicyAccepted: true },
+} as const;
 const verifyResponse = await fetch(`${apiRoot}/auth/challenges/${challenge.challengeId}/verify`, {
   method: 'POST',
   headers: verifyHeaders,
-  body: JSON.stringify({ code }),
+  body: JSON.stringify(verifyPayload),
 });
 const verified = await jsonResponse<{
   accessToken: string;
@@ -65,7 +69,7 @@ const replayedVerifyResponse = await fetch(
   {
     method: 'POST',
     headers: verifyHeaders,
-    body: JSON.stringify({ code }),
+    body: JSON.stringify(verifyPayload),
   },
 );
 const replayedVerification = await jsonResponse<{ user: { id: string } }>(

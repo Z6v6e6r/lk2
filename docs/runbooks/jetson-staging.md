@@ -75,8 +75,14 @@ it serves the PadlHub SPA from `/` and falls back to `index.html` for client
 routes. It also exposes these application routes:
 
 - `/health` and `/health/*` to the API;
+- `/public/api/*` to the anonymous read-only API;
 - `/user/api/*` to the API;
+- `/admin/api/*` to the authenticated CUP Admin API;
 - `/realtime/*` to the realtime service, including WebSocket upgrades.
+
+`/internal/api/*` is intentionally not exposed by the public Jetson ingress. The deploy smoke test
+requires JSON plus stable API error codes from both the Public and Admin boundaries, so an HTML SPA
+fallback cannot be accepted as a healthy API route.
 
 The web image is built in CI for `linux/arm64`, pinned by digest in the release
 file, and served by an internal Nginx container. The Jetson never builds the

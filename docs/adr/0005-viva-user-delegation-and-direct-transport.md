@@ -28,6 +28,12 @@ pre-existing mapping fails closed for audited reconciliation instead of creating
 The successful callback may also create or rotate a **Viva user delegation**. It is not a PadlHub
 session and never changes the public PadlHub user UUID.
 
+The provider-neutral phone flow may create the same server-only delegation when Viva's verified
+phone grant returns a refresh-token. This does not expose a provider token to the client and does
+not add a second identity-link rule: the verified issuer/subject remains the canonical mapping.
+Deployments that require the Viva-backed Home projection reject a phone login without that
+refresh-token rather than issue a partially usable PadlHub session.
+
 The OAuth start transaction immediately writes `legal.document_acceptance_intents` with the tenant,
 provider, document versions, acceptance timestamp, correlation ID and a SHA-256 hash of OAuth state.
 It stores no raw OAuth state or unauthenticated user identifier. After Viva establishes identity, the

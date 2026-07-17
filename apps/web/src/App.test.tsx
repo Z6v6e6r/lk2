@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import '@testing-library/jest-dom/vitest';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -240,6 +240,8 @@ afterEach(() => {
 
 async function openPhoneLogin(user: ReturnType<typeof userEvent.setup>): Promise<void> {
   await user.click(await screen.findByRole('button', { name: 'Войти по номеру телефона' }));
+  await user.click(screen.getByRole('checkbox', { name: /публичной оферты/i }));
+  await user.click(screen.getByRole('checkbox', { name: /обработку персональных данных/i }));
 }
 
 describe('PadlHub web authentication', () => {
@@ -252,30 +254,17 @@ describe('PadlHub web authentication', () => {
     expect(await screen.findByRole('heading', { name: 'Анна Петрова' })).toBeVisible();
     expect(screen.getAllByText('ПаделХАБ').length).toBeGreaterThan(0);
     expect(screen.getByRole('heading', { name: 'Сообщества' })).toBeVisible();
-    const homeActions = screen.getByRole('navigation', { name: 'Разделы клуба' });
-    expect(within(homeActions).getAllByRole('link')).toHaveLength(3);
-    expect(within(homeActions).getByRole('link', { name: 'Игры' })).toHaveAttribute(
-      'href',
-      '/games',
-    );
-    expect(within(homeActions).getByRole('link', { name: 'Турниры' })).toHaveAttribute(
-      'href',
-      '/tournaments',
-    );
-    expect(within(homeActions).getByRole('link', { name: 'Тренировки' })).toHaveAttribute(
-      'href',
-      '/trainings',
-    );
-    expect(within(homeActions).queryByText('Индив. тренировки')).not.toBeInTheDocument();
-    expect(within(homeActions).queryByText('Групповые тренировки')).not.toBeInTheDocument();
+    expect(screen.queryByRole('navigation', { name: 'Разделы клуба' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Создать игру' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Чаты' })).not.toBeInTheDocument();
     const twoLineCommunity = screen
-      .getByRole('link', { name: 'Padel Friends, непрочитанных сообщений: 2' })
+      .getByRole('group', { name: 'Padel Friends, непрочитанных сообщений: 2' })
       .querySelector('.fh-community-title');
     expect(twoLineCommunity).toHaveClass('is-two-lines');
     expect(twoLineCommunity).toHaveAttribute('data-title-lines', '2');
     expect(twoLineCommunity?.children).toHaveLength(2);
     const centeredCommunity = screen
-      .getByRole('link', { name: 'Тест' })
+      .getByRole('group', { name: 'Тест' })
       .querySelector('.fh-community-title');
     expect(centeredCommunity).toHaveClass('is-single-word');
     expect(centeredCommunity).toHaveAttribute('data-title-lines', '1');
@@ -413,7 +402,7 @@ describe('PadlHub web authentication', () => {
 
     render(<App gateway={gateway} tenantKey="padlhub" />);
 
-    expect(await screen.findByRole('link', { name: 'Шестое сообщество' })).toBeVisible();
+    expect(await screen.findByRole('group', { name: 'Шестое сообщество' })).toBeVisible();
     const carousel = screen.getByRole('region', { name: 'Мои сообщества' });
     expect(carousel).toHaveAttribute('tabindex', '0');
     Object.defineProperties(carousel, {
@@ -428,12 +417,12 @@ describe('PadlHub web authentication', () => {
     expect(carousel).toHaveClass('is-dragging');
     fireEvent.mouseUp(carousel, { button: 0, clientX: 180 });
     expect(carousel).not.toHaveClass('is-dragging');
-    expect(fireEvent.click(screen.getByRole('link', { name: 'Шестое сообщество' }))).toBe(false);
+    expect(screen.queryByRole('link', { name: 'Шестое сообщество' })).not.toBeInTheDocument();
 
     carousel.scrollLeft = 350;
     fireEvent.scroll(carousel);
 
-    expect(await screen.findByRole('link', { name: 'После свайпа' })).toBeVisible();
+    expect(await screen.findByRole('group', { name: 'После свайпа' })).toBeVisible();
     expect(listMyCommunities).toHaveBeenNthCalledWith(1);
     expect(listMyCommunities).toHaveBeenNthCalledWith(2, 'opaque-community-cursor');
   });
@@ -566,6 +555,7 @@ describe('PadlHub web authentication', () => {
 
     expect(await screen.findByRole('heading', { name: 'Мои сообщества' })).toBeVisible();
     expect(await screen.findByText('Padel Friends')).toBeVisible();
+    expect(screen.queryByRole('link', { name: /Padel Friends/ })).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Показать ещё' }));
     expect(await screen.findByText('Команда Север')).toBeVisible();
     expect(listMyCommunities).toHaveBeenNthCalledWith(1);
@@ -643,14 +633,14 @@ describe('PadlHub web authentication', () => {
     expect(screen.getByRole('heading', { name: 'Оповещения на устройстве' })).toBeVisible();
   });
 
-  it('does not fall through from a known section route to Home', async () => {
+  it('fails closed for an unfinished section route instead of showing a placeholder', async () => {
     window.history.replaceState({}, '', '/promotions');
     const gateway = createGateway({ restoreSession: vi.fn().mockResolvedValue(session) });
 
     render(<App gateway={gateway} tenantKey="padlhub" />);
 
-    expect(await screen.findByRole('heading', { name: 'Акции' })).toBeVisible();
-    expect(screen.getByText('Раздел подключается к API ПаделХАБ.')).toBeVisible();
+    expect(await screen.findByRole('heading', { name: 'Страница не найдена' })).toBeVisible();
+    expect(screen.queryByText('Раздел подключается к API ПаделХАБ.')).not.toBeInTheDocument();
     expect(gateway.getHomeDashboard).not.toHaveBeenCalled();
     expect(gateway.getUpcomingBookings).not.toHaveBeenCalled();
     expect(gateway.getPlayerProfile).not.toHaveBeenCalled();
@@ -686,7 +676,14 @@ describe('PadlHub web authentication', () => {
     await user.type(code, '0000');
     await user.click(screen.getByRole('button', { name: 'Войти' }));
 
-    expect(gateway.verifyCode).toHaveBeenCalledWith({ challengeId: 'challenge-1', code: '0000' });
+    expect(gateway.verifyCode).toHaveBeenCalledWith({
+      challengeId: 'challenge-1',
+      code: '0000',
+      acceptance: {
+        publicOfferAccepted: true,
+        personalDataPolicyAccepted: true,
+      },
+    });
     expect(await screen.findByRole('heading', { name: 'Анна Петрова' })).toBeVisible();
   });
 

@@ -30,7 +30,7 @@ const enabledEnvironment = {
   VIVA_OAUTH_ENABLED: 'true',
   VIVA_OAUTH_REDIRECT_URI: 'http://localhost:3000/user/api/v1/local-padel/auth/viva/callback',
   VIVA_OAUTH_SUCCESS_REDIRECT_URL: 'http://localhost:5173/',
-  VIVA_DELEGATION_ENCRYPTION_KEY: 'test-delegation-encryption-key-at-least-32-chars',
+  VIVA_DELEGATION_ENCRYPTION_KEY: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
 } as const;
 
 describe('client routing plan', () => {

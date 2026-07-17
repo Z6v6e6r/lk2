@@ -259,6 +259,9 @@ export function loadConfig(
     if (!parsed.data.VIVA_DELEGATION_ENCRYPTION_KEY) {
       throw new Error('Viva delegation encryption key is required when VIVA_OAUTH_ENABLED=true');
     }
+    if (!/^[A-Za-z0-9_-]{43}$/.test(parsed.data.VIVA_DELEGATION_ENCRYPTION_KEY)) {
+      throw new Error('Viva delegation encryption key must be 32-byte base64url');
+    }
   }
   if (
     parsed.data.HOME_VIVA_SYNC_ENABLED &&
@@ -359,6 +362,13 @@ export function loadConfig(
   }
   if (parsed.data.APP_ENV === 'production' && parsed.data.HOME_READ_MODE !== 'projection') {
     throw new Error('HOME_READ_MODE=projection is required in production');
+  }
+  if (
+    parsed.data.APP_ENV === 'production' &&
+    (parsed.data.PUBLIC_OFFER_VERSION === 'pending' ||
+      parsed.data.PERSONAL_DATA_POLICY_VERSION === 'pending')
+  ) {
+    throw new Error('Published legal document versions are required in production');
   }
   if (parsed.data.APP_ENV === 'production' && parsed.data.COMMUNITIES_READ_MODE === 'mock') {
     throw new Error('COMMUNITIES_READ_MODE=mock is forbidden in production');

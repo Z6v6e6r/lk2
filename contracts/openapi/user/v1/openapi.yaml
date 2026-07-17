@@ -1123,6 +1123,20 @@ components:
           type: string
           pattern: '^[0-9]{4}$'
           description: One-time code supplied to the user.
+        acceptance:
+          type: object
+          additionalProperties: false
+          description: |
+            Required for client sessions and rejected unless both values are true.
+            CUP admin authentication does not create a consumer legal acceptance.
+          required: [publicOfferAccepted, personalDataPolicyAccepted]
+          properties:
+            publicOfferAccepted:
+              type: boolean
+              const: true
+            personalDataPolicyAccepted:
+              type: boolean
+              const: true
     VivaOAuthAuthorizationRequest:
       type: object
       additionalProperties: false

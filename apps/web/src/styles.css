@@ -2825,7 +2825,7 @@ label {
   display: none;
 }
 
-.fh-community-track > a {
+.fh-community-card {
   display: flex;
   width: 58px;
   height: 73px;
@@ -2994,7 +2994,7 @@ label {
   list-style: none;
 }
 
-.community-directory-list li > a {
+.community-directory-card {
   display: grid;
   grid-template-columns: 58px 1fr auto;
   min-height: 82px;
@@ -3008,7 +3008,7 @@ label {
   gap: 12px;
 }
 
-.community-directory-list li > a > span:nth-child(2) {
+.community-directory-card > span:nth-child(2) {
   display: grid;
   min-width: 0;
   gap: 5px;
@@ -3024,12 +3024,6 @@ label {
 .community-directory-list small {
   color: #88818f;
   font-size: 12px;
-}
-
-.community-directory-list li > a > b {
-  color: #958aa8;
-  font-size: 28px;
-  font-weight: 400;
 }
 
 .community-directory-avatar {
@@ -3160,7 +3154,7 @@ label {
   gap: 12px;
 }
 
-.fh-tabs button {
+.fh-tabs strong {
   position: relative;
   display: flex;
   width: 148px;
@@ -3170,20 +3164,14 @@ label {
   justify-content: flex-start;
   flex-direction: column;
   gap: 13px;
-  border: 0;
-  background: transparent;
-  color: rgba(255, 255, 255, 0.4);
+  color: #fff;
   font-family: 'RF Dewi', 'Inter Display', sans-serif;
   font-size: 18px;
   font-weight: 700;
   line-height: 18px;
 }
 
-.fh-tabs button[aria-selected='true'] {
-  color: #fff;
-}
-
-.fh-tabs button[aria-selected='true']::after {
+.fh-tabs strong::after {
   width: 148px;
   height: 3px;
   flex: 0 0 3px;
@@ -3205,7 +3193,7 @@ label {
   display: flex;
   width: 375px;
   height: 498px;
-  padding: 12px 0 32px;
+  padding: 24px 0 32px;
   flex: 0 0 498px;
   flex-direction: column;
   align-items: center;
@@ -3216,106 +3204,26 @@ label {
   box-shadow: 0 0 8px rgba(0, 0, 0, 0.02);
 }
 
-.fh-filters {
+.fh-bookings-list {
   display: flex;
   width: 375px;
-  height: 89px;
-  flex: 0 0 89px;
+  min-height: 0;
+  flex: 1;
   flex-direction: column;
-  gap: 10px;
+  overflow-y: auto;
+  scrollbar-width: none;
 }
 
-.fh-calendar {
+.fh-bookings-list::-webkit-scrollbar {
+  display: none;
+}
+
+.fh-booking-entry {
   display: flex;
   width: 375px;
-  height: 55px;
-  padding: 0 20px;
-  align-items: center;
-  justify-content: center;
-  gap: 2px;
-}
-
-.fh-calendar button {
-  position: relative;
-  display: flex;
-  width: 46px;
-  height: 55px;
-  padding: 10px 8px;
-  flex: 0 0 46px;
-  align-items: center;
-  justify-content: center;
   flex-direction: column;
-  gap: 4px;
-  border: 0;
-  border-radius: 8px;
-  background: #fff;
-}
-
-.fh-calendar button.is-selected {
-  border-radius: 10px;
-  background: #fafafa;
-}
-
-.fh-calendar strong {
-  color: #c5c5c6;
-  font-family: 'RF Dewi', 'Inter Display', sans-serif;
-  font-size: 18px;
-  font-weight: 700;
-  line-height: 22px;
-}
-
-.fh-calendar small {
-  color: rgba(31, 30, 32, 0.4);
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0.02em;
-  line-height: 9px;
-  text-transform: uppercase;
-}
-
-.fh-calendar button.is-selected strong,
-.fh-calendar button.is-selected small {
-  color: #1f1e20;
-}
-
-.fh-calendar i {
-  position: absolute;
-  top: 5px;
-  left: 21px;
-  width: 4px;
-  height: 4px;
-  border-radius: 50%;
-  background: #f0705f;
-}
-
-.fh-filter-pills {
-  display: flex;
-  width: 375px;
-  height: 24px;
-  padding: 0 24px;
-  align-items: center;
-  gap: 6px;
-}
-
-.fh-filter-pills button {
-  display: flex;
-  height: 24px;
-  padding: 0 19px;
-  align-items: center;
-  justify-content: center;
-  border: 0.5px solid #e8e8e9;
-  border-radius: 24px;
-  background: #fff;
-  font-family: 'RF Dewi', 'Inter Display', sans-serif;
-  font-size: 8px;
-  font-weight: 700;
-  letter-spacing: 0.12em;
-  line-height: 8px;
-  text-transform: uppercase;
-}
-
-.fh-filter-pills button.is-selected {
-  border-color: #353436;
+  gap: 18px;
+  padding-bottom: 18px;
 }
 
 .fh-divider {
@@ -3328,9 +3236,9 @@ label {
 .fh-event {
   display: flex;
   width: 375px;
-  height: 115px;
+  min-height: 88px;
   padding: 0 24px;
-  flex: 0 0 115px;
+  flex: 0 0 88px;
   align-items: flex-start;
   gap: 24px;
   border-radius: 16px;
@@ -3365,17 +3273,16 @@ label {
 .fh-event__main {
   display: flex;
   width: 247px;
-  height: 115px;
+  min-height: 88px;
   flex: 1;
   flex-direction: column;
-  gap: 20px;
 }
 
 .fh-event__header {
   position: relative;
   display: flex;
   width: 247px;
-  height: 55px;
+  min-height: 64px;
   flex-direction: column;
   align-items: flex-start;
   gap: 4px;
@@ -3399,9 +3306,14 @@ label {
   text-transform: uppercase;
 }
 
-.fh-event__tag.is-rating {
+.fh-event__tag.is-waitlist {
   background: #e2f6fe;
   color: #50b1f9;
+}
+
+.fh-event__tag.is-payment-required {
+  background: rgba(240, 112, 95, 0.1);
+  color: #d75f50;
 }
 
 .fh-event__header > .fh-chevron {
@@ -3428,31 +3340,32 @@ label {
   line-height: 12px;
 }
 
-.fh-players {
+.fh-bookings-empty {
   display: flex;
-  width: 176px;
-  height: 40px;
+  width: 327px;
+  min-height: 0;
+  flex: 1;
   align-items: center;
+  justify-content: center;
+  flex-direction: column;
   gap: 8px;
-}
-
-.fh-players img,
-.fh-player-add {
-  display: block;
-  width: 38px;
-  height: 40px;
-  flex: 0 0 38px;
-  object-fit: fill;
-}
-
-.fh-player-add {
-  display: grid;
-  place-items: center;
-  border: 1px solid #e7e7e7;
-  border-radius: 50%;
+  padding: 32px 24px;
+  border-radius: 16px;
   background: #fafafa;
-  color: #b4b4b4;
+  text-align: center;
+}
+
+.fh-bookings-empty strong {
+  font-family: 'RF Dewi', 'Inter Display', sans-serif;
   font-size: 16px;
+  line-height: 20px;
+}
+
+.fh-bookings-empty p {
+  margin: 0;
+  color: #888889;
+  font-size: 12px;
+  line-height: 17px;
 }
 
 .fh-bookings-footer {
