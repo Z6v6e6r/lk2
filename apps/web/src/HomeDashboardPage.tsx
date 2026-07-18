@@ -606,17 +606,23 @@ export function HomeDashboardPage({
   error,
   onLogout,
 }: HomeDashboardPageProps): React.JSX.Element {
-  const actionIcons: Readonly<
-    Record<HomeDashboard['quickActions'][number]['id'], HomeActionIconName>
-  > = {
-    play: 'games',
-    tournament: 'tournaments',
-    group_training: 'trainings',
-    individual_training: 'trainings',
-  };
-  const actions = dashboard.quickActions
-    .filter((action) => isImplementedMvpRoute(action.route))
-    .map((action) => ({ ...action, icon: actionIcons[action.id] }));
+  const actionRoute = (id: HomeDashboard['quickActions'][number]['id'], fallback: string): string =>
+    dashboard.quickActions.find((action) => action.id === id)?.route ?? fallback;
+  const actions = [
+    { id: 'games', label: 'Игры', icon: 'games', route: actionRoute('play', '/games') },
+    {
+      id: 'tournaments',
+      label: 'Турниры',
+      icon: 'tournaments',
+      route: actionRoute('tournament', '/tournaments'),
+    },
+    {
+      id: 'trainings',
+      label: 'Тренировки',
+      icon: 'trainings',
+      route: actionRoute('group_training', '/trainings'),
+    },
+  ] as const;
   const balance = new Intl.NumberFormat('ru-RU').format(dashboard.profile.balanceMinor / 100);
 
   return (
@@ -670,22 +676,25 @@ export function HomeDashboardPage({
             </section>
           ) : null}
 
-          {actions.length > 0 ? (
-            <nav className="fh-actions" aria-label="Разделы клуба">
-              {actions.map((action) => (
-                <a href={action.route} key={action.id}>
-                  <span className="fh-action-icon">
-                    <HomeActionIcon name={action.icon} />
-                  </span>
-                  <span>{action.title}</span>
-                  <Chevron />
-                </a>
-              ))}
-            </nav>
-          ) : null}
+          <nav className="fh-actions" aria-label="Разделы клуба">
+            {actions.map((action) => (
+              <a href={action.route} key={action.id}>
+                <span className="fh-action-icon">
+                  <HomeActionIcon name={action.icon} />
+                </span>
+                <span>{action.label}</span>
+                <Chevron />
+              </a>
+            ))}
+          </nav>
 
-          <div className="fh-tabs">
-            <strong>Мои записи</strong>
+          <div className="fh-tabs" role="tablist" aria-label="Раздел записей">
+            <button type="button" role="tab" aria-selected="true">
+              Мои записи
+            </button>
+            <button type="button" role="tab" aria-selected="false">
+              Абонементы
+            </button>
           </div>
         </section>
 

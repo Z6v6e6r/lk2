@@ -81,6 +81,11 @@ Production navigation is an allowlist, not a list of future product intentions. 
 - `/communities` as a read-only directory;
 - `/notifications`.
 
+Staging may keep the Home quick-action block (`Игры`, `Турниры`, `Тренировки`) and the
+`Мои записи / Абонементы` tabs visible as an explicit product workbench. Until each vertical is
+complete, its route must show an honest work-in-progress shell, must not fabricate business data
+or execute an unsupported command, and remains a production `NO-GO` item.
+
 All release gates are server-owned capabilities combined with deploy-time feature flags. Flags default to off and failure to load capabilities fails closed. Client-side hiding alone is not authorization.
 
 Before release:

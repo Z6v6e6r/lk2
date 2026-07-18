@@ -1,5 +1,24 @@
 # Worklog
 
+## 2026-07-18 — Progressive Home controls restored
+
+- Restored the three Home quick actions (`Игры`, `Турниры`, `Тренировки`) and the
+  `Мои записи / Абонементы` tabs at the product owner's request so their verticals can be completed
+  incrementally.
+- Kept truthful server-backed booking cards and restored only an explicit work-in-progress shell
+  for those staged sections; no synthetic records or unsupported commands were reintroduced.
+- Recorded that these visible shells remain a production `NO-GO` until their journeys are complete.
+
+## 2026-07-18 — Viva OTP runtime error boundary repair
+
+- Traced live staging OTP verification by correlation ID: Viva returned `401` and the adapter
+  classified it as `AUTH_CODE_INVALID`, while the API incorrectly exposed
+  `AUTH_PROVIDER_UNAVAILABLE`.
+- Declared `@phub/auth` as a runtime dependency of `@phub/viva-adapter`, preventing the package
+  build from embedding a second `IdentityProviderError` class that failed API `instanceof` mapping.
+- Added a post-build runtime check that exercises the adapter's `401` path and proves both packages
+  share the same error class before an image can pass `npm run check`.
+
 ## 2026-07-18 — MVP Home and phone-auth launch safety
 
 - Removed synthetic Home event cards and made the web dashboard render only the bounded server

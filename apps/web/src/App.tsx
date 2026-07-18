@@ -51,7 +51,15 @@ type ProtectedRoute =
   | { readonly kind: 'communities' }
   | { readonly kind: 'locations' }
   | { readonly kind: 'location'; readonly locationId: string }
+  | { readonly kind: 'section'; readonly title: string }
   | { readonly kind: 'not-found' };
+
+const visibleWorkInProgressSections = [
+  ['/games', 'Игры'],
+  ['/tournaments', 'Турниры'],
+  ['/trainings', 'Тренировки'],
+  ['/subscriptions', 'Абонементы'],
+] as const;
 
 function resolveProtectedRoute(pathname: string): ProtectedRoute {
   const normalizedPath = pathname.length > 1 ? pathname.replace(/\/+$/, '') : pathname;
@@ -69,6 +77,10 @@ function resolveProtectedRoute(pathname: string): ProtectedRoute {
     /^\/locations\/([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i,
   );
   if (locationMatch?.[1]) return { kind: 'location', locationId: locationMatch[1] };
+  const section = visibleWorkInProgressSections.find(
+    ([prefix]) => normalizedPath === prefix || normalizedPath.startsWith(`${prefix}/`),
+  );
+  if (section) return { kind: 'section', title: section[1] };
   return { kind: 'not-found' };
 }
 
@@ -938,13 +950,19 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
       }
       return <LocationDetailPage location={locationDetail} />;
     }
-    if (protectedRoute.kind === 'not-found') {
+    if (protectedRoute.kind === 'section' || protectedRoute.kind === 'not-found') {
+      const title =
+        protectedRoute.kind === 'section' ? protectedRoute.title : 'Страница не найдена';
       return (
         <main className="app-shell app-shell-loading" aria-labelledby="route-title">
           <Brand />
           <section className="loading-card">
-            <h1 id="route-title">Страница не найдена</h1>
-            <p>Проверьте адрес или вернитесь на Главную.</p>
+            <h1 id="route-title">{title}</h1>
+            <p>
+              {protectedRoute.kind === 'section'
+                ? 'Раздел подключается к API ПаделХАБ.'
+                : 'Проверьте адрес или вернитесь на Главную.'}
+            </p>
             <a className="secondary-button logout-button" href="/">
               Вернуться на Главную
             </a>

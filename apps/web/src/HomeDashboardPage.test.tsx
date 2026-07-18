@@ -112,6 +112,40 @@ describe('Home promotion carousel', () => {
   });
 });
 
+describe('Home progressive navigation', () => {
+  it('keeps the quick-action block and the bookings/subscriptions tabs visible', () => {
+    render(
+      <HomeDashboardPage
+        dashboard={dashboard}
+        tenantName="ПадлХАБ"
+        notificationUnreadCount={0}
+        loadCommunityPage={() => Promise.resolve({ items: [] })}
+        logoutBusy={false}
+        onLogout={vi.fn()}
+      />,
+    );
+
+    const actions = screen.getByRole('navigation', { name: 'Разделы клуба' });
+    expect(within(actions).getByRole('link', { name: 'Игры' })).toHaveAttribute('href', '/games');
+    expect(within(actions).getByRole('link', { name: 'Турниры' })).toHaveAttribute(
+      'href',
+      '/tournaments',
+    );
+    expect(within(actions).getByRole('link', { name: 'Тренировки' })).toHaveAttribute(
+      'href',
+      '/trainings',
+    );
+    expect(screen.getByRole('tab', { name: 'Мои записи' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    expect(screen.getByRole('tab', { name: 'Абонементы' })).toHaveAttribute(
+      'aria-selected',
+      'false',
+    );
+  });
+});
+
 describe('Home upcoming bookings', () => {
   it('shows an honest empty state instead of placeholder cards', () => {
     const { container } = render(

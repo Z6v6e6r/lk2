@@ -3154,7 +3154,7 @@ label {
   gap: 12px;
 }
 
-.fh-tabs strong {
+.fh-tabs button {
   position: relative;
   display: flex;
   width: 148px;
@@ -3164,14 +3164,20 @@ label {
   justify-content: flex-start;
   flex-direction: column;
   gap: 13px;
-  color: #fff;
+  border: 0;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.4);
   font-family: 'RF Dewi', 'Inter Display', sans-serif;
   font-size: 18px;
   font-weight: 700;
   line-height: 18px;
 }
 
-.fh-tabs strong::after {
+.fh-tabs button[aria-selected='true'] {
+  color: #fff;
+}
+
+.fh-tabs button[aria-selected='true']::after {
   width: 148px;
   height: 3px;
   flex: 0 0 3px;

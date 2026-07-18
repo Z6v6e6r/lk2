@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import '@testing-library/jest-dom/vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -254,7 +254,28 @@ describe('PadlHub web authentication', () => {
     expect(await screen.findByRole('heading', { name: 'Анна Петрова' })).toBeVisible();
     expect(screen.getAllByText('ПаделХАБ').length).toBeGreaterThan(0);
     expect(screen.getByRole('heading', { name: 'Сообщества' })).toBeVisible();
-    expect(screen.queryByRole('navigation', { name: 'Разделы клуба' })).not.toBeInTheDocument();
+    const homeActions = screen.getByRole('navigation', { name: 'Разделы клуба' });
+    expect(within(homeActions).getAllByRole('link')).toHaveLength(3);
+    expect(within(homeActions).getByRole('link', { name: 'Игры' })).toHaveAttribute(
+      'href',
+      '/games',
+    );
+    expect(within(homeActions).getByRole('link', { name: 'Турниры' })).toHaveAttribute(
+      'href',
+      '/tournaments',
+    );
+    expect(within(homeActions).getByRole('link', { name: 'Тренировки' })).toHaveAttribute(
+      'href',
+      '/trainings',
+    );
+    expect(screen.getByRole('tab', { name: 'Мои записи' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    expect(screen.getByRole('tab', { name: 'Абонементы' })).toHaveAttribute(
+      'aria-selected',
+      'false',
+    );
     expect(screen.queryByRole('link', { name: 'Создать игру' })).not.toBeInTheDocument();
     expect(screen.queryByRole('link', { name: 'Чаты' })).not.toBeInTheDocument();
     const twoLineCommunity = screen
@@ -644,6 +665,17 @@ describe('PadlHub web authentication', () => {
     expect(gateway.getHomeDashboard).not.toHaveBeenCalled();
     expect(gateway.getUpcomingBookings).not.toHaveBeenCalled();
     expect(gateway.getPlayerProfile).not.toHaveBeenCalled();
+  });
+
+  it('shows an honest work-in-progress shell for a restored staged section', async () => {
+    window.history.replaceState({}, '', '/subscriptions');
+    const gateway = createGateway({ restoreSession: vi.fn().mockResolvedValue(session) });
+
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+
+    expect(await screen.findByRole('heading', { name: 'Абонементы' })).toBeVisible();
+    expect(screen.getByText('Раздел подключается к API ПаделХАБ.')).toBeVisible();
+    expect(gateway.getHomeDashboard).not.toHaveBeenCalled();
   });
 
   it('shows a not-found screen for an unknown protected route without requesting Home', async () => {
