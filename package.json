@@ -51,7 +51,7 @@
     "notifications:web-push:live-smoke": "node --env-file-if-exists=.env --import tsx scripts/verify-live-web-push-sandbox.ts",
     "notifications:web-push:verify": "node --import tsx scripts/verify-web-push-e2e.ts",
     "games:read:load": "node --import tsx scripts/verify-games-read-load.ts",
-    "runtime:imports": "node --input-type=module -e \"await Promise.all([import('@phub/auth'), import('@phub/auth/viva-delegation')])\"",
+    "runtime:imports": "node scripts/verify-runtime-imports.js",
     "smoke": "node --env-file-if-exists=.env --import tsx scripts/smoke-test.ts",
     "smoke:auth": "node --env-file-if-exists=.env --import tsx scripts/auth-smoke.ts"
   },

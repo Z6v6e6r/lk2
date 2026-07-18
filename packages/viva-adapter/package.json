@@ -9,6 +9,7 @@
     "build": "tsup src/index.ts --format esm --dts --sourcemap --clean"
   },
   "dependencies": {
+    "@phub/auth": "0.1.0",
     "@phub/domain": "0.1.0",
     "jose": "6.2.3",
     "zod": "4.4.3"
