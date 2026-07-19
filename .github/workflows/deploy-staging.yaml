@@ -4,6 +4,12 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      diagnose_home:
+        description: Read-only live Home source diagnostics
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -14,7 +20,35 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  diagnose-home:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.diagnose_home }}
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+      - name: Join the staging tailnet
+        uses: tailscale/github-action@v4
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+          ping: ${{ secrets.STAGING_HOST }}
+      - name: Configure audited SSH
+        env:
+          DEPLOY_KEY: ${{ secrets.STAGING_DEPLOY_KEY }}
+          KNOWN_HOSTS: ${{ secrets.STAGING_KNOWN_HOSTS }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+      - name: Inspect live Home source readiness
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+        run: |
+          scp deploy/jetson/diagnose-live-home.sh "phub-deploy@$HOST:/opt/phub/diagnose-live-home.sh"
+          ssh "phub-deploy@$HOST" 'sh /opt/phub/diagnose-live-home.sh'
+
   build:
+    if: ${{ github.event_name == 'push' || !inputs.diagnose_home }}
     runs-on: ubuntu-latest
     strategy:
       matrix:

@@ -137,6 +137,47 @@ while test "$attempt" -lt 24; do
 done
 
 if test "$projection_ready" -ne 1; then
+  component_readiness="$(sql "
+    select concat(
+      'viva=', count(*) filter (where (
+        select count(*)
+          from integration.viva_home_source_components viva
+         where viva.tenant_id = delegation.tenant_id
+           and viva.user_id = delegation.user_id
+           and viva.last_synced_at >= '${activation_started}'::timestamptz
+      ) = 3), '/', count(*),
+      ' community=', count(*) filter (where exists (
+        select 1
+          from integration.community_home_source_components community
+         where community.tenant_id = delegation.tenant_id
+           and community.user_id = delegation.user_id
+           and community.last_synced_at >= '${activation_started}'::timestamptz
+      )), '/', count(*),
+      ' promotion=', count(*) filter (where exists (
+        select 1
+          from integration.promotion_home_source_components promotion
+         where promotion.tenant_id = delegation.tenant_id
+           and promotion.user_id = delegation.user_id
+           and promotion.last_synced_at >= '${activation_started}'::timestamptz
+      )), '/', count(*),
+      ' snapshot=', count(*) filter (where exists (
+        select 1
+          from home.dashboard_snapshots snapshot
+         where snapshot.tenant_id = delegation.tenant_id
+           and snapshot.user_id = delegation.user_id
+           and snapshot.updated_at >= '${activation_started}'::timestamptz
+           and snapshot.stale_at > now()
+      )), '/', count(*),
+      ' viva_failure_codes=', coalesce(
+        string_agg(distinct delegation.refresh_failure_code, ','), 'NONE'
+      )
+    )
+      from integration.user_delegations delegation
+     where delegation.provider = 'VIVA'
+       and delegation.revoked_at is null
+       and (delegation.refresh_expires_at is null or delegation.refresh_expires_at > now())
+  ")"
+  echo "Live Home component readiness: $component_readiness" >&2
   echo "Live Home projection did not become complete; API remains on its previous read mode" >&2
   exit 1
 fi
