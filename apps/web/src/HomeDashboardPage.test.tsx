@@ -2,7 +2,7 @@
 
 import '@testing-library/jest-dom/vitest';
 
-import { act, cleanup, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { HomeDashboard } from './auth-gateway.js';
@@ -113,7 +113,7 @@ describe('Home promotion carousel', () => {
 });
 
 describe('Home progressive navigation', () => {
-  it('keeps the quick-action block and the bookings/subscriptions tabs visible', () => {
+  it('keeps the quick-action block and the bookings/recommendations tabs visible', () => {
     render(
       <HomeDashboardPage
         dashboard={dashboard}
@@ -139,9 +139,35 @@ describe('Home progressive navigation', () => {
       'aria-selected',
       'true',
     );
-    expect(screen.getByRole('tab', { name: 'Абонементы' })).toHaveAttribute(
-      'aria-selected',
-      'false',
+    expect(screen.getByRole('tab', { name: 'Для меня' })).toHaveAttribute('aria-selected', 'false');
+  });
+
+  it('loads recommendations only after the user opens the For me tab', async () => {
+    const loadBookingRecommendations = vi.fn().mockResolvedValue({
+      version: 'a'.repeat(64),
+      generatedAt: '2026-07-18T09:00:00.000Z',
+      staleAt: '2026-07-18T09:05:00.000Z',
+      personalization: 'BASIC',
+      items: [],
+      nextCursor: null,
+    });
+    render(
+      <HomeDashboardPage
+        dashboard={dashboard}
+        tenantName="ПадлХАБ"
+        notificationUnreadCount={0}
+        loadCommunityPage={() => Promise.resolve({ items: [] })}
+        loadBookingRecommendations={loadBookingRecommendations}
+        logoutBusy={false}
+        onLogout={vi.fn()}
+      />,
+    );
+
+    expect(loadBookingRecommendations).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('tab', { name: 'Для меня' }));
+    await vi.waitFor(() => expect(loadBookingRecommendations).toHaveBeenCalledOnce());
+    await vi.waitFor(() =>
+      expect(screen.getByRole('status')).toHaveTextContent('Пока нет подходящих игр'),
     );
   });
 });
@@ -221,5 +247,55 @@ describe('Home upcoming bookings', () => {
     expect(container.querySelectorAll('.fh-event img')).toHaveLength(0);
     expect(container.querySelectorAll('.fh-event[href]')).toHaveLength(0);
     expect(screen.queryByText(/Рейтинговая игра|Френдли игра/)).not.toBeInTheDocument();
+  });
+
+  it('filters real upcoming bookings by a day in the current week', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-18T09:00:00.000Z'));
+    const upcoming: HomeDashboard['upcoming'] = [
+      {
+        id: '33333333-3333-4333-8333-333333333333',
+        kind: 'training',
+        title: 'Субботняя тренировка',
+        startsAt: '2026-07-18T10:15:00.000Z',
+        venue: 'Селигерская · корт 1',
+        status: 'confirmed',
+        route: '/trainings/33333333-3333-4333-8333-333333333333',
+      },
+      {
+        id: '44444444-4444-4444-8444-444444444444',
+        kind: 'tournament',
+        title: 'Воскресный турнир',
+        startsAt: '2026-07-19T08:30:00.000Z',
+        venue: 'ПаделХАБ · центральный корт',
+        status: 'waitlist',
+        route: '/tournaments/44444444-4444-4444-8444-444444444444',
+      },
+    ];
+    render(
+      <HomeDashboardPage
+        dashboard={{ ...dashboard, upcoming }}
+        tenantName="ПадлХАБ"
+        notificationUnreadCount={0}
+        loadCommunityPage={() => Promise.resolve({ items: [] })}
+        logoutBusy={false}
+        onLogout={vi.fn()}
+      />,
+    );
+
+    const filter = screen.getByLabelText('Фильтр записей по дате');
+    const saturday = within(filter).getByRole('button', { name: /суббота, 18 июля/i });
+    expect(saturday.querySelector('i')).toBeInTheDocument();
+
+    fireEvent.click(saturday);
+    expect(screen.getByRole('article', { name: 'Субботняя тренировка' })).toBeVisible();
+    expect(screen.queryByRole('article', { name: 'Воскресный турнир' })).not.toBeInTheDocument();
+
+    fireEvent.click(within(filter).getByRole('button', { name: /понедельник, 13 июля/i }));
+    expect(screen.getByRole('status')).toHaveTextContent('На выбранную дату записей нет');
+
+    fireEvent.click(within(filter).getByRole('button', { name: 'Все даты' }));
+    expect(screen.getByRole('article', { name: 'Субботняя тренировка' })).toBeVisible();
+    expect(screen.getByRole('article', { name: 'Воскресный турнир' })).toBeVisible();
   });
 });

@@ -1,7 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import type { MouseEvent as ReactMouseEvent, UIEvent } from 'react';
 
-import type { CommunityMembershipPage, HomeDashboard } from './auth-gateway.js';
+import type {
+  BookingRecommendationPage,
+  CommunityMembershipPage,
+  HomeDashboard,
+} from './auth-gateway.js';
+import { BookingRecommendations } from './BookingRecommendations.js';
 import locationSeligerUrl from './assets/home/location-seliger.png';
 import promoUrl from './assets/home/promo.png';
 import { PlayerLevelAvatar } from './PlayerLevelAvatar.js';
@@ -11,6 +16,7 @@ interface HomeDashboardPageProps {
   readonly tenantName: string;
   readonly notificationUnreadCount: number;
   readonly loadCommunityPage: (cursor?: string) => Promise<CommunityMembershipPage>;
+  readonly loadBookingRecommendations?: () => Promise<BookingRecommendationPage>;
   readonly logoutBusy: boolean;
   readonly error?: string | null;
   readonly onLogout: () => void;
@@ -25,6 +31,7 @@ const implementedMvpRoutes = new Set([
   '/profile',
   '/bookings',
   '/notifications',
+  '/games',
   '/communities',
   '/locations',
 ]);
@@ -115,7 +122,7 @@ function BottomNavIcon({ name }: { readonly name: BottomNavIconName }): React.JS
         <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
           <path
             d="M7.09572 1.78614C8.46171 0.72792 10.6414 0.673629 12.0617 1.66846L17.2737 5.31449C18.2687 6.01117 19.0559 7.51343 19.0559 8.73469V14.868C19.0559 17.175 17.1825 19.0483 14.8755 19.0483H5.12268C2.81597 19.0481 0.943515 17.1662 0.943359 14.8595V8.61701C0.943359 7.4773 1.65783 6.02985 2.56229 5.32403L7.09572 1.78614ZM9.99961 10.8148C9.54992 10.8148 9.18537 11.1794 9.18537 11.629V15.4288C9.18542 15.8785 9.54995 16.243 9.99961 16.243C10.4493 16.243 10.8138 15.8785 10.8138 15.4288V11.629C10.8138 11.1794 10.4493 10.8148 9.99961 10.8148Z"
-            fill="#353436"
+            fill="currentColor"
           />
         </svg>
       );
@@ -124,13 +131,13 @@ function BottomNavIcon({ name }: { readonly name: BottomNavIconName }): React.JS
         <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
           <path
             d="M9.97508 1.0417C9.46675 1.0417 8.94175 1.08337 8.40842 1.17504C4.74175 1.80004 1.75008 4.80004 1.14175 8.48337C0.658417 11.4084 1.56675 14.2667 3.64175 16.3417C5.71675 18.4167 8.57508 19.3167 11.4917 18.8417C15.1667 18.2334 18.1751 15.25 18.8001 11.5834C18.9334 10.775 18.9667 9.98337 18.9001 9.23337V9.22503C18.8834 9.03337 18.8501 8.85003 18.8001 8.6667C18.7417 8.45837 18.5834 8.30004 18.3834 8.23337C18.1834 8.1667 17.9584 8.2167 17.7917 8.35004C17.0084 9.00837 16.0084 9.37504 14.9751 9.37504C12.5584 9.37504 10.6001 7.40837 10.6001 5.00004C10.6001 3.9667 10.9668 2.9667 11.6251 2.18337C11.7667 2.0167 11.8084 1.80004 11.7417 1.5917C11.6751 1.38337 11.5167 1.23337 11.3084 1.17504C11.1251 1.12504 10.9417 1.0917 10.7501 1.07504C10.5001 1.05004 10.2418 1.0417 9.97508 1.0417ZM9.97508 17.7084C7.93342 17.7084 6.00008 16.9167 4.53342 15.45C2.75008 13.6667 1.96675 11.2 2.38342 8.68337C2.90842 5.52503 5.46675 2.9417 8.62508 2.40837C9.12508 2.32504 9.60008 2.27504 10.0584 2.2917C9.60842 3.1167 9.36675 4.05004 9.36675 5.00004C9.36675 8.10004 11.8917 10.625 14.9917 10.625C15.9417 10.625 16.8751 10.3834 17.7001 9.93337C17.7084 10.3917 17.6667 10.8667 17.5834 11.3667C17.0501 14.5167 14.4667 17.0834 11.3084 17.6C10.8501 17.675 10.4084 17.7084 9.97508 17.7084Z"
-            fill="#353436"
+            fill="currentColor"
           />
           <path
             d="M11.1496 1.15833C10.9663 1.15833 10.7913 1.23333 10.6746 1.38333C9.82461 2.39167 9.34961 3.675 9.34961 5C9.34961 8.1 11.8746 10.625 14.9746 10.625C16.2996 10.625 17.5829 10.1583 18.5913 9.3C18.7829 9.14167 18.8579 8.88333 18.7913 8.65C18.6413 8.13333 18.2583 6.38333 17.875 6C15.7987 3.92371 15.375 3 12.6746 1.98333C12.2913 1.6 11.8329 1.33333 11.3246 1.18333C11.2663 1.16667 11.2079 1.15833 11.1496 1.15833ZM14.9746 9.375C12.5579 9.375 10.5996 7.40833 10.5996 5C10.5996 4.11667 10.8663 3.25833 11.3579 2.54167C11.3579 2.54167 11.7417 1.86667 11.875 2C14.875 2.5 15.7987 3.92371 17.875 6C18.0083 6.13333 17.7917 8.34167 17.875 8.5C17.1583 8.99167 15.8579 9.375 14.9746 9.375Z"
-            fill="#353436"
+            fill="currentColor"
           />
-          <circle cx="9.875" cy="10" r="8.375" stroke="#353436" strokeWidth="1.25" />
+          <circle cx="9.875" cy="10" r="8.375" stroke="currentColor" strokeWidth="1.25" />
         </svg>
       );
     case 'create':
@@ -191,7 +198,7 @@ function BottomNavIcon({ name }: { readonly name: BottomNavIconName }): React.JS
         <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
           <path
             d="M9.99935 19.0079C9.42435 19.0079 8.88268 18.7163 8.49935 18.2079L7.24935 16.5413C7.22435 16.5079 7.12435 16.4663 7.08268 16.4579H6.66602C3.19102 16.4579 1.04102 15.5163 1.04102 10.8329V6.66626C1.04102 2.98293 2.98268 1.04126 6.66602 1.04126H13.3327C17.016 1.04126 18.9577 2.98293 18.9577 6.66626V10.8329C18.9577 14.5163 17.016 16.4579 13.3327 16.4579H12.916C12.8493 16.4579 12.791 16.4913 12.7493 16.5413L11.4993 18.2079C11.116 18.7163 10.5743 19.0079 9.99935 19.0079ZM6.66602 2.29126C3.68268 2.29126 2.29102 3.68293 2.29102 6.66626V10.8329C2.29102 14.5996 3.58268 15.2079 6.66602 15.2079H7.08268C7.50768 15.2079 7.99101 15.4496 8.24935 15.7913L9.49935 17.4579C9.79101 17.8413 10.2077 17.8413 10.4993 17.4579L11.7493 15.7913C12.0243 15.4246 12.4577 15.2079 12.916 15.2079H13.3327C16.316 15.2079 17.7077 13.8163 17.7077 10.8329V6.66626C17.7077 3.68293 16.316 2.29126 13.3327 2.29126H6.66602Z"
-            fill="#353436"
+            fill="currentColor"
           />
         </svg>
       );
@@ -200,14 +207,14 @@ function BottomNavIcon({ name }: { readonly name: BottomNavIconName }): React.JS
         <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
           <path
             d="M10.1441 9.5C10.0541 9.49098 9.94595 9.49098 9.84685 9.5C7.7027 9.42785 6 7.66911 6 5.50451C6 3.29481 7.78378 1.5 10 1.5C12.2072 1.5 14 3.29481 14 5.50451C13.991 7.66911 12.2883 9.42785 10.1441 9.5Z"
-            stroke="#353436"
+            stroke="currentColor"
             strokeWidth="1.25"
             strokeLinecap="round"
             strokeLinejoin="round"
           />
           <path
             d="M10.0078 11.625C11.7873 11.625 13.529 12.0325 14.8145 12.8086H14.8154C15.9357 13.4823 16.375 14.2932 16.375 14.9932C16.3749 15.6936 15.9345 16.5061 14.8135 17.1846C13.5226 17.9653 11.7789 18.375 10 18.375C8.22112 18.375 6.47741 17.9653 5.18652 17.1846L5.18457 17.1836C4.06461 16.5099 3.625 15.6998 3.625 15C3.625 14.2996 4.06466 13.486 5.18555 12.8076C6.48212 12.0311 8.22931 11.625 10.0078 11.625Z"
-            stroke="#353436"
+            stroke="currentColor"
             strokeWidth="1.25"
             strokeLinecap="round"
             strokeLinejoin="round"
@@ -215,6 +222,53 @@ function BottomNavIcon({ name }: { readonly name: BottomNavIconName }): React.JS
         </svg>
       );
   }
+}
+
+export type MainNavigationSection = 'home' | 'games' | 'notifications' | 'profile';
+
+interface MainBottomNavigationProps {
+  readonly active?: MainNavigationSection;
+  readonly gamesDestination?: 'bookings' | 'games';
+}
+
+export function MainBottomNavigation({
+  active,
+  gamesDestination = 'bookings',
+}: MainBottomNavigationProps): React.JSX.Element {
+  const gamesHref = gamesDestination === 'games' ? '/games' : '/bookings';
+  const gamesLabel = gamesDestination === 'games' ? 'Игры' : 'Записи';
+
+  return (
+    <nav className="fh-bottom-nav" aria-label="Основная навигация">
+      <a href="/" aria-current={active === 'home' ? 'page' : undefined} aria-label="Главная">
+        <BottomNavIcon name="home" />
+      </a>
+      <a
+        href={gamesHref}
+        aria-current={active === 'games' ? 'page' : undefined}
+        aria-label={gamesLabel}
+      >
+        <BottomNavIcon name="games" />
+      </a>
+      <a className="fh-create" href="/games/new" aria-label="Создать игру">
+        <BottomNavIcon name="create" />
+      </a>
+      <a
+        href="/notifications"
+        aria-current={active === 'notifications' ? 'page' : undefined}
+        aria-label="Оповещения"
+      >
+        <BottomNavIcon name="chat" />
+      </a>
+      <a
+        href="/profile"
+        aria-current={active === 'profile' ? 'page' : undefined}
+        aria-label="Профиль"
+      >
+        <BottomNavIcon name="profile" />
+      </a>
+    </nav>
+  );
 }
 
 function NotificationBellIcon(): React.JSX.Element {
@@ -566,6 +620,35 @@ const upcomingDateFormatter = new Intl.DateTimeFormat('ru-RU', {
   month: 'short',
 });
 
+const calendarDayFormatter = new Intl.DateTimeFormat('ru-RU', {
+  weekday: 'short',
+});
+
+const calendarDayLabelFormatter = new Intl.DateTimeFormat('ru-RU', {
+  weekday: 'long',
+  day: 'numeric',
+  month: 'long',
+});
+
+function localDateKey(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function currentWeekDays(now: Date): readonly Date[] {
+  const monday = new Date(now);
+  const dayFromMonday = (monday.getDay() + 6) % 7;
+  monday.setHours(0, 0, 0, 0);
+  monday.setDate(monday.getDate() - dayFromMonday);
+  return Array.from({ length: 7 }, (_, index) => {
+    const day = new Date(monday);
+    day.setDate(monday.getDate() + index);
+    return day;
+  });
+}
+
 function EventCard({ item }: { readonly item: HomeUpcomingItem }): React.JSX.Element {
   const startsAt = new Date(item.startsAt);
   const content = (
@@ -602,6 +685,15 @@ export function HomeDashboardPage({
   tenantName,
   notificationUnreadCount,
   loadCommunityPage,
+  loadBookingRecommendations = () =>
+    Promise.resolve({
+      version: '0'.repeat(64),
+      generatedAt: new Date(0).toISOString(),
+      staleAt: new Date(0).toISOString(),
+      personalization: 'BASIC',
+      items: [],
+      nextCursor: null,
+    }),
   logoutBusy,
   error,
   onLogout,
@@ -623,7 +715,39 @@ export function HomeDashboardPage({
       route: actionRoute('group_training', '/trainings'),
     },
   ] as const;
+  const [selectedDateKey, setSelectedDateKey] = useState<string | null>(null);
+  const [bookingTab, setBookingTab] = useState<'MY' | 'FOR_ME'>('MY');
+  const [bookingRecommendations, setBookingRecommendations] =
+    useState<BookingRecommendationPage | null>(null);
+  const [bookingRecommendationsLoading, setBookingRecommendationsLoading] = useState(false);
+  const [bookingRecommendationsError, setBookingRecommendationsError] = useState<string | null>(
+    null,
+  );
+  const calendarDays = currentWeekDays(new Date());
+  const datesWithBookings = new Set(
+    dashboard.upcoming.map((item) => localDateKey(new Date(item.startsAt))),
+  );
+  const visibleUpcoming = selectedDateKey
+    ? dashboard.upcoming.filter((item) => localDateKey(new Date(item.startsAt)) === selectedDateKey)
+    : dashboard.upcoming;
   const balance = new Intl.NumberFormat('ru-RU').format(dashboard.profile.balanceMinor / 100);
+
+  function showBookingRecommendations(): void {
+    setBookingTab('FOR_ME');
+    setBookingRecommendationsError(null);
+    if (bookingRecommendations || bookingRecommendationsLoading) return;
+    setBookingRecommendationsLoading(true);
+    void loadBookingRecommendations().then(
+      (page) => {
+        setBookingRecommendations(page);
+        setBookingRecommendationsLoading(false);
+      },
+      () => {
+        setBookingRecommendationsError('Не удалось загрузить рекомендации.');
+        setBookingRecommendationsLoading(false);
+      },
+    );
+  }
 
   return (
     <div className="figma-home-shell">
@@ -689,36 +813,118 @@ export function HomeDashboardPage({
           </nav>
 
           <div className="fh-tabs" role="tablist" aria-label="Раздел записей">
-            <button type="button" role="tab" aria-selected="true">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={bookingTab === 'MY'}
+              onClick={() => {
+                setBookingTab('MY');
+                setBookingRecommendationsError(null);
+              }}
+            >
               Мои записи
             </button>
-            <button type="button" role="tab" aria-selected="false">
-              Абонементы
+            <button
+              type="button"
+              role="tab"
+              aria-selected={bookingTab === 'FOR_ME'}
+              onClick={showBookingRecommendations}
+            >
+              Для меня
             </button>
           </div>
         </section>
 
         <section className="fh-main-box">
-          <section className="fh-bookings" aria-label="Мои записи">
-            {dashboard.upcoming.length > 0 ? (
-              <div className="fh-bookings-list">
-                {dashboard.upcoming.map((item, index) => (
-                  <div className="fh-booking-entry" key={item.id}>
-                    {index > 0 ? <div className="fh-divider" /> : null}
-                    <EventCard item={item} />
+          <section
+            className="fh-bookings"
+            aria-label={bookingTab === 'MY' ? 'Мои записи' : 'Для меня'}
+          >
+            {bookingTab === 'MY' ? (
+              <>
+                <div className="fh-filters" aria-label="Фильтр записей по дате">
+                  <div className="fh-calendar">
+                    {calendarDays.map((day) => {
+                      const dateKey = localDateKey(day);
+                      const selected = selectedDateKey === dateKey;
+                      return (
+                        <button
+                          className={selected ? 'is-selected' : ''}
+                          type="button"
+                          key={dateKey}
+                          aria-label={calendarDayLabelFormatter.format(day)}
+                          aria-pressed={selected}
+                          onClick={() => setSelectedDateKey(selected ? null : dateKey)}
+                        >
+                          <strong>{day.getDate()}</strong>
+                          <small>{calendarDayFormatter.format(day).replace('.', '')}</small>
+                          {datesWithBookings.has(dateKey) ? <i aria-hidden="true" /> : null}
+                        </button>
+                      );
+                    })}
                   </div>
-                ))}
-              </div>
+                  <div className="fh-filter-pills">
+                    <button
+                      className={selectedDateKey === null ? 'is-selected' : ''}
+                      type="button"
+                      aria-pressed={selectedDateKey === null}
+                      onClick={() => setSelectedDateKey(null)}
+                    >
+                      Все даты
+                    </button>
+                  </div>
+                </div>
+                <div className="fh-divider" />
+                {visibleUpcoming.length > 0 ? (
+                  <div className="fh-bookings-list">
+                    {visibleUpcoming.map((item, index) => (
+                      <div className="fh-booking-entry" key={item.id}>
+                        {index > 0 ? <div className="fh-divider" /> : null}
+                        <EventCard item={item} />
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="fh-bookings-empty" role="status">
+                    <strong>
+                      {selectedDateKey ? 'На выбранную дату записей нет' : 'Ближайших записей нет'}
+                    </strong>
+                    <p>
+                      {selectedDateKey
+                        ? 'Выберите другой день или покажите все даты.'
+                        : 'Когда появятся ближайшие записи, они отобразятся здесь.'}
+                    </p>
+                  </div>
+                )}
+                <div className="fh-bookings-footer">
+                  <div className="fh-divider" />
+                  <a href="/bookings">Все записи</a>
+                </div>
+              </>
             ) : (
-              <div className="fh-bookings-empty" role="status">
-                <strong>Ближайших записей нет</strong>
-                <p>Когда появятся ближайшие записи, они отобразятся здесь.</p>
+              <div className="fh-for-me">
+                <header>
+                  <div>
+                    <span>Персональная подборка</span>
+                    <strong>Подходящие игры</strong>
+                  </div>
+                  <a href="/profile#booking-preferences-title">Настроить</a>
+                </header>
+                {bookingRecommendationsLoading && !bookingRecommendations ? (
+                  <p role="status">Подбираем игры…</p>
+                ) : null}
+                {bookingRecommendationsError ? (
+                  <p role="alert">{bookingRecommendationsError}</p>
+                ) : null}
+                {bookingRecommendations ? (
+                  <BookingRecommendations page={bookingRecommendations} compact />
+                ) : null}
+                <div className="fh-bookings-footer">
+                  <div className="fh-divider" />
+                  <a href="/bookings?view=for-me">Все рекомендации</a>
+                </div>
               </div>
             )}
-            <div className="fh-bookings-footer">
-              <div className="fh-divider" />
-              <a href="/bookings">Все записи</a>
-            </div>
           </section>
 
           <HomePromotionCarousel
@@ -770,20 +976,7 @@ export function HomeDashboardPage({
           </section>
         </section>
 
-        <nav className="fh-bottom-nav" aria-label="Основная навигация">
-          <a href="/" aria-current="page" aria-label="Главная">
-            <BottomNavIcon name="home" />
-          </a>
-          <a href="/bookings" aria-label="Записи">
-            <BottomNavIcon name="games" />
-          </a>
-          <a href="/notifications" aria-label="Оповещения">
-            <BottomNavIcon name="chat" />
-          </a>
-          <a href="/profile" aria-label="Профиль">
-            <BottomNavIcon name="profile" />
-          </a>
-        </nav>
+        <MainBottomNavigation active="home" />
 
         <button
           className="fh-logout-accessible"

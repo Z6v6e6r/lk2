@@ -24,6 +24,7 @@ describe('loadConfig', () => {
       VIVA_MODE: 'mock',
       HOME_READ_MODE: 'mock',
       GAMES_READ_ENABLED: false,
+      GAMES_COMMANDS_ENABLED: false,
       HOME_PROJECTION_TTL_SECONDS: 300,
       HOME_VIVA_SYNC_ENABLED: false,
       HOME_VIVA_SYNC_INTERVAL_MS: 120_000,
@@ -61,6 +62,15 @@ describe('loadConfig', () => {
     expect(() =>
       loadConfig({ ...validEnvironment, APP_ENV: 'production', GAMES_READ_ENABLED: 'true' }),
     ).toThrow('GAMES_READ_ENABLED is staging-only');
+  });
+
+  it('keeps Games commands off by default and rejects them in production', () => {
+    expect(
+      loadConfig({ ...validEnvironment, APP_ENV: 'staging', GAMES_COMMANDS_ENABLED: 'true' }),
+    ).toMatchObject({ GAMES_COMMANDS_ENABLED: true });
+    expect(() =>
+      loadConfig({ ...validEnvironment, APP_ENV: 'production', GAMES_COMMANDS_ENABLED: 'true' }),
+    ).toThrow('GAMES_COMMANDS_ENABLED is staging-only');
   });
 
   it('allows the synthetic CUP operator code only in a fully explicit local runtime', () => {

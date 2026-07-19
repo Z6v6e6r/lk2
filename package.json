@@ -17,7 +17,7 @@
   },
   "scripts": {
     "build": "npm run contracts:generate && npm run build:packages && npm run build:apps",
-    "build:packages": "npm run build -w @phub/domain && npm run build -w @phub/games && npm run build -w @phub/config && npm run build -w @phub/communities && npm run build -w @phub/locations && npm run build -w @phub/notifications && npm run build -w @phub/database && npm run build -w @phub/home-projection && npm run build -w @phub/api-contracts && npm run build -w @phub/api-sdk && npm run build -w @phub/auth && npm run build -w @phub/observability && npm run build -w @phub/viva-adapter && npm run build -w @phub/viva-client-adapter && npm run build -w @phub/ui && npm run build -w @phub/testing",
+    "build:packages": "npm run build -w @phub/domain && npm run build -w @phub/games && npm run build -w @phub/config && npm run build -w @phub/communities && npm run build -w @phub/locations && npm run build -w @phub/notifications && npm run build -w @phub/database && npm run build -w @phub/home-projection && npm run build -w @phub/api-contracts && npm run build -w @phub/api-sdk && npm run build -w @phub/auth && npm run build -w @phub/observability && npm run build -w @phub/viva-adapter && npm run build -w @phub/viva-client-adapter && npm run build -w @phub/legacy-games-adapter && npm run build -w @phub/ui && npm run build -w @phub/testing",
     "build:apps": "npm run build -w @phub/api && npm run build -w @phub/worker && npm run build -w @phub/realtime && npm run build -w @phub/migrator && npm run build -w @phub/web && npm run build -w @phub/mobile && npm run build -w @phub/cup-admin",
     "build:api": "npm run build -w @phub/api",
     "build:worker": "npm run build -w @phub/worker",
@@ -51,6 +51,7 @@
     "notifications:web-push:live-smoke": "node --env-file-if-exists=.env --import tsx scripts/verify-live-web-push-sandbox.ts",
     "notifications:web-push:verify": "node --import tsx scripts/verify-web-push-e2e.ts",
     "games:read:load": "node --import tsx scripts/verify-games-read-load.ts",
+    "games:legacy:import-local": "node --env-file-if-exists=.env --import tsx scripts/import-legacy-games-local.ts",
     "runtime:imports": "node scripts/verify-runtime-imports.js",
     "smoke": "node --env-file-if-exists=.env --import tsx scripts/smoke-test.ts",
     "smoke:auth": "node --env-file-if-exists=.env --import tsx scripts/auth-smoke.ts"

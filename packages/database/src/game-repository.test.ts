@@ -202,6 +202,8 @@ describe('game repository', () => {
       text.includes("base_payload ->> 'organizerUserId'"),
     );
     expect(call?.[0]).toContain("lifecycle_state in ('FINISHED', 'CANCELLED')");
+    expect(call?.[0]).toContain("reservation ->> 'expiresAt'");
+    expect(call?.[0]).toContain('::timestamptz > now()');
     expect(call?.[0]).toContain('(starts_at, game_id) <');
     expect(call?.[0]).toContain('order by starts_at desc, game_id desc');
     expect(call?.[1]).toEqual([tenantId, actorUserId, gameRow.starts_at, gameId, 21]);
@@ -225,6 +227,7 @@ describe('game repository', () => {
               user_id: actorUserId,
               display_name: 'Алексей',
               photo_url: null,
+              level_label: 'C+',
               role: 'ORGANIZER',
               payment_state: 'NOT_REQUIRED',
             },
@@ -238,6 +241,12 @@ describe('game repository', () => {
     await expect(
       createGameRepository(pool as never).projectCardEvent({ tenantId, eventId, gameId }),
     ).resolves.toBe('applied');
+    const projectionCall = query.mock.calls.find(([text]) =>
+      text.includes('insert into games.card_projections'),
+    );
+    expect(JSON.parse(String(projectionCall?.[1]?.[7]))).toMatchObject({
+      participants: [{ userId: actorUserId, level: 'C+' }],
+    });
     const projectionWrite = query.mock.calls.find(([text]) =>
       text.includes('insert into games.card_projections'),
     );

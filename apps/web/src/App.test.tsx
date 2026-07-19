@@ -9,6 +9,8 @@ import { App } from './App.js';
 import type {
   AuthGateway,
   AuthenticatedSession,
+  BookingPreferences,
+  BookingRecommendationPage,
   CommunityMembershipPage,
   HomeDashboard,
   NotificationInboxPage,
@@ -175,6 +177,21 @@ const notificationInbox: NotificationInboxPage = {
 const communityMemberships: CommunityMembershipPage = {
   items: homeDashboard.communities,
 };
+const bookingPreferences: BookingPreferences = {
+  favoriteStationIds: [],
+  preferredTimeWindows: [],
+  useHistory: true,
+  version: 0,
+  updatedAt: null,
+};
+const bookingRecommendations: BookingRecommendationPage = {
+  version: 'a'.repeat(64),
+  generatedAt: '2026-07-18T09:00:00.000Z',
+  staleAt: '2026-07-18T09:05:00.000Z',
+  personalization: 'BASIC',
+  items: [],
+  nextCursor: null,
+};
 
 function createGateway(overrides: Partial<AuthGateway> = {}): AuthGateway {
   return {
@@ -200,8 +217,19 @@ function createGateway(overrides: Partial<AuthGateway> = {}): AuthGateway {
     getPlayerProfile: vi.fn().mockResolvedValue(userProfile),
     getProfilePrivacy: vi.fn().mockResolvedValue(profilePrivacy),
     updateProfilePrivacy: vi.fn().mockResolvedValue(profilePrivacy),
+    getBookingPreferences: vi.fn().mockResolvedValue(bookingPreferences),
+    updateBookingPreferences: vi.fn().mockResolvedValue(bookingPreferences),
     getUpcomingBookings: vi.fn().mockResolvedValue(upcomingBookings),
+    listBookingRecommendations: vi.fn().mockResolvedValue(bookingRecommendations),
     getHomeDashboard: vi.fn().mockResolvedValue(homeDashboard),
+    listPublicGames: vi.fn().mockResolvedValue({ items: [], nextCursor: null }),
+    listMyGames: vi.fn().mockResolvedValue({ items: [], nextCursor: null }),
+    getGame: vi.fn().mockRejectedValue(new Error('GAME_NOT_FOUND')),
+    joinGame: vi.fn().mockRejectedValue(new Error('GAME_COMMAND_NOT_CONFIGURED')),
+    leaveGame: vi.fn().mockRejectedValue(new Error('GAME_COMMAND_NOT_CONFIGURED')),
+    joinGameWaitlist: vi.fn().mockRejectedValue(new Error('GAME_COMMAND_NOT_CONFIGURED')),
+    leaveGameWaitlist: vi.fn().mockRejectedValue(new Error('GAME_COMMAND_NOT_CONFIGURED')),
+    getGameOperation: vi.fn().mockRejectedValue(new Error('GAME_COMMAND_NOT_CONFIGURED')),
     listLocations: vi.fn<AuthGateway['listLocations']>().mockResolvedValue({ items: [] }),
     getLocation: vi
       .fn<AuthGateway['getLocation']>()
@@ -272,11 +300,12 @@ describe('PadlHub web authentication', () => {
       'aria-selected',
       'true',
     );
-    expect(screen.getByRole('tab', { name: 'Абонементы' })).toHaveAttribute(
-      'aria-selected',
-      'false',
-    );
-    expect(screen.queryByRole('link', { name: 'Создать игру' })).not.toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Для меня' })).toHaveAttribute('aria-selected', 'false');
+    const bottomNavigation = screen.getByRole('navigation', { name: 'Основная навигация' });
+    const bottomNavigationLinks = within(bottomNavigation).getAllByRole('link');
+    expect(bottomNavigationLinks).toHaveLength(5);
+    expect(bottomNavigationLinks[2]).toHaveAccessibleName('Создать игру');
+    expect(bottomNavigationLinks[2]).toHaveAttribute('href', '/games/new');
     expect(screen.queryByRole('link', { name: 'Чаты' })).not.toBeInTheDocument();
     const twoLineCommunity = screen
       .getByRole('group', { name: 'Padel Friends, непрочитанных сообщений: 2' })
@@ -484,7 +513,11 @@ describe('PadlHub web authentication', () => {
 
     const chatToggle = await screen.findByRole('checkbox', { name: /Личный чат/ });
     await user.click(chatToggle);
-    await user.click(screen.getByRole('button', { name: 'Сохранить' }));
+    await user.click(
+      within(screen.getByRole('region', { name: 'Кто может связаться' })).getByRole('button', {
+        name: 'Сохранить',
+      }),
+    );
 
     await waitFor(() =>
       expect(updateProfilePrivacy).toHaveBeenCalledWith({
@@ -538,7 +571,7 @@ describe('PadlHub web authentication', () => {
 
     render(<App gateway={gateway} tenantKey="padlhub" />);
 
-    expect(await screen.findByRole('heading', { name: 'Мои записи' })).toBeVisible();
+    expect(await screen.findByRole('heading', { name: 'Записи' })).toBeVisible();
     expect(screen.getByText('Американо · уровень C')).toBeVisible();
     expect(screen.getByText('Подтверждено')).toBeVisible();
     expect(gateway.getUpcomingBookings).toHaveBeenCalledOnce();

@@ -68,6 +68,74 @@ function createClient(
 }
 
 describe('PadlHubApiClient authentication boundary', () => {
+  it('keeps public Games discovery on the anonymous public API boundary', async () => {
+    const calls: Array<{ input: Parameters<typeof fetch>[0]; init?: RequestInit }> = [];
+    const fetchImplementation: typeof fetch = (input, init) => {
+      calls.push({ input, ...(init === undefined ? {} : { init }) });
+      return Promise.resolve(jsonResponse({ items: [], nextCursor: null }));
+    };
+    const client = createClient(fetchImplementation, {
+      initialAccessToken: 'token-that-must-not-reach-public-discovery',
+    });
+
+    await client.listPublicGames({ kind: 'RATING', availability: 'INCLUDE_FULL', limit: 20 });
+
+    expect(requestUrl(calls[0]?.input ?? '')).toBe(
+      'https://api.padlhub.test/public/api/v1/local-padel/games?kind=RATING&availability=INCLUDE_FULL&limit=20',
+    );
+    expect(new Headers(calls[0]?.init?.headers).get('Authorization')).toBeNull();
+  });
+
+  it('sends a retry-safe Games join with the projection revision', async () => {
+    const calls: Array<{ input: Parameters<typeof fetch>[0]; init?: RequestInit }> = [];
+    const fetchImplementation: typeof fetch = (input, init) => {
+      calls.push({ input, ...(init === undefined ? {} : { init }) });
+      return Promise.resolve(
+        jsonResponse({
+          commandId: 'c3889c99-b0e3-4a3d-b3e8-a5c99af730ea',
+          operation: { status: 'SUCCEEDED' },
+          game: null,
+          replayed: false,
+        }),
+      );
+    };
+    const client = createClient(fetchImplementation, {
+      initialAccessToken: authenticatedSession.accessToken,
+    });
+
+    await client.joinGame('751fe6a8-b0b1-4b2b-873d-a2d785c4e191', 9);
+
+    expect(requestUrl(calls[0]?.input ?? '')).toBe(
+      'https://api.padlhub.test/user/api/v1/local-padel/games/751fe6a8-b0b1-4b2b-873d-a2d785c4e191/join',
+    );
+    expect(calls[0]?.init?.method).toBe('POST');
+    expect(new Headers(calls[0]?.init?.headers).get('Authorization')).toBe(
+      `Bearer ${authenticatedSession.accessToken}`,
+    );
+    expect(new Headers(calls[0]?.init?.headers).get('Idempotency-Key')).toBeTruthy();
+    expect(JSON.parse(stringRequestBody(calls[0]?.init?.body))).toEqual({ expectedRevision: 9 });
+  });
+
+  it('reads a Games operation from the authenticated user boundary', async () => {
+    const calls: Array<{ input: Parameters<typeof fetch>[0]; init?: RequestInit }> = [];
+    const fetchImplementation: typeof fetch = (input, init) => {
+      calls.push({ input, ...(init === undefined ? {} : { init }) });
+      return Promise.resolve(jsonResponse({ operation: { status: 'SUCCEEDED' } }));
+    };
+    const client = createClient(fetchImplementation, {
+      initialAccessToken: authenticatedSession.accessToken,
+    });
+
+    await client.getGameOperation('c3889c99-b0e3-4a3d-b3e8-a5c99af730ea');
+
+    expect(requestUrl(calls[0]?.input ?? '')).toBe(
+      'https://api.padlhub.test/user/api/v1/local-padel/game-operations/c3889c99-b0e3-4a3d-b3e8-a5c99af730ea',
+    );
+    expect(new Headers(calls[0]?.init?.headers).get('Authorization')).toBe(
+      `Bearer ${authenticatedSession.accessToken}`,
+    );
+  });
+
   it('creates a public challenge without forwarding a stored token', async () => {
     const calls: Array<{ input: Parameters<typeof fetch>[0]; init?: RequestInit }> = [];
     const fetchImplementation: typeof fetch = (input, init) => {
@@ -382,6 +450,62 @@ describe('PadlHubApiClient profile privacy boundary', () => {
     const secondHeaders = new Headers(calls[1]?.init?.headers);
     expect(firstHeaders.get('Idempotency-Key')).toBeTruthy();
     expect(secondHeaders.get('Idempotency-Key')).toBe(firstHeaders.get('Idempotency-Key'));
+  });
+});
+
+describe('PadlHubApiClient booking personalization boundary', () => {
+  it('uses canonical preference and recommendation routes without provider selectors', async () => {
+    const calls: Array<{ input: Parameters<typeof fetch>[0]; init?: RequestInit }> = [];
+    const fetchImplementation: typeof fetch = (input, init) => {
+      calls.push({ input, ...(init === undefined ? {} : { init }) });
+      const url = requestUrl(input);
+      if (url.includes('/recommendations/bookings')) {
+        return Promise.resolve(
+          jsonResponse({
+            version: 'a'.repeat(64),
+            generatedAt: '2026-07-18T09:00:00.000Z',
+            staleAt: '2026-07-18T09:05:00.000Z',
+            personalization: 'BASIC',
+            items: [],
+            nextCursor: null,
+          }),
+        );
+      }
+      return Promise.resolve(
+        jsonResponse({
+          favoriteStationIds: [],
+          preferredTimeWindows: [],
+          useHistory: true,
+          version: init?.method === 'PUT' ? 1 : 0,
+          updatedAt: init?.method === 'PUT' ? '2026-07-18T09:00:00.000Z' : null,
+        }),
+      );
+    };
+    const client = createClient(fetchImplementation, {
+      initialAccessToken: authenticatedSession.accessToken,
+    });
+
+    await client.getBookingPreferences();
+    await client.updateBookingPreferences({
+      expectedVersion: 0,
+      favoriteStationIds: [],
+      preferredTimeWindows: [],
+      useHistory: true,
+    });
+    await client.listBookingRecommendations(6);
+
+    expect(requestUrl(calls[0]?.input ?? '')).toBe(
+      'https://api.padlhub.test/user/api/v1/local-padel/profile/booking-preferences',
+    );
+    expect(requestUrl(calls[1]?.input ?? '')).toBe(
+      'https://api.padlhub.test/user/api/v1/local-padel/profile/booking-preferences',
+    );
+    expect(calls[1]?.init?.method).toBe('PUT');
+    expect(new Headers(calls[1]?.init?.headers).get('Idempotency-Key')).toBeTruthy();
+    expect(requestUrl(calls[2]?.input ?? '')).toBe(
+      'https://api.padlhub.test/user/api/v1/local-padel/recommendations/bookings?limit=6',
+    );
+    expect(calls.map((call) => requestUrl(call.input)).join(' ')).not.toMatch(/viva|provider/i);
   });
 });
 

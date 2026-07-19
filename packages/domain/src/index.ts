@@ -224,6 +224,41 @@ export const DEFAULT_PROFILE_PRIVACY_SETTINGS: ProfilePrivacySettings = {
 
 export const PROFILE_PRIVACY_CHANGED_EVENT = 'profile.privacy.changed.v1' as const;
 
+export const BOOKING_PREFERENCE_WEEKDAYS = [
+  'MON',
+  'TUE',
+  'WED',
+  'THU',
+  'FRI',
+  'SAT',
+  'SUN',
+] as const;
+export type BookingPreferenceWeekday = (typeof BOOKING_PREFERENCE_WEEKDAYS)[number];
+
+export interface BookingPreferenceTimeWindow {
+  readonly weekday: BookingPreferenceWeekday;
+  readonly startsAt: string;
+  readonly endsAt: string;
+}
+
+export interface BookingPreferences {
+  readonly favoriteStationIds: readonly string[];
+  readonly preferredTimeWindows: readonly BookingPreferenceTimeWindow[];
+  readonly useHistory: boolean;
+  readonly version: number;
+  readonly updatedAt: string | null;
+}
+
+export const DEFAULT_BOOKING_PREFERENCES: BookingPreferences = {
+  favoriteStationIds: [],
+  preferredTimeWindows: [],
+  useHistory: true,
+  version: 0,
+  updatedAt: null,
+};
+
+export const BOOKING_PREFERENCES_CHANGED_EVENT = 'profile.booking_preferences.changed.v1' as const;
+
 export function isValidIdempotencyKey(value: string): boolean {
   return value.length >= 16 && value.length <= 128 && /^[A-Za-z0-9._:-]+$/.test(value);
 }

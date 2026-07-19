@@ -2,9 +2,11 @@ import type { IdentityProviderKey, IdentityProviderPort } from '@phub/auth';
 import { loadConfig } from '@phub/config';
 import {
   createAdminNotificationRepository,
+  createBookingPreferencesRepository,
   createClientRoutingPlanRepository,
   createDatabasePool,
   createGameRepository,
+  createGameRosterRepository,
   createHomeDashboardProjectionRepository,
   createLocationRepository,
   createNotificationEndpointRepository,
@@ -80,7 +82,11 @@ const app = await buildApp({
   adminNotificationRepository: createAdminNotificationRepository(pool),
   locationRepository: createLocationRepository(pool),
   profilePrivacyRepository: createProfilePrivacyRepository(pool),
+  bookingPreferencesRepository: createBookingPreferencesRepository(pool),
   ...(config.GAMES_READ_ENABLED ? { gameReadRepository: createGameRepository(pool) } : {}),
+  ...(config.GAMES_COMMANDS_ENABLED
+    ? { gameRosterRepository: createGameRosterRepository(pool) }
+    : {}),
   ...(notificationEndpointCipher ? { notificationEndpointCipher } : {}),
   authDependencyReady: async () => (await redis.ping()) === 'PONG',
   rateLimitRedis: redis,

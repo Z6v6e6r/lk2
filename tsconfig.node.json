@@ -10,6 +10,7 @@
     "packages/database/**/*.ts",
     "packages/domain/**/*.ts",
     "packages/games/src/**/*.ts",
+    "packages/legacy-games-adapter/**/*.ts",
     "packages/locations/**/*.ts",
     "packages/notifications/**/*.ts",
     "packages/observability/**/*.ts",

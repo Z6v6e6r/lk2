@@ -27,6 +27,7 @@
       "@phub/domain": ["packages/domain/src/index.ts"],
       "@phub/games": ["packages/games/src/index.ts"],
       "@phub/home-projection": ["packages/home-projection/src/index.ts"],
+      "@phub/legacy-games-adapter": ["packages/legacy-games-adapter/src/index.ts"],
       "@phub/notifications": ["packages/notifications/src/index.ts"],
       "@phub/observability": ["packages/observability/src/index.ts"],
       "@phub/testing": ["packages/testing/src/index.ts"],

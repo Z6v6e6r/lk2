@@ -1,0 +1,15 @@
+{
+  "name": "@phub/legacy-games-adapter",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./src/index.ts",
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --dts --sourcemap --clean"
+  },
+  "dependencies": {
+    "@phub/games": "0.1.0",
+    "mongodb": "6.21.0"
+  }
+}

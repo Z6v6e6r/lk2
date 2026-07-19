@@ -226,7 +226,46 @@ describe('Games read APIs', () => {
     );
   });
 
-  it('fails closed for unconfigured reads and never exposes a private outsider detail', async () => {
+  it('drops a stale viewer projection after its relation has expired', async () => {
+    const staleProjection = projection(
+      snapshot({
+        organizerUserId: playerId,
+        participants: [
+          {
+            userId: playerId,
+            displayName: 'Мария',
+            avatarUrl: null,
+            level: 'C+',
+            role: 'ORGANIZER',
+            paymentState: 'NOT_REQUIRED',
+          },
+        ],
+        seatReservations: [
+          {
+            id: '0a22bc1d-5795-4c60-a0b2-bc7bf67740f5',
+            userId,
+            expiresAt: '2026-07-17T19:00:00.000Z',
+            paymentState: 'REQUIRES_ACTION',
+          },
+        ],
+      }),
+    );
+    const app = await appWith(
+      repository({
+        listViewerCardProjections: vi.fn().mockResolvedValue({ items: [staleProjection] }),
+      }),
+    );
+    const response = await app.inject({
+      method: 'GET',
+      url: '/user/api/v1/local-padel/games?scope=UPCOMING',
+      headers: { authorization: `Bearer ${await accessToken()}` },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ items: [], nextCursor: null });
+  });
+
+  it('fails closed for unconfigured reads, allows public discovery detail and hides private games', async () => {
     const closed = await buildApp({
       config,
       logger: createLogger('games-read-api-test', 'silent'),
@@ -252,12 +291,26 @@ describe('Games read APIs', () => {
       .setSubject(outsider)
       .setExpirationTime('5m')
       .sign(new TextEncoder().encode(config.JWT_ACCESS_SECRET));
-    const app = await appWith(repository());
-    const detail = await app.inject({
+    const publicApp = await appWith(repository());
+    const publicDetail = await publicApp.inject({
       method: 'GET',
       url: `/user/api/v1/local-padel/games/${gameId}`,
       headers: { authorization: `Bearer ${token}` },
     });
-    expect(detail.statusCode).toBe(404);
+    expect(publicDetail.statusCode).toBe(200);
+    expect(publicDetail.json()).toMatchObject({
+      game: { id: gameId, surface: 'DISCOVER', viewerRelation: 'NONE' },
+    });
+
+    const privateProjection = projection(snapshot({ visibility: 'PRIVATE' }));
+    const privateApp = await appWith(
+      repository({ getCardProjection: vi.fn().mockResolvedValue(privateProjection) }),
+    );
+    const privateDetail = await privateApp.inject({
+      method: 'GET',
+      url: `/user/api/v1/local-padel/games/${gameId}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(privateDetail.statusCode).toBe(404);
   });
 });

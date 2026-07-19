@@ -36,6 +36,13 @@ dependency tree.
    `/etc/phub/staging.env`. Run migrations once from the CI-published migrator
    digest, then deploy web, API, realtime and worker.
 
+Every staging workflow creates a PostgreSQL custom-format archive under
+`/opt/phub/backups/postgres-pre-<release>-<UTC timestamp>.dump`. The workflow
+requires a non-empty archive, validates it with `pg_restore --list`, runs the
+digest-pinned migrator and confirms the latest repository migration in
+`public.schema_migrations` before it switches application containers. A failed
+backup or migration leaves the currently running application release untouched.
+
 The staging application Compose file passes only the existing MinIO credentials from
 `infrastructure.env` into the worker. API and realtime never receive object-storage credentials.
 The worker uses the private `http://minio:9000` endpoint and publishes short-lived signed URLs

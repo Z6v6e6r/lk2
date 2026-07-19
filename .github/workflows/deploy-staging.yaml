@@ -91,6 +91,7 @@ jobs:
             echo "REALTIME_IMAGE_DIGEST=$(cat digests/realtime)"
             echo "MIGRATOR_IMAGE_DIGEST=$(cat digests/migrator)"
             echo "RELEASE=${{ github.sha }}"
+            echo "LATEST_MIGRATION=$(find packages/database/migrations -maxdepth 1 -type f -name '*.sql' -exec basename {} \; | sort | tail -1)"
             echo "S3_PUBLIC_ENDPOINT=${{ vars.STAGING_BASE_URL }}"
           } > release.env
           scp release.env "phub-deploy@$HOST:/opt/phub/release.env"
@@ -107,8 +108,31 @@ jobs:
             compose() {
               docker compose --env-file infrastructure.env --env-file release.env "$@"
             }
+            infrastructure() {
+              docker compose --env-file infrastructure.env -f compose.infrastructure.yaml "$@"
+            }
             compose pull
+
+            backup_dir=/opt/phub/backups
+            backup_timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+            backup_path="$backup_dir/postgres-pre-${{ github.sha }}-$backup_timestamp.dump"
+            backup_tmp="$backup_path.tmp"
+            mkdir -p "$backup_dir"
+            trap "rm -f \"$backup_tmp\"; docker logout ghcr.io >/dev/null 2>&1 || true" EXIT
+            infrastructure exec -T postgres sh -ec \
+              "pg_dump -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" --format=custom --no-owner --no-acl" \
+              > "$backup_tmp"
+            test -s "$backup_tmp"
+            infrastructure exec -T postgres pg_restore --list < "$backup_tmp" >/dev/null
+            mv "$backup_tmp" "$backup_path"
+            echo "Verified staging PostgreSQL backup: $backup_path"
+
             compose --profile migration run --rm migrator
+            latest_migration="$(sed -n s/^LATEST_MIGRATION=//p release.env)"
+            test -n "$latest_migration"
+            infrastructure exec -T postgres sh -ec \
+              "psql -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -Atc \"select filename from public.schema_migrations\"" \
+              | grep -Fx "$latest_migration"
             compose up -d --remove-orphans
             # The ingress configuration is bind-mounted. Recreate this one
             # stateless container so it loads the newly copied configuration.

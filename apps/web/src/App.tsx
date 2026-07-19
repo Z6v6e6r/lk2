@@ -14,6 +14,7 @@ import {
   type AuthEntryView,
 } from './browser-auth-context.js';
 import { HomeDashboardPage } from './HomeDashboardPage.js';
+import { GamesPage } from './GamesPage.js';
 import { LocationDetailPage } from './LocationDetailPage.js';
 import { LocationsPage } from './LocationsPage.js';
 import { NotificationsPage } from './NotificationsPage.js';
@@ -21,6 +22,8 @@ import { ProfilePage } from './ProfilePage.js';
 import type {
   AuthGateway,
   AuthenticatedSession,
+  BookingPreferences,
+  BookingPreferencesUpdateRequest,
   HomeDashboard,
   LocationDetail,
   LocationList,
@@ -51,11 +54,12 @@ type ProtectedRoute =
   | { readonly kind: 'communities' }
   | { readonly kind: 'locations' }
   | { readonly kind: 'location'; readonly locationId: string }
+  | { readonly kind: 'games' }
+  | { readonly kind: 'game'; readonly gameId: string }
   | { readonly kind: 'section'; readonly title: string }
   | { readonly kind: 'not-found' };
 
 const visibleWorkInProgressSections = [
-  ['/games', 'Игры'],
   ['/tournaments', 'Турниры'],
   ['/trainings', 'Тренировки'],
   ['/subscriptions', 'Абонементы'],
@@ -77,6 +81,12 @@ function resolveProtectedRoute(pathname: string): ProtectedRoute {
     /^\/locations\/([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i,
   );
   if (locationMatch?.[1]) return { kind: 'location', locationId: locationMatch[1] };
+  if (normalizedPath === '/games') return { kind: 'games' };
+  if (normalizedPath === '/games/new') return { kind: 'section', title: 'Создание игры' };
+  const gameMatch = normalizedPath.match(
+    /^\/games\/([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i,
+  );
+  if (gameMatch?.[1]) return { kind: 'game', gameId: gameMatch[1] };
   const section = visibleWorkInProgressSections.find(
     ([prefix]) => normalizedPath === prefix || normalizedPath.startsWith(`${prefix}/`),
   );
@@ -332,6 +342,13 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
   const [profilePrivacyBusy, setProfilePrivacyBusy] = useState(false);
   const [profilePrivacyError, setProfilePrivacyError] = useState<string | null>(null);
   const [profilePrivacyNotice, setProfilePrivacyNotice] = useState<string | null>(null);
+  const [bookingPreferences, setBookingPreferences] = useState<BookingPreferences | null>(null);
+  const [bookingPreferencesBusy, setBookingPreferencesBusy] = useState(false);
+  const [bookingPreferencesError, setBookingPreferencesError] = useState<string | null>(null);
+  const [bookingPreferencesNotice, setBookingPreferencesNotice] = useState<string | null>(null);
+  const [bookingPreferenceStations, setBookingPreferenceStations] = useState<
+    readonly { readonly id: string; readonly name: string }[]
+  >([]);
   const [upcomingBookings, setUpcomingBookings] = useState<UserUpcomingBookings | null>(null);
   const [bookingsError, setBookingsError] = useState<string | null>(null);
   const [notifications, setNotifications] = useState<NotificationInboxPage | null>(null);
@@ -395,6 +412,36 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
             }
           },
         );
+        void gateway.getBookingPreferences().then(
+          (settings) => {
+            if (active) {
+              setBookingPreferences(settings);
+              setBookingPreferencesError(null);
+              setBookingPreferencesNotice(null);
+            }
+          },
+          () => {
+            if (active) {
+              setBookingPreferencesError('Не удалось загрузить предпочтения для рекомендаций.');
+              setBookingPreferencesNotice(null);
+            }
+          },
+        );
+        void gateway.listPublicGames({ availability: 'INCLUDE_FULL', limit: 50 }).then(
+          (page) => {
+            if (!active) return;
+            const stations = new Map<string, string>();
+            page.items.forEach((game) => stations.set(game.station.id, game.station.name));
+            setBookingPreferenceStations(
+              [...stations]
+                .map(([id, name]) => ({ id, name }))
+                .sort((left, right) => left.name.localeCompare(right.name, 'ru-RU')),
+            );
+          },
+          () => {
+            if (active) setBookingPreferenceStations([]);
+          },
+        );
       }
       void gateway.getPlayerProfile(targetUserId).then(
         (profile) => {
@@ -405,6 +452,10 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
               setProfilePrivacy(null);
               setProfilePrivacyError(null);
               setProfilePrivacyNotice(null);
+              setBookingPreferences(null);
+              setBookingPreferencesError(null);
+              setBookingPreferencesNotice(null);
+              setBookingPreferenceStations([]);
             }
           }
         },
@@ -688,6 +739,10 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
           setLocationsError(null);
           setUserProfile(null);
           setProfileError(null);
+          setBookingPreferences(null);
+          setBookingPreferencesError(null);
+          setBookingPreferencesNotice(null);
+          setBookingPreferenceStations([]);
           setUpcomingBookings(null);
           setBookingsError(null);
           setNotifications(null);
@@ -786,6 +841,23 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
     );
   }
 
+  function handleSaveBookingPreferences(input: BookingPreferencesUpdateRequest): void {
+    setBookingPreferencesBusy(true);
+    setBookingPreferencesError(null);
+    setBookingPreferencesNotice(null);
+    void gateway.updateBookingPreferences(input).then(
+      (settings) => {
+        setBookingPreferences(settings);
+        setBookingPreferencesBusy(false);
+        setBookingPreferencesNotice('Предпочтения сохранены');
+      },
+      () => {
+        setBookingPreferencesBusy(false);
+        setBookingPreferencesError('Не удалось сохранить. Обновите профиль и повторите.');
+      },
+    );
+  }
+
   if (state.view === 'restoring') {
     return (
       <main className="app-shell app-shell-loading" aria-labelledby="restore-title">
@@ -831,8 +903,14 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
           privacyBusy={profilePrivacyBusy}
           privacyError={profilePrivacyError}
           privacyNotice={profilePrivacyNotice}
+          bookingPreferences={bookingPreferences}
+          bookingPreferencesBusy={bookingPreferencesBusy}
+          bookingPreferencesError={bookingPreferencesError}
+          bookingPreferencesNotice={bookingPreferencesNotice}
+          stationChoices={bookingPreferenceStations}
           error={state.error}
           onSavePrivacy={handleSaveProfilePrivacy}
+          onSaveBookingPreferences={handleSaveBookingPreferences}
           onLogout={handleLogout}
         />
       );
@@ -858,7 +936,20 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
           </main>
         );
       }
-      return <BookingsPage bookings={upcomingBookings} tenantName={context.tenant.name} />;
+      return (
+        <BookingsPage
+          bookings={upcomingBookings}
+          tenantName={context.tenant.name}
+          loadHistory={(cursor) =>
+            gateway.listMyGames({
+              scope: 'HISTORY',
+              limit: 20,
+              ...(cursor ? { cursor } : {}),
+            })
+          }
+          loadRecommendations={() => gateway.listBookingRecommendations(20)}
+        />
+      );
     }
     if (protectedRoute.kind === 'notifications') {
       if (!notifications || !webPushConfiguration) {
@@ -950,6 +1041,14 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
       }
       return <LocationDetailPage location={locationDetail} />;
     }
+    if (protectedRoute.kind === 'games' || protectedRoute.kind === 'game') {
+      return (
+        <GamesPage
+          gateway={gateway}
+          {...(protectedRoute.kind === 'game' ? { gameId: protectedRoute.gameId } : {})}
+        />
+      );
+    }
     if (protectedRoute.kind === 'section' || protectedRoute.kind === 'not-found') {
       const title =
         protectedRoute.kind === 'section' ? protectedRoute.title : 'Страница не найдена';
@@ -1002,6 +1101,7 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
         tenantName={context.tenant.name}
         notificationUnreadCount={notifications?.unreadCount ?? 0}
         loadCommunityPage={gateway.listMyCommunities}
+        loadBookingRecommendations={() => gateway.listBookingRecommendations(6)}
         logoutBusy={state.busy === 'logout'}
         error={state.error}
         onLogout={handleLogout}

@@ -80,6 +80,7 @@ const environmentSchema = z.object({
   VIVA_MODE: z.enum(['mock', 'sandbox', 'production', 'disabled']).default('mock'),
   HOME_READ_MODE: z.enum(['mock', 'projection']).default('mock'),
   GAMES_READ_ENABLED: booleanFromEnvironment,
+  GAMES_COMMANDS_ENABLED: booleanFromEnvironment,
   HOME_PROJECTION_MAX_STALE_SECONDS: z.coerce.number().int().nonnegative().max(86_400).default(300),
   HOME_PROJECTION_TTL_SECONDS: z.coerce.number().int().min(30).max(86_400).default(300),
   HOME_VIVA_SYNC_ENABLED: booleanFromEnvironment,
@@ -234,6 +235,11 @@ export function loadConfig(
 
   if (parsed.data.APP_ENV === 'production' && parsed.data.GAMES_READ_ENABLED) {
     throw new Error('GAMES_READ_ENABLED is staging-only until the Games production gate passes');
+  }
+  if (parsed.data.APP_ENV === 'production' && parsed.data.GAMES_COMMANDS_ENABLED) {
+    throw new Error(
+      'GAMES_COMMANDS_ENABLED is staging-only until the Games production gate passes',
+    );
   }
   if (parsed.data.APP_ENV === 'production' && parsed.data.VIVA_MODE === 'mock') {
     throw new Error('VIVA_MODE=mock is forbidden in production');

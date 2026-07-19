@@ -7,6 +7,8 @@
   incrementally.
 - Kept truthful server-backed booking cards and restored only an explicit work-in-progress shell
   for those staged sections; no synthetic records or unsupported commands were reintroduced.
+- Restored the seven-day booking date filter with dates derived from the user's current week,
+  markers derived from real `upcoming` items, and a working all-dates reset.
 - Recorded that these visible shells remain a production `NO-GO` until their journeys are complete.
 
 ## 2026-07-18 — Viva OTP runtime error boundary repair
@@ -509,3 +511,15 @@
 - Added the provider switch, rollback and local mock verification runbook.
 - Added atomic single-use verification, per-phone cooldowns, shared Redis rate limits, correlated
   security audit, retry-safe idempotent session rotation and a full auth smoke test.
+
+# 2026-07-18 — My bookings and For me first slice
+
+- Replaced the static Home `Абонементы` tab with a lazy `Для меня` Games recommendation surface.
+- Added LOCAL_ONLY, tenant-RLS booking preferences with favorite stations, weekday/time windows,
+  history control, optimistic versioning, idempotency, audit and transactional outbox.
+- Added deterministic level/station/time ranking over one local Games projection snapshot; only
+  completed recent Games may supply learned signals and clients receive reasons rather than scores.
+- Added `/bookings` upcoming/history/For me navigation. History is explicitly Games-only until the
+  provider-wide history contract is verified.
+- Expanded authenticated public-game details so a non-participant can open and join a public game;
+  private outsider details still fail closed.

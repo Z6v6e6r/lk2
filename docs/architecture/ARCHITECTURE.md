@@ -70,6 +70,15 @@ PostgreSQL is the operational source of truth. Logical schemas mirror domains, n
 
 Every tenant-owned row contains `tenant_id`; row-level security is part of defense in depth. Modules own their tables and migrations and communicate through public domain interfaces.
 
+Booking recommendation preferences are an independently owned `LOCAL_ONLY` profile aggregate. The
+first recommendation slice ranks only locally projected, public and joinable Games using canonical
+player level, explicit station/time preferences and eligible completed Games history. Candidate and
+history projections are read in one tenant SQL snapshot; the client receives reason codes and
+PadlHub UUIDs, never scores, subscription state or provider identifiers. Provider-wide booking
+history and non-Games candidates remain fail-closed until their adapter contracts are proven. See
+[ADR 0012](../adr/0012-booking-recommendations-first-slice.md) and the
+[domain design](../domains/bookings-and-recommendations.md).
+
 The communities module owns canonical community and membership rows. Home projects no more than
 five summaries; the full authenticated directory uses a separate keyset-paginated User API read.
 While the legacy LK store still contains current membership data, an API-side anti-corruption

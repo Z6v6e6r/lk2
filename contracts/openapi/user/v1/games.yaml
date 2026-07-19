@@ -438,6 +438,48 @@ paths:
         '503':
           $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
 
+  /{tenantKey}/recommendations/bookings:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+    get:
+      tags: [bookings]
+      operationId: listBookingRecommendations
+      summary: List server-ranked booking opportunities for the authenticated user
+      description: |
+        Reads one versioned PadlHub projection result. The server applies level, explicit
+        station/time preferences and eligible completed Games history without exposing scores,
+        provider identifiers or subscription state.
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 20
+            default: 6
+      responses:
+        '200':
+          description: Ranked, explainable recommendations from current Games projections.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BookingRecommendationPage'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+
 components:
   parameters:
     IdempotencyKey:
@@ -519,6 +561,52 @@ components:
           type: [string, 'null']
           minLength: 16
           maxLength: 512
+    BookingRecommendationPage:
+      type: object
+      additionalProperties: false
+      required: [version, generatedAt, staleAt, personalization, items, nextCursor]
+      properties:
+        version:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+        generatedAt:
+          type: string
+          format: date-time
+        staleAt:
+          type: string
+          format: date-time
+        personalization:
+          type: string
+          enum: [EXPLICIT, LEARNED, BASIC]
+        items:
+          type: array
+          maxItems: 20
+          items:
+            $ref: '#/components/schemas/BookingRecommendationItem'
+        nextCursor:
+          type: 'null'
+          description: Reserved for the future materialized-feed pagination phase.
+    BookingRecommendationItem:
+      type: object
+      additionalProperties: false
+      required: [game, reasons]
+      properties:
+        game:
+          $ref: '#/components/schemas/GameCardView'
+        reasons:
+          type: array
+          minItems: 1
+          maxItems: 5
+          uniqueItems: true
+          items:
+            type: string
+            enum:
+              - LEVEL_MATCH
+              - FAVORITE_STATION
+              - PLAYED_STATION
+              - PREFERRED_TIME
+              - USUAL_TIME
+              - AVAILABLE_SOON
     GameCardResponse:
       type: object
       additionalProperties: false
@@ -562,7 +650,7 @@ components:
           minimum: 0
         surface:
           type: string
-          enum: [MY_UPCOMING, HISTORY, INVITE]
+          enum: [DISCOVER, MY_UPCOMING, HISTORY, INVITE]
         displayState:
           $ref: '#/components/schemas/GameCardDisplayState'
         title:

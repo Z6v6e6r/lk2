@@ -1,4 +1,4 @@
-import type { components } from '@phub/api-contracts';
+import type { components, PublicApiComponents } from '@phub/api-contracts';
 
 export type AuthChallengeRequest = components['schemas']['AuthChallengeRequest'];
 export type AuthChallenge = components['schemas']['AuthChallenge'];
@@ -16,12 +16,33 @@ export type PlayerProfileView = components['schemas']['PlayerProfileView'];
 export type ProfileActionCapability = components['schemas']['ProfileActionCapability'];
 export type ProfilePrivacySettings = components['schemas']['ProfilePrivacySettings'];
 export type ProfilePrivacyUpdateRequest = components['schemas']['ProfilePrivacyUpdateRequest'];
+export type BookingPreferences = components['schemas']['BookingPreferences'];
+export type BookingPreferencesUpdateRequest =
+  components['schemas']['BookingPreferencesUpdateRequest'];
+export type BookingRecommendationPage = components['schemas']['BookingRecommendationPage'];
 export type UserUpcomingBookings = components['schemas']['UserUpcomingBookings'];
 export type NotificationInboxPage = components['schemas']['NotificationInboxPage'];
 export type NotificationReadCursorResult = components['schemas']['NotificationReadCursorResult'];
 export type WebPushConfiguration = components['schemas']['WebPushConfiguration'];
 export type WebPushEndpointRegistration = components['schemas']['WebPushEndpointRegistration'];
 export type WebPushEndpointCommandResult = components['schemas']['WebPushEndpointCommandResult'];
+export type GameCard = components['schemas']['GameCardView'];
+export type GameCardPage = components['schemas']['GameCardPage'];
+export type GameCommandResult = components['schemas']['GameCommandResult'];
+export type PublicGameCard = PublicApiComponents['schemas']['PublicGameCard'];
+export type PublicGameCardPage = PublicApiComponents['schemas']['PublicGameCardPage'];
+
+export interface PublicGameFilters {
+  readonly stationId?: string;
+  readonly startsFrom?: string;
+  readonly startsTo?: string;
+  readonly kind?: components['schemas']['GameKind'];
+  readonly levelFrom?: components['schemas']['GamePlayerLevel'];
+  readonly levelTo?: components['schemas']['GamePlayerLevel'];
+  readonly availability?: 'JOINABLE' | 'INCLUDE_FULL';
+  readonly limit?: number;
+  readonly cursor?: string;
+}
 
 export type RequestAuthMode = 'none' | 'required';
 export type SessionIntent = 'refresh' | 'logout';
@@ -145,6 +166,7 @@ function jsonRequestBody(value: unknown): string {
 export class PadlHubApiClient {
   private readonly fetchImplementation: typeof fetch;
   private readonly apiRoot: string;
+  private readonly publicApiRoot: string;
   private accessToken: string | undefined;
   private refreshInFlight: Promise<AuthenticatedSession> | undefined;
 
@@ -152,6 +174,7 @@ export class PadlHubApiClient {
     this.fetchImplementation =
       options.fetchImplementation ?? ((input, init) => globalThis.fetch(input, init));
     this.apiRoot = `${options.baseUrl.replace(/\/$/, '')}/user/api/v1/${encodeURIComponent(options.tenantKey)}`;
+    this.publicApiRoot = `${options.baseUrl.replace(/\/$/, '')}/public/api/v1/${encodeURIComponent(options.tenantKey)}`;
     this.accessToken = options.initialAccessToken?.trim() || undefined;
   }
 
@@ -313,12 +336,92 @@ export class PadlHubApiClient {
     );
   }
 
+  public getBookingPreferences(): Promise<BookingPreferences> {
+    return this.request<BookingPreferences>('/profile/booking-preferences');
+  }
+
+  public updateBookingPreferences(
+    input: BookingPreferencesUpdateRequest,
+  ): Promise<BookingPreferences> {
+    const idempotencyKey = createCorrelationId();
+    return this.retryOnceOnNetworkFailure(() =>
+      this.request<BookingPreferences>('/profile/booking-preferences', {
+        method: 'PUT',
+        idempotencyKey,
+        body: jsonRequestBody(input),
+      }),
+    );
+  }
+
   public getUpcomingBookings(): Promise<UserUpcomingBookings> {
     return this.request<UserUpcomingBookings>('/bookings/upcoming');
   }
 
+  public listBookingRecommendations(limit = 6): Promise<BookingRecommendationPage> {
+    const query = new URLSearchParams({ limit: String(limit) });
+    return this.request<BookingRecommendationPage>(`/recommendations/bookings?${query.toString()}`);
+  }
+
   public getHomeDashboard(): Promise<HomeDashboard> {
     return this.request<HomeDashboard>('/home');
+  }
+
+  public listPublicGames(input: PublicGameFilters = {}): Promise<PublicGameCardPage> {
+    const query = new URLSearchParams();
+    if (input.stationId) query.set('stationId', input.stationId);
+    if (input.startsFrom) query.set('startsFrom', input.startsFrom);
+    if (input.startsTo) query.set('startsTo', input.startsTo);
+    if (input.kind) query.set('kind', input.kind);
+    if (input.levelFrom) query.set('levelFrom', input.levelFrom);
+    if (input.levelTo) query.set('levelTo', input.levelTo);
+    if (input.availability) query.set('availability', input.availability);
+    if (input.limit !== undefined) query.set('limit', String(input.limit));
+    if (input.cursor) query.set('cursor', input.cursor);
+    const suffix = query.size > 0 ? `?${query.toString()}` : '';
+    return this.requestFromRoot<PublicGameCardPage>(this.publicApiRoot, `/games${suffix}`, {
+      auth: 'none',
+    });
+  }
+
+  public listMyGames(
+    input: {
+      readonly scope?: 'UPCOMING' | 'HISTORY';
+      readonly limit?: number;
+      readonly cursor?: string;
+    } = {},
+  ): Promise<GameCardPage> {
+    const query = new URLSearchParams();
+    if (input.scope) query.set('scope', input.scope);
+    if (input.limit !== undefined) query.set('limit', String(input.limit));
+    if (input.cursor) query.set('cursor', input.cursor);
+    const suffix = query.size > 0 ? `?${query.toString()}` : '';
+    return this.request<GameCardPage>(`/games${suffix}`);
+  }
+
+  public getGame(gameId: string): Promise<GameCard> {
+    return this.request<{ readonly game: GameCard }>(`/games/${encodeURIComponent(gameId)}`).then(
+      ({ game }) => game,
+    );
+  }
+
+  public joinGame(gameId: string, expectedRevision?: number): Promise<GameCommandResult> {
+    return this.gameCommand(gameId, '/join', 'POST', { expectedRevision });
+  }
+
+  public leaveGame(gameId: string): Promise<GameCommandResult> {
+    return this.gameCommand(gameId, '/participants/me', 'DELETE');
+  }
+
+  public joinGameWaitlist(gameId: string): Promise<GameCommandResult> {
+    return this.gameCommand(gameId, '/waitlist', 'POST');
+  }
+
+  public leaveGameWaitlist(gameId: string): Promise<GameCommandResult> {
+    return this.gameCommand(gameId, '/waitlist/me', 'DELETE');
+  }
+
+  public getGameOperation(operationId: string): Promise<GameCommandResult> {
+    return this.request<GameCommandResult>(`/game-operations/${encodeURIComponent(operationId)}`);
   }
 
   public listLocations(): Promise<LocationList> {
@@ -440,6 +543,22 @@ export class PadlHubApiClient {
     }
   }
 
+  private gameCommand(
+    gameId: string,
+    suffix: string,
+    method: 'POST' | 'DELETE',
+    body?: unknown,
+  ): Promise<GameCommandResult> {
+    const idempotencyKey = createCorrelationId();
+    return this.retryOnceOnNetworkFailure(() =>
+      this.request<GameCommandResult>(`/games/${encodeURIComponent(gameId)}${suffix}`, {
+        method,
+        idempotencyKey,
+        ...(body === undefined ? {} : { body: jsonRequestBody(body) }),
+      }),
+    );
+  }
+
   private applyAuthenticatedSession(session: AuthenticatedSession): void {
     if (!isAuthenticatedSession(session)) {
       this.clearAccessToken();
@@ -453,6 +572,7 @@ export class PadlHubApiClient {
     policy: RequestPolicy,
     correlationId: string,
     allowRefresh: boolean,
+    apiRoot = this.apiRoot,
   ): Promise<TResponse> {
     const headers = createHeaderRecord(policy.requestInit.headers);
     setHeader(headers, 'Accept', 'application/json');
@@ -475,7 +595,7 @@ export class PadlHubApiClient {
     }
 
     const normalizedPath = path.startsWith('/') ? path : `/${path}`;
-    const response = await this.fetchImplementation(`${this.apiRoot}${normalizedPath}`, {
+    const response = await this.fetchImplementation(`${apiRoot}${normalizedPath}`, {
       ...policy.requestInit,
       credentials: policy.requestInit.credentials ?? 'same-origin',
       headers,
@@ -488,12 +608,34 @@ export class PadlHubApiClient {
       allowRefresh
     ) {
       await this.refreshSession();
-      return this.requestWithPolicy<TResponse>(path, policy, correlationId, false);
+      return this.requestWithPolicy<TResponse>(path, policy, correlationId, false, apiRoot);
     }
 
     if (!response.ok) throw await this.toApiClientError(response, correlationId);
     if (response.status === 204) return undefined as TResponse;
     return (await response.json()) as TResponse;
+  }
+
+  private requestFromRoot<TResponse>(
+    apiRoot: string,
+    path: string,
+    init: ApiRequestInit = {},
+  ): Promise<TResponse> {
+    const {
+      auth = 'required',
+      idempotencyKey,
+      retryOnUnauthorized = true,
+      sessionIntent,
+      ...requestInit
+    } = init;
+    const policy: RequestPolicy = {
+      auth,
+      retryOnUnauthorized,
+      requestInit,
+      ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
+      ...(sessionIntent === undefined ? {} : { sessionIntent }),
+    };
+    return this.requestWithPolicy<TResponse>(path, policy, createCorrelationId(), true, apiRoot);
   }
 
   private async toApiClientError(

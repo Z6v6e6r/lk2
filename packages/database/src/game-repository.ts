@@ -65,6 +65,11 @@ export interface StoredGameCardProjectionPage {
   readonly next?: { readonly startsAt: string; readonly gameId: string };
 }
 
+export interface GameRecommendationProjectionInputs {
+  readonly candidates: readonly StoredGameCardProjection[];
+  readonly history: readonly StoredGameCardProjection[];
+}
+
 export interface ClaimedGameScheduledCommand {
   readonly id: string;
   readonly gameId: string;
@@ -141,6 +146,12 @@ export interface GameRepository {
     readonly limit: number;
     readonly after?: { readonly startsAt: string; readonly gameId: string };
   }): Promise<StoredGameCardProjectionPage>;
+  listRecommendationCardProjections(input: {
+    readonly tenantId: string;
+    readonly viewerUserId: string;
+    readonly candidateLimit: number;
+    readonly historyLimit: number;
+  }): Promise<GameRecommendationProjectionInputs>;
   projectCardEvent(input: {
     readonly tenantId: string;
     readonly eventId: string;
@@ -213,6 +224,10 @@ interface ProjectionRow extends QueryResultRow {
   readonly projected_at: Date | string;
 }
 
+interface RecommendationProjectionRow extends ProjectionRow {
+  readonly input_kind: 'candidate' | 'history';
+}
+
 interface ProjectionSourceGameRow extends GameRow {
   readonly station_name: string;
   readonly station_short_address: string | null;
@@ -222,6 +237,7 @@ interface ProjectionParticipantRow extends QueryResultRow {
   readonly user_id: string;
   readonly display_name: string;
   readonly photo_url: string | null;
+  readonly level_label: GamePlayerLevel | null;
   readonly role: 'ORGANIZER' | 'PLAYER';
   readonly payment_state: 'NOT_REQUIRED' | 'PAID' | 'REFUND_PENDING' | 'REFUNDED';
 }
@@ -686,8 +702,13 @@ export function createGameRepository(pool: Pool): GameRepository {
                 or base_payload @> jsonb_build_object(
                   'participants', jsonb_build_array(jsonb_build_object('userId', $2))
                 )
-                or base_payload @> jsonb_build_object(
-                  'seatReservations', jsonb_build_array(jsonb_build_object('userId', $2))
+                or exists (
+                  select 1
+                    from jsonb_array_elements(
+                      coalesce(base_payload -> 'seatReservations', '[]'::jsonb)
+                    ) as reservation
+                   where reservation ->> 'userId' = $2
+                     and (reservation ->> 'expiresAt')::timestamptz > now()
                 )
                 or base_payload @> jsonb_build_object(
                   'waitlist', jsonb_build_array(jsonb_build_object('userId', $2))
@@ -711,6 +732,50 @@ export function createGameRepository(pool: Pool): GameRepository {
           ...(result.rows.length > limit && last
             ? { next: { startsAt: last.startsAt, gameId: last.gameId } }
             : {}),
+        };
+      });
+    },
+
+    listRecommendationCardProjections(input) {
+      const candidateLimit = Math.max(1, Math.min(input.candidateLimit, 100));
+      const historyLimit = Math.max(1, Math.min(input.historyLimit, 100));
+      return withTenantTransaction(pool, input.tenantId, async (client) => {
+        const result = await client.query<RecommendationProjectionRow>(
+          `with candidates as (
+             select game_id, aggregate_revision, projection_revision, lifecycle_state,
+                    visibility, starts_at, ends_at, base_payload, projected_at
+               from games.card_projections
+              where tenant_id = $1
+                and lifecycle_state = 'SCHEDULED'
+                and visibility = 'PUBLIC'
+                and starts_at > now()
+              order by starts_at, game_id
+              limit $3
+           ), history as (
+             select game_id, aggregate_revision, projection_revision, lifecycle_state,
+                    visibility, starts_at, ends_at, base_payload, projected_at
+               from games.card_projections
+              where tenant_id = $1
+                and lifecycle_state in ('FINISHED', 'CANCELLED')
+                and (
+                  base_payload ->> 'organizerUserId' = $2
+                  or base_payload @> jsonb_build_object(
+                    'participants', jsonb_build_array(jsonb_build_object('userId', $2))
+                  )
+                )
+              order by starts_at desc, game_id desc
+              limit $4
+           )
+           select 'candidate'::text as input_kind, candidates.* from candidates
+           union all
+           select 'history'::text as input_kind, history.* from history`,
+          [input.tenantId, input.viewerUserId, candidateLimit, historyLimit],
+        );
+        return {
+          candidates: result.rows
+            .filter((row) => row.input_kind === 'candidate')
+            .map(mapProjection),
+          history: result.rows.filter((row) => row.input_kind === 'history').map(mapProjection),
         };
       });
     },
@@ -763,7 +828,7 @@ export function createGameRepository(pool: Pool): GameRepository {
         const participants = await client.query<ProjectionParticipantRow>(
           `select p.user_id,
                     coalesce(nullif(btrim(summary.display_name), ''), 'Игрок') as display_name,
-                    summary.photo_url, p.role, p.payment_state
+                    summary.photo_url, summary.level_label, p.role, p.payment_state
                from games.participations p
                left join profile.user_summaries summary
                  on summary.tenant_id = p.tenant_id and summary.user_id = p.user_id
@@ -857,7 +922,7 @@ export function createGameRepository(pool: Pool): GameRepository {
             userId: participant.user_id,
             displayName: participant.display_name,
             avatarUrl: participant.photo_url,
-            level: null,
+            level: participant.level_label,
             role: participant.role,
             paymentState: participant.payment_state,
           })),

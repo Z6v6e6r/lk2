@@ -402,6 +402,17 @@ export function persistVivaHomeSource(input: {
       fetchedAt: input.snapshot.fetchedAt,
       requiredInternalId: input.delegation.userId,
     });
+    const levelLabel = ['D', 'D+', 'C', 'C+', 'B', 'B+', 'A'].includes(
+      input.snapshot.profile.level.label,
+    )
+      ? input.snapshot.profile.level.label
+      : null;
+    await client.query(
+      `update profile.user_summaries
+          set level_label = $3, updated_at = now()
+        where tenant_id = $1 and user_id = $2`,
+      [input.delegation.tenantId, input.delegation.userId, levelLabel],
+    );
     if (input.profilePhoto) {
       await client.query(
         `update profile.user_summaries

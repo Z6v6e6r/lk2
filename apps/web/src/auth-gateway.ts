@@ -1,13 +1,21 @@
 import { ApiClientError, PadlHubApiClient } from '@phub/api-sdk';
 import type {
   AuthenticatedSession as ApiAuthenticatedSession,
+  BookingPreferences,
+  BookingPreferencesUpdateRequest,
+  BookingRecommendationPage,
   ClientRoutingPlan,
   CommunityMembershipPage,
+  GameCard,
+  GameCardPage,
+  GameCommandResult,
   HomeDashboard,
   LocationDetail,
   LocationList,
   NotificationInboxPage,
   PlayerProfileView,
+  PublicGameCardPage,
+  PublicGameFilters,
   ProfilePrivacySettings,
   ProfilePrivacyUpdateRequest,
   UserProfile,
@@ -18,13 +26,22 @@ import type {
   WebPushEndpointRegistration,
 } from '@phub/api-sdk';
 export type {
+  BookingPreferences,
+  BookingPreferencesUpdateRequest,
+  BookingRecommendationPage,
   ClientRoutingPlan,
   CommunityMembershipPage,
+  GameCard,
+  GameCardPage,
+  GameCommandResult,
   HomeDashboard,
   LocationDetail,
   LocationList,
   NotificationInboxPage,
   PlayerProfileView,
+  PublicGameCard,
+  PublicGameCardPage,
+  PublicGameFilters,
   ProfilePrivacySettings,
   ProfilePrivacyUpdateRequest,
   UserProfile,
@@ -104,8 +121,25 @@ export interface AuthGateway {
   readonly updateProfilePrivacy: (
     input: ProfilePrivacyUpdateRequest,
   ) => Promise<ProfilePrivacySettings>;
+  readonly getBookingPreferences: () => Promise<BookingPreferences>;
+  readonly updateBookingPreferences: (
+    input: BookingPreferencesUpdateRequest,
+  ) => Promise<BookingPreferences>;
   readonly getUpcomingBookings: () => Promise<UserUpcomingBookings>;
+  readonly listBookingRecommendations: (limit?: number) => Promise<BookingRecommendationPage>;
   readonly getHomeDashboard: () => Promise<HomeDashboard>;
+  readonly listPublicGames: (input?: PublicGameFilters) => Promise<PublicGameCardPage>;
+  readonly listMyGames: (input?: {
+    readonly scope?: 'UPCOMING' | 'HISTORY';
+    readonly limit?: number;
+    readonly cursor?: string;
+  }) => Promise<GameCardPage>;
+  readonly getGame: (gameId: string) => Promise<GameCard>;
+  readonly joinGame: (gameId: string, expectedRevision?: number) => Promise<GameCommandResult>;
+  readonly leaveGame: (gameId: string) => Promise<GameCommandResult>;
+  readonly joinGameWaitlist: (gameId: string) => Promise<GameCommandResult>;
+  readonly leaveGameWaitlist: (gameId: string) => Promise<GameCommandResult>;
+  readonly getGameOperation: (operationId: string) => Promise<GameCommandResult>;
   readonly listLocations: () => Promise<LocationList>;
   readonly getLocation: (locationId: string) => Promise<LocationDetail>;
   readonly listMyCommunities: (cursor?: string) => Promise<CommunityMembershipPage>;
@@ -173,6 +207,7 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
   let userProfilePromise: Promise<UserProfile> | undefined;
   const playerProfilePromises = new Map<string, Promise<PlayerProfileView>>();
   let profilePrivacyPromise: Promise<ProfilePrivacySettings> | undefined;
+  let bookingPreferencesPromise: Promise<BookingPreferences> | undefined;
   let upcomingBookingsPromise: Promise<UserUpcomingBookings> | undefined;
 
   async function applyVivaAccess(handoffCode?: string): Promise<string> {
@@ -347,6 +382,20 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       return settings;
     },
 
+    getBookingPreferences() {
+      bookingPreferencesPromise ??= client.getBookingPreferences().catch((error: unknown) => {
+        bookingPreferencesPromise = undefined;
+        throw error;
+      });
+      return bookingPreferencesPromise;
+    },
+
+    async updateBookingPreferences(input) {
+      const settings = await client.updateBookingPreferences(input);
+      bookingPreferencesPromise = Promise.resolve(settings);
+      return settings;
+    },
+
     getUpcomingBookings() {
       upcomingBookingsPromise ??= transportExecutor
         .executeRead({
@@ -363,6 +412,10 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       return upcomingBookingsPromise;
     },
 
+    listBookingRecommendations(limit = 6) {
+      return client.listBookingRecommendations(limit);
+    },
+
     getHomeDashboard() {
       if (homeDashboardPromise) return homeDashboardPromise;
       const request = client.getHomeDashboard().finally(() => {
@@ -370,6 +423,38 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       });
       homeDashboardPromise = request;
       return request;
+    },
+
+    listPublicGames(input = {}) {
+      return client.listPublicGames(input);
+    },
+
+    listMyGames(input = {}) {
+      return client.listMyGames(input);
+    },
+
+    getGame(gameId) {
+      return client.getGame(gameId);
+    },
+
+    joinGame(gameId, expectedRevision) {
+      return client.joinGame(gameId, expectedRevision);
+    },
+
+    leaveGame(gameId) {
+      return client.leaveGame(gameId);
+    },
+
+    joinGameWaitlist(gameId) {
+      return client.joinGameWaitlist(gameId);
+    },
+
+    leaveGameWaitlist(gameId) {
+      return client.leaveGameWaitlist(gameId);
+    },
+
+    getGameOperation(operationId) {
+      return client.getGameOperation(operationId);
     },
 
     listLocations() {
@@ -427,6 +512,7 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       userProfilePromise = undefined;
       playerProfilePromises.clear();
       profilePrivacyPromise = undefined;
+      bookingPreferencesPromise = undefined;
       upcomingBookingsPromise = undefined;
     },
   };

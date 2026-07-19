@@ -201,13 +201,18 @@ export async function listViewerGameCards(input: {
     ...(after ? { after: { startsAt: after.startsAt, gameId: after.gameId } } : {}),
   });
   const surface = input.scope === 'HISTORY' ? 'HISTORY' : 'MY_UPCOMING';
-  return {
-    items: page.items.map((projection) => ({
-      ...projectGameCard(projection.basePayload, {
+  const cards = page.items
+    .map((projection) =>
+      projectGameCard(projection.basePayload, {
         surface,
         now: input.now,
         viewerUserId: input.viewerUserId,
       }),
+    )
+    .filter((card) => card.viewerRelation !== 'NONE' && card.viewerRelation !== 'ANONYMOUS');
+  return {
+    items: cards.map((card) => ({
+      ...card,
       conversation: null,
     })),
     nextCursor: page.next ? encodeCursor({ v: 1, queryHash: hash, ...page.next }) : null,
@@ -223,15 +228,25 @@ export async function getViewerGameCard(input: {
 }): Promise<ViewerGameCard | undefined> {
   const projection = await input.repository.getCardProjection(input.tenantId, input.gameId);
   if (!projection) return undefined;
-  const surface =
-    projection.lifecycleState === 'FINISHED' || projection.lifecycleState === 'CANCELLED'
-      ? 'HISTORY'
-      : 'MY_UPCOMING';
+  const history =
+    projection.lifecycleState === 'FINISHED' || projection.lifecycleState === 'CANCELLED';
+  const relation = projectGameCard(projection.basePayload, {
+    surface: history ? 'HISTORY' : 'MY_UPCOMING',
+    now: input.now,
+    viewerUserId: input.viewerUserId,
+  }).viewerRelation;
+  if (
+    relation === 'ANONYMOUS' ||
+    (relation === 'NONE' &&
+      (projection.visibility !== 'PUBLIC' || projection.lifecycleState !== 'SCHEDULED'))
+  ) {
+    return undefined;
+  }
+  const surface = history ? 'HISTORY' : relation === 'NONE' ? 'DISCOVER' : 'MY_UPCOMING';
   const card = projectGameCard(projection.basePayload, {
     surface,
     now: input.now,
     viewerUserId: input.viewerUserId,
   });
-  if (card.viewerRelation === 'NONE' || card.viewerRelation === 'ANONYMOUS') return undefined;
   return { ...card, conversation: null };
 }

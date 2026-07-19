@@ -1,4 +1,6 @@
 import type {
+  BookingPreferences,
+  BookingPreferencesUpdateRequest,
   PlayerProfileView,
   ProfileActionCapability,
   ProfilePrivacySettings,
@@ -14,9 +16,241 @@ interface ProfilePageProps {
   readonly privacyBusy?: boolean;
   readonly privacyError?: string | null;
   readonly privacyNotice?: string | null;
+  readonly bookingPreferences?: BookingPreferences | null;
+  readonly bookingPreferencesBusy?: boolean;
+  readonly bookingPreferencesError?: string | null;
+  readonly bookingPreferencesNotice?: string | null;
+  readonly stationChoices?: readonly { readonly id: string; readonly name: string }[];
   readonly error?: string | null;
   readonly onSavePrivacy?: (input: ProfilePrivacyUpdateRequest) => void;
+  readonly onSaveBookingPreferences?: (input: BookingPreferencesUpdateRequest) => void;
   readonly onLogout: () => void;
+}
+
+const weekdayLabels: Readonly<
+  Record<BookingPreferences['preferredTimeWindows'][number]['weekday'], string>
+> = {
+  MON: 'Понедельник',
+  TUE: 'Вторник',
+  WED: 'Среда',
+  THU: 'Четверг',
+  FRI: 'Пятница',
+  SAT: 'Суббота',
+  SUN: 'Воскресенье',
+};
+
+function BookingPreferencesSettings({
+  settings,
+  stations,
+  busy,
+  error,
+  notice,
+  onSave,
+}: {
+  readonly settings?: BookingPreferences | null;
+  readonly stations: readonly { readonly id: string; readonly name: string }[];
+  readonly busy: boolean;
+  readonly error?: string | null;
+  readonly notice?: string | null;
+  readonly onSave?: (input: BookingPreferencesUpdateRequest) => void;
+}): React.JSX.Element {
+  return (
+    <section className="profile-booking-preferences" aria-labelledby="booking-preferences-title">
+      <div className="profile-section-heading">
+        <span>Рекомендации</span>
+        <h2 id="booking-preferences-title">Когда и где мне удобно</h2>
+      </div>
+      {!settings ? (
+        <p className="profile-privacy-loading" role={error ? 'alert' : 'status'}>
+          {error ?? 'Загружаем предпочтения…'}
+        </p>
+      ) : (
+        <BookingPreferencesForm
+          key={settings.version}
+          settings={settings}
+          stations={stations}
+          busy={busy}
+          {...(error !== undefined ? { error } : {})}
+          {...(notice !== undefined ? { notice } : {})}
+          {...(onSave !== undefined ? { onSave } : {})}
+        />
+      )}
+    </section>
+  );
+}
+
+function BookingPreferencesForm({
+  settings,
+  stations,
+  busy,
+  error,
+  notice,
+  onSave,
+}: {
+  readonly settings: BookingPreferences;
+  readonly stations: readonly { readonly id: string; readonly name: string }[];
+  readonly busy: boolean;
+  readonly error?: string | null;
+  readonly notice?: string | null;
+  readonly onSave?: (input: BookingPreferencesUpdateRequest) => void;
+}): React.JSX.Element {
+  const [favoriteStationIds, setFavoriteStationIds] = useState<readonly string[]>(
+    settings.favoriteStationIds,
+  );
+  const [preferredTimeWindows, setPreferredTimeWindows] = useState(settings.preferredTimeWindows);
+  const [useHistory, setUseHistory] = useState(settings.useHistory);
+  const serialized = JSON.stringify({ favoriteStationIds, preferredTimeWindows, useHistory });
+  const initial = JSON.stringify({
+    favoriteStationIds: settings.favoriteStationIds,
+    preferredTimeWindows: settings.preferredTimeWindows,
+    useHistory: settings.useHistory,
+  });
+
+  return (
+    <form
+      className="profile-booking-preferences-form"
+      onSubmit={(event) => {
+        event.preventDefault();
+        onSave?.({
+          expectedVersion: settings.version,
+          favoriteStationIds: [...favoriteStationIds],
+          preferredTimeWindows: [...preferredTimeWindows],
+          useHistory,
+        });
+      }}
+    >
+      <fieldset disabled={busy}>
+        <legend>Любимые станции</legend>
+        {stations.length === 0 ? (
+          <p>Станции появятся после загрузки доступных игр.</p>
+        ) : (
+          <div className="profile-station-options">
+            {stations.map((station) => {
+              const checked = favoriteStationIds.includes(station.id);
+              return (
+                <label key={station.id}>
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    disabled={!checked && favoriteStationIds.length >= 3}
+                    onChange={(event) =>
+                      setFavoriteStationIds((current) =>
+                        event.currentTarget.checked
+                          ? [...current, station.id]
+                          : current.filter((id) => id !== station.id),
+                      )
+                    }
+                  />
+                  <span>{station.name}</span>
+                </label>
+              );
+            })}
+          </div>
+        )}
+      </fieldset>
+
+      <fieldset disabled={busy}>
+        <legend>Удобное время</legend>
+        <div className="profile-time-windows">
+          {preferredTimeWindows.map((window, index) => (
+            <div key={`${window.weekday}-${window.startsAt}-${window.endsAt}-${index}`}>
+              <select
+                aria-label={`День для интервала ${index + 1}`}
+                value={window.weekday}
+                onChange={(event) =>
+                  setPreferredTimeWindows((current) =>
+                    current.map((item, itemIndex) =>
+                      itemIndex === index
+                        ? {
+                            ...item,
+                            weekday: event.currentTarget.value as typeof item.weekday,
+                          }
+                        : item,
+                    ),
+                  )
+                }
+              >
+                {Object.entries(weekdayLabels).map(([value, label]) => (
+                  <option value={value} key={value}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+              <input
+                type="time"
+                aria-label={`Начало интервала ${index + 1}`}
+                value={window.startsAt}
+                onChange={(event) =>
+                  setPreferredTimeWindows((current) =>
+                    current.map((item, itemIndex) =>
+                      itemIndex === index ? { ...item, startsAt: event.currentTarget.value } : item,
+                    ),
+                  )
+                }
+              />
+              <span>—</span>
+              <input
+                type="time"
+                aria-label={`Конец интервала ${index + 1}`}
+                value={window.endsAt}
+                onChange={(event) =>
+                  setPreferredTimeWindows((current) =>
+                    current.map((item, itemIndex) =>
+                      itemIndex === index ? { ...item, endsAt: event.currentTarget.value } : item,
+                    ),
+                  )
+                }
+              />
+              <button
+                type="button"
+                aria-label={`Удалить интервал ${index + 1}`}
+                onClick={() =>
+                  setPreferredTimeWindows((current) =>
+                    current.filter((_, itemIndex) => itemIndex !== index),
+                  )
+                }
+              >
+                ×
+              </button>
+            </div>
+          ))}
+        </div>
+        <button
+          className="profile-add-time-window"
+          type="button"
+          disabled={busy || preferredTimeWindows.length >= 14}
+          onClick={() =>
+            setPreferredTimeWindows((current) => [
+              ...current,
+              { weekday: 'MON', startsAt: '18:00', endsAt: '21:00' },
+            ])
+          }
+        >
+          Добавить интервал
+        </button>
+      </fieldset>
+
+      <label className="profile-privacy-toggle">
+        <span>
+          <strong>Учитывать историю игр</strong>
+          <small>Только завершённые игры за последние 180 дней</small>
+        </span>
+        <input
+          type="checkbox"
+          checked={useHistory}
+          disabled={busy}
+          onChange={(event) => setUseHistory(event.currentTarget.checked)}
+        />
+      </label>
+
+      <div className="profile-privacy-save-row">
+        <p role={error ? 'alert' : notice ? 'status' : undefined}>{error ?? notice}</p>
+        <button type="submit" disabled={busy || serialized === initial || !onSave}>
+          {busy ? 'Сохраняем…' : 'Сохранить'}
+        </button>
+      </div>
+    </form>
+  );
 }
 
 function initials(displayName: string): string {
@@ -192,8 +426,14 @@ export function ProfilePage({
   privacyBusy = false,
   privacyError,
   privacyNotice,
+  bookingPreferences,
+  bookingPreferencesBusy = false,
+  bookingPreferencesError,
+  bookingPreferencesNotice,
+  stationChoices = [],
   error,
   onSavePrivacy,
+  onSaveBookingPreferences,
   onLogout,
 }: ProfilePageProps): React.JSX.Element {
   const { profile, privateAccount, access } = view;
@@ -277,6 +517,18 @@ export function ProfilePage({
             />
           </div>
         </section>
+      ) : null}
+
+      {isSelf ? (
+        <BookingPreferencesSettings
+          key={bookingPreferences?.version ?? 'loading'}
+          {...(bookingPreferences !== undefined ? { settings: bookingPreferences } : {})}
+          stations={stationChoices}
+          busy={bookingPreferencesBusy}
+          {...(bookingPreferencesError !== undefined ? { error: bookingPreferencesError } : {})}
+          {...(bookingPreferencesNotice !== undefined ? { notice: bookingPreferencesNotice } : {})}
+          {...(onSaveBookingPreferences ? { onSave: onSaveBookingPreferences } : {})}
+        />
       ) : null}
 
       {isSelf ? (

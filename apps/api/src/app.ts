@@ -10,6 +10,7 @@ import { checkDatabaseReady } from '@phub/database';
 import type {
   ClientRoutingPlanRepository,
   AdminNotificationRepository,
+  BookingPreferencesRepository,
   HomeDashboardProjectionRepository,
   GameRosterRepository,
   GameRepository,
@@ -30,6 +31,8 @@ import { registerAuthRoutes } from './auth/auth-routes.js';
 import { registerAdminNotificationRoutes } from './admin/notification-admin-routes.js';
 import { registerLocationAdminRoutes } from './admin/location-admin-routes.js';
 import type { AuthService } from './auth/auth-service.js';
+import { registerBookingPreferenceRoutes } from './bookings/booking-preference-routes.js';
+import { registerBookingRecommendationRoutes } from './bookings/booking-recommendation-routes.js';
 import { registerCommunityRoutes } from './communities/community-routes.js';
 import { registerGameRoutes } from './games/game-routes.js';
 import { registerGameReadRoutes } from './games/game-read-routes.js';
@@ -81,7 +84,8 @@ export interface BuildAppOptions {
   readonly gameReadRepository?: Pick<
     GameRepository,
     'getCardProjection' | 'listPublicCardProjections' | 'listViewerCardProjections'
-  >;
+  > &
+    Partial<Pick<GameRepository, 'listRecommendationCardProjections'>>;
   readonly clientRoutingPlanRepository?: Pick<ClientRoutingPlanRepository, 'get'>;
   readonly notificationRepository?: NotificationInboxRepository;
   readonly notificationEndpointRepository?: NotificationEndpointRepository;
@@ -89,6 +93,7 @@ export interface BuildAppOptions {
   readonly adminNotificationRepository?: AdminNotificationRepository;
   readonly locationRepository?: LocationRepository;
   readonly profilePrivacyRepository?: ProfilePrivacyRepository;
+  readonly bookingPreferencesRepository?: BookingPreferencesRepository;
   readonly rateLimitRedis?: Redis;
 }
 
@@ -437,6 +442,20 @@ export async function buildApp(options: BuildAppOptions) {
     publicTenantHandlers: [resolvePublicTenant],
     authenticatedTenantHandlers: [authenticate, authorizeGamesPlayer, resolveTenant],
   });
+  registerBookingRecommendationRoutes(app as unknown as FastifyInstance, {
+    ...(options.gameReadRepository?.listRecommendationCardProjections
+      ? {
+          gameRepository: options.gameReadRepository as Pick<
+            GameRepository,
+            'listRecommendationCardProjections'
+          >,
+        }
+      : {}),
+    ...(options.bookingPreferencesRepository
+      ? { preferencesRepository: options.bookingPreferencesRepository }
+      : {}),
+    authenticatedTenantHandlers: [authenticate, authorizeGamesPlayer, resolveTenant],
+  });
   registerWebPushRoutes(app as unknown as FastifyInstance, {
     ...(options.notificationEndpointRepository
       ? { repository: options.notificationEndpointRepository }
@@ -479,6 +498,13 @@ export async function buildApp(options: BuildAppOptions) {
   });
   registerProfilePrivacyRoutes(app as unknown as FastifyInstance, {
     ...(options.profilePrivacyRepository ? { repository: options.profilePrivacyRepository } : {}),
+    authenticatedTenantHandlers: [authenticate, resolveTenant],
+    commandHandlers: [authenticate, resolveTenant, requireIdempotencyKey],
+  });
+  registerBookingPreferenceRoutes(app as unknown as FastifyInstance, {
+    ...(options.bookingPreferencesRepository
+      ? { repository: options.bookingPreferencesRepository }
+      : {}),
     authenticatedTenantHandlers: [authenticate, resolveTenant],
     commandHandlers: [authenticate, resolveTenant, requireIdempotencyKey],
   });

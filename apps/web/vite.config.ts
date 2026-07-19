@@ -10,6 +10,10 @@ export default defineConfig({
         target: process.env.PHUB_DEV_API_PROXY_TARGET ?? 'http://127.0.0.1:3000',
         changeOrigin: true,
       },
+      '/public/api': {
+        target: process.env.PHUB_DEV_API_PROXY_TARGET ?? 'http://127.0.0.1:3000',
+        changeOrigin: true,
+      },
     },
   },
   build: {
