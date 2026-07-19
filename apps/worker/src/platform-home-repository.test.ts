@@ -68,7 +68,8 @@ describe('platform Home source persistence', () => {
           },
         ];
       }
-      if (text.includes('from identity.users current_user')) {
+      if (text.includes('from identity.users identity_user')) {
+        expect(text).not.toMatch(/\bcurrent_user\./i);
         return [
           {
             roles: ['client', 'manager'],

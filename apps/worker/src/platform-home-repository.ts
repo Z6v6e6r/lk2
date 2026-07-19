@@ -194,13 +194,13 @@ export function synchronizePlatformHomeUser(input: {
       client.query<AccessRow>(
         `select coalesce(access.roles, array['client']::text[]) as roles,
                   coalesce(access.permissions, array['profile.read']::text[]) as permissions
-             from identity.users current_user
+             from identity.users identity_user
              left join identity.user_access_profiles access
-               on access.tenant_id = current_user.tenant_id
-              and access.user_id = current_user.id
-            where current_user.tenant_id = $1
-              and current_user.id = $2
-              and current_user.status = 'ACTIVE'`,
+               on access.tenant_id = identity_user.tenant_id
+              and access.user_id = identity_user.id
+            where identity_user.tenant_id = $1
+              and identity_user.id = $2
+              and identity_user.status = 'ACTIVE'`,
         [input.tenantId, input.userId],
       ),
       client.query<{ component_revision: string } & QueryResultRow>(
