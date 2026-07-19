@@ -182,6 +182,19 @@ Using a valid PadlHub user JWT, verify that `GET /user/api/v1/{tenantKey}/home` 
 external identifiers. Confirm that the browser performs one Home request and renders the same
 version.
 
+### Jetson staging activation
+
+The staging Compose file reads `/etc/phub/staging.env` first and an optional non-secret
+`/opt/phub/staging.override.env` second. The deploy workflow runs
+`deploy/jetson/activate-live-home.sh`, which writes only the Home/community/promotion feature gates
+to that override. Secrets remain exclusively in `/etc/phub/staging.env`.
+
+The activation is deliberately two-phase. It recreates the worker while Home reads stay on mock,
+then requires every active Viva delegation to receive fresh Viva, community and promotion source
+components and a fresh complete `LOCAL_PROJECTION` snapshot. Only after that database gate passes
+does it write `HOME_READ_MODE=projection` and recreate the API. If the gate times out, the script
+exits without recreating the API in projection mode.
+
 ## Failure and rollback
 
 - `HOME_PROJECTION_NOT_READY`: fill the tenant/user row; do not enable a mock fallback.

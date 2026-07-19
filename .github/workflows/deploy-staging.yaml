@@ -83,6 +83,7 @@ jobs:
         run: |
           scp deploy/compose.staging.yaml "phub-deploy@$HOST:/opt/phub/compose.yaml"
           scp deploy/jetson/nginx/default.conf "phub-deploy@$HOST:/opt/phub/nginx/default.conf"
+          scp deploy/jetson/activate-live-home.sh "phub-deploy@$HOST:/opt/phub/activate-live-home.sh"
           {
             echo "REGISTRY=ghcr.io/z6v6e6r"
             echo "WEB_IMAGE_DIGEST=$(cat digests/web)"
@@ -162,6 +163,10 @@ jobs:
               exit 1
             fi
           '
+      - name: Activate and verify live Home projection
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+        run: ssh "phub-deploy@$HOST" 'sh /opt/phub/activate-live-home.sh'
       - name: Verify the web entrypoint
         env:
           SMOKE_BASE_URL: ${{ vars.STAGING_BASE_URL }}

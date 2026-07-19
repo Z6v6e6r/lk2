@@ -2,7 +2,9 @@ name: phub-staging
 
 x-runtime: &runtime
   env_file:
-    - ${RUNTIME_ENV_FILE:-/etc/phub/staging.env}
+    - path: ${RUNTIME_ENV_FILE:-/etc/phub/staging.env}
+    - path: ${RUNTIME_OVERRIDE_ENV_FILE:-/opt/phub/staging.override.env}
+      required: false
   restart: unless-stopped
   networks:
     - application
