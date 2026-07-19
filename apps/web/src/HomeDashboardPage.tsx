@@ -34,6 +34,9 @@ const implementedMvpRoutes = new Set([
   '/games',
   '/communities',
   '/locations',
+  '/promotions',
+  '/gift-certificates',
+  '/offers',
 ]);
 
 function isImplementedMvpRoute(route: string): boolean {
@@ -142,55 +145,11 @@ function BottomNavIcon({ name }: { readonly name: BottomNavIconName }): React.JS
       );
     case 'create':
       return (
-        <svg width="88" height="72" viewBox="0 0 88 72" fill="none" aria-hidden="true">
-          <g filter="url(#fh-create-shadow)">
-            <rect x="16" y="16" width="56" height="40" rx="16" fill="#8766EB" />
-            <g className="fh-create-cross">
-              <path
-                d="M41.75 36.75H38C37.5858 36.75 37.25 36.4142 37.25 36C37.25 35.5858 37.5858 35.25 38 35.25H41.75V36.75Z"
-                fill="#FAFAFA"
-              />
-              <path
-                d="M50 35.25C50.4142 35.25 50.75 35.5858 50.75 36C50.75 36.4142 50.4142 36.75 50 36.75H43.25V35.25H50Z"
-                fill="#FAFAFA"
-              />
-              <path
-                d="M44.75 42C44.75 42.4142 44.4142 42.75 44 42.75C43.5858 42.75 43.25 42.4142 43.25 42V35.25H44.75V42Z"
-                fill="#FAFAFA"
-              />
-              <path
-                d="M44 29.25C44.4142 29.25 44.75 29.5858 44.75 30V33.75H43.25V30C43.25 29.5858 43.5858 29.25 44 29.25Z"
-                fill="#FAFAFA"
-              />
-            </g>
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <g className="fh-create-cross" fill="#FAFAFA">
+            <path d="M9.25 11.25H14.75V12.75H9.25V11.25Z" />
+            <path d="M11.25 8H12.75V16H11.25V8Z" />
           </g>
-          <defs>
-            <filter
-              id="fh-create-shadow"
-              x="0"
-              y="0"
-              width="88"
-              height="72"
-              filterUnits="userSpaceOnUse"
-              colorInterpolationFilters="sRGB"
-            >
-              <feFlood floodOpacity="0" result="BackgroundImageFix" />
-              <feColorMatrix
-                in="SourceAlpha"
-                type="matrix"
-                values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0"
-                result="hardAlpha"
-              />
-              <feOffset />
-              <feGaussianBlur stdDeviation="8" />
-              <feColorMatrix
-                type="matrix"
-                values="0 0 0 0 0.658824 0 0 0 0 0.556863 0 0 0 0 0.964706 0 0 0 0.16 0"
-              />
-              <feBlend mode="normal" in2="BackgroundImageFix" result="effect1_dropShadow" />
-              <feBlend mode="normal" in="SourceGraphic" in2="effect1_dropShadow" result="shape" />
-            </filter>
-          </defs>
         </svg>
       );
     case 'chat':
@@ -251,7 +210,9 @@ export function MainBottomNavigation({
         <BottomNavIcon name="games" />
       </a>
       <a className="fh-create" href="/games/new" aria-label="Создать игру">
-        <BottomNavIcon name="create" />
+        <span className="fh-create-button">
+          <BottomNavIcon name="create" />
+        </span>
       </a>
       <a
         href="/notifications"
@@ -637,20 +598,84 @@ function localDateKey(date: Date): string {
   return `${year}-${month}-${day}`;
 }
 
-function currentWeekDays(now: Date): readonly Date[] {
-  const monday = new Date(now);
-  const dayFromMonday = (monday.getDay() + 6) % 7;
-  monday.setHours(0, 0, 0, 0);
-  monday.setDate(monday.getDate() - dayFromMonday);
+function bookingCalendarDays(now: Date, weekOffset: number): readonly Date[] {
+  const firstDay = new Date(now);
+  firstDay.setHours(0, 0, 0, 0);
+  firstDay.setDate(firstDay.getDate() + weekOffset * 7);
   return Array.from({ length: 7 }, (_, index) => {
-    const day = new Date(monday);
-    day.setDate(monday.getDate() + index);
+    const day = new Date(firstDay);
+    day.setDate(firstDay.getDate() + index);
     return day;
   });
 }
 
+function participantAccent(level: string | null | undefined): string {
+  if (level?.startsWith('D')) return '#f0705f';
+  if (level?.startsWith('C')) return '#f0925f';
+  if (level?.startsWith('B')) return '#697ee8';
+  return '#8766eb';
+}
+
+function participantLabel(
+  participant: NonNullable<HomeUpcomingItem['participants']>[number],
+): string {
+  const fullName = [participant.firstName, participant.lastName].filter(Boolean).join(' ');
+  const nickname = participant.nickname
+    ? participant.nickname.startsWith('@')
+      ? participant.nickname
+      : `@${participant.nickname}`
+    : null;
+  return [fullName || participant.displayName, nickname].filter(Boolean).join(' · ');
+}
+
+function EventParticipants({
+  item,
+}: {
+  readonly item: HomeUpcomingItem;
+}): React.JSX.Element | null {
+  const participants = (item.participants ?? []).slice(0, 4);
+  // Home only renders the compact 2×2 roster: four fixed cells with either a player avatar
+  // or an empty-seat marker. Names and profile navigation belong to the game detail screen.
+  const openSlots = Math.max(0, 4 - participants.length);
+  if (participants.length === 0 && openSlots === 0) return null;
+
+  return (
+    <span className="fh-event__participants" aria-label="Участники записи">
+      {participants.map((participant, index) => {
+        const label = participantLabel(participant);
+        return (
+          <span
+            className="fh-event__participant"
+            key={participant.profileId ?? `${label}-${index}`}
+            aria-label={`${label}${participant.level ? `, уровень ${participant.level}` : ''}`}
+          >
+            <PlayerLevelAvatar
+              alt=""
+              accentColor={participantAccent(participant.level)}
+              level={participant.level ?? ''}
+              size={38}
+              src={participant.avatarUrl ?? null}
+              variant="participant"
+            />
+          </span>
+        );
+      })}
+      {Array.from({ length: openSlots }, (_, index) => (
+        <span
+          className="fh-event__open-slot"
+          key={`open-slot-${index}`}
+          aria-label="Свободное место"
+        >
+          +
+        </span>
+      ))}
+    </span>
+  );
+}
+
 function EventCard({ item }: { readonly item: HomeUpcomingItem }): React.JSX.Element {
   const startsAt = new Date(item.startsAt);
+  const hasParticipants = (item.participants?.length ?? 0) + (item.openSlots ?? 0) > 0;
   const content = (
     <>
       <time dateTime={item.startsAt}>
@@ -669,13 +694,19 @@ function EventCard({ item }: { readonly item: HomeUpcomingItem }): React.JSX.Ele
       </span>
     </>
   );
-  return isImplementedMvpRoute(item.route) ? (
-    <a className="fh-event" href={item.route}>
-      {content}
-    </a>
-  ) : (
-    <article className="fh-event" aria-label={item.title}>
-      {content}
+  return (
+    <article
+      className={hasParticipants ? 'fh-event has-participants' : 'fh-event'}
+      aria-label={item.title}
+    >
+      {isImplementedMvpRoute(item.route) ? (
+        <a className="fh-event__details-link" href={item.route}>
+          {content}
+        </a>
+      ) : (
+        content
+      )}
+      <EventParticipants item={item} />
     </article>
   );
 }
@@ -716,6 +747,11 @@ export function HomeDashboardPage({
     },
   ] as const;
   const [selectedDateKey, setSelectedDateKey] = useState<string | null>(null);
+  const [selectedBookingKind, setSelectedBookingKind] = useState<'all' | HomeUpcomingItem['kind']>(
+    'all',
+  );
+  const [calendarWeekOffset, setCalendarWeekOffset] = useState(0);
+  const calendarSwipeStartX = useRef<number | null>(null);
   const [bookingTab, setBookingTab] = useState<'MY' | 'FOR_ME'>('MY');
   const [bookingRecommendations, setBookingRecommendations] =
     useState<BookingRecommendationPage | null>(null);
@@ -723,13 +759,15 @@ export function HomeDashboardPage({
   const [bookingRecommendationsError, setBookingRecommendationsError] = useState<string | null>(
     null,
   );
-  const calendarDays = currentWeekDays(new Date());
+  const calendarDays = bookingCalendarDays(new Date(), calendarWeekOffset);
   const datesWithBookings = new Set(
     dashboard.upcoming.map((item) => localDateKey(new Date(item.startsAt))),
   );
-  const visibleUpcoming = selectedDateKey
-    ? dashboard.upcoming.filter((item) => localDateKey(new Date(item.startsAt)) === selectedDateKey)
-    : dashboard.upcoming;
+  const visibleUpcoming = dashboard.upcoming.filter(
+    (item) =>
+      (!selectedDateKey || localDateKey(new Date(item.startsAt)) === selectedDateKey) &&
+      (selectedBookingKind === 'all' || item.kind === selectedBookingKind),
+  );
   const balance = new Intl.NumberFormat('ru-RU').format(dashboard.profile.balanceMinor / 100);
 
   function showBookingRecommendations(): void {
@@ -843,7 +881,25 @@ export function HomeDashboardPage({
             {bookingTab === 'MY' ? (
               <>
                 <div className="fh-filters" aria-label="Фильтр записей по дате">
-                  <div className="fh-calendar">
+                  <div
+                    className="fh-calendar"
+                    onPointerDown={(event) => {
+                      calendarSwipeStartX.current = event.clientX;
+                    }}
+                    onPointerUp={(event) => {
+                      const startX = calendarSwipeStartX.current;
+                      calendarSwipeStartX.current = null;
+                      if (startX === null || Math.abs(event.clientX - startX) < 40) return;
+                      setCalendarWeekOffset((currentOffset) =>
+                        event.clientX < startX
+                          ? Math.min(2, currentOffset + 1)
+                          : Math.max(0, currentOffset - 1),
+                      );
+                    }}
+                    onPointerCancel={() => {
+                      calendarSwipeStartX.current = null;
+                    }}
+                  >
                     {calendarDays.map((day) => {
                       const dateKey = localDateKey(day);
                       const selected = selectedDateKey === dateKey;
@@ -863,15 +919,25 @@ export function HomeDashboardPage({
                       );
                     })}
                   </div>
-                  <div className="fh-filter-pills">
-                    <button
-                      className={selectedDateKey === null ? 'is-selected' : ''}
-                      type="button"
-                      aria-pressed={selectedDateKey === null}
-                      onClick={() => setSelectedDateKey(null)}
-                    >
-                      Все даты
-                    </button>
+                  <div className="fh-filter-pills" aria-label="Фильтр записей по типу">
+                    {(
+                      [
+                        ['all', 'Все'],
+                        ['game', 'Игры'],
+                        ['training', 'Тренировки'],
+                        ['tournament', 'Турниры'],
+                      ] as const
+                    ).map(([kind, label]) => (
+                      <button
+                        className={selectedBookingKind === kind ? 'is-selected' : ''}
+                        type="button"
+                        key={kind}
+                        aria-pressed={selectedBookingKind === kind}
+                        onClick={() => setSelectedBookingKind(kind)}
+                      >
+                        {label}
+                      </button>
+                    ))}
                   </div>
                 </div>
                 <div className="fh-divider" />
@@ -887,11 +953,13 @@ export function HomeDashboardPage({
                 ) : (
                   <div className="fh-bookings-empty" role="status">
                     <strong>
-                      {selectedDateKey ? 'На выбранную дату записей нет' : 'Ближайших записей нет'}
+                      {selectedDateKey || selectedBookingKind !== 'all'
+                        ? 'По выбранным фильтрам записей нет'
+                        : 'Ближайших записей нет'}
                     </strong>
                     <p>
-                      {selectedDateKey
-                        ? 'Выберите другой день или покажите все даты.'
+                      {selectedDateKey || selectedBookingKind !== 'all'
+                        ? 'Выберите другой день, тип записи или снимите фильтр даты повторным нажатием.'
                         : 'Когда появятся ближайшие записи, они отобразятся здесь.'}
                     </p>
                   </div>

@@ -8,6 +8,8 @@ import {
   vivaRefreshLockRedisKey,
 } from '@phub/auth/viva-delegation';
 import type { AppConfig } from '@phub/config';
+import { createLegacyGameImportRepository } from '@phub/database';
+import type { LegacyGamesMongoAdapter } from '@phub/legacy-games-adapter';
 import { VivaHomeSourceError, type VivaHomeSourceAdapter } from '@phub/viva-adapter';
 import type Redis from 'ioredis';
 import type { Logger } from 'pino';
@@ -32,6 +34,50 @@ export interface VivaHomeSyncCycleResult {
   readonly synced: number;
   readonly busy: number;
   readonly failed: number;
+}
+
+export interface VivaHomeLegacyGameRosterBridge {
+  /** Tenant selection is configuration, never inferred from a Viva or legacy document. */
+  readonly tenantKey: string;
+  readonly source: Pick<LegacyGamesMongoAdapter, 'readByVivaExerciseIds'>;
+}
+
+async function synchronizeLegacyGameRostersForHome(input: {
+  readonly pool: Pool;
+  readonly bridge: VivaHomeLegacyGameRosterBridge;
+  readonly snapshot: Awaited<ReturnType<VivaHomeSourceAdapter['read']>>;
+  readonly correlationId: string;
+  readonly now: Date;
+}): Promise<{ readonly imported: number; readonly synced: number; readonly conflicts: number }> {
+  const exerciseExternalIds = input.snapshot.upcoming.flatMap((item) =>
+    item.exerciseExternalId ? [item.exerciseExternalId] : [],
+  );
+  if (exerciseExternalIds.length === 0) return { imported: 0, synced: 0, conflicts: 0 };
+
+  const snapshots = await input.bridge.source.readByVivaExerciseIds({
+    exerciseExternalIds,
+    limit: Math.min(25, Math.max(1, exerciseExternalIds.length)),
+  });
+  if (snapshots.length === 0) return { imported: 0, synced: 0, conflicts: 0 };
+
+  const repository = createLegacyGameImportRepository(input.pool);
+  const imported = await repository.importSnapshots({
+    tenantKey: input.bridge.tenantKey,
+    snapshots,
+    correlationId: input.correlationId,
+    now: input.now,
+  });
+  const rosterSync = await repository.synchronizeParticipants({
+    tenantKey: input.bridge.tenantKey,
+    snapshots,
+    correlationId: input.correlationId,
+    now: input.now,
+  });
+  return {
+    imported: imported.imported.length,
+    synced: rosterSync.synced.length,
+    conflicts: rosterSync.conflicts,
+  };
 }
 
 function failureCode(error: unknown): string {
@@ -113,6 +159,11 @@ export async function runVivaHomeSyncCycle(input: {
   readonly provider: VivaOAuthProviderPort;
   readonly getAdapter: (providerTenantKey: string) => VivaHomeSourceAdapter;
   readonly profilePhotoStore: ProfilePhotoObjectStore;
+  /**
+   * Optional staging bridge: Viva first proves the viewer booking, then the server reads just
+   * the matching legacy Game roster and writes it into the canonical aggregate before Home.
+   */
+  readonly legacyGameRosterBridge?: VivaHomeLegacyGameRosterBridge;
   readonly now?: Date;
 }): Promise<VivaHomeSyncCycleResult> {
   if (!input.config.HOME_VIVA_SYNC_ENABLED) {
@@ -160,6 +211,26 @@ export async function runVivaHomeSyncCycle(input: {
           accessToken: refreshed.accessToken,
           correlationId,
         });
+        if (input.legacyGameRosterBridge) {
+          const rosterResult = await synchronizeLegacyGameRostersForHome({
+            pool: input.pool,
+            bridge: input.legacyGameRosterBridge,
+            snapshot,
+            correlationId,
+            now,
+          });
+          if (rosterResult.imported > 0 || rosterResult.synced > 0 || rosterResult.conflicts > 0) {
+            input.logger.info(
+              {
+                tenantId: delegation.tenantId,
+                userId: delegation.userId,
+                correlationId,
+                ...rosterResult,
+              },
+              'legacy Game roster synchronized before Home projection',
+            );
+          }
+        }
         const profilePhoto = await synchronizeVivaProfilePhoto({
           pool: input.pool,
           store: input.profilePhotoStore,

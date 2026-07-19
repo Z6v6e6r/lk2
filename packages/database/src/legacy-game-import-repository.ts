@@ -12,6 +12,7 @@ import type { Pool, PoolClient, QueryResultRow } from 'pg';
 import { queryOne, withTenantTransaction } from './connection.js';
 
 const EXTERNAL_SYSTEM = 'LK_LEGACY_SNAPSHOT';
+const VIVA_EXTERNAL_SYSTEM = 'VIVA';
 
 export interface LegacyGameImportParticipant {
   readonly externalId: string;
@@ -24,6 +25,8 @@ export interface LegacyGameImportParticipant {
 export interface LegacyGameImportSnapshot {
   readonly externalId: string;
   readonly externalVersion: string;
+  /** Integration-only VIVA exercise key. It must never reach a Games or Home DTO. */
+  readonly vivaExerciseExternalId: string | null;
   readonly title: string;
   readonly kind: GameKind;
   readonly visibility: GameVisibility;
@@ -53,6 +56,15 @@ export interface LegacyGameImportResult {
   readonly skipped: number;
 }
 
+export interface LegacyGameParticipantSyncResult {
+  readonly tenantId: string;
+  readonly synced: readonly { readonly gameId: string; readonly projectionEventId: string }[];
+  readonly bootstrapped: number;
+  readonly unchanged: number;
+  readonly conflicts: number;
+  readonly skipped: number;
+}
+
 export interface LegacyGameImportRepository {
   importSnapshots(input: {
     readonly tenantKey: string;
@@ -60,6 +72,17 @@ export interface LegacyGameImportRepository {
     readonly correlationId: string;
     readonly now?: Date;
   }): Promise<LegacyGameImportResult>;
+  /**
+   * Mirrors an imported roster only while its canonical aggregate still has the revision that
+   * the previous mirror run wrote. A local command therefore produces a durable conflict instead
+   * of being overwritten by the old LK source.
+   */
+  synchronizeParticipants(input: {
+    readonly tenantKey: string;
+    readonly snapshots: readonly LegacyGameImportSnapshot[];
+    readonly correlationId: string;
+    readonly now?: Date;
+  }): Promise<LegacyGameParticipantSyncResult>;
 }
 
 interface TenantRow extends QueryResultRow {
@@ -68,6 +91,28 @@ interface TenantRow extends QueryResultRow {
 
 interface MappingRow extends QueryResultRow {
   readonly internal_id: string;
+  readonly external_version?: string | null;
+}
+
+interface LegacyGameRow extends QueryResultRow {
+  readonly id: string;
+  readonly revision: string | number;
+  readonly organizer_user_id: string;
+  readonly lifecycle_state: GameLifecycleState;
+}
+
+interface ActiveParticipantRow extends QueryResultRow {
+  readonly id: string;
+  readonly user_id: string;
+  readonly role: 'ORGANIZER' | 'PLAYER';
+  readonly payment_state: 'NOT_REQUIRED' | 'PAID';
+  readonly external_id: string | null;
+}
+
+interface RosterSyncStateRow extends QueryResultRow {
+  readonly source_external_version: string;
+  readonly last_synced_game_revision: string | number;
+  readonly mode: 'MIRROR' | 'CONFLICT' | 'DISABLED';
 }
 
 function cleanText(value: string, maxLength: number, fallback: string): string {
@@ -125,6 +170,52 @@ async function insertMapping(
       input.entityType,
       input.internalId,
       input.externalId,
+      input.externalVersion,
+    ],
+  );
+}
+
+async function associateVivaExercise(
+  client: PoolClient,
+  input: {
+    readonly tenantId: string;
+    readonly gameId: string;
+    readonly vivaExerciseExternalId: string | null;
+    readonly externalVersion: string;
+  },
+): Promise<void> {
+  if (!input.vivaExerciseExternalId) return;
+  const existing = await queryOne<MappingRow>(
+    client,
+    `select internal_id
+       from integration.external_entity_map
+      where tenant_id = $1 and external_system = $2 and entity_type = 'exercise' and external_id = $3
+      for update`,
+    [input.tenantId, VIVA_EXTERNAL_SYSTEM, input.vivaExerciseExternalId],
+  );
+  if (existing && existing.internal_id !== input.gameId) {
+    throw new Error('VIVA_EXERCISE_GAME_ASSOCIATION_CONFLICT');
+  }
+  if (existing) {
+    await client.query(
+      `update integration.external_entity_map
+          set external_version = $4, last_synced_at = now(), sync_status = 'synced',
+              sync_error_code = null
+        where tenant_id = $1 and external_system = $2 and entity_type = 'exercise' and external_id = $3`,
+      [input.tenantId, VIVA_EXTERNAL_SYSTEM, input.vivaExerciseExternalId, input.externalVersion],
+    );
+    return;
+  }
+  await client.query(
+    `insert into integration.external_entity_map (
+       tenant_id, external_system, entity_type, internal_id, external_id,
+       external_version, last_synced_at, sync_status, sync_error_code
+     ) values ($1, $2, 'exercise', $3, $4, $5, now(), 'synced', null)`,
+    [
+      input.tenantId,
+      VIVA_EXTERNAL_SYSTEM,
+      input.gameId,
+      input.vivaExerciseExternalId,
       input.externalVersion,
     ],
   );
@@ -245,6 +336,12 @@ async function importOne(
       input.snapshot.externalId,
     );
     if (existingGameId) {
+      await associateVivaExercise(client, {
+        tenantId: input.tenantId,
+        gameId: existingGameId,
+        vivaExerciseExternalId: input.snapshot.vivaExerciseExternalId,
+        externalVersion: input.snapshot.externalVersion,
+      });
       return { outcome: 'existing', gameId: existingGameId, projectionEventId: randomUUID() };
     }
 
@@ -318,6 +415,12 @@ async function importOne(
       entityType: 'game',
       internalId: gameId,
       externalId: input.snapshot.externalId,
+      externalVersion: input.snapshot.externalVersion,
+    });
+    await associateVivaExercise(client, {
+      tenantId: input.tenantId,
+      gameId,
+      vivaExerciseExternalId: input.snapshot.vivaExerciseExternalId,
       externalVersion: input.snapshot.externalVersion,
     });
 
@@ -410,6 +513,326 @@ async function importOne(
   });
 }
 
+function participantFingerprint(input: {
+  readonly externalId: string;
+  readonly role: 'ORGANIZER' | 'PLAYER';
+  readonly paymentState: 'NOT_REQUIRED' | 'PAID';
+}): string {
+  return `${input.externalId}\u0000${input.role}\u0000${input.paymentState}`;
+}
+
+function sameRoster(
+  current: readonly ActiveParticipantRow[],
+  snapshot: LegacyGameImportSnapshot,
+): boolean {
+  if (current.some((item) => !item.external_id)) return false;
+  const currentRoster = current
+    .map((item) =>
+      participantFingerprint({
+        externalId: item.external_id as string,
+        role: item.role,
+        paymentState: item.payment_state,
+      }),
+    )
+    .sort();
+  const sourceRoster = snapshot.participants
+    .map((item) =>
+      participantFingerprint({
+        externalId: item.externalId,
+        role: item.externalId === snapshot.organizerExternalId ? 'ORGANIZER' : 'PLAYER',
+        paymentState: item.paymentState,
+      }),
+    )
+    .sort();
+  return (
+    currentRoster.length === sourceRoster.length &&
+    currentRoster.every((item, i) => item === sourceRoster[i])
+  );
+}
+
+async function recordRosterConflict(
+  client: PoolClient,
+  input: {
+    readonly tenantId: string;
+    readonly gameId: string;
+    readonly sourceExternalVersion: string;
+    readonly currentRevision: number;
+    readonly code:
+      'LEGACY_GAME_ROSTER_BASELINE_MISMATCH' | 'LEGACY_GAME_ROSTER_LOCAL_REVISION_CHANGED';
+    readonly correlationId: string;
+  },
+): Promise<void> {
+  await client.query(
+    `insert into integration.legacy_game_roster_sync_state (
+       tenant_id, game_id, source_external_version, last_synced_game_revision,
+       mode, conflict_code, last_synced_at, updated_at
+     ) values ($1, $2, $3, $4, 'CONFLICT', $5, now(), now())
+     on conflict (tenant_id, game_id) do update set
+       mode = 'CONFLICT', conflict_code = excluded.conflict_code,
+       source_external_version = excluded.source_external_version,
+       updated_at = now()`,
+    [input.tenantId, input.gameId, input.sourceExternalVersion, input.currentRevision, input.code],
+  );
+  await client.query(
+    `update integration.external_entity_map
+        set sync_status = 'conflict', sync_error_code = $4, last_synced_at = now()
+      where tenant_id = $1 and external_system = $2 and entity_type = 'game' and internal_id = $3`,
+    [input.tenantId, EXTERNAL_SYSTEM, input.gameId, input.code],
+  );
+  await client.query(
+    `insert into audit.audit_log (
+       tenant_id, actor_id, action, resource_type, resource_id, result, reason, correlation_id,
+       new_value
+     ) values ($1, null, 'LEGACY_GAME_ROSTER_SYNC_QUARANTINED', 'GAME', $2,
+               'CONFLICT', $3, $4, $5::jsonb)`,
+    [
+      input.tenantId,
+      input.gameId,
+      input.code,
+      input.correlationId,
+      JSON.stringify({ currentRevision: input.currentRevision }),
+    ],
+  );
+}
+
+async function synchronizeOne(
+  pool: Pool,
+  input: {
+    readonly tenantId: string;
+    readonly snapshot: LegacyGameImportSnapshot;
+    readonly correlationId: string;
+    readonly now: Date;
+  },
+): Promise<
+  | { readonly outcome: 'synced'; readonly gameId: string; readonly projectionEventId: string }
+  | { readonly outcome: 'bootstrapped' | 'unchanged' | 'conflict' | 'skipped' }
+> {
+  return withTenantTransaction(pool, input.tenantId, async (client) => {
+    const mapping = await queryOne<MappingRow>(
+      client,
+      `select internal_id, external_version
+         from integration.external_entity_map
+        where tenant_id = $1 and external_system = $2 and entity_type = 'game' and external_id = $3
+        for update`,
+      [input.tenantId, EXTERNAL_SYSTEM, input.snapshot.externalId],
+    );
+    if (!mapping) return { outcome: 'skipped' };
+    const game = await queryOne<LegacyGameRow>(
+      client,
+      `select id, revision, organizer_user_id, lifecycle_state
+         from games.games where tenant_id = $1 and id = $2 for update`,
+      [input.tenantId, mapping.internal_id],
+    );
+    if (!game || game.lifecycle_state !== 'SCHEDULED') return { outcome: 'skipped' };
+    const currentRevision = Number(game.revision);
+    const currentParticipants = await client.query<ActiveParticipantRow>(
+      `select p.id, p.user_id, p.role, p.payment_state, player.external_id
+         from games.participations p
+         left join integration.external_entity_map player
+           on player.tenant_id = p.tenant_id and player.external_system = $3
+          and player.entity_type = 'game_player' and player.internal_id = p.user_id
+        where p.tenant_id = $1 and p.game_id = $2 and p.state = 'ACTIVE'
+        order by p.joined_at, p.id
+        for update of p`,
+      [input.tenantId, game.id, EXTERNAL_SYSTEM],
+    );
+    const state = await queryOne<RosterSyncStateRow>(
+      client,
+      `select source_external_version, last_synced_game_revision, mode
+         from integration.legacy_game_roster_sync_state
+        where tenant_id = $1 and game_id = $2 for update`,
+      [input.tenantId, game.id],
+    );
+    if (!state) {
+      // Never take ownership of an old imported game whose source has already drifted: an
+      // operator must reconcile it explicitly. Fresh imports have matching fingerprints.
+      if (
+        mapping.external_version !== input.snapshot.externalVersion ||
+        !sameRoster(currentParticipants.rows, input.snapshot)
+      ) {
+        await recordRosterConflict(client, {
+          tenantId: input.tenantId,
+          gameId: game.id,
+          sourceExternalVersion: input.snapshot.externalVersion,
+          currentRevision,
+          code: 'LEGACY_GAME_ROSTER_BASELINE_MISMATCH',
+          correlationId: input.correlationId,
+        });
+        return { outcome: 'conflict' };
+      }
+      await client.query(
+        `insert into integration.legacy_game_roster_sync_state (
+           tenant_id, game_id, source_external_version, last_synced_game_revision, mode,
+           conflict_code, last_synced_at, updated_at
+         ) values ($1, $2, $3, $4, 'MIRROR', null, now(), now())`,
+        [input.tenantId, game.id, input.snapshot.externalVersion, currentRevision],
+      );
+      return { outcome: 'bootstrapped' };
+    }
+    if (state.mode !== 'MIRROR') return { outcome: 'conflict' };
+    if (Number(state.last_synced_game_revision) !== currentRevision) {
+      await recordRosterConflict(client, {
+        tenantId: input.tenantId,
+        gameId: game.id,
+        sourceExternalVersion: input.snapshot.externalVersion,
+        currentRevision,
+        code: 'LEGACY_GAME_ROSTER_LOCAL_REVISION_CHANGED',
+        correlationId: input.correlationId,
+      });
+      return { outcome: 'conflict' };
+    }
+    if (state.source_external_version === input.snapshot.externalVersion)
+      return { outcome: 'unchanged' };
+
+    const sourceUsers = new Map<
+      string,
+      { userId: string; participant: LegacyGameImportParticipant }
+    >();
+    for (const participant of input.snapshot.participants) {
+      sourceUsers.set(participant.externalId, {
+        userId: await resolvePlayer(
+          client,
+          input.tenantId,
+          participant,
+          input.snapshot.externalVersion,
+        ),
+        participant,
+      });
+    }
+    const organizer = sourceUsers.get(input.snapshot.organizerExternalId);
+    if (!organizer) throw new Error('LEGACY_GAME_ORGANIZER_MAPPING_MISSING');
+    const sourceByUserId = new Map(
+      [...sourceUsers.values()].map((item) => [item.userId, item.participant]),
+    );
+    const activeByUserId = new Map(currentParticipants.rows.map((item) => [item.user_id, item]));
+    for (const participant of currentParticipants.rows) {
+      if (sourceByUserId.has(participant.user_id)) continue;
+      await client.query(
+        `update games.participations
+            set state = 'LEFT', left_at = $4, updated_at = $4
+          where tenant_id = $1 and game_id = $2 and id = $3 and state = 'ACTIVE'`,
+        [input.tenantId, game.id, participant.id, input.now.toISOString()],
+      );
+    }
+    // The partial unique organizer index requires demoting a previous organizer before a new
+    // organizer can be promoted in the same mirror transaction.
+    await client.query(
+      `update games.participations set role = 'PLAYER', updated_at = $4
+        where tenant_id = $1 and game_id = $2 and user_id <> $3
+          and state = 'ACTIVE' and role = 'ORGANIZER'`,
+      [input.tenantId, game.id, organizer.userId, input.now.toISOString()],
+    );
+    for (const { userId, participant } of sourceUsers.values()) {
+      const current = activeByUserId.get(userId);
+      const role: 'ORGANIZER' | 'PLAYER' =
+        participant.externalId === input.snapshot.organizerExternalId ? 'ORGANIZER' : 'PLAYER';
+      if (!current) {
+        await client.query(
+          `insert into games.participations (
+             tenant_id, game_id, user_id, role, state, payment_state, joined_at, updated_at
+           ) values ($1, $2, $3, $4, 'ACTIVE', $5, $6, $6)`,
+          [
+            input.tenantId,
+            game.id,
+            userId,
+            role,
+            participant.paymentState,
+            input.now.toISOString(),
+          ],
+        );
+      } else {
+        await client.query(
+          `update games.participations set role = $4, payment_state = $5, updated_at = $6
+            where tenant_id = $1 and game_id = $2 and id = $3`,
+          [
+            input.tenantId,
+            game.id,
+            current.id,
+            role,
+            participant.paymentState,
+            input.now.toISOString(),
+          ],
+        );
+      }
+    }
+    const updatedGame = await queryOne<{ revision: string | number }>(
+      client,
+      `update games.games
+          set organizer_user_id = $3, revision = revision + 1, updated_at = $4
+        where tenant_id = $1 and id = $2
+        returning revision`,
+      [input.tenantId, game.id, organizer.userId, input.now.toISOString()],
+    );
+    if (!updatedGame) throw new Error('LEGACY_GAME_ROSTER_GAME_UPDATE_FAILED');
+    const nextRevision = Number(updatedGame.revision);
+    await client.query(
+      `update integration.external_entity_map
+          set external_version = $5, last_synced_at = now(), sync_status = 'synced', sync_error_code = null
+        where tenant_id = $1 and external_system = $2 and entity_type = 'game' and internal_id = $3
+          and external_id = $4`,
+      [
+        input.tenantId,
+        EXTERNAL_SYSTEM,
+        game.id,
+        input.snapshot.externalId,
+        input.snapshot.externalVersion,
+      ],
+    );
+    await client.query(
+      `update integration.legacy_game_roster_sync_state
+          set source_external_version = $3, last_synced_game_revision = $4,
+              last_synced_at = now(), updated_at = now()
+        where tenant_id = $1 and game_id = $2 and mode = 'MIRROR'`,
+      [input.tenantId, game.id, input.snapshot.externalVersion, nextRevision],
+    );
+    const projectionEventId = randomUUID();
+    const event = gameDomainEventSchema.parse({
+      id: projectionEventId,
+      type: 'game.scheduled.v1',
+      aggregateId: game.id,
+      tenantId: input.tenantId,
+      occurredAt: input.now.toISOString(),
+      correlationId: input.correlationId,
+      payload: {
+        gameId: game.id,
+        aggregateRevision: String(nextRevision),
+        causationId: projectionEventId,
+        actorUserId: null,
+        organizerUserId: organizer.userId,
+      },
+    });
+    await client.query(
+      `insert into audit.outbox_events (
+         id, tenant_id, event_type, aggregate_id, correlation_id, payload, occurred_at
+       ) values ($1, $2, $3, $4, $5, $6::jsonb, $7)`,
+      [
+        event.id,
+        event.tenantId,
+        event.type,
+        event.aggregateId,
+        event.correlationId,
+        JSON.stringify(event.payload),
+        event.occurredAt,
+      ],
+    );
+    await client.query(
+      `insert into audit.audit_log (
+         tenant_id, actor_id, action, resource_type, resource_id, result, reason, correlation_id,
+         old_value, new_value
+       ) values ($1, null, 'GAME_PARTICIPANTS_SYNCED_FROM_LEGACY_SNAPSHOT', 'GAME', $2,
+                 'SUCCESS', 'MIRROR', $3, $4::jsonb, $5::jsonb)`,
+      [
+        input.tenantId,
+        game.id,
+        input.correlationId,
+        JSON.stringify({ activeParticipantCount: currentParticipants.rows.length }),
+        JSON.stringify({ activeParticipantCount: sourceUsers.size, revision: nextRevision }),
+      ],
+    );
+    return { outcome: 'synced', gameId: game.id, projectionEventId };
+  });
+}
+
 export function createLegacyGameImportRepository(pool: Pool): LegacyGameImportRepository {
   return {
     async importSnapshots(input) {
@@ -441,6 +864,38 @@ export function createLegacyGameImportRepository(pool: Pool): LegacyGameImportRe
         }
       }
       return { tenantId: tenant.id, imported, existing, skipped };
+    },
+
+    async synchronizeParticipants(input) {
+      const tenant = (
+        await pool.query<TenantRow>(
+          `select id from identity.tenants where tenant_key = $1 and active = true`,
+          [input.tenantKey],
+        )
+      ).rows[0];
+      if (!tenant) throw new Error('LEGACY_GAME_IMPORT_TENANT_NOT_FOUND');
+      if (!input.correlationId.trim() || input.correlationId.length < 8) {
+        throw new Error('LEGACY_GAME_IMPORT_CORRELATION_ID_INVALID');
+      }
+      const synced: { gameId: string; projectionEventId: string }[] = [];
+      let bootstrapped = 0;
+      let unchanged = 0;
+      let conflicts = 0;
+      let skipped = 0;
+      for (const snapshot of input.snapshots) {
+        const result = await synchronizeOne(pool, {
+          tenantId: tenant.id,
+          snapshot,
+          correlationId: input.correlationId,
+          now: input.now ?? new Date(),
+        });
+        if (result.outcome === 'synced') synced.push(result);
+        else if (result.outcome === 'bootstrapped') bootstrapped += 1;
+        else if (result.outcome === 'unchanged') unchanged += 1;
+        else if (result.outcome === 'conflict') conflicts += 1;
+        else skipped += 1;
+      }
+      return { tenantId: tenant.id, synced, bootstrapped, unchanged, conflicts, skipped };
     },
   };
 }

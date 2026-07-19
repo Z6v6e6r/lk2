@@ -1,5 +1,10 @@
 .root {
   --player-level-avatar-scale: 1;
+  --player-level-avatar-accent: #8766eb;
+  --player-level-avatar-segment: rgba(255, 255, 255, 0.24);
+  --player-level-avatar-segment-active: #fafafa;
+  --player-level-avatar-badge-background: #fafafa;
+  --player-level-avatar-badge-color: #1f1e20;
 
   position: relative;
   display: block;
@@ -28,11 +33,11 @@
 }
 
 .segment {
-  fill: rgba(255, 255, 255, 0.24);
+  fill: var(--player-level-avatar-segment);
 }
 
 .segmentActive {
-  fill: #fafafa;
+  fill: var(--player-level-avatar-segment-active);
 }
 
 .photoFrame {
@@ -96,9 +101,9 @@
   padding: 0 calc(4px * var(--player-level-avatar-scale));
 
   border-radius: calc(44px * var(--player-level-avatar-scale));
-  background: #fafafa;
+  background: var(--player-level-avatar-badge-background);
 
-  color: #1f1e20;
+  color: var(--player-level-avatar-badge-color);
   font-family: 'RF Dewi', sans-serif;
   font-size: calc(9px * var(--player-level-avatar-scale));
   font-weight: 700;
@@ -107,4 +112,11 @@
   white-space: nowrap;
 
   transform: translateX(-50%);
+}
+
+.participant {
+  --player-level-avatar-segment: rgba(18, 18, 18, 0.1);
+  --player-level-avatar-segment-active: var(--player-level-avatar-accent);
+  --player-level-avatar-badge-background: var(--player-level-avatar-accent);
+  --player-level-avatar-badge-color: #fafafa;
 }

@@ -37,6 +37,15 @@ interface MappingRow extends QueryResultRow {
   readonly internal_id: string;
 }
 
+interface CanonicalOpenGameRosterRow extends QueryResultRow {
+  readonly exercise_external_id: string;
+  readonly capacity: number;
+  readonly profile_id: string;
+  readonly display_name: string;
+  readonly photo_url: string | null;
+  readonly level_label: string | null;
+}
+
 interface RevisionRow extends QueryResultRow {
   readonly source_revision: string;
   readonly payload_checksum: string;
@@ -326,12 +335,101 @@ async function resolveInternalId(input: {
   return row.internal_id;
 }
 
+type HomeParticipant = {
+  readonly profileId: string;
+  readonly displayName: string;
+  readonly firstName: string;
+  readonly lastName: string | null;
+  readonly nickname: null;
+  readonly avatarUrl: string | null;
+  readonly level: string | null;
+};
+
+interface CanonicalOpenGameRoster {
+  readonly participants: HomeParticipant[];
+  readonly openSlots: number;
+}
+
+function nameParts(displayName: string): {
+  readonly firstName: string;
+  readonly lastName: string | null;
+} {
+  const [firstName, ...rest] = displayName.trim().split(/\s+/);
+  return { firstName: firstName || displayName, lastName: rest.length ? rest.join(' ') : null };
+}
+
+/**
+ * Resolves a VIVA exercise only through the server-side integration map. The returned roster is
+ * owned by the local Games aggregate; it intentionally contains no external IDs, payment data,
+ * phones or provider image source URLs.
+ */
+async function resolveCanonicalOpenGameRosters(input: {
+  readonly client: PoolClient;
+  readonly tenantId: string;
+  readonly exerciseExternalIds: readonly string[];
+}): Promise<ReadonlyMap<string, CanonicalOpenGameRoster>> {
+  const exerciseExternalIds = [...new Set(input.exerciseExternalIds)].slice(0, 6);
+  if (exerciseExternalIds.length === 0) return new Map();
+  const rows = await input.client.query<CanonicalOpenGameRosterRow>(
+    `select e.external_id as exercise_external_id, g.capacity, p.user_id as profile_id,
+            s.display_name, s.photo_url, s.level_label
+       from integration.external_entity_map e
+       join games.games g
+         on g.tenant_id = e.tenant_id and g.id = e.internal_id
+       join games.participations p
+         on p.tenant_id = g.tenant_id and p.game_id = g.id and p.state = 'ACTIVE'
+       join profile.user_summaries s
+         on s.tenant_id = p.tenant_id and s.user_id = p.user_id
+      where e.tenant_id = $1
+        and e.external_system = 'VIVA'
+        and e.entity_type = 'exercise'
+        and e.external_id = any($2::text[])
+        and g.lifecycle_state in ('SCHEDULED', 'IN_PROGRESS')
+      order by e.external_id, p.joined_at, p.user_id`,
+    [input.tenantId, exerciseExternalIds],
+  );
+  const rosters = new Map<string, { capacity: number; participants: HomeParticipant[] }>();
+  for (const row of rows.rows) {
+    const displayName = row.display_name.trim().slice(0, 200);
+    if (!displayName) continue;
+    const entry = rosters.get(row.exercise_external_id) ?? {
+      capacity: Math.min(4, Math.max(0, row.capacity)),
+      participants: [],
+    };
+    if (entry.participants.length < 4) {
+      const names = nameParts(displayName);
+      entry.participants.push({
+        profileId: row.profile_id,
+        displayName,
+        firstName: names.firstName.slice(0, 100),
+        lastName: names.lastName?.slice(0, 100) ?? null,
+        nickname: null,
+        avatarUrl: row.photo_url,
+        level: row.level_label,
+      });
+    }
+    rosters.set(row.exercise_external_id, entry);
+  }
+  return new Map(
+    [...rosters.entries()]
+      .filter(([, roster]) => roster.participants.length > 0)
+      .map(([exerciseExternalId, roster]) => [
+        exerciseExternalId,
+        {
+          participants: roster.participants,
+          openSlots: Math.max(0, roster.capacity - roster.participants.length),
+        },
+      ]),
+  );
+}
+
 function asHomeValues(input: {
   readonly userId: string;
   readonly snapshot: VivaHomeSourceSnapshot;
   readonly avatarUrl: string | null;
   readonly bookingIds: ReadonlyMap<string, string>;
   readonly subscriptionIds: ReadonlyMap<string, string>;
+  readonly gameRosters: ReadonlyMap<string, CanonicalOpenGameRoster>;
 }): readonly Pick<HomeProjectionComponentPayload, 'component' | 'value'>[] {
   return [
     {
@@ -340,6 +438,7 @@ function asHomeValues(input: {
         userId: input.userId,
         displayName: input.snapshot.profile.displayName,
         firstName: input.snapshot.profile.firstName ?? null,
+        lastName: input.snapshot.profile.lastName ?? null,
         avatarUrl: input.avatarUrl,
         ...(input.snapshot.profile.phoneLast4
           ? { phoneLast4: input.snapshot.profile.phoneLast4 }
@@ -354,14 +453,33 @@ function asHomeValues(input: {
       value: input.snapshot.upcoming.map((item) => {
         const id = input.bookingIds.get(item.externalId);
         if (!id) throw new Error('BOOKING_ID_MAPPING_MISSING');
+        const canonicalRoster = item.exerciseExternalId
+          ? input.gameRosters.get(item.exerciseExternalId)
+          : undefined;
         return {
           id,
-          kind: 'training' as const,
+          // A local roster association makes this a Games card even when the Viva booking type
+          // is the generic exercise/training type.
+          kind: canonicalRoster ? ('game' as const) : ('training' as const),
           title: item.title,
           startsAt: item.startsAt,
           venue: item.venue,
           status: item.status,
           route: `/bookings/${id}`,
+          // The canonical Games roster wins when its VIVA exercise association is known. Until
+          // that migration has reached an event, preserve the only participant Viva proves here.
+          participants: canonicalRoster?.participants ?? [
+            {
+              profileId: input.userId,
+              displayName: input.snapshot.profile.displayName,
+              firstName: input.snapshot.profile.firstName ?? input.snapshot.profile.displayName,
+              lastName: input.snapshot.profile.lastName ?? null,
+              nickname: null,
+              avatarUrl: input.avatarUrl,
+              level: input.snapshot.profile.level.label,
+            },
+          ],
+          ...(canonicalRoster ? { openSlots: canonicalRoster.openSlots } : {}),
         };
       }),
     },
@@ -504,6 +622,13 @@ export function persistVivaHomeSource(input: {
         }),
       );
     }
+    const gameRosters = await resolveCanonicalOpenGameRosters({
+      client,
+      tenantId: input.delegation.tenantId,
+      exerciseExternalIds: input.snapshot.upcoming.flatMap((item) =>
+        item.exerciseExternalId ? [item.exerciseExternalId] : [],
+      ),
+    });
 
     const results: { component: string; revision: string }[] = [];
     for (const item of asHomeValues({
@@ -512,6 +637,7 @@ export function persistVivaHomeSource(input: {
       avatarUrl: input.profilePhoto?.avatarUrl ?? null,
       bookingIds,
       subscriptionIds,
+      gameRosters,
     })) {
       const valueChecksum = checksum(item.value);
       const row = (

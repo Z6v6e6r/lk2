@@ -99,6 +99,27 @@ export function buildMockHomeDashboard(input: HomeDashboardInput) {
         venue: 'ПаделХАБ · корт 2',
         status: 'confirmed' as const,
         route: '/games/751fe6a8-b0b1-4b2b-873d-a2d785c4e191',
+        participants: [
+          {
+            profileId: input.userId,
+            displayName: input.displayName,
+            firstName: firstName(input.displayName),
+            lastName: input.displayName.split(/\s+/).slice(1).join(' ') || null,
+            nickname: null,
+            avatarUrl: null,
+            level: 'C+',
+          },
+          {
+            profileId: 'd3f37209-f511-4e94-a815-b8621b7e7fca',
+            displayName: 'Мария Орлова',
+            firstName: 'Мария',
+            lastName: 'Орлова',
+            nickname: 'maria_orlova',
+            avatarUrl: null,
+            level: 'C',
+          },
+        ],
+        openSlots: 2,
       },
       {
         id: '081d6c55-aad7-459f-a350-8f905a0532d6',
@@ -108,6 +129,17 @@ export function buildMockHomeDashboard(input: HomeDashboardInput) {
         venue: 'ПаделХАБ · корт 4',
         status: 'confirmed' as const,
         route: '/trainings/081d6c55-aad7-459f-a350-8f905a0532d6',
+        participants: [
+          {
+            profileId: input.userId,
+            displayName: input.displayName,
+            firstName: firstName(input.displayName),
+            lastName: input.displayName.split(/\s+/).slice(1).join(' ') || null,
+            nickname: null,
+            avatarUrl: null,
+            level: 'C+',
+          },
+        ],
       },
     ],
     subscriptions: [

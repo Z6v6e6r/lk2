@@ -21,10 +21,20 @@ describe('loadConfig', () => {
   it('parses safe defaults', () => {
     expect(loadConfig(validEnvironment)).toMatchObject({
       APP_ENV: 'ci',
+      OUTBOX_PUBLISH_MODE: 'transactional',
+      OUTBOX_BATCH_SIZE: 50,
+      OUTBOX_CLAIM_TTL_MS: 60_000,
+      OUTBOX_CONFIRM_TIMEOUT_MS: 10_000,
+      OUTBOX_FAILURE_BACKOFF_MS: 5_000,
       VIVA_MODE: 'mock',
       HOME_READ_MODE: 'mock',
       GAMES_READ_ENABLED: false,
       GAMES_COMMANDS_ENABLED: false,
+      LEGACY_GAMES_ROSTER_SYNC_ENABLED: false,
+      LEGACY_GAMES_ROSTER_SYNC_INTERVAL_MS: 120_000,
+      LEGACY_GAMES_ROSTER_SYNC_LOOKBACK_DAYS: 1,
+      LEGACY_GAMES_ROSTER_SYNC_LOOKAHEAD_DAYS: 42,
+      LEGACY_GAMES_ROSTER_SYNC_LIMIT: 200,
       HOME_PROJECTION_TTL_SECONDS: 300,
       HOME_VIVA_SYNC_ENABLED: false,
       HOME_VIVA_SYNC_INTERVAL_MS: 120_000,
@@ -43,6 +53,11 @@ describe('loadConfig', () => {
       PROMOTION_IMAGE_MOBILE_WIDTH: 750,
       PROMOTION_IMAGE_MOBILE_HEIGHT: 480,
       PROMOTION_IMAGE_WEBP_QUALITY: 80,
+      LOCATION_MEDIA_ENABLED: false,
+      GIFT_CERTIFICATE_MEDIA_ENABLED: false,
+      GIFT_CERTIFICATE_PAYMENT_MODE: 'disabled',
+      GIFT_CERTIFICATE_ISSUANCE_ENABLED: false,
+      GIFT_CERTIFICATE_DELIVERY_MODE: 'disabled',
       S3_FORCE_PATH_STYLE: true,
       S3_AUTO_CREATE_BUCKET: false,
       PROFILE_PHOTO_WEBP_QUALITY: 82,
@@ -53,6 +68,109 @@ describe('loadConfig', () => {
       WEB_PUSH_CIRCUIT_RESET_MS: 30_000,
       CUP_DEV_AUTH_ENABLED: false,
     });
+  });
+
+  it('keeps leased outbox publication explicit, staging-only and lease-safe', () => {
+    expect(
+      loadConfig({
+        ...validEnvironment,
+        APP_ENV: 'staging',
+        OUTBOX_PUBLISH_MODE: 'leased',
+      }),
+    ).toMatchObject({ OUTBOX_PUBLISH_MODE: 'leased' });
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        APP_ENV: 'production',
+        OUTBOX_PUBLISH_MODE: 'leased',
+      }),
+    ).toThrow('OUTBOX_PUBLISH_MODE=leased is staging-only');
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        OUTBOX_PUBLISH_MODE: 'leased',
+        OUTBOX_CLAIM_TTL_MS: '14000',
+        OUTBOX_CONFIRM_TIMEOUT_MS: '10000',
+      }),
+    ).toThrow('OUTBOX_CLAIM_TTL_MS must exceed OUTBOX_CONFIRM_TIMEOUT_MS by at least 5000ms');
+  });
+
+  it('keeps certificate payment sandbox local and requires complete private media storage', () => {
+    expect(
+      loadConfig({
+        ...validEnvironment,
+        APP_ENV: 'local',
+        GIFT_CERTIFICATE_PAYMENT_MODE: 'sandbox',
+      }),
+    ).toMatchObject({ GIFT_CERTIFICATE_PAYMENT_MODE: 'sandbox' });
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        APP_ENV: 'staging',
+        GIFT_CERTIFICATE_PAYMENT_MODE: 'sandbox',
+      }),
+    ).toThrow('GIFT_CERTIFICATE_PAYMENT_MODE=sandbox is allowed only in local or ci');
+    expect(() =>
+      loadConfig({ ...validEnvironment, GIFT_CERTIFICATE_MEDIA_ENABLED: 'true' }),
+    ).toThrow('GIFT_CERTIFICATE_MEDIA_ENABLED requires media storage');
+    expect(
+      loadConfig({
+        ...validEnvironment,
+        GIFT_CERTIFICATE_MEDIA_ENABLED: 'true',
+        S3_ENDPOINT: 'http://minio:9000',
+        S3_PUBLIC_ENDPOINT: 'http://localhost:9000',
+        S3_BUCKET: 'padlhub-media',
+        S3_ACCESS_KEY: 'padlhub',
+        S3_SECRET_KEY: 'test-secret',
+      }),
+    ).toMatchObject({ GIFT_CERTIFICATE_MEDIA_ENABLED: true });
+  });
+
+  it('requires complete private S3 delivery when location uploads are enabled', () => {
+    expect(() => loadConfig({ ...validEnvironment, LOCATION_MEDIA_ENABLED: 'true' })).toThrow(
+      'LOCATION_MEDIA_ENABLED requires media storage',
+    );
+    expect(
+      loadConfig({
+        ...validEnvironment,
+        LOCATION_MEDIA_ENABLED: 'true',
+        S3_ENDPOINT: 'http://minio:9000',
+        S3_PUBLIC_ENDPOINT: 'http://localhost:9000',
+        S3_BUCKET: 'padlhub-media',
+        S3_ACCESS_KEY: 'padlhub',
+        S3_SECRET_KEY: 'test-secret',
+      }),
+    ).toMatchObject({ LOCATION_MEDIA_ENABLED: true });
+  });
+
+  it('requires a private artifact store and secret for certificate issuance', () => {
+    expect(() =>
+      loadConfig({ ...validEnvironment, GIFT_CERTIFICATE_ISSUANCE_ENABLED: 'true' }),
+    ).toThrow('GIFT_CERTIFICATE_ISSUANCE_ENABLED requires private artifacts');
+    expect(
+      loadConfig({
+        ...validEnvironment,
+        APP_ENV: 'local',
+        GIFT_CERTIFICATE_ISSUANCE_ENABLED: 'true',
+        GIFT_CERTIFICATE_ACTIVATION_HMAC_SECRET: 'test-gift-certificate-activation-secret',
+        GIFT_CERTIFICATE_DELIVERY_MODE: 'sandbox',
+        S3_ENDPOINT: 'http://minio:9000',
+        S3_PUBLIC_ENDPOINT: 'http://localhost:9000',
+        S3_BUCKET: 'padlhub-media',
+        S3_ACCESS_KEY: 'padlhub',
+        S3_SECRET_KEY: 'test-secret',
+      }),
+    ).toMatchObject({
+      GIFT_CERTIFICATE_ISSUANCE_ENABLED: true,
+      GIFT_CERTIFICATE_DELIVERY_MODE: 'sandbox',
+    });
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        APP_ENV: 'staging',
+        GIFT_CERTIFICATE_DELIVERY_MODE: 'sandbox',
+      }),
+    ).toThrow('GIFT_CERTIFICATE_DELIVERY_MODE=sandbox is allowed only in local or ci');
   });
 
   it('keeps Games reads off by default and staging-only during the rollout gate', () => {
@@ -71,6 +189,40 @@ describe('loadConfig', () => {
     expect(() =>
       loadConfig({ ...validEnvironment, APP_ENV: 'production', GAMES_COMMANDS_ENABLED: 'true' }),
     ).toThrow('GAMES_COMMANDS_ENABLED is staging-only');
+  });
+
+  it('permits the legacy roster mirror only in an explicitly gated staging worker', () => {
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        LEGACY_GAMES_ROSTER_SYNC_ENABLED: 'true',
+      }),
+    ).toThrow('LEGACY_GAMES_ROSTER_SYNC_ENABLED is staging-only');
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        APP_ENV: 'staging',
+        LEGACY_GAMES_ROSTER_SYNC_ENABLED: 'true',
+      }),
+    ).toThrow('LEGACY_GAMES_ROSTER_SYNC_ENABLED requires GAMES_READ_ENABLED=true');
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        APP_ENV: 'staging',
+        GAMES_READ_ENABLED: 'true',
+        LEGACY_GAMES_ROSTER_SYNC_ENABLED: 'true',
+      }),
+    ).toThrow('LEGACY_GAMES_ROSTER_SYNC_ENABLED requires LEGACY_GAMES_MONGODB_URI');
+    expect(
+      loadConfig({
+        ...validEnvironment,
+        APP_ENV: 'staging',
+        GAMES_READ_ENABLED: 'true',
+        LEGACY_GAMES_ROSTER_SYNC_ENABLED: 'true',
+        LEGACY_GAMES_MONGODB_URI: 'mongodb://readonly:secret@mongo.test/games',
+        LEGACY_GAMES_ROSTER_SYNC_TENANT_KEY: 'staging-padel',
+      }),
+    ).toMatchObject({ LEGACY_GAMES_ROSTER_SYNC_ENABLED: true });
   });
 
   it('allows the synthetic CUP operator code only in a fully explicit local runtime', () => {

@@ -14,10 +14,13 @@ export interface PlayerLevelAvatarProps {
 
   readonly size?: number;
   readonly className?: string;
+  readonly variant?: 'profile' | 'participant';
+  readonly accentColor?: string;
 }
 
 type PlayerLevelAvatarStyle = CSSProperties & {
   readonly '--player-level-avatar-scale': number;
+  readonly '--player-level-avatar-accent'?: string;
 };
 
 const BASE_SIZE = 48;
@@ -108,6 +111,8 @@ export function PlayerLevelAvatar({
   progress = 0,
   size = BASE_SIZE,
   className,
+  variant = 'profile',
+  accentColor,
 }: PlayerLevelAvatarProps): React.JSX.Element {
   const [failedSource, setFailedSource] = useState<string | null>(null);
   const ringMaskId = `player-level-avatar-ring-${useId().replaceAll(':', '')}`;
@@ -123,11 +128,16 @@ export function PlayerLevelAvatar({
 
   const rootStyle: PlayerLevelAvatarStyle = {
     '--player-level-avatar-scale': scale,
+    ...(variant === 'participant' && accentColor
+      ? { '--player-level-avatar-accent': accentColor }
+      : {}),
   };
 
   return (
     <span
-      className={rootClassName}
+      className={
+        variant === 'participant' ? `${rootClassName} ${styles.participant}` : rootClassName
+      }
       data-player-level-avatar=""
       data-progress={normalizedProgress}
       data-size={normalizedSize}

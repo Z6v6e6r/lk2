@@ -14,6 +14,8 @@ export interface LegacyGameSourceParticipant {
 export interface LegacyGameSourceSnapshot {
   readonly externalId: string;
   readonly externalVersion: string;
+  /** Server-side integration key only; never serialized into a game DTO. */
+  readonly vivaExerciseExternalId: string | null;
   readonly title: string;
   readonly kind: GameKind;
   readonly visibility: GameVisibility;
@@ -78,6 +80,7 @@ interface RawLegacyGame extends Document {
     readonly [key: string]: unknown;
     readonly gameFormat?: unknown;
     readonly gameTitle?: unknown;
+    readonly vivaExerciseId?: unknown;
   };
   readonly booking?: {
     readonly [key: string]: unknown;
@@ -87,6 +90,7 @@ interface RawLegacyGame extends Document {
     readonly roomName?: unknown;
     readonly timeFromIso?: unknown;
     readonly timeToIso?: unknown;
+    readonly vivaExerciseId?: unknown;
   };
 }
 
@@ -94,6 +98,14 @@ function stringValue(value: unknown): string | undefined {
   if (typeof value === 'string' && value.trim()) return value.trim();
   if (typeof value === 'number' && Number.isFinite(value)) return String(value);
   return undefined;
+}
+
+function uuidValue(value: unknown): string | undefined {
+  const candidate = stringValue(value);
+  return candidate &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(candidate)
+    ? candidate
+    : undefined;
 }
 
 function numericValue(value: unknown): number | undefined {
@@ -136,6 +148,9 @@ function anonymizeSnapshot(snapshot: LegacyGameSourceSnapshot): LegacyGameSource
   return {
     ...snapshot,
     externalId: pseudonymousId('game', snapshot.externalId),
+    vivaExerciseExternalId: snapshot.vivaExerciseExternalId
+      ? pseudonymousId('viva-exercise', snapshot.vivaExerciseExternalId)
+      : null,
     title: `${snapshot.kind === 'RATING' ? 'Рейтинговая' : 'Открытая'} игра ${snapshot.capacity === 2 ? '1×1' : '2×2'}`,
     station: {
       ...snapshot.station,
@@ -226,6 +241,8 @@ function mapLegacyGame(raw: RawLegacyGame): LegacyGameSourceSnapshot | undefined
     courtName: stringValue(raw.booking?.roomName) ?? null,
   };
   const paymentMode = stringValue(raw.settings?.payMode) === 'split' ? 'SPLIT' : 'ORGANIZER_PAYS';
+  const vivaExerciseExternalId =
+    uuidValue(raw.metadata?.vivaExerciseId) ?? uuidValue(raw.booking?.vivaExerciseId) ?? null;
   const externalVersion = createHash('sha256')
     .update(
       JSON.stringify({
@@ -237,6 +254,7 @@ function mapLegacyGame(raw: RawLegacyGame): LegacyGameSourceSnapshot | undefined
         startsAt,
         endsAt,
         station,
+        vivaExerciseExternalId,
         capacity,
         paymentMode,
         minRating,
@@ -249,6 +267,7 @@ function mapLegacyGame(raw: RawLegacyGame): LegacyGameSourceSnapshot | undefined
   return {
     externalId,
     externalVersion,
+    vivaExerciseExternalId,
     title,
     kind: ratingGame ? 'RATING' : 'FRIENDLY',
     visibility,
@@ -294,6 +313,57 @@ export class LegacyGamesMongoAdapter {
       throw new Error('LEGACY_GAMES_LIMIT_INVALID');
     }
 
+    return this.readMatching({
+      filter: {
+        archived: { $ne: true },
+        status: { $in: ['PAID', 'CANCELLED'] },
+        'booking.timeFromIso': { $gte: from, $lt: to },
+      },
+      limit: input.limit,
+      sort: { 'booking.timeFromIso': 1, _id: 1 },
+    });
+  }
+
+  /**
+   * Resolves only the current LK games that are explicitly associated with Viva exercises from
+   * the server-side Home snapshot. This is intentionally not available to browser callers.
+   */
+  public async readByVivaExerciseIds(input: {
+    readonly exerciseExternalIds: readonly string[];
+    readonly limit: number;
+  }): Promise<readonly LegacyGameSourceSnapshot[]> {
+    const exerciseExternalIds = [...new Set(input.exerciseExternalIds.map((id) => id.trim()))]
+      .filter((id) => uuidValue(id))
+      .slice(0, 25);
+    if (exerciseExternalIds.length === 0) return [];
+    if (!Number.isInteger(input.limit) || input.limit < 1 || input.limit > 100) {
+      throw new Error('LEGACY_GAMES_LIMIT_INVALID');
+    }
+
+    const snapshots = await this.readMatching({
+      filter: {
+        archived: { $ne: true },
+        status: { $in: ['PAID', 'CANCELLED'] },
+        $or: [
+          { 'metadata.vivaExerciseId': { $in: exerciseExternalIds } },
+          { 'booking.vivaExerciseId': { $in: exerciseExternalIds } },
+        ],
+      },
+      limit: input.limit,
+      sort: { updatedAt: -1, _id: 1 },
+    });
+    const requested = new Set(exerciseExternalIds);
+    return snapshots.filter(
+      (snapshot) =>
+        snapshot.vivaExerciseExternalId !== null && requested.has(snapshot.vivaExerciseExternalId),
+    );
+  }
+
+  private async readMatching(input: {
+    readonly filter: Filter<RawLegacyGame>;
+    readonly limit: number;
+    readonly sort: Document;
+  }): Promise<readonly LegacyGameSourceSnapshot[]> {
     const attempts = this.options.maxAttempts ?? 2;
     const sleep = this.options.sleep ?? defaultSleep;
     for (let attempt = 1; attempt <= attempts; attempt += 1) {
@@ -308,15 +378,10 @@ export class LegacyGamesMongoAdapter {
       });
       try {
         await client.connect();
-        const filter: Filter<RawLegacyGame> = {
-          archived: { $ne: true },
-          status: { $in: ['PAID', 'CANCELLED'] },
-          'booking.timeFromIso': { $gte: from, $lt: to },
-        };
         const rows = await client
           .db(this.options.dbName ?? 'games')
           .collection<RawLegacyGame>(this.options.collectionName ?? 'lk_games')
-          .find(filter, {
+          .find(input.filter, {
             projection: {
               id: 1,
               status: 1,
@@ -337,16 +402,18 @@ export class LegacyGamesMongoAdapter {
               'settings.ratingGame': 1,
               'metadata.gameFormat': 1,
               'metadata.gameTitle': 1,
+              'metadata.vivaExerciseId': 1,
               'booking.studioId': 1,
               'booking.studioName': 1,
               'booking.roomId': 1,
               'booking.roomName': 1,
               'booking.timeFromIso': 1,
               'booking.timeToIso': 1,
+              'booking.vivaExerciseId': 1,
             },
             maxTimeMS: this.options.timeoutMs ?? 5_000,
           })
-          .sort({ 'booking.timeFromIso': 1, _id: 1 })
+          .sort(input.sort)
           .limit(input.limit)
           .toArray();
         const snapshots = rows.flatMap((row) => {

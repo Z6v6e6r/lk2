@@ -5,6 +5,17 @@ const uuid = z.string().uuid();
 const dateTime = z.string().datetime({ offset: true });
 const route = z.string().startsWith('/');
 const nullableUrl = z.string().url().nullable();
+const nullableLocationImageUrl = z
+  .string()
+  .refine(
+    (value) =>
+      z.string().url().safeParse(value).success ||
+      /^\/public\/api\/v1\/[a-z0-9][a-z0-9-]{1,62}\/location-media\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+        value,
+      ),
+    'location image must be an absolute URL or PadlHub location media URL',
+  )
+  .nullable();
 const positiveRevision = z.string().regex(/^[1-9]\d*$/);
 const promotionHref = z
   .string()
@@ -34,6 +45,7 @@ export const homeProfileSchema = z
     userId: uuid,
     displayName: z.string().min(1).max(200),
     firstName: z.string().max(100).nullable().optional(),
+    lastName: z.string().max(100).nullable().optional(),
     avatarUrl: nullableUrl.optional(),
     phoneLast4: z
       .string()
@@ -78,6 +90,26 @@ export const homeUpcomingSchema = z
     venue: z.string().min(1).max(160),
     status: z.enum(['confirmed', 'waitlist', 'payment_required']),
     route,
+    /** Viewer-filtered roster summary. It is omitted when the source does not own it. */
+    participants: z
+      .array(
+        z
+          .object({
+            /** PadlHub profile UUID. It authorizes a separate viewer-filtered profile request. */
+            profileId: uuid.optional(),
+            displayName: z.string().min(1).max(200),
+            firstName: z.string().min(1).max(100).optional(),
+            lastName: z.string().min(1).max(100).nullable().optional(),
+            nickname: z.string().min(1).max(100).nullable().optional(),
+            avatarUrl: nullableUrl.optional(),
+            level: z.string().min(1).max(20).nullable().optional(),
+          })
+          .strict(),
+      )
+      .max(4)
+      .optional(),
+    /** Slots that the source explicitly exposes as open; never inferred by clients. */
+    openSlots: z.number().int().min(0).max(4).optional(),
   })
   .strict();
 
@@ -159,6 +191,39 @@ function firstPromotion(value: unknown): unknown {
   return items[0] ?? null;
 }
 
+function normalizeConfirmedViewerParticipants(upcoming: unknown, profile: unknown): unknown {
+  if (!Array.isArray(upcoming) || !isRecord(profile)) return upcoming;
+  const displayName = typeof profile.displayName === 'string' ? profile.displayName.trim() : '';
+  const profileId = typeof profile.userId === 'string' ? profile.userId : undefined;
+  const firstName = typeof profile.firstName === 'string' ? profile.firstName.trim() : '';
+  const lastName = typeof profile.lastName === 'string' ? profile.lastName.trim() : '';
+  const avatarUrl =
+    profile.avatarUrl === null || typeof profile.avatarUrl === 'string' ? profile.avatarUrl : null;
+  const level =
+    isRecord(profile.level) && typeof profile.level.label === 'string' ? profile.level.label : null;
+  if (!displayName || !level) return upcoming;
+
+  return (upcoming as readonly unknown[]).map((item) => {
+    if (!isRecord(item) || 'participants' in item || item.status !== 'confirmed') return item;
+    return {
+      ...item,
+      // A persisted legacy projection proves only the authenticated viewer's confirmed booking.
+      // It never expands this into an unverified group roster.
+      participants: [
+        {
+          ...(profileId ? { profileId } : {}),
+          displayName,
+          firstName: firstName || displayName,
+          lastName: lastName || null,
+          nickname: null,
+          avatarUrl,
+          level,
+        },
+      ],
+    };
+  });
+}
+
 /**
  * Expand/migrate compatibility for Home snapshots persisted before communities were reduced and
  * before the CUP advertising placement became a rotatable deck. Remove only after every stored
@@ -169,6 +234,9 @@ export function normalizeHomeDashboardPayload(value: unknown): unknown {
   const promotions = normalizePromotionDeck(value.promotions ?? value.promotion);
   return {
     ...value,
+    ...('upcoming' in value
+      ? { upcoming: normalizeConfirmedViewerParticipants(value.upcoming, value.profile) }
+      : {}),
     ...('communities' in value
       ? { communities: normalizeCommunitySummaries(value.communities) }
       : {}),
@@ -194,7 +262,7 @@ export const homeLocationSchema = z
     id: uuid,
     title: z.string().min(1).max(120),
     courtCount: z.number().int().min(1),
-    imageUrl: nullableUrl,
+    imageUrl: nullableLocationImageUrl,
     route,
   })
   .strict();

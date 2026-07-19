@@ -22,6 +22,7 @@ const components: readonly HomeProjectionComponentPayload[] = [
       userId,
       displayName: 'Алексей Петров',
       firstName: 'Алексей',
+      lastName: 'Петров',
       avatarUrl: null,
       phoneLast4: '3190',
       balanceMinor: 245_000,
@@ -213,5 +214,29 @@ describe('Home projection contract and builder', () => {
       intervalSeconds: 6,
       items: [legacyPromotion],
     });
+  });
+
+  it('adds only the confirmed viewer to a legacy upcoming item without a roster', () => {
+    const result = buildHomeProjection({
+      components,
+      sourceRevision: '11',
+      generatedAt: new Date('2026-07-15T12:00:00.000Z'),
+      ttlSeconds: 300,
+    });
+    expect(result.ready).toBe(true);
+    if (!result.ready) return;
+
+    const normalized = homeDashboardSchema.parse(normalizeHomeDashboardPayload(result.dashboard));
+    expect(normalized.upcoming[0]?.participants).toEqual([
+      {
+        profileId: userId,
+        displayName: 'Алексей Петров',
+        firstName: 'Алексей',
+        lastName: 'Петров',
+        nickname: null,
+        avatarUrl: null,
+        level: 'C+',
+      },
+    ]);
   });
 });

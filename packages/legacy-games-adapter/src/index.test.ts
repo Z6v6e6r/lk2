@@ -28,7 +28,7 @@ describe('legacy games adapter', () => {
       metadata: {
         gameFormat: 'doubles',
         gameTitle: 'Рейтинговая игра',
-        vivaExerciseId: 'provider-exercise',
+        vivaExerciseId: '11111111-1111-4111-8111-111111111111',
       },
       booking: {
         studioId: 'legacy-station-1',
@@ -37,7 +37,7 @@ describe('legacy games adapter', () => {
         roomName: 'Корт №4',
         timeFromIso: '2026-07-20T18:00:00+03:00',
         timeToIso: '2026-07-20T20:00:00+03:00',
-        vivaExerciseId: 'provider-exercise',
+        vivaExerciseId: '11111111-1111-4111-8111-111111111111',
       },
       payment: { paymentUrl: 'https://bank.invalid/secret' },
     });
@@ -51,12 +51,13 @@ describe('legacy games adapter', () => {
       paymentMode: 'SPLIT',
       levelFrom: 'C',
       levelTo: 'B',
+      vivaExerciseExternalId: '11111111-1111-4111-8111-111111111111',
       participants: [
         { displayName: 'Анна', role: 'ORGANIZER', level: 'C+' },
         { displayName: 'Борис', role: 'PLAYER', level: 'B' },
       ],
     });
-    expect(JSON.stringify(mapped)).not.toMatch(/phone|paymentUrl|vivaExerciseId|bookingIds/i);
+    expect(JSON.stringify(mapped)).not.toMatch(/phone|paymentUrl|bookingIds/i);
   });
 
   it('drops records without stable organizer, station or time identity', () => {

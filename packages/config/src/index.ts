@@ -21,6 +21,11 @@ const environmentSchema = z.object({
   REALTIME_PORT: z.coerce.number().int().positive().default(3001),
   WORKER_HEALTH_PORT: z.coerce.number().int().positive().default(3002),
   OUTBOX_POLL_INTERVAL_MS: z.coerce.number().int().positive().max(60_000).default(1000),
+  OUTBOX_PUBLISH_MODE: z.enum(['transactional', 'leased']).default('transactional'),
+  OUTBOX_BATCH_SIZE: z.coerce.number().int().min(1).max(500).default(50),
+  OUTBOX_CLAIM_TTL_MS: z.coerce.number().int().min(10_000).max(300_000).default(60_000),
+  OUTBOX_CONFIRM_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(60_000).default(10_000),
+  OUTBOX_FAILURE_BACKOFF_MS: z.coerce.number().int().min(1_000).max(60_000).default(5_000),
   CORS_ORIGINS: z.string().default('http://localhost:5173,http://127.0.0.1:5173'),
   TRUSTED_PROXY_CIDRS: z.string().default(''),
   DATABASE_URL: z.string().url(),
@@ -81,6 +86,20 @@ const environmentSchema = z.object({
   HOME_READ_MODE: z.enum(['mock', 'projection']).default('mock'),
   GAMES_READ_ENABLED: booleanFromEnvironment,
   GAMES_COMMANDS_ENABLED: booleanFromEnvironment,
+  // The old LK can supply roster changes only during the staged migration mirror. This source
+  // URI is process-only and is never exposed through API configuration or client bundles.
+  LEGACY_GAMES_ROSTER_SYNC_ENABLED: booleanFromEnvironment,
+  LEGACY_GAMES_MONGODB_URI: z.string().min(1).optional(),
+  LEGACY_GAMES_ROSTER_SYNC_TENANT_KEY: z.string().min(1).optional(),
+  LEGACY_GAMES_ROSTER_SYNC_INTERVAL_MS: z.coerce
+    .number()
+    .int()
+    .min(30_000)
+    .max(3_600_000)
+    .default(120_000),
+  LEGACY_GAMES_ROSTER_SYNC_LOOKBACK_DAYS: z.coerce.number().int().min(0).max(30).default(1),
+  LEGACY_GAMES_ROSTER_SYNC_LOOKAHEAD_DAYS: z.coerce.number().int().min(1).max(90).default(42),
+  LEGACY_GAMES_ROSTER_SYNC_LIMIT: z.coerce.number().int().min(1).max(500).default(200),
   HOME_PROJECTION_MAX_STALE_SECONDS: z.coerce.number().int().nonnegative().max(86_400).default(300),
   HOME_PROJECTION_TTL_SECONDS: z.coerce.number().int().min(30).max(86_400).default(300),
   HOME_VIVA_SYNC_ENABLED: booleanFromEnvironment,
@@ -144,6 +163,62 @@ const environmentSchema = z.object({
   PROMOTION_IMAGE_MOBILE_HEIGHT: z.coerce.number().int().min(240).max(1_200).default(480),
   PROMOTION_IMAGE_WEBP_QUALITY: z.coerce.number().int().min(40).max(95).default(80),
   PROMOTION_MEDIA_GC_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(20),
+  LOCATION_MEDIA_ENABLED: booleanFromEnvironment,
+  LOCATION_MEDIA_MAX_BYTES: z.coerce
+    .number()
+    .int()
+    .min(64 * 1_024)
+    .max(8 * 1_024 * 1_024)
+    .default(8 * 1_024 * 1_024),
+  LOCATION_MEDIA_MAX_DIMENSION: z.coerce.number().int().min(512).max(2_048).default(1_600),
+  LOCATION_MEDIA_WEBP_QUALITY: z.coerce.number().int().min(60).max(95).default(84),
+  LOCATION_MEDIA_URL_TTL_SECONDS: z.coerce.number().int().min(60).max(86_400).default(3_600),
+  LOCATION_MEDIA_STORAGE_TIMEOUT_MS: z.coerce.number().int().min(500).max(30_000).default(5_000),
+  GIFT_CERTIFICATE_MEDIA_ENABLED: booleanFromEnvironment,
+  GIFT_CERTIFICATE_MEDIA_MAX_BYTES: z.coerce
+    .number()
+    .int()
+    .min(64 * 1_024)
+    .max(8 * 1_024 * 1_024)
+    .default(5 * 1_024 * 1_024),
+  GIFT_CERTIFICATE_MEDIA_MAX_DIMENSION: z.coerce.number().int().min(512).max(2_048).default(1_600),
+  GIFT_CERTIFICATE_MEDIA_WEBP_QUALITY: z.coerce.number().int().min(60).max(95).default(84),
+  GIFT_CERTIFICATE_MEDIA_URL_TTL_SECONDS: z.coerce
+    .number()
+    .int()
+    .min(60)
+    .max(86_400)
+    .default(3_600),
+  GIFT_CERTIFICATE_MEDIA_STORAGE_TIMEOUT_MS: z.coerce
+    .number()
+    .int()
+    .min(500)
+    .max(30_000)
+    .default(5_000),
+  GIFT_CERTIFICATE_PAYMENT_MODE: z.enum(['disabled', 'sandbox']).default('disabled'),
+  GIFT_CERTIFICATE_ISSUANCE_ENABLED: booleanFromEnvironment,
+  GIFT_CERTIFICATE_ACTIVATION_HMAC_SECRET: z.string().min(32).optional(),
+  GIFT_CERTIFICATE_ARTIFACT_STORAGE_TIMEOUT_MS: z.coerce
+    .number()
+    .int()
+    .min(500)
+    .max(30_000)
+    .default(5_000),
+  GIFT_CERTIFICATE_DELIVERY_MODE: z.enum(['disabled', 'sandbox']).default('disabled'),
+  GIFT_CERTIFICATE_DELIVERY_POLL_INTERVAL_MS: z.coerce
+    .number()
+    .int()
+    .min(250)
+    .max(60_000)
+    .default(1_000),
+  GIFT_CERTIFICATE_DELIVERY_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(20),
+  GIFT_CERTIFICATE_DELIVERY_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(20).default(5),
+  GIFT_CERTIFICATE_DELIVERY_RETRY_BASE_MS: z.coerce
+    .number()
+    .int()
+    .min(1_000)
+    .max(3_600_000)
+    .default(5_000),
   WEB_PUSH_ENABLED: booleanFromEnvironment,
   WEB_PUSH_ENVIRONMENT: z.enum(['SANDBOX', 'PRODUCTION']).default('SANDBOX'),
   WEB_PUSH_APP_ID: z.string().min(1).max(300).default('padlhub-web'),
@@ -241,6 +316,35 @@ export function loadConfig(
       'GAMES_COMMANDS_ENABLED is staging-only until the Games production gate passes',
     );
   }
+  if (parsed.data.LEGACY_GAMES_ROSTER_SYNC_ENABLED) {
+    if (parsed.data.APP_ENV !== 'staging') {
+      throw new Error(
+        'LEGACY_GAMES_ROSTER_SYNC_ENABLED is staging-only until the Games production gate passes',
+      );
+    }
+    if (!parsed.data.GAMES_READ_ENABLED) {
+      throw new Error('LEGACY_GAMES_ROSTER_SYNC_ENABLED requires GAMES_READ_ENABLED=true');
+    }
+    if (!parsed.data.LEGACY_GAMES_MONGODB_URI) {
+      throw new Error('LEGACY_GAMES_ROSTER_SYNC_ENABLED requires LEGACY_GAMES_MONGODB_URI');
+    }
+    if (!parsed.data.LEGACY_GAMES_ROSTER_SYNC_TENANT_KEY) {
+      throw new Error(
+        'LEGACY_GAMES_ROSTER_SYNC_ENABLED requires LEGACY_GAMES_ROSTER_SYNC_TENANT_KEY',
+      );
+    }
+  }
+  if (parsed.data.APP_ENV === 'production' && parsed.data.OUTBOX_PUBLISH_MODE === 'leased') {
+    throw new Error(
+      'OUTBOX_PUBLISH_MODE=leased is staging-only until the outbox lease production gate passes',
+    );
+  }
+  if (
+    parsed.data.OUTBOX_PUBLISH_MODE === 'leased' &&
+    parsed.data.OUTBOX_CLAIM_TTL_MS - parsed.data.OUTBOX_CONFIRM_TIMEOUT_MS < 5_000
+  ) {
+    throw new Error('OUTBOX_CLAIM_TTL_MS must exceed OUTBOX_CONFIRM_TIMEOUT_MS by at least 5000ms');
+  }
   if (parsed.data.APP_ENV === 'production' && parsed.data.VIVA_MODE === 'mock') {
     throw new Error('VIVA_MODE=mock is forbidden in production');
   }
@@ -309,6 +413,77 @@ export function loadConfig(
         `PROMOTIONS_READ_MODE=legacy requires media storage: ${missingStorage.join(', ')}`,
       );
     }
+  }
+  if (
+    parsed.data.GIFT_CERTIFICATE_PAYMENT_MODE === 'sandbox' &&
+    parsed.data.APP_ENV !== 'local' &&
+    parsed.data.APP_ENV !== 'ci'
+  ) {
+    throw new Error('GIFT_CERTIFICATE_PAYMENT_MODE=sandbox is allowed only in local or ci');
+  }
+  if (parsed.data.GIFT_CERTIFICATE_MEDIA_ENABLED) {
+    const missingStorage = [
+      ['S3_ENDPOINT', parsed.data.S3_ENDPOINT],
+      ['S3_PUBLIC_ENDPOINT', parsed.data.S3_PUBLIC_ENDPOINT],
+      ['S3_BUCKET', parsed.data.S3_BUCKET],
+      ['S3_ACCESS_KEY', parsed.data.S3_ACCESS_KEY],
+      ['S3_SECRET_KEY', parsed.data.S3_SECRET_KEY],
+    ]
+      .filter(([, value]) => !value)
+      .map(([name]) => name);
+    if (missingStorage.length > 0) {
+      throw new Error(
+        `GIFT_CERTIFICATE_MEDIA_ENABLED requires media storage: ${missingStorage.join(', ')}`,
+      );
+    }
+  }
+  if (parsed.data.LOCATION_MEDIA_ENABLED) {
+    const missingStorage = [
+      ['S3_ENDPOINT', parsed.data.S3_ENDPOINT],
+      ['S3_PUBLIC_ENDPOINT', parsed.data.S3_PUBLIC_ENDPOINT],
+      ['S3_BUCKET', parsed.data.S3_BUCKET],
+      ['S3_ACCESS_KEY', parsed.data.S3_ACCESS_KEY],
+      ['S3_SECRET_KEY', parsed.data.S3_SECRET_KEY],
+    ]
+      .filter(([, value]) => !value)
+      .map(([name]) => name);
+    if (missingStorage.length > 0) {
+      throw new Error(
+        `LOCATION_MEDIA_ENABLED requires media storage: ${missingStorage.join(', ')}`,
+      );
+    }
+  }
+  if (
+    parsed.data.GIFT_CERTIFICATE_DELIVERY_MODE === 'sandbox' &&
+    parsed.data.APP_ENV !== 'local' &&
+    parsed.data.APP_ENV !== 'ci'
+  ) {
+    throw new Error('GIFT_CERTIFICATE_DELIVERY_MODE=sandbox is allowed only in local or ci');
+  }
+  if (parsed.data.GIFT_CERTIFICATE_ISSUANCE_ENABLED) {
+    const missingIssuance = [
+      [
+        'GIFT_CERTIFICATE_ACTIVATION_HMAC_SECRET',
+        parsed.data.GIFT_CERTIFICATE_ACTIVATION_HMAC_SECRET,
+      ],
+      ['S3_ENDPOINT', parsed.data.S3_ENDPOINT],
+      ['S3_BUCKET', parsed.data.S3_BUCKET],
+      ['S3_ACCESS_KEY', parsed.data.S3_ACCESS_KEY],
+      ['S3_SECRET_KEY', parsed.data.S3_SECRET_KEY],
+    ]
+      .filter(([, value]) => !value)
+      .map(([name]) => name);
+    if (missingIssuance.length > 0) {
+      throw new Error(
+        `GIFT_CERTIFICATE_ISSUANCE_ENABLED requires private artifacts: ${missingIssuance.join(', ')}`,
+      );
+    }
+  }
+  if (
+    parsed.data.GIFT_CERTIFICATE_DELIVERY_MODE !== 'disabled' &&
+    !parsed.data.GIFT_CERTIFICATE_ISSUANCE_ENABLED
+  ) {
+    throw new Error('GIFT_CERTIFICATE_DELIVERY_MODE requires GIFT_CERTIFICATE_ISSUANCE_ENABLED');
   }
   if (
     parsed.data.VIVA_DIRECT_READ_ENABLED &&

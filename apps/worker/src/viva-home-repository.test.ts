@@ -9,6 +9,7 @@ const subscriptionId = '66666666-6666-4666-8666-666666666666';
 const externalProfileId = '11111111-1111-4111-8111-111111111111';
 const externalBookingId = '22222222-2222-4222-8222-222222222222';
 const externalSubscriptionId = '33333333-3333-4333-8333-333333333333';
+const externalExerciseId = '44444444-4444-4444-8444-444444444444';
 
 const delegation: VivaHomeDelegation = {
   id: '77777777-7777-4777-8777-777777777777',
@@ -45,6 +46,39 @@ describe('Viva Home producer repository', () => {
             },
           ],
           rowCount: 1,
+        });
+      }
+      if (text.includes('from integration.external_entity_map e')) {
+        expect(values).toEqual([tenantId, [externalExerciseId]]);
+        return Promise.resolve({
+          rows: [
+            {
+              exercise_external_id: externalExerciseId,
+              capacity: 4,
+              profile_id: 'b1dc7c9c-1aed-448d-987e-3235a839b505',
+              display_name: 'Дмитрий Крикунов',
+              photo_url: 'https://media.padlhub.test/profiles/dmitriy.webp',
+              level_label: 'C',
+            },
+            {
+              exercise_external_id: externalExerciseId,
+              capacity: 4,
+              profile_id: userId,
+              display_name: 'Алексей Сергеев',
+              photo_url:
+                'https://media.padlhub.test/phub-local/profile-photo.webp?X-Amz-Signature=test',
+              level_label: 'C',
+            },
+            {
+              exercise_external_id: externalExerciseId,
+              capacity: 4,
+              profile_id: 'c4e17ec7-a696-4355-a0b9-7e1a5644a3a6',
+              display_name: 'Александр Сосновский',
+              photo_url: null,
+              level_label: 'D+',
+            },
+          ],
+          rowCount: 3,
         });
       }
       if (
@@ -90,13 +124,16 @@ describe('Viva Home producer repository', () => {
         snapshot: {
           profile: {
             externalId: externalProfileId,
-            displayName: 'Алексей',
+            displayName: 'Алексей Петров',
+            firstName: 'Алексей',
+            lastName: 'Петров',
             balanceMinor: -100,
             level: { label: 'D', value: 0, assessmentRequired: true },
           },
           upcoming: [
             {
               externalId: externalBookingId,
+              exerciseExternalId: externalExerciseId,
               title: 'Тренировка',
               startsAt: '2026-07-16T09:00:00+03:00',
               venue: 'ПаделХАБ',
@@ -125,10 +162,17 @@ describe('Viva Home producer repository', () => {
     expect(serialized).not.toContain(externalProfileId);
     expect(serialized).not.toContain(externalBookingId);
     expect(serialized).not.toContain(externalSubscriptionId);
+    expect(serialized).not.toContain(externalExerciseId);
     expect(serialized).not.toContain('562807.selcdn.ru');
     expect(serialized).toContain('media.padlhub.test');
     expect(serialized).toContain(`/bookings/${bookingId}`);
     expect(serialized).toContain(`/subscriptions/${subscriptionId}`);
+    expect(serialized).toContain('"firstName":"Алексей"');
+    expect(serialized).toContain('"lastName":"Петров"');
+    expect(serialized).toContain('"nickname":null');
+    expect(serialized).toContain('"displayName":"Дмитрий Крикунов"');
+    expect(serialized).toContain('"displayName":"Александр Сосновский"');
+    expect(serialized).toContain('"openSlots":1');
     expect(query.mock.calls.at(-1)?.[0]).toBe('commit');
     expect(release).toHaveBeenCalledOnce();
   });

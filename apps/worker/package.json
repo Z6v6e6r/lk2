@@ -18,6 +18,7 @@
     "@phub/database": "0.1.0",
     "@phub/domain": "0.1.0",
     "@phub/home-projection": "0.1.0",
+    "@phub/legacy-games-adapter": "0.1.0",
     "@phub/locations": "0.1.0",
     "@phub/notifications": "0.1.0",
     "zod": "4.4.3",

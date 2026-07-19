@@ -113,6 +113,54 @@ describe('Home promotion carousel', () => {
 });
 
 describe('Home progressive navigation', () => {
+  it('places additional sections after locations and routes certificates to the sale page', () => {
+    render(
+      <HomeDashboardPage
+        dashboard={{
+          ...dashboard,
+          locations: [
+            {
+              id: 'a8df730b-6a67-41a5-8772-48bca84f73bc',
+              title: 'Селигерская',
+              courtCount: 5,
+              imageUrl: null,
+              route: '/locations/a8df730b-6a67-41a5-8772-48bca84f73bc',
+            },
+          ],
+          additionalLinks: [
+            { id: 'promotions', title: 'Все акции', route: '/promotions' },
+            {
+              id: 'gift_certificates',
+              title: 'Подарочные сертификаты',
+              route: '/gift-certificates',
+            },
+            { id: 'offers', title: 'Предложения', route: '/offers' },
+          ],
+        }}
+        tenantName="ПадлХАБ"
+        notificationUnreadCount={0}
+        loadCommunityPage={() => Promise.resolve({ items: [] })}
+        logoutBusy={false}
+        onLogout={vi.fn()}
+      />,
+    );
+
+    const locations = screen.getByRole('region', { name: /локации/i });
+    const additional = screen.getByRole('navigation', { name: 'Дополнительные разделы' });
+    expect(locations.nextElementSibling).toBe(additional);
+    expect(
+      within(additional).getByRole('link', { name: 'Подарочные сертификаты' }),
+    ).toHaveAttribute('href', '/gift-certificates');
+    expect(within(additional).getByRole('link', { name: 'Все акции' })).toHaveAttribute(
+      'href',
+      '/promotions',
+    );
+    expect(within(additional).getByRole('link', { name: 'Предложения' })).toHaveAttribute(
+      'href',
+      '/offers',
+    );
+  });
+
   it('keeps the quick-action block and the bookings/recommendations tabs visible', () => {
     render(
       <HomeDashboardPage
@@ -249,7 +297,7 @@ describe('Home upcoming bookings', () => {
     expect(screen.queryByText(/Рейтинговая игра|Френдли игра/)).not.toBeInTheDocument();
   });
 
-  it('filters real upcoming bookings by a day in the current week', () => {
+  it('filters real upcoming bookings by date and type, and swipes through the next two weeks', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-07-18T09:00:00.000Z'));
     const upcoming: HomeDashboard['upcoming'] = [
@@ -264,7 +312,7 @@ describe('Home upcoming bookings', () => {
       },
       {
         id: '44444444-4444-4444-8444-444444444444',
-        kind: 'tournament',
+        kind: 'game',
         title: 'Воскресный турнир',
         startsAt: '2026-07-19T08:30:00.000Z',
         venue: 'ПаделХАБ · центральный корт',
@@ -291,11 +339,91 @@ describe('Home upcoming bookings', () => {
     expect(screen.getByRole('article', { name: 'Субботняя тренировка' })).toBeVisible();
     expect(screen.queryByRole('article', { name: 'Воскресный турнир' })).not.toBeInTheDocument();
 
-    fireEvent.click(within(filter).getByRole('button', { name: /понедельник, 13 июля/i }));
-    expect(screen.getByRole('status')).toHaveTextContent('На выбранную дату записей нет');
+    fireEvent.click(within(filter).getByRole('button', { name: /понедельник, 20 июля/i }));
+    expect(screen.getByRole('status')).toHaveTextContent('По выбранным фильтрам записей нет');
 
-    fireEvent.click(within(filter).getByRole('button', { name: 'Все даты' }));
+    fireEvent.click(within(filter).getByRole('button', { name: /понедельник, 20 июля/i }));
     expect(screen.getByRole('article', { name: 'Субботняя тренировка' })).toBeVisible();
     expect(screen.getByRole('article', { name: 'Воскресный турнир' })).toBeVisible();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Игры' }));
+    expect(screen.queryByRole('article', { name: 'Субботняя тренировка' })).not.toBeInTheDocument();
+    expect(screen.getByRole('article', { name: 'Воскресный турнир' })).toBeVisible();
+
+    const calendar = filter.querySelector('.fh-calendar');
+    expect(calendar).not.toBeNull();
+    fireEvent.pointerDown(calendar as HTMLDivElement, { clientX: 280 });
+    fireEvent.pointerUp(calendar as HTMLDivElement, { clientX: 100 });
+    expect(within(filter).getByRole('button', { name: /суббота, 25 июля/i })).toBeVisible();
+
+    fireEvent.pointerDown(calendar as HTMLDivElement, { clientX: 280 });
+    fireEvent.pointerUp(calendar as HTMLDivElement, { clientX: 100 });
+    expect(within(filter).getByRole('button', { name: /суббота, 1 августа/i })).toBeVisible();
+
+    fireEvent.pointerDown(calendar as HTMLDivElement, { clientX: 100 });
+    fireEvent.pointerUp(calendar as HTMLDivElement, { clientX: 280 });
+    expect(within(filter).getByRole('button', { name: /суббота, 25 июля/i })).toBeVisible();
+  });
+
+  it('renders only roster data supplied by the Home projection', () => {
+    const upcoming: HomeDashboard['upcoming'] = [
+      {
+        id: '44444444-4444-4444-8444-444444444444',
+        kind: 'game',
+        title: 'Игра с составом',
+        startsAt: '2026-07-19T08:30:00.000Z',
+        venue: 'ПаделХАБ · центральный корт',
+        status: 'confirmed',
+        route: '/games/44444444-4444-4444-8444-444444444444',
+        participants: [
+          {
+            profileId: 'b1dc7c9c-1aed-448d-987e-3235a839b505',
+            displayName: 'Иван Петров',
+            firstName: 'Иван',
+            lastName: 'Петров',
+            nickname: 'ivan_p',
+            avatarUrl: null,
+            level: 'D+',
+          },
+          {
+            profileId: 'c4e17ec7-a696-4355-a0b9-7e1a5644a3a6',
+            displayName: 'Мария Орлова',
+            firstName: 'Мария',
+            lastName: 'Орлова',
+            nickname: null,
+            avatarUrl: null,
+            level: 'C',
+          },
+        ],
+        openSlots: 2,
+      },
+      {
+        id: '55555555-5555-4555-8555-555555555555',
+        kind: 'training',
+        title: 'Запись без состава',
+        startsAt: '2026-07-20T08:30:00.000Z',
+        venue: 'ПаделХАБ · центральный корт',
+        status: 'confirmed',
+        route: '/trainings/55555555-5555-4555-8555-555555555555',
+      },
+    ];
+    const { container } = render(
+      <HomeDashboardPage
+        dashboard={{ ...dashboard, upcoming }}
+        tenantName="ПадлХАБ"
+        notificationUnreadCount={0}
+        loadCommunityPage={() => Promise.resolve({ items: [] })}
+        logoutBusy={false}
+        onLogout={vi.fn()}
+      />,
+    );
+
+    const card = screen.getByRole('article', { name: 'Игра с составом' });
+    expect(within(card).getByLabelText('Участники записи')).toBeVisible();
+    expect(within(card).getAllByRole('img')).toHaveLength(2);
+    expect(within(card).queryByText('Мария Орлова')).not.toBeInTheDocument();
+    expect(within(card).queryByRole('link', { name: /Иван Петров/ })).not.toBeInTheDocument();
+    expect(within(card).getAllByLabelText('Свободное место')).toHaveLength(2);
+    expect(container.querySelectorAll('.fh-event.has-participants')).toHaveLength(1);
   });
 });

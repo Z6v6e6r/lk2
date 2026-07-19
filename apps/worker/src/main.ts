@@ -12,6 +12,7 @@ import {
   createGameRepository,
   createLocalCommunityDirectoryRepository,
 } from '@phub/database';
+import { LegacyGamesMongoAdapter } from '@phub/legacy-games-adapter';
 import { createNotificationEndpointCipher } from '@phub/notifications';
 import { createLogger, startTelemetry } from '@phub/observability';
 import { VivaHomeSourceAdapter, VivaIdentityProvider } from '@phub/viva-adapter';
@@ -27,6 +28,7 @@ import { runCommunityHomeSyncCycle } from './community-home-sync.js';
 import { LegacyPromotionSource } from './legacy-promotion-source.js';
 import { S3ProfilePhotoObjectStore } from './profile-photo-sync.js';
 import { runPromotionHomeSyncCycle } from './promotion-home-sync.js';
+import { runLegacyGamesRosterSyncCycle } from './legacy-games-roster-sync.js';
 import { runVivaHomeSyncCycle } from './viva-home-sync.js';
 import { WebPushDeliveryAdapter } from './web-push-adapter.js';
 import { runWebPushDeliveryBatch } from './web-push-delivery.js';
@@ -73,6 +75,14 @@ const promotionSource =
         onMetric: (metric) => logger.info({ metric }, 'legacy CUP promotion read'),
       })
     : undefined;
+const legacyGamesRosterSource = config.LEGACY_GAMES_ROSTER_SYNC_ENABLED
+  ? new LegacyGamesMongoAdapter({
+      uri: config.LEGACY_GAMES_MONGODB_URI as string,
+      timeoutMs: 5_000,
+      maxAttempts: 2,
+      onMetric: (metric) => logger.info({ metric }, 'legacy Games roster read'),
+    })
+  : undefined;
 const webPushRuntime =
   config.WEB_PUSH_ENABLED && config.NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS
     ? {
@@ -281,6 +291,14 @@ const runVivaSyncCycle = async (): Promise<void> => {
       provider: vivaIdentityProvider,
       getAdapter: getVivaHomeAdapter,
       profilePhotoStore,
+      ...(legacyGamesRosterSource
+        ? {
+            legacyGameRosterBridge: {
+              tenantKey: config.LEGACY_GAMES_ROSTER_SYNC_TENANT_KEY as string,
+              source: legacyGamesRosterSource,
+            },
+          }
+        : {}),
     });
     if (result.attempted > 0) logger.info({ result }, 'Viva Home sync cycle completed');
   } catch (error) {
@@ -333,6 +351,27 @@ const runPromotionSyncCycle = async (): Promise<void> => {
   }
 };
 
+const runLegacyGamesRosterSync = async (): Promise<void> => {
+  if (shuttingDown || !legacyGamesRosterSource) return;
+  try {
+    await runLegacyGamesRosterSyncCycle({
+      pool,
+      config,
+      logger,
+      source: legacyGamesRosterSource,
+    });
+  } catch (error) {
+    logger.error({ error }, 'legacy Games roster synchronization deferred');
+  } finally {
+    if (!shuttingDown) {
+      setTimeout(
+        () => void runLegacyGamesRosterSync(),
+        config.LEGACY_GAMES_ROSTER_SYNC_INTERVAL_MS,
+      );
+    }
+  }
+};
+
 const shutdown = async (signal: string): Promise<void> => {
   if (shuttingDown) return;
   shuttingDown = true;
@@ -353,4 +392,5 @@ void runCycle();
 void runVivaSyncCycle();
 void runCommunitySyncCycle();
 void runPromotionSyncCycle();
+void runLegacyGamesRosterSync();
 void runWebPushCycle();
