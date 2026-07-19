@@ -68,3 +68,27 @@ sql "
      and delegation.revoked_at is null
      and (delegation.refresh_expires_at is null or delegation.refresh_expires_at > now())
 "
+
+sql "
+  select concat(
+    'components=', coalesce(string_agg(distinct component.component, ',' order by component.component), 'NONE'),
+    ' outbox_unpublished=', count(distinct event.id) filter (where event.published_at is null),
+    ' projector_received=', count(distinct inbox.event_id),
+    ' projector_processed=', count(distinct inbox.event_id) filter (where inbox.processed_at is not null)
+  )
+    from integration.user_delegations delegation
+    left join home.dashboard_components component
+      on component.tenant_id = delegation.tenant_id
+     and component.user_id = delegation.user_id
+    left join audit.outbox_events event
+      on event.tenant_id = delegation.tenant_id
+     and event.aggregate_id = delegation.user_id
+     and event.event_type = 'home.projection.component.changed.v1'
+    left join audit.inbox_events inbox
+      on inbox.tenant_id = event.tenant_id
+     and inbox.event_id = event.id
+     and inbox.consumer_name = 'home-projector-v1'
+   where delegation.provider = 'VIVA'
+     and delegation.revoked_at is null
+     and (delegation.refresh_expires_at is null or delegation.refresh_expires_at > now())
+"
