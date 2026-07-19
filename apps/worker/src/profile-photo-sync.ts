@@ -20,6 +20,7 @@ import {
 
 const IMAGE_CONTENT_TYPE = /^image\/(?:avif|heic|heif|jpeg|png|webp)(?:;|$)/i;
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+const PROFILE_PHOTO_FETCH_USER_AGENT = 'PadlHub Profile Photo Sync/1.0';
 
 export interface ProfilePhotoObjectStore {
   put(input: {
@@ -184,7 +185,10 @@ async function fetchSourcePhoto(input: {
     }
 > {
   let url = allowedPhotoUrl(input.sourceUrl, input.allowedHosts);
-  const headers = new Headers({ Accept: 'image/avif,image/webp,image/png,image/jpeg' });
+  const headers = new Headers({
+    Accept: 'image/avif,image/webp,image/png,image/jpeg',
+    'User-Agent': PROFILE_PHOTO_FETCH_USER_AGENT,
+  });
   if (input.current.sourceUrl === input.sourceUrl && input.current.objectKey) {
     if (input.current.sourceEtag) headers.set('If-None-Match', input.current.sourceEtag);
     if (input.current.sourceLastModified) {
