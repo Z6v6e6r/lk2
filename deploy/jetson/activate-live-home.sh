@@ -120,6 +120,20 @@ ready_delegations_sql="
           and promotion.user_id = delegation.user_id
           and promotion.last_synced_at >= '${activation_started}'::timestamptz
      )
+     and (
+       select count(*)
+         from integration.platform_home_source_components platform
+        where platform.tenant_id = delegation.tenant_id
+          and platform.user_id = delegation.user_id
+          and platform.last_synced_at >= '${activation_started}'::timestamptz
+     ) = 3
+     and exists (
+       select 1
+         from home.dashboard_components location
+        where location.tenant_id = delegation.tenant_id
+          and location.user_id = delegation.user_id
+          and location.component = 'locations'
+     )
 "
 
 projection_ready=0
@@ -159,6 +173,20 @@ if test "$projection_ready" -ne 1; then
          where promotion.tenant_id = delegation.tenant_id
            and promotion.user_id = delegation.user_id
            and promotion.last_synced_at >= '${activation_started}'::timestamptz
+      )), '/', count(*),
+      ' platform=', count(*) filter (where (
+        select count(*)
+          from integration.platform_home_source_components platform
+         where platform.tenant_id = delegation.tenant_id
+           and platform.user_id = delegation.user_id
+           and platform.last_synced_at >= '${activation_started}'::timestamptz
+      ) = 3), '/', count(*),
+      ' locations=', count(*) filter (where exists (
+        select 1
+          from home.dashboard_components location
+         where location.tenant_id = delegation.tenant_id
+           and location.user_id = delegation.user_id
+           and location.component = 'locations'
       )), '/', count(*),
       ' snapshot=', count(*) filter (where exists (
         select 1

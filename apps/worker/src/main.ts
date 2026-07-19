@@ -23,6 +23,7 @@ import { registerGamesCardProjectorConsumer } from './games-card-projector-consu
 import { registerLocationHomeProjectorConsumer } from './location-home-projector-consumer.js';
 import { registerNotificationProjectorConsumer } from './notification-projector-consumer.js';
 import { publishOutboxBatch } from './outbox-publisher.js';
+import { runPlatformHomeSyncCycle } from './platform-home-sync.js';
 import { runCommunityHomeSyncCycle } from './community-home-sync.js';
 import { LegacyPromotionSource } from './legacy-promotion-source.js';
 import { S3ProfilePhotoObjectStore } from './profile-photo-sync.js';
@@ -313,6 +314,20 @@ const runCommunitySyncCycle = async (): Promise<void> => {
   }
 };
 
+const runPlatformSyncCycle = async (): Promise<void> => {
+  if (shuttingDown || !config.HOME_VIVA_SYNC_ENABLED) return;
+  try {
+    const result = await runPlatformHomeSyncCycle({ pool, config, logger });
+    if (result.attempted > 0) logger.info({ result }, 'platform Home sync cycle completed');
+  } catch (error) {
+    logger.error({ error }, 'platform Home sync cycle failed');
+  } finally {
+    if (!shuttingDown) {
+      setTimeout(() => void runPlatformSyncCycle(), config.HOME_VIVA_SYNC_INTERVAL_MS);
+    }
+  }
+};
+
 const runPromotionSyncCycle = async (): Promise<void> => {
   if (shuttingDown || !promotionSource || !profilePhotoStore) return;
   try {
@@ -352,5 +367,6 @@ process.once('SIGINT', () => void shutdown('SIGINT'));
 void runCycle();
 void runVivaSyncCycle();
 void runCommunitySyncCycle();
+void runPlatformSyncCycle();
 void runPromotionSyncCycle();
 void runWebPushCycle();

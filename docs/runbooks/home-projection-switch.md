@@ -191,9 +191,10 @@ to that override. Secrets remain exclusively in `/etc/phub/staging.env`.
 
 The activation is deliberately two-phase. It recreates the worker while Home reads stay on mock,
 then requires every active Viva delegation to receive fresh Viva, community and promotion source
-components and a fresh complete `LOCAL_PROJECTION` snapshot. Only after that database gate passes
-does it write `HOME_READ_MODE=projection` and recreate the API. If the gate times out, the script
-exits without recreating the API in projection mode.
+components, three fresh canonical platform components, a canonical locations component and a fresh
+complete `LOCAL_PROJECTION` snapshot. Only after that database gate passes does it write
+`HOME_READ_MODE=projection` and recreate the API. If the gate times out, the script prints only
+aggregate component readiness and exits without recreating the API in projection mode.
 
 ## Failure and rollback
 

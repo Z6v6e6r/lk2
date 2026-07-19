@@ -44,6 +44,20 @@ sql "
          and promotion.user_id = delegation.user_id
          and promotion.last_synced_at >= now() - interval '10 minutes'
     )),
+    ' platform_fresh=', count(*) filter (where (
+      select count(*)
+        from integration.platform_home_source_components platform
+       where platform.tenant_id = delegation.tenant_id
+         and platform.user_id = delegation.user_id
+         and platform.last_synced_at >= now() - interval '10 minutes'
+    ) = 3),
+    ' locations_component=', count(*) filter (where exists (
+      select 1
+        from home.dashboard_components location
+       where location.tenant_id = delegation.tenant_id
+         and location.user_id = delegation.user_id
+         and location.component = 'locations'
+    )),
     ' snapshot_projection=', count(*) filter (where exists (
       select 1
         from home.dashboard_snapshots snapshot
