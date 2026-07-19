@@ -96,6 +96,8 @@ describe('Viva profile photo synchronization', () => {
     const uploaded = objectStore.put.mock.calls[0]?.[0];
     expect(uploaded?.body.subarray(0, 4).toString('ascii')).toBe('RIFF');
     expect(uploaded?.body.subarray(8, 12).toString('ascii')).toBe('WEBP');
+    const requestHeaders = new Headers(fetchImplementation.mock.calls[0]?.[1]?.headers);
+    expect(requestHeaders.get('User-Agent')).toBe('PadlHub Profile Photo Sync/1.0');
   });
 
   it('uses a conditional request and keeps the locally stored object on 304', async () => {
