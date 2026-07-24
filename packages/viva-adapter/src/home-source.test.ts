@@ -46,6 +46,7 @@ describe('Viva Home source adapter', () => {
             isCancelled: false,
             transactionStatus: { transactionStatus: 'UNPAID' },
             exercise: {
+              id: '55555555-5555-4555-8555-555555555555',
               timeFrom: '2026-07-16T09:00:00+03:00',
               inWaitlist: false,
               direction: { name: 'Падел' },
@@ -86,6 +87,7 @@ describe('Viva Home source adapter', () => {
         externalId: '11111111-1111-4111-8111-111111111111',
         displayName: 'Алексей Петров',
         firstName: 'Алексей',
+        lastName: 'Петров',
         photoUrl: 'https://562807.selcdn.ru/smstretching/profile-source.jpg',
         balanceMinor: -12_500,
         level: { label: 'C+', value: 3.7, assessmentRequired: false },
@@ -93,6 +95,7 @@ describe('Viva Home source adapter', () => {
       upcoming: [
         {
           externalId: '22222222-2222-4222-8222-222222222222',
+          exerciseExternalId: '55555555-5555-4555-8555-555555555555',
           title: 'Групповая тренировка',
           startsAt: '2026-07-16T09:00:00+03:00',
           venue: 'Селигерская · Коровинское шоссе, 10',

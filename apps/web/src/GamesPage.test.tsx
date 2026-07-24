@@ -6,7 +6,10 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { GamesPage } from './GamesPage.js';
-import type { AuthGateway, PublicGameCard } from './auth-gateway.js';
+import type { AuthGateway, GameCard as ViewerGameCard, PublicGameCard } from './auth-gateway.js';
+
+const weekdayFormatter = new Intl.DateTimeFormat('ru-RU', { weekday: 'short' });
+const dayFormatter = new Intl.DateTimeFormat('ru-RU', { day: '2-digit' });
 
 const game: PublicGameCard = {
   id: '751fe6a8-b0b1-4b2b-873d-a2d785c4e191',
@@ -20,6 +23,7 @@ const game: PublicGameCard = {
   endsAt: '2026-07-20T16:00:00.000Z',
   timezone: 'Europe/Moscow',
   station: { id: 'a8df730b-6a67-41a5-8772-48bca84f73bc', name: 'Селигерская' },
+  court: { id: 'bd35543d-c565-443a-bd3d-eea68eb2fbe6', name: 'Корт №3' },
   levelRange: { from: 'C', to: 'C+' },
   rosterState: 'LAST_SPOT',
   capacity: { total: 4, occupied: 3, reserved: 0, open: 1, waitlistCount: 0 },
@@ -63,6 +67,37 @@ function gateway(): AuthGateway {
 afterEach(() => cleanup());
 
 describe('GamesPage discovery', () => {
+  it('opens the result tab immediately for a finished game', async () => {
+    const finishedGame: ViewerGameCard = {
+      ...game,
+      surface: 'HISTORY',
+      displayState: 'RESULT_REQUIRED',
+      levelRange: game.levelRange ?? null,
+      capacity: { ...game.capacity, total: 4 },
+      priceSummary: game.priceSummary ?? null,
+      participants: game.participants.map((participant, index) => ({
+        ...participant,
+        userId: `00000000-0000-4000-8000-00000000000${index}`,
+      })),
+      viewerRelation: 'PARTICIPANT',
+      resultSummary: { state: 'AWAITING_SUBMISSION' },
+      allowedActions: ['OPEN_DETAILS', 'SUBMIT_RESULT'],
+      conversation: null,
+    };
+    const api: AuthGateway = {
+      ...gateway(),
+      getGame: vi.fn().mockResolvedValue(finishedGame),
+    };
+
+    render(<GamesPage gateway={api} gameId={finishedGame.id} />);
+
+    expect(await screen.findByRole('tab', { name: 'Результат' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    expect(screen.getByRole('heading', { name: 'Пары и счёт по сетам' })).toBeInTheDocument();
+  });
+
   it('uses the shared main navigation and exposes the MVP create-game call to action', async () => {
     const api = gateway();
     render(<GamesPage gateway={api} />);
@@ -85,6 +120,46 @@ describe('GamesPage discovery', () => {
     expect(createDescription.closest('a')).toHaveAttribute('href', '/games/new');
     expect(document.querySelector('.games-header a[aria-label="Создать игру"]')).toBeNull();
     expect(document.querySelector('.games-bottom-nav')).toBeNull();
+  });
+
+  it('opens on today with a swipeable two-week date horizon and two discovery tabs', async () => {
+    const api = gateway();
+    const user = userEvent.setup();
+    render(<GamesPage gateway={api} />);
+
+    await screen.findByText(game.title);
+
+    expect(screen.queryByRole('heading', { name: 'Игры' })).not.toBeInTheDocument();
+    const tabs = screen.getByRole('navigation', { name: 'Разделы игр' });
+    expect(within(tabs).getAllByRole('button')).toHaveLength(2);
+    expect(within(tabs).getByRole('button', { name: 'Для меня' })).toBeInTheDocument();
+    expect(within(tabs).queryByRole('button', { name: 'Мои игры' })).not.toBeInTheDocument();
+    expect(within(tabs).queryByRole('button', { name: 'История' })).not.toBeInTheDocument();
+
+    const dateRail = screen.getByLabelText('Выбор даты');
+    const dateButtons = within(dateRail).getAllByRole('button');
+    expect(dateButtons).toHaveLength(16);
+    expect(dateButtons[0]).toHaveAttribute('aria-pressed', 'false');
+    expect(dateButtons[1]).toHaveAttribute('aria-pressed', 'true');
+    const initialFilters = vi.mocked(api.listPublicGames).mock.calls[0]?.[0];
+    expect(typeof initialFilters?.startsFrom).toBe('string');
+    expect(typeof initialFilters?.startsTo).toBe('string');
+
+    const twoWeeksAhead = new Date();
+    twoWeeksAhead.setHours(0, 0, 0, 0);
+    twoWeeksAhead.setDate(twoWeeksAhead.getDate() + 14);
+    expect(
+      within(dateRail).getByRole('button', {
+        name: `${dayFormatter.format(twoWeeksAhead)}${weekdayFormatter
+          .format(twoWeeksAhead)
+          .replace('.', '')}`,
+      }),
+    ).toBeInTheDocument();
+
+    await user.click(within(tabs).getByRole('button', { name: 'Для меня' }));
+    await waitFor(() =>
+      expect(api.listMyGames).toHaveBeenCalledWith({ scope: 'UPCOMING', limit: 20 }),
+    );
   });
 
   it('loads real discovery contract and executes a revision-guarded join', async () => {

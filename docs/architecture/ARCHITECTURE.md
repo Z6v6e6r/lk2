@@ -66,7 +66,7 @@ that stored target policy after permission evaluation, so privacy can only reduc
 
 ## Data and domains
 
-PostgreSQL is the operational source of truth. Logical schemas mirror domains, not services or Viva response shapes. Redis stores only ephemeral cache, locks, rate-limit state and counters. RabbitMQ transports events/retries/DLQ. Files use signed URLs to S3-compatible storage.
+PostgreSQL is the operational source of truth. Logical schemas mirror domains, not services or Viva response shapes. Redis stores only ephemeral cache, locks, rate-limit state and counters. RabbitMQ transports events/retries/DLQ. Private files use bounded PadlHub media endpoints or short-lived signed URLs to S3-compatible storage; expiring signatures are never persisted as canonical profile data.
 
 Every tenant-owned row contains `tenant_id`; row-level security is part of defense in depth. Modules own their tables and migrations and communicate through public domain interfaces.
 
@@ -78,6 +78,20 @@ PadlHub UUIDs, never scores, subscription state or provider identifiers. Provide
 history and non-Games candidates remain fail-closed until their adapter contracts are proven. See
 [ADR 0012](../adr/0012-booking-recommendations-first-slice.md) and the
 [domain design](../domains/bookings-and-recommendations.md).
+
+Gift certificates are a `LOCAL_PRIMARY` Commerce aggregate. It owns the tenant catalog, PadlHub
+media assets, immutable server-priced order snapshots and a payment-operation journal. CUP changes
+a single optimistic-locking draft, uploads normalized private WebP media and publishes it with an
+audited idempotent command. Public and authenticated sale surfaces read one published version;
+guest orders are bound to a short-lived HttpOnly purchase session. The only implemented payment
+provider is a physically local/CI-only sandbox. A durable worker now issues exactly one certificate
+per verified payment, writes a private PDF and journals scheduled email delivery; the only email
+adapter is an explicitly local/CI sandbox that sends nothing externally. Real provider and email
+traffic, activation and the credit ledger remain disabled until their later slices are complete. See
+[ADR 0013](../adr/0013-gift-certificate-catalog-foundation.md),
+[ADR 0014](../adr/0014-gift-certificate-sale-sandbox.md),
+[ADR 0015](../adr/0015-gift-certificate-issuance-and-private-pdf.md) and the
+[gift certificate domain](../domains/gift-certificates.md).
 
 The communities module owns canonical community and membership rows. Home projects no more than
 five summaries; the full authenticated directory uses a separate keyset-paginated User API read.
@@ -99,9 +113,11 @@ after signed URLs and stale projections have expired.
 
 Provider-hosted profile photos cross the integration boundary only in `apps/worker`. They are
 allowlisted, size-limited, normalized to metadata-free WebP and stored under immutable SHA-256 keys.
-PostgreSQL keeps the tenant/user object mapping and provider change validators; clients receive only
-short-lived signed URLs to PadlHub-owned objects. A profile/media update and its Home outbox event
-share one transaction, while superseded-object deletion is queued until signed URLs and stale
+PostgreSQL keeps the tenant/user object mapping and provider change validators; profiles and read
+projections keep only the stable `/public/api/v1/media/profile-photos/{tenantId}/{deliveryId}` PadlHub URL.
+The API resolves the current object key under tenant RLS and streams the private WebP from object
+storage with bounded retries and a timeout. A profile/media update and its Home outbox event share
+one transaction, while superseded-object deletion is queued until cached responses and stale
 projections can no longer reference it.
 
 ## Chats, notifications and moderation

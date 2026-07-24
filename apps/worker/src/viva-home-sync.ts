@@ -9,20 +9,30 @@ import {
 } from '@phub/auth/viva-delegation';
 import type { AppConfig } from '@phub/config';
 import { createLegacyGameImportRepository } from '@phub/database';
-import type { LegacyGamesMongoAdapter } from '@phub/legacy-games-adapter';
+import {
+  localVivaProfileAssociationId,
+  type LegacyGamesMongoAdapter,
+} from '@phub/legacy-games-adapter';
 import { VivaHomeSourceError, type VivaHomeSourceAdapter } from '@phub/viva-adapter';
 import type Redis from 'ioredis';
 import type { Logger } from 'pino';
 import type { Pool } from 'pg';
 
-import { synchronizeVivaProfilePhoto, type ProfilePhotoObjectStore } from './profile-photo-sync.js';
+import {
+  synchronizeProfilePhoto,
+  synchronizeVivaProfilePhoto,
+  type ProfilePhotoObjectStore,
+} from './profile-photo-sync.js';
 import {
   completeProfilePhotoObjectGc,
   listDueVivaHomeDelegations,
   listDueProfilePhotoObjects,
+  persistProfilePhoto,
+  persistLegacyParticipantViewerProfile,
   persistVivaHomeSource,
   recordProfilePhotoObjectGcFailure,
   recordVivaHomeSyncFailure,
+  resolveLegacyParticipantPhotoTargets,
   saveRefreshedVivaHomeDelegation,
   type VivaHomeDelegation,
 } from './viva-home-repository.js';
@@ -44,27 +54,73 @@ export interface VivaHomeLegacyGameRosterBridge {
 
 async function synchronizeLegacyGameRostersForHome(input: {
   readonly pool: Pool;
+  readonly viewerUserId: string;
   readonly bridge: VivaHomeLegacyGameRosterBridge;
   readonly snapshot: Awaited<ReturnType<VivaHomeSourceAdapter['read']>>;
+  readonly config: AppConfig;
+  readonly profilePhotoStore: ProfilePhotoObjectStore;
+  readonly logger: Logger;
   readonly correlationId: string;
   readonly now: Date;
-}): Promise<{ readonly imported: number; readonly synced: number; readonly conflicts: number }> {
+}): Promise<{
+  readonly imported: number;
+  readonly synced: number;
+  readonly conflicts: number;
+  readonly viewerProfileEnriched: boolean;
+  readonly avatarsStored: number;
+  readonly avatarsUnchanged: number;
+  readonly avatarsFailed: number;
+}> {
   const exerciseExternalIds = input.snapshot.upcoming.flatMap((item) =>
     item.exerciseExternalId ? [item.exerciseExternalId] : [],
   );
-  if (exerciseExternalIds.length === 0) return { imported: 0, synced: 0, conflicts: 0 };
+  if (exerciseExternalIds.length === 0) {
+    return {
+      imported: 0,
+      synced: 0,
+      conflicts: 0,
+      viewerProfileEnriched: false,
+      avatarsStored: 0,
+      avatarsUnchanged: 0,
+      avatarsFailed: 0,
+    };
+  }
 
   const snapshots = await input.bridge.source.readByVivaExerciseIds({
     exerciseExternalIds,
     limit: Math.min(25, Math.max(1, exerciseExternalIds.length)),
   });
-  if (snapshots.length === 0) return { imported: 0, synced: 0, conflicts: 0 };
+  if (snapshots.length === 0) {
+    return {
+      imported: 0,
+      synced: 0,
+      conflicts: 0,
+      viewerProfileEnriched: false,
+      avatarsStored: 0,
+      avatarsUnchanged: 0,
+      avatarsFailed: 0,
+    };
+  }
 
+  const viewerAssociationIds = new Set([
+    input.snapshot.profile.externalId,
+    localVivaProfileAssociationId(input.snapshot.profile.externalId),
+  ]);
+  const viewerParticipant = snapshots
+    .flatMap((snapshot) => snapshot.participants)
+    .find((participant) => viewerAssociationIds.has(participant.externalId));
   const repository = createLegacyGameImportRepository(input.pool);
   const imported = await repository.importSnapshots({
     tenantKey: input.bridge.tenantKey,
     snapshots,
     correlationId: input.correlationId,
+    ...(viewerParticipant
+      ? {
+          participantUserBindings: [
+            { externalId: viewerParticipant.externalId, userId: input.viewerUserId },
+          ],
+        }
+      : {}),
     now: input.now,
   });
   const rosterSync = await repository.synchronizeParticipants({
@@ -73,10 +129,95 @@ async function synchronizeLegacyGameRostersForHome(input: {
     correlationId: input.correlationId,
     now: input.now,
   });
+  const viewerLevel = ['D', 'D+', 'C', 'C+', 'B', 'B+', 'A'].includes(
+    input.snapshot.profile.level.label,
+  )
+    ? (input.snapshot.profile.level.label as 'D' | 'D+' | 'C' | 'C+' | 'B' | 'B+' | 'A')
+    : null;
+  const viewerProfileEnriched =
+    viewerParticipant && viewerLevel
+      ? await persistLegacyParticipantViewerProfile({
+          pool: input.pool,
+          tenantId: imported.tenantId,
+          participantExternalId: viewerParticipant.externalId,
+          displayName: input.snapshot.profile.displayName,
+          level: viewerLevel,
+          levelValue: input.snapshot.profile.level.value,
+        })
+      : false;
+  const photoTargets = await resolveLegacyParticipantPhotoTargets({
+    pool: input.pool,
+    tenantId: imported.tenantId,
+    snapshots,
+  });
+  let avatarsStored = 0;
+  let avatarsUnchanged = 0;
+  let avatarsFailed = 0;
+  for (const target of photoTargets) {
+    try {
+      const result = await synchronizeProfilePhoto({
+        pool: input.pool,
+        store: input.profilePhotoStore,
+        tenantId: imported.tenantId,
+        userId: target.userId,
+        sourceUrl: target.sourceUrl,
+        fetchedAt: input.snapshot.fetchedAt,
+        allowedHosts: input.config.PROFILE_PHOTO_ALLOWED_HOSTS.split(',')
+          .map((host) => host.trim())
+          .filter(Boolean),
+        maxBytes: input.config.PROFILE_PHOTO_MAX_BYTES,
+        maxDimension: input.config.PROFILE_PHOTO_MAX_DIMENSION,
+        webpQuality: input.config.PROFILE_PHOTO_WEBP_QUALITY,
+        previousObjectRetentionSeconds:
+          input.config.PROFILE_PHOTO_URL_TTL_SECONDS +
+          input.config.HOME_PROJECTION_MAX_STALE_SECONDS +
+          60,
+        timeoutMs: input.config.VIVA_TIMEOUT_MS,
+        replaceExistingSource: false,
+      });
+      if (!result.errorCode || result.persistence.objectKey) {
+        await persistProfilePhoto({
+          pool: input.pool,
+          tenantId: imported.tenantId,
+          userId: target.userId,
+          photo: result.persistence,
+        });
+      }
+      if (result.outcome === 'stored') avatarsStored += 1;
+      else if (result.outcome === 'unchanged') avatarsUnchanged += 1;
+      else avatarsFailed += 1;
+      if (result.errorCode) {
+        input.logger.warn(
+          {
+            tenantId: imported.tenantId,
+            userId: target.userId,
+            correlationId: input.correlationId,
+            code: result.errorCode,
+          },
+          'legacy participant photo synchronization retained the local photo',
+        );
+      }
+    } catch (error) {
+      avatarsFailed += 1;
+      input.logger.warn(
+        {
+          tenantId: imported.tenantId,
+          userId: target.userId,
+          correlationId: input.correlationId,
+          code: failureCode(error),
+        },
+        'legacy participant photo synchronization failed',
+      );
+    }
+  }
   return {
     imported: imported.imported.length,
     synced: rosterSync.synced.length,
     conflicts: rosterSync.conflicts,
+    viewerProfileEnriched,
+    avatarsStored,
+    avatarsUnchanged,
+    avatarsFailed,
   };
 }
 
@@ -214,12 +355,24 @@ export async function runVivaHomeSyncCycle(input: {
         if (input.legacyGameRosterBridge) {
           const rosterResult = await synchronizeLegacyGameRostersForHome({
             pool: input.pool,
+            viewerUserId: delegation.userId,
             bridge: input.legacyGameRosterBridge,
             snapshot,
+            config: input.config,
+            profilePhotoStore: input.profilePhotoStore,
+            logger: input.logger,
             correlationId,
             now,
           });
-          if (rosterResult.imported > 0 || rosterResult.synced > 0 || rosterResult.conflicts > 0) {
+          if (
+            rosterResult.imported > 0 ||
+            rosterResult.synced > 0 ||
+            rosterResult.conflicts > 0 ||
+            rosterResult.viewerProfileEnriched ||
+            rosterResult.avatarsStored > 0 ||
+            rosterResult.avatarsUnchanged > 0 ||
+            rosterResult.avatarsFailed > 0
+          ) {
             input.logger.info(
               {
                 tenantId: delegation.tenantId,

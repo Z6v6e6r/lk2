@@ -49,7 +49,8 @@ Endpoints:
 - First vertical web app: `http://localhost:5173` (with the `clients` profile or `npm run dev:web`)
 - Realtime liveness: `http://localhost:3001/health/live`
 - RabbitMQ UI: `http://localhost:15672`
-- MinIO UI: `http://localhost:9001`
+- MinIO UI: `http://localhost:9001` by default (set `MINIO_CONSOLE_PORT` in `.env` to
+  use another host port)
 - Prometheus: `http://localhost:9090`
 - Grafana: `http://localhost:3101`
 

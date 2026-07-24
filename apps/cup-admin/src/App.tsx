@@ -2,6 +2,7 @@ import { ApiClientError } from '@phub/api-sdk';
 import type { AuthenticatedSession } from '@phub/api-sdk';
 import { useEffect, useMemo, useState } from 'react';
 
+import { GiftCertificateWorkspace } from './GiftCertificateWorkspace.js';
 import { LocationsWorkspace } from './LocationsWorkspace.js';
 import {
   createNotificationAdminClient,
@@ -193,7 +194,9 @@ function NotificationWorkspace(props: {
   readonly session: AuthenticatedSession;
   readonly onLogout: () => void;
 }): React.JSX.Element {
-  const [activeArea, setActiveArea] = useState<'notifications' | 'settings'>('settings');
+  const [activeArea, setActiveArea] = useState<'notifications' | 'gift-certificates' | 'settings'>(
+    'settings',
+  );
   const [capabilities, setCapabilities] = useState<AdminNotificationCapabilities>();
   const [phonesText, setPhonesText] = useState('');
   const [title, setTitle] = useState('');
@@ -305,6 +308,13 @@ function NotificationWorkspace(props: {
             </button>
             <button
               type="button"
+              className={`nav-item ${activeArea === 'gift-certificates' ? 'active' : ''}`}
+              onClick={() => setActiveArea('gift-certificates')}
+            >
+              <span>◇</span> Сертификаты
+            </button>
+            <button
+              type="button"
               className={`nav-item ${activeArea === 'settings' ? 'active' : ''}`}
               onClick={() => setActiveArea('settings')}
             >
@@ -328,6 +338,8 @@ function NotificationWorkspace(props: {
 
       {activeArea === 'settings' ? (
         <LocationsWorkspace client={client} />
+      ) : activeArea === 'gift-certificates' ? (
+        <GiftCertificateWorkspace client={client} />
       ) : (
         <main className="workspace">
           <header className="workspace-header">

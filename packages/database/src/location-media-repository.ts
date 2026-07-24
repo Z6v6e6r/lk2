@@ -1,0 +1,177 @@
+import { locationMediaAssetSchema, type LocationMediaAsset } from '@phub/locations';
+import type { Pool, QueryResultRow } from 'pg';
+
+import { queryOne, withTenantTransaction } from './connection.js';
+
+export type LocationMediaCommandResult =
+  | {
+      readonly outcome: 'applied';
+      readonly asset: LocationMediaAsset;
+      readonly replayed: boolean;
+    }
+  | { readonly outcome: 'idempotency_conflict' };
+
+export interface LocationMediaRepository {
+  saveReady(input: {
+    readonly tenantId: string;
+    readonly actorUserId: string;
+    readonly tenantKey: string;
+    readonly assetId: string;
+    readonly objectKey: string;
+    readonly sha256: string;
+    readonly bytes: number;
+    readonly width: number;
+    readonly height: number;
+    readonly idempotencyKey: string;
+    readonly requestHash: string;
+    readonly correlationId: string;
+  }): Promise<LocationMediaCommandResult>;
+  getReady(
+    tenantId: string,
+    assetId: string,
+  ): Promise<
+    | {
+        readonly asset: LocationMediaAsset;
+        readonly objectKey: string;
+      }
+    | undefined
+  >;
+}
+
+interface MediaRow extends QueryResultRow {
+  readonly id: string;
+  readonly status: 'READY';
+  readonly object_key: string;
+  readonly content_sha256: string;
+  readonly content_type: 'image/webp';
+  readonly byte_size: number;
+  readonly width: number;
+  readonly height: number;
+  readonly created_at: Date | string;
+}
+
+interface MediaCommandRow extends QueryResultRow {
+  readonly request_hash: string;
+  readonly result_payload: unknown;
+}
+
+function mapAsset(row: MediaRow, tenantKey: string): LocationMediaAsset {
+  return locationMediaAssetSchema.parse({
+    id: row.id,
+    status: row.status,
+    mediaUrl: `/public/api/v1/${tenantKey}/location-media/${row.id}`,
+    contentType: row.content_type,
+    bytes: row.byte_size,
+    width: row.width,
+    height: row.height,
+    sha256: row.content_sha256,
+    createdAt: new Date(row.created_at).toISOString(),
+  });
+}
+
+export function createLocationMediaRepository(pool: Pool): LocationMediaRepository {
+  return {
+    saveReady(input) {
+      return withTenantTransaction(pool, input.tenantId, async (client) => {
+        const command = await queryOne<MediaCommandRow>(
+          client,
+          `select request_hash, result_payload
+             from locations.media_commands
+            where tenant_id = $1 and actor_user_id = $2 and idempotency_key = $3
+            for update`,
+          [input.tenantId, input.actorUserId, input.idempotencyKey],
+        );
+        if (command) {
+          if (command.request_hash !== input.requestHash) {
+            return { outcome: 'idempotency_conflict' };
+          }
+          return {
+            outcome: 'applied',
+            asset: locationMediaAssetSchema.parse(command.result_payload),
+            replayed: true,
+          };
+        }
+
+        const row = await queryOne<MediaRow>(
+          client,
+          `insert into locations.media_assets (
+             tenant_id, id, status, object_key, content_sha256,
+             content_type, byte_size, width, height, created_by
+           ) values ($1, $2, 'READY', $3, $4, 'image/webp', $5, $6, $7, $8)
+           on conflict (tenant_id, content_sha256) do update set
+             content_sha256 = excluded.content_sha256
+           returning id, status, object_key, content_sha256,
+                     content_type, byte_size, width, height, created_at`,
+          [
+            input.tenantId,
+            input.assetId,
+            input.objectKey,
+            input.sha256,
+            input.bytes,
+            input.width,
+            input.height,
+            input.actorUserId,
+          ],
+        );
+        if (!row) throw new Error('LOCATION_MEDIA_WRITE_LOST');
+        const asset = mapAsset(row, input.tenantKey);
+        await client.query(
+          `insert into audit.audit_log (
+             tenant_id, actor_id, action, resource_type, resource_id,
+             result, correlation_id, new_value
+           ) values ($1, $2, 'LOCATION_MEDIA_READY', 'LOCATION_MEDIA', $3,
+                     'SUCCESS', $4, $5::jsonb)`,
+          [
+            input.tenantId,
+            input.actorUserId,
+            asset.id,
+            input.correlationId,
+            JSON.stringify({
+              sha256: asset.sha256,
+              contentType: asset.contentType,
+              bytes: asset.bytes,
+              width: asset.width,
+              height: asset.height,
+            }),
+          ],
+        );
+        await client.query(
+          `insert into locations.media_commands (
+             tenant_id, actor_user_id, idempotency_key, request_hash,
+             asset_id, result_payload
+           ) values ($1, $2, $3, $4, $5, $6::jsonb)`,
+          [
+            input.tenantId,
+            input.actorUserId,
+            input.idempotencyKey,
+            input.requestHash,
+            asset.id,
+            JSON.stringify(asset),
+          ],
+        );
+        return { outcome: 'applied', asset, replayed: false };
+      });
+    },
+
+    getReady(tenantId, assetId) {
+      return withTenantTransaction(pool, tenantId, async (client) => {
+        const tenant = await queryOne<{ readonly tenant_key: string }>(
+          client,
+          'select tenant_key from identity.tenants where id = $1 and active = true',
+          [tenantId],
+        );
+        const row = await queryOne<MediaRow>(
+          client,
+          `select id, status, object_key, content_sha256,
+                  content_type, byte_size, width, height, created_at
+             from locations.media_assets
+            where tenant_id = $1 and id = $2 and status = 'READY'`,
+          [tenantId, assetId],
+        );
+        return row && tenant
+          ? { asset: mapAsset(row, tenant.tenant_key), objectKey: row.object_key }
+          : undefined;
+      });
+    },
+  };
+}

@@ -94,15 +94,44 @@ export const locationGalleryImageSchema = z
   .object({
     url: z
       .string()
-      .url()
       .max(2_000)
-      .refine((value) => value.startsWith('https://'), 'gallery images must use HTTPS'),
+      .refine(
+        (value) =>
+          value.startsWith('https://') ||
+          /^\/public\/api\/v1\/[a-z0-9][a-z0-9-]{1,62}\/location-media\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+            value,
+          ),
+        'gallery images must use HTTPS or a PadlHub location media URL',
+      ),
     alt: z.string().trim().max(180),
     isCover: z.boolean(),
     sortOrder: z.number().int().min(0).max(99),
   })
   .strict();
 export type LocationGalleryImage = z.infer<typeof locationGalleryImageSchema>;
+
+export const locationMediaAssetSchema = z
+  .object({
+    id: uuid,
+    status: z.literal('READY'),
+    mediaUrl: z
+      .string()
+      .regex(
+        /^\/public\/api\/v1\/[a-z0-9][a-z0-9-]{1,62}\/location-media\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+      ),
+    contentType: z.literal('image/webp'),
+    bytes: z
+      .number()
+      .int()
+      .positive()
+      .max(8 * 1_024 * 1_024),
+    width: z.number().int().positive().max(2_048),
+    height: z.number().int().positive().max(2_048),
+    sha256: z.string().regex(/^[0-9a-f]{64}$/),
+    createdAt: dateTime,
+  })
+  .strict();
+export type LocationMediaAsset = z.infer<typeof locationMediaAssetSchema>;
 
 const locationEditorialFields = {
   slug: z.string().regex(/^[a-z0-9][a-z0-9-]{1,78}$/),

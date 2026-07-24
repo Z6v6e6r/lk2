@@ -86,10 +86,24 @@ const environmentSchema = z.object({
   HOME_READ_MODE: z.enum(['mock', 'projection']).default('mock'),
   GAMES_READ_ENABLED: booleanFromEnvironment,
   GAMES_COMMANDS_ENABLED: booleanFromEnvironment,
-  // The old LK can supply roster changes only during the staged migration mirror. This source
-  // URI is process-only and is never exposed through API configuration or client bundles.
+  GAMES_RESULTS_WRITE_MODE: z
+    .enum(['disabled', 'shadow_compare', 'local_primary'])
+    .default('disabled'),
+  CUP_RATING_CONSUMER_ENABLED: booleanFromEnvironment,
+  CUP_RATING_API_URL: z.string().url().optional(),
+  CUP_RATING_SERVICE_TOKEN: z.string().min(32).optional(),
+  CUP_RATING_TIMEOUT_MS: z.coerce.number().int().min(500).max(30_000).default(5_000),
+  ACTIVITY_HISTORY_ENABLED: booleanFromEnvironment,
+  ACTIVITY_HISTORY_SYNC_ENABLED: booleanFromEnvironment,
+  ACTIVITY_HISTORY_GAME_BACKFILL_ENABLED: booleanFromEnvironment,
+  ACTIVITY_HISTORY_FRESH_SECONDS: z.coerce.number().int().min(30).max(86_400).default(300),
+  ACTIVITY_HISTORY_PROVIDER_PAGE_SIZE: z.coerce.number().int().min(1).max(100).default(50),
+  // The old LK can supply roster changes through either a safe local public clone or the staged
+  // Mongo migration mirror. Source selection is process-only and is never exposed to clients.
   LEGACY_GAMES_ROSTER_SYNC_ENABLED: booleanFromEnvironment,
+  LEGACY_GAMES_ROSTER_SYNC_SOURCE: z.enum(['public', 'mongo']).default('mongo'),
   LEGACY_GAMES_MONGODB_URI: z.string().min(1).optional(),
+  LEGACY_GAMES_PUBLIC_BASE_URL: z.string().url().default('https://padlhub.su'),
   LEGACY_GAMES_ROSTER_SYNC_TENANT_KEY: z.string().min(1).optional(),
   LEGACY_GAMES_ROSTER_SYNC_INTERVAL_MS: z.coerce
     .number()
@@ -299,6 +313,11 @@ export function loadConfig(
       'NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS',
       'NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS_FILE',
     ),
+    CUP_RATING_SERVICE_TOKEN: materializeFileSecret(
+      environment,
+      'CUP_RATING_SERVICE_TOKEN',
+      'CUP_RATING_SERVICE_TOKEN_FILE',
+    ),
   };
   const parsed = environmentSchema.safeParse(resolvedEnvironment);
   if (!parsed.success) {
@@ -316,16 +335,100 @@ export function loadConfig(
       'GAMES_COMMANDS_ENABLED is staging-only until the Games production gate passes',
     );
   }
-  if (parsed.data.LEGACY_GAMES_ROSTER_SYNC_ENABLED) {
-    if (parsed.data.APP_ENV !== 'staging') {
+  if (
+    parsed.data.GAMES_RESULTS_WRITE_MODE === 'local_primary' &&
+    !parsed.data.GAMES_COMMANDS_ENABLED
+  ) {
+    throw new Error('GAMES_RESULTS_WRITE_MODE=local_primary requires GAMES_COMMANDS_ENABLED=true');
+  }
+  if (parsed.data.APP_ENV === 'production' && parsed.data.GAMES_RESULTS_WRITE_MODE !== 'disabled') {
+    throw new Error('Games results cutover is staging-only until the production gate passes');
+  }
+  if (
+    parsed.data.CUP_RATING_CONSUMER_ENABLED &&
+    (!parsed.data.CUP_RATING_API_URL || !parsed.data.CUP_RATING_SERVICE_TOKEN)
+  ) {
+    throw new Error(
+      'CUP_RATING_CONSUMER_ENABLED requires CUP_RATING_API_URL and CUP_RATING_SERVICE_TOKEN',
+    );
+  }
+  if (parsed.data.APP_ENV === 'production' && parsed.data.ACTIVITY_HISTORY_ENABLED) {
+    throw new Error(
+      'ACTIVITY_HISTORY_ENABLED is staging-only until the activity history production gate passes',
+    );
+  }
+  if (parsed.data.ACTIVITY_HISTORY_SYNC_ENABLED && !parsed.data.ACTIVITY_HISTORY_ENABLED) {
+    throw new Error('ACTIVITY_HISTORY_SYNC_ENABLED requires ACTIVITY_HISTORY_ENABLED=true');
+  }
+  if (
+    parsed.data.ACTIVITY_HISTORY_SYNC_ENABLED &&
+    (!parsed.data.VIVA_OAUTH_ENABLED ||
+      parsed.data.VIVA_MODE === 'mock' ||
+      parsed.data.VIVA_MODE === 'disabled')
+  ) {
+    throw new Error(
+      'ACTIVITY_HISTORY_SYNC_ENABLED requires Viva OAuth and VIVA_MODE=sandbox or production',
+    );
+  }
+  if (parsed.data.ACTIVITY_HISTORY_GAME_BACKFILL_ENABLED) {
+    if (!parsed.data.ACTIVITY_HISTORY_SYNC_ENABLED) {
       throw new Error(
-        'LEGACY_GAMES_ROSTER_SYNC_ENABLED is staging-only until the Games production gate passes',
+        'ACTIVITY_HISTORY_GAME_BACKFILL_ENABLED requires ACTIVITY_HISTORY_SYNC_ENABLED=true',
       );
+    }
+    if (!parsed.data.GAMES_READ_ENABLED) {
+      throw new Error('ACTIVITY_HISTORY_GAME_BACKFILL_ENABLED requires GAMES_READ_ENABLED=true');
+    }
+    if (parsed.data.APP_ENV !== 'local' && parsed.data.APP_ENV !== 'staging') {
+      throw new Error('ACTIVITY_HISTORY_GAME_BACKFILL_ENABLED is allowed only in local or staging');
+    }
+    if (
+      parsed.data.APP_ENV === 'local' &&
+      parsed.data.LEGACY_GAMES_ROSTER_SYNC_SOURCE !== 'public'
+    ) {
+      throw new Error('Local activity history game backfill requires the public CUP source');
+    }
+    if (
+      parsed.data.APP_ENV === 'staging' &&
+      parsed.data.LEGACY_GAMES_ROSTER_SYNC_SOURCE !== 'mongo'
+    ) {
+      throw new Error('Staging activity history game backfill requires the CUP Mongo mirror');
+    }
+    if (
+      parsed.data.LEGACY_GAMES_ROSTER_SYNC_SOURCE === 'mongo' &&
+      !parsed.data.LEGACY_GAMES_MONGODB_URI
+    ) {
+      throw new Error('ACTIVITY_HISTORY_GAME_BACKFILL_ENABLED requires LEGACY_GAMES_MONGODB_URI');
+    }
+    if (!parsed.data.LEGACY_GAMES_ROSTER_SYNC_TENANT_KEY) {
+      throw new Error(
+        'ACTIVITY_HISTORY_GAME_BACKFILL_ENABLED requires LEGACY_GAMES_ROSTER_SYNC_TENANT_KEY',
+      );
+    }
+  }
+  if (parsed.data.LEGACY_GAMES_ROSTER_SYNC_ENABLED) {
+    if (parsed.data.APP_ENV !== 'local' && parsed.data.APP_ENV !== 'staging') {
+      throw new Error('LEGACY_GAMES_ROSTER_SYNC_ENABLED is allowed only in local or staging');
     }
     if (!parsed.data.GAMES_READ_ENABLED) {
       throw new Error('LEGACY_GAMES_ROSTER_SYNC_ENABLED requires GAMES_READ_ENABLED=true');
     }
-    if (!parsed.data.LEGACY_GAMES_MONGODB_URI) {
+    if (
+      parsed.data.APP_ENV === 'local' &&
+      parsed.data.LEGACY_GAMES_ROSTER_SYNC_SOURCE !== 'public'
+    ) {
+      throw new Error('Local legacy roster sync requires the public anonymized source');
+    }
+    if (
+      parsed.data.APP_ENV === 'staging' &&
+      parsed.data.LEGACY_GAMES_ROSTER_SYNC_SOURCE !== 'mongo'
+    ) {
+      throw new Error('Staging legacy roster sync requires the Mongo mirror source');
+    }
+    if (
+      parsed.data.LEGACY_GAMES_ROSTER_SYNC_SOURCE === 'mongo' &&
+      !parsed.data.LEGACY_GAMES_MONGODB_URI
+    ) {
       throw new Error('LEGACY_GAMES_ROSTER_SYNC_ENABLED requires LEGACY_GAMES_MONGODB_URI');
     }
     if (!parsed.data.LEGACY_GAMES_ROSTER_SYNC_TENANT_KEY) {

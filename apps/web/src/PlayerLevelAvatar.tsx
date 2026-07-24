@@ -1,7 +1,11 @@
 import { useId, useState } from 'react';
 import type { CSSProperties } from 'react';
 
-import fallbackPhotoUrl from './assets/home/profile.png';
+import {
+  avatarBackgroundIndex,
+  avatarBackgroundUrl,
+  playerInitials,
+} from './avatar-backgrounds.js';
 import styles from './PlayerLevelAvatar.module.css';
 
 export interface PlayerLevelAvatarProps {
@@ -16,11 +20,19 @@ export interface PlayerLevelAvatarProps {
   readonly className?: string;
   readonly variant?: 'profile' | 'participant';
   readonly accentColor?: string;
+  /** Стабильный PadlHub-ключ для выбора фона аватара без фото. */
+  readonly fallbackSeed?: string | null;
+  /** Порядок в перекрывающейся группе игроков. */
+  readonly stackIndex?: number;
 }
 
 type PlayerLevelAvatarStyle = CSSProperties & {
   readonly '--player-level-avatar-scale': number;
   readonly '--player-level-avatar-accent'?: string;
+  readonly '--player-level-avatar-photo-layer'?: number;
+  readonly '--player-level-avatar-ring-layer'?: number;
+  readonly '--player-level-avatar-ring-shield-layer'?: number;
+  readonly '--player-level-avatar-badge-layer'?: number;
 };
 
 const BASE_SIZE = 48;
@@ -113,16 +125,25 @@ export function PlayerLevelAvatar({
   className,
   variant = 'profile',
   accentColor,
+  fallbackSeed,
+  stackIndex,
 }: PlayerLevelAvatarProps): React.JSX.Element {
   const [failedSource, setFailedSource] = useState<string | null>(null);
   const ringMaskId = `player-level-avatar-ring-${useId().replaceAll(':', '')}`;
 
   const normalizedSize = Number.isFinite(size) && size > 0 ? size : BASE_SIZE;
   const normalizedProgress = Number.isFinite(progress) ? clamp(progress, 0, 100) : 0;
+  const normalizedStackIndex =
+    typeof stackIndex === 'number' && Number.isInteger(stackIndex) && stackIndex >= 0
+      ? stackIndex
+      : null;
 
   const scale = normalizedSize / BASE_SIZE;
   const usesFallbackPhoto = !src || failedSource === src;
-  const photoSource = usesFallbackPhoto ? fallbackPhotoUrl : src;
+  const backgroundSeed = fallbackSeed?.trim() || alt.trim() || 'padelhub-player';
+  const backgroundIndex = avatarBackgroundIndex(backgroundSeed);
+  const photoSource = usesFallbackPhoto ? avatarBackgroundUrl(backgroundSeed) : src;
+  const fallbackInitials = playerInitials(alt);
 
   const rootClassName = className ? `${styles.root} ${className}` : styles.root;
 
@@ -131,6 +152,15 @@ export function PlayerLevelAvatar({
     ...(variant === 'participant' && accentColor
       ? { '--player-level-avatar-accent': accentColor }
       : {}),
+    ...(normalizedStackIndex === null
+      ? {}
+      : {
+          // A following circular shield masks the preceding ring without covering either photo.
+          '--player-level-avatar-photo-layer': 30 - normalizedStackIndex,
+          '--player-level-avatar-ring-layer': 10 + 2 * normalizedStackIndex,
+          '--player-level-avatar-ring-shield-layer': 9 + 2 * normalizedStackIndex,
+          '--player-level-avatar-badge-layer': 40 - normalizedStackIndex,
+        }),
   };
 
   return (
@@ -197,12 +227,18 @@ export function PlayerLevelAvatar({
           alt=""
           aria-hidden="true"
           data-player-level-photo={usesFallbackPhoto ? 'fallback' : 'source'}
+          data-avatar-background={usesFallbackPhoto ? backgroundIndex + 1 : undefined}
           onError={() => {
             if (src && failedSource !== src) {
               setFailedSource(src);
             }
           }}
         />
+        {usesFallbackPhoto && fallbackInitials ? (
+          <span className={styles.photoInitials} aria-hidden="true" data-avatar-initials="">
+            {fallbackInitials}
+          </span>
+        ) : null}
       </span>
 
       {level ? (

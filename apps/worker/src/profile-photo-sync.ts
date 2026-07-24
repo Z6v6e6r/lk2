@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 import {
   CreateBucketCommand,
@@ -9,6 +9,7 @@ import {
   S3Client,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { profilePhotoDeliveryUrl } from '@phub/domain';
 import type { Pool } from 'pg';
 import sharp from 'sharp';
 
@@ -20,6 +21,7 @@ import {
 
 const IMAGE_CONTENT_TYPE = /^image\/(?:avif|heic|heif|jpeg|png|webp)(?:;|$)/i;
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+const PROFILE_PHOTO_FETCH_USER_AGENT = 'PadlHub Profile Photo Sync/1.0';
 
 export interface ProfilePhotoObjectStore {
   put(input: {
@@ -184,7 +186,10 @@ async function fetchSourcePhoto(input: {
     }
 > {
   let url = allowedPhotoUrl(input.sourceUrl, input.allowedHosts);
-  const headers = new Headers({ Accept: 'image/avif,image/webp,image/png,image/jpeg' });
+  const headers = new Headers({
+    Accept: 'image/avif,image/webp,image/png,image/jpeg',
+    'User-Agent': PROFILE_PHOTO_FETCH_USER_AGENT,
+  });
   if (input.current.sourceUrl === input.sourceUrl && input.current.objectKey) {
     if (input.current.sourceEtag) headers.set('If-None-Match', input.current.sourceEtag);
     if (input.current.sourceLastModified) {
@@ -245,9 +250,11 @@ function persistenceFromCurrent(
   current: ProfilePhotoSyncRecord,
   avatarUrl: string | undefined,
   fallbackTime: string,
+  deliveryId: string,
 ): ProfilePhotoPersistence {
   return {
     avatarUrl: avatarUrl ?? null,
+    deliveryId,
     ...(current.sourceUrl ? { sourceUrl: current.sourceUrl } : {}),
     ...(current.sourceEtag ? { sourceEtag: current.sourceEtag } : {}),
     ...(current.sourceLastModified ? { sourceLastModified: current.sourceLastModified } : {}),
@@ -269,7 +276,7 @@ function deletionFields(
   };
 }
 
-export async function synchronizeVivaProfilePhoto(input: {
+export async function synchronizeProfilePhoto(input: {
   readonly pool: Pool;
   readonly store: ProfilePhotoObjectStore;
   readonly tenantId: string;
@@ -282,6 +289,8 @@ export async function synchronizeVivaProfilePhoto(input: {
   readonly webpQuality: number;
   readonly previousObjectRetentionSeconds: number;
   readonly timeoutMs: number;
+  /** Legacy sources are fallback-only and must not replace a profile-owned avatar. */
+  readonly replaceExistingSource?: boolean;
   readonly fetchImplementation?: typeof fetch;
 }): Promise<ProfilePhotoSyncResult> {
   const current = await loadProfilePhotoSyncRecord({
@@ -289,6 +298,22 @@ export async function synchronizeVivaProfilePhoto(input: {
     tenantId: input.tenantId,
     userId: input.userId,
   });
+  const deliveryId = current.deliveryId ?? randomUUID();
+  if (
+    input.sourceUrl &&
+    input.replaceExistingSource === false &&
+    current.objectKey &&
+    current.sourceUrl !== input.sourceUrl
+  ) {
+    const avatarUrl = profilePhotoDeliveryUrl(input.tenantId, deliveryId);
+    return {
+      outcome: 'unchanged',
+      persistence: {
+        ...persistenceFromCurrent(current, avatarUrl, input.fetchedAt, deliveryId),
+        syncedAt: input.fetchedAt,
+      },
+    };
+  }
   if (!input.sourceUrl) {
     return {
       outcome: 'removed',
@@ -310,11 +335,11 @@ export async function synchronizeVivaProfilePhoto(input: {
       fetchImplementation: input.fetchImplementation ?? fetch,
     });
     if (source.outcome === 'unchanged' && current.objectKey && current.contentSha256) {
-      const avatarUrl = await input.store.createReadUrl(current.objectKey);
+      const avatarUrl = profilePhotoDeliveryUrl(input.tenantId, deliveryId);
       return {
         outcome: 'unchanged',
         persistence: {
-          ...persistenceFromCurrent(current, avatarUrl, input.fetchedAt),
+          ...persistenceFromCurrent(current, avatarUrl, input.fetchedAt, deliveryId),
           syncedAt: input.fetchedAt,
         },
       };
@@ -336,7 +361,7 @@ export async function synchronizeVivaProfilePhoto(input: {
     if (current.contentSha256 !== contentSha256 || current.objectKey !== objectKey) {
       await input.store.put({ key: objectKey, body: webp, sha256: contentSha256 });
     }
-    const avatarUrl = await input.store.createReadUrl(objectKey);
+    const avatarUrl = profilePhotoDeliveryUrl(input.tenantId, deliveryId);
     return {
       outcome:
         current.contentSha256 === contentSha256 && current.objectKey === objectKey
@@ -344,6 +369,7 @@ export async function synchronizeVivaProfilePhoto(input: {
           : 'stored',
       persistence: {
         avatarUrl,
+        deliveryId,
         sourceUrl: input.sourceUrl,
         ...(source.etag ? { sourceEtag: source.etag } : {}),
         ...(source.lastModified ? { sourceLastModified: source.lastModified } : {}),
@@ -356,14 +382,16 @@ export async function synchronizeVivaProfilePhoto(input: {
       },
     };
   } catch (error) {
-    let avatarUrl = current.avatarUrl;
-    if (current.objectKey) {
-      avatarUrl = await input.store.createReadUrl(current.objectKey).catch(() => avatarUrl);
-    }
+    const avatarUrl = current.objectKey
+      ? profilePhotoDeliveryUrl(input.tenantId, deliveryId)
+      : undefined;
     return {
       outcome: 'fallback',
-      persistence: persistenceFromCurrent(current, avatarUrl, input.fetchedAt),
+      persistence: persistenceFromCurrent(current, avatarUrl, input.fetchedAt, deliveryId),
       errorCode: errorCode(error),
     };
   }
 }
+
+/** Backward-compatible name for the authenticated Viva profile path. */
+export const synchronizeVivaProfilePhoto = synchronizeProfilePhoto;

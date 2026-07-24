@@ -53,6 +53,21 @@ records. The API returns `LEVEL_MATCH`, `FAVORITE_STATION`, `PLAYED_STATION`, `P
 
 - Upcoming bookings continue to use the existing versioned `/bookings/upcoming` projection.
 - Games history uses `/games?scope=HISTORY` with an opaque keyset cursor.
+- Unified visible history uses `/bookings/history` and reads one local activity-history projection.
+  Its persisted coverage marker distinguishes a successfully synchronized empty history from an
+  uncovered provider range. The server, never the client, performs a bounded provider refresh for
+  an uncovered range and persists it before returning the projection.
+- A provider game is replaced by its canonical Games card only when the authenticated viewer can
+  read that game and the server can correlate both sources. The primary correlation is the
+  one-way Viva exercise association in integration storage; start time plus normalized station is
+  a compatibility fallback. Provider-only records never receive result actions because their
+  participant roster and command authorization cannot be proven locally.
+- When a synchronized Viva page contains a game that is absent locally, the server performs a
+  bounded historical backfill before persisting the page: Viva proves the viewer's exercise UUIDs,
+  the server paginates that viewer's CUP history and filters it to the full Viva page, and Games
+  imports each aggregate idempotently. The authenticated Viva profile is bound to the matching CUP
+  participant, raw provider identifiers remain in integration storage, and the new card projection
+  is built before history is reread.
 - Recommendations use `/recommendations/bookings` and return `private, no-store`.
 - Unconfigured or failed recommendation dependencies return
   `BOOKING_RECOMMENDATIONS_UNAVAILABLE`; Home keeps the upcoming tab usable.
@@ -61,7 +76,8 @@ records. The API returns `LEVEL_MATCH`, `FAVORITE_STATION`, `PLAYED_STATION`, `P
 
 ## Deferred gates
 
-- provider-wide booking and training history;
+- production rollout of provider-wide booking/training history until real Viva pagination and
+  authenticated staging evidence pass the ADR 0017 gate;
 - canonical catalog station linked to editorial location profiles;
 - materialized recommendation feed and cursor pagination;
 - training and tournament candidate adapters;

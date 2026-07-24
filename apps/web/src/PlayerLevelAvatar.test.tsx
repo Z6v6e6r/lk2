@@ -5,6 +5,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { PlayerLevelAvatar } from './PlayerLevelAvatar.js';
+import { AVATAR_BACKGROUND_URLS, avatarBackgroundIndex } from './avatar-backgrounds.js';
 
 afterEach(cleanup);
 
@@ -99,15 +100,22 @@ describe('PlayerLevelAvatar', () => {
   });
 
   it('uses the project fallback for an absent or failed source', () => {
-    const { rerender } = render(<PlayerLevelAvatar alt="Без фото" src={null} />);
+    const fallbackSeed = 'player-42';
+    const { rerender } = render(
+      <PlayerLevelAvatar alt="Без фото" fallbackSeed={fallbackSeed} src={null} />,
+    );
 
     const fallbackAvatar = screen.getByRole('img', {
       name: 'Без фото, уровень , прогресс 0%',
     });
-    expect(fallbackAvatar.querySelector('[data-player-level-photo]')).toHaveAttribute(
-      'data-player-level-photo',
-      'fallback',
+    const fallbackPhoto = fallbackAvatar.querySelector('[data-player-level-photo]');
+    expect(fallbackPhoto).toHaveAttribute('data-player-level-photo', 'fallback');
+    expect(fallbackPhoto).toHaveAttribute(
+      'data-avatar-background',
+      String(avatarBackgroundIndex(fallbackSeed) + 1),
     );
+    expect(fallbackPhoto?.getAttribute('src')).toMatch(/padel_avatar_bg_\d{2}\.png$/);
+    expect(fallbackAvatar.querySelector('[data-avatar-initials]')).toHaveTextContent('БФ');
 
     rerender(<PlayerLevelAvatar alt="Ошибка фото" src="/broken-avatar.png" />);
     const failedPhoto = screen
@@ -122,6 +130,36 @@ describe('PlayerLevelAvatar', () => {
         .getByRole('img', { name: 'Ошибка фото, уровень , прогресс 0%' })
         .querySelector('[data-player-level-photo]'),
     ).toHaveAttribute('data-player-level-photo', 'fallback');
+  });
+
+  it('uses the participant placeholder when a participant has no photo', () => {
+    render(
+      <PlayerLevelAvatar
+        alt="Иван Петров"
+        level="D+"
+        progress={87}
+        src={null}
+        variant="participant"
+      />,
+    );
+
+    const avatar = screen.getByRole('img', {
+      name: 'Иван Петров, уровень D+, прогресс 87%',
+    });
+    const photo = avatar.querySelector('[data-player-level-photo]');
+    expect(photo).toHaveAttribute('data-player-level-photo', 'fallback');
+    expect(photo?.getAttribute('src')).toMatch(/padel_avatar_bg_\d{2}\.png$/);
+    expect(avatar.querySelector('[data-avatar-initials]')).toHaveTextContent('ИП');
+  });
+
+  it('selects a stable fallback from all twenty supplied backgrounds', () => {
+    expect(AVATAR_BACKGROUND_URLS).toHaveLength(20);
+    expect(new Set(AVATAR_BACKGROUND_URLS).size).toBe(20);
+    expect(avatarBackgroundIndex('player-42')).toBe(avatarBackgroundIndex('player-42'));
+    expect(
+      new Set(Array.from({ length: 200 }, (_, index) => avatarBackgroundIndex(`player-${index}`)))
+        .size,
+    ).toBe(20);
   });
 
   it('keeps an empty level and a custom class layout-safe', () => {

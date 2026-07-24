@@ -1,4 +1,4 @@
-import type { GameRepository } from '@phub/database';
+import type { GameRepository, ProfileSummaryRepository } from '@phub/database';
 import { GAME_KINDS, GAME_PLAYER_LEVELS, type GameKind, type GamePlayerLevel } from '@phub/games';
 import type { FastifyInstance, FastifyReply, FastifyRequest, preHandlerHookHandler } from 'fastify';
 
@@ -172,6 +172,8 @@ export function registerGameReadRoutes(
   app: FastifyInstance,
   options: {
     readonly repository?: CardReadRepository;
+    readonly photoRepository?: Pick<ProfileSummaryRepository, 'getPhotoDeliveryIds'> &
+      Partial<Pick<ProfileSummaryRepository, 'getDisplayNames' | 'getLevelValues'>>;
     readonly publicTenantHandlers: readonly preHandlerHookHandler[];
     readonly authenticatedTenantHandlers: readonly preHandlerHookHandler[];
   },
@@ -188,6 +190,7 @@ export function registerGameReadRoutes(
       try {
         const result = await listPublicGameCards({
           repository: options.repository,
+          ...(options.photoRepository ? { photoRepository: options.photoRepository } : {}),
           tenantId: currentTenantId,
           now: new Date().toISOString(),
           limit: query.limit,
@@ -215,6 +218,7 @@ export function registerGameReadRoutes(
       if (!currentTenantId || !options.repository) return unavailable(request, reply);
       const game = await getPublicGameCard({
         repository: options.repository,
+        ...(options.photoRepository ? { photoRepository: options.photoRepository } : {}),
         tenantId: currentTenantId,
         gameId: currentGameId,
         now: new Date().toISOString(),
@@ -237,6 +241,7 @@ export function registerGameReadRoutes(
       try {
         return await listViewerGameCards({
           repository: options.repository,
+          ...(options.photoRepository ? { photoRepository: options.photoRepository } : {}),
           tenantId: current.tenantId,
           viewerUserId: current.userId,
           scope: query.scope,
@@ -264,6 +269,7 @@ export function registerGameReadRoutes(
       if (!current || !options.repository) return unavailable(request, reply);
       const game = await getViewerGameCard({
         repository: options.repository,
+        ...(options.photoRepository ? { photoRepository: options.photoRepository } : {}),
         tenantId: current.tenantId,
         viewerUserId: current.userId,
         gameId: currentGameId,

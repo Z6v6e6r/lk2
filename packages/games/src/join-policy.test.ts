@@ -36,6 +36,7 @@ function snapshot(overrides: Partial<GameCardProjectionInput> = {}): GameCardPro
     endsAt: '2026-08-01T19:30:00+03:00',
     timezone: 'Europe/Moscow',
     station: { id: stationId, name: 'Селигерская' },
+    court: null,
     capacity: 4,
     participants: [
       {

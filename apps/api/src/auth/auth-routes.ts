@@ -219,9 +219,14 @@ export function registerAuthRoutes(
       const redirectUrl = config.VIVA_OAUTH_SUCCESS_REDIRECT_URL;
       if (!redirectUrl) throw new AuthServiceError('AUTH_PROVIDER_UNAVAILABLE');
       const target = new URL(redirectUrl);
-      const fragment = new URLSearchParams(target.hash.replace(/^#/, ''));
-      fragment.set('viva_handoff', session.vivaHandoffCode);
-      target.hash = fragment.toString();
+      const directVivaAllowed =
+        directVivaAccessAllowed &&
+        (await directVivaAccessAllowed(session.user.tenantId, session.user.id, 'web'));
+      if (directVivaAllowed) {
+        const fragment = new URLSearchParams(target.hash.replace(/^#/, ''));
+        fragment.set('viva_handoff', session.vivaHandoffCode);
+        target.hash = fragment.toString();
+      }
       return reply.redirect(target.toString());
     } catch (error) {
       return handleAuthError(error, request, reply);

@@ -30,6 +30,9 @@ describe('loadConfig', () => {
       HOME_READ_MODE: 'mock',
       GAMES_READ_ENABLED: false,
       GAMES_COMMANDS_ENABLED: false,
+      GAMES_RESULTS_WRITE_MODE: 'disabled',
+      CUP_RATING_CONSUMER_ENABLED: false,
+      ACTIVITY_HISTORY_GAME_BACKFILL_ENABLED: false,
       LEGACY_GAMES_ROSTER_SYNC_ENABLED: false,
       LEGACY_GAMES_ROSTER_SYNC_INTERVAL_MS: 120_000,
       LEGACY_GAMES_ROSTER_SYNC_LOOKBACK_DAYS: 1,
@@ -93,6 +96,35 @@ describe('loadConfig', () => {
         OUTBOX_CONFIRM_TIMEOUT_MS: '10000',
       }),
     ).toThrow('OUTBOX_CLAIM_TTL_MS must exceed OUTBOX_CONFIRM_TIMEOUT_MS by at least 5000ms');
+  });
+
+  it('gates the result writer and requires a complete worker-only CUP boundary', () => {
+    expect(
+      loadConfig({
+        ...validEnvironment,
+        APP_ENV: 'staging',
+        GAMES_COMMANDS_ENABLED: 'true',
+        GAMES_RESULTS_WRITE_MODE: 'local_primary',
+      }),
+    ).toMatchObject({ GAMES_RESULTS_WRITE_MODE: 'local_primary' });
+    expect(() =>
+      loadConfig({ ...validEnvironment, GAMES_RESULTS_WRITE_MODE: 'local_primary' }),
+    ).toThrow('requires GAMES_COMMANDS_ENABLED=true');
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        CUP_RATING_CONSUMER_ENABLED: 'true',
+        CUP_RATING_API_URL: 'https://cup.internal',
+      }),
+    ).toThrow('requires CUP_RATING_API_URL and CUP_RATING_SERVICE_TOKEN');
+    expect(
+      loadConfig({
+        ...validEnvironment,
+        CUP_RATING_CONSUMER_ENABLED: 'true',
+        CUP_RATING_API_URL: 'https://cup.internal',
+        CUP_RATING_SERVICE_TOKEN: 'x'.repeat(32),
+      }),
+    ).toMatchObject({ CUP_RATING_CONSUMER_ENABLED: true });
   });
 
   it('keeps certificate payment sandbox local and requires complete private media storage', () => {
@@ -191,13 +223,34 @@ describe('loadConfig', () => {
     ).toThrow('GAMES_COMMANDS_ENABLED is staging-only');
   });
 
-  it('permits the legacy roster mirror only in an explicitly gated staging worker', () => {
+  it('permits only the anonymized public roster bridge locally and Mongo mirror in staging', () => {
     expect(() =>
       loadConfig({
         ...validEnvironment,
         LEGACY_GAMES_ROSTER_SYNC_ENABLED: 'true',
       }),
-    ).toThrow('LEGACY_GAMES_ROSTER_SYNC_ENABLED is staging-only');
+    ).toThrow('allowed only in local or staging');
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        APP_ENV: 'local',
+        GAMES_READ_ENABLED: 'true',
+        LEGACY_GAMES_ROSTER_SYNC_ENABLED: 'true',
+      }),
+    ).toThrow('Local legacy roster sync requires the public anonymized source');
+    expect(
+      loadConfig({
+        ...validEnvironment,
+        APP_ENV: 'local',
+        GAMES_READ_ENABLED: 'true',
+        LEGACY_GAMES_ROSTER_SYNC_ENABLED: 'true',
+        LEGACY_GAMES_ROSTER_SYNC_SOURCE: 'public',
+        LEGACY_GAMES_ROSTER_SYNC_TENANT_KEY: 'local-padel',
+      }),
+    ).toMatchObject({
+      LEGACY_GAMES_ROSTER_SYNC_ENABLED: true,
+      LEGACY_GAMES_ROSTER_SYNC_SOURCE: 'public',
+    });
     expect(() =>
       loadConfig({
         ...validEnvironment,
@@ -211,6 +264,7 @@ describe('loadConfig', () => {
         APP_ENV: 'staging',
         GAMES_READ_ENABLED: 'true',
         LEGACY_GAMES_ROSTER_SYNC_ENABLED: 'true',
+        LEGACY_GAMES_ROSTER_SYNC_SOURCE: 'mongo',
       }),
     ).toThrow('LEGACY_GAMES_ROSTER_SYNC_ENABLED requires LEGACY_GAMES_MONGODB_URI');
     expect(
@@ -219,10 +273,47 @@ describe('loadConfig', () => {
         APP_ENV: 'staging',
         GAMES_READ_ENABLED: 'true',
         LEGACY_GAMES_ROSTER_SYNC_ENABLED: 'true',
+        LEGACY_GAMES_ROSTER_SYNC_SOURCE: 'mongo',
         LEGACY_GAMES_MONGODB_URI: 'mongodb://readonly:secret@mongo.test/games',
         LEGACY_GAMES_ROSTER_SYNC_TENANT_KEY: 'staging-padel',
       }),
-    ).toMatchObject({ LEGACY_GAMES_ROSTER_SYNC_ENABLED: true });
+    ).toMatchObject({
+      LEGACY_GAMES_ROSTER_SYNC_ENABLED: true,
+      LEGACY_GAMES_ROSTER_SYNC_SOURCE: 'mongo',
+    });
+  });
+
+  it('enables activity history game backfill independently from continuous roster sync', () => {
+    const configured = loadConfig({
+      ...validEnvironment,
+      APP_ENV: 'local',
+      VIVA_MODE: 'sandbox',
+      VIVA_OAUTH_ENABLED: 'true',
+      VIVA_OAUTH_REDIRECT_URI: 'https://lk.padlhub.test/oauth/callback',
+      VIVA_OAUTH_SUCCESS_REDIRECT_URL: 'https://lk.padlhub.test/',
+      VIVA_DELEGATION_ENCRYPTION_KEY: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+      GAMES_READ_ENABLED: 'true',
+      ACTIVITY_HISTORY_ENABLED: 'true',
+      ACTIVITY_HISTORY_SYNC_ENABLED: 'true',
+      ACTIVITY_HISTORY_GAME_BACKFILL_ENABLED: 'true',
+      LEGACY_GAMES_ROSTER_SYNC_SOURCE: 'public',
+      LEGACY_GAMES_ROSTER_SYNC_TENANT_KEY: 'local-padel',
+    });
+    expect(configured).toMatchObject({
+      ACTIVITY_HISTORY_GAME_BACKFILL_ENABLED: true,
+      LEGACY_GAMES_ROSTER_SYNC_ENABLED: false,
+    });
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        APP_ENV: 'local',
+        GAMES_READ_ENABLED: 'true',
+        ACTIVITY_HISTORY_ENABLED: 'true',
+        ACTIVITY_HISTORY_GAME_BACKFILL_ENABLED: 'true',
+        LEGACY_GAMES_ROSTER_SYNC_SOURCE: 'public',
+        LEGACY_GAMES_ROSTER_SYNC_TENANT_KEY: 'local-padel',
+      }),
+    ).toThrow('ACTIVITY_HISTORY_GAME_BACKFILL_ENABLED requires ACTIVITY_HISTORY_SYNC_ENABLED=true');
   });
 
   it('allows the synthetic CUP operator code only in a fully explicit local runtime', () => {

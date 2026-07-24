@@ -1,0 +1,58 @@
+groups:
+  - name: padlhub-worker-reliability
+    interval: 15s
+    rules:
+      - alert: PadlHubDeadLetterQueueNotEmpty
+        expr: phub_worker_dlq_messages_ready > 0
+        for: 1m
+        labels:
+          severity: p1
+          component: worker
+        annotations:
+          summary: PadlHub dead-letter queue contains events
+          description: Rejected events are retained and require cause analysis before replay.
+          runbook: docs/runbooks/chats-notifications-moderation.md
+
+      - alert: PadlHubOutboxDelayed
+        expr: phub_worker_outbox_oldest_age_seconds > 30 and phub_worker_outbox_oldest_age_seconds <= 300
+        for: 5m
+        labels:
+          severity: p2
+          component: worker
+        annotations:
+          summary: PadlHub outbox publication is delayed
+          description: The oldest unpublished event has exceeded the 30 second rollout budget.
+          runbook: docs/runbooks/chats-notifications-moderation.md
+
+      - alert: PadlHubOutboxStalled
+        expr: phub_worker_outbox_oldest_age_seconds > 300
+        for: 2m
+        labels:
+          severity: p1
+          component: worker
+        annotations:
+          summary: PadlHub outbox publication is stalled
+          description: The oldest unpublished event has remained pending for more than five minutes.
+          runbook: docs/runbooks/chats-notifications-moderation.md
+
+      - alert: PadlHubOutboxPublishFailures
+        expr: increase(phub_worker_outbox_publish_failures_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: p1
+          component: worker
+        annotations:
+          summary: PadlHub outbox publisher is failing
+          description: At least one bounded outbox publication cycle failed in the last five minutes.
+          runbook: docs/runbooks/chats-notifications-moderation.md
+
+      - alert: PadlHubOperationalMetricsCollectionFailed
+        expr: phub_worker_operational_collection_success == 0
+        for: 2m
+        labels:
+          severity: p2
+          component: worker
+        annotations:
+          summary: PadlHub worker reliability metrics cannot be collected
+          description: Backlog alerts may be blind; inspect PostgreSQL, RabbitMQ and OTLP connectivity.
+          runbook: docs/runbooks/chats-notifications-moderation.md

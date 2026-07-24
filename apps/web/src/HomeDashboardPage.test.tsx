@@ -217,6 +217,7 @@ describe('Home progressive navigation', () => {
     await vi.waitFor(() =>
       expect(screen.getByRole('status')).toHaveTextContent('Пока нет подходящих игр'),
     );
+    expect(screen.queryByText('Персональная подборка')).not.toBeInTheDocument();
   });
 });
 
@@ -277,19 +278,23 @@ describe('Home upcoming bookings', () => {
 
     const trainingCard = screen.getByRole('article', { name: 'Тренировка с Марией' });
     expect(within(trainingCard).getByText('Тренировка · Лист ожидания')).toBeInTheDocument();
-    expect(within(trainingCard).getByText('Селигерская · корт 1')).toBeInTheDocument();
+    expect(within(trainingCard).getByText('Селигерская')).toBeInTheDocument();
     expect(trainingCard.querySelector('time')).toHaveAttribute('datetime', upcoming[0]?.startsAt);
-    expect(
-      within(trainingCard).getByText(
-        new Intl.DateTimeFormat('ru-RU', { hour: '2-digit', minute: '2-digit' }).format(
-          new Date(upcoming[0]?.startsAt ?? ''),
-        ),
-      ),
-    ).toBeInTheDocument();
+    const trainingStartsAt = new Date(upcoming[0]?.startsAt ?? '');
+    const trainingWeekday = new Intl.DateTimeFormat('ru-RU', { weekday: 'short' }).format(
+      trainingStartsAt,
+    );
+    expect(trainingCard.querySelector('time')).toHaveTextContent(
+      `${new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'long' }).format(trainingStartsAt)}, ${trainingWeekday.endsWith('.') ? trainingWeekday : `${trainingWeekday}.`}, с ${new Intl.DateTimeFormat('ru-RU', { hour: '2-digit', minute: '2-digit' }).format(trainingStartsAt)}`,
+    );
+    expect(within(trainingCard).getByRole('link', { name: 'Открыть' })).toHaveAttribute(
+      'href',
+      '/bookings',
+    );
 
     const tournamentCard = screen.getByRole('article', { name: 'Кубок выходного дня' });
     expect(within(tournamentCard).getByText('Турнир · Нужна оплата')).toBeInTheDocument();
-    expect(within(tournamentCard).getByText('ПаделХАБ · центральный корт')).toBeInTheDocument();
+    expect(within(tournamentCard).getByText('ПаделХАБ')).toBeInTheDocument();
     expect(tournamentCard.querySelector('time')).toHaveAttribute('datetime', upcoming[1]?.startsAt);
 
     expect(container.querySelectorAll('.fh-event img')).toHaveLength(0);
@@ -297,7 +302,32 @@ describe('Home upcoming bookings', () => {
     expect(screen.queryByText(/Рейтинговая игра|Френдли игра/)).not.toBeInTheDocument();
   });
 
-  it('filters real upcoming bookings by date and type, and swipes through the next two weeks', () => {
+  it('expands the Home bookings viewport to preview scrolling when more than two cards remain', () => {
+    const upcoming: HomeDashboard['upcoming'] = Array.from({ length: 3 }, (_, index) => ({
+      id: `${index + 1}3333333-3333-4333-8333-333333333333`,
+      kind: 'game' as const,
+      title: `Игра ${index + 1}`,
+      startsAt: `2026-07-${18 + index}T10:15:00.000Z`,
+      venue: 'Селигерская · корт 1',
+      status: 'confirmed' as const,
+      route: `/games/${index + 1}`,
+    }));
+    const { container } = render(
+      <HomeDashboardPage
+        dashboard={{ ...dashboard, upcoming }}
+        tenantName="ПадлХАБ"
+        notificationUnreadCount={0}
+        loadCommunityPage={() => Promise.resolve({ items: [] })}
+        logoutBusy={false}
+        onLogout={vi.fn()}
+      />,
+    );
+
+    expect(container.querySelector('.figma-home-shell')).toHaveClass('has-bookings-scroll-peek');
+    expect(container.querySelectorAll('.fh-bookings-list > .fh-booking-entry')).toHaveLength(3);
+  });
+
+  it('filters real upcoming bookings and swipes the calendar one day up to two weeks ahead', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-07-18T09:00:00.000Z'));
     const upcoming: HomeDashboard['upcoming'] = [
@@ -332,17 +362,21 @@ describe('Home upcoming bookings', () => {
     );
 
     const filter = screen.getByLabelText('Фильтр записей по дате');
+    const allDates = within(filter).getByRole('button', { name: 'Все даты' });
+    expect(allDates).toHaveAttribute('aria-pressed', 'true');
     const saturday = within(filter).getByRole('button', { name: /суббота, 18 июля/i });
     expect(saturday.querySelector('i')).toBeInTheDocument();
 
     fireEvent.click(saturday);
+    expect(allDates).toHaveAttribute('aria-pressed', 'false');
     expect(screen.getByRole('article', { name: 'Субботняя тренировка' })).toBeVisible();
     expect(screen.queryByRole('article', { name: 'Воскресный турнир' })).not.toBeInTheDocument();
 
     fireEvent.click(within(filter).getByRole('button', { name: /понедельник, 20 июля/i }));
     expect(screen.getByRole('status')).toHaveTextContent('По выбранным фильтрам записей нет');
 
-    fireEvent.click(within(filter).getByRole('button', { name: /понедельник, 20 июля/i }));
+    fireEvent.click(allDates);
+    expect(allDates).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByRole('article', { name: 'Субботняя тренировка' })).toBeVisible();
     expect(screen.getByRole('article', { name: 'Воскресный турнир' })).toBeVisible();
 
@@ -354,7 +388,23 @@ describe('Home upcoming bookings', () => {
     expect(calendar).not.toBeNull();
     fireEvent.pointerDown(calendar as HTMLDivElement, { clientX: 280 });
     fireEvent.pointerUp(calendar as HTMLDivElement, { clientX: 100 });
+    expect(
+      within(filter).queryByRole('button', { name: /суббота, 18 июля/i }),
+    ).not.toBeInTheDocument();
     expect(within(filter).getByRole('button', { name: /суббота, 25 июля/i })).toBeVisible();
+
+    fireEvent.pointerDown(calendar as HTMLDivElement, { clientX: 280 });
+    fireEvent.pointerUp(calendar as HTMLDivElement, { clientX: 100 });
+    expect(
+      within(filter).queryByRole('button', { name: /воскресенье, 19 июля/i }),
+    ).not.toBeInTheDocument();
+    expect(within(filter).getByRole('button', { name: /воскресенье, 26 июля/i })).toBeVisible();
+
+    for (let index = 0; index < 12; index += 1) {
+      fireEvent.pointerDown(calendar as HTMLDivElement, { clientX: 280 });
+      fireEvent.pointerUp(calendar as HTMLDivElement, { clientX: 100 });
+    }
+    expect(within(filter).getByRole('button', { name: /суббота, 1 августа/i })).toBeVisible();
 
     fireEvent.pointerDown(calendar as HTMLDivElement, { clientX: 280 });
     fireEvent.pointerUp(calendar as HTMLDivElement, { clientX: 100 });
@@ -362,7 +412,7 @@ describe('Home upcoming bookings', () => {
 
     fireEvent.pointerDown(calendar as HTMLDivElement, { clientX: 100 });
     fireEvent.pointerUp(calendar as HTMLDivElement, { clientX: 280 });
-    expect(within(filter).getByRole('button', { name: /суббота, 25 июля/i })).toBeVisible();
+    expect(within(filter).getByRole('button', { name: /пятница, 31 июля/i })).toBeVisible();
   });
 
   it('renders only roster data supplied by the Home projection', () => {
@@ -384,6 +434,7 @@ describe('Home upcoming bookings', () => {
             nickname: 'ivan_p',
             avatarUrl: null,
             level: 'D+',
+            levelValue: 2.86793,
           },
           {
             profileId: 'c4e17ec7-a696-4355-a0b9-7e1a5644a3a6',
@@ -393,6 +444,7 @@ describe('Home upcoming bookings', () => {
             nickname: null,
             avatarUrl: null,
             level: 'C',
+            levelValue: 3.43844,
           },
         ],
         openSlots: 2,
@@ -420,7 +472,18 @@ describe('Home upcoming bookings', () => {
 
     const card = screen.getByRole('article', { name: 'Игра с составом' });
     expect(within(card).getByLabelText('Участники записи')).toBeVisible();
-    expect(within(card).getAllByRole('img')).toHaveLength(2);
+    const participantAvatars = within(card).getAllByRole('img');
+    expect(participantAvatars).toHaveLength(2);
+    expect(participantAvatars[0]).toHaveAccessibleName(
+      'Иван Петров · @ivan_p, уровень D+, прогресс 87%',
+    );
+    expect(participantAvatars[1]).toHaveAccessibleName('Мария Орлова, уровень C, прогресс 44%');
+    expect(participantAvatars[0]).toHaveAttribute('data-progress', '87');
+    expect(participantAvatars[1]).toHaveAttribute('data-progress', '44');
+    expect(participantAvatars[0]).toHaveAttribute('data-size', '48');
+    expect(participantAvatars[1]).toHaveAttribute('data-size', '48');
+    expect(within(card).getByText('ИП')).toHaveAttribute('data-avatar-initials');
+    expect(within(card).getByText('МО')).toHaveAttribute('data-avatar-initials');
     expect(within(card).queryByText('Мария Орлова')).not.toBeInTheDocument();
     expect(within(card).queryByRole('link', { name: /Иван Петров/ })).not.toBeInTheDocument();
     expect(within(card).getAllByLabelText('Свободное место')).toHaveLength(2);

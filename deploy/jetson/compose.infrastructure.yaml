@@ -108,6 +108,7 @@ services:
       - '--storage.tsdb.retention.size=1GB'
     volumes:
       - ./monitoring/prometheus.yaml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/padlhub-alerts.yaml:/etc/prometheus/rules/padlhub-alerts.yaml:ro
       - prometheus_data:/prometheus
 
   loki:

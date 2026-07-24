@@ -11,6 +11,7 @@ const source = {
   userId: '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca',
   displayName: 'Анна Петрова',
   firstName: 'Анна',
+  lastName: 'Петрова',
   avatarUrl: null,
   phoneLast4: '4567',
   balanceMinor: 54_000,
@@ -36,6 +37,7 @@ describe('player profile view policy', () => {
       },
     });
     expect(view.profile.level.value).toBe(3.8);
+    expect(view.profile.lastName).toBe('Петрова');
   });
 
   it('returns a minimal view and stable lock reasons to a basic viewer', () => {

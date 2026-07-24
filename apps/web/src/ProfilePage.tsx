@@ -1,12 +1,25 @@
 import type {
   BookingPreferences,
   BookingPreferencesUpdateRequest,
+  CommunityMembershipPage,
+  HomeDashboard,
   PlayerProfileView,
   ProfileActionCapability,
   ProfilePrivacySettings,
   ProfilePrivacyUpdateRequest,
 } from '@phub/api-sdk';
 import { useState } from 'react';
+import type { CSSProperties } from 'react';
+
+import { MainBottomNavigation } from './HomeDashboardPage.js';
+import { PlayerLevelAvatar } from './PlayerLevelAvatar.js';
+import levelABackground from './assets/profile-levels/level-a.jpg';
+import levelBBackground from './assets/profile-levels/level-b.jpg';
+import levelBPlusBackground from './assets/profile-levels/level-b-plus.jpg';
+import levelCBackground from './assets/profile-levels/level-c.jpg';
+import levelCPlusBackground from './assets/profile-levels/level-c-plus.jpg';
+import levelDBackground from './assets/profile-levels/level-d.jpg';
+import levelDPlusBackground from './assets/profile-levels/level-d-plus.jpg';
 
 interface ProfilePageProps {
   readonly profile: PlayerProfileView;
@@ -21,11 +34,53 @@ interface ProfilePageProps {
   readonly bookingPreferencesError?: string | null;
   readonly bookingPreferencesNotice?: string | null;
   readonly stationChoices?: readonly { readonly id: string; readonly name: string }[];
+  readonly subscriptions?: HomeDashboard['subscriptions'] | null;
+  readonly subscriptionsError?: string | null;
+  readonly communities?: CommunityMembershipPage | null;
+  readonly communitiesError?: string | null;
   readonly error?: string | null;
   readonly onSavePrivacy?: (input: ProfilePrivacyUpdateRequest) => void;
   readonly onSaveBookingPreferences?: (input: BookingPreferencesUpdateRequest) => void;
   readonly onLogout: () => void;
 }
+
+type ProfilePageStyle = CSSProperties & {
+  readonly '--profile-level-background': string;
+  readonly '--profile-level-accent': string;
+  readonly '--profile-level-soft': string;
+};
+
+const levelBackgrounds: Readonly<Record<string, string>> = {
+  A: levelABackground,
+  'B+': levelBPlusBackground,
+  B: levelBBackground,
+  'C+': levelCPlusBackground,
+  C: levelCBackground,
+  'D+': levelDPlusBackground,
+  D: levelDBackground,
+};
+
+const levelAccents: Readonly<Record<string, string>> = {
+  A: '#7650f4',
+  'B+': '#8c55ef',
+  B: '#be27b4',
+  'C+': '#df2485',
+  C: '#ef3150',
+  'D+': '#ff641c',
+  D: '#ff8a12',
+};
+
+const levelSoftTones: Readonly<Record<string, string>> = {
+  A: '#eeeaff',
+  'B+': '#f2e9ff',
+  B: '#f8e7f6',
+  'C+': '#ffe8f1',
+  C: '#ffe9ec',
+  'D+': '#fff0e6',
+  D: '#fff3df',
+};
+
+const levelScale = ['A', 'B+', 'B', 'C+', 'C', 'D+', 'D'] as const;
 
 const weekdayLabels: Readonly<
   Record<BookingPreferences['preferredTimeWindows'][number]['weekday'], string>
@@ -262,6 +317,289 @@ function initials(displayName: string): string {
     .join('');
 }
 
+function levelProgress(value: number | undefined, assessmentRequired: boolean): number {
+  if (assessmentRequired || value === undefined || !Number.isFinite(value)) return 0;
+  return Math.round((value - Math.floor(value)) * 100);
+}
+
+function communityInitials(title: string): string {
+  return initials(title);
+}
+
+function ProfileIcon({
+  name,
+}: {
+  readonly name:
+    'bell' | 'more' | 'share' | 'community' | 'preference' | 'eye' | 'city' | 'sport' | 'crown';
+}): React.JSX.Element {
+  const common = {
+    width: 22,
+    height: 22,
+    viewBox: '0 0 24 24',
+    fill: 'none',
+    'aria-hidden': true,
+  } as const;
+
+  switch (name) {
+    case 'bell':
+      return (
+        <svg {...common}>
+          <path
+            d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      );
+    case 'more':
+      return (
+        <svg {...common}>
+          <circle cx="12" cy="5" r="1.7" fill="currentColor" />
+          <circle cx="12" cy="12" r="1.7" fill="currentColor" />
+          <circle cx="12" cy="19" r="1.7" fill="currentColor" />
+        </svg>
+      );
+    case 'share':
+      return (
+        <svg {...common}>
+          <path
+            d="M8 12h8M13 8l4 4-4 4M5 5h6M5 19h6M5 5v14"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      );
+    case 'community':
+      return (
+        <svg {...common}>
+          <path
+            d="M16 20v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 10a4 4 0 1 0 0-8 4 4 0 0 0 0 8M22 20v-2a4 4 0 0 0-3-3.87M16 2.13a4 4 0 0 1 0 7.75"
+            stroke="currentColor"
+            strokeWidth="1.7"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      );
+    case 'preference':
+      return (
+        <svg {...common}>
+          <path
+            d="m12 2 3.1 6.3L22 9.3l-5 4.9 1.2 6.8-6.2-3.2L5.8 21 7 14.2 2 9.3l6.9-1L12 2Z"
+            stroke="currentColor"
+            strokeWidth="1.6"
+            strokeLinejoin="round"
+          />
+        </svg>
+      );
+    case 'eye':
+      return (
+        <svg {...common}>
+          <path
+            d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z"
+            stroke="currentColor"
+            strokeWidth="1.7"
+            strokeLinejoin="round"
+          />
+          <circle cx="12" cy="12" r="2.5" stroke="currentColor" strokeWidth="1.7" />
+        </svg>
+      );
+    case 'city':
+      return (
+        <svg {...common}>
+          <path
+            d="M20 10c0 5-8 12-8 12S4 15 4 10a8 8 0 1 1 16 0Z"
+            stroke="currentColor"
+            strokeWidth="1.7"
+            strokeLinejoin="round"
+          />
+          <circle cx="12" cy="10" r="2.6" stroke="currentColor" strokeWidth="1.7" />
+        </svg>
+      );
+    case 'sport':
+      return (
+        <svg {...common}>
+          <path
+            d="m8 16 8-8M6.2 13.8l4 4M13.8 6.2l4 4M4.5 15.5l4 4M15.5 4.5l4 4M3 18l3 3 15-15-3-3L3 18Z"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      );
+    case 'crown':
+      return (
+        <svg {...common}>
+          <path
+            d="m3 7 4.5 4L12 4l4.5 7L21 7l-2 11H5L3 7Z"
+            fill="currentColor"
+            stroke="currentColor"
+            strokeWidth="1.2"
+            strokeLinejoin="round"
+          />
+        </svg>
+      );
+  }
+}
+
+function ProfileFacts(): React.JSX.Element {
+  return (
+    <section className="profile-facts" aria-label="Город и вид спорта">
+      <div>
+        <span className="profile-inline-icon">
+          <ProfileIcon name="city" />
+        </span>
+        <span>
+          <small>город</small>
+          <strong>Москва</strong>
+        </span>
+        <i aria-hidden="true">›</i>
+      </div>
+      <div>
+        <span className="profile-inline-icon">
+          <ProfileIcon name="sport" />
+        </span>
+        <span>
+          <small>вид спорта</small>
+          <strong>Падел</strong>
+        </span>
+        <i aria-hidden="true">›</i>
+      </div>
+    </section>
+  );
+}
+
+function subscriptionDate(value: string | null): string | null {
+  if (!value) return null;
+  return new Intl.DateTimeFormat('ru-RU', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  }).format(new Date(value));
+}
+
+function remainingVisitsLabel(value: number): string {
+  const lastTwoDigits = value % 100;
+  const lastDigit = value % 10;
+  if (lastTwoDigits >= 11 && lastTwoDigits <= 14) return `${value} посещений`;
+  if (lastDigit === 1) return `${value} посещение`;
+  if (lastDigit >= 2 && lastDigit <= 4) return `${value} посещения`;
+  return `${value} посещений`;
+}
+
+function ProfileSubscriptions({
+  subscriptions,
+  error,
+}: {
+  readonly subscriptions?: HomeDashboard['subscriptions'] | null;
+  readonly error?: string | null;
+}): React.JSX.Element {
+  const current =
+    subscriptions
+      ?.filter((subscription) => ['active', 'scheduled', 'paused'].includes(subscription.status))
+      .slice(0, 2) ?? [];
+
+  return (
+    <section className="profile-subscriptions" aria-labelledby="profile-subscriptions-title">
+      <header>
+        <span className="profile-inline-icon">
+          <ProfileIcon name="crown" />
+        </span>
+        <h2 id="profile-subscriptions-title">Подписки и абонементы</h2>
+      </header>
+
+      {error ? (
+        <p role="alert">{error}</p>
+      ) : !subscriptions ? (
+        <p role="status">Загружаем действующие подписки…</p>
+      ) : current.length === 0 ? (
+        <p>Действующих подписок пока нет.</p>
+      ) : (
+        <div className="profile-subscription-list">
+          {current.map((subscription) => {
+            const validUntil = subscriptionDate(subscription.validUntil);
+            return (
+              <article key={subscription.id}>
+                <span className="profile-subscription-art" aria-hidden="true">
+                  <b>{subscription.remainingUnits}</b>
+                  <small>игр</small>
+                </span>
+                <span className="profile-subscription-copy">
+                  <span>
+                    <strong>{subscription.title}</strong>
+                    {subscription.status === 'active' ? <em>активна</em> : null}
+                  </span>
+                  <small>
+                    {subscription.remainingUnits > 0
+                      ? `осталось ${remainingVisitsLabel(subscription.remainingUnits)}`
+                      : 'посещения закончились'}
+                    {validUntil ? ` · до ${validUntil}` : ''}
+                  </small>
+                </span>
+                <a href={subscription.route}>продлить</a>
+              </article>
+            );
+          })}
+        </div>
+      )}
+
+      <a className="profile-subscriptions-all" href="/subscriptions">
+        все подписки <span aria-hidden="true">›</span>
+      </a>
+    </section>
+  );
+}
+
+function ProfileCommunities({
+  page,
+  error,
+}: {
+  readonly page?: CommunityMembershipPage | null;
+  readonly error?: string | null;
+}): React.JSX.Element {
+  const communities = page?.items.slice(0, 4) ?? [];
+
+  return (
+    <section className="profile-communities" aria-labelledby="profile-communities-title">
+      <header>
+        <span className="profile-inline-icon">
+          <ProfileIcon name="community" />
+        </span>
+        <h2 id="profile-communities-title">Сообщества</h2>
+        <a href="/communities">Все</a>
+      </header>
+      {error ? (
+        <p role="alert">{error}</p>
+      ) : !page ? (
+        <p role="status">Загружаем сообщества…</p>
+      ) : communities.length === 0 ? (
+        <p>Вы пока не вступили ни в одно сообщество.</p>
+      ) : (
+        <div className="profile-community-list">
+          {communities.map((community) => (
+            <a href={community.route} key={community.id} aria-label={community.title}>
+              <span>
+                {community.logoUrl ? (
+                  <img src={community.logoUrl} alt="" />
+                ) : (
+                  communityInitials(community.title)
+                )}
+              </span>
+              <small>{community.title}</small>
+              {community.unreadChatCount > 0 ? <b>{community.unreadChatCount}</b> : null}
+            </a>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
 function accessTierLabel(tier: PlayerProfileView['access']['tier']): string {
   switch (tier) {
     case 'SELF':
@@ -431,12 +769,18 @@ export function ProfilePage({
   bookingPreferencesError,
   bookingPreferencesNotice,
   stationChoices = [],
+  subscriptions,
+  subscriptionsError,
+  communities,
+  communitiesError,
   error,
   onSavePrivacy,
   onSaveBookingPreferences,
   onLogout,
 }: ProfilePageProps): React.JSX.Element {
   const { profile, privateAccount, access } = view;
+  const [shareNotice, setShareNotice] = useState<string | null>(null);
+  const [activeSettings, setActiveSettings] = useState<'preferences' | 'visibility' | null>(null);
   const isSelf = access.audience === 'SELF';
   const balance = privateAccount
     ? new Intl.NumberFormat('ru-RU', {
@@ -446,125 +790,268 @@ export function ProfilePage({
       }).format(privateAccount.balanceMinor / 100)
     : null;
   const rating = profile.level.value;
+  const levelKey = levelBackgrounds[profile.level.label] ? profile.level.label : 'A';
+  const displayLevel = profile.level.assessmentRequired ? '?' : profile.level.label;
+  const pageStyle: ProfilePageStyle = {
+    '--profile-level-background': `url("${levelBackgrounds[levelKey] ?? levelABackground}")`,
+    '--profile-level-accent': levelAccents[levelKey] ?? levelAccents.A ?? '#7650f4',
+    '--profile-level-soft': levelSoftTones[levelKey] ?? levelSoftTones.A ?? '#eeeaff',
+  };
+
+  async function shareProfile(): Promise<void> {
+    const url = window.location.href;
+    try {
+      if (navigator.share) {
+        await navigator.share({ title: profile.displayName, url });
+        setShareNotice('Профиль отправлен');
+      } else if (navigator.clipboard) {
+        await navigator.clipboard.writeText(url);
+        setShareNotice('Ссылка скопирована');
+      } else {
+        setShareNotice('Скопируйте адрес страницы из браузера');
+      }
+    } catch (shareError: unknown) {
+      if (shareError instanceof DOMException && shareError.name === 'AbortError') return;
+      setShareNotice('Не удалось поделиться профилем');
+    }
+  }
 
   return (
-    <main className="profile-page">
-      <section className="profile-hero">
+    <div className="profile-shell">
+      <main className="profile-page" style={pageStyle}>
         <header className="profile-toolbar">
-          <a href="/" aria-label="Вернуться на Главную">
-            ‹
+          <a href="/notifications" aria-label="Оповещения">
+            <ProfileIcon name="bell" />
           </a>
-          <span>{tenantName}</span>
-          <i aria-hidden="true" />
+          <span>PadelHub Player</span>
+          <a href="#profile-settings" aria-label="Перейти к настройкам профиля">
+            <ProfileIcon name="more" />
+          </a>
         </header>
-        <div className="profile-identity">
-          <span className="profile-avatar" aria-hidden="true">
-            {profile.avatarUrl ? (
-              <img src={profile.avatarUrl} alt="" />
-            ) : (
-              initials(profile.displayName)
-            )}
-          </span>
-          <p>{isSelf ? 'Мой профиль' : 'Профиль игрока'}</p>
-          <h1>{profile.displayName}</h1>
+
+        <section className="profile-identity" aria-labelledby="profile-name">
+          <p>{isSelf ? tenantName : 'Профиль игрока'}</p>
+          <h1 id="profile-name">{profile.displayName}</h1>
           {privateAccount?.phoneLast4 ? <small>•••• {privateAccount.phoneLast4}</small> : null}
-        </div>
-      </section>
+          {isSelf ? (
+            <a className="profile-edit-link" href="#profile-settings">
+              <span aria-hidden="true">✎</span>
+              редактировать профиль
+            </a>
+          ) : null}
 
-      <section className="profile-card" aria-label="Доступные данные профиля">
-        {privateAccount ? (
-          <div>
-            <span>Баланс</span>
-            <strong>{balance}</strong>
-            <small>Виден только вам</small>
-          </div>
-        ) : (
-          <div>
-            <span>Доступ к профилю</span>
-            <strong>{accessTierLabel(access.tier)}</strong>
-            <small>Определён сервером</small>
-          </div>
-        )}
-        <div>
-          <span>Уровень</span>
-          <strong>{profile.level.label}</strong>
-          <small>
-            {profile.level.assessmentRequired
-              ? 'Нужна оценка уровня'
-              : rating === undefined
-                ? 'Рейтинг доступен на следующем уровне'
-                : `Рейтинг ${rating.toLocaleString('ru-RU')}`}
-          </small>
-        </div>
-      </section>
-
-      {access.audience === 'OTHER' ? (
-        <section className="profile-access-section" aria-labelledby="profile-actions-title">
-          <div className="profile-section-heading">
-            <span>Возможности</span>
-            <h2 id="profile-actions-title">Связаться с игроком</h2>
-          </div>
-          <div className="profile-actions">
-            <ProfileAction
-              title="Связаться"
-              description="Выбрать доступный способ связи"
-              capability={access.contact}
-            />
-            <ProfileAction
-              title="Открыть чат"
-              description="Перейти в личный чат ПадлХАБ"
-              capability={access.chat}
+          <div className="profile-avatar-stage">
+            <PlayerLevelAvatar
+              className="profile-level-avatar"
+              alt={profile.displayName}
+              fallbackSeed={profile.userId}
+              level={displayLevel}
+              progress={levelProgress(rating, profile.level.assessmentRequired)}
+              size={150}
+              src={profile.avatarUrl ?? null}
             />
           </div>
+
+          <div className="profile-stats" aria-label="Данные профиля">
+            <div>
+              <span>уровень</span>
+              <strong>{displayLevel}</strong>
+            </div>
+            <div>
+              <span>{privateAccount ? 'баланс' : 'доступ'}</span>
+              <strong>{privateAccount ? balance : accessTierLabel(access.tier)}</strong>
+            </div>
+          </div>
+
+          <button className="profile-share" type="button" onClick={() => void shareProfile()}>
+            <ProfileIcon name="share" />
+            QR / поделиться профилем
+          </button>
+          {shareNotice ? (
+            <p className="profile-share-notice" role="status">
+              {shareNotice}
+            </p>
+          ) : null}
         </section>
-      ) : null}
 
-      {isSelf ? (
-        <BookingPreferencesSettings
-          key={bookingPreferences?.version ?? 'loading'}
-          {...(bookingPreferences !== undefined ? { settings: bookingPreferences } : {})}
-          stations={stationChoices}
-          busy={bookingPreferencesBusy}
-          {...(bookingPreferencesError !== undefined ? { error: bookingPreferencesError } : {})}
-          {...(bookingPreferencesNotice !== undefined ? { notice: bookingPreferencesNotice } : {})}
-          {...(onSaveBookingPreferences ? { onSave: onSaveBookingPreferences } : {})}
-        />
-      ) : null}
+        <div className="profile-content">
+          {access.audience === 'OTHER' ? (
+            <section className="profile-access-section" aria-labelledby="profile-actions-title">
+              <div className="profile-section-heading">
+                <span>Возможности</span>
+                <h2 id="profile-actions-title">Связаться с игроком</h2>
+              </div>
+              <div className="profile-actions">
+                <ProfileAction
+                  title="Связаться"
+                  description="Выбрать доступный способ связи"
+                  capability={access.contact}
+                />
+                <ProfileAction
+                  title="Открыть чат"
+                  description="Перейти в личный чат ПадлХАБ"
+                  capability={access.chat}
+                />
+              </div>
+            </section>
+          ) : null}
 
-      {isSelf ? (
-        <PrivacySettings
-          key={privacySettings?.version ?? 'loading'}
-          {...(privacySettings !== undefined ? { settings: privacySettings } : {})}
-          busy={privacyBusy}
-          {...(privacyError !== undefined ? { error: privacyError } : {})}
-          {...(privacyNotice !== undefined ? { notice: privacyNotice } : {})}
-          {...(onSavePrivacy ? { onSave: onSavePrivacy } : {})}
-        />
-      ) : null}
+          {isSelf ? (
+            <>
+              <ProfileFacts />
+              <ProfileSubscriptions
+                {...(subscriptions !== undefined ? { subscriptions } : {})}
+                {...(subscriptionsError !== undefined ? { error: subscriptionsError } : {})}
+              />
+            </>
+          ) : null}
 
-      <section className="profile-privacy-note" aria-labelledby="profile-privacy-title">
-        <span aria-hidden="true">◎</span>
-        <div>
-          <h2 id="profile-privacy-title">Приватность и доступ</h2>
-          <p>
-            {isSelf
-              ? 'Другие игроки видят только разрешённые поля. Связь и личный чат открываются после серверной проверки доступа.'
-              : 'Это уже отфильтрованный профиль: телефон, баланс и закрытые поля не передаются в браузер.'}
-          </p>
+          {isSelf ? (
+            <ProfileCommunities
+              {...(communities !== undefined ? { page: communities } : {})}
+              {...(communitiesError !== undefined ? { error: communitiesError } : {})}
+            />
+          ) : null}
+
+          {isSelf ? (
+            <section
+              className="profile-settings-overview"
+              id="profile-settings"
+              aria-label="Настройки"
+            >
+              <button type="button" onClick={() => setActiveSettings('preferences')}>
+                <span className="profile-inline-icon">
+                  <ProfileIcon name="preference" />
+                </span>
+                <span>
+                  <strong>Предпочтения</strong>
+                  <small>любимые станции · удобное время · история игр</small>
+                </span>
+                <i aria-hidden="true">›</i>
+              </button>
+              <button type="button" onClick={() => setActiveSettings('visibility')}>
+                <span className="profile-inline-icon">
+                  <ProfileIcon name="eye" />
+                </span>
+                <span>
+                  <strong>Видимость профиля</strong>
+                  <small>связь и личный чат</small>
+                </span>
+                <i aria-hidden="true">›</i>
+              </button>
+              <a href="/notifications">
+                <span className="profile-inline-icon">
+                  <ProfileIcon name="bell" />
+                </span>
+                <span>
+                  <strong>Уведомления</strong>
+                  <small>push и лента оповещений</small>
+                </span>
+                <i aria-hidden="true">›</i>
+              </a>
+            </section>
+          ) : null}
+
+          {isSelf ? (
+            <section className="profile-level-scale" aria-labelledby="profile-level-scale-title">
+              <span id="profile-level-scale-title">уровень игрока</span>
+              <div>
+                {levelScale.map((level) => (
+                  <b className={level === levelKey ? 'is-active' : undefined} key={level}>
+                    {level}
+                  </b>
+                ))}
+              </div>
+            </section>
+          ) : null}
+
+          <section className="profile-privacy-note" aria-labelledby="profile-privacy-title">
+            <span aria-hidden="true">◎</span>
+            <div>
+              <h2 id="profile-privacy-title">Приватность и доступ</h2>
+              <p>
+                {isSelf
+                  ? 'Другие игроки видят только разрешённые поля. Связь и личный чат открываются после серверной проверки доступа.'
+                  : 'Это уже отфильтрованный профиль: телефон, баланс и закрытые поля не передаются в браузер.'}
+              </p>
+            </div>
+          </section>
+
+          {error ? (
+            <p className="profile-error" role="alert">
+              {error}
+            </p>
+          ) : null}
+
+          {isSelf ? (
+            <button
+              className="profile-logout"
+              type="button"
+              disabled={logoutBusy}
+              onClick={onLogout}
+            >
+              {logoutBusy ? 'Выходим…' : 'Выйти из аккаунта'}
+            </button>
+          ) : null}
         </div>
-      </section>
 
-      {error ? (
-        <p className="profile-error" role="alert">
-          {error}
-        </p>
-      ) : null}
+        {isSelf && activeSettings ? (
+          <div
+            className="profile-settings-backdrop"
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget) setActiveSettings(null);
+            }}
+          >
+            <section
+              className="profile-settings-sheet"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="profile-settings-sheet-title"
+            >
+              <header className="profile-settings-sheet__toolbar">
+                <button
+                  type="button"
+                  aria-label="Закрыть настройки"
+                  onClick={() => setActiveSettings(null)}
+                >
+                  ‹
+                </button>
+                <h2 id="profile-settings-sheet-title">
+                  {activeSettings === 'preferences' ? 'Предпочтения' : 'Видимость профиля'}
+                </h2>
+                <span aria-hidden="true" />
+              </header>
 
-      {isSelf ? (
-        <button className="profile-logout" type="button" disabled={logoutBusy} onClick={onLogout}>
-          {logoutBusy ? 'Выходим…' : 'Выйти из аккаунта'}
-        </button>
-      ) : null}
-    </main>
+              {activeSettings === 'preferences' ? (
+                <BookingPreferencesSettings
+                  key={bookingPreferences?.version ?? 'loading'}
+                  {...(bookingPreferences !== undefined ? { settings: bookingPreferences } : {})}
+                  stations={stationChoices}
+                  busy={bookingPreferencesBusy}
+                  {...(bookingPreferencesError !== undefined
+                    ? { error: bookingPreferencesError }
+                    : {})}
+                  {...(bookingPreferencesNotice !== undefined
+                    ? { notice: bookingPreferencesNotice }
+                    : {})}
+                  {...(onSaveBookingPreferences ? { onSave: onSaveBookingPreferences } : {})}
+                />
+              ) : (
+                <PrivacySettings
+                  key={privacySettings?.version ?? 'loading'}
+                  {...(privacySettings !== undefined ? { settings: privacySettings } : {})}
+                  busy={privacyBusy}
+                  {...(privacyError !== undefined ? { error: privacyError } : {})}
+                  {...(privacyNotice !== undefined ? { notice: privacyNotice } : {})}
+                  {...(onSavePrivacy ? { onSave: onSavePrivacy } : {})}
+                />
+              )}
+            </section>
+          </div>
+        ) : null}
+
+        <MainBottomNavigation active="profile" gamesDestination="games" />
+      </main>
+    </div>
   );
 }

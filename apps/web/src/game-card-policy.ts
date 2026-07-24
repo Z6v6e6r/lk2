@@ -14,7 +14,7 @@ const stateLabels: Record<GameCardModel['displayState'], string> = {
   RESULT_REQUIRED: 'Внесите счёт',
   RESULT_PENDING: 'Ожидание результата',
   RESULT_DISPUTED: 'Результат оспаривается',
-  COMPLETED: 'Игра состоялась',
+  COMPLETED: 'Игра завершена',
   CANCELLED: 'Игра отменена',
 };
 
@@ -39,4 +39,22 @@ export function gameStateLabel(state: GameCardModel['displayState']): string {
 export function gamePrimaryAction(game: GameCardModel): GameCardAction | undefined {
   const allowedActions: readonly string[] = game.allowedActions;
   return actionPriority.find((action) => allowedActions.includes(action));
+}
+
+export function gameHistoryStateLabel(game: GameCardModel): string {
+  if ('resultSummary' in game && game.resultSummary?.state === 'CONFIRMED') {
+    return 'Результат внесён';
+  }
+  return gameStateLabel(game.displayState);
+}
+
+export function gameHistoryPrimaryAction(game: GameCardModel): GameCardAction | undefined {
+  const allowedActions: readonly string[] = game.allowedActions;
+  if (game.displayState === 'RESULT_REQUIRED' && allowedActions.includes('SUBMIT_RESULT')) {
+    return 'SUBMIT_RESULT';
+  }
+  if (game.displayState === 'RESULT_PENDING' && allowedActions.includes('DISPUTE_RESULT')) {
+    return 'DISPUTE_RESULT';
+  }
+  return undefined;
 }

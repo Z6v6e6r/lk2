@@ -21,6 +21,10 @@ export type BookingPreferencesUpdateRequest =
   components['schemas']['BookingPreferencesUpdateRequest'];
 export type BookingRecommendationPage = components['schemas']['BookingRecommendationPage'];
 export type UserUpcomingBookings = components['schemas']['UserUpcomingBookings'];
+export type ActivityHistoryKind = components['schemas']['ActivityHistoryKind'];
+export type ActivityHistoryStatus = components['schemas']['ActivityHistoryStatus'];
+export type ActivityHistoryItem = components['schemas']['ActivityHistoryItem'];
+export type ActivityHistoryPage = components['schemas']['ActivityHistoryPage'];
 export type NotificationInboxPage = components['schemas']['NotificationInboxPage'];
 export type NotificationReadCursorResult = components['schemas']['NotificationReadCursorResult'];
 export type WebPushConfiguration = components['schemas']['WebPushConfiguration'];
@@ -29,8 +33,21 @@ export type WebPushEndpointCommandResult = components['schemas']['WebPushEndpoin
 export type GameCard = components['schemas']['GameCardView'];
 export type GameCardPage = components['schemas']['GameCardPage'];
 export type GameCommandResult = components['schemas']['GameCommandResult'];
+export type SubmitGameResultRequest = components['schemas']['SubmitGameResultRequest'];
+export type DisputeGameResultRequest = components['schemas']['DisputeGameResultRequest'];
 export type PublicGameCard = PublicApiComponents['schemas']['PublicGameCard'];
 export type PublicGameCardPage = PublicApiComponents['schemas']['PublicGameCardPage'];
+export type PublicGiftCertificateCatalog =
+  PublicApiComponents['schemas']['PublicGiftCertificateCatalog'];
+export type CreateGiftCertificateOrderRequest =
+  PublicApiComponents['schemas']['CreateGiftCertificateOrderRequest'];
+export type GiftCertificateOrder = PublicApiComponents['schemas']['GiftCertificateOrder'];
+export type GiftCertificateOrderCommandResult =
+  PublicApiComponents['schemas']['GiftCertificateOrderCommandResult'];
+export type GiftCertificatePaymentIntent =
+  PublicApiComponents['schemas']['GiftCertificatePaymentIntent'];
+export type GiftCertificatePaymentConfirmation =
+  PublicApiComponents['schemas']['GiftCertificatePaymentConfirmation'];
 
 export interface PublicGameFilters {
   readonly stationId?: string;
@@ -42,6 +59,13 @@ export interface PublicGameFilters {
   readonly availability?: 'JOINABLE' | 'INCLUDE_FULL';
   readonly limit?: number;
   readonly cursor?: string;
+}
+
+export interface ActivityHistoryFilters {
+  readonly kind?: ActivityHistoryKind;
+  readonly status?: ActivityHistoryStatus;
+  readonly cursor?: string;
+  readonly limit?: number;
 }
 
 export type RequestAuthMode = 'none' | 'required';
@@ -189,6 +213,12 @@ export class PadlHubApiClient {
 
   public getAccessToken(): string | undefined {
     return this.accessToken;
+  }
+
+  private resolveApiMediaUrl(url: string): string {
+    return url.startsWith('/')
+      ? new URL(url, `${this.options.baseUrl.replace(/\/$/, '')}/`).toString()
+      : url;
   }
 
   public async request<TResponse>(path: string, init: ApiRequestInit = {}): Promise<TResponse> {
@@ -357,13 +387,31 @@ export class PadlHubApiClient {
     return this.request<UserUpcomingBookings>('/bookings/upcoming');
   }
 
+  public listActivityHistory(input: ActivityHistoryFilters = {}): Promise<ActivityHistoryPage> {
+    const query = new URLSearchParams();
+    if (input.kind) query.set('kind', input.kind);
+    if (input.status) query.set('status', input.status);
+    if (input.cursor) query.set('cursor', input.cursor);
+    if (input.limit !== undefined) query.set('limit', String(input.limit));
+    const suffix = query.size > 0 ? `?${query.toString()}` : '';
+    return this.request<ActivityHistoryPage>(`/bookings/history${suffix}`);
+  }
+
   public listBookingRecommendations(limit = 6): Promise<BookingRecommendationPage> {
     const query = new URLSearchParams({ limit: String(limit) });
     return this.request<BookingRecommendationPage>(`/recommendations/bookings?${query.toString()}`);
   }
 
-  public getHomeDashboard(): Promise<HomeDashboard> {
-    return this.request<HomeDashboard>('/home');
+  public async getHomeDashboard(): Promise<HomeDashboard> {
+    const dashboard = await this.request<HomeDashboard>('/home');
+    if (!Array.isArray(dashboard.locations)) return dashboard;
+    return {
+      ...dashboard,
+      locations: dashboard.locations.map((location) => ({
+        ...location,
+        imageUrl: location.imageUrl ? this.resolveApiMediaUrl(location.imageUrl) : null,
+      })),
+    };
   }
 
   public listPublicGames(input: PublicGameFilters = {}): Promise<PublicGameCardPage> {
@@ -381,6 +429,128 @@ export class PadlHubApiClient {
     return this.requestFromRoot<PublicGameCardPage>(this.publicApiRoot, `/games${suffix}`, {
       auth: 'none',
     });
+  }
+
+  public getPublicGiftCertificateCatalog(): Promise<PublicGiftCertificateCatalog> {
+    return this.requestFromRoot<PublicGiftCertificateCatalog>(
+      this.publicApiRoot,
+      '/gift-certificate-catalog',
+      { auth: 'none' },
+    );
+  }
+
+  public createPublicGiftCertificateOrder(
+    input: CreateGiftCertificateOrderRequest,
+  ): Promise<GiftCertificateOrderCommandResult> {
+    const idempotencyKey = createCorrelationId();
+    return this.retryOnceOnNetworkFailure(() =>
+      this.requestFromRoot<GiftCertificateOrderCommandResult>(
+        this.publicApiRoot,
+        '/gift-certificate-orders',
+        {
+          method: 'POST',
+          auth: 'none',
+          credentials: 'include',
+          idempotencyKey,
+          body: jsonRequestBody(input),
+        },
+      ),
+    );
+  }
+
+  public getPublicGiftCertificateOrder(orderId: string): Promise<GiftCertificateOrder> {
+    return this.requestFromRoot<GiftCertificateOrder>(
+      this.publicApiRoot,
+      `/gift-certificate-orders/${encodeURIComponent(orderId)}`,
+      { auth: 'none', credentials: 'include' },
+    );
+  }
+
+  public downloadPublicGiftCertificate(orderId: string): Promise<Blob> {
+    return this.downloadFromRoot(
+      this.publicApiRoot,
+      `/gift-certificate-orders/${encodeURIComponent(orderId)}/certificate.pdf`,
+      'none',
+      'include',
+    );
+  }
+
+  public createPublicGiftCertificatePaymentIntent(
+    orderId: string,
+  ): Promise<GiftCertificatePaymentIntent> {
+    const idempotencyKey = createCorrelationId();
+    return this.retryOnceOnNetworkFailure(() =>
+      this.requestFromRoot<GiftCertificatePaymentIntent>(
+        this.publicApiRoot,
+        `/gift-certificate-orders/${encodeURIComponent(orderId)}/payment-intents`,
+        { method: 'POST', auth: 'none', credentials: 'include', idempotencyKey },
+      ),
+    );
+  }
+
+  public confirmPublicGiftCertificateSandboxPayment(
+    paymentId: string,
+  ): Promise<GiftCertificatePaymentConfirmation> {
+    const idempotencyKey = createCorrelationId();
+    return this.retryOnceOnNetworkFailure(() =>
+      this.requestFromRoot<GiftCertificatePaymentConfirmation>(
+        this.publicApiRoot,
+        `/gift-certificate-payments/${encodeURIComponent(paymentId)}/sandbox-confirm`,
+        { method: 'POST', auth: 'none', credentials: 'include', idempotencyKey, body: '{}' },
+      ),
+    );
+  }
+
+  public createGiftCertificateOrder(
+    input: CreateGiftCertificateOrderRequest,
+  ): Promise<GiftCertificateOrderCommandResult> {
+    const idempotencyKey = createCorrelationId();
+    return this.retryOnceOnNetworkFailure(() =>
+      this.request<GiftCertificateOrderCommandResult>('/gift-certificate-orders', {
+        method: 'POST',
+        idempotencyKey,
+        body: jsonRequestBody(input),
+      }),
+    );
+  }
+
+  public getGiftCertificateOrder(orderId: string): Promise<GiftCertificateOrder> {
+    return this.request<GiftCertificateOrder>(
+      `/gift-certificate-orders/${encodeURIComponent(orderId)}`,
+    );
+  }
+
+  public downloadGiftCertificate(orderId: string): Promise<Blob> {
+    return this.downloadFromRoot(
+      this.apiRoot,
+      `/gift-certificate-orders/${encodeURIComponent(orderId)}/certificate.pdf`,
+      'required',
+      'same-origin',
+    );
+  }
+
+  public createGiftCertificatePaymentIntent(
+    orderId: string,
+  ): Promise<GiftCertificatePaymentIntent> {
+    const idempotencyKey = createCorrelationId();
+    return this.retryOnceOnNetworkFailure(() =>
+      this.request<GiftCertificatePaymentIntent>(
+        `/gift-certificate-orders/${encodeURIComponent(orderId)}/payment-intents`,
+        { method: 'POST', idempotencyKey },
+      ),
+    );
+  }
+
+  public confirmGiftCertificateSandboxPayment(
+    paymentId: string,
+  ): Promise<GiftCertificatePaymentConfirmation> {
+    const idempotencyKey = createCorrelationId();
+    return this.retryOnceOnNetworkFailure(() =>
+      this.request<GiftCertificatePaymentConfirmation>(
+        `/gift-certificate-payments/${encodeURIComponent(paymentId)}/sandbox-confirm`,
+        { method: 'POST', idempotencyKey, body: '{}' },
+      ),
+    );
   }
 
   public listMyGames(
@@ -420,16 +590,62 @@ export class PadlHubApiClient {
     return this.gameCommand(gameId, '/waitlist/me', 'DELETE');
   }
 
+  public submitGameResult(
+    gameId: string,
+    input: SubmitGameResultRequest,
+  ): Promise<GameCommandResult> {
+    return this.gameCommand(gameId, '/result-submissions', 'POST', input);
+  }
+
+  public confirmGameResult(gameId: string, submissionId: string): Promise<GameCommandResult> {
+    return this.gameCommand(
+      gameId,
+      `/result-submissions/${encodeURIComponent(submissionId)}/confirm`,
+      'POST',
+    );
+  }
+
+  public disputeGameResult(
+    gameId: string,
+    submissionId: string,
+    input: DisputeGameResultRequest,
+  ): Promise<GameCommandResult> {
+    return this.gameCommand(
+      gameId,
+      `/result-submissions/${encodeURIComponent(submissionId)}/dispute`,
+      'POST',
+      input,
+    );
+  }
+
   public getGameOperation(operationId: string): Promise<GameCommandResult> {
     return this.request<GameCommandResult>(`/game-operations/${encodeURIComponent(operationId)}`);
   }
 
-  public listLocations(): Promise<LocationList> {
-    return this.request<LocationList>('/locations');
+  public async listLocations(): Promise<LocationList> {
+    const locations = await this.request<LocationList>('/locations');
+    return {
+      ...locations,
+      items: locations.items.map((location) => ({
+        ...location,
+        coverImageUrl: location.coverImageUrl
+          ? this.resolveApiMediaUrl(location.coverImageUrl)
+          : null,
+      })),
+    };
   }
 
-  public getLocation(locationId: string): Promise<LocationDetail> {
-    return this.request<LocationDetail>(`/locations/${encodeURIComponent(locationId)}`);
+  public async getLocation(locationId: string): Promise<LocationDetail> {
+    const location = await this.request<LocationDetail>(
+      `/locations/${encodeURIComponent(locationId)}`,
+    );
+    return {
+      ...location,
+      gallery: location.gallery.map((image) => ({
+        ...image,
+        url: this.resolveApiMediaUrl(image.url),
+      })),
+    };
   }
 
   public listMyCommunities(
@@ -636,6 +852,36 @@ export class PadlHubApiClient {
       ...(sessionIntent === undefined ? {} : { sessionIntent }),
     };
     return this.requestWithPolicy<TResponse>(path, policy, createCorrelationId(), true, apiRoot);
+  }
+
+  private async downloadFromRoot(
+    apiRoot: string,
+    path: string,
+    auth: RequestAuthMode,
+    credentials: RequestCredentials,
+    correlationId = createCorrelationId(),
+    allowRefresh = true,
+  ): Promise<Blob> {
+    const headers: HeaderRecord = {};
+    setHeader(headers, 'Accept', 'application/pdf');
+    setHeader(headers, 'X-Correlation-ID', correlationId);
+    setHeader(headers, 'X-App-Platform', this.options.platform);
+    setHeader(headers, 'X-App-Version', this.options.appVersion);
+    if (this.options.appBuild) setHeader(headers, 'X-App-Build', this.options.appBuild);
+    if (auth === 'required' && this.accessToken) {
+      setHeader(headers, 'Authorization', `Bearer ${this.accessToken}`);
+    }
+    const response = await this.fetchImplementation(`${apiRoot}${path}`, {
+      method: 'GET',
+      credentials,
+      headers,
+    });
+    if (response.status === 401 && auth === 'required' && allowRefresh) {
+      await this.refreshSession();
+      return this.downloadFromRoot(apiRoot, path, auth, credentials, correlationId, false);
+    }
+    if (!response.ok) throw await this.toApiClientError(response, correlationId);
+    return response.blob();
   }
 
   private async toApiClientError(

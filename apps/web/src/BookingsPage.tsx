@@ -1,18 +1,19 @@
 import { useState } from 'react';
 
 import type {
+  ActivityHistoryPage,
+  ActivityHistoryQuery,
   BookingRecommendationPage,
-  GameCardPage,
   UserUpcomingBookings,
 } from './auth-gateway.js';
+import { ActivityHistoryPanel } from './ActivityHistory.js';
 import { BookingRecommendations } from './BookingRecommendations.js';
-import { GameCard } from './GameCard.js';
 import { MainBottomNavigation } from './HomeDashboardPage.js';
 
 interface BookingsPageProps {
   readonly bookings: UserUpcomingBookings;
   readonly tenantName: string;
-  readonly loadHistory: (cursor?: string) => Promise<GameCardPage>;
+  readonly loadHistory: (input?: ActivityHistoryQuery) => Promise<ActivityHistoryPage>;
   readonly loadRecommendations: () => Promise<BookingRecommendationPage>;
 }
 
@@ -48,30 +49,16 @@ export function BookingsPage({
     new URLSearchParams(window.location.search).get('view') === 'for-me'
       ? 'FOR_ME'
       : 'MY';
+  const initialScope =
+    typeof window !== 'undefined' &&
+    new URLSearchParams(window.location.search).get('scope') === 'history'
+      ? 'HISTORY'
+      : 'UPCOMING';
   const [view, setView] = useState<'MY' | 'FOR_ME'>(initialView);
-  const [scope, setScope] = useState<'UPCOMING' | 'HISTORY'>('UPCOMING');
-  const [history, setHistory] = useState<GameCardPage | null>(null);
+  const [scope, setScope] = useState<'UPCOMING' | 'HISTORY'>(initialScope);
   const [recommendations, setRecommendations] = useState<BookingRecommendationPage | null>(null);
   const [loading, setLoading] = useState(false);
-  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  function showHistory(): void {
-    setScope('HISTORY');
-    setError(null);
-    if (history || loading) return;
-    setLoading(true);
-    void loadHistory().then(
-      (page) => {
-        setHistory(page);
-        setLoading(false);
-      },
-      () => {
-        setError('Не удалось загрузить историю игр.');
-        setLoading(false);
-      },
-    );
-  }
 
   function showRecommendations(): void {
     setView('FOR_ME');
@@ -86,25 +73,6 @@ export function BookingsPage({
       () => {
         setError('Не удалось загрузить рекомендации.');
         setLoading(false);
-      },
-    );
-  }
-
-  function loadMoreHistory(): void {
-    if (!history?.nextCursor || loadingMore) return;
-    setLoadingMore(true);
-    setError(null);
-    void loadHistory(history.nextCursor).then(
-      (page) => {
-        setHistory({
-          items: [...history.items, ...page.items],
-          ...(page.nextCursor !== undefined ? { nextCursor: page.nextCursor } : {}),
-        });
-        setLoadingMore(false);
-      },
-      () => {
-        setError('Не удалось загрузить следующую страницу истории.');
-        setLoadingMore(false);
       },
     );
   }
@@ -160,7 +128,10 @@ export function BookingsPage({
               type="button"
               role="tab"
               aria-selected={scope === 'HISTORY'}
-              onClick={showHistory}
+              onClick={() => {
+                setScope('HISTORY');
+                setError(null);
+              }}
             >
               История
             </button>
@@ -197,25 +168,7 @@ export function BookingsPage({
             </section>
           ) : (
             <section className="bookings-history" aria-label="История записей">
-              <p className="bookings-coverage-note">
-                Сейчас история содержит завершённые и отменённые игры ПаделХАБ. История внешних
-                тренировок появится после подтверждения provider-контракта.
-              </p>
-              {loading && !history ? <p role="status">Загружаем историю…</p> : null}
-              {history?.items.length === 0 ? (
-                <div className="bookings-empty" role="status">
-                  <strong>История пока пуста</strong>
-                  <p>Завершённые игры появятся здесь.</p>
-                </div>
-              ) : null}
-              {history?.items.map((game) => (
-                <GameCard game={game} compact key={game.id} />
-              ))}
-              {history?.nextCursor ? (
-                <button type="button" disabled={loadingMore} onClick={loadMoreHistory}>
-                  {loadingMore ? 'Загружаем…' : 'Показать ещё'}
-                </button>
-              ) : null}
+              <ActivityHistoryPanel active={scope === 'HISTORY'} loadHistory={loadHistory} />
             </section>
           )}
         </>

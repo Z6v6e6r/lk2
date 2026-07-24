@@ -25,6 +25,7 @@ export interface PlayerProfileView {
     readonly userId: string;
     readonly displayName: string;
     readonly firstName?: string | null;
+    readonly lastName?: string | null;
     readonly avatarUrl?: string | null;
     readonly level: {
       readonly label: string;
@@ -86,6 +87,7 @@ export function buildPlayerProfileView(input: PlayerProfileViewInput): PlayerPro
     userId: input.profile.userId,
     displayName: input.profile.displayName,
     ...(input.profile.firstName !== undefined ? { firstName: input.profile.firstName } : {}),
+    ...(input.profile.lastName !== undefined ? { lastName: input.profile.lastName } : {}),
     ...(input.profile.avatarUrl !== undefined ? { avatarUrl: input.profile.avatarUrl } : {}),
     level: {
       label: input.profile.level.label,

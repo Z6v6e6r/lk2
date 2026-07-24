@@ -8,7 +8,7 @@ import {
   type LocationPublicationStatus,
   type LocationWeekday,
 } from '@phub/locations';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 
 import type { NotificationAdminClient } from './notification-admin-client.js';
@@ -16,7 +16,7 @@ import type { NotificationAdminClient } from './notification-admin-client.js';
 type SettingsTab = 'general' | 'quick' | 'stations';
 type LocationClient = Pick<
   NotificationAdminClient,
-  'listLocations' | 'createLocation' | 'updateLocation'
+  'listLocations' | 'createLocation' | 'updateLocation' | 'uploadLocationMedia' | 'resolveMediaUrl'
 >;
 
 const weekdays: readonly { readonly id: LocationWeekday; readonly label: string }[] = [
@@ -134,8 +134,10 @@ function nullable(value: string): string | null {
 
 function LocationPreview({
   profile,
+  mediaUrl,
 }: {
   readonly profile: LocationProfileInput;
+  readonly mediaUrl: (url: string) => string;
 }): React.JSX.Element {
   const cover = profile.gallery.find((image) => image.isCover)?.url;
   const firstHours = profile.workingHours.find((entry) => !entry.closed)?.intervals[0];
@@ -143,7 +145,7 @@ function LocationPreview({
     <aside className="location-preview" aria-label="Предпросмотр карточки локации">
       <div
         className="location-preview-cover"
-        style={cover ? { backgroundImage: `url(${cover})` } : undefined}
+        style={cover ? { backgroundImage: `url(${mediaUrl(cover)})` } : undefined}
       >
         <span>{profile.gallery.length || 0} фото</span>
       </div>
@@ -189,6 +191,7 @@ function LocationListPanel(props: {
   readonly onQuery: (query: string) => void;
   readonly onCreate: () => void;
   readonly onSelect: (location: LocationAdminView) => void;
+  readonly mediaUrl: (url: string) => string;
 }): React.JSX.Element {
   const normalizedQuery = props.query.trim().toLocaleLowerCase('ru-RU');
   const visible = props.locations.filter((location) =>
@@ -229,7 +232,7 @@ function LocationListPanel(props: {
             >
               <span
                 className="location-row-cover"
-                style={cover ? { backgroundImage: `url(${cover})` } : undefined}
+                style={cover ? { backgroundImage: `url(${props.mediaUrl(cover)})` } : undefined}
               />
               <span className="location-row-copy">
                 <strong>{location.title}</strong>
@@ -262,12 +265,16 @@ function LocationEditor(props: {
   readonly selected?: LocationAdminView;
   readonly profile: LocationProfileInput;
   readonly busy: boolean;
+  readonly mediaUploading: boolean;
+  readonly mediaUrl: (url: string) => string;
   readonly message?: string;
   readonly error?: string;
   readonly onChange: (profile: LocationProfileInput) => void;
+  readonly onUploadPhoto: (file: File) => void;
   readonly onSave: (status: LocationPublicationStatus) => void;
 }): React.JSX.Element {
   const profile = props.profile;
+  const imageInput = useRef<HTMLInputElement>(null);
   const parsed = locationProfileInputSchema.safeParse(profile);
   const completeness = locationCompleteness(profile);
   const isNew = !props.selected;
@@ -415,10 +422,38 @@ function LocationEditor(props: {
             <span>2</span>
             <div>
               <h3>Фотографии</h3>
-              <p>До 12 HTTPS-изображений. Одно обязательно назначается обложкой.</p>
+              <p>
+                До 12 фотографий. Загрузите JPEG, PNG или WebP — сервер сохранит оптимизированный
+                WebP в хранилище. Одно фото обязательно назначается обложкой.
+              </p>
             </div>
-            <button className="secondary-button" type="button" onClick={addImage}>
-              + Фото
+            <input
+              ref={imageInput}
+              className="sr-only"
+              type="file"
+              accept="image/jpeg,image/png,image/webp"
+              aria-label="Загрузить фотографию с компьютера"
+              onChange={(event) => {
+                const [file] = Array.from(event.target.files ?? []);
+                event.currentTarget.value = '';
+                if (file) props.onUploadPhoto(file);
+              }}
+            />
+            <button
+              className="secondary-button"
+              type="button"
+              disabled={props.mediaUploading || profile.gallery.length >= 12}
+              onClick={() => imageInput.current?.click()}
+            >
+              {props.mediaUploading ? 'Загружаем…' : '+ Фото с компьютера'}
+            </button>
+            <button
+              className="secondary-button"
+              type="button"
+              disabled={props.mediaUploading || profile.gallery.length >= 12}
+              onClick={addImage}
+            >
+              + Ссылка
             </button>
           </div>
           <div className="location-repeat-list">
@@ -426,7 +461,9 @@ function LocationEditor(props: {
               <div className="gallery-editor-row" key={`${index}-${image.sortOrder}`}>
                 <span
                   className="gallery-editor-preview"
-                  style={image.url ? { backgroundImage: `url(${image.url})` } : undefined}
+                  style={
+                    image.url ? { backgroundImage: `url(${props.mediaUrl(image.url)})` } : undefined
+                  }
                 />
                 <label>
                   HTTPS-ссылка
@@ -776,7 +813,7 @@ function LocationEditor(props: {
           </div>
         </div>
       </div>
-      <LocationPreview profile={profile} />
+      <LocationPreview profile={profile} mediaUrl={props.mediaUrl} />
     </section>
   );
 }
@@ -793,6 +830,7 @@ export function LocationsWorkspace({
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [mediaUploading, setMediaUploading] = useState(false);
   const [error, setError] = useState<string>();
   const [message, setMessage] = useState<string>();
 
@@ -859,6 +897,39 @@ export function LocationsWorkspace({
     }
   }
 
+  async function uploadPhoto(file: File): Promise<void> {
+    if (profile.gallery.length >= 12) {
+      setError('В галерее может быть не больше 12 фотографий.');
+      return;
+    }
+    setMediaUploading(true);
+    setError(undefined);
+    setMessage(undefined);
+    try {
+      const asset = await client.uploadLocationMedia(file);
+      setProfile((current) => {
+        if (current.gallery.length >= 12) return current;
+        return {
+          ...current,
+          gallery: [
+            ...current.gallery,
+            {
+              url: asset.mediaUrl,
+              alt: '',
+              isCover: current.gallery.length === 0,
+              sortOrder: current.gallery.length,
+            },
+          ],
+        };
+      });
+      setMessage(asset.replayed ? 'Это изображение уже было загружено.' : 'Фотография загружена.');
+    } catch (uploadError) {
+      setError(errorMessage(uploadError));
+    } finally {
+      setMediaUploading(false);
+    }
+  }
+
   return (
     <main className="workspace location-workspace">
       <header className="workspace-header">
@@ -905,6 +976,7 @@ export function LocationsWorkspace({
             {...(selected ? { selectedId: selected.id } : {})}
             query={query}
             onQuery={setQuery}
+            mediaUrl={client.resolveMediaUrl}
             onCreate={() => {
               setSelected(undefined);
               setProfile(emptyProfile());
@@ -928,9 +1000,12 @@ export function LocationsWorkspace({
               {...(selected ? { selected } : {})}
               profile={profile}
               busy={busy}
+              mediaUploading={mediaUploading}
+              mediaUrl={client.resolveMediaUrl}
               {...(message ? { message } : {})}
               {...(error ? { error } : {})}
               onChange={setProfile}
+              onUploadPhoto={(file) => void uploadPhoto(file)}
               onSave={(status) => void save(status)}
             />
           )}

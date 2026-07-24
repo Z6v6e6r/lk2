@@ -13,8 +13,10 @@ only PadlHub Location and Home APIs and never select or merge a station source.
 
 ## Invariants
 
-- Every profile and command ledger row is tenant-scoped and protected by forced PostgreSQL RLS.
-- A gallery contains at most 12 distinct HTTPS URLs and exactly one cover when non-empty.
+- Every profile, media asset and command ledger row is tenant-scoped and protected by forced
+  PostgreSQL RLS.
+- A gallery contains at most 12 distinct HTTPS URLs or stable PadlHub media URLs and exactly one
+  cover when non-empty.
 - Weekly hours contain at most one entry per weekday and at most three intervals per day. The
   server calculates `openNow` in the profile IANA timezone, including an interval crossing midnight.
 - Latitude and longitude are either both present or both absent. Navigation links are derived by
@@ -41,9 +43,14 @@ The authenticated cabinet uses `GET /user/api/v1/{tenantKey}/locations` for the 
 working-hours copy and Yandex navigation URL are server-owned computed fields. Favorite and review
 state are separate future aggregates and are not stored on the editorial profile.
 
-The first media slice accepts existing HTTPS delivery URLs. Binary uploads, object validation,
-derivatives and garbage collection must be added as a separate storage-backed command before CUP
-can accept files; clients must never be given storage credentials.
+CUP may keep an existing HTTPS URL or upload a JPEG, PNG or WebP file through
+`POST /admin/api/v1/{tenantKey}/location-media`. The API accepts the binary only from a
+`locations.manage` CUP operator, enforces the byte and pixel limits, strips metadata by decoding and
+re-encoding with `sharp`, and writes one content-addressed WebP object to S3-compatible storage.
+`locations.media_assets` retains the object key and audit metadata; the gallery stores only the
+stable PadlHub URL `/public/api/v1/{tenantKey}/location-media/{assetId}`. The browser never sees S3
+credentials or a persisted signed URL; the public media endpoint redirects each request to a
+short-lived S3 read URL.
 
 ## Events and Home projection
 
@@ -59,7 +66,8 @@ with different payloads remain conflicts.
 
 ## Operations
 
-Apply migration `0021_location_profiles.sql` with the migrator, grant the minimum location
+Apply migrations `0021_location_profiles.sql` and `0033_location_media.sql` with the migrator,
+enable `LOCATION_MEDIA_ENABLED` only with complete S3 configuration, grant the minimum location
 permission, create a draft, publish only after completeness reaches 100%, and verify both User API
 reads and the next Home projection revision. The operational procedure and rollback gates are in
 [the location publication runbook](../runbooks/location-publication.md).

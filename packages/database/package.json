@@ -12,6 +12,7 @@
     "@phub/communities": "0.1.0",
     "@phub/domain": "0.1.0",
     "@phub/games": "0.1.0",
+    "@phub/gift-certificates": "0.1.0",
     "@phub/locations": "0.1.0",
     "pg": "8.22.0"
   }

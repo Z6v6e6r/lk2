@@ -35,6 +35,7 @@ const snapshot: LegacyGameImportSnapshot = {
       externalId: 'legacy-player-organizer',
       displayName: 'Анна',
       level: 'C+',
+      levelValue: 3.8,
       role: 'ORGANIZER',
       paymentState: 'PAID',
     },
@@ -42,6 +43,7 @@ const snapshot: LegacyGameImportSnapshot = {
       externalId: 'legacy-player-two',
       displayName: 'Борис',
       level: 'B',
+      levelValue: 4.2,
       role: 'PLAYER',
       paymentState: 'PAID',
     },
@@ -69,6 +71,174 @@ function fakePool(
 }
 
 describe('legacy game import repository', () => {
+  it('resolves the authenticated user Viva profile only inside the integration boundary', async () => {
+    const userId = 'e68c6e6e-0b0a-4ad9-8e3d-4bc08c1eea11';
+    const { pool, clientQuery } = fakePool((text) => {
+      if (text.includes("entity_type = 'viva_profile'")) {
+        return { rows: [{ external_id: 'private-viva-profile-id' }] };
+      }
+      return { rows: [] };
+    });
+
+    await expect(
+      createLegacyGameImportRepository(pool).resolveVivaProfileExternalId({ tenantId, userId }),
+    ).resolves.toBe('private-viva-profile-id');
+    expect(
+      clientQuery.mock.calls.some(([text]) => text.includes('integration.external_entity_map')),
+    ).toBe(true);
+  });
+
+  it('resolves the viewer phone only for the server-side CUP history adapter', async () => {
+    const userId = 'e68c6e6e-0b0a-4ad9-8e3d-4bc08c1eea11';
+    const { pool } = fakePool((text) => {
+      if (text.includes('from profile.user_summaries')) {
+        return { rows: [{ phone_e164: '+79990000001' }] };
+      }
+      return { rows: [] };
+    });
+
+    await expect(
+      createLegacyGameImportRepository(pool).resolveViewerPhoneE164({ tenantId, userId }),
+    ).resolves.toBe('+79990000001');
+  });
+
+  it('binds the proven viewer participant to the existing PadlHub user during import', async () => {
+    const viewerUserId = 'e68c6e6e-0b0a-4ad9-8e3d-4bc08c1eea11';
+    const { pool, clientQuery } = fakePool((text) => {
+      if (text.includes('from identity.tenants')) return { rows: [{ id: tenantId }] };
+      if (text.includes('select id from identity.users')) return { rows: [{ id: viewerUserId }] };
+      return { rows: [] };
+    });
+
+    await createLegacyGameImportRepository(pool).importSnapshots({
+      tenantKey: 'local-padel',
+      snapshots: [snapshot],
+      correlationId: 'legacy-viewer-binding-test',
+      participantUserBindings: [{ externalId: snapshot.organizerExternalId, userId: viewerUserId }],
+      now: new Date('2026-07-21T10:00:00.000Z'),
+    });
+
+    const createdUsers = clientQuery.mock.calls.filter(([text]) =>
+      text.includes('insert into identity.users'),
+    );
+    expect(createdUsers).toHaveLength(1);
+    const viewerMapping = clientQuery.mock.calls.find(
+      ([text, values]) =>
+        text.includes('insert into integration.external_entity_map') &&
+        values?.[3] === viewerUserId &&
+        values?.[4] === snapshot.organizerExternalId,
+    );
+    expect(viewerMapping).toBeDefined();
+    expect(
+      clientQuery.mock.calls.find(
+        ([text, values]) =>
+          text.includes('insert into integration.legacy_game_player_bindings') &&
+          values?.[1] === snapshot.organizerExternalId &&
+          values?.[2] === viewerUserId &&
+          values?.[3] === 'VIVA_PROFILE',
+      ),
+    ).toBeDefined();
+  });
+
+  it('moves an existing imported participation to the proven PadlHub viewer', async () => {
+    const gameId = '6418f90b-0fa6-4c04-a3da-57707e2f0ae2';
+    const syntheticUserId = 'c68c6e6e-0b0a-4ad9-8e3d-4bc08c1eea19';
+    const viewerUserId = 'e68c6e6e-0b0a-4ad9-8e3d-4bc08c1eea11';
+    const participationId = 'd68c6e6e-0b0a-4ad9-8e3d-4bc08c1eea18';
+    const { pool, clientQuery } = fakePool((text, values) => {
+      if (text.includes('from identity.tenants')) return { rows: [{ id: tenantId }] };
+      if (text.includes('from integration.external_entity_map') && values[2] === 'game') {
+        return { rows: [{ internal_id: gameId }] };
+      }
+      if (text.includes('from integration.external_entity_map') && values[2] === 'game_player') {
+        return { rows: [{ internal_id: syntheticUserId }] };
+      }
+      if (text.includes('select id from identity.users')) return { rows: [{ id: viewerUserId }] };
+      if (text.includes('from games.participations') && values[2] === syntheticUserId) {
+        return { rows: [{ id: participationId, role: 'ORGANIZER' }] };
+      }
+      if (text.includes('from games.participations') && values[2] === viewerUserId) {
+        return { rows: [] };
+      }
+      return { rows: [] };
+    });
+
+    const result = await createLegacyGameImportRepository(pool).importSnapshots({
+      tenantKey: 'local-padel',
+      snapshots: [snapshot],
+      correlationId: 'legacy-existing-viewer-binding-test',
+      participantUserBindings: [
+        {
+          externalId: snapshot.organizerExternalId,
+          userId: viewerUserId,
+          proofKind: 'VIEWER_PHONE',
+        },
+      ],
+      now: new Date('2026-07-21T10:00:00.000Z'),
+    });
+
+    expect(result.existing).toEqual([expect.objectContaining({ gameId })]);
+    expect(
+      clientQuery.mock.calls.find(
+        ([text, values]) =>
+          text.includes('insert into integration.legacy_game_player_bindings') &&
+          values?.[2] === viewerUserId &&
+          values?.[3] === 'VIEWER_PHONE',
+      ),
+    ).toBeDefined();
+    expect(
+      clientQuery.mock.calls.find(
+        ([text, values]) =>
+          text.includes('set user_id = $4') &&
+          values?.[2] === participationId &&
+          values?.[3] === viewerUserId,
+      ),
+    ).toBeDefined();
+    expect(
+      clientQuery.mock.calls.find(([text]) => text.includes('set revision = revision + 1')),
+    ).toBeDefined();
+  });
+
+  it('refreshes real names for already mapped players without changing the existing roster', async () => {
+    const gameId = '6418f90b-0fa6-4c04-a3da-57707e2f0ae2';
+    const organizerUserId = 'e68c6e6e-0b0a-4ad9-8e3d-4bc08c1eea11';
+    const playerUserId = 'e68c6e6e-0b0a-4ad9-8e3d-4bc08c1eea12';
+    const { pool, clientQuery } = fakePool((text, values) => {
+      if (text.includes('from identity.tenants')) return { rows: [{ id: tenantId }] };
+      if (text.includes('from integration.external_entity_map') && values[2] === 'game') {
+        return { rows: [{ internal_id: gameId }] };
+      }
+      if (text.includes('from integration.external_entity_map') && values[2] === 'game_player') {
+        return {
+          rows: [
+            {
+              internal_id:
+                values[3] === snapshot.organizerExternalId ? organizerUserId : playerUserId,
+            },
+          ],
+        };
+      }
+      return { rows: [] };
+    });
+
+    const result = await createLegacyGameImportRepository(pool).importSnapshots({
+      tenantKey: 'local-padel',
+      snapshots: [snapshot],
+      correlationId: 'legacy-name-refresh-test',
+      now: new Date('2026-07-19T10:00:00.000Z'),
+    });
+
+    expect(result.existing).toEqual([expect.objectContaining({ gameId })]);
+    const nameRefreshes = clientQuery.mock.calls.filter(([text]) =>
+      text.includes('update profile.user_summaries summary'),
+    );
+    expect(nameRefreshes).toHaveLength(2);
+    expect(nameRefreshes.map(([, values]) => values?.[2])).toEqual(['Анна', 'Борис']);
+    expect(
+      clientQuery.mock.calls.some(([text]) => text.includes('insert into games.participations')),
+    ).toBe(false);
+  });
+
   it('creates a local aggregate, PadlHub mappings, audit and outbox in one transaction', async () => {
     const { pool, clientQuery } = fakePool((text) => {
       if (text.includes('from identity.tenants')) return { rows: [{ id: tenantId }] };
@@ -92,6 +262,20 @@ describe('legacy game import repository', () => {
       clientQuery.mock.calls.some(([text]) => text.includes('insert into identity.users')),
     ).toBe(true);
     expect(
+      clientQuery.mock.calls.some(([text]) =>
+        text.includes(
+          'level_label = coalesce(excluded.level_label, profile.user_summaries.level_label)',
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      clientQuery.mock.calls.some(([text]) =>
+        text.includes(
+          'level_value = coalesce(excluded.level_value, profile.user_summaries.level_value)',
+        ),
+      ),
+    ).toBe(true);
+    expect(
       clientQuery.mock.calls.some(([text]) => text.includes('insert into locations.profiles')),
     ).toBe(true);
     expect(clientQuery.mock.calls.some(([text]) => text.includes('insert into games.games'))).toBe(
@@ -106,6 +290,12 @@ describe('legacy game import repository', () => {
     expect(
       clientQuery.mock.calls.some(([text]) => text.includes('insert into audit.audit_log')),
     ).toBe(true);
+    const lifecycleCommands = clientQuery.mock.calls.find(([text]) =>
+      text.includes("'game.lifecycle.start.v1'::text"),
+    );
+    expect(lifecycleCommands).toBeDefined();
+    expect(lifecycleCommands?.[0]).toContain("'game.lifecycle.finish.v1'::text");
+    expect(lifecycleCommands?.[0]).toContain('where not exists');
     const vivaAssociation = clientQuery.mock.calls.find(
       ([text, values]) =>
         text.includes('external_system, entity_type, internal_id, external_id') &&
@@ -137,6 +327,7 @@ describe('legacy game import repository', () => {
       tenantKey: 'local-padel',
       snapshots: [snapshot],
       correlationId: 'legacy-import-test-2',
+      now: new Date('2026-07-18T10:00:00.000Z'),
     });
     expect(result.imported).toEqual([]);
     expect(result.existing).toHaveLength(1);
@@ -148,6 +339,111 @@ describe('legacy game import repository', () => {
     expect(
       clientQuery.mock.calls.some(
         ([text, values]) => text.includes("entity_type = 'exercise'") && values?.[1] === 'VIVA',
+      ),
+    ).toBe(true);
+    expect(
+      clientQuery.mock.calls.some(([text]) => text.includes('set title = case when title = $4')),
+    ).toBe(true);
+    expect(
+      clientQuery.mock.calls.some(([text]) => text.includes("'game.lifecycle.start.v1'::text")),
+    ).toBe(true);
+  });
+
+  it('advances an existing CUP game lifecycle and emits the canonical outbox fact', async () => {
+    const gameId = '6418f90b-0fa6-4c04-a3da-57707e2f0ae2';
+    const organizerUserId = 'e68c6e6e-0b0a-4ad9-8e3d-4bc08c1eea11';
+    const { pool, clientQuery } = fakePool((text, values) => {
+      if (text.includes('from identity.tenants')) return { rows: [{ id: tenantId }] };
+      if (text.includes('from integration.external_entity_map') && values[2] === 'game') {
+        return { rows: [{ internal_id: gameId }] };
+      }
+      if (text.includes('set lifecycle_state = $3')) return { rows: [{}] };
+      if (text.includes('set revision = revision + 1')) return { rows: [{ revision: '8' }] };
+      if (text.includes('select user_id') && text.includes('from games.participations')) {
+        return { rows: [{ user_id: organizerUserId }] };
+      }
+      return { rows: [] };
+    });
+
+    const result = await createLegacyGameImportRepository(pool).importSnapshots({
+      tenantKey: 'local-padel',
+      snapshots: [snapshot],
+      correlationId: 'legacy-lifecycle-refresh-test',
+      now: new Date('2026-07-21T10:00:00.000Z'),
+    });
+
+    expect(result.existing).toEqual([expect.objectContaining({ gameId })]);
+    const lifecycleUpdate = clientQuery.mock.calls.find(([text]) =>
+      text.includes('set lifecycle_state = $3'),
+    );
+    expect(lifecycleUpdate?.[1]?.[2]).toBe('FINISHED');
+    const outbox = clientQuery.mock.calls.find(([text]) =>
+      text.includes('insert into audit.outbox_events'),
+    );
+    expect(outbox?.[1]?.[2]).toBe('game.finished.v1');
+    expect(outbox?.[1]?.[5]).toContain('"aggregateRevision":"8"');
+    expect(
+      clientQuery.mock.calls.some(([text]) => text.includes("'LEGACY_GAME_LIFECYCLE_REFRESHED'")),
+    ).toBe(true);
+    expect(
+      clientQuery.mock.calls.some(
+        ([text]) =>
+          text.includes(
+            "command_type in ('game.lifecycle.start.v1', 'game.lifecycle.finish.v1')",
+          ) && text.includes("state in ('PENDING', 'FAILED')"),
+      ),
+    ).toBe(true);
+  });
+
+  it('advances an associated game from a fresh Viva history exercise reference', async () => {
+    const gameId = '6418f90b-0fa6-4c04-a3da-57707e2f0ae2';
+    const organizerUserId = 'e68c6e6e-0b0a-4ad9-8e3d-4bc08c1eea11';
+    const exerciseAssociationId = 'e'.repeat(64);
+    const { pool, clientQuery } = fakePool((text) => {
+      if (text.includes('from integration.external_entity_map mapping')) {
+        return {
+          rows: [
+            {
+              id: gameId,
+              revision: '1',
+              lifecycle_state: 'SCHEDULED',
+              starts_at: '2026-07-20T15:00:00.000Z',
+              ends_at: '2026-07-20T16:30:00.000Z',
+            },
+          ],
+        };
+      }
+      if (text.includes('update games.games') && text.includes('returning revision')) {
+        return { rows: [{ revision: '2' }] };
+      }
+      if (text.includes('select user_id') && text.includes('from games.participations')) {
+        return { rows: [{ user_id: organizerUserId }] };
+      }
+      return { rows: [] };
+    });
+
+    const result = await createLegacyGameImportRepository(pool).refreshVivaExerciseGameLifecycles({
+      tenantId,
+      vivaExerciseAssociationIds: [exerciseAssociationId],
+      correlationId: 'viva-history-lifecycle-test',
+      now: new Date('2026-07-21T10:00:00.000Z'),
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0]?.gameId).toBe(gameId);
+    expect(typeof result[0]?.projectionEventId).toBe('string');
+    const lifecycleUpdate = clientQuery.mock.calls.find(
+      ([text]) => text.includes('update games.games') && text.includes('returning revision'),
+    );
+    expect(lifecycleUpdate?.[1]?.[2]).toBe('FINISHED');
+    const outbox = clientQuery.mock.calls.find(([text]) =>
+      text.includes('insert into audit.outbox_events'),
+    );
+    expect(outbox?.[1]?.[2]).toBe('game.finished.v1');
+    expect(JSON.stringify(outbox?.[1])).not.toContain(exerciseAssociationId);
+    expect(
+      clientQuery.mock.calls.some(([text]) =>
+        text.includes("'VIVA_HISTORY_GAME_LIFECYCLE_REFRESHED'"),
       ),
     ).toBe(true);
   });

@@ -221,7 +221,7 @@ services:
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
     ports:
       - '127.0.0.1:9000:9000'
-      - '127.0.0.1:9001:9001'
+      - '127.0.0.1:${MINIO_CONSOLE_PORT:-9001}:9001'
     volumes:
       - minio_data:/data
     healthcheck:
@@ -252,6 +252,7 @@ services:
     profiles: [monitoring]
     volumes:
       - ./infra/monitoring/prometheus.yaml:/etc/prometheus/prometheus.yml:ro
+      - ./infra/monitoring/padlhub-alerts.yaml:/etc/prometheus/rules/padlhub-alerts.yaml:ro
       - prometheus_data:/prometheus
     ports:
       - '127.0.0.1:9090:9090'

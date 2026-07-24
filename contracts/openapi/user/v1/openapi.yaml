@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: PadlHub User API
-  version: 1.12.0
+  version: 1.15.0
   description: Canonical user-facing API. Public identifiers are PadlHub UUIDs.
   license:
     name: Proprietary
@@ -11,6 +11,8 @@ servers:
 security:
   - PadlHubUserJwt: []
 tags:
+  - name: gift-certificates
+    description: Published gift certificate catalog for authenticated clients.
   - name: bookings
     description: User booking timeline and explainable booking discovery.
   - name: profiles
@@ -20,6 +22,207 @@ tags:
   - name: locations
     description: Published PadlHub location cards and detail views.
 paths:
+  /{tenantKey}/gift-certificate-catalog:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+    get:
+      tags: [gift-certificates]
+      operationId: getUserGiftCertificateCatalog
+      summary: Read the currently published gift certificate catalog
+      responses:
+        '200':
+          description: Published tenant catalog available to authenticated clients.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: ../../public/v1/openapi.yaml#/components/schemas/PublicGiftCertificateCatalog
+        '401':
+          $ref: '#/components/responses/AuthenticationRejected'
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/gift-certificate-orders:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+    post:
+      tags: [gift-certificates]
+      operationId: createUserGiftCertificateOrder
+      summary: Create an authenticated server-priced gift certificate order
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: ../../public/v1/openapi.yaml#/components/schemas/CreateGiftCertificateOrderRequest
+      responses:
+        '201':
+          description: Authenticated order created.
+          content:
+            application/json:
+              schema:
+                $ref: ../../public/v1/openapi.yaml#/components/schemas/GiftCertificateOrderCommandResult
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: '#/components/responses/AuthenticationRejected'
+        '409':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '422':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/gift-certificate-orders/{orderId}:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - name: orderId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [gift-certificates]
+      operationId: getUserGiftCertificateOrder
+      summary: Read an order owned by the authenticated buyer
+      responses:
+        '200':
+          description: Buyer-owned order.
+          content:
+            application/json:
+              schema:
+                $ref: ../../public/v1/openapi.yaml#/components/schemas/GiftCertificateOrder
+        '401':
+          $ref: '#/components/responses/AuthenticationRejected'
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+  /{tenantKey}/gift-certificate-orders/{orderId}/certificate.pdf:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - name: orderId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [gift-certificates]
+      operationId: downloadUserGiftCertificate
+      summary: Download an issued certificate PDF owned by the authenticated buyer
+      responses:
+        '200':
+          description: Buyer-owned private PDF artifact.
+          content:
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+        '401':
+          $ref: '#/components/responses/AuthenticationRejected'
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/gift-certificate-orders/{orderId}/payment-intents:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - name: orderId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [gift-certificates]
+      operationId: createUserGiftCertificatePaymentIntent
+      summary: Create a local sandbox payment intent for a buyer-owned order
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '201':
+          description: Provider-neutral sandbox payment intent.
+          content:
+            application/json:
+              schema:
+                $ref: ../../public/v1/openapi.yaml#/components/schemas/GiftCertificatePaymentIntent
+        '401':
+          $ref: '#/components/responses/AuthenticationRejected'
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/gift-certificate-payment-sandbox/{paymentId}:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - name: paymentId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [gift-certificates]
+      operationId: getUserGiftCertificatePaymentSandbox
+      summary: Open the authenticated local-only hosted sandbox payment page
+      responses:
+        '200':
+          description: HTML page that refreshes the PadlHub session before local confirmation.
+          content:
+            text/html:
+              schema:
+                type: string
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/gift-certificate-payments/{paymentId}/sandbox-confirm:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - name: paymentId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [gift-certificates]
+      operationId: confirmUserGiftCertificateSandboxPayment
+      summary: Confirm a local-only buyer-owned sandbox payment
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: Order and payment confirmed exactly once.
+          content:
+            application/json:
+              schema:
+                $ref: ../../public/v1/openapi.yaml#/components/schemas/GiftCertificatePaymentConfirmation
+        '401':
+          $ref: '#/components/responses/AuthenticationRejected'
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
   /{tenantKey}/auth/viva/authorize:
     parameters:
       - $ref: ../../common/components.yaml#/components/parameters/TenantKey
@@ -592,6 +795,62 @@ paths:
           $ref: ../../common/components.yaml#/components/responses/TooManyRequests
         '503':
           $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/bookings/history:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+    get:
+      tags: [bookings]
+      operationId: listActivityHistory
+      summary: Load the authenticated user's unified activity history
+      description: |
+        Reads a tenant-isolated PadlHub projection containing completed and cancelled Games,
+        trainings and tournament participations. Clients never select a provider and provider
+        identifiers remain in integration storage. The server may refresh an uncovered range from
+        the configured booking provider before returning the persisted projection.
+      parameters:
+        - name: kind
+          in: query
+          schema:
+            $ref: '#/components/schemas/ActivityHistoryKind'
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/ActivityHistoryStatus'
+        - name: cursor
+          in: query
+          description: Opaque keyset cursor issued by this endpoint.
+          schema:
+            type: string
+            minLength: 16
+            maxLength: 512
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 20
+      responses:
+        '200':
+          description: One page from a single persisted activity-history projection version.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActivityHistoryPage'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
   /{tenantKey}/home:
     parameters:
       - $ref: ../../common/components.yaml#/components/parameters/TenantKey
@@ -1149,9 +1408,12 @@ components:
         firstName:
           type: [string, 'null']
           maxLength: 100
+        lastName:
+          type: [string, 'null']
+          maxLength: 100
         avatarUrl:
           type: [string, 'null']
-          format: uri
+          pattern: '^(https?://.+|/public/api/v1/media/profile-photos/[0-9a-f-]{36}/[0-9a-f-]{36})$'
         level:
           $ref: '#/components/schemas/PlayerProfileLevel'
     PlayerProfileLevel:
@@ -1364,7 +1626,7 @@ components:
           maxLength: 100
         avatarUrl:
           type: [string, 'null']
-          format: uri
+          pattern: '^(https?://.+|/public/api/v1/media/profile-photos/[0-9a-f-]{36}/[0-9a-f-]{36})$'
     UserContext:
       type: object
       additionalProperties: false
@@ -1493,7 +1755,7 @@ components:
           maxLength: 100
         avatarUrl:
           type: [string, 'null']
-          format: uri
+          pattern: '^(https?://.+|/public/api/v1/media/profile-photos/[0-9a-f-]{36}/[0-9a-f-]{36})$'
         phoneLast4:
           type: string
           pattern: '^[0-9]{4}$'
@@ -1573,6 +1835,9 @@ components:
         startsAt:
           type: string
           format: date-time
+        endsAt:
+          type: string
+          format: date-time
         venue:
           type: string
           minLength: 1
@@ -1583,6 +1848,81 @@ components:
         route:
           type: string
           pattern: '^/'
+        game:
+          description: Canonical Game presentation data when the booking is associated with a local game aggregate.
+          type: object
+          additionalProperties: false
+          required: [type]
+          properties:
+            type:
+              type: string
+              enum: [friendly, rating]
+            courtName:
+              type: string
+              minLength: 1
+              maxLength: 120
+            station:
+              type: object
+              additionalProperties: false
+              required: [id, title, route]
+              properties:
+                id:
+                  type: string
+                  format: uuid
+                title:
+                  type: string
+                  minLength: 1
+                  maxLength: 120
+                route:
+                  type: string
+                  pattern: '^/'
+        participants:
+          description: Viewer-filtered participant summaries. Omitted when the booking source does not own a roster.
+          type: array
+          maxItems: 4
+          items:
+            type: object
+            additionalProperties: false
+            required: [displayName]
+            properties:
+              profileId:
+                type: string
+                format: uuid
+                description: PadlHub profile identifier for the separately viewer-filtered profile route.
+              displayName:
+                type: string
+                minLength: 1
+                maxLength: 200
+              firstName:
+                type: string
+                minLength: 1
+                maxLength: 100
+              lastName:
+                type: [string, 'null']
+                minLength: 1
+                maxLength: 100
+              nickname:
+                description: Player nickname when the server-owned source provides it; otherwise null.
+                type: [string, 'null']
+                minLength: 1
+                maxLength: 100
+              avatarUrl:
+                type: [string, 'null']
+                pattern: '^(https?://.+|/public/api/v1/media/profile-photos/[0-9a-f-]{36}/[0-9a-f-]{36})$'
+              level:
+                type: [string, 'null']
+                minLength: 1
+                maxLength: 20
+              levelValue:
+                description: Normalized current rating; its fractional part is the progress within the displayed level.
+                type: [number, 'null']
+                minimum: 0
+                maximum: 10
+        openSlots:
+          description: Number of open participant slots explicitly supplied by the booking source; clients must not infer it.
+          type: integer
+          minimum: 0
+          maximum: 4
     UserUpcomingBookings:
       type: object
       additionalProperties: false
@@ -1603,6 +1943,76 @@ components:
           maxItems: 6
           items:
             $ref: '#/components/schemas/HomeUpcomingItem'
+    ActivityHistoryKind:
+      type: string
+      enum: [GAME, TRAINING, TOURNAMENT]
+    ActivityHistoryStatus:
+      type: string
+      enum: [COMPLETED, CANCELLED]
+    ActivityHistoryItem:
+      type: object
+      additionalProperties: false
+      required: [id, kind, status, title, occurredAt, startsAt, venue]
+      properties:
+        id:
+          type: string
+          format: uuid
+        kind:
+          $ref: '#/components/schemas/ActivityHistoryKind'
+        status:
+          $ref: '#/components/schemas/ActivityHistoryStatus'
+        title:
+          type: string
+          minLength: 1
+          maxLength: 160
+        occurredAt:
+          type: string
+          format: date-time
+        startsAt:
+          type: string
+          format: date-time
+        endsAt:
+          type: [string, 'null']
+          format: date-time
+        venue:
+          type: string
+          maxLength: 240
+        route:
+          type: [string, 'null']
+          pattern: '^/'
+        subtitle:
+          type: [string, 'null']
+          maxLength: 240
+        trainerName:
+          type: [string, 'null']
+          maxLength: 160
+        result:
+          type: [string, 'null']
+          maxLength: 160
+        game:
+          $ref: ./games.yaml#/components/schemas/GameCardView
+    ActivityHistoryPage:
+      type: object
+      additionalProperties: false
+      required: [items, freshness, coverage, generatedAt]
+      properties:
+        items:
+          type: array
+          maxItems: 50
+          items:
+            $ref: '#/components/schemas/ActivityHistoryItem'
+        nextCursor:
+          type: [string, 'null']
+          maxLength: 512
+        freshness:
+          type: string
+          enum: [FRESH, STALE]
+        coverage:
+          type: string
+          enum: [COMPLETE, PARTIAL]
+        generatedAt:
+          type: string
+          format: date-time
     HomeSubscription:
       type: object
       additionalProperties: false
@@ -1698,7 +2108,7 @@ components:
           enum: [violet, lime, mint, sand]
         imageUrl:
           type: [string, 'null']
-          format: uri
+          pattern: '^(https?://|/public/api/v1/[a-z0-9][a-z0-9-]{1,62}/location-media/)'
         mobileImageUrl:
           type: [string, 'null']
           format: uri
@@ -1995,8 +2405,7 @@ components:
       properties:
         url:
           type: string
-          format: uri
-          pattern: '^https://'
+          pattern: '^(https://|/public/api/v1/[a-z0-9][a-z0-9-]{1,62}/location-media/)'
           maxLength: 2000
         alt:
           type: string

@@ -1,14 +1,20 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import type { MouseEvent as ReactMouseEvent, UIEvent } from 'react';
 
 import type {
+  ActivityHistoryPage,
+  ActivityHistoryQuery,
   BookingRecommendationPage,
   CommunityMembershipPage,
   HomeDashboard,
 } from './auth-gateway.js';
+import { ActivityHistoryModal } from './ActivityHistory.js';
+import { EventCalendarIcon, EventLocationIcon } from './ActivityCardIcons.js';
 import { BookingRecommendations } from './BookingRecommendations.js';
+import { GameTypeBadge } from './GameTypeBadge.js';
 import locationSeligerUrl from './assets/home/location-seliger.png';
 import promoUrl from './assets/home/promo.png';
+import { ParticipantAvatarStack } from './ParticipantAvatarStack.js';
 import { PlayerLevelAvatar } from './PlayerLevelAvatar.js';
 
 interface HomeDashboardPageProps {
@@ -17,6 +23,7 @@ interface HomeDashboardPageProps {
   readonly notificationUnreadCount: number;
   readonly loadCommunityPage: (cursor?: string) => Promise<CommunityMembershipPage>;
   readonly loadBookingRecommendations?: () => Promise<BookingRecommendationPage>;
+  readonly loadActivityHistory?: (input?: ActivityHistoryQuery) => Promise<ActivityHistoryPage>;
   readonly logoutBusy: boolean;
   readonly error?: string | null;
   readonly onLogout: () => void;
@@ -118,6 +125,17 @@ function WalletIcon(): React.JSX.Element {
 
 type BottomNavIconName = 'home' | 'games' | 'create' | 'chat' | 'profile';
 
+export function ChatIcon(): React.JSX.Element {
+  return (
+    <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <path
+        d="M9.99935 19.0079C9.42435 19.0079 8.88268 18.7163 8.49935 18.2079L7.24935 16.5413C7.22435 16.5079 7.12435 16.4663 7.08268 16.4579H6.66602C3.19102 16.4579 1.04102 15.5163 1.04102 10.8329V6.66626C1.04102 2.98293 2.98268 1.04126 6.66602 1.04126H13.3327C17.016 1.04126 18.9577 2.98293 18.9577 6.66626V10.8329C18.9577 14.5163 17.016 16.4579 13.3327 16.4579H12.916C12.8493 16.4579 12.791 16.4913 12.7493 16.5413L11.4993 18.2079C11.116 18.7163 10.5743 19.0079 9.99935 19.0079ZM6.66602 2.29126C3.68268 2.29126 2.29102 3.68293 2.29102 6.66626V10.8329C2.29102 14.5996 3.58268 15.2079 6.66602 15.2079H7.08268C7.50768 15.2079 7.99101 15.4496 8.24935 15.7913L9.49935 17.4579C9.79101 17.8413 10.2077 17.8413 10.4993 17.4579L11.7493 15.7913C12.0243 15.4246 12.4577 15.2079 12.916 15.2079H13.3327C16.316 15.2079 17.7077 13.8163 17.7077 10.8329V6.66626C17.7077 3.68293 16.316 2.29126 13.3327 2.29126H6.66602Z"
+        fill="currentColor"
+      />
+    </svg>
+  );
+}
+
 function BottomNavIcon({ name }: { readonly name: BottomNavIconName }): React.JSX.Element {
   switch (name) {
     case 'home':
@@ -145,22 +163,68 @@ function BottomNavIcon({ name }: { readonly name: BottomNavIconName }): React.JS
       );
     case 'create':
       return (
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <g className="fh-create-cross" fill="#FAFAFA">
-            <path d="M9.25 11.25H14.75V12.75H9.25V11.25Z" />
-            <path d="M11.25 8H12.75V16H11.25V8Z" />
+        <svg width="88" height="72" viewBox="0 0 88 72" fill="none" aria-hidden="true">
+          <g filter="url(#filter0_d_743_2030)">
+            <rect x="16" y="16" width="56" height="40" rx="16" fill="#8766EB" />
+            <g className="fh-create-cross">
+              <path
+                d="M41.75 36.75H38C37.5858 36.75 37.25 36.4142 37.25 36C37.25 35.5858 37.5858 35.25 38 35.25H41.75V36.75Z"
+                fill="#FAFAFA"
+              />
+              <path
+                d="M50 35.25C50.4142 35.25 50.75 35.5858 50.75 36C50.75 36.4142 50.4142 36.75 50 36.75H43.25V35.25H50Z"
+                fill="#FAFAFA"
+              />
+              <path
+                d="M44.75 42C44.75 42.4142 44.4142 42.75 44 42.75C43.5858 42.75 43.25 42.4142 43.25 42V35.25H44.75V42Z"
+                fill="#FAFAFA"
+              />
+              <path
+                d="M44 29.25C44.4142 29.25 44.75 29.5858 44.75 30V33.75H43.25V30C43.25 29.5858 43.5858 29.25 44 29.25Z"
+                fill="#FAFAFA"
+              />
+            </g>
           </g>
+          <defs>
+            <filter
+              id="filter0_d_743_2030"
+              x="0"
+              y="0"
+              width="88"
+              height="72"
+              filterUnits="userSpaceOnUse"
+              colorInterpolationFilters="sRGB"
+            >
+              <feFlood floodOpacity="0" result="BackgroundImageFix" />
+              <feColorMatrix
+                in="SourceAlpha"
+                type="matrix"
+                values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0"
+                result="hardAlpha"
+              />
+              <feOffset />
+              <feGaussianBlur stdDeviation="8" />
+              <feColorMatrix
+                type="matrix"
+                values="0 0 0 0 0.658824 0 0 0 0 0.556863 0 0 0 0 0.964706 0 0 0 0.16 0"
+              />
+              <feBlend
+                mode="normal"
+                in2="BackgroundImageFix"
+                result="effect1_dropShadow_743_2030"
+              />
+              <feBlend
+                mode="normal"
+                in="SourceGraphic"
+                in2="effect1_dropShadow_743_2030"
+                result="shape"
+              />
+            </filter>
+          </defs>
         </svg>
       );
     case 'chat':
-      return (
-        <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
-          <path
-            d="M9.99935 19.0079C9.42435 19.0079 8.88268 18.7163 8.49935 18.2079L7.24935 16.5413C7.22435 16.5079 7.12435 16.4663 7.08268 16.4579H6.66602C3.19102 16.4579 1.04102 15.5163 1.04102 10.8329V6.66626C1.04102 2.98293 2.98268 1.04126 6.66602 1.04126H13.3327C17.016 1.04126 18.9577 2.98293 18.9577 6.66626V10.8329C18.9577 14.5163 17.016 16.4579 13.3327 16.4579H12.916C12.8493 16.4579 12.791 16.4913 12.7493 16.5413L11.4993 18.2079C11.116 18.7163 10.5743 19.0079 9.99935 19.0079ZM6.66602 2.29126C3.68268 2.29126 2.29102 3.68293 2.29102 6.66626V10.8329C2.29102 14.5996 3.58268 15.2079 6.66602 15.2079H7.08268C7.50768 15.2079 7.99101 15.4496 8.24935 15.7913L9.49935 17.4579C9.79101 17.8413 10.2077 17.8413 10.4993 17.4579L11.7493 15.7913C12.0243 15.4246 12.4577 15.2079 12.916 15.2079H13.3327C16.316 15.2079 17.7077 13.8163 17.7077 10.8329V6.66626C17.7077 3.68293 16.316 2.29126 13.3327 2.29126H6.66602Z"
-            fill="currentColor"
-          />
-        </svg>
-      );
+      return <ChatIcon />;
     case 'profile':
       return (
         <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
@@ -233,25 +297,91 @@ export function MainBottomNavigation({
 }
 
 function NotificationBellIcon(): React.JSX.Element {
+  const rawId = useId().replace(/:/g, '');
+  const topGradientId = `notification-top-${rawId}`;
+  const bottomGradientId = `notification-bottom-${rawId}`;
+  const glowId = `notification-glow-${rawId}`;
+
   return (
-    <svg width="36" height="36" viewBox="0 0 36 36" fill="none" aria-hidden="true">
-      <path
-        d="M0 18C0 8.05888 8.05888 0 18 0C27.9411 0 36 8.05888 36 18C36 27.9411 27.9411 36 18 36C8.05888 36 0 27.9411 0 18Z"
-        fill="white"
-        fillOpacity="0.01"
-      />
-      <g className="fh-bell-glyph">
+    <svg
+      width="36"
+      height="36"
+      viewBox="0 0 36 36"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+      aria-hidden="true"
+    >
+      <defs>
+        <linearGradient
+          id={topGradientId}
+          x1="5.3"
+          y1="22.6"
+          x2="23.7"
+          y2="5.8"
+          gradientUnits="userSpaceOnUse"
+        >
+          <stop offset="0" stopColor="white" stopOpacity="0" />
+          <stop offset="0.18" stopColor="white" stopOpacity="0.55" />
+          <stop offset="0.48" stopColor="white" stopOpacity="1" />
+          <stop offset="0.82" stopColor="white" stopOpacity="0.72" />
+          <stop offset="1" stopColor="white" stopOpacity="0" />
+        </linearGradient>
+        <linearGradient
+          id={bottomGradientId}
+          x1="30.2"
+          y1="12.3"
+          x2="11.3"
+          y2="29.7"
+          gradientUnits="userSpaceOnUse"
+        >
+          <stop offset="0" stopColor="white" stopOpacity="0" />
+          <stop offset="0.18" stopColor="white" stopOpacity="0.38" />
+          <stop offset="0.55" stopColor="white" stopOpacity="1" />
+          <stop offset="0.86" stopColor="white" stopOpacity="0.62" />
+          <stop offset="1" stopColor="white" stopOpacity="0" />
+        </linearGradient>
+        <filter id={glowId} x="-30%" y="-30%" width="160%" height="160%">
+          <feGaussianBlur stdDeviation="0.65" />
+        </filter>
+      </defs>
+      <g fill="none" strokeLinecap="round" opacity="0.62" filter={`url(#${glowId})`}>
         <path
-          d="M22.8936 19.66L22.227 18.5534C22.087 18.3067 21.9603 17.84 21.9603 17.5667V15.88C21.9603 14.3134 21.0403 12.96 19.7136 12.3267C19.367 11.7134 18.727 11.3334 17.9936 11.3334C17.267 11.3334 16.6136 11.7267 16.267 12.3467C14.967 12.9934 14.067 14.3334 14.067 15.88V17.5667C14.067 17.84 13.9403 18.3067 13.8003 18.5467L13.127 19.66C12.8603 20.1067 12.8003 20.6 12.967 21.0534C13.127 21.5 13.507 21.8467 14.0003 22.0134C15.2936 22.4534 16.6536 22.6667 18.0136 22.6667C19.3736 22.6667 20.7336 22.4534 22.027 22.02C22.4936 21.8667 22.8536 21.5134 23.027 21.0534C23.2003 20.5934 23.1536 20.0867 22.8936 19.66Z"
-          fill="white"
+          d="M5.314 22.617 A13.5 13.5 0 0 1 23.705 5.765"
+          stroke={`url(#${topGradientId})`}
+          strokeWidth="1.8"
         />
         <path
-          d="M19.8868 23.34C19.6068 24.1134 18.8668 24.6667 18.0001 24.6667C17.4735 24.6667 16.9535 24.4534 16.5868 24.0734C16.3735 23.8734 16.2135 23.6067 16.1201 23.3334C16.2068 23.3467 16.2935 23.3534 16.3868 23.3667C16.5401 23.3867 16.7001 23.4067 16.8601 23.42C17.2401 23.4534 17.6268 23.4734 18.0135 23.4734C18.3935 23.4734 18.7735 23.4534 19.1468 23.42C19.2868 23.4067 19.4268 23.4 19.5601 23.38C19.6668 23.3667 19.7735 23.3534 19.8868 23.34Z"
-          fill="white"
+          d="M30.235 12.295 A13.5 13.5 0 0 1 11.25 29.691"
+          stroke={`url(#${bottomGradientId})`}
+          strokeWidth="1.8"
         />
       </g>
+      <g fill="none" strokeLinecap="round">
+        <path
+          d="M5.314 22.617 A13.5 13.5 0 0 1 23.705 5.765"
+          stroke={`url(#${topGradientId})`}
+          strokeWidth="0.9"
+        />
+        <path
+          d="M30.235 12.295 A13.5 13.5 0 0 1 11.25 29.691"
+          stroke={`url(#${bottomGradientId})`}
+          strokeWidth="0.9"
+        />
+      </g>
+      <path
+        d="M22.8936 19.66L22.227 18.5534C22.087 18.3067 21.9603 17.84 21.9603 17.5667V15.88C21.9603 14.3134 21.0403 12.96 19.7136 12.3267C19.367 11.7134 18.727 11.3334 17.9936 11.3334C17.267 11.3334 16.6136 11.7267 16.267 12.3467C14.967 12.9934 14.067 14.3334 14.067 15.88V17.5667C14.067 17.84 13.9403 18.3067 13.8003 18.5467L13.127 19.66C12.8603 20.1067 12.8003 20.6 12.967 21.0534C13.127 21.5 13.507 21.8467 14.0003 22.0134C15.2936 22.4534 16.6536 22.6667 18.0136 22.6667C19.3736 22.6667 20.7336 22.4534 22.027 22.02C22.4936 21.8667 22.8536 21.5134 23.027 21.0534C23.2003 20.5934 23.1536 20.0867 22.8936 19.66Z"
+        fill="white"
+      />
+      <path
+        d="M19.8868 23.34C19.6068 24.1134 18.8668 24.6667 18.0001 24.6667C17.4735 24.6667 16.9535 24.4534 16.5868 24.0734C16.3735 23.8734 16.2135 23.6067 16.1201 23.3334C16.2068 23.3467 16.2935 23.3534 16.3868 23.3667C16.5401 23.3867 16.7001 23.4067 16.8601 23.42C17.2401 23.4534 17.6268 23.4734 18.0135 23.4734C18.3935 23.4734 18.7735 23.4534 19.1468 23.42C19.2868 23.4067 19.4268 23.4 19.5601 23.38C19.6668 23.3667 19.7735 23.3534 19.8868 23.34Z"
+        fill="white"
+      />
     </svg>
   );
+}
+
+function HeroBackgroundX(): React.JSX.Element {
+  return <span className="fh-hero-x" aria-hidden="true" />;
 }
 
 function Chevron(): React.JSX.Element {
@@ -578,7 +708,11 @@ const upcomingTimeFormatter = new Intl.DateTimeFormat('ru-RU', {
 
 const upcomingDateFormatter = new Intl.DateTimeFormat('ru-RU', {
   day: 'numeric',
-  month: 'short',
+  month: 'long',
+});
+
+const upcomingWeekdayFormatter = new Intl.DateTimeFormat('ru-RU', {
+  weekday: 'short',
 });
 
 const calendarDayFormatter = new Intl.DateTimeFormat('ru-RU', {
@@ -598,22 +732,15 @@ function localDateKey(date: Date): string {
   return `${year}-${month}-${day}`;
 }
 
-function bookingCalendarDays(now: Date, weekOffset: number): readonly Date[] {
+function bookingCalendarDays(now: Date, dayOffset: number): readonly Date[] {
   const firstDay = new Date(now);
   firstDay.setHours(0, 0, 0, 0);
-  firstDay.setDate(firstDay.getDate() + weekOffset * 7);
+  firstDay.setDate(firstDay.getDate() + dayOffset);
   return Array.from({ length: 7 }, (_, index) => {
     const day = new Date(firstDay);
     day.setDate(firstDay.getDate() + index);
     return day;
   });
-}
-
-function participantAccent(level: string | null | undefined): string {
-  if (level?.startsWith('D')) return '#f0705f';
-  if (level?.startsWith('C')) return '#f0925f';
-  if (level?.startsWith('B')) return '#697ee8';
-  return '#8766eb';
 }
 
 function participantLabel(
@@ -633,80 +760,77 @@ function EventParticipants({
 }: {
   readonly item: HomeUpcomingItem;
 }): React.JSX.Element | null {
-  const participants = (item.participants ?? []).slice(0, 4);
-  // Home only renders the compact 2×2 roster: four fixed cells with either a player avatar
-  // or an empty-seat marker. Names and profile navigation belong to the game detail screen.
-  const openSlots = Math.max(0, 4 - participants.length);
-  if (participants.length === 0 && openSlots === 0) return null;
-
   return (
-    <span className="fh-event__participants" aria-label="Участники записи">
-      {participants.map((participant, index) => {
+    <ParticipantAvatarStack
+      ariaLabel="Участники записи"
+      capacity={4}
+      participants={(item.participants ?? []).map((participant, index) => {
         const label = participantLabel(participant);
-        return (
-          <span
-            className="fh-event__participant"
-            key={participant.profileId ?? `${label}-${index}`}
-            aria-label={`${label}${participant.level ? `, уровень ${participant.level}` : ''}`}
-          >
-            <PlayerLevelAvatar
-              alt=""
-              accentColor={participantAccent(participant.level)}
-              level={participant.level ?? ''}
-              size={38}
-              src={participant.avatarUrl ?? null}
-              variant="participant"
-            />
-          </span>
-        );
+        return {
+          key: participant.profileId ?? `${label}-${index}`,
+          displayName: label,
+          avatarUrl: participant.avatarUrl ?? null,
+          level: participant.level ?? null,
+          levelValue: participant.levelValue ?? null,
+        };
       })}
-      {Array.from({ length: openSlots }, (_, index) => (
-        <span
-          className="fh-event__open-slot"
-          key={`open-slot-${index}`}
-          aria-label="Свободное место"
-        >
-          +
-        </span>
-      ))}
-    </span>
+    />
   );
 }
 
 function EventCard({ item }: { readonly item: HomeUpcomingItem }): React.JSX.Element {
   const startsAt = new Date(item.startsAt);
   const hasParticipants = (item.participants?.length ?? 0) + (item.openSlots ?? 0) > 0;
-  const content = (
-    <>
-      <time dateTime={item.startsAt}>
-        <strong>{upcomingTimeFormatter.format(startsAt)}</strong>
-        <span>{upcomingDateFormatter.format(startsAt)}</span>
-      </time>
-      <span className="fh-event__main">
-        <span className="fh-event__header">
-          <span className={`fh-event__tag is-${item.status.replace('_', '-')}`}>
-            {upcomingKindLabel[item.kind]} · {upcomingStatusLabel[item.status]}
-          </span>
-          {isImplementedMvpRoute(item.route) ? <Chevron /> : null}
-          <strong>{item.title}</strong>
-          <small>{item.venue}</small>
-        </span>
-      </span>
-    </>
-  );
+  const detailsHref = isImplementedMvpRoute(item.route) ? item.route : '/bookings';
+  const gameType = item.game?.type;
+  const stationTitle = item.game?.station?.title ?? item.venue.split(' · ')[0];
+  const endsAt = item.endsAt ? new Date(item.endsAt) : null;
+  const weekdayLabel = upcomingWeekdayFormatter.format(startsAt);
+  const weekday = weekdayLabel.endsWith('.') ? weekdayLabel : `${weekdayLabel}.`;
+  const timeLabel = endsAt
+    ? `с ${upcomingTimeFormatter.format(startsAt)} до ${upcomingTimeFormatter.format(endsAt)}`
+    : `с ${upcomingTimeFormatter.format(startsAt)}`;
+  const locationLabel = item.game?.courtName
+    ? `${stationTitle} · ${item.game.courtName}`
+    : stationTitle;
   return (
     <article
       className={hasParticipants ? 'fh-event has-participants' : 'fh-event'}
       aria-label={item.title}
     >
-      {isImplementedMvpRoute(item.route) ? (
-        <a className="fh-event__details-link" href={item.route}>
-          {content}
-        </a>
+      {gameType ? (
+        <GameTypeBadge type={gameType} />
       ) : (
-        content
+        <span className={`fh-event__tag is-${item.status.replace('_', '-')}`}>
+          <span className="fh-event__tag-label">
+            {upcomingKindLabel[item.kind]} · {upcomingStatusLabel[item.status]}
+          </span>
+        </span>
       )}
-      <EventParticipants item={item} />
+      <h3 className="activity-card-title">{item.title}</h3>
+      <span className="fh-event__metadata">
+        <span className="activity-card-metadata-row">
+          <EventCalendarIcon />
+          <time dateTime={item.startsAt}>
+            {upcomingDateFormatter.format(startsAt)}, {weekday}, {timeLabel}
+          </time>
+        </span>
+        <span className="activity-card-metadata-row">
+          <EventLocationIcon />
+          {item.game?.station ? (
+            <a href={item.game.station.route}>{locationLabel}</a>
+          ) : (
+            <span>{locationLabel}</span>
+          )}
+        </span>
+      </span>
+      <span className="fh-event__divider" aria-hidden="true" />
+      <span className="fh-event__footer">
+        <EventParticipants item={item} />
+        <a className="fh-event__action" href={detailsHref}>
+          Открыть
+        </a>
+      </span>
     </article>
   );
 }
@@ -725,6 +849,7 @@ export function HomeDashboardPage({
       items: [],
       nextCursor: null,
     }),
+  loadActivityHistory = () => Promise.reject(new Error('ACTIVITY_HISTORY_NOT_CONNECTED')),
   logoutBusy,
   error,
   onLogout,
@@ -750,7 +875,7 @@ export function HomeDashboardPage({
   const [selectedBookingKind, setSelectedBookingKind] = useState<'all' | HomeUpcomingItem['kind']>(
     'all',
   );
-  const [calendarWeekOffset, setCalendarWeekOffset] = useState(0);
+  const [calendarDayOffset, setCalendarDayOffset] = useState(0);
   const calendarSwipeStartX = useRef<number | null>(null);
   const [bookingTab, setBookingTab] = useState<'MY' | 'FOR_ME'>('MY');
   const [bookingRecommendations, setBookingRecommendations] =
@@ -759,7 +884,8 @@ export function HomeDashboardPage({
   const [bookingRecommendationsError, setBookingRecommendationsError] = useState<string | null>(
     null,
   );
-  const calendarDays = bookingCalendarDays(new Date(), calendarWeekOffset);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const calendarDays = bookingCalendarDays(new Date(), calendarDayOffset);
   const datesWithBookings = new Set(
     dashboard.upcoming.map((item) => localDateKey(new Date(item.startsAt))),
   );
@@ -768,6 +894,7 @@ export function HomeDashboardPage({
       (!selectedDateKey || localDateKey(new Date(item.startsAt)) === selectedDateKey) &&
       (selectedBookingKind === 'all' || item.kind === selectedBookingKind),
   );
+  const showBookingsScrollPeek = bookingTab === 'MY' && visibleUpcoming.length > 2;
   const balance = new Intl.NumberFormat('ru-RU').format(dashboard.profile.balanceMinor / 100);
 
   function showBookingRecommendations(): void {
@@ -788,13 +915,19 @@ export function HomeDashboardPage({
   }
 
   return (
-    <div className="figma-home-shell">
+    <div
+      className={
+        showBookingsScrollPeek ? 'figma-home-shell has-bookings-scroll-peek' : 'figma-home-shell'
+      }
+    >
       <main className="figma-home" aria-label="Главная">
         <section className="fh-hero">
+          <HeroBackgroundX />
           <header className="fh-profile-row">
             <a className="fh-profile" href="/profile">
               <PlayerLevelAvatar
                 alt={dashboard.profile.displayName}
+                fallbackSeed={dashboard.profile.userId}
                 level={
                   dashboard.profile.level.assessmentRequired ? '?' : dashboard.profile.level.label
                 }
@@ -890,9 +1023,9 @@ export function HomeDashboardPage({
                       const startX = calendarSwipeStartX.current;
                       calendarSwipeStartX.current = null;
                       if (startX === null || Math.abs(event.clientX - startX) < 40) return;
-                      setCalendarWeekOffset((currentOffset) =>
+                      setCalendarDayOffset((currentOffset) =>
                         event.clientX < startX
-                          ? Math.min(2, currentOffset + 1)
+                          ? Math.min(14, currentOffset + 1)
                           : Math.max(0, currentOffset - 1),
                       );
                     }}
@@ -900,6 +1033,19 @@ export function HomeDashboardPage({
                       calendarSwipeStartX.current = null;
                     }}
                   >
+                    <button
+                      className={
+                        selectedDateKey === null
+                          ? 'fh-calendar-reset is-selected'
+                          : 'fh-calendar-reset'
+                      }
+                      type="button"
+                      aria-label="Все даты"
+                      aria-pressed={selectedDateKey === null}
+                      onClick={() => setSelectedDateKey(null)}
+                    >
+                      <span>Все даты</span>
+                    </button>
                     {calendarDays.map((day) => {
                       const dateKey = localDateKey(day);
                       const selected = selectedDateKey === dateKey;
@@ -943,9 +1089,8 @@ export function HomeDashboardPage({
                 <div className="fh-divider" />
                 {visibleUpcoming.length > 0 ? (
                   <div className="fh-bookings-list">
-                    {visibleUpcoming.map((item, index) => (
+                    {visibleUpcoming.map((item) => (
                       <div className="fh-booking-entry" key={item.id}>
-                        {index > 0 ? <div className="fh-divider" /> : null}
                         <EventCard item={item} />
                       </div>
                     ))}
@@ -966,14 +1111,17 @@ export function HomeDashboardPage({
                 )}
                 <div className="fh-bookings-footer">
                   <div className="fh-divider" />
-                  <a href="/bookings">Все записи</a>
+                  <div className="fh-bookings-footer-action">
+                    <button type="button" onClick={() => setHistoryOpen(true)}>
+                      История посещений
+                    </button>
+                  </div>
                 </div>
               </>
             ) : (
               <div className="fh-for-me">
                 <header>
                   <div>
-                    <span>Персональная подборка</span>
                     <strong>Подходящие игры</strong>
                   </div>
                   <a href="/profile#booking-preferences-title">Настроить</a>
@@ -1061,6 +1209,11 @@ export function HomeDashboardPage({
           </p>
         ) : null}
       </main>
+      <ActivityHistoryModal
+        open={historyOpen}
+        loadHistory={loadActivityHistory}
+        onClose={() => setHistoryOpen(false)}
+      />
     </div>
   );
 }

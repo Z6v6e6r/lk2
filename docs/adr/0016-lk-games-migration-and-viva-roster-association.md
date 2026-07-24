@@ -31,10 +31,17 @@ document to the browser.
 4. Viva Home synchronization reads the viewer booking from `@phub/viva-adapter`. Before it
    persists the Home component, a staging-only trusted bridge looks up only the matching current
    LK Games by the server-side Viva exercise association, imports/guards their canonical roster,
-   and then resolves that roster in the tenant transaction. It emits only display name,
-   PadlHub-served avatar URL, level and server-computed free slots. It emits no phone, payment,
-   legacy identifier, Viva identifier or provider source URL. A bridge read failure leaves the
-   last successful Home projection intact rather than publishing a partial roster.
+   copies allowlisted participant photos into metadata-free, content-addressed PadlHub WebP
+   objects, and then resolves that roster in the tenant transaction. The legacy photo is
+   fallback-only and cannot replace an existing profile-owned avatar. When the matching legacy
+   participant omitted a level, the worker may fill that participant's profile presentation from
+   the authenticated viewer's confirmed Viva profile after an exact server-side identity match;
+   it does not mutate the Games aggregate or guess another participant's level. The normalized
+   numeric rating is stored with the profile presentation so the client can render progress within
+   the current level. It emits only real display name, short-lived PadlHub-served avatar URL, level,
+   normalized rating and server-computed free slots. It emits no phone, payment, legacy identifier,
+   Viva identifier or provider source URL. A bridge read or media failure retains the last local
+   avatar/projection rather than publishing provider URLs or a partial roster.
 5. The public legacy endpoint remains local-clone-only and anonymizes every retained integration
    key. A production backfill must use a separately approved, bounded server source; a browser
    may never call either source directly.
@@ -63,6 +70,8 @@ document to the browser.
 
 - No client bundle or API response contains legacy/Viva identifiers, phone numbers, payment URLs
   or source-media URLs.
+- Every projected participant avatar resolves to a private PadlHub-owned `image/webp` object whose
+  object key and content hash are recorded in integration storage.
 - Every migrated Game has one tenant-scoped canonical aggregate and at most one Viva exercise
   association.
 - Roster count, capacity and active participant identities reconcile against the approved source;
@@ -77,4 +86,7 @@ document to the browser.
 The first safe user-visible slice is a Home card whose participants come from the canonical Game
 after the association has been migrated. It is intentionally not a production backfill or a
 cutover by itself: the trusted source, reconciliation job, command migration and CUP screens each
-remain explicit release work.
+remain explicit release work. A participant with a known rating renders a level ring filled to the
+fractional progress of that normalized rating, not merely because a level label exists. When no
+PadlHub-owned photo exists, the client renders the neutral supplied placeholder while retaining the
+same level badge.

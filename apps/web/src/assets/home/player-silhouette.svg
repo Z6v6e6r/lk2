@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 40 40" fill="none">
+  <defs>
+    <linearGradient id="avatar-bg" x1="5" y1="3" x2="35" y2="38" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F4F6F9"/>
+      <stop offset="1" stop-color="#E5E9EF"/>
+    </linearGradient>
+    <linearGradient id="avatar-person" x1="20" y1="8" x2="20" y2="40" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#BAC3CF"/>
+      <stop offset="1" stop-color="#9FAAB8"/>
+    </linearGradient>
+    <clipPath id="avatar-clip">
+      <circle cx="20" cy="20" r="20"/>
+    </clipPath>
+  </defs>
+
+  <g clip-path="url(#avatar-clip)">
+    <rect width="40" height="40" fill="url(#avatar-bg)"/>
+
+    <!-- subtle background depth, without an extra ring -->
+    <circle cx="32" cy="8" r="11" fill="#FFFFFF" fill-opacity="0.34"/>
+    <circle cx="7" cy="33" r="13" fill="#DCE2E9" fill-opacity="0.42"/>
+
+    <!-- neutral player silhouette -->
+    <circle cx="20" cy="14.25" r="6.25" fill="url(#avatar-person)"/>
+    <path
+      d="M7.5 40C7.95 31.45 12.65 26.25 20 26.25C27.35 26.25 32.05 31.45 32.5 40H7.5Z"
+      fill="url(#avatar-person)"
+    />
+  </g>
+</svg>

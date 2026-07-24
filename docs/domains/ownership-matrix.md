@@ -1,22 +1,23 @@
 # Initial domain ownership matrix
 
-| Domain                   | Initial write owner | Local role                                      | Target owner           |
-| ------------------------ | ------------------- | ----------------------------------------------- | ---------------------- |
-| Identity/authentication  | `VIVA_PRIMARY`      | provider-neutral users and sessions             | PadlHub Identity       |
-| Profile                  | `VIVA_PRIMARY`      | full normalized aggregate                       | PadlHub                |
-| Profile privacy          | `LOCAL_ONLY`        | owner policy, audit and versioned commands      | PadlHub Profile        |
-| Permissions              | `VIVA_PRIMARY`      | normalized read model                           | CUP                    |
-| Stations/spaces/coaches  | `VIVA_PRIMARY`      | independent domain model                        | CUP                    |
-| Public location profiles | `LOCAL_ONLY`        | editorial source of truth and publication       | PadlHub Locations      |
-| Schedule/availability    | `VIVA_PRIMARY`      | freshness-controlled read model                 | CUP                    |
-| Bookings                 | `VIVA_PRIMARY`      | local projection and audit                      | CUP                    |
-| Payments                 | provider/Viva       | immutable local operation journal               | PadlHub Commerce       |
-| Games                    | `LOCAL_PRIMARY`     | canonical aggregate, command journal and cards  | PadlHub Games          |
-| Tournaments              | `LOCAL_ONLY`        | source of truth                                 | PadlHub                |
-| Community                | `LOCAL_ONLY`        | source of truth                                 | PadlHub                |
-| Messaging                | `LOCAL_ONLY`        | conversations, ordered messages and read state  | PadlHub Chats          |
-| Notifications            | `LOCAL_ONLY`        | trigger intents, inbox and delivery history     | PadlHub Notifications  |
-| Moderation               | `LOCAL_ONLY`        | reports, review cases and enforcement decisions | PadlHub Trust & Safety |
+| Domain                   | Initial write owner | Local role                                        | Target owner           |
+| ------------------------ | ------------------- | ------------------------------------------------- | ---------------------- |
+| Identity/authentication  | `VIVA_PRIMARY`      | provider-neutral users and sessions               | PadlHub Identity       |
+| Profile                  | `VIVA_PRIMARY`      | full normalized aggregate                         | PadlHub                |
+| Profile privacy          | `LOCAL_ONLY`        | owner policy, audit and versioned commands        | PadlHub Profile        |
+| Permissions              | `VIVA_PRIMARY`      | normalized read model                             | CUP                    |
+| Stations/spaces/coaches  | `VIVA_PRIMARY`      | independent domain model                          | CUP                    |
+| Public location profiles | `LOCAL_ONLY`        | editorial source of truth and publication         | PadlHub Locations      |
+| Schedule/availability    | `VIVA_PRIMARY`      | freshness-controlled read model                   | CUP                    |
+| Bookings                 | `VIVA_PRIMARY`      | local projection and audit                        | CUP                    |
+| Payments                 | provider/Viva       | immutable local operation journal                 | PadlHub Commerce       |
+| Gift certificates        | `LOCAL_PRIMARY`     | catalog, orders, issued PDFs and delivery journal | PadlHub Commerce       |
+| Games                    | `LOCAL_PRIMARY`     | canonical aggregate, command journal and cards    | PadlHub Games          |
+| Tournaments              | `LOCAL_ONLY`        | source of truth                                   | PadlHub                |
+| Community                | `LOCAL_ONLY`        | source of truth                                   | PadlHub                |
+| Messaging                | `LOCAL_ONLY`        | conversations, ordered messages and read state    | PadlHub Chats          |
+| Notifications            | `LOCAL_ONLY`        | trigger intents, inbox and delivery history       | PadlHub Notifications  |
+| Moderation               | `LOCAL_ONLY`        | reports, review cases and enforcement decisions   | PadlHub Trust & Safety |
 
 Before changing a row, document commands, events, invariants, freshness, metrics, reconciliation and rollback.
 

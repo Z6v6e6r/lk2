@@ -68,6 +68,114 @@ function createClient(
 }
 
 describe('PadlHubApiClient authentication boundary', () => {
+  it('resolves stable relative location media paths against the configured API origin', async () => {
+    const fetchImplementation: typeof fetch = () =>
+      Promise.resolve(
+        jsonResponse({
+          items: [
+            {
+              id: '11111111-1111-4111-8111-111111111111',
+              title: 'Нагатинская',
+              city: 'Москва',
+              courtCount: 6,
+              coverImageUrl:
+                '/public/api/v1/local-padel/location-media/22222222-2222-4222-8222-222222222222',
+              route: '/locations/11111111-1111-4111-8111-111111111111',
+            },
+          ],
+        }),
+      );
+    const client = createClient(fetchImplementation, {
+      initialAccessToken: authenticatedSession.accessToken,
+    });
+
+    const result = await client.listLocations();
+
+    expect(result.items[0]?.coverImageUrl).toBe(
+      'https://api.padlhub.test/public/api/v1/local-padel/location-media/22222222-2222-4222-8222-222222222222',
+    );
+  });
+
+  it('reads the published gift certificate catalog without forwarding a token', async () => {
+    const calls: Array<{ input: Parameters<typeof fetch>[0]; init?: RequestInit }> = [];
+    const fetchImplementation: typeof fetch = (input, init) => {
+      calls.push({ input, ...(init === undefined ? {} : { init }) });
+      return Promise.resolve(jsonResponse({ id: 'catalog-id', designs: [], denominations: [] }));
+    };
+    const client = createClient(fetchImplementation, {
+      initialAccessToken: 'token-that-must-not-reach-the-public-catalog',
+    });
+
+    await client.getPublicGiftCertificateCatalog();
+
+    expect(requestUrl(calls[0]?.input ?? '')).toBe(
+      'https://api.padlhub.test/public/api/v1/local-padel/gift-certificate-catalog',
+    );
+    expect(new Headers(calls[0]?.init?.headers).get('Authorization')).toBeNull();
+  });
+
+  it('creates a public gift order through the cookie boundary without trusting a client amount', async () => {
+    const calls: Array<{ input: Parameters<typeof fetch>[0]; init?: RequestInit }> = [];
+    const fetchImplementation: typeof fetch = (input, init) => {
+      calls.push({ input, ...(init === undefined ? {} : { init }) });
+      return Promise.resolve(jsonResponse({ order: {}, replayed: false }));
+    };
+    const client = createClient(fetchImplementation, {
+      initialAccessToken: 'token-that-must-not-reach-the-public-sale',
+    });
+    const request = {
+      catalogId: '11111111-1111-4111-8111-111111111111',
+      designId: '22222222-2222-4222-8222-222222222222',
+      denominationId: '33333333-3333-4333-8333-333333333333',
+      buyerEmail: 'buyer@example.test',
+      recipientName: 'Мария',
+      recipientEmail: 'recipient@example.test',
+      message: null,
+      deliveryMode: 'IMMEDIATE' as const,
+      scheduledFor: null,
+      termsAccepted: true as const,
+    };
+
+    await client.createPublicGiftCertificateOrder(request);
+
+    expect(requestUrl(calls[0]?.input ?? '')).toBe(
+      'https://api.padlhub.test/public/api/v1/local-padel/gift-certificate-orders',
+    );
+    expect(calls[0]?.init?.credentials).toBe('include');
+    const headers = new Headers(calls[0]?.init?.headers);
+    expect(headers.get('Authorization')).toBeNull();
+    expect(headers.get('Idempotency-Key')).toBeTruthy();
+    expect(JSON.parse(stringRequestBody(calls[0]?.init?.body))).toEqual(request);
+    expect(stringRequestBody(calls[0]?.init?.body)).not.toContain('amountMinor');
+  });
+
+  it('downloads a private guest certificate through the purchase cookie boundary', async () => {
+    const calls: Array<{ input: Parameters<typeof fetch>[0]; init?: RequestInit }> = [];
+    const fetchImplementation: typeof fetch = (input, init) => {
+      calls.push({ input, ...(init === undefined ? {} : { init }) });
+      return Promise.resolve(
+        new Response(new Uint8Array([0x25, 0x50, 0x44, 0x46]), {
+          status: 200,
+          headers: { 'Content-Type': 'application/pdf' },
+        }),
+      );
+    };
+    const client = createClient(fetchImplementation, {
+      initialAccessToken: 'token-that-must-not-reach-the-public-download',
+    });
+
+    const blob = await client.downloadPublicGiftCertificate('44444444-4444-4444-8444-444444444444');
+
+    expect(blob.type).toBe('application/pdf');
+    expect(requestUrl(calls[0]?.input ?? '')).toBe(
+      'https://api.padlhub.test/public/api/v1/local-padel/gift-certificate-orders/44444444-4444-4444-8444-444444444444/certificate.pdf',
+    );
+    expect(calls[0]?.init?.credentials).toBe('include');
+    const headers = new Headers(calls[0]?.init?.headers);
+    expect(headers.get('Accept')).toBe('application/pdf');
+    expect(headers.get('Authorization')).toBeNull();
+  });
+
   it('keeps public Games discovery on the anonymous public API boundary', async () => {
     const calls: Array<{ input: Parameters<typeof fetch>[0]; init?: RequestInit }> = [];
     const fetchImplementation: typeof fetch = (input, init) => {
@@ -454,6 +562,37 @@ describe('PadlHubApiClient profile privacy boundary', () => {
 });
 
 describe('PadlHubApiClient booking personalization boundary', () => {
+  it('loads unified activity history through PadlHub filters only', async () => {
+    const calls: Array<{ input: Parameters<typeof fetch>[0]; init?: RequestInit }> = [];
+    const fetchImplementation: typeof fetch = (input, init) => {
+      calls.push({ input, ...(init === undefined ? {} : { init }) });
+      return Promise.resolve(
+        jsonResponse({
+          items: [],
+          nextCursor: null,
+          freshness: 'FRESH',
+          coverage: 'COMPLETE',
+          generatedAt: '2026-07-21T09:00:00.000Z',
+        }),
+      );
+    };
+    const client = createClient(fetchImplementation, {
+      initialAccessToken: authenticatedSession.accessToken,
+    });
+
+    await client.listActivityHistory({
+      kind: 'TRAINING',
+      status: 'COMPLETED',
+      cursor: 'opaque-history-cursor',
+      limit: 20,
+    });
+
+    expect(requestUrl(calls[0]?.input ?? '')).toBe(
+      'https://api.padlhub.test/user/api/v1/local-padel/bookings/history?kind=TRAINING&status=COMPLETED&cursor=opaque-history-cursor&limit=20',
+    );
+    expect(requestUrl(calls[0]?.input ?? '')).not.toMatch(/viva|provider|phone/i);
+  });
+
   it('uses canonical preference and recommendation routes without provider selectors', async () => {
     const calls: Array<{ input: Parameters<typeof fetch>[0]; init?: RequestInit }> = [];
     const fetchImplementation: typeof fetch = (input, init) => {

@@ -50,6 +50,9 @@ const ADMIN_ONLY_PERMISSIONS = new Set([
   'locations.read',
   'locations.manage',
   'locations.publish',
+  'gift_certificates.catalog.read',
+  'gift_certificates.catalog.manage',
+  'gift_certificates.catalog.publish',
 ]);
 
 export interface RefreshSessionIdentity {

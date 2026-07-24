@@ -4,6 +4,7 @@
     "apps/cup-admin/**/*.ts",
     "apps/cup-admin/**/*.tsx",
     "packages/api-sdk/**/*.ts",
+    "packages/gift-certificates/**/*.ts",
     "packages/ui/**/*.tsx"
   ],
   "exclude": ["node_modules", "dist"]

@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
+import { localVivaExerciseAssociationId } from '@phub/legacy-games-adapter';
 
-import { persistVivaHomeSource, type VivaHomeDelegation } from './viva-home-repository.js';
+import {
+  persistLegacyParticipantViewerProfile,
+  persistVivaHomeSource,
+  resolveLegacyParticipantPhotoTargets,
+  type VivaHomeDelegation,
+} from './viva-home-repository.js';
 
 const tenantId = '86afbe01-0318-4dd2-bc25-303b7bf0d430';
 const userId = '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca';
@@ -23,6 +29,85 @@ const delegation: VivaHomeDelegation = {
 };
 
 describe('Viva Home producer repository', () => {
+  it('fills a mapped legacy participant level from the confirmed Viva viewer profile', async () => {
+    const query = vi.fn((text: string, values: readonly unknown[] = []) => {
+      if (
+        text === 'begin' ||
+        text === 'commit' ||
+        text === 'rollback' ||
+        text.includes("set_config('app.tenant_id'")
+      ) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('update profile.user_summaries p')) {
+        expect(values).toEqual([tenantId, 'legacy-viewer-key', 'Alexey Sergeev', 'C', 3.15022]);
+        return Promise.resolve({ rows: [], rowCount: 1 });
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const pool = { connect: vi.fn().mockResolvedValue({ query, release: vi.fn() }) };
+
+    await expect(
+      persistLegacyParticipantViewerProfile({
+        pool: pool as never,
+        tenantId,
+        participantExternalId: 'legacy-viewer-key',
+        displayName: 'Alexey Sergeev',
+        level: 'C',
+        levelValue: 3.15022,
+      }),
+    ).resolves.toBe(true);
+  });
+
+  it('resolves only locally mapped legacy participants that have source photos', async () => {
+    const mappedUserId = 'b1dc7c9c-1aed-448d-987e-3235a839b505';
+    const query = vi.fn((text: string, values: readonly unknown[] = []) => {
+      if (
+        text === 'begin' ||
+        text === 'commit' ||
+        text === 'rollback' ||
+        text.includes("set_config('app.tenant_id'")
+      ) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes("external_system = 'LK_LEGACY_SNAPSHOT'")) {
+        expect(values).toEqual([tenantId, ['legacy-player-with-photo']]);
+        return Promise.resolve({
+          rows: [
+            { external_id: 'legacy-player-with-photo', internal_id: mappedUserId },
+            { external_id: 'not-requested', internal_id: userId },
+          ],
+          rowCount: 2,
+        });
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const pool = { connect: vi.fn().mockResolvedValue({ query, release: vi.fn() }) };
+
+    await expect(
+      resolveLegacyParticipantPhotoTargets({
+        pool: pool as never,
+        tenantId,
+        snapshots: [
+          {
+            participants: [
+              {
+                externalId: 'legacy-player-with-photo',
+                avatarSourceUrl: 'https://562807.selcdn.ru/smstretching/player-photo',
+              },
+              { externalId: 'legacy-player-without-photo', avatarSourceUrl: null },
+            ],
+          },
+        ] as never,
+      }),
+    ).resolves.toEqual([
+      {
+        userId: mappedUserId,
+        sourceUrl: 'https://562807.selcdn.ru/smstretching/player-photo',
+      },
+    ]);
+  });
+
   it('maps Viva IDs and writes PadlHub-only components through the outbox atomically', async () => {
     const outboxPayloads: string[] = [];
     let mapping = 0;
@@ -49,33 +134,57 @@ describe('Viva Home producer repository', () => {
         });
       }
       if (text.includes('from integration.external_entity_map e')) {
-        expect(values).toEqual([tenantId, [externalExerciseId]]);
+        expect(values).toEqual([
+          tenantId,
+          [externalExerciseId, localVivaExerciseAssociationId(externalExerciseId)],
+        ]);
         return Promise.resolve({
           rows: [
             {
               exercise_external_id: externalExerciseId,
               capacity: 4,
+              game_title: 'Вечерняя игра',
+              game_kind: 'RATING',
+              ends_at: '2026-07-16T10:30:00.000Z',
+              court_name: 'Корт №4',
+              station_id: '9b993668-ff54-4cce-8dfd-cad84c4a06fa',
+              station_title: 'Ясенево',
               profile_id: 'b1dc7c9c-1aed-448d-987e-3235a839b505',
               display_name: 'Дмитрий Крикунов',
               photo_url: 'https://media.padlhub.test/profiles/dmitriy.webp',
               level_label: 'C',
+              level_value: '3.44464',
             },
             {
               exercise_external_id: externalExerciseId,
               capacity: 4,
+              game_title: 'Вечерняя игра',
+              game_kind: 'RATING',
+              ends_at: '2026-07-16T10:30:00.000Z',
+              court_name: 'Корт №4',
+              station_id: '9b993668-ff54-4cce-8dfd-cad84c4a06fa',
+              station_title: 'Ясенево',
               profile_id: userId,
               display_name: 'Алексей Сергеев',
               photo_url:
                 'https://media.padlhub.test/phub-local/profile-photo.webp?X-Amz-Signature=test',
               level_label: 'C',
+              level_value: '3.15022',
             },
             {
               exercise_external_id: externalExerciseId,
               capacity: 4,
+              game_title: 'Вечерняя игра',
+              game_kind: 'RATING',
+              ends_at: '2026-07-16T10:30:00.000Z',
+              court_name: 'Корт №4',
+              station_id: '9b993668-ff54-4cce-8dfd-cad84c4a06fa',
+              station_title: 'Ясенево',
               profile_id: 'c4e17ec7-a696-4355-a0b9-7e1a5644a3a6',
               display_name: 'Александр Сосновский',
               photo_url: null,
               level_label: 'D+',
+              level_value: '2.86793',
             },
           ],
           rowCount: 3,
@@ -115,6 +224,7 @@ describe('Viva Home producer repository', () => {
         profilePhoto: {
           avatarUrl:
             'https://media.padlhub.test/phub-local/profile-photo.webp?X-Amz-Signature=test',
+          deliveryId: '2d650d6c-207a-449a-85f5-50f226499992',
           sourceUrl: 'https://562807.selcdn.ru/smstretching/provider-photo',
           sourceEtag: '"photo-v1"',
           contentSha256: 'f'.repeat(64),
@@ -172,7 +282,13 @@ describe('Viva Home producer repository', () => {
     expect(serialized).toContain('"nickname":null');
     expect(serialized).toContain('"displayName":"Дмитрий Крикунов"');
     expect(serialized).toContain('"displayName":"Александр Сосновский"');
+    expect(serialized).toContain('"levelValue":3.44464');
+    expect(serialized).toContain('"levelValue":2.86793');
     expect(serialized).toContain('"openSlots":1');
+    expect(serialized).toContain('"title":"Вечерняя игра"');
+    expect(serialized).toContain('"type":"rating"');
+    expect(serialized).toContain('"title":"Ясенево"');
+    expect(serialized).toContain('"courtName":"Корт №4"');
     expect(query.mock.calls.at(-1)?.[0]).toBe('commit');
     expect(release).toHaveBeenCalledOnce();
   });

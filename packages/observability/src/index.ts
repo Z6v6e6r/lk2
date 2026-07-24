@@ -1,6 +1,8 @@
 import { getNodeAutoInstrumentations } from '@opentelemetry/auto-instrumentations-node';
+import { OTLPMetricExporter } from '@opentelemetry/exporter-metrics-otlp-http';
 import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
 import { resourceFromAttributes } from '@opentelemetry/resources';
+import { PeriodicExportingMetricReader } from '@opentelemetry/sdk-metrics';
 import { NodeSDK } from '@opentelemetry/sdk-node';
 import { ATTR_SERVICE_NAME, ATTR_SERVICE_NAMESPACE } from '@opentelemetry/semantic-conventions';
 import pino, { type Logger, type LoggerOptions } from 'pino';
@@ -32,6 +34,7 @@ export function startTelemetry(options: {
   readonly endpoint?: string;
 }): NodeSDK | undefined {
   if (!options.endpoint) return undefined;
+  const endpoint = options.endpoint.replace(/\/$/, '');
 
   const sdk = new NodeSDK({
     resource: resourceFromAttributes({
@@ -39,8 +42,15 @@ export function startTelemetry(options: {
       [ATTR_SERVICE_NAMESPACE]: options.serviceNamespace,
     }),
     traceExporter: new OTLPTraceExporter({
-      url: `${options.endpoint.replace(/\/$/, '')}/v1/traces`,
+      url: `${endpoint}/v1/traces`,
     }),
+    metricReaders: [
+      new PeriodicExportingMetricReader({
+        exporter: new OTLPMetricExporter({ url: `${endpoint}/v1/metrics` }),
+        exportIntervalMillis: 15_000,
+        exportTimeoutMillis: 10_000,
+      }),
+    ],
     instrumentations: [
       getNodeAutoInstrumentations({
         '@opentelemetry/instrumentation-http': {

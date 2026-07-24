@@ -55,6 +55,28 @@ afterEach(async () => {
 });
 
 describe('health endpoints', () => {
+  it('allows CUP preflight for state-changing admin methods', async () => {
+    const app = await buildApp({
+      config: { ...config, CORS_ORIGINS: 'http://127.0.0.1:3001' },
+      logger: createLogger('api-test', 'silent'),
+    });
+    apps.push(app);
+    const response = await app.inject({
+      method: 'OPTIONS',
+      url: '/admin/api/v1/local-padel/gift-certificate-catalog/draft',
+      headers: {
+        origin: 'http://127.0.0.1:3001',
+        'access-control-request-method': 'PUT',
+        'access-control-request-headers':
+          'authorization,content-type,idempotency-key,x-app-platform,x-app-version,x-correlation-id',
+      },
+    });
+
+    expect(response.statusCode).toBe(204);
+    expect(response.headers['access-control-allow-origin']).toBe('http://127.0.0.1:3001');
+    expect(response.headers['access-control-allow-methods']).toContain('PUT');
+  });
+
   it('removes OAuth and other query parameters from request logs', () => {
     expect(
       sanitizeRequestLogUrl(
@@ -235,6 +257,53 @@ describe('health endpoints', () => {
     expect(response.statusCode).toBe(403);
     expect(response.json()).toMatchObject({ code: 'DIRECT_VIVA_DISABLED' });
     expect(issueVivaAccessToken).not.toHaveBeenCalled();
+  });
+
+  it('omits the Viva handoff from the OAuth redirect when the effective plan is PadlHub-only', async () => {
+    const app = await buildApp({
+      config: {
+        ...config,
+        VIVA_OAUTH_SUCCESS_REDIRECT_URL: 'https://app.example.test/',
+      },
+      logger: createLogger('api-test', 'silent'),
+      authService: {
+        completeVivaOAuth: () =>
+          Promise.resolve({
+            accessToken: 'padlhub-access-token',
+            tokenType: 'Bearer',
+            expiresAt: '2099-01-01T00:00:00.000Z',
+            refreshToken: 'padlhub-refresh-token',
+            refreshExpiresAt: '2099-02-01T00:00:00.000Z',
+            user: {
+              id: '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca',
+              tenantId,
+              displayName: 'Игрок ПадлХАБ',
+            },
+            roles: ['client'],
+            permissions: ['profile.read'],
+            vivaHandoffCode: 'one-time-viva-handoff-code',
+          }),
+      } as never,
+      clientRoutingPlanRepository: {
+        get: () =>
+          Promise.resolve({
+            mode: 'PADLHUB_ONLY',
+            revision: '4',
+            validForSeconds: 60,
+            directOperations: [],
+            delegationReady: true,
+          }),
+      },
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: `/user/api/v1/local-padel/auth/viva/callback?state=${'s'.repeat(24)}&code=oauth-code`,
+    });
+
+    expect(response.statusCode).toBe(302);
+    expect(response.headers.location).toBe('https://app.example.test/');
   });
 
   it('returns one normalized PadlHub profile aggregate', async () => {
@@ -613,6 +682,49 @@ describe('health endpoints', () => {
 
     expect(response.statusCode).toBe(503);
     expect(response.json()).toMatchObject({ code: 'HOME_PROJECTION_NOT_READY' });
+  });
+
+  it('opens a roster participant profile from the server-owned summary when no Home snapshot exists', async () => {
+    const targetUserId = 'b1dc7c9c-1aed-448d-987e-3235a839b505';
+    const app = await buildApp({
+      config: { ...config, HOME_READ_MODE: 'projection' as const, VIVA_MODE: 'sandbox' as const },
+      logger: createLogger('api-test', 'silent'),
+      pool: fakePool(),
+      homeDashboardRepository: { get: () => Promise.resolve(undefined) },
+      profileSummaryRepository: {
+        get: (_tenantId, userId) =>
+          Promise.resolve(
+            userId === targetUserId
+              ? {
+                  userId: targetUserId,
+                  displayName: 'Дмитрий Крикунов',
+                  avatarUrl: 'https://media.padlhub.test/profiles/dmitriy.webp',
+                  levelLabel: 'C',
+                  levelValue: 3.43844,
+                }
+              : undefined,
+          ),
+      },
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: `/user/api/v1/local-padel/profiles/${targetUserId}`,
+      headers: { authorization: `Bearer ${await accessToken()}` },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      profile: {
+        userId: targetUserId,
+        displayName: 'Дмитрий Крикунов',
+        firstName: 'Дмитрий',
+        lastName: 'Крикунов',
+        level: { label: 'C', assessmentRequired: false },
+      },
+      access: { audience: 'OTHER', tier: 'BASIC' },
+    });
   });
 
   it('rejects a token that does not contain the resolved tenant', async () => {

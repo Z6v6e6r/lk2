@@ -22,6 +22,7 @@ export interface VivaHomeProfileSource {
   readonly externalId: string;
   readonly displayName: string;
   readonly firstName?: string;
+  readonly lastName?: string;
   /** Provider-owned source URL, consumed only by the server-side media synchronizer. */
   readonly photoUrl?: string;
   readonly phoneLast4?: string;
@@ -35,6 +36,8 @@ export interface VivaHomeProfileSource {
 
 export interface VivaHomeUpcomingSource {
   readonly externalId: string;
+  /** Integration-only key used to resolve a canonical PadlHub Game roster. */
+  readonly exerciseExternalId?: string;
   readonly title: string;
   readonly startsAt: string;
   readonly venue: string;
@@ -118,6 +121,7 @@ const pageSchema = <T extends z.ZodType>(item: T) =>
 
 const namedUuidSchema = z.object({ id: z.string().uuid(), name: z.string() });
 const exerciseSchema = z.object({
+  id: z.string().uuid().optional(),
   timeFrom: z.string().datetime({ offset: true }),
   inWaitlist: z.boolean(),
   direction: z.object({ name: z.string() }),
@@ -411,6 +415,7 @@ export class VivaHomeSourceAdapter {
           return [
             {
               externalId: item.id,
+              ...(item.exercise.id ? { exerciseExternalId: item.exercise.id } : {}),
               title: bounded(item.exercise.type.name || item.exercise.direction.name, 160),
               startsAt: item.exercise.timeFrom,
               venue: venue(item.exercise.studio.name, item.exercise.studio.address),
@@ -439,6 +444,7 @@ export class VivaHomeSourceAdapter {
         externalId: profile.id,
         displayName: bounded(displayName || 'Игрок ПаделхАБ', 200),
         ...(profile.firstName?.trim() ? { firstName: bounded(profile.firstName, 100) } : {}),
+        ...(profile.lastName?.trim() ? { lastName: bounded(profile.lastName, 100) } : {}),
         ...(profile.photo ? { photoUrl: profile.photo } : {}),
         ...(phoneDigits.length >= 4 ? { phoneLast4: phoneDigits.slice(-4) } : {}),
         balanceMinor: profile.deposit,

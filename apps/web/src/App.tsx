@@ -15,6 +15,7 @@ import {
 } from './browser-auth-context.js';
 import { HomeDashboardPage } from './HomeDashboardPage.js';
 import { GamesPage } from './GamesPage.js';
+import { GiftCertificatesPage } from './GiftCertificatesPage.js';
 import { LocationDetailPage } from './LocationDetailPage.js';
 import { LocationsPage } from './LocationsPage.js';
 import { NotificationsPage } from './NotificationsPage.js';
@@ -24,6 +25,7 @@ import type {
   AuthenticatedSession,
   BookingPreferences,
   BookingPreferencesUpdateRequest,
+  CommunityMembershipPage,
   HomeDashboard,
   LocationDetail,
   LocationList,
@@ -56,6 +58,7 @@ type ProtectedRoute =
   | { readonly kind: 'location'; readonly locationId: string }
   | { readonly kind: 'games' }
   | { readonly kind: 'game'; readonly gameId: string }
+  | { readonly kind: 'gift-certificates' }
   | { readonly kind: 'section'; readonly title: string }
   | { readonly kind: 'not-found' };
 
@@ -63,6 +66,8 @@ const visibleWorkInProgressSections = [
   ['/tournaments', 'Турниры'],
   ['/trainings', 'Тренировки'],
   ['/subscriptions', 'Абонементы'],
+  ['/promotions', 'Акции'],
+  ['/offers', 'Предложения'],
 ] as const;
 
 function resolveProtectedRoute(pathname: string): ProtectedRoute {
@@ -82,6 +87,7 @@ function resolveProtectedRoute(pathname: string): ProtectedRoute {
   );
   if (locationMatch?.[1]) return { kind: 'location', locationId: locationMatch[1] };
   if (normalizedPath === '/games') return { kind: 'games' };
+  if (normalizedPath === '/gift-certificates') return { kind: 'gift-certificates' };
   if (normalizedPath === '/games/new') return { kind: 'section', title: 'Создание игры' };
   const gameMatch = normalizedPath.match(
     /^\/games\/([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i,
@@ -324,6 +330,7 @@ export interface AppProps {
 
 const HOME_REFRESH_INTERVAL_MS = 30_000;
 const NOTIFICATIONS_REFRESH_INTERVAL_MS = 15_000;
+const HOME_INITIAL_RETRY_DELAYS_MS = [400, 1_000, 2_000] as const;
 
 export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
   const [state, dispatch] = useReducer(reducer, initialState);
@@ -333,6 +340,7 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
   const [currentTime, setCurrentTime] = useState(() => Date.now());
   const [homeDashboard, setHomeDashboard] = useState<HomeDashboard | null>(null);
   const [homeError, setHomeError] = useState<string | null>(null);
+  const [homeReloadToken, setHomeReloadToken] = useState(0);
   const [locations, setLocations] = useState<LocationList | null>(null);
   const [locationDetail, setLocationDetail] = useState<LocationDetail | null>(null);
   const [locationsError, setLocationsError] = useState<string | null>(null);
@@ -349,6 +357,14 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
   const [bookingPreferenceStations, setBookingPreferenceStations] = useState<
     readonly { readonly id: string; readonly name: string }[]
   >([]);
+  const [profileCommunities, setProfileCommunities] = useState<CommunityMembershipPage | null>(
+    null,
+  );
+  const [profileCommunitiesError, setProfileCommunitiesError] = useState<string | null>(null);
+  const [profileSubscriptions, setProfileSubscriptions] = useState<
+    HomeDashboard['subscriptions'] | null
+  >(null);
+  const [profileSubscriptionsError, setProfileSubscriptionsError] = useState<string | null>(null);
   const [upcomingBookings, setUpcomingBookings] = useState<UserUpcomingBookings | null>(null);
   const [bookingsError, setBookingsError] = useState<string | null>(null);
   const [notifications, setNotifications] = useState<NotificationInboxPage | null>(null);
@@ -362,6 +378,8 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
   const protectedRoute = resolveProtectedRoute(
     typeof window === 'undefined' ? '/' : window.location.pathname,
   );
+  const publicGiftRoute =
+    typeof window !== 'undefined' && window.location.pathname.replace(/\/+$/, '') === '/giftcard';
   const requestedProfileUserId =
     protectedRoute.kind === 'profile' ? protectedRoute.userId : undefined;
   const requestedLocationId =
@@ -370,6 +388,7 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
   const codeInput = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
+    if (publicGiftRoute) return;
     let active = true;
     void gateway.restoreSession().then(
       (session) => {
@@ -388,7 +407,7 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
     return () => {
       active = false;
     };
-  }, [entryView, gateway]);
+  }, [entryView, gateway, publicGiftRoute]);
 
   useEffect(() => {
     if (state.view !== 'home' || !state.session) return;
@@ -442,6 +461,30 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
             if (active) setBookingPreferenceStations([]);
           },
         );
+        void gateway.listMyCommunities().then(
+          (page) => {
+            if (!active) return;
+            setProfileCommunities(page);
+            setProfileCommunitiesError(null);
+          },
+          () => {
+            if (!active) return;
+            setProfileCommunities({ items: [] });
+            setProfileCommunitiesError('Не удалось загрузить сообщества.');
+          },
+        );
+        void gateway.getHomeDashboard().then(
+          (dashboard) => {
+            if (!active) return;
+            setProfileSubscriptions(dashboard.subscriptions);
+            setProfileSubscriptionsError(null);
+          },
+          () => {
+            if (!active) return;
+            setProfileSubscriptions([]);
+            setProfileSubscriptionsError('Не удалось загрузить подписки и абонементы.');
+          },
+        );
       }
       void gateway.getPlayerProfile(targetUserId).then(
         (profile) => {
@@ -456,6 +499,10 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
               setBookingPreferencesError(null);
               setBookingPreferencesNotice(null);
               setBookingPreferenceStations([]);
+              setProfileCommunities(null);
+              setProfileCommunitiesError(null);
+              setProfileSubscriptions(null);
+              setProfileSubscriptionsError(null);
             }
           }
         },
@@ -574,16 +621,25 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
       };
     }
     if (protectedRoute.kind !== 'home') return;
-    const refreshHome = (): void => {
+    let homeRetryTimer: number | undefined;
+    let homeLoaded = false;
+    const refreshHome = (attempt = 0): void => {
       void gateway.getHomeDashboard().then(
         (dashboard) => {
           if (active) {
+            homeLoaded = true;
             setHomeDashboard(dashboard);
             setHomeError(null);
           }
         },
         () => {
-          if (active) setHomeError('Не удалось загрузить Главную. Проверьте связь и повторите.');
+          if (!active) return;
+          const retryDelay = HOME_INITIAL_RETRY_DELAYS_MS[attempt];
+          if (!homeLoaded && retryDelay !== undefined) {
+            homeRetryTimer = window.setTimeout(() => refreshHome(attempt + 1), retryDelay);
+            return;
+          }
+          setHomeError('Не удалось загрузить Главную. Проверьте связь и повторите.');
         },
       );
     };
@@ -612,6 +668,7 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
     document.addEventListener('visibilitychange', refreshVisibleHome);
     return () => {
       active = false;
+      if (homeRetryTimer !== undefined) window.clearTimeout(homeRetryTimer);
       window.clearInterval(homeRefreshInterval);
       window.clearInterval(notificationRefreshInterval);
       window.removeEventListener('focus', refreshHomeContent);
@@ -622,6 +679,7 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
     protectedRoute.kind,
     requestedLocationId,
     requestedProfileUserId,
+    homeReloadToken,
     state.session,
     state.view,
   ]);
@@ -743,6 +801,10 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
           setBookingPreferencesError(null);
           setBookingPreferencesNotice(null);
           setBookingPreferenceStations([]);
+          setProfileCommunities(null);
+          setProfileCommunitiesError(null);
+          setProfileSubscriptions(null);
+          setProfileSubscriptionsError(null);
           setUpcomingBookings(null);
           setBookingsError(null);
           setNotifications(null);
@@ -858,6 +920,21 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
     );
   }
 
+  if (publicGiftRoute) {
+    return (
+      <GiftCertificatesPage
+        surface="public"
+        gateway={{
+          getCatalog: gateway.getPublicGiftCertificateCatalog,
+          createOrder: gateway.createPublicGiftCertificateOrder,
+          createPayment: gateway.createPublicGiftCertificatePaymentIntent,
+          getOrder: gateway.getPublicGiftCertificateOrder,
+          downloadCertificate: gateway.downloadPublicGiftCertificate,
+        }}
+      />
+    );
+  }
+
   if (state.view === 'restoring') {
     return (
       <main className="app-shell app-shell-loading" aria-labelledby="restore-title">
@@ -908,6 +985,10 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
           bookingPreferencesError={bookingPreferencesError}
           bookingPreferencesNotice={bookingPreferencesNotice}
           stationChoices={bookingPreferenceStations}
+          subscriptions={profileSubscriptions}
+          subscriptionsError={profileSubscriptionsError}
+          communities={profileCommunities}
+          communitiesError={profileCommunitiesError}
           error={state.error}
           onSavePrivacy={handleSaveProfilePrivacy}
           onSaveBookingPreferences={handleSaveBookingPreferences}
@@ -940,13 +1021,7 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
         <BookingsPage
           bookings={upcomingBookings}
           tenantName={context.tenant.name}
-          loadHistory={(cursor) =>
-            gateway.listMyGames({
-              scope: 'HISTORY',
-              limit: 20,
-              ...(cursor ? { cursor } : {}),
-            })
-          }
+          loadHistory={gateway.getActivityHistory}
           loadRecommendations={() => gateway.listBookingRecommendations(20)}
         />
       );
@@ -1049,6 +1124,20 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
         />
       );
     }
+    if (protectedRoute.kind === 'gift-certificates') {
+      return (
+        <GiftCertificatesPage
+          surface="user"
+          gateway={{
+            getCatalog: gateway.getPublicGiftCertificateCatalog,
+            createOrder: gateway.createGiftCertificateOrder,
+            createPayment: gateway.createGiftCertificatePaymentIntent,
+            getOrder: gateway.getGiftCertificateOrder,
+            downloadCertificate: gateway.downloadGiftCertificate,
+          }}
+        />
+      );
+    }
     if (protectedRoute.kind === 'section' || protectedRoute.kind === 'not-found') {
       const title =
         protectedRoute.kind === 'section' ? protectedRoute.title : 'Страница не найдена';
@@ -1086,6 +1175,16 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
             <button
               className="secondary-button logout-button"
               type="button"
+              onClick={() => {
+                setHomeError(null);
+                setHomeReloadToken((token) => token + 1);
+              }}
+            >
+              Обновить
+            </button>
+            <button
+              className="secondary-button logout-button"
+              type="button"
               disabled={state.busy === 'logout'}
               onClick={handleLogout}
             >
@@ -1102,6 +1201,7 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
         notificationUnreadCount={notifications?.unreadCount ?? 0}
         loadCommunityPage={gateway.listMyCommunities}
         loadBookingRecommendations={() => gateway.listBookingRecommendations(6)}
+        loadActivityHistory={gateway.getActivityHistory}
         logoutBusy={state.busy === 'logout'}
         error={state.error}
         onLogout={handleLogout}

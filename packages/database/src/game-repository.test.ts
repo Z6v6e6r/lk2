@@ -228,6 +228,7 @@ describe('game repository', () => {
               display_name: 'Алексей',
               photo_url: null,
               level_label: 'C+',
+              level_value: '3.43844',
               role: 'ORGANIZER',
               payment_state: 'NOT_REQUIRED',
             },
@@ -245,7 +246,7 @@ describe('game repository', () => {
       text.includes('insert into games.card_projections'),
     );
     expect(JSON.parse(String(projectionCall?.[1]?.[7]))).toMatchObject({
-      participants: [{ userId: actorUserId, level: 'C+' }],
+      participants: [{ userId: actorUserId, level: 'C+', levelValue: 3.43844 }],
     });
     const projectionWrite = query.mock.calls.find(([text]) =>
       text.includes('insert into games.card_projections'),

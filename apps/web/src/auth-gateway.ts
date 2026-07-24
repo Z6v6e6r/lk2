@@ -1,6 +1,8 @@
 import { ApiClientError, PadlHubApiClient } from '@phub/api-sdk';
 import type {
   AuthenticatedSession as ApiAuthenticatedSession,
+  ActivityHistoryFilters,
+  ActivityHistoryPage,
   BookingPreferences,
   BookingPreferencesUpdateRequest,
   BookingRecommendationPage,
@@ -9,13 +11,20 @@ import type {
   GameCard,
   GameCardPage,
   GameCommandResult,
+  SubmitGameResultRequest,
+  DisputeGameResultRequest,
   HomeDashboard,
+  GiftCertificateOrderCommandResult,
+  GiftCertificateOrder,
+  GiftCertificatePaymentIntent,
   LocationDetail,
   LocationList,
   NotificationInboxPage,
   PlayerProfileView,
   PublicGameCardPage,
   PublicGameFilters,
+  PublicGiftCertificateCatalog,
+  CreateGiftCertificateOrderRequest,
   ProfilePrivacySettings,
   ProfilePrivacyUpdateRequest,
   UserProfile,
@@ -26,6 +35,8 @@ import type {
   WebPushEndpointRegistration,
 } from '@phub/api-sdk';
 export type {
+  ActivityHistoryFilters,
+  ActivityHistoryPage,
   BookingPreferences,
   BookingPreferencesUpdateRequest,
   BookingRecommendationPage,
@@ -34,7 +45,12 @@ export type {
   GameCard,
   GameCardPage,
   GameCommandResult,
+  SubmitGameResultRequest,
+  DisputeGameResultRequest,
   HomeDashboard,
+  GiftCertificateOrderCommandResult,
+  GiftCertificateOrder,
+  GiftCertificatePaymentIntent,
   LocationDetail,
   LocationList,
   NotificationInboxPage,
@@ -42,6 +58,8 @@ export type {
   PublicGameCard,
   PublicGameCardPage,
   PublicGameFilters,
+  PublicGiftCertificateCatalog,
+  CreateGiftCertificateOrderRequest,
   ProfilePrivacySettings,
   ProfilePrivacyUpdateRequest,
   UserProfile,
@@ -49,6 +67,11 @@ export type {
   WebPushConfiguration,
   WebPushEndpointCommandResult,
   WebPushEndpointRegistration,
+} from '@phub/api-sdk';
+export type {
+  ActivityHistoryItem,
+  ActivityHistoryKind,
+  ActivityHistoryStatus,
 } from '@phub/api-sdk';
 import { maskPhone } from '@phub/auth';
 import {
@@ -80,6 +103,8 @@ export interface UserContext {
 export interface AuthenticatedSession {
   readonly context: UserContext;
 }
+
+export type ActivityHistoryQuery = ActivityHistoryFilters;
 
 export interface PhoneChallenge {
   readonly challengeId: string;
@@ -128,17 +153,45 @@ export interface AuthGateway {
   readonly getUpcomingBookings: () => Promise<UserUpcomingBookings>;
   readonly listBookingRecommendations: (limit?: number) => Promise<BookingRecommendationPage>;
   readonly getHomeDashboard: () => Promise<HomeDashboard>;
+  readonly getPublicGiftCertificateCatalog: () => Promise<PublicGiftCertificateCatalog>;
+  readonly createPublicGiftCertificateOrder: (
+    input: CreateGiftCertificateOrderRequest,
+  ) => Promise<GiftCertificateOrderCommandResult>;
+  readonly createPublicGiftCertificatePaymentIntent: (
+    orderId: string,
+  ) => Promise<GiftCertificatePaymentIntent>;
+  readonly getPublicGiftCertificateOrder: (orderId: string) => Promise<GiftCertificateOrder>;
+  readonly downloadPublicGiftCertificate: (orderId: string) => Promise<Blob>;
+  readonly createGiftCertificateOrder: (
+    input: CreateGiftCertificateOrderRequest,
+  ) => Promise<GiftCertificateOrderCommandResult>;
+  readonly createGiftCertificatePaymentIntent: (
+    orderId: string,
+  ) => Promise<GiftCertificatePaymentIntent>;
+  readonly getGiftCertificateOrder: (orderId: string) => Promise<GiftCertificateOrder>;
+  readonly downloadGiftCertificate: (orderId: string) => Promise<Blob>;
   readonly listPublicGames: (input?: PublicGameFilters) => Promise<PublicGameCardPage>;
   readonly listMyGames: (input?: {
     readonly scope?: 'UPCOMING' | 'HISTORY';
     readonly limit?: number;
     readonly cursor?: string;
   }) => Promise<GameCardPage>;
+  readonly getActivityHistory: (input?: ActivityHistoryQuery) => Promise<ActivityHistoryPage>;
   readonly getGame: (gameId: string) => Promise<GameCard>;
   readonly joinGame: (gameId: string, expectedRevision?: number) => Promise<GameCommandResult>;
   readonly leaveGame: (gameId: string) => Promise<GameCommandResult>;
   readonly joinGameWaitlist: (gameId: string) => Promise<GameCommandResult>;
   readonly leaveGameWaitlist: (gameId: string) => Promise<GameCommandResult>;
+  readonly submitGameResult: (
+    gameId: string,
+    input: SubmitGameResultRequest,
+  ) => Promise<GameCommandResult>;
+  readonly confirmGameResult: (gameId: string, submissionId: string) => Promise<GameCommandResult>;
+  readonly disputeGameResult: (
+    gameId: string,
+    submissionId: string,
+    input: DisputeGameResultRequest,
+  ) => Promise<GameCommandResult>;
   readonly getGameOperation: (operationId: string) => Promise<GameCommandResult>;
   readonly listLocations: () => Promise<LocationList>;
   readonly getLocation: (locationId: string) => Promise<LocationDetail>;
@@ -209,6 +262,18 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
   let profilePrivacyPromise: Promise<ProfilePrivacySettings> | undefined;
   let bookingPreferencesPromise: Promise<BookingPreferences> | undefined;
   let upcomingBookingsPromise: Promise<UserUpcomingBookings> | undefined;
+
+  function resolvePaymentIntent(
+    intent: GiftCertificatePaymentIntent,
+  ): GiftCertificatePaymentIntent {
+    return {
+      ...intent,
+      nextAction: {
+        ...intent.nextAction,
+        url: new URL(intent.nextAction.url, `${clientOptions.baseUrl}/`).toString(),
+      },
+    };
+  }
 
   async function applyVivaAccess(handoffCode?: string): Promise<string> {
     const access = await client.issueVivaAccessToken(handoffCode ? { handoffCode } : {});
@@ -425,12 +490,52 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       return request;
     },
 
+    getPublicGiftCertificateCatalog() {
+      return client.getPublicGiftCertificateCatalog();
+    },
+
+    createPublicGiftCertificateOrder(input) {
+      return client.createPublicGiftCertificateOrder(input);
+    },
+
+    async createPublicGiftCertificatePaymentIntent(orderId) {
+      return resolvePaymentIntent(await client.createPublicGiftCertificatePaymentIntent(orderId));
+    },
+
+    getPublicGiftCertificateOrder(orderId) {
+      return client.getPublicGiftCertificateOrder(orderId);
+    },
+
+    downloadPublicGiftCertificate(orderId) {
+      return client.downloadPublicGiftCertificate(orderId);
+    },
+
+    createGiftCertificateOrder(input) {
+      return client.createGiftCertificateOrder(input);
+    },
+
+    async createGiftCertificatePaymentIntent(orderId) {
+      return resolvePaymentIntent(await client.createGiftCertificatePaymentIntent(orderId));
+    },
+
+    getGiftCertificateOrder(orderId) {
+      return client.getGiftCertificateOrder(orderId);
+    },
+
+    downloadGiftCertificate(orderId) {
+      return client.downloadGiftCertificate(orderId);
+    },
+
     listPublicGames(input = {}) {
       return client.listPublicGames(input);
     },
 
     listMyGames(input = {}) {
       return client.listMyGames(input);
+    },
+
+    getActivityHistory(input = {}) {
+      return client.listActivityHistory(input);
     },
 
     getGame(gameId) {
@@ -451,6 +556,18 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
 
     leaveGameWaitlist(gameId) {
       return client.leaveGameWaitlist(gameId);
+    },
+
+    submitGameResult(gameId, input) {
+      return client.submitGameResult(gameId, input);
+    },
+
+    confirmGameResult(gameId, submissionId) {
+      return client.confirmGameResult(gameId, submissionId);
+    },
+
+    disputeGameResult(gameId, submissionId, input) {
+      return client.disputeGameResult(gameId, submissionId, input);
     },
 
     getGameOperation(operationId) {

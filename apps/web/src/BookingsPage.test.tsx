@@ -67,4 +67,20 @@ describe('BookingsPage', () => {
       expect(screen.getByRole('status')).toHaveTextContent('Пока нет подходящих игр'),
     );
   });
+
+  it('opens history directly from the history booking link', async () => {
+    window.history.replaceState({}, '', '/bookings?scope=history');
+    const loadHistory = vi.fn().mockResolvedValue({ items: [], nextCursor: null });
+    render(
+      <BookingsPage
+        bookings={bookings}
+        tenantName="ПадлХАБ"
+        loadHistory={loadHistory}
+        loadRecommendations={vi.fn().mockResolvedValue(recommendations)}
+      />,
+    );
+
+    await vi.waitFor(() => expect(loadHistory).toHaveBeenCalledOnce());
+    expect(screen.getByRole('tab', { name: 'История' })).toHaveAttribute('aria-selected', 'true');
+  });
 });

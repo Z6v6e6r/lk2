@@ -7,8 +7,11 @@ export interface LegacyGameSourceParticipant {
   readonly externalId: string;
   readonly displayName: string;
   readonly level: GamePlayerLevel | null;
+  readonly levelValue: number | null;
   readonly role: 'ORGANIZER' | 'PLAYER';
   readonly paymentState: Extract<GamePaymentState, 'NOT_REQUIRED' | 'PAID'>;
+  /** Integration-only source. The worker must copy it to a PadlHub-owned WebP before projection. */
+  readonly avatarSourceUrl: string | null;
 }
 
 export interface LegacyGameSourceSnapshot {
@@ -36,6 +39,8 @@ export interface LegacyGameSourceSnapshot {
   readonly levelTo: GamePlayerLevel | null;
   readonly organizerExternalId: string;
   readonly participants: readonly LegacyGameSourceParticipant[];
+  /** One-way player key proven by the server-side viewer-phone lookup, when present. */
+  readonly viewerParticipantExternalId?: string | null;
 }
 
 export interface LegacyGamesMongoAdapterOptions {
@@ -59,6 +64,9 @@ interface RawParticipant {
   readonly rating?: unknown;
   readonly ratingNumeric?: unknown;
   readonly status?: unknown;
+  readonly photo?: unknown;
+  readonly phone?: unknown;
+  readonly phoneNorm?: unknown;
 }
 
 interface RawLegacyGame extends Document {
@@ -100,12 +108,28 @@ function stringValue(value: unknown): string | undefined {
   return undefined;
 }
 
+function phoneDigits(value: unknown): string | undefined {
+  const digits = stringValue(value)?.replace(/\D/g, '');
+  return digits && /^\d{10,15}$/.test(digits) ? digits : undefined;
+}
+
 function uuidValue(value: unknown): string | undefined {
   const candidate = stringValue(value);
   return candidate &&
     /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(candidate)
     ? candidate
     : undefined;
+}
+
+function httpsUrl(value: unknown): string | undefined {
+  const candidate = stringValue(value);
+  if (!candidate) return undefined;
+  try {
+    const url = new URL(candidate);
+    return url.protocol === 'https:' && !url.username && !url.password ? url.toString() : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function numericValue(value: unknown): number | undefined {
@@ -133,25 +157,49 @@ function playerLevel(value: unknown): GamePlayerLevel | null {
   return 'A';
 }
 
+function playerLevelValue(value: unknown): number | null {
+  const rating = numericValue(value);
+  return rating !== undefined && rating >= 0 && rating <= 10 ? rating : null;
+}
+
 function pseudonymousId(entityType: string, externalId: string): string {
   return createHash('sha256')
     .update(`phub-local-public-clone-v1:${entityType}:${externalId}`)
     .digest('hex');
 }
 
-function anonymizeSnapshot(snapshot: LegacyGameSourceSnapshot): LegacyGameSourceSnapshot {
-  const participants = snapshot.participants.map((item, index) => ({
+/**
+ * Produces the same one-way local association key used by the public legacy clone. The raw Viva
+ * exercise UUID is used only in memory while matching the two server-side sources and is never
+ * persisted by the local bridge.
+ */
+export function localVivaExerciseAssociationId(externalId: string): string {
+  const normalized = uuidValue(externalId);
+  if (!normalized) throw new Error('VIVA_EXERCISE_ID_INVALID');
+  return pseudonymousId('viva-exercise', normalized);
+}
+
+/** Matches a Viva profile to the anonymized local player key without persisting the raw UUID. */
+export function localVivaProfileAssociationId(externalId: string): string {
+  const normalized = stringValue(externalId);
+  if (!normalized) throw new Error('VIVA_PROFILE_ID_INVALID');
+  return pseudonymousId('player', normalized);
+}
+
+function sanitizeSnapshot(snapshot: LegacyGameSourceSnapshot): LegacyGameSourceSnapshot {
+  const participants = snapshot.participants.map((item) => ({
     ...item,
-    externalId: pseudonymousId('player', item.externalId),
-    displayName: item.role === 'ORGANIZER' ? 'Организатор' : `Игрок ${index + 1}`,
+    externalId: localVivaProfileAssociationId(item.externalId),
   }));
   return {
     ...snapshot,
     externalId: pseudonymousId('game', snapshot.externalId),
     vivaExerciseExternalId: snapshot.vivaExerciseExternalId
-      ? pseudonymousId('viva-exercise', snapshot.vivaExerciseExternalId)
+      ? localVivaExerciseAssociationId(snapshot.vivaExerciseExternalId)
       : null,
-    title: `${snapshot.kind === 'RATING' ? 'Рейтинговая' : 'Открытая'} игра ${snapshot.capacity === 2 ? '1×1' : '2×2'}`,
+    // A public game's title is presentation data, not an integration identifier. Preserve it so
+    // Home renders the name the organizer gave the game while IDs remain pseudonymous.
+    title: snapshot.title,
     station: {
       ...snapshot.station,
       externalId: pseudonymousId('station', snapshot.station.externalId),
@@ -159,7 +207,10 @@ function anonymizeSnapshot(snapshot: LegacyGameSourceSnapshot): LegacyGameSource
         ? pseudonymousId('court', snapshot.station.courtExternalId)
         : null,
     },
-    organizerExternalId: pseudonymousId('player', snapshot.organizerExternalId),
+    organizerExternalId: localVivaProfileAssociationId(snapshot.organizerExternalId),
+    viewerParticipantExternalId: snapshot.viewerParticipantExternalId
+      ? localVivaProfileAssociationId(snapshot.viewerParticipantExternalId)
+      : null,
     participants,
   };
 }
@@ -177,16 +228,22 @@ function participant(
   const externalId = stringValue(raw.id);
   const displayName = stringValue(raw.name);
   if (!externalId || !displayName) return undefined;
+  const rating = raw.ratingNumeric ?? raw.rating;
   return {
     externalId,
     displayName,
-    level: playerLevel(raw.ratingNumeric ?? raw.rating),
+    level: playerLevel(rating),
+    levelValue: playerLevelValue(rating),
     role: externalId === organizerExternalId ? 'ORGANIZER' : 'PLAYER',
     paymentState: 'PAID',
+    avatarSourceUrl: httpsUrl(raw.photo) ?? null,
   };
 }
 
-function mapLegacyGame(raw: RawLegacyGame): LegacyGameSourceSnapshot | undefined {
+function mapLegacyGame(
+  raw: RawLegacyGame,
+  viewerPhoneE164?: string,
+): LegacyGameSourceSnapshot | undefined {
   const externalId = stringValue(raw.id);
   const organizerExternalId = stringValue(raw.organizer?.id);
   const organizerName = stringValue(raw.organizer?.name);
@@ -213,19 +270,36 @@ function mapLegacyGame(raw: RawLegacyGame): LegacyGameSourceSnapshot | undefined
     externalId: organizerExternalId,
     displayName: organizerName,
     level: playerLevel(raw.organizer?.ratingNumeric ?? raw.organizer?.rating),
+    levelValue: playerLevelValue(raw.organizer?.ratingNumeric ?? raw.organizer?.rating),
     role: 'ORGANIZER' as const,
     paymentState: 'PAID' as const,
+    avatarSourceUrl: httpsUrl(raw.organizer?.photo) ?? null,
   };
   const participantMap = new Map<string, LegacyGameSourceParticipant>([
     [organizerExternalId, organizer],
   ]);
   for (const item of raw.participants ?? []) {
     const normalized = participant(item, organizerExternalId);
-    if (normalized) participantMap.set(normalized.externalId, normalized);
+    if (normalized) {
+      const existing = participantMap.get(normalized.externalId);
+      participantMap.set(normalized.externalId, {
+        ...existing,
+        ...normalized,
+        avatarSourceUrl: normalized.avatarSourceUrl ?? existing?.avatarSourceUrl ?? null,
+      });
+    }
   }
   const format = stringValue(raw.metadata?.gameFormat);
   const capacity: 2 | 4 = format === 'singles' ? 2 : 4;
   const participants = [...participantMap.values()].slice(0, capacity);
+  const viewerPhone = phoneDigits(viewerPhoneE164);
+  const viewerParticipantExternalId = viewerPhone
+    ? [raw.organizer, ...(raw.participants ?? [])].find(
+        (item) =>
+          phoneDigits(item?.phoneNorm ?? item?.phone) === viewerPhone &&
+          stringValue(item?.id) !== undefined,
+      )?.id
+    : undefined;
   const minRating = playerLevel(raw.settings?.minRating);
   const maxRating = playerLevel(raw.settings?.maxRating);
   const updatedAt = isoInstant(raw.updatedAt) ?? startsAt;
@@ -246,6 +320,7 @@ function mapLegacyGame(raw: RawLegacyGame): LegacyGameSourceSnapshot | undefined
   const externalVersion = createHash('sha256')
     .update(
       JSON.stringify({
+        snapshotContractVersion: 2,
         updatedAt,
         legacyStatus,
         title,
@@ -259,7 +334,14 @@ function mapLegacyGame(raw: RawLegacyGame): LegacyGameSourceSnapshot | undefined
         paymentMode,
         minRating,
         maxRating,
-        participants,
+        participants: participants.map((item) => ({
+          externalId: item.externalId,
+          displayName: item.displayName,
+          level: item.level,
+          levelValue: item.levelValue,
+          role: item.role,
+          paymentState: item.paymentState,
+        })),
       }),
     )
     .digest('hex');
@@ -283,6 +365,7 @@ function mapLegacyGame(raw: RawLegacyGame): LegacyGameSourceSnapshot | undefined
     levelTo: maxRating,
     organizerExternalId,
     participants,
+    viewerParticipantExternalId: stringValue(viewerParticipantExternalId) ?? null,
   };
 }
 
@@ -331,10 +414,11 @@ export class LegacyGamesMongoAdapter {
   public async readByVivaExerciseIds(input: {
     readonly exerciseExternalIds: readonly string[];
     readonly limit: number;
+    readonly viewerPhoneE164?: string;
   }): Promise<readonly LegacyGameSourceSnapshot[]> {
     const exerciseExternalIds = [...new Set(input.exerciseExternalIds.map((id) => id.trim()))]
       .filter((id) => uuidValue(id))
-      .slice(0, 25);
+      .slice(0, 100);
     if (exerciseExternalIds.length === 0) return [];
     if (!Number.isInteger(input.limit) || input.limit < 1 || input.limit > 100) {
       throw new Error('LEGACY_GAMES_LIMIT_INVALID');
@@ -453,21 +537,19 @@ export interface LegacyGamesPublicAdapterOptions {
 export class LegacyGamesPublicAdapter {
   public constructor(private readonly options: LegacyGamesPublicAdapterOptions = {}) {}
 
-  public async readAvailable(input: {
-    readonly limit: number;
-  }): Promise<readonly LegacyGameSourceSnapshot[]> {
-    if (!Number.isInteger(input.limit) || input.limit < 1 || input.limit > 500) {
-      throw new Error('LEGACY_GAMES_LIMIT_INVALID');
-    }
+  private async readMappedPage(
+    url: URL,
+    viewerPhoneE164?: string,
+  ): Promise<{
+    readonly snapshots: readonly LegacyGameSourceSnapshot[];
+    readonly rawCount: number;
+    readonly total?: number;
+    readonly hasMore?: boolean;
+  }> {
     const baseUrl = new URL(this.options.baseUrl ?? 'https://padlhub.su');
     if (baseUrl.protocol !== 'https:' && baseUrl.hostname !== 'localhost') {
       throw new Error('LEGACY_GAMES_PUBLIC_BASE_URL_INVALID');
     }
-    const url = new URL('/lk/games', baseUrl);
-    url.searchParams.set('public', 'true');
-    url.searchParams.set('available', 'true');
-    url.searchParams.set('limit', String(input.limit));
-    url.searchParams.set('offset', '0');
     const fetchImplementation = this.options.fetchImplementation ?? fetch;
     let response: Response;
     try {
@@ -499,14 +581,114 @@ export class LegacyGamesPublicAdapter {
         ? (body as { readonly games?: unknown }).games
         : undefined;
     if (!Array.isArray(games)) throw new Error('LEGACY_GAMES_PUBLIC_RESPONSE_INVALID');
-    return games.flatMap((raw) => {
-      if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return [];
-      const mapped = mapLegacyGame(raw as RawLegacyGame);
-      return mapped && mapped.visibility === 'PUBLIC' && !mapped.cancelled
-        ? [anonymizeSnapshot(mapped)]
-        : [];
-    });
+    const record = body as { readonly total?: unknown; readonly hasMore?: unknown };
+    const total =
+      typeof record.total === 'number' && Number.isInteger(record.total) && record.total >= 0
+        ? record.total
+        : undefined;
+    const hasMore = typeof record.hasMore === 'boolean' ? record.hasMore : undefined;
+    return {
+      snapshots: games.flatMap((raw) => {
+        if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return [];
+        const mapped = mapLegacyGame(raw as RawLegacyGame, viewerPhoneE164);
+        return mapped ? [mapped] : [];
+      }),
+      rawCount: games.length,
+      ...(total === undefined ? {} : { total }),
+      ...(hasMore === undefined ? {} : { hasMore }),
+    };
+  }
+
+  private async readMapped(url: URL): Promise<readonly LegacyGameSourceSnapshot[]> {
+    return (await this.readMappedPage(url)).snapshots;
+  }
+
+  private async readMappedAvailable(limit: number): Promise<readonly LegacyGameSourceSnapshot[]> {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 500) {
+      throw new Error('LEGACY_GAMES_LIMIT_INVALID');
+    }
+    const baseUrl = new URL(this.options.baseUrl ?? 'https://padlhub.su');
+    if (baseUrl.protocol !== 'https:' && baseUrl.hostname !== 'localhost') {
+      throw new Error('LEGACY_GAMES_PUBLIC_BASE_URL_INVALID');
+    }
+    const url = new URL('/lk/games', baseUrl);
+    url.searchParams.set('public', 'true');
+    url.searchParams.set('available', 'true');
+    url.searchParams.set('limit', String(limit));
+    url.searchParams.set('offset', '0');
+    return (await this.readMapped(url)).filter(
+      (snapshot) => snapshot.visibility === 'PUBLIC' && !snapshot.cancelled,
+    );
+  }
+
+  public async readAvailable(input: {
+    readonly limit: number;
+  }): Promise<readonly LegacyGameSourceSnapshot[]> {
+    return (await this.readMappedAvailable(input.limit)).map(sanitizeSnapshot);
+  }
+
+  /**
+   * Local-only counterpart of the Mongo bridge. Viva first proves the exercise UUID for the
+   * authenticated viewer; the server reads that viewer's CUP history and keeps only the matching
+   * historical/private games. Raw identifiers and the lookup phone never cross the API boundary or
+   * enter local business tables.
+   */
+  public async readByVivaExerciseIds(input: {
+    readonly exerciseExternalIds: readonly string[];
+    readonly limit: number;
+    readonly viewerPhoneE164?: string;
+  }): Promise<readonly LegacyGameSourceSnapshot[]> {
+    const exerciseExternalIds = [...new Set(input.exerciseExternalIds.map((id) => id.trim()))]
+      .filter((id) => uuidValue(id))
+      .slice(0, 100);
+    if (exerciseExternalIds.length === 0) return [];
+    if (!Number.isInteger(input.limit) || input.limit < 1 || input.limit > 100) {
+      throw new Error('LEGACY_GAMES_LIMIT_INVALID');
+    }
+    const requested = new Set(exerciseExternalIds);
+    const phone = input.viewerPhoneE164?.replace(/\D/g, '');
+    if (phone && /^\d{10,15}$/.test(phone)) {
+      const baseUrl = new URL(this.options.baseUrl ?? 'https://padlhub.su');
+      if (baseUrl.protocol !== 'https:' && baseUrl.hostname !== 'localhost') {
+        throw new Error('LEGACY_GAMES_PUBLIC_BASE_URL_INVALID');
+      }
+      const matches: LegacyGameSourceSnapshot[] = [];
+      const pageSize = 500;
+      for (let pageIndex = 0; pageIndex < 20 && matches.length < input.limit; pageIndex += 1) {
+        const offset = pageIndex * pageSize;
+        const url = new URL('/lk/games/by-phone', baseUrl);
+        url.searchParams.set('phone', phone);
+        url.searchParams.set('includePast', 'true');
+        url.searchParams.set('limit', String(pageSize));
+        url.searchParams.set('offset', String(offset));
+        const page = await this.readMappedPage(url, input.viewerPhoneE164);
+        matches.push(
+          ...page.snapshots.filter(
+            (snapshot) =>
+              snapshot.vivaExerciseExternalId !== null &&
+              requested.has(snapshot.vivaExerciseExternalId),
+          ),
+        );
+        const hasMore =
+          page.hasMore ??
+          (page.total === undefined
+            ? page.rawCount === pageSize
+            : offset + page.rawCount < page.total);
+        if (!hasMore) break;
+      }
+      return matches.slice(0, input.limit).map(sanitizeSnapshot);
+    } else {
+      // Home has no reason to pass the viewer phone. Its upcoming bridge stays on the bounded
+      // public-available projection and still filters by the Viva-proven exercise IDs in memory.
+      const candidates = await this.readMappedAvailable(500);
+      const matches = candidates.filter(
+        (snapshot) =>
+          snapshot.vivaExerciseExternalId !== null &&
+          requested.has(snapshot.vivaExerciseExternalId),
+      );
+      return matches.slice(0, input.limit).map(sanitizeSnapshot);
+    }
   }
 }
 
-export const testing = { mapLegacyGame, anonymizeSnapshot };
+export const testing = { mapLegacyGame, sanitizeSnapshot };

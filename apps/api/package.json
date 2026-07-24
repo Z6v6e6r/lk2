@@ -10,6 +10,8 @@
     "test": "vitest run src"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "3.1088.0",
+    "@aws-sdk/s3-request-presigner": "3.1088.0",
     "@fastify/cookie": "11.1.1",
     "@fastify/cors": "11.3.0",
     "@fastify/helmet": "13.1.0",
@@ -19,13 +21,17 @@
     "@phub/config": "0.1.0",
     "@phub/database": "0.1.0",
     "@phub/domain": "0.1.0",
+    "@phub/gift-certificates": "0.1.0",
     "@phub/home-projection": "0.1.0",
+    "@phub/games": "0.1.0",
+    "@phub/legacy-games-adapter": "0.1.0",
     "@phub/locations": "0.1.0",
     "@phub/observability": "0.1.0",
     "@phub/viva-adapter": "0.1.0",
     "fastify": "5.10.0",
     "ioredis": "5.11.1",
     "jose": "6.2.3",
-    "pg": "8.22.0"
+    "pg": "8.22.0",
+    "sharp": "0.35.3"
   }
 }

@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@phub/communities": "0.1.0",
+    "@phub/domain": "0.1.0",
     "zod": "4.4.3"
   }
 }

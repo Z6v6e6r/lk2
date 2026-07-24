@@ -7,6 +7,7 @@ import {
   type GameKind,
   type GameLifecycleState,
   type GamePlayerLevel,
+  type GameResultSetInput,
   type GameVisibility,
 } from '@phub/games';
 import type { Pool, PoolClient, QueryResultRow } from 'pg';
@@ -231,6 +232,7 @@ interface RecommendationProjectionRow extends ProjectionRow {
 interface ProjectionSourceGameRow extends GameRow {
   readonly station_name: string;
   readonly station_short_address: string | null;
+  readonly court_name: string | null;
 }
 
 interface ProjectionParticipantRow extends QueryResultRow {
@@ -238,6 +240,7 @@ interface ProjectionParticipantRow extends QueryResultRow {
   readonly display_name: string;
   readonly photo_url: string | null;
   readonly level_label: GamePlayerLevel | null;
+  readonly level_value: number | string | null;
   readonly role: 'ORGANIZER' | 'PLAYER';
   readonly payment_state: 'NOT_REQUIRED' | 'PAID' | 'REFUND_PENDING' | 'REFUNDED';
 }
@@ -255,8 +258,12 @@ interface ProjectionWaitlistRow extends QueryResultRow {
 }
 
 interface ProjectionResultRow extends QueryResultRow {
+  readonly id: string;
   readonly submitted_by_user_id: string;
+  readonly submitted_at: Date | string;
+  readonly confirmation_quorum: number;
   readonly score_payload: unknown;
+  readonly roster_snapshot: unknown;
 }
 
 interface ProjectionReviewRow extends QueryResultRow {
@@ -348,6 +355,15 @@ function mapProjection(row: ProjectionRow): StoredGameCardProjection {
 function scoreSets(value: unknown): unknown {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
   return (value as Record<string, unknown>).sets;
+}
+
+function resultRoster(value: unknown): readonly string[] {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return [];
+  const participantUserIds = (value as Record<string, unknown>).participantUserIds;
+  return Array.isArray(participantUserIds) &&
+    participantUserIds.every((item) => typeof item === 'string')
+    ? participantUserIds
+    : [];
 }
 
 function storedCreateResult(value: unknown): StoredCreateAppliedResult | undefined {
@@ -828,7 +844,8 @@ export function createGameRepository(pool: Pool): GameRepository {
         const participants = await client.query<ProjectionParticipantRow>(
           `select p.user_id,
                     coalesce(nullif(btrim(summary.display_name), ''), 'Игрок') as display_name,
-                    summary.photo_url, summary.level_label, p.role, p.payment_state
+                    summary.photo_url, summary.level_label, summary.level_value,
+                    p.role, p.payment_state
                from games.participations p
                left join profile.user_summaries summary
                  on summary.tenant_id = p.tenant_id and summary.user_id = p.user_id
@@ -862,10 +879,11 @@ export function createGameRepository(pool: Pool): GameRepository {
           } else {
             const submission = await queryOne<ProjectionResultRow>(
               client,
-              `select submitted_by_user_id, score_payload
+              `select id, submitted_by_user_id, submitted_at, confirmation_quorum,
+                      score_payload, roster_snapshot
                  from games.result_submissions
                 where tenant_id = $1 and game_id = $2
-                order by submitted_at desc, id desc
+                order by revision desc, id desc
                 limit 1`,
               [input.tenantId, input.gameId],
             );
@@ -877,7 +895,7 @@ export function createGameRepository(pool: Pool): GameRepository {
                   and submission_id = (
                     select id from games.result_submissions
                      where tenant_id = $1 and game_id = $2
-                     order by submitted_at desc, id desc limit 1
+                     order by revision desc, id desc limit 1
                   )
                 order by reviewer_user_id`,
               [input.tenantId, input.gameId],
@@ -886,12 +904,17 @@ export function createGameRepository(pool: Pool): GameRepository {
             if (!Array.isArray(sets)) return finish('dependency_missing');
             result = {
               state: game.resultState,
+              submissionId: submission.id,
               submittedByUserId: submission.submitted_by_user_id,
-              requiredConfirmationUserIds: reviews.rows.map((row) => row.reviewer_user_id),
+              submittedAt: timestamp(submission.submitted_at),
+              requiredConfirmationUserIds: resultRoster(submission.roster_snapshot).filter(
+                (userId) => userId !== submission.submitted_by_user_id,
+              ),
               confirmedByUserIds: reviews.rows
                 .filter((row) => row.decision === 'CONFIRMED')
                 .map((row) => row.reviewer_user_id),
-              sets: sets as { readonly teamA: number; readonly teamB: number }[],
+              confirmationQuorum: submission.confirmation_quorum,
+              sets: sets as GameResultSetInput[],
             };
           }
         }
@@ -913,6 +936,12 @@ export function createGameRepository(pool: Pool): GameRepository {
             name: source.station_name,
             shortAddress: source.station_short_address,
           },
+          court: game.courtId
+            ? {
+                id: game.courtId,
+                name: source.court_name,
+              }
+            : null,
           levelRange:
             game.levelFrom === null && game.levelTo === null
               ? null
@@ -923,6 +952,7 @@ export function createGameRepository(pool: Pool): GameRepository {
             displayName: participant.display_name,
             avatarUrl: participant.photo_url,
             level: participant.level_label,
+            levelValue: participant.level_value === null ? null : Number(participant.level_value),
             role: participant.role,
             paymentState: participant.payment_state,
           })),

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { GameCard, type GameCardAction, type GameCardModel } from './GameCard.js';
+import { GameDetailView, type GameDetailTab } from './GameDetailView.js';
 import { MainBottomNavigation } from './HomeDashboardPage.js';
 import type {
   AuthGateway,
@@ -9,7 +10,7 @@ import type {
   PublicGameFilters,
 } from './auth-gateway.js';
 
-type GamesTab = 'DISCOVER' | 'UPCOMING' | 'HISTORY';
+type GamesTab = 'DISCOVER' | 'UPCOMING';
 type GameKindFilter = 'ALL' | 'FRIENDLY' | 'RATING';
 
 const weekdayFormatter = new Intl.DateTimeFormat('ru-RU', { weekday: 'short' });
@@ -42,11 +43,21 @@ function errorMessage(error: unknown): string {
         return 'Состав изменился. Проверьте актуальные места и повторите.';
       case 'GAME_NOT_FOUND':
         return 'Игра больше недоступна.';
+      case 'GAME_RESULT_INVALID_ROSTER':
+        return 'Состав результата не совпадает с участниками игры.';
+      case 'GAME_RESULT_REVIEW_FORBIDDEN':
+        return 'Автор результата не может подтвердить его сам.';
+      case 'GAME_RESULT_STATE_CONFLICT':
+        return 'Результат уже изменился. Обновили карточку игры.';
       default:
         break;
     }
   }
   return 'Не удалось выполнить действие. Проверьте связь и повторите.';
+}
+
+function initialDetailTab(game: ViewerGameCard): GameDetailTab {
+  return Date.parse(game.endsAt) <= Date.now() ? 'RESULT' : 'GAME';
 }
 
 export interface GamesPageProps {
@@ -57,7 +68,7 @@ export interface GamesPageProps {
 export function GamesPage({ gateway, gameId }: GamesPageProps): React.JSX.Element {
   const [tab, setTab] = useState<GamesTab>('DISCOVER');
   const [kind, setKind] = useState<GameKindFilter>('ALL');
-  const [selectedDate, setSelectedDate] = useState<string | null>(null);
+  const [selectedDate, setSelectedDate] = useState<string | null>(() => dateKey(new Date()));
   const [includeFull, setIncludeFull] = useState(true);
   const [games, setGames] = useState<readonly GameCardModel[]>([]);
   const [detail, setDetail] = useState<ViewerGameCard | null>(null);
@@ -67,12 +78,13 @@ export function GamesPage({ gateway, gameId }: GamesPageProps): React.JSX.Elemen
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [detailTab, setDetailTab] = useState<GameDetailTab>('GAME');
   const [reloadToken, setReloadToken] = useState(0);
   const pendingViewerGame = useRef<ViewerGameCard | null>(null);
 
   const days = useMemo(
     () =>
-      Array.from({ length: 7 }, (_, index) => {
+      Array.from({ length: 15 }, (_, index) => {
         const date = new Date();
         date.setHours(0, 0, 0, 0);
         date.setDate(date.getDate() + index);
@@ -93,6 +105,7 @@ export function GamesPage({ gateway, gameId }: GamesPageProps): React.JSX.Elemen
         (game) => {
           if (!active) return;
           setDetail(game);
+          setDetailTab(initialDetailTab(game));
           setLoading(false);
         },
         (cause: unknown) => {
@@ -165,6 +178,52 @@ export function GamesPage({ gateway, gameId }: GamesPageProps): React.JSX.Elemen
   }
 
   async function handleAction(action: GameCardAction, game: GameCardModel): Promise<void> {
+    if (
+      ['SUBMIT_RESULT', 'CONFIRM_RESULT', 'DISPUTE_RESULT', 'VIEW_RESULT', 'OPEN_DISPUTE'].includes(
+        action,
+      )
+    ) {
+      if (!gameId) {
+        window.location.assign(`/games/${encodeURIComponent(game.id)}`);
+        return;
+      }
+      if (['SUBMIT_RESULT', 'VIEW_RESULT', 'OPEN_DISPUTE'].includes(action)) {
+        setDetailTab('RESULT');
+        return;
+      }
+      if (busyGameId || !('resultSummary' in game)) return;
+      const submissionId = game.resultSummary?.submissionId;
+      if (!submissionId) {
+        setError('Не удалось определить предложение результата. Обновите карточку.');
+        return;
+      }
+      if (action === 'DISPUTE_RESULT' && !window.confirm('Оспорить этот результат?')) return;
+      setBusyGameId(game.id);
+      setError(null);
+      setNotice(null);
+      try {
+        const result =
+          action === 'CONFIRM_RESULT'
+            ? await gateway.confirmGameResult(game.id, submissionId)
+            : await gateway.disputeGameResult(game.id, submissionId, { reasonCode: 'OTHER' });
+        for (let attempt = 0; attempt < 8; attempt += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 250));
+          const refreshed = await gateway.getGame(game.id);
+          setDetail(refreshed);
+          if (refreshed.revision >= (result.operation.aggregateRevision ?? 0)) break;
+        }
+        setNotice(
+          action === 'CONFIRM_RESULT'
+            ? 'Результат согласован и сохранён в истории игроков.'
+            : 'Результат оспорен. Теперь можно отправить исправленный вариант.',
+        );
+      } catch (cause) {
+        setError(errorMessage(cause));
+      } finally {
+        setBusyGameId(null);
+      }
+      return;
+    }
     if (!['JOIN', 'JOIN_WAITLIST', 'LEAVE_WAITLIST', 'LEAVE'].includes(action) || busyGameId)
       return;
     setBusyGameId(game.id);
@@ -238,16 +297,39 @@ export function GamesPage({ gateway, gameId }: GamesPageProps): React.JSX.Elemen
     }
   }
 
+  async function submitResult(
+    input: Parameters<AuthGateway['submitGameResult']>[1],
+  ): Promise<void> {
+    if (!detail || busyGameId) return;
+    setBusyGameId(detail.id);
+    setError(null);
+    setNotice(null);
+    try {
+      const result = await gateway.submitGameResult(detail.id, input);
+      for (let attempt = 0; attempt < 8; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        const refreshed = await gateway.getGame(detail.id);
+        setDetail(refreshed);
+        if (refreshed.revision >= (result.operation.aggregateRevision ?? 0)) break;
+      }
+      setNotice('Результат отправлен другим участникам на согласование.');
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      setBusyGameId(null);
+    }
+  }
+
   if (gameId) {
     return (
       <main className="games-page games-page--detail">
         <header className="games-header">
           <a className="games-back" href="/games" aria-label="Назад к играм">
-            ←
+            <span aria-hidden="true">←</span>
+            Назад
           </a>
           <div>
-            <span>ПаделХАБ</span>
-            <h1>Игра</h1>
+            <h1>Детали матча</h1>
           </div>
         </header>
         {loading ? (
@@ -266,40 +348,14 @@ export function GamesPage({ gateway, gameId }: GamesPageProps): React.JSX.Elemen
           </p>
         ) : null}
         {detail ? (
-          <section className="game-detail" aria-label="Карточка игры">
-            <GameCard
-              game={detail}
-              busy={busyGameId === detail.id}
-              onAction={(action, game) => void handleAction(action, game)}
-              unsupportedActionBehavior="DISABLED"
-            />
-            <div className="game-detail__roster">
-              <div>
-                <span>Состав</span>
-                <strong>
-                  {detail.capacity.occupied}/{detail.capacity.total}
-                </strong>
-              </div>
-              {detail.participants.map((participant) => (
-                <a href={`/profile/${participant.userId}`} key={participant.userId}>
-                  <span>{participant.displayName.slice(0, 1).toUpperCase()}</span>
-                  <strong>{participant.displayName}</strong>
-                  <small>
-                    {participant.role === 'ORGANIZER'
-                      ? 'Организатор'
-                      : (participant.level ?? 'Игрок')}
-                  </small>
-                </a>
-              ))}
-              {Array.from({ length: detail.capacity.open }, (_, index) => (
-                <div className="game-detail__open-seat" key={`seat-${index}`}>
-                  <span>＋</span>
-                  <strong>Свободное место</strong>
-                  <small>Можно присоединиться</small>
-                </div>
-              ))}
-            </div>
-          </section>
+          <GameDetailView
+            activeTab={detailTab}
+            busy={busyGameId === detail.id}
+            game={detail}
+            onAction={(action) => void handleAction(action, detail)}
+            onSubmit={submitResult}
+            onTabChange={setDetailTab}
+          />
         ) : null}
         <MainBottomNavigation active="games" gamesDestination="games" />
       </main>
@@ -314,7 +370,6 @@ export function GamesPage({ gateway, gameId }: GamesPageProps): React.JSX.Elemen
         </a>
         <div>
           <span>Найти партнёров и корт</span>
-          <h1>Игры</h1>
         </div>
         <span className="games-header__spacer" aria-hidden="true" />
       </header>
@@ -323,8 +378,7 @@ export function GamesPage({ gateway, gameId }: GamesPageProps): React.JSX.Elemen
         {(
           [
             ['DISCOVER', 'Найти игру'],
-            ['UPCOMING', 'Мои игры'],
-            ['HISTORY', 'История'],
+            ['UPCOMING', 'Для меня'],
           ] as const
         ).map(([value, label]) => (
           <button
@@ -351,7 +405,7 @@ export function GamesPage({ gateway, gameId }: GamesPageProps): React.JSX.Elemen
             <span>Выберите станцию, время и откройте набор игроков</span>
           </a>
           <section className="games-filters" aria-label="Фильтры поиска игр">
-            <div className="games-date-rail">
+            <div className="games-date-rail" aria-label="Выбор даты">
               <button
                 className={selectedDate === null ? 'is-active' : undefined}
                 type="button"

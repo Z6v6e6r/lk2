@@ -95,6 +95,20 @@ describe('location profile contract', () => {
     ).toBe(false);
   });
 
+  it('accepts the stable PadlHub media URL returned by the location upload command', () => {
+    expect(
+      locationProfileInputSchema.safeParse({
+        ...input,
+        gallery: [
+          {
+            ...input.gallery[0],
+            url: '/public/api/v1/local-padel/location-media/11111111-1111-4111-8111-111111111111',
+          },
+        ],
+      }).success,
+    ).toBe(true);
+  });
+
   it('keeps an overnight interval open after midnight in the location timezone', () => {
     const overnight: LocationProfileInput = {
       ...input,

@@ -32,5 +32,7 @@ community-owned aggregates and may later be projected into the read card.
   storage, but it cannot become a client-visible primary identifier or dual-write mechanism.
 - Home changes fan out per existing user. Large tenants may later replace direct fan-out with a
   shared tenant component plus snapshot composition, while preserving one version per response.
-- The initial URL-based gallery is intentionally narrower than file upload and must be replaced by
-  a storage-backed media command before accepting operator binaries.
+- The gallery accepts existing HTTPS URLs and storage-backed media URLs. CUP file uploads are
+  decoded and re-encoded to bounded WebP by the API, stored under a tenant-scoped S3 object key,
+  then delivered through a stable PadlHub public URL that redirects to a short-lived S3 read URL.
+  Storage credentials and raw object keys remain server-side.

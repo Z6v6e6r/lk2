@@ -2,15 +2,7 @@ import type { ConfirmChannel } from 'amqplib';
 import type { Logger } from 'pino';
 import type { Pool } from 'pg';
 
-interface OutboxRow {
-  readonly id: string;
-  readonly event_type: string;
-  readonly aggregate_id: string;
-  readonly tenant_id: string;
-  readonly correlation_id: string;
-  readonly occurred_at: Date;
-  readonly payload: Record<string, unknown>;
-}
+import { publishOutboxRows, type OutboxRow } from './outbox-event-publisher.js';
 
 export async function publishOutboxBatch(options: {
   readonly pool: Pool;
@@ -28,37 +20,14 @@ export async function publishOutboxBatch(options: {
          from audit.outbox_events
         where published_at is null
           and tenant_id = $1
-        order by occurred_at
+        order by occurred_at, id
         for update skip locked
         limit $2`,
       [options.tenantId, options.batchSize ?? 50],
     );
 
-    for (const row of result.rows) {
-      const body = Buffer.from(
-        JSON.stringify({
-          id: row.id,
-          type: row.event_type,
-          aggregateId: row.aggregate_id,
-          tenantId: row.tenant_id,
-          occurredAt: row.occurred_at.toISOString(),
-          correlationId: row.correlation_id,
-          payload: row.payload,
-        }),
-      );
-      options.channel.publish('phub.events', row.event_type, body, {
-        persistent: true,
-        contentType: 'application/json',
-        contentEncoding: 'utf-8',
-        messageId: row.id,
-        correlationId: row.correlation_id,
-        timestamp: row.occurred_at.getTime(),
-        headers: { tenantId: row.tenant_id },
-      });
-    }
-
     if (result.rowCount && result.rowCount > 0) {
-      await options.channel.waitForConfirms();
+      await publishOutboxRows({ channel: options.channel, rows: result.rows });
       await client.query(
         'update audit.outbox_events set published_at = now() where id = any($1::uuid[])',
         [result.rows.map((row) => row.id)],

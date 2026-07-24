@@ -122,6 +122,35 @@ describe('admin access token audience', () => {
     expect(decodeJwt(clientSession.accessToken).permissions).toEqual(['profile.read']);
   });
 
+  it('allows a gift-catalog operator into the admin audience without leaking catalog grants', async () => {
+    const giftCatalogAccess = {
+      roles: ['client', 'admin'],
+      permissions: [
+        'profile.read',
+        'gift_certificates.catalog.read',
+        'gift_certificates.catalog.manage',
+        'gift_certificates.catalog.publish',
+      ],
+    };
+    const adminSession = await service(giftCatalogAccess).refreshSession(
+      'local-padel',
+      'existing-refresh-token',
+      'gift-catalog-admin-auth-correlation',
+      'gift-catalog-admin-auth-idempotency-0001',
+      'admin',
+    );
+    expect(decodeJwt(adminSession.accessToken).permissions).toEqual(giftCatalogAccess.permissions);
+
+    const clientSession = await service(giftCatalogAccess).refreshSession(
+      'local-padel',
+      'existing-refresh-token',
+      'gift-catalog-client-auth-correlation',
+      'gift-catalog-client-auth-idempotency-0001',
+      'client',
+    );
+    expect(decodeJwt(clientSession.accessToken).permissions).toEqual(['profile.read']);
+  });
+
   it('rejects admin audience issuance without the explicit grant', async () => {
     await expect(
       service({ roles: ['client'], permissions: ['profile.read'] }).refreshSession(

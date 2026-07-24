@@ -11,13 +11,21 @@ import type {
   ClientRoutingPlanRepository,
   AdminNotificationRepository,
   BookingPreferencesRepository,
+  ActivityHistoryRepository,
   HomeDashboardProjectionRepository,
+  GameResultRepository,
   GameRosterRepository,
   GameRepository,
+  GiftCertificateCatalogRepository,
+  GiftCertificateIssuanceRepository,
+  GiftCertificateMediaRepository,
+  GiftCertificateSaleRepository,
+  LocationMediaRepository,
   LocationRepository,
   NotificationEndpointRepository,
   NotificationInboxRepository,
   ProfilePrivacyRepository,
+  ProfileSummaryRepository,
 } from '@phub/database';
 import { isValidIdempotencyKey, type ClientPlatform } from '@phub/domain';
 import type { NotificationEndpointCipher } from '@phub/notifications';
@@ -30,12 +38,23 @@ import type { Pool } from 'pg';
 import { registerAuthRoutes } from './auth/auth-routes.js';
 import { registerAdminNotificationRoutes } from './admin/notification-admin-routes.js';
 import { registerLocationAdminRoutes } from './admin/location-admin-routes.js';
+import { registerGiftCertificateAdminRoutes } from './admin/gift-certificate-admin-routes.js';
 import type { AuthService } from './auth/auth-service.js';
 import { registerBookingPreferenceRoutes } from './bookings/booking-preference-routes.js';
 import { registerBookingRecommendationRoutes } from './bookings/booking-recommendation-routes.js';
+import {
+  registerActivityHistoryRoutes,
+  type ActivityHistoryRefreshService,
+} from './bookings/activity-history-routes.js';
 import { registerCommunityRoutes } from './communities/community-routes.js';
 import { registerGameRoutes } from './games/game-routes.js';
+import { registerGameResultRoutes } from './games/game-result-routes.js';
 import { registerGameReadRoutes } from './games/game-read-routes.js';
+import { registerGiftCertificateRoutes } from './gift-certificates/gift-certificate-routes.js';
+import type { GiftCertificateArtifactReadStore } from './gift-certificates/gift-certificate-artifact-store.js';
+import { registerGiftCertificateMediaRoutes } from './gift-certificates/gift-certificate-media-routes.js';
+import type { GiftCertificateMediaStore } from './gift-certificates/gift-certificate-media-store.js';
+import { registerGiftCertificateSaleRoutes } from './gift-certificates/gift-certificate-sale-routes.js';
 import { buildMockHomeDashboard } from './home/home-dashboard.js';
 import {
   homeDashboardSchema,
@@ -44,9 +63,18 @@ import {
 } from './home/home-dashboard-schema.js';
 import { sendApiError } from './http-errors.js';
 import { registerLocationRoutes } from './locations/location-routes.js';
+import { registerLocationMediaRoutes } from './locations/location-media-routes.js';
+import type { LocationMediaStore } from './locations/location-media-store.js';
 import { registerNotificationRoutes } from './notifications/notification-routes.js';
 import { registerWebPushRoutes } from './notifications/web-push-routes.js';
 import { registerProfilePrivacyRoutes } from './profile/profile-privacy-routes.js';
+import { registerProfilePhotoMediaRoutes } from './profile/profile-photo-media-routes.js';
+import type { ProfilePhotoMediaStore } from './profile/profile-photo-media-store.js';
+import {
+  homeProfilePhotoUserIds,
+  stabilizeHomeProfilePhotos,
+  stableProfilePhotoUrl,
+} from './profile/profile-photo-url.js';
 import { buildPlayerProfileView } from './profile/profile-view.js';
 import { buildClientRoutingPlan, canUseDirectViva } from './routing/client-routing-plan.js';
 
@@ -61,6 +89,33 @@ interface PadlHubClaims extends JWTPayload {
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const CORRELATION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/;
 const TENANT_KEY_PATTERN = /^[a-z0-9][a-z0-9-]{1,62}$/;
+
+function profileLevel(label: string | null): {
+  readonly label: string;
+  readonly value: number;
+  readonly assessmentRequired: boolean;
+} {
+  const values: Record<string, number> = {
+    D: 0,
+    'D+': 2.5,
+    C: 3,
+    'C+': 3.5,
+    B: 4.5,
+    'B+': 5,
+    A: 6,
+  };
+  const value = label ? values[label] : undefined;
+  if (!label || value === undefined) return { label: 'D', value: 0, assessmentRequired: true };
+  return { label, value, assessmentRequired: false };
+}
+
+function profileNameParts(displayName: string): {
+  readonly firstName: string;
+  readonly lastName: string | null;
+} {
+  const [firstName, ...lastName] = displayName.trim().split(/\s+/);
+  return { firstName: firstName || displayName, lastName: lastName.join(' ') || null };
+}
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -81,6 +136,7 @@ export interface BuildAppOptions {
     GameRosterRepository,
     'join' | 'joinWaitlist' | 'leave' | 'leaveWaitlist' | 'getOperation'
   >;
+  readonly gameResultRepository?: Pick<GameResultRepository, 'submit' | 'confirm' | 'dispute'>;
   readonly gameReadRepository?: Pick<
     GameRepository,
     'getCardProjection' | 'listPublicCardProjections' | 'listViewerCardProjections'
@@ -92,8 +148,25 @@ export interface BuildAppOptions {
   readonly notificationEndpointCipher?: NotificationEndpointCipher;
   readonly adminNotificationRepository?: AdminNotificationRepository;
   readonly locationRepository?: LocationRepository;
+  readonly locationMediaRepository?: LocationMediaRepository;
+  readonly giftCertificateCatalogRepository?: GiftCertificateCatalogRepository;
+  readonly giftCertificateMediaRepository?: GiftCertificateMediaRepository;
+  readonly giftCertificateSaleRepository?: GiftCertificateSaleRepository;
+  readonly giftCertificateIssuanceRepository?: GiftCertificateIssuanceRepository;
+  readonly giftCertificateMediaStore?: GiftCertificateMediaStore;
+  readonly locationMediaStore?: LocationMediaStore;
+  readonly giftCertificateArtifactStore?: GiftCertificateArtifactReadStore;
   readonly profilePrivacyRepository?: ProfilePrivacyRepository;
+  readonly profileSummaryRepository?: Pick<ProfileSummaryRepository, 'get'>;
+  readonly profilePhotoMediaRepository?: Pick<
+    ProfileSummaryRepository,
+    'getPhotoObjectKey' | 'getPhotoDeliveryIds'
+  > &
+    Partial<Pick<ProfileSummaryRepository, 'getDisplayNames' | 'getLevelValues'>>;
+  readonly profilePhotoMediaStore?: ProfilePhotoMediaStore;
   readonly bookingPreferencesRepository?: BookingPreferencesRepository;
+  readonly activityHistoryRepository?: ActivityHistoryRepository;
+  readonly activityHistoryRefresher?: ActivityHistoryRefreshService;
   readonly rateLimitRedis?: Redis;
 }
 
@@ -111,6 +184,21 @@ function upcomingBookingsResponse(dashboard: HomeDashboard) {
     staleAt: dashboard.snapshot.staleAt,
     items: dashboard.upcoming,
   };
+}
+
+async function normalizeProjectedHomeDashboard(input: {
+  readonly payload: unknown;
+  readonly tenantId: string;
+  readonly photoRepository?: Pick<ProfileSummaryRepository, 'getPhotoDeliveryIds'>;
+}): Promise<unknown> {
+  const normalized = normalizeHomeDashboardPayload(input.payload);
+  const deliveryIds = input.photoRepository
+    ? await input.photoRepository.getPhotoDeliveryIds(
+        input.tenantId,
+        homeProfilePhotoUserIds(normalized),
+      )
+    : new Map<string, string>();
+  return stabilizeHomeProfilePhotos(normalized, input.tenantId, deliveryIds);
 }
 
 function parseAllowedOrigins(value: string): ReadonlySet<string> {
@@ -361,6 +449,7 @@ export async function buildApp(options: BuildAppOptions) {
       else callback(null, false);
     },
     credentials: true,
+    methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: [
       'Authorization',
       'Content-Type',
@@ -437,8 +526,15 @@ export async function buildApp(options: BuildAppOptions) {
     authenticatedTenantHandlers: [authenticate, authorizeGamesPlayer, resolveTenant],
     commandHandlers: [authenticate, authorizeGamesPlayer, resolveTenant, requireIdempotencyKey],
   });
+  registerGameResultRoutes(app as unknown as FastifyInstance, {
+    ...(options.gameResultRepository ? { repository: options.gameResultRepository } : {}),
+    commandHandlers: [authenticate, authorizeGamesPlayer, resolveTenant, requireIdempotencyKey],
+  });
   registerGameReadRoutes(app as unknown as FastifyInstance, {
     ...(options.gameReadRepository ? { repository: options.gameReadRepository } : {}),
+    ...(options.profilePhotoMediaRepository
+      ? { photoRepository: options.profilePhotoMediaRepository }
+      : {}),
     publicTenantHandlers: [resolvePublicTenant],
     authenticatedTenantHandlers: [authenticate, authorizeGamesPlayer, resolveTenant],
   });
@@ -454,7 +550,18 @@ export async function buildApp(options: BuildAppOptions) {
     ...(options.bookingPreferencesRepository
       ? { preferencesRepository: options.bookingPreferencesRepository }
       : {}),
+    ...(options.profilePhotoMediaRepository
+      ? { photoRepository: options.profilePhotoMediaRepository }
+      : {}),
     authenticatedTenantHandlers: [authenticate, authorizeGamesPlayer, resolveTenant],
+  });
+  registerActivityHistoryRoutes(app as unknown as FastifyInstance, {
+    ...(options.activityHistoryRepository ? { repository: options.activityHistoryRepository } : {}),
+    ...(options.activityHistoryRefresher ? { refresher: options.activityHistoryRefresher } : {}),
+    ...(options.profilePhotoMediaRepository
+      ? { photoRepository: options.profilePhotoMediaRepository }
+      : {}),
+    authenticatedTenantHandlers: [authenticate, resolveTenant],
   });
   registerWebPushRoutes(app as unknown as FastifyInstance, {
     ...(options.notificationEndpointRepository
@@ -492,9 +599,76 @@ export async function buildApp(options: BuildAppOptions) {
     authenticatedTenantHandlers: [authenticateAdmin, resolveTenant],
     commandHandlers: [authenticateAdmin, resolveTenant, requireIdempotencyKey],
   });
+  registerGiftCertificateAdminRoutes(app as unknown as FastifyInstance, {
+    ...(options.giftCertificateCatalogRepository
+      ? { repository: options.giftCertificateCatalogRepository }
+      : {}),
+    authenticatedTenantHandlers: [authenticateAdmin, resolveTenant],
+    commandHandlers: [authenticateAdmin, resolveTenant, requireIdempotencyKey],
+  });
   registerLocationRoutes(app as unknown as FastifyInstance, {
     ...(options.locationRepository ? { repository: options.locationRepository } : {}),
     authenticatedTenantHandlers: [authenticate, resolveTenant],
+  });
+  registerGiftCertificateRoutes(app as unknown as FastifyInstance, {
+    ...(options.giftCertificateCatalogRepository
+      ? { repository: options.giftCertificateCatalogRepository }
+      : {}),
+    publicTenantHandlers: [resolvePublicTenant],
+    authenticatedTenantHandlers: [authenticate, resolveTenant],
+  });
+  registerLocationMediaRoutes(app as unknown as FastifyInstance, {
+    ...(options.locationMediaRepository ? { repository: options.locationMediaRepository } : {}),
+    ...(options.locationMediaStore ? { store: options.locationMediaStore } : {}),
+    enabled: options.config.LOCATION_MEDIA_ENABLED,
+    maxBytes: options.config.LOCATION_MEDIA_MAX_BYTES,
+    parserMaxBytes: Math.max(
+      options.config.LOCATION_MEDIA_MAX_BYTES,
+      options.config.GIFT_CERTIFICATE_MEDIA_MAX_BYTES,
+    ),
+    maxDimension: options.config.LOCATION_MEDIA_MAX_DIMENSION,
+    webpQuality: options.config.LOCATION_MEDIA_WEBP_QUALITY,
+    authenticatedTenantHandlers: [authenticateAdmin, resolveTenant],
+    commandHandlers: [authenticateAdmin, resolveTenant, requireIdempotencyKey],
+    publicTenantHandlers: [resolvePublicTenant],
+  });
+  registerProfilePhotoMediaRoutes(app as unknown as FastifyInstance, {
+    ...(options.profilePhotoMediaRepository
+      ? { repository: options.profilePhotoMediaRepository }
+      : {}),
+    ...(options.profilePhotoMediaStore ? { store: options.profilePhotoMediaStore } : {}),
+  });
+  registerGiftCertificateMediaRoutes(app as unknown as FastifyInstance, {
+    ...(options.giftCertificateMediaRepository
+      ? { repository: options.giftCertificateMediaRepository }
+      : {}),
+    ...(options.giftCertificateMediaStore ? { store: options.giftCertificateMediaStore } : {}),
+    enabled: options.config.GIFT_CERTIFICATE_MEDIA_ENABLED,
+    maxBytes: options.config.GIFT_CERTIFICATE_MEDIA_MAX_BYTES,
+    maxDimension: options.config.GIFT_CERTIFICATE_MEDIA_MAX_DIMENSION,
+    webpQuality: options.config.GIFT_CERTIFICATE_MEDIA_WEBP_QUALITY,
+    authenticatedTenantHandlers: [authenticateAdmin, resolveTenant],
+    commandHandlers: [authenticateAdmin, resolveTenant, requireIdempotencyKey],
+    publicTenantHandlers: [resolvePublicTenant],
+  });
+  registerGiftCertificateSaleRoutes(app as unknown as FastifyInstance, {
+    ...(options.giftCertificateSaleRepository
+      ? { repository: options.giftCertificateSaleRepository }
+      : {}),
+    ...(options.giftCertificateIssuanceRepository
+      ? { issuanceRepository: options.giftCertificateIssuanceRepository }
+      : {}),
+    ...(options.giftCertificateArtifactStore
+      ? { artifactStore: options.giftCertificateArtifactStore }
+      : {}),
+    artifactsEnabled: options.config.GIFT_CERTIFICATE_ISSUANCE_ENABLED,
+    sandboxEnabled: options.config.GIFT_CERTIFICATE_PAYMENT_MODE === 'sandbox',
+    purchaseSecret: options.config.JWT_REFRESH_SECRET,
+    secureCookies: options.config.AUTH_COOKIE_SECURE,
+    publicTenantHandlers: [resolvePublicTenant],
+    publicCommandHandlers: [resolvePublicTenant, requireIdempotencyKey],
+    authenticatedTenantHandlers: [authenticate, resolveTenant],
+    authenticatedCommandHandlers: [authenticate, resolveTenant, requireIdempotencyKey],
   });
   registerProfilePrivacyRoutes(app as unknown as FastifyInstance, {
     ...(options.profilePrivacyRepository ? { repository: options.profilePrivacyRepository } : {}),
@@ -605,7 +779,13 @@ export async function buildApp(options: BuildAppOptions) {
         );
       }
       const parsedDashboard = homeDashboardSchema.safeParse(
-        normalizeHomeDashboardPayload(projection.payload),
+        await normalizeProjectedHomeDashboard({
+          payload: projection.payload,
+          tenantId,
+          ...(options.profilePhotoMediaRepository
+            ? { photoRepository: options.profilePhotoMediaRepository }
+            : {}),
+        }),
       );
       if (
         !parsedDashboard.success ||
@@ -700,10 +880,49 @@ export async function buildApp(options: BuildAppOptions) {
 
       const projection = await options.homeDashboardRepository?.get(tenantId, targetUserId);
       if (!projection) {
+        const summary =
+          targetUserId === viewerUserId
+            ? undefined
+            : await options.profileSummaryRepository?.get(tenantId, targetUserId);
+        if (summary) {
+          const names = profileNameParts(summary.displayName);
+          const deliveryIds = options.profilePhotoMediaRepository
+            ? await options.profilePhotoMediaRepository.getPhotoDeliveryIds(tenantId, [
+                summary.userId,
+              ])
+            : new Map<string, string>();
+          reply.header('Cache-Control', 'private, max-age=15, stale-while-revalidate=45');
+          return buildPlayerProfileView({
+            profile: {
+              userId: summary.userId,
+              displayName: summary.displayName,
+              firstName: names.firstName,
+              lastName: names.lastName,
+              avatarUrl: stableProfilePhotoUrl({
+                tenantId,
+                userId: summary.userId,
+                currentUrl: summary.avatarUrl,
+                deliveryIds,
+              }) as string | null,
+              balanceMinor: 0,
+              currency: 'RUB',
+              level: profileLevel(summary.levelLabel),
+            },
+            viewerUserId,
+            permissions,
+            ...(privacyPolicy ? { policy: privacyPolicy } : {}),
+          });
+        }
         return sendApiError(request, reply, 404, 'PROFILE_NOT_FOUND', 'Профиль игрока не найден.');
       }
       const parsedDashboard = homeDashboardSchema.safeParse(
-        normalizeHomeDashboardPayload(projection.payload),
+        await normalizeProjectedHomeDashboard({
+          payload: projection.payload,
+          tenantId,
+          ...(options.profilePhotoMediaRepository
+            ? { photoRepository: options.profilePhotoMediaRepository }
+            : {}),
+        }),
       );
       if (
         !parsedDashboard.success ||
@@ -785,7 +1004,13 @@ export async function buildApp(options: BuildAppOptions) {
         );
       }
       const parsedDashboard = homeDashboardSchema.safeParse(
-        normalizeHomeDashboardPayload(projection.payload),
+        await normalizeProjectedHomeDashboard({
+          payload: projection.payload,
+          tenantId,
+          ...(options.profilePhotoMediaRepository
+            ? { photoRepository: options.profilePhotoMediaRepository }
+            : {}),
+        }),
       );
       if (
         !parsedDashboard.success ||
@@ -864,7 +1089,13 @@ export async function buildApp(options: BuildAppOptions) {
       }
 
       const parsedDashboard = homeDashboardSchema.safeParse(
-        normalizeHomeDashboardPayload(projection.payload),
+        await normalizeProjectedHomeDashboard({
+          payload: projection.payload,
+          tenantId,
+          ...(options.profilePhotoMediaRepository
+            ? { photoRepository: options.profilePhotoMediaRepository }
+            : {}),
+        }),
       );
       if (
         !parsedDashboard.success ||

@@ -1,9 +1,27 @@
 import { ApiClientError, PadlHubApiClient } from '@phub/api-sdk';
 import type { AuthenticatedSession, AuthChallenge } from '@phub/api-sdk';
-import type { LocationAdminView, LocationProfileInput } from '@phub/locations';
+import type {
+  GiftCertificateAdminCatalogState,
+  GiftCertificateCatalogInput,
+  GiftCertificateCatalogView,
+  GiftCertificateMediaAsset,
+} from '@phub/gift-certificates';
+import type { LocationAdminView, LocationMediaAsset, LocationProfileInput } from '@phub/locations';
 
+export type {
+  GiftCertificateAdminCatalogState,
+  GiftCertificateCatalogInput,
+  GiftCertificateCatalogView,
+} from '@phub/gift-certificates';
 export type { LocationAdminView, LocationProfileInput } from '@phub/locations';
 export type AdminLocationCommandResult = LocationAdminView & { readonly replayed: boolean };
+export type AdminLocationMediaCommandResult = LocationMediaAsset & { readonly replayed: boolean };
+export type AdminGiftCertificateCatalogCommandResult = GiftCertificateCatalogView & {
+  readonly replayed: boolean;
+};
+export type AdminGiftCertificateMediaCommandResult = GiftCertificateMediaAsset & {
+  readonly replayed: boolean;
+};
 
 export type AdminNotificationChannel = 'IN_APP' | 'WEB_PUSH' | 'IOS_PUSH' | 'ANDROID_PUSH';
 
@@ -63,6 +81,18 @@ export interface NotificationAdminClient {
     expectedVersion: number,
     profile: LocationProfileInput,
   ): Promise<AdminLocationCommandResult>;
+  uploadLocationMedia(file: File): Promise<AdminLocationMediaCommandResult>;
+  resolveMediaUrl(url: string): string;
+  getGiftCertificateCatalogState(): Promise<GiftCertificateAdminCatalogState>;
+  saveGiftCertificateCatalogDraft(
+    expectedRevision: number | null,
+    catalog: GiftCertificateCatalogInput,
+  ): Promise<AdminGiftCertificateCatalogCommandResult>;
+  publishGiftCertificateCatalogDraft(
+    catalogId: string,
+    expectedRevision: number,
+  ): Promise<AdminGiftCertificateCatalogCommandResult>;
+  uploadGiftCertificateMedia(file: File): Promise<AdminGiftCertificateMediaCommandResult>;
 }
 
 interface NotificationAdminClientOptions {
@@ -125,7 +155,7 @@ export function createNotificationAdminClient(
     headers.set('X-App-Version', options.appVersion);
     if (options.appBuild) headers.set('X-App-Build', options.appBuild);
     if (idempotencyKey) headers.set('Idempotency-Key', idempotencyKey);
-    if (init.body) headers.set('Content-Type', 'application/json');
+    if (init.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
     const accessToken = userClient.getAccessToken();
     if (accessToken) headers.set('Authorization', `Bearer ${accessToken}`);
 
@@ -193,6 +223,49 @@ export function createNotificationAdminClient(
       return adminRequest<AdminLocationCommandResult>(
         `/locations/${encodeURIComponent(locationId)}`,
         { method: 'PATCH', body: JSON.stringify({ expectedVersion, profile }) },
+        operationId(),
+      );
+    },
+    uploadLocationMedia(file) {
+      return adminRequest<AdminLocationMediaCommandResult>(
+        '/location-media',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': file.type },
+          body: file,
+        },
+        operationId(),
+      );
+    },
+    resolveMediaUrl(url) {
+      const baseUrl = options.baseUrl.replace(/\/$/, '');
+      return baseUrl ? new URL(url, `${baseUrl}/`).toString() : url;
+    },
+    getGiftCertificateCatalogState() {
+      return adminRequest<GiftCertificateAdminCatalogState>('/gift-certificate-catalog');
+    },
+    saveGiftCertificateCatalogDraft(expectedRevision, catalog) {
+      return adminRequest<AdminGiftCertificateCatalogCommandResult>(
+        '/gift-certificate-catalog/draft',
+        { method: 'PUT', body: JSON.stringify({ expectedRevision, catalog }) },
+        operationId(),
+      );
+    },
+    publishGiftCertificateCatalogDraft(catalogId, expectedRevision) {
+      return adminRequest<AdminGiftCertificateCatalogCommandResult>(
+        '/gift-certificate-catalog/draft/publish',
+        { method: 'POST', body: JSON.stringify({ catalogId, expectedRevision }) },
+        operationId(),
+      );
+    },
+    uploadGiftCertificateMedia(file) {
+      return adminRequest<AdminGiftCertificateMediaCommandResult>(
+        '/gift-certificate-media',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': file.type },
+          body: file,
+        },
         operationId(),
       );
     },

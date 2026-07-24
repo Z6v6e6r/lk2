@@ -1,3 +1,4 @@
+import { PROFILE_PHOTO_DELIVERY_PATH_PATTERN } from '@phub/domain';
 import { z } from 'zod';
 
 export const GAME_LIFECYCLE_STATES = [
@@ -168,12 +169,87 @@ export function assertGameLifecycleTransition(
 const uuid = z.string().uuid();
 const dateTime = z.string().datetime({ offset: true });
 
+const resultTeamSchema = z.tuple([uuid, uuid]);
+
+export const gameResultSetInputSchema = z
+  .object({
+    setNumber: z.number().int().min(1).max(9),
+    teamAUserIds: resultTeamSchema,
+    teamBUserIds: resultTeamSchema,
+    teamA: z.number().int().min(0).max(99),
+    teamB: z.number().int().min(0).max(99),
+  })
+  .strict()
+  .superRefine((input, context) => {
+    const playerIds = [...input.teamAUserIds, ...input.teamBUserIds];
+    if (new Set(playerIds).size !== 4) {
+      context.addIssue({
+        code: 'custom',
+        path: ['teamAUserIds'],
+        message: 'A set must contain four different players',
+      });
+    }
+    if (input.teamA === input.teamB) {
+      context.addIssue({
+        code: 'custom',
+        path: ['teamB'],
+        message: 'A completed set cannot end in a draw',
+      });
+    }
+  });
+
+export const submitGameResultInputSchema = z
+  .object({
+    sets: z.array(gameResultSetInputSchema).min(1).max(9),
+  })
+  .strict()
+  .superRefine((input, context) => {
+    const firstRoster = [...input.sets[0]!.teamAUserIds, ...input.sets[0]!.teamBUserIds].sort();
+    input.sets.forEach((set, index) => {
+      if (set.setNumber !== index + 1) {
+        context.addIssue({
+          code: 'custom',
+          path: ['sets', index, 'setNumber'],
+          message: 'Set numbers must be contiguous and start at 1',
+        });
+      }
+      const roster = [...set.teamAUserIds, ...set.teamBUserIds].sort();
+      if (roster.some((userId, playerIndex) => userId !== firstRoster[playerIndex])) {
+        context.addIssue({
+          code: 'custom',
+          path: ['sets', index],
+          message: 'Every set must contain the same four game participants',
+        });
+      }
+    });
+  });
+
+export const disputeGameResultInputSchema = z
+  .object({
+    reasonCode: z.enum(['SCORE_INCORRECT', 'ROSTER_INCORRECT', 'GAME_NOT_PLAYED', 'OTHER']),
+    note: z.string().trim().min(1).max(500).optional(),
+  })
+  .strict();
+
+export type GameResultSetInput = z.infer<typeof gameResultSetInputSchema>;
+export type SubmitGameResultInput = z.infer<typeof submitGameResultInputSchema>;
+export type DisputeGameResultInput = z.infer<typeof disputeGameResultInputSchema>;
+const avatarUrl = z
+  .string()
+  .max(2_048)
+  .refine(
+    (value) =>
+      z.string().url().safeParse(value).success || PROFILE_PHOTO_DELIVERY_PATH_PATTERN.test(value),
+    'avatar URL must be absolute or use the PadlHub profile-photo delivery endpoint',
+  );
+
 const participantSchema = z
   .object({
     userId: uuid,
     displayName: z.string().trim().min(1).max(120),
-    avatarUrl: z.string().url().max(2_048).nullable().optional(),
+    avatarUrl: avatarUrl.nullable().optional(),
     level: z.enum(GAME_PLAYER_LEVELS).nullable().optional(),
+    levelValue: z.number().min(0).max(10).nullable().optional(),
     role: z.enum(['ORGANIZER', 'PLAYER']),
     paymentState: z
       .enum(['NOT_REQUIRED', 'PAID', 'REFUND_PENDING', 'REFUNDED'])
@@ -200,13 +276,19 @@ const waitlistEntrySchema = z
 const resultSchema = z
   .object({
     state: z.enum(GAME_RESULT_STATES),
+    submissionId: uuid.optional(),
     submittedByUserId: uuid.nullable().optional(),
+    submittedAt: dateTime.optional(),
     requiredConfirmationUserIds: z.array(uuid).max(4).default([]),
     confirmedByUserIds: z.array(uuid).max(4).default([]),
+    confirmationQuorum: z.number().int().min(1).max(3).optional(),
     sets: z
       .array(
         z
           .object({
+            setNumber: z.number().int().min(1).max(9).optional(),
+            teamAUserIds: resultTeamSchema.optional(),
+            teamBUserIds: resultTeamSchema.optional(),
             teamA: z.number().int().min(0).max(99),
             teamB: z.number().int().min(0).max(99),
           })
@@ -238,6 +320,14 @@ export const gameCardProjectionInputSchema = z
         shortAddress: z.string().trim().min(1).max(240).nullable().optional(),
       })
       .strict(),
+    court: z
+      .object({
+        id: uuid,
+        name: z.string().trim().min(1).max(120).nullable(),
+      })
+      .strict()
+      .nullable()
+      .default(null),
     levelRange: z
       .object({
         from: z.enum(GAME_PLAYER_LEVELS).nullable(),
@@ -380,24 +470,23 @@ export const gameCardProjectionInputSchema = z
       }
       if (
         result.state === 'PENDING_CONFIRMATION' &&
-        result.requiredConfirmationUserIds.length === 0
+        result.requiredConfirmationUserIds.length < (result.confirmationQuorum ?? 1)
       ) {
         context.addIssue({
           code: 'custom',
           path: ['result', 'requiredConfirmationUserIds'],
-          message: 'A pending result requires at least one reviewer',
+          message: 'A pending result requires enough eligible reviewers for its quorum',
         });
       }
       if (
         result.state === 'CONFIRMED' &&
-        result.requiredConfirmationUserIds.some(
-          (userId) => !result.confirmedByUserIds.includes(userId),
-        )
+        result.submissionId !== undefined &&
+        result.confirmedByUserIds.length < (result.confirmationQuorum ?? 1)
       ) {
         context.addIssue({
           code: 'custom',
           path: ['result', 'confirmedByUserIds'],
-          message: 'A confirmed result must include every required confirmation',
+          message: 'A confirmed result must satisfy its confirmation quorum',
         });
       }
     }
@@ -430,6 +519,8 @@ export interface GameCardProjectionContext {
   readonly now: string;
   readonly viewerUserId?: string;
   readonly startingSoonMinutes?: number;
+  /** How long a finished game remains open for the first result submission. */
+  readonly resultSubmissionWindowHours?: number;
 }
 
 export interface GameCapacityView {
@@ -445,6 +536,7 @@ export interface GameCardParticipantView {
   readonly displayName: string;
   readonly avatarUrl: string | null;
   readonly level: GamePlayerLevel | null;
+  readonly levelValue: number | null;
   readonly role: 'ORGANIZER' | 'PLAYER';
 }
 
@@ -452,12 +544,23 @@ export interface PublicGameCardParticipantView {
   readonly displayName: string;
   readonly avatarUrl: string | null;
   readonly level: GamePlayerLevel | null;
+  readonly levelValue: number | null;
   readonly role: 'ORGANIZER' | 'PLAYER';
 }
 
 export interface GameResultSummaryView {
   readonly state: GameResultState;
-  readonly sets?: readonly { readonly teamA: number; readonly teamB: number }[];
+  readonly submissionId?: string;
+  readonly submittedByUserId?: string;
+  readonly submittedAt?: string;
+  readonly confirmationQuorum?: number;
+  readonly sets?: readonly {
+    readonly setNumber?: number | undefined;
+    readonly teamAUserIds?: readonly [string, string] | undefined;
+    readonly teamBUserIds?: readonly [string, string] | undefined;
+    readonly teamA: number;
+    readonly teamB: number;
+  }[];
 }
 
 export interface GameCardView {
@@ -476,6 +579,10 @@ export interface GameCardView {
     readonly name: string;
     readonly shortAddress: string | null;
   };
+  readonly court: {
+    readonly id: string;
+    readonly name: string | null;
+  } | null;
   readonly levelRange: {
     readonly from: GamePlayerLevel | null;
     readonly to: GamePlayerLevel | null;
@@ -625,6 +732,17 @@ function resultStateOf(input: GameCardProjectionInput): GameResultState {
   );
 }
 
+function resultSubmissionWindowOpen(
+  game: GameCardProjectionInput,
+  now: string,
+  resultSubmissionWindowHours: number,
+): boolean {
+  return (
+    parseInstant(now, 'now') <
+    parseInstant(game.endsAt, 'endsAt') + resultSubmissionWindowHours * 60 * 60_000
+  );
+}
+
 function deriveDisplayState(input: {
   readonly game: GameCardProjectionInput;
   readonly now: string;
@@ -632,6 +750,7 @@ function deriveDisplayState(input: {
   readonly viewerPaymentState: GamePaymentState;
   readonly rosterState: GameRosterState;
   readonly startingSoonMinutes: number;
+  readonly resultSubmissionWindowHours: number;
 }): GameCardDisplayState {
   const { game } = input;
   if (game.lifecycleState === 'DRAFT' || game.lifecycleState === 'PROVISIONING') {
@@ -654,6 +773,7 @@ function deriveDisplayState(input: {
   if (game.lifecycleState === 'FINISHED') {
     if (
       resultState === 'AWAITING_SUBMISSION' &&
+      resultSubmissionWindowOpen(game, input.now, input.resultSubmissionWindowHours) &&
       (input.viewerRelation === 'ORGANIZER' || input.viewerRelation === 'PARTICIPANT')
     ) {
       return 'RESULT_REQUIRED';
@@ -687,6 +807,7 @@ function deriveAllowedActions(input: {
   readonly viewerRelation: GameViewerRelation;
   readonly viewerPaymentState: GamePaymentState;
   readonly rosterState: GameRosterState;
+  readonly resultSubmissionWindowHours: number;
 }): readonly GameAllowedAction[] {
   const actions = new Set<GameAllowedAction>(['OPEN_DETAILS']);
   const { game, viewerRelation } = input;
@@ -726,6 +847,7 @@ function deriveAllowedActions(input: {
   if (
     game.lifecycleState === 'FINISHED' &&
     resultState === 'AWAITING_SUBMISSION' &&
+    resultSubmissionWindowOpen(game, input.now, input.resultSubmissionWindowHours) &&
     (viewerRelation === 'ORGANIZER' || viewerRelation === 'PARTICIPANT')
   ) {
     actions.add('SUBMIT_RESULT');
@@ -769,6 +891,7 @@ export function projectGameCard(
   const input = parseProjectionInput(rawInput);
   const nowMs = parseInstant(context.now, 'now');
   const startingSoonMinutes = context.startingSoonMinutes ?? 180;
+  const resultSubmissionWindowHours = context.resultSubmissionWindowHours ?? 48;
   if (
     !Number.isInteger(startingSoonMinutes) ||
     startingSoonMinutes < 0 ||
@@ -777,6 +900,16 @@ export function projectGameCard(
     throw new GameDomainError(
       'GAME_SNAPSHOT_INVALID',
       'startingSoonMinutes must be an integer between 0 and 1440',
+    );
+  }
+  if (
+    !Number.isInteger(resultSubmissionWindowHours) ||
+    resultSubmissionWindowHours < 1 ||
+    resultSubmissionWindowHours > 168
+  ) {
+    throw new GameDomainError(
+      'GAME_SNAPSHOT_INVALID',
+      'resultSubmissionWindowHours must be an integer between 1 and 168',
     );
   }
 
@@ -792,6 +925,7 @@ export function projectGameCard(
     viewerPaymentState,
     rosterState,
     startingSoonMinutes,
+    resultSubmissionWindowHours,
   });
   const allowedActions = deriveAllowedActions({
     game: input,
@@ -800,6 +934,7 @@ export function projectGameCard(
     viewerRelation,
     viewerPaymentState,
     rosterState,
+    resultSubmissionWindowHours,
   });
 
   return {
@@ -818,6 +953,7 @@ export function projectGameCard(
       name: input.station.name,
       shortAddress: input.station.shortAddress ?? null,
     },
+    court: input.court,
     levelRange: input.levelRange ?? null,
     rosterState,
     capacity,
@@ -826,6 +962,7 @@ export function projectGameCard(
       displayName: participant.displayName,
       avatarUrl: participant.avatarUrl ?? null,
       level: participant.level ?? null,
+      levelValue: participant.levelValue ?? null,
       role: participant.role,
     })),
     priceSummary: input.priceSummary ?? null,
@@ -836,6 +973,14 @@ export function projectGameCard(
         ? null
         : {
             state: resultState,
+            ...(input.result?.submissionId ? { submissionId: input.result.submissionId } : {}),
+            ...(input.result?.submittedByUserId
+              ? { submittedByUserId: input.result.submittedByUserId }
+              : {}),
+            ...(input.result?.submittedAt ? { submittedAt: input.result.submittedAt } : {}),
+            ...(input.result?.confirmationQuorum
+              ? { confirmationQuorum: input.result.confirmationQuorum }
+              : {}),
             ...(input.result?.sets ? { sets: input.result.sets } : {}),
           },
     badges: deriveBadges(input, viewerRelation, viewerPaymentState),
@@ -869,12 +1014,24 @@ export function projectPublicGameCard(
   void privateResultSummary;
   return {
     ...publicCard,
+    displayState:
+      input.lifecycleState === 'CANCELLED'
+        ? 'CANCELLED'
+        : input.lifecycleState === 'FINISHED'
+          ? 'COMPLETED'
+          : input.lifecycleState === 'IN_PROGRESS'
+            ? 'IN_PROGRESS'
+            : publicCard.displayState,
     viewerRelation: 'ANONYMOUS',
     viewerPaymentState: 'NOT_REQUIRED',
+    allowedActions: publicCard.allowedActions.filter(
+      (action) => action === 'OPEN_DETAILS' || action === 'JOIN' || action === 'JOIN_WAITLIST',
+    ),
     participants: card.participants.map((participant) => ({
       displayName: participant.displayName,
       avatarUrl: participant.avatarUrl,
       level: participant.level,
+      levelValue: participant.levelValue,
       role: participant.role,
     })),
   };

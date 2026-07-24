@@ -15,6 +15,14 @@ The two reads intentionally serve different purposes:
 Web maps `/profile` to the signed-in user's UUID and `/profile/{userId}` to another player's UUID.
 The browser does not select a provider or request a wider DTO.
 
+`avatarUrl` is either null or the stable PadlHub path
+`/public/api/v1/media/profile-photos/{tenantId}/{deliveryId}`. The opaque delivery UUID is not the
+player UUID. The media handler resolves the current private
+object under tenant RLS and streams WebP bytes; temporary object-storage signatures never enter
+profile rows, Home snapshots or Games card projections.
+Home, Games and Activity History read boundaries also replace legacy participant-photo values with
+the current opaque delivery path in one batched tenant lookup while older projections are refreshed.
+
 The owner manages the independently versioned privacy aggregate through
 `GET /{tenantKey}/profile/privacy` and idempotent `PUT /{tenantKey}/profile/privacy`. It is
 `LOCAL_ONLY`; profile identity and rating can remain `VIVA_PRIMARY` without creating a dual write.

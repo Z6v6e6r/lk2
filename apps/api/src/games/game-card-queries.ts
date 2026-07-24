@@ -1,20 +1,77 @@
 import { createHash } from 'node:crypto';
 
-import type { GameRepository, StoredGameCardProjection } from '@phub/database';
+import type {
+  GameRepository,
+  ProfileSummaryRepository,
+  StoredGameCardProjection,
+} from '@phub/database';
 import {
   GAME_PLAYER_LEVELS,
   projectGameCard,
   projectPublicGameCard,
   type GameCardView,
+  type GameCardProjectionInput,
   type GameKind,
   type GamePlayerLevel,
   type PublicGameCardView,
 } from '@phub/games';
 
+import {
+  gameCardProfilePhotoUserIds,
+  stabilizeGameCardProfilePhotos,
+} from '../profile/profile-photo-url.js';
+
 type CardReadRepository = Pick<
   GameRepository,
   'getCardProjection' | 'listPublicCardProjections' | 'listViewerCardProjections'
 >;
+type CardProfileRepository = Pick<ProfileSummaryRepository, 'getPhotoDeliveryIds'> &
+  Partial<Pick<ProfileSummaryRepository, 'getDisplayNames' | 'getLevelValues'>>;
+
+interface CardProfileData {
+  readonly deliveryIds: ReadonlyMap<string, string>;
+  readonly displayNames: ReadonlyMap<string, string>;
+  readonly levelValues: ReadonlyMap<string, number>;
+}
+
+async function profileDataForProjections(input: {
+  readonly repository?: CardProfileRepository;
+  readonly tenantId: string;
+  readonly projections: readonly StoredGameCardProjection[];
+}): Promise<CardProfileData> {
+  if (!input.repository) {
+    return { deliveryIds: new Map(), displayNames: new Map(), levelValues: new Map() };
+  }
+  const userIds = input.projections.flatMap((projection) =>
+    gameCardProfilePhotoUserIds(projection.basePayload),
+  );
+  const [deliveryIds, displayNames, levelValues] = await Promise.all([
+    input.repository.getPhotoDeliveryIds(input.tenantId, userIds),
+    input.repository.getDisplayNames?.(input.tenantId, userIds) ?? Promise.resolve(new Map()),
+    input.repository.getLevelValues?.(input.tenantId, userIds) ?? Promise.resolve(new Map()),
+  ]);
+  return { deliveryIds, displayNames, levelValues };
+}
+
+function enrichGameCardProfiles(
+  projection: StoredGameCardProjection,
+  tenantId: string,
+  profileData: CardProfileData,
+): GameCardProjectionInput {
+  const payload = stabilizeGameCardProfilePhotos(
+    projection.basePayload,
+    tenantId,
+    profileData.deliveryIds,
+  );
+  return {
+    ...payload,
+    participants: payload.participants.map((participant) => ({
+      ...participant,
+      displayName: profileData.displayNames.get(participant.userId) ?? participant.displayName,
+      levelValue: profileData.levelValues.get(participant.userId) ?? participant.levelValue ?? null,
+    })),
+  };
+}
 
 export interface PublicGameFilters {
   readonly stationId?: string;
@@ -112,6 +169,7 @@ function cursorTuple(projection: StoredGameCardProjection, hash: string): Cursor
 
 export async function listPublicGameCards(input: {
   readonly repository: CardReadRepository;
+  readonly photoRepository?: CardProfileRepository;
   readonly tenantId: string;
   readonly now: string;
   readonly limit: number;
@@ -133,12 +191,20 @@ export async function listPublicGameCards(input: {
       limit: SCAN_PAGE_SIZE,
       ...(after ? { after: { startsAt: after.startsAt, gameId: after.gameId } } : {}),
     });
+    const profileData = await profileDataForProjections({
+      ...(input.photoRepository ? { repository: input.photoRepository } : {}),
+      tenantId: input.tenantId,
+      projections: page.items,
+    });
     for (const projection of page.items) {
       lastScanned = projection;
-      const card = projectPublicGameCard(projection.basePayload, {
-        surface: 'DISCOVER',
-        now: input.now,
-      });
+      const card = projectPublicGameCard(
+        enrichGameCardProfiles(projection, input.tenantId, profileData),
+        {
+          surface: 'DISCOVER',
+          now: input.now,
+        },
+      );
       if (matchesPublicFilters(card, input.filters)) {
         matches.push({ card, projection });
         if (matches.length > input.limit) break;
@@ -167,23 +233,29 @@ export async function listPublicGameCards(input: {
 
 export async function getPublicGameCard(input: {
   readonly repository: CardReadRepository;
+  readonly photoRepository?: CardProfileRepository;
   readonly tenantId: string;
   readonly gameId: string;
   readonly now: string;
 }): Promise<PublicGameCardView | undefined> {
   const projection = await input.repository.getCardProjection(input.tenantId, input.gameId);
-  if (
-    !projection ||
-    projection.visibility !== 'PUBLIC' ||
-    projection.lifecycleState !== 'SCHEDULED'
-  ) {
+  if (!projection || projection.visibility !== 'PUBLIC') {
     return undefined;
   }
-  return projectPublicGameCard(projection.basePayload, { surface: 'DISCOVER', now: input.now });
+  const profileData = await profileDataForProjections({
+    ...(input.photoRepository ? { repository: input.photoRepository } : {}),
+    tenantId: input.tenantId,
+    projections: [projection],
+  });
+  return projectPublicGameCard(enrichGameCardProfiles(projection, input.tenantId, profileData), {
+    surface: 'INVITE',
+    now: input.now,
+  });
 }
 
 export async function listViewerGameCards(input: {
   readonly repository: CardReadRepository;
+  readonly photoRepository?: CardProfileRepository;
   readonly tenantId: string;
   readonly viewerUserId: string;
   readonly scope: 'UPCOMING' | 'HISTORY';
@@ -201,9 +273,14 @@ export async function listViewerGameCards(input: {
     ...(after ? { after: { startsAt: after.startsAt, gameId: after.gameId } } : {}),
   });
   const surface = input.scope === 'HISTORY' ? 'HISTORY' : 'MY_UPCOMING';
+  const profileData = await profileDataForProjections({
+    ...(input.photoRepository ? { repository: input.photoRepository } : {}),
+    tenantId: input.tenantId,
+    projections: page.items,
+  });
   const cards = page.items
     .map((projection) =>
-      projectGameCard(projection.basePayload, {
+      projectGameCard(enrichGameCardProfiles(projection, input.tenantId, profileData), {
         surface,
         now: input.now,
         viewerUserId: input.viewerUserId,
@@ -221,6 +298,7 @@ export async function listViewerGameCards(input: {
 
 export async function getViewerGameCard(input: {
   readonly repository: CardReadRepository;
+  readonly photoRepository?: CardProfileRepository;
   readonly tenantId: string;
   readonly viewerUserId: string;
   readonly gameId: string;
@@ -230,7 +308,13 @@ export async function getViewerGameCard(input: {
   if (!projection) return undefined;
   const history =
     projection.lifecycleState === 'FINISHED' || projection.lifecycleState === 'CANCELLED';
-  const relation = projectGameCard(projection.basePayload, {
+  const profileData = await profileDataForProjections({
+    ...(input.photoRepository ? { repository: input.photoRepository } : {}),
+    tenantId: input.tenantId,
+    projections: [projection],
+  });
+  const payload = enrichGameCardProfiles(projection, input.tenantId, profileData);
+  const relation = projectGameCard(payload, {
     surface: history ? 'HISTORY' : 'MY_UPCOMING',
     now: input.now,
     viewerUserId: input.viewerUserId,
@@ -243,7 +327,7 @@ export async function getViewerGameCard(input: {
     return undefined;
   }
   const surface = history ? 'HISTORY' : relation === 'NONE' ? 'DISCOVER' : 'MY_UPCOMING';
-  const card = projectGameCard(projection.basePayload, {
+  const card = projectGameCard(payload, {
     surface,
     now: input.now,
     viewerUserId: input.viewerUserId,

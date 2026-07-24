@@ -34,6 +34,7 @@ function projection(input: {
     endsAt: new Date(Date.parse(input.startsAt) + 90 * 60 * 1_000).toISOString(),
     timezone: 'Europe/Moscow',
     station: { id: input.stationId, name: input.stationName, shortAddress: null },
+    court: null,
     levelRange: { from: input.levelFrom ?? 'D', to: input.levelTo ?? 'A' },
     capacity: 4,
     participants: [

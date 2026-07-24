@@ -167,9 +167,10 @@ CUP_DEV_AUTH_OTP_CODE=<four-digit-local-code>
 
 Configuration rejects this switch outside `APP_ENV=local`. The bypass applies only to requests
 with platform `cup-admin`, resolves exactly one existing active PadlHub user by the configured
-phone and still requires role `admin` plus `notifications.manage`. It never creates a user from a
-phone and never bypasses Admin API authorization. Keep the switch disabled in shared staging and
-production.
+phone and still requires role `admin` plus at least one registered admin-only permission. Every
+Admin API route separately enforces its own permission, such as `notifications.manage` or
+`gift_certificates.catalog.manage`; the bypass never creates a user from a phone and never bypasses
+route authorization. Keep the switch disabled in shared staging and production.
 
 Preview:
 
@@ -269,6 +270,108 @@ Stop expansion when any of these persist beyond the alert window:
 - unexpected rise in invalid endpoints on one push platform;
 - moderation queue age over SLA or quarantine without a future expiry;
 - RLS/authorization denial anomaly or any cross-tenant identifier in telemetry.
+
+### Dead-letter retention check
+
+Worker startup must declare `phub.dead-letter.v1` as a durable quorum queue and bind it to the
+`phub.dead-letter` topic exchange with routing key `#`. This is shared retention for rejected
+events; it does not change the routing keys or delivery policy of existing consumers.
+
+Before enabling a new tenant or transport, verify the queue and binding in the target environment:
+
+```bash
+docker compose exec rabbitmq rabbitmqctl list_queues \
+  name durable arguments messages_ready messages_unacknowledged
+docker compose exec rabbitmq rabbitmqctl list_bindings \
+  source_name destination_name destination_kind routing_key
+```
+
+The queue must be durable, have `x-queue-type=quorum`, and have an exchange-to-queue binding from
+`phub.dead-letter` to `phub.dead-letter.v1` with `#`. Any non-zero or growing depth blocks rollout
+expansion until the cause is identified. Inspect metadata and `x-death` headers without copying
+message bodies or endpoint data into logs or incident tickets. Replay only through a reviewed,
+idempotent repair after the failing consumer or contract is fixed.
+
+### Automated worker reliability alerts
+
+The worker exports aggregated, content-free OTLP metrics every 15 seconds. Metrics contain no
+tenant, user, phone, message, endpoint or provider identifiers. Prometheus evaluates these rules:
+
+| Alert                                       | Condition                                                      | Severity | Required action                                                                              |
+| ------------------------------------------- | -------------------------------------------------------------- | -------- | -------------------------------------------------------------------------------------------- |
+| `PadlHubDeadLetterQueueNotEmpty`            | Retained DLQ depth is non-zero for 1 minute                    | P1       | Stop expansion, identify the rejecting consumer and preserve the event for reviewed replay.  |
+| `PadlHubOutboxDelayed`                      | Oldest unpublished event is 30-300 seconds old for 5 minutes   | P2       | Inspect publisher throughput and RabbitMQ confirms before increasing tenant coverage.        |
+| `PadlHubOutboxStalled`                      | Oldest unpublished event is over 300 seconds old for 2 minutes | P1       | Stop producers if growth continues and restore publication before replaying downstream work. |
+| `PadlHubOutboxPublishFailures`              | A publish cycle failed in the last 5 minutes                   | P1       | Inspect PostgreSQL/RabbitMQ connectivity and correlation-safe worker logs.                   |
+| `PadlHubOperationalMetricsCollectionFailed` | PostgreSQL/RabbitMQ snapshot failed for 2 minutes              | P2       | Treat backlog monitoring as blind until collection is restored.                              |
+
+Backlog does not change `/health/ready`: restarting a healthy worker does not repair retained or
+delayed work and can amplify an incident. Readiness remains dependency-based; alerts drive
+containment. Validate both local and Jetson rule copies before promotion:
+
+```bash
+cmp infra/monitoring/padlhub-alerts.yaml deploy/jetson/monitoring/padlhub-alerts.yaml
+docker compose --profile monitoring exec -T prometheus \
+  promtool check rules /etc/prometheus/rules/padlhub-alerts.yaml
+```
+
+### Leased outbox staging gate
+
+Migration `0031_outbox_publish_leases.sql` is expand-only: it adds nullable claim metadata and a
+tenant-first partial index. Deploy it before the worker package. The worker remains on the existing
+transactional publisher unless `OUTBOX_PUBLISH_MODE=leased` is set explicitly; configuration
+rejects leased mode in production.
+
+For one staging worker, set:
+
+```text
+APP_ENV=staging
+OUTBOX_PUBLISH_MODE=leased
+OUTBOX_BATCH_SIZE=50
+OUTBOX_CLAIM_TTL_MS=60000
+OUTBOX_CONFIRM_TIMEOUT_MS=10000
+OUTBOX_FAILURE_BACKOFF_MS=5000
+```
+
+The claim transaction commits before RabbitMQ publication. Successful publisher confirms are
+followed by a separate token-guarded finalize transaction. A crash before publication is recovered
+after lease expiry. A crash after broker confirm but before finalize can deliver the same event
+again, so every consumer must continue deduplicating by event `id`; the lease changes lock duration,
+not the platform's at-least-once contract.
+
+Do not expand the gate while outbox age, publish failures or DLQ depth grows. To roll back, stop all
+leased workers, wait at least `OUTBOX_CLAIM_TTL_MS`, then restart with
+`OUTBOX_PUBLISH_MODE=transactional`. A final idempotent duplicate is possible for events confirmed
+before a crash. Keep the nullable columns and index; do not reverse the migration during an
+incident.
+
+#### P0.4 isolated crash-soak gate
+
+Before enabling leased mode on a shared staging worker, run the repository soak against a disposable
+PostgreSQL database and RabbitMQ vhost whose names end in `_verify`. The command refuses any other
+target. Never point it at the application database or vhost.
+
+The soak starts independent worker processes with real RabbitMQ confirm channels and a durable
+verification queue compatible with RabbitMQ 4. It forces one
+process to exit after committing a claim and another after receiving broker confirms but before the
+finalize transaction. It then proves lease recovery, the exact at-least-once duplicate set, an empty
+DLQ, visible degraded outbox metrics and a clean final snapshot.
+
+```bash
+# Provision isolated resources using credentials from the target secret manager.
+createdb <padlhub_outbox_verify>
+rabbitmqctl add_vhost <padlhub_outbox_verify>
+rabbitmqctl set_permissions -p <padlhub_outbox_verify> <worker-user> '.*' '.*' '.*'
+
+DATABASE_URL=<isolated-postgresql-url> \
+RABBITMQ_URL=<isolated-amqp-url> \
+npm run outbox:lease:soak
+```
+
+The gate passes only when all seeded rows are published, the two expired claim batches have exactly
+two attempts, only the confirm-before-finalize batch appears twice in RabbitMQ, and both outbox
+backlog and DLQ depth return to zero. Delete the disposable database and vhost after retaining the
+content-free JSON result in the release evidence.
 
 ## Incident controls
 

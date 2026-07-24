@@ -10,9 +10,11 @@ import {
   createCommunityLegacyBridgeRepository,
   createDatabasePool,
   createGameRepository,
+  createGameResultProjectionRepository,
+  createGiftCertificateIssuanceRepository,
   createLocalCommunityDirectoryRepository,
 } from '@phub/database';
-import { LegacyGamesMongoAdapter } from '@phub/legacy-games-adapter';
+import { LegacyGamesMongoAdapter, LegacyGamesPublicAdapter } from '@phub/legacy-games-adapter';
 import { createNotificationEndpointCipher } from '@phub/notifications';
 import { createLogger, startTelemetry } from '@phub/observability';
 import { VivaHomeSourceAdapter, VivaIdentityProvider } from '@phub/viva-adapter';
@@ -20,12 +22,25 @@ import { connect } from 'amqplib';
 import Redis from 'ioredis';
 
 import { registerHomeProjectorConsumer } from './home-projector-consumer.js';
+import { registerCoreBrokerTopology } from './broker-topology.js';
 import { registerGamesCardProjectorConsumer } from './games-card-projector-consumer.js';
+import { registerGameResultProjectorConsumer } from './game-result-projector-consumer.js';
+import { registerCupRatingConsumer } from './cup-rating-consumer.js';
+import { CupRatingClient } from './cup-rating-client.js';
+import { S3GiftCertificateArtifactStore } from './gift-certificate-artifact-store.js';
+import { runGiftCertificateSandboxDeliveryBatch } from './gift-certificate-delivery.js';
+import { registerGiftCertificateIssuerConsumer } from './gift-certificate-issuer-consumer.js';
 import { registerLocationHomeProjectorConsumer } from './location-home-projector-consumer.js';
 import { registerNotificationProjectorConsumer } from './notification-projector-consumer.js';
+import {
+  collectWorkerOperationalSnapshot,
+  createWorkerMetricRecorder,
+  WORKER_OPERATIONAL_METRICS_INTERVAL_MS,
+} from './operational-metrics.js';
 import { publishOutboxBatch } from './outbox-publisher.js';
 import { runCommunityHomeSyncCycle } from './community-home-sync.js';
 import { LegacyPromotionSource } from './legacy-promotion-source.js';
+import { publishLeasedOutboxBatch } from './leased-outbox-publisher.js';
 import { S3ProfilePhotoObjectStore } from './profile-photo-sync.js';
 import { runPromotionHomeSyncCycle } from './promotion-home-sync.js';
 import { runLegacyGamesRosterSyncCycle } from './legacy-games-roster-sync.js';
@@ -41,6 +56,22 @@ const telemetry = startTelemetry({
   ...(config.OTEL_EXPORTER_OTLP_ENDPOINT ? { endpoint: config.OTEL_EXPORTER_OTLP_ENDPOINT } : {}),
 });
 const pool = createDatabasePool(config.DATABASE_URL);
+const giftCertificateRuntime = config.GIFT_CERTIFICATE_ISSUANCE_ENABLED
+  ? {
+      repository: createGiftCertificateIssuanceRepository(pool),
+      store: new S3GiftCertificateArtifactStore({
+        endpoint: config.S3_ENDPOINT as string,
+        region: config.S3_REGION,
+        bucket: config.S3_BUCKET as string,
+        accessKey: config.S3_ACCESS_KEY as string,
+        secretKey: config.S3_SECRET_KEY as string,
+        forcePathStyle: config.S3_FORCE_PATH_STYLE,
+        autoCreateBucket: config.S3_AUTO_CREATE_BUCKET,
+        timeoutMs: config.GIFT_CERTIFICATE_ARTIFACT_STORAGE_TIMEOUT_MS,
+      }),
+      activationSecret: config.GIFT_CERTIFICATE_ACTIVATION_HMAC_SECRET as string,
+    }
+  : undefined;
 const communityHome = (() => {
   if (config.COMMUNITIES_READ_MODE === 'mock') return undefined;
   let repository: CommunityDirectoryRepository;
@@ -75,14 +106,21 @@ const promotionSource =
         onMetric: (metric) => logger.info({ metric }, 'legacy CUP promotion read'),
       })
     : undefined;
-const legacyGamesRosterSource = config.LEGACY_GAMES_ROSTER_SYNC_ENABLED
-  ? new LegacyGamesMongoAdapter({
-      uri: config.LEGACY_GAMES_MONGODB_URI as string,
-      timeoutMs: 5_000,
-      maxAttempts: 2,
-      onMetric: (metric) => logger.info({ metric }, 'legacy Games roster read'),
-    })
-  : undefined;
+const legacyGamesRosterSource = !config.LEGACY_GAMES_ROSTER_SYNC_ENABLED
+  ? undefined
+  : config.LEGACY_GAMES_ROSTER_SYNC_SOURCE === 'public'
+    ? new LegacyGamesPublicAdapter({
+        baseUrl: config.LEGACY_GAMES_PUBLIC_BASE_URL,
+        timeoutMs: 8_000,
+      })
+    : new LegacyGamesMongoAdapter({
+        uri: config.LEGACY_GAMES_MONGODB_URI as string,
+        timeoutMs: 5_000,
+        maxAttempts: 2,
+        onMetric: (metric) => logger.info({ metric }, 'legacy Games roster read'),
+      });
+const legacyGamesRosterWindowSource =
+  legacyGamesRosterSource instanceof LegacyGamesMongoAdapter ? legacyGamesRosterSource : undefined;
 const webPushRuntime =
   config.WEB_PUSH_ENABLED && config.NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS
     ? {
@@ -107,8 +145,8 @@ const redis = config.HOME_VIVA_SYNC_ENABLED
 const connection = await connect(config.RABBITMQ_URL);
 const channel = await connection.createConfirmChannel();
 const consumerChannel = await connection.createChannel();
-await channel.assertExchange('phub.events', 'topic', { durable: true });
-await channel.assertExchange('phub.dead-letter', 'topic', { durable: true });
+const operationalChannel = telemetry ? await connection.createChannel() : undefined;
+await registerCoreBrokerTopology(channel);
 await registerHomeProjectorConsumer({
   channel: consumerChannel,
   pool,
@@ -125,6 +163,24 @@ await registerGamesCardProjectorConsumer({
   repository: createGameRepository(pool),
   logger,
 });
+const gameResultProjectionRepository = createGameResultProjectionRepository(pool);
+await registerGameResultProjectorConsumer({
+  channel: consumerChannel,
+  repository: gameResultProjectionRepository,
+  logger,
+});
+if (config.CUP_RATING_CONSUMER_ENABLED) {
+  await registerCupRatingConsumer({
+    channel: consumerChannel,
+    repository: gameResultProjectionRepository,
+    client: new CupRatingClient({
+      baseUrl: config.CUP_RATING_API_URL as string,
+      serviceToken: config.CUP_RATING_SERVICE_TOKEN as string,
+      timeoutMs: config.CUP_RATING_TIMEOUT_MS,
+    }),
+    logger,
+  });
+}
 await registerNotificationProjectorConsumer({
   channel: consumerChannel,
   pool,
@@ -138,9 +194,19 @@ await registerNotificationProjectorConsumer({
       }
     : {}),
 });
+if (giftCertificateRuntime) {
+  await registerGiftCertificateIssuerConsumer({
+    channel: consumerChannel,
+    repository: giftCertificateRuntime.repository,
+    store: giftCertificateRuntime.store,
+    activationSecret: giftCertificateRuntime.activationSecret,
+    logger,
+  });
+}
 
 let shuttingDown = false;
 let rabbitReady = true;
+const workerMetrics = createWorkerMetricRecorder();
 
 connection.on('close', () => {
   rabbitReady = false;
@@ -191,22 +257,65 @@ const healthServer = createServer((request, response) => {
   void handleHealthRequest(request, response);
 });
 healthServer.listen(config.WORKER_HEALTH_PORT, '0.0.0.0');
+logger.info({ mode: config.OUTBOX_PUBLISH_MODE }, 'outbox publisher configured');
+
+const publishConfiguredOutboxBatch = (tenantId: string): Promise<number> => {
+  if (config.OUTBOX_PUBLISH_MODE === 'leased') {
+    return publishLeasedOutboxBatch({
+      pool,
+      channel,
+      logger,
+      tenantId,
+      batchSize: config.OUTBOX_BATCH_SIZE,
+      claimTtlMs: config.OUTBOX_CLAIM_TTL_MS,
+      confirmTimeoutMs: config.OUTBOX_CONFIRM_TIMEOUT_MS,
+      failureBackoffMs: config.OUTBOX_FAILURE_BACKOFF_MS,
+    });
+  }
+  return publishOutboxBatch({
+    pool,
+    channel,
+    logger,
+    tenantId,
+    batchSize: config.OUTBOX_BATCH_SIZE,
+  });
+};
 
 const runCycle = async (): Promise<void> => {
   if (shuttingDown) return;
+  const startedAt = Date.now();
+  let publishedCount = 0;
+  let failed = false;
   try {
     const tenants = await pool.query<{ id: string }>(
       'select id from identity.tenants where active = true',
     );
-    let count = 0;
     for (const tenant of tenants.rows) {
-      count += await publishOutboxBatch({ pool, channel, logger, tenantId: tenant.id });
+      publishedCount += await publishConfiguredOutboxBatch(tenant.id);
     }
-    if (count > 0) logger.info({ count }, 'outbox events published');
+    if (publishedCount > 0) logger.info({ count: publishedCount }, 'outbox events published');
   } catch {
+    failed = true;
     // The event remains unpublished and will be retried by the next bounded cycle.
   } finally {
+    workerMetrics.recordOutboxPublishCycle(publishedCount, Date.now() - startedAt, failed);
     if (!shuttingDown) setTimeout(() => void runCycle(), config.OUTBOX_POLL_INTERVAL_MS);
+  }
+};
+
+const runOperationalMetricsCycle = async (): Promise<void> => {
+  if (shuttingDown || !operationalChannel) return;
+  const startedAt = Date.now();
+  try {
+    const snapshot = await collectWorkerOperationalSnapshot({ pool, channel: operationalChannel });
+    workerMetrics.recordOperationalSnapshot(snapshot, Date.now() - startedAt);
+  } catch (error) {
+    workerMetrics.recordOperationalCollectionFailure(Date.now() - startedAt);
+    logger.error({ error }, 'worker operational metrics collection failed');
+  } finally {
+    if (!shuttingDown) {
+      setTimeout(() => void runOperationalMetricsCycle(), WORKER_OPERATIONAL_METRICS_INTERVAL_MS);
+    }
   }
 };
 
@@ -234,6 +343,40 @@ const runWebPushCycle = async (): Promise<void> => {
   } finally {
     if (!shuttingDown) {
       setTimeout(() => void runWebPushCycle(), config.WEB_PUSH_POLL_INTERVAL_MS);
+    }
+  }
+};
+
+const runGiftCertificateDeliveryCycle = async (): Promise<void> => {
+  if (
+    shuttingDown ||
+    !giftCertificateRuntime ||
+    config.GIFT_CERTIFICATE_DELIVERY_MODE !== 'sandbox'
+  ) {
+    return;
+  }
+  try {
+    const tenants = await pool.query<{ id: string }>(
+      'select id from identity.tenants where active = true',
+    );
+    for (const tenant of tenants.rows) {
+      await runGiftCertificateSandboxDeliveryBatch({
+        repository: giftCertificateRuntime.repository,
+        logger,
+        tenantId: tenant.id,
+        batchSize: config.GIFT_CERTIFICATE_DELIVERY_BATCH_SIZE,
+        maxAttempts: config.GIFT_CERTIFICATE_DELIVERY_MAX_ATTEMPTS,
+        retryBaseMs: config.GIFT_CERTIFICATE_DELIVERY_RETRY_BASE_MS,
+      });
+    }
+  } catch (error) {
+    logger.error({ error }, 'gift certificate delivery cycle failed');
+  } finally {
+    if (!shuttingDown) {
+      setTimeout(
+        () => void runGiftCertificateDeliveryCycle(),
+        config.GIFT_CERTIFICATE_DELIVERY_POLL_INTERVAL_MS,
+      );
     }
   }
 };
@@ -352,13 +495,13 @@ const runPromotionSyncCycle = async (): Promise<void> => {
 };
 
 const runLegacyGamesRosterSync = async (): Promise<void> => {
-  if (shuttingDown || !legacyGamesRosterSource) return;
+  if (shuttingDown || !legacyGamesRosterWindowSource) return;
   try {
     await runLegacyGamesRosterSyncCycle({
       pool,
       config,
       logger,
-      source: legacyGamesRosterSource,
+      source: legacyGamesRosterWindowSource,
     });
   } catch (error) {
     logger.error({ error }, 'legacy Games roster synchronization deferred');
@@ -377,6 +520,7 @@ const shutdown = async (signal: string): Promise<void> => {
   shuttingDown = true;
   logger.info({ signal }, 'shutting down');
   healthServer.close();
+  await operationalChannel?.close();
   await consumerChannel.close();
   await channel.close();
   await connection.close();
@@ -389,8 +533,10 @@ const shutdown = async (signal: string): Promise<void> => {
 process.once('SIGTERM', () => void shutdown('SIGTERM'));
 process.once('SIGINT', () => void shutdown('SIGINT'));
 void runCycle();
+if (telemetry) void runOperationalMetricsCycle();
 void runVivaSyncCycle();
 void runCommunitySyncCycle();
 void runPromotionSyncCycle();
 void runLegacyGamesRosterSync();
 void runWebPushCycle();
+void runGiftCertificateDeliveryCycle();

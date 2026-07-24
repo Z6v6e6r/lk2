@@ -1,5 +1,9 @@
 import { loadConfig } from '@phub/config';
-import type { GameRepository, StoredGameCardProjection } from '@phub/database';
+import type {
+  GameRepository,
+  ProfileSummaryRepository,
+  StoredGameCardProjection,
+} from '@phub/database';
 import type { GameCardProjectionInput } from '@phub/games';
 import { createLogger } from '@phub/observability';
 import { SignJWT } from 'jose';
@@ -23,6 +27,7 @@ const tenantId = '86afbe01-0318-4dd2-bc25-303b7bf0d430';
 const userId = '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca';
 const playerId = '47b10c0e-2d9f-4775-96dc-2941adae4968';
 const stationId = 'bd35543d-c565-443a-bd3d-eea68eb2fbe6';
+const courtId = '4eac46e0-3600-4f57-956f-dabf49eaab80';
 const gameId = '6418f90b-0fa6-4c04-a3da-57707e2f0ae2';
 const secondGameId = '2f674339-c562-4b10-8ec8-5b58d1701ee8';
 const apps: Awaited<ReturnType<typeof buildApp>>[] = [];
@@ -46,6 +51,7 @@ function snapshot(overrides: Partial<GameCardProjectionInput> = {}): GameCardPro
     endsAt: '2026-08-01T19:30:00.000Z',
     timezone: 'Europe/Moscow',
     station: { id: stationId, name: 'Падел Сколково', shortAddress: 'Новая, 1' },
+    court: { id: courtId, name: 'Корт №3' },
     levelRange: { from: 'C', to: 'B' },
     capacity: 4,
     participants: [
@@ -137,12 +143,17 @@ async function accessToken(): Promise<string> {
     .sign(new TextEncoder().encode(config.JWT_ACCESS_SECRET));
 }
 
-async function appWith(repositoryValue: CardReadRepository) {
+async function appWith(
+  repositoryValue: CardReadRepository,
+  photoRepository?: Pick<ProfileSummaryRepository, 'getPhotoObjectKey' | 'getPhotoDeliveryIds'> &
+    Partial<Pick<ProfileSummaryRepository, 'getDisplayNames' | 'getLevelValues'>>,
+) {
   const app = await buildApp({
     config,
     logger: createLogger('games-read-api-test', 'silent'),
     pool: fakePool(),
     gameReadRepository: repositoryValue,
+    ...(photoRepository ? { profilePhotoMediaRepository: photoRepository } : {}),
   });
   apps.push(app);
   return app;
@@ -174,6 +185,86 @@ describe('Games read APIs', () => {
     });
     expect(JSON.stringify(body)).not.toContain(userId);
     expect(JSON.stringify(body)).not.toContain(playerId);
+  });
+
+  it('replaces expired projection URLs with opaque delivery URLs without exposing user IDs', async () => {
+    const firstDeliveryId = 'a2ba8c91-8656-4456-944d-42c5c72dfef4';
+    const secondDeliveryId = '6d37b6e8-c05f-47ee-a208-2e39a0049159';
+    const expired = (id: string) =>
+      `http://127.0.0.1:9000/phub-local/profile-photos/${tenantId}/${id}/${'a'.repeat(64)}.webp?X-Amz-Expires=3600`;
+    const stored = projection(
+      snapshot({
+        participants: [
+          {
+            userId,
+            displayName: 'Организатор',
+            avatarUrl: expired(userId),
+            level: 'C',
+            role: 'ORGANIZER',
+            paymentState: 'NOT_REQUIRED',
+          },
+          {
+            userId: playerId,
+            displayName: 'Игрок 2',
+            avatarUrl: expired(playerId),
+            level: 'C+',
+            role: 'PLAYER',
+            paymentState: 'PAID',
+          },
+        ],
+      }),
+    );
+    const photoRepository = {
+      getPhotoObjectKey: vi.fn<ProfileSummaryRepository['getPhotoObjectKey']>(),
+      getPhotoDeliveryIds: vi
+        .fn<ProfileSummaryRepository['getPhotoDeliveryIds']>()
+        .mockResolvedValue(
+          new Map([
+            [userId, firstDeliveryId],
+            [playerId, secondDeliveryId],
+          ]),
+        ),
+      getDisplayNames: vi.fn<ProfileSummaryRepository['getDisplayNames']>().mockResolvedValue(
+        new Map([
+          [userId, 'Мария Шмакина'],
+          [playerId, 'Артур Ситдиков'],
+        ]),
+      ),
+      getLevelValues: vi.fn<ProfileSummaryRepository['getLevelValues']>().mockResolvedValue(
+        new Map([
+          [userId, 3.43844],
+          [playerId, 3.82],
+        ]),
+      ),
+    };
+    const app = await appWith(
+      repository({
+        listPublicCardProjections: vi.fn().mockResolvedValue({ items: [stored] }),
+      }),
+      photoRepository,
+    );
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/public/api/v1/local-padel/games?limit=1&availability=JOINABLE',
+    });
+
+    expect(response.statusCode).toBe(200);
+    const serialized = response.body;
+    expect(serialized).toContain(
+      `/public/api/v1/media/profile-photos/${tenantId}/${firstDeliveryId}`,
+    );
+    expect(serialized).toContain(
+      `/public/api/v1/media/profile-photos/${tenantId}/${secondDeliveryId}`,
+    );
+    expect(serialized).not.toContain(userId);
+    expect(serialized).not.toContain(playerId);
+    expect(serialized).toContain('"displayName":"Мария Шмакина"');
+    expect(serialized).toContain('"displayName":"Артур Ситдиков"');
+    expect(serialized).not.toContain('"displayName":"Организатор"');
+    expect(serialized).not.toContain('"displayName":"Игрок 2"');
+    expect(serialized).toContain('"levelValue":3.43844');
+    expect(serialized).toContain('"levelValue":3.82');
   });
 
   it('binds an opaque cursor to the original filters', async () => {
@@ -312,5 +403,42 @@ describe('Games read APIs', () => {
       headers: { authorization: `Bearer ${token}` },
     });
     expect(privateDetail.statusCode).toBe(404);
+  });
+
+  it('keeps a public game detail available after start while collapsing private result state', async () => {
+    const finishedProjection = projection(
+      snapshot({
+        lifecycleState: 'FINISHED',
+        startsAt: '2026-07-20T18:00:00.000Z',
+        endsAt: '2026-07-20T19:30:00.000Z',
+        result: {
+          state: 'DISPUTED',
+          sets: [{ teamA: 6, teamB: 4 }],
+          submittedByUserId: userId,
+          requiredConfirmationUserIds: [playerId],
+          confirmedByUserIds: [],
+        },
+      }),
+    );
+    const app = await appWith(
+      repository({ getCardProjection: vi.fn().mockResolvedValue(finishedProjection) }),
+    );
+    const response = await app.inject({
+      method: 'GET',
+      url: `/public/api/v1/local-padel/games/${gameId}`,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      game: {
+        id: gameId,
+        surface: 'INVITE',
+        displayState: 'COMPLETED',
+        court: { id: courtId, name: 'Корт №3' },
+        allowedActions: ['OPEN_DETAILS'],
+      },
+    });
+    expect(JSON.stringify(response.json())).not.toContain('DISPUTED');
+    expect(JSON.stringify(response.json())).not.toContain(userId);
   });
 });

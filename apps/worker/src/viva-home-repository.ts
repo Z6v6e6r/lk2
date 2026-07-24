@@ -2,6 +2,10 @@ import { createHash, randomUUID } from 'node:crypto';
 
 import { withTenantTransaction } from '@phub/database';
 import {
+  localVivaExerciseAssociationId,
+  type LegacyGameSourceSnapshot,
+} from '@phub/legacy-games-adapter';
+import {
   HOME_PROJECTION_COMPONENT_EVENT,
   homeProjectionComponentPayloadSchema,
   type HomeProjectionComponentPayload,
@@ -40,10 +44,17 @@ interface MappingRow extends QueryResultRow {
 interface CanonicalOpenGameRosterRow extends QueryResultRow {
   readonly exercise_external_id: string;
   readonly capacity: number;
+  readonly game_title: string;
+  readonly game_kind: 'FRIENDLY' | 'RATING' | 'PRIVATE' | 'COACH_GAME';
+  readonly ends_at: Date | string;
+  readonly court_name: string | null;
+  readonly station_id: string;
+  readonly station_title: string | null;
   readonly profile_id: string;
   readonly display_name: string;
   readonly photo_url: string | null;
   readonly level_label: string | null;
+  readonly level_value: string | number | null;
 }
 
 interface RevisionRow extends QueryResultRow {
@@ -53,6 +64,7 @@ interface RevisionRow extends QueryResultRow {
 
 interface ProfilePhotoRow extends QueryResultRow {
   readonly photo_url: string | null;
+  readonly delivery_id: string | null;
   readonly source_url: string | null;
   readonly source_etag: string | null;
   readonly source_last_modified: string | null;
@@ -61,8 +73,14 @@ interface ProfilePhotoRow extends QueryResultRow {
   readonly synced_at: Date | string | null;
 }
 
+interface LegacyParticipantPhotoMappingRow extends QueryResultRow {
+  readonly external_id: string;
+  readonly internal_id: string;
+}
+
 export interface ProfilePhotoSyncRecord {
   readonly avatarUrl?: string;
+  readonly deliveryId?: string;
   readonly sourceUrl?: string;
   readonly sourceEtag?: string;
   readonly sourceLastModified?: string;
@@ -73,6 +91,7 @@ export interface ProfilePhotoSyncRecord {
 
 export interface ProfilePhotoPersistence {
   readonly avatarUrl: string | null;
+  readonly deliveryId?: string;
   readonly sourceUrl?: string;
   readonly sourceEtag?: string;
   readonly sourceLastModified?: string;
@@ -86,6 +105,13 @@ export interface ProfilePhotoPersistence {
 export interface ProfilePhotoObjectGcItem {
   readonly objectKey: string;
 }
+
+export interface LegacyParticipantPhotoTarget {
+  readonly userId: string;
+  readonly sourceUrl: string;
+}
+
+type LegacyParticipantLevel = 'D' | 'D+' | 'C' | 'C+' | 'B' | 'B+' | 'A';
 
 function checksum(value: unknown): string {
   return createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -115,7 +141,7 @@ export function loadProfilePhotoSyncRecord(input: {
   return withTenantTransaction(input.pool, input.tenantId, async (client) => {
     const row = (
       await client.query<ProfilePhotoRow>(
-        `select p.photo_url, s.source_url, s.source_etag, s.source_last_modified,
+        `select p.photo_url, s.delivery_id, s.source_url, s.source_etag, s.source_last_modified,
                 s.content_sha256, s.object_key, s.synced_at
            from profile.user_summaries p
            left join integration.user_profile_photo_sync s
@@ -127,6 +153,7 @@ export function loadProfilePhotoSyncRecord(input: {
     if (!row) throw new Error('PROFILE_SUMMARY_NOT_FOUND');
     return {
       ...(row.photo_url ? { avatarUrl: row.photo_url } : {}),
+      ...(row.delivery_id ? { deliveryId: row.delivery_id } : {}),
       ...(row.source_url ? { sourceUrl: row.source_url } : {}),
       ...(row.source_etag ? { sourceEtag: row.source_etag } : {}),
       ...(row.source_last_modified ? { sourceLastModified: row.source_last_modified } : {}),
@@ -134,6 +161,153 @@ export function loadProfilePhotoSyncRecord(input: {
       ...(row.object_key ? { objectKey: row.object_key } : {}),
       ...(row.synced_at ? { syncedAt: new Date(row.synced_at).toISOString() } : {}),
     };
+  });
+}
+
+/**
+ * Resolves legacy player references to PadlHub users without persisting or returning the source
+ * reference. The avatar URL remains worker-only until it has been copied to local object storage.
+ */
+export function resolveLegacyParticipantPhotoTargets(input: {
+  readonly pool: Pool;
+  readonly tenantId: string;
+  readonly snapshots: readonly LegacyGameSourceSnapshot[];
+}): Promise<readonly LegacyParticipantPhotoTarget[]> {
+  const sourceUrls = new Map<string, string>();
+  for (const snapshot of input.snapshots) {
+    for (const participant of snapshot.participants) {
+      if (participant.avatarSourceUrl) {
+        sourceUrls.set(participant.externalId, participant.avatarSourceUrl);
+      }
+    }
+  }
+  if (sourceUrls.size === 0) return Promise.resolve([]);
+  return withTenantTransaction(input.pool, input.tenantId, async (client) => {
+    const rows = await client.query<LegacyParticipantPhotoMappingRow>(
+      `select external_id, internal_id
+         from integration.external_entity_map
+        where tenant_id = $1 and external_system = 'LK_LEGACY_SNAPSHOT'
+          and entity_type = 'game_player' and external_id = any($2::text[])
+        order by external_id`,
+      [input.tenantId, [...sourceUrls.keys()]],
+    );
+    const targets = new Map<string, LegacyParticipantPhotoTarget>();
+    for (const row of rows.rows) {
+      const sourceUrl = sourceUrls.get(row.external_id);
+      if (sourceUrl) targets.set(row.internal_id, { userId: row.internal_id, sourceUrl });
+    }
+    return [...targets.values()];
+  });
+}
+
+/**
+ * Applies a confirmed Viva viewer profile to the matching legacy participant read model. This
+ * does not change the Games aggregate or its source revision; it only fills profile presentation
+ * data that the legacy Game omitted.
+ */
+export function persistLegacyParticipantViewerProfile(input: {
+  readonly pool: Pool;
+  readonly tenantId: string;
+  readonly participantExternalId: string;
+  readonly displayName: string;
+  readonly level: LegacyParticipantLevel;
+  readonly levelValue: number;
+}): Promise<boolean> {
+  return withTenantTransaction(input.pool, input.tenantId, async (client) => {
+    const result = await client.query(
+      `update profile.user_summaries p
+          set display_name = $3, level_label = $4, level_value = $5, updated_at = now()
+         from integration.external_entity_map e
+        where e.tenant_id = $1 and e.external_system = 'LK_LEGACY_SNAPSHOT'
+          and e.entity_type = 'game_player' and e.external_id = $2
+          and p.tenant_id = e.tenant_id and p.user_id = e.internal_id`,
+      [
+        input.tenantId,
+        input.participantExternalId,
+        input.displayName.trim().slice(0, 200),
+        input.level,
+        input.levelValue,
+      ],
+    );
+    return (result.rowCount ?? 0) > 0;
+  });
+}
+
+async function persistProfilePhotoWithClient(
+  client: PoolClient,
+  input: {
+    readonly tenantId: string;
+    readonly userId: string;
+    readonly photo: ProfilePhotoPersistence;
+  },
+): Promise<void> {
+  await client.query(
+    `update profile.user_summaries
+        set photo_url = $3, updated_at = now()
+      where tenant_id = $1 and user_id = $2`,
+    [input.tenantId, input.userId, input.photo.avatarUrl],
+  );
+  if (input.photo.sourceUrl && input.photo.contentSha256 && input.photo.objectKey) {
+    if (!input.photo.deliveryId) throw new Error('PROFILE_PHOTO_DELIVERY_ID_MISSING');
+    await client.query(
+      `insert into integration.user_profile_photo_sync (
+         tenant_id, user_id, delivery_id, source_url, source_etag, source_last_modified,
+         content_sha256, object_key, synced_at
+       ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       on conflict (tenant_id, user_id) do update set
+         source_url = excluded.source_url,
+         source_etag = excluded.source_etag,
+         source_last_modified = excluded.source_last_modified,
+         content_sha256 = excluded.content_sha256,
+         object_key = excluded.object_key,
+         synced_at = excluded.synced_at,
+         updated_at = now()`,
+      [
+        input.tenantId,
+        input.userId,
+        input.photo.deliveryId,
+        input.photo.sourceUrl,
+        input.photo.sourceEtag ?? null,
+        input.photo.sourceLastModified ?? null,
+        input.photo.contentSha256,
+        input.photo.objectKey,
+        input.photo.syncedAt,
+      ],
+    );
+    await client.query(
+      `delete from integration.profile_photo_object_gc
+        where tenant_id = $1 and object_key = $2`,
+      [input.tenantId, input.photo.objectKey],
+    );
+  } else {
+    await client.query(
+      `delete from integration.user_profile_photo_sync
+        where tenant_id = $1 and user_id = $2`,
+      [input.tenantId, input.userId],
+    );
+  }
+  if (input.photo.supersededObjectKey && input.photo.deleteAfter) {
+    await client.query(
+      `insert into integration.profile_photo_object_gc (
+         tenant_id, object_key, delete_after
+       ) values ($1, $2, $3)
+       on conflict (tenant_id, object_key) do update set
+         delete_after = least(integration.profile_photo_object_gc.delete_after,
+                              excluded.delete_after),
+         updated_at = now()`,
+      [input.tenantId, input.photo.supersededObjectKey, input.photo.deleteAfter],
+    );
+  }
+}
+
+export function persistProfilePhoto(input: {
+  readonly pool: Pool;
+  readonly tenantId: string;
+  readonly userId: string;
+  readonly photo: ProfilePhotoPersistence;
+}): Promise<void> {
+  return withTenantTransaction(input.pool, input.tenantId, async (client) => {
+    await persistProfilePhotoWithClient(client, input);
   });
 }
 
@@ -343,9 +517,15 @@ type HomeParticipant = {
   readonly nickname: null;
   readonly avatarUrl: string | null;
   readonly level: string | null;
+  readonly levelValue: number | null;
 };
 
 interface CanonicalOpenGameRoster {
+  readonly title: string;
+  readonly type: 'friendly' | 'rating';
+  readonly endsAt: string;
+  readonly courtName?: string;
+  readonly station?: { readonly id: string; readonly title: string; readonly route: string };
   readonly participants: HomeParticipant[];
   readonly openSlots: number;
 }
@@ -370,12 +550,19 @@ async function resolveCanonicalOpenGameRosters(input: {
 }): Promise<ReadonlyMap<string, CanonicalOpenGameRoster>> {
   const exerciseExternalIds = [...new Set(input.exerciseExternalIds)].slice(0, 6);
   if (exerciseExternalIds.length === 0) return new Map();
+  const associationIds = [
+    ...exerciseExternalIds,
+    ...exerciseExternalIds.map(localVivaExerciseAssociationId),
+  ];
   const rows = await input.client.query<CanonicalOpenGameRosterRow>(
-    `select e.external_id as exercise_external_id, g.capacity, p.user_id as profile_id,
-            s.display_name, s.photo_url, s.level_label
+    `select e.external_id as exercise_external_id, g.capacity, g.title as game_title, g.ends_at,
+            g.kind as game_kind, g.court_name, g.station_id, lp.title as station_title, p.user_id as profile_id,
+            s.display_name, s.photo_url, s.level_label, s.level_value
        from integration.external_entity_map e
        join games.games g
          on g.tenant_id = e.tenant_id and g.id = e.internal_id
+       left join locations.profiles lp
+         on lp.tenant_id = g.tenant_id and lp.id = g.station_id
        join games.participations p
          on p.tenant_id = g.tenant_id and p.game_id = g.id and p.state = 'ACTIVE'
        join profile.user_summaries s
@@ -386,14 +573,38 @@ async function resolveCanonicalOpenGameRosters(input: {
         and e.external_id = any($2::text[])
         and g.lifecycle_state in ('SCHEDULED', 'IN_PROGRESS')
       order by e.external_id, p.joined_at, p.user_id`,
-    [input.tenantId, exerciseExternalIds],
+    [input.tenantId, associationIds],
   );
-  const rosters = new Map<string, { capacity: number; participants: HomeParticipant[] }>();
+  const rosters = new Map<
+    string,
+    {
+      capacity: number;
+      title: string;
+      type: 'friendly' | 'rating';
+      endsAt: string;
+      courtName?: string;
+      station?: { readonly id: string; readonly title: string; readonly route: string };
+      participants: HomeParticipant[];
+    }
+  >();
   for (const row of rows.rows) {
     const displayName = row.display_name.trim().slice(0, 200);
     if (!displayName) continue;
     const entry = rosters.get(row.exercise_external_id) ?? {
       capacity: Math.min(4, Math.max(0, row.capacity)),
+      title: row.game_title,
+      type: row.game_kind === 'RATING' ? ('rating' as const) : ('friendly' as const),
+      endsAt: new Date(row.ends_at).toISOString(),
+      ...(row.court_name ? { courtName: row.court_name } : {}),
+      ...(row.station_title
+        ? {
+            station: {
+              id: row.station_id,
+              title: row.station_title,
+              route: `/locations/${row.station_id}`,
+            },
+          }
+        : {}),
       participants: [],
     };
     if (entry.participants.length < 4) {
@@ -406,6 +617,10 @@ async function resolveCanonicalOpenGameRosters(input: {
         nickname: null,
         avatarUrl: row.photo_url,
         level: row.level_label,
+        levelValue:
+          row.level_value === null || !Number.isFinite(Number(row.level_value))
+            ? null
+            : Number(row.level_value),
       });
     }
     rosters.set(row.exercise_external_id, entry);
@@ -413,9 +628,18 @@ async function resolveCanonicalOpenGameRosters(input: {
   return new Map(
     [...rosters.entries()]
       .filter(([, roster]) => roster.participants.length > 0)
-      .map(([exerciseExternalId, roster]) => [
-        exerciseExternalId,
+      .map(([exerciseAssociationId, roster]) => [
+        exerciseExternalIds.find(
+          (exerciseExternalId) =>
+            exerciseExternalId === exerciseAssociationId ||
+            localVivaExerciseAssociationId(exerciseExternalId) === exerciseAssociationId,
+        ) ?? exerciseAssociationId,
         {
+          title: roster.title,
+          type: roster.type,
+          endsAt: roster.endsAt,
+          ...(roster.courtName ? { courtName: roster.courtName } : {}),
+          ...(roster.station ? { station: roster.station } : {}),
           participants: roster.participants,
           openSlots: Math.max(0, roster.capacity - roster.participants.length),
         },
@@ -461,11 +685,21 @@ function asHomeValues(input: {
           // A local roster association makes this a Games card even when the Viva booking type
           // is the generic exercise/training type.
           kind: canonicalRoster ? ('game' as const) : ('training' as const),
-          title: item.title,
+          title: canonicalRoster?.title ?? item.title,
           startsAt: item.startsAt,
+          ...(canonicalRoster ? { endsAt: canonicalRoster.endsAt } : {}),
           venue: item.venue,
           status: item.status,
           route: `/bookings/${id}`,
+          ...(canonicalRoster
+            ? {
+                game: {
+                  type: canonicalRoster.type,
+                  ...(canonicalRoster.courtName ? { courtName: canonicalRoster.courtName } : {}),
+                  ...(canonicalRoster.station ? { station: canonicalRoster.station } : {}),
+                },
+              }
+            : {}),
           // The canonical Games roster wins when its VIVA exercise association is known. Until
           // that migration has reached an event, preserve the only participant Viva proves here.
           participants: canonicalRoster?.participants ?? [
@@ -477,6 +711,7 @@ function asHomeValues(input: {
               nickname: null,
               avatarUrl: input.avatarUrl,
               level: input.snapshot.profile.level.label,
+              levelValue: input.snapshot.profile.level.value,
             },
           ],
           ...(canonicalRoster ? { openSlots: canonicalRoster.openSlots } : {}),
@@ -527,74 +762,21 @@ export function persistVivaHomeSource(input: {
       : null;
     await client.query(
       `update profile.user_summaries
-          set level_label = $3, updated_at = now()
+          set level_label = $3, level_value = $4, updated_at = now()
         where tenant_id = $1 and user_id = $2`,
-      [input.delegation.tenantId, input.delegation.userId, levelLabel],
+      [
+        input.delegation.tenantId,
+        input.delegation.userId,
+        levelLabel,
+        input.snapshot.profile.level.value,
+      ],
     );
     if (input.profilePhoto) {
-      await client.query(
-        `update profile.user_summaries
-            set photo_url = $3, updated_at = now()
-          where tenant_id = $1 and user_id = $2`,
-        [input.delegation.tenantId, input.delegation.userId, input.profilePhoto.avatarUrl],
-      );
-      if (
-        input.profilePhoto.sourceUrl &&
-        input.profilePhoto.contentSha256 &&
-        input.profilePhoto.objectKey
-      ) {
-        await client.query(
-          `insert into integration.user_profile_photo_sync (
-             tenant_id, user_id, source_url, source_etag, source_last_modified,
-             content_sha256, object_key, synced_at
-           ) values ($1, $2, $3, $4, $5, $6, $7, $8)
-           on conflict (tenant_id, user_id) do update set
-             source_url = excluded.source_url,
-             source_etag = excluded.source_etag,
-             source_last_modified = excluded.source_last_modified,
-             content_sha256 = excluded.content_sha256,
-             object_key = excluded.object_key,
-             synced_at = excluded.synced_at,
-             updated_at = now()`,
-          [
-            input.delegation.tenantId,
-            input.delegation.userId,
-            input.profilePhoto.sourceUrl,
-            input.profilePhoto.sourceEtag ?? null,
-            input.profilePhoto.sourceLastModified ?? null,
-            input.profilePhoto.contentSha256,
-            input.profilePhoto.objectKey,
-            input.profilePhoto.syncedAt,
-          ],
-        );
-        await client.query(
-          `delete from integration.profile_photo_object_gc
-            where tenant_id = $1 and object_key = $2`,
-          [input.delegation.tenantId, input.profilePhoto.objectKey],
-        );
-      } else {
-        await client.query(
-          `delete from integration.user_profile_photo_sync
-            where tenant_id = $1 and user_id = $2`,
-          [input.delegation.tenantId, input.delegation.userId],
-        );
-      }
-      if (input.profilePhoto.supersededObjectKey && input.profilePhoto.deleteAfter) {
-        await client.query(
-          `insert into integration.profile_photo_object_gc (
-             tenant_id, object_key, delete_after
-           ) values ($1, $2, $3)
-           on conflict (tenant_id, object_key) do update set
-             delete_after = least(integration.profile_photo_object_gc.delete_after,
-                                  excluded.delete_after),
-             updated_at = now()`,
-          [
-            input.delegation.tenantId,
-            input.profilePhoto.supersededObjectKey,
-            input.profilePhoto.deleteAfter,
-          ],
-        );
-      }
+      await persistProfilePhotoWithClient(client, {
+        tenantId: input.delegation.tenantId,
+        userId: input.delegation.userId,
+        photo: input.profilePhoto,
+      });
     }
     const bookingIds = new Map<string, string>();
     for (const item of input.snapshot.upcoming) {

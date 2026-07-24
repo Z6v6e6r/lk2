@@ -102,6 +102,13 @@ The initial schema is expand-only:
 - shared audit and outbox tables;
 - `integration.external_entity_map` for Viva/provider references.
 
+Historical imports follow the same ownership boundary as upcoming roster imports. An authenticated
+Viva history page supplies the bounded exercise set, CUP supplies the complete legacy snapshot, and
+the Games importer atomically writes the aggregate, participants, integration associations, audit
+fact and outbox event. A past imported game starts as `FINISHED / AWAITING_SUBMISSION`; the card
+exposes submission only inside the result-policy window and otherwise renders `COMPLETED`. The card
+is projected from the local aggregate before history is returned.
+
 Every tenant-owned row contains `tenant_id`, has tenant-aware foreign keys and is protected by
 forced RLS. API processes never run migrations.
 
@@ -192,6 +199,17 @@ Only a Commerce event produced after provider verification may transition an obl
 The confirmed result and a rating outbox event are committed atomically. Rating calculation and
 Viva projection run after the HTTP transaction.
 
+The v2 submission payload is deliberately small: one ordered list of sets, and for each set two
+player UUIDs in pair A, two in pair B and the two scores. All sets contain the same four active game
+participants, while partners may change between sets. A complete local draft is submitted once;
+there is no canonical autosave/session entity. One other participant confirms, or an eligible
+participant disputes and a corrected immutable submission supersedes the disputed version.
+
+Confirmation normalizes set rosters for card/history analytics and emits
+`game.result.confirmed.v1`. Player history and CUP rating consume that fact asynchronously. CUP is
+the only writer of current level and its rating ledger records source, player, old level, new level,
+game and result UUIDs.
+
 ## 5. Server-owned card presentation
 
 ### 5.1 Why the card has a presentation contract
@@ -202,24 +220,59 @@ roster” or “finished without score beats completed”. The API/card projecto
 
 ### 5.2 Primary display states
 
-| `displayState`          | User label            | Minimum condition                          | Typical action                      |
-| ----------------------- | --------------------- | ------------------------------------------ | ----------------------------------- |
-| `FINDING_PLAYERS`       | Ищем игроков          | scheduled, more than one open spot         | `JOIN` or `INVITE`                  |
-| `ONE_SPOT_LEFT`         | Осталось 1 место      | scheduled, one open spot                   | `JOIN`                              |
-| `ROSTER_READY`          | Состав набран         | scheduled, no open spots                   | `OPEN_DETAILS`                      |
-| `SEAT_PAYMENT_REQUIRED` | Оплатите место        | viewer has an active unpaid reservation    | `PAY`                               |
-| `STARTING_SOON`         | Скоро начало          | within server-configured window            | `OPEN_DETAILS`                      |
-| `REGISTRATION_CLOSED`   | Регистрация закрыта   | join cut-off passed before game transition | `OPEN_DETAILS`                      |
-| `IN_PROGRESS`           | Игра идёт             | lifecycle is in progress                   | `OPEN_CHAT`                         |
-| `RESULT_REQUIRED`       | Внесите счёт          | finished, viewer may submit, no submission | `SUBMIT_RESULT`                     |
-| `RESULT_PENDING`        | Счёт на подтверждении | result pending confirmation                | `CONFIRM_RESULT` or view            |
-| `RESULT_DISPUTED`       | Результат оспорен     | dispute is open                            | `OPEN_DISPUTE`                      |
-| `COMPLETED`             | Игра завершена        | confirmed or result not required by policy | `VIEW_RESULT`                       |
-| `CANCELLED`             | Игра отменена         | lifecycle cancelled                        | refund/details action if applicable |
+| `displayState`          | User label            | Minimum condition                                | Typical action                      |
+| ----------------------- | --------------------- | ------------------------------------------------ | ----------------------------------- |
+| `FINDING_PLAYERS`       | Ищем игроков          | scheduled, more than one open spot               | `JOIN` or `INVITE`                  |
+| `ONE_SPOT_LEFT`         | Осталось 1 место      | scheduled, one open spot                         | `JOIN`                              |
+| `ROSTER_READY`          | Состав набран         | scheduled, no open spots                         | `OPEN_DETAILS`                      |
+| `SEAT_PAYMENT_REQUIRED` | Оплатите место        | viewer has an active unpaid reservation          | `PAY`                               |
+| `STARTING_SOON`         | Скоро начало          | within server-configured window                  | `OPEN_DETAILS`                      |
+| `REGISTRATION_CLOSED`   | Регистрация закрыта   | join cut-off passed before game transition       | `OPEN_DETAILS`                      |
+| `IN_PROGRESS`           | Игра идёт             | lifecycle is in progress                         | `OPEN_CHAT`                         |
+| `RESULT_REQUIRED`       | Внесите счёт          | finished, viewer may submit, no submission       | `SUBMIT_RESULT`                     |
+| `RESULT_PENDING`        | Счёт на подтверждении | result pending confirmation                      | `CONFIRM_RESULT` or view            |
+| `RESULT_DISPUTED`       | Результат оспорен     | dispute is open                                  | `OPEN_DISPUTE`                      |
+| `COMPLETED`             | Игра завершена        | confirmed, void, or no submission after 48 hours | `VIEW_RESULT` when confirmed        |
+| `CANCELLED`             | Игра отменена         | lifecycle cancelled                              | refund/details action if applicable |
 
 The primary display state is not the complete domain state. Secondary badges can show `Рейтинговая`,
 `Закрытая`, `Лист ожидания`, `Возврат оформляется` or `Вы организатор` without changing the primary
 state.
+
+### 5.2.1 End-to-end card state map
+
+The API owns the transition from canonical lifecycle facts to a card state. Web, mobile, Tilda and
+CUP render the returned key and never infer a game status from the current clock on the client.
+
+| Phase                          | Canonical facts                                | External card `displayState` | Authenticated additions                                          | Primary transition                       |
+| ------------------------------ | ---------------------------------------------- | ---------------------------- | ---------------------------------------------------------------- | ---------------------------------------- |
+| Before publication             | `DRAFT` or `PROVISIONING`                      | not exposed                  | creation/provisioning operation only                             | confirmed booking/payment -> `SCHEDULED` |
+| Before start, places available | `SCHEDULED` + `OPEN`                           | `FINDING_PLAYERS`            | join/invite/edit according to relation                           | one open place -> `ONE_SPOT_LEFT`        |
+| Before start, last place       | `SCHEDULED` + `LAST_SPOT`                      | `ONE_SPOT_LEFT`              | join or invite                                                   | no open places -> `ROSTER_READY`         |
+| Before start, roster full      | `SCHEDULED` + `FULL`/`WAITLIST_ONLY`           | `ROSTER_READY`               | waitlist actions when enabled                                    | cutoff -> `REGISTRATION_CLOSED`          |
+| Shortly before start           | `SCHEDULED` inside the server window           | `STARTING_SOON`              | viewer payment may take precedence                               | scheduled start command -> `IN_PROGRESS` |
+| During play                    | `IN_PROGRESS`                                  | `IN_PROGRESS`                | chat for participants                                            | finish command -> result workflow        |
+| After play, result absent      | `FINISHED` + `AWAITING_SUBMISSION`             | `COMPLETED`                  | `RESULT_REQUIRED` for eligible players during the bounded window | submit or window expiry                  |
+| After play, result review      | `FINISHED` + `PENDING_CONFIRMATION`/`DISPUTED` | `COMPLETED`                  | `RESULT_PENDING`/`RESULT_DISPUTED`                               | confirm, resolve or void                 |
+| After play, terminal           | `FINISHED` + `CONFIRMED`/`VOID`                | `COMPLETED`                  | score/result action when authorized                              | terminal                                 |
+| Cancelled at any point         | `CANCELLED` + cancellation facts               | `CANCELLED`                  | refund/details actions when authorized                           | terminal                                 |
+
+Public cards deliberately collapse private result-workflow states to `COMPLETED`. They may expose
+`IN_PROGRESS`, `COMPLETED` and `CANCELLED` on a direct public game card, while public discovery
+continues to list only `PUBLIC + SCHEDULED` games.
+
+### 5.2.2 Viva exercise to PadlHub game identity
+
+Historical composition uses one exact server-side chain:
+
+`Viva exercise UUID -> one-way integration association -> CUP game snapshot -> PadlHub game UUID`.
+
+Viva proves that the exercise belongs to the authenticated user. CUP supplies the game roster and
+legacy cancellation fact. The importer persists the canonical `games.games.lifecycle_state`, binds
+the proven viewer through an integration-only player association, and projects one immutable game
+revision. Date, title, station and court are reconciliation evidence only; they must never create a
+game link because two different games may share the same time and station. A CUP miss remains a
+provider-only activity record and must not receive a fabricated game UUID or game actions.
 
 ### 5.3 Precedence
 
@@ -235,6 +288,11 @@ The projector applies this high-level precedence:
 
 The exact precedence is a versioned domain policy with table-driven tests, not nested conditionals
 inside a React component.
+
+For a finished game with no submission, `SUBMIT_RESULT` remains available to participants for 48
+hours after `endsAt`. At the deadline the server projector removes the action and returns
+`COMPLETED`; clients do not calculate or extend this window. A confirmed result may be presented as
+`Результат внесён`, while an expired game without a result is presented as `Игра завершена`.
 
 ### 5.4 `GameCardView` contract
 
@@ -446,6 +504,17 @@ boundary:
 Commands carry only PadlHub UUIDs, expected revision and safe resource type. The service-only
 Internal API accepts them with `Idempotency-Key`; it also exposes read-only event inspection for
 correlation-based operations. It does not provide an HTTP event-ingestion route.
+
+The CUP/legacy import bridge schedules both lifecycle deadlines whenever it creates or revisits a
+future `SCHEDULED` aggregate. Repeated imports refresh pending deadlines without duplicating
+commands; an exact snapshot that already proves `FINISHED` or `CANCELLED` completes superseded
+pending lifecycle commands in the same tenant transaction.
+
+During Activity History refresh, fresh Viva exercise references may select only their existing
+integration associations. The Games write owner then advances those exact local aggregates from
+their canonical start/end timestamps, emits the lifecycle outbox fact and rebuilds the card before
+History is projected. This path neither exposes provider identifiers nor depends on CUP retaining
+an old snapshot.
 
 Consumers include card/Home projectors, Messaging conversation membership, Notifications, Rating,
 realtime invalidation and integration compatibility workers. Every consumer is inbox-deduplicated.

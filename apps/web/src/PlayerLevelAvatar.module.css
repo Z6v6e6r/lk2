@@ -19,7 +19,7 @@
 
 .progressRing {
   position: absolute;
-  z-index: 2;
+  z-index: var(--player-level-avatar-ring-layer, 2);
   top: 0;
   left: 0;
 
@@ -42,7 +42,7 @@
 
 .photoFrame {
   position: absolute;
-  z-index: 1;
+  z-index: var(--player-level-avatar-photo-layer, 1);
 
   /*
    * Геометрический центр кольца находится около 24px,
@@ -56,8 +56,14 @@
 
   box-sizing: border-box;
   overflow: hidden;
+  border: calc(1.5px * var(--player-level-avatar-scale)) solid #fafafa;
   border-radius: 50%;
   background: #d9d9d9;
+}
+
+/* В шапке профиля фото показывается без белой обводки. */
+.root:not(.participant) .photoFrame {
+  border: 0;
 }
 
 .photo {
@@ -71,20 +77,31 @@
 }
 
 .photoFallback {
+  object-fit: cover;
+}
+
+.photoInitials {
   position: absolute;
-  top: calc(-8px * var(--player-level-avatar-scale));
-  left: 50%;
+  z-index: 1;
+  inset: 0;
 
-  width: calc(72px * var(--player-level-avatar-scale));
-  height: auto;
-  max-width: none;
+  display: grid;
+  place-items: center;
 
-  transform: translateX(-50%);
+  color: #646b78;
+  font-family: 'RF Dewi', sans-serif;
+  font-size: calc(13px * var(--player-level-avatar-scale));
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: calc(0.3px * var(--player-level-avatar-scale));
+  text-shadow: 0 calc(1px * var(--player-level-avatar-scale))
+    calc(2px * var(--player-level-avatar-scale)) rgba(255, 255, 255, 0.72);
+  pointer-events: none;
 }
 
 .levelBadge {
   position: absolute;
-  z-index: 3;
+  z-index: var(--player-level-avatar-badge-layer, 3);
 
   /* В Figma top: 37px */
   top: calc(37px * var(--player-level-avatar-scale));
@@ -119,4 +136,20 @@
   --player-level-avatar-segment-active: var(--player-level-avatar-accent);
   --player-level-avatar-badge-background: var(--player-level-avatar-accent);
   --player-level-avatar-badge-color: #fafafa;
+  isolation: auto;
+}
+
+.participant::before {
+  position: absolute;
+  z-index: var(--player-level-avatar-ring-shield-layer, 0);
+  top: calc(-2px * var(--player-level-avatar-scale));
+  left: calc(-2px * var(--player-level-avatar-scale));
+
+  width: calc(52px * var(--player-level-avatar-scale));
+  height: calc(52px * var(--player-level-avatar-scale));
+
+  border-radius: 50%;
+  background: #fff;
+  content: '';
+  pointer-events: none;
 }

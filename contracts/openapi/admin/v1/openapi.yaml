@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: PadlHub Admin API
-  version: 1.2.0
+  version: 1.4.0
   description: Canonical tenant-scoped CUP boundary for audited operator commands.
   license:
     name: Proprietary
@@ -15,6 +15,8 @@ tags:
     description: Audited manual notification operations available to authorized CUP staff.
   - name: Locations
     description: Tenant-scoped editorial profiles for PadlHub public locations.
+  - name: GiftCertificates
+    description: Versioned gift certificate catalog management for authorized CUP staff.
 paths:
   /admin/api/v1/{tenantKey}/notifications/capabilities:
     get:
@@ -90,6 +92,184 @@ paths:
         '409':
           $ref: '#/components/responses/ApiError'
         '422':
+          $ref: '#/components/responses/ApiError'
+  /admin/api/v1/{tenantKey}/gift-certificate-catalog:
+    get:
+      tags: [GiftCertificates]
+      operationId: getAdminGiftCertificateCatalogState
+      summary: Get current draft and published catalog versions
+      parameters:
+        - $ref: '#/components/parameters/TenantKey'
+      responses:
+        '200':
+          description: Current tenant catalog state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GiftCertificateAdminCatalogState'
+        '401':
+          $ref: '#/components/responses/ApiError'
+        '403':
+          $ref: '#/components/responses/ApiError'
+        '503':
+          $ref: '#/components/responses/ApiError'
+  /admin/api/v1/{tenantKey}/gift-certificate-catalog/draft:
+    put:
+      tags: [GiftCertificates]
+      operationId: saveAdminGiftCertificateCatalogDraft
+      summary: Create or replace the tenant draft with optimistic versioning
+      parameters:
+        - $ref: '#/components/parameters/TenantKey'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SaveGiftCertificateCatalogDraftRequest'
+      responses:
+        '200':
+          description: Draft saved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GiftCertificateCatalogCommandResult'
+        '400':
+          $ref: '#/components/responses/ApiError'
+        '401':
+          $ref: '#/components/responses/ApiError'
+        '403':
+          $ref: '#/components/responses/ApiError'
+        '409':
+          $ref: '#/components/responses/ApiError'
+        '503':
+          $ref: '#/components/responses/ApiError'
+  /admin/api/v1/{tenantKey}/gift-certificate-catalog/draft/publish:
+    post:
+      tags: [GiftCertificates]
+      operationId: publishAdminGiftCertificateCatalogDraft
+      summary: Publish an immutable catalog version and archive the previous version
+      parameters:
+        - $ref: '#/components/parameters/TenantKey'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PublishGiftCertificateCatalogRequest'
+      responses:
+        '200':
+          description: Draft published
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GiftCertificateCatalogCommandResult'
+        '400':
+          $ref: '#/components/responses/ApiError'
+        '401':
+          $ref: '#/components/responses/ApiError'
+        '403':
+          $ref: '#/components/responses/ApiError'
+        '404':
+          $ref: '#/components/responses/ApiError'
+        '409':
+          $ref: '#/components/responses/ApiError'
+        '422':
+          $ref: '#/components/responses/ApiError'
+        '503':
+          $ref: '#/components/responses/ApiError'
+  /admin/api/v1/{tenantKey}/gift-certificate-media:
+    post:
+      tags: [GiftCertificates]
+      operationId: uploadAdminGiftCertificateMedia
+      summary: Validate, normalize and store a certificate design image
+      parameters:
+        - $ref: '#/components/parameters/TenantKey'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          image/jpeg:
+            schema:
+              type: string
+              format: binary
+          image/png:
+            schema:
+              type: string
+              format: binary
+          image/webp:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '201':
+          description: Metadata-free WebP asset stored in PadlHub object storage.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GiftCertificateMediaCommandResult'
+        '400':
+          $ref: '#/components/responses/ApiError'
+        '401':
+          $ref: '#/components/responses/ApiError'
+        '403':
+          $ref: '#/components/responses/ApiError'
+        '409':
+          $ref: '#/components/responses/ApiError'
+        '413':
+          $ref: '#/components/responses/ApiError'
+        '415':
+          $ref: '#/components/responses/ApiError'
+        '422':
+          $ref: '#/components/responses/ApiError'
+        '503':
+          $ref: '#/components/responses/ApiError'
+  /admin/api/v1/{tenantKey}/location-media:
+    post:
+      tags: [Locations]
+      operationId: uploadAdminLocationMedia
+      summary: Validate, normalize and store a location gallery image
+      parameters:
+        - $ref: '#/components/parameters/TenantKey'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          image/jpeg:
+            schema:
+              type: string
+              format: binary
+          image/png:
+            schema:
+              type: string
+              format: binary
+          image/webp:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '201':
+          description: Normalized WebP asset stored in PadlHub object storage.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocationMediaCommandResult'
+        '400':
+          $ref: '#/components/responses/ApiError'
+        '401':
+          $ref: '#/components/responses/ApiError'
+        '403':
+          $ref: '#/components/responses/ApiError'
+        '409':
+          $ref: '#/components/responses/ApiError'
+        '413':
+          $ref: '#/components/responses/ApiError'
+        '415':
+          $ref: '#/components/responses/ApiError'
+        '422':
+          $ref: '#/components/responses/ApiError'
+        '503':
           $ref: '#/components/responses/ApiError'
   /admin/api/v1/{tenantKey}/locations:
     get:
@@ -237,6 +417,331 @@ components:
           schema:
             $ref: '#/components/schemas/ApiError'
   schemas:
+    GiftCertificateCatalogStatus:
+      type: string
+      enum: [DRAFT, PUBLISHED, ARCHIVED]
+    GiftCertificateFlowStep:
+      type: string
+      enum: [RECIPIENT_KIND, DESIGN, DENOMINATION, MESSAGE, DELIVERY, REVIEW]
+    GiftCertificatePolicy:
+      type: object
+      additionalProperties: false
+      required:
+        - validityStart
+        - validityDays
+        - activationDeadlineDays
+        - scheduledDeliveryEnabled
+        - emailAttachmentEnabled
+      properties:
+        validityStart:
+          type: string
+          enum: [ISSUE, ACTIVATION]
+        validityDays:
+          type: integer
+          minimum: 1
+          maximum: 3650
+        activationDeadlineDays:
+          type: [integer, 'null']
+          minimum: 1
+          maximum: 3650
+        scheduledDeliveryEnabled:
+          type: boolean
+        emailAttachmentEnabled:
+          type: boolean
+    GiftCertificateDesignInput:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          key,
+          audience,
+          title,
+          description,
+          imageUrl,
+          alt,
+          codeXPercent,
+          codeYPercent,
+          amountXPercent,
+          amountYPercent,
+          active,
+          sortOrder,
+        ]
+      properties:
+        key:
+          type: string
+          pattern: '^[a-z][a-z0-9-]{1,62}$'
+        audience:
+          type: string
+          enum: [FOR_HER, FOR_HIM, UNIVERSAL]
+        title:
+          type: string
+          minLength: 1
+          maxLength: 120
+        description:
+          type: [string, 'null']
+          minLength: 1
+          maxLength: 500
+        imageUrl:
+          type: string
+          pattern: '^(https://|/public/api/v1/)'
+          maxLength: 2000
+        alt:
+          type: string
+          minLength: 1
+          maxLength: 180
+        codeXPercent:
+          type: number
+          minimum: 0
+          maximum: 100
+        codeYPercent:
+          type: number
+          minimum: 0
+          maximum: 100
+        amountXPercent:
+          type: number
+          minimum: 0
+          maximum: 100
+        amountYPercent:
+          type: number
+          minimum: 0
+          maximum: 100
+        active:
+          type: boolean
+        sortOrder:
+          type: integer
+          minimum: 0
+          maximum: 999
+    GiftCertificateDesign:
+      allOf:
+        - $ref: '#/components/schemas/GiftCertificateDesignInput'
+        - type: object
+          required: [id]
+          properties:
+            id:
+              type: string
+              format: uuid
+    GiftCertificateDenominationInput:
+      type: object
+      additionalProperties: false
+      required: [amountMinor, currency, active, sortOrder]
+      properties:
+        amountMinor:
+          type: integer
+          minimum: 10000
+          maximum: 100000000
+        currency:
+          type: string
+          const: RUB
+        active:
+          type: boolean
+        sortOrder:
+          type: integer
+          minimum: 0
+          maximum: 999
+    GiftCertificateDenomination:
+      allOf:
+        - $ref: '#/components/schemas/GiftCertificateDenominationInput'
+        - type: object
+          required: [id]
+          properties:
+            id:
+              type: string
+              format: uuid
+    GiftCertificateCatalogInput:
+      type: object
+      additionalProperties: false
+      required:
+        - title
+        - publicEnabled
+        - availableFrom
+        - availableTo
+        - flowSteps
+        - policy
+        - designs
+        - denominations
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 160
+        publicEnabled:
+          type: boolean
+        availableFrom:
+          type: [string, 'null']
+          format: date-time
+        availableTo:
+          type: [string, 'null']
+          format: date-time
+        flowSteps:
+          type: array
+          minItems: 3
+          maxItems: 6
+          uniqueItems: true
+          items:
+            $ref: '#/components/schemas/GiftCertificateFlowStep'
+        policy:
+          $ref: '#/components/schemas/GiftCertificatePolicy'
+        designs:
+          type: array
+          maxItems: 20
+          items:
+            $ref: '#/components/schemas/GiftCertificateDesignInput'
+        denominations:
+          type: array
+          maxItems: 20
+          items:
+            $ref: '#/components/schemas/GiftCertificateDenominationInput'
+    GiftCertificateCatalog:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - catalogNumber
+        - status
+        - revision
+        - title
+        - publicEnabled
+        - availableFrom
+        - availableTo
+        - flowSteps
+        - policy
+        - designs
+        - denominations
+        - createdAt
+        - updatedAt
+        - publishedAt
+        - archivedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        catalogNumber:
+          type: integer
+          minimum: 1
+        status:
+          $ref: '#/components/schemas/GiftCertificateCatalogStatus'
+        revision:
+          type: integer
+          minimum: 1
+        title:
+          $ref: '#/components/schemas/GiftCertificateCatalogInput/properties/title'
+        publicEnabled:
+          $ref: '#/components/schemas/GiftCertificateCatalogInput/properties/publicEnabled'
+        availableFrom:
+          $ref: '#/components/schemas/GiftCertificateCatalogInput/properties/availableFrom'
+        availableTo:
+          $ref: '#/components/schemas/GiftCertificateCatalogInput/properties/availableTo'
+        flowSteps:
+          $ref: '#/components/schemas/GiftCertificateCatalogInput/properties/flowSteps'
+        policy:
+          $ref: '#/components/schemas/GiftCertificatePolicy'
+        designs:
+          type: array
+          maxItems: 20
+          items:
+            $ref: '#/components/schemas/GiftCertificateDesign'
+        denominations:
+          type: array
+          maxItems: 20
+          items:
+            $ref: '#/components/schemas/GiftCertificateDenomination'
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        publishedAt:
+          type: [string, 'null']
+          format: date-time
+        archivedAt:
+          type: [string, 'null']
+          format: date-time
+    GiftCertificateAdminCatalogState:
+      type: object
+      additionalProperties: false
+      required: [draft, published]
+      properties:
+        draft:
+          oneOf:
+            - $ref: '#/components/schemas/GiftCertificateCatalog'
+            - type: 'null'
+        published:
+          oneOf:
+            - $ref: '#/components/schemas/GiftCertificateCatalog'
+            - type: 'null'
+    SaveGiftCertificateCatalogDraftRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedRevision, catalog]
+      properties:
+        expectedRevision:
+          type: [integer, 'null']
+          minimum: 1
+        catalog:
+          $ref: '#/components/schemas/GiftCertificateCatalogInput'
+    PublishGiftCertificateCatalogRequest:
+      type: object
+      additionalProperties: false
+      required: [catalogId, expectedRevision]
+      properties:
+        catalogId:
+          type: string
+          format: uuid
+        expectedRevision:
+          type: integer
+          minimum: 1
+    GiftCertificateCatalogCommandResult:
+      allOf:
+        - $ref: '#/components/schemas/GiftCertificateCatalog'
+        - type: object
+          required: [replayed]
+          properties:
+            replayed:
+              type: boolean
+    GiftCertificateMediaAsset:
+      type: object
+      additionalProperties: false
+      required: [id, status, mediaUrl, contentType, bytes, width, height, sha256, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          const: READY
+        mediaUrl:
+          type: string
+          pattern: '^/public/api/v1/'
+        contentType:
+          type: string
+          const: image/webp
+        bytes:
+          type: integer
+          minimum: 1
+          maximum: 8388608
+        width:
+          type: integer
+          minimum: 1
+          maximum: 2048
+        height:
+          type: integer
+          minimum: 1
+          maximum: 2048
+        sha256:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+        createdAt:
+          type: string
+          format: date-time
+    GiftCertificateMediaCommandResult:
+      allOf:
+        - $ref: '#/components/schemas/GiftCertificateMediaAsset'
+        - type: object
+          required: [replayed]
+          properties:
+            replayed:
+              type: boolean
     LocationPublicationStatus:
       type: string
       enum: [DRAFT, PUBLISHED, ARCHIVED]
@@ -313,8 +818,7 @@ components:
       properties:
         url:
           type: string
-          format: uri
-          pattern: '^https://'
+          pattern: '^(https://|/public/api/v1/[a-z0-9][a-z0-9-]{1,62}/location-media/)'
           maxLength: 2000
         alt:
           type: string
@@ -325,6 +829,49 @@ components:
           type: integer
           minimum: 0
           maximum: 99
+    LocationMediaAsset:
+      type: object
+      additionalProperties: false
+      required: [id, status, mediaUrl, contentType, bytes, width, height, sha256, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          const: READY
+        mediaUrl:
+          type: string
+          pattern: '^/public/api/v1/[a-z0-9][a-z0-9-]{1,62}/location-media/'
+        contentType:
+          type: string
+          const: image/webp
+        bytes:
+          type: integer
+          minimum: 1
+          maximum: 8388608
+        width:
+          type: integer
+          minimum: 1
+          maximum: 2048
+        height:
+          type: integer
+          minimum: 1
+          maximum: 2048
+        sha256:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+        createdAt:
+          type: string
+          format: date-time
+    LocationMediaCommandResult:
+      allOf:
+        - $ref: '#/components/schemas/LocationMediaAsset'
+        - type: object
+          required: [replayed]
+          properties:
+            replayed:
+              type: boolean
     LocationProfileInput:
       type: object
       additionalProperties: false

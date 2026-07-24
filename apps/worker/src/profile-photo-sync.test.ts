@@ -1,12 +1,18 @@
 import { describe, expect, it, vi } from 'vitest';
 import sharp from 'sharp';
 
-import { synchronizeVivaProfilePhoto, type ProfilePhotoObjectStore } from './profile-photo-sync.js';
+import {
+  synchronizeProfilePhoto,
+  synchronizeVivaProfilePhoto,
+  type ProfilePhotoObjectStore,
+} from './profile-photo-sync.js';
 
 const tenantId = '86afbe01-0318-4dd2-bc25-303b7bf0d430';
 const userId = '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca';
+const deliveryId = '3b6b1841-bef8-498d-8b2c-4adf56a68170';
 const fetchedAt = '2026-07-16T08:00:00.000Z';
 const sourceUrl = 'https://562807.selcdn.ru/smstretching/source-photo';
+const deliveryUrl = `/public/api/v1/media/profile-photos/${tenantId}/${deliveryId}`;
 
 function poolWith(record: Record<string, unknown>) {
   const query = vi.fn((text: string) => {
@@ -60,6 +66,7 @@ describe('Viva profile photo synchronization', () => {
       .toBuffer();
     const database = poolWith({
       photo_url: null,
+      delivery_id: null,
       source_url: null,
       source_etag: null,
       source_last_modified: null,
@@ -92,10 +99,16 @@ describe('Viva profile photo synchronization', () => {
     expect(result.persistence.objectKey).toMatch(
       new RegExp(`^profile-photos/${tenantId}/${userId}/[0-9a-f]{64}\\.webp$`),
     );
+    expect(result.persistence.deliveryId).toEqual(expect.any(String));
+    expect(result.persistence.avatarUrl).toBe(
+      `/public/api/v1/media/profile-photos/${tenantId}/${result.persistence.deliveryId}`,
+    );
     expect(objectStore.put).toHaveBeenCalledOnce();
     const uploaded = objectStore.put.mock.calls[0]?.[0];
     expect(uploaded?.body.subarray(0, 4).toString('ascii')).toBe('RIFF');
     expect(uploaded?.body.subarray(8, 12).toString('ascii')).toBe('WEBP');
+    const requestHeaders = new Headers(fetchImplementation.mock.calls[0]?.[1]?.headers);
+    expect(requestHeaders.get('User-Agent')).toBe('PadlHub Profile Photo Sync/1.0');
   });
 
   it('uses a conditional request and keeps the locally stored object on 304', async () => {
@@ -103,6 +116,7 @@ describe('Viva profile photo synchronization', () => {
     const objectKey = `profile-photos/${tenantId}/${userId}/${contentSha256}.webp`;
     const database = poolWith({
       photo_url: 'https://media.padlhub.test/old-signed-url',
+      delivery_id: deliveryId,
       source_url: sourceUrl,
       source_etag: '"photo-v1"',
       source_last_modified: null,
@@ -125,7 +139,8 @@ describe('Viva profile photo synchronization', () => {
 
     expect(result.outcome).toBe('unchanged');
     expect(objectStore.put).not.toHaveBeenCalled();
-    expect(objectStore.createReadUrl).toHaveBeenCalledWith(objectKey);
+    expect(result.persistence.avatarUrl).toBe(deliveryUrl);
+    expect(objectStore.createReadUrl).not.toHaveBeenCalled();
     const requestHeaders = new Headers(fetchImplementation.mock.calls[0]?.[1]?.headers);
     expect(requestHeaders.get('If-None-Match')).toBe('"photo-v1"');
   });
@@ -135,6 +150,7 @@ describe('Viva profile photo synchronization', () => {
     const objectKey = `profile-photos/${tenantId}/${userId}/${contentSha256}.webp`;
     const database = poolWith({
       photo_url: 'https://media.padlhub.test/old-signed-url',
+      delivery_id: deliveryId,
       source_url: sourceUrl,
       source_etag: null,
       source_last_modified: null,
@@ -158,5 +174,41 @@ describe('Viva profile photo synchronization', () => {
         deleteAfter: '2026-07-16T09:05:00.000Z',
       },
     });
+  });
+
+  it('keeps a profile-owned object when a fallback legacy source differs', async () => {
+    const contentSha256 = 'c'.repeat(64);
+    const objectKey = `profile-photos/${tenantId}/${userId}/${contentSha256}.webp`;
+    const database = poolWith({
+      photo_url: 'https://media.padlhub.test/current-signed-url',
+      delivery_id: deliveryId,
+      source_url: 'https://562807.selcdn.ru/smstretching/profile-owned-photo',
+      source_etag: '"profile-v1"',
+      source_last_modified: null,
+      content_sha256: contentSha256,
+      object_key: objectKey,
+      synced_at: fetchedAt,
+    });
+    const objectStore = store();
+    const fetchImplementation = vi.fn<typeof fetch>();
+
+    const result = await synchronizeProfilePhoto({
+      ...settings,
+      pool: database.pool,
+      store: objectStore,
+      sourceUrl: 'https://562807.selcdn.ru/smstretching/legacy-game-photo',
+      replaceExistingSource: false,
+      fetchImplementation,
+    });
+
+    expect(result.outcome).toBe('unchanged');
+    expect(result.persistence).toMatchObject({
+      avatarUrl: deliveryUrl,
+      sourceUrl: 'https://562807.selcdn.ru/smstretching/profile-owned-photo',
+      objectKey,
+      contentSha256,
+    });
+    expect(fetchImplementation).not.toHaveBeenCalled();
+    expect(objectStore.createReadUrl).not.toHaveBeenCalled();
   });
 });

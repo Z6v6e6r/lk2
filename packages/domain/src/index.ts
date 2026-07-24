@@ -64,6 +64,23 @@ export interface ClientRoutingPlan {
 
 export type ClientPlatform = 'web' | 'ios' | 'android' | 'cup-admin' | 'internal';
 
+const PADLHUB_UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+/**
+ * Stable client-facing profile-photo URL. Temporary S3 signatures are created only inside the
+ * media delivery boundary and must never be persisted in profiles or read projections.
+ */
+export function profilePhotoDeliveryUrl(tenantId: string, deliveryId: string): string {
+  if (!PADLHUB_UUID_PATTERN.test(tenantId) || !PADLHUB_UUID_PATTERN.test(deliveryId)) {
+    throw new Error('PROFILE_PHOTO_DELIVERY_ID_INVALID');
+  }
+  return `/public/api/v1/media/profile-photos/${tenantId}/${deliveryId}`;
+}
+
+export const PROFILE_PHOTO_DELIVERY_PATH_PATTERN =
+  /^\/public\/api\/v1\/media\/profile-photos\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 export type DomainName =
   | 'identity'
   | 'profile'

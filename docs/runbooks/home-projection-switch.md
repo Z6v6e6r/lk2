@@ -151,11 +151,12 @@ from integration.user_profile_photo_sync
 order by user_id;
 ```
 
-Do not print `source_url`, signed query parameters or storage credentials during verification. For a
-profile with a Viva photo, confirm that the `profile` component contains an `image/webp` signed URL,
-that its host equals `S3_PUBLIC_ENDPOINT`, and that a second unchanged cycle does not create another
-object. Changing the Viva photo must produce a new SHA-256 object key and retire the previous key
-only after the database/outbox transaction succeeds.
+Do not print `source_url`, storage credentials or historical signed query parameters during
+verification. For a profile with a Viva photo, confirm that the `profile` component contains the
+stable `/public/api/v1/media/profile-photos/{tenantId}/{deliveryId}` path and that a GET to that path returns
+`image/webp`. A second unchanged cycle must not create another object. Changing the Viva photo must
+produce a new SHA-256 object key and retire the previous key only after the database/outbox
+transaction succeeds.
 
 `EXTERNAL_ID_MAPPING_CONFLICT` means the Viva profile is already attached to another PadlHub UUID.
 Do not edit the mapping or revoke a delegation as an implicit repair; stop for explicit account

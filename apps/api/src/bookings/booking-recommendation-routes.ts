@@ -1,4 +1,8 @@
-import type { BookingPreferencesRepository, GameRepository } from '@phub/database';
+import type {
+  BookingPreferencesRepository,
+  GameRepository,
+  ProfileSummaryRepository,
+} from '@phub/database';
 import type { FastifyInstance, FastifyReply, FastifyRequest, preHandlerHookHandler } from 'fastify';
 
 import { sendApiError } from '../http-errors.js';
@@ -33,6 +37,7 @@ export function registerBookingRecommendationRoutes(
   app: FastifyInstance,
   options: {
     readonly gameRepository?: CardReadRepository;
+    readonly photoRepository?: Pick<ProfileSummaryRepository, 'getPhotoDeliveryIds'>;
     readonly preferencesRepository?: BookingPreferencesRepository;
     readonly authenticatedTenantHandlers: readonly preHandlerHookHandler[];
   },
@@ -67,6 +72,7 @@ export function registerBookingRecommendationRoutes(
         );
         return await listBookingRecommendations({
           repository: options.gameRepository,
+          ...(options.photoRepository ? { photoRepository: options.photoRepository } : {}),
           tenantId: current.tenantId,
           userId: current.userId,
           preferences: profile.preferences,

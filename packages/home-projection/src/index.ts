@@ -1,10 +1,20 @@
 import { communitySummarySchema } from '@phub/communities';
+import { PROFILE_PHOTO_DELIVERY_PATH_PATTERN } from '@phub/domain';
 import { z } from 'zod';
 
 const uuid = z.string().uuid();
 const dateTime = z.string().datetime({ offset: true });
 const route = z.string().startsWith('/');
 const nullableUrl = z.string().url().nullable();
+const nullableAvatarUrl = z
+  .string()
+  .max(2_048)
+  .refine(
+    (value) =>
+      z.string().url().safeParse(value).success || PROFILE_PHOTO_DELIVERY_PATH_PATTERN.test(value),
+    'avatar URL must be absolute or use the PadlHub profile-photo delivery endpoint',
+  )
+  .nullable();
 const nullableLocationImageUrl = z
   .string()
   .refine(
@@ -46,7 +56,7 @@ export const homeProfileSchema = z
     displayName: z.string().min(1).max(200),
     firstName: z.string().max(100).nullable().optional(),
     lastName: z.string().max(100).nullable().optional(),
-    avatarUrl: nullableUrl.optional(),
+    avatarUrl: nullableAvatarUrl.optional(),
     phoneLast4: z
       .string()
       .regex(/^\d{4}$/)
@@ -87,9 +97,25 @@ export const homeUpcomingSchema = z
     kind: z.enum(['game', 'training', 'tournament']),
     title: z.string().min(1).max(160),
     startsAt: dateTime,
+    endsAt: dateTime.optional(),
     venue: z.string().min(1).max(160),
     status: z.enum(['confirmed', 'waitlist', 'payment_required']),
     route,
+    game: z
+      .object({
+        type: z.enum(['friendly', 'rating']),
+        courtName: z.string().min(1).max(120).optional(),
+        station: z
+          .object({
+            id: uuid,
+            title: z.string().min(1).max(120),
+            route,
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
     /** Viewer-filtered roster summary. It is omitted when the source does not own it. */
     participants: z
       .array(
@@ -101,8 +127,10 @@ export const homeUpcomingSchema = z
             firstName: z.string().min(1).max(100).optional(),
             lastName: z.string().min(1).max(100).nullable().optional(),
             nickname: z.string().min(1).max(100).nullable().optional(),
-            avatarUrl: nullableUrl.optional(),
+            avatarUrl: nullableAvatarUrl.optional(),
             level: z.string().min(1).max(20).nullable().optional(),
+            /** Normalized rating whose fractional part renders progress within the level. */
+            levelValue: z.number().min(0).max(10).nullable().optional(),
           })
           .strict(),
       )

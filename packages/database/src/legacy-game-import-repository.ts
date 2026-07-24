@@ -18,6 +18,7 @@ export interface LegacyGameImportParticipant {
   readonly externalId: string;
   readonly displayName: string;
   readonly level: GamePlayerLevel | null;
+  readonly levelValue: number | null;
   readonly role: 'ORGANIZER' | 'PLAYER';
   readonly paymentState: 'NOT_REQUIRED' | 'PAID';
 }
@@ -66,10 +67,35 @@ export interface LegacyGameParticipantSyncResult {
 }
 
 export interface LegacyGameImportRepository {
+  /** Server-only lookup used to bind the authenticated viewer to a sanitized CUP participant. */
+  resolveVivaProfileExternalId(input: {
+    readonly tenantId: string;
+    readonly userId: string;
+  }): Promise<string | undefined>;
+  /** Server-only lookup; used solely by the CUP history adapter and never serialized. */
+  resolveViewerPhoneE164(input: {
+    readonly tenantId: string;
+    readonly userId: string;
+  }): Promise<string | undefined>;
+  /**
+   * Advances only already-associated Games aggregates selected by fresh Viva history exercise
+   * references. The provider identifiers remain inside integration storage.
+   */
+  refreshVivaExerciseGameLifecycles(input: {
+    readonly tenantId: string;
+    readonly vivaExerciseAssociationIds: readonly string[];
+    readonly correlationId: string;
+    readonly now: Date;
+  }): Promise<readonly { readonly gameId: string; readonly projectionEventId: string }[]>;
   importSnapshots(input: {
     readonly tenantKey: string;
     readonly snapshots: readonly LegacyGameImportSnapshot[];
     readonly correlationId: string;
+    readonly participantUserBindings?: readonly {
+      readonly externalId: string;
+      readonly userId: string;
+      readonly proofKind?: 'VIVA_PROFILE' | 'VIEWER_PHONE';
+    }[];
     readonly now?: Date;
   }): Promise<LegacyGameImportResult>;
   /**
@@ -99,6 +125,14 @@ interface LegacyGameRow extends QueryResultRow {
   readonly revision: string | number;
   readonly organizer_user_id: string;
   readonly lifecycle_state: GameLifecycleState;
+}
+
+interface AssociatedLifecycleGameRow extends QueryResultRow {
+  readonly id: string;
+  readonly revision: string | number;
+  readonly lifecycle_state: 'SCHEDULED' | 'IN_PROGRESS';
+  readonly starts_at: Date | string;
+  readonly ends_at: Date | string;
 }
 
 interface ActiveParticipantRow extends QueryResultRow {
@@ -131,6 +165,97 @@ function createdAt(snapshot: LegacyGameImportSnapshot, now: Date): string {
   return new Date(
     Math.min(now.getTime(), Date.parse(snapshot.startsAt) - 86_400_000),
   ).toISOString();
+}
+
+function generatedLegacyTitle(snapshot: LegacyGameImportSnapshot): string {
+  return `${snapshot.kind === 'RATING' ? 'Рейтинговая' : 'Открытая'} игра ${snapshot.capacity === 2 ? '1×1' : '2×2'}`;
+}
+
+async function reconcileLifecycleCommands(
+  client: PoolClient,
+  input: {
+    readonly tenantId: string;
+    readonly gameId: string;
+    readonly desiredLifecycleState: GameLifecycleState;
+    readonly now: Date;
+  },
+): Promise<void> {
+  if (input.desiredLifecycleState === 'FINISHED' || input.desiredLifecycleState === 'CANCELLED') {
+    await client.query(
+      `update games.scheduled_commands
+          set state = 'COMPLETED', completed_at = coalesce(completed_at, $3::timestamptz),
+              locked_at = null, locked_by = null
+        where tenant_id = $1 and game_id = $2
+          and command_type in ('game.lifecycle.start.v1', 'game.lifecycle.finish.v1')
+          and state in ('PENDING', 'FAILED')`,
+      [input.tenantId, input.gameId, input.now.toISOString()],
+    );
+    return;
+  }
+
+  if (input.desiredLifecycleState === 'IN_PROGRESS') {
+    await client.query(
+      `update games.scheduled_commands
+          set state = 'COMPLETED', completed_at = coalesce(completed_at, $3::timestamptz),
+              locked_at = null, locked_by = null
+        where tenant_id = $1 and game_id = $2
+          and command_type = 'game.lifecycle.start.v1'
+          and state in ('PENDING', 'FAILED')`,
+      [input.tenantId, input.gameId, input.now.toISOString()],
+    );
+  }
+
+  // The advisory import lock serializes repeated CUP snapshots for the tenant. Keep one durable
+  // start and finish command per game, and refresh a still-pending command if the aggregate
+  // revision changed while the roster was being bound.
+  await client.query(
+    `with desired(command_type, due_at, expected_revision) as (
+       select 'game.lifecycle.start.v1'::text, game.starts_at, game.revision
+         from games.games game
+        where game.tenant_id = $1 and game.id = $2
+          and game.lifecycle_state = $3 and $3 = 'SCHEDULED'
+       union all
+       select 'game.lifecycle.finish.v1'::text, game.ends_at,
+              game.revision + case when $3 = 'SCHEDULED' then 1 else 0 end
+         from games.games game
+        where game.tenant_id = $1 and game.id = $2
+          and game.lifecycle_state = $3 and $3 in ('SCHEDULED', 'IN_PROGRESS')
+     ), refreshed as (
+       update games.scheduled_commands command set
+          due_at = desired.due_at,
+          expected_revision = desired.expected_revision,
+          payload = jsonb_build_object(
+            'gameId', command.game_id,
+            'expectedRevision', desired.expected_revision::text
+          ),
+          available_at = case
+            when command.state = 'PENDING' then least(command.available_at, desired.due_at)
+            else command.available_at
+          end
+         from desired
+        where command.tenant_id = $1 and command.game_id = $2
+          and command.command_type::text = desired.command_type
+          and command.state in ('PENDING', 'FAILED')
+       returning command.command_type
+     )
+     insert into games.scheduled_commands (
+       tenant_id, game_id, command_type, due_at, available_at, expected_revision, payload
+     )
+     select $1, $2, desired.command_type,
+            desired.due_at, desired.due_at, desired.expected_revision,
+            jsonb_build_object(
+              'gameId', $2::uuid,
+              'expectedRevision', desired.expected_revision::text
+            )
+       from desired
+      where not exists (
+        select 1
+          from games.scheduled_commands command
+         where command.tenant_id = $1 and command.game_id = $2
+           and command.command_type::text = desired.command_type
+      )`,
+    [input.tenantId, input.gameId, input.desiredLifecycleState],
+  );
 }
 
 async function findMapping(
@@ -226,14 +351,46 @@ async function resolvePlayer(
   tenantId: string,
   participant: LegacyGameImportParticipant,
   externalVersion: string,
+  boundUserId?: string,
+  proofKind: 'VIVA_PROFILE' | 'VIEWER_PHONE' = 'VIVA_PROFILE',
 ): Promise<string> {
+  const persistedBinding = await queryOne<{ readonly user_id: string } & QueryResultRow>(
+    client,
+    `select user_id
+       from integration.legacy_game_player_bindings
+      where tenant_id = $1 and source_player_association_id = $2
+      for update`,
+    [tenantId, participant.externalId],
+  );
+  if (persistedBinding && boundUserId && persistedBinding.user_id !== boundUserId) {
+    throw new Error('LEGACY_GAME_PARTICIPANT_USER_BINDING_CONFLICT');
+  }
+  const provenUserId = boundUserId ?? persistedBinding?.user_id;
+  if (boundUserId && !persistedBinding) {
+    const boundUser = await queryOne<{ readonly id: string } & QueryResultRow>(
+      client,
+      `select id from identity.users
+        where tenant_id = $1 and id = $2 and status = 'ACTIVE'
+        for share`,
+      [tenantId, boundUserId],
+    );
+    if (!boundUser) throw new Error('LEGACY_GAME_PARTICIPANT_BOUND_USER_NOT_FOUND');
+    await client.query(
+      `insert into integration.legacy_game_player_bindings (
+         tenant_id, source_player_association_id, user_id, proof_kind
+       ) values ($1, $2, $3, $4)`,
+      [tenantId, participant.externalId, boundUserId, proofKind],
+    );
+  }
   const existing = await findMapping(client, tenantId, 'game_player', participant.externalId);
-  const userId = existing ?? randomUUID();
+  const userId = provenUserId ?? existing ?? randomUUID();
   if (!existing) {
-    await client.query(`insert into identity.users (id, tenant_id) values ($1, $2)`, [
-      userId,
-      tenantId,
-    ]);
+    if (!provenUserId) {
+      await client.query(`insert into identity.users (id, tenant_id) values ($1, $2)`, [
+        userId,
+        tenantId,
+      ]);
+    }
     await insertMapping(client, {
       tenantId,
       entityType: 'game_player',
@@ -243,15 +400,159 @@ async function resolvePlayer(
     });
   }
   await client.query(
-    `insert into profile.user_summaries (tenant_id, user_id, display_name, level_label)
-     values ($1, $2, $3, $4)
+    `insert into profile.user_summaries (
+       tenant_id, user_id, display_name, level_label, level_value
+     ) values ($1, $2, $3, $4, $5)
      on conflict (tenant_id, user_id) do update set
        display_name = excluded.display_name,
-       level_label = excluded.level_label,
+       level_label = coalesce(excluded.level_label, profile.user_summaries.level_label),
+       level_value = coalesce(excluded.level_value, profile.user_summaries.level_value),
        updated_at = now()`,
-    [tenantId, userId, cleanText(participant.displayName, 200, 'Игрок'), participant.level],
+    [
+      tenantId,
+      userId,
+      cleanText(participant.displayName, 200, 'Игрок'),
+      participant.level,
+      participant.levelValue,
+    ],
   );
   return userId;
+}
+
+async function refreshMappedPlayerSummary(
+  client: PoolClient,
+  input: {
+    readonly tenantId: string;
+    readonly participant: LegacyGameImportParticipant;
+  },
+): Promise<void> {
+  const userId = await findMapping(
+    client,
+    input.tenantId,
+    'game_player',
+    input.participant.externalId,
+  );
+  if (!userId) return;
+  await client.query(
+    `update profile.user_summaries summary
+        set display_name = $3,
+            level_label = coalesce($4, summary.level_label),
+            level_value = coalesce($5, summary.level_value),
+            updated_at = now()
+      where summary.tenant_id = $1 and summary.user_id = $2
+        and (
+          summary.display_name = 'Организатор'
+          or summary.display_name ~ '^Игрок( [0-9]+)?$'
+          or not exists (
+            select 1
+              from integration.legacy_game_player_bindings binding
+             where binding.tenant_id = summary.tenant_id
+               and binding.user_id = summary.user_id
+          )
+        )`,
+    [
+      input.tenantId,
+      userId,
+      cleanText(input.participant.displayName, 200, 'Игрок'),
+      input.participant.level,
+      input.participant.levelValue,
+    ],
+  );
+}
+
+async function bindExistingGameParticipant(
+  client: PoolClient,
+  input: {
+    readonly tenantId: string;
+    readonly gameId: string;
+    readonly participant: LegacyGameImportParticipant;
+    readonly externalVersion: string;
+    readonly userId: string;
+    readonly proofKind: 'VIVA_PROFILE' | 'VIEWER_PHONE';
+    readonly now: Date;
+  },
+): Promise<boolean> {
+  const previousUserId = await findMapping(
+    client,
+    input.tenantId,
+    'game_player',
+    input.participant.externalId,
+  );
+  const userId = await resolvePlayer(
+    client,
+    input.tenantId,
+    input.participant,
+    input.externalVersion,
+    input.userId,
+    input.proofKind,
+  );
+  if (!previousUserId || previousUserId === userId) return false;
+
+  const source = await queryOne<
+    {
+      readonly id: string;
+      readonly role: 'ORGANIZER' | 'PLAYER';
+    } & QueryResultRow
+  >(
+    client,
+    `select id, role
+       from games.participations
+      where tenant_id = $1 and game_id = $2 and user_id = $3 and state = 'ACTIVE'
+      for update`,
+    [input.tenantId, input.gameId, previousUserId],
+  );
+  if (!source) return false;
+  const target = await queryOne<{ readonly id: string } & QueryResultRow>(
+    client,
+    `select id
+       from games.participations
+      where tenant_id = $1 and game_id = $2 and user_id = $3 and state = 'ACTIVE'
+      for update`,
+    [input.tenantId, input.gameId, userId],
+  );
+  if (target) {
+    await client.query(
+      `update games.participations
+          set state = 'LEFT', left_at = $4, updated_at = $4
+        where tenant_id = $1 and game_id = $2 and id = $3`,
+      [input.tenantId, input.gameId, source.id, input.now.toISOString()],
+    );
+    await client.query(
+      `update games.participations
+          set role = $4, payment_state = $5, updated_at = $6
+        where tenant_id = $1 and game_id = $2 and id = $3`,
+      [
+        input.tenantId,
+        input.gameId,
+        target.id,
+        source.role,
+        input.participant.paymentState,
+        input.now.toISOString(),
+      ],
+    );
+  } else {
+    await client.query(
+      `update games.participations
+          set user_id = $4, payment_state = $5, updated_at = $6
+        where tenant_id = $1 and game_id = $2 and id = $3`,
+      [
+        input.tenantId,
+        input.gameId,
+        source.id,
+        userId,
+        input.participant.paymentState,
+        input.now.toISOString(),
+      ],
+    );
+  }
+  if (source.role === 'ORGANIZER') {
+    await client.query(
+      `update games.games set organizer_user_id = $3, updated_at = $4
+        where tenant_id = $1 and id = $2 and organizer_user_id = $5`,
+      [input.tenantId, input.gameId, userId, input.now.toISOString(), previousUserId],
+    );
+  }
+  return true;
 }
 
 async function resolveStation(
@@ -319,6 +620,10 @@ async function importOne(
     readonly snapshot: LegacyGameImportSnapshot;
     readonly correlationId: string;
     readonly now: Date;
+    readonly participantUserBindings: ReadonlyMap<
+      string,
+      { readonly userId: string; readonly proofKind: 'VIVA_PROFILE' | 'VIEWER_PHONE' }
+    >;
   },
 ): Promise<{
   readonly outcome: 'imported' | 'existing';
@@ -336,20 +641,204 @@ async function importOne(
       input.snapshot.externalId,
     );
     if (existingGameId) {
+      let aggregateChanged = false;
+      let lifecycleChanged = false;
+      const desiredLifecycleState = lifecycle(input.snapshot, input.now);
+      const projectionEventId = randomUUID();
+      // Refresh legacy presentation fields only when the previous import used a generated
+      // fallback title. Deliberately preserve a later canonical title or any local edit.
+      const generatedTitle = generatedLegacyTitle(input.snapshot);
+      const sourceTitle = cleanText(input.snapshot.title, 160, generatedTitle);
+      if (input.snapshot.station.courtName || sourceTitle !== generatedTitle) {
+        const updated = await client.query(
+          `update games.games
+              set title = case when title = $4 then $3 else title end,
+                  court_name = coalesce($5, court_name),
+                  updated_at = now()
+            where tenant_id = $1 and id = $2
+              and (title = $4 or court_name is distinct from coalesce($5, court_name))`,
+          [
+            input.tenantId,
+            existingGameId,
+            sourceTitle,
+            generatedTitle,
+            input.snapshot.station.courtName
+              ? cleanText(input.snapshot.station.courtName, 120, 'Корт')
+              : null,
+          ],
+        );
+        aggregateChanged = (updated.rowCount ?? 0) > 0;
+      }
+      if (desiredLifecycleState !== 'SCHEDULED') {
+        const lifecycleUpdate = await client.query(
+          `update games.games
+              set lifecycle_state = $3,
+                  result_state = case
+                    when $3 = 'FINISHED' and result_state = 'NOT_AVAILABLE'
+                      then 'AWAITING_SUBMISSION'
+                    when $3 = 'CANCELLED' then 'VOID'
+                    else result_state
+                  end,
+                  started_at = case
+                    when $3 in ('IN_PROGRESS', 'FINISHED')
+                      then coalesce(started_at, $5::timestamptz)
+                    else started_at
+                  end,
+                  finished_at = case
+                    when $3 = 'FINISHED' then coalesce(finished_at, $6::timestamptz)
+                    else finished_at
+                  end,
+                  cancelled_at = case
+                    when $3 = 'CANCELLED' then coalesce(cancelled_at, $4::timestamptz)
+                    else cancelled_at
+                  end,
+                  cancellation_reason_code = case
+                    when $3 = 'CANCELLED' then coalesce(cancellation_reason_code, 'OTHER')
+                    else cancellation_reason_code
+                  end,
+                  updated_at = $4
+            where tenant_id = $1 and id = $2
+              and (
+                ($3 = 'IN_PROGRESS' and lifecycle_state = 'SCHEDULED')
+                or ($3 = 'FINISHED' and lifecycle_state in ('SCHEDULED', 'IN_PROGRESS'))
+                or ($3 = 'CANCELLED' and lifecycle_state in ('SCHEDULED', 'IN_PROGRESS'))
+              )`,
+          [
+            input.tenantId,
+            existingGameId,
+            desiredLifecycleState,
+            input.now.toISOString(),
+            input.snapshot.startsAt,
+            input.snapshot.endsAt,
+          ],
+        );
+        lifecycleChanged = (lifecycleUpdate.rowCount ?? 0) > 0;
+        aggregateChanged = lifecycleChanged || aggregateChanged;
+      }
       await associateVivaExercise(client, {
         tenantId: input.tenantId,
         gameId: existingGameId,
         vivaExerciseExternalId: input.snapshot.vivaExerciseExternalId,
         externalVersion: input.snapshot.externalVersion,
       });
-      return { outcome: 'existing', gameId: existingGameId, projectionEventId: randomUUID() };
+      for (const participant of input.snapshot.participants) {
+        await refreshMappedPlayerSummary(client, {
+          tenantId: input.tenantId,
+          participant,
+        });
+      }
+      for (const participant of input.snapshot.participants) {
+        const binding = input.participantUserBindings.get(participant.externalId);
+        if (!binding) continue;
+        aggregateChanged =
+          (await bindExistingGameParticipant(client, {
+            tenantId: input.tenantId,
+            gameId: existingGameId,
+            participant,
+            externalVersion: input.snapshot.externalVersion,
+            userId: binding.userId,
+            proofKind: binding.proofKind,
+            now: input.now,
+          })) || aggregateChanged;
+      }
+      let aggregateRevision: string | undefined;
+      if (aggregateChanged) {
+        const revision = await queryOne<{ readonly revision: string | number } & QueryResultRow>(
+          client,
+          `update games.games
+              set revision = revision + 1, updated_at = $3
+            where tenant_id = $1 and id = $2
+            returning revision`,
+          [input.tenantId, existingGameId, input.now.toISOString()],
+        );
+        aggregateRevision = revision ? String(revision.revision) : undefined;
+      }
+      if (lifecycleChanged && aggregateRevision) {
+        const participants = await client.query<{ readonly user_id: string } & QueryResultRow>(
+          `select user_id
+             from games.participations
+            where tenant_id = $1 and game_id = $2 and state = 'ACTIVE'
+            order by joined_at, id`,
+          [input.tenantId, existingGameId],
+        );
+        const participantUserIds = participants.rows.map((row) => row.user_id);
+        const eventType =
+          desiredLifecycleState === 'CANCELLED'
+            ? 'game.cancelled.v1'
+            : desiredLifecycleState === 'FINISHED'
+              ? 'game.finished.v1'
+              : 'game.started.v1';
+        const commonPayload = {
+          gameId: existingGameId,
+          aggregateRevision,
+          causationId: projectionEventId,
+          actorUserId: null,
+          participantUserIds,
+        };
+        const event = gameDomainEventSchema.parse({
+          id: projectionEventId,
+          type: eventType,
+          aggregateId: existingGameId,
+          tenantId: input.tenantId,
+          occurredAt: input.now.toISOString(),
+          correlationId: input.correlationId,
+          payload:
+            eventType === 'game.cancelled.v1'
+              ? { ...commonPayload, reasonCode: 'OTHER' as const }
+              : commonPayload,
+        });
+        await client.query(
+          `insert into audit.outbox_events (
+             id, tenant_id, event_type, aggregate_id, correlation_id, payload, occurred_at
+           ) values ($1, $2, $3, $4, $5, $6::jsonb, $7)`,
+          [
+            event.id,
+            event.tenantId,
+            event.type,
+            event.aggregateId,
+            event.correlationId,
+            JSON.stringify(event.payload),
+            event.occurredAt,
+          ],
+        );
+        await client.query(
+          `insert into audit.audit_log (
+             tenant_id, actor_id, action, resource_type, resource_id, result,
+             reason, correlation_id, new_value
+           ) values ($1, null, 'LEGACY_GAME_LIFECYCLE_REFRESHED', 'GAME', $2,
+                     'SUCCESS', 'EXACT_CUP_SNAPSHOT', $3, $4::jsonb)`,
+          [
+            input.tenantId,
+            existingGameId,
+            input.correlationId,
+            JSON.stringify({
+              revision: Number(aggregateRevision),
+              lifecycleState: desiredLifecycleState,
+            }),
+          ],
+        );
+      }
+      await reconcileLifecycleCommands(client, {
+        tenantId: input.tenantId,
+        gameId: existingGameId,
+        desiredLifecycleState,
+        now: input.now,
+      });
+      return { outcome: 'existing', gameId: existingGameId, projectionEventId };
     }
 
     const participantIds = new Map<string, string>();
     for (const participant of input.snapshot.participants) {
       participantIds.set(
         participant.externalId,
-        await resolvePlayer(client, input.tenantId, participant, input.snapshot.externalVersion),
+        await resolvePlayer(
+          client,
+          input.tenantId,
+          participant,
+          input.snapshot.externalVersion,
+          input.participantUserBindings.get(participant.externalId)?.userId,
+          input.participantUserBindings.get(participant.externalId)?.proofKind,
+        ),
       );
     }
     const organizerUserId = participantIds.get(input.snapshot.organizerExternalId);
@@ -373,12 +862,12 @@ async function importOne(
     await client.query(
       `insert into games.games (
          tenant_id, id, revision, organizer_user_id, title, kind, visibility,
-         lifecycle_state, station_id, court_id, starts_at, ends_at, timezone,
+         lifecycle_state, station_id, court_id, court_name, starts_at, ends_at, timezone,
          capacity, waitlist_enabled, payment_mode, level_from, level_to, result_state,
          cancellation_reason_code, cancelled_at, started_at, finished_at, created_at, updated_at
        ) values (
-         $1, $2, 1, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-         $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $23
+         $1, $2, 1, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+         $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $24
        )`,
       [
         input.tenantId,
@@ -390,6 +879,9 @@ async function importOne(
         state,
         stationId,
         courtId,
+        input.snapshot.station.courtName
+          ? cleanText(input.snapshot.station.courtName, 120, 'Корт')
+          : null,
         input.snapshot.startsAt,
         input.snapshot.endsAt,
         input.snapshot.timezone,
@@ -442,6 +934,13 @@ async function importOne(
         ],
       );
     }
+
+    await reconcileLifecycleCommands(client, {
+      tenantId: input.tenantId,
+      gameId,
+      desiredLifecycleState: state,
+      now: input.now,
+    });
 
     const projectionEventId = randomUUID();
     const occurredAt = input.now.toISOString();
@@ -835,6 +1334,164 @@ async function synchronizeOne(
 
 export function createLegacyGameImportRepository(pool: Pool): LegacyGameImportRepository {
   return {
+    resolveVivaProfileExternalId(input) {
+      return withTenantTransaction(pool, input.tenantId, async (client) => {
+        const row = await queryOne<{ readonly external_id: string } & QueryResultRow>(
+          client,
+          `select external_id
+             from integration.external_entity_map
+            where tenant_id = $1 and external_system = 'VIVA'
+              and entity_type = 'viva_profile' and internal_id = $2
+            order by last_synced_at desc
+            limit 1`,
+          [input.tenantId, input.userId],
+        );
+        return row?.external_id;
+      });
+    },
+
+    resolveViewerPhoneE164(input) {
+      return withTenantTransaction(pool, input.tenantId, async (client) => {
+        const row = await queryOne<{ readonly phone_e164: string | null } & QueryResultRow>(
+          client,
+          `select phone_e164
+             from profile.user_summaries
+            where tenant_id = $1 and user_id = $2`,
+          [input.tenantId, input.userId],
+        );
+        return row?.phone_e164 ?? undefined;
+      });
+    },
+
+    async refreshVivaExerciseGameLifecycles(input) {
+      const vivaExerciseAssociationIds = [
+        ...new Set(input.vivaExerciseAssociationIds.map((id) => id.trim())),
+      ]
+        .filter(Boolean)
+        .slice(0, 100);
+      if (vivaExerciseAssociationIds.length === 0) return [];
+      return withTenantTransaction(pool, input.tenantId, async (client) => {
+        const candidates = await client.query<AssociatedLifecycleGameRow>(
+          `select game.id, game.revision, game.lifecycle_state, game.starts_at, game.ends_at
+             from integration.external_entity_map mapping
+             join games.games game
+               on game.tenant_id = mapping.tenant_id and game.id = mapping.internal_id
+            where mapping.tenant_id = $1 and mapping.external_system = $2
+              and mapping.entity_type = 'exercise'
+              and mapping.external_id = any($3::text[])
+              and game.lifecycle_state in ('SCHEDULED', 'IN_PROGRESS')
+              and game.starts_at <= $4::timestamptz
+            order by game.starts_at, game.id
+            for update of game`,
+          [
+            input.tenantId,
+            VIVA_EXTERNAL_SYSTEM,
+            vivaExerciseAssociationIds,
+            input.now.toISOString(),
+          ],
+        );
+        const refreshed: { gameId: string; projectionEventId: string }[] = [];
+        for (const candidate of candidates.rows) {
+          const desiredLifecycleState =
+            (candidate.ends_at instanceof Date
+              ? candidate.ends_at.getTime()
+              : Date.parse(candidate.ends_at)) <= input.now.getTime()
+              ? ('FINISHED' as const)
+              : ('IN_PROGRESS' as const);
+          if (candidate.lifecycle_state === desiredLifecycleState) continue;
+          const updated = await queryOne<{ readonly revision: string | number } & QueryResultRow>(
+            client,
+            `update games.games
+                set lifecycle_state = $3,
+                    result_state = case
+                      when $3 = 'FINISHED' and result_state = 'NOT_AVAILABLE'
+                        then 'AWAITING_SUBMISSION'
+                      else result_state
+                    end,
+                    started_at = coalesce(started_at, starts_at),
+                    finished_at = case
+                      when $3 = 'FINISHED' then coalesce(finished_at, ends_at)
+                      else finished_at
+                    end,
+                    revision = revision + 1,
+                    updated_at = $4::timestamptz
+              where tenant_id = $1 and id = $2
+                and lifecycle_state = $5
+              returning revision`,
+            [
+              input.tenantId,
+              candidate.id,
+              desiredLifecycleState,
+              input.now.toISOString(),
+              candidate.lifecycle_state,
+            ],
+          );
+          if (!updated) continue;
+          const participants = await client.query<{ readonly user_id: string } & QueryResultRow>(
+            `select user_id
+               from games.participations
+              where tenant_id = $1 and game_id = $2 and state = 'ACTIVE'
+              order by joined_at, id`,
+            [input.tenantId, candidate.id],
+          );
+          const projectionEventId = randomUUID();
+          const event = gameDomainEventSchema.parse({
+            id: projectionEventId,
+            type: desiredLifecycleState === 'FINISHED' ? 'game.finished.v1' : 'game.started.v1',
+            aggregateId: candidate.id,
+            tenantId: input.tenantId,
+            occurredAt: input.now.toISOString(),
+            correlationId: input.correlationId,
+            payload: {
+              gameId: candidate.id,
+              aggregateRevision: String(updated.revision),
+              causationId: projectionEventId,
+              actorUserId: null,
+              participantUserIds: participants.rows.map((row) => row.user_id),
+            },
+          });
+          await client.query(
+            `insert into audit.outbox_events (
+               id, tenant_id, event_type, aggregate_id, correlation_id, payload, occurred_at
+             ) values ($1, $2, $3, $4, $5, $6::jsonb, $7)`,
+            [
+              event.id,
+              event.tenantId,
+              event.type,
+              event.aggregateId,
+              event.correlationId,
+              JSON.stringify(event.payload),
+              event.occurredAt,
+            ],
+          );
+          await client.query(
+            `insert into audit.audit_log (
+               tenant_id, actor_id, action, resource_type, resource_id, result,
+               reason, correlation_id, new_value
+             ) values ($1, null, 'VIVA_HISTORY_GAME_LIFECYCLE_REFRESHED', 'GAME', $2,
+                       'SUCCESS', 'FRESH_VIVA_EXERCISE_ASSOCIATION', $3, $4::jsonb)`,
+            [
+              input.tenantId,
+              candidate.id,
+              input.correlationId,
+              JSON.stringify({
+                revision: Number(updated.revision),
+                lifecycleState: desiredLifecycleState,
+              }),
+            ],
+          );
+          await reconcileLifecycleCommands(client, {
+            tenantId: input.tenantId,
+            gameId: candidate.id,
+            desiredLifecycleState,
+            now: input.now,
+          });
+          refreshed.push({ gameId: candidate.id, projectionEventId });
+        }
+        return refreshed;
+      });
+    },
+
     async importSnapshots(input) {
       const tenant = (
         await pool.query<TenantRow>(
@@ -848,6 +1505,20 @@ export function createLegacyGameImportRepository(pool: Pool): LegacyGameImportRe
       }
       const imported: { gameId: string; projectionEventId: string }[] = [];
       const existing: { gameId: string; projectionEventId: string }[] = [];
+      const participantUserBindings = new Map<
+        string,
+        { readonly userId: string; readonly proofKind: 'VIVA_PROFILE' | 'VIEWER_PHONE' }
+      >();
+      for (const binding of input.participantUserBindings ?? []) {
+        const previous = participantUserBindings.get(binding.externalId);
+        if (previous && previous.userId !== binding.userId) {
+          throw new Error('LEGACY_GAME_PARTICIPANT_USER_BINDING_CONFLICT');
+        }
+        participantUserBindings.set(binding.externalId, {
+          userId: binding.userId,
+          proofKind: binding.proofKind ?? 'VIVA_PROFILE',
+        });
+      }
       let skipped = 0;
       for (const snapshot of input.snapshots) {
         const result = await importOne(pool, {
@@ -855,6 +1526,7 @@ export function createLegacyGameImportRepository(pool: Pool): LegacyGameImportRe
           snapshot,
           correlationId: input.correlationId,
           now: input.now ?? new Date(),
+          participantUserBindings,
         });
         const target = { gameId: result.gameId, projectionEventId: result.projectionEventId };
         if (result.outcome === 'imported') imported.push(target);

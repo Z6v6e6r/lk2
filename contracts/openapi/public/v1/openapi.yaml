@@ -1,8 +1,8 @@
 openapi: 3.1.0
 info:
   title: PadlHub Public API
-  version: 1.0.0
-  description: Anonymous read-only PadlHub boundary. Responses contain allowlisted public data only.
+  version: 1.1.0
+  description: Anonymous PadlHub boundary. Commands are explicitly idempotent and session-scoped.
   license:
     name: Proprietary
     identifier: LicenseRef-Proprietary
@@ -12,7 +12,280 @@ security: []
 tags:
   - name: games
     description: Anonymous discovery of public scheduled games.
+  - name: gift-certificates
+    description: Published tenant-owned gift certificate catalog.
+  - name: locations
+    description: Public delivery of tenant-owned location gallery media.
+  - name: profiles
+    description: Stable delivery of PadlHub-owned public profile photos.
 paths:
+  /media/profile-photos/{tenantId}/{deliveryId}:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - name: tenantId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: deliveryId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [profiles]
+      operationId: getPublicProfilePhoto
+      summary: Stream the current PadlHub-owned profile photo
+      responses:
+        '200':
+          description: Current normalized WebP profile photo.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            image/webp:
+              schema:
+                type: string
+                contentEncoding: binary
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/gift-certificate-catalog:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+    get:
+      tags: [gift-certificates]
+      operationId: getPublicGiftCertificateCatalog
+      summary: Load the currently published gift certificate catalog
+      description: |
+        Returns one immutable published catalog version. Prices are server-owned minor-unit values;
+        the response contains no order, payment, recipient, activation or provider data.
+      responses:
+        '200':
+          description: Published catalog available for the current tenant and time.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicGiftCertificateCatalog'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/gift-certificate-media/{assetId}:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - name: assetId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [gift-certificates]
+      operationId: getPublicGiftCertificateMedia
+      summary: Redirect to a short-lived private media URL
+      responses:
+        '302':
+          description: Short-lived signed object-storage URL.
+          headers:
+            Location:
+              schema:
+                type: string
+                format: uri
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/location-media/{assetId}:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - name: assetId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [locations]
+      operationId: getPublicLocationMedia
+      summary: Redirect to a short-lived location gallery media URL
+      responses:
+        '302':
+          description: Short-lived signed WebP object-storage URL.
+          headers:
+            Location:
+              schema:
+                type: string
+                format: uri
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/gift-certificate-orders:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+    post:
+      tags: [gift-certificates]
+      operationId: createPublicGiftCertificateOrder
+      summary: Create a guest order from one published catalog version
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateGiftCertificateOrderRequest'
+      responses:
+        '201':
+          description: Server-priced order and HttpOnly purchase session created.
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GiftCertificateOrderCommandResult'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/gift-certificate-orders/{orderId}:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/GiftCertificateOrderId'
+    get:
+      tags: [gift-certificates]
+      operationId: getPublicGiftCertificateOrder
+      summary: Read a guest order through its HttpOnly purchase session
+      responses:
+        '200':
+          description: Session-owned order with masked email addresses.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GiftCertificateOrder'
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+  /{tenantKey}/gift-certificate-orders/{orderId}/certificate.pdf:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/GiftCertificateOrderId'
+    get:
+      tags: [gift-certificates]
+      operationId: downloadPublicGiftCertificate
+      summary: Download a session-owned issued certificate PDF
+      responses:
+        '200':
+          description: Buyer-owned private PDF artifact.
+          content:
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/gift-certificate-orders/{orderId}/payment-intents:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/GiftCertificateOrderId'
+    post:
+      tags: [gift-certificates]
+      operationId: createPublicGiftCertificatePaymentIntent
+      summary: Create the local hosted-payment sandbox action
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '201':
+          description: Provider-neutral payment intent.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GiftCertificatePaymentIntent'
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/gift-certificate-payment-sandbox/{paymentId}:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - name: paymentId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [gift-certificates]
+      operationId: getPublicGiftCertificatePaymentSandbox
+      summary: Open the local-only hosted sandbox payment page
+      responses:
+        '200':
+          description: HTML page that performs no real charge.
+          content:
+            text/html:
+              schema:
+                type: string
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/gift-certificate-payments/{paymentId}/sandbox-confirm:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - name: paymentId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [gift-certificates]
+      operationId: confirmPublicGiftCertificateSandboxPayment
+      summary: Confirm a local-only sandbox payment
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: Order and payment confirmed exactly once.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GiftCertificatePaymentConfirmation'
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
   /{tenantKey}/games:
     parameters:
       - $ref: ../../common/components.yaml#/components/parameters/TenantKey
@@ -135,7 +408,488 @@ paths:
         '503':
           $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
 components:
+  responses:
+    Conflict:
+      description: Current state conflicts with the requested command.
+      content:
+        application/json:
+          schema:
+            $ref: ../../common/components.yaml#/components/schemas/ApiError
+    UnprocessableEntity:
+      description: The command is well-formed but violates the current policy.
+      content:
+        application/json:
+          schema:
+            $ref: ../../common/components.yaml#/components/schemas/ApiError
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema:
+        type: string
+        minLength: 16
+        maxLength: 128
+    GiftCertificateOrderId:
+      name: orderId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
   schemas:
+    GiftCertificateFlowStep:
+      type: string
+      enum: [RECIPIENT_KIND, DESIGN, DENOMINATION, MESSAGE, DELIVERY, REVIEW]
+    GiftCertificatePolicy:
+      type: object
+      additionalProperties: false
+      required:
+        - validityStart
+        - validityDays
+        - activationDeadlineDays
+        - scheduledDeliveryEnabled
+        - emailAttachmentEnabled
+      properties:
+        validityStart:
+          type: string
+          enum: [ISSUE, ACTIVATION]
+        validityDays:
+          type: integer
+          minimum: 1
+          maximum: 3650
+        activationDeadlineDays:
+          type: [integer, 'null']
+          minimum: 1
+          maximum: 3650
+        scheduledDeliveryEnabled:
+          type: boolean
+        emailAttachmentEnabled:
+          type: boolean
+    PublicGiftCertificateDesign:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          id,
+          key,
+          audience,
+          title,
+          description,
+          imageUrl,
+          alt,
+          codeXPercent,
+          codeYPercent,
+          amountXPercent,
+          amountYPercent,
+          active,
+          sortOrder,
+        ]
+      properties:
+        id:
+          type: string
+          format: uuid
+        key:
+          type: string
+          pattern: '^[a-z][a-z0-9-]{1,62}$'
+        audience:
+          type: string
+          enum: [FOR_HER, FOR_HIM, UNIVERSAL]
+        title:
+          type: string
+          minLength: 1
+          maxLength: 120
+        description:
+          type: [string, 'null']
+          minLength: 1
+          maxLength: 500
+        imageUrl:
+          type: string
+          pattern: '^(https://|/public/api/v1/)'
+          maxLength: 2000
+        alt:
+          type: string
+          minLength: 1
+          maxLength: 180
+        codeXPercent:
+          type: number
+          minimum: 0
+          maximum: 100
+        codeYPercent:
+          type: number
+          minimum: 0
+          maximum: 100
+        amountXPercent:
+          type: number
+          minimum: 0
+          maximum: 100
+        amountYPercent:
+          type: number
+          minimum: 0
+          maximum: 100
+        active:
+          type: boolean
+          const: true
+        sortOrder:
+          type: integer
+          minimum: 0
+          maximum: 999
+    PublicGiftCertificateDenomination:
+      type: object
+      additionalProperties: false
+      required: [id, amountMinor, currency, active, sortOrder]
+      properties:
+        id:
+          type: string
+          format: uuid
+        amountMinor:
+          type: integer
+          minimum: 10000
+          maximum: 100000000
+        currency:
+          type: string
+          const: RUB
+        active:
+          type: boolean
+          const: true
+        sortOrder:
+          type: integer
+          minimum: 0
+          maximum: 999
+    PublicGiftCertificateCatalog:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - catalogNumber
+        - title
+        - availableFrom
+        - availableTo
+        - flowSteps
+        - policy
+        - designs
+        - denominations
+        - publishedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        catalogNumber:
+          type: integer
+          minimum: 1
+        title:
+          type: string
+          minLength: 1
+          maxLength: 160
+        availableFrom:
+          type: [string, 'null']
+          format: date-time
+        availableTo:
+          type: [string, 'null']
+          format: date-time
+        flowSteps:
+          type: array
+          minItems: 3
+          maxItems: 6
+          uniqueItems: true
+          items:
+            $ref: '#/components/schemas/GiftCertificateFlowStep'
+        policy:
+          $ref: '#/components/schemas/GiftCertificatePolicy'
+        designs:
+          type: array
+          minItems: 1
+          maxItems: 20
+          items:
+            $ref: '#/components/schemas/PublicGiftCertificateDesign'
+        denominations:
+          type: array
+          minItems: 1
+          maxItems: 20
+          items:
+            $ref: '#/components/schemas/PublicGiftCertificateDenomination'
+        publishedAt:
+          type: string
+          format: date-time
+    CreateGiftCertificateOrderRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - catalogId
+        - designId
+        - denominationId
+        - buyerEmail
+        - recipientName
+        - recipientEmail
+        - message
+        - deliveryMode
+        - scheduledFor
+        - termsAccepted
+      properties:
+        catalogId:
+          type: string
+          format: uuid
+        designId:
+          type: string
+          format: uuid
+        denominationId:
+          type: string
+          format: uuid
+        buyerEmail:
+          type: string
+          format: email
+          maxLength: 320
+        recipientName:
+          type: string
+          minLength: 1
+          maxLength: 120
+        recipientEmail:
+          type: string
+          format: email
+          maxLength: 320
+        message:
+          type: [string, 'null']
+          minLength: 1
+          maxLength: 500
+        deliveryMode:
+          type: string
+          enum: [IMMEDIATE, SCHEDULED]
+        scheduledFor:
+          type: [string, 'null']
+          format: date-time
+        termsAccepted:
+          type: boolean
+          const: true
+    GiftCertificateOrder:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - orderNumber
+        - salesChannel
+        - status
+        - revision
+        - catalog
+        - design
+        - amountMinor
+        - currency
+        - policy
+        - buyerEmailMasked
+        - recipientName
+        - recipientEmailMasked
+        - deliveryMode
+        - scheduledFor
+        - createdAt
+        - paidAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        orderNumber:
+          type: string
+          pattern: '^GC-[A-Z0-9]{12}$'
+        salesChannel:
+          type: string
+          enum: [PUBLIC_WEB, LK]
+        status:
+          type: string
+          enum: [PAYMENT_PENDING, PAID, PAYMENT_FAILED, CANCELLED]
+        revision:
+          type: integer
+          minimum: 1
+        catalog:
+          type: object
+          additionalProperties: false
+          required: [id, catalogNumber]
+          properties:
+            id:
+              type: string
+              format: uuid
+            catalogNumber:
+              type: integer
+              minimum: 1
+        design:
+          type: object
+          additionalProperties: false
+          required: [id, key, title, imageUrl, alt]
+          properties:
+            id:
+              type: string
+              format: uuid
+            key:
+              type: string
+            title:
+              type: string
+            imageUrl:
+              type: string
+            alt:
+              type: string
+        amountMinor:
+          type: integer
+          minimum: 10000
+          maximum: 100000000
+        currency:
+          type: string
+          const: RUB
+        policy:
+          $ref: '#/components/schemas/GiftCertificatePolicy'
+        buyerEmailMasked:
+          type: string
+        recipientName:
+          type: string
+        recipientEmailMasked:
+          type: string
+        deliveryMode:
+          type: string
+          enum: [IMMEDIATE, SCHEDULED]
+        scheduledFor:
+          type: [string, 'null']
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+        paidAt:
+          type: [string, 'null']
+          format: date-time
+        fulfillment:
+          oneOf:
+            - $ref: '#/components/schemas/GiftCertificateFulfillment'
+            - type: 'null'
+    GiftCertificateFulfillment:
+      type: object
+      additionalProperties: false
+      required: [certificate, delivery]
+      properties:
+        certificate:
+          type: object
+          additionalProperties: false
+          required:
+            - id
+            - certificateNumber
+            - status
+            - amountMinor
+            - currency
+            - issuedAt
+            - validFrom
+            - validUntil
+            - activationDeadlineAt
+            - downloadReady
+          properties:
+            id:
+              type: string
+              format: uuid
+            certificateNumber:
+              type: string
+              pattern: '^PH-GC-[A-Z0-9]{16}$'
+            status:
+              type: string
+              enum: [PREPARING, ISSUED, VOIDED]
+            amountMinor:
+              type: integer
+              minimum: 10000
+              maximum: 100000000
+            currency:
+              type: string
+              const: RUB
+            issuedAt:
+              type: [string, 'null']
+              format: date-time
+            validFrom:
+              type: [string, 'null']
+              format: date-time
+            validUntil:
+              type: [string, 'null']
+              format: date-time
+            activationDeadlineAt:
+              type: [string, 'null']
+              format: date-time
+            downloadReady:
+              type: boolean
+        delivery:
+          oneOf:
+            - type: object
+              additionalProperties: false
+              required: [status, scheduledFor, deliveredAt]
+              properties:
+                status:
+                  type: string
+                  enum: [PENDING, SANDBOXED, DELIVERED, FAILED]
+                scheduledFor:
+                  type: string
+                  format: date-time
+                deliveredAt:
+                  type: [string, 'null']
+                  format: date-time
+            - type: 'null'
+    GiftCertificateOrderCommandResult:
+      allOf:
+        - $ref: '#/components/schemas/GiftCertificateOrder'
+        - type: object
+          required: [replayed]
+          properties:
+            replayed:
+              type: boolean
+    GiftCertificatePayment:
+      type: object
+      additionalProperties: false
+      required: [id, orderId, provider, status, amountMinor, currency, createdAt, confirmedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        orderId:
+          type: string
+          format: uuid
+        provider:
+          type: string
+          const: PADLHUB_SANDBOX
+        status:
+          type: string
+          enum: [PENDING, CONFIRMED, FAILED]
+        amountMinor:
+          type: integer
+          minimum: 10000
+          maximum: 100000000
+        currency:
+          type: string
+          const: RUB
+        createdAt:
+          type: string
+          format: date-time
+        confirmedAt:
+          type: [string, 'null']
+          format: date-time
+    GiftCertificatePaymentIntent:
+      type: object
+      additionalProperties: false
+      required: [payment, nextAction, replayed]
+      properties:
+        payment:
+          $ref: '#/components/schemas/GiftCertificatePayment'
+        nextAction:
+          type: object
+          additionalProperties: false
+          required: [type, url]
+          properties:
+            type:
+              type: string
+              const: REDIRECT
+            url:
+              type: string
+              pattern: '^/'
+        replayed:
+          type: boolean
+    GiftCertificatePaymentConfirmation:
+      type: object
+      additionalProperties: false
+      required: [order, payment, replayed]
+      properties:
+        order:
+          $ref: '#/components/schemas/GiftCertificateOrder'
+        payment:
+          $ref: '#/components/schemas/GiftCertificatePayment'
+        replayed:
+          type: boolean
     PublicGameCardPage:
       type: object
       additionalProperties: false
@@ -172,6 +926,7 @@ components:
         - endsAt
         - timezone
         - station
+        - court
         - rosterState
         - capacity
         - participants
@@ -189,7 +944,7 @@ components:
           minimum: 0
         surface:
           type: string
-          const: DISCOVER
+          enum: [DISCOVER, INVITE]
         displayState:
           $ref: '#/components/schemas/GameCardDisplayState'
         title:
@@ -213,6 +968,10 @@ components:
           maxLength: 64
         station:
           $ref: '#/components/schemas/PublicGameStation'
+        court:
+          oneOf:
+            - $ref: '#/components/schemas/PublicGameCourt'
+            - type: 'null'
         levelRange:
           oneOf:
             - $ref: '#/components/schemas/GameLevelRange'
@@ -260,6 +1019,9 @@ components:
         - ROSTER_READY
         - STARTING_SOON
         - REGISTRATION_CLOSED
+        - IN_PROGRESS
+        - COMPLETED
+        - CANCELLED
     GameKind:
       type: string
       enum: [FRIENDLY, RATING, PRIVATE, COACH_GAME]
@@ -298,6 +1060,18 @@ components:
           type: [string, 'null']
           minLength: 1
           maxLength: 240
+    PublicGameCourt:
+      type: object
+      additionalProperties: false
+      required: [id, name]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: [string, 'null']
+          minLength: 1
+          maxLength: 120
     GameCapacity:
       type: object
       additionalProperties: false
@@ -333,7 +1107,7 @@ components:
           maxLength: 120
         avatarUrl:
           type: [string, 'null']
-          format: uri
+          pattern: '^(https?://.+|/public/api/v1/media/profile-photos/[0-9a-f-]{36}/[0-9a-f-]{36})$'
           maxLength: 2048
         level:
           oneOf:

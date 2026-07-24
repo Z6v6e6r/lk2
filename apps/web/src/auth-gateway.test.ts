@@ -5,6 +5,45 @@ import { describe, expect, it, vi } from 'vitest';
 import { createBrowserAuthGateway } from './auth-gateway.js';
 
 describe('browser auth gateway', () => {
+  it('keeps public gift payment commands anonymous and resolves the hosted API origin', async () => {
+    const fetchImplementation = vi.fn<typeof fetch>().mockResolvedValue(
+      Response.json({
+        payment: {
+          id: '11111111-1111-4111-8111-111111111111',
+          orderId: '22222222-2222-4222-8222-222222222222',
+          provider: 'PADLHUB_SANDBOX',
+          status: 'PENDING',
+          amountMinor: 500_000,
+          currency: 'RUB',
+          createdAt: '2026-07-19T10:00:00.000Z',
+          confirmedAt: null,
+        },
+        nextAction: {
+          type: 'REDIRECT',
+          url: '/public/api/v1/padlhub/gift-certificate-payment-sandbox/payment-id',
+        },
+        replayed: false,
+      }),
+    );
+    const gateway = createBrowserAuthGateway({
+      baseUrl: 'https://api.padlhub.test/',
+      tenantKey: 'padlhub',
+      appVersion: 'test',
+      fetchImplementation,
+    });
+
+    const intent = await gateway.createPublicGiftCertificatePaymentIntent(
+      '22222222-2222-4222-8222-222222222222',
+    );
+
+    expect(intent.nextAction.url).toBe(
+      'https://api.padlhub.test/public/api/v1/padlhub/gift-certificate-payment-sandbox/payment-id',
+    );
+    const [, init] = fetchImplementation.mock.calls[0] ?? [];
+    expect(init?.credentials).toBe('include');
+    expect(new Headers(init?.headers).get('Authorization')).toBeNull();
+  });
+
   it('restores through the HttpOnly cookie and keeps the access token in memory', async () => {
     const fetchImplementation = vi.fn<typeof fetch>().mockResolvedValueOnce(
       new Response(

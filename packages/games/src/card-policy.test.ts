@@ -24,6 +24,7 @@ const IDS = {
   tenant: '86afbe01-0318-4dd2-bc25-303b7bf0d430',
   game: '6fe9dc1f-87b5-4efd-83a2-5cf9d8070b76',
   station: 'ee2eb9ac-fcb5-40d2-a714-97b9ef75a4a0',
+  court: '705e97fd-2a14-4274-8e4a-f4e1a1248f24',
   organizer: 'f75b4e2a-9c98-4b26-85b6-ae58e0edca24',
   player2: 'a9c106f7-0db8-4e27-b1e0-298829f94730',
   player3: '6a758cce-23ab-4ffd-9c57-a1bc5d4aab70',
@@ -64,6 +65,7 @@ function game(overrides: Partial<GameCardProjectionInput> = {}): GameCardProject
       name: 'Селигерская',
       shortAddress: 'Москва',
     },
+    court: { id: IDS.court, name: 'Корт №3' },
     levelRange: { from: 'C', to: 'B' },
     capacity: 4,
     participants: [participant(IDS.organizer, 'ORGANIZER')],
@@ -92,6 +94,27 @@ describe('GameCard display policy', () => {
       viewerRelation: 'ANONYMOUS',
     });
     expect(card.allowedActions).toEqual(['OPEN_DETAILS', 'JOIN']);
+  });
+
+  it('projects normalized CUP rating progress for participant level rings', () => {
+    const input = game({
+      participants: [
+        {
+          ...participant(IDS.organizer, 'ORGANIZER'),
+          level: 'C',
+          levelValue: 3.43844,
+        },
+      ],
+    });
+
+    expect(projectGameCard(input, cardContext()).participants[0]).toMatchObject({
+      level: 'C',
+      levelValue: 3.43844,
+    });
+    expect(projectPublicGameCard(input, cardContext()).participants[0]).toMatchObject({
+      level: 'C',
+      levelValue: 3.43844,
+    });
   });
 
   it('shows one remaining place', () => {
@@ -222,6 +245,42 @@ describe('GameCard display policy', () => {
     );
   });
 
+  it('closes result submission exactly 48 hours after the game ends', () => {
+    const finished = game({
+      lifecycleState: 'FINISHED',
+      startsAt: '2026-07-30T08:30:00+03:00',
+      endsAt: '2026-07-30T10:00:00+03:00',
+      participants: [participant(IDS.organizer, 'ORGANIZER'), participant(IDS.player2)],
+      result: {
+        state: 'AWAITING_SUBMISSION',
+        requiredConfirmationUserIds: [],
+        confirmedByUserIds: [],
+      },
+    });
+
+    const beforeDeadline = projectGameCard(
+      finished,
+      cardContext({
+        surface: 'HISTORY',
+        viewerUserId: IDS.player2,
+        now: '2026-08-01T09:59:59+03:00',
+      }),
+    );
+    expect(beforeDeadline.displayState).toBe('RESULT_REQUIRED');
+    expect(beforeDeadline.allowedActions).toContain('SUBMIT_RESULT');
+
+    const atDeadline = projectGameCard(
+      finished,
+      cardContext({
+        surface: 'HISTORY',
+        viewerUserId: IDS.player2,
+        now: '2026-08-01T10:00:00+03:00',
+      }),
+    );
+    expect(atDeadline.displayState).toBe('COMPLETED');
+    expect(atDeadline.allowedActions).not.toContain('SUBMIT_RESULT');
+  });
+
   it('offers result confirmation only to an eligible non-submitting player', () => {
     const input = game({
       lifecycleState: 'FINISHED',
@@ -229,6 +288,7 @@ describe('GameCard display policy', () => {
       result: {
         state: 'PENDING_CONFIRMATION',
         submittedByUserId: IDS.organizer,
+        submittedAt: '2026-08-01T09:45:00+03:00',
         requiredConfirmationUserIds: [IDS.player2],
         confirmedByUserIds: [],
         sets: [{ teamA: 6, teamB: 4 }],
@@ -239,6 +299,10 @@ describe('GameCard display policy', () => {
       cardContext({ surface: 'HISTORY', viewerUserId: IDS.player2 }),
     );
     expect(playerCard.displayState).toBe('RESULT_PENDING');
+    expect(playerCard.resultSummary).toMatchObject({
+      submittedByUserId: IDS.organizer,
+      submittedAt: '2026-08-01T09:45:00+03:00',
+    });
     expect(playerCard.allowedActions).toContain('CONFIRM_RESULT');
     expect(playerCard.allowedActions).toContain('DISPUTE_RESULT');
 
@@ -303,6 +367,7 @@ describe('public game card', () => {
       displayName: 'Организатор',
       avatarUrl: null,
       level: null,
+      levelValue: null,
       role: 'ORGANIZER',
     });
     expect(JSON.stringify(card)).not.toContain(IDS.organizer);
@@ -325,6 +390,37 @@ describe('public game card', () => {
       () => projectPublicGameCard(game({ lifecycleState: 'IN_PROGRESS' }), cardContext()),
       'GAME_NOT_CARD_VISIBLE',
     );
+  });
+
+  it('collapses private result workflow states on direct public cards', () => {
+    const inProgress = projectPublicGameCard(
+      game({ lifecycleState: 'IN_PROGRESS', startsAt: NOW, joinCutoffAt: null }),
+      { surface: 'INVITE', now: NOW },
+    );
+    expect(inProgress).toMatchObject({
+      surface: 'INVITE',
+      displayState: 'IN_PROGRESS',
+      court: { id: IDS.court, name: 'Корт №3' },
+    });
+
+    const finished = projectPublicGameCard(
+      game({
+        lifecycleState: 'FINISHED',
+        startsAt: '2026-08-01T08:00:00+03:00',
+        endsAt: '2026-08-01T09:00:00+03:00',
+        joinCutoffAt: null,
+        result: {
+          state: 'DISPUTED',
+          submittedByUserId: IDS.organizer,
+          requiredConfirmationUserIds: [IDS.organizer],
+          confirmedByUserIds: [],
+          sets: [{ teamA: 6, teamB: 4 }],
+        },
+      }),
+      { surface: 'INVITE', now: NOW },
+    );
+    expect(finished.displayState).toBe('COMPLETED');
+    expect(JSON.stringify(finished)).not.toContain('DISPUTED');
   });
 });
 

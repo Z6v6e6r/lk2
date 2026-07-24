@@ -15,6 +15,7 @@ import type {
   HomeDashboard,
   NotificationInboxPage,
   PlayerProfileView,
+  PublicGiftCertificateCatalog,
   UserUpcomingBookings,
 } from './auth-gateway.js';
 
@@ -192,6 +193,48 @@ const bookingRecommendations: BookingRecommendationPage = {
   items: [],
   nextCursor: null,
 };
+const giftCertificateCatalog: PublicGiftCertificateCatalog = {
+  id: '11111111-1111-4111-8111-111111111111',
+  catalogNumber: 1,
+  title: 'Подарочные сертификаты',
+  availableFrom: null,
+  availableTo: null,
+  flowSteps: ['DESIGN', 'DENOMINATION', 'REVIEW'],
+  policy: {
+    validityStart: 'ISSUE',
+    validityDays: 365,
+    activationDeadlineDays: null,
+    scheduledDeliveryEnabled: false,
+    emailAttachmentEnabled: false,
+  },
+  designs: [
+    {
+      id: '22222222-2222-4222-8222-222222222222',
+      key: 'classic',
+      audience: 'UNIVERSAL',
+      title: 'Классический',
+      description: null,
+      imageUrl: 'https://cdn.padlhub.test/gift/classic.webp',
+      alt: 'Сертификат',
+      codeXPercent: 5.1,
+      codeYPercent: 88,
+      amountXPercent: 78.3,
+      amountYPercent: 88,
+      active: true,
+      sortOrder: 10,
+    },
+  ],
+  denominations: [
+    {
+      id: '33333333-3333-4333-8333-333333333333',
+      amountMinor: 500_000,
+      currency: 'RUB',
+      active: true,
+      sortOrder: 10,
+    },
+  ],
+  publishedAt: '2026-07-19T10:00:00.000Z',
+};
 
 function createGateway(overrides: Partial<AuthGateway> = {}): AuthGateway {
   return {
@@ -222,13 +265,38 @@ function createGateway(overrides: Partial<AuthGateway> = {}): AuthGateway {
     getUpcomingBookings: vi.fn().mockResolvedValue(upcomingBookings),
     listBookingRecommendations: vi.fn().mockResolvedValue(bookingRecommendations),
     getHomeDashboard: vi.fn().mockResolvedValue(homeDashboard),
+    getPublicGiftCertificateCatalog: vi.fn().mockRejectedValue(new Error('GIFT_CATALOG_MISSING')),
+    createPublicGiftCertificateOrder: vi.fn().mockRejectedValue(new Error('GIFT_SALE_DISABLED')),
+    createPublicGiftCertificatePaymentIntent: vi
+      .fn()
+      .mockRejectedValue(new Error('GIFT_SALE_DISABLED')),
+    getPublicGiftCertificateOrder: vi.fn().mockRejectedValue(new Error('GIFT_ORDER_NOT_FOUND')),
+    downloadPublicGiftCertificate: vi
+      .fn()
+      .mockRejectedValue(new Error('GIFT_CERTIFICATE_ARTIFACT_NOT_READY')),
+    createGiftCertificateOrder: vi.fn().mockRejectedValue(new Error('GIFT_SALE_DISABLED')),
+    createGiftCertificatePaymentIntent: vi.fn().mockRejectedValue(new Error('GIFT_SALE_DISABLED')),
+    getGiftCertificateOrder: vi.fn().mockRejectedValue(new Error('GIFT_ORDER_NOT_FOUND')),
+    downloadGiftCertificate: vi
+      .fn()
+      .mockRejectedValue(new Error('GIFT_CERTIFICATE_ARTIFACT_NOT_READY')),
     listPublicGames: vi.fn().mockResolvedValue({ items: [], nextCursor: null }),
     listMyGames: vi.fn().mockResolvedValue({ items: [], nextCursor: null }),
+    getActivityHistory: vi.fn().mockResolvedValue({
+      items: [],
+      nextCursor: null,
+      freshness: 'FRESH',
+      coverage: 'COMPLETE',
+      generatedAt: '2026-07-21T09:00:00.000Z',
+    }),
     getGame: vi.fn().mockRejectedValue(new Error('GAME_NOT_FOUND')),
     joinGame: vi.fn().mockRejectedValue(new Error('GAME_COMMAND_NOT_CONFIGURED')),
     leaveGame: vi.fn().mockRejectedValue(new Error('GAME_COMMAND_NOT_CONFIGURED')),
     joinGameWaitlist: vi.fn().mockRejectedValue(new Error('GAME_COMMAND_NOT_CONFIGURED')),
     leaveGameWaitlist: vi.fn().mockRejectedValue(new Error('GAME_COMMAND_NOT_CONFIGURED')),
+    submitGameResult: vi.fn().mockRejectedValue(new Error('GAME_COMMAND_NOT_CONFIGURED')),
+    confirmGameResult: vi.fn().mockRejectedValue(new Error('GAME_COMMAND_NOT_CONFIGURED')),
+    disputeGameResult: vi.fn().mockRejectedValue(new Error('GAME_COMMAND_NOT_CONFIGURED')),
     getGameOperation: vi.fn().mockRejectedValue(new Error('GAME_COMMAND_NOT_CONFIGURED')),
     listLocations: vi.fn<AuthGateway['listLocations']>().mockResolvedValue({ items: [] }),
     getLocation: vi
@@ -263,6 +331,7 @@ function createGateway(overrides: Partial<AuthGateway> = {}): AuthGateway {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  vi.useRealTimers();
   window.history.replaceState({}, '', '/');
 });
 
@@ -273,6 +342,25 @@ async function openPhoneLogin(user: ReturnType<typeof userEvent.setup>): Promise
 }
 
 describe('PadlHub web authentication', () => {
+  it('retries an initial Home projection read before showing the unavailable screen', async () => {
+    const getHomeDashboard = vi
+      .fn<AuthGateway['getHomeDashboard']>()
+      .mockRejectedValueOnce(new Error('HOME_PROJECTION_NOT_READY'))
+      .mockResolvedValueOnce(homeDashboard);
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue(session),
+      getHomeDashboard,
+    });
+
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+
+    await screen.findByText('Загружаем один актуальный снимок…');
+    expect(screen.queryByRole('heading', { name: 'Главная недоступна' })).not.toBeInTheDocument();
+
+    expect(await screen.findByRole('heading', { name: 'Анна Петрова' })).toBeVisible();
+    expect(getHomeDashboard).toHaveBeenCalledTimes(2);
+  });
+
   it('restores an HttpOnly-cookie-backed session before showing protected home', async () => {
     const gateway = createGateway({ restoreSession: vi.fn().mockResolvedValue(session) });
 
@@ -306,6 +394,14 @@ describe('PadlHub web authentication', () => {
     expect(bottomNavigationLinks).toHaveLength(5);
     expect(bottomNavigationLinks[2]).toHaveAccessibleName('Создать игру');
     expect(bottomNavigationLinks[2]).toHaveAttribute('href', '/games/new');
+    expect(bottomNavigationLinks[2]?.querySelector('.fh-create-button svg')).toHaveAttribute(
+      'viewBox',
+      '0 0 88 72',
+    );
+    expect(bottomNavigationLinks[2]?.querySelector('.fh-create-button rect')).toHaveAttribute(
+      'width',
+      '56',
+    );
     expect(screen.queryByRole('link', { name: 'Чаты' })).not.toBeInTheDocument();
     const twoLineCommunity = screen
       .getByRole('group', { name: 'Padel Friends, непрочитанных сообщений: 2' })
@@ -345,6 +441,32 @@ describe('PadlHub web authentication', () => {
     expect(gateway.restoreSession).toHaveBeenCalledOnce();
     expect(gateway.getHomeDashboard).toHaveBeenCalledOnce();
     expect(gateway.listNotifications).toHaveBeenCalledOnce();
+  });
+
+  it('opens unified activity history over Home without navigating to the fallback route', async () => {
+    const getActivityHistory = vi.fn<AuthGateway['getActivityHistory']>().mockResolvedValue({
+      items: [],
+      nextCursor: null,
+      freshness: 'FRESH',
+      coverage: 'COMPLETE',
+      generatedAt: '2026-07-21T09:00:00.000Z',
+    });
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue(session),
+      getActivityHistory,
+    });
+
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+
+    await screen.findByRole('heading', { name: 'Анна Петрова' });
+    const historyButton = screen.getByRole('button', { name: 'История посещений' });
+    fireEvent.click(historyButton);
+
+    expect(await screen.findByRole('dialog', { name: 'История' })).toBeVisible();
+    expect(window.location.pathname).toBe('/');
+    await vi.waitFor(() =>
+      expect(getActivityHistory).toHaveBeenCalledWith({ status: 'COMPLETED', limit: 20 }),
+    );
   });
 
   it('revalidates Home on focus and replaces a fallback avatar with the projection photo', async () => {
@@ -477,21 +599,50 @@ describe('PadlHub web authentication', () => {
     expect(listMyCommunities).toHaveBeenNthCalledWith(2, 'opaque-community-cursor');
   });
 
-  it('loads the profile route through the profile gateway without requesting Home', async () => {
+  it('loads the profile route with profile details and active subscriptions', async () => {
     window.history.replaceState({}, '', '/profile');
     const gateway = createGateway({ restoreSession: vi.fn().mockResolvedValue(session) });
+    const user = userEvent.setup();
 
     render(<App gateway={gateway} tenantKey="padlhub" />);
 
     expect(await screen.findByRole('heading', { name: 'Анна Петрова' })).toBeVisible();
     expect(screen.getByText('540 ₽')).toBeVisible();
-    expect(screen.getByText('Рейтинг 3,8')).toBeVisible();
+    expect(screen.queryByRole('group', { name: 'Рейтинг 3,8' })).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /редактировать профиль/ })).toBeVisible();
+    expect(
+      screen.queryByText('Фон профиля зависит от вашего текущего уровня'),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole('img', { name: 'Анна Петрова, уровень C+, прогресс 80%' }),
+    ).toBeVisible();
+    expect(screen.getByRole('region', { name: 'Город и вид спорта' })).toBeVisible();
+    expect(screen.getByText('Москва')).toBeVisible();
+    expect(screen.getByText('Падел')).toBeVisible();
+    expect(await screen.findByRole('heading', { name: 'Подписки и абонементы' })).toBeVisible();
+    expect(screen.getByText('Лето · Падел · Спорт')).toBeVisible();
+    expect(screen.getByText(/осталось 8 посещений/)).toBeVisible();
+    expect(await screen.findByRole('heading', { name: 'Сообщества' })).toBeVisible();
+    expect(screen.getByRole('link', { name: 'Padel Friends' })).toBeVisible();
+    expect(
+      screen.queryByRole('heading', { name: 'Когда и где мне удобно' }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Кто может связаться' })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /^Предпочтения/ }));
+    expect(screen.getByRole('dialog', { name: 'Предпочтения' })).toBeVisible();
+    expect(await screen.findByRole('heading', { name: 'Когда и где мне удобно' })).toBeVisible();
+    await user.click(screen.getByRole('button', { name: 'Закрыть настройки' }));
+
+    await user.click(screen.getByRole('button', { name: /^Видимость профиля/ }));
+    expect(screen.getByRole('dialog', { name: 'Видимость профиля' })).toBeVisible();
     expect(await screen.findByRole('heading', { name: 'Кто может связаться' })).toBeVisible();
     expect(screen.getByRole('checkbox', { name: /Запрос на связь/ })).toBeChecked();
     expect(screen.getByRole('checkbox', { name: /Личный чат/ })).toBeChecked();
     expect(gateway.getPlayerProfile).toHaveBeenCalledWith(session.context.user.id);
     expect(gateway.getProfilePrivacy).toHaveBeenCalledOnce();
-    expect(gateway.getHomeDashboard).not.toHaveBeenCalled();
+    expect(gateway.listMyCommunities).toHaveBeenCalledOnce();
+    expect(gateway.getHomeDashboard).toHaveBeenCalledOnce();
   });
 
   it('saves an optimistic owner privacy command from the profile', async () => {
@@ -511,6 +662,7 @@ describe('PadlHub web authentication', () => {
 
     render(<App gateway={gateway} tenantKey="padlhub" />);
 
+    await user.click(await screen.findByRole('button', { name: /^Видимость профиля/ }));
     const chatToggle = await screen.findByRole('checkbox', { name: /Личный чат/ });
     await user.click(chatToggle);
     await user.click(
@@ -687,8 +839,8 @@ describe('PadlHub web authentication', () => {
     expect(screen.getByRole('heading', { name: 'Оповещения на устройстве' })).toBeVisible();
   });
 
-  it('fails closed for an unfinished section route instead of showing a placeholder', async () => {
-    window.history.replaceState({}, '', '/promotions');
+  it('fails closed for an unknown section route instead of showing a placeholder', async () => {
+    window.history.replaceState({}, '', '/unpublished-section');
     const gateway = createGateway({ restoreSession: vi.fn().mockResolvedValue(session) });
 
     render(<App gateway={gateway} tenantKey="padlhub" />);
@@ -701,12 +853,12 @@ describe('PadlHub web authentication', () => {
   });
 
   it('shows an honest work-in-progress shell for a restored staged section', async () => {
-    window.history.replaceState({}, '', '/subscriptions');
+    window.history.replaceState({}, '', '/promotions');
     const gateway = createGateway({ restoreSession: vi.fn().mockResolvedValue(session) });
 
     render(<App gateway={gateway} tenantKey="padlhub" />);
 
-    expect(await screen.findByRole('heading', { name: 'Абонементы' })).toBeVisible();
+    expect(await screen.findByRole('heading', { name: 'Акции' })).toBeVisible();
     expect(screen.getByText('Раздел подключается к API ПаделХАБ.')).toBeVisible();
     expect(gateway.getHomeDashboard).not.toHaveBeenCalled();
   });
@@ -857,5 +1009,37 @@ describe('PadlHub web authentication', () => {
       provider: 'vkid',
       acceptance: { publicOfferAccepted: true, personalDataPolicyAccepted: true },
     });
+  });
+
+  it('opens /giftcard through the anonymous sale boundary without restoring a session', async () => {
+    window.history.replaceState({}, '', '/giftcard');
+    const gateway = createGateway({
+      getPublicGiftCertificateCatalog: vi.fn().mockResolvedValue(giftCertificateCatalog),
+    });
+
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+
+    expect(
+      await screen.findByRole('heading', { name: 'Идеальный подарок без лишних хлопот' }),
+    ).toBeVisible();
+    expect(gateway.restoreSession).not.toHaveBeenCalled();
+    expect(
+      screen.queryByRole('heading', { name: 'Войти в личный кабинет' }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('opens /gift-certificates in LK after restoring the buyer session', async () => {
+    window.history.replaceState({}, '', '/gift-certificates');
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue(session),
+      getPublicGiftCertificateCatalog: vi.fn().mockResolvedValue(giftCertificateCatalog),
+    });
+
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+
+    expect(
+      await screen.findByRole('heading', { name: 'Идеальный подарок без лишних хлопот' }),
+    ).toBeVisible();
+    expect(gateway.restoreSession).toHaveBeenCalledTimes(1);
   });
 });

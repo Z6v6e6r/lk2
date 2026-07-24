@@ -629,6 +629,7 @@ components:
         - endsAt
         - timezone
         - station
+        - court
         - levelRange
         - rosterState
         - capacity
@@ -673,6 +674,10 @@ components:
           maxLength: 64
         station:
           $ref: '#/components/schemas/GameStationView'
+        court:
+          oneOf:
+            - $ref: '#/components/schemas/GameCourtView'
+            - type: 'null'
         levelRange:
           oneOf:
             - $ref: '#/components/schemas/GameLevelRange'
@@ -800,6 +805,18 @@ components:
           type: [string, 'null']
           minLength: 1
           maxLength: 240
+    GameCourtView:
+      type: object
+      additionalProperties: false
+      required: [id, name]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: [string, 'null']
+          minLength: 1
+          maxLength: 120
     GameCapacityView:
       type: object
       additionalProperties: false
@@ -837,12 +854,17 @@ components:
           maxLength: 120
         avatarUrl:
           type: [string, 'null']
-          format: uri
+          pattern: '^(https?://.+|/public/api/v1/media/profile-photos/[0-9a-f-]{36}/[0-9a-f-]{36})$'
           maxLength: 2048
         level:
           oneOf:
             - $ref: '#/components/schemas/GamePlayerLevel'
             - type: 'null'
+        levelValue:
+          description: Current normalized CUP rating; its fractional part is progress within the displayed level.
+          type: [number, 'null']
+          minimum: 0
+          maximum: 10
         role:
           type: string
           enum: [ORGANIZER, PLAYER]
@@ -870,12 +892,91 @@ components:
             - CONFIRMED
             - DISPUTED
             - VOID
+        submissionId:
+          type: string
+          format: uuid
+        submittedByUserId:
+          type: string
+          format: uuid
+        submittedAt:
+          type: string
+          format: date-time
+        confirmationQuorum:
+          type: integer
+          minimum: 1
+          maximum: 3
         sets:
           type: array
           minItems: 1
           maxItems: 9
           items:
-            $ref: '#/components/schemas/GameSetScore'
+            $ref: '#/components/schemas/GameResultSet'
+    GameResultSet:
+      type: object
+      additionalProperties: false
+      required: [teamA, teamB]
+      properties:
+        setNumber:
+          type: integer
+          minimum: 1
+          maximum: 9
+        teamAUserIds:
+          type: array
+          minItems: 2
+          maxItems: 2
+          uniqueItems: true
+          items:
+            type: string
+            format: uuid
+        teamBUserIds:
+          type: array
+          minItems: 2
+          maxItems: 2
+          uniqueItems: true
+          items:
+            type: string
+            format: uuid
+        teamA:
+          type: integer
+          minimum: 0
+          maximum: 99
+        teamB:
+          type: integer
+          minimum: 0
+          maximum: 99
+    SubmitGameResultSet:
+      type: object
+      additionalProperties: false
+      required: [setNumber, teamAUserIds, teamBUserIds, teamA, teamB]
+      properties:
+        setNumber:
+          type: integer
+          minimum: 1
+          maximum: 9
+        teamAUserIds:
+          type: array
+          minItems: 2
+          maxItems: 2
+          uniqueItems: true
+          items:
+            type: string
+            format: uuid
+        teamBUserIds:
+          type: array
+          minItems: 2
+          maxItems: 2
+          uniqueItems: true
+          items:
+            type: string
+            format: uuid
+        teamA:
+          type: integer
+          minimum: 0
+          maximum: 99
+        teamB:
+          type: integer
+          minimum: 0
+          maximum: 99
     GameSetScore:
       type: object
       additionalProperties: false
@@ -979,7 +1080,7 @@ components:
           minItems: 1
           maxItems: 9
           items:
-            $ref: '#/components/schemas/GameSetScore'
+            $ref: '#/components/schemas/SubmitGameResultSet'
     DisputeGameResultRequest:
       type: object
       additionalProperties: false

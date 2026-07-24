@@ -1,6 +1,10 @@
 import { createHash } from 'node:crypto';
 
-import type { GameRepository, StoredGameCardProjection } from '@phub/database';
+import type {
+  GameRepository,
+  ProfileSummaryRepository,
+  StoredGameCardProjection,
+} from '@phub/database';
 import type { BookingPreferences, BookingPreferenceWeekday } from '@phub/domain';
 import {
   GAME_PLAYER_LEVELS,
@@ -8,6 +12,11 @@ import {
   type GameCardView,
   type GamePlayerLevel,
 } from '@phub/games';
+
+import {
+  gameCardProfilePhotoUserIds,
+  stabilizeGameCardProfilePhotos,
+} from '../profile/profile-photo-url.js';
 
 type CardReadRepository = Pick<GameRepository, 'listRecommendationCardProjections'>;
 
@@ -237,6 +246,7 @@ function rankGames(input: {
 
 export async function listBookingRecommendations(input: {
   readonly repository: CardReadRepository;
+  readonly photoRepository?: Pick<ProfileSummaryRepository, 'getPhotoDeliveryIds'>;
   readonly tenantId: string;
   readonly userId: string;
   readonly preferences: BookingPreferences;
@@ -250,19 +260,33 @@ export async function listBookingRecommendations(input: {
     candidateLimit: 100,
     historyLimit: 50,
   });
+  const deliveryIds = input.photoRepository
+    ? await input.photoRepository.getPhotoDeliveryIds(
+        input.tenantId,
+        [...projectionInputs.candidates, ...projectionInputs.history].flatMap((projection) =>
+          gameCardProfilePhotoUserIds(projection.basePayload),
+        ),
+      )
+    : new Map<string, string>();
   const candidates = projectionInputs.candidates.map((projection) =>
-    projectGameCard(projection.basePayload, {
-      surface: 'DISCOVER',
-      now: input.now,
-      viewerUserId: input.userId,
-    }),
+    projectGameCard(
+      stabilizeGameCardProfilePhotos(projection.basePayload, input.tenantId, deliveryIds),
+      {
+        surface: 'DISCOVER',
+        now: input.now,
+        viewerUserId: input.userId,
+      },
+    ),
   );
   const history = projectionInputs.history.map((projection) =>
-    projectGameCard(projection.basePayload, {
-      surface: 'HISTORY',
-      now: input.now,
-      viewerUserId: input.userId,
-    }),
+    projectGameCard(
+      stabilizeGameCardProfilePhotos(projection.basePayload, input.tenantId, deliveryIds),
+      {
+        surface: 'HISTORY',
+        now: input.now,
+        viewerUserId: input.userId,
+      },
+    ),
   );
   const items = rankGames({ ...input, candidates, history });
   const version = createHash('sha256')
