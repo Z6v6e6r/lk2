@@ -5,6 +5,8 @@ x-runtime: &runtime
     - path: ${RUNTIME_ENV_FILE:-/etc/phub/staging.env}
     - path: ${RUNTIME_OVERRIDE_ENV_FILE:-/opt/phub/staging.override.env}
       required: false
+    - path: ${RUNTIME_GAMES_ENV_FILE:-/opt/phub/staging.games.env}
+      required: false
   restart: unless-stopped
   networks:
     - application

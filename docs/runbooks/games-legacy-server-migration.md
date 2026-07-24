@@ -52,10 +52,15 @@ This is not a client feature switch and never writes back to legacy Mongo/Node-R
 
 Run this only after the initial reconciliation is clean and only in the staging worker deployment.
 The Mongo URI belongs in the secret manager, never in a checked-in environment file.
+On the Jetson staging node these settings live in the mode-`0600`
+`/opt/phub/staging.games.env` file. The Home activation script owns a different non-secret override
+and must never rewrite or copy the Mongo URI.
 
 ```text
 GAMES_READ_ENABLED=true
+GAMES_COMMANDS_ENABLED=false
 LEGACY_GAMES_ROSTER_SYNC_ENABLED=true
+LEGACY_GAMES_ROSTER_SYNC_SOURCE=mongo
 LEGACY_GAMES_MONGODB_URI=<server-secret>
 LEGACY_GAMES_ROSTER_SYNC_TENANT_KEY=<approved-staging-tenant>
 LEGACY_GAMES_ROSTER_SYNC_LOOKBACK_DAYS=1
@@ -68,6 +73,13 @@ The worker reads the bounded window, imports previously unseen Games, and update
 when its prior mirror revision still matches. It writes canonical `game.scheduled.v1` outbox facts
 for changed rosters. Investigate every `LEGACY_GAME_ROSTER_BASELINE_MISMATCH` and
 `LEGACY_GAME_ROSTER_LOCAL_REVISION_CHANGED`; leave the game quarantined until an audited repair.
+
+If moving the Mongo credential to staging is not separately approved, a read-only test release may
+instead set `LEGACY_GAMES_ROSTER_SYNC_SOURCE=public` and
+`LEGACY_GAMES_PUBLIC_BASE_URL=https://padlhub.su`. This source contains real public CUP Games but
+only the sanitized public roster surface. `GAMES_COMMANDS_ENABLED` and
+`ACTIVITY_HISTORY_GAME_BACKFILL_ENABLED` must remain `false`; use the Mongo mirror when private or
+historical roster reconciliation is required.
 
 ## Rollback and repair
 

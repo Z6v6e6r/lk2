@@ -154,6 +154,50 @@ describe('legacy games adapter', () => {
     expect(serialized).not.toMatch(/secret-|79990000001|paymentUrl|bank\.invalid/);
   });
 
+  it('reads a bounded real public Games window for a read-only staging mirror', async () => {
+    const game = (id: string, startsAt: string) => ({
+      id,
+      status: 'PAID',
+      organizer: { id: `${id}-organizer`, name: 'Настоящий игрок', rating: 'C' },
+      participants: [{ id: `${id}-organizer`, name: 'Настоящий игрок', rating: 'C' }],
+      settings: { isPrivate: false, ratingGame: false },
+      metadata: { gameFormat: 'doubles' },
+      booking: {
+        studioId: 'station',
+        studioName: 'Терехово',
+        timeFromIso: startsAt,
+        timeToIso: new Date(Date.parse(startsAt) + 3_600_000).toISOString(),
+      },
+    });
+    const fetchImplementation = vi.fn(() =>
+      Promise.resolve(
+        Response.json({
+          games: [
+            game('before-window', '2026-07-23T09:00:00.000Z'),
+            game('inside-window', '2026-07-25T09:00:00.000Z'),
+            game('after-window', '2026-09-10T09:00:00.000Z'),
+          ],
+        }),
+      ),
+    );
+
+    const result = await new LegacyGamesPublicAdapter({ fetchImplementation }).read({
+      from: '2026-07-24T00:00:00.000Z',
+      to: '2026-09-04T00:00:00.000Z',
+      limit: 200,
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      title: 'Открытая игра 2×2',
+      visibility: 'PUBLIC',
+      participants: [{ displayName: 'Настоящий игрок' }],
+    });
+    const serialized = JSON.stringify(result);
+    expect(serialized).not.toContain('inside-window-organizer');
+    expect(serialized).not.toContain('"externalId":"station"');
+  });
+
   it('matches a requested Viva exercise in memory and returns only its sanitized local roster', async () => {
     const exerciseId = '11111111-1111-4111-8111-111111111111';
     const otherExerciseId = '22222222-2222-4222-8222-222222222222';

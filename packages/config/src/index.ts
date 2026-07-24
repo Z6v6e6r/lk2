@@ -421,9 +421,10 @@ export function loadConfig(
     }
     if (
       parsed.data.APP_ENV === 'staging' &&
-      parsed.data.LEGACY_GAMES_ROSTER_SYNC_SOURCE !== 'mongo'
+      parsed.data.LEGACY_GAMES_ROSTER_SYNC_SOURCE === 'public' &&
+      parsed.data.GAMES_COMMANDS_ENABLED
     ) {
-      throw new Error('Staging legacy roster sync requires the Mongo mirror source');
+      throw new Error('Staging public legacy roster sync requires GAMES_COMMANDS_ENABLED=false');
     }
     if (
       parsed.data.LEGACY_GAMES_ROSTER_SYNC_SOURCE === 'mongo' &&

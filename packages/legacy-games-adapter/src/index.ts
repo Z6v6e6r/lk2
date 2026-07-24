@@ -627,6 +627,25 @@ export class LegacyGamesPublicAdapter {
     return (await this.readMappedAvailable(input.limit)).map(sanitizeSnapshot);
   }
 
+  public async read(input: {
+    readonly from: string;
+    readonly to: string;
+    readonly limit: number;
+  }): Promise<readonly LegacyGameSourceSnapshot[]> {
+    const from = isoInstant(input.from);
+    const to = isoInstant(input.to);
+    if (!from || !to || Date.parse(to) <= Date.parse(from)) {
+      throw new Error('LEGACY_GAMES_DATE_RANGE_INVALID');
+    }
+    return (await this.readMappedAvailable(input.limit))
+      .filter(
+        (snapshot) =>
+          Date.parse(snapshot.startsAt) >= Date.parse(from) &&
+          Date.parse(snapshot.startsAt) < Date.parse(to),
+      )
+      .map(sanitizeSnapshot);
+  }
+
   /**
    * Local-only counterpart of the Mongo bridge. Viva first proves the exercise UUID for the
    * authenticated viewer; the server reads that viewer's CUP history and keeps only the matching

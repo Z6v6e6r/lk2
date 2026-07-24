@@ -36,6 +36,22 @@ dependency tree.
    `/etc/phub/staging.env`. Run migrations once from the CI-published migrator
    digest, then deploy web, API, realtime and worker.
 
+The application runtime reads three environment files in order:
+
+- `/etc/phub/staging.env` contains the root-owned shared runtime secrets;
+- `/opt/phub/staging.override.env` contains only the Home/community/promotion live-read gates;
+- `/opt/phub/staging.games.env` is mode `0600`, owned by `phub-deploy`, and contains the
+  staging-only Games mirror gates. The preferred Mongo mirror keeps its URI only here; a
+  read-only public CUP mirror may be used without a new credential.
+
+The Games file must select a real server-side source, enable canonical Games reads and keep
+commands disabled until their separate cutover approval. A public source must use HTTPS and cannot
+be combined with Games commands. The deploy workflow runs
+`verify-live-staging-data.sh preflight` before backup/migration and repeats the verification after
+the new containers start. A release fails if Viva/Home uses mock data, if a local dev-auth path is
+enabled, or if the worker does not produce real canonical Games, card projections and guarded
+roster-mirror state.
+
 Every staging workflow creates a PostgreSQL custom-format archive under
 `/opt/phub/backups/postgres-pre-<release>-<UTC timestamp>.dump`. The workflow
 requires a non-empty archive, validates it with `pg_restore --list`, runs the

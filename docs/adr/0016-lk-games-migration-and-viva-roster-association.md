@@ -42,16 +42,19 @@ document to the browser.
    normalized rating and server-computed free slots. It emits no phone, payment, legacy identifier,
    Viva identifier or provider source URL. A bridge read or media failure retains the last local
    avatar/projection rather than publishing provider URLs or a partial roster.
-5. The public legacy endpoint remains local-clone-only and anonymizes every retained integration
-   key. A production backfill must use a separately approved, bounded server source; a browser
-   may never call either source directly.
+5. The public legacy endpoint anonymizes every retained integration key. It may feed a read-only
+   local clone or staging mirror, but staging must keep Games commands and private/history backfill
+   disabled. A production backfill must use a separately approved, bounded server source; a
+   browser may never call either source directly.
 6. Game commands move operation-by-operation to the local aggregate. There is no independent
    dual-write to legacy Mongo/Node-RED. Compatibility updates, if required during cutover, are
    asynchronous adapter work driven by durable outbox facts and have a single declared owner.
-7. The mirror is staging-only and requires an explicit `GAMES_READ_ENABLED` gate, scoped tenant,
-   server-secret Mongo URI and bounded time window. It creates canonical outbox facts for changed
-   rosters, so card/Home projections refresh through the normal consumers. It never writes back
-   to legacy Mongo/Node-RED.
+7. The mirror is staging-only and requires an explicit `GAMES_READ_ENABLED` gate, scoped tenant
+   and bounded time window. The preferred source is the server-secret Mongo URI. A sanitized HTTPS
+   public CUP source is permitted for read-only staging verification only when Games commands and
+   private/history backfill remain disabled. Both modes create canonical outbox facts for changed
+   rosters, so card/Home projections refresh through the normal consumers. Neither writes back to
+   legacy Mongo/Node-RED.
 
 ## Migration sequence
 

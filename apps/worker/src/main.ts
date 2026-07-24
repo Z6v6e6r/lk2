@@ -120,8 +120,7 @@ const legacyGamesRosterSource = !config.LEGACY_GAMES_ROSTER_SYNC_ENABLED
         maxAttempts: 2,
         onMetric: (metric) => logger.info({ metric }, 'legacy Games roster read'),
       });
-const legacyGamesRosterWindowSource =
-  legacyGamesRosterSource instanceof LegacyGamesMongoAdapter ? legacyGamesRosterSource : undefined;
+const legacyGamesRosterWindowSource = legacyGamesRosterSource;
 const webPushRuntime =
   config.WEB_PUSH_ENABLED && config.NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS
     ? {

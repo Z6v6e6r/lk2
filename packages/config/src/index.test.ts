@@ -223,7 +223,7 @@ describe('loadConfig', () => {
     ).toThrow('GAMES_COMMANDS_ENABLED is staging-only');
   });
 
-  it('permits only the anonymized public roster bridge locally and Mongo mirror in staging', () => {
+  it('permits the anonymized public roster bridge in read-only local and staging runtimes', () => {
     expect(() =>
       loadConfig({
         ...validEnvironment,
@@ -281,6 +281,32 @@ describe('loadConfig', () => {
       LEGACY_GAMES_ROSTER_SYNC_ENABLED: true,
       LEGACY_GAMES_ROSTER_SYNC_SOURCE: 'mongo',
     });
+    expect(
+      loadConfig({
+        ...validEnvironment,
+        APP_ENV: 'staging',
+        GAMES_READ_ENABLED: 'true',
+        GAMES_COMMANDS_ENABLED: 'false',
+        LEGACY_GAMES_ROSTER_SYNC_ENABLED: 'true',
+        LEGACY_GAMES_ROSTER_SYNC_SOURCE: 'public',
+        LEGACY_GAMES_ROSTER_SYNC_TENANT_KEY: 'staging-padel',
+      }),
+    ).toMatchObject({
+      LEGACY_GAMES_ROSTER_SYNC_ENABLED: true,
+      LEGACY_GAMES_ROSTER_SYNC_SOURCE: 'public',
+      GAMES_COMMANDS_ENABLED: false,
+    });
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        APP_ENV: 'staging',
+        GAMES_READ_ENABLED: 'true',
+        GAMES_COMMANDS_ENABLED: 'true',
+        LEGACY_GAMES_ROSTER_SYNC_ENABLED: 'true',
+        LEGACY_GAMES_ROSTER_SYNC_SOURCE: 'public',
+        LEGACY_GAMES_ROSTER_SYNC_TENANT_KEY: 'staging-padel',
+      }),
+    ).toThrow('Staging public legacy roster sync requires GAMES_COMMANDS_ENABLED=false');
   });
 
   it('enables activity history game backfill independently from continuous roster sync', () => {
