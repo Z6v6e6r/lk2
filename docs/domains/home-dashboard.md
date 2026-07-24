@@ -208,9 +208,14 @@ component events are emitted by their domain transaction, not by this script.
 
 `HOME_VIVA_SYNC_ENABLED=true` activates the first real source producers in `apps/worker` with a
 bounded batch, interval and failure backoff. It does not change `HOME_READ_MODE`. A user remains in
-the projector's `waiting` state until messaging, communities, promotion, locations, navigation and
-capabilities are also present. Duplicate PadlHub users resolving to one Viva profile are rejected as
-`EXTERNAL_ID_MAPPING_CONFLICT`; the producer never silently reassigns the profile mapping.
+the projector's `waiting` state until every component is present. The same worker gate also enables
+the canonical PadlHub platform producer: `messaging` is calculated from conversation read cursors,
+`navigation` from server product configuration and `capabilities` from the tenant-scoped access
+profile. It performs a one-time `locations` fan-out from the existing LOCAL_ONLY location projection
+revision when a user has no location component; later location changes remain owned exclusively by
+the location domain event producer. Duplicate PadlHub users resolving to one Viva profile are
+rejected as `EXTERNAL_ID_MAPPING_CONFLICT`; the producer never silently reassigns the profile
+mapping.
 
 `PROMOTIONS_READ_MODE=legacy` independently activates the CUP advertising producer and requires
 private object storage. Production forbids `PROMOTIONS_READ_MODE=mock`; operators continue to add,
