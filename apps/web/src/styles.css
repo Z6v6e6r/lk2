@@ -5458,7 +5458,9 @@ label {
   min-height: 100dvh;
   flex-direction: column;
   margin: 0 auto;
-  overflow-x: hidden;
+  /* Keep horizontal artwork clipped without turning Home into a nested vertical scroller. */
+  overflow-x: clip;
+  overflow-y: visible;
   background-color: #d2c8ff;
   background-image: linear-gradient(155.73deg, #8a63ff -7.01%, #9576ff 28.39%, #d2c8ff 69.68%);
   background-position: top center;
