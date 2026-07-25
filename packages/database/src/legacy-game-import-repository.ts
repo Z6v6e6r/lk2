@@ -331,6 +331,30 @@ async function associateVivaExercise(
     );
     return;
   }
+  const existingForGame = await queryOne<{ readonly external_id: string } & QueryResultRow>(
+    client,
+    `select external_id
+       from integration.external_entity_map
+      where tenant_id = $1 and external_system = $2 and entity_type = 'exercise' and internal_id = $3
+      for update`,
+    [input.tenantId, VIVA_EXTERNAL_SYSTEM, input.gameId],
+  );
+  if (existingForGame) {
+    await client.query(
+      `update integration.external_entity_map
+          set external_id = $4, external_version = $5, last_synced_at = now(),
+              sync_status = 'synced', sync_error_code = null
+        where tenant_id = $1 and external_system = $2 and entity_type = 'exercise' and internal_id = $3`,
+      [
+        input.tenantId,
+        VIVA_EXTERNAL_SYSTEM,
+        input.gameId,
+        input.vivaExerciseExternalId,
+        input.externalVersion,
+      ],
+    );
+    return;
+  }
   await client.query(
     `insert into integration.external_entity_map (
        tenant_id, external_system, entity_type, internal_id, external_id,

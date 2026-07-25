@@ -349,6 +349,50 @@ describe('legacy game import repository', () => {
     ).toBe(true);
   });
 
+  it('normalizes the existing raw Viva exercise association for an imported game', async () => {
+    const gameId = '6418f90b-0fa6-4c04-a3da-57707e2f0ae2';
+    const rawVivaExerciseId = 'private-raw-viva-exercise-id';
+    const { pool, clientQuery } = fakePool((text, values) => {
+      if (text.includes('from identity.tenants')) return { rows: [{ id: tenantId }] };
+      if (text.includes('from integration.external_entity_map') && values[2] === 'game') {
+        return { rows: [{ internal_id: gameId }] };
+      }
+      if (
+        text.includes("entity_type = 'exercise'") &&
+        text.includes('internal_id = $3') &&
+        values[2] === gameId
+      ) {
+        return { rows: [{ external_id: rawVivaExerciseId }] };
+      }
+      return { rows: [] };
+    });
+
+    const result = await createLegacyGameImportRepository(pool).importSnapshots({
+      tenantKey: 'local-padel',
+      snapshots: [snapshot],
+      correlationId: 'legacy-association-normalize-test',
+      now: new Date('2026-07-18T10:00:00.000Z'),
+    });
+
+    expect(result.existing).toEqual([expect.objectContaining({ gameId })]);
+    expect(
+      clientQuery.mock.calls.find(
+        ([text, values]) =>
+          text.includes('set external_id = $4') &&
+          values?.[2] === gameId &&
+          values?.[3] === snapshot.vivaExerciseExternalId,
+      ),
+    ).toBeDefined();
+    expect(
+      clientQuery.mock.calls.some(
+        ([text, values]) =>
+          text.includes('insert into integration.external_entity_map') &&
+          values?.[1] === 'VIVA' &&
+          values?.[3] === gameId,
+      ),
+    ).toBe(false);
+  });
+
   it('advances an existing CUP game lifecycle and emits the canonical outbox fact', async () => {
     const gameId = '6418f90b-0fa6-4c04-a3da-57707e2f0ae2';
     const organizerUserId = 'e68c6e6e-0b0a-4ad9-8e3d-4bc08c1eea11';
