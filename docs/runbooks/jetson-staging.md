@@ -59,6 +59,14 @@ digest-pinned migrator and confirms the latest repository migration in
 `public.schema_migrations` before it switches application containers. A failed
 backup or migration leaves the currently running application release untouched.
 
+Before pulling a new digest, CI checks free space on `/`. Below 8 GiB it removes only Docker
+images that are not referenced by a container; it never prunes volumes. Deployment stops before
+pull/migration if that safe cleanup still leaves less than 4 GiB. A Redis
+`MISCONF ... stop-writes-on-bgsave-error`, PostgreSQL restart loop, or RabbitMQ `541` must therefore
+be treated as a storage incident first: inspect `df -h /`, `df -i /` and `docker system df`, retain
+all volumes, free only confirmed-unused images, then require all three infrastructure healthchecks
+before restarting the application release.
+
 The staging application Compose file passes the existing MinIO credentials from
 `infrastructure.env` into API and worker. Both use the same private `http://minio:9000` endpoint
 and `phub-media` bucket: worker owns writes while API serves stable profile-photo delivery routes.

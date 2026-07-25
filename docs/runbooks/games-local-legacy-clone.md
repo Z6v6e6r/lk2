@@ -41,6 +41,10 @@ never replaces an already stored profile-owned avatar.
   summary for an already mapped participant, then rebuild the card projection from the current
   local aggregate. Game reads overlay that current PadlHub display name so stock avatars use real
   initials even when an older projection contains `Организатор` or `Игрок N`.
+- Both source adapters must emit the same pseudonymous association ID. Raw source IDs are accepted
+  only as integration aliases. If a pre-`0042` database contains both forms, the migration keeps
+  the pseudonymous aggregate as canonical, moves external/history references, removes the source
+  projection and retains the source aggregate as a lossless redirect tombstone.
 
 ## Procedure
 
@@ -90,6 +94,14 @@ rating; a truly unknown rating remains at zero rather than being inferred.
 
 Unknown waitlist members are deliberately not cloned: the source identifies them by phone, which is
 outside the approved snapshot contract. Payment URLs and payment-provider state are also excluded.
+
+For a post-migration reconciliation, verify all three invariants:
+
+- the raw/hash pair query returns zero pairs with different `internal_id`;
+- every row in `integration.legacy_game_merge_redirects` has no corresponding
+  `games.card_projections` row for `source_game_id`;
+- source mappings, Viva exercise mappings and `booking.activity_history_projection.game_id`
+  resolve to `target_game_id`, while source Games/participations/results remain present.
 
 ## Verification and cleanup
 

@@ -16,6 +16,8 @@ const VIVA_EXTERNAL_SYSTEM = 'VIVA';
 
 export interface LegacyGameImportParticipant {
   readonly externalId: string;
+  /** Integration-only aliases; never serialized into Games or Home DTOs. */
+  readonly externalAliases?: readonly string[];
   readonly displayName: string;
   readonly level: GamePlayerLevel | null;
   readonly levelValue: number | null;
@@ -25,6 +27,8 @@ export interface LegacyGameImportParticipant {
 
 export interface LegacyGameImportSnapshot {
   readonly externalId: string;
+  /** Integration-only aliases; never serialized into Games or Home DTOs. */
+  readonly externalAliases?: readonly string[];
   readonly externalVersion: string;
   /** Integration-only VIVA exercise key. It must never reach a Games or Home DTO. */
   readonly vivaExerciseExternalId: string | null;
@@ -37,8 +41,10 @@ export interface LegacyGameImportSnapshot {
   readonly timezone: string;
   readonly station: {
     readonly externalId: string;
+    readonly externalAliases?: readonly string[];
     readonly name: string;
     readonly courtExternalId: string | null;
+    readonly courtExternalAliases?: readonly string[];
     readonly courtName: string | null;
   };
   readonly capacity: number;
@@ -118,6 +124,7 @@ interface TenantRow extends QueryResultRow {
 
 interface MappingRow extends QueryResultRow {
   readonly internal_id: string;
+  readonly external_id: string;
   readonly external_version?: string | null;
 }
 
@@ -259,46 +266,68 @@ async function reconcileLifecycleCommands(
   );
 }
 
-async function findMapping(
+function canonicalAndAliases(
+  externalId: string,
+  aliases: readonly string[] | undefined,
+): readonly string[] {
+  return [
+    ...new Set(
+      [externalId, ...(aliases ?? [])].map((value) => value.trim()).filter((value) => value.length),
+    ),
+  ];
+}
+
+async function findMappings(
   client: PoolClient,
   tenantId: string,
   entityType: 'game' | 'game_player' | 'game_station' | 'game_court',
-  externalId: string,
-): Promise<string | undefined> {
-  const row = await queryOne<MappingRow>(
-    client,
-    `select internal_id
+  externalIds: readonly string[],
+): Promise<readonly MappingRow[]> {
+  if (externalIds.length === 0) return [];
+  const result = await client.query<MappingRow>(
+    `select internal_id, external_id, external_version
        from integration.external_entity_map
-      where tenant_id = $1 and external_system = $2 and entity_type = $3 and external_id = $4`,
-    [tenantId, EXTERNAL_SYSTEM, entityType, externalId],
+      where tenant_id = $1 and external_system = $2 and entity_type = $3
+        and external_id = any($4::text[])
+      order by case when external_id = $5 then 0 else 1 end, last_synced_at desc nulls last
+      for update`,
+    [tenantId, EXTERNAL_SYSTEM, entityType, externalIds, externalIds[0]],
   );
-  return row?.internal_id;
+  return result.rows;
 }
 
-async function insertMapping(
+async function upsertMappingAliases(
   client: PoolClient,
   input: {
     readonly tenantId: string;
     readonly entityType: 'game' | 'game_player' | 'game_station' | 'game_court';
     readonly internalId: string;
-    readonly externalId: string;
+    readonly externalIds: readonly string[];
     readonly externalVersion: string;
   },
 ): Promise<void> {
-  await client.query(
-    `insert into integration.external_entity_map (
-       tenant_id, external_system, entity_type, internal_id, external_id,
-       external_version, last_synced_at, sync_status, sync_error_code
-     ) values ($1, $2, $3, $4, $5, $6, now(), 'synced', null)`,
-    [
-      input.tenantId,
-      EXTERNAL_SYSTEM,
-      input.entityType,
-      input.internalId,
-      input.externalId,
-      input.externalVersion,
-    ],
-  );
+  for (const externalId of input.externalIds) {
+    await client.query(
+      `insert into integration.external_entity_map (
+         tenant_id, external_system, entity_type, internal_id, external_id,
+         external_version, last_synced_at, sync_status, sync_error_code
+       ) values ($1, $2, $3, $4, $5, $6, now(), 'synced', null)
+       on conflict (tenant_id, external_system, entity_type, external_id) do update set
+         internal_id = excluded.internal_id,
+         external_version = excluded.external_version,
+         last_synced_at = excluded.last_synced_at,
+         sync_status = 'synced',
+         sync_error_code = null`,
+      [
+        input.tenantId,
+        EXTERNAL_SYSTEM,
+        input.entityType,
+        input.internalId,
+        externalId,
+        input.externalVersion,
+      ],
+    );
+  }
 }
 
 async function associateVivaExercise(
@@ -319,7 +348,10 @@ async function associateVivaExercise(
       for update`,
     [input.tenantId, VIVA_EXTERNAL_SYSTEM, input.vivaExerciseExternalId],
   );
-  if (existing && existing.internal_id !== input.gameId) {
+  const existingTarget = existing
+    ? await canonicalRedirectTarget(client, input.tenantId, existing.internal_id)
+    : undefined;
+  if (existingTarget && existingTarget !== input.gameId) {
     throw new Error('VIVA_EXERCISE_GAME_ASSOCIATION_CONFLICT');
   }
   if (existing) {
@@ -408,23 +440,23 @@ async function resolvePlayer(
       [tenantId, sourcePlayerAssociationId, boundUserId, proofKind],
     );
   }
-  const existing = await findMapping(client, tenantId, 'game_player', participant.externalId);
+  const externalIds = canonicalAndAliases(participant.externalId, participant.externalAliases);
+  const mappings = await findMappings(client, tenantId, 'game_player', externalIds);
+  const existing = mappings[0]?.internal_id;
   const userId = provenUserId ?? existing ?? randomUUID();
-  if (!existing) {
-    if (!provenUserId) {
-      await client.query(`insert into identity.users (id, tenant_id) values ($1, $2)`, [
-        userId,
-        tenantId,
-      ]);
-    }
-    await insertMapping(client, {
+  if (!existing && !provenUserId) {
+    await client.query(`insert into identity.users (id, tenant_id) values ($1, $2)`, [
+      userId,
       tenantId,
-      entityType: 'game_player',
-      internalId: userId,
-      externalId: participant.externalId,
-      externalVersion,
-    });
+    ]);
   }
+  await upsertMappingAliases(client, {
+    tenantId,
+    entityType: 'game_player',
+    internalId: userId,
+    externalIds,
+    externalVersion,
+  });
   await client.query(
     `insert into profile.user_summaries (
        tenant_id, user_id, display_name, level_label, level_value
@@ -452,12 +484,14 @@ async function refreshMappedPlayerSummary(
     readonly participant: LegacyGameImportParticipant;
   },
 ): Promise<void> {
-  const userId = await findMapping(
-    client,
-    input.tenantId,
-    'game_player',
-    input.participant.externalId,
-  );
+  const userId = (
+    await findMappings(
+      client,
+      input.tenantId,
+      'game_player',
+      canonicalAndAliases(input.participant.externalId, input.participant.externalAliases),
+    )
+  )[0]?.internal_id;
   if (!userId) return;
   await client.query(
     `update profile.user_summaries summary
@@ -499,12 +533,14 @@ async function bindExistingGameParticipant(
     readonly now: Date;
   },
 ): Promise<boolean> {
-  const previousUserId = await findMapping(
-    client,
-    input.tenantId,
-    'game_player',
-    input.participant.externalId,
-  );
+  const previousUserId = (
+    await findMappings(
+      client,
+      input.tenantId,
+      'game_player',
+      canonicalAndAliases(input.participant.externalId, input.participant.externalAliases),
+    )
+  )[0]?.internal_id;
   const userId = await resolvePlayer(
     client,
     input.tenantId,
@@ -588,13 +624,25 @@ async function resolveStation(
   input: {
     readonly tenantId: string;
     readonly externalId: string;
+    readonly externalAliases?: readonly string[];
     readonly externalVersion: string;
     readonly name: string;
     readonly actorUserId: string;
   },
 ): Promise<string> {
-  const existing = await findMapping(client, input.tenantId, 'game_station', input.externalId);
-  if (existing) return existing;
+  const externalIds = canonicalAndAliases(input.externalId, input.externalAliases);
+  const mappings = await findMappings(client, input.tenantId, 'game_station', externalIds);
+  const existing = mappings[0]?.internal_id;
+  if (existing) {
+    await upsertMappingAliases(client, {
+      tenantId: input.tenantId,
+      entityType: 'game_station',
+      internalId: existing,
+      externalIds,
+      externalVersion: input.externalVersion,
+    });
+    return existing;
+  }
   const stationId = randomUUID();
   await client.query(
     `insert into locations.profiles (
@@ -609,11 +657,11 @@ async function resolveStation(
       input.actorUserId,
     ],
   );
-  await insertMapping(client, {
+  await upsertMappingAliases(client, {
     tenantId: input.tenantId,
     entityType: 'game_station',
     internalId: stationId,
-    externalId: input.externalId,
+    externalIds,
     externalVersion: input.externalVersion,
   });
   return stationId;
@@ -624,21 +672,151 @@ async function resolveCourt(
   input: {
     readonly tenantId: string;
     readonly externalId: string | null;
+    readonly externalAliases?: readonly string[];
     readonly externalVersion: string;
   },
 ): Promise<string | null> {
   if (!input.externalId) return null;
-  const existing = await findMapping(client, input.tenantId, 'game_court', input.externalId);
-  if (existing) return existing;
+  const externalIds = canonicalAndAliases(input.externalId, input.externalAliases);
+  const mappings = await findMappings(client, input.tenantId, 'game_court', externalIds);
+  const existing = mappings[0]?.internal_id;
+  if (existing) {
+    await upsertMappingAliases(client, {
+      tenantId: input.tenantId,
+      entityType: 'game_court',
+      internalId: existing,
+      externalIds,
+      externalVersion: input.externalVersion,
+    });
+    return existing;
+  }
   const courtId = randomUUID();
-  await insertMapping(client, {
+  await upsertMappingAliases(client, {
     tenantId: input.tenantId,
     entityType: 'game_court',
     internalId: courtId,
-    externalId: input.externalId,
+    externalIds,
     externalVersion: input.externalVersion,
   });
   return courtId;
+}
+
+async function canonicalRedirectTarget(
+  client: PoolClient,
+  tenantId: string,
+  gameId: string,
+): Promise<string> {
+  const redirect = await queryOne<{ readonly target_game_id: string } & QueryResultRow>(
+    client,
+    `select target_game_id
+       from integration.legacy_game_merge_redirects
+      where tenant_id = $1 and source_game_id = $2`,
+    [tenantId, gameId],
+  );
+  return redirect?.target_game_id ?? gameId;
+}
+
+/**
+ * Losslessly folds a duplicate legacy aggregate into its canonical identity. Child rows that
+ * carry immutable game history remain attached to the source tombstone; the redirect preserves
+ * access while projections, source mappings and user activity history switch atomically.
+ */
+async function mergeLegacyGameAliasPair(
+  client: PoolClient,
+  input: {
+    readonly tenantId: string;
+    readonly sourceGameId: string;
+    readonly targetGameId: string;
+    readonly correlationId: string;
+    readonly now: Date;
+  },
+): Promise<void> {
+  if (input.sourceGameId === input.targetGameId) return;
+  const sourceGameId = await canonicalRedirectTarget(client, input.tenantId, input.sourceGameId);
+  const targetGameId = await canonicalRedirectTarget(client, input.tenantId, input.targetGameId);
+  if (sourceGameId === targetGameId) return;
+  const locked = await client.query<{ readonly id: string } & QueryResultRow>(
+    `select id
+       from games.games
+      where tenant_id = $1 and id = any($2::uuid[])
+      order by id
+      for update`,
+    [input.tenantId, [sourceGameId, targetGameId]],
+  );
+  if (locked.rows.length !== 2) throw new Error('LEGACY_GAME_ALIAS_MERGE_GAME_NOT_FOUND');
+
+  await client.query(
+    `insert into integration.legacy_game_merge_redirects (
+       tenant_id, source_game_id, target_game_id, merge_reason, merged_at
+     ) values ($1, $2, $3, 'SOURCE_AND_PSEUDONYMOUS_ID_ALIAS', $4)
+     on conflict (tenant_id, source_game_id) do update set
+       target_game_id = excluded.target_game_id,
+       merge_reason = excluded.merge_reason,
+       merged_at = excluded.merged_at`,
+    [input.tenantId, sourceGameId, targetGameId, input.now.toISOString()],
+  );
+  await client.query(
+    `update integration.external_entity_map
+        set internal_id = $3, last_synced_at = now(), sync_status = 'synced',
+            sync_error_code = null
+      where tenant_id = $1 and internal_id = $2
+        and external_system = $4 and entity_type = 'game'`,
+    [input.tenantId, sourceGameId, targetGameId, EXTERNAL_SYSTEM],
+  );
+  await client.query(
+    `update integration.external_entity_map mapping
+        set internal_id = $3, last_synced_at = now(), sync_status = 'synced',
+            sync_error_code = null
+      where mapping.tenant_id = $1 and mapping.internal_id = $2
+        and mapping.external_system = $4 and mapping.entity_type = 'exercise'
+        and not exists (
+          select 1
+            from integration.external_entity_map target_mapping
+           where target_mapping.tenant_id = $1
+             and target_mapping.external_system = mapping.external_system
+             and target_mapping.entity_type = mapping.entity_type
+             and target_mapping.internal_id = $3
+        )`,
+    [input.tenantId, sourceGameId, targetGameId, VIVA_EXTERNAL_SYSTEM],
+  );
+  await client.query(
+    `update booking.activity_history_projection
+        set game_id = $3, updated_at = $4
+      where tenant_id = $1 and game_id = $2`,
+    [input.tenantId, sourceGameId, targetGameId, input.now.toISOString()],
+  );
+  await client.query(
+    `update integration.legacy_game_roster_sync_state
+        set mode = 'DISABLED', conflict_code = null, updated_at = $3
+      where tenant_id = $1 and game_id = $2`,
+    [input.tenantId, sourceGameId, input.now.toISOString()],
+  );
+  await client.query(
+    `update games.scheduled_commands
+        set state = 'COMPLETED', completed_at = coalesce(completed_at, $3),
+            locked_at = null, locked_by = null
+      where tenant_id = $1 and game_id = $2 and state in ('PENDING', 'FAILED')`,
+    [input.tenantId, sourceGameId, input.now.toISOString()],
+  );
+  await client.query(`delete from games.card_projections where tenant_id = $1 and game_id = $2`, [
+    input.tenantId,
+    sourceGameId,
+  ]);
+  await client.query(
+    `insert into audit.audit_log (
+       tenant_id, actor_id, action, resource_type, resource_id, result,
+       reason, correlation_id, old_value, new_value
+     ) values ($1, null, 'LEGACY_GAME_ALIAS_PAIR_MERGED', 'GAME', $3,
+               'SUCCESS', 'SOURCE_AND_PSEUDONYMOUS_ID_ALIAS', $4, $5::jsonb, $6::jsonb)`,
+    [
+      input.tenantId,
+      sourceGameId,
+      targetGameId,
+      input.correlationId,
+      JSON.stringify({ sourceGameId }),
+      JSON.stringify({ targetGameId }),
+    ],
+  );
 }
 
 async function importOne(
@@ -666,12 +844,37 @@ async function importOne(
     await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
       `legacy-game-import:${input.tenantId}`,
     ]);
-    const existingGameId = await findMapping(
-      client,
-      input.tenantId,
-      'game',
+    const gameExternalIds = canonicalAndAliases(
       input.snapshot.externalId,
+      input.snapshot.externalAliases,
     );
+    const gameMappings = await findMappings(client, input.tenantId, 'game', gameExternalIds);
+    let existingGameId = gameMappings[0]?.internal_id;
+    if (existingGameId) {
+      existingGameId = await canonicalRedirectTarget(client, input.tenantId, existingGameId);
+      for (const duplicateGameId of new Set(gameMappings.map((mapping) => mapping.internal_id))) {
+        const resolvedDuplicateGameId = await canonicalRedirectTarget(
+          client,
+          input.tenantId,
+          duplicateGameId,
+        );
+        if (resolvedDuplicateGameId === existingGameId) continue;
+        await mergeLegacyGameAliasPair(client, {
+          tenantId: input.tenantId,
+          sourceGameId: resolvedDuplicateGameId,
+          targetGameId: existingGameId,
+          correlationId: input.correlationId,
+          now: input.now,
+        });
+      }
+      await upsertMappingAliases(client, {
+        tenantId: input.tenantId,
+        entityType: 'game',
+        internalId: existingGameId,
+        externalIds: gameExternalIds,
+        externalVersion: input.snapshot.externalVersion,
+      });
+    }
     if (existingGameId) {
       let aggregateChanged = false;
       let lifecycleChanged = false;
@@ -883,6 +1086,9 @@ async function importOne(
     const stationId = await resolveStation(client, {
       tenantId: input.tenantId,
       externalId: input.snapshot.station.externalId,
+      ...(input.snapshot.station.externalAliases
+        ? { externalAliases: input.snapshot.station.externalAliases }
+        : {}),
       externalVersion: input.snapshot.externalVersion,
       name: input.snapshot.station.name,
       actorUserId: organizerUserId,
@@ -890,6 +1096,9 @@ async function importOne(
     const courtId = await resolveCourt(client, {
       tenantId: input.tenantId,
       externalId: input.snapshot.station.courtExternalId,
+      ...(input.snapshot.station.courtExternalAliases
+        ? { externalAliases: input.snapshot.station.courtExternalAliases }
+        : {}),
       externalVersion: input.snapshot.externalVersion,
     });
     const gameId = randomUUID();
@@ -938,11 +1147,11 @@ async function importOne(
         initialCreatedAt,
       ],
     );
-    await insertMapping(client, {
+    await upsertMappingAliases(client, {
       tenantId: input.tenantId,
       entityType: 'game',
       internalId: gameId,
-      externalId: input.snapshot.externalId,
+      externalIds: gameExternalIds,
       externalVersion: input.snapshot.externalVersion,
     });
     await associateVivaExercise(client, {
@@ -1143,20 +1352,20 @@ async function synchronizeOne(
   | { readonly outcome: 'bootstrapped' | 'unchanged' | 'conflict' | 'skipped' }
 > {
   return withTenantTransaction(pool, input.tenantId, async (client) => {
-    const mapping = await queryOne<MappingRow>(
+    const mappings = await findMappings(
       client,
-      `select internal_id, external_version
-         from integration.external_entity_map
-        where tenant_id = $1 and external_system = $2 and entity_type = 'game' and external_id = $3
-        for update`,
-      [input.tenantId, EXTERNAL_SYSTEM, input.snapshot.externalId],
+      input.tenantId,
+      'game',
+      canonicalAndAliases(input.snapshot.externalId, input.snapshot.externalAliases),
     );
+    const mapping = mappings[0];
     if (!mapping) return { outcome: 'skipped' };
+    const gameId = await canonicalRedirectTarget(client, input.tenantId, mapping.internal_id);
     const game = await queryOne<LegacyGameRow>(
       client,
       `select id, revision, organizer_user_id, lifecycle_state
          from games.games where tenant_id = $1 and id = $2 for update`,
-      [input.tenantId, mapping.internal_id],
+      [input.tenantId, gameId],
     );
     if (!game || game.lifecycle_state !== 'SCHEDULED') return { outcome: 'skipped' };
     const currentRevision = Number(game.revision);
@@ -1408,14 +1617,21 @@ export function createLegacyGameImportRepository(pool: Pool): LegacyGameImportRe
       if (vivaExerciseAssociationIds.length === 0) return [];
       return withTenantTransaction(pool, input.tenantId, async (client) => {
         const candidates = await client.query<AssociatedLifecycleGameRow>(
-          `select game.id, game.revision, game.lifecycle_state, game.starts_at, game.ends_at
-             from integration.external_entity_map mapping
+          `with candidate_ids as (
+             select distinct coalesce(redirect.target_game_id, mapping.internal_id) as game_id
+               from integration.external_entity_map mapping
+               left join integration.legacy_game_merge_redirects redirect
+                 on redirect.tenant_id = mapping.tenant_id
+                and redirect.source_game_id = mapping.internal_id
+              where mapping.tenant_id = $1 and mapping.external_system = $2
+                and mapping.entity_type = 'exercise'
+                and mapping.external_id = any($3::text[])
+           )
+           select game.id, game.revision, game.lifecycle_state, game.starts_at, game.ends_at
+             from candidate_ids
              join games.games game
-               on game.tenant_id = mapping.tenant_id and game.id = mapping.internal_id
-            where mapping.tenant_id = $1 and mapping.external_system = $2
-              and mapping.entity_type = 'exercise'
-              and mapping.external_id = any($3::text[])
-              and game.lifecycle_state in ('SCHEDULED', 'IN_PROGRESS')
+               on game.tenant_id = $1 and game.id = candidate_ids.game_id
+            where game.lifecycle_state in ('SCHEDULED', 'IN_PROGRESS')
               and game.starts_at <= $4::timestamptz
             order by game.starts_at, game.id
             for update of game`,

@@ -352,6 +352,77 @@ describe('legacy game import repository', () => {
     ).toBe(true);
   });
 
+  it('transactionally merges raw and pseudonymous game aliases into the canonical aggregate', async () => {
+    const sourceGameId = '7418f90b-0fa6-4c04-a3da-57707e2f0ae1';
+    const canonicalGameId = '7418f90b-0fa6-4c04-a3da-57707e2f0ae2';
+    const aliasSnapshot: LegacyGameImportSnapshot = {
+      ...snapshot,
+      externalId: 'f'.repeat(64),
+      externalAliases: ['pay_source-game-id'],
+    };
+    const { pool, clientQuery } = fakePool((text, values) => {
+      if (text.includes('from identity.tenants')) return { rows: [{ id: tenantId }] };
+      if (
+        text.includes('from integration.external_entity_map') &&
+        values[2] === 'game' &&
+        Array.isArray(values[3])
+      ) {
+        return {
+          rows: [
+            {
+              internal_id: canonicalGameId,
+              external_id: aliasSnapshot.externalId,
+              external_version: snapshot.externalVersion,
+            },
+            {
+              internal_id: sourceGameId,
+              external_id: aliasSnapshot.externalAliases?.[0],
+              external_version: snapshot.externalVersion,
+            },
+          ],
+        };
+      }
+      if (text.includes('from games.games') && text.includes('id = any')) {
+        return { rows: [{ id: sourceGameId }, { id: canonicalGameId }] };
+      }
+      return { rows: [] };
+    });
+
+    const result = await createLegacyGameImportRepository(pool).importSnapshots({
+      tenantKey: 'local-padel',
+      snapshots: [aliasSnapshot],
+      correlationId: 'legacy-alias-merge-test',
+      now: new Date('2026-07-18T10:00:00.000Z'),
+    });
+
+    expect(result.existing).toEqual([expect.objectContaining({ gameId: canonicalGameId })]);
+    expect(
+      clientQuery.mock.calls.some(
+        ([text, values]) =>
+          text.includes('insert into integration.legacy_game_merge_redirects') &&
+          values?.[1] === sourceGameId &&
+          values?.[2] === canonicalGameId,
+      ),
+    ).toBe(true);
+    expect(
+      clientQuery.mock.calls.some(([text]) =>
+        text.includes('update booking.activity_history_projection'),
+      ),
+    ).toBe(true);
+    expect(
+      clientQuery.mock.calls.some(([text]) => text.includes('delete from games.card_projections')),
+    ).toBe(true);
+    const aliasMappings = clientQuery.mock.calls.filter(
+      ([text, values]) =>
+        text.includes('on conflict (tenant_id, external_system, entity_type, external_id)') &&
+        values?.[2] === 'game' &&
+        values?.[3] === canonicalGameId,
+    );
+    expect(aliasMappings.map(([, values]) => values?.[4])).toEqual(
+      expect.arrayContaining([aliasSnapshot.externalId, aliasSnapshot.externalAliases?.[0]]),
+    );
+  });
+
   it('normalizes the existing raw Viva exercise association for an imported game', async () => {
     const gameId = '6418f90b-0fa6-4c04-a3da-57707e2f0ae2';
     const rawVivaExerciseId = 'private-raw-viva-exercise-id';
@@ -360,13 +431,8 @@ describe('legacy game import repository', () => {
       if (text.includes('from integration.external_entity_map') && values[2] === 'game') {
         return { rows: [{ internal_id: gameId }] };
       }
-      if (
-        text.includes("entity_type = 'exercise'") &&
-        text.includes('internal_id = $3') &&
-        values[2] === gameId
-      ) {
+      if (text.includes("entity_type = 'exercise'") && text.includes('internal_id = $3'))
         return { rows: [{ external_id: rawVivaExerciseId }] };
-      }
       return { rows: [] };
     });
 
@@ -523,7 +589,11 @@ describe('legacy game import repository', () => {
     const existingVersion = 'b'.repeat(64);
     const { pool, clientQuery } = fakePool((text, values) => {
       if (text.includes('from identity.tenants')) return { rows: [{ id: tenantId }] };
-      if (text.includes("entity_type = 'game' and external_id") && text.includes('for update')) {
+      if (
+        text.includes('from integration.external_entity_map') &&
+        values[2] === 'game' &&
+        text.includes('for update')
+      ) {
         return { rows: [{ internal_id: gameId, external_version: existingVersion }] };
       }
       if (text.includes('from games.games') && text.includes('for update')) {
@@ -598,9 +668,13 @@ describe('legacy game import repository', () => {
 
   it('quarantines a roster when a local aggregate revision has moved since the last mirror', async () => {
     const gameId = '6418f90b-0fa6-4c04-a3da-57707e2f0ae2';
-    const { pool, clientQuery } = fakePool((text) => {
+    const { pool, clientQuery } = fakePool((text, values) => {
       if (text.includes('from identity.tenants')) return { rows: [{ id: tenantId }] };
-      if (text.includes("entity_type = 'game' and external_id") && text.includes('for update')) {
+      if (
+        text.includes('from integration.external_entity_map') &&
+        values[2] === 'game' &&
+        text.includes('for update')
+      ) {
         return { rows: [{ internal_id: gameId, external_version: snapshot.externalVersion }] };
       }
       if (text.includes('from games.games') && text.includes('for update')) {

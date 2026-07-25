@@ -456,7 +456,14 @@ export function createGameRepository(pool: Pool): GameRepository {
       return withTenantTransaction(pool, tenantId, async (client) => {
         const row = await queryOne<GameRow>(
           client,
-          `select ${GAME_COLUMNS} from games.games where tenant_id = $1 and id = $2`,
+          `select ${GAME_COLUMNS}
+             from games.games
+            where tenant_id = $1
+              and id = coalesce((
+                select target_game_id
+                  from integration.legacy_game_merge_redirects
+                 where tenant_id = $1 and source_game_id = $2
+              ), $2)`,
           [tenantId, gameId],
         );
         return row ? mapGame(row) : undefined;
@@ -609,7 +616,15 @@ export function createGameRepository(pool: Pool): GameRepository {
       return withTenantTransaction(pool, input.tenantId, async (client) => {
         const game = await queryOne<{ revision: string | number } & QueryResultRow>(
           client,
-          `select revision from games.games where tenant_id = $1 and id = $2 for update`,
+          `select revision
+             from games.games
+            where tenant_id = $1 and id = $2
+              and not exists (
+                select 1
+                  from integration.legacy_game_merge_redirects redirect
+                 where redirect.tenant_id = $1 and redirect.source_game_id = $2
+              )
+            for update`,
           [input.tenantId, snapshot.id],
         );
         if (!game) return 'game_not_found';
@@ -660,6 +675,12 @@ export function createGameRepository(pool: Pool): GameRepository {
                   visibility, starts_at, ends_at, base_payload, projected_at
              from games.card_projections
             where tenant_id = $1
+              and not exists (
+                select 1
+                 from integration.legacy_game_merge_redirects redirect
+                 where redirect.tenant_id = $1
+                   and redirect.source_game_id = games.card_projections.game_id
+              )
               and lifecycle_state = 'SCHEDULED'
               and visibility = 'PUBLIC'
               and starts_at > now()
@@ -689,7 +710,12 @@ export function createGameRepository(pool: Pool): GameRepository {
           `select game_id, aggregate_revision, projection_revision, lifecycle_state,
                   visibility, starts_at, ends_at, base_payload, projected_at
              from games.card_projections
-            where tenant_id = $1 and game_id = $2`,
+            where tenant_id = $1
+              and game_id = coalesce((
+                select target_game_id
+                  from integration.legacy_game_merge_redirects
+                 where tenant_id = $1 and source_game_id = $2
+              ), $2)`,
           [tenantId, gameId],
         );
         return row ? mapProjection(row) : undefined;
@@ -712,6 +738,12 @@ export function createGameRepository(pool: Pool): GameRepository {
                   visibility, starts_at, ends_at, base_payload, projected_at
              from games.card_projections
             where tenant_id = $1
+              and not exists (
+                select 1
+                 from integration.legacy_game_merge_redirects redirect
+                 where redirect.tenant_id = $1
+                   and redirect.source_game_id = games.card_projections.game_id
+              )
               and ${lifecyclePredicate}
               and (
                 base_payload ->> 'organizerUserId' = $2
@@ -762,6 +794,12 @@ export function createGameRepository(pool: Pool): GameRepository {
                     visibility, starts_at, ends_at, base_payload, projected_at
                from games.card_projections
               where tenant_id = $1
+                and not exists (
+                  select 1
+                    from integration.legacy_game_merge_redirects redirect
+                   where redirect.tenant_id = $1
+                     and redirect.source_game_id = games.card_projections.game_id
+                )
                 and lifecycle_state = 'SCHEDULED'
                 and visibility = 'PUBLIC'
                 and starts_at > now()
@@ -772,6 +810,12 @@ export function createGameRepository(pool: Pool): GameRepository {
                     visibility, starts_at, ends_at, base_payload, projected_at
                from games.card_projections
               where tenant_id = $1
+                and not exists (
+                  select 1
+                    from integration.legacy_game_merge_redirects redirect
+                   where redirect.tenant_id = $1
+                     and redirect.source_game_id = games.card_projections.game_id
+                )
                 and lifecycle_state in ('FINISHED', 'CANCELLED')
                 and (
                   base_payload ->> 'organizerUserId' = $2
@@ -829,6 +873,12 @@ export function createGameRepository(pool: Pool): GameRepository {
              left join locations.profiles lp
                on lp.tenant_id = g.tenant_id and lp.id = g.station_id
             where g.tenant_id = $1 and g.id = $2
+              and not exists (
+                select 1
+                  from integration.legacy_game_merge_redirects redirect
+                 where redirect.tenant_id = g.tenant_id
+                   and redirect.source_game_id = g.id
+              )
             for share of g`,
           [input.tenantId, input.gameId],
         );

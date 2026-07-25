@@ -95,7 +95,7 @@ describe('legacy games adapter', () => {
     expect(testing.mapLegacyGame({ id: 'legacy-game-2', status: 'PAID' })).toBeUndefined();
   });
 
-  it('normalizes only the Viva exercise association for the private Mongo bridge', () => {
+  it('uses the public pseudonymous ID scheme and retains private source aliases for Mongo', () => {
     const exerciseId = '11111111-1111-4111-8111-111111111111';
     const mapped = testing.mapLegacyGame(
       {
@@ -123,12 +123,22 @@ describe('legacy games adapter', () => {
     );
 
     expect(mapped).toBeDefined();
-    expect(testing.normalizeMongoSnapshot(mapped!)).toMatchObject({
-      externalId: 'legacy-game-1',
+    const normalized = testing.normalizeMongoSnapshot(mapped!);
+    expect(normalized).toMatchObject({
       vivaExerciseExternalId: localVivaExerciseAssociationId(exerciseId),
-      viewerParticipantExternalId: 'legacy-player-1',
-      participants: [{ externalId: 'legacy-player-1' }],
+      viewerParticipantExternalId: localVivaProfileAssociationId('legacy-player-1'),
+      externalAliases: ['legacy-game-1'],
+      station: {
+        externalAliases: ['legacy-station-1'],
+      },
+      participants: [
+        {
+          externalId: localVivaProfileAssociationId('legacy-player-1'),
+          externalAliases: ['legacy-player-1'],
+        },
+      ],
     });
+    expect(normalized.externalId).toMatch(/^[0-9a-f]{64}$/);
   });
 
   it('sanitizes an over-broad public response while retaining player names', async () => {

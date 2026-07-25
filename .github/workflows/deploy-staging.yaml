@@ -152,6 +152,18 @@ jobs:
             infrastructure() {
               docker compose --env-file infrastructure.env -f compose.infrastructure.yaml "$@"
             }
+            available_kb="$(df -Pk / | tail -1 | tr -s " " | cut -d " " -f 4)"
+            if [ "$available_kb" -lt 8388608 ]; then
+              echo "Nano has less than 8 GiB free; pruning only unused Docker images."
+              docker image prune --all --force
+              available_kb="$(df -Pk / | tail -1 | tr -s " " | cut -d " " -f 4)"
+            fi
+            if [ "$available_kb" -lt 4194304 ]; then
+              echo "Nano has less than 4 GiB free after safe image pruning."
+              df -h /
+              docker system df
+              exit 1
+            fi
             compose pull
 
             backup_dir=/opt/phub/backups

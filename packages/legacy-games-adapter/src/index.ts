@@ -5,6 +5,8 @@ import { MongoClient, type Document, type Filter } from 'mongodb';
 
 export interface LegacyGameSourceParticipant {
   readonly externalId: string;
+  /** Integration-only aliases observed before canonical pseudonymization. */
+  readonly externalAliases?: readonly string[];
   readonly displayName: string;
   readonly level: GamePlayerLevel | null;
   readonly levelValue: number | null;
@@ -16,6 +18,8 @@ export interface LegacyGameSourceParticipant {
 
 export interface LegacyGameSourceSnapshot {
   readonly externalId: string;
+  /** Integration-only aliases observed before canonical pseudonymization. */
+  readonly externalAliases?: readonly string[];
   readonly externalVersion: string;
   /** Server-side integration key only; never serialized into a game DTO. */
   readonly vivaExerciseExternalId: string | null;
@@ -28,8 +32,10 @@ export interface LegacyGameSourceSnapshot {
   readonly timezone: 'Europe/Moscow';
   readonly station: {
     readonly externalId: string;
+    readonly externalAliases?: readonly string[];
     readonly name: string;
     readonly courtExternalId: string | null;
+    readonly courtExternalAliases?: readonly string[];
     readonly courtName: string | null;
   };
   readonly capacity: 2 | 4;
@@ -223,14 +229,49 @@ export function localVivaProfileAssociationId(externalId: string): string {
   return pseudonymousId('player', normalized);
 }
 
-function sanitizeSnapshot(snapshot: LegacyGameSourceSnapshot): LegacyGameSourceSnapshot {
-  const participants = snapshot.participants.map((item) => ({
-    ...item,
-    externalId: localVivaProfileAssociationId(item.externalId),
-  }));
+function sanitizeSnapshot(
+  snapshot: LegacyGameSourceSnapshot,
+  includeSourceAliases = false,
+): LegacyGameSourceSnapshot {
+  const aliases = (canonicalId: string, values: readonly (string | null | undefined)[]) =>
+    [
+      ...new Set(
+        values
+          .map((value) => stringValue(value))
+          .filter((value): value is string => Boolean(value)),
+      ),
+    ].filter((value) => value !== canonicalId);
+  const participants = snapshot.participants.map((item) => {
+    const externalId = localVivaProfileAssociationId(item.externalId);
+    return {
+      ...item,
+      externalId,
+      ...(includeSourceAliases
+        ? {
+            externalAliases: aliases(externalId, [
+              item.externalId,
+              ...(item.externalAliases ?? []),
+            ]),
+          }
+        : {}),
+    };
+  });
+  const externalId = pseudonymousId('game', snapshot.externalId);
+  const stationExternalId = pseudonymousId('station', snapshot.station.externalId);
+  const courtExternalId = snapshot.station.courtExternalId
+    ? pseudonymousId('court', snapshot.station.courtExternalId)
+    : null;
   return {
     ...snapshot,
-    externalId: pseudonymousId('game', snapshot.externalId),
+    externalId,
+    ...(includeSourceAliases
+      ? {
+          externalAliases: aliases(externalId, [
+            snapshot.externalId,
+            ...(snapshot.externalAliases ?? []),
+          ]),
+        }
+      : {}),
     vivaExerciseExternalId: snapshot.vivaExerciseExternalId
       ? localVivaExerciseAssociationId(snapshot.vivaExerciseExternalId)
       : null,
@@ -239,10 +280,26 @@ function sanitizeSnapshot(snapshot: LegacyGameSourceSnapshot): LegacyGameSourceS
     title: snapshot.title,
     station: {
       ...snapshot.station,
-      externalId: pseudonymousId('station', snapshot.station.externalId),
-      courtExternalId: snapshot.station.courtExternalId
-        ? pseudonymousId('court', snapshot.station.courtExternalId)
-        : null,
+      externalId: stationExternalId,
+      ...(includeSourceAliases
+        ? {
+            externalAliases: aliases(stationExternalId, [
+              snapshot.station.externalId,
+              ...(snapshot.station.externalAliases ?? []),
+            ]),
+          }
+        : {}),
+      courtExternalId,
+      ...(includeSourceAliases
+        ? {
+            courtExternalAliases: courtExternalId
+              ? aliases(courtExternalId, [
+                  snapshot.station.courtExternalId,
+                  ...(snapshot.station.courtExternalAliases ?? []),
+                ])
+              : [],
+          }
+        : {}),
     },
     organizerExternalId: localVivaProfileAssociationId(snapshot.organizerExternalId),
     viewerParticipantExternalId: snapshot.viewerParticipantExternalId
@@ -253,12 +310,7 @@ function sanitizeSnapshot(snapshot: LegacyGameSourceSnapshot): LegacyGameSourceS
 }
 
 function normalizeMongoSnapshot(snapshot: LegacyGameSourceSnapshot): LegacyGameSourceSnapshot {
-  return {
-    ...snapshot,
-    vivaExerciseExternalId: snapshot.vivaExerciseExternalId
-      ? localVivaExerciseAssociationId(snapshot.vivaExerciseExternalId)
-      : null,
-  };
+  return sanitizeSnapshot(snapshot, true);
 }
 
 function isoInstant(value: unknown): string | undefined {
@@ -723,7 +775,9 @@ export class LegacyGamesPublicAdapter {
   public async readAvailable(input: {
     readonly limit: number;
   }): Promise<readonly LegacyGameSourceSnapshot[]> {
-    return (await this.readMappedAvailable(input.limit)).map(sanitizeSnapshot);
+    return (await this.readMappedAvailable(input.limit)).map((snapshot) =>
+      sanitizeSnapshot(snapshot),
+    );
   }
 
   public async read(input: {
@@ -742,7 +796,7 @@ export class LegacyGamesPublicAdapter {
           Date.parse(snapshot.startsAt) >= Date.parse(from) &&
           Date.parse(snapshot.startsAt) < Date.parse(to),
       )
-      .map(sanitizeSnapshot);
+      .map((snapshot) => sanitizeSnapshot(snapshot));
   }
 
   /**
@@ -797,7 +851,7 @@ export class LegacyGamesPublicAdapter {
             : offset + page.rawCount < page.total);
         if (!hasMore) break;
       }
-      return matches.slice(0, input.limit).map(sanitizeSnapshot);
+      return matches.slice(0, input.limit).map((snapshot) => sanitizeSnapshot(snapshot));
     } else {
       // Home has no reason to pass the viewer phone. Its upcoming bridge stays on the bounded
       // public-available projection and still filters by the Viva-proven exercise IDs in memory.
@@ -808,7 +862,7 @@ export class LegacyGamesPublicAdapter {
           requested.has(snapshot.vivaExerciseExternalId) &&
           matchesVivaExerciseOccurrence(snapshot, occurrences),
       );
-      return matches.slice(0, input.limit).map(sanitizeSnapshot);
+      return matches.slice(0, input.limit).map((snapshot) => sanitizeSnapshot(snapshot));
     }
   }
 }

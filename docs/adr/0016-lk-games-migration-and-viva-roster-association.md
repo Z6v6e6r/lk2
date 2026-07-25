@@ -1,6 +1,6 @@
 # ADR 0016: Migrate LK Games into the local aggregate with a server-only Viva roster association
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-07-19
 
 ## Context
@@ -55,10 +55,22 @@ document to the browser.
    private/history backfill remain disabled. Both modes create canonical outbox facts for changed
    rosters, so card/Home projections refresh through the normal consumers. Neither writes back to
    legacy Mongo/Node-RED.
+8. Both the direct Mongo adapter and the sanitized HTTPS adapter derive game, player, station and
+   court association keys with the same `phub-local-public-clone-v1` SHA-256 namespace. The
+   trusted snapshot may carry the raw source value only as an integration-only alias. Import
+   resolves the canonical key and every observed alias under the tenant advisory lock.
+9. If an earlier release created both raw-ID and pseudonymous-ID Games, migration `0042` performs
+   a lossless logical merge in one database transaction. The pseudonymous-ID aggregate is the
+   canonical target; source and Viva mappings plus activity-history routes move to that target,
+   the source card and scheduled work are disabled, and
+   `integration.legacy_game_merge_redirects` preserves old PadlHub UUID links. The source aggregate
+   row and its immutable participants, result submissions, results and audit facts are retained as
+   a redirect tombstone; they are never deleted or rewritten speculatively.
 
 ## Migration sequence
 
-1. Inventory and backfill legacy Games into canonical aggregates; record source versions and
+1. Apply migration `0042`, reconcile its raw/hash alias pairs and prove that no source redirect has
+   a card projection. Inventory and backfill legacy Games into canonical aggregates; record source versions and
    Viva exercise associations, bootstrap the guarded roster mirror, then reconcile counts, roster
    occupancy and lifecycle state.
 2. Switch new LK and CUP reads to the canonical API/card projections, initially behind a tenant
@@ -75,8 +87,9 @@ document to the browser.
   or source-media URLs.
 - Every projected participant avatar resolves to a private PadlHub-owned `image/webp` object whose
   object key and content hash are recorded in integration storage.
-- Every migrated Game has one tenant-scoped canonical aggregate and at most one Viva exercise
-  association.
+- Every migrated source game has one tenant-scoped canonical target. Raw and pseudonymous source
+  aliases may coexist only in `integration.external_entity_map` and must resolve to that target;
+  a redirected source UUID has no card projection or pending lifecycle command.
 - Roster count, capacity and active participant identities reconcile against the approved source;
   any local revision divergence or unknown baseline is quarantined rather than guessed.
 - New LK and CUP use PadlHub API DTOs only, and all command flows pass authorization,

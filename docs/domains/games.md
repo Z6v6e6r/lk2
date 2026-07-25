@@ -101,6 +101,8 @@ The initial schema is expand-only:
 - `games.scheduled_commands`;
 - shared audit and outbox tables;
 - `integration.external_entity_map` for Viva/provider references.
+- `integration.legacy_game_merge_redirects` for lossless redirects created when historical raw and
+  pseudonymous source IDs represented the same imported game.
 
 Historical imports follow the same ownership boundary as upcoming roster imports. An authenticated
 Viva history page supplies the bounded exercise set, CUP supplies the complete legacy snapshot, and
@@ -108,6 +110,13 @@ the Games importer atomically writes the aggregate, participants, integration as
 fact and outbox event. A past imported game starts as `FINISHED / AWAITING_SUBMISSION`; the card
 exposes submission only inside the result-policy window and otherwise renders `COMPLETED`. The card
 is projected from the local aggregate before history is returned.
+
+Legacy adapters use one deterministic pseudonymous namespace for game, player, station and court
+association keys. Raw source values can exist only as integration aliases. Import locks the tenant,
+resolves all aliases and maps them to one canonical aggregate. Historical duplicate aggregates are
+not physically deleted: their visible projection and scheduled work are removed, external and
+activity-history references move to the canonical aggregate, and the immutable source children are
+retained behind a tenant-scoped redirect.
 
 Every tenant-owned row contains `tenant_id`, has tenant-aware foreign keys and is protected by
 forced RLS. API processes never run migrations.
