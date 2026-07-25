@@ -32,6 +32,10 @@ export interface ActivityHistoryGameBackfillOptions {
   }) => Promise<unknown>;
 }
 
+function playerAssociationId(externalId: string): string {
+  return /^[0-9a-f]{64}$/.test(externalId) ? externalId : localVivaProfileAssociationId(externalId);
+}
+
 /**
  * Viva proves which historical exercises belong to the authenticated viewer. CUP supplies the
  * matching full game aggregate. Import and projection are idempotent, while all provider IDs stay
@@ -141,6 +145,7 @@ export class ActivityHistoryGameBackfill {
     const participantUserBindings = [...provenViewerAssociations].map(
       ([externalId, proofKind]) => ({
         externalId,
+        sourcePlayerAssociationId: playerAssociationId(externalId),
         userId: input.userId,
         proofKind,
       }),

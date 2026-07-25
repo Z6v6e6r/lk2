@@ -93,6 +93,7 @@ export interface LegacyGameImportRepository {
     readonly correlationId: string;
     readonly participantUserBindings?: readonly {
       readonly externalId: string;
+      readonly sourcePlayerAssociationId?: string;
       readonly userId: string;
       readonly proofKind?: 'VIVA_PROFILE' | 'VIEWER_PHONE';
     }[];
@@ -377,6 +378,7 @@ async function resolvePlayer(
   externalVersion: string,
   boundUserId?: string,
   proofKind: 'VIVA_PROFILE' | 'VIEWER_PHONE' = 'VIVA_PROFILE',
+  sourcePlayerAssociationId = participant.externalId,
 ): Promise<string> {
   const persistedBinding = await queryOne<{ readonly user_id: string } & QueryResultRow>(
     client,
@@ -384,7 +386,7 @@ async function resolvePlayer(
        from integration.legacy_game_player_bindings
       where tenant_id = $1 and source_player_association_id = $2
       for update`,
-    [tenantId, participant.externalId],
+    [tenantId, sourcePlayerAssociationId],
   );
   if (persistedBinding && boundUserId && persistedBinding.user_id !== boundUserId) {
     throw new Error('LEGACY_GAME_PARTICIPANT_USER_BINDING_CONFLICT');
@@ -403,7 +405,7 @@ async function resolvePlayer(
       `insert into integration.legacy_game_player_bindings (
          tenant_id, source_player_association_id, user_id, proof_kind
        ) values ($1, $2, $3, $4)`,
-      [tenantId, participant.externalId, boundUserId, proofKind],
+      [tenantId, sourcePlayerAssociationId, boundUserId, proofKind],
     );
   }
   const existing = await findMapping(client, tenantId, 'game_player', participant.externalId);
@@ -493,6 +495,7 @@ async function bindExistingGameParticipant(
     readonly externalVersion: string;
     readonly userId: string;
     readonly proofKind: 'VIVA_PROFILE' | 'VIEWER_PHONE';
+    readonly sourcePlayerAssociationId?: string;
     readonly now: Date;
   },
 ): Promise<boolean> {
@@ -509,6 +512,7 @@ async function bindExistingGameParticipant(
     input.externalVersion,
     input.userId,
     input.proofKind,
+    input.sourcePlayerAssociationId,
   );
   if (!previousUserId || previousUserId === userId) return false;
 
@@ -646,7 +650,11 @@ async function importOne(
     readonly now: Date;
     readonly participantUserBindings: ReadonlyMap<
       string,
-      { readonly userId: string; readonly proofKind: 'VIVA_PROFILE' | 'VIEWER_PHONE' }
+      {
+        readonly userId: string;
+        readonly proofKind: 'VIVA_PROFILE' | 'VIEWER_PHONE';
+        readonly sourcePlayerAssociationId?: string;
+      }
     >;
   },
 ): Promise<{
@@ -762,6 +770,9 @@ async function importOne(
             externalVersion: input.snapshot.externalVersion,
             userId: binding.userId,
             proofKind: binding.proofKind,
+            ...(binding.sourcePlayerAssociationId
+              ? { sourcePlayerAssociationId: binding.sourcePlayerAssociationId }
+              : {}),
             now: input.now,
           })) || aggregateChanged;
       }
@@ -862,6 +873,7 @@ async function importOne(
           input.snapshot.externalVersion,
           input.participantUserBindings.get(participant.externalId)?.userId,
           input.participantUserBindings.get(participant.externalId)?.proofKind,
+          input.participantUserBindings.get(participant.externalId)?.sourcePlayerAssociationId,
         ),
       );
     }
@@ -1531,7 +1543,11 @@ export function createLegacyGameImportRepository(pool: Pool): LegacyGameImportRe
       const existing: { gameId: string; projectionEventId: string }[] = [];
       const participantUserBindings = new Map<
         string,
-        { readonly userId: string; readonly proofKind: 'VIVA_PROFILE' | 'VIEWER_PHONE' }
+        {
+          readonly userId: string;
+          readonly proofKind: 'VIVA_PROFILE' | 'VIEWER_PHONE';
+          readonly sourcePlayerAssociationId?: string;
+        }
       >();
       for (const binding of input.participantUserBindings ?? []) {
         const previous = participantUserBindings.get(binding.externalId);
@@ -1541,6 +1557,9 @@ export function createLegacyGameImportRepository(pool: Pool): LegacyGameImportRe
         participantUserBindings.set(binding.externalId, {
           userId: binding.userId,
           proofKind: binding.proofKind ?? 'VIVA_PROFILE',
+          ...(binding.sourcePlayerAssociationId
+            ? { sourcePlayerAssociationId: binding.sourcePlayerAssociationId }
+            : {}),
         });
       }
       let skipped = 0;

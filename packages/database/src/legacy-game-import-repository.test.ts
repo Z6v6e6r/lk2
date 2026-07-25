@@ -144,6 +144,7 @@ describe('legacy game import repository', () => {
     const gameId = '6418f90b-0fa6-4c04-a3da-57707e2f0ae2';
     const syntheticUserId = 'c68c6e6e-0b0a-4ad9-8e3d-4bc08c1eea19';
     const viewerUserId = 'e68c6e6e-0b0a-4ad9-8e3d-4bc08c1eea11';
+    const sourcePlayerAssociationId = 'f'.repeat(64);
     const participationId = 'd68c6e6e-0b0a-4ad9-8e3d-4bc08c1eea18';
     const { pool, clientQuery } = fakePool((text, values) => {
       if (text.includes('from identity.tenants')) return { rows: [{ id: tenantId }] };
@@ -170,6 +171,7 @@ describe('legacy game import repository', () => {
       participantUserBindings: [
         {
           externalId: snapshot.organizerExternalId,
+          sourcePlayerAssociationId,
           userId: viewerUserId,
           proofKind: 'VIEWER_PHONE',
         },
@@ -182,6 +184,7 @@ describe('legacy game import repository', () => {
       clientQuery.mock.calls.find(
         ([text, values]) =>
           text.includes('insert into integration.legacy_game_player_bindings') &&
+          values?.[1] === sourcePlayerAssociationId &&
           values?.[2] === viewerUserId &&
           values?.[3] === 'VIEWER_PHONE',
       ),

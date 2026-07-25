@@ -103,6 +103,7 @@ describe('ActivityHistoryGameBackfill', () => {
         participantUserBindings: [
           {
             externalId: vivaProfileId,
+            sourcePlayerAssociationId: localVivaProfileAssociationId(vivaProfileId),
             userId,
             proofKind: 'VIVA_PROFILE',
           },
@@ -159,7 +160,12 @@ describe('ActivityHistoryGameBackfill', () => {
     expect(importSnapshots).toHaveBeenCalledWith(
       expect.objectContaining({
         participantUserBindings: [
-          { externalId: phoneAssociation, userId, proofKind: 'VIEWER_PHONE' },
+          {
+            externalId: phoneAssociation,
+            sourcePlayerAssociationId: phoneAssociation,
+            userId,
+            proofKind: 'VIEWER_PHONE',
+          },
         ],
       }),
     );
