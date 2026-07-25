@@ -63,25 +63,12 @@ require_value PROMOTIONS_READ_MODE legacy
 require_value GAMES_READ_ENABLED true
 require_value GAMES_COMMANDS_ENABLED false
 require_value LEGACY_GAMES_ROSTER_SYNC_ENABLED true
-case "$(runtime_value LEGACY_GAMES_ROSTER_SYNC_SOURCE)" in
-  mongo)
-    test -n "$(runtime_value LEGACY_GAMES_MONGODB_URI)"
-    ;;
-  public)
-    case "$(runtime_value LEGACY_GAMES_PUBLIC_BASE_URL)" in
-      https://*) ;;
-      *)
-        echo "Unsafe staging configuration: public Games source must use HTTPS" >&2
-        exit 1
-        ;;
-    esac
-    ;;
-  *)
-    echo "Unsafe staging configuration: Games must use a real server-side source" >&2
-    exit 1
-    ;;
-esac
+require_value LEGACY_GAMES_ROSTER_SYNC_SOURCE mongo
+test -n "$(runtime_value LEGACY_GAMES_MONGODB_URI)"
 test -n "$(runtime_value LEGACY_GAMES_ROSTER_SYNC_TENANT_KEY)"
+require_value ACTIVITY_HISTORY_ENABLED true
+require_value ACTIVITY_HISTORY_SYNC_ENABLED true
+require_value ACTIVITY_HISTORY_GAME_BACKFILL_ENABLED true
 
 if test "${1:-}" = preflight; then
   echo "Real staging data configuration verified"
@@ -111,6 +98,10 @@ compose exec -T api node -e "
   if (env.HOME_READ_MODE !== 'projection') process.exit(1);
   if (env.GAMES_READ_ENABLED !== 'true') process.exit(1);
   if (env.GAMES_COMMANDS_ENABLED !== 'false') process.exit(1);
+  if (env.LEGACY_GAMES_ROSTER_SYNC_SOURCE !== 'mongo') process.exit(1);
+  if (!env.LEGACY_GAMES_MONGODB_URI) process.exit(1);
+  if (env.ACTIVITY_HISTORY_GAME_BACKFILL_ENABLED !== 'true') process.exit(1);
+  if (env.S3_BUCKET !== 'phub-media') process.exit(1);
 "
 
 compose exec -T worker node -e "
@@ -118,9 +109,33 @@ compose exec -T worker node -e "
   if (!['sandbox', 'production'].includes(env.VIVA_MODE)) process.exit(1);
   if (env.HOME_READ_MODE !== 'projection') process.exit(1);
   if (env.LEGACY_GAMES_ROSTER_SYNC_ENABLED !== 'true') process.exit(1);
-  if (!['mongo', 'public'].includes(env.LEGACY_GAMES_ROSTER_SYNC_SOURCE)) process.exit(1);
-  if (env.LEGACY_GAMES_ROSTER_SYNC_SOURCE === 'mongo' && !env.LEGACY_GAMES_MONGODB_URI) process.exit(1);
-  if (env.LEGACY_GAMES_ROSTER_SYNC_SOURCE === 'public' && !env.LEGACY_GAMES_PUBLIC_BASE_URL?.startsWith('https://')) process.exit(1);
+  if (env.LEGACY_GAMES_ROSTER_SYNC_SOURCE !== 'mongo') process.exit(1);
+  if (!env.LEGACY_GAMES_MONGODB_URI) process.exit(1);
+  if (env.ACTIVITY_HISTORY_GAME_BACKFILL_ENABLED !== 'true') process.exit(1);
+  if (env.S3_BUCKET !== 'phub-media') process.exit(1);
+"
+
+compose exec -T api node -e "
+  import('mongodb').then(async ({ MongoClient }) => {
+    const client = new MongoClient(process.env.LEGACY_GAMES_MONGODB_URI, {
+      serverSelectionTimeoutMS: 5000,
+      connectTimeoutMS: 5000,
+      socketTimeoutMS: 5000,
+      maxPoolSize: 1,
+      retryReads: true,
+      readPreference: 'secondaryPreferred',
+    });
+    try {
+      await client.connect();
+      const game = await client.db('games').collection('lk_games').findOne(
+        { archived: { \$ne: true }, status: { \$in: ['PAID', 'CANCELLED'] } },
+        { projection: { _id: 1 }, maxTimeMS: 5000 },
+      );
+      if (!game) process.exitCode = 1;
+    } finally {
+      await client.close();
+    }
+  }).catch(() => { process.exitCode = 1; });
 "
 
 attempt=0

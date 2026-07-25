@@ -41,16 +41,16 @@ The application runtime reads three environment files in order:
 - `/etc/phub/staging.env` contains the root-owned shared runtime secrets;
 - `/opt/phub/staging.override.env` contains only the Home/community/promotion live-read gates;
 - `/opt/phub/staging.games.env` is mode `0600`, owned by `phub-deploy`, and contains the
-  staging-only Games mirror gates. The preferred Mongo mirror keeps its URI only here; a
-  read-only public CUP mirror may be used without a new credential.
+  staging-only Games mirror gates. The Mongo mirror keeps its URI only here.
 
-The Games file must select a real server-side source, enable canonical Games reads and keep
-commands disabled until their separate cutover approval. A public source must use HTTPS and cannot
-be combined with Games commands. The deploy workflow runs
+The Games file must select the Mongo source, enable canonical Games reads and Activity History
+game backfill, and keep commands disabled until their separate cutover approval. The deploy
+workflow verifies a bounded read from the `games.lk_games` collection without logging source
+records or the URI. It runs
 `verify-live-staging-data.sh preflight` before backup/migration and repeats the verification after
 the new containers start. A release fails if Viva/Home uses mock data, if a local dev-auth path is
-enabled, or if the worker does not produce real canonical Games, card projections and guarded
-roster-mirror state.
+enabled, if API and worker do not share the `phub-media` bucket, or if the worker does not produce
+real canonical Games, card projections and guarded roster-mirror state.
 
 Every staging workflow creates a PostgreSQL custom-format archive under
 `/opt/phub/backups/postgres-pre-<release>-<UTC timestamp>.dump`. The workflow
@@ -59,11 +59,11 @@ digest-pinned migrator and confirms the latest repository migration in
 `public.schema_migrations` before it switches application containers. A failed
 backup or migration leaves the currently running application release untouched.
 
-The staging application Compose file passes only the existing MinIO credentials from
-`infrastructure.env` into the worker. API and realtime never receive object-storage credentials.
-The worker uses the private `http://minio:9000` endpoint and publishes short-lived signed URLs
-through the private `phub-media` bucket exposed by Nginx. The bucket is not public; unsigned reads
-must remain denied.
+The staging application Compose file passes the existing MinIO credentials from
+`infrastructure.env` into API and worker. Both use the same private `http://minio:9000` endpoint
+and `phub-media` bucket: worker owns writes while API serves stable profile-photo delivery routes.
+Realtime does not receive object-storage credentials. The bucket is not public; direct unsigned
+S3 reads must remain denied.
 
 ## GitHub Actions access
 
