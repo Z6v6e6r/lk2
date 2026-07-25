@@ -116,25 +116,17 @@ compose exec -T worker node -e "
 "
 
 compose exec -T api node -e "
-  import('mongodb').then(async ({ MongoClient }) => {
-    const client = new MongoClient(process.env.LEGACY_GAMES_MONGODB_URI, {
-      serverSelectionTimeoutMS: 5000,
-      connectTimeoutMS: 5000,
-      socketTimeoutMS: 5000,
-      maxPoolSize: 1,
-      retryReads: true,
-      readPreference: 'secondaryPreferred',
+  import('@phub/legacy-games-adapter').then(async ({ LegacyGamesMongoAdapter }) => {
+    const adapter = new LegacyGamesMongoAdapter({
+      uri: process.env.LEGACY_GAMES_MONGODB_URI,
+      timeoutMs: 5000,
+      maxAttempts: 1,
     });
-    try {
-      await client.connect();
-      const game = await client.db('games').collection('lk_games').findOne(
-        { archived: { \$ne: true }, status: { \$in: ['PAID', 'CANCELLED'] } },
-        { projection: { _id: 1 }, maxTimeMS: 5000 },
-      );
-      if (!game) process.exitCode = 1;
-    } finally {
-      await client.close();
-    }
+    await adapter.read({
+      from: '2020-01-01T00:00:00.000Z',
+      to: '2030-01-01T00:00:00.000Z',
+      limit: 1,
+    });
   }).catch(() => { process.exitCode = 1; });
 "
 
