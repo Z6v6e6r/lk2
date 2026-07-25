@@ -143,6 +143,11 @@ export interface GameCardProps {
   readonly busy?: boolean;
   readonly compact?: boolean;
   readonly onAction?: (action: GameCardAction, game: GameCardModel) => void;
+  readonly onParticipantProfileRequest?: (
+    game: GameCardModel,
+    participant: GameCardModel['participants'][number],
+    participantIndex: number,
+  ) => void;
   readonly unsupportedActionBehavior?: 'DETAILS' | 'DISABLED';
 }
 
@@ -151,6 +156,7 @@ export function GameCard({
   busy = false,
   compact = false,
   onAction,
+  onParticipantProfileRequest,
   unsupportedActionBehavior = 'DETAILS',
 }: GameCardProps) {
   const schedule = formatDate(game);
@@ -284,6 +290,21 @@ export function GameCard({
                     ? { href: `/profile/${encodeURIComponent(participant.userId)}` }
                     : {}),
                 }))}
+                {...(onParticipantProfileRequest &&
+                visibleParticipants.some(
+                  (participant) =>
+                    !('userId' in participant) || typeof participant.userId !== 'string',
+                )
+                  ? {
+                      onParticipantClick: (_participant, participantIndex) => {
+                        const participant = visibleParticipants[participantIndex];
+                        if (participant) {
+                          onParticipantProfileRequest(game, participant, participantIndex);
+                        }
+                      },
+                      participantActionLabel: 'Открыть профиль',
+                    }
+                  : {})}
               />
             ) : (
               <div className="game-participants" aria-label="Участники игры">

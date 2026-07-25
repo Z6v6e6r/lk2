@@ -13,6 +13,7 @@ export interface ParticipantAvatarStackProps {
   readonly participants: readonly ParticipantAvatarStackItem[];
   readonly capacity?: number;
   readonly ariaLabel?: string;
+  readonly participantActionLabel?: string;
   readonly onOpenSlotClick?: (slotIndex: number) => void;
   readonly onParticipantClick?: (
     participant: ParticipantAvatarStackItem,
@@ -70,6 +71,7 @@ export function ParticipantAvatarStack({
   participants,
   capacity = 4,
   ariaLabel = 'Участники',
+  participantActionLabel = 'Управлять',
   onOpenSlotClick,
   onParticipantClick,
 }: ParticipantAvatarStackProps): React.JSX.Element {
@@ -100,7 +102,7 @@ export function ParticipantAvatarStack({
             type="button"
             key={participant.key}
             title={accessibleName}
-            aria-label={`Управлять ${participant.displayName}`}
+            aria-label={`${participantActionLabel} ${participant.displayName}`}
             onClick={() => onParticipantClick(participant, index)}
           >
             {avatar}

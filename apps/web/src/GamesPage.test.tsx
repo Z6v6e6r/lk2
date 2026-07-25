@@ -6,6 +6,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { GamesPage } from './GamesPage.js';
+import { profileUserIdForParticipant } from './game-participant-profile.js';
 import type { AuthGateway, GameCard as ViewerGameCard, PublicGameCard } from './auth-gateway.js';
 
 const weekdayFormatter = new Intl.DateTimeFormat('ru-RU', { weekday: 'short' });
@@ -67,6 +68,25 @@ function gateway(): AuthGateway {
 afterEach(() => cleanup());
 
 describe('GamesPage discovery', () => {
+  it('resolves the selected public participant against an authenticated card revision', () => {
+    const participantUserId = '38edce35-3060-4f16-b23e-3ad8cbf8d1dd';
+    const viewerGame = {
+      ...game,
+      viewerRelation: 'NONE',
+      viewerPaymentState: 'NOT_REQUIRED',
+      participants: game.participants.map((participant, index) => ({
+        ...participant,
+        userId: index === 0 ? participantUserId : `00000000-0000-4000-8000-00000000000${index}`,
+      })),
+      resultSummary: null,
+      conversation: null,
+    } as ViewerGameCard;
+
+    expect(profileUserIdForParticipant(game, game.participants[0]!, 0, viewerGame)).toBe(
+      participantUserId,
+    );
+  });
+
   it('opens the result tab immediately for a finished game', async () => {
     const finishedGame: ViewerGameCard = {
       ...game,

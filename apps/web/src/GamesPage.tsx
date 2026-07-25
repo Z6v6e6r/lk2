@@ -3,14 +3,17 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { GameCard, type GameCardAction, type GameCardModel } from './GameCard.js';
 import { GameDetailView, type GameDetailTab } from './GameDetailView.js';
 import { MainBottomNavigation } from './HomeDashboardPage.js';
+import { profileUserIdForParticipant } from './game-participant-profile.js';
 import type {
   AuthGateway,
   GameCard as ViewerGameCard,
   GameCommandResult,
+  PublicGameCard,
   PublicGameFilters,
 } from './auth-gateway.js';
 
 type GamesTab = 'DISCOVER' | 'UPCOMING';
+
 type GameKindFilter = 'ALL' | 'FRIENDLY' | 'RATING';
 
 const weekdayFormatter = new Intl.DateTimeFormat('ru-RU', { weekday: 'short' });
@@ -174,6 +177,34 @@ export function GamesPage({ gateway, gameId }: GamesPageProps): React.JSX.Elemen
       setError(errorMessage(cause));
     } finally {
       setLoadingMore(false);
+    }
+  }
+
+  async function handleParticipantProfileRequest(
+    game: GameCardModel,
+    participant: GameCardModel['participants'][number],
+    participantIndex: number,
+  ): Promise<void> {
+    if ('userId' in participant && typeof participant.userId === 'string') {
+      window.location.assign(`/profile/${encodeURIComponent(participant.userId)}`);
+      return;
+    }
+    setError(null);
+    try {
+      const viewerGame = await gateway.getGame(game.id);
+      const userId = profileUserIdForParticipant(
+        game as PublicGameCard,
+        participant,
+        participantIndex,
+        viewerGame,
+      );
+      if (!userId) {
+        setError('Профиль этого участника пока недоступен.');
+        return;
+      }
+      window.location.assign(`/profile/${encodeURIComponent(userId)}`);
+    } catch (cause) {
+      setError(errorMessage(cause));
     }
   }
 
@@ -512,6 +543,9 @@ export function GamesPage({ gateway, gameId }: GamesPageProps): React.JSX.Elemen
             busy={busyGameId === game.id}
             key={game.id}
             onAction={(action, selectedGame) => void handleAction(action, selectedGame)}
+            onParticipantProfileRequest={(selectedGame, participant, participantIndex) =>
+              void handleParticipantProfileRequest(selectedGame, participant, participantIndex)
+            }
           />
         ))}
         {nextCursor ? (

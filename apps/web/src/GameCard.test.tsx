@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 
 import '@testing-library/jest-dom/vitest';
-import { cleanup, render, screen, within } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { GameCard } from './GameCard.js';
 import type { GameCard as ViewerGameCard, PublicGameCard } from './auth-gateway.js';
@@ -84,6 +84,21 @@ describe('GameCard lifecycle template', () => {
     );
     expect(screen.getByText('Селигерская · Корт №3')).toBeInTheDocument();
     expect(screen.getByText(/2.*300/)).toBeInTheDocument();
+  });
+
+  it('requests an authenticated profile lookup when a discovery avatar is pressed', () => {
+    const onParticipantProfileRequest = vi.fn();
+    render(
+      <GameCard game={publicGame} onParticipantProfileRequest={onParticipantProfileRequest} />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Открыть профиль Анна Петрова' }));
+
+    expect(onParticipantProfileRequest).toHaveBeenCalledWith(
+      publicGame,
+      publicGame.participants[0],
+      0,
+    );
   });
 
   it('uses the Home badge and metadata icons and hides status above the primary action', () => {
