@@ -74,6 +74,11 @@ async function synchronizeLegacyGameRostersForHome(input: {
   const exerciseExternalIds = input.snapshot.upcoming.flatMap((item) =>
     item.exerciseExternalId ? [item.exerciseExternalId] : [],
   );
+  const exerciseOccurrences = input.snapshot.upcoming.flatMap((item) =>
+    item.exerciseExternalId
+      ? [{ exerciseExternalId: item.exerciseExternalId, startsAt: item.startsAt }]
+      : [],
+  );
   if (exerciseExternalIds.length === 0) {
     return {
       imported: 0,
@@ -88,6 +93,7 @@ async function synchronizeLegacyGameRostersForHome(input: {
 
   const snapshots = await input.bridge.source.readByVivaExerciseIds({
     exerciseExternalIds,
+    exerciseOccurrences,
     limit: Math.min(25, Math.max(1, exerciseExternalIds.length)),
   });
   if (snapshots.length === 0) {

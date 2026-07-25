@@ -88,6 +88,42 @@ describe('legacy games adapter', () => {
     expect(testing.mapLegacyGame({ id: 'legacy-game-2', status: 'PAID' })).toBeUndefined();
   });
 
+  it('normalizes only the Viva exercise association for the private Mongo bridge', () => {
+    const exerciseId = '11111111-1111-4111-8111-111111111111';
+    const mapped = testing.mapLegacyGame(
+      {
+        id: 'legacy-game-1',
+        status: 'PAID',
+        organizer: { id: 'legacy-player-1', name: 'Alexey Sergeev' },
+        participants: [
+          {
+            id: 'legacy-player-1',
+            name: 'Alexey Sergeev',
+            phone: '+79990000001',
+          },
+        ],
+        settings: { isPrivate: true, ratingGame: false },
+        metadata: { gameFormat: 'doubles', vivaExerciseId: exerciseId },
+        booking: {
+          studioId: 'legacy-station-1',
+          studioName: 'Терехово',
+          timeFromIso: '2026-07-20T09:00:00+03:00',
+          timeToIso: '2026-07-20T10:00:00+03:00',
+          vivaExerciseId: exerciseId,
+        },
+      },
+      '+79990000001',
+    );
+
+    expect(mapped).toBeDefined();
+    expect(testing.normalizeMongoSnapshot(mapped!)).toMatchObject({
+      externalId: 'legacy-game-1',
+      vivaExerciseExternalId: localVivaExerciseAssociationId(exerciseId),
+      viewerParticipantExternalId: 'legacy-player-1',
+      participants: [{ externalId: 'legacy-player-1' }],
+    });
+  });
+
   it('sanitizes an over-broad public response while retaining player names', async () => {
     const fetchImplementation = () =>
       Promise.resolve(
@@ -201,7 +237,12 @@ describe('legacy games adapter', () => {
   it('matches a requested Viva exercise in memory and returns only its sanitized local roster', async () => {
     const exerciseId = '11111111-1111-4111-8111-111111111111';
     const otherExerciseId = '22222222-2222-4222-8222-222222222222';
-    const game = (id: string, vivaExerciseId: string, name: string) => ({
+    const game = (
+      id: string,
+      vivaExerciseId: string,
+      name: string,
+      startsAt = '2026-07-21T09:00:00+03:00',
+    ) => ({
       id,
       status: 'PAID',
       organizer: { id: `${id}-organizer`, name, rating: 'C', ratingNumeric: 3.44 },
@@ -211,8 +252,8 @@ describe('legacy games adapter', () => {
       booking: {
         studioId: 'station',
         studioName: 'Терехово',
-        timeFromIso: '2026-07-21T09:00:00+03:00',
-        timeToIso: '2026-07-21T10:00:00+03:00',
+        timeFromIso: startsAt,
+        timeToIso: new Date(Date.parse(startsAt) + 3_600_000).toISOString(),
         vivaExerciseId,
       },
     });
@@ -228,6 +269,12 @@ describe('legacy games adapter', () => {
           JSON.stringify({
             games: [
               game('requested-game', exerciseId, 'Настоящее имя'),
+              game(
+                'same-exercise-other-date',
+                exerciseId,
+                'Игрок другого дня',
+                '2026-07-22T09:00:00+03:00',
+              ),
               game('other-game', otherExerciseId, 'Другое имя'),
             ],
           }),
@@ -238,7 +285,13 @@ describe('legacy games adapter', () => {
 
     const result = await new LegacyGamesPublicAdapter({
       fetchImplementation,
-    }).readByVivaExerciseIds({ exerciseExternalIds: [exerciseId], limit: 5 });
+    }).readByVivaExerciseIds({
+      exerciseExternalIds: [exerciseId],
+      exerciseOccurrences: [
+        { exerciseExternalId: exerciseId, startsAt: '2026-07-21T06:00:00.000Z' },
+      ],
+      limit: 5,
+    });
 
     expect(result).toHaveLength(1);
     expect(fetchImplementation).toHaveBeenCalledTimes(1);
@@ -252,7 +305,9 @@ describe('legacy games adapter', () => {
         },
       ],
     });
-    expect(JSON.stringify(result)).not.toMatch(/requested-game|other-game|Другое имя/);
+    expect(JSON.stringify(result)).not.toMatch(
+      /requested-game|same-exercise-other-date|Игрок другого дня|other-game|Другое имя/,
+    );
   });
 
   it('reads the authenticated viewer CUP history and filters it by Viva-proven exercises', async () => {

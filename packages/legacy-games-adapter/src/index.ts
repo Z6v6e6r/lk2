@@ -57,6 +57,11 @@ export interface LegacyGamesMongoAdapterOptions {
   }) => void;
 }
 
+export interface VivaExerciseOccurrence {
+  readonly exerciseExternalId: string;
+  readonly startsAt: string;
+}
+
 interface RawParticipant {
   readonly [key: string]: unknown;
   readonly id?: unknown;
@@ -215,10 +220,48 @@ function sanitizeSnapshot(snapshot: LegacyGameSourceSnapshot): LegacyGameSourceS
   };
 }
 
+function normalizeMongoSnapshot(snapshot: LegacyGameSourceSnapshot): LegacyGameSourceSnapshot {
+  return {
+    ...snapshot,
+    vivaExerciseExternalId: snapshot.vivaExerciseExternalId
+      ? localVivaExerciseAssociationId(snapshot.vivaExerciseExternalId)
+      : null,
+  };
+}
+
 function isoInstant(value: unknown): string | undefined {
   const raw = stringValue(value);
   if (!raw || Number.isNaN(Date.parse(raw))) return undefined;
   return new Date(raw).toISOString();
+}
+
+const VIVA_EXERCISE_TIME_TOLERANCE_MS = 5 * 60 * 1_000;
+
+function vivaExerciseOccurrences(
+  input: readonly VivaExerciseOccurrence[] | undefined,
+): readonly VivaExerciseOccurrence[] {
+  const occurrences = new Map<string, VivaExerciseOccurrence>();
+  for (const item of input ?? []) {
+    const exerciseExternalId = uuidValue(item.exerciseExternalId);
+    const startsAt = isoInstant(item.startsAt);
+    if (!exerciseExternalId || !startsAt) continue;
+    occurrences.set(`${exerciseExternalId}:${startsAt}`, { exerciseExternalId, startsAt });
+  }
+  return [...occurrences.values()].slice(0, 100);
+}
+
+function matchesVivaExerciseOccurrence(
+  snapshot: LegacyGameSourceSnapshot,
+  occurrences: readonly VivaExerciseOccurrence[],
+): boolean {
+  if (occurrences.length === 0) return true;
+  if (!snapshot.vivaExerciseExternalId) return false;
+  const startsAt = Date.parse(snapshot.startsAt);
+  return occurrences.some(
+    (occurrence) =>
+      occurrence.exerciseExternalId === snapshot.vivaExerciseExternalId &&
+      Math.abs(Date.parse(occurrence.startsAt) - startsAt) <= VIVA_EXERCISE_TIME_TOLERANCE_MS,
+  );
 }
 
 function participant(
@@ -396,15 +439,17 @@ export class LegacyGamesMongoAdapter {
       throw new Error('LEGACY_GAMES_LIMIT_INVALID');
     }
 
-    return this.readMatching({
-      filter: {
-        archived: { $ne: true },
-        status: { $in: ['PAID', 'CANCELLED'] },
-        'booking.timeFromIso': { $gte: from, $lt: to },
-      },
-      limit: input.limit,
-      sort: { 'booking.timeFromIso': 1, _id: 1 },
-    });
+    return (
+      await this.readMatching({
+        filter: {
+          archived: { $ne: true },
+          status: { $in: ['PAID', 'CANCELLED'] },
+          'booking.timeFromIso': { $gte: from, $lt: to },
+        },
+        limit: input.limit,
+        sort: { 'booking.timeFromIso': 1, _id: 1 },
+      })
+    ).map(normalizeMongoSnapshot);
   }
 
   /**
@@ -413,6 +458,7 @@ export class LegacyGamesMongoAdapter {
    */
   public async readByVivaExerciseIds(input: {
     readonly exerciseExternalIds: readonly string[];
+    readonly exerciseOccurrences?: readonly VivaExerciseOccurrence[];
     readonly limit: number;
     readonly viewerPhoneE164?: string;
   }): Promise<readonly LegacyGameSourceSnapshot[]> {
@@ -423,30 +469,79 @@ export class LegacyGamesMongoAdapter {
     if (!Number.isInteger(input.limit) || input.limit < 1 || input.limit > 100) {
       throw new Error('LEGACY_GAMES_LIMIT_INVALID');
     }
+    const occurrences = vivaExerciseOccurrences(input.exerciseOccurrences);
+    const occurrenceFilter: Filter<RawLegacyGame>[] =
+      occurrences.length > 0
+        ? occurrences.map((occurrence) => {
+            const startsAt = Date.parse(occurrence.startsAt);
+            const parsedStartsAt = {
+              $convert: {
+                input: '$booking.timeFromIso',
+                to: 'date',
+                onError: null,
+                onNull: null,
+              },
+            };
+            return {
+              $and: [
+                {
+                  $or: [
+                    { 'metadata.vivaExerciseId': occurrence.exerciseExternalId },
+                    { 'booking.vivaExerciseId': occurrence.exerciseExternalId },
+                  ],
+                },
+                {
+                  $expr: {
+                    $and: [
+                      {
+                        $gte: [
+                          parsedStartsAt,
+                          new Date(startsAt - VIVA_EXERCISE_TIME_TOLERANCE_MS),
+                        ],
+                      },
+                      {
+                        $lte: [
+                          parsedStartsAt,
+                          new Date(startsAt + VIVA_EXERCISE_TIME_TOLERANCE_MS),
+                        ],
+                      },
+                    ],
+                  },
+                },
+              ],
+            };
+          })
+        : [
+            { 'metadata.vivaExerciseId': { $in: exerciseExternalIds } },
+            { 'booking.vivaExerciseId': { $in: exerciseExternalIds } },
+          ];
 
     const snapshots = await this.readMatching({
       filter: {
         archived: { $ne: true },
         status: { $in: ['PAID', 'CANCELLED'] },
-        $or: [
-          { 'metadata.vivaExerciseId': { $in: exerciseExternalIds } },
-          { 'booking.vivaExerciseId': { $in: exerciseExternalIds } },
-        ],
+        $or: occurrenceFilter,
       },
       limit: input.limit,
       sort: { updatedAt: -1, _id: 1 },
+      ...(input.viewerPhoneE164 ? { viewerPhoneE164: input.viewerPhoneE164 } : {}),
     });
     const requested = new Set(exerciseExternalIds);
-    return snapshots.filter(
-      (snapshot) =>
-        snapshot.vivaExerciseExternalId !== null && requested.has(snapshot.vivaExerciseExternalId),
-    );
+    return snapshots
+      .filter(
+        (snapshot) =>
+          snapshot.vivaExerciseExternalId !== null &&
+          requested.has(snapshot.vivaExerciseExternalId) &&
+          matchesVivaExerciseOccurrence(snapshot, occurrences),
+      )
+      .map(normalizeMongoSnapshot);
   }
 
   private async readMatching(input: {
     readonly filter: Filter<RawLegacyGame>;
     readonly limit: number;
     readonly sort: Document;
+    readonly viewerPhoneE164?: string;
   }): Promise<readonly LegacyGameSourceSnapshot[]> {
     const attempts = this.options.maxAttempts ?? 2;
     const sleep = this.options.sleep ?? defaultSleep;
@@ -501,7 +596,7 @@ export class LegacyGamesMongoAdapter {
           .limit(input.limit)
           .toArray();
         const snapshots = rows.flatMap((row) => {
-          const mapped = mapLegacyGame(row);
+          const mapped = mapLegacyGame(row, input.viewerPhoneE164);
           return mapped ? [mapped] : [];
         });
         this.options.onMetric?.({
@@ -654,6 +749,7 @@ export class LegacyGamesPublicAdapter {
    */
   public async readByVivaExerciseIds(input: {
     readonly exerciseExternalIds: readonly string[];
+    readonly exerciseOccurrences?: readonly VivaExerciseOccurrence[];
     readonly limit: number;
     readonly viewerPhoneE164?: string;
   }): Promise<readonly LegacyGameSourceSnapshot[]> {
@@ -665,6 +761,7 @@ export class LegacyGamesPublicAdapter {
       throw new Error('LEGACY_GAMES_LIMIT_INVALID');
     }
     const requested = new Set(exerciseExternalIds);
+    const occurrences = vivaExerciseOccurrences(input.exerciseOccurrences);
     const phone = input.viewerPhoneE164?.replace(/\D/g, '');
     if (phone && /^\d{10,15}$/.test(phone)) {
       const baseUrl = new URL(this.options.baseUrl ?? 'https://padlhub.su');
@@ -685,7 +782,8 @@ export class LegacyGamesPublicAdapter {
           ...page.snapshots.filter(
             (snapshot) =>
               snapshot.vivaExerciseExternalId !== null &&
-              requested.has(snapshot.vivaExerciseExternalId),
+              requested.has(snapshot.vivaExerciseExternalId) &&
+              matchesVivaExerciseOccurrence(snapshot, occurrences),
           ),
         );
         const hasMore =
@@ -703,11 +801,17 @@ export class LegacyGamesPublicAdapter {
       const matches = candidates.filter(
         (snapshot) =>
           snapshot.vivaExerciseExternalId !== null &&
-          requested.has(snapshot.vivaExerciseExternalId),
+          requested.has(snapshot.vivaExerciseExternalId) &&
+          matchesVivaExerciseOccurrence(snapshot, occurrences),
       );
       return matches.slice(0, input.limit).map(sanitizeSnapshot);
     }
   }
 }
 
-export const testing = { mapLegacyGame, sanitizeSnapshot };
+export const testing = {
+  mapLegacyGame,
+  sanitizeSnapshot,
+  normalizeMongoSnapshot,
+  matchesVivaExerciseOccurrence,
+};

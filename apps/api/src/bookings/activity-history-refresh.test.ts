@@ -226,7 +226,14 @@ describe('ActivityHistoryRefreshCoordinator', () => {
 
     expect(repo.items()).toHaveLength(1);
     expect(backfillGames).toHaveBeenCalledWith(
-      expect.objectContaining({ exerciseExternalIds: ['21111111-1111-4111-8111-111111111111'] }),
+      expect.objectContaining({
+        exerciseOccurrences: [
+          {
+            exerciseExternalId: '21111111-1111-4111-8111-111111111111',
+            startsAt: '2026-07-20T09:00:00.000Z',
+          },
+        ],
+      }),
     );
     expect(repo.items()[0]).toMatchObject({
       id: gameId,

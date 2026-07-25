@@ -15,7 +15,7 @@ const vivaProfileId = '31111111-1111-4111-8111-111111111111';
 const gameId = '33333333-3333-4333-8333-333333333333';
 
 function snapshot(): LegacyGameSourceSnapshot {
-  const participantId = localVivaProfileAssociationId(vivaProfileId);
+  const participantId = vivaProfileId;
   return {
     externalId: 'a'.repeat(64),
     externalVersion: 'b'.repeat(64),
@@ -83,12 +83,18 @@ describe('ActivityHistoryGameBackfill', () => {
         tenantId,
         userId,
         correlationId: 'history-backfill-test',
-        exerciseExternalIds: [exerciseId, exerciseId],
+        exerciseOccurrences: [
+          { exerciseExternalId: exerciseId, startsAt: '2026-07-20T06:00:00.000Z' },
+          { exerciseExternalId: exerciseId, startsAt: '2026-07-20T06:00:00.000Z' },
+        ],
         now: new Date('2026-07-21T10:00:00.000Z'),
       }),
     ).resolves.toEqual({ requested: 1, matched: 1, imported: 1, existing: 0, viewerBound: true });
     expect(source.readByVivaExerciseIds).toHaveBeenCalledWith({
       exerciseExternalIds: [exerciseId],
+      exerciseOccurrences: [
+        { exerciseExternalId: exerciseId, startsAt: '2026-07-20T06:00:00.000Z' },
+      ],
       limit: 1,
       viewerPhoneE164: '+79990000001',
     });
@@ -96,7 +102,7 @@ describe('ActivityHistoryGameBackfill', () => {
       expect.objectContaining({
         participantUserBindings: [
           {
-            externalId: localVivaProfileAssociationId(vivaProfileId),
+            externalId: vivaProfileId,
             userId,
             proofKind: 'VIVA_PROFILE',
           },
@@ -144,7 +150,9 @@ describe('ActivityHistoryGameBackfill', () => {
         tenantId,
         userId,
         correlationId: 'history-phone-binding-test',
-        exerciseExternalIds: [exerciseId],
+        exerciseOccurrences: [
+          { exerciseExternalId: exerciseId, startsAt: '2026-07-20T06:00:00.000Z' },
+        ],
         now: new Date('2026-07-21T10:00:00.000Z'),
       }),
     ).resolves.toMatchObject({ viewerBound: true });
@@ -180,7 +188,9 @@ describe('ActivityHistoryGameBackfill', () => {
         tenantId,
         userId,
         correlationId: 'history-existing-lifecycle-test',
-        exerciseExternalIds: [exerciseId],
+        exerciseOccurrences: [
+          { exerciseExternalId: exerciseId, startsAt: '2026-07-20T06:00:00.000Z' },
+        ],
         now: new Date('2026-07-21T10:00:00.000Z'),
       }),
     ).resolves.toEqual({

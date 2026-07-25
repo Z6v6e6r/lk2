@@ -3,6 +3,7 @@ import {
   localVivaExerciseAssociationId,
   localVivaProfileAssociationId,
   type LegacyGameSourceSnapshot,
+  type VivaExerciseOccurrence,
 } from '@phub/legacy-games-adapter';
 
 export interface ActivityHistoryGameBackfillResult {
@@ -18,6 +19,7 @@ export interface ActivityHistoryGameBackfillOptions {
   readonly source: {
     readByVivaExerciseIds(input: {
       readonly exerciseExternalIds: readonly string[];
+      readonly exerciseOccurrences?: readonly VivaExerciseOccurrence[];
       readonly limit: number;
       readonly viewerPhoneE164?: string;
     }): Promise<readonly LegacyGameSourceSnapshot[]>;
@@ -42,15 +44,31 @@ export class ActivityHistoryGameBackfill {
     readonly tenantId: string;
     readonly userId: string;
     readonly correlationId: string;
-    readonly exerciseExternalIds: readonly string[];
+    readonly exerciseOccurrences: readonly VivaExerciseOccurrence[];
     readonly now: Date;
   }): Promise<ActivityHistoryGameBackfillResult> {
-    const exerciseExternalIds = [...new Set(input.exerciseExternalIds.map((id) => id.trim()))]
-      .filter(Boolean)
-      .slice(0, 100);
-    if (exerciseExternalIds.length === 0) {
+    const occurrenceMap = new Map<string, VivaExerciseOccurrence>();
+    for (const occurrence of input.exerciseOccurrences) {
+      const exerciseExternalId = occurrence.exerciseExternalId.trim();
+      const startsAt = new Date(occurrence.startsAt);
+      if (!exerciseExternalId || Number.isNaN(startsAt.getTime())) continue;
+      const normalized = {
+        exerciseExternalId,
+        startsAt: startsAt.toISOString(),
+      };
+      occurrenceMap.set(`${normalized.exerciseExternalId}:${normalized.startsAt}`, normalized);
+    }
+    const exerciseOccurrences = [...occurrenceMap.values()].slice(0, 100);
+    if (exerciseOccurrences.length === 0) {
       return { requested: 0, matched: 0, imported: 0, existing: 0, viewerBound: false };
     }
+    const exerciseExternalIds = [
+      ...new Set(exerciseOccurrences.map((occurrence) => occurrence.exerciseExternalId)),
+    ];
+    const requestedAssociations = exerciseOccurrences.map((occurrence) => ({
+      associationId: localVivaExerciseAssociationId(occurrence.exerciseExternalId),
+      startsAt: occurrence.startsAt,
+    }));
     const lifecycleRefreshed = await this.options.repository.refreshVivaExerciseGameLifecycles({
       tenantId: input.tenantId,
       vivaExerciseAssociationIds: exerciseExternalIds.map(localVivaExerciseAssociationId),
@@ -70,12 +88,21 @@ export class ActivityHistoryGameBackfill {
     });
     const snapshots = await this.options.source.readByVivaExerciseIds({
       exerciseExternalIds,
-      limit: exerciseExternalIds.length,
+      exerciseOccurrences,
+      limit: exerciseOccurrences.length,
       ...(viewerPhoneE164 ? { viewerPhoneE164 } : {}),
     });
-    if (snapshots.length === 0) {
+    const matchedSnapshots = snapshots.filter((snapshot) =>
+      requestedAssociations.some(
+        (association) =>
+          snapshot.vivaExerciseExternalId === association.associationId &&
+          Math.abs(Date.parse(snapshot.startsAt) - Date.parse(association.startsAt)) <=
+            5 * 60 * 1_000,
+      ),
+    );
+    if (matchedSnapshots.length === 0) {
       return {
-        requested: exerciseExternalIds.length,
+        requested: exerciseOccurrences.length,
         matched: 0,
         imported: 0,
         existing: 0,
@@ -87,11 +114,13 @@ export class ActivityHistoryGameBackfill {
       tenantId: input.tenantId,
       userId: input.userId,
     });
-    const vivaProfileAssociationId = vivaProfileExternalId
-      ? localVivaProfileAssociationId(vivaProfileExternalId)
-      : undefined;
+    const vivaProfileAssociationIds = new Set(
+      vivaProfileExternalId
+        ? [vivaProfileExternalId, localVivaProfileAssociationId(vivaProfileExternalId)]
+        : [],
+    );
     const provenViewerAssociations = new Map<string, 'VIVA_PROFILE' | 'VIEWER_PHONE'>();
-    for (const snapshot of snapshots) {
+    for (const snapshot of matchedSnapshots) {
       if (
         snapshot.viewerParticipantExternalId &&
         snapshot.participants.some(
@@ -100,14 +129,12 @@ export class ActivityHistoryGameBackfill {
       ) {
         provenViewerAssociations.set(snapshot.viewerParticipantExternalId, 'VIEWER_PHONE');
       }
-      if (
-        vivaProfileAssociationId &&
-        snapshot.participants.some(
-          (participant) => participant.externalId === vivaProfileAssociationId,
-        )
-      ) {
-        if (!provenViewerAssociations.has(vivaProfileAssociationId)) {
-          provenViewerAssociations.set(vivaProfileAssociationId, 'VIVA_PROFILE');
+      const vivaProfileParticipant = snapshot.participants.find((participant) =>
+        vivaProfileAssociationIds.has(participant.externalId),
+      );
+      if (vivaProfileParticipant) {
+        if (!provenViewerAssociations.has(vivaProfileParticipant.externalId)) {
+          provenViewerAssociations.set(vivaProfileParticipant.externalId, 'VIVA_PROFILE');
         }
       }
     }
@@ -121,7 +148,7 @@ export class ActivityHistoryGameBackfill {
     const viewerBound = participantUserBindings.length > 0;
     const imported = await this.options.repository.importSnapshots({
       tenantKey: this.options.tenantKey,
-      snapshots,
+      snapshots: matchedSnapshots,
       correlationId: input.correlationId,
       ...(viewerBound ? { participantUserBindings } : {}),
       now: input.now,
@@ -137,8 +164,8 @@ export class ActivityHistoryGameBackfill {
       });
     }
     return {
-      requested: exerciseExternalIds.length,
-      matched: snapshots.length,
+      requested: exerciseOccurrences.length,
+      matched: matchedSnapshots.length,
       imported: imported.imported.length,
       existing: imported.existing.length,
       viewerBound,

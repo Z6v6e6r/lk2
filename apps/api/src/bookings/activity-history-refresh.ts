@@ -25,7 +25,10 @@ export interface ActivityHistoryRefreshCoordinatorOptions {
     readonly tenantId: string;
     readonly userId: string;
     readonly correlationId: string;
-    readonly exerciseExternalIds: readonly string[];
+    readonly exerciseOccurrences: readonly {
+      readonly exerciseExternalId: string;
+      readonly startsAt: string;
+    }[];
     readonly now: Date;
   }) => Promise<unknown>;
   readonly readLocalGames?: (input: {
@@ -187,17 +190,22 @@ export class ActivityHistoryRefreshCoordinator implements ActivityHistoryRefresh
       const sourceRevision = revision(page);
       const items: PersistActivityHistoryItemInput[] = [];
       const supersededItemIds = new Set<string>();
-      const exerciseExternalIds = page.records.flatMap((record) =>
+      const exerciseOccurrences = page.records.flatMap((record) =>
         record.kind === 'GAME' && record.sourceRef.exerciseRef
-          ? [record.sourceRef.exerciseRef]
+          ? [
+              {
+                exerciseExternalId: record.sourceRef.exerciseRef,
+                startsAt: record.startsAt,
+              },
+            ]
           : [],
       );
-      if (this.options.backfillGames && exerciseExternalIds.length > 0) {
+      if (this.options.backfillGames && exerciseOccurrences.length > 0) {
         await this.options.backfillGames({
           tenantId: input.tenantId,
           userId: input.userId,
           correlationId: input.correlationId,
-          exerciseExternalIds,
+          exerciseOccurrences,
           now: fetchedAt,
         });
       }
