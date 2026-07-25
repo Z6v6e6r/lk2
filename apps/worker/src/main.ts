@@ -396,7 +396,9 @@ const vivaIdentityProvider = new VivaIdentityProvider({
 });
 const vivaAdapters = new Map<string, VivaHomeSourceAdapter>();
 const profilePhotoStore =
-  config.HOME_VIVA_SYNC_ENABLED || config.PROMOTIONS_READ_MODE === 'legacy'
+  config.HOME_VIVA_SYNC_ENABLED ||
+  config.PROMOTIONS_READ_MODE === 'legacy' ||
+  config.LEGACY_GAMES_ROSTER_SYNC_ENABLED
     ? new S3ProfilePhotoObjectStore({
         endpoint: config.S3_ENDPOINT as string,
         publicEndpoint: config.S3_PUBLIC_ENDPOINT as string,
@@ -509,13 +511,14 @@ const runPromotionSyncCycle = async (): Promise<void> => {
 };
 
 const runLegacyGamesRosterSync = async (): Promise<void> => {
-  if (shuttingDown || !legacyGamesRosterWindowSource) return;
+  if (shuttingDown || !legacyGamesRosterWindowSource || !profilePhotoStore) return;
   try {
     await runLegacyGamesRosterSyncCycle({
       pool,
       config,
       logger,
       source: legacyGamesRosterWindowSource,
+      profilePhotoStore,
     });
   } catch (error) {
     logger.error({ error }, 'legacy Games roster synchronization deferred');

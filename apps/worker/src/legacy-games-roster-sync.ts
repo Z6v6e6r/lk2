@@ -6,6 +6,9 @@ import type { LegacyGamesMongoAdapter } from '@phub/legacy-games-adapter';
 import type { Logger } from 'pino';
 import type { Pool } from 'pg';
 
+import { synchronizeLegacyParticipantPhotos } from './legacy-participant-photo-sync.js';
+import type { ProfilePhotoObjectStore } from './profile-photo-sync.js';
+
 export interface LegacyGamesRosterSyncCycleResult {
   readonly attempted: number;
   readonly imported: number;
@@ -14,6 +17,9 @@ export interface LegacyGamesRosterSyncCycleResult {
   readonly unchanged: number;
   readonly conflicts: number;
   readonly skipped: number;
+  readonly avatarsStored: number;
+  readonly avatarsUnchanged: number;
+  readonly avatarsFailed: number;
 }
 
 function isoAtOffset(now: Date, days: number): string {
@@ -29,6 +35,7 @@ export async function runLegacyGamesRosterSyncCycle(input: {
   readonly config: AppConfig;
   readonly logger: Logger;
   readonly source: Pick<LegacyGamesMongoAdapter, 'read'>;
+  readonly profilePhotoStore: ProfilePhotoObjectStore;
   readonly now?: Date;
 }): Promise<LegacyGamesRosterSyncCycleResult> {
   if (!input.config.LEGACY_GAMES_ROSTER_SYNC_ENABLED) {
@@ -40,6 +47,9 @@ export async function runLegacyGamesRosterSyncCycle(input: {
       unchanged: 0,
       conflicts: 0,
       skipped: 0,
+      avatarsStored: 0,
+      avatarsUnchanged: 0,
+      avatarsFailed: 0,
     };
   }
   const now = input.now ?? new Date();
@@ -62,6 +72,33 @@ export async function runLegacyGamesRosterSyncCycle(input: {
     correlationId,
     now,
   });
+  const historicalPhotoSnapshots =
+    input.config.LEGACY_GAMES_PROFILE_PHOTO_SYNC_LOOKBACK_DAYS >
+    input.config.LEGACY_GAMES_ROSTER_SYNC_LOOKBACK_DAYS
+      ? await input.source.read({
+          from: isoAtOffset(now, -input.config.LEGACY_GAMES_PROFILE_PHOTO_SYNC_LOOKBACK_DAYS),
+          to: now.toISOString(),
+          limit: 500,
+        })
+      : [];
+  const photoSnapshots = [
+    ...new Map(
+      [...historicalPhotoSnapshots, ...snapshots].map((snapshot) => [
+        snapshot.externalId,
+        snapshot,
+      ]),
+    ).values(),
+  ];
+  const avatarSync = await synchronizeLegacyParticipantPhotos({
+    pool: input.pool,
+    tenantId: imported.tenantId,
+    snapshots: photoSnapshots,
+    config: input.config,
+    store: input.profilePhotoStore,
+    logger: input.logger,
+    correlationId,
+    fetchedAt: now.toISOString(),
+  });
   const result = {
     attempted: snapshots.length,
     imported: imported.imported.length,
@@ -70,6 +107,9 @@ export async function runLegacyGamesRosterSyncCycle(input: {
     unchanged: mirrored.unchanged,
     conflicts: mirrored.conflicts,
     skipped: mirrored.skipped,
+    avatarsStored: avatarSync.stored,
+    avatarsUnchanged: avatarSync.unchanged,
+    avatarsFailed: avatarSync.failed,
   };
   input.logger.info(
     {

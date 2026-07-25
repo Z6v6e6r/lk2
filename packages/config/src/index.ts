@@ -114,6 +114,7 @@ const environmentSchema = z.object({
   LEGACY_GAMES_ROSTER_SYNC_LOOKBACK_DAYS: z.coerce.number().int().min(0).max(30).default(1),
   LEGACY_GAMES_ROSTER_SYNC_LOOKAHEAD_DAYS: z.coerce.number().int().min(1).max(90).default(42),
   LEGACY_GAMES_ROSTER_SYNC_LIMIT: z.coerce.number().int().min(1).max(500).default(200),
+  LEGACY_GAMES_PROFILE_PHOTO_SYNC_LOOKBACK_DAYS: z.coerce.number().int().min(1).max(90).default(30),
   HOME_PROJECTION_MAX_STALE_SECONDS: z.coerce.number().int().nonnegative().max(86_400).default(300),
   HOME_PROJECTION_TTL_SECONDS: z.coerce.number().int().min(30).max(86_400).default(300),
   HOME_VIVA_SYNC_ENABLED: booleanFromEnvironment,

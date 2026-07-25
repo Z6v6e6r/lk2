@@ -107,6 +107,38 @@ interface RawLegacyGame extends Document {
   };
 }
 
+const LEGACY_GAME_PROJECTION = {
+  id: 1,
+  status: 1,
+  updatedAt: 1,
+  'organizer.id': 1,
+  'organizer.name': 1,
+  'organizer.rating': 1,
+  'organizer.ratingNumeric': 1,
+  'organizer.photo': 1,
+  'participants.id': 1,
+  'participants.name': 1,
+  'participants.rating': 1,
+  'participants.ratingNumeric': 1,
+  'participants.status': 1,
+  'participants.photo': 1,
+  'settings.isPrivate': 1,
+  'settings.minRating': 1,
+  'settings.maxRating': 1,
+  'settings.payMode': 1,
+  'settings.ratingGame': 1,
+  'metadata.gameFormat': 1,
+  'metadata.gameTitle': 1,
+  'metadata.vivaExerciseId': 1,
+  'booking.studioId': 1,
+  'booking.studioName': 1,
+  'booking.roomId': 1,
+  'booking.roomName': 1,
+  'booking.timeFromIso': 1,
+  'booking.timeToIso': 1,
+  'booking.vivaExerciseId': 1,
+} satisfies Document;
+
 function stringValue(value: unknown): string | undefined {
   if (typeof value === 'string' && value.trim()) return value.trim();
   if (typeof value === 'number' && Number.isFinite(value)) return String(value);
@@ -561,35 +593,7 @@ export class LegacyGamesMongoAdapter {
           .db(this.options.dbName ?? 'games')
           .collection<RawLegacyGame>(this.options.collectionName ?? 'lk_games')
           .find(input.filter, {
-            projection: {
-              id: 1,
-              status: 1,
-              updatedAt: 1,
-              'organizer.id': 1,
-              'organizer.name': 1,
-              'organizer.rating': 1,
-              'organizer.ratingNumeric': 1,
-              'participants.id': 1,
-              'participants.name': 1,
-              'participants.rating': 1,
-              'participants.ratingNumeric': 1,
-              'participants.status': 1,
-              'settings.isPrivate': 1,
-              'settings.minRating': 1,
-              'settings.maxRating': 1,
-              'settings.payMode': 1,
-              'settings.ratingGame': 1,
-              'metadata.gameFormat': 1,
-              'metadata.gameTitle': 1,
-              'metadata.vivaExerciseId': 1,
-              'booking.studioId': 1,
-              'booking.studioName': 1,
-              'booking.roomId': 1,
-              'booking.roomName': 1,
-              'booking.timeFromIso': 1,
-              'booking.timeToIso': 1,
-              'booking.vivaExerciseId': 1,
-            },
+            projection: LEGACY_GAME_PROJECTION,
             maxTimeMS: this.options.timeoutMs ?? 5_000,
           })
           .sort(input.sort)
@@ -810,6 +814,7 @@ export class LegacyGamesPublicAdapter {
 }
 
 export const testing = {
+  legacyGameProjection: LEGACY_GAME_PROJECTION,
   mapLegacyGame,
   sanitizeSnapshot,
   normalizeMongoSnapshot,

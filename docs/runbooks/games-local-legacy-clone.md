@@ -72,6 +72,7 @@ Relevant variables:
 - `LEGACY_GAMES_PUBLIC_BASE_URL`: default `https://padlhub.su`.
 - `LEGACY_GAMES_ROSTER_SYNC_SOURCE`: must be `public` locally; staging uses the separately guarded
   `mongo` mirror.
+- `LEGACY_GAMES_PROFILE_PHOTO_SYNC_LOOKBACK_DAYS`: worker-only photo window, default `30`.
 
 ## Expected result
 

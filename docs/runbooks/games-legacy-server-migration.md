@@ -66,6 +66,7 @@ LEGACY_GAMES_ROSTER_SYNC_TENANT_KEY=<approved-staging-tenant>
 LEGACY_GAMES_ROSTER_SYNC_LOOKBACK_DAYS=1
 LEGACY_GAMES_ROSTER_SYNC_LOOKAHEAD_DAYS=42
 LEGACY_GAMES_ROSTER_SYNC_LIMIT=200
+LEGACY_GAMES_PROFILE_PHOTO_SYNC_LOOKBACK_DAYS=30
 LEGACY_GAMES_ROSTER_SYNC_INTERVAL_MS=120000
 ```
 
@@ -73,6 +74,10 @@ The worker reads the bounded window, imports previously unseen Games, and update
 when its prior mirror revision still matches. It writes canonical `game.scheduled.v1` outbox facts
 for changed rosters. Investigate every `LEGACY_GAME_ROSTER_BASELINE_MISMATCH` and
 `LEGACY_GAME_ROSTER_LOCAL_REVISION_CHANGED`; leave the game quarantined until an audited repair.
+The separate profile-photo window reads at most 30 past days by default and copies images only for
+participants that already have a PadlHub mapping. It does not import or mutate historical Games,
+does not expose CUP media URLs to clients, and preserves a profile-owned avatar when the legacy
+source differs or fails.
 
 If moving the Mongo credential to staging is not separately approved, a read-only test release may
 instead set `LEGACY_GAMES_ROSTER_SYNC_SOURCE=public` and

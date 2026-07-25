@@ -8,6 +8,13 @@ import {
 } from './index.js';
 
 describe('legacy games adapter', () => {
+  it('retains organizer and participant photos in the bounded Mongo projection', () => {
+    expect(testing.legacyGameProjection).toMatchObject({
+      'organizer.photo': 1,
+      'participants.photo': 1,
+    });
+  });
+
   it('maps a selected Mongo document without leaking phones, payment URLs or provider booking IDs', () => {
     const mapped = testing.mapLegacyGame({
       id: 'legacy-game-1',

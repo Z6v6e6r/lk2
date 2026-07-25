@@ -18,21 +18,16 @@ import type Redis from 'ioredis';
 import type { Logger } from 'pino';
 import type { Pool } from 'pg';
 
-import {
-  synchronizeProfilePhoto,
-  synchronizeVivaProfilePhoto,
-  type ProfilePhotoObjectStore,
-} from './profile-photo-sync.js';
+import { synchronizeVivaProfilePhoto, type ProfilePhotoObjectStore } from './profile-photo-sync.js';
+import { synchronizeLegacyParticipantPhotos } from './legacy-participant-photo-sync.js';
 import {
   completeProfilePhotoObjectGc,
   listDueVivaHomeDelegations,
   listDueProfilePhotoObjects,
-  persistProfilePhoto,
   persistLegacyParticipantViewerProfile,
   persistVivaHomeSource,
   recordProfilePhotoObjectGcFailure,
   recordVivaHomeSyncFailure,
-  resolveLegacyParticipantPhotoTargets,
   saveRefreshedVivaHomeDelegation,
   type VivaHomeDelegation,
 } from './viva-home-repository.js';
@@ -151,79 +146,24 @@ async function synchronizeLegacyGameRostersForHome(input: {
           levelValue: input.snapshot.profile.level.value,
         })
       : false;
-  const photoTargets = await resolveLegacyParticipantPhotoTargets({
+  const avatarSync = await synchronizeLegacyParticipantPhotos({
     pool: input.pool,
     tenantId: imported.tenantId,
     snapshots,
+    config: input.config,
+    store: input.profilePhotoStore,
+    logger: input.logger,
+    correlationId: input.correlationId,
+    fetchedAt: input.snapshot.fetchedAt,
   });
-  let avatarsStored = 0;
-  let avatarsUnchanged = 0;
-  let avatarsFailed = 0;
-  for (const target of photoTargets) {
-    try {
-      const result = await synchronizeProfilePhoto({
-        pool: input.pool,
-        store: input.profilePhotoStore,
-        tenantId: imported.tenantId,
-        userId: target.userId,
-        sourceUrl: target.sourceUrl,
-        fetchedAt: input.snapshot.fetchedAt,
-        allowedHosts: input.config.PROFILE_PHOTO_ALLOWED_HOSTS.split(',')
-          .map((host) => host.trim())
-          .filter(Boolean),
-        maxBytes: input.config.PROFILE_PHOTO_MAX_BYTES,
-        maxDimension: input.config.PROFILE_PHOTO_MAX_DIMENSION,
-        webpQuality: input.config.PROFILE_PHOTO_WEBP_QUALITY,
-        previousObjectRetentionSeconds:
-          input.config.PROFILE_PHOTO_URL_TTL_SECONDS +
-          input.config.HOME_PROJECTION_MAX_STALE_SECONDS +
-          60,
-        timeoutMs: input.config.VIVA_TIMEOUT_MS,
-        replaceExistingSource: false,
-      });
-      if (!result.errorCode || result.persistence.objectKey) {
-        await persistProfilePhoto({
-          pool: input.pool,
-          tenantId: imported.tenantId,
-          userId: target.userId,
-          photo: result.persistence,
-        });
-      }
-      if (result.outcome === 'stored') avatarsStored += 1;
-      else if (result.outcome === 'unchanged') avatarsUnchanged += 1;
-      else avatarsFailed += 1;
-      if (result.errorCode) {
-        input.logger.warn(
-          {
-            tenantId: imported.tenantId,
-            userId: target.userId,
-            correlationId: input.correlationId,
-            code: result.errorCode,
-          },
-          'legacy participant photo synchronization retained the local photo',
-        );
-      }
-    } catch (error) {
-      avatarsFailed += 1;
-      input.logger.warn(
-        {
-          tenantId: imported.tenantId,
-          userId: target.userId,
-          correlationId: input.correlationId,
-          code: failureCode(error),
-        },
-        'legacy participant photo synchronization failed',
-      );
-    }
-  }
   return {
     imported: imported.imported.length,
     synced: rosterSync.synced.length,
     conflicts: rosterSync.conflicts,
     viewerProfileEnriched,
-    avatarsStored,
-    avatarsUnchanged,
-    avatarsFailed,
+    avatarsStored: avatarSync.stored,
+    avatarsUnchanged: avatarSync.unchanged,
+    avatarsFailed: avatarSync.failed,
   };
 }
 
