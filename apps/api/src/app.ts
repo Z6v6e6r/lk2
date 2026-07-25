@@ -536,7 +536,7 @@ export async function buildApp(options: BuildAppOptions) {
       ? { photoRepository: options.profilePhotoMediaRepository }
       : {}),
     publicTenantHandlers: [resolvePublicTenant],
-    authenticatedTenantHandlers: [authenticate, authorizeGamesPlayer, resolveTenant],
+    authenticatedTenantHandlers: [authenticate, resolveTenant],
   });
   registerBookingRecommendationRoutes(app as unknown as FastifyInstance, {
     ...(options.gameReadRepository?.listRecommendationCardProjections

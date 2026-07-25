@@ -373,7 +373,7 @@ describe('Games read APIs', () => {
     const token = await new SignJWT({
       tenants: [tenantId],
       roles: ['client'],
-      permissions: ['games.play'],
+      permissions: [],
       sid: '55555555-5555-4555-8555-555555555555',
     })
       .setProtectedHeader({ alg: 'HS256' })
