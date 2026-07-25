@@ -8,6 +8,7 @@ import type { Pool } from 'pg';
 
 import { synchronizeLegacyParticipantPhotos } from './legacy-participant-photo-sync.js';
 import type { ProfilePhotoObjectStore } from './profile-photo-sync.js';
+import { listLegacyHistoryParticipantPhotoAliases } from './viva-home-repository.js';
 
 export interface LegacyGamesRosterSyncCycleResult {
   readonly attempted: number;
@@ -34,7 +35,8 @@ export async function runLegacyGamesRosterSyncCycle(input: {
   readonly pool: Pool;
   readonly config: AppConfig;
   readonly logger: Logger;
-  readonly source: Pick<LegacyGamesMongoAdapter, 'read'>;
+  readonly source: Pick<LegacyGamesMongoAdapter, 'read'> &
+    Partial<Pick<LegacyGamesMongoAdapter, 'readParticipantPhotos'>>;
   readonly profilePhotoStore: ProfilePhotoObjectStore;
   readonly now?: Date;
 }): Promise<LegacyGamesRosterSyncCycleResult> {
@@ -89,10 +91,20 @@ export async function runLegacyGamesRosterSyncCycle(input: {
       ]),
     ).values(),
   ];
+  const historyParticipantAliases = await listLegacyHistoryParticipantPhotoAliases({
+    pool: input.pool,
+    tenantId: imported.tenantId,
+  });
+  const historyParticipantPhotos = input.source.readParticipantPhotos
+    ? await input.source.readParticipantPhotos({
+        participantExternalIds: historyParticipantAliases,
+      })
+    : [];
   const avatarSync = await synchronizeLegacyParticipantPhotos({
     pool: input.pool,
     tenantId: imported.tenantId,
     snapshots: photoSnapshots,
+    participants: historyParticipantPhotos,
     config: input.config,
     store: input.profilePhotoStore,
     logger: input.logger,

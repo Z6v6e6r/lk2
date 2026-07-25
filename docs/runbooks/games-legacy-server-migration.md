@@ -77,7 +77,10 @@ for changed rosters. Investigate every `LEGACY_GAME_ROSTER_BASELINE_MISMATCH` an
 The separate profile-photo window reads at most 30 past days by default and copies images only for
 participants that already have a PadlHub mapping. It does not import or mutate historical Games,
 does not expose CUP media URLs to clients, and preserves a profile-owned avatar when the legacy
-source differs or fails.
+source differs or fails. Because a busy 30-day window can exceed the general 500-game read bound,
+the worker also resolves up to 100 missing-avatar participants already present in completed
+PadlHub history and asks the Mongo adapter for their newest CUP photo directly. Raw participant
+aliases stay inside the integration layer; only the copied PadlHub media URL reaches projections.
 
 If moving the Mongo credential to staging is not separately approved, a read-only test release may
 instead set `LEGACY_GAMES_ROSTER_SYNC_SOURCE=public` and

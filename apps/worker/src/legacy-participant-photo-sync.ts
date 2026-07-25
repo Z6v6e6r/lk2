@@ -1,5 +1,8 @@
 import type { AppConfig } from '@phub/config';
-import type { LegacyGameSourceSnapshot } from '@phub/legacy-games-adapter';
+import type {
+  LegacyGameSourceSnapshot,
+  LegacyParticipantPhotoSource,
+} from '@phub/legacy-games-adapter';
 import type { Logger } from 'pino';
 import type { Pool } from 'pg';
 
@@ -37,6 +40,7 @@ export async function synchronizeLegacyParticipantPhotos(
     readonly pool: Pool;
     readonly tenantId: string;
     readonly snapshots: readonly LegacyGameSourceSnapshot[];
+    readonly participants?: readonly LegacyParticipantPhotoSource[];
     readonly config: AppConfig;
     readonly store: ProfilePhotoObjectStore;
     readonly logger: Logger;
@@ -49,6 +53,7 @@ export async function synchronizeLegacyParticipantPhotos(
     pool: input.pool,
     tenantId: input.tenantId,
     snapshots: input.snapshots,
+    ...(input.participants ? { participants: input.participants } : {}),
   });
   let stored = 0;
   let unchanged = 0;

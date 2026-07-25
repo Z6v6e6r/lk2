@@ -4,6 +4,7 @@ const mocks = vi.hoisted(() => ({
   importSnapshots: vi.fn(),
   synchronizeParticipants: vi.fn(),
   synchronizeLegacyParticipantPhotos: vi.fn(),
+  listLegacyHistoryParticipantPhotoAliases: vi.fn(),
 }));
 
 vi.mock('@phub/database', () => ({
@@ -15,6 +16,10 @@ vi.mock('@phub/database', () => ({
 
 vi.mock('./legacy-participant-photo-sync.js', () => ({
   synchronizeLegacyParticipantPhotos: mocks.synchronizeLegacyParticipantPhotos,
+}));
+
+vi.mock('./viva-home-repository.js', () => ({
+  listLegacyHistoryParticipantPhotoAliases: mocks.listLegacyHistoryParticipantPhotoAliases,
 }));
 
 import { runLegacyGamesRosterSyncCycle } from './legacy-games-roster-sync.js';
@@ -65,8 +70,17 @@ describe('legacy Games roster synchronization', () => {
       unchanged: 0,
       failed: 0,
     });
+    mocks.listLegacyHistoryParticipantPhotoAliases.mockResolvedValue(['legacy-history-player-1']);
+    const historyParticipantPhotos = [
+      {
+        externalId: 'canonical-history-player-1',
+        externalAliases: ['legacy-history-player-1'],
+        avatarSourceUrl: 'https://562807.selcdn.ru/smstretching/history-player-one',
+      },
+    ];
     const source = {
       read: vi.fn().mockResolvedValueOnce(snapshots).mockResolvedValueOnce(historicalSnapshots),
+      readParticipantPhotos: vi.fn().mockResolvedValue(historyParticipantPhotos),
     };
     const logger = { info: vi.fn() };
 
@@ -98,10 +112,14 @@ describe('legacy Games roster synchronization', () => {
     expect(mocks.synchronizeParticipants).toHaveBeenCalledBefore(
       mocks.synchronizeLegacyParticipantPhotos,
     );
+    expect(source.readParticipantPhotos).toHaveBeenCalledWith({
+      participantExternalIds: ['legacy-history-player-1'],
+    });
     expect(mocks.synchronizeLegacyParticipantPhotos).toHaveBeenCalledWith(
       expect.objectContaining({
         tenantId: '86afbe01-0318-4dd2-bc25-303b7bf0d430',
         snapshots: [...historicalSnapshots, ...snapshots],
+        participants: historyParticipantPhotos,
         fetchedAt: now.toISOString(),
       }),
     );
@@ -136,6 +154,7 @@ describe('legacy Games roster synchronization', () => {
     });
 
     expect(source.read).not.toHaveBeenCalled();
+    expect(mocks.listLegacyHistoryParticipantPhotoAliases).not.toHaveBeenCalled();
     expect(mocks.synchronizeLegacyParticipantPhotos).not.toHaveBeenCalled();
   });
 });

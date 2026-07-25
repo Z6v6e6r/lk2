@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { localVivaExerciseAssociationId } from '@phub/legacy-games-adapter';
 
 import {
+  listLegacyHistoryParticipantPhotoAliases,
   persistLegacyParticipantViewerProfile,
   persistVivaHomeSource,
   resolveLegacyParticipantPhotoTargets,
@@ -99,6 +100,82 @@ describe('Viva Home producer repository', () => {
             ],
           },
         ] as never,
+      }),
+    ).resolves.toEqual([
+      {
+        userId: mappedUserId,
+        sourceUrl: 'https://562807.selcdn.ru/smstretching/player-photo',
+      },
+    ]);
+  });
+
+  it('lists only bounded raw aliases for completed-history players without a local photo', async () => {
+    const query = vi.fn((text: string, values: readonly unknown[] = []) => {
+      if (
+        text === 'begin' ||
+        text === 'commit' ||
+        text === 'rollback' ||
+        text.includes("set_config('app.tenant_id'")
+      ) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('with history_players as')) {
+        expect(text).toContain("h.status = 'COMPLETED'");
+        expect(text).toContain('p.photo_url is null');
+        expect(text).toContain("e.external_id !~ '^[0-9a-f]{64}$'");
+        expect(values).toEqual([tenantId, 25]);
+        return Promise.resolve({
+          rows: [{ external_id: 'raw-cup-player-1' }, { external_id: 'raw-cup-player-2' }],
+          rowCount: 2,
+        });
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const pool = { connect: vi.fn().mockResolvedValue({ query, release: vi.fn() }) };
+
+    await expect(
+      listLegacyHistoryParticipantPhotoAliases({
+        pool: pool as never,
+        tenantId,
+        limit: 25,
+      }),
+    ).resolves.toEqual(['raw-cup-player-1', 'raw-cup-player-2']);
+  });
+
+  it('combines a targeted participant photo with its canonical and raw mappings', async () => {
+    const mappedUserId = 'b1dc7c9c-1aed-448d-987e-3235a839b505';
+    const query = vi.fn((text: string, values: readonly unknown[] = []) => {
+      if (
+        text === 'begin' ||
+        text === 'commit' ||
+        text === 'rollback' ||
+        text.includes("set_config('app.tenant_id'")
+      ) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes("external_system = 'LK_LEGACY_SNAPSHOT'")) {
+        expect(values).toEqual([tenantId, ['canonical-player', 'raw-cup-player']]);
+        return Promise.resolve({
+          rows: [{ external_id: 'raw-cup-player', internal_id: mappedUserId }],
+          rowCount: 1,
+        });
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const pool = { connect: vi.fn().mockResolvedValue({ query, release: vi.fn() }) };
+
+    await expect(
+      resolveLegacyParticipantPhotoTargets({
+        pool: pool as never,
+        tenantId,
+        snapshots: [],
+        participants: [
+          {
+            externalId: 'canonical-player',
+            externalAliases: ['raw-cup-player'],
+            avatarSourceUrl: 'https://562807.selcdn.ru/smstretching/player-photo',
+          },
+        ],
       }),
     ).resolves.toEqual([
       {

@@ -16,6 +16,14 @@ export interface LegacyGameSourceParticipant {
   readonly avatarSourceUrl: string | null;
 }
 
+export interface LegacyParticipantPhotoSource {
+  readonly externalId: string;
+  /** Integration-only aliases observed before canonical pseudonymization. */
+  readonly externalAliases: readonly string[];
+  /** Integration-only source. The worker must copy it to PadlHub-owned storage. */
+  readonly avatarSourceUrl: string;
+}
+
 export interface LegacyGameSourceSnapshot {
   readonly externalId: string;
   /** Integration-only aliases observed before canonical pseudonymization. */
@@ -313,6 +321,54 @@ function normalizeMongoSnapshot(snapshot: LegacyGameSourceSnapshot): LegacyGameS
   return sanitizeSnapshot(snapshot, true);
 }
 
+function normalizeMongoParticipantPhoto(
+  raw: RawParticipant,
+): LegacyParticipantPhotoSource | undefined {
+  const sourceExternalId = stringValue(raw.id);
+  const avatarSourceUrl = httpsUrl(raw.photo);
+  if (!sourceExternalId || !avatarSourceUrl) return undefined;
+  const externalId = localVivaProfileAssociationId(sourceExternalId);
+  return {
+    externalId,
+    externalAliases: sourceExternalId === externalId ? [] : [sourceExternalId],
+    avatarSourceUrl,
+  };
+}
+
+function participantPhotoPipeline(externalIds: readonly string[]): Document[] {
+  return [
+    {
+      $match: {
+        archived: { $ne: true },
+        status: { $in: ['PAID', 'CANCELLED'] },
+        $or: [
+          { 'organizer.id': { $in: externalIds } },
+          { 'participants.id': { $in: externalIds } },
+        ],
+      },
+    },
+    {
+      $project: {
+        updatedAt: 1,
+        players: {
+          $concatArrays: [[{ $ifNull: ['$organizer', null] }], { $ifNull: ['$participants', []] }],
+        },
+      },
+    },
+    { $unwind: '$players' },
+    {
+      $match: {
+        'players.id': { $in: externalIds },
+        'players.photo': { $type: 'string' },
+      },
+    },
+    { $sort: { updatedAt: -1, _id: -1 } },
+    { $group: { _id: '$players.id', player: { $first: '$players' } } },
+    { $project: { _id: 0, player: 1 } },
+    { $limit: externalIds.length },
+  ];
+}
+
 function isoInstant(value: unknown): string | undefined {
   const raw = stringValue(value);
   if (!raw || Number.isNaN(Date.parse(raw))) return undefined;
@@ -534,6 +590,70 @@ export class LegacyGamesMongoAdapter {
         sort: { 'booking.timeFromIso': 1, _id: 1 },
       })
     ).map(normalizeMongoSnapshot);
+  }
+
+  /**
+   * Finds the newest valid source photo for each explicitly requested legacy participant.
+   * Raw participant aliases remain server-side and the returned primary key is pseudonymous.
+   */
+  public async readParticipantPhotos(input: {
+    readonly participantExternalIds: readonly string[];
+  }): Promise<readonly LegacyParticipantPhotoSource[]> {
+    const participantExternalIds = [
+      ...new Set(input.participantExternalIds.map((id) => stringValue(id)).filter(Boolean)),
+    ] as string[];
+    if (participantExternalIds.length === 0) return [];
+    if (participantExternalIds.length > 100) {
+      throw new Error('LEGACY_GAMES_PARTICIPANT_LIMIT_INVALID');
+    }
+
+    const attempts = this.options.maxAttempts ?? 2;
+    const sleep = this.options.sleep ?? defaultSleep;
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      const startedAt = Date.now();
+      const client = new MongoClient(this.options.uri, {
+        serverSelectionTimeoutMS: this.options.timeoutMs ?? 5_000,
+        connectTimeoutMS: this.options.timeoutMs ?? 5_000,
+        socketTimeoutMS: this.options.timeoutMs ?? 5_000,
+        maxPoolSize: 2,
+        retryReads: true,
+        readPreference: 'secondaryPreferred',
+      });
+      try {
+        await client.connect();
+        const rows = await client
+          .db(this.options.dbName ?? 'games')
+          .collection<RawLegacyGame>(this.options.collectionName ?? 'lk_games')
+          .aggregate<{ player?: RawParticipant }>(
+            participantPhotoPipeline(participantExternalIds),
+            { maxTimeMS: this.options.timeoutMs ?? 5_000 },
+          )
+          .toArray();
+        const photos = rows.flatMap((row) => {
+          const photo = normalizeMongoParticipantPhoto(row.player ?? {});
+          return photo ? [photo] : [];
+        });
+        this.options.onMetric?.({
+          outcome: 'success',
+          attempt,
+          durationMs: Date.now() - startedAt,
+        });
+        return photos;
+      } catch (error) {
+        this.options.onMetric?.({
+          outcome: attempt < attempts ? 'retry' : 'failure',
+          attempt,
+          durationMs: Date.now() - startedAt,
+        });
+        if (attempt === attempts) {
+          throw new Error('LEGACY_GAMES_SOURCE_UNAVAILABLE', { cause: error });
+        }
+        await sleep(100 * attempt);
+      } finally {
+        await client.close().catch(() => undefined);
+      }
+    }
+    throw new Error('LEGACY_GAMES_SOURCE_UNAVAILABLE');
   }
 
   /**
@@ -872,5 +992,7 @@ export const testing = {
   mapLegacyGame,
   sanitizeSnapshot,
   normalizeMongoSnapshot,
+  normalizeMongoParticipantPhoto,
+  participantPhotoPipeline,
   matchesVivaExerciseOccurrence,
 };

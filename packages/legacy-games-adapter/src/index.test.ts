@@ -15,6 +15,31 @@ describe('legacy games adapter', () => {
     });
   });
 
+  it('builds a bounded targeted photo lookup and pseudonymizes its result', () => {
+    const pipeline = testing.participantPhotoPipeline(['raw-player-1', 'raw-player-2']);
+    expect(JSON.stringify(pipeline)).toContain(
+      '"$or":[{"organizer.id":{"$in":["raw-player-1","raw-player-2"]}},' +
+        '{"participants.id":{"$in":["raw-player-1","raw-player-2"]}}]',
+    );
+    expect(pipeline.at(-1)).toEqual({ $limit: 2 });
+    expect(
+      testing.normalizeMongoParticipantPhoto({
+        id: 'raw-player-1',
+        photo: 'https://562807.selcdn.ru/smstretching/player-one',
+      }),
+    ).toEqual({
+      externalId: localVivaProfileAssociationId('raw-player-1'),
+      externalAliases: ['raw-player-1'],
+      avatarSourceUrl: 'https://562807.selcdn.ru/smstretching/player-one',
+    });
+    expect(
+      testing.normalizeMongoParticipantPhoto({
+        id: 'raw-player-2',
+        photo: 'http://untrusted.invalid/player-two',
+      }),
+    ).toBeUndefined();
+  });
+
   it('maps a selected Mongo document without leaking phones, payment URLs or provider booking IDs', () => {
     const mapped = testing.mapLegacyGame({
       id: 'legacy-game-1',

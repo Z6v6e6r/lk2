@@ -51,6 +51,13 @@ describe('legacy participant photo synchronization', () => {
           pool: {} as never,
           tenantId,
           snapshots: [{ participants: [] }] as never,
+          participants: [
+            {
+              externalId: 'canonical-player-one',
+              externalAliases: ['legacy-player-one'],
+              avatarSourceUrl: 'https://562807.selcdn.ru/smstretching/player-one',
+            },
+          ],
           config: {
             PROFILE_PHOTO_ALLOWED_HOSTS: '.selcdn.ru',
             PROFILE_PHOTO_MAX_BYTES: 5_000_000,
@@ -77,6 +84,13 @@ describe('legacy participant photo synchronization', () => {
       pool: {},
       tenantId,
       snapshots: [{ participants: [] }],
+      participants: [
+        {
+          externalId: 'canonical-player-one',
+          externalAliases: ['legacy-player-one'],
+          avatarSourceUrl: 'https://562807.selcdn.ru/smstretching/player-one',
+        },
+      ],
     });
     expect(synchronizePhoto).toHaveBeenCalledTimes(2);
     expect(synchronizePhoto).toHaveBeenNthCalledWith(

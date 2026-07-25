@@ -4,6 +4,7 @@ import { withTenantTransaction } from '@phub/database';
 import {
   localVivaExerciseAssociationId,
   type LegacyGameSourceSnapshot,
+  type LegacyParticipantPhotoSource,
 } from '@phub/legacy-games-adapter';
 import {
   HOME_PROJECTION_COMPONENT_EVENT,
@@ -76,6 +77,10 @@ interface ProfilePhotoRow extends QueryResultRow {
 interface LegacyParticipantPhotoMappingRow extends QueryResultRow {
   readonly external_id: string;
   readonly internal_id: string;
+}
+
+interface LegacyHistoryParticipantAliasRow extends QueryResultRow {
+  readonly external_id: string;
 }
 
 export interface ProfilePhotoSyncRecord {
@@ -172,6 +177,7 @@ export function resolveLegacyParticipantPhotoTargets(input: {
   readonly pool: Pool;
   readonly tenantId: string;
   readonly snapshots: readonly LegacyGameSourceSnapshot[];
+  readonly participants?: readonly LegacyParticipantPhotoSource[];
 }): Promise<readonly LegacyParticipantPhotoTarget[]> {
   const sourceUrls = new Map<string, string>();
   for (const snapshot of input.snapshots) {
@@ -179,6 +185,12 @@ export function resolveLegacyParticipantPhotoTargets(input: {
       if (participant.avatarSourceUrl) {
         sourceUrls.set(participant.externalId, participant.avatarSourceUrl);
       }
+    }
+  }
+  for (const participant of input.participants ?? []) {
+    sourceUrls.set(participant.externalId, participant.avatarSourceUrl);
+    for (const alias of participant.externalAliases) {
+      sourceUrls.set(alias, participant.avatarSourceUrl);
     }
   }
   if (sourceUrls.size === 0) return Promise.resolve([]);
@@ -197,6 +209,48 @@ export function resolveLegacyParticipantPhotoTargets(input: {
       if (sourceUrl) targets.set(row.internal_id, { userId: row.internal_id, sourceUrl });
     }
     return [...targets.values()];
+  });
+}
+
+/**
+ * Returns only integration aliases for history participants that still have no local avatar.
+ * These identifiers are consumed server-side by the CUP adapter and never enter a client DTO.
+ */
+export function listLegacyHistoryParticipantPhotoAliases(input: {
+  readonly pool: Pool;
+  readonly tenantId: string;
+  readonly limit?: number;
+}): Promise<readonly string[]> {
+  const limit = input.limit ?? 100;
+  if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+    throw new Error('LEGACY_HISTORY_PARTICIPANT_LIMIT_INVALID');
+  }
+  return withTenantTransaction(input.pool, input.tenantId, async (client) => {
+    const rows = await client.query<LegacyHistoryParticipantAliasRow>(
+      `with history_players as (
+         select distinct h.tenant_id, participant ->> 'userId' as user_id
+           from booking.activity_history_projection h
+           cross join lateral jsonb_array_elements(
+             coalesce(h.details #> '{game,participants}', '[]'::jsonb)
+           ) as participant
+          where h.tenant_id = $1 and h.status = 'COMPLETED'
+            and participant ->> 'userId' ~
+              '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+       )
+       select distinct e.external_id
+         from history_players h
+         join integration.external_entity_map e
+           on e.tenant_id = h.tenant_id and e.internal_id = h.user_id::uuid
+         join profile.user_summaries p
+           on p.tenant_id = e.tenant_id and p.user_id = e.internal_id
+        where e.tenant_id = $1 and e.external_system = 'LK_LEGACY_SNAPSHOT'
+          and e.entity_type = 'game_player' and p.photo_url is null
+          and e.external_id !~ '^[0-9a-f]{64}$'
+        order by e.external_id
+        limit $2`,
+      [input.tenantId, limit],
+    );
+    return rows.rows.map((row) => row.external_id);
   });
 }
 
