@@ -41,6 +41,7 @@ sql() {
 
 write_runtime_override() {
   home_read_mode="$1"
+  promotion_sync_batch_size="${2:-}"
   override_tmp="$runtime_override_env.$$"
   umask 077
   trap 'rm -f "$override_tmp"' EXIT HUP INT TERM
@@ -49,6 +50,9 @@ write_runtime_override() {
     printf 'HOME_VIVA_SYNC_ENABLED=true\n'
     printf 'COMMUNITIES_READ_MODE=legacy\n'
     printf 'PROMOTIONS_READ_MODE=legacy\n'
+    if test -n "$promotion_sync_batch_size"; then
+      printf 'PROMOTIONS_SYNC_BATCH_SIZE=%s\n' "$promotion_sync_batch_size"
+    fi
   } > "$override_tmp"
   mv "$override_tmp" "$runtime_override_env"
   trap - EXIT HUP INT TERM
@@ -76,7 +80,16 @@ wait_for_service() {
 }
 
 activation_started="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-write_runtime_override mock
+previous_home_read_mode="$(
+  sed -n 's/^HOME_READ_MODE=//p' "$runtime_override_env" 2>/dev/null |
+    tail -n 1
+)"
+case "$previous_home_read_mode" in
+  mock | projection) ;;
+  *) previous_home_read_mode=mock ;;
+esac
+
+write_runtime_override mock 100
 compose up -d --force-recreate worker
 wait_for_service worker
 
@@ -206,13 +219,17 @@ if test "$projection_ready" -ne 1; then
        and (delegation.refresh_expires_at is null or delegation.refresh_expires_at > now())
   ")"
   echo "Live Home component readiness: $component_readiness" >&2
-  echo "Live Home projection did not become complete; API remains on its previous read mode" >&2
+  write_runtime_override "$previous_home_read_mode"
+  compose up -d --force-recreate worker
+  wait_for_service worker
+  echo "Live Home projection did not become complete; previous API and worker read mode restored" >&2
   exit 1
 fi
 
 write_runtime_override projection
-compose up -d --force-recreate api
+compose up -d --force-recreate api worker
 wait_for_service api
+wait_for_service worker
 
 projection_source_ok="$(sql "
   select coalesce(bool_and(snapshot.payload #>> '{snapshot,source}' = 'LOCAL_PROJECTION'), false)

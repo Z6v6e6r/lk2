@@ -190,12 +190,15 @@ The staging Compose file reads `/etc/phub/staging.env` first and an optional non
 `deploy/jetson/activate-live-home.sh`, which writes only the Home/community/promotion feature gates
 to that override. Secrets remain exclusively in `/etc/phub/staging.env`.
 
-The activation is deliberately two-phase. It recreates the worker while Home reads stay on mock,
-then requires every active Viva delegation to receive fresh Viva, community and promotion source
-components, three fresh canonical platform components, a canonical locations component and a fresh
-complete `LOCAL_PROJECTION` snapshot. Only after that database gate passes does it write
-`HOME_READ_MODE=projection` and recreate the API. If the gate times out, the script prints only
-aggregate component readiness and exits without recreating the API in projection mode.
+The activation is deliberately two-phase. It recreates the worker while Home reads stay on mock
+and temporarily raises the promotion batch to 100 so active delegated users are covered within the
+bounded activation window. It then requires every active Viva delegation to receive fresh Viva,
+community and promotion source components, three fresh canonical platform components, a canonical
+locations component and a fresh complete `LOCAL_PROJECTION` snapshot. Only after that database gate
+passes does it write `HOME_READ_MODE=projection` and recreate both API and worker from the persistent
+projection override. If the gate times out, the script prints only aggregate component readiness,
+restores the previous persistent read mode, recreates the worker from that mode and exits without
+changing the running API mode.
 
 ## Failure and rollback
 
