@@ -103,6 +103,19 @@ npm run messaging:game-context:backfill -- \
   --limit=25
 ```
 
+On Nano, do not copy a source checkout or install development dependencies. Run the command bundled
+into the exact deployed migrator digest:
+
+```bash
+cd /opt/phub
+docker compose --env-file infrastructure.env --env-file release.env \
+  --profile migration run --rm migrator \
+  node apps/migrator/dist/backfill-game-conversations.js \
+  --tenant-key=<internal-test-tenant> \
+  --actor-id=<padlhub-user-uuid> \
+  --limit=25
+```
+
 After reviewing the candidate count, apply the same window:
 
 ```bash
@@ -112,6 +125,11 @@ npm run messaging:game-context:backfill -- \
   --limit=25 \
   --confirm=BACKFILL_GAME_CONVERSATIONS
 ```
+
+For Nano, append `--confirm=BACKFILL_GAME_CONVERSATIONS` to the immutable migrator command above.
+The messaging runtime setter is packaged alongside it as
+`apps/migrator/dist/set-messaging-runtime.js`; use that entry point with the same Compose prefix
+when previewing or applying Nano gate changes.
 
 Confirm that every conversation has `kind=GAME`, the PadlHub game UUID in `context_id`, active
 canonical participants only and an identifier-only projection outbox event. Then preview and apply

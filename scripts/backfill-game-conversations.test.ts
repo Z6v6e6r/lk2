@@ -18,4 +18,20 @@ describe('GAME conversation backfill', () => {
     expect(source).toContain("game.lifecycle_state in ('SCHEDULED', 'IN_PROGRESS', 'FINISHED')");
     expect(source).not.toMatch(/viva|external_id/i);
   });
+
+  it('is bundled into the immutable migrator image for Nano operations', async () => {
+    const buildConfig = await readFile(
+      resolve(process.cwd(), 'apps/migrator/tsup.config.ts'),
+      'utf8',
+    );
+    const dockerfile = await readFile(resolve(process.cwd(), 'apps/migrator/Dockerfile'), 'utf8');
+
+    expect(buildConfig).toContain(
+      "'backfill-game-conversations': '../../scripts/backfill-game-conversations.ts'",
+    );
+    expect(buildConfig).toContain(
+      "'set-messaging-runtime': '../../scripts/set-messaging-runtime.ts'",
+    );
+    expect(dockerfile).toContain('COPY --from=build /workspace/apps ./apps');
+  });
 });
