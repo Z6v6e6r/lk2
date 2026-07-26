@@ -164,6 +164,15 @@ while test "$attempt" -lt 24; do
 done
 
 if test "$projection_ready" -ne 1; then
+  active_delegations="$(sql "$active_delegations_sql")"
+  ready_delegations="$(sql "$ready_delegations_sql")"
+  echo "Live Home projection final readiness: ${ready_delegations}/${active_delegations} active delegations"
+  if test "$active_delegations" -gt 0 && test "$ready_delegations" = "$active_delegations"; then
+    projection_ready=1
+  fi
+fi
+
+if test "$projection_ready" -ne 1; then
   component_readiness="$(sql "
     select concat(
       'viva=', count(*) filter (where (

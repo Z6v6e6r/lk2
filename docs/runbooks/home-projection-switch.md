@@ -190,6 +190,11 @@ The staging Compose file reads `/etc/phub/staging.env` first and an optional non
 `deploy/jetson/activate-live-home.sh`, which writes only the Home/community/promotion feature gates
 to that override. Secrets remain exclusively in `/etc/phub/staging.env`.
 
+The activation wait loop takes one final readiness sample after its last bounded sleep. This
+boundary sample prevents a projection that becomes complete during the final interval from being
+rolled back even though every component is already fresh. A genuinely incomplete projection still
+prints the per-component readiness breakdown, restores the previous read mode and fails closed.
+
 The activation is deliberately two-phase. It recreates the worker while Home reads stay on mock
 and temporarily raises the promotion batch to 100 so active delegated users are covered within the
 bounded activation window. It then requires every active Viva delegation to receive fresh Viva,
