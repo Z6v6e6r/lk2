@@ -8,6 +8,7 @@ import {
 import {
   checkDatabaseReady,
   createCommunityLegacyBridgeRepository,
+  createContextualMessagingRepository,
   createDatabasePool,
   createGameRepository,
   createGameResultProjectionRepository,
@@ -24,6 +25,7 @@ import Redis from 'ioredis';
 import { registerHomeProjectorConsumer } from './home-projector-consumer.js';
 import { registerCoreBrokerTopology } from './broker-topology.js';
 import { registerGamesCardProjectorConsumer } from './games-card-projector-consumer.js';
+import { registerGameConversationProjectorConsumer } from './game-conversation-projector-consumer.js';
 import { registerGameResultProjectorConsumer } from './game-result-projector-consumer.js';
 import { registerCupRatingConsumer } from './cup-rating-consumer.js';
 import { CupRatingClient } from './cup-rating-client.js';
@@ -161,6 +163,11 @@ await registerLocationHomeProjectorConsumer({
 await registerGamesCardProjectorConsumer({
   channel: consumerChannel,
   repository: createGameRepository(pool),
+  logger,
+});
+await registerGameConversationProjectorConsumer({
+  channel: consumerChannel,
+  repository: createContextualMessagingRepository(pool),
   logger,
 });
 const gameResultProjectionRepository = createGameResultProjectionRepository(pool);

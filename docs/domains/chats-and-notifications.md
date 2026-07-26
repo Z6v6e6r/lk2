@@ -12,6 +12,13 @@ identifier-only fanout из RabbitMQ и reconnect/gap recovery через HTTP `
 messaging runtime gate по умолчанию выключены. В M1/M2 не входят contextual чаты, вложения,
 edit/delete, коннекторы и модерация.
 
+M3.1 начат с worker-owned проектора `GAME`: доменное событие содержит только PadlHub UUID,
+проектор повторно читает один канонический aggregate из `games`, синхронизирует разговор и
+активных участников в tenant transaction, а event inbox защищает от повторной обработки.
+Спроецированные строки остаются недоступны API при `contextual=false`. История активности и Viva
+projection не используются как источник membership. `COMMUNITY` и `TOURNAMENT` остаются закрыты;
+для последнего сначала требуется канонический tournament aggregate.
+
 Реализованный in-app срез включает rule/template consumer, транзакционные intent/inbox/delivery,
 RabbitMQ inbox-дедупликацию, tenant gate, `GET /notifications`, идемпотентный `PUT
 /notifications/read-cursor` и типизированный SDK. Реализованный Web Push срез добавляет

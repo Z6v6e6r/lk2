@@ -2,36 +2,45 @@
 
 ## Current delivery boundary
 
-| Stage                | State                                | Testable result                                                                  |
-| -------------------- | ------------------------------------ | -------------------------------------------------------------------------------- |
-| Foundation           | complete                             | Tenant-scoped PostgreSQL schema, RLS/FORCE RLS, audit and identifier-only outbox |
-| M1 direct HTTP       | complete                             | Create/list direct conversations, ordered history/send and monotonic read cursor |
-| M2 direct realtime   | implementation complete, runtime off | Single-use ticket, member subscription, RabbitMQ fanout and HTTP gap recovery    |
-| In-app notifications | complete, separately gated           | Inbox, unread/read cursor and manual CUP delivery                                |
-| Web Push             | complete, separately gated           | VAPID registration/delivery with provider and tenant gates                       |
+| Stage                | State                             | Testable result                                                                  |
+| -------------------- | --------------------------------- | -------------------------------------------------------------------------------- |
+| Foundation           | complete                          | Tenant-scoped PostgreSQL schema, RLS/FORCE RLS, audit and identifier-only outbox |
+| M1 direct HTTP       | complete                          | Create/list direct conversations, ordered history/send and monotonic read cursor |
+| M2 direct realtime   | Nano canary active                | Single-use ticket, member subscription, RabbitMQ fanout and HTTP gap recovery    |
+| M3 GAME context      | projector foundation, runtime off | Canonical game lifecycle projects one hidden tenant-scoped conversation          |
+| In-app notifications | complete, separately gated        | Inbox, unread/read cursor and manual CUP delivery                                |
+| Web Push             | complete, separately gated        | VAPID registration/delivery with provider and tenant gates                       |
 
 No messaging gate is enabled by a migration or image deployment. Nano activation is a separate
 reviewed operation.
 
 ## Remaining stages
 
-1. **M2 Nano canary.** Promote one immutable digest, keep gates off, verify readiness and HTTP
-   expected-auth responses, then enable HTTP/direct/realtime for one internal tenant and two test
-   users. Roll back realtime independently.
-2. **M3 contextual chats.** Add `GAME`, `TOURNAMENT` and `COMMUNITY` creation and membership
-   projectors. Membership follows the owning aggregate lifecycle; clients cannot choose or merge a
-   source.
-3. **M4 message lifecycle and safety.** Add edit/delete tombstones, private attachments with
+1. **M3.1 GAME contextual chats.** Complete the user/API projection over the worker-owned
+   `GAME` conversation projector, backfill one internal tenant, exercise join/leave/cancel and only
+   then enable `contextual` for that tenant. The projector consumes canonical `game.#` facts,
+   rereads `games.games` plus `games.participations`, deduplicates each event and publishes only
+   PadlHub identifiers.
+2. **M3.2 COMMUNITY contextual chats.** Add the explicit owner command and canonical
+   `communities.memberships` projector with the same isolation and lifecycle guarantees.
+3. **M3.3 TOURNAMENT contextual chats.** First deliver a canonical tournament aggregate and
+   PadlHub UUID membership source. Activity-history/Viva projections are not a write owner and
+   cannot be used to create or authorize a tournament chat.
+4. **M4 message lifecycle and safety.** Add edit/delete tombstones, private attachments with
    malware scan, rate limits and user reports. Preserve server sequence and immutable revisions.
-4. **M5 CUP support and one connector.** Add support assignment, external contact mapping,
+5. **M5 CUP support and one connector.** Add support assignment, external contact mapping,
    inbound/outbound deduplication, bounded retry and DLQ replay. Canonical message state remains in
    PostgreSQL.
-5. **M6 moderation.** Add CUP case queue, immutable decisions, reversible quarantine and one
+6. **M6 moderation.** Add CUP case queue, immutable decisions, reversible quarantine and one
    external provider in `SIGNAL_ONLY`. External services never apply authoritative changes.
-6. **M7 native delivery completion.** Add APNs and FCM adapters plus displayed/opened receipts.
+7. **M7 native delivery completion.** Add APNs and FCM adapters plus displayed/opened receipts.
    Web Push and in-app stay independently operable during a native-provider incident.
-7. **Production expansion.** Load/soak tests, backup/restore rehearsal, sequential-node rollout,
+8. **Production expansion.** Load/soak tests, backup/restore rehearsal, sequential-node rollout,
    monitored tenant expansion and tested digest rollback.
+
+The M3 GAME projector may populate hidden rows while `contextual=false`; deployment alone never
+exposes them. This prevents event loss between image promotion and the reviewed gate change.
+Historical games require a bounded, audited backfill before activation.
 
 ## How to test M1 and M2
 
