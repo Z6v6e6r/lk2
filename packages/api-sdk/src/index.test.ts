@@ -648,6 +648,71 @@ describe('PadlHubApiClient booking personalization boundary', () => {
   });
 });
 
+describe('PadlHubApiClient messaging boundary', () => {
+  it('uses only PadlHub conversation routes and retry-safe commands', async () => {
+    const calls: Array<{ input: Parameters<typeof fetch>[0]; init?: RequestInit }> = [];
+    const conversationId = '22222222-2222-4222-8222-222222222222';
+    const otherUserId = '11111111-1111-4111-8111-111111111111';
+    const fetchImplementation: typeof fetch = (input, init) => {
+      calls.push({ input, ...(init === undefined ? {} : { init }) });
+      const url = requestUrl(input);
+      if (url.endsWith('/conversations?limit=25')) {
+        return Promise.resolve(jsonResponse({ items: [] }));
+      }
+      if (url.endsWith('/conversations/direct')) {
+        return Promise.resolve(
+          jsonResponse({
+            outcome: 'ok',
+            conversation: {},
+            created: true,
+            replayed: false,
+          }),
+        );
+      }
+      if (url.includes('/messages') && init?.method === 'POST') {
+        return Promise.resolve(jsonResponse({ outcome: 'ok', message: {}, replayed: false }));
+      }
+      if (url.includes('/read-cursor')) {
+        return Promise.resolve(
+          jsonResponse({
+            outcome: 'ok',
+            readThroughSequence: 1,
+            changed: true,
+            replayed: false,
+          }),
+        );
+      }
+      return Promise.resolve(jsonResponse({ messages: [] }));
+    };
+    const client = createClient(fetchImplementation, {
+      initialAccessToken: authenticatedSession.accessToken,
+    });
+
+    await client.listConversations(25);
+    await client.createDirectConversation(otherUserId);
+    await client.listConversationMessages(conversationId, { afterSequence: 4, limit: 50 });
+    await client.sendConversationMessage(conversationId, 'Привет');
+    await client.markConversationRead(conversationId, 5);
+
+    expect(requestUrl(calls[0]?.input ?? '')).toContain('/conversations?limit=25');
+    expect(JSON.parse(stringRequestBody(calls[1]?.init?.body))).toEqual({ otherUserId });
+    expect(requestUrl(calls[2]?.input ?? '')).toContain(
+      `/conversations/${conversationId}/messages?afterSequence=4&limit=50`,
+    );
+    const sendHeaders = new Headers(calls[3]?.init?.headers);
+    const sendBody = JSON.parse(stringRequestBody(calls[3]?.init?.body)) as {
+      clientMessageId: string;
+      body: string;
+    };
+    expect(sendHeaders.get('Idempotency-Key')).toBe(sendBody.clientMessageId);
+    expect(sendBody.body).toBe('Привет');
+    expect(JSON.parse(stringRequestBody(calls[4]?.init?.body))).toEqual({
+      throughSequence: 5,
+    });
+    expect(calls.map((call) => requestUrl(call.input)).join(' ')).not.toMatch(/viva|provider/i);
+  });
+});
+
 describe('PadlHubApiClient notification boundary', () => {
   it('uses the canonical inbox query and an idempotent read-cursor command', async () => {
     const calls: Array<{ input: Parameters<typeof fetch>[0]; init?: RequestInit }> = [];

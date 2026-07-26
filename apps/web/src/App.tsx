@@ -7,6 +7,7 @@ import padlHubLogoUrl from './assets/padlhub-logo.svg';
 import vkIconUrl from './assets/vk-auth.svg';
 import yandexIconUrl from './assets/yandex-auth.svg';
 import { BookingsPage } from './BookingsPage.js';
+import { ChatsPage } from './ChatsPage.js';
 import { CommunitiesPage } from './CommunitiesPage.js';
 import {
   isIOSBrowser,
@@ -26,6 +27,8 @@ import type {
   BookingPreferences,
   BookingPreferencesUpdateRequest,
   CommunityMembershipPage,
+  ConversationMessagePage,
+  ConversationPage,
   HomeDashboard,
   LocationDetail,
   LocationList,
@@ -52,6 +55,7 @@ type ProtectedRoute =
   | { readonly kind: 'home' }
   | { readonly kind: 'profile'; readonly userId?: string }
   | { readonly kind: 'bookings' }
+  | { readonly kind: 'chats'; readonly conversationId?: string }
   | { readonly kind: 'notifications' }
   | { readonly kind: 'communities' }
   | { readonly kind: 'locations' }
@@ -79,6 +83,11 @@ function resolveProtectedRoute(pathname: string): ProtectedRoute {
   );
   if (profileMatch?.[1]) return { kind: 'profile', userId: profileMatch[1] };
   if (normalizedPath === '/bookings') return { kind: 'bookings' };
+  if (normalizedPath === '/chats') return { kind: 'chats' };
+  const chatMatch = normalizedPath.match(
+    /^\/chats\/([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i,
+  );
+  if (chatMatch?.[1]) return { kind: 'chats', conversationId: chatMatch[1] };
   if (normalizedPath === '/notifications') return { kind: 'notifications' };
   if (normalizedPath === '/communities') return { kind: 'communities' };
   if (normalizedPath === '/locations') return { kind: 'locations' };
@@ -330,6 +339,7 @@ export interface AppProps {
 
 const HOME_REFRESH_INTERVAL_MS = 30_000;
 const NOTIFICATIONS_REFRESH_INTERVAL_MS = 15_000;
+const CHATS_REFRESH_INTERVAL_MS = 5_000;
 const HOME_INITIAL_RETRY_DELAYS_MS = [400, 1_000, 2_000] as const;
 
 export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
@@ -367,6 +377,12 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
   const [profileSubscriptionsError, setProfileSubscriptionsError] = useState<string | null>(null);
   const [upcomingBookings, setUpcomingBookings] = useState<UserUpcomingBookings | null>(null);
   const [bookingsError, setBookingsError] = useState<string | null>(null);
+  const [conversations, setConversations] = useState<ConversationPage | null>(null);
+  const [conversationMessages, setConversationMessages] = useState<ConversationMessagePage | null>(
+    null,
+  );
+  const [chatsError, setChatsError] = useState<string | null>(null);
+  const [chatsBusy, setChatsBusy] = useState(false);
   const [notifications, setNotifications] = useState<NotificationInboxPage | null>(null);
   const [webPushConfiguration, setWebPushConfiguration] = useState<WebPushConfiguration | null>(
     null,
@@ -384,8 +400,11 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
     protectedRoute.kind === 'profile' ? protectedRoute.userId : undefined;
   const requestedLocationId =
     protectedRoute.kind === 'location' ? protectedRoute.locationId : undefined;
+  const requestedConversationId =
+    protectedRoute.kind === 'chats' ? protectedRoute.conversationId : undefined;
   const phoneInput = useRef<HTMLInputElement>(null);
   const codeInput = useRef<HTMLInputElement>(null);
+  const chatReadThroughRef = useRef(0);
 
   useEffect(() => {
     if (publicGiftRoute) return;
@@ -528,6 +547,56 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
       );
       return () => {
         active = false;
+      };
+    }
+    if (protectedRoute.kind === 'chats') {
+      chatReadThroughRef.current = 0;
+      const refreshConversations = (): void => {
+        void gateway.listConversations().then(
+          (page) => {
+            if (!active) return;
+            setConversations(page);
+            setChatsError(null);
+          },
+          () => {
+            if (active) setChatsError('Не удалось загрузить список диалогов.');
+          },
+        );
+      };
+      const refreshMessages = (): void => {
+        if (!requestedConversationId) return;
+        void gateway.listConversationMessages(requestedConversationId).then(
+          (page) => {
+            if (!active) return;
+            setConversationMessages(page);
+            setChatsError(null);
+            const newestSequence = page.messages.at(-1)?.sequence ?? 0;
+            if (newestSequence > chatReadThroughRef.current) {
+              chatReadThroughRef.current = newestSequence;
+              void gateway.markConversationRead(requestedConversationId, newestSequence).then(
+                () => {
+                  if (active) refreshConversations();
+                },
+                () => {
+                  if (active) chatReadThroughRef.current = 0;
+                },
+              );
+            }
+          },
+          () => {
+            if (active) setChatsError('Не удалось загрузить историю диалога.');
+          },
+        );
+      };
+      refreshConversations();
+      refreshMessages();
+      const refreshInterval = window.setInterval(() => {
+        refreshConversations();
+        refreshMessages();
+      }, CHATS_REFRESH_INTERVAL_MS);
+      return () => {
+        active = false;
+        window.clearInterval(refreshInterval);
       };
     }
     if (protectedRoute.kind === 'notifications') {
@@ -678,6 +747,7 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
     gateway,
     protectedRoute.kind,
     requestedLocationId,
+    requestedConversationId,
     requestedProfileUserId,
     homeReloadToken,
     state.session,
@@ -886,6 +956,55 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
       );
   }
 
+  function handleCreateDirectConversation(otherUserId: string): void {
+    setChatsBusy(true);
+    setChatsError(null);
+    void gateway.createDirectConversation(otherUserId).then(
+      (result) => {
+        window.location.assign(`/chats/${result.conversation.id}`);
+      },
+      () => {
+        setChatsError('Не удалось создать диалог. Проверьте PadlHub UUID и право доступа.');
+        setChatsBusy(false);
+      },
+    );
+  }
+
+  function refreshSelectedConversation(): void {
+    if (!requestedConversationId) return;
+    setChatsBusy(true);
+    void Promise.all([
+      gateway.listConversations(),
+      gateway.listConversationMessages(requestedConversationId),
+    ]).then(
+      ([page, messages]) => {
+        setConversations(page);
+        setConversationMessages(messages);
+        setChatsError(null);
+        setChatsBusy(false);
+      },
+      () => {
+        setChatsError('Не удалось обновить диалог.');
+        setChatsBusy(false);
+      },
+    );
+  }
+
+  function handleSendConversationMessage(body: string): void {
+    if (!requestedConversationId) return;
+    setChatsBusy(true);
+    setChatsError(null);
+    void gateway.sendConversationMessage(requestedConversationId, body).then(
+      () => {
+        refreshSelectedConversation();
+      },
+      () => {
+        setChatsError('Не удалось отправить сообщение.');
+        setChatsBusy(false);
+      },
+    );
+  }
+
   function handleSaveProfilePrivacy(input: ProfilePrivacyUpdateRequest): void {
     setProfilePrivacyBusy(true);
     setProfilePrivacyError(null);
@@ -1060,6 +1179,35 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
           onEnableWebPush={handleEnableWebPush}
           onDisableWebPush={handleDisableWebPush}
           onMarkAllRead={handleMarkAllNotificationsRead}
+        />
+      );
+    }
+    if (protectedRoute.kind === 'chats') {
+      if (!conversations || (requestedConversationId && !conversationMessages)) {
+        return (
+          <main className="app-shell app-shell-loading" aria-labelledby="chats-loading-title">
+            <Brand />
+            <section className="loading-card" aria-busy={!chatsError}>
+              {chatsError ? null : <span className="loader" aria-hidden="true" />}
+              <h1 id="chats-loading-title">{chatsError ? 'Чаты недоступны' : 'Загружаем чаты'}</h1>
+              <p className={chatsError ? 'error-message' : undefined}>
+                {chatsError ?? 'Получаем каноническую HTTP-историю…'}
+              </p>
+            </section>
+          </main>
+        );
+      }
+      return (
+        <ChatsPage
+          page={conversations}
+          messages={conversationMessages}
+          {...(requestedConversationId ? { selectedConversationId: requestedConversationId } : {})}
+          currentUserId={context.user.id}
+          busy={chatsBusy}
+          error={chatsError}
+          onCreateDirect={handleCreateDirectConversation}
+          onSendMessage={handleSendConversationMessage}
+          onRefresh={refreshSelectedConversation}
         />
       );
     }

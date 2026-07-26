@@ -46,6 +46,7 @@
     "routing:plan:set": "node --env-file-if-exists=.env --import tsx scripts/set-client-routing-plan.ts",
     "user:access:set": "node --env-file-if-exists=.env --import tsx scripts/set-user-access.ts",
     "notifications:runtime:set": "node --env-file-if-exists=.env --import tsx scripts/set-notification-runtime.ts",
+    "messaging:runtime:set": "node --env-file-if-exists=.env --import tsx scripts/set-messaging-runtime.ts",
     "notifications:web-push:provider:set": "node --env-file-if-exists=.env --import tsx scripts/configure-web-push-provider.ts",
     "notifications:web-push:secrets:provision": "node --import tsx scripts/provision-local-web-push-secrets.ts",
     "notifications:web-push:live-smoke": "node --env-file-if-exists=.env --import tsx scripts/verify-live-web-push-sandbox.ts",

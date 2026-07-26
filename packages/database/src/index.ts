@@ -20,5 +20,6 @@ export * from './notification-endpoint-repository.js';
 export * from './admin-notification-repository.js';
 export * from './location-repository.js';
 export * from './location-media-repository.js';
+export * from './messaging-repository.js';
 export * from './profile-privacy-repository.js';
 export * from './profile-summary-repository.js';

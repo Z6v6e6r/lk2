@@ -303,6 +303,11 @@ function createGateway(overrides: Partial<AuthGateway> = {}): AuthGateway {
       .fn<AuthGateway['getLocation']>()
       .mockRejectedValue(new Error('LOCATION_NOT_FOUND')),
     listMyCommunities: vi.fn().mockResolvedValue(communityMemberships),
+    listConversations: vi.fn().mockResolvedValue({ items: [] }),
+    createDirectConversation: vi.fn().mockRejectedValue(new Error('MESSAGING_DISABLED')),
+    listConversationMessages: vi.fn().mockResolvedValue({ messages: [] }),
+    sendConversationMessage: vi.fn().mockRejectedValue(new Error('MESSAGING_DISABLED')),
+    markConversationRead: vi.fn().mockRejectedValue(new Error('MESSAGING_DISABLED')),
     listNotifications: vi.fn().mockResolvedValue(notificationInbox),
     markNotificationsRead: vi.fn().mockResolvedValue(undefined),
     getWebPushConfiguration: vi.fn().mockResolvedValue({
@@ -781,6 +786,51 @@ describe('PadlHub web authentication', () => {
     expect(screen.getByRole('button', { name: 'Включить' })).toBeDisabled();
     expect(gateway.listNotifications).toHaveBeenCalledOnce();
     expect(gateway.getWebPushConfiguration).toHaveBeenCalledOnce();
+    expect(gateway.getHomeDashboard).not.toHaveBeenCalled();
+  });
+
+  it('loads the selected direct conversation through the HTTP messaging surface', async () => {
+    const conversationId = '22222222-2222-4222-8222-222222222222';
+    window.history.replaceState({}, '', `/chats/${conversationId}`);
+    const listConversations = vi.fn().mockResolvedValue({
+      items: [
+        {
+          id: conversationId,
+          kind: 'DIRECT',
+          participant: {
+            userId: '11111111-1111-4111-8111-111111111111',
+            displayName: 'Борис',
+          },
+          unreadCount: 1,
+          updatedAt: '2026-07-26T12:00:00.000Z',
+        },
+      ],
+    });
+    const listConversationMessages = vi.fn().mockResolvedValue({
+      messages: [
+        {
+          id: '33333333-3333-4333-8333-333333333333',
+          conversationId,
+          sequence: 1,
+          sender: { userId: session.context.user.id, displayName: 'Анна' },
+          messageType: 'TEXT',
+          body: 'Привет из M1',
+          createdAt: '2026-07-26T12:00:00.000Z',
+        },
+      ],
+    });
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue(session),
+      listConversations,
+      listConversationMessages,
+    });
+
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+
+    expect(await screen.findByRole('heading', { name: 'Чаты' })).toBeVisible();
+    expect(screen.getByText('Привет из M1')).toBeVisible();
+    expect(listConversations).toHaveBeenCalledOnce();
+    expect(listConversationMessages).toHaveBeenCalledWith(conversationId);
     expect(gateway.getHomeDashboard).not.toHaveBeenCalled();
   });
 

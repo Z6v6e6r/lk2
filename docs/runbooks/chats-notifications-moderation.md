@@ -34,6 +34,35 @@ opening public routes by itself.
    false-positive review. No authoritative mode exists.
 10. Expand tenant coverage gradually while watching the metrics below.
 
+### Direct chat M1 runtime gate
+
+An absent `messaging.tenant_runtime_settings` row means every messaging capability is off. M1
+requires only `http` and `direct`; keep `realtime` and `contextual` off. Preview with an active
+PadlHub user UUID attributed as the operator:
+
+```bash
+npm run messaging:runtime:set -- \
+  --tenant-key=<internal-test-tenant> \
+  --actor-id=<padlhub-user-uuid> \
+  --http=on \
+  --direct=on
+```
+
+Apply only after the migration, API readiness and authorization smoke pass:
+
+```bash
+npm run messaging:runtime:set -- \
+  --tenant-key=<internal-test-tenant> \
+  --actor-id=<padlhub-user-uuid> \
+  --http=on \
+  --direct=on \
+  --confirm=APPLY_MESSAGING_RUNTIME
+```
+
+For rollback, preview and then apply `--http=off --direct=off`. The command rejects direct,
+realtime or contextual enablement while HTTP is off, preserves omitted gates, locks the tenant
+setting and writes an audit event.
+
 ### In-app runtime gate
 
 The in-app User API and projector are disabled when a tenant has no runtime-settings row. Preview a
@@ -233,8 +262,16 @@ channel before stopping the delivery worker during an incident.
 
 ## Required smoke tests
 
+- With all messaging gates off, every chat route returns `MESSAGING_DISABLED`; with only HTTP on,
+  direct creation and send return `DIRECT_MESSAGING_DISABLED`.
+- Create a direct conversation twice with one `Idempotency-Key`; verify one normalized user pair,
+  one conversation and `replayed=true`. Reuse the key with another user and expect
+  `IDEMPOTENCY_KEY_REUSED`.
 - Repeat a send command with the same `Idempotency-Key` and `clientMessageId`; only one sequence is
   allocated and the original response is returned.
+- Send messages from both members, reload `/chats/{conversationId}`, verify exact server sequence,
+  monotonic read cursor and zero unread count after reading. A tenant user outside the pair must
+  receive 404 for history/send/read cursor.
 - Disconnect realtime, create messages, reconnect with `afterSequence`; the client fills the exact
   gap through HTTP without duplicate rendering.
 - Remove a test member and confirm both HTTP history and WebSocket subscribe reject access.
@@ -388,7 +425,8 @@ content-free JSON result in the release evidence.
 
 ## Rollback
 
-1. Disable the newest tenant/platform/connector feature gate.
+1. Disable the newest tenant/platform/connector feature gate. For direct M1, disable `direct` and
+   `http`; leave the expand-only schema in place.
 2. Stop newly introduced producers and let already claimed jobs reach a stable state or lease
    expiry.
 3. Roll API, worker and realtime back sequentially to the recorded image digests, checking

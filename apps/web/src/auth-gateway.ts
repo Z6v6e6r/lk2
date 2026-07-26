@@ -8,6 +8,10 @@ import type {
   BookingRecommendationPage,
   ClientRoutingPlan,
   CommunityMembershipPage,
+  ConversationMessagePage,
+  ConversationPage,
+  ConversationReadCursorResult,
+  CreateDirectConversationResult,
   GameCard,
   GameCardPage,
   GameCommandResult,
@@ -27,6 +31,7 @@ import type {
   CreateGiftCertificateOrderRequest,
   ProfilePrivacySettings,
   ProfilePrivacyUpdateRequest,
+  SendConversationMessageResult,
   UserProfile,
   UserUpcomingBookings,
   UserContext as ApiUserContext,
@@ -42,6 +47,10 @@ export type {
   BookingRecommendationPage,
   ClientRoutingPlan,
   CommunityMembershipPage,
+  ConversationMessagePage,
+  ConversationPage,
+  ConversationReadCursorResult,
+  CreateDirectConversationResult,
   GameCard,
   GameCardPage,
   GameCommandResult,
@@ -62,6 +71,7 @@ export type {
   CreateGiftCertificateOrderRequest,
   ProfilePrivacySettings,
   ProfilePrivacyUpdateRequest,
+  SendConversationMessageResult,
   UserProfile,
   UserUpcomingBookings,
   WebPushConfiguration,
@@ -196,6 +206,22 @@ export interface AuthGateway {
   readonly listLocations: () => Promise<LocationList>;
   readonly getLocation: (locationId: string) => Promise<LocationDetail>;
   readonly listMyCommunities: (cursor?: string) => Promise<CommunityMembershipPage>;
+  readonly listConversations: () => Promise<ConversationPage>;
+  readonly createDirectConversation: (
+    otherUserId: string,
+  ) => Promise<CreateDirectConversationResult>;
+  readonly listConversationMessages: (
+    conversationId: string,
+    afterSequence?: number,
+  ) => Promise<ConversationMessagePage>;
+  readonly sendConversationMessage: (
+    conversationId: string,
+    body: string,
+  ) => Promise<SendConversationMessageResult>;
+  readonly markConversationRead: (
+    conversationId: string,
+    throughSequence: number,
+  ) => Promise<ConversationReadCursorResult>;
   readonly listNotifications: () => Promise<NotificationInboxPage>;
   readonly markNotificationsRead: (throughId: string) => Promise<void>;
   readonly getWebPushConfiguration: () => Promise<WebPushConfiguration>;
@@ -595,6 +621,26 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       });
       communityMembershipsPromise = request;
       return request;
+    },
+
+    listConversations() {
+      return client.listConversations(50);
+    },
+
+    createDirectConversation(otherUserId) {
+      return client.createDirectConversation(otherUserId);
+    },
+
+    listConversationMessages(conversationId, afterSequence = 0) {
+      return client.listConversationMessages(conversationId, { afterSequence, limit: 100 });
+    },
+
+    sendConversationMessage(conversationId, body) {
+      return client.sendConversationMessage(conversationId, body);
+    },
+
+    markConversationRead(conversationId, throughSequence) {
+      return client.markConversationRead(conversationId, throughSequence);
     },
 
     listNotifications() {
