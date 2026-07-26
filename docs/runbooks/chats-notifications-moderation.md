@@ -63,6 +63,30 @@ For rollback, preview and then apply `--http=off --direct=off`. The command reje
 realtime or contextual enablement while HTTP is off, preserves omitted gates, locks the tenant
 setting and writes an audit event.
 
+### Direct chat realtime M2 gate
+
+Do not enable realtime before M1 HTTP history passes for both test users. Preview all required
+gates together:
+
+```bash
+npm run messaging:runtime:set -- \
+  --tenant-key=<internal-test-tenant> \
+  --actor-id=<padlhub-user-uuid> \
+  --http=on \
+  --direct=on \
+  --realtime=on
+```
+
+After reviewing the current/desired state, apply with
+`--confirm=APPLY_MESSAGING_RUNTIME`. Keep `contextual=off`. Realtime readiness must report
+PostgreSQL, Redis and RabbitMQ as ready before this change.
+
+The User API issues a ticket through `POST
+/user/api/v1/{tenantKey}/realtime/tickets`. It expires after 30 seconds, is consumed atomically in
+Redis and must appear only in the first `authenticate` WebSocket frame. Each realtime instance
+owns an exclusive auto-delete RabbitMQ queue, so every instance can notify its own connected
+clients. RabbitMQ carries identifiers and sequence only; clients recover content from HTTP.
+
 ### In-app runtime gate
 
 The in-app User API and projector are disabled when a tenant has no runtime-settings row. Preview a
@@ -272,6 +296,13 @@ channel before stopping the delivery worker during an incident.
 - Send messages from both members, reload `/chats/{conversationId}`, verify exact server sequence,
   monotonic read cursor and zero unread count after reading. A tenant user outside the pair must
   receive 404 for history/send/read cursor.
+- Request one realtime ticket and authenticate through the first WebSocket frame. A second
+  connection using the same ticket must close with `4401`; a ticket in the URL is not supported.
+- Subscribe with `afterSequence=N`, send two messages while disconnected, reconnect and verify
+  `conversation.gap` followed by HTTP `GET .../messages?afterSequence=N`. Render every sequence
+  once and in ascending order.
+- Remove or block one member before the next event. Subscription or fanout must return no message
+  event for that user even if an older socket remains connected.
 - Disconnect realtime, create messages, reconnect with `afterSequence`; the client fills the exact
   gap through HTTP without duplicate rendering.
 - Remove a test member and confirm both HTTP history and WebSocket subscribe reject access.
@@ -425,7 +456,8 @@ content-free JSON result in the release evidence.
 
 ## Rollback
 
-1. Disable the newest tenant/platform/connector feature gate. For direct M1, disable `direct` and
+1. Disable the newest tenant/platform/connector feature gate. For realtime M2, disable only
+   `realtime` first and verify HTTP polling continues. For direct M1, then disable `direct` and
    `http`; leave the expand-only schema in place.
 2. Stop newly introduced producers and let already claimed jobs reach a stable state or lease
    expiry.

@@ -7,6 +7,7 @@ import padlHubLogoUrl from './assets/padlhub-logo.svg';
 import vkIconUrl from './assets/vk-auth.svg';
 import yandexIconUrl from './assets/yandex-auth.svg';
 import { BookingsPage } from './BookingsPage.js';
+import { connectChatRealtime } from './chat-realtime-client.js';
 import { ChatsPage } from './ChatsPage.js';
 import { CommunitiesPage } from './CommunitiesPage.js';
 import {
@@ -335,6 +336,7 @@ function VivaProviderIcon({
 export interface AppProps {
   readonly gateway: AuthGateway;
   readonly tenantKey: string;
+  readonly realtimeBaseUrl?: string;
 }
 
 const HOME_REFRESH_INTERVAL_MS = 30_000;
@@ -342,7 +344,7 @@ const NOTIFICATIONS_REFRESH_INTERVAL_MS = 15_000;
 const CHATS_REFRESH_INTERVAL_MS = 5_000;
 const HOME_INITIAL_RETRY_DELAYS_MS = [400, 1_000, 2_000] as const;
 
-export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
+export function App({ gateway, tenantKey, realtimeBaseUrl }: AppProps): React.JSX.Element {
   const [state, dispatch] = useReducer(reducer, initialState);
   const browserNavigator = typeof navigator === 'undefined' ? undefined : navigator;
   const iosBrowser = isIOSBrowser(browserNavigator);
@@ -405,6 +407,7 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
   const phoneInput = useRef<HTMLInputElement>(null);
   const codeInput = useRef<HTMLInputElement>(null);
   const chatReadThroughRef = useRef(0);
+  const chatLatestSequenceRef = useRef(0);
 
   useEffect(() => {
     if (publicGiftRoute) return;
@@ -551,6 +554,7 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
     }
     if (protectedRoute.kind === 'chats') {
       chatReadThroughRef.current = 0;
+      chatLatestSequenceRef.current = 0;
       const refreshConversations = (): void => {
         void gateway.listConversations().then(
           (page) => {
@@ -563,25 +567,55 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
           },
         );
       };
-      const refreshMessages = (): void => {
+      const loadMessagesAfter = async (afterSequence: number): Promise<ConversationMessagePage> => {
+        const messages: ConversationMessagePage['messages'][number][] = [];
+        let cursor = afterSequence;
+        for (let pageIndex = 0; pageIndex < 100; pageIndex += 1) {
+          const page = await gateway.listConversationMessages(
+            requestedConversationId as string,
+            cursor,
+          );
+          messages.push(...page.messages);
+          if (page.nextAfterSequence === undefined) return { messages };
+          cursor = page.nextAfterSequence;
+        }
+        throw new Error('CHAT_HISTORY_PAGE_LIMIT_EXCEEDED');
+      };
+      const acceptMessages = (page: ConversationMessagePage, replace: boolean): void => {
+        if (!active) return;
+        if (replace) {
+          setConversationMessages(page);
+        } else {
+          setConversationMessages((current) => {
+            const merged = new Map(
+              (current?.messages ?? []).map((message) => [message.sequence, message]),
+            );
+            page.messages.forEach((message) => merged.set(message.sequence, message));
+            return {
+              messages: [...merged.values()].sort((left, right) => left.sequence - right.sequence),
+            };
+          });
+        }
+        setChatsError(null);
+        const newestSequence = page.messages.at(-1)?.sequence ?? chatLatestSequenceRef.current;
+        chatLatestSequenceRef.current = Math.max(chatLatestSequenceRef.current, newestSequence);
+        if (newestSequence > chatReadThroughRef.current) {
+          chatReadThroughRef.current = newestSequence;
+          void gateway.markConversationRead(requestedConversationId as string, newestSequence).then(
+            () => {
+              if (active) refreshConversations();
+            },
+            () => {
+              if (active) chatReadThroughRef.current = 0;
+            },
+          );
+        }
+      };
+      const recoverMessages = (afterSequence: number): void => {
         if (!requestedConversationId) return;
-        void gateway.listConversationMessages(requestedConversationId).then(
+        void loadMessagesAfter(afterSequence).then(
           (page) => {
-            if (!active) return;
-            setConversationMessages(page);
-            setChatsError(null);
-            const newestSequence = page.messages.at(-1)?.sequence ?? 0;
-            if (newestSequence > chatReadThroughRef.current) {
-              chatReadThroughRef.current = newestSequence;
-              void gateway.markConversationRead(requestedConversationId, newestSequence).then(
-                () => {
-                  if (active) refreshConversations();
-                },
-                () => {
-                  if (active) chatReadThroughRef.current = 0;
-                },
-              );
-            }
+            acceptMessages(page, afterSequence === 0);
           },
           () => {
             if (active) setChatsError('Не удалось загрузить историю диалога.');
@@ -589,13 +623,25 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
         );
       };
       refreshConversations();
-      refreshMessages();
+      recoverMessages(0);
+      const realtime =
+        requestedConversationId && realtimeBaseUrl
+          ? connectChatRealtime({
+              baseUrl: realtimeBaseUrl,
+              tenantKey,
+              conversationId: requestedConversationId,
+              getTicket: () => gateway.createRealtimeTicket(),
+              getAfterSequence: () => chatLatestSequenceRef.current,
+              onRecoveryRequired: recoverMessages,
+            })
+          : undefined;
       const refreshInterval = window.setInterval(() => {
         refreshConversations();
-        refreshMessages();
+        recoverMessages(chatLatestSequenceRef.current);
       }, CHATS_REFRESH_INTERVAL_MS);
       return () => {
         active = false;
+        realtime?.stop();
         window.clearInterval(refreshInterval);
       };
     }
@@ -748,10 +794,12 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
     protectedRoute.kind,
     requestedLocationId,
     requestedConversationId,
+    realtimeBaseUrl,
     requestedProfileUserId,
     homeReloadToken,
     state.session,
     state.view,
+    tenantKey,
   ]);
 
   useEffect(() => {

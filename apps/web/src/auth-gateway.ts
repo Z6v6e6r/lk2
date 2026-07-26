@@ -26,6 +26,7 @@ import type {
   NotificationInboxPage,
   PlayerProfileView,
   PublicGameCardPage,
+  RealtimeTicket,
   PublicGameFilters,
   PublicGiftCertificateCatalog,
   CreateGiftCertificateOrderRequest,
@@ -222,6 +223,7 @@ export interface AuthGateway {
     conversationId: string,
     throughSequence: number,
   ) => Promise<ConversationReadCursorResult>;
+  readonly createRealtimeTicket: () => Promise<RealtimeTicket>;
   readonly listNotifications: () => Promise<NotificationInboxPage>;
   readonly markNotificationsRead: (throughId: string) => Promise<void>;
   readonly getWebPushConfiguration: () => Promise<WebPushConfiguration>;
@@ -641,6 +643,10 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
 
     markConversationRead(conversationId, throughSequence) {
       return client.markConversationRead(conversationId, throughSequence);
+    },
+
+    createRealtimeTicket() {
+      return client.createRealtimeTicket();
     },
 
     listNotifications() {

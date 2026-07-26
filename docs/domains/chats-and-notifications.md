@@ -1,13 +1,16 @@
 # Контур «Чаты и оповещения»
 
-Статус: целевая архитектура, expand-only фундамент, feature-gated direct chat M1, in-app, Web
-Push/VAPID и ручная отправка из ЦУП. Остальные публичные операции остаются закрытыми, пока не
-реализованы авторизация, идемпотентность, аудит и обработчики соответствующего вертикального среза.
+Статус: целевая архитектура, expand-only фундамент, feature-gated direct chat M1 + realtime M2,
+in-app, Web Push/VAPID и ручная отправка из ЦУП. Остальные публичные операции остаются закрытыми,
+пока не реализованы авторизация, идемпотентность, аудит и обработчики соответствующего
+вертикального среза.
 
 Direct chat M1 реализует список и идемпотентное создание диалогов `DIRECT`, HTTP-историю,
 отправку текста с серверным `sequence`, монотонный read cursor, typed SDK и тестовый Web-экран
-`/chats`. Все четыре messaging runtime gate по умолчанию выключены. В M1 не входят contextual
-чаты, вложения, edit/delete, realtime fanout, коннекторы и модерация.
+`/chats`. M2 добавляет 30-секундные одноразовые tickets, membership-проверку при подписке,
+identifier-only fanout из RabbitMQ и reconnect/gap recovery через HTTP `afterSequence`. Все четыре
+messaging runtime gate по умолчанию выключены. В M1/M2 не входят contextual чаты, вложения,
+edit/delete, коннекторы и модерация.
 
 Реализованный in-app срез включает rule/template consumer, транзакционные intent/inbox/delivery,
 RabbitMQ inbox-дедупликацию, tenant gate, `GET /notifications`, идемпотентный `PUT
@@ -334,7 +337,8 @@ p95 < 2 s после commit; 99.9% intent либо доставлен хотя �
    закрыты.
 2. **Direct + contextual read/write:** direct HTTP list/create/history/send/read cursor реализованы
    за tenant gates; game/tournament/community membership policies остаются следующим подэтапом.
-3. **Realtime:** tickets, subscriptions, sequence-gap recovery; HTTP остаётся fallback.
+3. **Realtime:** single-use tickets, direct membership subscriptions, identifier-only fanout и
+   sequence-gap recovery реализованы за отдельным tenant gate; HTTP остаётся fallback.
 4. **CUP support + один connector:** inbound/outbound dedupe, assignment, retry/DLQ.
 5. **In-app notifications:** templates, rules, intents, preferences и inbox. Пользовательский срез
    и ручная отправка из ЦУП реализованы и закрыты tenant/admin gates; управление версиями

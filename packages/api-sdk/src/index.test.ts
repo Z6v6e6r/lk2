@@ -649,6 +649,32 @@ describe('PadlHubApiClient booking personalization boundary', () => {
 });
 
 describe('PadlHubApiClient messaging boundary', () => {
+  it('requests a realtime ticket through authenticated PadlHub HTTP without URL credentials', async () => {
+    const calls: Array<{ input: Parameters<typeof fetch>[0]; init?: RequestInit }> = [];
+    const fetchImplementation: typeof fetch = (input, init) => {
+      calls.push({ input, ...(init === undefined ? {} : { init }) });
+      return Promise.resolve(
+        jsonResponse({
+          ticket: 'signed-ticket',
+          expiresAt: '2026-07-26T12:00:30.000Z',
+        }),
+      );
+    };
+    const client = createClient(fetchImplementation, {
+      initialAccessToken: authenticatedSession.accessToken,
+    });
+
+    await expect(client.createRealtimeTicket()).resolves.toEqual({
+      ticket: 'signed-ticket',
+      expiresAt: '2026-07-26T12:00:30.000Z',
+    });
+    expect(requestUrl(calls[0]?.input ?? '')).toBe(
+      'https://api.padlhub.test/user/api/v1/local-padel/realtime/tickets',
+    );
+    expect(calls[0]?.init?.method).toBe('POST');
+    expect(requestUrl(calls[0]?.input ?? '')).not.toContain('signed-ticket');
+  });
+
   it('uses only PadlHub conversation routes and retry-safe commands', async () => {
     const calls: Array<{ input: Parameters<typeof fetch>[0]; init?: RequestInit }> = [];
     const conversationId = '22222222-2222-4222-8222-222222222222';

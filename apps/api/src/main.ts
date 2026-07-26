@@ -40,6 +40,7 @@ import { S3ProfilePhotoMediaStore } from './profile/profile-photo-media-store.js
 import { AuthService } from './auth/auth-service.js';
 import { RedisAuthChallengeStore } from './auth/challenge-store.js';
 import { RedisVivaOAuthStateStore } from './auth/oauth-state-store.js';
+import { RedisRealtimeTicketIssuer } from './messaging/realtime-ticket-issuer.js';
 import { createCommunityDirectoryRuntime } from './communities/community-runtime.js';
 import { PostgresAuthRepository } from './auth/postgres-auth-repository.js';
 
@@ -243,6 +244,7 @@ const app = await buildApp({
   adminNotificationRepository: createAdminNotificationRepository(pool),
   locationRepository: createLocationRepository(pool),
   messagingRepository: createMessagingRepository(pool),
+  realtimeTicketIssuer: new RedisRealtimeTicketIssuer(redis, config),
   locationMediaRepository: createLocationMediaRepository(pool),
   giftCertificateCatalogRepository: createGiftCertificateCatalogRepository(pool),
   giftCertificateMediaRepository: createGiftCertificateMediaRepository(pool),

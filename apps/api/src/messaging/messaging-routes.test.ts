@@ -115,6 +115,12 @@ function repository(overrides: Partial<MessagingRepository> = {}): MessagingRepo
       changed: true,
       replayed: false,
     }),
+    authorizeRealtimeSubscription: vi.fn().mockResolvedValue({
+      outcome: 'ok',
+      latestSequence: 1,
+    }),
+    listRealtimeRecipientUserIds: vi.fn().mockResolvedValue([userId, otherUserId]),
+    recordRealtimeTicketIssued: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
 }
@@ -174,6 +180,75 @@ describe('messaging User API', () => {
 
     expect(response.statusCode).toBe(404);
     expect(response.json()).toMatchObject({ code: 'DIRECT_MESSAGING_DISABLED' });
+  });
+
+  it('issues a realtime ticket only when the realtime tenant gate is enabled', async () => {
+    const issue = vi.fn().mockResolvedValue({
+      ticketId: '77777777-7777-4777-8777-777777777777',
+      ticket: 'signed-realtime-ticket',
+      expiresAt: '2026-07-26T12:00:30.000Z',
+    });
+    const recordRealtimeTicketIssued = vi.fn().mockResolvedValue(undefined);
+    const messagingRepository = repository({
+      getRuntimeSettings: vi
+        .fn()
+        .mockResolvedValueOnce({
+          httpEnabled: true,
+          directEnabled: true,
+          realtimeEnabled: false,
+          contextualEnabled: false,
+        })
+        .mockResolvedValueOnce({
+          httpEnabled: true,
+          directEnabled: true,
+          realtimeEnabled: true,
+          contextualEnabled: false,
+        }),
+      recordRealtimeTicketIssued,
+    });
+    const app = await buildApp({
+      config,
+      logger: createLogger('messaging-api-test', 'silent'),
+      pool: fakePool(),
+      messagingRepository,
+      realtimeTicketIssuer: { issue },
+    });
+    apps.push(app);
+
+    const disabled = await app.inject({
+      method: 'POST',
+      url: '/user/api/v1/local-padel/realtime/tickets',
+      headers: { authorization: `Bearer ${await accessToken([])}` },
+    });
+    const enabled = await app.inject({
+      method: 'POST',
+      url: '/user/api/v1/local-padel/realtime/tickets',
+      headers: {
+        authorization: `Bearer ${await accessToken([])}`,
+        'x-correlation-id': 'realtime-ticket-correlation-0001',
+      },
+    });
+
+    expect(disabled.statusCode).toBe(404);
+    expect(disabled.json()).toMatchObject({ code: 'REALTIME_MESSAGING_DISABLED' });
+    expect(enabled.statusCode).toBe(200);
+    expect(enabled.json()).toEqual({
+      ticket: 'signed-realtime-ticket',
+      expiresAt: '2026-07-26T12:00:30.000Z',
+    });
+    expect(issue).toHaveBeenCalledWith({
+      tenantId,
+      tenantKey: 'local-padel',
+      userId,
+      sessionId: '55555555-5555-4555-8555-555555555555',
+    });
+    expect(recordRealtimeTicketIssued).toHaveBeenCalledWith({
+      tenantId,
+      userId,
+      ticketId: '77777777-7777-4777-8777-777777777777',
+      expiresAt: '2026-07-26T12:00:30.000Z',
+      correlationId: 'realtime-ticket-correlation-0001',
+    });
   });
 
   it('returns only the authenticated member conversation list without caching', async () => {

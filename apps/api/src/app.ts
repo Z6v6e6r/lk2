@@ -67,6 +67,7 @@ import { registerLocationRoutes } from './locations/location-routes.js';
 import { registerLocationMediaRoutes } from './locations/location-media-routes.js';
 import type { LocationMediaStore } from './locations/location-media-store.js';
 import { registerMessagingRoutes } from './messaging/messaging-routes.js';
+import type { RealtimeTicketIssuer } from './messaging/realtime-ticket-issuer.js';
 import { registerNotificationRoutes } from './notifications/notification-routes.js';
 import { registerWebPushRoutes } from './notifications/web-push-routes.js';
 import { registerProfilePrivacyRoutes } from './profile/profile-privacy-routes.js';
@@ -152,6 +153,7 @@ export interface BuildAppOptions {
   readonly locationRepository?: LocationRepository;
   readonly locationMediaRepository?: LocationMediaRepository;
   readonly messagingRepository?: MessagingRepository;
+  readonly realtimeTicketIssuer?: RealtimeTicketIssuer;
   readonly giftCertificateCatalogRepository?: GiftCertificateCatalogRepository;
   readonly giftCertificateMediaRepository?: GiftCertificateMediaRepository;
   readonly giftCertificateSaleRepository?: GiftCertificateSaleRepository;
@@ -536,6 +538,7 @@ export async function buildApp(options: BuildAppOptions) {
   });
   registerMessagingRoutes(app as unknown as FastifyInstance, {
     ...(options.messagingRepository ? { repository: options.messagingRepository } : {}),
+    ...(options.realtimeTicketIssuer ? { realtimeTicketIssuer: options.realtimeTicketIssuer } : {}),
     authenticatedTenantHandlers: [authenticate, resolveTenant],
     directCommandHandlers: [
       authenticate,

@@ -19,6 +19,6 @@ const gateway = createBrowserAuthGateway({
 
 createRoot(mount).render(
   <StrictMode>
-    <App gateway={gateway} tenantKey={tenantKey} />
+    <App gateway={gateway} tenantKey={tenantKey} realtimeBaseUrl={apiBaseUrl} />
   </StrictMode>,
 );

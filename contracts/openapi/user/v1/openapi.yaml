@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: PadlHub User API
-  version: 1.16.0
+  version: 1.17.0
   description: Canonical user-facing API. Public identifiers are PadlHub UUIDs.
   license:
     name: Proprietary
@@ -22,7 +22,7 @@ tags:
   - name: locations
     description: Published PadlHub location cards and detail views.
   - name: messaging
-    description: Tenant-gated direct conversations with ordered HTTP history.
+    description: Tenant-gated direct conversations with ordered HTTP history and recoverable realtime hints.
 paths:
   /{tenantKey}/gift-certificate-catalog:
     parameters:
@@ -931,6 +931,35 @@ paths:
           $ref: ../../common/components.yaml#/components/responses/Unauthorized
         '403':
           $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/realtime/tickets:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+    post:
+      tags: [messaging]
+      operationId: createRealtimeTicket
+      summary: Issue one short-lived single-use WebSocket ticket
+      description: |
+        Requires authenticated tenant context and the HTTP, direct and realtime messaging gates.
+        The ticket is sent only in the first WebSocket authentication frame, never in the URL.
+      responses:
+        '200':
+          description: A signed ticket that expires after 30 seconds and can be consumed once.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RealtimeTicket'
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
         '404':
           $ref: ../../common/components.yaml#/components/responses/NotFound
         '429':
@@ -2460,6 +2489,18 @@ components:
           maxItems: 100
           items:
             $ref: '#/components/schemas/ConversationSummary'
+    RealtimeTicket:
+      type: object
+      additionalProperties: false
+      required: [ticket, expiresAt]
+      properties:
+        ticket:
+          type: string
+          minLength: 64
+          maxLength: 4096
+        expiresAt:
+          type: string
+          format: date-time
     CreateDirectConversationRequest:
       type: object
       additionalProperties: false

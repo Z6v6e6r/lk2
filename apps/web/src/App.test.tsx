@@ -308,6 +308,7 @@ function createGateway(overrides: Partial<AuthGateway> = {}): AuthGateway {
     listConversationMessages: vi.fn().mockResolvedValue({ messages: [] }),
     sendConversationMessage: vi.fn().mockRejectedValue(new Error('MESSAGING_DISABLED')),
     markConversationRead: vi.fn().mockRejectedValue(new Error('MESSAGING_DISABLED')),
+    createRealtimeTicket: vi.fn().mockRejectedValue(new Error('REALTIME_MESSAGING_DISABLED')),
     listNotifications: vi.fn().mockResolvedValue(notificationInbox),
     markNotificationsRead: vi.fn().mockResolvedValue(undefined),
     getWebPushConfiguration: vi.fn().mockResolvedValue({
@@ -830,7 +831,7 @@ describe('PadlHub web authentication', () => {
     expect(await screen.findByRole('heading', { name: 'Чаты' })).toBeVisible();
     expect(screen.getByText('Привет из M1')).toBeVisible();
     expect(listConversations).toHaveBeenCalledOnce();
-    expect(listConversationMessages).toHaveBeenCalledWith(conversationId);
+    expect(listConversationMessages).toHaveBeenCalledWith(conversationId, 0);
     expect(gateway.getHomeDashboard).not.toHaveBeenCalled();
   });
 
