@@ -93,4 +93,49 @@ describe('profile normalization', () => {
       }),
     ).toThrow();
   });
+
+  it('accepts the canonical expanded game card returned by bookings/upcoming', () => {
+    const payload = {
+      version: 'home-v1-1212',
+      generatedAt: '2026-07-26T16:48:37.020Z',
+      staleAt: '2026-07-26T16:53:37.020Z',
+      items: [
+        {
+          id: '68de2201-f5bc-4f9c-9396-297bd6f7d549',
+          kind: 'game',
+          title: 'Падел утром',
+          startsAt: '2026-07-27T09:00:00+03:00',
+          endsAt: '2026-07-27T07:00:00.000Z',
+          venue: 'Терехово',
+          status: 'confirmed',
+          route: '/bookings/68de2201-f5bc-4f9c-9396-297bd6f7d549',
+          game: {
+            type: 'rating',
+            courtName: 'Корт №3',
+            station: {
+              id: 'd7a1913a-8d12-4d9b-a234-0933363b195c',
+              title: 'Терехово',
+              route: '/locations/d7a1913a-8d12-4d9b-a234-0933363b195c',
+            },
+          },
+          participants: [
+            {
+              profileId: '11906280-4767-4d29-84a2-e8ab9be82a98',
+              displayName: 'Ivan Novozhilov',
+              firstName: 'Ivan',
+              lastName: 'Novozhilov',
+              nickname: null,
+              avatarUrl:
+                '/public/api/v1/media/profile-photos/ff7a355b-2eaf-4300-bf47-cbe151e0db0f/436980fb-fbd2-4b3e-985b-5097ccb1818d',
+              level: 'C',
+              levelValue: 3.3959,
+            },
+          ],
+          openSlots: 3,
+        },
+      ],
+    };
+
+    expect(normalizePadlHubUpcomingBookings(payload)).toEqual(payload);
+  });
 });

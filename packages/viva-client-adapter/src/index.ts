@@ -4,6 +4,7 @@ import type { UserProfile, UserUpcomingBookings } from '@phub/api-sdk';
 import {
   DIRECT_VIVA_CONTRACT_READY_OPERATIONS,
   DIRECT_VIVA_READ_OPERATIONS,
+  PROFILE_PHOTO_DELIVERY_PATH_PATTERN,
   type ClientRoutingPlan,
   type DirectVivaReadOperation,
 } from '@phub/domain';
@@ -78,6 +79,29 @@ const normalizedProfileSchema = z.object({
   }),
 });
 
+const normalizedUpcomingParticipantSchema = z
+  .object({
+    profileId: z.string().uuid().optional(),
+    displayName: z.string().min(1).max(200),
+    firstName: z.string().min(1).max(100).optional(),
+    lastName: z.string().min(1).max(100).nullable().optional(),
+    nickname: z.string().min(1).max(100).nullable().optional(),
+    avatarUrl: z
+      .string()
+      .max(2_048)
+      .refine(
+        (value) =>
+          z.string().url().safeParse(value).success ||
+          PROFILE_PHOTO_DELIVERY_PATH_PATTERN.test(value),
+        'avatar URL must be absolute or use the PadlHub profile-photo delivery endpoint',
+      )
+      .nullable()
+      .optional(),
+    level: z.string().min(1).max(20).nullable().optional(),
+    levelValue: z.number().min(0).max(10).nullable().optional(),
+  })
+  .strict();
+
 const normalizedUpcomingBookingsSchema = z
   .object({
     version: z.string().min(1).max(100),
@@ -91,9 +115,27 @@ const normalizedUpcomingBookingsSchema = z
             kind: z.enum(['game', 'training', 'tournament']),
             title: z.string().min(1).max(160),
             startsAt: z.string().datetime({ offset: true }),
+            endsAt: z.string().datetime({ offset: true }).optional(),
             venue: z.string().min(1).max(160),
             status: z.enum(['confirmed', 'waitlist', 'payment_required']),
             route: z.string().startsWith('/'),
+            game: z
+              .object({
+                type: z.enum(['friendly', 'rating']),
+                courtName: z.string().min(1).max(120).optional(),
+                station: z
+                  .object({
+                    id: z.string().uuid(),
+                    title: z.string().min(1).max(120),
+                    route: z.string().startsWith('/'),
+                  })
+                  .strict()
+                  .optional(),
+              })
+              .strict()
+              .optional(),
+            participants: z.array(normalizedUpcomingParticipantSchema).max(4).optional(),
+            openSlots: z.number().int().min(0).max(4).optional(),
           })
           .strict(),
       )
@@ -140,7 +182,7 @@ export function normalizePadlHubUserProfile(input: unknown): UserProfile {
  * PadlHub identifiers without exposing external ids to the browser.
  */
 export function normalizePadlHubUpcomingBookings(input: unknown): UserUpcomingBookings {
-  return normalizedUpcomingBookingsSchema.parse(input);
+  return normalizedUpcomingBookingsSchema.parse(input) as UserUpcomingBookings;
 }
 
 /**
