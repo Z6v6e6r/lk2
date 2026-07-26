@@ -56,6 +56,7 @@ type ProtectedRoute =
   | { readonly kind: 'home' }
   | { readonly kind: 'profile'; readonly userId?: string }
   | { readonly kind: 'bookings' }
+  | { readonly kind: 'booking'; readonly gameId: string }
   | { readonly kind: 'chats'; readonly conversationId?: string }
   | { readonly kind: 'notifications' }
   | { readonly kind: 'communities' }
@@ -84,6 +85,10 @@ function resolveProtectedRoute(pathname: string): ProtectedRoute {
   );
   if (profileMatch?.[1]) return { kind: 'profile', userId: profileMatch[1] };
   if (normalizedPath === '/bookings') return { kind: 'bookings' };
+  const bookingMatch = normalizedPath.match(
+    /^\/bookings\/([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i,
+  );
+  if (bookingMatch?.[1]) return { kind: 'booking', gameId: bookingMatch[1] };
   if (normalizedPath === '/chats') return { kind: 'chats' };
   const chatMatch = normalizedPath.match(
     /^\/chats\/([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i,
@@ -1312,11 +1317,18 @@ export function App({ gateway, tenantKey, realtimeBaseUrl }: AppProps): React.JS
       }
       return <LocationDetailPage location={locationDetail} />;
     }
-    if (protectedRoute.kind === 'games' || protectedRoute.kind === 'game') {
+    if (
+      protectedRoute.kind === 'games' ||
+      protectedRoute.kind === 'game' ||
+      protectedRoute.kind === 'booking'
+    ) {
       return (
         <GamesPage
           gateway={gateway}
-          {...(protectedRoute.kind === 'game' ? { gameId: protectedRoute.gameId } : {})}
+          {...(protectedRoute.kind === 'game' || protectedRoute.kind === 'booking'
+            ? { gameId: protectedRoute.gameId }
+            : {})}
+          {...(protectedRoute.kind === 'booking' ? { detailsOrigin: 'bookings' as const } : {})}
         />
       );
     }

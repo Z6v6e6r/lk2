@@ -66,9 +66,14 @@ function initialDetailTab(game: ViewerGameCard): GameDetailTab {
 export interface GamesPageProps {
   readonly gateway: AuthGateway;
   readonly gameId?: string;
+  readonly detailsOrigin?: 'bookings' | 'games';
 }
 
-export function GamesPage({ gateway, gameId }: GamesPageProps): React.JSX.Element {
+export function GamesPage({
+  gateway,
+  gameId,
+  detailsOrigin = 'games',
+}: GamesPageProps): React.JSX.Element {
   const [tab, setTab] = useState<GamesTab>('DISCOVER');
   const [kind, setKind] = useState<GameKindFilter>('ALL');
   const [selectedDate, setSelectedDate] = useState<string | null>(() => dateKey(new Date()));
@@ -352,10 +357,12 @@ export function GamesPage({ gateway, gameId }: GamesPageProps): React.JSX.Elemen
   }
 
   if (gameId) {
+    const detailsBackHref = detailsOrigin === 'bookings' ? '/bookings' : '/games';
+    const detailsBackLabel = detailsOrigin === 'bookings' ? 'Назад к записям' : 'Назад к играм';
     return (
       <main className="games-page games-page--detail">
         <header className="games-header">
-          <a className="games-back" href="/games" aria-label="Назад к играм">
+          <a className="games-back" href={detailsBackHref} aria-label={detailsBackLabel}>
             <span aria-hidden="true">←</span>
             Назад
           </a>
@@ -388,7 +395,10 @@ export function GamesPage({ gateway, gameId }: GamesPageProps): React.JSX.Elemen
             onTabChange={setDetailTab}
           />
         ) : null}
-        <MainBottomNavigation active="games" gamesDestination="games" />
+        <MainBottomNavigation
+          active="games"
+          gamesDestination={detailsOrigin === 'bookings' ? 'bookings' : 'games'}
+        />
       </main>
     );
   }
