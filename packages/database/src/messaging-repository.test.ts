@@ -42,16 +42,17 @@ describe('messaging repository', () => {
       if (text === 'begin' || text === 'commit' || text.includes("set_config('app.tenant_id'")) {
         return Promise.resolve({ rows: [], rowCount: 0 });
       }
-      if (text.includes('member.id as member_id') && !text.includes('for update of member')) {
+      if (text.includes('member.id as member_id') && text.includes('for update of member')) {
         return Promise.resolve({
-          rows: [{ member_id: memberId, last_read_sequence: '0', last_sequence: '0' }],
+          rows: [{ member_id: memberId }],
           rowCount: 1,
         });
       }
       if (text.includes('message.idempotency_key = $3')) {
         return Promise.resolve({ rows: [], rowCount: 0 });
       }
-      if (text.includes('select next_sequence')) {
+      if (text.includes('select conversation.next_sequence')) {
+        expect(text).toContain('for update of conversation');
         return Promise.resolve({ rows: [{ next_sequence: '1' }], rowCount: 1 });
       }
       if (text.includes('insert into messaging.messages')) {
@@ -135,7 +136,7 @@ describe('messaging repository', () => {
     ).resolves.toEqual({ outcome: 'not_found' });
   });
 
-  it('authorizes realtime only through enabled gates and current direct membership', async () => {
+  it('authorizes realtime through the matching kind gate and current membership', async () => {
     const query = vi.fn((text: string) => {
       if (text === 'begin' || text === 'commit' || text.includes("set_config('app.tenant_id'")) {
         return Promise.resolve({ rows: [], rowCount: 0 });
@@ -154,7 +155,8 @@ describe('messaging repository', () => {
         });
       }
       if (text.includes('conversation.next_sequence - 1 as latest_sequence')) {
-        expect(text).toContain("conversation.kind = 'DIRECT'");
+        expect(text).toContain("conversation.kind = 'DIRECT' and $4 = true");
+        expect(text).toContain("conversation.kind = 'GAME' and $5 = true");
         expect(text).toContain("member.state = 'ACTIVE'");
         return Promise.resolve({ rows: [{ latest_sequence: '7' }], rowCount: 1 });
       }
@@ -169,6 +171,86 @@ describe('messaging repository', () => {
         conversationId,
       }),
     ).resolves.toEqual({ outcome: 'ok', latestSequence: 7 });
+  });
+
+  it('maps a gated GAME conversation without inventing a peer participant', async () => {
+    const gameId = '66666666-6666-4666-8666-666666666666';
+    const query = vi.fn((text: string) => {
+      if (text === 'begin' || text === 'commit' || text.includes("set_config('app.tenant_id'")) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('from messaging.conversations conversation')) {
+        expect(text).toContain('settings.contextual_enabled = true');
+        expect(text).toContain("other_member on conversation.kind = 'DIRECT'");
+        expect(text).toContain('select member.tenant_id, member.user_id');
+        return Promise.resolve({
+          rows: [
+            {
+              id: conversationId,
+              kind: 'GAME',
+              context_id: gameId,
+              title: 'Тестовая игра',
+              other_user_id: null,
+              other_display_name: null,
+              unread_count: '2',
+              updated_at: '2026-07-26 12:00:00+00',
+              last_sequence: null,
+              last_body: null,
+              last_created_at: null,
+            },
+          ],
+          rowCount: 1,
+        });
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const repository = createMessagingRepository(poolWithQuery(query) as never);
+
+    await expect(repository.listConversations({ tenantId, userId, limit: 50 })).resolves.toEqual([
+      {
+        id: conversationId,
+        kind: 'GAME',
+        context: { type: 'GAME', id: gameId },
+        title: 'Тестовая игра',
+        unreadCount: 2,
+        updatedAt: '2026-07-26T12:00:00+00:00',
+      },
+    ]);
+  });
+
+  it('exposes GAME references only through contextual gate and active membership', async () => {
+    const gameId = '66666666-6666-4666-8666-666666666666';
+    const query = vi.fn((text: string, values?: readonly unknown[]) => {
+      if (text === 'begin' || text === 'commit' || text.includes("set_config('app.tenant_id'")) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('conversation.context_id as game_id')) {
+        expect(text).toContain('settings.contextual_enabled = true');
+        expect(text).toContain("conversation.kind = 'GAME'");
+        expect(text).toContain("member.state = 'ACTIVE'");
+        expect(values).toEqual([tenantId, userId, [gameId]]);
+        return Promise.resolve({
+          rows: [
+            {
+              game_id: gameId,
+              conversation_id: conversationId,
+              unread_count: '3',
+            },
+          ],
+          rowCount: 1,
+        });
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const repository = createMessagingRepository(poolWithQuery(query) as never);
+
+    await expect(
+      repository.getGameConversationReferences({
+        tenantId,
+        userId,
+        gameIds: [gameId, gameId],
+      }),
+    ).resolves.toEqual(new Map([[gameId, { conversationId, unreadCount: 3 }]]));
   });
 
   it('resolves realtime recipients from the canonical message and active members', async () => {

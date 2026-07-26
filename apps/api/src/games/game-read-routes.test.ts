@@ -1,6 +1,7 @@
 import { loadConfig } from '@phub/config';
 import type {
   GameRepository,
+  MessagingRepository,
   ProfileSummaryRepository,
   StoredGameCardProjection,
 } from '@phub/database';
@@ -147,12 +148,16 @@ async function appWith(
   repositoryValue: CardReadRepository,
   photoRepository?: Pick<ProfileSummaryRepository, 'getPhotoObjectKey' | 'getPhotoDeliveryIds'> &
     Partial<Pick<ProfileSummaryRepository, 'getDisplayNames' | 'getLevelValues'>>,
+  messagingRepository?: Pick<MessagingRepository, 'getGameConversationReferences'>,
 ) {
   const app = await buildApp({
     config,
     logger: createLogger('games-read-api-test', 'silent'),
     pool: fakePool(),
     gameReadRepository: repositoryValue,
+    ...(messagingRepository
+      ? { messagingRepository: messagingRepository as MessagingRepository }
+      : {}),
     ...(photoRepository ? { profilePhotoMediaRepository: photoRepository } : {}),
   });
   apps.push(app);
@@ -285,7 +290,20 @@ describe('Games read APIs', () => {
 
   it('returns viewer-aware cards from the authenticated user projection', async () => {
     const listViewerCardProjections = vi.fn().mockResolvedValue({ items: [firstProjection] });
-    const app = await appWith(repository({ listViewerCardProjections }));
+    const getGameConversationReferences = vi.fn().mockResolvedValue(
+      new Map([
+        [
+          gameId,
+          {
+            conversationId: '77777777-7777-4777-8777-777777777777',
+            unreadCount: 2,
+          },
+        ],
+      ]),
+    );
+    const app = await appWith(repository({ listViewerCardProjections }), undefined, {
+      getGameConversationReferences,
+    });
     const response = await app.inject({
       method: 'GET',
       url: '/user/api/v1/local-padel/games?scope=UPCOMING',
@@ -304,7 +322,10 @@ describe('Games read APIs', () => {
           id: gameId,
           surface: 'MY_UPCOMING',
           viewerRelation: 'ORGANIZER',
-          conversation: null,
+          conversation: {
+            conversationId: '77777777-7777-4777-8777-777777777777',
+            unreadCount: 2,
+          },
         },
       ],
       nextCursor: null,
@@ -315,6 +336,11 @@ describe('Games read APIs', () => {
     expect(listViewerCardProjections).toHaveBeenCalledWith(
       expect.objectContaining({ tenantId, viewerUserId: userId, scope: 'UPCOMING' }),
     );
+    expect(getGameConversationReferences).toHaveBeenCalledWith({
+      tenantId,
+      userId,
+      gameIds: [gameId],
+    });
   });
 
   it('drops a stale viewer projection after its relation has expired', async () => {

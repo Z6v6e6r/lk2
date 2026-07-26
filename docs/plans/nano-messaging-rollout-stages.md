@@ -2,25 +2,25 @@
 
 ## Current delivery boundary
 
-| Stage                | State                             | Testable result                                                                  |
-| -------------------- | --------------------------------- | -------------------------------------------------------------------------------- |
-| Foundation           | complete                          | Tenant-scoped PostgreSQL schema, RLS/FORCE RLS, audit and identifier-only outbox |
-| M1 direct HTTP       | complete                          | Create/list direct conversations, ordered history/send and monotonic read cursor |
-| M2 direct realtime   | Nano canary active                | Single-use ticket, member subscription, RabbitMQ fanout and HTTP gap recovery    |
-| M3 GAME context      | projector foundation, runtime off | Canonical game lifecycle projects one hidden tenant-scoped conversation          |
-| In-app notifications | complete, separately gated        | Inbox, unread/read cursor and manual CUP delivery                                |
-| Web Push             | complete, separately gated        | VAPID registration/delivery with provider and tenant gates                       |
+| Stage                | State                                | Testable result                                                                  |
+| -------------------- | ------------------------------------ | -------------------------------------------------------------------------------- |
+| Foundation           | complete                             | Tenant-scoped PostgreSQL schema, RLS/FORCE RLS, audit and identifier-only outbox |
+| M1 direct HTTP       | complete                             | Create/list direct conversations, ordered history/send and monotonic read cursor |
+| M2 direct realtime   | Nano canary active                   | Single-use ticket, member subscription, RabbitMQ fanout and HTTP gap recovery    |
+| M3 GAME context      | implementation complete, runtime off | Canonical membership, gated API/Web link and bounded audited backfill            |
+| In-app notifications | complete, separately gated           | Inbox, unread/read cursor and manual CUP delivery                                |
+| Web Push             | complete, separately gated           | VAPID registration/delivery with provider and tenant gates                       |
 
 No messaging gate is enabled by a migration or image deployment. Nano activation is a separate
 reviewed operation.
 
 ## Remaining stages
 
-1. **M3.1 GAME contextual chats.** Complete the user/API projection over the worker-owned
-   `GAME` conversation projector, backfill one internal tenant, exercise join/leave/cancel and only
-   then enable `contextual` for that tenant. The projector consumes canonical `game.#` facts,
-   rereads `games.games` plus `games.participations`, deduplicates each event and publishes only
-   PadlHub identifiers.
+1. **M3.1 GAME contextual canary.** Deploy the completed worker/API/Web slice with
+   `contextual=false`, preview and apply one bounded internal-tenant backfill, exercise
+   join/leave/cancel and only then enable `contextual` for that tenant. The projector consumes
+   canonical `game.#` facts, rereads `games.games` plus `games.participations`, deduplicates each
+   event and publishes only PadlHub identifiers.
 2. **M3.2 COMMUNITY contextual chats.** Add the explicit owner command and canonical
    `communities.memberships` projector with the same isolation and lifecycle guarantees.
 3. **M3.3 TOURNAMENT contextual chats.** First deliver a canonical tournament aggregate and
@@ -71,3 +71,21 @@ verify manifest SHA, API/realtime readiness and expected authentication failures
 internal tenant, capture correlation IDs and sequences for the two-browser journey, then observe
 outbox age, RabbitMQ queue health, reconnect rate, realtime errors and HTTP fallback for at least
 one test window. Disable `realtime` to prove polling fallback before expanding access.
+
+## How to test M3.1
+
+1. Deploy migration `0044`, API, worker, realtime and Web with `contextual=false`; verify the
+   release SHA and the durable `phub.game-conversation-projector.v1` consumer.
+2. Create or update one canonical synthetic game. Confirm that the projector stores a hidden
+   `GAME` conversation with the PadlHub game UUID and only active canonical participants.
+3. Run `messaging:game-context:backfill` without confirmation, review the bounded candidate count,
+   then apply the same limit with `--confirm=BACKFILL_GAME_CONVERSATIONS`.
+4. While the gate is off, verify game cards have `conversation: null` and direct chats still work.
+5. Enable `contextual` only for the internal tenant. Verify the game-card chat link, discriminated
+   `GAME` item in `/conversations`, ordered history/send/read cursor and realtime gap recovery.
+6. Add and remove a participant and confirm membership follows canonical `games.participations`;
+   an outsider and removed member must receive the same non-disclosing 404.
+7. Cancel the game and confirm the conversation closes, every active member is removed and the
+   game-card link disappears.
+8. Disable only `contextual` and confirm GAME chats disappear immediately while DIRECT HTTP and
+   realtime remain available.

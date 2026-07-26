@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: PadlHub User API
-  version: 1.17.0
+  version: 1.18.0
   description: Canonical user-facing API. Public identifiers are PadlHub UUIDs.
   license:
     name: Proprietary
@@ -22,7 +22,7 @@ tags:
   - name: locations
     description: Published PadlHub location cards and detail views.
   - name: messaging
-    description: Tenant-gated direct conversations with ordered HTTP history and recoverable realtime hints.
+    description: Tenant-gated direct and contextual conversations with ordered HTTP history and recoverable realtime hints.
 paths:
   /{tenantKey}/gift-certificate-catalog:
     parameters:
@@ -946,8 +946,9 @@ paths:
       operationId: createRealtimeTicket
       summary: Issue one short-lived single-use WebSocket ticket
       description: |
-        Requires authenticated tenant context and the HTTP, direct and realtime messaging gates.
-        The ticket is sent only in the first WebSocket authentication frame, never in the URL.
+        Requires authenticated tenant context plus the HTTP and realtime messaging gates. At least
+        one conversation-kind gate (direct or contextual) must also be enabled. The ticket is sent
+        only in the first WebSocket authentication frame, never in the URL.
       responses:
         '200':
           description: A signed ticket that expires after 30 seconds and can be consumed once.
@@ -973,10 +974,11 @@ paths:
     get:
       tags: [messaging]
       operationId: listConversations
-      summary: List the authenticated user's active direct conversations
+      summary: List the authenticated user's active conversations
       description: |
-        Returns only conversations where the JWT subject is an active member. The route remains
-        closed until both messaging HTTP and direct-chat tenant gates are enabled.
+        Returns only conversations where the JWT subject is an active member. Each conversation
+        kind is filtered by its tenant gate: direct_enabled for DIRECT and contextual_enabled for
+        GAME. The route remains closed until the messaging HTTP gate is enabled.
       parameters:
         - name: limit
           in: query
@@ -988,7 +990,7 @@ paths:
             default: 50
       responses:
         '200':
-          description: Active direct conversations ordered by latest durable activity.
+          description: Active gated conversations ordered by latest durable activity.
           headers:
             X-Correlation-ID:
               $ref: ../../common/components.yaml#/components/headers/CorrelationId
@@ -2458,7 +2460,7 @@ components:
         createdAt:
           type: string
           format: date-time
-    ConversationSummary:
+    DirectConversationSummary:
       type: object
       additionalProperties: false
       required: [id, kind, participant, unreadCount, updatedAt]
@@ -2479,6 +2481,51 @@ components:
           format: date-time
         lastMessage:
           $ref: '#/components/schemas/ConversationLastMessage'
+    ContextConversationReference:
+      type: object
+      additionalProperties: false
+      required: [type, id]
+      properties:
+        type:
+          type: string
+          const: GAME
+        id:
+          type: string
+          format: uuid
+    GameChatConversationSummary:
+      type: object
+      additionalProperties: false
+      required: [id, kind, context, title, unreadCount, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        kind:
+          type: string
+          const: GAME
+        context:
+          $ref: '#/components/schemas/ContextConversationReference'
+        title:
+          type: string
+          minLength: 1
+          maxLength: 300
+        unreadCount:
+          type: integer
+          minimum: 0
+        updatedAt:
+          type: string
+          format: date-time
+        lastMessage:
+          $ref: '#/components/schemas/ConversationLastMessage'
+    ConversationSummary:
+      oneOf:
+        - $ref: '#/components/schemas/DirectConversationSummary'
+        - $ref: '#/components/schemas/GameChatConversationSummary'
+      discriminator:
+        propertyName: kind
+        mapping:
+          DIRECT: '#/components/schemas/DirectConversationSummary'
+          GAME: '#/components/schemas/GameChatConversationSummary'
     ConversationPage:
       type: object
       additionalProperties: false

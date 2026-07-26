@@ -92,4 +92,41 @@ describe('ChatsPage', () => {
 
     expect(onCreateDirect).toHaveBeenCalledWith('11111111-1111-4111-8111-111111111111');
   });
+
+  it('renders a GAME conversation by its canonical title and context', () => {
+    render(
+      <ChatsPage
+        page={{
+          items: [
+            {
+              id: conversationId,
+              kind: 'GAME',
+              context: {
+                type: 'GAME',
+                id: '44444444-4444-4444-8444-444444444444',
+              },
+              title: 'Игра в Сколково',
+              unreadCount: 2,
+              updatedAt: '2026-07-26T12:00:00.000Z',
+            },
+          ],
+        }}
+        messages={{ messages: [] }}
+        selectedConversationId={conversationId}
+        currentUserId={currentUserId}
+        busy={false}
+        error={null}
+        onCreateDirect={vi.fn()}
+        onSendMessage={vi.fn()}
+        onRefresh={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole('link', { name: /Игра в Сколково/ })).toHaveAttribute(
+      'href',
+      `/chats/${conversationId}`,
+    );
+    expect(screen.getByText('Чат игры')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Игра в Сколково' })).toBeInTheDocument();
+  });
 });

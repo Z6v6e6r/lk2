@@ -15,6 +15,17 @@ interface ChatsPageProps {
   readonly onRefresh: () => void;
 }
 
+type Conversation = ConversationPage['items'][number];
+
+function conversationTitle(conversation: Conversation | undefined): string {
+  if (!conversation) return 'Диалог';
+  return conversation.kind === 'DIRECT' ? conversation.participant.displayName : conversation.title;
+}
+
+function conversationKindLabel(conversation: Conversation | undefined): string {
+  return conversation?.kind === 'GAME' ? 'Чат игры' : 'Личный диалог';
+}
+
 export function ChatsPage({
   page,
   messages,
@@ -53,7 +64,7 @@ export function ChatsPage({
           <span>Чаты</span>
         </div>
         <h1>Чаты</h1>
-        <p>M1 · HTTP history. Realtime будет подключён отдельным этапом.</p>
+        <p>Личные диалоги и чаты ваших игр с восстановлением истории.</p>
       </header>
 
       {error ? (
@@ -88,7 +99,7 @@ export function ChatsPage({
                     href={`/chats/${conversation.id}`}
                     aria-current={conversation.id === selectedConversationId ? 'page' : undefined}
                   >
-                    <strong>{conversation.participant.displayName}</strong>
+                    <strong>{conversationTitle(conversation)}</strong>
                     <span>{conversation.lastMessage?.body ?? 'Новый диалог'}</span>
                     {conversation.unreadCount > 0 ? (
                       <small aria-label={`Непрочитанных: ${conversation.unreadCount}`}>
@@ -112,8 +123,8 @@ export function ChatsPage({
             <>
               <header>
                 <div>
-                  <small>Direct chat</small>
-                  <h2>{selected?.participant.displayName ?? 'Диалог'}</h2>
+                  <small>{conversationKindLabel(selected)}</small>
+                  <h2>{conversationTitle(selected)}</h2>
                 </div>
                 <button type="button" disabled={busy} onClick={onRefresh}>
                   Обновить

@@ -1,7 +1,9 @@
 import { createHash } from 'node:crypto';
 
 import type {
+  GameConversationReference,
   GameRepository,
+  MessagingRepository,
   ProfileSummaryRepository,
   StoredGameCardProjection,
 } from '@phub/database';
@@ -27,6 +29,7 @@ type CardReadRepository = Pick<
 >;
 type CardProfileRepository = Pick<ProfileSummaryRepository, 'getPhotoDeliveryIds'> &
   Partial<Pick<ProfileSummaryRepository, 'getDisplayNames' | 'getLevelValues'>>;
+type ConversationReadRepository = Pick<MessagingRepository, 'getGameConversationReferences'>;
 
 interface CardProfileData {
   readonly deliveryIds: ReadonlyMap<string, string>;
@@ -84,7 +87,7 @@ export interface PublicGameFilters {
 }
 
 export interface ViewerGameCard extends GameCardView {
-  readonly conversation: null;
+  readonly conversation: GameConversationReference | null;
 }
 
 interface CursorPayload {
@@ -256,6 +259,7 @@ export async function getPublicGameCard(input: {
 export async function listViewerGameCards(input: {
   readonly repository: CardReadRepository;
   readonly photoRepository?: CardProfileRepository;
+  readonly conversationRepository?: ConversationReadRepository;
   readonly tenantId: string;
   readonly viewerUserId: string;
   readonly scope: 'UPCOMING' | 'HISTORY';
@@ -287,10 +291,17 @@ export async function listViewerGameCards(input: {
       }),
     )
     .filter((card) => card.viewerRelation !== 'NONE' && card.viewerRelation !== 'ANONYMOUS');
+  const conversations = input.conversationRepository
+    ? await input.conversationRepository.getGameConversationReferences({
+        tenantId: input.tenantId,
+        userId: input.viewerUserId,
+        gameIds: cards.map((card) => card.id),
+      })
+    : new Map<string, GameConversationReference>();
   return {
     items: cards.map((card) => ({
       ...card,
-      conversation: null,
+      conversation: conversations.get(card.id) ?? null,
     })),
     nextCursor: page.next ? encodeCursor({ v: 1, queryHash: hash, ...page.next }) : null,
   };
@@ -299,6 +310,7 @@ export async function listViewerGameCards(input: {
 export async function getViewerGameCard(input: {
   readonly repository: CardReadRepository;
   readonly photoRepository?: CardProfileRepository;
+  readonly conversationRepository?: ConversationReadRepository;
   readonly tenantId: string;
   readonly viewerUserId: string;
   readonly gameId: string;
@@ -332,5 +344,12 @@ export async function getViewerGameCard(input: {
     now: input.now,
     viewerUserId: input.viewerUserId,
   });
-  return { ...card, conversation: null };
+  const conversations = input.conversationRepository
+    ? await input.conversationRepository.getGameConversationReferences({
+        tenantId: input.tenantId,
+        userId: input.viewerUserId,
+        gameIds: [card.id],
+      })
+    : new Map<string, GameConversationReference>();
+  return { ...card, conversation: conversations.get(card.id) ?? null };
 }

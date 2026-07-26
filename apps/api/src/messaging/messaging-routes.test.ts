@@ -68,6 +68,7 @@ function repository(overrides: Partial<MessagingRepository> = {}): MessagingRepo
         updatedAt: '2026-07-26T12:00:00.000Z',
       },
     ]),
+    getGameConversationReferences: vi.fn().mockResolvedValue(new Map()),
     createDirectConversation: vi.fn().mockResolvedValue({
       outcome: 'ok',
       conversation: {
@@ -156,12 +157,13 @@ describe('messaging User API', () => {
     expect(response.json()).toMatchObject({ code: 'MESSAGING_DISABLED' });
   });
 
-  it('keeps direct messaging closed when only the tenant HTTP gate is enabled', async () => {
+  it('keeps direct creation closed while allowing an empty gated conversation list', async () => {
     const app = await buildApp({
       config,
       logger: createLogger('messaging-api-test', 'silent'),
       pool: fakePool(),
       messagingRepository: repository({
+        listConversations: vi.fn().mockResolvedValue([]),
         getRuntimeSettings: vi.fn().mockResolvedValue({
           httpEnabled: true,
           directEnabled: false,
@@ -172,14 +174,25 @@ describe('messaging User API', () => {
     });
     apps.push(app);
 
-    const response = await app.inject({
+    const listResponse = await app.inject({
       method: 'GET',
       url: '/user/api/v1/local-padel/conversations',
       headers: { authorization: `Bearer ${await accessToken([])}` },
     });
+    const createResponse = await app.inject({
+      method: 'POST',
+      url: '/user/api/v1/local-padel/conversations/direct',
+      headers: {
+        authorization: `Bearer ${await accessToken()}`,
+        'idempotency-key': 'direct-command-disabled-0001',
+      },
+      payload: { otherUserId },
+    });
 
-    expect(response.statusCode).toBe(404);
-    expect(response.json()).toMatchObject({ code: 'DIRECT_MESSAGING_DISABLED' });
+    expect(listResponse.statusCode).toBe(200);
+    expect(listResponse.json()).toEqual({ items: [] });
+    expect(createResponse.statusCode).toBe(404);
+    expect(createResponse.json()).toMatchObject({ code: 'DIRECT_MESSAGING_DISABLED' });
   });
 
   it('issues a realtime ticket only when the realtime tenant gate is enabled', async () => {
@@ -249,6 +262,38 @@ describe('messaging User API', () => {
       expiresAt: '2026-07-26T12:00:30.000Z',
       correlationId: 'realtime-ticket-correlation-0001',
     });
+  });
+
+  it('issues the same short-lived ticket when only contextual messaging is active', async () => {
+    const issue = vi.fn().mockResolvedValue({
+      ticketId: '77777777-7777-4777-8777-777777777777',
+      ticket: 'signed-contextual-ticket',
+      expiresAt: '2026-07-26T12:00:30.000Z',
+    });
+    const app = await buildApp({
+      config,
+      logger: createLogger('messaging-api-test', 'silent'),
+      pool: fakePool(),
+      messagingRepository: repository({
+        getRuntimeSettings: vi.fn().mockResolvedValue({
+          httpEnabled: true,
+          directEnabled: false,
+          realtimeEnabled: true,
+          contextualEnabled: true,
+        }),
+      }),
+      realtimeTicketIssuer: { issue },
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/user/api/v1/local-padel/realtime/tickets',
+      headers: { authorization: `Bearer ${await accessToken([])}` },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ ticket: 'signed-contextual-ticket' });
   });
 
   it('returns only the authenticated member conversation list without caching', async () => {

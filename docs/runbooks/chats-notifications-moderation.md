@@ -87,6 +87,39 @@ Redis and must appear only in the first `authenticate` WebSocket frame. Each rea
 owns an exclusive auto-delete RabbitMQ queue, so every instance can notify its own connected
 clients. RabbitMQ carries identifiers and sequence only; clients recover content from HTTP.
 
+### GAME contextual chat M3.1 gate
+
+Deploy migration `0044_contextual_messaging_projection.sql`, API and worker while
+`contextual=false`. The worker may project new canonical `game.#` facts into hidden conversation
+rows, but User API, game cards and realtime remain closed until the tenant gate is enabled.
+
+Preview a bounded backfill. It selects at most 500 canonical PadlHub games and does not use Viva or
+activity-history projections:
+
+```bash
+npm run messaging:game-context:backfill -- \
+  --tenant-key=<internal-test-tenant> \
+  --actor-id=<padlhub-user-uuid> \
+  --limit=25
+```
+
+After reviewing the candidate count, apply the same window:
+
+```bash
+npm run messaging:game-context:backfill -- \
+  --tenant-key=<internal-test-tenant> \
+  --actor-id=<padlhub-user-uuid> \
+  --limit=25 \
+  --confirm=BACKFILL_GAME_CONVERSATIONS
+```
+
+Confirm that every conversation has `kind=GAME`, the PadlHub game UUID in `context_id`, active
+canonical participants only and an identifier-only projection outbox event. Then preview and apply
+`--contextual=on` with `messaging:runtime:set`. Verify the game detail deep-link, HTTP history/send,
+realtime gap recovery, join/leave membership changes and cancellation closure. Roll back only
+`--contextual=off`; DIRECT HTTP and realtime remain available. Do not enable TOURNAMENT or
+COMMUNITY through this gate until their own write-owner projectors are delivered.
+
 ### In-app runtime gate
 
 The in-app User API and projector are disabled when a tenant has no runtime-settings row. Preview a
@@ -287,7 +320,8 @@ channel before stopping the delivery worker during an incident.
 ## Required smoke tests
 
 - With all messaging gates off, every chat route returns `MESSAGING_DISABLED`; with only HTTP on,
-  direct creation and send return `DIRECT_MESSAGING_DISABLED`.
+  direct creation returns `DIRECT_MESSAGING_DISABLED` and conversation-specific operations return
+  the same non-disclosing 404 used for a non-member.
 - Create a direct conversation twice with one `Idempotency-Key`; verify one normalized user pair,
   one conversation and `replayed=true`. Reuse the key with another user and expect
   `IDEMPOTENCY_KEY_REUSED`.
@@ -306,6 +340,10 @@ channel before stopping the delivery worker during an incident.
 - Disconnect realtime, create messages, reconnect with `afterSequence`; the client fills the exact
   gap through HTTP without duplicate rendering.
 - Remove a test member and confirm both HTTP history and WebSocket subscribe reject access.
+- Backfill one GAME conversation with `contextual=false` and verify it is absent from conversation
+  lists and game cards. Enable the gate, verify the active participant sees the same PadlHub
+  conversation ID in both surfaces, then process leave and cancel facts and confirm membership
+  removal plus conversation closure.
 - Submit the same connector webhook twice and confirm one canonical message/external mapping.
 - Register, rotate and invalidate one Web Push subscription, APNs token and FCM token. Confirm a
   provider acceptance is not shown as `DISPLAYED` or `OPENED` until a client receipt arrives.

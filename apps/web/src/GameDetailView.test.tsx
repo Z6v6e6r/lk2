@@ -88,7 +88,10 @@ describe('GameDetailView', () => {
     expect(screen.queryByText('2 пары по 2 игрока')).toBeNull();
     expect(screen.queryByText('Выбирается по сетам')).toBeNull();
     expect(screen.queryByText(/Состав пар задаётся отдельно/i)).toBeNull();
-    expect(screen.getByRole('link', { name: 'Чат игры' })).toHaveAttribute('href', '/chats');
+    expect(screen.getByRole('link', { name: 'Чат игры' })).toHaveAttribute(
+      'href',
+      `/chats/${game.conversation?.conversationId}`,
+    );
     expect(screen.queryByText('Чат игры')).toBeNull();
     expect(screen.queryByRole('heading', { name: 'Пары и счёт по сетам' })).toBeNull();
 

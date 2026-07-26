@@ -563,6 +563,7 @@ export async function buildApp(options: BuildAppOptions) {
   });
   registerGameReadRoutes(app as unknown as FastifyInstance, {
     ...(options.gameReadRepository ? { repository: options.gameReadRepository } : {}),
+    ...(options.messagingRepository ? { conversationRepository: options.messagingRepository } : {}),
     ...(options.profilePhotoMediaRepository
       ? { photoRepository: options.profilePhotoMediaRepository }
       : {}),

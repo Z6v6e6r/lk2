@@ -512,8 +512,12 @@ function GameTab(props: {
           <p className="game-detail-state">{gameStateLabel(game.displayState)}</p>
         )}
 
-        {game.conversation || game.allowedActions.includes('OPEN_CHAT') ? (
-          <a className="game-detail-chat" href="/chats" aria-label="Чат игры">
+        {game.conversation ? (
+          <a
+            className="game-detail-chat"
+            href={`/chats/${game.conversation.conversationId}`}
+            aria-label="Чат игры"
+          >
             <ChatIcon />
             {game.conversation?.unreadCount ? <span>{game.conversation.unreadCount}</span> : null}
           </a>

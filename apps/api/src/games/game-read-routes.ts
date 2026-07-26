@@ -1,4 +1,4 @@
-import type { GameRepository, ProfileSummaryRepository } from '@phub/database';
+import type { GameRepository, MessagingRepository, ProfileSummaryRepository } from '@phub/database';
 import { GAME_KINDS, GAME_PLAYER_LEVELS, type GameKind, type GamePlayerLevel } from '@phub/games';
 import type { FastifyInstance, FastifyReply, FastifyRequest, preHandlerHookHandler } from 'fastify';
 
@@ -174,6 +174,7 @@ export function registerGameReadRoutes(
     readonly repository?: CardReadRepository;
     readonly photoRepository?: Pick<ProfileSummaryRepository, 'getPhotoDeliveryIds'> &
       Partial<Pick<ProfileSummaryRepository, 'getDisplayNames' | 'getLevelValues'>>;
+    readonly conversationRepository?: Pick<MessagingRepository, 'getGameConversationReferences'>;
     readonly publicTenantHandlers: readonly preHandlerHookHandler[];
     readonly authenticatedTenantHandlers: readonly preHandlerHookHandler[];
   },
@@ -242,6 +243,9 @@ export function registerGameReadRoutes(
         return await listViewerGameCards({
           repository: options.repository,
           ...(options.photoRepository ? { photoRepository: options.photoRepository } : {}),
+          ...(options.conversationRepository
+            ? { conversationRepository: options.conversationRepository }
+            : {}),
           tenantId: current.tenantId,
           viewerUserId: current.userId,
           scope: query.scope,
@@ -270,6 +274,9 @@ export function registerGameReadRoutes(
       const game = await getViewerGameCard({
         repository: options.repository,
         ...(options.photoRepository ? { photoRepository: options.photoRepository } : {}),
+        ...(options.conversationRepository
+          ? { conversationRepository: options.conversationRepository }
+          : {}),
         tenantId: current.tenantId,
         viewerUserId: current.userId,
         gameId: currentGameId,

@@ -40,18 +40,21 @@ async function requireMessagingGate(
   reply: FastifyReply,
   repository: MessagingRepository,
   tenantId: string,
-  capability: 'direct' | 'realtime' = 'direct',
+  capability: 'http' | 'direct' | 'realtime',
 ): Promise<boolean> {
   const settings = await repository.getRuntimeSettings(tenantId);
   if (!settings.httpEnabled) {
     sendApiError(request, reply, 404, 'MESSAGING_DISABLED', 'Раздел чатов не включён.');
     return false;
   }
-  if (!settings.directEnabled) {
+  if (capability === 'direct' && !settings.directEnabled) {
     sendApiError(request, reply, 404, 'DIRECT_MESSAGING_DISABLED', 'Личные диалоги не включены.');
     return false;
   }
-  if (capability === 'realtime' && !settings.realtimeEnabled) {
+  if (
+    capability === 'realtime' &&
+    (!settings.realtimeEnabled || (!settings.directEnabled && !settings.contextualEnabled))
+  ) {
     sendApiError(
       request,
       reply,
@@ -139,7 +142,9 @@ export function registerMessagingRoutes(
         return sendApiError(request, reply, 401, 'AUTH_REQUIRED', 'Требуется авторизация.');
       }
       if (!options.repository) return unavailable(request, reply);
-      if (!(await requireMessagingGate(request, reply, options.repository, current.tenantId))) {
+      if (
+        !(await requireMessagingGate(request, reply, options.repository, current.tenantId, 'http'))
+      ) {
         return;
       }
       const query = request.query as Record<string, unknown>;
@@ -173,7 +178,15 @@ export function registerMessagingRoutes(
         return sendApiError(request, reply, 401, 'AUTH_REQUIRED', 'Требуется авторизация.');
       }
       if (!options.repository) return unavailable(request, reply);
-      if (!(await requireMessagingGate(request, reply, options.repository, current.tenantId))) {
+      if (
+        !(await requireMessagingGate(
+          request,
+          reply,
+          options.repository,
+          current.tenantId,
+          'direct',
+        ))
+      ) {
         return;
       }
       const body = request.body as Record<string, unknown> | null;
@@ -225,7 +238,9 @@ export function registerMessagingRoutes(
         return sendApiError(request, reply, 401, 'AUTH_REQUIRED', 'Требуется авторизация.');
       }
       if (!options.repository) return unavailable(request, reply);
-      if (!(await requireMessagingGate(request, reply, options.repository, current.tenantId))) {
+      if (
+        !(await requireMessagingGate(request, reply, options.repository, current.tenantId, 'http'))
+      ) {
         return;
       }
       const conversationId = (request.params as { conversationId?: string }).conversationId;
@@ -271,7 +286,9 @@ export function registerMessagingRoutes(
         return sendApiError(request, reply, 401, 'AUTH_REQUIRED', 'Требуется авторизация.');
       }
       if (!options.repository) return unavailable(request, reply);
-      if (!(await requireMessagingGate(request, reply, options.repository, current.tenantId))) {
+      if (
+        !(await requireMessagingGate(request, reply, options.repository, current.tenantId, 'http'))
+      ) {
         return;
       }
       const conversationId = (request.params as { conversationId?: string }).conversationId;
@@ -324,7 +341,9 @@ export function registerMessagingRoutes(
         return sendApiError(request, reply, 401, 'AUTH_REQUIRED', 'Требуется авторизация.');
       }
       if (!options.repository) return unavailable(request, reply);
-      if (!(await requireMessagingGate(request, reply, options.repository, current.tenantId))) {
+      if (
+        !(await requireMessagingGate(request, reply, options.repository, current.tenantId, 'http'))
+      ) {
         return;
       }
       const conversationId = (request.params as { conversationId?: string }).conversationId;

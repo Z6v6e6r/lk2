@@ -14,10 +14,8 @@ export interface MessagingParticipant {
   readonly displayName: string;
 }
 
-export interface ConversationSummary {
+interface ConversationSummaryBase {
   readonly id: string;
-  readonly kind: 'DIRECT';
-  readonly participant: MessagingParticipant;
   readonly unreadCount: number;
   readonly updatedAt: string;
   readonly lastMessage?: {
@@ -26,6 +24,22 @@ export interface ConversationSummary {
     readonly createdAt: string;
   };
 }
+
+export interface DirectConversationSummary extends ConversationSummaryBase {
+  readonly kind: 'DIRECT';
+  readonly participant: MessagingParticipant;
+}
+
+export interface GameConversationSummary extends ConversationSummaryBase {
+  readonly kind: 'GAME';
+  readonly context: {
+    readonly type: 'GAME';
+    readonly id: string;
+  };
+  readonly title: string;
+}
+
+export type ConversationSummary = DirectConversationSummary | GameConversationSummary;
 
 export interface ConversationMessage {
   readonly id: string;
@@ -40,6 +54,11 @@ export interface ConversationMessage {
 export interface ConversationMessagePage {
   readonly messages: readonly ConversationMessage[];
   readonly nextAfterSequence?: number;
+}
+
+export interface GameConversationReference {
+  readonly conversationId: string;
+  readonly unreadCount: number;
 }
 
 export type CreateDirectConversationResult =
@@ -91,6 +110,11 @@ export interface MessagingRepository {
     readonly userId: string;
     readonly limit: number;
   }): Promise<readonly ConversationSummary[]>;
+  getGameConversationReferences(input: {
+    readonly tenantId: string;
+    readonly userId: string;
+    readonly gameIds: readonly string[];
+  }): Promise<ReadonlyMap<string, GameConversationReference>>;
   createDirectConversation(input: {
     readonly tenantId: string;
     readonly actorUserId: string;
@@ -151,9 +175,11 @@ interface RuntimeRow extends QueryResultRow {
 
 interface ConversationRow extends QueryResultRow {
   readonly id: string;
-  readonly kind: 'DIRECT';
-  readonly other_user_id: string;
-  readonly other_display_name: string;
+  readonly kind: 'DIRECT' | 'GAME';
+  readonly context_id: string | null;
+  readonly title: string | null;
+  readonly other_user_id: string | null;
+  readonly other_display_name: string | null;
   readonly unread_count: number | string;
   readonly updated_at: Date | string;
   readonly last_sequence: number | string | null;
@@ -177,6 +203,12 @@ interface MessageRow extends QueryResultRow {
 interface DirectCommandRow extends QueryResultRow {
   readonly other_user_id: string;
   readonly conversation_id: string;
+}
+
+interface GameConversationReferenceRow extends QueryResultRow {
+  readonly game_id: string;
+  readonly conversation_id: string;
+  readonly unread_count: number | string;
 }
 
 interface MemberRow extends QueryResultRow {
@@ -205,13 +237,8 @@ function sequence(value: number | string): number {
 }
 
 function mapConversation(row: ConversationRow): ConversationSummary {
-  return {
+  const base: ConversationSummaryBase = {
     id: row.id,
-    kind: row.kind,
-    participant: {
-      userId: row.other_user_id,
-      displayName: row.other_display_name,
-    },
     unreadCount: sequence(row.unread_count),
     updatedAt: timestamp(row.updated_at),
     ...(row.last_sequence !== null && row.last_body !== null && row.last_created_at !== null
@@ -223,6 +250,26 @@ function mapConversation(row: ConversationRow): ConversationSummary {
           },
         }
       : {}),
+  };
+  if (row.kind === 'GAME') {
+    if (!row.context_id || !row.title) throw new Error('GAME_CONVERSATION_CONTEXT_INVALID');
+    return {
+      ...base,
+      kind: 'GAME',
+      context: { type: 'GAME', id: row.context_id },
+      title: row.title,
+    };
+  }
+  if (!row.other_user_id || !row.other_display_name) {
+    throw new Error('DIRECT_CONVERSATION_PARTICIPANT_INVALID');
+  }
+  return {
+    ...base,
+    kind: 'DIRECT',
+    participant: {
+      userId: row.other_user_id,
+      displayName: row.other_display_name,
+    },
   };
 }
 
@@ -244,8 +291,14 @@ function mapMessage(row: MessageRow): ConversationMessage {
 const CONVERSATION_SELECT = `
   select conversation.id,
          conversation.kind,
+         conversation.context_id,
+         conversation.title,
          other_member.user_id as other_user_id,
-         coalesce(other_summary.display_name, 'Участник') as other_display_name,
+         case
+           when conversation.kind = 'DIRECT'
+             then coalesce(other_summary.display_name, 'Участник')
+           else null
+         end as other_display_name,
          greatest(
            (conversation.next_sequence - 1) - current_member.last_read_sequence,
            0
@@ -260,12 +313,20 @@ const CONVERSATION_SELECT = `
      and current_member.conversation_id = conversation.id
      and current_member.user_id = $2
      and current_member.state = 'ACTIVE'
-    join messaging.conversation_members other_member
-      on other_member.tenant_id = conversation.tenant_id
-     and other_member.conversation_id = conversation.id
-     and other_member.user_id is not null
-     and other_member.user_id <> $2
-     and other_member.state = 'ACTIVE'
+    join messaging.tenant_runtime_settings settings
+      on settings.tenant_id = conversation.tenant_id
+     and settings.http_enabled = true
+    left join lateral (
+      select member.tenant_id, member.user_id
+        from messaging.conversation_members member
+       where member.tenant_id = conversation.tenant_id
+         and member.conversation_id = conversation.id
+         and member.user_id is not null
+         and member.user_id <> $2
+         and member.state = 'ACTIVE'
+       order by member.user_id
+       limit 1
+    ) other_member on conversation.kind = 'DIRECT'
     left join profile.user_summaries other_summary
       on other_summary.tenant_id = other_member.tenant_id
      and other_summary.user_id = other_member.user_id
@@ -279,8 +340,11 @@ const CONVERSATION_SELECT = `
        limit 1
     ) last_message on true
    where conversation.tenant_id = $1
-     and conversation.kind = 'DIRECT'
-     and conversation.state = 'OPEN'`;
+     and conversation.state = 'OPEN'
+     and (
+       (conversation.kind = 'DIRECT' and settings.direct_enabled = true)
+       or (conversation.kind = 'GAME' and settings.contextual_enabled = true)
+     )`;
 
 async function getConversation(
   client: PoolClient,
@@ -361,6 +425,45 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
           [input.tenantId, input.userId, input.limit],
         );
         return result.rows.map(mapConversation);
+      });
+    },
+
+    getGameConversationReferences(input) {
+      if (input.gameIds.length === 0) return Promise.resolve(new Map());
+      return withTenantTransaction(pool, input.tenantId, async (client) => {
+        const result = await client.query<GameConversationReferenceRow>(
+          `select conversation.context_id as game_id,
+                  conversation.id as conversation_id,
+                  greatest(
+                    (conversation.next_sequence - 1) - member.last_read_sequence,
+                    0
+                  ) as unread_count
+             from messaging.tenant_runtime_settings settings
+             join messaging.conversations conversation
+               on conversation.tenant_id = settings.tenant_id
+              and conversation.kind = 'GAME'
+              and conversation.context_type = 'GAME'
+              and conversation.context_id = any($3::uuid[])
+              and conversation.state = 'OPEN'
+             join messaging.conversation_members member
+               on member.tenant_id = conversation.tenant_id
+              and member.conversation_id = conversation.id
+              and member.user_id = $2
+              and member.state = 'ACTIVE'
+            where settings.tenant_id = $1
+              and settings.http_enabled = true
+              and settings.contextual_enabled = true`,
+          [input.tenantId, input.userId, [...new Set(input.gameIds)]],
+        );
+        return new Map(
+          result.rows.map((row) => [
+            row.game_id,
+            {
+              conversationId: row.conversation_id,
+              unreadCount: sequence(row.unread_count),
+            },
+          ]),
+        );
       });
     },
 
@@ -492,12 +595,18 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
              join messaging.conversations conversation
                on conversation.tenant_id = member.tenant_id
               and conversation.id = member.conversation_id
+             join messaging.tenant_runtime_settings settings
+               on settings.tenant_id = conversation.tenant_id
+              and settings.http_enabled = true
             where member.tenant_id = $1
               and member.conversation_id = $2
               and member.user_id = $3
               and member.state = 'ACTIVE'
               and conversation.state = 'OPEN'
-              and conversation.kind = 'DIRECT'`,
+              and (
+                (conversation.kind = 'DIRECT' and settings.direct_enabled = true)
+                or (conversation.kind = 'GAME' and settings.contextual_enabled = true)
+              )`,
           [input.tenantId, input.conversationId, input.userId],
         );
         if (!member) return { outcome: 'not_found' };
@@ -537,21 +646,33 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
 
     sendMessage(input) {
       return withTenantTransaction(pool, input.tenantId, async (client) => {
-        const member = await queryOne<MemberRow>(
+        const locked = await queryOne<{ next_sequence: number | string }>(
           client,
-          `select member.id as member_id,
-                  member.last_read_sequence,
-                  conversation.next_sequence - 1 as last_sequence
+          `select conversation.next_sequence
+             from messaging.conversations conversation
+             join messaging.tenant_runtime_settings settings
+               on settings.tenant_id = conversation.tenant_id
+              and settings.http_enabled = true
+            where conversation.tenant_id = $1
+              and conversation.id = $2
+              and conversation.state = 'OPEN'
+              and (
+                (conversation.kind = 'DIRECT' and settings.direct_enabled = true)
+                or (conversation.kind = 'GAME' and settings.contextual_enabled = true)
+              )
+            for update of conversation`,
+          [input.tenantId, input.conversationId],
+        );
+        if (!locked) return { outcome: 'not_found' };
+        const member = await queryOne<{ member_id: string }>(
+          client,
+          `select member.id as member_id
              from messaging.conversation_members member
-             join messaging.conversations conversation
-               on conversation.tenant_id = member.tenant_id
-              and conversation.id = member.conversation_id
             where member.tenant_id = $1
               and member.conversation_id = $2
               and member.user_id = $3
               and member.state = 'ACTIVE'
-              and conversation.state = 'OPEN'
-              and conversation.kind = 'DIRECT'`,
+            for update of member`,
           [input.tenantId, input.conversationId, input.userId],
         );
         if (!member) return { outcome: 'not_found' };
@@ -587,15 +708,6 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
           return { outcome: 'ok', message: mapMessage(previous), replayed: true };
         }
 
-        const locked = await queryOne<{ next_sequence: number | string }>(
-          client,
-          `select next_sequence
-             from messaging.conversations
-            where tenant_id = $1 and id = $2 and state = 'OPEN' and kind = 'DIRECT'
-            for update`,
-          [input.tenantId, input.conversationId],
-        );
-        if (!locked) return { outcome: 'not_found' };
         const allocatedSequence = sequence(locked.next_sequence);
         const inserted = await queryOne<{ id: string }>(
           client,
@@ -683,12 +795,18 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
              join messaging.conversations conversation
                on conversation.tenant_id = member.tenant_id
               and conversation.id = member.conversation_id
+             join messaging.tenant_runtime_settings settings
+               on settings.tenant_id = conversation.tenant_id
+              and settings.http_enabled = true
             where member.tenant_id = $1
               and member.conversation_id = $2
               and member.user_id = $3
               and member.state = 'ACTIVE'
               and conversation.state = 'OPEN'
-              and conversation.kind = 'DIRECT'
+              and (
+                (conversation.kind = 'DIRECT' and settings.direct_enabled = true)
+                or (conversation.kind = 'GAME' and settings.contextual_enabled = true)
+              )
             for update of member`,
           [input.tenantId, input.conversationId, input.userId],
         );
@@ -791,7 +909,11 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
             where tenant_id = $1`,
           [input.tenantId],
         );
-        if (!settings?.http_enabled || !settings.direct_enabled || !settings.realtime_enabled) {
+        if (
+          !settings?.http_enabled ||
+          !settings.realtime_enabled ||
+          (!settings.direct_enabled && !settings.contextual_enabled)
+        ) {
           return { outcome: 'disabled' };
         }
         const row = await queryOne<{ latest_sequence: number | string }>(
@@ -805,9 +927,18 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
               and member.state = 'ACTIVE'
             where conversation.tenant_id = $1
               and conversation.id = $3
-              and conversation.kind = 'DIRECT'
-              and conversation.state = 'OPEN'`,
-          [input.tenantId, input.userId, input.conversationId],
+              and conversation.state = 'OPEN'
+              and (
+                (conversation.kind = 'DIRECT' and $4 = true)
+                or (conversation.kind = 'GAME' and $5 = true)
+              )`,
+          [
+            input.tenantId,
+            input.userId,
+            input.conversationId,
+            settings.direct_enabled,
+            settings.contextual_enabled,
+          ],
         );
         return row
           ? { outcome: 'ok', latestSequence: sequence(row.latest_sequence) }
@@ -823,8 +954,11 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
              join messaging.conversations conversation
                on conversation.tenant_id = settings.tenant_id
               and conversation.id = $2
-              and conversation.kind = 'DIRECT'
               and conversation.state = 'OPEN'
+              and (
+                (conversation.kind = 'DIRECT' and settings.direct_enabled = true)
+                or (conversation.kind = 'GAME' and settings.contextual_enabled = true)
+              )
              join messaging.messages message
                on message.tenant_id = conversation.tenant_id
               and message.conversation_id = conversation.id
@@ -839,7 +973,6 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
               and member.state = 'ACTIVE'
             where settings.tenant_id = $1
               and settings.http_enabled = true
-              and settings.direct_enabled = true
               and settings.realtime_enabled = true`,
           [input.tenantId, input.conversationId, input.messageId, input.sequence],
         );
