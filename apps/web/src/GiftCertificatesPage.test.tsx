@@ -107,7 +107,9 @@ describe('GiftCertificatesPage', () => {
     } satisfies GiftCertificateSaleGateway;
     render(<GiftCertificatesPage gateway={gateway} surface="public" />);
 
-    await screen.findByRole('heading', { name: 'Идеальный подарок без лишних хлопот' });
+    const title = await screen.findByRole('heading', { name: 'Идеальный подарок без хлопот' });
+    expect(screen.queryByText('Главная')).not.toBeInTheDocument();
+    expect(title.querySelector('.gift-sale-title-gradient')).toHaveTextContent('без хлопот');
     fireEvent.change(screen.getByLabelText('Ваша почта'), {
       target: { value: 'buyer@example.test' },
     });
@@ -139,6 +141,76 @@ describe('GiftCertificatesPage', () => {
       'href',
       '/public/api/v1/local-padel/gift-certificate-payment-sandbox/payment-id',
     );
+  });
+
+  it('renders the layered mobile intro in LK and connects its CTA to the existing designer', async () => {
+    const gateway = {
+      getCatalog: vi.fn().mockResolvedValue(catalog),
+      createOrder: vi.fn(),
+      createPayment: vi.fn(),
+      getOrder: vi.fn(),
+      downloadCertificate: vi.fn(),
+    } satisfies GiftCertificateSaleGateway;
+    const { container } = render(<GiftCertificatesPage gateway={gateway} surface="user" />);
+
+    expect(await screen.findByRole('heading', { name: 'Подарочная карта' })).toBeVisible();
+    expect(screen.getByRole('img', { name: 'Пример двух подарочных карт ПадлХАБ' })).toBeVisible();
+    expect(
+      screen.queryByRole('heading', { name: 'Идеальный подарок без хлопот' }),
+    ).not.toBeInTheDocument();
+
+    const decorations = container.querySelectorAll('.gift-sale-mobile-decor');
+    expect(decorations).toHaveLength(4);
+    for (const decoration of decorations) {
+      expect(decoration).toHaveAttribute('alt', '');
+      expect(decoration).toHaveAttribute('aria-hidden', 'true');
+    }
+
+    const scrollIntoView = vi.fn();
+    const matchMediaDescriptor = Object.getOwnPropertyDescriptor(window, 'matchMedia');
+    const scrollDescriptor = Object.getOwnPropertyDescriptor(Element.prototype, 'scrollIntoView');
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      value: vi.fn().mockReturnValue({ matches: true }),
+    });
+    Object.defineProperty(Element.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: scrollIntoView,
+    });
+
+    try {
+      fireEvent.click(screen.getByRole('button', { name: 'Перейти к дизайну' }));
+      expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'auto', block: 'start' });
+    } finally {
+      if (matchMediaDescriptor) {
+        Object.defineProperty(window, 'matchMedia', matchMediaDescriptor);
+      } else {
+        Reflect.deleteProperty(window, 'matchMedia');
+      }
+      if (scrollDescriptor) {
+        Object.defineProperty(Element.prototype, 'scrollIntoView', scrollDescriptor);
+      } else {
+        Reflect.deleteProperty(Element.prototype, 'scrollIntoView');
+      }
+    }
+  });
+
+  it('renders the selected certificate design with its denomination in the order summary', async () => {
+    const gateway = {
+      getCatalog: vi.fn().mockResolvedValue(catalog),
+      createOrder: vi.fn(),
+      createPayment: vi.fn(),
+      getOrder: vi.fn(),
+      downloadCertificate: vi.fn(),
+    } satisfies GiftCertificateSaleGateway;
+    render(<GiftCertificatesPage gateway={gateway} surface="user" />);
+
+    expect(await screen.findByRole('complementary', { name: 'Ваш выбор' })).toBeInTheDocument();
+    expect(
+      screen.getByRole('img', {
+        name: /Сертификат\. Номинал 5.000.₽/,
+      }),
+    ).toHaveAttribute('src', catalog.designs[0]!.imageUrl);
   });
 
   it('recovers a paid order and exposes its private PDF when issuance is ready', async () => {

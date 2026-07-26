@@ -14,6 +14,14 @@
 }
 
 /* Gift certificate sale is shared by the anonymous /giftcard entry and authenticated LK. */
+@font-face {
+  font-family: 'RFDewiExpanded';
+  src: url('./assets/home/rf-dewi-ultrabold.woff2') format('woff2');
+  font-display: swap;
+  font-style: normal;
+  font-weight: 900;
+}
+
 .gift-sale-shell {
   min-height: 100vh;
   padding: 0 0 100px;
@@ -21,6 +29,307 @@
   color: #1f1e20;
   background: #fafafa;
   font-family: 'Inter Display', Inter, sans-serif;
+}
+
+.gift-sale-mobile-intro {
+  --gift-safe-top: env(safe-area-inset-top, 0px);
+  --gift-safe-bottom: env(safe-area-inset-bottom, 0px);
+
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  min-height: 100svh;
+  min-height: 100dvh;
+  flex-direction: column;
+  overflow: hidden;
+  color: #fff;
+  background:
+    radial-gradient(circle at 76% 18%, rgb(212 190 255 / 52%), transparent 38%),
+    radial-gradient(circle at 8% 58%, rgb(141 104 246 / 24%), transparent 42%),
+    linear-gradient(158deg, #9d7ff5 0%, #b2a0f3 52%, #cbc9ef 100%);
+}
+
+.gift-sale-mobile-intro * {
+  box-sizing: border-box;
+}
+
+.gift-sale-mobile-header {
+  position: relative;
+  z-index: 20;
+  display: grid;
+  min-height: calc(56px + var(--gift-safe-top));
+  grid-template-columns: 44px minmax(0, 1fr) 44px;
+  align-items: center;
+  padding: var(--gift-safe-top) 12px 0;
+}
+
+.gift-sale-mobile-header h1 {
+  overflow: hidden;
+  margin: 0;
+  padding: 0 8px;
+  font-family: 'Inter Display', Inter, sans-serif;
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.2;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gift-sale-mobile-back {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  border: 1px solid rgb(255 255 255 / 18%);
+  border-radius: 14px;
+  color: inherit;
+  background: rgb(255 255 255 / 10%);
+  text-decoration: none;
+  -webkit-tap-highlight-color: transparent;
+  backdrop-filter: blur(12px);
+}
+
+.gift-sale-mobile-back:active {
+  transform: scale(0.96);
+}
+
+.gift-sale-mobile-header-spacer {
+  width: 44px;
+  height: 44px;
+}
+
+.gift-sale-mobile-hero {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  min-height: 0;
+  flex: 1;
+  grid-template-rows: minmax(330px, 1fr) auto;
+}
+
+.gift-sale-mobile-visual {
+  position: relative;
+  width: min(100%, 480px);
+  min-height: 330px;
+  margin: 0 auto;
+}
+
+.gift-sale-mobile-cards {
+  position: absolute;
+  z-index: 4;
+  top: 50%;
+  left: 50%;
+  display: block;
+  width: min(102vw, 440px);
+  max-width: none;
+  height: auto;
+  transform: translate(-52%, -50%) rotate(-1deg);
+  filter: drop-shadow(0 22px 30px rgb(55 29 109 / 24%));
+  user-select: none;
+}
+
+.gift-sale-mobile-decor {
+  position: absolute;
+  z-index: 2;
+  display: block;
+  height: auto;
+  pointer-events: none;
+  user-select: none;
+  filter: drop-shadow(0 12px 18px rgb(61 34 124 / 18%));
+}
+
+.gift-sale-mobile-heart-top {
+  top: 10px;
+  left: -22px;
+  width: 92px;
+  transform: rotate(-13deg);
+  animation: gift-sale-mobile-float-a 7s ease-in-out infinite;
+}
+
+.gift-sale-mobile-coin-top {
+  top: 28px;
+  right: -12px;
+  width: 108px;
+  transform: rotate(8deg);
+  animation: gift-sale-mobile-float-b 8s ease-in-out infinite;
+}
+
+.gift-sale-mobile-coin-side {
+  right: -48px;
+  bottom: 16px;
+  width: 116px;
+  transform: rotate(-8deg);
+  animation: gift-sale-mobile-float-a 9s ease-in-out -2s infinite;
+}
+
+.gift-sale-mobile-heart-bottom {
+  bottom: -16px;
+  left: -26px;
+  width: 90px;
+  opacity: 0.92;
+  transform: rotate(17deg);
+  animation: gift-sale-mobile-float-b 7.5s ease-in-out -1s infinite;
+}
+
+.gift-sale-mobile-plus {
+  position: absolute;
+  z-index: 6;
+  right: 18%;
+  bottom: 16%;
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  color: rgb(255 255 255 / 72%);
+}
+
+.gift-sale-mobile-content {
+  position: relative;
+  z-index: 10;
+  width: min(100%, 480px);
+  margin: 0 auto;
+  padding: 4px 20px calc(18px + var(--gift-safe-bottom));
+}
+
+.gift-sale-mobile-content p {
+  max-width: 350px;
+  margin: 0 auto 18px;
+  font-family: 'Inter Display', Inter, sans-serif;
+  font-size: 16px;
+  font-weight: 400;
+  letter-spacing: 0.01em;
+  line-height: 1.45;
+  text-align: center;
+  text-wrap: balance;
+}
+
+.gift-sale-mobile-content button {
+  display: grid;
+  width: 100%;
+  min-height: 54px;
+  place-items: center;
+  padding: 12px 20px;
+  border: 1.5px solid rgb(255 255 255 / 90%);
+  border-radius: 17px;
+  color: #fff;
+  background: rgb(255 255 255 / 8%);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 12%);
+  cursor: pointer;
+  font-family: 'Inter Display', Inter, sans-serif;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  line-height: 1;
+  text-transform: uppercase;
+  -webkit-tap-highlight-color: transparent;
+  backdrop-filter: blur(12px);
+}
+
+.gift-sale-mobile-content button:active {
+  transform: scale(0.985);
+  background: rgb(255 255 255 / 16%);
+}
+
+.gift-sale-mobile-back:focus-visible,
+.gift-sale-mobile-content button:focus-visible {
+  outline: 3px solid rgb(255 255 255 / 72%);
+  outline-offset: 2px;
+}
+
+.gift-sale-mobile-chevron {
+  display: grid;
+  width: max-content;
+  margin: 18px auto 0;
+  place-items: center;
+  color: rgb(255 255 255 / 88%);
+}
+
+@keyframes gift-sale-mobile-float-a {
+  0%,
+  100% {
+    translate: 0 0;
+  }
+
+  50% {
+    translate: 0 -8px;
+  }
+}
+
+@keyframes gift-sale-mobile-float-b {
+  0%,
+  100% {
+    translate: 0 0;
+  }
+
+  50% {
+    translate: 5px -6px;
+  }
+}
+
+@media (max-width: 359px) {
+  .gift-sale-mobile-hero {
+    grid-template-rows: minmax(286px, 1fr) auto;
+  }
+
+  .gift-sale-mobile-visual {
+    min-height: 286px;
+  }
+
+  .gift-sale-mobile-cards {
+    width: min(105vw, 390px);
+  }
+
+  .gift-sale-mobile-heart-top {
+    width: 76px;
+  }
+
+  .gift-sale-mobile-coin-top {
+    width: 92px;
+  }
+
+  .gift-sale-mobile-content p {
+    font-size: 15px;
+  }
+}
+
+@media (min-width: 430px) {
+  .gift-sale-mobile-cards {
+    width: min(96vw, 470px);
+  }
+
+  .gift-sale-mobile-content {
+    padding-right: 28px;
+    padding-left: 28px;
+  }
+}
+
+@media (max-height: 700px) {
+  .gift-sale-mobile-hero {
+    grid-template-rows: minmax(250px, 1fr) auto;
+  }
+
+  .gift-sale-mobile-visual {
+    min-height: 250px;
+  }
+
+  .gift-sale-mobile-cards {
+    width: min(88vw, 370px);
+  }
+
+  .gift-sale-mobile-content p {
+    margin-bottom: 12px;
+  }
+
+  .gift-sale-mobile-chevron {
+    margin-top: 12px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gift-sale-mobile-decor {
+    animation: none;
+  }
 }
 
 .gift-sale-nav {
@@ -68,30 +377,11 @@
   display: grid;
   min-height: 255px;
   max-width: 1210px;
-  grid-template-columns: 250px minmax(0, 1fr);
-  gap: 52px;
+  grid-template-columns: minmax(0, 1fr);
   align-items: center;
   padding: 48px 34px 38px;
   margin: 0 auto;
   background: #fafafa;
-}
-
-.gift-sale-breadcrumbs {
-  display: flex;
-  gap: 10px;
-  align-items: center;
-  color: #b7b7b7;
-  font-family: 'Source Code Pro', monospace;
-  font-size: 10px;
-  text-transform: uppercase;
-}
-
-.gift-sale-breadcrumbs strong {
-  overflow: hidden;
-  color: #1f1e20;
-  font-weight: 500;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .gift-sale-summary small,
@@ -104,20 +394,40 @@
 
 .gift-sale-header h1 {
   margin: 0;
-  font-family: 'RF Dewi', sans-serif;
+  font-family: 'RFDewiExpanded', 'RF Dewi', Arial, sans-serif;
   font-size: clamp(42px, 5.2vw, 72px);
   font-weight: 900;
-  letter-spacing: -0.055em;
-  line-height: 0.88;
+  letter-spacing: -0.025em;
+  line-height: 1.16;
   text-transform: uppercase;
 }
 
-.gift-sale-header h1 span {
+.gift-sale-title-gradient {
   display: block;
-  color: #9676ff;
-  background: linear-gradient(90deg, #c17aff 0%, #9676ff 42%, #769dff 100%);
+  background: linear-gradient(-45deg, #9676ff, #769dff, #9676ff, #c17aff);
+  background-size: 400% 400%;
   background-clip: text;
+  animation: gift-sale-title-gradient-shift 8s ease infinite;
+  -webkit-box-decoration-break: clone;
   -webkit-text-fill-color: transparent;
+}
+
+@keyframes gift-sale-title-gradient-shift {
+  0%,
+  100% {
+    background-position: 0% 50%;
+  }
+
+  50% {
+    background-position: 100% 50%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gift-sale-title-gradient {
+    background-position: 50% 50%;
+    animation: none;
+  }
 }
 
 .gift-sale-hero {
@@ -534,6 +844,10 @@
   font-size: 28px;
 }
 
+.gift-sale-summary > .gift-sale-summary-card {
+  display: none;
+}
+
 .gift-sale-terms {
   display: flex;
   align-items: flex-start;
@@ -738,6 +1052,70 @@
   .gift-sale-ready a,
   .gift-sale-ready button {
     min-width: 0;
+  }
+}
+
+@media (max-width: 767px) {
+  .gift-sale-denomination-picker {
+    display: none;
+  }
+
+  .gift-sale-summary {
+    display: block;
+    padding: 0;
+    margin: 36px 20px 0;
+    color: #fff;
+    background: transparent;
+  }
+
+  .gift-sale-summary > .gift-sale-summary-copy,
+  .gift-sale-summary > .gift-sale-summary-amount {
+    display: none;
+  }
+
+  .gift-sale-summary > .gift-sale-summary-card {
+    position: relative;
+    display: block;
+    aspect-ratio: 1600 / 1004;
+    overflow: hidden;
+    border-radius: 18px;
+    background: #1f1e20;
+    box-shadow: 0 18px 42px rgb(31 30 32 / 18%);
+  }
+
+  .gift-sale-summary-card::after {
+    position: absolute;
+    z-index: 1;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    height: 42%;
+    background: linear-gradient(180deg, transparent, rgb(10 8 18 / 64%));
+    content: '';
+    pointer-events: none;
+  }
+
+  .gift-sale-summary-card img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+
+  .gift-sale-summary-card-amount {
+    position: absolute;
+    z-index: 2;
+    right: 22px;
+    bottom: 18px;
+    color: #fff;
+    font-family: 'RF Dewi', sans-serif;
+    font-size: clamp(24px, 7.5vw, 38px);
+    font-variant-numeric: tabular-nums;
+    font-weight: 700;
+    letter-spacing: -0.04em;
+    line-height: 1;
+    text-shadow: 0 2px 12px rgb(0 0 0 / 42%);
+    white-space: nowrap;
   }
 }
 

@@ -7,6 +7,11 @@ import type {
   GiftCertificatePaymentIntent,
   PublicGiftCertificateCatalog,
 } from './auth-gateway.js';
+import giftCardStackUrl from './assets/gift-certificates/gift-card-stack.webp';
+import glassHeartUrl from './assets/gift-certificates/glass-heart.webp';
+import heartCoinFlatUrl from './assets/gift-certificates/heart-coin-flat.webp';
+import heartCoinSideUrl from './assets/gift-certificates/heart-coin-side.webp';
+import { GiftCardNominalStep } from './GiftCardNominalStep.js';
 
 export interface GiftCertificateSaleGateway {
   readonly getCatalog: () => Promise<PublicGiftCertificateCatalog>;
@@ -32,6 +37,13 @@ function rubles(amountMinor: number): string {
     currency: 'RUB',
     maximumFractionDigits: 0,
   }).format(amountMinor / 100);
+}
+
+function scrollToStep(id: string): void {
+  const target = document.getElementById(id);
+  if (!target) return;
+  const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  target.scrollIntoView({ behavior: reducedMotion ? 'auto' : 'smooth', block: 'start' });
 }
 
 function errorMessage(error: unknown): string {
@@ -219,44 +231,129 @@ export function GiftCertificatesPage(props: {
 
   return (
     <main className="gift-sale-shell">
-      <nav className="gift-sale-nav" aria-label="Навигация витрины сертификатов">
-        <a href={props.surface === 'user' ? '/' : 'https://padlhub.ru/'} aria-label="Вернуться">
-          <span aria-hidden="true">←</span>
-        </a>
-        <span className="gift-sale-nav-mark" aria-hidden="true">
-          PH
-        </span>
-        <a href={props.surface === 'user' ? '/' : '/gift-certificates'}>
-          {props.surface === 'user' ? 'Личный кабинет' : 'Начать играть'}
-        </a>
-      </nav>
+      {props.surface === 'user' ? (
+        <section className="gift-sale-mobile-intro">
+          <header className="gift-sale-mobile-header">
+            <a className="gift-sale-mobile-back" href="/" aria-label="Вернуться на Главную">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path
+                  d="M15 5 8 12l7 7"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </a>
+            <h1>Подарочная карта</h1>
+            <span className="gift-sale-mobile-header-spacer" aria-hidden="true" />
+          </header>
 
-      <header className="gift-sale-header">
-        <div className="gift-sale-breadcrumbs">
-          <span>Главная</span>
-          <span>/</span>
-          <strong>{catalog.title}</strong>
-        </div>
-        <h1>
-          Идеальный подарок <span>без лишних хлопот</span>
-        </h1>
-      </header>
+          <section className="gift-sale-mobile-hero" aria-labelledby="gift-sale-mobile-description">
+            <div className="gift-sale-mobile-visual">
+              <img
+                className="gift-sale-mobile-decor gift-sale-mobile-heart-top"
+                src={glassHeartUrl}
+                alt=""
+                aria-hidden="true"
+                draggable={false}
+              />
+              <img
+                className="gift-sale-mobile-decor gift-sale-mobile-coin-top"
+                src={heartCoinFlatUrl}
+                alt=""
+                aria-hidden="true"
+                draggable={false}
+              />
+              <img
+                className="gift-sale-mobile-decor gift-sale-mobile-coin-side"
+                src={heartCoinSideUrl}
+                alt=""
+                aria-hidden="true"
+                draggable={false}
+              />
+              <img
+                className="gift-sale-mobile-decor gift-sale-mobile-heart-bottom"
+                src={glassHeartUrl}
+                alt=""
+                aria-hidden="true"
+                draggable={false}
+              />
+              <span className="gift-sale-mobile-plus" aria-hidden="true">
+                <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+                  <path
+                    d="M9 4v10M4 9h10"
+                    stroke="currentColor"
+                    strokeWidth="1.5"
+                    strokeLinecap="round"
+                  />
+                </svg>
+              </span>
+              <img
+                className="gift-sale-mobile-cards"
+                src={giftCardStackUrl}
+                alt="Пример двух подарочных карт ПадлХАБ"
+                draggable={false}
+                fetchPriority="high"
+              />
+            </div>
 
-      <section className="gift-sale-hero" aria-labelledby="gift-sale-hero-copy">
-        <div className="gift-sale-hero-card" aria-hidden="true">
-          {selectedDesign ? <img src={selectedDesign.imageUrl} alt="" /> : null}
-        </div>
-        <div className="gift-sale-hero-coin gift-sale-hero-coin--left" aria-hidden="true">
-          ×
-        </div>
-        <div className="gift-sale-hero-coin gift-sale-hero-coin--right" aria-hidden="true">
-          ×
-        </div>
-        <div className="gift-sale-hero-copy" id="gift-sale-hero-copy">
-          <p>Соберите в конструкторе ниже дизайн подарочной карты и порадуйте своих близких</p>
-          <a href="#gift-design-builder">Перейти к дизайну</a>
-        </div>
-      </section>
+            <div className="gift-sale-mobile-content">
+              <p id="gift-sale-mobile-description">
+                Собери в конструкторе дизайн подарочной карты и порадуй своих близких
+              </p>
+              <button type="button" onClick={() => scrollToStep('gift-design-builder')}>
+                Перейти к дизайну
+              </button>
+              <span className="gift-sale-mobile-chevron" aria-hidden="true">
+                <svg width="32" height="18" viewBox="0 0 32 18" fill="none">
+                  <path
+                    d="M2 2l14 13L30 2"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              </span>
+            </div>
+          </section>
+        </section>
+      ) : (
+        <>
+          <nav className="gift-sale-nav" aria-label="Навигация витрины сертификатов">
+            <a href="https://padlhub.ru/" aria-label="Вернуться">
+              <span aria-hidden="true">←</span>
+            </a>
+            <span className="gift-sale-nav-mark" aria-hidden="true">
+              PH
+            </span>
+            <a href="/gift-certificates">Начать играть</a>
+          </nav>
+
+          <header className="gift-sale-header">
+            <h1>
+              Идеальный подарок <span className="gift-sale-title-gradient">без хлопот</span>
+            </h1>
+          </header>
+
+          <section className="gift-sale-hero" aria-labelledby="gift-sale-hero-copy">
+            <div className="gift-sale-hero-card" aria-hidden="true">
+              {selectedDesign ? <img src={selectedDesign.imageUrl} alt="" /> : null}
+            </div>
+            <div className="gift-sale-hero-coin gift-sale-hero-coin--left" aria-hidden="true">
+              ×
+            </div>
+            <div className="gift-sale-hero-coin gift-sale-hero-coin--right" aria-hidden="true">
+              ×
+            </div>
+            <div className="gift-sale-hero-copy" id="gift-sale-hero-copy">
+              <p>Соберите в конструкторе ниже дизайн подарочной карты и порадуйте своих близких</p>
+              <a href="#gift-design-builder">Перейти к дизайну</a>
+            </div>
+          </section>
+        </>
+      )}
 
       {recoveredOrder ? (
         <section className="gift-sale-ready gift-sale-fulfillment" role="status">
@@ -329,7 +426,7 @@ export function GiftCertificatesPage(props: {
           </div>
 
           <footer className="gift-sale-builder-footer">
-            <div className="gift-sale-design-picker">
+            <div className="gift-sale-design-picker" id="gift-design-step">
               <span className="gift-sale-step-pill">02&nbsp;&nbsp;|&nbsp;&nbsp;Дизайн</span>
               <div className="gift-sale-designs">
                 {visibleDesigns.map((design) => (
@@ -368,10 +465,15 @@ export function GiftCertificatesPage(props: {
                 ))}
               </div>
             </div>
+            <GiftCardNominalStep
+              denominations={catalog.denominations}
+              value={denominationId || null}
+              onChange={setDenominationId}
+            />
           </footer>
         </section>
 
-        <section className="gift-sale-section gift-sale-checkout">
+        <section className="gift-sale-section gift-sale-checkout" id="gift-checkout-step">
           <div className="gift-sale-section-title">
             <span>04</span>
             <div>
@@ -452,12 +554,27 @@ export function GiftCertificatesPage(props: {
           </div>
         </section>
 
-        <aside className="gift-sale-summary">
-          <div>
+        <aside className="gift-sale-summary" aria-label="Ваш выбор">
+          {selectedDesign ? (
+            <div className="gift-sale-summary-card">
+              <img
+                src={selectedDesign.imageUrl}
+                alt={`${selectedDesign.alt}. Номинал ${
+                  selectedDenomination ? rubles(selectedDenomination.amountMinor) : 'не выбран'
+                }`}
+              />
+              <strong className="gift-sale-summary-card-amount" aria-hidden="true">
+                {selectedDenomination ? rubles(selectedDenomination.amountMinor) : '—'}
+              </strong>
+            </div>
+          ) : null}
+          <div className="gift-sale-summary-copy">
             <small>Ваш выбор</small>
             <strong>{selectedDesign?.title ?? 'Дизайн'}</strong>
           </div>
-          <strong>{selectedDenomination ? rubles(selectedDenomination.amountMinor) : '—'}</strong>
+          <strong className="gift-sale-summary-amount">
+            {selectedDenomination ? rubles(selectedDenomination.amountMinor) : '—'}
+          </strong>
         </aside>
         <label className="gift-sale-terms">
           <input
