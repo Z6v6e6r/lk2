@@ -7,7 +7,7 @@
 | Foundation           | complete                             | Tenant-scoped PostgreSQL schema, RLS/FORCE RLS, audit and identifier-only outbox |
 | M1 direct HTTP       | complete                             | Create/list direct conversations, ordered history/send and monotonic read cursor |
 | M2 direct realtime   | Nano canary active                   | Single-use ticket, member subscription, RabbitMQ fanout and HTTP gap recovery    |
-| M3 GAME context      | implementation complete, runtime off | Canonical membership, gated API/Web link and bounded audited backfill            |
+| M3 GAME context      | Nano canary active; auth E2E pending | Canonical membership, gated API/Web link and bounded audited backfill            |
 | In-app notifications | complete, separately gated           | Inbox, unread/read cursor and manual CUP delivery                                |
 | Web Push             | complete, separately gated           | VAPID registration/delivery with provider and tenant gates                       |
 
@@ -16,11 +16,12 @@ reviewed operation.
 
 ## Remaining stages
 
-1. **M3.1 GAME contextual canary.** Deploy the completed worker/API/Web slice with
-   `contextual=false`, preview and apply one bounded internal-tenant backfill, exercise
-   join/leave/cancel and only then enable `contextual` for that tenant. The projector consumes
-   canonical `game.#` facts, rereads `games.games` plus `games.participations`, deduplicates each
-   event and publishes only PadlHub identifiers.
+1. **M3.1 GAME contextual canary validation.** Nano runs release
+   `e539731705213fd64a16f024c0d794d4f654a21a`; one reviewed `limit=25` backfill window projected
+   25 conversations and `contextual` is enabled only for `local-padel`. Complete the authenticated
+   two-browser send/reconnect journey plus join/leave/cancel and outsider checks before declaring
+   M3.1 complete. The projector consumes canonical `game.#` facts, rereads `games.games` plus
+   `games.participations`, deduplicates each event and publishes only PadlHub identifiers.
 2. **M3.2 COMMUNITY contextual chats.** Add the explicit owner command and canonical
    `communities.memberships` projector with the same isolation and lifecycle guarantees.
 3. **M3.3 TOURNAMENT contextual chats.** First deliver a canonical tournament aggregate and
