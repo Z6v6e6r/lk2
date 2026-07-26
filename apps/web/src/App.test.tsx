@@ -737,19 +737,21 @@ describe('PadlHub web authentication', () => {
     expect(gateway.getPlayerProfile).not.toHaveBeenCalled();
   });
 
-  it('opens a booking game card through the viewer-aware game details route', async () => {
+  it('opens a booking card from the same upcoming-bookings snapshot', async () => {
     const gameId = '751fe6a8-b0b1-4b2b-873d-a2d785c4e191';
     window.history.replaceState({}, '', `/bookings/${gameId}`);
     const gateway = createGateway({ restoreSession: vi.fn().mockResolvedValue(session) });
 
     render(<App gateway={gateway} tenantKey="padlhub" />);
 
-    expect(await screen.findByRole('heading', { name: 'Детали матча' })).toBeVisible();
+    expect(await screen.findByRole('heading', { name: 'Детали записи' })).toBeVisible();
+    expect(screen.getByRole('heading', { name: 'Американо · уровень C' })).toBeVisible();
     expect(screen.getByRole('link', { name: 'Назад к записям' })).toHaveAttribute(
       'href',
       '/bookings',
     );
-    expect(gateway.getGame).toHaveBeenCalledWith(gameId);
+    expect(gateway.getUpcomingBookings).toHaveBeenCalledOnce();
+    expect(gateway.getGame).not.toHaveBeenCalled();
     expect(gateway.getHomeDashboard).not.toHaveBeenCalled();
     expect(screen.queryByRole('heading', { name: 'Страница не найдена' })).not.toBeInTheDocument();
   });

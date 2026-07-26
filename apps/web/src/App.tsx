@@ -56,7 +56,7 @@ type ProtectedRoute =
   | { readonly kind: 'home' }
   | { readonly kind: 'profile'; readonly userId?: string }
   | { readonly kind: 'bookings' }
-  | { readonly kind: 'booking'; readonly gameId: string }
+  | { readonly kind: 'booking'; readonly bookingId: string }
   | { readonly kind: 'chats'; readonly conversationId?: string }
   | { readonly kind: 'notifications' }
   | { readonly kind: 'communities' }
@@ -88,7 +88,7 @@ function resolveProtectedRoute(pathname: string): ProtectedRoute {
   const bookingMatch = normalizedPath.match(
     /^\/bookings\/([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i,
   );
-  if (bookingMatch?.[1]) return { kind: 'booking', gameId: bookingMatch[1] };
+  if (bookingMatch?.[1]) return { kind: 'booking', bookingId: bookingMatch[1] };
   if (normalizedPath === '/chats') return { kind: 'chats' };
   const chatMatch = normalizedPath.match(
     /^\/chats\/([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i,
@@ -541,7 +541,7 @@ export function App({ gateway, tenantKey, realtimeBaseUrl }: AppProps): React.JS
         active = false;
       };
     }
-    if (protectedRoute.kind === 'bookings') {
+    if (protectedRoute.kind === 'bookings' || protectedRoute.kind === 'booking') {
       void gateway.getUpcomingBookings().then(
         (bookings) => {
           if (active) {
@@ -1168,7 +1168,7 @@ export function App({ gateway, tenantKey, realtimeBaseUrl }: AppProps): React.JS
         />
       );
     }
-    if (protectedRoute.kind === 'bookings') {
+    if (protectedRoute.kind === 'bookings' || protectedRoute.kind === 'booking') {
       if (!upcomingBookings) {
         return (
           <main className="app-shell app-shell-loading" aria-labelledby="bookings-loading-title">
@@ -1195,6 +1195,7 @@ export function App({ gateway, tenantKey, realtimeBaseUrl }: AppProps): React.JS
           tenantName={context.tenant.name}
           loadHistory={gateway.getActivityHistory}
           loadRecommendations={() => gateway.listBookingRecommendations(20)}
+          {...(protectedRoute.kind === 'booking' ? { bookingId: protectedRoute.bookingId } : {})}
         />
       );
     }
@@ -1317,18 +1318,11 @@ export function App({ gateway, tenantKey, realtimeBaseUrl }: AppProps): React.JS
       }
       return <LocationDetailPage location={locationDetail} />;
     }
-    if (
-      protectedRoute.kind === 'games' ||
-      protectedRoute.kind === 'game' ||
-      protectedRoute.kind === 'booking'
-    ) {
+    if (protectedRoute.kind === 'games' || protectedRoute.kind === 'game') {
       return (
         <GamesPage
           gateway={gateway}
-          {...(protectedRoute.kind === 'game' || protectedRoute.kind === 'booking'
-            ? { gameId: protectedRoute.gameId }
-            : {})}
-          {...(protectedRoute.kind === 'booking' ? { detailsOrigin: 'bookings' as const } : {})}
+          {...(protectedRoute.kind === 'game' ? { gameId: protectedRoute.gameId } : {})}
         />
       );
     }

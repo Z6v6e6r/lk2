@@ -19,7 +19,27 @@ const bookings: UserUpcomingBookings = {
       startsAt: '2026-07-20T07:00:00.000Z',
       venue: 'Селигерская',
       status: 'confirmed',
-      route: '/games/751fe6a8-b0b1-4b2b-873d-a2d785c4e191',
+      route: '/bookings/751fe6a8-b0b1-4b2b-873d-a2d785c4e191',
+      endsAt: '2026-07-20T08:30:00.000Z',
+      game: {
+        type: 'friendly',
+        courtName: 'Корт №3',
+        station: {
+          id: 'a8df730b-6a67-41a5-8772-48bca84f73bc',
+          title: 'Селигерская',
+          route: '/locations/a8df730b-6a67-41a5-8772-48bca84f73bc',
+        },
+      },
+      participants: [
+        {
+          profileId: '00000000-0000-4000-8000-000000000001',
+          displayName: 'Анна Петрова',
+          firstName: 'Анна',
+          lastName: 'Петрова',
+          level: 'C',
+        },
+      ],
+      openSlots: 1,
     },
   ],
 };
@@ -82,5 +102,27 @@ describe('BookingsPage', () => {
 
     await vi.waitFor(() => expect(loadHistory).toHaveBeenCalledOnce());
     expect(screen.getByRole('tab', { name: 'История' })).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('renders booking details from the same immutable upcoming snapshot', () => {
+    render(
+      <BookingsPage
+        bookingId={bookings.items[0]!.id}
+        bookings={bookings}
+        tenantName="ПадлХАБ"
+        loadHistory={vi.fn()}
+        loadRecommendations={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole('heading', { name: 'Детали записи' })).toBeVisible();
+    expect(screen.getByRole('heading', { name: 'Утренняя игра' })).toBeVisible();
+    expect(screen.getByText('Корт №3')).toBeVisible();
+    expect(screen.getByText('Дружеская игра')).toBeVisible();
+    expect(screen.getByRole('heading', { name: 'Участники' })).toBeVisible();
+    expect(screen.getByRole('link', { name: /Анна Петрова/ })).toHaveAttribute(
+      'href',
+      '/profile/00000000-0000-4000-8000-000000000001',
+    );
   });
 });
