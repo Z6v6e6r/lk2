@@ -21,4 +21,6 @@ export * from './admin-notification-repository.js';
 export * from './location-repository.js';
 export * from './location-media-repository.js';
 export * from './profile-privacy-repository.js';
+export * from './profile-friendship-repository.js';
+export * from './profile-level-history-repository.js';
 export * from './profile-summary-repository.js';

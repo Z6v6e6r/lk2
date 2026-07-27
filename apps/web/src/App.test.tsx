@@ -260,6 +260,17 @@ function createGateway(overrides: Partial<AuthGateway> = {}): AuthGateway {
     getPlayerProfile: vi.fn().mockResolvedValue(userProfile),
     getProfilePrivacy: vi.fn().mockResolvedValue(profilePrivacy),
     updateProfilePrivacy: vi.fn().mockResolvedValue(profilePrivacy),
+    listProfileFriends: vi.fn().mockResolvedValue({ items: [] }),
+    getProfileFriendship: vi.fn().mockResolvedValue({
+      userId: '6a81e965-c508-4321-812c-4be323606a70',
+      status: 'NONE',
+      createdAt: null,
+    }),
+    addProfileFriend: vi.fn().mockResolvedValue({
+      userId: '6a81e965-c508-4321-812c-4be323606a70',
+      status: 'FRIEND',
+      createdAt: '2026-07-26T10:00:00.000Z',
+    }),
     getBookingPreferences: vi.fn().mockResolvedValue(bookingPreferences),
     updateBookingPreferences: vi.fn().mockResolvedValue(bookingPreferences),
     getUpcomingBookings: vi.fn().mockResolvedValue(upcomingBookings),
@@ -303,6 +314,16 @@ function createGateway(overrides: Partial<AuthGateway> = {}): AuthGateway {
       .fn<AuthGateway['getLocation']>()
       .mockRejectedValue(new Error('LOCATION_NOT_FOUND')),
     listMyCommunities: vi.fn().mockResolvedValue(communityMemberships),
+    getProfileLevelHistory: vi.fn().mockResolvedValue({
+      userId: session.context.user.id,
+      items: [
+        {
+          changedAt: '2026-07-20T12:00:00.000Z',
+          levelLabel: 'C',
+          levelValue: 3.1,
+        },
+      ],
+    }),
     listNotifications: vi.fn().mockResolvedValue(notificationInbox),
     markNotificationsRead: vi.fn().mockResolvedValue(undefined),
     getWebPushConfiguration: vi.fn().mockResolvedValue({
@@ -369,26 +390,24 @@ describe('PadlHub web authentication', () => {
     expect(screen.getByRole('status')).toHaveTextContent('Проверяем сессию');
     expect(await screen.findByRole('heading', { name: 'Анна Петрова' })).toBeVisible();
     expect(screen.getAllByText('ПаделХАБ').length).toBeGreaterThan(0);
-    expect(screen.getByRole('heading', { name: 'Сообщества' })).toBeVisible();
+    expect(screen.getByRole('region', { name: 'Сообщества' })).toBeVisible();
+    expect(screen.queryByRole('heading', { name: 'Сообщества' })).not.toBeInTheDocument();
     const homeActions = screen.getByRole('navigation', { name: 'Разделы клуба' });
-    expect(within(homeActions).getAllByRole('link')).toHaveLength(3);
+    expect(within(homeActions).getAllByRole('link')).toHaveLength(2);
     expect(within(homeActions).getByRole('link', { name: 'Игры' })).toHaveAttribute(
       'href',
       '/games',
     );
-    expect(within(homeActions).getByRole('link', { name: 'Турниры' })).toHaveAttribute(
-      'href',
-      '/tournaments',
-    );
+    expect(within(homeActions).queryByRole('link', { name: 'Турниры' })).not.toBeInTheDocument();
     expect(within(homeActions).getByRole('link', { name: 'Тренировки' })).toHaveAttribute(
       'href',
       '/trainings',
     );
     expect(screen.getByRole('tab', { name: 'Мои записи' })).toHaveAttribute(
       'aria-selected',
-      'true',
+      'false',
     );
-    expect(screen.getByRole('tab', { name: 'Для меня' })).toHaveAttribute('aria-selected', 'false');
+    expect(screen.getByRole('tab', { name: 'Для меня' })).toHaveAttribute('aria-selected', 'true');
     const bottomNavigation = screen.getByRole('navigation', { name: 'Основная навигация' });
     const bottomNavigationLinks = within(bottomNavigation).getAllByRole('link');
     expect(bottomNavigationLinks).toHaveLength(5);
@@ -459,6 +478,7 @@ describe('PadlHub web authentication', () => {
     render(<App gateway={gateway} tenantKey="padlhub" />);
 
     await screen.findByRole('heading', { name: 'Анна Петрова' });
+    fireEvent.click(screen.getByRole('tab', { name: 'Мои записи' }));
     const historyButton = screen.getByRole('button', { name: 'История посещений' });
     fireEvent.click(historyButton);
 
@@ -623,7 +643,7 @@ describe('PadlHub web authentication', () => {
     expect(screen.getByText('Лето · Падел · Спорт')).toBeVisible();
     expect(screen.getByText(/осталось 8 посещений/)).toBeVisible();
     expect(await screen.findByRole('heading', { name: 'Сообщества' })).toBeVisible();
-    expect(screen.getByRole('link', { name: 'Padel Friends' })).toBeVisible();
+    expect(screen.getByRole('link', { name: 'Padel Friends, вне рейтинга' })).toBeVisible();
     expect(
       screen.queryByRole('heading', { name: 'Когда и где мне удобно' }),
     ).not.toBeInTheDocument();
@@ -643,6 +663,40 @@ describe('PadlHub web authentication', () => {
     expect(gateway.getProfilePrivacy).toHaveBeenCalledOnce();
     expect(gateway.listMyCommunities).toHaveBeenCalledOnce();
     expect(gateway.getHomeDashboard).toHaveBeenCalledOnce();
+  });
+
+  it('opens profile level history as a separate protected page', async () => {
+    window.history.replaceState({}, '', '/profile/level-history');
+    const getProfileLevelHistory = vi.fn().mockResolvedValue({
+      userId: session.context.user.id,
+      items: [
+        {
+          changedAt: '2026-05-10T09:00:00.000Z',
+          levelLabel: 'D+',
+          levelValue: 2.75,
+        },
+        {
+          changedAt: '2026-07-20T12:00:00.000Z',
+          levelLabel: 'C',
+          levelValue: 3.1,
+        },
+      ],
+    });
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue(session),
+      getProfileLevelHistory,
+    });
+
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+
+    expect(await screen.findByRole('heading', { name: 'История уровня' })).toBeVisible();
+    expect(
+      await screen.findByRole('img', {
+        name: 'График изменения уровня: дата по горизонтали, уровень по вертикали',
+      }),
+    ).toBeVisible();
+    expect(getProfileLevelHistory).toHaveBeenCalledOnce();
+    expect(gateway.getPlayerProfile).not.toHaveBeenCalled();
   });
 
   it('saves an optimistic owner privacy command from the profile', async () => {
@@ -715,6 +769,39 @@ describe('PadlHub web authentication', () => {
     expect(gateway.getPlayerProfile).toHaveBeenCalledWith(targetUserId);
     expect(gateway.getProfilePrivacy).not.toHaveBeenCalled();
     expect(gateway.getHomeDashboard).not.toHaveBeenCalled();
+    expect(gateway.getProfileFriendship).toHaveBeenCalledWith(targetUserId);
+  });
+
+  it('adds another player to friends from the viewer-filtered profile', async () => {
+    const targetUserId = '6a81e965-c508-4321-812c-4be323606a70';
+    window.history.replaceState({}, '', `/profile/${targetUserId}`);
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue(session),
+      getPlayerProfile: vi.fn().mockResolvedValue({
+        profile: {
+          userId: targetUserId,
+          displayName: 'Мария Соколова',
+          avatarUrl: null,
+          level: { label: 'C', assessmentRequired: false },
+        },
+        access: {
+          audience: 'OTHER',
+          tier: 'BASIC',
+          visibleSections: ['BASIC', 'PLAYER_LEVEL'],
+          contact: { status: 'LOCKED', reason: 'ACCESS_REQUIRED' },
+          chat: { status: 'LOCKED', reason: 'ACCESS_REQUIRED' },
+        },
+      }),
+    });
+
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+
+    const addButton = await screen.findByRole('button', { name: 'Добавить' });
+    await userEvent.click(addButton);
+
+    await waitFor(() => expect(gateway.addProfileFriend).toHaveBeenCalledWith(targetUserId));
+    expect(await screen.findByRole('button', { name: 'Добавлен' })).toBeDisabled();
+    expect(screen.getByText('Уже в друзьях')).toBeVisible();
   });
 
   it('loads the bookings route as a separate PadlHub aggregate without requesting Home', async () => {
@@ -1020,7 +1107,7 @@ describe('PadlHub web authentication', () => {
     render(<App gateway={gateway} tenantKey="padlhub" />);
 
     expect(
-      await screen.findByRole('heading', { name: 'Идеальный подарок без лишних хлопот' }),
+      await screen.findByRole('heading', { name: 'Идеальный подарок без хлопот' }),
     ).toBeVisible();
     expect(gateway.restoreSession).not.toHaveBeenCalled();
     expect(
@@ -1037,9 +1124,7 @@ describe('PadlHub web authentication', () => {
 
     render(<App gateway={gateway} tenantKey="padlhub" />);
 
-    expect(
-      await screen.findByRole('heading', { name: 'Идеальный подарок без лишних хлопот' }),
-    ).toBeVisible();
+    expect(await screen.findByRole('heading', { name: 'Подарочная карта' })).toBeVisible();
     expect(gateway.restoreSession).toHaveBeenCalledTimes(1);
   });
 });

@@ -32,6 +32,7 @@ interface CommunityDirectoryRow extends QueryResultRow {
   readonly title: string;
   readonly is_verified: boolean;
   readonly logo_url: string | null;
+  readonly ranking_position: number | string | null;
   readonly pinned: boolean;
   readonly sort_at: Date | string;
 }
@@ -121,6 +122,7 @@ export function createLocalCommunityDirectoryRepository(pool: Pool): CommunityDi
       return withTenantTransaction(pool, input.tenantId, async (client) => {
         const result = await client.query<CommunityDirectoryRow>(
           `select c.id, c.title, c.is_verified, logo.delivery_url as logo_url,
+                  m.ranking_position,
                   (m.pinned_at is not null) as pinned,
                   greatest(c.updated_at, m.updated_at) as sort_at
              from communities.memberships m
@@ -165,6 +167,7 @@ export function createLocalCommunityDirectoryRepository(pool: Pool): CommunityDi
           logoUrl: row.logo_url,
           isVerified: row.is_verified,
           unreadChatCount: 0,
+          ...(row.ranking_position === null ? {} : { memberRank: Number(row.ranking_position) }),
           pinned: row.pinned,
           sortAt: timestamp(row.sort_at),
         }));

@@ -802,11 +802,310 @@ export interface LegacyGamesPublicAdapterOptions {
   readonly baseUrl?: string;
   readonly timeoutMs?: number;
   readonly maxResponseBytes?: number;
+  readonly freshTtlMs?: number;
+  readonly staleTtlMs?: number;
+  readonly circuitFailureThreshold?: number;
+  readonly circuitResetMs?: number;
   readonly fetchImplementation?: typeof fetch;
+  readonly now?: () => number;
+  readonly onMetric?: (metric: {
+    readonly operation: 'available_games';
+    readonly outcome: 'success' | 'failure' | 'cache_fresh' | 'cache_stale' | 'circuit_open';
+    readonly durationMs: number;
+  }) => void;
+}
+
+interface PublicAvailableGamesCacheEntry {
+  readonly fetchedAt: number;
+  readonly items: readonly LegacyGameSourceSnapshot[];
+}
+
+export interface PublicTournamentSummary {
+  readonly id: string;
+  readonly title: string;
+  readonly format: string;
+  readonly startsAt: string;
+  readonly endsAt: string;
+  readonly venue: string;
+  readonly trainerName: string | null;
+  readonly levelRange: {
+    readonly from: GamePlayerLevel;
+    readonly to: GamePlayerLevel;
+  } | null;
+  readonly organizer: {
+    readonly displayName: string;
+    readonly avatarUrl: string | null;
+  } | null;
+  readonly capacity: {
+    readonly total: number;
+    readonly registered: number;
+    readonly open: number;
+    readonly waitlist: number;
+  };
+  readonly status: 'REGISTRATION' | 'FULL';
+  readonly route: string;
+}
+
+export interface LegacyTournamentSummaryAdapterOptions {
+  readonly baseUrl?: string;
+  readonly timeoutMs?: number;
+  readonly maxResponseBytes?: number;
+  readonly freshTtlMs?: number;
+  readonly staleTtlMs?: number;
+  readonly circuitFailureThreshold?: number;
+  readonly circuitResetMs?: number;
+  readonly fetchImplementation?: typeof fetch;
+  readonly now?: () => number;
+  readonly onMetric?: (metric: {
+    readonly outcome: 'success' | 'failure' | 'cache_fresh' | 'cache_stale' | 'circuit_open';
+    readonly durationMs: number;
+  }) => void;
+}
+
+interface TournamentCacheEntry {
+  readonly fetchedAt: number;
+  readonly items: readonly PublicTournamentSummary[];
+}
+
+function publicTournamentId(externalId: string): string {
+  const bytes = Buffer.from(
+    createHash('sha256')
+      .update(`phub-public-tournament-v1:${externalId}`)
+      .digest('hex')
+      .slice(0, 32),
+    'hex',
+  );
+  bytes[6] = ((bytes[6] ?? 0) & 0x0f) | 0x40;
+  bytes[8] = ((bytes[8] ?? 0) & 0x3f) | 0x80;
+  const hex = bytes.toString('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+function tournamentLevelRange(value: unknown): PublicTournamentSummary['levelRange'] {
+  if (!Array.isArray(value)) return null;
+  const ratings = value
+    .slice(0, 100)
+    .map((item) => numericValue(item))
+    .filter((item): item is number => item !== undefined && item >= 0 && item <= 10);
+  if (ratings.length === 0) return null;
+  const from = playerLevel(Math.min(...ratings));
+  const to = playerLevel(Math.max(...ratings));
+  return from && to ? { from, to } : null;
+}
+
+function publicTournamentSummary(value: unknown): PublicTournamentSummary | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+  const item = value as Record<string, unknown>;
+  const externalId = stringValue(item.id) ?? stringValue(item.exerciseId);
+  const title = stringValue(item.name);
+  const startsAt = stringValue(item.startsAt);
+  const endsAt = stringValue(item.endsAt);
+  const rawStatus = stringValue(item.rawStatus) ?? stringValue(item.status);
+  const publicEvent = item.isPublic !== false;
+  const registrationOpen = rawStatus === 'REGISTRATION';
+  const total = numericValue(item.maxPlayers);
+  const registered = numericValue(item.participantsCount);
+  const waitlist = numericValue(item.waitlistCount) ?? 0;
+  if (
+    !externalId ||
+    !title ||
+    !startsAt ||
+    !endsAt ||
+    Number.isNaN(Date.parse(startsAt)) ||
+    Number.isNaN(Date.parse(endsAt)) ||
+    Date.parse(endsAt) <= Date.parse(startsAt) ||
+    !publicEvent ||
+    !registrationOpen ||
+    total === undefined ||
+    registered === undefined ||
+    total <= 0
+  ) {
+    return undefined;
+  }
+  const safeTotal = Math.max(0, Math.min(10_000, Math.trunc(total)));
+  const safeRegistered = Math.max(0, Math.min(safeTotal, Math.trunc(registered)));
+  const safeWaitlist = Math.max(0, Math.min(10_000, Math.trunc(waitlist)));
+  const id = publicTournamentId(externalId);
+  const trainerName = stringValue(item.trainerName)?.slice(0, 120) ?? null;
+  const venue = (
+    stringValue(item.studioName) ??
+    stringValue(item.locationName)?.split(/\s+·\s+/u)[0] ??
+    'ПаделХАБ'
+  ).slice(0, 160);
+  return {
+    id,
+    title: title.slice(0, 160),
+    format: (stringValue(item.tournamentType) ?? stringValue(item.format) ?? 'Турнир').slice(0, 80),
+    startsAt: new Date(startsAt).toISOString(),
+    endsAt: new Date(endsAt).toISOString(),
+    venue,
+    trainerName,
+    levelRange: tournamentLevelRange(item.accessLevels),
+    organizer: trainerName ? { displayName: trainerName, avatarUrl: null } : null,
+    capacity: {
+      total: safeTotal,
+      registered: safeRegistered,
+      open: Math.max(0, safeTotal - safeRegistered),
+      waitlist: safeWaitlist,
+    },
+    status: safeRegistered >= safeTotal ? 'FULL' : 'REGISTRATION',
+    route: `/tournaments?event=${encodeURIComponent(id)}`,
+  };
+}
+
+/**
+ * Reads one legacy tournament schedule response per date and immediately reduces it to anonymous
+ * summaries. Fresh/stale caching and per-date single-flight ensure that a thousand page viewers do
+ * not become a thousand upstream roster requests.
+ */
+export class LegacyTournamentSummaryAdapter {
+  private readonly cache = new Map<string, TournamentCacheEntry>();
+  private readonly pending = new Map<string, Promise<readonly PublicTournamentSummary[]>>();
+  private readonly avatarSources = new Map<
+    string,
+    { readonly sourceUrl: string; readonly fetchedAt: number }
+  >();
+  private consecutiveFailures = 0;
+  private circuitOpenedAt: number | undefined;
+
+  public constructor(private readonly options: LegacyTournamentSummaryAdapterOptions = {}) {}
+
+  private emit(
+    metric: Parameters<NonNullable<LegacyTournamentSummaryAdapterOptions['onMetric']>>[0],
+  ) {
+    try {
+      this.options.onMetric?.(metric);
+    } catch {
+      // Metrics must never change discovery behavior.
+    }
+  }
+
+  private async fetchDate(date: string): Promise<readonly PublicTournamentSummary[]> {
+    const startedAt = Date.now();
+    const now = this.options.now?.() ?? Date.now();
+    const resetMs = this.options.circuitResetMs ?? 30_000;
+    if (this.circuitOpenedAt !== undefined && now - this.circuitOpenedAt < resetMs) {
+      this.emit({ outcome: 'circuit_open', durationMs: 0 });
+      throw new Error('TOURNAMENT_SUMMARY_CIRCUIT_OPEN');
+    }
+    const baseUrl = new URL(this.options.baseUrl ?? 'https://padlhub.su');
+    if (baseUrl.protocol !== 'https:' && baseUrl.hostname !== 'localhost') {
+      throw new Error('TOURNAMENT_SUMMARY_BASE_URL_INVALID');
+    }
+    const url = new URL('/api/tournaments', baseUrl);
+    url.searchParams.set('date', date);
+    try {
+      const response = await (this.options.fetchImplementation ?? fetch)(url, {
+        headers: { Accept: 'application/json' },
+        signal: AbortSignal.timeout(this.options.timeoutMs ?? 8_000),
+      });
+      if (!response.ok) throw new Error('TOURNAMENT_SUMMARY_SOURCE_UNAVAILABLE');
+      const maxBytes = this.options.maxResponseBytes ?? 5 * 1_024 * 1_024;
+      const length = Number(response.headers.get('content-length'));
+      if (Number.isFinite(length) && length > maxBytes) {
+        throw new Error('TOURNAMENT_SUMMARY_RESPONSE_TOO_LARGE');
+      }
+      const bytes = await response.arrayBuffer();
+      if (bytes.byteLength > maxBytes) throw new Error('TOURNAMENT_SUMMARY_RESPONSE_TOO_LARGE');
+      const body = JSON.parse(new TextDecoder().decode(bytes)) as unknown;
+      if (!Array.isArray(body)) throw new Error('TOURNAMENT_SUMMARY_RESPONSE_INVALID');
+      const items = body
+        .flatMap((item) => {
+          const summary = publicTournamentSummary(item);
+          const avatarSourceUrl =
+            typeof item === 'object' && item !== null && !Array.isArray(item)
+              ? httpsUrl((item as Record<string, unknown>).trainerAvatarUrl)
+              : undefined;
+          if (summary && avatarSourceUrl) {
+            this.avatarSources.set(summary.id, { sourceUrl: avatarSourceUrl, fetchedAt: now });
+          }
+          return summary ? [summary] : [];
+        })
+        .sort(
+          (left, right) =>
+            left.startsAt.localeCompare(right.startsAt) || left.id.localeCompare(right.id),
+        );
+      this.consecutiveFailures = 0;
+      this.circuitOpenedAt = undefined;
+      this.emit({ outcome: 'success', durationMs: Date.now() - startedAt });
+      return items;
+    } catch (error) {
+      this.consecutiveFailures += 1;
+      if (this.consecutiveFailures >= (this.options.circuitFailureThreshold ?? 3)) {
+        this.circuitOpenedAt = now;
+      }
+      this.emit({ outcome: 'failure', durationMs: Date.now() - startedAt });
+      throw error;
+    }
+  }
+
+  public readDate(date: string): Promise<readonly PublicTournamentSummary[]> {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return Promise.reject(new Error('TOURNAMENT_SUMMARY_DATE_INVALID'));
+    }
+    const now = this.options.now?.() ?? Date.now();
+    const cached = this.cache.get(date);
+    if (cached && now - cached.fetchedAt <= (this.options.freshTtlMs ?? 60_000)) {
+      this.emit({ outcome: 'cache_fresh', durationMs: 0 });
+      return Promise.resolve(cached.items);
+    }
+    const existing = this.pending.get(date);
+    if (existing) return existing;
+    const request = this.fetchDate(date)
+      .then((items) => {
+        this.cache.set(date, { fetchedAt: now, items });
+        return items;
+      })
+      .catch((error) => {
+        if (cached && now - cached.fetchedAt <= (this.options.staleTtlMs ?? 600_000)) {
+          this.emit({ outcome: 'cache_stale', durationMs: 0 });
+          return cached.items;
+        }
+        throw error;
+      })
+      .finally(() => {
+        if (this.pending.get(date) === request) this.pending.delete(date);
+      });
+    this.pending.set(date, request);
+    return request;
+  }
+
+  /**
+   * Returns an integration-only media source for a summary already loaded through readDate().
+   * Public routes proxy this URL and never serialize it into a browser DTO.
+   */
+  public readAvatarSource(summaryId: string): string | undefined {
+    const value = this.avatarSources.get(summaryId);
+    if (!value) return undefined;
+    const now = this.options.now?.() ?? Date.now();
+    if (now - value.fetchedAt > (this.options.staleTtlMs ?? 600_000)) {
+      this.avatarSources.delete(summaryId);
+      return undefined;
+    }
+    return value.sourceUrl;
+  }
 }
 
 export class LegacyGamesPublicAdapter {
+  private readonly availableCache = new Map<number, PublicAvailableGamesCacheEntry>();
+  private readonly availablePending = new Map<
+    number,
+    Promise<readonly LegacyGameSourceSnapshot[]>
+  >();
+  private consecutiveFailures = 0;
+  private circuitOpenedAt: number | undefined;
+
   public constructor(private readonly options: LegacyGamesPublicAdapterOptions = {}) {}
+
+  private emit(
+    metric: Parameters<NonNullable<LegacyGamesPublicAdapterOptions['onMetric']>>[0],
+  ): void {
+    try {
+      this.options.onMetric?.(metric);
+    } catch {
+      // Telemetry must never change migration behavior.
+    }
+  }
 
   private async readMappedPage(
     url: URL,
@@ -874,9 +1173,17 @@ export class LegacyGamesPublicAdapter {
     return (await this.readMappedPage(url)).snapshots;
   }
 
-  private async readMappedAvailable(limit: number): Promise<readonly LegacyGameSourceSnapshot[]> {
-    if (!Number.isInteger(limit) || limit < 1 || limit > 500) {
-      throw new Error('LEGACY_GAMES_LIMIT_INVALID');
+  private async fetchMappedAvailable(limit: number): Promise<readonly LegacyGameSourceSnapshot[]> {
+    const startedAt = Date.now();
+    const now = this.options.now?.() ?? Date.now();
+    const resetMs = this.options.circuitResetMs ?? 30_000;
+    if (this.circuitOpenedAt !== undefined && now - this.circuitOpenedAt < resetMs) {
+      this.emit({
+        operation: 'available_games',
+        outcome: 'circuit_open',
+        durationMs: 0,
+      });
+      throw new Error('LEGACY_GAMES_PUBLIC_CIRCUIT_OPEN');
     }
     const baseUrl = new URL(this.options.baseUrl ?? 'https://padlhub.su');
     if (baseUrl.protocol !== 'https:' && baseUrl.hostname !== 'localhost') {
@@ -887,9 +1194,74 @@ export class LegacyGamesPublicAdapter {
     url.searchParams.set('available', 'true');
     url.searchParams.set('limit', String(limit));
     url.searchParams.set('offset', '0');
-    return (await this.readMapped(url)).filter(
-      (snapshot) => snapshot.visibility === 'PUBLIC' && !snapshot.cancelled,
-    );
+    try {
+      const items = (await this.readMapped(url)).filter(
+        (snapshot) => snapshot.visibility === 'PUBLIC' && !snapshot.cancelled,
+      );
+      this.consecutiveFailures = 0;
+      this.circuitOpenedAt = undefined;
+      this.emit({
+        operation: 'available_games',
+        outcome: 'success',
+        durationMs: Date.now() - startedAt,
+      });
+      return items;
+    } catch (error) {
+      this.consecutiveFailures += 1;
+      if (this.consecutiveFailures >= (this.options.circuitFailureThreshold ?? 3)) {
+        this.circuitOpenedAt = now;
+      }
+      this.emit({
+        operation: 'available_games',
+        outcome: 'failure',
+        durationMs: Date.now() - startedAt,
+      });
+      throw error;
+    }
+  }
+
+  private readMappedAvailable(limit: number): Promise<readonly LegacyGameSourceSnapshot[]> {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 500) {
+      return Promise.reject(new Error('LEGACY_GAMES_LIMIT_INVALID'));
+    }
+    const now = this.options.now?.() ?? Date.now();
+    const cached = this.availableCache.get(limit);
+    if (cached && now - cached.fetchedAt <= (this.options.freshTtlMs ?? 60_000)) {
+      this.emit({
+        operation: 'available_games',
+        outcome: 'cache_fresh',
+        durationMs: 0,
+      });
+      return Promise.resolve(cached.items);
+    }
+    const existing = this.availablePending.get(limit);
+    if (existing) return existing;
+    const request = this.fetchMappedAvailable(limit)
+      .then((items) => {
+        this.availableCache.set(limit, {
+          fetchedAt: this.options.now?.() ?? Date.now(),
+          items,
+        });
+        return items;
+      })
+      .catch((error) => {
+        if (cached && now - cached.fetchedAt <= (this.options.staleTtlMs ?? 600_000)) {
+          this.emit({
+            operation: 'available_games',
+            outcome: 'cache_stale',
+            durationMs: 0,
+          });
+          return cached.items;
+        }
+        throw error;
+      })
+      .finally(() => {
+        if (this.availablePending.get(limit) === request) {
+          this.availablePending.delete(limit);
+        }
+      });
+    this.availablePending.set(limit, request);
+    return request;
   }
 
   public async readAvailable(input: {

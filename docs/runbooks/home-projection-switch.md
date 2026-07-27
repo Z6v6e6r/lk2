@@ -86,6 +86,7 @@ API read mode:
 VIVA_MODE=sandbox
 VIVA_OAUTH_ENABLED=true
 HOME_VIVA_SYNC_ENABLED=true
+HOME_VIVA_LEGACY_GAME_BRIDGE_ENABLED=false
 HOME_VIVA_SYNC_INTERVAL_MS=120000
 HOME_VIVA_SYNC_BATCH_SIZE=20
 HOME_VIVA_SYNC_FAILURE_BACKOFF_MS=300000
@@ -98,12 +99,18 @@ S3_ACCESS_KEY=<secret runtime value>
 S3_SECRET_KEY=<secret runtime value>
 S3_FORCE_PATH_STYLE=true
 S3_AUTO_CREATE_BUCKET=false
-PROFILE_PHOTO_ALLOWED_HOSTS=.selcdn.ru
+PROFILE_PHOTO_ALLOWED_HOSTS=.selcdn.ru,.selstorage.ru
 PROFILE_PHOTO_MAX_BYTES=8388608
 PROFILE_PHOTO_MAX_DIMENSION=1024
 PROFILE_PHOTO_WEBP_QUALITY=82
 PROFILE_PHOTO_URL_TTL_SECONDS=3600
 ```
+
+Set `HOME_VIVA_LEGACY_GAME_BRIDGE_ENABLED=true` only in local/staging when the separately documented
+targeted bridge is required. It may remain enabled while
+`LEGACY_GAMES_ROSTER_SYNC_ENABLED=false`: the bridge evaluates only Viva-proven upcoming exercise
+IDs and uses shared cache/single-flight/circuit protection. Follow
+`docs/runbooks/games-legacy-server-migration.md` for the complete gates and postchecks.
 
 Keep the delegation encryption key only in the secret runtime environment. Recreate the worker so
 Docker applies changed environment values. `S3_PUBLIC_ENDPOINT` must be reachable by the client;

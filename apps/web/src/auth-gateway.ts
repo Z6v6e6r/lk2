@@ -23,10 +23,17 @@ import type {
   PlayerProfileView,
   PublicGameCardPage,
   PublicGameFilters,
+  PublicCoachGameFilters,
+  PublicCoachGameSummaryPage,
+  PublicTournamentFilters,
+  PublicTournamentSummaryPage,
   PublicGiftCertificateCatalog,
   CreateGiftCertificateOrderRequest,
   ProfilePrivacySettings,
   ProfilePrivacyUpdateRequest,
+  ProfileLevelHistory,
+  ProfileFriendPage,
+  ProfileFriendship,
   UserProfile,
   UserUpcomingBookings,
   UserContext as ApiUserContext,
@@ -58,10 +65,19 @@ export type {
   PublicGameCard,
   PublicGameCardPage,
   PublicGameFilters,
+  PublicCoachGameFilters,
+  PublicCoachGameSummary,
+  PublicCoachGameSummaryPage,
+  PublicTournamentFilters,
+  PublicTournamentSummary,
+  PublicTournamentSummaryPage,
   PublicGiftCertificateCatalog,
   CreateGiftCertificateOrderRequest,
   ProfilePrivacySettings,
   ProfilePrivacyUpdateRequest,
+  ProfileLevelHistory,
+  ProfileFriendPage,
+  ProfileFriendship,
   UserProfile,
   UserUpcomingBookings,
   WebPushConfiguration,
@@ -146,6 +162,9 @@ export interface AuthGateway {
   readonly updateProfilePrivacy: (
     input: ProfilePrivacyUpdateRequest,
   ) => Promise<ProfilePrivacySettings>;
+  readonly listProfileFriends: (limit?: number) => Promise<ProfileFriendPage>;
+  readonly getProfileFriendship: (userId: string) => Promise<ProfileFriendship>;
+  readonly addProfileFriend: (userId: string) => Promise<ProfileFriendship>;
   readonly getBookingPreferences: () => Promise<BookingPreferences>;
   readonly updateBookingPreferences: (
     input: BookingPreferencesUpdateRequest,
@@ -171,6 +190,12 @@ export interface AuthGateway {
   readonly getGiftCertificateOrder: (orderId: string) => Promise<GiftCertificateOrder>;
   readonly downloadGiftCertificate: (orderId: string) => Promise<Blob>;
   readonly listPublicGames: (input?: PublicGameFilters) => Promise<PublicGameCardPage>;
+  readonly listPublicTournamentSummaries?: (
+    input: PublicTournamentFilters,
+  ) => Promise<PublicTournamentSummaryPage>;
+  readonly listPublicCoachGameSummaries?: (
+    input: PublicCoachGameFilters,
+  ) => Promise<PublicCoachGameSummaryPage>;
   readonly listMyGames: (input?: {
     readonly scope?: 'UPCOMING' | 'HISTORY';
     readonly limit?: number;
@@ -196,6 +221,7 @@ export interface AuthGateway {
   readonly listLocations: () => Promise<LocationList>;
   readonly getLocation: (locationId: string) => Promise<LocationDetail>;
   readonly listMyCommunities: (cursor?: string) => Promise<CommunityMembershipPage>;
+  readonly getProfileLevelHistory: () => Promise<ProfileLevelHistory>;
   readonly listNotifications: () => Promise<NotificationInboxPage>;
   readonly markNotificationsRead: (throughId: string) => Promise<void>;
   readonly getWebPushConfiguration: () => Promise<WebPushConfiguration>;
@@ -447,6 +473,18 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       return settings;
     },
 
+    listProfileFriends(limit) {
+      return client.listProfileFriends(limit);
+    },
+
+    getProfileFriendship(userId) {
+      return client.getProfileFriendship(userId);
+    },
+
+    addProfileFriend(userId) {
+      return client.addProfileFriend(userId);
+    },
+
     getBookingPreferences() {
       bookingPreferencesPromise ??= client.getBookingPreferences().catch((error: unknown) => {
         bookingPreferencesPromise = undefined;
@@ -530,6 +568,14 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       return client.listPublicGames(input);
     },
 
+    listPublicTournamentSummaries(input) {
+      return client.listPublicTournamentSummaries(input);
+    },
+
+    listPublicCoachGameSummaries(input) {
+      return client.listPublicCoachGameSummaries(input);
+    },
+
     listMyGames(input = {}) {
       return client.listMyGames(input);
     },
@@ -595,6 +641,10 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       });
       communityMembershipsPromise = request;
       return request;
+    },
+
+    getProfileLevelHistory() {
+      return client.getProfileLevelHistory();
     },
 
     listNotifications() {

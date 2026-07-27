@@ -16,6 +16,11 @@ export type PlayerProfileView = components['schemas']['PlayerProfileView'];
 export type ProfileActionCapability = components['schemas']['ProfileActionCapability'];
 export type ProfilePrivacySettings = components['schemas']['ProfilePrivacySettings'];
 export type ProfilePrivacyUpdateRequest = components['schemas']['ProfilePrivacyUpdateRequest'];
+export type ProfileFriendship = components['schemas']['ProfileFriendship'];
+export type ProfileFriendSummary = components['schemas']['ProfileFriendSummary'];
+export type ProfileFriendPage = components['schemas']['ProfileFriendPage'];
+export type ProfileLevelHistory = components['schemas']['ProfileLevelHistory'];
+export type ProfileLevelHistoryPoint = components['schemas']['ProfileLevelHistoryPoint'];
 export type BookingPreferences = components['schemas']['BookingPreferences'];
 export type BookingPreferencesUpdateRequest =
   components['schemas']['BookingPreferencesUpdateRequest'];
@@ -37,6 +42,12 @@ export type SubmitGameResultRequest = components['schemas']['SubmitGameResultReq
 export type DisputeGameResultRequest = components['schemas']['DisputeGameResultRequest'];
 export type PublicGameCard = PublicApiComponents['schemas']['PublicGameCard'];
 export type PublicGameCardPage = PublicApiComponents['schemas']['PublicGameCardPage'];
+export type PublicTournamentSummary = PublicApiComponents['schemas']['PublicTournamentSummary'];
+export type PublicTournamentSummaryPage =
+  PublicApiComponents['schemas']['PublicTournamentSummaryPage'];
+export type PublicCoachGameSummary = PublicApiComponents['schemas']['PublicCoachGameSummary'];
+export type PublicCoachGameSummaryPage =
+  PublicApiComponents['schemas']['PublicCoachGameSummaryPage'];
 export type PublicGiftCertificateCatalog =
   PublicApiComponents['schemas']['PublicGiftCertificateCatalog'];
 export type CreateGiftCertificateOrderRequest =
@@ -60,6 +71,15 @@ export interface PublicGameFilters {
   readonly limit?: number;
   readonly cursor?: string;
 }
+
+export interface PublicTournamentFilters {
+  readonly dateFrom: string;
+  readonly dateTo: string;
+  readonly availability?: 'JOINABLE' | 'INCLUDE_FULL';
+  readonly limit?: number;
+}
+
+export type PublicCoachGameFilters = PublicTournamentFilters;
 
 export interface ActivityHistoryFilters {
   readonly kind?: ActivityHistoryKind;
@@ -353,6 +373,30 @@ export class PadlHubApiClient {
     return this.request<ProfilePrivacySettings>('/profile/privacy');
   }
 
+  public listProfileFriends(limit = 8): Promise<ProfileFriendPage> {
+    return this.request<ProfileFriendPage>(`/profile/friends?limit=${encodeURIComponent(limit)}`);
+  }
+
+  public getProfileFriendship(userId: string): Promise<ProfileFriendship> {
+    return this.request<ProfileFriendship>(`/profile/friends/${encodeURIComponent(userId)}`);
+  }
+
+  public addProfileFriend(userId: string): Promise<ProfileFriendship> {
+    const idempotencyKey = createCorrelationId();
+    return this.retryOnceOnNetworkFailure(() =>
+      this.request<ProfileFriendship>(`/profile/friends/${encodeURIComponent(userId)}`, {
+        method: 'POST',
+        idempotencyKey,
+      }),
+    );
+  }
+
+  public getProfileLevelHistory(limit = 100): Promise<ProfileLevelHistory> {
+    return this.request<ProfileLevelHistory>(
+      `/profile/level-history?limit=${encodeURIComponent(limit)}`,
+    );
+  }
+
   public updateProfilePrivacySettings(
     input: ProfilePrivacyUpdateRequest,
   ): Promise<ProfilePrivacySettings> {
@@ -429,6 +473,38 @@ export class PadlHubApiClient {
     return this.requestFromRoot<PublicGameCardPage>(this.publicApiRoot, `/games${suffix}`, {
       auth: 'none',
     });
+  }
+
+  public listPublicTournamentSummaries(
+    input: PublicTournamentFilters,
+  ): Promise<PublicTournamentSummaryPage> {
+    const query = new URLSearchParams({
+      dateFrom: input.dateFrom,
+      dateTo: input.dateTo,
+    });
+    if (input.availability) query.set('availability', input.availability);
+    if (input.limit !== undefined) query.set('limit', String(input.limit));
+    return this.requestFromRoot<PublicTournamentSummaryPage>(
+      this.publicApiRoot,
+      `/tournaments?${query.toString()}`,
+      { auth: 'none' },
+    );
+  }
+
+  public listPublicCoachGameSummaries(
+    input: PublicCoachGameFilters,
+  ): Promise<PublicCoachGameSummaryPage> {
+    const query = new URLSearchParams({
+      dateFrom: input.dateFrom,
+      dateTo: input.dateTo,
+    });
+    if (input.availability) query.set('availability', input.availability);
+    if (input.limit !== undefined) query.set('limit', String(input.limit));
+    return this.requestFromRoot<PublicCoachGameSummaryPage>(
+      this.publicApiRoot,
+      `/coach-games?${query.toString()}`,
+      { auth: 'none' },
+    );
   }
 
   public getPublicGiftCertificateCatalog(): Promise<PublicGiftCertificateCatalog> {

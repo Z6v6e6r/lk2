@@ -107,12 +107,16 @@ const promotionSource =
         onMetric: (metric) => logger.info({ metric }, 'legacy CUP promotion read'),
       })
     : undefined;
-const legacyGamesRosterSource = !config.LEGACY_GAMES_ROSTER_SYNC_ENABLED
-  ? undefined
-  : config.LEGACY_GAMES_ROSTER_SYNC_SOURCE === 'public'
+const createLegacyGamesRosterSource = () =>
+  config.LEGACY_GAMES_ROSTER_SYNC_SOURCE === 'public'
     ? new LegacyGamesPublicAdapter({
         baseUrl: config.LEGACY_GAMES_PUBLIC_BASE_URL,
         timeoutMs: 8_000,
+        freshTtlMs: 60_000,
+        staleTtlMs: 600_000,
+        circuitFailureThreshold: 3,
+        circuitResetMs: 30_000,
+        onMetric: (metric) => logger.info({ metric }, 'legacy Games public read'),
       })
     : new LegacyGamesMongoAdapter({
         uri: config.LEGACY_GAMES_MONGODB_URI as string,
@@ -120,7 +124,12 @@ const legacyGamesRosterSource = !config.LEGACY_GAMES_ROSTER_SYNC_ENABLED
         maxAttempts: 2,
         onMetric: (metric) => logger.info({ metric }, 'legacy Games roster read'),
       });
-const legacyGamesRosterWindowSource = legacyGamesRosterSource;
+const legacyGamesRosterWindowSource = config.LEGACY_GAMES_ROSTER_SYNC_ENABLED
+  ? createLegacyGamesRosterSource()
+  : undefined;
+const vivaHomeLegacyGameBridgeSource = config.HOME_VIVA_LEGACY_GAME_BRIDGE_ENABLED
+  ? (legacyGamesRosterWindowSource ?? createLegacyGamesRosterSource())
+  : undefined;
 const webPushRuntime =
   config.WEB_PUSH_ENABLED && config.NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS
     ? {
@@ -436,11 +445,11 @@ const runVivaSyncCycle = async (): Promise<void> => {
       provider: vivaIdentityProvider,
       getAdapter: getVivaHomeAdapter,
       profilePhotoStore,
-      ...(legacyGamesRosterSource
+      ...(vivaHomeLegacyGameBridgeSource
         ? {
             legacyGameRosterBridge: {
               tenantKey: config.LEGACY_GAMES_ROSTER_SYNC_TENANT_KEY as string,
-              source: legacyGamesRosterSource,
+              source: vivaHomeLegacyGameBridgeSource,
             },
           }
         : {}),

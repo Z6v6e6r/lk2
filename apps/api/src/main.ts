@@ -20,12 +20,23 @@ import {
   createNotificationEndpointRepository,
   createNotificationInboxRepository,
   createProfilePrivacyRepository,
+  createProfileFriendshipRepository,
+  createProfileLevelHistoryRepository,
   createProfileSummaryRepository,
 } from '@phub/database';
-import { LegacyGamesMongoAdapter, LegacyGamesPublicAdapter } from '@phub/legacy-games-adapter';
+import {
+  LegacyGamesMongoAdapter,
+  LegacyGamesPublicAdapter,
+  LegacyTournamentSummaryAdapter,
+} from '@phub/legacy-games-adapter';
 import { createNotificationEndpointCipher } from '@phub/notifications';
 import { createLogger, startTelemetry } from '@phub/observability';
-import { VivaBookingHistorySourceAdapter, VivaIdentityProvider } from '@phub/viva-adapter';
+import {
+  VivaBookingHistorySourceAdapter,
+  VivaCoachGameSummaryAdapter,
+  VivaExerciseRecommendationSourceAdapter,
+  VivaIdentityProvider,
+} from '@phub/viva-adapter';
 import Redis from 'ioredis';
 
 import { buildApp } from './app.js';
@@ -90,6 +101,42 @@ const activityHistoryRepository = config.ACTIVITY_HISTORY_ENABLED
   ? createActivityHistoryRepository(pool)
   : undefined;
 const gameReadRepository = config.GAMES_READ_ENABLED ? createGameRepository(pool) : undefined;
+const tournamentSummarySource = config.GAMES_READ_ENABLED
+  ? new LegacyTournamentSummaryAdapter({
+      baseUrl: config.LEGACY_GAMES_PUBLIC_BASE_URL,
+      timeoutMs: Math.max(config.VIVA_TIMEOUT_MS, 8_000),
+      freshTtlMs: 60_000,
+      staleTtlMs: 600_000,
+      circuitFailureThreshold: 3,
+      circuitResetMs: 30_000,
+      onMetric: (metric) => logger.info({ metric }, 'legacy tournament summary read'),
+    })
+  : undefined;
+const coachGameSummarySource = config.GAMES_READ_ENABLED
+  ? new VivaCoachGameSummaryAdapter({
+      apiBaseUrl: config.VIVA_END_USER_API_URL,
+      tenantKey: config.VIVA_AUTH_TENANT_KEY,
+      timeoutMs: Math.max(config.VIVA_TIMEOUT_MS, 8_000),
+      freshTtlMs: 60_000,
+      staleTtlMs: 600_000,
+      circuitFailureThreshold: 3,
+      circuitResetMs: 30_000,
+      onMetric: (metric) => logger.info({ metric }, 'Viva coach-game summary read'),
+    })
+  : undefined;
+const exerciseRecommendationSource =
+  config.GAMES_READ_ENABLED && (config.VIVA_MODE === 'sandbox' || config.VIVA_MODE === 'production')
+    ? new VivaExerciseRecommendationSourceAdapter({
+        mode: config.VIVA_MODE,
+        apiBaseUrl: config.VIVA_END_USER_API_URL,
+        providerTenantKey: config.VIVA_AUTH_TENANT_KEY,
+        timeoutMs: config.VIVA_TIMEOUT_MS,
+        maxAttempts: 2,
+        circuitFailureThreshold: 3,
+        circuitResetMs: 30_000,
+        onMetric: (metric) => logger.info({ metric }, 'Viva exercise recommendation read'),
+      })
+    : undefined;
 const profileSummaryRepository = createProfileSummaryRepository(pool);
 const activityHistoryGameBackfillSource = !config.ACTIVITY_HISTORY_GAME_BACKFILL_ENABLED
   ? undefined
@@ -254,11 +301,16 @@ const app = await buildApp({
   ...(profilePhotoMediaStore ? { profilePhotoMediaStore } : {}),
   ...(giftCertificateArtifactStore ? { giftCertificateArtifactStore } : {}),
   profilePrivacyRepository: createProfilePrivacyRepository(pool),
+  profileFriendshipRepository: createProfileFriendshipRepository(pool),
+  profileLevelHistoryRepository: createProfileLevelHistoryRepository(pool),
   profileSummaryRepository,
   bookingPreferencesRepository: createBookingPreferencesRepository(pool),
   ...(activityHistoryRepository ? { activityHistoryRepository } : {}),
   ...(activityHistoryRefresher ? { activityHistoryRefresher } : {}),
   ...(gameReadRepository ? { gameReadRepository } : {}),
+  ...(tournamentSummarySource ? { tournamentSummarySource } : {}),
+  ...(coachGameSummarySource ? { coachGameSummarySource } : {}),
+  ...(exerciseRecommendationSource ? { exerciseRecommendationSource } : {}),
   ...(config.GAMES_COMMANDS_ENABLED
     ? {
         gameRosterRepository: createGameRosterRepository(pool),

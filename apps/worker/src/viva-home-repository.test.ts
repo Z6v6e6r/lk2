@@ -12,6 +12,7 @@ import {
 const tenantId = '86afbe01-0318-4dd2-bc25-303b7bf0d430';
 const userId = '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca';
 const bookingId = '55555555-5555-4555-8555-555555555555';
+const gameId = '88888888-8888-4888-8888-888888888888';
 const subscriptionId = '66666666-6666-4666-8666-666666666666';
 const externalProfileId = '11111111-1111-4111-8111-111111111111';
 const externalBookingId = '22222222-2222-4222-8222-222222222222';
@@ -219,6 +220,7 @@ describe('Viva Home producer repository', () => {
           rows: [
             {
               exercise_external_id: externalExerciseId,
+              game_id: gameId,
               capacity: 4,
               game_title: 'Вечерняя игра',
               game_kind: 'RATING',
@@ -234,6 +236,7 @@ describe('Viva Home producer repository', () => {
             },
             {
               exercise_external_id: externalExerciseId,
+              game_id: gameId,
               capacity: 4,
               game_title: 'Вечерняя игра',
               game_kind: 'RATING',
@@ -250,6 +253,7 @@ describe('Viva Home producer repository', () => {
             },
             {
               exercise_external_id: externalExerciseId,
+              game_id: gameId,
               capacity: 4,
               game_title: 'Вечерняя игра',
               game_kind: 'RATING',
@@ -352,7 +356,8 @@ describe('Viva Home producer repository', () => {
     expect(serialized).not.toContain(externalExerciseId);
     expect(serialized).not.toContain('562807.selcdn.ru');
     expect(serialized).toContain('media.padlhub.test');
-    expect(serialized).toContain(`/bookings/${bookingId}`);
+    expect(serialized).toContain(`/games/${gameId}`);
+    expect(serialized).not.toContain(`/bookings/${bookingId}`);
     expect(serialized).toContain(`/subscriptions/${subscriptionId}`);
     expect(serialized).toContain('"firstName":"Алексей"');
     expect(serialized).toContain('"lastName":"Петров"');

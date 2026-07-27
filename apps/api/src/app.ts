@@ -24,11 +24,14 @@ import type {
   LocationRepository,
   NotificationEndpointRepository,
   NotificationInboxRepository,
+  ProfileFriendshipRepository,
+  ProfileLevelHistoryRepository,
   ProfilePrivacyRepository,
   ProfileSummaryRepository,
 } from '@phub/database';
 import { isValidIdempotencyKey, type ClientPlatform } from '@phub/domain';
 import type { NotificationEndpointCipher } from '@phub/notifications';
+import type { VivaExerciseRecommendationSourceAdapter } from '@phub/viva-adapter';
 import type { Logger } from 'pino';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import type Redis from 'ioredis';
@@ -47,6 +50,11 @@ import {
   type ActivityHistoryRefreshService,
 } from './bookings/activity-history-routes.js';
 import { registerCommunityRoutes } from './communities/community-routes.js';
+import { EventAvatarMediaProxy, type EventAvatarMedia } from './event-avatar-media.js';
+import {
+  registerCoachGameSummaryRoutes,
+  type CoachGameSummarySource,
+} from './coach-games/coach-game-summary-routes.js';
 import { registerGameRoutes } from './games/game-routes.js';
 import { registerGameResultRoutes } from './games/game-result-routes.js';
 import { registerGameReadRoutes } from './games/game-read-routes.js';
@@ -68,6 +76,8 @@ import type { LocationMediaStore } from './locations/location-media-store.js';
 import { registerNotificationRoutes } from './notifications/notification-routes.js';
 import { registerWebPushRoutes } from './notifications/web-push-routes.js';
 import { registerProfilePrivacyRoutes } from './profile/profile-privacy-routes.js';
+import { registerProfileFriendshipRoutes } from './profile/profile-friendship-routes.js';
+import { registerProfileLevelHistoryRoutes } from './profile/profile-level-history-routes.js';
 import { registerProfilePhotoMediaRoutes } from './profile/profile-photo-media-routes.js';
 import type { ProfilePhotoMediaStore } from './profile/profile-photo-media-store.js';
 import {
@@ -77,6 +87,10 @@ import {
 } from './profile/profile-photo-url.js';
 import { buildPlayerProfileView } from './profile/profile-view.js';
 import { buildClientRoutingPlan, canUseDirectViva } from './routing/client-routing-plan.js';
+import {
+  registerTournamentSummaryRoutes,
+  type TournamentSummarySource,
+} from './tournaments/tournament-summary-routes.js';
 
 interface PadlHubClaims extends JWTPayload {
   readonly sub: string;
@@ -157,6 +171,8 @@ export interface BuildAppOptions {
   readonly locationMediaStore?: LocationMediaStore;
   readonly giftCertificateArtifactStore?: GiftCertificateArtifactReadStore;
   readonly profilePrivacyRepository?: ProfilePrivacyRepository;
+  readonly profileFriendshipRepository?: ProfileFriendshipRepository;
+  readonly profileLevelHistoryRepository?: ProfileLevelHistoryRepository;
   readonly profileSummaryRepository?: Pick<ProfileSummaryRepository, 'get'>;
   readonly profilePhotoMediaRepository?: Pick<
     ProfileSummaryRepository,
@@ -167,6 +183,10 @@ export interface BuildAppOptions {
   readonly bookingPreferencesRepository?: BookingPreferencesRepository;
   readonly activityHistoryRepository?: ActivityHistoryRepository;
   readonly activityHistoryRefresher?: ActivityHistoryRefreshService;
+  readonly tournamentSummarySource?: TournamentSummarySource;
+  readonly coachGameSummarySource?: CoachGameSummarySource;
+  readonly eventAvatarMedia?: EventAvatarMedia;
+  readonly exerciseRecommendationSource?: Pick<VivaExerciseRecommendationSourceAdapter, 'readDate'>;
   readonly rateLimitRedis?: Redis;
 }
 
@@ -436,6 +456,20 @@ export async function buildApp(options: BuildAppOptions) {
     genReqId: (request) => safeCorrelationId(request.headers['x-correlation-id']),
     bodyLimit: 1_048_576,
   });
+  const eventAvatarMedia =
+    options.eventAvatarMedia ??
+    new EventAvatarMediaProxy({
+      allowedHosts: options.config.PROFILE_PHOTO_ALLOWED_HOSTS.split(',')
+        .map((host) => host.trim())
+        .filter(Boolean),
+      timeoutMs: options.config.VIVA_TIMEOUT_MS,
+      maxBytes: options.config.PROFILE_PHOTO_MAX_BYTES,
+      maxDimension: options.config.PROFILE_PHOTO_MAX_DIMENSION,
+      webpQuality: options.config.PROFILE_PHOTO_WEBP_QUALITY,
+      circuitFailureThreshold: 3,
+      circuitResetMs: 30_000,
+      onMetric: (metric) => options.logger.info({ metric }, 'event avatar media read'),
+    });
 
   app.decorate('config', options.config);
   if (options.pool) app.decorate('pool', options.pool);
@@ -538,6 +572,17 @@ export async function buildApp(options: BuildAppOptions) {
     publicTenantHandlers: [resolvePublicTenant],
     authenticatedTenantHandlers: [authenticate, resolveTenant],
   });
+  registerTournamentSummaryRoutes(app as unknown as FastifyInstance, {
+    ...(options.tournamentSummarySource ? { source: options.tournamentSummarySource } : {}),
+    avatarMedia: eventAvatarMedia,
+    publicTenantHandlers: [resolvePublicTenant],
+  });
+  registerCoachGameSummaryRoutes(app as unknown as FastifyInstance, {
+    ...(options.coachGameSummarySource ? { source: options.coachGameSummarySource } : {}),
+    avatarMedia: eventAvatarMedia,
+    publicTenantHandlers: [resolvePublicTenant],
+  });
+  const bookingRecommendationAuthService = options.authService;
   registerBookingRecommendationRoutes(app as unknown as FastifyInstance, {
     ...(options.gameReadRepository?.listRecommendationCardProjections
       ? {
@@ -552,6 +597,25 @@ export async function buildApp(options: BuildAppOptions) {
       : {}),
     ...(options.profilePhotoMediaRepository
       ? { photoRepository: options.profilePhotoMediaRepository }
+      : {}),
+    ...(options.exerciseRecommendationSource
+      ? { exerciseSource: options.exerciseRecommendationSource }
+      : {}),
+    ...(options.exerciseRecommendationSource && bookingRecommendationAuthService
+      ? {
+          getExerciseAccessToken: async (input: {
+            readonly tenantId: string;
+            readonly userId: string;
+            readonly correlationId: string;
+          }) =>
+            (
+              await bookingRecommendationAuthService.issueVivaAccessToken({
+                tenantId: input.tenantId,
+                userId: input.userId,
+                correlationId: input.correlationId,
+              })
+            ).accessToken,
+        }
       : {}),
     authenticatedTenantHandlers: [authenticate, authorizeGamesPlayer, resolveTenant],
   });
@@ -674,6 +738,19 @@ export async function buildApp(options: BuildAppOptions) {
     ...(options.profilePrivacyRepository ? { repository: options.profilePrivacyRepository } : {}),
     authenticatedTenantHandlers: [authenticate, resolveTenant],
     commandHandlers: [authenticate, resolveTenant, requireIdempotencyKey],
+  });
+  registerProfileFriendshipRoutes(app as unknown as FastifyInstance, {
+    ...(options.profileFriendshipRepository
+      ? { repository: options.profileFriendshipRepository }
+      : {}),
+    authenticatedTenantHandlers: [authenticate, resolveTenant],
+    commandHandlers: [authenticate, resolveTenant, requireIdempotencyKey],
+  });
+  registerProfileLevelHistoryRoutes(app as unknown as FastifyInstance, {
+    ...(options.profileLevelHistoryRepository
+      ? { repository: options.profileLevelHistoryRepository }
+      : {}),
+    authenticatedTenantHandlers: [authenticate, resolveTenant],
   });
   registerBookingPreferenceRoutes(app as unknown as FastifyInstance, {
     ...(options.bookingPreferencesRepository

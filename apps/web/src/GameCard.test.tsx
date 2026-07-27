@@ -126,6 +126,24 @@ describe('GameCard lifecycle template', () => {
     expect(within(card).getByRole('link', { name: 'Вступить в игру' })).toBeInTheDocument();
   });
 
+  it('shows the game level when the compact recommendation variant requests it', () => {
+    render(<GameCard game={publicGame} compact showCompactLevel />);
+
+    expect(screen.getByText('от D+ до C')).toHaveClass('game-card__compact-level');
+  });
+
+  it('reuses the full game metadata rows in compact recommendations', () => {
+    render(<GameCard game={publicGame} compact showCompactMetadata />);
+
+    const card = screen.getByRole('article');
+    expect(within(card).queryByText('Селигерская · 18:00')).not.toBeInTheDocument();
+    expect(within(card).getByText('пн, 20 июля')).toBeInTheDocument();
+    expect(within(card).getByText('18:00–19:00')).toBeInTheDocument();
+    expect(within(card).getByText('Селигерская · Корт №3')).toBeInTheDocument();
+    expect(within(card).getByText('от D+ до C').closest('.game-card__level')).not.toBeNull();
+    expect(card.querySelectorAll('.game-card__meta svg')).toHaveLength(3);
+  });
+
   it('keeps the lifecycle status when no primary action is available', () => {
     render(<GameCard game={{ ...publicGame, allowedActions: ['OPEN_DETAILS'] }} />);
 

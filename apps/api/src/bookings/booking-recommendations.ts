@@ -12,6 +12,7 @@ import {
   type GameCardView,
   type GamePlayerLevel,
 } from '@phub/games';
+import type { VivaExerciseRecommendation } from '@phub/viva-adapter';
 
 import {
   gameCardProfilePhotoUserIds,
@@ -30,10 +31,43 @@ export const BOOKING_RECOMMENDATION_REASONS = [
 ] as const;
 export type BookingRecommendationReason = (typeof BOOKING_RECOMMENDATION_REASONS)[number];
 
-export interface BookingRecommendationItem {
+export interface BookingRecommendationGameItem {
+  readonly kind: 'GAME';
   readonly game: GameCardView;
   readonly reasons: readonly BookingRecommendationReason[];
 }
+
+export interface BookingRecommendationActivity {
+  readonly id: string;
+  readonly kind: 'TRAINING' | 'TOURNAMENT';
+  readonly title: string;
+  readonly startsAt: string;
+  readonly endsAt: string;
+  readonly timezone: string;
+  readonly station: {
+    readonly id: string;
+    readonly name: string;
+    readonly shortAddress: string | null;
+  };
+  readonly levelRange: {
+    readonly from: GamePlayerLevel;
+    readonly to: GamePlayerLevel;
+  } | null;
+  readonly capacity: {
+    readonly total: number | null;
+    readonly open: number | null;
+  };
+  readonly route: string;
+}
+
+export interface BookingRecommendationActivityItem {
+  readonly kind: 'TRAINING' | 'TOURNAMENT';
+  readonly activity: BookingRecommendationActivity;
+  readonly reasons: readonly BookingRecommendationReason[];
+}
+
+export type BookingRecommendationItem =
+  BookingRecommendationGameItem | BookingRecommendationActivityItem;
 
 export interface BookingRecommendationPage {
   readonly version: string;
@@ -48,6 +82,74 @@ interface LocalSlot {
   readonly weekday: BookingPreferenceWeekday;
   readonly minuteOfDay: number;
   readonly timeBucket: string;
+}
+
+interface RankableEvent {
+  readonly id: string;
+  readonly startsAt: string;
+  readonly timezone: string;
+  readonly station: {
+    readonly id: string;
+    readonly name: string;
+  };
+  readonly levelRange: {
+    readonly from: GamePlayerLevel | null;
+    readonly to: GamePlayerLevel | null;
+  } | null;
+}
+
+interface ScoredRecommendation {
+  readonly item: BookingRecommendationItem;
+  readonly score: number;
+  readonly startsAt: string;
+  readonly id: string;
+}
+
+function compareRecommendations(left: ScoredRecommendation, right: ScoredRecommendation): number {
+  return (
+    right.score - left.score ||
+    Date.parse(left.startsAt) - Date.parse(right.startsAt) ||
+    left.id.localeCompare(right.id)
+  );
+}
+
+function compareRecommendationSchedule(
+  left: ScoredRecommendation,
+  right: ScoredRecommendation,
+): number {
+  return Date.parse(left.startsAt) - Date.parse(right.startsAt) || left.id.localeCompare(right.id);
+}
+
+function recommendationIdentity(recommendation: ScoredRecommendation): string {
+  return `${recommendation.item.kind}:${recommendation.id}`;
+}
+
+function selectDiverseRecommendations(
+  recommendations: readonly ScoredRecommendation[],
+  limit: number,
+): readonly BookingRecommendationItem[] {
+  const ranked = [...recommendations].sort(compareRecommendations);
+  if (limit < 3) {
+    return ranked
+      .slice(0, limit)
+      .sort(compareRecommendationSchedule)
+      .map(({ item }) => item);
+  }
+
+  const anchors = (['TRAINING', 'TOURNAMENT'] as const).flatMap((kind) => {
+    const recommendation = ranked.find((candidate) => candidate.item.kind === kind);
+    return recommendation ? [recommendation] : [];
+  });
+  const selected = [...anchors];
+  const selectedIds = new Set(selected.map(recommendationIdentity));
+  for (const recommendation of ranked) {
+    if (selected.length >= limit) break;
+    const identity = recommendationIdentity(recommendation);
+    if (selectedIds.has(identity)) continue;
+    selected.push(recommendation);
+    selectedIds.add(identity);
+  }
+  return selected.sort(compareRecommendationSchedule).map(({ item }) => item);
 }
 
 const WEEKDAY: Readonly<Record<string, BookingPreferenceWeekday>> = {
@@ -104,19 +206,19 @@ function minutes(value: string): number {
   return Number(hour) * 60 + Number(minute);
 }
 
-function fitsLevel(game: GameCardView, playerLevel: GamePlayerLevel | null): boolean {
-  if (!playerLevel || !game.levelRange) return true;
+function fitsLevel(event: RankableEvent, playerLevel: GamePlayerLevel | null): boolean {
+  if (!playerLevel || !event.levelRange) return true;
   const player = levelIndex(playerLevel);
-  const from = game.levelRange.from ? levelIndex(game.levelRange.from) : 0;
-  const to = game.levelRange.to ? levelIndex(game.levelRange.to) : GAME_PLAYER_LEVELS.length - 1;
+  const from = event.levelRange.from ? levelIndex(event.levelRange.from) : 0;
+  const to = event.levelRange.to ? levelIndex(event.levelRange.to) : GAME_PLAYER_LEVELS.length - 1;
   return player >= from && player <= to;
 }
 
-function levelScore(game: GameCardView, playerLevel: GamePlayerLevel | null): number {
+function levelScore(event: RankableEvent, playerLevel: GamePlayerLevel | null): number {
   if (!playerLevel) return 0.5;
-  if (!game.levelRange) return 0.7;
-  const from = game.levelRange.from ? levelIndex(game.levelRange.from) : 0;
-  const to = game.levelRange.to ? levelIndex(game.levelRange.to) : GAME_PLAYER_LEVELS.length - 1;
+  if (!event.levelRange) return 0.7;
+  const from = event.levelRange.from ? levelIndex(event.levelRange.from) : 0;
+  const to = event.levelRange.to ? levelIndex(event.levelRange.to) : GAME_PLAYER_LEVELS.length - 1;
   const distance = Math.abs(levelIndex(playerLevel) - (from + to) / 2);
   return Math.max(0.65, 1 - distance * 0.12);
 }
@@ -136,19 +238,23 @@ function affinityMaps(
   now: string,
 ): {
   readonly stations: ReadonlyMap<string, number>;
+  readonly stationNames: ReadonlyMap<string, number>;
   readonly times: ReadonlyMap<string, number>;
 } {
   const stations = new Map<string, number>();
+  const stationNames = new Map<string, number>();
   const times = new Map<string, number>();
   const nowMs = Date.parse(now);
   for (const game of history) {
     const ageDays = Math.max(0, (nowMs - Date.parse(game.startsAt)) / (24 * 60 * 60 * 1_000));
     const weight = 0.5 ** (ageDays / 45);
     stations.set(game.station.id, (stations.get(game.station.id) ?? 0) + weight);
+    const stationName = normalizeStationName(game.station.name);
+    stationNames.set(stationName, (stationNames.get(stationName) ?? 0) + weight);
     const slot = localSlot(game.startsAt, game.timezone);
     times.set(slot.timeBucket, (times.get(slot.timeBucket) ?? 0) + weight);
   }
-  return { stations, times };
+  return { stations, stationNames, times };
 }
 
 function normalizedAffinity(map: ReadonlyMap<string, number>, key: string): number {
@@ -157,14 +263,65 @@ function normalizedAffinity(map: ReadonlyMap<string, number>, key: string): numb
   return (map.get(key) ?? 0) / maximum;
 }
 
-function explicitTimeMatch(game: GameCardView, preferences: BookingPreferences): boolean {
-  const slot = localSlot(game.startsAt, game.timezone);
+function normalizeStationName(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replaceAll('ё', 'е')
+    .replace(/[^a-z0-9а-я]+/g, '');
+}
+
+function explicitTimeMatch(event: RankableEvent, preferences: BookingPreferences): boolean {
+  const slot = localSlot(event.startsAt, event.timezone);
   return preferences.preferredTimeWindows.some(
     (window) =>
       window.weekday === slot.weekday &&
       slot.minuteOfDay >= minutes(window.startsAt) &&
       slot.minuteOfDay < minutes(window.endsAt),
   );
+}
+
+function scoreEvent(input: {
+  readonly event: RankableEvent;
+  readonly affinity: ReturnType<typeof affinityMaps>;
+  readonly favoriteStations: ReadonlySet<string>;
+  readonly preferences: BookingPreferences;
+  readonly playerLevel: GamePlayerLevel | null;
+}): { readonly reasons: readonly BookingRecommendationReason[]; readonly score: number } {
+  const reasons: BookingRecommendationReason[] = [];
+  const level = levelScore(input.event, input.playerLevel);
+  if (input.playerLevel && input.event.levelRange) reasons.push('LEVEL_MATCH');
+
+  const stationHistory = Math.max(
+    normalizedAffinity(input.affinity.stations, input.event.station.id),
+    normalizedAffinity(input.affinity.stationNames, normalizeStationName(input.event.station.name)),
+  );
+  const station = input.favoriteStations.has(input.event.station.id)
+    ? 1
+    : input.favoriteStations.size > 0
+      ? Math.max(0.15, stationHistory * 0.7)
+      : stationHistory > 0
+        ? stationHistory
+        : 0.5;
+  if (input.favoriteStations.has(input.event.station.id)) reasons.push('FAVORITE_STATION');
+  else if (stationHistory >= 0.5) reasons.push('PLAYED_STATION');
+
+  const preferredTime = explicitTimeMatch(input.event, input.preferences);
+  const slot = localSlot(input.event.startsAt, input.event.timezone);
+  const timeHistory = normalizedAffinity(input.affinity.times, slot.timeBucket);
+  const time =
+    input.preferences.preferredTimeWindows.length > 0
+      ? preferredTime
+        ? 1
+        : Math.max(0.15, timeHistory * 0.7)
+      : timeHistory > 0
+        ? timeHistory
+        : 0.5;
+  if (preferredTime) reasons.push('PREFERRED_TIME');
+  else if (timeHistory >= 0.5) reasons.push('USUAL_TIME');
+  if (reasons.length === 0) reasons.push('AVAILABLE_SOON');
+
+  return { reasons, score: level * 0.45 + station * 0.3 + time * 0.25 };
 }
 
 function personalizationMode(
@@ -183,8 +340,7 @@ function rankGames(input: {
   readonly preferences: BookingPreferences;
   readonly playerLevel: GamePlayerLevel | null;
   readonly now: string;
-  readonly limit: number;
-}): readonly BookingRecommendationItem[] {
+}): readonly ScoredRecommendation[] {
   const usefulHistory = input.preferences.useHistory
     ? completedHistory({ history: input.history, now: input.now })
     : [];
@@ -199,49 +355,77 @@ function rankGames(input: {
         fitsLevel(game, input.playerLevel),
     )
     .map((game) => {
-      const reasons: BookingRecommendationReason[] = [];
-      const level = levelScore(game, input.playerLevel);
-      if (input.playerLevel && game.levelRange) reasons.push('LEVEL_MATCH');
-
-      const stationHistory = normalizedAffinity(affinity.stations, game.station.id);
-      const station = favoriteStations.has(game.station.id)
-        ? 1
-        : favoriteStations.size > 0
-          ? Math.max(0.15, stationHistory * 0.7)
-          : stationHistory > 0
-            ? stationHistory
-            : 0.5;
-      if (favoriteStations.has(game.station.id)) reasons.push('FAVORITE_STATION');
-      else if (stationHistory >= 0.5) reasons.push('PLAYED_STATION');
-
-      const preferredTime = explicitTimeMatch(game, input.preferences);
-      const slot = localSlot(game.startsAt, game.timezone);
-      const timeHistory = normalizedAffinity(affinity.times, slot.timeBucket);
-      const time =
-        input.preferences.preferredTimeWindows.length > 0
-          ? preferredTime
-            ? 1
-            : Math.max(0.15, timeHistory * 0.7)
-          : timeHistory > 0
-            ? timeHistory
-            : 0.5;
-      if (preferredTime) reasons.push('PREFERRED_TIME');
-      else if (timeHistory >= 0.5) reasons.push('USUAL_TIME');
-      if (reasons.length === 0) reasons.push('AVAILABLE_SOON');
-
+      const ranked = scoreEvent({
+        event: game,
+        affinity,
+        favoriteStations,
+        preferences: input.preferences,
+        playerLevel: input.playerLevel,
+      });
       return {
-        item: { game, reasons },
-        score: level * 0.45 + station * 0.3 + time * 0.25,
+        item: { kind: 'GAME' as const, game, reasons: ranked.reasons },
+        score: ranked.score,
+        startsAt: game.startsAt,
+        id: game.id,
       };
-    })
-    .sort(
-      (left, right) =>
-        right.score - left.score ||
-        Date.parse(left.item.game.startsAt) - Date.parse(right.item.game.startsAt) ||
-        left.item.game.id.localeCompare(right.item.game.id),
-    )
-    .slice(0, input.limit)
-    .map(({ item }) => item);
+    });
+}
+
+function activityFromSource(
+  activity: VivaExerciseRecommendation,
+): BookingRecommendationActivity | undefined {
+  const from = activity.levelRange?.from;
+  const to = activity.levelRange?.to;
+  if (
+    (from && !GAME_PLAYER_LEVELS.includes(from as GamePlayerLevel)) ||
+    (to && !GAME_PLAYER_LEVELS.includes(to as GamePlayerLevel))
+  ) {
+    return undefined;
+  }
+  return {
+    ...activity,
+    levelRange: from && to ? { from: from as GamePlayerLevel, to: to as GamePlayerLevel } : null,
+  };
+}
+
+function rankActivities(input: {
+  readonly activities: readonly VivaExerciseRecommendation[];
+  readonly history: readonly GameCardView[];
+  readonly preferences: BookingPreferences;
+  readonly playerLevel: GamePlayerLevel | null;
+  readonly now: string;
+}): readonly ScoredRecommendation[] {
+  const usefulHistory = input.preferences.useHistory
+    ? completedHistory({ history: input.history, now: input.now })
+    : [];
+  const affinity = affinityMaps(usefulHistory, input.now);
+  const favoriteStations = new Set(input.preferences.favoriteStationIds);
+  return input.activities.flatMap((sourceActivity) => {
+    const activity = activityFromSource(sourceActivity);
+    if (
+      !activity ||
+      Date.parse(activity.startsAt) < Date.parse(input.now) ||
+      activity.capacity.open === 0 ||
+      !fitsLevel(activity, input.playerLevel)
+    ) {
+      return [];
+    }
+    const ranked = scoreEvent({
+      event: activity,
+      affinity,
+      favoriteStations,
+      preferences: input.preferences,
+      playerLevel: input.playerLevel,
+    });
+    return [
+      {
+        item: { kind: activity.kind, activity, reasons: ranked.reasons },
+        score: ranked.score,
+        startsAt: activity.startsAt,
+        id: activity.id,
+      },
+    ];
+  });
 }
 
 export async function listBookingRecommendations(input: {
@@ -251,6 +435,7 @@ export async function listBookingRecommendations(input: {
   readonly userId: string;
   readonly preferences: BookingPreferences;
   readonly playerLevel: GamePlayerLevel | null;
+  readonly activities?: readonly VivaExerciseRecommendation[];
   readonly now: string;
   readonly limit: number;
 }): Promise<BookingRecommendationPage> {
@@ -288,7 +473,13 @@ export async function listBookingRecommendations(input: {
       },
     ),
   );
-  const items = rankGames({ ...input, candidates, history });
+  const rankedGames = rankGames({ ...input, candidates, history });
+  const rankedActivities = rankActivities({
+    ...input,
+    activities: input.activities ?? [],
+    history,
+  });
+  const items = selectDiverseRecommendations([...rankedGames, ...rankedActivities], input.limit);
   const version = createHash('sha256')
     .update(
       JSON.stringify({
@@ -301,6 +492,11 @@ export async function listBookingRecommendations(input: {
         history: projectionInputs.history.map((item: StoredGameCardProjection) => [
           item.gameId,
           item.projectionRevision,
+        ]),
+        activities: (input.activities ?? []).map((item) => [
+          item.id,
+          item.startsAt,
+          item.capacity.open,
         ]),
       }),
     )

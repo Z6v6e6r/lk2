@@ -8,7 +8,9 @@ import {
 } from './index.js';
 
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
+const MAX_RANK_RESPONSE_BYTES = 512 * 1024;
 const MAX_SOURCE_COMMUNITIES = 1_000;
+const MAX_RANK_ENRICHMENTS = 8;
 
 export type LegacyCommunityReadErrorCode =
   | 'COMMUNITY_LEGACY_IDENTITY_UNAVAILABLE'
@@ -25,6 +27,7 @@ export class LegacyCommunityReadError extends Error {
 }
 
 export interface LegacyCommunityMetric {
+  readonly operation: 'membership-summary' | 'community-rating';
   readonly outcome: 'success' | 'failure';
   readonly attempt: number;
   readonly durationMs: number;
@@ -38,10 +41,17 @@ interface CacheEntry {
   readonly pending?: Promise<readonly CommunityDirectoryItem[]>;
 }
 
+interface RankCacheEntry {
+  readonly expiresAt: number;
+  readonly value?: number | null;
+  readonly pending?: Promise<number | null>;
+}
+
 interface LegacyCommunityCandidate {
   readonly externalId: string;
   readonly title: string;
   readonly isVerified: boolean;
+  readonly memberRank?: number;
   readonly sortAt: string;
   readonly logoSourceUrl?: string;
 }
@@ -81,6 +91,19 @@ function booleanValue(value: unknown): boolean | undefined {
   return undefined;
 }
 
+function positiveInteger(...values: unknown[]): number | undefined {
+  for (const value of values) {
+    const parsed =
+      typeof value === 'number'
+        ? value
+        : typeof value === 'string' && value.trim()
+          ? Number(value)
+          : Number.NaN;
+    if (Number.isInteger(parsed) && parsed > 0) return parsed;
+  }
+  return undefined;
+}
+
 function normalizePhone(value: unknown): string | undefined {
   if (typeof value !== 'string' && typeof value !== 'number') return undefined;
   const digits = String(value).replace(/\D/g, '');
@@ -94,6 +117,7 @@ function identityMatches(member: unknown, identity: LegacyCommunityViewerIdentit
   const memberId =
     stringValue(member.id) ??
     stringValue(member.clientId) ??
+    stringValue(member.playerId) ??
     stringValue(member.userId) ??
     stringValue(member.uuid);
   const memberPhone = normalizePhone(
@@ -102,6 +126,46 @@ function identityMatches(member: unknown, identity: LegacyCommunityViewerIdentit
   return Boolean(
     (identity.clientId && memberId === identity.clientId) ||
     (identity.phoneE164 && memberPhone === normalizePhone(identity.phoneE164)),
+  );
+}
+
+function extractViewerRank(
+  payload: unknown,
+  identity: LegacyCommunityViewerIdentity,
+): number | undefined {
+  if (!isRecord(payload)) return undefined;
+  const nested = isRecord(payload.data) ? payload.data : undefined;
+  const directViewer = isRecord(payload.viewer)
+    ? payload.viewer
+    : nested && isRecord(nested.viewer)
+      ? nested.viewer
+      : undefined;
+  if (directViewer && identityMatches(directViewer, identity)) {
+    const directRank = positiveInteger(
+      directViewer.rank,
+      directViewer.overallPlace,
+      directViewer.place,
+      directViewer.position,
+    );
+    if (directRank) return directRank;
+  }
+
+  const rowsValue =
+    payload.items ??
+    payload.rows ??
+    payload.result ??
+    (Array.isArray(payload.data) ? payload.data : undefined) ??
+    nested?.items ??
+    nested?.rows ??
+    nested?.result;
+  if (!Array.isArray(rowsValue)) return undefined;
+  const viewerRow = (rowsValue as readonly unknown[]).find((row) => identityMatches(row, identity));
+  if (!isRecord(viewerRow)) return undefined;
+  return positiveInteger(
+    viewerRow.rank,
+    viewerRow.overallPlace,
+    viewerRow.place,
+    viewerRow.position,
   );
 }
 
@@ -161,15 +225,29 @@ function extractCandidates(
   const byExternalId = new Map<string, LegacyCommunityCandidate>();
   for (const value of rows) {
     if (!isRecord(value) || !Array.isArray(value.members)) continue;
-    if (!value.members.some((member) => identityMatches(member, identity))) continue;
+    const members: readonly unknown[] = value.members;
+    const viewerMember = members.find((member) => identityMatches(member, identity));
+    if (!isRecord(viewerMember)) continue;
     const externalId = stringValue(value.id ?? value.communityId ?? value.uuid);
     const title = stringValue(value.name ?? value.title);
     if (!externalId || externalId.length > 500 || !title) continue;
     const sourceLogoUrl = logoSourceUrl(value, baseUrl);
+    const memberRating = isRecord(viewerMember.rating) ? viewerMember.rating : undefined;
+    const memberRank = positiveInteger(
+      viewerMember.communityRank,
+      viewerMember.ratingPosition,
+      viewerMember.rank,
+      viewerMember.place,
+      viewerMember.position,
+      memberRating?.rank,
+      memberRating?.place,
+      memberRating?.position,
+    );
     byExternalId.set(externalId, {
       externalId,
       title: title.slice(0, 120),
       isVerified: verifiedCommunity(value),
+      ...(memberRank ? { memberRank } : {}),
       sortAt: safeDate(value.lastVisibleFeedActivityAt, value.updatedAt, value.createdAt),
       ...(sourceLogoUrl ? { logoSourceUrl: sourceLogoUrl } : {}),
     });
@@ -188,8 +266,12 @@ function wait(milliseconds: number): Promise<void> {
 export class LegacyCommunityReadRepository implements CommunityDirectoryRepository {
   private readonly fetchImplementation: typeof fetch;
   private readonly cache = new Map<string, CacheEntry>();
+  private readonly rankCache = new Map<string, RankCacheEntry>();
+  private readonly externalCommunityIds = new Map<string, string>();
   private consecutiveFailures = 0;
   private circuitOpenUntil = 0;
+  private rankConsecutiveFailures = 0;
+  private rankCircuitOpenUntil = 0;
 
   public constructor(private readonly options: LegacyCommunityReadRepositoryOptions) {
     this.fetchImplementation =
@@ -208,7 +290,185 @@ export class LegacyCommunityReadRepository implements CommunityDirectoryReposito
     };
   }): Promise<CommunityDirectoryRepositoryPage> {
     const items = await this.getMemberships(input);
-    return paginateCommunityDirectoryItems(items, input.limit, input.after);
+    const page = paginateCommunityDirectoryItems(items, input.limit, input.after);
+    return {
+      ...page,
+      items: await this.enrichMemberRanks(
+        page.items,
+        input.tenantId,
+        input.userId,
+        input.correlationId,
+      ),
+    };
+  }
+
+  private async enrichMemberRanks(
+    items: readonly CommunityDirectoryItem[],
+    tenantId: string,
+    userId: string,
+    correlationId: string,
+  ): Promise<readonly CommunityDirectoryItem[]> {
+    const identity = await this.options.bridge.getViewerIdentity(tenantId, userId);
+    if (!identity.phoneE164 && !identity.clientId) return items;
+    const candidates = items.filter((item) => !item.memberRank).slice(0, MAX_RANK_ENRICHMENTS);
+    if (candidates.length === 0) return items;
+
+    const ranks = new Map<string, number>();
+    await Promise.all(
+      candidates.map(async (item) => {
+        const externalId = this.externalCommunityIds.get(`${tenantId}:${item.id}`);
+        if (!externalId) return;
+        const rank = await this.getMemberRank(
+          tenantId,
+          userId,
+          externalId,
+          identity,
+          correlationId,
+        );
+        if (rank) ranks.set(item.id, rank);
+      }),
+    );
+    return items.map((item) => {
+      const memberRank = ranks.get(item.id);
+      return memberRank ? { ...item, memberRank } : item;
+    });
+  }
+
+  private getMemberRank(
+    tenantId: string,
+    userId: string,
+    externalCommunityId: string,
+    identity: LegacyCommunityViewerIdentity,
+    correlationId: string,
+  ): Promise<number | null> {
+    const cacheKey = `${tenantId}:${userId}:${externalCommunityId}`;
+    const cached = this.rankCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      if (cached.value !== undefined) return Promise.resolve(cached.value);
+      if (cached.pending) return cached.pending;
+    }
+
+    const pending = this.fetchMemberRank(externalCommunityId, identity, correlationId).then(
+      (value) => {
+        const normalized = value ?? null;
+        this.rankCache.set(cacheKey, {
+          expiresAt: Date.now() + Math.max(5_000, this.options.cacheTtlMs),
+          value: normalized,
+        });
+        return normalized;
+      },
+      () => {
+        this.rankCache.set(cacheKey, {
+          expiresAt: Date.now() + 5_000,
+          value: null,
+        });
+        return null;
+      },
+    );
+    this.rankCache.set(cacheKey, {
+      expiresAt: Date.now() + Math.max(5_000, this.options.timeoutMs * 2 + 500),
+      pending,
+    });
+    return pending;
+  }
+
+  private async fetchMemberRank(
+    externalCommunityId: string,
+    identity: LegacyCommunityViewerIdentity,
+    correlationId: string,
+  ): Promise<number | undefined> {
+    if (this.rankCircuitOpenUntil > Date.now()) {
+      this.options.onMetric?.({
+        operation: 'community-rating',
+        outcome: 'failure',
+        attempt: 1,
+        durationMs: 0,
+        code: 'COMMUNITY_LEGACY_CIRCUIT_OPEN',
+      });
+      return undefined;
+    }
+    for (const route of ['rating', 'ranking'] as const) {
+      const url = new URL(
+        `/lk/communities/${encodeURIComponent(externalCommunityId)}/${route}`,
+        this.options.baseUrl,
+      );
+      if (identity.phoneE164)
+        url.searchParams.set('phone', normalizePhone(identity.phoneE164) ?? '');
+      if (identity.clientId) url.searchParams.set('clientId', identity.clientId);
+      url.searchParams.set('tab', 'overall');
+      url.searchParams.set('period', '30d');
+      url.searchParams.set('calculationVersion', 'community-rating-v1.3.0');
+      const startedAt = Date.now();
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), this.options.timeoutMs);
+      try {
+        const response = await this.fetchImplementation(url, {
+          method: 'GET',
+          headers: {
+            Accept: 'application/json',
+            'X-Correlation-ID': correlationId,
+          },
+          signal: controller.signal,
+        });
+        if (!response.ok) {
+          this.options.onMetric?.({
+            operation: 'community-rating',
+            outcome: 'failure',
+            attempt: 1,
+            durationMs: Date.now() - startedAt,
+            status: response.status,
+            code: 'COMMUNITY_LEGACY_UNAVAILABLE',
+          });
+          if (response.status === 404 && route === 'rating') continue;
+          this.recordRankFailure();
+          return undefined;
+        }
+        const contentLength = Number(response.headers.get('content-length') ?? 0);
+        if (contentLength > MAX_RANK_RESPONSE_BYTES) {
+          this.recordRankFailure();
+          return undefined;
+        }
+        const text = await response.text();
+        if (Buffer.byteLength(text, 'utf8') > MAX_RANK_RESPONSE_BYTES) {
+          this.recordRankFailure();
+          return undefined;
+        }
+        const payload = JSON.parse(text) as unknown;
+        const rank = extractViewerRank(payload, identity);
+        this.rankConsecutiveFailures = 0;
+        this.rankCircuitOpenUntil = 0;
+        this.options.onMetric?.({
+          operation: 'community-rating',
+          outcome: 'success',
+          attempt: 1,
+          durationMs: Date.now() - startedAt,
+          status: response.status,
+        });
+        return rank;
+      } catch {
+        this.recordRankFailure();
+        this.options.onMetric?.({
+          operation: 'community-rating',
+          outcome: 'failure',
+          attempt: 1,
+          durationMs: Date.now() - startedAt,
+          code: controller.signal.aborted
+            ? 'COMMUNITY_LEGACY_TIMEOUT'
+            : 'COMMUNITY_LEGACY_RESPONSE_INVALID',
+        });
+        return undefined;
+      } finally {
+        clearTimeout(timeout);
+      }
+    }
+    return undefined;
+  }
+
+  private recordRankFailure(): void {
+    this.rankConsecutiveFailures += 1;
+    if (this.rankConsecutiveFailures >= this.options.circuitFailureThreshold) {
+      this.rankCircuitOpenUntil = Date.now() + this.options.circuitResetMs;
+    }
   }
 
   private getMemberships(input: {
@@ -286,12 +546,14 @@ export class LegacyCommunityReadRepository implements CommunityDirectoryReposito
     const result = candidates.map((candidate) => {
       const id = ids.get(candidate.externalId);
       if (!id) throw new LegacyCommunityReadError('COMMUNITY_LEGACY_RESPONSE_INVALID');
+      this.externalCommunityIds.set(`${input.tenantId}:${id}`, candidate.externalId);
       return {
         id,
         title: candidate.title,
         logoUrl: storedLogoUrls.get(id) ?? null,
         isVerified: candidate.isVerified,
         unreadChatCount: 0,
+        ...(candidate.memberRank ? { memberRank: candidate.memberRank } : {}),
         pinned: false,
         sortAt: candidate.sortAt,
         ...(candidate.logoSourceUrl ? { legacyLogoSourceUrl: candidate.logoSourceUrl } : {}),
@@ -347,6 +609,7 @@ export class LegacyCommunityReadRepository implements CommunityDirectoryReposito
           throw new LegacyCommunityReadError('COMMUNITY_LEGACY_RESPONSE_INVALID');
         }
         this.options.onMetric?.({
+          operation: 'membership-summary',
           outcome: 'success',
           attempt,
           durationMs: Date.now() - startedAt,
@@ -363,6 +626,7 @@ export class LegacyCommunityReadRepository implements CommunityDirectoryReposito
                   : 'COMMUNITY_LEGACY_UNAVAILABLE',
               );
         this.options.onMetric?.({
+          operation: 'membership-summary',
           outcome: 'failure',
           attempt,
           durationMs: Date.now() - startedAt,

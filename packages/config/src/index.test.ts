@@ -41,6 +41,7 @@ describe('loadConfig', () => {
       LEGACY_GAMES_PROFILE_PHOTO_SYNC_LOOKBACK_DAYS: 30,
       HOME_PROJECTION_TTL_SECONDS: 300,
       HOME_VIVA_SYNC_ENABLED: false,
+      HOME_VIVA_LEGACY_GAME_BRIDGE_ENABLED: false,
       HOME_VIVA_SYNC_INTERVAL_MS: 120_000,
       HOME_VIVA_SYNC_FAILURE_BACKOFF_MS: 300_000,
       COMMUNITIES_READ_MODE: 'mock',
@@ -341,6 +342,55 @@ describe('loadConfig', () => {
         LEGACY_GAMES_ROSTER_SYNC_TENANT_KEY: 'local-padel',
       }),
     ).toThrow('ACTIVITY_HISTORY_GAME_BACKFILL_ENABLED requires ACTIVITY_HISTORY_SYNC_ENABLED=true');
+  });
+
+  it('gates the targeted Viva Home Game bridge independently from continuous roster sync', () => {
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        APP_ENV: 'local',
+        HOME_VIVA_LEGACY_GAME_BRIDGE_ENABLED: 'true',
+      }),
+    ).toThrow('requires HOME_VIVA_SYNC_ENABLED=true');
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        APP_ENV: 'local',
+        HOME_VIVA_SYNC_ENABLED: 'true',
+        HOME_VIVA_LEGACY_GAME_BRIDGE_ENABLED: 'true',
+      }),
+    ).toThrow('requires GAMES_READ_ENABLED=true');
+    expect(
+      loadConfig({
+        ...validEnvironment,
+        APP_ENV: 'local',
+        VIVA_MODE: 'sandbox',
+        VIVA_OAUTH_ENABLED: 'true',
+        VIVA_OAUTH_REDIRECT_URI: 'https://lk.padlhub.test/oauth/callback',
+        VIVA_OAUTH_SUCCESS_REDIRECT_URL: 'https://lk.padlhub.test/',
+        VIVA_DELEGATION_ENCRYPTION_KEY: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+        HOME_VIVA_SYNC_ENABLED: 'true',
+        HOME_VIVA_LEGACY_GAME_BRIDGE_ENABLED: 'true',
+        GAMES_READ_ENABLED: 'true',
+        LEGACY_GAMES_ROSTER_SYNC_ENABLED: 'false',
+        LEGACY_GAMES_ROSTER_SYNC_SOURCE: 'public',
+        LEGACY_GAMES_ROSTER_SYNC_TENANT_KEY: 'local-padel',
+      }),
+    ).toMatchObject({
+      HOME_VIVA_LEGACY_GAME_BRIDGE_ENABLED: true,
+      LEGACY_GAMES_ROSTER_SYNC_ENABLED: false,
+    });
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        APP_ENV: 'ci',
+        HOME_VIVA_SYNC_ENABLED: 'true',
+        HOME_VIVA_LEGACY_GAME_BRIDGE_ENABLED: 'true',
+        GAMES_READ_ENABLED: 'true',
+        LEGACY_GAMES_ROSTER_SYNC_SOURCE: 'public',
+        LEGACY_GAMES_ROSTER_SYNC_TENANT_KEY: 'ci-padel',
+      }),
+    ).toThrow('allowed only in local or staging');
   });
 
   it('allows the synthetic CUP operator code only in a fully explicit local runtime', () => {

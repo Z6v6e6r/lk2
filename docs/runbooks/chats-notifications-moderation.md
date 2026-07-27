@@ -6,6 +6,13 @@ Use this runbook when enabling or rolling back messaging, Web/iOS/Android push, 
 moderation for a tenant. The database migration is an expand-only foundation; it does not authorize
 opening public routes by itself.
 
+For Jetson Nano, use the bounded
+[Nano test-contour plan](../plans/nano-chats-notifications-test-contour.md). It records the verified
+release baseline, separates the notification slice that is already implemented from chat surfaces
+that still require M1/M2 implementation, and defines the load ceiling and acceptance gates for
+internal testing. A `200` healthcheck or an existing messaging table does not by itself authorize
+enabling chats.
+
 ## Preconditions
 
 - The exact immutable API, worker and realtime image digests passed CI and staging.

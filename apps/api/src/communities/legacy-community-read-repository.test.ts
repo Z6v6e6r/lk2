@@ -35,7 +35,7 @@ function bridge(): CommunityLegacyBridgeRepository {
   };
 }
 
-function payload() {
+function payload(options: { readonly embeddedRank?: boolean } = {}) {
   return {
     communities: [
       {
@@ -49,6 +49,7 @@ function payload() {
             id: 'legacy-client-1',
             phone: '79990000001',
             name: 'Скрытое имя',
+            ...(options.embeddedRank === false ? {} : { rating: { position: 7 } }),
           },
         ],
       },
@@ -101,6 +102,7 @@ describe('legacy community read repository', () => {
         legacyLogoSourceUrl:
           'https://legacy.padlhub.test/lk/media/community-logo/community_logo_123',
         isVerified: true,
+        memberRank: 7,
       }),
     ]);
     expect(JSON.stringify(items.items)).not.toContain('community_legacy_mine');
@@ -124,6 +126,60 @@ describe('legacy community read repository', () => {
       limit: 20,
     });
     expect(fetchImplementation).toHaveBeenCalledTimes(1);
+  });
+
+  it('enriches the visible membership from the current community rating snapshot', async () => {
+    const source = payload({ embeddedRank: false });
+    const fetchImplementation = vi.fn<typeof fetch>().mockImplementation((input) => {
+      const url = new URL(typeof input === 'string' || input instanceof URL ? input : input.url);
+      if (url.pathname.endsWith('/rating')) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              communityId: 'community_legacy_mine',
+              calculationVersion: 'community-rating-v1.3.0',
+              items: [
+                {
+                  rank: 12,
+                  playerId: 'legacy-client-1',
+                  playerName: 'Скрытое имя',
+                },
+              ],
+            }),
+            { status: 200 },
+          ),
+        );
+      }
+      return Promise.resolve(new Response(JSON.stringify(source), { status: 200 }));
+    });
+    const repository = new LegacyCommunityReadRepository({
+      baseUrl: 'https://legacy.padlhub.test',
+      timeoutMs: 1_000,
+      maxAttempts: 2,
+      circuitFailureThreshold: 3,
+      circuitResetMs: 30_000,
+      cacheTtlMs: 30_000,
+      bridge: bridge(),
+      fetchImplementation,
+    });
+
+    const page = await repository.listMemberships({
+      tenantId,
+      userId,
+      correlationId: 'community-rating-test',
+      limit: 4,
+    });
+
+    expect(page.items[0]).toEqual(expect.objectContaining({ memberRank: 12 }));
+    expect(fetchImplementation).toHaveBeenCalledTimes(2);
+    const rankingRequest = fetchImplementation.mock.calls[1]?.[0];
+    const rankingUrl =
+      typeof rankingRequest === 'string'
+        ? rankingRequest
+        : rankingRequest instanceof URL
+          ? rankingRequest.href
+          : rankingRequest?.url;
+    expect(rankingUrl).toContain('/lk/communities/community_legacy_mine/rating');
   });
 
   it('retries a bounded transient failure and reports only redacted metrics', async () => {

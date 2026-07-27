@@ -161,36 +161,7 @@ describe('Home progressive navigation', () => {
     );
   });
 
-  it('keeps the quick-action block and the bookings/recommendations tabs visible', () => {
-    render(
-      <HomeDashboardPage
-        dashboard={dashboard}
-        tenantName="ПадлХАБ"
-        notificationUnreadCount={0}
-        loadCommunityPage={() => Promise.resolve({ items: [] })}
-        logoutBusy={false}
-        onLogout={vi.fn()}
-      />,
-    );
-
-    const actions = screen.getByRole('navigation', { name: 'Разделы клуба' });
-    expect(within(actions).getByRole('link', { name: 'Игры' })).toHaveAttribute('href', '/games');
-    expect(within(actions).getByRole('link', { name: 'Турниры' })).toHaveAttribute(
-      'href',
-      '/tournaments',
-    );
-    expect(within(actions).getByRole('link', { name: 'Тренировки' })).toHaveAttribute(
-      'href',
-      '/trainings',
-    );
-    expect(screen.getByRole('tab', { name: 'Мои записи' })).toHaveAttribute(
-      'aria-selected',
-      'true',
-    );
-    expect(screen.getByRole('tab', { name: 'Для меня' })).toHaveAttribute('aria-selected', 'false');
-  });
-
-  it('loads recommendations only after the user opens the For me tab', async () => {
+  it('shows only games and trainings and opens recommendations by default', async () => {
     const loadBookingRecommendations = vi.fn().mockResolvedValue({
       version: 'a'.repeat(64),
       generatedAt: '2026-07-18T09:00:00.000Z',
@@ -211,13 +182,57 @@ describe('Home progressive navigation', () => {
       />,
     );
 
-    expect(loadBookingRecommendations).not.toHaveBeenCalled();
+    const actions = screen.getByRole('navigation', { name: 'Разделы клуба' });
+    expect(within(actions).getByRole('link', { name: 'Игры' })).toHaveAttribute('href', '/games');
+    expect(within(actions).queryByRole('link', { name: 'Турниры' })).not.toBeInTheDocument();
+    expect(within(actions).getByRole('link', { name: 'Тренировки' })).toHaveAttribute(
+      'href',
+      '/trainings',
+    );
+    expect(screen.getByRole('tab', { name: 'Мои записи' })).toHaveAttribute(
+      'aria-selected',
+      'false',
+    );
+    expect(screen.getByRole('tab', { name: 'Для меня' })).toHaveAttribute('aria-selected', 'true');
+    await vi.waitFor(() => expect(loadBookingRecommendations).toHaveBeenCalledOnce());
+    expect(screen.queryByText('Подходящие игры')).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Настроить' })).toHaveAttribute(
+      'href',
+      '/profile#booking-preferences-title',
+    );
+  });
+
+  it('does not reload recommendations when the active For me tab is clicked again', async () => {
+    const loadBookingRecommendations = vi.fn().mockResolvedValue({
+      version: 'a'.repeat(64),
+      generatedAt: '2026-07-18T09:00:00.000Z',
+      staleAt: '2026-07-18T09:05:00.000Z',
+      personalization: 'BASIC',
+      items: [],
+      nextCursor: null,
+    });
+    render(
+      <HomeDashboardPage
+        dashboard={dashboard}
+        tenantName="ПадлХАБ"
+        notificationUnreadCount={0}
+        loadCommunityPage={() => Promise.resolve({ items: [] })}
+        loadBookingRecommendations={loadBookingRecommendations}
+        logoutBusy={false}
+        onLogout={vi.fn()}
+      />,
+    );
+
+    await vi.waitFor(() => expect(loadBookingRecommendations).toHaveBeenCalledOnce());
     fireEvent.click(screen.getByRole('tab', { name: 'Для меня' }));
     await vi.waitFor(() => expect(loadBookingRecommendations).toHaveBeenCalledOnce());
     await vi.waitFor(() =>
-      expect(screen.getByRole('status')).toHaveTextContent('Пока нет подходящих игр'),
+      expect(screen.getByRole('status')).toHaveTextContent('Пока нет подходящих событий'),
     );
     expect(screen.queryByText('Персональная подборка')).not.toBeInTheDocument();
+    const allRecommendations = screen.getByRole('link', { name: 'Все рекомендации' });
+    expect(allRecommendations).toHaveAttribute('href', '/bookings?view=for-me');
+    expect(allRecommendations.parentElement).toHaveClass('fh-bookings-footer-action');
   });
 });
 
@@ -234,6 +249,7 @@ describe('Home upcoming bookings', () => {
       />,
     );
 
+    fireEvent.click(screen.getByRole('tab', { name: 'Мои записи' }));
     const bookings = screen.getByRole('region', { name: 'Мои записи' });
     expect(within(bookings).getByRole('status')).toHaveTextContent('Ближайших записей нет');
     expect(container.querySelectorAll('.fh-event')).toHaveLength(0);
@@ -273,6 +289,7 @@ describe('Home upcoming bookings', () => {
       />,
     );
 
+    fireEvent.click(screen.getByRole('tab', { name: 'Мои записи' }));
     const cards = container.querySelectorAll('.fh-event');
     expect(cards).toHaveLength(2);
 
@@ -323,6 +340,7 @@ describe('Home upcoming bookings', () => {
       />,
     );
 
+    fireEvent.click(screen.getByRole('tab', { name: 'Мои записи' }));
     expect(container.querySelector('.figma-home-shell')).toHaveClass('has-bookings-scroll-peek');
     expect(container.querySelectorAll('.fh-bookings-list > .fh-booking-entry')).toHaveLength(3);
   });
@@ -361,6 +379,7 @@ describe('Home upcoming bookings', () => {
       />,
     );
 
+    fireEvent.click(screen.getByRole('tab', { name: 'Мои записи' }));
     const filter = screen.getByLabelText('Фильтр записей по дате');
     const allDates = within(filter).getByRole('button', { name: 'Все даты' });
     expect(allDates).toHaveAttribute('aria-pressed', 'true');
@@ -470,7 +489,12 @@ describe('Home upcoming bookings', () => {
       />,
     );
 
+    fireEvent.click(screen.getByRole('tab', { name: 'Мои записи' }));
     const card = screen.getByRole('article', { name: 'Игра с составом' });
+    expect(within(card).getByRole('link', { name: 'Открыть' })).toHaveAttribute(
+      'href',
+      '/games/44444444-4444-4444-8444-444444444444',
+    );
     expect(within(card).getByLabelText('Участники записи')).toBeVisible();
     const participantAvatars = within(card).getAllByRole('img');
     expect(participantAvatars).toHaveLength(2);

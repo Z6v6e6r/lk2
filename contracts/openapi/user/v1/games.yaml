@@ -448,8 +448,8 @@ paths:
       summary: List server-ranked booking opportunities for the authenticated user
       description: |
         Reads one versioned PadlHub projection result. The server applies level, explicit
-        station/time preferences and eligible completed Games history without exposing scores,
-        provider identifiers or subscription state.
+        station/time preferences and eligible completed activity history to Games, trainings and
+        tournaments without exposing scores, provider identifiers or subscription state.
       parameters:
         - name: limit
           in: query
@@ -587,26 +587,108 @@ components:
           type: 'null'
           description: Reserved for the future materialized-feed pagination phase.
     BookingRecommendationItem:
+      oneOf:
+        - $ref: '#/components/schemas/BookingRecommendationGameItem'
+        - $ref: '#/components/schemas/BookingRecommendationActivityItem'
+      discriminator:
+        propertyName: kind
+        mapping:
+          GAME: '#/components/schemas/BookingRecommendationGameItem'
+          TRAINING: '#/components/schemas/BookingRecommendationActivityItem'
+          TOURNAMENT: '#/components/schemas/BookingRecommendationActivityItem'
+    BookingRecommendationGameItem:
       type: object
       additionalProperties: false
-      required: [game, reasons]
+      required: [kind, game, reasons]
       properties:
+        kind:
+          type: string
+          const: GAME
         game:
           $ref: '#/components/schemas/GameCardView'
         reasons:
-          type: array
-          minItems: 1
-          maxItems: 5
-          uniqueItems: true
-          items:
-            type: string
-            enum:
-              - LEVEL_MATCH
-              - FAVORITE_STATION
-              - PLAYED_STATION
-              - PREFERRED_TIME
-              - USUAL_TIME
-              - AVAILABLE_SOON
+          $ref: '#/components/schemas/BookingRecommendationReasons'
+    BookingRecommendationActivityItem:
+      type: object
+      additionalProperties: false
+      required: [kind, activity, reasons]
+      properties:
+        kind:
+          type: string
+          enum: [TRAINING, TOURNAMENT]
+        activity:
+          $ref: '#/components/schemas/BookingRecommendationActivity'
+        reasons:
+          $ref: '#/components/schemas/BookingRecommendationReasons'
+    BookingRecommendationReasons:
+      type: array
+      minItems: 1
+      maxItems: 5
+      uniqueItems: true
+      items:
+        type: string
+        enum:
+          - LEVEL_MATCH
+          - FAVORITE_STATION
+          - PLAYED_STATION
+          - PREFERRED_TIME
+          - USUAL_TIME
+          - AVAILABLE_SOON
+    BookingRecommendationActivity:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - kind
+        - title
+        - startsAt
+        - endsAt
+        - timezone
+        - station
+        - levelRange
+        - capacity
+        - route
+      properties:
+        id:
+          type: string
+          format: uuid
+        kind:
+          type: string
+          enum: [TRAINING, TOURNAMENT]
+        title:
+          type: string
+          minLength: 1
+          maxLength: 160
+        startsAt:
+          type: string
+          format: date-time
+        endsAt:
+          type: string
+          format: date-time
+        timezone:
+          type: string
+          minLength: 1
+          maxLength: 80
+        station:
+          $ref: '#/components/schemas/GameStationView'
+        levelRange:
+          oneOf:
+            - $ref: '#/components/schemas/GameLevelRange'
+            - type: 'null'
+        capacity:
+          type: object
+          additionalProperties: false
+          required: [total, open]
+          properties:
+            total:
+              type: [integer, 'null']
+              minimum: 0
+            open:
+              type: [integer, 'null']
+              minimum: 0
+        route:
+          type: string
+          pattern: '^/'
     GameCardResponse:
       type: object
       additionalProperties: false

@@ -12,6 +12,10 @@ security: []
 tags:
   - name: games
     description: Anonymous discovery of public scheduled games.
+  - name: tournaments
+    description: Anonymous discovery of bounded tournament summaries.
+  - name: coach-games
+    description: Anonymous discovery of bounded Viva-primary coach-game summaries.
   - name: gift-certificates
     description: Published tenant-owned gift certificate catalog.
   - name: locations
@@ -365,6 +369,194 @@ paths:
                 $ref: '#/components/schemas/PublicGameCardPage'
         '400':
           $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/tournaments:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+    get:
+      tags: [tournaments]
+      operationId: listPublicTournamentSummaries
+      summary: Discover public tournament summaries
+      description: |
+        Returns at most fifty summary cards for a bounded fifteen-day range. The operation never
+        returns participant arrays, names, phones, provider identifiers, payment data or mechanics.
+        Upstream schedule reads are fresh/stale cached and single-flight per date.
+      parameters:
+        - name: dateFrom
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+        - name: dateTo
+          in: query
+          required: true
+          description: Exclusive upper date bound; the range may contain at most fifteen days.
+          schema:
+            type: string
+            format: date
+        - name: availability
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [JOINABLE, INCLUDE_FULL]
+            default: INCLUDE_FULL
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 20
+      responses:
+        '200':
+          description: Bounded summary cards without tournament rosters.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicTournamentSummaryPage'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/tournaments/{summaryId}/organizer-avatar:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - name: summaryId
+        in: path
+        required: true
+        description: Stable PadlHub tournament-summary UUID.
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [tournaments]
+      operationId: getPublicTournamentOrganizerAvatar
+      summary: Load a proxied tournament organizer avatar
+      description: |
+        Returns a PadlHub-normalized WebP image. The upstream media URL and provider identifiers
+        remain server-side.
+      responses:
+        '200':
+          description: Organizer avatar normalized as WebP.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            image/webp:
+              schema:
+                type: string
+                format: binary
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/coach-games:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+    get:
+      tags: [coach-games]
+      operationId: listPublicCoachGameSummaries
+      summary: Discover public coach-game summaries
+      description: |
+        Returns at most fifty summary cards for a bounded fifteen-day range. The operation reads one
+        Viva schedule version per date and never returns exercise, studio, court or trainer provider
+        identifiers, trainer media URLs, client arrays or booking credentials.
+      parameters:
+        - name: dateFrom
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+        - name: dateTo
+          in: query
+          required: true
+          description: Exclusive upper date bound; the range may contain at most fifteen days.
+          schema:
+            type: string
+            format: date
+        - name: availability
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [JOINABLE, INCLUDE_FULL]
+            default: INCLUDE_FULL
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 20
+      responses:
+        '200':
+          description: Bounded coach-game cards without provider identities or client rosters.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicCoachGameSummaryPage'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/coach-games/{summaryId}/trainer-avatar:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - name: summaryId
+        in: path
+        required: true
+        description: Stable PadlHub coach-game summary UUID.
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [coach-games]
+      operationId: getPublicCoachGameTrainerAvatar
+      summary: Load a proxied coach avatar
+      description: |
+        Returns a PadlHub-normalized WebP image. The Viva media URL and trainer identifier remain
+        server-side.
+      responses:
+        '200':
+          description: Trainer avatar normalized as WebP.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            image/webp:
+              schema:
+                type: string
+                format: binary
         '404':
           $ref: ../../common/components.yaml#/components/responses/NotFound
         '429':
@@ -904,6 +1096,195 @@ components:
           type: [string, 'null']
           minLength: 16
           maxLength: 512
+    PublicTournamentSummaryPage:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          maxItems: 50
+          items:
+            $ref: '#/components/schemas/PublicTournamentSummary'
+    PublicCoachGameSummaryPage:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          maxItems: 50
+          items:
+            $ref: '#/components/schemas/PublicCoachGameSummary'
+    PublicCoachGameSummary:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - title
+        - startsAt
+        - endsAt
+        - stationName
+        - courtName
+        - level
+        - trainer
+        - capacity
+        - status
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+          minLength: 1
+          maxLength: 160
+        startsAt:
+          type: string
+          format: date-time
+        endsAt:
+          type: string
+          format: date-time
+        stationName:
+          type: string
+          minLength: 1
+          maxLength: 160
+        courtName:
+          type: [string, 'null']
+          maxLength: 160
+        level:
+          oneOf:
+            - $ref: '#/components/schemas/GamePlayerLevel'
+            - type: 'null'
+        trainer:
+          oneOf:
+            - type: object
+              additionalProperties: false
+              required: [displayName, avatarUrl]
+              properties:
+                displayName:
+                  type: string
+                  minLength: 1
+                  maxLength: 160
+                avatarUrl:
+                  type: [string, 'null']
+                  pattern: '^/(?!/)'
+                  maxLength: 2000
+            - type: 'null'
+        capacity:
+          type: object
+          additionalProperties: false
+          required: [total, occupied, open]
+          properties:
+            total:
+              type: integer
+              minimum: 0
+              maximum: 10000
+            occupied:
+              type: integer
+              minimum: 0
+              maximum: 10000
+            open:
+              type: integer
+              minimum: 0
+              maximum: 10000
+        status:
+          type: string
+          enum: [JOINABLE, FULL]
+    PublicTournamentSummary:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - title
+        - format
+        - startsAt
+        - endsAt
+        - venue
+        - trainerName
+        - levelRange
+        - organizer
+        - capacity
+        - status
+        - route
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+          minLength: 1
+          maxLength: 160
+        format:
+          type: string
+          minLength: 1
+          maxLength: 80
+        startsAt:
+          type: string
+          format: date-time
+        endsAt:
+          type: string
+          format: date-time
+        venue:
+          type: string
+          minLength: 1
+          maxLength: 160
+        trainerName:
+          type: [string, 'null']
+          maxLength: 120
+        levelRange:
+          oneOf:
+            - type: object
+              additionalProperties: false
+              required: [from, to]
+              properties:
+                from:
+                  $ref: '#/components/schemas/GamePlayerLevel'
+                to:
+                  $ref: '#/components/schemas/GamePlayerLevel'
+            - type: 'null'
+        organizer:
+          oneOf:
+            - type: object
+              additionalProperties: false
+              required: [displayName, avatarUrl]
+              properties:
+                displayName:
+                  type: string
+                  minLength: 1
+                  maxLength: 120
+                avatarUrl:
+                  type: [string, 'null']
+                  pattern: '^/(?!/)'
+                  maxLength: 2000
+            - type: 'null'
+        capacity:
+          type: object
+          additionalProperties: false
+          required: [total, registered, open, waitlist]
+          properties:
+            total:
+              type: integer
+              minimum: 0
+              maximum: 10000
+            registered:
+              type: integer
+              minimum: 0
+              maximum: 10000
+            open:
+              type: integer
+              minimum: 0
+              maximum: 10000
+            waitlist:
+              type: integer
+              minimum: 0
+              maximum: 10000
+        status:
+          type: string
+          enum: [REGISTRATION, FULL]
+        route:
+          type: string
+          pattern: '^/(?!/)'
+          maxLength: 2000
     PublicGameCardResponse:
       type: object
       additionalProperties: false

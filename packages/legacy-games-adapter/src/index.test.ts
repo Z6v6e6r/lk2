@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   LegacyGamesPublicAdapter,
+  LegacyTournamentSummaryAdapter,
   localVivaExerciseAssociationId,
   localVivaProfileAssociationId,
   testing,
@@ -352,6 +353,64 @@ describe('legacy games adapter', () => {
     );
   });
 
+  it('single-flights one bounded public page for one thousand targeted Home bridge reads', async () => {
+    const exerciseId = '11111111-1111-4111-8111-111111111111';
+    const fetchImplementation = vi.fn(() =>
+      Promise.resolve(
+        Response.json({
+          games: [
+            {
+              id: 'requested-game',
+              status: 'PAID',
+              organizer: {
+                id: 'requested-game-organizer',
+                name: 'Настоящее имя',
+                rating: 'C',
+              },
+              participants: [
+                {
+                  id: 'requested-game-organizer',
+                  name: 'Настоящее имя',
+                  rating: 'C',
+                },
+              ],
+              settings: { isPrivate: false, ratingGame: true },
+              metadata: { gameFormat: 'doubles', vivaExerciseId: exerciseId },
+              booking: {
+                studioId: 'station',
+                studioName: 'Терехово',
+                timeFromIso: '2026-07-21T09:00:00+03:00',
+                timeToIso: '2026-07-21T10:00:00+03:00',
+                vivaExerciseId: exerciseId,
+              },
+            },
+          ],
+        }),
+      ),
+    );
+    const adapter = new LegacyGamesPublicAdapter({
+      fetchImplementation,
+      freshTtlMs: 60_000,
+    });
+
+    const results = await Promise.all(
+      Array.from({ length: 1_000 }, () =>
+        adapter.readByVivaExerciseIds({
+          exerciseExternalIds: [exerciseId],
+          exerciseOccurrences: [
+            { exerciseExternalId: exerciseId, startsAt: '2026-07-21T06:00:00.000Z' },
+          ],
+          limit: 1,
+        }),
+      ),
+    );
+
+    expect(fetchImplementation).toHaveBeenCalledTimes(1);
+    expect(results).toHaveLength(1_000);
+    expect(results.every((items) => items.length === 1)).toBe(true);
+    expect(JSON.stringify(results[0])).not.toMatch(/requested-game|requested-game-organizer/);
+  });
+
   it('reads the authenticated viewer CUP history and filters it by Viva-proven exercises', async () => {
     const exerciseId = '11111111-1111-4111-8111-111111111111';
     const fetchImplementation = vi.fn((url: URL | RequestInfo) => {
@@ -458,5 +517,53 @@ describe('legacy games adapter', () => {
 
     expect(result).toHaveLength(1);
     expect(fetchImplementation).toHaveBeenCalledTimes(2);
+  });
+
+  it('single-flights tournament schedules and strips participant identities from summaries', async () => {
+    const fetchImplementation = vi.fn().mockResolvedValue(
+      Response.json([
+        {
+          id: 'legacy-tournament-id',
+          name: 'Воскресный Мексикано',
+          rawStatus: 'REGISTRATION',
+          isPublic: true,
+          startsAt: '2026-07-26T19:00:00+03:00',
+          endsAt: '2026-07-26T21:00:00+03:00',
+          locationName: 'Селигерская · Корт №1',
+          trainerName: 'Кирилл Твердохлеб',
+          trainerAvatarUrl: 'https://external.example/private-trainer-photo-id',
+          accessLevels: ['2.25', '3.375'],
+          tournamentType: 'Мексикано',
+          maxPlayers: 16,
+          participantsCount: 12,
+          waitlistCount: 2,
+          participants: [{ id: 'private-player-id', name: 'Игрок', phone: '79990000001' }],
+        },
+      ]),
+    );
+    const adapter = new LegacyTournamentSummaryAdapter({ fetchImplementation });
+
+    const results = await Promise.all(
+      Array.from({ length: 1_000 }, () => adapter.readDate('2026-07-26')),
+    );
+    const first = results[0];
+
+    expect(fetchImplementation).toHaveBeenCalledTimes(1);
+    expect(results.every((result) => result === first)).toBe(true);
+    expect(first).toEqual([
+      expect.objectContaining({
+        title: 'Воскресный Мексикано',
+        venue: 'Селигерская',
+        levelRange: { from: 'D+', to: 'C' },
+        organizer: { displayName: 'Кирилл Твердохлеб', avatarUrl: null },
+        capacity: { total: 16, registered: 12, open: 4, waitlist: 2 },
+      }),
+    ]);
+    expect(JSON.stringify(first)).not.toMatch(
+      /79990000001|private-player-id|private-trainer-photo-id|participants/,
+    );
+    expect(adapter.readAvatarSource(first?.[0]?.id ?? '')).toBe(
+      'https://external.example/private-trainer-photo-id',
+    );
   });
 });

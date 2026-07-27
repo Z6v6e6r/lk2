@@ -142,6 +142,8 @@ export interface GameCardProps {
   readonly game: GameCardModel;
   readonly busy?: boolean;
   readonly compact?: boolean;
+  readonly showCompactMetadata?: boolean;
+  readonly showCompactLevel?: boolean;
   readonly onAction?: (action: GameCardAction, game: GameCardModel) => void;
   readonly onParticipantProfileRequest?: (
     game: GameCardModel,
@@ -155,6 +157,8 @@ export function GameCard({
   game,
   busy = false,
   compact = false,
+  showCompactMetadata = false,
+  showCompactLevel = false,
   onAction,
   onParticipantProfileRequest,
   unsupportedActionBehavior = 'DETAILS',
@@ -205,7 +209,7 @@ export function GameCard({
           <a className={compact ? 'activity-card-title' : undefined} href={detailsUrl}>
             {game.title}
           </a>
-          {compact ? (
+          {compact && !showCompactMetadata ? (
             <span className="game-card__history-meta">
               {game.station.name} · {schedule.startTime}
             </span>
@@ -225,7 +229,14 @@ export function GameCard({
         ) : null}
       </div>
 
-      {compact ? null : (
+      {compact && showCompactLevel && !showCompactMetadata ? (
+        <span className="game-card__compact-level">
+          <EventLevelIcon />
+          {levelLabel(game)}
+        </span>
+      ) : null}
+
+      {compact && !showCompactMetadata ? null : (
         <div className="game-card__meta">
           <span
             className="game-card__date activity-card-metadata-row"

@@ -42,7 +42,7 @@ const environmentSchema = z.object({
   S3_SECRET_KEY: z.string().min(1).optional(),
   S3_FORCE_PATH_STYLE: booleanFromEnvironmentDefaultTrue,
   S3_AUTO_CREATE_BUCKET: booleanFromEnvironment,
-  PROFILE_PHOTO_ALLOWED_HOSTS: z.string().min(1).default('.selcdn.ru'),
+  PROFILE_PHOTO_ALLOWED_HOSTS: z.string().min(1).default('.selcdn.ru,.selstorage.ru'),
   PROFILE_PHOTO_MAX_BYTES: z.coerce
     .number()
     .int()
@@ -118,6 +118,7 @@ const environmentSchema = z.object({
   HOME_PROJECTION_MAX_STALE_SECONDS: z.coerce.number().int().nonnegative().max(86_400).default(300),
   HOME_PROJECTION_TTL_SECONDS: z.coerce.number().int().min(30).max(86_400).default(300),
   HOME_VIVA_SYNC_ENABLED: booleanFromEnvironment,
+  HOME_VIVA_LEGACY_GAME_BRIDGE_ENABLED: booleanFromEnvironment,
   HOME_VIVA_SYNC_INTERVAL_MS: z.coerce.number().int().min(30_000).max(3_600_000).default(120_000),
   HOME_VIVA_SYNC_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(20),
   HOME_VIVA_SYNC_FAILURE_BACKOFF_MS: z.coerce
@@ -436,6 +437,41 @@ export function loadConfig(
     if (!parsed.data.LEGACY_GAMES_ROSTER_SYNC_TENANT_KEY) {
       throw new Error(
         'LEGACY_GAMES_ROSTER_SYNC_ENABLED requires LEGACY_GAMES_ROSTER_SYNC_TENANT_KEY',
+      );
+    }
+  }
+  if (parsed.data.HOME_VIVA_LEGACY_GAME_BRIDGE_ENABLED) {
+    if (parsed.data.APP_ENV !== 'local' && parsed.data.APP_ENV !== 'staging') {
+      throw new Error('HOME_VIVA_LEGACY_GAME_BRIDGE_ENABLED is allowed only in local or staging');
+    }
+    if (!parsed.data.HOME_VIVA_SYNC_ENABLED) {
+      throw new Error('HOME_VIVA_LEGACY_GAME_BRIDGE_ENABLED requires HOME_VIVA_SYNC_ENABLED=true');
+    }
+    if (!parsed.data.GAMES_READ_ENABLED) {
+      throw new Error('HOME_VIVA_LEGACY_GAME_BRIDGE_ENABLED requires GAMES_READ_ENABLED=true');
+    }
+    if (
+      parsed.data.APP_ENV === 'local' &&
+      parsed.data.LEGACY_GAMES_ROSTER_SYNC_SOURCE !== 'public'
+    ) {
+      throw new Error('Local Viva Home Game bridge requires the public anonymized source');
+    }
+    if (
+      parsed.data.APP_ENV === 'staging' &&
+      parsed.data.LEGACY_GAMES_ROSTER_SYNC_SOURCE === 'public' &&
+      parsed.data.GAMES_COMMANDS_ENABLED
+    ) {
+      throw new Error('Staging public Viva Home Game bridge requires GAMES_COMMANDS_ENABLED=false');
+    }
+    if (
+      parsed.data.LEGACY_GAMES_ROSTER_SYNC_SOURCE === 'mongo' &&
+      !parsed.data.LEGACY_GAMES_MONGODB_URI
+    ) {
+      throw new Error('HOME_VIVA_LEGACY_GAME_BRIDGE_ENABLED requires LEGACY_GAMES_MONGODB_URI');
+    }
+    if (!parsed.data.LEGACY_GAMES_ROSTER_SYNC_TENANT_KEY) {
+      throw new Error(
+        'HOME_VIVA_LEGACY_GAME_BRIDGE_ENABLED requires LEGACY_GAMES_ROSTER_SYNC_TENANT_KEY',
       );
     }
   }

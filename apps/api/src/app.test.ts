@@ -1,5 +1,9 @@
 import { loadConfig } from '@phub/config';
-import type { ProfilePrivacyRepository } from '@phub/database';
+import type {
+  ProfileFriendshipRepository,
+  ProfileLevelHistoryRepository,
+  ProfilePrivacyRepository,
+} from '@phub/database';
 import { createLogger } from '@phub/observability';
 import { SignJWT } from 'jose';
 import type { Pool } from 'pg';
@@ -404,6 +408,124 @@ describe('health endpoints', () => {
       chatPolicy: 'AUTHORIZED',
     });
     expect(updateInput?.requestHash).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('lists friends from the authenticated LOCAL_ONLY profile aggregate', async () => {
+    const list = vi.fn<ProfileFriendshipRepository['list']>().mockResolvedValue({
+      items: [
+        {
+          userId: '6a81e965-c508-4321-812c-4be323606a70',
+          displayName: 'Мария Соколова',
+          avatarUrl: null,
+          levelLabel: 'C',
+          addedAt: '2026-07-26T10:00:00.000Z',
+          route: '/profile/6a81e965-c508-4321-812c-4be323606a70',
+        },
+      ],
+    });
+    const app = await buildApp({
+      config,
+      logger: createLogger('api-test', 'silent'),
+      pool: fakePool(),
+      profileFriendshipRepository: { list, get: vi.fn(), add: vi.fn() },
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/user/api/v1/local-padel/profile/friends?limit=4',
+      headers: { authorization: `Bearer ${await accessToken()}` },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['cache-control']).toBe('no-store');
+    expect(response.json()).toMatchObject({
+      items: [{ displayName: 'Мария Соколова', levelLabel: 'C' }],
+    });
+    expect(list).toHaveBeenCalledWith(tenantId, '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca', 4);
+  });
+
+  it('returns chronological level history for the authenticated profile', async () => {
+    const list = vi.fn<ProfileLevelHistoryRepository['list']>().mockResolvedValue({
+      userId: '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca',
+      items: [
+        {
+          changedAt: '2026-05-10T09:00:00.000Z',
+          levelLabel: 'D+',
+          levelValue: 2.75,
+        },
+        {
+          changedAt: '2026-07-20T12:00:00.000Z',
+          levelLabel: 'C',
+          levelValue: 3.1,
+        },
+      ],
+    });
+    const app = await buildApp({
+      config,
+      logger: createLogger('api-test', 'silent'),
+      pool: fakePool(),
+      profileLevelHistoryRepository: { list },
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/user/api/v1/local-padel/profile/level-history?limit=100',
+      headers: { authorization: `Bearer ${await accessToken()}` },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['cache-control']).toBe(
+      'private, max-age=15, stale-while-revalidate=45',
+    );
+    expect(response.json()).toMatchObject({
+      items: [{ levelLabel: 'D+' }, { levelLabel: 'C' }],
+    });
+    expect(list).toHaveBeenCalledWith(tenantId, '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca', 100);
+  });
+
+  it('adds a friend through an audited idempotent command route', async () => {
+    const targetUserId = '6a81e965-c508-4321-812c-4be323606a70';
+    const friendship = {
+      userId: targetUserId,
+      status: 'FRIEND' as const,
+      createdAt: '2026-07-26T10:00:00.000Z',
+    };
+    const add = vi.fn<ProfileFriendshipRepository['add']>().mockResolvedValue({
+      outcome: 'applied',
+      friendship,
+      replayed: false,
+    });
+    const app = await buildApp({
+      config,
+      logger: createLogger('api-test', 'silent'),
+      pool: fakePool(),
+      profileFriendshipRepository: { list: vi.fn(), get: vi.fn(), add },
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/user/api/v1/local-padel/profile/friends/${targetUserId}`,
+      headers: {
+        authorization: `Bearer ${await accessToken()}`,
+        'idempotency-key': 'profile-friend-add-test-0001',
+        'x-correlation-id': 'profile-friend-correlation-0001',
+      },
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(response.headers['x-idempotent-replayed']).toBe('false');
+    expect(response.json()).toEqual(friendship);
+    expect(add.mock.calls[0]?.[0]).toMatchObject({
+      tenantId,
+      actorUserId: '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca',
+      targetUserId,
+      idempotencyKey: 'profile-friend-add-test-0001',
+      correlationId: 'profile-friend-correlation-0001',
+    });
+    expect(add.mock.calls[0]?.[0].requestHash).toMatch(/^[0-9a-f]{64}$/);
   });
 
   it('returns a self profile view with private account data', async () => {

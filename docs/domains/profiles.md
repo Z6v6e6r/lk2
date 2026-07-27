@@ -27,14 +27,28 @@ The owner manages the independently versioned privacy aggregate through
 `GET /{tenantKey}/profile/privacy` and idempotent `PUT /{tenantKey}/profile/privacy`. It is
 `LOCAL_ONLY`; profile identity and rating can remain `VIVA_PRIMARY` without creating a dual write.
 
+Friendships are a separate symmetric `LOCAL_ONLY` aggregate. `GET /{tenantKey}/profile/friends`
+lists the authenticated user's friends, `GET /{tenantKey}/profile/friends/{userId}` returns the
+relationship state for a player profile, and idempotent
+`POST /{tenantKey}/profile/friends/{userId}` creates the relationship. The aggregate stores only
+tenant-scoped PadlHub user UUIDs. Its business row, command result, audit entry and
+`profile.friendship.created.v1` outbox event commit in one PostgreSQL transaction.
+
+Level history is an immutable PadlHub read-model exposed only to the authenticated owner through
+`GET /{tenantKey}/profile/level-history`. `profile.level_history` stores the normalized level label,
+optional numeric value and change time under tenant RLS. Migration backfill creates one baseline
+point from the existing profile summary; it does not invent earlier dates or levels. Future
+`profile.user_summaries` level changes append a point in the same database transaction. The web
+opens `/profile/level-history` as a separate protected page and plots date on X and level on Y.
+
 ## Visibility tiers
 
-| Tier          | Visible data                                                      | Contact/chat                     |
-| ------------- | ----------------------------------------------------------------- | -------------------------------- |
-| `BASIC`       | name, PadlHub-owned avatar, level label and assessment state      | locked                           |
-| `EXTENDED`    | basic fields plus numeric player rating                           | locked unless separately allowed |
-| `INTERACTION` | permitted visible fields plus server-approved action routes       | independently permitted          |
-| `SELF`        | complete own level plus `privateAccount` balance and phone suffix | hidden as self-actions           |
+| Tier          | Visible data                                                 | Contact/chat                     |
+| ------------- | ------------------------------------------------------------ | -------------------------------- |
+| `BASIC`       | name, PadlHub-owned avatar, level label and assessment state | locked                           |
+| `EXTENDED`    | basic fields plus numeric player rating                      | locked unless separately allowed |
+| `INTERACTION` | permitted visible fields plus server-approved action routes  | independently permitted          |
+| `SELF`        | complete own level plus self-only account fields in the API  | hidden as self-actions           |
 
 The tier is about viewer access. It must never be derived from, or confused with, the target
 player's sporting level.
@@ -68,6 +82,9 @@ stable lock reasons are:
 Future block, safety and moderation decisions join this server policy before a capability is
 returned and are rechecked by the command. Raw phone/email values are never part of another
 player’s `PlayerProfileView`; an enabled contact capability leads to a mediated PadlHub operation.
+
+Adding a friend does not grant contact, chat, extended-profile or commercial permissions.
+Friendship state is not derived from subscriptions, community memberships or Viva data.
 
 `profile.privacy_settings` stores `contactPolicy`, `chatPolicy` and an optimistic version under
 tenant RLS. Missing rows resolve to `AUTHORIZED` for both actions; this does not expose contact

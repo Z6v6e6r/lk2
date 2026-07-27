@@ -134,6 +134,7 @@ describe('booking recommendations', () => {
     expect(page.personalization).toBe('EXPLICIT');
     expect(page.items).toHaveLength(1);
     expect(page.items[0]).toMatchObject({
+      kind: 'GAME',
       game: { station: { id: favoriteStationId }, surface: 'DISCOVER' },
       reasons: ['LEVEL_MATCH', 'FAVORITE_STATION', 'PREFERRED_TIME'],
     });
@@ -184,5 +185,88 @@ describe('booking recommendations', () => {
 
     expect(page.personalization).toBe('LEARNED');
     expect(page.items[0]?.reasons).toContain('PLAYED_STATION');
+  });
+
+  it('keeps the best training and tournament visible alongside higher-scoring games', async () => {
+    const repository = {
+      listRecommendationCardProjections: vi.fn().mockResolvedValue({
+        candidates: [1, 2, 3, 4].map((index) =>
+          projection({
+            id: `40000000-0000-4000-8000-00000000000${index}`,
+            startsAt: `2026-07-${String(19 + index).padStart(2, '0')}T15:30:00.000Z`,
+            stationId: favoriteStationId,
+            stationName: 'Селигерская',
+            levelFrom: 'C',
+            levelTo: 'B',
+          }),
+        ),
+        history: [],
+      }),
+    };
+
+    const page = await listBookingRecommendations({
+      repository,
+      tenantId,
+      userId,
+      preferences: {
+        favoriteStationIds: [favoriteStationId],
+        preferredTimeWindows: [{ weekday: 'MON', startsAt: '18:00', endsAt: '21:00' }],
+        useHistory: true,
+        version: 2,
+        updatedAt: '2026-07-18T08:00:00.000Z',
+      },
+      playerLevel: 'C+',
+      activities: [
+        {
+          id: '50000000-0000-4000-8000-000000000001',
+          kind: 'TRAINING',
+          title: 'Групповая тренировка',
+          startsAt: '2026-07-21T08:00:00.000Z',
+          endsAt: '2026-07-21T09:30:00.000Z',
+          timezone: 'Europe/Moscow',
+          station: {
+            id: otherStationId,
+            name: 'Терехово',
+            shortAddress: null,
+          },
+          levelRange: { from: 'C', to: 'B' },
+          capacity: { total: 8, open: 3 },
+          route: '/trainings?event=50000000-0000-4000-8000-000000000001',
+        },
+        {
+          id: '50000000-0000-4000-8000-000000000002',
+          kind: 'TOURNAMENT',
+          title: 'Мини-турнир',
+          startsAt: '2026-07-22T08:00:00.000Z',
+          endsAt: '2026-07-22T10:00:00.000Z',
+          timezone: 'Europe/Moscow',
+          station: {
+            id: otherStationId,
+            name: 'Сколково',
+            shortAddress: null,
+          },
+          levelRange: { from: 'C', to: 'B' },
+          capacity: { total: 16, open: 1 },
+          route: '/tournaments?event=50000000-0000-4000-8000-000000000002',
+        },
+      ],
+      now: '2026-07-18T09:00:00.000Z',
+      limit: 4,
+    });
+
+    expect(page.items).toHaveLength(4);
+    expect(page.items.map((item) => item.kind)).toEqual(
+      expect.arrayContaining(['GAME', 'TRAINING', 'TOURNAMENT']),
+    );
+    expect(page.items.find((item) => item.kind === 'TRAINING')).toMatchObject({
+      activity: {
+        title: 'Групповая тренировка',
+        levelRange: { from: 'C', to: 'B' },
+      },
+    });
+    const startsAt = page.items.map((item) =>
+      item.kind === 'GAME' ? item.game.startsAt : item.activity.startsAt,
+    );
+    expect(startsAt).toEqual([...startsAt].sort((left, right) => left.localeCompare(right)));
   });
 });

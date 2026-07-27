@@ -7,7 +7,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { GamesPage } from './GamesPage.js';
 import { profileUserIdForParticipant } from './game-participant-profile.js';
-import type { AuthGateway, GameCard as ViewerGameCard, PublicGameCard } from './auth-gateway.js';
+import type {
+  AuthGateway,
+  GameCard as ViewerGameCard,
+  PublicGameCard,
+  PublicCoachGameSummary,
+  PublicTournamentSummary,
+} from './auth-gateway.js';
 
 const weekdayFormatter = new Intl.DateTimeFormat('ru-RU', { weekday: 'short' });
 const dayFormatter = new Intl.DateTimeFormat('ru-RU', { day: '2-digit' });
@@ -41,10 +47,60 @@ const game: PublicGameCard = {
   deepLink: '/games/751fe6a8-b0b1-4b2b-873d-a2d785c4e191',
 };
 
+const tournament: PublicTournamentSummary = {
+  id: '99999999-9999-4999-8999-999999999999',
+  title: 'Воскресный Мексикано',
+  format: 'Мексикано',
+  startsAt: new Date(Date.now() + 3_600_000).toISOString(),
+  endsAt: new Date(Date.now() + 10_800_000).toISOString(),
+  venue: 'Селигерская',
+  trainerName: 'Кирилл Твердохлеб',
+  levelRange: { from: 'D+', to: 'C' },
+  organizer: {
+    displayName: 'Кирилл Твердохлеб',
+    avatarUrl:
+      '/public/api/v1/local-padel/tournaments/99999999-9999-4999-8999-999999999999/organizer-avatar',
+  },
+  capacity: { total: 16, registered: 12, open: 4, waitlist: 0 },
+  status: 'REGISTRATION',
+  route: '/tournaments?event=99999999-9999-4999-8999-999999999999',
+};
+
+const coachGame: PublicCoachGameSummary = {
+  id: '88888888-8888-4888-8888-888888888888',
+  title: 'Игра с тренером · C',
+  startsAt: new Date(Date.now() + 1_800_000).toISOString(),
+  endsAt: new Date(Date.now() + 5_400_000).toISOString(),
+  stationName: 'Селигерская',
+  courtName: 'Корт №2',
+  level: 'C',
+  trainer: {
+    displayName: 'Кирилл Боев',
+    avatarUrl:
+      '/public/api/v1/local-padel/coach-games/88888888-8888-4888-8888-888888888888/trainer-avatar',
+  },
+  capacity: { total: 3, occupied: 1, open: 2 },
+  status: 'JOINABLE',
+};
+
 function gateway(): AuthGateway {
   return {
     listPublicGames: vi.fn().mockResolvedValue({ items: [game], nextCursor: null }),
+    listPublicTournamentSummaries: vi.fn().mockResolvedValue({ items: [] }),
+    listPublicCoachGameSummaries: vi.fn().mockResolvedValue({ items: [] }),
     listMyGames: vi.fn().mockResolvedValue({ items: [], nextCursor: null }),
+    listLocations: vi.fn().mockResolvedValue({
+      items: [
+        {
+          id: game.station.id,
+          title: game.station.name,
+          city: 'Москва',
+          courtCount: 3,
+          coverImageUrl: null,
+          route: `/locations/${game.station.id}`,
+        },
+      ],
+    }),
     getGameOperation: vi.fn(),
     joinGame: vi.fn().mockResolvedValue({
       commandId: 'c3889c99-b0e3-4a3d-b3e8-a5c99af730ea',
@@ -197,18 +253,178 @@ describe('GamesPage discovery', () => {
     expect(await screen.findByText(/Вы в игре/)).toBeInTheDocument();
   });
 
-  it('translates a kind filter into the public API query', async () => {
+  it('selects multiple event types from a checkbox dropdown and translates the coach type', async () => {
     const api = gateway();
     const user = userEvent.setup();
     render(<GamesPage gateway={api} />);
     await screen.findByText(game.title);
 
-    await user.click(screen.getByRole('button', { name: 'Рейтинговые' }));
+    await user.click(screen.getByRole('button', { name: 'Все типы' }));
+    const typeFilter = screen.getByRole('group', { name: 'Тип события' });
+    expect(within(typeFilter).getByRole('checkbox', { name: 'Игра' })).toBeInTheDocument();
+    expect(within(typeFilter).getByRole('checkbox', { name: 'Игра + Тренер' })).toBeInTheDocument();
+    expect(within(typeFilter).getByRole('checkbox', { name: 'Турнир' })).toBeInTheDocument();
+    expect(screen.queryByRole('combobox', { name: 'Тип игры' })).not.toBeInTheDocument();
+
+    await user.click(within(typeFilter).getByRole('checkbox', { name: 'Игра + Тренер' }));
     await waitFor(() =>
       expect(api.listPublicGames).toHaveBeenLastCalledWith(
-        expect.objectContaining({ kind: 'RATING', availability: 'INCLUDE_FULL' }),
+        expect.objectContaining({ kind: 'COACH_GAME', availability: 'INCLUDE_FULL' }),
       ),
     );
+    await user.click(within(typeFilter).getByRole('checkbox', { name: 'Турнир' }));
+    expect(within(typeFilter).getByRole('checkbox', { name: 'Игра + Тренер' })).toBeChecked();
+    expect(within(typeFilter).getByRole('checkbox', { name: 'Турнир' })).toBeChecked();
+  });
+
+  it('loads bounded tournament and coach-game summaries without roster requests', async () => {
+    const api = gateway();
+    vi.mocked(api.listPublicTournamentSummaries!).mockResolvedValueOnce({ items: [tournament] });
+    vi.mocked(api.listPublicCoachGameSummaries!).mockResolvedValueOnce({ items: [coachGame] });
+    const user = userEvent.setup();
+    render(<GamesPage gateway={api} />);
+
+    expect(await screen.findByText(tournament.title)).toBeInTheDocument();
+    expect(api.listPublicTournamentSummaries).toHaveBeenCalledWith(
+      expect.objectContaining({
+        availability: 'INCLUDE_FULL',
+        limit: 50,
+      }),
+    );
+    expect(api.listPublicCoachGameSummaries).toHaveBeenCalledWith(
+      expect.objectContaining({
+        availability: 'INCLUDE_FULL',
+        limit: 50,
+      }),
+    );
+    const coachGameCard = screen.getByText(coachGame.title).closest('article');
+    expect(coachGameCard).not.toBeNull();
+    expect(coachGameCard).toHaveAttribute('data-event-kind', 'COACH_GAME');
+    expect(within(coachGameCard!).getByText('Уровень C')).toBeInTheDocument();
+    expect(within(coachGameCard!).getByText('Кирилл Боев')).toBeInTheDocument();
+    const trainerAvatar = within(coachGameCard!).getByRole('img', {
+      name: 'Тренер: Кирилл Боев',
+    });
+    expect(trainerAvatar.querySelector('img')).toHaveAttribute('src', coachGame.trainer?.avatarUrl);
+    expect(trainerAvatar.querySelector('img')).toHaveAttribute('loading', 'lazy');
+    expect(trainerAvatar.querySelector('span')).toHaveAttribute('hidden');
+    expect(within(coachGameCard!).getByText('Участники 1/3')).toBeInTheDocument();
+    expect(within(coachGameCard!).getByText('Осталось 2 места')).toBeInTheDocument();
+    expect(within(coachGameCard!).getByLabelText('Занято мест: 1')).toBeInTheDocument();
+    const tournamentCard = screen.getByText(tournament.title).closest('article');
+    expect(tournamentCard).not.toBeNull();
+    expect(within(tournamentCard!).getByText('Турнир · Мексикано').parentElement).toHaveClass(
+      'fh-event__tag',
+      'is-tournament',
+    );
+    expect(within(tournamentCard!).getByRole('link', { name: 'Записаться' })).toHaveClass(
+      'game-card__button',
+    );
+    expect(within(tournamentCard!).queryByText(/Корт/)).not.toBeInTheDocument();
+    expect(within(tournamentCard!).getByText('Селигерская · от D+ до C')).toBeInTheDocument();
+    expect(within(tournamentCard!).getByText('Организатор')).toBeInTheDocument();
+    expect(within(tournamentCard!).getByText('Кирилл Твердохлеб')).toBeInTheDocument();
+    const organizerAvatar = within(tournamentCard!).getByRole('img', {
+      name: 'Организатор: Кирилл Твердохлеб',
+    });
+    expect(organizerAvatar.querySelector('img')).toHaveAttribute(
+      'src',
+      tournament.organizer?.avatarUrl,
+    );
+    expect(organizerAvatar.querySelector('img')).toHaveAttribute('loading', 'lazy');
+    expect(organizerAvatar.querySelector('span')).toHaveAttribute('hidden');
+    expect(within(tournamentCard!).getByText('Участники 12/16')).toBeInTheDocument();
+    expect(within(tournamentCard!).getByText('Осталось 4 места')).toBeInTheDocument();
+    expect(within(tournamentCard!).getByLabelText('Ещё участников: 9')).toHaveTextContent('+9');
+
+    await user.click(screen.getByRole('button', { name: 'Все типы' }));
+    await user.click(screen.getByRole('checkbox', { name: 'Игра + Тренер' }));
+    await waitFor(() =>
+      expect(api.listPublicGames).toHaveBeenLastCalledWith(
+        expect.objectContaining({ kind: 'COACH_GAME' }),
+      ),
+    );
+    expect(api.listPublicTournamentSummaries).toHaveBeenCalledTimes(1);
+    expect(api.listPublicCoachGameSummaries).toHaveBeenCalledTimes(2);
+  });
+
+  it('applies station, availability and advanced filters from the reference-shaped panel', async () => {
+    const api = gateway();
+    const secondStation = {
+      id: '11111111-1111-4111-8111-111111111111',
+      title: 'Терехово',
+      city: 'Москва',
+      courtCount: 4,
+      coverImageUrl: null,
+      route: '/locations/11111111-1111-4111-8111-111111111111',
+    };
+    vi.mocked(api.listLocations).mockResolvedValueOnce({
+      items: [
+        {
+          id: game.station.id,
+          title: game.station.name,
+          city: 'Москва',
+          courtCount: 3,
+          coverImageUrl: null,
+          route: `/locations/${game.station.id}`,
+        },
+        secondStation,
+      ],
+    });
+    const user = userEvent.setup();
+    render(<GamesPage gateway={api} />);
+    await screen.findByText(game.title);
+
+    expect(screen.queryByText('Тип игры')).not.toBeInTheDocument();
+    expect(screen.queryByText('Станция')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Все станции' }));
+    const stationFilter = screen.getByRole('group', { name: 'Станции' });
+    await user.click(
+      await within(stationFilter).findByRole('checkbox', { name: game.station.name }),
+    );
+    await user.click(
+      await within(stationFilter).findByRole('checkbox', { name: secondStation.title }),
+    );
+    expect(within(stationFilter).getByRole('checkbox', { name: game.station.name })).toBeChecked();
+    expect(
+      within(stationFilter).getByRole('checkbox', { name: secondStation.title }),
+    ).toBeChecked();
+    expect(screen.getByRole('button', { name: 'Станции: 2' })).toBeInTheDocument();
+    await user.click(screen.getByRole('checkbox', { name: 'Не показывать набранные' }));
+    await user.click(screen.getByRole('button', { name: 'Все фильтры · 2' }));
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Время начала' }), '18:00');
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Уровень игроков' }), 'C_B_PLUS');
+
+    await waitFor(() => {
+      const recentFilters = vi
+        .mocked(api.listPublicGames)
+        .mock.calls.slice(-2)
+        .map(([filters]) => filters);
+      expect(recentFilters.map((filters) => filters?.stationId)).toEqual(
+        expect.arrayContaining([game.station.id, secondStation.id]),
+      );
+      recentFilters.forEach((filters) => {
+        expect(filters).toBeDefined();
+        if (!filters) return;
+        expect(filters).toMatchObject({
+          availability: 'JOINABLE',
+          levelFrom: 'C',
+          levelTo: 'B+',
+        });
+        expect(filters.startsFrom).toContain('T15:00:00.000Z');
+      });
+    });
+    expect(screen.getByRole('button', { name: 'Убрать фильтр После 18:00' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Убрать фильтр Уровень C–B+' })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Сбросить всё' }));
+    await waitFor(() => {
+      const filters = vi.mocked(api.listPublicGames).mock.calls.at(-1)?.[0];
+      expect(filters).not.toHaveProperty('stationId');
+      expect(filters).not.toHaveProperty('levelFrom');
+      expect(filters).not.toHaveProperty('levelTo');
+    });
+    expect(screen.getByRole('checkbox', { name: 'Не показывать набранные' })).not.toBeChecked();
   });
 
   it('polls an accepted roster command before reporting completion', async () => {

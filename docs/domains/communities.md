@@ -11,9 +11,11 @@ is deliberately narrow:
 - a five-item summary projection embedded in Home;
 - a temporary server-side read adapter for the current LK community store.
 
-Community creation, detail, join/invite commands, member moderation, feed, rating and chat history
-remain later vertical slices. Community chat itself belongs to `messaging`; this domain stores no
-messages and does not invent an independent unread source.
+Community creation, detail, join/invite commands, member moderation, feed, full rating tables and
+chat history remain later vertical slices. The membership summary may include only the
+authenticated viewer's current positive `memberRank` when an existing ranking source publishes it.
+Community chat itself belongs to `messaging`; this domain stores no messages and does not invent an
+independent unread source.
 
 ## Public read contracts
 
@@ -26,9 +28,13 @@ Home returns no more than five `CommunitySummary` items. Each item contains only
   "logoUrl": "https://media.padlhub.example/.../logo.webp?signed=...",
   "isVerified": true,
   "unreadChatCount": 2,
+  "memberRank": 12,
   "route": "/communities/{PadlHub UUID}"
 }
 ```
+
+`memberRank` is optional. Absence means the ranking source has no current position; the API and UI
+omit the place rather than synthesize one.
 
 Opening `/communities` calls:
 
@@ -50,6 +56,7 @@ parameters from the browser.
 membership key includes `tenant_id`. An active community may have only one active `OWNER`
 membership. Owner membership cannot be pending or inactive. Archived community state carries an
 `archived_at` timestamp. Logos are represented by a PadlHub object key, never a provider URL.
+`communities.memberships.ranking_position` is nullable and positive when present.
 
 The unique index guarantees at most one active owner. The later create/transfer commands must also
 guarantee that an active community is never left without an owner in the same transaction.
@@ -66,6 +73,14 @@ PadlHub user to server-only phone/Viva profile identity, calls the fixed
 `/lk/communities?view=summary` source and treats the response as untrusted integration input. It
 selects only rows whose single summary member matches that server-resolved identity. Open catalog
 rows and other members are discarded.
+
+When the summary member does not already contain a rank, the bridge enriches only the visible page
+(at most eight communities) from the current
+`/lk/communities/{communityId}/rating?tab=overall&period=30d` snapshot. The request carries the
+server-resolved identity, uses the same fixed legacy origin and never exposes that identity to the
+browser. A missing, stale or unavailable rating snapshot leaves `memberRank` absent without failing
+the membership directory. Successful and negative enrichments use a short coalescing cache to keep
+the fan-out bounded.
 
 Legacy community IDs are mapped to PadlHub UUIDs in `integration.external_entity_map` under
 `LK_LEGACY/community`. The response drops members, phones, client IDs, connections, invite data and

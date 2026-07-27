@@ -20,6 +20,7 @@ import { LocationDetailPage } from './LocationDetailPage.js';
 import { LocationsPage } from './LocationsPage.js';
 import { NotificationsPage } from './NotificationsPage.js';
 import { ProfilePage } from './ProfilePage.js';
+import { ProfileLevelHistoryPage } from './ProfileLevelHistoryPage.js';
 import type {
   AuthGateway,
   AuthenticatedSession,
@@ -32,8 +33,11 @@ import type {
   NotificationInboxPage,
   PlayerProfileView,
   PhoneChallenge,
+  ProfileLevelHistory,
   ProfilePrivacySettings,
   ProfilePrivacyUpdateRequest,
+  ProfileFriendPage,
+  ProfileFriendship,
   UserUpcomingBookings,
   VivaOAuthProvider,
   WebPushConfiguration,
@@ -51,6 +55,7 @@ type BusyAction = 'start-viva' | 'request-code' | 'verify-code' | 'logout' | nul
 type ProtectedRoute =
   | { readonly kind: 'home' }
   | { readonly kind: 'profile'; readonly userId?: string }
+  | { readonly kind: 'profile-level-history' }
   | { readonly kind: 'bookings' }
   | { readonly kind: 'notifications' }
   | { readonly kind: 'communities' }
@@ -74,6 +79,7 @@ function resolveProtectedRoute(pathname: string): ProtectedRoute {
   const normalizedPath = pathname.length > 1 ? pathname.replace(/\/+$/, '') : pathname;
   if (normalizedPath === '/') return { kind: 'home' };
   if (normalizedPath === '/profile') return { kind: 'profile' };
+  if (normalizedPath === '/profile/level-history') return { kind: 'profile-level-history' };
   const profileMatch = normalizedPath.match(
     /^\/profile\/([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i,
   );
@@ -365,6 +371,12 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
     HomeDashboard['subscriptions'] | null
   >(null);
   const [profileSubscriptionsError, setProfileSubscriptionsError] = useState<string | null>(null);
+  const [profileFriends, setProfileFriends] = useState<ProfileFriendPage | null>(null);
+  const [profileFriendship, setProfileFriendship] = useState<ProfileFriendship | null>(null);
+  const [profileFriendsBusy, setProfileFriendsBusy] = useState(false);
+  const [profileFriendsError, setProfileFriendsError] = useState<string | null>(null);
+  const [profileLevelHistory, setProfileLevelHistory] = useState<ProfileLevelHistory | null>(null);
+  const [profileLevelHistoryError, setProfileLevelHistoryError] = useState<string | null>(null);
   const [upcomingBookings, setUpcomingBookings] = useState<UserUpcomingBookings | null>(null);
   const [bookingsError, setBookingsError] = useState<string | null>(null);
   const [notifications, setNotifications] = useState<NotificationInboxPage | null>(null);
@@ -412,6 +424,23 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
   useEffect(() => {
     if (state.view !== 'home' || !state.session) return;
     let active = true;
+    if (protectedRoute.kind === 'profile-level-history') {
+      void gateway.getProfileLevelHistory().then(
+        (history) => {
+          if (!active) return;
+          setProfileLevelHistory(history);
+          setProfileLevelHistoryError(null);
+        },
+        () => {
+          if (!active) return;
+          setProfileLevelHistory(null);
+          setProfileLevelHistoryError('Не удалось загрузить историю уровня.');
+        },
+      );
+      return () => {
+        active = false;
+      };
+    }
     if (protectedRoute.kind === 'profile') {
       const targetUserId = requestedProfileUserId ?? state.session.context.user.id;
       const isSelfProfile = targetUserId === state.session.context.user.id;
@@ -485,7 +514,37 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
             setProfileSubscriptionsError('Не удалось загрузить подписки и абонементы.');
           },
         );
+        void gateway.listProfileFriends(8).then(
+          (page) => {
+            if (!active) return;
+            setProfileFriends(page);
+            setProfileFriendsError(null);
+          },
+          () => {
+            if (!active) return;
+            setProfileFriends({ items: [] });
+            setProfileFriendsError('Не удалось загрузить друзей.');
+          },
+        );
+      } else {
+        void gateway.getProfileFriendship(targetUserId).then(
+          (friendship) => {
+            if (!active) return;
+            setProfileFriendship(friendship);
+            setProfileFriendsError(null);
+          },
+          () => {
+            if (!active) return;
+            setProfileFriendsError('Не удалось проверить статус дружбы.');
+          },
+        );
       }
+      void gateway.listNotifications().then(
+        (page) => {
+          if (active) setNotifications(page);
+        },
+        () => undefined,
+      );
       void gateway.getPlayerProfile(targetUserId).then(
         (profile) => {
           if (active) {
@@ -920,6 +979,22 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
     );
   }
 
+  function handleAddProfileFriend(): void {
+    if (!requestedProfileUserId || profileFriendship?.status === 'FRIEND') return;
+    setProfileFriendsBusy(true);
+    setProfileFriendsError(null);
+    void gateway.addProfileFriend(requestedProfileUserId).then(
+      (friendship) => {
+        setProfileFriendship(friendship);
+        setProfileFriendsBusy(false);
+      },
+      () => {
+        setProfileFriendsBusy(false);
+        setProfileFriendsError('Не удалось добавить игрока в друзья. Повторите попытку.');
+      },
+    );
+  }
+
   if (publicGiftRoute) {
     return (
       <GiftCertificatesPage
@@ -950,6 +1025,11 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
 
   if (state.view === 'home' && state.session) {
     const { context } = state.session;
+    if (protectedRoute.kind === 'profile-level-history') {
+      return (
+        <ProfileLevelHistoryPage history={profileLevelHistory} error={profileLevelHistoryError} />
+      );
+    }
     if (protectedRoute.kind === 'profile') {
       if (!userProfile) {
         return (
@@ -974,8 +1054,8 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
       return (
         <ProfilePage
           profile={userProfile}
-          tenantName={context.tenant.name}
           logoutBusy={state.busy === 'logout'}
+          notificationUnreadCount={notifications?.unreadCount ?? 0}
           privacySettings={profilePrivacy}
           privacyBusy={profilePrivacyBusy}
           privacyError={profilePrivacyError}
@@ -989,9 +1069,14 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
           subscriptionsError={profileSubscriptionsError}
           communities={profileCommunities}
           communitiesError={profileCommunitiesError}
+          friends={profileFriends}
+          friendship={profileFriendship}
+          friendsBusy={profileFriendsBusy}
+          friendsError={profileFriendsError}
           error={state.error}
           onSavePrivacy={handleSaveProfilePrivacy}
           onSaveBookingPreferences={handleSaveBookingPreferences}
+          onAddFriend={handleAddProfileFriend}
           onLogout={handleLogout}
         />
       );

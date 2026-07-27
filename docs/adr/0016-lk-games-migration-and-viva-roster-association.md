@@ -29,8 +29,9 @@ document to the browser.
    PadlHub Game fails with `VIVA_EXERCISE_GAME_ASSOCIATION_CONFLICT`; it never rewrites either
    game.
 4. Viva Home synchronization reads the viewer booking from `@phub/viva-adapter`. Before it
-   persists the Home component, a staging-only trusted bridge looks up only the matching current
-   LK Games by the server-side Viva exercise association, imports/guards their canonical roster,
+   persists the Home component, a local/staging-only trusted bridge, independently gated by
+   `HOME_VIVA_LEGACY_GAME_BRIDGE_ENABLED`, looks up only the matching current LK Games by the
+   server-side Viva exercise association, imports/guards their canonical roster,
    copies allowlisted participant photos into metadata-free, content-addressed PadlHub WebP
    objects, and then resolves that roster in the tenant transaction. The legacy photo is
    fallback-only and cannot replace an existing profile-owned avatar. When the matching legacy
@@ -41,7 +42,10 @@ document to the browser.
    the current level. It emits only real display name, short-lived PadlHub-served avatar URL, level,
    normalized rating and server-computed free slots. It emits no phone, payment, legacy identifier,
    Viva identifier or provider source URL. A bridge read or media failure retains the last local
-   avatar/projection rather than publishing provider URLs or a partial roster.
+   avatar/projection rather than publishing provider URLs or a partial roster. The public bridge
+   shares one bounded available-Games page through a 60-second process cache and single-flight;
+   stale-on-error and a circuit breaker prevent concurrent Home viewers from multiplying upstream
+   reads. Once resolved, Home routes to `/games/{PadlHub UUID}`, never to a provider or legacy ID.
 5. The public legacy endpoint anonymizes every retained integration key. It may feed a read-only
    local clone or staging mirror, but staging must keep Games commands and private/history backfill
    disabled. A production backfill must use a separately approved, bounded server source; a

@@ -11,6 +11,7 @@ export const communitySummarySchema = z
     logoUrl: z.string().url().nullable(),
     isVerified: z.boolean(),
     unreadChatCount: z.number().int().nonnegative(),
+    memberRank: z.number().int().positive().optional(),
     route,
   })
   .strict();

@@ -5,13 +5,16 @@ import type {
   HomeDashboard,
   PlayerProfileView,
   ProfileActionCapability,
+  ProfileFriendPage,
+  ProfileFriendship,
   ProfilePrivacySettings,
   ProfilePrivacyUpdateRequest,
 } from '@phub/api-sdk';
 import { useState } from 'react';
 import type { CSSProperties } from 'react';
 
-import { MainBottomNavigation } from './HomeDashboardPage.js';
+import { MainBottomNavigation, NotificationBellLink } from './HomeDashboardPage.js';
+import { ParticipantAvatarStack } from './ParticipantAvatarStack.js';
 import { PlayerLevelAvatar } from './PlayerLevelAvatar.js';
 import levelABackground from './assets/profile-levels/level-a.jpg';
 import levelBBackground from './assets/profile-levels/level-b.jpg';
@@ -23,8 +26,8 @@ import levelDPlusBackground from './assets/profile-levels/level-d-plus.jpg';
 
 interface ProfilePageProps {
   readonly profile: PlayerProfileView;
-  readonly tenantName: string;
   readonly logoutBusy: boolean;
+  readonly notificationUnreadCount?: number;
   readonly privacySettings?: ProfilePrivacySettings | null;
   readonly privacyBusy?: boolean;
   readonly privacyError?: string | null;
@@ -38,9 +41,14 @@ interface ProfilePageProps {
   readonly subscriptionsError?: string | null;
   readonly communities?: CommunityMembershipPage | null;
   readonly communitiesError?: string | null;
+  readonly friends?: ProfileFriendPage | null;
+  readonly friendship?: ProfileFriendship | null;
+  readonly friendsBusy?: boolean;
+  readonly friendsError?: string | null;
   readonly error?: string | null;
   readonly onSavePrivacy?: (input: ProfilePrivacyUpdateRequest) => void;
   readonly onSaveBookingPreferences?: (input: BookingPreferencesUpdateRequest) => void;
+  readonly onAddFriend?: () => void;
   readonly onLogout: () => void;
 }
 
@@ -330,7 +338,17 @@ function ProfileIcon({
   name,
 }: {
   readonly name:
-    'bell' | 'more' | 'share' | 'community' | 'preference' | 'eye' | 'city' | 'sport' | 'crown';
+    | 'back'
+    | 'bell'
+    | 'share'
+    | 'community'
+    | 'friends'
+    | 'preference'
+    | 'history'
+    | 'eye'
+    | 'city'
+    | 'sport'
+    | 'crown';
 }): React.JSX.Element {
   const common = {
     width: 22,
@@ -341,6 +359,18 @@ function ProfileIcon({
   } as const;
 
   switch (name) {
+    case 'back':
+      return (
+        <svg {...common}>
+          <path
+            d="m15 18-6-6 6-6"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      );
     case 'bell':
       return (
         <svg {...common}>
@@ -351,14 +381,6 @@ function ProfileIcon({
             strokeLinecap="round"
             strokeLinejoin="round"
           />
-        </svg>
-      );
-    case 'more':
-      return (
-        <svg {...common}>
-          <circle cx="12" cy="5" r="1.7" fill="currentColor" />
-          <circle cx="12" cy="12" r="1.7" fill="currentColor" />
-          <circle cx="12" cy="19" r="1.7" fill="currentColor" />
         </svg>
       );
     case 'share':
@@ -374,6 +396,7 @@ function ProfileIcon({
         </svg>
       );
     case 'community':
+    case 'friends':
       return (
         <svg {...common}>
           <path
@@ -394,6 +417,22 @@ function ProfileIcon({
             strokeWidth="1.6"
             strokeLinejoin="round"
           />
+        </svg>
+      );
+    case 'history':
+      return (
+        <svg {...common}>
+          <path
+            d="M4 19V5M4 19h16M7 15l4-4 3 2 5-6"
+            stroke="currentColor"
+            strokeWidth="1.7"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+          <circle cx="7" cy="15" r="1" fill="currentColor" />
+          <circle cx="11" cy="11" r="1" fill="currentColor" />
+          <circle cx="14" cy="13" r="1" fill="currentColor" />
+          <circle cx="19" cy="7" r="1" fill="currentColor" />
         </svg>
       );
     case 'eye':
@@ -582,7 +621,13 @@ function ProfileCommunities({
       ) : (
         <div className="profile-community-list">
           {communities.map((community) => (
-            <a href={community.route} key={community.id} aria-label={community.title}>
+            <a
+              href={community.route}
+              key={community.id}
+              aria-label={`${community.title}, ${
+                community.memberRank ? `${community.memberRank} место` : 'вне рейтинга'
+              }`}
+            >
               <span>
                 {community.logoUrl ? (
                   <img src={community.logoUrl} alt="" />
@@ -591,11 +636,107 @@ function ProfileCommunities({
                 )}
               </span>
               <small>{community.title}</small>
+              <em>{community.memberRank ? `${community.memberRank} место` : 'вне рейтинга'}</em>
               {community.unreadChatCount > 0 ? <b>{community.unreadChatCount}</b> : null}
             </a>
           ))}
         </div>
       )}
+    </section>
+  );
+}
+
+function ProfileFriends({
+  page,
+  error,
+}: {
+  readonly page?: ProfileFriendPage | null;
+  readonly error?: string | null;
+}): React.JSX.Element {
+  const friends = page?.items.slice(0, 4) ?? [];
+  return (
+    <section className="profile-friends" aria-labelledby="profile-friends-title">
+      <header>
+        <span className="profile-inline-icon">
+          <ProfileIcon name="friends" />
+        </span>
+        <h2 id="profile-friends-title">Друзья</h2>
+        {page ? <span>{page.items.length}</span> : null}
+      </header>
+      {error ? (
+        <p role="alert">{error}</p>
+      ) : !page ? (
+        <p role="status">Загружаем друзей…</p>
+      ) : friends.length === 0 ? (
+        <p>Добавляйте игроков из их профилей — они появятся здесь.</p>
+      ) : (
+        <div className="profile-friend-list">
+          {friends.map((friend) => {
+            const [firstName = friend.displayName, ...familyNameParts] = friend.displayName
+              .trim()
+              .split(/\s+/);
+            const familyName = familyNameParts.join(' ');
+
+            return (
+              <a
+                href={friend.route}
+                key={friend.userId}
+                aria-label={`${friend.displayName} · ${friend.levelLabel}`}
+              >
+                <ParticipantAvatarStack
+                  ariaLabel={friend.displayName}
+                  capacity={1}
+                  participants={[
+                    {
+                      key: friend.userId,
+                      displayName: friend.displayName,
+                      avatarUrl: friend.avatarUrl,
+                      level: friend.levelLabel,
+                    },
+                  ]}
+                />
+                <small>
+                  <span>{firstName}</span>
+                  {familyName ? <span>{familyName}</span> : null}
+                </small>
+              </a>
+            );
+          })}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function FriendshipAction({
+  friendship,
+  busy,
+  error,
+  onAdd,
+}: {
+  readonly friendship?: ProfileFriendship | null;
+  readonly busy: boolean;
+  readonly error?: string | null;
+  readonly onAdd?: () => void;
+}): React.JSX.Element {
+  const isFriend = friendship?.status === 'FRIEND';
+  return (
+    <section className="profile-friendship-action" aria-labelledby="profile-friendship-title">
+      <span className="profile-inline-icon">
+        <ProfileIcon name="friends" />
+      </span>
+      <span>
+        <strong id="profile-friendship-title">
+          {isFriend ? 'Уже в друзьях' : 'Добавить в друзья'}
+        </strong>
+        <small>
+          {isFriend ? 'Игрок отображается в вашем блоке друзей' : 'Игрок появится в вашем профиле'}
+        </small>
+      </span>
+      <button type="button" disabled={busy || isFriend || !friendship || !onAdd} onClick={onAdd}>
+        {busy ? 'Добавляем…' : isFriend ? 'Добавлен' : 'Добавить'}
+      </button>
+      {error ? <p role="alert">{error}</p> : null}
     </section>
   );
 }
@@ -758,8 +899,8 @@ function PrivacySettingsForm({
 
 export function ProfilePage({
   profile: view,
-  tenantName,
   logoutBusy,
+  notificationUnreadCount = 0,
   privacySettings,
   privacyBusy = false,
   privacyError,
@@ -773,9 +914,14 @@ export function ProfilePage({
   subscriptionsError,
   communities,
   communitiesError,
+  friends,
+  friendship,
+  friendsBusy = false,
+  friendsError,
   error,
   onSavePrivacy,
   onSaveBookingPreferences,
+  onAddFriend,
   onLogout,
 }: ProfilePageProps): React.JSX.Element {
   const { profile, privateAccount, access } = view;
@@ -820,19 +966,23 @@ export function ProfilePage({
     <div className="profile-shell">
       <main className="profile-page" style={pageStyle}>
         <header className="profile-toolbar">
-          <a href="/notifications" aria-label="Оповещения">
-            <ProfileIcon name="bell" />
-          </a>
+          <button
+            className="profile-toolbar__back"
+            type="button"
+            aria-label="Назад"
+            onClick={() => window.history.back()}
+          >
+            <ProfileIcon name="back" />
+          </button>
           <span>PadelHub Player</span>
-          <a href="#profile-settings" aria-label="Перейти к настройкам профиля">
-            <ProfileIcon name="more" />
-          </a>
+          <NotificationBellLink
+            className="profile-toolbar__bell"
+            unreadCount={notificationUnreadCount}
+          />
         </header>
 
         <section className="profile-identity" aria-labelledby="profile-name">
-          <p>{isSelf ? tenantName : 'Профиль игрока'}</p>
           <h1 id="profile-name">{profile.displayName}</h1>
-          {privateAccount?.phoneLast4 ? <small>•••• {privateAccount.phoneLast4}</small> : null}
           {isSelf ? (
             <a className="profile-edit-link" href="#profile-settings">
               <span aria-hidden="true">✎</span>
@@ -876,24 +1026,32 @@ export function ProfilePage({
 
         <div className="profile-content">
           {access.audience === 'OTHER' ? (
-            <section className="profile-access-section" aria-labelledby="profile-actions-title">
-              <div className="profile-section-heading">
-                <span>Возможности</span>
-                <h2 id="profile-actions-title">Связаться с игроком</h2>
-              </div>
-              <div className="profile-actions">
-                <ProfileAction
-                  title="Связаться"
-                  description="Выбрать доступный способ связи"
-                  capability={access.contact}
-                />
-                <ProfileAction
-                  title="Открыть чат"
-                  description="Перейти в личный чат ПадлХАБ"
-                  capability={access.chat}
-                />
-              </div>
-            </section>
+            <>
+              <FriendshipAction
+                busy={friendsBusy}
+                {...(friendship !== undefined ? { friendship } : {})}
+                {...(friendsError !== undefined ? { error: friendsError } : {})}
+                {...(onAddFriend ? { onAdd: onAddFriend } : {})}
+              />
+              <section className="profile-access-section" aria-labelledby="profile-actions-title">
+                <div className="profile-section-heading">
+                  <span>Возможности</span>
+                  <h2 id="profile-actions-title">Связаться с игроком</h2>
+                </div>
+                <div className="profile-actions">
+                  <ProfileAction
+                    title="Связаться"
+                    description="Выбрать доступный способ связи"
+                    capability={access.contact}
+                  />
+                  <ProfileAction
+                    title="Открыть чат"
+                    description="Перейти в личный чат ПадлХАБ"
+                    capability={access.chat}
+                  />
+                </div>
+              </section>
+            </>
           ) : null}
 
           {isSelf ? (
@@ -904,6 +1062,13 @@ export function ProfilePage({
                 {...(subscriptionsError !== undefined ? { error: subscriptionsError } : {})}
               />
             </>
+          ) : null}
+
+          {isSelf ? (
+            <ProfileFriends
+              {...(friends !== undefined ? { page: friends } : {})}
+              {...(friendsError !== undefined ? { error: friendsError } : {})}
+            />
           ) : null}
 
           {isSelf ? (
@@ -963,6 +1128,19 @@ export function ProfilePage({
                 ))}
               </div>
             </section>
+          ) : null}
+
+          {isSelf ? (
+            <a className="profile-level-history-link" href="/profile/level-history">
+              <span className="profile-inline-icon">
+                <ProfileIcon name="history" />
+              </span>
+              <span>
+                <strong>История изменения уровня</strong>
+                <small>график по датам и уровням</small>
+              </span>
+              <i aria-hidden="true">›</i>
+            </a>
           ) : null}
 
           <section className="profile-privacy-note" aria-labelledby="profile-privacy-title">

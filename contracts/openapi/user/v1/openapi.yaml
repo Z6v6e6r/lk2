@@ -653,6 +653,162 @@ paths:
           $ref: ../../common/components.yaml#/components/responses/TooManyRequests
         '503':
           $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/profile/friends:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+    get:
+      tags: [profiles]
+      operationId: listProfileFriends
+      summary: List the authenticated user's friends
+      description: Returns only PadlHub profile summaries from the LOCAL_ONLY friendship aggregate.
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 24
+            default: 8
+      responses:
+        '200':
+          description: Friends ordered by most recently added.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfileFriendPage'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/profile/friends/{userId}:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - name: userId
+        in: path
+        required: true
+        description: Stable PadlHub UUID of the other player.
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [profiles]
+      operationId: getProfileFriendship
+      summary: Load friendship state for another player
+      responses:
+        '200':
+          description: Current friendship state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfileFriendship'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+    post:
+      tags: [profiles]
+      operationId: addProfileFriend
+      summary: Add another player as a friend
+      description: |
+        Creates a symmetric LOCAL_ONLY friendship. The command is authorized, idempotent,
+        audited and publishes an outbox event in the same PostgreSQL transaction.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: Idempotent replay of an existing command result.
+          headers:
+            X-Idempotent-Replayed:
+              description: Always true for this response.
+              schema:
+                type: string
+                const: 'true'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfileFriendship'
+        '201':
+          description: Friendship created.
+          headers:
+            X-Idempotent-Replayed:
+              description: Always false for a newly applied command.
+              schema:
+                type: string
+                const: 'false'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfileFriendship'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/CommandConflict'
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/profile/level-history:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+    get:
+      tags: [profiles]
+      operationId: getProfileLevelHistory
+      summary: Load the authenticated player's level history
+      description: |
+        Returns the latest immutable PadlHub level-history points in chronological order.
+        The first point may be the baseline captured when history storage was introduced.
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 100
+      responses:
+        '200':
+          description: Chronological level-history points for the authenticated player.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfileLevelHistory'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
   /{tenantKey}/profile/booking-preferences:
     parameters:
       - $ref: ../../common/components.yaml#/components/parameters/TenantKey
@@ -1484,6 +1640,82 @@ components:
           type: string
           pattern: '^/'
           description: Present only when the action is available; generated by PadlHub.
+    ProfileFriendship:
+      type: object
+      additionalProperties: false
+      required: [userId, status, createdAt]
+      properties:
+        userId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [NONE, FRIEND]
+        createdAt:
+          type: [string, 'null']
+          format: date-time
+    ProfileFriendSummary:
+      type: object
+      additionalProperties: false
+      required: [userId, displayName, avatarUrl, levelLabel, addedAt, route]
+      properties:
+        userId:
+          type: string
+          format: uuid
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 200
+        avatarUrl:
+          type: [string, 'null']
+          pattern: '^/public/api/v1/media/profile-photos/'
+        levelLabel:
+          type: [string, 'null']
+          maxLength: 20
+        addedAt:
+          type: string
+          format: date-time
+        route:
+          type: string
+          pattern: '^/profile/[0-9a-f-]+$'
+    ProfileFriendPage:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          maxItems: 24
+          items:
+            $ref: '#/components/schemas/ProfileFriendSummary'
+    ProfileLevelHistoryPoint:
+      type: object
+      additionalProperties: false
+      required: [changedAt, levelLabel, levelValue]
+      properties:
+        changedAt:
+          type: string
+          format: date-time
+        levelLabel:
+          type: string
+          enum: [D, D+, C, C+, B, B+, A]
+        levelValue:
+          type: [number, 'null']
+          minimum: 0
+          maximum: 10
+    ProfileLevelHistory:
+      type: object
+      additionalProperties: false
+      required: [userId, items]
+      properties:
+        userId:
+          type: string
+          format: uuid
+        items:
+          type: array
+          maxItems: 200
+          items:
+            $ref: '#/components/schemas/ProfileLevelHistoryPoint'
     AuthChallengeRequest:
       type: object
       additionalProperties: false
@@ -2057,6 +2289,10 @@ components:
         unreadChatCount:
           type: integer
           minimum: 0
+        memberRank:
+          type: integer
+          minimum: 1
+          description: Current viewer position in this community rating, when the ranking source has it.
         route:
           type: string
           pattern: '^/'

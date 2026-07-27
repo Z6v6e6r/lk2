@@ -64,6 +64,11 @@ Profile privacy is an independently owned `LOCAL_ONLY` aggregate under tenant RL
 audit record and `profile.privacy.changed.v1` outbox event atomically. Viewer profile reads apply
 that stored target policy after permission evaluation, so privacy can only reduce access.
 
+Profile friendships are a separate symmetric `LOCAL_ONLY` aggregate under tenant RLS. The
+idempotent add-friend command writes the friendship, stored command result, audit record and
+`profile.friendship.created.v1` outbox event atomically. Friendship does not imply contact, chat,
+profile-visibility or subscription permissions.
+
 ## Data and domains
 
 PostgreSQL is the operational source of truth. Logical schemas mirror domains, not services or Viva response shapes. Redis stores only ephemeral cache, locks, rate-limit state and counters. RabbitMQ transports events/retries/DLQ. Private files use bounded PadlHub media endpoints or short-lived signed URLs to S3-compatible storage; expiring signatures are never persisted as canonical profile data.
@@ -173,7 +178,9 @@ addresses and connector payloads are excluded from logs, metrics and broker even
 See [ADR 0006](../adr/0006-chats-and-notifications-contour.md) for the decision and
 [the domain design](../domains/chats-and-notifications.md) for commands, events, access rules,
 failure handling and rollout phases. Operational enablement and rollback are defined in the
-[runbook](../runbooks/chats-notifications-moderation.md).
+[runbook](../runbooks/chats-notifications-moderation.md). The bounded Jetson Nano profile, current
+readiness gaps and internal-test acceptance gates are captured in the
+[Nano test-contour plan](../plans/nano-chats-notifications-test-contour.md).
 
 ## Viva transition
 

@@ -64,7 +64,7 @@ describe('BookingsPage', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Для меня' }));
     await vi.waitFor(() => expect(loadRecommendations).toHaveBeenCalledOnce());
     await vi.waitFor(() =>
-      expect(screen.getByRole('status')).toHaveTextContent('Пока нет подходящих игр'),
+      expect(screen.getByRole('status')).toHaveTextContent('Пока нет подходящих событий'),
     );
   });
 

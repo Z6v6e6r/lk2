@@ -44,6 +44,7 @@ interface MappingRow extends QueryResultRow {
 
 interface CanonicalOpenGameRosterRow extends QueryResultRow {
   readonly exercise_external_id: string;
+  readonly game_id: string;
   readonly capacity: number;
   readonly game_title: string;
   readonly game_kind: 'FRIENDLY' | 'RATING' | 'PRIVATE' | 'COACH_GAME';
@@ -575,6 +576,7 @@ type HomeParticipant = {
 };
 
 interface CanonicalOpenGameRoster {
+  readonly id: string;
   readonly title: string;
   readonly type: 'friendly' | 'rating';
   readonly endsAt: string;
@@ -609,7 +611,8 @@ async function resolveCanonicalOpenGameRosters(input: {
     ...exerciseExternalIds.map(localVivaExerciseAssociationId),
   ];
   const rows = await input.client.query<CanonicalOpenGameRosterRow>(
-    `select e.external_id as exercise_external_id, g.capacity, g.title as game_title, g.ends_at,
+    `select e.external_id as exercise_external_id, g.id as game_id, g.capacity,
+            g.title as game_title, g.ends_at,
             g.kind as game_kind, g.court_name, g.station_id, lp.title as station_title, p.user_id as profile_id,
             s.display_name, s.photo_url, s.level_label, s.level_value
        from integration.external_entity_map e
@@ -632,6 +635,7 @@ async function resolveCanonicalOpenGameRosters(input: {
   const rosters = new Map<
     string,
     {
+      id: string;
       capacity: number;
       title: string;
       type: 'friendly' | 'rating';
@@ -645,6 +649,7 @@ async function resolveCanonicalOpenGameRosters(input: {
     const displayName = row.display_name.trim().slice(0, 200);
     if (!displayName) continue;
     const entry = rosters.get(row.exercise_external_id) ?? {
+      id: row.game_id,
       capacity: Math.min(4, Math.max(0, row.capacity)),
       title: row.game_title,
       type: row.game_kind === 'RATING' ? ('rating' as const) : ('friendly' as const),
@@ -689,6 +694,7 @@ async function resolveCanonicalOpenGameRosters(input: {
             localVivaExerciseAssociationId(exerciseExternalId) === exerciseAssociationId,
         ) ?? exerciseAssociationId,
         {
+          id: roster.id,
           title: roster.title,
           type: roster.type,
           endsAt: roster.endsAt,
@@ -744,7 +750,7 @@ function asHomeValues(input: {
           ...(canonicalRoster ? { endsAt: canonicalRoster.endsAt } : {}),
           venue: item.venue,
           status: item.status,
-          route: `/bookings/${id}`,
+          route: canonicalRoster ? `/games/${canonicalRoster.id}` : `/bookings/${id}`,
           ...(canonicalRoster
             ? {
                 game: {

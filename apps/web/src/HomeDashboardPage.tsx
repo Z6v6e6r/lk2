@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import type { MouseEvent as ReactMouseEvent, UIEvent } from 'react';
 
 import type {
@@ -49,7 +49,7 @@ const implementedMvpRoutes = new Set([
 function isImplementedMvpRoute(route: string): boolean {
   const pathname = route.split(/[?#]/, 1)[0] ?? '';
   if (implementedMvpRoutes.has(pathname)) return true;
-  return /^\/(?:profile|locations)\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+  return /^\/(?:profile|locations|games)\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
     pathname,
   );
 }
@@ -377,6 +377,31 @@ function NotificationBellIcon(): React.JSX.Element {
         fill="white"
       />
     </svg>
+  );
+}
+
+export function NotificationBellLink({
+  unreadCount,
+  className,
+}: {
+  readonly unreadCount: number;
+  readonly className?: string;
+}): React.JSX.Element {
+  return (
+    <a
+      className={['fh-bell', unreadCount > 0 ? 'is-unread' : null, className?.trim() || null]
+        .filter(Boolean)
+        .join(' ')}
+      href="/notifications"
+      aria-label={
+        unreadCount > 0
+          ? `Уведомления, непрочитанных: ${unreadCount}`
+          : 'Уведомления, непрочитанных нет'
+      }
+    >
+      <NotificationBellIcon />
+      {unreadCount > 0 ? <span className="fh-bell-dot" aria-hidden="true" /> : null}
+    </a>
   );
 }
 
@@ -859,12 +884,6 @@ export function HomeDashboardPage({
   const actions = [
     { id: 'games', label: 'Игры', icon: 'games', route: actionRoute('play', '/games') },
     {
-      id: 'tournaments',
-      label: 'Турниры',
-      icon: 'tournaments',
-      route: actionRoute('tournament', '/tournaments'),
-    },
-    {
       id: 'trainings',
       label: 'Тренировки',
       icon: 'trainings',
@@ -877,13 +896,15 @@ export function HomeDashboardPage({
   );
   const [calendarDayOffset, setCalendarDayOffset] = useState(0);
   const calendarSwipeStartX = useRef<number | null>(null);
-  const [bookingTab, setBookingTab] = useState<'MY' | 'FOR_ME'>('MY');
+  const [bookingTab, setBookingTab] = useState<'MY' | 'FOR_ME'>('FOR_ME');
   const [bookingRecommendations, setBookingRecommendations] =
     useState<BookingRecommendationPage | null>(null);
-  const [bookingRecommendationsLoading, setBookingRecommendationsLoading] = useState(false);
+  const [bookingRecommendationsLoading, setBookingRecommendationsLoading] = useState(true);
   const [bookingRecommendationsError, setBookingRecommendationsError] = useState<string | null>(
     null,
   );
+  const initialBookingRecommendationsLoader = useRef(loadBookingRecommendations);
+  const bookingRecommendationsRequestStarted = useRef(true);
   const [historyOpen, setHistoryOpen] = useState(false);
   const calendarDays = bookingCalendarDays(new Date(), calendarDayOffset);
   const datesWithBookings = new Set(
@@ -897,10 +918,10 @@ export function HomeDashboardPage({
   const showBookingsScrollPeek = bookingTab === 'MY' && visibleUpcoming.length > 2;
   const balance = new Intl.NumberFormat('ru-RU').format(dashboard.profile.balanceMinor / 100);
 
-  function showBookingRecommendations(): void {
-    setBookingTab('FOR_ME');
+  const requestBookingRecommendations = useCallback((): void => {
     setBookingRecommendationsError(null);
-    if (bookingRecommendations || bookingRecommendationsLoading) return;
+    if (bookingRecommendations || bookingRecommendationsRequestStarted.current) return;
+    bookingRecommendationsRequestStarted.current = true;
     setBookingRecommendationsLoading(true);
     void loadBookingRecommendations().then(
       (page) => {
@@ -908,10 +929,36 @@ export function HomeDashboardPage({
         setBookingRecommendationsLoading(false);
       },
       () => {
+        bookingRecommendationsRequestStarted.current = false;
         setBookingRecommendationsError('Не удалось загрузить рекомендации.');
         setBookingRecommendationsLoading(false);
       },
     );
+  }, [bookingRecommendations, loadBookingRecommendations]);
+
+  useEffect(() => {
+    let active = true;
+    void initialBookingRecommendationsLoader.current().then(
+      (page) => {
+        if (!active) return;
+        setBookingRecommendations(page);
+        setBookingRecommendationsLoading(false);
+      },
+      () => {
+        if (!active) return;
+        bookingRecommendationsRequestStarted.current = false;
+        setBookingRecommendationsError('Не удалось загрузить рекомендации.');
+        setBookingRecommendationsLoading(false);
+      },
+    );
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  function showBookingRecommendations(): void {
+    setBookingTab('FOR_ME');
+    requestBookingRecommendations();
   }
 
   return (
@@ -942,28 +989,11 @@ export function HomeDashboardPage({
                 </small>
               </span>
             </a>
-            <a
-              className={notificationUnreadCount > 0 ? 'fh-bell is-unread' : 'fh-bell'}
-              href="/notifications"
-              aria-label={
-                notificationUnreadCount > 0
-                  ? `Уведомления, непрочитанных: ${notificationUnreadCount}`
-                  : 'Уведомления, непрочитанных нет'
-              }
-            >
-              <NotificationBellIcon />
-              {notificationUnreadCount > 0 ? (
-                <span className="fh-bell-dot" aria-hidden="true" />
-              ) : null}
-            </a>
+            <NotificationBellLink unreadCount={notificationUnreadCount} />
           </header>
 
           {dashboard.capabilities.canViewCommunities ? (
-            <section className="fh-hero-communities" aria-labelledby="fh-community-title">
-              <header>
-                <h2 id="fh-community-title">Сообщества</h2>
-                <a href="/communities">Все</a>
-              </header>
+            <section className="fh-hero-communities" aria-label="Сообщества">
               <HomeCommunityCarousel
                 initialItems={dashboard.communities}
                 loadPage={loadCommunityPage}
@@ -1121,9 +1151,6 @@ export function HomeDashboardPage({
             ) : (
               <div className="fh-for-me">
                 <header>
-                  <div>
-                    <strong>Подходящие игры</strong>
-                  </div>
                   <a href="/profile#booking-preferences-title">Настроить</a>
                 </header>
                 {bookingRecommendationsLoading && !bookingRecommendations ? (
@@ -1137,7 +1164,9 @@ export function HomeDashboardPage({
                 ) : null}
                 <div className="fh-bookings-footer">
                   <div className="fh-divider" />
-                  <a href="/bookings?view=for-me">Все рекомендации</a>
+                  <div className="fh-bookings-footer-action">
+                    <a href="/bookings?view=for-me">Все рекомендации</a>
+                  </div>
                 </div>
               </div>
             )}
