@@ -148,6 +148,13 @@ describe('VivaIdentityProvider', () => {
       displayName: 'Алексей Сергеев',
       phoneE164: '+79603073190',
     });
+    const profileCall = fetchImplementation.mock.calls.find(([request]) =>
+      fetchUrl(request).pathname.endsWith('/iSkq6G/profile'),
+    );
+    expect(profileCall).toBeDefined();
+    const profileHeaders = new Headers(profileCall?.[1]?.headers);
+    expect(profileHeaders.get('accept')).toBe('application/json');
+    expect(profileHeaders.get('x-correlation-id')).toBe('oauth-correlation-123');
   });
 
   it('reports the safe OAuth failure stage without logging provider credentials', async () => {
