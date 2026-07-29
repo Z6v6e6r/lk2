@@ -99,6 +99,11 @@ process's private readiness endpoint, so the deploy gate does not depend on a se
 inside a running container. If readiness does not converge, the workflow prints bounded startup
 logs and container status, then fails the release instead of reporting an ambiguous Nginx `502`.
 
+When a Viva OAuth callback returns `AUTH_PROVIDER_UNAVAILABLE`, find the callback by correlation ID
+in the API logs and inspect the following redacted `identity provider operation` metric. Its
+`failureStage` distinguishes the token request/payload, refresh credential, access-token validation
+and Viva profile request/response/payload without logging an authorization code or provider token.
+
 ## Application ingress
 
 Nginx stays healthy before the first application release. After a web release,

@@ -34,14 +34,33 @@ export interface VivaIdentityProviderOptions {
 }
 
 export interface VivaIdentityMetric {
+  readonly correlationId?: string;
   readonly operation: 'request_code' | 'verify_code' | 'oauth_exchange' | 'delegation_refresh';
   readonly outcome: 'success' | 'invalid' | 'rate_limited' | 'unavailable';
   readonly status?: number;
+  readonly failureStage?:
+    | 'token_request'
+    | 'token_payload'
+    | 'refresh_token'
+    | 'access_token'
+    | 'profile_request'
+    | 'profile_response'
+    | 'profile_payload';
   readonly durationMs: number;
   readonly circuitState: 'closed' | 'open';
 }
 
 type VivaIdentityMetricInput = Omit<VivaIdentityMetric, 'durationMs' | 'circuitState'>;
+
+class VivaOAuthStageError extends Error {
+  public constructor(
+    public readonly failureStage: NonNullable<VivaIdentityMetric['failureStage']>,
+    public readonly status?: number,
+  ) {
+    super(failureStage);
+    this.name = 'VivaOAuthStageError';
+  }
+}
 
 const tokenResponseSchema = z.object({
   access_token: z.string().min(1),
@@ -209,20 +228,34 @@ export class VivaIdentityProvider implements IdentityProviderPort, VivaOAuthProv
     const profileUrl = new URL(
       `${this.options.profileApiBaseUrl.replace(/\/$/, '')}/${encodeURIComponent(providerTenantKey)}/profile`,
     );
-    const profileResponse = await this.fetchWithPolicy(
-      profileUrl,
-      {
-        method: 'GET',
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          'X-Correlation-ID': correlationId,
+    let profileResponse: Response;
+    try {
+      profileResponse = await this.fetchWithPolicy(
+        profileUrl,
+        {
+          method: 'GET',
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'X-Correlation-ID': correlationId,
+          },
         },
-      },
-      true,
-    );
-    if (!profileResponse.ok) throw new IdentityProviderError('AUTH_PROVIDER_UNAVAILABLE');
-    const profile = profileResponseSchema.parse(await profileResponse.json());
-    if (profile.id === undefined) throw new IdentityProviderError('AUTH_PROVIDER_UNAVAILABLE');
+        true,
+      );
+    } catch {
+      throw new VivaOAuthStageError('profile_request');
+    }
+    if (!profileResponse.ok) {
+      throw new VivaOAuthStageError('profile_response', profileResponse.status);
+    }
+    let profile: z.infer<typeof profileResponseSchema>;
+    try {
+      profile = profileResponseSchema.parse(await profileResponse.json());
+    } catch {
+      throw new VivaOAuthStageError('profile_payload', profileResponse.status);
+    }
+    if (profile.id === undefined) {
+      throw new VivaOAuthStageError('profile_payload', profileResponse.status);
+    }
     return profile as z.infer<typeof profileResponseSchema> & { readonly id: string | number };
   }
 
@@ -231,12 +264,17 @@ export class VivaIdentityProvider implements IdentityProviderPort, VivaOAuthProv
     providerTenantKey: string,
     correlationId: string,
   ): Promise<VerifiedExternalIdentity> {
-    const { payload } = await jwtVerify(accessToken, this.jwks, {
-      issuer: this.issuer,
-      algorithms: ['RS256'],
-    });
+    let payload: JWTPayload;
+    try {
+      ({ payload } = await jwtVerify(accessToken, this.jwks, {
+        issuer: this.issuer,
+        algorithms: ['RS256'],
+      }));
+    } catch {
+      throw new VivaOAuthStageError('access_token');
+    }
     if (payload.azp !== this.options.clientId || typeof payload.sub !== 'string' || !payload.sub) {
-      throw new IdentityProviderError('AUTH_PROVIDER_UNAVAILABLE');
+      throw new VivaOAuthStageError('access_token');
     }
     const profile = await this.resolveVivaProfile(accessToken, providerTenantKey, correlationId);
     const profileName = [profile.firstName, profile.middleName, profile.lastName]
@@ -320,39 +358,111 @@ export class VivaIdentityProvider implements IdentityProviderPort, VivaOAuthProv
         },
       );
     } catch {
-      this.emit({ operation: 'oauth_exchange', outcome: 'unavailable' }, startedAt);
+      this.emit(
+        {
+          correlationId: input.correlationId,
+          operation: 'oauth_exchange',
+          outcome: 'unavailable',
+          failureStage: 'token_request',
+        },
+        startedAt,
+      );
       throw new IdentityProviderError('AUTH_PROVIDER_UNAVAILABLE');
     }
     if (response.status === 400 || response.status === 401) {
       this.emit(
-        { operation: 'oauth_exchange', outcome: 'invalid', status: response.status },
+        {
+          correlationId: input.correlationId,
+          operation: 'oauth_exchange',
+          outcome: 'invalid',
+          status: response.status,
+        },
         startedAt,
       );
       throw new IdentityProviderError('AUTH_CODE_INVALID');
     }
     if (response.status === 429) {
       this.emit(
-        { operation: 'oauth_exchange', outcome: 'rate_limited', status: response.status },
+        {
+          correlationId: input.correlationId,
+          operation: 'oauth_exchange',
+          outcome: 'rate_limited',
+          status: response.status,
+        },
         startedAt,
       );
       throw new IdentityProviderError('AUTH_RATE_LIMITED');
     }
     if (!response.ok) {
       this.emit(
-        { operation: 'oauth_exchange', outcome: 'unavailable', status: response.status },
+        {
+          correlationId: input.correlationId,
+          operation: 'oauth_exchange',
+          outcome: 'unavailable',
+          status: response.status,
+        },
         startedAt,
       );
       throw new IdentityProviderError('AUTH_PROVIDER_UNAVAILABLE');
     }
-    const tokens = tokenResponseSchema.parse(await response.json());
-    if (!tokens.refresh_token) throw new IdentityProviderError('AUTH_PROVIDER_UNAVAILABLE');
-    const identity = await this.resolveOAuthIdentity(
-      tokens.access_token,
-      input.providerTenantKey,
-      input.correlationId,
-    );
+    let tokens: z.infer<typeof tokenResponseSchema>;
+    try {
+      tokens = tokenResponseSchema.parse(await response.json());
+    } catch {
+      this.emit(
+        {
+          correlationId: input.correlationId,
+          operation: 'oauth_exchange',
+          outcome: 'unavailable',
+          status: response.status,
+          failureStage: 'token_payload',
+        },
+        startedAt,
+      );
+      throw new IdentityProviderError('AUTH_PROVIDER_UNAVAILABLE');
+    }
+    if (!tokens.refresh_token) {
+      this.emit(
+        {
+          correlationId: input.correlationId,
+          operation: 'oauth_exchange',
+          outcome: 'unavailable',
+          status: response.status,
+          failureStage: 'refresh_token',
+        },
+        startedAt,
+      );
+      throw new IdentityProviderError('AUTH_PROVIDER_UNAVAILABLE');
+    }
+    let identity: VerifiedExternalIdentity;
+    try {
+      identity = await this.resolveOAuthIdentity(
+        tokens.access_token,
+        input.providerTenantKey,
+        input.correlationId,
+      );
+    } catch (error) {
+      const failureStage =
+        error instanceof VivaOAuthStageError ? error.failureStage : 'access_token';
+      this.emit(
+        {
+          correlationId: input.correlationId,
+          operation: 'oauth_exchange',
+          outcome: 'unavailable',
+          ...(error instanceof VivaOAuthStageError && error.status ? { status: error.status } : {}),
+          failureStage,
+        },
+        startedAt,
+      );
+      throw new IdentityProviderError('AUTH_PROVIDER_UNAVAILABLE');
+    }
     this.emit(
-      { operation: 'oauth_exchange', outcome: 'success', status: response.status },
+      {
+        correlationId: input.correlationId,
+        operation: 'oauth_exchange',
+        outcome: 'success',
+        status: response.status,
+      },
       startedAt,
     );
     return {
