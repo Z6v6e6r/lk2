@@ -286,6 +286,40 @@ describe('VivaIdentityProvider', () => {
     ).rejects.toMatchObject({ code: 'AUTH_PROVIDER_UNAVAILABLE' });
   });
 
+  it('reports the safe OAuth failure stage without logging provider credentials', async () => {
+    const metrics: unknown[] = [];
+    const provider = new VivaIdentityProvider({
+      ...options(),
+      mode: 'sandbox',
+      fetchImplementation: vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(Response.json({ access_token: 'external-secret' })),
+      onMetric: (metric) => metrics.push(metric),
+    });
+
+    await expect(
+      provider.exchangeAuthorizationCode({
+        code: 'authorization-code',
+        codeVerifier: 'pkce-verifier',
+        providerTenantKey: 'iSkq6G',
+        redirectUri: 'https://app.example.test/callback',
+        correlationId: 'oauth-correlation-123',
+      }),
+    ).rejects.toMatchObject({ code: 'AUTH_PROVIDER_UNAVAILABLE' });
+
+    expect(metrics).toEqual([
+      expect.objectContaining({
+        correlationId: 'oauth-correlation-123',
+        operation: 'oauth_exchange',
+        outcome: 'unavailable',
+        status: 200,
+        failureStage: 'refresh_token',
+      }),
+    ]);
+    expect(JSON.stringify(metrics)).not.toContain('external-secret');
+    expect(JSON.stringify(metrics)).not.toContain('authorization-code');
+  });
+
   it('opens its circuit after bounded upstream failures', async () => {
     const fetchImplementation = vi.fn<typeof fetch>().mockRejectedValue(new Error('offline'));
     const provider = new VivaIdentityProvider({
