@@ -156,7 +156,8 @@ describe('VivaIdentityProvider', () => {
     );
     const profileHeaders = new Headers(profileCall?.[1]?.headers);
     expect(profileHeaders.get('Authorization')).toBe(`Bearer ${accessToken}`);
-    expect(profileHeaders.get('X-Correlation-ID')).toBeNull();
+    expect(profileHeaders.get('Accept')).toBe('application/json');
+    expect(profileHeaders.get('X-Correlation-ID')).toBe('oauth-correlation-123');
     expect(
       metrics.map((metric) => ({
         operation: metric.operation,

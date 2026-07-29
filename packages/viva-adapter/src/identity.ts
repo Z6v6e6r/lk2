@@ -234,6 +234,7 @@ export class VivaIdentityProvider implements IdentityProviderPort, VivaOAuthProv
         {
           method: 'GET',
           headers: {
+            Accept: 'application/json',
             Authorization: `Bearer ${accessToken}`,
           },
         },
