@@ -4,6 +4,12 @@ set -eu
 
 cd /opt/phub
 
+auth_correlation_id='fd11bad9-4441-441e-b474-a0a51d8e00bf'
+
+compose() {
+  docker compose --env-file infrastructure.env --env-file release.env "$@"
+}
+
 infrastructure() {
   docker compose --env-file infrastructure.env -f compose.infrastructure.yaml "$@"
 }
@@ -13,6 +19,62 @@ sql() {
     'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -Atc "$1"' \
     sh "$1"
 }
+
+api_container_id="$(compose ps -q api)"
+test -n "$api_container_id"
+
+echo "auth_runtime"
+compose exec -T api node -e "
+  const env = process.env;
+  const decodedKeyBytes = (() => {
+    try { return Buffer.from(env.VIVA_DELEGATION_ENCRYPTION_KEY || '', 'base64url').length; }
+    catch { return -1; }
+  })();
+  console.log(JSON.stringify({
+    appEnv: env.APP_ENV,
+    vivaMode: env.VIVA_MODE,
+    oauthEnabled: env.VIVA_OAUTH_ENABLED,
+    redirectUri: env.VIVA_OAUTH_REDIRECT_URI,
+    successRedirectUrl: env.VIVA_OAUTH_SUCCESS_REDIRECT_URL,
+    oauthScopes: env.VIVA_OAUTH_SCOPES,
+    delegationKeyBytes: decodedKeyBytes,
+    delegationKeyVersionPresent: Boolean(env.VIVA_DELEGATION_KEY_VERSION)
+  }));
+"
+
+echo "auth_audit"
+sql "
+  select concat(action, '|', resource_type, '|', result)
+    from audit.audit_log
+   where correlation_id = '$auth_correlation_id'
+   order by occurred_at
+"
+
+echo "auth_acceptances"
+sql "
+  select concat(document_kind, '|', source)
+    from legal.document_acceptances
+   where correlation_id = '$auth_correlation_id'
+   order by document_kind
+"
+
+echo "auth_request_log"
+docker logs "$api_container_id" --since 3h 2>&1 \
+  | grep -F "$auth_correlation_id" \
+  | sed -E \
+      -e 's/(code=)[^&" ]+/\1<redacted>/g' \
+      -e 's/(state=)[^&" ]+/\1<redacted>/g' \
+      -e 's/("(access|refresh)?[Tt]oken"[[:space:]]*:[[:space:]]*")[^"]+/\1<redacted>/g' \
+      -e 's/("(authorization|cookie)"[[:space:]]*:[[:space:]]*")[^"]+/\1<redacted>/g' \
+  || true
+
+echo "recent_identity_provider_metrics"
+docker logs "$api_container_id" --since 30m 2>&1 \
+  | grep -F 'identity provider operation' \
+  | tail -40 \
+  || true
+
+exit 0
 
 sql "
   select concat(
