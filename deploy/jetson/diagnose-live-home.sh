@@ -23,6 +23,23 @@ sql() {
 api_container_id="$(compose ps -q api)"
 test -n "$api_container_id"
 
+echo "runtime_status"
+compose ps api worker realtime web
+infrastructure ps nginx
+docker inspect \
+  --format 'nginx_status={{.State.Status}} nginx_ports={{json .NetworkSettings.Ports}}' \
+  "$(infrastructure ps -q nginx)"
+
+echo "internal_ingress"
+infrastructure exec -T nginx wget -qO- http://127.0.0.1/healthz
+echo
+infrastructure exec -T nginx wget -qO- http://127.0.0.1/manifest.json
+echo
+infrastructure exec -T nginx wget -qO- http://127.0.0.1/health/live
+echo
+infrastructure exec -T nginx wget -qO- http://127.0.0.1/health/ready
+echo
+
 echo "auth_runtime"
 compose exec -T api node -e "
   const env = process.env;

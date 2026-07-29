@@ -46,6 +46,22 @@ jobs:
         run: |
           scp deploy/jetson/diagnose-live-home.sh "phub-deploy@$HOST:/opt/phub/diagnose-live-home.sh"
           ssh "phub-deploy@$HOST" 'sh /opt/phub/diagnose-live-home.sh'
+      - name: Inspect public staging ingress
+        env:
+          BASE_URL: ${{ vars.STAGING_BASE_URL }}
+        run: |
+          set +e
+          for path in /healthz /manifest.json /health/live /health/ready; do
+            echo "public_path=$path"
+            curl \
+              --connect-timeout 10 \
+              --max-time 15 \
+              --silent \
+              --show-error \
+              --write-out '\npublic_http_status=%{http_code}\n' \
+              "${BASE_URL%/}$path"
+          done
+          exit 0
 
   build:
     if: ${{ github.event_name == 'push' || !inputs.diagnose_home }}
