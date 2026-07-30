@@ -15,6 +15,8 @@ authentication provider binding or PadlHub UUIDs.
    PadlHub UUIDs. The operator command also requires the operation to be present in
    `DIRECT_VIVA_CONTRACT_READY_OPERATIONS`; currently only `profile.read` is eligible. Do not
    include an operation while a Viva identifier can reach the browser.
+   `FOR_ME` and upcoming `MY_BOOKINGS` use the separate ADR 0020 read-job contract and therefore do
+   not add schedule or booking operations to this general allowlist.
 5. Confirm `VIVA_DIRECT_READ_ENABLED=true` only in the target staging environment. Keep Home
    backend synchronization and other server Viva reads independently budgeted; mixed mode must not
    create duplicate polling.
@@ -52,10 +54,22 @@ different payload with that key fails with `IDEMPOTENCY_KEY_CONFLICT`.
 6. Monitor direct read latency/errors, broker refresh failures, API Viva egress and Viva rate-limit
    responses through the agreed soak.
 
-For bookings, verify `/bookings/upcoming` and the `/bookings` UI use PadlHub UUIDs and PadlHub API
-transport. Viva currently requires a second details request keyed by its own booking IDs, so
-`bookings.read` and `bookings.details.read` must remain non-direct until the provider contract
-supports PadlHub identifiers.
+For the Home booking screens, additionally verify:
+
+1. activating `Для меня` creates a `FOR_ME` job and produces only schedule requests;
+2. activating `Мои записи` creates one `MY_BOOKINGS` job;
+3. the browser reads `/v2/{tenant}/bookings?page=0&size=50`, then requests details only for active
+   identifiers returned by that response;
+4. each result submission returns `202` (or a harmless replay `200`) and completion returns
+   `screen=MY_BOOKINGS`;
+5. the public response, logs and Redis result contain no Viva booking/exercise identifier;
+6. known exercise mappings route to `/games/{padlhubUuid}`, while unmapped records use opaque
+   snapshot UUIDs;
+7. API/worker logs show zero server-side schedule or booking egress during the browser journey.
+
+Do not add `bookings.read` or `bookings.details.read` to
+`DIRECT_VIVA_CONTRACT_READY_OPERATIONS`; the fixed read-job chain is the only approved browser
+transport for those provider routes.
 
 ## Switch to PadlHub-only / rollback
 

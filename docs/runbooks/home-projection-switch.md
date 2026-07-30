@@ -17,6 +17,12 @@ Do not assemble the import file in a browser from profile, bookings, subscriptio
 requests. Those responses do not share a version and would recreate the consistency bug this read
 model removes.
 
+For the additive HomeBase recovery path, also read
+[ADR 0019](../adr/0019-home-base-and-viva-egress-gate.md). `GET /home` remains the complete
+compatibility projection; `GET /home/base` exposes local quick actions, community and promotion
+envelopes, locations, additional links and capabilities. It excludes the self-profile aggregate,
+balance, messaging, counters, upcoming bookings and subscriptions.
+
 ## Expand and fill
 
 Apply the expand-only migration while the API still uses its previous mode:
@@ -76,6 +82,73 @@ npm run home:component:enqueue -- \
 Add `--apply` only after review. This utility writes an audited outbox event and is not a substitute
 for the domain owner's transactional event producer. The worker returns `waiting` internally until
 all nine component types have arrived; it must not create a partial snapshot.
+
+## Gate 0: trusted Viva egress
+
+Do not assume that successful OAuth or delegated token issuance proves that the worker can read
+Viva business data. Before enabling fresh Viva-backed Home sections, run the approved read-only
+probe from the exact target worker runtime with the same user-delegation refresh path.
+
+The probe may log only:
+
+- operation name;
+- generated correlation ID;
+- HTTP status;
+- latency;
+- strict schema outcome.
+
+Never print or persist an access token, refresh token, provider identifier, response body, phone,
+name or another personal field. Use only `GET`; do not use a booking-detail identifier unless it
+came from a successful authorized booking-list response in the same probe.
+
+The 2026-07-29 local Gate 0 result was:
+
+| Operation              | Correlation ID                         | Result        | Latency | Schema outcome  |
+| ---------------------- | -------------------------------------- | ------------- | ------- | --------------- |
+| delegated access-token | `3f9e14b1-30ac-4beb-93a5-c895e27011e1` | `200`         | 610 ms  | valid token DTO |
+| profile                | `606f90e2-89fc-405d-ae62-e936f651ce55` | `403`         | 521 ms  | not validated   |
+| bookings               | `489852a5-b4d3-4e7d-8527-376aee81a56f` | `403`         | 368 ms  | not validated   |
+| booking details        | `6b673038-74c3-4d8d-b5cf-bfb02c602a5c` | not attempted | n/a     | not attempted   |
+| subscriptions          | `928ee24e-47bb-4b86-ad06-d558c1341a08` | `403`         | 133 ms  | not validated   |
+
+Authorization-only controls also returned `403` for profile, bookings and subscriptions, so the
+correlation header was not the cause. This result is a `NO-GO` for the legacy complete Viva-backed
+Home components, for adding Viva-backed sections to HomeBase, or for representing profile
+separation as a complete synchronization repair.
+
+The gate becomes `GO` only when bookings, booking details and subscriptions all:
+
+1. return `2xx` from the exact target worker egress;
+2. pass the strict `@phub/viva-adapter` schemas;
+3. map every provider ID to a PadlHub UUID before projection publication;
+4. share the intended coherent source timestamp;
+5. leave no token, provider payload or provider identifier in public data or logs.
+
+If the gate remains red, request a trusted user-delegated server/worker egress path from Viva. Do
+not enable direct booking/subscription operations, do not post browser-fetched provider payloads
+back into the API, and do not refresh the old complete snapshot with an older profile component.
+
+## HomeBase additive recovery
+
+HomeBase can be expanded and verified without changing or deleting the complete HomeDashboard
+contract. Verify that the response contains `snapshot`, PadlHub `viewerUserId`, `quickActions`,
+`communities`, `promotions`, `locations`, `additionalLinks` and `capabilities`, and omits profile,
+balance, messaging, counters, upcoming bookings and subscriptions. Its top-level snapshot contains
+`version`, `generatedAt`, `source` and `completeness`, but no `staleAt`; required local fields do not
+expire the whole response into a global `503`. For each community and promotion envelope, verify:
+
+- `READY` carries one contract-valid local value plus required `revision`, `observedAt` and future
+  `staleAt`;
+- `STALE` carries the last contract-valid value, preserves its original `revision`, `observedAt` and
+  `staleAt`, and is inside the approved maximum stale window;
+- `UNAVAILABLE` carries no fabricated value;
+- the self profile is absent and is loaded through its separate routed aggregate;
+- a profile `403` does not change independent PadlHub-owned section states.
+
+Keep old clients on `GET /home` during migration. Switch a new client to `GET /home/base` only after
+the OpenAPI contract, API/SDK implementation, database RLS, section-state UI and browser failure
+isolation pass together. Roll back the client/API image digest without down-migrating or deleting
+HomeBase rows.
 
 ## Enable Viva source producers
 
@@ -190,6 +263,12 @@ Using a valid PadlHub user JWT, verify that `GET /user/api/v1/{tenantKey}/home` 
 external identifiers. Confirm that the browser performs one Home request and renders the same
 version.
 
+For a HomeBase-capable client, additionally verify that `GET /user/api/v1/{tenantKey}/home/base`
+returns the expected snapshot version and explicit community/promotion section states. Browser
+network evidence must show one PadlHub HomeBase read, the separately routed self-profile read and,
+when rendered, the separate PadlHub notification-badge read. It must not show direct Viva bookings
+or subscriptions, and no section may silently fall back between PadlHub and Viva.
+
 ### Jetson staging activation
 
 The staging Compose file reads `/etc/phub/staging.env` first and an optional non-secret
@@ -214,6 +293,11 @@ changing the running API mode.
   corrected revision.
 - `HOME_PROJECTION_STALE`: restore the producer and publish a fresh higher revision. Increasing the
   stale grace is an approved incident mitigation only when the business accepts stale data.
+- HomeBase `STALE`: confirm the section `revision`, `observedAt`, `staleAt` and approved maximum
+  stale window, show a visible stale treatment, and restore its owner. Never rewrite freshness
+  metadata without a new source event.
+- HomeBase `UNAVAILABLE`: keep the failure section-scoped and restore/backfill its local owner. Do
+  not substitute mock or a browser-relayed Viva payload.
 - `PROFILE_PHOTO_*`: inspect the redacted worker error code, CDN allowlist, image limits and object
   storage readiness. The worker keeps the last stored avatar and continues the Home batch; do not
   replace it with the Viva URL in the public projection.

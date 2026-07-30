@@ -4,7 +4,7 @@ import { withTenantTransaction } from '@phub/database';
 import {
   HOME_PROJECTION_COMPONENT_EVENT,
   homeProjectionComponentPayloadSchema,
-  type HomeDashboard,
+  type HomePromotionSlots,
 } from '@phub/home-projection';
 import type { Pool, PoolClient, QueryResultRow } from 'pg';
 
@@ -304,7 +304,7 @@ export function persistPromotionHomeSource(input: {
   readonly pool: Pool;
   readonly tenantId: string;
   readonly userId: string;
-  readonly promotions: HomeDashboard['promotions'];
+  readonly promotions: HomePromotionSlots;
   readonly correlationId: string;
   readonly fetchedAt: string;
 }): Promise<PromotionHomePersistenceResult> {
@@ -408,8 +408,10 @@ export function persistPromotionHomeSource(input: {
         input.correlationId,
         JSON.stringify({
           sourceRevision: nextRevision,
-          promotionCount: input.promotions.items.length,
-          rotationEnabled: input.promotions.rotationEnabled,
+          heroPromotionCount: input.promotions.hero.items.length,
+          standardPromotionCount: input.promotions.standard.items.length,
+          heroRotationEnabled: input.promotions.hero.rotationEnabled,
+          standardRotationEnabled: input.promotions.standard.rotationEnabled,
         }),
       ],
     );

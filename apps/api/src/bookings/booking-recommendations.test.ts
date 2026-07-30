@@ -231,6 +231,11 @@ describe('booking recommendations', () => {
           },
           levelRange: { from: 'C', to: 'B' },
           capacity: { total: 8, open: 3 },
+          host: {
+            displayName: 'Мария Орлова',
+            avatarUrl: null,
+            role: 'TRAINER',
+          },
           route: '/trainings?event=50000000-0000-4000-8000-000000000001',
         },
         {
@@ -247,6 +252,11 @@ describe('booking recommendations', () => {
           },
           levelRange: { from: 'C', to: 'B' },
           capacity: { total: 16, open: 1 },
+          host: {
+            displayName: 'Илья Соколов',
+            avatarUrl: null,
+            role: 'ORGANIZER',
+          },
           route: '/tournaments?event=50000000-0000-4000-8000-000000000002',
         },
       ],
@@ -262,11 +272,71 @@ describe('booking recommendations', () => {
       activity: {
         title: 'Групповая тренировка',
         levelRange: { from: 'C', to: 'B' },
+        host: { displayName: 'Мария Орлова', role: 'TRAINER' },
       },
     });
     const startsAt = page.items.map((item) =>
       item.kind === 'GAME' ? item.game.startsAt : item.activity.startsAt,
     );
     expect(startsAt).toEqual([...startsAt].sort((left, right) => left.localeCompare(right)));
+  });
+
+  it('returns a stable first page of 14 recommendations and subsequent pages of 12', async () => {
+    const candidates = Array.from({ length: 30 }, (_, index) =>
+      projection({
+        id: `60000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`,
+        startsAt: new Date(
+          Date.parse('2026-07-20T09:00:00.000Z') + index * 60 * 60 * 1_000,
+        ).toISOString(),
+        stationId: favoriteStationId,
+        stationName: 'Терехово',
+      }),
+    );
+    const repository = {
+      listRecommendationCardProjections: vi.fn().mockResolvedValue({
+        candidates,
+        history: [],
+      }),
+    };
+    const baseInput = {
+      repository,
+      tenantId,
+      userId,
+      preferences: {
+        favoriteStationIds: [],
+        preferredTimeWindows: [],
+        useHistory: false,
+        version: 0,
+        updatedAt: null,
+      },
+      playerLevel: null,
+      now: '2026-07-18T09:00:00.000Z',
+    } as const;
+
+    const firstPage = await listBookingRecommendations({ ...baseInput, limit: 14 });
+    const secondPage = await listBookingRecommendations({
+      ...baseInput,
+      limit: 12,
+      cursor: firstPage.nextCursor!,
+    });
+    const thirdPage = await listBookingRecommendations({
+      ...baseInput,
+      limit: 12,
+      cursor: secondPage.nextCursor!,
+    });
+
+    expect(firstPage.items).toHaveLength(14);
+    expect(secondPage.items).toHaveLength(12);
+    expect(thirdPage.items).toHaveLength(4);
+    expect(firstPage.nextCursor).toEqual(expect.any(String));
+    expect(secondPage.nextCursor).toEqual(expect.any(String));
+    expect(thirdPage.nextCursor).toBeNull();
+    expect(repository.listRecommendationCardProjections).toHaveBeenCalledOnce();
+    const distinctIds = new Set(
+      [...firstPage.items, ...secondPage.items, ...thirdPage.items].map((item) =>
+        item.kind === 'GAME' ? item.game.id : item.activity.id,
+      ),
+    );
+    expect(distinctIds.size).toBe(30);
   });
 });

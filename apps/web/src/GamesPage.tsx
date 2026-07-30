@@ -256,7 +256,7 @@ export function GamesPage({ gateway, gameId }: GamesPageProps): React.JSX.Elemen
   const [startsAfter, setStartsAfter] = useState<GameStartAfterFilter>('ALL');
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [selectedDate, setSelectedDate] = useState<string | null>(() => dateKey(new Date()));
-  const [includeFull, setIncludeFull] = useState(true);
+  const [includeFull, setIncludeFull] = useState(false);
   const [games, setGames] = useState<readonly GameCardModel[]>([]);
   const [coachGames, setCoachGames] = useState<readonly PublicCoachGameSummary[]>([]);
   const [tournaments, setTournaments] = useState<readonly PublicTournamentSummary[]>([]);
@@ -581,7 +581,7 @@ export function GamesPage({ gateway, gameId }: GamesPageProps): React.JSX.Elemen
   const activeFilterCount =
     Number(selectedKinds.length > 0) +
     Number(selectedStationIds.length > 0) +
-    Number(!includeFull) +
+    Number(includeFull) +
     Number(levelRange !== 'ALL') +
     Number(startsAfter !== 'ALL');
   const kindSummary =
@@ -626,7 +626,7 @@ export function GamesPage({ gateway, gameId }: GamesPageProps): React.JSX.Elemen
     beginFilterChange();
     setSelectedKinds([]);
     setSelectedStationIds([]);
-    setIncludeFull(true);
+    setIncludeFull(false);
     setLevelRange('ALL');
     setStartsAfter('ALL');
   }
@@ -884,7 +884,7 @@ export function GamesPage({ gateway, gameId }: GamesPageProps): React.JSX.Elemen
         <>
           <a className="games-create-hero" href="/games/new" aria-label="Создать игру">
             <strong>Создать игру</strong>
-            <span>Выберите станцию, время и откройте набор игроков</span>
+            <span>Выберите станцию, время и собери свою игру</span>
           </a>
           <section className="games-filters" aria-label="Фильтры поиска игр">
             <div className="games-date-rail" aria-label="Выбор даты">
@@ -1058,16 +1058,16 @@ export function GamesPage({ gateway, gameId }: GamesPageProps): React.JSX.Elemen
                       {station.name} <span>×</span>
                     </button>
                   ))}
-                  {!includeFull ? (
+                  {includeFull ? (
                     <button
                       type="button"
-                      aria-label="Убрать фильтр Только со свободными местами"
+                      aria-label="Убрать фильтр Показываются набранные"
                       onClick={() => {
                         beginFilterChange();
-                        setIncludeFull(true);
+                        setIncludeFull(false);
                       }}
                     >
-                      Есть места <span>×</span>
+                      Набранные <span>×</span>
                     </button>
                   ) : null}
                   {startsAfter !== 'ALL' ? (

@@ -3,6 +3,7 @@
 - Status: accepted, direct-command portion superseded by ADR 0008
 - Date: 2026-07-12
 - Extends: [ADR 0004](0004-provider-neutral-authentication.md)
+- Amended by: [ADR 0019](0019-home-base-and-viva-egress-gate.md)
 
 ## Context
 
@@ -24,6 +25,15 @@ that integration-only identifier to one PadlHub user UUID before issuing the nor
 JWT and rotating `HttpOnly` refresh cookie. Different VK ID/Yandex subjects for the same Viva client
 are identity links of that one user; phone and email are never account-linking keys. A conflicting
 pre-existing mapping fails closed for audited reconciliation instead of creating or merging users.
+
+When Viva accepts the OAuth token exchange but forbids the server-side End User profile read with
+`403`, a tenant may use the direct-read gate for a narrower bootstrap. PadlHub still verifies the
+access-token signature, issuer, audience/client and subject, then resolves only an already-existing
+`(tenant_id, issuer, subject)` mapping. It does not create a user, infer identity from token profile
+claims, or accept a Viva profile ID from the browser. An unknown subject fails with
+`AUTH_IDENTITY_LINK_REQUIRED`; the normal canonical-profile flow or an audited support
+reconciliation must establish the link first. The resulting short-lived access-token is handed to
+the browser as described below, so the allowlisted profile read can run directly.
 
 The successful callback may also create or rotate a **Viva user delegation**. It is not a PadlHub
 session and never changes the public PadlHub user UUID.
@@ -69,6 +79,20 @@ HTTP method and expiry. Any other Viva URL, scope or command is rejected by the 
 
 Purchase, cancellation and every other command stay behind PadlHub APIs. Direct client command
 transport is not enabled by this ADR.
+
+The first-party web client reads both the authenticated user's profile and another player's profile
+through PadlHub APIs. This keeps the profile on one server-owned projection version and lets the API
+attach only the stable PadlHub profile-photo delivery URL; the web client must not combine a direct
+Viva profile with locally stored media. The Home surface composes that PadlHub self-profile
+aggregate with the separate `HomeBase` partial recovery contract defined by ADR 0019. A direct
+profile response never fills, refreshes or changes the source of a HomeBase section.
+
+The general-purpose direct exception remains limited to `DIRECT_VIVA_CONTRACT_READY_OPERATIONS`.
+ADR 0020 defines a narrower server-directed exception for booking-screen read jobs: the browser may
+relay a bounded list/details pair only when the authenticated PadlHub API issued the exact
+short-lived command. The relayed payload is validated and converted to a provider-free screen
+snapshot before storage; it is never written into a business projection or accepted as proof for a
+command. Subscription reads remain outside that exception.
 
 ## Refresh, revocation and expiry
 

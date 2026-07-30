@@ -1,0 +1,281 @@
+paths:
+  /{tenantKey}/booking-screen-read-jobs:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+    post:
+      tags: [bookings]
+      operationId: startBookingScreenReadJob
+      summary: Start a server-directed client-assisted screen read
+      description: |
+        Returns only a fixed, read-only command vocabulary. The browser cannot submit a provider
+        URL or choose a source. Provider payloads must be relayed immediately to the matching
+        result endpoint and are normalized before recommendation ranking or construction of the
+        current user's booking snapshot.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BookingScreenReadJobRequest'
+      responses:
+        '200':
+          description: Short-lived read job and its fixed commands.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BookingScreenReadJob'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+
+  /{tenantKey}/booking-screen-read-jobs/{jobId}/results/{commandId}:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/BookingScreenReadJobId'
+      - $ref: '#/components/parameters/BookingScreenReadCommandId'
+    post:
+      tags: [bookings]
+      operationId: submitBookingScreenReadResult
+      summary: Relay one bounded provider result to its server-issued command
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BookingScreenReadResultRequest'
+      responses:
+        '200':
+          description: An identical command result was already accepted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BookingScreenReadResultAcceptance'
+        '202':
+          description: Result normalized and accepted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BookingScreenReadResultAcceptance'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+
+  /{tenantKey}/booking-screen-read-jobs/{jobId}/complete:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/BookingScreenReadJobId'
+    post:
+      tags: [bookings]
+      operationId: completeBookingScreenReadJob
+      summary: Build a recommendation snapshot from accepted results and local games
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BookingScreenReadCompletionRequest'
+      responses:
+        '200':
+          description: Ready or explicitly partial recommendation snapshot.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BookingScreenReadCompletion'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+
+components:
+  parameters:
+    BookingScreenReadJobId:
+      name: jobId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    BookingScreenReadCommandId:
+      name: commandId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+  schemas:
+    BookingScreenReadJobRequest:
+      type: object
+      additionalProperties: false
+      required: [screen]
+      properties:
+        screen:
+          type: string
+          enum: [FOR_ME, MY_BOOKINGS]
+    BookingScreenReadJob:
+      type: object
+      additionalProperties: false
+      required: [jobId, screen, expiresAt, commands, concurrency]
+      properties:
+        jobId:
+          type: string
+          format: uuid
+        screen:
+          type: string
+          enum: [FOR_ME, MY_BOOKINGS]
+        expiresAt:
+          type: string
+          format: date-time
+        commands:
+          type: array
+          minItems: 1
+          maxItems: 14
+          items:
+            $ref: '#/components/schemas/BookingScreenReadCommand'
+        concurrency:
+          type: integer
+          minimum: 1
+          maximum: 3
+    BookingScreenReadCommand:
+      oneOf:
+        - $ref: '#/components/schemas/BookingScreenScheduleReadCommand'
+        - $ref: '#/components/schemas/BookingScreenUpcomingReadCommand'
+    BookingScreenScheduleReadCommand:
+      type: object
+      additionalProperties: false
+      required: [commandId, operation, date]
+      properties:
+        commandId:
+          type: string
+          format: uuid
+        operation:
+          type: string
+          const: schedule.read
+        date:
+          type: string
+          format: date
+    BookingScreenUpcomingReadCommand:
+      type: object
+      additionalProperties: false
+      required: [commandId, operation, detailsOperation, page, size]
+      properties:
+        commandId:
+          type: string
+          format: uuid
+        operation:
+          type: string
+          const: bookings.read
+        detailsOperation:
+          type: string
+          const: bookings.details.read
+        page:
+          type: integer
+          const: 0
+        size:
+          type: integer
+          const: 50
+    BookingScreenReadResultRequest:
+      type: object
+      additionalProperties: false
+      required: [payload]
+      properties:
+        payload:
+          description: |
+            Bounded Viva end-user schedule response or a fixed booking-list/details pair. It is
+            normalized immediately and is never returned from a PadlHub public API or retained as
+            a source of truth.
+          oneOf:
+            - type: array
+              maxItems: 500
+              items: {}
+            - type: object
+              additionalProperties: true
+    BookingScreenReadResultAcceptance:
+      type: object
+      additionalProperties: false
+      required: [accepted, replayed, itemCount]
+      properties:
+        accepted:
+          type: boolean
+          const: true
+        replayed:
+          type: boolean
+        itemCount:
+          type: integer
+          minimum: 0
+          maximum: 500
+    BookingScreenReadCompletionRequest:
+      type: object
+      additionalProperties: false
+      required: [limit]
+      properties:
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 50
+    BookingScreenReadCompletion:
+      oneOf:
+        - $ref: '#/components/schemas/BookingScreenRecommendationReadCompletion'
+        - $ref: '#/components/schemas/BookingScreenUpcomingReadCompletion'
+    BookingScreenRecommendationReadCompletion:
+      type: object
+      additionalProperties: false
+      required: [screen, state, completedCommands, totalCommands, page]
+      properties:
+        screen:
+          type: string
+          const: FOR_ME
+        state:
+          type: string
+          enum: [READY, PARTIAL]
+        completedCommands:
+          type: integer
+          minimum: 0
+          maximum: 14
+        totalCommands:
+          type: integer
+          minimum: 1
+          maximum: 14
+        page:
+          $ref: ./games.yaml#/components/schemas/BookingRecommendationPage
+    BookingScreenUpcomingReadCompletion:
+      type: object
+      additionalProperties: false
+      required: [screen, state, completedCommands, totalCommands, bookings]
+      properties:
+        screen:
+          type: string
+          const: MY_BOOKINGS
+        state:
+          type: string
+          enum: [READY, PARTIAL]
+        completedCommands:
+          type: integer
+          minimum: 0
+          maximum: 1
+        totalCommands:
+          type: integer
+          const: 1
+        bookings:
+          $ref: ./openapi.yaml#/components/schemas/UserUpcomingBookings

@@ -1,4 +1,5 @@
 import type { LocationList } from './auth-gateway.js';
+import { locationCourtLabel } from './location-court-label.js';
 
 function LocationNavigation(): React.JSX.Element {
   return (
@@ -52,7 +53,7 @@ export function LocationsPage({
               }
             >
               <i>
-                {location.courtCount} {location.courtCount === 1 ? 'корт' : 'кортов'}
+                {location.courtCount} {locationCourtLabel(location.courtCount)}
               </i>
             </span>
             <span className="location-directory-copy">

@@ -5,6 +5,7 @@ import type {
   ActivityHistoryPage,
   BookingPreferences,
   BookingPreferencesUpdateRequest,
+  BookingRecommendationFilters,
   BookingRecommendationPage,
   ClientRoutingPlan,
   CommunityMembershipPage,
@@ -13,6 +14,7 @@ import type {
   GameCommandResult,
   SubmitGameResultRequest,
   DisputeGameResultRequest,
+  HomeBase,
   HomeDashboard,
   GiftCertificateOrderCommandResult,
   GiftCertificateOrder,
@@ -46,6 +48,7 @@ export type {
   ActivityHistoryPage,
   BookingPreferences,
   BookingPreferencesUpdateRequest,
+  BookingRecommendationFilters,
   BookingRecommendationPage,
   ClientRoutingPlan,
   CommunityMembershipPage,
@@ -54,6 +57,7 @@ export type {
   GameCommandResult,
   SubmitGameResultRequest,
   DisputeGameResultRequest,
+  HomeBase,
   HomeDashboard,
   GiftCertificateOrderCommandResult,
   GiftCertificateOrder,
@@ -92,9 +96,7 @@ export type {
 import { maskPhone } from '@phub/auth';
 import {
   createClientTransportExecutor,
-  normalizePadlHubUpcomingBookings,
   normalizePadlHubUserProfile,
-  normalizeVivaUserProfile,
 } from '@phub/viva-client-adapter';
 
 export interface NormalizedUser {
@@ -156,6 +158,7 @@ export interface AuthGateway {
   readonly getVivaAccessToken: () => string | undefined;
   readonly refreshVivaAccessToken: () => Promise<string>;
   readonly getRoutingPlan: (forceRefresh?: boolean) => Promise<ClientRoutingPlan>;
+  readonly getSelfProfile: () => Promise<UserProfile>;
   readonly getUserProfile: (userId: string) => Promise<UserProfile>;
   readonly getPlayerProfile: (userId: string) => Promise<PlayerProfileView>;
   readonly getProfilePrivacy: () => Promise<ProfilePrivacySettings>;
@@ -170,7 +173,10 @@ export interface AuthGateway {
     input: BookingPreferencesUpdateRequest,
   ) => Promise<BookingPreferences>;
   readonly getUpcomingBookings: () => Promise<UserUpcomingBookings>;
-  readonly listBookingRecommendations: (limit?: number) => Promise<BookingRecommendationPage>;
+  readonly listBookingRecommendations: (
+    input?: BookingRecommendationFilters,
+  ) => Promise<BookingRecommendationPage>;
+  readonly getHomeBase: () => Promise<HomeBase>;
   readonly getHomeDashboard: () => Promise<HomeDashboard>;
   readonly getPublicGiftCertificateCatalog: () => Promise<PublicGiftCertificateCatalog>;
   readonly createPublicGiftCertificateOrder: (
@@ -220,7 +226,7 @@ export interface AuthGateway {
   readonly getGameOperation: (operationId: string) => Promise<GameCommandResult>;
   readonly listLocations: () => Promise<LocationList>;
   readonly getLocation: (locationId: string) => Promise<LocationDetail>;
-  readonly listMyCommunities: (cursor?: string) => Promise<CommunityMembershipPage>;
+  readonly listMyCommunities: (cursor?: string, limit?: number) => Promise<CommunityMembershipPage>;
   readonly getProfileLevelHistory: () => Promise<ProfileLevelHistory>;
   readonly listNotifications: () => Promise<NotificationInboxPage>;
   readonly markNotificationsRead: (throughId: string) => Promise<void>;
@@ -261,6 +267,34 @@ function isUnauthorized(error: unknown): boolean {
   return error instanceof ApiClientError && error.status === 401;
 }
 
+function buildSelfPlayerProfileView(profile: UserProfile): PlayerProfileView {
+  return {
+    profile: {
+      userId: profile.userId,
+      displayName: profile.displayName,
+      ...(profile.firstName !== undefined ? { firstName: profile.firstName } : {}),
+      ...(profile.avatarUrl !== undefined ? { avatarUrl: profile.avatarUrl } : {}),
+      level: {
+        label: profile.level.label,
+        value: profile.level.value,
+        assessmentRequired: profile.level.assessmentRequired,
+      },
+    },
+    privateAccount: {
+      ...(profile.phoneLast4 ? { phoneLast4: profile.phoneLast4 } : {}),
+      balanceMinor: profile.balanceMinor,
+      currency: profile.currency,
+    },
+    access: {
+      audience: 'SELF',
+      tier: 'SELF',
+      visibleSections: ['BASIC', 'PLAYER_LEVEL', 'PLAYER_RATING', 'PRIVATE_ACCOUNT'],
+      contact: { status: 'HIDDEN', reason: 'SELF_PROFILE' },
+      chat: { status: 'HIDDEN', reason: 'SELF_PROFILE' },
+    },
+  };
+}
+
 /**
  * Browser auth talks only to the public PadlHub API. The refresh credential is
  * an HttpOnly cookie; only the short-lived PadlHub access token reaches JS and
@@ -278,16 +312,19 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
   const client = new PadlHubApiClient(clientOptions);
   let vivaAccessToken: string | undefined;
   let vivaAccessExpiresAt = 0;
+  let homeBasePromise: Promise<HomeBase> | undefined;
   let homeDashboardPromise: Promise<HomeDashboard> | undefined;
   let locationsPromise: Promise<LocationList> | undefined;
-  let communityMembershipsPromise: Promise<CommunityMembershipPage> | undefined;
+  const communityMembershipPagePromises = new Map<number, Promise<CommunityMembershipPage>>();
   let routingPlan: ClientRoutingPlan | undefined;
   let routingPlanPromise: Promise<ClientRoutingPlan> | undefined;
-  let userProfilePromise: Promise<UserProfile> | undefined;
+  let selfProfilePromise: Promise<UserProfile> | undefined;
+  let currentUserId: string | undefined;
   const playerProfilePromises = new Map<string, Promise<PlayerProfileView>>();
   let profilePrivacyPromise: Promise<ProfilePrivacySettings> | undefined;
   let bookingPreferencesPromise: Promise<BookingPreferences> | undefined;
   let upcomingBookingsPromise: Promise<UserUpcomingBookings> | undefined;
+  let vivaAccessPromise: Promise<string> | undefined;
 
   function resolvePaymentIntent(
     intent: GiftCertificatePaymentIntent,
@@ -301,11 +338,21 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     };
   }
 
-  async function applyVivaAccess(handoffCode?: string): Promise<string> {
-    const access = await client.issueVivaAccessToken(handoffCode ? { handoffCode } : {});
-    vivaAccessToken = access.accessToken;
-    vivaAccessExpiresAt = Date.parse(access.expiresAt);
-    return access.accessToken;
+  function applyVivaAccess(handoffCode?: string): Promise<string> {
+    if (!handoffCode && vivaAccessPromise) return vivaAccessPromise;
+    const request = client
+      .issueVivaAccessToken(handoffCode ? { handoffCode } : {})
+      .then((access) => {
+        vivaAccessToken = access.accessToken;
+        vivaAccessExpiresAt = Date.parse(access.expiresAt);
+        return access.accessToken;
+      });
+    if (handoffCode) return request;
+    const coalesced = request.finally(() => {
+      if (vivaAccessPromise === coalesced) vivaAccessPromise = undefined;
+    });
+    vivaAccessPromise = coalesced;
+    return coalesced;
   }
 
   async function consumeVivaHandoff(): Promise<void> {
@@ -324,6 +371,7 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
   }
 
   function normalizeSession(session: ApiAuthenticatedSession): AuthenticatedSession {
+    currentUserId = session.context.userId;
     return { context: normalizeContext(session.context, options.tenantKey) };
   }
 
@@ -345,22 +393,84 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     return request;
   }
 
-  const transportExecutor = createClientTransportExecutor({
+  function loadSelfProfile(): Promise<UserProfile> {
+    if (!currentUserId) return Promise.reject(new Error('AUTH_REQUIRED'));
+    selfProfilePromise ??= client
+      .getUserProfile()
+      .then(normalizePadlHubUserProfile)
+      .catch((error: unknown) => {
+        selfProfilePromise = undefined;
+        throw error;
+      });
+    return selfProfilePromise;
+  }
+
+  const clientTransport = createClientTransportExecutor({
     getRoutingPlan: loadRoutingPlan,
     getVivaAccessToken: () =>
       vivaAccessToken && vivaAccessExpiresAt > Date.now() + 30_000 ? vivaAccessToken : undefined,
-    refreshVivaAccessToken: () => applyVivaAccess(),
-    executePadlHub: (request) => {
-      if (request.operation === 'profile.read') {
-        return client.getUserProfile();
-      }
-      if (request.operation === 'bookings.read') {
-        return client.getUpcomingBookings();
-      }
-      return Promise.reject(new Error(`PadlHub operation ${request.operation} is not connected`));
-    },
+    refreshVivaAccessToken: applyVivaAccess,
+    executePadlHub: () => Promise.reject(new Error('CLIENT_ASSISTED_READ_HAS_NO_DIRECT_FALLBACK')),
     ...(options.fetchImplementation ? { fetchImplementation: options.fetchImplementation } : {}),
   });
+
+  async function loadClientAssistedRecommendations(
+    input: BookingRecommendationFilters,
+  ): Promise<BookingRecommendationPage> {
+    const limit = input.limit ?? 6;
+    if (input.cursor) return client.listBookingRecommendations(input);
+
+    const job = await client.startBookingScreenReadJob('FOR_ME');
+
+    let nextIndex = 0;
+    const worker = async (): Promise<void> => {
+      while (nextIndex < job.commands.length) {
+        const command = job.commands[nextIndex];
+        nextIndex += 1;
+        if (!command) return;
+        if (command.operation !== 'schedule.read') continue;
+        try {
+          const payload = await clientTransport.executeClientAssistedScheduleRead({
+            operation: command.operation,
+            date: command.date,
+          });
+          await client.submitBookingScreenReadResult(job.jobId, command.commandId, payload);
+        } catch {
+          // Completion reports PARTIAL and still returns eligible local games.
+        }
+      }
+    };
+    await Promise.all(
+      Array.from({ length: Math.max(1, Math.min(job.concurrency, job.commands.length)) }, () =>
+        worker(),
+      ),
+    );
+    const completion = await client.completeBookingScreenReadJob(job.jobId, limit);
+    if (completion.screen !== 'FOR_ME') throw new Error('BOOKING_SCREEN_READ_JOB_MISMATCH');
+    return completion.page;
+  }
+
+  async function loadClientAssistedUpcomingBookings(): Promise<UserUpcomingBookings> {
+    const job = await client.startBookingScreenReadJob('MY_BOOKINGS');
+    const command = job.commands.find((item) => item.operation === 'bookings.read');
+    if (!command) throw new Error('BOOKING_SCREEN_READ_COMMAND_MISSING');
+    try {
+      const payload = await clientTransport.executeClientAssistedUpcomingBookingsRead({
+        operation: command.operation,
+        detailsOperation: command.detailsOperation,
+        page: command.page,
+        size: command.size,
+      });
+      await client.submitBookingScreenReadResult(job.jobId, command.commandId, payload);
+    } catch {
+      // Completion returns an explicitly stale, empty partial snapshot.
+    }
+    const completion = await client.completeBookingScreenReadJob(job.jobId, 50);
+    if (completion.screen !== 'MY_BOOKINGS') {
+      throw new Error('BOOKING_SCREEN_READ_JOB_MISMATCH');
+    }
+    return completion.bookings;
+  }
 
   async function restore(): Promise<AuthenticatedSession | null> {
     try {
@@ -434,29 +544,30 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       return loadRoutingPlan(forceRefresh);
     },
 
+    getSelfProfile() {
+      return loadSelfProfile();
+    },
+
     getUserProfile(userId) {
-      userProfilePromise ??= transportExecutor
-        .executeRead({
-          request: { operation: 'profile.read' },
-          normalizePadlHub: normalizePadlHubUserProfile,
-          normalizeViva: (payload) => normalizeVivaUserProfile(payload, userId),
-        })
-        .catch((error: unknown) => {
-          userProfilePromise = undefined;
-          throw error;
-        });
-      return userProfilePromise;
+      if (userId !== currentUserId) return Promise.reject(new Error('PROFILE_SELF_REQUIRED'));
+      return loadSelfProfile();
     },
 
     getPlayerProfile(userId) {
+      if (userId === currentUserId) {
+        return loadSelfProfile().then(buildSelfPlayerProfileView);
+      }
       const cached = playerProfilePromises.get(userId);
       if (cached) return cached;
-      const request = client.getPlayerProfile(userId).catch((error: unknown) => {
-        if (playerProfilePromises.get(userId) === request) playerProfilePromises.delete(userId);
+      const request = client.getPlayerProfile(userId);
+      const guardedRequest = request.catch((error: unknown) => {
+        if (playerProfilePromises.get(userId) === guardedRequest) {
+          playerProfilePromises.delete(userId);
+        }
         throw error;
       });
-      playerProfilePromises.set(userId, request);
-      return request;
+      playerProfilePromises.set(userId, guardedRequest);
+      return guardedRequest;
     },
 
     getProfilePrivacy() {
@@ -500,23 +611,33 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     },
 
     getUpcomingBookings() {
-      upcomingBookingsPromise ??= transportExecutor
-        .executeRead({
-          request: { operation: 'bookings.read', page: 0, size: 6 },
-          normalizePadlHub: normalizePadlHubUpcomingBookings,
-          normalizeViva: () => {
-            throw new Error('DIRECT_VIVA_BOOKINGS_CONTRACT_NOT_READY');
-          },
-        })
-        .catch((error: unknown) => {
-          upcomingBookingsPromise = undefined;
-          throw error;
-        });
-      return upcomingBookingsPromise;
+      if (upcomingBookingsPromise) return upcomingBookingsPromise;
+      const request = loadClientAssistedUpcomingBookings().finally(() => {
+        if (upcomingBookingsPromise === request) upcomingBookingsPromise = undefined;
+      });
+      upcomingBookingsPromise = request;
+      return request;
     },
 
-    listBookingRecommendations(limit = 6) {
-      return client.listBookingRecommendations(limit);
+    listBookingRecommendations(input = {}) {
+      return loadClientAssistedRecommendations(input);
+    },
+
+    getHomeBase() {
+      if (homeBasePromise) return homeBasePromise;
+      const request = client
+        .getHomeBase()
+        .then((homeBase) => {
+          if (!currentUserId || homeBase.viewerUserId !== currentUserId) {
+            throw new Error('HOME_BASE_VIEWER_MISMATCH');
+          }
+          return homeBase;
+        })
+        .finally(() => {
+          if (homeBasePromise === request) homeBasePromise = undefined;
+        });
+      homeBasePromise = request;
+      return request;
     },
 
     getHomeDashboard() {
@@ -633,13 +754,16 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       return client.getLocation(locationId);
     },
 
-    listMyCommunities(cursor) {
-      if (cursor) return client.listMyCommunities({ limit: 20, cursor });
-      if (communityMembershipsPromise) return communityMembershipsPromise;
-      const request = client.listMyCommunities({ limit: 20 }).finally(() => {
-        if (communityMembershipsPromise === request) communityMembershipsPromise = undefined;
+    listMyCommunities(cursor, limit = 20) {
+      if (cursor) return client.listMyCommunities({ limit, cursor });
+      const pending = communityMembershipPagePromises.get(limit);
+      if (pending) return pending;
+      const request = client.listMyCommunities({ limit }).finally(() => {
+        if (communityMembershipPagePromises.get(limit) === request) {
+          communityMembershipPagePromises.delete(limit);
+        }
       });
-      communityMembershipsPromise = request;
+      communityMembershipPagePromises.set(limit, request);
       return request;
     },
 
@@ -671,12 +795,14 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       await client.revokeSession();
       vivaAccessToken = undefined;
       vivaAccessExpiresAt = 0;
+      homeBasePromise = undefined;
       homeDashboardPromise = undefined;
       locationsPromise = undefined;
-      communityMembershipsPromise = undefined;
+      communityMembershipPagePromises.clear();
       routingPlan = undefined;
       routingPlanPromise = undefined;
-      userProfilePromise = undefined;
+      selfProfilePromise = undefined;
+      currentUserId = undefined;
       playerProfilePromises.clear();
       profilePrivacyPromise = undefined;
       bookingPreferencesPromise = undefined;

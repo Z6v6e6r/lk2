@@ -5,7 +5,12 @@ import '@testing-library/jest-dom/vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { HomeDashboard } from './auth-gateway.js';
+import type {
+  BookingRecommendationPage,
+  HomeBase,
+  HomeDashboard,
+  UserUpcomingBookings,
+} from './auth-gateway.js';
 import { HomeDashboardPage } from './HomeDashboardPage.js';
 
 const dashboard: HomeDashboard = {
@@ -66,6 +71,62 @@ const dashboard: HomeDashboard = {
   },
 };
 
+const homeBase: HomeBase = {
+  snapshot: {
+    version: 'home-base-v1-promotions',
+    generatedAt: dashboard.snapshot.generatedAt,
+    source: 'LOCAL_PROJECTION',
+    completeness: 'PARTIAL',
+  },
+  viewerUserId: dashboard.profile.userId,
+  quickActions: dashboard.quickActions,
+  communities: {
+    status: 'READY',
+    revision: '1',
+    observedAt: dashboard.snapshot.generatedAt,
+    staleAt: dashboard.snapshot.staleAt,
+    value: dashboard.communities,
+  },
+  promotions: {
+    status: 'READY',
+    revision: '1',
+    observedAt: dashboard.snapshot.generatedAt,
+    staleAt: dashboard.snapshot.staleAt,
+    value: {
+      hero: dashboard.promotions,
+      standard: dashboard.promotions,
+    },
+  },
+  locations: dashboard.locations,
+  additionalLinks: dashboard.additionalLinks,
+  capabilities: dashboard.capabilities,
+};
+
+const defaultUpcoming: UserUpcomingBookings = {
+  version: dashboard.snapshot.version,
+  generatedAt: dashboard.snapshot.generatedAt,
+  staleAt: dashboard.snapshot.staleAt,
+  items: dashboard.upcoming,
+};
+
+const independentSectionProps = {
+  viewerFallback: {
+    id: dashboard.profile.userId,
+    displayName: dashboard.profile.displayName,
+  },
+  viewer: { state: 'READY' as const, value: dashboard.profile },
+  upcoming: { state: 'READY' as const, value: defaultUpcoming },
+  onRetryViewer: vi.fn(),
+  onRetryUpcoming: vi.fn(),
+};
+
+function readyUpcoming(items: UserUpcomingBookings['items']): {
+  readonly state: 'READY';
+  readonly value: UserUpcomingBookings;
+} {
+  return { state: 'READY', value: { ...defaultUpcoming, items } };
+}
+
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
@@ -79,16 +140,21 @@ describe('Home promotion carousel', () => {
     vi.stubGlobal('matchMedia', vi.fn().mockReturnValue({ matches: false }));
     render(
       <HomeDashboardPage
-        dashboard={dashboard}
+        {...independentSectionProps}
+        dashboard={homeBase}
         tenantName="ПадлХАБ"
         notificationUnreadCount={0}
-        loadCommunityPage={() => Promise.resolve({ items: [] })}
         logoutBusy={false}
         onLogout={vi.fn()}
       />,
     );
 
-    const first = screen.getByRole('link', { name: 'Первая акция' });
+    const heroPromotion = screen.getByRole('region', { name: 'Промо в шапке' });
+    expect(
+      within(heroPromotion).getByRole('link', { name: 'Акция: Первая акция' }),
+    ).toHaveAttribute('href', '/promotions/first');
+    const lowerPromotions = screen.getByRole('region', { name: 'Акции' });
+    const first = within(lowerPromotions).getByRole('link', { name: 'Первая акция' });
     expect(first).toHaveAttribute('href', '/promotions/first');
     expect(first.querySelector('source')).toHaveAttribute(
       'srcset',
@@ -99,25 +165,77 @@ describe('Home promotion carousel', () => {
       vi.advanceTimersByTime(6_000);
     });
 
-    const second = screen.getByRole('link', { name: 'Вторая акция' });
+    expect(
+      within(heroPromotion).getByRole('link', { name: 'Акция: Вторая акция' }),
+    ).toHaveAttribute('href', 'https://padlhub.ru/promo/second');
+    const second = within(lowerPromotions).getByRole('link', { name: 'Вторая акция' });
     expect(second).toHaveAttribute('href', 'https://padlhub.ru/promo/second');
     expect(second.querySelector('source')).toHaveAttribute(
       'srcset',
       'https://media.padlhub.test/mobile-second.webp',
     );
-    expect(screen.getByRole('button', { name: 'Показать акцию «Вторая акция»' })).toHaveAttribute(
-      'aria-current',
-      'true',
-    );
+    expect(
+      within(heroPromotion).getByRole('button', { name: 'Показать акцию «Вторая акция»' }),
+    ).toHaveAttribute('aria-current', 'true');
   });
 });
 
 describe('Home progressive navigation', () => {
+  it('keeps local navigation and locations when optional Base sections are unavailable', () => {
+    render(
+      <HomeDashboardPage
+        {...independentSectionProps}
+        dashboard={{
+          ...homeBase,
+          communities: { status: 'UNAVAILABLE' },
+          promotions: { status: 'UNAVAILABLE' },
+          capabilities: { ...homeBase.capabilities, canViewCommunities: true },
+        }}
+        tenantName="ПадлХАБ"
+        notificationUnreadCount={0}
+        logoutBusy={false}
+        onLogout={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole('navigation', { name: 'Разделы клуба' })).toBeVisible();
+    expect(screen.getByText('Сообщества временно недоступны.')).toBeVisible();
+    expect(screen.getAllByText('Акции временно недоступны.')).toHaveLength(2);
+    expect(screen.getByRole('heading', { name: /Локации/ })).toBeVisible();
+  });
+
+  it('renders stale communities without the technical freshness notice', () => {
+    render(
+      <HomeDashboardPage
+        {...independentSectionProps}
+        dashboard={{
+          ...homeBase,
+          communities: {
+            status: 'STALE',
+            revision: '1',
+            observedAt: dashboard.snapshot.generatedAt,
+            staleAt: dashboard.snapshot.staleAt,
+            value: dashboard.communities,
+          },
+          capabilities: { ...homeBase.capabilities, canViewCommunities: true },
+        }}
+        tenantName="ПадлХАБ"
+        notificationUnreadCount={0}
+        logoutBusy={false}
+        onLogout={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole('region', { name: 'Мои сообщества' })).toBeVisible();
+    expect(screen.queryByText('Показаны последние доступные сообщества.')).not.toBeInTheDocument();
+  });
+
   it('places additional sections after locations and routes certificates to the sale page', () => {
     render(
       <HomeDashboardPage
+        {...independentSectionProps}
         dashboard={{
-          ...dashboard,
+          ...homeBase,
           locations: [
             {
               id: 'a8df730b-6a67-41a5-8772-48bca84f73bc',
@@ -139,7 +257,6 @@ describe('Home progressive navigation', () => {
         }}
         tenantName="ПадлХАБ"
         notificationUnreadCount={0}
-        loadCommunityPage={() => Promise.resolve({ items: [] })}
         logoutBusy={false}
         onLogout={vi.fn()}
       />,
@@ -161,6 +278,29 @@ describe('Home progressive navigation', () => {
     );
   });
 
+  it('shows the booking recommendations GIF while the personalized feed loads', () => {
+    const loadBookingRecommendations = vi.fn(
+      () => new Promise<BookingRecommendationPage>(() => undefined),
+    );
+    render(
+      <HomeDashboardPage
+        {...independentSectionProps}
+        dashboard={homeBase}
+        tenantName="ПадлХАБ"
+        notificationUnreadCount={0}
+        loadBookingRecommendations={loadBookingRecommendations}
+        logoutBusy={false}
+        onLogout={vi.fn()}
+      />,
+    );
+
+    const loader = screen.getByRole('status', { name: 'Подбираем игры' });
+    expect(loader.querySelector('img')).toHaveAttribute(
+      'src',
+      expect.stringMatching(/booking-recommendations\.gif$/),
+    );
+  });
+
   it('shows only games and trainings and opens recommendations by default', async () => {
     const loadBookingRecommendations = vi.fn().mockResolvedValue({
       version: 'a'.repeat(64),
@@ -170,12 +310,12 @@ describe('Home progressive navigation', () => {
       items: [],
       nextCursor: null,
     });
-    render(
+    const { container } = render(
       <HomeDashboardPage
-        dashboard={dashboard}
+        {...independentSectionProps}
+        dashboard={homeBase}
         tenantName="ПадлХАБ"
         notificationUnreadCount={0}
-        loadCommunityPage={() => Promise.resolve({ items: [] })}
         loadBookingRecommendations={loadBookingRecommendations}
         logoutBusy={false}
         onLogout={vi.fn()}
@@ -183,23 +323,101 @@ describe('Home progressive navigation', () => {
     );
 
     const actions = screen.getByRole('navigation', { name: 'Разделы клуба' });
-    expect(within(actions).getByRole('link', { name: 'Игры' })).toHaveAttribute('href', '/games');
+    expect(within(actions).getByRole('link', { name: 'Играть' })).toHaveAttribute('href', '/games');
     expect(within(actions).queryByRole('link', { name: 'Турниры' })).not.toBeInTheDocument();
-    expect(within(actions).getByRole('link', { name: 'Тренировки' })).toHaveAttribute(
+    expect(within(actions).getByRole('link', { name: 'Тренироваться' })).toHaveAttribute(
       'href',
       '/trainings',
     );
+    expect(
+      within(screen.getByRole('tablist', { name: 'Раздел записей' }))
+        .getAllByRole('tab')
+        .map((tab) => tab.textContent),
+    ).toEqual(['Для меня', 'Мои записи']);
     expect(screen.getByRole('tab', { name: 'Мои записи' })).toHaveAttribute(
       'aria-selected',
       'false',
     );
     expect(screen.getByRole('tab', { name: 'Для меня' })).toHaveAttribute('aria-selected', 'true');
-    await vi.waitFor(() => expect(loadBookingRecommendations).toHaveBeenCalledOnce());
-    expect(screen.queryByText('Подходящие игры')).not.toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Настроить' })).toHaveAttribute(
-      'href',
-      '/profile#booking-preferences-title',
+    expect(container.querySelector('.figma-home-shell')).toHaveClass(
+      'has-recommendations-scroll-peek',
     );
+    await vi.waitFor(() => expect(loadBookingRecommendations).toHaveBeenCalledOnce());
+    expect(loadBookingRecommendations).toHaveBeenCalledWith({ limit: 6 });
+    expect(screen.queryByText('Подходящие игры')).not.toBeInTheDocument();
+    const configure = screen.getByRole('link', { name: 'Настроить' });
+    expect(configure).toHaveAttribute('href', '/profile#booking-preferences-title');
+    expect(container.querySelector('.fh-for-me > header')).not.toBeInTheDocument();
+    expect(configure.parentElement).toHaveClass('fh-bookings-footer-action', 'is-split');
+    expect(configure.previousElementSibling).toHaveTextContent('Все рекомендации');
+  });
+
+  it('keeps the second Home variant independent and puts promotion before communities', () => {
+    const { container } = render(
+      <HomeDashboardPage
+        {...independentSectionProps}
+        dashboard={{
+          ...homeBase,
+          capabilities: { ...homeBase.capabilities, canViewCommunities: true },
+        }}
+        tenantName="ПадлХАБ"
+        layoutVariant="v2"
+        notificationUnreadCount={0}
+        logoutBusy={false}
+        onLogout={vi.fn()}
+      />,
+    );
+
+    const hero = container.querySelector('.fh-hero--v2');
+    const heroChildClasses = [...(hero?.children ?? [])].map((element) => element.className);
+    expect(hero).toBeInTheDocument();
+    expect(heroChildClasses.indexOf('fh-hero-promotion')).toBeLessThan(
+      heroChildClasses.indexOf('fh-hero-communities'),
+    );
+  });
+
+  it('marks the third Home variant and requests its first 14 recommendations', async () => {
+    const loadBookingRecommendations = vi.fn().mockResolvedValue({
+      version: 'a'.repeat(64),
+      generatedAt: '2026-07-18T09:00:00.000Z',
+      staleAt: '2026-07-18T09:05:00.000Z',
+      personalization: 'BASIC',
+      items: [],
+      nextCursor: null,
+    });
+    const { container } = render(
+      <HomeDashboardPage
+        {...independentSectionProps}
+        dashboard={{
+          ...homeBase,
+          capabilities: { ...homeBase.capabilities, canViewCommunities: true },
+        }}
+        tenantName="ПадлХАБ"
+        layoutVariant="v3"
+        notificationUnreadCount={0}
+        loadBookingRecommendations={loadBookingRecommendations}
+        logoutBusy={false}
+        onLogout={vi.fn()}
+      />,
+    );
+
+    await vi.waitFor(() => expect(loadBookingRecommendations).toHaveBeenCalledWith({ limit: 14 }));
+    expect(container.querySelector('.figma-home-shell')).toHaveClass(
+      'is-home-v3',
+      'has-recommendations-scroll-peek',
+    );
+    expect(container.querySelector('.fh-hero--v3')).toHaveClass('fh-hero--v2');
+    const hero = container.querySelector('.fh-hero--v3');
+    const heroChildClasses = [...(hero?.children ?? [])].map((element) => element.className);
+    expect(heroChildClasses.indexOf('fh-hero-communities')).toBeLessThan(
+      heroChildClasses.indexOf('fh-hero-promotion'),
+    );
+    expect(screen.queryByRole('link', { name: 'Все рекомендации' })).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Настроить' }).parentElement).not.toHaveClass(
+      'is-split',
+    );
+    expect(container.querySelector('.fh-main-box > .fh-promotions')).not.toBeInTheDocument();
+    expect(container.querySelector('.fh-main-box > .fh-lower')).not.toBeInTheDocument();
   });
 
   it('does not reload recommendations when the active For me tab is clicked again', async () => {
@@ -213,10 +431,10 @@ describe('Home progressive navigation', () => {
     });
     render(
       <HomeDashboardPage
-        dashboard={dashboard}
+        {...independentSectionProps}
+        dashboard={homeBase}
         tenantName="ПадлХАБ"
         notificationUnreadCount={0}
-        loadCommunityPage={() => Promise.resolve({ items: [] })}
         loadBookingRecommendations={loadBookingRecommendations}
         logoutBusy={false}
         onLogout={vi.fn()}
@@ -232,18 +450,73 @@ describe('Home progressive navigation', () => {
     expect(screen.queryByText('Персональная подборка')).not.toBeInTheDocument();
     const allRecommendations = screen.getByRole('link', { name: 'Все рекомендации' });
     expect(allRecommendations).toHaveAttribute('href', '/bookings?view=for-me');
-    expect(allRecommendations.parentElement).toHaveClass('fh-bookings-footer-action');
+    expect(allRecommendations.parentElement).toHaveClass('fh-bookings-footer-action', 'is-split');
+    expect(allRecommendations.nextElementSibling).toHaveTextContent('Настроить');
   });
 });
 
 describe('Home upcoming bookings', () => {
+  it('keeps an unavailable booking source distinct from a confirmed empty list', () => {
+    const onRetryUpcoming = vi.fn();
+    render(
+      <HomeDashboardPage
+        {...independentSectionProps}
+        dashboard={homeBase}
+        upcoming={{
+          state: 'UNAVAILABLE',
+          message: 'Источник записей временно недоступен.',
+        }}
+        tenantName="ПадлХАБ"
+        notificationUnreadCount={0}
+        logoutBusy={false}
+        onRetryUpcoming={onRetryUpcoming}
+        onLogout={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Мои записи' }));
+
+    expect(screen.getByText('Мои записи временно недоступны')).toBeVisible();
+    expect(screen.queryByText('Ближайших записей нет')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Повторить' }));
+    expect(onRetryUpcoming).toHaveBeenCalledOnce();
+  });
+
+  it('labels a stale booking envelope without hiding its last valid value', () => {
+    const staleItem: UserUpcomingBookings['items'][number] = {
+      id: '55555555-5555-4555-8555-555555555555',
+      kind: 'training',
+      title: 'Последняя доступная тренировка',
+      startsAt: '2026-07-20T08:30:00.000Z',
+      venue: 'ПаделХАБ · центральный корт',
+      status: 'confirmed',
+      route: '/trainings/55555555-5555-4555-8555-555555555555',
+    };
+    render(
+      <HomeDashboardPage
+        {...independentSectionProps}
+        dashboard={homeBase}
+        upcoming={{ state: 'STALE', value: { ...defaultUpcoming, items: [staleItem] } }}
+        tenantName="ПадлХАБ"
+        notificationUnreadCount={0}
+        logoutBusy={false}
+        onLogout={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Мои записи' }));
+
+    expect(screen.getByText(/Показаны последние доступные записи/)).toBeVisible();
+    expect(screen.getByRole('heading', { name: staleItem.title })).toBeVisible();
+  });
+
   it('shows an honest empty state instead of placeholder cards', () => {
     const { container } = render(
       <HomeDashboardPage
-        dashboard={dashboard}
+        {...independentSectionProps}
+        dashboard={homeBase}
         tenantName="ПадлХАБ"
         notificationUnreadCount={0}
-        loadCommunityPage={() => Promise.resolve({ items: [] })}
         logoutBusy={false}
         onLogout={vi.fn()}
       />,
@@ -280,10 +553,11 @@ describe('Home upcoming bookings', () => {
     ];
     const { container } = render(
       <HomeDashboardPage
-        dashboard={{ ...dashboard, upcoming }}
+        {...independentSectionProps}
+        dashboard={homeBase}
+        upcoming={readyUpcoming(upcoming)}
         tenantName="ПадлХАБ"
         notificationUnreadCount={0}
-        loadCommunityPage={() => Promise.resolve({ items: [] })}
         logoutBusy={false}
         onLogout={vi.fn()}
       />,
@@ -331,10 +605,11 @@ describe('Home upcoming bookings', () => {
     }));
     const { container } = render(
       <HomeDashboardPage
-        dashboard={{ ...dashboard, upcoming }}
+        {...independentSectionProps}
+        dashboard={homeBase}
+        upcoming={readyUpcoming(upcoming)}
         tenantName="ПадлХАБ"
         notificationUnreadCount={0}
-        loadCommunityPage={() => Promise.resolve({ items: [] })}
         logoutBusy={false}
         onLogout={vi.fn()}
       />,
@@ -370,10 +645,11 @@ describe('Home upcoming bookings', () => {
     ];
     render(
       <HomeDashboardPage
-        dashboard={{ ...dashboard, upcoming }}
+        {...independentSectionProps}
+        dashboard={homeBase}
+        upcoming={readyUpcoming(upcoming)}
         tenantName="ПадлХАБ"
         notificationUnreadCount={0}
-        loadCommunityPage={() => Promise.resolve({ items: [] })}
         logoutBusy={false}
         onLogout={vi.fn()}
       />,
@@ -480,10 +756,11 @@ describe('Home upcoming bookings', () => {
     ];
     const { container } = render(
       <HomeDashboardPage
-        dashboard={{ ...dashboard, upcoming }}
+        {...independentSectionProps}
+        dashboard={homeBase}
+        upcoming={readyUpcoming(upcoming)}
         tenantName="ПадлХАБ"
         notificationUnreadCount={0}
-        loadCommunityPage={() => Promise.resolve({ items: [] })}
         logoutBusy={false}
         onLogout={vi.fn()}
       />,

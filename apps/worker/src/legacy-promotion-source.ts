@@ -1,6 +1,8 @@
 const MAX_RESPONSE_BYTES = 256 * 1024;
 const MAX_PROMOTIONS = 20;
 
+export type LegacyPromotionPlacement = 'cabinet_home' | 'cabinet_home_top';
+
 export type LegacyPromotionSourceErrorCode =
   | 'PROMOTION_LEGACY_CIRCUIT_OPEN'
   | 'PROMOTION_LEGACY_TIMEOUT'
@@ -37,6 +39,7 @@ export interface LegacyPromotionSourceMetric {
 
 export interface LegacyPromotionSourceOptions {
   readonly baseUrl: string;
+  readonly placement?: LegacyPromotionPlacement;
   readonly timeoutMs: number;
   readonly maxAttempts: number;
   readonly circuitFailureThreshold: number;
@@ -81,8 +84,12 @@ function imageSourceUrl(value: unknown, baseUrl: string): string | undefined {
   }
 }
 
-function normalizeSnapshot(payload: unknown, baseUrl: string): LegacyPromotionSourceSnapshot {
-  if (!isRecord(payload) || payload.placement !== 'cabinet_home' || !Array.isArray(payload.ads)) {
+function normalizeSnapshot(
+  payload: unknown,
+  baseUrl: string,
+  placement: LegacyPromotionPlacement,
+): LegacyPromotionSourceSnapshot {
+  if (!isRecord(payload) || payload.placement !== placement || !Array.isArray(payload.ads)) {
     throw new LegacyPromotionSourceError('PROMOTION_LEGACY_RESPONSE_INVALID');
   }
   if (payload.ads.length > MAX_PROMOTIONS) {
@@ -167,7 +174,12 @@ export class LegacyPromotionSource {
     if (this.circuitOpenUntil > Date.now()) {
       throw new LegacyPromotionSourceError('PROMOTION_LEGACY_CIRCUIT_OPEN');
     }
-    const url = new URL('/api/advertising/cabinet-home', this.options.baseUrl);
+    const placement = this.options.placement ?? 'cabinet_home';
+    const path =
+      placement === 'cabinet_home_top'
+        ? '/api/advertising/cabinet-home-top'
+        : '/api/advertising/cabinet-home';
+    const url = new URL(path, this.options.baseUrl);
     let lastError = new LegacyPromotionSourceError('PROMOTION_LEGACY_UNAVAILABLE');
     for (let attempt = 1; attempt <= this.options.maxAttempts; attempt += 1) {
       const startedAt = Date.now();
@@ -196,7 +208,11 @@ export class LegacyPromotionSource {
           if (!retryableStatus(response.status)) break;
           continue;
         }
-        const snapshot = normalizeSnapshot(await readBoundedJson(response), this.options.baseUrl);
+        const snapshot = normalizeSnapshot(
+          await readBoundedJson(response),
+          this.options.baseUrl,
+          placement,
+        );
         this.consecutiveFailures = 0;
         this.circuitOpenUntil = 0;
         this.options.onMetric?.({

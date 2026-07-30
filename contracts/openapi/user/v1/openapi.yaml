@@ -1041,6 +1041,39 @@ paths:
           $ref: ../../common/components.yaml#/components/responses/TooManyRequests
         '503':
           $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/home/base:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+    get:
+      operationId: getHomeBase
+      summary: Load the partial PadlHub-owned Home base
+      description: |
+        Returns only the locally projected Home sections that PadlHub can verify without a live
+        Viva read. The response is explicitly partial and never represents unavailable profile,
+        booking, subscription or balance data as empty or fresh.
+      responses:
+        '200':
+          description: One partial Home base snapshot with section-level freshness.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HomeBase'
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
   /{tenantKey}/communities/mine:
     parameters:
       - $ref: ../../common/components.yaml#/components/parameters/TenantKey
@@ -1298,6 +1331,12 @@ paths:
     $ref: ./games.yaml#/paths/~1{tenantKey}~1games
   /{tenantKey}/recommendations/bookings:
     $ref: ./games.yaml#/paths/~1{tenantKey}~1recommendations~1bookings
+  /{tenantKey}/booking-screen-read-jobs:
+    $ref: ./booking-screen-read-jobs.yaml#/paths/~1{tenantKey}~1booking-screen-read-jobs
+  /{tenantKey}/booking-screen-read-jobs/{jobId}/results/{commandId}:
+    $ref: ./booking-screen-read-jobs.yaml#/paths/~1{tenantKey}~1booking-screen-read-jobs~1{jobId}~1results~1{commandId}
+  /{tenantKey}/booking-screen-read-jobs/{jobId}/complete:
+    $ref: ./booking-screen-read-jobs.yaml#/paths/~1{tenantKey}~1booking-screen-read-jobs~1{jobId}~1complete
   /{tenantKey}/games/{gameId}:
     $ref: ./games.yaml#/paths/~1{tenantKey}~1games~1{gameId}
   /{tenantKey}/games/{gameId}/publish:
@@ -1928,7 +1967,7 @@ components:
             $ref: '#/components/schemas/HomeSubscription'
         communities:
           type: array
-          maxItems: 5
+          maxItems: 10
           items:
             $ref: '#/components/schemas/CommunitySummary'
         promotion:
@@ -1938,6 +1977,9 @@ components:
             - $ref: '#/components/schemas/HomePromotion'
             - type: 'null'
         promotions:
+          $ref: '#/components/schemas/HomePromotionDeck'
+        heroPromotions:
+          description: Independently managed compact banner deck for the top of Home.
           $ref: '#/components/schemas/HomePromotionDeck'
         locations:
           type: array
@@ -1951,6 +1993,159 @@ components:
             $ref: '#/components/schemas/HomeAdditionalLink'
         capabilities:
           $ref: '#/components/schemas/HomeCapabilities'
+    HomeBase:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          snapshot,
+          viewerUserId,
+          quickActions,
+          communities,
+          promotions,
+          locations,
+          additionalLinks,
+          capabilities,
+        ]
+      properties:
+        snapshot:
+          $ref: '#/components/schemas/HomeBaseSnapshot'
+        viewerUserId:
+          type: string
+          format: uuid
+          description: Authenticated PadlHub user UUID; never a provider identifier.
+        quickActions:
+          type: array
+          maxItems: 4
+          items:
+            $ref: '#/components/schemas/HomeQuickAction'
+        communities:
+          $ref: '#/components/schemas/HomeBaseCommunitySection'
+        promotions:
+          $ref: '#/components/schemas/HomeBasePromotionSection'
+        locations:
+          type: array
+          maxItems: 8
+          items:
+            $ref: '#/components/schemas/HomeLocation'
+        additionalLinks:
+          type: array
+          maxItems: 6
+          items:
+            $ref: '#/components/schemas/HomeAdditionalLink'
+        capabilities:
+          $ref: '#/components/schemas/HomeCapabilities'
+    HomeBaseSnapshot:
+      type: object
+      additionalProperties: false
+      required: [version, generatedAt, source, completeness]
+      properties:
+        version:
+          type: string
+          minLength: 1
+          maxLength: 100
+        generatedAt:
+          type: string
+          format: date-time
+        source:
+          type: string
+          enum: [LOCAL_PROJECTION]
+        completeness:
+          type: string
+          enum: [PARTIAL]
+          description: Prevents this recovery read model from being interpreted as complete Home.
+    HomeBaseCommunitySection:
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required: [status, revision, observedAt, staleAt, value]
+          properties:
+            status:
+              type: string
+              enum: [READY]
+            revision:
+              type: string
+              pattern: '^[1-9][0-9]*$'
+            observedAt:
+              type: string
+              format: date-time
+            staleAt:
+              type: string
+              format: date-time
+            value:
+              type: array
+              maxItems: 10
+              items:
+                $ref: '#/components/schemas/CommunitySummary'
+        - type: object
+          additionalProperties: false
+          required: [status, revision, observedAt, staleAt, value]
+          properties:
+            status:
+              type: string
+              enum: [STALE]
+            revision:
+              type: string
+              pattern: '^[1-9][0-9]*$'
+            observedAt:
+              type: string
+              format: date-time
+            staleAt:
+              type: string
+              format: date-time
+            value:
+              type: array
+              maxItems: 10
+              items:
+                $ref: '#/components/schemas/CommunitySummary'
+        - $ref: '#/components/schemas/HomeBaseUnavailableSection'
+    HomeBasePromotionSection:
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required: [status, revision, observedAt, staleAt, value]
+          properties:
+            status:
+              type: string
+              enum: [READY]
+            revision:
+              type: string
+              pattern: '^[1-9][0-9]*$'
+            observedAt:
+              type: string
+              format: date-time
+            staleAt:
+              type: string
+              format: date-time
+            value:
+              $ref: '#/components/schemas/HomePromotionSlots'
+        - type: object
+          additionalProperties: false
+          required: [status, revision, observedAt, staleAt, value]
+          properties:
+            status:
+              type: string
+              enum: [STALE]
+            revision:
+              type: string
+              pattern: '^[1-9][0-9]*$'
+            observedAt:
+              type: string
+              format: date-time
+            staleAt:
+              type: string
+              format: date-time
+            value:
+              $ref: '#/components/schemas/HomePromotionSlots'
+        - $ref: '#/components/schemas/HomeBaseUnavailableSection'
+    HomeBaseUnavailableSection:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [UNAVAILABLE]
     HomeSnapshot:
       type: object
       additionalProperties: false
@@ -2172,7 +2367,7 @@ components:
           format: date-time
         items:
           type: array
-          maxItems: 6
+          maxItems: 50
           items:
             $ref: '#/components/schemas/HomeUpcomingItem'
     ActivityHistoryKind:
@@ -2364,6 +2559,15 @@ components:
           maxItems: 20
           items:
             $ref: '#/components/schemas/HomePromotion'
+    HomePromotionSlots:
+      type: object
+      additionalProperties: false
+      required: [hero, standard]
+      properties:
+        hero:
+          $ref: '#/components/schemas/HomePromotionDeck'
+        standard:
+          $ref: '#/components/schemas/HomePromotionDeck'
     HomeLocation:
       type: object
       additionalProperties: false

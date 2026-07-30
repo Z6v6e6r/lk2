@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import type { AppConfig } from '@phub/config';
-import { homePromotionDeckSchema } from '@phub/home-projection';
+import { homePromotionDeckSchema, homePromotionSlotsSchema } from '@phub/home-projection';
 import type { Logger } from 'pino';
 import type { Pool } from 'pg';
 
@@ -38,7 +38,10 @@ export async function runPromotionHomeSyncCycle(input: {
   readonly pool: Pool;
   readonly config: AppConfig;
   readonly logger: Logger;
-  readonly source: LegacyPromotionSource;
+  readonly source: {
+    readonly hero: LegacyPromotionSource;
+    readonly standard: LegacyPromotionSource;
+  };
   readonly store: ProfilePhotoObjectStore;
   readonly now?: Date;
 }): Promise<PromotionHomeSyncCycleResult> {
@@ -66,14 +69,21 @@ export async function runPromotionHomeSyncCycle(input: {
     attempted += users.length;
     const sourceCorrelationId = randomUUID();
     try {
-      const snapshot = await input.source.getSnapshot(sourceCorrelationId);
+      const [heroSnapshot, standardSnapshot] = await Promise.all([
+        input.source.hero.getSnapshot(sourceCorrelationId),
+        input.source.standard.getSnapshot(sourceCorrelationId),
+      ]);
+      const sourceItems = [
+        ...heroSnapshot.items.map((item) => ({ ...item, sourceKey: `top:${item.externalId}` })),
+        ...standardSnapshot.items.map((item) => ({ ...item, sourceKey: item.externalId })),
+      ];
       const ids = await resolvePromotionIds({
         pool: input.pool,
         tenantId: tenant.id,
-        externalIds: snapshot.items.map((item) => item.externalId),
+        externalIds: sourceItems.map((item) => item.sourceKey),
       });
-      const candidates = snapshot.items.map((item) => {
-        const promotionId = ids.get(item.externalId);
+      const candidates = sourceItems.map((item) => {
+        const promotionId = ids.get(item.sourceKey);
         if (!promotionId) throw new Error('PROMOTION_ID_MAPPING_MISSING');
         return { promotionId, sourceUrl: item.imageSourceUrl };
       });
@@ -105,25 +115,30 @@ export async function runPromotionHomeSyncCycle(input: {
         timeoutMs: input.config.PROMOTIONS_LEGACY_TIMEOUT_MS,
       });
       const mediaByPromotionId = new Map(media.map((item) => [item.promotionId, item]));
-      const promotions = homePromotionDeckSchema.parse({
-        rotationEnabled: snapshot.rotationEnabled && snapshot.items.length > 1,
-        intervalSeconds: input.config.PROMOTION_ROTATION_INTERVAL_SECONDS,
-        items: snapshot.items.map((item) => {
-          const promotionId = ids.get(item.externalId);
-          const asset = promotionId ? mediaByPromotionId.get(promotionId) : undefined;
-          if (!promotionId || !asset) throw new Error('PROMOTION_MEDIA_MAPPING_MISSING');
-          return {
-            id: promotionId,
-            eyebrow: 'Акция',
-            title: item.title,
-            description: 'Специальное предложение ПадлХАБ.',
-            actionLabel: 'Подробнее',
-            route: item.href,
-            tone: 'lime',
-            imageUrl: asset.imageUrl,
-            mobileImageUrl: asset.mobileImageUrl,
-          };
-        }),
+      const toDeck = (snapshot: typeof heroSnapshot, top: boolean) =>
+        homePromotionDeckSchema.parse({
+          rotationEnabled: snapshot.rotationEnabled && snapshot.items.length > 1,
+          intervalSeconds: input.config.PROMOTION_ROTATION_INTERVAL_SECONDS,
+          items: snapshot.items.map((item) => {
+            const promotionId = ids.get(top ? `top:${item.externalId}` : item.externalId);
+            const asset = promotionId ? mediaByPromotionId.get(promotionId) : undefined;
+            if (!promotionId || !asset) throw new Error('PROMOTION_MEDIA_MAPPING_MISSING');
+            return {
+              id: promotionId,
+              eyebrow: 'Акция',
+              title: item.title,
+              description: 'Специальное предложение ПадлХАБ.',
+              actionLabel: 'Подробнее',
+              route: item.href,
+              tone: 'lime',
+              imageUrl: asset.imageUrl,
+              mobileImageUrl: asset.mobileImageUrl,
+            };
+          }),
+        });
+      const promotions = homePromotionSlotsSchema.parse({
+        hero: toDeck(heroSnapshot, true),
+        standard: toDeck(standardSnapshot, false),
       });
       const deleteAfter = new Date(
         now.getTime() +
@@ -135,7 +150,9 @@ export async function runPromotionHomeSyncCycle(input: {
       await persistPromotionMedia({
         pool: input.pool,
         tenantId: tenant.id,
-        activePromotionIds: promotions.items.map((item) => item.id),
+        activePromotionIds: [...promotions.hero.items, ...promotions.standard.items].map(
+          (item) => item.id,
+        ),
         assets: media.map((item) => item.persistence),
         deleteAfter,
       });
@@ -156,9 +173,12 @@ export async function runPromotionHomeSyncCycle(input: {
             tenantId: tenant.id,
             userId,
             correlationId,
-            sourceUpdatedAt: snapshot.updatedAt,
-            promotionCount: promotions.items.length,
-            rotationEnabled: promotions.rotationEnabled,
+            heroSourceUpdatedAt: heroSnapshot.updatedAt,
+            standardSourceUpdatedAt: standardSnapshot.updatedAt,
+            heroPromotionCount: promotions.hero.items.length,
+            standardPromotionCount: promotions.standard.items.length,
+            heroRotationEnabled: promotions.hero.rotationEnabled,
+            standardRotationEnabled: promotions.standard.rotationEnabled,
             outcome: result.outcome,
             sourceRevision: result.sourceRevision,
           },

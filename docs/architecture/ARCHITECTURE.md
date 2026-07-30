@@ -99,11 +99,12 @@ traffic, activation and the credit ledger remain disabled until their later slic
 [gift certificate domain](../domains/gift-certificates.md).
 
 The communities module owns canonical community and membership rows. Home projects no more than
-five summaries; the full authenticated directory uses a separate keyset-paginated User API read.
+ten summaries; the authenticated rail replaces that immediate fallback with a ten-item
+keyset-paginated User API page and requests continuation pages near the scroll boundary.
 While the legacy LK store still contains current membership data, an API-side anti-corruption
 adapter may read it under an explicit server mode, map source IDs inside `integration` and expose
 only PadlHub UUIDs. Browser-supplied identity selectors, direct legacy calls and dual-write are
-forbidden. The worker also projects the first five normalized memberships into Home in the
+forbidden. The worker also projects the first ten normalized memberships into Home in the
 background on a cycle independent of Viva profile synchronization; the Home request never merges a
 live external response with its local snapshot. See
 [ADR 0009](../adr/0009-community-directory-and-legacy-read-bridge.md) and the

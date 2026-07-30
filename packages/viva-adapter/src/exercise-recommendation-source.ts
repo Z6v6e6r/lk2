@@ -22,6 +22,11 @@ export interface VivaExerciseRecommendation {
     readonly total: number | null;
     readonly open: number | null;
   };
+  readonly host: {
+    readonly displayName: string;
+    readonly avatarUrl: string | null;
+    readonly role: 'TRAINER' | 'ORGANIZER';
+  } | null;
   readonly route: string;
 }
 
@@ -34,6 +39,8 @@ export interface VivaExerciseRecommendationSourceOptions {
   readonly retryBaseDelayMs?: number;
   readonly circuitFailureThreshold?: number;
   readonly circuitResetMs?: number;
+  readonly avatarSourceTtlMs?: number;
+  readonly maxAvatarSources?: number;
   readonly fetchImplementation?: typeof fetch;
   readonly sleep?: (milliseconds: number) => Promise<void>;
   readonly now?: () => number;
@@ -74,6 +81,88 @@ function namedElement(value: unknown): { readonly id?: string; readonly name?: s
     ...(id ? { id } : {}),
     ...(name ? { name } : {}),
   };
+}
+
+function firstRecord(value: unknown): Record<string, unknown> | undefined {
+  return Array.isArray(value) ? recordValue(value[0]) : recordValue(value);
+}
+
+function personName(value: unknown): string | undefined {
+  const person = recordValue(value);
+  if (!person) return undefined;
+  const explicitName =
+    stringValue(person.displayName) ?? stringValue(person.fullName) ?? stringValue(person.name);
+  if (explicitName) return explicitName.slice(0, 160);
+  const composedName = [stringValue(person.firstName), stringValue(person.lastName)]
+    .filter(Boolean)
+    .join(' ');
+  return composedName ? composedName.slice(0, 160) : undefined;
+}
+
+function hostCandidates(
+  item: Record<string, unknown>,
+  kind: VivaExerciseRecommendationKind,
+): readonly (Record<string, unknown> | undefined)[] {
+  return kind === 'TRAINING'
+    ? [
+        firstRecord(item.trainers),
+        recordValue(item.trainer),
+        recordValue(item.coach),
+        recordValue(item.master),
+      ]
+    : [
+        recordValue(item.organizer),
+        firstRecord(item.organizers),
+        firstRecord(item.trainers),
+        recordValue(item.trainer),
+      ];
+}
+
+function exerciseHostRecord(
+  item: Record<string, unknown>,
+  kind: VivaExerciseRecommendationKind,
+): Record<string, unknown> | undefined {
+  return hostCandidates(item, kind).find((candidate) => personName(candidate) !== undefined);
+}
+
+function httpsUrl(value: unknown): string | undefined {
+  const candidate = stringValue(value);
+  if (!candidate || candidate.length > 2_048) return undefined;
+  try {
+    const url = new URL(candidate);
+    return url.protocol === 'https:' && !url.username && !url.password && !url.port
+      ? url.toString()
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function exerciseHost(
+  item: Record<string, unknown>,
+  kind: VivaExerciseRecommendationKind,
+): VivaExerciseRecommendation['host'] {
+  const displayName = personName(exerciseHostRecord(item, kind));
+  return displayName
+    ? {
+        displayName,
+        avatarUrl: null,
+        role: kind === 'TRAINING' ? 'TRAINER' : 'ORGANIZER',
+      }
+    : null;
+}
+
+function exerciseHostAvatarSource(
+  item: Record<string, unknown>,
+  kind: VivaExerciseRecommendationKind,
+): string | undefined {
+  const host = exerciseHostRecord(item, kind);
+  return (
+    httpsUrl(host?.photo) ??
+    httpsUrl(host?.photoUrl) ??
+    httpsUrl(host?.avatarUrl) ??
+    httpsUrl(recordValue(host?.photo)?.url)
+  );
 }
 
 function normalizeMarker(value: string | undefined): string {
@@ -184,7 +273,10 @@ function normalizeExercise(value: unknown): VivaExerciseRecommendation | undefin
   const stationName = stringValue(studio?.name);
   const title = type.name ?? direction.name;
   if (!stationExternalId || !stationName || !title) return undefined;
-  const total = numericValue(item.maxClients) ?? numericValue(item.capacity);
+  const total =
+    numericValue(item.maxClientsCount) ??
+    numericValue(item.maxClients) ??
+    numericValue(item.capacity);
   const explicitOpen =
     numericValue(item.freePlaces) ??
     numericValue(item.availablePlaces) ??
@@ -215,11 +307,44 @@ function normalizeExercise(value: unknown): VivaExerciseRecommendation | undefin
     },
     levelRange: levelRange(item.accessLevels ?? item.ratings),
     capacity: { total: safeTotal, open: safeOpen },
+    host: exerciseHost(item, kind),
     route:
       kind === 'TOURNAMENT'
         ? `/tournaments?event=${encodeURIComponent(id)}`
         : `/trainings?event=${encodeURIComponent(id)}`,
   };
+}
+
+/**
+ * Converts an end-user Viva schedule response into the provider-free shape
+ * consumed by PadlHub recommendation code. The function is intentionally
+ * transport-agnostic so a browser-assisted read can be normalized immediately
+ * at the API boundary without persisting the provider payload.
+ */
+export function normalizeVivaExerciseRecommendationPayload(
+  payload: unknown,
+  options: {
+    readonly onAvatarSource?: (activityId: string, sourceUrl: string) => void;
+  } = {},
+): readonly VivaExerciseRecommendation[] {
+  return exerciseArray(payload)
+    .slice(0, 500)
+    .flatMap((item) => {
+      const normalized = normalizeExercise(item);
+      const sourceItem = recordValue(item);
+      const avatarSourceUrl =
+        normalized && sourceItem
+          ? exerciseHostAvatarSource(sourceItem, normalized.kind)
+          : undefined;
+      if (normalized && avatarSourceUrl) {
+        options.onAvatarSource?.(normalized.id, avatarSourceUrl);
+      }
+      return normalized ? [normalized] : [];
+    })
+    .sort(
+      (left, right) =>
+        left.startsAt.localeCompare(right.startsAt) || left.id.localeCompare(right.id),
+    );
 }
 
 class VivaExerciseSourceError extends Error {
@@ -235,6 +360,10 @@ export class VivaExerciseRecommendationSourceAdapter {
   private readonly fetchImplementation: typeof fetch;
   private readonly sleep: (milliseconds: number) => Promise<void>;
   private readonly now: () => number;
+  private readonly avatarSources = new Map<
+    string,
+    { readonly sourceUrl: string; readonly fetchedAt: number }
+  >();
   private consecutiveFailures = 0;
   private circuitOpenedAt: number | undefined;
 
@@ -253,6 +382,16 @@ export class VivaExerciseRecommendationSourceAdapter {
       this.options.onMetric?.(metric);
     } catch {
       // Metrics must never change recommendation behavior.
+    }
+  }
+
+  private rememberAvatarSource(activityId: string, sourceUrl: string, fetchedAt: number): void {
+    this.avatarSources.delete(activityId);
+    this.avatarSources.set(activityId, { sourceUrl, fetchedAt });
+    while (this.avatarSources.size > (this.options.maxAvatarSources ?? 2_000)) {
+      const oldestId = this.avatarSources.keys().next().value;
+      if (!oldestId) break;
+      this.avatarSources.delete(oldestId);
     }
   }
 
@@ -306,16 +445,10 @@ export class VivaExerciseRecommendationSourceAdapter {
         const bytes = await response.arrayBuffer();
         if (bytes.byteLength > 5 * 1_024 * 1_024) throw new VivaExerciseSourceError(false);
         const payload = JSON.parse(new TextDecoder().decode(bytes)) as unknown;
-        const items = exerciseArray(payload)
-          .slice(0, 500)
-          .flatMap((item) => {
-            const normalized = normalizeExercise(item);
-            return normalized ? [normalized] : [];
-          })
-          .sort(
-            (left, right) =>
-              left.startsAt.localeCompare(right.startsAt) || left.id.localeCompare(right.id),
-          );
+        const items = normalizeVivaExerciseRecommendationPayload(payload, {
+          onAvatarSource: (activityId, sourceUrl) =>
+            this.rememberAvatarSource(activityId, sourceUrl, now),
+        });
         this.consecutiveFailures = 0;
         this.circuitOpenedAt = undefined;
         this.emit({ outcome: 'success', attempt, durationMs: this.now() - startedAt });
@@ -346,5 +479,19 @@ export class VivaExerciseRecommendationSourceAdapter {
       }
     }
     throw new Error('VIVA_EXERCISE_RECOMMENDATION_SOURCE_UNAVAILABLE');
+  }
+
+  /**
+   * Returns an integration-only host-photo source for an activity already loaded through readDate().
+   * Public routes proxy this URL and never serialize it into a browser DTO.
+   */
+  public readAvatarSource(activityId: string): string | undefined {
+    const value = this.avatarSources.get(activityId);
+    if (!value) return undefined;
+    if (this.now() - value.fetchedAt > (this.options.avatarSourceTtlMs ?? 15 * 60 * 1_000)) {
+      this.avatarSources.delete(activityId);
+      return undefined;
+    }
+    return value.sourceUrl;
   }
 }

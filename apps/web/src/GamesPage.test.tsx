@@ -191,7 +191,7 @@ describe('GamesPage discovery', () => {
       '/games/new',
     );
 
-    const createDescription = screen.getByText('Выберите станцию, время и откройте набор игроков');
+    const createDescription = screen.getByText('Выберите станцию, время и собери свою игру');
     expect(createDescription.closest('a')).toHaveClass('games-create-hero');
     expect(createDescription.closest('a')).toHaveAttribute('href', '/games/new');
     expect(document.querySelector('.games-header a[aria-label="Создать игру"]')).toBeNull();
@@ -245,7 +245,7 @@ describe('GamesPage discovery', () => {
 
     expect(await screen.findByText(game.title)).toBeInTheDocument();
     expect(api.listPublicGames).toHaveBeenCalledWith(
-      expect.objectContaining({ availability: 'INCLUDE_FULL', limit: 20 }),
+      expect.objectContaining({ availability: 'JOINABLE', limit: 20 }),
     );
 
     await user.click(screen.getByRole('button', { name: 'Вступить в игру' }));
@@ -269,7 +269,7 @@ describe('GamesPage discovery', () => {
     await user.click(within(typeFilter).getByRole('checkbox', { name: 'Игра + Тренер' }));
     await waitFor(() =>
       expect(api.listPublicGames).toHaveBeenLastCalledWith(
-        expect.objectContaining({ kind: 'COACH_GAME', availability: 'INCLUDE_FULL' }),
+        expect.objectContaining({ kind: 'COACH_GAME', availability: 'JOINABLE' }),
       ),
     );
     await user.click(within(typeFilter).getByRole('checkbox', { name: 'Турнир' }));
@@ -287,13 +287,13 @@ describe('GamesPage discovery', () => {
     expect(await screen.findByText(tournament.title)).toBeInTheDocument();
     expect(api.listPublicTournamentSummaries).toHaveBeenCalledWith(
       expect.objectContaining({
-        availability: 'INCLUDE_FULL',
+        availability: 'JOINABLE',
         limit: 50,
       }),
     );
     expect(api.listPublicCoachGameSummaries).toHaveBeenCalledWith(
       expect.objectContaining({
-        availability: 'INCLUDE_FULL',
+        availability: 'JOINABLE',
         limit: 50,
       }),
     );
@@ -308,9 +308,8 @@ describe('GamesPage discovery', () => {
     expect(trainerAvatar.querySelector('img')).toHaveAttribute('src', coachGame.trainer?.avatarUrl);
     expect(trainerAvatar.querySelector('img')).toHaveAttribute('loading', 'lazy');
     expect(trainerAvatar.querySelector('span')).toHaveAttribute('hidden');
-    expect(within(coachGameCard!).getByText('Участники 1/3')).toBeInTheDocument();
-    expect(within(coachGameCard!).getByText('Осталось 2 места')).toBeInTheDocument();
-    expect(within(coachGameCard!).getByLabelText('Занято мест: 1')).toBeInTheDocument();
+    expect(within(coachGameCard!).getByText('Доступно 2 места из 3')).toBeInTheDocument();
+    expect(within(coachGameCard!).getByLabelText('Доступно мест: 2')).toBeInTheDocument();
     const tournamentCard = screen.getByText(tournament.title).closest('article');
     expect(tournamentCard).not.toBeNull();
     expect(within(tournamentCard!).getByText('Турнир · Мексикано').parentElement).toHaveClass(
@@ -333,9 +332,8 @@ describe('GamesPage discovery', () => {
     );
     expect(organizerAvatar.querySelector('img')).toHaveAttribute('loading', 'lazy');
     expect(organizerAvatar.querySelector('span')).toHaveAttribute('hidden');
-    expect(within(tournamentCard!).getByText('Участники 12/16')).toBeInTheDocument();
-    expect(within(tournamentCard!).getByText('Осталось 4 места')).toBeInTheDocument();
-    expect(within(tournamentCard!).getByLabelText('Ещё участников: 9')).toHaveTextContent('+9');
+    expect(within(tournamentCard!).getByText('Доступно 4 места из 16')).toBeInTheDocument();
+    expect(within(tournamentCard!).getByLabelText('Ещё мест: 1')).toHaveTextContent('+1');
 
     await user.click(screen.getByRole('button', { name: 'Все типы' }));
     await user.click(screen.getByRole('checkbox', { name: 'Игра + Тренер' }));
@@ -390,8 +388,11 @@ describe('GamesPage discovery', () => {
       within(stationFilter).getByRole('checkbox', { name: secondStation.title }),
     ).toBeChecked();
     expect(screen.getByRole('button', { name: 'Станции: 2' })).toBeInTheDocument();
-    await user.click(screen.getByRole('checkbox', { name: 'Не показывать набранные' }));
-    await user.click(screen.getByRole('button', { name: 'Все фильтры · 2' }));
+    const availabilityFilter = screen.getByRole('checkbox', { name: 'Не показывать набранные' });
+    expect(availabilityFilter).toBeChecked();
+    await user.click(availabilityFilter);
+    const advancedFiltersButton = await screen.findByRole('button', { name: 'Все фильтры · 2' });
+    await user.click(advancedFiltersButton);
     await user.selectOptions(screen.getByRole('combobox', { name: 'Время начала' }), '18:00');
     await user.selectOptions(screen.getByRole('combobox', { name: 'Уровень игроков' }), 'C_B_PLUS');
 
@@ -407,7 +408,7 @@ describe('GamesPage discovery', () => {
         expect(filters).toBeDefined();
         if (!filters) return;
         expect(filters).toMatchObject({
-          availability: 'JOINABLE',
+          availability: 'INCLUDE_FULL',
           levelFrom: 'C',
           levelTo: 'B+',
         });
@@ -424,7 +425,7 @@ describe('GamesPage discovery', () => {
       expect(filters).not.toHaveProperty('levelFrom');
       expect(filters).not.toHaveProperty('levelTo');
     });
-    expect(screen.getByRole('checkbox', { name: 'Не показывать набранные' })).not.toBeChecked();
+    expect(screen.getByRole('checkbox', { name: 'Не показывать набранные' })).toBeChecked();
   });
 
   it('polls an accepted roster command before reporting completion', async () => {

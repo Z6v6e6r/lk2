@@ -12,6 +12,16 @@ function ruleBody(selector: string): string {
 }
 
 describe('Games page multi-select filters', () => {
+  it('uses the light palette independently of the system colour scheme', () => {
+    const pageRule = ruleBody('.games-page');
+
+    expect(pageRule).toMatch(/--games-bg:\s*#f7f7f8\s*;/);
+    expect(pageRule).toMatch(/--games-surface:\s*#fff\s*;/);
+    expect(pageRule).toMatch(/--games-card:\s*#fff\s*;/);
+    expect(pageRule).toMatch(/--games-ink:\s*#1f1e20\s*;/);
+    expect(styles).not.toMatch(/@media\s*\(prefers-color-scheme:\s*dark\)/);
+  });
+
   it('clips the date rail horizontally without clipping dropdown menus vertically', () => {
     const filtersRule = ruleBody('.games-filters');
 

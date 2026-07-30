@@ -3,10 +3,10 @@
 ## Purpose
 
 The authenticated Home page is a PadlHub-owned read surface. It presents a bounded summary of the
-player's current context without making the web or mobile client orchestrate profile, bookings,
-subscriptions, communities, promotion, chat or tournament sources.
+player's current context without making the web or mobile client choose profile, booking,
+subscription, community, promotion, chat or tournament sources.
 
-The public operation is:
+The complete compatibility operation is:
 
 ```http
 GET /user/api/v1/{tenantKey}/home
@@ -16,6 +16,22 @@ X-Correlation-ID: <opaque id>
 
 Its response is `HomeDashboard` in
 `contracts/openapi/user/v1/openapi.yaml`. Every rendered initial block comes from this one response.
+
+ADR 0019 adds the recovery operation:
+
+```http
+GET /user/api/v1/{tenantKey}/home/base
+Authorization: Bearer <PadlHub JWT>
+X-Correlation-ID: <opaque id>
+```
+
+Its response is `HomeBase`. Alongside `snapshot` and the PadlHub `viewerUserId`, the first milestone
+contains `quickActions`, independently versioned `communities` and `promotions` envelopes,
+`locations`, `additionalLinks` and `capabilities`. It excludes the authenticated self profile,
+balance, messaging, counters, upcoming bookings and subscriptions; the notification badge remains
+a separate PadlHub API concern. The self profile is a separate `profile.read` aggregate whose
+transport is selected by the short-lived server routing plan. This two-aggregate page composition
+does not permit a client to merge one HomeBase section from multiple sources.
 
 ## Legacy request audit
 
@@ -41,6 +57,9 @@ Home request after session restoration.
 
 ## Response blocks
 
+The following blocks describe the complete compatibility `HomeDashboard`. The smaller `HomeBase`
+subset and its explicit omissions are defined above.
+
 - `snapshot`: opaque version, generation/staleness timestamps and server-owned source marker.
 - `profile`: display-ready identity, optional masked phone suffix, signed balance and player level.
 - `counters`: unread chats, upcoming events and active subscriptions.
@@ -48,7 +67,7 @@ Home request after session restoration.
 - `upcoming`: at most six game, training or tournament summaries.
 - `subscriptions`: at most six normalized subscription summaries, including a distinct `paused`
   state for Viva `HOLD` records.
-- `communities`: at most five current memberships with title, verification, chat unread count,
+- `communities`: at most ten current memberships with title, verification, chat unread count,
   route and nullable PadlHub-served logo URL; never roles, member totals, feed posts, rankings or
   external identifiers.
 - `promotions`: up to twenty active CUP cards in operator order, with the CUP rotation flag,
@@ -61,12 +80,42 @@ Home request after session restoration.
 - `capabilities`: precomputed feature/capability flags; the client never scans source data to infer
   them.
 
+## HomeBase section availability
+
+`HomeBase` is a partial recovery read model rather than a second write owner or a partially trusted
+business aggregate. Its community and promotion envelopes can be rendered independently of the
+self profile. Each such section has one source revision, its original freshness timestamps and one
+state:
+
+| State         | Meaning                                                                                      |
+| ------------- | -------------------------------------------------------------------------------------------- |
+| `READY`       | The exact local section version is contract-valid and has not passed `staleAt`.              |
+| `STALE`       | The last contract-valid version is inside the bounded stale window and stays visibly stale.  |
+| `UNAVAILABLE` | No safe local version exists or the maximum stale window passed; no synthetic value is sent. |
+
+Only `READY` and `STALE` may carry a section value, and both require `revision`, `observedAt` and
+`staleAt`. A stale value keeps those original fields; serving it does not advance freshness
+metadata. `UNAVAILABLE` carries only its state. The top-level snapshot contains `version`,
+`generatedAt`, `source=LOCAL_PROJECTION` and `completeness=PARTIAL`, but no global `staleAt`.
+Freshness belongs only to the optional section envelopes. Required local fields do not clock-expire
+the whole HomeBase response into a `503`.
+
+The web may render the stable local quick actions, locations, additional links and capabilities
+while a community or promotion section is stale or unavailable. It must show section-level
+loading/stale/unavailable treatment and must not replace an unavailable section with mock, raw Viva
+or a field copied from the old complete snapshot.
+
 ## Ownership and consistency
 
 Home is a read model, not a new write owner. Commands continue to belong to their profile, booking,
 subscription, community, messaging and tournament domains. A production Home projection must be
 materialized server-side from committed domain events and served as one versioned snapshot. A
 request must never assemble a single block from mixed local, cached and Viva responses.
+
+For `HomeBase`, the same invariant is applied to each versioned community/promotion section: one
+returned section is read from one local projection revision. The response may carry different
+section revisions because it states their boundaries and freshness explicitly; it never combines
+fields within a section. The separate self-profile read is not persisted into HomeBase.
 
 The persisted projection key is `(tenant_id, user_id)`. It stores one complete JSON payload,
 monotonic source revision, source-event UUID, checksum and freshness timestamps. Row-level security
@@ -128,6 +177,12 @@ All three Viva components carry one `fetchedAt`. The projector treats them as a 
 does not rebuild while their component timestamps differ; the last event of the batch makes the
 group eligible for a new snapshot.
 
+The legacy complete `HomeDashboard` continues to use that three-component coherence rule during
+expand/migrate. The initial HomeBase contract omits profile, upcoming bookings and subscriptions,
+so it does not claim that batch is fresh. Those Viva-backed sections are not added to HomeBase until
+the exact target worker can read bookings, booking details and subscriptions through trusted
+user-delegated egress and all responses pass the strict adapter schemas.
+
 The worker consumes from the durable quorum queue `phub.home-projector.v1`, records the event in
 `audit.inbox_events`, rejects same-revision/different-payload conflicts, and serializes rebuilds by
 user. A snapshot revision advances only after every required component is available. Unread,
@@ -143,14 +198,39 @@ The web gateway coalesces concurrent Home reads, including React StrictMode star
 private-cacheable for 15 seconds and may be used stale for 45 seconds while the browser revalidates.
 This cache is a delivery optimization; the source of truth remains the server-owned projection.
 
-The first five community summaries are part of the snapshot because they are visible on Home. Home
-does not carry a continuation cursor and does not make a second startup request. The explicit
-`/communities` route loads active memberships in pages of 20 through
+For HomeBase, revalidation does not erase the last contract-valid community or promotion section
+when its producer is temporarily unavailable. The API recomputes `READY`, `STALE` or `UNAVAILABLE`
+from persisted timestamps and the configured bounded stale window. Browser cache age never
+upgrades a section state. A failed self-profile read affects only the profile hero and does not turn
+HomeBase into a page-level network error.
+
+The first ten community summaries are part of the snapshot and render immediately on Home. Home
+does not carry a continuation cursor. The web client then replaces that fallback with the first
+canonical directory page requested with `limit=10`, which supplies the opaque cursor; it never
+merges fields from the snapshot and directory versions. Approaching the end of the horizontal rail
+loads the next ten-item page. An `UNAVAILABLE` Home community component does not block this
+canonical directory bootstrap; the unavailable state is shown only if that read also fails. The
+explicit `/communities` route loads active memberships in pages of 20 through
 `GET /user/api/v1/{tenantKey}/communities/mine`; community detail, feed pages, rankings, member
 management and chat history remain lazy. The same rule applies to booking history and item details.
 
+The personalized `Для меня` feed remains a separate, versioned read because it ranks current Games,
+trainings and tournaments against the viewer's preferences. Home V3 requests the first 14 items,
+then requests 12 at a time as its recommendation sheet approaches the scroll boundary. Every
+continuation uses the opaque `nextCursor` from the server; the cursor is bound to the ranked feed
+version, so clients append pages and never re-rank or slice a provider response locally. Training
+and tournament hosts are normalized by `@phub/viva-adapter` into a display name and role. Provider
+identifiers and provider photo URLs remain integration-only. Host photos are exposed only through
+the PadlHub-owned
+`GET /public/api/v1/{tenantKey}/booking-activities/{activityId}/host-avatar` route. That route reads
+a bounded, short-lived integration-side source mapping, enforces the shared media allowlist and
+image limits, and returns normalized WebP without exposing the Viva URL. The API may retain the
+assembled feed in a bounded five-minute in-process delivery cache so a continuation page does not
+change when an optional upstream activity read is transiently unavailable; the cached feed never
+becomes a write owner or extends the response's `staleAt`.
+
 When `COMMUNITIES_READ_MODE=legacy` or `local`, the worker reads the same server-owned community
-directory in its own bounded synchronization cycle and publishes the first five summaries as the
+directory in its own bounded synchronization cycle and publishes the first ten summaries as the
 `communities` component through the transactional outbox. The cycle selects active Home users
 without calling or waiting for Viva, so a profile-provider outage cannot block community or logo
 updates. The Home API never overlays a live legacy response onto a stored snapshot. A failed
@@ -165,8 +245,8 @@ PadlHub URL from its existing snapshot and never calls the legacy media endpoint
 An unchanged legacy asset URL reuses the local object, while a failed refresh retains the previous
 logo and a removed source schedules the superseded object for delayed deletion.
 
-When `PROMOTIONS_READ_MODE=legacy`, the worker reads the existing public CUP placement once per
-tenant from `GET /api/advertising/cabinet-home`; the web client never calls that endpoint. The
+When `PROMOTIONS_READ_MODE=legacy`, the worker reads the two public CUP placements once per
+tenant from `GET /api/advertising/cabinet-home-top` and `GET /api/advertising/cabinet-home`; the web client never calls either endpoint. The
 bridge accepts only the active, ordered public items returned by CUP, maps source IDs through
 `integration.external_entity_map`, and publishes the strict `promotion` component independently of
 Viva. `rotationEnabled=false` fixes the first active item; `true` rotates only when at least two
@@ -197,6 +277,14 @@ regardless of whether authentication uses mock or sandbox Viva. `HOME_READ_MODE=
 only `home.dashboard_snapshots`. A missing projection returns `HOME_PROJECTION_NOT_READY`; an
 invalid contract returns `HOME_PROJECTION_INVALID`; a snapshot older than the configured grace
 period returns `HOME_PROJECTION_STALE`. Production configuration requires projection mode.
+
+The 2026-07-29 Gate 0 probe is a production-readiness `NO-GO` for the legacy complete Viva-backed
+Home components and for adding Viva-backed sections to HomeBase: user-delegation token issuance
+succeeded, while exact server/worker reads for profile, bookings and subscriptions returned `403`;
+booking details were not attempted because no authorized booking-list identifier was available.
+The redacted correlations and latency evidence are recorded in
+[ADR 0019](../adr/0019-home-base-and-viva-egress-gate.md). Until trusted egress passes, those
+sections remain outside the HomeBase contract.
 
 The controlled importer in `scripts/import-home-projection.ts` validates a full snapshot and is an
 initial fill/recovery mechanism, not the continuous producer. It must receive a backend-produced

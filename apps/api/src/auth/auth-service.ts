@@ -69,6 +69,11 @@ export type RefreshSessionRotation =
 
 export interface AuthRepository {
   resolveTenantAuthBinding(tenantKey: string): Promise<TenantAuthBinding | undefined>;
+  resolveExistingExternalIdentity(input: {
+    readonly binding: TenantAuthBinding;
+    readonly identity: Pick<VerifiedExternalIdentity, 'issuer' | 'subject'>;
+    readonly correlationId: string;
+  }): Promise<AuthUser | undefined>;
   upsertExternalIdentity(input: {
     readonly binding: TenantAuthBinding;
     readonly identity: VerifiedExternalIdentity;
@@ -172,6 +177,7 @@ export type AuthServiceErrorCode =
   | 'VIVA_DELEGATION_BUSY'
   | 'LEGAL_ACCEPTANCE_REQUIRED'
   | 'AUTH_IDENTITY_CONFLICT'
+  | 'AUTH_IDENTITY_LINK_REQUIRED'
   | 'IDEMPOTENCY_KEY_CONFLICT'
   | 'TENANT_KEY_INVALID'
   | 'TENANT_NOT_FOUND';
@@ -190,6 +196,7 @@ const errorStatus: Readonly<Record<AuthServiceErrorCode, number>> = {
   VIVA_DELEGATION_BUSY: 409,
   LEGAL_ACCEPTANCE_REQUIRED: 400,
   AUTH_IDENTITY_CONFLICT: 409,
+  AUTH_IDENTITY_LINK_REQUIRED: 409,
   IDEMPOTENCY_KEY_CONFLICT: 409,
   TENANT_KEY_INVALID: 400,
   TENANT_NOT_FOUND: 404,
@@ -411,12 +418,23 @@ export class AuthService {
     }
     let user: AuthUser;
     try {
-      user = await this.options.repository.upsertExternalIdentity({
-        binding,
-        identity: result.identity,
-        correlationId: input.correlationId,
-      });
+      if (result.identityResolution === 'EXISTING_SUBJECT') {
+        const existing = await this.options.repository.resolveExistingExternalIdentity({
+          binding,
+          identity: result.identity,
+          correlationId: input.correlationId,
+        });
+        if (!existing) throw new AuthServiceError('AUTH_IDENTITY_LINK_REQUIRED');
+        user = existing;
+      } else {
+        user = await this.options.repository.upsertExternalIdentity({
+          binding,
+          identity: result.identity,
+          correlationId: input.correlationId,
+        });
+      }
     } catch (error) {
+      if (error instanceof AuthServiceError) throw error;
       this.mapIdentityRepositoryError(error);
     }
     await this.options.repository.recordLegalAcceptances({

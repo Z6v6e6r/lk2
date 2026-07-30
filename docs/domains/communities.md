@@ -8,7 +8,7 @@ is deliberately narrow:
 - a canonical `communities.communities` aggregate identified by a PadlHub UUID;
 - tenant/user-scoped memberships that prevent duplicate active owners;
 - a protected, cursor-paginated list of the authenticated user's active memberships;
-- a five-item summary projection embedded in Home;
+- a ten-item summary projection embedded in Home;
 - a temporary server-side read adapter for the current LK community store.
 
 Community creation, detail, join/invite commands, member moderation, feed, full rating tables and
@@ -19,7 +19,7 @@ independent unread source.
 
 ## Public read contracts
 
-Home returns no more than five `CommunitySummary` items. Each item contains only:
+Home returns no more than ten `CommunitySummary` items. Each item contains only:
 
 ```json
 {
@@ -98,10 +98,17 @@ and contains no source identity. A missing identity, invalid payload, timeout or
 closed with `COMMUNITY_DIRECTORY_UNAVAILABLE`; the API never substitutes mock or mixed-source data.
 
 The same normalized repository feeds the Home projector in the background. The worker persists at
-most five summaries in `integration.community_home_source_components` and emits a versioned
+most ten summaries in `integration.community_home_source_components` and emits a versioned
 `home.projection.component.changed.v1` event in the same transaction. Revisions advance beyond any
 previous seeded component, while unchanged payloads only refresh producer metadata. The Home read
 therefore remains one locally consistent snapshot instead of calling the legacy source on demand.
+
+The web client renders those ten projected summaries immediately, then replaces that fallback with
+one canonical directory page requested with `limit=10`. That first directory read establishes the
+opaque continuation cursor without merging fields or versions. When the horizontal rail approaches
+its end, the client requests the next ten-item page and appends it by PadlHub community UUID. If
+the HomeBase community component is `UNAVAILABLE`, the same canonical first-page read hydrates the
+rail instead of suppressing the directory request.
 
 For a missing local logo in `legacy` mode, the worker downloads the source image only from
 `COMMUNITY_LOGO_ALLOWED_HOSTS`, with HTTPS, redirect, timeout, byte and pixel bounds. It strips

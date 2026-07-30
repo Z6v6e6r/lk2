@@ -69,6 +69,22 @@ export class PostgresAuthRepository implements AuthRepository {
     });
   }
 
+  public resolveExistingExternalIdentity(input: {
+    readonly binding: TenantAuthBinding;
+    readonly identity: {
+      readonly issuer: string;
+      readonly subject: string;
+    };
+    readonly correlationId: string;
+  }): Promise<AuthUser | undefined> {
+    return this.repository.resolveExistingExternalUser({
+      tenantId: input.binding.tenantId,
+      issuer: input.identity.issuer,
+      subject: input.identity.subject,
+      correlationId: input.correlationId,
+    });
+  }
+
   public async createRefreshSession(input: {
     readonly sessionId: string;
     readonly tenantId: string;

@@ -563,6 +563,41 @@ paths:
           $ref: ../../common/components.yaml#/components/responses/TooManyRequests
         '503':
           $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/booking-activities/{activityId}/host-avatar:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - name: activityId
+        in: path
+        required: true
+        description: Stable PadlHub booking-activity UUID.
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [bookings]
+      operationId: getPublicBookingActivityHostAvatar
+      summary: Load a proxied training or tournament host avatar
+      description: |
+        Returns a PadlHub-normalized WebP image. The Viva media URL and host identifier remain
+        server-side.
+      responses:
+        '200':
+          description: Activity host avatar normalized as WebP.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            image/webp:
+              schema:
+                type: string
+                format: binary
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
   /{tenantKey}/games/{gameId}:
     parameters:
       - $ref: ../../common/components.yaml#/components/parameters/TenantKey

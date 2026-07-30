@@ -1,10 +1,21 @@
+import type { CSSProperties } from 'react';
+
 import type { BookingRecommendationPage } from './auth-gateway.js';
+import {
+  bookingCardBackground,
+  type BookingCardBackgroundKind,
+} from './booking-card-backgrounds.js';
 import { EventCalendarIcon, EventLevelIcon, EventLocationIcon } from './ActivityCardIcons.js';
+import { CreateGameButtonIcon } from './CreateGameButtonIcon.js';
 import { GameCard } from './GameCard.js';
+import { ParticipantAvatarStack } from './ParticipantAvatarStack.js';
 
 type RecommendationItem = BookingRecommendationPage['items'][number];
 type RecommendationReason = RecommendationItem['reasons'][number];
 type RecommendationReasonTone = 'level' | 'place' | 'time';
+type CompactActionVariant = 'default' | 'mini-create';
+type CompactMetadataVariant = 'default' | 'station-time';
+type CompactRosterVariant = 'default' | 'host-slots';
 type RecommendationActivity = Extract<
   RecommendationItem,
   { kind: 'TRAINING' | 'TOURNAMENT' }
@@ -82,17 +93,22 @@ function RecommendationMarkerIcon({
 
 function RecommendationReasonChip({
   reason,
+  iconOnly = false,
 }: {
   readonly reason: RecommendationReason;
+  readonly iconOnly?: boolean;
 }): React.JSX.Element {
   const presentation = reasonPresentation[reason];
   return (
     <span
-      className={`booking-recommendation__reason booking-recommendation__reason--${presentation.tone}`}
+      className={`booking-recommendation__reason booking-recommendation__reason--${presentation.tone}${
+        iconOnly ? ' is-icon-only' : ''
+      }`}
       data-recommendation-reason={reason}
+      {...(iconOnly ? { 'aria-label': presentation.chipLabel } : {})}
     >
       <RecommendationMarkerIcon icon={presentation.icon} />
-      {presentation.chipLabel}
+      {!iconOnly ? presentation.chipLabel : null}
     </span>
   );
 }
@@ -100,18 +116,23 @@ function RecommendationReasonChip({
 export function BookingRecommendationReasonChips({
   reasons,
   compact = false,
+  iconOnly = false,
 }: {
   readonly reasons: RecommendationItem['reasons'];
   readonly compact?: boolean;
+  readonly iconOnly?: boolean;
 }): React.JSX.Element {
   const visibleReasons = compact ? reasons.slice(0, 2) : reasons;
   const hiddenReasonCount = reasons.length - visibleReasons.length;
   return (
-    <div className="booking-recommendation__reasons" aria-label="Почему игра подходит">
+    <div
+      className={`booking-recommendation__reasons${iconOnly ? ' is-icon-only' : ''}`}
+      aria-label="Почему игра подходит"
+    >
       {visibleReasons.map((reason) => (
-        <RecommendationReasonChip key={reason} reason={reason} />
+        <RecommendationReasonChip iconOnly={iconOnly} key={reason} reason={reason} />
       ))}
-      {hiddenReasonCount > 0 ? (
+      {hiddenReasonCount > 0 && !iconOnly ? (
         <span
           className="booking-recommendation__reason-count"
           aria-label={`Ещё причин: ${hiddenReasonCount}`}
@@ -168,11 +189,25 @@ function activityLevelLabel(activity: RecommendationActivity): string {
 function RecommendationActivityCard({
   activity,
   compact,
+  compactActionVariant,
+  compactMetadataVariant,
+  compactRosterVariant,
+  footerSupplement,
 }: {
   readonly activity: RecommendationActivity;
   readonly compact: boolean;
+  readonly compactActionVariant: CompactActionVariant;
+  readonly compactMetadataVariant: CompactMetadataVariant;
+  readonly compactRosterVariant: CompactRosterVariant;
+  readonly footerSupplement?: React.ReactNode;
 }): React.JSX.Element {
   const schedule = formatActivitySchedule(activity);
+  const usesStationTimeMetadata = compact && compactMetadataVariant === 'station-time';
+  const actionLabel = activity.capacity.open === 0 ? 'Подробнее' : 'Записаться';
+  const usesMiniCreateAction =
+    compact && compactActionVariant === 'mini-create' && actionLabel === 'Записаться';
+  const usesHostSlots = compact && compactRosterVariant === 'host-slots';
+  const showLevel = activity.kind === 'TOURNAMENT' || !usesStationTimeMetadata;
   const kindLabel = activity.kind === 'TOURNAMENT' ? 'Турнир' : 'Тренировка';
   const availability =
     activity.capacity.open === null
@@ -208,34 +243,77 @@ function RecommendationActivityCard({
         ) : null}
       </div>
       <div className="game-card__meta">
-        <span className="activity-card-metadata-row">
-          <EventCalendarIcon />
-          <span className="game-card__metadata-text">
-            <strong>{schedule.date}</strong>
-            <span>{schedule.time}</span>
+        {!usesStationTimeMetadata ? (
+          <span className="activity-card-metadata-row">
+            <EventCalendarIcon />
+            <span className="game-card__metadata-text">
+              <strong>{schedule.date}</strong>
+              <span>{schedule.time}</span>
+            </span>
           </span>
-        </span>
+        ) : null}
         <span className="activity-card-metadata-row">
           <EventLocationIcon />
           <span className="game-card__metadata-text">
             <strong>{activity.station.name}</strong>
-            {!compact && activity.station.shortAddress ? (
+            {usesStationTimeMetadata ? (
+              <span>{schedule.time}</span>
+            ) : !compact && activity.station.shortAddress ? (
               <span>{activity.station.shortAddress}</span>
             ) : null}
           </span>
         </span>
-        <span className="game-card__level">
-          <span className="game-card__level-icon">
-            <EventLevelIcon />
+        {showLevel ? (
+          <span className="game-card__level">
+            <span className="game-card__level-icon">
+              <EventLevelIcon />
+            </span>
+            <strong>{activityLevelLabel(activity)}</strong>
           </span>
-          <strong>{activityLevelLabel(activity)}</strong>
-        </span>
+        ) : null}
       </div>
       <div className="game-card__footer">
-        <span className="game-state">{availability}</span>
-        <div className="game-card__actions">
-          <a className="game-card__button" href={activity.route}>
-            {activity.capacity.open === 0 ? 'Подробнее' : 'Записаться'}
+        {footerSupplement ? (
+          <div className="game-card__footer-supplement">{footerSupplement}</div>
+        ) : null}
+        {usesHostSlots ? (
+          <ParticipantAvatarStack
+            ariaLabel={
+              activity.kind === 'TRAINING'
+                ? 'Тренер и свободные места'
+                : 'Организатор и свободные места'
+            }
+            capacity={Math.min(
+              4,
+              (activity.host ? 1 : 0) + Math.max(0, activity.capacity.open ?? 0),
+            )}
+            participants={
+              activity.host
+                ? [
+                    {
+                      key: `${activity.kind}-${activity.id}-host`,
+                      displayName: activity.host.displayName,
+                      avatarUrl: activity.host.avatarUrl,
+                    },
+                  ]
+                : []
+            }
+            showLevelRing={false}
+          />
+        ) : (
+          <span className="game-state">{availability}</span>
+        )}
+        <div
+          className={`game-card__actions${
+            usesMiniCreateAction ? ' game-card__actions--mini-create' : ''
+          }`}
+        >
+          <a
+            className={`game-card__button${usesMiniCreateAction ? ' game-card__button--mini-create' : ''}`}
+            href={activity.route}
+            aria-label={usesMiniCreateAction ? actionLabel : undefined}
+          >
+            {usesMiniCreateAction ? <CreateGameButtonIcon /> : actionLabel}
           </a>
         </div>
       </div>
@@ -247,31 +325,72 @@ function recommendationKey(item: RecommendationItem): string {
   return item.kind === 'GAME' ? `game-${item.game.id}` : `${item.kind}-${item.activity.id}`;
 }
 
+function recommendationBackgroundKind(item: RecommendationItem): BookingCardBackgroundKind {
+  if (item.kind !== 'GAME') return item.kind;
+  return item.game.kind === 'COACH_GAME' ? 'COACH_GAME' : 'GAME';
+}
+
+type BookingRecommendationStyle = CSSProperties & {
+  readonly '--booking-card-background-image': string;
+};
+
 function RecommendationCard({
   item,
   compact,
+  compactActionVariant,
+  compactMetadataVariant,
+  compactRosterVariant,
+  footerSupplement,
 }: {
   readonly item: RecommendationItem;
   readonly compact: boolean;
+  readonly compactActionVariant: CompactActionVariant;
+  readonly compactMetadataVariant: CompactMetadataVariant;
+  readonly compactRosterVariant: CompactRosterVariant;
+  readonly footerSupplement?: React.ReactNode;
 }): React.JSX.Element {
   return item.kind === 'GAME' ? (
     <GameCard
       game={item.game}
       compact={compact}
+      footerSupplement={footerSupplement}
       showCompactLevel={compact}
       showCompactMetadata={compact}
+      compactMetadataVariant={compactMetadataVariant}
+      compactActionVariant={compactActionVariant}
     />
   ) : (
-    <RecommendationActivityCard activity={item.activity} compact={compact} />
+    <RecommendationActivityCard
+      activity={item.activity}
+      compact={compact}
+      compactActionVariant={compactActionVariant}
+      compactMetadataVariant={compactMetadataVariant}
+      compactRosterVariant={compactRosterVariant}
+      footerSupplement={footerSupplement}
+    />
   );
 }
 
 export function BookingRecommendations({
   page,
   compact = false,
+  compactActionVariant = 'default',
+  compactMetadataVariant = 'default',
+  compactRosterVariant = 'default',
+  showCompactReasonBadges = true,
+  hasMore = false,
+  loadingMore = false,
+  onLoadMore,
 }: {
   readonly page: BookingRecommendationPage;
   readonly compact?: boolean;
+  readonly compactActionVariant?: CompactActionVariant;
+  readonly compactMetadataVariant?: CompactMetadataVariant;
+  readonly compactRosterVariant?: CompactRosterVariant;
+  readonly showCompactReasonBadges?: boolean;
+  readonly hasMore?: boolean;
+  readonly loadingMore?: boolean;
+  readonly onLoadMore?: () => void;
 }): React.JSX.Element {
   if (page.items.length === 0) {
     return (
@@ -284,13 +403,55 @@ export function BookingRecommendations({
   }
 
   return (
-    <div className={compact ? 'booking-recommendations is-compact' : 'booking-recommendations'}>
-      {page.items.map((item) => (
-        <section className="booking-recommendation" key={recommendationKey(item)}>
-          <BookingRecommendationReasonChips reasons={item.reasons} compact={compact} />
-          <RecommendationCard item={item} compact={compact} />
-        </section>
-      ))}
+    <div
+      className={compact ? 'booking-recommendations is-compact' : 'booking-recommendations'}
+      onScroll={
+        compact && hasMore && onLoadMore
+          ? (event) => {
+              const container = event.currentTarget;
+              if (container.scrollHeight - container.scrollTop - container.clientHeight <= 240) {
+                onLoadMore();
+              }
+            }
+          : undefined
+      }
+    >
+      {page.items.map((item) => {
+        const key = recommendationKey(item);
+        const background = bookingCardBackground(recommendationBackgroundKind(item), key);
+        const style: BookingRecommendationStyle = {
+          '--booking-card-background-image': `url("${background.image}")`,
+        };
+
+        return (
+          <section
+            className="booking-recommendation"
+            data-booking-card-background-tone={background.tone}
+            data-booking-card-background-variant={background.variant + 1}
+            key={key}
+            style={style}
+          >
+            {!compact ? <BookingRecommendationReasonChips reasons={item.reasons} /> : null}
+            <RecommendationCard
+              item={item}
+              compact={compact}
+              compactActionVariant={compactActionVariant}
+              compactMetadataVariant={compactMetadataVariant}
+              compactRosterVariant={compactRosterVariant}
+              footerSupplement={
+                compact && showCompactReasonBadges ? (
+                  <BookingRecommendationReasonChips iconOnly reasons={item.reasons} compact />
+                ) : null
+              }
+            />
+          </section>
+        );
+      })}
+      {loadingMore ? (
+        <p className="booking-recommendations__loading-more" role="status">
+          Загружаем рекомендации…
+        </p>
+      ) : null}
     </div>
   );
 }

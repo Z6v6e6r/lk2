@@ -4,6 +4,12 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { createBrowserAuthGateway } from './auth-gateway.js';
 
+function requestUrl(input: Parameters<typeof fetch>[0]): string {
+  if (typeof input === 'string') return input;
+  if (input instanceof URL) return input.toString();
+  return input.url;
+}
+
 describe('browser auth gateway', () => {
   it('keeps public gift payment commands anonymous and resolves the hosted API origin', async () => {
     const fetchImplementation = vi.fn<typeof fetch>().mockResolvedValue(
@@ -133,6 +139,166 @@ describe('browser auth gateway', () => {
     expect(fetchImplementation).toHaveBeenCalledTimes(3);
   });
 
+  it('coalesces local Home Base reads without pinning a resolved partial snapshot', async () => {
+    const session = {
+      accessToken: 'short-lived-padlhub-token',
+      tokenType: 'Bearer',
+      expiresAt: '2099-07-11T12:10:00.000Z',
+      user: { id: '00000000-0000-4000-8000-000000000001', displayName: 'Анна' },
+      context: {
+        userId: '00000000-0000-4000-8000-000000000001',
+        tenantId: '00000000-0000-4000-8000-000000000002',
+        displayName: 'Анна',
+        phoneLast4: '0001',
+        roles: ['client'],
+        permissions: ['profile.read'],
+      },
+    };
+    const homeBase = {
+      snapshot: {
+        version: 'home-base-v1-test',
+        generatedAt: '2026-07-29T12:00:00.000Z',
+        source: 'LOCAL_PROJECTION',
+        completeness: 'PARTIAL',
+      },
+      viewerUserId: session.context.userId,
+      quickActions: [],
+      communities: { status: 'UNAVAILABLE' },
+      promotions: { status: 'UNAVAILABLE' },
+      locations: [],
+      additionalLinks: [],
+      capabilities: {
+        canCreateGame: true,
+        canManageTournaments: false,
+        canViewCommunities: true,
+      },
+    };
+    const refreshed = {
+      ...homeBase,
+      snapshot: { ...homeBase.snapshot, version: 'home-base-v1-refreshed' },
+    };
+    const fetchImplementation = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json(session))
+      .mockResolvedValueOnce(Response.json(homeBase))
+      .mockResolvedValueOnce(Response.json(refreshed));
+    const gateway = createBrowserAuthGateway({
+      baseUrl: 'https://api.padlhub.test/',
+      tenantKey: 'padlhub',
+      appVersion: 'test',
+      fetchImplementation,
+    });
+
+    await gateway.restoreSession();
+    const [first, second] = await Promise.all([gateway.getHomeBase(), gateway.getHomeBase()]);
+
+    expect(first).toEqual(homeBase);
+    expect(second).toBe(first);
+    expect(fetchImplementation.mock.calls[1]?.[0]).toBe(
+      'https://api.padlhub.test/user/api/v1/padlhub/home/base',
+    );
+    await expect(gateway.getHomeBase()).resolves.toEqual(refreshed);
+    expect(fetchImplementation).toHaveBeenCalledTimes(3);
+  });
+
+  it('coalesces first community pages by page size and preserves ten-item Home pagination', async () => {
+    const session = {
+      accessToken: 'short-lived-padlhub-token',
+      tokenType: 'Bearer',
+      expiresAt: '2099-07-11T12:10:00.000Z',
+      user: { id: '00000000-0000-4000-8000-000000000001', displayName: 'Анна' },
+      context: {
+        userId: '00000000-0000-4000-8000-000000000001',
+        tenantId: '00000000-0000-4000-8000-000000000002',
+        displayName: 'Анна',
+        phoneLast4: '0001',
+        roles: ['client'],
+        permissions: ['profile.read'],
+      },
+    };
+    const tenItemPage = { items: [], nextCursor: 'home-community-cursor' };
+    const twentyItemPage = { items: [] };
+    const fetchImplementation = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json(session))
+      .mockResolvedValueOnce(Response.json(tenItemPage))
+      .mockResolvedValueOnce(Response.json(twentyItemPage));
+    const gateway = createBrowserAuthGateway({
+      baseUrl: 'https://api.padlhub.test/',
+      tenantKey: 'padlhub',
+      appVersion: 'test',
+      fetchImplementation,
+    });
+
+    await gateway.restoreSession();
+    const [firstTen, duplicateTen, firstTwenty] = await Promise.all([
+      gateway.listMyCommunities(undefined, 10),
+      gateway.listMyCommunities(undefined, 10),
+      gateway.listMyCommunities(),
+    ]);
+
+    expect(duplicateTen).toBe(firstTen);
+    expect(firstTwenty).toEqual(twentyItemPage);
+    expect(fetchImplementation).toHaveBeenCalledTimes(3);
+    expect(fetchImplementation.mock.calls[1]?.[0]).toBe(
+      'https://api.padlhub.test/user/api/v1/padlhub/communities/mine?limit=10',
+    );
+    expect(fetchImplementation.mock.calls[2]?.[0]).toBe(
+      'https://api.padlhub.test/user/api/v1/padlhub/communities/mine?limit=20',
+    );
+  });
+
+  it('rejects a Home Base snapshot bound to another PadlHub user', async () => {
+    const userId = '00000000-0000-4000-8000-000000000001';
+    const session = {
+      accessToken: 'short-lived-padlhub-token',
+      tokenType: 'Bearer',
+      expiresAt: '2099-07-11T12:10:00.000Z',
+      user: { id: userId, displayName: 'Анна' },
+      context: {
+        userId,
+        tenantId: '00000000-0000-4000-8000-000000000002',
+        displayName: 'Анна',
+        phoneLast4: '0001',
+        roles: ['client'],
+        permissions: ['profile.read'],
+      },
+    };
+    const fetchImplementation = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json(session))
+      .mockResolvedValueOnce(
+        Response.json({
+          snapshot: {
+            version: 'home-base-v1-mismatch',
+            generatedAt: '2026-07-29T12:00:00.000Z',
+            source: 'LOCAL_PROJECTION',
+            completeness: 'PARTIAL',
+          },
+          viewerUserId: '99999999-9999-4999-8999-999999999999',
+          quickActions: [],
+          communities: { status: 'UNAVAILABLE' },
+          promotions: { status: 'UNAVAILABLE' },
+          locations: [],
+          additionalLinks: [],
+          capabilities: {
+            canCreateGame: false,
+            canManageTournaments: false,
+            canViewCommunities: false,
+          },
+        }),
+      );
+    const gateway = createBrowserAuthGateway({
+      baseUrl: 'https://api.padlhub.test/',
+      tenantKey: 'padlhub',
+      appVersion: 'test',
+      fetchImplementation,
+    });
+
+    await gateway.restoreSession();
+    await expect(gateway.getHomeBase()).rejects.toThrow('HOME_BASE_VIEWER_MISMATCH');
+  });
+
   it('exchanges a fragment handoff once and keeps the Viva access token only in memory', async () => {
     window.history.replaceState({}, '', '/#viva_handoff=one-time-handoff-code-12345');
     const session = {
@@ -252,6 +418,8 @@ describe('browser auth gateway', () => {
     const profile = {
       userId,
       displayName: 'Анна Петрова',
+      avatarUrl:
+        '/public/api/v1/media/profile-photos/00000000-0000-4000-8000-000000000002/33333333-3333-4333-8333-333333333333',
       phoneLast4: '0001',
       balanceMinor: 54_000,
       currency: 'RUB',
@@ -278,7 +446,8 @@ describe('browser auth gateway', () => {
     });
 
     await gateway.restoreSession();
-    await expect(gateway.getUserProfile(userId)).resolves.toEqual(profile);
+    await gateway.getRoutingPlan();
+    await expect(gateway.getSelfProfile()).resolves.toEqual(profile);
 
     expect(fetchImplementation).toHaveBeenCalledTimes(3);
     expect(fetchImplementation.mock.calls[2]?.[0]).toBe(
@@ -400,7 +569,7 @@ describe('browser auth gateway', () => {
     });
   });
 
-  it('keeps bookings behind PadlHub when a stored plan incorrectly requests direct Viva', async () => {
+  it('loads upcoming bookings through the server-directed Viva list/details job', async () => {
     const userId = '00000000-0000-4000-8000-000000000001';
     const session = {
       accessToken: 'short-lived-padlhub-token',
@@ -416,6 +585,27 @@ describe('browser auth gateway', () => {
         permissions: ['profile.read'],
       },
     };
+    const bookings = {
+      version: 'b'.repeat(64),
+      generatedAt: '2026-07-15T18:00:00.000Z',
+      staleAt: '2026-07-15T18:05:00.000Z',
+      items: [],
+    };
+    const job = {
+      jobId: '10000000-0000-4000-8000-000000000001',
+      screen: 'MY_BOOKINGS',
+      expiresAt: '2099-07-11T12:02:00.000Z',
+      concurrency: 1,
+      commands: [
+        {
+          commandId: '20000000-0000-4000-8000-000000000001',
+          operation: 'bookings.read',
+          detailsOperation: 'bookings.details.read',
+          page: 0,
+          size: 50,
+        },
+      ],
+    };
     const operationNames = [
       'profile.read',
       'bookings.read',
@@ -423,34 +613,69 @@ describe('browser auth gateway', () => {
       'subscriptions.read',
       'schedule.read',
     ];
-    const routingPlan = {
-      revision: '99',
-      mode: 'MIXED_END_USER_READS',
-      issuedAt: new Date().toISOString(),
-      expiresAt: new Date(Date.now() + 60_000).toISOString(),
-      operations: operationNames.map((operation) => ({
-        operation,
-        transport: 'DIRECT_VIVA',
-        fallback: 'UNAVAILABLE',
-      })),
-      directViva: {
-        apiBaseUrl: 'https://api.vivacrm.invalid/end-user/api',
-        providerTenantKey: 'iSkq6G',
-        accessTokenPath: '/auth/viva/access',
-        allowedRequestHeaders: ['Authorization'],
-      },
-    };
-    const bookings = {
-      version: 'home-17',
-      generatedAt: '2026-07-15T18:00:00.000Z',
-      staleAt: '2026-07-15T18:05:00.000Z',
-      items: [],
-    };
-    const fetchImplementation = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(Response.json(session))
-      .mockResolvedValueOnce(Response.json(routingPlan))
-      .mockResolvedValueOnce(Response.json(bookings));
+    const fetchImplementation = vi.fn<typeof fetch>((input) => {
+      const url = requestUrl(input);
+      if (url.endsWith('/auth/session/refresh')) return Promise.resolve(Response.json(session));
+      if (url.endsWith('/booking-screen-read-jobs')) return Promise.resolve(Response.json(job));
+      if (url.endsWith('/routing-plan')) {
+        return Promise.resolve(
+          Response.json({
+            revision: '8',
+            mode: 'MIXED_END_USER_READS',
+            issuedAt: new Date().toISOString(),
+            expiresAt: new Date(Date.now() + 60_000).toISOString(),
+            operations: operationNames.map((operation) => ({
+              operation,
+              transport: 'PADLHUB_API',
+              fallback: 'UNAVAILABLE',
+            })),
+            directViva: {
+              apiBaseUrl: 'https://api.vivacrm.invalid/end-user/api',
+              providerTenantKey: 'iSkq6G',
+              accessTokenPath: '/auth/viva/access',
+              allowedRequestHeaders: ['Authorization'],
+            },
+          }),
+        );
+      }
+      if (url.endsWith('/auth/viva/access')) {
+        return Promise.resolve(
+          Response.json({
+            accessToken: 'short-lived-viva-token',
+            expiresAt: '2099-07-11T12:05:00.000Z',
+          }),
+        );
+      }
+      if (url.includes('/v2/iSkq6G/bookings?')) {
+        return Promise.resolve(
+          Response.json({
+            content: [{ id: 'active-private-booking', isCancelled: false }],
+          }),
+        );
+      }
+      if (url.includes('/v1/iSkq6G/bookings/list?')) {
+        return Promise.resolve(
+          Response.json([{ id: 'active-private-booking', isCancelled: false }]),
+        );
+      }
+      if (url.includes('/results/')) {
+        return Promise.resolve(
+          Response.json({ accepted: true, replayed: false, itemCount: 1 }, { status: 202 }),
+        );
+      }
+      if (url.endsWith(`/booking-screen-read-jobs/${job.jobId}/complete`)) {
+        return Promise.resolve(
+          Response.json({
+            screen: 'MY_BOOKINGS',
+            state: 'READY',
+            completedCommands: 1,
+            totalCommands: 1,
+            bookings,
+          }),
+        );
+      }
+      return Promise.resolve(new Response(null, { status: 404 }));
+    });
     const gateway = createBrowserAuthGateway({
       baseUrl: 'https://api.padlhub.test/',
       tenantKey: 'padlhub',
@@ -459,17 +684,25 @@ describe('browser auth gateway', () => {
     });
 
     await gateway.restoreSession();
-    await expect(gateway.getUpcomingBookings()).resolves.toEqual(bookings);
+    const firstRead = gateway.getUpcomingBookings();
+    const coalescedRead = gateway.getUpcomingBookings();
+    expect(coalescedRead).toBe(firstRead);
+    await expect(firstRead).resolves.toEqual(bookings);
 
-    expect(fetchImplementation).toHaveBeenCalledTimes(3);
-    expect(fetchImplementation.mock.calls[2]?.[0]).toBe(
-      'https://api.padlhub.test/user/api/v1/padlhub/bookings/upcoming',
+    const urls = fetchImplementation.mock.calls.map(([input]) => requestUrl(input));
+    expect(
+      urls.filter((url) => url.endsWith('/user/api/v1/padlhub/booking-screen-read-jobs')),
+    ).toHaveLength(1);
+    expect(urls).toContain(
+      'https://api.vivacrm.invalid/end-user/api/v2/iSkq6G/bookings?page=0&size=50',
     );
+    expect(urls.filter((url) => url.startsWith('https://api.vivacrm.invalid/'))).toHaveLength(2);
+    expect(urls.some((url) => url.endsWith('/bookings/upcoming'))).toBe(false);
+    expect(urls.filter((url) => url.endsWith('/auth/viva/access'))).toHaveLength(1);
   });
 
-  it('executes only profile.read in Viva and drops the external profile identifier', async () => {
+  it('keeps the self profile on PadlHub when a routing plan advertises direct Viva', async () => {
     const userId = '00000000-0000-4000-8000-000000000001';
-    const vivaProfileId = '7aa93a46-9fa8-42b2-9894-490874fe53f7';
     const session = {
       accessToken: 'short-lived-padlhub-token',
       tokenType: 'Bearer',
@@ -508,27 +741,22 @@ describe('browser auth gateway', () => {
         allowedRequestHeaders: ['Authorization'],
       },
     };
+    const avatarUrl =
+      '/public/api/v1/media/profile-photos/00000000-0000-4000-8000-000000000002/33333333-3333-4333-8333-333333333333';
+    const padlHubProfile = {
+      userId,
+      displayName: 'Анна Петрова',
+      avatarUrl,
+      phoneLast4: '0001',
+      balanceMinor: 54_000,
+      currency: 'RUB',
+      level: { label: 'D', value: 0, assessmentRequired: true },
+    };
     const fetchImplementation = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(Response.json(session))
       .mockResolvedValueOnce(Response.json(routingPlan))
-      .mockResolvedValueOnce(
-        Response.json({
-          accessToken: 'short-lived-viva-access-token',
-          expiresAt: new Date(Date.now() + 60_000).toISOString(),
-        }),
-      )
-      .mockResolvedValueOnce(
-        Response.json({
-          id: vivaProfileId,
-          firstName: 'Анна',
-          middleName: null,
-          lastName: 'Петрова',
-          phone: '+7 999 000-00-01',
-          deposit: 54_000,
-          customFields: [],
-        }),
-      );
+      .mockResolvedValueOnce(Response.json(padlHubProfile));
     const gateway = createBrowserAuthGateway({
       baseUrl: 'https://api.padlhub.test/',
       tenantKey: 'padlhub',
@@ -537,18 +765,159 @@ describe('browser auth gateway', () => {
     });
 
     await gateway.restoreSession();
-    const profile = await gateway.getUserProfile(userId);
+    await expect(gateway.getRoutingPlan()).resolves.toEqual(routingPlan);
+    const [selfProfile, profile] = await Promise.all([
+      gateway.getSelfProfile(),
+      gateway.getPlayerProfile(userId),
+    ]);
 
-    expect(profile).toMatchObject({ userId, displayName: 'Анна Петрова', balanceMinor: 54_000 });
-    expect(JSON.stringify(profile)).not.toContain(vivaProfileId);
-    expect(fetchImplementation).toHaveBeenCalledTimes(4);
-    const [vivaUrl, vivaInit] = fetchImplementation.mock.calls[3] ?? [];
-    expect(vivaUrl).toBeInstanceOf(URL);
-    expect((vivaUrl as URL).toString()).toBe(
-      'https://api.vivacrm.invalid/end-user/api/v1/iSkq6G/profile',
-    );
-    expect(Object.fromEntries(new Headers(vivaInit?.headers))).toEqual({
-      authorization: 'Bearer short-lived-viva-access-token',
+    expect(selfProfile).toMatchObject({
+      userId,
+      displayName: 'Анна Петрова',
+      balanceMinor: 54_000,
+      avatarUrl,
     });
+    expect(profile).toMatchObject({
+      profile: {
+        userId,
+        displayName: 'Анна Петрова',
+        avatarUrl,
+        level: { label: 'D', value: 0, assessmentRequired: true },
+      },
+      privateAccount: {
+        phoneLast4: '0001',
+        balanceMinor: 54_000,
+        currency: 'RUB',
+      },
+      access: { audience: 'SELF', tier: 'SELF' },
+    });
+    expect(fetchImplementation).toHaveBeenCalledTimes(3);
+    expect(fetchImplementation.mock.calls[2]?.[0]).toBe(
+      'https://api.padlhub.test/user/api/v1/padlhub/profile',
+    );
+  });
+
+  it('relays server-directed schedule reads before requesting recommendation completion', async () => {
+    const session = {
+      accessToken: 'short-lived-padlhub-token',
+      tokenType: 'Bearer',
+      expiresAt: '2099-07-11T12:10:00.000Z',
+      user: { id: '00000000-0000-4000-8000-000000000001', displayName: 'Анна' },
+      context: {
+        userId: '00000000-0000-4000-8000-000000000001',
+        tenantId: '00000000-0000-4000-8000-000000000002',
+        displayName: 'Анна',
+        phoneLast4: '0001',
+        roles: ['client'],
+        permissions: ['profile.read', 'games.play'],
+      },
+    };
+    const operationNames = [
+      'profile.read',
+      'bookings.read',
+      'bookings.details.read',
+      'subscriptions.read',
+      'schedule.read',
+    ];
+    const job = {
+      jobId: '10000000-0000-4000-8000-000000000001',
+      screen: 'FOR_ME',
+      expiresAt: '2099-07-11T12:02:00.000Z',
+      concurrency: 2,
+      commands: [
+        {
+          commandId: '20000000-0000-4000-8000-000000000001',
+          operation: 'schedule.read',
+          date: '2026-07-30',
+        },
+        {
+          commandId: '20000000-0000-4000-8000-000000000002',
+          operation: 'schedule.read',
+          date: '2026-07-31',
+        },
+      ],
+    };
+    const recommendationPage = {
+      version: 'a'.repeat(64),
+      generatedAt: '2026-07-30T09:00:00.000Z',
+      staleAt: '2026-07-30T09:05:00.000Z',
+      personalization: 'BASIC',
+      items: [],
+      nextCursor: null,
+    };
+    const fetchImplementation = vi.fn<typeof fetch>((input) => {
+      const url = requestUrl(input);
+      if (url.endsWith('/auth/session/refresh')) return Promise.resolve(Response.json(session));
+      if (url.endsWith('/booking-screen-read-jobs')) return Promise.resolve(Response.json(job));
+      if (url.endsWith('/routing-plan')) {
+        return Promise.resolve(
+          Response.json({
+            revision: '7',
+            mode: 'MIXED_END_USER_READS',
+            issuedAt: new Date().toISOString(),
+            expiresAt: new Date(Date.now() + 60_000).toISOString(),
+            operations: operationNames.map((operation) => ({
+              operation,
+              transport: operation === 'profile.read' ? 'DIRECT_VIVA' : 'PADLHUB_API',
+              fallback: operation === 'profile.read' ? 'UNAVAILABLE' : 'PADLHUB_API',
+            })),
+            directViva: {
+              apiBaseUrl: 'https://api.vivacrm.invalid/end-user/api',
+              providerTenantKey: 'iSkq6G',
+              accessTokenPath: '/auth/viva/access',
+              allowedRequestHeaders: ['Authorization'],
+            },
+          }),
+        );
+      }
+      if (url.endsWith('/auth/viva/access')) {
+        return Promise.resolve(
+          Response.json({
+            accessToken: 'short-lived-viva-token',
+            expiresAt: '2099-07-11T12:05:00.000Z',
+          }),
+        );
+      }
+      if (url.startsWith('https://api.vivacrm.invalid/')) {
+        return Promise.resolve(Response.json({ content: [] }));
+      }
+      if (url.includes('/results/')) {
+        return Promise.resolve(
+          Response.json({ accepted: true, replayed: false, itemCount: 0 }, { status: 202 }),
+        );
+      }
+      if (url.endsWith(`/booking-screen-read-jobs/${job.jobId}/complete`)) {
+        return Promise.resolve(
+          Response.json({
+            screen: 'FOR_ME',
+            state: 'READY',
+            completedCommands: 2,
+            totalCommands: 2,
+            page: recommendationPage,
+          }),
+        );
+      }
+      return Promise.resolve(new Response(null, { status: 404 }));
+    });
+    const gateway = createBrowserAuthGateway({
+      baseUrl: 'https://api.padlhub.test/',
+      tenantKey: 'padlhub',
+      appVersion: 'test',
+      fetchImplementation,
+    });
+
+    await gateway.restoreSession();
+    await expect(gateway.listBookingRecommendations({ limit: 6 })).resolves.toEqual(
+      recommendationPage,
+    );
+
+    const urls = fetchImplementation.mock.calls.map(([input]) => requestUrl(input));
+    expect(urls.filter((url) => url.startsWith('https://api.vivacrm.invalid/'))).toHaveLength(2);
+    expect(urls.filter((url) => url.endsWith('/auth/viva/access'))).toHaveLength(1);
+    expect(urls.filter((url) => url.includes('/results/'))).toHaveLength(2);
+    expect(urls).toContain(
+      `https://api.padlhub.test/user/api/v1/padlhub/booking-screen-read-jobs/${job.jobId}/complete`,
+    );
+    expect(urls.some((url) => url.includes('/recommendations/bookings'))).toBe(false);
   });
 });

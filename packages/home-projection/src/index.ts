@@ -153,6 +153,7 @@ export const homeSubscriptionSchema = z
   .strict();
 
 export const homeCommunitySchema = communitySummarySchema;
+export const HOME_COMMUNITY_SUMMARY_LIMIT = 10;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -160,7 +161,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function normalizeCommunitySummaries(value: unknown): unknown {
   if (!Array.isArray(value)) return value;
-  return (value as readonly unknown[]).slice(0, 5).map((community) => {
+  return (value as readonly unknown[]).slice(0, HOME_COMMUNITY_SUMMARY_LIMIT).map((community) => {
     if (!isRecord(community)) return community;
     if ('isVerified' in community && 'unreadChatCount' in community) return community;
     return {
@@ -205,12 +206,33 @@ export const homePromotionDeckSchema = z
   })
   .strict();
 
+/**
+ * Two independently managed Home placements.  `hero` is the compact banner in
+ * the header, while `standard` is the existing lower promotional block.
+ */
+export const homePromotionSlotsSchema = z
+  .object({
+    hero: homePromotionDeckSchema,
+    standard: homePromotionDeckSchema,
+  })
+  .strict();
+
+export type HomePromotionSlots = z.infer<typeof homePromotionSlotsSchema>;
+
 function normalizePromotionDeck(value: unknown): unknown {
   if (isRecord(value) && Array.isArray(value.items)) return value;
   if (value === null || value === undefined) {
     return { rotationEnabled: false, intervalSeconds: 6, items: [] };
   }
   return { rotationEnabled: false, intervalSeconds: 6, items: [value] };
+}
+
+function normalizePromotionSlots(value: unknown): unknown {
+  if (isRecord(value) && 'hero' in value && 'standard' in value) return value;
+  const standard = normalizePromotionDeck(value);
+  // Old snapshots rendered the same deck in both positions. Preserve that
+  // behaviour until the worker publishes the independently managed slots.
+  return { hero: standard, standard };
 }
 
 function firstPromotion(value: unknown): unknown {
@@ -259,7 +281,10 @@ function normalizeConfirmedViewerParticipants(upcoming: unknown, profile: unknow
  */
 export function normalizeHomeDashboardPayload(value: unknown): unknown {
   if (!isRecord(value)) return value;
-  const promotions = normalizePromotionDeck(value.promotions ?? value.promotion);
+  const promotionSlots = normalizePromotionSlots(
+    value.promotionSlots ?? value.promotions ?? value.promotion,
+  );
+  const slots = homePromotionSlotsSchema.parse(promotionSlots);
   return {
     ...value,
     ...('upcoming' in value
@@ -268,8 +293,9 @@ export function normalizeHomeDashboardPayload(value: unknown): unknown {
     ...('communities' in value
       ? { communities: normalizeCommunitySummaries(value.communities) }
       : {}),
-    promotions,
-    promotion: value.promotion ?? firstPromotion(promotions),
+    heroPromotions: slots.hero,
+    promotions: slots.standard,
+    promotion: value.promotion ?? firstPromotion(slots.standard),
   };
 }
 
@@ -280,7 +306,7 @@ export function normalizeHomeProjectionComponentPayload(value: unknown): unknown
     return { ...value, value: normalizeCommunitySummaries(value.value) };
   }
   if (value.component === 'promotion') {
-    return { ...value, value: normalizePromotionDeck(value.value) };
+    return { ...value, value: normalizePromotionSlots(value.value) };
   }
   return value;
 }
@@ -319,9 +345,11 @@ export const homeDashboardSchema = z
     quickActions: z.array(homeQuickActionSchema).max(4),
     upcoming: z.array(homeUpcomingSchema).max(6),
     subscriptions: z.array(homeSubscriptionSchema).max(6),
-    communities: z.array(homeCommunitySchema).max(5),
+    communities: z.array(homeCommunitySchema).max(HOME_COMMUNITY_SUMMARY_LIMIT),
     /** @deprecated Kept during the expand/migrate window for older clients. */
     promotion: homePromotionSchema.nullable(),
+    /** Independently managed compact banner at the top of Home. */
+    heroPromotions: homePromotionDeckSchema.optional(),
     promotions: homePromotionDeckSchema,
     locations: z.array(homeLocationSchema).max(8),
     additionalLinks: z.array(homeAdditionalLinkSchema).max(6),
@@ -374,11 +402,11 @@ export const homeProjectionComponentPayloadSchema = z.discriminatedUnion('compon
   componentBaseSchema
     .extend({
       component: z.literal('communities'),
-      value: z.array(homeCommunitySchema).max(5),
+      value: z.array(homeCommunitySchema).max(HOME_COMMUNITY_SUMMARY_LIMIT),
     })
     .strict(),
   componentBaseSchema
-    .extend({ component: z.literal('promotion'), value: homePromotionDeckSchema })
+    .extend({ component: z.literal('promotion'), value: homePromotionSlotsSchema })
     .strict(),
   componentBaseSchema
     .extend({ component: z.literal('locations'), value: z.array(homeLocationSchema).max(8) })
@@ -456,7 +484,9 @@ export function buildHomeProjection(input: {
     .parse(values.get('messaging'));
   const upcoming = z.array(homeUpcomingSchema).max(6).parse(values.get('upcoming'));
   const subscriptions = z.array(homeSubscriptionSchema).max(6).parse(values.get('subscriptions'));
-  const promotions = homePromotionDeckSchema.parse(values.get('promotion'));
+  const promotionSlots = homePromotionSlotsSchema.parse(
+    normalizePromotionSlots(values.get('promotion')),
+  );
   const navigation = z
     .object({
       quickActions: z.array(homeQuickActionSchema).max(4),
@@ -485,11 +515,185 @@ export function buildHomeProjection(input: {
       upcoming,
       subscriptions,
       communities: values.get('communities'),
-      promotion: promotions.items[0] ?? null,
-      promotions,
+      promotion: promotionSlots.standard.items[0] ?? null,
+      heroPromotions: promotionSlots.hero,
+      promotions: promotionSlots.standard,
       locations: values.get('locations'),
       additionalLinks: navigation.additionalLinks,
       capabilities: values.get('capabilities'),
     }),
   };
+}
+
+export const homeBaseSnapshotSchema = z
+  .object({
+    version: z.string().min(1).max(100),
+    generatedAt: dateTime,
+    source: z.literal('LOCAL_PROJECTION'),
+    completeness: z.literal('PARTIAL'),
+  })
+  .strict();
+
+const homeBaseCommunityReadySectionSchema = z
+  .object({
+    status: z.literal('READY'),
+    revision: positiveRevision,
+    observedAt: dateTime,
+    staleAt: dateTime,
+    value: z.array(homeCommunitySchema).max(HOME_COMMUNITY_SUMMARY_LIMIT),
+  })
+  .strict();
+
+const homeBaseCommunityStaleSectionSchema = z
+  .object({
+    status: z.literal('STALE'),
+    revision: positiveRevision,
+    observedAt: dateTime,
+    staleAt: dateTime,
+    value: z.array(homeCommunitySchema).max(HOME_COMMUNITY_SUMMARY_LIMIT),
+  })
+  .strict();
+
+const homeBaseUnavailableSectionSchema = z.object({ status: z.literal('UNAVAILABLE') }).strict();
+
+export const homeBaseCommunitySectionSchema = z.discriminatedUnion('status', [
+  homeBaseCommunityReadySectionSchema,
+  homeBaseCommunityStaleSectionSchema,
+  homeBaseUnavailableSectionSchema,
+]);
+
+const homeBasePromotionReadySectionSchema = z
+  .object({
+    status: z.literal('READY'),
+    revision: positiveRevision,
+    observedAt: dateTime,
+    staleAt: dateTime,
+    value: homePromotionSlotsSchema,
+  })
+  .strict();
+
+const homeBasePromotionStaleSectionSchema = z
+  .object({
+    status: z.literal('STALE'),
+    revision: positiveRevision,
+    observedAt: dateTime,
+    staleAt: dateTime,
+    value: homePromotionSlotsSchema,
+  })
+  .strict();
+
+export const homeBasePromotionSectionSchema = z.discriminatedUnion('status', [
+  homeBasePromotionReadySectionSchema,
+  homeBasePromotionStaleSectionSchema,
+  homeBaseUnavailableSectionSchema,
+]);
+
+export const homeBaseSchema = z
+  .object({
+    snapshot: homeBaseSnapshotSchema,
+    viewerUserId: uuid,
+    quickActions: z.array(homeQuickActionSchema).max(4),
+    communities: homeBaseCommunitySectionSchema,
+    promotions: homeBasePromotionSectionSchema,
+    locations: z.array(homeLocationSchema).max(8),
+    additionalLinks: z.array(homeAdditionalLinkSchema).max(6),
+    capabilities: homeCapabilitiesSchema,
+  })
+  .strict();
+
+export type HomeBase = z.infer<typeof homeBaseSchema>;
+
+type HomeBaseSectionInput<TValue> = {
+  readonly revision: string;
+  readonly observedAt: Date;
+  readonly value: TValue;
+};
+
+function homeBaseSection<TValue>(input: {
+  readonly section?: HomeBaseSectionInput<TValue>;
+  readonly now: Date;
+  readonly ttlSeconds: number;
+}) {
+  if (!input.section) return { status: 'UNAVAILABLE' as const };
+  const observedAt = input.section.observedAt.toISOString();
+  const staleAtDate = new Date(input.section.observedAt.getTime() + input.ttlSeconds * 1_000);
+  return {
+    status: input.now.getTime() <= staleAtDate.getTime() ? ('READY' as const) : ('STALE' as const),
+    revision: input.section.revision,
+    observedAt,
+    staleAt: staleAtDate.toISOString(),
+    value: input.section.value,
+  };
+}
+
+export function buildHomeBase(input: {
+  readonly viewerUserId: string;
+  readonly sourceRevision: string;
+  readonly generatedAt: Date;
+  readonly ttlSeconds: number;
+  readonly quickActions: readonly z.infer<typeof homeQuickActionSchema>[];
+  readonly locations: readonly z.infer<typeof homeLocationSchema>[];
+  readonly additionalLinks: readonly z.infer<typeof homeAdditionalLinkSchema>[];
+  readonly capabilities: z.infer<typeof homeCapabilitiesSchema>;
+  readonly communities?: HomeBaseSectionInput<readonly z.infer<typeof homeCommunitySchema>[]>;
+  readonly promotions?: HomeBaseSectionInput<z.infer<typeof homePromotionSlotsSchema>>;
+}): HomeBase {
+  return homeBaseSchema.parse({
+    snapshot: {
+      version: `home-base-v1-${input.sourceRevision}`,
+      generatedAt: input.generatedAt.toISOString(),
+      source: 'LOCAL_PROJECTION',
+      completeness: 'PARTIAL',
+    },
+    viewerUserId: input.viewerUserId,
+    quickActions: input.quickActions,
+    communities: homeBaseSection({
+      ...(input.communities ? { section: input.communities } : {}),
+      now: input.generatedAt,
+      ttlSeconds: input.ttlSeconds,
+    }),
+    promotions: homeBaseSection({
+      ...(input.promotions ? { section: input.promotions } : {}),
+      now: input.generatedAt,
+      ttlSeconds: input.ttlSeconds,
+    }),
+    locations: input.locations,
+    additionalLinks: input.additionalLinks,
+    capabilities: input.capabilities,
+  });
+}
+
+function currentHomeBaseSection<TValue>(
+  section:
+    | { readonly status: 'UNAVAILABLE' }
+    | {
+        readonly status: 'READY' | 'STALE';
+        readonly revision: string;
+        readonly observedAt: string;
+        readonly staleAt: string;
+        readonly value: TValue;
+      },
+  now: Date,
+  maxStaleSeconds: number,
+) {
+  if (section.status === 'UNAVAILABLE') return section;
+  const staleAt = Date.parse(section.staleAt);
+  if (now.getTime() <= staleAt) return { ...section, status: 'READY' as const };
+  if (now.getTime() <= staleAt + maxStaleSeconds * 1_000) {
+    return { ...section, status: 'STALE' as const };
+  }
+  return { status: 'UNAVAILABLE' as const };
+}
+
+export function normalizeHomeBaseFreshness(
+  value: unknown,
+  now: Date,
+  maxStaleSeconds: number,
+): HomeBase {
+  const parsed = homeBaseSchema.parse(value);
+  return homeBaseSchema.parse({
+    ...parsed,
+    communities: currentHomeBaseSection(parsed.communities, now, maxStaleSeconds),
+    promotions: currentHomeBaseSection(parsed.promotions, now, maxStaleSeconds),
+  });
 }

@@ -4,6 +4,7 @@ import {
   createAdminNotificationRepository,
   createActivityHistoryRepository,
   createBookingPreferencesRepository,
+  createBookingScreenMappingRepository,
   createClientRoutingPlanRepository,
   createDatabasePool,
   createGameRepository,
@@ -13,6 +14,7 @@ import {
   createGiftCertificateMediaRepository,
   createGiftCertificateSaleRepository,
   createGameRosterRepository,
+  createHomeBaseProjectionRepository,
   createHomeDashboardProjectionRepository,
   createLegacyGameImportRepository,
   createLocationMediaRepository,
@@ -42,6 +44,7 @@ import Redis from 'ioredis';
 import { buildApp } from './app.js';
 import { ActivityHistoryRefreshCoordinator } from './bookings/activity-history-refresh.js';
 import { ActivityHistoryGameBackfill } from './bookings/activity-history-game-backfill.js';
+import { RedisBookingScreenReadJobStore } from './bookings/booking-screen-read-job-store.js';
 import { listViewerGameCards } from './games/game-card-queries.js';
 import { S3GiftCertificateMediaStore } from './gift-certificates/gift-certificate-media-store.js';
 import { S3GiftCertificateArtifactReadStore } from './gift-certificates/gift-certificate-artifact-store.js';
@@ -84,6 +87,7 @@ const vivaIdentityProvider = new VivaIdentityProvider({
   timeoutMs: config.VIVA_TIMEOUT_MS,
   devPhoneE164: config.AUTH_DEV_PHONE_E164,
   devOtpCode: config.AUTH_DEV_OTP_CODE,
+  allowExistingSubjectOAuthBootstrap: config.VIVA_DIRECT_READ_ENABLED,
   onMetric: (metric) => logger.info({ metric }, 'identity provider operation'),
 });
 const providers = new Map<IdentityProviderKey, IdentityProviderPort>([
@@ -283,6 +287,7 @@ const app = await buildApp({
   authService,
   communityDirectory: createCommunityDirectoryRuntime({ config, pool, logger }),
   homeDashboardRepository: createHomeDashboardProjectionRepository(pool),
+  homeBaseRepository: createHomeBaseProjectionRepository(pool),
   clientRoutingPlanRepository,
   notificationRepository: createNotificationInboxRepository(pool),
   notificationEndpointRepository: createNotificationEndpointRepository(pool),
@@ -305,6 +310,12 @@ const app = await buildApp({
   profileLevelHistoryRepository: createProfileLevelHistoryRepository(pool),
   profileSummaryRepository,
   bookingPreferencesRepository: createBookingPreferencesRepository(pool),
+  ...(config.VIVA_DIRECT_READ_ENABLED
+    ? {
+        bookingScreenReadJobStore: new RedisBookingScreenReadJobStore(redis),
+        bookingScreenMappingRepository: createBookingScreenMappingRepository(pool),
+      }
+    : {}),
   ...(activityHistoryRepository ? { activityHistoryRepository } : {}),
   ...(activityHistoryRefresher ? { activityHistoryRefresher } : {}),
   ...(gameReadRepository ? { gameReadRepository } : {}),

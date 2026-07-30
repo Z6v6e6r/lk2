@@ -68,6 +68,41 @@ function createClient(
 }
 
 describe('PadlHubApiClient authentication boundary', () => {
+  it('loads HomeBase without inventing unavailable Viva sections', async () => {
+    const fetchImplementation = vi.fn<typeof fetch>().mockResolvedValue(
+      jsonResponse({
+        snapshot: {
+          version: 'home-base-v1-7',
+          generatedAt: '2026-07-15T12:00:00.000Z',
+          source: 'LOCAL_PROJECTION',
+          completeness: 'PARTIAL',
+        },
+        viewerUserId: authenticatedSession.user.id,
+        quickActions: [],
+        communities: { status: 'UNAVAILABLE' },
+        promotions: { status: 'UNAVAILABLE' },
+        locations: [],
+        additionalLinks: [],
+        capabilities: {
+          canCreateGame: true,
+          canManageTournaments: false,
+          canViewCommunities: true,
+        },
+      }),
+    );
+    const client = createClient(fetchImplementation, {
+      initialAccessToken: authenticatedSession.accessToken,
+    });
+
+    const result = await client.getHomeBase();
+
+    expect(result.snapshot.completeness).toBe('PARTIAL');
+    expect(result).not.toHaveProperty('profile');
+    expect(requestUrl(fetchImplementation.mock.calls[0]?.[0] ?? '')).toBe(
+      'https://api.padlhub.test/user/api/v1/local-padel/home/base',
+    );
+  });
+
   it('resolves stable relative location media paths against the configured API origin', async () => {
     const fetchImplementation: typeof fetch = () =>
       Promise.resolve(
@@ -631,7 +666,7 @@ describe('PadlHubApiClient booking personalization boundary', () => {
       preferredTimeWindows: [],
       useHistory: true,
     });
-    await client.listBookingRecommendations(6);
+    await client.listBookingRecommendations({ limit: 6, cursor: 'recommendation-cursor' });
 
     expect(requestUrl(calls[0]?.input ?? '')).toBe(
       'https://api.padlhub.test/user/api/v1/local-padel/profile/booking-preferences',
@@ -642,7 +677,7 @@ describe('PadlHubApiClient booking personalization boundary', () => {
     expect(calls[1]?.init?.method).toBe('PUT');
     expect(new Headers(calls[1]?.init?.headers).get('Idempotency-Key')).toBeTruthy();
     expect(requestUrl(calls[2]?.input ?? '')).toBe(
-      'https://api.padlhub.test/user/api/v1/local-padel/recommendations/bookings?limit=6',
+      'https://api.padlhub.test/user/api/v1/local-padel/recommendations/bookings?limit=6&cursor=recommendation-cursor',
     );
     expect(calls.map((call) => requestUrl(call.input)).join(' ')).not.toMatch(/viva|provider/i);
   });

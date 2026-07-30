@@ -76,4 +76,30 @@ describe('legacy CUP promotion source', () => {
       code: 'PROMOTION_LEGACY_RESPONSE_INVALID',
     });
   });
+
+  it('reads the independently managed upper placement from its dedicated route', async () => {
+    const fetchImplementation = vi.fn<typeof fetch>().mockResolvedValue(
+      Response.json({
+        placement: 'cabinet_home_top',
+        rotationEnabled: false,
+        ads: [],
+      }),
+    );
+    const source = new LegacyPromotionSource({
+      baseUrl: 'https://padlhub.su',
+      placement: 'cabinet_home_top',
+      timeoutMs: 1_000,
+      maxAttempts: 1,
+      circuitFailureThreshold: 3,
+      circuitResetMs: 30_000,
+      fetchImplementation,
+    });
+
+    await expect(source.getSnapshot('promotion-top-source-test')).resolves.toMatchObject({
+      rotationEnabled: false,
+      items: [],
+    });
+    const [request] = fetchImplementation.mock.calls[0] ?? [];
+    expect(request).toEqual(new URL('https://padlhub.su/api/advertising/cabinet-home-top'));
+  });
 });

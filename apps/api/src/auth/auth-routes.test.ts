@@ -67,6 +67,8 @@ class FakeRepository implements AuthRepository {
   private bindingValue: TenantAuthBinding = binding;
   private vivaDelegationRevocationCount = 0;
   private phoneLegalAcceptanceCount = 0;
+  private existingSubjectUser: AuthUser | undefined = user;
+  private identityUpsertCount = 0;
   private vivaDelegation:
     | {
         issuer: string;
@@ -93,13 +95,26 @@ class FakeRepository implements AuthRepository {
     return this.vivaDelegation !== undefined;
   }
 
+  public get identityUpserts(): number {
+    return this.identityUpsertCount;
+  }
+
+  public setExistingSubjectUser(nextUser: AuthUser | undefined): void {
+    this.existingSubjectUser = nextUser;
+  }
+
   public resolveTenantAuthBinding(tenantKey: string): Promise<TenantAuthBinding | undefined> {
     return Promise.resolve(
       tenantKey === this.bindingValue.tenantKey ? this.bindingValue : undefined,
     );
   }
 
+  public resolveExistingExternalIdentity(): Promise<AuthUser | undefined> {
+    return Promise.resolve(this.existingSubjectUser);
+  }
+
   public upsertExternalIdentity(): Promise<AuthUser> {
+    this.identityUpsertCount += 1;
     return Promise.resolve(user);
   }
 
@@ -228,6 +243,7 @@ const oauthProvider: VivaOAuthProviderPort = {
         phoneE164: '+79990000001',
         displayName: user.displayName,
       },
+      identityResolution: 'CANONICAL_PROFILE',
       accessToken: 'initial-viva-access-token',
       accessExpiresIn: 300,
       refreshToken: 'initial-viva-refresh-token',
@@ -259,6 +275,7 @@ describe('provider-neutral authentication routes', () => {
       JWT_AUDIENCE: 'phub-api',
       JWT_ACCESS_SECRET: 'test-access-secret-at-least-32-characters',
       JWT_REFRESH_SECRET: 'test-refresh-secret-at-least-32-characters',
+      VIVA_MODE: 'sandbox',
       VIVA_OAUTH_ENABLED: 'true',
       VIVA_OAUTH_REDIRECT_URI:
         'https://api.example.test/user/api/v1/local-padel/auth/viva/callback',
@@ -315,6 +332,138 @@ describe('provider-neutral authentication routes', () => {
       correlationId: 'oauth-refresh-correlation',
     });
     expect(refreshedAccess.accessToken).toBe('refreshed-viva-access-token');
+  });
+
+  it('bootstraps mixed OAuth only through an already-linked issuer and subject', async () => {
+    const oauthConfig = loadConfig({
+      APP_ENV: 'ci',
+      DATABASE_URL: 'postgresql://phub:test@localhost:5432/phub',
+      REDIS_URL: 'redis://localhost:6379',
+      RABBITMQ_URL: 'amqp://phub:test@localhost:5672',
+      JWT_ISSUER: 'phub-identity',
+      JWT_AUDIENCE: 'phub-api',
+      JWT_ACCESS_SECRET: 'test-access-secret-at-least-32-characters',
+      JWT_REFRESH_SECRET: 'test-refresh-secret-at-least-32-characters',
+      VIVA_MODE: 'sandbox',
+      VIVA_OAUTH_ENABLED: 'true',
+      VIVA_OAUTH_REDIRECT_URI:
+        'https://api.example.test/user/api/v1/local-padel/auth/viva/callback',
+      VIVA_OAUTH_SUCCESS_REDIRECT_URL: 'https://app.example.test/',
+      VIVA_DELEGATION_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString('base64url'),
+      VIVA_DIRECT_READ_ENABLED: 'true',
+    });
+    const repository = new FakeRepository();
+    const stateStore = new MemoryVivaOAuthStateStore();
+    const existingSubjectProvider: VivaOAuthProviderPort = {
+      ...oauthProvider,
+      exchangeAuthorizationCode: () =>
+        Promise.resolve({
+          identity: {
+            issuer: 'https://identity.example.test',
+            subject: 'external-user-1',
+            displayName: 'Social Account Name',
+          },
+          identityResolution: 'EXISTING_SUBJECT',
+          accessToken: 'mixed-viva-access-token',
+          accessExpiresIn: 300,
+          refreshToken: 'mixed-viva-refresh-token',
+          refreshExpiresIn: 3600,
+        }),
+    };
+    const service = new AuthService({
+      config: oauthConfig,
+      repository,
+      challengeStore: new MemoryAuthChallengeStore(),
+      providers: new Map([['VIVA', provider]]),
+      vivaOAuthProvider: existingSubjectProvider,
+      vivaOAuthStateStore: stateStore,
+    });
+
+    const started = await service.startVivaOAuth({
+      tenantKey: binding.tenantKey,
+      provider: 'vkid',
+      publicOfferAccepted: true,
+      personalDataPolicyAccepted: true,
+      correlationId: 'mixed-oauth-start-correlation',
+    });
+    const state = new URL(started.redirectUrl).searchParams.get('state') ?? '';
+    const completed = await service.completeVivaOAuth({
+      tenantKey: binding.tenantKey,
+      state,
+      code: 'authorization-code',
+      correlationId: 'mixed-oauth-complete-correlation',
+      idempotencyKey: 'mixed-oauth-complete-idempotency',
+    });
+
+    expect(completed.user.id).toBe(user.id);
+    expect(repository.identityUpserts).toBe(0);
+    expect(repository.hasVivaDelegation).toBe(true);
+  });
+
+  it('fails closed when mixed OAuth returns an issuer and subject that are not linked', async () => {
+    const oauthConfig = loadConfig({
+      APP_ENV: 'ci',
+      DATABASE_URL: 'postgresql://phub:test@localhost:5432/phub',
+      REDIS_URL: 'redis://localhost:6379',
+      RABBITMQ_URL: 'amqp://phub:test@localhost:5672',
+      JWT_ISSUER: 'phub-identity',
+      JWT_AUDIENCE: 'phub-api',
+      JWT_ACCESS_SECRET: 'test-access-secret-at-least-32-characters',
+      JWT_REFRESH_SECRET: 'test-refresh-secret-at-least-32-characters',
+      VIVA_MODE: 'sandbox',
+      VIVA_OAUTH_ENABLED: 'true',
+      VIVA_OAUTH_REDIRECT_URI:
+        'https://api.example.test/user/api/v1/local-padel/auth/viva/callback',
+      VIVA_OAUTH_SUCCESS_REDIRECT_URL: 'https://app.example.test/',
+      VIVA_DELEGATION_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString('base64url'),
+      VIVA_DIRECT_READ_ENABLED: 'true',
+    });
+    const repository = new FakeRepository();
+    repository.setExistingSubjectUser(undefined);
+    const stateStore = new MemoryVivaOAuthStateStore();
+    const existingSubjectProvider: VivaOAuthProviderPort = {
+      ...oauthProvider,
+      exchangeAuthorizationCode: () =>
+        Promise.resolve({
+          identity: {
+            issuer: 'https://identity.example.test',
+            subject: 'unlinked-external-user',
+            displayName: 'Unlinked User',
+          },
+          identityResolution: 'EXISTING_SUBJECT',
+          accessToken: 'mixed-viva-access-token',
+          refreshToken: 'mixed-viva-refresh-token',
+        }),
+    };
+    const service = new AuthService({
+      config: oauthConfig,
+      repository,
+      challengeStore: new MemoryAuthChallengeStore(),
+      providers: new Map([['VIVA', provider]]),
+      vivaOAuthProvider: existingSubjectProvider,
+      vivaOAuthStateStore: stateStore,
+    });
+
+    const started = await service.startVivaOAuth({
+      tenantKey: binding.tenantKey,
+      provider: 'yandex',
+      publicOfferAccepted: true,
+      personalDataPolicyAccepted: true,
+      correlationId: 'unlinked-oauth-start-correlation',
+    });
+    const state = new URL(started.redirectUrl).searchParams.get('state') ?? '';
+
+    await expect(
+      service.completeVivaOAuth({
+        tenantKey: binding.tenantKey,
+        state,
+        code: 'authorization-code',
+        correlationId: 'unlinked-oauth-complete-correlation',
+        idempotencyKey: 'unlinked-oauth-complete-idempotency',
+      }),
+    ).rejects.toMatchObject({ code: 'AUTH_IDENTITY_LINK_REQUIRED' });
+    expect(repository.identityUpserts).toBe(0);
+    expect(repository.hasVivaDelegation).toBe(false);
   });
 
   it('keeps Viva OAuth disabled until the server-side delegation feature is configured', async () => {

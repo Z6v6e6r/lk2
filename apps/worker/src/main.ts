@@ -38,6 +38,7 @@ import {
   WORKER_OPERATIONAL_METRICS_INTERVAL_MS,
 } from './operational-metrics.js';
 import { publishOutboxBatch } from './outbox-publisher.js';
+import { runHomeBaseSyncCycle } from './home-base-sync.js';
 import { runPlatformHomeSyncCycle } from './platform-home-sync.js';
 import { runCommunityHomeSyncCycle } from './community-home-sync.js';
 import { LegacyPromotionSource } from './legacy-promotion-source.js';
@@ -96,16 +97,28 @@ const communityHome = (() => {
       config.COMMUNITIES_READ_MODE === 'legacy' ? ('LEGACY' as const) : ('LOCAL' as const),
   };
 })();
-const promotionSource =
+const promotionSources =
   config.PROMOTIONS_READ_MODE === 'legacy'
-    ? new LegacyPromotionSource({
-        baseUrl: config.PROMOTIONS_LEGACY_BASE_URL,
-        timeoutMs: config.PROMOTIONS_LEGACY_TIMEOUT_MS,
-        maxAttempts: config.PROMOTIONS_LEGACY_MAX_ATTEMPTS,
-        circuitFailureThreshold: config.PROMOTIONS_LEGACY_CIRCUIT_FAILURE_THRESHOLD,
-        circuitResetMs: config.PROMOTIONS_LEGACY_CIRCUIT_RESET_MS,
-        onMetric: (metric) => logger.info({ metric }, 'legacy CUP promotion read'),
-      })
+    ? {
+        hero: new LegacyPromotionSource({
+          baseUrl: config.PROMOTIONS_LEGACY_BASE_URL,
+          placement: 'cabinet_home_top',
+          timeoutMs: config.PROMOTIONS_LEGACY_TIMEOUT_MS,
+          maxAttempts: config.PROMOTIONS_LEGACY_MAX_ATTEMPTS,
+          circuitFailureThreshold: config.PROMOTIONS_LEGACY_CIRCUIT_FAILURE_THRESHOLD,
+          circuitResetMs: config.PROMOTIONS_LEGACY_CIRCUIT_RESET_MS,
+          onMetric: (metric) => logger.info({ metric }, 'legacy CUP hero promotion read'),
+        }),
+        standard: new LegacyPromotionSource({
+          baseUrl: config.PROMOTIONS_LEGACY_BASE_URL,
+          placement: 'cabinet_home',
+          timeoutMs: config.PROMOTIONS_LEGACY_TIMEOUT_MS,
+          maxAttempts: config.PROMOTIONS_LEGACY_MAX_ATTEMPTS,
+          circuitFailureThreshold: config.PROMOTIONS_LEGACY_CIRCUIT_FAILURE_THRESHOLD,
+          circuitResetMs: config.PROMOTIONS_LEGACY_CIRCUIT_RESET_MS,
+          onMetric: (metric) => logger.info({ metric }, 'legacy CUP promotion read'),
+        }),
+      }
     : undefined;
 const createLegacyGamesRosterSource = () =>
   config.LEGACY_GAMES_ROSTER_SYNC_SOURCE === 'public'
@@ -499,14 +512,28 @@ const runPlatformSyncCycle = async (): Promise<void> => {
   }
 };
 
+const runHomeBaseCycle = async (): Promise<void> => {
+  if (shuttingDown || !config.HOME_BASE_SYNC_ENABLED) return;
+  try {
+    const result = await runHomeBaseSyncCycle({ pool, config, logger });
+    if (result.attempted > 0) logger.info({ result }, 'HomeBase sync cycle completed');
+  } catch (error) {
+    logger.error({ error }, 'HomeBase sync cycle failed');
+  } finally {
+    if (!shuttingDown) {
+      setTimeout(() => void runHomeBaseCycle(), config.HOME_BASE_SYNC_INTERVAL_MS);
+    }
+  }
+};
+
 const runPromotionSyncCycle = async (): Promise<void> => {
-  if (shuttingDown || !promotionSource || !profilePhotoStore) return;
+  if (shuttingDown || !promotionSources || !profilePhotoStore) return;
   try {
     const result = await runPromotionHomeSyncCycle({
       pool,
       config,
       logger,
-      source: promotionSource,
+      source: promotionSources,
       store: profilePhotoStore,
     });
     if (result.attempted > 0) logger.info({ result }, 'promotion Home sync cycle completed');
@@ -563,6 +590,7 @@ if (telemetry) void runOperationalMetricsCycle();
 void runVivaSyncCycle();
 void runCommunitySyncCycle();
 void runPlatformSyncCycle();
+void runHomeBaseCycle();
 void runPromotionSyncCycle();
 void runLegacyGamesRosterSync();
 void runWebPushCycle();

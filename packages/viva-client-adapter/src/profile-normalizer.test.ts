@@ -67,6 +67,23 @@ describe('profile normalization', () => {
     expect(() => normalizePadlHubUserProfile({ userId: vivaProfileId })).toThrow();
   });
 
+  it('accepts the stable PadlHub profile-photo delivery path', () => {
+    const avatarUrl =
+      '/public/api/v1/media/profile-photos/11111111-1111-4111-8111-111111111111/22222222-2222-4222-8222-222222222222';
+
+    expect(
+      normalizePadlHubUserProfile({
+        userId: padlHubUserId,
+        displayName: 'Алексей Петров',
+        avatarUrl,
+        phoneLast4: '3190',
+        balanceMinor: 245_000,
+        currency: 'RUB',
+        level: { label: 'C+', value: 3.8, assessmentRequired: false },
+      }),
+    ).toMatchObject({ userId: padlHubUserId, avatarUrl });
+  });
+
   it('accepts bookings only when every item has a PadlHub UUID', () => {
     const payload = {
       version: 'home-17',

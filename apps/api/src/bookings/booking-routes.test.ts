@@ -142,5 +142,117 @@ describe('booking preferences and recommendations routes', () => {
     expect(response.headers['cache-control']).toContain('no-store');
     expect(response.json()).toMatchObject({ personalization: 'BASIC', items: [] });
     expect(JSON.stringify(response.json())).not.toMatch(/score|provider|externalId/i);
+
+    const invalidCursor = await app.inject({
+      method: 'GET',
+      url: '/user/api/v1/local-padel/recommendations/bookings?limit=12&cursor=not-a-valid-recommendation-cursor',
+      headers: { authorization: `Bearer ${await accessToken(['games.play'])}` },
+    });
+    expect(invalidCursor.statusCode).toBe(400);
+    expect(invalidCursor.json()).toMatchObject({
+      code: 'BOOKING_RECOMMENDATION_CURSOR_INVALID',
+    });
+  });
+
+  it('returns PadlHub host media URLs and proxies the provider image', async () => {
+    const activityId = '50000000-0000-4000-8000-000000000001';
+    const sourceUrl = 'https://media.example/private-trainer-photo';
+    const readDate = vi
+      .fn()
+      .mockResolvedValueOnce([
+        {
+          id: activityId,
+          kind: 'TRAINING',
+          title: 'Групповая тренировка',
+          startsAt: '2099-07-29T15:00:00.000Z',
+          endsAt: '2099-07-29T16:00:00.000Z',
+          timezone: 'Europe/Moscow',
+          station: {
+            id: '60000000-0000-4000-8000-000000000001',
+            name: 'Терехово',
+            shortAddress: null,
+          },
+          levelRange: null,
+          capacity: { total: 4, open: 3 },
+          host: {
+            displayName: 'Мария Орлова',
+            avatarUrl: null,
+            role: 'TRAINER',
+          },
+          route: `/trainings?event=${activityId}`,
+        },
+      ])
+      .mockResolvedValue([]);
+    const readAvatarSource = vi.fn().mockReturnValue(sourceUrl);
+    const avatarMedia = {
+      read: vi.fn().mockResolvedValue({
+        body: Buffer.from('webp-host'),
+        etag: '"host-etag"',
+      }),
+    };
+    const app = await buildApp({
+      config,
+      logger: createLogger('booking-routes-test', 'silent'),
+      pool: fakePool(),
+      authService: {
+        issueVivaAccessToken: vi.fn().mockResolvedValue({ accessToken: 'delegated-user-token' }),
+      } as never,
+      bookingPreferencesRepository: {
+        get: vi.fn().mockResolvedValue(defaults),
+        getPlayerLevel: vi.fn().mockResolvedValue(null),
+        getRecommendationProfile: vi
+          .fn()
+          .mockResolvedValue({ preferences: defaults, playerLevel: null }),
+        update: vi.fn(),
+      },
+      gameReadRepository: {
+        getCardProjection: vi.fn(),
+        listPublicCardProjections: vi.fn(),
+        listViewerCardProjections: vi.fn(),
+        listRecommendationCardProjections: vi.fn().mockResolvedValue({
+          candidates: [],
+          history: [],
+        }),
+      },
+      exerciseRecommendationSource: { readDate, readAvatarSource },
+      eventAvatarMedia: avatarMedia,
+    });
+    apps.push(app);
+
+    const recommendations = await app.inject({
+      method: 'GET',
+      url: '/user/api/v1/local-padel/recommendations/bookings?limit=6',
+      headers: { authorization: `Bearer ${await accessToken(['games.play'])}` },
+    });
+
+    expect(recommendations.statusCode).toBe(200);
+    expect(recommendations.json()).toMatchObject({
+      items: [
+        {
+          kind: 'TRAINING',
+          activity: {
+            id: activityId,
+            host: {
+              displayName: 'Мария Орлова',
+              avatarUrl: `/public/api/v1/local-padel/booking-activities/${activityId}/host-avatar`,
+            },
+          },
+        },
+      ],
+    });
+    expect(recommendations.body).not.toMatch(/media\.example|private-trainer-photo/);
+
+    const avatar = await app.inject({
+      method: 'GET',
+      url: `/public/api/v1/local-padel/booking-activities/${activityId}/host-avatar`,
+    });
+    expect(avatar.statusCode).toBe(200);
+    expect(avatar.headers['content-type']).toBe('image/webp');
+    expect(avatar.headers.etag).toBe('"host-etag"');
+    expect(avatar.body).toBe('webp-host');
+    expect(avatarMedia.read).toHaveBeenCalledWith({
+      cacheKey: `booking-activity:${activityId}`,
+      sourceUrl,
+    });
   });
 });

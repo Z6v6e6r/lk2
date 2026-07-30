@@ -2,7 +2,7 @@
 
 import '@testing-library/jest-dom/vitest';
 import type { PlayerProfileView } from '@phub/api-sdk';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ProfilePage } from './ProfilePage.js';
@@ -88,6 +88,54 @@ describe('ProfilePage', () => {
         name: `Алексей Максимов, уровень ${level}, прогресс 64%`,
       }),
     ).toBeVisible();
+  });
+
+  it('switches to an isolated squash profile without showing padel memberships or communities', () => {
+    render(
+      <ProfilePage
+        profile={selfProfile('D+')}
+        logoutBusy={false}
+        communities={{ items: [] }}
+        subscriptions={[]}
+        onLogout={() => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Вид спорта: Падел' }));
+
+    const picker = screen.getByRole('dialog', { name: 'Выберите вид спорта' });
+    fireEvent.click(within(picker).getByRole('button', { name: 'Сквош' }));
+
+    expect(screen.getByText('SquashHub Player')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Вид спорта: Сквош' })).toBeVisible();
+    expect(screen.getByRole('heading', { name: 'Отдельный спортивный профиль' })).toBeVisible();
+    expect(screen.getByRole('main').getAttribute('style')).toContain('squash-level-a.webp');
+    expect(screen.queryByRole('region', { name: 'Подписки и абонементы' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'Сообщества' })).not.toBeInTheDocument();
+  });
+
+  it('switches to an isolated badminton profile with its own artwork', () => {
+    render(
+      <ProfilePage
+        profile={selfProfile('D+')}
+        logoutBusy={false}
+        communities={{ items: [] }}
+        subscriptions={[]}
+        onLogout={() => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Вид спорта: Падел' }));
+
+    const picker = screen.getByRole('dialog', { name: 'Выберите вид спорта' });
+    fireEvent.click(within(picker).getByRole('button', { name: 'Бадминтон' }));
+
+    expect(screen.getByText('BadmintonHub Player')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Вид спорта: Бадминтон' })).toBeVisible();
+    expect(screen.getByText('рекомендации по бадминтону', { exact: false })).toBeVisible();
+    expect(screen.getByRole('main').getAttribute('style')).toContain('badminton-level-a.webp');
+    expect(screen.queryByRole('region', { name: 'Подписки и абонементы' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'Сообщества' })).not.toBeInTheDocument();
   });
 
   it('renders friends as links to PadlHub player profiles', () => {

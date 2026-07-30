@@ -57,6 +57,11 @@ export interface BookingRecommendationActivity {
     readonly total: number | null;
     readonly open: number | null;
   };
+  readonly host: {
+    readonly displayName: string;
+    readonly avatarUrl: string | null;
+    readonly role: 'TRAINER' | 'ORGANIZER';
+  } | null;
   readonly route: string;
 }
 
@@ -75,7 +80,7 @@ export interface BookingRecommendationPage {
   readonly staleAt: string;
   readonly personalization: 'EXPLICIT' | 'LEARNED' | 'BASIC';
   readonly items: readonly BookingRecommendationItem[];
-  readonly nextCursor: null;
+  readonly nextCursor: string | null;
 }
 
 interface LocalSlot {
@@ -105,6 +110,94 @@ interface ScoredRecommendation {
   readonly id: string;
 }
 
+interface BookingRecommendationCursor {
+  readonly v: 1;
+  readonly version: string;
+  readonly offset: number;
+}
+
+const HASH_PATTERN = /^[0-9a-f]{64}$/;
+const RECOMMENDATION_FEED_CACHE_MAX_ENTRIES = 500;
+
+interface CachedBookingRecommendationFeed {
+  readonly version: string;
+  readonly generatedAt: string;
+  readonly staleAt: string;
+  readonly personalization: BookingRecommendationPage['personalization'];
+  readonly items: readonly BookingRecommendationItem[];
+}
+
+const recommendationFeedCache = new Map<string, CachedBookingRecommendationFeed>();
+
+function encodeCursor(cursor: BookingRecommendationCursor): string {
+  return Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url');
+}
+
+function decodeCursor(value: string): BookingRecommendationCursor {
+  try {
+    const parsed = JSON.parse(Buffer.from(value, 'base64url').toString('utf8')) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('shape');
+    const record = parsed as Record<string, unknown>;
+    if (
+      Object.keys(record).sort().join(',') !== 'offset,v,version' ||
+      record.v !== 1 ||
+      typeof record.version !== 'string' ||
+      !HASH_PATTERN.test(record.version) ||
+      typeof record.offset !== 'number' ||
+      !Number.isInteger(record.offset) ||
+      record.offset < 1 ||
+      record.offset > 10_000
+    ) {
+      throw new Error('fields');
+    }
+    return record as unknown as BookingRecommendationCursor;
+  } catch {
+    throw new Error('BOOKING_RECOMMENDATION_CURSOR_INVALID');
+  }
+}
+
+function recommendationFeedCacheKey(tenantId: string, userId: string, version: string): string {
+  return `${tenantId}:${userId}:${version}`;
+}
+
+function cacheRecommendationFeed(
+  tenantId: string,
+  userId: string,
+  feed: CachedBookingRecommendationFeed,
+): void {
+  const now = Date.parse(feed.generatedAt);
+  for (const [key, cached] of recommendationFeedCache) {
+    if (Date.parse(cached.staleAt) < now) recommendationFeedCache.delete(key);
+  }
+  while (recommendationFeedCache.size >= RECOMMENDATION_FEED_CACHE_MAX_ENTRIES) {
+    const oldestKey = recommendationFeedCache.keys().next().value;
+    if (!oldestKey) break;
+    recommendationFeedCache.delete(oldestKey);
+  }
+  recommendationFeedCache.set(recommendationFeedCacheKey(tenantId, userId, feed.version), feed);
+}
+
+function pageFromFeed(
+  feed: CachedBookingRecommendationFeed,
+  offset: number,
+  limit: number,
+): BookingRecommendationPage {
+  if (offset > feed.items.length) throw new Error('BOOKING_RECOMMENDATION_CURSOR_INVALID');
+  const items = feed.items.slice(offset, offset + limit);
+  const nextOffset = offset + items.length;
+  return {
+    version: feed.version,
+    generatedAt: feed.generatedAt,
+    staleAt: feed.staleAt,
+    personalization: feed.personalization,
+    items,
+    nextCursor:
+      nextOffset < feed.items.length
+        ? encodeCursor({ v: 1, version: feed.version, offset: nextOffset })
+        : null,
+  };
+}
+
 function compareRecommendations(left: ScoredRecommendation, right: ScoredRecommendation): number {
   return (
     right.score - left.score ||
@@ -122,6 +215,12 @@ function compareRecommendationSchedule(
 
 function recommendationIdentity(recommendation: ScoredRecommendation): string {
   return `${recommendation.item.kind}:${recommendation.id}`;
+}
+
+function recommendationItemIdentity(recommendation: BookingRecommendationItem): string {
+  return recommendation.kind === 'GAME'
+    ? `GAME:${recommendation.game.id}`
+    : `${recommendation.kind}:${recommendation.activity.id}`;
 }
 
 function selectDiverseRecommendations(
@@ -150,6 +249,26 @@ function selectDiverseRecommendations(
     selectedIds.add(identity);
   }
   return selected.sort(compareRecommendationSchedule).map(({ item }) => item);
+}
+
+function buildPaginatedRecommendationFeed(
+  recommendations: readonly ScoredRecommendation[],
+  firstPageSize: number,
+): readonly BookingRecommendationItem[] {
+  const feed: BookingRecommendationItem[] = [];
+  let remaining = [...recommendations];
+  let batchSize = firstPageSize;
+  while (remaining.length > 0) {
+    const batch = selectDiverseRecommendations(remaining, batchSize);
+    if (batch.length === 0) break;
+    feed.push(...batch);
+    const selected = new Set(batch.map(recommendationItemIdentity));
+    remaining = remaining.filter(
+      (recommendation) => !selected.has(recommendationIdentity(recommendation)),
+    );
+    batchSize = 12;
+  }
+  return feed;
 }
 
 const WEEKDAY: Readonly<Record<string, BookingPreferenceWeekday>> = {
@@ -438,7 +557,17 @@ export async function listBookingRecommendations(input: {
   readonly activities?: readonly VivaExerciseRecommendation[];
   readonly now: string;
   readonly limit: number;
+  readonly cursor?: string;
 }): Promise<BookingRecommendationPage> {
+  const cursor = input.cursor ? decodeCursor(input.cursor) : undefined;
+  if (cursor) {
+    const cachedFeed = recommendationFeedCache.get(
+      recommendationFeedCacheKey(input.tenantId, input.userId, cursor.version),
+    );
+    if (cachedFeed && Date.parse(cachedFeed.staleAt) >= Date.parse(input.now)) {
+      return pageFromFeed(cachedFeed, cursor.offset, input.limit);
+    }
+  }
   const projectionInputs = await input.repository.listRecommendationCardProjections({
     tenantId: input.tenantId,
     viewerUserId: input.userId,
@@ -479,7 +608,8 @@ export async function listBookingRecommendations(input: {
     activities: input.activities ?? [],
     history,
   });
-  const items = selectDiverseRecommendations([...rankedGames, ...rankedActivities], input.limit);
+  const rankedRecommendations = [...rankedGames, ...rankedActivities];
+  const feedItems = buildPaginatedRecommendationFeed(rankedRecommendations, input.limit);
   const version = createHash('sha256')
     .update(
       JSON.stringify({
@@ -498,11 +628,17 @@ export async function listBookingRecommendations(input: {
           item.startsAt,
           item.capacity.open,
         ]),
+        feed: feedItems.map((item) =>
+          item.kind === 'GAME' ? ['GAME', item.game.id] : [item.kind, item.activity.id],
+        ),
       }),
     )
     .digest('hex');
+  if (cursor && cursor.version !== version) {
+    throw new Error('BOOKING_RECOMMENDATION_CURSOR_INVALID');
+  }
   const generatedAt = new Date(input.now).toISOString();
-  return {
+  const feed: CachedBookingRecommendationFeed = {
     version,
     generatedAt,
     staleAt: new Date(Date.parse(generatedAt) + 5 * 60 * 1_000).toISOString(),
@@ -510,7 +646,8 @@ export async function listBookingRecommendations(input: {
       input.preferences,
       completedHistory({ history, now: input.now }),
     ),
-    items,
-    nextCursor: null,
+    items: feedItems,
   };
+  cacheRecommendationFeed(input.tenantId, input.userId, feed);
+  return pageFromFeed(feed, cursor?.offset ?? 0, input.limit);
 }

@@ -13,9 +13,17 @@ describe('Viva exercise recommendation source', () => {
           timeFrom: '2026-07-27T15:00:00.000+03:00',
           timeTo: '2026-07-27T16:30:00.000+03:00',
           studio: { id: 10, name: 'Терехово', address: 'ул. Тестовая, 1' },
-          maxClients: 8,
+          maxClientsCount: 8,
           clientsCount: 5,
           accessLevels: [2.5, 3],
+          trainers: [
+            {
+              id: 'trainer-viva-12',
+              firstName: 'Мария',
+              lastName: 'Орлова',
+              photo: 'https://provider.invalid/trainer.jpg',
+            },
+          ],
         },
         {
           id: 'tournament-viva-77',
@@ -24,8 +32,13 @@ describe('Viva exercise recommendation source', () => {
           timeFrom: '2026-07-28T16:00:00.000+03:00',
           timeTo: '2026-07-28T18:00:00.000+03:00',
           studio: { id: 11, name: 'Сколково' },
-          maxClients: 16,
+          maxClientsCount: 16,
           availablePlaces: 1,
+          organizer: {
+            id: 'organizer-viva-15',
+            displayName: 'Илья Соколов',
+            photo: 'https://provider.invalid/organizer.jpg',
+          },
         },
       ]),
     );
@@ -50,15 +63,33 @@ describe('Viva exercise recommendation source', () => {
         station: { name: 'Терехово' },
         levelRange: { from: 'D+', to: 'C' },
         capacity: { total: 8, open: 3 },
+        host: {
+          displayName: 'Мария Орлова',
+          avatarUrl: null,
+          role: 'TRAINER',
+        },
       },
       {
         kind: 'TOURNAMENT',
         title: 'Мини-турнир',
         station: { name: 'Сколково' },
         capacity: { total: 16, open: 1 },
+        host: {
+          displayName: 'Илья Соколов',
+          avatarUrl: null,
+          role: 'ORGANIZER',
+        },
       },
     ]);
-    expect(JSON.stringify(items)).not.toMatch(/training-viva-42|tournament-viva-77/);
+    expect(JSON.stringify(items)).not.toMatch(
+      /training-viva-42|tournament-viva-77|trainer-viva-12|organizer-viva-15|provider\.invalid/,
+    );
+    expect(source.readAvatarSource(items[0]?.id ?? '')).toBe(
+      'https://provider.invalid/trainer.jpg',
+    );
+    expect(source.readAvatarSource(items[1]?.id ?? '')).toBe(
+      'https://provider.invalid/organizer.jpg',
+    );
     const [, init] = fetchImplementation.mock.calls[0] ?? [];
     expect(Object.fromEntries(new Headers(init?.headers))).toMatchObject({
       authorization: 'Bearer user-token',

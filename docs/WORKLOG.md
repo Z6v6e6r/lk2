@@ -1,5 +1,47 @@
 # Worklog
 
+## 2026-07-30 — Home community rail ten-item bootstrap and cursor continuation
+
+- Expanded both compatibility Home and partial HomeBase community projections from five to ten
+  bounded `CommunitySummary` items without changing identifiers or introducing a client-selected
+  data source. Added an expand migration that validates the ten-item source constraint before
+  removing the previous five-item database limit.
+- Restored the authenticated directory hydration removed during the HomeBase transition: ten
+  projected summaries render immediately, the first canonical ten-item page replaces that fallback
+  and supplies an opaque cursor, and the next page loads near the horizontal scroll boundary. An
+  unavailable HomeBase community component now falls back to that canonical directory read.
+- Kept the standalone communities directory on twenty-item pages and isolated first-page request
+  coalescing by page size.
+
+## 2026-07-29 — HomeBase recovery and trusted Viva egress gate
+
+- Recorded Gate 0 with redacted correlation/status/latency evidence: delegated token issuance was
+  `200`, while exact server/worker profile, booking-list and subscription reads returned `403`;
+  booking details were not attempted because the list read did not authorize an identifier.
+- Accepted additive `GET /home/base` / `HomeBase` semantics: quick actions, locations, additional
+  links and capabilities stay local; community/promotion envelopes use `READY`, `STALE` and
+  `UNAVAILABLE`, with required `revision`, `observedAt` and `staleAt` on available values. Profile
+  is routed separately; balance, messaging, counters, bookings and subscriptions are omitted. The
+  partial snapshot has no global `staleAt`.
+- Kept the complete `GET /home` contract during expand/migrate and rejected browser relay, immediate
+  direct booking/subscription enablement, silent mock/stale fallback and advancing a fresh snapshot
+  around an old profile component.
+- Made trusted user-delegated server/worker egress plus strict schemas and PadlHub UUID mapping the
+  required Gate B before legacy complete-Home Viva components recover or a Viva-backed section is
+  added to HomeBase.
+
+## 2026-07-29 — Viva mixed OAuth bootstrap for server-blocked profile reads
+
+- Confirmed by correlation-stage metrics that Viva OAuth token exchange and JWT verification
+  succeeded while the server-side End User `/profile` read returned `403`.
+- Added a direct-read-gated callback path that can resolve only an already-linked
+  `(tenant_id, issuer, subject)` identity and then issue the existing one-time browser handoff.
+- Kept new and unknown subjects fail-closed with `AUTH_IDENTITY_LINK_REQUIRED`; this path never
+  creates users, trusts browser-supplied Viva identifiers or changes canonical mappings.
+- Connected the self-profile page to the allowlisted direct `profile.read` while other-player
+  profiles remain server-authorized PadlHub reads, and kept Home in a bounded bootstrap-loading
+  state until its single local projection becomes ready.
+
 ## 2026-07-18 — Progressive Home controls restored
 
 - Restored the three Home quick actions (`Игры`, `Турниры`, `Тренировки`) and the

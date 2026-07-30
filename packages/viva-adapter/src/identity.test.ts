@@ -2,7 +2,7 @@ import type { IdentityProviderError } from '@phub/auth';
 import { exportJWK, generateKeyPair, SignJWT } from 'jose';
 import { describe, expect, it, vi } from 'vitest';
 
-import { VivaIdentityProvider } from './identity.js';
+import { VivaIdentityProvider, type VivaIdentityMetric } from './identity.js';
 
 const input = {
   phoneE164: '+79991234567',
@@ -95,6 +95,7 @@ describe('VivaIdentityProvider', () => {
   });
 
   it('binds OAuth subjects to the stable Viva profile identifier', async () => {
+    const metrics: VivaIdentityMetric[] = [];
     const { publicKey, privateKey } = await generateKeyPair('RS256');
     const jwk = { ...(await exportJWK(publicKey)), kid: 'test-key', use: 'sig', alg: 'RS256' };
     const accessToken = await new SignJWT({
@@ -132,6 +133,7 @@ describe('VivaIdentityProvider', () => {
       ...options(),
       mode: 'sandbox',
       fetchImplementation,
+      onMetric: (metric) => metrics.push(metric),
     });
 
     const result = await provider.exchangeAuthorizationCode({
@@ -148,6 +150,140 @@ describe('VivaIdentityProvider', () => {
       displayName: 'Алексей Сергеев',
       phoneE164: '+79603073190',
     });
+    expect(result.identityResolution).toBe('CANONICAL_PROFILE');
+    const profileCall = fetchImplementation.mock.calls.find(([request]) =>
+      fetchUrl(request).pathname.endsWith('/iSkq6G/profile'),
+    );
+    const profileHeaders = new Headers(profileCall?.[1]?.headers);
+    expect(profileHeaders.get('Authorization')).toBe(`Bearer ${accessToken}`);
+    expect(profileHeaders.get('X-Correlation-ID')).toBeNull();
+    expect(
+      metrics.map((metric) => ({
+        operation: metric.operation,
+        outcome: metric.outcome,
+        status: metric.status,
+        correlationId: metric.correlationId,
+      })),
+    ).toEqual([
+      {
+        operation: 'oauth_token_exchange',
+        outcome: 'success',
+        status: 200,
+        correlationId: 'oauth-correlation-123',
+      },
+      {
+        operation: 'jwt_verify',
+        outcome: 'success',
+        status: undefined,
+        correlationId: 'oauth-correlation-123',
+      },
+      {
+        operation: 'profile_read',
+        outcome: 'success',
+        status: 200,
+        correlationId: 'oauth-correlation-123',
+      },
+      {
+        operation: 'oauth_exchange',
+        outcome: 'success',
+        status: 200,
+        correlationId: undefined,
+      },
+    ]);
+  });
+
+  it('returns a verified existing-subject bootstrap when server profile reads are forbidden', async () => {
+    const { publicKey, privateKey } = await generateKeyPair('RS256');
+    const jwk = { ...(await exportJWK(publicKey)), kid: 'test-key', use: 'sig', alg: 'RS256' };
+    const accessToken = await new SignJWT({
+      azp: 'widget',
+      name: 'Social Account Name',
+    })
+      .setProtectedHeader({ alg: 'RS256', kid: 'test-key' })
+      .setIssuer('https://kc.vivacrm.invalid/realms/clients')
+      .setSubject('already-linked-subject')
+      .setExpirationTime('5m')
+      .sign(privateKey);
+    const fetchImplementation = vi.fn<typeof fetch>((request) => {
+      const url = fetchUrl(request);
+      if (url.pathname.endsWith('/protocol/openid-connect/token')) {
+        return Promise.resolve(
+          Response.json({ access_token: accessToken, refresh_token: 'external-refresh' }),
+        );
+      }
+      if (url.pathname.endsWith('/protocol/openid-connect/certs')) {
+        return Promise.resolve(Response.json({ keys: [jwk] }));
+      }
+      if (url.pathname.endsWith('/iSkq6G/profile')) {
+        return Promise.resolve(new Response(null, { status: 403 }));
+      }
+      return Promise.resolve(new Response(null, { status: 404 }));
+    });
+    const provider = new VivaIdentityProvider({
+      ...options(),
+      mode: 'sandbox',
+      allowExistingSubjectOAuthBootstrap: true,
+      fetchImplementation,
+    });
+
+    const result = await provider.exchangeAuthorizationCode({
+      code: 'authorization-code',
+      codeVerifier: 'pkce-verifier',
+      providerTenantKey: 'iSkq6G',
+      redirectUri: 'https://app.example.test/callback',
+      correlationId: 'oauth-subject-correlation-123',
+    });
+
+    expect(result.identityResolution).toBe('EXISTING_SUBJECT');
+    expect(result.identity).toEqual({
+      issuer: 'https://kc.vivacrm.invalid/realms/clients',
+      subject: 'already-linked-subject',
+      displayName: 'Social Account Name',
+    });
+    expect(result.accessToken).toBe(accessToken);
+    expect(result.refreshToken).toBe('external-refresh');
+  });
+
+  it('does not use subject-only OAuth bootstrap for non-policy profile failures', async () => {
+    const { publicKey, privateKey } = await generateKeyPair('RS256');
+    const jwk = { ...(await exportJWK(publicKey)), kid: 'test-key', use: 'sig', alg: 'RS256' };
+    const accessToken = await new SignJWT({ azp: 'widget' })
+      .setProtectedHeader({ alg: 'RS256', kid: 'test-key' })
+      .setIssuer('https://kc.vivacrm.invalid/realms/clients')
+      .setSubject('already-linked-subject')
+      .setExpirationTime('5m')
+      .sign(privateKey);
+    const fetchImplementation = vi.fn<typeof fetch>((request) => {
+      const url = fetchUrl(request);
+      if (url.pathname.endsWith('/protocol/openid-connect/token')) {
+        return Promise.resolve(
+          Response.json({ access_token: accessToken, refresh_token: 'external-refresh' }),
+        );
+      }
+      if (url.pathname.endsWith('/protocol/openid-connect/certs')) {
+        return Promise.resolve(Response.json({ keys: [jwk] }));
+      }
+      if (url.pathname.endsWith('/iSkq6G/profile')) {
+        return Promise.resolve(new Response(null, { status: 500 }));
+      }
+      return Promise.resolve(new Response(null, { status: 404 }));
+    });
+    const provider = new VivaIdentityProvider({
+      ...options(),
+      mode: 'sandbox',
+      allowExistingSubjectOAuthBootstrap: true,
+      fetchImplementation,
+    });
+
+    await expect(
+      provider.exchangeAuthorizationCode({
+        code: 'authorization-code',
+        codeVerifier: 'pkce-verifier',
+        providerTenantKey: 'iSkq6G',
+        redirectUri: 'https://app.example.test/callback',
+        correlationId: 'oauth-non-policy-correlation-123',
+      }),
+    ).rejects.toMatchObject({ code: 'AUTH_PROVIDER_UNAVAILABLE' });
   });
 
   it('opens its circuit after bounded upstream failures', async () => {

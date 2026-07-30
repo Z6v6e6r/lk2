@@ -95,6 +95,8 @@ export interface IdentityProviderPort {
 
 export type VivaOAuthProvider = 'vkid' | 'yandex';
 
+export type VivaOAuthIdentityResolution = 'CANONICAL_PROFILE' | 'EXISTING_SUBJECT';
+
 export interface VivaOAuthProviderPort {
   createAuthorizationUrl(input: {
     readonly provider: VivaOAuthProvider;
@@ -111,6 +113,7 @@ export interface VivaOAuthProviderPort {
     readonly correlationId: string;
   }): Promise<{
     readonly identity: VerifiedExternalIdentity;
+    readonly identityResolution: VivaOAuthIdentityResolution;
     readonly accessToken: string;
     readonly accessExpiresIn?: number;
     readonly refreshToken: string;

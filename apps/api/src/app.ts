@@ -11,7 +11,9 @@ import type {
   ClientRoutingPlanRepository,
   AdminNotificationRepository,
   BookingPreferencesRepository,
+  BookingScreenMappingRepository,
   ActivityHistoryRepository,
+  HomeBaseProjectionRepository,
   HomeDashboardProjectionRepository,
   GameResultRepository,
   GameRosterRepository,
@@ -30,6 +32,7 @@ import type {
   ProfileSummaryRepository,
 } from '@phub/database';
 import { isValidIdempotencyKey, type ClientPlatform } from '@phub/domain';
+import { homeBaseSchema, normalizeHomeBaseFreshness, type HomeBase } from '@phub/home-projection';
 import type { NotificationEndpointCipher } from '@phub/notifications';
 import type { VivaExerciseRecommendationSourceAdapter } from '@phub/viva-adapter';
 import type { Logger } from 'pino';
@@ -45,6 +48,7 @@ import { registerGiftCertificateAdminRoutes } from './admin/gift-certificate-adm
 import type { AuthService } from './auth/auth-service.js';
 import { registerBookingPreferenceRoutes } from './bookings/booking-preference-routes.js';
 import { registerBookingRecommendationRoutes } from './bookings/booking-recommendation-routes.js';
+import type { BookingScreenReadJobStore } from './bookings/booking-screen-read-job-store.js';
 import {
   registerActivityHistoryRoutes,
   type ActivityHistoryRefreshService,
@@ -146,6 +150,7 @@ export interface BuildAppOptions {
   readonly authDependencyReady?: () => Promise<boolean>;
   readonly communityDirectory?: CommunityDirectoryService;
   readonly homeDashboardRepository?: Pick<HomeDashboardProjectionRepository, 'get'>;
+  readonly homeBaseRepository?: Pick<HomeBaseProjectionRepository, 'get'>;
   readonly gameRosterRepository?: Pick<
     GameRosterRepository,
     'join' | 'joinWaitlist' | 'leave' | 'leaveWaitlist' | 'getOperation'
@@ -181,12 +186,18 @@ export interface BuildAppOptions {
     Partial<Pick<ProfileSummaryRepository, 'getDisplayNames' | 'getLevelValues'>>;
   readonly profilePhotoMediaStore?: ProfilePhotoMediaStore;
   readonly bookingPreferencesRepository?: BookingPreferencesRepository;
+  readonly bookingScreenReadJobStore?: BookingScreenReadJobStore;
+  readonly bookingScreenMappingRepository?: BookingScreenMappingRepository;
   readonly activityHistoryRepository?: ActivityHistoryRepository;
   readonly activityHistoryRefresher?: ActivityHistoryRefreshService;
   readonly tournamentSummarySource?: TournamentSummarySource;
   readonly coachGameSummarySource?: CoachGameSummarySource;
   readonly eventAvatarMedia?: EventAvatarMedia;
-  readonly exerciseRecommendationSource?: Pick<VivaExerciseRecommendationSourceAdapter, 'readDate'>;
+  readonly exerciseRecommendationSource?: Pick<
+    VivaExerciseRecommendationSourceAdapter,
+    'readDate'
+  > &
+    Partial<Pick<VivaExerciseRecommendationSourceAdapter, 'readAvatarSource'>>;
   readonly rateLimitRedis?: Redis;
 }
 
@@ -595,6 +606,12 @@ export async function buildApp(options: BuildAppOptions) {
     ...(options.bookingPreferencesRepository
       ? { preferencesRepository: options.bookingPreferencesRepository }
       : {}),
+    ...(options.bookingScreenReadJobStore
+      ? { clientAssistedJobStore: options.bookingScreenReadJobStore }
+      : {}),
+    ...(options.bookingScreenMappingRepository
+      ? { bookingScreenMappingRepository: options.bookingScreenMappingRepository }
+      : {}),
     ...(options.profilePhotoMediaRepository
       ? { photoRepository: options.profilePhotoMediaRepository }
       : {}),
@@ -617,6 +634,8 @@ export async function buildApp(options: BuildAppOptions) {
             ).accessToken,
         }
       : {}),
+    avatarMedia: eventAvatarMedia,
+    publicTenantHandlers: [resolvePublicTenant],
     authenticatedTenantHandlers: [authenticate, authorizeGamesPlayer, resolveTenant],
   });
   registerActivityHistoryRoutes(app as unknown as FastifyInstance, {
@@ -1225,6 +1244,78 @@ export async function buildApp(options: BuildAppOptions) {
           : 'private, max-age=15, stale-while-revalidate=45',
       );
       return parsedDashboard.data;
+    },
+  );
+
+  app.get(
+    '/user/api/v1/:tenantKey/home/base',
+    { preHandler: [authenticate, resolveTenant] },
+    async (request, reply) => {
+      const tenantId = request.tenantId;
+      const userId = request.padlHubClaims?.sub;
+      if (!tenantId || !userId) {
+        return sendApiError(request, reply, 401, 'AUTH_REQUIRED', 'Требуется авторизация.');
+      }
+      const user = options.authService
+        ? await options.authService.getUserContext(tenantId, userId)
+        : undefined;
+      if (options.authService && !user) {
+        return sendApiError(request, reply, 401, 'AUTH_SESSION_REVOKED', 'Сессия завершена.');
+      }
+      const projection = await options.homeBaseRepository?.get(tenantId, userId);
+      if (!projection) {
+        return sendApiError(
+          request,
+          reply,
+          503,
+          'HOME_BASE_PROJECTION_NOT_READY',
+          'Базовые данные главной страницы ещё не подготовлены.',
+        );
+      }
+
+      let homeBase: HomeBase;
+      try {
+        homeBase = normalizeHomeBaseFreshness(
+          projection.payload,
+          new Date(),
+          options.config.HOME_PROJECTION_MAX_STALE_SECONDS,
+        );
+      } catch (error) {
+        request.log.error(
+          {
+            err: error,
+            tenantId,
+            userId,
+            sourceRevision: projection.sourceRevision,
+          },
+          'invalid HomeBase projection rejected',
+        );
+        return sendApiError(
+          request,
+          reply,
+          503,
+          'HOME_BASE_PROJECTION_INVALID',
+          'Базовые данные главной страницы временно недоступны.',
+        );
+      }
+      if (
+        !homeBaseSchema.safeParse(homeBase).success ||
+        homeBase.snapshot.source !== 'LOCAL_PROJECTION' ||
+        homeBase.snapshot.completeness !== 'PARTIAL' ||
+        homeBase.snapshot.version !== projection.snapshotVersion ||
+        Date.parse(homeBase.snapshot.generatedAt) !== Date.parse(projection.generatedAt) ||
+        homeBase.viewerUserId !== userId
+      ) {
+        return sendApiError(
+          request,
+          reply,
+          503,
+          'HOME_BASE_PROJECTION_INVALID',
+          'Базовые данные главной страницы временно недоступны.',
+        );
+      }
+      reply.header('Cache-Control', 'private, no-store');
+      return homeBase;
     },
   );
 

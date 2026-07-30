@@ -7,6 +7,7 @@ export type AuthenticatedSession = components['schemas']['AuthenticatedSession']
 export type AuthenticatedUser = components['schemas']['AuthenticatedUser'];
 export type UserContext = components['schemas']['UserContext'];
 export type HomeDashboard = components['schemas']['HomeDashboard'];
+export type HomeBase = components['schemas']['HomeBase'];
 export type LocationList = components['schemas']['LocationList'];
 export type LocationDetail = components['schemas']['LocationDetail'];
 export type CommunityMembershipPage = components['schemas']['CommunityMembershipPage'];
@@ -87,6 +88,55 @@ export interface ActivityHistoryFilters {
   readonly cursor?: string;
   readonly limit?: number;
 }
+
+export interface BookingRecommendationFilters {
+  readonly limit?: number;
+  readonly cursor?: string;
+}
+
+export interface BookingScreenScheduleReadCommand {
+  readonly commandId: string;
+  readonly operation: 'schedule.read';
+  readonly date: string;
+}
+
+export interface BookingScreenUpcomingReadCommand {
+  readonly commandId: string;
+  readonly operation: 'bookings.read';
+  readonly detailsOperation: 'bookings.details.read';
+  readonly page: 0;
+  readonly size: 50;
+}
+
+export type BookingScreenReadCommand =
+  BookingScreenScheduleReadCommand | BookingScreenUpcomingReadCommand;
+
+export interface BookingScreenReadJob {
+  readonly jobId: string;
+  readonly screen: 'FOR_ME' | 'MY_BOOKINGS';
+  readonly expiresAt: string;
+  readonly commands: readonly BookingScreenReadCommand[];
+  readonly concurrency: number;
+}
+
+export interface BookingScreenRecommendationReadCompletion {
+  readonly screen: 'FOR_ME';
+  readonly state: 'READY' | 'PARTIAL';
+  readonly completedCommands: number;
+  readonly totalCommands: number;
+  readonly page: BookingRecommendationPage;
+}
+
+export interface BookingScreenUpcomingReadCompletion {
+  readonly screen: 'MY_BOOKINGS';
+  readonly state: 'READY' | 'PARTIAL';
+  readonly completedCommands: number;
+  readonly totalCommands: number;
+  readonly bookings: UserUpcomingBookings;
+}
+
+export type BookingScreenReadCompletion =
+  BookingScreenRecommendationReadCompletion | BookingScreenUpcomingReadCompletion;
 
 export type RequestAuthMode = 'none' | 'required';
 export type SessionIntent = 'refresh' | 'logout';
@@ -441,9 +491,55 @@ export class PadlHubApiClient {
     return this.request<ActivityHistoryPage>(`/bookings/history${suffix}`);
   }
 
-  public listBookingRecommendations(limit = 6): Promise<BookingRecommendationPage> {
-    const query = new URLSearchParams({ limit: String(limit) });
+  public listBookingRecommendations(
+    input: BookingRecommendationFilters = {},
+  ): Promise<BookingRecommendationPage> {
+    const query = new URLSearchParams({ limit: String(input.limit ?? 6) });
+    if (input.cursor) query.set('cursor', input.cursor);
     return this.request<BookingRecommendationPage>(`/recommendations/bookings?${query.toString()}`);
+  }
+
+  public startBookingScreenReadJob(
+    screen: 'FOR_ME' | 'MY_BOOKINGS',
+  ): Promise<BookingScreenReadJob> {
+    return this.request<BookingScreenReadJob>('/booking-screen-read-jobs', {
+      method: 'POST',
+      idempotencyKey: createCorrelationId(),
+      body: jsonRequestBody({ screen }),
+    });
+  }
+
+  public submitBookingScreenReadResult(
+    jobId: string,
+    commandId: string,
+    payload: unknown,
+  ): Promise<{
+    readonly accepted: boolean;
+    readonly replayed: boolean;
+    readonly itemCount: number;
+  }> {
+    return this.request(
+      `/booking-screen-read-jobs/${encodeURIComponent(jobId)}/results/${encodeURIComponent(commandId)}`,
+      {
+        method: 'POST',
+        idempotencyKey: createCorrelationId(),
+        body: jsonRequestBody({ payload }),
+      },
+    );
+  }
+
+  public completeBookingScreenReadJob(
+    jobId: string,
+    limit: number,
+  ): Promise<BookingScreenReadCompletion> {
+    return this.request<BookingScreenReadCompletion>(
+      `/booking-screen-read-jobs/${encodeURIComponent(jobId)}/complete`,
+      {
+        method: 'POST',
+        idempotencyKey: createCorrelationId(),
+        body: jsonRequestBody({ limit }),
+      },
+    );
   }
 
   public async getHomeDashboard(): Promise<HomeDashboard> {
@@ -452,6 +548,17 @@ export class PadlHubApiClient {
     return {
       ...dashboard,
       locations: dashboard.locations.map((location) => ({
+        ...location,
+        imageUrl: location.imageUrl ? this.resolveApiMediaUrl(location.imageUrl) : null,
+      })),
+    };
+  }
+
+  public async getHomeBase(): Promise<HomeBase> {
+    const homeBase = await this.request<HomeBase>('/home/base');
+    return {
+      ...homeBase,
+      locations: homeBase.locations.map((location) => ({
         ...location,
         imageUrl: location.imageUrl ? this.resolveApiMediaUrl(location.imageUrl) : null,
       })),

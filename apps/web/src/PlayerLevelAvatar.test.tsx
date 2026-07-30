@@ -152,6 +152,29 @@ describe('PlayerLevelAvatar', () => {
     expect(avatar.querySelector('[data-avatar-initials]')).toHaveTextContent('ИП');
   });
 
+  it('fills the avatar frame without rendering the level ring when requested', () => {
+    render(
+      <PlayerLevelAvatar
+        alt="Мария Орлова"
+        level="C"
+        showLevelRing={false}
+        src="/public/api/v1/local-padel/booking-activities/activity/host-avatar"
+        variant="participant"
+      />,
+    );
+
+    const avatar = screen.getByRole('img', {
+      name: 'Мария Орлова, уровень C, прогресс 0%',
+    });
+    expect(avatar).toHaveAttribute('data-player-level-ring-visible', 'false');
+    expect(avatar.querySelector('[data-player-level-ring]')).not.toBeInTheDocument();
+    expect(avatar.querySelector('[data-player-level-photo]')).toHaveAttribute(
+      'src',
+      '/public/api/v1/local-padel/booking-activities/activity/host-avatar',
+    );
+    expect(avatar.querySelector('[data-player-level-badge]')).toHaveTextContent('C');
+  });
+
   it('selects a stable fallback from all twenty supplied backgrounds', () => {
     expect(AVATAR_BACKGROUND_URLS).toHaveLength(20);
     expect(new Set(AVATAR_BACKGROUND_URLS).size).toBe(20);
