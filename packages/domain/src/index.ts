@@ -24,6 +24,7 @@ export const DIRECT_VIVA_READ_OPERATIONS = [
   'profile.read',
   'bookings.read',
   'bookings.details.read',
+  'bookings.history.read',
   'subscriptions.read',
   'schedule.read',
 ] as const;

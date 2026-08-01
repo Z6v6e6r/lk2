@@ -230,6 +230,26 @@ function normalizeRecord(booking: z.infer<typeof bookingSchema>): VivaBookingHis
   };
 }
 
+/**
+ * Validates and normalizes a browser-relayed Viva history page. Raw provider
+ * identifiers remain inside the server integration boundary.
+ */
+export function normalizeVivaBookingHistoryPayload(input: unknown): VivaBookingHistoryPage {
+  const parsed = historyPageSchema.parse(input);
+  const isLastPage = parsed.last || parsed.number + 1 >= parsed.totalPages;
+  return {
+    records: parsed.content.flatMap((booking) => {
+      const normalized = normalizeRecord(booking);
+      return normalized ? [normalized] : [];
+    }),
+    page: parsed.number,
+    size: parsed.size,
+    totalElements: parsed.totalElements,
+    isLastPage,
+    nextPage: isLastPage ? null : parsed.number + 1,
+  };
+}
+
 function isRetryableStatus(status: number): boolean {
   return status === 408 || status === 429 || status >= 500;
 }
@@ -356,7 +376,8 @@ export class VivaBookingHistorySourceAdapter implements VivaBookingHistorySource
             response.status,
           );
         }
-        const parsed = historyPageSchema.safeParse(await response.json());
+        const rawPayload: unknown = await response.json();
+        const parsed = historyPageSchema.safeParse(rawPayload);
         if (!parsed.success) {
           throw new VivaBookingHistorySourceError(
             'EXTERNAL_SOURCE_RESPONSE_INVALID',
@@ -368,7 +389,7 @@ export class VivaBookingHistorySourceAdapter implements VivaBookingHistorySource
             })),
           );
         }
-        const isLastPage = parsed.data.last || parsed.data.number + 1 >= parsed.data.totalPages;
+        const normalizedPage = normalizeVivaBookingHistoryPayload(rawPayload);
         this.consecutiveFailures = 0;
         this.circuitOpenedAt = undefined;
         this.emit({
@@ -378,17 +399,7 @@ export class VivaBookingHistorySourceAdapter implements VivaBookingHistorySource
           status: response.status,
           durationMs: Math.max(0, this.now() - startedAt),
         });
-        return {
-          records: parsed.data.content.flatMap((booking) => {
-            const normalized = normalizeRecord(booking);
-            return normalized ? [normalized] : [];
-          }),
-          page: parsed.data.number,
-          size: parsed.data.size,
-          totalElements: parsed.data.totalElements,
-          isLastPage,
-          nextPage: isLastPage ? null : parsed.data.number + 1,
-        };
+        return normalizedPage;
       } catch (error) {
         const failure =
           error instanceof VivaBookingHistorySourceError

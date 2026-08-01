@@ -8,3 +8,4 @@ contracts/imported/
 .env
 apps/mobile/android
 apps/mobile/ios
+.worktrees

@@ -7,6 +7,7 @@ const operations = [
   'profile.read',
   'bookings.read',
   'bookings.details.read',
+  'bookings.history.read',
   'subscriptions.read',
   'schedule.read',
 ] as const;
@@ -113,6 +114,29 @@ describe('client transport executor', () => {
     expect(detailsUrl.pathname).toBe('/end-user/api/v1/tenant%20key/bookings/list');
     expect(detailsUrl.searchParams.getAll('bookingIds')).toEqual(['active-booking-secret']);
     expect(detailsUrl.toString()).not.toContain('cancelled-booking-secret');
+  });
+
+  it('executes one fixed client-assisted history page without server fallback', async () => {
+    const payload = { content: [], totalPages: 0, totalElements: 0, last: true };
+    const vivaFetch = vi.fn<typeof fetch>().mockResolvedValue(Response.json(payload));
+    const executor = createClientTransportExecutor({
+      getRoutingPlan: vi.fn().mockResolvedValue(plan('MIXED_END_USER_READS')),
+      getVivaAccessToken: () => 'user-access-token',
+      refreshVivaAccessToken: vi.fn(),
+      executePadlHub: vi.fn(),
+      fetchImplementation: vivaFetch,
+    });
+
+    await expect(
+      executor.executeClientAssistedActivityHistoryRead({
+        operation: 'bookings.history.read',
+        page: 3,
+        size: 50,
+      }),
+    ).resolves.toEqual(payload);
+    expect((vivaFetch.mock.calls[0]?.[0] as URL).toString()).toBe(
+      'https://api.vivacrm.invalid/end-user/api/v2/tenant%20key/bookings/history?includeCanceled=true&page=3&size=50',
+    );
   });
 
   it('fails a client-assisted read closed when direct transport is absent', async () => {

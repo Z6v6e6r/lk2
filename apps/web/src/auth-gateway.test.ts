@@ -492,6 +492,7 @@ describe('browser auth gateway', () => {
       'profile.read',
       'bookings.read',
       'bookings.details.read',
+      'bookings.history.read',
       'subscriptions.read',
       'schedule.read',
     ].map((operation) => ({ operation, transport: 'PADLHUB_API', fallback: 'PADLHUB_API' }));
@@ -690,12 +691,21 @@ describe('browser auth gateway', () => {
       'profile.read',
       'bookings.read',
       'bookings.details.read',
+      'bookings.history.read',
       'subscriptions.read',
       'schedule.read',
     ];
+    let projectionReady = false;
     const fetchImplementation = vi.fn<typeof fetch>((input) => {
       const url = requestUrl(input);
       if (url.endsWith('/auth/session/refresh')) return Promise.resolve(Response.json(session));
+      if (url.endsWith('/bookings/upcoming')) {
+        return Promise.resolve(
+          projectionReady
+            ? Response.json(bookings)
+            : Response.json({ code: 'BOOKINGS_PROJECTION_NOT_READY' }, { status: 503 }),
+        );
+      }
       if (url.endsWith('/booking-screen-read-jobs')) return Promise.resolve(Response.json(job));
       if (url.endsWith('/routing-plan')) {
         return Promise.resolve(
@@ -744,6 +754,7 @@ describe('browser auth gateway', () => {
         );
       }
       if (url.endsWith(`/booking-screen-read-jobs/${job.jobId}/complete`)) {
+        projectionReady = true;
         return Promise.resolve(
           Response.json({
             screen: 'MY_BOOKINGS',
@@ -777,8 +788,192 @@ describe('browser auth gateway', () => {
       'https://api.vivacrm.invalid/end-user/api/v2/iSkq6G/bookings?page=0&size=50',
     );
     expect(urls.filter((url) => url.startsWith('https://api.vivacrm.invalid/'))).toHaveLength(2);
-    expect(urls.some((url) => url.endsWith('/bookings/upcoming'))).toBe(false);
+    expect(urls.filter((url) => url.endsWith('/bookings/upcoming'))).toHaveLength(2);
     expect(urls.filter((url) => url.endsWith('/auth/viva/access'))).toHaveLength(1);
+  });
+
+  it('renders a fresh My bookings projection without contacting Viva', async () => {
+    const userId = '00000000-0000-4000-8000-000000000001';
+    const bookings = {
+      version: 'c'.repeat(64),
+      generatedAt: new Date().toISOString(),
+      staleAt: new Date(Date.now() + 60_000).toISOString(),
+      items: [],
+    };
+    const fetchImplementation = vi.fn<typeof fetch>((input) => {
+      const url = requestUrl(input);
+      if (url.endsWith('/auth/session/refresh')) {
+        return Promise.resolve(
+          Response.json({
+            accessToken: 'short-lived-padlhub-token',
+            tokenType: 'Bearer',
+            expiresAt: '2099-07-11T12:10:00.000Z',
+            user: { id: userId, displayName: 'Анна' },
+            context: {
+              userId,
+              tenantId: '00000000-0000-4000-8000-000000000002',
+              displayName: 'Анна',
+              phoneLast4: '0001',
+              roles: ['client'],
+              permissions: ['profile.read'],
+            },
+          }),
+        );
+      }
+      if (url.endsWith('/bookings/upcoming')) return Promise.resolve(Response.json(bookings));
+      return Promise.resolve(new Response(null, { status: 404 }));
+    });
+    const gateway = createBrowserAuthGateway({
+      baseUrl: 'https://api.padlhub.test/',
+      tenantKey: 'padlhub',
+      appVersion: 'test',
+      fetchImplementation,
+    });
+
+    await gateway.restoreSession();
+    await expect(gateway.getUpcomingBookings()).resolves.toEqual(bookings);
+
+    const urls = fetchImplementation.mock.calls.map(([input]) => requestUrl(input));
+    expect(urls.filter((url) => url.endsWith('/bookings/upcoming'))).toHaveLength(1);
+    expect(urls.some((url) => url.includes('vivacrm'))).toBe(false);
+    expect(urls.some((url) => url.endsWith('/booking-screen-read-jobs'))).toBe(false);
+  });
+
+  it('refreshes activity history in the browser before reading the PadlHub projection', async () => {
+    const userId = '00000000-0000-4000-8000-000000000001';
+    const session = {
+      accessToken: 'short-lived-padlhub-token',
+      tokenType: 'Bearer',
+      expiresAt: '2099-07-11T12:10:00.000Z',
+      user: { id: userId, displayName: 'Анна' },
+      context: {
+        userId,
+        tenantId: '00000000-0000-4000-8000-000000000002',
+        displayName: 'Анна',
+        phoneLast4: '0001',
+        roles: ['client'],
+        permissions: ['profile.read'],
+      },
+    };
+    const jobId = '10000000-0000-4000-8000-000000000011';
+    const commandId = '20000000-0000-4000-8000-000000000011';
+    const history = {
+      items: [],
+      nextCursor: null,
+      freshness: 'FRESH',
+      coverage: 'COMPLETE',
+      generatedAt: '2026-08-01T20:00:00.000Z',
+    };
+    const operationNames = [
+      'profile.read',
+      'bookings.read',
+      'bookings.details.read',
+      'bookings.history.read',
+      'subscriptions.read',
+      'schedule.read',
+    ];
+    let historyProjectionReads = 0;
+    const fetchImplementation = vi.fn<typeof fetch>((input) => {
+      const url = requestUrl(input);
+      if (url.endsWith('/auth/session/refresh')) return Promise.resolve(Response.json(session));
+      if (url.endsWith('/activity-history-read-jobs')) {
+        return Promise.resolve(
+          Response.json({
+            jobId,
+            screen: 'ACTIVITY_HISTORY',
+            expiresAt: '2099-07-11T12:02:00.000Z',
+            concurrency: 1,
+            commands: [{ commandId, operation: 'bookings.history.read', page: 0, size: 50 }],
+          }),
+        );
+      }
+      if (url.endsWith('/routing-plan')) {
+        return Promise.resolve(
+          Response.json({
+            revision: '9',
+            mode: 'MIXED_END_USER_READS',
+            issuedAt: new Date().toISOString(),
+            expiresAt: new Date(Date.now() + 60_000).toISOString(),
+            operations: operationNames.map((operation) => ({
+              operation,
+              transport: 'PADLHUB_API',
+              fallback: 'UNAVAILABLE',
+            })),
+            directViva: {
+              apiBaseUrl: 'https://api.vivacrm.invalid/end-user/api',
+              providerTenantKey: 'iSkq6G',
+              accessTokenPath: '/auth/viva/access',
+              allowedRequestHeaders: ['Authorization'],
+            },
+          }),
+        );
+      }
+      if (url.endsWith('/auth/viva/access')) {
+        return Promise.resolve(
+          Response.json({
+            accessToken: 'short-lived-viva-token',
+            expiresAt: '2099-07-11T12:05:00.000Z',
+          }),
+        );
+      }
+      if (url.includes('/v2/iSkq6G/bookings/history?')) {
+        return Promise.resolve(
+          Response.json({
+            content: [],
+            totalPages: 0,
+            totalElements: 0,
+            last: true,
+            numberOfElements: 0,
+            size: 50,
+            number: 0,
+            empty: true,
+          }),
+        );
+      }
+      if (url.includes(`/activity-history-read-jobs/${jobId}/results/${commandId}`)) {
+        return Promise.resolve(
+          Response.json({ accepted: true, replayed: false, itemCount: 0 }, { status: 202 }),
+        );
+      }
+      if (url.endsWith(`/activity-history-read-jobs/${jobId}/complete`)) {
+        return Promise.resolve(
+          Response.json({
+            screen: 'ACTIVITY_HISTORY',
+            state: 'READY',
+            completedCommands: 1,
+            totalCommands: 1,
+          }),
+        );
+      }
+      if (url.includes('/bookings/history?')) {
+        historyProjectionReads += 1;
+        return Promise.resolve(
+          Response.json(
+            historyProjectionReads === 1 ? { ...history, freshness: 'STALE' } : history,
+          ),
+        );
+      }
+      return Promise.resolve(new Response(null, { status: 404 }));
+    });
+    const gateway = createBrowserAuthGateway({
+      baseUrl: 'https://api.padlhub.test/',
+      tenantKey: 'padlhub',
+      appVersion: 'test',
+      fetchImplementation,
+    });
+
+    await gateway.restoreSession();
+    await expect(gateway.getActivityHistory({ status: 'COMPLETED', limit: 20 })).resolves.toEqual(
+      history,
+    );
+
+    const urls = fetchImplementation.mock.calls.map(([input]) => requestUrl(input));
+    expect(urls).toContain(
+      'https://api.vivacrm.invalid/end-user/api/v2/iSkq6G/bookings/history?includeCanceled=true&page=0&size=50',
+    );
+    expect(urls.at(-1)).toBe(
+      'https://api.padlhub.test/user/api/v1/padlhub/bookings/history?status=COMPLETED&limit=20',
+    );
   });
 
   it('keeps the self profile on PadlHub when a routing plan advertises direct Viva', async () => {
@@ -801,6 +996,7 @@ describe('browser auth gateway', () => {
       'profile.read',
       'bookings.read',
       'bookings.details.read',
+      'bookings.history.read',
       'subscriptions.read',
       'schedule.read',
     ];
@@ -896,6 +1092,7 @@ describe('browser auth gateway', () => {
       'profile.read',
       'bookings.read',
       'bookings.details.read',
+      'bookings.history.read',
       'subscriptions.read',
       'schedule.read',
     ];
@@ -1062,6 +1259,7 @@ describe('browser auth gateway', () => {
               'profile.read',
               'bookings.read',
               'bookings.details.read',
+              'bookings.history.read',
               'subscriptions.read',
               'schedule.read',
             ].map((operation) => ({
@@ -1152,6 +1350,7 @@ describe('browser auth gateway', () => {
       'profile.read',
       'bookings.read',
       'bookings.details.read',
+      'bookings.history.read',
       'subscriptions.read',
       'schedule.read',
     ];

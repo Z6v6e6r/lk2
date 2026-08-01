@@ -8,7 +8,10 @@ import type {
   BookingRecommendationFilters,
   BookingRecommendationPage,
   BookingScreenReadJob,
+  BookingScreenActivityHistoryReadCommand,
   BookingScreenScheduleReadCommand,
+  EventCatalogPage,
+  EventCatalogQuery,
   TrainingSchedulePage,
   ClientRoutingPlan,
   CommunityMembershipPage,
@@ -56,6 +59,9 @@ export type {
   BookingPreferencesUpdateRequest,
   BookingRecommendationFilters,
   BookingRecommendationPage,
+  EventCatalogItem,
+  EventCatalogPage,
+  EventCatalogQuery,
   TrainingSchedulePage,
   ClientRoutingPlan,
   CommunityMembershipPage,
@@ -197,6 +203,8 @@ export interface AuthGateway {
     kind: 'IMPRESSION' | 'CLICK',
   ) => Promise<{ readonly accepted: boolean }>;
   readonly listTrainingSchedule: () => Promise<TrainingSchedulePage>;
+  readonly listEventCatalog: (query: EventCatalogQuery) => Promise<EventCatalogPage>;
+  readonly continueEventCatalog: (cursor: string, limit?: number) => Promise<EventCatalogPage>;
   readonly getHomeBase: () => Promise<HomeBase>;
   readonly getHomeDashboard: () => Promise<HomeDashboard>;
   readonly getPublicGiftCertificateCatalog: () => Promise<PublicGiftCertificateCatalog>;
@@ -574,26 +582,90 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     return completion.trainings;
   }
 
-  async function loadClientAssistedUpcomingBookings(): Promise<UserUpcomingBookings> {
-    const job = await client.startBookingScreenReadJob('MY_BOOKINGS');
-    const command = job.commands.find((item) => item.operation === 'bookings.read');
-    if (!command) throw new Error('BOOKING_SCREEN_READ_COMMAND_MISSING');
-    try {
-      const payload = await clientTransport.executeClientAssistedUpcomingBookingsRead({
-        operation: command.operation,
-        detailsOperation: command.detailsOperation,
-        page: command.page,
-        size: command.size,
-      });
-      await client.submitBookingScreenReadResult(job.jobId, command.commandId, payload);
-    } catch {
-      // Completion returns an explicitly stale, empty partial snapshot.
-    }
-    const completion = await client.completeBookingScreenReadJob(job.jobId, 50);
-    if (completion.screen !== 'MY_BOOKINGS') {
+  async function loadClientAssistedEventCatalog(
+    query: EventCatalogQuery,
+  ): Promise<EventCatalogPage> {
+    const job = await client.startEventCatalogReadJob(query);
+    const commands = job.commands.filter(
+      (command): command is BookingScreenScheduleReadCommand =>
+        command.operation === 'schedule.read',
+    );
+    await executeScheduleCommands(job, commands);
+    const completion = await client.completeBookingScreenReadJob(job.jobId, query.limit);
+    if (completion.screen !== 'EVENT_CATALOG') {
       throw new Error('BOOKING_SCREEN_READ_JOB_MISMATCH');
     }
-    return completion.bookings;
+    return completion.catalog;
+  }
+
+  async function loadClientAssistedUpcomingBookings(): Promise<UserUpcomingBookings> {
+    let staleProjection: UserUpcomingBookings | undefined;
+    try {
+      const current = await client.getUpcomingBookings();
+      if (Date.parse(current.staleAt) > Date.now()) return current;
+      staleProjection = current;
+    } catch {
+      // An absent projection is prepared through the client-assisted job below.
+    }
+    try {
+      const job = await client.startBookingScreenReadJob('MY_BOOKINGS');
+      const command = job.commands.find((item) => item.operation === 'bookings.read');
+      if (!command) throw new Error('BOOKING_SCREEN_READ_COMMAND_MISSING');
+      try {
+        const payload = await clientTransport.executeClientAssistedUpcomingBookingsRead({
+          operation: command.operation,
+          detailsOperation: command.detailsOperation,
+          page: command.page,
+          size: command.size,
+        });
+        await client.submitBookingScreenReadResult(job.jobId, command.commandId, payload);
+      } catch {
+        // Completion keeps an existing stale projection readable when Viva is unavailable.
+      }
+      await client.completeBookingScreenReadJob(job.jobId, 50);
+      return await client.getUpcomingBookings();
+    } catch (error) {
+      if (staleProjection) return staleProjection;
+      throw error;
+    }
+  }
+
+  async function loadClientAssistedActivityHistory(
+    input: ActivityHistoryQuery,
+  ): Promise<ActivityHistoryPage> {
+    let staleProjection: ActivityHistoryPage | undefined;
+    if (!input.cursor) {
+      try {
+        const current = await client.listActivityHistory(input);
+        if (current.freshness === 'FRESH') return current;
+        staleProjection = current;
+      } catch {
+        // An uncovered projection must be prepared through the client-assisted job below.
+      }
+    }
+    try {
+      const job = await client.startActivityHistoryReadJob(input);
+      const command = job.commands.find(
+        (item): item is BookingScreenActivityHistoryReadCommand =>
+          item.operation === 'bookings.history.read',
+      );
+      if (command) {
+        try {
+          const payload = await clientTransport.executeClientAssistedActivityHistoryRead({
+            operation: command.operation,
+            page: command.page,
+            size: command.size,
+          });
+          await client.submitActivityHistoryReadResult(job.jobId, command.commandId, payload);
+        } catch {
+          // Completion records the missing provider page and keeps stale local data readable.
+        }
+      }
+      await client.completeActivityHistoryReadJob(job.jobId);
+    } catch {
+      if (staleProjection) return staleProjection;
+    }
+    return client.listActivityHistory(input);
   }
 
   async function restore(): Promise<AuthenticatedSession | null> {
@@ -834,6 +906,14 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       return request;
     },
 
+    listEventCatalog(query) {
+      return loadClientAssistedEventCatalog(query);
+    },
+
+    continueEventCatalog(cursor, limit) {
+      return client.continueEventCatalog(cursor, limit);
+    },
+
     getHomeBase() {
       if (homeBasePromise) return homeBasePromise;
       const request = client
@@ -930,7 +1010,7 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     },
 
     getActivityHistory(input = {}) {
-      return client.listActivityHistory(input);
+      return loadClientAssistedActivityHistory(input);
     },
 
     getGame(gameId) {

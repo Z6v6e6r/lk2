@@ -1007,6 +1007,10 @@ export class LegacyTournamentSummaryAdapter {
     string,
     { readonly externalId: string; readonly fetchedAt: number }
   >();
+  private readonly stationSources = new Map<
+    string,
+    { readonly externalId: string; readonly fetchedAt: number }
+  >();
   private readonly participantCache = new Map<string, TournamentParticipantCacheEntry>();
   private readonly participantPending = new Map<string, Promise<TournamentParticipantRoster>>();
   private consecutiveFailures = 0;
@@ -1053,6 +1057,7 @@ export class LegacyTournamentSummaryAdapter {
       if (bytes.byteLength > maxBytes) throw new Error('TOURNAMENT_SUMMARY_RESPONSE_TOO_LARGE');
       const body = JSON.parse(new TextDecoder().decode(bytes)) as unknown;
       if (!Array.isArray(body)) throw new Error('TOURNAMENT_SUMMARY_RESPONSE_INVALID');
+      if (body.length > 500) throw new Error('TOURNAMENT_SUMMARY_RESPONSE_TOO_LARGE');
       const items = body
         .flatMap((item) => {
           const summary = publicTournamentSummary(item);
@@ -1076,11 +1081,23 @@ export class LegacyTournamentSummaryAdapter {
             });
           }
           if (summary && typeof item === 'object' && item !== null && !Array.isArray(item)) {
-            const externalId =
-              stringValue((item as Record<string, unknown>).id) ??
-              stringValue((item as Record<string, unknown>).exerciseId);
+            const sourceItem = item as Record<string, unknown>;
+            const externalId = stringValue(sourceItem.id) ?? stringValue(sourceItem.exerciseId);
             if (externalId) {
               this.participantSources.set(summary.id, { externalId, fetchedAt: now });
+            }
+            const stationExternalId =
+              stringValue(sourceItem.studioId) ??
+              (typeof sourceItem.studio === 'object' &&
+              sourceItem.studio !== null &&
+              !Array.isArray(sourceItem.studio)
+                ? stringValue((sourceItem.studio as Record<string, unknown>).id)
+                : undefined);
+            if (stationExternalId) {
+              this.stationSources.set(summary.id, {
+                externalId: stationExternalId,
+                fetchedAt: now,
+              });
             }
           }
           return summary ? [summary] : [];
@@ -1132,6 +1149,30 @@ export class LegacyTournamentSummaryAdapter {
       });
     this.pending.set(date, request);
     return request;
+  }
+
+  /** Returns private integration metadata only to the API mapping boundary. */
+  public readStationExternalId(summaryId: string): string | undefined {
+    const source = this.stationSources.get(summaryId);
+    if (!source) return undefined;
+    const now = this.options.now?.() ?? Date.now();
+    if (now - source.fetchedAt > (this.options.staleTtlMs ?? 600_000)) {
+      this.stationSources.delete(summaryId);
+      return undefined;
+    }
+    return source.externalId;
+  }
+
+  /** Returns private integration metadata only to the API mapping boundary. */
+  public readExerciseExternalId(summaryId: string): string | undefined {
+    const source = this.participantSources.get(summaryId);
+    if (!source) return undefined;
+    const now = this.options.now?.() ?? Date.now();
+    if (now - source.fetchedAt > (this.options.staleTtlMs ?? 600_000)) {
+      this.participantSources.delete(summaryId);
+      return undefined;
+    }
+    return source.externalId;
   }
 
   /**

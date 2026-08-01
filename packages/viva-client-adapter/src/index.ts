@@ -232,6 +232,13 @@ const bookingDetailsRequestSchema = z
     bookingIds: z.array(z.string().min(1).max(128)).min(1).max(50),
   })
   .strict();
+const bookingHistoryRequestSchema = z
+  .object({
+    operation: z.literal('bookings.history.read'),
+    page: z.number().int().min(0).max(1000),
+    size: z.number().int().min(1).max(100),
+  })
+  .strict();
 const subscriptionsRequestSchema = z
   .object({
     operation: z.literal('subscriptions.read'),
@@ -251,6 +258,7 @@ export type DirectVivaReadRequest =
   | z.input<typeof profileRequestSchema>
   | z.input<typeof bookingsRequestSchema>
   | z.input<typeof bookingDetailsRequestSchema>
+  | z.input<typeof bookingHistoryRequestSchema>
   | z.input<typeof subscriptionsRequestSchema>
   | z.input<typeof scheduleRequestSchema>;
 
@@ -299,6 +307,14 @@ export interface ClientAssistedUpcomingBookingsReadCommand {
   readonly size: 50;
 }
 
+export interface ClientAssistedActivityHistoryReadCommand {
+  readonly operation: 'bookings.history.read';
+  readonly page: number;
+  readonly size: number;
+}
+
+const clientAssistedActivityHistoryReadCommandSchema = bookingHistoryRequestSchema;
+
 const clientAssistedUpcomingBookingsReadCommandSchema = z
   .object({
     operation: z.literal('bookings.read'),
@@ -326,6 +342,8 @@ function parseReadRequest(request: DirectVivaReadRequest) {
       return bookingsRequestSchema.parse(request);
     case 'bookings.details.read':
       return bookingDetailsRequestSchema.parse(request);
+    case 'bookings.history.read':
+      return bookingHistoryRequestSchema.parse(request);
     case 'subscriptions.read':
       return subscriptionsRequestSchema.parse(request);
     case 'schedule.read':
@@ -349,6 +367,12 @@ function directReadUrl(plan: ClientRoutingPlan, request: ReturnType<typeof parse
     case 'bookings.details.read':
       url = new URL(`${base}/v1/${tenant}/bookings/list`);
       for (const bookingId of request.bookingIds) url.searchParams.append('bookingIds', bookingId);
+      return url;
+    case 'bookings.history.read':
+      url = new URL(`${base}/v2/${tenant}/bookings/history`);
+      url.searchParams.set('includeCanceled', 'true');
+      url.searchParams.set('page', String(request.page));
+      url.searchParams.set('size', String(request.size));
       return url;
     case 'subscriptions.read':
       url = new URL(`${base}/v1/${tenant}/subscriptions`);
@@ -506,6 +530,18 @@ export function createClientTransportExecutor(options: ClientTransportExecutorOp
               true,
             );
       return { bookings, details };
+    },
+
+    /** Executes one server-issued history page and relays the raw response. */
+    async executeClientAssistedActivityHistoryRead(
+      command: ClientAssistedActivityHistoryReadCommand,
+    ): Promise<unknown> {
+      const request = clientAssistedActivityHistoryReadCommandSchema.parse(command);
+      const plan = await effectivePlan(options.getRoutingPlan);
+      if (plan?.mode !== 'MIXED_END_USER_READS' || !plan.directViva) {
+        throw new ClientTransportError('DIRECT_VIVA_UNAVAILABLE', request.operation);
+      }
+      return directRead(plan, request, true);
     },
 
     async executeRead<TResult>(execution: ClientReadExecution<TResult>): Promise<TResult> {

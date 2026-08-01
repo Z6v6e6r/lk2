@@ -334,6 +334,30 @@ describe('Home progressive navigation', () => {
     );
   });
 
+  it('uses the pulse preloader for Home V3 recommendations', () => {
+    const loadBookingRecommendations = vi.fn(
+      () => new Promise<BookingRecommendationPage>(() => undefined),
+    );
+    render(
+      <HomeDashboardPage
+        {...independentSectionProps}
+        dashboard={homeBase}
+        tenantName="ПадлХАБ"
+        layoutVariant="v3"
+        notificationUnreadCount={0}
+        loadBookingRecommendations={loadBookingRecommendations}
+        logoutBusy={false}
+        onLogout={vi.fn()}
+      />,
+    );
+
+    const loader = screen.getByRole('status', { name: 'Подбираем игры' });
+    expect(loader).toHaveClass('fh-for-me-loader--pulse');
+    expect(loader.querySelector('.fh-loader-pulse')).toBeInTheDocument();
+    expect(loader.querySelectorAll('.fh-loader-pulse i')).toHaveLength(3);
+    expect(loader.querySelector('img')).not.toBeInTheDocument();
+  });
+
   it('shows only games and trainings and opens recommendations by default', async () => {
     const loadBookingRecommendations = vi.fn().mockResolvedValue({
       version: 'a'.repeat(64),

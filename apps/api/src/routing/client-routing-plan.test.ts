@@ -73,7 +73,7 @@ describe('client routing plan', () => {
         allowedRequestHeaders: ['Authorization'],
       },
     });
-    expect(result.operations).toHaveLength(5);
+    expect(result.operations).toHaveLength(6);
     expect(result.operations).toContainEqual({
       operation: 'profile.read',
       transport: 'DIRECT_VIVA',
@@ -84,6 +84,11 @@ describe('client routing plan', () => {
         .filter((operation) => operation.operation !== 'profile.read')
         .every((operation) => operation.transport === 'PADLHUB_API'),
     ).toBe(true);
+    expect(result.operations).toContainEqual({
+      operation: 'bookings.history.read',
+      transport: 'PADLHUB_API',
+      fallback: 'PADLHUB_API',
+    });
     expect(JSON.stringify(result)).not.toContain('token');
     expect(JSON.stringify(result)).not.toContain('keyVersion');
   });

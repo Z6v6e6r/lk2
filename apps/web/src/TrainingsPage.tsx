@@ -1,12 +1,18 @@
-import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 
 import { BookingActivityCard } from './BookingRecommendations.js';
 import { MainBottomNavigation } from './HomeDashboardPage.js';
-import type { BookingRecommendationActivity } from './booking-activity-kind.js';
-import type { AuthGateway, TrainingSchedulePage } from './auth-gateway.js';
+import type {
+  AuthGateway,
+  EventCatalogItem,
+  EventCatalogPage,
+  EventCatalogQuery,
+} from './auth-gateway.js';
+import { usePaginatedEventSearch } from './usePaginatedEventSearch.js';
 
 type TrainingLevelRangeFilter = 'ALL' | 'D_C_PLUS' | 'C_C_PLUS' | 'C_B_PLUS' | 'B_A';
 type TrainingStartAfterFilter = 'ALL' | '18:00';
+type TrainingCatalogItem = Extract<EventCatalogItem, { readonly activity: unknown }>;
 
 const levelRangeFilters = {
   ALL: null,
@@ -26,9 +32,10 @@ const levelRangeLabels: Readonly<Record<TrainingLevelRangeFilter, string>> = {
 
 const weekdayFormatter = new Intl.DateTimeFormat('ru-RU', { weekday: 'short' });
 const dayFormatter = new Intl.DateTimeFormat('ru-RU', { day: '2-digit' });
-const trainingLevelOrder = new Map(
-  (['D', 'D+', 'C', 'C+', 'B', 'B+', 'A'] as const).map((level, index) => [level, index]),
-);
+type EventCatalogMetadata = Pick<
+  EventCatalogPage,
+  'state' | 'totalMatched' | 'facets' | 'sourceStatus'
+>;
 
 function dateKey(date: Date): string {
   const year = date.getFullYear();
@@ -37,71 +44,11 @@ function dateKey(date: Date): string {
   return `${year}-${month}-${day}`;
 }
 
-function activityDateKey(activity: BookingRecommendationActivity): string {
-  return new Intl.DateTimeFormat('en-CA', {
-    timeZone: activity.timezone,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).format(new Date(activity.startsAt));
-}
-
-function activityStartsAfter(
-  activity: BookingRecommendationActivity,
-  startsAfter: TrainingStartAfterFilter,
-): boolean {
-  if (startsAfter === 'ALL') return true;
-  const parts = new Intl.DateTimeFormat('en-GB', {
-    timeZone: activity.timezone,
-    hour: '2-digit',
-    minute: '2-digit',
-    hourCycle: 'h23',
-  }).formatToParts(new Date(activity.startsAt));
-  const hour = Number(parts.find((part) => part.type === 'hour')?.value ?? 0);
-  const minute = Number(parts.find((part) => part.type === 'minute')?.value ?? 0);
-  return hour * 60 + minute >= 18 * 60;
-}
-
-function activityMatchesLevel(
-  activity: BookingRecommendationActivity,
-  levelRange: TrainingLevelRangeFilter,
-): boolean {
-  const selectedRange = levelRangeFilters[levelRange];
-  if (!selectedRange) return true;
-  const activityRange = activity.levelRange;
-  if (!activityRange?.from || !activityRange.to) return false;
-  const selectedFrom = trainingLevelOrder.get(selectedRange.from);
-  const selectedTo = trainingLevelOrder.get(selectedRange.to);
-  const activityFrom = trainingLevelOrder.get(activityRange.from);
-  const activityTo = trainingLevelOrder.get(activityRange.to);
-  if (
-    selectedFrom === undefined ||
-    selectedTo === undefined ||
-    activityFrom === undefined ||
-    activityTo === undefined
-  ) {
-    return false;
-  }
-  return activityTo >= selectedFrom && activityFrom <= selectedTo;
-}
-
-function categoryKey(activity: BookingRecommendationActivity): string {
-  return activity.category?.id ?? `title:${activity.title.toLocaleLowerCase('ru-RU')}`;
-}
-
-function categoryName(activity: BookingRecommendationActivity): string {
-  return activity.category?.name ?? activity.title;
-}
-
-function mergeActivities(
-  current: readonly BookingRecommendationActivity[],
-  page: TrainingSchedulePage,
-): readonly BookingRecommendationActivity[] {
-  const activities = page.items.filter((activity) => activity.kind === 'TRAINING');
-  return [
-    ...new Map([...current, ...activities].map((activity) => [activity.id, activity])).values(),
-  ].sort(
-    (left, right) => left.startsAt.localeCompare(right.startsAt) || left.id.localeCompare(right.id),
+function isExpiredCatalogCursor(error: Error | null): boolean {
+  return (
+    error !== null &&
+    'code' in error &&
+    (error as Error & { readonly code?: string }).code === 'CATALOG_CURSOR_EXPIRED'
   );
 }
 
@@ -219,15 +166,14 @@ export function TrainingsPage({
   gateway,
   individualTrainingRoute = '/coaches',
 }: TrainingsPageProps): React.JSX.Element {
-  const [activities, setActivities] = useState<readonly BookingRecommendationActivity[]>([]);
   const [selectedCategoryIds, setSelectedCategoryIds] = useState<readonly string[]>([]);
   const [selectedStationIds, setSelectedStationIds] = useState<readonly string[]>([]);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [levelRange, setLevelRange] = useState<TrainingLevelRangeFilter>('ALL');
   const [startsAfter, setStartsAfter] = useState<TrainingStartAfterFilter>('ALL');
   const [filtersOpen, setFiltersOpen] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [categoryLabels, setCategoryLabels] = useState<Readonly<Record<string, string>>>({});
+  const [stationLabels, setStationLabels] = useState<Readonly<Record<string, string>>>({});
 
   const days = useMemo(
     () =>
@@ -244,73 +190,80 @@ export function TrainingsPage({
     [],
   );
 
-  useEffect(() => {
-    let active = true;
-    void gateway.listTrainingSchedule().then(
-      (page) => {
-        if (!active) return;
-        setActivities((current) => mergeActivities(current, page));
-        setError(null);
-        setLoading(false);
-      },
-      () => {
-        if (!active) return;
-        setActivities([]);
-        setError('Групповые тренировки временно недоступны. Попробуйте обновить страницу.');
-        setLoading(false);
-      },
-    );
-    return () => {
-      active = false;
+  const catalogQuery = useMemo<EventCatalogQuery>(() => {
+    const selectedRange = levelRangeFilters[levelRange];
+    return {
+      surface: 'TRAININGS',
+      localDates: selectedDate ? [selectedDate] : days.map((day) => day.key),
+      kinds: ['COACH_GAME', 'GROUP_TRAINING', 'SPLIT'],
+      ...(selectedCategoryIds.length > 0 ? { categoryIds: [...selectedCategoryIds].sort() } : {}),
+      ...(selectedStationIds.length > 0 ? { stationIds: [...selectedStationIds].sort() } : {}),
+      availability: 'INCLUDE_FULL',
+      ...(selectedRange ? { levelFrom: selectedRange.from, levelTo: selectedRange.to } : {}),
+      ...(startsAfter === 'ALL' ? {} : { startsAfterLocal: startsAfter }),
+      limit: 20,
     };
-  }, [gateway]);
+  }, [days, levelRange, selectedCategoryIds, selectedDate, selectedStationIds, startsAfter]);
+  const queryKey = useMemo(() => JSON.stringify(catalogQuery), [catalogQuery]);
+  const loadCatalogPage = useCallback(
+    async (query: EventCatalogQuery, request: { readonly cursor?: string }) => {
+      const page = request.cursor
+        ? await gateway.continueEventCatalog(request.cursor, query.limit)
+        : await gateway.listEventCatalog(query);
+      return {
+        items: page.items.filter((item): item is TrainingCatalogItem => 'activity' in item),
+        nextCursor: page.nextCursor,
+        metadata: {
+          state: page.state,
+          totalMatched: page.totalMatched,
+          facets: page.facets,
+          sourceStatus: page.sourceStatus,
+        } satisfies EventCatalogMetadata,
+      };
+    },
+    [gateway],
+  );
+  const {
+    items,
+    nextCursor,
+    metadata,
+    loading,
+    loadingMore,
+    error,
+    errorPhase,
+    loadMore,
+    retry,
+    restart,
+  } = usePaginatedEventSearch<EventCatalogQuery, TrainingCatalogItem, EventCatalogMetadata>({
+    queryKey,
+    query: catalogQuery,
+    loadPage: loadCatalogPage,
+    itemKey: (item) => `${item.kind}:${item.activity.id}`,
+  });
+  const activities = useMemo(() => items.map((item) => item.activity), [items]);
+  const cursorExpired = errorPhase === 'more' && isExpiredCatalogCursor(error);
 
   const categories = useMemo(
-    () =>
-      [
-        ...new Map(
-          activities.map((activity) => [
-            categoryKey(activity),
-            { id: categoryKey(activity), name: categoryName(activity) },
-          ]),
-        ).values(),
-      ].sort((left, right) => left.name.localeCompare(right.name, 'ru-RU')),
-    [activities],
+    () => metadata?.facets?.categories ?? [],
+    [metadata?.facets?.categories],
   );
-  const stations = useMemo(
-    () =>
-      [
-        ...new Map(
-          activities.map((activity) => [
-            activity.station.id,
-            { id: activity.station.id, name: activity.station.name },
-          ]),
-        ).values(),
-      ].sort((left, right) => left.name.localeCompare(right.name, 'ru-RU')),
-    [activities],
-  );
+  const stations = useMemo(() => metadata?.facets?.stations ?? [], [metadata?.facets?.stations]);
   const selectedCategories = useMemo(
-    () => categories.filter((category) => selectedCategoryIds.includes(category.id)),
-    [categories, selectedCategoryIds],
+    () =>
+      selectedCategoryIds.map((id) => {
+        const option = categories.find((category) => category.id === id);
+        return option ?? { id, name: categoryLabels[id] ?? 'Тип тренировки' };
+      }),
+    [categories, categoryLabels, selectedCategoryIds],
   );
   const selectedStations = useMemo(
-    () => stations.filter((station) => selectedStationIds.includes(station.id)),
-    [selectedStationIds, stations],
-  );
-  const visibleActivities = useMemo(
     () =>
-      activities.filter(
-        (activity) =>
-          (selectedDate === null || activityDateKey(activity) === selectedDate) &&
-          (selectedCategoryIds.length === 0 ||
-            selectedCategoryIds.includes(categoryKey(activity))) &&
-          (selectedStationIds.length === 0 || selectedStationIds.includes(activity.station.id)) &&
-          activityStartsAfter(activity, startsAfter) &&
-          activityMatchesLevel(activity, levelRange),
-      ),
-    [activities, levelRange, selectedCategoryIds, selectedDate, selectedStationIds, startsAfter],
+      selectedStationIds.map((id) => {
+        const option = stations.find((station) => station.id === id);
+        return option ?? { id, name: stationLabels[id] ?? 'Станция' };
+      }),
+    [selectedStationIds, stationLabels, stations],
   );
-
   const activeFilterCount =
     Number(selectedCategoryIds.length > 0) +
     Number(selectedStationIds.length > 0) +
@@ -330,6 +283,8 @@ export function TrainingsPage({
         : `Станции: ${selectedStations.length}`;
 
   function toggleCategory(categoryId: string): void {
+    const option = categories.find((category) => category.id === categoryId);
+    if (option) setCategoryLabels((current) => ({ ...current, [categoryId]: option.name }));
     setSelectedCategoryIds((current) =>
       current.includes(categoryId)
         ? current.filter((item) => item !== categoryId)
@@ -338,6 +293,8 @@ export function TrainingsPage({
   }
 
   function toggleStation(stationId: string): void {
+    const option = stations.find((station) => station.id === stationId);
+    if (option) setStationLabels((current) => ({ ...current, [stationId]: option.name }));
     setSelectedStationIds((current) =>
       current.includes(stationId)
         ? current.filter((item) => item !== stationId)
@@ -540,12 +497,25 @@ export function TrainingsPage({
 
       <div className="trainings-list-heading">
         <h2>Групповые тренировки</h2>
-        {!loading ? <span>{visibleActivities.length}</span> : null}
+        {!loading && metadata?.state === 'READY' ? <span>{metadata.totalMatched}</span> : null}
       </div>
 
       {error ? (
         <p className="games-message is-error" role="alert">
-          {error}
+          Групповые тренировки временно недоступны.{' '}
+          <button type="button" onClick={() => void (cursorExpired ? restart() : retry())}>
+            {cursorExpired ? 'Обновить список' : 'Повторить'}
+          </button>
+        </p>
+      ) : null}
+
+      {metadata?.state === 'PARTIAL' ? (
+        <p className="games-message is-error" role="status">
+          Показаны не все тренировки: часть расписания временно недоступна. Попробуйте обновить
+          список.{' '}
+          <button type="button" onClick={() => void restart()}>
+            Обновить список
+          </button>
         </p>
       ) : null}
 
@@ -555,16 +525,30 @@ export function TrainingsPage({
             Загружаем групповые тренировки…
           </div>
         ) : null}
-        {!loading && visibleActivities.length === 0 ? (
+        {!loading && !error && metadata?.state === 'READY' && activities.length === 0 ? (
           <div className="games-empty">
             <span aria-hidden="true">◌</span>
             <h2>Подходящих тренировок пока нет</h2>
             <p>Смените дату, тип, станцию или уровень.</p>
           </div>
         ) : null}
-        {visibleActivities.map((activity) => (
+        {activities.map((activity) => (
           <BookingActivityCard activity={activity} key={activity.id} />
         ))}
+        {nextCursor ? (
+          <button
+            className="games-load-more"
+            type="button"
+            disabled={loadingMore}
+            onClick={() => void loadMore()}
+          >
+            {loadingMore
+              ? 'Загружаем…'
+              : errorPhase === 'more'
+                ? 'Повторить загрузку'
+                : 'Показать ещё'}
+          </button>
+        ) : null}
       </section>
 
       <MainBottomNavigation active="games" gamesDestination="games" />

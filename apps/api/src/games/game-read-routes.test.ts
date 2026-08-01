@@ -47,8 +47,8 @@ function snapshot(overrides: Partial<GameCardProjectionInput> = {}): GameCardPro
     kind: 'FRIENDLY',
     visibility: 'PUBLIC',
     lifecycleState: 'SCHEDULED',
-    startsAt: '2026-08-01T18:00:00.000Z',
-    endsAt: '2026-08-01T19:30:00.000Z',
+    startsAt: '2099-08-01T18:00:00.000Z',
+    endsAt: '2099-08-01T19:30:00.000Z',
     timezone: 'Europe/Moscow',
     station: { id: stationId, name: 'Падел Сколково', shortAddress: 'Новая, 1' },
     court: { id: courtId, name: 'Корт №3' },
@@ -75,7 +75,7 @@ function snapshot(overrides: Partial<GameCardProjectionInput> = {}): GameCardPro
     seatReservations: [],
     waitlist: [],
     waitlistEnabled: true,
-    joinCutoffAt: '2026-08-01T17:30:00.000Z',
+    joinCutoffAt: '2099-08-01T17:30:00.000Z',
     priceSummary: { amountMinor: 250_000, currency: 'RUB' },
     ...overrides,
   };
@@ -100,9 +100,9 @@ const secondProjection = projection(
   snapshot({
     id: secondGameId,
     title: 'Вторая игра',
-    startsAt: '2026-08-02T18:00:00.000Z',
-    endsAt: '2026-08-02T19:30:00.000Z',
-    joinCutoffAt: '2026-08-02T17:30:00.000Z',
+    startsAt: '2099-08-02T18:00:00.000Z',
+    endsAt: '2099-08-02T19:30:00.000Z',
+    joinCutoffAt: '2099-08-02T17:30:00.000Z',
   }),
 );
 

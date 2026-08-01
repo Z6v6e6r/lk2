@@ -1308,10 +1308,15 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
       return <LocationDetailPage location={locationDetail} />;
     }
     if (protectedRoute.kind === 'games' || protectedRoute.kind === 'game') {
+      const eventId =
+        protectedRoute.kind === 'games' && typeof window !== 'undefined'
+          ? new URLSearchParams(window.location.search).get('event')
+          : null;
       return (
         <GamesPage
           gateway={gateway}
           {...(protectedRoute.kind === 'game' ? { gameId: protectedRoute.gameId } : {})}
+          {...(eventId ? { eventId } : {})}
         />
       );
     }

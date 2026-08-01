@@ -317,6 +317,18 @@ function createGateway(overrides: Partial<AuthGateway> = {}): AuthGateway {
       staleAt: '2026-07-30T09:01:00.000Z',
       items: [],
     }),
+    listEventCatalog: vi.fn().mockResolvedValue({
+      state: 'READY',
+      snapshotVersion: 'a'.repeat(64),
+      generatedAt: '2026-07-30T09:00:00.000Z',
+      staleAt: '2026-07-30T09:01:00.000Z',
+      items: [],
+      nextCursor: null,
+      totalMatched: 0,
+      facets: { kinds: [], categories: [], stations: [] },
+      sourceStatus: [{ source: 'SCHEDULE', localDate: null, state: 'READY', errorCode: null }],
+    }),
+    continueEventCatalog: vi.fn().mockRejectedValue(new Error('CATALOG_CURSOR_INVALID')),
     getHomeBase: vi.fn().mockResolvedValue(homeBase),
     getHomeDashboard: vi.fn().mockResolvedValue(homeDashboard),
     getPublicGiftCertificateCatalog: vi.fn().mockRejectedValue(new Error('GIFT_CATALOG_MISSING')),
@@ -966,6 +978,30 @@ describe('PadlHub web authentication', () => {
     expect(gateway.getPlayerProfile).not.toHaveBeenCalled();
   });
 
+  it('opens a game booking deep-link as a game card instead of the discovery catalog', async () => {
+    const eventId = '8a830ad0-a8c7-479b-a239-5b434c42148f';
+    window.history.replaceState({}, '', `/games?event=${eventId}`);
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue(session),
+      getUpcomingBookings: vi.fn().mockResolvedValue({
+        ...upcomingBookings,
+        items: [
+          {
+            ...upcomingBookings.items[0]!,
+            title: 'Открытая игра',
+            route: `/games?event=${eventId}`,
+          },
+        ],
+      }),
+    });
+
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+
+    expect(await screen.findByRole('heading', { name: 'Карточка игры' })).toBeVisible();
+    expect(await screen.findByRole('article', { name: 'Открытая игра' })).toBeVisible();
+    expect(gateway.listEventCatalog).not.toHaveBeenCalled();
+  });
+
   it('loads and continues the communities directory without requesting Home', async () => {
     window.history.replaceState({}, '', '/communities');
     const listMyCommunities = vi
@@ -1100,7 +1136,7 @@ describe('PadlHub web authentication', () => {
       '/coaches',
     );
     expect(screen.queryByText('Раздел подключается к API ПаделХАБ.')).not.toBeInTheDocument();
-    expect(gateway.listTrainingSchedule).toHaveBeenCalledTimes(1);
+    expect(gateway.listEventCatalog).toHaveBeenCalledTimes(1);
     expect(gateway.getHomeBase).not.toHaveBeenCalled();
   });
 

@@ -184,6 +184,17 @@ describe('Home layout scroll contract', () => {
     expect(ruleBody('.fh-hero--v3 .fh-actions')).toMatch(/margin-top:\s*11px\s*;/);
   });
 
+  it('keeps the preferences edit icon white and half-sized beside the tab label', () => {
+    const editRule = ruleBody('.figma-home .fh-preferences-edit');
+    const iconRule = ruleBody('.figma-home .fh-preferences-edit svg');
+
+    expect(editRule).toMatch(/width:\s*12px\s*;/);
+    expect(editRule).toMatch(/height:\s*12px\s*;/);
+    expect(editRule).toMatch(/color:\s*#fff\s*;/);
+    expect(iconRule).toMatch(/width:\s*8px\s*;/);
+    expect(iconRule).toMatch(/height:\s*8px\s*;/);
+  });
+
   it('does not retain the removed recommendation explanation styles', () => {
     expect(styles).not.toContain('.booking-recommendation-explainer');
     expect(styles).not.toContain('.has-recommendation-explainer');
@@ -198,6 +209,14 @@ describe('Home layout scroll contract', () => {
     expect(loaderRule).toMatch(/display:\s*grid\s*;/);
     expect(loaderRule).toMatch(/place-items:\s*start center\s*;/);
     expect(loaderRule).toMatch(/padding:\s*16px 8px\s*;/);
+  });
+
+  it('keeps the Home V3 pulse loader centered and respects reduced motion', () => {
+    expect(ruleBody('.fh-for-me-loader--pulse')).toMatch(/place-items:\s*center\s*;/);
+    expect(ruleBody('.fh-loader-pulse i')).toMatch(/animation:\s*fh-loader-pulse/);
+    expect(styles).toMatch(
+      /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.fh-loader-pulse i\s*\{[\s\S]*?animation:\s*none\s*;/,
+    );
   });
 
   it('keeps the Home V3 recommendation grid isolated to two columns', () => {

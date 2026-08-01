@@ -1,5 +1,8 @@
-import type { VivaExerciseRecommendation } from '@phub/viva-adapter';
+import type { VivaBookingHistoryPage, VivaExerciseRecommendation } from '@phub/viva-adapter';
 import type Redis from 'ioredis';
+
+import type { TrainingEventCatalogQuery } from './training-event-catalog.js';
+import type { GamesEventCatalogQuery } from './games-event-catalog.js';
 
 export interface BookingScreenScheduleReadCommand {
   readonly commandId: string;
@@ -15,17 +18,29 @@ export interface BookingScreenUpcomingReadCommand {
   readonly size: 50;
 }
 
+export interface BookingScreenActivityHistoryReadCommand {
+  readonly commandId: string;
+  readonly operation: 'bookings.history.read';
+  readonly page: number;
+  readonly size: number;
+}
+
 export type BookingScreenReadCommand =
-  BookingScreenScheduleReadCommand | BookingScreenUpcomingReadCommand;
+  | BookingScreenScheduleReadCommand
+  | BookingScreenUpcomingReadCommand
+  | BookingScreenActivityHistoryReadCommand;
 
 export interface BookingScreenReadJob {
   readonly jobId: string;
-  readonly screen: 'FOR_ME' | 'GROUP_TRAININGS' | 'MY_BOOKINGS';
+  readonly screen:
+    'FOR_ME' | 'GROUP_TRAININGS' | 'MY_BOOKINGS' | 'EVENT_CATALOG' | 'ACTIVITY_HISTORY';
   readonly tenantId: string;
   readonly userId: string;
   readonly createdAt: string;
   readonly expiresAt: string;
   readonly commands: readonly BookingScreenReadCommand[];
+  readonly catalogQuery?: TrainingEventCatalogQuery | GamesEventCatalogQuery;
+  readonly historyReason?: 'UNCOVERED' | 'STALE' | 'NEXT_PAGE';
 }
 
 export interface BookingScreenUpcomingItem {
@@ -43,6 +58,10 @@ export interface BookingScreenScheduleReadResult {
   readonly commandId: string;
   readonly kind: 'schedule';
   readonly activities: readonly VivaExerciseRecommendation[];
+  readonly gameAssociations?: readonly {
+    readonly activityId: string;
+    readonly gameId: string;
+  }[];
   readonly acceptedAt: string;
 }
 
@@ -53,8 +72,17 @@ export interface BookingScreenUpcomingReadResult {
   readonly acceptedAt: string;
 }
 
+export interface BookingScreenActivityHistoryReadResult {
+  readonly commandId: string;
+  readonly kind: 'history';
+  readonly page: VivaBookingHistoryPage;
+  readonly acceptedAt: string;
+}
+
 export type BookingScreenReadResult =
-  BookingScreenScheduleReadResult | BookingScreenUpcomingReadResult;
+  | BookingScreenScheduleReadResult
+  | BookingScreenUpcomingReadResult
+  | BookingScreenActivityHistoryReadResult;
 
 export interface BookingScreenReadJobStore {
   create(job: BookingScreenReadJob, ttlSeconds: number): Promise<boolean>;

@@ -14,6 +14,7 @@ inventory.
 | PadlHub Games state and cards      | Games                     | `LOCAL_PRIMARY` / `LOCAL_ONLY` reads |
 | Booking recommendation preferences | Profile                   | `LOCAL_ONLY`                         |
 | First-slice recommendation result  | User API query projection | derived local read                   |
+| Upcoming bookings projection       | Bookings                  | derived local read                   |
 
 External identifiers remain in `integration.external_entity_map`. Public preference and
 recommendation DTOs contain PadlHub UUIDs only.
@@ -60,12 +61,30 @@ is enabled. The API returns `LEVEL_MATCH`, `FRIEND_PLAYING`, `FAVORITE_STATION`,
 
 ## Read behavior and failures
 
-- Upcoming bookings continue to use the existing versioned `/bookings/upcoming` projection.
+### Filtered discovery catalogs
+
+ADR 0021 defines the replacement for browser-side discovery filtering. `/games` and `/trainings`
+will submit one canonical domain query to `Event Catalog V2`; the server normalizes all permitted
+sources, applies filters before the page limit and materializes a short-lived provider-free Redis
+snapshot. Every continuation cursor is bound to the tenant, user, normalized filter hash and
+snapshot version.
+
+The UI must restart page one after any filter or date change and ignore responses from an older
+query generation. Exact totals, facets and an empty state are allowed only for a `READY` snapshot.
+`PARTIAL` retains successful rows, exposes missing source/date status and remains retryable.
+Recommendation ranking remains exclusive to `FOR_ME` and must not be used as a catalog source.
+
+- Upcoming bookings use the versioned `/bookings/upcoming` projection. A fresh projection renders
+  immediately. An absent or stale projection starts a fixed browser-assisted `MY_BOOKINGS` job;
+  PadlHub normalizes and atomically replaces `booking.upcoming_booking_projection`, after which the
+  client rereads the local endpoint. API and worker processes never call Viva booking-list/details
+  routes, and an existing stale projection remains the fallback when a browser read fails.
 - Games history uses `/games?scope=HISTORY` with an opaque keyset cursor.
 - Unified visible history uses `/bookings/history` and reads one local activity-history projection.
   Its persisted coverage marker distinguishes a successfully synchronized empty history from an
-  uncovered provider range. The server, never the client, performs a bounded provider refresh for
-  an uncovered range and persists it before returning the projection.
+  uncovered provider range. A short-lived `/activity-history-read-jobs` command lets the browser
+  relay one bounded Viva page; PadlHub validates and persists it before serving the projection.
+  API and worker processes never call Viva End User history routes.
 - A provider game is replaced by its canonical Games card only when the authenticated viewer can
   read that game and the server can correlate both sources. The primary correlation is the
   one-way Viva exercise association in integration storage; start time plus normalized station is

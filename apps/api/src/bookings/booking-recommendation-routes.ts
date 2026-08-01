@@ -4,8 +4,10 @@ import type {
   BookingPreferencesRepository,
   BookingScreenMappingRepository,
   GameRepository,
+  LocationRepository,
   ProfileFriendshipRepository,
   ProfileSummaryRepository,
+  UpcomingBookingsRepository,
 } from '@phub/database';
 import {
   localVivaExerciseAssociationId,
@@ -22,6 +24,7 @@ import {
 import type { FastifyInstance, FastifyReply, FastifyRequest, preHandlerHookHandler } from 'fastify';
 
 import type { EventAvatarMedia } from '../event-avatar-media.js';
+import { listPublicGameCards } from '../games/game-card-queries.js';
 import { sendApiError } from '../http-errors.js';
 import type { TournamentSummarySource } from '../tournaments/tournament-summary-routes.js';
 import type {
@@ -29,8 +32,29 @@ import type {
   BookingScreenReadJobStore,
 } from './booking-screen-read-job-store.js';
 import { listBookingRecommendations } from './booking-recommendations.js';
+import type { EventCatalogSnapshotStore } from './event-catalog-snapshot-store.js';
+import {
+  buildGamesEventCatalog,
+  gamesEventCatalogQueryHash,
+  normalizeGamesEventCatalogQuery,
+  type CanonicalTournamentCatalogSummary,
+  type GamesEventCatalogItem,
+  type GamesEventCatalogIntegrationMapping,
+  type GamesEventCatalogMetadata,
+} from './games-event-catalog.js';
+import {
+  buildTrainingEventCatalog,
+  normalizeTrainingEventCatalogQuery,
+  trainingCatalogKind,
+  trainingEventCatalogQueryHash,
+  type TrainingEventCatalogMetadata,
+  type TrainingEventCatalogItem,
+} from './training-event-catalog.js';
 
-type CardReadRepository = Pick<GameRepository, 'listRecommendationCardProjections'>;
+type CardReadRepository = Pick<GameRepository, 'listRecommendationCardProjections'> &
+  Partial<Pick<GameRepository, 'listPublicCardProjections'>>;
+export type EventCatalogItem = TrainingEventCatalogItem | GamesEventCatalogItem;
+type EventCatalogMetadata = TrainingEventCatalogMetadata | GamesEventCatalogMetadata;
 type ExerciseRecommendationSource = Pick<VivaExerciseRecommendationSourceAdapter, 'readDate'> &
   Partial<
     Pick<
@@ -44,6 +68,8 @@ type ExerciseRecommendationSource = Pick<VivaExerciseRecommendationSourceAdapter
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const CLIENT_ASSISTED_JOB_TTL_SECONDS = 120;
 const CLIENT_ASSISTED_DAYS = 7;
+const EVENT_CATALOG_SNAPSHOT_TTL_SECONDS = 600;
+const EVENT_CATALOG_TIMEZONE = 'Europe/Moscow';
 
 function principal(request: FastifyRequest): { tenantId: string; userId: string } | undefined {
   const tenantId = request.tenantId;
@@ -155,8 +181,8 @@ async function readActivities(input: {
 async function readTournaments(input: {
   readonly source?: TournamentSummarySource;
   readonly dates: readonly string[];
-}): Promise<readonly PublicTournamentSummary[]> {
-  if (!input.source) return [];
+}): Promise<{ readonly items: readonly PublicTournamentSummary[]; readonly complete: boolean }> {
+  if (!input.source) return { items: [], complete: false };
   const pages = await Promise.allSettled(input.dates.map((date) => input.source!.readDate(date)));
   const byId = new Map<string, PublicTournamentSummary>();
   for (const tournament of pages.flatMap((page) =>
@@ -164,7 +190,119 @@ async function readTournaments(input: {
   )) {
     byId.set(tournament.id, tournament);
   }
-  return [...byId.values()];
+  return {
+    items: [...byId.values()],
+    complete: pages.every((page) => page.status === 'fulfilled'),
+  };
+}
+
+async function readAllPublicGames(input: {
+  readonly repository?: CardReadRepository;
+  readonly photoRepository?: Pick<ProfileSummaryRepository, 'getPhotoDeliveryIds'>;
+  readonly tenantId: string;
+  readonly now: string;
+  readonly localDates: readonly string[];
+}): Promise<{
+  readonly items: Awaited<ReturnType<typeof listPublicGameCards>>['items'];
+  readonly complete: boolean;
+}> {
+  if (!input.repository?.listPublicCardProjections) return { items: [], complete: false };
+  const byId = new Map<string, Awaited<ReturnType<typeof listPublicGameCards>>['items'][number]>();
+  let complete = true;
+  for (const localDate of input.localDates) {
+    const next = new Date(`${localDate}T00:00:00.000Z`);
+    next.setUTCDate(next.getUTCDate() + 1);
+    let cursor: string | undefined;
+    for (let page = 0; page < 20; page += 1) {
+      const result = await listPublicGameCards({
+        repository: input.repository as Pick<GameRepository, 'listPublicCardProjections'>,
+        ...(input.photoRepository ? { photoRepository: input.photoRepository } : {}),
+        tenantId: input.tenantId,
+        now: input.now,
+        limit: 50,
+        filters: {
+          availability: 'INCLUDE_FULL',
+          startsFrom: `${localDate}T00:00:00+03:00`,
+          startsTo: `${next.toISOString().slice(0, 10)}T00:00:00+03:00`,
+        },
+        ...(cursor ? { cursor } : {}),
+      });
+      for (const item of result.items) byId.set(item.id, item);
+      if (!result.nextCursor) break;
+      cursor = result.nextCursor;
+      if (page === 19) complete = false;
+    }
+  }
+  return { items: [...byId.values()], complete };
+}
+
+async function canonicalTournaments(input: {
+  readonly tenantId: string;
+  readonly tournaments: readonly PublicTournamentSummary[];
+  readonly source?: TournamentSummarySource;
+  readonly mappingRepository?: BookingScreenMappingRepository;
+  readonly locationRepository?: Pick<LocationRepository, 'getPublished'>;
+}): Promise<{
+  readonly items: readonly CanonicalTournamentCatalogSummary[];
+  readonly complete: boolean;
+  readonly gameAssociations: readonly { readonly tournamentId: string; readonly gameId: string }[];
+}> {
+  if (
+    !input.source?.readStationExternalId ||
+    !input.mappingRepository ||
+    !input.locationRepository
+  ) {
+    return { items: [], complete: input.tournaments.length === 0, gameAssociations: [] };
+  }
+  const sourceRows = input.tournaments.flatMap((tournament) => {
+    const externalId = input.source?.readStationExternalId?.(tournament.id);
+    const exerciseExternalId = input.source?.readExerciseExternalId?.(tournament.id);
+    return externalId ? [{ tournament, externalId, exerciseExternalId }] : [];
+  });
+  const mappings = await input.mappingRepository.resolve({
+    tenantId: input.tenantId,
+    bookingExternalIds: [],
+    exerciseAssociationIds: sourceRows.flatMap((row) =>
+      row.exerciseExternalId ? exerciseAssociationIds(row.exerciseExternalId) : [],
+    ),
+    stationExternalIds: sourceRows.map((row) => row.externalId),
+  });
+  const stationIds = new Map(mappings.stations.map((row) => [row.externalId, row.stationId]));
+  const gameIds = new Map(mappings.games.map((row) => [row.associationId, row.gameId]));
+  const canonicalStationIds = [...new Set(mappings.stations.map((row) => row.stationId))];
+  const locations = new Map(
+    (
+      await Promise.all(
+        canonicalStationIds.map((stationId) =>
+          input.locationRepository!.getPublished(input.tenantId, stationId),
+        ),
+      )
+    ).flatMap((location) => (location ? [[location.id, location] as const] : [])),
+  );
+  const items = sourceRows.flatMap(({ tournament, externalId }) => {
+    const location = locations.get(stationIds.get(externalId) ?? '');
+    return location
+      ? [
+          {
+            ...tournament,
+            station: {
+              id: location.id,
+              name: location.shortTitle ?? location.title,
+              shortAddress: location.address,
+            },
+          },
+        ]
+      : [];
+  });
+  const gameAssociations = sourceRows.flatMap(({ tournament, exerciseExternalId }) => {
+    const gameId = exerciseExternalId
+      ? exerciseAssociationIds(exerciseExternalId)
+          .map((associationId) => gameIds.get(associationId))
+          .find((value): value is string => Boolean(value))
+      : undefined;
+    return gameId ? [{ tournamentId: tournament.id, gameId }] : [];
+  });
+  return { items, complete: items.length === input.tournaments.length, gameAssociations };
 }
 
 function completedScheduleDates(
@@ -235,7 +373,10 @@ export function registerBookingRecommendationRoutes(
     readonly exerciseSource?: ExerciseRecommendationSource;
     readonly tournamentSource?: TournamentSummarySource;
     readonly clientAssistedJobStore?: BookingScreenReadJobStore;
+    readonly eventCatalogSnapshotStore?: EventCatalogSnapshotStore<EventCatalogItem>;
     readonly bookingScreenMappingRepository?: BookingScreenMappingRepository;
+    readonly upcomingBookingsRepository?: UpcomingBookingsRepository;
+    readonly locationRepository?: Pick<LocationRepository, 'getPublished'>;
     readonly getExerciseAccessToken?: (input: {
       readonly tenantId: string;
       readonly userId: string;
@@ -256,12 +397,20 @@ export function registerBookingRecommendationRoutes(
         return sendApiError(request, reply, 401, 'AUTH_REQUIRED', 'Требуется авторизация.');
       }
       const body = request.body as Record<string, unknown> | undefined;
+      const catalogQuery =
+        body?.screen === 'EVENT_CATALOG'
+          ? (normalizeTrainingEventCatalogQuery(body.query) ??
+            normalizeGamesEventCatalogQuery(body.query))
+          : undefined;
+      const legacyScreen =
+        body?.screen === 'FOR_ME' ||
+        body?.screen === 'GROUP_TRAININGS' ||
+        body?.screen === 'MY_BOOKINGS';
       if (
         !body ||
-        Object.keys(body).length !== 1 ||
-        (body.screen !== 'FOR_ME' &&
-          body.screen !== 'GROUP_TRAININGS' &&
-          body.screen !== 'MY_BOOKINGS')
+        (legacyScreen && Object.keys(body).length !== 1) ||
+        (!legacyScreen &&
+          (body.screen !== 'EVENT_CATALOG' || Object.keys(body).length !== 2 || !catalogQuery))
       ) {
         return sendApiError(
           request,
@@ -275,7 +424,7 @@ export function registerBookingRecommendationRoutes(
 
       const now = new Date();
       const jobId = randomUUID();
-      const screen = body.screen;
+      const screen = body.screen as BookingScreenReadJob['screen'];
       const job: BookingScreenReadJob = {
         jobId,
         screen,
@@ -283,9 +432,15 @@ export function registerBookingRecommendationRoutes(
         userId: current.userId,
         createdAt: now.toISOString(),
         expiresAt: new Date(now.getTime() + CLIENT_ASSISTED_JOB_TTL_SECONDS * 1_000).toISOString(),
+        ...(catalogQuery ? { catalogQuery } : {}),
         commands:
           screen !== 'MY_BOOKINGS'
-            ? recommendationDates(now).map((date) => ({
+            ? (catalogQuery &&
+              catalogQuery.surface === 'GAMES' &&
+              !catalogQuery.kinds.includes('COACH_GAME')
+                ? []
+                : (catalogQuery?.localDates ?? recommendationDates(now))
+              ).map((date) => ({
                 commandId: randomUUID(),
                 operation: 'schedule.read' as const,
                 date,
@@ -374,6 +529,10 @@ export function registerBookingRecommendationRoutes(
         | {
             readonly kind: 'schedule';
             readonly activities: readonly VivaExerciseRecommendation[];
+            readonly gameAssociations?: readonly {
+              readonly activityId: string;
+              readonly gameId: string;
+            }[];
           }
         | {
             readonly kind: 'upcoming';
@@ -390,18 +549,43 @@ export function registerBookingRecommendationRoutes(
           };
       try {
         if (command.operation === 'schedule.read') {
+          const exerciseExternalIds = new Map<string, string>();
+          const activities = normalizeVivaExerciseRecommendationPayload(body.payload, {
+            onAvatarSource: (activityId, sourceUrl) =>
+              options.exerciseSource?.registerAvatarSource?.(activityId, sourceUrl),
+            onTrainerAvatarSource: (activityId, source) =>
+              options.exerciseSource?.registerTrainerAvatarSource?.(activityId, source),
+            onExerciseExternalId: (activityId, externalId) =>
+              exerciseExternalIds.set(activityId, externalId),
+          }).filter(
+            (activity) =>
+              activity.kind === 'TRAINING' &&
+              moscowDate(new Date(activity.startsAt)) === command.date,
+          );
+          const mappings = options.bookingScreenMappingRepository
+            ? await options.bookingScreenMappingRepository.resolve({
+                tenantId: current.tenantId,
+                bookingExternalIds: [],
+                exerciseAssociationIds: [...exerciseExternalIds.values()].flatMap(
+                  exerciseAssociationIds,
+                ),
+              })
+            : { bookings: [], games: [], stations: [] };
+          const gamesByAssociation = new Map(
+            mappings.games.map((mapping) => [mapping.associationId, mapping.gameId]),
+          );
           result = {
             kind: 'schedule',
-            activities: normalizeVivaExerciseRecommendationPayload(body.payload, {
-              onAvatarSource: (activityId, sourceUrl) =>
-                options.exerciseSource?.registerAvatarSource?.(activityId, sourceUrl),
-              onTrainerAvatarSource: (activityId, source) =>
-                options.exerciseSource?.registerTrainerAvatarSource?.(activityId, source),
-            }).filter(
-              (activity) =>
-                activity.kind === 'TRAINING' &&
-                moscowDate(new Date(activity.startsAt)) === command.date,
-            ),
+            activities,
+            gameAssociations: activities.flatMap((activity) => {
+              const externalId = exerciseExternalIds.get(activity.id);
+              const gameId = externalId
+                ? exerciseAssociationIds(externalId)
+                    .map((associationId) => gamesByAssociation.get(associationId))
+                    .find((value): value is string => Boolean(value))
+                : undefined;
+              return gameId ? [{ activityId: activity.id, gameId }] : [];
+            }),
           };
         } else {
           const sources = normalizeVivaUpcomingBookingPayload(body.payload);
@@ -413,7 +597,7 @@ export function registerBookingRecommendationRoutes(
                   item.exerciseRef ? exerciseAssociationIds(item.exerciseRef) : [],
                 ),
               })
-            : { bookings: [], games: [] };
+            : { bookings: [], games: [], stations: [] };
           const bookingIds = new Map(
             mappings.bookings.map((item) => [item.externalId, item.bookingId]),
           );
@@ -530,6 +714,18 @@ export function registerBookingRecommendationRoutes(
           'Задание чтения не найдено.',
         );
       }
+      if (
+        job.screen === 'EVENT_CATALOG' &&
+        (phase !== undefined || !job.catalogQuery || limit !== job.catalogQuery.limit)
+      ) {
+        return sendApiError(
+          request,
+          reply,
+          400,
+          'BOOKING_SCREEN_READ_JOB_INVALID',
+          'Размер страницы каталога не совпадает с исходным запросом.',
+        );
+      }
       if (job.screen !== 'FOR_ME' && phase !== undefined) {
         return sendApiError(
           request,
@@ -561,6 +757,163 @@ export function registerBookingRecommendationRoutes(
         job.jobId,
         job.commands.map((command) => command.commandId),
       );
+      if (job.screen === 'EVENT_CATALOG') {
+        if (!job.catalogQuery || !options.eventCatalogSnapshotStore || limit > 50) {
+          return unavailable(request, reply);
+        }
+        const generatedAt = new Date();
+        const tenantKey = (request.params as { tenantKey: string }).tenantKey;
+        let catalog: {
+          readonly state: 'READY' | 'PARTIAL';
+          readonly items: readonly EventCatalogItem[];
+          readonly metadata: EventCatalogMetadata;
+        };
+        let queryHash: string;
+        if (job.catalogQuery.surface === 'TRAININGS') {
+          const trainingCatalog = buildTrainingEventCatalog({
+            activities: withHostAvatarUrls(
+              results.flatMap((result) => (result.kind === 'schedule' ? result.activities : [])),
+              options.exerciseSource,
+              tenantKey,
+            ),
+            query: job.catalogQuery,
+            completedDates: completedScheduleDates(job, results),
+            timezone: EVENT_CATALOG_TIMEZONE,
+          });
+          catalog = {
+            ...trainingCatalog,
+            items: trainingCatalog.items.map((activity) => ({
+              kind: trainingCatalogKind(activity),
+              activity,
+            })),
+          };
+          queryHash = trainingEventCatalogQueryHash(job.catalogQuery);
+        } else {
+          const selectedKinds = new Set(job.catalogQuery.kinds);
+          const gameRead = selectedKinds.has('GAME')
+            ? await readAllPublicGames({
+                ...(options.gameRepository ? { repository: options.gameRepository } : {}),
+                ...(options.photoRepository ? { photoRepository: options.photoRepository } : {}),
+                tenantId: current.tenantId,
+                now: generatedAt.toISOString(),
+                localDates: job.catalogQuery.localDates,
+              }).catch(() => ({ items: [], complete: false }) as const)
+            : { items: [], complete: true };
+          const tournamentRead = selectedKinds.has('TOURNAMENT')
+            ? await readTournaments({
+                ...(options.tournamentSource ? { source: options.tournamentSource } : {}),
+                dates: job.catalogQuery.localDates,
+              })
+            : { items: [], complete: true };
+          const canonicalTournamentRead = selectedKinds.has('TOURNAMENT')
+            ? await canonicalTournaments({
+                tenantId: current.tenantId,
+                tournaments: withTournamentOrganizerAvatarUrls(
+                  tournamentRead.items,
+                  options.tournamentSource,
+                  tenantKey,
+                ),
+                ...(options.tournamentSource ? { source: options.tournamentSource } : {}),
+                ...(options.bookingScreenMappingRepository
+                  ? { mappingRepository: options.bookingScreenMappingRepository }
+                  : {}),
+                ...(options.locationRepository
+                  ? { locationRepository: options.locationRepository }
+                  : {}),
+              }).catch(() => ({ items: [], complete: false, gameAssociations: [] }) as const)
+            : { items: [], complete: true, gameAssociations: [] };
+          const coachItems = withHostAvatarUrls(
+            results.flatMap((result) => (result.kind === 'schedule' ? result.activities : [])),
+            options.exerciseSource,
+            tenantKey,
+          ).flatMap((activity) =>
+            trainingCatalogKind(activity) === 'COACH_GAME'
+              ? [{ kind: 'COACH_GAME' as const, activity }]
+              : [],
+          );
+          const integrationMappings: GamesEventCatalogIntegrationMapping[] = [
+            ...results.flatMap((result) =>
+              result.kind === 'schedule'
+                ? (result.gameAssociations ?? []).map((association) => ({
+                    sourceKind: 'COACH_GAME' as const,
+                    sourceId: association.activityId,
+                    gameId: association.gameId,
+                  }))
+                : [],
+            ),
+            ...canonicalTournamentRead.gameAssociations.map((association) => ({
+              sourceKind: 'TOURNAMENT' as const,
+              sourceId: association.tournamentId,
+              gameId: association.gameId,
+            })),
+          ];
+          catalog = buildGamesEventCatalog({
+            games: gameRead.items,
+            coachGames: coachItems,
+            tournaments: canonicalTournamentRead.items,
+            integrationMappings,
+            query: job.catalogQuery,
+            localGamesComplete: gameRead.complete,
+            completedScheduleDates: completedScheduleDates(job, results),
+            tournamentsComplete: tournamentRead.complete && canonicalTournamentRead.complete,
+            timezone: EVENT_CATALOG_TIMEZONE,
+          });
+          queryHash = gamesEventCatalogQueryHash(job.catalogQuery);
+        }
+        const catalogItems = catalog.items;
+        const version = snapshotVersion({
+          query: job.catalogQuery,
+          items: catalogItems,
+          metadata: catalog.metadata,
+        });
+        const snapshotId = randomUUID();
+        const staleAt = new Date(
+          generatedAt.getTime() + EVENT_CATALOG_SNAPSHOT_TTL_SECONDS * 1_000,
+        ).toISOString();
+        const created = await options.eventCatalogSnapshotStore.create(
+          {
+            snapshotId,
+            tenantId: current.tenantId,
+            userId: current.userId,
+            queryHash,
+            version,
+            generatedAt: generatedAt.toISOString(),
+            staleAt,
+            state: catalog.state,
+            items: catalogItems,
+            metadata: catalog.metadata,
+          },
+          EVENT_CATALOG_SNAPSHOT_TTL_SECONDS,
+        );
+        if (!created) return unavailable(request, reply);
+        const firstPage = await options.eventCatalogSnapshotStore.firstPage({
+          snapshotId,
+          tenantId: current.tenantId,
+          userId: current.userId,
+          queryHash,
+          limit,
+          ttlSeconds: EVENT_CATALOG_SNAPSHOT_TTL_SECONDS,
+        });
+        if (firstPage.outcome !== 'PAGE') return unavailable(request, reply);
+        const metadata = firstPage.page.metadata as EventCatalogMetadata;
+        return {
+          screen: job.screen,
+          state: catalog.state,
+          completedCommands: results.length,
+          totalCommands: job.commands.length,
+          catalog: {
+            state: firstPage.page.state,
+            snapshotVersion: firstPage.page.snapshotVersion,
+            generatedAt: firstPage.page.generatedAt,
+            staleAt: firstPage.page.staleAt,
+            items: firstPage.page.items,
+            nextCursor: firstPage.page.nextCursor,
+            totalMatched: metadata.totalMatched,
+            facets: metadata.facets,
+            sourceStatus: metadata.sourceStatus,
+          },
+        };
+      }
       if (job.screen === 'MY_BOOKINGS') {
         const generatedAt = new Date();
         const items = results
@@ -571,17 +924,38 @@ export function registerBookingRecommendationRoutes(
           )
           .slice(0, limit);
         const ready = results.length === job.commands.length;
+        const generatedProjection = {
+          version: snapshotVersion(items),
+          generatedAt: generatedAt.toISOString(),
+          staleAt: new Date(generatedAt.getTime() + 60_000).toISOString(),
+          items,
+        };
+        const storedProjection =
+          ready && options.upcomingBookingsRepository
+            ? await options.upcomingBookingsRepository.replace({
+                tenantId: current.tenantId,
+                userId: current.userId,
+                ...generatedProjection,
+              })
+            : !ready && options.upcomingBookingsRepository
+              ? await options.upcomingBookingsRepository.get(current.tenantId, current.userId)
+              : undefined;
         return {
           screen: job.screen,
           state: ready ? 'READY' : 'PARTIAL',
           completedCommands: results.length,
           totalCommands: job.commands.length,
-          bookings: {
-            version: snapshotVersion(items),
-            generatedAt: generatedAt.toISOString(),
-            staleAt: new Date(generatedAt.getTime() + (ready ? 60_000 : 0)).toISOString(),
-            items,
-          },
+          bookings: storedProjection
+            ? {
+                version: storedProjection.version,
+                generatedAt: storedProjection.generatedAt,
+                staleAt: storedProjection.staleAt,
+                items: storedProjection.items,
+              }
+            : {
+                ...generatedProjection,
+                staleAt: ready ? generatedProjection.staleAt : generatedProjection.generatedAt,
+              },
         };
       }
       if (job.screen === 'GROUP_TRAININGS') {
@@ -653,7 +1027,7 @@ export function registerBookingRecommendationRoutes(
             tenantKey,
           ),
           tournaments: withTournamentOrganizerAvatarUrls(
-            tournaments,
+            tournaments.items,
             options.tournamentSource,
             tenantKey,
           ),
@@ -670,6 +1044,75 @@ export function registerBookingRecommendationRoutes(
       } catch {
         return unavailable(request, reply);
       }
+    },
+  );
+
+  app.get(
+    '/user/api/v2/:tenantKey/event-catalog',
+    { preHandler: [...options.authenticatedTenantHandlers] },
+    async (request, reply) => {
+      reply.header('Cache-Control', 'private, no-store');
+      const current = principal(request);
+      if (!current) {
+        return sendApiError(request, reply, 401, 'AUTH_REQUIRED', 'Требуется авторизация.');
+      }
+      const query = request.query as Record<string, unknown>;
+      const cursor = typeof query.cursor === 'string' ? query.cursor : undefined;
+      const limit = query.limit === undefined ? 20 : Number(query.limit);
+      if (
+        Object.keys(query).some((key) => key !== 'cursor' && key !== 'limit') ||
+        !cursor ||
+        !UUID_PATTERN.test(cursor) ||
+        !Number.isInteger(limit) ||
+        limit < 1 ||
+        limit > 50 ||
+        !options.eventCatalogSnapshotStore
+      ) {
+        return sendApiError(
+          request,
+          reply,
+          400,
+          'CATALOG_CURSOR_INVALID',
+          'Курсор каталога недействителен.',
+        );
+      }
+      const result = await options.eventCatalogSnapshotStore.continuePage({
+        cursor,
+        tenantId: current.tenantId,
+        userId: current.userId,
+        limit,
+        ttlSeconds: EVENT_CATALOG_SNAPSHOT_TTL_SECONDS,
+      });
+      if (result.outcome === 'EXPIRED') {
+        return sendApiError(
+          request,
+          reply,
+          410,
+          'CATALOG_CURSOR_EXPIRED',
+          'Снимок каталога устарел. Обновите список.',
+        );
+      }
+      if (result.outcome === 'INVALID') {
+        return sendApiError(
+          request,
+          reply,
+          400,
+          'CATALOG_CURSOR_INVALID',
+          'Курсор каталога недействителен.',
+        );
+      }
+      const metadata = result.page.metadata as EventCatalogMetadata;
+      return {
+        state: result.page.state,
+        snapshotVersion: result.page.snapshotVersion,
+        generatedAt: result.page.generatedAt,
+        staleAt: result.page.staleAt,
+        items: result.page.items,
+        nextCursor: result.page.nextCursor,
+        totalMatched: metadata.totalMatched,
+        facets: metadata.facets,
+        sourceStatus: metadata.sourceStatus,
+      };
     },
   );
 
@@ -730,7 +1173,7 @@ export function registerBookingRecommendationRoutes(
                 now,
               }),
           cursor
-            ? Promise.resolve([])
+            ? Promise.resolve({ items: [], complete: true })
             : readTournaments({
                 ...(options.tournamentSource ? { source: options.tournamentSource } : {}),
                 dates: recommendationDates(now),
@@ -755,7 +1198,7 @@ export function registerBookingRecommendationRoutes(
           friendUserIds: friends.items.map((friend) => friend.userId),
           activities: withHostAvatarUrls(activities, options.exerciseSource, tenantKey),
           tournaments: withTournamentOrganizerAvatarUrls(
-            tournaments,
+            tournaments.items,
             options.tournamentSource,
             tenantKey,
           ),

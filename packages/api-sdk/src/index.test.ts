@@ -712,6 +712,88 @@ describe('PadlHubApiClient booking personalization boundary', () => {
     expect(calls.map((call) => requestUrl(call.input)).join(' ')).not.toMatch(/viva|provider/i);
   });
 
+  it('starts a filtered training catalog job on v1 and continues its snapshot on v2', async () => {
+    const calls: Array<{ input: Parameters<typeof fetch>[0]; init?: RequestInit }> = [];
+    const fetchImplementation: typeof fetch = (input, init) => {
+      calls.push({ input, ...(init === undefined ? {} : { init }) });
+      if (requestUrl(input).includes('/booking-screen-read-jobs')) {
+        return Promise.resolve(
+          jsonResponse({
+            jobId: '41000000-0000-4000-8000-000000000001',
+            screen: 'EVENT_CATALOG',
+            expiresAt: '2026-08-01T09:02:00.000Z',
+            commands: [
+              {
+                commandId: '41000000-0000-4000-8000-000000000002',
+                operation: 'schedule.read',
+                date: '2026-08-02',
+              },
+            ],
+            concurrency: 1,
+          }),
+        );
+      }
+      return Promise.resolve(
+        jsonResponse({
+          state: 'READY',
+          snapshotVersion: 'a'.repeat(64),
+          generatedAt: '2026-08-01T09:00:00.000Z',
+          staleAt: '2026-08-01T09:10:00.000Z',
+          items: [],
+          nextCursor: null,
+          totalMatched: 0,
+          facets: { kinds: [], categories: [], stations: [] },
+          sourceStatus: [
+            { source: 'SCHEDULE', localDate: '2026-08-02', state: 'READY', errorCode: null },
+          ],
+        }),
+      );
+    };
+    const client = createClient(fetchImplementation, {
+      initialAccessToken: authenticatedSession.accessToken,
+    });
+
+    await client.startEventCatalogReadJob({
+      surface: 'TRAININGS',
+      localDates: ['2026-08-02'],
+      kinds: ['COACH_GAME', 'GROUP_TRAINING', 'SPLIT'],
+      stationIds: ['42000000-0000-4000-8000-000000000001'],
+      availability: 'EXCLUDE_FULL',
+      startsAfterLocal: '18:00',
+      limit: 20,
+    });
+    await client.continueEventCatalog('43000000-0000-4000-8000-000000000001', 20);
+
+    expect(requestUrl(calls[0]?.input ?? '')).toBe(
+      'https://api.padlhub.test/user/api/v1/local-padel/booking-screen-read-jobs',
+    );
+    expect(calls[0]?.init?.method).toBe('POST');
+    expect(new Headers(calls[0]?.init?.headers).get('Idempotency-Key')).toBeTruthy();
+    expect(JSON.parse(stringRequestBody(calls[0]?.init?.body))).toEqual({
+      screen: 'EVENT_CATALOG',
+      query: {
+        surface: 'TRAININGS',
+        localDates: ['2026-08-02'],
+        kinds: ['COACH_GAME', 'GROUP_TRAINING', 'SPLIT'],
+        stationIds: ['42000000-0000-4000-8000-000000000001'],
+        availability: 'EXCLUDE_FULL',
+        startsAfterLocal: '18:00',
+        limit: 20,
+      },
+    });
+    expect(requestUrl(calls[1]?.input ?? '')).toBe(
+      'https://api.padlhub.test/user/api/v2/local-padel/event-catalog?cursor=43000000-0000-4000-8000-000000000001&limit=20',
+    );
+    expect(new Headers(calls[1]?.init?.headers).get('Authorization')).toBe(
+      `Bearer ${authenticatedSession.accessToken}`,
+    );
+    expect(
+      calls
+        .map((call) => `${requestUrl(call.input)} ${stringRequestBody(call.init?.body ?? '')}`)
+        .join(' '),
+    ).not.toMatch(/viva|provider/i);
+  });
+
   it('records an idempotent promotion event without client identity fields', async () => {
     const calls: Array<{ input: Parameters<typeof fetch>[0]; init?: RequestInit }> = [];
     const fetchImplementation: typeof fetch = (input, init) => {

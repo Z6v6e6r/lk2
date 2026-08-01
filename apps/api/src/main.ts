@@ -27,6 +27,7 @@ import {
   createProfileSummaryRepository,
   createPromotionEngagementRepository,
   createTrainerAvatarRepository,
+  createUpcomingBookingsRepository,
 } from '@phub/database';
 import {
   LegacyGamesMongoAdapter,
@@ -36,7 +37,6 @@ import {
 import { createNotificationEndpointCipher } from '@phub/notifications';
 import { createLogger, startTelemetry } from '@phub/observability';
 import {
-  VivaBookingHistorySourceAdapter,
   VivaCoachGameSummaryAdapter,
   VivaExerciseRecommendationSourceAdapter,
   VivaIdentityProvider,
@@ -44,9 +44,11 @@ import {
 import Redis from 'ioredis';
 
 import { buildApp } from './app.js';
-import { ActivityHistoryRefreshCoordinator } from './bookings/activity-history-refresh.js';
+import { ActivityHistoryProjectionCoordinator } from './bookings/activity-history-refresh.js';
 import { ActivityHistoryGameBackfill } from './bookings/activity-history-game-backfill.js';
 import { RedisBookingScreenReadJobStore } from './bookings/booking-screen-read-job-store.js';
+import { RedisEventCatalogSnapshotStore } from './bookings/event-catalog-snapshot-store.js';
+import type { EventCatalogItem } from './bookings/booking-recommendation-routes.js';
 import { listViewerGameCards } from './games/game-card-queries.js';
 import { S3GiftCertificateMediaStore } from './gift-certificates/gift-certificate-media-store.js';
 import { S3GiftCertificateArtifactReadStore } from './gift-certificates/gift-certificate-artifact-store.js';
@@ -201,26 +203,10 @@ const readAllLocalGameHistory = gameReadRepository
       throw new Error('ACTIVITY_HISTORY_LOCAL_GAMES_LIMIT_EXCEEDED');
     }
   : undefined;
-const activityHistoryRefresher =
+const activityHistoryProjector =
   activityHistoryRepository && config.ACTIVITY_HISTORY_SYNC_ENABLED
-    ? new ActivityHistoryRefreshCoordinator({
+    ? new ActivityHistoryProjectionCoordinator({
         repository: activityHistoryRepository,
-        source: new VivaBookingHistorySourceAdapter({
-          mode: config.VIVA_MODE,
-          apiBaseUrl: config.VIVA_END_USER_API_URL,
-          tenantKey: config.VIVA_AUTH_TENANT_KEY,
-          timeoutMs: config.VIVA_TIMEOUT_MS,
-          onMetric: (metric) => logger.info({ metric }, 'Viva activity history read operation'),
-        }),
-        getAccessToken: async ({ tenantId, userId, correlationId }) =>
-          (
-            await authService.issueVivaAccessToken({
-              tenantId,
-              userId,
-              correlationId,
-            })
-          ).accessToken,
-        pageSize: config.ACTIVITY_HISTORY_PROVIDER_PAGE_SIZE,
         freshSeconds: config.ACTIVITY_HISTORY_FRESH_SECONDS,
         ...(activityHistoryGameBackfill
           ? {
@@ -349,14 +335,16 @@ const app = await buildApp({
       }
     : {}),
   bookingPreferencesRepository: createBookingPreferencesRepository(pool),
-  ...(config.VIVA_DIRECT_READ_ENABLED
+  upcomingBookingsRepository: createUpcomingBookingsRepository(pool),
+  ...(config.VIVA_DIRECT_READ_ENABLED || config.GAMES_READ_ENABLED
     ? {
         bookingScreenReadJobStore: new RedisBookingScreenReadJobStore(redis),
+        eventCatalogSnapshotStore: new RedisEventCatalogSnapshotStore<EventCatalogItem>(redis),
         bookingScreenMappingRepository: createBookingScreenMappingRepository(pool),
       }
     : {}),
   ...(activityHistoryRepository ? { activityHistoryRepository } : {}),
-  ...(activityHistoryRefresher ? { activityHistoryRefresher } : {}),
+  ...(activityHistoryProjector ? { activityHistoryProjector } : {}),
   ...(gameReadRepository ? { gameReadRepository } : {}),
   ...(tournamentSummarySource ? { tournamentSummarySource } : {}),
   ...(coachGameSummarySource ? { coachGameSummarySource } : {}),

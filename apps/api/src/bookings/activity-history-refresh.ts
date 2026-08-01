@@ -11,15 +11,10 @@ import type { VivaBookingHistoryPage, VivaBookingHistorySourcePort } from '@phub
 
 import type { ActivityHistoryRefreshService } from './activity-history-routes.js';
 
-export interface ActivityHistoryRefreshCoordinatorOptions {
+export type ActivityHistoryRefreshReason = 'UNCOVERED' | 'STALE' | 'NEXT_PAGE';
+
+export interface ActivityHistoryProjectionCoordinatorOptions {
   readonly repository: ActivityHistoryRepository;
-  readonly source: VivaBookingHistorySourcePort;
-  readonly getAccessToken: (input: {
-    readonly tenantId: string;
-    readonly userId: string;
-    readonly correlationId: string;
-  }) => Promise<string>;
-  readonly pageSize: number;
   readonly freshSeconds: number;
   readonly backfillGames?: (input: {
     readonly tenantId: string;
@@ -49,6 +44,16 @@ export interface ActivityHistoryRefreshCoordinatorOptions {
   readonly now?: () => Date;
 }
 
+export interface ActivityHistoryRefreshCoordinatorOptions extends ActivityHistoryProjectionCoordinatorOptions {
+  readonly source: VivaBookingHistorySourcePort;
+  readonly getAccessToken: (input: {
+    readonly tenantId: string;
+    readonly userId: string;
+    readonly correlationId: string;
+  }) => Promise<string>;
+  readonly pageSize: number;
+}
+
 function revision(page: VivaBookingHistoryPage): string {
   return createHash('sha256')
     .update(
@@ -62,10 +67,7 @@ function revision(page: VivaBookingHistoryPage): string {
     .digest('hex');
 }
 
-function providerPage(
-  state: ActivityHistorySyncState,
-  reason: 'UNCOVERED' | 'STALE' | 'NEXT_PAGE',
-) {
+function providerPage(state: ActivityHistorySyncState, reason: ActivityHistoryRefreshReason) {
   if (reason !== 'NEXT_PAGE') return 0;
   const parsed = Number(state.nextProviderCursor);
   if (!Number.isInteger(parsed) || parsed < 0) throw new Error('ACTIVITY_HISTORY_CURSOR_INVALID');
@@ -85,7 +87,7 @@ function oldestCoveredAt(
 function syncInput(input: {
   readonly state: ActivityHistorySyncState;
   readonly page: VivaBookingHistoryPage;
-  readonly reason: 'UNCOVERED' | 'STALE' | 'NEXT_PAGE';
+  readonly reason: ActivityHistoryRefreshReason;
   readonly now: Date;
   readonly freshSeconds: number;
   readonly sourceRevision: string;
@@ -146,17 +148,17 @@ function exerciseAssociationId(exerciseRef: string | undefined): string | undefi
 
 export class ActivityHistoryRefreshCoordinator implements ActivityHistoryRefreshService {
   private readonly inflight = new Map<string, Promise<void>>();
-  private readonly now: () => Date;
+  private readonly projector: ActivityHistoryProjectionCoordinator;
 
   public constructor(private readonly options: ActivityHistoryRefreshCoordinatorOptions) {
-    this.now = options.now ?? (() => new Date());
+    this.projector = new ActivityHistoryProjectionCoordinator(options);
   }
 
   public refresh(input: {
     readonly tenantId: string;
     readonly userId: string;
     readonly correlationId: string;
-    readonly reason: 'UNCOVERED' | 'STALE' | 'NEXT_PAGE';
+    readonly reason: ActivityHistoryRefreshReason;
   }): Promise<void> {
     const key = `${input.tenantId}:${input.userId}`;
     const existing = this.inflight.get(key);
@@ -172,7 +174,7 @@ export class ActivityHistoryRefreshCoordinator implements ActivityHistoryRefresh
     readonly tenantId: string;
     readonly userId: string;
     readonly correlationId: string;
-    readonly reason: 'UNCOVERED' | 'STALE' | 'NEXT_PAGE';
+    readonly reason: ActivityHistoryRefreshReason;
   }): Promise<void> {
     try {
       const state = await this.options.repository.getSyncState({
@@ -186,130 +188,7 @@ export class ActivityHistoryRefreshCoordinator implements ActivityHistoryRefresh
         page: providerPage(state, input.reason),
         size: this.options.pageSize,
       });
-      const fetchedAt = this.now();
-      const sourceRevision = revision(page);
-      const items: PersistActivityHistoryItemInput[] = [];
-      const supersededItemIds = new Set<string>();
-      const exerciseOccurrences = page.records.flatMap((record) =>
-        record.kind === 'GAME' && record.sourceRef.exerciseRef
-          ? [
-              {
-                exerciseExternalId: record.sourceRef.exerciseRef,
-                startsAt: record.startsAt,
-              },
-            ]
-          : [],
-      );
-      if (this.options.backfillGames && exerciseOccurrences.length > 0) {
-        await this.options.backfillGames({
-          tenantId: input.tenantId,
-          userId: input.userId,
-          correlationId: input.correlationId,
-          exerciseOccurrences,
-          now: fetchedAt,
-        });
-      }
-      const localGames =
-        input.reason !== 'NEXT_PAGE' && this.options.readLocalGames
-          ? await this.options.readLocalGames({
-              tenantId: input.tenantId,
-              userId: input.userId,
-            })
-          : [];
-      const localGameIds = new Set(localGames.map((game) => game.id));
-      const recordAssociationIds = new Map<string, string>();
-      if (localGames.length > 0) {
-        for (const record of page.records) {
-          if (record.kind !== 'GAME') continue;
-          const associationId = exerciseAssociationId(record.sourceRef.exerciseRef);
-          if (associationId) recordAssociationIds.set(record.sourceRef.bookingRef, associationId);
-        }
-      }
-      const associatedGames = new Map(
-        (
-          await this.options.repository.resolveVivaExerciseGameAssociations({
-            tenantId: input.tenantId,
-            associationIds: [...recordAssociationIds.values()],
-          })
-        ).map((association) => [association.associationId, association.gameId]),
-      );
-      for (const record of page.records) {
-        const associatedGameId = associatedGames.get(
-          recordAssociationIds.get(record.sourceRef.bookingRef) ?? '',
-        );
-        if (
-          record.kind === 'GAME' &&
-          associatedGameId !== undefined &&
-          localGameIds.has(associatedGameId)
-        ) {
-          const mapping = await this.options.repository.resolveSourceMapping({
-            tenantId: input.tenantId,
-            externalSystem: 'VIVA',
-            entityType: 'booking_history',
-            externalId: record.sourceRef.bookingRef,
-            externalVersion: sourceRevision,
-            syncedAt: fetchedAt.toISOString(),
-          });
-          supersededItemIds.add(mapping.internalId);
-          continue;
-        }
-        const mapping = await this.options.repository.resolveSourceMapping({
-          tenantId: input.tenantId,
-          externalSystem: 'VIVA',
-          entityType: 'booking_history',
-          externalId: record.sourceRef.bookingRef,
-          externalVersion: sourceRevision,
-          syncedAt: fetchedAt.toISOString(),
-        });
-        const subtitle = [record.venue.room, record.venue.address].filter(Boolean).join(' · ');
-        items.push({
-          id: mapping.internalId,
-          kind: record.kind,
-          status: record.status,
-          occurredAt: record.startsAt,
-          startsAt: record.startsAt,
-          ...(record.endsAt ? { endsAt: record.endsAt } : {}),
-          title: record.title,
-          venueName: record.venue.name,
-          integrationMappingId: mapping.mappingId,
-          details: subtitle ? { subtitle } : {},
-          sourceRevision,
-          syncedAt: fetchedAt.toISOString(),
-        });
-      }
-      if (input.reason !== 'NEXT_PAGE') {
-        for (const game of localGames) {
-          items.push({
-            id: game.id,
-            kind: 'GAME',
-            status: game.displayState === 'CANCELLED' ? 'CANCELLED' : 'COMPLETED',
-            occurredAt: game.startsAt,
-            startsAt: game.startsAt,
-            endsAt: game.endsAt,
-            title: game.title,
-            venueName: game.station.name,
-            route: game.deepLink,
-            gameId: game.id,
-            details: { game },
-            sourceRevision: `game:${game.revision}`,
-            syncedAt: fetchedAt.toISOString(),
-          });
-        }
-      }
-      await this.options.repository.persistPage({
-        tenantId: input.tenantId,
-        userId: input.userId,
-        items,
-        ...(supersededItemIds.size > 0 ? { supersededItemIds: [...supersededItemIds] } : {}),
-        sync: syncInput({
-          state,
-          page,
-          reason: input.reason,
-          now: fetchedAt,
-          freshSeconds: this.options.freshSeconds,
-          sourceRevision,
-        }),
-      });
+      await this.projector.project({ ...input, page });
     } catch (error) {
       await this.options.repository
         .recordSyncFailure({
@@ -320,5 +199,156 @@ export class ActivityHistoryRefreshCoordinator implements ActivityHistoryRefresh
         .catch(() => undefined);
       throw error;
     }
+  }
+}
+
+/**
+ * Validates and persists a provider-neutral history page. The caller owns the
+ * transport; this coordinator never acquires a Viva token or performs egress.
+ */
+export class ActivityHistoryProjectionCoordinator {
+  private readonly now: () => Date;
+
+  public constructor(private readonly options: ActivityHistoryProjectionCoordinatorOptions) {
+    this.now = options.now ?? (() => new Date());
+  }
+
+  public async project(input: {
+    readonly tenantId: string;
+    readonly userId: string;
+    readonly correlationId: string;
+    readonly reason: ActivityHistoryRefreshReason;
+    readonly page: VivaBookingHistoryPage;
+  }): Promise<void> {
+    const state = await this.options.repository.getSyncState({
+      tenantId: input.tenantId,
+      userId: input.userId,
+    });
+    const expectedPage = providerPage(state, input.reason);
+    if (input.page.page !== expectedPage) throw new Error('ACTIVITY_HISTORY_PAGE_MISMATCH');
+    const fetchedAt = this.now();
+    const sourceRevision = revision(input.page);
+    const items: PersistActivityHistoryItemInput[] = [];
+    const supersededItemIds = new Set<string>();
+    const exerciseOccurrences = input.page.records.flatMap((record) =>
+      record.kind === 'GAME' && record.sourceRef.exerciseRef
+        ? [
+            {
+              exerciseExternalId: record.sourceRef.exerciseRef,
+              startsAt: record.startsAt,
+            },
+          ]
+        : [],
+    );
+    if (this.options.backfillGames && exerciseOccurrences.length > 0) {
+      await this.options.backfillGames({
+        tenantId: input.tenantId,
+        userId: input.userId,
+        correlationId: input.correlationId,
+        exerciseOccurrences,
+        now: fetchedAt,
+      });
+    }
+    const localGames =
+      input.reason !== 'NEXT_PAGE' && this.options.readLocalGames
+        ? await this.options.readLocalGames({
+            tenantId: input.tenantId,
+            userId: input.userId,
+          })
+        : [];
+    const localGameIds = new Set(localGames.map((game) => game.id));
+    const recordAssociationIds = new Map<string, string>();
+    if (localGames.length > 0) {
+      for (const record of input.page.records) {
+        if (record.kind !== 'GAME') continue;
+        const associationId = exerciseAssociationId(record.sourceRef.exerciseRef);
+        if (associationId) recordAssociationIds.set(record.sourceRef.bookingRef, associationId);
+      }
+    }
+    const associatedGames = new Map(
+      (
+        await this.options.repository.resolveVivaExerciseGameAssociations({
+          tenantId: input.tenantId,
+          associationIds: [...recordAssociationIds.values()],
+        })
+      ).map((association) => [association.associationId, association.gameId]),
+    );
+    for (const record of input.page.records) {
+      const associatedGameId = associatedGames.get(
+        recordAssociationIds.get(record.sourceRef.bookingRef) ?? '',
+      );
+      if (
+        record.kind === 'GAME' &&
+        associatedGameId !== undefined &&
+        localGameIds.has(associatedGameId)
+      ) {
+        const mapping = await this.options.repository.resolveSourceMapping({
+          tenantId: input.tenantId,
+          externalSystem: 'VIVA',
+          entityType: 'booking_history',
+          externalId: record.sourceRef.bookingRef,
+          externalVersion: sourceRevision,
+          syncedAt: fetchedAt.toISOString(),
+        });
+        supersededItemIds.add(mapping.internalId);
+        continue;
+      }
+      const mapping = await this.options.repository.resolveSourceMapping({
+        tenantId: input.tenantId,
+        externalSystem: 'VIVA',
+        entityType: 'booking_history',
+        externalId: record.sourceRef.bookingRef,
+        externalVersion: sourceRevision,
+        syncedAt: fetchedAt.toISOString(),
+      });
+      const subtitle = [record.venue.room, record.venue.address].filter(Boolean).join(' · ');
+      items.push({
+        id: mapping.internalId,
+        kind: record.kind,
+        status: record.status,
+        occurredAt: record.startsAt,
+        startsAt: record.startsAt,
+        ...(record.endsAt ? { endsAt: record.endsAt } : {}),
+        title: record.title,
+        venueName: record.venue.name,
+        integrationMappingId: mapping.mappingId,
+        details: subtitle ? { subtitle } : {},
+        sourceRevision,
+        syncedAt: fetchedAt.toISOString(),
+      });
+    }
+    if (input.reason !== 'NEXT_PAGE') {
+      for (const game of localGames) {
+        items.push({
+          id: game.id,
+          kind: 'GAME',
+          status: game.displayState === 'CANCELLED' ? 'CANCELLED' : 'COMPLETED',
+          occurredAt: game.startsAt,
+          startsAt: game.startsAt,
+          endsAt: game.endsAt,
+          title: game.title,
+          venueName: game.station.name,
+          route: game.deepLink,
+          gameId: game.id,
+          details: { game },
+          sourceRevision: `game:${game.revision}`,
+          syncedAt: fetchedAt.toISOString(),
+        });
+      }
+    }
+    await this.options.repository.persistPage({
+      tenantId: input.tenantId,
+      userId: input.userId,
+      items,
+      ...(supersededItemIds.size > 0 ? { supersededItemIds: [...supersededItemIds] } : {}),
+      sync: syncInput({
+        state,
+        page: input.page,
+        reason: input.reason,
+        now: fetchedAt,
+        freshSeconds: this.options.freshSeconds,
+        sourceRevision,
+      }),
+    });
   }
 }

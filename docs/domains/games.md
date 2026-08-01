@@ -24,6 +24,17 @@ The target module must provide:
 The module is implemented inside the existing modular monolith. It does not introduce a games
 microservice.
 
+### Discovery filtering and pagination
+
+The current public Games keyset cursor remains the reference invariant: filters are applied before
+the limit and the cursor is bound to the normalized query. ADR 0021 extends that invariant to the
+mixed `/games` surface. Games, coach activities and tournaments must be normalized into one stable
+snapshot and globally paginated; React must not merge independently bounded first pages.
+
+Multiple stations use OR semantics in the server query. Tournament station filtering requires a
+canonical PadlHub station UUID, not venue-name prefix matching. A local Game and a Viva activity are
+deduplicated only through a verified integration mapping.
+
 ## 2. Domain boundary and ownership
 
 Games are `LOCAL_PRIMARY`: PostgreSQL is the source of truth for the game aggregate. Business state

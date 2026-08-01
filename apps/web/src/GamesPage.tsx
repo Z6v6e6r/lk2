@@ -1,23 +1,25 @@
-import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 
 import { BookingActivityCard } from './BookingRecommendations.js';
 import { GameCard, type GameCardAction, type GameCardModel } from './GameCard.js';
 import { GameDetailView, type GameDetailTab } from './GameDetailView.js';
-import { MainBottomNavigation } from './HomeDashboardPage.js';
-import { TournamentSummaryCard } from './TournamentSummaryCard.js';
 import {
-  isCoachGameActivity,
-  type BookingRecommendationActivity,
-} from './booking-activity-kind.js';
+  MainBottomNavigation,
+  UpcomingBookingCard,
+  type HomeUpcomingItem,
+} from './HomeDashboardPage.js';
+import { TournamentSummaryCard } from './TournamentSummaryCard.js';
 import { profileUserIdForParticipant } from './game-participant-profile.js';
 import type {
   AuthGateway,
+  EventCatalogItem,
+  EventCatalogPage,
+  EventCatalogQuery,
   GameCard as ViewerGameCard,
   GameCommandResult,
   PublicGameCard,
-  PublicGameFilters,
-  PublicTournamentSummary,
 } from './auth-gateway.js';
+import { usePaginatedEventSearch } from './usePaginatedEventSearch.js';
 
 type GamesTab = 'DISCOVER' | 'UPCOMING';
 
@@ -33,27 +35,6 @@ const gameKindOptions: readonly {
   { value: 'COACH_GAME', label: 'Игра + Тренер' },
   { value: 'TOURNAMENT', label: 'Турнир' },
 ];
-
-function filterIncludesKind(
-  selectedKinds: readonly GameKindFilter[],
-  kind: GameKindFilter,
-): boolean {
-  return selectedKinds.length === 0 || selectedKinds.includes(kind);
-}
-
-function gameMatchesKind(
-  game: Pick<GameCardModel, 'kind'>,
-  selectedKinds: readonly GameKindFilter[],
-): boolean {
-  return filterIncludesKind(selectedKinds, game.kind === 'COACH_GAME' ? 'COACH_GAME' : 'GAME');
-}
-
-function trainingMatchesKind(
-  activity: BookingRecommendationActivity,
-  selectedKinds: readonly GameKindFilter[],
-): boolean {
-  return isCoachGameActivity(activity) && filterIncludesKind(selectedKinds, 'COACH_GAME');
-}
 
 const levelRangeFilters = {
   ALL: null,
@@ -73,9 +54,6 @@ const levelRangeLabels: Readonly<Record<GameLevelRangeFilter, string>> = {
 
 const weekdayFormatter = new Intl.DateTimeFormat('ru-RU', { weekday: 'short' });
 const dayFormatter = new Intl.DateTimeFormat('ru-RU', { day: '2-digit' });
-const gameLevelOrder = new Map(
-  (['D', 'D+', 'C', 'C+', 'B', 'B+', 'A'] as const).map((level, index) => [level, index]),
-);
 
 function dateKey(date: Date): string {
   const year = date.getFullYear();
@@ -84,78 +62,15 @@ function dateKey(date: Date): string {
   return `${year}-${month}-${day}`;
 }
 
-function dateRange(
-  key: string,
-  startsAfter: GameStartAfterFilter,
-): { readonly startsFrom: string; readonly startsTo: string } {
-  const from = new Date(`${key}T${startsAfter === '18:00' ? '18:00:00' : '00:00:00'}`);
-  const to = new Date(from);
-  if (startsAfter === '18:00') {
-    to.setHours(24, 0, 0, 0);
-  } else {
-    to.setDate(to.getDate() + 1);
-  }
-  return { startsFrom: from.toISOString(), startsTo: to.toISOString() };
-}
+type GamesCatalogQuery = Omit<EventCatalogQuery, 'surface' | 'kinds'> & {
+  readonly surface: 'GAMES';
+  readonly kinds: GameKindFilter[];
+};
 
-function tournamentDateRange(selectedDate: string | null): {
-  readonly dateFrom: string;
-  readonly dateTo: string;
-} {
-  const from = selectedDate ? new Date(`${selectedDate}T00:00:00`) : new Date();
-  from.setHours(0, 0, 0, 0);
-  const to = new Date(from);
-  to.setDate(to.getDate() + (selectedDate ? 1 : 15));
-  return { dateFrom: dateKey(from), dateTo: dateKey(to) };
-}
-
-function activityDateKey(activity: BookingRecommendationActivity): string {
-  return new Intl.DateTimeFormat('en-CA', {
-    timeZone: activity.timezone,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).format(new Date(activity.startsAt));
-}
-
-function activityStartsAfter(
-  activity: BookingRecommendationActivity,
-  startsAfter: GameStartAfterFilter,
-): boolean {
-  if (startsAfter === 'ALL') return true;
-  const timeParts = new Intl.DateTimeFormat('en-GB', {
-    timeZone: activity.timezone,
-    hour: '2-digit',
-    minute: '2-digit',
-    hourCycle: 'h23',
-  }).formatToParts(new Date(activity.startsAt));
-  const hour = Number(timeParts.find((part) => part.type === 'hour')?.value ?? 0);
-  const minute = Number(timeParts.find((part) => part.type === 'minute')?.value ?? 0);
-  return hour * 60 + minute >= 18 * 60;
-}
-
-function activityMatchesLevel(
-  activity: BookingRecommendationActivity,
-  levelRange: GameLevelRangeFilter,
-): boolean {
-  const selectedRange = levelRangeFilters[levelRange];
-  if (!selectedRange) return true;
-  const activityRange = activity.levelRange;
-  if (!activityRange?.from || !activityRange.to) return false;
-  const selectedFrom = gameLevelOrder.get(selectedRange.from);
-  const selectedTo = gameLevelOrder.get(selectedRange.to);
-  const activityFrom = gameLevelOrder.get(activityRange.from);
-  const activityTo = gameLevelOrder.get(activityRange.to);
-  if (
-    selectedFrom === undefined ||
-    selectedTo === undefined ||
-    activityFrom === undefined ||
-    activityTo === undefined
-  ) {
-    return false;
-  }
-  return activityTo >= selectedFrom && activityFrom <= selectedTo;
-}
+type GamesCatalogMetadata = Pick<
+  EventCatalogPage,
+  'state' | 'totalMatched' | 'facets' | 'sourceStatus'
+>;
 
 function mergeStations(
   current: readonly { readonly id: string; readonly name: string }[],
@@ -304,9 +219,10 @@ function initialDetailTab(game: ViewerGameCard): GameDetailTab {
 export interface GamesPageProps {
   readonly gateway: AuthGateway;
   readonly gameId?: string;
+  readonly eventId?: string;
 }
 
-export function GamesPage({ gateway, gameId }: GamesPageProps): React.JSX.Element {
+export function GamesPage({ gateway, gameId, eventId }: GamesPageProps): React.JSX.Element {
   const [tab, setTab] = useState<GamesTab>('DISCOVER');
   const [selectedKinds, setSelectedKinds] = useState<readonly GameKindFilter[]>([]);
   const [selectedStationIds, setSelectedStationIds] = useState<readonly string[]>([]);
@@ -319,16 +235,11 @@ export function GamesPage({ gateway, gameId }: GamesPageProps): React.JSX.Elemen
   const [selectedDate, setSelectedDate] = useState<string | null>(() => dateKey(new Date()));
   const [includeFull, setIncludeFull] = useState(false);
   const [games, setGames] = useState<readonly GameCardModel[]>([]);
-  const [trainingActivities, setTrainingActivities] = useState<
-    readonly BookingRecommendationActivity[]
-  >([]);
-  const [tournaments, setTournaments] = useState<readonly PublicTournamentSummary[]>([]);
   const [detail, setDetail] = useState<ViewerGameCard | null>(null);
+  const [eventBooking, setEventBooking] = useState<HomeUpcomingItem | null>(null);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [busyGameId, setBusyGameId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [trainingActivitiesLoading, setTrainingActivitiesLoading] = useState(!gameId);
-  const [trainingActivitiesError, setTrainingActivitiesError] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -351,8 +262,68 @@ export function GamesPage({ gateway, gameId }: GamesPageProps): React.JSX.Elemen
     [],
   );
 
+  const catalogEnabled = !gameId && !eventId && tab === 'DISCOVER';
+  const catalogQuery = useMemo<GamesCatalogQuery>(() => {
+    const selectedRange = levelRangeFilters[levelRange];
+    return {
+      surface: 'GAMES',
+      localDates: selectedDate ? [selectedDate] : days.map((day) => day.key),
+      kinds: selectedKinds.length > 0 ? [...selectedKinds] : ['GAME', 'COACH_GAME', 'TOURNAMENT'],
+      ...(selectedStationIds.length > 0 ? { stationIds: [...selectedStationIds].sort() } : {}),
+      availability: includeFull ? 'INCLUDE_FULL' : 'EXCLUDE_FULL',
+      ...(selectedRange ? { levelFrom: selectedRange.from, levelTo: selectedRange.to } : {}),
+      ...(startsAfter === 'ALL' ? {} : { startsAfterLocal: startsAfter }),
+      limit: 20,
+    };
+  }, [days, includeFull, levelRange, selectedDate, selectedKinds, selectedStationIds, startsAfter]);
+  const catalogQueryKey = useMemo(
+    () =>
+      `${catalogEnabled ? 'active' : 'inactive'}:${reloadToken}:${JSON.stringify(catalogQuery)}`,
+    [catalogEnabled, catalogQuery, reloadToken],
+  );
+  const loadCatalogPage = useCallback(
+    async (query: GamesCatalogQuery, request: { readonly cursor?: string }) => {
+      if (!catalogEnabled) return { items: [] as readonly EventCatalogItem[], nextCursor: null };
+      const page = request.cursor
+        ? await gateway.continueEventCatalog(request.cursor, query.limit)
+        : await gateway.listEventCatalog(query);
+      return {
+        items: page.items,
+        nextCursor: page.nextCursor,
+        metadata: {
+          state: page.state,
+          totalMatched: page.totalMatched,
+          facets: page.facets,
+          sourceStatus: page.sourceStatus,
+        } satisfies GamesCatalogMetadata,
+      };
+    },
+    [catalogEnabled, gateway],
+  );
+  const {
+    items: catalogItems,
+    nextCursor: catalogNextCursor,
+    metadata: catalogMetadata,
+    loading: catalogLoading,
+    loadingMore: catalogLoadingMore,
+    error: catalogError,
+    errorPhase: catalogErrorPhase,
+    loadMore: loadMoreCatalog,
+    retry: retryCatalog,
+  } = usePaginatedEventSearch<GamesCatalogQuery, EventCatalogItem, GamesCatalogMetadata>({
+    queryKey: catalogQueryKey,
+    query: catalogQuery,
+    loadPage: loadCatalogPage,
+    itemKey: (item) =>
+      item.kind === 'GAME'
+        ? `GAME:${item.game.id}`
+        : item.kind === 'TOURNAMENT'
+          ? `TOURNAMENT:${item.tournament.id}`
+          : `COACH_GAME:${item.activity.id}`,
+  });
+
   useEffect(() => {
-    if (gameId) return;
+    if (gameId || eventId) return;
     let active = true;
     void gateway.listLocations().then(
       (result) => {
@@ -369,40 +340,7 @@ export function GamesPage({ gateway, gameId }: GamesPageProps): React.JSX.Elemen
     return () => {
       active = false;
     };
-  }, [gameId, gateway]);
-
-  useEffect(() => {
-    if (gameId) return;
-    let active = true;
-    void gateway.listBookingRecommendations({ limit: 20 }).then(
-      (page) => {
-        if (!active) return;
-        const activities = page.items.flatMap((item) =>
-          item.kind === 'TRAINING' && isCoachGameActivity(item.activity) ? [item.activity] : [],
-        );
-        setTrainingActivities(activities);
-        setStations((current) =>
-          mergeStations(
-            current,
-            activities.map((activity) => ({
-              id: activity.station.id,
-              name: activity.station.name,
-            })),
-          ),
-        );
-        setTrainingActivitiesLoading(false);
-      },
-      () => {
-        if (!active) return;
-        setTrainingActivities([]);
-        setTrainingActivitiesError('Тренировки «Игра + тренер» временно недоступны.');
-        setTrainingActivitiesLoading(false);
-      },
-    );
-    return () => {
-      active = false;
-    };
-  }, [gameId, gateway]);
+  }, [eventId, gameId, gateway]);
 
   useEffect(() => {
     let active = true;
@@ -427,77 +365,23 @@ export function GamesPage({ gateway, gameId }: GamesPageProps): React.JSX.Elemen
       };
     }
 
-    const selectedLevelRange = levelRangeFilters[levelRange];
-    const includesRegularGames = filterIncludesKind(selectedKinds, 'GAME');
-    const includesCoachGames = filterIncludesKind(selectedKinds, 'COACH_GAME');
-    const includesTournaments = filterIncludesKind(selectedKinds, 'TOURNAMENT');
-    const filters: PublicGameFilters = {
-      availability: includeFull ? 'INCLUDE_FULL' : 'JOINABLE',
-      limit: 20,
-      ...(!includesRegularGames && includesCoachGames ? { kind: 'COACH_GAME' as const } : {}),
-      ...(selectedLevelRange
-        ? { levelFrom: selectedLevelRange.from, levelTo: selectedLevelRange.to }
-        : {}),
-      ...(selectedDate ? dateRange(selectedDate, startsAfter) : {}),
-    };
-    if (tab === 'DISCOVER') {
-      const loadGames =
-        !includesRegularGames && !includesCoachGames
-          ? Promise.resolve({ items: [], nextCursor: null })
-          : selectedStationIds.length <= 1
-            ? gateway.listPublicGames({
-                ...filters,
-                ...(selectedStationIds[0] ? { stationId: selectedStationIds[0] } : {}),
-              })
-            : Promise.all(
-                selectedStationIds.map((stationId) =>
-                  gateway.listPublicGames({ ...filters, stationId }),
-                ),
-              ).then((pages) => ({
-                items: [
-                  ...new Map(
-                    pages.flatMap((page) => page.items).map((item) => [item.id, item] as const),
-                  ).values(),
-                ],
-                nextCursor: null,
-              }));
-      const loadTournaments =
-        !gateway.listPublicTournamentSummaries ||
-        !includesTournaments ||
-        levelRange !== 'ALL' ||
-        startsAfter !== 'ALL'
-          ? Promise.resolve({ items: [] })
-          : gateway.listPublicTournamentSummaries({
-              ...tournamentDateRange(selectedDate),
-              availability: includeFull ? 'INCLUDE_FULL' : 'JOINABLE',
-              limit: 50,
-            });
-      void Promise.allSettled([loadGames, loadTournaments]).then(
-        ([gamesResult, tournamentsResult]) => {
+    if (eventId) {
+      void gateway.getUpcomingBookings().then(
+        (bookings) => {
           if (!active) return;
-          if (gamesResult.status === 'rejected') {
-            setGames([]);
-            setTournaments(
-              tournamentsResult.status === 'fulfilled' ? tournamentsResult.value.items : [],
-            );
-            setNextCursor(null);
-            setError(errorMessage(gamesResult.reason));
-            setLoading(false);
-            return;
-          }
-          const page = gamesResult.value;
-          const pageItems = page.items.filter((item) => gameMatchesKind(item, selectedKinds));
-          setGames(pageItems);
-          setTournaments(
-            tournamentsResult.status === 'fulfilled' ? tournamentsResult.value.items : [],
-          );
-          setStations((current) =>
-            mergeStations(
-              current,
-              pageItems.map((item) => ({ id: item.station.id, name: item.station.name })),
-            ),
-          );
-          setNextCursor(page.nextCursor ?? null);
+          const selected = bookings.items.find((item) => {
+            if (item.kind !== 'game') return false;
+            const query = item.route.split('?')[1];
+            return query ? new URLSearchParams(query).get('event') === eventId : false;
+          });
+          setEventBooking(selected ?? null);
+          setError(selected ? null : 'Карточка этой игры пока недоступна.');
+          setLoading(false);
+        },
+        (cause: unknown) => {
+          if (!active) return;
+          setEventBooking(null);
+          setError(errorMessage(cause));
           setLoading(false);
         },
       );
@@ -506,10 +390,15 @@ export function GamesPage({ gateway, gameId }: GamesPageProps): React.JSX.Elemen
       };
     }
 
+    if (tab === 'DISCOVER') {
+      return () => {
+        active = false;
+      };
+    }
+
     void gateway.listMyGames({ scope: tab, limit: 20 }).then(
       (page) => {
         if (!active) return;
-        setTournaments([]);
         const pending = tab === 'UPCOMING' ? pendingViewerGame.current : null;
         const hasPending = pending ? page.items.some((item) => item.id === pending.id) : false;
         setGames(pending && !hasPending ? [pending, ...page.items] : page.items);
@@ -526,7 +415,6 @@ export function GamesPage({ gateway, gameId }: GamesPageProps): React.JSX.Elemen
       (cause: unknown) => {
         if (!active) return;
         setGames([]);
-        setTournaments([]);
         setNextCursor(null);
         setError(errorMessage(cause));
         setLoading(false);
@@ -535,51 +423,16 @@ export function GamesPage({ gateway, gameId }: GamesPageProps): React.JSX.Elemen
     return () => {
       active = false;
     };
-  }, [
-    gameId,
-    gateway,
-    includeFull,
-    levelRange,
-    reloadToken,
-    selectedDate,
-    selectedKinds,
-    selectedStationIds,
-    startsAfter,
-    tab,
-  ]);
+  }, [eventId, gameId, gateway, reloadToken, tab]);
 
   async function loadMore(): Promise<void> {
+    if (tab === 'DISCOVER') return loadMoreCatalog();
     if (!nextCursor || loadingMore || gameId) return;
     setLoadingMore(true);
     setError(null);
     try {
-      const includesRegularGames = filterIncludesKind(selectedKinds, 'GAME');
-      const includesCoachGames = filterIncludesKind(selectedKinds, 'COACH_GAME');
-      const page =
-        tab === 'DISCOVER'
-          ? !includesRegularGames && !includesCoachGames
-            ? { items: [], nextCursor: null }
-            : await gateway.listPublicGames({
-                availability: includeFull ? 'INCLUDE_FULL' : 'JOINABLE',
-                limit: 20,
-                cursor: nextCursor,
-                ...(!includesRegularGames && includesCoachGames
-                  ? { kind: 'COACH_GAME' as const }
-                  : {}),
-                ...(selectedStationIds[0] ? { stationId: selectedStationIds[0] } : {}),
-                ...(levelRangeFilters[levelRange]
-                  ? {
-                      levelFrom: levelRangeFilters[levelRange].from,
-                      levelTo: levelRangeFilters[levelRange].to,
-                    }
-                  : {}),
-                ...(selectedDate ? dateRange(selectedDate, startsAfter) : {}),
-              })
-          : await gateway.listMyGames({ scope: tab, limit: 20, cursor: nextCursor });
-      const pageItems =
-        tab === 'DISCOVER'
-          ? page.items.filter((item) => gameMatchesKind(item, selectedKinds))
-          : page.items;
+      const page = await gateway.listMyGames({ scope: tab, limit: 20, cursor: nextCursor });
+      const pageItems = page.items;
       setGames((current) => [...current, ...pageItems]);
       setStations((current) =>
         mergeStations(
@@ -599,80 +452,18 @@ export function GamesPage({ gateway, gameId }: GamesPageProps): React.JSX.Elemen
     () => stations.filter((station) => selectedStationIds.includes(station.id)),
     [selectedStationIds, stations],
   );
-  const selectedStationNames = useMemo(
-    () => new Set(selectedStations.map((station) => station.name)),
-    [selectedStations],
-  );
   const visibleEvents = useMemo(
     () =>
-      [
-        ...games
-          .filter(
-            (game) =>
-              gameMatchesKind(game, selectedKinds) &&
-              (selectedStationIds.length === 0 || selectedStationIds.includes(game.station.id)),
+      tab === 'DISCOVER'
+        ? catalogItems.map((item) =>
+            item.kind === 'GAME'
+              ? { type: 'GAME' as const, game: item.game }
+              : item.kind === 'TOURNAMENT'
+                ? { type: 'TOURNAMENT' as const, tournament: item.tournament }
+                : { type: 'TRAINING' as const, activity: item.activity },
           )
-          .map((game) => ({ type: 'GAME' as const, startsAt: game.startsAt, game })),
-        ...trainingActivities
-          .filter(
-            (activity) =>
-              tab === 'DISCOVER' &&
-              trainingMatchesKind(activity, selectedKinds) &&
-              (selectedDate === null || activityDateKey(activity) === selectedDate) &&
-              (includeFull || activity.capacity.open !== 0) &&
-              activityStartsAfter(activity, startsAfter) &&
-              activityMatchesLevel(activity, levelRange) &&
-              (selectedStationIds.length === 0 || selectedStationIds.includes(activity.station.id)),
-          )
-          .map((activity) => ({
-            type: 'TRAINING' as const,
-            startsAt: activity.startsAt,
-            activity,
-          })),
-        ...tournaments
-          .filter(
-            (tournament) =>
-              filterIncludesKind(selectedKinds, 'TOURNAMENT') &&
-              (selectedStationIds.length === 0 ||
-                [...selectedStationNames].some(
-                  (stationName) =>
-                    tournament.venue === stationName ||
-                    tournament.venue.startsWith(`${stationName} ·`),
-                )),
-          )
-          .map((tournament) => ({
-            type: 'TOURNAMENT' as const,
-            startsAt: tournament.startsAt,
-            tournament,
-          })),
-      ].sort((left, right) => {
-        const leftId =
-          left.type === 'GAME'
-            ? left.game.id
-            : left.type === 'TRAINING'
-              ? left.activity.id
-              : left.tournament.id;
-        const rightId =
-          right.type === 'GAME'
-            ? right.game.id
-            : right.type === 'TRAINING'
-              ? right.activity.id
-              : right.tournament.id;
-        return left.startsAt.localeCompare(right.startsAt) || leftId.localeCompare(rightId);
-      }),
-    [
-      games,
-      includeFull,
-      levelRange,
-      selectedDate,
-      selectedKinds,
-      selectedStationIds,
-      selectedStationNames,
-      startsAfter,
-      tab,
-      tournaments,
-      trainingActivities,
-    ],
+        : games.map((game) => ({ type: 'GAME' as const, game })),
+    [catalogItems, games, tab],
   );
   const activeFilterCount =
     Number(selectedKinds.length > 0) +
@@ -695,7 +486,6 @@ export function GamesPage({ gateway, gameId }: GamesPageProps): React.JSX.Elemen
         : `Станции: ${selectedStations.length}`;
 
   function beginFilterChange(): void {
-    setLoading(true);
     setError(null);
   }
 
@@ -934,6 +724,38 @@ export function GamesPage({ gateway, gameId }: GamesPageProps): React.JSX.Elemen
             onSubmit={submitResult}
             onTabChange={setDetailTab}
           />
+        ) : null}
+        <MainBottomNavigation active="games" gamesDestination="games" />
+      </main>
+    );
+  }
+
+  if (eventId) {
+    return (
+      <main className="games-page games-page--detail games-page--booking-detail">
+        <header className="games-header">
+          <a className="games-back" href="/" aria-label="Назад к моим записям">
+            <span aria-hidden="true">←</span>
+            Назад
+          </a>
+          <div>
+            <h1>Карточка игры</h1>
+          </div>
+        </header>
+        {loading ? (
+          <div className="games-loading" role="status">
+            Загружаем карточку игры…
+          </div>
+        ) : null}
+        {error ? (
+          <p className="games-message is-error" role="alert">
+            {error}
+          </p>
+        ) : null}
+        {eventBooking ? (
+          <section className="game-booking-detail" aria-label="Выбранная игра">
+            <UpcomingBookingCard item={eventBooking} showAction={false} />
+          </section>
         ) : null}
         <MainBottomNavigation active="games" gamesDestination="games" />
       </main>
@@ -1207,29 +1029,32 @@ export function GamesPage({ gateway, gameId }: GamesPageProps): React.JSX.Elemen
           {notice}
         </p>
       ) : null}
-      {tab === 'DISCOVER' && trainingActivitiesError ? (
+      {tab === 'DISCOVER' && catalogError ? (
+        <p className="games-message is-error" role="alert">
+          События временно недоступны.{' '}
+          <button type="button" onClick={() => void retryCatalog()}>
+            Повторить
+          </button>
+        </p>
+      ) : null}
+      {tab === 'DISCOVER' && catalogMetadata?.state === 'PARTIAL' ? (
         <p className="games-message is-error" role="status">
-          {trainingActivitiesError}
+          Показаны не все события: часть источников временно недоступна.
         </p>
       ) : null}
 
       <section
         className="games-list"
         aria-live="polite"
-        aria-busy={loading || (tab === 'DISCOVER' && trainingActivitiesLoading)}
+        aria-busy={tab === 'DISCOVER' ? catalogLoading : loading}
       >
-        {loading ? (
+        {(tab === 'DISCOVER' ? catalogLoading : loading) ? (
           <div className="games-loading" role="status">
             Ищем подходящие игры…
           </div>
         ) : null}
-        {!loading && tab === 'DISCOVER' && trainingActivitiesLoading ? (
-          <div className="games-loading" role="status">
-            Добавляем тренировки «Игра + тренер»…
-          </div>
-        ) : null}
-        {!loading &&
-        !(tab === 'DISCOVER' && trainingActivitiesLoading) &&
+        {!(tab === 'DISCOVER' ? catalogLoading : loading) &&
+        !(tab === 'DISCOVER' && catalogError) &&
         visibleEvents.length === 0 ? (
           <div className="games-empty">
             <span aria-hidden="true">◌</span>
@@ -1261,14 +1086,18 @@ export function GamesPage({ gateway, gameId }: GamesPageProps): React.JSX.Elemen
             />
           ),
         )}
-        {nextCursor ? (
+        {(tab === 'DISCOVER' ? catalogNextCursor : nextCursor) ? (
           <button
             className="games-load-more"
             type="button"
-            disabled={loadingMore}
+            disabled={tab === 'DISCOVER' ? catalogLoadingMore : loadingMore}
             onClick={() => void loadMore()}
           >
-            {loadingMore ? 'Загружаем…' : 'Показать ещё'}
+            {tab === 'DISCOVER' && catalogErrorPhase === 'more'
+              ? 'Повторить загрузку'
+              : (tab === 'DISCOVER' ? catalogLoadingMore : loadingMore)
+                ? 'Загружаем…'
+                : 'Показать ещё'}
           </button>
         ) : null}
       </section>

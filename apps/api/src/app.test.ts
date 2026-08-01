@@ -693,6 +693,43 @@ describe('health endpoints', () => {
     expect(JSON.stringify(body)).not.toContain('externalId');
   });
 
+  it('reads My bookings from the dedicated client-assisted projection', async () => {
+    const userId = '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca';
+    const generatedAt = new Date().toISOString();
+    const staleAt = new Date(Date.now() + 60_000).toISOString();
+    const get = vi.fn().mockResolvedValue({
+      tenantId,
+      userId,
+      version: 'b'.repeat(64),
+      generatedAt,
+      staleAt,
+      items: [],
+      updatedAt: generatedAt,
+    });
+    const app = await buildApp({
+      config: { ...config, HOME_READ_MODE: 'projection' },
+      logger: createLogger('api-test', 'silent'),
+      pool: fakePool(),
+      upcomingBookingsRepository: { get, replace: vi.fn() },
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/user/api/v1/local-padel/bookings/upcoming',
+      headers: { authorization: `Bearer ${await accessToken()}` },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      version: 'b'.repeat(64),
+      generatedAt,
+      staleAt,
+      items: [],
+    });
+    expect(get).toHaveBeenCalledWith(tenantId, userId);
+  });
+
   it('returns the complete home dashboard as one protected snapshot', async () => {
     const app = await buildApp({
       config,

@@ -6,6 +6,8 @@ import type { Pool } from 'pg';
 import { describe, expect, it, vi } from 'vitest';
 
 import { buildApp } from '../app.js';
+import type { ActivityHistoryProjectionService } from './activity-history-routes.js';
+import { MemoryBookingScreenReadJobStore } from './booking-screen-read-job-store.js';
 
 const tenantId = '86afbe01-0318-4dd2-bc25-303b7bf0d430';
 const userId = '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca';
@@ -101,6 +103,91 @@ function repository(syncState: ActivityHistorySyncState): ActivityHistoryReposit
 }
 
 describe('activity history routes', () => {
+  it('refreshes a stale projection through a browser-relayed history page', async () => {
+    const stale = state({ freshness: 'STALE', coverageStatus: 'PARTIAL', nextProviderCursor: '1' });
+    const project = vi.fn<ActivityHistoryProjectionService['project']>().mockResolvedValue();
+    const app = await buildApp({
+      config,
+      logger: createLogger('activity-history-test', 'silent'),
+      pool: fakePool(),
+      activityHistoryRepository: repository(stale),
+      activityHistoryProjector: { project },
+      bookingScreenReadJobStore: new MemoryBookingScreenReadJobStore(),
+    });
+    const authorization = `Bearer ${await token()}`;
+    const started = await app.inject({
+      method: 'POST',
+      url: '/user/api/v1/local-padel/activity-history-read-jobs',
+      headers: { authorization },
+      payload: {},
+    });
+    const job = started.json<{
+      jobId: string;
+      commands: readonly { commandId: string; operation: string; page: number; size: number }[];
+    }>();
+    expect(started.statusCode).toBe(200);
+    expect(job.commands).toEqual([
+      expect.objectContaining({ operation: 'bookings.history.read', page: 0, size: 50 }),
+    ]);
+    const command = job.commands[0];
+    if (!command) throw new Error('Expected history command');
+    const submitted = await app.inject({
+      method: 'POST',
+      url: `/user/api/v1/local-padel/activity-history-read-jobs/${job.jobId}/results/${command.commandId}`,
+      headers: { authorization },
+      payload: {
+        payload: {
+          content: [
+            {
+              id: 'private-booking-ref',
+              isCancelled: false,
+              exercise: {
+                id: 'private-exercise-ref',
+                direction: { id: 4588, name: 'Открытая игра' },
+                type: { id: 1613, name: 'Открытая игра' },
+                timeFrom: '2026-07-20T09:00:00.000Z',
+                timeTo: '2026-07-20T10:00:00.000Z',
+                studio: { name: 'Терехово' },
+              },
+            },
+          ],
+          totalPages: 1,
+          totalElements: 1,
+          last: true,
+          numberOfElements: 1,
+          size: 50,
+          number: 0,
+          empty: false,
+        },
+      },
+    });
+    expect(submitted.statusCode).toBe(202);
+    const completed = await app.inject({
+      method: 'POST',
+      url: `/user/api/v1/local-padel/activity-history-read-jobs/${job.jobId}/complete`,
+      headers: { authorization },
+      payload: {},
+    });
+    await app.close();
+
+    expect(completed.statusCode).toBe(200);
+    expect(completed.json()).toMatchObject({
+      screen: 'ACTIVITY_HISTORY',
+      state: 'READY',
+      completedCommands: 1,
+      totalCommands: 1,
+    });
+    expect(project).toHaveBeenCalledTimes(1);
+    const projectionInput = project.mock.calls[0]?.[0];
+    expect(projectionInput).toMatchObject({
+      tenantId,
+      userId,
+      reason: 'STALE',
+      page: { page: 0 },
+    });
+    expect(projectionInput?.page.records).toHaveLength(1);
+  });
+
   it('returns one provider-neutral local projection page', async () => {
     const app = await buildApp({
       config,

@@ -529,6 +529,7 @@ describe('legacy games adapter', () => {
           isPublic: true,
           startsAt: '2026-07-26T19:00:00+03:00',
           endsAt: '2026-07-26T21:00:00+03:00',
+          studioId: 'legacy-station-42',
           locationName: 'Селигерская · Корт №1',
           trainerName: 'Кирилл Твердохлеб',
           trainerId: 'viva-trainer-42',
@@ -566,12 +567,24 @@ describe('legacy games adapter', () => {
     expect(adapter.readAvatarSource(first?.[0]?.id ?? '')).toBe(
       'https://external.example/private-trainer-photo-id',
     );
+    expect(adapter.readStationExternalId(first?.[0]?.id ?? '')).toBe('legacy-station-42');
+    expect(adapter.readExerciseExternalId(first?.[0]?.id ?? '')).toBe('legacy-tournament-id');
     expect(adapter.readTrainerAvatarSource(first?.[0]?.id ?? '')).toEqual({
       provider: 'VIVA',
       providerTrainerId: 'viva-trainer-42',
       displayName: 'Кирилл Твердохлеб',
       sourceUrl: 'https://external.example/private-trainer-photo-id',
     });
+  });
+
+  it('fails a tournament date closed instead of truncating an oversized source page', async () => {
+    const adapter = new LegacyTournamentSummaryAdapter({
+      fetchImplementation: vi.fn().mockResolvedValue(Response.json(Array.from({ length: 501 }))),
+    });
+
+    await expect(adapter.readDate('2026-07-26')).rejects.toThrow(
+      'TOURNAMENT_SUMMARY_RESPONSE_TOO_LARGE',
+    );
   });
 
   it('reads one safe tournament roster and removes cancelled and duplicate bookings', async () => {

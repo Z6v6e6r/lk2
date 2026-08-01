@@ -168,7 +168,7 @@ function cursorTuple(projection: StoredGameCardProjection, hash: string): Cursor
 }
 
 export async function listPublicGameCards(input: {
-  readonly repository: CardReadRepository;
+  readonly repository: Pick<GameRepository, 'listPublicCardProjections'>;
   readonly photoRepository?: CardProfileRepository;
   readonly tenantId: string;
   readonly now: string;

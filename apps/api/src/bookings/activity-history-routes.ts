@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 import type {
   ActivityHistoryItem as StoredActivityHistoryItem,
   ActivityHistoryKind,
@@ -5,8 +7,13 @@ import type {
   ActivityHistoryStatus,
   ProfileSummaryRepository,
 } from '@phub/database';
+import {
+  normalizeVivaBookingHistoryPayload,
+  type VivaBookingHistoryPage,
+} from '@phub/viva-adapter';
 import type { FastifyInstance, FastifyReply, FastifyRequest, preHandlerHookHandler } from 'fastify';
 
+import type { BookingScreenReadJobStore } from './booking-screen-read-job-store.js';
 import { sendApiError } from '../http-errors.js';
 import {
   gameCardProfilePhotoUserIds,
@@ -17,6 +24,7 @@ const QUERY_KEYS = new Set(['kind', 'status', 'cursor', 'limit']);
 const KINDS = new Set<ActivityHistoryKind>(['GAME', 'TRAINING', 'TOURNAMENT']);
 const STATUSES = new Set<ActivityHistoryStatus>(['COMPLETED', 'CANCELLED']);
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const CLIENT_ASSISTED_JOB_TTL_SECONDS = 120;
 
 export interface ActivityHistoryRefreshService {
   refresh(input: {
@@ -24,6 +32,16 @@ export interface ActivityHistoryRefreshService {
     readonly userId: string;
     readonly correlationId: string;
     readonly reason: 'UNCOVERED' | 'STALE' | 'NEXT_PAGE';
+  }): Promise<void>;
+}
+
+export interface ActivityHistoryProjectionService {
+  project(input: {
+    readonly tenantId: string;
+    readonly userId: string;
+    readonly correlationId: string;
+    readonly reason: 'UNCOVERED' | 'STALE' | 'NEXT_PAGE';
+    readonly page: VivaBookingHistoryPage;
   }): Promise<void>;
 }
 
@@ -146,10 +164,300 @@ export function registerActivityHistoryRoutes(
   options: {
     readonly repository?: ActivityHistoryRepository;
     readonly refresher?: ActivityHistoryRefreshService;
+    readonly clientAssistedJobStore?: BookingScreenReadJobStore;
+    readonly projector?: ActivityHistoryProjectionService;
+    readonly providerPageSize?: number;
     readonly photoRepository?: Pick<ProfileSummaryRepository, 'getPhotoDeliveryIds'>;
     readonly authenticatedTenantHandlers: readonly preHandlerHookHandler[];
   },
 ): void {
+  app.post(
+    '/user/api/v1/:tenantKey/activity-history-read-jobs',
+    { preHandler: [...options.authenticatedTenantHandlers] },
+    async (request, reply) => {
+      reply.header('Cache-Control', 'private, no-store');
+      const current = principal(request);
+      const body = (request.body ?? {}) as Record<string, unknown>;
+      const cursor = decodeCursor(body.cursor);
+      const kind = typeof body.kind === 'string' ? body.kind : undefined;
+      const status = typeof body.status === 'string' ? body.status : undefined;
+      const limit = body.limit === undefined ? 20 : body.limit;
+      if (
+        !current ||
+        !options.repository ||
+        !options.clientAssistedJobStore ||
+        !options.projector
+      ) {
+        return sendApiError(
+          request,
+          reply,
+          503,
+          'BOOKING_HISTORY_UNAVAILABLE',
+          'История временно недоступна.',
+        );
+      }
+      if (
+        Object.keys(body).some((key) => !QUERY_KEYS.has(key)) ||
+        cursor === null ||
+        (body.cursor !== undefined && typeof body.cursor !== 'string') ||
+        (kind !== undefined && !KINDS.has(kind as ActivityHistoryKind)) ||
+        (status !== undefined && !STATUSES.has(status as ActivityHistoryStatus)) ||
+        !Number.isInteger(limit) ||
+        (limit as number) < 1 ||
+        (limit as number) > 50
+      ) {
+        return sendApiError(
+          request,
+          reply,
+          400,
+          'BOOKING_HISTORY_READ_JOB_INVALID',
+          'Некорректный запрос обновления истории.',
+        );
+      }
+      const state = await options.repository.getSyncState({
+        tenantId: current.tenantId,
+        userId: current.userId,
+      });
+      const projectedPage = cursor
+        ? await options.repository.list({
+            tenantId: current.tenantId,
+            userId: current.userId,
+            ...(kind ? { kind: kind as ActivityHistoryKind } : {}),
+            ...(status ? { status: status as ActivityHistoryStatus } : {}),
+            limit: limit as number,
+            ...(cursor.type === 'ITEM'
+              ? { after: { occurredAt: cursor.occurredAt, id: cursor.id } }
+              : {}),
+          })
+        : undefined;
+      const needsNextProviderPage =
+        state.coverageStatus === 'PARTIAL' &&
+        Boolean(state.nextProviderCursor) &&
+        (cursor?.type === 'COVERAGE' ||
+          (cursor?.type === 'ITEM' &&
+            !projectedPage?.next &&
+            (projectedPage?.items.length ?? 0) < (limit as number)));
+      const reason =
+        state.freshness === 'UNSYNCED'
+          ? ('UNCOVERED' as const)
+          : state.freshness === 'STALE'
+            ? ('STALE' as const)
+            : needsNextProviderPage
+              ? ('NEXT_PAGE' as const)
+              : undefined;
+      const providerPage =
+        reason === 'NEXT_PAGE' ? Number(state.nextProviderCursor) : reason ? 0 : undefined;
+      if (providerPage !== undefined && (!Number.isInteger(providerPage) || providerPage < 0)) {
+        return sendApiError(
+          request,
+          reply,
+          503,
+          'BOOKING_HISTORY_UNAVAILABLE',
+          'История временно недоступна.',
+        );
+      }
+      const now = new Date();
+      const jobId = randomUUID();
+      const commandId = reason ? randomUUID() : undefined;
+      const job = {
+        jobId,
+        screen: 'ACTIVITY_HISTORY' as const,
+        tenantId: current.tenantId,
+        userId: current.userId,
+        createdAt: now.toISOString(),
+        expiresAt: new Date(now.getTime() + CLIENT_ASSISTED_JOB_TTL_SECONDS * 1_000).toISOString(),
+        ...(reason ? { historyReason: reason } : {}),
+        commands:
+          reason && commandId && providerPage !== undefined
+            ? [
+                {
+                  commandId,
+                  operation: 'bookings.history.read' as const,
+                  page: providerPage,
+                  size: options.providerPageSize ?? 50,
+                },
+              ]
+            : [],
+      };
+      if (!(await options.clientAssistedJobStore.create(job, CLIENT_ASSISTED_JOB_TTL_SECONDS))) {
+        return sendApiError(
+          request,
+          reply,
+          503,
+          'BOOKING_HISTORY_UNAVAILABLE',
+          'История временно недоступна.',
+        );
+      }
+      return {
+        jobId: job.jobId,
+        screen: job.screen,
+        expiresAt: job.expiresAt,
+        commands: job.commands,
+        concurrency: 1,
+      };
+    },
+  );
+
+  app.post(
+    '/user/api/v1/:tenantKey/activity-history-read-jobs/:jobId/results/:commandId',
+    { preHandler: [...options.authenticatedTenantHandlers] },
+    async (request, reply) => {
+      reply.header('Cache-Control', 'private, no-store');
+      const current = principal(request);
+      const { jobId, commandId } = request.params as {
+        readonly jobId?: string;
+        readonly commandId?: string;
+      };
+      if (
+        !current ||
+        !jobId ||
+        !commandId ||
+        !UUID_PATTERN.test(jobId) ||
+        !UUID_PATTERN.test(commandId) ||
+        !options.clientAssistedJobStore
+      ) {
+        return sendApiError(
+          request,
+          reply,
+          404,
+          'BOOKING_HISTORY_READ_JOB_NOT_FOUND',
+          'Задание обновления истории не найдено.',
+        );
+      }
+      const job = await options.clientAssistedJobStore.get(jobId);
+      const command = job?.commands.find((item) => item.commandId === commandId);
+      if (
+        !job ||
+        job.screen !== 'ACTIVITY_HISTORY' ||
+        job.tenantId !== current.tenantId ||
+        job.userId !== current.userId ||
+        command?.operation !== 'bookings.history.read'
+      ) {
+        return sendApiError(
+          request,
+          reply,
+          404,
+          'BOOKING_HISTORY_READ_JOB_NOT_FOUND',
+          'Задание обновления истории не найдено.',
+        );
+      }
+      const body = request.body as Record<string, unknown> | undefined;
+      let page: VivaBookingHistoryPage;
+      try {
+        if (!body || Object.keys(body).length !== 1) throw new Error('INVALID_BODY');
+        page = normalizeVivaBookingHistoryPayload(body.payload);
+        if (page.page !== command.page || page.size !== command.size) {
+          throw new Error('PAGE_MISMATCH');
+        }
+      } catch {
+        return sendApiError(
+          request,
+          reply,
+          400,
+          'BOOKING_HISTORY_READ_RESULT_INVALID',
+          'Некорректный результат чтения истории.',
+        );
+      }
+      const ttlSeconds = Math.max(1, Math.ceil((Date.parse(job.expiresAt) - Date.now()) / 1_000));
+      const status = await options.clientAssistedJobStore.putResult(
+        jobId,
+        { commandId, kind: 'history', page, acceptedAt: new Date().toISOString() },
+        ttlSeconds,
+      );
+      return reply.status(status === 'accepted' ? 202 : 200).send({
+        accepted: true,
+        replayed: status === 'replayed',
+        itemCount: page.records.length,
+      });
+    },
+  );
+
+  app.post(
+    '/user/api/v1/:tenantKey/activity-history-read-jobs/:jobId/complete',
+    { preHandler: [...options.authenticatedTenantHandlers] },
+    async (request, reply) => {
+      reply.header('Cache-Control', 'private, no-store');
+      const current = principal(request);
+      const { jobId } = request.params as { readonly jobId?: string };
+      const body = (request.body ?? {}) as Record<string, unknown>;
+      if (
+        !current ||
+        !jobId ||
+        !UUID_PATTERN.test(jobId) ||
+        !options.repository ||
+        !options.clientAssistedJobStore ||
+        !options.projector ||
+        Object.keys(body).length !== 0
+      ) {
+        return sendApiError(
+          request,
+          reply,
+          404,
+          'BOOKING_HISTORY_READ_JOB_NOT_FOUND',
+          'Задание обновления истории не найдено.',
+        );
+      }
+      const job = await options.clientAssistedJobStore.get(jobId);
+      if (
+        !job ||
+        job.screen !== 'ACTIVITY_HISTORY' ||
+        job.tenantId !== current.tenantId ||
+        job.userId !== current.userId
+      ) {
+        return sendApiError(
+          request,
+          reply,
+          404,
+          'BOOKING_HISTORY_READ_JOB_NOT_FOUND',
+          'Задание обновления истории не найдено.',
+        );
+      }
+      const results = await options.clientAssistedJobStore.getResults(
+        job.jobId,
+        job.commands.map((command) => command.commandId),
+      );
+      const result = results.find((item) => item.kind === 'history');
+      if (job.historyReason && result?.kind === 'history') {
+        try {
+          await options.projector.project({
+            tenantId: current.tenantId,
+            userId: current.userId,
+            correlationId: request.id,
+            reason: job.historyReason,
+            page: result.page,
+          });
+        } catch {
+          await options.repository
+            .recordSyncFailure({
+              tenantId: current.tenantId,
+              userId: current.userId,
+              errorCode: 'CLIENT_ASSISTED_HISTORY_PROJECTION_FAILED',
+            })
+            .catch(() => undefined);
+          return sendApiError(
+            request,
+            reply,
+            503,
+            'BOOKING_HISTORY_UNAVAILABLE',
+            'Не удалось обновить историю.',
+          );
+        }
+      } else if (job.historyReason) {
+        await options.repository.recordSyncFailure({
+          tenantId: current.tenantId,
+          userId: current.userId,
+          errorCode: 'CLIENT_ASSISTED_HISTORY_UNAVAILABLE',
+        });
+      }
+      return {
+        screen: job.screen,
+        state: job.commands.length === results.length ? 'READY' : 'PARTIAL',
+        completedCommands: results.length,
+        totalCommands: job.commands.length,
+      };
+    },
+  );
+
   app.get(
     '/user/api/v1/:tenantKey/bookings/history',
     { preHandler: [...options.authenticatedTenantHandlers] },

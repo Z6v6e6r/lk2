@@ -1,0 +1,85 @@
+openapi: 3.1.0
+info:
+  title: PadlHub User API V2
+  version: 2.0.0
+  description: Additive authenticated catalog reads with immutable snapshot pagination.
+  license:
+    name: Proprietary
+    identifier: LicenseRef-Proprietary
+servers:
+  - url: https://api.padlhub.ru/user/api/v2
+security:
+  - PadlHubUserJwt: []
+tags:
+  - name: event-catalog
+    description: Server-filtered event discovery over one immutable snapshot.
+paths:
+  /{tenantKey}/event-catalog:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+    get:
+      tags: [event-catalog]
+      operationId: continueEventCatalog
+      summary: Continue an immutable filtered event catalog snapshot
+      description: |
+        Reads the next page identified by a server-stored opaque cursor. Continuation never repeats
+        a provider read and cannot change the query that created the snapshot.
+      parameters:
+        - name: cursor
+          in: query
+          required: true
+          description: Opaque server-stored cursor returned by the preceding catalog page.
+          schema:
+            type: string
+            format: uuid
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 20
+      responses:
+        '200':
+          description: The next page from the same immutable, filter-bound snapshot.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: ../v1/booking-screen-read-jobs.yaml#/components/schemas/EventCatalogPage
+        '400':
+          description: The cursor is malformed or belongs to another tenant, user or query.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: ../../common/components.yaml#/components/schemas/ApiError
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '410':
+          description: The cursor or its immutable snapshot has expired; restart from page one.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: ../../common/components.yaml#/components/schemas/ApiError
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+components:
+  securitySchemes:
+    PadlHubUserJwt:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT

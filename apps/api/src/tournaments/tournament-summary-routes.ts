@@ -13,6 +13,10 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3
 
 export interface TournamentSummarySource {
   readonly readDate: (date: string) => Promise<readonly PublicTournamentSummary[]>;
+  /** Private provider metadata; it is resolved to a PadlHub location before any client DTO. */
+  readonly readStationExternalId?: (summaryId: string) => string | undefined;
+  /** Private exercise identity used only for trusted canonical Game duplicate resolution. */
+  readonly readExerciseExternalId?: (summaryId: string) => string | undefined;
   readonly readAvatarSource?: (summaryId: string) => string | undefined;
   readonly readTrainerAvatarSource?: (summaryId: string) =>
     | {

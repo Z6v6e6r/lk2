@@ -28,3 +28,4 @@ export * from './profile-level-history-repository.js';
 export * from './profile-summary-repository.js';
 export * from './promotion-engagement-repository.js';
 export * from './trainer-avatar-repository.js';
+export * from './upcoming-bookings-repository.js';

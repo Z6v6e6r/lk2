@@ -1,6 +1,6 @@
 # ADR 0020: Client-assisted booking screen snapshots
 
-- Status: accepted for `FOR_ME`, `GROUP_TRAININGS` and upcoming `MY_BOOKINGS`; production rollout pending
+- Status: accepted for `FOR_ME`, `GROUP_TRAININGS`, `MY_BOOKINGS` and `ACTIVITY_HISTORY`; production rollout pending
 - Date: 2026-07-30
 - Extends: [ADR 0005](0005-viva-user-delegation-and-direct-transport.md)
 - Extends: [ADR 0012](0012-booking-recommendations-first-slice.md)
@@ -43,11 +43,11 @@ The browser is a transport participant, not the data owner:
 5. the resulting screen DTO contains only PadlHub UUIDs and opaque cursors.
 
 The implementation enables `schedule.read` inside authenticated, short-lived `FOR_ME` and
-`GROUP_TRAININGS` jobs and the fixed `bookings.read -> bookings.details.read` chain inside
-`MY_BOOKINGS`. It does not add any of those operations to the general-purpose
-`DIRECT_VIVA_CONTRACT_READY_OPERATIONS` allowlist. History remains on the dedicated PadlHub
-activity-history projection until its independent paging contract is moved to a client-assisted
-job.
+`GROUP_TRAININGS` jobs, the fixed `bookings.read -> bookings.details.read` chain inside
+`MY_BOOKINGS`, and one bounded `bookings.history.read` page inside `ACTIVITY_HISTORY`. It does not
+add any of those operations to the general-purpose `DIRECT_VIVA_CONTRACT_READY_OPERATIONS`
+allowlist. History keeps its dedicated PadlHub activity-history projection; only provider-page
+transport is client-assisted.
 
 The browser cannot provide booking detail identifiers. `@phub/viva-client-adapter` extracts at most
 50 active identifiers from the immediately preceding list response and uses only those identifiers
@@ -128,14 +128,17 @@ media URL are not exposed.
 
 ### `Мои записи`
 
-Activation starts a `MY_BOOKINGS` read job. It gathers the allowlisted Viva booking list/details
-required for the same user and consults existing PadlHub integration mappings for identity and
-route resolution.
+Activation first reads the dedicated local `/bookings/upcoming` projection. A fresh projection is
+rendered without contacting Viva. An absent or stale projection starts a `MY_BOOKINGS` read job;
+the browser gathers the allowlisted Viva booking list/details required for the same user and
+relays the fixed result to PadlHub.
 
 The upcoming slice uses the direct Viva list/details pair as one consistent source operation. It
 does not merge fields from the older Home projection. Existing PadlHub mappings contribute identity
 and route resolution only, never provider business fields. A missing mapping does not hide a valid
-booking.
+booking. The normalized result replaces `booking.upcoming_booking_projection` atomically. The UI
+then rereads `/bookings/upcoming`; a failed browser read leaves a still-servable stale projection
+visible and never falls back to server Viva egress.
 
 All canonical records are returned. Recommendation score, station preferences and preferred time
 must never hide an existing booking. The screen supports:
@@ -146,6 +149,17 @@ must never hide an existing booking. The screen supports:
 - an explicit partial-data notice when one source is unavailable.
 
 History is loaded only when the `История` scope is activated.
+
+### `ACTIVITY_HISTORY`
+
+The browser first starts a history read job. PadlHub inspects the authenticated user's projection
+state and returns either no command, page zero for an uncovered/stale projection, or the next fixed
+provider page for partial coverage. The browser cannot choose a Viva URL, tenant, method or page.
+
+The accepted response is strictly validated and normalized by `@phub/viva-adapter`, then the
+existing history projector resolves canonical Game associations and persists the provider-free
+page. `GET /bookings/history` continues to serve only the local projection. A failed browser read
+leaves an existing stale projection readable and never falls back to server Viva egress.
 
 ## Proposed API
 
@@ -226,9 +240,10 @@ The response is discriminated by `screen`. `FOR_ME` wraps the immutable recommen
 result has `staleAt == generatedAt`, so the existing UI shows an explicit stale-data notice instead
 of presenting an empty provider response as fresh.
 
-`GROUP_TRAININGS` returns the provider-free `TrainingSchedulePage` snapshot in `trainings`. It has
-no personalization field or cursor because the bounded seven-day catalog is filtered locally by
-date, type, station, time and level.
+`GROUP_TRAININGS` returns the provider-free `TrainingSchedulePage` snapshot in `trainings`. The
+first slice has no personalization field or cursor and filters its bounded seven-day payload
+locally. ADR 0021 supersedes that local-filtering decision for discovery screens: the V2 catalog
+must filter before pagination and continue an immutable, filter-bound snapshot.
 
 The snapshot version covers preference version, player level revision, local projection revisions,
 the validated direct-read result digests and recommendation-policy version.
@@ -300,7 +315,7 @@ Each screen has its own state machine:
 7. Add timeout, payload-size, rate-limit, replay and malformed-result tests.
 8. Keep the existing global direct-read kill switch and add a dedicated tenant read-job allowlist
    before production rollout.
-9. Run the mixed-mode browser smoke and confirm zero server Viva schedule/booking egress.
+9. Run the mixed-mode browser smoke and confirm zero server Viva schedule/booking/history egress.
 10. Update ADR 0005, ADR 0012 and the client-routing runbook before production rollout. The
     first-slice OpenAPI contract is already published in the repository.
 
@@ -309,8 +324,9 @@ Each screen has its own state machine:
 - the user's network path can read Viva when PadlHub egress is blocked;
 - recommendation logic remains server-owned, versioned and explainable;
 - the two screens fail and refresh independently;
-- upcoming `Мои записи` no longer depends on server Viva egress;
-- booking history remains a separate lazy PadlHub projection and is not part of this slice;
+- upcoming `Мои записи` is projection-first and no longer depends on server Viva egress;
+- booking history remains a separate lazy PadlHub projection whose provider pages use the same
+  client-assisted trust boundary;
 - the design introduces an untrusted relay boundary and therefore requires more validation than a
   normal direct-read adapter;
 - no direct Viva write is enabled;

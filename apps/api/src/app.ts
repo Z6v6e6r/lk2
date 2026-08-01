@@ -32,6 +32,7 @@ import type {
   ProfileSummaryRepository,
   PromotionEngagementRepository,
   TrainerAvatarRepository,
+  UpcomingBookingsRepository,
 } from '@phub/database';
 import { isValidIdempotencyKey, type ClientPlatform } from '@phub/domain';
 import { homeBaseSchema, normalizeHomeBaseFreshness, type HomeBase } from '@phub/home-projection';
@@ -49,10 +50,15 @@ import { registerLocationAdminRoutes } from './admin/location-admin-routes.js';
 import { registerGiftCertificateAdminRoutes } from './admin/gift-certificate-admin-routes.js';
 import type { AuthService } from './auth/auth-service.js';
 import { registerBookingPreferenceRoutes } from './bookings/booking-preference-routes.js';
-import { registerBookingRecommendationRoutes } from './bookings/booking-recommendation-routes.js';
+import {
+  registerBookingRecommendationRoutes,
+  type EventCatalogItem,
+} from './bookings/booking-recommendation-routes.js';
 import type { BookingScreenReadJobStore } from './bookings/booking-screen-read-job-store.js';
+import type { EventCatalogSnapshotStore } from './bookings/event-catalog-snapshot-store.js';
 import {
   registerActivityHistoryRoutes,
+  type ActivityHistoryProjectionService,
   type ActivityHistoryRefreshService,
 } from './bookings/activity-history-routes.js';
 import { registerCommunityRoutes } from './communities/community-routes.js';
@@ -198,9 +204,12 @@ export interface BuildAppOptions {
   readonly profilePhotoMediaStore?: ProfilePhotoMediaStore;
   readonly bookingPreferencesRepository?: BookingPreferencesRepository;
   readonly bookingScreenReadJobStore?: BookingScreenReadJobStore;
+  readonly eventCatalogSnapshotStore?: EventCatalogSnapshotStore<EventCatalogItem>;
   readonly bookingScreenMappingRepository?: BookingScreenMappingRepository;
+  readonly upcomingBookingsRepository?: UpcomingBookingsRepository;
   readonly activityHistoryRepository?: ActivityHistoryRepository;
   readonly activityHistoryRefresher?: ActivityHistoryRefreshService;
+  readonly activityHistoryProjector?: ActivityHistoryProjectionService;
   readonly tournamentSummarySource?: TournamentSummarySource;
   readonly coachGameSummarySource?: CoachGameSummarySource;
   readonly eventAvatarMedia?: EventAvatarMedia;
@@ -631,10 +640,11 @@ export async function buildApp(options: BuildAppOptions) {
       ? {
           gameRepository: options.gameReadRepository as Pick<
             GameRepository,
-            'listRecommendationCardProjections'
+            'listRecommendationCardProjections' | 'listPublicCardProjections'
           >,
         }
       : {}),
+    ...(options.locationRepository ? { locationRepository: options.locationRepository } : {}),
     ...(options.bookingPreferencesRepository
       ? { preferencesRepository: options.bookingPreferencesRepository }
       : {}),
@@ -644,8 +654,14 @@ export async function buildApp(options: BuildAppOptions) {
     ...(options.bookingScreenReadJobStore
       ? { clientAssistedJobStore: options.bookingScreenReadJobStore }
       : {}),
+    ...(options.eventCatalogSnapshotStore
+      ? { eventCatalogSnapshotStore: options.eventCatalogSnapshotStore }
+      : {}),
     ...(options.bookingScreenMappingRepository
       ? { bookingScreenMappingRepository: options.bookingScreenMappingRepository }
+      : {}),
+    ...(options.upcomingBookingsRepository
+      ? { upcomingBookingsRepository: options.upcomingBookingsRepository }
       : {}),
     ...(options.profilePhotoMediaRepository
       ? { photoRepository: options.profilePhotoMediaRepository }
@@ -686,6 +702,11 @@ export async function buildApp(options: BuildAppOptions) {
   registerActivityHistoryRoutes(app as unknown as FastifyInstance, {
     ...(options.activityHistoryRepository ? { repository: options.activityHistoryRepository } : {}),
     ...(options.activityHistoryRefresher ? { refresher: options.activityHistoryRefresher } : {}),
+    ...(options.bookingScreenReadJobStore
+      ? { clientAssistedJobStore: options.bookingScreenReadJobStore }
+      : {}),
+    ...(options.activityHistoryProjector ? { projector: options.activityHistoryProjector } : {}),
+    providerPageSize: options.config.ACTIVITY_HISTORY_PROVIDER_PAGE_SIZE,
     ...(options.profilePhotoMediaRepository
       ? { photoRepository: options.profilePhotoMediaRepository }
       : {}),
@@ -1132,6 +1153,41 @@ export async function buildApp(options: BuildAppOptions) {
             permissions: request.padlHubClaims?.permissions ?? [],
           }),
         );
+      }
+
+      if (options.upcomingBookingsRepository) {
+        const projection = await options.upcomingBookingsRepository.get(tenantId, userId);
+        if (!projection) {
+          return sendApiError(
+            request,
+            reply,
+            503,
+            'BOOKINGS_PROJECTION_NOT_READY',
+            'Записи ещё не подготовлены.',
+          );
+        }
+        const staleAt = Date.parse(projection.staleAt);
+        if (Date.now() > staleAt + options.config.HOME_PROJECTION_MAX_STALE_SECONDS * 1_000) {
+          return sendApiError(
+            request,
+            reply,
+            503,
+            'BOOKINGS_PROJECTION_STALE',
+            'Записи обновляются.',
+          );
+        }
+        reply.header(
+          'Cache-Control',
+          Date.now() > staleAt
+            ? 'private, max-age=0, stale-while-revalidate=45'
+            : 'private, max-age=15, stale-while-revalidate=45',
+        );
+        return {
+          version: projection.version,
+          generatedAt: projection.generatedAt,
+          staleAt: projection.staleAt,
+          items: projection.items,
+        };
       }
 
       const projection = await options.homeDashboardRepository?.get(tenantId, userId);

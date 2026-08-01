@@ -442,6 +442,11 @@ export function normalizeVivaExerciseRecommendationPayload(
   options: {
     readonly onAvatarSource?: (activityId: string, sourceUrl: string) => void;
     readonly onTrainerAvatarSource?: (activityId: string, source: VivaTrainerAvatarSource) => void;
+    /**
+     * Internal integration hook used to resolve an already-established canonical Game mapping.
+     * Provider identifiers must never be copied into the returned public recommendation DTO.
+     */
+    readonly onExerciseExternalId?: (activityId: string, externalId: string) => void;
   } = {},
 ): readonly VivaExerciseRecommendation[] {
   return exerciseArray(payload)
@@ -462,6 +467,12 @@ export function normalizeVivaExerciseRecommendationPayload(
       }
       if (normalized && trainerAvatarSource) {
         options.onTrainerAvatarSource?.(normalized.id, trainerAvatarSource);
+      }
+      const externalId = sourceItem
+        ? (stringValue(sourceItem.id) ?? stringValue(sourceItem.exerciseId))
+        : undefined;
+      if (normalized && externalId) {
+        options.onExerciseExternalId?.(normalized.id, externalId);
       }
       return normalized ? [normalized] : [];
     })

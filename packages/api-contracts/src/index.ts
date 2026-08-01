@@ -3,6 +3,11 @@ import type { components as UserGeneratedComponents } from './generated-user.js'
 
 export type { components, operations, paths } from './generated-user.js';
 export type {
+  components as UserApiV2Components,
+  operations as UserApiV2Operations,
+  paths as UserApiV2Paths,
+} from './generated-user-v2.js';
+export type {
   components as PublicApiComponents,
   operations as PublicApiOperations,
   paths as PublicApiPaths,

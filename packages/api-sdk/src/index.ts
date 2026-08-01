@@ -1,4 +1,4 @@
-import type { components, PublicApiComponents } from '@phub/api-contracts';
+import type { components, PublicApiComponents, UserApiV2Components } from '@phub/api-contracts';
 
 export type AuthChallengeRequest = components['schemas']['AuthChallengeRequest'];
 export type AuthChallenge = components['schemas']['AuthChallenge'];
@@ -27,6 +27,11 @@ export type BookingPreferencesUpdateRequest =
   components['schemas']['BookingPreferencesUpdateRequest'];
 export type BookingRecommendationPage = components['schemas']['BookingRecommendationPage'];
 export type TrainingSchedulePage = components['schemas']['TrainingSchedulePage'];
+export type EventCatalogQuery = components['schemas']['EventCatalogQuery'];
+export type EventCatalogPage = UserApiV2Components['schemas']['EventCatalogPage'];
+export type EventCatalogItem = EventCatalogPage['items'][number];
+export type EventCatalogFacets = NonNullable<EventCatalogPage['facets']>;
+export type EventCatalogSourceStatus = EventCatalogPage['sourceStatus'][number];
 export type UserUpcomingBookings = components['schemas']['UserUpcomingBookings'];
 export type ActivityHistoryKind = components['schemas']['ActivityHistoryKind'];
 export type ActivityHistoryStatus = components['schemas']['ActivityHistoryStatus'];
@@ -127,12 +132,22 @@ export interface BookingScreenUpcomingReadCommand {
   readonly size: 50;
 }
 
+export interface BookingScreenActivityHistoryReadCommand {
+  readonly commandId: string;
+  readonly operation: 'bookings.history.read';
+  readonly page: number;
+  readonly size: number;
+}
+
 export type BookingScreenReadCommand =
-  BookingScreenScheduleReadCommand | BookingScreenUpcomingReadCommand;
+  | BookingScreenScheduleReadCommand
+  | BookingScreenUpcomingReadCommand
+  | BookingScreenActivityHistoryReadCommand;
 
 export interface BookingScreenReadJob {
   readonly jobId: string;
-  readonly screen: 'FOR_ME' | 'GROUP_TRAININGS' | 'MY_BOOKINGS';
+  readonly screen:
+    'FOR_ME' | 'GROUP_TRAININGS' | 'MY_BOOKINGS' | 'EVENT_CATALOG' | 'ACTIVITY_HISTORY';
   readonly expiresAt: string;
   readonly commands: readonly BookingScreenReadCommand[];
   readonly concurrency: number;
@@ -162,9 +177,25 @@ export interface BookingScreenTrainingScheduleReadCompletion {
   readonly trainings: TrainingSchedulePage;
 }
 
+export interface BookingScreenEventCatalogReadCompletion {
+  readonly screen: 'EVENT_CATALOG';
+  readonly state: 'READY' | 'PARTIAL';
+  readonly completedCommands: number;
+  readonly totalCommands: number;
+  readonly catalog: EventCatalogPage;
+}
+
+export interface ActivityHistoryReadCompletion {
+  readonly screen: 'ACTIVITY_HISTORY';
+  readonly state: 'READY' | 'PARTIAL';
+  readonly completedCommands: number;
+  readonly totalCommands: number;
+}
+
 export type BookingScreenReadCompletion =
   | BookingScreenRecommendationReadCompletion
   | BookingScreenTrainingScheduleReadCompletion
+  | BookingScreenEventCatalogReadCompletion
   | BookingScreenUpcomingReadCompletion;
 
 export type RequestAuthMode = 'none' | 'required';
@@ -289,6 +320,7 @@ function jsonRequestBody(value: unknown): string {
 export class PadlHubApiClient {
   private readonly fetchImplementation: typeof fetch;
   private readonly apiRoot: string;
+  private readonly apiV2Root: string;
   private readonly publicApiRoot: string;
   private accessToken: string | undefined;
   private refreshInFlight: Promise<AuthenticatedSession> | undefined;
@@ -297,6 +329,7 @@ export class PadlHubApiClient {
     this.fetchImplementation =
       options.fetchImplementation ?? ((input, init) => globalThis.fetch(input, init));
     this.apiRoot = `${options.baseUrl.replace(/\/$/, '')}/user/api/v1/${encodeURIComponent(options.tenantKey)}`;
+    this.apiV2Root = `${options.baseUrl.replace(/\/$/, '')}/user/api/v2/${encodeURIComponent(options.tenantKey)}`;
     this.publicApiRoot = `${options.baseUrl.replace(/\/$/, '')}/public/api/v1/${encodeURIComponent(options.tenantKey)}`;
     this.accessToken = options.initialAccessToken?.trim() || undefined;
   }
@@ -524,6 +557,46 @@ export class PadlHubApiClient {
     return this.request<ActivityHistoryPage>(`/bookings/history${suffix}`);
   }
 
+  public startActivityHistoryReadJob(
+    input: ActivityHistoryFilters = {},
+  ): Promise<BookingScreenReadJob> {
+    return this.request<BookingScreenReadJob>('/activity-history-read-jobs', {
+      method: 'POST',
+      idempotencyKey: createCorrelationId(),
+      body: jsonRequestBody(input),
+    });
+  }
+
+  public submitActivityHistoryReadResult(
+    jobId: string,
+    commandId: string,
+    payload: unknown,
+  ): Promise<{
+    readonly accepted: boolean;
+    readonly replayed: boolean;
+    readonly itemCount: number;
+  }> {
+    return this.request(
+      `/activity-history-read-jobs/${encodeURIComponent(jobId)}/results/${encodeURIComponent(commandId)}`,
+      {
+        method: 'POST',
+        idempotencyKey: createCorrelationId(),
+        body: jsonRequestBody({ payload }),
+      },
+    );
+  }
+
+  public completeActivityHistoryReadJob(jobId: string): Promise<ActivityHistoryReadCompletion> {
+    return this.request<ActivityHistoryReadCompletion>(
+      `/activity-history-read-jobs/${encodeURIComponent(jobId)}/complete`,
+      {
+        method: 'POST',
+        idempotencyKey: createCorrelationId(),
+        body: jsonRequestBody({}),
+      },
+    );
+  }
+
   public listBookingRecommendations(
     input: BookingRecommendationFilters = {},
   ): Promise<BookingRecommendationPage> {
@@ -555,6 +628,22 @@ export class PadlHubApiClient {
       idempotencyKey: createCorrelationId(),
       body: jsonRequestBody({ screen }),
     });
+  }
+
+  public startEventCatalogReadJob(query: EventCatalogQuery): Promise<BookingScreenReadJob> {
+    return this.request<BookingScreenReadJob>('/booking-screen-read-jobs', {
+      method: 'POST',
+      idempotencyKey: createCorrelationId(),
+      body: jsonRequestBody({ screen: 'EVENT_CATALOG', query }),
+    });
+  }
+
+  public continueEventCatalog(cursor: string, limit = 20): Promise<EventCatalogPage> {
+    const query = new URLSearchParams({ cursor, limit: String(limit) });
+    return this.requestFromRoot<EventCatalogPage>(
+      this.apiV2Root,
+      `/event-catalog?${query.toString()}`,
+    );
   }
 
   public submitBookingScreenReadResult(

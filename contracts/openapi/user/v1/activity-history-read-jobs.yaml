@@ -1,0 +1,199 @@
+paths:
+  /{tenantKey}/activity-history-read-jobs:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+    post:
+      tags: [bookings]
+      operationId: startActivityHistoryReadJob
+      summary: Start a server-directed client-assisted history refresh
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ActivityHistoryReadJobRequest'
+      responses:
+        '200':
+          description: Short-lived history read job.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActivityHistoryReadJob'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+
+  /{tenantKey}/activity-history-read-jobs/{jobId}/results/{commandId}:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/ActivityHistoryReadJobId'
+      - $ref: '#/components/parameters/ActivityHistoryReadCommandId'
+    post:
+      tags: [bookings]
+      operationId: submitActivityHistoryReadResult
+      summary: Relay one bounded Viva history page
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ActivityHistoryReadResultRequest'
+      responses:
+        '200':
+          description: An identical command result was already accepted.
+          content:
+            application/json:
+              schema:
+                $ref: ./booking-screen-read-jobs.yaml#/components/schemas/BookingScreenReadResultAcceptance
+        '202':
+          description: Result normalized and accepted.
+          content:
+            application/json:
+              schema:
+                $ref: ./booking-screen-read-jobs.yaml#/components/schemas/BookingScreenReadResultAcceptance
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+
+  /{tenantKey}/activity-history-read-jobs/{jobId}/complete:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/ActivityHistoryReadJobId'
+    post:
+      tags: [bookings]
+      operationId: completeActivityHistoryReadJob
+      summary: Persist the accepted provider-neutral history page
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+      responses:
+        '200':
+          description: Refresh completed or explicitly partial.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActivityHistoryReadCompletion'
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+
+components:
+  parameters:
+    ActivityHistoryReadJobId:
+      name: jobId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    ActivityHistoryReadCommandId:
+      name: commandId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+  schemas:
+    ActivityHistoryReadJobRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        kind:
+          type: string
+          enum: [GAME, TRAINING, TOURNAMENT]
+        status:
+          type: string
+          enum: [COMPLETED, CANCELLED]
+        cursor:
+          type: string
+          minLength: 16
+          maxLength: 512
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 50
+    ActivityHistoryReadCommand:
+      type: object
+      additionalProperties: false
+      required: [commandId, operation, page, size]
+      properties:
+        commandId:
+          type: string
+          format: uuid
+        operation:
+          type: string
+          const: bookings.history.read
+        page:
+          type: integer
+          minimum: 0
+          maximum: 1000
+        size:
+          type: integer
+          minimum: 1
+          maximum: 100
+    ActivityHistoryReadJob:
+      type: object
+      additionalProperties: false
+      required: [jobId, screen, expiresAt, commands, concurrency]
+      properties:
+        jobId:
+          type: string
+          format: uuid
+        screen:
+          type: string
+          const: ACTIVITY_HISTORY
+        expiresAt:
+          type: string
+          format: date-time
+        commands:
+          type: array
+          maxItems: 1
+          items:
+            $ref: '#/components/schemas/ActivityHistoryReadCommand'
+        concurrency:
+          type: integer
+          const: 1
+    ActivityHistoryReadResultRequest:
+      type: object
+      additionalProperties: false
+      required: [payload]
+      properties:
+        payload:
+          type: object
+          additionalProperties: true
+    ActivityHistoryReadCompletion:
+      type: object
+      additionalProperties: false
+      required: [screen, state, completedCommands, totalCommands]
+      properties:
+        screen:
+          type: string
+          const: ACTIVITY_HISTORY
+        state:
+          type: string
+          enum: [READY, PARTIAL]
+        completedCommands:
+          type: integer
+          minimum: 0
+          maximum: 1
+        totalCommands:
+          type: integer
+          minimum: 0
+          maximum: 1

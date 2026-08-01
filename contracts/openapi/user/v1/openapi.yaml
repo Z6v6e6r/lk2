@@ -1414,6 +1414,12 @@ paths:
     $ref: ./booking-screen-read-jobs.yaml#/paths/~1{tenantKey}~1booking-screen-read-jobs~1{jobId}~1results~1{commandId}
   /{tenantKey}/booking-screen-read-jobs/{jobId}/complete:
     $ref: ./booking-screen-read-jobs.yaml#/paths/~1{tenantKey}~1booking-screen-read-jobs~1{jobId}~1complete
+  /{tenantKey}/activity-history-read-jobs:
+    $ref: ./activity-history-read-jobs.yaml#/paths/~1{tenantKey}~1activity-history-read-jobs
+  /{tenantKey}/activity-history-read-jobs/{jobId}/results/{commandId}:
+    $ref: ./activity-history-read-jobs.yaml#/paths/~1{tenantKey}~1activity-history-read-jobs~1{jobId}~1results~1{commandId}
+  /{tenantKey}/activity-history-read-jobs/{jobId}/complete:
+    $ref: ./activity-history-read-jobs.yaml#/paths/~1{tenantKey}~1activity-history-read-jobs~1{jobId}~1complete
   /{tenantKey}/games/{gameId}:
     $ref: ./games.yaml#/paths/~1{tenantKey}~1games~1{gameId}
   /{tenantKey}/games/{gameId}/publish:
@@ -1544,8 +1550,8 @@ components:
           format: date-time
         operations:
           type: array
-          minItems: 5
-          maxItems: 5
+          minItems: 6
+          maxItems: 6
           items:
             $ref: '#/components/schemas/ClientRoutingOperationPlan'
         directViva:
@@ -1558,7 +1564,14 @@ components:
         operation:
           type: string
           enum:
-            [profile.read, bookings.read, bookings.details.read, subscriptions.read, schedule.read]
+            [
+              profile.read,
+              bookings.read,
+              bookings.details.read,
+              bookings.history.read,
+              subscriptions.read,
+              schedule.read,
+            ]
         transport:
           type: string
           enum: [PADLHUB_API, DIRECT_VIVA]

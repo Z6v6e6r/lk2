@@ -163,7 +163,7 @@ function HomeActionIcon({ name }: { readonly name: HomeActionIconName }): React.
 
 function HomePreferencesEditIcon(): React.JSX.Element {
   return (
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+    <svg width="8" height="8" viewBox="0 0 16 16" fill="none" aria-hidden="true">
       <path
         d="M10.89 2.11a1.52 1.52 0 0 1 2.15 0l.85.85a1.52 1.52 0 0 1 0 2.15l-7.8 7.8-3.43.43.43-3.43 7.8-7.8Z"
         stroke="currentColor"
@@ -905,7 +905,7 @@ function HomeAdditionalLinks({
   );
 }
 
-type HomeUpcomingItem = UserUpcomingBookings['items'][number];
+export type HomeUpcomingItem = UserUpcomingBookings['items'][number];
 
 const upcomingKindLabel: Readonly<Record<HomeUpcomingItem['kind'], string>> = {
   game: 'Игра',
@@ -996,7 +996,13 @@ function EventParticipants({
   );
 }
 
-function EventCard({ item }: { readonly item: HomeUpcomingItem }): React.JSX.Element {
+export function UpcomingBookingCard({
+  item,
+  showAction = true,
+}: {
+  readonly item: HomeUpcomingItem;
+  readonly showAction?: boolean;
+}): React.JSX.Element {
   const startsAt = new Date(item.startsAt);
   const hasParticipants = (item.participants?.length ?? 0) + (item.openSlots ?? 0) > 0;
   const detailsHref = isImplementedMvpRoute(item.route) ? item.route : '/bookings';
@@ -1045,9 +1051,11 @@ function EventCard({ item }: { readonly item: HomeUpcomingItem }): React.JSX.Ele
       <span className="fh-event__divider" aria-hidden="true" />
       <span className="fh-event__footer">
         <EventParticipants item={item} />
-        <a className="fh-event__action" href={detailsHref}>
-          Открыть
-        </a>
+        {showAction ? (
+          <a className="fh-event__action" href={detailsHref}>
+            Открыть
+          </a>
+        ) : null}
       </span>
     </article>
   );
@@ -1508,7 +1516,7 @@ export function HomeDashboardPage({
                     <div className="fh-bookings-list">
                       {visibleUpcoming.map((item) => (
                         <div className="fh-booking-entry" key={item.id}>
-                          <EventCard item={item} />
+                          <UpcomingBookingCard item={item} />
                         </div>
                       ))}
                     </div>
@@ -1539,8 +1547,20 @@ export function HomeDashboardPage({
             ) : (
               <div className="fh-for-me">
                 {bookingRecommendationsLoading && !bookingRecommendations ? (
-                  <div className="fh-for-me-loader" role="status" aria-label="Подбираем игры">
-                    <img src={bookingRecommendationsLoaderUrl} alt="" />
+                  <div
+                    className={`fh-for-me-loader${layoutVariant === 'v3' ? ' fh-for-me-loader--pulse' : ''}`}
+                    role="status"
+                    aria-label="Подбираем игры"
+                  >
+                    {layoutVariant === 'v3' ? (
+                      <span className="fh-loader-pulse" aria-hidden="true">
+                        <i />
+                        <i />
+                        <i />
+                      </span>
+                    ) : (
+                      <img src={bookingRecommendationsLoaderUrl} alt="" />
+                    )}
                   </div>
                 ) : null}
                 {bookingRecommendationsError ? (

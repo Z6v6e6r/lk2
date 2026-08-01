@@ -1,8 +1,11 @@
 import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
+import type { UpcomingBookingsRepository } from '@phub/database';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { MemoryBookingScreenReadJobStore } from './booking-screen-read-job-store.js';
 import { registerBookingRecommendationRoutes } from './booking-recommendation-routes.js';
+import { MemoryEventCatalogSnapshotStore } from './event-catalog-snapshot-store.js';
+import type { TrainingEventCatalogItem } from './training-event-catalog.js';
 
 const tenantId = '10000000-0000-4000-8000-000000000001';
 const userId = '20000000-0000-4000-8000-000000000001';
@@ -348,6 +351,280 @@ describe('client-assisted booking screen read routes', () => {
     expect(completed.body).not.toContain('Первая пробная тренировка');
   });
 
+  it('filters EVENT_CATALOG before limit and continues the immutable snapshot', async () => {
+    const app = Fastify();
+    apps.push(app);
+    const authenticate = (request: FastifyRequest): Promise<void> => {
+      request.tenantId = tenantId;
+      request.padlHubClaims = {
+        sub: userId,
+        tenants: [tenantId],
+        roles: ['client'],
+        permissions: ['games.play'],
+        sid: '30000000-0000-4000-8000-000000000001',
+      };
+      return Promise.resolve();
+    };
+    registerBookingRecommendationRoutes(app, {
+      clientAssistedJobStore: new MemoryBookingScreenReadJobStore(),
+      eventCatalogSnapshotStore: new MemoryEventCatalogSnapshotStore<TrainingEventCatalogItem>(),
+      authenticatedTenantHandlers: [authenticate],
+      publicTenantHandlers: [],
+    });
+
+    const started = await app.inject({
+      method: 'POST',
+      url: '/user/api/v1/local-padel/booking-screen-read-jobs',
+      payload: {
+        screen: 'EVENT_CATALOG',
+        query: {
+          surface: 'TRAININGS',
+          localDates: ['2026-08-03', '2026-08-02', '2026-08-02'],
+          kinds: ['COACH_GAME'],
+          availability: 'EXCLUDE_FULL',
+          limit: 20,
+        },
+      },
+    });
+    expect(started.statusCode).toBe(200);
+    expect(started.headers['cache-control']).toBe('private, no-store');
+    const job = started.json<{
+      readonly jobId: string;
+      readonly commands: readonly { readonly commandId: string; readonly date: string }[];
+    }>();
+    expect(job.commands.map((command) => command.date)).toEqual(['2026-08-02', '2026-08-03']);
+
+    for (const command of job.commands) {
+      const payload =
+        command.date === '2026-08-02'
+          ? Array.from({ length: 21 }, (_, index) => ({
+              id: `private-coach-${index + 1}`,
+              type: { id: 605, name: 'Падел групповая тренировка' },
+              direction: { id: 2, name: 'Игра+Тренер. Уровень D+' },
+              timeFrom: `${command.date}T${String(10 + Math.floor(index / 6)).padStart(2, '0')}:${String((index % 6) * 10).padStart(2, '0')}:00.000+03:00`,
+              timeTo: `${command.date}T18:00:00.000+03:00`,
+              studio: { id: 'private-studio', name: 'Терехово' },
+              room: { id: `private-court-${index + 1}`, name: `Корт №${index + 1}` },
+              maxClientsCount: 4,
+              freePlaces: 2,
+            }))
+          : [];
+      const accepted = await app.inject({
+        method: 'POST',
+        url: `/user/api/v1/local-padel/booking-screen-read-jobs/${job.jobId}/results/${command.commandId}`,
+        payload: { payload },
+      });
+      expect(accepted.statusCode).toBe(202);
+    }
+
+    const mismatchedCompletion = await app.inject({
+      method: 'POST',
+      url: `/user/api/v1/local-padel/booking-screen-read-jobs/${job.jobId}/complete`,
+      payload: { limit: 50 },
+    });
+    expect(mismatchedCompletion.statusCode).toBe(400);
+    expect(mismatchedCompletion.json()).toMatchObject({
+      code: 'BOOKING_SCREEN_READ_JOB_INVALID',
+    });
+
+    const completed = await app.inject({
+      method: 'POST',
+      url: `/user/api/v1/local-padel/booking-screen-read-jobs/${job.jobId}/complete`,
+      payload: { limit: 20 },
+    });
+    expect(completed.statusCode).toBe(200);
+    const first = completed.json<{
+      readonly catalog: {
+        readonly state: string;
+        readonly items: readonly {
+          readonly kind: string;
+          readonly activity: { readonly id: string };
+        }[];
+        readonly nextCursor: string;
+        readonly totalMatched: number;
+      };
+    }>().catalog;
+    expect(first.state).toBe('READY');
+    expect(first.items).toHaveLength(20);
+    expect(first.totalMatched).toBe(21);
+    expect(first.nextCursor).toEqual(expect.any(String));
+    expect(completed.body).not.toMatch(/private-coach|private-studio|private-court/);
+
+    const mismatchedContinuation = await app.inject({
+      method: 'GET',
+      url: `/user/api/v2/local-padel/event-catalog?cursor=${encodeURIComponent(first.nextCursor)}&limit=1`,
+    });
+    expect(mismatchedContinuation.statusCode).toBe(400);
+    expect(mismatchedContinuation.json()).toMatchObject({ code: 'CATALOG_CURSOR_INVALID' });
+
+    const continued = await app.inject({
+      method: 'GET',
+      url: `/user/api/v2/local-padel/event-catalog?cursor=${encodeURIComponent(first.nextCursor)}&limit=20`,
+    });
+    expect(continued.statusCode).toBe(200);
+    expect(continued.json()).toMatchObject({
+      state: 'READY',
+      totalMatched: 21,
+      nextCursor: null,
+    });
+    expect(continued.json<{ readonly items: readonly unknown[] }>().items).toHaveLength(1);
+  });
+
+  it('creates a GAMES catalog snapshot without provider commands when only local games are selected', async () => {
+    const app = Fastify();
+    apps.push(app);
+    const authenticate = (request: FastifyRequest): Promise<void> => {
+      request.tenantId = tenantId;
+      request.padlHubClaims = {
+        sub: userId,
+        tenants: [tenantId],
+        roles: ['client'],
+        permissions: ['games.play'],
+        sid: '30000000-0000-4000-8000-000000000001',
+      };
+      return Promise.resolve();
+    };
+    registerBookingRecommendationRoutes(app, {
+      clientAssistedJobStore: new MemoryBookingScreenReadJobStore(),
+      eventCatalogSnapshotStore: new MemoryEventCatalogSnapshotStore<TrainingEventCatalogItem>(),
+      authenticatedTenantHandlers: [authenticate],
+      publicTenantHandlers: [],
+    });
+
+    const started = await app.inject({
+      method: 'POST',
+      url: '/user/api/v1/local-padel/booking-screen-read-jobs',
+      payload: {
+        screen: 'EVENT_CATALOG',
+        query: {
+          surface: 'GAMES',
+          localDates: ['2026-08-02'],
+          kinds: ['GAME'],
+          availability: 'INCLUDE_FULL',
+          limit: 20,
+        },
+      },
+    });
+    expect(started.statusCode).toBe(200);
+    const job = started.json<{ readonly jobId: string; readonly commands: readonly unknown[] }>();
+    expect(job.commands).toEqual([]);
+
+    const completed = await app.inject({
+      method: 'POST',
+      url: `/user/api/v1/local-padel/booking-screen-read-jobs/${job.jobId}/complete`,
+      payload: { limit: 20 },
+    });
+    expect(completed.statusCode).toBe(200);
+    expect(completed.json()).toMatchObject({
+      screen: 'EVENT_CATALOG',
+      state: 'PARTIAL',
+      completedCommands: 0,
+      totalCommands: 0,
+      catalog: {
+        state: 'PARTIAL',
+        items: [],
+        totalMatched: null,
+        facets: null,
+        sourceStatus: [
+          {
+            source: 'LOCAL_GAMES',
+            localDate: null,
+            state: 'UNAVAILABLE',
+            errorCode: 'LOCAL_GAMES_READ_INCOMPLETE',
+          },
+        ],
+      },
+    });
+  });
+
+  it('maps an expired catalog cursor to 410', async () => {
+    const app = Fastify();
+    apps.push(app);
+    const authenticate = (request: FastifyRequest): Promise<void> => {
+      request.tenantId = tenantId;
+      request.padlHubClaims = {
+        sub: userId,
+        tenants: [tenantId],
+        roles: ['client'],
+        permissions: ['games.play'],
+        sid: '30000000-0000-4000-8000-000000000001',
+      };
+      return Promise.resolve();
+    };
+    registerBookingRecommendationRoutes(app, {
+      clientAssistedJobStore: new MemoryBookingScreenReadJobStore(),
+      eventCatalogSnapshotStore: new MemoryEventCatalogSnapshotStore<TrainingEventCatalogItem>(),
+      authenticatedTenantHandlers: [authenticate],
+      publicTenantHandlers: [],
+    });
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/user/api/v2/local-padel/event-catalog?cursor=44000000-0000-4000-8000-000000000001&limit=20',
+    });
+
+    expect(response.statusCode).toBe(410);
+    expect(response.json()).toMatchObject({ code: 'CATALOG_CURSOR_EXPIRED' });
+  });
+
+  it('maps a cursor owned by another user to 400', async () => {
+    const app = Fastify();
+    apps.push(app);
+    const foreignUserId = '20000000-0000-4000-8000-000000000002';
+    const store = new MemoryEventCatalogSnapshotStore<TrainingEventCatalogItem>();
+    const item = { kind: 'COACH_GAME' } as TrainingEventCatalogItem;
+    await store.create(
+      {
+        snapshotId: 'catalog-snapshot-foreign-user',
+        tenantId,
+        userId,
+        queryHash: 'catalog-query-foreign-user',
+        version: 'a'.repeat(64),
+        generatedAt: '2026-08-01T12:00:00.000Z',
+        staleAt: '2026-08-01T12:10:00.000Z',
+        state: 'READY',
+        items: [item, item],
+      },
+      600,
+    );
+    const first = await store.firstPage({
+      snapshotId: 'catalog-snapshot-foreign-user',
+      tenantId,
+      userId,
+      queryHash: 'catalog-query-foreign-user',
+      limit: 1,
+      ttlSeconds: 600,
+    });
+    if (first.outcome !== 'PAGE' || !first.page.nextCursor) {
+      throw new Error('expected an owned continuation cursor');
+    }
+    const authenticate = (request: FastifyRequest): Promise<void> => {
+      request.tenantId = tenantId;
+      request.padlHubClaims = {
+        sub: foreignUserId,
+        tenants: [tenantId],
+        roles: ['client'],
+        permissions: ['games.play'],
+        sid: '30000000-0000-4000-8000-000000000002',
+      };
+      return Promise.resolve();
+    };
+    registerBookingRecommendationRoutes(app, {
+      clientAssistedJobStore: new MemoryBookingScreenReadJobStore(),
+      eventCatalogSnapshotStore: store,
+      authenticatedTenantHandlers: [authenticate],
+      publicTenantHandlers: [],
+    });
+
+    const response = await app.inject({
+      method: 'GET',
+      url: `/user/api/v2/local-padel/event-catalog?cursor=${encodeURIComponent(first.page.nextCursor)}&limit=1`,
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({ code: 'CATALOG_CURSOR_INVALID' });
+  });
+
   it('reads two tournament days for the initial Home slice and the full range after expansion', async () => {
     const app = Fastify();
     apps.push(app);
@@ -480,9 +757,11 @@ describe('client-assisted booking screen read routes', () => {
           readonly tenantId: string;
           readonly bookingExternalIds: readonly string[];
           readonly exerciseAssociationIds: readonly string[];
+          readonly stationExternalIds?: readonly string[];
         }) => Promise<{
           readonly bookings: readonly { readonly externalId: string; readonly bookingId: string }[];
           readonly games: readonly { readonly associationId: string; readonly gameId: string }[];
+          readonly stations: readonly { readonly externalId: string; readonly stationId: string }[];
         }>
       >()
       .mockResolvedValue({
@@ -498,11 +777,22 @@ describe('client-assisted booking screen read routes', () => {
             gameId: canonicalGameId,
           },
         ],
+        stations: [],
       });
     const mappingRepository = { resolve: resolveMappings };
+    const replaceUpcomingProjection = vi.fn<UpcomingBookingsRepository['replace']>((input) =>
+      Promise.resolve({
+        ...input,
+        updatedAt: input.generatedAt,
+      }),
+    );
     registerBookingRecommendationRoutes(app, {
       clientAssistedJobStore: new MemoryBookingScreenReadJobStore(),
       bookingScreenMappingRepository: mappingRepository,
+      upcomingBookingsRepository: {
+        get: vi.fn().mockResolvedValue(undefined),
+        replace: replaceUpcomingProjection,
+      },
       authenticatedTenantHandlers: [authenticate],
       publicTenantHandlers: [],
     });
@@ -592,6 +882,13 @@ describe('client-assisted booking screen read routes', () => {
       },
     });
     expect(completed.body).not.toMatch(/private-viva-booking-id|private-viva-exercise-id|VIVA/i);
+    expect(replaceUpcomingProjection).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tenantId,
+        userId,
+        items: [expect.objectContaining({ id: canonicalBookingId })],
+      }),
+    );
     const mappingInput = resolveMappings.mock.calls[0]?.[0];
     expect(mappingInput?.tenantId).toBe(tenantId);
     expect(mappingInput?.bookingExternalIds).toEqual(['private-viva-booking-id']);

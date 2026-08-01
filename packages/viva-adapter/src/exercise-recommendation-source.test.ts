@@ -1,8 +1,33 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { VivaExerciseRecommendationSourceAdapter } from './exercise-recommendation-source.js';
+import {
+  normalizeVivaExerciseRecommendationPayload,
+  VivaExerciseRecommendationSourceAdapter,
+} from './exercise-recommendation-source.js';
 
 describe('Viva exercise recommendation source', () => {
+  it('reports private exercise IDs only through the internal mapping hook', () => {
+    const associations = new Map<string, string>();
+    const items = normalizeVivaExerciseRecommendationPayload(
+      [
+        {
+          id: 'private-exercise-42',
+          type: { id: 1208, name: 'Игра+Тренер' },
+          direction: { id: 101, name: 'Игра+Тренер. Уровень D' },
+          timeFrom: '2026-08-02T10:00:00+03:00',
+          timeTo: '2026-08-02T11:00:00+03:00',
+          studio: { id: 'private-station', name: 'Терехово' },
+        },
+      ],
+      {
+        onExerciseExternalId: (activityId, externalId) => associations.set(activityId, externalId),
+      },
+    );
+
+    expect(associations.get(items[0]?.id ?? '')).toBe('private-exercise-42');
+    expect(JSON.stringify(items)).not.toContain('private-exercise-42');
+  });
+
   it('normalizes trainings and tournaments without exposing Viva identifiers', async () => {
     const fetchImplementation = vi.fn<typeof fetch>().mockResolvedValue(
       Response.json([

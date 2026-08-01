@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import '@testing-library/jest-dom/vitest';
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -10,10 +10,17 @@ import type { BookingRecommendationActivity } from './booking-activity-kind.js';
 import { profileUserIdForParticipant } from './game-participant-profile.js';
 import type {
   AuthGateway,
+  EventCatalogPage,
+  EventCatalogQuery,
   GameCard as ViewerGameCard,
   PublicGameCard,
   PublicTournamentSummary,
 } from './auth-gateway.js';
+
+type GamesCatalogTestItem =
+  | { readonly kind: 'GAME'; readonly game: PublicGameCard }
+  | { readonly kind: 'COACH_GAME'; readonly activity: BookingRecommendationActivity }
+  | { readonly kind: 'TOURNAMENT'; readonly tournament: PublicTournamentSummary };
 
 const weekdayFormatter = new Intl.DateTimeFormat('ru-RU', { weekday: 'short' });
 const dayFormatter = new Intl.DateTimeFormat('ru-RU', { day: '2-digit' });
@@ -93,41 +100,43 @@ const coachGameActivity: BookingRecommendationActivity = {
   route: '/trainings?event=88888888-8888-4888-8888-888888888888',
 };
 
-const groupTrainingActivity: BookingRecommendationActivity = {
-  id: '77777777-7777-4777-8777-777777777777',
-  kind: 'TRAINING',
-  title: 'Падел групповая тренировка',
-  startsAt: new Date(Date.now() + 3_600_000).toISOString(),
-  endsAt: new Date(Date.now() + 7_200_000).toISOString(),
-  timezone: 'Europe/Moscow',
-  station: {
-    id: game.station.id,
-    name: game.station.name,
-    shortAddress: null,
-  },
-  levelRange: null,
-  host: {
-    displayName: 'Мария Орлова',
-    avatarUrl: null,
-    role: 'TRAINER',
-  },
-  capacity: { total: 8, open: 4 },
-  route: '/trainings?event=77777777-7777-4777-8777-777777777777',
-};
+function catalogPage(
+  items: readonly GamesCatalogTestItem[],
+  nextCursor: string | null = null,
+): EventCatalogPage {
+  return {
+    state: 'READY',
+    snapshotVersion: 'a'.repeat(64),
+    generatedAt: new Date().toISOString(),
+    staleAt: new Date(Date.now() + 60_000).toISOString(),
+    items,
+    nextCursor,
+    sourceStatus: [
+      { source: 'LOCAL_GAMES', localDate: null, state: 'READY', errorCode: null },
+      { source: 'SCHEDULE', localDate: null, state: 'READY', errorCode: null },
+      { source: 'TOURNAMENTS', localDate: null, state: 'READY', errorCode: null },
+    ],
+    totalMatched: items.length,
+    facets: { kinds: [], categories: [], stations: [] },
+  } as unknown as EventCatalogPage;
+}
+
+function deferred<Value>(): {
+  readonly promise: Promise<Value>;
+  readonly resolve: (value: Value) => void;
+} {
+  let resolve!: (value: Value) => void;
+  const promise = new Promise<Value>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
 
 function gateway(): AuthGateway {
   return {
-    listPublicGames: vi.fn().mockResolvedValue({ items: [game], nextCursor: null }),
-    listPublicTournamentSummaries: vi.fn().mockResolvedValue({ items: [] }),
-    listPublicCoachGameSummaries: vi.fn().mockResolvedValue({ items: [] }),
-    listBookingRecommendations: vi.fn().mockResolvedValue({
-      version: 'a'.repeat(64),
-      generatedAt: new Date().toISOString(),
-      staleAt: new Date(Date.now() + 60_000).toISOString(),
-      personalization: 'BASIC',
-      items: [],
-      nextCursor: null,
-    }),
+    listEventCatalog: vi.fn().mockResolvedValue(catalogPage([{ kind: 'GAME', game }])),
+    continueEventCatalog: vi.fn().mockResolvedValue(catalogPage([])),
+    getUpcomingBookings: vi.fn(),
     listMyGames: vi.fn().mockResolvedValue({ items: [], nextCursor: null }),
     listLocations: vi.fn().mockResolvedValue({
       items: [
@@ -164,6 +173,39 @@ function gateway(): AuthGateway {
 afterEach(() => cleanup());
 
 describe('GamesPage discovery', () => {
+  it('opens a client-assisted booking deep-link as the selected game card', async () => {
+    const eventId = '8a830ad0-a8c7-479b-a239-5b434c42148f';
+    const api = gateway();
+    vi.mocked(api.getUpcomingBookings).mockResolvedValue({
+      version: 'b'.repeat(64),
+      generatedAt: '2026-08-01T10:00:00.000Z',
+      staleAt: '2026-08-01T10:01:00.000Z',
+      items: [
+        {
+          id: '11111111-1111-4111-8111-111111111111',
+          kind: 'game',
+          title: 'Открытая игра',
+          startsAt: '2026-08-15T05:00:00.000Z',
+          endsAt: '2026-08-15T06:00:00.000Z',
+          venue: 'Сочи',
+          status: 'confirmed',
+          route: `/games?event=${eventId}`,
+          openSlots: 4,
+        },
+      ],
+    });
+
+    render(<GamesPage gateway={api} eventId={eventId} />);
+
+    expect(await screen.findByRole('heading', { name: 'Карточка игры' })).toBeVisible();
+    const card = await screen.findByRole('article', { name: 'Открытая игра' });
+    expect(within(card).getByText('Сочи')).toBeVisible();
+    expect(within(card).queryByRole('link', { name: 'Открыть' })).not.toBeInTheDocument();
+    expect(api.getUpcomingBookings).toHaveBeenCalledOnce();
+    expect(api.listEventCatalog).not.toHaveBeenCalled();
+    expect(api.listLocations).not.toHaveBeenCalled();
+  });
+
   it('resolves the selected public participant against an authenticated card revision', () => {
     const participantUserId = '38edce35-3060-4f16-b23e-3ad8cbf8d1dd';
     const viewerGame = {
@@ -257,9 +299,10 @@ describe('GamesPage discovery', () => {
     expect(dateButtons).toHaveLength(16);
     expect(dateButtons[0]).toHaveAttribute('aria-pressed', 'false');
     expect(dateButtons[1]).toHaveAttribute('aria-pressed', 'true');
-    const initialFilters = vi.mocked(api.listPublicGames).mock.calls[0]?.[0];
-    expect(typeof initialFilters?.startsFrom).toBe('string');
-    expect(typeof initialFilters?.startsTo).toBe('string');
+    const initialFilters = vi.mocked(api.listEventCatalog).mock.calls[0]?.[0] as unknown as {
+      readonly localDates: readonly string[];
+    };
+    expect(initialFilters.localDates).toHaveLength(1);
 
     const twoWeeksAhead = new Date();
     twoWeeksAhead.setHours(0, 0, 0, 0);
@@ -284,8 +327,13 @@ describe('GamesPage discovery', () => {
     render(<GamesPage gateway={api} />);
 
     expect(await screen.findByText(game.title)).toBeInTheDocument();
-    expect(api.listPublicGames).toHaveBeenCalledWith(
-      expect.objectContaining({ availability: 'JOINABLE', limit: 20 }),
+    expect(api.listEventCatalog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        surface: 'GAMES',
+        kinds: ['GAME', 'COACH_GAME', 'TOURNAMENT'],
+        availability: 'EXCLUDE_FULL',
+        limit: 20,
+      }),
     );
 
     await user.click(screen.getByRole('button', { name: 'Вступить в игру' }));
@@ -311,8 +359,8 @@ describe('GamesPage discovery', () => {
 
     await user.click(within(typeFilter).getByRole('checkbox', { name: 'Игра + Тренер' }));
     await waitFor(() =>
-      expect(api.listPublicGames).toHaveBeenLastCalledWith(
-        expect.objectContaining({ kind: 'COACH_GAME', availability: 'JOINABLE' }),
+      expect(api.listEventCatalog).toHaveBeenLastCalledWith(
+        expect.objectContaining({ kinds: ['COACH_GAME'], availability: 'EXCLUDE_FULL' }),
       ),
     );
     await user.click(within(typeFilter).getByRole('checkbox', { name: 'Турнир' }));
@@ -320,41 +368,19 @@ describe('GamesPage discovery', () => {
     expect(within(typeFilter).getByRole('checkbox', { name: 'Турнир' })).toBeChecked();
   });
 
-  it('loads only coach-game trainings through the same direct contract as Home', async () => {
+  it('renders the mixed catalog without client-side source filtering', async () => {
     const api = gateway();
-    vi.mocked(api.listPublicTournamentSummaries!).mockResolvedValueOnce({ items: [tournament] });
-    vi.mocked(api.listBookingRecommendations).mockResolvedValueOnce({
-      version: 'b'.repeat(64),
-      generatedAt: new Date().toISOString(),
-      staleAt: new Date(Date.now() + 60_000).toISOString(),
-      personalization: 'BASIC',
-      items: [
-        {
-          kind: 'TRAINING',
-          activity: groupTrainingActivity,
-          reasons: ['PLAYED_STATION'],
-        },
-        {
-          kind: 'TRAINING',
-          activity: coachGameActivity,
-          reasons: ['LEVEL_MATCH'],
-        },
-      ],
-      nextCursor: null,
-    });
+    vi.mocked(api.listEventCatalog).mockResolvedValueOnce(
+      catalogPage([
+        { kind: 'GAME', game },
+        { kind: 'COACH_GAME', activity: coachGameActivity },
+        { kind: 'TOURNAMENT', tournament },
+      ]),
+    );
     const user = userEvent.setup();
     render(<GamesPage gateway={api} />);
 
     expect(await screen.findByText(tournament.title)).toBeInTheDocument();
-    expect(screen.queryByText(groupTrainingActivity.title)).not.toBeInTheDocument();
-    expect(api.listPublicTournamentSummaries).toHaveBeenCalledWith(
-      expect.objectContaining({
-        availability: 'JOINABLE',
-        limit: 50,
-      }),
-    );
-    expect(api.listBookingRecommendations).toHaveBeenCalledWith({ limit: 20 });
-    expect(api.listPublicCoachGameSummaries).not.toHaveBeenCalled();
     const coachGameCard = screen.getByText(coachGameActivity.title).closest('article');
     expect(coachGameCard).not.toBeNull();
     expect(coachGameCard).toHaveAttribute('data-event-kind', 'TRAINING');
@@ -409,14 +435,10 @@ describe('GamesPage discovery', () => {
     await user.click(screen.getByRole('button', { name: 'Все типы' }));
     await user.click(screen.getByRole('checkbox', { name: 'Игра + Тренер' }));
     await waitFor(() =>
-      expect(api.listPublicGames).toHaveBeenLastCalledWith(
-        expect.objectContaining({ kind: 'COACH_GAME' }),
+      expect(api.listEventCatalog).toHaveBeenLastCalledWith(
+        expect.objectContaining({ kinds: ['COACH_GAME'] }),
       ),
     );
-    expect(api.listPublicTournamentSummaries).toHaveBeenCalledTimes(1);
-    expect(api.listBookingRecommendations).toHaveBeenCalledTimes(1);
-    expect(screen.getByText(coachGameActivity.title)).toBeInTheDocument();
-    expect(screen.queryByText(groupTrainingActivity.title)).not.toBeInTheDocument();
   });
 
   it('applies station, availability and advanced filters from the reference-shaped panel', async () => {
@@ -470,22 +492,16 @@ describe('GamesPage discovery', () => {
     await user.selectOptions(screen.getByRole('combobox', { name: 'Уровень игроков' }), 'C_B_PLUS');
 
     await waitFor(() => {
-      const recentFilters = vi
-        .mocked(api.listPublicGames)
-        .mock.calls.slice(-2)
-        .map(([filters]) => filters);
-      expect(recentFilters.map((filters) => filters?.stationId)).toEqual(
-        expect.arrayContaining([game.station.id, secondStation.id]),
-      );
-      recentFilters.forEach((filters) => {
-        expect(filters).toBeDefined();
-        if (!filters) return;
-        expect(filters).toMatchObject({
-          availability: 'INCLUDE_FULL',
-          levelFrom: 'C',
-          levelTo: 'B+',
-        });
-        expect(filters.startsFrom).toContain('T15:00:00.000Z');
+      const filters = vi.mocked(api.listEventCatalog).mock.calls.at(-1)?.[0] as unknown as Record<
+        string,
+        unknown
+      >;
+      expect(filters).toMatchObject({
+        stationIds: [secondStation.id, game.station.id].sort(),
+        availability: 'INCLUDE_FULL',
+        levelFrom: 'C',
+        levelTo: 'B+',
+        startsAfterLocal: '18:00',
       });
     });
     expect(screen.getByRole('button', { name: 'Убрать фильтр После 18:00' })).toBeInTheDocument();
@@ -493,12 +509,68 @@ describe('GamesPage discovery', () => {
 
     await user.click(screen.getByRole('button', { name: 'Сбросить всё' }));
     await waitFor(() => {
-      const filters = vi.mocked(api.listPublicGames).mock.calls.at(-1)?.[0];
-      expect(filters).not.toHaveProperty('stationId');
+      const filters = vi.mocked(api.listEventCatalog).mock.calls.at(-1)?.[0];
+      expect(filters).not.toHaveProperty('stationIds');
       expect(filters).not.toHaveProperty('levelFrom');
       expect(filters).not.toHaveProperty('levelTo');
     });
     expect(screen.getByRole('checkbox', { name: 'Не показывать набранные' })).toBeChecked();
+  });
+
+  it('continues the mixed catalog through its opaque cursor', async () => {
+    const secondGame: PublicGameCard = {
+      ...game,
+      id: '22222222-2222-4222-8222-222222222222',
+      title: 'Вторая игра каталога',
+      deepLink: '/games/22222222-2222-4222-8222-222222222222',
+    };
+    const api = gateway();
+    vi.mocked(api.listEventCatalog).mockResolvedValueOnce(
+      catalogPage([{ kind: 'GAME', game }], 'opaque-page-2'),
+    );
+    vi.mocked(api.continueEventCatalog).mockResolvedValueOnce(
+      catalogPage([{ kind: 'GAME', game: secondGame }]),
+    );
+    const user = userEvent.setup();
+
+    render(<GamesPage gateway={api} />);
+    await screen.findByText(game.title);
+    await user.click(screen.getByRole('button', { name: 'Показать ещё' }));
+
+    await waitFor(() => expect(api.continueEventCatalog).toHaveBeenCalledWith('opaque-page-2', 20));
+    expect(await screen.findByText(secondGame.title)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Показать ещё' })).not.toBeInTheDocument();
+  });
+
+  it('resets the catalog query on date change and rejects the stale response', async () => {
+    const stalePage = deferred<EventCatalogPage>();
+    const currentPage = deferred<EventCatalogPage>();
+    const api = gateway();
+    vi.mocked(api.listEventCatalog)
+      .mockImplementationOnce(() => stalePage.promise)
+      .mockImplementationOnce(() => currentPage.promise);
+    const user = userEvent.setup();
+
+    render(<GamesPage gateway={api} />);
+    await waitFor(() => expect(api.listEventCatalog).toHaveBeenCalledTimes(1));
+    const dateButtons = within(screen.getByLabelText('Выбор даты')).getAllByRole('button');
+    await user.click(dateButtons[2]!);
+    await waitFor(() => expect(api.listEventCatalog).toHaveBeenCalledTimes(2));
+    const changedQuery = vi.mocked(api.listEventCatalog).mock.calls[1]?.[0] as EventCatalogQuery;
+    expect(changedQuery.localDates).toHaveLength(1);
+
+    const currentGame: PublicGameCard = {
+      ...game,
+      id: '33333333-3333-4333-8333-333333333333',
+      title: 'Игра новой даты',
+      deepLink: '/games/33333333-3333-4333-8333-333333333333',
+    };
+    act(() => currentPage.resolve(catalogPage([{ kind: 'GAME', game: currentGame }])));
+    expect(await screen.findByText(currentGame.title)).toBeInTheDocument();
+
+    act(() => stalePage.resolve(catalogPage([{ kind: 'GAME', game }])));
+    await waitFor(() => expect(screen.queryByText(game.title)).not.toBeInTheDocument());
+    expect(screen.getByText(currentGame.title)).toBeInTheDocument();
   });
 
   it('polls an accepted roster command before reporting completion', async () => {
