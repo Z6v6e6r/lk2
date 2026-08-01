@@ -7,6 +7,7 @@ import {
   type GameCardModel,
 } from './game-card-policy.js';
 import { EventCalendarIcon, EventLevelIcon, EventLocationIcon } from './ActivityCardIcons.js';
+import { CreateGameButtonIcon } from './CreateGameButtonIcon.js';
 import { GameScoreSummary, type GameScoreSummarySet } from './GameScoreSummary.js';
 import { GameTypeBadge } from './GameTypeBadge.js';
 import { ParticipantAvatarStack } from './ParticipantAvatarStack.js';
@@ -142,6 +143,9 @@ export interface GameCardProps {
   readonly game: GameCardModel;
   readonly busy?: boolean;
   readonly compact?: boolean;
+  readonly compactActionVariant?: 'default' | 'mini-create';
+  readonly compactMetadataVariant?: 'default' | 'station-time';
+  readonly footerSupplement?: React.ReactNode;
   readonly showCompactMetadata?: boolean;
   readonly showCompactLevel?: boolean;
   readonly onAction?: (action: GameCardAction, game: GameCardModel) => void;
@@ -157,6 +161,9 @@ export function GameCard({
   game,
   busy = false,
   compact = false,
+  compactActionVariant = 'default',
+  compactMetadataVariant = 'default',
+  footerSupplement,
   showCompactMetadata = false,
   showCompactLevel = false,
   onAction,
@@ -165,7 +172,16 @@ export function GameCard({
 }: GameCardProps) {
   const schedule = formatDate(game);
   const dateBadge = formatDateBadge(game);
-  const action = compact ? gameHistoryPrimaryAction(game) : gamePrimaryAction(game);
+  const usesStationTimeMetadata =
+    compact && showCompactMetadata && compactMetadataVariant === 'station-time';
+  const action =
+    compact && compactActionVariant === 'default'
+      ? gameHistoryPrimaryAction(game)
+      : gamePrimaryAction(game);
+  const usesMiniCreateAction =
+    compact &&
+    compactActionVariant === 'mini-create' &&
+    (action === 'JOIN' || action === 'JOIN_WAITLIST');
   const openSlots = Math.max(0, Math.min(game.capacity.open, game.capacity.total));
   const visibleParticipants = game.participants.slice(0, game.capacity.total);
   const sets = resultSets(game);
@@ -238,26 +254,38 @@ export function GameCard({
 
       {compact && !showCompactMetadata ? null : (
         <div className="game-card__meta">
-          <span
-            className="game-card__date activity-card-metadata-row"
-            aria-label={`${schedule.date}, ${schedule.time}`}
-          >
-            <EventCalendarIcon />
-            <span className="game-card__metadata-text">
-              <strong>{schedule.date}</strong>
-              <span>{schedule.time}</span>
+          {!usesStationTimeMetadata ? (
+            <span
+              className="game-card__date activity-card-metadata-row"
+              aria-label={`${schedule.date}, ${schedule.time}`}
+            >
+              <EventCalendarIcon />
+              <span className="game-card__metadata-text">
+                <strong>{schedule.date}</strong>
+                <span>{schedule.time}</span>
+              </span>
             </span>
-          </span>
+          ) : null}
           <span className="activity-card-metadata-row">
             <EventLocationIcon />
             <span className="game-card__metadata-text">
               <strong>
                 {game.station.name}
-                {game.court?.name ? ` · ${game.court.name}` : ''}
+                {!usesStationTimeMetadata && game.court?.name ? ` · ${game.court.name}` : ''}
               </strong>
-              {game.station.shortAddress ? <span>{game.station.shortAddress}</span> : null}
+              {!usesStationTimeMetadata && game.station.shortAddress ? (
+                <span>{game.station.shortAddress}</span>
+              ) : null}
             </span>
           </span>
+          {usesStationTimeMetadata ? (
+            <span className="game-card__time activity-card-metadata-row">
+              <EventCalendarIcon />
+              <span className="game-card__metadata-text">
+                <strong>{schedule.time}</strong>
+              </span>
+            </span>
+          ) : null}
           <span className="game-card__level">
             <span className="game-card__level-icon">
               <EventLevelIcon />
@@ -281,11 +309,15 @@ export function GameCard({
 
       {showFooter ? (
         <div className={`game-card__footer${hasStructuredResult ? ' has-structured-result' : ''}`}>
+          {footerSupplement ? (
+            <div className="game-card__footer-supplement">{footerSupplement}</div>
+          ) : null}
           {showFooterParticipants ? (
             sets.length === 0 ? (
               <ParticipantAvatarStack
                 ariaLabel="Участники игры"
                 capacity={game.capacity.total}
+                showLevelRing={!(compact && compactActionVariant === 'mini-create')}
                 participants={visibleParticipants.map((participant, index) => ({
                   key:
                     'userId' in participant && typeof participant.userId === 'string'
@@ -384,7 +416,11 @@ export function GameCard({
           ) : null}
 
           {showFooterActions ? (
-            <div className="game-card__actions">
+            <div
+              className={`game-card__actions${
+                usesMiniCreateAction ? ' game-card__actions--mini-create' : ''
+              }`}
+            >
               {!action ? (
                 <span className={`game-state game-state--${game.displayState.toLowerCase()}`}>
                   {compact ? gameHistoryStateLabel(game) : gameStateLabel(game.displayState)}
@@ -404,8 +440,16 @@ export function GameCard({
                     {actionLabels[action]}
                   </button>
                 ) : (
-                  <a className="game-card__button" href={detailsUrl}>
-                    {actionLabels[action]}
+                  <a
+                    className={`game-card__button${
+                      usesMiniCreateAction
+                        ? ' game-card__button--mini-create game-card__button--static'
+                        : ''
+                    }`}
+                    href={detailsUrl}
+                    aria-label={usesMiniCreateAction ? actionLabels[action] : undefined}
+                  >
+                    {usesMiniCreateAction ? <CreateGameButtonIcon /> : actionLabels[action]}
                   </a>
                 )
               ) : !compact ? (

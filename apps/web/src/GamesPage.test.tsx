@@ -6,12 +6,12 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { GamesPage } from './GamesPage.js';
+import type { BookingRecommendationActivity } from './booking-activity-kind.js';
 import { profileUserIdForParticipant } from './game-participant-profile.js';
 import type {
   AuthGateway,
   GameCard as ViewerGameCard,
   PublicGameCard,
-  PublicCoachGameSummary,
   PublicTournamentSummary,
 } from './auth-gateway.js';
 
@@ -66,21 +66,53 @@ const tournament: PublicTournamentSummary = {
   route: '/tournaments?event=99999999-9999-4999-8999-999999999999',
 };
 
-const coachGame: PublicCoachGameSummary = {
+const coachGameActivity: BookingRecommendationActivity = {
   id: '88888888-8888-4888-8888-888888888888',
-  title: 'Игра с тренером · C',
+  kind: 'TRAINING',
+  title: 'Игра + тренер · C',
   startsAt: new Date(Date.now() + 1_800_000).toISOString(),
   endsAt: new Date(Date.now() + 5_400_000).toISOString(),
-  stationName: 'Селигерская',
-  courtName: 'Корт №2',
-  level: 'C',
-  trainer: {
+  timezone: 'Europe/Moscow',
+  station: {
+    id: game.station.id,
+    name: game.station.name,
+    shortAddress: 'г Москва, ул Нижние Мнёвники, д 12а',
+  },
+  court: {
+    id: '66666666-6666-4666-8666-666666666666',
+    name: 'Корт №1',
+  },
+  levelRange: { from: 'C', to: 'C' },
+  host: {
     displayName: 'Кирилл Боев',
     avatarUrl:
-      '/public/api/v1/local-padel/coach-games/88888888-8888-4888-8888-888888888888/trainer-avatar',
+      '/public/api/v1/local-padel/booking-activities/88888888-8888-4888-8888-888888888888/host-avatar',
+    role: 'TRAINER',
   },
-  capacity: { total: 3, occupied: 1, open: 2 },
-  status: 'JOINABLE',
+  capacity: { total: 3, open: 2 },
+  route: '/trainings?event=88888888-8888-4888-8888-888888888888',
+};
+
+const groupTrainingActivity: BookingRecommendationActivity = {
+  id: '77777777-7777-4777-8777-777777777777',
+  kind: 'TRAINING',
+  title: 'Падел групповая тренировка',
+  startsAt: new Date(Date.now() + 3_600_000).toISOString(),
+  endsAt: new Date(Date.now() + 7_200_000).toISOString(),
+  timezone: 'Europe/Moscow',
+  station: {
+    id: game.station.id,
+    name: game.station.name,
+    shortAddress: null,
+  },
+  levelRange: null,
+  host: {
+    displayName: 'Мария Орлова',
+    avatarUrl: null,
+    role: 'TRAINER',
+  },
+  capacity: { total: 8, open: 4 },
+  route: '/trainings?event=77777777-7777-4777-8777-777777777777',
 };
 
 function gateway(): AuthGateway {
@@ -88,6 +120,14 @@ function gateway(): AuthGateway {
     listPublicGames: vi.fn().mockResolvedValue({ items: [game], nextCursor: null }),
     listPublicTournamentSummaries: vi.fn().mockResolvedValue({ items: [] }),
     listPublicCoachGameSummaries: vi.fn().mockResolvedValue({ items: [] }),
+    listBookingRecommendations: vi.fn().mockResolvedValue({
+      version: 'a'.repeat(64),
+      generatedAt: new Date().toISOString(),
+      staleAt: new Date(Date.now() + 60_000).toISOString(),
+      personalization: 'BASIC',
+      items: [],
+      nextCursor: null,
+    }),
     listMyGames: vi.fn().mockResolvedValue({ items: [], nextCursor: null }),
     listLocations: vi.fn().mockResolvedValue({
       items: [
@@ -191,7 +231,7 @@ describe('GamesPage discovery', () => {
       '/games/new',
     );
 
-    const createDescription = screen.getByText('Выберите станцию, время и откройте набор игроков');
+    const createDescription = screen.getByText('Выберите станцию, время и собери свою игру');
     expect(createDescription.closest('a')).toHaveClass('games-create-hero');
     expect(createDescription.closest('a')).toHaveAttribute('href', '/games/new');
     expect(document.querySelector('.games-header a[aria-label="Создать игру"]')).toBeNull();
@@ -245,7 +285,7 @@ describe('GamesPage discovery', () => {
 
     expect(await screen.findByText(game.title)).toBeInTheDocument();
     expect(api.listPublicGames).toHaveBeenCalledWith(
-      expect.objectContaining({ availability: 'INCLUDE_FULL', limit: 20 }),
+      expect.objectContaining({ availability: 'JOINABLE', limit: 20 }),
     );
 
     await user.click(screen.getByRole('button', { name: 'Вступить в игру' }));
@@ -262,6 +302,9 @@ describe('GamesPage discovery', () => {
     await user.click(screen.getByRole('button', { name: 'Все типы' }));
     const typeFilter = screen.getByRole('group', { name: 'Тип события' });
     expect(within(typeFilter).getByRole('checkbox', { name: 'Игра' })).toBeInTheDocument();
+    expect(
+      within(typeFilter).queryByRole('checkbox', { name: 'Групповая тренировка' }),
+    ).not.toBeInTheDocument();
     expect(within(typeFilter).getByRole('checkbox', { name: 'Игра + Тренер' })).toBeInTheDocument();
     expect(within(typeFilter).getByRole('checkbox', { name: 'Турнир' })).toBeInTheDocument();
     expect(screen.queryByRole('combobox', { name: 'Тип игры' })).not.toBeInTheDocument();
@@ -269,7 +312,7 @@ describe('GamesPage discovery', () => {
     await user.click(within(typeFilter).getByRole('checkbox', { name: 'Игра + Тренер' }));
     await waitFor(() =>
       expect(api.listPublicGames).toHaveBeenLastCalledWith(
-        expect.objectContaining({ kind: 'COACH_GAME', availability: 'INCLUDE_FULL' }),
+        expect.objectContaining({ kind: 'COACH_GAME', availability: 'JOINABLE' }),
       ),
     );
     await user.click(within(typeFilter).getByRole('checkbox', { name: 'Турнир' }));
@@ -277,40 +320,67 @@ describe('GamesPage discovery', () => {
     expect(within(typeFilter).getByRole('checkbox', { name: 'Турнир' })).toBeChecked();
   });
 
-  it('loads bounded tournament and coach-game summaries without roster requests', async () => {
+  it('loads only coach-game trainings through the same direct contract as Home', async () => {
     const api = gateway();
     vi.mocked(api.listPublicTournamentSummaries!).mockResolvedValueOnce({ items: [tournament] });
-    vi.mocked(api.listPublicCoachGameSummaries!).mockResolvedValueOnce({ items: [coachGame] });
+    vi.mocked(api.listBookingRecommendations).mockResolvedValueOnce({
+      version: 'b'.repeat(64),
+      generatedAt: new Date().toISOString(),
+      staleAt: new Date(Date.now() + 60_000).toISOString(),
+      personalization: 'BASIC',
+      items: [
+        {
+          kind: 'TRAINING',
+          activity: groupTrainingActivity,
+          reasons: ['PLAYED_STATION'],
+        },
+        {
+          kind: 'TRAINING',
+          activity: coachGameActivity,
+          reasons: ['LEVEL_MATCH'],
+        },
+      ],
+      nextCursor: null,
+    });
     const user = userEvent.setup();
     render(<GamesPage gateway={api} />);
 
     expect(await screen.findByText(tournament.title)).toBeInTheDocument();
+    expect(screen.queryByText(groupTrainingActivity.title)).not.toBeInTheDocument();
     expect(api.listPublicTournamentSummaries).toHaveBeenCalledWith(
       expect.objectContaining({
-        availability: 'INCLUDE_FULL',
+        availability: 'JOINABLE',
         limit: 50,
       }),
     );
-    expect(api.listPublicCoachGameSummaries).toHaveBeenCalledWith(
-      expect.objectContaining({
-        availability: 'INCLUDE_FULL',
-        limit: 50,
-      }),
-    );
-    const coachGameCard = screen.getByText(coachGame.title).closest('article');
+    expect(api.listBookingRecommendations).toHaveBeenCalledWith({ limit: 20 });
+    expect(api.listPublicCoachGameSummaries).not.toHaveBeenCalled();
+    const coachGameCard = screen.getByText(coachGameActivity.title).closest('article');
     expect(coachGameCard).not.toBeNull();
-    expect(coachGameCard).toHaveAttribute('data-event-kind', 'COACH_GAME');
+    expect(coachGameCard).toHaveAttribute('data-event-kind', 'TRAINING');
+    expect(within(coachGameCard!).getByText('Игра + тренер')).toBeInTheDocument();
     expect(within(coachGameCard!).getByText('Уровень C')).toBeInTheDocument();
-    expect(within(coachGameCard!).getByText('Кирилл Боев')).toBeInTheDocument();
-    const trainerAvatar = within(coachGameCard!).getByRole('img', {
-      name: 'Тренер: Кирилл Боев',
-    });
-    expect(trainerAvatar.querySelector('img')).toHaveAttribute('src', coachGame.trainer?.avatarUrl);
-    expect(trainerAvatar.querySelector('img')).toHaveAttribute('loading', 'lazy');
-    expect(trainerAvatar.querySelector('span')).toHaveAttribute('hidden');
-    expect(within(coachGameCard!).getByText('Участники 1/3')).toBeInTheDocument();
-    expect(within(coachGameCard!).getByText('Осталось 2 места')).toBeInTheDocument();
-    expect(within(coachGameCard!).getByLabelText('Занято мест: 1')).toBeInTheDocument();
+    expect(
+      within(coachGameCard!).getByText(
+        `${coachGameActivity.station.name} · ${coachGameActivity.court?.name}`,
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(coachGameCard!).queryByText('г Москва, ул Нижние Мнёвники, д 12а'),
+    ).not.toBeInTheDocument();
+    const trainerSlots = within(coachGameCard!).getByLabelText('Тренер и свободные места');
+    const trainerAvatar = within(trainerSlots).getByRole('img', { name: /Кирилл Боев/ });
+    expect(trainerAvatar.querySelector('[data-player-level-photo]')).toHaveAttribute(
+      'src',
+      coachGameActivity.host?.avatarUrl,
+    );
+    const openSlots = within(trainerSlots).getByLabelText('Свободных мест: 2');
+    expect(within(openSlots).getAllByLabelText('Свободное место')).toHaveLength(2);
+    expect(within(coachGameCard!).queryByText('Свободно мест: 2')).not.toBeInTheDocument();
+    expect(within(coachGameCard!).getByRole('link', { name: 'Записаться' })).toHaveAttribute(
+      'href',
+      coachGameActivity.route,
+    );
     const tournamentCard = screen.getByText(tournament.title).closest('article');
     expect(tournamentCard).not.toBeNull();
     expect(within(tournamentCard!).getByText('Турнир · Мексикано').parentElement).toHaveClass(
@@ -333,9 +403,8 @@ describe('GamesPage discovery', () => {
     );
     expect(organizerAvatar.querySelector('img')).toHaveAttribute('loading', 'lazy');
     expect(organizerAvatar.querySelector('span')).toHaveAttribute('hidden');
-    expect(within(tournamentCard!).getByText('Участники 12/16')).toBeInTheDocument();
-    expect(within(tournamentCard!).getByText('Осталось 4 места')).toBeInTheDocument();
-    expect(within(tournamentCard!).getByLabelText('Ещё участников: 9')).toHaveTextContent('+9');
+    expect(within(tournamentCard!).getByText('Доступно 4 места из 16')).toBeInTheDocument();
+    expect(within(tournamentCard!).getByLabelText('Ещё мест: 1')).toHaveTextContent('+1');
 
     await user.click(screen.getByRole('button', { name: 'Все типы' }));
     await user.click(screen.getByRole('checkbox', { name: 'Игра + Тренер' }));
@@ -345,7 +414,9 @@ describe('GamesPage discovery', () => {
       ),
     );
     expect(api.listPublicTournamentSummaries).toHaveBeenCalledTimes(1);
-    expect(api.listPublicCoachGameSummaries).toHaveBeenCalledTimes(2);
+    expect(api.listBookingRecommendations).toHaveBeenCalledTimes(1);
+    expect(screen.getByText(coachGameActivity.title)).toBeInTheDocument();
+    expect(screen.queryByText(groupTrainingActivity.title)).not.toBeInTheDocument();
   });
 
   it('applies station, availability and advanced filters from the reference-shaped panel', async () => {
@@ -390,8 +461,11 @@ describe('GamesPage discovery', () => {
       within(stationFilter).getByRole('checkbox', { name: secondStation.title }),
     ).toBeChecked();
     expect(screen.getByRole('button', { name: 'Станции: 2' })).toBeInTheDocument();
-    await user.click(screen.getByRole('checkbox', { name: 'Не показывать набранные' }));
-    await user.click(screen.getByRole('button', { name: 'Все фильтры · 2' }));
+    const availabilityFilter = screen.getByRole('checkbox', { name: 'Не показывать набранные' });
+    expect(availabilityFilter).toBeChecked();
+    await user.click(availabilityFilter);
+    const advancedFiltersButton = await screen.findByRole('button', { name: 'Все фильтры · 2' });
+    await user.click(advancedFiltersButton);
     await user.selectOptions(screen.getByRole('combobox', { name: 'Время начала' }), '18:00');
     await user.selectOptions(screen.getByRole('combobox', { name: 'Уровень игроков' }), 'C_B_PLUS');
 
@@ -407,7 +481,7 @@ describe('GamesPage discovery', () => {
         expect(filters).toBeDefined();
         if (!filters) return;
         expect(filters).toMatchObject({
-          availability: 'JOINABLE',
+          availability: 'INCLUDE_FULL',
           levelFrom: 'C',
           levelTo: 'B+',
         });
@@ -424,7 +498,7 @@ describe('GamesPage discovery', () => {
       expect(filters).not.toHaveProperty('levelFrom');
       expect(filters).not.toHaveProperty('levelTo');
     });
-    expect(screen.getByRole('checkbox', { name: 'Не показывать набранные' })).not.toBeChecked();
+    expect(screen.getByRole('checkbox', { name: 'Не показывать набранные' })).toBeChecked();
   });
 
   it('polls an accepted roster command before reporting completion', async () => {

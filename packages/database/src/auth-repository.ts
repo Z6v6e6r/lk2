@@ -46,6 +46,13 @@ export interface UpsertExternalUserInput {
   readonly correlationId: string;
 }
 
+export interface ResolveExistingExternalUserInput {
+  readonly tenantId: string;
+  readonly issuer: string;
+  readonly subject: string;
+  readonly correlationId: string;
+}
+
 export interface CreateRefreshSessionInput {
   readonly tenantId: string;
   readonly userId: string;
@@ -78,6 +85,9 @@ export type RefreshSessionRotationResult =
 export interface IdentityAuthRepository {
   resolveTenantAuthConfig(tenantKey: string): Promise<TenantAuthContext | undefined>;
   getAuthUser(tenantId: string, userId: string): Promise<AuthUser | undefined>;
+  resolveExistingExternalUser(
+    input: ResolveExistingExternalUserInput,
+  ): Promise<AuthUser | undefined>;
   upsertExternalUser(input: UpsertExternalUserInput): Promise<AuthUser>;
   createRefreshSession(input: CreateRefreshSessionInput): Promise<RefreshSession>;
   findActiveRefreshSession(input: {
@@ -227,7 +237,7 @@ async function writeSecurityAudit(
 
 async function selectExternalUserForUpdate(
   client: PoolClient,
-  input: UpsertExternalUserInput,
+  input: Pick<UpsertExternalUserInput, 'tenantId' | 'issuer' | 'subject'>,
 ): Promise<AuthUser | undefined> {
   const row = await queryOne<AuthUserRow>(
     client,
@@ -349,6 +359,33 @@ export function createIdentityAuthRepository(pool: Pool): IdentityAuthRepository
       return withTenantTransaction(pool, tenantId, (client) =>
         getAuthUserWithClient(client, tenantId, userId),
       );
+    },
+
+    resolveExistingExternalUser(input) {
+      return withTenantTransaction(pool, input.tenantId, async (client) => {
+        await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
+          `${input.tenantId}\u001f${input.issuer}\u001f${input.subject}`,
+        ]);
+        const user = await selectExternalUserForUpdate(client, input);
+        if (!user) return undefined;
+        await client.query(
+          `
+            update integration.external_identity_map
+            set last_seen_at = now()
+            where tenant_id = $1 and issuer = $2 and subject = $3
+          `,
+          [input.tenantId, input.issuer, input.subject],
+        );
+        await writeSecurityAudit(client, {
+          tenantId: input.tenantId,
+          actorId: user.id,
+          action: 'AUTH_EXISTING_SUBJECT_RESOLVED',
+          resourceType: 'EXTERNAL_IDENTITY',
+          resourceId: user.id,
+          correlationId: input.correlationId,
+        });
+        return user;
+      });
     },
 
     upsertExternalUser(input) {

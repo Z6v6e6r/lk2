@@ -61,6 +61,13 @@
   background: #d9d9d9;
 }
 
+.root[data-player-level-ring-visible='false'] .photoFrame {
+  top: 0;
+  left: 0;
+  width: calc(48px * var(--player-level-avatar-scale));
+  height: calc(48px * var(--player-level-avatar-scale));
+}
+
 /* В шапке профиля фото показывается без белой обводки. */
 .root:not(.participant) .photoFrame {
   border: 0;
@@ -152,4 +159,8 @@
   background: #fff;
   content: '';
   pointer-events: none;
+}
+
+.participant[data-player-level-ring-visible='false']::before {
+  display: none;
 }

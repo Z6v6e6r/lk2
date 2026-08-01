@@ -4,6 +4,7 @@ import type { UserProfile, UserUpcomingBookings } from '@phub/api-sdk';
 import {
   DIRECT_VIVA_CONTRACT_READY_OPERATIONS,
   DIRECT_VIVA_READ_OPERATIONS,
+  PROFILE_PHOTO_DELIVERY_PATH_PATTERN,
   type ClientRoutingPlan,
   type DirectVivaReadOperation,
 } from '@phub/domain';
@@ -60,11 +61,20 @@ const vivaProfileSchema = z.object({
   customFields: z.array(profileCustomFieldSchema),
 });
 
+const absoluteUrlSchema = z.string().url();
+const normalizedAvatarUrlSchema = z
+  .string()
+  .refine(
+    (value) =>
+      PROFILE_PHOTO_DELIVERY_PATH_PATTERN.test(value) || absoluteUrlSchema.safeParse(value).success,
+    'avatar URL must be absolute or use the PadlHub profile-photo delivery endpoint',
+  );
+
 const normalizedProfileSchema = z.object({
   userId: z.string().uuid(),
   displayName: z.string().min(1).max(200),
   firstName: z.string().max(100).nullish(),
-  avatarUrl: z.string().url().nullish(),
+  avatarUrl: normalizedAvatarUrlSchema.nullish(),
   phoneLast4: z
     .string()
     .regex(/^\d{4}$/)
@@ -136,8 +146,8 @@ export function normalizePadlHubUserProfile(input: unknown): UserProfile {
 
 /**
  * Validates that the bookings boundary contains only stable PadlHub UUIDs.
- * A Viva normalizer is intentionally absent until the provider can return
- * PadlHub identifiers without exposing external ids to the browser.
+ * Client-assisted Viva list/details payloads are deliberately not normalized
+ * for UI use here; they are relayed to the server-owned read-job normalizer.
  */
 export function normalizePadlHubUpcomingBookings(input: unknown): UserUpcomingBookings {
   return normalizedUpcomingBookingsSchema.parse(input);
@@ -277,6 +287,37 @@ export interface ClientReadExecution<TResult> {
   readonly normalizeViva: (payload: unknown) => TResult;
 }
 
+export interface ClientAssistedScheduleReadCommand {
+  readonly operation: 'schedule.read';
+  readonly date: string;
+}
+
+export interface ClientAssistedUpcomingBookingsReadCommand {
+  readonly operation: 'bookings.read';
+  readonly detailsOperation: 'bookings.details.read';
+  readonly page: 0;
+  readonly size: 50;
+}
+
+const clientAssistedUpcomingBookingsReadCommandSchema = z
+  .object({
+    operation: z.literal('bookings.read'),
+    detailsOperation: z.literal('bookings.details.read'),
+    page: z.literal(0),
+    size: z.literal(50),
+  })
+  .strict();
+const clientAssistedBookingListSchema = z.object({
+  content: z
+    .array(
+      z.object({
+        id: z.union([z.string().trim().min(1).max(200), z.number().finite().transform(String)]),
+        isCancelled: z.boolean(),
+      }),
+    )
+    .max(50),
+});
+
 function parseReadRequest(request: DirectVivaReadRequest) {
   switch (request.operation) {
     case 'profile.read':
@@ -412,6 +453,61 @@ export function createClientTransportExecutor(options: ClientTransportExecutorOp
   }
 
   return {
+    /**
+     * Executes a server-issued schedule command for immediate relay back to the
+     * PadlHub API. The result is deliberately not normalized for UI use here:
+     * only the server can map provider identifiers and apply recommendations.
+     */
+    async executeClientAssistedScheduleRead(
+      command: ClientAssistedScheduleReadCommand,
+    ): Promise<unknown> {
+      const request = scheduleRequestSchema.parse(command);
+      const plan = await effectivePlan(options.getRoutingPlan);
+      if (plan?.mode !== 'MIXED_END_USER_READS' || !plan.directViva) {
+        throw new ClientTransportError('DIRECT_VIVA_UNAVAILABLE', request.operation);
+      }
+      return directRead(plan, request, true);
+    },
+
+    /**
+     * Executes the server-fixed list -> details chain. Detail identifiers are
+     * derived only from the just-read active list and cannot be supplied by UI code.
+     */
+    async executeClientAssistedUpcomingBookingsRead(
+      command: ClientAssistedUpcomingBookingsReadCommand,
+    ): Promise<unknown> {
+      const parsedCommand = clientAssistedUpcomingBookingsReadCommandSchema.parse(command);
+      const plan = await effectivePlan(options.getRoutingPlan);
+      if (plan?.mode !== 'MIXED_END_USER_READS' || !plan.directViva) {
+        throw new ClientTransportError('DIRECT_VIVA_UNAVAILABLE', parsedCommand.operation);
+      }
+      const bookings = await directRead(
+        plan,
+        bookingsRequestSchema.parse({
+          operation: parsedCommand.operation,
+          page: parsedCommand.page,
+          size: parsedCommand.size,
+        }),
+        true,
+      );
+      const activeBookingIds = clientAssistedBookingListSchema
+        .parse(bookings)
+        .content.filter((booking) => !booking.isCancelled)
+        .map((booking) => booking.id);
+      const details =
+        activeBookingIds.length === 0
+          ? []
+          : await directRead(
+              plan,
+              bookingDetailsRequestSchema.parse({
+                operation: parsedCommand.detailsOperation,
+                bookingIds: activeBookingIds,
+              }),
+              true,
+            );
+      return { bookings, details };
+    },
+
     async executeRead<TResult>(execution: ClientReadExecution<TResult>): Promise<TResult> {
       const request = parseReadRequest(execution.request);
       const plan = await effectivePlan(options.getRoutingPlan);

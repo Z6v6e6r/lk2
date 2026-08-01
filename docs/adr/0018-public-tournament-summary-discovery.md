@@ -35,6 +35,12 @@ uses a 60-second fresh cache, a 10-minute stale fallback, bounded response bytes
 timeout and a circuit breaker. Date-range reads use concurrency two. The public response is cached
 for 30 seconds with stale-while-revalidate.
 
+A selected tournament is read through
+`GET /public/api/v1/{tenantKey}/tournaments/{summaryId}` with the same bounded date range. The
+server evaluates dates in batches of two and stops as soon as the PadlHub summary UUID is found,
+instead of materializing the complete discovery range before selecting one aggregate. The response
+is the same anonymous `PublicTournamentSummary`; provider identifiers remain integration-only.
+
 Tournament detail and signup remain separate capabilities. A list card must never hydrate its
 roster. If a later detail screen needs a public roster, it must request one selected tournament,
 be abortable and no-retry on the client, and use its own backend concurrency, privacy and rate
@@ -43,6 +49,16 @@ limits.
 Coach-game schedule reads use the same fifteen-day and fifty-card public bounds, per-date
 single-flight, fresh/stale cache, response-size limit, timeout, circuit breaker, range concurrency
 of two and public HTTP cache policy as tournament discovery.
+
+Trainer media uses a server-owned read-through cache shared by tournament, training and coach-game
+routes. The adapter keeps the Viva trainer identity and source URL inside the integration boundary.
+On media delivery the API resolves `(tenant, provider, provider trainer id)` in
+`integration.trainer_avatar_sync`, reads the normalized WebP object from private storage first and
+contacts the provider only when no local object exists. A successful provider read is normalized,
+stored under `trainer-avatars/{tenantId}/{trainerId}/{sha256}.webp`, and linked to the
+Viva-primary `catalog.trainers` projection. Provider-specific `4xx` responses are recorded for that
+trainer but do not open the shared media circuit breaker. The public DTO and media URL never expose
+the provider trainer id or provider URL.
 
 ## Consequences
 
@@ -56,3 +72,5 @@ of two and public HTTP cache policy as tournament discovery.
   presented as locally writable Games aggregates.
 - Upstream failure can hide tournament summaries while Games remain usable; no client falls back to
   direct legacy or Viva traffic.
+- A previously cached trainer avatar remains available when the provider URL expires or returns
+  `403`; a trainer never cached successfully continues to use the deterministic UI fallback.

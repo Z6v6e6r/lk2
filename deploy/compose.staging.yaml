@@ -75,6 +75,9 @@ services:
     image: ${REGISTRY}/phub-worker@${WORKER_IMAGE_DIGEST}
     environment:
       <<: *object-storage
+    networks:
+      - application
+      - cup-showcase
 
   migrator:
     <<: *runtime
@@ -86,3 +89,6 @@ networks:
   application:
     external: true
     name: phub-private
+  cup-showcase:
+    external: true
+    name: phab-showcase_default

@@ -1,9 +1,11 @@
 export * from './auth-repository.js';
 export * from './activity-history-repository.js';
 export * from './booking-preferences-repository.js';
+export * from './booking-screen-mapping-repository.js';
 export * from './connection.js';
 export * from './community-repository.js';
 export * from './home-dashboard-repository.js';
+export * from './home-base-repository.js';
 export * from './game-repository.js';
 export * from './game-result-repository.js';
 export * from './game-result-projection-repository.js';
@@ -24,3 +26,5 @@ export * from './profile-privacy-repository.js';
 export * from './profile-friendship-repository.js';
 export * from './profile-level-history-repository.js';
 export * from './profile-summary-repository.js';
+export * from './promotion-engagement-repository.js';
+export * from './trainer-avatar-repository.js';

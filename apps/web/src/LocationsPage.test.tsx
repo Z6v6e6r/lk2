@@ -56,6 +56,12 @@ describe('published location screens', () => {
           isCover: true,
           sortOrder: 0,
         },
+        {
+          url: 'https://cdn.padlhub.test/location-2.webp',
+          alt: 'Второй корт',
+          isCover: false,
+          sortOrder: 1,
+        },
       ],
       amenities: [
         {
@@ -82,12 +88,35 @@ describe('published location screens', () => {
     render(<LocationDetailPage location={location} />);
 
     expect(screen.getByRole('heading', { name: 'Хаб Нагатинская' })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: '⌁ Построить маршрут' })).toHaveAttribute(
+    expect(
+      screen.getByRole('link', { name: 'Вернуться к локациям' }).querySelector('svg'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Поделиться локацией' }).querySelector('svg'),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Построить маршрут' })).toHaveAttribute(
       'href',
       location.navigationUrl,
     );
     const favorite = screen.getByRole('button', { name: 'Добавить в избранное' });
     fireEvent.click(favorite);
     expect(screen.getByRole('button', { name: 'Удалить из избранного' })).toBeInTheDocument();
+
+    const gallery = screen
+      .getByLabelText('Фотографии локации')
+      .querySelector('.location-detail-slides');
+    expect(gallery).not.toBeNull();
+    fireEvent.pointerDown(gallery as HTMLDivElement, { clientX: 280 });
+    fireEvent.pointerUp(gallery as HTMLDivElement, { clientX: 100 });
+    expect(screen.getByRole('button', { name: 'Показать фотографию 2' })).toHaveClass('is-active');
+
+    fireEvent.pointerDown(gallery as HTMLDivElement, { clientX: 100 });
+    fireEvent.pointerUp(gallery as HTMLDivElement, { clientX: 280 });
+    fireEvent.click(screen.getByRole('button', { name: 'Показать фотографию 2' }));
+    expect(screen.getByRole('button', { name: 'Показать фотографию 1' })).toHaveClass('is-active');
+
+    fireEvent.mouseDown(gallery as HTMLDivElement, { clientX: 280 });
+    fireEvent.mouseUp(gallery as HTMLDivElement, { clientX: 100 });
+    expect(screen.getByRole('button', { name: 'Показать фотографию 2' })).toHaveClass('is-active');
   });
 });

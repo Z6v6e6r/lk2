@@ -25,6 +25,8 @@ const updateSchema = z
     favoriteStationIds: z.array(z.string().uuid()).max(3),
     preferredTimeWindows: z.array(timeWindowSchema).max(14),
     useHistory: z.boolean(),
+    recommendFriends: z.boolean(),
+    recommendationDisplay: z.enum(['CARDS', 'ROWS']),
   })
   .strict()
   .superRefine((value, context) => {

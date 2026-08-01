@@ -10,7 +10,7 @@ import type {
   ProfilePrivacySettings,
   ProfilePrivacyUpdateRequest,
 } from '@phub/api-sdk';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { CSSProperties } from 'react';
 
 import { MainBottomNavigation, NotificationBellLink } from './HomeDashboardPage.js';
@@ -23,6 +23,19 @@ import levelCBackground from './assets/profile-levels/level-c.jpg';
 import levelCPlusBackground from './assets/profile-levels/level-c-plus.jpg';
 import levelDBackground from './assets/profile-levels/level-d.jpg';
 import levelDPlusBackground from './assets/profile-levels/level-d-plus.jpg';
+import badmintonLevelABackground from './assets/profile-sports/badminton/badminton-level-a.webp';
+import badmintonLevelBBackground from './assets/profile-sports/badminton/badminton-level-b.webp';
+import badmintonLevelBPlusBackground from './assets/profile-sports/badminton/badminton-level-b-plus.webp';
+import badmintonLevelCBackground from './assets/profile-sports/badminton/badminton-level-c.webp';
+import badmintonLevelCPlusBackground from './assets/profile-sports/badminton/badminton-level-c-plus.webp';
+import badmintonLevelDBackground from './assets/profile-sports/badminton/badminton-level-d.webp';
+import squashLevelABackground from './assets/profile-sports/squash/squash-level-a.webp';
+import squashLevelBBackground from './assets/profile-sports/squash/squash-level-b.webp';
+import squashLevelBPlusBackground from './assets/profile-sports/squash/squash-level-b-plus.webp';
+import squashLevelCBackground from './assets/profile-sports/squash/squash-level-c.webp';
+import squashLevelCPlusBackground from './assets/profile-sports/squash/squash-level-c-plus.webp';
+import squashLevelDBackground from './assets/profile-sports/squash/squash-level-d.webp';
+import squashLevelDPlusBackground from './assets/profile-sports/squash/squash-level-d-plus.webp';
 
 interface ProfilePageProps {
   readonly profile: PlayerProfileView;
@@ -58,6 +71,8 @@ type ProfilePageStyle = CSSProperties & {
   readonly '--profile-level-soft': string;
 };
 
+type ProfileSport = 'PADEL' | 'SQUASH' | 'BADMINTON';
+
 const levelBackgrounds: Readonly<Record<string, string>> = {
   A: levelABackground,
   'B+': levelBPlusBackground,
@@ -88,11 +103,32 @@ const levelSoftTones: Readonly<Record<string, string>> = {
   D: '#fff3df',
 };
 
+const squashLevelBackgrounds: Readonly<Record<string, string>> = {
+  A: squashLevelABackground,
+  'B+': squashLevelBPlusBackground,
+  B: squashLevelBBackground,
+  'C+': squashLevelCPlusBackground,
+  C: squashLevelCBackground,
+  'D+': squashLevelDPlusBackground,
+  D: squashLevelDBackground,
+};
+
+const badmintonLevelBackgrounds: Readonly<Record<string, string>> = {
+  A: badmintonLevelABackground,
+  'B+': badmintonLevelBPlusBackground,
+  B: badmintonLevelBBackground,
+  'C+': badmintonLevelCPlusBackground,
+  C: badmintonLevelCBackground,
+  'D+': badmintonLevelDBackground,
+  D: badmintonLevelDBackground,
+};
+
 const levelScale = ['A', 'B+', 'B', 'C+', 'C', 'D+', 'D'] as const;
 
 const weekdayLabels: Readonly<
   Record<BookingPreferences['preferredTimeWindows'][number]['weekday'], string>
 > = {
+  ANY: 'Любой день',
   MON: 'Понедельник',
   TUE: 'Вторник',
   WED: 'Среда',
@@ -101,6 +137,10 @@ const weekdayLabels: Readonly<
   SAT: 'Суббота',
   SUN: 'Воскресенье',
 };
+
+const defaultPreferredTimeWindows = [
+  { weekday: 'ANY', startsAt: '09:00', endsAt: '22:00' },
+] satisfies BookingPreferences['preferredTimeWindows'];
 
 function BookingPreferencesSettings({
   settings,
@@ -160,14 +200,39 @@ function BookingPreferencesForm({
   const [favoriteStationIds, setFavoriteStationIds] = useState<readonly string[]>(
     settings.favoriteStationIds,
   );
-  const [preferredTimeWindows, setPreferredTimeWindows] = useState(settings.preferredTimeWindows);
+  const [preferredTimeWindows, setPreferredTimeWindows] = useState(
+    settings.preferredTimeWindows.length > 0
+      ? settings.preferredTimeWindows
+      : defaultPreferredTimeWindows,
+  );
   const [useHistory, setUseHistory] = useState(settings.useHistory);
-  const serialized = JSON.stringify({ favoriteStationIds, preferredTimeWindows, useHistory });
+  const [recommendFriends, setRecommendFriends] = useState(settings.recommendFriends);
+  const [recommendationDisplay, setRecommendationDisplay] = useState(
+    settings.recommendationDisplay,
+  );
+  const initialTimeWindows =
+    settings.preferredTimeWindows.length > 0
+      ? settings.preferredTimeWindows
+      : defaultPreferredTimeWindows;
+  const serialized = JSON.stringify({
+    favoriteStationIds,
+    preferredTimeWindows,
+    useHistory,
+    recommendFriends,
+    recommendationDisplay,
+  });
   const initial = JSON.stringify({
     favoriteStationIds: settings.favoriteStationIds,
-    preferredTimeWindows: settings.preferredTimeWindows,
+    preferredTimeWindows: initialTimeWindows,
     useHistory: settings.useHistory,
+    recommendFriends: settings.recommendFriends,
+    recommendationDisplay: settings.recommendationDisplay,
   });
+  const selectedStations = favoriteStationIds.map((stationId) => {
+    const station = stations.find((item) => item.id === stationId);
+    return station ?? { id: stationId, name: 'Сохранённая станция' };
+  });
+  const availableStations = stations.filter((station) => !favoriteStationIds.includes(station.id));
 
   return (
     <form
@@ -179,36 +244,101 @@ function BookingPreferencesForm({
           favoriteStationIds: [...favoriteStationIds],
           preferredTimeWindows: [...preferredTimeWindows],
           useHistory,
+          recommendFriends,
+          recommendationDisplay,
         });
       }}
     >
       <fieldset disabled={busy}>
+        <legend>Отображение рекомендаций</legend>
+        <div className="profile-recommendation-display">
+          {(
+            [
+              ['CARDS', 'Карточками', 'Компактная сетка Home V3'] as const,
+              ['ROWS', 'Строками', 'Как на обычной главной'] as const,
+            ] satisfies readonly (readonly [
+              BookingPreferences['recommendationDisplay'],
+              string,
+              string,
+            ])[]
+          ).map(([value, title, description]) => (
+            <label key={value}>
+              <input
+                type="radio"
+                name="recommendation-display"
+                value={value}
+                checked={recommendationDisplay === value}
+                onChange={() => setRecommendationDisplay(value)}
+              />
+              <span className={`profile-recommendation-display__preview is-${value.toLowerCase()}`}>
+                <i />
+                <i />
+                <i />
+                <i />
+              </span>
+              <span>
+                <strong>{title}</strong>
+                <small>{description}</small>
+              </span>
+            </label>
+          ))}
+        </div>
+      </fieldset>
+
+      <fieldset disabled={busy}>
         <legend>Любимые станции</legend>
-        {stations.length === 0 ? (
+        {stations.length === 0 && selectedStations.length === 0 ? (
           <p>Станции появятся после загрузки доступных игр.</p>
         ) : (
-          <div className="profile-station-options">
-            {stations.map((station) => {
-              const checked = favoriteStationIds.includes(station.id);
-              return (
-                <label key={station.id}>
-                  <input
-                    type="checkbox"
-                    checked={checked}
-                    disabled={!checked && favoriteStationIds.length >= 3}
-                    onChange={(event) =>
+          <>
+            <div className="profile-station-options">
+              {selectedStations.length === 0 ? (
+                <span className="profile-station-options__empty">Пока не выбраны</span>
+              ) : null}
+              {selectedStations.map((station) => (
+                <span className="profile-station-option" key={station.id}>
+                  {station.name}
+                  <button
+                    type="button"
+                    aria-label={`Удалить станцию ${station.name}`}
+                    onClick={() =>
                       setFavoriteStationIds((current) =>
-                        event.currentTarget.checked
-                          ? [...current, station.id]
-                          : current.filter((id) => id !== station.id),
+                        current.filter((stationId) => stationId !== station.id),
                       )
                     }
-                  />
-                  <span>{station.name}</span>
-                </label>
-              );
-            })}
-          </div>
+                  >
+                    ×
+                  </button>
+                </span>
+              ))}
+            </div>
+            {stations.length === 0 ? (
+              <p>Другие станции появятся после загрузки доступных игр.</p>
+            ) : (
+              <select
+                className="profile-station-select"
+                aria-label="Добавить любимую станцию"
+                value=""
+                disabled={busy || favoriteStationIds.length >= 3 || availableStations.length === 0}
+                onChange={(event) => {
+                  const stationId = event.currentTarget.value;
+                  if (!stationId) return;
+                  setFavoriteStationIds((current) => [...current, stationId]);
+                }}
+              >
+                <option value="">
+                  {favoriteStationIds.length >= 3
+                    ? 'Можно выбрать до 3 станций'
+                    : 'Добавить станцию'}
+                </option>
+                {availableStations.map((station) => (
+                  <option key={station.id} value={station.id}>
+                    {station.name}
+                  </option>
+                ))}
+              </select>
+            )}
+          </>
         )}
       </fieldset>
 
@@ -285,26 +415,44 @@ function BookingPreferencesForm({
           onClick={() =>
             setPreferredTimeWindows((current) => [
               ...current,
-              { weekday: 'MON', startsAt: '18:00', endsAt: '21:00' },
+              { weekday: 'ANY', startsAt: '09:00', endsAt: '22:00' },
             ])
           }
         >
           Добавить интервал
         </button>
+        <p className="profile-time-windows__hint">
+          Базовый интервал — 09:00–22:00. История завершённых игр уточняет порядок рекомендаций.
+        </p>
       </fieldset>
 
-      <label className="profile-privacy-toggle">
-        <span>
-          <strong>Учитывать историю игр</strong>
-          <small>Только завершённые игры за последние 180 дней</small>
-        </span>
-        <input
-          type="checkbox"
-          checked={useHistory}
-          disabled={busy}
-          onChange={(event) => setUseHistory(event.currentTarget.checked)}
-        />
-      </label>
+      <div className="profile-recommendation-toggles">
+        <label className="profile-privacy-toggle">
+          <span>
+            <strong>Учитывать историю игр</strong>
+            <small>Только завершённые игры за последние 180 дней</small>
+          </span>
+          <input
+            type="checkbox"
+            checked={useHistory}
+            disabled={busy}
+            onChange={(event) => setUseHistory(event.currentTarget.checked)}
+          />
+        </label>
+
+        <label className="profile-privacy-toggle">
+          <span>
+            <strong>Рекомендовать события с друзьями</strong>
+            <small>Поднимать выше события, в которых участвуют мои друзья</small>
+          </span>
+          <input
+            type="checkbox"
+            checked={recommendFriends}
+            disabled={busy}
+            onChange={(event) => setRecommendFriends(event.currentTarget.checked)}
+          />
+        </label>
+      </div>
 
       <div className="profile-privacy-save-row">
         <p role={error ? 'alert' : notice ? 'status' : undefined}>{error ?? notice}</p>
@@ -486,7 +634,15 @@ function ProfileIcon({
   }
 }
 
-function ProfileFacts(): React.JSX.Element {
+function ProfileFacts({
+  sport,
+  onChooseSport,
+}: {
+  readonly sport: ProfileSport;
+  readonly onChooseSport?: () => void;
+}): React.JSX.Element {
+  const sportLabel = sport === 'SQUASH' ? 'Сквош' : sport === 'BADMINTON' ? 'Бадминтон' : 'Падел';
+
   return (
     <section className="profile-facts" aria-label="Город и вид спорта">
       <div>
@@ -499,17 +655,118 @@ function ProfileFacts(): React.JSX.Element {
         </span>
         <i aria-hidden="true">›</i>
       </div>
-      <div>
+      <button
+        aria-haspopup={onChooseSport ? 'dialog' : undefined}
+        aria-label={onChooseSport ? `Вид спорта: ${sportLabel}` : undefined}
+        type="button"
+        onClick={onChooseSport}
+      >
         <span className="profile-inline-icon">
           <ProfileIcon name="sport" />
         </span>
         <span>
           <small>вид спорта</small>
-          <strong>Падел</strong>
+          <strong>{sportLabel}</strong>
         </span>
         <i aria-hidden="true">›</i>
-      </div>
+      </button>
     </section>
+  );
+}
+
+function SportPicker({
+  activeSport,
+  onClose,
+  onSelect,
+}: {
+  readonly activeSport: ProfileSport;
+  readonly onClose: () => void;
+  readonly onSelect: (sport: ProfileSport) => void;
+}): React.JSX.Element {
+  return (
+    <div
+      className="profile-sport-backdrop"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <section
+        className="profile-sport-sheet"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="profile-sport-sheet-title"
+      >
+        <header>
+          <div>
+            <span>Личный кабинет</span>
+            <h2 id="profile-sport-sheet-title">Выберите вид спорта</h2>
+          </div>
+          <button type="button" aria-label="Закрыть выбор спорта" onClick={onClose}>
+            ×
+          </button>
+        </header>
+        <p>У каждого вида спорта — собственные уровни, сообщества и игровая история.</p>
+        {(
+          [
+            ['PADEL', 'Падел', 'Текущий кабинет ПаделХАБ'] as const,
+            ['SQUASH', 'Сквош', 'Отдельный профиль и шкала уровней'] as const,
+            ['BADMINTON', 'Бадминтон', 'Отдельный профиль и шкала уровней'] as const,
+          ] satisfies readonly (readonly [ProfileSport, string, string])[]
+        ).map(([sport, title, description]) => (
+          <button
+            aria-label={title}
+            className={sport === activeSport ? 'is-active' : undefined}
+            key={sport}
+            type="button"
+            onClick={() => onSelect(sport)}
+          >
+            <span
+              className={`profile-sport-option__mark profile-sport-option__mark--${sport.toLowerCase()}`}
+              aria-hidden="true"
+            />
+            <span>
+              <strong>{title}</strong>
+              <small>{description}</small>
+            </span>
+            {sport === activeSport ? <em>выбран</em> : <i aria-hidden="true">›</i>}
+          </button>
+        ))}
+      </section>
+    </div>
+  );
+}
+
+function IndependentSportProfileContent({
+  sport,
+}: {
+  readonly sport: Exclude<ProfileSport, 'PADEL'>;
+}): React.JSX.Element {
+  const sportLabel = sport === 'SQUASH' ? 'Сквош' : 'Бадминтон';
+  const sportInPrepositional = sport === 'SQUASH' ? 'сквошу' : 'бадминтону';
+
+  return (
+    <>
+      <section className="profile-sport-intro" aria-labelledby="independent-sport-profile-title">
+        <span className="profile-sport-intro__eyebrow">{sportLabel}</span>
+        <h2 id="independent-sport-profile-title">Отдельный спортивный профиль</h2>
+        <p>
+          Уровень, сообщества, история матчей и рекомендации по {sportInPrepositional} не
+          смешиваются с падел-кабинетом.
+        </p>
+      </section>
+      <section className="profile-sport-empty" aria-labelledby="independent-sport-data-title">
+        <span className="profile-inline-icon">
+          <ProfileIcon name="community" />
+        </span>
+        <div>
+          <h2 id="independent-sport-data-title">Данные появятся здесь</h2>
+          <p>
+            После подключения профиля здесь будут доступны только уровни и сообщества по виду
+            спорта.
+          </p>
+        </div>
+      </section>
+    </>
   );
 }
 
@@ -927,7 +1184,18 @@ export function ProfilePage({
   const { profile, privateAccount, access } = view;
   const [shareNotice, setShareNotice] = useState<string | null>(null);
   const [activeSettings, setActiveSettings] = useState<'preferences' | 'visibility' | null>(null);
+  const [activeSport, setActiveSport] = useState<ProfileSport>('PADEL');
+  const [sportPickerOpen, setSportPickerOpen] = useState(false);
   const isSelf = access.audience === 'SELF';
+  const independentSport: Exclude<ProfileSport, 'PADEL'> | null =
+    activeSport === 'PADEL' ? null : activeSport;
+  const isIndependentSport = independentSport !== null;
+  const productLabel =
+    activeSport === 'SQUASH'
+      ? 'SquashHub Player'
+      : activeSport === 'BADMINTON'
+        ? 'BadmintonHub Player'
+        : 'PadelHub Player';
   const balance = privateAccount
     ? new Intl.NumberFormat('ru-RU', {
         style: 'currency',
@@ -935,14 +1203,44 @@ export function ProfilePage({
         maximumFractionDigits: 0,
       }).format(privateAccount.balanceMinor / 100)
     : null;
-  const rating = profile.level.value;
-  const levelKey = levelBackgrounds[profile.level.label] ? profile.level.label : 'A';
-  const displayLevel = profile.level.assessmentRequired ? '?' : profile.level.label;
+  const rating = isIndependentSport ? undefined : profile.level.value;
+  const levelKey = isIndependentSport
+    ? 'A'
+    : levelBackgrounds[profile.level.label]
+      ? profile.level.label
+      : 'A';
+  const displayLevel =
+    isIndependentSport || profile.level.assessmentRequired ? '?' : profile.level.label;
+  const background =
+    activeSport === 'SQUASH'
+      ? (squashLevelBackgrounds[levelKey] ?? squashLevelABackground)
+      : activeSport === 'BADMINTON'
+        ? (badmintonLevelBackgrounds[levelKey] ?? badmintonLevelABackground)
+        : (levelBackgrounds[levelKey] ?? levelABackground);
   const pageStyle: ProfilePageStyle = {
-    '--profile-level-background': `url("${levelBackgrounds[levelKey] ?? levelABackground}")`,
-    '--profile-level-accent': levelAccents[levelKey] ?? levelAccents.A ?? '#7650f4',
-    '--profile-level-soft': levelSoftTones[levelKey] ?? levelSoftTones.A ?? '#eeeaff',
+    '--profile-level-background': `url("${background}")`,
+    '--profile-level-accent':
+      activeSport === 'SQUASH'
+        ? '#7150ef'
+        : activeSport === 'BADMINTON'
+          ? '#8a45e8'
+          : (levelAccents[levelKey] ?? levelAccents.A ?? '#7650f4'),
+    '--profile-level-soft': isIndependentSport
+      ? '#eeeaff'
+      : (levelSoftTones[levelKey] ?? levelSoftTones.A ?? '#eeeaff'),
   };
+
+  useEffect(() => {
+    if (!isSelf || isIndependentSport) return;
+    const openDeepLinkedSettings = (): void => {
+      if (window.location.hash === '#booking-preferences-title') {
+        setActiveSettings('preferences');
+      }
+    };
+    openDeepLinkedSettings();
+    window.addEventListener('hashchange', openDeepLinkedSettings);
+    return () => window.removeEventListener('hashchange', openDeepLinkedSettings);
+  }, [isIndependentSport, isSelf]);
 
   async function shareProfile(): Promise<void> {
     const url = window.location.href;
@@ -974,7 +1272,7 @@ export function ProfilePage({
           >
             <ProfileIcon name="back" />
           </button>
-          <span>PadelHub Player</span>
+          <span>{productLabel}</span>
           <NotificationBellLink
             className="profile-toolbar__bell"
             unreadCount={notificationUnreadCount}
@@ -1008,19 +1306,29 @@ export function ProfilePage({
               <strong>{displayLevel}</strong>
             </div>
             <div>
-              <span>{privateAccount ? 'баланс' : 'доступ'}</span>
-              <strong>{privateAccount ? balance : accessTierLabel(access.tier)}</strong>
+              <span>{isIndependentSport ? 'профиль' : privateAccount ? 'баланс' : 'доступ'}</span>
+              <strong>
+                {isIndependentSport
+                  ? 'отдельный'
+                  : privateAccount
+                    ? balance
+                    : accessTierLabel(access.tier)}
+              </strong>
             </div>
           </div>
 
-          <button className="profile-share" type="button" onClick={() => void shareProfile()}>
-            <ProfileIcon name="share" />
-            QR / поделиться профилем
-          </button>
-          {shareNotice ? (
-            <p className="profile-share-notice" role="status">
-              {shareNotice}
-            </p>
+          {!isIndependentSport ? (
+            <>
+              <button className="profile-share" type="button" onClick={() => void shareProfile()}>
+                <ProfileIcon name="share" />
+                QR / поделиться профилем
+              </button>
+              {shareNotice ? (
+                <p className="profile-share-notice" role="status">
+                  {shareNotice}
+                </p>
+              ) : null}
+            </>
           ) : null}
         </section>
 
@@ -1055,8 +1363,15 @@ export function ProfilePage({
           ) : null}
 
           {isSelf ? (
+            <ProfileFacts sport={activeSport} onChooseSport={() => setSportPickerOpen(true)} />
+          ) : null}
+
+          {isSelf && independentSport ? (
+            <IndependentSportProfileContent sport={independentSport} />
+          ) : null}
+
+          {isSelf && !isIndependentSport ? (
             <>
-              <ProfileFacts />
               <ProfileSubscriptions
                 {...(subscriptions !== undefined ? { subscriptions } : {})}
                 {...(subscriptionsError !== undefined ? { error: subscriptionsError } : {})}
@@ -1064,21 +1379,21 @@ export function ProfilePage({
             </>
           ) : null}
 
-          {isSelf ? (
+          {isSelf && !isIndependentSport ? (
             <ProfileFriends
               {...(friends !== undefined ? { page: friends } : {})}
               {...(friendsError !== undefined ? { error: friendsError } : {})}
             />
           ) : null}
 
-          {isSelf ? (
+          {isSelf && !isIndependentSport ? (
             <ProfileCommunities
               {...(communities !== undefined ? { page: communities } : {})}
               {...(communitiesError !== undefined ? { error: communitiesError } : {})}
             />
           ) : null}
 
-          {isSelf ? (
+          {isSelf && !isIndependentSport ? (
             <section
               className="profile-settings-overview"
               id="profile-settings"
@@ -1117,7 +1432,7 @@ export function ProfilePage({
             </section>
           ) : null}
 
-          {isSelf ? (
+          {isSelf && !isIndependentSport ? (
             <section className="profile-level-scale" aria-labelledby="profile-level-scale-title">
               <span id="profile-level-scale-title">уровень игрока</span>
               <div>
@@ -1130,7 +1445,7 @@ export function ProfilePage({
             </section>
           ) : null}
 
-          {isSelf ? (
+          {isSelf && !isIndependentSport ? (
             <a className="profile-level-history-link" href="/profile/level-history">
               <span className="profile-inline-icon">
                 <ProfileIcon name="history" />
@@ -1226,6 +1541,18 @@ export function ProfilePage({
               )}
             </section>
           </div>
+        ) : null}
+
+        {isSelf && sportPickerOpen ? (
+          <SportPicker
+            activeSport={activeSport}
+            onClose={() => setSportPickerOpen(false)}
+            onSelect={(sport) => {
+              setActiveSport(sport);
+              setShareNotice(null);
+              setSportPickerOpen(false);
+            }}
+          />
         ) : null}
 
         <MainBottomNavigation active="profile" gamesDestination="games" />

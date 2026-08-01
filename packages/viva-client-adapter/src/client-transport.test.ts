@@ -42,6 +42,101 @@ function plan(
 const identity = (payload: unknown) => payload;
 
 describe('client transport executor', () => {
+  it('executes only a fixed server-directed schedule read for immediate relay', async () => {
+    const vivaFetch = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(Response.json({ content: [{ id: 'provider-id' }] }));
+    const executor = createClientTransportExecutor({
+      getRoutingPlan: vi.fn().mockResolvedValue(plan('MIXED_END_USER_READS')),
+      getVivaAccessToken: () => 'user-access-token',
+      refreshVivaAccessToken: vi.fn(),
+      executePadlHub: vi.fn(),
+      fetchImplementation: vivaFetch,
+    });
+
+    await expect(
+      executor.executeClientAssistedScheduleRead({
+        operation: 'schedule.read',
+        date: '2026-07-30',
+      }),
+    ).resolves.toEqual({ content: [{ id: 'provider-id' }] });
+    const [url, init] = vivaFetch.mock.calls[0] ?? [];
+    expect((url as URL).toString()).toBe(
+      'https://api.vivacrm.invalid/end-user/api/v1/tenant%20key/exercises?date=2026-07-30',
+    );
+    expect(Object.fromEntries(new Headers(init?.headers))).toEqual({
+      authorization: 'Bearer user-access-token',
+    });
+  });
+
+  it('derives booking detail identifiers only from the active list response', async () => {
+    const vivaFetch = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        Response.json({
+          content: [
+            { id: 'active-booking-secret', isCancelled: false },
+            { id: 'cancelled-booking-secret', isCancelled: true },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(Response.json([{ id: 'active-booking-secret', isCancelled: false }]));
+    const executor = createClientTransportExecutor({
+      getRoutingPlan: vi.fn().mockResolvedValue(plan('MIXED_END_USER_READS')),
+      getVivaAccessToken: () => 'user-access-token',
+      refreshVivaAccessToken: vi.fn(),
+      executePadlHub: vi.fn(),
+      fetchImplementation: vivaFetch,
+    });
+
+    await expect(
+      executor.executeClientAssistedUpcomingBookingsRead({
+        operation: 'bookings.read',
+        detailsOperation: 'bookings.details.read',
+        page: 0,
+        size: 50,
+      }),
+    ).resolves.toEqual({
+      bookings: {
+        content: [
+          { id: 'active-booking-secret', isCancelled: false },
+          { id: 'cancelled-booking-secret', isCancelled: true },
+        ],
+      },
+      details: [{ id: 'active-booking-secret', isCancelled: false }],
+    });
+    expect(vivaFetch).toHaveBeenCalledTimes(2);
+    expect((vivaFetch.mock.calls[0]?.[0] as URL).toString()).toBe(
+      'https://api.vivacrm.invalid/end-user/api/v2/tenant%20key/bookings?page=0&size=50',
+    );
+    const detailsUrl = vivaFetch.mock.calls[1]?.[0] as URL;
+    expect(detailsUrl.pathname).toBe('/end-user/api/v1/tenant%20key/bookings/list');
+    expect(detailsUrl.searchParams.getAll('bookingIds')).toEqual(['active-booking-secret']);
+    expect(detailsUrl.toString()).not.toContain('cancelled-booking-secret');
+  });
+
+  it('fails a client-assisted read closed when direct transport is absent', async () => {
+    const vivaFetch = vi.fn<typeof fetch>();
+    const executor = createClientTransportExecutor({
+      getRoutingPlan: vi.fn().mockResolvedValue(plan('PADLHUB_ONLY')),
+      getVivaAccessToken: () => 'user-access-token',
+      refreshVivaAccessToken: vi.fn(),
+      executePadlHub: vi.fn(),
+      fetchImplementation: vivaFetch,
+    });
+
+    await expect(
+      executor.executeClientAssistedScheduleRead({
+        operation: 'schedule.read',
+        date: '2026-07-30',
+      }),
+    ).rejects.toMatchObject({
+      code: 'DIRECT_VIVA_UNAVAILABLE',
+      operation: 'schedule.read',
+    });
+    expect(vivaFetch).not.toHaveBeenCalled();
+  });
+
   it('fails closed to PadlHub when the plan is missing or invalid', async () => {
     const executePadlHub = vi.fn().mockResolvedValue({ source: 'padlhub' });
     const vivaFetch = vi.fn<typeof fetch>();

@@ -1,17 +1,33 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  buildHomeBase,
   buildHomeProjection,
+  HOME_COMMUNITY_SUMMARY_LIMIT,
   HOME_PROJECTION_COMPONENT_EVENT,
+  homeBaseSchema,
   homeDashboardSchema,
   homeProjectionEventSchema,
   homeProjectionComponentPayloadSchema,
   normalizeHomeDashboardPayload,
+  normalizeHomeBaseFreshness,
   normalizeHomeProjectionComponentPayload,
   type HomeProjectionComponentPayload,
 } from './index.js';
 
 const userId = '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca';
+const homeCommunities = Array.from({ length: HOME_COMMUNITY_SUMMARY_LIMIT + 1 }, (_, index) => {
+  const suffix = String(index + 1).padStart(12, '0');
+  const id = `10000000-0000-4000-8000-${suffix}`;
+  return {
+    id,
+    title: `Сообщество ${index + 1}`,
+    logoUrl: null,
+    isVerified: index % 2 === 0,
+    unreadChatCount: index,
+    route: `/communities/${id}`,
+  };
+});
 
 const components: readonly HomeProjectionComponentPayload[] = [
   {
@@ -97,6 +113,140 @@ const components: readonly HomeProjectionComponentPayload[] = [
 ];
 
 describe('Home projection contract and builder', () => {
+  it('keeps the partial Home base explicit and excludes unavailable Viva aggregates', () => {
+    const parsed = homeBaseSchema.parse({
+      snapshot: {
+        version: 'home-base-v1-1',
+        generatedAt: '2026-07-15T12:00:00.000Z',
+        source: 'LOCAL_PROJECTION',
+        completeness: 'PARTIAL',
+      },
+      viewerUserId: userId,
+      quickActions: [],
+      communities: {
+        status: 'READY',
+        revision: '3',
+        observedAt: '2026-07-15T11:59:00.000Z',
+        staleAt: '2026-07-15T12:04:00.000Z',
+        value: [],
+      },
+      promotions: { status: 'UNAVAILABLE' },
+      locations: [],
+      additionalLinks: [],
+      capabilities: {
+        canCreateGame: true,
+        canManageTournaments: false,
+        canViewCommunities: true,
+      },
+    });
+
+    expect(parsed.snapshot.completeness).toBe('PARTIAL');
+    expect(parsed).not.toHaveProperty('profile');
+    expect(parsed).not.toHaveProperty('upcoming');
+    expect(parsed).not.toHaveProperty('subscriptions');
+    expect(parsed).not.toHaveProperty('counters');
+  });
+
+  it('keeps ten community summaries in Home and rejects an eleventh', () => {
+    const component = {
+      userId,
+      component: 'communities' as const,
+      componentRevision: '9',
+    };
+    expect(
+      homeProjectionComponentPayloadSchema.safeParse({
+        ...component,
+        value: homeCommunities.slice(0, HOME_COMMUNITY_SUMMARY_LIMIT),
+      }).success,
+    ).toBe(true);
+    expect(
+      homeProjectionComponentPayloadSchema.safeParse({
+        ...component,
+        value: homeCommunities,
+      }).success,
+    ).toBe(false);
+
+    const homeBase = buildHomeBase({
+      viewerUserId: userId,
+      sourceRevision: '10',
+      generatedAt: new Date('2026-07-15T12:00:00.000Z'),
+      ttlSeconds: 300,
+      quickActions: [],
+      locations: [],
+      additionalLinks: [],
+      capabilities: {
+        canCreateGame: true,
+        canManageTournaments: false,
+        canViewCommunities: true,
+      },
+      communities: {
+        revision: '9',
+        observedAt: new Date('2026-07-15T11:59:00.000Z'),
+        value: homeCommunities.slice(0, HOME_COMMUNITY_SUMMARY_LIMIT),
+      },
+    });
+    expect(homeBase.communities).toMatchObject({
+      status: 'READY',
+      value: homeCommunities.slice(0, HOME_COMMUNITY_SUMMARY_LIMIT),
+    });
+    expect(() =>
+      buildHomeBase({
+        viewerUserId: userId,
+        sourceRevision: '11',
+        generatedAt: new Date('2026-07-15T12:00:00.000Z'),
+        ttlSeconds: 300,
+        quickActions: [],
+        locations: [],
+        additionalLinks: [],
+        capabilities: {
+          canCreateGame: true,
+          canManageTournaments: false,
+          canViewCommunities: true,
+        },
+        communities: {
+          revision: '10',
+          observedAt: new Date('2026-07-15T11:59:00.000Z'),
+          value: homeCommunities,
+        },
+      }),
+    ).toThrow();
+  });
+
+  it('keeps optional HomeBase freshness bound to its source observation', () => {
+    const homeBase = buildHomeBase({
+      viewerUserId: userId,
+      sourceRevision: '8',
+      generatedAt: new Date('2026-07-15T12:00:00.000Z'),
+      ttlSeconds: 300,
+      quickActions: [],
+      locations: [],
+      additionalLinks: [],
+      capabilities: {
+        canCreateGame: true,
+        canManageTournaments: false,
+        canViewCommunities: true,
+      },
+      communities: {
+        revision: '3',
+        observedAt: new Date('2026-07-15T11:59:00.000Z'),
+        value: [],
+      },
+    });
+
+    expect(homeBase.communities).toMatchObject({
+      status: 'READY',
+      revision: '3',
+      observedAt: '2026-07-15T11:59:00.000Z',
+      staleAt: '2026-07-15T12:04:00.000Z',
+    });
+    expect(
+      normalizeHomeBaseFreshness(homeBase, new Date('2026-07-15T12:05:00.000Z'), 300).communities,
+    ).toMatchObject({ status: 'STALE', revision: '3' });
+    expect(
+      normalizeHomeBaseFreshness(homeBase, new Date('2026-07-15T12:10:00.000Z'), 300).communities,
+    ).toEqual({ status: 'UNAVAILABLE' });
+  });
+
   it('waits until every server-owned component is present', () => {
     expect(
       buildHomeProjection({
@@ -210,9 +360,10 @@ describe('Home projection contract and builder', () => {
       }),
     );
     expect(normalizedComponent.value).toEqual({
-      rotationEnabled: false,
-      intervalSeconds: 6,
-      items: [legacyPromotion],
+      hero: { rotationEnabled: false, intervalSeconds: 6, items: [legacyPromotion] },
+      standard: { rotationEnabled: false, intervalSeconds: 6, items: [legacyPromotion] },
+      recommendationStrip: { repeatEveryCards: 4, items: [] },
+      recommendationCard: { repeatEveryCards: 6, items: [] },
     });
   });
 

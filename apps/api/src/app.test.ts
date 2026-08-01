@@ -4,6 +4,7 @@ import type {
   ProfileLevelHistoryRepository,
   ProfilePrivacyRepository,
 } from '@phub/database';
+import { buildHomeBase } from '@phub/home-projection';
 import { createLogger } from '@phub/observability';
 import { SignJWT } from 'jose';
 import type { Pool } from 'pg';
@@ -723,6 +724,79 @@ describe('health endpoints', () => {
     });
     expect(body.quickActions).toHaveLength(4);
     expect(body.communities).toHaveLength(3);
+  });
+
+  it('serves HomeBase when optional sections are stale or unavailable', async () => {
+    const userId = '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca';
+    const now = new Date();
+    const homeBase = buildHomeBase({
+      viewerUserId: userId,
+      sourceRevision: '3',
+      generatedAt: now,
+      ttlSeconds: 300,
+      quickActions: [],
+      locations: [],
+      additionalLinks: [],
+      capabilities: {
+        canCreateGame: true,
+        canManageTournaments: false,
+        canViewCommunities: true,
+      },
+      communities: {
+        revision: '7',
+        observedAt: new Date(now.getTime() - 6 * 60_000),
+        value: [],
+      },
+      promotions: {
+        revision: '4',
+        observedAt: new Date(now.getTime() - 11 * 60_000),
+        value: {
+          hero: { rotationEnabled: false, intervalSeconds: 6, items: [] },
+          standard: { rotationEnabled: false, intervalSeconds: 6, items: [] },
+        },
+      },
+    });
+    const app = await buildApp({
+      config,
+      logger: createLogger('api-test', 'silent'),
+      pool: fakePool(),
+      homeBaseRepository: {
+        get: () =>
+          Promise.resolve({
+            tenantId,
+            userId,
+            sourceRevision: '3',
+            sourceEventId: '55555555-5555-4555-8555-555555555555',
+            producer: 'HOME_BASE_PROJECTOR',
+            snapshotVersion: homeBase.snapshot.version,
+            payload: homeBase,
+            payloadChecksum: 'a'.repeat(64),
+            generatedAt: homeBase.snapshot.generatedAt,
+            checkedAt: homeBase.snapshot.generatedAt,
+            updatedAt: homeBase.snapshot.generatedAt,
+          }),
+      },
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/user/api/v1/local-padel/home/base',
+      headers: { authorization: `Bearer ${await accessToken()}` },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      snapshot: { completeness: 'PARTIAL' },
+      viewerUserId: userId,
+      communities: { status: 'STALE', revision: '7' },
+      promotions: { status: 'UNAVAILABLE' },
+    });
+    expect(response.body).not.toContain('"profile"');
+    expect(response.body).not.toContain('"upcoming"');
+    expect(response.body).not.toContain('"subscriptions"');
+    expect(response.body).not.toContain('"counters"');
+    expect(response.headers['cache-control']).toBe('private, no-store');
   });
 
   it('serves a validated persisted Home projection independently of Viva mode', async () => {

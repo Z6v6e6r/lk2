@@ -86,6 +86,28 @@ export interface ClaimedGameScheduledCommand {
   readonly attempts: number;
 }
 
+export type GameLifecycleCommandType = 'game.lifecycle.start.v1' | 'game.lifecycle.finish.v1';
+
+export type GameLifecycleCommandExecutionResult =
+  | {
+      readonly outcome: 'applied';
+      readonly gameId: string;
+      readonly lifecycleState: 'IN_PROGRESS' | 'FINISHED';
+      readonly revision: number;
+      readonly eventId: string;
+    }
+  | {
+      readonly outcome: 'already_applied';
+      readonly gameId: string;
+    }
+  | {
+      readonly outcome: 'rescheduled';
+      readonly gameId: string;
+      readonly dueAt: string;
+      readonly expectedRevision: number;
+    }
+  | { readonly outcome: 'not_claimed' };
+
 export interface CreateStoredGameInput {
   readonly tenantId: string;
   readonly actorUserId: string;
@@ -164,7 +186,15 @@ export interface GameRepository {
     readonly tenantId: string;
     readonly workerId: string;
     readonly limit: number;
+    readonly commandTypes?: readonly ClaimedGameScheduledCommand['commandType'][];
   }): Promise<readonly ClaimedGameScheduledCommand[]>;
+  executeLifecycleCommand(input: {
+    readonly tenantId: string;
+    readonly workerId: string;
+    readonly commandId: string;
+    readonly correlationId: string;
+    readonly occurredAt?: Date;
+  }): Promise<GameLifecycleCommandExecutionResult>;
   completeScheduledCommand(input: {
     readonly tenantId: string;
     readonly workerId: string;
@@ -278,6 +308,22 @@ interface ScheduledCommandRow extends QueryResultRow {
   readonly expected_revision: string | number | null;
   readonly payload: unknown;
   readonly attempts: number;
+}
+
+interface ClaimedLifecycleCommandRow extends QueryResultRow {
+  readonly id: string;
+  readonly game_id: string;
+  readonly command_type: GameLifecycleCommandType;
+  readonly due_at: Date | string;
+  readonly expected_revision: string | number | null;
+}
+
+interface LifecycleGameRow extends QueryResultRow {
+  readonly id: string;
+  readonly revision: string | number;
+  readonly lifecycle_state: GameLifecycleState;
+  readonly starts_at: Date | string;
+  readonly ends_at: Date | string;
 }
 
 interface AttemptsRow extends QueryResultRow {
@@ -1060,12 +1106,23 @@ export function createGameRepository(pool: Pool): GameRepository {
     claimScheduledCommands(input) {
       const limit = Math.max(1, Math.min(input.limit, 100));
       return withTenantTransaction(pool, input.tenantId, async (client) => {
+        await client.query(
+          `update games.scheduled_commands
+              set state = 'FAILED', available_at = now(),
+                  locked_at = null, locked_by = null,
+                  last_error_code = 'GAME_COMMAND_CLAIM_EXPIRED'
+            where tenant_id = $1 and state = 'PROCESSING'
+              and ($2::text[] is null or command_type = any($2::text[]))
+              and locked_at < now() - interval '60 seconds'`,
+          [input.tenantId, input.commandTypes ? [...input.commandTypes] : null],
+        );
         const result = await client.query<ScheduledCommandRow>(
           `with due as (
              select tenant_id, id
                from games.scheduled_commands
               where tenant_id = $1
                 and state in ('PENDING', 'FAILED')
+                and ($4::text[] is null or command_type = any($4::text[]))
                 and due_at <= now()
                 and available_at <= now()
                 and attempts < 20
@@ -1080,9 +1137,191 @@ export function createGameRepository(pool: Pool): GameRepository {
            where command.tenant_id = due.tenant_id and command.id = due.id
            returning command.id, command.game_id, command.command_type,
                      command.expected_revision, command.payload, command.attempts`,
-          [input.tenantId, input.workerId, limit],
+          [
+            input.tenantId,
+            input.workerId,
+            limit,
+            input.commandTypes ? [...input.commandTypes] : null,
+          ],
         );
         return result.rows.map(mapScheduledCommand);
+      });
+    },
+
+    executeLifecycleCommand(input) {
+      const occurredAt = input.occurredAt ?? new Date();
+      return withTenantTransaction(pool, input.tenantId, async (client) => {
+        const command = await queryOne<ClaimedLifecycleCommandRow>(
+          client,
+          `select id, game_id, command_type, due_at, expected_revision
+             from games.scheduled_commands
+            where tenant_id = $1 and id = $2
+              and state = 'PROCESSING' and locked_by = $3
+              and command_type in ('game.lifecycle.start.v1', 'game.lifecycle.finish.v1')
+            for update`,
+          [input.tenantId, input.commandId, input.workerId],
+        );
+        if (!command) return { outcome: 'not_claimed' };
+
+        const game = await queryOne<LifecycleGameRow>(
+          client,
+          `select id, revision, lifecycle_state, starts_at, ends_at
+             from games.games
+            where tenant_id = $1 and id = $2
+            for update`,
+          [input.tenantId, command.game_id],
+        );
+        if (!game) throw new Error('GAME_LIFECYCLE_COMMAND_GAME_NOT_FOUND');
+
+        const completeClaim = async (): Promise<void> => {
+          const completed = await client.query(
+            `update games.scheduled_commands
+                set state = 'COMPLETED', completed_at = $4,
+                    locked_at = null, locked_by = null, last_error_code = null
+              where tenant_id = $1 and id = $2
+                and state = 'PROCESSING' and locked_by = $3`,
+            [input.tenantId, command.id, input.workerId, occurredAt.toISOString()],
+          );
+          if (completed.rowCount !== 1) {
+            throw new Error('GAME_LIFECYCLE_COMMAND_COMPLETION_LOST');
+          }
+        };
+
+        const alreadyApplied =
+          command.command_type === 'game.lifecycle.start.v1'
+            ? ['IN_PROGRESS', 'FINISHED', 'CANCELLED'].includes(game.lifecycle_state)
+            : ['FINISHED', 'CANCELLED'].includes(game.lifecycle_state);
+        if (alreadyApplied) {
+          await completeClaim();
+          return { outcome: 'already_applied', gameId: game.id };
+        }
+
+        const expectedSourceState =
+          command.command_type === 'game.lifecycle.start.v1' ? 'SCHEDULED' : 'IN_PROGRESS';
+        if (game.lifecycle_state !== expectedSourceState) {
+          throw new Error('GAME_LIFECYCLE_COMMAND_NOT_READY');
+        }
+
+        const dueAt = timestamp(
+          command.command_type === 'game.lifecycle.start.v1' ? game.starts_at : game.ends_at,
+        );
+        const revision = positiveInteger(game.revision);
+        const storedExpectedRevision =
+          command.expected_revision === null ? null : positiveInteger(command.expected_revision);
+        if (
+          timestamp(command.due_at) !== dueAt ||
+          storedExpectedRevision !== revision ||
+          Date.parse(dueAt) > occurredAt.getTime()
+        ) {
+          const rescheduled = await client.query(
+            `update games.scheduled_commands
+                set state = 'FAILED', due_at = $4,
+                    available_at = greatest($4::timestamptz, $5::timestamptz),
+                    expected_revision = $6,
+                    payload = jsonb_build_object(
+                      'gameId', game_id,
+                      'expectedRevision', $6::text
+                    ),
+                    locked_at = null, locked_by = null,
+                    last_error_code = 'GAME_COMMAND_RESCHEDULED'
+              where tenant_id = $1 and id = $2
+                and state = 'PROCESSING' and locked_by = $3`,
+            [input.tenantId, command.id, input.workerId, dueAt, occurredAt.toISOString(), revision],
+          );
+          if (rescheduled.rowCount !== 1) {
+            throw new Error('GAME_LIFECYCLE_COMMAND_RESCHEDULE_LOST');
+          }
+          return {
+            outcome: 'rescheduled',
+            gameId: game.id,
+            dueAt,
+            expectedRevision: revision,
+          };
+        }
+
+        const lifecycleState =
+          command.command_type === 'game.lifecycle.start.v1' ? 'IN_PROGRESS' : 'FINISHED';
+        const updated = await queryOne<{ readonly revision: string | number } & QueryResultRow>(
+          client,
+          `update games.games
+              set lifecycle_state = $4,
+                  result_state = case
+                    when $4 = 'FINISHED' and result_state = 'NOT_AVAILABLE'
+                      then 'AWAITING_SUBMISSION'
+                    else result_state
+                  end,
+                  started_at = coalesce(started_at, starts_at),
+                  finished_at = case
+                    when $4 = 'FINISHED' then coalesce(finished_at, ends_at)
+                    else finished_at
+                  end,
+                  revision = revision + 1,
+                  updated_at = $5
+            where tenant_id = $1 and id = $2
+              and revision = $3 and lifecycle_state = $6
+            returning revision`,
+          [
+            input.tenantId,
+            game.id,
+            revision,
+            lifecycleState,
+            occurredAt.toISOString(),
+            expectedSourceState,
+          ],
+        );
+        if (!updated) throw new Error('GAME_LIFECYCLE_COMMAND_REVISION_CONFLICT');
+        const nextRevision = positiveInteger(updated.revision);
+
+        const participants = await client.query<{ readonly user_id: string } & QueryResultRow>(
+          `select user_id
+             from games.participations
+            where tenant_id = $1 and game_id = $2 and state = 'ACTIVE'
+            order by joined_at, id`,
+          [input.tenantId, game.id],
+        );
+        const eventId = randomUUID();
+        await insertOutboxEvent(client, {
+          id: eventId,
+          type:
+            command.command_type === 'game.lifecycle.start.v1'
+              ? 'game.started.v1'
+              : 'game.finished.v1',
+          aggregateId: game.id,
+          tenantId: input.tenantId,
+          occurredAt: occurredAt.toISOString(),
+          correlationId: input.correlationId,
+          payload: {
+            gameId: game.id,
+            aggregateRevision: String(nextRevision),
+            causationId: command.id,
+            actorUserId: null,
+            participantUserIds: participants.rows.map((row) => row.user_id),
+          },
+        });
+        await client.query(
+          `insert into audit.audit_log (
+             tenant_id, actor_id, action, resource_type, resource_id, result,
+             reason, correlation_id, old_value, new_value, occurred_at
+           ) values ($1, null, $2, 'GAME', $3, 'SUCCESS',
+                     'SCHEDULED_COMMAND', $4, $5::jsonb, $6::jsonb, $7)`,
+          [
+            input.tenantId,
+            lifecycleState === 'IN_PROGRESS' ? 'GAME_LIFECYCLE_STARTED' : 'GAME_LIFECYCLE_FINISHED',
+            game.id,
+            input.correlationId,
+            JSON.stringify({ revision, lifecycleState: game.lifecycle_state }),
+            JSON.stringify({ revision: nextRevision, lifecycleState }),
+            occurredAt.toISOString(),
+          ],
+        );
+        await completeClaim();
+        return {
+          outcome: 'applied',
+          gameId: game.id,
+          lifecycleState,
+          revision: nextRevision,
+          eventId,
+        };
       });
     },
 

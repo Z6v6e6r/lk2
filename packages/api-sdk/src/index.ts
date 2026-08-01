@@ -7,6 +7,7 @@ export type AuthenticatedSession = components['schemas']['AuthenticatedSession']
 export type AuthenticatedUser = components['schemas']['AuthenticatedUser'];
 export type UserContext = components['schemas']['UserContext'];
 export type HomeDashboard = components['schemas']['HomeDashboard'];
+export type HomeBase = components['schemas']['HomeBase'];
 export type LocationList = components['schemas']['LocationList'];
 export type LocationDetail = components['schemas']['LocationDetail'];
 export type CommunityMembershipPage = components['schemas']['CommunityMembershipPage'];
@@ -25,6 +26,7 @@ export type BookingPreferences = components['schemas']['BookingPreferences'];
 export type BookingPreferencesUpdateRequest =
   components['schemas']['BookingPreferencesUpdateRequest'];
 export type BookingRecommendationPage = components['schemas']['BookingRecommendationPage'];
+export type TrainingSchedulePage = components['schemas']['TrainingSchedulePage'];
 export type UserUpcomingBookings = components['schemas']['UserUpcomingBookings'];
 export type ActivityHistoryKind = components['schemas']['ActivityHistoryKind'];
 export type ActivityHistoryStatus = components['schemas']['ActivityHistoryStatus'];
@@ -45,6 +47,8 @@ export type PublicGameCardPage = PublicApiComponents['schemas']['PublicGameCardP
 export type PublicTournamentSummary = PublicApiComponents['schemas']['PublicTournamentSummary'];
 export type PublicTournamentSummaryPage =
   PublicApiComponents['schemas']['PublicTournamentSummaryPage'];
+export type TournamentParticipant = components['schemas']['TournamentParticipant'];
+export type TournamentParticipantRoster = components['schemas']['TournamentParticipantRoster'];
 export type PublicCoachGameSummary = PublicApiComponents['schemas']['PublicCoachGameSummary'];
 export type PublicCoachGameSummaryPage =
   PublicApiComponents['schemas']['PublicCoachGameSummaryPage'];
@@ -79,6 +83,11 @@ export interface PublicTournamentFilters {
   readonly limit?: number;
 }
 
+export interface PublicTournamentSummaryRange {
+  readonly dateFrom: string;
+  readonly dateTo: string;
+}
+
 export type PublicCoachGameFilters = PublicTournamentFilters;
 
 export interface ActivityHistoryFilters {
@@ -87,6 +96,76 @@ export interface ActivityHistoryFilters {
   readonly cursor?: string;
   readonly limit?: number;
 }
+
+export interface BookingRecommendationFilters {
+  readonly limit?: number;
+  readonly cursor?: string;
+}
+
+function normalizeBookingPreferences(settings: BookingPreferences): BookingPreferences {
+  const candidate = settings as Partial<BookingPreferences>;
+  return {
+    ...settings,
+    recommendFriends:
+      typeof candidate.recommendFriends === 'boolean' ? candidate.recommendFriends : true,
+    recommendationDisplay:
+      candidate.recommendationDisplay === 'ROWS' ? candidate.recommendationDisplay : 'CARDS',
+  };
+}
+
+export interface BookingScreenScheduleReadCommand {
+  readonly commandId: string;
+  readonly operation: 'schedule.read';
+  readonly date: string;
+}
+
+export interface BookingScreenUpcomingReadCommand {
+  readonly commandId: string;
+  readonly operation: 'bookings.read';
+  readonly detailsOperation: 'bookings.details.read';
+  readonly page: 0;
+  readonly size: 50;
+}
+
+export type BookingScreenReadCommand =
+  BookingScreenScheduleReadCommand | BookingScreenUpcomingReadCommand;
+
+export interface BookingScreenReadJob {
+  readonly jobId: string;
+  readonly screen: 'FOR_ME' | 'GROUP_TRAININGS' | 'MY_BOOKINGS';
+  readonly expiresAt: string;
+  readonly commands: readonly BookingScreenReadCommand[];
+  readonly concurrency: number;
+}
+
+export interface BookingScreenRecommendationReadCompletion {
+  readonly screen: 'FOR_ME';
+  readonly state: 'READY' | 'PARTIAL';
+  readonly completedCommands: number;
+  readonly totalCommands: number;
+  readonly page: BookingRecommendationPage;
+}
+
+export interface BookingScreenUpcomingReadCompletion {
+  readonly screen: 'MY_BOOKINGS';
+  readonly state: 'READY' | 'PARTIAL';
+  readonly completedCommands: number;
+  readonly totalCommands: number;
+  readonly bookings: UserUpcomingBookings;
+}
+
+export interface BookingScreenTrainingScheduleReadCompletion {
+  readonly screen: 'GROUP_TRAININGS';
+  readonly state: 'READY' | 'PARTIAL';
+  readonly completedCommands: number;
+  readonly totalCommands: number;
+  readonly trainings: TrainingSchedulePage;
+}
+
+export type BookingScreenReadCompletion =
+  | BookingScreenRecommendationReadCompletion
+  | BookingScreenTrainingScheduleReadCompletion
+  | BookingScreenUpcomingReadCompletion;
 
 export type RequestAuthMode = 'none' | 'required';
 export type SessionIntent = 'refresh' | 'logout';
@@ -410,20 +489,24 @@ export class PadlHubApiClient {
     );
   }
 
-  public getBookingPreferences(): Promise<BookingPreferences> {
-    return this.request<BookingPreferences>('/profile/booking-preferences');
+  public async getBookingPreferences(): Promise<BookingPreferences> {
+    return normalizeBookingPreferences(
+      await this.request<BookingPreferences>('/profile/booking-preferences'),
+    );
   }
 
-  public updateBookingPreferences(
+  public async updateBookingPreferences(
     input: BookingPreferencesUpdateRequest,
   ): Promise<BookingPreferences> {
     const idempotencyKey = createCorrelationId();
-    return this.retryOnceOnNetworkFailure(() =>
-      this.request<BookingPreferences>('/profile/booking-preferences', {
-        method: 'PUT',
-        idempotencyKey,
-        body: jsonRequestBody(input),
-      }),
+    return normalizeBookingPreferences(
+      await this.retryOnceOnNetworkFailure(() =>
+        this.request<BookingPreferences>('/profile/booking-preferences', {
+          method: 'PUT',
+          idempotencyKey,
+          body: jsonRequestBody(input),
+        }),
+      ),
     );
   }
 
@@ -441,9 +524,71 @@ export class PadlHubApiClient {
     return this.request<ActivityHistoryPage>(`/bookings/history${suffix}`);
   }
 
-  public listBookingRecommendations(limit = 6): Promise<BookingRecommendationPage> {
-    const query = new URLSearchParams({ limit: String(limit) });
+  public listBookingRecommendations(
+    input: BookingRecommendationFilters = {},
+  ): Promise<BookingRecommendationPage> {
+    const query = new URLSearchParams({ limit: String(input.limit ?? 6) });
+    if (input.cursor) query.set('cursor', input.cursor);
     return this.request<BookingRecommendationPage>(`/recommendations/bookings?${query.toString()}`);
+  }
+
+  public recordPromotionEngagement(
+    promotionId: string,
+    kind: 'IMPRESSION' | 'CLICK',
+  ): Promise<{ readonly accepted: boolean }> {
+    return this.request<{ readonly accepted: boolean }>(
+      `/promotions/${encodeURIComponent(promotionId)}/engagements`,
+      {
+        method: 'POST',
+        idempotencyKey: createCorrelationId(),
+        keepalive: true,
+        body: jsonRequestBody({ kind }),
+      },
+    );
+  }
+
+  public startBookingScreenReadJob(
+    screen: 'FOR_ME' | 'GROUP_TRAININGS' | 'MY_BOOKINGS',
+  ): Promise<BookingScreenReadJob> {
+    return this.request<BookingScreenReadJob>('/booking-screen-read-jobs', {
+      method: 'POST',
+      idempotencyKey: createCorrelationId(),
+      body: jsonRequestBody({ screen }),
+    });
+  }
+
+  public submitBookingScreenReadResult(
+    jobId: string,
+    commandId: string,
+    payload: unknown,
+  ): Promise<{
+    readonly accepted: boolean;
+    readonly replayed: boolean;
+    readonly itemCount: number;
+  }> {
+    return this.request(
+      `/booking-screen-read-jobs/${encodeURIComponent(jobId)}/results/${encodeURIComponent(commandId)}`,
+      {
+        method: 'POST',
+        idempotencyKey: createCorrelationId(),
+        body: jsonRequestBody({ payload }),
+      },
+    );
+  }
+
+  public completeBookingScreenReadJob(
+    jobId: string,
+    limit: number,
+    phase?: 'HOME_INITIAL' | 'HOME_TOURNAMENTS' | 'FULL',
+  ): Promise<BookingScreenReadCompletion> {
+    return this.request<BookingScreenReadCompletion>(
+      `/booking-screen-read-jobs/${encodeURIComponent(jobId)}/complete`,
+      {
+        method: 'POST',
+        idempotencyKey: createCorrelationId(),
+        body: jsonRequestBody({ limit, ...(phase ? { phase } : {}) }),
+      },
+    );
   }
 
   public async getHomeDashboard(): Promise<HomeDashboard> {
@@ -452,6 +597,17 @@ export class PadlHubApiClient {
     return {
       ...dashboard,
       locations: dashboard.locations.map((location) => ({
+        ...location,
+        imageUrl: location.imageUrl ? this.resolveApiMediaUrl(location.imageUrl) : null,
+      })),
+    };
+  }
+
+  public async getHomeBase(): Promise<HomeBase> {
+    const homeBase = await this.request<HomeBase>('/home/base');
+    return {
+      ...homeBase,
+      locations: homeBase.locations.map((location) => ({
         ...location,
         imageUrl: location.imageUrl ? this.resolveApiMediaUrl(location.imageUrl) : null,
       })),
@@ -488,6 +644,27 @@ export class PadlHubApiClient {
       this.publicApiRoot,
       `/tournaments?${query.toString()}`,
       { auth: 'none' },
+    );
+  }
+
+  public getPublicTournamentSummary(
+    summaryId: string,
+    input: PublicTournamentSummaryRange,
+  ): Promise<PublicTournamentSummary> {
+    const query = new URLSearchParams({
+      dateFrom: input.dateFrom,
+      dateTo: input.dateTo,
+    });
+    return this.requestFromRoot<PublicTournamentSummary>(
+      this.publicApiRoot,
+      `/tournaments/${encodeURIComponent(summaryId)}?${query.toString()}`,
+      { auth: 'none' },
+    );
+  }
+
+  public getTournamentParticipants(tournamentId: string): Promise<TournamentParticipantRoster> {
+    return this.request<TournamentParticipantRoster>(
+      `/tournaments/${encodeURIComponent(tournamentId)}/participants`,
     );
   }
 

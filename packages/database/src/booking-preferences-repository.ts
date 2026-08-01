@@ -40,6 +40,8 @@ export interface BookingPreferencesRepository {
     readonly favoriteStationIds: readonly string[];
     readonly preferredTimeWindows: readonly BookingPreferenceTimeWindow[];
     readonly useHistory: boolean;
+    readonly recommendFriends: boolean;
+    readonly recommendationDisplay: BookingPreferences['recommendationDisplay'];
   }): Promise<BookingPreferencesCommandResult>;
 }
 
@@ -47,6 +49,8 @@ interface PreferencesRow extends QueryResultRow {
   readonly favorite_station_ids: readonly string[];
   readonly preferred_time_windows: unknown;
   readonly use_history: boolean;
+  readonly recommend_friends: boolean;
+  readonly recommendation_display: string;
   readonly version: number;
   readonly updated_at: Date | string;
 }
@@ -59,6 +63,8 @@ interface RecommendationProfileRow extends QueryResultRow {
   readonly favorite_station_ids: readonly string[] | null;
   readonly preferred_time_windows: unknown;
   readonly use_history: boolean | null;
+  readonly recommend_friends: boolean | null;
+  readonly recommendation_display: string | null;
   readonly version: number | null;
   readonly updated_at: Date | string | null;
   readonly level_label: GamePlayerLevel | null;
@@ -70,7 +76,7 @@ interface CommandRow extends QueryResultRow {
 }
 
 const PREFERENCES_COLUMNS =
-  'favorite_station_ids, preferred_time_windows, use_history, version, updated_at';
+  'favorite_station_ids, preferred_time_windows, use_history, recommend_friends, recommendation_display, version, updated_at';
 const TIME_PATTERN = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const LEVELS: readonly GamePlayerLevel[] = ['D', 'D+', 'C', 'C+', 'B', 'B+', 'A'];
@@ -126,10 +132,15 @@ function parseFavoriteStationIds(value: unknown): readonly string[] {
 }
 
 function mapRow(row: PreferencesRow): BookingPreferences {
+  if (row.recommendation_display !== 'CARDS' && row.recommendation_display !== 'ROWS') {
+    throw new Error('BOOKING_PREFERENCES_DISPLAY_INVALID');
+  }
   return {
     favoriteStationIds: parseFavoriteStationIds(row.favorite_station_ids),
     preferredTimeWindows: parseWindows(row.preferred_time_windows),
     useHistory: row.use_history,
+    recommendFriends: row.recommend_friends,
+    recommendationDisplay: row.recommendation_display,
     version: row.version,
     updatedAt: new Date(row.updated_at).toISOString(),
   };
@@ -153,10 +164,26 @@ function parseStoredSettings(value: unknown): BookingPreferences {
   ) {
     throw new Error('BOOKING_PREFERENCES_COMMAND_RESULT_INVALID');
   }
+  const recommendFriends =
+    'recommendFriends' in value
+      ? value.recommendFriends
+      : DEFAULT_BOOKING_PREFERENCES.recommendFriends;
+  const recommendationDisplay =
+    'recommendationDisplay' in value
+      ? value.recommendationDisplay
+      : DEFAULT_BOOKING_PREFERENCES.recommendationDisplay;
+  if (
+    typeof recommendFriends !== 'boolean' ||
+    (recommendationDisplay !== 'CARDS' && recommendationDisplay !== 'ROWS')
+  ) {
+    throw new Error('BOOKING_PREFERENCES_COMMAND_RESULT_INVALID');
+  }
   return {
     favoriteStationIds: parseFavoriteStationIds(value.favoriteStationIds),
     preferredTimeWindows: parseWindows(value.preferredTimeWindows),
     useHistory: value.useHistory,
+    recommendFriends,
+    recommendationDisplay,
     version: value.version,
     updatedAt: value.updatedAt,
   };
@@ -246,6 +273,8 @@ async function recordChange(
         favoriteStationIds: input.settings.favoriteStationIds,
         preferredTimeWindows: input.settings.preferredTimeWindows,
         useHistory: input.settings.useHistory,
+        recommendFriends: input.settings.recommendFriends,
+        recommendationDisplay: input.settings.recommendationDisplay,
       }),
     ],
   );
@@ -277,6 +306,7 @@ export function createBookingPreferencesRepository(pool: Pool): BookingPreferenc
         const row = await queryOne<RecommendationProfileRow>(
           client,
           `select p.favorite_station_ids, p.preferred_time_windows, p.use_history,
+                  p.recommend_friends, p.recommendation_display,
                   p.version, p.updated_at, s.level_label
              from identity.users u
              left join profile.booking_preferences p
@@ -291,12 +321,16 @@ export function createBookingPreferencesRepository(pool: Pool): BookingPreferenc
           row.version === null ||
           row.updated_at === null ||
           row.favorite_station_ids === null ||
-          row.use_history === null
+          row.use_history === null ||
+          row.recommend_friends === null ||
+          row.recommendation_display === null
             ? { ...DEFAULT_BOOKING_PREFERENCES }
             : mapRow({
                 favorite_station_ids: row.favorite_station_ids,
                 preferred_time_windows: row.preferred_time_windows,
                 use_history: row.use_history,
+                recommend_friends: row.recommend_friends,
+                recommendation_display: row.recommendation_display,
                 version: row.version,
                 updated_at: row.updated_at,
               });
@@ -324,16 +358,18 @@ export function createBookingPreferencesRepository(pool: Pool): BookingPreferenc
           client,
           `insert into profile.booking_preferences (
              tenant_id, user_id, favorite_station_ids, preferred_time_windows,
-             use_history, version, updated_by
-           ) values ($1, $2, $3::uuid[], $4::jsonb, $5, 1, $6)
+             use_history, recommend_friends, recommendation_display, version, updated_by
+           ) values ($1, $2, $3::uuid[], $4::jsonb, $5, $6, $7, 1, $8)
            on conflict (tenant_id, user_id) do update set
              favorite_station_ids = excluded.favorite_station_ids,
              preferred_time_windows = excluded.preferred_time_windows,
              use_history = excluded.use_history,
+             recommend_friends = excluded.recommend_friends,
+             recommendation_display = excluded.recommendation_display,
              version = profile.booking_preferences.version + 1,
              updated_by = excluded.updated_by,
              updated_at = now()
-           where profile.booking_preferences.version = $7
+           where profile.booking_preferences.version = $9
            returning ${PREFERENCES_COLUMNS}`,
           [
             input.tenantId,
@@ -341,6 +377,8 @@ export function createBookingPreferencesRepository(pool: Pool): BookingPreferenc
             input.favoriteStationIds,
             JSON.stringify(input.preferredTimeWindows),
             input.useHistory,
+            input.recommendFriends,
+            input.recommendationDisplay,
             input.actorUserId,
             input.expectedVersion,
           ],

@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-07-15
+- Partially superseded by: [ADR 0019](0019-home-base-and-viva-egress-gate.md)
 
 ## Context
 
@@ -19,6 +20,16 @@ contract.
 
 Add the protected `GET /user/api/v1/{tenantKey}/home` operation and return one versioned
 `HomeDashboard` snapshot containing all initial Home blocks.
+
+ADR 0019 retains this complete snapshot as the expand/migrate compatibility contract but removes
+it as the only permitted Home bootstrap. New clients may use the additive `GET /home/base`
+recovery contract plus a separately routed self-profile aggregate. The first `HomeBase` milestone
+contains quick actions, community and promotion envelopes, locations, additional links and
+capabilities; profile, balance, messaging, counters, upcoming bookings and subscriptions are
+omitted. Each versioned community/promotion section keeps a required local `revision`, `observedAt`,
+`staleAt` and `READY` or `STALE` state, or is explicitly `UNAVAILABLE`; clients still may not merge
+one section from local, cached and Viva responses. The HomeBase snapshot has no global `staleAt`;
+required local fields do not clock-expire the whole partial response into a `503`.
 
 The production implementation will be a server-owned materialized projection. It is read-only and
 does not change domain write ownership. All public entity identifiers are PadlHub UUIDs. Tenant and
@@ -69,6 +80,11 @@ Profile, upcoming bookings and subscriptions from one Viva pull share the same s
 The projector defers rebuilds while those three component timestamps differ, so an intermediate
 event cannot publish a snapshot that mixes two Viva sync cycles.
 
+That three-component requirement remains valid for the legacy complete `HomeDashboard`. Under ADR
+0019, a forbidden profile read no longer blocks delivery of the local-only first HomeBase
+milestone. Booking and subscription data are not added to HomeBase until the trusted worker-egress
+gate passes and their separate contract is accepted.
+
 ## Consequences
 
 - Home requires one business-data request after authentication.
@@ -86,6 +102,11 @@ event cannot publish a snapshot that mixes two Viva sync cycles.
 - Any future Home block must first be added to the OpenAPI snapshot and ownership documentation; it
   must not add an independent initial client request.
 
+ADR 0019 narrows the last two consequences for new clients: the old complete endpoint still waits
+for all nine components, while `HomeBase` may expose independently versioned community and
+promotion section states. The additional self-profile request is an explicitly separate aggregate
+selected by the server routing plan, not browser source orchestration.
+
 ## Advertising placement expansion
 
 The existing CUP `cabinet_home` placement remains the temporary operator source while Home moves to
@@ -98,3 +119,9 @@ the old singular `promotion` field mirrors its first item only for rollout compa
 This bridge is read-only and does not create another advertising write owner. Source failure keeps
 the last valid component, while immutable media replacement and deletion observe the signed-URL and
 projection-staleness grace period.
+
+The Home presentation chooses its CUP placement only in the worker configuration. The current
+PadlHub Home mapping deliberately mirrors CUP Block 2 (`cabinet_home`) into both the compact header
+slot and the rollout-compatible lower slot; the browser still receives one authenticated Home
+snapshot and never chooses a provider or loads a CUP asset URL. `cabinet_home_top` remains a
+supported adapter placement, but activating it for either slot is a separate operator decision.

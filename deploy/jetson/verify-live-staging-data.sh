@@ -75,6 +75,12 @@ if test "${1:-}" = preflight; then
   exit 0
 fi
 
+require_value PROMOTIONS_LEGACY_BASE_URL http://phab-showcase:3000
+require_value PROMOTIONS_HERO_PLACEMENT cabinet_home
+require_value PROMOTIONS_STANDARD_PLACEMENT cabinet_home
+require_value PROMOTION_IMAGE_ALLOWED_HOSTS phab-showcase
+require_value PROMOTION_IMAGE_PRIVATE_HTTP_HOSTS phab-showcase
+
 compose() {
   docker compose --env-file infrastructure.env --env-file release.env "$@"
 }
@@ -113,6 +119,18 @@ compose exec -T worker node -e "
   if (!env.LEGACY_GAMES_MONGODB_URI) process.exit(1);
   if (env.ACTIVITY_HISTORY_GAME_BACKFILL_ENABLED !== 'true') process.exit(1);
   if (env.S3_BUCKET !== 'phub-media') process.exit(1);
+  const promotionSource = new URL('/api/advertising/cabinet-home', env.PROMOTIONS_LEGACY_BASE_URL);
+  fetch(promotionSource, {
+    headers: {
+      Accept: 'application/json',
+      'X-Correlation-ID': 'staging-promotion-source-verification',
+    },
+    signal: AbortSignal.timeout(5000),
+  }).then(async (response) => {
+    if (!response.ok) process.exit(1);
+    const payload = await response.json();
+    if (payload.placement !== 'cabinet_home' || !Array.isArray(payload.ads)) process.exit(1);
+  }).catch(() => { process.exitCode = 1; });
 "
 
 compose exec -T api node -e "

@@ -242,6 +242,7 @@ export const DEFAULT_PROFILE_PRIVACY_SETTINGS: ProfilePrivacySettings = {
 export const PROFILE_PRIVACY_CHANGED_EVENT = 'profile.privacy.changed.v1' as const;
 
 export const BOOKING_PREFERENCE_WEEKDAYS = [
+  'ANY',
   'MON',
   'TUE',
   'WED',
@@ -262,14 +263,18 @@ export interface BookingPreferences {
   readonly favoriteStationIds: readonly string[];
   readonly preferredTimeWindows: readonly BookingPreferenceTimeWindow[];
   readonly useHistory: boolean;
+  readonly recommendFriends: boolean;
+  readonly recommendationDisplay: 'CARDS' | 'ROWS';
   readonly version: number;
   readonly updatedAt: string | null;
 }
 
 export const DEFAULT_BOOKING_PREFERENCES: BookingPreferences = {
   favoriteStationIds: [],
-  preferredTimeWindows: [],
+  preferredTimeWindows: [{ weekday: 'ANY', startsAt: '09:00', endsAt: '22:00' }],
   useHistory: true,
+  recommendFriends: true,
+  recommendationDisplay: 'CARDS',
   version: 0,
   updatedAt: null,
 };

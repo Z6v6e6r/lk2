@@ -1,0 +1,35 @@
+name: phub-tls-ingress
+
+services:
+  caddy:
+    image: caddy@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648
+    restart: unless-stopped
+    env_file:
+      - ${PORTAINER_AUTH_ENV_FILE:-/opt/phub/tls-ingress/portainer-auth.env}
+    ports:
+      - '80:80'
+      - '443:443'
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - phub-private
+      - phab-showcase
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: '3'
+
+networks:
+  phub-private:
+    external: true
+    name: phub-private
+  phab-showcase:
+    external: true
+    name: phab-showcase_default
+
+volumes:
+  caddy_data:
+  caddy_config:

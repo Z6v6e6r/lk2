@@ -47,10 +47,18 @@ const namedSchema = z.object({
 });
 
 const trainerSchema = z.object({
+  id: z.union([z.string().trim().min(1).max(200), z.number().finite()]).optional(),
   firstName: z.string().trim().min(1).max(120),
   lastName: z.string().trim().max(120).nullish(),
   photo: z.string().trim().url().max(2_048).nullish(),
 });
+
+export interface VivaCoachTrainerAvatarSource {
+  readonly provider: 'VIVA';
+  readonly providerTrainerId: string;
+  readonly displayName: string;
+  readonly sourceUrl?: string;
+}
 
 const exerciseSchema = z.object({
   id: z.union([z.string().trim().min(1).max(200), z.number().finite()]),
@@ -120,7 +128,7 @@ export class VivaCoachGameSummaryAdapter {
   private readonly pending = new Map<string, Promise<readonly PublicCoachGameSummary[]>>();
   private readonly avatarSources = new Map<
     string,
-    { readonly sourceUrl: string; readonly fetchedAt: number }
+    { readonly source: VivaCoachTrainerAvatarSource; readonly fetchedAt: number }
   >();
   private consecutiveFailures = 0;
   private circuitOpenedAt: number | undefined;
@@ -184,8 +192,17 @@ export class VivaCoachGameSummaryAdapter {
           const coachName = trainerName(exercise.trainers);
           const id = publicCoachGameId(tenantKey, String(exercise.id));
           const avatarSourceUrl = trainerAvatarSource(exercise.trainers);
-          if (avatarSourceUrl) {
-            this.avatarSources.set(id, { sourceUrl: avatarSourceUrl, fetchedAt: now });
+          const providerTrainerId = exercise.trainers[0]?.id;
+          if (coachName && providerTrainerId !== undefined) {
+            this.avatarSources.set(id, {
+              source: {
+                provider: 'VIVA',
+                providerTrainerId: String(providerTrainerId),
+                displayName: coachName,
+                ...(avatarSourceUrl ? { sourceUrl: avatarSourceUrl } : {}),
+              },
+              fetchedAt: now,
+            });
           }
           const item: PublicCoachGameSummary = {
             id,
@@ -274,6 +291,17 @@ export class VivaCoachGameSummaryAdapter {
       this.avatarSources.delete(summaryId);
       return undefined;
     }
-    return value.sourceUrl;
+    return value.source.sourceUrl;
+  }
+
+  public readTrainerAvatarSource(summaryId: string): VivaCoachTrainerAvatarSource | undefined {
+    const value = this.avatarSources.get(summaryId);
+    if (!value) return undefined;
+    const now = this.options.now?.() ?? Date.now();
+    if (now - value.fetchedAt > (this.options.staleTtlMs ?? 600_000)) {
+      this.avatarSources.delete(summaryId);
+      return undefined;
+    }
+    return value.source;
   }
 }

@@ -50,6 +50,11 @@ write_runtime_override() {
     printf 'HOME_VIVA_SYNC_ENABLED=true\n'
     printf 'COMMUNITIES_READ_MODE=legacy\n'
     printf 'PROMOTIONS_READ_MODE=legacy\n'
+    printf 'PROMOTIONS_LEGACY_BASE_URL=http://phab-showcase:3000\n'
+    printf 'PROMOTIONS_HERO_PLACEMENT=cabinet_home\n'
+    printf 'PROMOTIONS_STANDARD_PLACEMENT=cabinet_home\n'
+    printf 'PROMOTION_IMAGE_ALLOWED_HOSTS=phab-showcase\n'
+    printf 'PROMOTION_IMAGE_PRIVATE_HTTP_HOSTS=phab-showcase\n'
     if test -n "$promotion_sync_batch_size"; then
       printf 'PROMOTIONS_SYNC_BATCH_SIZE=%s\n' "$promotion_sync_batch_size"
     fi

@@ -301,6 +301,7 @@ describe('game repository', () => {
         tenantId,
         workerId: 'worker-games-1',
         limit: 10,
+        commandTypes: ['game.lifecycle.start.v1', 'game.lifecycle.finish.v1'],
       }),
     ).resolves.toEqual([
       {
@@ -315,5 +316,144 @@ describe('game repository', () => {
     const claimCall = query.mock.calls.find(([text]) => text.includes('with due as'));
     expect(claimCall?.[0]).toContain('for update skip locked');
     expect(claimCall?.[0]).toContain('attempts < 20');
+    expect(claimCall?.[0]).toContain('command_type = any($4::text[])');
+    expect(claimCall?.[1]?.[3]).toEqual(['game.lifecycle.start.v1', 'game.lifecycle.finish.v1']);
+    expect(
+      query.mock.calls.some(
+        ([text, values]) =>
+          text.includes("last_error_code = 'GAME_COMMAND_CLAIM_EXPIRED'") &&
+          text.includes("interval '60 seconds'") &&
+          values?.[1] instanceof Array &&
+          values[1].includes('game.lifecycle.start.v1'),
+      ),
+    ).toBe(true);
+  });
+
+  it('applies a claimed lifecycle command, audit and outbox event atomically', async () => {
+    const commandId = '0ef0247c-cae5-4e38-b4bf-1caf19e66746';
+    const occurredAt = new Date('2026-07-20T16:00:01.000Z');
+    const scheduled = {
+      id: gameId,
+      revision: '5',
+      lifecycle_state: 'SCHEDULED',
+      starts_at: '2026-07-20T16:00:00.000Z',
+      ends_at: '2026-07-20T17:30:00.000Z',
+    };
+    const { pool, query } = poolWithHandler((text) => {
+      if (text.includes('from games.scheduled_commands') && text.includes("state = 'PROCESSING'")) {
+        return {
+          rows: [
+            {
+              id: commandId,
+              game_id: gameId,
+              command_type: 'game.lifecycle.start.v1',
+              due_at: scheduled.starts_at,
+              expected_revision: scheduled.revision,
+            },
+          ],
+        };
+      }
+      if (text.includes('from games.games') && text.includes('for update')) {
+        return { rows: [scheduled] };
+      }
+      if (text.includes('update games.games') && text.includes('returning revision')) {
+        return { rows: [{ revision: '6' }] };
+      }
+      if (text.includes('from games.participations')) {
+        return { rows: [{ user_id: actorUserId }] };
+      }
+      if (
+        text.includes('update games.scheduled_commands') &&
+        text.includes("state = 'COMPLETED'")
+      ) {
+        return { rowCount: 1 };
+      }
+      return { rows: [] };
+    });
+
+    await expect(
+      createGameRepository(pool as never).executeLifecycleCommand({
+        tenantId,
+        workerId: 'games-process-manager-test',
+        commandId,
+        correlationId: `games-process-manager-${commandId}`,
+        occurredAt,
+      }),
+    ).resolves.toMatchObject({
+      outcome: 'applied',
+      gameId,
+      lifecycleState: 'IN_PROGRESS',
+      revision: 6,
+    });
+
+    const aggregateUpdate = query.mock.calls.find(
+      ([text]) => text.includes('update games.games') && text.includes('returning revision'),
+    );
+    expect(aggregateUpdate?.[0]).toContain("when $4 = 'FINISHED'");
+    expect(aggregateUpdate?.[1]?.[3]).toBe('IN_PROGRESS');
+    const outbox = query.mock.calls.find(([text]) =>
+      text.includes('insert into audit.outbox_events'),
+    );
+    expect(outbox?.[1]?.[2]).toBe('game.started.v1');
+    expect(outbox?.[1]?.[5]).toContain(`"causationId":"${commandId}"`);
+    const audit = query.mock.calls.find(([text]) => text.includes('insert into audit.audit_log'));
+    expect(audit?.[1]?.[1]).toBe('GAME_LIFECYCLE_STARTED');
+    expect(query).toHaveBeenCalledWith('commit');
+  });
+
+  it('refreshes a stale lifecycle command from canonical revision and schedule', async () => {
+    const commandId = '0ef0247c-cae5-4e38-b4bf-1caf19e66746';
+    const { pool, query } = poolWithHandler((text) => {
+      if (text.includes('from games.scheduled_commands') && text.includes("state = 'PROCESSING'")) {
+        return {
+          rows: [
+            {
+              id: commandId,
+              game_id: gameId,
+              command_type: 'game.lifecycle.start.v1',
+              due_at: '2026-07-20T15:00:00.000Z',
+              expected_revision: '4',
+            },
+          ],
+        };
+      }
+      if (text.includes('from games.games') && text.includes('for update')) {
+        return {
+          rows: [
+            {
+              id: gameId,
+              revision: '5',
+              lifecycle_state: 'SCHEDULED',
+              starts_at: '2026-07-20T16:00:00.000Z',
+              ends_at: '2026-07-20T17:30:00.000Z',
+            },
+          ],
+        };
+      }
+      if (
+        text.includes('update games.scheduled_commands') &&
+        text.includes("last_error_code = 'GAME_COMMAND_RESCHEDULED'")
+      ) {
+        return { rowCount: 1 };
+      }
+      return { rows: [] };
+    });
+
+    await expect(
+      createGameRepository(pool as never).executeLifecycleCommand({
+        tenantId,
+        workerId: 'games-process-manager-test',
+        commandId,
+        correlationId: `games-process-manager-${commandId}`,
+        occurredAt: new Date('2026-07-20T15:30:00.000Z'),
+      }),
+    ).resolves.toEqual({
+      outcome: 'rescheduled',
+      gameId,
+      dueAt: '2026-07-20T16:00:00.000Z',
+      expectedRevision: 5,
+    });
+    expect(query.mock.calls.some(([text]) => text.includes('update games.games'))).toBe(false);
+    expect(query).toHaveBeenCalledWith('commit');
   });
 });

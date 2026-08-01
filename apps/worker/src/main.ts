@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 
 import { loadConfig } from '@phub/config';
@@ -23,6 +24,7 @@ import Redis from 'ioredis';
 
 import { registerHomeProjectorConsumer } from './home-projector-consumer.js';
 import { registerCoreBrokerTopology } from './broker-topology.js';
+import { runGameLifecycleProcessManagerCycle } from './game-lifecycle-process-manager.js';
 import { registerGamesCardProjectorConsumer } from './games-card-projector-consumer.js';
 import { registerGameResultProjectorConsumer } from './game-result-projector-consumer.js';
 import { registerCupRatingConsumer } from './cup-rating-consumer.js';
@@ -38,9 +40,10 @@ import {
   WORKER_OPERATIONAL_METRICS_INTERVAL_MS,
 } from './operational-metrics.js';
 import { publishOutboxBatch } from './outbox-publisher.js';
+import { runHomeBaseSyncCycle } from './home-base-sync.js';
 import { runPlatformHomeSyncCycle } from './platform-home-sync.js';
 import { runCommunityHomeSyncCycle } from './community-home-sync.js';
-import { LegacyPromotionSource } from './legacy-promotion-source.js';
+import { LegacyPromotionSource, type LegacyPromotionPlacement } from './legacy-promotion-source.js';
 import { publishLeasedOutboxBatch } from './leased-outbox-publisher.js';
 import { S3ProfilePhotoObjectStore } from './profile-photo-sync.js';
 import { runPromotionHomeSyncCycle } from './promotion-home-sync.js';
@@ -57,6 +60,8 @@ const telemetry = startTelemetry({
   ...(config.OTEL_EXPORTER_OTLP_ENDPOINT ? { endpoint: config.OTEL_EXPORTER_OTLP_ENDPOINT } : {}),
 });
 const pool = createDatabasePool(config.DATABASE_URL);
+const gameRepository = createGameRepository(pool);
+const gamesProcessManagerWorkerId = `games-process-manager-${randomUUID()}`;
 const giftCertificateRuntime = config.GIFT_CERTIFICATE_ISSUANCE_ENABLED
   ? {
       repository: createGiftCertificateIssuanceRepository(pool),
@@ -96,17 +101,30 @@ const communityHome = (() => {
       config.COMMUNITIES_READ_MODE === 'legacy' ? ('LEGACY' as const) : ('LOCAL' as const),
   };
 })();
-const promotionSource =
-  config.PROMOTIONS_READ_MODE === 'legacy'
-    ? new LegacyPromotionSource({
-        baseUrl: config.PROMOTIONS_LEGACY_BASE_URL,
-        timeoutMs: config.PROMOTIONS_LEGACY_TIMEOUT_MS,
-        maxAttempts: config.PROMOTIONS_LEGACY_MAX_ATTEMPTS,
-        circuitFailureThreshold: config.PROMOTIONS_LEGACY_CIRCUIT_FAILURE_THRESHOLD,
-        circuitResetMs: config.PROMOTIONS_LEGACY_CIRCUIT_RESET_MS,
-        onMetric: (metric) => logger.info({ metric }, 'legacy CUP promotion read'),
-      })
-    : undefined;
+const promotionSources = (() => {
+  if (config.PROMOTIONS_READ_MODE !== 'legacy') return undefined;
+  const createSource = (placement: LegacyPromotionPlacement): LegacyPromotionSource =>
+    new LegacyPromotionSource({
+      baseUrl: config.PROMOTIONS_LEGACY_BASE_URL,
+      placement,
+      privateHttpHosts: config.PROMOTION_IMAGE_PRIVATE_HTTP_HOSTS.split(',')
+        .map((host) => host.trim())
+        .filter(Boolean),
+      timeoutMs: config.PROMOTIONS_LEGACY_TIMEOUT_MS,
+      maxAttempts: config.PROMOTIONS_LEGACY_MAX_ATTEMPTS,
+      circuitFailureThreshold: config.PROMOTIONS_LEGACY_CIRCUIT_FAILURE_THRESHOLD,
+      circuitResetMs: config.PROMOTIONS_LEGACY_CIRCUIT_RESET_MS,
+      onMetric: (metric) => logger.info({ metric, placement }, 'legacy CUP promotion read'),
+    });
+  const standard = createSource(config.PROMOTIONS_STANDARD_PLACEMENT);
+  const hero =
+    config.PROMOTIONS_HERO_PLACEMENT === config.PROMOTIONS_STANDARD_PLACEMENT
+      ? standard
+      : createSource(config.PROMOTIONS_HERO_PLACEMENT);
+  const recommendationStrip = createSource(config.PROMOTIONS_RECOMMENDATION_STRIP_PLACEMENT);
+  const recommendationCard = createSource(config.PROMOTIONS_RECOMMENDATION_CARD_PLACEMENT);
+  return { hero, standard, recommendationStrip, recommendationCard };
+})();
 const createLegacyGamesRosterSource = () =>
   config.LEGACY_GAMES_ROSTER_SYNC_SOURCE === 'public'
     ? new LegacyGamesPublicAdapter({
@@ -169,7 +187,7 @@ await registerLocationHomeProjectorConsumer({
 });
 await registerGamesCardProjectorConsumer({
   channel: consumerChannel,
-  repository: createGameRepository(pool),
+  repository: gameRepository,
   logger,
 });
 const gameResultProjectionRepository = createGameResultProjectionRepository(pool);
@@ -300,11 +318,21 @@ const runCycle = async (): Promise<void> => {
       'select id from identity.tenants where active = true',
     );
     for (const tenant of tenants.rows) {
+      if (config.GAMES_READ_ENABLED) {
+        await runGameLifecycleProcessManagerCycle({
+          repository: gameRepository,
+          tenantId: tenant.id,
+          workerId: gamesProcessManagerWorkerId,
+          logger,
+          batchSize: config.OUTBOX_BATCH_SIZE,
+        });
+      }
       publishedCount += await publishConfiguredOutboxBatch(tenant.id);
     }
     if (publishedCount > 0) logger.info({ count: publishedCount }, 'outbox events published');
-  } catch {
+  } catch (error) {
     failed = true;
+    logger.error({ error }, 'worker core cycle failed');
     // The event remains unpublished and will be retried by the next bounded cycle.
   } finally {
     workerMetrics.recordOutboxPublishCycle(publishedCount, Date.now() - startedAt, failed);
@@ -499,14 +527,28 @@ const runPlatformSyncCycle = async (): Promise<void> => {
   }
 };
 
+const runHomeBaseCycle = async (): Promise<void> => {
+  if (shuttingDown || !config.HOME_BASE_SYNC_ENABLED) return;
+  try {
+    const result = await runHomeBaseSyncCycle({ pool, config, logger });
+    if (result.attempted > 0) logger.info({ result }, 'HomeBase sync cycle completed');
+  } catch (error) {
+    logger.error({ error }, 'HomeBase sync cycle failed');
+  } finally {
+    if (!shuttingDown) {
+      setTimeout(() => void runHomeBaseCycle(), config.HOME_BASE_SYNC_INTERVAL_MS);
+    }
+  }
+};
+
 const runPromotionSyncCycle = async (): Promise<void> => {
-  if (shuttingDown || !promotionSource || !profilePhotoStore) return;
+  if (shuttingDown || !promotionSources || !profilePhotoStore) return;
   try {
     const result = await runPromotionHomeSyncCycle({
       pool,
       config,
       logger,
-      source: promotionSource,
+      source: promotionSources,
       store: profilePhotoStore,
     });
     if (result.attempted > 0) logger.info({ result }, 'promotion Home sync cycle completed');
@@ -563,6 +605,7 @@ if (telemetry) void runOperationalMetricsCycle();
 void runVivaSyncCycle();
 void runCommunitySyncCycle();
 void runPlatformSyncCycle();
+void runHomeBaseCycle();
 void runPromotionSyncCycle();
 void runLegacyGamesRosterSync();
 void runWebPushCycle();

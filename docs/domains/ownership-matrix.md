@@ -44,3 +44,8 @@ source photo while `VIVA_PRIMARY`; PadlHub worker normalizes it to WebP, stores 
 and projects only a signed PadlHub delivery URL. Provider URL and validators remain in integration
 storage, and the local media mapping changes in the same transaction as the Home profile outbox
 component.
+
+Trainer avatars follow the same ownership rule. `catalog.trainers` is a Viva-primary local
+projection, while provider identity, source URL and PadlHub object key remain in
+`integration.trainer_avatar_sync`. The local WebP is a derived availability cache, not an
+independent coach write owner; all clients continue to receive only PadlHub media routes.

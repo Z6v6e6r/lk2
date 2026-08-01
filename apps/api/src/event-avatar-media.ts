@@ -1,9 +1,23 @@
 import { createHash } from 'node:crypto';
 
+import type { TrainerAvatarRepository } from '@phub/database';
 import sharp from 'sharp';
 
+import type { TrainerAvatarMediaStore } from './trainer-avatar-media-store.js';
+
+export interface TrainerAvatarIdentity {
+  readonly provider: 'VIVA';
+  readonly providerTrainerId: string;
+  readonly displayName: string;
+}
+
 export interface EventAvatarMedia {
-  read(input: { readonly cacheKey: string; readonly sourceUrl: string }): Promise<{
+  read(input: {
+    readonly cacheKey: string;
+    readonly sourceUrl?: string;
+    readonly tenantId?: string;
+    readonly trainer?: TrainerAvatarIdentity;
+  }): Promise<{
     readonly body: Buffer;
     readonly etag: string;
   }>;
@@ -96,10 +110,13 @@ export class EventAvatarMediaProxy implements EventAvatarMedia {
 
   public async read(input: {
     readonly cacheKey: string;
-    readonly sourceUrl: string;
+    readonly sourceUrl?: string;
+    readonly tenantId?: string;
+    readonly trainer?: TrainerAvatarIdentity;
   }): Promise<{ readonly body: Buffer; readonly etag: string }> {
     const startedAt = Date.now();
     const now = this.options.now?.() ?? Date.now();
+    if (!input.sourceUrl) throw new Error('EVENT_AVATAR_SOURCE_NOT_FOUND');
     const url = validatedSourceUrl(input.sourceUrl, this.options.allowedHosts);
     const fingerprint = sourceFingerprint(url);
     const cached = this.cache.get(input.cacheKey);
@@ -127,7 +144,7 @@ export class EventAvatarMediaProxy implements EventAvatarMedia {
           signal: AbortSignal.timeout(this.options.timeoutMs),
         });
         if (!response.ok) {
-          const error = new Error('EVENT_AVATAR_SOURCE_UNAVAILABLE');
+          const error = new Error(`EVENT_AVATAR_SOURCE_HTTP_${response.status}`);
           if (!responseMayBeRetried(response.status)) throw error;
           lastError = error;
           continue;
@@ -173,20 +190,25 @@ export class EventAvatarMediaProxy implements EventAvatarMedia {
         lastError = error;
         if (
           error instanceof Error &&
-          [
+          ([
             'EVENT_AVATAR_SOURCE_NOT_ALLOWED',
             'EVENT_AVATAR_CONTENT_TYPE_INVALID',
             'EVENT_AVATAR_RESPONSE_TOO_LARGE',
-          ].includes(error.message)
+          ].includes(error.message) ||
+            /^EVENT_AVATAR_SOURCE_HTTP_4\d\d$/.test(error.message))
         ) {
           break;
         }
       }
     }
 
-    this.consecutiveFailures += 1;
-    if (this.consecutiveFailures >= (this.options.circuitFailureThreshold ?? 3)) {
-      this.circuitOpenedAt = now;
+    const sourceSpecificFailure =
+      lastError instanceof Error && /^EVENT_AVATAR_SOURCE_HTTP_4\d\d$/.test(lastError.message);
+    if (!sourceSpecificFailure) {
+      this.consecutiveFailures += 1;
+      if (this.consecutiveFailures >= (this.options.circuitFailureThreshold ?? 3)) {
+        this.circuitOpenedAt = now;
+      }
     }
     this.emit({
       operation: 'event_avatar_media',
@@ -194,5 +216,102 @@ export class EventAvatarMediaProxy implements EventAvatarMedia {
       durationMs: Date.now() - startedAt,
     });
     throw lastError instanceof Error ? lastError : new Error('EVENT_AVATAR_SOURCE_UNAVAILABLE');
+  }
+}
+
+export class PersistentTrainerAvatarMedia implements EventAvatarMedia {
+  public constructor(
+    private readonly options: {
+      readonly remote: EventAvatarMedia;
+      readonly repository: TrainerAvatarRepository;
+      readonly store: TrainerAvatarMediaStore;
+      readonly maxBytes: number;
+      readonly onPersistenceError?: (error: unknown) => void;
+    },
+  ) {}
+
+  private report(error: unknown): void {
+    try {
+      this.options.onPersistenceError?.(error);
+    } catch {
+      // Diagnostics must never change media delivery.
+    }
+  }
+
+  public async read(input: {
+    readonly cacheKey: string;
+    readonly sourceUrl?: string;
+    readonly tenantId?: string;
+    readonly trainer?: TrainerAvatarIdentity;
+  }): Promise<{ readonly body: Buffer; readonly etag: string }> {
+    if (!input.tenantId || !input.trainer) return this.options.remote.read(input);
+
+    const existing = await this.options.repository.getByProviderIdentity(
+      input.tenantId,
+      input.trainer.provider,
+      input.trainer.providerTrainerId,
+    );
+    let local: { readonly body: Buffer; readonly etag: string } | undefined;
+    if (existing?.objectKey) {
+      try {
+        const body = await this.options.store.read(existing.objectKey, this.options.maxBytes);
+        local = {
+          body,
+          etag: `"${createHash('sha256').update(body).digest('base64url')}"`,
+        };
+        if (!input.sourceUrl || input.sourceUrl === existing.sourceUrl) return local;
+      } catch (error) {
+        this.report(error);
+      }
+    }
+
+    const profile =
+      existing ??
+      (await this.options.repository.save({
+        tenantId: input.tenantId,
+        provider: input.trainer.provider,
+        providerTrainerId: input.trainer.providerTrainerId,
+        displayName: input.trainer.displayName,
+        ...(input.sourceUrl ? { sourceUrl: input.sourceUrl } : {}),
+      }));
+    const sourceUrl = input.sourceUrl ?? profile.sourceUrl;
+    if (!sourceUrl) throw new Error('EVENT_AVATAR_SOURCE_NOT_FOUND');
+
+    let remote: { readonly body: Buffer; readonly etag: string };
+    try {
+      remote = await this.options.remote.read({ ...input, sourceUrl });
+    } catch (error) {
+      await this.options.repository
+        .save({
+          tenantId: input.tenantId,
+          provider: input.trainer.provider,
+          providerTrainerId: input.trainer.providerTrainerId,
+          displayName: input.trainer.displayName,
+          sourceUrl,
+          lastErrorCode: error instanceof Error ? error.message.slice(0, 100) : 'UNKNOWN',
+        })
+        .catch((persistenceError) => this.report(persistenceError));
+      if (local) return local;
+      throw error;
+    }
+
+    const contentSha256 = createHash('sha256').update(remote.body).digest('hex');
+    const objectKey = `trainer-avatars/${input.tenantId}/${profile.trainerId}/${contentSha256}.webp`;
+    try {
+      await this.options.store.put({ key: objectKey, body: remote.body, sha256: contentSha256 });
+      await this.options.repository.save({
+        tenantId: input.tenantId,
+        provider: input.trainer.provider,
+        providerTrainerId: input.trainer.providerTrainerId,
+        displayName: input.trainer.displayName,
+        sourceUrl,
+        objectKey,
+        contentSha256,
+        syncedAt: new Date().toISOString(),
+      });
+    } catch (error) {
+      this.report(error);
+    }
+    return remote;
   }
 }

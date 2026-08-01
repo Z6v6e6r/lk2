@@ -35,6 +35,7 @@ describe('promotion media synchronization', () => {
       current: new Map(),
       fetchedAt: '2026-07-17T12:00:00.000Z',
       allowedHosts: ['padlhub.su'],
+      privateHttpHosts: [],
       maxBytes: 10 * 1_024 * 1_024,
       desktopMaxWidth: 1_600,
       desktopMaxHeight: 900,
@@ -71,5 +72,47 @@ describe('promotion media synchronization', () => {
       height: 480,
     });
     expect(mobileMetadata.exif).toBeUndefined();
+  });
+
+  it('accepts an explicitly allowlisted staging-only private HTTP source', async () => {
+    const source = await sharp({
+      create: { width: 800, height: 480, channels: 3, background: '#b9a1ff' },
+    })
+      .webp()
+      .toBuffer();
+    const store: ProfilePhotoObjectStore = {
+      put: vi.fn(() => Promise.resolve()),
+      createReadUrl: vi.fn((key) => Promise.resolve(`https://media.padlhub.test/${key}`)),
+      delete: vi.fn(() => Promise.resolve()),
+    };
+
+    await expect(
+      synchronizePromotionMedia({
+        store,
+        tenantId: '86afbe01-0318-4dd2-bc25-303b7bf0d430',
+        candidates: [
+          {
+            promotionId: '22222222-2222-4222-8222-222222222222',
+            sourceUrl: 'http://phab-showcase:3000/api/advertising/assets/asset-2',
+          },
+        ],
+        current: new Map(),
+        fetchedAt: '2026-07-30T12:00:00.000Z',
+        allowedHosts: ['padlhub.su'],
+        privateHttpHosts: ['phab-showcase'],
+        maxBytes: 10 * 1_024 * 1_024,
+        desktopMaxWidth: 1_600,
+        desktopMaxHeight: 900,
+        mobileWidth: 750,
+        mobileHeight: 480,
+        webpQuality: 80,
+        previousObjectRetentionSeconds: 4_000,
+        readUrlTtlSeconds: 3_600,
+        timeoutMs: 1_000,
+        fetchImplementation: vi
+          .fn()
+          .mockResolvedValue(new Response(source, { headers: { 'content-type': 'image/webp' } })),
+      }),
+    ).resolves.toHaveLength(1);
   });
 });

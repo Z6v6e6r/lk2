@@ -459,6 +459,14 @@ paths:
             minimum: 1
             maximum: 20
             default: 6
+        - name: cursor
+          in: query
+          required: false
+          description: Opaque cursor returned by the preceding recommendation page.
+          schema:
+            type: string
+            minLength: 16
+            maxLength: 512
       responses:
         '200':
           description: Ranked, explainable recommendations from current Games projections.
@@ -584,8 +592,9 @@ components:
           items:
             $ref: '#/components/schemas/BookingRecommendationItem'
         nextCursor:
-          type: 'null'
-          description: Reserved for the future materialized-feed pagination phase.
+          type: [string, 'null']
+          minLength: 16
+          maxLength: 512
     BookingRecommendationItem:
       oneOf:
         - $ref: '#/components/schemas/BookingRecommendationGameItem'
@@ -629,6 +638,7 @@ components:
         type: string
         enum:
           - LEVEL_MATCH
+          - FRIEND_PLAYING
           - FAVORITE_STATION
           - PLAYED_STATION
           - PREFERRED_TIME
@@ -647,6 +657,7 @@ components:
         - station
         - levelRange
         - capacity
+        - host
         - route
       properties:
         id:
@@ -671,6 +682,25 @@ components:
           maxLength: 80
         station:
           $ref: '#/components/schemas/GameStationView'
+        court:
+          oneOf:
+            - $ref: '#/components/schemas/GameCourtView'
+            - type: 'null'
+        category:
+          description: Optional PadlHub category for filtering training activities.
+          oneOf:
+            - type: object
+              additionalProperties: false
+              required: [id, name]
+              properties:
+                id:
+                  type: string
+                  format: uuid
+                name:
+                  type: string
+                  minLength: 1
+                  maxLength: 120
+            - type: 'null'
         levelRange:
           oneOf:
             - $ref: '#/components/schemas/GameLevelRange'
@@ -686,6 +716,24 @@ components:
             open:
               type: [integer, 'null']
               minimum: 0
+        host:
+          oneOf:
+            - type: object
+              additionalProperties: false
+              required: [displayName, avatarUrl, role]
+              properties:
+                displayName:
+                  type: string
+                  minLength: 1
+                  maxLength: 160
+                avatarUrl:
+                  type: [string, 'null']
+                  format: uri-reference
+                  description: PadlHub-owned media URL. Provider media URLs are never exposed.
+                role:
+                  type: string
+                  enum: [TRAINER, ORGANIZER]
+            - type: 'null'
         route:
           type: string
           pattern: '^/'

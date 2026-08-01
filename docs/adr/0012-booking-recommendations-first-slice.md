@@ -55,3 +55,12 @@ must not launch until its adapter contract, ID mapping, pagination and staging e
 - The profile level projection must persist the canonical `D` through `A` label used by Games.
 - Favorite station management is currently limited to operational station UUIDs observed in Games;
   the future catalog-station/location link remains a separate expand/migrate task.
+
+## 2026-07-30 amendment
+
+The same `LOCAL_ONLY` preference aggregate now also stores a friend-participation ranking switch
+and the Home V3 presentation (`CARDS` or `ROWS`). Presentation is a client concern: both variants
+use the same recommendation request, cursor and server result. When enabled, canonical Games that
+contain a PadlHub friend receive a deterministic ranking boost and the `FRIEND_PLAYING` reason;
+the boost never relaxes eligibility checks. A broad `ANY` 09:00–22:00 window is the initial
+preference, while eligible completed history may refine ordering within it.

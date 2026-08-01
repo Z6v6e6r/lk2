@@ -86,6 +86,21 @@ describe('GameCard lifecycle template', () => {
     expect(screen.getByText(/2.*300/)).toBeInTheDocument();
   });
 
+  it('places a Home recommendation supplement above the footer line for compact cards', () => {
+    render(
+      <GameCard
+        compact
+        footerSupplement={<span aria-label="Причина рекомендации">⌖</span>}
+        game={publicGame}
+        showCompactMetadata
+      />,
+    );
+
+    expect(
+      screen.getByLabelText('Причина рекомендации').closest('.game-card__footer'),
+    ).not.toBeNull();
+  });
+
   it('requests an authenticated profile lookup when a discovery avatar is pressed', () => {
     const onParticipantProfileRequest = vi.fn();
     render(
@@ -142,6 +157,56 @@ describe('GameCard lifecycle template', () => {
     expect(within(card).getByText('Селигерская · Корт №3')).toBeInTheDocument();
     expect(within(card).getByText('от D+ до C').closest('.game-card__level')).not.toBeNull();
     expect(card.querySelectorAll('.game-card__meta svg')).toHaveLength(3);
+  });
+
+  it('uses separate station, time and level rows in the Home V3 compact variant', () => {
+    render(
+      <GameCard
+        game={publicGame}
+        compact
+        showCompactMetadata
+        compactMetadataVariant="station-time"
+      />,
+    );
+
+    const card = screen.getByRole('article');
+    const stationRow = within(card).getByText('Селигерская').closest('.activity-card-metadata-row');
+    const timeRow = within(card).getByText('18:00–19:00').closest('.activity-card-metadata-row');
+    const levelRow = within(card).getByText('от D+ до C').closest('.game-card__level');
+    expect(stationRow).toBeInstanceOf(HTMLElement);
+    expect(timeRow).toBeInstanceOf(HTMLElement);
+    expect(levelRow).toBeInstanceOf(HTMLElement);
+    expect(stationRow).not.toBe(timeRow);
+    expect(within(card).queryByText('пн, 20 июля')).not.toBeInTheDocument();
+    expect(within(card).queryByText('Корт №3')).not.toBeInTheDocument();
+    expect([...card.querySelectorAll('.game-card__meta > *')]).toEqual([
+      stationRow,
+      timeRow,
+      levelRow,
+    ]);
+    expect(card.querySelectorAll('.game-card__meta svg')).toHaveLength(3);
+  });
+
+  it('uses the static mini-create control without the lifecycle status in Home V3', () => {
+    render(
+      <GameCard
+        game={publicGame}
+        compact
+        compactActionVariant="mini-create"
+        showCompactMetadata
+        compactMetadataVariant="station-time"
+      />,
+    );
+
+    const card = screen.getByRole('article');
+    const action = within(card).getByRole('link', { name: 'Вступить в игру' });
+    expect(action).toHaveClass('game-card__button--mini-create', 'game-card__button--static');
+    expect(action).toHaveTextContent('');
+    expect(action.querySelector('svg')).toHaveAttribute('viewBox', '0 0 88 72');
+    const participantAvatar = card.querySelector('[data-player-level-avatar]');
+    expect(participantAvatar).toHaveAttribute('data-player-level-ring-visible', 'false');
+    expect(participantAvatar?.querySelector('[data-player-level-ring]')).not.toBeInTheDocument();
+    expect(within(card).queryByText('Ищем игроков')).not.toBeInTheDocument();
   });
 
   it('keeps the lifecycle status when no primary action is available', () => {

@@ -12,6 +12,7 @@ import {
   type GameCardView,
   type GamePlayerLevel,
 } from '@phub/games';
+import type { PublicTournamentSummary } from '@phub/legacy-games-adapter';
 import type { VivaExerciseRecommendation } from '@phub/viva-adapter';
 
 import {
@@ -23,6 +24,7 @@ type CardReadRepository = Pick<GameRepository, 'listRecommendationCardProjection
 
 export const BOOKING_RECOMMENDATION_REASONS = [
   'LEVEL_MATCH',
+  'FRIEND_PLAYING',
   'FAVORITE_STATION',
   'PLAYED_STATION',
   'PREFERRED_TIME',
@@ -49,6 +51,14 @@ export interface BookingRecommendationActivity {
     readonly name: string;
     readonly shortAddress: string | null;
   };
+  readonly court?: {
+    readonly id: string;
+    readonly name: string;
+  } | null;
+  readonly category?: {
+    readonly id: string;
+    readonly name: string;
+  } | null;
   readonly levelRange: {
     readonly from: GamePlayerLevel;
     readonly to: GamePlayerLevel;
@@ -57,6 +67,11 @@ export interface BookingRecommendationActivity {
     readonly total: number | null;
     readonly open: number | null;
   };
+  readonly host: {
+    readonly displayName: string;
+    readonly avatarUrl: string | null;
+    readonly role: 'TRAINER' | 'ORGANIZER';
+  } | null;
   readonly route: string;
 }
 
@@ -75,7 +90,7 @@ export interface BookingRecommendationPage {
   readonly staleAt: string;
   readonly personalization: 'EXPLICIT' | 'LEARNED' | 'BASIC';
   readonly items: readonly BookingRecommendationItem[];
-  readonly nextCursor: null;
+  readonly nextCursor: string | null;
 }
 
 interface LocalSlot {
@@ -105,6 +120,94 @@ interface ScoredRecommendation {
   readonly id: string;
 }
 
+interface BookingRecommendationCursor {
+  readonly v: 1;
+  readonly version: string;
+  readonly offset: number;
+}
+
+const HASH_PATTERN = /^[0-9a-f]{64}$/;
+const RECOMMENDATION_FEED_CACHE_MAX_ENTRIES = 500;
+
+interface CachedBookingRecommendationFeed {
+  readonly version: string;
+  readonly generatedAt: string;
+  readonly staleAt: string;
+  readonly personalization: BookingRecommendationPage['personalization'];
+  readonly items: readonly BookingRecommendationItem[];
+}
+
+const recommendationFeedCache = new Map<string, CachedBookingRecommendationFeed>();
+
+function encodeCursor(cursor: BookingRecommendationCursor): string {
+  return Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url');
+}
+
+function decodeCursor(value: string): BookingRecommendationCursor {
+  try {
+    const parsed = JSON.parse(Buffer.from(value, 'base64url').toString('utf8')) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('shape');
+    const record = parsed as Record<string, unknown>;
+    if (
+      Object.keys(record).sort().join(',') !== 'offset,v,version' ||
+      record.v !== 1 ||
+      typeof record.version !== 'string' ||
+      !HASH_PATTERN.test(record.version) ||
+      typeof record.offset !== 'number' ||
+      !Number.isInteger(record.offset) ||
+      record.offset < 1 ||
+      record.offset > 10_000
+    ) {
+      throw new Error('fields');
+    }
+    return record as unknown as BookingRecommendationCursor;
+  } catch {
+    throw new Error('BOOKING_RECOMMENDATION_CURSOR_INVALID');
+  }
+}
+
+function recommendationFeedCacheKey(tenantId: string, userId: string, version: string): string {
+  return `${tenantId}:${userId}:${version}`;
+}
+
+function cacheRecommendationFeed(
+  tenantId: string,
+  userId: string,
+  feed: CachedBookingRecommendationFeed,
+): void {
+  const now = Date.parse(feed.generatedAt);
+  for (const [key, cached] of recommendationFeedCache) {
+    if (Date.parse(cached.staleAt) < now) recommendationFeedCache.delete(key);
+  }
+  while (recommendationFeedCache.size >= RECOMMENDATION_FEED_CACHE_MAX_ENTRIES) {
+    const oldestKey = recommendationFeedCache.keys().next().value;
+    if (!oldestKey) break;
+    recommendationFeedCache.delete(oldestKey);
+  }
+  recommendationFeedCache.set(recommendationFeedCacheKey(tenantId, userId, feed.version), feed);
+}
+
+function pageFromFeed(
+  feed: CachedBookingRecommendationFeed,
+  offset: number,
+  limit: number,
+): BookingRecommendationPage {
+  if (offset > feed.items.length) throw new Error('BOOKING_RECOMMENDATION_CURSOR_INVALID');
+  const items = feed.items.slice(offset, offset + limit);
+  const nextOffset = offset + items.length;
+  return {
+    version: feed.version,
+    generatedAt: feed.generatedAt,
+    staleAt: feed.staleAt,
+    personalization: feed.personalization,
+    items,
+    nextCursor:
+      nextOffset < feed.items.length
+        ? encodeCursor({ v: 1, version: feed.version, offset: nextOffset })
+        : null,
+  };
+}
+
 function compareRecommendations(left: ScoredRecommendation, right: ScoredRecommendation): number {
   return (
     right.score - left.score ||
@@ -122,6 +225,12 @@ function compareRecommendationSchedule(
 
 function recommendationIdentity(recommendation: ScoredRecommendation): string {
   return `${recommendation.item.kind}:${recommendation.id}`;
+}
+
+function recommendationItemIdentity(recommendation: BookingRecommendationItem): string {
+  return recommendation.kind === 'GAME'
+    ? `GAME:${recommendation.game.id}`
+    : `${recommendation.kind}:${recommendation.activity.id}`;
 }
 
 function selectDiverseRecommendations(
@@ -150,6 +259,26 @@ function selectDiverseRecommendations(
     selectedIds.add(identity);
   }
   return selected.sort(compareRecommendationSchedule).map(({ item }) => item);
+}
+
+function buildPaginatedRecommendationFeed(
+  recommendations: readonly ScoredRecommendation[],
+  firstPageSize: number,
+): readonly BookingRecommendationItem[] {
+  const feed: BookingRecommendationItem[] = [];
+  let remaining = [...recommendations];
+  let batchSize = firstPageSize;
+  while (remaining.length > 0) {
+    const batch = selectDiverseRecommendations(remaining, batchSize);
+    if (batch.length === 0) break;
+    feed.push(...batch);
+    const selected = new Set(batch.map(recommendationItemIdentity));
+    remaining = remaining.filter(
+      (recommendation) => !selected.has(recommendationIdentity(recommendation)),
+    );
+    batchSize = 12;
+  }
+  return feed;
 }
 
 const WEEKDAY: Readonly<Record<string, BookingPreferenceWeekday>> = {
@@ -275,7 +404,7 @@ function explicitTimeMatch(event: RankableEvent, preferences: BookingPreferences
   const slot = localSlot(event.startsAt, event.timezone);
   return preferences.preferredTimeWindows.some(
     (window) =>
-      window.weekday === slot.weekday &&
+      (window.weekday === 'ANY' || window.weekday === slot.weekday) &&
       slot.minuteOfDay >= minutes(window.startsAt) &&
       slot.minuteOfDay < minutes(window.endsAt),
   );
@@ -287,10 +416,12 @@ function scoreEvent(input: {
   readonly favoriteStations: ReadonlySet<string>;
   readonly preferences: BookingPreferences;
   readonly playerLevel: GamePlayerLevel | null;
+  readonly friendMatch: boolean;
 }): { readonly reasons: readonly BookingRecommendationReason[]; readonly score: number } {
   const reasons: BookingRecommendationReason[] = [];
   const level = levelScore(input.event, input.playerLevel);
   if (input.playerLevel && input.event.levelRange) reasons.push('LEVEL_MATCH');
+  if (input.preferences.recommendFriends && input.friendMatch) reasons.push('FRIEND_PLAYING');
 
   const stationHistory = Math.max(
     normalizedAffinity(input.affinity.stations, input.event.station.id),
@@ -309,10 +440,13 @@ function scoreEvent(input: {
   const preferredTime = explicitTimeMatch(input.event, input.preferences);
   const slot = localSlot(input.event.startsAt, input.event.timezone);
   const timeHistory = normalizedAffinity(input.affinity.times, slot.timeBucket);
+  const hasTimeHistory = input.preferences.useHistory && input.affinity.times.size > 0;
   const time =
     input.preferences.preferredTimeWindows.length > 0
       ? preferredTime
-        ? 1
+        ? hasTimeHistory
+          ? 0.75 + timeHistory * 0.25
+          : 1
         : Math.max(0.15, timeHistory * 0.7)
       : timeHistory > 0
         ? timeHistory
@@ -321,14 +455,21 @@ function scoreEvent(input: {
   else if (timeHistory >= 0.5) reasons.push('USUAL_TIME');
   if (reasons.length === 0) reasons.push('AVAILABLE_SOON');
 
-  return { reasons, score: level * 0.45 + station * 0.3 + time * 0.25 };
+  const friendBoost = input.preferences.recommendFriends && input.friendMatch ? 0.2 : 0;
+  return { reasons, score: level * 0.45 + station * 0.3 + time * 0.25 + friendBoost };
 }
 
 function personalizationMode(
   preferences: BookingPreferences,
   history: readonly GameCardView[],
 ): BookingRecommendationPage['personalization'] {
-  if (preferences.favoriteStationIds.length > 0 || preferences.preferredTimeWindows.length > 0) {
+  const hasNonDefaultTimeWindow =
+    preferences.preferredTimeWindows.length > 0 &&
+    (preferences.preferredTimeWindows.length !== 1 ||
+      preferences.preferredTimeWindows[0]?.weekday !== 'ANY' ||
+      preferences.preferredTimeWindows[0]?.startsAt !== '09:00' ||
+      preferences.preferredTimeWindows[0]?.endsAt !== '22:00');
+  if (preferences.favoriteStationIds.length > 0 || hasNonDefaultTimeWindow) {
     return 'EXPLICIT';
   }
   return preferences.useHistory && history.length >= 3 ? 'LEARNED' : 'BASIC';
@@ -339,6 +480,7 @@ function rankGames(input: {
   readonly history: readonly GameCardView[];
   readonly preferences: BookingPreferences;
   readonly playerLevel: GamePlayerLevel | null;
+  readonly friendUserIds: ReadonlySet<string>;
   readonly now: string;
 }): readonly ScoredRecommendation[] {
   const usefulHistory = input.preferences.useHistory
@@ -361,6 +503,9 @@ function rankGames(input: {
         favoriteStations,
         preferences: input.preferences,
         playerLevel: input.playerLevel,
+        friendMatch: game.participants.some((participant) =>
+          input.friendUserIds.has(participant.userId),
+        ),
       });
       return {
         item: { kind: 'GAME' as const, game, reasons: ranked.reasons },
@@ -371,9 +516,10 @@ function rankGames(input: {
     });
 }
 
-function activityFromSource(
+function trainingActivityFromSource(
   activity: VivaExerciseRecommendation,
 ): BookingRecommendationActivity | undefined {
+  if (activity.kind !== 'TRAINING') return undefined;
   const from = activity.levelRange?.from;
   const to = activity.levelRange?.to;
   if (
@@ -388,8 +534,53 @@ function activityFromSource(
   };
 }
 
+function stableTournamentStationId(venue: string): string {
+  const bytes = Buffer.from(
+    createHash('sha256').update(`phub-public-tournament-station-v1:${venue}`).digest('hex'),
+    'hex',
+  ).subarray(0, 16);
+  bytes[6] = ((bytes[6] ?? 0) & 0x0f) | 0x40;
+  bytes[8] = ((bytes[8] ?? 0) & 0x3f) | 0x80;
+  const hex = bytes.toString('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+function tournamentActivityFromSource(
+  tournament: PublicTournamentSummary,
+): BookingRecommendationActivity {
+  const host = tournament.organizer
+    ? { ...tournament.organizer, role: 'ORGANIZER' as const }
+    : tournament.trainerName
+      ? {
+          displayName: tournament.trainerName,
+          avatarUrl: null,
+          role: 'ORGANIZER' as const,
+        }
+      : null;
+  return {
+    id: tournament.id,
+    kind: 'TOURNAMENT',
+    title: tournament.title,
+    startsAt: tournament.startsAt,
+    endsAt: tournament.endsAt,
+    timezone: 'Europe/Moscow',
+    station: {
+      id: stableTournamentStationId(tournament.venue),
+      name: tournament.venue,
+      shortAddress: null,
+    },
+    levelRange: tournament.levelRange,
+    capacity: {
+      total: tournament.capacity.total,
+      open: tournament.capacity.open,
+    },
+    host,
+    route: tournament.route,
+  };
+}
+
 function rankActivities(input: {
-  readonly activities: readonly VivaExerciseRecommendation[];
+  readonly activities: readonly BookingRecommendationActivity[];
   readonly history: readonly GameCardView[];
   readonly preferences: BookingPreferences;
   readonly playerLevel: GamePlayerLevel | null;
@@ -400,10 +591,8 @@ function rankActivities(input: {
     : [];
   const affinity = affinityMaps(usefulHistory, input.now);
   const favoriteStations = new Set(input.preferences.favoriteStationIds);
-  return input.activities.flatMap((sourceActivity) => {
-    const activity = activityFromSource(sourceActivity);
+  return input.activities.flatMap((activity) => {
     if (
-      !activity ||
       Date.parse(activity.startsAt) < Date.parse(input.now) ||
       activity.capacity.open === 0 ||
       !fitsLevel(activity, input.playerLevel)
@@ -416,6 +605,7 @@ function rankActivities(input: {
       favoriteStations,
       preferences: input.preferences,
       playerLevel: input.playerLevel,
+      friendMatch: false,
     });
     return [
       {
@@ -435,10 +625,22 @@ export async function listBookingRecommendations(input: {
   readonly userId: string;
   readonly preferences: BookingPreferences;
   readonly playerLevel: GamePlayerLevel | null;
+  readonly friendUserIds?: readonly string[];
   readonly activities?: readonly VivaExerciseRecommendation[];
+  readonly tournaments?: readonly PublicTournamentSummary[];
   readonly now: string;
   readonly limit: number;
+  readonly cursor?: string;
 }): Promise<BookingRecommendationPage> {
+  const cursor = input.cursor ? decodeCursor(input.cursor) : undefined;
+  if (cursor) {
+    const cachedFeed = recommendationFeedCache.get(
+      recommendationFeedCacheKey(input.tenantId, input.userId, cursor.version),
+    );
+    if (cachedFeed && Date.parse(cachedFeed.staleAt) >= Date.parse(input.now)) {
+      return pageFromFeed(cachedFeed, cursor.offset, input.limit);
+    }
+  }
   const projectionInputs = await input.repository.listRecommendationCardProjections({
     tenantId: input.tenantId,
     viewerUserId: input.userId,
@@ -473,17 +675,33 @@ export async function listBookingRecommendations(input: {
       },
     ),
   );
-  const rankedGames = rankGames({ ...input, candidates, history });
+  const rankedGames = rankGames({
+    ...input,
+    candidates,
+    history,
+    friendUserIds: new Set(input.friendUserIds ?? []),
+  });
+  const activities = [
+    ...(input.activities ?? []).flatMap((activity) => {
+      const normalized = trainingActivityFromSource(activity);
+      return normalized ? [normalized] : [];
+    }),
+    ...(input.tournaments ?? []).map(tournamentActivityFromSource),
+  ];
   const rankedActivities = rankActivities({
     ...input,
-    activities: input.activities ?? [],
+    activities,
     history,
   });
-  const items = selectDiverseRecommendations([...rankedGames, ...rankedActivities], input.limit);
+  const rankedRecommendations = [...rankedGames, ...rankedActivities];
+  const feedItems = buildPaginatedRecommendationFeed(rankedRecommendations, input.limit);
   const version = createHash('sha256')
     .update(
       JSON.stringify({
         preferenceVersion: input.preferences.version,
+        friendUserIds: input.preferences.recommendFriends
+          ? [...(input.friendUserIds ?? [])].sort()
+          : [],
         playerLevel: input.playerLevel,
         candidates: projectionInputs.candidates.map((item: StoredGameCardProjection) => [
           item.gameId,
@@ -498,11 +716,22 @@ export async function listBookingRecommendations(input: {
           item.startsAt,
           item.capacity.open,
         ]),
+        tournaments: (input.tournaments ?? []).map((item) => [
+          item.id,
+          item.startsAt,
+          item.capacity.open,
+        ]),
+        feed: feedItems.map((item) =>
+          item.kind === 'GAME' ? ['GAME', item.game.id] : [item.kind, item.activity.id],
+        ),
       }),
     )
     .digest('hex');
+  if (cursor && cursor.version !== version) {
+    throw new Error('BOOKING_RECOMMENDATION_CURSOR_INVALID');
+  }
   const generatedAt = new Date(input.now).toISOString();
-  return {
+  const feed: CachedBookingRecommendationFeed = {
     version,
     generatedAt,
     staleAt: new Date(Date.parse(generatedAt) + 5 * 60 * 1_000).toISOString(),
@@ -510,7 +739,8 @@ export async function listBookingRecommendations(input: {
       input.preferences,
       completedHistory({ history, now: input.now }),
     ),
-    items,
-    nextCursor: null,
+    items: feedItems,
   };
+  cacheRecommendationFeed(input.tenantId, input.userId, feed);
+  return pageFromFeed(feed, cursor?.offset ?? 0, input.limit);
 }

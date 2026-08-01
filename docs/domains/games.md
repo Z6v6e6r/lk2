@@ -133,6 +133,13 @@ the locked aggregate revision. Public discovery reads only `SCHEDULED`/`PUBLIC` 
 the `(starts_at, game_id)` keyset. Scheduled work is claimed with `FOR UPDATE SKIP LOCKED`, a bounded
 20-attempt policy and worker ownership checks.
 
+The worker claims lifecycle commands separately from unfinished provisioning, payment and
+integration commands. It claims one lifecycle command at a time per tenant so an overdue start is
+committed before the corresponding finish. Command completion, aggregate revision, audit metadata
+and the lifecycle outbox event share one transaction. A claim abandoned for 60 seconds becomes
+eligible for retry; a changed canonical deadline or aggregate revision refreshes the same durable
+command instead of applying stale timing.
+
 ## 4. State model
 
 One overloaded status is forbidden. The state is represented by independent axes.

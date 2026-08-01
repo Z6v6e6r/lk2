@@ -10,6 +10,14 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3
 export interface CoachGameSummarySource {
   readonly readDate: (date: string) => Promise<readonly PublicCoachGameSummary[]>;
   readonly readAvatarSource?: (summaryId: string) => string | undefined;
+  readonly readTrainerAvatarSource?: (summaryId: string) =>
+    | {
+        readonly provider: 'VIVA';
+        readonly providerTrainerId: string;
+        readonly displayName: string;
+        readonly sourceUrl?: string;
+      }
+    | undefined;
 }
 
 function dateValue(value: unknown): string | undefined {
@@ -94,7 +102,11 @@ export function registerCoachGameSummaryRoutes(
           )
           .slice(0, limit)
           .map((item) => {
-            if (!item.trainer || !source.readAvatarSource?.(item.id)) return item;
+            if (
+              !item.trainer ||
+              (!source.readTrainerAvatarSource?.(item.id) && !source.readAvatarSource?.(item.id))
+            )
+              return item;
             const tenantKey = (request.params as { tenantKey: string }).tenantKey;
             return {
               ...item,
@@ -129,14 +141,17 @@ export function registerCoachGameSummaryRoutes(
       if (!summaryId || !UUID_PATTERN.test(summaryId)) {
         return sendApiError(request, reply, 404, 'EVENT_AVATAR_NOT_FOUND', 'Аватар не найден.');
       }
-      const sourceUrl = options.source?.readAvatarSource?.(summaryId);
-      if (!sourceUrl || !options.avatarMedia) {
+      const trainer = options.source?.readTrainerAvatarSource?.(summaryId);
+      const sourceUrl = trainer?.sourceUrl ?? options.source?.readAvatarSource?.(summaryId);
+      if ((!sourceUrl && !trainer) || !options.avatarMedia) {
         return sendApiError(request, reply, 404, 'EVENT_AVATAR_NOT_FOUND', 'Аватар не найден.');
       }
       try {
         const media = await options.avatarMedia.read({
           cacheKey: `coach-game:${summaryId}`,
-          sourceUrl,
+          ...(sourceUrl ? { sourceUrl } : {}),
+          ...(request.tenantId ? { tenantId: request.tenantId } : {}),
+          ...(trainer ? { trainer } : {}),
         });
         reply.header('Cache-Control', 'public, max-age=300, stale-while-revalidate=600');
         reply.header('Cross-Origin-Resource-Policy', 'cross-origin');
@@ -144,7 +159,7 @@ export function registerCoachGameSummaryRoutes(
         reply.type('image/webp');
         return reply.send(media.body);
       } catch (error) {
-        request.log.error({ error, summaryId }, 'coach trainer avatar delivery failed');
+        request.log.error({ err: error, summaryId }, 'coach trainer avatar delivery failed');
         return sendApiError(
           request,
           reply,

@@ -14,6 +14,7 @@ export interface ParticipantAvatarStackProps {
   readonly capacity?: number;
   readonly ariaLabel?: string;
   readonly participantActionLabel?: string;
+  readonly showLevelRing?: boolean;
   readonly onOpenSlotClick?: (slotIndex: number) => void;
   readonly onParticipantClick?: (
     participant: ParticipantAvatarStackItem,
@@ -72,6 +73,7 @@ export function ParticipantAvatarStack({
   capacity = 4,
   ariaLabel = 'Участники',
   participantActionLabel = 'Управлять',
+  showLevelRing = true,
   onOpenSlotClick,
   onParticipantClick,
 }: ParticipantAvatarStackProps): React.JSX.Element {
@@ -92,6 +94,7 @@ export function ParticipantAvatarStack({
             size={48}
             src={participant.avatarUrl ?? null}
             fallbackSeed={participant.key}
+            showLevelRing={showLevelRing}
             stackIndex={index}
             variant="participant"
           />

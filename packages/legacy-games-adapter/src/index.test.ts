@@ -531,6 +531,7 @@ describe('legacy games adapter', () => {
           endsAt: '2026-07-26T21:00:00+03:00',
           locationName: 'Селигерская · Корт №1',
           trainerName: 'Кирилл Твердохлеб',
+          trainerId: 'viva-trainer-42',
           trainerAvatarUrl: 'https://external.example/private-trainer-photo-id',
           accessLevels: ['2.25', '3.375'],
           tournamentType: 'Мексикано',
@@ -565,5 +566,67 @@ describe('legacy games adapter', () => {
     expect(adapter.readAvatarSource(first?.[0]?.id ?? '')).toBe(
       'https://external.example/private-trainer-photo-id',
     );
+    expect(adapter.readTrainerAvatarSource(first?.[0]?.id ?? '')).toEqual({
+      provider: 'VIVA',
+      providerTrainerId: 'viva-trainer-42',
+      displayName: 'Кирилл Твердохлеб',
+      sourceUrl: 'https://external.example/private-trainer-photo-id',
+    });
+  });
+
+  it('reads one safe tournament roster and removes cancelled and duplicate bookings', async () => {
+    const fetchImplementation = vi.fn((input: string | URL | Request) => {
+      const url = new URL(input instanceof Request ? input.url : input.toString());
+      if (url.pathname === '/api/tournaments') {
+        return Promise.resolve(
+          Response.json([
+            {
+              id: '4647f06f-c846-45f3-b89b-662d0b58671b',
+              name: 'Мексикано',
+              rawStatus: 'REGISTRATION',
+              isPublic: true,
+              startsAt: '2026-08-01T14:00:00+03:00',
+              endsAt: '2026-08-01T16:00:00+03:00',
+              maxPlayers: 12,
+              participantsCount: 2,
+            },
+          ]),
+        );
+      }
+      return Promise.resolve(
+        Response.json([
+          {
+            id: 'booking-1',
+            client: {
+              id: 'viva-client-1',
+              firstName: 'Анна',
+              lastName: 'Иванова',
+              phone: '79990000001',
+            },
+            rating: '2.5',
+          },
+          {
+            id: 'booking-2',
+            client: { id: 'viva-client-1', firstName: 'Анна', lastName: 'Иванова' },
+            rating: '2.5',
+          },
+          {
+            id: 'booking-3',
+            isCancelled: true,
+            client: { id: 'viva-client-2', firstName: 'Пётр' },
+          },
+        ]),
+      );
+    });
+    const adapter = new LegacyTournamentSummaryAdapter({ fetchImplementation });
+    const [summary] = await adapter.readDate('2026-08-01');
+    const roster = await adapter.readParticipants(summary?.id ?? '');
+
+    expect(roster.items).toEqual([
+      expect.objectContaining({ displayName: 'Анна Иванова', level: 'D+' }),
+    ]);
+    expect(roster.items[0]?.id).toMatch(/^[0-9a-f-]{36}$/);
+    expect(JSON.stringify(roster)).not.toMatch(/viva-client|booking-|79990000001/);
+    expect(fetchImplementation).toHaveBeenCalledTimes(2);
   });
 });

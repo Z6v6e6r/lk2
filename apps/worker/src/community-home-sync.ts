@@ -7,6 +7,7 @@ import {
   type CommunityDirectoryRepository,
 } from '@phub/communities';
 import type { AppConfig } from '@phub/config';
+import { HOME_COMMUNITY_SUMMARY_LIMIT } from '@phub/home-projection';
 import type { Logger } from 'pino';
 import type { Pool } from 'pg';
 
@@ -138,7 +139,7 @@ export async function runCommunityHomeSyncCycle(input: {
             'community logo synchronization retained the local logo',
           );
         }
-        const communities = directoryItems.slice(0, 5).map((item) =>
+        const communities = directoryItems.slice(0, HOME_COMMUNITY_SUMMARY_LIMIT).map((item) =>
           communitySummarySchema.parse({
             id: item.id,
             title: item.title,

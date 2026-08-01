@@ -40,16 +40,25 @@ export interface PromotionMediaSyncResult {
   readonly outcome: 'stored' | 'unchanged';
 }
 
-function allowedSourceUrl(value: string, allowedHosts: readonly string[]): URL {
-  const url = new URL(value);
-  const hostname = url.hostname.toLowerCase();
-  const allowed = allowedHosts.some((entry) => {
+function hostAllowed(hostname: string, allowedHosts: readonly string[]): boolean {
+  return allowedHosts.some((entry) => {
     const candidate = entry.trim().toLowerCase();
     return candidate.startsWith('.')
       ? hostname.endsWith(candidate) && hostname.length > candidate.length
       : hostname === candidate;
   });
-  if (url.protocol !== 'https:' || !allowed || url.username || url.password) {
+}
+
+function allowedSourceUrl(
+  value: string,
+  allowedHosts: readonly string[],
+  privateHttpHosts: readonly string[],
+): URL {
+  const url = new URL(value);
+  const hostname = url.hostname.toLowerCase();
+  const secureSource = url.protocol === 'https:' && hostAllowed(hostname, allowedHosts);
+  const privateHttpSource = url.protocol === 'http:' && hostAllowed(hostname, privateHttpHosts);
+  if ((!secureSource && !privateHttpSource) || url.username || url.password) {
     throw new Error('PROMOTION_MEDIA_SOURCE_NOT_ALLOWED');
   }
   return url;
@@ -82,11 +91,12 @@ async function readBoundedBody(response: Response, maxBytes: number): Promise<Bu
 async function fetchSource(input: {
   readonly sourceUrl: string;
   readonly allowedHosts: readonly string[];
+  readonly privateHttpHosts: readonly string[];
   readonly maxBytes: number;
   readonly timeoutMs: number;
   readonly fetchImplementation: typeof fetch;
 }): Promise<{ readonly body: Buffer; readonly etag?: string; readonly lastModified?: string }> {
-  let url = allowedSourceUrl(input.sourceUrl, input.allowedHosts);
+  let url = allowedSourceUrl(input.sourceUrl, input.allowedHosts, input.privateHttpHosts);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), input.timeoutMs);
   try {
@@ -100,7 +110,11 @@ async function fetchSource(input: {
       if (REDIRECT_STATUSES.has(response.status)) {
         const location = response.headers.get('location');
         if (!location || redirects === 2) throw new Error('PROMOTION_MEDIA_REDIRECT_INVALID');
-        url = allowedSourceUrl(new URL(location, url).toString(), input.allowedHosts);
+        url = allowedSourceUrl(
+          new URL(location, url).toString(),
+          input.allowedHosts,
+          input.privateHttpHosts,
+        );
         continue;
       }
       if (!response.ok) throw new Error(`PROMOTION_MEDIA_SOURCE_HTTP_${response.status}`);
@@ -160,6 +174,7 @@ async function synchronizeOne(input: {
   readonly current?: PromotionMediaSyncRecord;
   readonly fetchedAt: string;
   readonly allowedHosts: readonly string[];
+  readonly privateHttpHosts: readonly string[];
   readonly maxBytes: number;
   readonly desktopMaxWidth: number;
   readonly desktopMaxHeight: number;
@@ -190,6 +205,7 @@ async function synchronizeOne(input: {
   const source = await fetchSource({
     sourceUrl: input.candidate.sourceUrl,
     allowedHosts: input.allowedHosts,
+    privateHttpHosts: input.privateHttpHosts,
     maxBytes: input.maxBytes,
     timeoutMs: input.timeoutMs,
     fetchImplementation: input.fetchImplementation,
@@ -275,6 +291,7 @@ export async function synchronizePromotionMedia(input: {
   readonly current: ReadonlyMap<string, PromotionMediaSyncRecord>;
   readonly fetchedAt: string;
   readonly allowedHosts: readonly string[];
+  readonly privateHttpHosts: readonly string[];
   readonly maxBytes: number;
   readonly desktopMaxWidth: number;
   readonly desktopMaxHeight: number;

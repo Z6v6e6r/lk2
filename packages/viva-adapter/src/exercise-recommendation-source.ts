@@ -14,6 +14,14 @@ export interface VivaExerciseRecommendation {
     readonly name: string;
     readonly shortAddress: string | null;
   };
+  readonly court?: {
+    readonly id: string;
+    readonly name: string;
+  } | null;
+  readonly category?: {
+    readonly id: string;
+    readonly name: string;
+  } | null;
   readonly levelRange: {
     readonly from: string;
     readonly to: string;
@@ -22,7 +30,49 @@ export interface VivaExerciseRecommendation {
     readonly total: number | null;
     readonly open: number | null;
   };
+  readonly host: {
+    readonly displayName: string;
+    readonly avatarUrl: string | null;
+    readonly role: 'TRAINER' | 'ORGANIZER';
+  } | null;
   readonly route: string;
+}
+
+export interface VivaTrainerAvatarSource {
+  readonly provider: 'VIVA';
+  readonly providerTrainerId: string;
+  readonly displayName: string;
+  readonly sourceUrl?: string;
+}
+
+export const GROUP_TRAINING_CATALOG_TYPE_NAMES = [
+  'Групповая тренировка уровень С/С+',
+  'Групповая тренировка уровень D',
+  'Групповая тренировка уровень D+',
+  'Игра+Тренер. Уровень C',
+  'Игра+Тренер. Уровень D',
+  'Игра+Тренер. Уровень D+',
+  'Сплит D',
+  'Сплит D+',
+] as const;
+
+const GROUP_TRAINING_CATALOG_TYPE_KEYS = new Set(
+  GROUP_TRAINING_CATALOG_TYPE_NAMES.map((name) =>
+    name.normalize('NFKC').toLocaleLowerCase('ru-RU'),
+  ),
+);
+
+export function isGroupTrainingCatalogActivity(activity: VivaExerciseRecommendation): boolean {
+  const name = activity.category?.name;
+  return (
+    activity.kind === 'TRAINING' &&
+    Boolean(
+      name &&
+      GROUP_TRAINING_CATALOG_TYPE_KEYS.has(
+        name.trim().replace(/\s+/g, ' ').normalize('NFKC').toLocaleLowerCase('ru-RU'),
+      ),
+    )
+  );
 }
 
 export interface VivaExerciseRecommendationSourceOptions {
@@ -34,6 +84,8 @@ export interface VivaExerciseRecommendationSourceOptions {
   readonly retryBaseDelayMs?: number;
   readonly circuitFailureThreshold?: number;
   readonly circuitResetMs?: number;
+  readonly avatarSourceTtlMs?: number;
+  readonly maxAvatarSources?: number;
   readonly fetchImplementation?: typeof fetch;
   readonly sleep?: (milliseconds: number) => Promise<void>;
   readonly now?: () => number;
@@ -73,6 +125,105 @@ function namedElement(value: unknown): { readonly id?: string; readonly name?: s
   return {
     ...(id ? { id } : {}),
     ...(name ? { name } : {}),
+  };
+}
+
+function firstRecord(value: unknown): Record<string, unknown> | undefined {
+  return Array.isArray(value) ? recordValue(value[0]) : recordValue(value);
+}
+
+function personName(value: unknown): string | undefined {
+  const person = recordValue(value);
+  if (!person) return undefined;
+  const explicitName =
+    stringValue(person.displayName) ?? stringValue(person.fullName) ?? stringValue(person.name);
+  if (explicitName) return explicitName.slice(0, 160);
+  const composedName = [stringValue(person.firstName), stringValue(person.lastName)]
+    .filter(Boolean)
+    .join(' ');
+  return composedName ? composedName.slice(0, 160) : undefined;
+}
+
+function hostCandidates(
+  item: Record<string, unknown>,
+  kind: VivaExerciseRecommendationKind,
+): readonly (Record<string, unknown> | undefined)[] {
+  return kind === 'TRAINING'
+    ? [
+        firstRecord(item.trainers),
+        recordValue(item.trainer),
+        recordValue(item.coach),
+        recordValue(item.master),
+      ]
+    : [
+        recordValue(item.organizer),
+        firstRecord(item.organizers),
+        firstRecord(item.trainers),
+        recordValue(item.trainer),
+      ];
+}
+
+function exerciseHostRecord(
+  item: Record<string, unknown>,
+  kind: VivaExerciseRecommendationKind,
+): Record<string, unknown> | undefined {
+  return hostCandidates(item, kind).find((candidate) => personName(candidate) !== undefined);
+}
+
+function httpsUrl(value: unknown): string | undefined {
+  const candidate = stringValue(value);
+  if (!candidate || candidate.length > 2_048) return undefined;
+  try {
+    const url = new URL(candidate);
+    return url.protocol === 'https:' && !url.username && !url.password && !url.port
+      ? url.toString()
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function exerciseHost(
+  item: Record<string, unknown>,
+  kind: VivaExerciseRecommendationKind,
+): VivaExerciseRecommendation['host'] {
+  const displayName = personName(exerciseHostRecord(item, kind));
+  return displayName
+    ? {
+        displayName,
+        avatarUrl: null,
+        role: kind === 'TRAINING' ? 'TRAINER' : 'ORGANIZER',
+      }
+    : null;
+}
+
+function exerciseHostAvatarSource(
+  item: Record<string, unknown>,
+  kind: VivaExerciseRecommendationKind,
+): string | undefined {
+  const host = exerciseHostRecord(item, kind);
+  return (
+    httpsUrl(host?.photo) ??
+    httpsUrl(host?.photoUrl) ??
+    httpsUrl(host?.avatarUrl) ??
+    httpsUrl(recordValue(host?.photo)?.url)
+  );
+}
+
+function exerciseTrainerAvatarSource(
+  item: Record<string, unknown>,
+  kind: VivaExerciseRecommendationKind,
+): VivaTrainerAvatarSource | undefined {
+  const host = exerciseHostRecord(item, kind);
+  const providerTrainerId = stringValue(host?.id) ?? stringValue(host?.uuid);
+  const displayName = personName(host);
+  if (!providerTrainerId || !displayName) return undefined;
+  const sourceUrl = exerciseHostAvatarSource(item, kind);
+  return {
+    provider: 'VIVA',
+    providerTrainerId,
+    displayName,
+    ...(sourceUrl ? { sourceUrl } : {}),
   };
 }
 
@@ -128,6 +279,24 @@ function publicUuid(namespace: string, externalId: string): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
+function exerciseCategory(
+  type: ReturnType<typeof namedElement>,
+  direction: ReturnType<typeof namedElement>,
+): { readonly id: string; readonly name: string } | null {
+  const genericDirectionMarkers = new Set(['тренировка', 'тренировки', 'training', 'trainings']);
+  const preferred =
+    direction.name && !genericDirectionMarkers.has(normalizeMarker(direction.name))
+      ? direction
+      : type.name
+        ? type
+        : direction;
+  if (!preferred.name) return null;
+  return {
+    id: publicUuid('category', preferred.id ?? preferred.name),
+    name: preferred.name.slice(0, 120),
+  };
+}
+
 function levelLabel(value: number): string {
   if (value < 2) return 'D';
   if (value < 3) return 'D+';
@@ -152,6 +321,28 @@ function levelRange(value: unknown): VivaExerciseRecommendation['levelRange'] {
   };
 }
 
+const LEVEL_LABELS = ['D', 'D+', 'C', 'C+', 'B', 'B+', 'A'] as const;
+
+function trainingLevelRangeFromNames(
+  values: readonly unknown[],
+): VivaExerciseRecommendation['levelRange'] {
+  const levels = values.flatMap((value) => {
+    const name = stringValue(value)?.toUpperCase();
+    if (!name) return [];
+    return [...name.matchAll(/(?:^|[^A-ZА-Я0-9+])([DCBA](?:\+)?)(?=$|[^A-ZА-Я0-9+])/gu)]
+      .map((match) => match[1])
+      .filter((level): level is (typeof LEVEL_LABELS)[number] =>
+        LEVEL_LABELS.includes(level as (typeof LEVEL_LABELS)[number]),
+      );
+  });
+  if (levels.length === 0) return null;
+  const indexes = levels.map((level) => LEVEL_LABELS.indexOf(level));
+  return {
+    from: LEVEL_LABELS[Math.min(...indexes)]!,
+    to: LEVEL_LABELS[Math.max(...indexes)]!,
+  };
+}
+
 function exerciseArray(payload: unknown): readonly unknown[] {
   if (Array.isArray(payload)) return payload;
   const record = recordValue(payload);
@@ -168,6 +359,7 @@ function normalizeExercise(value: unknown): VivaExerciseRecommendation | undefin
   const type = namedElement(item.type);
   const direction = namedElement(item.direction);
   const studio = recordValue(item.studio);
+  const room = namedElement(item.room);
   const startsAtValue = stringValue(item.timeFrom) ?? stringValue(item.startsAt);
   if (!kind || !externalId || !startsAtValue || Number.isNaN(Date.parse(startsAtValue))) {
     return undefined;
@@ -182,9 +374,14 @@ function normalizeExercise(value: unknown): VivaExerciseRecommendation | undefin
   const stationExternalId =
     stringValue(studio?.id) ?? stringValue(studio?.uuid) ?? stringValue(studio?.name);
   const stationName = stringValue(studio?.name);
-  const title = type.name ?? direction.name;
+  const courtExternalId = room.id ?? room.name;
+  const category = kind === 'TRAINING' ? exerciseCategory(type, direction) : null;
+  const title = kind === 'TRAINING' ? (category?.name ?? type.name ?? direction.name) : type.name;
   if (!stationExternalId || !stationName || !title) return undefined;
-  const total = numericValue(item.maxClients) ?? numericValue(item.capacity);
+  const total =
+    numericValue(item.maxClientsCount) ??
+    numericValue(item.maxClients) ??
+    numericValue(item.capacity);
   const explicitOpen =
     numericValue(item.freePlaces) ??
     numericValue(item.availablePlaces) ??
@@ -213,13 +410,65 @@ function normalizeExercise(value: unknown): VivaExerciseRecommendation | undefin
       name: stationName.slice(0, 160),
       shortAddress: stringValue(studio?.address)?.slice(0, 240) ?? null,
     },
-    levelRange: levelRange(item.accessLevels ?? item.ratings),
+    court:
+      courtExternalId && room.name
+        ? {
+            id: publicUuid('court', `${stationExternalId}:${courtExternalId}`),
+            name: room.name.slice(0, 120),
+          }
+        : null,
+    category,
+    levelRange:
+      kind === 'TRAINING'
+        ? trainingLevelRangeFromNames([item.name, item.title, type.name, direction.name])
+        : levelRange(item.accessLevels ?? item.ratings),
     capacity: { total: safeTotal, open: safeOpen },
+    host: exerciseHost(item, kind),
     route:
       kind === 'TOURNAMENT'
         ? `/tournaments?event=${encodeURIComponent(id)}`
         : `/trainings?event=${encodeURIComponent(id)}`,
   };
+}
+
+/**
+ * Converts an end-user Viva schedule response into the provider-free shape
+ * consumed by PadlHub recommendation code. The function is intentionally
+ * transport-agnostic so a browser-assisted read can be normalized immediately
+ * at the API boundary without persisting the provider payload.
+ */
+export function normalizeVivaExerciseRecommendationPayload(
+  payload: unknown,
+  options: {
+    readonly onAvatarSource?: (activityId: string, sourceUrl: string) => void;
+    readonly onTrainerAvatarSource?: (activityId: string, source: VivaTrainerAvatarSource) => void;
+  } = {},
+): readonly VivaExerciseRecommendation[] {
+  return exerciseArray(payload)
+    .slice(0, 500)
+    .flatMap((item) => {
+      const normalized = normalizeExercise(item);
+      const sourceItem = recordValue(item);
+      const avatarSourceUrl =
+        normalized && sourceItem
+          ? exerciseHostAvatarSource(sourceItem, normalized.kind)
+          : undefined;
+      const trainerAvatarSource =
+        normalized && sourceItem
+          ? exerciseTrainerAvatarSource(sourceItem, normalized.kind)
+          : undefined;
+      if (normalized && avatarSourceUrl) {
+        options.onAvatarSource?.(normalized.id, avatarSourceUrl);
+      }
+      if (normalized && trainerAvatarSource) {
+        options.onTrainerAvatarSource?.(normalized.id, trainerAvatarSource);
+      }
+      return normalized ? [normalized] : [];
+    })
+    .sort(
+      (left, right) =>
+        left.startsAt.localeCompare(right.startsAt) || left.id.localeCompare(right.id),
+    );
 }
 
 class VivaExerciseSourceError extends Error {
@@ -235,6 +484,10 @@ export class VivaExerciseRecommendationSourceAdapter {
   private readonly fetchImplementation: typeof fetch;
   private readonly sleep: (milliseconds: number) => Promise<void>;
   private readonly now: () => number;
+  private readonly avatarSources = new Map<
+    string,
+    { readonly source: VivaTrainerAvatarSource; readonly fetchedAt: number }
+  >();
   private consecutiveFailures = 0;
   private circuitOpenedAt: number | undefined;
 
@@ -254,6 +507,47 @@ export class VivaExerciseRecommendationSourceAdapter {
     } catch {
       // Metrics must never change recommendation behavior.
     }
+  }
+
+  private rememberAvatarSource(activityId: string, sourceUrl: string, fetchedAt: number): void {
+    this.avatarSources.delete(activityId);
+    this.avatarSources.set(activityId, {
+      source: {
+        provider: 'VIVA',
+        providerTrainerId: `activity:${activityId}`,
+        displayName: 'Тренер',
+        sourceUrl,
+      },
+      fetchedAt,
+    });
+    while (this.avatarSources.size > (this.options.maxAvatarSources ?? 2_000)) {
+      const oldestId = this.avatarSources.keys().next().value;
+      if (!oldestId) break;
+      this.avatarSources.delete(oldestId);
+    }
+  }
+
+  public registerAvatarSource(activityId: string, sourceUrl: string): void {
+    const normalizedSourceUrl = httpsUrl(sourceUrl);
+    if (
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(activityId) ||
+      !normalizedSourceUrl
+    ) {
+      return;
+    }
+    this.rememberAvatarSource(activityId, normalizedSourceUrl, this.now());
+  }
+
+  public registerTrainerAvatarSource(activityId: string, source: VivaTrainerAvatarSource): void {
+    if (
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(activityId) ||
+      !source.providerTrainerId.trim() ||
+      !source.displayName.trim()
+    ) {
+      return;
+    }
+    this.avatarSources.delete(activityId);
+    this.avatarSources.set(activityId, { source, fetchedAt: this.now() });
   }
 
   public async readDate(input: {
@@ -306,16 +600,12 @@ export class VivaExerciseRecommendationSourceAdapter {
         const bytes = await response.arrayBuffer();
         if (bytes.byteLength > 5 * 1_024 * 1_024) throw new VivaExerciseSourceError(false);
         const payload = JSON.parse(new TextDecoder().decode(bytes)) as unknown;
-        const items = exerciseArray(payload)
-          .slice(0, 500)
-          .flatMap((item) => {
-            const normalized = normalizeExercise(item);
-            return normalized ? [normalized] : [];
-          })
-          .sort(
-            (left, right) =>
-              left.startsAt.localeCompare(right.startsAt) || left.id.localeCompare(right.id),
-          );
+        const items = normalizeVivaExerciseRecommendationPayload(payload, {
+          onAvatarSource: (activityId, sourceUrl) =>
+            this.rememberAvatarSource(activityId, sourceUrl, now),
+          onTrainerAvatarSource: (activityId, source) =>
+            this.registerTrainerAvatarSource(activityId, source),
+        });
         this.consecutiveFailures = 0;
         this.circuitOpenedAt = undefined;
         this.emit({ outcome: 'success', attempt, durationMs: this.now() - startedAt });
@@ -346,5 +636,29 @@ export class VivaExerciseRecommendationSourceAdapter {
       }
     }
     throw new Error('VIVA_EXERCISE_RECOMMENDATION_SOURCE_UNAVAILABLE');
+  }
+
+  /**
+   * Returns an integration-only host-photo source for an activity already loaded through readDate().
+   * Public routes proxy this URL and never serialize it into a browser DTO.
+   */
+  public readAvatarSource(activityId: string): string | undefined {
+    const value = this.avatarSources.get(activityId);
+    if (!value) return undefined;
+    if (this.now() - value.fetchedAt > (this.options.avatarSourceTtlMs ?? 15 * 60 * 1_000)) {
+      this.avatarSources.delete(activityId);
+      return undefined;
+    }
+    return value.source.sourceUrl;
+  }
+
+  public readTrainerAvatarSource(activityId: string): VivaTrainerAvatarSource | undefined {
+    const value = this.avatarSources.get(activityId);
+    if (!value) return undefined;
+    if (this.now() - value.fetchedAt > (this.options.avatarSourceTtlMs ?? 15 * 60 * 1_000)) {
+      this.avatarSources.delete(activityId);
+      return undefined;
+    }
+    return value.source;
   }
 }

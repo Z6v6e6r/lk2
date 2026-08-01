@@ -68,5 +68,11 @@ describe('VivaCoachGameSummaryAdapter', () => {
     expect(adapter.readAvatarSource(first?.[0]?.id ?? '')).toBe(
       'https://external.example/trainer-photo-id',
     );
+    expect(adapter.readTrainerAvatarSource(first?.[0]?.id ?? '')).toEqual({
+      provider: 'VIVA',
+      providerTrainerId: 'external-trainer-id',
+      displayName: 'Кирилл Боев',
+      sourceUrl: 'https://external.example/trainer-photo-id',
+    });
   });
 });

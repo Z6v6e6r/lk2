@@ -1,6 +1,9 @@
 const MAX_RESPONSE_BYTES = 256 * 1024;
 const MAX_PROMOTIONS = 20;
 
+export type LegacyPromotionPlacement =
+  'cabinet_home' | 'cabinet_home_top' | 'cabinet_for_me_strip' | 'cabinet_for_me_card';
+
 export type LegacyPromotionSourceErrorCode =
   | 'PROMOTION_LEGACY_CIRCUIT_OPEN'
   | 'PROMOTION_LEGACY_TIMEOUT'
@@ -17,12 +20,17 @@ export class LegacyPromotionSourceError extends Error {
 export interface LegacyPromotionSourceItem {
   readonly externalId: string;
   readonly title: string;
+  readonly badgeText?: string;
+  readonly footerText?: string;
   readonly href: string;
   readonly imageSourceUrl: string;
+  readonly squareImageSourceUrl?: string;
+  readonly horizontalImageSourceUrl?: string;
 }
 
 export interface LegacyPromotionSourceSnapshot {
   readonly rotationEnabled: boolean;
+  readonly repeatEveryCards?: number;
   readonly items: readonly LegacyPromotionSourceItem[];
   readonly updatedAt?: string;
 }
@@ -37,6 +45,8 @@ export interface LegacyPromotionSourceMetric {
 
 export interface LegacyPromotionSourceOptions {
   readonly baseUrl: string;
+  readonly placement?: LegacyPromotionPlacement;
+  readonly privateHttpHosts?: readonly string[];
   readonly timeoutMs: number;
   readonly maxAttempts: number;
   readonly circuitFailureThreshold: number;
@@ -69,20 +79,34 @@ function safeHref(value: unknown): string | undefined {
   }
 }
 
-function imageSourceUrl(value: unknown, baseUrl: string): string | undefined {
+function imageSourceUrl(
+  value: unknown,
+  baseUrl: string,
+  privateHttpHosts: readonly string[],
+): string | undefined {
   const candidate = stringValue(value);
   if (!candidate || candidate.length > 2_048) return undefined;
   try {
     const url = new URL(candidate, baseUrl);
-    if (url.protocol !== 'https:' || url.username || url.password) return undefined;
+    const privateHttpAllowed =
+      url.protocol === 'http:' &&
+      privateHttpHosts.some((host) => host.trim().toLowerCase() === url.hostname.toLowerCase());
+    if ((url.protocol !== 'https:' && !privateHttpAllowed) || url.username || url.password) {
+      return undefined;
+    }
     return url.toString();
   } catch {
     return undefined;
   }
 }
 
-function normalizeSnapshot(payload: unknown, baseUrl: string): LegacyPromotionSourceSnapshot {
-  if (!isRecord(payload) || payload.placement !== 'cabinet_home' || !Array.isArray(payload.ads)) {
+function normalizeSnapshot(
+  payload: unknown,
+  baseUrl: string,
+  placement: LegacyPromotionPlacement,
+  privateHttpHosts: readonly string[],
+): LegacyPromotionSourceSnapshot {
+  if (!isRecord(payload) || payload.placement !== placement || !Array.isArray(payload.ads)) {
     throw new LegacyPromotionSourceError('PROMOTION_LEGACY_RESPONSE_INVALID');
   }
   if (payload.ads.length > MAX_PROMOTIONS) {
@@ -95,20 +119,52 @@ function normalizeSnapshot(payload: unknown, baseUrl: string): LegacyPromotionSo
     }
     const externalId = stringValue(value.id);
     const href = safeHref(value.href);
-    const sourceUrl = imageSourceUrl(value.imageUrl, baseUrl);
+    const sourceUrl = imageSourceUrl(value.imageUrl, baseUrl, privateHttpHosts);
+    const squareSourceUrl = imageSourceUrl(
+      value.squareImageUrl ?? value.imageUrl,
+      baseUrl,
+      privateHttpHosts,
+    );
+    const horizontalSourceUrl = imageSourceUrl(
+      value.horizontalImageUrl ?? value.imageUrl,
+      baseUrl,
+      privateHttpHosts,
+    );
+    const badgeText = stringValue(value.badgeText)?.slice(0, 40);
+    const footerText = stringValue(value.footerText)?.slice(0, 100);
     if (!externalId || externalId.length > 500 || !href || !sourceUrl) {
       throw new LegacyPromotionSourceError('PROMOTION_LEGACY_RESPONSE_INVALID');
     }
     byId.set(externalId, {
       externalId,
       title: (stringValue(value.title) ?? `Акция ${index + 1}`).slice(0, 120),
+      ...(badgeText ? { badgeText } : {}),
+      ...(footerText ? { footerText } : {}),
       href,
       imageSourceUrl: sourceUrl,
+      ...(placement === 'cabinet_for_me_card' && squareSourceUrl
+        ? { squareImageSourceUrl: squareSourceUrl }
+        : {}),
+      ...(placement === 'cabinet_for_me_card' && horizontalSourceUrl
+        ? { horizontalImageSourceUrl: horizontalSourceUrl }
+        : {}),
     });
   }
   const updatedAt = stringValue(payload.updatedAt);
   return {
     rotationEnabled: payload.rotationEnabled === true,
+    ...(['cabinet_for_me_strip', 'cabinet_for_me_card'].includes(placement)
+      ? {
+          repeatEveryCards:
+            Number.isInteger(payload.repeatEveryCards) &&
+            Number(payload.repeatEveryCards) >= 1 &&
+            Number(payload.repeatEveryCards) <= 20
+              ? Number(payload.repeatEveryCards)
+              : placement === 'cabinet_for_me_strip'
+                ? 4
+                : 6,
+        }
+      : {}),
     items: [...byId.values()],
     ...(updatedAt && Number.isFinite(Date.parse(updatedAt))
       ? { updatedAt: new Date(updatedAt).toISOString() }
@@ -167,7 +223,14 @@ export class LegacyPromotionSource {
     if (this.circuitOpenUntil > Date.now()) {
       throw new LegacyPromotionSourceError('PROMOTION_LEGACY_CIRCUIT_OPEN');
     }
-    const url = new URL('/api/advertising/cabinet-home', this.options.baseUrl);
+    const placement = this.options.placement ?? 'cabinet_home';
+    const path = {
+      cabinet_home: '/api/advertising/cabinet-home',
+      cabinet_home_top: '/api/advertising/cabinet-home-top',
+      cabinet_for_me_strip: '/api/advertising/cabinet-for-me-strip',
+      cabinet_for_me_card: '/api/advertising/cabinet-for-me-card',
+    }[placement];
+    const url = new URL(path, this.options.baseUrl);
     let lastError = new LegacyPromotionSourceError('PROMOTION_LEGACY_UNAVAILABLE');
     for (let attempt = 1; attempt <= this.options.maxAttempts; attempt += 1) {
       const startedAt = Date.now();
@@ -196,7 +259,12 @@ export class LegacyPromotionSource {
           if (!retryableStatus(response.status)) break;
           continue;
         }
-        const snapshot = normalizeSnapshot(await readBoundedJson(response), this.options.baseUrl);
+        const snapshot = normalizeSnapshot(
+          await readBoundedJson(response),
+          this.options.baseUrl,
+          placement,
+          this.options.privateHttpHosts ?? [],
+        );
         this.consecutiveFailures = 0;
         this.circuitOpenUntil = 0;
         this.options.onMetric?.({

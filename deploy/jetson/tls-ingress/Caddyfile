@@ -1,0 +1,61 @@
+{
+    admin off
+    log {
+        output stdout
+        format json
+    }
+}
+
+(nano_security) {
+    encode zstd gzip
+    header {
+        Strict-Transport-Security "max-age=31536000"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "SAMEORIGIN"
+        Referrer-Policy "same-origin"
+        -Server
+    }
+}
+
+# Viva still has this exact callback origin. Remove the HTTP compatibility site
+# only after the provider accepts the HTTPS redirect URI.
+http://185.155.18.146 {
+    reverse_proxy nginx:80
+}
+
+nano.padlhub.su {
+    import nano_security
+    redir https://lk.nano.padlhub.su{uri} permanent
+}
+
+lk.nano.padlhub.su {
+    import nano_security
+    reverse_proxy nginx:80
+}
+
+api.nano.padlhub.su {
+    import nano_security
+    reverse_proxy api:3000
+}
+
+cup.nano.padlhub.su {
+    import nano_security
+    reverse_proxy showcase-proxy:80
+}
+
+swagger.nano.padlhub.su {
+    import nano_security
+    reverse_proxy swagger-ui:8080
+}
+
+portainer.nano.padlhub.su {
+    import nano_security
+    basic_auth {
+        nano-admin {$PORTAINER_AUTH_HASH}
+    }
+    reverse_proxy https://portainer:9443 {
+        transport http {
+            tls_insecure_skip_verify
+        }
+    }
+}

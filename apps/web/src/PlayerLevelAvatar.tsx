@@ -20,6 +20,7 @@ export interface PlayerLevelAvatarProps {
   readonly className?: string;
   readonly variant?: 'profile' | 'participant';
   readonly accentColor?: string;
+  readonly showLevelRing?: boolean;
   /** Стабильный PadlHub-ключ для выбора фона аватара без фото. */
   readonly fallbackSeed?: string | null;
   /** Порядок в перекрывающейся группе игроков. */
@@ -125,6 +126,7 @@ export function PlayerLevelAvatar({
   className,
   variant = 'profile',
   accentColor,
+  showLevelRing = true,
   fallbackSeed,
   stackIndex,
 }: PlayerLevelAvatarProps): React.JSX.Element {
@@ -169,54 +171,57 @@ export function PlayerLevelAvatar({
         variant === 'participant' ? `${rootClassName} ${styles.participant}` : rootClassName
       }
       data-player-level-avatar=""
+      data-player-level-ring-visible={showLevelRing ? 'true' : 'false'}
       data-progress={normalizedProgress}
       data-size={normalizedSize}
       role="img"
       aria-label={`${alt}, уровень ${level}, прогресс ${Math.round(normalizedProgress)}%`}
       style={rootStyle}
     >
-      <svg
-        className={styles.progressRing}
-        viewBox="0 0 48 48"
-        aria-hidden="true"
-        focusable="false"
-        shapeRendering="geometricPrecision"
-        data-player-level-ring=""
-      >
-        <defs>
-          <mask id={ringMaskId} maskUnits="userSpaceOnUse" x="0" y="0" width="48" height="48">
-            <rect width="48" height="48" fill="#fff" />
-            <rect
-              fill="#000"
-              x={BADGE_CLEARANCE.x}
-              y={BADGE_CLEARANCE.y}
-              width={BADGE_CLEARANCE.width}
-              height={BADGE_CLEARANCE.height}
-              rx={BADGE_CLEARANCE.radius}
-            />
-          </mask>
-        </defs>
+      {showLevelRing ? (
+        <svg
+          className={styles.progressRing}
+          viewBox="0 0 48 48"
+          aria-hidden="true"
+          focusable="false"
+          shapeRendering="geometricPrecision"
+          data-player-level-ring=""
+        >
+          <defs>
+            <mask id={ringMaskId} maskUnits="userSpaceOnUse" x="0" y="0" width="48" height="48">
+              <rect width="48" height="48" fill="#fff" />
+              <rect
+                fill="#000"
+                x={BADGE_CLEARANCE.x}
+                y={BADGE_CLEARANCE.y}
+                width={BADGE_CLEARANCE.width}
+                height={BADGE_CLEARANCE.height}
+                rx={BADGE_CLEARANCE.radius}
+              />
+            </mask>
+          </defs>
 
-        <g mask={`url(#${ringMaskId})`}>
-          {RING_SEGMENT_ANGLES.map(({ start, end }, index) => {
-            const segmentProgress = getSegmentProgress(normalizedProgress, index);
-            const backgroundPath = ringSegmentPath(start, end);
-            const activePath = partialRingSegmentPath(start, end, segmentProgress);
+          <g mask={`url(#${ringMaskId})`}>
+            {RING_SEGMENT_ANGLES.map(({ start, end }, index) => {
+              const segmentProgress = getSegmentProgress(normalizedProgress, index);
+              const backgroundPath = ringSegmentPath(start, end);
+              const activePath = partialRingSegmentPath(start, end, segmentProgress);
 
-            return (
-              <g
-                key={index}
-                data-player-level-segment=""
-                data-segment-index={index}
-                data-segment-progress={segmentProgress}
-              >
-                <path className={styles.segment} d={backgroundPath} />
-                {activePath ? <path className={styles.segmentActive} d={activePath} /> : null}
-              </g>
-            );
-          })}
-        </g>
-      </svg>
+              return (
+                <g
+                  key={index}
+                  data-player-level-segment=""
+                  data-segment-index={index}
+                  data-segment-progress={segmentProgress}
+                >
+                  <path className={styles.segment} d={backgroundPath} />
+                  {activePath ? <path className={styles.segmentActive} d={activePath} /> : null}
+                </g>
+              );
+            })}
+          </g>
+        </svg>
+      ) : null}
 
       <span className={styles.photoFrame}>
         <img

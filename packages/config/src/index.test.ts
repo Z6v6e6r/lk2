@@ -40,6 +40,9 @@ describe('loadConfig', () => {
       LEGACY_GAMES_ROSTER_SYNC_LIMIT: 200,
       LEGACY_GAMES_PROFILE_PHOTO_SYNC_LOOKBACK_DAYS: 30,
       HOME_PROJECTION_TTL_SECONDS: 300,
+      HOME_BASE_SYNC_ENABLED: false,
+      HOME_BASE_SYNC_INTERVAL_MS: 120_000,
+      HOME_BASE_SYNC_BATCH_SIZE: 20,
       HOME_VIVA_SYNC_ENABLED: false,
       HOME_VIVA_LEGACY_GAME_BRIDGE_ENABLED: false,
       HOME_VIVA_SYNC_INTERVAL_MS: 120_000,
@@ -52,9 +55,12 @@ describe('loadConfig', () => {
       COMMUNITY_LOGO_MAX_DIMENSION: 512,
       COMMUNITY_LOGO_WEBP_QUALITY: 82,
       PROMOTIONS_READ_MODE: 'mock',
+      PROMOTIONS_HERO_PLACEMENT: 'cabinet_home',
+      PROMOTIONS_STANDARD_PLACEMENT: 'cabinet_home',
       PROMOTIONS_SYNC_INTERVAL_MS: 120_000,
       PROMOTIONS_SYNC_BATCH_SIZE: 20,
       PROMOTION_ROTATION_INTERVAL_SECONDS: 6,
+      PROMOTION_IMAGE_PRIVATE_HTTP_HOSTS: '',
       PROMOTION_IMAGE_MOBILE_WIDTH: 750,
       PROMOTION_IMAGE_MOBILE_HEIGHT: 480,
       PROMOTION_IMAGE_WEBP_QUALITY: 80,
@@ -547,6 +553,46 @@ describe('loadConfig', () => {
         { profilePhotoStorage: true },
       ),
     ).toThrow('PROMOTIONS_READ_MODE=legacy requires media storage');
+  });
+
+  it('keeps CUP Block 2 as the explicit Home promotion source', () => {
+    expect(
+      loadConfig({
+        ...validEnvironment,
+        PROMOTIONS_HERO_PLACEMENT: 'cabinet_home',
+        PROMOTIONS_STANDARD_PLACEMENT: 'cabinet_home',
+      }),
+    ).toMatchObject({
+      PROMOTIONS_HERO_PLACEMENT: 'cabinet_home',
+      PROMOTIONS_STANDARD_PLACEMENT: 'cabinet_home',
+    });
+  });
+
+  it('keeps private HTTP promotion media staging-only', () => {
+    expect(
+      loadConfig({
+        ...validEnvironment,
+        APP_ENV: 'staging',
+        PROMOTION_IMAGE_PRIVATE_HTTP_HOSTS: 'phab-showcase',
+      }),
+    ).toMatchObject({ PROMOTION_IMAGE_PRIVATE_HTTP_HOSTS: 'phab-showcase' });
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        APP_ENV: 'production',
+        VIVA_MODE: 'production',
+        AUTH_COOKIE_SECURE: 'true',
+        TRUSTED_PROXY_CIDRS: '10.0.0.0/24',
+        JWT_ACCESS_SECRET: 'prod-access-secret-very-long-and-random-123',
+        JWT_REFRESH_SECRET: 'prod-refresh-secret-very-long-and-random-456',
+        HOME_READ_MODE: 'projection',
+        PUBLIC_OFFER_VERSION: '2026-07-18',
+        PERSONAL_DATA_POLICY_VERSION: '2026-07-18',
+        COMMUNITIES_READ_MODE: 'legacy',
+        PROMOTIONS_READ_MODE: 'legacy',
+        PROMOTION_IMAGE_PRIVATE_HTTP_HOSTS: 'phab-showcase',
+      }),
+    ).toThrow('PROMOTION_IMAGE_PRIVATE_HTTP_HOSTS is forbidden in production');
   });
 
   it('rejects incomplete secrets', () => {

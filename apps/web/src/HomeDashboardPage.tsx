@@ -6,32 +6,89 @@ import type {
   ActivityHistoryQuery,
   BookingRecommendationPage,
   CommunityMembershipPage,
+  HomeBase,
+  HomeBookingRecommendationFilters,
   HomeDashboard,
+  UserProfile,
+  UserUpcomingBookings,
 } from './auth-gateway.js';
 import { ActivityHistoryModal } from './ActivityHistory.js';
 import { EventCalendarIcon, EventLocationIcon } from './ActivityCardIcons.js';
 import { BookingRecommendations } from './BookingRecommendations.js';
 import { GameTypeBadge } from './GameTypeBadge.js';
 import locationSeligerUrl from './assets/home/location-seliger.png';
+import promotionHeroFallbackUrl from './assets/home/promotion-hero-fallback.png';
+import bookingRecommendationsLoaderUrl from './assets/loaders/booking-recommendations.gif';
+import { locationCourtLabel } from './location-court-label.js';
 import promoUrl from './assets/home/promo.png';
 import { ParticipantAvatarStack } from './ParticipantAvatarStack.js';
 import { PlayerLevelAvatar } from './PlayerLevelAvatar.js';
 
 interface HomeDashboardPageProps {
-  readonly dashboard: HomeDashboard;
+  readonly dashboard: HomeBase;
+  readonly viewerFallback: {
+    readonly id: string;
+    readonly displayName: string;
+  };
+  readonly viewer: HomeSectionEnvelope<UserProfile> | null;
+  readonly upcoming: HomeSectionEnvelope<UserUpcomingBookings> | null;
   readonly tenantName: string;
+  readonly layoutVariant?: 'default' | 'v2' | 'v3';
+  readonly recommendationDisplay?: 'CARDS' | 'ROWS';
   readonly notificationUnreadCount: number;
-  readonly loadCommunityPage: (cursor?: string) => Promise<CommunityMembershipPage>;
-  readonly loadBookingRecommendations?: () => Promise<BookingRecommendationPage>;
+  readonly loadCommunityPage?: (
+    cursor?: string,
+    limit?: number,
+  ) => Promise<CommunityMembershipPage>;
+  readonly communityPageSize?: number;
+  readonly loadBookingRecommendations?: (
+    input?: HomeBookingRecommendationFilters,
+  ) => Promise<BookingRecommendationPage>;
   readonly loadActivityHistory?: (input?: ActivityHistoryQuery) => Promise<ActivityHistoryPage>;
+  readonly recordPromotionEngagement?: (
+    promotionId: string,
+    kind: 'IMPRESSION' | 'CLICK',
+  ) => Promise<unknown>;
   readonly logoutBusy: boolean;
   readonly error?: string | null;
+  readonly onRetryViewer: () => void;
+  readonly onActivateUpcoming?: () => void;
+  readonly onRetryUpcoming: () => void;
   readonly onLogout: () => void;
 }
 
-type HomeCommunity = HomeDashboard['communities'][number];
+export type HomeSectionEnvelope<T> =
+  | { readonly state: 'READY'; readonly value: T }
+  | { readonly state: 'STALE'; readonly value: T }
+  | { readonly state: 'UNAVAILABLE'; readonly message: string };
+
+type AvailableHomeCommunities = Extract<
+  HomeBase['communities'],
+  { readonly status: 'READY' | 'STALE' }
+>;
+type HomeCommunity = AvailableHomeCommunities['value'][number];
 
 type HomeActionIconName = 'games' | 'tournaments' | 'trainings';
+
+function recommendationItemKey(item: BookingRecommendationPage['items'][number]): string {
+  return item.kind === 'GAME' ? `GAME:${item.game.id}` : `${item.kind}:${item.activity.id}`;
+}
+
+function appendRecommendationPage(
+  current: BookingRecommendationPage,
+  next: BookingRecommendationPage,
+): BookingRecommendationPage {
+  const existing = new Set(current.items.map(recommendationItemKey));
+  return {
+    ...next,
+    items: [
+      ...current.items,
+      ...next.items.filter((item) => !existing.has(recommendationItemKey(item))),
+    ],
+  };
+}
+
+const HOME_RECOMMENDATION_EXPANSION_THRESHOLD = 6;
 
 const implementedMvpRoutes = new Set([
   '/',
@@ -102,6 +159,21 @@ function HomeActionIcon({ name }: { readonly name: HomeActionIconName }): React.
         </svg>
       );
   }
+}
+
+function HomePreferencesEditIcon(): React.JSX.Element {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path
+        d="M10.89 2.11a1.52 1.52 0 0 1 2.15 0l.85.85a1.52 1.52 0 0 1 0 2.15l-7.8 7.8-3.43.43.43-3.43 7.8-7.8Z"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path d="m9.75 3.25 3 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  );
 }
 
 function WalletIcon(): React.JSX.Element {
@@ -413,7 +485,7 @@ function Chevron(): React.JSX.Element {
   return <span className="fh-chevron" aria-hidden="true" />;
 }
 
-function levelAvatarProgress(level: HomeDashboard['profile']['level']): number {
+function levelAvatarProgress(level: UserProfile['level']): number {
   if (level.assessmentRequired) return 0;
   const fractionalProgress = level.value - Math.floor(level.value);
   return Math.round(fractionalProgress * 100);
@@ -434,48 +506,7 @@ function communityAccent(id: string): string {
   return palette[hash % palette.length] ?? palette[0];
 }
 
-function communityTitleLines(title: string): readonly [string] | readonly [string, string] {
-  const words = title.trim().split(/\s+/u).filter(Boolean);
-  if (words.length <= 1) return [words[0] ?? title];
-  let splitAt = 1;
-  let bestLongestLine = Number.POSITIVE_INFINITY;
-  let bestDifference = Number.POSITIVE_INFINITY;
-  for (let index = 1; index < words.length; index += 1) {
-    const firstLength = words.slice(0, index).join(' ').length;
-    const secondLength = words.slice(index).join(' ').length;
-    const longestLine = Math.max(firstLength, secondLength);
-    const difference = Math.abs(firstLength - secondLength);
-    if (
-      longestLine < bestLongestLine ||
-      (longestLine === bestLongestLine && difference < bestDifference)
-    ) {
-      splitAt = index;
-      bestLongestLine = longestLine;
-      bestDifference = difference;
-    }
-  }
-  return [words.slice(0, splitAt).join(' '), words.slice(splitAt).join(' ')];
-}
-
-function CommunityTitle({ title }: { readonly title: string }): React.JSX.Element {
-  const lines = communityTitleLines(title);
-  return (
-    <span
-      className={`fh-community-title ${lines.length === 1 ? 'is-single-word' : 'is-two-lines'}`}
-      data-title-lines={lines.length}
-    >
-      {lines.map((line, index) => (
-        <span key={`${index}-${line}`}>{line}</span>
-      ))}
-    </span>
-  );
-}
-
-function CommunityLogo({
-  community,
-}: {
-  readonly community: HomeDashboard['communities'][number];
-}): React.JSX.Element {
+function CommunityLogo({ community }: { readonly community: HomeCommunity }): React.JSX.Element {
   const accent = communityAccent(community.id);
   return (
     <span className="fh-community-logo" style={{ borderColor: accent }}>
@@ -497,6 +528,15 @@ function CommunityLogo({
   );
 }
 
+function CommunitySearchIcon(): React.JSX.Element {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <circle cx="7" cy="7" r="4.5" stroke="currentColor" strokeWidth="1.2" />
+      <path d="m10.5 10.5 3 3" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 function mergeCommunities(
   current: readonly HomeCommunity[],
   next: readonly HomeCommunity[],
@@ -508,19 +548,27 @@ function mergeCommunities(
 
 function HomeCommunityCarousel({
   initialItems,
+  snapshotAvailable,
   loadPage,
+  pageSize,
 }: {
   readonly initialItems: readonly HomeCommunity[];
-  readonly loadPage: (cursor?: string) => Promise<CommunityMembershipPage>;
+  readonly snapshotAvailable: boolean;
+  readonly loadPage:
+    ((cursor?: string, limit?: number) => Promise<CommunityMembershipPage>) | undefined;
+  readonly pageSize: number;
 }): React.JSX.Element {
-  const [directoryItems, setDirectoryItems] = useState<readonly HomeCommunity[]>([]);
+  const [directoryItems, setDirectoryItems] = useState<readonly HomeCommunity[] | null>(null);
+  const [directoryStatus, setDirectoryStatus] = useState<'idle' | 'loading' | 'ready' | 'failed'>(
+    loadPage ? 'loading' : 'idle',
+  );
   const [nextCursor, setNextCursor] = useState<string | undefined>();
   const [dragging, setDragging] = useState(false);
   const loadingMore = useRef(false);
   const active = useRef(true);
   const drag = useRef({ active: false, moved: false, startX: 0, startScrollLeft: 0 });
   const suppressNextClick = useRef(false);
-  const items = mergeCommunities(directoryItems, initialItems);
+  const items = directoryItems ?? initialItems;
 
   useEffect(() => {
     active.current = true;
@@ -530,28 +578,33 @@ function HomeCommunityCarousel({
   }, []);
 
   useEffect(() => {
+    if (!loadPage) return;
     let requestActive = true;
-    void loadPage().then(
+    loadingMore.current = false;
+    void loadPage(undefined, pageSize).then(
       (page) => {
         if (!requestActive) return;
         setDirectoryItems(page.items);
         setNextCursor(page.nextCursor);
+        setDirectoryStatus('ready');
       },
-      () => undefined,
+      () => {
+        if (requestActive) setDirectoryStatus('failed');
+      },
     );
     return () => {
       requestActive = false;
     };
-  }, [loadPage]);
+  }, [loadPage, pageSize]);
 
   function loadMore(): void {
     const cursor = nextCursor;
-    if (!cursor || loadingMore.current) return;
+    if (!loadPage || !cursor || loadingMore.current) return;
     loadingMore.current = true;
-    void loadPage(cursor).then(
+    void loadPage(cursor, pageSize).then(
       (page) => {
         if (!active.current) return;
-        setDirectoryItems((current) => mergeCommunities(current, page.items));
+        setDirectoryItems((current) => mergeCommunities(current ?? initialItems, page.items));
         setNextCursor(page.nextCursor);
         loadingMore.current = false;
       },
@@ -606,6 +659,18 @@ function HomeCommunityCarousel({
     event.stopPropagation();
   }
 
+  if (!snapshotAvailable && directoryItems === null) {
+    return directoryStatus === 'loading' ? (
+      <p className="fh-section-unavailable" role="status">
+        Загружаем сообщества…
+      </p>
+    ) : (
+      <p className="fh-section-unavailable" role="alert">
+        Сообщества временно недоступны.
+      </p>
+    );
+  }
+
   return (
     <div
       className={`fh-community-track${dragging ? ' is-dragging' : ''}`}
@@ -620,6 +685,11 @@ function HomeCommunityCarousel({
       onClickCapture={handleClickCapture}
       onDragStart={(event) => event.preventDefault()}
     >
+      <a className="fh-community-search" href="/communities" aria-label="Найти сообщество">
+        <span aria-hidden="true">
+          <CommunitySearchIcon />
+        </span>
+      </a>
       {items.map((community) => (
         <div
           className="fh-community-card"
@@ -632,7 +702,6 @@ function HomeCommunityCarousel({
           }`}
         >
           <CommunityLogo community={community} />
-          <CommunityTitle title={community.title} />
         </div>
       ))}
     </div>
@@ -642,10 +711,14 @@ function HomeCommunityCarousel({
 function HomePromotionCarousel({
   promotion,
   promotions,
-}: Pick<HomeDashboard, 'promotion' | 'promotions'>): React.JSX.Element | null {
+  variant = 'standard',
+}: Pick<HomeDashboard, 'promotion' | 'promotions'> & {
+  readonly variant?: 'standard' | 'hero';
+}): React.JSX.Element | null {
   const items = promotions.items.length > 0 ? promotions.items : promotion ? [promotion] : [];
   const [activeIndex, setActiveIndex] = useState(0);
   const [paused, setPaused] = useState(false);
+  const isHeroPromotion = variant === 'hero';
 
   useEffect(() => {
     if (!promotions.rotationEnabled || items.length < 2 || paused) return;
@@ -665,8 +738,8 @@ function HomePromotionCarousel({
 
   return (
     <section
-      className="fh-promotions"
-      aria-label="Акции"
+      className={isHeroPromotion ? 'fh-hero-promotion' : 'fh-promotions'}
+      aria-label={isHeroPromotion ? 'Промо в шапке' : 'Акции'}
       onMouseEnter={() => setPaused(true)}
       onMouseLeave={() => setPaused(false)}
       onFocus={() => setPaused(true)}
@@ -675,27 +748,45 @@ function HomePromotionCarousel({
       }}
     >
       <a
-        className="fh-promo"
+        className={isHeroPromotion ? 'fh-hero-promo' : 'fh-promo'}
         href={activeItem.route}
-        aria-label={activeItem.title}
+        aria-label={isHeroPromotion ? `Акция: ${activeItem.title}` : activeItem.title}
         key={activeItem.id}
       >
+        {isHeroPromotion ? (
+          <span className="fh-hero-promo-tag" aria-hidden="true">
+            <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+              <path
+                d="M5.7.8 2.9 5h2L4.3 9.2 7.1 5h-2L5.7.8Z"
+                fill="currentColor"
+                stroke="currentColor"
+                strokeLinejoin="round"
+                strokeWidth=".35"
+              />
+            </svg>
+            Акция
+          </span>
+        ) : null}
         <picture>
-          {activeItem.mobileImageUrl ? (
+          {!isHeroPromotion && activeItem.mobileImageUrl ? (
             <source media="(max-width: 767px)" srcSet={activeItem.mobileImageUrl} />
           ) : null}
           <img
             src={desktopImageUrl}
             alt=""
-            width="750"
-            height="480"
+            width={isHeroPromotion ? '670' : '750'}
+            height={isHeroPromotion ? '240' : '480'}
             loading="lazy"
             decoding="async"
           />
         </picture>
       </a>
       {items.length > 1 ? (
-        <div className="fh-promotion-dots" role="group" aria-label="Выбор акции">
+        <div
+          className={isHeroPromotion ? 'fh-hero-promotion-dots' : 'fh-promotion-dots'}
+          role="group"
+          aria-label={isHeroPromotion ? 'Выбор промо в шапке' : 'Выбор акции'}
+        >
           {items.map((item, index) => (
             <button
               type="button"
@@ -712,7 +803,109 @@ function HomePromotionCarousel({
   );
 }
 
-type HomeUpcomingItem = HomeDashboard['upcoming'][number];
+function HomeHeroPromotionFallback(): React.JSX.Element {
+  return (
+    <section className="fh-hero-promotion fh-hero-promotion-fallback" aria-label="Промо в шапке">
+      <img
+        src={promotionHeroFallbackUrl}
+        alt="Лето. Падел."
+        width="670"
+        height="240"
+        decoding="async"
+      />
+    </section>
+  );
+}
+
+function HomeStandardPromotionSection({
+  promotions,
+}: {
+  readonly promotions: HomeBase['promotions'];
+}): React.JSX.Element {
+  if (promotions.status === 'UNAVAILABLE') {
+    return (
+      <section className="fh-promotions fh-section-unavailable" role="alert">
+        Акции временно недоступны.
+      </section>
+    );
+  }
+
+  return (
+    <>
+      {promotions.status === 'STALE' ? (
+        <p className="fh-section-stale" role="status">
+          Показаны последние доступные акции.
+        </p>
+      ) : null}
+      <HomePromotionCarousel
+        promotion={promotions.value.standard.items[0] ?? null}
+        promotions={promotions.value.standard}
+      />
+    </>
+  );
+}
+
+function HomeLocationsSection({
+  locations,
+  titleId,
+}: {
+  readonly locations: HomeBase['locations'];
+  readonly titleId: string;
+}): React.JSX.Element {
+  return (
+    <section className="fh-locations" aria-labelledby={titleId}>
+      <div className="fh-section-head">
+        <h2 id={titleId}>
+          Локации <span>{locations.length}</span>
+        </h2>
+        <a href="/locations">Все</a>
+      </div>
+      <div className="fh-location-track">
+        {locations.map((location, index) => {
+          const imageUrl = location.imageUrl ?? (index === 0 ? locationSeligerUrl : null);
+          return (
+            <a
+              className="fh-location-card"
+              href={location.route}
+              key={location.id}
+              aria-label={`${location.title}, ${location.courtCount} ${locationCourtLabel(location.courtCount)}`}
+              style={imageUrl ? { backgroundImage: `url(${imageUrl})` } : undefined}
+            >
+              <span>
+                <strong>{location.title}</strong>
+                <small>
+                  {location.courtCount} {locationCourtLabel(location.courtCount)}
+                </small>
+              </span>
+            </a>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function HomeAdditionalLinks({
+  links,
+}: {
+  readonly links: HomeBase['additionalLinks'];
+}): React.JSX.Element | null {
+  const visibleLinks = links.filter((link) => isImplementedMvpRoute(link.route));
+  if (visibleLinks.length === 0) return null;
+
+  return (
+    <nav className="fh-additional" aria-label="Дополнительные разделы">
+      {visibleLinks.map((link) => (
+        <a href={link.route} key={link.id}>
+          <span>{link.title}</span>
+          <Chevron />
+        </a>
+      ))}
+    </nav>
+  );
+}
+
+type HomeUpcomingItem = UserUpcomingBookings['items'][number];
 
 const upcomingKindLabel: Readonly<Record<HomeUpcomingItem['kind'], string>> = {
   game: 'Игра',
@@ -860,11 +1053,80 @@ function EventCard({ item }: { readonly item: HomeUpcomingItem }): React.JSX.Ele
   );
 }
 
+function HomeViewerHeader({
+  fallback,
+  notificationUnreadCount,
+  onRetry,
+  viewer,
+}: {
+  readonly fallback: HomeDashboardPageProps['viewerFallback'];
+  readonly notificationUnreadCount: number;
+  readonly onRetry: () => void;
+  readonly viewer: HomeSectionEnvelope<UserProfile> | null;
+}): React.JSX.Element {
+  const profile = viewer && viewer.state !== 'UNAVAILABLE' ? viewer.value : null;
+  const displayName = profile?.displayName ?? fallback.displayName;
+  const userId = profile?.userId ?? fallback.id;
+  const balance = profile
+    ? new Intl.NumberFormat('ru-RU').format(profile.balanceMinor / 100)
+    : null;
+
+  return (
+    <header className="fh-profile-row">
+      <a className="fh-profile" href="/profile">
+        <PlayerLevelAvatar
+          alt={displayName}
+          fallbackSeed={userId}
+          level={
+            profile ? (profile.level.assessmentRequired ? '?' : profile.level.label) : 'не загружен'
+          }
+          progress={profile ? levelAvatarProgress(profile.level) : 0}
+          showLevelRing={Boolean(profile)}
+          src={profile?.avatarUrl ?? null}
+        />
+        <span className="fh-profile-copy">
+          <h1>{displayName}</h1>
+          {profile ? (
+            <small>
+              <WalletIcon />
+              {balance} ₽
+            </small>
+          ) : (
+            <small role={viewer?.state === 'UNAVAILABLE' ? 'alert' : 'status'}>
+              {viewer?.state === 'UNAVAILABLE'
+                ? 'Профиль временно недоступен'
+                : 'Загружаем профиль…'}
+            </small>
+          )}
+          {viewer?.state === 'STALE' ? <small>Профиль может быть неактуален</small> : null}
+        </span>
+      </a>
+      {viewer?.state === 'UNAVAILABLE' ? (
+        <button
+          className="fh-profile-retry"
+          type="button"
+          aria-label="Повторить загрузку профиля"
+          onClick={onRetry}
+        >
+          <span aria-hidden="true">↻</span>
+        </button>
+      ) : null}
+      <NotificationBellLink unreadCount={notificationUnreadCount} />
+    </header>
+  );
+}
+
 export function HomeDashboardPage({
   dashboard,
+  viewerFallback,
+  viewer,
+  upcoming,
   tenantName,
+  layoutVariant = 'default',
+  recommendationDisplay = 'CARDS',
   notificationUnreadCount,
   loadCommunityPage,
+  communityPageSize = 10,
   loadBookingRecommendations = () =>
     Promise.resolve({
       version: '0'.repeat(64),
@@ -875,17 +1137,21 @@ export function HomeDashboardPage({
       nextCursor: null,
     }),
   loadActivityHistory = () => Promise.reject(new Error('ACTIVITY_HISTORY_NOT_CONNECTED')),
+  recordPromotionEngagement,
   logoutBusy,
   error,
+  onRetryViewer,
+  onActivateUpcoming = () => undefined,
+  onRetryUpcoming,
   onLogout,
 }: HomeDashboardPageProps): React.JSX.Element {
-  const actionRoute = (id: HomeDashboard['quickActions'][number]['id'], fallback: string): string =>
+  const actionRoute = (id: HomeBase['quickActions'][number]['id'], fallback: string): string =>
     dashboard.quickActions.find((action) => action.id === id)?.route ?? fallback;
   const actions = [
-    { id: 'games', label: 'Игры', icon: 'games', route: actionRoute('play', '/games') },
+    { id: 'games', label: 'Играть', icon: 'games', route: actionRoute('play', '/games') },
     {
       id: 'trainings',
-      label: 'Тренировки',
+      label: 'Тренироваться',
       icon: 'trainings',
       route: actionRoute('group_training', '/trainings'),
     },
@@ -900,30 +1166,76 @@ export function HomeDashboardPage({
   const [bookingRecommendations, setBookingRecommendations] =
     useState<BookingRecommendationPage | null>(null);
   const [bookingRecommendationsLoading, setBookingRecommendationsLoading] = useState(true);
+  const [bookingRecommendationsLoadingMore, setBookingRecommendationsLoadingMore] = useState(false);
   const [bookingRecommendationsError, setBookingRecommendationsError] = useState<string | null>(
     null,
   );
   const initialBookingRecommendationsLoader = useRef(loadBookingRecommendations);
+  const initialBookingRecommendationLimit = useRef(layoutVariant === 'v3' ? 14 : 6);
   const bookingRecommendationsRequestStarted = useRef(true);
+  const bookingRecommendationsLoadMoreStarted = useRef(false);
+  const bookingRecommendationsExpansionStarted = useRef(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const calendarDays = bookingCalendarDays(new Date(), calendarDayOffset);
+  const upcomingItems =
+    upcoming && upcoming.state !== 'UNAVAILABLE' ? upcoming.value.items : ([] as const);
   const datesWithBookings = new Set(
-    dashboard.upcoming.map((item) => localDateKey(new Date(item.startsAt))),
+    upcomingItems.map((item) => localDateKey(new Date(item.startsAt))),
   );
-  const visibleUpcoming = dashboard.upcoming.filter(
+  const visibleUpcoming = upcomingItems.filter(
     (item) =>
       (!selectedDateKey || localDateKey(new Date(item.startsAt)) === selectedDateKey) &&
       (selectedBookingKind === 'all' || item.kind === selectedBookingKind),
   );
   const showBookingsScrollPeek = bookingTab === 'MY' && visibleUpcoming.length > 2;
-  const balance = new Intl.NumberFormat('ru-RU').format(dashboard.profile.balanceMinor / 100);
+  const showRecommendationsScrollPeek = bookingTab === 'FOR_ME';
+  const usesCompactHero = layoutVariant !== 'default';
+  const usesV3RecommendationCards = layoutVariant === 'v3' && recommendationDisplay === 'CARDS';
+  const shellClassName = [
+    'figma-home-shell',
+    layoutVariant === 'v3' ? (usesV3RecommendationCards ? 'is-home-v3' : 'is-home-v3-rows') : null,
+    layoutVariant === 'v3' && bookingTab === 'MY' ? 'has-v3-my-extras' : null,
+    showBookingsScrollPeek
+      ? 'has-bookings-scroll-peek'
+      : showRecommendationsScrollPeek
+        ? 'has-recommendations-scroll-peek'
+        : null,
+  ]
+    .filter(Boolean)
+    .join(' ');
+  const communities =
+    dashboard.communities.status === 'UNAVAILABLE' ? null : dashboard.communities.value;
+  const promotionSlots =
+    dashboard.promotions.status === 'UNAVAILABLE' ? null : dashboard.promotions.value;
+  const heroCommunities = dashboard.capabilities.canViewCommunities ? (
+    <section className="fh-hero-communities" aria-label="Сообщества">
+      {communities || loadCommunityPage ? (
+        <HomeCommunityCarousel
+          initialItems={communities ?? []}
+          snapshotAvailable={communities !== null}
+          loadPage={loadCommunityPage}
+          pageSize={communityPageSize}
+        />
+      ) : (
+        <p className="fh-section-unavailable" role="alert">
+          Сообщества временно недоступны.
+        </p>
+      )}
+    </section>
+  ) : null;
+  const heroPromotion =
+    promotionSlots && promotionSlots.hero.items.length > 0 ? (
+      <HomePromotionCarousel promotion={null} promotions={promotionSlots.hero} variant="hero" />
+    ) : (
+      <HomeHeroPromotionFallback />
+    );
 
   const requestBookingRecommendations = useCallback((): void => {
     setBookingRecommendationsError(null);
     if (bookingRecommendations || bookingRecommendationsRequestStarted.current) return;
     bookingRecommendationsRequestStarted.current = true;
     setBookingRecommendationsLoading(true);
-    void loadBookingRecommendations().then(
+    void loadBookingRecommendations({ limit: layoutVariant === 'v3' ? 14 : 6 }).then(
       (page) => {
         setBookingRecommendations(page);
         setBookingRecommendationsLoading(false);
@@ -934,27 +1246,80 @@ export function HomeDashboardPage({
         setBookingRecommendationsLoading(false);
       },
     );
-  }, [bookingRecommendations, loadBookingRecommendations]);
+  }, [bookingRecommendations, layoutVariant, loadBookingRecommendations]);
+
+  const loadMoreBookingRecommendations = useCallback((): void => {
+    const cursor = bookingRecommendations?.nextCursor;
+    if (!cursor || bookingRecommendationsLoadMoreStarted.current) return;
+    bookingRecommendationsLoadMoreStarted.current = true;
+    setBookingRecommendationsLoadingMore(true);
+    setBookingRecommendationsError(null);
+    void loadBookingRecommendations({ limit: 12, cursor }).then(
+      (page) => {
+        setBookingRecommendations((current) =>
+          current ? appendRecommendationPage(current, page) : page,
+        );
+        bookingRecommendationsLoadMoreStarted.current = false;
+        setBookingRecommendationsLoadingMore(false);
+      },
+      () => {
+        bookingRecommendationsLoadMoreStarted.current = false;
+        setBookingRecommendationsLoadingMore(false);
+        setBookingRecommendationsError('Не удалось загрузить следующие рекомендации.');
+      },
+    );
+  }, [bookingRecommendations?.nextCursor, loadBookingRecommendations]);
 
   useEffect(() => {
     let active = true;
-    void initialBookingRecommendationsLoader.current().then(
+    void initialBookingRecommendationsLoader
+      .current({ limit: initialBookingRecommendationLimit.current })
+      .then(
+        (page) => {
+          if (!active) return;
+          setBookingRecommendations(page);
+          setBookingRecommendationsLoading(false);
+        },
+        () => {
+          if (!active) return;
+          bookingRecommendationsRequestStarted.current = false;
+          setBookingRecommendationsError('Не удалось загрузить рекомендации.');
+          setBookingRecommendationsLoading(false);
+        },
+      );
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (
+      !bookingRecommendations ||
+      bookingRecommendationsLoading ||
+      bookingRecommendationsExpansionStarted.current
+    ) {
+      return;
+    }
+    bookingRecommendationsExpansionStarted.current = true;
+    let active = true;
+    void loadBookingRecommendations({
+      limit: initialBookingRecommendationLimit.current,
+      phase:
+        bookingRecommendations.items.length < HOME_RECOMMENDATION_EXPANSION_THRESHOLD
+          ? 'EXPANDED'
+          : 'TOURNAMENTS',
+    }).then(
       (page) => {
-        if (!active) return;
-        setBookingRecommendations(page);
-        setBookingRecommendationsLoading(false);
+        if (active) setBookingRecommendations(page);
       },
       () => {
-        if (!active) return;
-        bookingRecommendationsRequestStarted.current = false;
-        setBookingRecommendationsError('Не удалось загрузить рекомендации.');
-        setBookingRecommendationsLoading(false);
+        // The initial three-day recommendation slice remains usable.
       },
     );
     return () => {
       active = false;
     };
-  }, []);
+  }, [bookingRecommendations, bookingRecommendationsLoading, loadBookingRecommendations]);
 
   function showBookingRecommendations(): void {
     setBookingTab('FOR_ME');
@@ -962,44 +1327,32 @@ export function HomeDashboardPage({
   }
 
   return (
-    <div
-      className={
-        showBookingsScrollPeek ? 'figma-home-shell has-bookings-scroll-peek' : 'figma-home-shell'
-      }
-    >
+    <div className={shellClassName}>
       <main className="figma-home" aria-label="Главная">
-        <section className="fh-hero">
+        <section
+          className={`fh-hero${usesCompactHero ? ' fh-hero--v2' : ''}${
+            layoutVariant === 'v3' ? ' fh-hero--v3' : ''
+          }`}
+        >
           <HeroBackgroundX />
-          <header className="fh-profile-row">
-            <a className="fh-profile" href="/profile">
-              <PlayerLevelAvatar
-                alt={dashboard.profile.displayName}
-                fallbackSeed={dashboard.profile.userId}
-                level={
-                  dashboard.profile.level.assessmentRequired ? '?' : dashboard.profile.level.label
-                }
-                progress={levelAvatarProgress(dashboard.profile.level)}
-                src={dashboard.profile.avatarUrl ?? null}
-              />
-              <span className="fh-profile-copy">
-                <h1>{dashboard.profile.displayName}</h1>
-                <small>
-                  <WalletIcon />
-                  {balance} ₽
-                </small>
-              </span>
-            </a>
-            <NotificationBellLink unreadCount={notificationUnreadCount} />
-          </header>
+          <HomeViewerHeader
+            fallback={viewerFallback}
+            notificationUnreadCount={notificationUnreadCount}
+            onRetry={onRetryViewer}
+            viewer={viewer}
+          />
 
-          {dashboard.capabilities.canViewCommunities ? (
-            <section className="fh-hero-communities" aria-label="Сообщества">
-              <HomeCommunityCarousel
-                initialItems={dashboard.communities}
-                loadPage={loadCommunityPage}
-              />
-            </section>
-          ) : null}
+          {layoutVariant === 'v3' ? (
+            <>
+              {heroCommunities}
+              {heroPromotion}
+            </>
+          ) : (
+            <>
+              {usesCompactHero ? heroPromotion : heroCommunities}
+              {usesCompactHero ? heroCommunities : heroPromotion}
+            </>
+          )}
 
           <nav className="fh-actions" aria-label="Разделы клуба">
             {actions.map((action) => (
@@ -1008,7 +1361,6 @@ export function HomeDashboardPage({
                   <HomeActionIcon name={action.icon} />
                 </span>
                 <span>{action.label}</span>
-                <Chevron />
               </a>
             ))}
           </nav>
@@ -1017,21 +1369,35 @@ export function HomeDashboardPage({
             <button
               type="button"
               role="tab"
-              aria-selected={bookingTab === 'MY'}
-              onClick={() => {
-                setBookingTab('MY');
-                setBookingRecommendationsError(null);
-              }}
-            >
-              Мои записи
-            </button>
-            <button
-              type="button"
-              role="tab"
               aria-selected={bookingTab === 'FOR_ME'}
               onClick={showBookingRecommendations}
             >
               Для меня
+            </button>
+            <a
+              className="fh-preferences-edit"
+              href="/profile#booking-preferences-title"
+              aria-label="Настроить предпочтения"
+              title="Настроить предпочтения"
+            >
+              <HomePreferencesEditIcon />
+            </a>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={bookingTab === 'MY'}
+              onClick={() => {
+                setBookingTab('MY');
+                setBookingRecommendationsError(null);
+                onActivateUpcoming();
+              }}
+            >
+              <span className="fh-tab-label">
+                Мои записи
+                {upcomingItems.length > 0 ? (
+                  <i className="fh-booking-presence-dot" aria-hidden="true" />
+                ) : null}
+              </span>
             </button>
           </div>
         </section>
@@ -1042,183 +1408,204 @@ export function HomeDashboardPage({
             aria-label={bookingTab === 'MY' ? 'Мои записи' : 'Для меня'}
           >
             {bookingTab === 'MY' ? (
-              <>
-                <div className="fh-filters" aria-label="Фильтр записей по дате">
-                  <div
-                    className="fh-calendar"
-                    onPointerDown={(event) => {
-                      calendarSwipeStartX.current = event.clientX;
-                    }}
-                    onPointerUp={(event) => {
-                      const startX = calendarSwipeStartX.current;
-                      calendarSwipeStartX.current = null;
-                      if (startX === null || Math.abs(event.clientX - startX) < 40) return;
-                      setCalendarDayOffset((currentOffset) =>
-                        event.clientX < startX
-                          ? Math.min(14, currentOffset + 1)
-                          : Math.max(0, currentOffset - 1),
-                      );
-                    }}
-                    onPointerCancel={() => {
-                      calendarSwipeStartX.current = null;
-                    }}
-                  >
-                    <button
-                      className={
-                        selectedDateKey === null
-                          ? 'fh-calendar-reset is-selected'
-                          : 'fh-calendar-reset'
-                      }
-                      type="button"
-                      aria-label="Все даты"
-                      aria-pressed={selectedDateKey === null}
-                      onClick={() => setSelectedDateKey(null)}
-                    >
-                      <span>Все даты</span>
-                    </button>
-                    {calendarDays.map((day) => {
-                      const dateKey = localDateKey(day);
-                      const selected = selectedDateKey === dateKey;
-                      return (
-                        <button
-                          className={selected ? 'is-selected' : ''}
-                          type="button"
-                          key={dateKey}
-                          aria-label={calendarDayLabelFormatter.format(day)}
-                          aria-pressed={selected}
-                          onClick={() => setSelectedDateKey(selected ? null : dateKey)}
-                        >
-                          <strong>{day.getDate()}</strong>
-                          <small>{calendarDayFormatter.format(day).replace('.', '')}</small>
-                          {datesWithBookings.has(dateKey) ? <i aria-hidden="true" /> : null}
-                        </button>
-                      );
-                    })}
-                  </div>
-                  <div className="fh-filter-pills" aria-label="Фильтр записей по типу">
-                    {(
-                      [
-                        ['all', 'Все'],
-                        ['game', 'Игры'],
-                        ['training', 'Тренировки'],
-                        ['tournament', 'Турниры'],
-                      ] as const
-                    ).map(([kind, label]) => (
-                      <button
-                        className={selectedBookingKind === kind ? 'is-selected' : ''}
-                        type="button"
-                        key={kind}
-                        aria-pressed={selectedBookingKind === kind}
-                        onClick={() => setSelectedBookingKind(kind)}
-                      >
-                        {label}
-                      </button>
-                    ))}
-                  </div>
+              upcoming === null ? (
+                <div className="fh-section-state" role="status">
+                  <span className="loader" aria-hidden="true" />
+                  <strong>Загружаем мои записи…</strong>
                 </div>
-                <div className="fh-divider" />
-                {visibleUpcoming.length > 0 ? (
-                  <div className="fh-bookings-list">
-                    {visibleUpcoming.map((item) => (
-                      <div className="fh-booking-entry" key={item.id}>
-                        <EventCard item={item} />
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="fh-bookings-empty" role="status">
-                    <strong>
-                      {selectedDateKey || selectedBookingKind !== 'all'
-                        ? 'По выбранным фильтрам записей нет'
-                        : 'Ближайших записей нет'}
-                    </strong>
-                    <p>
-                      {selectedDateKey || selectedBookingKind !== 'all'
-                        ? 'Выберите другой день, тип записи или снимите фильтр даты повторным нажатием.'
-                        : 'Когда появятся ближайшие записи, они отобразятся здесь.'}
+              ) : upcoming.state === 'UNAVAILABLE' ? (
+                <div className="fh-section-state is-unavailable" role="alert">
+                  <strong>Мои записи временно недоступны</strong>
+                  <p>{upcoming.message}</p>
+                  <button type="button" onClick={onRetryUpcoming}>
+                    Повторить
+                  </button>
+                </div>
+              ) : (
+                <>
+                  {upcoming.state === 'STALE' ? (
+                    <p className="fh-section-stale" role="status">
+                      Показаны последние доступные записи. Данные могут быть неактуальны.
                     </p>
+                  ) : null}
+                  <div className="fh-filters" aria-label="Фильтр записей по дате">
+                    <div
+                      className="fh-calendar"
+                      onPointerDown={(event) => {
+                        calendarSwipeStartX.current = event.clientX;
+                      }}
+                      onPointerUp={(event) => {
+                        const startX = calendarSwipeStartX.current;
+                        calendarSwipeStartX.current = null;
+                        if (startX === null || Math.abs(event.clientX - startX) < 40) return;
+                        setCalendarDayOffset((currentOffset) =>
+                          event.clientX < startX
+                            ? Math.min(14, currentOffset + 1)
+                            : Math.max(0, currentOffset - 1),
+                        );
+                      }}
+                      onPointerCancel={() => {
+                        calendarSwipeStartX.current = null;
+                      }}
+                    >
+                      <button
+                        className={
+                          selectedDateKey === null
+                            ? 'fh-calendar-reset is-selected'
+                            : 'fh-calendar-reset'
+                        }
+                        type="button"
+                        aria-label="Все даты"
+                        aria-pressed={selectedDateKey === null}
+                        onClick={() => setSelectedDateKey(null)}
+                      >
+                        <span>Все даты</span>
+                      </button>
+                      {calendarDays.map((day) => {
+                        const dateKey = localDateKey(day);
+                        const selected = selectedDateKey === dateKey;
+                        return (
+                          <button
+                            className={selected ? 'is-selected' : ''}
+                            type="button"
+                            key={dateKey}
+                            aria-label={calendarDayLabelFormatter.format(day)}
+                            aria-pressed={selected}
+                            onClick={() => setSelectedDateKey(selected ? null : dateKey)}
+                          >
+                            <strong>{day.getDate()}</strong>
+                            <small>{calendarDayFormatter.format(day).replace('.', '')}</small>
+                            {datesWithBookings.has(dateKey) ? (
+                              <i className="fh-booking-presence-dot" aria-hidden="true" />
+                            ) : null}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <div className="fh-filter-pills" aria-label="Фильтр записей по типу">
+                      {(
+                        [
+                          ['all', 'Все'],
+                          ['game', 'Игры'],
+                          ['training', 'Тренировки'],
+                          ['tournament', 'Турниры'],
+                        ] as const
+                      ).map(([kind, label]) => (
+                        <button
+                          className={selectedBookingKind === kind ? 'is-selected' : ''}
+                          type="button"
+                          key={kind}
+                          aria-pressed={selectedBookingKind === kind}
+                          onClick={() => setSelectedBookingKind(kind)}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
                   </div>
-                )}
-                <div className="fh-bookings-footer">
                   <div className="fh-divider" />
-                  <div className="fh-bookings-footer-action">
-                    <button type="button" onClick={() => setHistoryOpen(true)}>
-                      История посещений
-                    </button>
+                  {visibleUpcoming.length > 0 ? (
+                    <div className="fh-bookings-list">
+                      {visibleUpcoming.map((item) => (
+                        <div className="fh-booking-entry" key={item.id}>
+                          <EventCard item={item} />
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="fh-bookings-empty" role="status">
+                      <strong>
+                        {selectedDateKey || selectedBookingKind !== 'all'
+                          ? 'По выбранным фильтрам записей нет'
+                          : 'Ближайших записей нет'}
+                      </strong>
+                      <p>
+                        {selectedDateKey || selectedBookingKind !== 'all'
+                          ? 'Выберите другой день, тип записи или снимите фильтр даты повторным нажатием.'
+                          : 'Когда появятся ближайшие записи, они отобразятся здесь.'}
+                      </p>
+                    </div>
+                  )}
+                  <div className="fh-bookings-footer">
+                    <div className="fh-divider" />
+                    <div className="fh-bookings-footer-action">
+                      <button type="button" onClick={() => setHistoryOpen(true)}>
+                        История посещений
+                      </button>
+                    </div>
                   </div>
-                </div>
-              </>
+                </>
+              )
             ) : (
               <div className="fh-for-me">
-                <header>
-                  <a href="/profile#booking-preferences-title">Настроить</a>
-                </header>
                 {bookingRecommendationsLoading && !bookingRecommendations ? (
-                  <p role="status">Подбираем игры…</p>
+                  <div className="fh-for-me-loader" role="status" aria-label="Подбираем игры">
+                    <img src={bookingRecommendationsLoaderUrl} alt="" />
+                  </div>
                 ) : null}
                 {bookingRecommendationsError ? (
                   <p role="alert">{bookingRecommendationsError}</p>
                 ) : null}
                 {bookingRecommendations ? (
-                  <BookingRecommendations page={bookingRecommendations} compact />
+                  <BookingRecommendations
+                    page={bookingRecommendations}
+                    compact
+                    compactActionVariant={usesV3RecommendationCards ? 'mini-create' : 'default'}
+                    compactMetadataVariant={usesV3RecommendationCards ? 'station-time' : 'default'}
+                    compactRosterVariant={usesV3RecommendationCards ? 'host-slots' : 'default'}
+                    showCompactReasonBadges={!usesV3RecommendationCards}
+                    hasMore={Boolean(bookingRecommendations.nextCursor)}
+                    loadingMore={bookingRecommendationsLoadingMore}
+                    onLoadMore={loadMoreBookingRecommendations}
+                    recommendationStripAdvertising={promotionSlots?.recommendationStrip ?? null}
+                    recommendationCardAdvertising={promotionSlots?.recommendationCard ?? null}
+                    advertisingLayout={usesV3RecommendationCards ? 'compact' : 'vertical'}
+                    {...(recordPromotionEngagement
+                      ? { onAdvertisingEngagement: recordPromotionEngagement }
+                      : {})}
+                  />
                 ) : null}
                 <div className="fh-bookings-footer">
                   <div className="fh-divider" />
-                  <div className="fh-bookings-footer-action">
-                    <a href="/bookings?view=for-me">Все рекомендации</a>
+                  <div
+                    className={`fh-bookings-footer-action${
+                      usesV3RecommendationCards ? '' : ' is-split'
+                    }`}
+                  >
+                    {usesV3RecommendationCards ? null : (
+                      <a href="/bookings?view=for-me">Все рекомендации</a>
+                    )}
+                    <a href="/profile#booking-preferences-title">Настроить</a>
                   </div>
                 </div>
               </div>
             )}
           </section>
 
-          <HomePromotionCarousel
-            promotion={dashboard.promotion}
-            promotions={dashboard.promotions}
-          />
-
-          <section className="fh-lower">
-            <section className="fh-locations" aria-labelledby="fh-locations-title">
-              <div className="fh-section-head">
-                <h2 id="fh-locations-title">
-                  Локации <span>{dashboard.locations.length}</span>
-                </h2>
-                <a href="/locations">Все</a>
-              </div>
-              <div className="fh-location-track">
-                {dashboard.locations.map((location, index) => {
-                  const imageUrl = location.imageUrl ?? (index === 0 ? locationSeligerUrl : null);
-                  return (
-                    <a
-                      className="fh-location-card"
-                      href={location.route}
-                      key={location.id}
-                      aria-label={`${location.title}, ${location.courtCount} кортов`}
-                      style={imageUrl ? { backgroundImage: `url(${imageUrl})` } : undefined}
-                    >
-                      <span>
-                        <strong>{location.title}</strong>
-                        <small>{location.courtCount} кортов</small>
-                      </span>
-                    </a>
-                  );
-                })}
-              </div>
+          {layoutVariant === 'v3' && bookingTab === 'MY' ? (
+            <section className="fh-v3-my-extras" aria-label="Сервисы клуба">
+              <HomeStandardPromotionSection promotions={dashboard.promotions} />
+              <HomeLocationsSection
+                locations={dashboard.locations}
+                titleId="fh-v3-locations-title"
+              />
+              <HomeAdditionalLinks links={dashboard.additionalLinks} />
             </section>
+          ) : null}
 
-            {dashboard.additionalLinks.some((link) => isImplementedMvpRoute(link.route)) ? (
-              <nav className="fh-additional" aria-label="Дополнительные разделы">
-                {dashboard.additionalLinks
-                  .filter((link) => isImplementedMvpRoute(link.route))
-                  .map((link) => (
-                    <a href={link.route} key={link.id}>
-                      <span>{link.title}</span>
-                      <Chevron />
-                    </a>
-                  ))}
-              </nav>
-            ) : null}
-          </section>
+          {layoutVariant === 'v3' ? null : (
+            <>
+              <HomeStandardPromotionSection promotions={dashboard.promotions} />
+
+              <section className="fh-lower">
+                <HomeLocationsSection
+                  locations={dashboard.locations}
+                  titleId="fh-locations-title"
+                />
+                <HomeAdditionalLinks links={dashboard.additionalLinks} />
+              </section>
+            </>
+          )}
         </section>
 
         <MainBottomNavigation active="home" />

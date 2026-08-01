@@ -16,9 +16,12 @@ from Home would recreate the startup fan-out that the Home projection removed.
 ## Decision
 
 Create canonical tenant-RLS community and membership tables plus the shared `CommunitySummary`
-contract. Home contains at most five summaries. The complete active-membership list is loaded only
-after navigation through `GET /user/api/v1/{tenantKey}/communities/mine`, with bounded keyset
-pagination and a server-owned opaque cursor.
+contract. Home contains at most ten summaries. The web renders them immediately, then replaces the
+fallback with the first ten-item page from `GET /user/api/v1/{tenantKey}/communities/mine` to
+establish the server-owned opaque cursor. Approaching the end of the horizontal rail loads the next
+page. An `UNAVAILABLE` Home component still starts this canonical directory read; the unavailable
+message is retained only when the directory read also fails. The snapshot and directory versions
+are never field-merged.
 
 Canonical reads execute the cursor as a PostgreSQL keyset query with `limit + 1`. The temporary
 legacy source cannot page memberships, so its bounded summary is fetched once into a short
@@ -35,7 +38,7 @@ limit, redacted metrics and short normalized cache. `local`, `legacy` and `mock`
 the client never selects one. Production cannot use `mock`.
 
 The worker uses that same server-owned repository in a bounded community synchronization cycle that
-is independent of the Viva profile/bookings/subscriptions cycle. It stores a normalized five-item
+is independent of the Viva profile/bookings/subscriptions cycle. It stores a normalized ten-item
 producer component and emits it through outbox/projector; the Home request itself reads only the
 completed snapshot. Community refresh failure is isolated from Viva Home source failure and retains
 the last valid community component.
@@ -49,7 +52,8 @@ a changed URL imports a new immutable object and queues the old one for delayed 
 
 ## Consequences
 
-- More than five memberships do not enlarge Home or add a second startup request.
+- More than ten memberships do not enlarge the Home snapshot. One authenticated ten-item directory
+  bootstrap read establishes pagination; continuation reads happen only near the rail boundary.
 - The communities page can load the first 20 and continue without offset drift from newly inserted
   rows.
 - Existing Home snapshots using the previous wider card shape are normalized on read and when the

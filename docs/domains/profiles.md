@@ -13,7 +13,10 @@ The two reads intentionally serve different purposes:
 | `GET /{tenantKey}/profiles/{userId}` | canonical viewer-filtered player card             | only when viewer is self |
 
 Web maps `/profile` to the signed-in user's UUID and `/profile/{userId}` to another player's UUID.
-The browser does not select a provider or request a wider DTO.
+The browser does not select a provider or request a wider DTO. The authenticated-self read also
+stays on the PadlHub API when a migration routing plan advertises a direct Viva profile read,
+because combining that provider response with a locally stored avatar would violate profile source
+consistency.
 
 `avatarUrl` is either null or the stable PadlHub path
 `/public/api/v1/media/profile-photos/{tenantId}/{deliveryId}`. The opaque delivery UUID is not the
@@ -105,6 +108,20 @@ The current implementation reuses the validated local Home profile component as 
 read source. The target state is a dedicated profile projection containing the normalized profile
 and target privacy version. Moving to that projection is an internal change; the public DTO and
 reason codes remain stable.
+
+## Multi-sport isolation
+
+The chosen sport is an account context, not a colour theme. A switch from padel to squash must
+replace the complete sport-owned slice: level/rating, match history, communities, recommendations,
+subscriptions and any future sport-specific permissions. The client must never reuse or relabel a
+padel response as squash data, nor merge the two aggregates on one screen.
+
+The current web selector demonstrates this boundary: the squash and badminton screens use their
+own artwork and do not render padel memberships, friends, communities, level history or booking
+preferences. They deliberately remain empty states until the API supplies server-owned sport
+profile projections. Persisting the active sport and serving sport data require an
+expand/migrate/contract backend change with tenant-scoped sport identifiers and sport-filtered
+profile/community reads.
 
 ## Rollout
 

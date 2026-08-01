@@ -434,6 +434,57 @@ paths:
           $ref: ../../common/components.yaml#/components/responses/TooManyRequests
         '503':
           $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/tournaments/{summaryId}:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - name: summaryId
+        in: path
+        required: true
+        description: Stable PadlHub tournament-summary UUID.
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [tournaments]
+      operationId: getPublicTournamentSummary
+      summary: Load one public tournament summary
+      description: |
+        Resolves one PadlHub tournament UUID within a bounded fifteen-day range. The server stops
+        reading schedule dates as soon as the requested summary is found and never returns provider
+        identifiers, participant contact data, payment data or tournament mechanics.
+      parameters:
+        - name: dateFrom
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+        - name: dateTo
+          in: query
+          required: true
+          description: Exclusive upper date bound; the range may contain at most fifteen days.
+          schema:
+            type: string
+            format: date
+      responses:
+        '200':
+          description: Requested tournament summary.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicTournamentSummary'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
   /{tenantKey}/tournaments/{summaryId}/organizer-avatar:
     parameters:
       - $ref: ../../common/components.yaml#/components/parameters/TenantKey
@@ -448,10 +499,10 @@ paths:
     get:
       tags: [tournaments]
       operationId: getPublicTournamentOrganizerAvatar
-      summary: Load a proxied tournament organizer avatar
+      summary: Load a locally cached tournament organizer avatar
       description: |
-        Returns a PadlHub-normalized WebP image. The upstream media URL and provider identifiers
-        remain server-side.
+        Reads the PadlHub-owned WebP cache first and uses the upstream source only on a cache miss.
+        The upstream media URL and provider identifiers remain server-side.
       responses:
         '200':
           description: Organizer avatar normalized as WebP.
@@ -542,13 +593,48 @@ paths:
     get:
       tags: [coach-games]
       operationId: getPublicCoachGameTrainerAvatar
-      summary: Load a proxied coach avatar
+      summary: Load a locally cached coach avatar
       description: |
-        Returns a PadlHub-normalized WebP image. The Viva media URL and trainer identifier remain
-        server-side.
+        Reads the PadlHub-owned WebP cache first and uses Viva only on a cache miss. The Viva media
+        URL and trainer identifier remain server-side.
       responses:
         '200':
           description: Trainer avatar normalized as WebP.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            image/webp:
+              schema:
+                type: string
+                format: binary
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/booking-activities/{activityId}/host-avatar:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - name: activityId
+        in: path
+        required: true
+        description: Stable PadlHub booking-activity UUID.
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [bookings]
+      operationId: getPublicBookingActivityHostAvatar
+      summary: Load a locally cached training or tournament host avatar
+      description: |
+        Reads the PadlHub-owned WebP cache first and uses Viva only on a cache miss. The Viva media
+        URL and host identifier remain server-side.
+      responses:
+        '200':
+          description: Activity host avatar normalized as WebP.
           headers:
             X-Correlation-ID:
               $ref: ../../common/components.yaml#/components/headers/CorrelationId

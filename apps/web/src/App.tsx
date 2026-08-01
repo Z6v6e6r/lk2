@@ -14,6 +14,7 @@ import {
   type AuthEntryView,
 } from './browser-auth-context.js';
 import { HomeDashboardPage } from './HomeDashboardPage.js';
+import type { HomeSectionEnvelope } from './HomeDashboardPage.js';
 import { GamesPage } from './GamesPage.js';
 import { GiftCertificatesPage } from './GiftCertificatesPage.js';
 import { LocationDetailPage } from './LocationDetailPage.js';
@@ -21,12 +22,15 @@ import { LocationsPage } from './LocationsPage.js';
 import { NotificationsPage } from './NotificationsPage.js';
 import { ProfilePage } from './ProfilePage.js';
 import { ProfileLevelHistoryPage } from './ProfileLevelHistoryPage.js';
+import { TrainingsPage } from './TrainingsPage.js';
+import { TournamentDetailPage } from './TournamentDetailPage.js';
 import type {
   AuthGateway,
   AuthenticatedSession,
   BookingPreferences,
   BookingPreferencesUpdateRequest,
   CommunityMembershipPage,
+  HomeBase,
   HomeDashboard,
   LocationDetail,
   LocationList,
@@ -38,6 +42,7 @@ import type {
   ProfilePrivacyUpdateRequest,
   ProfileFriendPage,
   ProfileFriendship,
+  UserProfile,
   UserUpcomingBookings,
   VivaOAuthProvider,
   WebPushConfiguration,
@@ -54,6 +59,8 @@ type BusyAction = 'start-viva' | 'request-code' | 'verify-code' | 'logout' | nul
 
 type ProtectedRoute =
   | { readonly kind: 'home' }
+  | { readonly kind: 'home-v2' }
+  | { readonly kind: 'home-v3' }
   | { readonly kind: 'profile'; readonly userId?: string }
   | { readonly kind: 'profile-level-history' }
   | { readonly kind: 'bookings' }
@@ -63,13 +70,14 @@ type ProtectedRoute =
   | { readonly kind: 'location'; readonly locationId: string }
   | { readonly kind: 'games' }
   | { readonly kind: 'game'; readonly gameId: string }
+  | { readonly kind: 'trainings' }
+  | { readonly kind: 'tournaments' }
   | { readonly kind: 'gift-certificates' }
   | { readonly kind: 'section'; readonly title: string }
   | { readonly kind: 'not-found' };
 
 const visibleWorkInProgressSections = [
-  ['/tournaments', 'Турниры'],
-  ['/trainings', 'Тренировки'],
+  ['/coaches', 'Индивидуальные тренировки'],
   ['/subscriptions', 'Абонементы'],
   ['/promotions', 'Акции'],
   ['/offers', 'Предложения'],
@@ -78,6 +86,8 @@ const visibleWorkInProgressSections = [
 function resolveProtectedRoute(pathname: string): ProtectedRoute {
   const normalizedPath = pathname.length > 1 ? pathname.replace(/\/+$/, '') : pathname;
   if (normalizedPath === '/') return { kind: 'home' };
+  if (normalizedPath === '/home-v2') return { kind: 'home-v2' };
+  if (normalizedPath === '/home-v3') return { kind: 'home-v3' };
   if (normalizedPath === '/profile') return { kind: 'profile' };
   if (normalizedPath === '/profile/level-history') return { kind: 'profile-level-history' };
   const profileMatch = normalizedPath.match(
@@ -93,6 +103,8 @@ function resolveProtectedRoute(pathname: string): ProtectedRoute {
   );
   if (locationMatch?.[1]) return { kind: 'location', locationId: locationMatch[1] };
   if (normalizedPath === '/games') return { kind: 'games' };
+  if (normalizedPath === '/trainings') return { kind: 'trainings' };
+  if (normalizedPath === '/tournaments') return { kind: 'tournaments' };
   if (normalizedPath === '/gift-certificates') return { kind: 'gift-certificates' };
   if (normalizedPath === '/games/new') return { kind: 'section', title: 'Создание игры' };
   const gameMatch = normalizedPath.match(
@@ -336,7 +348,9 @@ export interface AppProps {
 
 const HOME_REFRESH_INTERVAL_MS = 30_000;
 const NOTIFICATIONS_REFRESH_INTERVAL_MS = 15_000;
-const HOME_INITIAL_RETRY_DELAYS_MS = [400, 1_000, 2_000] as const;
+const HOME_INITIAL_RETRY_DELAYS_MS = [
+  400, 1_000, 2_000, 5_000, 10_000, 20_000, 30_000, 30_000, 30_000,
+] as const;
 
 export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
   const [state, dispatch] = useReducer(reducer, initialState);
@@ -344,9 +358,15 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
   const iosBrowser = isIOSBrowser(browserNavigator);
   const entryView = preferredAuthEntryView(browserNavigator);
   const [currentTime, setCurrentTime] = useState(() => Date.now());
-  const [homeDashboard, setHomeDashboard] = useState<HomeDashboard | null>(null);
+  const [homeBase, setHomeBase] = useState<HomeBase | null>(null);
   const [homeError, setHomeError] = useState<string | null>(null);
   const [homeReloadToken, setHomeReloadToken] = useState(0);
+  const [homeViewer, setHomeViewer] = useState<HomeSectionEnvelope<UserProfile> | null>(null);
+  const [homeViewerReloadToken, setHomeViewerReloadToken] = useState(0);
+  const [homeUpcoming, setHomeUpcoming] =
+    useState<HomeSectionEnvelope<UserUpcomingBookings> | null>(null);
+  const [homeUpcomingRequested, setHomeUpcomingRequested] = useState(false);
+  const [homeUpcomingReloadToken, setHomeUpcomingReloadToken] = useState(0);
   const [locations, setLocations] = useState<LocationList | null>(null);
   const [locationDetail, setLocationDetail] = useState<LocationDetail | null>(null);
   const [locationsError, setLocationsError] = useState<string | null>(null);
@@ -357,6 +377,7 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
   const [profilePrivacyError, setProfilePrivacyError] = useState<string | null>(null);
   const [profilePrivacyNotice, setProfilePrivacyNotice] = useState<string | null>(null);
   const [bookingPreferences, setBookingPreferences] = useState<BookingPreferences | null>(null);
+  const [homeBookingPreferencesResolved, setHomeBookingPreferencesResolved] = useState(false);
   const [bookingPreferencesBusy, setBookingPreferencesBusy] = useState(false);
   const [bookingPreferencesError, setBookingPreferencesError] = useState<string | null>(null);
   const [bookingPreferencesNotice, setBookingPreferencesNotice] = useState<string | null>(null);
@@ -396,6 +417,10 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
     protectedRoute.kind === 'profile' ? protectedRoute.userId : undefined;
   const requestedLocationId =
     protectedRoute.kind === 'location' ? protectedRoute.locationId : undefined;
+  const isHomeRoute =
+    protectedRoute.kind === 'home' ||
+    protectedRoute.kind === 'home-v2' ||
+    protectedRoute.kind === 'home-v3';
   const phoneInput = useRef<HTMLInputElement>(null);
   const codeInput = useRef<HTMLInputElement>(null);
 
@@ -420,6 +445,84 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
       active = false;
     };
   }, [entryView, gateway, publicGiftRoute]);
+
+  useEffect(() => {
+    if (state.view !== 'home' || !state.session || !isHomeRoute) return;
+    let active = true;
+    void gateway.getSelfProfile().then(
+      (profile) => {
+        if (active) setHomeViewer({ state: 'READY', value: profile });
+      },
+      () => {
+        if (active) {
+          setHomeViewer({
+            state: 'UNAVAILABLE',
+            message: 'Не удалось обновить данные игрока.',
+          });
+        }
+      },
+    );
+    return () => {
+      active = false;
+    };
+  }, [gateway, homeViewerReloadToken, isHomeRoute, state.session, state.view]);
+
+  useEffect(() => {
+    if (state.view !== 'home' || !state.session || !isHomeRoute) return;
+    let active = true;
+    void gateway.getBookingPreferences().then(
+      (settings) => {
+        if (active) {
+          setBookingPreferences(settings);
+          setHomeBookingPreferencesResolved(true);
+        }
+      },
+      () => {
+        if (active) {
+          setBookingPreferences(null);
+          setHomeBookingPreferencesResolved(true);
+        }
+      },
+    );
+    return () => {
+      active = false;
+    };
+  }, [gateway, isHomeRoute, state.session, state.view]);
+
+  useEffect(() => {
+    if (state.view !== 'home' || !state.session || !isHomeRoute || !homeUpcomingRequested) {
+      return;
+    }
+    let active = true;
+    void gateway.getUpcomingBookings().then(
+      (bookings) => {
+        if (!active) return;
+        setHomeUpcoming({
+          state: Date.parse(bookings.staleAt) <= Date.now() ? 'STALE' : 'READY',
+          value: bookings,
+        });
+      },
+      () => {
+        if (active) {
+          setHomeUpcoming({
+            state: 'UNAVAILABLE',
+            message:
+              'Не удалось получить актуальные записи. Остальные разделы продолжают работать.',
+          });
+        }
+      },
+    );
+    return () => {
+      active = false;
+    };
+  }, [
+    gateway,
+    homeUpcomingReloadToken,
+    homeUpcomingRequested,
+    isHomeRoute,
+    state.session,
+    state.view,
+  ]);
 
   useEffect(() => {
     if (state.view !== 'home' || !state.session) return;
@@ -502,18 +605,13 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
             setProfileCommunitiesError('Не удалось загрузить сообщества.');
           },
         );
-        void gateway.getHomeDashboard().then(
-          (dashboard) => {
-            if (!active) return;
-            setProfileSubscriptions(dashboard.subscriptions);
-            setProfileSubscriptionsError(null);
-          },
-          () => {
-            if (!active) return;
-            setProfileSubscriptions([]);
-            setProfileSubscriptionsError('Не удалось загрузить подписки и абонементы.');
-          },
-        );
+        void Promise.resolve().then(() => {
+          if (!active) return;
+          setProfileSubscriptions(null);
+          setProfileSubscriptionsError(
+            'Подписки и абонементы временно недоступны. Остальные данные профиля загружены.',
+          );
+        });
         void gateway.listProfileFriends(8).then(
           (page) => {
             if (!active) return;
@@ -679,15 +777,20 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
         active = false;
       };
     }
-    if (protectedRoute.kind !== 'home') return;
+    if (
+      protectedRoute.kind !== 'home' &&
+      protectedRoute.kind !== 'home-v2' &&
+      protectedRoute.kind !== 'home-v3'
+    )
+      return;
     let homeRetryTimer: number | undefined;
     let homeLoaded = false;
     const refreshHome = (attempt = 0): void => {
-      void gateway.getHomeDashboard().then(
+      void gateway.getHomeBase().then(
         (dashboard) => {
           if (active) {
             homeLoaded = true;
-            setHomeDashboard(dashboard);
+            setHomeBase(dashboard);
             setHomeError(null);
           }
         },
@@ -849,8 +952,11 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
       .then(() => gateway.logout())
       .then(
         () => {
-          setHomeDashboard(null);
+          setHomeBase(null);
           setHomeError(null);
+          setHomeViewer(null);
+          setHomeUpcoming(null);
+          setHomeUpcomingRequested(false);
           setLocations(null);
           setLocationDetail(null);
           setLocationsError(null);
@@ -1107,7 +1213,7 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
           bookings={upcomingBookings}
           tenantName={context.tenant.name}
           loadHistory={gateway.getActivityHistory}
-          loadRecommendations={() => gateway.listBookingRecommendations(20)}
+          loadRecommendations={() => gateway.listBookingRecommendations({ limit: 20 })}
         />
       );
     }
@@ -1209,6 +1315,16 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
         />
       );
     }
+    if (protectedRoute.kind === 'trainings') {
+      return <TrainingsPage gateway={gateway} />;
+    }
+    if (protectedRoute.kind === 'tournaments') {
+      const tournamentId =
+        typeof window === 'undefined'
+          ? null
+          : new URLSearchParams(window.location.search).get('event');
+      return <TournamentDetailPage gateway={gateway} tournamentId={tournamentId} />;
+    }
     if (protectedRoute.kind === 'gift-certificates') {
       return (
         <GiftCertificatesPage
@@ -1243,7 +1359,7 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
         </main>
       );
     }
-    if (!homeDashboard) {
+    if (!homeBase || !homeBookingPreferencesResolved) {
       return (
         <main className="app-shell app-shell-loading" aria-labelledby="home-loading-title">
           <Brand />
@@ -1281,14 +1397,42 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
     }
     return (
       <HomeDashboardPage
-        dashboard={homeDashboard}
+        dashboard={homeBase}
+        viewerFallback={context.user}
+        viewer={homeViewer}
+        upcoming={homeUpcoming}
         tenantName={context.tenant.name}
+        layoutVariant={
+          protectedRoute.kind === 'home-v2'
+            ? 'v2'
+            : protectedRoute.kind === 'home'
+              ? 'v3'
+              : 'default'
+        }
+        recommendationDisplay={bookingPreferences?.recommendationDisplay ?? 'CARDS'}
         notificationUnreadCount={notifications?.unreadCount ?? 0}
         loadCommunityPage={gateway.listMyCommunities}
-        loadBookingRecommendations={() => gateway.listBookingRecommendations(6)}
+        communityPageSize={10}
+        loadBookingRecommendations={(input) =>
+          gateway.listHomeBookingRecommendations
+            ? gateway.listHomeBookingRecommendations(input)
+            : gateway.listBookingRecommendations(input)
+        }
+        recordPromotionEngagement={(promotionId, kind) =>
+          gateway.recordPromotionEngagement(promotionId, kind)
+        }
         loadActivityHistory={gateway.getActivityHistory}
         logoutBusy={state.busy === 'logout'}
         error={state.error}
+        onRetryViewer={() => {
+          setHomeViewer(null);
+          setHomeViewerReloadToken((token) => token + 1);
+        }}
+        onActivateUpcoming={() => setHomeUpcomingRequested(true)}
+        onRetryUpcoming={() => {
+          setHomeUpcoming(null);
+          setHomeUpcomingReloadToken((token) => token + 1);
+        }}
         onLogout={handleLogout}
       />
     );

@@ -88,6 +88,45 @@ describe('identity auth repository', () => {
     });
   });
 
+  it('resolves and audits only an existing issuer and subject binding', async () => {
+    const statements: string[] = [];
+    const { repository } = repositoryWithClient((text) => {
+      statements.push(text);
+      if (text.includes('from integration.external_identity_map e')) {
+        return {
+          rows: [
+            {
+              id: userId,
+              tenant_id: tenantId,
+              display_name: 'Алексей',
+              phone_last_4: '4567',
+            },
+          ],
+        };
+      }
+      return { rows: [], rowCount: 1 };
+    });
+
+    await expect(
+      repository.resolveExistingExternalUser({
+        tenantId,
+        issuer: 'https://kc.vivacrm.ru/realms/clients',
+        subject: 'stable-viva-subject',
+        correlationId: 'mixed-bootstrap-correlation-123',
+      }),
+    ).resolves.toEqual({
+      id: userId,
+      tenantId,
+      displayName: 'Алексей',
+      phoneLast4: '4567',
+    });
+    expect(
+      statements.some((text) => text.includes('update integration.external_identity_map')),
+    ).toBe(true);
+    expect(statements.some((text) => text.includes('insert into audit.audit_log'))).toBe(true);
+    expect(statements.some((text) => text.includes('insert into identity.users'))).toBe(false);
+  });
+
   it('creates a user from issuer and subject without using phone as identity', async () => {
     const statements: string[] = [];
     const { repository } = repositoryWithClient((text) => {

@@ -846,6 +846,25 @@ export interface PublicTournamentSummary {
   readonly route: string;
 }
 
+export interface TournamentParticipant {
+  readonly id: string;
+  readonly displayName: string;
+  readonly level: GamePlayerLevel | null;
+  readonly avatarUrl: null;
+}
+
+export interface TournamentParticipantRoster {
+  readonly items: readonly TournamentParticipant[];
+  readonly refreshedAt: string;
+}
+
+export interface LegacyTournamentTrainerAvatarSource {
+  readonly provider: 'VIVA';
+  readonly providerTrainerId: string;
+  readonly displayName: string;
+  readonly sourceUrl?: string;
+}
+
 export interface LegacyTournamentSummaryAdapterOptions {
   readonly baseUrl?: string;
   readonly timeoutMs?: number;
@@ -867,10 +886,29 @@ interface TournamentCacheEntry {
   readonly items: readonly PublicTournamentSummary[];
 }
 
+interface TournamentParticipantCacheEntry {
+  readonly fetchedAt: number;
+  readonly roster: TournamentParticipantRoster;
+}
+
 function publicTournamentId(externalId: string): string {
   const bytes = Buffer.from(
     createHash('sha256')
       .update(`phub-public-tournament-v1:${externalId}`)
+      .digest('hex')
+      .slice(0, 32),
+    'hex',
+  );
+  bytes[6] = ((bytes[6] ?? 0) & 0x0f) | 0x40;
+  bytes[8] = ((bytes[8] ?? 0) & 0x3f) | 0x80;
+  const hex = bytes.toString('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+function publicTournamentParticipantId(externalId: string): string {
+  const bytes = Buffer.from(
+    createHash('sha256')
+      .update(`phub-public-tournament-participant-v1:${externalId}`)
       .digest('hex')
       .slice(0, 32),
     'hex',
@@ -963,8 +1001,14 @@ export class LegacyTournamentSummaryAdapter {
   private readonly pending = new Map<string, Promise<readonly PublicTournamentSummary[]>>();
   private readonly avatarSources = new Map<
     string,
-    { readonly sourceUrl: string; readonly fetchedAt: number }
+    { readonly source: LegacyTournamentTrainerAvatarSource; readonly fetchedAt: number }
   >();
+  private readonly participantSources = new Map<
+    string,
+    { readonly externalId: string; readonly fetchedAt: number }
+  >();
+  private readonly participantCache = new Map<string, TournamentParticipantCacheEntry>();
+  private readonly participantPending = new Map<string, Promise<TournamentParticipantRoster>>();
   private consecutiveFailures = 0;
   private circuitOpenedAt: number | undefined;
 
@@ -1016,8 +1060,28 @@ export class LegacyTournamentSummaryAdapter {
             typeof item === 'object' && item !== null && !Array.isArray(item)
               ? httpsUrl((item as Record<string, unknown>).trainerAvatarUrl)
               : undefined;
-          if (summary && avatarSourceUrl) {
-            this.avatarSources.set(summary.id, { sourceUrl: avatarSourceUrl, fetchedAt: now });
+          const providerTrainerId =
+            typeof item === 'object' && item !== null && !Array.isArray(item)
+              ? stringValue((item as Record<string, unknown>).trainerId)
+              : undefined;
+          if (summary?.organizer && (providerTrainerId || avatarSourceUrl)) {
+            this.avatarSources.set(summary.id, {
+              source: {
+                provider: 'VIVA',
+                providerTrainerId: providerTrainerId ?? `tournament:${summary.id}`,
+                displayName: summary.organizer.displayName,
+                ...(avatarSourceUrl ? { sourceUrl: avatarSourceUrl } : {}),
+              },
+              fetchedAt: now,
+            });
+          }
+          if (summary && typeof item === 'object' && item !== null && !Array.isArray(item)) {
+            const externalId =
+              stringValue((item as Record<string, unknown>).id) ??
+              stringValue((item as Record<string, unknown>).exerciseId);
+            if (externalId) {
+              this.participantSources.set(summary.id, { externalId, fetchedAt: now });
+            }
           }
           return summary ? [summary] : [];
         })
@@ -1082,7 +1146,120 @@ export class LegacyTournamentSummaryAdapter {
       this.avatarSources.delete(summaryId);
       return undefined;
     }
-    return value.sourceUrl;
+    return value.source.sourceUrl;
+  }
+
+  public readTrainerAvatarSource(
+    summaryId: string,
+  ): LegacyTournamentTrainerAvatarSource | undefined {
+    const value = this.avatarSources.get(summaryId);
+    if (!value) return undefined;
+    const now = this.options.now?.() ?? Date.now();
+    if (now - value.fetchedAt > (this.options.staleTtlMs ?? 600_000)) {
+      this.avatarSources.delete(summaryId);
+      return undefined;
+    }
+    return value.source;
+  }
+
+  public readParticipants(summaryId: string): Promise<TournamentParticipantRoster> {
+    const now = this.options.now?.() ?? Date.now();
+    const source = this.participantSources.get(summaryId);
+    if (!source || now - source.fetchedAt > (this.options.staleTtlMs ?? 600_000)) {
+      return Promise.reject(new Error('TOURNAMENT_PARTICIPANT_SOURCE_NOT_FOUND'));
+    }
+    const cached = this.participantCache.get(summaryId);
+    if (cached && now - cached.fetchedAt <= (this.options.freshTtlMs ?? 30_000)) {
+      return Promise.resolve(cached.roster);
+    }
+    const pending = this.participantPending.get(summaryId);
+    if (pending) return pending;
+    const request = this.fetchParticipants(source.externalId)
+      .then((roster) => {
+        this.participantCache.set(summaryId, {
+          fetchedAt: this.options.now?.() ?? Date.now(),
+          roster,
+        });
+        return roster;
+      })
+      .catch((error) => {
+        if (cached && now - cached.fetchedAt <= (this.options.staleTtlMs ?? 600_000)) {
+          return cached.roster;
+        }
+        throw error;
+      })
+      .finally(() => {
+        if (this.participantPending.get(summaryId) === request) {
+          this.participantPending.delete(summaryId);
+        }
+      });
+    this.participantPending.set(summaryId, request);
+    return request;
+  }
+
+  private async fetchParticipants(externalId: string): Promise<TournamentParticipantRoster> {
+    const baseUrl = new URL(this.options.baseUrl ?? 'https://padlhub.su');
+    if (baseUrl.protocol !== 'https:' && baseUrl.hostname !== 'localhost') {
+      throw new Error('TOURNAMENT_SUMMARY_BASE_URL_INVALID');
+    }
+    const url = new URL('/lk/tournaments/participants', baseUrl);
+    url.searchParams.set('exerciseId', externalId);
+    url.searchParams.set('size', '50');
+    const response = await (this.options.fetchImplementation ?? fetch)(url, {
+      headers: { Accept: 'application/json' },
+      signal: AbortSignal.timeout(this.options.timeoutMs ?? 8_000),
+    });
+    if (!response.ok) throw new Error('TOURNAMENT_PARTICIPANTS_SOURCE_UNAVAILABLE');
+    const maxBytes = Math.min(this.options.maxResponseBytes ?? 1_024 * 1_024, 1_024 * 1_024);
+    const bytes = await response.arrayBuffer();
+    if (bytes.byteLength > maxBytes) throw new Error('TOURNAMENT_PARTICIPANTS_RESPONSE_TOO_LARGE');
+    const body = JSON.parse(new TextDecoder().decode(bytes)) as unknown;
+    const list = Array.isArray(body)
+      ? body
+      : typeof body === 'object' &&
+          body !== null &&
+          Array.isArray((body as { content?: unknown }).content)
+        ? (body as { content: unknown[] }).content
+        : undefined;
+    if (!list) throw new Error('TOURNAMENT_PARTICIPANTS_RESPONSE_INVALID');
+    const seen = new Set<string>();
+    const items = list.slice(0, 200).flatMap((value) => {
+      if (typeof value !== 'object' || value === null || Array.isArray(value)) return [];
+      const booking = value as Record<string, unknown>;
+      const status = stringValue(booking.status)?.toLowerCase();
+      if (
+        booking.isCancelled === true ||
+        booking.cancelled === true ||
+        booking.canceled === true ||
+        status === 'cancelled' ||
+        status === 'canceled' ||
+        status === 'cancel'
+      )
+        return [];
+      const client = booking.client;
+      if (typeof client !== 'object' || client === null || Array.isArray(client)) return [];
+      const record = client as Record<string, unknown>;
+      const externalClientId = stringValue(record.id);
+      if (!externalClientId || seen.has(externalClientId)) return [];
+      const displayName = [stringValue(record.firstName), stringValue(record.lastName)]
+        .filter((part): part is string => Boolean(part))
+        .join(' ')
+        .slice(0, 160);
+      if (!displayName) return [];
+      seen.add(externalClientId);
+      return [
+        {
+          id: publicTournamentParticipantId(externalClientId),
+          displayName,
+          level: playerLevel(booking.rating),
+          avatarUrl: null,
+        } satisfies TournamentParticipant,
+      ];
+    });
+    return {
+      items: items.slice(0, 50),
+      refreshedAt: new Date(this.options.now?.() ?? Date.now()).toISOString(),
+    };
   }
 }
 

@@ -117,6 +117,9 @@ const environmentSchema = z.object({
   LEGACY_GAMES_PROFILE_PHOTO_SYNC_LOOKBACK_DAYS: z.coerce.number().int().min(1).max(90).default(30),
   HOME_PROJECTION_MAX_STALE_SECONDS: z.coerce.number().int().nonnegative().max(86_400).default(300),
   HOME_PROJECTION_TTL_SECONDS: z.coerce.number().int().min(30).max(86_400).default(300),
+  HOME_BASE_SYNC_ENABLED: booleanFromEnvironment,
+  HOME_BASE_SYNC_INTERVAL_MS: z.coerce.number().int().min(30_000).max(3_600_000).default(120_000),
+  HOME_BASE_SYNC_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(20),
   HOME_VIVA_SYNC_ENABLED: booleanFromEnvironment,
   HOME_VIVA_LEGACY_GAME_BRIDGE_ENABLED: booleanFromEnvironment,
   HOME_VIVA_SYNC_INTERVAL_MS: z.coerce.number().int().min(30_000).max(3_600_000).default(120_000),
@@ -154,6 +157,16 @@ const environmentSchema = z.object({
   COMMUNITY_LOGO_GC_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(20),
   PROMOTIONS_READ_MODE: z.enum(['mock', 'legacy']).default('mock'),
   PROMOTIONS_LEGACY_BASE_URL: z.string().url().default('https://padlhub.su'),
+  PROMOTIONS_HERO_PLACEMENT: z.enum(['cabinet_home', 'cabinet_home_top']).default('cabinet_home'),
+  PROMOTIONS_STANDARD_PLACEMENT: z
+    .enum(['cabinet_home', 'cabinet_home_top'])
+    .default('cabinet_home'),
+  PROMOTIONS_RECOMMENDATION_STRIP_PLACEMENT: z
+    .literal('cabinet_for_me_strip')
+    .default('cabinet_for_me_strip'),
+  PROMOTIONS_RECOMMENDATION_CARD_PLACEMENT: z
+    .literal('cabinet_for_me_card')
+    .default('cabinet_for_me_card'),
   PROMOTIONS_LEGACY_TIMEOUT_MS: z.coerce.number().int().min(500).max(30_000).default(5_000),
   PROMOTIONS_LEGACY_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(2).default(2),
   PROMOTIONS_LEGACY_CIRCUIT_FAILURE_THRESHOLD: z.coerce.number().int().min(1).max(20).default(3),
@@ -163,10 +176,12 @@ const environmentSchema = z.object({
     .min(1_000)
     .max(3_600_000)
     .default(30_000),
+  PROMOTIONS_ENGAGEMENT_SECRET: z.string().min(32).optional(),
   PROMOTIONS_SYNC_INTERVAL_MS: z.coerce.number().int().min(30_000).max(3_600_000).default(120_000),
   PROMOTIONS_SYNC_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(20),
   PROMOTION_ROTATION_INTERVAL_SECONDS: z.coerce.number().int().min(3).max(30).default(6),
   PROMOTION_IMAGE_ALLOWED_HOSTS: z.string().min(1).default('padlhub.su'),
+  PROMOTION_IMAGE_PRIVATE_HTTP_HOSTS: z.string().default(''),
   PROMOTION_IMAGE_MAX_BYTES: z.coerce
     .number()
     .int()
@@ -703,6 +718,12 @@ export function loadConfig(
     new URL(parsed.data.PROMOTIONS_LEGACY_BASE_URL).protocol !== 'https:'
   ) {
     throw new Error('PROMOTIONS_LEGACY_BASE_URL must use https in production');
+  }
+  if (
+    parsed.data.APP_ENV === 'production' &&
+    parsed.data.PROMOTION_IMAGE_PRIVATE_HTTP_HOSTS.trim()
+  ) {
+    throw new Error('PROMOTION_IMAGE_PRIVATE_HTTP_HOSTS is forbidden in production');
   }
 
   return parsed.data;

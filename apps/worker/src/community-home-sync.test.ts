@@ -9,14 +9,19 @@ import type { ProfilePhotoObjectStore } from './profile-photo-sync.js';
 
 const tenantId = '86afbe01-0318-4dd2-bc25-303b7bf0d430';
 const userId = '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca';
-const communityId = '11111111-1111-4111-8111-111111111111';
 const communityIds = [
-  communityId,
-  '22222222-2222-4222-8222-222222222222',
-  '33333333-3333-4333-8333-333333333333',
-  '44444444-4444-4444-8444-444444444444',
-  '55555555-5555-4555-8555-555555555555',
-  '66666666-6666-4666-8666-666666666666',
+  '00000001-0000-4000-8000-000000000001',
+  '00000002-0000-4000-8000-000000000002',
+  '00000003-0000-4000-8000-000000000003',
+  '00000004-0000-4000-8000-000000000004',
+  '00000005-0000-4000-8000-000000000005',
+  '00000006-0000-4000-8000-000000000006',
+  '00000007-0000-4000-8000-000000000007',
+  '00000008-0000-4000-8000-000000000008',
+  '00000009-0000-4000-8000-000000000009',
+  '00000010-0000-4000-8000-000000000010',
+  '00000011-0000-4000-8000-000000000011',
+  '00000012-0000-4000-8000-000000000012',
 ] as const;
 
 describe('independent community Home synchronization', () => {
@@ -126,7 +131,7 @@ describe('independent community Home synchronization', () => {
     const outboxPayload = homeProjectionComponentPayloadSchema.parse(rawOutboxPayload);
     const projectedCommunities = communitySummarySchema.array().parse(outboxPayload.value);
     expect(outboxPayload).toMatchObject({ component: 'communities' });
-    expect(projectedCommunities).toHaveLength(5);
-    expect(projectedCommunities.map((item) => item.id)).toEqual(communityIds.slice(0, 5));
+    expect(projectedCommunities).toHaveLength(10);
+    expect(projectedCommunities.map((item) => item.id)).toEqual(communityIds.slice(0, 10));
   });
 });

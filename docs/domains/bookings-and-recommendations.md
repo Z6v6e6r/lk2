@@ -21,12 +21,15 @@ recommendation DTOs contain PadlHub UUIDs only.
 ## Preference aggregate
 
 `profile.booking_preferences` is keyed by `(tenant_id, user_id)` and stores favorite operational
-station UUIDs, weekday/time windows, the history switch, an optimistic version and the actor. The
-matching command table provides idempotent replay. Each successful change commits settings, audit
-and `profile.booking_preferences.changed.v1` in one transaction.
+station UUIDs, weekday/time windows, the history switch, the friend-participation ranking switch,
+the Home V3 recommendation presentation (`CARDS` or `ROWS`), an optimistic version and the actor.
+The matching command table provides idempotent replay. Each successful change commits settings,
+audit and `profile.booking_preferences.changed.v1` in one transaction.
 
-Missing rows resolve to version zero with no explicit stations/windows and history enabled. The
-owner can disable behavioral history without deleting the visible booking history.
+Missing rows resolve to version zero with no explicit stations, a broad every-day 09:00–22:00
+window, history and friend-aware ranking enabled, and the Home V3 card grid. The owner can disable
+behavioral history without deleting the visible booking history. The `ROWS` presentation reuses
+the ordinary Home recommendation cards and keeps the same recommendation request and cursor.
 
 ## Recommendation policy v1
 
@@ -44,10 +47,16 @@ Eligible cards are ranked with a versioned deterministic policy:
 - favorite or historically played station: 30%;
 - explicit or historically usual time: 25%.
 
+When friend-aware ranking is enabled, an otherwise eligible Game containing one of the viewer's
+PadlHub friends receives a deterministic `FRIEND_PLAYING` boost. Friendship never bypasses level,
+capacity, visibility, viewer-relation or join-action eligibility. Activities without a canonical
+PadlHub participant roster do not receive this boost.
+
 Explicit values take precedence over history. History uses completed Games from the last 180 days
 with a 45-day half-life and becomes a learned-personalization claim only after three eligible
-records. The API returns `LEVEL_MATCH`, `FAVORITE_STATION`, `PLAYED_STATION`, `PREFERRED_TIME`,
-`USUAL_TIME` or `AVAILABLE_SOON`; it never returns the score.
+records. Inside the broad preferred interval, learned time affinity refines ordering when history
+is enabled. The API returns `LEVEL_MATCH`, `FRIEND_PLAYING`, `FAVORITE_STATION`,
+`PLAYED_STATION`, `PREFERRED_TIME`, `USUAL_TIME` or `AVAILABLE_SOON`; it never returns the score.
 
 ## Read behavior and failures
 
@@ -69,6 +78,11 @@ records. The API returns `LEVEL_MATCH`, `FAVORITE_STATION`, `PLAYED_STATION`, `P
   participant, raw provider identifiers remain in integration storage, and the new card projection
   is built before history is reread.
 - Recommendations use `/recommendations/bookings` and return `private, no-store`.
+- Home's client-assisted recommendation read is progressive: three Viva schedule dates produce the
+  first visible slice, and the remaining four dates run on the same job only when that slice has
+  fewer than six eligible items. The first visible slice does not wait for tournament I/O; a dense
+  slice is then recompleted with two tournament dates, while a sparse expansion uses the full
+  accepted tournament range.
 - Unconfigured or failed recommendation dependencies return
   `BOOKING_RECOMMENDATIONS_UNAVAILABLE`; Home keeps the upcoming tab usable.
 - Opening a recommendation performs a fresh viewer-aware Games detail read. Join commands still

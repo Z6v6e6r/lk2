@@ -1,7 +1,11 @@
 import { randomUUID } from 'node:crypto';
 
 import type { AppConfig } from '@phub/config';
-import { homePromotionDeckSchema } from '@phub/home-projection';
+import {
+  homePromotionDeckSchema,
+  homePromotionSlotsSchema,
+  homeRecommendationPromotionDeckSchema,
+} from '@phub/home-projection';
 import type { Logger } from 'pino';
 import type { Pool } from 'pg';
 
@@ -18,6 +22,27 @@ import {
   resolvePromotionIds,
 } from './promotion-home-repository.js';
 import { synchronizePromotionMedia } from './promotion-media-sync.js';
+
+type PromotionSource = Pick<LegacyPromotionSource, 'getSnapshot'>;
+
+export async function readPromotionSourceSnapshots(
+  source: {
+    readonly hero: PromotionSource;
+    readonly standard: PromotionSource;
+  },
+  correlationId: string,
+): Promise<{
+  readonly hero: Awaited<ReturnType<PromotionSource['getSnapshot']>>;
+  readonly standard: Awaited<ReturnType<PromotionSource['getSnapshot']>>;
+  readonly mirrorsStandard: boolean;
+}> {
+  const mirrorsStandard = source.hero === source.standard;
+  const standardSnapshotPromise = source.standard.getSnapshot(correlationId);
+  const [hero, standard] = mirrorsStandard
+    ? await standardSnapshotPromise.then((snapshot) => [snapshot, snapshot] as const)
+    : await Promise.all([source.hero.getSnapshot(correlationId), standardSnapshotPromise]);
+  return { hero, standard, mirrorsStandard };
+}
 
 export interface PromotionHomeSyncCycleResult {
   readonly attempted: number;
@@ -38,7 +63,12 @@ export async function runPromotionHomeSyncCycle(input: {
   readonly pool: Pool;
   readonly config: AppConfig;
   readonly logger: Logger;
-  readonly source: LegacyPromotionSource;
+  readonly source: {
+    readonly hero: PromotionSource;
+    readonly standard: PromotionSource;
+    readonly recommendationStrip: PromotionSource;
+    readonly recommendationCard: PromotionSource;
+  };
   readonly store: ProfilePhotoObjectStore;
   readonly now?: Date;
 }): Promise<PromotionHomeSyncCycleResult> {
@@ -66,14 +96,53 @@ export async function runPromotionHomeSyncCycle(input: {
     attempted += users.length;
     const sourceCorrelationId = randomUUID();
     try {
-      const snapshot = await input.source.getSnapshot(sourceCorrelationId);
+      const {
+        hero: heroSnapshot,
+        standard: standardSnapshot,
+        mirrorsStandard,
+      } = await readPromotionSourceSnapshots(input.source, sourceCorrelationId);
+      const [recommendationStripSnapshot, recommendationCardSnapshot] = await Promise.all([
+        input.source.recommendationStrip.getSnapshot(sourceCorrelationId),
+        input.source.recommendationCard.getSnapshot(sourceCorrelationId),
+      ]);
+      const primarySourceItems = mirrorsStandard
+        ? standardSnapshot.items.map((item) => ({ ...item, sourceKey: item.externalId }))
+        : [
+            ...heroSnapshot.items.map((item) => ({
+              ...item,
+              sourceKey: `top:${item.externalId}`,
+            })),
+            ...standardSnapshot.items.map((item) => ({
+              ...item,
+              sourceKey: item.externalId,
+            })),
+          ];
+      const sourceItems = [
+        ...primarySourceItems,
+        ...recommendationStripSnapshot.items.map((item) => ({
+          ...item,
+          sourceKey: `strip:${item.externalId}`,
+        })),
+        ...recommendationCardSnapshot.items.flatMap((item) => [
+          {
+            ...item,
+            imageSourceUrl: item.horizontalImageSourceUrl ?? item.imageSourceUrl,
+            sourceKey: `card:${item.externalId}`,
+          },
+          {
+            ...item,
+            imageSourceUrl: item.squareImageSourceUrl ?? item.imageSourceUrl,
+            sourceKey: `card-square:${item.externalId}`,
+          },
+        ]),
+      ];
       const ids = await resolvePromotionIds({
         pool: input.pool,
         tenantId: tenant.id,
-        externalIds: snapshot.items.map((item) => item.externalId),
+        externalIds: sourceItems.map((item) => item.sourceKey),
       });
-      const candidates = snapshot.items.map((item) => {
-        const promotionId = ids.get(item.externalId);
+      const candidates = sourceItems.map((item) => {
+        const promotionId = ids.get(item.sourceKey);
         if (!promotionId) throw new Error('PROMOTION_ID_MAPPING_MISSING');
         return { promotionId, sourceUrl: item.imageSourceUrl };
       });
@@ -91,6 +160,9 @@ export async function runPromotionHomeSyncCycle(input: {
         allowedHosts: input.config.PROMOTION_IMAGE_ALLOWED_HOSTS.split(',')
           .map((host) => host.trim())
           .filter(Boolean),
+        privateHttpHosts: input.config.PROMOTION_IMAGE_PRIVATE_HTTP_HOSTS.split(',')
+          .map((host) => host.trim())
+          .filter(Boolean),
         maxBytes: input.config.PROMOTION_IMAGE_MAX_BYTES,
         desktopMaxWidth: input.config.PROMOTION_IMAGE_DESKTOP_MAX_WIDTH,
         desktopMaxHeight: input.config.PROMOTION_IMAGE_DESKTOP_MAX_HEIGHT,
@@ -105,25 +177,69 @@ export async function runPromotionHomeSyncCycle(input: {
         timeoutMs: input.config.PROMOTIONS_LEGACY_TIMEOUT_MS,
       });
       const mediaByPromotionId = new Map(media.map((item) => [item.promotionId, item]));
-      const promotions = homePromotionDeckSchema.parse({
-        rotationEnabled: snapshot.rotationEnabled && snapshot.items.length > 1,
-        intervalSeconds: input.config.PROMOTION_ROTATION_INTERVAL_SECONDS,
-        items: snapshot.items.map((item) => {
-          const promotionId = ids.get(item.externalId);
-          const asset = promotionId ? mediaByPromotionId.get(promotionId) : undefined;
-          if (!promotionId || !asset) throw new Error('PROMOTION_MEDIA_MAPPING_MISSING');
-          return {
-            id: promotionId,
-            eyebrow: 'Акция',
-            title: item.title,
-            description: 'Специальное предложение ПадлХАБ.',
-            actionLabel: 'Подробнее',
-            route: item.href,
-            tone: 'lime',
-            imageUrl: asset.imageUrl,
-            mobileImageUrl: asset.mobileImageUrl,
-          };
-        }),
+      const toDeck = (snapshot: typeof heroSnapshot, top: boolean) =>
+        homePromotionDeckSchema.parse({
+          rotationEnabled: snapshot.rotationEnabled && snapshot.items.length > 1,
+          intervalSeconds: input.config.PROMOTION_ROTATION_INTERVAL_SECONDS,
+          items: snapshot.items.map((item) => {
+            const promotionId = ids.get(top ? `top:${item.externalId}` : item.externalId);
+            const asset = promotionId ? mediaByPromotionId.get(promotionId) : undefined;
+            if (!promotionId || !asset) throw new Error('PROMOTION_MEDIA_MAPPING_MISSING');
+            return {
+              id: promotionId,
+              eyebrow: 'Акция',
+              title: item.title,
+              description: 'Специальное предложение ПадлХАБ.',
+              actionLabel: 'Подробнее',
+              route: item.href,
+              tone: 'lime',
+              imageUrl: asset.imageUrl,
+              mobileImageUrl: asset.mobileImageUrl,
+            };
+          }),
+        });
+      const standardPromotions = toDeck(standardSnapshot, false);
+      const toRecommendationDeck = (
+        snapshot: typeof recommendationStripSnapshot,
+        sourcePrefix: 'strip' | 'card',
+        defaultRepeatEveryCards: number,
+      ) =>
+        homeRecommendationPromotionDeckSchema.parse({
+          repeatEveryCards: snapshot.repeatEveryCards ?? defaultRepeatEveryCards,
+          items: snapshot.items.map((item) => {
+            const promotionId = ids.get(`${sourcePrefix}:${item.externalId}`);
+            const asset = promotionId ? mediaByPromotionId.get(promotionId) : undefined;
+            if (!promotionId || !asset) throw new Error('PROMOTION_MEDIA_MAPPING_MISSING');
+            const squarePromotionId =
+              sourcePrefix === 'card' ? ids.get(`card-square:${item.externalId}`) : undefined;
+            const squareAsset = squarePromotionId
+              ? mediaByPromotionId.get(squarePromotionId)
+              : undefined;
+            if (sourcePrefix === 'card' && (!squarePromotionId || !squareAsset)) {
+              throw new Error('PROMOTION_MEDIA_MAPPING_MISSING');
+            }
+            return {
+              id: promotionId,
+              title: item.title,
+              route: item.href,
+              imageUrl: asset.imageUrl,
+              mobileImageUrl: squareAsset?.imageUrl ?? asset.mobileImageUrl,
+              ...(sourcePrefix === 'card'
+                ? {
+                    squareImageUrl: squareAsset?.imageUrl ?? asset.mobileImageUrl,
+                    horizontalImageUrl: asset.imageUrl,
+                  }
+                : {}),
+              ...(item.badgeText ? { badgeText: item.badgeText } : {}),
+              ...(item.footerText ? { footerText: item.footerText } : {}),
+            };
+          }),
+        });
+      const promotions = homePromotionSlotsSchema.parse({
+        hero: mirrorsStandard ? standardPromotions : toDeck(heroSnapshot, true),
+        standard: standardPromotions,
+        recommendationStrip: toRecommendationDeck(recommendationStripSnapshot, 'strip', 4),
+        recommendationCard: toRecommendationDeck(recommendationCardSnapshot, 'card', 6),
       });
       const deleteAfter = new Date(
         now.getTime() +
@@ -135,7 +251,10 @@ export async function runPromotionHomeSyncCycle(input: {
       await persistPromotionMedia({
         pool: input.pool,
         tenantId: tenant.id,
-        activePromotionIds: promotions.items.map((item) => item.id),
+        // The square recommendation-card asset is an internal media sibling and is
+        // intentionally absent from the public deck. Keep every synchronized
+        // source active so garbage collection cannot remove that second crop.
+        activePromotionIds: media.map((item) => item.promotionId),
         assets: media.map((item) => item.persistence),
         deleteAfter,
       });
@@ -156,9 +275,14 @@ export async function runPromotionHomeSyncCycle(input: {
             tenantId: tenant.id,
             userId,
             correlationId,
-            sourceUpdatedAt: snapshot.updatedAt,
-            promotionCount: promotions.items.length,
-            rotationEnabled: promotions.rotationEnabled,
+            heroSourceUpdatedAt: heroSnapshot.updatedAt,
+            standardSourceUpdatedAt: standardSnapshot.updatedAt,
+            heroPromotionCount: promotions.hero.items.length,
+            standardPromotionCount: promotions.standard.items.length,
+            recommendationStripCount: promotions.recommendationStrip?.items.length ?? 0,
+            recommendationCardCount: promotions.recommendationCard?.items.length ?? 0,
+            heroRotationEnabled: promotions.hero.rotationEnabled,
+            standardRotationEnabled: promotions.standard.rotationEnabled,
             outcome: result.outcome,
             sourceRevision: result.sourceRevision,
           },

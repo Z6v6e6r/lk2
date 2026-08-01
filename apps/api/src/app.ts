@@ -11,7 +11,9 @@ import type {
   ClientRoutingPlanRepository,
   AdminNotificationRepository,
   BookingPreferencesRepository,
+  BookingScreenMappingRepository,
   ActivityHistoryRepository,
+  HomeBaseProjectionRepository,
   HomeDashboardProjectionRepository,
   GameResultRepository,
   GameRosterRepository,
@@ -28,8 +30,11 @@ import type {
   ProfileLevelHistoryRepository,
   ProfilePrivacyRepository,
   ProfileSummaryRepository,
+  PromotionEngagementRepository,
+  TrainerAvatarRepository,
 } from '@phub/database';
 import { isValidIdempotencyKey, type ClientPlatform } from '@phub/domain';
+import { homeBaseSchema, normalizeHomeBaseFreshness, type HomeBase } from '@phub/home-projection';
 import type { NotificationEndpointCipher } from '@phub/notifications';
 import type { VivaExerciseRecommendationSourceAdapter } from '@phub/viva-adapter';
 import type { Logger } from 'pino';
@@ -45,12 +50,17 @@ import { registerGiftCertificateAdminRoutes } from './admin/gift-certificate-adm
 import type { AuthService } from './auth/auth-service.js';
 import { registerBookingPreferenceRoutes } from './bookings/booking-preference-routes.js';
 import { registerBookingRecommendationRoutes } from './bookings/booking-recommendation-routes.js';
+import type { BookingScreenReadJobStore } from './bookings/booking-screen-read-job-store.js';
 import {
   registerActivityHistoryRoutes,
   type ActivityHistoryRefreshService,
 } from './bookings/activity-history-routes.js';
 import { registerCommunityRoutes } from './communities/community-routes.js';
-import { EventAvatarMediaProxy, type EventAvatarMedia } from './event-avatar-media.js';
+import {
+  EventAvatarMediaProxy,
+  PersistentTrainerAvatarMedia,
+  type EventAvatarMedia,
+} from './event-avatar-media.js';
 import {
   registerCoachGameSummaryRoutes,
   type CoachGameSummarySource,
@@ -73,11 +83,14 @@ import { sendApiError } from './http-errors.js';
 import { registerLocationRoutes } from './locations/location-routes.js';
 import { registerLocationMediaRoutes } from './locations/location-media-routes.js';
 import type { LocationMediaStore } from './locations/location-media-store.js';
+import type { TrainerAvatarMediaStore } from './trainer-avatar-media-store.js';
 import { registerNotificationRoutes } from './notifications/notification-routes.js';
 import { registerWebPushRoutes } from './notifications/web-push-routes.js';
 import { registerProfilePrivacyRoutes } from './profile/profile-privacy-routes.js';
 import { registerProfileFriendshipRoutes } from './profile/profile-friendship-routes.js';
 import { registerProfileLevelHistoryRoutes } from './profile/profile-level-history-routes.js';
+import { registerPromotionEngagementRoutes } from './promotions/promotion-engagement-routes.js';
+import type { PromotionEngagementSink } from './promotions/legacy-promotion-engagement-sink.js';
 import { registerProfilePhotoMediaRoutes } from './profile/profile-photo-media-routes.js';
 import type { ProfilePhotoMediaStore } from './profile/profile-photo-media-store.js';
 import {
@@ -146,6 +159,7 @@ export interface BuildAppOptions {
   readonly authDependencyReady?: () => Promise<boolean>;
   readonly communityDirectory?: CommunityDirectoryService;
   readonly homeDashboardRepository?: Pick<HomeDashboardProjectionRepository, 'get'>;
+  readonly homeBaseRepository?: Pick<HomeBaseProjectionRepository, 'get'>;
   readonly gameRosterRepository?: Pick<
     GameRosterRepository,
     'join' | 'joinWaitlist' | 'leave' | 'leaveWaitlist' | 'getOperation'
@@ -174,6 +188,8 @@ export interface BuildAppOptions {
   readonly profileFriendshipRepository?: ProfileFriendshipRepository;
   readonly profileLevelHistoryRepository?: ProfileLevelHistoryRepository;
   readonly profileSummaryRepository?: Pick<ProfileSummaryRepository, 'get'>;
+  readonly promotionEngagementRepository?: PromotionEngagementRepository;
+  readonly promotionEngagementSink?: PromotionEngagementSink;
   readonly profilePhotoMediaRepository?: Pick<
     ProfileSummaryRepository,
     'getPhotoObjectKey' | 'getPhotoDeliveryIds'
@@ -181,12 +197,28 @@ export interface BuildAppOptions {
     Partial<Pick<ProfileSummaryRepository, 'getDisplayNames' | 'getLevelValues'>>;
   readonly profilePhotoMediaStore?: ProfilePhotoMediaStore;
   readonly bookingPreferencesRepository?: BookingPreferencesRepository;
+  readonly bookingScreenReadJobStore?: BookingScreenReadJobStore;
+  readonly bookingScreenMappingRepository?: BookingScreenMappingRepository;
   readonly activityHistoryRepository?: ActivityHistoryRepository;
   readonly activityHistoryRefresher?: ActivityHistoryRefreshService;
   readonly tournamentSummarySource?: TournamentSummarySource;
   readonly coachGameSummarySource?: CoachGameSummarySource;
   readonly eventAvatarMedia?: EventAvatarMedia;
-  readonly exerciseRecommendationSource?: Pick<VivaExerciseRecommendationSourceAdapter, 'readDate'>;
+  readonly trainerAvatarRepository?: TrainerAvatarRepository;
+  readonly trainerAvatarMediaStore?: TrainerAvatarMediaStore;
+  readonly exerciseRecommendationSource?: Pick<
+    VivaExerciseRecommendationSourceAdapter,
+    'readDate'
+  > &
+    Partial<
+      Pick<
+        VivaExerciseRecommendationSourceAdapter,
+        | 'readAvatarSource'
+        | 'registerAvatarSource'
+        | 'readTrainerAvatarSource'
+        | 'registerTrainerAvatarSource'
+      >
+    >;
   readonly rateLimitRedis?: Redis;
 }
 
@@ -456,20 +488,30 @@ export async function buildApp(options: BuildAppOptions) {
     genReqId: (request) => safeCorrelationId(request.headers['x-correlation-id']),
     bodyLimit: 1_048_576,
   });
+  const remoteEventAvatarMedia = new EventAvatarMediaProxy({
+    allowedHosts: options.config.PROFILE_PHOTO_ALLOWED_HOSTS.split(',')
+      .map((host) => host.trim())
+      .filter(Boolean),
+    timeoutMs: options.config.VIVA_TIMEOUT_MS,
+    maxBytes: options.config.PROFILE_PHOTO_MAX_BYTES,
+    maxDimension: options.config.PROFILE_PHOTO_MAX_DIMENSION,
+    webpQuality: options.config.PROFILE_PHOTO_WEBP_QUALITY,
+    circuitFailureThreshold: 3,
+    circuitResetMs: 30_000,
+    onMetric: (metric) => options.logger.info({ metric }, 'event avatar media read'),
+  });
   const eventAvatarMedia =
     options.eventAvatarMedia ??
-    new EventAvatarMediaProxy({
-      allowedHosts: options.config.PROFILE_PHOTO_ALLOWED_HOSTS.split(',')
-        .map((host) => host.trim())
-        .filter(Boolean),
-      timeoutMs: options.config.VIVA_TIMEOUT_MS,
-      maxBytes: options.config.PROFILE_PHOTO_MAX_BYTES,
-      maxDimension: options.config.PROFILE_PHOTO_MAX_DIMENSION,
-      webpQuality: options.config.PROFILE_PHOTO_WEBP_QUALITY,
-      circuitFailureThreshold: 3,
-      circuitResetMs: 30_000,
-      onMetric: (metric) => options.logger.info({ metric }, 'event avatar media read'),
-    });
+    (options.trainerAvatarRepository && options.trainerAvatarMediaStore
+      ? new PersistentTrainerAvatarMedia({
+          remote: remoteEventAvatarMedia,
+          repository: options.trainerAvatarRepository,
+          store: options.trainerAvatarMediaStore,
+          maxBytes: options.config.PROFILE_PHOTO_MAX_BYTES,
+          onPersistenceError: (err) =>
+            options.logger.warn({ err }, 'trainer avatar persistence failed'),
+        })
+      : remoteEventAvatarMedia);
 
   app.decorate('config', options.config);
   if (options.pool) app.decorate('pool', options.pool);
@@ -576,6 +618,7 @@ export async function buildApp(options: BuildAppOptions) {
     ...(options.tournamentSummarySource ? { source: options.tournamentSummarySource } : {}),
     avatarMedia: eventAvatarMedia,
     publicTenantHandlers: [resolvePublicTenant],
+    authenticatedTenantHandlers: [authenticate, authorizeGamesPlayer, resolveTenant],
   });
   registerCoachGameSummaryRoutes(app as unknown as FastifyInstance, {
     ...(options.coachGameSummarySource ? { source: options.coachGameSummarySource } : {}),
@@ -595,11 +638,23 @@ export async function buildApp(options: BuildAppOptions) {
     ...(options.bookingPreferencesRepository
       ? { preferencesRepository: options.bookingPreferencesRepository }
       : {}),
+    ...(options.profileFriendshipRepository
+      ? { friendshipRepository: options.profileFriendshipRepository }
+      : {}),
+    ...(options.bookingScreenReadJobStore
+      ? { clientAssistedJobStore: options.bookingScreenReadJobStore }
+      : {}),
+    ...(options.bookingScreenMappingRepository
+      ? { bookingScreenMappingRepository: options.bookingScreenMappingRepository }
+      : {}),
     ...(options.profilePhotoMediaRepository
       ? { photoRepository: options.profilePhotoMediaRepository }
       : {}),
     ...(options.exerciseRecommendationSource
       ? { exerciseSource: options.exerciseRecommendationSource }
+      : {}),
+    ...(options.tournamentSummarySource
+      ? { tournamentSource: options.tournamentSummarySource }
       : {}),
     ...(options.exerciseRecommendationSource && bookingRecommendationAuthService
       ? {
@@ -617,7 +672,16 @@ export async function buildApp(options: BuildAppOptions) {
             ).accessToken,
         }
       : {}),
+    avatarMedia: eventAvatarMedia,
+    publicTenantHandlers: [resolvePublicTenant],
     authenticatedTenantHandlers: [authenticate, authorizeGamesPlayer, resolveTenant],
+  });
+  registerPromotionEngagementRoutes(app as unknown as FastifyInstance, {
+    ...(options.promotionEngagementRepository
+      ? { repository: options.promotionEngagementRepository }
+      : {}),
+    ...(options.promotionEngagementSink ? { sink: options.promotionEngagementSink } : {}),
+    commandHandlers: [authenticate, resolveTenant, requireIdempotencyKey],
   });
   registerActivityHistoryRoutes(app as unknown as FastifyInstance, {
     ...(options.activityHistoryRepository ? { repository: options.activityHistoryRepository } : {}),
@@ -1225,6 +1289,78 @@ export async function buildApp(options: BuildAppOptions) {
           : 'private, max-age=15, stale-while-revalidate=45',
       );
       return parsedDashboard.data;
+    },
+  );
+
+  app.get(
+    '/user/api/v1/:tenantKey/home/base',
+    { preHandler: [authenticate, resolveTenant] },
+    async (request, reply) => {
+      const tenantId = request.tenantId;
+      const userId = request.padlHubClaims?.sub;
+      if (!tenantId || !userId) {
+        return sendApiError(request, reply, 401, 'AUTH_REQUIRED', 'Требуется авторизация.');
+      }
+      const user = options.authService
+        ? await options.authService.getUserContext(tenantId, userId)
+        : undefined;
+      if (options.authService && !user) {
+        return sendApiError(request, reply, 401, 'AUTH_SESSION_REVOKED', 'Сессия завершена.');
+      }
+      const projection = await options.homeBaseRepository?.get(tenantId, userId);
+      if (!projection) {
+        return sendApiError(
+          request,
+          reply,
+          503,
+          'HOME_BASE_PROJECTION_NOT_READY',
+          'Базовые данные главной страницы ещё не подготовлены.',
+        );
+      }
+
+      let homeBase: HomeBase;
+      try {
+        homeBase = normalizeHomeBaseFreshness(
+          projection.payload,
+          new Date(),
+          options.config.HOME_PROJECTION_MAX_STALE_SECONDS,
+        );
+      } catch (error) {
+        request.log.error(
+          {
+            err: error,
+            tenantId,
+            userId,
+            sourceRevision: projection.sourceRevision,
+          },
+          'invalid HomeBase projection rejected',
+        );
+        return sendApiError(
+          request,
+          reply,
+          503,
+          'HOME_BASE_PROJECTION_INVALID',
+          'Базовые данные главной страницы временно недоступны.',
+        );
+      }
+      if (
+        !homeBaseSchema.safeParse(homeBase).success ||
+        homeBase.snapshot.source !== 'LOCAL_PROJECTION' ||
+        homeBase.snapshot.completeness !== 'PARTIAL' ||
+        homeBase.snapshot.version !== projection.snapshotVersion ||
+        Date.parse(homeBase.snapshot.generatedAt) !== Date.parse(projection.generatedAt) ||
+        homeBase.viewerUserId !== userId
+      ) {
+        return sendApiError(
+          request,
+          reply,
+          503,
+          'HOME_BASE_PROJECTION_INVALID',
+          'Базовые данные главной страницы временно недоступны.',
+        );
+      }
+      reply.header('Cache-Control', 'private, no-store');
+      return homeBase;
     },
   );
 
