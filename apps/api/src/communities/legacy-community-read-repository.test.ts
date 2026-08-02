@@ -182,6 +182,42 @@ describe('legacy community read repository', () => {
     expect(rankingUrl).toContain('/lk/communities/community_legacy_mine/rating');
   });
 
+  it('does not hold the membership page open for a slow optional rank lookup', async () => {
+    const source = payload({ embeddedRank: false });
+    let resolveRank: ((response: Response) => void) | undefined;
+    const fetchImplementation = vi.fn<typeof fetch>().mockImplementation((input) => {
+      const url = new URL(typeof input === 'string' || input instanceof URL ? input : input.url);
+      if (url.pathname.endsWith('/rating')) {
+        return new Promise<Response>((resolve) => {
+          resolveRank = resolve;
+        });
+      }
+      return Promise.resolve(new Response(JSON.stringify(source), { status: 200 }));
+    });
+    const repository = new LegacyCommunityReadRepository({
+      baseUrl: 'https://legacy.padlhub.test',
+      timeoutMs: 1_000,
+      maxAttempts: 1,
+      circuitFailureThreshold: 3,
+      circuitResetMs: 30_000,
+      cacheTtlMs: 30_000,
+      bridge: bridge(),
+      fetchImplementation,
+    });
+
+    const startedAt = Date.now();
+    const page = await repository.listMemberships({
+      tenantId,
+      userId,
+      correlationId: 'community-rank-budget-test',
+      limit: 4,
+    });
+
+    expect(Date.now() - startedAt).toBeLessThan(500);
+    expect(page.items[0]).not.toHaveProperty('memberRank');
+    resolveRank?.(new Response(JSON.stringify({ items: [] }), { status: 200 }));
+  });
+
   it('retries a bounded transient failure and reports only redacted metrics', async () => {
     const fetchImplementation = vi
       .fn<typeof fetch>()

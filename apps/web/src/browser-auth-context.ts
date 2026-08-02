@@ -17,5 +17,6 @@ export function isIOSBrowser(navigatorLike: BrowserAuthNavigator | undefined): b
 export function preferredAuthEntryView(
   navigatorLike: BrowserAuthNavigator | undefined,
 ): AuthEntryView {
-  return isIOSBrowser(navigatorLike) ? 'phone' : 'oauth';
+  void navigatorLike;
+  return 'oauth';
 }

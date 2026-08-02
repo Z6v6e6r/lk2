@@ -138,6 +138,10 @@ jobs:
             "phub-deploy@$HOST:/opt/phub/verify-home-base.sh"
           scp deploy/jetson/verify-live-staging-data.sh \
             "phub-deploy@$HOST:/opt/phub/verify-live-staging-data.sh"
+          scp deploy/jetson/verify-cup-integrations.sh \
+            "phub-deploy@$HOST:/opt/phub/verify-cup-integrations.sh"
+          scp deploy/jetson/tls-ingress/Caddyfile \
+            "phub-deploy@$HOST:/opt/phub/tls-ingress/Caddyfile.next"
           ssh "phub-deploy@$HOST" '
             set -eu
             auth_env=/opt/phub/staging.auth.env
@@ -147,6 +151,7 @@ jobs:
             {
               printf "%s\n" "VIVA_OAUTH_EXISTING_SUBJECT_BOOTSTRAP_ENABLED=true"
               printf "%s\n" "VIVA_DIRECT_READ_ENABLED=false"
+              printf "%s\n" "VIVA_OAUTH_SUCCESS_REDIRECT_URL=https://lk.nano.padlhub.su/"
               printf "%s\n" "HOME_BASE_SYNC_ENABLED=true"
             } > "$auth_env_tmp"
             chmod 600 "$auth_env_tmp"
@@ -248,6 +253,48 @@ jobs:
               exit 1
             fi
           '
+      - name: Promote canonical Nano TLS ingress
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+        run: |
+          ssh "phub-deploy@$HOST" '
+            set -eu
+            cd /opt/phub/tls-ingress
+            backup_dir=/opt/phub/backups
+            backup_timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+            backup_path="$backup_dir/Caddyfile-pre-${{ github.sha }}-$backup_timestamp"
+            mkdir -p "$backup_dir"
+            test -s Caddyfile.next
+            cp Caddyfile "$backup_path"
+            mv Caddyfile.next Caddyfile
+
+            rollback_caddy() {
+              cp "$backup_path" Caddyfile
+              docker compose up -d --force-recreate caddy >/dev/null 2>&1 || true
+            }
+
+            if ! docker compose run --rm --no-deps caddy caddy validate --config /etc/caddy/Caddyfile; then
+              rollback_caddy
+              exit 1
+            fi
+            if ! docker compose up -d --force-recreate caddy; then
+              rollback_caddy
+              exit 1
+            fi
+            if ! curl --fail --silent --show-error \
+              --resolve lk.nano.padlhub.su:443:127.0.0.1 \
+              https://lk.nano.padlhub.su/health/ready >/dev/null; then
+              rollback_caddy
+              exit 1
+            fi
+            location="$(curl --silent --show-error --output /dev/null --write-out "%{redirect_url}" \
+              -H "Host: 185.155.18.146" http://127.0.0.1/games)"
+            if test "$location" != "https://lk.nano.padlhub.su/games"; then
+              rollback_caddy
+              exit 1
+            fi
+            echo "Verified TLS ingress backup: $backup_path"
+          '
       - name: Verify local HomeBase projections
         env:
           HOST: ${{ secrets.STAGING_HOST }}
@@ -260,6 +307,10 @@ jobs:
         env:
           HOST: ${{ secrets.STAGING_HOST }}
         run: ssh "phub-deploy@$HOST" 'sh /opt/phub/verify-live-staging-data.sh'
+      - name: Verify CUP campaigns and notifications binding
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+        run: ssh "phub-deploy@$HOST" 'sh /opt/phub/verify-cup-integrations.sh local-padel'
       - name: Verify the web entrypoint
         env:
           SMOKE_BASE_URL: ${{ vars.STAGING_BASE_URL }}

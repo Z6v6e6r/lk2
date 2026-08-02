@@ -11,6 +11,7 @@ const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 const MAX_RANK_RESPONSE_BYTES = 512 * 1024;
 const MAX_SOURCE_COMMUNITIES = 1_000;
 const MAX_RANK_ENRICHMENTS = 8;
+const RANK_ENRICHMENT_RESPONSE_BUDGET_MS = 150;
 
 export type LegacyCommunityReadErrorCode =
   | 'COMMUNITY_LEGACY_IDENTITY_UNAVAILABLE'
@@ -314,7 +315,7 @@ export class LegacyCommunityReadRepository implements CommunityDirectoryReposito
     if (candidates.length === 0) return items;
 
     const ranks = new Map<string, number>();
-    await Promise.all(
+    const enrichment = Promise.all(
       candidates.map(async (item) => {
         const externalId = this.externalCommunityIds.get(`${tenantId}:${item.id}`);
         if (!externalId) return;
@@ -328,6 +329,19 @@ export class LegacyCommunityReadRepository implements CommunityDirectoryReposito
         if (rank) ranks.set(item.id, rank);
       }),
     );
+    // Rank is optional presentation data. Keep slow legacy rating endpoints
+    // from delaying the canonical membership page; in-flight requests still
+    // populate the short-lived rank cache for the next read.
+    let budgetTimer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      enrichment,
+      new Promise<void>((resolve) => {
+        budgetTimer = setTimeout(resolve, RANK_ENRICHMENT_RESPONSE_BUDGET_MS);
+        budgetTimer.unref?.();
+      }),
+    ]).finally(() => {
+      if (budgetTimer) clearTimeout(budgetTimer);
+    });
     return items.map((item) => {
       const memberRank = ranks.get(item.id);
       return memberRank ? { ...item, memberRank } : item;

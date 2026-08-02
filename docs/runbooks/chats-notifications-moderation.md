@@ -235,6 +235,33 @@ credentials exist. Resolve a known internal phone, send one test campaign, then 
 - the same `Idempotency-Key` returns the original campaign with `replayed=true`;
 - logs and RabbitMQ contain no title, body, phone or endpoint material.
 
+### Nano CUP binding
+
+On Nano the active operator surface is `https://cup.nano.padlhub.su/api/ui/admin`. Configure its
+CUP container with these server-side values and recreate that container:
+
+```text
+PADLHUB_NOTIFICATION_API_BASE_URL=https://cup.nano.padlhub.su
+PADLHUB_NOTIFICATION_TENANT_KEY=local-padel
+ADVERTISING_ENGAGEMENT_SECRET=<same 32+ character value as PadlHub PROMOTIONS_ENGAGEMENT_SECRET>
+```
+
+Caddy sends only `/user/api/*`, `/admin/api/*` and `/public/api/*` on the CUP host to PadlHub API;
+all other paths stay on the CUP showcase. The browser therefore calls PadlHub through a same-origin
+PadlHub-controlled route and no system credential enters the bundle. Before the presentation,
+grant one real operator `admin` plus `notifications.manage`, enable in-app delivery for the tenant,
+and configure Web Push only when Nano has the VAPID and endpoint-encryption secrets in both API and
+worker. Then run:
+
+```sh
+sh /opt/phub/verify-cup-integrations.sh local-padel
+```
+
+The check validates the four advertising sources, the shared engagement secret without printing
+it, CUP-to-PadlHub settings, tenant runtime, optional Web Push provider state and an authorized CUP
+operator. It does not send a campaign; final acceptance still requires one operator login, one
+recipient preview, one test campaign and an inbox read-back.
+
 Revoke access by applying the desired non-admin roles/permissions. Disable the affected tenant
 channel before stopping the delivery worker during an incident.
 

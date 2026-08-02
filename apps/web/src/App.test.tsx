@@ -1333,24 +1333,19 @@ describe('PadlHub web authentication', () => {
     expect(screen.getByRole('heading', { name: 'Войти в личный кабинет' })).toBeVisible();
   });
 
-  it('defaults iPhone browsers to phone login and warns before external Viva OAuth', async () => {
+  it('keeps iPhone browsers on regular OAuth and does not offer SMS login', async () => {
     vi.spyOn(window.navigator, 'userAgent', 'get').mockReturnValue(
       'Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 Version/26.5 Mobile/23F77 Safari/604.1',
     );
     const gateway = createGateway();
-    const user = userEvent.setup();
-
     render(<App gateway={gateway} tenantKey="padlhub" />);
 
-    expect(await screen.findByRole('heading', { name: 'Вход по номеру' })).toBeVisible();
-    expect(screen.getByRole('note')).toHaveTextContent('Для iPhone выбран надёжный способ входа');
-    expect(screen.getByRole('note')).toHaveTextContent('откройте исходную страницу в Safari');
+    expect(await screen.findByRole('heading', { name: 'Войти в личный кабинет' })).toBeVisible();
+    expect(screen.getByRole('note')).toHaveTextContent('На iPhone откройте сайт в Safari');
+    expect(
+      screen.queryByRole('button', { name: 'Войти по номеру телефона' }),
+    ).not.toBeInTheDocument();
     expect(gateway.startVivaOAuth).not.toHaveBeenCalled();
-
-    await user.click(screen.getByRole('button', { name: /Войти через Viva/ }));
-
-    expect(screen.getByRole('heading', { name: 'Войти в личный кабинет' })).toBeVisible();
-    expect(screen.getByRole('note')).toHaveTextContent('Во встроенном браузере Telegram');
     expect(screen.getByRole('button', { name: 'VK ID или Mail.ru' })).toHaveAttribute(
       'aria-describedby',
       'ios-oauth-guidance',

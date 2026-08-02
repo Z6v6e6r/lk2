@@ -1535,14 +1535,16 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
                   {state.error}
                 </p>
               ) : null}
-              <button
-                className="text-button auth-alternative"
-                type="button"
-                disabled={isStartingViva}
-                onClick={() => dispatch({ type: 'edit-phone' })}
-              >
-                Войти по номеру телефона
-              </button>
+              {!iosBrowser ? (
+                <button
+                  className="text-button auth-alternative"
+                  type="button"
+                  disabled={isStartingViva}
+                  onClick={() => dispatch({ type: 'edit-phone' })}
+                >
+                  Войти по номеру телефона
+                </button>
+              ) : null}
             </>
           ) : state.view === 'phone' ? (
             <>

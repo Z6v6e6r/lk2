@@ -56,6 +56,15 @@ the new containers start. A release fails if Viva/Home uses mock data, if a loca
 enabled, if API and worker do not share the `phub-media` bucket, or if the worker does not produce
 real canonical Games, card projections and guarded roster-mirror state.
 
+The Home override also enables the staging-only browser read-job transport. Before activation,
+every tenant with an active Viva delegation must have a `MIXED_END_USER_READS` routing plan with
+`profile.read`, plus a non-empty Viva provider tenant binding. Fixed schedule, upcoming-booking
+and history commands use that mixed plan as their transport envelope; they are not added to the
+general direct-operation allowlist. Activation and post-deploy verification fail when an active
+delegation cannot receive the envelope. The same override bounds the synchronous legacy community
+bridge to one 2.5-second attempt and keeps successful pages for two minutes; optional member-rank
+enrichment has a 150 ms response budget.
+
 Every staging workflow creates a PostgreSQL custom-format archive under
 `/opt/phub/backups/postgres-pre-<release>-<UTC timestamp>.dump`. The workflow
 requires a non-empty archive, validates it with `pg_restore --list`, runs the
