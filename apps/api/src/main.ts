@@ -39,6 +39,7 @@ import { createLogger, startTelemetry } from '@phub/observability';
 import {
   VivaCoachGameSummaryAdapter,
   VivaExerciseRecommendationSourceAdapter,
+  VivaExerciseRosterSourceAdapter,
   VivaIdentityProvider,
 } from '@phub/viva-adapter';
 import Redis from 'ioredis';
@@ -145,6 +146,25 @@ const exerciseRecommendationSource =
         circuitFailureThreshold: 3,
         circuitResetMs: 30_000,
         onMetric: (metric) => logger.info({ metric }, 'Viva exercise recommendation read'),
+      })
+    : undefined;
+const exerciseRosterSource =
+  config.GAMES_READ_ENABLED && (config.VIVA_MODE === 'sandbox' || config.VIVA_MODE === 'production')
+    ? new VivaExerciseRosterSourceAdapter({
+        mode: config.VIVA_MODE,
+        apiBaseUrl:
+          config.VIVA_API_URL && config.VIVA_API_KEY
+            ? config.VIVA_API_URL
+            : config.LEGACY_GAMES_PUBLIC_BASE_URL,
+        transport: config.VIVA_API_URL && config.VIVA_API_KEY ? 'VIVA_ADMIN' : 'PADLHUB_PROXY',
+        ...(config.VIVA_API_URL && config.VIVA_API_KEY ? { apiKey: config.VIVA_API_KEY } : {}),
+        timeoutMs: Math.min(config.VIVA_TIMEOUT_MS, 4_000),
+        maxAttempts: 2,
+        freshTtlMs: 30_000,
+        staleTtlMs: 600_000,
+        circuitFailureThreshold: 3,
+        circuitResetMs: 30_000,
+        onMetric: (metric) => logger.info({ metric }, 'Viva exercise roster read'),
       })
     : undefined;
 const profileSummaryRepository = createProfileSummaryRepository(pool);
@@ -349,6 +369,7 @@ const app = await buildApp({
   ...(tournamentSummarySource ? { tournamentSummarySource } : {}),
   ...(coachGameSummarySource ? { coachGameSummarySource } : {}),
   ...(exerciseRecommendationSource ? { exerciseRecommendationSource } : {}),
+  ...(exerciseRosterSource ? { exerciseRosterSource } : {}),
   ...(config.GAMES_COMMANDS_ENABLED
     ? {
         gameRosterRepository: createGameRosterRepository(pool),
