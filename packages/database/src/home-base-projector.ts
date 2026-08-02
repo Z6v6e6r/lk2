@@ -167,7 +167,22 @@ export async function listDueHomeBaseUsers(input: {
         where identity_user.tenant_id = $1
           and identity_user.status = 'ACTIVE'
           and (snapshot.checked_at is null or snapshot.checked_at < $2)
-        order by snapshot.checked_at asc nulls first,
+        order by case
+                   when exists (
+                     select 1
+                       from integration.user_delegations delegation
+                      where delegation.tenant_id = identity_user.tenant_id
+                        and delegation.user_id = identity_user.id
+                        and delegation.provider = 'VIVA'
+                        and delegation.revoked_at is null
+                        and (
+                          delegation.refresh_expires_at is null
+                          or delegation.refresh_expires_at > now()
+                        )
+                   ) then 0
+                   else 1
+                 end,
+                 snapshot.checked_at asc nulls first,
                  case
                    when snapshot.checked_at is null
                      then hashtextextended(identity_user.id::text, $4::bigint)

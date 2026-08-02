@@ -166,6 +166,11 @@ export interface BuildAppOptions {
   readonly communityDirectory?: CommunityDirectoryService;
   readonly homeDashboardRepository?: Pick<HomeDashboardProjectionRepository, 'get'>;
   readonly homeBaseRepository?: Pick<HomeBaseProjectionRepository, 'get'>;
+  readonly homeBaseProjector?: (input: {
+    readonly tenantId: string;
+    readonly userId: string;
+    readonly correlationId: string;
+  }) => Promise<unknown>;
   readonly gameRosterRepository?: Pick<
     GameRosterRepository,
     'join' | 'joinWaitlist' | 'leave' | 'leaveWaitlist' | 'getOperation'
@@ -1363,7 +1368,22 @@ export async function buildApp(options: BuildAppOptions) {
       if (options.authService && !user) {
         return sendApiError(request, reply, 401, 'AUTH_SESSION_REVOKED', 'Сессия завершена.');
       }
-      const projection = await options.homeBaseRepository?.get(tenantId, userId);
+      let projection = await options.homeBaseRepository?.get(tenantId, userId);
+      if (!projection && options.homeBaseProjector) {
+        try {
+          await options.homeBaseProjector({
+            tenantId,
+            userId,
+            correlationId: correlationIdFromHeader(request),
+          });
+          projection = await options.homeBaseRepository?.get(tenantId, userId);
+        } catch (error) {
+          request.log.warn(
+            { err: error, tenantId, userId },
+            'on-demand HomeBase projection failed',
+          );
+        }
+      }
       if (!projection) {
         return sendApiError(
           request,

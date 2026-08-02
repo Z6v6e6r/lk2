@@ -28,6 +28,7 @@ import {
   createPromotionEngagementRepository,
   createTrainerAvatarRepository,
   createUpcomingBookingsRepository,
+  projectHomeBaseUser,
 } from '@phub/database';
 import {
   LegacyGamesMongoAdapter,
@@ -301,6 +302,16 @@ const app = await buildApp({
   communityDirectory: createCommunityDirectoryRuntime({ config, pool, logger }),
   homeDashboardRepository: createHomeDashboardProjectionRepository(pool),
   homeBaseRepository: createHomeBaseProjectionRepository(pool),
+  ...(config.HOME_BASE_SYNC_ENABLED
+    ? {
+        homeBaseProjector: (input: { tenantId: string; userId: string; correlationId: string }) =>
+          projectHomeBaseUser({
+            pool,
+            ...input,
+            ttlSeconds: config.HOME_PROJECTION_TTL_SECONDS,
+          }),
+      }
+    : {}),
   clientRoutingPlanRepository,
   notificationRepository: createNotificationInboxRepository(pool),
   notificationEndpointRepository: createNotificationEndpointRepository(pool),

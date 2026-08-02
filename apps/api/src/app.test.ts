@@ -836,6 +836,73 @@ describe('health endpoints', () => {
     expect(response.headers['cache-control']).toBe('private, no-store');
   });
 
+  it('provisions a missing HomeBase synchronously for the authenticated viewer', async () => {
+    const userId = '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca';
+    const now = new Date();
+    const homeBase = buildHomeBase({
+      viewerUserId: userId,
+      sourceRevision: '1',
+      generatedAt: now,
+      ttlSeconds: 300,
+      quickActions: [],
+      locations: [],
+      additionalLinks: [],
+      capabilities: {
+        canCreateGame: true,
+        canManageTournaments: false,
+        canViewCommunities: true,
+      },
+    });
+    const persistedProjection = {
+      tenantId,
+      userId,
+      sourceRevision: '1',
+      sourceEventId: '55555555-5555-4555-8555-555555555555',
+      producer: 'HOME_BASE_PROJECTOR',
+      snapshotVersion: homeBase.snapshot.version,
+      payload: homeBase,
+      payloadChecksum: 'a'.repeat(64),
+      generatedAt: homeBase.snapshot.generatedAt,
+      checkedAt: homeBase.snapshot.generatedAt,
+      updatedAt: homeBase.snapshot.generatedAt,
+    } as const;
+    let projection: typeof persistedProjection | undefined;
+    const get = vi.fn(() => Promise.resolve(projection));
+    const homeBaseProjector = vi.fn(() => {
+      projection = persistedProjection;
+      return Promise.resolve();
+    });
+    const app = await buildApp({
+      config,
+      logger: createLogger('api-test', 'silent'),
+      pool: fakePool(),
+      homeBaseRepository: { get },
+      homeBaseProjector,
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/user/api/v1/local-padel/home/base',
+      headers: {
+        authorization: `Bearer ${await accessToken()}`,
+        'x-correlation-id': 'home-base-on-demand-test',
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      snapshot: { source: 'LOCAL_PROJECTION', completeness: 'PARTIAL' },
+      viewerUserId: userId,
+    });
+    expect(homeBaseProjector).toHaveBeenCalledWith({
+      tenantId,
+      userId,
+      correlationId: 'home-base-on-demand-test',
+    });
+    expect(get).toHaveBeenCalledTimes(2);
+  });
+
   it('serves a validated persisted Home projection independently of Viva mode', async () => {
     const projectionConfig = {
       ...config,

@@ -113,10 +113,11 @@ If a server-side profile response is `403`, staging may set
 only an already-linked `(tenant, issuer, subject)` and fails closed with
 `AUTH_IDENTITY_LINK_REQUIRED` for an unknown subject.
 
-After the immutable services start, `verify-home-base.sh` waits until every active PadlHub user has
-a fresh `home.base_snapshots` row. This gate runs before the independent Viva-backed full Home
-activation. A failure of that external projection must not leave an authenticated user waiting for
-the PadlHub-owned `/home/base` response.
+After the immutable services start, `verify-home-base.sh` waits until every active user with a
+current Viva delegation has a fresh `home.base_snapshots` row. The worker prioritizes this bounded
+set ahead of the full identity backfill. In addition, an authenticated `/home/base` read provisions
+its own missing PadlHub-only projection synchronously, so a newly authenticated user never waits for
+the background batch cursor. This gate runs before the independent Viva-backed full Home activation.
 
 ## Application ingress
 
