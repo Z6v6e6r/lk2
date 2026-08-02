@@ -134,8 +134,25 @@ jobs:
           scp deploy/compose.staging.yaml "phub-deploy@$HOST:/opt/phub/compose.yaml"
           scp deploy/jetson/nginx/default.conf "phub-deploy@$HOST:/opt/phub/nginx/default.conf"
           scp deploy/jetson/activate-live-home.sh "phub-deploy@$HOST:/opt/phub/activate-live-home.sh"
+          scp deploy/jetson/verify-home-base.sh \
+            "phub-deploy@$HOST:/opt/phub/verify-home-base.sh"
           scp deploy/jetson/verify-live-staging-data.sh \
             "phub-deploy@$HOST:/opt/phub/verify-live-staging-data.sh"
+          ssh "phub-deploy@$HOST" '
+            set -eu
+            auth_env=/opt/phub/staging.auth.env
+            auth_env_tmp="${auth_env}.$$"
+            umask 077
+            trap "rm -f \"$auth_env_tmp\"" EXIT HUP INT TERM
+            {
+              printf "%s\n" "VIVA_OAUTH_EXISTING_SUBJECT_BOOTSTRAP_ENABLED=true"
+              printf "%s\n" "VIVA_DIRECT_READ_ENABLED=false"
+              printf "%s\n" "HOME_BASE_SYNC_ENABLED=true"
+            } > "$auth_env_tmp"
+            chmod 600 "$auth_env_tmp"
+            mv "$auth_env_tmp" "$auth_env"
+            trap - EXIT HUP INT TERM
+          '
           {
             echo "REGISTRY=ghcr.io/z6v6e6r"
             echo "WEB_IMAGE_DIGEST=$(cat digests/web)"
@@ -231,6 +248,10 @@ jobs:
               exit 1
             fi
           '
+      - name: Verify local HomeBase projections
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+        run: ssh "phub-deploy@$HOST" 'sh /opt/phub/verify-home-base.sh'
       - name: Activate and verify live Home projection
         env:
           HOST: ${{ secrets.STAGING_HOST }}

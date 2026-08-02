@@ -55,6 +55,7 @@ esac
 require_value VIVA_OAUTH_ENABLED true
 require_value VIVA_OAUTH_EXISTING_SUBJECT_BOOTSTRAP_ENABLED true
 require_value VIVA_DIRECT_READ_ENABLED false
+require_value HOME_BASE_SYNC_ENABLED true
 test "$(runtime_value CUP_DEV_AUTH_ENABLED)" != true
 require_value HOME_READ_MODE projection
 case "$(runtime_value COMMUNITIES_READ_MODE)" in
@@ -120,6 +121,7 @@ compose exec -T api node -e "
 compose exec -T worker node -e "
   const env = process.env;
   if (!['sandbox', 'production'].includes(env.VIVA_MODE)) process.exit(1);
+  if (env.HOME_BASE_SYNC_ENABLED !== 'true') process.exit(1);
   if (env.HOME_READ_MODE !== 'projection') process.exit(1);
   if (env.LEGACY_GAMES_ROSTER_SYNC_ENABLED !== 'true') process.exit(1);
   if (env.LEGACY_GAMES_ROSTER_SYNC_SOURCE !== 'mongo') process.exit(1);

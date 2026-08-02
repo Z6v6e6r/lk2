@@ -39,8 +39,10 @@ dependency tree.
 The application runtime reads three environment files in order:
 
 - `/etc/phub/staging.env` contains the root-owned shared runtime secrets;
-- `/opt/phub/staging.auth.env` is mode `0600`, owned by `phub-deploy`, and contains only audited
-  staging authentication feature gates that override the root-owned baseline;
+- `/opt/phub/staging.auth.env` is mode `0600`, owned by `phub-deploy`, and contains the audited
+  authentication gates plus `HOME_BASE_SYNC_ENABLED=true`. The deploy workflow rewrites this
+  non-secret file atomically before preflight so OAuth recovery and the local HomeBase projector
+  cannot drift from the working local contour;
 - `/opt/phub/staging.override.env` contains only the Home/community/promotion live-read gates;
 - `/opt/phub/staging.games.env` is mode `0600`, owned by `phub-deploy`, and contains the
   staging-only Games mirror gates. The Mongo mirror keeps its URI only here.
@@ -110,6 +112,11 @@ If a server-side profile response is `403`, staging may set
 `VIVA_DIRECT_READ_ENABLED=false`. The deploy verifier enforces both values. The fallback accepts
 only an already-linked `(tenant, issuer, subject)` and fails closed with
 `AUTH_IDENTITY_LINK_REQUIRED` for an unknown subject.
+
+After the immutable services start, `verify-home-base.sh` waits until every active PadlHub user has
+a fresh `home.base_snapshots` row. This gate runs before the independent Viva-backed full Home
+activation. A failure of that external projection must not leave an authenticated user waiting for
+the PadlHub-owned `/home/base` response.
 
 ## Application ingress
 
