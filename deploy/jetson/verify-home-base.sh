@@ -26,7 +26,7 @@ while test "$attempt" -lt 24; do
       count(distinct snapshot.user_id) filter (where
         snapshot.payload #>> '{snapshot,source}' = 'LOCAL_PROJECTION'
         and snapshot.payload #>> '{snapshot,completeness}' = 'PARTIAL'
-        and (snapshot.payload #>> '{snapshot,staleAt}')::timestamptz > now()
+        and snapshot.checked_at >= now() - interval '5 minutes'
       )
     )
       from identity.users identity_user

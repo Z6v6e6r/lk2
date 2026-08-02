@@ -117,7 +117,9 @@ After the immutable services start, `verify-home-base.sh` waits until every acti
 current Viva delegation has a fresh `home.base_snapshots` row. The worker prioritizes this bounded
 set ahead of the full identity backfill. In addition, an authenticated `/home/base` read provisions
 its own missing PadlHub-only projection synchronously, so a newly authenticated user never waits for
-the background batch cursor. This gate runs before the independent Viva-backed full Home activation.
+the background batch cursor. The deploy gate validates the persisted snapshot contract and a recent
+`checked_at` watermark; optional-section TTLs are normalized separately at read time. This gate runs
+before the independent Viva-backed full Home activation.
 
 ## Application ingress
 
