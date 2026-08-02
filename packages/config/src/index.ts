@@ -277,6 +277,7 @@ const environmentSchema = z.object({
   VIVA_AUTH_TENANT_KEY: z.string().min(1).default('iSkq6G'),
   VIVA_AUTH_CHANNEL: z.string().min(1).default('cascade'),
   VIVA_OAUTH_ENABLED: booleanFromEnvironment,
+  VIVA_OAUTH_EXISTING_SUBJECT_BOOTSTRAP_ENABLED: booleanFromEnvironment,
   VIVA_OAUTH_REDIRECT_URI: z.string().url().optional().or(z.literal('')),
   VIVA_OAUTH_SUCCESS_REDIRECT_URL: z.string().url().optional().or(z.literal('')),
   VIVA_OAUTH_SCOPES: z.string().min(1).default('openid'),
@@ -649,6 +650,22 @@ export function loadConfig(
   }
   if (parsed.data.VIVA_DIRECT_READ_ENABLED && !parsed.data.VIVA_OAUTH_ENABLED) {
     throw new Error('VIVA_DIRECT_READ_ENABLED requires VIVA_OAUTH_ENABLED=true');
+  }
+  if (
+    parsed.data.VIVA_OAUTH_EXISTING_SUBJECT_BOOTSTRAP_ENABLED &&
+    (parsed.data.VIVA_MODE === 'mock' || parsed.data.VIVA_MODE === 'disabled')
+  ) {
+    throw new Error(
+      'VIVA_OAUTH_EXISTING_SUBJECT_BOOTSTRAP_ENABLED requires VIVA_MODE=sandbox or production',
+    );
+  }
+  if (
+    parsed.data.VIVA_OAUTH_EXISTING_SUBJECT_BOOTSTRAP_ENABLED &&
+    !parsed.data.VIVA_OAUTH_ENABLED
+  ) {
+    throw new Error(
+      'VIVA_OAUTH_EXISTING_SUBJECT_BOOTSTRAP_ENABLED requires VIVA_OAUTH_ENABLED=true',
+    );
   }
   if (parsed.data.WEB_PUSH_ENABLED) {
     const missingWebPush = [

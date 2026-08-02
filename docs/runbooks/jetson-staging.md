@@ -39,6 +39,8 @@ dependency tree.
 The application runtime reads three environment files in order:
 
 - `/etc/phub/staging.env` contains the root-owned shared runtime secrets;
+- `/opt/phub/staging.auth.env` is mode `0600`, owned by `phub-deploy`, and contains only audited
+  staging authentication feature gates that override the root-owned baseline;
 - `/opt/phub/staging.override.env` contains only the Home/community/promotion live-read gates;
 - `/opt/phub/staging.games.env` is mode `0600`, owned by `phub-deploy`, and contains the
   staging-only Games mirror gates. The Mongo mirror keeps its URI only here.
@@ -103,6 +105,11 @@ When a Viva OAuth callback returns `AUTH_PROVIDER_UNAVAILABLE`, find the callbac
 in the API logs and inspect the following redacted `identity provider operation` metric. Its
 `failureStage` distinguishes the token request/payload, refresh credential, access-token validation
 and Viva profile request/response/payload without logging an authorization code or provider token.
+If a server-side profile response is `403`, staging may set
+`VIVA_OAUTH_EXISTING_SUBJECT_BOOTSTRAP_ENABLED=true` only while keeping
+`VIVA_DIRECT_READ_ENABLED=false`. The deploy verifier enforces both values. The fallback accepts
+only an already-linked `(tenant, issuer, subject)` and fails closed with
+`AUTH_IDENTITY_LINK_REQUIRED` for an unknown subject.
 
 ## Application ingress
 

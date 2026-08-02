@@ -93,7 +93,7 @@ const vivaIdentityProvider = new VivaIdentityProvider({
   timeoutMs: config.VIVA_TIMEOUT_MS,
   devPhoneE164: config.AUTH_DEV_PHONE_E164,
   devOtpCode: config.AUTH_DEV_OTP_CODE,
-  allowExistingSubjectOAuthBootstrap: config.VIVA_DIRECT_READ_ENABLED,
+  allowExistingSubjectOAuthBootstrap: config.VIVA_OAUTH_EXISTING_SUBJECT_BOOTSTRAP_ENABLED,
   onMetric: (metric) => logger.info({ metric }, 'identity provider operation'),
 });
 const providers = new Map<IdentityProviderKey, IdentityProviderPort>([

@@ -78,6 +78,7 @@ describe('loadConfig', () => {
       WEB_PUSH_CIRCUIT_FAILURE_THRESHOLD: 5,
       WEB_PUSH_CIRCUIT_RESET_MS: 30_000,
       CUP_DEV_AUTH_ENABLED: false,
+      VIVA_OAUTH_EXISTING_SUBJECT_BOOTSTRAP_ENABLED: false,
     });
   });
 
@@ -451,6 +452,39 @@ describe('loadConfig', () => {
         VIVA_DIRECT_READ_ENABLED: 'true',
       }),
     ).toThrow('VIVA_DIRECT_READ_ENABLED requires VIVA_OAUTH_ENABLED=true');
+  });
+
+  it('gates existing-subject OAuth bootstrap independently from browser Viva reads', () => {
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        VIVA_OAUTH_EXISTING_SUBJECT_BOOTSTRAP_ENABLED: 'true',
+      }),
+    ).toThrow(
+      'VIVA_OAUTH_EXISTING_SUBJECT_BOOTSTRAP_ENABLED requires VIVA_MODE=sandbox or production',
+    );
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        VIVA_MODE: 'sandbox',
+        VIVA_OAUTH_EXISTING_SUBJECT_BOOTSTRAP_ENABLED: 'true',
+      }),
+    ).toThrow('VIVA_OAUTH_EXISTING_SUBJECT_BOOTSTRAP_ENABLED requires VIVA_OAUTH_ENABLED=true');
+    expect(
+      loadConfig({
+        ...validEnvironment,
+        VIVA_MODE: 'sandbox',
+        VIVA_OAUTH_ENABLED: 'true',
+        VIVA_OAUTH_REDIRECT_URI:
+          'https://api.example.test/user/api/v1/local-padel/auth/viva/callback',
+        VIVA_OAUTH_SUCCESS_REDIRECT_URL: 'https://app.example.test/',
+        VIVA_DELEGATION_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString('base64url'),
+        VIVA_OAUTH_EXISTING_SUBJECT_BOOTSTRAP_ENABLED: 'true',
+      }),
+    ).toMatchObject({
+      VIVA_DIRECT_READ_ENABLED: false,
+      VIVA_OAUTH_EXISTING_SUBJECT_BOOTSTRAP_ENABLED: true,
+    });
   });
 
   it('requires complete VAPID and endpoint encryption secrets when Web Push is enabled', () => {

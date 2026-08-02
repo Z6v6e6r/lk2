@@ -5,12 +5,15 @@ set -eu
 cd /opt/phub
 
 base_runtime_env=/etc/phub/staging.env
+auth_runtime_env=/opt/phub/staging.auth.env
 home_runtime_env=/opt/phub/staging.override.env
 games_runtime_env=/opt/phub/staging.games.env
 
 test -r "$base_runtime_env"
+test -r "$auth_runtime_env"
 test -r "$home_runtime_env"
 test -r "$games_runtime_env"
+test "$(stat -c %a "$auth_runtime_env")" = 600
 test "$(stat -c %a "$games_runtime_env")" = 600
 
 file_value() {
@@ -21,7 +24,7 @@ file_value() {
 
 runtime_value() {
   key="$1"
-  for file in "$games_runtime_env" "$home_runtime_env" "$base_runtime_env"; do
+  for file in "$games_runtime_env" "$home_runtime_env" "$auth_runtime_env" "$base_runtime_env"; do
     value="$(file_value "$file" "$key")"
     if test -n "$value"; then
       printf '%s' "$value"
@@ -50,6 +53,8 @@ case "$(runtime_value VIVA_MODE)" in
     ;;
 esac
 require_value VIVA_OAUTH_ENABLED true
+require_value VIVA_OAUTH_EXISTING_SUBJECT_BOOTSTRAP_ENABLED true
+require_value VIVA_DIRECT_READ_ENABLED false
 test "$(runtime_value CUP_DEV_AUTH_ENABLED)" != true
 require_value HOME_READ_MODE projection
 case "$(runtime_value COMMUNITIES_READ_MODE)" in
@@ -100,6 +105,8 @@ compose exec -T api node -e "
   if (env.APP_ENV !== 'staging') process.exit(1);
   if (!['sandbox', 'production'].includes(env.VIVA_MODE)) process.exit(1);
   if (env.VIVA_OAUTH_ENABLED !== 'true') process.exit(1);
+  if (env.VIVA_OAUTH_EXISTING_SUBJECT_BOOTSTRAP_ENABLED !== 'true') process.exit(1);
+  if (env.VIVA_DIRECT_READ_ENABLED !== 'false') process.exit(1);
   if (env.CUP_DEV_AUTH_ENABLED === 'true') process.exit(1);
   if (env.HOME_READ_MODE !== 'projection') process.exit(1);
   if (env.GAMES_READ_ENABLED !== 'true') process.exit(1);
