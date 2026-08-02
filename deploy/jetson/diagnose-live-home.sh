@@ -91,6 +91,49 @@ docker logs "$api_container_id" --since 30m 2>&1 \
   | tail -40 \
   || true
 
+echo "home_base_runtime"
+compose exec -T worker node -e "
+  const env = process.env;
+  console.log(JSON.stringify({
+    enabled: env.HOME_BASE_SYNC_ENABLED,
+    intervalMs: env.HOME_BASE_SYNC_INTERVAL_MS,
+    batchSize: env.HOME_BASE_SYNC_BATCH_SIZE
+  }));
+"
+
+echo "home_base_readiness"
+sql "
+  select concat(
+    'active=', count(*),
+    ' snapshot=', count(snapshot.user_id),
+    ' fresh=', count(snapshot.user_id) filter (where
+      snapshot.payload #>> '{snapshot,source}' = 'LOCAL_PROJECTION'
+      and snapshot.payload #>> '{snapshot,completeness}' = 'PARTIAL'
+      and (snapshot.payload #>> '{snapshot,staleAt}')::timestamptz > now()
+    )
+  )
+    from identity.users identity_user
+    left join home.base_snapshots snapshot
+      on snapshot.tenant_id = identity_user.tenant_id
+     and snapshot.user_id = identity_user.id
+   where identity_user.status = 'ACTIVE'
+"
+
+echo "recent_home_base_audit"
+sql "
+  select concat(action, '|', result, '|', occurred_at)
+    from audit.audit_log
+   where action = 'HOME_BASE_PROJECTED'
+   order by occurred_at desc
+   limit 20
+"
+
+echo "recent_home_base_worker_logs"
+docker logs "$(compose ps -q worker)" --since 30m 2>&1 \
+  | grep -E 'HomeBase|HOME_BASE' \
+  | tail -120 \
+  || true
+
 exit 0
 
 sql "
