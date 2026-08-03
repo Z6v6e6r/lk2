@@ -50,33 +50,19 @@ jobs:
             uptime
             free -m
             df -h /
-            timeout 15 docker stats --no-stream --format \
-              "container={{.Name}} cpu={{.CPUPerc}} memory={{.MemUsage}} net={{.NetIO}} block={{.BlockIO}}"
-
-            manifest="$(curl \
-              --resolve lk.nano.padlhub.su:443:127.0.0.1 \
-              --insecure \
-              --silent \
-              --show-error \
-              --max-time 15 \
-              https://lk.nano.padlhub.su/manifest.json)"
-            entry_path="$(printf "%s\n" "$manifest" | sed -n "s/.*\"entry\": \"\([^\"]*\)\".*/\1/p")"
-            style_path="$(printf "%s\n" "$manifest" | sed -n "s/.*\"\(\/assets\/index-[^\"]*\.css\)\".*/\1/p" | head -1)"
-            echo loopback_asset_delivery
-            for asset_path in "$entry_path" "$style_path"; do
-              curl \
-                --resolve lk.nano.padlhub.su:443:127.0.0.1 \
-                --insecure \
-                --silent \
-                --show-error \
-                --range 0-65535 \
-                --max-time 20 \
-                --output /dev/null \
-                --write-out "hop=caddy-loopback path=${asset_path} status=%{http_code} bytes=%{size_download} speed=%{speed_download} seconds=%{time_total}\n" \
-                "https://lk.nano.padlhub.su${asset_path}"
+            echo vmstat
+            timeout 8 vmstat 1 5
+            echo top_processes
+            ps -eo state,pid,ppid,comm,%cpu,%mem,rss --sort=-%cpu | head -25
+            echo docker_memory
+            timeout 10 docker stats --no-stream --format \
+              "container={{.Name}} cpu={{.CPUPerc}} memory={{.MemUsage}} block={{.BlockIO}}"
+            echo unhealthy_healthchecks
+            for container in phub-staging-api-1 phub-staging-realtime-1 phub-staging-worker-1; do
+              docker inspect --format \
+                "container={{.Name}} status={{.State.Health.Status}} failing_streak={{.State.Health.FailingStreak}} checks={{range .State.Health.Log}}{{.End}} exit={{.ExitCode}} output={{json .Output}}; {{end}}" \
+                "$container"
             done
-
-            sh /opt/phub/diagnose-live-home.sh
             exit 0
           '
       - name: Inspect public staging ingress
@@ -113,7 +99,8 @@ jobs:
               --fail \
               --silent \
               --show-error \
-              --max-time 30 \
+              --range 0-65535 \
+              --max-time 20 \
               --output /dev/null \
               --write-out "hop=github-public path=${asset_path} status=%{http_code} bytes=%{size_download} speed=%{speed_download} seconds=%{time_total}\n" \
               "$canonical_base_url$asset_path"
