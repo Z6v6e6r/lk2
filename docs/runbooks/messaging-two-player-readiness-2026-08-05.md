@@ -2,9 +2,10 @@
 
 ## Decision
 
-Local merged M1 candidate `11cd477` contains the tenant-gated User API, OpenAPI/typed SDK and Web UI
-for direct-chat list/create/history/send/read-cursor operations. Its tenant gates remain off by
-default. This is code-level evidence only: no canonical Nano manifest or immutable service digest,
+The local integration candidate contains the tenant-gated User API, OpenAPI/typed SDK and Web UI
+for direct-chat list/create/history/send/read-cursor operations, including current permission,
+active-user and target-privacy revalidation before create/send. Its tenant gates remain off by
+default. This is code-level evidence only: no canonical target manifest or immutable service digest,
 enabled tenant runtime, two-player session, persisted A-to-B message or rendered Web journey has
 been verified against a live target. Live acceptance therefore remains **BLOCKED** until the
 preflight and owner-approved smoke below pass on the explicitly confirmed target.
@@ -17,8 +18,8 @@ is the acceptance source of truth.
 The old `0ddae6c` M1, `b8c50f5` M2 and `00a98e9` GAME/M3 commits remain review evidence, not merge
 candidates. They are based on a divergent line, and their migration numbers `0043`/`0044` are
 already occupied on the current integration line. The current M1 candidate was rebuilt on that line
-using migration `0057`; it still requires independent auth/privacy review and the live evidence
-above. Do not use the old claim "Nano canary active" as current runtime evidence.
+using migration `0057` and passed local auth/privacy review; it still requires the target-specific
+live evidence above. Do not use the old claim "Nano canary active" as current runtime evidence.
 
 ## Minimum honest A-to-B acceptance
 
