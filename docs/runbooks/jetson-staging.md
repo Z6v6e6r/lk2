@@ -162,6 +162,12 @@ release to match the workflow commit. It does not run migrations or restart the
 API, worker, realtime, ingress, or infrastructure services. Use the normal full
 rollout whenever any non-web artifact or release invariant changed.
 
+If the canonical LK renders but session refresh fails with `ORIGIN_NOT_ALLOWED`, dispatch the
+staging workflow with `repair_lk_origin=true`. The recovery preserves the currently resolved CORS
+origins, adds the canonical LK and CUP origins, backs up `staging.auth.env`, and recreates only the
+API container. It rolls the file back if API readiness or the unauthenticated refresh contract does
+not converge; success requires `AUTH_SESSION_REVOKED` with the canonical CORS response header.
+
 ## Management access
 
 With Tailscale connected, create local tunnels from the Mac:

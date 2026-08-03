@@ -25,6 +25,11 @@ on:
         required: false
         type: string
         default: ''
+      repair_lk_origin:
+        description: Allow the canonical Nano LK and CUP browser origins, then restart only API
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -142,7 +147,7 @@ jobs:
           exit 0
 
   build:
-    if: ${{ github.event_name == 'push' || (!inputs.diagnose_home && inputs.web_only_digest == '') }}
+    if: ${{ github.event_name == 'push' || (!inputs.diagnose_home && !inputs.repair_lk_origin && inputs.web_only_digest == '') }}
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -224,6 +229,36 @@ jobs:
           printf '%s' "$GHCR_TOKEN" | ssh -o ServerAliveInterval=10 -o ServerAliveCountMax=2 \
             "phub-deploy@$HOST" \
             "WEB_DIGEST='$WEB_DIGEST' EXPECTED_RELEASE='$WEB_RELEASE' sh /opt/phub/recover-web-only.sh"
+
+  recover-auth-origin:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.repair_lk_origin }}
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+      - name: Join the staging tailnet
+        uses: tailscale/github-action@v4
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+          ping: ${{ secrets.STAGING_HOST }}
+      - name: Configure audited SSH
+        env:
+          DEPLOY_KEY: ${{ secrets.STAGING_DEPLOY_KEY }}
+          KNOWN_HOSTS: ${{ secrets.STAGING_KNOWN_HOSTS }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+      - name: Repair canonical browser origins
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+        run: |
+          scp deploy/jetson/recover-auth-origin.sh \
+            "phub-deploy@$HOST:/opt/phub/recover-auth-origin.sh"
+          ssh -o ServerAliveInterval=10 -o ServerAliveCountMax=2 \
+            "phub-deploy@$HOST" \
+            "sh /opt/phub/recover-auth-origin.sh"
 
   deploy:
     needs: build
