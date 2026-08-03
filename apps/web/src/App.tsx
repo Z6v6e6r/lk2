@@ -7,6 +7,8 @@ import padlHubLogoUrl from './assets/padlhub-logo.svg';
 import vkIconUrl from './assets/vk-auth.svg';
 import yandexIconUrl from './assets/yandex-auth.svg';
 import { BookingsPage } from './BookingsPage.js';
+import { ChatsPage } from './ChatsPage.js';
+import type { ChatUiError } from './ChatsPage.js';
 import { CommunitiesPage } from './CommunitiesPage.js';
 import {
   isIOSBrowser,
@@ -30,6 +32,8 @@ import type {
   BookingPreferences,
   BookingPreferencesUpdateRequest,
   CommunityMembershipPage,
+  ConversationMessage,
+  ConversationPage,
   HomeBase,
   HomeDashboard,
   LocationDetail,
@@ -47,6 +51,7 @@ import type {
   VivaOAuthProvider,
   WebPushConfiguration,
 } from './auth-gateway.js';
+import { createMessagingCommandId } from './auth-gateway.js';
 import {
   disableWebPush,
   enableWebPush,
@@ -64,6 +69,11 @@ type ProtectedRoute =
   | { readonly kind: 'profile'; readonly userId?: string }
   | { readonly kind: 'profile-level-history' }
   | { readonly kind: 'bookings' }
+  | {
+      readonly kind: 'chats';
+      readonly mode: 'list' | 'new' | 'thread';
+      readonly conversationId?: string;
+    }
   | { readonly kind: 'notifications' }
   | { readonly kind: 'communities' }
   | { readonly kind: 'locations' }
@@ -95,6 +105,14 @@ function resolveProtectedRoute(pathname: string): ProtectedRoute {
   );
   if (profileMatch?.[1]) return { kind: 'profile', userId: profileMatch[1] };
   if (normalizedPath === '/bookings') return { kind: 'bookings' };
+  if (normalizedPath === '/chats') return { kind: 'chats', mode: 'list' };
+  if (normalizedPath === '/chats/new') return { kind: 'chats', mode: 'new' };
+  const chatMatch = normalizedPath.match(
+    /^\/chats\/([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i,
+  );
+  if (chatMatch?.[1]) {
+    return { kind: 'chats', mode: 'thread', conversationId: chatMatch[1] };
+  }
   if (normalizedPath === '/notifications') return { kind: 'notifications' };
   if (normalizedPath === '/communities') return { kind: 'communities' };
   if (normalizedPath === '/locations') return { kind: 'locations' };
@@ -260,6 +278,73 @@ function errorCode(error: unknown): string | undefined {
   return typeof error.code === 'string' ? error.code : undefined;
 }
 
+function errorStatus(error: unknown): number | undefined {
+  if (typeof error !== 'object' || error === null || !('status' in error)) return undefined;
+  return typeof error.status === 'number' ? error.status : undefined;
+}
+
+type ChatOperation = 'list' | 'create' | 'history' | 'send' | 'read';
+
+function chatUiError(error: unknown, operation: ChatOperation): ChatUiError {
+  const code = errorCode(error);
+  const status = errorStatus(error);
+  if (status === 401 || code === 'AUTH_REQUIRED' || code === 'AUTH_TOKEN_INVALID') {
+    return {
+      kind: 'AUTH',
+      message: 'Сессия завершилась. После входа безопасно откройте ссылку на чат ещё раз.',
+    };
+  }
+  if (status === 403 || code === 'CONVERSATION_ACCESS_DENIED' || code === 'TENANT_ACCESS_DENIED') {
+    return {
+      kind: 'FORBIDDEN',
+      message: 'Текущая учётная запись не является активным участником этого диалога.',
+    };
+  }
+  if (
+    code === 'FEATURE_UNAVAILABLE' ||
+    code === 'MESSAGING_DISABLED' ||
+    code === 'MESSAGING_HTTP_DISABLED' ||
+    (status === 404 && operation === 'list') ||
+    status === 503
+  ) {
+    return {
+      kind: 'FEATURE_UNAVAILABLE',
+      message:
+        'Контур личных чатов ещё не включён для этой организации. Остальные разделы работают.',
+    };
+  }
+  if (status === 404 || code === 'CONVERSATION_NOT_FOUND' || code === 'USER_NOT_FOUND') {
+    return {
+      kind: 'NOT_FOUND',
+      message:
+        operation === 'create'
+          ? 'Получатель недоступен для личного чата.'
+          : 'Диалог не существует или больше не доступен текущему участнику.',
+    };
+  }
+  return {
+    kind: 'RETRYABLE',
+    message:
+      operation === 'send'
+        ? 'Сервер не подтвердил отправку. Повтор использует тот же идентификатор сообщения.'
+        : operation === 'read'
+          ? 'Не удалось подтвердить прочтение. История сообщений сохранена.'
+          : 'Проверьте соединение и повторите запрос.',
+  };
+}
+
+const PADLHUB_UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function mergeConversationMessages(
+  current: readonly ConversationMessage[],
+  incoming: readonly ConversationMessage[],
+): readonly ConversationMessage[] {
+  const bySequence = new Map(current.map((message) => [message.sequence, message]));
+  for (const message of incoming) bySequence.set(message.sequence, message);
+  return [...bySequence.values()].sort((left, right) => left.sequence - right.sequence);
+}
+
 function userMessage(
   error: unknown,
   operation: 'restore' | 'request' | 'verify' | 'oauth' | 'logout',
@@ -348,6 +433,8 @@ export interface AppProps {
 
 const HOME_REFRESH_INTERVAL_MS = 30_000;
 const NOTIFICATIONS_REFRESH_INTERVAL_MS = 15_000;
+const CHATS_REFRESH_INTERVAL_MS = 5_000;
+const CHAT_GAP_PAGE_LIMIT = 20;
 const HOME_INITIAL_RETRY_DELAYS_MS = [
   400, 1_000, 2_000, 5_000, 10_000, 20_000, 30_000, 30_000, 30_000,
 ] as const;
@@ -400,6 +487,18 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
   const [profileLevelHistoryError, setProfileLevelHistoryError] = useState<string | null>(null);
   const [upcomingBookings, setUpcomingBookings] = useState<UserUpcomingBookings | null>(null);
   const [bookingsError, setBookingsError] = useState<string | null>(null);
+  const [conversations, setConversations] = useState<ConversationPage | null>(null);
+  const [conversationMessages, setConversationMessages] = useState<readonly ConversationMessage[]>(
+    [],
+  );
+  const [chatsError, setChatsError] = useState<ChatUiError | null>(null);
+  const [chatsBusy, setChatsBusy] = useState<'create' | 'send' | 'refresh' | null>(null);
+  const [chatsReloadToken, setChatsReloadToken] = useState(0);
+  const [failedChatMessage, setFailedChatMessage] = useState<{
+    readonly conversationId: string;
+    readonly clientMessageId: string;
+    readonly body: string;
+  } | null>(null);
   const [notifications, setNotifications] = useState<NotificationInboxPage | null>(null);
   const [webPushConfiguration, setWebPushConfiguration] = useState<WebPushConfiguration | null>(
     null,
@@ -417,12 +516,31 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
     protectedRoute.kind === 'profile' ? protectedRoute.userId : undefined;
   const requestedLocationId =
     protectedRoute.kind === 'location' ? protectedRoute.locationId : undefined;
+  const requestedConversationId =
+    protectedRoute.kind === 'chats' ? protectedRoute.conversationId : undefined;
+  const requestedChatRecipientId =
+    protectedRoute.kind === 'chats' &&
+    protectedRoute.mode === 'new' &&
+    typeof window !== 'undefined'
+      ? new URLSearchParams(window.location.search).get('recipientUserId')?.trim()
+      : undefined;
+  const validChatRecipientId =
+    requestedChatRecipientId && PADLHUB_UUID_PATTERN.test(requestedChatRecipientId)
+      ? requestedChatRecipientId
+      : undefined;
   const isHomeRoute =
     protectedRoute.kind === 'home' ||
     protectedRoute.kind === 'home-v2' ||
     protectedRoute.kind === 'home-v3';
   const phoneInput = useRef<HTMLInputElement>(null);
   const codeInput = useRef<HTMLInputElement>(null);
+  const chatLastSequenceRef = useRef(0);
+  const chatReadThroughRef = useRef(0);
+  const chatRefreshInFlightRef = useRef(false);
+  const chatCreateCommandRef = useRef<{
+    readonly recipientUserId: string;
+    readonly idempotencyKey: string;
+  } | null>(null);
 
   useEffect(() => {
     if (publicGiftRoute) return;
@@ -687,6 +805,104 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
         active = false;
       };
     }
+    if (protectedRoute.kind === 'chats') {
+      chatLastSequenceRef.current = 0;
+      chatReadThroughRef.current = 0;
+      chatRefreshInFlightRef.current = false;
+
+      const readMessageGap = async (
+        conversationId: string,
+        afterSequence: number,
+      ): Promise<readonly ConversationMessage[]> => {
+        const messages: ConversationMessage[] = [];
+        let cursor = afterSequence;
+        for (let pageIndex = 0; pageIndex < CHAT_GAP_PAGE_LIMIT; pageIndex += 1) {
+          const page = await gateway.listConversationMessages(conversationId, cursor);
+          messages.push(...page.messages);
+          const newestSequence = page.messages.at(-1)?.sequence ?? cursor;
+          const nextCursor = page.nextAfterSequence ?? newestSequence;
+          if (nextCursor <= cursor || page.messages.length === 0 || !page.nextAfterSequence) break;
+          cursor = nextCursor;
+        }
+        return messages;
+      };
+
+      const refreshChats = async (): Promise<void> => {
+        if (chatRefreshInFlightRef.current || !active) return;
+        chatRefreshInFlightRef.current = true;
+        const listResult = await gateway.listConversations().then(
+          (page) => ({ status: 'fulfilled' as const, page }),
+          (error: unknown) => ({ status: 'rejected' as const, error }),
+        );
+        const historyResult = requestedConversationId
+          ? await readMessageGap(requestedConversationId, chatLastSequenceRef.current).then(
+              (messages) => ({ status: 'fulfilled' as const, messages }),
+              (error: unknown) => ({ status: 'rejected' as const, error }),
+            )
+          : ({ status: 'skipped' } as const);
+        chatRefreshInFlightRef.current = false;
+        if (!active) return;
+
+        if (listResult.status === 'fulfilled') setConversations(listResult.page);
+        else {
+          setConversations(null);
+          setChatsError(chatUiError(listResult.error, 'list'));
+          setChatsBusy(null);
+          return;
+        }
+
+        if (historyResult.status === 'rejected') {
+          setChatsError(chatUiError(historyResult.error, 'history'));
+          setChatsBusy(null);
+          return;
+        }
+        if (historyResult.status === 'fulfilled') {
+          const newestSequence = historyResult.messages.at(-1)?.sequence;
+          if (newestSequence !== undefined) {
+            chatLastSequenceRef.current = Math.max(chatLastSequenceRef.current, newestSequence);
+            setConversationMessages((current) =>
+              mergeConversationMessages(current, historyResult.messages),
+            );
+            if (
+              requestedConversationId &&
+              chatLastSequenceRef.current > chatReadThroughRef.current
+            ) {
+              const readThroughSequence = chatLastSequenceRef.current;
+              const readCommandId = createMessagingCommandId();
+              void gateway
+                .markConversationRead(requestedConversationId, readThroughSequence, readCommandId)
+                .then(
+                  () => {
+                    chatReadThroughRef.current = Math.max(
+                      chatReadThroughRef.current,
+                      readThroughSequence,
+                    );
+                  },
+                  () => undefined,
+                );
+            }
+          }
+        }
+        setChatsError(null);
+        setChatsBusy(null);
+      };
+
+      void Promise.resolve().then(() => {
+        if (!active) return;
+        setConversationMessages([]);
+        setChatsError(null);
+        void refreshChats();
+      });
+      const refreshInterval = window.setInterval(
+        () => void refreshChats(),
+        CHATS_REFRESH_INTERVAL_MS,
+      );
+      return () => {
+        active = false;
+        chatRefreshInFlightRef.current = false;
+        window.clearInterval(refreshInterval);
+      };
+    }
     if (protectedRoute.kind === 'notifications') {
       const serviceWorkerUrl =
         window.__PHUB_BOOTSTRAP__?.serviceWorkerUrl ?? '/phub-notification-sw.js';
@@ -838,7 +1054,9 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
     };
   }, [
     gateway,
+    chatsReloadToken,
     protectedRoute.kind,
+    requestedConversationId,
     requestedLocationId,
     requestedProfileUserId,
     homeReloadToken,
@@ -972,6 +1190,12 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
           setProfileSubscriptionsError(null);
           setUpcomingBookings(null);
           setBookingsError(null);
+          setConversations(null);
+          setConversationMessages([]);
+          setChatsError(null);
+          setChatsBusy(null);
+          setFailedChatMessage(null);
+          chatCreateCommandRef.current = null;
           setNotifications(null);
           setWebPushConfiguration(null);
           setNotificationsError(null);
@@ -981,6 +1205,88 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
           dispatch({ type: 'logout-failed', message: userMessage(error, 'logout') });
         },
       );
+  }
+
+  function handleCreateDirectConversation(): void {
+    if (!validChatRecipientId) return;
+    const existingCommand = chatCreateCommandRef.current;
+    const command =
+      existingCommand?.recipientUserId === validChatRecipientId
+        ? existingCommand
+        : {
+            recipientUserId: validChatRecipientId,
+            idempotencyKey: createMessagingCommandId(),
+          };
+    chatCreateCommandRef.current = command;
+    setChatsBusy('create');
+    setChatsError(null);
+    void gateway.createDirectConversation(command.recipientUserId, command.idempotencyKey).then(
+      (result) => {
+        chatCreateCommandRef.current = null;
+        setChatsBusy(null);
+        window.history.pushState({}, '', `/chats/${result.conversation.id}`);
+        setChatsReloadToken((token) => token + 1);
+      },
+      (error: unknown) => {
+        setChatsError(chatUiError(error, 'create'));
+        setChatsBusy(null);
+      },
+    );
+  }
+
+  function sendChatCommand(command: {
+    readonly conversationId: string;
+    readonly clientMessageId: string;
+    readonly body: string;
+  }): void {
+    setChatsBusy('send');
+    setChatsError(null);
+    void gateway
+      .sendConversationMessage(command.conversationId, {
+        clientMessageId: command.clientMessageId,
+        body: command.body,
+      })
+      .then(
+        (result) => {
+          setConversationMessages((current) =>
+            mergeConversationMessages(current, [result.message]),
+          );
+          chatLastSequenceRef.current = Math.max(
+            chatLastSequenceRef.current,
+            result.message.sequence,
+          );
+          setFailedChatMessage(null);
+          setChatsBusy(null);
+          setChatsError(null);
+          setChatsReloadToken((token) => token + 1);
+        },
+        (error: unknown) => {
+          setFailedChatMessage(command);
+          setChatsError(chatUiError(error, 'send'));
+          setChatsBusy(null);
+        },
+      );
+  }
+
+  function handleSendConversationMessage(body: string): void {
+    if (!requestedConversationId) return;
+    const command = {
+      conversationId: requestedConversationId,
+      clientMessageId: createMessagingCommandId(),
+      body,
+    };
+    setFailedChatMessage(null);
+    sendChatCommand(command);
+  }
+
+  function handleRetryConversationMessage(): void {
+    if (failedChatMessage) sendChatCommand(failedChatMessage);
+  }
+
+  function handleRefreshChats(): void {
+    setChatsBusy('refresh');
+    setChatsError(null);
+    setChatsReloadToken((token) => token + 1);
   }
 
   function handleEnableWebPush(): void {
@@ -1214,6 +1520,28 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
           tenantName={context.tenant.name}
           loadHistory={gateway.getActivityHistory}
           loadRecommendations={() => gateway.listBookingRecommendations({ limit: 20 })}
+        />
+      );
+    }
+    if (protectedRoute.kind === 'chats') {
+      return (
+        <ChatsPage
+          page={conversations}
+          messages={conversationMessages}
+          mode={protectedRoute.mode}
+          {...(requestedConversationId ? { selectedConversationId: requestedConversationId } : {})}
+          hasExplicitRecipient={Boolean(validChatRecipientId)}
+          currentUserId={context.user.id}
+          busy={chatsBusy}
+          error={chatsError}
+          canRetrySend={
+            Boolean(failedChatMessage) &&
+            failedChatMessage?.conversationId === requestedConversationId
+          }
+          onCreateDirect={handleCreateDirectConversation}
+          onSendMessage={handleSendConversationMessage}
+          onRetrySend={handleRetryConversationMessage}
+          onRefresh={handleRefreshChats}
         />
       );
     }

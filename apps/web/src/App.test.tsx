@@ -379,6 +379,16 @@ function createGateway(overrides: Partial<AuthGateway> = {}): AuthGateway {
         },
       ],
     }),
+    listConversations: vi.fn().mockResolvedValue({ items: [] }),
+    createDirectConversation: vi.fn().mockRejectedValue(new Error('MESSAGING_HTTP_DISABLED')),
+    listConversationMessages: vi.fn().mockResolvedValue({ messages: [] }),
+    sendConversationMessage: vi.fn().mockRejectedValue(new Error('MESSAGING_HTTP_DISABLED')),
+    markConversationRead: vi.fn().mockResolvedValue({
+      outcome: 'ok',
+      readThroughSequence: 0,
+      changed: false,
+      replayed: false,
+    }),
     listNotifications: vi.fn().mockResolvedValue(notificationInbox),
     markNotificationsRead: vi.fn().mockResolvedValue(undefined),
     getWebPushConfiguration: vi.fn().mockResolvedValue({
@@ -1320,6 +1330,129 @@ describe('PadlHub web authentication', () => {
     expect(screen.getByRole('heading', { name: 'Введите код' })).toBeVisible();
     expect(code).toHaveValue('');
     expect(code).toHaveAttribute('aria-invalid', 'true');
+  });
+
+  it('exposes an explicit direct-chat deep link only when another profile capability is available', async () => {
+    const recipientUserId = '11111111-1111-4111-8111-111111111111';
+    window.history.replaceState({}, '', `/profile/${recipientUserId}`);
+    const otherProfile: PlayerProfileView = {
+      profile: {
+        userId: recipientUserId,
+        displayName: 'Борис',
+        firstName: 'Борис',
+        avatarUrl: null,
+        level: { label: 'C', value: 3.1, assessmentRequired: false },
+      },
+      access: {
+        audience: 'OTHER',
+        tier: 'INTERACTION',
+        visibleSections: ['BASIC', 'PLAYER_LEVEL'],
+        contact: { status: 'LOCKED', reason: 'ACCESS_REQUIRED' },
+        chat: {
+          status: 'AVAILABLE',
+          route: `/chats/new?recipientUserId=${recipientUserId}`,
+        },
+      },
+    };
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue(session),
+      getPlayerProfile: vi.fn().mockResolvedValue(otherProfile),
+    });
+
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+
+    expect(await screen.findByRole('link', { name: /Открыть чат/ })).toHaveAttribute(
+      'href',
+      `/chats/new?recipientUserId=${recipientUserId}`,
+    );
+  });
+
+  it('creates or reuses a direct conversation from the profile deep link and opens its thread', async () => {
+    const recipientUserId = '11111111-1111-4111-8111-111111111111';
+    const conversationId = '22222222-2222-4222-8222-222222222222';
+    window.history.replaceState({}, '', `/chats/new?recipientUserId=${recipientUserId}`);
+    const createDirectConversation = vi
+      .fn<AuthGateway['createDirectConversation']>()
+      .mockResolvedValue({
+        outcome: 'ok',
+        conversation: {
+          id: conversationId,
+          kind: 'DIRECT',
+          participant: { userId: recipientUserId, displayName: 'Борис' },
+          unreadCount: 0,
+          updatedAt: '2026-08-03T10:00:00.000Z',
+        },
+        created: false,
+        replayed: false,
+      });
+    const listConversationMessages = vi
+      .fn<AuthGateway['listConversationMessages']>()
+      .mockResolvedValue({ messages: [] });
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue(session),
+      createDirectConversation,
+      listConversationMessages,
+    });
+    const user = userEvent.setup();
+
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+    expect(await screen.findByRole('button', { name: 'Начать диалог' })).toBeVisible();
+    expect(screen.queryByText(recipientUserId)).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Начать диалог' }));
+
+    await waitFor(() => expect(window.location.pathname).toBe(`/chats/${conversationId}`));
+    expect(createDirectConversation).toHaveBeenCalledWith(recipientUserId, expect.any(String));
+    await waitFor(() => expect(listConversationMessages).toHaveBeenCalledWith(conversationId, 0));
+  });
+
+  it('retries an unconfirmed message with the same stable clientMessageId', async () => {
+    const recipientUserId = '11111111-1111-4111-8111-111111111111';
+    const conversationId = '22222222-2222-4222-8222-222222222222';
+    window.history.replaceState({}, '', `/chats/${conversationId}`);
+    const conversation = {
+      id: conversationId,
+      kind: 'DIRECT' as const,
+      participant: { userId: recipientUserId, displayName: 'Борис' },
+      unreadCount: 0,
+      updatedAt: '2026-08-03T10:00:00.000Z',
+    };
+    const sendConversationMessage = vi
+      .fn<AuthGateway['sendConversationMessage']>()
+      .mockRejectedValueOnce(new TypeError('network interrupted'))
+      .mockImplementation((_selectedConversationId, command) =>
+        Promise.resolve({
+          outcome: 'ok',
+          message: {
+            id: '33333333-3333-4333-8333-333333333333',
+            conversationId,
+            sequence: 1,
+            sender: { userId: session.context.user.id, displayName: 'Анна' },
+            messageType: 'TEXT',
+            body: command.body,
+            createdAt: '2026-08-03T10:01:00.000Z',
+          },
+          replayed: true,
+        }),
+      );
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue(session),
+      listConversations: vi.fn().mockResolvedValue({ items: [conversation] }),
+      listConversationMessages: vi.fn().mockResolvedValue({ messages: [] }),
+      sendConversationMessage,
+    });
+    const user = userEvent.setup();
+
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+    await user.type(await screen.findByLabelText('Сообщение'), 'Привет');
+    await user.click(screen.getByRole('button', { name: 'Отправить' }));
+    await user.click(await screen.findByRole('button', { name: 'Повторить отправку' }));
+
+    await waitFor(() => expect(sendConversationMessage).toHaveBeenCalledTimes(2));
+    const firstCommand = sendConversationMessage.mock.calls[0]?.[1];
+    const retryCommand = sendConversationMessage.mock.calls[1]?.[1];
+    expect(firstCommand?.clientMessageId).toEqual(retryCommand?.clientMessageId);
+    expect(firstCommand?.body).toBe('Привет');
+    expect(retryCommand?.body).toBe('Привет');
   });
 
   it('falls back to phone login when session restoration is unavailable', async () => {
