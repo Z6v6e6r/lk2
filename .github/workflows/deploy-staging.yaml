@@ -44,8 +44,41 @@ jobs:
         env:
           HOST: ${{ secrets.STAGING_HOST }}
         run: |
-          scp deploy/jetson/diagnose-live-home.sh "phub-deploy@$HOST:/opt/phub/diagnose-live-home.sh"
-          ssh "phub-deploy@$HOST" 'sh /opt/phub/diagnose-live-home.sh'
+          ssh -o ServerAliveInterval=10 -o ServerAliveCountMax=2 "phub-deploy@$HOST" '
+            set +e
+            echo host_resources
+            uptime
+            free -m
+            df -h /
+            timeout 15 docker stats --no-stream --format \
+              "container={{.Name}} cpu={{.CPUPerc}} memory={{.MemUsage}} net={{.NetIO}} block={{.BlockIO}}"
+
+            manifest="$(curl \
+              --resolve lk.nano.padlhub.su:443:127.0.0.1 \
+              --insecure \
+              --silent \
+              --show-error \
+              --max-time 15 \
+              https://lk.nano.padlhub.su/manifest.json)"
+            entry_path="$(printf "%s\n" "$manifest" | sed -n "s/.*\"entry\": \"\([^\"]*\)\".*/\1/p")"
+            style_path="$(printf "%s\n" "$manifest" | sed -n "s/.*\"\(\/assets\/index-[^\"]*\.css\)\".*/\1/p" | head -1)"
+            echo loopback_asset_delivery
+            for asset_path in "$entry_path" "$style_path"; do
+              curl \
+                --resolve lk.nano.padlhub.su:443:127.0.0.1 \
+                --insecure \
+                --silent \
+                --show-error \
+                --range 0-65535 \
+                --max-time 20 \
+                --output /dev/null \
+                --write-out "hop=caddy-loopback path=${asset_path} status=%{http_code} bytes=%{size_download} speed=%{speed_download} seconds=%{time_total}\n" \
+                "https://lk.nano.padlhub.su${asset_path}"
+            done
+
+            sh /opt/phub/diagnose-live-home.sh
+            exit 0
+          '
       - name: Inspect public staging ingress
         env:
           BASE_URL: ${{ vars.STAGING_BASE_URL }}
