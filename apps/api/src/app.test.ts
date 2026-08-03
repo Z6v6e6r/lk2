@@ -588,7 +588,7 @@ describe('health endpoints', () => {
     expect(JSON.stringify(body)).not.toContain('245000');
   });
 
-  it('exposes contact and chat actions only from server-side entitlements', async () => {
+  it('does not expose contact and chat routes before the interaction commands are mounted', async () => {
     const targetUserId = '6a81e965-c508-4321-812c-4be323606a70';
     const app = await buildApp({
       config,
@@ -618,8 +618,8 @@ describe('health endpoints', () => {
       access: {
         audience: 'OTHER',
         tier: 'INTERACTION',
-        contact: { status: 'AVAILABLE' },
-        chat: { status: 'AVAILABLE' },
+        contact: { status: 'LOCKED', reason: 'FEATURE_UNAVAILABLE' },
+        chat: { status: 'HIDDEN' },
       },
     });
   });
