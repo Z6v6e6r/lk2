@@ -567,7 +567,9 @@ describe('legacy games adapter', () => {
     expect(adapter.readAvatarSource(first?.[0]?.id ?? '')).toBe(
       'https://external.example/private-trainer-photo-id',
     );
-    expect(adapter.readStationExternalId(first?.[0]?.id ?? '')).toBe('legacy-station-42');
+    expect(adapter.readStationExternalId(first?.[0]?.id ?? '')).toBe(
+      '92504a5e8432fb6de6da92476c846e75c571a0d47a6c4cd9662cab48d38fe4d0',
+    );
     expect(adapter.readExerciseExternalId(first?.[0]?.id ?? '')).toBe('legacy-tournament-id');
     expect(adapter.readTrainerAvatarSource(first?.[0]?.id ?? '')).toEqual({
       provider: 'VIVA',

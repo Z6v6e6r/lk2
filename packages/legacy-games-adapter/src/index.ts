@@ -1095,7 +1095,7 @@ export class LegacyTournamentSummaryAdapter {
                 : undefined);
             if (stationExternalId) {
               this.stationSources.set(summary.id, {
-                externalId: stationExternalId,
+                externalId: pseudonymousId('station', stationExternalId),
                 fetchedAt: now,
               });
             }
@@ -1151,7 +1151,7 @@ export class LegacyTournamentSummaryAdapter {
     return request;
   }
 
-  /** Returns private integration metadata only to the API mapping boundary. */
+  /** Returns the one-way station association key used by the integration mapping boundary. */
   public readStationExternalId(summaryId: string): string | undefined {
     const source = this.stationSources.get(summaryId);
     if (!source) return undefined;

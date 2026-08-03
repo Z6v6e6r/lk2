@@ -470,6 +470,107 @@ describe('client-assisted booking screen read routes', () => {
     expect(continued.json<{ readonly items: readonly unknown[] }>().items).toHaveLength(1);
   });
 
+  it('resolves one-way tournament station keys into a ready GAMES catalog', async () => {
+    const app = Fastify();
+    apps.push(app);
+    const stationAssociationId = '92504a5e8432fb6de6da92476c846e75c571a0d47a6c4cd9662cab48d38fe4d0';
+    const stationId = '60000000-0000-4000-8000-000000000001';
+    const authenticate = (request: FastifyRequest): Promise<void> => {
+      request.tenantId = tenantId;
+      request.padlHubClaims = {
+        sub: userId,
+        tenants: [tenantId],
+        roles: ['client'],
+        permissions: ['games.play'],
+        sid: '30000000-0000-4000-8000-000000000001',
+      };
+      return Promise.resolve();
+    };
+    const resolveMappings = vi.fn().mockResolvedValue({
+      bookings: [],
+      games: [],
+      stations: [{ externalId: stationAssociationId, stationId }],
+    });
+    registerBookingRecommendationRoutes(app, {
+      clientAssistedJobStore: new MemoryBookingScreenReadJobStore(),
+      eventCatalogSnapshotStore: new MemoryEventCatalogSnapshotStore<TrainingEventCatalogItem>(),
+      tournamentSource: {
+        readDate: vi.fn().mockResolvedValue([
+          {
+            id: '70000000-0000-4000-8000-000000000001',
+            title: 'Воскресный Мексикано',
+            format: 'Мексикано',
+            startsAt: '2026-08-03T16:00:00.000Z',
+            endsAt: '2026-08-03T18:00:00.000Z',
+            venue: 'Селигерская',
+            trainerName: null,
+            levelRange: null,
+            organizer: null,
+            capacity: { total: 16, registered: 12, open: 4, waitlist: 0 },
+            status: 'REGISTRATION',
+            route: '/tournaments?event=70000000-0000-4000-8000-000000000001',
+          },
+        ]),
+        readStationExternalId: () => stationAssociationId,
+      },
+      bookingScreenMappingRepository: { resolve: resolveMappings },
+      locationRepository: {
+        getPublished: vi.fn().mockResolvedValue({
+          id: stationId,
+          title: 'Селигерская',
+          shortTitle: 'Селигерская',
+          address: 'Москва',
+        }),
+      },
+      authenticatedTenantHandlers: [authenticate],
+      publicTenantHandlers: [],
+    });
+
+    const started = await app.inject({
+      method: 'POST',
+      url: '/user/api/v1/local-padel/booking-screen-read-jobs',
+      payload: {
+        screen: 'EVENT_CATALOG',
+        query: {
+          surface: 'GAMES',
+          localDates: ['2026-08-03'],
+          kinds: ['TOURNAMENT'],
+          availability: 'EXCLUDE_FULL',
+          limit: 20,
+        },
+      },
+    });
+    expect(started.statusCode).toBe(200);
+    const job = started.json<{ readonly jobId: string; readonly commands: readonly unknown[] }>();
+    expect(job.commands).toEqual([]);
+
+    const completed = await app.inject({
+      method: 'POST',
+      url: `/user/api/v1/local-padel/booking-screen-read-jobs/${job.jobId}/complete`,
+      payload: { limit: 20 },
+    });
+
+    expect(completed.statusCode).toBe(200);
+    expect(completed.json()).toMatchObject({
+      state: 'READY',
+      catalog: {
+        state: 'READY',
+        totalMatched: 1,
+        items: [
+          {
+            kind: 'TOURNAMENT',
+            tournament: { title: 'Воскресный Мексикано' },
+            station: { id: stationId, name: 'Селигерская', shortAddress: 'Москва' },
+          },
+        ],
+        sourceStatus: [{ source: 'TOURNAMENTS', localDate: null, state: 'READY', errorCode: null }],
+      },
+    });
+    expect(resolveMappings).toHaveBeenCalledWith(
+      expect.objectContaining({ stationExternalIds: [stationAssociationId] }),
+    );
+  });
+
   it('creates a GAMES catalog snapshot without provider commands when only local games are selected', async () => {
     const app = Fastify();
     apps.push(app);
