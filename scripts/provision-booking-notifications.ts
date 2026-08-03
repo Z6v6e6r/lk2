@@ -6,6 +6,7 @@ import type { PoolClient, QueryResultRow } from 'pg';
 const CONFIRMATION_TOKEN = 'APPLY_BOOKING_NOTIFICATION_RULESET';
 const RULESET_VERSION = 'booking.ru-ru.v1';
 const LOCALE = 'ru-RU';
+const TEMPLATE_DEEP_LINK = '/bookings';
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const TENANT_KEY_PATTERN = /^[a-z0-9][a-z0-9-]{1,62}$/;
 const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9._:-]{16,128}$/;
@@ -42,7 +43,14 @@ const definitions = [
 ] as const;
 
 const requestHash = createHash('sha256')
-  .update(JSON.stringify({ rulesetVersion: RULESET_VERSION, locale: LOCALE, definitions }))
+  .update(
+    JSON.stringify({
+      rulesetVersion: RULESET_VERSION,
+      locale: LOCALE,
+      deepLink: TEMPLATE_DEEP_LINK,
+      definitions,
+    }),
+  )
   .digest('hex');
 
 interface TenantRow extends QueryResultRow {
@@ -87,7 +95,7 @@ function templateMatches(row: TemplateRow, definition: (typeof definitions)[numb
     JSON.stringify(row.channels) === JSON.stringify(['IN_APP', 'PUSH']) &&
     row.title_template === definition.title &&
     row.body_template === definition.body &&
-    row.deep_link_template === '/bookings/{{bookingId}}'
+    row.deep_link_template === TEMPLATE_DEEP_LINK
   );
 }
 
@@ -211,7 +219,7 @@ try {
              tenant_id, template_key, version, locale, category, channels,
              title_template, body_template, deep_link_template, active, created_by_user_id
            ) values ($1, $2, 1, $3, 'BOOKING', array['IN_APP', 'PUSH']::text[],
-                     $4, $5, '/bookings/{{bookingId}}', false, $6)
+                     $4, $5, '/bookings', false, $6)
            on conflict (tenant_id, template_key, version, locale) do nothing`,
           [tenantId, definition.key, LOCALE, definition.title, definition.body, actorId],
         );

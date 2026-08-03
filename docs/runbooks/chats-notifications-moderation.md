@@ -276,6 +276,9 @@ gates remain authoritative and default off. Both preview and apply require the a
 `notifications.manage`; apply checks this again inside its transaction. Preview first, then apply
 with a unique operator idempotency key:
 
+The v1 templates link to the supported `/bookings` list route. Do not provision a booking-detail
+deep link until an authoritative booking detail model and matching Web route exist.
+
 ```bash
 npm run notifications:booking:provision -- \
   --tenant-key=local-padel \

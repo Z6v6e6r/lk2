@@ -14,6 +14,11 @@ describe('booking notification provisioning contract', () => {
     expect(source).toContain('IDEMPOTENCY_KEY_REUSED');
     expect(source).toContain('BOOKING_NOTIFICATION_RULESET_PROVISIONED');
     expect(source).toContain('\'{"type":"EVENT_USERS","field":"recipientUserIds"}\'::jsonb');
+    expect(source).toContain("const TEMPLATE_DEEP_LINK = '/bookings'");
+    expect(source).toContain('deepLink: TEMPLATE_DEEP_LINK');
+    expect(source).toContain('deep_link_template === TEMPLATE_DEEP_LINK');
+    expect(source).toContain("$4, $5, '/bookings', false, $6");
+    expect(source).not.toContain('/bookings/{{bookingId}}');
     expect(source).toContain("'admin' = any(access.roles)");
     expect(source).toContain("'notifications.manage' = any(access.permissions)");
     expect(source).toContain("throw new Error('ADMIN_PERMISSION_REQUIRED')");
