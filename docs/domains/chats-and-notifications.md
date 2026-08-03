@@ -275,11 +275,20 @@ recommendation и revoke signal. Она не получает user/admin JWT, н
 | `notifications.delivery.receipt.v1`        | deliveryId, receiptType, platform            | ЦУП, analytics                                    |
 | `notifications.read-cursor.updated.v1`     | recipientUserId, readThroughItemId           | home counters, analytics                          |
 | `notifications.admin-campaign.accepted.v1` | campaignId, matchedCount, requestedChannels  | ЦУП, analytics                                    |
+| `booking.confirmed.v1`                     | bookingId, revision, recipientUserIds        | notification policy                               |
+| `booking.changed.v1`                       | bookingId, revision, recipientUserIds        | notification policy                               |
+| `booking.cancelled.v1`                     | bookingId, revision, recipientUserIds        | notification policy                               |
+| `booking.reminder.due.v1`                  | bookingId, revision, recipientUserIds        | notification policy                               |
 | `moderation.case.created.v1`               | caseId, source, severity                     | ЦУП moderation queue                              |
 | `moderation.action.applied.v1`             | caseId, actionId, actionType, target IDs     | messaging, realtime, audit projection             |
 
 Broker payloads не содержат body, attachment URLs, телефон, email, push token или внешний contact
 ID. Версия является частью имени события; несовместимое изменение создаёт новую версию.
+
+Booking events используют только PadlHub UUID: envelope `aggregateId` равен payload
+`bookingId`, `revision` содержит монотонную ревизию авторитетного booking aggregate, а
+`recipientUserIds` — дедуплицированный ограниченный список PadlHub user UUID. Viva booking IDs и
+browser-derived projections в этот контракт не входят.
 
 ## 7. Авторизация, приватность и модерация
 

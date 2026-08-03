@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  MAX_NOTIFICATION_EVENT_RECIPIENTS,
+  bookingNotificationSourceEventSchema,
   canonicalWebPushSubscription,
   createNotificationEndpointCipher,
   notificationAudienceSelectorSchema,
@@ -10,6 +12,7 @@ import {
   webPushSubscriptionSchema,
 } from './index.js';
 
+const legacyRecipientUserId = '44444444-4444-4444-8444-444444444444';
 const event = notificationSourceEventSchema.parse({
   id: '11111111-1111-4111-8111-111111111111',
   type: 'game.starting-soon.v1',
@@ -18,7 +21,7 @@ const event = notificationSourceEventSchema.parse({
   occurredAt: '2026-07-16T12:00:00.000Z',
   correlationId: 'notification-test-123',
   payload: {
-    recipientUserId: '44444444-4444-4444-8444-444444444444',
+    recipientUserId: legacyRecipientUserId,
     game: { title: 'Игра на Селигерской' },
     startsAt: '19:00',
   },
@@ -70,6 +73,76 @@ describe('notification domain contracts', () => {
       '44444444-4444-4444-8444-444444444444',
     ]);
     expect(resolveNotificationRecipients({ ...event, payload: {} }, selector)).toEqual([]);
+  });
+
+  it('resolves bounded multi-recipient audiences and keeps EVENT_USER compatible', () => {
+    const selector = notificationAudienceSelectorSchema.parse({
+      type: 'EVENT_USERS',
+      field: 'recipientUserIds',
+    });
+    const secondUserId = '55555555-5555-4555-8555-555555555555';
+    expect(
+      resolveNotificationRecipients(
+        {
+          ...event,
+          payload: {
+            recipientUserIds: [legacyRecipientUserId, secondUserId, secondUserId],
+          },
+        },
+        selector,
+      ),
+    ).toEqual([legacyRecipientUserId, secondUserId]);
+    expect(
+      resolveNotificationRecipients(
+        {
+          ...event,
+          payload: {
+            recipientUserIds: Array.from(
+              { length: MAX_NOTIFICATION_EVENT_RECIPIENTS + 1 },
+              (_, index) => `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`,
+            ),
+          },
+        },
+        selector,
+      ),
+    ).toEqual([]);
+  });
+
+  it('validates canonical booking notification events and normalizes recipients', () => {
+    const bookingId = '66666666-6666-4666-8666-666666666666';
+    const userId = '77777777-7777-4777-8777-777777777777';
+    const parsed = bookingNotificationSourceEventSchema.parse({
+      id: '88888888-8888-4888-8888-888888888888',
+      type: 'booking.cancelled.v1',
+      aggregateId: bookingId,
+      tenantId: event.tenantId,
+      occurredAt: event.occurredAt,
+      correlationId: 'booking-notification-test',
+      payload: {
+        bookingId,
+        revision: '3',
+        recipientUserIds: [userId, userId],
+        serviceTitle: 'Тренировка по паделу',
+        startsAt: '2026-08-05T16:00:00+03:00',
+        timezone: 'Europe/Moscow',
+        locationName: 'ПаделхАБ Селигерская',
+        reasonCode: 'VENUE_REQUEST',
+      },
+    });
+    expect(parsed.payload.recipientUserIds).toEqual([userId]);
+
+    expect(() =>
+      notificationSourceEventSchema.parse({
+        ...parsed,
+        aggregateId: '99999999-9999-4999-8999-999999999999',
+      }),
+    ).toThrow();
+    expect(() =>
+      notificationSourceEventSchema.parse({
+        ...parsed,
+        payload: { ...parsed.payload, revision: '0' },
+      }),
+    ).toThrow();
   });
 
   it('renders a bounded snapshot and requires an internal deep link', () => {

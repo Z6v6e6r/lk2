@@ -267,6 +267,38 @@ channel before stopping the delivery worker during an incident.
 
 ## Required smoke tests
 
+### Booking notification ruleset M1
+
+Provisioning is an explicit, tenant-scoped operation. It installs active `ru-RU` v1 templates and
+rules, but it never changes `notifications.tenant_runtime_settings`; the existing in-app/Web Push
+gates remain authoritative and default off. Preview first, then apply with a unique operator
+idempotency key:
+
+```bash
+npm run notifications:booking:provision -- \
+  --tenant-key=local-padel \
+  --actor-id=<active-padlhub-user-uuid> \
+  --idempotency-key=booking-ruleset-2026-08-03
+
+npm run notifications:booking:provision -- \
+  --tenant-key=local-padel \
+  --actor-id=<active-padlhub-user-uuid> \
+  --idempotency-key=booking-ruleset-2026-08-03 \
+  --confirm=APPLY_BOOKING_NOTIFICATION_RULESET
+```
+
+Replaying the same key and ruleset returns the stored result; reusing it for different provisioning
+content fails closed. Inspect `notifications.ruleset_provision_commands` and the
+`BOOKING_NOTIFICATION_RULESET_PROVISIONED` audit record before enabling a runtime transport.
+
+M1 does not produce booking events. At this revision the repository has no authoritative
+`LOCAL_PRIMARY` booking command path or durable reminder scheduler that can emit the canonical
+revision after committing business state. Viva-assisted and browser-derived booking read snapshots
+are explicitly non-authoritative and must not be used as producers. Runtime activation therefore
+remains blocked until the booking write owner emits confirmed/changed/cancelled events in the same
+transaction as the booking change, and a leased durable scheduler emits `booking.reminder.due.v1`
+with cancellation/reschedule dedupe.
+
 - Repeat a send command with the same `Idempotency-Key` and `clientMessageId`; only one sequence is
   allocated and the original response is returned.
 - Disconnect realtime, create messages, reconnect with `afterSequence`; the client fills the exact
