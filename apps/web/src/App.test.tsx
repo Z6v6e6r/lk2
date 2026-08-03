@@ -380,6 +380,7 @@ function createGateway(overrides: Partial<AuthGateway> = {}): AuthGateway {
       ],
     }),
     listConversations: vi.fn().mockResolvedValue({ items: [] }),
+    createRealtimeTicket: vi.fn().mockRejectedValue(new Error('REALTIME_MESSAGING_DISABLED')),
     createDirectConversation: vi.fn().mockRejectedValue(new Error('MESSAGING_HTTP_DISABLED')),
     listConversationMessages: vi.fn().mockResolvedValue({ messages: [] }),
     sendConversationMessage: vi.fn().mockRejectedValue(new Error('MESSAGING_HTTP_DISABLED')),

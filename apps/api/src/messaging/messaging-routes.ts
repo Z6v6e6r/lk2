@@ -2,18 +2,22 @@ import type { MessagingRepository } from '@phub/database';
 import type { FastifyInstance, FastifyReply, FastifyRequest, preHandlerHookHandler } from 'fastify';
 
 import { sendApiError } from '../http-errors.js';
+import type { RealtimeTicketIssuer } from './realtime-ticket-issuer.js';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const CLIENT_MESSAGE_ID_PATTERN = /^[A-Za-z0-9._:-]{16,128}$/;
 
-function principal(request: FastifyRequest): { tenantId: string; userId: string } | undefined {
+function principal(
+  request: FastifyRequest,
+): { tenantId: string; userId: string; sessionId: string } | undefined {
   const current = request as FastifyRequest & {
     readonly tenantId?: string;
-    readonly padlHubClaims?: { readonly sub?: string };
+    readonly padlHubClaims?: { readonly sub?: string; readonly sid?: string };
   };
   const tenantId = current.tenantId;
   const userId = current.padlHubClaims?.sub;
-  return tenantId && userId ? { tenantId, userId } : undefined;
+  const sessionId = current.padlHubClaims?.sid;
+  return tenantId && userId && sessionId ? { tenantId, userId, sessionId } : undefined;
 }
 
 function unavailable(request: FastifyRequest, reply: FastifyReply) {
@@ -77,12 +81,66 @@ export function registerMessagingRoutes(
   app: FastifyInstance,
   options: {
     readonly repository?: MessagingRepository;
+    readonly realtimeTicketIssuer?: RealtimeTicketIssuer;
     readonly authenticatedTenantHandlers: readonly preHandlerHookHandler[];
     readonly directCommandHandlers: readonly preHandlerHookHandler[];
     readonly contextualCommandHandlers: readonly preHandlerHookHandler[];
     readonly commandHandlers: readonly preHandlerHookHandler[];
   },
 ): void {
+  app.post(
+    '/user/api/v1/:tenantKey/messaging/realtime-ticket',
+    {
+      preHandler: [...options.authenticatedTenantHandlers],
+      config: { rateLimit: { max: 10, timeWindow: 60_000 } },
+    },
+    async (request, reply) => {
+      reply.header('Cache-Control', 'no-store');
+      const current = principal(request);
+      if (!current) {
+        return sendApiError(request, reply, 401, 'AUTH_REQUIRED', 'Требуется авторизация.');
+      }
+      if (!options.repository || !options.realtimeTicketIssuer) return unavailable(request, reply);
+      const authorization = await options.repository.authorizeRealtimeConnection({
+        tenantId: current.tenantId,
+        userId: current.userId,
+        sessionId: current.sessionId,
+      });
+      if (authorization.outcome === 'disabled') {
+        return sendApiError(
+          request,
+          reply,
+          404,
+          'REALTIME_MESSAGING_DISABLED',
+          'Онлайн-чат не включён.',
+        );
+      }
+      if (authorization.outcome === 'revoked') {
+        return sendApiError(request, reply, 401, 'AUTH_SESSION_REVOKED', 'Сессия недействительна.');
+      }
+      const tenantKey = (request.params as { tenantKey: string }).tenantKey;
+      const issued = await options.realtimeTicketIssuer.issue({
+        tenantId: current.tenantId,
+        tenantKey,
+        userId: current.userId,
+        sessionId: current.sessionId,
+      });
+      try {
+        await options.repository.recordRealtimeTicketIssued({
+          tenantId: current.tenantId,
+          userId: current.userId,
+          ticketId: issued.ticketId,
+          expiresAt: issued.expiresAt,
+          correlationId: request.id,
+        });
+      } catch (error) {
+        await options.realtimeTicketIssuer.revoke(issued.ticketId).catch(() => undefined);
+        throw error;
+      }
+      return { ticket: issued.ticket, expiresAt: issued.expiresAt };
+    },
+  );
+
   app.get(
     '/user/api/v1/:tenantKey/conversations',
     { preHandler: [...options.authenticatedTenantHandlers] },

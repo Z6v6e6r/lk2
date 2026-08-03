@@ -24,8 +24,38 @@ tags:
   - name: locations
     description: Published PadlHub location cards and detail views.
   - name: messaging
-    description: Tenant-gated direct conversations with ordered HTTP history.
+    description: Tenant-gated direct conversations with ordered HTTP history and recoverable realtime hints.
 paths:
+  /{tenantKey}/messaging/realtime-ticket:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+    post:
+      tags: [messaging]
+      operationId: issueMessagingRealtimeTicket
+      summary: Issue a one-time session-bound realtime connection ticket
+      description: |
+        The 30-second ticket is accepted once. Current session, user permission and tenant runtime
+        gates are revalidated before issuance and again by the realtime process. Message bodies are
+        never included in the ticket or broker event.
+      responses:
+        '200':
+          description: One-time ticket for the tenant realtime WebSocket endpoint.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessagingRealtimeTicket'
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
   /{tenantKey}/tournaments/{tournamentId}/participants:
     parameters:
       - $ref: ../../common/components.yaml#/components/parameters/TenantKey
@@ -3172,6 +3202,18 @@ components:
           maxItems: 100
           items:
             $ref: '#/components/schemas/ConversationSummary'
+    MessagingRealtimeTicket:
+      type: object
+      additionalProperties: false
+      required: [ticket, expiresAt]
+      properties:
+        ticket:
+          type: string
+          minLength: 64
+          maxLength: 4096
+        expiresAt:
+          type: string
+          format: date-time
     CreateDirectConversationRequest:
       type: object
       additionalProperties: false

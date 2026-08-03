@@ -68,6 +68,33 @@ with a reviewed `--http=off --direct=off` apply; leave the expand-only schema in
 runtime does not add block-list enforcement: the repository has no authoritative block table yet,
 so external rollout remains blocked on that later policy gate.
 
+### Direct chat realtime M2 gate
+
+Realtime включается только после HTTP/direct M1. До apply проверьте, что
+`/health/ready` realtime показывает `redis=true`, `database=true`, `rabbit=true`, exclusive
+instance queue и durable quarantine созданы, а HTTP polling проходит на двух тестовых игроках.
+
+```bash
+npm run messaging:runtime:set -- \
+  --tenant-key=<internal-test-tenant> \
+  --actor-id=<authorized-padlhub-admin-uuid> \
+  --http=on --direct=on --realtime=on
+
+npm run messaging:runtime:set -- \
+  --tenant-key=<internal-test-tenant> \
+  --actor-id=<authorized-padlhub-admin-uuid> \
+  --http=on --direct=on --realtime=on \
+  --confirm=APPLY_MESSAGING_RUNTIME
+```
+
+Принятие: ticket используется один раз; после logout/отзыва permission socket
+закрывается; снятие membership запрещает subscribe/fanout; разрыв Rabbit даёт
+readiness 503 до повторной регистрации consumer; после reconnect клиент забирает gap через
+HTTP. В логах, Rabbit и quarantine не должно быть body сообщения.
+
+Rollback: сначала `--realtime=off` с теми же `http/direct=on`; поллинг остаётся
+рабочим. При инциденте HTTP/direct выключаются отдельно. Схему и Rabbit queues не удалять.
+
 ### In-app runtime gate
 
 The in-app User API and projector are disabled when a tenant has no runtime-settings row. Preview a

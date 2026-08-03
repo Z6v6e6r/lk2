@@ -1,7 +1,7 @@
 # Контур «Чаты и оповещения»
 
 Статус: целевая архитектура, expand-only фундамент, feature-gated direct-chat
-HTTP M1 с Web UI, in-app, Web Push/VAPID и ручная отправка из ЦУП. Остальные публичные
+HTTP M1 и recoverable realtime M2 с Web UI, in-app, Web Push/VAPID и ручная отправка из ЦУП. Остальные публичные
 операции остаются закрытыми, пока не реализованы авторизация, идемпотентность, аудит и
 обработчики соответствующего вертикального среза.
 
@@ -9,9 +9,10 @@ HTTP M1 с Web UI, in-app, Web Push/VAPID и ручная отправка из 
 для list/create/history/send/read cursor. Каноническая пара PadlHub UUID дедуплицируется;
 создание и отправка повторно проверяют current permission, active membership, active target и его
 `chatPolicy`. Tenant gates по умолчанию выключены. Наличие кода не доказывает, что срез активирован
-или проверен в целевой среде. Block-list enforcement, tournament/station contextual chats, attachments,
-edit/delete,
-realtime, connectors и moderation в M1 не входят.
+или проверен в целевой среде. Block-list enforcement, tournament/station contextual chats,
+attachments, edit/delete, connectors и moderation в M1/M2 не входят. Realtime M2 добавляет одноразовый
+session-bound ticket, повторную проверку сессии/прав/membership, identifier-only fanout и
+HTTP gap recovery. Все команды и каноническая история остаются в HTTP/PostgreSQL.
 
 Следующий feature-gated slice реализует только `GAME`: canonical `games.games.id`, актуальная
 `games.participations(state='ACTIVE')` и `games.play` повторно проверяются перед list/history/send/
@@ -239,8 +240,16 @@ window, timeout, circuit breaker и redacted telemetry. Режим аккаун�
 - при разрыве sequence или reconnect клиент вызывает HTTP `GET messages?afterSequence=...`;
 - отправка/редактирование/удаление сообщений всегда идёт через HTTP command API, а не WebSocket.
 
-Gateway держит connection registry в Redis только как эфемерную маршрутизацию. Если Redis или
+Gateway держит connection registry в памяти своего процесса; Redis хранит только
+короткоживущие one-time ticket markers. Если Redis или
 RabbitMQ недоступен, история остаётся корректной, клиент восстанавливается через API.
+
+Текущий M2 использует exclusive fanout queue на каждый realtime instance, `prefetch(1)` и keyed
+serialization по conversation. Потеря ephemeral queue закрывается HTTP gap recovery, а не хранением
+истории в RabbitMQ. Невалидные envelope создают publisher-confirmed запись в
+`phub.realtime.messaging.quarantine.v1` только с hash/reason, без raw body; transient projection failure снимает readiness и
+запускает bounded reconnect. Событие остаётся hint: пропуск, дубль или reconnect
+закрываются HTTP-чтением по `sequence`.
 
 ## 5. Целевые API-поверхности
 
@@ -264,7 +273,7 @@ gates; остальной список — целевая карта.
 - `POST|DELETE /{tenantKey}/notification-endpoints` для будущих iOS/Android установок
 - `POST /{tenantKey}/notification-deliveries/{deliveryId}/receipts`
 - `POST /{tenantKey}/conversations/{conversationId}/messages/{messageId}/reports`
-- `POST /{tenantKey}/realtime/tickets`
+- `POST /{tenantKey}/messaging/realtime-ticket`
 
 ### Admin API / ЦУП
 

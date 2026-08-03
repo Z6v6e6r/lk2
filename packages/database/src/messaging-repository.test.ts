@@ -728,4 +728,85 @@ describe('messaging repository', () => {
       }),
     ).resolves.toEqual({ outcome: 'not_found' });
   });
+
+  it('authorizes realtime only while the tenant gate, permission and session family are active', async () => {
+    const query = vi.fn((text: string) => {
+      if (text === 'begin' || text === 'commit' || text.includes("set_config('app.tenant_id'")) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('from messaging.tenant_runtime_settings')) {
+        return Promise.resolve({
+          rows: [
+            {
+              http_enabled: true,
+              direct_enabled: true,
+              realtime_enabled: true,
+              contextual_enabled: false,
+            },
+          ],
+          rowCount: 1,
+        });
+      }
+      if (text.includes('from identity.refresh_sessions presented')) {
+        return Promise.resolve({ rows: [{ authorized: true }], rowCount: 1 });
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const repository = createMessagingRepository(poolWithQuery(query) as never);
+
+    await expect(
+      repository.authorizeRealtimeConnection({
+        tenantId,
+        userId,
+        sessionId: '55555555-5555-4555-8555-555555555555',
+      }),
+    ).resolves.toEqual({ outcome: 'ok' });
+    const authorizationSql = String(
+      query.mock.calls.find(([text]) =>
+        String(text).includes('from identity.refresh_sessions presented'),
+      )?.[0],
+    );
+    expect(authorizationSql).toContain("'chat.direct.create' = any(current_access.permissions)");
+    expect(authorizationSql).toContain('active_session.revoked_at is null');
+    expect(authorizationSql).toContain('active_session.rotated_at is null');
+    expect(authorizationSql).toContain('active_session.family_id = presented.family_id');
+  });
+
+  it('rechecks direct membership and current permission for every realtime subscription', async () => {
+    const query = vi.fn((text: string) => {
+      if (text === 'begin' || text === 'commit' || text.includes("set_config('app.tenant_id'")) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('from messaging.tenant_runtime_settings')) {
+        return Promise.resolve({
+          rows: [
+            {
+              http_enabled: true,
+              direct_enabled: true,
+              realtime_enabled: true,
+              contextual_enabled: false,
+            },
+          ],
+          rowCount: 1,
+        });
+      }
+      if (text.includes('conversation.next_sequence - 1 as latest_sequence')) {
+        return Promise.resolve({ rows: [{ latest_sequence: '7' }], rowCount: 1 });
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const repository = createMessagingRepository(poolWithQuery(query) as never);
+
+    await expect(
+      repository.authorizeRealtimeSubscription({ tenantId, userId, conversationId }),
+    ).resolves.toEqual({ outcome: 'ok', latestSequence: 7 });
+    const membershipSql = String(
+      query.mock.calls.find(([text]) =>
+        String(text).includes('conversation.next_sequence - 1 as latest_sequence'),
+      )?.[0],
+    );
+    expect(membershipSql).toContain("member.state = 'ACTIVE'");
+    expect(membershipSql).toContain("conversation.kind = 'DIRECT'");
+    expect(membershipSql).toContain("'chat.direct.create' = any(current_access.permissions)");
+  });
 });

@@ -50,6 +50,7 @@ import { ActivityHistoryProjectionCoordinator } from './bookings/activity-histor
 import { ActivityHistoryGameBackfill } from './bookings/activity-history-game-backfill.js';
 import { RedisBookingScreenReadJobStore } from './bookings/booking-screen-read-job-store.js';
 import { RedisEventCatalogSnapshotStore } from './bookings/event-catalog-snapshot-store.js';
+import { RedisRealtimeTicketIssuer } from './messaging/realtime-ticket-issuer.js';
 import type { EventCatalogItem } from './bookings/booking-recommendation-routes.js';
 import { listViewerGameCards } from './games/game-card-queries.js';
 import { S3GiftCertificateMediaStore } from './gift-certificates/gift-certificate-media-store.js';
@@ -316,6 +317,7 @@ const app = await buildApp({
   clientRoutingPlanRepository,
   notificationRepository: createNotificationInboxRepository(pool),
   messagingRepository: createMessagingRepository(pool),
+  realtimeTicketIssuer: new RedisRealtimeTicketIssuer(redis, config),
   notificationEndpointRepository: createNotificationEndpointRepository(pool),
   adminNotificationRepository: createAdminNotificationRepository(pool),
   locationRepository: createLocationRepository(pool),

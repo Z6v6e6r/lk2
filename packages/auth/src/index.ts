@@ -52,6 +52,13 @@ export class MemoryTokenStore implements SecureTokenStore {
 
 export const MOBILE_TOKEN_STORAGE_REQUIREMENT = 'KEYCHAIN_OR_KEYSTORE' as const;
 
+export const REALTIME_TICKET_SCOPE = 'realtime.connect' as const;
+export const REALTIME_TICKET_TTL_SECONDS = 30;
+
+export function realtimeTicketRedisKey(ticketId: string): string {
+  return `auth:realtime-ticket:${ticketId}`;
+}
+
 export type IdentityProviderKey = 'VIVA' | 'LOCAL';
 
 export interface VerifiedExternalIdentity {

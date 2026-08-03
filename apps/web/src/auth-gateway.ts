@@ -28,6 +28,7 @@ import type {
   LocationDetail,
   LocationList,
   NotificationInboxPage,
+  MessagingRealtimeTicket,
   PlayerProfileView,
   PublicGameCardPage,
   PublicGameFilters,
@@ -341,6 +342,7 @@ export interface AuthGateway {
   readonly listMyCommunities: (cursor?: string, limit?: number) => Promise<CommunityMembershipPage>;
   readonly getProfileLevelHistory: () => Promise<ProfileLevelHistory>;
   readonly listConversations: () => Promise<ConversationPage>;
+  readonly createRealtimeTicket: () => Promise<MessagingRealtimeTicket>;
   readonly createDirectConversation: (
     otherUserId: string,
     idempotencyKey: string,
@@ -1198,6 +1200,10 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
 
     listConversations() {
       return client.request<ConversationPage>('/conversations?limit=50');
+    },
+
+    createRealtimeTicket() {
+      return client.issueMessagingRealtimeTicket();
     },
 
     createDirectConversation(otherUserId, idempotencyKey) {

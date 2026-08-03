@@ -48,6 +48,7 @@ export type GetOrCreateGameConversationResult =
   components['schemas']['GetOrCreateGameConversationResult'];
 export type SendConversationMessageResult = components['schemas']['SendConversationMessageResult'];
 export type ConversationReadCursorResult = components['schemas']['ConversationReadCursorResult'];
+export type MessagingRealtimeTicket = components['schemas']['MessagingRealtimeTicket'];
 export type NotificationInboxPage = components['schemas']['NotificationInboxPage'];
 export type NotificationReadCursorResult = components['schemas']['NotificationReadCursorResult'];
 export type WebPushConfiguration = components['schemas']['WebPushConfiguration'];
@@ -1014,6 +1015,12 @@ export class PadlHubApiClient {
   public listConversations(limit = 50): Promise<ConversationPage> {
     const query = new URLSearchParams({ limit: String(limit) });
     return this.request<ConversationPage>(`/conversations?${query.toString()}`);
+  }
+
+  public issueMessagingRealtimeTicket(): Promise<MessagingRealtimeTicket> {
+    return this.request<MessagingRealtimeTicket>('/messaging/realtime-ticket', {
+      method: 'POST',
+    });
   }
 
   public createDirectConversation(otherUserId: string): Promise<CreateDirectConversationResult> {

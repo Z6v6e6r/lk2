@@ -816,6 +816,25 @@ describe('PadlHubApiClient booking personalization boundary', () => {
 });
 
 describe('PadlHubApiClient messaging boundary', () => {
+  it('issues the realtime ticket through the authenticated PadlHub API only', async () => {
+    const calls: Array<{ input: Parameters<typeof fetch>[0]; init?: RequestInit }> = [];
+    const client = createClient(
+      (input, init) => {
+        calls.push({ input, ...(init === undefined ? {} : { init }) });
+        return Promise.resolve(
+          jsonResponse({ ticket: 'x'.repeat(64), expiresAt: '2026-08-03T12:00:30.000Z' }),
+        );
+      },
+      { initialAccessToken: authenticatedSession.accessToken },
+    );
+
+    await client.issueMessagingRealtimeTicket();
+
+    expect(requestUrl(calls[0]?.input ?? '')).toContain('/messaging/realtime-ticket');
+    expect(calls[0]?.init?.method).toBe('POST');
+    expect(new Headers(calls[0]?.init?.headers).get('Authorization')).toMatch(/^Bearer /);
+  });
+
   it('uses only PadlHub conversation routes and retry-safe commands', async () => {
     const calls: Array<{ input: Parameters<typeof fetch>[0]; init?: RequestInit }> = [];
     const conversationId = '22222222-2222-4222-8222-222222222222';

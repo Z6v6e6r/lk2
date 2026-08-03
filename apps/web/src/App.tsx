@@ -8,6 +8,7 @@ import vkIconUrl from './assets/vk-auth.svg';
 import yandexIconUrl from './assets/yandex-auth.svg';
 import { BookingsPage } from './BookingsPage.js';
 import { ChatsPage } from './ChatsPage.js';
+import { connectChatRealtime } from './chat-realtime-client.js';
 import type { ChatUiError } from './ChatsPage.js';
 import { CommunitiesPage } from './CommunitiesPage.js';
 import {
@@ -429,6 +430,7 @@ function VivaProviderIcon({
 export interface AppProps {
   readonly gateway: AuthGateway;
   readonly tenantKey: string;
+  readonly realtimeBaseUrl?: string;
 }
 
 const HOME_REFRESH_INTERVAL_MS = 30_000;
@@ -439,7 +441,7 @@ const HOME_INITIAL_RETRY_DELAYS_MS = [
   400, 1_000, 2_000, 5_000, 10_000, 20_000, 30_000, 30_000, 30_000,
 ] as const;
 
-export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
+export function App({ gateway, tenantKey, realtimeBaseUrl }: AppProps): React.JSX.Element {
   const [state, dispatch] = useReducer(reducer, initialState);
   const browserNavigator = typeof navigator === 'undefined' ? undefined : navigator;
   const iosBrowser = isIOSBrowser(browserNavigator);
@@ -897,9 +899,28 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
         () => void refreshChats(),
         CHATS_REFRESH_INTERVAL_MS,
       );
+      const realtime =
+        requestedConversationId && realtimeBaseUrl
+          ? connectChatRealtime({
+              baseUrl: realtimeBaseUrl,
+              tenantKey,
+              conversationId: requestedConversationId,
+              getTicket: () => gateway.createRealtimeTicket(),
+              getAfterSequence: () => chatLastSequenceRef.current,
+              onRecoveryRequired: (afterSequence) => {
+                if (afterSequence < chatLastSequenceRef.current) {
+                  chatLastSequenceRef.current = afterSequence;
+                  chatReadThroughRef.current = Math.min(chatReadThroughRef.current, afterSequence);
+                  if (afterSequence === 0) setConversationMessages([]);
+                }
+                void refreshChats();
+              },
+            })
+          : undefined;
       return () => {
         active = false;
         chatRefreshInFlightRef.current = false;
+        realtime?.stop();
         window.clearInterval(refreshInterval);
       };
     }
@@ -1057,6 +1078,8 @@ export function App({ gateway, tenantKey }: AppProps): React.JSX.Element {
     chatsReloadToken,
     protectedRoute.kind,
     requestedConversationId,
+    realtimeBaseUrl,
+    tenantKey,
     requestedLocationId,
     requestedProfileUserId,
     homeReloadToken,

@@ -117,6 +117,10 @@ function repository(overrides: Partial<MessagingRepository> = {}): MessagingRepo
       changed: true,
       replayed: false,
     }),
+    authorizeRealtimeConnection: vi.fn().mockResolvedValue({ outcome: 'disabled' }),
+    authorizeRealtimeSubscription: vi.fn().mockResolvedValue({ outcome: 'disabled' }),
+    listRealtimeRecipientUserIds: vi.fn().mockResolvedValue([]),
+    recordRealtimeTicketIssued: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
 }
@@ -126,6 +130,52 @@ afterEach(async () => {
 });
 
 describe('messaging User API', () => {
+  it('issues an audited realtime ticket only after current session authorization', async () => {
+    const authorizeRealtimeConnection = vi.fn().mockResolvedValue({ outcome: 'ok' });
+    const recordRealtimeTicketIssued = vi
+      .fn<MessagingRepository['recordRealtimeTicketIssued']>()
+      .mockResolvedValue(undefined);
+    const issue = vi.fn().mockResolvedValue({
+      ticketId: '77777777-7777-4777-8777-777777777777',
+      ticket: 'signed-ticket',
+      expiresAt: '2026-08-03T12:00:30.000Z',
+    });
+    const app = await buildApp({
+      config,
+      logger: createLogger('messaging-api-test', 'silent'),
+      pool: fakePool(),
+      messagingRepository: repository({ authorizeRealtimeConnection, recordRealtimeTicketIssued }),
+      realtimeTicketIssuer: { issue, revoke: vi.fn() },
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/user/api/v1/local-padel/messaging/realtime-ticket',
+      headers: { authorization: `Bearer ${await accessToken()}` },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      ticket: 'signed-ticket',
+      expiresAt: '2026-08-03T12:00:30.000Z',
+    });
+    expect(authorizeRealtimeConnection).toHaveBeenCalledWith({
+      tenantId,
+      userId,
+      sessionId: '55555555-5555-4555-8555-555555555555',
+    });
+    expect(recordRealtimeTicketIssued).toHaveBeenCalledOnce();
+    const recordedTicket = recordRealtimeTicketIssued.mock.calls[0]?.[0];
+    expect(recordedTicket).toMatchObject({
+      tenantId,
+      userId,
+      ticketId: '77777777-7777-4777-8777-777777777777',
+      expiresAt: '2026-08-03T12:00:30.000Z',
+    });
+    expect(typeof recordedTicket?.correlationId).toBe('string');
+  });
+
   it('rejects an unauthenticated request before consulting messaging state', async () => {
     const getRuntimeSettings = vi.fn();
     const app = await buildApp({

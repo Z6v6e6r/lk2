@@ -105,6 +105,14 @@ export type MarkConversationReadResult =
       readonly replayed: boolean;
     };
 
+export type RealtimeConnectionAuthorization =
+  { readonly outcome: 'disabled' | 'revoked' } | { readonly outcome: 'ok' };
+
+export type RealtimeSubscriptionResult =
+  | { readonly outcome: 'disabled' }
+  | { readonly outcome: 'not_found' }
+  | { readonly outcome: 'ok'; readonly latestSequence: number };
+
 export interface MessagingRepository {
   getRuntimeSettings(tenantId: string): Promise<MessagingRuntimeSettings>;
   listConversations(input: {
@@ -150,6 +158,29 @@ export interface MessagingRepository {
     readonly idempotencyKey: string;
     readonly correlationId: string;
   }): Promise<MarkConversationReadResult>;
+  authorizeRealtimeConnection(input: {
+    readonly tenantId: string;
+    readonly userId: string;
+    readonly sessionId: string;
+  }): Promise<RealtimeConnectionAuthorization>;
+  authorizeRealtimeSubscription(input: {
+    readonly tenantId: string;
+    readonly userId: string;
+    readonly conversationId: string;
+  }): Promise<RealtimeSubscriptionResult>;
+  listRealtimeRecipientUserIds(input: {
+    readonly tenantId: string;
+    readonly conversationId: string;
+    readonly messageId: string;
+    readonly sequence: number;
+  }): Promise<readonly string[]>;
+  recordRealtimeTicketIssued(input: {
+    readonly tenantId: string;
+    readonly userId: string;
+    readonly ticketId: string;
+    readonly expiresAt: string;
+    readonly correlationId: string;
+  }): Promise<void>;
 }
 
 interface RuntimeRow extends QueryResultRow {
@@ -1195,6 +1226,144 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
           changed,
           replayed: false,
         };
+      });
+    },
+
+    authorizeRealtimeConnection(input) {
+      return withTenantTransaction(pool, input.tenantId, async (client) => {
+        const settings = await queryOne<RuntimeRow>(
+          client,
+          `select http_enabled, direct_enabled, realtime_enabled, contextual_enabled
+             from messaging.tenant_runtime_settings
+            where tenant_id = $1`,
+          [input.tenantId],
+        );
+        if (!settings?.http_enabled || !settings.direct_enabled || !settings.realtime_enabled) {
+          return { outcome: 'disabled' };
+        }
+        const authorized = await queryOne<{ authorized: boolean }>(
+          client,
+          `select true as authorized
+             from identity.refresh_sessions presented
+             join identity.users current_user
+               on current_user.tenant_id = presented.tenant_id
+              and current_user.id = presented.user_id
+              and current_user.status = 'ACTIVE'
+             join identity.user_access_profiles current_access
+               on current_access.tenant_id = current_user.tenant_id
+              and current_access.user_id = current_user.id
+              and 'chat.direct.create' = any(current_access.permissions)
+            where presented.tenant_id = $1
+              and presented.id = $2
+              and presented.user_id = $3
+              and exists (
+                select 1
+                  from identity.refresh_sessions active_session
+                 where active_session.tenant_id = presented.tenant_id
+                   and active_session.family_id = presented.family_id
+                   and active_session.revoked_at is null
+                   and active_session.rotated_at is null
+                   and active_session.expires_at > now()
+              )`,
+          [input.tenantId, input.sessionId, input.userId],
+        );
+        return authorized ? { outcome: 'ok' } : { outcome: 'revoked' };
+      });
+    },
+
+    authorizeRealtimeSubscription(input) {
+      return withTenantTransaction(pool, input.tenantId, async (client) => {
+        const settings = await queryOne<RuntimeRow>(
+          client,
+          `select http_enabled, direct_enabled, realtime_enabled, contextual_enabled
+             from messaging.tenant_runtime_settings
+            where tenant_id = $1`,
+          [input.tenantId],
+        );
+        if (!settings?.http_enabled || !settings.direct_enabled || !settings.realtime_enabled) {
+          return { outcome: 'disabled' };
+        }
+        const row = await queryOne<{ latest_sequence: number | string }>(
+          client,
+          `select conversation.next_sequence - 1 as latest_sequence
+             from messaging.conversations conversation
+             join messaging.conversation_members member
+               on member.tenant_id = conversation.tenant_id
+              and member.conversation_id = conversation.id
+              and member.user_id = $2
+              and member.state = 'ACTIVE'
+             join identity.users current_user
+               on current_user.tenant_id = member.tenant_id
+              and current_user.id = member.user_id
+              and current_user.status = 'ACTIVE'
+             join identity.user_access_profiles current_access
+               on current_access.tenant_id = current_user.tenant_id
+              and current_access.user_id = current_user.id
+              and 'chat.direct.create' = any(current_access.permissions)
+            where conversation.tenant_id = $1
+              and conversation.id = $3
+              and conversation.kind = 'DIRECT'
+              and conversation.state = 'OPEN'`,
+          [input.tenantId, input.userId, input.conversationId],
+        );
+        return row
+          ? { outcome: 'ok', latestSequence: sequence(row.latest_sequence) }
+          : { outcome: 'not_found' };
+      });
+    },
+
+    listRealtimeRecipientUserIds(input) {
+      return withTenantTransaction(pool, input.tenantId, async (client) => {
+        const result = await client.query<{ user_id: string }>(
+          `select member.user_id
+             from messaging.tenant_runtime_settings settings
+             join messaging.conversations conversation
+               on conversation.tenant_id = settings.tenant_id
+              and conversation.id = $2
+              and conversation.kind = 'DIRECT'
+              and conversation.state = 'OPEN'
+             join messaging.messages message
+               on message.tenant_id = conversation.tenant_id
+              and message.conversation_id = conversation.id
+              and message.id = $3
+              and message.sequence = $4
+              and message.deleted_at is null
+             join messaging.conversation_members member
+               on member.tenant_id = conversation.tenant_id
+              and member.conversation_id = conversation.id
+              and member.member_type = 'USER'
+              and member.user_id is not null
+              and member.state = 'ACTIVE'
+             join identity.users current_user
+               on current_user.tenant_id = member.tenant_id
+              and current_user.id = member.user_id
+              and current_user.status = 'ACTIVE'
+            where settings.tenant_id = $1
+              and settings.http_enabled = true
+              and settings.direct_enabled = true
+              and settings.realtime_enabled = true`,
+          [input.tenantId, input.conversationId, input.messageId, input.sequence],
+        );
+        return result.rows.map((row) => row.user_id);
+      });
+    },
+
+    recordRealtimeTicketIssued(input) {
+      return withTenantTransaction(pool, input.tenantId, async (client) => {
+        await client.query(
+          `insert into audit.audit_log (
+             tenant_id, actor_id, action, resource_type, resource_id,
+             result, correlation_id, new_value
+           ) values ($1, $2, 'REALTIME_TICKET_ISSUED', 'REALTIME_TICKET', $3,
+                     'SUCCESS', $4, $5::jsonb)`,
+          [
+            input.tenantId,
+            input.userId,
+            input.ticketId,
+            input.correlationId,
+            JSON.stringify({ expiresAt: input.expiresAt }),
+          ],
+        );
       });
     },
   };
