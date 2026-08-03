@@ -345,6 +345,13 @@ Worker startup must declare `phub.dead-letter.v1` as a durable quorum queue and 
 `phub.dead-letter` topic exchange with routing key `#`. This is shared retention for rejected
 events; it does not change the routing keys or delivery policy of existing consumers.
 
+The notification projector queue is intentionally different: it binds only the four explicit
+booking source contracts listed in the domain event catalog. During an in-place upgrade the worker
+creates those exact bindings first and then removes the legacy `phub.events` / `#` binding. Verify
+that `phub.notification-intent-projector.v1` has no wildcard binding before enabling booking rules.
+Every future notification-producing vertical must add its versioned routing key to the code-owned
+topology manifest and topology test; a database rule alone must not broaden broker consumption.
+
 Before enabling a new tenant or transport, verify the queue and binding in the target environment:
 
 ```bash

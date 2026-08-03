@@ -1,4 +1,7 @@
-import { notificationSourceEventSchema } from '@phub/notifications';
+import {
+  BOOKING_NOTIFICATION_EVENT_TYPES,
+  notificationSourceEventSchema,
+} from '@phub/notifications';
 import type { Channel, ConsumeMessage } from 'amqplib';
 import type { Logger } from 'pino';
 import type { Pool } from 'pg';
@@ -6,6 +9,7 @@ import type { Pool } from 'pg';
 import { applyNotificationSourceEvent } from './notification-projector.js';
 
 export const NOTIFICATION_PROJECTOR_QUEUE = 'phub.notification-intent-projector.v1';
+export const NOTIFICATION_SOURCE_ROUTING_KEYS = BOOKING_NOTIFICATION_EVENT_TYPES;
 
 async function handleMessage(options: {
   readonly channel: Channel;
@@ -92,7 +96,13 @@ export async function registerNotificationProjectorConsumer(options: {
       'x-dead-letter-exchange': 'phub.dead-letter',
     },
   });
-  await options.channel.bindQueue(NOTIFICATION_PROJECTOR_QUEUE, 'phub.events', '#');
+  // Bind the current explicit source contracts before removing the legacy wildcard so an
+  // in-place rollout cannot create a routing gap. RabbitMQ routes a message once per queue even
+  // when more than one binding matches it.
+  for (const routingKey of NOTIFICATION_SOURCE_ROUTING_KEYS) {
+    await options.channel.bindQueue(NOTIFICATION_PROJECTOR_QUEUE, 'phub.events', routingKey);
+  }
+  await options.channel.unbindQueue(NOTIFICATION_PROJECTOR_QUEUE, 'phub.events', '#');
   await options.channel.prefetch(10);
   const consumer = await options.channel.consume(
     NOTIFICATION_PROJECTOR_QUEUE,
