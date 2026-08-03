@@ -8,7 +8,7 @@ import Fastify from 'fastify';
 import type Redis from 'ioredis';
 import { jwtVerify } from 'jose';
 import type { Logger } from 'pino';
-import type { RawData, WebSocket } from 'ws';
+import { WebSocket, type RawData } from 'ws';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const CORRELATION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/;
@@ -223,7 +223,10 @@ export async function buildRealtimeApp(options: {
             connection.socket.close(4401, 'Session revoked');
           }
         })
-        .catch(() => connection.socket.close(1013, 'Authorization unavailable'));
+        .catch(() => {
+          connections.delete(connection);
+          connection.socket.close(1013, 'Authorization unavailable');
+        });
     }
   }, AUTHORITY_RECHECK_INTERVAL_MS);
   authorityTimer.unref();
@@ -233,8 +236,16 @@ export async function buildRealtimeApp(options: {
     '/realtime/v1/:tenantKey',
     { websocket: true },
     (socket: WebSocket, request) => {
+      let closed = false;
+      let connection: ConnectionContext | undefined;
       const authenticationTimeout = setTimeout(() => socket.close(4401, 'Unauthorized'), 5_000);
-      socket.once('close', () => clearTimeout(authenticationTimeout));
+      const cleanup = (): void => {
+        if (closed) return;
+        closed = true;
+        clearTimeout(authenticationTimeout);
+        if (connection) connections.delete(connection);
+      };
+      socket.once('close', cleanup);
       socket.once('message', (rawMessage) => {
         void (async () => {
           try {
@@ -276,7 +287,7 @@ export async function buildRealtimeApp(options: {
               throw new Error('Ticket scope mismatch');
             }
 
-            const connection: ConnectionContext = {
+            connection = {
               socket,
               tenantId: payload.tenantId,
               tenantKey: request.params.tenantKey,
@@ -289,8 +300,8 @@ export async function buildRealtimeApp(options: {
               subscriptionCount: 0,
             };
             if (!(await connectionAuthorized(connection))) throw new Error('Session revoked');
+            if (closed || socket.readyState !== WebSocket.OPEN) return;
             connections.add(connection);
-            socket.once('close', () => connections.delete(connection));
             clearTimeout(authenticationTimeout);
             send(socket, {
               type: 'connection.ready',

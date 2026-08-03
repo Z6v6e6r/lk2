@@ -58,9 +58,14 @@ function nextMessage(socket: WebSocket): Promise<Record<string, unknown>> {
   });
 }
 
+function nextTurn(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
 afterEach(async () => {
   for (const socket of sockets.splice(0)) socket.close();
   await Promise.all(apps.splice(0).map((app) => app.close()));
+  vi.useRealTimers();
 });
 
 describe('realtime messaging gateway', () => {
@@ -122,6 +127,104 @@ describe('realtime messaging gateway', () => {
     ).resolves.toBe(1);
     await expect(projected).resolves.toMatchObject({ type: 'message.created', sequence: 4 });
     expect(authorizeRealtimeConnection).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not register a socket closed while connection authority is pending', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'setInterval'] });
+    let resolveAuthority!: (value: { outcome: 'ok' }) => void;
+    const pendingAuthority = new Promise<{ outcome: 'ok' }>((resolve) => {
+      resolveAuthority = resolve;
+    });
+    const authorizeRealtimeConnection = vi.fn().mockReturnValue(pendingAuthority);
+    const listRealtimeRecipientUserIds = vi.fn().mockResolvedValue([userId]);
+    const app = await buildRealtimeApp({
+      config,
+      logger: createLogger('realtime-test', 'silent'),
+      redis: { ping: vi.fn().mockResolvedValue('PONG') },
+      databaseReady: vi.fn().mockResolvedValue(true),
+      rabbitReady: () => true,
+      ticketConsumer: { consume: vi.fn().mockResolvedValue(true) },
+      messagingRepository: {
+        authorizeRealtimeConnection,
+        authorizeRealtimeSubscription: vi.fn(),
+        listRealtimeRecipientUserIds,
+      },
+    });
+    apps.push(app);
+    await app.ready();
+    const socket = await app.injectWS('/realtime/v1/local-padel');
+    sockets.push(socket);
+    socket.send(JSON.stringify({ type: 'authenticate', ticket: await ticket() }));
+    await vi.waitFor(() => expect(authorizeRealtimeConnection).toHaveBeenCalledTimes(1));
+
+    const closed = new Promise<void>((resolve) => socket.once('close', () => resolve()));
+    socket.terminate();
+    await closed;
+    resolveAuthority({ outcome: 'ok' });
+    await nextTurn();
+
+    await expect(
+      app.publishMessageCreated({
+        tenantId,
+        conversationId,
+        messageId: '22222222-2222-4222-8222-222222222222',
+        sequence: 1,
+        correlationId: 'realtime-correlation-close-race',
+        occurredAt: '2026-08-04T09:00:00.000Z',
+      }),
+    ).resolves.toBe(0);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(authorizeRealtimeConnection).toHaveBeenCalledTimes(1);
+    expect(listRealtimeRecipientUserIds).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not register a socket closed by the authentication timeout', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'setInterval'] });
+    let resolveAuthority!: (value: { outcome: 'ok' }) => void;
+    const pendingAuthority = new Promise<{ outcome: 'ok' }>((resolve) => {
+      resolveAuthority = resolve;
+    });
+    const authorizeRealtimeConnection = vi.fn().mockReturnValue(pendingAuthority);
+    const listRealtimeRecipientUserIds = vi.fn().mockResolvedValue([userId]);
+    const app = await buildRealtimeApp({
+      config,
+      logger: createLogger('realtime-test', 'silent'),
+      redis: { ping: vi.fn().mockResolvedValue('PONG') },
+      databaseReady: vi.fn().mockResolvedValue(true),
+      rabbitReady: () => true,
+      ticketConsumer: { consume: vi.fn().mockResolvedValue(true) },
+      messagingRepository: {
+        authorizeRealtimeConnection,
+        authorizeRealtimeSubscription: vi.fn(),
+        listRealtimeRecipientUserIds,
+      },
+    });
+    apps.push(app);
+    await app.ready();
+    const socket = await app.injectWS('/realtime/v1/local-padel');
+    sockets.push(socket);
+    const closed = new Promise<number>((resolve) => socket.once('close', resolve));
+    socket.send(JSON.stringify({ type: 'authenticate', ticket: await ticket() }));
+    await vi.waitFor(() => expect(authorizeRealtimeConnection).toHaveBeenCalledTimes(1));
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    await expect(closed).resolves.toBe(4401);
+    resolveAuthority({ outcome: 'ok' });
+    await nextTurn();
+
+    await expect(
+      app.publishMessageCreated({
+        tenantId,
+        conversationId,
+        messageId: '22222222-2222-4222-8222-222222222222',
+        sequence: 1,
+        correlationId: 'realtime-correlation-auth-timeout',
+        occurredAt: '2026-08-04T09:00:00.000Z',
+      }),
+    ).resolves.toBe(0);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(authorizeRealtimeConnection).toHaveBeenCalledTimes(1);
+    expect(listRealtimeRecipientUserIds).toHaveBeenCalledTimes(1);
   });
 
   it('rejects a replayed one-time ticket', async () => {
