@@ -53,8 +53,9 @@ these inputs.
    `messageId`, `conversationId`, body and server sequence.
 7. Player B advances the read cursor, then repeats the command. The second result must be an
    idempotent replay and unread count must stay zero.
-8. Send one additional message while player B is offline, then reopen the page and prove HTTP gap
-   recovery returns the missing sequence exactly once.
+8. Do not send an additional message as part of the minimum acceptance. HTTP gap recovery is a
+   separate, separately approved mutation scenario; the Wednesday one-message test proves the
+   recipient path through bounded polling/history.
 
 ## Negative and privacy checks
 
