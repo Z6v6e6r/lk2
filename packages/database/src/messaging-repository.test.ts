@@ -118,6 +118,136 @@ describe('messaging repository', () => {
     expect(JSON.stringify(auditCall?.[1])).not.toContain(body);
   });
 
+  it.each(['target privacy is NOBODY', 'target identity is inactive'])(
+    'fails send closed when %s before allocating a sequence',
+    async () => {
+      const query = vi.fn((text: string) => {
+        if (text === 'begin' || text === 'commit' || text.includes("set_config('app.tenant_id'")) {
+          return Promise.resolve({ rows: [], rowCount: 0 });
+        }
+        if (text.includes('member.id as member_id')) {
+          return Promise.resolve({ rows: [], rowCount: 0 });
+        }
+        throw new Error(`Unexpected query: ${text}`);
+      });
+      const repository = createMessagingRepository(poolWithQuery(query) as never);
+
+      await expect(
+        repository.sendMessage({
+          tenantId,
+          userId,
+          conversationId,
+          clientMessageId: 'client-message-0001',
+          idempotencyKey: 'message-command-0001',
+          body: 'Секретный текст сообщения',
+          correlationId: 'message-correlation-0001',
+        }),
+      ).resolves.toEqual({ outcome: 'not_found' });
+
+      const authorizationQuery = String(
+        query.mock.calls.find(([text]) => String(text).includes('member.id as member_id'))?.[0],
+      );
+      expect(authorizationQuery).toContain("current_user.status = 'ACTIVE'");
+      expect(authorizationQuery).toContain("other_member.state = 'ACTIVE'");
+      expect(authorizationQuery).toContain("other_user.status = 'ACTIVE'");
+      expect(authorizationQuery).toContain(
+        "coalesce(target_privacy.chat_policy, 'AUTHORIZED') = 'AUTHORIZED'",
+      );
+      expect(
+        query.mock.calls.some(([text]) =>
+          /select next_sequence|message\.idempotency_key|insert into messaging\.messages|insert into audit\.outbox_events/.test(
+            String(text),
+          ),
+        ),
+      ).toBe(false);
+    },
+  );
+
+  it('fails send closed when the current database permission is missing', async () => {
+    const query = vi.fn((text: string) => {
+      if (text === 'begin' || text === 'commit' || text.includes("set_config('app.tenant_id'")) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('member.id as member_id')) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const repository = createMessagingRepository(poolWithQuery(query) as never);
+
+    await expect(
+      repository.sendMessage({
+        tenantId,
+        userId,
+        conversationId,
+        clientMessageId: 'client-message-0001',
+        idempotencyKey: 'message-command-0001',
+        body: 'Привет',
+        correlationId: 'message-correlation-0001',
+      }),
+    ).resolves.toEqual({ outcome: 'not_found' });
+
+    const authorizationQuery = String(
+      query.mock.calls.find(([text]) => String(text).includes('member.id as member_id'))?.[0],
+    );
+    expect(authorizationQuery).toContain('identity.user_access_profiles current_access');
+    expect(authorizationQuery).toContain("'chat.direct.create' = any(current_access.permissions)");
+    expect(
+      query.mock.calls.some(([text]) =>
+        /select next_sequence|message\.idempotency_key|insert into messaging\.messages|insert into audit\.outbox_events/.test(
+          String(text),
+        ),
+      ),
+    ).toBe(false);
+  });
+
+  it('denies an exact idempotent replay when current target policy has been revoked', async () => {
+    const query = vi.fn((text: string) => {
+      if (text === 'begin' || text === 'commit' || text.includes("set_config('app.tenant_id'")) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('member.id as member_id')) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('message.idempotency_key = $3')) {
+        return Promise.resolve({
+          rows: [
+            {
+              id: messageId,
+              conversation_id: conversationId,
+              sequence: '1',
+              sender_user_id: userId,
+              sender_display_name: 'Анна',
+              message_type: 'TEXT',
+              body: 'Привет',
+              created_at: '2026-08-03 12:00:00.000000+00',
+              client_message_id: 'client-message-0001',
+              idempotency_key: 'message-command-0001',
+            },
+          ],
+          rowCount: 1,
+        });
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const repository = createMessagingRepository(poolWithQuery(query) as never);
+
+    await expect(
+      repository.sendMessage({
+        tenantId,
+        userId,
+        conversationId,
+        clientMessageId: 'client-message-0001',
+        idempotencyKey: 'message-command-0001',
+        body: 'Привет',
+        correlationId: 'message-correlation-0001',
+      }),
+    ).resolves.toEqual({ outcome: 'not_found' });
+    expect(
+      query.mock.calls.some(([text]) => String(text).includes('message.idempotency_key = $3')),
+    ).toBe(false);
+  });
+
   it('hides a target whose current profile policy denies direct chat', async () => {
     const query = vi.fn((text: string) => {
       if (
@@ -156,6 +286,49 @@ describe('messaging repository', () => {
     expect(
       query.mock.calls.some(([text]) =>
         String(text).includes('insert into messaging.conversations'),
+      ),
+    ).toBe(false);
+  });
+
+  it('denies direct creation when the current database permission is missing', async () => {
+    const query = vi.fn((text: string) => {
+      if (
+        text === 'begin' ||
+        text === 'commit' ||
+        text.includes("set_config('app.tenant_id'") ||
+        text.includes('pg_advisory_xact_lock')
+      ) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('from identity.users user_account')) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const repository = createMessagingRepository(poolWithQuery(query) as never);
+
+    await expect(
+      repository.createDirectConversation({
+        tenantId,
+        actorUserId: userId,
+        otherUserId,
+        idempotencyKey: 'direct-command-0001',
+        correlationId: 'direct-correlation-0001',
+      }),
+    ).resolves.toEqual({ outcome: 'target_not_found' });
+
+    const authorizationQuery = String(
+      query.mock.calls.find(([text]) =>
+        String(text).includes('from identity.users user_account'),
+      )?.[0],
+    );
+    expect(authorizationQuery).toContain('identity.user_access_profiles current_access');
+    expect(authorizationQuery).toContain("'chat.direct.create' = any(current_access.permissions)");
+    expect(
+      query.mock.calls.some(([text]) =>
+        /from messaging\.direct_conversation_commands|insert into messaging\.(?:conversations|direct_conversation_commands)/.test(
+          String(text),
+        ),
       ),
     ).toBe(false);
   });

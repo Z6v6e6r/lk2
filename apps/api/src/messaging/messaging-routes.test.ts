@@ -275,6 +275,31 @@ describe('messaging User API', () => {
     expect(response.json()).toMatchObject({ code: 'CHAT_PARTICIPANT_NOT_FOUND' });
   });
 
+  it('rejects send when direct-chat permission was revoked without calling the repository', async () => {
+    const sendMessage = vi.fn();
+    const app = await buildApp({
+      config,
+      logger: createLogger('messaging-api-test', 'silent'),
+      pool: fakePool(),
+      messagingRepository: repository({ sendMessage }),
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/user/api/v1/local-padel/conversations/${conversationId}/messages`,
+      headers: {
+        authorization: `Bearer ${await accessToken([])}`,
+        'idempotency-key': 'message-command-0001',
+      },
+      payload: { clientMessageId: 'client-message-0001', body: 'Привет' },
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toMatchObject({ code: 'CHAT_PERMISSION_REQUIRED' });
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
   it('normalizes and sends a text message through the idempotent repository command', async () => {
     const sendMessage = vi.fn().mockResolvedValue({
       outcome: 'ok',
@@ -301,7 +326,7 @@ describe('messaging User API', () => {
       method: 'POST',
       url: `/user/api/v1/local-padel/conversations/${conversationId}/messages`,
       headers: {
-        authorization: `Bearer ${await accessToken([])}`,
+        authorization: `Bearer ${await accessToken()}`,
         'idempotency-key': 'message-command-0001',
         'x-correlation-id': 'message-correlation-0001',
       },
@@ -341,7 +366,7 @@ describe('messaging User API', () => {
       method: 'POST',
       url: `/user/api/v1/local-padel/conversations/${conversationId}/messages`,
       headers: {
-        authorization: `Bearer ${await accessToken([])}`,
+        authorization: `Bearer ${await accessToken()}`,
         'idempotency-key': 'message-command-0001',
       },
       payload: { clientMessageId: 'client-message-0001', body: 'Привет' },

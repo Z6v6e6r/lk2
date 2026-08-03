@@ -208,7 +208,7 @@ export function registerMessagingRoutes(
 
   app.post(
     '/user/api/v1/:tenantKey/conversations/:conversationId/messages',
-    { preHandler: [...options.commandHandlers] },
+    { preHandler: [...options.directCommandHandlers] },
     async (request, reply) => {
       reply.header('Cache-Control', 'no-store');
       const current = principal(request);

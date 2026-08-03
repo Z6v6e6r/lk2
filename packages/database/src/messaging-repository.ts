@@ -354,6 +354,28 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
         await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
           `${input.tenantId}:${input.actorUserId}:${input.idempotencyKey}`,
         ]);
+        const activeUsers = await client.query<{ id: string; chat_policy: string }>(
+          `select user_account.id,
+                  coalesce(privacy.chat_policy, 'AUTHORIZED') as chat_policy
+             from identity.users user_account
+             join identity.user_access_profiles current_access
+               on current_access.tenant_id = user_account.tenant_id
+              and current_access.user_id = $3
+              and 'chat.direct.create' = any(current_access.permissions)
+             left join profile.privacy_settings privacy
+               on privacy.tenant_id = user_account.tenant_id
+              and privacy.user_id = user_account.id
+            where user_account.tenant_id = $1
+              and user_account.id = any($2::uuid[])
+              and user_account.status = 'ACTIVE'`,
+          [input.tenantId, [input.actorUserId, input.otherUserId], input.actorUserId],
+        );
+        if (activeUsers.rows.length !== 2) return { outcome: 'target_not_found' };
+        const target = activeUsers.rows.find((user) => user.id === input.otherUserId);
+        if (!target || target.chat_policy !== 'AUTHORIZED') {
+          return { outcome: 'target_not_found' };
+        }
+
         const previous = await queryOne<DirectCommandRow>(
           client,
           `select other_user_id, conversation_id
@@ -373,24 +395,6 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
           );
           if (!conversation) throw new Error('MESSAGING_REPLAY_CONVERSATION_MISSING');
           return { outcome: 'ok', conversation, created: false, replayed: true };
-        }
-
-        const activeUsers = await client.query<{ id: string; chat_policy: string }>(
-          `select user_account.id,
-                  coalesce(privacy.chat_policy, 'AUTHORIZED') as chat_policy
-             from identity.users user_account
-             left join profile.privacy_settings privacy
-               on privacy.tenant_id = user_account.tenant_id
-              and privacy.user_id = user_account.id
-            where user_account.tenant_id = $1
-              and user_account.id = any($2::uuid[])
-              and user_account.status = 'ACTIVE'`,
-          [input.tenantId, [input.actorUserId, input.otherUserId]],
-        );
-        if (activeUsers.rows.length !== 2) return { outcome: 'target_not_found' };
-        const target = activeUsers.rows.find((user) => user.id === input.otherUserId);
-        if (!target || target.chat_policy !== 'AUTHORIZED') {
-          return { outcome: 'target_not_found' };
         }
 
         const [leftUserId, rightUserId] = [input.actorUserId, input.otherUserId].sort();
@@ -549,12 +553,30 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
                on current_user.tenant_id = member.tenant_id
               and current_user.id = member.user_id
               and current_user.status = 'ACTIVE'
+             join identity.user_access_profiles current_access
+               on current_access.tenant_id = current_user.tenant_id
+              and current_access.user_id = current_user.id
+              and 'chat.direct.create' = any(current_access.permissions)
+             join messaging.conversation_members other_member
+               on other_member.tenant_id = member.tenant_id
+              and other_member.conversation_id = member.conversation_id
+              and other_member.user_id is not null
+              and other_member.user_id <> member.user_id
+              and other_member.state = 'ACTIVE'
+             join identity.users other_user
+               on other_user.tenant_id = other_member.tenant_id
+              and other_user.id = other_member.user_id
+              and other_user.status = 'ACTIVE'
+             left join profile.privacy_settings target_privacy
+               on target_privacy.tenant_id = other_user.tenant_id
+              and target_privacy.user_id = other_user.id
             where member.tenant_id = $1
               and member.conversation_id = $2
               and member.user_id = $3
               and member.state = 'ACTIVE'
               and conversation.state = 'OPEN'
-              and conversation.kind = 'DIRECT'`,
+              and conversation.kind = 'DIRECT'
+              and coalesce(target_privacy.chat_policy, 'AUTHORIZED') = 'AUTHORIZED'`,
           [input.tenantId, input.conversationId, input.userId],
         );
         if (!member) return { outcome: 'not_found' };
