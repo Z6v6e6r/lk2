@@ -154,7 +154,8 @@ commit SHA into the web build as `PHUB_RELEASE`; the post-deploy gate reads
 match the same GitHub commit before the release can succeed.
 
 For an urgent web-only recovery, the staging workflow accepts `web_only_digest`
-only for an already-built `sha256:` digest. That path backs up `release.env`,
+and its matching `web_only_release` commit only for an already-built `sha256:`
+digest. That path backs up `release.env`,
 replaces only `WEB_IMAGE_DIGEST`, pulls and recreates only the stateless `web`
 service, then requires its Docker healthcheck and the loopback TLS manifest
 release to match the workflow commit. It does not run migrations or restart the

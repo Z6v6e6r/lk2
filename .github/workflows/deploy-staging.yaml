@@ -20,6 +20,11 @@ on:
         required: false
         type: string
         default: ''
+      web_only_release:
+        description: Commit SHA embedded in the already-built web image
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -176,6 +181,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: staging
     steps:
+      - uses: actions/checkout@v4
       - name: Join the staging tailnet
         uses: tailscale/github-action@v4
         with:
@@ -195,6 +201,7 @@ jobs:
           HOST: ${{ secrets.STAGING_HOST }}
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           WEB_DIGEST: ${{ inputs.web_only_digest }}
+          WEB_RELEASE: ${{ inputs.web_only_release }}
         run: |
           case "$WEB_DIGEST" in
             sha256:[0-9a-f][0-9a-f]*) ;;
@@ -204,11 +211,19 @@ jobs:
             echo "Invalid web digest length" >&2
             exit 1
           fi
+          case "$WEB_RELEASE" in
+            [0-9a-f][0-9a-f]*) ;;
+            *) echo "Invalid web release" >&2; exit 1 ;;
+          esac
+          if [ "${#WEB_RELEASE}" -ne 40 ]; then
+            echo "Invalid web release length" >&2
+            exit 1
+          fi
           scp deploy/jetson/recover-web-only.sh \
             "phub-deploy@$HOST:/opt/phub/recover-web-only.sh"
           printf '%s' "$GHCR_TOKEN" | ssh -o ServerAliveInterval=10 -o ServerAliveCountMax=2 \
             "phub-deploy@$HOST" \
-            "WEB_DIGEST='$WEB_DIGEST' EXPECTED_RELEASE='${{ github.sha }}' sh /opt/phub/recover-web-only.sh"
+            "WEB_DIGEST='$WEB_DIGEST' EXPECTED_RELEASE='$WEB_RELEASE' sh /opt/phub/recover-web-only.sh"
 
   deploy:
     needs: build
