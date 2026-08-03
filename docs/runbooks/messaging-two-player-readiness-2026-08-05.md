@@ -52,6 +52,7 @@ read cursors and never prints tokens or response content. Store values in a mode
 file rather than shell history:
 
 ```text
+# Example only. The owner must confirm and replace the target and tenant.
 MESSAGING_PREFLIGHT_BASE_URL=https://lk.nano.padlhub.su
 MESSAGING_PREFLIGHT_TENANT_KEY=local-padel
 MESSAGING_PREFLIGHT_EXPECTED_RELEASE=<full-ci-commit-sha>
@@ -79,6 +80,41 @@ Required `HTTP_M1_PREFLIGHT_PASS` evidence:
 If no existing conversation is available, the preflight must remain `BLOCKED`. The owner must
 explicitly authorize a separate direct-conversation creation window; the reviewer must not create
 one merely to turn the preflight green.
+
+## Owner-approved mutating smoke
+
+The mutating harness is never part of automatic preflight or CI. It refuses to make a network call
+without every explicit argument, both access tokens in environment only, and the exact
+`--confirm=SEND_DIRECT_CHAT_SMOKE` value. It creates or reuses one direct conversation, sends one
+message, replays that exact command, proves B history, and writes/replays B's read cursor. It never
+prints tokens or the message body. Do not run it until the owner confirms the target, users, message
+and mutation window.
+
+Put only the two short-lived tokens in a mode-0600 environment file:
+
+```text
+MESSAGING_SMOKE_PLAYER_A_TOKEN=<short-lived-existing-session-token>
+MESSAGING_SMOKE_PLAYER_B_TOKEN=<short-lived-existing-session-token>
+```
+
+Then provide every non-credential input explicitly. The message must be non-sensitive, at most 200
+characters and begin with `PADLHUB_CHAT_SMOKE `:
+
+```bash
+node --env-file=/secure/path/messaging-smoke.env \
+  --import tsx scripts/verify-direct-chat-smoke.ts \
+  --confirm=SEND_DIRECT_CHAT_SMOKE \
+  --base-url=https://owner-confirmed.example \
+  --tenant-key=<owner-confirmed-tenant> \
+  --recipient-user-id=<player-b-padlhub-uuid> \
+  --run-id=<unique-8-to-32-character-run-id> \
+  --message='PADLHUB_CHAT_SMOKE <unique-non-sensitive-label>'
+```
+
+The report contains only conversation/message identifiers, sequence and stable correlation IDs.
+There are six mutation requests: create plus replay, send plus replay, and read-cursor plus replay.
+The B history proof is the seventh request and is GET-only. Reusing the same run ID intentionally
+reuses every idempotency key, so choose a new run ID only for a newly approved message.
 
 ## Old M2 safety audit
 

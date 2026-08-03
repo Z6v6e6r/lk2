@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { runMessagingTwoPlayerPreflight } from './preflight-messaging-two-player.js';
+import {
+  messagingPreflightOptionsFromEnvironment,
+  runMessagingTwoPlayerPreflight,
+} from './preflight-messaging-two-player.js';
 
 const conversationId = '11111111-1111-4111-8111-111111111111';
 
@@ -99,5 +102,14 @@ describe('read-only two-player messaging preflight', () => {
     ]);
     expect(fetchImpl).toHaveBeenCalledTimes(3);
     expect(report.mutationCount).toBe(0);
+  });
+
+  it('rejects a missing tenant key before a network preflight can be constructed', () => {
+    expect(() =>
+      messagingPreflightOptionsFromEnvironment({
+        MESSAGING_PREFLIGHT_BASE_URL: 'https://owner-confirmed.example.test',
+        MESSAGING_PREFLIGHT_EXPECTED_RELEASE: 'abc123',
+      }),
+    ).toThrow('MESSAGING_PREFLIGHT_TENANT_KEY is required');
   });
 });

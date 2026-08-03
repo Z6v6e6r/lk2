@@ -12,6 +12,17 @@ export interface MessagingPreflightReport {
   readonly mutationCount: 0;
 }
 
+export interface MessagingPreflightEnvironment {
+  readonly MESSAGING_PREFLIGHT_BASE_URL?: string;
+  readonly MESSAGING_PREFLIGHT_TENANT_KEY?: string;
+  readonly MESSAGING_PREFLIGHT_EXPECTED_RELEASE?: string;
+  readonly MESSAGING_PREFLIGHT_PLAYER_A_TOKEN?: string;
+  readonly MESSAGING_PREFLIGHT_PLAYER_B_TOKEN?: string;
+  readonly MESSAGING_PREFLIGHT_CONVERSATION_ID?: string;
+  readonly MESSAGING_PREFLIGHT_REQUIRE_REALTIME?: string;
+  readonly MESSAGING_PREFLIGHT_REALTIME_HEALTH_URL?: string;
+}
+
 interface JsonResponse {
   readonly status: number;
   readonly contentType: string;
@@ -213,29 +224,39 @@ export async function runMessagingTwoPlayerPreflight(options: {
   };
 }
 
-async function main(): Promise<void> {
-  const baseUrl = process.env.MESSAGING_PREFLIGHT_BASE_URL;
+export function messagingPreflightOptionsFromEnvironment(
+  environment: MessagingPreflightEnvironment,
+): Parameters<typeof runMessagingTwoPlayerPreflight>[0] {
+  const baseUrl = environment.MESSAGING_PREFLIGHT_BASE_URL;
+  const tenantKey = environment.MESSAGING_PREFLIGHT_TENANT_KEY;
+  const expectedRelease = environment.MESSAGING_PREFLIGHT_EXPECTED_RELEASE;
   if (!baseUrl) throw new Error('MESSAGING_PREFLIGHT_BASE_URL is required');
-  const report = await runMessagingTwoPlayerPreflight({
+  if (!tenantKey) throw new Error('MESSAGING_PREFLIGHT_TENANT_KEY is required');
+  if (!expectedRelease) throw new Error('MESSAGING_PREFLIGHT_EXPECTED_RELEASE is required');
+  return {
     baseUrl,
-    tenantKey: process.env.MESSAGING_PREFLIGHT_TENANT_KEY ?? 'local-padel',
-    ...(process.env.MESSAGING_PREFLIGHT_EXPECTED_RELEASE
-      ? { expectedRelease: process.env.MESSAGING_PREFLIGHT_EXPECTED_RELEASE }
+    tenantKey,
+    expectedRelease,
+    ...(environment.MESSAGING_PREFLIGHT_PLAYER_A_TOKEN
+      ? { playerAToken: environment.MESSAGING_PREFLIGHT_PLAYER_A_TOKEN }
       : {}),
-    ...(process.env.MESSAGING_PREFLIGHT_PLAYER_A_TOKEN
-      ? { playerAToken: process.env.MESSAGING_PREFLIGHT_PLAYER_A_TOKEN }
+    ...(environment.MESSAGING_PREFLIGHT_PLAYER_B_TOKEN
+      ? { playerBToken: environment.MESSAGING_PREFLIGHT_PLAYER_B_TOKEN }
       : {}),
-    ...(process.env.MESSAGING_PREFLIGHT_PLAYER_B_TOKEN
-      ? { playerBToken: process.env.MESSAGING_PREFLIGHT_PLAYER_B_TOKEN }
+    ...(environment.MESSAGING_PREFLIGHT_CONVERSATION_ID
+      ? { conversationId: environment.MESSAGING_PREFLIGHT_CONVERSATION_ID }
       : {}),
-    ...(process.env.MESSAGING_PREFLIGHT_CONVERSATION_ID
-      ? { conversationId: process.env.MESSAGING_PREFLIGHT_CONVERSATION_ID }
+    requireRealtime: environment.MESSAGING_PREFLIGHT_REQUIRE_REALTIME === 'true',
+    ...(environment.MESSAGING_PREFLIGHT_REALTIME_HEALTH_URL
+      ? { realtimeHealthUrl: environment.MESSAGING_PREFLIGHT_REALTIME_HEALTH_URL }
       : {}),
-    requireRealtime: process.env.MESSAGING_PREFLIGHT_REQUIRE_REALTIME === 'true',
-    ...(process.env.MESSAGING_PREFLIGHT_REALTIME_HEALTH_URL
-      ? { realtimeHealthUrl: process.env.MESSAGING_PREFLIGHT_REALTIME_HEALTH_URL }
-      : {}),
-  });
+  };
+}
+
+async function main(): Promise<void> {
+  const report = await runMessagingTwoPlayerPreflight(
+    messagingPreflightOptionsFromEnvironment(process.env),
+  );
   process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
   if (report.result === 'BLOCKED') process.exitCode = 2;
 }
