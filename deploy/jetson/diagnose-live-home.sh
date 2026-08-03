@@ -62,7 +62,7 @@ for asset_path in "$entry_path" "$style_path"; do
     trap '\''rm -f "$output"'\'' EXIT HUP INT TERM
     started="$(date +%s)"
     outcome=ok
-    if ! wget -T 30 -qO "$output" "http://web:8080${asset_path}"; then
+    if ! timeout 30 wget -qO "$output" "http://web:8080${asset_path}"; then
       outcome=timeout_or_error
     fi
     finished="$(date +%s)"
