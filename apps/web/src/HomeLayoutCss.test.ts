@@ -18,6 +18,12 @@ describe('Home layout scroll contract', () => {
     ).toMatch(/margin-top:\s*auto\s*;/);
   });
 
+  it('shows compact recommendation artwork without a dark overlay', () => {
+    expect(ruleBody('.booking-recommendation-ad.is-card.is-compact picture::after')).toMatch(
+      /content:\s*none\s*;/,
+    );
+  });
+
   it('clips horizontal artwork without creating a nested vertical page scroller', () => {
     const homeRule = ruleBody('.figma-home');
 

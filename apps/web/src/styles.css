@@ -2097,6 +2097,10 @@
   background: linear-gradient(180deg, rgb(13 9 25 / 10%), rgb(13 9 25 / 70%));
 }
 
+.booking-recommendation-ad.is-card.is-compact picture::after {
+  content: none;
+}
+
 .booking-recommendation-ad img {
   width: 100%;
   height: 100%;
