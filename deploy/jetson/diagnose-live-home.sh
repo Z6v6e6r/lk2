@@ -61,12 +61,15 @@ for asset_path in "$entry_path" "$style_path"; do
     output="$(mktemp)"
     trap '\''rm -f "$output"'\'' EXIT HUP INT TERM
     started="$(date +%s)"
-    wget -qO "$output" "http://web:8080${asset_path}"
+    outcome=ok
+    if ! wget -T 30 -qO "$output" "http://web:8080${asset_path}"; then
+      outcome=timeout_or_error
+    fi
     finished="$(date +%s)"
-    echo "hop=web-direct path=${asset_path} bytes=$(wc -c < "$output") seconds=$((finished - started))"
+    echo "hop=web-direct path=${asset_path} result=${outcome} bytes=$(wc -c < "$output") seconds=$((finished - started))"
   ' sh "$asset_path"
 
-  curl \
+  if ! curl \
     --resolve lk.nano.padlhub.su:443:127.0.0.1 \
     --fail \
     --insecure \
@@ -75,7 +78,9 @@ for asset_path in "$entry_path" "$style_path"; do
     --max-time 30 \
     --output /dev/null \
     --write-out "hop=caddy-loopback path=${asset_path} status=%{http_code} bytes=%{size_download} speed=%{speed_download} seconds=%{time_total}\n" \
-    "https://lk.nano.padlhub.su${asset_path}"
+    "https://lk.nano.padlhub.su${asset_path}"; then
+    echo "hop=caddy-loopback path=${asset_path} result=timeout_or_error"
+  fi
 done
 
 echo "auth_runtime"
