@@ -287,7 +287,7 @@ export async function buildRealtimeApp(options: {
               throw new Error('Ticket scope mismatch');
             }
 
-            connection = {
+            const authenticatedConnection: ConnectionContext = {
               socket,
               tenantId: payload.tenantId,
               tenantKey: request.params.tenantKey,
@@ -299,9 +299,12 @@ export async function buildRealtimeApp(options: {
               commandCount: 0,
               subscriptionCount: 0,
             };
-            if (!(await connectionAuthorized(connection))) throw new Error('Session revoked');
+            connection = authenticatedConnection;
+            if (!(await connectionAuthorized(authenticatedConnection))) {
+              throw new Error('Session revoked');
+            }
             if (closed || socket.readyState !== WebSocket.OPEN) return;
-            connections.add(connection);
+            connections.add(authenticatedConnection);
             clearTimeout(authenticationTimeout);
             send(socket, {
               type: 'connection.ready',
@@ -310,7 +313,7 @@ export async function buildRealtimeApp(options: {
             });
 
             socket.on('message', (rawCommand) => {
-              connection.commandTail = connection.commandTail
+              authenticatedConnection.commandTail = authenticatedConnection.commandTail
                 .catch(() => undefined)
                 .then(async () => {
                   try {
@@ -319,12 +322,12 @@ export async function buildRealtimeApp(options: {
                       throw new Error('Command invalid');
                     }
                     const subscription = command.type === 'conversation.subscribe';
-                    if (!consumeRateBudget(connection, subscription)) {
+                    if (!consumeRateBudget(authenticatedConnection, subscription)) {
                       protocolError(socket, 'REALTIME_RATE_LIMITED', request.id);
                       socket.close(4429, 'Rate limit');
                       return;
                     }
-                    if (!(await connectionAuthorized(connection))) {
+                    if (!(await connectionAuthorized(authenticatedConnection))) {
                       socket.close(4401, 'Session revoked');
                       return;
                     }
@@ -350,8 +353,8 @@ export async function buildRealtimeApp(options: {
                       return;
                     }
                     if (
-                      !connection.subscriptions.has(command.conversationId) &&
-                      connection.subscriptions.size >= MAX_SUBSCRIPTIONS_PER_CONNECTION
+                      !authenticatedConnection.subscriptions.has(command.conversationId) &&
+                      authenticatedConnection.subscriptions.size >= MAX_SUBSCRIPTIONS_PER_CONNECTION
                     ) {
                       protocolError(
                         socket,
@@ -371,8 +374,8 @@ export async function buildRealtimeApp(options: {
                       return;
                     }
                     const result = await options.messagingRepository.authorizeRealtimeSubscription({
-                      tenantId: connection.tenantId,
-                      userId: connection.userId,
+                      tenantId: authenticatedConnection.tenantId,
+                      userId: authenticatedConnection.userId,
                       conversationId: command.conversationId,
                     });
                     if (result.outcome === 'disabled') {
@@ -394,7 +397,7 @@ export async function buildRealtimeApp(options: {
                       return;
                     }
 
-                    connection.subscriptions.add(command.conversationId);
+                    authenticatedConnection.subscriptions.add(command.conversationId);
                     send(socket, {
                       type: 'conversation.subscribed',
                       conversationId: command.conversationId,
