@@ -8,6 +8,12 @@ interface DeliveryStateRow extends QueryResultRow {
   readonly state: string;
 }
 
+interface ProviderLinkRow extends QueryResultRow {
+  readonly delivery_id: string;
+}
+
+const PROVIDER_MESSAGE_LINK_CONFLICT = 'NOTIFICATION_PROVIDER_MESSAGE_LINK_CONFLICT';
+
 export interface ClaimedNotificationDelivery {
   readonly tenantId: string;
   readonly deliveryId: string;
@@ -67,6 +73,31 @@ function validateExternalMessageId(value: string): string {
     throw new Error('NOTIFICATION_PROVIDER_MESSAGE_ID_INVALID');
   }
   return normalized;
+}
+
+async function linkProviderMessage(
+  client: PoolClient,
+  job: ClaimedNotificationDelivery,
+  externalMessageId: string,
+): Promise<'linked' | 'conflict'> {
+  const linked = await client.query<ProviderLinkRow>(
+    `insert into integration.notification_provider_links (
+       tenant_id, delivery_id, provider_account_id, external_message_id
+     ) values ($1, $2, $3, $4)
+     on conflict do nothing
+     returning delivery_id`,
+    [job.tenantId, job.deliveryId, job.providerAccountId, externalMessageId],
+  );
+  if (linked.rowCount === 1) return 'linked';
+
+  const exactReplay = await client.query<ProviderLinkRow>(
+    `select delivery_id
+       from integration.notification_provider_links
+      where tenant_id = $1 and delivery_id = $2
+        and provider_account_id = $3 and external_message_id = $4`,
+    [job.tenantId, job.deliveryId, job.providerAccountId, externalMessageId],
+  );
+  return exactReplay.rowCount === 1 ? 'linked' : 'conflict';
 }
 
 /**
@@ -140,37 +171,39 @@ export async function finalizeNotificationDelivery(options: {
     if (updatedRows !== 1) return 'stale';
 
     if (options.result.outcome === 'accepted') {
+      let providerLinkConflict = false;
       if (options.result.externalMessageId) {
-        const linked = await client.query(
-          `insert into integration.notification_provider_links (
-             tenant_id, delivery_id, provider_account_id, external_message_id
-           ) values ($1, $2, $3, $4)
-           on conflict (tenant_id, delivery_id) do update
-             set external_message_id = integration.notification_provider_links.external_message_id
-           where integration.notification_provider_links.provider_account_id = excluded.provider_account_id
-             and integration.notification_provider_links.external_message_id = excluded.external_message_id
-           returning delivery_id`,
-          [
-            options.job.tenantId,
-            options.job.deliveryId,
-            options.job.providerAccountId,
+        providerLinkConflict =
+          (await linkProviderMessage(
+            client,
+            options.job,
             validateExternalMessageId(options.result.externalMessageId),
-          ],
-        );
-        if (linked.rowCount !== 1) {
-          throw new Error('NOTIFICATION_PROVIDER_MESSAGE_LINK_CONFLICT');
-        }
+          )) === 'conflict';
       }
-      const receiptKey = createHash('sha256')
-        .update(`${options.transport}:provider-accepted:${options.job.deliveryId}`)
-        .digest('hex');
-      await client.query(
-        `insert into notifications.delivery_receipts (
-           tenant_id, delivery_id, receipt_key, receipt_type, source, platform, occurred_at
-         ) values ($1, $2, $3, 'PROVIDER_ACCEPTED', 'PROVIDER', $4, $5)
-         on conflict (tenant_id, receipt_key) do nothing`,
-        [options.job.tenantId, options.job.deliveryId, receiptKey, options.platform, now],
-      );
+      if (providerLinkConflict) {
+        terminalState = 'dead';
+        attemptOutcome = 'TERMINAL_FAILURE';
+        deliveryState = 'DEAD';
+        errorCode = PROVIDER_MESSAGE_LINK_CONFLICT;
+        await client.query(
+          `update notifications.deliveries
+              set state = 'DEAD', completed_at = now(), updated_at = now(),
+                  last_error_code = $3
+            where tenant_id = $1 and id = $2`,
+          [options.job.tenantId, options.job.deliveryId, errorCode],
+        );
+      } else {
+        const receiptKey = createHash('sha256')
+          .update(`${options.transport}:provider-accepted:${options.job.deliveryId}`)
+          .digest('hex');
+        await client.query(
+          `insert into notifications.delivery_receipts (
+             tenant_id, delivery_id, receipt_key, receipt_type, source, platform, occurred_at
+           ) values ($1, $2, $3, 'PROVIDER_ACCEPTED', 'PROVIDER', $4, $5)
+           on conflict (tenant_id, receipt_key) do nothing`,
+          [options.job.tenantId, options.job.deliveryId, receiptKey, options.platform, now],
+        );
+      }
     } else if (options.result.outcome === 'terminal_failure' && options.result.invalidate) {
       await client.query(
         `update integration.notification_endpoints

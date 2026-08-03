@@ -24,8 +24,9 @@ not deploy or mutate runtime data.
   identifier-only outbox are committed atomically. The external ID stays only in
   `integration.notification_provider_links`; provider bodies and endpoint material are never
   persisted with receipts, audit or broker events.
-- A replay may reuse the same delivery/provider/external-message tuple. A conflicting external ID
-  for an existing delivery aborts the transaction fail-closed.
+- A replay may reuse the same delivery/provider/external-message tuple. Either provider-link unique
+  conflict becomes terminal `NOTIFICATION_PROVIDER_MESSAGE_LINK_CONFLICT`; the opaque provider ID
+  remains out of logs, audit and outbox, and the worker continues the rest of the batch.
 - `PROVIDER_ACCEPTED` does not mean displayed or opened. This wave does not invent display/open
   receipts without a real client event.
 - `PENDING`/expired-lease due count, oldest due age and durable `DEAD` count are collected through

@@ -194,8 +194,10 @@ notification UUID, безопасный preview и deep-link route; полный
 `attempt_count`, но и непросроченный lease, а stale worker не может добавить attempt, receipt,
 provider link или outbox. Необязательный внешний message ID хранится только в tenant-scoped
 `integration.notification_provider_links`; конфликт ID для уже связанной delivery завершает
-transaction fail-closed. APNs/FCM смогут использовать этот finalizer, но их adapters, encrypted
-token lifecycle и native client bridges в текущем срезе отсутствуют и остаются выключенными.
+delivery как `DEAD` со стабильным безопасным кодом без provider ID в audit, outbox или логах;
+точный replay той же связи остаётся идемпотентным. APNs/FCM смогут использовать этот finalizer, но
+их adapters, encrypted token lifecycle и native client bridges в текущем срезе отсутствуют и
+остаются выключенными.
 
 MAX является messenger connector, а не push platform. Для него определён отдельный delivery-port
 boundary, но network adapter отсутствует: в PadlHub пока нет подтверждённых bot account settings и

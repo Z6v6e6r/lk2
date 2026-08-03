@@ -23,19 +23,30 @@ function result(rows: readonly unknown[] = [], rowCount = rows.length): QueryRes
   };
 }
 
-function fakePool(updateRowCount: number, providerLinkRowCount = 1) {
+function fakePool(
+  updateRowCount: number,
+  providerLink: 'inserted' | 'exact-replay' | 'conflict' = 'inserted',
+) {
   const queries: { readonly text: string; readonly values?: readonly unknown[] }[] = [];
   const query = vi.fn((text: string, values?: readonly unknown[]) => {
     queries.push({ text, ...(values ? { values } : {}) });
+    if (text.includes("set state = 'DEAD'") && text.includes('last_error_code')) {
+      return Promise.resolve(result([], 1));
+    }
     if (text.includes('update notifications.deliveries')) {
       return Promise.resolve(result([], updateRowCount));
     }
-    if (text.includes('integration.notification_provider_links')) {
+    if (text.includes('insert into integration.notification_provider_links')) {
       return Promise.resolve(
         result(
-          providerLinkRowCount === 1 ? [{ delivery_id: job.deliveryId }] : [],
-          providerLinkRowCount,
+          providerLink === 'inserted' ? [{ delivery_id: job.deliveryId }] : [],
+          providerLink === 'inserted' ? 1 : 0,
         ),
+      );
+    }
+    if (text.includes('from integration.notification_provider_links')) {
+      return Promise.resolve(
+        result(providerLink === 'exact-replay' ? [{ delivery_id: job.deliveryId }] : []),
       );
     }
     if (text.includes('select state') && text.includes('notifications.deliveries')) {
@@ -110,24 +121,54 @@ describe('notification delivery finalizer', () => {
     expect(outbox?.values).toContain(JSON.stringify({ deliveryId: job.deliveryId, state: 'SENT' }));
   });
 
-  it('rolls back fail-closed when an existing provider link has a different opaque ID', async () => {
-    const { pool, queries } = fakePool(1, 0);
+  it('records a safe terminal outcome when an existing provider link conflicts', async () => {
+    const externalMessageId = 'different-provider-message';
+    const { pool, queries } = fakePool(1, 'conflict');
 
     await expect(
       finalizeNotificationDelivery({
         pool,
         job,
-        result: { outcome: 'accepted', externalMessageId: 'different-provider-message' },
+        result: { outcome: 'accepted', externalMessageId },
         platform: 'WEB',
         transport: 'WEB_PUSH',
         maxAttempts: 5,
         retryBaseMs: 5_000,
       }),
-    ).rejects.toThrow('NOTIFICATION_PROVIDER_MESSAGE_LINK_CONFLICT');
+    ).resolves.toBe('dead');
 
-    expect(queries.some((entry) => entry.text === 'rollback')).toBe(true);
+    expect(queries.some((entry) => entry.text === 'rollback')).toBe(false);
     expect(queries.some((entry) => entry.text.includes('delivery_receipts'))).toBe(false);
-    expect(queries.some((entry) => entry.text.includes('delivery_attempts'))).toBe(false);
-    expect(queries.some((entry) => entry.text.includes('outbox_events'))).toBe(false);
+    expect(queries.some((entry) => entry.text.includes('delivery_attempts'))).toBe(true);
+    const outbox = queries.find((entry) => entry.text.includes('outbox_events'));
+    expect(outbox?.values).toContain(
+      JSON.stringify({
+        deliveryId: job.deliveryId,
+        state: 'DEAD',
+        errorCode: 'NOTIFICATION_PROVIDER_MESSAGE_LINK_CONFLICT',
+      }),
+    );
+    for (const entry of queries.filter(
+      (candidate) => !candidate.text.includes('integration.notification_provider_links'),
+    )) {
+      expect(JSON.stringify(entry.values ?? [])).not.toContain(externalMessageId);
+      expect(entry.text).not.toContain(externalMessageId);
+    }
+  });
+
+  it('accepts an exact provider-link replay', async () => {
+    const { pool } = fakePool(1, 'exact-replay');
+
+    await expect(
+      finalizeNotificationDelivery({
+        pool,
+        job,
+        result: { outcome: 'accepted', externalMessageId: 'same-provider-message' },
+        platform: 'WEB',
+        transport: 'WEB_PUSH',
+        maxAttempts: 5,
+        retryBaseMs: 5_000,
+      }),
+    ).resolves.toBe('sent');
   });
 });
