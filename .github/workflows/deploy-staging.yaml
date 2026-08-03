@@ -10,6 +10,11 @@ on:
         required: true
         type: boolean
         default: false
+      recover_udisks:
+        description: Restart a leaking udisks2 service, then run diagnostics
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -21,7 +26,7 @@ concurrency:
 
 jobs:
   diagnose-home:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.diagnose_home }}
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.diagnose_home || inputs.recover_udisks) }}
     runs-on: ubuntu-latest
     environment: staging
     steps:
@@ -40,6 +45,25 @@ jobs:
           printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
           printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+      - name: Recover leaked udisks memory
+        if: ${{ inputs.recover_udisks }}
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+        run: |
+          ssh -o ServerAliveInterval=10 -o ServerAliveCountMax=2 "phub-deploy@$HOST" '
+            set -eu
+            echo udisks_before
+            systemctl status udisks2 --no-pager || true
+            pid="$(pidof udisksd || true)"
+            if [ -n "$pid" ]; then
+              grep -E "^(Rss|Pss|Swap):" "/proc/$pid/smaps_rollup" || true
+            fi
+            sudo -n systemctl restart udisks2
+            sleep 5
+            echo udisks_after
+            systemctl status udisks2 --no-pager || true
+            free -m
+          '
       - name: Inspect live Home source readiness
         env:
           HOST: ${{ secrets.STAGING_HOST }}
