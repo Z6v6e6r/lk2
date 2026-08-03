@@ -14,6 +14,12 @@ describe('booking notification provisioning contract', () => {
     expect(source).toContain('IDEMPOTENCY_KEY_REUSED');
     expect(source).toContain('BOOKING_NOTIFICATION_RULESET_PROVISIONED');
     expect(source).toContain('\'{"type":"EVENT_USERS","field":"recipientUserIds"}\'::jsonb');
+    expect(source).toContain("'admin' = any(access.roles)");
+    expect(source).toContain("'notifications.manage' = any(access.permissions)");
+    expect(source).toContain("throw new Error('ADMIN_PERMISSION_REQUIRED')");
+    expect(
+      source.match(/assertNotificationAdminAccess\(client, tenantId, actorId\)/g),
+    ).toHaveLength(2);
     expect(source).not.toContain('insert into notifications.tenant_runtime_settings');
     expect(source).not.toContain('update notifications.tenant_runtime_settings');
   });

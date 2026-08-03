@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 
 import { createDatabasePool, queryOne, withTenantTransaction } from '@phub/database';
-import type { QueryResultRow } from 'pg';
+import type { PoolClient, QueryResultRow } from 'pg';
 
 const CONFIRMATION_TOKEN = 'APPLY_BOOKING_NOTIFICATION_RULESET';
 const RULESET_VERSION = 'booking.ru-ru.v1';
@@ -91,6 +91,26 @@ function templateMatches(row: TemplateRow, definition: (typeof definitions)[numb
   );
 }
 
+async function assertNotificationAdminAccess(
+  client: PoolClient,
+  tenantId: string,
+  actorId: string,
+): Promise<void> {
+  const authorized = await client.query(
+    `select 1
+       from identity.users u
+       join identity.user_access_profiles access
+         on access.tenant_id = u.tenant_id and access.user_id = u.id
+      where u.tenant_id = $1
+        and u.id = $2
+        and u.status = 'ACTIVE'
+        and 'admin' = any(access.roles)
+        and 'notifications.manage' = any(access.permissions)`,
+    [tenantId, actorId],
+  );
+  if (authorized.rowCount !== 1) throw new Error('ADMIN_PERMISSION_REQUIRED');
+}
+
 const connectionString = process.env.DATABASE_URL;
 if (!connectionString) throw new Error('DATABASE_URL is required');
 
@@ -118,13 +138,7 @@ try {
   if (!tenantId) throw new Error('Tenant was not found or is inactive');
 
   const current = await withTenantTransaction(pool, tenantId, async (client) => {
-    const actor = await client.query(
-      `select 1
-         from identity.users
-        where tenant_id = $1 and id = $2 and status = 'ACTIVE'`,
-      [tenantId, actorId],
-    );
-    if (actor.rowCount === 0) throw new Error('Actor is not an active user in the tenant');
+    await assertNotificationAdminAccess(client, tenantId, actorId);
     const runtime = await queryOne<RuntimeRow>(
       client,
       `select in_app_enabled, web_push_enabled
@@ -174,13 +188,7 @@ try {
       await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
         `notification-ruleset:${tenantId}:${RULESET_VERSION}`,
       ]);
-      const actor = await client.query(
-        `select 1
-           from identity.users
-          where tenant_id = $1 and id = $2 and status = 'ACTIVE'`,
-        [tenantId, actorId],
-      );
-      if (actor.rowCount === 0) throw new Error('Actor is not an active user in the tenant');
+      await assertNotificationAdminAccess(client, tenantId, actorId);
 
       const previous = await queryOne<ProvisionCommandRow>(
         client,

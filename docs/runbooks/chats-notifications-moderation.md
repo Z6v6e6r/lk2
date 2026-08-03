@@ -271,8 +271,10 @@ channel before stopping the delivery worker during an incident.
 
 Provisioning is an explicit, tenant-scoped operation. It installs active `ru-RU` v1 templates and
 rules, but it never changes `notifications.tenant_runtime_settings`; the existing in-app/Web Push
-gates remain authoritative and default off. Preview first, then apply with a unique operator
-idempotency key:
+gates remain authoritative and default off. Both preview and apply require the actor's current
+`identity.user_access_profiles` row to contain role `admin` and permission
+`notifications.manage`; apply checks this again inside its transaction. Preview first, then apply
+with a unique operator idempotency key:
 
 ```bash
 npm run notifications:booking:provision -- \
