@@ -18,7 +18,8 @@ function poolWithQuery(query: ReturnType<typeof vi.fn>) {
 
 describe('messaging repository', () => {
   it('keeps every runtime gate disabled without an explicit tenant row', async () => {
-    const query = vi.fn((text: string) => {
+    const query = vi.fn((text: string, values?: readonly unknown[]) => {
+      void values;
       if (text === 'begin' || text === 'commit' || text.includes("set_config('app.tenant_id'")) {
         return Promise.resolve({ rows: [], rowCount: 0 });
       }
@@ -154,7 +155,8 @@ describe('messaging repository', () => {
   });
 
   it('syncs a late active game participant without creating a second conversation', async () => {
-    const query = vi.fn((text: string) => {
+    const query = vi.fn((text: string, values?: readonly unknown[]) => {
+      void values;
       if (
         text === 'begin' ||
         text === 'commit' ||

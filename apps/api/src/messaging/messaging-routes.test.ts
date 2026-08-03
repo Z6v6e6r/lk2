@@ -330,6 +330,7 @@ describe('messaging User API', () => {
       headers: {
         authorization: `Bearer ${await accessToken(['games.play'])}`,
         'idempotency-key': 'game-chat-command-0001',
+        'x-correlation-id': 'game-chat-correlation-0001',
       },
       payload: { gameId },
     });
@@ -384,6 +385,7 @@ describe('messaging User API', () => {
       headers: {
         authorization: `Bearer ${await accessToken(['games.play'])}`,
         'idempotency-key': 'game-chat-command-0001',
+        'x-correlation-id': 'game-chat-correlation-0001',
       },
       payload: { gameId },
     });
@@ -395,7 +397,7 @@ describe('messaging User API', () => {
       actorUserId: userId,
       gameId,
       idempotencyKey: 'game-chat-command-0001',
-      correlationId: expect.any(String),
+      correlationId: 'game-chat-correlation-0001',
     });
   });
 
