@@ -269,15 +269,17 @@ channel before stopping the delivery worker during an incident.
 
 ### Booking notification ruleset M1
 
-Provisioning is an explicit, tenant-scoped operation. It installs active `ru-RU` v1 templates and
+Provisioning is an explicit, tenant-scoped operation. It installs immutable `ru-RU` v2 templates and
 rules, but it never changes `notifications.tenant_runtime_settings`; the existing in-app/Web Push
 gates remain authoritative and default off. Both preview and apply require the actor's current
 `identity.user_access_profiles` row to contain role `admin` and permission
 `notifications.manage`; apply checks this again inside its transaction. Preview first, then apply
 with a unique operator idempotency key:
 
-The v1 templates link to the supported `/bookings` list route. Do not provision a booking-detail
-deep link until an authoritative booking detail model and matching Web route exist.
+The v2 templates link to the supported `/bookings` list route. Provisioning creates version 2,
+repoints each stable rule and only deactivates an older active template; it never rewrites v1
+content. Do not provision a booking-detail deep link until an authoritative booking detail model
+and matching Web route exist.
 
 ```bash
 npm run notifications:booking:provision -- \

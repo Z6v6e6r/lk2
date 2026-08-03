@@ -4,7 +4,8 @@ import { createDatabasePool, queryOne, withTenantTransaction } from '@phub/datab
 import type { PoolClient, QueryResultRow } from 'pg';
 
 const CONFIRMATION_TOKEN = 'APPLY_BOOKING_NOTIFICATION_RULESET';
-const RULESET_VERSION = 'booking.ru-ru.v1';
+const RULESET_VERSION = 'booking.ru-ru.v2';
+const TEMPLATE_VERSION = 2;
 const LOCALE = 'ru-RU';
 const TEMPLATE_DEEP_LINK = '/bookings';
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -46,6 +47,7 @@ const requestHash = createHash('sha256')
   .update(
     JSON.stringify({
       rulesetVersion: RULESET_VERSION,
+      templateVersion: TEMPLATE_VERSION,
       locale: LOCALE,
       deepLink: TEMPLATE_DEEP_LINK,
       definitions,
@@ -218,7 +220,7 @@ try {
           `insert into notifications.templates (
              tenant_id, template_key, version, locale, category, channels,
              title_template, body_template, deep_link_template, active, created_by_user_id
-           ) values ($1, $2, 1, $3, 'BOOKING', array['IN_APP', 'PUSH']::text[],
+           ) values ($1, $2, 2, $3, 'BOOKING', array['IN_APP', 'PUSH']::text[],
                      $4, $5, '/bookings', false, $6)
            on conflict (tenant_id, template_key, version, locale) do nothing`,
           [tenantId, definition.key, LOCALE, definition.title, definition.body, actorId],
@@ -227,7 +229,7 @@ try {
           client,
           `select id, category, channels, title_template, body_template, deep_link_template
              from notifications.templates
-            where tenant_id = $1 and template_key = $2 and version = 1 and locale = $3
+            where tenant_id = $1 and template_key = $2 and version = 2 and locale = $3
             for update`,
           [tenantId, definition.key, LOCALE],
         );
@@ -281,6 +283,7 @@ try {
 
       const appliedResult = {
         rulesetVersion: RULESET_VERSION,
+        templateVersion: TEMPLATE_VERSION,
         locale: LOCALE,
         templateIds,
         ruleIds,

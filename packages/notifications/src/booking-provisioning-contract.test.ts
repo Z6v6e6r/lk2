@@ -10,6 +10,19 @@ describe('booking notification provisioning contract', () => {
     );
 
     expect(source).toContain("const CONFIRMATION_TOKEN = 'APPLY_BOOKING_NOTIFICATION_RULESET'");
+    expect(source).toContain("const RULESET_VERSION = 'booking.ru-ru.v2'");
+    expect(source).toContain('const TEMPLATE_VERSION = 2');
+    expect(source).toContain('templateVersion: TEMPLATE_VERSION');
+    expect(source).toContain("values ($1, $2, 2, $3, 'BOOKING'");
+    expect(source).toContain('version = 2 and locale = $3');
+    expect(source).toContain('on conflict (tenant_id, template_key, version, locale) do nothing');
+    expect(source).toContain('and id <> $4 and active = true');
+    expect(source).toContain('template_id = excluded.template_id');
+    expect(source.indexOf('set active = false')).toBeLessThan(
+      source.indexOf('on conflict (tenant_id, rule_key) do update'),
+    );
+    expect(source).not.toContain('set title_template =');
+    expect(source).not.toContain('set body_template =');
     expect(source).toContain('notifications.ruleset_provision_commands');
     expect(source).toContain('IDEMPOTENCY_KEY_REUSED');
     expect(source).toContain('BOOKING_NOTIFICATION_RULESET_PROVISIONED');
