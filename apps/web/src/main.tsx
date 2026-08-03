@@ -1,4 +1,4 @@
-import { StrictMode } from 'react';
+import { StrictMode, Suspense } from 'react';
 import { createRoot } from 'react-dom/client';
 
 import { App } from './App.js';
@@ -19,6 +19,18 @@ const gateway = createBrowserAuthGateway({
 
 createRoot(mount).render(
   <StrictMode>
-    <App gateway={gateway} tenantKey={tenantKey} />
+    <Suspense
+      fallback={
+        <main className="app-shell app-shell-loading" aria-labelledby="chunk-loading-title">
+          <section className="loading-card" aria-busy="true">
+            <span className="loader" aria-hidden="true" />
+            <h1 id="chunk-loading-title">Открываем личный кабинет</h1>
+            <p role="status">Загружаем нужный раздел…</p>
+          </section>
+        </main>
+      }
+    >
+      <App gateway={gateway} tenantKey={tenantKey} />
+    </Suspense>
   </StrictMode>,
 );

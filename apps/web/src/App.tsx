@@ -1,29 +1,17 @@
 import { normalizePhoneE164 } from '@phub/auth';
 import { PrimaryButton } from '@phub/ui';
-import { useEffect, useReducer, useRef, useState } from 'react';
+import { lazy, useEffect, useReducer, useRef, useState } from 'react';
 import type { ChangeEvent, FormEvent } from 'react';
 
 import padlHubLogoUrl from './assets/padlhub-logo.svg';
 import vkIconUrl from './assets/vk-auth.svg';
 import yandexIconUrl from './assets/yandex-auth.svg';
-import { BookingsPage } from './BookingsPage.js';
-import { CommunitiesPage } from './CommunitiesPage.js';
 import {
   isIOSBrowser,
   preferredAuthEntryView,
   type AuthEntryView,
 } from './browser-auth-context.js';
-import { HomeDashboardPage } from './HomeDashboardPage.js';
 import type { HomeSectionEnvelope } from './HomeDashboardPage.js';
-import { GamesPage } from './GamesPage.js';
-import { GiftCertificatesPage } from './GiftCertificatesPage.js';
-import { LocationDetailPage } from './LocationDetailPage.js';
-import { LocationsPage } from './LocationsPage.js';
-import { NotificationsPage } from './NotificationsPage.js';
-import { ProfilePage } from './ProfilePage.js';
-import { ProfileLevelHistoryPage } from './ProfileLevelHistoryPage.js';
-import { TrainingsPage } from './TrainingsPage.js';
-import { TournamentDetailPage } from './TournamentDetailPage.js';
 import type {
   AuthGateway,
   AuthenticatedSession,
@@ -53,6 +41,45 @@ import {
   getWebPushBrowserState,
   type WebPushBrowserState,
 } from './web-push-client.js';
+
+const BookingsPage = lazy(() =>
+  import('./BookingsPage.js').then((module) => ({ default: module.BookingsPage })),
+);
+const CommunitiesPage = lazy(() =>
+  import('./CommunitiesPage.js').then((module) => ({ default: module.CommunitiesPage })),
+);
+const GamesPage = lazy(() =>
+  import('./GamesPage.js').then((module) => ({ default: module.GamesPage })),
+);
+const GiftCertificatesPage = lazy(() =>
+  import('./GiftCertificatesPage.js').then((module) => ({ default: module.GiftCertificatesPage })),
+);
+const HomeDashboardPage = lazy(() =>
+  import('./HomeDashboardPage.js').then((module) => ({ default: module.HomeDashboardPage })),
+);
+const LocationDetailPage = lazy(() =>
+  import('./LocationDetailPage.js').then((module) => ({ default: module.LocationDetailPage })),
+);
+const LocationsPage = lazy(() =>
+  import('./LocationsPage.js').then((module) => ({ default: module.LocationsPage })),
+);
+const NotificationsPage = lazy(() =>
+  import('./NotificationsPage.js').then((module) => ({ default: module.NotificationsPage })),
+);
+const ProfilePage = lazy(() =>
+  import('./ProfilePage.js').then((module) => ({ default: module.ProfilePage })),
+);
+const ProfileLevelHistoryPage = lazy(() =>
+  import('./ProfileLevelHistoryPage.js').then((module) => ({
+    default: module.ProfileLevelHistoryPage,
+  })),
+);
+const TrainingsPage = lazy(() =>
+  import('./TrainingsPage.js').then((module) => ({ default: module.TrainingsPage })),
+);
+const TournamentDetailPage = lazy(() =>
+  import('./TournamentDetailPage.js').then((module) => ({ default: module.TournamentDetailPage })),
+);
 
 type View = 'restoring' | 'oauth' | 'phone' | 'otp' | 'home';
 type BusyAction = 'start-viva' | 'request-code' | 'verify-code' | 'logout' | null;
