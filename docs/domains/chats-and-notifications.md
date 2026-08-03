@@ -182,6 +182,19 @@ envelope key, а hash используется только для дедупл�
 notification UUID, безопасный preview и deep-link route; полный чувствительный текст клиент
 получает из User API после авторизации.
 
+Один общий atomic finalizer фиксирует результат любого push delivery port. Он проверяет не только
+`attempt_count`, но и непросроченный lease, а stale worker не может добавить attempt, receipt,
+provider link или outbox. Необязательный внешний message ID хранится только в tenant-scoped
+`integration.notification_provider_links`; конфликт ID для уже связанной delivery завершает
+transaction fail-closed. APNs/FCM смогут использовать этот finalizer, но их adapters, encrypted
+token lifecycle и native client bridges в текущем срезе отсутствуют и остаются выключенными.
+
+MAX является messenger connector, а не push platform. Для него определён отдельный delivery-port
+boundary, но network adapter отсутствует: в PadlHub пока нет подтверждённых bot account settings и
+tenant-scoped согласованного mapping пользователя на MAX `user_id`/`chat_id`. До появления этих
+входов MAX остаётся fail-closed. Текущая evidence/readiness matrix находится в
+[плане каналов доставки](../plans/push-delivery-readiness-wave-2026-08-03.md).
+
 ### Внешний контроль и модерация
 
 Источники: жалоба пользователя, правило PadlHub, действие сотрудника ЦУП или signed signal

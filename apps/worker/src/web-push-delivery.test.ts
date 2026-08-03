@@ -1,8 +1,16 @@
 import { describe, expect, it } from 'vitest';
 
-import { resolveNotificationIntentState, webPushRetryDelayMs } from './web-push-delivery.js';
+import {
+  WEB_PUSH_DELIVERY_LEASE_SECONDS,
+  resolveNotificationIntentState,
+  webPushRetryDelayMs,
+} from './web-push-delivery.js';
 
 describe('Web Push delivery state machine', () => {
+  it('keeps the database lease longer than the maximum provider timeout', () => {
+    expect(WEB_PUSH_DELIVERY_LEASE_SECONDS).toBeGreaterThan(30);
+  });
+
   it('uses bounded exponential retry delays', () => {
     expect(webPushRetryDelayMs(1, 5_000)).toBe(5_000);
     expect(webPushRetryDelayMs(3, 5_000)).toBe(20_000);

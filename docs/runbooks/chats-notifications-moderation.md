@@ -170,6 +170,26 @@ while already-created jobs reach a terminal state; disable the global flag only 
 incident. `PROVIDER_ACCEPTED` is not a display or open receipt. The current Web slice does not yet
 collect client `DISPLAYED`/`OPENED` receipts.
 
+The delivery worker finalizes only while its 60-second database lease is still current; the Web
+Push provider timeout is capped at 30 seconds. An expired/lost lease is reported as `stale` and
+must not produce attempt, receipt, provider-link or outbox evidence. A conflicting external
+provider message ID for the same delivery aborts the transaction rather than silently replacing
+the original link.
+
+Runtime evidence is content-free. Alert and retain release evidence for:
+
+```text
+phub.worker.notifications.push_deliveries_due
+phub.worker.notifications.push_delivery_oldest_due_age_seconds
+phub.worker.notifications.push_deliveries_dead
+phub.worker.outbox.oldest_age_seconds
+phub.worker.dlq.messages_ready
+```
+
+The first two gauges and outbox/DLQ must return to the approved baseline after a smoke or retry
+window. `push_deliveries_dead` is durable operator work, not a transient success metric; investigate
+by delivery UUID and stable error code without querying or logging endpoint ciphertext.
+
 After enablement, verify the live loopback API without exposing JWT or subscription material:
 
 ```bash

@@ -210,7 +210,7 @@ export interface PushDeliveryRequest {
   readonly providerIdempotencyKey: string;
 }
 
-export type PushDeliveryResult =
+export type NotificationProviderDeliveryResult =
   | { readonly outcome: 'accepted'; readonly externalMessageId?: string }
   | { readonly outcome: 'retryable_failure'; readonly errorCode: string }
   | {
@@ -219,9 +219,37 @@ export type PushDeliveryResult =
       readonly invalidate: boolean;
     };
 
+export type PushDeliveryResult = NotificationProviderDeliveryResult;
+
 export interface NotificationPushDeliveryPort {
   readonly platform: NotificationPushPlatform;
   send(request: PushDeliveryRequest): Promise<PushDeliveryResult>;
+}
+
+/**
+ * Messenger delivery is deliberately separate from mobile/browser push. External target IDs are
+ * resolved from encrypted integration storage by the worker and never become public user IDs.
+ */
+export interface MessengerDeliveryRequest {
+  readonly tenantId: string;
+  readonly deliveryId: string;
+  readonly providerAccountId: string;
+  readonly connector: 'MAX';
+  readonly target: {
+    readonly kind: 'USER' | 'CHAT';
+    readonly externalId: string;
+  };
+  readonly notification: {
+    readonly id: string;
+    readonly text: string;
+    readonly deepLink?: string;
+  };
+  readonly providerIdempotencyKey: string;
+}
+
+export interface NotificationMessengerDeliveryPort {
+  readonly connector: 'MAX';
+  send(request: MessengerDeliveryRequest): Promise<NotificationProviderDeliveryResult>;
 }
 
 const webPushKey = z

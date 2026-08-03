@@ -10,6 +10,7 @@ import {
   renderNotificationTemplate,
   resolveNotificationRecipients,
   webPushSubscriptionSchema,
+  type NotificationMessengerDeliveryPort,
 } from './index.js';
 
 const legacyRecipientUserId = '44444444-4444-4444-8444-444444444444';
@@ -64,6 +65,35 @@ describe('Web Push endpoint protection', () => {
 });
 
 describe('notification domain contracts', () => {
+  it('keeps MAX messenger delivery outside the push platform contract', async () => {
+    const port: NotificationMessengerDeliveryPort = {
+      connector: 'MAX',
+      send: (request) =>
+        Promise.resolve({
+          outcome: 'terminal_failure',
+          errorCode: request.connector === 'MAX' ? 'MAX_RUNTIME_DISABLED' : 'CONNECTOR_INVALID',
+          invalidate: false,
+        }),
+    };
+
+    await expect(
+      port.send({
+        tenantId: '11111111-1111-4111-8111-111111111111',
+        deliveryId: '22222222-2222-4222-8222-222222222222',
+        providerAccountId: '33333333-3333-4333-8333-333333333333',
+        connector: 'MAX',
+        target: { kind: 'USER', externalId: 'opaque-max-user-id' },
+        notification: { id: '44444444-4444-4444-8444-444444444444', text: 'safe preview' },
+        providerIdempotencyKey: 'max-delivery-contract-test-0001',
+      }),
+    ).resolves.toEqual({
+      outcome: 'terminal_failure',
+      errorCode: 'MAX_RUNTIME_DISABLED',
+      invalidate: false,
+    });
+    expect(port).not.toHaveProperty('platform');
+  });
+
   it('resolves only a PadlHub UUID selected by the active rule', () => {
     const selector = notificationAudienceSelectorSchema.parse({
       type: 'EVENT_USER',
