@@ -1,5 +1,7 @@
 import { pathToFileURL } from 'node:url';
 
+import { safeMessagingBaseUrl } from './safe-messaging-base-url.js';
+
 export interface MessagingPreflightCheck {
   readonly name: string;
   readonly status: 'PASS' | 'BLOCKED' | 'NOT_CHECKED';
@@ -83,11 +85,12 @@ export async function runMessagingTwoPlayerPreflight(options: {
   readonly realtimeHealthUrl?: string;
   readonly fetchImpl?: typeof fetch;
 }): Promise<MessagingPreflightReport> {
+  const baseUrl = safeMessagingBaseUrl(options.baseUrl, 'MESSAGING_PREFLIGHT_BASE_URL_INVALID');
   const fetchImpl = options.fetchImpl ?? fetch;
   const checks: MessagingPreflightCheck[] = [];
 
   try {
-    const manifest = await getJson(fetchImpl, endpoint(options.baseUrl, '/manifest.json'));
+    const manifest = await getJson(fetchImpl, endpoint(baseUrl, '/manifest.json'));
     const release = isRecord(manifest.body) ? manifest.body.release : undefined;
     if (!options.expectedRelease) {
       checks.push(blocked('immutable-release', 'MESSAGING_PREFLIGHT_EXPECTED_RELEASE is required'));
@@ -101,7 +104,7 @@ export async function runMessagingTwoPlayerPreflight(options: {
   }
 
   try {
-    const readiness = await getJson(fetchImpl, endpoint(options.baseUrl, '/health/ready'));
+    const readiness = await getJson(fetchImpl, endpoint(baseUrl, '/health/ready'));
     const status = isRecord(readiness.body) ? readiness.body.status : undefined;
     checks.push(
       readiness.status === 200 && status === 'ready'
@@ -114,7 +117,7 @@ export async function runMessagingTwoPlayerPreflight(options: {
 
   const conversationsPath = `/user/api/v1/${encodeURIComponent(options.tenantKey)}/conversations?limit=1`;
   try {
-    const routeProbe = await getJson(fetchImpl, endpoint(options.baseUrl, conversationsPath));
+    const routeProbe = await getJson(fetchImpl, endpoint(baseUrl, conversationsPath));
     const code = isRecord(routeProbe.body) ? routeProbe.body.code : undefined;
     checks.push(
       routeProbe.status === 401 && code === 'AUTH_REQUIRED'
@@ -139,11 +142,7 @@ export async function runMessagingTwoPlayerPreflight(options: {
       continue;
     }
     try {
-      const response = await getJson(
-        fetchImpl,
-        endpoint(options.baseUrl, conversationsPath),
-        token,
-      );
+      const response = await getJson(fetchImpl, endpoint(baseUrl, conversationsPath), token);
       const items = isRecord(response.body) ? response.body.items : undefined;
       checks.push(
         response.status === 200 &&
@@ -170,7 +169,7 @@ export async function runMessagingTwoPlayerPreflight(options: {
     const historyPath = `/user/api/v1/${encodeURIComponent(options.tenantKey)}/conversations/${encodeURIComponent(options.conversationId)}/messages?afterSequence=0&limit=1`;
     const historyResults = await Promise.allSettled(
       [options.playerAToken, options.playerBToken].map((token) =>
-        getJson(fetchImpl, endpoint(options.baseUrl, historyPath), token),
+        getJson(fetchImpl, endpoint(baseUrl, historyPath), token),
       ),
     );
     const bothMembers = historyResults.every(

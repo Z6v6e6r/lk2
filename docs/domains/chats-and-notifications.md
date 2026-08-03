@@ -1,14 +1,16 @@
 # Контур «Чаты и оповещения»
 
-Статус: целевая архитектура, expand-only фундамент, feature-gated direct-chat M1,
-in-app, Web Push/VAPID и ручная отправка из ЦУП. Остальные публичные операции остаются
-закрытыми до своего вертикального среза.
+Статус: целевая архитектура, expand-only фундамент, feature-gated direct-chat
+HTTP M1 с Web UI, in-app, Web Push/VAPID и ручная отправка из ЦУП. Остальные публичные
+операции остаются закрытыми, пока не реализованы авторизация, идемпотентность, аудит и
+обработчики соответствующего вертикального среза.
 
-Direct-chat M1 реализует User API и typed SDK для list/create/history/send/read cursor.
-Каноническая пара PadlHub UUID дедуплицируется, каждая команда проверяет active
-membership, а создание также повторно проверяет target `chatPolicy`. Все runtime gates
-по умолчанию выключены. Web UI, block-list enforcement, contextual chats, attachments,
-edit/delete, realtime, connectors и moderation в M1 не входят.
+Локально собранный direct-chat M1 включает User API, типизированный SDK и Web-маршруты
+для list/create/history/send/read cursor. Каноническая пара PadlHub UUID дедуплицируется;
+создание и отправка повторно проверяют current permission, active membership, active target и его
+`chatPolicy`. Tenant gates по умолчанию выключены. Наличие кода не доказывает, что срез активирован
+или проверен в целевой среде. Block-list enforcement, contextual chats, attachments, edit/delete,
+realtime, connectors и moderation в M1 не входят.
 
 Реализованный in-app срез включает rule/template consumer, транзакционные intent/inbox/delivery,
 RabbitMQ inbox-дедупликацию, tenant gate, `GET /notifications`, идемпотентный `PUT

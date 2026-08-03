@@ -1,5 +1,7 @@
 import { pathToFileURL } from 'node:url';
 
+import { safeMessagingBaseUrl } from './safe-messaging-base-url.js';
+
 const CONFIRMATION = 'SEND_DIRECT_CHAT_SMOKE';
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const RUN_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{7,31}$/;
@@ -50,18 +52,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function requiredString(value: unknown, code: string): string {
   if (typeof value !== 'string' || value.length === 0) throw new Error(code);
   return value;
-}
-
-function safeBaseUrl(value: string): string {
-  const url = new URL(value);
-  if (url.username || url.password || url.search || url.hash) {
-    throw new Error('DIRECT_CHAT_SMOKE_BASE_URL_INVALID');
-  }
-  const local = url.hostname === 'localhost' || url.hostname === '127.0.0.1';
-  if (url.protocol !== 'https:' && !(local && url.protocol === 'http:')) {
-    throw new Error('DIRECT_CHAT_SMOKE_BASE_URL_INVALID');
-  }
-  return url.toString();
 }
 
 function apiUrl(baseUrl: string, path: string): URL {
@@ -181,7 +171,7 @@ export async function runDirectChatSmoke(options: {
   readonly fetchImpl?: typeof fetch;
 }): Promise<DirectChatSmokeReport> {
   if (options.confirm !== CONFIRMATION) throw new Error('DIRECT_CHAT_SMOKE_CONFIRMATION_REQUIRED');
-  const baseUrl = safeBaseUrl(options.baseUrl);
+  const baseUrl = safeMessagingBaseUrl(options.baseUrl, 'DIRECT_CHAT_SMOKE_BASE_URL_INVALID');
   if (!TENANT_KEY_PATTERN.test(options.tenantKey))
     throw new Error('DIRECT_CHAT_SMOKE_TENANT_INVALID');
   if (!UUID_PATTERN.test(options.recipientUserId)) {

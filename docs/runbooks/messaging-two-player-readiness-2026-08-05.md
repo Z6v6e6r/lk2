@@ -2,23 +2,23 @@
 
 ## Decision
 
-Integration commit `d730259` is **BLOCKED** for an A-to-B chat test. The User API does not mount
-conversation routes, its OpenAPI/SDK contains no messaging operations, and the current API test
-intentionally keeps chat hidden with `FEATURE_UNAVAILABLE`. The realtime process at this commit is
-only the generic ticket handshake; it cannot make the missing HTTP messaging source of truth usable.
+Local merged M1 candidate `11cd477` contains the tenant-gated User API, OpenAPI/typed SDK and Web UI
+for direct-chat list/create/history/send/read-cursor operations. Its tenant gates remain off by
+default. This is code-level evidence only: no canonical Nano manifest or immutable service digest,
+enabled tenant runtime, two-player session, persisted A-to-B message or rendered Web journey has
+been verified against a live target. Live acceptance therefore remains **BLOCKED** until the
+preflight and owner-approved smoke below pass on the explicitly confirmed target.
 
 HTTP M1 is sufficient for the minimum honest 2026-08-05 acceptance. Realtime is not required if
 the result is described as "B receives the message after explicit refresh or bounded polling". Do
 not describe this as instant delivery, push or realtime. PostgreSQL history, not a WebSocket marker,
 is the acceptance source of truth.
 
-The old `0ddae6c` M1, `b8c50f5` M2 and `00a98e9` GAME/M3 commits are review evidence, not merge
+The old `0ddae6c` M1, `b8c50f5` M2 and `00a98e9` GAME/M3 commits remain review evidence, not merge
 candidates. They are based on a divergent line, and their migration numbers `0043`/`0044` are
-already occupied by `0043_community_member_rank.sql` and `0044_profile_level_history.sql` on the
-integration line. `00a98e9` does not modify the realtime process and therefore inherits every M2
-blocker below. Reimplement M1 narrowly with a new migration number and current auth/privacy
-contracts before any environment test; do not use the old claim "Nano canary active" as current
-runtime evidence.
+already occupied on the current integration line. The current M1 candidate was rebuilt on that line
+using migration `0057`; it still requires independent auth/privacy review and the live evidence
+above. Do not use the old claim "Nano canary active" as current runtime evidence.
 
 ## Minimum honest A-to-B acceptance
 
@@ -49,7 +49,8 @@ an A-to-B acceptance.
 
 The repository preflight uses GET only. It never creates users, conversations, tickets, messages or
 read cursors and never prints tokens or response content. Store values in a mode-0600 environment
-file rather than shell history:
+file rather than shell history. Before its first request it rejects credentials, query strings or
+fragments in the base URL and requires HTTPS, except for HTTP on `localhost` or `127.0.0.1`:
 
 ```text
 # Example only. The owner must confirm and replace the target and tenant.
@@ -130,7 +131,7 @@ reuses every idempotency key, so choose a new run ID only for a newly approved m
 | Session/member revocation | `sid` is signed but not rechecked by realtime; active socket has no bounded lifetime; removed member stops receiving fanout but remains subscribed | **BLOCKER before public rollout**   |
 | Abuse controls            | payload, subscription count and socket buffer are bounded; command rate and repeated membership-query rate are not                                 | **BLOCKER before public rollout**   |
 
-Do not port M2 until current M1 exists and passes HTTP acceptance. A future M2 candidate must add
+Do not port M2 until the current M1 candidate passes HTTP acceptance. A future M2 candidate must add
 serial broker processing or per-conversation ordering, fail-fast/reconnect with consumer recovery,
 DLQ handling, session/socket revocation semantics and command rate limits. Its separate test must
 prove ticket replay rejection, removed-member denial, ordered sequences under concurrent publish,

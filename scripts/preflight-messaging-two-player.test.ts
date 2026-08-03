@@ -52,7 +52,7 @@ describe('read-only two-player messaging preflight', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(7);
   });
 
-  it('blocks the current integration shape when the M1 route is absent', async () => {
+  it('blocks a legacy deployment when the M1 route is absent', async () => {
     const fetchImpl = vi.fn((input: string | URL | Request) => {
       const url = requestUrl(input);
       if (url.endsWith('/manifest.json')) return Promise.resolve(json({ release: 'd730259' }));
@@ -112,4 +112,49 @@ describe('read-only two-player messaging preflight', () => {
       }),
     ).toThrow('MESSAGING_PREFLIGHT_TENANT_KEY is required');
   });
+
+  it.each([
+    'not-a-url',
+    'http://staging.padlhub.test',
+    'https://operator:secret@staging.padlhub.test',
+    'https://staging.padlhub.test?target=other',
+    'https://staging.padlhub.test#other',
+  ])('rejects an unsafe base URL before sending either player token: %s', async (baseUrl) => {
+    const fetchImpl = vi.fn();
+
+    await expect(
+      runMessagingTwoPlayerPreflight({
+        baseUrl,
+        tenantKey: 'local-padel',
+        expectedRelease: 'abc123',
+        playerAToken: 'player-a-secret',
+        playerBToken: 'player-b-secret',
+        conversationId,
+        fetchImpl,
+      }),
+    ).rejects.toThrow('MESSAGING_PREFLIGHT_BASE_URL_INVALID');
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it.each(['http://localhost:3000', 'http://127.0.0.1:3000'])(
+    'preserves HTTP preflight support for a loopback target: %s',
+    async (baseUrl) => {
+      const fetchImpl = vi.fn((input: string | URL | Request) => {
+        const url = requestUrl(input);
+        if (url.endsWith('/manifest.json')) return Promise.resolve(json({ release: 'abc123' }));
+        if (url.endsWith('/health/ready')) return Promise.resolve(json({ status: 'ready' }));
+        return Promise.resolve(json({ code: 'AUTH_REQUIRED' }, 401));
+      });
+
+      const report = await runMessagingTwoPlayerPreflight({
+        baseUrl,
+        tenantKey: 'local-padel',
+        expectedRelease: 'abc123',
+        fetchImpl,
+      });
+
+      expect(report.result).toBe('BLOCKED');
+      expect(fetchImpl).toHaveBeenCalledTimes(3);
+    },
+  );
 });
