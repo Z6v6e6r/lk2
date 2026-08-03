@@ -271,6 +271,12 @@ alongside a non-null PadlHub `conversationId` resolved by the messaging membersh
 If the messaging route or repository is absent, the game remains usable but the chat action fails
 closed.
 
+The authenticated canonical game-detail surface may also issue the explicit idempotent
+`POST /conversations/game` get-or-create command with the card's PadlHub `gameId`. This is never a
+free-form identifier input: the messaging repository rechecks the active user, `games.play`, the
+tenant messaging gates and current `ACTIVE` participation before returning a conversation. A
+failed command leaves the game detail usable and does not synthesize an `OPEN_CHAT` capability.
+
 ### 5.2.1 End-to-end card state map
 
 The API owns the transition from canonical lifecycle facts to a card state. Web, mobile, Tilda and

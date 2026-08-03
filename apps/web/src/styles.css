@@ -4793,8 +4793,15 @@
   justify-content: center;
   flex: 0 0 46px;
   border-radius: 12px;
+  border: 0;
   background: #f0ebff;
   color: #7253d8 !important;
+  cursor: pointer;
+}
+
+.game-detail-chat:disabled {
+  cursor: wait;
+  opacity: 0.55;
 }
 
 .game-detail-chat svg {

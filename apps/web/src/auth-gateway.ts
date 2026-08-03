@@ -18,6 +18,7 @@ import type {
   GameCard,
   GameCardPage,
   GameCommandResult,
+  GetOrCreateGameConversationResult,
   SubmitGameResultRequest,
   DisputeGameResultRequest,
   HomeBase,
@@ -69,6 +70,7 @@ export type {
   GameCard,
   GameCardPage,
   GameCommandResult,
+  GetOrCreateGameConversationResult,
   SubmitGameResultRequest,
   DisputeGameResultRequest,
   HomeBase,
@@ -347,6 +349,9 @@ export interface AuthGateway {
     otherUserId: string,
     idempotencyKey: string,
   ) => Promise<CreateDirectConversationResult>;
+  readonly getOrCreateGameConversation: (
+    gameId: string,
+  ) => Promise<GetOrCreateGameConversationResult>;
   readonly listConversationMessages: (
     conversationId: string,
     afterSequence?: number,
@@ -1214,6 +1219,10 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
           body: JSON.stringify({ otherUserId }),
         }),
       );
+    },
+
+    getOrCreateGameConversation(gameId) {
+      return client.getOrCreateGameConversation(gameId);
     },
 
     listConversationMessages(conversationId, afterSequence = 0) {

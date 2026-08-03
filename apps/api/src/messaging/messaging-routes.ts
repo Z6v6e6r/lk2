@@ -43,9 +43,8 @@ async function requireMessagingGate(
     return false;
   }
   if (
-    (kind === 'DIRECT' || kind === 'LIST') &&
-    !settings.directEnabled &&
-    !settings.contextualEnabled
+    (kind === 'DIRECT' && !settings.directEnabled) ||
+    (kind === 'LIST' && !settings.directEnabled && !settings.contextualEnabled)
   ) {
     sendApiError(request, reply, 404, 'DIRECT_MESSAGING_DISABLED', 'Личные диалоги не включены.');
     return false;

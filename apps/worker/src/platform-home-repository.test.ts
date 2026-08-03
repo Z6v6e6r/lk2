@@ -132,5 +132,25 @@ describe('platform Home source persistence', () => {
       canManageTournaments: true,
       canViewCommunities: true,
     });
+
+    const unreadQuery = query.mock.calls.find(([text]) =>
+      String(text).includes('from messaging.conversation_members member'),
+    );
+    expect(unreadQuery?.[1]).toEqual([tenantId, userId]);
+    const unreadSql = String(unreadQuery?.[0]);
+    expect(unreadSql).toMatch(/current_user\.status = 'ACTIVE'/);
+    expect(unreadSql).toMatch(/conversation\.kind = 'DIRECT'/);
+    expect(unreadSql).toMatch(/runtime\.direct_enabled/);
+    expect(unreadSql).toMatch(/'chat\.direct\.create' = any\(current_access\.permissions\)/);
+    expect(unreadSql).toMatch(/other_user\.status = 'ACTIVE'/);
+    expect(unreadSql).toMatch(/target_privacy\.chat_policy/);
+    expect(unreadSql).toMatch(/conversation\.kind = 'GAME'/);
+    expect(unreadSql).toMatch(/runtime\.contextual_enabled/);
+    expect(unreadSql).toMatch(/'games\.play' = any\(current_access\.permissions\)/);
+    expect(unreadSql).toMatch(/from games\.games game/);
+    expect(unreadSql).toMatch(/join games\.participations participation/);
+    expect(unreadSql).toMatch(/participation\.user_id = current_user\.id/);
+    expect(unreadSql).toMatch(/participation\.state = 'ACTIVE'/);
+    expect(unreadSql).toMatch(/game\.tenant_id = conversation\.tenant_id/);
   });
 });

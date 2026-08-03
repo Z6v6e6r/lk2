@@ -307,6 +307,82 @@ describe('messaging User API', () => {
     expect(response.json()).toMatchObject({ items: [{ kind: 'GAME', contextId: gameId }] });
   });
 
+  it.each([
+    { directEnabled: false, contextualEnabled: false },
+    { directEnabled: false, contextualEnabled: true },
+    { directEnabled: true, contextualEnabled: false },
+    { directEnabled: true, contextualEnabled: true },
+  ])(
+    'enforces independent direct/contextual gates for $directEnabled/$contextualEnabled',
+    async ({ directEnabled, contextualEnabled }) => {
+      const createDirectConversation = vi.fn().mockResolvedValue({
+        outcome: 'ok',
+        conversation: {
+          id: conversationId,
+          kind: 'DIRECT',
+          participant: { userId: otherUserId, displayName: 'Борис' },
+          unreadCount: 0,
+          updatedAt: '2026-08-03T12:00:00.000Z',
+        },
+        created: true,
+        replayed: false,
+      });
+      const getOrCreateGameConversation = vi.fn().mockResolvedValue({
+        outcome: 'ok',
+        conversation: {
+          id: conversationId,
+          kind: 'GAME',
+          contextId: gameId,
+          title: 'Игра',
+          unreadCount: 0,
+          updatedAt: '2026-08-03T12:00:00.000Z',
+        },
+        created: true,
+        replayed: false,
+      });
+      const app = await buildApp({
+        config,
+        logger: createLogger('messaging-api-test', 'silent'),
+        pool: fakePool(),
+        messagingRepository: repository({
+          getRuntimeSettings: vi.fn().mockResolvedValue({
+            httpEnabled: true,
+            directEnabled,
+            realtimeEnabled: false,
+            contextualEnabled,
+          }),
+          createDirectConversation,
+          getOrCreateGameConversation,
+        }),
+      });
+      apps.push(app);
+
+      const directResponse = await app.inject({
+        method: 'POST',
+        url: '/user/api/v1/local-padel/conversations/direct',
+        headers: {
+          authorization: `Bearer ${await accessToken(['chat.direct.create'])}`,
+          'idempotency-key': 'direct-gate-matrix-0001',
+        },
+        payload: { otherUserId },
+      });
+      const gameResponse = await app.inject({
+        method: 'POST',
+        url: '/user/api/v1/local-padel/conversations/game',
+        headers: {
+          authorization: `Bearer ${await accessToken(['games.play'])}`,
+          'idempotency-key': 'game-gate-matrix-0001',
+        },
+        payload: { gameId },
+      });
+
+      expect(directResponse.statusCode).toBe(directEnabled ? 200 : 404);
+      expect(gameResponse.statusCode).toBe(contextualEnabled ? 200 : 404);
+      expect(createDirectConversation).toHaveBeenCalledTimes(directEnabled ? 1 : 0);
+      expect(getOrCreateGameConversation).toHaveBeenCalledTimes(contextualEnabled ? 1 : 0);
+    },
+  );
+
   it('requires the direct-chat permission and an idempotency key to create a dialog', async () => {
     const messagingRepository = repository();
     const app = await buildApp({

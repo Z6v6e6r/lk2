@@ -1470,6 +1470,7 @@ describe('browser auth gateway', () => {
   it('keeps direct-chat commands on PadlHub HTTP with stable idempotency across a network retry', async () => {
     const userId = '00000000-0000-4000-8000-000000000001';
     const conversationId = '22222222-2222-4222-8222-222222222222';
+    const gameId = '55555555-5555-4555-8555-555555555555';
     const clientMessageId = '33333333-3333-4333-8333-333333333333';
     const session = {
       accessToken: 'short-lived-padlhub-token',
@@ -1504,6 +1505,14 @@ describe('browser auth gateway', () => {
       unreadCount: 0,
       updatedAt: '2026-08-03T10:00:00.000Z',
     };
+    const gameConversation = {
+      id: '66666666-6666-4666-8666-666666666666',
+      kind: 'GAME',
+      contextId: gameId,
+      title: 'Игра в среду',
+      unreadCount: 0,
+      updatedAt: '2026-08-03T10:00:00.000Z',
+    };
     let sendAttempts = 0;
     const fetchImplementation = vi.fn<typeof fetch>((input, init) => {
       const url = requestUrl(input);
@@ -1514,6 +1523,16 @@ describe('browser auth gateway', () => {
       if (url.endsWith('/conversations/direct')) {
         return Promise.resolve(
           Response.json({ outcome: 'ok', conversation, created: false, replayed: false }),
+        );
+      }
+      if (url.endsWith('/conversations/game')) {
+        return Promise.resolve(
+          Response.json({
+            outcome: 'ok',
+            conversation: gameConversation,
+            created: true,
+            replayed: false,
+          }),
         );
       }
       if (url.includes(`/conversations/${conversationId}/messages?`)) {
@@ -1560,6 +1579,10 @@ describe('browser auth gateway', () => {
     await expect(
       gateway.createDirectConversation(conversation.participant.userId, clientMessageId),
     ).resolves.toMatchObject({ conversation, created: false });
+    await expect(gateway.getOrCreateGameConversation(gameId)).resolves.toMatchObject({
+      conversation: gameConversation,
+      created: true,
+    });
     await expect(gateway.listConversationMessages(conversationId, 7)).resolves.toEqual({
       messages: [],
     });
@@ -1592,6 +1615,14 @@ describe('browser auth gateway', () => {
     expect(typeof createInit?.body).toBe('string');
     if (typeof createInit?.body !== 'string') throw new Error('Expected a JSON request body');
     expect(JSON.parse(createInit.body)).toEqual({ otherUserId: conversation.participant.userId });
+    const createGameInit = callsByUrl.get(
+      'https://api.padlhub.test/user/api/v1/padlhub/conversations/game',
+    );
+    expect(createGameInit?.method).toBe('POST');
+    expect(new Headers(createGameInit?.headers).get('Idempotency-Key')).toMatch(/^[0-9a-f-]{36}$/);
+    expect(typeof createGameInit?.body).toBe('string');
+    if (typeof createGameInit?.body !== 'string') throw new Error('Expected a JSON request body');
+    expect(JSON.parse(createGameInit.body)).toEqual({ gameId });
     expect(
       [...callsByUrl.keys()].some((url) =>
         url.endsWith(`/conversations/${conversationId}/messages?afterSequence=7&limit=100`),

@@ -69,6 +69,7 @@ describe('GameDetailView', () => {
           busy={false}
           game={game}
           onAction={vi.fn()}
+          onChatOpen={vi.fn()}
           onSubmit={vi.fn().mockResolvedValue(undefined)}
           onTabChange={setActiveTab}
         />
@@ -117,24 +118,32 @@ describe('GameDetailView', () => {
     expect(screen.getByRole('button', { name: 'Отправить на согласование' })).toBeInTheDocument();
   });
 
-  it('does not publish a chat entrypoint without both authorization and a conversation id', () => {
+  it('opens get/create only from the canonical participant game detail', async () => {
+    const user = userEvent.setup();
+    const onChatOpen = vi.fn();
     const renderState = (overrides: Partial<GameCard>) => {
-      const rendered = render(
+      return render(
         <GameDetailView
           activeTab="GAME"
           busy={false}
           game={{ ...game, ...overrides }}
           onAction={vi.fn()}
+          onChatOpen={onChatOpen}
           onSubmit={vi.fn().mockResolvedValue(undefined)}
           onTabChange={vi.fn()}
         />,
       );
-      expect(screen.queryByRole('link', { name: 'Чат игры' })).toBeNull();
-      rendered.unmount();
     };
 
-    renderState({ conversation: null });
-    renderState({ allowedActions: game.allowedActions.filter((action) => action !== 'OPEN_CHAT') });
+    const participant = renderState({ conversation: null });
+    expect(screen.queryByRole('link', { name: 'Чат игры' })).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Открыть чат игры' }));
+    expect(onChatOpen).toHaveBeenCalledTimes(1);
+    participant.unmount();
+
+    const outsider = renderState({ conversation: null, viewerRelation: 'NONE' });
+    expect(screen.queryByRole('button', { name: 'Открыть чат игры' })).toBeNull();
+    outsider.unmount();
   });
 
   it('restores the lineup after remount and lets players be swapped or removed', async () => {
@@ -146,6 +155,7 @@ describe('GameDetailView', () => {
           busy={false}
           game={game}
           onAction={vi.fn()}
+          onChatOpen={vi.fn()}
           onSubmit={vi.fn().mockResolvedValue(undefined)}
           onTabChange={vi.fn()}
         />,
@@ -231,6 +241,7 @@ describe('GameDetailView', () => {
         busy={false}
         game={pendingGame}
         onAction={onAction}
+        onChatOpen={vi.fn()}
         onSubmit={vi.fn().mockResolvedValue(undefined)}
         onTabChange={vi.fn()}
       />,

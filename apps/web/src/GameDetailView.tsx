@@ -284,6 +284,7 @@ function GameTab(props: {
   readonly game: GameCard;
   readonly lineupUserIdsByPair: readonly (readonly string[])[];
   readonly onAction: (action: GameCardAction) => void;
+  readonly onChatOpen: () => void;
   readonly onAssignParticipant: (pairIndex: number, userId: string) => void;
   readonly onRemoveParticipant: (userId: string) => void;
   readonly onReplaceParticipant: (currentUserId: string, nextUserId: string) => void;
@@ -294,6 +295,7 @@ function GameTab(props: {
     game,
     lineupUserIdsByPair,
     onAction,
+    onChatOpen,
     onAssignParticipant,
     onRemoveParticipant,
     onReplaceParticipant,
@@ -521,6 +523,16 @@ function GameTab(props: {
             <ChatIcon />
             {game.conversation.unreadCount ? <span>{game.conversation.unreadCount}</span> : null}
           </a>
+        ) : game.viewerRelation === 'ORGANIZER' || game.viewerRelation === 'PARTICIPANT' ? (
+          <button
+            className="game-detail-chat"
+            type="button"
+            disabled={busy}
+            aria-label={busy ? 'Открываем чат игры…' : 'Открыть чат игры'}
+            onClick={onChatOpen}
+          >
+            <ChatIcon />
+          </button>
         ) : null}
       </div>
     </div>
@@ -643,10 +655,11 @@ export function GameDetailView(props: {
   readonly busy: boolean;
   readonly game: GameCard;
   readonly onAction: (action: GameCardAction) => void;
+  readonly onChatOpen: () => void;
   readonly onSubmit: (input: SubmitGameResultRequest) => Promise<void>;
   readonly onTabChange: (tab: GameDetailTab) => void;
 }): React.JSX.Element {
-  const { activeTab, busy, game, onAction, onSubmit, onTabChange } = props;
+  const { activeTab, busy, game, onAction, onChatOpen, onSubmit, onTabChange } = props;
   const [lineupByGame, setLineupByGame] = useState<LineupByGame>(loadStoredLineups);
   const lineupUserIdsByPair = normalizeLineup(game, lineupByGame[game.id]);
 
@@ -733,6 +746,7 @@ export function GameDetailView(props: {
             game={game}
             lineupUserIdsByPair={lineupUserIdsByPair}
             onAction={onAction}
+            onChatOpen={onChatOpen}
             onAssignParticipant={assignParticipant}
             onRemoveParticipant={removeParticipant}
             onReplaceParticipant={replaceParticipant}

@@ -175,10 +175,61 @@ export function synchronizePlatformHomeUser(input: {
              join messaging.conversations conversation
                on conversation.tenant_id = member.tenant_id
               and conversation.id = member.conversation_id
+             join identity.users current_user
+               on current_user.tenant_id = member.tenant_id
+              and current_user.id = member.user_id
+              and current_user.status = 'ACTIVE'
+             join identity.user_access_profiles current_access
+               on current_access.tenant_id = current_user.tenant_id
+              and current_access.user_id = current_user.id
+             join messaging.tenant_runtime_settings runtime
+               on runtime.tenant_id = conversation.tenant_id
+              and runtime.http_enabled
             where member.tenant_id = $1
               and member.user_id = $2
               and member.state = 'ACTIVE'
-              and conversation.state = 'OPEN'`,
+              and conversation.state = 'OPEN'
+              and (
+                (
+                  conversation.kind = 'DIRECT'
+                  and runtime.direct_enabled
+                  and 'chat.direct.create' = any(current_access.permissions)
+                  and exists (
+                    select 1
+                      from messaging.conversation_members other_member
+                      join identity.users other_user
+                        on other_user.tenant_id = other_member.tenant_id
+                       and other_user.id = other_member.user_id
+                       and other_user.status = 'ACTIVE'
+                      left join profile.privacy_settings target_privacy
+                        on target_privacy.tenant_id = other_user.tenant_id
+                       and target_privacy.user_id = other_user.id
+                     where other_member.tenant_id = member.tenant_id
+                       and other_member.conversation_id = member.conversation_id
+                       and other_member.user_id <> member.user_id
+                       and other_member.state = 'ACTIVE'
+                       and coalesce(target_privacy.chat_policy, 'AUTHORIZED') = 'AUTHORIZED'
+                  )
+                )
+                or
+                (
+                  conversation.kind = 'GAME'
+                  and conversation.context_type = 'GAME'
+                  and runtime.contextual_enabled
+                  and 'games.play' = any(current_access.permissions)
+                  and exists (
+                    select 1
+                      from games.games game
+                      join games.participations participation
+                        on participation.tenant_id = game.tenant_id
+                       and participation.game_id = game.id
+                       and participation.user_id = current_user.id
+                       and participation.state = 'ACTIVE'
+                     where game.tenant_id = conversation.tenant_id
+                       and game.id = conversation.context_id
+                  )
+                )
+              )`,
         [input.tenantId, input.userId],
       ),
       client.query<LocationRow>(
