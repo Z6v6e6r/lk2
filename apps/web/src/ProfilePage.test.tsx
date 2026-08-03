@@ -56,8 +56,6 @@ describe('ProfilePage', () => {
   });
 
   it('shows Back on the left and notifications on the right', () => {
-    const historyBack = vi.spyOn(window.history, 'back').mockImplementation(() => undefined);
-
     render(
       <ProfilePage
         profile={selfProfile('D+')}
@@ -68,16 +66,17 @@ describe('ProfilePage', () => {
       />,
     );
 
-    const backButton = screen.getByRole('button', { name: 'Назад' });
-    const toolbar = backButton.closest('header');
+    const backLink = screen.getByRole('link', { name: 'Назад' });
+    const toolbar = backLink.closest('header');
     const notificationsLink = toolbar?.querySelector(
       'a[aria-label="Уведомления, непрочитанных: 1"]',
     );
 
     expect(toolbar).toHaveClass('profile-toolbar');
-    expect(toolbar?.firstElementChild).toBe(backButton);
+    expect(toolbar?.firstElementChild).toBe(backLink);
     expect(toolbar?.lastElementChild).toBe(notificationsLink);
-    expect(backButton).toHaveClass('profile-toolbar__back');
+    expect(backLink).toHaveClass('profile-toolbar__back');
+    expect(backLink).toHaveAttribute('href', '/');
     expect(notificationsLink).toHaveAttribute('href', '/notifications');
     expect(notificationsLink).toHaveClass('fh-bell', 'is-unread', 'profile-toolbar__bell');
     expect(notificationsLink?.querySelector('.fh-bell-dot')).toBeInTheDocument();
@@ -85,9 +84,6 @@ describe('ProfilePage', () => {
       'href',
       '/profile/level-history',
     );
-
-    backButton.click();
-    expect(historyBack).toHaveBeenCalledOnce();
   });
 
   it.each([

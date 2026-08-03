@@ -7711,6 +7711,8 @@ label {
 .figma-home-shell.is-home-v3 .figma-home {
   --gap-tabs-sheet: 3px;
   --sheet-padding-x: 6px;
+  --fh-v3-main-offset: calc(413px + env(safe-area-inset-top, 0px));
+  --fh-bottom-nav-height: 88px;
   height: calc(937px + var(--fh-bookings-extra-height) + var(--fh-my-extras-height));
   background-color: #fff;
   background-size: 100% calc(435px + env(safe-area-inset-top, 0px));
@@ -7719,6 +7721,14 @@ label {
 .figma-home-shell.is-home-v3 .fh-main-box {
   height: calc(522px + var(--fh-bookings-extra-height) + var(--fh-my-extras-height));
   flex: 0 0 calc(522px + var(--fh-bookings-extra-height) + var(--fh-my-extras-height));
+}
+
+.figma-home-shell.is-home-v3:not(.has-v3-my-extras) .fh-main-box,
+.figma-home-shell.is-home-v3:not(.has-v3-my-extras) .fh-bookings {
+  min-height: max(
+    calc(522px + var(--fh-bookings-extra-height)),
+    calc(100dvh - var(--fh-v3-main-offset) - var(--fh-bottom-nav-height))
+  );
 }
 
 .figma-home-shell.is-home-v3-rows {
@@ -10947,7 +10957,7 @@ button.participant-avatar-stack__open-slot:focus-visible {
   justify-self: end;
 }
 
-.profile-toolbar button.profile-toolbar__back,
+.profile-toolbar a.profile-toolbar__back,
 .profile-toolbar a.profile-toolbar__bell {
   width: 36px;
   height: 36px;
@@ -10958,7 +10968,7 @@ button.participant-avatar-stack__open-slot:focus-visible {
   backdrop-filter: none;
 }
 
-.profile-toolbar button.profile-toolbar__back {
+.profile-toolbar a.profile-toolbar__back {
   justify-self: start;
 }
 

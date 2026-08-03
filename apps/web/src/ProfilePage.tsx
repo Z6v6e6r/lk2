@@ -1264,14 +1264,9 @@ export function ProfilePage({
     <div className="profile-shell">
       <main className="profile-page" style={pageStyle}>
         <header className="profile-toolbar">
-          <button
-            className="profile-toolbar__back"
-            type="button"
-            aria-label="Назад"
-            onClick={() => window.history.back()}
-          >
+          <a className="profile-toolbar__back" href="/" aria-label="Назад">
             <ProfileIcon name="back" />
-          </button>
+          </a>
           <span>{productLabel}</span>
           <NotificationBellLink
             className="profile-toolbar__bell"
