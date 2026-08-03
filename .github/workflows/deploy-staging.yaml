@@ -61,6 +61,30 @@ jobs:
               --write-out '\npublic_http_status=%{http_code}\n' \
               "${BASE_URL%/}$path"
           done
+          canonical_base_url=https://lk.nano.padlhub.su
+          manifest="$(curl --fail --silent --show-error --max-time 15 "$canonical_base_url/manifest.json")"
+          entry_path="$(printf '%s' "$manifest" | node -e '
+            let input = "";
+            process.stdin.setEncoding("utf8");
+            process.stdin.on("data", (chunk) => { input += chunk; });
+            process.stdin.on("end", () => process.stdout.write(JSON.parse(input).entry));
+          ')"
+          style_path="$(printf '%s' "$manifest" | node -e '
+            let input = "";
+            process.stdin.setEncoding("utf8");
+            process.stdin.on("data", (chunk) => { input += chunk; });
+            process.stdin.on("end", () => process.stdout.write(JSON.parse(input).styles[0]));
+          ')"
+          for asset_path in "$entry_path" "$style_path"; do
+            curl \
+              --fail \
+              --silent \
+              --show-error \
+              --max-time 30 \
+              --output /dev/null \
+              --write-out "hop=github-public path=${asset_path} status=%{http_code} bytes=%{size_download} speed=%{speed_download} seconds=%{time_total}\n" \
+              "$canonical_base_url$asset_path"
+          done
           exit 0
 
   build:

@@ -40,6 +40,44 @@ echo
 infrastructure exec -T nginx wget -qO- http://127.0.0.1/health/ready
 echo
 
+echo "host_resources"
+uptime
+free -m
+df -h /
+docker system df
+docker stats --no-stream --format \
+  'container={{.Name}} cpu={{.CPUPerc}} memory={{.MemUsage}} net={{.NetIO}} block={{.BlockIO}}'
+
+manifest="$(infrastructure exec -T nginx wget -qO- http://127.0.0.1/manifest.json)"
+entry_path="$(printf '%s\n' "$manifest" | sed -n 's/.*"entry": "\([^"]*\)".*/\1/p')"
+style_path="$(printf '%s\n' "$manifest" | sed -n 's/.*"\(\/assets\/index-[^"]*\.css\)".*/\1/p' | head -1)"
+test -n "$entry_path"
+test -n "$style_path"
+
+echo "internal_asset_delivery"
+for asset_path in "$entry_path" "$style_path"; do
+  infrastructure exec -T nginx sh -ec '
+    asset_path="$1"
+    output="$(mktemp)"
+    trap '\''rm -f "$output"'\'' EXIT HUP INT TERM
+    started="$(date +%s)"
+    wget -qO "$output" "http://web:8080${asset_path}"
+    finished="$(date +%s)"
+    echo "hop=web-direct path=${asset_path} bytes=$(wc -c < "$output") seconds=$((finished - started))"
+  ' sh "$asset_path"
+
+  curl \
+    --resolve lk.nano.padlhub.su:443:127.0.0.1 \
+    --fail \
+    --insecure \
+    --silent \
+    --show-error \
+    --max-time 30 \
+    --output /dev/null \
+    --write-out "hop=caddy-loopback path=${asset_path} status=%{http_code} bytes=%{size_download} speed=%{speed_download} seconds=%{time_total}\n" \
+    "https://lk.nano.padlhub.su${asset_path}"
+done
+
 echo "auth_runtime"
 compose exec -T api node -e "
   const env = process.env;
