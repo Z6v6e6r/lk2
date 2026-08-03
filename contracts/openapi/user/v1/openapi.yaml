@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: PadlHub User API
-  version: 1.16.0
+  version: 1.17.0
   description: Canonical user-facing API. Public identifiers are PadlHub UUIDs.
   license:
     name: Proprietary
@@ -23,6 +23,8 @@ tags:
     description: Authenticated tournament detail reads.
   - name: locations
     description: Published PadlHub location cards and detail views.
+  - name: messaging
+    description: Tenant-gated direct conversations with ordered HTTP history.
 paths:
   /{tenantKey}/tournaments/{tournamentId}/participants:
     parameters:
@@ -1151,6 +1153,230 @@ paths:
           $ref: ../../common/components.yaml#/components/responses/Forbidden
         '404':
           $ref: ../../common/components.yaml#/components/responses/NotFound
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/conversations:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+    get:
+      tags: [messaging]
+      operationId: listConversations
+      summary: List the authenticated user's active direct conversations
+      description: |
+        Returns only conversations where the JWT subject is an active member. The route remains
+        closed until both messaging HTTP and direct-chat tenant gates are enabled.
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+      responses:
+        '200':
+          description: Active direct conversations ordered by latest durable activity.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationPage'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/conversations/direct:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/IdempotencyKey'
+    post:
+      tags: [messaging]
+      operationId: createDirectConversation
+      summary: Create or return one direct conversation for a PadlHub user pair
+      description: |
+        Requires chat.direct.create. The pair is canonical and tenant-local; no provider or Viva
+        identifier is accepted. An exact Idempotency-Key replay returns the stored result.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateDirectConversationRequest'
+      responses:
+        '200':
+          description: Created, existing, or idempotently replayed direct conversation.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateDirectConversationResult'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/CommandConflict'
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/conversations/{conversationId}/messages:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - name: conversationId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [messaging]
+      operationId: listConversationMessages
+      summary: Read ordered messages after a known sequence
+      description: |
+        Current membership is checked on every request. The client uses afterSequence for polling
+        and, in M2, for deterministic realtime gap recovery.
+      parameters:
+        - name: afterSequence
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: int64
+            minimum: 0
+            default: 0
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+      responses:
+        '200':
+          description: Messages ordered by ascending server-issued sequence.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationMessagePage'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+    post:
+      tags: [messaging]
+      operationId: sendConversationMessage
+      summary: Commit one ordered text message
+      description: |
+        Locks the conversation and writes the message, audit record and identifier-only outbox
+        event atomically. Message body is excluded from broker events and telemetry.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SendConversationMessageRequest'
+      responses:
+        '200':
+          description: Stored result of the idempotent message command.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SendConversationMessageResult'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/CommandConflict'
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/conversations/{conversationId}/read-cursor:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - name: conversationId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    put:
+      tags: [messaging]
+      operationId: updateConversationReadCursor
+      summary: Monotonically advance the authenticated member's read cursor
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConversationReadCursorRequest'
+      responses:
+        '200':
+          description: Stored result of the idempotent read-cursor command.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationReadCursorResult'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/CommandConflict'
         '429':
           $ref: ../../common/components.yaml#/components/responses/TooManyRequests
         '503':
@@ -2834,6 +3060,179 @@ components:
         canManageTournaments:
           type: boolean
         canViewCommunities:
+          type: boolean
+    MessagingParticipant:
+      type: object
+      additionalProperties: false
+      required: [userId, displayName]
+      properties:
+        userId:
+          type: string
+          format: uuid
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 200
+    ConversationLastMessage:
+      type: object
+      additionalProperties: false
+      required: [sequence, body, createdAt]
+      properties:
+        sequence:
+          type: integer
+          format: int64
+          minimum: 1
+        body:
+          type: string
+          minLength: 1
+          maxLength: 8000
+        createdAt:
+          type: string
+          format: date-time
+    ConversationSummary:
+      type: object
+      additionalProperties: false
+      required: [id, kind, participant, unreadCount, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        kind:
+          type: string
+          const: DIRECT
+        participant:
+          $ref: '#/components/schemas/MessagingParticipant'
+        unreadCount:
+          type: integer
+          minimum: 0
+        updatedAt:
+          type: string
+          format: date-time
+        lastMessage:
+          $ref: '#/components/schemas/ConversationLastMessage'
+    ConversationPage:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/ConversationSummary'
+    CreateDirectConversationRequest:
+      type: object
+      additionalProperties: false
+      required: [otherUserId]
+      properties:
+        otherUserId:
+          type: string
+          format: uuid
+    CreateDirectConversationResult:
+      type: object
+      additionalProperties: false
+      required: [outcome, conversation, created, replayed]
+      properties:
+        outcome:
+          type: string
+          const: ok
+        conversation:
+          $ref: '#/components/schemas/ConversationSummary'
+        created:
+          type: boolean
+        replayed:
+          type: boolean
+    ConversationMessage:
+      type: object
+      additionalProperties: false
+      required: [id, conversationId, sequence, sender, messageType, body, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        conversationId:
+          type: string
+          format: uuid
+        sequence:
+          type: integer
+          format: int64
+          minimum: 1
+        sender:
+          $ref: '#/components/schemas/MessagingParticipant'
+        messageType:
+          type: string
+          const: TEXT
+        body:
+          type: string
+          minLength: 1
+          maxLength: 8000
+        createdAt:
+          type: string
+          format: date-time
+    ConversationMessagePage:
+      type: object
+      additionalProperties: false
+      required: [messages]
+      properties:
+        messages:
+          type: array
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/ConversationMessage'
+        nextAfterSequence:
+          type: integer
+          format: int64
+          minimum: 1
+    SendConversationMessageRequest:
+      type: object
+      additionalProperties: false
+      required: [clientMessageId, body]
+      properties:
+        clientMessageId:
+          type: string
+          minLength: 16
+          maxLength: 128
+          pattern: '^[A-Za-z0-9._:-]+$'
+        body:
+          type: string
+          minLength: 1
+          maxLength: 8000
+    SendConversationMessageResult:
+      type: object
+      additionalProperties: false
+      required: [outcome, message, replayed]
+      properties:
+        outcome:
+          type: string
+          const: ok
+        message:
+          $ref: '#/components/schemas/ConversationMessage'
+        replayed:
+          type: boolean
+    ConversationReadCursorRequest:
+      type: object
+      additionalProperties: false
+      required: [throughSequence]
+      properties:
+        throughSequence:
+          type: integer
+          format: int64
+          minimum: 0
+    ConversationReadCursorResult:
+      type: object
+      additionalProperties: false
+      required: [outcome, readThroughSequence, changed, replayed]
+      properties:
+        outcome:
+          type: string
+          const: ok
+        readThroughSequence:
+          type: integer
+          format: int64
+          minimum: 0
+        changed:
+          type: boolean
+        replayed:
           type: boolean
     NotificationInboxPage:
       type: object

@@ -60,7 +60,7 @@ describe('player profile view policy', () => {
     expect(JSON.stringify(view)).not.toContain('54000');
   });
 
-  it('does not publish chat routes before their server commands are mounted', () => {
+  it('does not publish chat routes while the direct-chat tenant gate is disabled', () => {
     const view = buildPlayerProfileView({
       profile: source,
       viewerUserId: '6a81e965-c508-4321-812c-4be323606a70',
@@ -80,6 +80,20 @@ describe('player profile view policy', () => {
     });
     expect(view.access.chat).toEqual({ status: 'HIDDEN' });
     expect(JSON.stringify(view)).not.toContain('/chats');
+  });
+
+  it('publishes the direct-chat route only when permission, privacy and runtime allow it', () => {
+    const view = buildPlayerProfileView({
+      profile: source,
+      viewerUserId: '6a81e965-c508-4321-812c-4be323606a70',
+      permissions: ['profile.read', DIRECT_CHAT_PERMISSION],
+      directChatEnabled: true,
+    });
+
+    expect(view.access.chat).toEqual({
+      status: 'AVAILABLE',
+      route: `/chats/new?recipientUserId=${source.userId}`,
+    });
   });
 
   it('lets the target privacy policy override a viewer permission', () => {

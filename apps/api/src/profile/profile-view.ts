@@ -12,6 +12,7 @@ export interface PlayerProfileViewInput {
   readonly viewerUserId: string;
   readonly permissions: readonly string[];
   readonly policy?: Pick<ProfilePrivacySettings, 'contactPolicy' | 'chatPolicy'>;
+  readonly directChatEnabled?: boolean;
 }
 
 export interface ProfileActionCapability {
@@ -70,6 +71,21 @@ function otherAction(
     : { status: 'LOCKED', reason: 'FEATURE_UNAVAILABLE' };
 }
 
+function chatAction(input: {
+  readonly granted: boolean;
+  readonly policy: ProfilePrivacySettings['chatPolicy'];
+  readonly enabled: boolean;
+  readonly targetUserId: string;
+}): ProfileActionCapability {
+  if (input.policy === 'NOBODY') return { status: 'LOCKED', reason: 'PROFILE_RESTRICTED' };
+  if (!input.granted) return { status: 'LOCKED', reason: 'ACCESS_REQUIRED' };
+  if (!input.enabled) return { status: 'HIDDEN' };
+  return {
+    status: 'AVAILABLE',
+    route: `/chats/new?recipientUserId=${encodeURIComponent(input.targetUserId)}`,
+  };
+}
+
 /**
  * Builds the only DTO allowed to cross the player-profile boundary. The
  * caller supplies server-derived permissions; the browser never receives a
@@ -125,7 +141,14 @@ export function buildPlayerProfileView(input: PlayerProfileViewInput): PlayerPro
             : 'BASIC',
       visibleSections,
       contact: isSelf ? selfAction() : otherAction(canContact, policy.contactPolicy, 'LOCKED'),
-      chat: isSelf ? selfAction() : otherAction(canChat, policy.chatPolicy, 'HIDDEN'),
+      chat: isSelf
+        ? selfAction()
+        : chatAction({
+            granted: canChat,
+            policy: policy.chatPolicy,
+            enabled: input.directChatEnabled ?? false,
+            targetUserId: input.profile.userId,
+          }),
     },
   };
 }

@@ -588,7 +588,7 @@ describe('health endpoints', () => {
     expect(JSON.stringify(body)).not.toContain('245000');
   });
 
-  it('does not expose contact and chat routes before the interaction commands are mounted', async () => {
+  it('does not expose the chat route while messaging runtime is disabled', async () => {
     const targetUserId = '6a81e965-c508-4321-812c-4be323606a70';
     const app = await buildApp({
       config,
@@ -622,6 +622,45 @@ describe('health endpoints', () => {
         chat: { status: 'HIDDEN' },
       },
     });
+  });
+
+  it('publishes profile-to-chat capability only when HTTP and direct gates are enabled', async () => {
+    const targetUserId = '6a81e965-c508-4321-812c-4be323606a70';
+    const getRuntimeSettings = vi.fn().mockResolvedValue({
+      httpEnabled: true,
+      directEnabled: true,
+      realtimeEnabled: false,
+      contextualEnabled: false,
+    });
+    const app = await buildApp({
+      config,
+      logger: createLogger('api-test', 'silent'),
+      pool: fakePool(),
+      messagingRepository: { getRuntimeSettings } as never,
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: `/user/api/v1/local-padel/profiles/${targetUserId}`,
+      headers: {
+        authorization: `Bearer ${await accessToken(
+          [tenantId],
+          ['profile.read', 'chat.direct.create'],
+        )}`,
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      access: {
+        chat: {
+          status: 'AVAILABLE',
+          route: `/chats/new?recipientUserId=${targetUserId}`,
+        },
+      },
+    });
+    expect(getRuntimeSettings).toHaveBeenCalledWith(tenantId);
   });
 
   it('lets the target privacy policy override viewer entitlements', async () => {

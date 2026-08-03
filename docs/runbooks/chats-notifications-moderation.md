@@ -41,6 +41,33 @@ enabling chats.
    false-positive review. No authoritative mode exists.
 10. Expand tenant coverage gradually while watching the metrics below.
 
+### Direct chat M1 runtime gate
+
+An absent `messaging.tenant_runtime_settings` row keeps every messaging capability off. M1 needs
+only `http` and `direct`; keep `realtime` and `contextual` off. Preview and apply both require the
+current actor to be active with role `admin` and the existing comms-operator authority
+`notifications.manage`. Apply rechecks it after taking the tenant advisory lock.
+
+```bash
+npm run messaging:runtime:set -- \
+  --tenant-key=<internal-test-tenant> \
+  --actor-id=<authorized-padlhub-admin-uuid> \
+  --http=on \
+  --direct=on
+
+npm run messaging:runtime:set -- \
+  --tenant-key=<internal-test-tenant> \
+  --actor-id=<authorized-padlhub-admin-uuid> \
+  --http=on \
+  --direct=on \
+  --confirm=APPLY_MESSAGING_RUNTIME
+```
+
+Do not run the apply command until migration/API/authorization smokes pass. Roll back the capability
+with a reviewed `--http=off --direct=off` apply; leave the expand-only schema in place. Enabling
+runtime does not add block-list enforcement: the repository has no authoritative block table yet,
+so external rollout remains blocked on that later policy gate.
+
 ### In-app runtime gate
 
 The in-app User API and projector are disabled when a tenant has no runtime-settings row. Preview a
@@ -306,6 +333,10 @@ remains blocked until the booking write owner emits confirmed/changed/cancelled 
 transaction as the booking change, and a leased durable scheduler emits `booking.reminder.due.v1`
 with cancellation/reschedule dedupe.
 
+- With no messaging runtime row, chat routes return `MESSAGING_DISABLED`; with HTTP only they return
+  `DIRECT_MESSAGING_DISABLED`.
+- Create a direct conversation twice with one key and verify one canonical pair. A missing,
+  inactive or `chatPolicy=NOBODY` target must return the same non-enumerating 404.
 - Repeat a send command with the same `Idempotency-Key` and `clientMessageId`; only one sequence is
   allocated and the original response is returned.
 - Disconnect realtime, create messages, reconnect with `afterSequence`; the client fills the exact

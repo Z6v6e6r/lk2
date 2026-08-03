@@ -24,6 +24,7 @@ import type {
   GiftCertificateSaleRepository,
   LocationMediaRepository,
   LocationRepository,
+  MessagingRepository,
   NotificationEndpointRepository,
   NotificationInboxRepository,
   ProfileFriendshipRepository,
@@ -89,6 +90,7 @@ import { sendApiError } from './http-errors.js';
 import { registerLocationRoutes } from './locations/location-routes.js';
 import { registerLocationMediaRoutes } from './locations/location-media-routes.js';
 import type { LocationMediaStore } from './locations/location-media-store.js';
+import { registerMessagingRoutes } from './messaging/messaging-routes.js';
 import type { TrainerAvatarMediaStore } from './trainer-avatar-media-store.js';
 import { registerNotificationRoutes } from './notifications/notification-routes.js';
 import { registerWebPushRoutes } from './notifications/web-push-routes.js';
@@ -186,6 +188,7 @@ export interface BuildAppOptions {
   readonly notificationEndpointRepository?: NotificationEndpointRepository;
   readonly notificationEndpointCipher?: NotificationEndpointCipher;
   readonly adminNotificationRepository?: AdminNotificationRepository;
+  readonly messagingRepository?: MessagingRepository;
   readonly locationRepository?: LocationRepository;
   readonly locationMediaRepository?: LocationMediaRepository;
   readonly giftCertificateCatalogRepository?: GiftCertificateCatalogRepository;
@@ -404,6 +407,20 @@ function authorizeGamesPlayer(request: FastifyRequest, reply: FastifyReply): Pro
   return Promise.resolve();
 }
 
+function authorizeDirectChat(request: FastifyRequest, reply: FastifyReply): Promise<void> {
+  if (reply.sent) return Promise.resolve();
+  if (!request.padlHubClaims?.permissions.includes('chat.direct.create')) {
+    sendApiError(
+      request,
+      reply,
+      403,
+      'CHAT_PERMISSION_REQUIRED',
+      'Нет права на создание личного диалога.',
+    );
+  }
+  return Promise.resolve();
+}
+
 async function resolveTenant(request: FastifyRequest, reply: FastifyReply): Promise<void> {
   if (reply.sent) return;
   const tenantKey = (request.params as { tenantKey?: string }).tenantKey;
@@ -605,6 +622,17 @@ export async function buildApp(options: BuildAppOptions) {
   registerNotificationRoutes(app as unknown as FastifyInstance, {
     ...(options.notificationRepository ? { repository: options.notificationRepository } : {}),
     authenticatedTenantHandlers: [authenticate, resolveTenant],
+    commandHandlers: [authenticate, resolveTenant, requireIdempotencyKey],
+  });
+  registerMessagingRoutes(app as unknown as FastifyInstance, {
+    ...(options.messagingRepository ? { repository: options.messagingRepository } : {}),
+    authenticatedTenantHandlers: [authenticate, resolveTenant],
+    directCommandHandlers: [
+      authenticate,
+      authorizeDirectChat,
+      resolveTenant,
+      requireIdempotencyKey,
+    ],
     commandHandlers: [authenticate, resolveTenant, requireIdempotencyKey],
   });
   registerCommunityRoutes(app as unknown as FastifyInstance, {
@@ -1021,6 +1049,16 @@ export async function buildApp(options: BuildAppOptions) {
         targetUserId === viewerUserId
           ? undefined
           : await options.profilePrivacyRepository?.get(tenantId, targetUserId);
+      const shouldResolveDirectChatRuntime =
+        targetUserId !== viewerUserId &&
+        permissions.includes('chat.direct.create') &&
+        privacyPolicy?.chatPolicy !== 'NOBODY';
+      const messagingRuntime = shouldResolveDirectChatRuntime
+        ? await options.messagingRepository?.getRuntimeSettings(tenantId)
+        : undefined;
+      const directChatEnabled = Boolean(
+        messagingRuntime?.httpEnabled && messagingRuntime.directEnabled,
+      );
 
       if (options.config.HOME_READ_MODE === 'mock') {
         const isSelf = targetUserId === viewerUserId;
@@ -1041,6 +1079,7 @@ export async function buildApp(options: BuildAppOptions) {
           profile,
           viewerUserId,
           permissions,
+          directChatEnabled,
           ...(privacyPolicy ? { policy: privacyPolicy } : {}),
         });
       }
@@ -1077,6 +1116,7 @@ export async function buildApp(options: BuildAppOptions) {
             },
             viewerUserId,
             permissions,
+            directChatEnabled,
             ...(privacyPolicy ? { policy: privacyPolicy } : {}),
           });
         }
@@ -1125,6 +1165,7 @@ export async function buildApp(options: BuildAppOptions) {
         profile: parsedDashboard.data.profile,
         viewerUserId,
         permissions,
+        directChatEnabled,
         ...(privacyPolicy ? { policy: privacyPolicy } : {}),
       });
     },

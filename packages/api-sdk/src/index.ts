@@ -37,6 +37,14 @@ export type ActivityHistoryKind = components['schemas']['ActivityHistoryKind'];
 export type ActivityHistoryStatus = components['schemas']['ActivityHistoryStatus'];
 export type ActivityHistoryItem = components['schemas']['ActivityHistoryItem'];
 export type ActivityHistoryPage = components['schemas']['ActivityHistoryPage'];
+export type ConversationPage = components['schemas']['ConversationPage'];
+export type ConversationSummary = components['schemas']['ConversationSummary'];
+export type ConversationMessagePage = components['schemas']['ConversationMessagePage'];
+export type ConversationMessage = components['schemas']['ConversationMessage'];
+export type CreateDirectConversationResult =
+  components['schemas']['CreateDirectConversationResult'];
+export type SendConversationMessageResult = components['schemas']['SendConversationMessageResult'];
+export type ConversationReadCursorResult = components['schemas']['ConversationReadCursorResult'];
 export type NotificationInboxPage = components['schemas']['NotificationInboxPage'];
 export type NotificationReadCursorResult = components['schemas']['NotificationReadCursorResult'];
 export type WebPushConfiguration = components['schemas']['WebPushConfiguration'];
@@ -998,6 +1006,69 @@ export class PadlHubApiClient {
     if (input.cursor) query.set('cursor', input.cursor);
     const suffix = query.size > 0 ? `?${query.toString()}` : '';
     return this.request<CommunityMembershipPage>(`/communities/mine${suffix}`);
+  }
+
+  public listConversations(limit = 50): Promise<ConversationPage> {
+    const query = new URLSearchParams({ limit: String(limit) });
+    return this.request<ConversationPage>(`/conversations?${query.toString()}`);
+  }
+
+  public createDirectConversation(otherUserId: string): Promise<CreateDirectConversationResult> {
+    const idempotencyKey = createCorrelationId();
+    return this.retryOnceOnNetworkFailure(() =>
+      this.request<CreateDirectConversationResult>('/conversations/direct', {
+        method: 'POST',
+        idempotencyKey,
+        body: jsonRequestBody({ otherUserId }),
+      }),
+    );
+  }
+
+  public listConversationMessages(
+    conversationId: string,
+    input: { readonly afterSequence?: number; readonly limit?: number } = {},
+  ): Promise<ConversationMessagePage> {
+    const query = new URLSearchParams();
+    if (input.afterSequence !== undefined) query.set('afterSequence', String(input.afterSequence));
+    if (input.limit !== undefined) query.set('limit', String(input.limit));
+    const suffix = query.size > 0 ? `?${query.toString()}` : '';
+    return this.request<ConversationMessagePage>(
+      `/conversations/${encodeURIComponent(conversationId)}/messages${suffix}`,
+    );
+  }
+
+  public sendConversationMessage(
+    conversationId: string,
+    body: string,
+  ): Promise<SendConversationMessageResult> {
+    const commandId = createCorrelationId();
+    return this.retryOnceOnNetworkFailure(() =>
+      this.request<SendConversationMessageResult>(
+        `/conversations/${encodeURIComponent(conversationId)}/messages`,
+        {
+          method: 'POST',
+          idempotencyKey: commandId,
+          body: jsonRequestBody({ clientMessageId: commandId, body }),
+        },
+      ),
+    );
+  }
+
+  public markConversationRead(
+    conversationId: string,
+    throughSequence: number,
+  ): Promise<ConversationReadCursorResult> {
+    const idempotencyKey = createCorrelationId();
+    return this.retryOnceOnNetworkFailure(() =>
+      this.request<ConversationReadCursorResult>(
+        `/conversations/${encodeURIComponent(conversationId)}/read-cursor`,
+        {
+          method: 'PUT',
+          idempotencyKey,
+          body: jsonRequestBody({ throughSequence }),
+        },
+      ),
+    );
   }
 
   public listNotifications(
