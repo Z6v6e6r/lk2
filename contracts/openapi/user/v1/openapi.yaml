@@ -1164,10 +1164,12 @@ paths:
     get:
       tags: [messaging]
       operationId: listConversations
-      summary: List the authenticated user's active direct conversations
+      summary: List the authenticated user's active direct and game conversations
       description: |
-        Returns only conversations where the JWT subject is an active member. The route remains
-        closed until both messaging HTTP and direct-chat tenant gates are enabled.
+        Returns only conversations where the JWT subject is an active member. GAME rows additionally
+        require current ACTIVE games.participations membership; a stale messaging member row never
+        grants access. Direct rows remain closed until the direct gate is enabled, while GAME rows
+        remain absent until the contextual gate is enabled.
       parameters:
         - name: limit
           in: query
@@ -1227,6 +1229,50 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/CreateDirectConversationResult'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/CommandConflict'
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/conversations/game:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/IdempotencyKey'
+    post:
+      tags: [messaging]
+      operationId: getOrCreateGameConversation
+      summary: Get or create the canonical conversation for one game
+      description: |
+        Accepts only a tenant-local PadlHub game UUID. Requires games.play and current ACTIVE
+        participation in games.participations. The same authoritative roster is checked again
+        before every history, send and read-cursor operation. The route remains closed while the
+        contextual messaging tenant gate is off.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GetOrCreateGameConversationRequest'
+      responses:
+        '200':
+          description: Created, existing, or idempotently replayed game conversation.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GetOrCreateGameConversationResult'
         '400':
           $ref: ../../common/components.yaml#/components/responses/BadRequest
         '401':
@@ -3089,7 +3135,7 @@ components:
         createdAt:
           type: string
           format: date-time
-    ConversationSummary:
+    DirectConversationSummary:
       type: object
       additionalProperties: false
       required: [id, kind, participant, unreadCount, updatedAt]
@@ -3110,6 +3156,12 @@ components:
           format: date-time
         lastMessage:
           $ref: '#/components/schemas/ConversationLastMessage'
+    ConversationSummary:
+      oneOf:
+        - $ref: '#/components/schemas/DirectConversationSummary'
+        - $ref: '#/components/schemas/GameConversationSummary'
+      discriminator:
+        propertyName: kind
     ConversationPage:
       type: object
       additionalProperties: false
@@ -3137,7 +3189,55 @@ components:
           type: string
           const: ok
         conversation:
-          $ref: '#/components/schemas/ConversationSummary'
+          $ref: '#/components/schemas/DirectConversationSummary'
+        created:
+          type: boolean
+        replayed:
+          type: boolean
+    GameConversationSummary:
+      type: object
+      additionalProperties: false
+      required: [id, kind, contextId, title, unreadCount, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        kind:
+          type: string
+          const: GAME
+        contextId:
+          type: string
+          format: uuid
+        title:
+          type: string
+          minLength: 1
+          maxLength: 160
+        unreadCount:
+          type: integer
+          minimum: 0
+        updatedAt:
+          type: string
+          format: date-time
+        lastMessage:
+          $ref: '#/components/schemas/ConversationLastMessage'
+    GetOrCreateGameConversationRequest:
+      type: object
+      additionalProperties: false
+      required: [gameId]
+      properties:
+        gameId:
+          type: string
+          format: uuid
+    GetOrCreateGameConversationResult:
+      type: object
+      additionalProperties: false
+      required: [outcome, conversation, created, replayed]
+      properties:
+        outcome:
+          type: string
+          const: ok
+        conversation:
+          $ref: '#/components/schemas/GameConversationSummary'
         created:
           type: boolean
         replayed:

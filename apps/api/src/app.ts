@@ -421,6 +421,15 @@ function authorizeDirectChat(request: FastifyRequest, reply: FastifyReply): Prom
   return Promise.resolve();
 }
 
+function authorizeMessagingCommand(request: FastifyRequest, reply: FastifyReply): Promise<void> {
+  if (reply.sent) return Promise.resolve();
+  const permissions = request.padlHubClaims?.permissions ?? [];
+  if (!permissions.includes('chat.direct.create') && !permissions.includes('games.play')) {
+    sendApiError(request, reply, 403, 'CHAT_PERMISSION_REQUIRED', 'Нет права на операцию с чатом.');
+  }
+  return Promise.resolve();
+}
+
 async function resolveTenant(request: FastifyRequest, reply: FastifyReply): Promise<void> {
   if (reply.sent) return;
   const tenantKey = (request.params as { tenantKey?: string }).tenantKey;
@@ -633,7 +642,18 @@ export async function buildApp(options: BuildAppOptions) {
       resolveTenant,
       requireIdempotencyKey,
     ],
-    commandHandlers: [authenticate, resolveTenant, requireIdempotencyKey],
+    contextualCommandHandlers: [
+      authenticate,
+      authorizeGamesPlayer,
+      resolveTenant,
+      requireIdempotencyKey,
+    ],
+    commandHandlers: [
+      authenticate,
+      authorizeMessagingCommand,
+      resolveTenant,
+      requireIdempotencyKey,
+    ],
   });
   registerCommunityRoutes(app as unknown as FastifyInstance, {
     ...(options.communityDirectory ? { service: options.communityDirectory } : {}),

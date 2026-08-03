@@ -118,8 +118,8 @@ export function ChatsPage({
         <section className="chats-layout">
           <aside className="chat-list" aria-label="Диалоги">
             <div className="chat-list-heading">
-              <strong>Личные диалоги</strong>
-              <small>Direct M1</small>
+              <strong>Диалоги</strong>
+              <small>Direct и Game</small>
             </div>
             {!page && !error ? (
               <p className="chat-empty" role="status">
@@ -138,7 +138,11 @@ export function ChatsPage({
                       href={`/chats/${conversation.id}`}
                       aria-current={conversation.id === selectedConversationId ? 'page' : undefined}
                     >
-                      <strong>{conversation.participant.displayName}</strong>
+                      <strong>
+                        {conversation.kind === 'DIRECT'
+                          ? conversation.participant.displayName
+                          : conversation.title}
+                      </strong>
                       <span>{conversation.lastMessage?.body ?? 'Новый диалог'}</span>
                       {conversation.unreadCount > 0 ? (
                         <small aria-label={`Непрочитанных: ${conversation.unreadCount}`}>
@@ -162,8 +166,12 @@ export function ChatsPage({
               <>
                 <header>
                   <div>
-                    <small>Личный чат</small>
-                    <h2>{selected?.participant.displayName ?? 'Диалог'}</h2>
+                    <small>{selected?.kind === 'GAME' ? 'Чат игры' : 'Личный чат'}</small>
+                    <h2>
+                      {selected?.kind === 'DIRECT'
+                        ? selected.participant.displayName
+                        : (selected?.title ?? 'Диалог')}
+                    </h2>
                   </div>
                   <button type="button" disabled={busy !== null} onClick={onRefresh}>
                     {busy === 'refresh' ? 'Обновляем…' : 'Обновить'}

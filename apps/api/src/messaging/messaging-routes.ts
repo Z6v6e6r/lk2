@@ -31,15 +31,29 @@ async function requireMessagingGate(
   reply: FastifyReply,
   repository: MessagingRepository,
   tenantId: string,
-  direct = false,
+  kind?: 'DIRECT' | 'CONTEXTUAL' | 'LIST',
 ): Promise<boolean> {
   const settings = await repository.getRuntimeSettings(tenantId);
   if (!settings.httpEnabled) {
     sendApiError(request, reply, 404, 'MESSAGING_DISABLED', 'Раздел чатов не включён.');
     return false;
   }
-  if (direct && !settings.directEnabled) {
+  if (
+    (kind === 'DIRECT' || kind === 'LIST') &&
+    !settings.directEnabled &&
+    !settings.contextualEnabled
+  ) {
     sendApiError(request, reply, 404, 'DIRECT_MESSAGING_DISABLED', 'Личные диалоги не включены.');
+    return false;
+  }
+  if (kind === 'CONTEXTUAL' && !settings.contextualEnabled) {
+    sendApiError(
+      request,
+      reply,
+      404,
+      'CONTEXTUAL_MESSAGING_DISABLED',
+      'Контекстные чаты не включены.',
+    );
     return false;
   }
   return true;
@@ -65,6 +79,7 @@ export function registerMessagingRoutes(
     readonly repository?: MessagingRepository;
     readonly authenticatedTenantHandlers: readonly preHandlerHookHandler[];
     readonly directCommandHandlers: readonly preHandlerHookHandler[];
+    readonly contextualCommandHandlers: readonly preHandlerHookHandler[];
     readonly commandHandlers: readonly preHandlerHookHandler[];
   },
 ): void {
@@ -79,7 +94,7 @@ export function registerMessagingRoutes(
       }
       if (!options.repository) return unavailable(request, reply);
       if (
-        !(await requireMessagingGate(request, reply, options.repository, current.tenantId, true))
+        !(await requireMessagingGate(request, reply, options.repository, current.tenantId, 'LIST'))
       ) {
         return;
       }
@@ -115,7 +130,13 @@ export function registerMessagingRoutes(
       }
       if (!options.repository) return unavailable(request, reply);
       if (
-        !(await requireMessagingGate(request, reply, options.repository, current.tenantId, true))
+        !(await requireMessagingGate(
+          request,
+          reply,
+          options.repository,
+          current.tenantId,
+          'DIRECT',
+        ))
       ) {
         return;
       }
@@ -158,6 +179,57 @@ export function registerMessagingRoutes(
     },
   );
 
+  app.post(
+    '/user/api/v1/:tenantKey/conversations/game',
+    { preHandler: [...options.contextualCommandHandlers] },
+    async (request, reply) => {
+      reply.header('Cache-Control', 'no-store');
+      const current = principal(request);
+      if (!current) {
+        return sendApiError(request, reply, 401, 'AUTH_REQUIRED', 'Требуется авторизация.');
+      }
+      if (!options.repository) return unavailable(request, reply);
+      if (
+        !(await requireMessagingGate(
+          request,
+          reply,
+          options.repository,
+          current.tenantId,
+          'CONTEXTUAL',
+        ))
+      ) {
+        return;
+      }
+      const body = request.body as Record<string, unknown> | null;
+      const gameId = body?.gameId;
+      if (
+        !body ||
+        Array.isArray(body) ||
+        Object.keys(body).length !== 1 ||
+        typeof gameId !== 'string' ||
+        !UUID_PATTERN.test(gameId)
+      ) {
+        return sendApiError(
+          request,
+          reply,
+          400,
+          'GAME_CONVERSATION_INVALID',
+          'Не указана каноническая игра.',
+        );
+      }
+      const result = await options.repository.getOrCreateGameConversation({
+        tenantId: current.tenantId,
+        actorUserId: current.userId,
+        gameId,
+        idempotencyKey: request.headers['idempotency-key'] as string,
+        correlationId: request.id,
+      });
+      if (result.outcome === 'not_found') return notFound(request, reply);
+      if (result.outcome === 'idempotency_conflict') return conflict(request, reply);
+      return result;
+    },
+  );
+
   app.get(
     '/user/api/v1/:tenantKey/conversations/:conversationId/messages',
     { preHandler: [...options.authenticatedTenantHandlers] },
@@ -168,9 +240,7 @@ export function registerMessagingRoutes(
         return sendApiError(request, reply, 401, 'AUTH_REQUIRED', 'Требуется авторизация.');
       }
       if (!options.repository) return unavailable(request, reply);
-      if (
-        !(await requireMessagingGate(request, reply, options.repository, current.tenantId, true))
-      ) {
+      if (!(await requireMessagingGate(request, reply, options.repository, current.tenantId))) {
         return;
       }
       const conversationId = (request.params as { conversationId?: string }).conversationId;
@@ -208,7 +278,7 @@ export function registerMessagingRoutes(
 
   app.post(
     '/user/api/v1/:tenantKey/conversations/:conversationId/messages',
-    { preHandler: [...options.directCommandHandlers] },
+    { preHandler: [...options.commandHandlers] },
     async (request, reply) => {
       reply.header('Cache-Control', 'no-store');
       const current = principal(request);
@@ -216,9 +286,7 @@ export function registerMessagingRoutes(
         return sendApiError(request, reply, 401, 'AUTH_REQUIRED', 'Требуется авторизация.');
       }
       if (!options.repository) return unavailable(request, reply);
-      if (
-        !(await requireMessagingGate(request, reply, options.repository, current.tenantId, true))
-      ) {
+      if (!(await requireMessagingGate(request, reply, options.repository, current.tenantId))) {
         return;
       }
       const conversationId = (request.params as { conversationId?: string }).conversationId;
@@ -271,9 +339,7 @@ export function registerMessagingRoutes(
         return sendApiError(request, reply, 401, 'AUTH_REQUIRED', 'Требуется авторизация.');
       }
       if (!options.repository) return unavailable(request, reply);
-      if (
-        !(await requireMessagingGate(request, reply, options.repository, current.tenantId, true))
-      ) {
+      if (!(await requireMessagingGate(request, reply, options.repository, current.tenantId))) {
         return;
       }
       const conversationId = (request.params as { conversationId?: string }).conversationId;

@@ -8,6 +8,7 @@ const otherUserId = '59d4e88c-7d52-4c1c-8f80-2fc99b42f9ca';
 const conversationId = '11111111-1111-4111-8111-111111111111';
 const memberId = '22222222-2222-4222-8222-222222222222';
 const messageId = '33333333-3333-4333-8333-333333333333';
+const gameId = '44444444-4444-4444-8444-444444444444';
 
 function poolWithQuery(query: ReturnType<typeof vi.fn>) {
   return {
@@ -34,6 +35,250 @@ describe('messaging repository', () => {
       realtimeEnabled: false,
       contextualEnabled: false,
     });
+  });
+
+  it('creates one canonical GAME conversation from active PadlHub roster membership', async () => {
+    const query = vi.fn((text: string, values?: readonly unknown[]) => {
+      void values;
+      if (
+        text === 'begin' ||
+        text === 'commit' ||
+        text === 'rollback' ||
+        text.includes("set_config('app.tenant_id'") ||
+        text.includes('pg_advisory_xact_lock')
+      ) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('from games.games game') && text.includes('runtime.contextual_enabled')) {
+        return Promise.resolve({
+          rows: [{ id: gameId, title: 'Игра в среду', role: 'PLAYER' }],
+          rowCount: 1,
+        });
+      }
+      if (text.includes('from messaging.game_conversation_commands')) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (
+        text.includes('from messaging.conversations') &&
+        text.includes("kind = 'GAME'") &&
+        !text.includes('join games.participations')
+      ) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('insert into messaging.conversations')) {
+        return Promise.resolve({ rows: [{ id: conversationId }], rowCount: 1 });
+      }
+      if (
+        text.includes('insert into messaging.conversation_members') ||
+        text.includes('insert into audit.outbox_events') ||
+        text.includes('insert into audit.audit_log') ||
+        text.includes('insert into messaging.game_conversation_commands')
+      ) {
+        return Promise.resolve({ rows: [], rowCount: 1 });
+      }
+      if (text.includes('select conversation.id') && text.includes('join games.participations')) {
+        return Promise.resolve({
+          rows: [
+            {
+              id: conversationId,
+              context_id: gameId,
+              title: 'Игра в среду',
+              unread_count: '0',
+              updated_at: '2026-08-03 12:00:00.000000+00',
+            },
+          ],
+          rowCount: 1,
+        });
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const repository = createMessagingRepository(poolWithQuery(query) as never);
+
+    await expect(
+      repository.getOrCreateGameConversation({
+        tenantId,
+        actorUserId: userId,
+        gameId,
+        idempotencyKey: 'game-chat-command-0001',
+        correlationId: 'game-chat-correlation-0001',
+      }),
+    ).resolves.toMatchObject({
+      outcome: 'ok',
+      conversation: { kind: 'GAME', contextId: gameId, title: 'Игра в среду' },
+      created: true,
+      replayed: false,
+    });
+
+    const authorization = String(
+      query.mock.calls.find(([text]) => String(text).includes('from games.games game'))?.[0],
+    );
+    expect(authorization).toContain("participation.state = 'ACTIVE'");
+    expect(authorization).toContain("'games.play' = any(current_access.permissions)");
+    expect(authorization).toContain('runtime.contextual_enabled');
+    expect(authorization).not.toMatch(/viva|external_id|provider_id/i);
+    expect(
+      query.mock.calls.some(([text]) => String(text).includes('select participation.tenant_id')),
+    ).toBe(true);
+  });
+
+  it('fails GAME creation closed before writes when current roster membership is absent', async () => {
+    const query = vi.fn((text: string) => {
+      if (
+        text === 'begin' ||
+        text === 'commit' ||
+        text === 'rollback' ||
+        text.includes("set_config('app.tenant_id'") ||
+        text.includes('pg_advisory_xact_lock')
+      ) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('from games.games game')) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const repository = createMessagingRepository(poolWithQuery(query) as never);
+
+    await expect(
+      repository.getOrCreateGameConversation({
+        tenantId,
+        actorUserId: userId,
+        gameId,
+        idempotencyKey: 'game-chat-command-0001',
+        correlationId: 'game-chat-correlation-0001',
+      }),
+    ).resolves.toEqual({ outcome: 'not_found' });
+    expect(query.mock.calls.some(([text]) => String(text).includes('insert into messaging.'))).toBe(
+      false,
+    );
+  });
+
+  it('syncs a late active game participant without creating a second conversation', async () => {
+    const query = vi.fn((text: string) => {
+      if (
+        text === 'begin' ||
+        text === 'commit' ||
+        text === 'rollback' ||
+        text.includes("set_config('app.tenant_id'") ||
+        text.includes('pg_advisory_xact_lock')
+      ) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('from games.games game') && text.includes('runtime.contextual_enabled')) {
+        return Promise.resolve({
+          rows: [{ id: gameId, title: 'Игра', role: 'PLAYER' }],
+          rowCount: 1,
+        });
+      }
+      if (text.includes('from messaging.game_conversation_commands')) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (
+        text.includes('from messaging.conversations') &&
+        text.includes("kind = 'GAME'") &&
+        !text.includes('join games.participations')
+      ) {
+        return Promise.resolve({ rows: [{ id: conversationId }], rowCount: 1 });
+      }
+      if (text.includes('insert into messaging.conversation_members')) {
+        return Promise.resolve({ rows: [{ id: memberId }], rowCount: 1 });
+      }
+      if (
+        text.includes('insert into audit.outbox_events') ||
+        text.includes('insert into audit.audit_log') ||
+        text.includes('insert into messaging.game_conversation_commands')
+      ) {
+        return Promise.resolve({ rows: [], rowCount: 1 });
+      }
+      if (text.includes('select conversation.id') && text.includes('join games.participations')) {
+        return Promise.resolve({
+          rows: [
+            {
+              id: conversationId,
+              context_id: gameId,
+              title: 'Игра',
+              unread_count: '0',
+              updated_at: '2026-08-03 12:00:00.000000+00',
+            },
+          ],
+          rowCount: 1,
+        });
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const repository = createMessagingRepository(poolWithQuery(query) as never);
+
+    await expect(
+      repository.getOrCreateGameConversation({
+        tenantId,
+        actorUserId: userId,
+        gameId,
+        idempotencyKey: 'game-chat-command-0002',
+        correlationId: 'game-chat-correlation-0002',
+      }),
+    ).resolves.toMatchObject({ outcome: 'ok', created: false, replayed: false });
+    expect(
+      query.mock.calls.filter(([text]) =>
+        String(text).includes('insert into messaging.conversations'),
+      ),
+    ).toHaveLength(0);
+    const outbox = query.mock.calls.find(([text]) =>
+      String(text).includes('insert into audit.outbox_events'),
+    );
+    expect(String(outbox?.[0])).toContain('messaging.member.changed.v1');
+    expect(JSON.stringify(outbox?.[1])).not.toMatch(/body|messageText/i);
+  });
+
+  it('lists GAME conversations only through current roster membership and contextual gate', async () => {
+    const query = vi.fn((text: string) => {
+      if (text === 'begin' || text === 'commit' || text.includes("set_config('app.tenant_id'")) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes("conversation.kind = 'DIRECT'")) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes("conversation.kind = 'GAME'")) {
+        return Promise.resolve({
+          rows: [
+            {
+              id: conversationId,
+              context_id: gameId,
+              title: 'Игра',
+              unread_count: '2',
+              updated_at: '2026-08-03 12:00:00.000000+00',
+              last_sequence: '3',
+              last_body: 'Готов',
+              last_created_at: '2026-08-03 11:59:00.000000+00',
+            },
+          ],
+          rowCount: 1,
+        });
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const repository = createMessagingRepository(poolWithQuery(query) as never);
+
+    await expect(repository.listConversations({ tenantId, userId, limit: 20 })).resolves.toEqual([
+      {
+        id: conversationId,
+        kind: 'GAME',
+        contextId: gameId,
+        title: 'Игра',
+        unreadCount: 2,
+        updatedAt: '2026-08-03T12:00:00.000000+00:00',
+        lastMessage: {
+          sequence: 3,
+          body: 'Готов',
+          createdAt: '2026-08-03T11:59:00.000000+00:00',
+        },
+      },
+    ]);
+    const gameQuery = String(
+      query.mock.calls.find(([text]) => String(text).includes("conversation.kind = 'GAME'"))?.[0],
+    );
+    expect(gameQuery).toContain("participation.state = 'ACTIVE'");
+    expect(gameQuery).toContain("'games.play' = any(current_access.permissions)");
+    expect(gameQuery).toContain('runtime.contextual_enabled');
   });
 
   it('allocates one sequence and emits only identifiers to the outbox', async () => {
@@ -128,6 +373,9 @@ describe('messaging repository', () => {
         if (text.includes('member.id as member_id')) {
           return Promise.resolve({ rows: [], rowCount: 0 });
         }
+        if (text.includes('select next_sequence')) {
+          return Promise.resolve({ rows: [{ next_sequence: '1' }], rowCount: 1 });
+        }
         throw new Error(`Unexpected query: ${text}`);
       });
       const repository = createMessagingRepository(poolWithQuery(query) as never);
@@ -155,7 +403,7 @@ describe('messaging repository', () => {
       );
       expect(
         query.mock.calls.some(([text]) =>
-          /select next_sequence|message\.idempotency_key|insert into messaging\.messages|insert into audit\.outbox_events/.test(
+          /message\.idempotency_key|insert into messaging\.messages|insert into audit\.outbox_events/.test(
             String(text),
           ),
         ),
@@ -170,6 +418,9 @@ describe('messaging repository', () => {
       }
       if (text.includes('member.id as member_id')) {
         return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('select next_sequence')) {
+        return Promise.resolve({ rows: [{ next_sequence: '1' }], rowCount: 1 });
       }
       throw new Error(`Unexpected query: ${text}`);
     });
@@ -194,7 +445,7 @@ describe('messaging repository', () => {
     expect(authorizationQuery).toContain("'chat.direct.create' = any(current_access.permissions)");
     expect(
       query.mock.calls.some(([text]) =>
-        /select next_sequence|message\.idempotency_key|insert into messaging\.messages|insert into audit\.outbox_events/.test(
+        /message\.idempotency_key|insert into messaging\.messages|insert into audit\.outbox_events/.test(
           String(text),
         ),
       ),
@@ -208,6 +459,9 @@ describe('messaging repository', () => {
       }
       if (text.includes('member.id as member_id')) {
         return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('select next_sequence')) {
+        return Promise.resolve({ rows: [{ next_sequence: '1' }], rowCount: 1 });
       }
       if (text.includes('message.idempotency_key = $3')) {
         return Promise.resolve({

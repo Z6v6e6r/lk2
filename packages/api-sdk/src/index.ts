@@ -43,6 +43,9 @@ export type ConversationMessagePage = components['schemas']['ConversationMessage
 export type ConversationMessage = components['schemas']['ConversationMessage'];
 export type CreateDirectConversationResult =
   components['schemas']['CreateDirectConversationResult'];
+export type GameConversationSummary = components['schemas']['GameConversationSummary'];
+export type GetOrCreateGameConversationResult =
+  components['schemas']['GetOrCreateGameConversationResult'];
 export type SendConversationMessageResult = components['schemas']['SendConversationMessageResult'];
 export type ConversationReadCursorResult = components['schemas']['ConversationReadCursorResult'];
 export type NotificationInboxPage = components['schemas']['NotificationInboxPage'];
@@ -1020,6 +1023,17 @@ export class PadlHubApiClient {
         method: 'POST',
         idempotencyKey,
         body: jsonRequestBody({ otherUserId }),
+      }),
+    );
+  }
+
+  public getOrCreateGameConversation(gameId: string): Promise<GetOrCreateGameConversationResult> {
+    const idempotencyKey = createCorrelationId();
+    return this.retryOnceOnNetworkFailure(() =>
+      this.request<GetOrCreateGameConversationResult>('/conversations/game', {
+        method: 'POST',
+        idempotencyKey,
+        body: jsonRequestBody({ gameId }),
       }),
     );
   }

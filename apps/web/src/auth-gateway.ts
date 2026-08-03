@@ -148,7 +148,7 @@ export interface ConversationLastMessage {
   readonly createdAt: string;
 }
 
-export interface ConversationSummary {
+export interface DirectConversationSummary {
   readonly id: string;
   readonly kind: 'DIRECT';
   readonly participant: MessagingParticipant;
@@ -156,6 +156,18 @@ export interface ConversationSummary {
   readonly updatedAt: string;
   readonly lastMessage?: ConversationLastMessage;
 }
+
+export interface GameConversationSummary {
+  readonly id: string;
+  readonly kind: 'GAME';
+  readonly contextId: string;
+  readonly title: string;
+  readonly unreadCount: number;
+  readonly updatedAt: string;
+  readonly lastMessage?: ConversationLastMessage;
+}
+
+export type ConversationSummary = DirectConversationSummary | GameConversationSummary;
 
 export interface ConversationPage {
   readonly items: readonly ConversationSummary[];
@@ -178,7 +190,7 @@ export interface ConversationMessagePage {
 
 export interface CreateDirectConversationResult {
   readonly outcome: 'ok';
-  readonly conversation: ConversationSummary;
+  readonly conversation: DirectConversationSummary;
   readonly created: boolean;
   readonly replayed: boolean;
 }

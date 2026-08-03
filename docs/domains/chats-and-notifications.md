@@ -9,8 +9,15 @@ HTTP M1 с Web UI, in-app, Web Push/VAPID и ручная отправка из 
 для list/create/history/send/read cursor. Каноническая пара PadlHub UUID дедуплицируется;
 создание и отправка повторно проверяют current permission, active membership, active target и его
 `chatPolicy`. Tenant gates по умолчанию выключены. Наличие кода не доказывает, что срез активирован
-или проверен в целевой среде. Block-list enforcement, contextual chats, attachments, edit/delete,
+или проверен в целевой среде. Block-list enforcement, tournament/station contextual chats, attachments,
+edit/delete,
 realtime, connectors и moderation в M1 не входят.
+
+Следующий feature-gated slice реализует только `GAME`: canonical `games.games.id`, актуальная
+`games.participations(state='ACTIVE')` и `games.play` повторно проверяются перед list/history/send/
+read cursor. Tournament остаётся закрыт без identity-linked canonical roster; Station остаётся
+закрыт без утверждённой membership/privacy модели и не добавляется в enum разговоров. Матрица
+доказательств и открытые вопросы: [contextual-chats-evidence-2026-08-03.md](../plans/contextual-chats-evidence-2026-08-03.md).
 
 Реализованный in-app срез включает rule/template consumer, транзакционные intent/inbox/delivery,
 RabbitMQ inbox-дедупликацию, tenant gate, `GET /notifications`, идемпотентный `PUT

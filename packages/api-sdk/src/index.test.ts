@@ -820,6 +820,7 @@ describe('PadlHubApiClient messaging boundary', () => {
     const calls: Array<{ input: Parameters<typeof fetch>[0]; init?: RequestInit }> = [];
     const conversationId = '22222222-2222-4222-8222-222222222222';
     const otherUserId = '11111111-1111-4111-8111-111111111111';
+    const gameId = '44444444-4444-4444-8444-444444444444';
     const fetchImplementation: typeof fetch = (input, init) => {
       calls.push({ input, ...(init === undefined ? {} : { init }) });
       const url = requestUrl(input);
@@ -827,6 +828,11 @@ describe('PadlHubApiClient messaging boundary', () => {
         return Promise.resolve(jsonResponse({ items: [] }));
       }
       if (url.endsWith('/conversations/direct')) {
+        return Promise.resolve(
+          jsonResponse({ outcome: 'ok', conversation: {}, created: true, replayed: false }),
+        );
+      }
+      if (url.endsWith('/conversations/game')) {
         return Promise.resolve(
           jsonResponse({ outcome: 'ok', conversation: {}, created: true, replayed: false }),
         );
@@ -847,23 +853,25 @@ describe('PadlHubApiClient messaging boundary', () => {
 
     await client.listConversations(25);
     await client.createDirectConversation(otherUserId);
+    await client.getOrCreateGameConversation(gameId);
     await client.listConversationMessages(conversationId, { afterSequence: 4, limit: 50 });
     await client.sendConversationMessage(conversationId, 'Привет');
     await client.markConversationRead(conversationId, 5);
 
     expect(requestUrl(calls[0]?.input ?? '')).toContain('/conversations?limit=25');
     expect(JSON.parse(stringRequestBody(calls[1]?.init?.body))).toEqual({ otherUserId });
-    expect(requestUrl(calls[2]?.input ?? '')).toContain(
+    expect(JSON.parse(stringRequestBody(calls[2]?.init?.body))).toEqual({ gameId });
+    expect(requestUrl(calls[3]?.input ?? '')).toContain(
       `/conversations/${conversationId}/messages?afterSequence=4&limit=50`,
     );
-    const sendHeaders = new Headers(calls[3]?.init?.headers);
-    const sendBody = JSON.parse(stringRequestBody(calls[3]?.init?.body)) as {
+    const sendHeaders = new Headers(calls[4]?.init?.headers);
+    const sendBody = JSON.parse(stringRequestBody(calls[4]?.init?.body)) as {
       clientMessageId: string;
       body: string;
     };
     expect(sendHeaders.get('Idempotency-Key')).toBe(sendBody.clientMessageId);
     expect(sendBody.body).toBe('Привет');
-    expect(JSON.parse(stringRequestBody(calls[4]?.init?.body))).toEqual({ throughSequence: 5 });
+    expect(JSON.parse(stringRequestBody(calls[5]?.init?.body))).toEqual({ throughSequence: 5 });
     expect(calls.map((call) => requestUrl(call.input)).join(' ')).not.toMatch(/viva|provider/i);
   });
 });

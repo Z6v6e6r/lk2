@@ -27,6 +27,22 @@ export interface ConversationSummary {
   };
 }
 
+export interface GameConversationSummary {
+  readonly id: string;
+  readonly kind: 'GAME';
+  readonly contextId: string;
+  readonly title: string;
+  readonly unreadCount: number;
+  readonly updatedAt: string;
+  readonly lastMessage?: {
+    readonly sequence: number;
+    readonly body: string;
+    readonly createdAt: string;
+  };
+}
+
+export type MessagingConversationSummary = ConversationSummary | GameConversationSummary;
+
 export interface ConversationMessage {
   readonly id: string;
   readonly conversationId: string;
@@ -48,6 +64,16 @@ export type CreateDirectConversationResult =
   | {
       readonly outcome: 'ok';
       readonly conversation: ConversationSummary;
+      readonly created: boolean;
+      readonly replayed: boolean;
+    };
+
+export type GetOrCreateGameConversationResult =
+  | { readonly outcome: 'not_found' }
+  | { readonly outcome: 'idempotency_conflict' }
+  | {
+      readonly outcome: 'ok';
+      readonly conversation: GameConversationSummary;
       readonly created: boolean;
       readonly replayed: boolean;
     };
@@ -85,7 +111,7 @@ export interface MessagingRepository {
     readonly tenantId: string;
     readonly userId: string;
     readonly limit: number;
-  }): Promise<readonly ConversationSummary[]>;
+  }): Promise<readonly MessagingConversationSummary[]>;
   createDirectConversation(input: {
     readonly tenantId: string;
     readonly actorUserId: string;
@@ -93,6 +119,13 @@ export interface MessagingRepository {
     readonly idempotencyKey: string;
     readonly correlationId: string;
   }): Promise<CreateDirectConversationResult>;
+  getOrCreateGameConversation(input: {
+    readonly tenantId: string;
+    readonly actorUserId: string;
+    readonly gameId: string;
+    readonly idempotencyKey: string;
+    readonly correlationId: string;
+  }): Promise<GetOrCreateGameConversationResult>;
   listMessages(input: {
     readonly tenantId: string;
     readonly userId: string;
@@ -156,6 +189,22 @@ interface DirectCommandRow extends QueryResultRow {
   readonly conversation_id: string;
 }
 
+interface GameCommandRow extends QueryResultRow {
+  readonly game_id: string;
+  readonly conversation_id: string;
+}
+
+interface GameConversationRow extends QueryResultRow {
+  readonly id: string;
+  readonly context_id: string;
+  readonly title: string;
+  readonly unread_count: number | string;
+  readonly updated_at: Date | string;
+  readonly last_sequence?: number | string | null;
+  readonly last_body?: string | null;
+  readonly last_created_at?: Date | string | null;
+}
+
 interface MemberRow extends QueryResultRow {
   readonly member_id: string;
   readonly last_read_sequence: number | string;
@@ -203,6 +252,26 @@ function mapConversation(row: ConversationRow): ConversationSummary {
   };
 }
 
+function mapGameConversation(row: GameConversationRow): GameConversationSummary {
+  return {
+    id: row.id,
+    kind: 'GAME',
+    contextId: row.context_id,
+    title: row.title,
+    unreadCount: sequence(row.unread_count),
+    updatedAt: timestamp(row.updated_at),
+    ...(row.last_sequence != null && row.last_body != null && row.last_created_at != null
+      ? {
+          lastMessage: {
+            sequence: sequence(row.last_sequence),
+            body: row.last_body,
+            createdAt: timestamp(row.last_created_at),
+          },
+        }
+      : {}),
+  };
+}
+
 function mapMessage(row: MessageRow): ConversationMessage {
   return {
     id: row.id,
@@ -237,6 +306,10 @@ const CONVERSATION_SELECT = `
      and current_member.conversation_id = conversation.id
      and current_member.user_id = $2
      and current_member.state = 'ACTIVE'
+    join messaging.tenant_runtime_settings runtime
+      on runtime.tenant_id = conversation.tenant_id
+     and runtime.http_enabled
+     and runtime.direct_enabled
     join identity.users current_user
       on current_user.tenant_id = current_member.tenant_id
      and current_user.id = current_member.user_id
@@ -263,6 +336,56 @@ const CONVERSATION_SELECT = `
      and conversation.kind = 'DIRECT'
      and conversation.state = 'OPEN'`;
 
+const GAME_CONVERSATION_SELECT = `
+  select conversation.id,
+         conversation.context_id,
+         game.title,
+         greatest((conversation.next_sequence - 1) - member.last_read_sequence, 0)
+           as unread_count,
+         conversation.updated_at::text as updated_at,
+         last_message.sequence as last_sequence,
+         last_message.body as last_body,
+         last_message.created_at::text as last_created_at
+    from messaging.conversations conversation
+    join messaging.conversation_members member
+      on member.tenant_id = conversation.tenant_id
+     and member.conversation_id = conversation.id
+     and member.user_id = $2
+     and member.state = 'ACTIVE'
+    join identity.users current_user
+      on current_user.tenant_id = member.tenant_id
+     and current_user.id = member.user_id
+     and current_user.status = 'ACTIVE'
+    join identity.user_access_profiles current_access
+      on current_access.tenant_id = current_user.tenant_id
+     and current_access.user_id = current_user.id
+     and 'games.play' = any(current_access.permissions)
+    join games.games game
+      on game.tenant_id = conversation.tenant_id
+     and game.id = conversation.context_id
+    join games.participations participation
+      on participation.tenant_id = game.tenant_id
+     and participation.game_id = game.id
+     and participation.user_id = current_user.id
+     and participation.state = 'ACTIVE'
+    join messaging.tenant_runtime_settings runtime
+      on runtime.tenant_id = conversation.tenant_id
+     and runtime.http_enabled
+     and runtime.contextual_enabled
+    left join lateral (
+      select message.sequence, message.body, message.created_at
+        from messaging.messages message
+       where message.tenant_id = conversation.tenant_id
+         and message.conversation_id = conversation.id
+         and message.deleted_at is null
+       order by message.sequence desc
+       limit 1
+    ) last_message on true
+   where conversation.tenant_id = $1
+     and conversation.kind = 'GAME'
+     and conversation.context_type = 'GAME'
+     and conversation.state = 'OPEN'`;
+
 async function getConversation(
   client: PoolClient,
   tenantId: string,
@@ -276,6 +399,130 @@ async function getConversation(
     [tenantId, userId, conversationId],
   );
   return row ? mapConversation(row) : undefined;
+}
+
+async function getGameConversation(
+  client: PoolClient,
+  tenantId: string,
+  userId: string,
+  conversationId: string,
+): Promise<GameConversationSummary | undefined> {
+  const row = await queryOne<GameConversationRow>(
+    client,
+    `select conversation.id,
+            conversation.context_id,
+            game.title,
+            greatest((conversation.next_sequence - 1) - member.last_read_sequence, 0)
+              as unread_count,
+            conversation.updated_at::text as updated_at
+       from messaging.conversations conversation
+       join messaging.conversation_members member
+         on member.tenant_id = conversation.tenant_id
+        and member.conversation_id = conversation.id
+        and member.user_id = $2
+        and member.state = 'ACTIVE'
+       join identity.users current_user
+         on current_user.tenant_id = member.tenant_id
+        and current_user.id = member.user_id
+        and current_user.status = 'ACTIVE'
+       join identity.user_access_profiles current_access
+         on current_access.tenant_id = current_user.tenant_id
+        and current_access.user_id = current_user.id
+        and 'games.play' = any(current_access.permissions)
+       join games.games game
+         on game.tenant_id = conversation.tenant_id
+        and game.id = conversation.context_id
+       join games.participations participation
+         on participation.tenant_id = game.tenant_id
+        and participation.game_id = game.id
+        and participation.user_id = current_user.id
+        and participation.state = 'ACTIVE'
+       join messaging.tenant_runtime_settings runtime
+         on runtime.tenant_id = conversation.tenant_id
+        and runtime.http_enabled
+        and runtime.contextual_enabled
+      where conversation.tenant_id = $1
+        and conversation.id = $3
+        and conversation.kind = 'GAME'
+        and conversation.context_type = 'GAME'
+        and conversation.state = 'OPEN'`,
+    [tenantId, userId, conversationId],
+  );
+  return row ? mapGameConversation(row) : undefined;
+}
+
+async function getAuthorizedMember(
+  client: PoolClient,
+  tenantId: string,
+  userId: string,
+  conversationId: string,
+  lockMember = false,
+): Promise<MemberRow | undefined> {
+  return queryOne<MemberRow>(
+    client,
+    `select member.id as member_id,
+            member.last_read_sequence,
+            conversation.next_sequence - 1 as last_sequence
+       from messaging.conversation_members member
+       join messaging.conversations conversation
+         on conversation.tenant_id = member.tenant_id
+        and conversation.id = member.conversation_id
+       join identity.users current_user
+         on current_user.tenant_id = member.tenant_id
+        and current_user.id = member.user_id
+        and current_user.status = 'ACTIVE'
+       join identity.user_access_profiles current_access
+         on current_access.tenant_id = current_user.tenant_id
+        and current_access.user_id = current_user.id
+       join messaging.tenant_runtime_settings runtime
+         on runtime.tenant_id = conversation.tenant_id
+        and runtime.http_enabled
+      where member.tenant_id = $1
+        and member.conversation_id = $2
+        and member.user_id = $3
+        and member.state = 'ACTIVE'
+        and conversation.state = 'OPEN'
+        and (
+          (
+            conversation.kind = 'DIRECT'
+            and runtime.direct_enabled
+            and 'chat.direct.create' = any(current_access.permissions)
+            and exists (
+              select 1
+                from messaging.conversation_members other_member
+                join identity.users other_user
+                  on other_user.tenant_id = other_member.tenant_id
+                 and other_user.id = other_member.user_id
+                 and other_user.status = 'ACTIVE'
+                left join profile.privacy_settings target_privacy
+                  on target_privacy.tenant_id = other_user.tenant_id
+                 and target_privacy.user_id = other_user.id
+               where other_member.tenant_id = member.tenant_id
+                 and other_member.conversation_id = member.conversation_id
+                 and other_member.user_id <> member.user_id
+                 and other_member.state = 'ACTIVE'
+                 and coalesce(target_privacy.chat_policy, 'AUTHORIZED') = 'AUTHORIZED'
+            )
+          )
+          or
+          (
+            conversation.kind = 'GAME'
+            and conversation.context_type = 'GAME'
+            and runtime.contextual_enabled
+            and 'games.play' = any(current_access.permissions)
+            and exists (
+              select 1
+                from games.participations participation
+               where participation.tenant_id = conversation.tenant_id
+                 and participation.game_id = conversation.context_id
+                 and participation.user_id = member.user_id
+                 and participation.state = 'ACTIVE'
+            )
+          )
+        )
+      ${lockMember ? 'for update of member' : ''}`,
+    [tenantId, conversationId, userId],
+  );
 }
 
 async function getMessage(
@@ -339,13 +586,21 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
 
     listConversations(input) {
       return withTenantTransaction(pool, input.tenantId, async (client) => {
-        const result = await client.query<ConversationRow>(
+        const direct = await client.query<ConversationRow>(
           `${CONVERSATION_SELECT}
             order by conversation.updated_at desc, conversation.id desc
             limit $3`,
           [input.tenantId, input.userId, input.limit],
         );
-        return result.rows.map(mapConversation);
+        const games = await client.query<GameConversationRow>(
+          `${GAME_CONVERSATION_SELECT}
+            order by conversation.updated_at desc, conversation.id desc
+            limit $3`,
+          [input.tenantId, input.userId, input.limit],
+        );
+        return [...direct.rows.map(mapConversation), ...games.rows.map(mapGameConversation)]
+          .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+          .slice(0, input.limit);
       });
     },
 
@@ -482,26 +737,199 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
       });
     },
 
+    getOrCreateGameConversation(input) {
+      return withTenantTransaction(pool, input.tenantId, async (client) => {
+        await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
+          `${input.tenantId}:${input.actorUserId}:${input.idempotencyKey}`,
+        ]);
+        const game = await queryOne<{ id: string; title: string; role: 'ORGANIZER' | 'PLAYER' }>(
+          client,
+          `select game.id, game.title, participation.role
+             from games.games game
+             join games.participations participation
+               on participation.tenant_id = game.tenant_id
+              and participation.game_id = game.id
+              and participation.user_id = $2
+              and participation.state = 'ACTIVE'
+             join identity.users current_user
+               on current_user.tenant_id = participation.tenant_id
+              and current_user.id = participation.user_id
+              and current_user.status = 'ACTIVE'
+             join identity.user_access_profiles current_access
+               on current_access.tenant_id = current_user.tenant_id
+              and current_access.user_id = current_user.id
+              and 'games.play' = any(current_access.permissions)
+             join messaging.tenant_runtime_settings runtime
+               on runtime.tenant_id = game.tenant_id
+              and runtime.http_enabled
+              and runtime.contextual_enabled
+            where game.tenant_id = $1 and game.id = $3`,
+          [input.tenantId, input.actorUserId, input.gameId],
+        );
+        if (!game) return { outcome: 'not_found' };
+
+        const previous = await queryOne<GameCommandRow>(
+          client,
+          `select game_id, conversation_id
+             from messaging.game_conversation_commands
+            where tenant_id = $1 and actor_user_id = $2 and idempotency_key = $3`,
+          [input.tenantId, input.actorUserId, input.idempotencyKey],
+        );
+        if (previous) {
+          if (previous.game_id !== input.gameId) return { outcome: 'idempotency_conflict' };
+          const conversation = await getGameConversation(
+            client,
+            input.tenantId,
+            input.actorUserId,
+            previous.conversation_id,
+          );
+          if (!conversation) throw new Error('MESSAGING_GAME_REPLAY_CONVERSATION_MISSING');
+          return { outcome: 'ok', conversation, created: false, replayed: true };
+        }
+
+        await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
+          `${input.tenantId}:GAME:${input.gameId}`,
+        ]);
+        const existing = await queryOne<{ id: string }>(
+          client,
+          `select id
+             from messaging.conversations
+            where tenant_id = $1
+              and kind = 'GAME'
+              and context_type = 'GAME'
+              and context_id = $2`,
+          [input.tenantId, input.gameId],
+        );
+        let conversationId = existing?.id;
+        const created = !conversationId;
+        if (!conversationId) {
+          const inserted = await queryOne<{ id: string }>(
+            client,
+            `insert into messaging.conversations (
+               tenant_id, kind, context_type, context_id, title, created_by_user_id
+             ) values ($1, 'GAME', 'GAME', $2, $3, $4)
+             returning id`,
+            [input.tenantId, input.gameId, game.title, input.actorUserId],
+          );
+          if (!inserted) throw new Error('MESSAGING_GAME_CONVERSATION_INSERT_FAILED');
+          conversationId = inserted.id;
+          await client.query(
+            `insert into messaging.conversation_members (
+               tenant_id, conversation_id, member_type, user_id, role
+             )
+             select participation.tenant_id,
+                    $2,
+                    'USER',
+                    participation.user_id,
+                    case when participation.role = 'ORGANIZER' then 'OWNER' else 'MEMBER' end
+               from games.participations participation
+               join identity.users roster_user
+                 on roster_user.tenant_id = participation.tenant_id
+                and roster_user.id = participation.user_id
+                and roster_user.status = 'ACTIVE'
+              where participation.tenant_id = $1
+                and participation.game_id = $3
+                and participation.state = 'ACTIVE'`,
+            [input.tenantId, conversationId, input.gameId],
+          );
+          await client.query(
+            `insert into audit.outbox_events (
+               tenant_id, event_type, aggregate_id, correlation_id, payload
+             ) values ($1, 'messaging.conversation.created.v1', $2, $3, $4::jsonb)`,
+            [
+              input.tenantId,
+              conversationId,
+              input.correlationId,
+              JSON.stringify({ conversationId, kind: 'GAME', contextId: input.gameId }),
+            ],
+          );
+          await client.query(
+            `insert into audit.audit_log (
+               tenant_id, actor_id, action, resource_type, resource_id,
+               result, correlation_id, new_value
+             ) values ($1, $2, 'GAME_CONVERSATION_CREATED', 'CONVERSATION', $3,
+                       'SUCCESS', $4, $5::jsonb)`,
+            [
+              input.tenantId,
+              input.actorUserId,
+              conversationId,
+              input.correlationId,
+              JSON.stringify({ kind: 'GAME', contextId: input.gameId }),
+            ],
+          );
+        } else {
+          const membership = await queryOne<{ id: string }>(
+            client,
+            `insert into messaging.conversation_members (
+               tenant_id, conversation_id, member_type, user_id, role
+             ) values ($1, $2, 'USER', $3, $4)
+             on conflict (tenant_id, conversation_id, user_id) where user_id is not null
+             do update set state = 'ACTIVE', left_at = null
+               where messaging.conversation_members.state <> 'ACTIVE'
+             returning id`,
+            [
+              input.tenantId,
+              conversationId,
+              input.actorUserId,
+              game.role === 'ORGANIZER' ? 'OWNER' : 'MEMBER',
+            ],
+          );
+          if (membership) {
+            await client.query(
+              `insert into audit.outbox_events (
+                 tenant_id, event_type, aggregate_id, correlation_id, payload
+               ) values ($1, 'messaging.member.changed.v1', $2, $3, $4::jsonb)`,
+              [
+                input.tenantId,
+                conversationId,
+                input.correlationId,
+                JSON.stringify({
+                  conversationId,
+                  userId: input.actorUserId,
+                  state: 'ACTIVE',
+                }),
+              ],
+            );
+            await client.query(
+              `insert into audit.audit_log (
+                 tenant_id, actor_id, action, resource_type, resource_id,
+                 result, correlation_id, new_value
+               ) values ($1, $2, 'GAME_CONVERSATION_MEMBERSHIP_SYNCED', 'CONVERSATION', $3,
+                         'SUCCESS', $4, $5::jsonb)`,
+              [
+                input.tenantId,
+                input.actorUserId,
+                conversationId,
+                input.correlationId,
+                JSON.stringify({ contextId: input.gameId, state: 'ACTIVE' }),
+              ],
+            );
+          }
+        }
+        await client.query(
+          `insert into messaging.game_conversation_commands (
+             tenant_id, actor_user_id, idempotency_key, game_id, conversation_id
+           ) values ($1, $2, $3, $4, $5)`,
+          [input.tenantId, input.actorUserId, input.idempotencyKey, input.gameId, conversationId],
+        );
+        const conversation = await getGameConversation(
+          client,
+          input.tenantId,
+          input.actorUserId,
+          conversationId,
+        );
+        if (!conversation) throw new Error('MESSAGING_GAME_CONVERSATION_READBACK_FAILED');
+        return { outcome: 'ok', conversation, created, replayed: false };
+      });
+    },
+
     listMessages(input) {
       return withTenantTransaction(pool, input.tenantId, async (client) => {
-        const member = await queryOne<{ id: string }>(
+        const member = await getAuthorizedMember(
           client,
-          `select member.id
-             from messaging.conversation_members member
-             join messaging.conversations conversation
-              on conversation.tenant_id = member.tenant_id
-              and conversation.id = member.conversation_id
-             join identity.users viewer_user
-               on viewer_user.tenant_id = member.tenant_id
-              and viewer_user.id = member.user_id
-              and viewer_user.status = 'ACTIVE'
-            where member.tenant_id = $1
-              and member.conversation_id = $2
-              and member.user_id = $3
-              and member.state = 'ACTIVE'
-              and conversation.state = 'OPEN'
-              and conversation.kind = 'DIRECT'`,
-          [input.tenantId, input.conversationId, input.userId],
+          input.tenantId,
+          input.userId,
+          input.conversationId,
         );
         if (!member) return { outcome: 'not_found' };
         const result = await client.query<MessageRow>(
@@ -540,56 +968,28 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
 
     sendMessage(input) {
       return withTenantTransaction(pool, input.tenantId, async (client) => {
-        const member = await queryOne<MemberRow>(
-          client,
-          `select member.id as member_id,
-                  member.last_read_sequence,
-                  conversation.next_sequence - 1 as last_sequence
-             from messaging.conversation_members member
-             join messaging.conversations conversation
-              on conversation.tenant_id = member.tenant_id
-              and conversation.id = member.conversation_id
-             join identity.users current_user
-               on current_user.tenant_id = member.tenant_id
-              and current_user.id = member.user_id
-              and current_user.status = 'ACTIVE'
-             join identity.user_access_profiles current_access
-               on current_access.tenant_id = current_user.tenant_id
-              and current_access.user_id = current_user.id
-              and 'chat.direct.create' = any(current_access.permissions)
-             join messaging.conversation_members other_member
-               on other_member.tenant_id = member.tenant_id
-              and other_member.conversation_id = member.conversation_id
-              and other_member.user_id is not null
-              and other_member.user_id <> member.user_id
-              and other_member.state = 'ACTIVE'
-             join identity.users other_user
-               on other_user.tenant_id = other_member.tenant_id
-              and other_user.id = other_member.user_id
-              and other_user.status = 'ACTIVE'
-             left join profile.privacy_settings target_privacy
-               on target_privacy.tenant_id = other_user.tenant_id
-              and target_privacy.user_id = other_user.id
-            where member.tenant_id = $1
-              and member.conversation_id = $2
-              and member.user_id = $3
-              and member.state = 'ACTIVE'
-              and conversation.state = 'OPEN'
-              and conversation.kind = 'DIRECT'
-              and coalesce(target_privacy.chat_policy, 'AUTHORIZED') = 'AUTHORIZED'`,
-          [input.tenantId, input.conversationId, input.userId],
-        );
-        if (!member) return { outcome: 'not_found' };
-
         const locked = await queryOne<{ next_sequence: number | string }>(
           client,
           `select next_sequence
              from messaging.conversations
-            where tenant_id = $1 and id = $2 and state = 'OPEN' and kind = 'DIRECT'
+            where tenant_id = $1
+              and id = $2
+              and state = 'OPEN'
+              and kind in ('DIRECT', 'GAME')
             for update`,
           [input.tenantId, input.conversationId],
         );
         if (!locked) return { outcome: 'not_found' };
+
+        // Re-evaluate the authoritative access source after serializing on the conversation.
+        // GAME access is never inferred from the possibly stale messaging member row.
+        const member = await getAuthorizedMember(
+          client,
+          input.tenantId,
+          input.userId,
+          input.conversationId,
+        );
+        if (!member) return { outcome: 'not_found' };
 
         const previous = await queryOne<MessageRow>(
           client,
@@ -701,27 +1101,12 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
 
     markRead(input) {
       return withTenantTransaction(pool, input.tenantId, async (client) => {
-        const member = await queryOne<MemberRow>(
+        const member = await getAuthorizedMember(
           client,
-          `select member.id as member_id,
-                  member.last_read_sequence,
-                  conversation.next_sequence - 1 as last_sequence
-             from messaging.conversation_members member
-             join messaging.conversations conversation
-              on conversation.tenant_id = member.tenant_id
-              and conversation.id = member.conversation_id
-             join identity.users current_user
-               on current_user.tenant_id = member.tenant_id
-              and current_user.id = member.user_id
-              and current_user.status = 'ACTIVE'
-            where member.tenant_id = $1
-              and member.conversation_id = $2
-              and member.user_id = $3
-              and member.state = 'ACTIVE'
-              and conversation.state = 'OPEN'
-              and conversation.kind = 'DIRECT'
-            for update of member`,
-          [input.tenantId, input.conversationId, input.userId],
+          input.tenantId,
+          input.userId,
+          input.conversationId,
+          true,
         );
         if (!member) return { outcome: 'not_found' };
 
