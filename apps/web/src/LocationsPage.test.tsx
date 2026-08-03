@@ -34,6 +34,7 @@ describe('published location screens', () => {
       'href',
       `/locations/${locationId}`,
     );
+    expect(screen.queryByRole('link', { name: 'Чаты' })).toBeNull();
   });
 
   it('renders computed status, contact data and a local favorite interaction', () => {

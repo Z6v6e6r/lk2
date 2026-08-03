@@ -837,12 +837,6 @@ function deriveAllowedActions(input: {
     }
   }
 
-  if (viewerRelation === 'ORGANIZER' || viewerRelation === 'PARTICIPANT') {
-    if (game.lifecycleState !== 'DRAFT' && game.lifecycleState !== 'PROVISIONING') {
-      actions.add('OPEN_CHAT');
-    }
-  }
-
   const resultState = resultStateOf(game);
   if (
     game.lifecycleState === 'FINISHED' &&

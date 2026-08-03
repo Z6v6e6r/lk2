@@ -325,7 +325,8 @@ p95 < 2 s после commit; 99.9% intent либо доставлен хотя �
 ## 9. Поэтапное включение и rollback
 
 1. **Foundation:** expand-only таблицы, RLS, domain interfaces, события и feature flags; routes
-   закрыты.
+   закрыты. В текущей release-линии `/chats` и `/chats/new` не публикуются;
+   game/profile DTO fail closed без смонтированного messaging route.
 2. **Direct + contextual read/write:** HTTP history/send/read cursor, затем game/tournament/community
    membership policies.
 3. **Realtime:** tickets, subscriptions, sequence-gap recovery; HTTP остаётся fallback.

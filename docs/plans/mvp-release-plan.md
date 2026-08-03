@@ -94,7 +94,8 @@ Before release:
 - hide `/tournaments`, `/trainings`, `/coaches`, `/subscriptions`, `/promotions`, `/gift-certificates`, `/offers`, and `/chats` from navigation, Home, profile, and deep-link entry points;
 - hide the Home subscription tab rather than render sample or empty future UI;
 - render community membership rows without a detail link until community details are implemented;
-- hide profile contact/chat actions until their server commands and access source exist;
+- keep the contact CTA visibly unavailable and hide chat actions until their separate server
+  commands and access sources exist; never publish `/chats` or `/chats/new` as placeholders;
 - reject or safely redirect notification deep links outside the route allowlist;
 - hide Web Push controls unless global, tenant, provider, browser, and same-origin service-worker gates have all passed;
 - return a real `404`/stable domain error for unsupported deep links; do not render “section is connecting” placeholders;

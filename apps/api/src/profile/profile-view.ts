@@ -16,7 +16,8 @@ export interface PlayerProfileViewInput {
 
 export interface ProfileActionCapability {
   readonly status: 'AVAILABLE' | 'LOCKED' | 'HIDDEN';
-  readonly reason?: 'ACCESS_REQUIRED' | 'PROFILE_RESTRICTED' | 'SELF_PROFILE';
+  readonly reason?:
+    'ACCESS_REQUIRED' | 'PROFILE_RESTRICTED' | 'SELF_PROFILE' | 'FEATURE_UNAVAILABLE';
   readonly route?: string;
 }
 
@@ -56,11 +57,17 @@ function selfAction(): ProfileActionCapability {
 function otherAction(
   granted: boolean,
   policy: ProfilePrivacySettings['contactPolicy'],
-  route: string,
+  unavailablePresentation: 'LOCKED' | 'HIDDEN',
 ): ProfileActionCapability {
   if (policy === 'NOBODY') return { status: 'LOCKED', reason: 'PROFILE_RESTRICTED' };
   if (!granted) return { status: 'LOCKED', reason: 'ACCESS_REQUIRED' };
-  return { status: 'AVAILABLE', route };
+  // Authorization and target privacy are necessary but not sufficient to
+  // publish an interaction. Until the direct-conversation command is mounted
+  // in the current release, keep the capability out of the rendered UI rather
+  // than advertising a dead `/chats/new` route.
+  return unavailablePresentation === 'HIDDEN'
+    ? { status: 'HIDDEN' }
+    : { status: 'LOCKED', reason: 'FEATURE_UNAVAILABLE' };
 }
 
 /**
@@ -117,20 +124,8 @@ export function buildPlayerProfileView(input: PlayerProfileViewInput): PlayerPro
             ? 'EXTENDED'
             : 'BASIC',
       visibleSections,
-      contact: isSelf
-        ? selfAction()
-        : otherAction(
-            canContact,
-            policy.contactPolicy,
-            `/chats/new?participantId=${input.profile.userId}&intent=contact`,
-          ),
-      chat: isSelf
-        ? selfAction()
-        : otherAction(
-            canChat,
-            policy.chatPolicy,
-            `/chats/new?participantId=${input.profile.userId}`,
-          ),
+      contact: isSelf ? selfAction() : otherAction(canContact, policy.contactPolicy, 'LOCKED'),
+      chat: isSelf ? selfAction() : otherAction(canChat, policy.chatPolicy, 'HIDDEN'),
     },
   };
 }

@@ -60,7 +60,7 @@ describe('player profile view policy', () => {
     expect(JSON.stringify(view)).not.toContain('54000');
   });
 
-  it('enables only actions explicitly granted by server permissions', () => {
+  it('does not publish chat routes before their server commands are mounted', () => {
     const view = buildPlayerProfileView({
       profile: source,
       viewerUserId: '6a81e965-c508-4321-812c-4be323606a70',
@@ -75,13 +75,11 @@ describe('player profile view policy', () => {
     expect(view.profile.level.value).toBe(3.8);
     expect(view.access.tier).toBe('INTERACTION');
     expect(view.access.contact).toEqual({
-      status: 'AVAILABLE',
-      route: `/chats/new?participantId=${source.userId}&intent=contact`,
+      status: 'LOCKED',
+      reason: 'FEATURE_UNAVAILABLE',
     });
-    expect(view.access.chat).toEqual({
-      status: 'AVAILABLE',
-      route: `/chats/new?participantId=${source.userId}`,
-    });
+    expect(view.access.chat).toEqual({ status: 'HIDDEN' });
+    expect(JSON.stringify(view)).not.toContain('/chats');
   });
 
   it('lets the target privacy policy override a viewer permission', () => {
