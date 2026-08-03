@@ -391,6 +391,15 @@ later complete cycle succeeds; a running cycle becomes stale when it has made no
 `max(30s, 3 * OUTBOX_POLL_INTERVAL_MS, 2 * OUTBOX_CONFIRM_TIMEOUT_MS)`. The readiness response
 exposes only content-free `checks` and `coreCycle` state/age fields.
 
+The active tenant list is read globally in deterministic UUID order. Failure to read that list fails
+the whole cycle. Work after that boundary is tenant-local: a lifecycle or outbox failure for one
+tenant is logged and marks the complete cycle failed, but does not prevent the remaining tenants
+from running. The starting offset advances by one on each cycle, including partially failed cycles,
+so a repeatedly slow or failing tenant cannot permanently occupy the first slot. Progress is
+recorded after every attempted tenant, including failures; readiness still remains false until one
+complete cycle finishes without any tenant failure. A terminal RabbitMQ failure sets shutdown state,
+which stops the orchestrator from starting another tenant and proceeds through fail-fast exit.
+
 An unexpected RabbitMQ connection `error` or `close` is terminal because all publisher and consumer
 channels belong to that connection. The worker first drops readiness, then performs a cleanup
 bounded to five seconds and exits with status 1. The configured supervisor must restart it; after

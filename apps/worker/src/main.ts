@@ -51,6 +51,7 @@ import { runLegacyGamesRosterSyncCycle } from './legacy-games-roster-sync.js';
 import { runVivaHomeSyncCycle } from './viva-home-sync.js';
 import { WebPushDeliveryAdapter } from './web-push-adapter.js';
 import { runWebPushDeliveryBatch } from './web-push-delivery.js';
+import { runFairTenantCycle } from './tenant-cycle-orchestrator.js';
 import {
   calculateWorkerForwardProgressMaxStaleMs,
   createRabbitFailureHandler,
@@ -315,6 +316,7 @@ const healthServer = createServer((request, response) => {
 });
 healthServer.listen(config.WORKER_HEALTH_PORT, '0.0.0.0');
 logger.info({ mode: config.OUTBOX_PUBLISH_MODE }, 'outbox publisher configured');
+let tenantCycleStartOffset = 0;
 
 const publishConfiguredOutboxBatch = (tenantId: string): Promise<number> => {
   if (config.OUTBOX_PUBLISH_MODE === 'leased') {
@@ -347,24 +349,34 @@ const runCycle = async (): Promise<void> => {
   let failed = false;
   try {
     const tenants = await pool.query<{ id: string }>(
-      'select id from identity.tenants where active = true',
+      'select id from identity.tenants where active = true order by id',
     );
     workerForwardProgress.markProgress();
-    for (const tenant of tenants.rows) {
-      if (config.GAMES_READ_ENABLED) {
-        await runGameLifecycleProcessManagerCycle({
-          repository: gameRepository,
-          tenantId: tenant.id,
-          workerId: gamesProcessManagerWorkerId,
-          logger,
-          batchSize: config.OUTBOX_BATCH_SIZE,
-        });
-        workerForwardProgress.markProgress();
-      }
-      publishedCount += await publishConfiguredOutboxBatch(tenant.id);
-      workerForwardProgress.markProgress();
-    }
-    workerForwardProgress.markCycleSucceeded();
+    const tenantCycle = await runFairTenantCycle({
+      tenants: tenants.rows,
+      startOffset: tenantCycleStartOffset,
+      shouldStop: () => shuttingDown,
+      runTenant: async (tenant) => {
+        if (config.GAMES_READ_ENABLED) {
+          await runGameLifecycleProcessManagerCycle({
+            repository: gameRepository,
+            tenantId: tenant.id,
+            workerId: gamesProcessManagerWorkerId,
+            logger,
+            batchSize: config.OUTBOX_BATCH_SIZE,
+          });
+        }
+        publishedCount += await publishConfiguredOutboxBatch(tenant.id);
+      },
+      onTenantFailure: (tenant, error) => {
+        logger.error({ err: error, tenantId: tenant.id }, 'worker tenant cycle failed');
+      },
+      onProgress: () => workerForwardProgress.markProgress(),
+    });
+    tenantCycleStartOffset = tenantCycle.nextStartOffset;
+    failed = tenantCycle.failedCount > 0 || tenantCycle.interrupted;
+    if (failed) workerForwardProgress.markCycleFailed();
+    else workerForwardProgress.markCycleSucceeded();
     if (publishedCount > 0) logger.info({ count: publishedCount }, 'outbox events published');
   } catch (error) {
     failed = true;
