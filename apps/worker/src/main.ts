@@ -51,6 +51,11 @@ import { runLegacyGamesRosterSyncCycle } from './legacy-games-roster-sync.js';
 import { runVivaHomeSyncCycle } from './viva-home-sync.js';
 import { WebPushDeliveryAdapter } from './web-push-adapter.js';
 import { runWebPushDeliveryBatch } from './web-push-delivery.js';
+import {
+  calculateWorkerForwardProgressMaxStaleMs,
+  createRabbitFailureHandler,
+  WorkerForwardProgressTracker,
+} from './worker-runtime-health.js';
 
 const config = loadConfig(process.env, { profilePhotoStorage: true });
 const logger = createLogger('worker', config.LOG_LEVEL, process.env.RELEASE);
@@ -234,14 +239,26 @@ if (giftCertificateRuntime) {
 let shuttingDown = false;
 let rabbitReady = true;
 const workerMetrics = createWorkerMetricRecorder();
+const workerForwardProgress = new WorkerForwardProgressTracker(
+  calculateWorkerForwardProgressMaxStaleMs({
+    pollIntervalMs: config.OUTBOX_POLL_INTERVAL_MS,
+    confirmTimeoutMs: config.OUTBOX_CONFIRM_TIMEOUT_MS,
+  }),
+);
+const handleRabbitFailure = createRabbitFailureHandler({
+  logger,
+  isShuttingDown: () => shuttingDown,
+  markUnavailable: () => {
+    rabbitReady = false;
+  },
+  terminate: (reason) => shutdown(`RABBITMQ_${reason.toUpperCase()}`, 1),
+});
 
 connection.on('close', () => {
-  rabbitReady = false;
-  logger.error('RabbitMQ connection closed');
+  handleRabbitFailure('close');
 });
 connection.on('error', (error) => {
-  rabbitReady = false;
-  logger.error({ error }, 'RabbitMQ connection error');
+  handleRabbitFailure('error', error);
 });
 redis?.on('ready', () => {
   logger.info('Redis connection for Viva Home sync ready');
@@ -273,8 +290,21 @@ const handleHealthRequest = async (
             .catch(() => false)
         : Promise.resolve(true),
     ]);
-    response.statusCode = databaseReady && rabbitReady && vivaSyncReady ? 200 : 503;
-    response.end(JSON.stringify({ status: response.statusCode === 200 ? 'ready' : 'not_ready' }));
+    const forwardProgress = workerForwardProgress.snapshot();
+    const checks = {
+      database: databaseReady,
+      rabbitmq: rabbitReady,
+      vivaSync: vivaSyncReady,
+      forwardProgress: forwardProgress.ready,
+    };
+    response.statusCode = Object.values(checks).every(Boolean) ? 200 : 503;
+    response.end(
+      JSON.stringify({
+        status: response.statusCode === 200 ? 'ready' : 'not_ready',
+        checks,
+        coreCycle: forwardProgress,
+      }),
+    );
     return;
   }
   response.statusCode = 404;
@@ -305,18 +335,21 @@ const publishConfiguredOutboxBatch = (tenantId: string): Promise<number> => {
     logger,
     tenantId,
     batchSize: config.OUTBOX_BATCH_SIZE,
+    confirmTimeoutMs: config.OUTBOX_CONFIRM_TIMEOUT_MS,
   });
 };
 
 const runCycle = async (): Promise<void> => {
   if (shuttingDown) return;
   const startedAt = Date.now();
+  workerForwardProgress.markCycleStarted(startedAt);
   let publishedCount = 0;
   let failed = false;
   try {
     const tenants = await pool.query<{ id: string }>(
       'select id from identity.tenants where active = true',
     );
+    workerForwardProgress.markProgress();
     for (const tenant of tenants.rows) {
       if (config.GAMES_READ_ENABLED) {
         await runGameLifecycleProcessManagerCycle({
@@ -326,12 +359,16 @@ const runCycle = async (): Promise<void> => {
           logger,
           batchSize: config.OUTBOX_BATCH_SIZE,
         });
+        workerForwardProgress.markProgress();
       }
       publishedCount += await publishConfiguredOutboxBatch(tenant.id);
+      workerForwardProgress.markProgress();
     }
+    workerForwardProgress.markCycleSucceeded();
     if (publishedCount > 0) logger.info({ count: publishedCount }, 'outbox events published');
   } catch (error) {
     failed = true;
+    workerForwardProgress.markCycleFailed();
     logger.error({ error }, 'worker core cycle failed');
     // The event remains unpublished and will be retried by the next bounded cycle.
   } finally {
@@ -583,20 +620,30 @@ const runLegacyGamesRosterSync = async (): Promise<void> => {
   }
 };
 
-const shutdown = async (signal: string): Promise<void> => {
+async function shutdown(signal: string, exitCode = 0): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
-  logger.info({ signal }, 'shutting down');
+  rabbitReady = false;
+  logger.info({ signal, exitCode }, 'shutting down');
   healthServer.close();
-  await operationalChannel?.close();
-  await consumerChannel.close();
-  await channel.close();
-  await connection.close();
-  await redis?.quit().catch(() => redis.disconnect());
-  await pool.end();
-  await telemetry?.shutdown();
-  process.exit(0);
-};
+  const forcedExit = setTimeout(() => process.exit(exitCode), 5_000);
+  forcedExit.unref();
+  const results = await Promise.allSettled([
+    operationalChannel?.close(),
+    consumerChannel.close(),
+    channel.close(),
+    connection.close(),
+    redis?.quit().catch(() => redis.disconnect()),
+    pool.end(),
+    telemetry?.shutdown(),
+  ]);
+  const failedClosures = results.filter((result) => result.status === 'rejected').length;
+  if (failedClosures > 0) {
+    logger.error({ failedClosures, signal }, 'worker shutdown completed with cleanup failures');
+  }
+  clearTimeout(forcedExit);
+  process.exit(exitCode);
+}
 
 process.once('SIGTERM', () => void shutdown('SIGTERM'));
 process.once('SIGINT', () => void shutdown('SIGINT'));

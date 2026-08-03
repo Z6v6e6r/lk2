@@ -339,15 +339,42 @@ tenant, user, phone, message, endpoint or provider identifiers. Prometheus evalu
 | `PadlHubOutboxPublishFailures`              | A publish cycle failed in the last 5 minutes                   | P1       | Inspect PostgreSQL/RabbitMQ connectivity and correlation-safe worker logs.                   |
 | `PadlHubOperationalMetricsCollectionFailed` | PostgreSQL/RabbitMQ snapshot failed for 2 minutes              | P2       | Treat backlog monitoring as blind until collection is restored.                              |
 
-Backlog does not change `/health/ready`: restarting a healthy worker does not repair retained or
-delayed work and can amplify an incident. Readiness remains dependency-based; alerts drive
-containment. Validate both local and Jetson rule copies before promotion:
+Backlog depth alone does not change `/health/ready`: restarting a worker does not repair retained or
+delayed work and can amplify an incident. Readiness requires PostgreSQL, RabbitMQ, optional Viva
+sync Redis, and recent successful forward progress by the worker core cycle. A new worker stays
+unready until its first complete core cycle succeeds. Any failed cycle makes it unready until a
+later complete cycle succeeds; a running cycle becomes stale when it has made no progress within
+`max(30s, 3 * OUTBOX_POLL_INTERVAL_MS, 2 * OUTBOX_CONFIRM_TIMEOUT_MS)`. The readiness response
+exposes only content-free `checks` and `coreCycle` state/age fields.
+
+An unexpected RabbitMQ connection `error` or `close` is terminal because all publisher and consumer
+channels belong to that connection. The worker first drops readiness, then performs a cleanup
+bounded to five seconds and exits with status 1. The configured supervisor must restart it; after
+restart, require a successful core cycle and restored consumers before reopening rollout gates. If
+the process remains running after a logged terminal Rabbit event, treat supervisor/runtime wiring as
+broken rather than manually marking the worker healthy.
+
+Validate both local and Jetson rule copies before promotion:
 
 ```bash
 cmp infra/monitoring/padlhub-alerts.yaml deploy/jetson/monitoring/padlhub-alerts.yaml
 docker compose --profile monitoring exec -T prometheus \
   promtool check rules /etc/prometheus/rules/padlhub-alerts.yaml
 ```
+
+### Transactional outbox confirm bound
+
+`OUTBOX_CONFIRM_TIMEOUT_MS` applies to both transactional and leased publishers. In transactional
+mode, the database row lock is held only until RabbitMQ confirms the batch or this bound expires.
+On timeout, the transaction rolls back, the event remains unpublished, the core cycle is marked
+failed, and readiness stays false until a later complete cycle succeeds.
+
+A broker may accept an event immediately before the local confirm deadline. Retrying that
+unpublished row can therefore deliver the same event again; all consumers must deduplicate on event
+`id`. Do not raise the timeout to mask RabbitMQ latency. Investigate connection/channel health,
+broker resource alarms, confirm latency and outbox age. A repeated
+`OUTBOX_CONFIRM_TIMEOUT` blocks rollout expansion even if the TCP connection has not emitted a
+terminal event.
 
 ### Leased outbox staging gate
 
