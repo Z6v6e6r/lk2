@@ -51,6 +51,7 @@
     "notifications:web-push:secrets:provision": "node --import tsx scripts/provision-local-web-push-secrets.ts",
     "notifications:web-push:live-smoke": "node --env-file-if-exists=.env --import tsx scripts/verify-live-web-push-sandbox.ts",
     "notifications:web-push:verify": "node --import tsx scripts/verify-web-push-e2e.ts",
+    "messaging:readiness:preflight": "node --env-file-if-exists=.env --import tsx scripts/preflight-messaging-two-player.ts",
     "games:read:load": "node --import tsx scripts/verify-games-read-load.ts",
     "outbox:lease:load": "node --import tsx scripts/verify-outbox-lease-load.ts",
     "outbox:lease:soak": "node --import tsx scripts/verify-outbox-lease-soak.ts",
