@@ -15,6 +15,11 @@ on:
         required: false
         type: boolean
         default: false
+      web_only_digest:
+        description: Deploy one already-built immutable web digest only
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -132,7 +137,7 @@ jobs:
           exit 0
 
   build:
-    if: ${{ github.event_name == 'push' || !inputs.diagnose_home }}
+    if: ${{ github.event_name == 'push' || (!inputs.diagnose_home && inputs.web_only_digest == '') }}
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -165,6 +170,45 @@ jobs:
           name: digest-${{ matrix.service }}
           path: digests/${{ matrix.service }}
           retention-days: 30
+
+  recover-web:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.web_only_digest != '' }}
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - name: Join the staging tailnet
+        uses: tailscale/github-action@v4
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+          ping: ${{ secrets.STAGING_HOST }}
+      - name: Configure audited SSH
+        env:
+          DEPLOY_KEY: ${{ secrets.STAGING_DEPLOY_KEY }}
+          KNOWN_HOSTS: ${{ secrets.STAGING_KNOWN_HOSTS }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+      - name: Deploy only the immutable web image
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WEB_DIGEST: ${{ inputs.web_only_digest }}
+        run: |
+          case "$WEB_DIGEST" in
+            sha256:[0-9a-f][0-9a-f]*) ;;
+            *) echo "Invalid web digest" >&2; exit 1 ;;
+          esac
+          if [ "${#WEB_DIGEST}" -ne 71 ]; then
+            echo "Invalid web digest length" >&2
+            exit 1
+          fi
+          scp deploy/jetson/recover-web-only.sh \
+            "phub-deploy@$HOST:/opt/phub/recover-web-only.sh"
+          printf '%s' "$GHCR_TOKEN" | ssh -o ServerAliveInterval=10 -o ServerAliveCountMax=2 \
+            "phub-deploy@$HOST" \
+            "WEB_DIGEST='$WEB_DIGEST' EXPECTED_RELEASE='${{ github.sha }}' sh /opt/phub/recover-web-only.sh"
 
   deploy:
     needs: build
