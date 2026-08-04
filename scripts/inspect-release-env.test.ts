@@ -48,15 +48,18 @@ describe('release.env metadata-only inspector', () => {
   it('reports only safe metadata for invalid lines and redacts every value', async () => {
     const carriageReturnSecret = 'carriage-return-secret';
     const unsafeKeySecret = 'unsafe-key-secret';
+    const nonAsciiSecret = 'секрет';
     const result = await inspect(
-      `REGISTRY=ghcr.io/example\nAPI_TOKEN=${carriageReturnSecret}\r\nlower.key=${unsafeKeySecret}\n`,
+      `REGISTRY=ghcr.io/example\nAPI_TOKEN=${carriageReturnSecret}\r\nlower.key=${unsafeKeySecret}\nRELEASE=${nonAsciiSecret}\n`,
     );
 
     expect(result.code).not.toBe(0);
     expect(result.stderr).toContain('release_env_invalid line=2 key=API_TOKEN length=33');
     expect(result.stderr).toContain('release_env_invalid line=3 key=UNSAFE_KEY length=27');
+    expect(result.stderr).toContain('release_env_invalid line=4 key=RELEASE length=20');
     expect(result.stderr).toContain('values were redacted');
     expect(`${result.stdout}${result.stderr}`).not.toContain(carriageReturnSecret);
     expect(`${result.stdout}${result.stderr}`).not.toContain(unsafeKeySecret);
+    expect(`${result.stdout}${result.stderr}`).not.toContain(nonAsciiSecret);
   });
 });

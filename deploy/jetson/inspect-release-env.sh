@@ -15,7 +15,7 @@ release_env_path="$1"
 [ -f "$release_env_path" ] && [ ! -L "$release_env_path" ] ||
   fail 'release.env is absent or unsafe'
 
-awk '
+LC_ALL=C awk '
   function diagnostic_key(line, equals, key) {
     equals = index(line, "=")
     if (equals <= 1) return "NO_KEY"
@@ -26,7 +26,7 @@ awk '
 
   /^[[:space:]]*$/ { next }
   /^#/ { next }
-  /^[A-Z][A-Z0-9_]*=[^[:cntrl:]]*$/ { next }
+  /^[A-Z][A-Z0-9_]*=[ -~]*$/ { next }
   {
     invalid = 1
     printf "release_env_invalid line=%d key=%s length=%d\n", NR, diagnostic_key($0), length($0)
