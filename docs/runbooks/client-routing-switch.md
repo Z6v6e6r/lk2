@@ -46,6 +46,13 @@ reviewed tenant key and operator UUID. An empty confirmation runs only the dry-r
 idempotency/correlation identifiers. The workflow executes the repository operator inside the
 digest-pinned migrator image so `DATABASE_URL` is never copied to GitHub Actions or printed.
 
+The 60-second lifetime is also an activation freshness guard and must not start before the staging
+image build. A full `DEPLOY_STAGING` therefore requires the same tenant key, operator UUID and exact
+`APPLY_ROUTING_PLAN` confirmation. After image pull, migration, TLS and local HomeBase verification,
+the deployment performs a fresh audited dry-run and apply immediately before
+`activate-live-home.sh`. Do not replace this just-in-time refresh with a longer lifetime: the routing
+operator intentionally accepts only 30–300 seconds.
+
 ## Mixed-mode smoke
 
 1. Restore a real PadlHub user session with an active Viva delegation.

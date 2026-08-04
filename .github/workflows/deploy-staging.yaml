@@ -7,6 +7,18 @@ on:
         description: Type DEPLOY_STAGING to deploy the main branch to staging
         required: false
         type: string
+      routing_tenant_key:
+        description: Active staging tenant whose routing plan is refreshed before live Home activation
+        required: false
+        type: string
+      routing_actor_id:
+        description: Operator UUID recorded for the just-in-time routing refresh
+        required: false
+        type: string
+      routing_apply_confirmation:
+        description: Type APPLY_ROUTING_PLAN to authorize the audited just-in-time routing refresh
+        required: false
+        type: string
       diagnose_home:
         description: Read-only live Home source diagnostics
         required: true
@@ -36,6 +48,9 @@ jobs:
         name: Validate requested staging operation
         env:
           DEPLOY_CONFIRMATION: ${{ inputs.deploy_confirmation }}
+          ROUTING_TENANT_KEY: ${{ inputs.routing_tenant_key }}
+          ROUTING_ACTOR_ID: ${{ inputs.routing_actor_id }}
+          ROUTING_APPLY_CONFIRMATION: ${{ inputs.routing_apply_confirmation }}
           DIAGNOSE_HOME: ${{ inputs.diagnose_home }}
           RECOVER_UDISKS: ${{ inputs.recover_udisks }}
           REQUEST_REF: ${{ github.ref }}
@@ -59,6 +74,18 @@ jobs:
           fi
           if [ "$REQUEST_REF" != 'refs/heads/main' ]; then
             echo '::error::Staging deployment is allowed only from refs/heads/main.'
+            exit 1
+          fi
+          if ! printf '%s' "$ROUTING_TENANT_KEY" | grep -Eq '^[a-z0-9][a-z0-9-]{1,62}$'; then
+            echo '::error::Deployment requires a valid staging routing tenant key.'
+            exit 1
+          fi
+          if ! printf '%s' "$ROUTING_ACTOR_ID" | grep -Eiq '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'; then
+            echo '::error::Deployment routing actor ID must be a UUID.'
+            exit 1
+          fi
+          if [ "$ROUTING_APPLY_CONFIRMATION" != 'APPLY_ROUTING_PLAN' ]; then
+            echo '::error::Deployment requires the exact APPLY_ROUTING_PLAN confirmation.'
             exit 1
           fi
           printf '%s\n' 'mode=deploy' >> "$GITHUB_OUTPUT"
@@ -282,6 +309,10 @@ jobs:
           scp deploy/compose.staging.yaml "phub-deploy@$HOST:/opt/phub/compose.yaml"
           scp deploy/jetson/nginx/default.conf "phub-deploy@$HOST:/opt/phub/nginx/default.conf"
           scp deploy/jetson/activate-live-home.sh "phub-deploy@$HOST:/opt/phub/activate-live-home.sh"
+          scp deploy/jetson/run-client-routing-plan.sh \
+            "phub-deploy@$HOST:/opt/phub/run-client-routing-plan.sh.next"
+          scp scripts/set-client-routing-plan.ts \
+            "phub-deploy@$HOST:/opt/phub/set-client-routing-plan.ts.next"
           scp deploy/jetson/verify-home-base.sh \
             "phub-deploy@$HOST:/opt/phub/verify-home-base.sh"
           scp deploy/jetson/verify-live-staging-data.sh \
@@ -292,6 +323,10 @@ jobs:
             "phub-deploy@$HOST:/opt/phub/tls-ingress/Caddyfile.next"
           ssh "phub-deploy@$HOST" '
             set -eu
+            mv /opt/phub/run-client-routing-plan.sh.next /opt/phub/run-client-routing-plan.sh
+            chmod 0755 /opt/phub/run-client-routing-plan.sh
+            mv /opt/phub/set-client-routing-plan.ts.next /opt/phub/set-client-routing-plan.ts
+            chmod 0644 /opt/phub/set-client-routing-plan.ts
             auth_env=/opt/phub/staging.auth.env
             auth_env_tmp="${auth_env}.$$"
             umask 077
@@ -471,6 +506,18 @@ jobs:
         env:
           HOST: ${{ secrets.STAGING_HOST }}
         run: ssh "phub-deploy@$HOST" 'sh /opt/phub/verify-home-base.sh'
+      - name: Refresh the audited routing plan immediately before live Home activation
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+          TENANT_KEY: ${{ inputs.routing_tenant_key }}
+          ACTOR_ID: ${{ inputs.routing_actor_id }}
+        run: |
+          operation_id="routing-mixed-deploy-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          reason="staging-live-home-activation-${GITHUB_SHA}"
+          ssh "phub-deploy@$HOST" /opt/phub/run-client-routing-plan.sh \
+            "$TENANT_KEY" "$ACTOR_ID" "$operation_id" "$operation_id" "$reason" false
+          ssh "phub-deploy@$HOST" /opt/phub/run-client-routing-plan.sh \
+            "$TENANT_KEY" "$ACTOR_ID" "$operation_id" "$operation_id" "$reason" true
       - name: Activate and verify live Home projection
         env:
           HOST: ${{ secrets.STAGING_HOST }}

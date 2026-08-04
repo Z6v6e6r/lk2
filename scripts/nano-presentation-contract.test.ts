@@ -33,6 +33,7 @@ describe('Nano presentation release contract', () => {
     );
     expect(validateJob).toContain('[ -n "$DEPLOY_CONFIRMATION" ]');
     expect(validateJob).toContain('[ "$DEPLOY_CONFIRMATION" != \'DEPLOY_STAGING\' ]');
+    expect(validateJob).toContain('[ "$ROUTING_APPLY_CONFIRMATION" != \'APPLY_ROUTING_PLAN\' ]');
     expect(validateJob).toContain('[ "$REQUEST_REF" != \'refs/heads/main\' ]');
     expect(validateJob).toContain('mode=diagnostics');
     expect(validateJob).toContain('mode=deploy');
@@ -164,6 +165,19 @@ describe('Nano presentation release contract', () => {
     expect(stagingRoutingOperator).toContain(
       '/opt/phub/set-client-routing-plan.ts:/app/set-client-routing-plan.ts:ro',
     );
+    const homeBaseGate = stagingWorkflow.indexOf('Verify local HomeBase projections');
+    const routingRefresh = stagingWorkflow.indexOf(
+      'Refresh the audited routing plan immediately before live Home activation',
+    );
+    const liveHomeActivation = stagingWorkflow.indexOf('Activate and verify live Home projection');
+    expect(homeBaseGate).toBeGreaterThan(-1);
+    expect(routingRefresh).toBeGreaterThan(homeBaseGate);
+    expect(liveHomeActivation).toBeGreaterThan(routingRefresh);
+    expect(stagingWorkflow).toContain(
+      'routing-mixed-deploy-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}',
+    );
+    expect(stagingWorkflow).toContain('"$reason" false');
+    expect(stagingWorkflow).toContain('"$reason" true');
   });
 
   it('bounds communities and activates all four independent CUP placements', () => {
