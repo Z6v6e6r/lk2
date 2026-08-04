@@ -88,6 +88,8 @@ describe('Nano presentation release contract', () => {
     expect(testPlayerDiagnostic).toContain('default_transaction_read_only=on');
     expect(testPlayerDiagnostic).toContain('begin transaction read only;');
     expect(testPlayerDiagnostic).toContain("'phone=***' || suffix");
+    expect(testPlayerDiagnostic).toContain("'operator_candidate'");
+    expect(testPlayerDiagnostic).toContain("'notifications.manage' = any(access.permissions)");
     expect(testPlayerDiagnostic).not.toContain('phone_e164::text');
     expect(testPlayerDiagnostic).not.toContain('refresh_token_ciphertext');
     expect(testPlayerDiagnostic).not.toContain('subject');

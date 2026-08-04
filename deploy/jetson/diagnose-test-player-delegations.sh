@@ -142,6 +142,28 @@ select concat_ws('|',
 from matched
 order by suffix, user_id nulls last;
 
+select concat_ws('|',
+  'operator_candidate',
+  'user_id=' || identity_user.id::text,
+  'phone=***' || coalesce(right(profile.phone_e164, 4), 'NONE'),
+  'roles=' || array_to_string(access.roles, ','),
+  'permissions=' || array_to_string(access.permissions, ',')
+)
+from identity.tenants tenant
+join identity.users identity_user
+  on identity_user.tenant_id = tenant.id
+ and identity_user.status = 'ACTIVE'
+join identity.user_access_profiles access
+  on access.tenant_id = identity_user.tenant_id
+ and access.user_id = identity_user.id
+left join profile.user_summaries profile
+  on profile.tenant_id = identity_user.tenant_id
+ and profile.user_id = identity_user.id
+where tenant.tenant_key = 'local-padel'
+  and 'admin' = any(access.roles)
+  and 'notifications.manage' = any(access.permissions)
+order by identity_user.id;
+
 commit;
 SQL
 )"
