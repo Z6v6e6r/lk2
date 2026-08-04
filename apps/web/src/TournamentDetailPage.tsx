@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import type { MouseEvent as ReactMouseEvent } from 'react';
 
 import { EventCalendarIcon, EventLevelIcon, EventLocationIcon } from './ActivityCardIcons.js';
 import type {
@@ -7,9 +8,55 @@ import type {
   TournamentParticipantRoster,
 } from './auth-gateway.js';
 import { avatarBackgroundUrl, playerInitials } from './avatar-backgrounds.js';
+import { UpcomingBookingCard, type HomeUpcomingItem } from './HomeDashboardPage.js';
 import { tournamentDetailRange } from './tournament-detail-range.js';
 
 type TournamentTab = 'participants' | 'rules' | 'results';
+
+function returnToPreviousPage(event: ReactMouseEvent<HTMLAnchorElement>): void {
+  if (typeof window === 'undefined' || window.history.length <= 1) return;
+  event.preventDefault();
+  window.history.back();
+}
+
+function routeEventId(route: string): string | null {
+  const query = route.split('?')[1];
+  return query ? new URLSearchParams(query).get('event') : null;
+}
+
+function TournamentBookingView({
+  booking,
+}: {
+  readonly booking: HomeUpcomingItem;
+}): React.JSX.Element {
+  return (
+    <main
+      className="tournament-detail tournament-detail--booking"
+      aria-labelledby="tournament-title"
+    >
+      <header className="tournament-detail__header">
+        <a
+          className="tournament-detail__round-button"
+          href="/"
+          aria-label="Назад к моим записям"
+          onClick={returnToPreviousPage}
+        >
+          <BackIcon />
+        </a>
+        <strong>Карточка турнира</strong>
+        <span aria-hidden="true" />
+      </header>
+      <section className="tournament-detail__booking-card" aria-label="Турнир из моих записей">
+        <div>
+          <span>МОЯ ЗАПИСЬ</span>
+          <h1 id="tournament-title">{booking.title}</h1>
+          <p role="status">Показаны подтверждённые данные из вашей записи.</p>
+        </div>
+        <UpcomingBookingCard item={booking} showAction={false} />
+      </section>
+    </main>
+  );
+}
 
 function schedule(tournament: PublicTournamentSummary): {
   readonly day: string;
@@ -34,6 +81,50 @@ function levelLabel(tournament: PublicTournamentSummary): string {
   const range = tournament.levelRange;
   if (!range) return 'Любой уровень';
   return range.from === range.to ? range.from : `от ${range.from} до ${range.to}`;
+}
+
+const TOURNAMENT_LEAVE_CUTOFF_MS = 24 * 60 * 60 * 1_000;
+
+function tournamentParticipationAction(
+  tournament: PublicTournamentSummary,
+  booking: HomeUpcomingItem | null,
+  now = Date.now(),
+): { readonly label: string; readonly disabled: boolean; readonly hint: string } {
+  if (booking?.status === 'confirmed') {
+    const canLeave = Date.parse(tournament.startsAt) - now > TOURNAMENT_LEAVE_CUTOFF_MS;
+    return canLeave
+      ? {
+          label: 'Покинуть турнир',
+          disabled: false,
+          hint: 'Выход из турнира будет подключён отдельным безопасным действием',
+        }
+      : {
+          label: 'Вы записаны',
+          disabled: true,
+          hint: 'Покинуть турнир можно не позднее чем за 24 часа до начала',
+        };
+  }
+  if (booking?.status === 'waitlist') {
+    return {
+      label: 'Вы в листе ожидания',
+      disabled: true,
+      hint: 'Управление листом ожидания будет подключено отдельным безопасным действием',
+    };
+  }
+  if (booking?.status === 'payment_required') {
+    return {
+      label: 'Нужна оплата',
+      disabled: true,
+      hint: 'Оплата участия будет подключена отдельным безопасным действием',
+    };
+  }
+  return tournament.status === 'FULL'
+    ? { label: 'Мест нет', disabled: true, hint: 'Регистрация на турнир завершена' }
+    : {
+        label: 'Записаться на турнир',
+        disabled: false,
+        hint: 'Запись будет подключена отдельным безопасным действием',
+      };
 }
 
 function BackIcon(): React.JSX.Element {
@@ -78,11 +169,13 @@ function PeopleIcon(): React.JSX.Element {
 
 function TournamentView({
   tournament,
+  booking,
   roster,
   rosterLoading,
   rosterError,
 }: {
   readonly tournament: PublicTournamentSummary;
+  readonly booking: HomeUpcomingItem | null;
   readonly roster: TournamentParticipantRoster | null;
   readonly rosterLoading: boolean;
   readonly rosterError: boolean;
@@ -94,11 +187,17 @@ function TournamentView({
   const organizerFallback = organizer
     ? avatarBackgroundUrl(`${tournament.id}:${organizer.displayName}`)
     : avatarBackgroundUrl(tournament.id);
+  const participationAction = tournamentParticipationAction(tournament, booking);
 
   return (
     <main className="tournament-detail" aria-labelledby="tournament-title">
       <header className="tournament-detail__header">
-        <a className="tournament-detail__round-button" href="/games" aria-label="Назад к событиям">
+        <a
+          className="tournament-detail__round-button"
+          href="/games"
+          aria-label="Назад к событиям"
+          onClick={returnToPreviousPage}
+        >
           <BackIcon />
         </a>
         <strong>{tournament.title}</strong>
@@ -257,10 +356,10 @@ function TournamentView({
       </section>
 
       <footer className="tournament-detail__action">
-        <button type="button" disabled={tournament.status === 'FULL'}>
-          {tournament.status === 'FULL' ? 'Мест нет' : 'Записаться на турнир'}
+        <button type="button" disabled={participationAction.disabled}>
+          {participationAction.label}
         </button>
-        <small>Запись будет подключена отдельным безопасным действием</small>
+        <small>{participationAction.hint}</small>
       </footer>
     </main>
   );
@@ -273,29 +372,84 @@ export function TournamentDetailPage({
   readonly gateway: AuthGateway;
   readonly tournamentId: string | null;
 }): React.JSX.Element {
-  const [tournament, setTournament] = useState<PublicTournamentSummary | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [roster, setRoster] = useState<TournamentParticipantRoster | null>(null);
-  const [rosterError, setRosterError] = useState(false);
+  const [detail, setDetail] = useState<
+    | {
+        readonly requestId: string;
+        readonly source: 'PUBLIC';
+        readonly tournament: PublicTournamentSummary;
+      }
+    | { readonly requestId: string; readonly source: 'BOOKING'; readonly booking: HomeUpcomingItem }
+    | null
+  >(null);
+  const [publicReadDoneFor, setPublicReadDoneFor] = useState<string | null>(null);
+  const [bookingReadDoneFor, setBookingReadDoneFor] = useState<string | null>(null);
+  const [bookingResult, setBookingResult] = useState<{
+    readonly requestId: string;
+    readonly booking: HomeUpcomingItem | null;
+  } | null>(null);
+  const [rosterResult, setRosterResult] = useState<{
+    readonly tournamentId: string;
+    readonly roster: TournamentParticipantRoster;
+  } | null>(null);
+  const [rosterErrorFor, setRosterErrorFor] = useState<string | null>(null);
   const range = useMemo(() => tournamentDetailRange(), []);
-  const unavailable = !tournamentId || !gateway.getPublicTournamentSummary;
+  const currentDetail = detail?.requestId === tournamentId ? detail : null;
+  const tournament = currentDetail?.source === 'PUBLIC' ? currentDetail.tournament : null;
+  const booking = bookingResult?.requestId === tournamentId ? bookingResult.booking : null;
+  const roster =
+    rosterResult && rosterResult.tournamentId === tournament?.id ? rosterResult.roster : null;
+  const rosterError = rosterErrorFor === tournament?.id;
+  const unavailable = !tournamentId;
 
   useEffect(() => {
     let active = true;
-    if (unavailable || !tournamentId || !gateway.getPublicTournamentSummary) {
+    if (unavailable || !tournamentId) {
       return () => {
         active = false;
       };
     }
-    void gateway.getPublicTournamentSummary(tournamentId, range).then(
-      (item) => {
-        if (!active) return;
-        setTournament(item);
-      },
-      () => {
-        if (active) setError('Не удалось загрузить карточку турнира.');
-      },
-    );
+    if (gateway.getPublicTournamentSummary) {
+      void gateway.getPublicTournamentSummary(tournamentId, range).then(
+        (item) => {
+          if (!active) return;
+          setDetail({ requestId: tournamentId, source: 'PUBLIC', tournament: item });
+          setPublicReadDoneFor(tournamentId);
+        },
+        () => {
+          if (active) setPublicReadDoneFor(tournamentId);
+        },
+      );
+    } else {
+      void Promise.resolve().then(() => {
+        if (active) setPublicReadDoneFor(tournamentId);
+      });
+    }
+    if (typeof gateway.getUpcomingBookings === 'function') {
+      void gateway.getUpcomingBookings().then(
+        (bookings) => {
+          if (!active) return;
+          const booking = bookings.items.find(
+            (item) => item.kind === 'tournament' && routeEventId(item.route) === tournamentId,
+          );
+          setBookingResult({ requestId: tournamentId, booking: booking ?? null });
+          if (booking) {
+            setDetail((current) =>
+              current?.requestId === tournamentId
+                ? current
+                : { requestId: tournamentId, source: 'BOOKING', booking },
+            );
+          }
+          setBookingReadDoneFor(tournamentId);
+        },
+        () => {
+          if (active) setBookingReadDoneFor(tournamentId);
+        },
+      );
+    } else {
+      void Promise.resolve().then(() => {
+        if (active) setBookingReadDoneFor(tournamentId);
+      });
+    }
     return () => {
       active = false;
     };
@@ -307,11 +461,11 @@ export function TournamentDetailPage({
     void gateway.getTournamentParticipants(tournament.id).then(
       (value) => {
         if (!active) return;
-        setRoster(value);
+        setRosterResult({ tournamentId: tournament.id, roster: value });
       },
       () => {
         if (!active) return;
-        setRosterError(true);
+        setRosterErrorFor(tournament.id);
       },
     );
     return () => {
@@ -323,13 +477,21 @@ export function TournamentDetailPage({
     return (
       <TournamentView
         tournament={tournament}
+        booking={booking}
         roster={roster}
         rosterLoading={Boolean(gateway.getTournamentParticipants) && !roster && !rosterError}
         rosterError={rosterError}
       />
     );
   }
-  const stateError = unavailable ? 'Карточка турнира недоступна.' : error;
+  if (currentDetail?.source === 'BOOKING') {
+    return <TournamentBookingView booking={currentDetail.booking} />;
+  }
+  const stateError = unavailable
+    ? 'Карточка турнира недоступна.'
+    : publicReadDoneFor === tournamentId && bookingReadDoneFor === tournamentId
+      ? 'Не удалось загрузить карточку турнира.'
+      : null;
   return (
     <main className="tournament-detail tournament-detail--state">
       <span className={stateError ? undefined : 'loader'} aria-hidden="true" />
