@@ -39,6 +39,13 @@ Dry run validates input and resolves the active tenant but writes nothing. Repea
 only after review. A repeated apply with the same key and payload returns the recorded revision; a
 different payload with that key fails with `IDEMPOTENCY_KEY_CONFLICT`.
 
+For Jetson staging, use the manual `Set staging client routing plan` workflow from `main`. Supply the
+reviewed tenant key and operator UUID. An empty confirmation runs only the dry-run. The exact
+`APPLY_ROUTING_PLAN` confirmation first repeats that dry-run and then applies the same fixed
+`MIXED_END_USER_READS` plan with only `profile.read`, a 60-second plan lifetime and run-scoped
+idempotency/correlation identifiers. The workflow executes the repository operator inside the
+digest-pinned migrator image so `DATABASE_URL` is never copied to GitHub Actions or printed.
+
 ## Mixed-mode smoke
 
 1. Restore a real PadlHub user session with an active Viva delegation.

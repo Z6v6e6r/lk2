@@ -10,6 +10,8 @@ function repositoryFile(relativePath: string): string {
 const caddyfile = repositoryFile('deploy/jetson/tls-ingress/Caddyfile');
 const nginxConfig = repositoryFile('deploy/jetson/nginx/default.conf');
 const stagingWorkflow = repositoryFile('.github/workflows/deploy-staging.yaml');
+const stagingRoutingWorkflow = repositoryFile('.github/workflows/set-staging-routing-plan.yaml');
+const stagingRoutingOperator = repositoryFile('deploy/jetson/run-client-routing-plan.sh');
 const migration0057Diagnostic = repositoryFile('deploy/jetson/diagnose-migration-0057.sh');
 const activation = repositoryFile('deploy/jetson/activate-live-home.sh');
 const verification = repositoryFile('deploy/jetson/verify-live-staging-data.sh');
@@ -142,6 +144,26 @@ describe('Nano presentation release contract', () => {
     expect(activation).toContain("binding.provider = 'VIVA'");
     expect(verification).toContain('require_value VIVA_DIRECT_READ_ENABLED true');
     expect(verification).toContain('routing_ready_delegations');
+  });
+
+  it('changes the staging routing plan only through a confirmed audited operator', () => {
+    expect(stagingRoutingWorkflow).not.toMatch(/^ {2}push:/m);
+    expect(stagingRoutingWorkflow).toMatch(/^ {2}workflow_dispatch:/m);
+    expect(stagingRoutingWorkflow).toContain('REQUEST_REF: ${{ github.ref }}');
+    expect(stagingRoutingWorkflow).toContain('[ "$REQUEST_REF" != \'refs/heads/main\' ]');
+    expect(stagingRoutingWorkflow).toContain('APPLY_ROUTING_PLAN');
+    expect(stagingRoutingWorkflow).toContain('environment: staging');
+    expect(stagingRoutingWorkflow).toContain('Validate the requested routing plan without writes');
+    expect(stagingRoutingWorkflow).toContain('Apply the audited routing plan');
+    expect(stagingRoutingWorkflow).toContain("needs.validate-request.outputs.apply == 'true'");
+    expect(stagingRoutingOperator).toContain('--mode MIXED_END_USER_READS');
+    expect(stagingRoutingOperator).toContain('--operations profile.read');
+    expect(stagingRoutingOperator).toContain('--valid-for-seconds 60');
+    expect(stagingRoutingOperator).toContain('set -- "$@" --apply');
+    expect(stagingRoutingOperator).toContain('--experimental-strip-types');
+    expect(stagingRoutingOperator).toContain(
+      '/opt/phub/set-client-routing-plan.ts:/app/set-client-routing-plan.ts:ro',
+    );
   });
 
   it('bounds communities and activates all four independent CUP placements', () => {
