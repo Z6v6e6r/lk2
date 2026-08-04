@@ -2546,6 +2546,16 @@
   background: #f2edff;
 }
 
+.fh-for-me .booking-activity-card__kind--training {
+  justify-content: flex-start;
+  margin: 0 auto 0 0;
+  background: #e1ecff;
+}
+
+.fh-for-me .booking-activity-card__kind--coach-game {
+  background: #f2edff;
+}
+
 .games-page .booking-activity-card__host-roster {
   display: flex;
   width: max-content;

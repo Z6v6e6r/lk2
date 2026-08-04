@@ -362,6 +362,16 @@ describe('Home layout scroll contract', () => {
     expect(gameTypeRule).toMatch(/gap:\s*6px\s*;/);
   });
 
+  it('fills Home training badges and aligns them to the card heading left edge', () => {
+    const trainingKindRule = ruleBody('.fh-for-me .booking-activity-card__kind--training');
+    const coachGameKindRule = ruleBody('.fh-for-me .booking-activity-card__kind--coach-game');
+
+    expect(trainingKindRule).toMatch(/justify-content:\s*flex-start\s*;/);
+    expect(trainingKindRule).toMatch(/margin:\s*0 auto 0 0\s*;/);
+    expect(trainingKindRule).toMatch(/background:\s*#e1ecff\s*;/);
+    expect(coachGameKindRule).toMatch(/background:\s*#f2edff\s*;/);
+  });
+
   it('keeps the Home V3 mini create action inside the card edge', () => {
     const actionRule = ruleBody('.game-card__actions--mini-create');
     const buttonRule = ruleBody('.game-card.is-compact .game-card__button--mini-create');
