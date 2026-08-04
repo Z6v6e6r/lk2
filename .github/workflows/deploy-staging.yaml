@@ -10,6 +10,11 @@ on:
         required: true
         type: boolean
         default: false
+      recover_udisks:
+        description: Restart a leaking udisks2 service, then run diagnostics
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -21,7 +26,7 @@ concurrency:
 
 jobs:
   diagnose-home:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.diagnose_home }}
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.diagnose_home || inputs.recover_udisks) }}
     runs-on: ubuntu-latest
     environment: staging
     steps:
@@ -40,12 +45,50 @@ jobs:
           printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
           printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+      - name: Recover leaked udisks memory
+        if: ${{ inputs.recover_udisks }}
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+        run: |
+          ssh -o ServerAliveInterval=10 -o ServerAliveCountMax=2 "phub-deploy@$HOST" '
+            set -eu
+            echo udisks_before
+            systemctl status udisks2 --no-pager || true
+            pid="$(pidof udisksd || true)"
+            if [ -n "$pid" ]; then
+              grep -E "^(Rss|Pss|Swap):" "/proc/$pid/smaps_rollup" || true
+            fi
+            sudo -n systemctl restart udisks2
+            sleep 5
+            echo udisks_after
+            systemctl status udisks2 --no-pager || true
+            free -m
+          '
       - name: Inspect live Home source readiness
         env:
           HOST: ${{ secrets.STAGING_HOST }}
         run: |
-          scp deploy/jetson/diagnose-live-home.sh "phub-deploy@$HOST:/opt/phub/diagnose-live-home.sh"
-          ssh "phub-deploy@$HOST" 'sh /opt/phub/diagnose-live-home.sh'
+          ssh -o ServerAliveInterval=10 -o ServerAliveCountMax=2 "phub-deploy@$HOST" '
+            set +e
+            echo host_resources
+            uptime
+            free -m
+            df -h /
+            echo vmstat
+            timeout 8 vmstat 1 5
+            echo top_processes
+            ps -eo state,pid,ppid,comm,%cpu,%mem,rss --sort=-%cpu | head -25
+            echo docker_memory
+            timeout 10 docker stats --no-stream --format \
+              "container={{.Name}} cpu={{.CPUPerc}} memory={{.MemUsage}} block={{.BlockIO}}"
+            echo unhealthy_healthchecks
+            for container in phub-staging-api-1 phub-staging-realtime-1 phub-staging-worker-1; do
+              docker inspect --format \
+                "container={{.Name}} status={{.State.Health.Status}} failing_streak={{.State.Health.FailingStreak}} checks={{range .State.Health.Log}}{{.End}} exit={{.ExitCode}} output={{json .Output}}; {{end}}" \
+                "$container"
+            done
+            exit 0
+          '
       - name: Inspect public staging ingress
         env:
           BASE_URL: ${{ vars.STAGING_BASE_URL }}
@@ -60,6 +103,31 @@ jobs:
               --show-error \
               --write-out '\npublic_http_status=%{http_code}\n' \
               "${BASE_URL%/}$path"
+          done
+          canonical_base_url=https://lk.nano.padlhub.su
+          manifest="$(curl --fail --silent --show-error --max-time 15 "$canonical_base_url/manifest.json")"
+          entry_path="$(printf '%s' "$manifest" | node -e '
+            let input = "";
+            process.stdin.setEncoding("utf8");
+            process.stdin.on("data", (chunk) => { input += chunk; });
+            process.stdin.on("end", () => process.stdout.write(JSON.parse(input).entry));
+          ')"
+          style_path="$(printf '%s' "$manifest" | node -e '
+            let input = "";
+            process.stdin.setEncoding("utf8");
+            process.stdin.on("data", (chunk) => { input += chunk; });
+            process.stdin.on("end", () => process.stdout.write(JSON.parse(input).styles[0]));
+          ')"
+          for asset_path in "$entry_path" "$style_path"; do
+            curl \
+              --fail \
+              --silent \
+              --show-error \
+              --range 0-65535 \
+              --max-time 20 \
+              --output /dev/null \
+              --write-out "hop=github-public path=${asset_path} status=%{http_code} bytes=%{size_download} speed=%{speed_download} seconds=%{time_total}\n" \
+              "$canonical_base_url$asset_path"
           done
           exit 0
 
