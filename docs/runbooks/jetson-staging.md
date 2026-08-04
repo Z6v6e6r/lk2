@@ -11,6 +11,11 @@ confirmation is absent or different, the selected ref is not `main`, no operatio
 deployment confirmation is mixed with either diagnostics option. `diagnose_home=true` with an
 empty confirmation runs only the independent read-only Home/public-ingress diagnostics; do not
 combine it with `recover_udisks=true` when a strictly read-only run is required.
+Set `diagnostic_phone_last4` to one to ten comma-separated four-digit phone suffixes to add a
+read-only, redacted test-player check. It reports only the masked suffix, PadlHub user UUID, account
+and Viva-delegation status, refresh timestamps/error codes, and Home projection freshness. The
+diagnostic never reads token ciphertext or Viva subject values and forces a read-only PostgreSQL
+transaction.
 The same read-only mode fingerprints the repository `0057_messaging_runtime.sql` migration and
 reports only structural PostgreSQL metadata for its three tables: matching migration-journal rows,
 columns, constraints, indexes, RLS flags and policies. The remote `psql` session enforces both

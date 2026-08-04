@@ -13,6 +13,7 @@ const stagingWorkflow = repositoryFile('.github/workflows/deploy-staging.yaml');
 const stagingRoutingWorkflow = repositoryFile('.github/workflows/set-staging-routing-plan.yaml');
 const stagingRoutingOperator = repositoryFile('deploy/jetson/run-client-routing-plan.sh');
 const migration0057Diagnostic = repositoryFile('deploy/jetson/diagnose-migration-0057.sh');
+const testPlayerDiagnostic = repositoryFile('deploy/jetson/diagnose-test-player-delegations.sh');
 const activation = repositoryFile('deploy/jetson/activate-live-home.sh');
 const verification = repositoryFile('deploy/jetson/verify-live-staging-data.sh');
 const cupVerification = repositoryFile('deploy/jetson/verify-cup-integrations.sh');
@@ -49,6 +50,10 @@ describe('Nano presentation release contract', () => {
       'sha256sum packages/database/migrations/0057_messaging_runtime.sql',
     );
     expect(diagnoseJob).toContain('< deploy/jetson/diagnose-migration-0057.sh');
+    expect(validateJob).toContain('DIAGNOSTIC_PHONE_LAST4');
+    expect(validateJob).toContain("'^[0-9]{4}(,[0-9]{4}){0,9}$'");
+    expect(diagnoseJob).toContain('Inspect selected test-player delegations read-only');
+    expect(diagnoseJob).toContain('< deploy/jetson/diagnose-test-player-delegations.sh');
     expect(buildGate).toContain('needs: validate-request');
     expect(buildGate).toContain("needs.validate-request.outputs.mode == 'deploy'");
     expect(deployGate).toContain('needs: [validate-request, build]');
@@ -70,6 +75,18 @@ describe('Nano presentation release contract', () => {
       /^\s*(insert|update|delete|alter|create|drop|truncate|grant|revoke)\b/im,
     );
     expect(migration0057Diagnostic).not.toMatch(/compose\s+(up|run)|migrator/i);
+  });
+
+  it('keeps selected test-player diagnostics read-only and redacted', () => {
+    expect(testPlayerDiagnostic).toContain('default_transaction_read_only=on');
+    expect(testPlayerDiagnostic).toContain('begin transaction read only;');
+    expect(testPlayerDiagnostic).toContain("'phone=***' || suffix");
+    expect(testPlayerDiagnostic).not.toContain('phone_e164::text');
+    expect(testPlayerDiagnostic).not.toContain('refresh_token_ciphertext');
+    expect(testPlayerDiagnostic).not.toContain('subject');
+    expect(testPlayerDiagnostic).not.toMatch(
+      /^\s*(insert|update|delete|alter|create|drop|truncate|grant|revoke)\b/im,
+    );
   });
 
   it('snapshots the active application before mutation and rolls it back after later failures', () => {

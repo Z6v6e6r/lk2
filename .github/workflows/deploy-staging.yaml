@@ -24,6 +24,10 @@ on:
         required: true
         type: boolean
         default: false
+      diagnostic_phone_last4:
+        description: Optional comma-separated phone suffixes for read-only player/delegation diagnostics
+        required: false
+        type: string
       recover_udisks:
         description: Restart a leaking udisks2 service, then run diagnostics
         required: false
@@ -52,12 +56,13 @@ jobs:
           ROUTING_ACTOR_ID: ${{ inputs.routing_actor_id }}
           ROUTING_APPLY_CONFIRMATION: ${{ inputs.routing_apply_confirmation }}
           DIAGNOSE_HOME: ${{ inputs.diagnose_home }}
+          DIAGNOSTIC_PHONE_LAST4: ${{ inputs.diagnostic_phone_last4 }}
           RECOVER_UDISKS: ${{ inputs.recover_udisks }}
           REQUEST_REF: ${{ github.ref }}
         run: |
           set -eu
           diagnostics_requested=false
-          if [ "$DIAGNOSE_HOME" = 'true' ] || [ "$RECOVER_UDISKS" = 'true' ]; then
+          if [ "$DIAGNOSE_HOME" = 'true' ] || [ "$RECOVER_UDISKS" = 'true' ] || [ -n "$DIAGNOSTIC_PHONE_LAST4" ]; then
             diagnostics_requested=true
           fi
           if [ "$diagnostics_requested" = 'true' ]; then
@@ -66,6 +71,10 @@ jobs:
               exit 1
             fi
             printf '%s\n' 'mode=diagnostics' >> "$GITHUB_OUTPUT"
+            if [ -n "$DIAGNOSTIC_PHONE_LAST4" ] && ! printf '%s' "$DIAGNOSTIC_PHONE_LAST4" | grep -Eq '^[0-9]{4}(,[0-9]{4}){0,9}$'; then
+              echo '::error::Player diagnostics require one to ten comma-separated four-digit phone suffixes.'
+              exit 1
+            fi
             exit 0
           fi
           if [ "$DEPLOY_CONFIRMATION" != 'DEPLOY_STAGING' ]; then
@@ -128,6 +137,14 @@ jobs:
           expected_checksum="${checksum_line%% *}"
           ssh -o ServerAliveInterval=10 -o ServerAliveCountMax=2 "phub-deploy@$HOST" \
             sh -s -- "$expected_checksum" < deploy/jetson/diagnose-migration-0057.sh
+      - name: Inspect selected test-player delegations read-only
+        if: ${{ inputs.diagnostic_phone_last4 != '' }}
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+          DIAGNOSTIC_PHONE_LAST4: ${{ inputs.diagnostic_phone_last4 }}
+        run: |
+          ssh -o ServerAliveInterval=10 -o ServerAliveCountMax=2 "phub-deploy@$HOST" \
+            sh -s -- "$DIAGNOSTIC_PHONE_LAST4" < deploy/jetson/diagnose-test-player-delegations.sh
       - name: Recover leaked udisks memory
         if: ${{ inputs.recover_udisks }}
         env:
