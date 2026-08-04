@@ -26,7 +26,32 @@ const config = loadConfig({
 
 const tenantId = '86afbe01-0318-4dd2-bc25-303b7bf0d430';
 const userId = '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca';
+const communityId = '11111111-1111-4111-8111-111111111111';
+const requestId = '22222222-2222-4222-8222-222222222222';
 const apps: Awaited<ReturnType<typeof buildApp>>[] = [];
+
+const activeMembership = {
+  communityId,
+  status: 'ACTIVE',
+  role: 'MEMBER',
+  revision: 2,
+  updatedAt: '2026-08-03T10:00:00.000Z',
+  pendingRequest: null,
+  joinAction: 'LEAVE',
+} as const;
+
+function lifecycleService(overrides: Partial<CommunityMembershipLifecycleService> = {}) {
+  return {
+    getOwnState: vi.fn(),
+    selfJoin: vi.fn(),
+    cancelPending: vi.fn(),
+    leave: vi.fn(),
+    listPending: vi.fn(),
+    approve: vi.fn(),
+    reject: vi.fn(),
+    ...overrides,
+  };
+}
 
 function fakePool(): Pool {
   return {
@@ -615,5 +640,244 @@ describe('community routes', () => {
     });
     expect(response.statusCode).toBe(503);
     expect(response.json()).toMatchObject({ code: 'COMMUNITY_COMMAND_UNAVAILABLE' });
+  });
+
+  it('maps every remaining self-join outcome and the immediate-join response', async () => {
+    const selfJoin = vi
+      .fn()
+      .mockResolvedValueOnce({ outcome: 'joined', membership: activeMembership, replayed: true });
+    const failures = [
+      ['idempotency_conflict', 409, 'IDEMPOTENCY_KEY_REUSED'],
+      ['revision_conflict', 409, 'COMMUNITY_MEMBERSHIP_REVISION_CONFLICT'],
+      ['community_not_found', 404, 'COMMUNITY_NOT_FOUND'],
+      ['actor_not_active', 403, 'COMMUNITY_MEMBERSHIP_ACTOR_INELIGIBLE'],
+      ['invite_required', 409, 'COMMUNITY_INVITE_REQUIRED'],
+      ['membership_already_active', 409, 'COMMUNITY_MEMBERSHIP_ALREADY_ACTIVE'],
+      ['request_already_pending', 409, 'COMMUNITY_JOIN_REQUEST_ALREADY_PENDING'],
+    ] as const;
+    for (const [outcome] of failures) selfJoin.mockResolvedValueOnce({ outcome });
+    const app = await buildApp({
+      config,
+      logger: createLogger('api-test', 'silent'),
+      pool: fakePool(),
+      communityMembershipLifecycleService: lifecycleService({ selfJoin }),
+    });
+    apps.push(app);
+    const authorization = `Bearer ${await accessToken()}`;
+    let sequence = 0;
+    const join = () =>
+      app.inject({
+        method: 'POST',
+        url: `/user/api/v1/local-padel/communities/${communityId}/members/me/join`,
+        headers: {
+          authorization,
+          'idempotency-key': `community-join-outcome-${String(++sequence).padStart(4, '0')}`,
+        },
+        payload: { expectedMembershipRevision: 1 },
+      });
+
+    const joined = await join();
+    expect(joined.statusCode).toBe(200);
+    expect(joined.headers['x-idempotent-replayed']).toBe('true');
+    expect(joined.json()).toMatchObject({ membershipStatus: 'ACTIVE', joinRequest: null });
+    for (const [, status, code] of failures) {
+      const response = await join();
+      expect(response.statusCode).toBe(status);
+      expect(response.json()).toMatchObject({ code });
+    }
+  });
+
+  it('maps cancel-pending success, revision, authorization and terminal outcomes', async () => {
+    const absentMembership = {
+      ...activeMembership,
+      status: 'ABSENT',
+      role: null,
+      revision: 3,
+      joinAction: 'JOIN',
+    } as const;
+    const cancelPending = vi.fn().mockResolvedValueOnce({
+      outcome: 'cancelled',
+      membership: absentMembership,
+      replayed: false,
+    });
+    const failures = [
+      ['idempotency_conflict', 409, 'IDEMPOTENCY_KEY_REUSED'],
+      ['membership_revision_conflict', 409, 'COMMUNITY_MEMBERSHIP_REVISION_CONFLICT'],
+      ['request_revision_conflict', 409, 'COMMUNITY_JOIN_REQUEST_REVISION_CONFLICT'],
+      ['community_not_found', 404, 'COMMUNITY_NOT_FOUND'],
+      ['request_not_found', 404, 'COMMUNITY_JOIN_REQUEST_NOT_FOUND'],
+      ['actor_not_active', 403, 'COMMUNITY_MEMBERSHIP_ACTOR_INELIGIBLE'],
+      ['membership_banned', 403, 'COMMUNITY_MEMBERSHIP_BANNED'],
+      ['request_not_pending', 409, 'COMMUNITY_JOIN_REQUEST_NOT_PENDING'],
+    ] as const;
+    for (const [outcome] of failures) cancelPending.mockResolvedValueOnce({ outcome });
+    const app = await buildApp({
+      config,
+      logger: createLogger('api-test', 'silent'),
+      pool: fakePool(),
+      communityMembershipLifecycleService: lifecycleService({ cancelPending }),
+    });
+    apps.push(app);
+    const authorization = `Bearer ${await accessToken()}`;
+    let sequence = 0;
+    const cancel = () =>
+      app.inject({
+        method: 'POST',
+        url: `/user/api/v1/local-padel/communities/${communityId}/join-requests/${requestId}/cancel`,
+        headers: {
+          authorization,
+          'idempotency-key': `community-cancel-outcome-${String(++sequence).padStart(4, '0')}`,
+        },
+        payload: { expectedMembershipRevision: 2, expectedRequestRevision: 1 },
+      });
+
+    expect((await cancel()).json()).toMatchObject({ membershipStatus: 'NONE' });
+    for (const [, status, code] of failures) {
+      const response = await cancel();
+      expect(response.statusCode).toBe(status);
+      expect(response.json()).toMatchObject({ code });
+    }
+  });
+
+  it('maps leave success and every protected lifecycle failure', async () => {
+    const leftMembership = {
+      ...activeMembership,
+      status: 'LEFT',
+      role: null,
+      revision: 3,
+      joinAction: 'REQUEST_REJOIN',
+    } as const;
+    const leave = vi
+      .fn()
+      .mockResolvedValueOnce({ outcome: 'left', membership: leftMembership, replayed: false });
+    const failures = [
+      ['idempotency_conflict', 409, 'IDEMPOTENCY_KEY_REUSED'],
+      ['revision_conflict', 409, 'COMMUNITY_MEMBERSHIP_REVISION_CONFLICT'],
+      ['community_not_found', 404, 'COMMUNITY_NOT_FOUND'],
+      ['actor_not_active', 403, 'COMMUNITY_MEMBERSHIP_ACTOR_INELIGIBLE'],
+      ['owner_cannot_leave', 409, 'COMMUNITY_OWNER_TRANSFER_REQUIRED'],
+      ['membership_not_active', 409, 'COMMUNITY_MEMBERSHIP_NOT_ACTIVE'],
+    ] as const;
+    for (const [outcome] of failures) leave.mockResolvedValueOnce({ outcome });
+    const app = await buildApp({
+      config,
+      logger: createLogger('api-test', 'silent'),
+      pool: fakePool(),
+      communityMembershipLifecycleService: lifecycleService({ leave }),
+    });
+    apps.push(app);
+    const authorization = `Bearer ${await accessToken()}`;
+    let sequence = 0;
+    const leaveCommunity = () =>
+      app.inject({
+        method: 'POST',
+        url: `/user/api/v1/local-padel/communities/${communityId}/members/me/leave`,
+        headers: {
+          authorization,
+          'idempotency-key': `community-leave-outcome-${String(++sequence).padStart(4, '0')}`,
+        },
+        payload: { expectedMembershipRevision: 2 },
+      });
+
+    expect((await leaveCommunity()).json()).toMatchObject({ membershipStatus: 'LEFT' });
+    for (const [, status, code] of failures) {
+      const response = await leaveCommunity();
+      expect(response.statusCode).toBe(status);
+      expect(response.json()).toMatchObject({ code });
+    }
+  });
+
+  it.each([
+    ['actor_not_active', 403, 'COMMUNITY_CREATE_ACTOR_INELIGIBLE'],
+    ['idempotency_conflict', 409, 'IDEMPOTENCY_KEY_REUSED'],
+    ['active_owner_quota_exceeded', 409, 'COMMUNITY_ACTIVE_OWNER_QUOTA_EXCEEDED'],
+  ] as const)(
+    'maps community create %s without leaking quota authority',
+    async (outcome, status, code) => {
+      const create = vi.fn().mockResolvedValue({ outcome });
+      const app = await buildApp({
+        config,
+        logger: createLogger('api-test', 'silent'),
+        pool: fakePool(),
+        communityCreateService: { create },
+      });
+      apps.push(app);
+      const response = await app.inject({
+        method: 'POST',
+        url: '/user/api/v1/local-padel/communities',
+        headers: {
+          authorization: `Bearer ${await accessToken(['communities.create'])}`,
+          'idempotency-key': `community-create-${outcome}-0001`,
+        },
+        payload: {
+          title: 'Padel Friends',
+          description: 'Локальное сообщество',
+          visibility: 'PUBLIC',
+          joinPolicy: 'INSTANT',
+          publishingPreset: 'OPEN_COMMUNITY',
+        },
+      });
+      expect(response.statusCode).toBe(status);
+      expect(response.json()).toMatchObject({ code });
+    },
+  );
+
+  it.each([
+    ['membership_not_found', 404, 'COMMUNITY_ACTIVE_MEMBERSHIP_NOT_FOUND'],
+    ['idempotency_conflict', 409, 'IDEMPOTENCY_KEY_REUSED'],
+    ['revision_conflict', 409, 'COMMUNITY_MEMBERSHIP_REVISION_CONFLICT'],
+  ] as const)('maps membership pin %s', async (outcome, status, code) => {
+    const setPin = vi.fn().mockResolvedValue({ outcome });
+    const app = await buildApp({
+      config,
+      logger: createLogger('api-test', 'silent'),
+      pool: fakePool(),
+      communityMembershipPinService: { setPin },
+    });
+    apps.push(app);
+    const response = await app.inject({
+      method: 'PUT',
+      url: `/user/api/v1/local-padel/communities/${communityId}/members/me/pin`,
+      headers: {
+        authorization: `Bearer ${await accessToken()}`,
+        'idempotency-key': `community-pin-${outcome}-0001`,
+      },
+      payload: { pinned: true, expectedRevision: 2 },
+    });
+    expect(response.statusCode).toBe(status);
+    expect(response.json()).toMatchObject({ code });
+  });
+
+  it.each([
+    ['idempotency_conflict', 409, 'IDEMPOTENCY_KEY_REUSED'],
+    ['actor_not_active', 403, 'COMMUNITY_OWNERSHIP_ACTOR_INELIGIBLE'],
+    ['community_not_found', 404, 'COMMUNITY_NOT_FOUND'],
+    ['actor_not_owner', 403, 'COMMUNITY_OWNER_REQUIRED'],
+    ['target_not_active', 409, 'COMMUNITY_OWNERSHIP_TARGET_NOT_ACTIVE'],
+    ['owner_revision_conflict', 409, 'COMMUNITY_MEMBERSHIP_REVISION_CONFLICT'],
+  ] as const)('maps ownership transfer %s', async (outcome, status, code) => {
+    const transfer = vi.fn().mockResolvedValue({ outcome });
+    const app = await buildApp({
+      config,
+      logger: createLogger('api-test', 'silent'),
+      pool: fakePool(),
+      communityOwnershipTransferService: { transfer },
+    });
+    apps.push(app);
+    const response = await app.inject({
+      method: 'POST',
+      url: `/user/api/v1/local-padel/communities/${communityId}/ownership-transfers`,
+      headers: {
+        authorization: `Bearer ${await accessToken()}`,
+        'idempotency-key': `community-transfer-${outcome}-0001`,
+      },
+      payload: {
+        targetUserId: requestId,
+        expectedOwnerRevision: 4,
+        expectedTargetRevision: 2,
+      },
+    });
+    expect(response.statusCode).toBe(status);
+    expect(response.json()).toMatchObject({ code });
   });
 });

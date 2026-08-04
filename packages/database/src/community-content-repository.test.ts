@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { createCommunityContentRepository } from './community-content-repository.js';
+import {
+  createCommunityContentRepository,
+  currentCommunityPostMediaWithClient,
+} from './community-content-repository.js';
 
 const tenantId = '86afbe01-0318-4dd2-bc25-303b7bf0d430';
 const actorUserId = '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca';
@@ -337,5 +340,175 @@ describe('community content repository', () => {
     expect(feed?.[0]).toContain("status = 'PUBLISHED'");
     expect(feed?.[0]).toContain('published_at <= $3::timestamptz');
     expect(feed?.[1]?.at(-1)).toBe(21);
+  });
+
+  it('replays the original post result and rejects a mismatched idempotency key reuse', async () => {
+    const replayPayload = {
+      id: postId,
+      communityId,
+      authorUserId: actorUserId,
+      status: 'PUBLISHED',
+      body: 'Первый пост',
+      revision: 1,
+      createdAt: now.toISOString(),
+      publishedAt: now.toISOString(),
+      updatedAt: now.toISOString(),
+      archivedAt: null,
+      restoreUntil: null,
+      retentionUntil: null,
+    };
+    const replay = poolWithQuery((text) =>
+      text.includes('from community_content.commands')
+        ? [
+            {
+              command_type: 'POST_CREATE',
+              request_hash: command.requestHash,
+              result_payload: replayPayload,
+            },
+          ]
+        : [],
+    );
+    await expect(
+      createCommunityContentRepository(replay.pool).createPost({ ...command, body: 'Первый пост' }),
+    ).resolves.toEqual({ outcome: 'created', post: replayPayload, replayed: true });
+    expect(replay.query.mock.calls.some(([text]) => String(text).includes('identity.users'))).toBe(
+      false,
+    );
+
+    const conflict = poolWithQuery((text) =>
+      text.includes('from community_content.commands')
+        ? [
+            {
+              command_type: 'POST_EDIT',
+              request_hash: command.requestHash,
+              result_payload: replayPayload,
+            },
+          ]
+        : [],
+    );
+    await expect(
+      createCommunityContentRepository(conflict.pool).createPost({
+        ...command,
+        body: 'Первый пост',
+      }),
+    ).resolves.toEqual({ outcome: 'idempotency_conflict' });
+  });
+
+  it.each([
+    {
+      name: 'inactive actor',
+      actor: [] as readonly unknown[],
+      context: [] as readonly unknown[],
+      outcome: 'actor_not_active',
+    },
+    {
+      name: 'missing community',
+      actor: [{ status: 'ACTIVE' }],
+      context: [] as readonly unknown[],
+      outcome: 'community_not_found',
+    },
+    {
+      name: 'inactive membership',
+      actor: [{ status: 'ACTIVE' }],
+      context: [
+        {
+          publishing_preset: 'OPEN_COMMUNITY',
+          visibility: 'PUBLIC',
+          membership_status: 'REMOVED',
+          membership_role: 'MEMBER',
+        },
+      ],
+      outcome: 'membership_required',
+    },
+  ])('rejects create before writes for $name', async ({ actor, context, outcome }) => {
+    const { pool, query } = poolWithQuery((text) => {
+      if (text.includes('from community_content.commands')) return [];
+      if (text.includes('from identity.users')) return actor;
+      if (text.includes('from communities.communities c')) return context;
+      return [];
+    });
+    await expect(
+      createCommunityContentRepository(pool).createPost({ ...command, body: 'Первый пост' }),
+    ).resolves.toEqual({ outcome });
+    expect(
+      query.mock.calls.some(([text]) =>
+        String(text).includes('insert into community_content.posts'),
+      ),
+    ).toBe(false);
+  });
+
+  it('hides a non-public feed from a non-member and skips the post query', async () => {
+    const { pool, query } = poolWithQuery((text) => {
+      if (text.includes('from identity.users')) return [{ status: 'ACTIVE' }];
+      if (text.includes('from communities.communities c')) {
+        return [
+          {
+            publishing_preset: 'OPEN_COMMUNITY',
+            visibility: 'HIDDEN',
+            membership_status: null,
+            membership_role: null,
+          },
+        ];
+      }
+      return [];
+    });
+    await expect(
+      createCommunityContentRepository(pool).listFeed({
+        tenantId,
+        viewerUserId: actorUserId,
+        communityId,
+        limit: 20,
+        correlationId: command.correlationId,
+      }),
+    ).resolves.toEqual({ outcome: 'community_not_found' });
+    expect(
+      query.mock.calls.some(([text]) => String(text).includes('community_content.posts')),
+    ).toBe(false);
+  });
+
+  it('groups multiple immutable variants per media item and short-circuits empty post sets', async () => {
+    const query = vi.fn().mockResolvedValue({
+      rows: [
+        {
+          post_id: postId,
+          media_id: '33333333-3333-4333-8333-333333333333',
+          position: '1',
+          variant_name: 'THUMBNAIL',
+          size_bytes: '128',
+          width: '320',
+          height: '200',
+          tenant_key: 'local-padel',
+        },
+        {
+          post_id: postId,
+          media_id: '33333333-3333-4333-8333-333333333333',
+          position: '1',
+          variant_name: 'FEED',
+          size_bytes: '512',
+          width: '1280',
+          height: '800',
+          tenant_key: 'local-padel',
+        },
+      ],
+    });
+    const client = { query } as never;
+    await expect(
+      currentCommunityPostMediaWithClient(client, tenantId, communityId, []),
+    ).resolves.toEqual(new Map());
+    expect(query).not.toHaveBeenCalled();
+
+    const grouped = await currentCommunityPostMediaWithClient(client, tenantId, communityId, [
+      postId,
+    ]);
+    expect(grouped.get(postId)).toEqual([
+      expect.objectContaining({
+        width: 1280,
+        height: 800,
+        variants: [
+          expect.objectContaining({ variant: 'THUMBNAIL', width: 320 }),
+          expect.objectContaining({ variant: 'FEED', width: 1280 }),
+        ],
+      }),
+    ]);
   });
 });

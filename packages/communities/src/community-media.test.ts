@@ -232,4 +232,164 @@ describe('community media domain', () => {
         .success,
     ).toBe(false);
   });
+
+  it('passes through issue authorization failures without signing an upload', async () => {
+    const repo = repository();
+    repo.issueUpload.mockResolvedValue({ outcome: 'membership_required' });
+    const uploadSigner = { issueUploadTarget: vi.fn() };
+    const mediaService = createCommunityMediaService({
+      repository: repo,
+      uploadSigner,
+      objectInspector: { inspectCurrentVersion: vi.fn() },
+    });
+    await expect(
+      mediaService.issueUpload({
+        ...command,
+        contentType: 'image/jpeg',
+        byteSize: 1_024,
+        sha256: 'b'.repeat(64),
+      }),
+    ).resolves.toEqual({ outcome: 'membership_required' });
+    expect(uploadSigner.issueUploadTarget).not.toHaveBeenCalled();
+  });
+
+  it('rejects an invalid persisted upload intent before asking the signer', async () => {
+    const repo = repository();
+    repo.issueUpload.mockResolvedValue({
+      outcome: 'issued',
+      replayed: false,
+      intent: {
+        ...baseMedia,
+        state: 'UPLOADING',
+        objectKey: '',
+        uploadExpiresAt: '2026-08-04T10:15:00.000Z',
+      },
+    });
+    const uploadSigner = { issueUploadTarget: vi.fn() };
+    const mediaService = createCommunityMediaService({
+      repository: repo,
+      uploadSigner,
+      objectInspector: { inspectCurrentVersion: vi.fn() },
+    });
+    await expect(
+      mediaService.issueUpload({
+        ...command,
+        contentType: 'image/jpeg',
+        byteSize: 1_024,
+        sha256: 'b'.repeat(64),
+      }),
+    ).rejects.toEqual(new CommunityMediaError('COMMUNITY_MEDIA_STATE_INVALID'));
+    expect(uploadSigner.issueUploadTarget).not.toHaveBeenCalled();
+  });
+
+  it('handles missing and malformed immutable objects without finalizing', async () => {
+    const repo = repository();
+    repo.getFinalizeTarget.mockResolvedValue({ outcome: 'inspect', objectKey: 'quarantine-key' });
+    const inspectCurrentVersion = vi
+      .fn()
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce({
+        byteSize: 1_024,
+        contentType: 'image/jpeg',
+        etag: '',
+        versionId: 'version-one',
+        checksumSha256: 'b'.repeat(64),
+      });
+    const mediaService = createCommunityMediaService({
+      repository: repo,
+      uploadSigner: { issueUploadTarget: vi.fn() },
+      objectInspector: { inspectCurrentVersion },
+    });
+    const input = { ...command, mediaId: baseMedia.id, expectedRevision: 1 };
+    await expect(mediaService.finalizeUpload(input)).resolves.toEqual({
+      outcome: 'object_missing',
+    });
+    await expect(mediaService.finalizeUpload(input)).rejects.toEqual(
+      new CommunityMediaError('COMMUNITY_MEDIA_STATE_INVALID'),
+    );
+    expect(repo.finalizeUpload).not.toHaveBeenCalled();
+  });
+
+  it('passes through finalize failures and rejects invalid replay or persisted status', async () => {
+    const repo = repository();
+    const mediaService = service(repo);
+    const input = { ...command, mediaId: baseMedia.id, expectedRevision: 1 };
+
+    repo.getFinalizeTarget.mockResolvedValueOnce({ outcome: 'upload_expired' });
+    await expect(mediaService.finalizeUpload(input)).resolves.toEqual({
+      outcome: 'upload_expired',
+    });
+
+    repo.getFinalizeTarget.mockResolvedValueOnce({
+      outcome: 'replayed',
+      media: { ...baseMedia, state: 'SCANNING', finalizedAt: 'not-a-date' },
+    });
+    await expect(mediaService.finalizeUpload(input)).rejects.toEqual(
+      new CommunityMediaError('COMMUNITY_MEDIA_STATE_INVALID'),
+    );
+
+    repo.getFinalizeTarget.mockResolvedValueOnce({
+      outcome: 'inspect',
+      objectKey: 'quarantine-key',
+    });
+    repo.finalizeUpload.mockResolvedValueOnce({
+      outcome: 'finalized',
+      replayed: false,
+      media: { ...baseMedia, state: 'READY', variants: [] },
+    });
+    const observed = {
+      byteSize: 1_024,
+      contentType: 'image/jpeg',
+      etag: 'etag-one',
+      versionId: 'version-one',
+      checksumSha256: 'b'.repeat(64),
+    };
+    const inspectedService = createCommunityMediaService({
+      repository: repo,
+      uploadSigner: { issueUploadTarget: vi.fn() },
+      objectInspector: { inspectCurrentVersion: vi.fn().mockResolvedValue(observed) },
+    });
+    await expect(inspectedService.finalizeUpload(input)).rejects.toEqual(
+      new CommunityMediaError('COMMUNITY_MEDIA_STATE_INVALID'),
+    );
+  });
+
+  it('validates get requests and persisted media states', async () => {
+    const repo = repository();
+    const mediaService = service(repo);
+    await expect(
+      mediaService.getMedia({
+        tenantId: command.tenantId,
+        actorUserId: command.actorUserId,
+        communityId: command.communityId,
+        mediaId: 'invalid',
+        correlationId: command.correlationId,
+      }),
+    ).rejects.toEqual(new CommunityMediaError('COMMUNITY_MEDIA_COMMAND_INVALID'));
+
+    repo.getMedia.mockResolvedValueOnce({ outcome: 'media_not_found' });
+    await expect(
+      mediaService.getMedia({
+        tenantId: command.tenantId,
+        actorUserId: command.actorUserId,
+        communityId: command.communityId,
+        mediaId: baseMedia.id,
+        correlationId: command.correlationId,
+      }),
+    ).resolves.toEqual({ outcome: 'media_not_found' });
+
+    repo.getMedia.mockResolvedValueOnce({
+      outcome: 'found',
+      media: { ...baseMedia, state: 'UPLOADING', uploadExpiresAt: 'not-a-date' },
+    });
+    await expect(
+      mediaService.getMedia({
+        tenantId: command.tenantId,
+        actorUserId: command.actorUserId,
+        communityId: command.communityId,
+        mediaId: baseMedia.id,
+        correlationId: command.correlationId,
+      }),
+    ).rejects.toEqual(new CommunityMediaError('COMMUNITY_MEDIA_STATE_INVALID'));
+  });
 });

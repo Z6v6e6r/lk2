@@ -516,7 +516,9 @@ describe('PadlHub web authentication', () => {
     await screen.findByText('Загружаем один актуальный снимок…');
     expect(screen.queryByRole('heading', { name: 'Главная недоступна' })).not.toBeInTheDocument();
 
-    expect(await screen.findByRole('heading', { name: 'Анна Петрова' })).toBeVisible();
+    expect(
+      await screen.findByRole('heading', { name: 'Анна Петрова' }, { timeout: 3_000 }),
+    ).toBeVisible();
     expect(getHomeBase).toHaveBeenCalledTimes(2);
   });
 

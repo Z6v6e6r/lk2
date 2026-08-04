@@ -86,4 +86,79 @@ describe('CommunityInvitePage', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('Ссылка приглашения неполная');
     expect(previewInvite).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ['COMMUNITY_DIRECT_INVITE_REQUEST_PENDING', 'Сначала дождитесь решения по уже поданной заявке'],
+    [
+      'COMMUNITY_DIRECT_INVITE_REDEEM_FORBIDDEN',
+      'Вступление по этой ссылке для вашего аккаунта недоступно',
+    ],
+    [
+      'COMMUNITY_DIRECT_INVITE_NOT_FOUND',
+      'Приглашение недействительно, отозвано или срок его действия истёк',
+    ],
+    ['UNEXPECTED', 'Не удалось проверить приглашение'],
+  ])('maps preview failure %s without rendering a redeem action', async (code, message) => {
+    const redeemInvite = vi.fn();
+    render(
+      <CommunityInvitePage
+        token={token}
+        previewInvite={vi.fn().mockRejectedValue({ code })}
+        redeemInvite={redeemInvite}
+      />,
+    );
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(message);
+    expect(screen.queryByRole('button', { name: /вступить/i })).not.toBeInTheDocument();
+    expect(redeemInvite).not.toHaveBeenCalled();
+  });
+
+  it('keeps explicit confirmation available after a revision conflict', async () => {
+    const redeemInvite = vi
+      .fn()
+      .mockRejectedValue({ code: 'COMMUNITY_MEMBERSHIP_REVISION_CONFLICT' });
+    render(
+      <CommunityInvitePage
+        token={token}
+        previewInvite={vi.fn().mockResolvedValue(preview)}
+        redeemInvite={redeemInvite}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Вступить в сообщество' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Состояние приглашения изменилось. Откройте ссылку заново.',
+    );
+    expect(screen.getByRole('button', { name: 'Вступить в сообщество' })).toBeEnabled();
+    expect(redeemInvite).toHaveBeenCalledWith(token, 1, 4);
+  });
+
+  it('opens an existing public membership without calling redeem', async () => {
+    const redeemInvite = vi.fn();
+    render(
+      <CommunityInvitePage
+        token={token}
+        previewInvite={vi.fn().mockResolvedValue({
+          ...preview,
+          community: {
+            ...preview.community,
+            visibility: 'PUBLIC',
+            logoUrl: 'https://media.test/community.webp',
+            isVerified: false,
+          },
+          redeemAction: 'OPEN_COMMUNITY',
+        })}
+        redeemInvite={redeemInvite}
+      />,
+    );
+
+    expect(await screen.findByText('Вы уже состоите в этом сообществе.')).toBeVisible();
+    expect(screen.getByText('Открытое сообщество')).toBeVisible();
+    expect(screen.getByRole('presentation')).toHaveAttribute(
+      'src',
+      'https://media.test/community.webp',
+    );
+    expect(redeemInvite).not.toHaveBeenCalled();
+  });
 });
