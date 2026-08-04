@@ -316,6 +316,20 @@ jobs:
         run: |
           ssh -o ServerAliveInterval=10 -o ServerAliveCountMax=2 "phub-deploy@$HOST" \
             sh -s -- "$DIAGNOSTIC_PHONE_LAST4" < deploy/jetson/diagnose-test-player-delegations.sh
+      - name: Inspect recent messaging API failures read-only
+        if: ${{ inputs.diagnostic_phone_last4 != '' }}
+        continue-on-error: true
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+        run: |
+          ssh -o ServerAliveInterval=10 -o ServerAliveCountMax=2 "phub-deploy@$HOST" '
+            set +e
+            docker logs --since 45m --tail 600 phub-staging-api-1 2>&1 \
+              | sed -E "s/(Bearer )[A-Za-z0-9._-]+/\1[REDACTED]/g" \
+              | grep -Ei "conversation|messaging|error|failed|correlation" \
+              | tail -120
+            exit 0
+          '
       - name: Recover leaked udisks memory
         if: ${{ inputs.recover_udisks }}
         env:

@@ -142,6 +142,105 @@ select concat_ws('|',
 from matched
 order by suffix, user_id nulls last;
 
+select set_config(
+  'app.tenant_id',
+  (select id::text from identity.tenants where tenant_key = 'local-padel'),
+  true
+);
+
+set local statement_timeout = '5s';
+
+with requested_users as (
+  select identity_user.id as user_id
+  from regexp_split_to_table(current_setting('phub.diagnostic_phone_last4'), ',') as suffix
+  join identity.tenants tenant
+    on tenant.tenant_key = 'local-padel'
+  join profile.user_summaries profile
+    on profile.tenant_id = tenant.id
+   and right(profile.phone_e164, 4) = suffix
+  join identity.users identity_user
+    on identity_user.tenant_id = profile.tenant_id
+   and identity_user.id = profile.user_id
+), direct_list_probe as (
+  select requested_users.user_id, conversation.id
+  from requested_users
+  join identity.tenants tenant
+    on tenant.tenant_key = 'local-padel'
+  left join messaging.conversations conversation
+    on conversation.tenant_id = tenant.id
+   and conversation.kind = 'DIRECT'
+   and conversation.state = 'OPEN'
+  left join messaging.conversation_members current_member
+    on current_member.tenant_id = conversation.tenant_id
+   and current_member.conversation_id = conversation.id
+   and current_member.user_id = requested_users.user_id
+   and current_member.state = 'ACTIVE'
+  left join messaging.tenant_runtime_settings runtime
+    on runtime.tenant_id = conversation.tenant_id
+   and runtime.http_enabled
+   and runtime.direct_enabled
+  left join identity.users current_user
+    on current_user.tenant_id = current_member.tenant_id
+   and current_user.id = current_member.user_id
+   and current_user.status = 'ACTIVE'
+  left join messaging.conversation_members other_member
+    on other_member.tenant_id = conversation.tenant_id
+   and other_member.conversation_id = conversation.id
+   and other_member.user_id is not null
+   and other_member.user_id <> requested_users.user_id
+   and other_member.state = 'ACTIVE'
+  left join profile.user_summaries other_summary
+    on other_summary.tenant_id = other_member.tenant_id
+   and other_summary.user_id = other_member.user_id
+  where current_member.user_id is not null
+    and runtime.tenant_id is not null
+    and current_user.id is not null
+    and other_member.user_id is not null
+)
+select concat_ws('|',
+  'messaging_direct_list_probe',
+  'users=' || count(distinct user_id),
+  'conversations=' || count(id)
+)
+from direct_list_probe;
+
+with requested_users as (
+  select identity_user.id as user_id
+  from regexp_split_to_table(current_setting('phub.diagnostic_phone_last4'), ',') as suffix
+  join identity.tenants tenant
+    on tenant.tenant_key = 'local-padel'
+  join profile.user_summaries profile
+    on profile.tenant_id = tenant.id
+   and right(profile.phone_e164, 4) = suffix
+  join identity.users identity_user
+    on identity_user.tenant_id = profile.tenant_id
+   and identity_user.id = profile.user_id
+), direct_create_probe as (
+  select requested_users.user_id,
+         coalesce(privacy.chat_policy, 'AUTHORIZED') as chat_policy,
+         'chat.direct.create' = any(access.permissions) as can_create
+  from requested_users
+  join identity.tenants tenant
+    on tenant.tenant_key = 'local-padel'
+  join identity.users identity_user
+    on identity_user.tenant_id = tenant.id
+   and identity_user.id = requested_users.user_id
+   and identity_user.status = 'ACTIVE'
+  join identity.user_access_profiles access
+    on access.tenant_id = identity_user.tenant_id
+   and access.user_id = identity_user.id
+  left join profile.privacy_settings privacy
+    on privacy.tenant_id = identity_user.tenant_id
+   and privacy.user_id = identity_user.id
+)
+select concat_ws('|',
+  'messaging_direct_create_probe',
+  'active_users=' || count(*),
+  'authorized_users=' || count(*) filter (where chat_policy = 'AUTHORIZED'),
+  'permitted_users=' || count(*) filter (where can_create)
+)
+from direct_create_probe;
+
 select concat_ws('|',
   'operator_candidate',
   'user_id=' || identity_user.id::text,
