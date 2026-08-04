@@ -218,6 +218,111 @@ describe('activity history routes', () => {
     expect(response.body).not.toMatch(/viva|provider|external/i);
   });
 
+  it('returns a strictly normalized confirmed tournament result', async () => {
+    const base = repository(state());
+    const podiumProfileId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const getPhotoDeliveryIds = vi.fn(() =>
+      Promise.resolve(new Map([[podiumProfileId, deliveryId]])),
+    );
+    const app = await buildApp({
+      config,
+      logger: createLogger('activity-history-test', 'silent'),
+      pool: fakePool(),
+      activityHistoryRepository: {
+        ...base,
+        list: () =>
+          Promise.resolve({
+            items: [
+              {
+                id: '11111111-1111-4111-8111-111111111111',
+                userId,
+                kind: 'TOURNAMENT' as const,
+                status: 'COMPLETED' as const,
+                occurredAt: '2026-08-04T07:00:00.000Z',
+                startsAt: '2026-08-04T05:30:00.000Z',
+                endsAt: '2026-08-04T07:00:00.000Z',
+                title: 'Время на друзей',
+                venueName: 'Терехово',
+                route: null,
+                gameId: null,
+                tournamentId: '33333333-3333-4333-8333-333333333333',
+                details: {
+                  tournamentResult: {
+                    status: 'CONFIRMED',
+                    podium: [
+                      {
+                        profileId: podiumProfileId,
+                        displayName: 'Иван Петров',
+                        avatarUrl: '/public/api/v1/media/profile-photos/a/1',
+                        place: 1,
+                      },
+                      {
+                        profileId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+                        displayName: 'Артём Сидоров',
+                        avatarUrl: null,
+                        place: 2,
+                      },
+                      {
+                        profileId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+                        displayName: 'Максим Орлов',
+                        avatarUrl: null,
+                        place: 3,
+                      },
+                    ],
+                    viewer: {
+                      profileId: userId,
+                      displayName: 'Алексей Иванов',
+                      avatarUrl: null,
+                      place: 5,
+                    },
+                  },
+                },
+                sourceRevision: 'tournament:1',
+                syncedAt: '2026-08-04T07:05:00.000Z',
+              },
+            ],
+          }),
+      },
+      profilePhotoMediaRepository: {
+        getPhotoObjectKey: () => Promise.resolve(undefined),
+        getPhotoDeliveryIds,
+      },
+    });
+    const response = await app.inject({
+      method: 'GET',
+      url: '/user/api/v1/local-padel/bookings/history?kind=TOURNAMENT',
+      headers: { authorization: `Bearer ${await token()}` },
+    });
+    await app.close();
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      items: [
+        {
+          tournamentResult: {
+            status: 'CONFIRMED',
+            podium: [
+              { displayName: 'Иван Петров', place: 1 },
+              { displayName: 'Артём Сидоров', place: 2 },
+              { displayName: 'Максим Орлов', place: 3 },
+            ],
+            viewer: { profileId: userId, displayName: 'Алексей Иванов', place: 5 },
+          },
+        },
+      ],
+    });
+    expect(response.body).not.toMatch(/tournamentId|external|provider|viva/i);
+    expect(response.body).toContain(
+      `/public/api/v1/media/profile-photos/${tenantId}/${deliveryId}`,
+    );
+    expect(getPhotoDeliveryIds).toHaveBeenCalledWith(tenantId, [
+      podiumProfileId,
+      'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      userId,
+    ]);
+  });
+
   it('replaces expired participant photos in persisted game history', async () => {
     const getPhotoDeliveryIds = vi.fn(() =>
       Promise.resolve(new Map([[participantUserId, deliveryId]])),

@@ -112,7 +112,6 @@ describe('ActivityHistoryPanel', () => {
 
     expect(await screen.findByText('Групповая тренировка')).toBeVisible();
     expect(screen.getByText('Иван Смирнов')).toBeVisible();
-    expect(screen.getByText('3 место')).toBeVisible();
     expect(screen.getByLabelText('Счёт по сетам')).toBeInTheDocument();
     expect(screen.queryByText('Результат внесён')).not.toBeInTheDocument();
     expect(loadHistory).toHaveBeenCalledWith({ status: 'COMPLETED', limit: 20 });
@@ -157,6 +156,94 @@ describe('ActivityHistoryPanel', () => {
     expect(await screen.findByText('Открытая игра')).toBeVisible();
     expect(screen.queryByText(duplicateSubtitle)).not.toBeInTheDocument();
     expect(screen.getByText('Тестовая станция')).toBeVisible();
+  });
+
+  it('shows the tournament name without its court and address subtitle', async () => {
+    const courtAndAddress = 'Корт №1 · г Москва, ул Нижние Мнёвники, д 12а';
+    const tournament: ActivityHistoryItem = {
+      id: 'history-tournament-with-address',
+      kind: 'TOURNAMENT',
+      status: 'COMPLETED',
+      title: 'Американо D+ в Терехово',
+      subtitle: courtAndAddress,
+      occurredAt: '2026-08-04T07:00:00.000Z',
+      startsAt: '2026-08-04T05:30:00.000Z',
+      endsAt: '2026-08-04T07:00:00.000Z',
+      venue: 'Терехово',
+    };
+
+    render(
+      <ActivityHistoryPanel active loadHistory={vi.fn().mockResolvedValue(page([tournament]))} />,
+    );
+
+    expect(await screen.findByRole('heading', { name: tournament.title })).toBeVisible();
+    expect(screen.queryByText(courtAndAddress)).not.toBeInTheDocument();
+    expect(document.querySelector('.tournament-history-card__copy > p')).toHaveTextContent(
+      'Терехово • 04 августа • 08:30–10:00',
+    );
+  });
+
+  it('shows the tournament podium and a separate viewer block only outside the top three', async () => {
+    const tournamentResult: NonNullable<ActivityHistoryItem['tournamentResult']> = {
+      status: 'CONFIRMED',
+      podium: [
+        { profileId: null, displayName: 'Иван Петров', avatarUrl: null, place: 1 },
+        { profileId: null, displayName: 'Артём Сидоров', avatarUrl: null, place: 2 },
+        { profileId: null, displayName: 'Максим Орлов', avatarUrl: null, place: 3 },
+      ],
+      viewer: { profileId: null, displayName: 'Алексей Иванов', avatarUrl: null, place: 5 },
+    };
+    const tournament: ActivityHistoryItem = {
+      id: 'history-tournament-result',
+      kind: 'TOURNAMENT',
+      status: 'COMPLETED',
+      title: 'Время на друзей',
+      occurredAt: '2026-08-04T07:00:00.000Z',
+      startsAt: '2026-08-04T05:30:00.000Z',
+      endsAt: '2026-08-04T07:00:00.000Z',
+      venue: 'Терехово',
+      tournamentResult,
+    };
+
+    render(
+      <ActivityHistoryPanel active loadHistory={vi.fn().mockResolvedValue(page([tournament]))} />,
+    );
+
+    expect(await screen.findByRole('list', { name: 'Призовые места' })).toBeVisible();
+    expect(screen.queryByRole('heading', { name: 'Итоги' })).not.toBeInTheDocument();
+    expect(document.querySelector('.tournament-history-card__podium .is-place-1')).toBeVisible();
+    expect(document.querySelector('.tournament-history-card__podium .is-place-2')).toBeVisible();
+    expect(document.querySelector('.tournament-history-card__podium .is-place-3')).toBeVisible();
+    expect(screen.queryByText('1 место')).not.toBeInTheDocument();
+    expect(screen.queryByText('2 место')).not.toBeInTheDocument();
+    expect(screen.queryByText('3 место')).not.toBeInTheDocument();
+    expect(
+      document.querySelector('.tournament-history-card__podium [data-size="58"]'),
+    ).toBeInTheDocument();
+    expect(
+      document.querySelectorAll('.tournament-history-card__podium [data-size="50"]'),
+    ).toHaveLength(2);
+    expect(screen.getByText('Алексей — 5 место')).toBeVisible();
+    expect(screen.getByText('Ваш результат')).toBeVisible();
+    expect(screen.queryByText('Результаты подтверждены')).not.toBeInTheDocument();
+
+    cleanup();
+    const topThreeTournament: ActivityHistoryItem = {
+      ...tournament,
+      tournamentResult: {
+        ...tournamentResult,
+        viewer: tournamentResult.podium[1]!,
+      },
+    };
+    render(
+      <ActivityHistoryPanel
+        active
+        loadHistory={vi.fn().mockResolvedValue(page([topThreeTournament]))}
+      />,
+    );
+
+    expect(await screen.findByRole('list', { name: 'Призовые места' })).toBeVisible();
+    expect(screen.queryByText('Ваш результат')).not.toBeInTheDocument();
   });
 
   it('loads the next cursor and offers a retry without dropping the first page', async () => {

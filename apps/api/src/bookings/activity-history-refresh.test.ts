@@ -164,6 +164,130 @@ describe('ActivityHistoryRefreshCoordinator', () => {
     ]);
   });
 
+  it('projects confirmed tournament standings only after exact viewer identity mapping', async () => {
+    const repo = repository();
+    const exerciseRef = '21111111-1111-4111-8111-111111111111';
+    const tournamentPage = page([
+      {
+        sourceRef: { bookingRef: 'provider-booking-secret', exerciseRef },
+        kind: 'TOURNAMENT',
+        status: 'COMPLETED',
+        title: 'Время на друзей',
+        startsAt: '2026-08-04T05:30:00.000Z',
+        endsAt: '2026-08-04T07:00:00.000Z',
+        venue: { name: 'Терехово' },
+        routeHint: 'NONE',
+      },
+    ]);
+    const coordinator = new ActivityHistoryRefreshCoordinator({
+      repository: repo.value,
+      source: { readPage: () => Promise.resolve(tournamentPage) },
+      getAccessToken: () => Promise.resolve('server-only-viva-token'),
+      pageSize: 20,
+      freshSeconds: 300,
+      tournamentResultSource: {
+        read: () =>
+          Promise.resolve({
+            id: '33333333-3333-4333-8333-333333333333',
+            status: 'CONFIRMED',
+            podium: [
+              { externalParticipantId: 'viva-player-1', displayName: 'Иван', place: 1 },
+              { externalParticipantId: 'viva-player-2', displayName: 'Артём', place: 2 },
+              { externalParticipantId: 'viva-player-3', displayName: 'Максим', place: 3 },
+            ],
+            standings: [
+              { externalParticipantId: 'viva-player-1', displayName: 'Иван', place: 1 },
+              { externalParticipantId: 'viva-player-2', displayName: 'Артём', place: 2 },
+              { externalParticipantId: 'viva-player-3', displayName: 'Максим', place: 3 },
+              { externalParticipantId: 'viva-viewer', displayName: 'Алексей', place: 5 },
+            ],
+            sourceUpdatedAt: '2026-08-04T07:05:00.000Z',
+          }),
+      },
+      resolveTournamentProfileIds: ({ externalClientIds }) => {
+        expect(externalClientIds).toEqual([
+          'viva-player-1',
+          'viva-player-2',
+          'viva-player-3',
+          'viva-viewer',
+        ]);
+        return Promise.resolve(
+          new Map([
+            ['viva-player-1', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'],
+            ['viva-player-2', 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'],
+            ['viva-viewer', userId],
+          ]),
+        );
+      },
+    });
+
+    await coordinator.refresh({
+      tenantId,
+      userId,
+      correlationId: 'correlation-1',
+      reason: 'UNCOVERED',
+    });
+
+    expect(repo.items()).toMatchObject([
+      {
+        kind: 'TOURNAMENT',
+        tournamentId: '33333333-3333-4333-8333-333333333333',
+        details: {
+          tournamentResult: {
+            status: 'CONFIRMED',
+            podium: [
+              { profileId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', place: 1 },
+              { profileId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', place: 2 },
+              { profileId: null, place: 3 },
+            ],
+            viewer: { profileId: userId, displayName: 'Алексей', place: 5 },
+          },
+        },
+      },
+    ]);
+    expect(JSON.stringify(repo.items())).not.toMatch(
+      /provider-booking-secret|viva-player|exerciseRef/,
+    );
+  });
+
+  it('keeps the compact tournament summary when result identity cannot be proven', async () => {
+    const repo = repository();
+    const tournamentPage = page([
+      {
+        sourceRef: {
+          bookingRef: 'provider-booking-secret',
+          exerciseRef: '21111111-1111-4111-8111-111111111111',
+        },
+        kind: 'TOURNAMENT',
+        status: 'COMPLETED',
+        title: 'Время на друзей',
+        startsAt: '2026-08-04T05:30:00.000Z',
+        venue: { name: 'Терехово' },
+        routeHint: 'NONE',
+      },
+    ]);
+    const coordinator = new ActivityHistoryRefreshCoordinator({
+      repository: repo.value,
+      source: { readPage: () => Promise.resolve(tournamentPage) },
+      getAccessToken: () => Promise.resolve('server-only-viva-token'),
+      pageSize: 20,
+      freshSeconds: 300,
+      tournamentResultSource: { read: () => Promise.reject(new Error('source down')) },
+      resolveTournamentProfileIds: () => Promise.resolve(new Map()),
+    });
+
+    await coordinator.refresh({
+      tenantId,
+      userId,
+      correlationId: 'correlation-1',
+      reason: 'UNCOVERED',
+    });
+
+    expect(repo.items()).toMatchObject([
+      { kind: 'TOURNAMENT', title: 'Время на друзей', details: {} },
+    ]);
+  });
+
   it('replaces the Viva row by its exact opaque exercise association', async () => {
     const repo = repository();
     const gameId = '33333333-3333-4333-8333-333333333333';

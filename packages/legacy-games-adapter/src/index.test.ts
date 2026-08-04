@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   LegacyGamesPublicAdapter,
+  LegacyTournamentResultAdapter,
   LegacyTournamentSummaryAdapter,
   localVivaExerciseAssociationId,
   localVivaProfileAssociationId,
@@ -640,6 +641,105 @@ describe('legacy games adapter', () => {
     ]);
     expect(roster.items[0]?.id).toMatch(/^[0-9a-f-]{36}$/);
     expect(JSON.stringify(roster)).not.toMatch(/viva-client|booking-|79990000001/);
+    expect(fetchImplementation).toHaveBeenCalledTimes(2);
+  });
+
+  it('reads only explicitly completed tournament standings through the private mapping boundary', async () => {
+    const exerciseExternalId = '4647f06f-c846-45f3-b89b-662d0b58671b';
+    const fetchImplementation = vi.fn((input: string | URL | Request) => {
+      const url = new URL(input instanceof Request ? input.url : input.toString());
+      expect(url.pathname).toBe('/lk/tournaments/americano/history');
+      expect(url.searchParams.get('tournamentId')).toBe(exerciseExternalId);
+      return Promise.resolve(
+        Response.json([
+          {
+            tournamentId: exerciseExternalId,
+            updatedAt: '2026-07-29T20:00:00.000Z',
+            params: { status: 'completed' },
+            summary: {
+              status: 'completed',
+              finished: true,
+              completedAt: '2026-07-29T20:00:00.000Z',
+            },
+            standings: [
+              { id: 'viva-player-3', name: 'Максим Орлов', rank: 3 },
+              { id: 'viva-player-1', name: 'Иван Петров', rank: 1 },
+              { id: 'viva-player-4', name: 'Alexey Sergeev', rank: 5 },
+              { id: 'viva-player-2', name: 'Артём Сидоров', rank: 2 },
+            ],
+          },
+        ]),
+      );
+    });
+    const adapter = new LegacyTournamentResultAdapter({ fetchImplementation });
+
+    const result = await adapter.read(exerciseExternalId);
+
+    expect(result).toMatchObject({
+      status: 'CONFIRMED',
+      podium: [
+        { externalParticipantId: 'viva-player-1', displayName: 'Иван Петров', place: 1 },
+        { externalParticipantId: 'viva-player-2', displayName: 'Артём Сидоров', place: 2 },
+        { externalParticipantId: 'viva-player-3', displayName: 'Максим Орлов', place: 3 },
+      ],
+      standings: [
+        { place: 1 },
+        { place: 2 },
+        { place: 3 },
+        { externalParticipantId: 'viva-player-4', place: 5 },
+      ],
+      sourceUpdatedAt: '2026-07-29T20:00:00.000Z',
+    });
+    expect(result?.id).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it('does not confirm standings without an explicit completed summary', async () => {
+    const adapter = new LegacyTournamentResultAdapter({
+      fetchImplementation: vi.fn().mockResolvedValue(
+        Response.json([
+          {
+            tournamentId: 'legacy-tournament',
+            params: { status: 'in_progress' },
+            summary: { status: 'in_progress', finished: false },
+            standings: [
+              { id: 'one', name: 'Один', rank: 1 },
+              { id: 'two', name: 'Два', rank: 2 },
+              { id: 'three', name: 'Три', rank: 3 },
+            ],
+          },
+        ]),
+      ),
+    });
+
+    await expect(adapter.read('legacy-tournament')).resolves.toBeNull();
+  });
+
+  it('retries a temporary tournament-result failure and caches the confirmed response', async () => {
+    const fetchImplementation = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(null, { status: 503 }))
+      .mockResolvedValueOnce(
+        Response.json([
+          {
+            tournamentId: 'legacy-tournament',
+            params: { status: 'completed' },
+            summary: { status: 'completed', finished: true },
+            standings: [
+              { id: 'one', name: 'Один', rank: 1 },
+              { id: 'two', name: 'Два', rank: 2 },
+              { id: 'three', name: 'Три', rank: 3 },
+            ],
+          },
+        ]),
+      );
+    const adapter = new LegacyTournamentResultAdapter({ fetchImplementation });
+
+    await expect(adapter.read('legacy-tournament')).resolves.toMatchObject({
+      status: 'CONFIRMED',
+    });
+    await expect(adapter.read('legacy-tournament')).resolves.toMatchObject({
+      status: 'CONFIRMED',
+    });
     expect(fetchImplementation).toHaveBeenCalledTimes(2);
   });
 });

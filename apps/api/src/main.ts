@@ -32,6 +32,7 @@ import {
 import {
   LegacyGamesMongoAdapter,
   LegacyGamesPublicAdapter,
+  LegacyTournamentResultAdapter,
   LegacyTournamentSummaryAdapter,
 } from '@phub/legacy-games-adapter';
 import { createNotificationEndpointCipher } from '@phub/notifications';
@@ -123,6 +124,19 @@ const tournamentSummarySource = config.GAMES_READ_ENABLED
       onMetric: (metric) => logger.info({ metric }, 'legacy tournament summary read'),
     })
   : undefined;
+const tournamentResultSource =
+  config.GAMES_READ_ENABLED && config.ACTIVITY_HISTORY_SYNC_ENABLED
+    ? new LegacyTournamentResultAdapter({
+        baseUrl: config.LEGACY_GAMES_PUBLIC_BASE_URL,
+        timeoutMs: Math.min(Math.max(config.VIVA_TIMEOUT_MS, 2_000), 5_000),
+        maxAttempts: 2,
+        freshTtlMs: 60_000,
+        staleTtlMs: 600_000,
+        circuitFailureThreshold: 3,
+        circuitResetMs: 30_000,
+        onMetric: (metric) => logger.info({ metric }, 'legacy tournament result read'),
+      })
+    : undefined;
 const coachGameSummarySource = config.GAMES_READ_ENABLED
   ? new VivaCoachGameSummaryAdapter({
       apiBaseUrl: config.VIVA_END_USER_API_URL,
@@ -260,6 +274,15 @@ const activityHistoryProjector =
             }
           : {}),
         ...(readAllLocalGameHistory ? { readLocalGames: readAllLocalGameHistory } : {}),
+        ...(tournamentResultSource && bookingScreenMappingRepository?.resolveVivaProfileIds
+          ? {
+              tournamentResultSource,
+              resolveTournamentProfileIds: (input: {
+                readonly tenantId: string;
+                readonly externalClientIds: readonly string[];
+              }) => bookingScreenMappingRepository.resolveVivaProfileIds!(input),
+            }
+          : {}),
       })
     : undefined;
 const giftCertificateMediaStore = config.GIFT_CERTIFICATE_MEDIA_ENABLED

@@ -17,6 +17,7 @@ import type { BookingScreenReadJobStore } from './booking-screen-read-job-store.
 import { sendApiError } from '../http-errors.js';
 import {
   gameCardProfilePhotoUserIds,
+  stableProfilePhotoUrl,
   stabilizeGameCardProfilePhotos,
 } from '../profile/profile-photo-url.js';
 
@@ -102,12 +103,118 @@ function readStringDetail(
   return typeof value === 'string' ? value : undefined;
 }
 
+interface TournamentHistoryPlayerResult {
+  readonly profileId: string | null;
+  readonly displayName: string;
+  readonly avatarUrl: string | null;
+  readonly place: number;
+}
+
+interface TournamentHistoryResult {
+  readonly status: 'CONFIRMED';
+  readonly podium: readonly TournamentHistoryPlayerResult[];
+  readonly viewer: TournamentHistoryPlayerResult;
+}
+
+function tournamentPlayerResult(value: unknown): TournamentHistoryPlayerResult | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+  const row = value as Record<string, unknown>;
+  const profileId = row.profileId;
+  const displayName = row.displayName;
+  const avatarUrl = row.avatarUrl;
+  const place = row.place;
+  if (
+    Object.keys(row).some(
+      (key) => !['profileId', 'displayName', 'avatarUrl', 'place'].includes(key),
+    ) ||
+    (profileId !== null && (typeof profileId !== 'string' || !UUID_PATTERN.test(profileId))) ||
+    typeof displayName !== 'string' ||
+    displayName.trim().length < 1 ||
+    displayName.length > 120 ||
+    (avatarUrl !== null &&
+      (typeof avatarUrl !== 'string' ||
+        !avatarUrl.startsWith('/') ||
+        avatarUrl.startsWith('//') ||
+        avatarUrl.length > 512)) ||
+    typeof place !== 'number' ||
+    !Number.isInteger(place) ||
+    place < 1 ||
+    place > 10_000
+  ) {
+    return undefined;
+  }
+  return { profileId, displayName: displayName.trim(), avatarUrl, place };
+}
+
+function readTournamentResult(
+  details: Readonly<Record<string, unknown>>,
+): TournamentHistoryResult | undefined {
+  const value = details.tournamentResult;
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+  const result = value as Record<string, unknown>;
+  if (
+    Object.keys(result).some((key) => !['status', 'podium', 'viewer'].includes(key)) ||
+    result.status !== 'CONFIRMED' ||
+    !Array.isArray(result.podium) ||
+    result.podium.length !== 3
+  ) {
+    return undefined;
+  }
+  const podium = result.podium.map(tournamentPlayerResult);
+  const viewer = tournamentPlayerResult(result.viewer);
+  if (
+    podium.some((row) => row === undefined) ||
+    podium.some((row, index) => row?.place !== index + 1) ||
+    !viewer
+  ) {
+    return undefined;
+  }
+  return {
+    status: 'CONFIRMED',
+    podium: podium as readonly TournamentHistoryPlayerResult[],
+    viewer,
+  };
+}
+
+function tournamentResultProfilePhotoUserIds(
+  details: Readonly<Record<string, unknown>>,
+): readonly string[] {
+  const result = readTournamentResult(details);
+  if (!result) return [];
+  return [...result.podium, result.viewer].flatMap((row) => (row.profileId ? [row.profileId] : []));
+}
+
+function stabilizeTournamentResultProfilePhotos(
+  result: TournamentHistoryResult,
+  tenantId: string,
+  deliveryIds: ReadonlyMap<string, string>,
+): TournamentHistoryResult {
+  const stabilize = (row: TournamentHistoryPlayerResult): TournamentHistoryPlayerResult => ({
+    ...row,
+    avatarUrl: row.profileId
+      ? (stableProfilePhotoUrl({
+          tenantId,
+          userId: row.profileId,
+          currentUrl: row.avatarUrl,
+          deliveryIds,
+        }) as string | null)
+      : row.avatarUrl,
+  });
+  return {
+    ...result,
+    podium: result.podium.map(stabilize),
+    viewer: stabilize(result.viewer),
+  };
+}
+
 function activityItem(
   item: StoredActivityHistoryItem,
   tenantId: string,
   deliveryIds: ReadonlyMap<string, string>,
 ) {
   const game = item.details.game;
+  const tournamentResult =
+    item.kind === 'TOURNAMENT' ? readTournamentResult(item.details) : undefined;
   return {
     id: item.id,
     kind: item.kind,
@@ -121,6 +228,15 @@ function activityItem(
     subtitle: readStringDetail(item.details, 'subtitle') ?? null,
     trainerName: readStringDetail(item.details, 'trainerName') ?? null,
     result: readStringDetail(item.details, 'result') ?? null,
+    ...(tournamentResult
+      ? {
+          tournamentResult: stabilizeTournamentResultProfilePhotos(
+            tournamentResult,
+            tenantId,
+            deliveryIds,
+          ),
+        }
+      : {}),
     ...(item.kind === 'GAME' && typeof game === 'object' && game !== null && !Array.isArray(game)
       ? { game: stabilizeGameCardProfilePhotos(game, tenantId, deliveryIds) }
       : {}),
@@ -559,7 +675,10 @@ export function registerActivityHistoryRoutes(
       const deliveryIds = options.photoRepository
         ? await options.photoRepository.getPhotoDeliveryIds(
             current.tenantId,
-            page.items.flatMap((item) => gameCardProfilePhotoUserIds(item.details.game)),
+            page.items.flatMap((item) => [
+              ...gameCardProfilePhotoUserIds(item.details.game),
+              ...tournamentResultProfilePhotoUserIds(item.details),
+            ]),
           )
         : new Map<string, string>();
       const nextCursor = page.next
