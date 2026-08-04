@@ -26,6 +26,8 @@ describe('Viva upcoming booking source normalization', () => {
             timeFrom: '2026-08-01T12:00:00+03:00',
             timeTo: '2026-08-01T14:00:00+03:00',
             inWaitlist: false,
+            clientsCount: 1,
+            maxClientsCount: 4,
             direction: { id: 4588, name: 'Игры' },
             type: { id: 1613, name: 'Открытая игра' },
             studio: { name: 'Терехово', address: 'Москва' },
@@ -83,6 +85,8 @@ describe('Viva upcoming booking source normalization', () => {
         exerciseRef: 'exercise-game-secret',
         kind: 'GAME',
         status: 'confirmed',
+        participantsCount: 1,
+        openSlots: 3,
       }),
       expect.objectContaining({
         bookingRef: 'booking-training-secret',

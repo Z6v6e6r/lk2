@@ -93,6 +93,15 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/ApiError'
+    Conflict:
+      description: The requested command conflicts with the current resource revision or a stored idempotency result.
+      headers:
+        X-Correlation-ID:
+          $ref: '#/components/headers/CorrelationId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
     TooManyRequests:
       description: Tenant or principal rate limit exceeded.
       headers:

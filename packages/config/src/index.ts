@@ -98,6 +98,10 @@ const environmentSchema = z.object({
   ACTIVITY_HISTORY_GAME_BACKFILL_ENABLED: booleanFromEnvironment,
   ACTIVITY_HISTORY_FRESH_SECONDS: z.coerce.number().int().min(30).max(86_400).default(300),
   ACTIVITY_HISTORY_PROVIDER_PAGE_SIZE: z.coerce.number().int().min(1).max(100).default(50),
+  BOOKING_ROSTER_READ_CONCURRENCY: z.coerce.number().int().min(1).max(10).default(4),
+  BOOKING_ROSTER_PRINCIPAL_EGRESS_LIMIT: z.coerce.number().int().min(1).max(500).default(50),
+  BOOKING_ROSTER_PROVIDER_EGRESS_LIMIT: z.coerce.number().int().min(1).max(5_000).default(500),
+  BOOKING_ROSTER_EGRESS_WINDOW_SECONDS: z.coerce.number().int().min(1).max(3_600).default(60),
   // The old LK can supply roster changes through either a safe local public clone or the staged
   // Mongo migration mirror. Source selection is process-only and is never exposed to clients.
   LEGACY_GAMES_ROSTER_SYNC_ENABLED: booleanFromEnvironment,

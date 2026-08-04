@@ -37,7 +37,10 @@ import type {
 import { isValidIdempotencyKey, type ClientPlatform } from '@phub/domain';
 import { homeBaseSchema, normalizeHomeBaseFreshness, type HomeBase } from '@phub/home-projection';
 import type { NotificationEndpointCipher } from '@phub/notifications';
-import type { VivaExerciseRecommendationSourceAdapter } from '@phub/viva-adapter';
+import type {
+  VivaExerciseRecommendationSourceAdapter,
+  VivaExerciseRosterSourceAdapter,
+} from '@phub/viva-adapter';
 import type { Logger } from 'pino';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import type Redis from 'ioredis';
@@ -228,6 +231,10 @@ export interface BuildAppOptions {
         | 'registerTrainerAvatarSource'
       >
     >;
+  readonly exerciseRosterSource?: Pick<
+    VivaExerciseRosterSourceAdapter,
+    'read' | 'readAvatarSource'
+  >;
   readonly rateLimitRedis?: Redis;
 }
 
@@ -666,9 +673,18 @@ export async function buildApp(options: BuildAppOptions) {
     ...(options.profilePhotoMediaRepository
       ? { photoRepository: options.profilePhotoMediaRepository }
       : {}),
+    ...(options.profileSummaryRepository
+      ? { profileRepository: options.profileSummaryRepository }
+      : {}),
     ...(options.exerciseRecommendationSource
       ? { exerciseSource: options.exerciseRecommendationSource }
       : {}),
+    ...(options.exerciseRosterSource ? { exerciseRosterSource: options.exerciseRosterSource } : {}),
+    bookingOwnershipMaxAgeSeconds: options.config.HOME_PROJECTION_MAX_STALE_SECONDS,
+    exerciseRosterReadConcurrency: options.config.BOOKING_ROSTER_READ_CONCURRENCY,
+    exerciseRosterPrincipalEgressLimit: options.config.BOOKING_ROSTER_PRINCIPAL_EGRESS_LIMIT,
+    exerciseRosterProviderEgressLimit: options.config.BOOKING_ROSTER_PROVIDER_EGRESS_LIMIT,
+    exerciseRosterEgressWindowSeconds: options.config.BOOKING_ROSTER_EGRESS_WINDOW_SECONDS,
     ...(options.tournamentSummarySource
       ? { tournamentSource: options.tournamentSummarySource }
       : {}),

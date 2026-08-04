@@ -71,6 +71,8 @@ paths:
           $ref: ../../common/components.yaml#/components/responses/Unauthorized
         '404':
           $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: ../../common/components.yaml#/components/responses/Conflict
         '429':
           $ref: ../../common/components.yaml#/components/responses/TooManyRequests
 
@@ -215,7 +217,7 @@ components:
           const: 0
         size:
           type: integer
-          const: 50
+          const: 1000
     BookingScreenReadResultRequest:
       type: object
       additionalProperties: false

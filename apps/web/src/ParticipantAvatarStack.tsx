@@ -12,6 +12,7 @@ export interface ParticipantAvatarStackItem {
 export interface ParticipantAvatarStackProps {
   readonly participants: readonly ParticipantAvatarStackItem[];
   readonly capacity?: number;
+  readonly anonymousParticipantCount?: number;
   readonly ariaLabel?: string;
   readonly participantActionLabel?: string;
   readonly showLevelRing?: boolean;
@@ -68,9 +69,20 @@ function OpenSlotIcon(): React.JSX.Element {
   );
 }
 
+function AnonymousParticipantIcon(): React.JSX.Element {
+  return (
+    <svg width="48" height="48" viewBox="0 0 48 48" fill="none" aria-hidden="true">
+      <circle cx="24" cy="24" r="23.25" fill="#E8E4F5" stroke="#FAFAFA" strokeWidth="1.5" />
+      <circle cx="24" cy="19" r="6" fill="#9A8FB8" />
+      <path d="M13 36c1.7-6.3 5.4-9.5 11-9.5S33.3 29.7 35 36" fill="#9A8FB8" />
+    </svg>
+  );
+}
+
 export function ParticipantAvatarStack({
   participants,
   capacity = 4,
+  anonymousParticipantCount = 0,
   ariaLabel = 'Участники',
   participantActionLabel = 'Управлять',
   showLevelRing = true,
@@ -79,7 +91,14 @@ export function ParticipantAvatarStack({
 }: ParticipantAvatarStackProps): React.JSX.Element {
   const visibleCapacity = Math.max(0, Math.min(4, Math.floor(capacity)));
   const visibleParticipants = participants.slice(0, visibleCapacity);
-  const openSlots = Math.max(0, visibleCapacity - visibleParticipants.length);
+  const visibleAnonymousParticipants = Math.min(
+    Math.max(0, Math.floor(anonymousParticipantCount)),
+    Math.max(0, visibleCapacity - visibleParticipants.length),
+  );
+  const openSlots = Math.max(
+    0,
+    visibleCapacity - visibleParticipants.length - visibleAnonymousParticipants,
+  );
 
   return (
     <span className="participant-avatar-stack" aria-label={ariaLabel}>
@@ -130,6 +149,16 @@ export function ParticipantAvatarStack({
           </span>
         );
       })}
+      {Array.from({ length: visibleAnonymousParticipants }, (_, index) => (
+        <span
+          className="participant-avatar-stack__anonymous"
+          key={`anonymous-participant-${index}`}
+          title="Профиль участника недоступен"
+          aria-label="Профиль участника недоступен"
+        >
+          <AnonymousParticipantIcon />
+        </span>
+      ))}
       {Array.from({ length: openSlots }, (_, index) =>
         onOpenSlotClick ? (
           <button

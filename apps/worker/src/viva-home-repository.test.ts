@@ -188,6 +188,7 @@ describe('Viva Home producer repository', () => {
 
   it('maps Viva IDs and writes PadlHub-only components through the outbox atomically', async () => {
     const outboxPayloads: string[] = [];
+    let ownershipValues: readonly unknown[] | undefined;
     let mapping = 0;
     let revision = 0;
     const query = vi.fn((text: string, values: readonly unknown[] = []) => {
@@ -199,6 +200,14 @@ describe('Viva Home producer repository', () => {
         text.includes('pg_advisory_xact_lock')
       ) {
         return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('delete from integration.viva_home_booking_ownership')) {
+        expect(values).toEqual([tenantId, userId]);
+        return Promise.resolve({ rows: [], rowCount: 1 });
+      }
+      if (text.includes('insert into integration.viva_home_booking_ownership')) {
+        ownershipValues = values;
+        return Promise.resolve({ rows: [], rowCount: 1 });
       }
       if (text.includes('insert into integration.external_entity_map')) {
         mapping += 1;
@@ -355,6 +364,14 @@ describe('Viva Home producer repository', () => {
     expect(serialized).not.toContain(externalSubscriptionId);
     expect(serialized).not.toContain(externalExerciseId);
     expect(serialized).not.toContain('562807.selcdn.ru');
+    expect(ownershipValues).toEqual([
+      tenantId,
+      userId,
+      [externalBookingId],
+      [externalExerciseId],
+      'producer-test-correlation',
+      '2026-07-15T12:00:00.000Z',
+    ]);
     expect(serialized).toContain('media.padlhub.test');
     expect(serialized).toContain(`/games/${gameId}`);
     expect(serialized).not.toContain(`/bookings/${bookingId}`);

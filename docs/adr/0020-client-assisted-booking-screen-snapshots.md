@@ -44,14 +44,16 @@ The browser is a transport participant, not the data owner:
 
 The implementation enables `schedule.read` inside authenticated, short-lived `FOR_ME` and
 `GROUP_TRAININGS` jobs, the fixed `bookings.read -> bookings.details.read` chain inside
-`MY_BOOKINGS`, and one bounded `bookings.history.read` page inside `ACTIVITY_HISTORY`. It does not
+`MY_BOOKINGS`, and one bounded `bookings.history.read` page inside `ACTIVITY_HISTORY`. The
+`MY_BOOKINGS` command is a fixed entry point for a bounded sequential traversal; provider page and
+detail identifiers remain derived inside the adapter. It does not
 add any of those operations to the general-purpose `DIRECT_VIVA_CONTRACT_READY_OPERATIONS`
 allowlist. History keeps its dedicated PadlHub activity-history projection; only provider-page
 transport is client-assisted.
 
-The browser cannot provide booking detail identifiers. `@phub/viva-client-adapter` extracts at most
-50 active identifiers from the immediately preceding list response and uses only those identifiers
-for the details read. PadlHub then:
+The browser cannot provide booking detail identifiers. `@phub/viva-client-adapter` follows the
+provider's `last`/`totalPages` metadata for at most 50 pages and 1,000 unique active bookings, then
+batches the derived identifiers in groups of at most 50 for details reads. PadlHub then:
 
 1. validates that every accepted detail belongs to the active list;
 2. resolves only integration mappings previously written by trusted worker/import paths;
@@ -131,7 +133,8 @@ media URL are not exposed.
 Activation first reads the dedicated local `/bookings/upcoming` projection. A fresh projection is
 rendered without contacting Viva. An absent or stale projection starts a `MY_BOOKINGS` read job;
 the browser gathers the allowlisted Viva booking list/details required for the same user and
-relays the fixed result to PadlHub.
+relays the fixed result to PadlHub. If Viva still reports another page after either bound, the
+completion is `PARTIAL` and cannot replace the last complete projection.
 
 The upcoming slice uses the direct Viva list/details pair as one consistent source operation. It
 does not merge fields from the older Home projection. Existing PadlHub mappings contribute identity
@@ -139,6 +142,65 @@ and route resolution only, never provider business fields. A missing mapping doe
 booking. The normalized result replaces `booking.upcoming_booking_projection` atomically. The UI
 then rereads `/bookings/upcoming`; a failed browser read leaves a still-servable stale projection
 visible and never falls back to server Viva egress.
+
+For a confirmed client-assisted Game booking, PadlHub attaches the authenticated player's own
+profile summary and the provider-supplied open-slot count. `@phub/viva-adapter` also performs one
+bounded, cached read of the exercise booking roster. It uses the Viva Admin route when server
+credentials are configured and the existing trusted PadlHub roster proxy otherwise; a Viva system
+key is never sent to that proxy. The roster read contributes participant identity and photo only;
+the client-assisted booking snapshot remains the owner of booking status, time, capacity and
+occupied count. Provider client identifiers and photo source URLs never cross the adapter boundary:
+client IDs become PadlHub-owned pseudonymous UUIDs and photos are served through the allowlisted
+PadlHub media proxy. When an integration-owned `viva_profile` mapping already exists, the adapter
+may attach that PadlHub profile UUID; it never creates identity mappings from a browser-relayed
+roster. A trusted roster name may fall back to an existing PadlHub profile only when the exact
+tenant-scoped display name identifies one active user; ambiguous names remain unlinked.
+
+The client-relayed `bookingRef`/`exerciseRef` pair is not authorization for that privileged roster
+read. Before egress, the API must prove the pair belongs to the current tenant and user from a
+trusted worker-owned booking source and integration mapping. This proof is an authorization guard,
+not a second source of booking presentation fields. An absent, stale, cross-tenant or mismatched
+proof suppresses roster enrichment and never falls back to the browser-selected exercise.
+
+That ownership guard applies to privileged Viva Admin roster egress. When no system key is
+configured, the roster adapter uses PadlHub's existing public participants endpoint and declares a
+`PUBLIC` access scope. That path may enrich a client-assisted card without private booking proof
+because it can return only participation context already public on PadlHub; the authenticated job,
+result claim, UUID validation, concurrency bound and shared egress budgets still apply. The API
+never treats a privileged source as public by default.
+
+The worker records that proof in `integration.viva_home_booking_ownership` from a direct,
+user-scoped Viva booking list/details read. The checkpoint contains only the exact external booking
+and exercise pair, tenant/user ownership, correlation ID and fetch time; it is never serialized to
+clients. A full Home source success replaces the checkpoint in the same transaction as the Home
+components, and also checkpoints it immediately after the direct booking read so later roster or
+photo enrichment cannot delay authorization freshness. If profile or subscription reads fail after
+delegation refresh, the worker retries only the bounded booking ownership slice and may refresh the
+checkpoint while the full Home sync still records its failure. Browser-assisted booking projections
+never write or refresh this authority.
+
+One accepted result claims its job/command and payload digest before any provider effect. Same-body
+replays return the stored state, while a different body returns a stable idempotency conflict;
+neither can repeat egress concurrently. The processing claim uses an independent 600-second lease,
+longer than the worst configured bounded fan-out, while the stored result retains the remaining job
+TTL. Authorized exercise references are deduplicated, then
+executed through one API-process provider bulkhead shared by concurrent requests. Redis atomically
+enforces both a tenant/user/provider budget and a tenant/provider budget across API nodes. Budget
+exhaustion returns stable `BOOKING_ROSTER_EGRESS_BUDGET_EXCEEDED` with `Retry-After` before any
+outbound read; every timeout, circuit-open and provider failure releases its bulkhead permit. The
+result-size bound remains a schema limit, not an outbound-concurrency setting.
+
+Game-roster identity is public participation context, so a player's name and avatar remain visible
+on the Game card even when their profile page is closed or limited. Profile privacy still governs
+the separate profile page, extended sections, contact and chat. If the trusted roster read is
+unavailable, a provider-supplied participant count may render unknown occupied seats as neutral
+silhouettes; the client never invents identities. The client renders only supplied participants and
+counts.
+
+Participant avatars with a mapped PadlHub UUID are independent profile links and take precedence
+over the whole-card game link. The upcoming Game deep-link uses the same `game-detail`
+presentation as canonical History games, while omitting result, lineup and command fields that the
+client-assisted booking snapshot does not own.
 
 All canonical records are returned. Recommendation score, station preferences and preferred time
 must never hide an existing booking. The screen supports:
@@ -183,7 +245,7 @@ Request:
 
 `screen` is `FOR_ME`, `GROUP_TRAININGS` or `MY_BOOKINGS`. A `MY_BOOKINGS` job returns exactly one
 command with `operation=bookings.read`, `detailsOperation=bookings.details.read`, `page=0` and
-`size=50`. `FOR_ME` and `GROUP_TRAININGS` return fixed `schedule.read` commands.
+`size=1000`. `FOR_ME` and `GROUP_TRAININGS` return fixed `schedule.read` commands.
 
 Response:
 
@@ -291,7 +353,12 @@ Each screen has its own state machine:
 - the Viva access token lives in browser memory only and is redacted from every error;
 - the browser uses `credentials: omit` and only the `Authorization` request header for Viva;
 - read jobs expire after at most 120 seconds and are single-use per command;
-- result submission is rate-limited, idempotent and bound to the PadlHub session;
+- result submission is rate-limited, bound to the PadlHub session and claimed idempotently before
+  any privileged provider enrichment;
+- server-held roster credentials may be used only after a trusted tenant/user/booking/exercise
+  ownership proof; client list/detail agreement is validation, not authorization;
+- roster egress is deduplicated, concurrency-bounded and protected by a shared per-principal and
+  per-provider budget whose rejection happens before outbound work;
 - raw provider payload is not persisted; only canonical integration mappings, digests, bounded
   audit metadata and the public screen DTO may survive completion;
 - client-relayed payload is untrusted and can influence only read-only screen snapshots;
@@ -312,11 +379,18 @@ Each screen has its own state machine:
 5. Prove recommendation parity for all three activity kinds and the no-backfill threshold rule.
 6. Prove `Мои записи` never applies recommendation filtering. Covered by API/browser tests for the
    upcoming slice.
-7. Add timeout, payload-size, rate-limit, replay and malformed-result tests.
-8. Keep the existing global direct-read kill switch and add a dedicated tenant read-job allowlist
+7. Add timeout, payload-size, rate-limit, replay and malformed-result tests. Roster-specific
+   coverage must also prove forged/cross-tenant targets perform zero egress, duplicate targets
+   perform one read, concurrent replay performs work once, peak concurrency never exceeds the
+   configured limit, and all failure paths release permits.
+8. Before materially increasing API replicas, load-test aggregate provider concurrency. The Redis
+   provider budget is cross-node, while the semaphore is process-local; introduce a provider proxy
+   or distributed concurrency lease if the replica envelope can exceed the provider's safe
+   simultaneous-request limit.
+9. Keep the existing global direct-read kill switch and add a dedicated tenant read-job allowlist
    before production rollout.
-9. Run the mixed-mode browser smoke and confirm zero server Viva schedule/booking/history egress.
-10. Update ADR 0005, ADR 0012 and the client-routing runbook before production rollout. The
+10. Run the mixed-mode browser smoke and confirm zero server Viva schedule/booking/history egress.
+11. Update ADR 0005, ADR 0012 and the client-routing runbook before production rollout. The
     first-slice OpenAPI contract is already published in the repository.
 
 ## Consequences

@@ -2493,8 +2493,13 @@ components:
                 type: [number, 'null']
                 minimum: 0
                 maximum: 10
+        participantsCount:
+          description: Total occupied participant slots supplied by the booking source. It may exceed the number of viewer-visible participant summaries.
+          type: integer
+          minimum: 0
+          maximum: 4
         openSlots:
-          description: Number of open participant slots explicitly supplied by the booking source; clients must not infer it.
+          description: Number of open participant slots explicitly supplied by the booking source; clients must not infer it or render additional placeholder slots.
           type: integer
           minimum: 0
           maximum: 4

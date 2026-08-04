@@ -17,9 +17,11 @@ import {
   isGroupTrainingCatalogActivity,
   normalizeVivaExerciseRecommendationPayload,
   normalizeVivaUpcomingBookingPayload,
+  isVivaUpcomingBookingPayloadComplete,
   vivaReadSnapshotUuid,
   type VivaExerciseRecommendation,
   type VivaExerciseRecommendationSourceAdapter,
+  type VivaExerciseRosterSourceAdapter,
 } from '@phub/viva-adapter';
 import type { FastifyInstance, FastifyReply, FastifyRequest, preHandlerHookHandler } from 'fastify';
 
@@ -30,6 +32,7 @@ import type { TournamentSummarySource } from '../tournaments/tournament-summary-
 import type {
   BookingScreenReadJob,
   BookingScreenReadJobStore,
+  BookingScreenReadResult,
 } from './booking-screen-read-job-store.js';
 import { listBookingRecommendations } from './booking-recommendations.js';
 import type { EventCatalogSnapshotStore } from './event-catalog-snapshot-store.js';
@@ -50,6 +53,7 @@ import {
   type TrainingEventCatalogMetadata,
   type TrainingEventCatalogItem,
 } from './training-event-catalog.js';
+import { stableProfilePhotoUrl } from '../profile/profile-photo-url.js';
 
 type CardReadRepository = Pick<GameRepository, 'listRecommendationCardProjections'> &
   Partial<Pick<GameRepository, 'listPublicCardProjections'>>;
@@ -65,11 +69,87 @@ type ExerciseRecommendationSource = Pick<VivaExerciseRecommendationSourceAdapter
       | 'registerTrainerAvatarSource'
     >
   >;
+type ExerciseRosterSource = Pick<VivaExerciseRosterSourceAdapter, 'read' | 'readAvatarSource'> & {
+  readonly accessScope?: VivaExerciseRosterSourceAdapter['accessScope'];
+};
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const CLIENT_ASSISTED_JOB_TTL_SECONDS = 120;
+const CLIENT_ASSISTED_RESULT_CLAIM_LEASE_SECONDS = 600;
 const CLIENT_ASSISTED_DAYS = 7;
 const EVENT_CATALOG_SNAPSHOT_TTL_SECONDS = 600;
 const EVENT_CATALOG_TIMEZONE = 'Europe/Moscow';
+const DEFAULT_ROSTER_READ_CONCURRENCY = 4;
+const DEFAULT_ROSTER_EGRESS_LIMIT = 50;
+const DEFAULT_ROSTER_EGRESS_WINDOW_SECONDS = 60;
+
+class RosterEgressBudgetError extends Error {
+  public constructor(public readonly retryAfterSeconds: number) {
+    super('BOOKING_ROSTER_EGRESS_BUDGET_EXCEEDED');
+  }
+}
+
+class AsyncSemaphore {
+  private active = 0;
+  private readonly waiting: (() => void)[] = [];
+
+  public constructor(private readonly limit: number) {}
+
+  private async acquire(): Promise<void> {
+    if (this.active < this.limit) {
+      this.active += 1;
+      return;
+    }
+    await new Promise<void>((resolve) => this.waiting.push(resolve));
+  }
+
+  private release(): void {
+    const next = this.waiting.shift();
+    if (next) {
+      next();
+      return;
+    }
+    this.active -= 1;
+  }
+
+  public async run<T>(operation: () => Promise<T>): Promise<T> {
+    await this.acquire();
+    try {
+      return await operation();
+    } finally {
+      this.release();
+    }
+  }
+}
+
+async function mapSettledWithConcurrency<T, R>(
+  items: readonly T[],
+  concurrency: number,
+  operation: (item: T) => Promise<R>,
+): Promise<readonly PromiseSettledResult<R>[]> {
+  const results = new Array<PromiseSettledResult<R>>(items.length);
+  let nextIndex = 0;
+  const worker = async (): Promise<void> => {
+    while (nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      try {
+        results[index] = { status: 'fulfilled', value: await operation(items[index]!) };
+      } catch (reason) {
+        results[index] = { status: 'rejected', reason };
+      }
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(items.length, Math.max(1, concurrency)) }, () => worker()),
+  );
+  return results;
+}
+
+function readResultItemCount(result: BookingScreenReadResult): number {
+  if (result.kind === 'schedule') return result.activities.length;
+  if (result.kind === 'upcoming') return result.bookings.length;
+  return result.page.records.length;
+}
 
 function principal(request: FastifyRequest): { tenantId: string; userId: string } | undefined {
   const tenantId = request.tenantId;
@@ -368,9 +448,11 @@ export function registerBookingRecommendationRoutes(
   options: {
     readonly gameRepository?: CardReadRepository;
     readonly photoRepository?: Pick<ProfileSummaryRepository, 'getPhotoDeliveryIds'>;
+    readonly profileRepository?: Pick<ProfileSummaryRepository, 'get'>;
     readonly preferencesRepository?: BookingPreferencesRepository;
     readonly friendshipRepository?: Pick<ProfileFriendshipRepository, 'list'>;
     readonly exerciseSource?: ExerciseRecommendationSource;
+    readonly exerciseRosterSource?: ExerciseRosterSource;
     readonly tournamentSource?: TournamentSummarySource;
     readonly clientAssistedJobStore?: BookingScreenReadJobStore;
     readonly eventCatalogSnapshotStore?: EventCatalogSnapshotStore<EventCatalogItem>;
@@ -382,11 +464,21 @@ export function registerBookingRecommendationRoutes(
       readonly userId: string;
       readonly correlationId: string;
     }) => Promise<string>;
+    readonly bookingOwnershipMaxAgeSeconds?: number;
+    readonly exerciseRosterReadConcurrency?: number;
+    readonly exerciseRosterPrincipalEgressLimit?: number;
+    readonly exerciseRosterProviderEgressLimit?: number;
+    readonly exerciseRosterEgressWindowSeconds?: number;
     readonly avatarMedia?: EventAvatarMedia;
     readonly publicTenantHandlers: readonly preHandlerHookHandler[];
     readonly authenticatedTenantHandlers: readonly preHandlerHookHandler[];
   },
 ): void {
+  const rosterReadConcurrency = Math.min(
+    10,
+    Math.max(1, options.exerciseRosterReadConcurrency ?? DEFAULT_ROSTER_READ_CONCURRENCY),
+  );
+  const rosterBulkhead = new AsyncSemaphore(rosterReadConcurrency);
   app.post(
     '/user/api/v1/:tenantKey/booking-screen-read-jobs',
     { preHandler: [...options.authenticatedTenantHandlers] },
@@ -451,7 +543,7 @@ export function registerBookingRecommendationRoutes(
                   operation: 'bookings.read',
                   detailsOperation: 'bookings.details.read',
                   page: 0,
-                  size: 50,
+                  size: 1000,
                 },
               ],
       };
@@ -525,6 +617,43 @@ export function registerBookingRecommendationRoutes(
           'Некорректный результат чтения.',
         );
       }
+      const ttlSeconds = Math.max(1, Math.ceil((Date.parse(job.expiresAt) - Date.now()) / 1_000));
+      const claimId = randomUUID();
+      const payloadHash = snapshotVersion(body.payload);
+      const claimStatus = await options.clientAssistedJobStore.claimResult(
+        jobId,
+        commandId,
+        claimId,
+        payloadHash,
+        CLIENT_ASSISTED_RESULT_CLAIM_LEASE_SECONDS,
+      );
+      if (claimStatus === 'replayed') {
+        const replayed = (await options.clientAssistedJobStore.getResults(jobId, [commandId]))[0];
+        if (!replayed) return unavailable(request, reply);
+        return reply.status(200).send({
+          accepted: true,
+          replayed: true,
+          itemCount: readResultItemCount(replayed),
+        });
+      }
+      if (claimStatus === 'in_progress') {
+        return sendApiError(
+          request,
+          reply,
+          409,
+          'BOOKING_SCREEN_READ_RESULT_IN_PROGRESS',
+          'Результат чтения уже обрабатывается.',
+        );
+      }
+      if (claimStatus === 'conflict') {
+        return sendApiError(
+          request,
+          reply,
+          409,
+          'BOOKING_SCREEN_READ_RESULT_IDEMPOTENCY_CONFLICT',
+          'Для этой команды уже получен другой результат.',
+        );
+      }
       let result:
         | {
             readonly kind: 'schedule';
@@ -545,8 +674,19 @@ export function registerBookingRecommendationRoutes(
               readonly venue: string;
               readonly status: 'confirmed' | 'waitlist' | 'payment_required';
               readonly route: string;
+              readonly participants?: readonly {
+                readonly profileId?: string;
+                readonly displayName: string;
+                readonly avatarUrl?: string | null;
+                readonly level?: string | null;
+                readonly levelValue?: number | null;
+              }[];
+              readonly participantsCount?: number;
+              readonly openSlots?: number;
             }[];
+            readonly complete: boolean;
           };
+      const tenantKey = (request.params as { readonly tenantKey: string }).tenantKey;
       try {
         if (command.operation === 'schedule.read') {
           const exerciseExternalIds = new Map<string, string>();
@@ -589,22 +729,148 @@ export function registerBookingRecommendationRoutes(
           };
         } else {
           const sources = normalizeVivaUpcomingBookingPayload(body.payload);
-          const mappings = options.bookingScreenMappingRepository
-            ? await options.bookingScreenMappingRepository.resolve({
+          const rosterCorrelationId =
+            typeof request.headers['x-correlation-id'] === 'string'
+              ? request.headers['x-correlation-id']
+              : randomUUID();
+          const tournamentDates = [
+            ...new Set(
+              sources
+                .filter((item) => item.kind === 'TOURNAMENT')
+                .map((item) => moscowDate(new Date(item.startsAt))),
+            ),
+          ];
+          const [mappings, ownedBookingExercises, viewerProfile, photoDeliveryIds, tournamentRead] =
+            await Promise.all([
+              options.bookingScreenMappingRepository
+                ? options.bookingScreenMappingRepository.resolve({
+                    tenantId: current.tenantId,
+                    bookingExternalIds: sources.map((item) => item.bookingRef),
+                    exerciseAssociationIds: sources.flatMap((item) =>
+                      item.exerciseRef ? exerciseAssociationIds(item.exerciseRef) : [],
+                    ),
+                  })
+                : Promise.resolve({ bookings: [], games: [], stations: [] }),
+              options.bookingScreenMappingRepository?.resolveOwnedBookingExercises?.({
                 tenantId: current.tenantId,
-                bookingExternalIds: sources.map((item) => item.bookingRef),
-                exerciseAssociationIds: sources.flatMap((item) =>
-                  item.exerciseRef ? exerciseAssociationIds(item.exerciseRef) : [],
+                userId: current.userId,
+                candidates: sources.flatMap((item) =>
+                  item.exerciseRef
+                    ? [
+                        {
+                          bookingExternalId: item.bookingRef,
+                          exerciseExternalId: item.exerciseRef,
+                          exerciseAssociationIds: exerciseAssociationIds(item.exerciseRef),
+                        },
+                      ]
+                    : [],
                 ),
-              })
-            : { bookings: [], games: [], stations: [] };
+                maxAgeSeconds: Math.max(0, options.bookingOwnershipMaxAgeSeconds ?? 300),
+              }) ?? Promise.resolve(new Map<string, ReadonlySet<string>>()),
+              options.profileRepository?.get(current.tenantId, current.userId),
+              options.photoRepository?.getPhotoDeliveryIds(current.tenantId, [current.userId]) ??
+                Promise.resolve(new Map<string, string>()),
+              readTournaments({
+                ...(options.tournamentSource ? { source: options.tournamentSource } : {}),
+                dates: tournamentDates,
+              }),
+            ]);
+          const bookingRefsByExerciseRef = new Map<string, string[]>();
+          if (options.exerciseRosterSource) {
+            for (const item of sources) {
+              if (
+                !item.exerciseRef ||
+                (options.exerciseRosterSource.accessScope !== 'PUBLIC' &&
+                  !ownedBookingExercises.get(item.bookingRef)?.has(item.exerciseRef)) ||
+                (item.kind !== 'GAME' && item.kind !== 'TOURNAMENT') ||
+                item.status === 'waitlist' ||
+                (item.participantsCount ?? 0) <= 0
+              ) {
+                continue;
+              }
+              const bookingRefs = bookingRefsByExerciseRef.get(item.exerciseRef) ?? [];
+              bookingRefs.push(item.bookingRef);
+              bookingRefsByExerciseRef.set(item.exerciseRef, bookingRefs);
+            }
+          }
+          const rosterCandidates = [...bookingRefsByExerciseRef.keys()];
+          const budget = await options.clientAssistedJobStore.consumeEgressBudget({
+            tenantId: current.tenantId,
+            userId: current.userId,
+            provider: 'VIVA',
+            units: rosterCandidates.length,
+            principalLimit: Math.max(
+              1,
+              options.exerciseRosterPrincipalEgressLimit ?? DEFAULT_ROSTER_EGRESS_LIMIT,
+            ),
+            providerLimit: Math.max(
+              1,
+              options.exerciseRosterProviderEgressLimit ?? DEFAULT_ROSTER_EGRESS_LIMIT * 10,
+            ),
+            windowSeconds: Math.max(
+              1,
+              options.exerciseRosterEgressWindowSeconds ?? DEFAULT_ROSTER_EGRESS_WINDOW_SECONDS,
+            ),
+          });
+          if (!budget.allowed) throw new RosterEgressBudgetError(budget.retryAfterSeconds);
+          const rosterReads = await mapSettledWithConcurrency(
+            rosterCandidates,
+            rosterReadConcurrency,
+            (exerciseExternalId) =>
+              rosterBulkhead.run(() =>
+                options.exerciseRosterSource!.read({
+                  tenantId: current.tenantId,
+                  exerciseExternalId,
+                  correlationId: rosterCorrelationId,
+                }),
+              ),
+          );
+          const rostersByExerciseRef = new Map(
+            rosterCandidates.flatMap((exerciseRef, index) => {
+              const roster = rosterReads[index];
+              return roster?.status === 'fulfilled' && roster.value.length > 0
+                ? [[exerciseRef, roster.value] as const]
+                : [];
+            }),
+          );
+          const rostersByBookingRef = new Map(
+            [...bookingRefsByExerciseRef].flatMap(([exerciseRef, bookingRefs]) => {
+              const roster = rostersByExerciseRef.get(exerciseRef);
+              return roster ? bookingRefs.map((bookingRef) => [bookingRef, roster] as const) : [];
+            }),
+          );
+          const profileIdsByDisplayName =
+            (await options.bookingScreenMappingRepository?.resolveUniqueProfileIdsByDisplayNames?.({
+              tenantId: current.tenantId,
+              displayNames: [...rostersByBookingRef.values()].flatMap((roster) =>
+                roster.map((participant) => participant.displayName),
+              ),
+            })) ?? new Map<string, string>();
           const bookingIds = new Map(
             mappings.bookings.map((item) => [item.externalId, item.bookingId]),
           );
           const gameIds = new Map(mappings.games.map((item) => [item.associationId, item.gameId]));
+          const tournamentCandidatesByExerciseRef = new Map<string, PublicTournamentSummary[]>();
+          for (const tournament of tournamentRead.items) {
+            const exerciseRef = options.tournamentSource?.readExerciseExternalId?.(tournament.id);
+            if (!exerciseRef) continue;
+            const candidates = tournamentCandidatesByExerciseRef.get(exerciseRef) ?? [];
+            candidates.push(tournament);
+            tournamentCandidatesByExerciseRef.set(exerciseRef, candidates);
+          }
+          const tournamentsByExerciseRef = new Map(
+            [...tournamentCandidatesByExerciseRef].flatMap(([exerciseRef, candidates]) =>
+              candidates.length === 1 ? [[exerciseRef, candidates[0]!] as const] : [],
+            ),
+          );
           result = {
             kind: 'upcoming',
+            complete: isVivaUpcomingBookingPayloadComplete(body.payload),
             bookings: sources.map((item) => {
+              const tournament =
+                item.kind === 'TOURNAMENT' && item.exerciseRef
+                  ? tournamentsByExerciseRef.get(item.exerciseRef)
+                  : undefined;
               const gameId = item.exerciseRef
                 ? exerciseAssociationIds(item.exerciseRef)
                     .map((associationId) => gameIds.get(associationId))
@@ -615,33 +881,140 @@ export function registerBookingRecommendationRoutes(
               const activityId = item.exerciseRef
                 ? vivaReadSnapshotUuid('exercise', item.exerciseRef)
                 : bookingId;
-              const kind = gameId
-                ? ('game' as const)
-                : item.kind === 'TOURNAMENT'
+              const kind =
+                item.kind === 'TOURNAMENT'
                   ? ('tournament' as const)
-                  : item.kind === 'GAME'
+                  : gameId || item.kind === 'GAME'
                     ? ('game' as const)
                     : ('training' as const);
+              const viewerParticipant =
+                item.status === 'waitlist' || !viewerProfile
+                  ? undefined
+                  : {
+                      profileId: viewerProfile.userId,
+                      displayName: viewerProfile.displayName,
+                      avatarUrl: stableProfilePhotoUrl({
+                        tenantId: current.tenantId,
+                        userId: viewerProfile.userId,
+                        currentUrl: viewerProfile.avatarUrl,
+                        deliveryIds: photoDeliveryIds,
+                      }) as string | null,
+                      level: viewerProfile.levelLabel,
+                      levelValue: viewerProfile.levelValue,
+                    };
+              const roster = rostersByBookingRef.get(item.bookingRef) ?? [];
+              const normalizedViewerName = viewerParticipant?.displayName
+                .trim()
+                .toLocaleLowerCase('ru-RU')
+                .replace(/\s+/gu, ' ');
+              const rosterParticipants = roster.map((participant) => ({
+                ...((participant.profileId ?? profileIdsByDisplayName.get(participant.displayName))
+                  ? {
+                      profileId:
+                        participant.profileId ??
+                        profileIdsByDisplayName.get(participant.displayName)!,
+                    }
+                  : {}),
+                displayName: participant.displayName,
+                avatarUrl: options.exerciseRosterSource?.readAvatarSource(participant.id)
+                  ? `/public/api/v1/${encodeURIComponent(tenantKey)}/booking-participants/${encodeURIComponent(participant.id)}/avatar`
+                  : null,
+                level: null,
+                levelValue: null,
+              }));
+              const viewerRosterIndex = normalizedViewerName
+                ? rosterParticipants.findIndex(
+                    (participant) =>
+                      participant.displayName
+                        .trim()
+                        .toLocaleLowerCase('ru-RU')
+                        .replace(/\s+/gu, ' ') === normalizedViewerName,
+                  )
+                : -1;
+              const participants =
+                rosterParticipants.length > 0
+                  ? rosterParticipants.map((participant, index) =>
+                      index === viewerRosterIndex && viewerParticipant
+                        ? viewerParticipant
+                        : participant,
+                    )
+                  : viewerParticipant
+                    ? [viewerParticipant]
+                    : [];
               return {
                 id: bookingId,
                 kind,
-                title: item.title,
-                startsAt: item.startsAt,
-                ...(item.endsAt ? { endsAt: item.endsAt } : {}),
-                venue: item.venue,
+                title: tournament?.title ?? item.title,
+                startsAt: tournament?.startsAt ?? item.startsAt,
+                ...(tournament?.endsAt
+                  ? { endsAt: tournament.endsAt }
+                  : item.endsAt
+                    ? { endsAt: item.endsAt }
+                    : {}),
+                venue: tournament?.venue ?? item.venue,
                 status: item.status,
-                route: gameId
-                  ? `/games/${gameId}`
+                ...(participants.length > 0 ? { participants } : {}),
+                ...(tournament
+                  ? { participantsCount: tournament.capacity.registered }
+                  : item.participantsCount === undefined
+                    ? {}
+                    : { participantsCount: Math.min(4, item.participantsCount) }),
+                ...(tournament
+                  ? { openSlots: tournament.capacity.open }
+                  : item.openSlots === undefined
+                    ? {}
+                    : { openSlots: item.openSlots }),
+                route: tournament
+                  ? tournament.route
                   : kind === 'tournament'
                     ? `/tournaments?event=${activityId}`
-                    : kind === 'game'
-                      ? `/games?event=${activityId}`
-                      : `/trainings?event=${activityId}`,
+                    : gameId
+                      ? `/games/${gameId}`
+                      : kind === 'game'
+                        ? `/games?event=${activityId}`
+                        : `/trainings?event=${activityId}`,
               };
             }),
           };
         }
-      } catch {
+        const storedResult: BookingScreenReadResult = {
+          commandId,
+          ...result,
+          acceptedAt: new Date().toISOString(),
+        };
+        if (
+          !(await options.clientAssistedJobStore.completeClaimedResult(
+            jobId,
+            claimId,
+            payloadHash,
+            storedResult,
+            ttlSeconds,
+          ))
+        ) {
+          throw new Error('BOOKING_SCREEN_READ_RESULT_CLAIM_LOST');
+        }
+        return reply.status(202).send({
+          accepted: true,
+          replayed: false,
+          itemCount: readResultItemCount(storedResult),
+        });
+      } catch (error) {
+        await options.clientAssistedJobStore.releaseResultClaim(
+          jobId,
+          commandId,
+          claimId,
+          payloadHash,
+        );
+        if (error instanceof RosterEgressBudgetError) {
+          reply.header('Retry-After', String(error.retryAfterSeconds));
+          return sendApiError(
+            request,
+            reply,
+            429,
+            'BOOKING_ROSTER_EGRESS_BUDGET_EXCEEDED',
+            'Лимит обновления состава временно исчерпан.',
+          );
+        }
         return sendApiError(
           request,
           reply,
@@ -650,21 +1023,6 @@ export function registerBookingRecommendationRoutes(
           'Некорректный результат чтения.',
         );
       }
-      const ttlSeconds = Math.max(1, Math.ceil((Date.parse(job.expiresAt) - Date.now()) / 1_000));
-      const status = await options.clientAssistedJobStore.putResult(
-        jobId,
-        {
-          commandId,
-          ...result,
-          acceptedAt: new Date().toISOString(),
-        },
-        ttlSeconds,
-      );
-      return reply.status(status === 'accepted' ? 202 : 200).send({
-        accepted: true,
-        replayed: status === 'replayed',
-        itemCount: result.kind === 'schedule' ? result.activities.length : result.bookings.length,
-      });
     },
   );
 
@@ -923,7 +1281,9 @@ export function registerBookingRecommendationRoutes(
               left.startsAt.localeCompare(right.startsAt) || left.id.localeCompare(right.id),
           )
           .slice(0, limit);
-        const ready = results.length === job.commands.length;
+        const ready =
+          results.length === job.commands.length &&
+          results.every((result) => result.kind !== 'upcoming' || result.complete);
         const generatedProjection = {
           version: snapshotVersion(items),
           generatedAt: generatedAt.toISOString(),
@@ -1217,6 +1577,47 @@ export function registerBookingRecommendationRoutes(
           );
         }
         return unavailable(request, reply);
+      }
+    },
+  );
+
+  app.get(
+    '/public/api/v1/:tenantKey/booking-participants/:participantId/avatar',
+    {
+      preHandler: [...options.publicTenantHandlers],
+      config: { rateLimit: { max: 300, timeWindow: 60_000 } },
+    },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { participantId } = request.params as { readonly participantId?: string };
+      if (!participantId || !UUID_PATTERN.test(participantId)) {
+        return sendApiError(request, reply, 404, 'EVENT_AVATAR_NOT_FOUND', 'Аватар не найден.');
+      }
+      const sourceUrl = options.exerciseRosterSource?.readAvatarSource(participantId);
+      if (!sourceUrl || !options.avatarMedia) {
+        return sendApiError(request, reply, 404, 'EVENT_AVATAR_NOT_FOUND', 'Аватар не найден.');
+      }
+      try {
+        const media = await options.avatarMedia.read({
+          cacheKey: `booking-participant:${participantId}`,
+          sourceUrl,
+        });
+        reply.header('Cache-Control', 'public, max-age=300, stale-while-revalidate=600');
+        reply.header('Cross-Origin-Resource-Policy', 'cross-origin');
+        reply.header('ETag', media.etag);
+        reply.type('image/webp');
+        return reply.send(media.body);
+      } catch (error) {
+        request.log.error(
+          { err: error, participantId },
+          'booking participant avatar delivery failed',
+        );
+        return sendApiError(
+          request,
+          reply,
+          503,
+          'EVENT_AVATAR_UNAVAILABLE',
+          'Аватар временно недоступен.',
+        );
       }
     },
   );

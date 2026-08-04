@@ -6,6 +6,7 @@ export * from './booking-history-source.js';
 export * from './coach-game-summary-source.js';
 export * from './exercise-recommendation-source.js';
 export * from './upcoming-booking-source.js';
+export * from './exercise-roster-source.js';
 
 export interface InternalAvailableSlot {
   readonly id: string;

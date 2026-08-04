@@ -10,6 +10,67 @@ import type { TrainingEventCatalogItem } from './training-event-catalog.js';
 const tenantId = '10000000-0000-4000-8000-000000000001';
 const userId = '20000000-0000-4000-8000-000000000001';
 
+function authenticateUser(request: FastifyRequest): Promise<void> {
+  request.tenantId = tenantId;
+  request.padlHubClaims = {
+    sub: userId,
+    tenants: [tenantId],
+    roles: ['client'],
+    permissions: ['games.play'],
+    sid: '30000000-0000-4000-8000-000000000001',
+  };
+  return Promise.resolve();
+}
+
+function upcomingPayload(
+  entries: readonly { readonly bookingRef: string; readonly exerciseRef: string }[],
+): unknown {
+  const startsAt = new Date(Date.now() + 24 * 60 * 60 * 1_000).toISOString();
+  return {
+    bookings: {
+      content: entries.map((entry) => ({ id: entry.bookingRef, isCancelled: false })),
+    },
+    details: entries.map((entry) => ({
+      id: entry.bookingRef,
+      isCancelled: false,
+      transactionStatus: null,
+      exercise: {
+        id: entry.exerciseRef,
+        timeFrom: startsAt,
+        inWaitlist: false,
+        clientsCount: 2,
+        maxClientsCount: 4,
+        direction: { id: 4588, name: 'Игры' },
+        type: { id: 1613, name: 'Игра на рейтинг' },
+        studio: { name: 'Терехово', address: 'Москва' },
+        room: { name: 'Корт 1' },
+      },
+    })),
+    complete: true,
+  };
+}
+
+async function startMyBookingsJob(
+  app: FastifyInstance,
+  headers?: Readonly<Record<string, string>>,
+): Promise<{
+  readonly jobId: string;
+  readonly commandId: string;
+}> {
+  const started = await app.inject({
+    method: 'POST',
+    url: '/user/api/v1/local-padel/booking-screen-read-jobs',
+    ...(headers ? { headers } : {}),
+    payload: { screen: 'MY_BOOKINGS' },
+  });
+  expect(started.statusCode).toBe(200);
+  const job = started.json<{
+    readonly jobId: string;
+    readonly commands: readonly { readonly commandId: string }[];
+  }>();
+  return { jobId: job.jobId, commandId: job.commands[0]!.commandId };
+}
+
 describe('client-assisted booking screen read routes', () => {
   const apps: FastifyInstance[] = [];
 
@@ -750,7 +811,11 @@ describe('client-assisted booking screen read routes', () => {
       return Promise.resolve();
     };
     const canonicalBookingId = '40000000-0000-4000-8000-000000000001';
+    const canonicalTournamentBookingId = '40000000-0000-4000-8000-000000000002';
     const canonicalGameId = '50000000-0000-4000-8000-000000000001';
+    const tournamentSummaryId = '7e50a4bb-27fa-4b6b-b3a5-36e60cb26cb5';
+    const startsAt = new Date(Date.now() + 24 * 60 * 60 * 1_000).toISOString();
+    const tournamentStartsAt = new Date(Date.parse(startsAt) + 4 * 60 * 60 * 1_000).toISOString();
     const resolveMappings = vi
       .fn<
         (input: {
@@ -770,6 +835,10 @@ describe('client-assisted booking screen read routes', () => {
             externalId: 'private-viva-booking-id',
             bookingId: canonicalBookingId,
           },
+          {
+            externalId: 'private-viva-tournament-booking-id',
+            bookingId: canonicalTournamentBookingId,
+          },
         ],
         games: [
           {
@@ -779,7 +848,19 @@ describe('client-assisted booking screen read routes', () => {
         ],
         stations: [],
       });
-    const mappingRepository = { resolve: resolveMappings };
+    const mappingRepository = {
+      resolve: resolveMappings,
+      resolveOwnedBookingExercises: vi.fn().mockResolvedValue(
+        new Map([
+          ['private-viva-booking-id', new Set(['private-viva-exercise-id'])],
+          ['private-viva-tournament-booking-id', new Set(['private-viva-tournament-exercise-id'])],
+        ]),
+      ),
+    };
+    const readRosterAvatar = vi.fn().mockResolvedValue({
+      body: Buffer.from('roster-avatar-webp'),
+      etag: '"roster-avatar"',
+    });
     const replaceUpcomingProjection = vi.fn<UpcomingBookingsRepository['replace']>((input) =>
       Promise.resolve({
         ...input,
@@ -793,6 +874,82 @@ describe('client-assisted booking screen read routes', () => {
         get: vi.fn().mockResolvedValue(undefined),
         replace: replaceUpcomingProjection,
       },
+      profileRepository: {
+        get: vi.fn().mockResolvedValue({
+          userId,
+          displayName: 'Алексей Сергеев',
+          avatarUrl: 'https://media.padlhub.test/alexey.webp',
+          levelLabel: 'D+',
+          levelValue: 2.94,
+        }),
+      },
+      tournamentSource: {
+        readDate: vi.fn().mockResolvedValue([
+          {
+            id: tournamentSummaryId,
+            title: 'Американо D+ в Терехово',
+            format: 'Американо',
+            startsAt: tournamentStartsAt,
+            endsAt: new Date(Date.parse(tournamentStartsAt) + 90 * 60 * 1_000).toISOString(),
+            venue: 'Терехово',
+            trainerName: null,
+            levelRange: { from: 'D+', to: 'C' },
+            organizer: null,
+            capacity: { total: 16, registered: 4, open: 12, waitlist: 0 },
+            status: 'REGISTRATION',
+            route: `/tournaments?event=${tournamentSummaryId}`,
+          },
+        ]),
+        readExerciseExternalId: (summaryId: string) =>
+          summaryId === tournamentSummaryId ? 'private-viva-tournament-exercise-id' : undefined,
+      },
+      exerciseRosterSource: {
+        read: vi.fn((input: { readonly exerciseExternalId: string }) =>
+          Promise.resolve(
+            input.exerciseExternalId === 'private-viva-tournament-exercise-id'
+              ? [
+                  {
+                    id: '60000000-0000-4000-8000-000000000001',
+                    displayName: 'Алексей Сергеев',
+                    avatarUrl: null,
+                  },
+                  {
+                    id: '60000000-0000-4000-8000-000000000002',
+                    displayName: 'Елена Смирнова',
+                    avatarUrl: null,
+                  },
+                  {
+                    id: '60000000-0000-4000-8000-000000000003',
+                    displayName: 'Павел Орлов',
+                    avatarUrl: null,
+                  },
+                  {
+                    id: '60000000-0000-4000-8000-000000000004',
+                    displayName: 'Анна Лебедева',
+                    avatarUrl: null,
+                  },
+                ]
+              : [
+                  {
+                    id: '50000000-0000-4000-8000-000000000001',
+                    displayName: 'Алексей Сергеев',
+                    avatarUrl: null,
+                  },
+                  {
+                    id: '50000000-0000-4000-8000-000000000002',
+                    displayName: 'Мария Иванова',
+                    avatarUrl: null,
+                  },
+                ],
+          ),
+        ),
+        readAvatarSource: (participantId: string) =>
+          ({
+            '50000000-0000-4000-8000-000000000002': 'https://media.vivacrm.test/maria.jpg',
+            '60000000-0000-4000-8000-000000000002': 'https://media.vivacrm.test/elena.jpg',
+          })[participantId],
+      },
+      avatarMedia: { read: readRosterAvatar },
       authenticatedTenantHandlers: [authenticate],
       publicTenantHandlers: [],
     });
@@ -821,12 +978,11 @@ describe('client-assisted booking screen read routes', () => {
           operation: 'bookings.read',
           detailsOperation: 'bookings.details.read',
           page: 0,
-          size: 50,
+          size: 1000,
         },
       ],
     });
     const command = job.commands[0]!;
-    const startsAt = new Date(Date.now() + 24 * 60 * 60 * 1_000).toISOString();
 
     const accepted = await app.inject({
       method: 'POST',
@@ -834,7 +990,10 @@ describe('client-assisted booking screen read routes', () => {
       payload: {
         payload: {
           bookings: {
-            content: [{ id: 'private-viva-booking-id', isCancelled: false }],
+            content: [
+              { id: 'private-viva-booking-id', isCancelled: false },
+              { id: 'private-viva-tournament-booking-id', isCancelled: false },
+            ],
           },
           details: [
             {
@@ -846,10 +1005,29 @@ describe('client-assisted booking screen read routes', () => {
                 timeFrom: startsAt,
                 timeTo: new Date(Date.parse(startsAt) + 2 * 60 * 60 * 1_000).toISOString(),
                 inWaitlist: false,
+                clientsCount: 2,
+                maxClientsCount: 4,
                 direction: { id: 4588, name: 'Игры' },
                 type: { id: 1613, name: 'Игра на рейтинг' },
                 studio: { name: 'Терехово', address: 'Москва' },
                 room: { name: 'Корт 1' },
+              },
+            },
+            {
+              id: 'private-viva-tournament-booking-id',
+              isCancelled: false,
+              transactionStatus: null,
+              exercise: {
+                id: 'private-viva-tournament-exercise-id',
+                timeFrom: tournamentStartsAt,
+                timeTo: new Date(Date.parse(tournamentStartsAt) + 90 * 60 * 1_000).toISOString(),
+                inWaitlist: false,
+                clientsCount: 4,
+                maxClientsCount: 16,
+                direction: { id: 2617, name: 'Турниры' },
+                type: { id: 839, name: 'Падел Турнир' },
+                studio: { name: 'Терехово', address: 'Москва' },
+                room: { name: 'Корт 2' },
               },
             },
           ],
@@ -857,7 +1035,18 @@ describe('client-assisted booking screen read routes', () => {
       },
     });
     expect(accepted.statusCode).toBe(202);
-    expect(accepted.json()).toMatchObject({ accepted: true, itemCount: 1 });
+    expect(accepted.json()).toMatchObject({ accepted: true, itemCount: 2 });
+
+    const rosterAvatar = await app.inject({
+      method: 'GET',
+      url: '/public/api/v1/local-padel/booking-participants/50000000-0000-4000-8000-000000000002/avatar',
+    });
+    expect(rosterAvatar.statusCode).toBe(200);
+    expect(rosterAvatar.headers['content-type']).toContain('image/webp');
+    expect(readRosterAvatar).toHaveBeenCalledWith({
+      cacheKey: 'booking-participant:50000000-0000-4000-8000-000000000002',
+      sourceUrl: 'https://media.vivacrm.test/maria.jpg',
+    });
 
     const completed = await app.inject({
       method: 'POST',
@@ -877,21 +1066,473 @@ describe('client-assisted booking screen read routes', () => {
             kind: 'game',
             title: 'Игра на рейтинг',
             route: `/games/${canonicalGameId}`,
+            participants: [
+              {
+                profileId: userId,
+                displayName: 'Алексей Сергеев',
+                avatarUrl: 'https://media.padlhub.test/alexey.webp',
+                level: 'D+',
+                levelValue: 2.94,
+              },
+              {
+                displayName: 'Мария Иванова',
+                avatarUrl:
+                  '/public/api/v1/local-padel/booking-participants/50000000-0000-4000-8000-000000000002/avatar',
+                level: null,
+                levelValue: null,
+              },
+            ],
+            participantsCount: 2,
+            openSlots: 2,
+          },
+          {
+            id: canonicalTournamentBookingId,
+            kind: 'tournament',
+            title: 'Американо D+ в Терехово',
+            route: `/tournaments?event=${tournamentSummaryId}`,
+            participants: [
+              {
+                profileId: userId,
+                displayName: 'Алексей Сергеев',
+                avatarUrl: 'https://media.padlhub.test/alexey.webp',
+                level: 'D+',
+                levelValue: 2.94,
+              },
+              {
+                displayName: 'Елена Смирнова',
+                avatarUrl:
+                  '/public/api/v1/local-padel/booking-participants/60000000-0000-4000-8000-000000000002/avatar',
+              },
+              { displayName: 'Павел Орлов' },
+              { displayName: 'Анна Лебедева' },
+            ],
+            participantsCount: 4,
+            openSlots: 12,
           },
         ],
       },
     });
-    expect(completed.body).not.toMatch(/private-viva-booking-id|private-viva-exercise-id|VIVA/i);
+    expect(completed.body).not.toMatch(
+      /private-viva-booking-id|private-viva-exercise-id|private-viva-tournament-booking-id|private-viva-tournament-exercise-id|VIVA/i,
+    );
     expect(replaceUpcomingProjection).toHaveBeenCalledWith(
       expect.objectContaining({
         tenantId,
         userId,
-        items: [expect.objectContaining({ id: canonicalBookingId })],
       }),
+    );
+    expect(replaceUpcomingProjection.mock.calls[0]?.[0].items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: canonicalBookingId }),
+        expect.objectContaining({ id: canonicalTournamentBookingId }),
+      ]),
     );
     const mappingInput = resolveMappings.mock.calls[0]?.[0];
     expect(mappingInput?.tenantId).toBe(tenantId);
-    expect(mappingInput?.bookingExternalIds).toEqual(['private-viva-booking-id']);
+    expect(mappingInput?.bookingExternalIds).toEqual([
+      'private-viva-booking-id',
+      'private-viva-tournament-booking-id',
+    ]);
     expect(mappingInput?.exerciseAssociationIds).toContain('private-viva-exercise-id');
+    expect(mappingInput?.exerciseAssociationIds).toContain('private-viva-tournament-exercise-id');
+  });
+
+  it('deduplicates 50 owned roster reads, bounds concurrency, and releases workers after failure', async () => {
+    const app = Fastify();
+    apps.push(app);
+    const entries = Array.from({ length: 50 }, (_, index) => ({
+      bookingRef: `owned-booking-${index}`,
+      exerciseRef: index < 2 ? 'shared-exercise' : `exercise-${index}`,
+    }));
+    let active = 0;
+    let maxActive = 0;
+    const read = vi.fn(async (input: { readonly exerciseExternalId: string }) => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      active -= 1;
+      if (input.exerciseExternalId === 'shared-exercise') {
+        throw new Error('synthetic provider failure');
+      }
+      return [];
+    });
+    registerBookingRecommendationRoutes(app, {
+      clientAssistedJobStore: new MemoryBookingScreenReadJobStore(),
+      bookingScreenMappingRepository: {
+        resolve: vi.fn().mockResolvedValue({ bookings: [], games: [], stations: [] }),
+        resolveOwnedBookingExercises: vi
+          .fn()
+          .mockResolvedValue(
+            new Map(entries.map((entry) => [entry.bookingRef, new Set([entry.exerciseRef])])),
+          ),
+      },
+      exerciseRosterSource: { read, readAvatarSource: () => undefined },
+      exerciseRosterReadConcurrency: 3,
+      exerciseRosterPrincipalEgressLimit: 100,
+      exerciseRosterProviderEgressLimit: 100,
+      authenticatedTenantHandlers: [authenticateUser],
+      publicTenantHandlers: [],
+    });
+    const job = await startMyBookingsJob(app);
+
+    const accepted = await app.inject({
+      method: 'POST',
+      url: `/user/api/v1/local-padel/booking-screen-read-jobs/${job.jobId}/results/${job.commandId}`,
+      payload: { payload: upcomingPayload(entries) },
+    });
+
+    expect(accepted.statusCode).toBe(202);
+    expect(read).toHaveBeenCalledTimes(49);
+    expect(maxActive).toBeLessThanOrEqual(3);
+    expect(read).toHaveBeenCalledWith(
+      expect.objectContaining({ exerciseExternalId: 'exercise-49' }),
+    );
+  });
+
+  it('claims a result before roster egress so concurrent replay performs the effect once', async () => {
+    const app = Fastify();
+    apps.push(app);
+    const entries = [{ bookingRef: 'owned-booking', exerciseRef: 'owned-exercise' }];
+    let releaseRead: (() => void) | undefined;
+    let markStarted: (() => void) | undefined;
+    const startedRead = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const read = vi.fn(
+      () =>
+        new Promise<readonly []>((resolve) => {
+          markStarted?.();
+          releaseRead = () => resolve([]);
+        }),
+    );
+    const store = new MemoryBookingScreenReadJobStore();
+    const claimResult = vi.spyOn(store, 'claimResult');
+    registerBookingRecommendationRoutes(app, {
+      clientAssistedJobStore: store,
+      bookingScreenMappingRepository: {
+        resolve: vi.fn().mockResolvedValue({ bookings: [], games: [], stations: [] }),
+        resolveOwnedBookingExercises: vi
+          .fn()
+          .mockResolvedValue(new Map([['owned-booking', new Set(['owned-exercise'])]])),
+      },
+      exerciseRosterSource: { read, readAvatarSource: () => undefined },
+      authenticatedTenantHandlers: [authenticateUser],
+      publicTenantHandlers: [],
+    });
+    const job = await startMyBookingsJob(app);
+    const request = {
+      method: 'POST' as const,
+      url: `/user/api/v1/local-padel/booking-screen-read-jobs/${job.jobId}/results/${job.commandId}`,
+      payload: { payload: upcomingPayload(entries) },
+    };
+
+    const first = app.inject(request);
+    await startedRead;
+    expect(claimResult.mock.calls[0]?.[4]).toBe(600);
+    const concurrent = await app.inject(request);
+    expect(concurrent.statusCode).toBe(409);
+    expect(concurrent.json()).toMatchObject({ code: 'BOOKING_SCREEN_READ_RESULT_IN_PROGRESS' });
+    releaseRead?.();
+    expect((await first).statusCode).toBe(202);
+    expect(read).toHaveBeenCalledTimes(1);
+
+    const replay = await app.inject(request);
+    expect(replay.statusCode).toBe(200);
+    expect(replay.json()).toMatchObject({ accepted: true, replayed: true });
+    expect(read).toHaveBeenCalledTimes(1);
+
+    const conflicting = await app.inject({
+      ...request,
+      payload: {
+        payload: upcomingPayload([
+          { bookingRef: 'owned-booking', exerciseRef: 'different-exercise' },
+        ]),
+      },
+    });
+    expect(conflicting.statusCode).toBe(409);
+    expect(conflicting.json()).toMatchObject({
+      code: 'BOOKING_SCREEN_READ_RESULT_IDEMPOTENCY_CONFLICT',
+    });
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a principal provider-egress budget before any roster request', async () => {
+    const app = Fastify();
+    apps.push(app);
+    const entries = [
+      { bookingRef: 'owned-booking-1', exerciseRef: 'owned-exercise-1' },
+      { bookingRef: 'owned-booking-2', exerciseRef: 'owned-exercise-2' },
+    ];
+    const read = vi.fn().mockResolvedValue([]);
+    registerBookingRecommendationRoutes(app, {
+      clientAssistedJobStore: new MemoryBookingScreenReadJobStore(),
+      bookingScreenMappingRepository: {
+        resolve: vi.fn().mockResolvedValue({ bookings: [], games: [], stations: [] }),
+        resolveOwnedBookingExercises: vi
+          .fn()
+          .mockResolvedValue(
+            new Map(entries.map((entry) => [entry.bookingRef, new Set([entry.exerciseRef])])),
+          ),
+      },
+      exerciseRosterSource: { read, readAvatarSource: () => undefined },
+      exerciseRosterPrincipalEgressLimit: 1,
+      exerciseRosterProviderEgressLimit: 10,
+      exerciseRosterEgressWindowSeconds: 30,
+      authenticatedTenantHandlers: [authenticateUser],
+      publicTenantHandlers: [],
+    });
+    const job = await startMyBookingsJob(app);
+
+    const rejected = await app.inject({
+      method: 'POST',
+      url: `/user/api/v1/local-padel/booking-screen-read-jobs/${job.jobId}/results/${job.commandId}`,
+      payload: { payload: upcomingPayload(entries) },
+    });
+
+    expect(rejected.statusCode).toBe(429);
+    expect(rejected.headers['retry-after']).toBe('30');
+    expect(rejected.json()).toMatchObject({ code: 'BOOKING_ROSTER_EGRESS_BUDGET_EXCEEDED' });
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it('shares one roster bulkhead across concurrent requests from different users', async () => {
+    const app = Fastify();
+    apps.push(app);
+    const users = [
+      '21000000-0000-4000-8000-000000000001',
+      '21000000-0000-4000-8000-000000000002',
+      '21000000-0000-4000-8000-000000000003',
+      '21000000-0000-4000-8000-000000000004',
+    ];
+    let active = 0;
+    let maxActive = 0;
+    const read = vi.fn(async () => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      active -= 1;
+      return [];
+    });
+    const authenticate = (request: FastifyRequest): Promise<void> => {
+      const requestedUser = request.headers['x-test-user'];
+      request.tenantId = tenantId;
+      request.padlHubClaims = {
+        sub: typeof requestedUser === 'string' ? requestedUser : users[0]!,
+        tenants: [tenantId],
+        roles: ['client'],
+        permissions: ['games.play'],
+        sid: '30000000-0000-4000-8000-000000000001',
+      };
+      return Promise.resolve();
+    };
+    registerBookingRecommendationRoutes(app, {
+      clientAssistedJobStore: new MemoryBookingScreenReadJobStore(),
+      bookingScreenMappingRepository: {
+        resolve: vi.fn().mockResolvedValue({ bookings: [], games: [], stations: [] }),
+        resolveOwnedBookingExercises: vi.fn(
+          (input: {
+            readonly candidates: readonly {
+              readonly bookingExternalId: string;
+              readonly exerciseExternalId: string;
+            }[];
+          }) =>
+            Promise.resolve(
+              new Map(
+                input.candidates.map((candidate) => [
+                  candidate.bookingExternalId,
+                  new Set([candidate.exerciseExternalId]),
+                ]),
+              ),
+            ),
+        ),
+      },
+      exerciseRosterSource: { read, readAvatarSource: () => undefined },
+      exerciseRosterReadConcurrency: 2,
+      exerciseRosterPrincipalEgressLimit: 10,
+      exerciseRosterProviderEgressLimit: 10,
+      authenticatedTenantHandlers: [authenticate],
+      publicTenantHandlers: [],
+    });
+    const jobs = await Promise.all(
+      users.map((currentUser) => startMyBookingsJob(app, { 'x-test-user': currentUser })),
+    );
+
+    const responses = await Promise.all(
+      jobs.map((job, index) =>
+        app.inject({
+          method: 'POST',
+          url: `/user/api/v1/local-padel/booking-screen-read-jobs/${job.jobId}/results/${job.commandId}`,
+          headers: { 'x-test-user': users[index]! },
+          payload: {
+            payload: upcomingPayload([
+              { bookingRef: `booking-${index}`, exerciseRef: `exercise-${index}` },
+            ]),
+          },
+        }),
+      ),
+    );
+
+    expect(responses.map((response) => response.statusCode)).toEqual([202, 202, 202, 202]);
+    expect(read).toHaveBeenCalledTimes(4);
+    expect(maxActive).toBeLessThanOrEqual(2);
+  });
+
+  it('shares the tenant/provider egress budget across different principals', async () => {
+    const app = Fastify();
+    apps.push(app);
+    const users = ['22000000-0000-4000-8000-000000000001', '22000000-0000-4000-8000-000000000002'];
+    const read = vi.fn().mockResolvedValue([]);
+    const authenticate = (request: FastifyRequest): Promise<void> => {
+      const requestedUser = request.headers['x-test-user'];
+      request.tenantId = tenantId;
+      request.padlHubClaims = {
+        sub: typeof requestedUser === 'string' ? requestedUser : users[0]!,
+        tenants: [tenantId],
+        roles: ['client'],
+        permissions: ['games.play'],
+        sid: '30000000-0000-4000-8000-000000000001',
+      };
+      return Promise.resolve();
+    };
+    registerBookingRecommendationRoutes(app, {
+      clientAssistedJobStore: new MemoryBookingScreenReadJobStore(),
+      bookingScreenMappingRepository: {
+        resolve: vi.fn().mockResolvedValue({ bookings: [], games: [], stations: [] }),
+        resolveOwnedBookingExercises: vi.fn(
+          (input: {
+            readonly candidates: readonly {
+              readonly bookingExternalId: string;
+              readonly exerciseExternalId: string;
+            }[];
+          }) =>
+            Promise.resolve(
+              new Map(
+                input.candidates.map((candidate) => [
+                  candidate.bookingExternalId,
+                  new Set([candidate.exerciseExternalId]),
+                ]),
+              ),
+            ),
+        ),
+      },
+      exerciseRosterSource: { read, readAvatarSource: () => undefined },
+      exerciseRosterPrincipalEgressLimit: 10,
+      exerciseRosterProviderEgressLimit: 1,
+      exerciseRosterEgressWindowSeconds: 30,
+      authenticatedTenantHandlers: [authenticate],
+      publicTenantHandlers: [],
+    });
+    const firstJob = await startMyBookingsJob(app, { 'x-test-user': users[0]! });
+    const first = await app.inject({
+      method: 'POST',
+      url: `/user/api/v1/local-padel/booking-screen-read-jobs/${firstJob.jobId}/results/${firstJob.commandId}`,
+      headers: { 'x-test-user': users[0]! },
+      payload: {
+        payload: upcomingPayload([{ bookingRef: 'booking-1', exerciseRef: 'exercise-1' }]),
+      },
+    });
+    expect(first.statusCode).toBe(202);
+
+    const secondJob = await startMyBookingsJob(app, { 'x-test-user': users[1]! });
+    const second = await app.inject({
+      method: 'POST',
+      url: `/user/api/v1/local-padel/booking-screen-read-jobs/${secondJob.jobId}/results/${secondJob.commandId}`,
+      headers: { 'x-test-user': users[1]! },
+      payload: {
+        payload: upcomingPayload([{ bookingRef: 'booking-2', exerciseRef: 'exercise-2' }]),
+      },
+    });
+
+    expect(second.statusCode).toBe(429);
+    expect(second.headers['retry-after']).toBe('30');
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+
+  it('requires the exact trusted booking and exercise pair before roster egress', async () => {
+    const app = Fastify();
+    apps.push(app);
+    const read = vi.fn().mockResolvedValue([]);
+    registerBookingRecommendationRoutes(app, {
+      clientAssistedJobStore: new MemoryBookingScreenReadJobStore(),
+      bookingScreenMappingRepository: {
+        resolve: vi.fn().mockResolvedValue({ bookings: [], games: [], stations: [] }),
+        resolveOwnedBookingExercises: vi
+          .fn()
+          .mockResolvedValue(new Map([['owned-booking', new Set(['owned-exercise'])]])),
+      },
+      exerciseRosterSource: { read, readAvatarSource: () => undefined },
+      authenticatedTenantHandlers: [authenticateUser],
+      publicTenantHandlers: [],
+    });
+    const forgedJob = await startMyBookingsJob(app);
+
+    const forged = await app.inject({
+      method: 'POST',
+      url: `/user/api/v1/local-padel/booking-screen-read-jobs/${forgedJob.jobId}/results/${forgedJob.commandId}`,
+      payload: {
+        payload: upcomingPayload([{ bookingRef: 'owned-booking', exerciseRef: 'forged-exercise' }]),
+      },
+    });
+    expect(forged.statusCode).toBe(202);
+    expect(read).not.toHaveBeenCalled();
+
+    const legitimateJob = await startMyBookingsJob(app);
+    const legitimate = await app.inject({
+      method: 'POST',
+      url: `/user/api/v1/local-padel/booking-screen-read-jobs/${legitimateJob.jobId}/results/${legitimateJob.commandId}`,
+      payload: {
+        payload: upcomingPayload([{ bookingRef: 'owned-booking', exerciseRef: 'owned-exercise' }]),
+      },
+    });
+
+    expect(legitimate.statusCode).toBe(202);
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(read).toHaveBeenCalledWith(
+      expect.objectContaining({ exerciseExternalId: 'owned-exercise' }),
+    );
+    expect(read).not.toHaveBeenCalledWith(
+      expect.objectContaining({ exerciseExternalId: 'forged-exercise' }),
+    );
+  });
+
+  it('allows the bounded public PadlHub roster proxy without private booking ownership', async () => {
+    const app = Fastify();
+    apps.push(app);
+    const read = vi.fn().mockResolvedValue([
+      {
+        id: '60000000-0000-4000-8000-000000000001',
+        displayName: 'Публичный участник',
+        avatarUrl: null,
+      },
+    ]);
+    registerBookingRecommendationRoutes(app, {
+      clientAssistedJobStore: new MemoryBookingScreenReadJobStore(),
+      bookingScreenMappingRepository: {
+        resolve: vi.fn().mockResolvedValue({ bookings: [], games: [], stations: [] }),
+        resolveOwnedBookingExercises: vi.fn().mockResolvedValue(new Map()),
+      },
+      exerciseRosterSource: {
+        accessScope: 'PUBLIC',
+        read,
+        readAvatarSource: () => undefined,
+      },
+      authenticatedTenantHandlers: [authenticateUser],
+      publicTenantHandlers: [],
+    });
+    const job = await startMyBookingsJob(app);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/user/api/v1/local-padel/booking-screen-read-jobs/${job.jobId}/results/${job.commandId}`,
+      payload: {
+        payload: upcomingPayload([{ bookingRef: 'booking-1', exerciseRef: 'exercise-1' }]),
+      },
+    });
+
+    expect(response.statusCode).toBe(202);
+    expect(read).toHaveBeenCalledOnce();
+    expect(read).toHaveBeenCalledWith(
+      expect.objectContaining({ exerciseExternalId: 'exercise-1' }),
+    );
   });
 });

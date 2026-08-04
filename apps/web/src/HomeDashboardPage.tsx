@@ -978,11 +978,22 @@ function EventParticipants({
 }: {
   readonly item: HomeUpcomingItem;
 }): React.JSX.Element | null {
+  const participants = item.participants ?? [];
+  const anonymousParticipantCount = Math.max(
+    0,
+    (item.participantsCount ?? participants.length) - participants.length,
+  );
+  const capacity = Math.min(
+    4,
+    participants.length + anonymousParticipantCount + (item.openSlots ?? 0),
+  );
+  if (capacity === 0) return null;
   return (
     <ParticipantAvatarStack
       ariaLabel="Участники записи"
-      capacity={4}
-      participants={(item.participants ?? []).map((participant, index) => {
+      capacity={capacity}
+      anonymousParticipantCount={anonymousParticipantCount}
+      participants={participants.map((participant, index) => {
         const label = participantLabel(participant);
         return {
           key: participant.profileId ?? `${label}-${index}`,
@@ -990,6 +1001,9 @@ function EventParticipants({
           avatarUrl: participant.avatarUrl ?? null,
           level: participant.level ?? null,
           levelValue: participant.levelValue ?? null,
+          ...(participant.profileId
+            ? { href: `/profile/${encodeURIComponent(participant.profileId)}` }
+            : {}),
         };
       })}
     />

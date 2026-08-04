@@ -59,6 +59,11 @@ export interface VivaHomeSourceSnapshot {
   readonly fetchedAt: string;
 }
 
+export interface VivaHomeUpcomingOwnershipSnapshot {
+  readonly upcoming: readonly VivaHomeUpcomingSource[];
+  readonly fetchedAt: string;
+}
+
 export interface VivaHomeSourceMetric {
   readonly operation: 'profile' | 'bookings' | 'booking_details' | 'subscriptions';
   readonly outcome: 'success' | 'failure' | 'retry' | 'circuit_open';
@@ -202,6 +207,41 @@ function bookingStatus(
     return 'payment_required';
   }
   return 'confirmed';
+}
+
+function normalizeUpcoming(
+  bookingDetails: readonly z.infer<typeof bookingDetailsSchema>[],
+): readonly VivaHomeUpcomingSource[] {
+  return bookingDetails
+    .filter((item) => !item.isCancelled)
+    .flatMap<VivaHomeUpcomingSource>((item) => {
+      if (item.exercise) {
+        return [
+          {
+            externalId: item.id,
+            ...(item.exercise.id ? { exerciseExternalId: item.exercise.id } : {}),
+            title: bounded(item.exercise.type.name || item.exercise.direction.name, 160),
+            startsAt: item.exercise.timeFrom,
+            venue: venue(item.exercise.studio.name, item.exercise.studio.address),
+            status: bookingStatus(item),
+          },
+        ];
+      }
+      if (item.freeVisit && item.checkInTime && item.studio) {
+        return [
+          {
+            externalId: item.id,
+            title: bounded(item.freeVisit.type.name, 160),
+            startsAt: item.checkInTime,
+            venue: venue(item.studio.name, item.studio.address),
+            status: bookingStatus(item),
+          },
+        ];
+      }
+      return [];
+    })
+    .sort((left, right) => Date.parse(left.startsAt) - Date.parse(right.startsAt))
+    .slice(0, 6);
 }
 
 function subscriptionStatus(
@@ -357,21 +397,13 @@ export class VivaHomeSourceAdapter {
     );
   }
 
-  public async read(input: {
+  public async readUpcomingOwnership(input: {
     readonly accessToken: string;
     readonly correlationId: string;
-  }): Promise<VivaHomeSourceSnapshot> {
+  }): Promise<VivaHomeUpcomingOwnershipSnapshot> {
     if (this.options.mode === 'disabled' || this.options.mode === 'mock') {
       throw new VivaHomeSourceError('EXTERNAL_SOURCE_DISABLED', false);
     }
-
-    const profile = await this.getJson({
-      url: this.endpoint('v1', '/profile'),
-      accessToken: input.accessToken,
-      correlationId: input.correlationId,
-      operation: 'profile',
-      schema: profileSchema,
-    });
     const activeBookings = await this.getJson({
       url: this.endpoint('v2', '/bookings?page=0&size=6&sort=id,asc'),
       accessToken: input.accessToken,
@@ -395,6 +427,28 @@ export class VivaHomeSourceAdapter {
             operation: 'booking_details',
             schema: z.array(bookingDetailsSchema),
           });
+    return {
+      upcoming: normalizeUpcoming(bookingDetails),
+      fetchedAt: new Date(this.now()).toISOString(),
+    };
+  }
+
+  public async read(input: {
+    readonly accessToken: string;
+    readonly correlationId: string;
+  }): Promise<VivaHomeSourceSnapshot> {
+    if (this.options.mode === 'disabled' || this.options.mode === 'mock') {
+      throw new VivaHomeSourceError('EXTERNAL_SOURCE_DISABLED', false);
+    }
+
+    const profile = await this.getJson({
+      url: this.endpoint('v1', '/profile'),
+      accessToken: input.accessToken,
+      correlationId: input.correlationId,
+      operation: 'profile',
+      schema: profileSchema,
+    });
+    const upcomingOwnership = await this.readUpcomingOwnership(input);
     const subscriptions = await this.getJson({
       url: this.endpoint('v1', '/subscriptions?includeFinished=false&page=0&size=6'),
       accessToken: input.accessToken,
@@ -408,37 +462,6 @@ export class VivaHomeSourceAdapter {
       .filter(Boolean)
       .join(' ');
     const phoneDigits = profile.phone?.replace(/\D/g, '') ?? '';
-    const upcoming = bookingDetails
-      .filter((item) => !item.isCancelled)
-      .flatMap<VivaHomeUpcomingSource>((item) => {
-        if (item.exercise) {
-          return [
-            {
-              externalId: item.id,
-              ...(item.exercise.id ? { exerciseExternalId: item.exercise.id } : {}),
-              title: bounded(item.exercise.type.name || item.exercise.direction.name, 160),
-              startsAt: item.exercise.timeFrom,
-              venue: venue(item.exercise.studio.name, item.exercise.studio.address),
-              status: bookingStatus(item),
-            },
-          ];
-        }
-        if (item.freeVisit && item.checkInTime && item.studio) {
-          return [
-            {
-              externalId: item.id,
-              title: bounded(item.freeVisit.type.name, 160),
-              startsAt: item.checkInTime,
-              venue: venue(item.studio.name, item.studio.address),
-              status: bookingStatus(item),
-            },
-          ];
-        }
-        return [];
-      })
-      .sort((left, right) => Date.parse(left.startsAt) - Date.parse(right.startsAt))
-      .slice(0, 6);
-
     return {
       profile: {
         externalId: profile.id,
@@ -450,7 +473,7 @@ export class VivaHomeSourceAdapter {
         balanceMinor: profile.deposit,
         level: readLevel(profile.customFields),
       },
-      upcoming,
+      upcoming: upcomingOwnership.upcoming,
       subscriptions: subscriptions.content.slice(0, 6).map((item) => ({
         externalId: item.subscriptionId,
         title: item.type === 'INDIVIDUAL' ? 'Индивидуальный абонемент' : 'Групповой абонемент',

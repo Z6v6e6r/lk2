@@ -127,6 +127,60 @@ describe('Viva Home source adapter', () => {
     }
   });
 
+  it('reads fresh booking ownership without depending on profile or subscriptions', async () => {
+    const fetchImplementation = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        Response.json({
+          content: [{ id: '22222222-2222-4222-8222-222222222222', isCancelled: false }],
+        }),
+      )
+      .mockResolvedValueOnce(
+        Response.json([
+          {
+            id: '22222222-2222-4222-8222-222222222222',
+            isCancelled: false,
+            transactionStatus: { transactionStatus: 'PAID' },
+            exercise: {
+              id: '55555555-5555-4555-8555-555555555555',
+              timeFrom: '2026-07-16T09:00:00+03:00',
+              inWaitlist: false,
+              direction: { name: 'Падел' },
+              type: { name: 'Групповая тренировка' },
+              studio: { name: 'Селигерская', address: 'Коровинское шоссе, 10' },
+              room: { id: '33333333-3333-4333-8333-333333333333', name: 'Корт 1' },
+            },
+          },
+        ]),
+      );
+    const adapter = new VivaHomeSourceAdapter({
+      mode: 'sandbox',
+      apiBaseUrl: 'https://api.vivacrm.invalid/end-user/api',
+      tenantKey: 'tenant-key',
+      timeoutMs: 100,
+      fetchImplementation,
+      now: () => Date.parse('2026-07-15T12:00:00.000Z'),
+    });
+
+    await expect(adapter.readUpcomingOwnership(access)).resolves.toEqual({
+      upcoming: [
+        {
+          externalId: '22222222-2222-4222-8222-222222222222',
+          exerciseExternalId: '55555555-5555-4555-8555-555555555555',
+          title: 'Групповая тренировка',
+          startsAt: '2026-07-16T09:00:00+03:00',
+          venue: 'Селигерская · Коровинское шоссе, 10',
+          status: 'confirmed',
+        },
+      ],
+      fetchedAt: '2026-07-15T12:00:00.000Z',
+    });
+    expect(fetchImplementation).toHaveBeenCalledTimes(2);
+    expect(fetchUrl(fetchImplementation.mock.calls[0]?.[0]).pathname).toBe(
+      '/end-user/api/v2/tenant-key/bookings',
+    );
+  });
+
   it('retries a bounded retryable GET and reports the retry metric', async () => {
     const metrics: string[] = [];
     const fetchImplementation = vi

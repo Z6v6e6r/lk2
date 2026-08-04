@@ -148,6 +148,10 @@ const exerciseRecommendationSource =
         onMetric: (metric) => logger.info({ metric }, 'Viva exercise recommendation read'),
       })
     : undefined;
+const bookingScreenMappingRepository =
+  config.VIVA_DIRECT_READ_ENABLED || config.GAMES_READ_ENABLED
+    ? createBookingScreenMappingRepository(pool)
+    : undefined;
 const exerciseRosterSource =
   config.GAMES_READ_ENABLED && (config.VIVA_MODE === 'sandbox' || config.VIVA_MODE === 'production')
     ? new VivaExerciseRosterSourceAdapter({
@@ -164,6 +168,14 @@ const exerciseRosterSource =
         staleTtlMs: 600_000,
         circuitFailureThreshold: 3,
         circuitResetMs: 30_000,
+        ...(bookingScreenMappingRepository?.resolveVivaProfileIds
+          ? {
+              resolveProfileIds: (input: {
+                readonly tenantId: string;
+                readonly externalClientIds: readonly string[];
+              }) => bookingScreenMappingRepository.resolveVivaProfileIds!(input),
+            }
+          : {}),
         onMetric: (metric) => logger.info({ metric }, 'Viva exercise roster read'),
       })
     : undefined;
@@ -360,7 +372,7 @@ const app = await buildApp({
     ? {
         bookingScreenReadJobStore: new RedisBookingScreenReadJobStore(redis),
         eventCatalogSnapshotStore: new RedisEventCatalogSnapshotStore<EventCatalogItem>(redis),
-        bookingScreenMappingRepository: createBookingScreenMappingRepository(pool),
+        ...(bookingScreenMappingRepository ? { bookingScreenMappingRepository } : {}),
       }
     : {}),
   ...(activityHistoryRepository ? { activityHistoryRepository } : {}),

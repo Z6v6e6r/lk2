@@ -24,6 +24,7 @@ import {
   completeProfilePhotoObjectGc,
   listDueVivaHomeDelegations,
   listDueProfilePhotoObjects,
+  persistVivaHomeBookingOwnership,
   persistLegacyParticipantViewerProfile,
   persistVivaHomeSource,
   recordProfilePhotoObjectGcFailure,
@@ -294,8 +295,53 @@ export async function runVivaHomeSyncCycle(input: {
           busy += 1;
           continue;
         }
-        const snapshot = await input.getAdapter(delegation.providerTenantKey).read({
-          accessToken: refreshed.accessToken,
+        const adapter = input.getAdapter(delegation.providerTenantKey);
+        let snapshot: Awaited<ReturnType<VivaHomeSourceAdapter['read']>>;
+        try {
+          snapshot = await adapter.read({
+            accessToken: refreshed.accessToken,
+            correlationId,
+          });
+        } catch (sourceError) {
+          try {
+            const ownership = await adapter.readUpcomingOwnership({
+              accessToken: refreshed.accessToken,
+              correlationId,
+            });
+            const bindings = await persistVivaHomeBookingOwnership({
+              pool: input.pool,
+              tenantId: delegation.tenantId,
+              userId: delegation.userId,
+              snapshot: ownership,
+              correlationId,
+            });
+            input.logger.info(
+              {
+                tenantId: delegation.tenantId,
+                userId: delegation.userId,
+                correlationId,
+                bindings,
+              },
+              'Viva booking ownership refreshed despite full Home source failure',
+            );
+          } catch (ownershipError) {
+            input.logger.warn(
+              {
+                tenantId: delegation.tenantId,
+                userId: delegation.userId,
+                correlationId,
+                code: failureCode(ownershipError),
+              },
+              'Viva booking ownership fallback failed',
+            );
+          }
+          throw sourceError;
+        }
+        await persistVivaHomeBookingOwnership({
+          pool: input.pool,
+          tenantId: delegation.tenantId,
+          userId: delegation.userId,
+          snapshot: { upcoming: snapshot.upcoming, fetchedAt: snapshot.fetchedAt },
           correlationId,
         });
         if (input.legacyGameRosterBridge) {

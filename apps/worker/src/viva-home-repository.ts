@@ -11,7 +11,7 @@ import {
   homeProjectionComponentPayloadSchema,
   type HomeProjectionComponentPayload,
 } from '@phub/home-projection';
-import type { VivaHomeSourceSnapshot } from '@phub/viva-adapter';
+import type { VivaHomeSourceSnapshot, VivaHomeUpcomingOwnershipSnapshot } from '@phub/viva-adapter';
 import type { Pool, PoolClient, QueryResultRow } from 'pg';
 
 export interface VivaHomeDelegation {
@@ -78,6 +78,65 @@ interface ProfilePhotoRow extends QueryResultRow {
 interface LegacyParticipantPhotoMappingRow extends QueryResultRow {
   readonly external_id: string;
   readonly internal_id: string;
+}
+
+async function replaceVivaHomeBookingOwnershipWithClient(
+  client: PoolClient,
+  input: {
+    readonly tenantId: string;
+    readonly userId: string;
+    readonly snapshot: VivaHomeUpcomingOwnershipSnapshot;
+    readonly correlationId: string;
+  },
+): Promise<number> {
+  const bindings = input.snapshot.upcoming
+    .flatMap((item) =>
+      item.exerciseExternalId
+        ? [
+            {
+              bookingExternalId: item.externalId,
+              exerciseExternalId: item.exerciseExternalId,
+            },
+          ]
+        : [],
+    )
+    .slice(0, 50);
+  await client.query(
+    `delete from integration.viva_home_booking_ownership
+      where tenant_id = $1 and user_id = $2`,
+    [input.tenantId, input.userId],
+  );
+  if (bindings.length === 0) return 0;
+  const result = await client.query(
+    `insert into integration.viva_home_booking_ownership (
+       tenant_id, user_id, booking_external_id, exercise_external_id,
+       correlation_id, fetched_at
+     )
+     select $1, $2, binding.booking_external_id, binding.exercise_external_id, $5, $6
+       from unnest($3::text[], $4::text[])
+         as binding(booking_external_id, exercise_external_id)`,
+    [
+      input.tenantId,
+      input.userId,
+      bindings.map((binding) => binding.bookingExternalId),
+      bindings.map((binding) => binding.exerciseExternalId),
+      input.correlationId,
+      input.snapshot.fetchedAt,
+    ],
+  );
+  return result.rowCount ?? bindings.length;
+}
+
+export function persistVivaHomeBookingOwnership(input: {
+  readonly pool: Pool;
+  readonly tenantId: string;
+  readonly userId: string;
+  readonly snapshot: VivaHomeUpcomingOwnershipSnapshot;
+  readonly correlationId: string;
+}): Promise<number> {
+  return withTenantTransaction(input.pool, input.tenantId, (client) =>
+    replaceVivaHomeBookingOwnershipWithClient(client, input),
+  );
 }
 
 interface LegacyHistoryParticipantAliasRow extends QueryResultRow {
@@ -807,6 +866,12 @@ export function persistVivaHomeSource(input: {
     await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
       input.delegation.userId,
     ]);
+    await replaceVivaHomeBookingOwnershipWithClient(client, {
+      tenantId: input.delegation.tenantId,
+      userId: input.delegation.userId,
+      snapshot: { upcoming: input.snapshot.upcoming, fetchedAt: input.snapshot.fetchedAt },
+      correlationId: input.correlationId,
+    });
     await resolveInternalId({
       client,
       tenantId: input.delegation.tenantId,

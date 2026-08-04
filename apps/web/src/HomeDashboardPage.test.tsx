@@ -911,7 +911,8 @@ describe('Home upcoming bookings', () => {
             levelValue: 3.43844,
           },
         ],
-        openSlots: 2,
+        participantsCount: 3,
+        openSlots: 1,
       },
       {
         id: '55555555-5555-4555-8555-555555555555',
@@ -955,8 +956,16 @@ describe('Home upcoming bookings', () => {
     expect(within(card).getByText('ИП')).toHaveAttribute('data-avatar-initials');
     expect(within(card).getByText('МО')).toHaveAttribute('data-avatar-initials');
     expect(within(card).queryByText('Мария Орлова')).not.toBeInTheDocument();
-    expect(within(card).queryByRole('link', { name: /Иван Петров/ })).not.toBeInTheDocument();
-    expect(within(card).getAllByLabelText('Свободное место')).toHaveLength(2);
+    expect(within(card).getByRole('link', { name: 'Иван Петров · @ivan_p · D+' })).toHaveAttribute(
+      'href',
+      '/profile/b1dc7c9c-1aed-448d-987e-3235a839b505',
+    );
+    expect(within(card).getByRole('link', { name: 'Мария Орлова · C' })).toHaveAttribute(
+      'href',
+      '/profile/c4e17ec7-a696-4355-a0b9-7e1a5644a3a6',
+    );
+    expect(within(card).getByLabelText('Профиль участника недоступен')).toBeVisible();
+    expect(within(card).getAllByLabelText('Свободное место')).toHaveLength(1);
     expect(container.querySelectorAll('.fh-event.has-participants')).toHaveLength(1);
   });
 });

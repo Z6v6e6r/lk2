@@ -13,6 +13,8 @@ export interface VivaUpcomingBookingSource {
   readonly endsAt?: string;
   readonly venue: string;
   readonly status: 'confirmed' | 'waitlist' | 'payment_required';
+  readonly participantsCount?: number;
+  readonly openSlots?: number;
 }
 
 const externalRefSchema = z.union([
@@ -28,7 +30,7 @@ const activeBookingSchema = z.object({
   isCancelled: z.boolean(),
 });
 const activeBookingsSchema = z.object({
-  content: z.array(activeBookingSchema).max(50),
+  content: z.array(activeBookingSchema).max(1000),
 });
 const transactionSchema = z
   .object({
@@ -40,6 +42,8 @@ const exerciseSchema = z.object({
   timeFrom: z.string().datetime({ offset: true }),
   timeTo: z.string().datetime({ offset: true }).optional(),
   inWaitlist: z.boolean().default(false),
+  clientsCount: z.number().int().nonnegative().max(10_000).optional(),
+  maxClientsCount: z.number().int().nonnegative().max(10_000).optional(),
   direction: namedElementSchema,
   type: namedElementSchema,
   studio: z.object({
@@ -61,7 +65,8 @@ const bookingDetailsSchema = z.object({
 const clientAssistedPayloadSchema = z
   .object({
     bookings: activeBookingsSchema,
-    details: z.array(bookingDetailsSchema).max(50),
+    details: z.array(bookingDetailsSchema).max(1000),
+    complete: z.boolean().default(true),
   })
   .strict();
 
@@ -209,6 +214,17 @@ export function normalizeVivaUpcomingBookingPayload(
           ...(exercise.timeTo ? { endsAt: exercise.timeTo } : {}),
           venue: venue(exercise) || 'ПаделХАБ',
           status: bookingStatus(detail),
+          ...(exercise.clientsCount === undefined
+            ? {}
+            : { participantsCount: exercise.clientsCount }),
+          ...(exercise.clientsCount === undefined || exercise.maxClientsCount === undefined
+            ? {}
+            : {
+                openSlots: Math.max(
+                  0,
+                  Math.min(4, exercise.maxClientsCount - exercise.clientsCount),
+                ),
+              }),
         },
       ];
     })
@@ -218,4 +234,9 @@ export function normalizeVivaUpcomingBookingPayload(
         left.bookingRef.localeCompare(right.bookingRef),
     )
     .slice(0, 50);
+}
+
+/** Whether the bounded browser read covered every provider booking page. */
+export function isVivaUpcomingBookingPayloadComplete(payload: unknown): boolean {
+  return clientAssistedPayloadSchema.parse(payload).complete;
 }

@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 const styles = readFileSync(new URL('./styles.css', import.meta.url), 'utf8');
 
 function ruleBody(selector: string): string {
-  const escapedSelector = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const escapedSelector = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
   const match = styles.match(new RegExp(`(?:^|\\n)${escapedSelector}\\s*\\{([^}]*)\\}`));
   expect(match, `CSS rule ${selector} must exist`).not.toBeNull();
   return match?.[1] ?? '';
@@ -26,17 +26,25 @@ describe('Home layout scroll contract', () => {
     expect(homeRule).not.toMatch(/overflow-x:\s*hidden\s*;/);
   });
 
-  it('fills a tall Home V3 recommendation sheet down to the bottom navigation', () => {
-    const v3HomeRule = ruleBody('.figma-home-shell.is-home-v3 .figma-home');
+  it.each(['is-home-v3', 'is-home-v3-rows'])(
+    'fills a tall %s recommendation sheet down to the bottom navigation',
+    (variant) => {
+      const homeRule = ruleBody(`.figma-home-shell.${variant} .figma-home`);
 
-    expect(v3HomeRule).toMatch(
-      /--fh-v3-main-offset:\s*calc\(413px \+ env\(safe-area-inset-top,\s*0px\)\)\s*;/,
-    );
-    expect(v3HomeRule).toMatch(/--fh-bottom-nav-height:\s*88px\s*;/);
-    expect(styles).toMatch(
-      /\.figma-home-shell\.is-home-v3:not\(\.has-v3-my-extras\) \.fh-main-box,\s*\.figma-home-shell\.is-home-v3:not\(\.has-v3-my-extras\) \.fh-bookings\s*\{[\s\S]*?min-height:\s*max\(\s*calc\(522px \+ var\(--fh-bookings-extra-height\)\),\s*calc\(100dvh - var\(--fh-v3-main-offset\) - var\(--fh-bottom-nav-height\)\)\s*\)\s*;/,
-    );
-  });
+      expect(homeRule).toMatch(
+        /--fh-v3-main-offset:\s*calc\(413px \+ env\(safe-area-inset-top,\s*0px\)\)\s*;/,
+      );
+      expect(homeRule).toMatch(/--fh-bottom-nav-height:\s*88px\s*;/);
+      expect(styles).toMatch(
+        new RegExp(
+          `\\.figma-home-shell\\.${variant}:not\\(\\.has-v3-my-extras\\) \\.fh-main-box,[\\s\\S]*?` +
+            `\\.figma-home-shell\\.${variant}:not\\(\\.has-v3-my-extras\\) \\.fh-bookings[\\s\\S]*?` +
+            `min-height:\\s*max\\(\\s*calc\\(522px \\+ var\\(--fh-bookings-extra-height\\)\\),\\s*` +
+            `calc\\(100dvh - var\\(--fh-v3-main-offset\\) - var\\(--fh-bottom-nav-height\\)\\)\\s*\\)\\s*;`,
+        ),
+      );
+    },
+  );
 
   it('keeps the compact hero and exact lower-box Figma geometry', () => {
     const homeRule = ruleBody('.figma-home');
