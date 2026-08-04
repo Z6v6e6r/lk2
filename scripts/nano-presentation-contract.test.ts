@@ -110,6 +110,10 @@ describe('Nano presentation release contract', () => {
   });
 
   it('publishes realtime health probes without changing the WebSocket route', () => {
+    const tlsPromotion = stagingWorkflow.match(
+      /name: Promote canonical Nano TLS ingress\n([\s\S]*?)\n {6}- name: Verify local HomeBase projections/,
+    )?.[1];
+
     expect(nginxConfig).toMatch(
       /location = \/realtime\/health\/live\s*\{[\s\S]*?http:\/\/realtime:3001\/health\/live;[\s\S]*?\}/,
     );
@@ -119,8 +123,15 @@ describe('Nano presentation release contract', () => {
     expect(nginxConfig).toMatch(
       /location \^~ \/realtime\/\s*\{[\s\S]*?proxy_set_header Upgrade \$http_upgrade;[\s\S]*?proxy_pass \$realtime_upstream;[\s\S]*?\}/,
     );
-    expect(stagingWorkflow).toContain(
-      'https://lk.nano.padlhub.su/realtime/health/ready >/dev/null',
+    expect(tlsPromotion).toContain(
+      'probe_canonical_ready https://lk.nano.padlhub.su/realtime/health/ready',
+    );
+    expect(tlsPromotion).toContain('while [ "$attempt" -lt 15 ]; do');
+    expect(tlsPromotion).toContain('--connect-timeout 2');
+    expect(tlsPromotion).toContain('--max-time 5');
+    expect(tlsPromotion).toContain('sleep 2');
+    expect(tlsPromotion).toMatch(
+      /if \[ "\$ingress_ready" -ne 1 \]; then[\s\S]*?rollback_caddy[\s\S]*?exit 1/,
     );
   });
 

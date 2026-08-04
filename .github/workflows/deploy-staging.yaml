@@ -429,15 +429,33 @@ jobs:
               rollback_caddy
               exit 1
             fi
-            if ! curl --fail --silent --show-error \
-              --resolve lk.nano.padlhub.su:443:127.0.0.1 \
-              https://lk.nano.padlhub.su/health/ready >/dev/null; then
-              rollback_caddy
-              exit 1
-            fi
-            if ! curl --fail --silent --show-error \
-              --resolve lk.nano.padlhub.su:443:127.0.0.1 \
-              https://lk.nano.padlhub.su/realtime/health/ready >/dev/null; then
+
+            probe_canonical_ready() {
+              curl --fail --silent \
+                --connect-timeout 2 \
+                --max-time 5 \
+                --resolve lk.nano.padlhub.su:443:127.0.0.1 \
+                "$1" >/dev/null
+            }
+
+            ingress_ready=0
+            attempt=0
+            while [ "$attempt" -lt 15 ]; do
+              if probe_canonical_ready https://lk.nano.padlhub.su/health/ready \
+                && probe_canonical_ready https://lk.nano.padlhub.su/realtime/health/ready; then
+                ingress_ready=1
+                break
+              fi
+              attempt=$((attempt + 1))
+              sleep 2
+            done
+            if [ "$ingress_ready" -ne 1 ]; then
+              curl --fail --silent --show-error --connect-timeout 2 --max-time 5 \
+                --resolve lk.nano.padlhub.su:443:127.0.0.1 \
+                https://lk.nano.padlhub.su/health/ready >/dev/null || true
+              curl --fail --silent --show-error --connect-timeout 2 --max-time 5 \
+                --resolve lk.nano.padlhub.su:443:127.0.0.1 \
+                https://lk.nano.padlhub.su/realtime/health/ready >/dev/null || true
               rollback_caddy
               exit 1
             fi

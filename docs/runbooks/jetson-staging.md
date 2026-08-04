@@ -232,6 +232,12 @@ routes. It also exposes these application routes:
 requires JSON plus stable API error codes from both the Public and Admin boundaries, so an HTML SPA
 fallback cannot be accepted as a healthy API route.
 
+Canonical TLS promotion validates the candidate Caddyfile before recreating Caddy. After recreation,
+the workflow polls both `/health/ready` and `/realtime/health/ready` through
+`lk.nano.padlhub.su` on the local TLS listener. The gate allows at most 15 attempts separated by two
+seconds, with bounded connect and request timeouts. It promotes the ingress only when both routes pass
+in the same attempt; exhaustion logs one final probe for each route and restores the saved Caddyfile.
+
 The web image is built in CI for `linux/arm64`, pinned by digest in the release
 file, and served by an internal Nginx container. The Jetson never builds the
 client and has no direct web-container port published. CI passes the deployed
