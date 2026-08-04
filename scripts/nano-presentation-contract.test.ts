@@ -8,6 +8,8 @@ function repositoryFile(relativePath: string): string {
 }
 
 const caddyfile = repositoryFile('deploy/jetson/tls-ingress/Caddyfile');
+const nginxConfig = repositoryFile('deploy/jetson/nginx/default.conf');
+const stagingWorkflow = repositoryFile('.github/workflows/deploy-staging.yaml');
 const activation = repositoryFile('deploy/jetson/activate-live-home.sh');
 const verification = repositoryFile('deploy/jetson/verify-live-staging-data.sh');
 const cupVerification = repositoryFile('deploy/jetson/verify-cup-integrations.sh');
@@ -27,6 +29,21 @@ describe('Nano presentation release contract', () => {
     expect(caddyfile).toContain('@padlhub_api path /user/api/* /admin/api/* /public/api/*');
     expect(caddyfile).toMatch(/handle @padlhub_api\s*\{\s*reverse_proxy api:3000\s*}/);
     expect(caddyfile).toMatch(/handle\s*\{\s*reverse_proxy showcase-proxy:80\s*}/);
+  });
+
+  it('publishes realtime health probes without changing the WebSocket route', () => {
+    expect(nginxConfig).toMatch(
+      /location = \/realtime\/health\/live\s*\{[\s\S]*?http:\/\/realtime:3001\/health\/live;[\s\S]*?\}/,
+    );
+    expect(nginxConfig).toMatch(
+      /location = \/realtime\/health\/ready\s*\{[\s\S]*?http:\/\/realtime:3001\/health\/ready;[\s\S]*?\}/,
+    );
+    expect(nginxConfig).toMatch(
+      /location \^~ \/realtime\/\s*\{[\s\S]*?proxy_set_header Upgrade \$http_upgrade;[\s\S]*?proxy_pass \$realtime_upstream;[\s\S]*?\}/,
+    );
+    expect(stagingWorkflow).toContain(
+      'https://lk.nano.padlhub.su/realtime/health/ready >/dev/null',
+    );
   });
 
   it('activates browser read jobs only with a usable mixed routing envelope', () => {

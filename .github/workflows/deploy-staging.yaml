@@ -287,6 +287,12 @@ jobs:
               rollback_caddy
               exit 1
             fi
+            if ! curl --fail --silent --show-error \
+              --resolve lk.nano.padlhub.su:443:127.0.0.1 \
+              https://lk.nano.padlhub.su/realtime/health/ready >/dev/null; then
+              rollback_caddy
+              exit 1
+            fi
             location="$(curl --silent --show-error --output /dev/null --write-out "%{redirect_url}" \
               -H "Host: 185.155.18.146" http://127.0.0.1/games)"
             if test "$location" != "https://lk.nano.padlhub.su/games"; then
