@@ -255,4 +255,25 @@ describe('Nano staging application rollback primitive', () => {
     );
     await expect(readFile(input.dockerLog, 'utf8')).rejects.toThrow();
   });
+
+  it('reports malformed release metadata without disclosing its value', async () => {
+    const input = await fixture();
+    const releasePath = join(input.backup, 'release.env');
+    const release = await readFile(releasePath, 'utf8');
+    const secretValue = 'rollback-secret-value';
+    await writeFile(releasePath, release.replace('REGISTRY=', `REGISTRY=${secretValue}\r\n#`));
+
+    const failure = await execute(input).catch((error: CommandFailure) => error);
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as CommandFailure).stderr).toContain('release_env_invalid line=1 key=REGISTRY');
+    expect((failure as CommandFailure).stderr).toContain(
+      'saved release.env contains an unsafe line',
+    );
+    expect((failure as CommandFailure).stdout).not.toContain(secretValue);
+    expect((failure as CommandFailure).stderr).not.toContain(secretValue);
+    await expect(readFile(join(input.root, 'compose.yaml'), 'utf8')).resolves.toBe(
+      'current compose\n',
+    );
+    await expect(readFile(input.dockerLog, 'utf8')).rejects.toThrow();
+  });
 });

@@ -36,6 +36,10 @@ describe('Nano presentation release contract', () => {
     expect(diagnoseJob).toContain('needs: validate-request');
     expect(diagnoseJob).toContain("needs.validate-request.outputs.mode == 'diagnostics'");
     expect(diagnoseJob).not.toContain('deploy_confirmation');
+    expect(diagnoseJob).toContain('Inspect active release metadata without values');
+    expect(diagnoseJob).toContain("'sh -s -- /opt/phub/release.env'");
+    expect(diagnoseJob).toContain('< deploy/jetson/inspect-release-env.sh');
+    expect(diagnoseJob).toContain('continue-on-error: true');
     expect(buildGate).toContain('needs: validate-request');
     expect(buildGate).toContain("needs.validate-request.outputs.mode == 'deploy'");
     expect(deployGate).toContain('needs: [validate-request, build]');

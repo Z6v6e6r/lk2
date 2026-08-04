@@ -180,7 +180,11 @@ the displaced current files in a new `rollback-recovery-*` directory, restores s
 restricted modes, and never starts the migrator or reverses an expand migration. It validates and
 recreates both Nginx and Caddy. Success is
 reported only after private `/health/ready` checks pass inside API, realtime and worker containers.
-The script never prints `release.env`, `staging.auth.env` or their values.
+The script never prints `release.env`, `staging.auth.env` or their values. For malformed
+`release.env` input it reports only the line number, a validated uppercase key (or a redacted key
+classification) and the line length. The read-only diagnostics workflow runs the same metadata-only
+inspection against `/opt/phub/release.env` and continues with the remaining host checks even when
+the metadata inspector finds an invalid line.
 
 If validation, image resolution or readiness fails, retain both saved-release directories, stop the
 change window and inspect only redacted container status. Do not delete the expanded schema and do

@@ -86,6 +86,13 @@ jobs:
           printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
           printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+      - name: Inspect active release metadata without values
+        continue-on-error: true
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+        run: |
+          ssh -o ServerAliveInterval=10 -o ServerAliveCountMax=2 "phub-deploy@$HOST" \
+            'sh -s -- /opt/phub/release.env' < deploy/jetson/inspect-release-env.sh
       - name: Recover leaked udisks memory
         if: ${{ inputs.recover_udisks }}
         env:

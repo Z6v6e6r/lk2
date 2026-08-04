@@ -106,11 +106,23 @@ fi
 
 release_env="$stage_dir/release.env"
 awk '
+  function diagnostic_key(line, equals, key) {
+    equals = index(line, "=")
+    if (equals <= 1) return "NO_KEY"
+    key = substr(line, 1, equals - 1)
+    if (key ~ /^[A-Z][A-Z0-9_]*$/) return key
+    return "UNSAFE_KEY"
+  }
+
   /^[[:space:]]*$/ { next }
   /^#/ { next }
   /^[A-Z][A-Z0-9_]*=[^[:cntrl:]]*$/ { next }
-  { exit 1 }
-' "$release_env" || fail 'saved release.env contains an unsafe line'
+  {
+    invalid = 1
+    printf "release_env_invalid line=%d key=%s length=%d\n", NR, diagnostic_key($0), length($0)
+  }
+  END { exit invalid }
+' "$release_env" >&2 || fail 'saved release.env contains an unsafe line'
 
 release_value() {
   release_key="$1"
