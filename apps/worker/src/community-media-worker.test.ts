@@ -177,4 +177,224 @@ describe('community media worker cycle', () => {
     );
     expect(releaseScan).not.toHaveBeenCalled();
   });
+
+  it('discovers absent expired sources, skips known versions and defers storage failures', async () => {
+    const confirmExpiredSourceAbsent = vi.fn().mockResolvedValue(true);
+    const log = logger();
+    const repo = repository({
+      expireDue: vi.fn().mockResolvedValue([
+        { mediaId: 'known-version', sourceObjectKey: 'known', sourceObjectVersion: 'v1' },
+        { mediaId: 'absent-version', sourceObjectKey: 'absent' },
+        { mediaId: 'failed-discovery', sourceObjectKey: 'failed' },
+      ]),
+      confirmExpiredSourceAbsent,
+    });
+    const currentVersion = vi
+      .fn()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error('storage unavailable'));
+    const result = await runCommunityMediaCycle({
+      repository: repo,
+      store: {
+        currentVersion,
+        getExact: vi.fn(),
+        putReady: vi.fn(),
+        deleteExact: vi.fn(),
+      },
+      scanner: new MockCommunityMediaMalwareScanner(),
+      logger: log,
+      tenantId,
+      workerId: 'media-worker-1',
+      batchSize: 10,
+    });
+
+    expect(result.expired).toBe(3);
+    expect(currentVersion).toHaveBeenCalledTimes(2);
+    expect(confirmExpiredSourceAbsent).toHaveBeenCalledWith(
+      expect.objectContaining({ mediaId: 'absent-version' }),
+    );
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ mediaId: 'failed-discovery' }),
+      'community media expired-source discovery deferred',
+    );
+  });
+
+  it('maps permanent source failures to rejection and transient failures to bounded retry', async () => {
+    const source = await sharp({
+      create: { width: 8, height: 8, channels: 3, background: '#123456' },
+    })
+      .webp()
+      .toBuffer();
+    const validSha = createHash('sha256').update(source).digest('hex');
+    const claims = [
+      {
+        mediaId: '00000000-0000-4000-8000-000000000001',
+        sourceObjectKey: 'wrong-size',
+        sourceObjectVersion: 'v1',
+        sourceEtag: 'etag-1',
+        declaredContentType: 'image/webp',
+        declaredByteSize: source.byteLength + 1,
+        declaredSha256: validSha,
+        scanAttempt: 1,
+      },
+      {
+        mediaId: '00000000-0000-4000-8000-000000000002',
+        sourceObjectKey: 'wrong-checksum',
+        sourceObjectVersion: 'v1',
+        sourceEtag: 'etag-2',
+        declaredContentType: 'image/webp',
+        declaredByteSize: source.byteLength,
+        declaredSha256: '0'.repeat(64),
+        scanAttempt: 2,
+      },
+      {
+        mediaId: '00000000-0000-4000-8000-000000000003',
+        sourceObjectKey: 'lowercase-transient',
+        sourceObjectVersion: 'v1',
+        sourceEtag: 'etag-3',
+        declaredContentType: 'image/webp',
+        declaredByteSize: source.byteLength,
+        declaredSha256: validSha,
+        scanAttempt: 3,
+      },
+      {
+        mediaId: '00000000-0000-4000-8000-000000000004',
+        sourceObjectKey: 'coded-transient',
+        sourceObjectVersion: 'v1',
+        sourceEtag: 'etag-4',
+        declaredContentType: 'image/webp',
+        declaredByteSize: source.byteLength,
+        declaredSha256: validSha,
+        scanAttempt: 4,
+      },
+    ];
+    const rejectScan = vi
+      .fn()
+      .mockResolvedValueOnce('already_rejected')
+      .mockResolvedValueOnce('lease_lost');
+    const releaseScan = vi.fn().mockResolvedValue(true);
+    const repo = repository({
+      claimScans: vi.fn().mockResolvedValue(claims),
+      rejectScan,
+      releaseScan,
+    });
+    const getExact = vi.fn(({ objectKey }: { readonly objectKey: string }) => {
+      if (objectKey === 'lowercase-transient')
+        return Promise.reject(new Error('storage unavailable'));
+      if (objectKey === 'coded-transient') {
+        return Promise.reject(new Error('COMMUNITY_MEDIA_SCAN_UNAVAILABLE'));
+      }
+      return Promise.resolve({ body: source, contentType: 'image/webp' });
+    });
+    const result = await runCommunityMediaCycle({
+      repository: repo,
+      store: { currentVersion: vi.fn(), getExact, putReady: vi.fn(), deleteExact: vi.fn() },
+      scanner: new MockCommunityMediaMalwareScanner(),
+      logger: logger(),
+      tenantId,
+      workerId: 'media-worker-1',
+      batchSize: 10,
+    });
+
+    expect(result).toMatchObject({ rejected: 1, scanRetried: 2 });
+    expect(rejectScan).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ rejectionCode: 'CONTENT_TYPE_MISMATCH' }),
+    );
+    expect(rejectScan).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ rejectionCode: 'SOURCE_CHECKSUM_MISMATCH' }),
+    );
+    expect(releaseScan).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ errorCode: 'COMMUNITY_MEDIA_TRANSIENT_FAILURE' }),
+    );
+    expect(releaseScan).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ errorCode: 'COMMUNITY_MEDIA_SCAN_UNAVAILABLE' }),
+    );
+    for (const [call] of releaseScan.mock.calls) {
+      const release = call as unknown as { readonly retryAt: string };
+      expect(Date.parse(release.retryAt)).toBeGreaterThan(Date.now());
+    }
+  });
+
+  it('counts already-ready scans and distinguishes completed GC from retryable failures', async () => {
+    const source = await sharp({
+      create: { width: 6, height: 4, channels: 3, background: '#abcdef' },
+    })
+      .webp()
+      .toBuffer();
+    const sourceSha256 = createHash('sha256').update(source).digest('hex');
+    const failGc = vi.fn().mockResolvedValue(true);
+    const repo = repository({
+      claimScans: vi.fn().mockResolvedValue([
+        {
+          mediaId,
+          sourceObjectKey: 'source',
+          sourceObjectVersion: 'v1',
+          sourceEtag: 'etag',
+          declaredContentType: 'image/webp',
+          declaredByteSize: source.byteLength,
+          declaredSha256: sourceSha256,
+          scanAttempt: 1,
+        },
+      ]),
+      completeScan: vi.fn().mockResolvedValue('already_ready'),
+      claimGc: vi.fn().mockResolvedValue([
+        { jobId: 'gc-not-completed', objectKey: 'ready', objectVersion: 'v1', attempt: 1 },
+        { jobId: 'gc-coded-failure', objectKey: 'coded-failure', objectVersion: 'v2', attempt: 2 },
+        {
+          jobId: 'gc-unknown-failure',
+          objectKey: 'unknown-failure',
+          objectVersion: 'v3',
+          attempt: 3,
+        },
+      ]),
+      completeGc: vi.fn().mockResolvedValue(false),
+      failGc,
+    });
+    const putReady = vi.fn(
+      ({ objectKey, body, sha256 }: { objectKey: string; body: Buffer; sha256: string }) =>
+        Promise.resolve({
+          objectKey,
+          versionId: 'ready-v1',
+          etag: 'ready-etag',
+          sha256,
+          sizeBytes: body.byteLength,
+          width: 6,
+          height: 4,
+        }),
+    );
+    const deleteExact = vi.fn(({ objectKey }: { objectKey: string }) => {
+      if (objectKey === 'coded-failure')
+        return Promise.reject(new Error('COMMUNITY_MEDIA_DELETE_FAILED'));
+      if (objectKey === 'unknown-failure') return Promise.reject(new Error('network reset'));
+      return Promise.resolve();
+    });
+    const result = await runCommunityMediaCycle({
+      repository: repo,
+      store: {
+        currentVersion: vi.fn(),
+        getExact: vi.fn().mockResolvedValue({ body: source, contentType: 'image/webp' }),
+        putReady,
+        deleteExact,
+      },
+      scanner: new MockCommunityMediaMalwareScanner(),
+      logger: logger(),
+      tenantId,
+      workerId: 'media-worker-1',
+      batchSize: 10,
+    });
+
+    expect(result).toMatchObject({ scanned: 1, gcCompleted: 0, gcRetried: 2 });
+    expect(failGc).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ errorCode: 'COMMUNITY_MEDIA_DELETE_FAILED' }),
+    );
+    expect(failGc).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ errorCode: 'COMMUNITY_MEDIA_TRANSIENT_FAILURE' }),
+    );
+  });
 });

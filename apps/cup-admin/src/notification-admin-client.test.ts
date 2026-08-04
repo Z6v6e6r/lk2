@@ -345,4 +345,90 @@ describe('NotificationAdminClient community moderation', () => {
     expect(headers.get('X-App-Platform')).toBe('cup-admin');
     expect(headers.get('Idempotency-Key')).toMatch(/^[A-Za-z0-9-]{16,}$/);
   });
+
+  it('covers the remaining moderation reads and commands with encoded server-owned identifiers', async () => {
+    const calls: Array<{
+      readonly input: Parameters<typeof fetch>[0];
+      readonly init?: RequestInit;
+    }> = [];
+    const fetchImplementation: typeof fetch = (input, init) => {
+      calls.push({ input, ...(init ? { init } : {}) });
+      return Promise.resolve(Response.json({ items: [], url: 'https://media.test/grant' }));
+    };
+    const client = createNotificationAdminClient({
+      baseUrl: 'https://api.padlhub.test/',
+      tenantKey: 'local-padel',
+      appVersion: '0.1.0',
+      appBuild: 'rc-42',
+      fetchImplementation,
+    });
+    const communityId = '11111111-1111-4111-8111-111111111111';
+    const requestId = '22222222-2222-4222-8222-222222222222';
+    const postId = '44444444-4444-4444-8444-444444444444';
+    const mediaId = '55555555-5555-4555-8555-555555555555';
+
+    await client.listPendingCommunityJoinRequests();
+    await client.rejectCommunityJoinRequest(requestId, {
+      expectedMembershipRevision: 3,
+      expectedRequestRevision: 5,
+      reasonCode: 'PROFILE_INCOMPLETE',
+    });
+    await client.getCommunityModerationMediaUrl(communityId, mediaId, 'FEED');
+    await client.hideCommunityPost(communityId, postId, {
+      expectedRevision: 7,
+      reasonCode: 'OPERATIONS_HIDE',
+    });
+    await client.restoreCommunityPost(communityId, postId, {
+      expectedRevision: 8,
+      reasonCode: 'APPEAL_ACCEPTED',
+    });
+
+    expect(calls.map((call) => call.input)).toEqual([
+      'https://api.padlhub.test/admin/api/v1/local-padel/community-join-requests/pending',
+      `https://api.padlhub.test/admin/api/v1/local-padel/community-join-requests/${requestId}/reject`,
+      `https://api.padlhub.test/admin/api/v1/local-padel/communities/${communityId}/content/media/${mediaId}/variants/FEED/url`,
+      `https://api.padlhub.test/admin/api/v1/local-padel/communities/${communityId}/content/posts/${postId}/hide`,
+      `https://api.padlhub.test/admin/api/v1/local-padel/communities/${communityId}/content/posts/${postId}/restore`,
+    ]);
+    expect(calls[1]?.init?.body).toBe(
+      JSON.stringify({
+        expectedMembershipRevision: 3,
+        expectedRequestRevision: 5,
+        reasonCode: 'PROFILE_INCOMPLETE',
+      }),
+    );
+    expect(calls[3]?.init?.body).toBe(
+      JSON.stringify({ expectedRevision: 7, reasonCode: 'OPERATIONS_HIDE' }),
+    );
+    expect(calls[4]?.init?.body).toBe(
+      JSON.stringify({ expectedRevision: 8, reasonCode: 'APPEAL_ACCEPTED' }),
+    );
+    expect(new Headers(calls[2]?.init?.headers).get('Idempotency-Key')).toBeNull();
+    expect(new Headers(calls[3]?.init?.headers).get('Idempotency-Key')).toMatch(
+      /^[A-Za-z0-9-]{16,}$/,
+    );
+    expect(new Headers(calls[4]?.init?.headers).get('X-App-Build')).toBe('rc-42');
+  });
+
+  it('returns a stable admin error when the moderation response is not JSON', async () => {
+    const client = createNotificationAdminClient({
+      baseUrl: 'https://api.padlhub.test',
+      tenantKey: 'local-padel',
+      appVersion: '0.1.0',
+      fetchImplementation: () =>
+        Promise.resolve(
+          new Response('upstream unavailable', {
+            status: 503,
+            headers: { 'X-Correlation-ID': 'server-correlation-id' },
+          }),
+        ),
+    });
+
+    await expect(client.listPendingCommunityContent()).rejects.toMatchObject({
+      message: 'Запрос не выполнен.',
+      status: 503,
+      code: 'UNEXPECTED_API_ERROR',
+      correlationId: 'server-correlation-id',
+    });
+  });
 });
