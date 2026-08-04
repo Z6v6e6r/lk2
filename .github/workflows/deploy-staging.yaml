@@ -93,6 +93,14 @@ jobs:
         run: |
           ssh -o ServerAliveInterval=10 -o ServerAliveCountMax=2 "phub-deploy@$HOST" \
             'sh -s -- /opt/phub/release.env' < deploy/jetson/inspect-release-env.sh
+      - name: Inspect migration 0057 state read-only
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+        run: |
+          checksum_line="$(sha256sum packages/database/migrations/0057_messaging_runtime.sql)"
+          expected_checksum="${checksum_line%% *}"
+          ssh -o ServerAliveInterval=10 -o ServerAliveCountMax=2 "phub-deploy@$HOST" \
+            sh -s -- "$expected_checksum" < deploy/jetson/diagnose-migration-0057.sh
       - name: Recover leaked udisks memory
         if: ${{ inputs.recover_udisks }}
         env:

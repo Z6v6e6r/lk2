@@ -11,6 +11,11 @@ confirmation is absent or different, the selected ref is not `main`, no operatio
 deployment confirmation is mixed with either diagnostics option. `diagnose_home=true` with an
 empty confirmation runs only the independent read-only Home/public-ingress diagnostics; do not
 combine it with `recover_udisks=true` when a strictly read-only run is required.
+The same read-only mode fingerprints the repository `0057_messaging_runtime.sql` migration and
+reports only structural PostgreSQL metadata for its three tables: matching migration-journal rows,
+columns, constraints, indexes, RLS flags and policies. The remote `psql` session enforces both
+`default_transaction_read_only=on` and `BEGIN READ ONLY`; it does not inspect tenant rows or change
+the migration journal. Use this evidence before reconciling a legacy renamed migration.
 
 Node services keep their runtime dependencies external to their ESM output.
 This is required for OpenTelemetry's Node instrumentation, which uses dynamic

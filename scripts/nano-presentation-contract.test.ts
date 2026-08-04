@@ -10,6 +10,7 @@ function repositoryFile(relativePath: string): string {
 const caddyfile = repositoryFile('deploy/jetson/tls-ingress/Caddyfile');
 const nginxConfig = repositoryFile('deploy/jetson/nginx/default.conf');
 const stagingWorkflow = repositoryFile('.github/workflows/deploy-staging.yaml');
+const migration0057Diagnostic = repositoryFile('deploy/jetson/diagnose-migration-0057.sh');
 const activation = repositoryFile('deploy/jetson/activate-live-home.sh');
 const verification = repositoryFile('deploy/jetson/verify-live-staging-data.sh');
 const cupVerification = repositoryFile('deploy/jetson/verify-cup-integrations.sh');
@@ -40,12 +41,32 @@ describe('Nano presentation release contract', () => {
     expect(diagnoseJob).toContain("'sh -s -- /opt/phub/release.env'");
     expect(diagnoseJob).toContain('< deploy/jetson/inspect-release-env.sh');
     expect(diagnoseJob).toContain('continue-on-error: true');
+    expect(diagnoseJob).toContain('Inspect migration 0057 state read-only');
+    expect(diagnoseJob).toContain(
+      'sha256sum packages/database/migrations/0057_messaging_runtime.sql',
+    );
+    expect(diagnoseJob).toContain('< deploy/jetson/diagnose-migration-0057.sh');
     expect(buildGate).toContain('needs: validate-request');
     expect(buildGate).toContain("needs.validate-request.outputs.mode == 'deploy'");
     expect(deployGate).toContain('needs: [validate-request, build]');
     expect(deployGate).toContain('always()');
     expect(deployGate).toContain("needs.build.result == 'success'");
     expect(deployGate).toContain("needs.validate-request.outputs.mode == 'deploy'");
+  });
+
+  it('keeps the migration 0057 staging diagnostic structurally read-only', () => {
+    expect(migration0057Diagnostic).toContain('default_transaction_read_only=on');
+    expect(migration0057Diagnostic).toContain('begin transaction read only;');
+    expect(migration0057Diagnostic).toContain('commit;');
+    expect(migration0057Diagnostic).toContain("'0057_messaging_runtime.sql'");
+    expect(migration0057Diagnostic).toContain("'0043_messaging_runtime.sql'");
+    expect(migration0057Diagnostic).toContain('pg_catalog.pg_policies');
+    expect(migration0057Diagnostic).toContain('pg_catalog.pg_constraint');
+    expect(migration0057Diagnostic).toContain('pg_catalog.pg_indexes');
+    expect(migration0057Diagnostic).not.toMatch(
+      /^\s*(insert|update|delete|alter|create|drop|truncate|grant|revoke)\b/im,
+    );
+    expect(migration0057Diagnostic).not.toMatch(/compose\s+(up|run)|migrator/i);
   });
 
   it('snapshots the active application before mutation and rolls it back after later failures', () => {
