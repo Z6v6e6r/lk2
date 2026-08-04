@@ -16,6 +16,16 @@ read-only, redacted test-player check. It reports only the masked suffix, PadlHu
 and Viva-delegation status, refresh timestamps/error codes, and Home projection freshness. The
 diagnostic never reads token ciphertext or Viva subject values and forces a read-only PostgreSQL
 transaction.
+Use `deployment_profile=FULL_LIVE_HOME` for the existing routing refresh and guarded Live Home
+activation. Use `deployment_profile=MESSAGING_TEST` only for the isolated two-player chat contour;
+provide two distinct active PadlHub UUIDs in `messaging_player_a_id` and
+`messaging_player_b_id` and leave every routing input empty. This profile still builds and promotes
+the same immutable digests, takes application and PostgreSQL backups, migrates, validates TLS and
+runs the ordinary smoke suite. It skips routing refresh, Live Home activation, full live-Home data
+and CUP gates. Instead it proves the saved `staging.override.env` is byte-identical, migration 0057
+has the repository checksum, both players retain chat permission/privacy, the anonymous
+conversation boundary returns `AUTH_REQUIRED`, and realtime readiness reports PostgreSQL, Redis
+and RabbitMQ ready. Any failure invokes the same application rollback.
 An isolated staging user-access change uses the same workflow with `access_target_user_id`,
 `access_actor_id`, and the complete `access_roles` and `access_permissions` sets. It cannot be
 combined with deployment or diagnostics. The workflow always previews current versus desired

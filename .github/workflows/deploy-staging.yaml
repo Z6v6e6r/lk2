@@ -7,6 +7,22 @@ on:
         description: Type DEPLOY_STAGING to deploy the main branch to staging
         required: false
         type: string
+      deployment_profile:
+        description: FULL_LIVE_HOME activates Home; MESSAGING_TEST preserves the current Home mode
+        required: true
+        type: choice
+        default: FULL_LIVE_HOME
+        options:
+          - FULL_LIVE_HOME
+          - MESSAGING_TEST
+      messaging_player_a_id:
+        description: First active PadlHub player UUID required by MESSAGING_TEST
+        required: false
+        type: string
+      messaging_player_b_id:
+        description: Second active PadlHub player UUID required by MESSAGING_TEST
+        required: false
+        type: string
       routing_tenant_key:
         description: Active staging tenant whose routing plan is refreshed before live Home activation
         required: false
@@ -73,6 +89,9 @@ jobs:
         name: Validate requested staging operation
         env:
           DEPLOY_CONFIRMATION: ${{ inputs.deploy_confirmation }}
+          DEPLOYMENT_PROFILE: ${{ inputs.deployment_profile }}
+          MESSAGING_PLAYER_A_ID: ${{ inputs.messaging_player_a_id }}
+          MESSAGING_PLAYER_B_ID: ${{ inputs.messaging_player_b_id }}
           ROUTING_TENANT_KEY: ${{ inputs.routing_tenant_key }}
           ROUTING_ACTOR_ID: ${{ inputs.routing_actor_id }}
           ROUTING_APPLY_CONFIRMATION: ${{ inputs.routing_apply_confirmation }}
@@ -145,18 +164,46 @@ jobs:
             echo '::error::Staging deployment is allowed only from refs/heads/main.'
             exit 1
           fi
-          if ! printf '%s' "$ROUTING_TENANT_KEY" | grep -Eq '^[a-z0-9][a-z0-9-]{1,62}$'; then
-            echo '::error::Deployment requires a valid staging routing tenant key.'
-            exit 1
-          fi
-          if ! printf '%s' "$ROUTING_ACTOR_ID" | grep -Eiq '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'; then
-            echo '::error::Deployment routing actor ID must be a UUID.'
-            exit 1
-          fi
-          if [ "$ROUTING_APPLY_CONFIRMATION" != 'APPLY_ROUTING_PLAN' ]; then
-            echo '::error::Deployment requires the exact APPLY_ROUTING_PLAN confirmation.'
-            exit 1
-          fi
+          case "$DEPLOYMENT_PROFILE" in
+            FULL_LIVE_HOME)
+              if ! printf '%s' "$ROUTING_TENANT_KEY" | grep -Eq '^[a-z0-9][a-z0-9-]{1,62}$'; then
+                echo '::error::Full Home deployment requires a valid staging routing tenant key.'
+                exit 1
+              fi
+              if ! printf '%s' "$ROUTING_ACTOR_ID" | grep -Eiq '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'; then
+                echo '::error::Full Home deployment routing actor ID must be a UUID.'
+                exit 1
+              fi
+              if [ "$ROUTING_APPLY_CONFIRMATION" != 'APPLY_ROUTING_PLAN' ]; then
+                echo '::error::Full Home deployment requires the exact APPLY_ROUTING_PLAN confirmation.'
+                exit 1
+              fi
+              if [ -n "$MESSAGING_PLAYER_A_ID$MESSAGING_PLAYER_B_ID" ]; then
+                echo '::error::Full Home deployment cannot include messaging-test players.'
+                exit 1
+              fi
+              ;;
+            MESSAGING_TEST)
+              if [ -n "$ROUTING_TENANT_KEY$ROUTING_ACTOR_ID$ROUTING_APPLY_CONFIRMATION" ]; then
+                echo '::error::Messaging-test deployment cannot refresh or activate Live Home routing.'
+                exit 1
+              fi
+              for player_id in "$MESSAGING_PLAYER_A_ID" "$MESSAGING_PLAYER_B_ID"; do
+                if ! printf '%s' "$player_id" | grep -Eiq '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'; then
+                  echo '::error::Messaging-test player IDs must be UUIDs.'
+                  exit 1
+                fi
+              done
+              if [ "$MESSAGING_PLAYER_A_ID" = "$MESSAGING_PLAYER_B_ID" ]; then
+                echo '::error::Messaging-test deployment requires two distinct players.'
+                exit 1
+              fi
+              ;;
+            *)
+              echo '::error::Unknown deployment profile.'
+              exit 1
+              ;;
+          esac
           printf '%s\n' 'mode=deploy' >> "$GITHUB_OUTPUT"
 
   set-user-access:
@@ -460,6 +507,8 @@ jobs:
             "phub-deploy@$HOST:/opt/phub/verify-live-staging-data.sh"
           scp deploy/jetson/verify-cup-integrations.sh \
             "phub-deploy@$HOST:/opt/phub/verify-cup-integrations.sh"
+          scp deploy/jetson/verify-messaging-test-release.sh \
+            "phub-deploy@$HOST:/opt/phub/verify-messaging-test-release.sh"
           scp deploy/jetson/tls-ingress/Caddyfile \
             "phub-deploy@$HOST:/opt/phub/tls-ingress/Caddyfile.next"
           ssh "phub-deploy@$HOST" '
@@ -648,6 +697,7 @@ jobs:
           HOST: ${{ secrets.STAGING_HOST }}
         run: ssh "phub-deploy@$HOST" 'sh /opt/phub/verify-home-base.sh'
       - name: Refresh the audited routing plan immediately before live Home activation
+        if: ${{ inputs.deployment_profile == 'FULL_LIVE_HOME' }}
         env:
           HOST: ${{ secrets.STAGING_HOST }}
           TENANT_KEY: ${{ inputs.routing_tenant_key }}
@@ -660,17 +710,41 @@ jobs:
           ssh "phub-deploy@$HOST" /opt/phub/run-client-routing-plan.sh \
             "$TENANT_KEY" "$ACTOR_ID" "$operation_id" "$operation_id" "$reason" true
       - name: Activate and verify live Home projection
+        if: ${{ inputs.deployment_profile == 'FULL_LIVE_HOME' }}
         env:
           HOST: ${{ secrets.STAGING_HOST }}
         run: ssh "phub-deploy@$HOST" 'sh /opt/phub/activate-live-home.sh'
       - name: Verify real staging identities and Games
+        if: ${{ inputs.deployment_profile == 'FULL_LIVE_HOME' }}
         env:
           HOST: ${{ secrets.STAGING_HOST }}
         run: ssh "phub-deploy@$HOST" 'sh /opt/phub/verify-live-staging-data.sh'
       - name: Verify CUP campaigns and notifications binding
+        if: ${{ inputs.deployment_profile == 'FULL_LIVE_HOME' }}
         env:
           HOST: ${{ secrets.STAGING_HOST }}
         run: ssh "phub-deploy@$HOST" 'sh /opt/phub/verify-cup-integrations.sh local-padel'
+      - name: Verify messaging test release and preserve the current Home mode
+        if: ${{ inputs.deployment_profile == 'MESSAGING_TEST' }}
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+          PLAYER_A_ID: ${{ inputs.messaging_player_a_id }}
+          PLAYER_B_ID: ${{ inputs.messaging_player_b_id }}
+        run: |
+          checksum_line="$(sha256sum packages/database/migrations/0057_messaging_runtime.sql)"
+          expected_checksum="${checksum_line%% *}"
+          ssh "phub-deploy@$HOST" sh -s -- "$STAGING_RELEASE_BACKUP_DIR" <<'REMOTE'
+            set -eu
+            backup_dir="$1"
+            if [ -f "$backup_dir/staging.override.env" ]; then
+              cmp "$backup_dir/staging.override.env" /opt/phub/staging.override.env
+            else
+              test -f "$backup_dir/staging.override.env.absent"
+              test ! -e /opt/phub/staging.override.env
+            fi
+          REMOTE
+          ssh "phub-deploy@$HOST" /opt/phub/verify-messaging-test-release.sh \
+            local-padel "$PLAYER_A_ID" "$PLAYER_B_ID" "$expected_checksum"
       - name: Verify the web entrypoint
         env:
           SMOKE_BASE_URL: ${{ vars.STAGING_BASE_URL }}

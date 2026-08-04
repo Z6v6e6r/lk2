@@ -15,6 +15,9 @@ const stagingRoutingOperator = repositoryFile('deploy/jetson/run-client-routing-
 const migration0057Diagnostic = repositoryFile('deploy/jetson/diagnose-migration-0057.sh');
 const testPlayerDiagnostic = repositoryFile('deploy/jetson/diagnose-test-player-delegations.sh');
 const userAccessOperator = repositoryFile('deploy/jetson/run-user-access.sh');
+const messagingReleaseVerification = repositoryFile(
+  'deploy/jetson/verify-messaging-test-release.sh',
+);
 const activation = repositoryFile('deploy/jetson/activate-live-home.sh');
 const verification = repositoryFile('deploy/jetson/verify-live-staging-data.sh');
 const cupVerification = repositoryFile('deploy/jetson/verify-cup-integrations.sh');
@@ -104,6 +107,26 @@ describe('Nano presentation release contract', () => {
     expect(userAccessOperator).toContain('--profile migration run --rm --no-deps');
     expect(stagingWorkflow).toContain("needs.validate-request.outputs.mode == 'user-access'");
     expect(stagingWorkflow).toContain("needs.validate-request.outputs.access_apply == 'true'");
+  });
+
+  it('deploys the messaging test contour without changing the current Home mode', () => {
+    expect(stagingWorkflow).toContain('MESSAGING_TEST');
+    expect(stagingWorkflow).toContain("inputs.deployment_profile == 'FULL_LIVE_HOME'");
+    expect(stagingWorkflow).toContain("inputs.deployment_profile == 'MESSAGING_TEST'");
+    expect(stagingWorkflow).toContain(
+      'Verify messaging test release and preserve the current Home mode',
+    );
+    expect(stagingWorkflow).toContain(
+      'cmp "$backup_dir/staging.override.env" /opt/phub/staging.override.env',
+    );
+    expect(messagingReleaseVerification).toContain('default_transaction_read_only=on');
+    expect(messagingReleaseVerification).toContain("runtime_state\" = 'true|true|true'");
+    expect(messagingReleaseVerification).toContain('0057_messaging_runtime.sql');
+    expect(messagingReleaseVerification).toContain('"AUTH_REQUIRED"');
+    expect(messagingReleaseVerification).toContain('/realtime/health/ready');
+    expect(messagingReleaseVerification).not.toMatch(
+      /^\s*(insert|update|delete|alter|create|drop|truncate|grant|revoke)\b/im,
+    );
   });
 
   it('snapshots the active application before mutation and rolls it back after later failures', () => {
