@@ -63,10 +63,6 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - name: Generate API contract types
-        run: npm run contracts:generate
-      - name: Build workspace packages
-        run: npm run build:packages
       - name: Verify immutable import and OpenAPI
         run: npm run contracts:lint
       - name: Check migration safety
