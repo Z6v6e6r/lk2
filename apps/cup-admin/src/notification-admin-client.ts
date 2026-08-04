@@ -1,5 +1,5 @@
 import { ApiClientError, PadlHubApiClient } from '@phub/api-sdk';
-import type { AuthenticatedSession, AuthChallenge } from '@phub/api-sdk';
+import type { AuthenticatedSession, AuthChallenge, CommunityPost } from '@phub/api-sdk';
 import type {
   GiftCertificateAdminCatalogState,
   GiftCertificateCatalogInput,
@@ -59,6 +59,63 @@ export interface AdminNotificationCampaignAccepted {
   readonly replayed: boolean;
 }
 
+export interface AdminCommunityJoinRequest {
+  readonly requestId: string;
+  readonly communityId: string;
+  readonly requesterUserId: string;
+  readonly kind: 'JOIN' | 'REJOIN';
+  readonly status: 'PENDING';
+  readonly membershipStatus: 'NONE' | 'PENDING' | 'ACTIVE' | 'LEFT' | 'REMOVED' | 'BANNED';
+  readonly membershipRevision: number;
+  readonly requestRevision: number;
+  readonly requestedAt: string;
+}
+
+export interface AdminCommunityJoinRequestPage {
+  readonly items: readonly AdminCommunityJoinRequest[];
+  readonly nextCursor?: string;
+}
+
+export interface AdminCommunityJoinRequestDecisionResult {
+  readonly outcome: 'APPROVED' | 'REJECTED';
+  readonly requestId: string;
+  readonly communityId: string;
+  readonly requesterUserId: string;
+  readonly requestStatus: 'APPROVED' | 'REJECTED';
+  readonly requestRevision: number;
+  readonly membershipStatus: 'NONE' | 'ACTIVE' | 'LEFT' | 'REMOVED' | 'BANNED';
+  readonly membershipRevision: number;
+  readonly reasonCode: string | null;
+  readonly decidedAt: string;
+  readonly replayed: boolean;
+}
+
+export interface AdminCommunityDirectInviteQuotaGrant {
+  readonly id: string;
+  readonly communityId: string;
+  readonly status: 'ACTIVE';
+  readonly revision: number;
+  readonly createdAt: string;
+  readonly expiresAt: string;
+  readonly updatedAt: string;
+  readonly consumedAt: null;
+  readonly replayed: boolean;
+}
+
+export interface AdminCommunityPendingPost {
+  readonly post: CommunityPost & { readonly status: 'PENDING_MODERATION' };
+}
+
+export interface AdminCommunityPendingPostPage {
+  readonly items: readonly AdminCommunityPendingPost[];
+  readonly nextCursor?: string;
+}
+
+export interface AdminCommunityMediaReadGrant {
+  readonly url: string;
+  readonly expiresAt: string;
+}
+
 export interface NotificationAdminClient {
   restoreSession(): Promise<AuthenticatedSession | null>;
   requestCode(phone: string): Promise<AuthChallenge>;
@@ -73,6 +130,63 @@ export interface NotificationAdminClient {
     readonly deepLink?: string;
     readonly channels: readonly AdminNotificationChannel[];
   }): Promise<AdminNotificationCampaignAccepted>;
+  listPendingCommunityJoinRequests(input?: {
+    readonly communityId?: string;
+    readonly cursor?: string;
+    readonly limit?: number;
+  }): Promise<AdminCommunityJoinRequestPage>;
+  approveCommunityJoinRequest(
+    requestId: string,
+    input: {
+      readonly expectedMembershipRevision: number;
+      readonly expectedRequestRevision: number;
+    },
+  ): Promise<AdminCommunityJoinRequestDecisionResult>;
+  rejectCommunityJoinRequest(
+    requestId: string,
+    input: {
+      readonly expectedMembershipRevision: number;
+      readonly expectedRequestRevision: number;
+      readonly reasonCode: string;
+    },
+  ): Promise<AdminCommunityJoinRequestDecisionResult>;
+  createCommunityDirectInviteQuotaGrant(
+    communityId: string,
+    input: {
+      readonly reasonCode: string;
+      readonly ticketId: string;
+    },
+  ): Promise<AdminCommunityDirectInviteQuotaGrant>;
+  listPendingCommunityContent(input?: {
+    readonly communityId?: string;
+    readonly cursor?: string;
+    readonly limit?: number;
+  }): Promise<AdminCommunityPendingPostPage>;
+  getCommunityModerationMediaUrl(
+    communityId: string,
+    mediaId: string,
+    variant: 'THUMBNAIL' | 'FEED',
+  ): Promise<AdminCommunityMediaReadGrant>;
+  approveCommunityPost(
+    communityId: string,
+    postId: string,
+    expectedRevision: number,
+  ): Promise<CommunityPost>;
+  rejectCommunityPost(
+    communityId: string,
+    postId: string,
+    input: { readonly expectedRevision: number; readonly reasonCode: string },
+  ): Promise<CommunityPost>;
+  hideCommunityPost(
+    communityId: string,
+    postId: string,
+    input: { readonly expectedRevision: number; readonly reasonCode: string },
+  ): Promise<CommunityPost>;
+  restoreCommunityPost(
+    communityId: string,
+    postId: string,
+    input: { readonly expectedRevision: number; readonly reasonCode: string },
+  ): Promise<CommunityPost>;
   listLocations(): Promise<{ readonly items: readonly LocationAdminView[] }>;
   getLocation(locationId: string): Promise<LocationAdminView>;
   createLocation(profile: LocationProfileInput): Promise<AdminLocationCommandResult>;
@@ -202,6 +316,78 @@ export function createNotificationAdminClient(
     createCampaign(input) {
       return adminRequest<AdminNotificationCampaignAccepted>(
         '/notifications/campaigns',
+        { method: 'POST', body: JSON.stringify(input) },
+        operationId(),
+      );
+    },
+    listPendingCommunityJoinRequests(input = {}) {
+      const query = new URLSearchParams();
+      if (input.communityId) query.set('communityId', input.communityId);
+      if (input.cursor) query.set('cursor', input.cursor);
+      if (input.limit !== undefined) query.set('limit', String(input.limit));
+      const suffix = query.size > 0 ? `?${query.toString()}` : '';
+      return adminRequest<AdminCommunityJoinRequestPage>(
+        `/community-join-requests/pending${suffix}`,
+      );
+    },
+    approveCommunityJoinRequest(requestId, input) {
+      return adminRequest<AdminCommunityJoinRequestDecisionResult>(
+        `/community-join-requests/${encodeURIComponent(requestId)}/approve`,
+        { method: 'POST', body: JSON.stringify(input) },
+        operationId(),
+      );
+    },
+    rejectCommunityJoinRequest(requestId, input) {
+      return adminRequest<AdminCommunityJoinRequestDecisionResult>(
+        `/community-join-requests/${encodeURIComponent(requestId)}/reject`,
+        { method: 'POST', body: JSON.stringify(input) },
+        operationId(),
+      );
+    },
+    createCommunityDirectInviteQuotaGrant(communityId, input) {
+      return adminRequest<AdminCommunityDirectInviteQuotaGrant>(
+        `/communities/${encodeURIComponent(communityId)}/direct-invite-quota-grants`,
+        { method: 'POST', body: JSON.stringify(input) },
+        operationId(),
+      );
+    },
+    listPendingCommunityContent(input = {}) {
+      const query = new URLSearchParams();
+      if (input.communityId) query.set('communityId', input.communityId);
+      if (input.cursor) query.set('cursor', input.cursor);
+      if (input.limit !== undefined) query.set('limit', String(input.limit));
+      const suffix = query.size > 0 ? `?${query.toString()}` : '';
+      return adminRequest<AdminCommunityPendingPostPage>(`/community-content/pending${suffix}`);
+    },
+    getCommunityModerationMediaUrl(communityId, mediaId, variant) {
+      return adminRequest<AdminCommunityMediaReadGrant>(
+        `/communities/${encodeURIComponent(communityId)}/content/media/${encodeURIComponent(mediaId)}/variants/${variant}/url`,
+      );
+    },
+    approveCommunityPost(communityId, postId, expectedRevision) {
+      return adminRequest<CommunityPost>(
+        `/communities/${encodeURIComponent(communityId)}/content/posts/${encodeURIComponent(postId)}/approve`,
+        { method: 'POST', body: JSON.stringify({ expectedRevision }) },
+        operationId(),
+      );
+    },
+    rejectCommunityPost(communityId, postId, input) {
+      return adminRequest<CommunityPost>(
+        `/communities/${encodeURIComponent(communityId)}/content/posts/${encodeURIComponent(postId)}/reject`,
+        { method: 'POST', body: JSON.stringify(input) },
+        operationId(),
+      );
+    },
+    hideCommunityPost(communityId, postId, input) {
+      return adminRequest<CommunityPost>(
+        `/communities/${encodeURIComponent(communityId)}/content/posts/${encodeURIComponent(postId)}/hide`,
+        { method: 'POST', body: JSON.stringify(input) },
+        operationId(),
+      );
+    },
+    restoreCommunityPost(communityId, postId, input) {
+      return adminRequest<CommunityPost>(
+        `/communities/${encodeURIComponent(communityId)}/content/posts/${encodeURIComponent(postId)}/restore`,
         { method: 'POST', body: JSON.stringify(input) },
         operationId(),
       );

@@ -19,5 +19,5 @@ RUN npm prune --omit=dev --workspaces
 USER appuser
 EXPOSE 3002
 HEALTHCHECK --interval=10s --timeout=3s --retries=5 \
-  CMD node -e "fetch('http://127.0.0.1:3002/health/live').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+  CMD node -e "fetch('http://127.0.0.1:3002/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 CMD ["node", "apps/worker/dist/main.js"]

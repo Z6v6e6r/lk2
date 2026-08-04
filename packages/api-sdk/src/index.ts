@@ -6,11 +6,67 @@ export type VerifyAuthChallengeRequest = components['schemas']['VerifyAuthChalle
 export type AuthenticatedSession = components['schemas']['AuthenticatedSession'];
 export type AuthenticatedUser = components['schemas']['AuthenticatedUser'];
 export type UserContext = components['schemas']['UserContext'];
+export type UserRuntimeCapabilities = components['schemas']['UserRuntimeCapabilities'];
+export type RealtimeTicket = components['schemas']['RealtimeTicket'];
 export type HomeDashboard = components['schemas']['HomeDashboard'];
 export type HomeBase = components['schemas']['HomeBase'];
 export type LocationList = components['schemas']['LocationList'];
 export type LocationDetail = components['schemas']['LocationDetail'];
 export type CommunityMembershipPage = components['schemas']['CommunityMembershipPage'];
+export type CommunityCreateRequest = components['schemas']['CommunityCreateRequest'];
+export type CommunityCreatedState = components['schemas']['CommunityCreatedState'];
+export type CommunityDiscoveryPage = components['schemas']['CommunityDiscoveryPage'];
+export type CommunityDiscoveryItem = components['schemas']['CommunityDiscoveryItem'];
+export type CommunityDetailView = components['schemas']['CommunityDetailView'];
+export type CommunityJoinAction = components['schemas']['CommunityJoinAction'];
+export type CommunityJoinRequestState = components['schemas']['CommunityJoinRequestState'];
+export type CommunityOwnMembershipState = components['schemas']['CommunityOwnMembershipState'];
+export type CommunityMembershipRevisionRequest =
+  components['schemas']['CommunityMembershipRevisionRequest'];
+export type CommunityJoinRequestCancelRequest =
+  components['schemas']['CommunityJoinRequestCancelRequest'];
+export type CommunityDirectInviteCreateRequest =
+  components['schemas']['CommunityDirectInviteCreateRequest'];
+export type CommunityDirectInviteTokenRequest =
+  components['schemas']['CommunityDirectInviteTokenRequest'];
+export type CommunityDirectInviteRedeemRequest =
+  components['schemas']['CommunityDirectInviteRedeemRequest'];
+export type CommunityDirectInviteRevokeRequest =
+  components['schemas']['CommunityDirectInviteRevokeRequest'];
+export type CommunityDirectInviteCreated = components['schemas']['CommunityDirectInviteCreated'];
+export type CommunityDirectInviteState = components['schemas']['CommunityDirectInviteState'];
+export type CommunityDirectInvitePage = components['schemas']['CommunityDirectInvitePage'];
+export type CommunityDirectInvitePreview = components['schemas']['CommunityDirectInvitePreview'];
+export type CommunityMembershipPinRequest = components['schemas']['CommunityMembershipPinRequest'];
+export type CommunityMembershipPinState = components['schemas']['CommunityMembershipPinState'];
+export type CommunityOwnershipTransferRequest =
+  components['schemas']['CommunityOwnershipTransferRequest'];
+export type CommunityOwnershipTransferState =
+  components['schemas']['CommunityOwnershipTransferState'];
+export type CommunityPost = components['schemas']['CommunityPost'];
+export type CommunityFeedPage = components['schemas']['CommunityFeedPage'];
+export type CommunityRealtimeEvent = components['schemas']['CommunityRealtimeEvent'];
+export type CommunityRealtimeEventPage = components['schemas']['CommunityRealtimeEventPage'];
+export type CommunityPostCreateRequest = components['schemas']['CommunityPostCreateRequest'];
+export type CommunityPostEditRequest = components['schemas']['CommunityPostEditRequest'];
+export type CommunityContentRevisionRequest =
+  components['schemas']['CommunityContentRevisionRequest'];
+export type CommunityComment = components['schemas']['CommunityComment'];
+export type CommunityCommentPage = components['schemas']['CommunityCommentPage'];
+export type CommunityCommentCreateRequest = components['schemas']['CommunityCommentCreateRequest'];
+export type CommunityCommentEditRequest = components['schemas']['CommunityCommentEditRequest'];
+export type CommunityReactionRequest = components['schemas']['CommunityReactionRequest'];
+export type CommunityReactionState = components['schemas']['CommunityReactionState'];
+export type CommunityMediaContentType = components['schemas']['CommunityMediaContentType'];
+export type CommunityMediaState = components['schemas']['CommunityMediaState'];
+export type CommunityMediaVariantName = components['schemas']['CommunityMediaVariantName'];
+export type CommunityMediaVariant = components['schemas']['CommunityMediaVariant'];
+export type CommunityPostMedia = components['schemas']['CommunityPostMedia'];
+export type CommunityMediaUploadIssueRequest =
+  components['schemas']['CommunityMediaUploadIssueRequest'];
+export type CommunityMediaUploadIssued = components['schemas']['CommunityMediaUploadIssued'];
+export type CommunityMediaFinalizeRequest = components['schemas']['CommunityMediaFinalizeRequest'];
+export type CommunityMediaStatus = components['schemas']['CommunityMediaStatus'];
 export type ClientRoutingPlan = components['schemas']['ClientRoutingPlan'];
 export type UserProfile = components['schemas']['UserProfile'];
 export type PlayerProfileView = components['schemas']['PlayerProfileView'];
@@ -115,6 +171,12 @@ export interface ActivityHistoryFilters {
 }
 
 export interface BookingRecommendationFilters {
+  readonly limit?: number;
+  readonly cursor?: string;
+}
+
+export interface CommunityDiscoveryFilters {
+  readonly query?: string;
   readonly limit?: number;
   readonly cursor?: string;
 }
@@ -241,6 +303,20 @@ export class ApiClientError extends Error {
   ) {
     super(message);
     this.name = 'ApiClientError';
+  }
+}
+
+export class CommunityEventGapExpiredError extends ApiClientError {
+  public readonly recoveryAction = 'FULL_CANONICAL_RELOAD' as const;
+
+  public constructor(
+    message: string,
+    correlationId: string,
+    public readonly latestSequence: number,
+    public readonly retainedFromSequence: number,
+  ) {
+    super(message, 409, 'COMMUNITY_EVENT_GAP_EXPIRED', correlationId);
+    this.name = 'CommunityEventGapExpiredError';
   }
 }
 
@@ -479,6 +555,14 @@ export class PadlHubApiClient {
 
   public getUserContext(): Promise<UserContext> {
     return this.request<UserContext>('/context');
+  }
+
+  public issueRealtimeTicket(): Promise<RealtimeTicket> {
+    return this.request<RealtimeTicket>('/realtime/tickets', {
+      method: 'POST',
+      auth: 'required',
+      cache: 'no-store',
+    });
   }
 
   public getClientRoutingPlan(): Promise<ClientRoutingPlan> {
@@ -1034,6 +1118,386 @@ export class PadlHubApiClient {
     );
   }
 
+  public discoverCommunities(
+    input: CommunityDiscoveryFilters = {},
+  ): Promise<CommunityDiscoveryPage> {
+    const query = new URLSearchParams();
+    if (input.query) query.set('query', input.query);
+    if (input.limit !== undefined) query.set('limit', String(input.limit));
+    if (input.cursor) query.set('cursor', input.cursor);
+    const suffix = query.size > 0 ? `?${query.toString()}` : '';
+    return this.request<CommunityDiscoveryPage>(`/communities${suffix}`);
+  }
+
+  public getCommunityDetail(communityId: string): Promise<CommunityDetailView> {
+    return this.request<CommunityDetailView>(`/communities/${encodeURIComponent(communityId)}`);
+  }
+
+  public getMyCommunityMembershipState(communityId: string): Promise<CommunityOwnMembershipState> {
+    return this.request<CommunityOwnMembershipState>(
+      `/communities/${encodeURIComponent(communityId)}/members/me`,
+    );
+  }
+
+  public joinOrRequestCommunityMembership(
+    communityId: string,
+    input: CommunityMembershipRevisionRequest,
+  ): Promise<CommunityOwnMembershipState> {
+    const idempotencyKey = createCorrelationId();
+    return this.retryOnceOnNetworkFailure(() =>
+      this.request<CommunityOwnMembershipState>(
+        `/communities/${encodeURIComponent(communityId)}/members/me/join`,
+        {
+          method: 'POST',
+          idempotencyKey,
+          body: jsonRequestBody(input),
+        },
+      ),
+    );
+  }
+
+  public cancelMyCommunityJoinRequest(
+    communityId: string,
+    requestId: string,
+    input: CommunityJoinRequestCancelRequest,
+  ): Promise<CommunityOwnMembershipState> {
+    const idempotencyKey = createCorrelationId();
+    return this.retryOnceOnNetworkFailure(() =>
+      this.request<CommunityOwnMembershipState>(
+        `/communities/${encodeURIComponent(communityId)}/join-requests/${encodeURIComponent(requestId)}/cancel`,
+        {
+          method: 'POST',
+          idempotencyKey,
+          body: jsonRequestBody(input),
+        },
+      ),
+    );
+  }
+
+  public leaveCommunity(
+    communityId: string,
+    input: CommunityMembershipRevisionRequest,
+  ): Promise<CommunityOwnMembershipState> {
+    const idempotencyKey = createCorrelationId();
+    return this.retryOnceOnNetworkFailure(() =>
+      this.request<CommunityOwnMembershipState>(
+        `/communities/${encodeURIComponent(communityId)}/members/me/leave`,
+        {
+          method: 'POST',
+          idempotencyKey,
+          body: jsonRequestBody(input),
+        },
+      ),
+    );
+  }
+
+  public transferCommunityOwnership(
+    communityId: string,
+    input: CommunityOwnershipTransferRequest,
+  ): Promise<CommunityOwnershipTransferState> {
+    const idempotencyKey = createCorrelationId();
+    return this.retryOnceOnNetworkFailure(() =>
+      this.request<CommunityOwnershipTransferState>(
+        `/communities/${encodeURIComponent(communityId)}/ownership-transfers`,
+        {
+          method: 'POST',
+          idempotencyKey,
+          body: jsonRequestBody(input),
+        },
+      ),
+    );
+  }
+
+  public listCommunityFeed(
+    communityId: string,
+    input: { readonly limit?: number; readonly cursor?: string } = {},
+  ): Promise<CommunityFeedPage> {
+    const query = new URLSearchParams();
+    if (input.limit !== undefined) query.set('limit', String(input.limit));
+    if (input.cursor) query.set('cursor', input.cursor);
+    const suffix = query.size > 0 ? `?${query.toString()}` : '';
+    return this.request<CommunityFeedPage>(
+      `/communities/${encodeURIComponent(communityId)}/feed${suffix}`,
+      { cache: 'no-store' },
+    );
+  }
+
+  public recoverCommunityEvents(
+    communityId: string,
+    input: { readonly afterSequence?: number; readonly limit?: number } = {},
+  ): Promise<CommunityRealtimeEventPage> {
+    const query = new URLSearchParams();
+    if (input.afterSequence !== undefined) {
+      query.set('afterSequence', String(input.afterSequence));
+    }
+    if (input.limit !== undefined) query.set('limit', String(input.limit));
+    const suffix = query.size > 0 ? `?${query.toString()}` : '';
+    return this.request<CommunityRealtimeEventPage>(
+      `/communities/${encodeURIComponent(communityId)}/events${suffix}`,
+      { cache: 'no-store' },
+    );
+  }
+
+  public createCommunityPost(
+    communityId: string,
+    input: CommunityPostCreateRequest,
+  ): Promise<CommunityPost> {
+    return this.communityContentCommand(
+      `/communities/${encodeURIComponent(communityId)}/posts`,
+      'POST',
+      input,
+    );
+  }
+
+  public issueCommunityMediaUpload(
+    communityId: string,
+    input: CommunityMediaUploadIssueRequest,
+  ): Promise<CommunityMediaUploadIssued> {
+    return this.communityContentCommand(
+      `/communities/${encodeURIComponent(communityId)}/media/uploads`,
+      'POST',
+      input,
+    );
+  }
+
+  public finalizeCommunityMediaUpload(
+    communityId: string,
+    mediaId: string,
+    input: CommunityMediaFinalizeRequest,
+  ): Promise<CommunityMediaStatus> {
+    return this.communityContentCommand(
+      `/communities/${encodeURIComponent(communityId)}/media/${encodeURIComponent(mediaId)}/finalize`,
+      'POST',
+      input,
+    );
+  }
+
+  public getCommunityMediaStatus(
+    communityId: string,
+    mediaId: string,
+  ): Promise<CommunityMediaStatus> {
+    return this.request<CommunityMediaStatus>(
+      `/communities/${encodeURIComponent(communityId)}/media/${encodeURIComponent(mediaId)}`,
+      { cache: 'no-store' },
+    );
+  }
+
+  public downloadCommunityMediaVariant(
+    communityId: string,
+    mediaId: string,
+    variant: CommunityMediaVariantName,
+  ): Promise<Blob> {
+    return this.downloadFromRoot(
+      this.apiRoot,
+      `/communities/${encodeURIComponent(communityId)}/media/${encodeURIComponent(mediaId)}/variants/${encodeURIComponent(variant)}`,
+      'required',
+      'same-origin',
+      createCorrelationId(),
+      true,
+      'image/webp',
+    );
+  }
+
+  public editCommunityPost(
+    communityId: string,
+    postId: string,
+    input: CommunityPostEditRequest,
+  ): Promise<CommunityPost> {
+    return this.communityContentCommand(
+      `/communities/${encodeURIComponent(communityId)}/posts/${encodeURIComponent(postId)}`,
+      'PATCH',
+      input,
+    );
+  }
+
+  public archiveCommunityPost(
+    communityId: string,
+    postId: string,
+    input: CommunityContentRevisionRequest,
+  ): Promise<CommunityPost> {
+    return this.communityContentCommand(
+      `/communities/${encodeURIComponent(communityId)}/posts/${encodeURIComponent(postId)}/archive`,
+      'POST',
+      input,
+    );
+  }
+
+  public restoreCommunityPost(
+    communityId: string,
+    postId: string,
+    input: CommunityContentRevisionRequest,
+  ): Promise<CommunityPost> {
+    return this.communityContentCommand(
+      `/communities/${encodeURIComponent(communityId)}/posts/${encodeURIComponent(postId)}/restore`,
+      'POST',
+      input,
+    );
+  }
+
+  public listCommunityComments(
+    communityId: string,
+    postId: string,
+    input: { readonly limit?: number; readonly cursor?: string } = {},
+  ): Promise<CommunityCommentPage> {
+    const query = new URLSearchParams();
+    if (input.limit !== undefined) query.set('limit', String(input.limit));
+    if (input.cursor) query.set('cursor', input.cursor);
+    const suffix = query.size > 0 ? `?${query.toString()}` : '';
+    return this.request<CommunityCommentPage>(
+      `/communities/${encodeURIComponent(communityId)}/posts/${encodeURIComponent(postId)}/comments${suffix}`,
+      { cache: 'no-store' },
+    );
+  }
+
+  public createCommunityComment(
+    communityId: string,
+    postId: string,
+    input: CommunityCommentCreateRequest,
+  ): Promise<CommunityComment> {
+    return this.communityContentCommand(
+      `/communities/${encodeURIComponent(communityId)}/posts/${encodeURIComponent(postId)}/comments`,
+      'POST',
+      input,
+    );
+  }
+
+  public editCommunityComment(
+    communityId: string,
+    postId: string,
+    commentId: string,
+    input: CommunityCommentEditRequest,
+  ): Promise<CommunityComment> {
+    return this.communityContentCommand(
+      `/communities/${encodeURIComponent(communityId)}/posts/${encodeURIComponent(postId)}/comments/${encodeURIComponent(commentId)}`,
+      'PATCH',
+      input,
+    );
+  }
+
+  public archiveCommunityComment(
+    communityId: string,
+    postId: string,
+    commentId: string,
+    input: CommunityContentRevisionRequest,
+  ): Promise<CommunityComment> {
+    return this.communityContentCommand(
+      `/communities/${encodeURIComponent(communityId)}/posts/${encodeURIComponent(postId)}/comments/${encodeURIComponent(commentId)}/archive`,
+      'POST',
+      input,
+    );
+  }
+
+  public restoreCommunityComment(
+    communityId: string,
+    postId: string,
+    commentId: string,
+    input: CommunityContentRevisionRequest,
+  ): Promise<CommunityComment> {
+    return this.communityContentCommand(
+      `/communities/${encodeURIComponent(communityId)}/posts/${encodeURIComponent(postId)}/comments/${encodeURIComponent(commentId)}/restore`,
+      'POST',
+      input,
+    );
+  }
+
+  public setCommunityReaction(
+    communityId: string,
+    targetType: 'POST' | 'COMMENT',
+    targetId: string,
+    input: CommunityReactionRequest,
+  ): Promise<CommunityReactionState> {
+    const segment = targetType === 'POST' ? 'posts' : 'comments';
+    return this.communityContentCommand(
+      `/communities/${encodeURIComponent(communityId)}/${segment}/${encodeURIComponent(targetId)}/reaction`,
+      'PUT',
+      input,
+    );
+  }
+
+  public removeCommunityReaction(
+    communityId: string,
+    targetType: 'POST' | 'COMMENT',
+    targetId: string,
+  ): Promise<CommunityReactionState> {
+    const segment = targetType === 'POST' ? 'posts' : 'comments';
+    return this.communityContentCommand(
+      `/communities/${encodeURIComponent(communityId)}/${segment}/${encodeURIComponent(targetId)}/reaction`,
+      'DELETE',
+    );
+  }
+
+  private communityContentCommand<TResult>(
+    path: string,
+    method: 'POST' | 'PATCH' | 'PUT' | 'DELETE',
+    input?: unknown,
+  ): Promise<TResult> {
+    const idempotencyKey = createCorrelationId();
+    return this.retryOnceOnNetworkFailure(() =>
+      this.request<TResult>(path, {
+        method,
+        cache: 'no-store',
+        idempotencyKey,
+        ...(input === undefined ? {} : { body: jsonRequestBody(input) }),
+      }),
+    );
+  }
+
+  public listCommunityDirectInvites(
+    communityId: string,
+    input: { readonly limit?: number; readonly cursor?: string } = {},
+  ): Promise<CommunityDirectInvitePage> {
+    const query = new URLSearchParams();
+    if (input.limit !== undefined) query.set('limit', String(input.limit));
+    if (input.cursor) query.set('cursor', input.cursor);
+    const suffix = query.size > 0 ? `?${query.toString()}` : '';
+    return this.request<CommunityDirectInvitePage>(
+      `/communities/${encodeURIComponent(communityId)}/direct-invites${suffix}`,
+      { cache: 'no-store' },
+    );
+  }
+
+  public createCommunityDirectInvite(
+    communityId: string,
+    input: CommunityDirectInviteCreateRequest,
+  ): Promise<CommunityDirectInviteCreated> {
+    const idempotencyKey = createCorrelationId();
+    return this.retryOnceOnNetworkFailure(() =>
+      this.request<CommunityDirectInviteCreated>(
+        `/communities/${encodeURIComponent(communityId)}/direct-invites`,
+        {
+          method: 'POST',
+          cache: 'no-store',
+          idempotencyKey,
+          body: jsonRequestBody(input),
+        },
+      ),
+    );
+  }
+
+  public previewCommunityDirectInvite(
+    input: CommunityDirectInviteTokenRequest,
+  ): Promise<CommunityDirectInvitePreview> {
+    return this.request<CommunityDirectInvitePreview>('/community-direct-invites/preview', {
+      method: 'POST',
+      cache: 'no-store',
+      body: jsonRequestBody(input),
+    });
+  }
+
+  public redeemCommunityDirectInvite(
+    input: CommunityDirectInviteRedeemRequest,
+  ): Promise<CommunityOwnMembershipState> {
+    const idempotencyKey = createCorrelationId();
+    return this.retryOnceOnNetworkFailure(() =>
+      this.request<CommunityOwnMembershipState>('/community-direct-invites/redeem', {
+        method: 'POST',
+        cache: 'no-store',
+        idempotencyKey,
+        body: jsonRequestBody(input),
+      }),
+    );
+  }
+
   public getOrCreateGameConversation(gameId: string): Promise<GetOrCreateGameConversationResult> {
     const idempotencyKey = createCorrelationId();
     return this.retryOnceOnNetworkFailure(() =>
@@ -1075,6 +1539,24 @@ export class PadlHubApiClient {
     );
   }
 
+  public revokeCommunityDirectInvite(
+    inviteId: string,
+    input: CommunityDirectInviteRevokeRequest,
+  ): Promise<CommunityDirectInviteState> {
+    const idempotencyKey = createCorrelationId();
+    return this.retryOnceOnNetworkFailure(() =>
+      this.request<CommunityDirectInviteState>(
+        `/community-direct-invites/${encodeURIComponent(inviteId)}/revoke`,
+        {
+          method: 'POST',
+          cache: 'no-store',
+          idempotencyKey,
+          body: jsonRequestBody(input),
+        },
+      ),
+    );
+  }
+
   public markConversationRead(
     conversationId: string,
     throughSequence: number,
@@ -1087,6 +1569,34 @@ export class PadlHubApiClient {
           method: 'PUT',
           idempotencyKey,
           body: jsonRequestBody({ throughSequence }),
+        },
+      ),
+    );
+  }
+
+  public createCommunity(input: CommunityCreateRequest): Promise<CommunityCreatedState> {
+    const idempotencyKey = createCorrelationId();
+    return this.retryOnceOnNetworkFailure(() =>
+      this.request<CommunityCreatedState>('/communities', {
+        method: 'POST',
+        idempotencyKey,
+        body: jsonRequestBody(input),
+      }),
+    );
+  }
+
+  public setMyCommunityMembershipPin(
+    communityId: string,
+    input: CommunityMembershipPinRequest,
+  ): Promise<CommunityMembershipPinState> {
+    const idempotencyKey = createCorrelationId();
+    return this.retryOnceOnNetworkFailure(() =>
+      this.request<CommunityMembershipPinState>(
+        `/communities/${encodeURIComponent(communityId)}/members/me/pin`,
+        {
+          method: 'PUT',
+          idempotencyKey,
+          body: jsonRequestBody(input),
         },
       ),
     );
@@ -1295,9 +1805,10 @@ export class PadlHubApiClient {
     credentials: RequestCredentials,
     correlationId = createCorrelationId(),
     allowRefresh = true,
+    accept = 'application/pdf',
   ): Promise<Blob> {
     const headers: HeaderRecord = {};
-    setHeader(headers, 'Accept', 'application/pdf');
+    setHeader(headers, 'Accept', accept);
     setHeader(headers, 'X-Correlation-ID', correlationId);
     setHeader(headers, 'X-App-Platform', this.options.platform);
     setHeader(headers, 'X-App-Version', this.options.appVersion);
@@ -1312,7 +1823,7 @@ export class PadlHubApiClient {
     });
     if (response.status === 401 && auth === 'required' && allowRefresh) {
       await this.refreshSession();
-      return this.downloadFromRoot(apiRoot, path, auth, credentials, correlationId, false);
+      return this.downloadFromRoot(apiRoot, path, auth, credentials, correlationId, false, accept);
     }
     if (!response.ok) throw await this.toApiClientError(response, correlationId);
     return response.blob();
@@ -1323,12 +1834,38 @@ export class PadlHubApiClient {
     fallbackCorrelationId: string,
   ): Promise<ApiClientError> {
     const body = (await response.json().catch(() => undefined)) as
-      { code?: string; message?: string; correlationId?: string } | undefined;
+      | {
+          code?: string;
+          message?: string;
+          correlationId?: string;
+          recoveryAction?: string;
+          latestSequence?: number;
+          retainedFromSequence?: number;
+        }
+      | undefined;
+    const correlationId =
+      body?.correlationId ?? response.headers.get('X-Correlation-ID') ?? fallbackCorrelationId;
+    if (
+      response.status === 409 &&
+      body?.code === 'COMMUNITY_EVENT_GAP_EXPIRED' &&
+      body.recoveryAction === 'FULL_CANONICAL_RELOAD' &&
+      Number.isSafeInteger(body.latestSequence) &&
+      Number.isSafeInteger(body.retainedFromSequence) &&
+      (body.latestSequence as number) >= 0 &&
+      (body.retainedFromSequence as number) > 0
+    ) {
+      return new CommunityEventGapExpiredError(
+        body.message ?? 'Каноническое состояние нужно загрузить заново.',
+        correlationId,
+        body.latestSequence as number,
+        body.retainedFromSequence as number,
+      );
+    }
     return new ApiClientError(
       body?.message ?? 'Запрос не выполнен.',
       response.status,
       body?.code ?? 'UNEXPECTED_API_ERROR',
-      body?.correlationId ?? response.headers.get('X-Correlation-ID') ?? fallbackCorrelationId,
+      correlationId,
     );
   }
 }

@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: PadlHub Admin API
-  version: 1.4.0
+  version: 1.5.0
   description: Canonical tenant-scoped CUP boundary for audited operator commands.
   license:
     name: Proprietary
@@ -17,7 +17,538 @@ tags:
     description: Tenant-scoped editorial profiles for PadlHub public locations.
   - name: GiftCertificates
     description: Versioned gift certificate catalog management for authorized CUP staff.
+  - name: Communities
+    description: Bounded CUP review of canonical community JOIN and REJOIN requests.
 paths:
+  /admin/api/v1/{tenantKey}/community-join-requests/pending:
+    get:
+      tags: [Communities]
+      operationId: listPendingCommunityJoinRequests
+      summary: List a bounded page of pending canonical JOIN and REJOIN requests
+      description: |
+        Requires the server-side `communities.moderation.read` capability. Tenant and operator
+        identity come from the phub-admin JWT. This endpoint always filters to PENDING requests and
+        never accepts an arbitrary status, target user, actor or role selector. The opaque cursor is
+        bound to the optional community filter.
+      parameters:
+        - $ref: '#/components/parameters/TenantKey'
+        - name: communityId
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 20
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 16
+            maxLength: 512
+      responses:
+        '200':
+          description: Pending requests ordered by creation time and UUID using a keyset cursor.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminCommunityJoinRequestPage'
+        '400':
+          $ref: '#/components/responses/ApiError'
+        '401':
+          $ref: '#/components/responses/ApiError'
+        '403':
+          $ref: '#/components/responses/ApiError'
+        '429':
+          $ref: '#/components/responses/ApiError'
+        '503':
+          $ref: '#/components/responses/ApiError'
+  /admin/api/v1/{tenantKey}/community-join-requests/{requestId}/approve:
+    post:
+      tags: [Communities]
+      operationId: approveCommunityJoinRequest
+      summary: Approve a pending JOIN or REJOIN request
+      description: |
+        Requires `communities.join.decide`. Tenant and decision actor are derived from the
+        phub-admin JWT; the body cannot select a user, community, membership role or resulting
+        status. Both revisions are checked while membership, request, idempotency result, audit and
+        outbox state are committed in one transaction. Stable conflicts include
+        `COMMUNITY_MEMBERSHIP_REVISION_CONFLICT`, `COMMUNITY_JOIN_REQUEST_REVISION_CONFLICT` and
+        `IDEMPOTENCY_KEY_REUSED`.
+      parameters:
+        - $ref: '#/components/parameters/TenantKey'
+        - name: requestId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminCommunityJoinRequestDecisionRequest'
+      responses:
+        '200':
+          description: Request approved and canonical membership activated, or idempotent replay.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminCommunityJoinRequestDecisionResult'
+        '400':
+          $ref: '#/components/responses/ApiError'
+        '401':
+          $ref: '#/components/responses/ApiError'
+        '403':
+          $ref: '#/components/responses/ApiError'
+        '404':
+          $ref: '#/components/responses/ApiError'
+        '409':
+          $ref: '#/components/responses/ApiError'
+        '429':
+          $ref: '#/components/responses/ApiError'
+        '503':
+          $ref: '#/components/responses/ApiError'
+  /admin/api/v1/{tenantKey}/community-join-requests/{requestId}/reject:
+    post:
+      tags: [Communities]
+      operationId: rejectCommunityJoinRequest
+      summary: Reject a pending JOIN or REJOIN request with a bounded reason code
+      description: |
+        Requires `communities.join.decide`. Tenant and decision actor are derived from the
+        phub-admin JWT. The uppercase reason code is audit metadata, not permission to choose the
+        resulting membership state. Both revisions are checked in the same transaction as request,
+        idempotency, audit and outbox changes. Stable conflicts match the approve command.
+      parameters:
+        - $ref: '#/components/parameters/TenantKey'
+        - name: requestId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminCommunityJoinRequestRejectRequest'
+      responses:
+        '200':
+          description: Request rejected, or the originally stored idempotent result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminCommunityJoinRequestDecisionResult'
+        '400':
+          $ref: '#/components/responses/ApiError'
+        '401':
+          $ref: '#/components/responses/ApiError'
+        '403':
+          $ref: '#/components/responses/ApiError'
+        '404':
+          $ref: '#/components/responses/ApiError'
+        '409':
+          $ref: '#/components/responses/ApiError'
+        '429':
+          $ref: '#/components/responses/ApiError'
+        '503':
+          $ref: '#/components/responses/ApiError'
+  /admin/api/v1/{tenantKey}/communities/{communityId}/direct-invite-quota-grants:
+    post:
+      tags: [Communities]
+      operationId: createCommunityDirectInviteQuotaGrant
+      summary: Create an audited one-time DIRECT invite quota grant
+      description: |
+        Requires the admin-audience `communities.invite.quota.override` capability and the
+        `X-App-Platform: cup-admin` client boundary. Tenant and operator are derived from the
+        verified phub-admin JWT. `reasonCode` and `ticketId` are mandatory audit evidence; callers
+        cannot provide the capability, grant actor, invite issuer, membership revision, role,
+        expiry, status or token. The server creates an ACTIVE community-level grant with an exact
+        24-hour TTL. It is consumed atomically by the next successful issue command that exceeds a
+        quota; that command still derives its issuer from the authenticated User API principal and
+        requires an ACTIVE OWNER or ADMIN membership. This endpoint never creates an invite or
+        returns an invite token.
+      parameters:
+        - $ref: '#/components/parameters/TenantKey'
+        - name: communityId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminCommunityDirectInviteQuotaGrantRequest'
+      responses:
+        '201':
+          description: Active 24-hour quota grant, or its original idempotent replay.
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                const: no-store
+            X-Idempotent-Replayed:
+              schema:
+                type: boolean
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminCommunityDirectInviteQuotaGrant'
+        '400':
+          $ref: '#/components/responses/ApiError'
+        '401':
+          $ref: '#/components/responses/ApiError'
+        '403':
+          description: |
+            `ADMIN_CLIENT_REQUIRED`, `COMMUNITY_DIRECT_INVITE_QUOTA_GRANT_PERMISSION_REQUIRED`,
+            or `COMMUNITY_DIRECT_INVITE_QUOTA_GRANT_ACTOR_INACTIVE`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '404':
+          $ref: '#/components/responses/ApiError'
+        '409':
+          description: |
+            `COMMUNITY_DIRECT_INVITE_QUOTA_GRANT_ACTIVE` when an unconsumed, unexpired grant already
+            exists, or `IDEMPOTENCY_KEY_REUSED` for a conflicting replay key.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '503':
+          $ref: '#/components/responses/ApiError'
+  /admin/api/v1/{tenantKey}/community-content/pending:
+    get:
+      tags: [Communities]
+      operationId: listPendingCommunityContent
+      summary: List a bounded oldest-first page of posts awaiting moderation
+      description: |
+        CUP-only endpoint requiring `communities.content.moderation.read`. Tenant and operator are
+        derived from the phub-admin JWT. The server returns only `PENDING_MODERATION` posts; callers
+        cannot select another status, actor or author. The opaque keyset cursor is bound to the
+        optional community filter and the response is never cached.
+      parameters:
+        - $ref: '#/components/parameters/TenantKey'
+        - name: communityId
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 20
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 16
+            maxLength: 1024
+      responses:
+        '200':
+          description: Pending posts ordered by update time and UUID.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminCommunityPendingPostPage'
+        '400':
+          $ref: '#/components/responses/ApiError'
+        '401':
+          $ref: '#/components/responses/ApiError'
+        '403':
+          $ref: '#/components/responses/ApiError'
+        '503':
+          $ref: '#/components/responses/ApiError'
+  /admin/api/v1/{tenantKey}/communities/{communityId}/content/media/{mediaId}/variants/{variant}/url:
+    get:
+      tags: [Communities]
+      operationId: getCommunityModerationMediaReadGrant
+      summary: Issue a short-lived exact-version image URL for CUP moderation preview
+      description: |
+        CUP-only endpoint requiring `communities.content.moderation.read`. The media must belong to
+        the current immutable revision of a community post. The object-store URL is short-lived,
+        exact-version and never persisted in the moderation queue.
+      parameters:
+        - $ref: '#/components/parameters/TenantKey'
+        - $ref: '#/components/parameters/CommunityId'
+        - name: mediaId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: variant
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/AdminCommunityMediaVariantName'
+      responses:
+        '200':
+          description: Short-lived exact-version read grant.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminCommunityMediaReadGrant'
+        '400':
+          $ref: '#/components/responses/ApiError'
+        '401':
+          $ref: '#/components/responses/ApiError'
+        '403':
+          $ref: '#/components/responses/ApiError'
+        '404':
+          $ref: '#/components/responses/ApiError'
+        '503':
+          $ref: '#/components/responses/ApiError'
+  /admin/api/v1/{tenantKey}/communities/{communityId}/content/posts/{postId}/approve:
+    post:
+      tags: [Communities]
+      operationId: approveCommunityPost
+      summary: Publish a post awaiting moderation
+      description: |
+        CUP-only command requiring `communities.content.moderation.decide`. Only
+        `PENDING_MODERATION` can become `PUBLISHED`. The revision, immutable moderation evidence,
+        audit record, durable community event and outbox record are committed atomically.
+      parameters:
+        - $ref: '#/components/parameters/TenantKey'
+        - $ref: '#/components/parameters/CommunityId'
+        - $ref: '#/components/parameters/CommunityPostId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminCommunityContentRevisionRequest'
+      responses:
+        '200':
+          description: Published post or the original idempotent result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminCommunityPost'
+        '400':
+          $ref: '#/components/responses/ApiError'
+        '401':
+          $ref: '#/components/responses/ApiError'
+        '403':
+          $ref: '#/components/responses/ApiError'
+        '404':
+          $ref: '#/components/responses/ApiError'
+        '409':
+          $ref: '#/components/responses/ApiError'
+        '503':
+          $ref: '#/components/responses/ApiError'
+  /admin/api/v1/{tenantKey}/communities/{communityId}/content/posts/{postId}/reject:
+    post:
+      tags: [Communities]
+      operationId: rejectCommunityPost
+      summary: Reject a post awaiting moderation while retaining its body and history
+      description: |
+        CUP-only command requiring `communities.content.moderation.decide`. Only
+        `PENDING_MODERATION` can become `HIDDEN`; the structured reason is mandatory. The author may
+        edit the hidden post, which creates another immutable revision and always moves it back to
+        `PENDING_MODERATION`. It cannot become visible again without a new moderation approval.
+      parameters:
+        - $ref: '#/components/parameters/TenantKey'
+        - $ref: '#/components/parameters/CommunityId'
+        - $ref: '#/components/parameters/CommunityPostId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminCommunityContentReasonedRequest'
+      responses:
+        '200':
+          description: Rejected hidden post or the original idempotent result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminCommunityPost'
+        '400':
+          $ref: '#/components/responses/ApiError'
+        '401':
+          $ref: '#/components/responses/ApiError'
+        '403':
+          $ref: '#/components/responses/ApiError'
+        '404':
+          $ref: '#/components/responses/ApiError'
+        '409':
+          $ref: '#/components/responses/ApiError'
+        '503':
+          $ref: '#/components/responses/ApiError'
+  /admin/api/v1/{tenantKey}/communities/{communityId}/content/posts/{postId}/hide:
+    post:
+      tags: [Communities]
+      operationId: hideCommunityPost
+      summary: Hide a published post with structured audit evidence
+      description: |
+        CUP-only command requiring `communities.content.moderation.decide`. Only `PUBLISHED` can
+        become `HIDDEN`; body and revision history are retained. The bounded uppercase reason code
+        is mandatory evidence and cannot select the actor or resulting status.
+      parameters:
+        - $ref: '#/components/parameters/TenantKey'
+        - $ref: '#/components/parameters/CommunityId'
+        - $ref: '#/components/parameters/CommunityPostId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminCommunityContentReasonedRequest'
+      responses:
+        '200':
+          description: Hidden post or the original idempotent result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminCommunityPost'
+        '400':
+          $ref: '#/components/responses/ApiError'
+        '401':
+          $ref: '#/components/responses/ApiError'
+        '403':
+          $ref: '#/components/responses/ApiError'
+        '404':
+          $ref: '#/components/responses/ApiError'
+        '409':
+          $ref: '#/components/responses/ApiError'
+        '503':
+          $ref: '#/components/responses/ApiError'
+  /admin/api/v1/{tenantKey}/communities/{communityId}/content/posts/{postId}/restore:
+    post:
+      tags: [Communities]
+      operationId: restoreCommunityPost
+      summary: Restore a hidden post with structured audit evidence
+      description: |
+        CUP-only command requiring `communities.content.moderation.decide`. Only `HIDDEN` can become
+        `PUBLISHED`. Optimistic revision control prevents stale moderation decisions.
+      parameters:
+        - $ref: '#/components/parameters/TenantKey'
+        - $ref: '#/components/parameters/CommunityId'
+        - $ref: '#/components/parameters/CommunityPostId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminCommunityContentReasonedRequest'
+      responses:
+        '200':
+          description: Restored post or the original idempotent result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminCommunityPost'
+        '400':
+          $ref: '#/components/responses/ApiError'
+        '401':
+          $ref: '#/components/responses/ApiError'
+        '403':
+          $ref: '#/components/responses/ApiError'
+        '404':
+          $ref: '#/components/responses/ApiError'
+        '409':
+          $ref: '#/components/responses/ApiError'
+        '503':
+          $ref: '#/components/responses/ApiError'
+  /admin/api/v1/{tenantKey}/communities/{communityId}/content/posts/{postId}/comments/{commentId}/hide:
+    post:
+      tags: [Communities]
+      operationId: hideCommunityComment
+      summary: Hide a published comment with structured audit evidence
+      parameters:
+        - $ref: '#/components/parameters/TenantKey'
+        - $ref: '#/components/parameters/CommunityId'
+        - $ref: '#/components/parameters/CommunityPostId'
+        - $ref: '#/components/parameters/CommunityCommentId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminCommunityContentReasonedRequest'
+      responses:
+        '200':
+          description: Hidden comment or the original idempotent result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminCommunityComment'
+        '400':
+          $ref: '#/components/responses/ApiError'
+        '401':
+          $ref: '#/components/responses/ApiError'
+        '403':
+          $ref: '#/components/responses/ApiError'
+        '404':
+          $ref: '#/components/responses/ApiError'
+        '409':
+          $ref: '#/components/responses/ApiError'
+        '503':
+          $ref: '#/components/responses/ApiError'
+  /admin/api/v1/{tenantKey}/communities/{communityId}/content/posts/{postId}/comments/{commentId}/restore:
+    post:
+      tags: [Communities]
+      operationId: restoreCommunityComment
+      summary: Restore a hidden comment when its parent post is published
+      parameters:
+        - $ref: '#/components/parameters/TenantKey'
+        - $ref: '#/components/parameters/CommunityId'
+        - $ref: '#/components/parameters/CommunityPostId'
+        - $ref: '#/components/parameters/CommunityCommentId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminCommunityContentReasonedRequest'
+      responses:
+        '200':
+          description: Restored comment or the original idempotent result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminCommunityComment'
+        '400':
+          $ref: '#/components/responses/ApiError'
+        '401':
+          $ref: '#/components/responses/ApiError'
+        '403':
+          $ref: '#/components/responses/ApiError'
+        '404':
+          $ref: '#/components/responses/ApiError'
+        '409':
+          $ref: '#/components/responses/ApiError'
+        '503':
+          $ref: '#/components/responses/ApiError'
   /admin/api/v1/{tenantKey}/notifications/capabilities:
     get:
       tags: [Notifications]
@@ -402,6 +933,27 @@ components:
         type: string
         minLength: 16
         maxLength: 128
+    CommunityId:
+      name: communityId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    CommunityPostId:
+      name: postId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    CommunityCommentId:
+      name: commentId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
     LocationId:
       name: locationId
       in: path
@@ -417,6 +969,416 @@ components:
           schema:
             $ref: '#/components/schemas/ApiError'
   schemas:
+    AdminCommunityMembershipStatus:
+      type: string
+      enum: [NONE, PENDING, ACTIVE, LEFT, REMOVED, BANNED]
+    AdminCommunityJoinRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - requestId
+        - communityId
+        - requesterUserId
+        - kind
+        - status
+        - membershipStatus
+        - membershipRevision
+        - requestRevision
+        - requestedAt
+      properties:
+        requestId:
+          type: string
+          format: uuid
+        communityId:
+          type: string
+          format: uuid
+        requesterUserId:
+          type: string
+          format: uuid
+        kind:
+          type: string
+          enum: [JOIN, REJOIN]
+        status:
+          type: string
+          const: PENDING
+        membershipStatus:
+          $ref: '#/components/schemas/AdminCommunityMembershipStatus'
+        membershipRevision:
+          type: integer
+          minimum: 0
+        requestRevision:
+          type: integer
+          minimum: 1
+        requestedAt:
+          type: string
+          format: date-time
+    AdminCommunityJoinRequestPage:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          maxItems: 50
+          items:
+            $ref: '#/components/schemas/AdminCommunityJoinRequest'
+        nextCursor:
+          type: string
+          minLength: 16
+          maxLength: 512
+    AdminCommunityJoinRequestDecisionRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedMembershipRevision, expectedRequestRevision]
+      properties:
+        expectedMembershipRevision:
+          type: integer
+          minimum: 0
+        expectedRequestRevision:
+          type: integer
+          minimum: 1
+    AdminCommunityJoinRequestRejectRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedMembershipRevision, expectedRequestRevision, reasonCode]
+      properties:
+        expectedMembershipRevision:
+          type: integer
+          minimum: 0
+        expectedRequestRevision:
+          type: integer
+          minimum: 1
+        reasonCode:
+          type: string
+          minLength: 2
+          maxLength: 64
+          pattern: '^[A-Z][A-Z0-9_]{1,63}$'
+    AdminCommunityJoinRequestDecisionResult:
+      type: object
+      additionalProperties: false
+      required:
+        - outcome
+        - requestId
+        - communityId
+        - requesterUserId
+        - requestStatus
+        - requestRevision
+        - membershipStatus
+        - membershipRevision
+        - reasonCode
+        - decidedAt
+        - replayed
+      properties:
+        outcome:
+          type: string
+          enum: [APPROVED, REJECTED]
+        requestId:
+          type: string
+          format: uuid
+        communityId:
+          type: string
+          format: uuid
+        requesterUserId:
+          type: string
+          format: uuid
+        requestStatus:
+          type: string
+          enum: [APPROVED, REJECTED]
+        requestRevision:
+          type: integer
+          minimum: 1
+        membershipStatus:
+          $ref: '#/components/schemas/AdminCommunityMembershipStatus'
+        membershipRevision:
+          type: integer
+          minimum: 0
+        reasonCode:
+          type: [string, 'null']
+          pattern: '^[A-Z][A-Z0-9_]{1,63}$'
+        decidedAt:
+          type: string
+          format: date-time
+        replayed:
+          type: boolean
+    AdminCommunityDirectInviteQuotaGrantRequest:
+      type: object
+      additionalProperties: false
+      required: [reasonCode, ticketId]
+      properties:
+        reasonCode:
+          type: string
+          minLength: 2
+          maxLength: 64
+          pattern: '^[A-Z][A-Z0-9_]{1,63}$'
+        ticketId:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: '^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$'
+    AdminCommunityDirectInviteQuotaGrant:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - communityId
+        - status
+        - revision
+        - createdAt
+        - expiresAt
+        - updatedAt
+        - consumedAt
+        - replayed
+      properties:
+        id:
+          type: string
+          format: uuid
+        communityId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          const: ACTIVE
+        revision:
+          type: integer
+          minimum: 1
+        createdAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        consumedAt:
+          type: 'null'
+        replayed:
+          type: boolean
+    AdminCommunityPostStatus:
+      type: string
+      enum: [PENDING_MODERATION, PUBLISHED, ARCHIVED, HIDDEN]
+    AdminCommunityMediaVariantName:
+      type: string
+      enum: [THUMBNAIL, FEED]
+    AdminCommunityMediaVariant:
+      type: object
+      additionalProperties: false
+      required: [variant, url, contentType, width, height, byteSize]
+      properties:
+        variant:
+          $ref: '#/components/schemas/AdminCommunityMediaVariantName'
+        url:
+          type: string
+          pattern: '^/user/api/v1/'
+        contentType:
+          type: string
+          const: image/webp
+        width:
+          type: integer
+          minimum: 1
+        height:
+          type: integer
+          minimum: 1
+        byteSize:
+          type: integer
+          minimum: 1
+    AdminCommunityPostMedia:
+      type: object
+      additionalProperties: false
+      required: [id, mediaType, width, height, variants]
+      properties:
+        id:
+          type: string
+          format: uuid
+        mediaType:
+          type: string
+          const: IMAGE
+        width:
+          type: integer
+          minimum: 1
+        height:
+          type: integer
+          minimum: 1
+        variants:
+          type: array
+          minItems: 1
+          maxItems: 2
+          items:
+            $ref: '#/components/schemas/AdminCommunityMediaVariant'
+    AdminCommunityMediaReadGrant:
+      type: object
+      additionalProperties: false
+      required: [url, expiresAt]
+      properties:
+        url:
+          type: string
+          format: uri
+        expiresAt:
+          type: string
+          format: date-time
+    AdminCommunityPost:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - communityId
+        - authorUserId
+        - status
+        - body
+        - revision
+        - createdAt
+        - publishedAt
+        - updatedAt
+        - archivedAt
+        - restoreUntil
+        - retentionUntil
+      properties:
+        id:
+          type: string
+          format: uuid
+        communityId:
+          type: string
+          format: uuid
+        authorUserId:
+          type: string
+          format: uuid
+        status:
+          $ref: '#/components/schemas/AdminCommunityPostStatus'
+        body:
+          type: string
+          minLength: 1
+          maxLength: 10000
+        revision:
+          type: integer
+          minimum: 1
+        createdAt:
+          type: string
+          format: date-time
+        publishedAt:
+          type: [string, 'null']
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        archivedAt:
+          type: [string, 'null']
+          format: date-time
+        restoreUntil:
+          type: [string, 'null']
+          format: date-time
+        retentionUntil:
+          type: [string, 'null']
+          format: date-time
+        media:
+          type: array
+          maxItems: 10
+          items:
+            $ref: '#/components/schemas/AdminCommunityPostMedia'
+    AdminCommunityPendingPost:
+      type: object
+      additionalProperties: false
+      required: [post]
+      properties:
+        post:
+          allOf:
+            - $ref: '#/components/schemas/AdminCommunityPost'
+            - type: object
+              properties:
+                status:
+                  const: PENDING_MODERATION
+    AdminCommunityPendingPostPage:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          maxItems: 50
+          items:
+            $ref: '#/components/schemas/AdminCommunityPendingPost'
+        nextCursor:
+          type: string
+          minLength: 16
+          maxLength: 1024
+    AdminCommunityContentRevisionRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedRevision]
+      properties:
+        expectedRevision:
+          type: integer
+          minimum: 1
+    AdminCommunityContentReasonedRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedRevision, reasonCode]
+      properties:
+        expectedRevision:
+          type: integer
+          minimum: 1
+        reasonCode:
+          type: string
+          minLength: 2
+          maxLength: 64
+          pattern: '^[A-Z][A-Z0-9_]{1,63}$'
+    AdminCommunityComment:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - communityId
+        - postId
+        - authorUserId
+        - status
+        - body
+        - revision
+        - createdAt
+        - publishedAt
+        - updatedAt
+        - archivedAt
+        - restoreUntil
+        - retentionUntil
+      properties:
+        id:
+          type: string
+          format: uuid
+        communityId:
+          type: string
+          format: uuid
+        postId:
+          type: string
+          format: uuid
+        authorUserId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [PUBLISHED, ARCHIVED, HIDDEN]
+        body:
+          type: string
+          minLength: 1
+          maxLength: 2000
+        revision:
+          type: integer
+          minimum: 1
+        createdAt:
+          type: string
+          format: date-time
+        publishedAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        archivedAt:
+          type: [string, 'null']
+          format: date-time
+        restoreUntil:
+          type: [string, 'null']
+          format: date-time
+        retentionUntil:
+          type: [string, 'null']
+          format: date-time
     GiftCertificateCatalogStatus:
       type: string
       enum: [DRAFT, PUBLISHED, ARCHIVED]

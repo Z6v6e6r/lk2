@@ -1,15 +1,23 @@
 import { realtimeTicketRedisKey } from '@phub/auth';
-import { loadConfig } from '@phub/config';
-import { checkDatabaseReady, createDatabasePool, createMessagingRepository } from '@phub/database';
+import { loadRealtimeConfig } from '@phub/config';
+import {
+  checkDatabaseReady,
+  createDatabasePool,
+  createMessagingRepository,
+  createRealtimeAuthorizationRepository,
+  warmDatabasePool,
+} from '@phub/database';
 import { createLogger, startTelemetry } from '@phub/observability';
-import { connect, type ChannelModel, type ConfirmChannel } from 'amqplib';
+import { connect, type Channel, type ChannelModel, type ConfirmChannel } from 'amqplib';
 import Redis from 'ioredis';
 
 import { buildRealtimeApp } from './app.js';
+import { registerCommunityEventConsumer } from './community-event-consumer.js';
 import { registerMessagingRealtimeConsumer } from './message-consumer.js';
+import { createRealtimeMetricRecorder } from './operational-metrics.js';
 import { rabbitReconnectDelayMs } from './rabbit-reconnect-policy.js';
 
-const config = loadConfig();
+const config = loadRealtimeConfig();
 const logger = createLogger('realtime', config.LOG_LEVEL, process.env.RELEASE);
 const telemetry = startTelemetry({
   serviceName: 'realtime',
@@ -22,8 +30,15 @@ const redis = new Redis(config.REDIS_URL, {
   maxRetriesPerRequest: 1,
 });
 await redis.connect();
-const pool = createDatabasePool(config.DATABASE_URL);
+const pool = createDatabasePool(config.DATABASE_URL, { max: config.REALTIME_DATABASE_POOL_MAX });
+await warmDatabasePool(
+  pool,
+  config.REALTIME_DATABASE_POOL_WARM_CONNECTIONS,
+  config.REALTIME_DATABASE_POOL_MAX,
+);
 const messagingRepository = createMessagingRepository(pool);
+const authorizationRepository = createRealtimeAuthorizationRepository(pool);
+const metrics = createRealtimeMetricRecorder();
 
 let rabbitReady = false;
 let shuttingDown = false;
@@ -33,7 +48,8 @@ let connecting: Promise<void> | undefined;
 let activeRabbit:
   | {
       readonly connection: ChannelModel;
-      readonly channel: ConfirmChannel;
+      readonly messagingChannel: ConfirmChannel;
+      readonly communityChannel?: Channel;
       readonly generation: number;
     }
   | undefined;
@@ -44,6 +60,8 @@ const app = await buildRealtimeApp({
   logger,
   redis,
   messagingRepository,
+  authorizationRepository,
+  metrics,
   databaseReady: () => checkDatabaseReady(pool),
   rabbitReady: () => rabbitReady,
   ticketConsumer: {
@@ -69,7 +87,8 @@ function invalidateRabbit(runtime: NonNullable<typeof activeRabbit>, cause: stri
   rabbitReady = false;
   activeRabbit = undefined;
   logger.error({ cause, generation: runtime.generation }, 'RabbitMQ realtime consumer unavailable');
-  void runtime.channel.close().catch(() => undefined);
+  void runtime.communityChannel?.close().catch(() => undefined);
+  void runtime.messagingChannel.close().catch(() => undefined);
   void runtime.connection.close().catch(() => undefined);
   scheduleReconnect();
 }
@@ -78,35 +97,58 @@ async function connectRabbit(failFast: boolean): Promise<void> {
   if (shuttingDown || activeRabbit || connecting) return connecting;
   const task = (async () => {
     let connection: ChannelModel | undefined;
-    let channel: ConfirmChannel | undefined;
+    let messagingChannel: ConfirmChannel | undefined;
+    let communityChannel: Channel | undefined;
     try {
       connection = await connect(config.RABBITMQ_URL);
-      channel = await connection.createConfirmChannel();
-      const runtime = { connection, channel, generation: ++rabbitGeneration };
+      messagingChannel = await connection.createConfirmChannel();
+      if (config.COMMUNITIES_REALTIME_ENABLED) {
+        communityChannel = await connection.createChannel();
+      }
+      const runtime = {
+        connection,
+        messagingChannel,
+        ...(communityChannel ? { communityChannel } : {}),
+        generation: ++rabbitGeneration,
+      };
       activeRabbit = runtime;
       connection.on('error', (err) => {
         logger.error({ err }, 'RabbitMQ realtime connection error');
         invalidateRabbit(runtime, 'connection_error');
       });
       connection.on('close', () => invalidateRabbit(runtime, 'connection_closed'));
-      channel.on('error', (err) => {
-        logger.error({ err }, 'RabbitMQ realtime channel error');
-        invalidateRabbit(runtime, 'channel_error');
+      messagingChannel.on('error', (err) => {
+        logger.error({ err }, 'RabbitMQ messaging realtime channel error');
+        invalidateRabbit(runtime, 'messaging_channel_error');
       });
-      channel.on('close', () => invalidateRabbit(runtime, 'channel_closed'));
+      messagingChannel.on('close', () => invalidateRabbit(runtime, 'messaging_channel_closed'));
+      communityChannel?.on('error', (err) => {
+        logger.error({ err }, 'RabbitMQ Communities realtime channel error');
+        invalidateRabbit(runtime, 'community_channel_error');
+      });
+      communityChannel?.on('close', () => invalidateRabbit(runtime, 'community_channel_closed'));
       await registerMessagingRealtimeConsumer({
-        channel,
+        channel: messagingChannel,
         logger,
         publish: (event) => app.publishMessageCreated(event),
         onConsumerFailure: (reason) => invalidateRabbit(runtime, reason),
       });
+      if (communityChannel) {
+        await registerCommunityEventConsumer({
+          channel: communityChannel,
+          target: app,
+          logger,
+          metrics,
+        });
+      }
       rabbitReady = true;
       reconnectAttempt = 0;
       logger.info({ generation: runtime.generation }, 'RabbitMQ realtime consumer ready');
     } catch (err) {
       rabbitReady = false;
       activeRabbit = undefined;
-      await channel?.close().catch(() => undefined);
+      await communityChannel?.close().catch(() => undefined);
+      await messagingChannel?.close().catch(() => undefined);
       await connection?.close().catch(() => undefined);
       logger.error({ err }, 'RabbitMQ realtime connection failed');
       if (failFast) throw err;
@@ -131,7 +173,8 @@ const shutdown = async (signal: string): Promise<void> => {
   await app.close();
   const runtime = activeRabbit;
   activeRabbit = undefined;
-  await runtime?.channel.close().catch(() => undefined);
+  await runtime?.communityChannel?.close().catch(() => undefined);
+  await runtime?.messagingChannel.close().catch(() => undefined);
   await runtime?.connection.close().catch(() => undefined);
   await redis.quit().catch(() => redis.disconnect());
   await pool.end();

@@ -123,7 +123,12 @@ function handleAuthError(
   throw error;
 }
 
-function publicSession(result: AuthSessionResult) {
+export interface UserRuntimeCapabilities {
+  readonly communityDirectInvites: boolean;
+  readonly communityRealtime: boolean;
+}
+
+function publicSession(result: AuthSessionResult, runtimeCapabilities: UserRuntimeCapabilities) {
   return {
     accessToken: result.accessToken,
     tokenType: result.tokenType,
@@ -136,6 +141,7 @@ function publicSession(result: AuthSessionResult) {
       ...(result.user.phoneLast4 ? { phoneLast4: result.user.phoneLast4 } : {}),
       roles: result.roles,
       permissions: result.permissions,
+      runtimeCapabilities,
     },
   };
 }
@@ -183,6 +189,10 @@ export function registerAuthRoutes(
     userId: string,
     platform: ClientPlatform,
   ) => Promise<boolean>,
+  runtimeCapabilities: UserRuntimeCapabilities = {
+    communityDirectInvites: false,
+    communityRealtime: false,
+  },
 ): void {
   app.post(
     '/user/api/v1/:tenantKey/auth/viva/authorize',
@@ -339,7 +349,7 @@ export function registerAuthRoutes(
         });
         setRefreshCookie(reply, config, tenantKey, session);
         preventCredentialCaching(reply);
-        return reply.send(publicSession(session));
+        return reply.send(publicSession(session, runtimeCapabilities));
       } catch (error) {
         return handleAuthError(error, request, reply);
       }
@@ -381,7 +391,7 @@ export function registerAuthRoutes(
         );
         setRefreshCookie(reply, config, tenantKey, session);
         preventCredentialCaching(reply);
-        return reply.send(publicSession(session));
+        return reply.send(publicSession(session, runtimeCapabilities));
       } catch (error) {
         if (
           !(error instanceof AuthServiceError) ||

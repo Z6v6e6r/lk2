@@ -1,6 +1,6 @@
 import { normalizePhoneE164 } from '@phub/auth';
 import { PrimaryButton } from '@phub/ui';
-import { lazy, useEffect, useReducer, useRef, useState } from 'react';
+import { lazy, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import type { ChangeEvent, FormEvent } from 'react';
 
 import padlHubLogoUrl from './assets/padlhub-logo.svg';
@@ -8,6 +8,11 @@ import vkIconUrl from './assets/vk-auth.svg';
 import yandexIconUrl from './assets/yandex-auth.svg';
 import { connectChatRealtime } from './chat-realtime-client.js';
 import type { ChatUiError } from './ChatsPage.js';
+import { consumeCommunityInviteToken } from './community-invite-token.js';
+import {
+  createCommunityRealtimeTransport,
+  type CommunityRealtimeSocket,
+} from './community-realtime-transport.js';
 import {
   isIOSBrowser,
   preferredAuthEntryView,
@@ -55,6 +60,12 @@ const ChatsPage = lazy(() =>
 );
 const CommunitiesPage = lazy(() =>
   import('./CommunitiesPage.js').then((module) => ({ default: module.CommunitiesPage })),
+);
+const CommunityDetailPage = lazy(() =>
+  import('./CommunityDetailPage.js').then((module) => ({ default: module.CommunityDetailPage })),
+);
+const CommunityInvitePage = lazy(() =>
+  import('./CommunityInvitePage.js').then((module) => ({ default: module.CommunityInvitePage })),
 );
 const GamesPage = lazy(() =>
   import('./GamesPage.js').then((module) => ({ default: module.GamesPage })),
@@ -106,6 +117,8 @@ type ProtectedRoute =
     }
   | { readonly kind: 'notifications' }
   | { readonly kind: 'communities' }
+  | { readonly kind: 'community'; readonly communityId: string }
+  | { readonly kind: 'community-invite' }
   | { readonly kind: 'locations' }
   | { readonly kind: 'location'; readonly locationId: string }
   | { readonly kind: 'games' }
@@ -145,6 +158,11 @@ function resolveProtectedRoute(pathname: string): ProtectedRoute {
   }
   if (normalizedPath === '/notifications') return { kind: 'notifications' };
   if (normalizedPath === '/communities') return { kind: 'communities' };
+  if (normalizedPath === '/community-invite') return { kind: 'community-invite' };
+  const communityMatch = normalizedPath.match(
+    /^\/communities\/([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i,
+  );
+  if (communityMatch?.[1]) return { kind: 'community', communityId: communityMatch[1] };
   if (normalizedPath === '/locations') return { kind: 'locations' };
   const locationMatch = normalizedPath.match(
     /^\/locations\/([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i,
@@ -460,6 +478,7 @@ export interface AppProps {
   readonly gateway: AuthGateway;
   readonly tenantKey: string;
   readonly realtimeBaseUrl?: string;
+  readonly realtimeUrl?: string;
 }
 
 const HOME_REFRESH_INTERVAL_MS = 30_000;
@@ -470,8 +489,26 @@ const HOME_INITIAL_RETRY_DELAYS_MS = [
   400, 1_000, 2_000, 5_000, 10_000, 20_000, 30_000, 30_000, 30_000,
 ] as const;
 
-export function App({ gateway, tenantKey, realtimeBaseUrl }: AppProps): React.JSX.Element {
+export function App({
+  gateway,
+  tenantKey,
+  realtimeBaseUrl,
+  realtimeUrl,
+}: AppProps): React.JSX.Element {
   const [state, dispatch] = useReducer(reducer, initialState);
+  const communityRealtimeTransport = useMemo(() => {
+    if (!realtimeUrl || typeof WebSocket === 'undefined') return undefined;
+    return createCommunityRealtimeTransport({
+      url: realtimeUrl,
+      issueTicket: gateway.issueRealtimeTicket,
+      createSocket: (url) => new WebSocket(url) as unknown as CommunityRealtimeSocket,
+    });
+  }, [gateway, realtimeUrl]);
+  const [communityInviteToken] = useState(() =>
+    typeof window === 'undefined'
+      ? null
+      : consumeCommunityInviteToken(window.location, window.history),
+  );
   const browserNavigator = typeof navigator === 'undefined' ? undefined : navigator;
   const iosBrowser = isIOSBrowser(browserNavigator);
   const entryView = preferredAuthEntryView(browserNavigator);
@@ -572,6 +609,22 @@ export function App({ gateway, tenantKey, realtimeBaseUrl }: AppProps): React.JS
     readonly recipientUserId: string;
     readonly idempotencyKey: string;
   } | null>(null);
+
+  const realtimeSessionActive =
+    state.view === 'home' &&
+    state.session !== null &&
+    state.session.context.runtimeCapabilities?.communityRealtime === true &&
+    state.busy !== 'logout';
+  useEffect(() => {
+    if (!communityRealtimeTransport || !realtimeSessionActive) {
+      communityRealtimeTransport?.stop();
+      return;
+    }
+    communityRealtimeTransport.start();
+    return () => communityRealtimeTransport.stop();
+  }, [communityRealtimeTransport, realtimeSessionActive]);
+
+  useEffect(() => () => communityRealtimeTransport?.clear(), [communityRealtimeTransport]);
 
   useEffect(() => {
     if (publicGiftRoute) return;
@@ -1214,6 +1267,7 @@ export function App({ gateway, tenantKey, realtimeBaseUrl }: AppProps): React.JS
   }
 
   function handleLogout(): void {
+    communityRealtimeTransport?.stop();
     dispatch({ type: 'logout-started' });
     const serviceWorkerUrl =
       window.__PHUB_BOOTSTRAP__?.serviceWorkerUrl ?? '/phub-notification-sw.js';
@@ -1636,7 +1690,47 @@ export function App({ gateway, tenantKey, realtimeBaseUrl }: AppProps): React.JS
     }
     if (protectedRoute.kind === 'communities') {
       return (
-        <CommunitiesPage tenantName={context.tenant.name} loadPage={gateway.listMyCommunities} />
+        <CommunitiesPage
+          tenantName={context.tenant.name}
+          loadPage={gateway.listMyCommunities}
+          discoverPage={gateway.discoverCommunities}
+        />
+      );
+    }
+    if (protectedRoute.kind === 'community-invite') {
+      return (
+        <CommunityInvitePage
+          token={communityInviteToken}
+          previewInvite={gateway.previewCommunityDirectInvite}
+          redeemInvite={gateway.redeemCommunityDirectInvite}
+        />
+      );
+    }
+    if (protectedRoute.kind === 'community') {
+      return (
+        <CommunityDetailPage
+          key={protectedRoute.communityId}
+          communityId={protectedRoute.communityId}
+          communityDirectInvitesEnabled={
+            state.session.context.runtimeCapabilities?.communityDirectInvites === true
+          }
+          loadDetail={gateway.getCommunityDetail}
+          loadMembershipState={gateway.getMyCommunityMembershipState}
+          joinOrRequestMembership={gateway.joinOrRequestCommunityMembership}
+          cancelJoinRequest={gateway.cancelMyCommunityJoinRequest}
+          leaveMembership={gateway.leaveCommunity}
+          loadInvites={gateway.listCommunityDirectInvites}
+          createInvite={gateway.createCommunityDirectInvite}
+          revokeInvite={gateway.revokeCommunityDirectInvite}
+          loadFeed={gateway.listCommunityFeed}
+          issueMediaUpload={gateway.issueCommunityMediaUpload}
+          finalizeMediaUpload={gateway.finalizeCommunityMediaUpload}
+          getMediaStatus={gateway.getCommunityMediaStatus}
+          createPost={gateway.createCommunityPost}
+          loadMediaVariant={gateway.downloadCommunityMediaVariant}
+          recoverCommunityEvents={gateway.recoverCommunityEvents}
+          {...(communityRealtimeTransport ? { realtimeTransport: communityRealtimeTransport } : {})}
+        />
       );
     }
     if (protectedRoute.kind === 'locations') {
