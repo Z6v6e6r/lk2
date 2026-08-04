@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 
 import { GiftCertificateWorkspace } from './GiftCertificateWorkspace.js';
 import { LocationsWorkspace } from './LocationsWorkspace.js';
+import { CommunityModerationWorkspace } from './CommunityModerationWorkspace.js';
 import {
   createNotificationAdminClient,
   type AdminNotificationCampaignAccepted,
@@ -194,9 +195,9 @@ function NotificationWorkspace(props: {
   readonly session: AuthenticatedSession;
   readonly onLogout: () => void;
 }): React.JSX.Element {
-  const [activeArea, setActiveArea] = useState<'notifications' | 'gift-certificates' | 'settings'>(
-    'settings',
-  );
+  const [activeArea, setActiveArea] = useState<
+    'notifications' | 'gift-certificates' | 'communities' | 'settings'
+  >('settings');
   const [capabilities, setCapabilities] = useState<AdminNotificationCapabilities>();
   const [phonesText, setPhonesText] = useState('');
   const [title, setTitle] = useState('');
@@ -301,6 +302,13 @@ function NotificationWorkspace(props: {
             </button>
             <button
               type="button"
+              className={`nav-item ${activeArea === 'communities' ? 'active' : ''}`}
+              onClick={() => setActiveArea('communities')}
+            >
+              <span>♙</span> Сообщества
+            </button>
+            <button
+              type="button"
               className={`nav-item ${activeArea === 'notifications' ? 'active' : ''}`}
               onClick={() => setActiveArea('notifications')}
             >
@@ -338,6 +346,8 @@ function NotificationWorkspace(props: {
 
       {activeArea === 'settings' ? (
         <LocationsWorkspace client={client} />
+      ) : activeArea === 'communities' ? (
+        <CommunityModerationWorkspace client={client} />
       ) : activeArea === 'gift-certificates' ? (
         <GiftCertificateWorkspace client={client} />
       ) : (

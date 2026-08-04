@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 
-import type { CommunityMembershipPage } from './auth-gateway.js';
+import type { CommunityDiscoveryPage, CommunityMembershipPage } from './auth-gateway.js';
 import styles from './communities-ui/CommunitiesReadOnly.module.css';
 
 type CommunitySummary = CommunityMembershipPage['items'][number];
@@ -9,6 +9,7 @@ interface CommunitiesPageProps {
   readonly tenantName: string;
   readonly loadPage: (cursor?: string) => Promise<CommunityMembershipPage>;
   readonly readExperienceEnabled?: boolean;
+  readonly discoverPage?: (query?: string, cursor?: string) => Promise<CommunityDiscoveryPage>;
 }
 
 function initials(title: string): string {
@@ -26,7 +27,14 @@ function accent(id: string): string {
   return palette[hash % palette.length] ?? palette[0];
 }
 
-function CommunityAvatar({ community }: { readonly community: CommunitySummary }) {
+interface CommunityAvatarRecord {
+  readonly id: string;
+  readonly title: string;
+  readonly logoUrl: string | null;
+  readonly isVerified: boolean;
+}
+
+function CommunityAvatar({ community }: { readonly community: CommunityAvatarRecord }) {
   const background = accent(community.id);
   return (
     <span
@@ -52,16 +60,29 @@ function mergeCommunities(
   return [...byId.values()];
 }
 
+function discoveryHint(item: CommunityDiscoveryPage['items'][number]): string {
+  if (item.visibility === 'LISTED_PRIVATE') return 'Закрытое сообщество';
+  return `${item.memberCount} участников`;
+}
+
 export function CommunitiesPage({
   tenantName,
   loadPage,
   readExperienceEnabled = false,
+  discoverPage,
 }: CommunitiesPageProps): React.JSX.Element {
   const [items, setItems] = useState<readonly CommunitySummary[]>([]);
   const [nextCursor, setNextCursor] = useState<string | undefined>();
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [searchInput, setSearchInput] = useState('');
+  const [activeQuery, setActiveQuery] = useState<string | undefined>();
+  const [discoveryItems, setDiscoveryItems] = useState<CommunityDiscoveryPage['items']>([]);
+  const [discoveryCursor, setDiscoveryCursor] = useState<string | undefined>();
+  const [discoveryLoading, setDiscoveryLoading] = useState(false);
+  const [discoveryStarted, setDiscoveryStarted] = useState(false);
+  const [discoveryError, setDiscoveryError] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -97,6 +118,46 @@ export function CommunitiesPage({
       () => {
         setError('Не удалось догрузить сообщества. Повторите попытку.');
         setLoadingMore(false);
+      },
+    );
+  }
+
+  function runDiscovery(event: FormEvent<HTMLFormElement>): void {
+    event.preventDefault();
+    if (!discoverPage) return;
+    const query = searchInput.trim() || undefined;
+    setDiscoveryLoading(true);
+    setDiscoveryStarted(true);
+    setDiscoveryError(null);
+    void discoverPage(query).then(
+      (page) => {
+        setActiveQuery(query);
+        setDiscoveryItems(page.items);
+        setDiscoveryCursor(page.nextCursor);
+        setDiscoveryLoading(false);
+      },
+      () => {
+        setDiscoveryError('Не удалось найти сообщества. Повторите попытку.');
+        setDiscoveryLoading(false);
+      },
+    );
+  }
+
+  function loadMoreDiscovery(): void {
+    if (!discoverPage || !discoveryCursor || discoveryLoading) return;
+    setDiscoveryLoading(true);
+    setDiscoveryError(null);
+    void discoverPage(activeQuery, discoveryCursor).then(
+      (page) => {
+        const byId = new Map(discoveryItems.map((item) => [item.id, item]));
+        page.items.forEach((item) => byId.set(item.id, item));
+        setDiscoveryItems([...byId.values()]);
+        setDiscoveryCursor(page.nextCursor);
+        setDiscoveryLoading(false);
+      },
+      () => {
+        setDiscoveryError('Не удалось догрузить сообщества.');
+        setDiscoveryLoading(false);
       },
     );
   }
@@ -157,6 +218,68 @@ export function CommunitiesPage({
           >
             {loadingMore ? 'Загружаем…' : 'Показать ещё'}
           </button>
+        ) : null}
+
+        {discoverPage ? (
+          <section className="community-discovery" aria-labelledby="community-discovery-title">
+            <header>
+              <h2 id="community-discovery-title">Найти сообщество</h2>
+              <p>Поиск по каноническому каталогу PadlHub</p>
+            </header>
+            <form onSubmit={runDiscovery} role="search">
+              <label htmlFor="community-search">Название сообщества</label>
+              <div>
+                <input
+                  id="community-search"
+                  value={searchInput}
+                  onChange={(event) => setSearchInput(event.target.value)}
+                  minLength={2}
+                  maxLength={80}
+                  placeholder="Например, Padel Friends"
+                />
+                <button type="submit" disabled={discoveryLoading}>
+                  Найти
+                </button>
+              </div>
+            </form>
+            {discoveryLoading && discoveryItems.length === 0 ? (
+              <p className="community-directory-status" role="status">
+                Ищем сообщества…
+              </p>
+            ) : null}
+            {discoveryStarted &&
+            !discoveryLoading &&
+            discoveryItems.length === 0 &&
+            !discoveryError ? (
+              <p className="community-directory-status">Подходящих сообществ нет.</p>
+            ) : null}
+            {discoveryItems.length > 0 ? (
+              <ul className="community-directory-list">
+                {discoveryItems.map((community) => (
+                  <li key={community.id}>
+                    <a className="community-directory-card" href={`/communities/${community.id}`}>
+                      <CommunityAvatar community={community} />
+                      <span>
+                        <strong>{community.title}</strong>
+                        <small>{discoveryHint(community)}</small>
+                      </span>
+                      <span aria-hidden="true">›</span>
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+            {discoveryError ? (
+              <p className="community-directory-error" role="alert">
+                {discoveryError}
+              </p>
+            ) : null}
+            {discoveryCursor ? (
+              <button type="button" onClick={loadMoreDiscovery} disabled={discoveryLoading}>
+                {discoveryLoading ? 'Загружаем…' : 'Показать ещё'}
+              </button>
+            ) : null}
+          </section>
         ) : null}
       </section>
     </main>

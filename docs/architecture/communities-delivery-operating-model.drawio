@@ -1,0 +1,91 @@
+<mxfile host="Electron">
+  <diagram id="communities-delivery" name="Команда и архитектурные ворота">
+    <mxGraphModel dx="1540" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1920" pageHeight="1080" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title" parent="1" style="text;html=1;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=24;fontStyle=1;" value="Сообщества: процесс выработки архитектуры и delivery operating model" vertex="1">
+          <mxGeometry height="50" width="1760" x="60" y="30" as="geometry" />
+        </mxCell>
+        <mxCell id="team" parent="1" style="swimlane;startSize=36;container=1;pointerEvents=0;rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;" value="Recommended team: 10 core FTE + shared reviewers" vertex="1">
+          <mxGeometry height="850" width="370" x="60" y="100" as="geometry" />
+        </mxCell>
+        <mxCell id="team-core" parent="team" style="rounded=1;whiteSpace=wrap;html=1;align=left;spacingLeft=14;fillColor=#ffffff;strokeColor=#6c8ebf;" value="&lt;b&gt;Core&lt;/b&gt;&lt;br&gt;1 Product Owner&lt;br&gt;1 Staff Architect / Tech Lead&lt;br&gt;3 Backend / Domain / Realtime&lt;br&gt;2 Frontend&lt;br&gt;1 Data &amp; Migration&lt;br&gt;1 QA Automation / Performance&lt;br&gt;1 Platform / SRE" vertex="1">
+          <mxGeometry height="280" width="290" x="40" y="70" as="geometry" />
+        </mxCell>
+        <mxCell id="team-shared" parent="team" style="rounded=1;whiteSpace=wrap;html=1;align=left;spacingLeft=14;fillColor=#ffffff;strokeColor=#6c8ebf;" value="&lt;b&gt;Shared&lt;/b&gt;&lt;br&gt;0.5 Product Design&lt;br&gt;0.25–0.5 AppSec / Privacy&lt;br&gt;0.25 DBA reviewer&lt;br&gt;0.25–0.5 Data Analytics&lt;br&gt;0.25–0.5 Trust &amp; Safety / Support" vertex="1">
+          <mxGeometry height="220" width="290" x="40" y="390" as="geometry" />
+        </mxCell>
+        <mxCell id="team-rule" parent="team" style="rounded=1;whiteSpace=wrap;html=1;align=left;spacingLeft=14;fillColor=#fff2cc;strokeColor=#d6b656;" value="&lt;b&gt;Правило ownership&lt;/b&gt;&lt;br&gt;Один accountable DRI на решение. QA/SRE дают независимый release verdict. Один aggregate — один write owner." vertex="1">
+          <mxGeometry height="150" width="290" x="40" y="650" as="geometry" />
+        </mxCell>
+        <mxCell id="runway" parent="1" style="swimlane;startSize=36;container=1;pointerEvents=0;rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontStyle=1;" value="Architecture runway — 4 недели" vertex="1">
+          <mxGeometry height="300" width="1330" x="470" y="100" as="geometry" />
+        </mxCell>
+        <mxCell id="week1" parent="runway" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#9673a6;" value="&lt;b&gt;Неделя 1&lt;/b&gt;&lt;br&gt;Product rules&lt;br&gt;Domain / event storming&lt;br&gt;Workload + threat model" vertex="1">
+          <mxGeometry height="150" width="250" x="50" y="80" as="geometry" />
+        </mxCell>
+        <mxCell id="week2" parent="runway" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#9673a6;" value="&lt;b&gt;Неделя 2&lt;/b&gt;&lt;br&gt;ERD + OpenAPI&lt;br&gt;Commands / events&lt;br&gt;Migration design" vertex="1">
+          <mxGeometry height="150" width="250" x="370" y="80" as="geometry" />
+        </mxCell>
+        <mxCell id="week3" parent="runway" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#9673a6;" value="&lt;b&gt;Неделя 3&lt;/b&gt;&lt;br&gt;Feed / membership&lt;br&gt;Realtime / fan-out&lt;br&gt;Media / migration spikes" vertex="1">
+          <mxGeometry height="150" width="250" x="690" y="80" as="geometry" />
+        </mxCell>
+        <mxCell id="week4" parent="runway" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;" value="&lt;b&gt;Неделя 4&lt;/b&gt;&lt;br&gt;Accepted ADR&lt;br&gt;Walking skeleton&lt;br&gt;Dashboards + runbooks" vertex="1">
+          <mxGeometry height="150" width="250" x="1010" y="80" as="geometry" />
+        </mxCell>
+        <mxCell id="delivery" parent="1" style="swimlane;startSize=36;container=1;pointerEvents=0;rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontStyle=1;" value="Vertical delivery — один срез проходит UI → API → PG → outbox → projection → evidence" vertex="1">
+          <mxGeometry height="300" width="1330" x="470" y="430" as="geometry" />
+        </mxCell>
+        <mxCell id="wave-a" parent="delivery" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;" value="&lt;b&gt;Wave A · 3 недели&lt;/b&gt;&lt;br&gt;Truth, mine, discovery, detail, Home" vertex="1">
+          <mxGeometry height="150" width="250" x="50" y="80" as="geometry" />
+        </mxCell>
+        <mxCell id="wave-b" parent="delivery" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;" value="&lt;b&gt;Wave B · 4 недели&lt;/b&gt;&lt;br&gt;Membership, roles, invites, audit" vertex="1">
+          <mxGeometry height="150" width="250" x="370" y="80" as="geometry" />
+        </mxCell>
+        <mxCell id="wave-cd" parent="delivery" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;" value="&lt;b&gt;Wave C + D · 5–8 недель&lt;/b&gt;&lt;br&gt;Feed, media, moderation&lt;br&gt;Chat, realtime, notifications" vertex="1">
+          <mxGeometry height="150" width="250" x="690" y="80" as="geometry" />
+        </mxCell>
+        <mxCell id="wave-ef" parent="delivery" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;" value="&lt;b&gt;Wave E + F · 7–9 недель&lt;/b&gt;&lt;br&gt;Rating, migration, shadow&lt;br&gt;scale, cohorts, GA" vertex="1">
+          <mxGeometry height="150" width="250" x="1010" y="80" as="geometry" />
+        </mxCell>
+        <mxCell id="gates" parent="1" style="swimlane;startSize=36;container=1;pointerEvents=0;rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontStyle=1;" value="Независимые ворота качества" vertex="1">
+          <mxGeometry height="190" width="1330" x="470" y="760" as="geometry" />
+        </mxCell>
+        <mxCell id="gate-a" parent="gates" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" value="A&lt;br&gt;Scope + states" vertex="1">
+          <mxGeometry height="100" width="180" x="80" y="60" as="geometry" />
+        </mxCell>
+        <mxCell id="gate-b" parent="gates" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" value="B&lt;br&gt;Contracts + threats" vertex="1">
+          <mxGeometry height="100" width="180" x="340" y="60" as="geometry" />
+        </mxCell>
+        <mxCell id="gate-c" parent="gates" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" value="C&lt;br&gt;Measured spikes" vertex="1">
+          <mxGeometry height="100" width="180" x="600" y="60" as="geometry" />
+        </mxCell>
+        <mxCell id="gate-d" parent="gates" style="rhombus;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" value="D&lt;br&gt;Architecture baseline" vertex="1">
+          <mxGeometry height="100" width="180" x="860" y="60" as="geometry" />
+        </mxCell>
+        <mxCell id="gate-ga" parent="gates" style="rhombus;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;" value="GO / NO-GO&lt;br&gt;SLO + restore + parity" vertex="1">
+          <mxGeometry height="100" width="180" x="1100" y="60" as="geometry" />
+        </mxCell>
+        <mxCell id="e-w1-w2" edge="1" parent="1" source="week1" target="week2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#9673a6;" value="Gate A">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-w2-w3" edge="1" parent="1" source="week2" target="week3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#9673a6;" value="Gate B">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-w3-w4" edge="1" parent="1" source="week3" target="week4" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#9673a6;" value="Gate C">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-a-b" edge="1" parent="1" source="wave-a" target="wave-b" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#d79b00;" value="read gate">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-b-cd" edge="1" parent="1" source="wave-b" target="wave-cd" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#d79b00;" value="write gate">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-cd-ef" edge="1" parent="1" source="wave-cd" target="wave-ef" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#d79b00;" value="scale gate">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

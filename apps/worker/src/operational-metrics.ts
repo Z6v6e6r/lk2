@@ -18,6 +18,24 @@ export const WORKER_METRIC_INSTRUMENTS = {
   pushDeliveriesDue: 'phub.worker.notifications.push_deliveries_due',
   pushDeliveryOldestDueAgeSeconds: 'phub.worker.notifications.push_delivery_oldest_due_age_seconds',
   pushDeliveriesDead: 'phub.worker.notifications.push_deliveries_dead',
+  communityMemberCountBuilding: 'phub.worker.communities.member_count.building',
+  communityMemberCountStale: 'phub.worker.communities.member_count.stale',
+  communityMemberCountNotReadyAgeSeconds:
+    'phub.worker.communities.member_count.not_ready_age_seconds',
+  communityEventRetentionPurged: 'phub.worker.communities.events.retention_purged',
+  communityEventRetentionClaimLost: 'phub.worker.communities.events.retention_claim_lost',
+  communityEventRetentionFailures: 'phub.worker.communities.events.retention_failures',
+  communityEventRetentionCycleDurationMilliseconds:
+    'phub.worker.communities.events.retention_cycle_duration_milliseconds',
+  communityMediaExpired: 'phub.worker.communities.media.expired',
+  communityMediaScanned: 'phub.worker.communities.media.scanned',
+  communityMediaRejected: 'phub.worker.communities.media.rejected',
+  communityMediaScanRetried: 'phub.worker.communities.media.scan_retried',
+  communityMediaGcCompleted: 'phub.worker.communities.media.gc_completed',
+  communityMediaGcRetried: 'phub.worker.communities.media.gc_retried',
+  communityMediaFailures: 'phub.worker.communities.media.failures',
+  communityMediaCycleDurationMilliseconds:
+    'phub.worker.communities.media.cycle_duration_milliseconds',
   operationalCollectionSuccess: 'phub.worker.operational.collection_success',
   operationalCollectionFailures: 'phub.worker.operational.collection_failures',
   operationalCollectionDurationMilliseconds:
@@ -34,6 +52,12 @@ interface PushDeliveryMetricRow extends QueryResultRow {
   readonly dead_count: number | string;
 }
 
+interface CommunityMemberCountRow extends QueryResultRow {
+  readonly building_count: number | string;
+  readonly stale_count: number | string;
+  readonly not_ready_age_seconds: number | string;
+}
+
 export interface WorkerOperationalSnapshot {
   readonly outboxOldestAgeSeconds: number;
   readonly outboxBackloggedTenants: number;
@@ -41,6 +65,9 @@ export interface WorkerOperationalSnapshot {
   readonly pushDeliveriesDue: number;
   readonly pushDeliveryOldestDueAgeSeconds: number;
   readonly pushDeliveriesDead: number;
+  readonly communityMemberCountBuilding: number;
+  readonly communityMemberCountStale: number;
+  readonly communityMemberCountNotReadyAgeSeconds: number;
 }
 
 async function mapWithConcurrency<TInput, TOutput>(
@@ -66,9 +93,7 @@ async function mapWithConcurrency<TInput, TOutput>(
 
 function parseNonNegativeMetric(value: number | string, field: string): number {
   const parsed = typeof value === 'number' ? value : Number(value);
-  if (!Number.isFinite(parsed) || parsed < 0) {
-    throw new Error(`Invalid ${field} metric value`);
-  }
+  if (!Number.isFinite(parsed) || parsed < 0) throw new Error(`Invalid ${field} metric value`);
   return parsed;
 }
 
@@ -109,48 +134,67 @@ export async function collectWorkerOperationalSnapshot(options: {
             where tenant_id = $1 and channel = 'PUSH'`,
           [tenant.id],
         );
+        const memberCount = await client.query<CommunityMemberCountRow>(
+          `select
+             count(*) filter (where state = 'BUILDING')::integer as building_count,
+             count(*) filter (where state = 'STALE')::integer as stale_count,
+             coalesce(max(extract(epoch from (clock_timestamp() - updated_at)))
+               filter (where state <> 'READY'), 0)::double precision
+               as not_ready_age_seconds
+             from communities.member_count_projections
+            where tenant_id = $1`,
+          [tenant.id],
+        );
         const outboxRow = outbox.rows[0];
         const deliveryRow = deliveries.rows[0];
+        const projection = memberCount.rows[0];
         return {
-          outboxOldestAgeSeconds: outboxRow
+          outboxAge: outboxRow
             ? parseNonNegativeMetric(outboxRow.oldest_age_seconds, 'outbox oldest age')
             : 0,
-          pushDeliveriesDue: deliveryRow
+          pushDue: deliveryRow
             ? parseNonNegativeMetric(deliveryRow.due_count, 'push deliveries due')
             : 0,
-          pushDeliveryOldestDueAgeSeconds: deliveryRow
+          pushOldestDueAge: deliveryRow
             ? parseNonNegativeMetric(
                 deliveryRow.oldest_due_age_seconds,
                 'push delivery oldest due age',
               )
             : 0,
-          pushDeliveriesDead: deliveryRow
+          pushDead: deliveryRow
             ? parseNonNegativeMetric(deliveryRow.dead_count, 'push deliveries dead')
+            : 0,
+          building: projection
+            ? parseNonNegativeMetric(projection.building_count, 'member count building')
+            : 0,
+          stale: projection
+            ? parseNonNegativeMetric(projection.stale_count, 'member count stale')
+            : 0,
+          notReadyAge: projection
+            ? parseNonNegativeMetric(projection.not_ready_age_seconds, 'member count not-ready age')
             : 0,
         };
       }),
   );
   const queue = await options.channel.checkQueue(DEAD_LETTER_QUEUE);
   return {
-    outboxOldestAgeSeconds: Math.max(
-      0,
-      ...tenantSnapshots.map((snapshot) => snapshot.outboxOldestAgeSeconds),
-    ),
-    outboxBackloggedTenants: tenantSnapshots.filter(
-      (snapshot) => snapshot.outboxOldestAgeSeconds > 0,
-    ).length,
+    outboxOldestAgeSeconds: Math.max(0, ...tenantSnapshots.map(({ outboxAge }) => outboxAge)),
+    outboxBackloggedTenants: tenantSnapshots.filter(({ outboxAge }) => outboxAge > 0).length,
     deadLetterMessagesReady: queue.messageCount,
-    pushDeliveriesDue: tenantSnapshots.reduce(
-      (sum, snapshot) => sum + snapshot.pushDeliveriesDue,
-      0,
-    ),
+    pushDeliveriesDue: tenantSnapshots.reduce((sum, snapshot) => sum + snapshot.pushDue, 0),
     pushDeliveryOldestDueAgeSeconds: Math.max(
       0,
-      ...tenantSnapshots.map((snapshot) => snapshot.pushDeliveryOldestDueAgeSeconds),
+      ...tenantSnapshots.map(({ pushOldestDueAge }) => pushOldestDueAge),
     ),
-    pushDeliveriesDead: tenantSnapshots.reduce(
-      (sum, snapshot) => sum + snapshot.pushDeliveriesDead,
+    pushDeliveriesDead: tenantSnapshots.reduce((sum, snapshot) => sum + snapshot.pushDead, 0),
+    communityMemberCountBuilding: tenantSnapshots.reduce(
+      (sum, snapshot) => sum + snapshot.building,
       0,
+    ),
+    communityMemberCountStale: tenantSnapshots.reduce((sum, snapshot) => sum + snapshot.stale, 0),
+    communityMemberCountNotReadyAgeSeconds: Math.max(
+      0,
+      ...tenantSnapshots.map(({ notReadyAge }) => notReadyAge),
     ),
   };
 }
@@ -165,6 +209,24 @@ export interface WorkerMetricRecorder {
     publishedEvents: number,
     durationMilliseconds: number,
     failed: boolean,
+  ): void;
+  recordCommunityEventRetentionCycle(
+    purged: number,
+    claimLost: number,
+    failures: number,
+    durationMilliseconds: number,
+  ): void;
+  recordCommunityMediaCycle(
+    result: {
+      readonly expired: number;
+      readonly scanned: number;
+      readonly rejected: number;
+      readonly scanRetried: number;
+      readonly gcCompleted: number;
+      readonly gcRetried: number;
+    },
+    failures: number,
+    durationMilliseconds: number,
   ): void;
 }
 
@@ -187,6 +249,51 @@ export function createWorkerMetricRecorder(): WorkerMetricRecorder {
     WORKER_METRIC_INSTRUMENTS.pushDeliveryOldestDueAgeSeconds,
   );
   const pushDeliveriesDead = meter.createGauge(WORKER_METRIC_INSTRUMENTS.pushDeliveriesDead);
+  const communityMemberCountBuilding = meter.createGauge(
+    WORKER_METRIC_INSTRUMENTS.communityMemberCountBuilding,
+  );
+  const communityMemberCountStale = meter.createGauge(
+    WORKER_METRIC_INSTRUMENTS.communityMemberCountStale,
+  );
+  const communityMemberCountNotReadyAge = meter.createGauge(
+    WORKER_METRIC_INSTRUMENTS.communityMemberCountNotReadyAgeSeconds,
+  );
+  const communityEventRetentionPurged = meter.createCounter(
+    WORKER_METRIC_INSTRUMENTS.communityEventRetentionPurged,
+  );
+  const communityEventRetentionClaimLost = meter.createCounter(
+    WORKER_METRIC_INSTRUMENTS.communityEventRetentionClaimLost,
+  );
+  const communityEventRetentionFailures = meter.createCounter(
+    WORKER_METRIC_INSTRUMENTS.communityEventRetentionFailures,
+  );
+  const communityEventRetentionDuration = meter.createHistogram(
+    WORKER_METRIC_INSTRUMENTS.communityEventRetentionCycleDurationMilliseconds,
+  );
+  const communityMediaExpired = meter.createCounter(
+    WORKER_METRIC_INSTRUMENTS.communityMediaExpired,
+  );
+  const communityMediaScanned = meter.createCounter(
+    WORKER_METRIC_INSTRUMENTS.communityMediaScanned,
+  );
+  const communityMediaRejected = meter.createCounter(
+    WORKER_METRIC_INSTRUMENTS.communityMediaRejected,
+  );
+  const communityMediaScanRetried = meter.createCounter(
+    WORKER_METRIC_INSTRUMENTS.communityMediaScanRetried,
+  );
+  const communityMediaGcCompleted = meter.createCounter(
+    WORKER_METRIC_INSTRUMENTS.communityMediaGcCompleted,
+  );
+  const communityMediaGcRetried = meter.createCounter(
+    WORKER_METRIC_INSTRUMENTS.communityMediaGcRetried,
+  );
+  const communityMediaFailures = meter.createCounter(
+    WORKER_METRIC_INSTRUMENTS.communityMediaFailures,
+  );
+  const communityMediaDuration = meter.createHistogram(
+    WORKER_METRIC_INSTRUMENTS.communityMediaCycleDurationMilliseconds,
+  );
   const collectionSuccess = meter.createGauge(
     WORKER_METRIC_INSTRUMENTS.operationalCollectionSuccess,
   );
@@ -205,6 +312,9 @@ export function createWorkerMetricRecorder(): WorkerMetricRecorder {
       pushDeliveriesDue.record(snapshot.pushDeliveriesDue);
       pushDeliveryOldestDueAge.record(snapshot.pushDeliveryOldestDueAgeSeconds);
       pushDeliveriesDead.record(snapshot.pushDeliveriesDead);
+      communityMemberCountBuilding.record(snapshot.communityMemberCountBuilding);
+      communityMemberCountStale.record(snapshot.communityMemberCountStale);
+      communityMemberCountNotReadyAge.record(snapshot.communityMemberCountNotReadyAgeSeconds);
       collectionSuccess.record(1);
       collectionDuration.record(durationMilliseconds);
     },
@@ -217,6 +327,22 @@ export function createWorkerMetricRecorder(): WorkerMetricRecorder {
       if (publishedEvents > 0) outboxPublished.add(publishedEvents);
       if (failed) outboxPublishFailures.add(1);
       outboxPublishDuration.record(durationMilliseconds);
+    },
+    recordCommunityEventRetentionCycle(purged, claimLost, failures, durationMilliseconds) {
+      if (purged > 0) communityEventRetentionPurged.add(purged);
+      if (claimLost > 0) communityEventRetentionClaimLost.add(claimLost);
+      if (failures > 0) communityEventRetentionFailures.add(failures);
+      communityEventRetentionDuration.record(durationMilliseconds);
+    },
+    recordCommunityMediaCycle(result, failures, durationMilliseconds) {
+      if (result.expired > 0) communityMediaExpired.add(result.expired);
+      if (result.scanned > 0) communityMediaScanned.add(result.scanned);
+      if (result.rejected > 0) communityMediaRejected.add(result.rejected);
+      if (result.scanRetried > 0) communityMediaScanRetried.add(result.scanRetried);
+      if (result.gcCompleted > 0) communityMediaGcCompleted.add(result.gcCompleted);
+      if (result.gcRetried > 0) communityMediaGcRetried.add(result.gcRetried);
+      if (failures > 0) communityMediaFailures.add(failures);
+      communityMediaDuration.record(durationMilliseconds);
     },
   };
 }

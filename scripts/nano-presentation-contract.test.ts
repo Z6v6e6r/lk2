@@ -74,8 +74,9 @@ describe('Nano presentation release contract', () => {
     );
     expect(stagingWorkflow).toContain('Apply the audited complete user-access replacement');
     expect(stagingWorkflow).toContain("APPLY_USER_ACCESS) printf '%s\\n' 'access_apply=true'");
-    expect(buildGate).toContain('needs: validate-request');
+    expect(buildGate).toContain('needs: [validate-request, verify]');
     expect(buildGate).toContain("needs.validate-request.outputs.mode == 'deploy'");
+    expect(buildGate).toContain("needs.verify.result == 'success'");
     expect(deployGate).toContain('needs: [validate-request, build]');
     expect(deployGate).toContain('always()');
     expect(deployGate).toContain("needs.build.result == 'success'");

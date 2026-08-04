@@ -99,9 +99,12 @@ dependency tree.
    `/etc/phub/staging.env`. Run migrations once from the CI-published migrator
    digest, then deploy web, API, realtime and worker.
 
-The application runtime reads three environment files in order:
+The application runtime uses separate API/worker and realtime secret contours:
 
-- `/etc/phub/staging.env` contains the root-owned shared runtime secrets;
+- `/etc/phub/staging.env` is mode `0600`, owned by `phub-deploy`, and contains the API/worker
+  runtime secrets, including access/refresh signing keys;
+- `/etc/phub/realtime.env` is mode `0600`, owned by `phub-deploy`, and contains only the common
+  database/broker metadata plus `JWT_REALTIME_SECRET`; access/refresh signing keys are forbidden;
 - `/opt/phub/staging.auth.env` is mode `0600`, owned by `phub-deploy`, and contains the audited
   authentication gates plus `HOME_BASE_SYNC_ENABLED=true`. The deploy workflow rewrites this
   non-secret file atomically before preflight so OAuth recovery and the local HomeBase projector
@@ -154,6 +157,13 @@ Only a successful `FULL_LIVE_HOME` run writes the three-line
 `production-promotion-eligibility.env` artifact bound to its release SHA and workflow run ID.
 Production refuses every staging run without that exact artifact, so this lightweight Communities
 profile can never certify image digests for promotion.
+
+The post-deploy gate also reads the public coach-game and tournament discovery contracts through
+the running API with a six-second deadline. `health/ready` is not evidence for these upstreams:
+coach-game discovery requires the configured Viva end-user schedule source to accept the Nano API
+read, and tournament discovery requires `LEGACY_GAMES_PUBLIC_BASE_URL/api/tournaments` to respond
+within that budget. A `COACH_GAME_DISCOVERY_UNAVAILABLE`, `TOURNAMENT_DISCOVERY_UNAVAILABLE`, HTML
+fallback or timeout fails the release even when the containers remain healthy.
 
 Every confirmed staging deployment creates a PostgreSQL custom-format archive under
 `/opt/phub/backups/postgres-pre-<release>-<UTC timestamp>.dump`. The workflow

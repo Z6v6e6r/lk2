@@ -6,7 +6,13 @@ import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
   {
-    ignores: ['**/dist/**', '**/coverage/**', '**/*.js', 'packages/api-contracts/src/generated.ts'],
+    ignores: [
+      '**/dist/**',
+      '**/coverage/**',
+      '**/.worktrees/**',
+      '**/*.js',
+      'packages/api-contracts/src/generated*.ts',
+    ],
   },
   eslint.configs.recommended,
   ...tseslint.configs.recommendedTypeChecked,

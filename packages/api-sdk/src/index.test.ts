@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { DEFAULT_PROFILE_PRIVACY_SETTINGS } from '@phub/domain';
 
 import {
   PadlHubApiClient,
@@ -90,6 +91,31 @@ describe('PadlHubApiClient authentication boundary', () => {
       `https://api.padlhub.test/user/api/v1/local-padel/community-views/${communityId}/rating?period=30d&tab=dynamics`,
     ]);
     for (const [, init] of fetchImplementation.mock.calls) expect(init?.cache).toBe('no-store');
+  });
+
+  it('issues a realtime ticket only through the authenticated no-store API boundary', async () => {
+    const fetchImplementation = vi.fn<typeof fetch>().mockResolvedValue(
+      jsonResponse({
+        ticket: 'signed-one-time-realtime-ticket-that-is-long-enough',
+        expiresAt: '2026-08-04T12:00:30.000Z',
+      }),
+    );
+    const client = createClient(fetchImplementation, {
+      initialAccessToken: authenticatedSession.accessToken,
+    });
+
+    await expect(client.issueRealtimeTicket()).resolves.toMatchObject({
+      expiresAt: '2026-08-04T12:00:30.000Z',
+    });
+    const [input, init] = fetchImplementation.mock.calls[0] ?? [];
+    expect(requestUrl(input ?? '')).toBe(
+      'https://api.padlhub.test/user/api/v1/local-padel/realtime/tickets',
+    );
+    expect(init?.method).toBe('POST');
+    expect(init?.cache).toBe('no-store');
+    expect(new Headers(init?.headers).get('Authorization')).toBe(
+      `Bearer ${authenticatedSession.accessToken}`,
+    );
   });
 
   it('loads one public tournament summary by PadlHub id and bounded date range', async () => {
@@ -650,6 +676,7 @@ describe('PadlHubApiClient profile privacy boundary', () => {
       if (attempt === 1) return Promise.reject(new TypeError('temporary network failure'));
       return Promise.resolve(
         jsonResponse({
+          ...DEFAULT_PROFILE_PRIVACY_SETTINGS,
           contactPolicy: 'AUTHORIZED',
           chatPolicy: 'NOBODY',
           version: 2,
@@ -1065,5 +1092,687 @@ describe('PadlHubApiClient notification boundary', () => {
     );
     expect(url).not.toContain('phone');
     expect(url).not.toContain('clientId');
+  });
+
+  it('uses canonical discovery/detail without identity or invite selectors', async () => {
+    const calls: Array<{ input: Parameters<typeof fetch>[0]; init?: RequestInit }> = [];
+    const fetchImplementation: typeof fetch = (input, init) => {
+      calls.push({ input, ...(init === undefined ? {} : { init }) });
+      return Promise.resolve(
+        requestUrl(input).includes('?')
+          ? jsonResponse({ items: [] })
+          : jsonResponse({
+              id: '11111111-1111-4111-8111-111111111111',
+              title: 'Private Padel',
+              logoUrl: null,
+              isVerified: true,
+              visibility: 'LISTED_PRIVATE',
+              joinAction: 'REQUEST_TO_JOIN',
+            }),
+      );
+    };
+    const client = createClient(fetchImplementation, {
+      initialAccessToken: authenticatedSession.accessToken,
+    });
+    const communityId = '11111111-1111-4111-8111-111111111111';
+
+    await client.discoverCommunities({ query: 'private padel', limit: 20 });
+    await client.getCommunityDetail(communityId);
+
+    expect(requestUrl(calls[0]?.input ?? '')).toBe(
+      'https://api.padlhub.test/user/api/v1/local-padel/communities?query=private+padel&limit=20',
+    );
+    expect(requestUrl(calls[1]?.input ?? '')).toBe(
+      `https://api.padlhub.test/user/api/v1/local-padel/communities/${communityId}`,
+    );
+    for (const call of calls) {
+      const url = requestUrl(call.input);
+      expect(url).not.toContain('phone');
+      expect(url).not.toContain('clientId');
+      expect(url).not.toContain('invite');
+    }
+  });
+
+  it('loads only the authenticated user community membership state', async () => {
+    const communityId = '11111111-1111-4111-8111-111111111111';
+    const calls: Array<{ input: Parameters<typeof fetch>[0]; init?: RequestInit }> = [];
+    const fetchImplementation: typeof fetch = (input, init) => {
+      calls.push({ input, ...(init === undefined ? {} : { init }) });
+      return Promise.resolve(
+        jsonResponse({
+          communityId,
+          membershipStatus: 'NONE',
+          role: null,
+          membershipRevision: 0,
+          joinRequest: null,
+          joinAction: 'REQUEST_TO_JOIN',
+          updatedAt: null,
+        }),
+      );
+    };
+    const client = createClient(fetchImplementation, {
+      initialAccessToken: authenticatedSession.accessToken,
+    });
+
+    await client.getMyCommunityMembershipState(communityId);
+
+    const url = requestUrl(calls[0]?.input ?? '');
+    expect(url).toBe(
+      `https://api.padlhub.test/user/api/v1/local-padel/communities/${communityId}/members/me`,
+    );
+    expect(url).not.toMatch(/actor|role|userId|phone|clientId/);
+    expect(calls[0]?.init?.method ?? 'GET').toBe('GET');
+  });
+
+  it('uses retry-stable keys and revision-only community membership command bodies', async () => {
+    const communityId = '11111111-1111-4111-8111-111111111111';
+    const requestId = '22222222-2222-4222-8222-222222222222';
+    const calls: Array<{ input: Parameters<typeof fetch>[0]; init?: RequestInit }> = [];
+    let joinAttempt = 0;
+    const fetchImplementation: typeof fetch = (input, init) => {
+      calls.push({ input, ...(init === undefined ? {} : { init }) });
+      if (requestUrl(input).endsWith('/members/me/join') && joinAttempt++ === 0) {
+        return Promise.reject(new TypeError('temporary network failure'));
+      }
+      return Promise.resolve(
+        jsonResponse({
+          communityId,
+          membershipStatus: 'ACTIVE',
+          role: 'MEMBER',
+          membershipRevision: 2,
+          joinRequest: null,
+          joinAction: 'OPEN_COMMUNITY',
+          updatedAt: '2026-08-03T10:00:00.000Z',
+        }),
+      );
+    };
+    const client = createClient(fetchImplementation, {
+      initialAccessToken: authenticatedSession.accessToken,
+    });
+
+    await client.joinOrRequestCommunityMembership(communityId, {
+      expectedMembershipRevision: 0,
+    });
+    await client.cancelMyCommunityJoinRequest(communityId, requestId, {
+      expectedMembershipRevision: 1,
+      expectedRequestRevision: 2,
+    });
+    await client.leaveCommunity(communityId, { expectedMembershipRevision: 2 });
+
+    expect(calls).toHaveLength(4);
+    const joinHeaders = calls.slice(0, 2).map((call) => new Headers(call.init?.headers));
+    expect(joinHeaders[0]?.get('Idempotency-Key')).toBeTruthy();
+    expect(joinHeaders[1]?.get('Idempotency-Key')).toBe(joinHeaders[0]?.get('Idempotency-Key'));
+    expect(requestUrl(calls[0]?.input ?? '')).toBe(
+      `https://api.padlhub.test/user/api/v1/local-padel/communities/${communityId}/members/me/join`,
+    );
+    expect(requestUrl(calls[2]?.input ?? '')).toBe(
+      `https://api.padlhub.test/user/api/v1/local-padel/communities/${communityId}/join-requests/${requestId}/cancel`,
+    );
+    expect(requestUrl(calls[3]?.input ?? '')).toBe(
+      `https://api.padlhub.test/user/api/v1/local-padel/communities/${communityId}/members/me/leave`,
+    );
+
+    const bodies = calls.map(
+      (call) => JSON.parse(stringRequestBody(call.init?.body)) as Record<string, unknown>,
+    );
+    expect(bodies[0]).toEqual({ expectedMembershipRevision: 0 });
+    expect(bodies[1]).toEqual({ expectedMembershipRevision: 0 });
+    expect(bodies[2]).toEqual({ expectedMembershipRevision: 1, expectedRequestRevision: 2 });
+    expect(bodies[3]).toEqual({ expectedMembershipRevision: 2 });
+    for (const [index, body] of bodies.entries()) {
+      expect(calls[index]?.init?.method).toBe('POST');
+      expect(new Headers(calls[index]?.init?.headers).get('Idempotency-Key')).toBeTruthy();
+      expect(body).not.toHaveProperty('actor');
+      expect(body).not.toHaveProperty('role');
+      expect(body).not.toHaveProperty('userId');
+      expect(body).not.toHaveProperty('phone');
+      expect(body).not.toHaveProperty('clientId');
+    }
+  });
+
+  it('transfers community ownership with one retry-stable key and explicit revisions', async () => {
+    const communityId = '11111111-1111-4111-8111-111111111111';
+    const targetUserId = '22222222-2222-4222-8222-222222222222';
+    const calls: Array<{ input: Parameters<typeof fetch>[0]; init?: RequestInit }> = [];
+    const fetchImplementation: typeof fetch = (input, init) => {
+      calls.push({ input, ...(init === undefined ? {} : { init }) });
+      if (calls.length === 1) return Promise.reject(new TypeError('temporary network failure'));
+      return Promise.resolve(
+        jsonResponse({
+          communityId,
+          previousOwner: {
+            userId: authenticatedSession.user.id,
+            role: 'ADMIN',
+            revision: 5,
+          },
+          owner: { userId: targetUserId, previousRole: 'MEMBER', role: 'OWNER', revision: 3 },
+          transferredAt: '2026-08-04T12:00:00.000Z',
+        }),
+      );
+    };
+    const client = createClient(fetchImplementation, {
+      initialAccessToken: authenticatedSession.accessToken,
+    });
+
+    await client.transferCommunityOwnership(communityId, {
+      targetUserId,
+      expectedOwnerRevision: 4,
+      expectedTargetRevision: 2,
+    });
+
+    expect(calls).toHaveLength(2);
+    expect(requestUrl(calls[1]?.input ?? '')).toBe(
+      `https://api.padlhub.test/user/api/v1/local-padel/communities/${communityId}/ownership-transfers`,
+    );
+    const firstKey = new Headers(calls[0]?.init?.headers).get('Idempotency-Key');
+    expect(firstKey).toBeTruthy();
+    expect(new Headers(calls[1]?.init?.headers).get('Idempotency-Key')).toBe(firstKey);
+    expect(JSON.parse(stringRequestBody(calls[1]?.init?.body))).toEqual({
+      targetUserId,
+      expectedOwnerRevision: 4,
+      expectedTargetRevision: 2,
+    });
+  });
+
+  it('uses opaque content cursors and retry-stable community content commands', async () => {
+    const communityId = '11111111-1111-4111-8111-111111111111';
+    const postId = '22222222-2222-4222-8222-222222222222';
+    const calls: Array<{ input: Parameters<typeof fetch>[0]; init?: RequestInit }> = [];
+    let createAttempts = 0;
+    const fetchImplementation: typeof fetch = (input, init) => {
+      calls.push({ input, ...(init === undefined ? {} : { init }) });
+      const url = requestUrl(input);
+      if (url.endsWith('/posts') && createAttempts++ === 0) {
+        return Promise.reject(new TypeError('temporary network failure'));
+      }
+      if (url.includes('/feed')) {
+        return Promise.resolve(jsonResponse({ items: [], watermark: '2026-08-04T12:00:00.000Z' }));
+      }
+      if (url.endsWith('/reaction')) {
+        return Promise.resolve(
+          jsonResponse({
+            targetType: 'POST',
+            targetId: postId,
+            reaction: 'LIKE',
+            active: true,
+            revision: 1,
+            updatedAt: '2026-08-04T12:00:00.000Z',
+          }),
+        );
+      }
+      return Promise.resolve(
+        jsonResponse({
+          id: postId,
+          communityId,
+          authorUserId: authenticatedSession.user.id,
+          status: 'PUBLISHED',
+          body: 'Первый пост',
+          revision: 1,
+          createdAt: '2026-08-04T12:00:00.000Z',
+          publishedAt: '2026-08-04T12:00:00.000Z',
+          updatedAt: '2026-08-04T12:00:00.000Z',
+          archivedAt: null,
+          restoreUntil: null,
+          retentionUntil: null,
+        }),
+      );
+    };
+    const client = createClient(fetchImplementation, {
+      initialAccessToken: authenticatedSession.accessToken,
+    });
+
+    await client.listCommunityFeed(communityId, { limit: 20, cursor: 'opaque-feed-cursor' });
+    await client.createCommunityPost(communityId, { body: 'Первый пост' });
+    await client.setCommunityReaction(communityId, 'POST', postId, { reaction: 'LIKE' });
+
+    expect(requestUrl(calls[0]?.input ?? '')).toBe(
+      `https://api.padlhub.test/user/api/v1/local-padel/communities/${communityId}/feed?limit=20&cursor=opaque-feed-cursor`,
+    );
+    expect(calls).toHaveLength(4);
+    const createHeaders = calls.slice(1, 3).map((call) => new Headers(call.init?.headers));
+    expect(createHeaders[0]?.get('Idempotency-Key')).toBeTruthy();
+    expect(createHeaders[1]?.get('Idempotency-Key')).toBe(createHeaders[0]?.get('Idempotency-Key'));
+    expect(JSON.parse(stringRequestBody(calls[2]?.init?.body))).toEqual({ body: 'Первый пост' });
+    expect(requestUrl(calls[3]?.input ?? '')).toBe(
+      `https://api.padlhub.test/user/api/v1/local-padel/communities/${communityId}/posts/${postId}/reaction`,
+    );
+    expect(calls[3]?.init?.method).toBe('PUT');
+  });
+
+  it('recovers Community events from an explicit durable sequence', async () => {
+    const calls: Array<{ input: Parameters<typeof fetch>[0]; init?: RequestInit }> = [];
+    const fetchImplementation: typeof fetch = (input, init) => {
+      calls.push({ input, ...(init === undefined ? {} : { init }) });
+      return Promise.resolve(
+        jsonResponse({
+          items: [],
+          afterSequence: 12,
+          latestSequence: 12,
+          retainedFromSequence: 1,
+          hasMore: false,
+        }),
+      );
+    };
+    const client = createClient(fetchImplementation, {
+      initialAccessToken: authenticatedSession.accessToken,
+    });
+    await expect(
+      client.recoverCommunityEvents('11111111-1111-4111-8111-111111111111', {
+        afterSequence: 12,
+        limit: 50,
+      }),
+    ).resolves.toMatchObject({ latestSequence: 12 });
+    expect(requestUrl(calls[0]?.input ?? '')).toBe(
+      'https://api.padlhub.test/user/api/v1/local-padel/communities/11111111-1111-4111-8111-111111111111/events?afterSequence=12&limit=50',
+    );
+    expect(calls[0]?.init?.cache).toBe('no-store');
+  });
+
+  it('issues, finalizes, polls and downloads community media only through scoped contracts', async () => {
+    const communityId = '11111111-1111-4111-8111-111111111111';
+    const mediaId = '22222222-2222-4222-8222-222222222222';
+    const calls: Array<{ input: Parameters<typeof fetch>[0]; init?: RequestInit }> = [];
+    const fetchImplementation: typeof fetch = (input, init) => {
+      calls.push({ input, ...(init === undefined ? {} : { init }) });
+      const url = requestUrl(input);
+      if (url.endsWith('/variants/FEED')) {
+        return Promise.resolve(
+          new Response(new Blob(['webp']), {
+            status: 200,
+            headers: { 'Content-Type': 'image/webp' },
+          }),
+        );
+      }
+      if (url.endsWith('/media/uploads')) {
+        return Promise.resolve(
+          jsonResponse({
+            id: mediaId,
+            communityId,
+            uploaderUserId: authenticatedSession.user.id,
+            mediaType: 'IMAGE',
+            state: 'UPLOADING',
+            revision: 1,
+            declaredContentType: 'image/jpeg',
+            declaredByteSize: 1024,
+            declaredSha256: 'a'.repeat(64),
+            upload: {
+              method: 'PUT',
+              url: 'https://quarantine.padlhub.test/upload',
+              requiredHeaders: { 'Content-Type': 'image/jpeg' },
+              expiresAt: '2026-08-04T12:15:00.000Z',
+            },
+            createdAt: '2026-08-04T12:00:00.000Z',
+            updatedAt: '2026-08-04T12:00:00.000Z',
+          }),
+        );
+      }
+      return Promise.resolve(
+        jsonResponse({
+          id: mediaId,
+          communityId,
+          uploaderUserId: authenticatedSession.user.id,
+          mediaType: 'IMAGE',
+          state: 'SCANNING',
+          revision: 2,
+          declaredContentType: 'image/jpeg',
+          declaredByteSize: 1024,
+          declaredSha256: 'a'.repeat(64),
+          finalizedAt: '2026-08-04T12:01:00.000Z',
+          createdAt: '2026-08-04T12:00:00.000Z',
+          updatedAt: '2026-08-04T12:01:00.000Z',
+        }),
+      );
+    };
+    const client = createClient(fetchImplementation, {
+      initialAccessToken: authenticatedSession.accessToken,
+    });
+
+    await client.issueCommunityMediaUpload(communityId, {
+      mediaType: 'IMAGE',
+      contentType: 'image/jpeg',
+      byteSize: 1024,
+      sha256: 'a'.repeat(64),
+    });
+    await client.finalizeCommunityMediaUpload(communityId, mediaId, { expectedRevision: 1 });
+    await client.getCommunityMediaStatus(communityId, mediaId);
+    await client.downloadCommunityMediaVariant(communityId, mediaId, 'FEED');
+
+    expect(requestUrl(calls[0]?.input ?? '')).toContain(
+      `/communities/${communityId}/media/uploads`,
+    );
+    expect(JSON.parse(stringRequestBody(calls[0]?.init?.body))).toEqual({
+      mediaType: 'IMAGE',
+      contentType: 'image/jpeg',
+      byteSize: 1024,
+      sha256: 'a'.repeat(64),
+    });
+    expect(new Headers(calls[0]?.init?.headers).get('Idempotency-Key')).toBeTruthy();
+    expect(requestUrl(calls[1]?.input ?? '')).toContain(`/media/${mediaId}/finalize`);
+    expect(new Headers(calls[1]?.init?.headers).get('Idempotency-Key')).toBeTruthy();
+    expect(calls[2]?.init?.cache).toBe('no-store');
+    expect(requestUrl(calls[3]?.input ?? '')).toContain(`/media/${mediaId}/variants/FEED`);
+    expect(new Headers(calls[3]?.init?.headers).get('Accept')).toBe('image/webp');
+    expect(new Headers(calls[3]?.init?.headers).get('Authorization')).toBe(
+      `Bearer ${authenticatedSession.accessToken}`,
+    );
+  });
+
+  it('exposes typed canonical reload metadata for an expired Community event gap', async () => {
+    const fetchImplementation: typeof fetch = () =>
+      Promise.resolve(
+        jsonResponse(
+          {
+            code: 'COMMUNITY_EVENT_GAP_EXPIRED',
+            message: 'История истекла.',
+            correlationId: 'gap-correlation',
+            recoveryAction: 'FULL_CANONICAL_RELOAD',
+            latestSequence: 40,
+            retainedFromSequence: 20,
+          },
+          409,
+        ),
+      );
+    const client = createClient(fetchImplementation, {
+      initialAccessToken: authenticatedSession.accessToken,
+    });
+    await expect(
+      client.recoverCommunityEvents('11111111-1111-4111-8111-111111111111', {
+        afterSequence: 1,
+      }),
+    ).rejects.toMatchObject({
+      name: 'CommunityEventGapExpiredError',
+      code: 'COMMUNITY_EVENT_GAP_EXPIRED',
+      recoveryAction: 'FULL_CANONICAL_RELOAD',
+      latestSequence: 40,
+      retainedFromSequence: 20,
+    });
+  });
+
+  it('retries community creation with one key and only public contract fields', async () => {
+    const calls: Array<{ input: Parameters<typeof fetch>[0]; init?: RequestInit }> = [];
+    const fetchImplementation: typeof fetch = (input, init) => {
+      calls.push({ input, ...(init === undefined ? {} : { init }) });
+      if (calls.length === 1) return Promise.reject(new TypeError('temporary network failure'));
+      return Promise.resolve(
+        jsonResponse({
+          id: '11111111-1111-4111-8111-111111111111',
+          title: 'Padel Friends',
+          description: null,
+          visibility: 'PUBLIC',
+          joinPolicy: 'INSTANT',
+          publishingPreset: 'OPEN_COMMUNITY',
+          status: 'ACTIVE',
+          revision: 1,
+          ownerUserId: authenticatedSession.user.id,
+          createdAt: '2026-08-03T10:00:00.000Z',
+          updatedAt: '2026-08-03T10:00:00.000Z',
+        }),
+      );
+    };
+    const client = createClient(fetchImplementation, {
+      initialAccessToken: authenticatedSession.accessToken,
+    });
+
+    await client.createCommunity({
+      title: 'Padel Friends',
+      visibility: 'PUBLIC',
+      joinPolicy: 'INSTANT',
+      publishingPreset: 'OPEN_COMMUNITY',
+    });
+
+    expect(calls).toHaveLength(2);
+    const firstHeaders = new Headers(calls[0]?.init?.headers);
+    const secondHeaders = new Headers(calls[1]?.init?.headers);
+    expect(firstHeaders.get('Idempotency-Key')).toBeTruthy();
+    expect(secondHeaders.get('Idempotency-Key')).toBe(firstHeaders.get('Idempotency-Key'));
+    expect(requestUrl(calls[1]?.input ?? '')).toBe(
+      'https://api.padlhub.test/user/api/v1/local-padel/communities',
+    );
+    const body = JSON.parse(stringRequestBody(calls[1]?.init?.body)) as Record<string, unknown>;
+    expect(body).toEqual({
+      title: 'Padel Friends',
+      visibility: 'PUBLIC',
+      joinPolicy: 'INSTANT',
+      publishingPreset: 'OPEN_COMMUNITY',
+    });
+    expect(body).not.toHaveProperty('actorUserId');
+    expect(body).not.toHaveProperty('quotaOverride');
+  });
+
+  it('keeps DIRECT invite tokens in no-store JSON bodies and retries commands with stable keys', async () => {
+    const communityId = '11111111-1111-4111-8111-111111111111';
+    const inviteId = '22222222-2222-4222-8222-222222222222';
+    const token = 'direct_invite_token_abcdefghijklmnopqrstuvwxyz0123456789';
+    const calls: Array<{ input: Parameters<typeof fetch>[0]; init?: RequestInit }> = [];
+    const commandAttempts = new Map<string, number>();
+    const fetchImplementation: typeof fetch = (input, init) => {
+      calls.push({ input, ...(init === undefined ? {} : { init }) });
+      const url = requestUrl(input);
+      const isRetryableCommand =
+        url.endsWith('/direct-invites') ||
+        url.endsWith('/community-direct-invites/redeem') ||
+        url.endsWith(`/community-direct-invites/${inviteId}/revoke`);
+      if (isRetryableCommand) {
+        const attempt = commandAttempts.get(url) ?? 0;
+        commandAttempts.set(url, attempt + 1);
+        if (attempt === 0) return Promise.reject(new TypeError('temporary network failure'));
+      }
+      if (url.includes(`/communities/${communityId}/direct-invites?`)) {
+        return Promise.resolve(
+          jsonResponse({
+            items: [
+              {
+                id: inviteId,
+                communityId,
+                status: 'ACTIVE',
+                revision: 1,
+                createdAt: '2026-08-04T10:00:00.000Z',
+                expiresAt: '2026-08-11T10:00:00.000Z',
+                updatedAt: '2026-08-04T10:00:00.000Z',
+              },
+            ],
+          }),
+        );
+      }
+      if (url.endsWith('/community-direct-invites/preview')) {
+        return Promise.resolve(
+          jsonResponse({
+            inviteId,
+            inviteRevision: 3,
+            community: {
+              id: communityId,
+              title: 'Hidden Padel',
+              logoUrl: null,
+              isVerified: true,
+              visibility: 'HIDDEN',
+            },
+            expiresAt: '2026-08-11T10:00:00.000Z',
+            membershipRevision: 4,
+            redeemAction: 'CONFIRM_MEMBERSHIP',
+          }),
+        );
+      }
+      if (url.endsWith('/community-direct-invites/redeem')) {
+        return Promise.resolve(
+          jsonResponse({
+            communityId,
+            membershipStatus: 'ACTIVE',
+            role: 'MEMBER',
+            membershipRevision: 5,
+            joinRequest: null,
+            joinAction: 'OPEN_COMMUNITY',
+            updatedAt: '2026-08-04T10:00:00.000Z',
+          }),
+        );
+      }
+      if (url.endsWith('/revoke')) {
+        return Promise.resolve(
+          jsonResponse({
+            id: inviteId,
+            communityId,
+            status: 'REVOKED',
+            revision: 2,
+            createdAt: '2026-08-04T10:00:00.000Z',
+            expiresAt: '2026-08-11T10:00:00.000Z',
+            updatedAt: '2026-08-04T11:00:00.000Z',
+          }),
+        );
+      }
+      return Promise.resolve(
+        jsonResponse(
+          {
+            id: inviteId,
+            communityId,
+            status: 'ACTIVE',
+            revision: 1,
+            token,
+            createdAt: '2026-08-04T10:00:00.000Z',
+            expiresAt: '2026-08-11T10:00:00.000Z',
+          },
+          201,
+        ),
+      );
+    };
+    const client = createClient(fetchImplementation, {
+      initialAccessToken: authenticatedSession.accessToken,
+    });
+
+    const page = await client.listCommunityDirectInvites(communityId, {
+      limit: 20,
+      cursor: 'opaque-direct-invite-cursor',
+    });
+    const created = await client.createCommunityDirectInvite(communityId, {
+      expectedIssuerMembershipRevision: 9,
+    });
+    const preview = await client.previewCommunityDirectInvite({ token });
+    await client.redeemCommunityDirectInvite({
+      token,
+      expectedInviteRevision: 3,
+      expectedMembershipRevision: 4,
+    });
+    await client.revokeCommunityDirectInvite(inviteId, { expectedInviteRevision: 1 });
+
+    expect(page.items[0]).not.toHaveProperty('token');
+    expect(page.items[0]).not.toHaveProperty('tokenHash');
+    expect(created.token).toBe(token);
+    expect(preview.inviteRevision).toBe(3);
+    expect(preview.membershipRevision).toBe(4);
+    expect(calls).toHaveLength(8);
+    expect(requestUrl(calls[0]?.input ?? '')).toBe(
+      `https://api.padlhub.test/user/api/v1/local-padel/communities/${communityId}/direct-invites?limit=20&cursor=opaque-direct-invite-cursor`,
+    );
+    expect(requestUrl(calls[1]?.input ?? '')).toBe(
+      `https://api.padlhub.test/user/api/v1/local-padel/communities/${communityId}/direct-invites`,
+    );
+    expect(requestUrl(calls[3]?.input ?? '')).toBe(
+      'https://api.padlhub.test/user/api/v1/local-padel/community-direct-invites/preview',
+    );
+    expect(requestUrl(calls[4]?.input ?? '')).toBe(
+      'https://api.padlhub.test/user/api/v1/local-padel/community-direct-invites/redeem',
+    );
+    expect(requestUrl(calls[6]?.input ?? '')).toBe(
+      `https://api.padlhub.test/user/api/v1/local-padel/community-direct-invites/${inviteId}/revoke`,
+    );
+
+    expect(calls[0]?.init?.body).toBeUndefined();
+    expect(JSON.parse(stringRequestBody(calls[1]?.init?.body))).toEqual({
+      expectedIssuerMembershipRevision: 9,
+    });
+    expect(JSON.parse(stringRequestBody(calls[2]?.init?.body))).toEqual({
+      expectedIssuerMembershipRevision: 9,
+    });
+    expect(JSON.parse(stringRequestBody(calls[3]?.init?.body))).toEqual({ token });
+    expect(JSON.parse(stringRequestBody(calls[4]?.init?.body))).toEqual({
+      token,
+      expectedInviteRevision: 3,
+      expectedMembershipRevision: 4,
+    });
+    expect(JSON.parse(stringRequestBody(calls[5]?.init?.body))).toEqual({
+      token,
+      expectedInviteRevision: 3,
+      expectedMembershipRevision: 4,
+    });
+    expect(JSON.parse(stringRequestBody(calls[6]?.init?.body))).toEqual({
+      expectedInviteRevision: 1,
+    });
+    expect(JSON.parse(stringRequestBody(calls[7]?.init?.body))).toEqual({
+      expectedInviteRevision: 1,
+    });
+
+    for (const call of calls) {
+      const url = requestUrl(call.input);
+      expect(url).not.toContain(token);
+      expect(url).not.toMatch(/actor|issuer|userId|role|status|expiry|maxUses/i);
+      expect(call.init?.cache).toBe('no-store');
+      if (call.init?.body) {
+        const body = JSON.parse(stringRequestBody(call.init.body)) as Record<string, unknown>;
+        for (const forbiddenKey of [
+          'actor',
+          'actorUserId',
+          'issuerUserId',
+          'userId',
+          'role',
+          'status',
+          'expiry',
+          'expiresAt',
+          'maxUses',
+        ]) {
+          expect(body).not.toHaveProperty(forbiddenKey);
+        }
+      }
+    }
+
+    for (const indexes of [
+      [1, 2],
+      [4, 5],
+      [6, 7],
+    ]) {
+      const firstHeaders = new Headers(calls[indexes[0] ?? -1]?.init?.headers);
+      const secondHeaders = new Headers(calls[indexes[1] ?? -1]?.init?.headers);
+      expect(firstHeaders.get('Idempotency-Key')).toBeTruthy();
+      expect(secondHeaders.get('Idempotency-Key')).toBe(firstHeaders.get('Idempotency-Key'));
+    }
+
+    expect(new Headers(calls[0]?.init?.headers).get('Idempotency-Key')).toBeNull();
+    expect(new Headers(calls[3]?.init?.headers).get('Idempotency-Key')).toBeNull();
+  });
+
+  it('retries a membership pin command with one key and no client-supplied actor', async () => {
+    const communityId = '11111111-1111-4111-8111-111111111111';
+    const calls: Array<{ input: Parameters<typeof fetch>[0]; init?: RequestInit }> = [];
+    const fetchImplementation: typeof fetch = (input, init) => {
+      calls.push({ input, ...(init === undefined ? {} : { init }) });
+      if (calls.length === 1) return Promise.reject(new TypeError('temporary network failure'));
+      return Promise.resolve(
+        jsonResponse({
+          communityId,
+          pinned: true,
+          revision: 4,
+          updatedAt: '2026-08-03T10:00:00.000Z',
+        }),
+      );
+    };
+    const client = createClient(fetchImplementation, {
+      initialAccessToken: authenticatedSession.accessToken,
+    });
+
+    await client.setMyCommunityMembershipPin(communityId, {
+      pinned: true,
+      expectedRevision: 3,
+    });
+
+    expect(calls).toHaveLength(2);
+    const firstHeaders = new Headers(calls[0]?.init?.headers);
+    const secondHeaders = new Headers(calls[1]?.init?.headers);
+    expect(firstHeaders.get('Idempotency-Key')).toBeTruthy();
+    expect(secondHeaders.get('Idempotency-Key')).toBe(firstHeaders.get('Idempotency-Key'));
+    expect(requestUrl(calls[1]?.input ?? '')).toBe(
+      `https://api.padlhub.test/user/api/v1/local-padel/communities/${communityId}/members/me/pin`,
+    );
+    expect(JSON.parse(stringRequestBody(calls[1]?.init?.body))).toEqual({
+      pinned: true,
+      expectedRevision: 3,
+    });
   });
 });
