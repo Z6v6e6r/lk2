@@ -743,7 +743,7 @@ jobs:
               test ! -e /opt/phub/staging.override.env
             fi
           REMOTE
-          ssh "phub-deploy@$HOST" /opt/phub/verify-messaging-test-release.sh \
+          ssh "phub-deploy@$HOST" sh /opt/phub/verify-messaging-test-release.sh \
             local-padel "$PLAYER_A_ID" "$PLAYER_B_ID" "$expected_checksum"
       - name: Verify the web entrypoint
         env:

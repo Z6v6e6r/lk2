@@ -116,6 +116,7 @@ describe('Nano presentation release contract', () => {
     expect(stagingWorkflow).toContain(
       'Verify messaging test release and preserve the current Home mode',
     );
+    expect(stagingWorkflow).toContain('sh /opt/phub/verify-messaging-test-release.sh');
     expect(stagingWorkflow).toContain(
       'cmp "$backup_dir/staging.override.env" /opt/phub/staging.override.env',
     );
