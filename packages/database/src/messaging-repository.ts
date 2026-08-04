@@ -341,10 +341,10 @@ const CONVERSATION_SELECT = `
       on runtime.tenant_id = conversation.tenant_id
      and runtime.http_enabled
      and runtime.direct_enabled
-    join identity.users current_user
-      on current_user.tenant_id = current_member.tenant_id
-     and current_user.id = current_member.user_id
-     and current_user.status = 'ACTIVE'
+    join identity.users viewer_user
+      on viewer_user.tenant_id = current_member.tenant_id
+     and viewer_user.id = current_member.user_id
+     and viewer_user.status = 'ACTIVE'
     join messaging.conversation_members other_member
       on other_member.tenant_id = conversation.tenant_id
      and other_member.conversation_id = conversation.id
@@ -383,13 +383,13 @@ const GAME_CONVERSATION_SELECT = `
      and member.conversation_id = conversation.id
      and member.user_id = $2
      and member.state = 'ACTIVE'
-    join identity.users current_user
-      on current_user.tenant_id = member.tenant_id
-     and current_user.id = member.user_id
-     and current_user.status = 'ACTIVE'
+    join identity.users viewer_user
+      on viewer_user.tenant_id = member.tenant_id
+     and viewer_user.id = member.user_id
+     and viewer_user.status = 'ACTIVE'
     join identity.user_access_profiles current_access
-      on current_access.tenant_id = current_user.tenant_id
-     and current_access.user_id = current_user.id
+      on current_access.tenant_id = viewer_user.tenant_id
+     and current_access.user_id = viewer_user.id
      and 'games.play' = any(current_access.permissions)
     join games.games game
       on game.tenant_id = conversation.tenant_id
@@ -397,7 +397,7 @@ const GAME_CONVERSATION_SELECT = `
     join games.participations participation
       on participation.tenant_id = game.tenant_id
      and participation.game_id = game.id
-     and participation.user_id = current_user.id
+     and participation.user_id = viewer_user.id
      and participation.state = 'ACTIVE'
     join messaging.tenant_runtime_settings runtime
       on runtime.tenant_id = conversation.tenant_id
@@ -452,13 +452,13 @@ async function getGameConversation(
         and member.conversation_id = conversation.id
         and member.user_id = $2
         and member.state = 'ACTIVE'
-       join identity.users current_user
-         on current_user.tenant_id = member.tenant_id
-        and current_user.id = member.user_id
-        and current_user.status = 'ACTIVE'
+       join identity.users viewer_user
+         on viewer_user.tenant_id = member.tenant_id
+        and viewer_user.id = member.user_id
+        and viewer_user.status = 'ACTIVE'
        join identity.user_access_profiles current_access
-         on current_access.tenant_id = current_user.tenant_id
-        and current_access.user_id = current_user.id
+         on current_access.tenant_id = viewer_user.tenant_id
+        and current_access.user_id = viewer_user.id
         and 'games.play' = any(current_access.permissions)
        join games.games game
          on game.tenant_id = conversation.tenant_id
@@ -466,7 +466,7 @@ async function getGameConversation(
        join games.participations participation
          on participation.tenant_id = game.tenant_id
         and participation.game_id = game.id
-        and participation.user_id = current_user.id
+        and participation.user_id = viewer_user.id
         and participation.state = 'ACTIVE'
        join messaging.tenant_runtime_settings runtime
          on runtime.tenant_id = conversation.tenant_id
@@ -498,13 +498,13 @@ async function getAuthorizedMember(
        join messaging.conversations conversation
          on conversation.tenant_id = member.tenant_id
         and conversation.id = member.conversation_id
-       join identity.users current_user
-         on current_user.tenant_id = member.tenant_id
-        and current_user.id = member.user_id
-        and current_user.status = 'ACTIVE'
+       join identity.users viewer_user
+         on viewer_user.tenant_id = member.tenant_id
+        and viewer_user.id = member.user_id
+        and viewer_user.status = 'ACTIVE'
        join identity.user_access_profiles current_access
-         on current_access.tenant_id = current_user.tenant_id
-        and current_access.user_id = current_user.id
+         on current_access.tenant_id = viewer_user.tenant_id
+        and current_access.user_id = viewer_user.id
        join messaging.tenant_runtime_settings runtime
          on runtime.tenant_id = conversation.tenant_id
         and runtime.http_enabled
@@ -782,13 +782,13 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
               and participation.game_id = game.id
               and participation.user_id = $2
               and participation.state = 'ACTIVE'
-             join identity.users current_user
-               on current_user.tenant_id = participation.tenant_id
-              and current_user.id = participation.user_id
-              and current_user.status = 'ACTIVE'
+             join identity.users viewer_user
+               on viewer_user.tenant_id = participation.tenant_id
+              and viewer_user.id = participation.user_id
+              and viewer_user.status = 'ACTIVE'
              join identity.user_access_profiles current_access
-               on current_access.tenant_id = current_user.tenant_id
-              and current_access.user_id = current_user.id
+               on current_access.tenant_id = viewer_user.tenant_id
+              and current_access.user_id = viewer_user.id
               and 'games.play' = any(current_access.permissions)
              join messaging.tenant_runtime_settings runtime
                on runtime.tenant_id = game.tenant_id
@@ -1245,13 +1245,13 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
           client,
           `select true as authorized
              from identity.refresh_sessions presented
-             join identity.users current_user
-               on current_user.tenant_id = presented.tenant_id
-              and current_user.id = presented.user_id
-              and current_user.status = 'ACTIVE'
+             join identity.users viewer_user
+               on viewer_user.tenant_id = presented.tenant_id
+              and viewer_user.id = presented.user_id
+              and viewer_user.status = 'ACTIVE'
              join identity.user_access_profiles current_access
-               on current_access.tenant_id = current_user.tenant_id
-              and current_access.user_id = current_user.id
+               on current_access.tenant_id = viewer_user.tenant_id
+              and current_access.user_id = viewer_user.id
               and 'chat.direct.create' = any(current_access.permissions)
             where presented.tenant_id = $1
               and presented.id = $2
@@ -1292,13 +1292,13 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
               and member.conversation_id = conversation.id
               and member.user_id = $2
               and member.state = 'ACTIVE'
-             join identity.users current_user
-               on current_user.tenant_id = member.tenant_id
-              and current_user.id = member.user_id
-              and current_user.status = 'ACTIVE'
+             join identity.users viewer_user
+               on viewer_user.tenant_id = member.tenant_id
+              and viewer_user.id = member.user_id
+              and viewer_user.status = 'ACTIVE'
              join identity.user_access_profiles current_access
-               on current_access.tenant_id = current_user.tenant_id
-              and current_access.user_id = current_user.id
+               on current_access.tenant_id = viewer_user.tenant_id
+              and current_access.user_id = viewer_user.id
               and 'chat.direct.create' = any(current_access.permissions)
             where conversation.tenant_id = $1
               and conversation.id = $3
@@ -1334,10 +1334,10 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
               and member.member_type = 'USER'
               and member.user_id is not null
               and member.state = 'ACTIVE'
-             join identity.users current_user
-               on current_user.tenant_id = member.tenant_id
-              and current_user.id = member.user_id
-              and current_user.status = 'ACTIVE'
+             join identity.users viewer_user
+               on viewer_user.tenant_id = member.tenant_id
+              and viewer_user.id = member.user_id
+              and viewer_user.status = 'ACTIVE'
             where settings.tenant_id = $1
               and settings.http_enabled = true
               and settings.direct_enabled = true

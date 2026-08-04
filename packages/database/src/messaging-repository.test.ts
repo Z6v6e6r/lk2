@@ -1,3 +1,5 @@
+import { readFile } from 'node:fs/promises';
+
 import { describe, expect, it, vi } from 'vitest';
 
 import { createMessagingRepository } from './messaging-repository.js';
@@ -17,6 +19,12 @@ function poolWithQuery(query: ReturnType<typeof vi.fn>) {
 }
 
 describe('messaging repository', () => {
+  it('does not use PostgreSQL session keywords as relation aliases', async () => {
+    const source = await readFile(new URL('./messaging-repository.ts', import.meta.url), 'utf8');
+
+    expect(source).not.toMatch(/\b(?:join|from)\s+[^\s]+\s+current_user\b/i);
+  });
+
   it('keeps every runtime gate disabled without an explicit tenant row', async () => {
     const query = vi.fn((text: string, values?: readonly unknown[]) => {
       void values;
@@ -397,7 +405,8 @@ describe('messaging repository', () => {
       const authorizationQuery = String(
         query.mock.calls.find(([text]) => String(text).includes('member.id as member_id'))?.[0],
       );
-      expect(authorizationQuery).toContain("current_user.status = 'ACTIVE'");
+      expect(authorizationQuery).toContain("viewer_user.status = 'ACTIVE'");
+      expect(authorizationQuery).not.toMatch(/\bcurrent_user\b/i);
       expect(authorizationQuery).toContain("other_member.state = 'ACTIVE'");
       expect(authorizationQuery).toContain("other_user.status = 'ACTIVE'");
       expect(authorizationQuery).toContain(

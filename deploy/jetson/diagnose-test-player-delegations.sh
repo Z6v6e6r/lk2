@@ -179,10 +179,10 @@ with requested_users as (
     on runtime.tenant_id = conversation.tenant_id
    and runtime.http_enabled
    and runtime.direct_enabled
-  left join identity.users current_user
-    on current_user.tenant_id = current_member.tenant_id
-   and current_user.id = current_member.user_id
-   and current_user.status = 'ACTIVE'
+  left join identity.users viewer_user
+    on viewer_user.tenant_id = current_member.tenant_id
+   and viewer_user.id = current_member.user_id
+   and viewer_user.status = 'ACTIVE'
   left join messaging.conversation_members other_member
     on other_member.tenant_id = conversation.tenant_id
    and other_member.conversation_id = conversation.id
@@ -194,7 +194,7 @@ with requested_users as (
    and other_summary.user_id = other_member.user_id
   where current_member.user_id is not null
     and runtime.tenant_id is not null
-    and current_user.id is not null
+    and viewer_user.id is not null
     and other_member.user_id is not null
 )
 select concat_ws('|',
