@@ -52,8 +52,10 @@ case "$(runtime_value VIVA_MODE)" in
     exit 1
     ;;
 esac
+require_value CORS_ORIGINS https://lk.nano.padlhub.su
 require_value VIVA_OAUTH_ENABLED true
 require_value VIVA_OAUTH_EXISTING_SUBJECT_BOOTSTRAP_ENABLED true
+require_value VIVA_OAUTH_REDIRECT_URI https://lk.nano.padlhub.su/user/api/v1/local-padel/auth/viva/callback
 require_value VIVA_OAUTH_SUCCESS_REDIRECT_URL https://lk.nano.padlhub.su/
 require_value HOME_BASE_SYNC_ENABLED true
 test "$(runtime_value CUP_DEV_AUTH_ENABLED)" != true
@@ -111,8 +113,11 @@ compose exec -T api node -e "
   const env = process.env;
   if (env.APP_ENV !== 'staging') process.exit(1);
   if (!['sandbox', 'production'].includes(env.VIVA_MODE)) process.exit(1);
+  if (env.CORS_ORIGINS !== 'https://lk.nano.padlhub.su') process.exit(1);
   if (env.VIVA_OAUTH_ENABLED !== 'true') process.exit(1);
   if (env.VIVA_OAUTH_EXISTING_SUBJECT_BOOTSTRAP_ENABLED !== 'true') process.exit(1);
+  if (env.VIVA_OAUTH_REDIRECT_URI !== 'https://lk.nano.padlhub.su/user/api/v1/local-padel/auth/viva/callback') process.exit(1);
+  if (env.VIVA_OAUTH_SUCCESS_REDIRECT_URL !== 'https://lk.nano.padlhub.su/') process.exit(1);
   if (env.VIVA_DIRECT_READ_ENABLED !== 'true') process.exit(1);
   if (env.CUP_DEV_AUTH_ENABLED === 'true') process.exit(1);
   if (env.HOME_READ_MODE !== 'projection') process.exit(1);

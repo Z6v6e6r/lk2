@@ -536,8 +536,10 @@ jobs:
             umask 077
             trap "rm -f \"$auth_env_tmp\"" EXIT HUP INT TERM
             {
+              printf "%s\n" "CORS_ORIGINS=https://lk.nano.padlhub.su"
               printf "%s\n" "VIVA_OAUTH_EXISTING_SUBJECT_BOOTSTRAP_ENABLED=true"
               printf "%s\n" "VIVA_DIRECT_READ_ENABLED=false"
+              printf "%s\n" "VIVA_OAUTH_REDIRECT_URI=https://lk.nano.padlhub.su/user/api/v1/local-padel/auth/viva/callback"
               printf "%s\n" "VIVA_OAUTH_SUCCESS_REDIRECT_URL=https://lk.nano.padlhub.su/"
               printf "%s\n" "HOME_BASE_SYNC_ENABLED=true"
             } > "$auth_env_tmp"

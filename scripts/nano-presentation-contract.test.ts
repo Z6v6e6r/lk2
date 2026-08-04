@@ -136,6 +136,26 @@ describe('Nano presentation release contract', () => {
     );
   });
 
+  it('pins staging browser auth to the canonical Nano origin and callback', () => {
+    const authEnvProvisioning = stagingWorkflow.match(
+      /auth_env=\/opt\/phub\/staging\.auth\.env([\s\S]*?)chmod 600 "\$auth_env_tmp"/,
+    )?.[1];
+
+    expect(authEnvProvisioning).toBeDefined();
+    expect(authEnvProvisioning).toContain('CORS_ORIGINS=https://lk.nano.padlhub.su');
+    expect(authEnvProvisioning).toContain(
+      'VIVA_OAUTH_REDIRECT_URI=https://lk.nano.padlhub.su/user/api/v1/local-padel/auth/viva/callback',
+    );
+    expect(authEnvProvisioning).toContain(
+      'VIVA_OAUTH_SUCCESS_REDIRECT_URL=https://lk.nano.padlhub.su/',
+    );
+    expect(authEnvProvisioning).not.toContain('http://127.0.0.1');
+    expect(verification).toContain('require_value CORS_ORIGINS https://lk.nano.padlhub.su');
+    expect(verification).toContain(
+      'require_value VIVA_OAUTH_REDIRECT_URI https://lk.nano.padlhub.su/user/api/v1/local-padel/auth/viva/callback',
+    );
+  });
+
   it('snapshots the active application before mutation and rolls it back after later failures', () => {
     const backupStep = stagingWorkflow.indexOf(
       'name: Preserve the active digest-pinned application release',
