@@ -463,8 +463,6 @@ async function resolvePlayer(
      ) values ($1, $2, $3, $4, $5)
      on conflict (tenant_id, user_id) do update set
        display_name = excluded.display_name,
-       level_label = coalesce(excluded.level_label, profile.user_summaries.level_label),
-       level_value = coalesce(excluded.level_value, profile.user_summaries.level_value),
        updated_at = now()`,
     [
       tenantId,
@@ -496,8 +494,6 @@ async function refreshMappedPlayerSummary(
   await client.query(
     `update profile.user_summaries summary
         set display_name = $3,
-            level_label = coalesce($4, summary.level_label),
-            level_value = coalesce($5, summary.level_value),
             updated_at = now()
       where summary.tenant_id = $1 and summary.user_id = $2
         and (
@@ -510,13 +506,7 @@ async function refreshMappedPlayerSummary(
                and binding.user_id = summary.user_id
           )
         )`,
-    [
-      input.tenantId,
-      userId,
-      cleanText(input.participant.displayName, 200, 'Игрок'),
-      input.participant.level,
-      input.participant.levelValue,
-    ],
+    [input.tenantId, userId, cleanText(input.participant.displayName, 200, 'Игрок')],
   );
 }
 

@@ -200,6 +200,16 @@ describe('legacy game import repository', () => {
     expect(
       clientQuery.mock.calls.find(([text]) => text.includes('set revision = revision + 1')),
     ).toBeDefined();
+    const profileSummaryUpsert = clientQuery.mock.calls.find(([text]) =>
+      text.includes('insert into profile.user_summaries'),
+    );
+    expect(profileSummaryUpsert?.[0]).toContain('display_name = excluded.display_name');
+    expect(profileSummaryUpsert?.[0]).not.toContain(
+      'level_label = coalesce(excluded.level_label, profile.user_summaries.level_label)',
+    );
+    expect(profileSummaryUpsert?.[0]).not.toContain(
+      'level_value = coalesce(excluded.level_value, profile.user_summaries.level_value)',
+    );
   });
 
   it('refreshes real names for already mapped players without changing the existing roster', async () => {
@@ -237,6 +247,8 @@ describe('legacy game import repository', () => {
     );
     expect(nameRefreshes).toHaveLength(2);
     expect(nameRefreshes.map(([, values]) => values?.[2])).toEqual(['Анна', 'Борис']);
+    expect(nameRefreshes.every(([text]) => !text.includes('level_label ='))).toBe(true);
+    expect(nameRefreshes.every(([text]) => !text.includes('level_value ='))).toBe(true);
     expect(
       clientQuery.mock.calls.some(([text]) => text.includes('insert into games.participations')),
     ).toBe(false);
@@ -270,14 +282,14 @@ describe('legacy game import repository', () => {
           'level_label = coalesce(excluded.level_label, profile.user_summaries.level_label)',
         ),
       ),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       clientQuery.mock.calls.some(([text]) =>
         text.includes(
           'level_value = coalesce(excluded.level_value, profile.user_summaries.level_value)',
         ),
       ),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       clientQuery.mock.calls.some(([text]) => text.includes('insert into locations.profiles')),
     ).toBe(true);

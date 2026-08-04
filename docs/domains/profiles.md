@@ -43,6 +43,9 @@ optional numeric value and change time under tenant RLS. Migration backfill crea
 point from the existing profile summary; it does not invent earlier dates or levels. Future
 `profile.user_summaries` level changes append a point in the same database transaction. The web
 opens `/profile/level-history` as a separate protected page and plots date on X and level on Y.
+Historical game imports may initialize a snapshot-only player summary, but they never overwrite
+`level_label` or `level_value` on an existing summary. In particular, activity-history backfill
+must not manufacture level-history points while replaying old Games snapshots.
 
 ## Visibility tiers
 
