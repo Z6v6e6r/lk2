@@ -160,8 +160,8 @@ candidate_compose() {
     "$@"
 }
 
-candidate_compose config --quiet
-candidate_images="$(candidate_compose config --images)"
+candidate_compose --profile migration config --quiet
+candidate_images="$(candidate_compose --profile migration config --images)"
 image_count="$(printf '%s\n' "$candidate_images" | sed '/^$/d' | wc -l | tr -d ' ')"
 [ "$image_count" -eq 5 ] || fail 'saved Compose definition must resolve exactly five images'
 for expected_image in \

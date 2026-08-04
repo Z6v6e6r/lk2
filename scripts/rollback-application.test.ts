@@ -99,7 +99,8 @@ async function fixture(): Promise<Fixture> {
 set -eu
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 case "$*" in
-  *'config --images'*) printf '%s\\n' "$FAKE_DOCKER_IMAGES" ;;
+  *'--profile migration config --images'*) printf '%s\\n' "$FAKE_DOCKER_IMAGES" ;;
+  *'config --images'*) printf '%s\\n' "$FAKE_DOCKER_IMAGES" | sed '/phub-migrator/d' ;;
 esac
 `,
     0o755,
@@ -163,15 +164,15 @@ describe('Nano staging application rollback primitive', () => {
     expect((await stat(join(input.root, 'staging.auth.env'))).mode & 0o777).toBe(0o600);
 
     const dockerCalls = await readFile(input.dockerLog, 'utf8');
-    expect(dockerCalls).toContain('config --quiet');
-    expect(dockerCalls).toContain('config --images');
+    expect(dockerCalls).toContain('--profile migration config --quiet');
+    expect(dockerCalls).toContain('--profile migration config --images');
     expect(dockerCalls).toContain('image inspect');
     expect(dockerCalls).not.toContain(' pull ');
     expect(dockerCalls).toContain('up -d --remove-orphans web api worker realtime');
     expect(dockerCalls).toContain('exec -T api node -e');
     expect(dockerCalls).toContain('exec -T realtime node -e');
     expect(dockerCalls).toContain('exec -T worker node -e');
-    expect(dockerCalls).not.toContain('profile migration');
+    expect(dockerCalls).not.toContain('--profile migration run');
     expect(dockerCalls).not.toContain(' run --rm migrator');
     expect(result.stdout).not.toContain('never-print-me');
     expect(result.stderr).not.toContain('never-print-me');

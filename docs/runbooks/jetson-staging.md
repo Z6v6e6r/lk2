@@ -188,6 +188,11 @@ read-only diagnostics workflow runs the same metadata-only inspection against
 `/opt/phub/release.env` and continues with the remaining host checks even when the metadata
 inspector finds an invalid line.
 
+Rollback validation enables the Compose `migration` profile only for `docker compose config`, so
+the saved migrator digest is included in the exact five-image check. Rollback itself never runs the
+migrator and restores only `web`, `api`, `worker` and `realtime`; applied expand-only migrations are
+not reversed.
+
 If validation, image resolution or readiness fails, retain both saved-release directories, stop the
 change window and inspect only redacted container status. Do not delete the expanded schema and do
 not repeatedly alternate releases. The primitive must be copied to `/opt/phub` and the snapshot
