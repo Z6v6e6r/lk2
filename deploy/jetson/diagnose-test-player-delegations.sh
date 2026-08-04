@@ -16,7 +16,7 @@ begin transaction read only;
 
 with requested as (
   select suffix
-  from regexp_split_to_table(:'last4_csv', ',') as suffix
+  from regexp_split_to_table(current_setting('phub.diagnostic_phone_last4'), ',') as suffix
 ), matched as (
   select
     requested.suffix,
@@ -119,5 +119,5 @@ SQL
 )"
 
 docker compose --env-file infrastructure.env -f compose.infrastructure.yaml exec -T postgres \
-  sh -ec 'PGOPTIONS="-c default_transaction_read_only=on" psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -v "last4_csv=$2" -P pager=off -Atc "$1"' \
+  sh -ec 'PGOPTIONS="-c default_transaction_read_only=on -c phub.diagnostic_phone_last4=$2" psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -P pager=off -Atc "$1"' \
   sh "$query" "$last4_csv"
