@@ -17,6 +17,14 @@ columns, constraints, indexes, RLS flags and policies. The remote `psql` session
 `default_transaction_read_only=on` and `BEGIN READ ONLY`; it does not inspect tenant rows or change
 the migration journal. Use this evidence before reconciling a legacy renamed migration.
 
+If the diagnostic proves that `0043_messaging_runtime.sql` has the exact repository `0057`
+checksum and that all expected messaging relations, columns, constraints, indexes, RLS flags and
+policies exist, `0056_messaging_runtime_legacy_alias.sql` records the checksum-identical `0057`
+filename in `public.schema_migrations`. Fresh databases and databases without that exact legacy
+journal row are unchanged by `0056` and proceed through the ordinary `0057` DDL. A mismatched
+legacy/current checksum or incomplete security structure fails the migration; do not delete or
+rewrite migration-journal rows manually.
+
 Node services keep their runtime dependencies external to their ESM output.
 This is required for OpenTelemetry's Node instrumentation, which uses dynamic
 module loading and cannot run from an esbuild-bundled ESM artifact. Each
