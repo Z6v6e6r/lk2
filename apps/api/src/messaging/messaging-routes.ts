@@ -2,7 +2,7 @@ import type { MessagingRepository } from '@phub/database';
 import type { FastifyInstance, FastifyReply, FastifyRequest, preHandlerHookHandler } from 'fastify';
 
 import { sendApiError } from '../http-errors.js';
-import type { RealtimeTicketIssuer } from './realtime-ticket-issuer.js';
+import { RealtimeTicketStoreError, type RealtimeTicketIssuer } from './realtime-ticket-issuer.js';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const CLIENT_MESSAGE_ID_PATTERN = /^[A-Za-z0-9._:-]{16,128}$/;
@@ -118,12 +118,26 @@ export function registerMessagingRoutes(
         return sendApiError(request, reply, 401, 'AUTH_SESSION_REVOKED', 'Сессия недействительна.');
       }
       const tenantKey = (request.params as { tenantKey: string }).tenantKey;
-      const issued = await options.realtimeTicketIssuer.issue({
-        tenantId: current.tenantId,
-        tenantKey,
-        userId: current.userId,
-        sessionId: current.sessionId,
-      });
+      let issued: Awaited<ReturnType<RealtimeTicketIssuer['issue']>>;
+      try {
+        issued = await options.realtimeTicketIssuer.issue({
+          tenantId: current.tenantId,
+          tenantKey,
+          userId: current.userId,
+          sessionId: current.sessionId,
+        });
+      } catch (error) {
+        if (error instanceof RealtimeTicketStoreError) {
+          return sendApiError(
+            request,
+            reply,
+            503,
+            error.code,
+            'Онлайн-подключение временно недоступно.',
+          );
+        }
+        throw error;
+      }
       try {
         await options.repository.recordRealtimeTicketIssued({
           tenantId: current.tenantId,

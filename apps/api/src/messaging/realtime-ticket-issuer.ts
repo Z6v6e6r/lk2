@@ -25,12 +25,21 @@ export interface RealtimeTicketIssuer {
   revoke(ticketId: string): Promise<void>;
 }
 
+export class RealtimeTicketStoreError extends Error {
+  public readonly code = 'REALTIME_TICKET_STORE_UNAVAILABLE';
+
+  public constructor() {
+    super('REALTIME_TICKET_STORE_UNAVAILABLE');
+    this.name = 'RealtimeTicketStoreError';
+  }
+}
+
 export class RedisRealtimeTicketIssuer implements RealtimeTicketIssuer {
   public constructor(
     private readonly redis: Pick<Redis, 'set' | 'del'>,
     private readonly config: Pick<
       AppConfig,
-      'JWT_ACCESS_SECRET' | 'JWT_ISSUER' | 'JWT_REALTIME_AUDIENCE'
+      'JWT_REALTIME_SECRET' | 'JWT_ISSUER' | 'JWT_REALTIME_AUDIENCE'
     >,
   ) {}
 
@@ -40,34 +49,45 @@ export class RedisRealtimeTicketIssuer implements RealtimeTicketIssuer {
     readonly userId: string;
     readonly sessionId: string;
   }): Promise<RealtimeTicketResult> {
+    if (!this.config.JWT_REALTIME_SECRET) throw new RealtimeTicketStoreError();
     const ticketId = randomUUID();
     const issuedAt = Math.floor(Date.now() / 1_000);
     const expiresAtSeconds = issuedAt + REALTIME_TICKET_TTL_SECONDS;
-    const stored = await this.redis.set(
-      realtimeTicketRedisKey(ticketId),
-      input.sessionId,
-      'EX',
-      REALTIME_TICKET_TTL_SECONDS,
-      'NX',
-    );
-    if (stored !== 'OK') throw new Error('REALTIME_TICKET_STORE_FAILED');
+    let stored: string | null;
+    try {
+      stored = await this.redis.set(
+        realtimeTicketRedisKey(ticketId),
+        input.sessionId,
+        'EX',
+        REALTIME_TICKET_TTL_SECONDS,
+        'NX',
+      );
+    } catch {
+      throw new RealtimeTicketStoreError();
+    }
+    if (stored !== 'OK') throw new RealtimeTicketStoreError();
 
-    const ticket = await new SignJWT({
-      scope: REALTIME_TICKET_SCOPE,
-      tenantId: input.tenantId,
-      tenantKey: input.tenantKey,
-      sid: input.sessionId,
-    })
-      .setProtectedHeader({ alg: 'HS256', typ: 'JWT' })
-      .setIssuer(this.config.JWT_ISSUER)
-      .setAudience(this.config.JWT_REALTIME_AUDIENCE)
-      .setSubject(input.userId)
-      .setJti(ticketId)
-      .setIssuedAt(issuedAt)
-      .setExpirationTime(expiresAtSeconds)
-      .sign(new TextEncoder().encode(this.config.JWT_ACCESS_SECRET));
+    try {
+      const ticket = await new SignJWT({
+        scope: REALTIME_TICKET_SCOPE,
+        tenantId: input.tenantId,
+        tenantKey: input.tenantKey,
+        sid: input.sessionId,
+      })
+        .setProtectedHeader({ alg: 'HS256', typ: 'JWT' })
+        .setIssuer(this.config.JWT_ISSUER)
+        .setAudience(this.config.JWT_REALTIME_AUDIENCE)
+        .setSubject(input.userId)
+        .setJti(ticketId)
+        .setIssuedAt(issuedAt)
+        .setExpirationTime(expiresAtSeconds)
+        .sign(new TextEncoder().encode(this.config.JWT_REALTIME_SECRET));
 
-    return { ticketId, ticket, expiresAt: new Date(expiresAtSeconds * 1_000).toISOString() };
+      return { ticketId, ticket, expiresAt: new Date(expiresAtSeconds * 1_000).toISOString() };
+    } catch (error) {
+      await this.redis.del(realtimeTicketRedisKey(ticketId)).catch(() => undefined);
+      throw error;
+    }
   }
 
   public async revoke(ticketId: string): Promise<void> {

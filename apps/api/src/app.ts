@@ -5,7 +5,19 @@ import cookie from '@fastify/cookie';
 import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
 import type { AppConfig } from '@phub/config';
-import type { CommunityDirectoryService } from '@phub/communities';
+import type {
+  CommunityCreateService,
+  CommunityDirectoryService,
+  CommunityDirectInviteService,
+  CommunityMembershipPinService,
+  CommunityMembershipLifecycleService,
+  CommunityReadService,
+  CommunityOwnershipTransferService,
+  CommunityContentService,
+  CommunityContentModerationService,
+  CommunityEventRecoveryService,
+  CommunityMediaService,
+} from '@phub/communities';
 import { checkDatabaseReady } from '@phub/database';
 import type {
   ClientRoutingPlanRepository,
@@ -32,6 +44,7 @@ import type {
   ProfilePrivacyRepository,
   ProfileSummaryRepository,
   PromotionEngagementRepository,
+  RealtimeAuthorizationRepository,
   TrainerAvatarRepository,
   UpcomingBookingsRepository,
 } from '@phub/database';
@@ -49,6 +62,9 @@ import { registerAuthRoutes } from './auth/auth-routes.js';
 import { registerAdminNotificationRoutes } from './admin/notification-admin-routes.js';
 import { registerLocationAdminRoutes } from './admin/location-admin-routes.js';
 import { registerGiftCertificateAdminRoutes } from './admin/gift-certificate-admin-routes.js';
+import { registerCommunityMembershipAdminRoutes } from './admin/community-membership-admin-routes.js';
+import { registerCommunityDirectInviteAdminRoutes } from './admin/community-direct-invite-admin-routes.js';
+import { registerCommunityContentModerationAdminRoutes } from './admin/community-content-moderation-admin-routes.js';
 import type { AuthService } from './auth/auth-service.js';
 import { registerBookingPreferenceRoutes } from './bookings/booking-preference-routes.js';
 import {
@@ -63,6 +79,14 @@ import {
   type ActivityHistoryRefreshService,
 } from './bookings/activity-history-routes.js';
 import { registerCommunityRoutes } from './communities/community-routes.js';
+import { registerCommunityDirectInviteRoutes } from './communities/community-direct-invite-routes.js';
+import { registerCommunityContentRoutes } from './communities/community-content-routes.js';
+import { registerCommunityEventRoutes } from './communities/community-event-routes.js';
+import {
+  registerCommunityMediaRoutes,
+  type CommunityMediaDeliveryAuthorizer,
+} from './communities/community-media-routes.js';
+import type { CommunityMediaObjectStore } from './communities/community-media-object-store.js';
 import {
   EventAvatarMediaProxy,
   PersistentTrainerAvatarMedia,
@@ -109,6 +133,7 @@ import {
 } from './profile/profile-photo-url.js';
 import { buildPlayerProfileView } from './profile/profile-view.js';
 import { buildClientRoutingPlan, canUseDirectViva } from './routing/client-routing-plan.js';
+import { registerRealtimeRoutes } from './realtime/realtime-routes.js';
 import {
   registerTournamentSummaryRoutes,
   type TournamentSummarySource,
@@ -167,6 +192,19 @@ export interface BuildAppOptions {
   readonly authService?: AuthService;
   readonly authDependencyReady?: () => Promise<boolean>;
   readonly communityDirectory?: CommunityDirectoryService;
+  readonly communityCreateService?: CommunityCreateService;
+  readonly communityMembershipPinService?: CommunityMembershipPinService;
+  readonly communityMembershipLifecycleService?: CommunityMembershipLifecycleService;
+  readonly communityReadService?: CommunityReadService;
+  readonly communityDirectInviteService?: CommunityDirectInviteService;
+  readonly communityOwnershipTransferService?: CommunityOwnershipTransferService;
+  readonly communityContentService?: CommunityContentService;
+  readonly communityContentModerationService?: CommunityContentModerationService;
+  readonly communityEventRecoveryService?: CommunityEventRecoveryService;
+  readonly communityMediaService?: CommunityMediaService;
+  readonly communityMediaDeliveryAuthorizer?: CommunityMediaDeliveryAuthorizer;
+  readonly communityMediaModerationAuthorizer?: CommunityMediaDeliveryAuthorizer;
+  readonly communityMediaObjectStore?: CommunityMediaObjectStore;
   readonly homeDashboardRepository?: Pick<HomeDashboardProjectionRepository, 'get'>;
   readonly homeBaseRepository?: Pick<HomeBaseProjectionRepository, 'get'>;
   readonly homeBaseProjector?: (input: {
@@ -239,6 +277,7 @@ export interface BuildAppOptions {
       >
     >;
   readonly rateLimitRedis?: Redis;
+  readonly realtimeAuthorizationRepository?: RealtimeAuthorizationRepository;
 }
 
 function clientPlatform(request: FastifyRequest): ClientPlatform {
@@ -555,6 +594,15 @@ export async function buildApp(options: BuildAppOptions) {
         })
       : remoteEventAvatarMedia);
 
+  const userRuntimeCapabilities = {
+    communityDirectInvites:
+      options.config.COMMUNITY_INVITES_ENABLED && Boolean(options.communityDirectInviteService),
+    communityRealtime:
+      options.config.COMMUNITIES_REALTIME_ENABLED &&
+      Boolean(options.realtimeAuthorizationRepository) &&
+      Boolean(options.realtimeTicketIssuer),
+  } as const;
+
   app.decorate('config', options.config);
   if (options.pool) app.decorate('pool', options.pool);
 
@@ -627,6 +675,7 @@ export async function buildApp(options: BuildAppOptions) {
               platform,
             })
         : undefined,
+      userRuntimeCapabilities,
     );
   }
 
@@ -660,7 +709,84 @@ export async function buildApp(options: BuildAppOptions) {
   });
   registerCommunityRoutes(app as unknown as FastifyInstance, {
     ...(options.communityDirectory ? { service: options.communityDirectory } : {}),
+    ...(options.communityCreateService ? { createService: options.communityCreateService } : {}),
+    ...(options.communityMembershipPinService
+      ? { membershipPinService: options.communityMembershipPinService }
+      : {}),
+    ...(options.communityMembershipLifecycleService
+      ? { membershipLifecycleService: options.communityMembershipLifecycleService }
+      : {}),
+    ...(options.communityReadService ? { readService: options.communityReadService } : {}),
+    ...(options.communityOwnershipTransferService
+      ? { ownershipTransferService: options.communityOwnershipTransferService }
+      : {}),
     authenticatedTenantHandlers: [authenticate, resolveTenant],
+    commandHandlers: [authenticate, resolveTenant, requireIdempotencyKey],
+  });
+  registerCommunityDirectInviteRoutes(app as unknown as FastifyInstance, {
+    ...(options.communityDirectInviteService
+      ? { service: options.communityDirectInviteService }
+      : {}),
+    authenticatedTenantHandlers: [authenticate, resolveTenant],
+    commandHandlers: [authenticate, resolveTenant, requireIdempotencyKey],
+  });
+  registerCommunityContentRoutes(app as unknown as FastifyInstance, {
+    ...(options.communityContentService ? { service: options.communityContentService } : {}),
+    authenticatedTenantHandlers: [authenticate, resolveTenant],
+    commandHandlers: [authenticate, resolveTenant, requireIdempotencyKey],
+  });
+  registerCommunityEventRoutes(app as unknown as FastifyInstance, {
+    ...(options.communityEventRecoveryService
+      ? { service: options.communityEventRecoveryService }
+      : {}),
+    authenticatedTenantHandlers: [authenticate, resolveTenant],
+  });
+  registerCommunityMediaRoutes(app as unknown as FastifyInstance, {
+    ...(options.communityMediaService ? { service: options.communityMediaService } : {}),
+    ...(options.communityMediaDeliveryAuthorizer
+      ? { deliveryAuthorizer: options.communityMediaDeliveryAuthorizer }
+      : {}),
+    ...(options.communityMediaObjectStore
+      ? { objectStore: options.communityMediaObjectStore }
+      : {}),
+    readUrlTtlSeconds: options.config.COMMUNITY_MEDIA_READ_URL_TTL_SECONDS,
+    authenticatedTenantHandlers: [authenticate, resolveTenant],
+    commandHandlers: [authenticate, resolveTenant, requireIdempotencyKey],
+  });
+  registerRealtimeRoutes(app as unknown as FastifyInstance, {
+    enabled: options.config.COMMUNITIES_REALTIME_ENABLED,
+    ...(options.realtimeAuthorizationRepository
+      ? { repository: options.realtimeAuthorizationRepository }
+      : {}),
+    ...(options.realtimeTicketIssuer ? { ticketIssuer: options.realtimeTicketIssuer } : {}),
+    authenticatedTenantHandlers: [authenticate, resolveTenant],
+  });
+  registerCommunityMembershipAdminRoutes(app as unknown as FastifyInstance, {
+    ...(options.communityMembershipLifecycleService
+      ? { service: options.communityMembershipLifecycleService }
+      : {}),
+    authenticatedTenantHandlers: [authenticateAdmin, resolveTenant],
+    commandHandlers: [authenticateAdmin, resolveTenant, requireIdempotencyKey],
+  });
+  registerCommunityDirectInviteAdminRoutes(app as unknown as FastifyInstance, {
+    ...(options.communityDirectInviteService
+      ? { service: options.communityDirectInviteService }
+      : {}),
+    commandHandlers: [authenticateAdmin, resolveTenant, requireIdempotencyKey],
+  });
+  registerCommunityContentModerationAdminRoutes(app as unknown as FastifyInstance, {
+    ...(options.communityContentModerationService
+      ? { service: options.communityContentModerationService }
+      : {}),
+    ...(options.communityMediaModerationAuthorizer
+      ? { mediaAuthorizer: options.communityMediaModerationAuthorizer }
+      : {}),
+    ...(options.communityMediaObjectStore
+      ? { mediaObjectStore: options.communityMediaObjectStore }
+      : {}),
+    mediaReadUrlTtlSeconds: options.config.COMMUNITY_MEDIA_READ_URL_TTL_SECONDS,
+    authenticatedTenantHandlers: [authenticateAdmin, resolveTenant],
+    commandHandlers: [authenticateAdmin, resolveTenant, requireIdempotencyKey],
   });
   registerGameRoutes(app as unknown as FastifyInstance, {
     ...(options.gameRosterRepository ? { repository: options.gameRosterRepository } : {}),
@@ -954,6 +1080,7 @@ export async function buildApp(options: BuildAppOptions) {
         ...(user ? { displayName: user.displayName, phoneLast4: user.phoneLast4 } : {}),
         roles: request.padlHubClaims?.roles,
         permissions: request.padlHubClaims?.permissions,
+        runtimeCapabilities: userRuntimeCapabilities,
       };
     },
   );

@@ -1,14 +1,39 @@
 import { Pool, type PoolClient, type PoolConfig, type QueryResultRow } from 'pg';
 
-export function createDatabasePool(connectionString: string): Pool {
+export function createDatabasePool(
+  connectionString: string,
+  options: { readonly max?: number } = {},
+): Pool {
   const config: PoolConfig = {
     connectionString,
     application_name: 'phub-platform',
-    max: 20,
+    max: options.max ?? 20,
     idleTimeoutMillis: 30_000,
     connectionTimeoutMillis: 3_000,
   };
   return new Pool(config);
+}
+
+export async function warmDatabasePool(
+  pool: Pool,
+  connections: number,
+  maximumConnections: number,
+): Promise<void> {
+  if (
+    !Number.isInteger(connections) ||
+    !Number.isInteger(maximumConnections) ||
+    connections < 1 ||
+    maximumConnections < 1 ||
+    connections > maximumConnections
+  ) {
+    throw new Error('DATABASE_POOL_WARM_CONNECTIONS_INVALID');
+  }
+  const clients = await Promise.all(Array.from({ length: connections }, () => pool.connect()));
+  try {
+    await Promise.all(clients.map((client) => client.query('select 1')));
+  } finally {
+    clients.forEach((client) => client.release());
+  }
 }
 
 export async function checkDatabaseReady(pool: Pool): Promise<boolean> {

@@ -77,9 +77,12 @@ dependency tree.
    `/etc/phub/staging.env`. Run migrations once from the CI-published migrator
    digest, then deploy web, API, realtime and worker.
 
-The application runtime reads three environment files in order:
+The application runtime uses separate API/worker and realtime secret contours:
 
-- `/etc/phub/staging.env` contains the root-owned shared runtime secrets;
+- `/etc/phub/staging.env` is mode `0600`, owned by `phub-deploy`, and contains the API/worker
+  runtime secrets, including access/refresh signing keys;
+- `/etc/phub/realtime.env` is mode `0600`, owned by `phub-deploy`, and contains only the common
+  database/broker metadata plus `JWT_REALTIME_SECRET`; access/refresh signing keys are forbidden;
 - `/opt/phub/staging.auth.env` is mode `0600`, owned by `phub-deploy`, and contains the audited
   authentication gates plus `HOME_BASE_SYNC_ENABLED=true`. The deploy workflow rewrites this
   non-secret file atomically before preflight so OAuth recovery and the local HomeBase projector
@@ -99,12 +102,19 @@ real canonical Games, card projections and guarded roster-mirror state.
 
 The Home override also enables the staging-only browser read-job transport. Before activation,
 every tenant with an active Viva delegation must have a `MIXED_END_USER_READS` routing plan with
-`profile.read`, plus a non-empty Viva provider tenant binding. Fixed schedule, upcoming-booking
+`profile.read`, plus a non-empty Viva provider tenant binding. The fixed schedule, upcoming-booking
 and history commands use that mixed plan as their transport envelope; they are not added to the
-general direct-operation allowlist. Activation and post-deploy verification fail when an active
-delegation cannot receive the envelope. The same override bounds the synchronous legacy community
-bridge to one 2.5-second attempt and keeps successful pages for two minutes; optional member-rank
-enrichment has a 150 ms response budget.
+general direct-operation allowlist. Activation and post-deploy verification fail when even one
+active delegation cannot receive this envelope. The same override bounds the synchronous legacy
+community bridge to one 2.5-second attempt and keeps successful membership pages for two minutes,
+so a slow legacy rank/summary source cannot hold the Nano UI for the former 20-second retry window.
+Optional member-rank enrichment has a 150 ms response budget.
+The post-deploy gate also reads the public coach-game and tournament discovery contracts through
+the running API with a six-second deadline. `health/ready` is not evidence for these upstreams:
+coach-game discovery requires the configured Viva end-user schedule source to accept the Nano API
+read, and tournament discovery requires `LEGACY_GAMES_PUBLIC_BASE_URL/api/tournaments` to respond
+within that budget. A `COACH_GAME_DISCOVERY_UNAVAILABLE`, `TOURNAMENT_DISCOVERY_UNAVAILABLE`, HTML
+fallback or timeout fails the release even when the containers remain healthy.
 
 Every confirmed staging deployment creates a PostgreSQL custom-format archive under
 `/opt/phub/backups/postgres-pre-<release>-<UTC timestamp>.dump`. The workflow

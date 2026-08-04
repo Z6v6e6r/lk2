@@ -19,6 +19,12 @@ const REDACT_PATHS = [
   'message.content',
 ];
 
+export function shouldIgnoreUndiciRequestPath(path: string): boolean {
+  if (path.includes('/sms/authentication-code')) return true;
+  if (!path.includes('/lk/communities')) return false;
+  return /[?&](?:phone|clientId)=/u.test(path);
+}
+
 export function createLogger(service: string, level: string, release = 'development'): Logger {
   const options: LoggerOptions = {
     level,
@@ -54,12 +60,13 @@ export function startTelemetry(options: {
     instrumentations: [
       getNodeAutoInstrumentations({
         '@opentelemetry/instrumentation-http': {
-          redactedQueryParams: ['phoneNumber', 'code', 'tenantKey'],
+          redactedQueryParams: ['phoneNumber', 'phone', 'clientId', 'code', 'tenantKey'],
         },
         '@opentelemetry/instrumentation-undici': {
-          // Viva's legacy SMS endpoint puts the phone in its query string.
-          // The adapter emits a safe custom metric instead of a URL-bearing span.
-          ignoreRequestHook: (request) => request.path.includes('/sms/authentication-code'),
+          // Temporary legacy endpoints put identity values in their query string. Their adapters
+          // emit safe custom metrics instead of URL-bearing spans, so auto-instrumentation must not
+          // export those raw paths.
+          ignoreRequestHook: (request) => shouldIgnoreUndiciRequestPath(request.path),
         },
       }),
     ],

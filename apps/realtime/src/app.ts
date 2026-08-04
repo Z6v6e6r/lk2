@@ -3,23 +3,40 @@ import { randomUUID } from 'node:crypto';
 import websocket from '@fastify/websocket';
 import { REALTIME_TICKET_SCOPE } from '@phub/auth';
 import type { AppConfig } from '@phub/config';
-import type { MessagingRepository } from '@phub/database';
+import type { MessagingRepository, RealtimeAuthorizationRepository } from '@phub/database';
 import Fastify from 'fastify';
 import type Redis from 'ioredis';
 import { jwtVerify } from 'jose';
 import type { Logger } from 'pino';
 import { WebSocket, type RawData } from 'ws';
 
+import type { RealtimeMetricRecorder } from './operational-metrics.js';
+
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const CORRELATION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/;
-const MAX_SUBSCRIPTIONS_PER_CONNECTION = 100;
-const MAX_SOCKET_BUFFER_BYTES = 512 * 1024;
 const COMMANDS_PER_MINUTE = 60;
 const SUBSCRIPTIONS_PER_MINUTE = 20;
+const AUTHENTICATION_TIMEOUT_MS = 5_000;
 const AUTHORITY_RECHECK_INTERVAL_MS = 15_000;
 
 export interface RealtimeTicketConsumer {
   consume(ticketId: string, sessionId: string): Promise<boolean>;
+}
+
+export interface CommunityRealtimeEventHint {
+  readonly tenantId: string;
+  readonly communityId: string;
+  readonly sequence: number;
+  readonly eventType: string;
+  readonly targetType: 'POST' | 'COMMENT' | 'REACTION';
+  readonly targetId: string;
+  readonly targetRevision: number;
+  readonly targetStatus: string | null;
+  readonly occurredAt: string;
+}
+
+export interface CommunityRealtimeFanoutTarget {
+  publishCommunityEvent(event: CommunityRealtimeEventHint): Promise<void>;
 }
 
 export interface RealtimeMessageCreatedEvent {
@@ -31,23 +48,26 @@ export interface RealtimeMessageCreatedEvent {
   readonly occurredAt: string;
 }
 
+declare module 'fastify' {
+  interface FastifyInstance {
+    publishCommunityEvent(event: CommunityRealtimeEventHint): Promise<void>;
+    publishMessageCreated(event: RealtimeMessageCreatedEvent): Promise<number>;
+  }
+}
+
 interface ConnectionContext {
   readonly socket: WebSocket;
   readonly tenantId: string;
   readonly tenantKey: string;
   readonly userId: string;
   readonly sessionId: string;
-  readonly subscriptions: Set<string>;
+  readonly communitySubscriptions: Set<string>;
+  readonly conversationSubscriptions: Set<string>;
   commandTail: Promise<void>;
   rateWindowStartedAt: number;
   commandCount: number;
   subscriptionCount: number;
-}
-
-declare module 'fastify' {
-  interface FastifyInstance {
-    publishMessageCreated(event: RealtimeMessageCreatedEvent): Promise<number>;
-  }
+  heartbeatAlive: boolean;
 }
 
 function safeCorrelationId(header: string | readonly string[] | undefined): string {
@@ -60,9 +80,15 @@ function rawDataToText(data: RawData): string {
   return data.toString('utf8');
 }
 
-function send(socket: WebSocket, payload: Record<string, unknown>): boolean {
-  if (socket.readyState !== 1) return false;
-  if (socket.bufferedAmount > MAX_SOCKET_BUFFER_BYTES) {
+function send(
+  socket: WebSocket,
+  payload: Record<string, unknown>,
+  maximumBufferedBytes: number,
+  metrics?: RealtimeMetricRecorder,
+): boolean {
+  if (socket.readyState !== WebSocket.OPEN) return false;
+  if (socket.bufferedAmount > maximumBufferedBytes) {
+    metrics?.recordSocketBackpressureClosure();
     socket.close(1013, 'Backpressure');
     return false;
   }
@@ -74,14 +100,20 @@ function protocolError(
   socket: WebSocket,
   code: string,
   correlationId: string,
-  conversationId?: string,
+  maximumBufferedBytes: number,
+  context?: { readonly communityId?: string; readonly conversationId?: string },
 ): void {
-  send(socket, {
-    type: 'error',
-    code,
-    correlationId,
-    ...(conversationId ? { conversationId } : {}),
-  });
+  send(
+    socket,
+    {
+      type: 'error',
+      code,
+      correlationId,
+      ...(context?.communityId ? { communityId: context.communityId } : {}),
+      ...(context?.conversationId ? { conversationId: context.conversationId } : {}),
+    },
+    maximumBufferedBytes,
+  );
 }
 
 function consumeRateBudget(connection: ConnectionContext, subscription: boolean): boolean {
@@ -104,24 +136,40 @@ export async function buildRealtimeApp(options: {
   readonly logger: Logger;
   readonly redis?: Pick<Redis, 'ping'>;
   readonly ticketConsumer?: RealtimeTicketConsumer;
+  readonly authorizationRepository?: Pick<
+    RealtimeAuthorizationRepository,
+    'authorizeConnection' | 'authorizeCommunitySubscription' | 'authorizeCommunityFanoutRecipients'
+  >;
   readonly messagingRepository?: Pick<
     MessagingRepository,
     'authorizeRealtimeConnection' | 'authorizeRealtimeSubscription' | 'listRealtimeRecipientUserIds'
   >;
   readonly databaseReady?: () => Promise<boolean>;
   readonly rabbitReady?: () => boolean;
+  readonly metrics?: RealtimeMetricRecorder;
 }) {
   const connections = new Set<ConnectionContext>();
-  const fanoutTails = new Map<string, Promise<number>>();
+  const deliveredSequences = new Map<string, number>();
+  const communityFanoutTails = new Map<string, Promise<void>>();
+  const messageFanoutTails = new Map<string, Promise<number>>();
+  let pendingConnections = 0;
   const app = Fastify({
     loggerInstance: options.logger,
     trustProxy: false,
     requestIdHeader: false,
     genReqId: (request) => safeCorrelationId(request.headers['x-correlation-id']),
   });
-  await app.register(websocket, { options: { maxPayload: 64 * 1024 } });
+  await app.register(websocket, { options: { maxPayload: 16 * 1_024 } });
 
   const connectionAuthorized = async (connection: ConnectionContext): Promise<boolean> => {
+    if (options.authorizationRepository) {
+      const result = await options.authorizationRepository.authorizeConnection({
+        tenantId: connection.tenantId,
+        userId: connection.userId,
+        sessionId: connection.sessionId,
+      });
+      return result.outcome === 'ok';
+    }
     if (!options.messagingRepository) return false;
     const result = await options.messagingRepository.authorizeRealtimeConnection({
       tenantId: connection.tenantId,
@@ -131,7 +179,75 @@ export async function buildRealtimeApp(options: {
     return result.outcome === 'ok';
   };
 
-  const publish = async (event: RealtimeMessageCreatedEvent): Promise<number> => {
+  const messagingConnectionAuthorization = async (connection: ConnectionContext) => {
+    if (!options.messagingRepository) return false;
+    return options.messagingRepository.authorizeRealtimeConnection({
+      tenantId: connection.tenantId,
+      userId: connection.userId,
+      sessionId: connection.sessionId,
+    });
+  };
+
+  const deliverCommunityEvent = async (event: CommunityRealtimeEventHint): Promise<void> => {
+    if (!options.config.COMMUNITIES_REALTIME_ENABLED || !options.authorizationRepository) return;
+    const key = `${event.tenantId}:${event.communityId}`;
+    if (event.sequence <= (deliveredSequences.get(key) ?? 0)) return;
+    const subscribers = [...connections].filter(
+      (connection) =>
+        connection.tenantId === event.tenantId &&
+        connection.communitySubscriptions.has(event.communityId),
+    );
+    let deliveredRecipients = 0;
+    for (let offset = 0; offset < subscribers.length; offset += 500) {
+      const batch = subscribers.slice(offset, offset + 500);
+      const authorizedSessionIds =
+        await options.authorizationRepository.authorizeCommunityFanoutRecipients({
+          tenantId: event.tenantId,
+          communityId: event.communityId,
+          recipients: batch.map(({ userId, sessionId }) => ({ userId, sessionId })),
+        });
+      for (const connection of batch) {
+        if (!authorizedSessionIds.has(connection.sessionId)) {
+          connection.communitySubscriptions.delete(event.communityId);
+          continue;
+        }
+        if (
+          send(
+            connection.socket,
+            {
+              type: 'community.event',
+              communityId: event.communityId,
+              sequence: event.sequence,
+              eventType: event.eventType,
+              targetType: event.targetType,
+              targetId: event.targetId,
+              targetRevision: event.targetRevision,
+              targetStatus: event.targetStatus,
+              occurredAt: event.occurredAt,
+            },
+            options.config.REALTIME_MAX_SOCKET_BUFFER_BYTES,
+            options.metrics,
+          )
+        ) {
+          deliveredRecipients += 1;
+        }
+      }
+    }
+    options.metrics?.recordCommunityFanout(deliveredRecipients);
+    deliveredSequences.set(key, event.sequence);
+  };
+
+  const publishCommunityEvent = (event: CommunityRealtimeEventHint): Promise<void> => {
+    const key = `${event.tenantId}:${event.communityId}`;
+    const previous = communityFanoutTails.get(key) ?? Promise.resolve();
+    const next = previous.catch(() => undefined).then(() => deliverCommunityEvent(event));
+    communityFanoutTails.set(key, next);
+    return next.finally(() => {
+      if (communityFanoutTails.get(key) === next) communityFanoutTails.delete(key);
+    });
+  };
+
+  const deliverMessageCreated = async (event: RealtimeMessageCreatedEvent): Promise<number> => {
     if (!options.messagingRepository) return 0;
     const recipients = new Set(
       await options.messagingRepository.listRealtimeRecipientUserIds({
@@ -145,25 +261,34 @@ export async function buildRealtimeApp(options: {
     for (const connection of [...connections]) {
       if (
         connection.tenantId !== event.tenantId ||
-        !connection.subscriptions.has(event.conversationId) ||
+        !connection.conversationSubscriptions.has(event.conversationId) ||
         !recipients.has(connection.userId)
       ) {
         continue;
       }
-      if (!(await connectionAuthorized(connection))) {
-        connections.delete(connection);
-        connection.socket.close(4401, 'Session revoked');
+      const authority = await messagingConnectionAuthorization(connection);
+      if (!authority || authority.outcome !== 'ok') {
+        connection.conversationSubscriptions.clear();
+        if (authority && authority.outcome === 'revoked') {
+          connections.delete(connection);
+          connection.socket.close(4401, 'Session revoked');
+        }
         continue;
       }
       if (
-        send(connection.socket, {
-          type: 'message.created',
-          conversationId: event.conversationId,
-          messageId: event.messageId,
-          sequence: event.sequence,
-          correlationId: event.correlationId,
-          occurredAt: event.occurredAt,
-        })
+        send(
+          connection.socket,
+          {
+            type: 'message.created',
+            conversationId: event.conversationId,
+            messageId: event.messageId,
+            sequence: event.sequence,
+            correlationId: event.correlationId,
+            occurredAt: event.occurredAt,
+          },
+          options.config.REALTIME_MAX_SOCKET_BUFFER_BYTES,
+          options.metrics,
+        )
       ) {
         delivered += 1;
       }
@@ -171,21 +296,15 @@ export async function buildRealtimeApp(options: {
     return delivered;
   };
 
-  app.decorate('publishMessageCreated', (event: RealtimeMessageCreatedEvent): Promise<number> => {
+  const publishMessageCreated = (event: RealtimeMessageCreatedEvent): Promise<number> => {
     const key = `${event.tenantId}:${event.conversationId}`;
-    const previous = fanoutTails.get(key) ?? Promise.resolve(0);
-    const current = previous.catch(() => 0).then(() => publish(event));
-    fanoutTails.set(key, current);
-    void current.then(
-      () => {
-        if (fanoutTails.get(key) === current) fanoutTails.delete(key);
-      },
-      () => {
-        if (fanoutTails.get(key) === current) fanoutTails.delete(key);
-      },
-    );
-    return current;
-  });
+    const previous = messageFanoutTails.get(key) ?? Promise.resolve(0);
+    const next = previous.catch(() => 0).then(() => deliverMessageCreated(event));
+    messageFanoutTails.set(key, next);
+    return next.finally(() => {
+      if (messageFanoutTails.get(key) === next) messageFanoutTails.delete(key);
+    });
+  };
 
   app.addHook('onRequest', async (request, reply) => {
     reply.header('X-Correlation-ID', request.id);
@@ -202,18 +321,37 @@ export async function buildRealtimeApp(options: {
         : Promise.resolve(false),
       options.databaseReady?.().catch(() => false) ?? Promise.resolve(false),
     ]);
-    const rabbitReady = options.rabbitReady?.() ?? false;
+    const rabbitReady = options.rabbitReady?.() === true;
     if (!redisReady || !databaseReady || !rabbitReady) {
       return reply.status(503).send({
         status: 'not_ready',
         redis: redisReady,
         database: databaseReady,
         rabbit: rabbitReady,
+        communities: options.config.COMMUNITIES_REALTIME_ENABLED,
       });
     }
-    return { status: 'ready', redis: true, database: true, rabbit: true };
+    return {
+      status: 'ready',
+      redis: true,
+      database: true,
+      rabbit: rabbitReady,
+      communities: options.config.COMMUNITIES_REALTIME_ENABLED,
+    };
   });
 
+  const heartbeatTimer = setInterval(() => {
+    for (const connection of [...connections]) {
+      if (!connection.heartbeatAlive) {
+        connections.delete(connection);
+        connection.socket.terminate();
+        continue;
+      }
+      connection.heartbeatAlive = false;
+      connection.socket.ping();
+    }
+  }, options.config.REALTIME_HEARTBEAT_INTERVAL_MS);
+  heartbeatTimer.unref();
   const authorityTimer = setInterval(() => {
     for (const connection of [...connections]) {
       void connectionAuthorized(connection)
@@ -230,20 +368,42 @@ export async function buildRealtimeApp(options: {
     }
   }, AUTHORITY_RECHECK_INTERVAL_MS);
   authorityTimer.unref();
-  app.addHook('onClose', () => clearInterval(authorityTimer));
+  app.addHook('onClose', () => {
+    clearInterval(heartbeatTimer);
+    clearInterval(authorityTimer);
+    communityFanoutTails.clear();
+    messageFanoutTails.clear();
+    deliveredSequences.clear();
+  });
 
   app.get<{ Params: { tenantKey: string } }>(
     '/realtime/v1/:tenantKey',
     { websocket: true },
     (socket: WebSocket, request) => {
+      if (connections.size + pendingConnections >= options.config.REALTIME_MAX_CONNECTIONS) {
+        options.metrics?.recordConnectionRejected('capacity');
+        socket.close(1013, 'Capacity');
+        return;
+      }
+      pendingConnections += 1;
+      let pending = true;
       let closed = false;
+      let registered = false;
       let connection: ConnectionContext | undefined;
-      const authenticationTimeout = setTimeout(() => socket.close(4401, 'Unauthorized'), 5_000);
+      const authenticationTimeout = setTimeout(
+        () => socket.close(4401, 'Unauthorized'),
+        AUTHENTICATION_TIMEOUT_MS,
+      );
       const cleanup = (): void => {
         if (closed) return;
         closed = true;
         clearTimeout(authenticationTimeout);
         if (connection) connections.delete(connection);
+        if (registered) options.metrics?.recordConnectionClosed();
+        if (pending) {
+          pending = false;
+          pendingConnections = Math.max(0, pendingConnections - 1);
+        }
       };
       socket.once('close', cleanup);
       socket.once('message', (rawMessage) => {
@@ -261,9 +421,11 @@ export async function buildRealtimeApp(options: {
             ) {
               throw new Error('Authentication message invalid');
             }
+            const realtimeSecret = options.config.JWT_REALTIME_SECRET;
+            if (!realtimeSecret) throw new Error('Realtime signing key unavailable');
             const { payload } = await jwtVerify(
               message.ticket,
-              new TextEncoder().encode(options.config.JWT_ACCESS_SECRET),
+              new TextEncoder().encode(realtimeSecret),
               {
                 issuer: options.config.JWT_ISSUER,
                 audience: options.config.JWT_REALTIME_AUDIENCE,
@@ -293,24 +455,40 @@ export async function buildRealtimeApp(options: {
               tenantKey: request.params.tenantKey,
               userId: payload.sub,
               sessionId: payload.sid,
-              subscriptions: new Set(),
+              communitySubscriptions: new Set(),
+              conversationSubscriptions: new Set(),
               commandTail: Promise.resolve(),
               rateWindowStartedAt: Date.now(),
               commandCount: 0,
               subscriptionCount: 0,
+              heartbeatAlive: true,
             };
             connection = authenticatedConnection;
             if (!(await connectionAuthorized(authenticatedConnection))) {
               throw new Error('Session revoked');
             }
             if (closed || socket.readyState !== WebSocket.OPEN) return;
+            pending = false;
+            pendingConnections = Math.max(0, pendingConnections - 1);
             connections.add(authenticatedConnection);
-            clearTimeout(authenticationTimeout);
-            send(socket, {
-              type: 'connection.ready',
-              correlationId: request.id,
-              occurredAt: new Date().toISOString(),
+            registered = true;
+            options.metrics?.recordAuthentication('accepted');
+            options.metrics?.recordConnectionOpened();
+            socket.on('pong', () => {
+              authenticatedConnection.heartbeatAlive = true;
             });
+            clearTimeout(authenticationTimeout);
+            send(
+              socket,
+              {
+                type: 'connection.ready',
+                correlationId: request.id,
+                occurredAt: new Date().toISOString(),
+                communitySubscriptions: options.config.COMMUNITIES_REALTIME_ENABLED,
+              },
+              options.config.REALTIME_MAX_SOCKET_BUFFER_BYTES,
+              options.metrics,
+            );
 
             socket.on('message', (rawCommand) => {
               authenticatedConnection.commandTail = authenticatedConnection.commandTail
@@ -321,9 +499,17 @@ export async function buildRealtimeApp(options: {
                     if (typeof command !== 'object' || command === null || !('type' in command)) {
                       throw new Error('Command invalid');
                     }
-                    const subscription = command.type === 'conversation.subscribe';
+                    const subscription =
+                      command.type === 'community.subscribe' ||
+                      command.type === 'conversation.subscribe';
                     if (!consumeRateBudget(authenticatedConnection, subscription)) {
-                      protocolError(socket, 'REALTIME_RATE_LIMITED', request.id);
+                      options.metrics?.recordConnectionRejected('rate_limited');
+                      protocolError(
+                        socket,
+                        'REALTIME_RATE_LIMITED',
+                        request.id,
+                        options.config.REALTIME_MAX_SOCKET_BUFFER_BYTES,
+                      );
                       socket.close(4429, 'Rate limit');
                       return;
                     }
@@ -332,96 +518,262 @@ export async function buildRealtimeApp(options: {
                       return;
                     }
                     if (command.type === 'ping') {
-                      send(socket, {
-                        type: 'pong',
-                        correlationId: request.id,
-                        occurredAt: new Date().toISOString(),
-                      });
+                      authenticatedConnection.heartbeatAlive = true;
+                      send(
+                        socket,
+                        {
+                          type: 'pong',
+                          correlationId: request.id,
+                          occurredAt: new Date().toISOString(),
+                        },
+                        options.config.REALTIME_MAX_SOCKET_BUFFER_BYTES,
+                      );
+                      return;
+                    }
+                    if (command.type === 'conversation.subscribe') {
+                      const conversationId =
+                        'conversationId' in command && typeof command.conversationId === 'string'
+                          ? command.conversationId
+                          : undefined;
+                      const afterSequence =
+                        'afterSequence' in command && typeof command.afterSequence === 'number'
+                          ? command.afterSequence
+                          : undefined;
+                      if (
+                        !conversationId ||
+                        !UUID_PATTERN.test(conversationId) ||
+                        afterSequence === undefined ||
+                        !Number.isSafeInteger(afterSequence) ||
+                        afterSequence < 0
+                      ) {
+                        protocolError(
+                          socket,
+                          'REALTIME_COMMAND_INVALID',
+                          request.id,
+                          options.config.REALTIME_MAX_SOCKET_BUFFER_BYTES,
+                        );
+                        return;
+                      }
+                      if (!options.messagingRepository) {
+                        protocolError(
+                          socket,
+                          'REALTIME_STORE_UNAVAILABLE',
+                          request.id,
+                          options.config.REALTIME_MAX_SOCKET_BUFFER_BYTES,
+                          { conversationId },
+                        );
+                        return;
+                      }
+                      const messagingAuthority =
+                        await messagingConnectionAuthorization(authenticatedConnection);
+                      if (!messagingAuthority || messagingAuthority.outcome === 'disabled') {
+                        authenticatedConnection.conversationSubscriptions.clear();
+                        protocolError(
+                          socket,
+                          'REALTIME_MESSAGING_DISABLED',
+                          request.id,
+                          options.config.REALTIME_MAX_SOCKET_BUFFER_BYTES,
+                          { conversationId },
+                        );
+                        return;
+                      }
+                      if (messagingAuthority.outcome === 'revoked') {
+                        socket.close(4401, 'Session revoked');
+                        return;
+                      }
+                      if (
+                        !authenticatedConnection.conversationSubscriptions.has(conversationId) &&
+                        authenticatedConnection.conversationSubscriptions.size +
+                          authenticatedConnection.communitySubscriptions.size >=
+                          options.config.REALTIME_MAX_SUBSCRIPTIONS_PER_CONNECTION
+                      ) {
+                        protocolError(
+                          socket,
+                          'REALTIME_SUBSCRIPTION_LIMIT',
+                          request.id,
+                          options.config.REALTIME_MAX_SOCKET_BUFFER_BYTES,
+                          { conversationId },
+                        );
+                        return;
+                      }
+                      const result =
+                        await options.messagingRepository.authorizeRealtimeSubscription({
+                          tenantId: authenticatedConnection.tenantId,
+                          userId: authenticatedConnection.userId,
+                          conversationId,
+                        });
+                      if (result.outcome === 'disabled') {
+                        protocolError(
+                          socket,
+                          'REALTIME_MESSAGING_DISABLED',
+                          request.id,
+                          options.config.REALTIME_MAX_SOCKET_BUFFER_BYTES,
+                          { conversationId },
+                        );
+                        return;
+                      }
+                      if (result.outcome === 'not_found') {
+                        protocolError(
+                          socket,
+                          'CONVERSATION_NOT_FOUND',
+                          request.id,
+                          options.config.REALTIME_MAX_SOCKET_BUFFER_BYTES,
+                          { conversationId },
+                        );
+                        return;
+                      }
+
+                      authenticatedConnection.conversationSubscriptions.add(conversationId);
+                      send(
+                        socket,
+                        {
+                          type: 'conversation.subscribed',
+                          conversationId,
+                          latestSequence: result.latestSequence,
+                          correlationId: request.id,
+                        },
+                        options.config.REALTIME_MAX_SOCKET_BUFFER_BYTES,
+                        options.metrics,
+                      );
+                      if (afterSequence !== result.latestSequence) {
+                        send(
+                          socket,
+                          {
+                            type: 'conversation.gap',
+                            conversationId,
+                            afterSequence:
+                              afterSequence > result.latestSequence ? 0 : afterSequence,
+                            latestSequence: result.latestSequence,
+                            reset: afterSequence > result.latestSequence,
+                            recovery: 'HTTP',
+                            correlationId: request.id,
+                          },
+                          options.config.REALTIME_MAX_SOCKET_BUFFER_BYTES,
+                          options.metrics,
+                        );
+                      }
+                      return;
+                    }
+                    const communityId =
+                      'communityId' in command && typeof command.communityId === 'string'
+                        ? command.communityId
+                        : undefined;
+                    if (!communityId || !UUID_PATTERN.test(communityId)) {
+                      options.metrics?.recordCommunitySubscription('invalid');
+                      protocolError(
+                        socket,
+                        'REALTIME_COMMAND_INVALID',
+                        request.id,
+                        options.config.REALTIME_MAX_SOCKET_BUFFER_BYTES,
+                      );
+                      return;
+                    }
+                    if (command.type === 'community.unsubscribe') {
+                      authenticatedConnection.communitySubscriptions.delete(communityId);
+                      send(
+                        socket,
+                        { type: 'community.unsubscribed', communityId, correlationId: request.id },
+                        options.config.REALTIME_MAX_SOCKET_BUFFER_BYTES,
+                        options.metrics,
+                      );
+                      return;
+                    }
+                    if (command.type !== 'community.subscribe') {
+                      options.metrics?.recordCommunitySubscription('invalid');
+                      protocolError(
+                        socket,
+                        'REALTIME_COMMAND_INVALID',
+                        request.id,
+                        options.config.REALTIME_MAX_SOCKET_BUFFER_BYTES,
+                      );
                       return;
                     }
                     if (
-                      command.type !== 'conversation.subscribe' ||
-                      !('conversationId' in command) ||
-                      typeof command.conversationId !== 'string' ||
-                      !UUID_PATTERN.test(command.conversationId) ||
-                      !('afterSequence' in command) ||
-                      typeof command.afterSequence !== 'number' ||
-                      !Number.isSafeInteger(command.afterSequence) ||
-                      command.afterSequence < 0
+                      !authenticatedConnection.communitySubscriptions.has(communityId) &&
+                      authenticatedConnection.communitySubscriptions.size +
+                        authenticatedConnection.conversationSubscriptions.size >=
+                        options.config.REALTIME_MAX_SUBSCRIPTIONS_PER_CONNECTION
                     ) {
-                      protocolError(socket, 'REALTIME_COMMAND_INVALID', request.id);
-                      return;
-                    }
-                    if (
-                      !authenticatedConnection.subscriptions.has(command.conversationId) &&
-                      authenticatedConnection.subscriptions.size >= MAX_SUBSCRIPTIONS_PER_CONNECTION
-                    ) {
+                      options.metrics?.recordCommunitySubscription('limit');
                       protocolError(
                         socket,
                         'REALTIME_SUBSCRIPTION_LIMIT',
                         request.id,
-                        command.conversationId,
+                        options.config.REALTIME_MAX_SOCKET_BUFFER_BYTES,
+                        { communityId },
                       );
                       return;
                     }
-                    if (!options.messagingRepository) {
+                    if (!options.authorizationRepository) {
+                      options.metrics?.recordCommunitySubscription('disabled');
                       protocolError(
                         socket,
                         'REALTIME_STORE_UNAVAILABLE',
                         request.id,
-                        command.conversationId,
+                        options.config.REALTIME_MAX_SOCKET_BUFFER_BYTES,
+                        { communityId },
                       );
                       return;
                     }
-                    const result = await options.messagingRepository.authorizeRealtimeSubscription({
-                      tenantId: authenticatedConnection.tenantId,
-                      userId: authenticatedConnection.userId,
-                      conversationId: command.conversationId,
-                    });
-                    if (result.outcome === 'disabled') {
-                      protocolError(
-                        socket,
-                        'REALTIME_MESSAGING_DISABLED',
-                        request.id,
-                        command.conversationId,
-                      );
-                      return;
-                    }
-                    if (result.outcome === 'not_found') {
-                      protocolError(
-                        socket,
-                        'CONVERSATION_NOT_FOUND',
-                        request.id,
-                        command.conversationId,
-                      );
-                      return;
-                    }
-
-                    authenticatedConnection.subscriptions.add(command.conversationId);
-                    send(socket, {
-                      type: 'conversation.subscribed',
-                      conversationId: command.conversationId,
-                      latestSequence: result.latestSequence,
-                      correlationId: request.id,
-                    });
-                    if (command.afterSequence !== result.latestSequence) {
-                      send(socket, {
-                        type: 'conversation.gap',
-                        conversationId: command.conversationId,
-                        afterSequence:
-                          command.afterSequence > result.latestSequence ? 0 : command.afterSequence,
-                        latestSequence: result.latestSequence,
-                        reset: command.afterSequence > result.latestSequence,
-                        recovery: 'HTTP',
-                        correlationId: request.id,
+                    const authorization =
+                      await options.authorizationRepository.authorizeCommunitySubscription({
+                        tenantId: authenticatedConnection.tenantId,
+                        userId: authenticatedConnection.userId,
+                        communityId,
+                        enabled: options.config.COMMUNITIES_REALTIME_ENABLED,
                       });
+                    if (authorization.outcome === 'disabled') {
+                      options.metrics?.recordCommunitySubscription('disabled');
+                      protocolError(
+                        socket,
+                        'COMMUNITIES_REALTIME_DISABLED',
+                        request.id,
+                        options.config.REALTIME_MAX_SOCKET_BUFFER_BYTES,
+                        { communityId },
+                      );
+                      return;
                     }
+                    if (authorization.outcome === 'not_found') {
+                      options.metrics?.recordCommunitySubscription('not_found');
+                      protocolError(
+                        socket,
+                        'COMMUNITY_NOT_FOUND',
+                        request.id,
+                        options.config.REALTIME_MAX_SOCKET_BUFFER_BYTES,
+                        { communityId },
+                      );
+                      return;
+                    }
+                    if (authorization.outcome !== 'ok') return;
+                    options.metrics?.recordCommunitySubscription('accepted');
+                    authenticatedConnection.communitySubscriptions.add(communityId);
+                    send(
+                      socket,
+                      {
+                        type: 'community.subscribed',
+                        communityId,
+                        communityRevision: authorization.communityRevision,
+                        membershipRevision: authorization.membershipRevision,
+                        latestSequence: authorization.latestSequence,
+                        delivery: 'DURABLE_SEQUENCE_HTTP_RECOVERY',
+                        correlationId: request.id,
+                      },
+                      options.config.REALTIME_MAX_SOCKET_BUFFER_BYTES,
+                      options.metrics,
+                    );
                   } catch {
-                    protocolError(socket, 'REALTIME_COMMAND_INVALID', request.id);
+                    protocolError(
+                      socket,
+                      'REALTIME_COMMAND_INVALID',
+                      request.id,
+                      options.config.REALTIME_MAX_SOCKET_BUFFER_BYTES,
+                    );
                   }
                 });
             });
           } catch {
+            options.metrics?.recordAuthentication('rejected');
+            options.metrics?.recordConnectionRejected('unauthorized');
             clearTimeout(authenticationTimeout);
             socket.close(4401, 'Unauthorized');
           }
@@ -430,5 +782,5 @@ export async function buildRealtimeApp(options: {
     },
   );
 
-  return app;
+  return Object.assign(app, { publishCommunityEvent, publishMessageCreated });
 }
