@@ -121,7 +121,13 @@ describe('Nano presentation release contract', () => {
       'cmp "$backup_dir/staging.override.env" /opt/phub/staging.override.env',
     );
     expect(messagingReleaseVerification).toContain('default_transaction_read_only=on');
-    expect(messagingReleaseVerification).toContain("runtime_state\" = 'true|true|true'");
+    expect(messagingReleaseVerification).toContain(
+      "concat_ws('|', http_enabled::text, direct_enabled::text, realtime_enabled::text)",
+    );
+    expect(messagingReleaseVerification).toContain(
+      'require_equal "$runtime_state" \'true|true|true\'',
+    );
+    expect(messagingReleaseVerification).toContain('Messaging test release verification failed:');
     expect(messagingReleaseVerification).toContain('0057_messaging_runtime.sql');
     expect(messagingReleaseVerification).toContain('"AUTH_REQUIRED"');
     expect(messagingReleaseVerification).toContain('/realtime/health/ready');
