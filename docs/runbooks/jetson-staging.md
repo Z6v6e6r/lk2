@@ -16,6 +16,11 @@ read-only, redacted test-player check. It reports only the masked suffix, PadlHu
 and Viva-delegation status, refresh timestamps/error codes, and Home projection freshness. The
 diagnostic never reads token ciphertext or Viva subject values and forces a read-only PostgreSQL
 transaction.
+An isolated staging user-access change uses the same workflow with `access_target_user_id`,
+`access_actor_id`, and the complete `access_roles` and `access_permissions` sets. It cannot be
+combined with deployment or diagnostics. The workflow always previews current versus desired
+access first; applying additionally requires `access_apply_confirmation=APPLY_USER_ACCESS`. The
+operator locks the target row and records `USER_ACCESS_CHANGED` with old/new JSON in the audit log.
 The same read-only mode fingerprints the repository `0057_messaging_runtime.sql` migration and
 reports only structural PostgreSQL metadata for its three tables: matching migration-journal rows,
 columns, constraints, indexes, RLS flags and policies. The remote `psql` session enforces both

@@ -28,6 +28,26 @@ on:
         description: Optional comma-separated phone suffixes for read-only player/delegation diagnostics
         required: false
         type: string
+      access_target_user_id:
+        description: Target PadlHub user UUID for an isolated audited access operation
+        required: false
+        type: string
+      access_roles:
+        description: Complete comma-separated desired role set
+        required: false
+        type: string
+      access_permissions:
+        description: Complete comma-separated desired permission set
+        required: false
+        type: string
+      access_actor_id:
+        description: Active PadlHub operator UUID recorded in the audit log
+        required: false
+        type: string
+      access_apply_confirmation:
+        description: Leave empty for dry-run or type APPLY_USER_ACCESS to apply
+        required: false
+        type: string
       recover_udisks:
         description: Restart a leaking udisks2 service, then run diagnostics
         required: false
@@ -47,6 +67,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       mode: ${{ steps.request.outputs.mode }}
+      access_apply: ${{ steps.request.outputs.access_apply }}
     steps:
       - id: request
         name: Validate requested staging operation
@@ -57,6 +78,11 @@ jobs:
           ROUTING_APPLY_CONFIRMATION: ${{ inputs.routing_apply_confirmation }}
           DIAGNOSE_HOME: ${{ inputs.diagnose_home }}
           DIAGNOSTIC_PHONE_LAST4: ${{ inputs.diagnostic_phone_last4 }}
+          ACCESS_TARGET_USER_ID: ${{ inputs.access_target_user_id }}
+          ACCESS_ROLES: ${{ inputs.access_roles }}
+          ACCESS_PERMISSIONS: ${{ inputs.access_permissions }}
+          ACCESS_ACTOR_ID: ${{ inputs.access_actor_id }}
+          ACCESS_APPLY_CONFIRMATION: ${{ inputs.access_apply_confirmation }}
           RECOVER_UDISKS: ${{ inputs.recover_udisks }}
           REQUEST_REF: ${{ github.ref }}
         run: |
@@ -64,6 +90,40 @@ jobs:
           diagnostics_requested=false
           if [ "$DIAGNOSE_HOME" = 'true' ] || [ "$RECOVER_UDISKS" = 'true' ] || [ -n "$DIAGNOSTIC_PHONE_LAST4" ]; then
             diagnostics_requested=true
+          fi
+          access_requested=false
+          if [ -n "$ACCESS_TARGET_USER_ID$ACCESS_ROLES$ACCESS_PERMISSIONS$ACCESS_ACTOR_ID$ACCESS_APPLY_CONFIRMATION" ]; then
+            access_requested=true
+          fi
+          if [ "$access_requested" = 'true' ]; then
+            if [ "$diagnostics_requested" = 'true' ] || [ -n "$DEPLOY_CONFIRMATION" ]; then
+              echo '::error::User-access operation cannot be combined with diagnostics or deployment.'
+              exit 1
+            fi
+            if ! printf '%s' "$ACCESS_TARGET_USER_ID" | grep -Eiq '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'; then
+              echo '::error::Target user ID must be a UUID.'
+              exit 1
+            fi
+            if ! printf '%s' "$ACCESS_ACTOR_ID" | grep -Eiq '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'; then
+              echo '::error::Access actor ID must be a UUID.'
+              exit 1
+            fi
+            for access_values in "$ACCESS_ROLES" "$ACCESS_PERMISSIONS"; do
+              if ! printf '%s' "$access_values" | grep -Eq '^[a-z][a-z0-9._-]{1,63}(,[a-z][a-z0-9._-]{1,63})*$'; then
+                echo '::error::Roles and permissions must be complete comma-separated access identifiers.'
+                exit 1
+              fi
+            done
+            case "$ACCESS_APPLY_CONFIRMATION" in
+              '') printf '%s\n' 'access_apply=false' >> "$GITHUB_OUTPUT" ;;
+              APPLY_USER_ACCESS) printf '%s\n' 'access_apply=true' >> "$GITHUB_OUTPUT" ;;
+              *)
+                echo '::error::Access apply requires the exact APPLY_USER_ACCESS confirmation.'
+                exit 1
+                ;;
+            esac
+            printf '%s\n' 'mode=user-access' >> "$GITHUB_OUTPUT"
+            exit 0
           fi
           if [ "$diagnostics_requested" = 'true' ]; then
             if [ -n "$DEPLOY_CONFIRMATION" ]; then
@@ -98,6 +158,70 @@ jobs:
             exit 1
           fi
           printf '%s\n' 'mode=deploy' >> "$GITHUB_OUTPUT"
+
+  set-user-access:
+    needs: validate-request
+    if: ${{ needs.validate-request.outputs.mode == 'user-access' }}
+    runs-on: ubuntu-latest
+    environment: staging
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Join the staging tailnet
+        uses: tailscale/github-action@v4
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+          ping: ${{ secrets.STAGING_HOST }}
+      - name: Configure audited SSH
+        env:
+          DEPLOY_KEY: ${{ secrets.STAGING_DEPLOY_KEY }}
+          KNOWN_HOSTS: ${{ secrets.STAGING_KNOWN_HOSTS }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+      - name: Install the reviewed user-access operator
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+        run: |
+          scp deploy/jetson/run-user-access.sh \
+            "phub-deploy@$HOST:/opt/phub/run-user-access.sh.next"
+          scp scripts/set-user-access.ts \
+            "phub-deploy@$HOST:/opt/phub/set-user-access.ts.next"
+          ssh "phub-deploy@$HOST" '
+            set -eu
+            mv /opt/phub/run-user-access.sh.next /opt/phub/run-user-access.sh
+            chmod 0755 /opt/phub/run-user-access.sh
+            mv /opt/phub/set-user-access.ts.next /opt/phub/set-user-access.ts
+            chmod 0644 /opt/phub/set-user-access.ts
+          '
+      - name: Preview the complete user-access replacement without writes
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+          TENANT_KEY: local-padel
+          ACTOR_ID: ${{ inputs.access_actor_id }}
+          TARGET_USER_ID: ${{ inputs.access_target_user_id }}
+          ACCESS_ROLES: ${{ inputs.access_roles }}
+          ACCESS_PERMISSIONS: ${{ inputs.access_permissions }}
+        run: |
+          ssh "phub-deploy@$HOST" /opt/phub/run-user-access.sh \
+            "$TENANT_KEY" "$ACTOR_ID" "$TARGET_USER_ID" \
+            "$ACCESS_ROLES" "$ACCESS_PERMISSIONS" false
+      - name: Apply the audited complete user-access replacement
+        if: ${{ needs.validate-request.outputs.access_apply == 'true' }}
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+          TENANT_KEY: local-padel
+          ACTOR_ID: ${{ inputs.access_actor_id }}
+          TARGET_USER_ID: ${{ inputs.access_target_user_id }}
+          ACCESS_ROLES: ${{ inputs.access_roles }}
+          ACCESS_PERMISSIONS: ${{ inputs.access_permissions }}
+        run: |
+          ssh "phub-deploy@$HOST" /opt/phub/run-user-access.sh \
+            "$TENANT_KEY" "$ACTOR_ID" "$TARGET_USER_ID" \
+            "$ACCESS_ROLES" "$ACCESS_PERMISSIONS" true
 
   diagnose-home:
     needs: validate-request

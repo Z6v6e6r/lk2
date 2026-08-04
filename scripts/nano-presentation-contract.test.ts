@@ -14,6 +14,7 @@ const stagingRoutingWorkflow = repositoryFile('.github/workflows/set-staging-rou
 const stagingRoutingOperator = repositoryFile('deploy/jetson/run-client-routing-plan.sh');
 const migration0057Diagnostic = repositoryFile('deploy/jetson/diagnose-migration-0057.sh');
 const testPlayerDiagnostic = repositoryFile('deploy/jetson/diagnose-test-player-delegations.sh');
+const userAccessOperator = repositoryFile('deploy/jetson/run-user-access.sh');
 const activation = repositoryFile('deploy/jetson/activate-live-home.sh');
 const verification = repositoryFile('deploy/jetson/verify-live-staging-data.sh');
 const cupVerification = repositoryFile('deploy/jetson/verify-cup-integrations.sh');
@@ -37,6 +38,7 @@ describe('Nano presentation release contract', () => {
     expect(validateJob).toContain('[ "$ROUTING_APPLY_CONFIRMATION" != \'APPLY_ROUTING_PLAN\' ]');
     expect(validateJob).toContain('[ "$REQUEST_REF" != \'refs/heads/main\' ]');
     expect(validateJob).toContain('mode=diagnostics');
+    expect(validateJob).toContain('mode=user-access');
     expect(validateJob).toContain('mode=deploy');
     expect(diagnoseJob).toContain('needs: validate-request');
     expect(diagnoseJob).toContain("needs.validate-request.outputs.mode == 'diagnostics'");
@@ -54,6 +56,11 @@ describe('Nano presentation release contract', () => {
     expect(validateJob).toContain("'^[0-9]{4}(,[0-9]{4}){0,9}$'");
     expect(diagnoseJob).toContain('Inspect selected test-player delegations read-only');
     expect(diagnoseJob).toContain('< deploy/jetson/diagnose-test-player-delegations.sh');
+    expect(stagingWorkflow).toContain(
+      'Preview the complete user-access replacement without writes',
+    );
+    expect(stagingWorkflow).toContain('Apply the audited complete user-access replacement');
+    expect(stagingWorkflow).toContain("APPLY_USER_ACCESS) printf '%s\\n' 'access_apply=true'");
     expect(buildGate).toContain('needs: validate-request');
     expect(buildGate).toContain("needs.validate-request.outputs.mode == 'deploy'");
     expect(deployGate).toContain('needs: [validate-request, build]');
@@ -87,6 +94,14 @@ describe('Nano presentation release contract', () => {
     expect(testPlayerDiagnostic).not.toMatch(
       /^\s*(insert|update|delete|alter|create|drop|truncate|grant|revoke)\b/im,
     );
+  });
+
+  it('runs staging user-access changes only through the reviewed dry-run/apply operator', () => {
+    expect(userAccessOperator).toContain('set-user-access.ts:/app/set-user-access.ts:ro');
+    expect(userAccessOperator).toContain('--confirm=APPLY_USER_ACCESS');
+    expect(userAccessOperator).toContain('--profile migration run --rm --no-deps');
+    expect(stagingWorkflow).toContain("needs.validate-request.outputs.mode == 'user-access'");
+    expect(stagingWorkflow).toContain("needs.validate-request.outputs.access_apply == 'true'");
   });
 
   it('snapshots the active application before mutation and rolls it back after later failures', () => {
