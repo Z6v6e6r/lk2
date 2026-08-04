@@ -9,6 +9,7 @@ import type {
   ActivityHistoryStatus,
 } from './auth-gateway.js';
 import { GameCard } from './GameCard.js';
+import { PlayerLevelAvatar } from './PlayerLevelAvatar.js';
 
 export type ActivityHistoryLoader = (input?: ActivityHistoryQuery) => Promise<ActivityHistoryPage>;
 
@@ -58,6 +59,109 @@ function eventTime(startsAt: string, endsAt?: string | null): string {
   return endsAt ? `${start}–${formatter.format(new Date(endsAt))}` : start;
 }
 
+function tournamentDate(value: string): { readonly day: string; readonly month: string } {
+  const date = new Date(value);
+  return {
+    day: new Intl.DateTimeFormat('ru-RU', { day: '2-digit' }).format(date),
+    month: new Intl.DateTimeFormat('ru-RU', { month: 'short' })
+      .format(date)
+      .replace('.', '')
+      .toUpperCase(),
+  };
+}
+
+function calendarDate(value: string): string {
+  return new Intl.DateTimeFormat('ru-RU', { day: '2-digit', month: 'long' }).format(
+    new Date(value),
+  );
+}
+
+function shortPlayerName(displayName: string): string {
+  return displayName.trim().split(/\s+/u)[0] ?? displayName;
+}
+
+function TournamentHistoryCard({
+  item,
+}: {
+  readonly item: ActivityHistoryItem;
+}): React.JSX.Element {
+  const date = tournamentDate(item.startsAt);
+  const result = item.tournamentResult;
+  const showViewerResult = result ? result.viewer.place > 3 : false;
+  const title = item.route ? <a href={item.route}>{item.title}</a> : item.title;
+
+  return (
+    <article
+      className={`activity-history-card activity-history-card--tournament${result ? ' has-result' : ''}`}
+      data-history-kind="TOURNAMENT"
+    >
+      <div className="tournament-history-card__summary">
+        <div className="tournament-history-card__copy">
+          <header>
+            <span>Турнир</span>
+            {item.status === 'CANCELLED' ? <small>Отменено</small> : null}
+          </header>
+          <h3>{title}</h3>
+          <p>
+            {item.venue} <i aria-hidden="true">•</i> {calendarDate(item.startsAt)}{' '}
+            <i aria-hidden="true">•</i> {eventTime(item.startsAt, item.endsAt)}
+          </p>
+        </div>
+        <time dateTime={item.startsAt} aria-label={eventDate(item.startsAt)}>
+          <strong>{date.day}</strong>
+          <span>{date.month}</span>
+        </time>
+      </div>
+
+      {result ? (
+        <div className="tournament-history-card__result">
+          <ol className="tournament-history-card__podium" aria-label="Призовые места">
+            {result.podium.map((player) => (
+              <li
+                key={`${player.place}:${player.profileId ?? player.displayName}`}
+                className={`is-place-${player.place}`}
+              >
+                <div className="tournament-history-card__winner">
+                  <PlayerLevelAvatar
+                    src={player.avatarUrl}
+                    alt={player.displayName}
+                    size={player.place === 1 ? 58 : 50}
+                    className="tournament-history-card__avatar"
+                    showLevelRing={false}
+                    fallbackSeed={player.profileId ?? player.displayName}
+                  />
+                  <span className="tournament-history-card__place" aria-hidden="true">
+                    {player.place}
+                  </span>
+                </div>
+                <strong>{shortPlayerName(player.displayName)}</strong>
+              </li>
+            ))}
+          </ol>
+
+          {showViewerResult ? (
+            <div className="tournament-history-card__viewer" data-viewer-tournament-result="">
+              <PlayerLevelAvatar
+                src={result.viewer.avatarUrl}
+                alt={result.viewer.displayName}
+                size={50}
+                showLevelRing={false}
+                fallbackSeed={result.viewer.profileId ?? result.viewer.displayName}
+              />
+              <p>
+                <strong>
+                  {shortPlayerName(result.viewer.displayName)} — {result.viewer.place} место
+                </strong>
+                <span>Ваш результат</span>
+              </p>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </article>
+  );
+}
+
 function GenericHistoryCard({ item }: { readonly item: ActivityHistoryItem }): React.JSX.Element {
   const title = item.route ? <a href={item.route}>{item.title}</a> : <strong>{item.title}</strong>;
   return (
@@ -70,7 +174,7 @@ function GenericHistoryCard({ item }: { readonly item: ActivityHistoryItem }): R
         {item.status === 'CANCELLED' ? <small>Отменено</small> : null}
       </header>
       <h3>{title}</h3>
-      {item.kind !== 'GAME' && item.subtitle ? <p>{item.subtitle}</p> : null}
+      {item.kind === 'TRAINING' && item.subtitle ? <p>{item.subtitle}</p> : null}
       <dl>
         <div>
           <dt>Дата</dt>
@@ -102,6 +206,9 @@ function GenericHistoryCard({ item }: { readonly item: ActivityHistoryItem }): R
 function HistoryItem({ item }: { readonly item: ActivityHistoryItem }): React.JSX.Element {
   if (item.kind === 'GAME' && item.game) {
     return <GameCard game={item.game} compact />;
+  }
+  if (item.kind === 'TOURNAMENT') {
+    return <TournamentHistoryCard item={item} />;
   }
   return <GenericHistoryCard item={item} />;
 }

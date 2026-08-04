@@ -919,6 +919,259 @@ function publicTournamentParticipantId(externalId: string): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
+export interface LegacyTournamentResultStanding {
+  /** Private provider identity. It is consumed only by the API mapping boundary. */
+  readonly externalParticipantId: string;
+  readonly displayName: string;
+  readonly place: number;
+}
+
+export interface LegacyTournamentResult {
+  /** Stable PadlHub tournament UUID derived from the private legacy identity. */
+  readonly id: string;
+  readonly status: 'CONFIRMED';
+  readonly podium: readonly [
+    LegacyTournamentResultStanding,
+    LegacyTournamentResultStanding,
+    LegacyTournamentResultStanding,
+  ];
+  readonly standings: readonly LegacyTournamentResultStanding[];
+  readonly sourceUpdatedAt: string | null;
+}
+
+export interface LegacyTournamentResultSource {
+  readonly read: (exerciseExternalId: string) => Promise<LegacyTournamentResult | null>;
+}
+
+export interface LegacyTournamentResultAdapterOptions {
+  readonly baseUrl?: string;
+  readonly timeoutMs?: number;
+  readonly maxAttempts?: number;
+  readonly maxResponseBytes?: number;
+  readonly freshTtlMs?: number;
+  readonly staleTtlMs?: number;
+  readonly circuitFailureThreshold?: number;
+  readonly circuitResetMs?: number;
+  readonly fetchImplementation?: typeof fetch;
+  readonly now?: () => number;
+  readonly onMetric?: (metric: {
+    readonly operation: 'tournament_result';
+    readonly outcome: 'success' | 'failure' | 'cache_fresh' | 'cache_stale' | 'circuit_open';
+    readonly durationMs: number;
+  }) => void;
+}
+
+interface LegacyTournamentResultCacheEntry {
+  readonly fetchedAt: number;
+  readonly result: LegacyTournamentResult | null;
+}
+
+function completedTournamentResult(
+  value: unknown,
+  exerciseExternalId: string,
+): LegacyTournamentResult | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
+  const tournament = value as Record<string, unknown>;
+  if (stringValue(tournament.tournamentId) !== exerciseExternalId) return null;
+  const params =
+    typeof tournament.params === 'object' &&
+    tournament.params !== null &&
+    !Array.isArray(tournament.params)
+      ? (tournament.params as Record<string, unknown>)
+      : {};
+  const summary =
+    typeof tournament.summary === 'object' &&
+    tournament.summary !== null &&
+    !Array.isArray(tournament.summary)
+      ? (tournament.summary as Record<string, unknown>)
+      : {};
+  const paramsCompleted = stringValue(params.status)?.toLowerCase() === 'completed';
+  const summaryCompleted =
+    stringValue(summary.status)?.toLowerCase() === 'completed' &&
+    (summary.finished === true ||
+      Boolean(stringValue(summary.finishedAt)) ||
+      Boolean(stringValue(summary.completedAt)));
+  if (
+    !paramsCompleted ||
+    !summaryCompleted ||
+    !Array.isArray(tournament.standings) ||
+    tournament.standings.length > 200
+  ) {
+    return null;
+  }
+
+  const seenPlaces = new Set<number>();
+  const standings: LegacyTournamentResultStanding[] = [];
+  for (const value of tournament.standings) {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
+    const row = value as Record<string, unknown>;
+    const externalParticipantId = stringValue(row.id);
+    const displayName = stringValue(row.name)?.slice(0, 120);
+    const place = numericValue(row.rank);
+    if (
+      !externalParticipantId ||
+      externalParticipantId.length > 200 ||
+      !displayName ||
+      place === undefined ||
+      !Number.isInteger(place) ||
+      place < 1 ||
+      place > 10_000 ||
+      seenPlaces.has(place)
+    ) {
+      return null;
+    }
+    seenPlaces.add(place);
+    standings.push({ externalParticipantId, displayName, place });
+  }
+  standings.sort((left, right) => left.place - right.place);
+  const podium = standings.slice(0, 3);
+  if (podium.length !== 3 || podium.some((standing, index) => standing.place !== index + 1)) {
+    return null;
+  }
+  const sourceUpdatedAt = stringValue(tournament.updatedAt);
+  return {
+    id: publicTournamentId(exerciseExternalId),
+    status: 'CONFIRMED',
+    podium: [podium[0]!, podium[1]!, podium[2]!],
+    standings,
+    sourceUpdatedAt:
+      sourceUpdatedAt && !Number.isNaN(Date.parse(sourceUpdatedAt))
+        ? new Date(sourceUpdatedAt).toISOString()
+        : null,
+  };
+}
+
+export class LegacyTournamentResultAdapter implements LegacyTournamentResultSource {
+  private readonly cache = new Map<string, LegacyTournamentResultCacheEntry>();
+  private readonly pending = new Map<string, Promise<LegacyTournamentResult | null>>();
+  private consecutiveFailures = 0;
+  private circuitOpenedAt: number | undefined;
+
+  public constructor(private readonly options: LegacyTournamentResultAdapterOptions = {}) {}
+
+  private emit(
+    outcome: Parameters<
+      NonNullable<LegacyTournamentResultAdapterOptions['onMetric']>
+    >[0]['outcome'],
+    durationMs: number,
+  ): void {
+    try {
+      this.options.onMetric?.({ operation: 'tournament_result', outcome, durationMs });
+    } catch {
+      // Telemetry must never change history projection behavior.
+    }
+  }
+
+  private async fetch(exerciseExternalId: string): Promise<LegacyTournamentResult | null> {
+    const startedAt = Date.now();
+    const now = this.options.now?.() ?? Date.now();
+    if (
+      this.circuitOpenedAt !== undefined &&
+      now - this.circuitOpenedAt < (this.options.circuitResetMs ?? 30_000)
+    ) {
+      this.emit('circuit_open', 0);
+      throw new Error('TOURNAMENT_RESULT_CIRCUIT_OPEN');
+    }
+    const baseUrl = new URL(this.options.baseUrl ?? 'https://padlhub.su');
+    if (baseUrl.protocol !== 'https:' && baseUrl.hostname !== 'localhost') {
+      throw new Error('TOURNAMENT_RESULT_BASE_URL_INVALID');
+    }
+    const url = new URL('/lk/tournaments/americano/history', baseUrl);
+    url.searchParams.set('tournamentId', exerciseExternalId);
+    const maxAttempts = Math.max(1, Math.min(this.options.maxAttempts ?? 2, 3));
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      try {
+        const response = await (this.options.fetchImplementation ?? fetch)(url, {
+          headers: { Accept: 'application/json' },
+          signal: AbortSignal.timeout(this.options.timeoutMs ?? 5_000),
+        });
+        if (!response.ok) {
+          const error = new Error('TOURNAMENT_RESULT_SOURCE_UNAVAILABLE');
+          if (response.status < 500) {
+            lastError = error;
+            break;
+          }
+          if (attempt === maxAttempts) throw error;
+          lastError = error;
+          continue;
+        }
+        const maxBytes = Math.min(
+          this.options.maxResponseBytes ?? 1_024 * 1_024,
+          2 * 1_024 * 1_024,
+        );
+        const contentLength = Number(response.headers.get('content-length'));
+        if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+          throw new Error('TOURNAMENT_RESULT_RESPONSE_TOO_LARGE');
+        }
+        const bytes = await response.arrayBuffer();
+        if (bytes.byteLength > maxBytes) throw new Error('TOURNAMENT_RESULT_RESPONSE_TOO_LARGE');
+        let body: unknown;
+        try {
+          body = JSON.parse(new TextDecoder().decode(bytes));
+        } catch {
+          throw new Error('TOURNAMENT_RESULT_RESPONSE_INVALID');
+        }
+        if (!Array.isArray(body) || body.length > 1) {
+          throw new Error('TOURNAMENT_RESULT_RESPONSE_INVALID');
+        }
+        const result =
+          body.length === 0 ? null : completedTournamentResult(body[0], exerciseExternalId);
+        this.consecutiveFailures = 0;
+        this.circuitOpenedAt = undefined;
+        this.emit('success', Date.now() - startedAt);
+        return result;
+      } catch (error) {
+        lastError = error;
+        if (attempt === maxAttempts) break;
+      }
+    }
+    this.consecutiveFailures += 1;
+    if (this.consecutiveFailures >= (this.options.circuitFailureThreshold ?? 3)) {
+      this.circuitOpenedAt = now;
+    }
+    this.emit('failure', Date.now() - startedAt);
+    throw lastError instanceof Error
+      ? lastError
+      : new Error('TOURNAMENT_RESULT_SOURCE_UNAVAILABLE');
+  }
+
+  public read(exerciseExternalId: string): Promise<LegacyTournamentResult | null> {
+    const normalized = exerciseExternalId.trim();
+    if (!normalized || normalized.length > 200) {
+      return Promise.reject(new Error('TOURNAMENT_RESULT_ID_INVALID'));
+    }
+    const now = this.options.now?.() ?? Date.now();
+    const cached = this.cache.get(normalized);
+    if (cached && now - cached.fetchedAt <= (this.options.freshTtlMs ?? 60_000)) {
+      this.emit('cache_fresh', 0);
+      return Promise.resolve(cached.result);
+    }
+    const existing = this.pending.get(normalized);
+    if (existing) return existing;
+    const request = this.fetch(normalized)
+      .then((result) => {
+        this.cache.set(normalized, {
+          fetchedAt: this.options.now?.() ?? Date.now(),
+          result,
+        });
+        return result;
+      })
+      .catch((error) => {
+        if (cached && now - cached.fetchedAt <= (this.options.staleTtlMs ?? 600_000)) {
+          this.emit('cache_stale', 0);
+          return cached.result;
+        }
+        throw error;
+      })
+      .finally(() => {
+        if (this.pending.get(normalized) === request) this.pending.delete(normalized);
+      });
+    this.pending.set(normalized, request);
+    return request;
+  }
+}
+
 function tournamentLevelRange(value: unknown): PublicTournamentSummary['levelRange'] {
   if (!Array.isArray(value)) return null;
   const ratings = value

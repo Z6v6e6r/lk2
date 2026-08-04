@@ -89,6 +89,42 @@ describe('Viva booking history source adapter', () => {
     expect(result.records.map((record) => record.kind)).toEqual(['TOURNAMENT', 'TRAINING', 'GAME']);
   });
 
+  it('uses the confirmed tournament direction as the Time for Friends title', async () => {
+    const providerPage = {
+      ...VIVA_BOOKING_HISTORY_EMPTY_PAGE_FIXTURE,
+      content: [
+        {
+          id: '19999999-9999-4999-8999-999999999999',
+          isCancelled: false,
+          exercise: {
+            id: '29999999-9999-4999-8999-999999999999',
+            direction: { id: 5278, name: 'Время на друзей' },
+            type: { id: 839, name: 'Падел Турнир' },
+            timeFrom: '2026-08-04T08:30:00+03:00',
+            timeTo: '2026-08-04T10:00:00+03:00',
+            studio: { name: 'Терехово', address: 'Москва' },
+            room: { name: 'Корт №1' },
+          },
+        },
+      ],
+      totalElements: 1,
+      numberOfElements: 1,
+      empty: false,
+    };
+    const fetchImplementation = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(Response.json(providerPage));
+
+    const result = await adapter(fetchImplementation).readPage(access);
+
+    expect(result.records).toEqual([
+      expect.objectContaining({
+        kind: 'TOURNAMENT',
+        title: 'Время на друзей',
+      }),
+    ]);
+  });
+
   it('returns a completed empty page without inventing activity', async () => {
     const fetchImplementation = vi
       .fn<typeof fetch>()
