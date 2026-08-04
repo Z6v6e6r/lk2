@@ -1,10 +1,12 @@
 name: Build and deploy staging
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
     inputs:
+      deploy_confirmation:
+        description: Type DEPLOY_STAGING to deploy the main branch to staging
+        required: false
+        type: string
       diagnose_home:
         description: Read-only live Home source diagnostics
         required: true
@@ -25,10 +27,49 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  validate-request:
+    runs-on: ubuntu-latest
+    outputs:
+      mode: ${{ steps.request.outputs.mode }}
+    steps:
+      - id: request
+        name: Validate requested staging operation
+        env:
+          DEPLOY_CONFIRMATION: ${{ inputs.deploy_confirmation }}
+          DIAGNOSE_HOME: ${{ inputs.diagnose_home }}
+          RECOVER_UDISKS: ${{ inputs.recover_udisks }}
+          REQUEST_REF: ${{ github.ref }}
+        run: |
+          set -eu
+          diagnostics_requested=false
+          if [ "$DIAGNOSE_HOME" = 'true' ] || [ "$RECOVER_UDISKS" = 'true' ]; then
+            diagnostics_requested=true
+          fi
+          if [ "$diagnostics_requested" = 'true' ]; then
+            if [ -n "$DEPLOY_CONFIRMATION" ]; then
+              echo '::error::Diagnostics cannot be combined with a deployment confirmation.'
+              exit 1
+            fi
+            printf '%s\n' 'mode=diagnostics' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$DEPLOY_CONFIRMATION" != 'DEPLOY_STAGING' ]; then
+            echo '::error::Deployment requires the exact DEPLOY_STAGING confirmation.'
+            exit 1
+          fi
+          if [ "$REQUEST_REF" != 'refs/heads/main' ]; then
+            echo '::error::Staging deployment is allowed only from refs/heads/main.'
+            exit 1
+          fi
+          printf '%s\n' 'mode=deploy' >> "$GITHUB_OUTPUT"
+
   diagnose-home:
-    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.diagnose_home || inputs.recover_udisks) }}
+    needs: validate-request
+    if: ${{ needs.validate-request.outputs.mode == 'diagnostics' }}
     runs-on: ubuntu-latest
     environment: staging
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
       - name: Join the staging tailnet
@@ -132,7 +173,8 @@ jobs:
           exit 0
 
   build:
-    if: ${{ github.event_name == 'push' || !inputs.diagnose_home }}
+    needs: validate-request
+    if: ${{ needs.validate-request.outputs.mode == 'deploy' }}
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -167,9 +209,12 @@ jobs:
           retention-days: 30
 
   deploy:
-    needs: build
+    needs: [validate-request, build]
+    if: ${{ always() && needs.validate-request.outputs.mode == 'deploy' && needs.build.result == 'success' }}
     runs-on: ubuntu-latest
     environment: staging
+    env:
+      STAGING_RELEASE_BACKUP_DIR: /opt/phub/backups/releases/pre-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -195,6 +240,26 @@ jobs:
           printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
           printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+      - id: application-backup
+        name: Preserve the active digest-pinned application release
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+        run: |
+          scp deploy/jetson/backup-application.sh \
+            "phub-deploy@$HOST:/opt/phub/backup-application.sh.next"
+          scp deploy/jetson/rollback-application.sh \
+            "phub-deploy@$HOST:/opt/phub/rollback-application.sh.next"
+          ssh "phub-deploy@$HOST" '
+            set -eu
+            install -m 755 /opt/phub/backup-application.sh.next /opt/phub/backup-application.sh
+            install -m 755 /opt/phub/rollback-application.sh.next /opt/phub/rollback-application.sh
+            rm -f /opt/phub/backup-application.sh.next /opt/phub/rollback-application.sh.next
+          '
+          ssh "phub-deploy@$HOST" \
+            "PHUB_BACKUP_ROOT=/opt/phub/backups/releases sh /opt/phub/backup-application.sh '$STAGING_RELEASE_BACKUP_DIR' BACKUP_STAGING_RELEASE"
+          ssh "phub-deploy@$HOST" \
+            "PHUB_ROLLBACK_BACKUP_ROOT=/opt/phub/backups/releases sh /opt/phub/rollback-application.sh '$STAGING_RELEASE_BACKUP_DIR' --validate-only"
+          printf '%s\n' 'ready=true' >> "$GITHUB_OUTPUT"
       - name: Install release and ingress definitions
         env:
           HOST: ${{ secrets.STAGING_HOST }}
@@ -406,3 +471,10 @@ jobs:
         env:
           SMOKE_BASE_URL: ${{ vars.STAGING_BASE_URL }}
         run: npm ci --ignore-scripts && npm run smoke
+      - name: Roll back a failed staging application release
+        if: ${{ (failure() || cancelled()) && steps.application-backup.outputs.ready == 'true' }}
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+        run: |
+          ssh "phub-deploy@$HOST" \
+            "PHUB_ROLLBACK_BACKUP_ROOT=/opt/phub/backups/releases sh /opt/phub/rollback-application.sh '$STAGING_RELEASE_BACKUP_DIR' --confirm=ROLLBACK_STAGING_RELEASE"

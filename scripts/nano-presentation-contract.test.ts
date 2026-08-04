@@ -15,6 +15,59 @@ const verification = repositoryFile('deploy/jetson/verify-live-staging-data.sh')
 const cupVerification = repositoryFile('deploy/jetson/verify-cup-integrations.sh');
 
 describe('Nano presentation release contract', () => {
+  it('requires an explicit main-branch confirmation for deploy while preserving diagnostics', () => {
+    const validateJob = stagingWorkflow.match(
+      / {2}validate-request:\n([\s\S]*?)\n {2}diagnose-home:/,
+    )?.[1];
+    const diagnoseJob = stagingWorkflow.match(/ {2}diagnose-home:\n([\s\S]*?)\n {2}build:/)?.[1];
+    const buildGate = stagingWorkflow.match(/ {2}build:\n([\s\S]*?)\n {4}runs-on:/)?.[1];
+    const deployGate = stagingWorkflow.match(/ {2}deploy:\n([\s\S]*?)\n {4}runs-on:/)?.[1];
+
+    expect(stagingWorkflow).not.toMatch(/^ {2}push:/m);
+    expect(stagingWorkflow).toMatch(/^ {2}workflow_dispatch:/m);
+    expect(stagingWorkflow).toMatch(
+      /deploy_confirmation:\n\s+description: Type DEPLOY_STAGING[\s\S]*?type: string/,
+    );
+    expect(validateJob).toContain('[ -n "$DEPLOY_CONFIRMATION" ]');
+    expect(validateJob).toContain('[ "$DEPLOY_CONFIRMATION" != \'DEPLOY_STAGING\' ]');
+    expect(validateJob).toContain('[ "$REQUEST_REF" != \'refs/heads/main\' ]');
+    expect(validateJob).toContain('mode=diagnostics');
+    expect(validateJob).toContain('mode=deploy');
+    expect(diagnoseJob).toContain('needs: validate-request');
+    expect(diagnoseJob).toContain("needs.validate-request.outputs.mode == 'diagnostics'");
+    expect(diagnoseJob).not.toContain('deploy_confirmation');
+    expect(buildGate).toContain('needs: validate-request');
+    expect(buildGate).toContain("needs.validate-request.outputs.mode == 'deploy'");
+    expect(deployGate).toContain('needs: [validate-request, build]');
+    expect(deployGate).toContain('always()');
+    expect(deployGate).toContain("needs.build.result == 'success'");
+    expect(deployGate).toContain("needs.validate-request.outputs.mode == 'deploy'");
+  });
+
+  it('snapshots the active application before mutation and rolls it back after later failures', () => {
+    const backupStep = stagingWorkflow.indexOf(
+      'name: Preserve the active digest-pinned application release',
+    );
+    const installStep = stagingWorkflow.indexOf('name: Install release and ingress definitions');
+    const smokeStep = stagingWorkflow.indexOf('name: Staging smoke test');
+    const rollbackStep = stagingWorkflow.indexOf(
+      'name: Roll back a failed staging application release',
+    );
+
+    expect(stagingWorkflow).toContain(
+      'STAGING_RELEASE_BACKUP_DIR: /opt/phub/backups/releases/pre-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}',
+    );
+    expect(backupStep).toBeGreaterThan(-1);
+    expect(backupStep).toBeLessThan(installStep);
+    expect(rollbackStep).toBeGreaterThan(smokeStep);
+    expect(stagingWorkflow).toContain('steps.application-backup.outputs.ready');
+    expect(stagingWorkflow).toContain('failure() || cancelled()');
+    expect(stagingWorkflow).toContain('BACKUP_STAGING_RELEASE');
+    expect(stagingWorkflow).toContain('--validate-only');
+    expect(stagingWorkflow).toContain('--confirm=ROLLBACK_STAGING_RELEASE');
+    expect(stagingWorkflow).toContain('PHUB_ROLLBACK_BACKUP_ROOT=/opt/phub/backups/releases');
+  });
+
   it('moves the Viva callback to HTTPS before the API consumes it', () => {
     const legacyIpSite = caddyfile.match(/http:\/\/185\.155\.18\.146 \{([\s\S]*?)\n\}/)?.[1];
 

@@ -4,6 +4,14 @@ The Jetson Nano is an ARM64 staging node, not a build host. CI builds the
 application images once for `linux/arm64`, publishes them, and deploys the
 resulting digests. The node only pulls images by digest and runs Compose.
 
+Staging deployment is manual-only. Run `Build and deploy staging` with
+`workflow_dispatch` from the `main` branch and enter the exact
+`deploy_confirmation=DEPLOY_STAGING` value. The validation job fails before checkout/build when the
+confirmation is absent or different, the selected ref is not `main`, no operation is selected, or
+deployment confirmation is mixed with either diagnostics option. `diagnose_home=true` with an
+empty confirmation runs only the independent read-only Home/public-ingress diagnostics; do not
+combine it with `recover_udisks=true` when a strictly read-only run is required.
+
 Node services keep their runtime dependencies external to their ESM output.
 This is required for OpenTelemetry's Node instrumentation, which uses dynamic
 module loading and cannot run from an esbuild-bundled ESM artifact. Each
@@ -65,7 +73,7 @@ delegation cannot receive the envelope. The same override bounds the synchronous
 bridge to one 2.5-second attempt and keeps successful pages for two minutes; optional member-rank
 enrichment has a 150 ms response budget.
 
-Every staging workflow creates a PostgreSQL custom-format archive under
+Every confirmed staging deployment creates a PostgreSQL custom-format archive under
 `/opt/phub/backups/postgres-pre-<release>-<UTC timestamp>.dump`. The workflow
 requires a non-empty archive, validates it with `pg_restore --list`, runs the
 digest-pinned migrator and confirms the latest repository migration in
@@ -129,6 +137,60 @@ its own missing PadlHub-only projection synchronously, so a newly authenticated 
 the background batch cursor. The deploy gate validates the persisted snapshot contract and a recent
 `checked_at` watermark; optional-section TTLs are normalized separately at read time. This gate runs
 before the independent Viva-backed full Home activation.
+
+## Application rollback snapshot
+
+Before switching an application release, the confirmed deployment creates one mode-`0700` child
+directory under `/opt/phub/backups/releases`. The backup primitive requires the exact previous `compose.yaml` and
+`release.env`; the release file must resolve web, API, worker, realtime and migrator only through
+full `sha256` digests. The snapshot must also contain `nginx/default.conf`, `staging.auth.env` and
+`tls-ingress/Caddyfile`. It stores either the previous `staging.override.env` or an empty
+`staging.override.env.absent` marker. Write `backup.complete` last with the exact previous release
+SHA.
+
+The expected saved-release layout is:
+
+```text
+/opt/phub/backups/releases/pre-<candidate-sha>-<workflow-run>-<attempt>/
+  compose.yaml
+  release.env
+  nginx/default.conf
+  staging.auth.env            # mode 0600
+  staging.override.env        # mode 0600; or staging.override.env.absent
+  tls-ingress/Caddyfile
+  backup.complete             # exact release SHA, written last
+```
+
+After declaring an incident, stopping concurrent deployments and confirming that the previous
+binary remains compatible with the expanded schema, invoke the reviewed on-host copy of the script
+with that explicit directory:
+
+```sh
+PHUB_ROLLBACK_BACKUP_ROOT=/opt/phub/backups/releases \
+  sh /opt/phub/rollback-application.sh \
+  /opt/phub/backups/releases/pre-<candidate-sha>-<workflow-run>-<attempt> \
+  --confirm=ROLLBACK_STAGING_RELEASE
+```
+
+`rollback-application.sh` rejects paths outside `/opt/phub/backups/releases`, symlinked saved files, mutable
+image references, incomplete snapshots, malformed release metadata and Compose definitions that do
+not resolve exactly the five recorded image digests. It requires all four old runtime images to
+already exist locally before changing files, stores
+the displaced current files in a new `rollback-recovery-*` directory, restores saved files with
+restricted modes, and never starts the migrator or reverses an expand migration. It validates and
+recreates both Nginx and Caddy. Success is
+reported only after private `/health/ready` checks pass inside API, realtime and worker containers.
+The script never prints `release.env`, `staging.auth.env` or their values.
+
+If validation, image resolution or readiness fails, retain both saved-release directories, stop the
+change window and inspect only redacted container status. Do not delete the expanded schema and do
+not repeatedly alternate releases. The primitive must be copied to `/opt/phub` and the snapshot
+must be created by the deployment workflow before it can be considered an operational rollback
+path. The primitive never uses registry credentials or pulls images. After a snapshot succeeds, any
+later failed or cancelled workflow step invokes rollback automatically. The database is not rolled
+back: the verified custom-format archive is retained and expand migrations remain applied. Before
+the workflow marks the snapshot rollback-ready, `--validate-only` proves its Compose/digest set and
+the local availability of every previous runtime image without changing the active release.
 
 ## Application ingress
 
