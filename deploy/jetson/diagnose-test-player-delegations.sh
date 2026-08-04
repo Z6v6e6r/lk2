@@ -24,6 +24,8 @@ with requested as (
     tenant.tenant_key,
     identity_user.id as user_id,
     identity_user.status as user_status,
+    access.permissions,
+    privacy.chat_policy,
     delegation.id as delegation_id,
     delegation.granted_scopes,
     delegation.refresh_expires_at,
@@ -47,6 +49,12 @@ with requested as (
     on delegation.tenant_id = identity_user.tenant_id
    and delegation.user_id = identity_user.id
    and delegation.provider = 'VIVA'
+  left join identity.user_access_profiles access
+    on access.tenant_id = identity_user.tenant_id
+   and access.user_id = identity_user.id
+  left join profile.privacy_settings privacy
+    on privacy.tenant_id = identity_user.tenant_id
+   and privacy.user_id = identity_user.id
 )
 select concat_ws('|',
   'phone=***' || suffix,
@@ -54,6 +62,26 @@ select concat_ws('|',
   'tenant=' || coalesce(tenant_key, 'NOT_FOUND'),
   'user_id=' || coalesce(user_id::text, 'NOT_FOUND'),
   'user_status=' || coalesce(user_status, 'NOT_FOUND'),
+  'chat_direct_permission=' || case
+    when 'chat.direct.create' = any(coalesce(permissions, '{}'::text[])) then 'YES'
+    else 'NO'
+  end,
+  'chat_policy=' || coalesce(chat_policy, 'AUTHORIZED'),
+  'messaging_http=' || coalesce((
+    select runtime.http_enabled::text
+    from messaging.tenant_runtime_settings runtime
+    where runtime.tenant_id = matched.tenant_id
+  ), 'false'),
+  'messaging_direct=' || coalesce((
+    select runtime.direct_enabled::text
+    from messaging.tenant_runtime_settings runtime
+    where runtime.tenant_id = matched.tenant_id
+  ), 'false'),
+  'messaging_realtime=' || coalesce((
+    select runtime.realtime_enabled::text
+    from messaging.tenant_runtime_settings runtime
+    where runtime.tenant_id = matched.tenant_id
+  ), 'false'),
   'delegation=' || case
     when delegation_id is null then 'MISSING'
     when revoked_at is not null then 'REVOKED'
