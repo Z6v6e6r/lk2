@@ -19,7 +19,9 @@ const messagingReleaseVerification = repositoryFile(
   'deploy/jetson/verify-messaging-test-release.sh',
 );
 const activation = repositoryFile('deploy/jetson/activate-live-home.sh');
+const clientAssistedActivation = repositoryFile('deploy/jetson/activate-client-assisted-viva.sh');
 const verification = repositoryFile('deploy/jetson/verify-live-staging-data.sh');
+const clientAssistedVerification = repositoryFile('deploy/jetson/verify-client-assisted-viva.sh');
 const cupVerification = repositoryFile('deploy/jetson/verify-cup-integrations.sh');
 
 describe('Nano presentation release contract', () => {
@@ -111,6 +113,7 @@ describe('Nano presentation release contract', () => {
 
   it('deploys the messaging test contour without changing the current Home mode', () => {
     expect(stagingWorkflow).toContain('MESSAGING_TEST');
+    expect(stagingWorkflow).toContain('CLIENT_ASSISTED_VIVA');
     expect(stagingWorkflow).toContain("inputs.deployment_profile == 'FULL_LIVE_HOME'");
     expect(stagingWorkflow).toContain("inputs.deployment_profile == 'MESSAGING_TEST'");
     expect(stagingWorkflow).toContain(
@@ -231,6 +234,41 @@ describe('Nano presentation release contract', () => {
     expect(verification).toContain('routing_ready_delegations');
   });
 
+  it('activates Nano client-assisted Viva reads without the blocked server Home sync', () => {
+    expect(stagingWorkflow).toContain("inputs.deployment_profile == 'CLIENT_ASSISTED_VIVA'");
+    expect(stagingWorkflow).toContain(
+      'Activate and verify client-assisted Viva reads independently of Home sync',
+    );
+    expect(stagingWorkflow).toContain('sh /opt/phub/activate-client-assisted-viva.sh');
+    expect(stagingWorkflow).toContain('sh /opt/phub/verify-client-assisted-viva.sh');
+    expect(clientAssistedActivation).toContain("printf '%s\\n' 'VIVA_DIRECT_READ_ENABLED=true'");
+    expect(clientAssistedActivation).toContain("printf '%s\\n' 'HOME_VIVA_SYNC_ENABLED=false'");
+    expect(clientAssistedActivation).toContain(
+      "printf '%s\\n' 'HOME_VIVA_LEGACY_GAME_BRIDGE_ENABLED=false'",
+    );
+    expect(clientAssistedActivation).toContain('previous_home_read_mode');
+    expect(clientAssistedActivation).toContain("plan.mode = 'MIXED_END_USER_READS'");
+    expect(clientAssistedActivation).toContain(
+      "plan.direct_read_operations = array['profile.read']::text[]",
+    );
+    expect(clientAssistedActivation).toContain('other_mixed_plans');
+    expect(clientAssistedActivation).toContain('restoring the previous runtime override');
+    expect(clientAssistedVerification).toContain('require_value VIVA_DIRECT_READ_ENABLED true');
+    expect(clientAssistedVerification).toContain('require_value HOME_VIVA_SYNC_ENABLED false');
+    expect(clientAssistedVerification).toContain(
+      'require_value CORS_ORIGINS https://lk.nano.padlhub.su',
+    );
+    expect(clientAssistedVerification).toContain(
+      'require_value VIVA_OAUTH_REDIRECT_URI https://lk.nano.padlhub.su/user/api/v1/local-padel/auth/viva/callback',
+    );
+    expect(clientAssistedVerification).toContain('/booking-screen-read-jobs');
+    expect(clientAssistedVerification).toContain('/activity-history-read-jobs');
+    expect(clientAssistedVerification).toContain('surface: "GAMES"');
+    expect(clientAssistedVerification).toContain('surface: "TRAININGS"');
+    expect(clientAssistedVerification).toContain('Origin: https://lk.nano.padlhub.su');
+    expect(clientAssistedVerification).toContain('Nano CORS accepted');
+  });
+
   it('changes the staging routing plan only through a confirmed audited operator', () => {
     expect(stagingRoutingWorkflow).not.toMatch(/^ {2}push:/m);
     expect(stagingRoutingWorkflow).toMatch(/^ {2}workflow_dispatch:/m);
@@ -251,7 +289,7 @@ describe('Nano presentation release contract', () => {
     );
     const homeBaseGate = stagingWorkflow.indexOf('Verify local HomeBase projections');
     const routingRefresh = stagingWorkflow.indexOf(
-      'Refresh the audited routing plan immediately before live Home activation',
+      'Refresh the audited routing plan for browser-assisted Viva reads',
     );
     const liveHomeActivation = stagingWorkflow.indexOf('Activate and verify live Home projection');
     expect(homeBaseGate).toBeGreaterThan(-1);

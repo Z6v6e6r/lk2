@@ -8,12 +8,13 @@ on:
         required: false
         type: string
       deployment_profile:
-        description: FULL_LIVE_HOME activates Home; MESSAGING_TEST preserves the current Home mode
+        description: Select full Home, isolated client-assisted Viva reads, or messaging test
         required: true
         type: choice
         default: FULL_LIVE_HOME
         options:
           - FULL_LIVE_HOME
+          - CLIENT_ASSISTED_VIVA
           - MESSAGING_TEST
       messaging_player_a_id:
         description: First active PadlHub player UUID required by MESSAGING_TEST
@@ -24,7 +25,7 @@ on:
         required: false
         type: string
       routing_tenant_key:
-        description: Active staging tenant whose routing plan is refreshed before live Home activation
+        description: Active staging tenant whose routing plan is refreshed before Viva activation
         required: false
         type: string
       routing_actor_id:
@@ -165,21 +166,21 @@ jobs:
             exit 1
           fi
           case "$DEPLOYMENT_PROFILE" in
-            FULL_LIVE_HOME)
+            FULL_LIVE_HOME | CLIENT_ASSISTED_VIVA)
               if ! printf '%s' "$ROUTING_TENANT_KEY" | grep -Eq '^[a-z0-9][a-z0-9-]{1,62}$'; then
-                echo '::error::Full Home deployment requires a valid staging routing tenant key.'
+                echo '::error::Viva-backed deployment requires a valid staging routing tenant key.'
                 exit 1
               fi
               if ! printf '%s' "$ROUTING_ACTOR_ID" | grep -Eiq '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'; then
-                echo '::error::Full Home deployment routing actor ID must be a UUID.'
+                echo '::error::Viva-backed deployment routing actor ID must be a UUID.'
                 exit 1
               fi
               if [ "$ROUTING_APPLY_CONFIRMATION" != 'APPLY_ROUTING_PLAN' ]; then
-                echo '::error::Full Home deployment requires the exact APPLY_ROUTING_PLAN confirmation.'
+                echo '::error::Viva-backed deployment requires the exact APPLY_ROUTING_PLAN confirmation.'
                 exit 1
               fi
               if [ -n "$MESSAGING_PLAYER_A_ID$MESSAGING_PLAYER_B_ID" ]; then
-                echo '::error::Full Home deployment cannot include messaging-test players.'
+                echo '::error::Viva-backed deployment cannot include messaging-test players.'
                 exit 1
               fi
               ;;
@@ -511,6 +512,8 @@ jobs:
           scp deploy/compose.staging.yaml "phub-deploy@$HOST:/opt/phub/compose.yaml"
           scp deploy/jetson/nginx/default.conf "phub-deploy@$HOST:/opt/phub/nginx/default.conf"
           scp deploy/jetson/activate-live-home.sh "phub-deploy@$HOST:/opt/phub/activate-live-home.sh"
+          scp deploy/jetson/activate-client-assisted-viva.sh \
+            "phub-deploy@$HOST:/opt/phub/activate-client-assisted-viva.sh"
           scp deploy/jetson/run-client-routing-plan.sh \
             "phub-deploy@$HOST:/opt/phub/run-client-routing-plan.sh.next"
           scp scripts/set-client-routing-plan.ts \
@@ -519,6 +522,8 @@ jobs:
             "phub-deploy@$HOST:/opt/phub/verify-home-base.sh"
           scp deploy/jetson/verify-live-staging-data.sh \
             "phub-deploy@$HOST:/opt/phub/verify-live-staging-data.sh"
+          scp deploy/jetson/verify-client-assisted-viva.sh \
+            "phub-deploy@$HOST:/opt/phub/verify-client-assisted-viva.sh"
           scp deploy/jetson/verify-cup-integrations.sh \
             "phub-deploy@$HOST:/opt/phub/verify-cup-integrations.sh"
           scp deploy/jetson/verify-messaging-test-release.sh \
@@ -712,15 +717,16 @@ jobs:
         env:
           HOST: ${{ secrets.STAGING_HOST }}
         run: ssh "phub-deploy@$HOST" 'sh /opt/phub/verify-home-base.sh'
-      - name: Refresh the audited routing plan immediately before live Home activation
-        if: ${{ inputs.deployment_profile == 'FULL_LIVE_HOME' }}
+      - name: Refresh the audited routing plan for browser-assisted Viva reads
+        if: ${{ inputs.deployment_profile == 'FULL_LIVE_HOME' || inputs.deployment_profile == 'CLIENT_ASSISTED_VIVA' }}
         env:
           HOST: ${{ secrets.STAGING_HOST }}
           TENANT_KEY: ${{ inputs.routing_tenant_key }}
           ACTOR_ID: ${{ inputs.routing_actor_id }}
+          DEPLOYMENT_PROFILE: ${{ inputs.deployment_profile }}
         run: |
           operation_id="routing-mixed-deploy-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          reason="staging-live-home-activation-${GITHUB_SHA}"
+          reason="staging-${DEPLOYMENT_PROFILE}-${GITHUB_SHA}"
           ssh "phub-deploy@$HOST" /opt/phub/run-client-routing-plan.sh \
             "$TENANT_KEY" "$ACTOR_ID" "$operation_id" "$operation_id" "$reason" false
           ssh "phub-deploy@$HOST" /opt/phub/run-client-routing-plan.sh \
@@ -730,6 +736,14 @@ jobs:
         env:
           HOST: ${{ secrets.STAGING_HOST }}
         run: ssh "phub-deploy@$HOST" 'sh /opt/phub/activate-live-home.sh'
+      - name: Activate and verify client-assisted Viva reads independently of Home sync
+        if: ${{ inputs.deployment_profile == 'CLIENT_ASSISTED_VIVA' }}
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+          TENANT_KEY: ${{ inputs.routing_tenant_key }}
+        run: |
+          ssh "phub-deploy@$HOST" sh /opt/phub/activate-client-assisted-viva.sh "$TENANT_KEY"
+          ssh "phub-deploy@$HOST" sh /opt/phub/verify-client-assisted-viva.sh "$TENANT_KEY"
       - name: Verify real staging identities and Games
         if: ${{ inputs.deployment_profile == 'FULL_LIVE_HOME' }}
         env:

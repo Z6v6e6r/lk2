@@ -17,7 +17,17 @@ and Viva-delegation status, refresh timestamps/error codes, and Home projection 
 diagnostic never reads token ciphertext or Viva subject values and forces a read-only PostgreSQL
 transaction.
 Use `deployment_profile=FULL_LIVE_HOME` for the existing routing refresh and guarded Live Home
-activation. Use `deployment_profile=MESSAGING_TEST` only for the isolated two-player chat contour;
+activation. Use `deployment_profile=CLIENT_ASSISTED_VIVA` when Viva server-side Home reads remain
+blocked but the browser-origin read-job contract is ready. This profile applies the same audited
+tenant routing envelope, enables `VIVA_DIRECT_READ_ENABLED`, explicitly disables
+`HOME_VIVA_SYNC_ENABLED` and the legacy Viva Home Game bridge, and preserves the current
+`HOME_READ_MODE`. It then restarts only API and worker, proves the exact Nano-origin Viva CORS
+contract, verifies all active target-tenant delegations can receive the routing envelope, and
+fails if another active tenant would enter mixed mode through the global kill switch. It covers
+recommendations, group-training and event schedules, upcoming bookings and activity history
+without waiting for server-to-server Viva profile or schedule egress.
+
+Use `deployment_profile=MESSAGING_TEST` only for the isolated two-player chat contour;
 provide two distinct active PadlHub UUIDs in `messaging_player_a_id` and
 `messaging_player_b_id` and leave every routing input empty. This profile still builds and promotes
 the same immutable digests, takes application and PostgreSQL backups, migrates, validates TLS and
@@ -97,13 +107,16 @@ the new containers start. A release fails if Viva/Home uses mock data, if a loca
 enabled, if API and worker do not share the `phub-media` bucket, or if the worker does not produce
 real canonical Games, card projections and guarded roster-mirror state.
 
-The Home override also enables the staging-only browser read-job transport. Before activation,
-every tenant with an active Viva delegation must have a `MIXED_END_USER_READS` routing plan with
-`profile.read`, plus a non-empty Viva provider tenant binding. Fixed schedule, upcoming-booking
-and history commands use that mixed plan as their transport envelope; they are not added to the
-general direct-operation allowlist. Activation and post-deploy verification fail when an active
-delegation cannot receive the envelope. The same override bounds the synchronous legacy community
-bridge to one 2.5-second attempt and keeps successful pages for two minutes; optional member-rank
+The runtime override contains independent Home-source and browser-transport gates. Full Home sets
+both `HOME_VIVA_SYNC_ENABLED=true` and `VIVA_DIRECT_READ_ENABLED=true` only after every source
+projection becomes fresh. `CLIENT_ASSISTED_VIVA` instead keeps server Home Viva sync off and turns
+on only the browser transport. Before either activation, every target-tenant user with an active
+Viva delegation must have a `MIXED_END_USER_READS` routing plan with `profile.read`, plus a
+non-empty Viva provider tenant binding. Fixed schedule, upcoming-booking and history commands use
+that mixed plan as their transport envelope; they are not added to the general direct-operation
+allowlist. Activation and post-deploy verification fail when an active delegation cannot receive
+the envelope. The full-Home override additionally bounds the synchronous legacy community bridge
+to one 2.5-second attempt and keeps successful pages for two minutes; optional member-rank
 enrichment has a 150 ms response budget.
 
 Every confirmed staging deployment creates a PostgreSQL custom-format archive under
