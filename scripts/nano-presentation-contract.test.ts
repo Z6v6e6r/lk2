@@ -147,6 +147,9 @@ describe('Nano presentation release contract', () => {
     expect(authEnvProvisioning).toBeDefined();
     expect(authEnvProvisioning).toContain('CORS_ORIGINS=https://lk.nano.padlhub.su');
     expect(authEnvProvisioning).toContain(
+      'VIVA_END_USER_API_URL=https://api.vivacrm.ru/end-user/api',
+    );
+    expect(authEnvProvisioning).toContain(
       'VIVA_OAUTH_REDIRECT_URI=https://lk.nano.padlhub.su/user/api/v1/local-padel/auth/viva/callback',
     );
     expect(authEnvProvisioning).toContain(
