@@ -110,7 +110,10 @@ real canonical Games, card projections and guarded roster-mirror state.
 The runtime override contains independent Home-source and browser-transport gates. Full Home sets
 both `HOME_VIVA_SYNC_ENABLED=true` and `VIVA_DIRECT_READ_ENABLED=true` only after every source
 projection becomes fresh. `CLIENT_ASSISTED_VIVA` instead keeps server Home Viva sync off and turns
-on only the browser transport. Before either activation, every target-tenant user with an active
+on only the browser transport. The staging auth environment explicitly pins
+`VIVA_END_USER_API_URL=https://api.vivacrm.ru/end-user/api` so the application and the CORS
+preflight verifier use the same provider boundary instead of relying on a package default. Before
+either activation, every target-tenant user with an active
 Viva delegation must have a `MIXED_END_USER_READS` routing plan with `profile.read`, plus a
 non-empty Viva provider tenant binding. Fixed schedule, upcoming-booking and history commands use
 that mixed plan as their transport envelope; they are not added to the general direct-operation
