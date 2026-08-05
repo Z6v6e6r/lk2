@@ -182,6 +182,7 @@ tr -d '\r' < "$cors_headers" | grep -Eiq '^access-control-allow-headers:.*author
 
 compose exec -T api node -e '
   const tenant = process.argv[1];
+  const localDate = new Date().toISOString().slice(0, 10);
   const checks = [
     ["/booking-screen-read-jobs", { screen: "FOR_ME" }],
     ["/booking-screen-read-jobs", { screen: "GROUP_TRAININGS" }],
@@ -190,7 +191,7 @@ compose exec -T api node -e '
       screen: "EVENT_CATALOG",
       query: {
         surface: "GAMES",
-        localDates: ["2026-08-04"],
+        localDates: [localDate],
         kinds: ["COACH_GAME"],
         availability: "ALL",
         limit: 20,
@@ -200,7 +201,7 @@ compose exec -T api node -e '
       screen: "EVENT_CATALOG",
       query: {
         surface: "TRAININGS",
-        localDates: ["2026-08-04"],
+        localDates: [localDate],
         kinds: ["TRAINING"],
         availability: "ALL",
         limit: 20,
@@ -214,9 +215,18 @@ compose exec -T api node -e '
       headers: { "Content-Type": "application/json", "X-App-Platform": "web" },
       body: JSON.stringify(body),
     });
-    const payload = await response.json();
-    if (response.status !== 401 || payload.code !== "AUTH_REQUIRED") process.exitCode = 1;
-  })).catch(() => { process.exitCode = 1; });
+    const payload = await response.json().catch(() => ({}));
+    if (response.status !== 401 || payload.code !== "AUTH_REQUIRED") {
+      const surface = body.screen ?? "ACTIVITY_HISTORY";
+      console.error(
+        `Unsafe anonymous boundary for ${surface}: status=${response.status} code=${payload.code ?? "UNKNOWN"}`,
+      );
+      process.exitCode = 1;
+    }
+  })).catch((error) => {
+    console.error(`Anonymous boundary verification failed: ${error instanceof Error ? error.message : "UNKNOWN"}`);
+    process.exitCode = 1;
+  });
 ' "$tenant_key"
 
 echo "Client-assisted Viva runtime verified: routing=${routing_ready_delegations}/${active_delegations}, Home server sync disabled, Nano CORS accepted"
