@@ -46,6 +46,7 @@ export type CommunityOwnershipTransferResult =
   | { readonly outcome: 'community_not_found' }
   | { readonly outcome: 'actor_not_owner' }
   | { readonly outcome: 'target_not_active' }
+  | { readonly outcome: 'target_active_owner_quota_exceeded' }
   | { readonly outcome: 'owner_revision_conflict'; readonly currentRevision: number }
   | { readonly outcome: 'target_revision_conflict'; readonly currentRevision: number };
 

@@ -35,6 +35,10 @@ interface UpdatedMembershipRow extends QueryResultRow {
   readonly updated_at: Date | string;
 }
 
+interface CountRow extends QueryResultRow {
+  readonly count: number | string;
+}
+
 function storedTransfer(value: unknown): CommunityOwnershipTransferState {
   return communityOwnershipTransferStateSchema.parse(value);
 }
@@ -167,6 +171,28 @@ export function createCommunityOwnershipTransferRepository(
         }
         if (!target || target.status !== 'ACTIVE' || target.role === 'OWNER') {
           return { outcome: 'target_not_active' };
+        }
+
+        await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
+          `community-owner-quota:${input.tenantId}:${input.targetUserId}`,
+        ]);
+
+        const targetOwnerCount = await queryOne<CountRow>(
+          client,
+          `select count(*)::integer as count
+             from communities.memberships membership
+             join communities.communities community
+               on community.tenant_id = membership.tenant_id
+              and community.id = membership.community_id
+            where membership.tenant_id = $1
+              and membership.user_id = $2
+              and membership.role = 'OWNER'
+              and membership.status = 'ACTIVE'
+              and community.status = 'ACTIVE'`,
+          [input.tenantId, input.targetUserId],
+        );
+        if (Number(targetOwnerCount?.count ?? 0) >= 3) {
+          return { outcome: 'target_active_owner_quota_exceeded' };
         }
 
         const ownerRevision = Number(owner.revision);

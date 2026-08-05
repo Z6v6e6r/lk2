@@ -10,13 +10,24 @@ const input = {
   visibility: 'PUBLIC',
   joinPolicy: 'MODERATED',
   publishingPreset: 'STAFF_FEED',
-  quotaOverride: false,
   idempotencyKey: 'community-create-test-0001',
   requestHash: 'a'.repeat(64),
   correlationId: 'community-create-correlation',
 } as const;
 
 const createdAt = new Date('2026-08-03T10:00:00.000Z');
+const quotaGrantInput = {
+  tenantId: input.tenantId,
+  actorUserId: '44444444-4444-4444-8444-444444444444',
+  subjectUserId: input.actorUserId,
+  capability: 'communities.create.quota.override',
+  scopes: ['ACTIVE_OWNER_LIMIT', 'DAILY_CREATE_LIMIT'],
+  reasonCode: 'OPERATIONS_EXCEPTION',
+  ticketId: 'CUP-1842',
+  idempotencyKey: 'community-create-grant-0001',
+  requestHash: 'b'.repeat(64),
+  correlationId: 'community-create-grant-correlation',
+} as const;
 const communityRow = {
   id: '11111111-1111-4111-8111-111111111111',
   title: input.title,
@@ -66,6 +77,7 @@ function successfulPool() {
     }
     if (text.includes('select count(*)::integer')) return [{ count: 2 }];
     if (text.includes('as retry_after_seconds')) return [];
+    if (text.includes('from communities.create_quota_grants')) return [];
     if (text.includes('insert into communities.communities')) return [communityRow];
     return [];
   });
@@ -83,6 +95,13 @@ describe('community create repository', () => {
     expect(query).toHaveBeenCalledWith("select set_config('app.tenant_id', $1, true)", [
       input.tenantId,
     ]);
+    expect(
+      query.mock.calls.some(
+        ([text, values]) =>
+          String(text).includes('pg_advisory_xact_lock') &&
+          values?.[0] === `community-owner-quota:${input.tenantId}:${input.actorUserId}`,
+      ),
+    ).toBe(true);
     expect(
       query.mock.calls.some(([text]) =>
         String(text).includes('insert into communities.memberships'),
@@ -151,7 +170,7 @@ describe('community create repository', () => {
     });
   });
 
-  it('requires an active actor and lets only an authorized internal override bypass quotas', async () => {
+  it('requires an active actor', async () => {
     const inactive = poolWithQuery((text) => {
       if (text.includes('select request_hash')) return [];
       if (text.includes('from identity.users')) return [{ status: 'DISABLED' }];
@@ -160,16 +179,156 @@ describe('community create repository', () => {
     await expect(createCommunityCreateRepository(inactive.pool).create(input)).resolves.toEqual({
       outcome: 'actor_not_active',
     });
+  });
 
-    const override = successfulPool();
+  it('consumes a matching user-scoped grant only after the successful create writes', async () => {
+    const grantId = '33333333-3333-4333-8333-333333333333';
+    const grant = poolWithQuery((text) => {
+      if (text.includes('select request_hash')) return [];
+      if (text.includes('from identity.users')) return [{ status: 'ACTIVE' }];
+      if (text.includes('select count(*)::integer')) return [{ count: 3 }];
+      if (text.includes('as retry_after_seconds')) return [{ retry_after_seconds: 3_600 }];
+      if (text.includes('from communities.create_quota_grants')) {
+        return [
+          {
+            id: grantId,
+            subject_user_id: input.actorUserId,
+            authorized_by_user_id: '44444444-4444-4444-8444-444444444444',
+            scopes: ['ACTIVE_OWNER_LIMIT', 'DAILY_CREATE_LIMIT'],
+            state: 'ACTIVE',
+            revision: 1,
+            expires_at: new Date('2026-08-06T10:00:00.000Z'),
+            created_at: createdAt,
+            updated_at: createdAt,
+            consumed_at: null,
+          },
+        ];
+      }
+      if (text.includes('insert into communities.communities')) return [communityRow];
+      if (text.includes("set state = 'CONSUMED'")) {
+        return [
+          {
+            id: grantId,
+            subject_user_id: input.actorUserId,
+            authorized_by_user_id: '44444444-4444-4444-8444-444444444444',
+            scopes: ['ACTIVE_OWNER_LIMIT', 'DAILY_CREATE_LIMIT'],
+            state: 'CONSUMED',
+            revision: 2,
+            expires_at: new Date('2026-08-06T10:00:00.000Z'),
+            created_at: createdAt,
+            updated_at: createdAt,
+            consumed_at: createdAt,
+          },
+        ];
+      }
+      return [];
+    });
+
+    await expect(createCommunityCreateRepository(grant.pool).create(input)).resolves.toMatchObject({
+      outcome: 'created',
+      replayed: false,
+    });
+    const calls = grant.query.mock.calls.map(([text]) => String(text));
+    expect(
+      calls.findIndex((text) => text.includes('insert into communities.communities')),
+    ).toBeLessThan(calls.findIndex((text) => text.includes("set state = 'CONSUMED'")));
+    const command = grant.query.mock.calls.find(([text]) =>
+      String(text).includes('insert into communities.create_commands'),
+    );
+    expect(command?.[1]).toContain(grantId);
+  });
+
+  it('does not consume a grant whose scopes do not cover every exceeded quota', async () => {
+    const insufficient = poolWithQuery((text) => {
+      if (text.includes('select request_hash')) return [];
+      if (text.includes('from identity.users')) return [{ status: 'ACTIVE' }];
+      if (text.includes('select count(*)::integer')) return [{ count: 3 }];
+      if (text.includes('as retry_after_seconds')) return [{ retry_after_seconds: 3_600 }];
+      if (text.includes('from communities.create_quota_grants')) {
+        return [
+          {
+            id: '33333333-3333-4333-8333-333333333333',
+            subject_user_id: input.actorUserId,
+            authorized_by_user_id: '44444444-4444-4444-8444-444444444444',
+            scopes: ['DAILY_CREATE_LIMIT'],
+            state: 'ACTIVE',
+            revision: 1,
+            expires_at: new Date('2026-08-06T10:00:00.000Z'),
+            created_at: createdAt,
+            updated_at: createdAt,
+            consumed_at: null,
+          },
+        ];
+      }
+      return [];
+    });
+
+    await expect(createCommunityCreateRepository(insufficient.pool).create(input)).resolves.toEqual(
+      {
+        outcome: 'active_owner_quota_exceeded',
+      },
+    );
+    expect(
+      insufficient.query.mock.calls.some(([text]) =>
+        String(text).includes("set state = 'CONSUMED'"),
+      ),
+    ).toBe(false);
+  });
+
+  it('creates one audited 24-hour user-scoped grant with server capability evidence', async () => {
+    const grantId = '33333333-3333-4333-8333-333333333333';
+    const grant = poolWithQuery((text) => {
+      if (text.includes('from communities.create_quota_grant_commands')) return [];
+      if (text.includes('select id, status from identity.users')) {
+        return [
+          { id: quotaGrantInput.actorUserId, status: 'ACTIVE' },
+          { id: quotaGrantInput.subjectUserId, status: 'ACTIVE' },
+        ];
+      }
+      if (text.includes('update communities.create_quota_grants')) return [];
+      if (text.includes('from communities.create_quota_grants')) return [];
+      if (text.includes('insert into communities.create_quota_grants')) {
+        return [
+          {
+            id: grantId,
+            subject_user_id: quotaGrantInput.subjectUserId,
+            authorized_by_user_id: quotaGrantInput.actorUserId,
+            scopes: [...quotaGrantInput.scopes],
+            state: 'ACTIVE',
+            revision: 1,
+            expires_at: new Date('2026-08-04T10:00:00.000Z'),
+            created_at: createdAt,
+            updated_at: createdAt,
+            consumed_at: null,
+          },
+        ];
+      }
+      return [];
+    });
+
     await expect(
-      createCommunityCreateRepository(override.pool).create({ ...input, quotaOverride: true }),
-    ).resolves.toMatchObject({ outcome: 'created', replayed: false });
+      createCommunityCreateRepository(grant.pool).createQuotaGrant(quotaGrantInput),
+    ).resolves.toMatchObject({
+      outcome: 'granted',
+      replayed: false,
+      grant: {
+        id: grantId,
+        subjectUserId: quotaGrantInput.subjectUserId,
+        scopes: [...quotaGrantInput.scopes],
+      },
+    });
     expect(
-      override.query.mock.calls.some(([text]) => String(text).includes('select count(*)::integer')),
-    ).toBe(false);
+      grant.query.mock.calls.some(([text]) =>
+        String(text).includes('insert into communities.create_quota_grant_commands'),
+      ),
+    ).toBe(true);
     expect(
-      override.query.mock.calls.some(([text]) => String(text).includes('as retry_after_seconds')),
-    ).toBe(false);
+      grant.query.mock.calls.some(([text]) => String(text).includes('insert into audit.audit_log')),
+    ).toBe(true);
+    expect(
+      grant.query.mock.calls.some(([text]) =>
+        String(text).includes('insert into audit.outbox_events'),
+      ),
+    ).toBe(true);
   });
 });

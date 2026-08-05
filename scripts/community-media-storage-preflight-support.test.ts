@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   lifecycleCanDeleteReady,
+  lifecycleCleansQuarantineVersions,
   policyAllowsAnonymousAccess,
 } from './community-media-storage-preflight-support.js';
 
@@ -50,6 +51,41 @@ describe('community media storage preflight policy', () => {
         Status: 'Enabled',
         Filter: { Prefix: 'community-media/quarantine/' },
         Expiration: { Days: 1 },
+      }),
+    ).toBe(false);
+  });
+
+  it('requires bounded cleanup for noncurrent quarantine versions', () => {
+    expect(
+      lifecycleCleansQuarantineVersions({
+        ID: 'quarantine-noncurrent-cleanup',
+        Status: 'Enabled',
+        Filter: { Prefix: 'community-media/quarantine/' },
+        NoncurrentVersionExpiration: { NoncurrentDays: 1 },
+      }),
+    ).toBe(true);
+    expect(
+      lifecycleCleansQuarantineVersions({
+        ID: 'too-slow-cleanup',
+        Status: 'Enabled',
+        Filter: { Prefix: 'community-media/quarantine/' },
+        NoncurrentVersionExpiration: { NoncurrentDays: 30 },
+      }),
+    ).toBe(false);
+    expect(
+      lifecycleCleansQuarantineVersions({
+        ID: 'one-tenant-only',
+        Status: 'Enabled',
+        Filter: { Prefix: 'community-media/quarantine/one-tenant/' },
+        NoncurrentVersionExpiration: { NoncurrentDays: 1 },
+      }),
+    ).toBe(false);
+    expect(
+      lifecycleCleansQuarantineVersions({
+        ID: 'ready-only',
+        Status: 'Enabled',
+        Filter: { Prefix: 'community-media/ready/' },
+        NoncurrentVersionExpiration: { NoncurrentDays: 1 },
       }),
     ).toBe(false);
   });

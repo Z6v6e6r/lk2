@@ -26,6 +26,7 @@ export interface CommunityMediaUploadedObject {
 }
 
 export interface CommunityMediaObjectStore {
+  checkReady(): Promise<void>;
   createUploadGrant(input: {
     readonly objectKey: string;
     readonly contentType: string;
@@ -100,37 +101,48 @@ export class S3CommunityMediaObjectStore implements CommunityMediaObjectStore {
     this.deliveryClient = new S3Client({ ...shared, endpoint: options.publicEndpoint });
   }
 
-  private ensureReady(): Promise<void> {
-    this.ready ??= (async () => {
+  private async probeReady(): Promise<void> {
+    try {
+      await this.internalClient.send(new HeadBucketCommand({ Bucket: this.options.bucket }));
+    } catch (error) {
+      if (httpStatus(error) !== 404 || !this.options.autoCreateBucket) throw error;
       try {
-        await this.internalClient.send(new HeadBucketCommand({ Bucket: this.options.bucket }));
-      } catch (error) {
-        if (httpStatus(error) !== 404 || !this.options.autoCreateBucket) throw error;
-        try {
-          await this.internalClient.send(new CreateBucketCommand({ Bucket: this.options.bucket }));
-        } catch (createError) {
-          if (httpStatus(createError) !== 409) throw createError;
-        }
+        await this.internalClient.send(new CreateBucketCommand({ Bucket: this.options.bucket }));
+      } catch (createError) {
+        if (httpStatus(createError) !== 409) throw createError;
       }
-      let versioning = await this.internalClient.send(
+    }
+    let versioning = await this.internalClient.send(
+      new GetBucketVersioningCommand({ Bucket: this.options.bucket }),
+    );
+    if (versioning.Status !== 'Enabled' && this.options.autoCreateBucket) {
+      await this.internalClient.send(
+        new PutBucketVersioningCommand({
+          Bucket: this.options.bucket,
+          VersioningConfiguration: { Status: 'Enabled' },
+        }),
+      );
+      versioning = await this.internalClient.send(
         new GetBucketVersioningCommand({ Bucket: this.options.bucket }),
       );
-      if (versioning.Status !== 'Enabled' && this.options.autoCreateBucket) {
-        await this.internalClient.send(
-          new PutBucketVersioningCommand({
-            Bucket: this.options.bucket,
-            VersioningConfiguration: { Status: 'Enabled' },
-          }),
-        );
-        versioning = await this.internalClient.send(
-          new GetBucketVersioningCommand({ Bucket: this.options.bucket }),
-        );
-      }
-      if (versioning.Status !== 'Enabled') {
-        throw new Error('COMMUNITY_MEDIA_BUCKET_VERSIONING_REQUIRED');
-      }
-    })();
-    return this.ready;
+    }
+    if (versioning.Status !== 'Enabled') {
+      throw new Error('COMMUNITY_MEDIA_BUCKET_VERSIONING_REQUIRED');
+    }
+  }
+
+  private ensureReady(): Promise<void> {
+    if (this.ready) return this.ready;
+    const attempt = this.probeReady();
+    this.ready = attempt;
+    void attempt.catch(() => {
+      if (this.ready === attempt) this.ready = undefined;
+    });
+    return attempt;
+  }
+
+  public checkReady(): Promise<void> {
+    return this.probeReady();
   }
 
   public async createUploadGrant(input: {
@@ -162,6 +174,7 @@ export class S3CommunityMediaObjectStore implements CommunityMediaObjectStore {
         ContentType: input.contentType,
         ContentLength: input.byteSize,
         CacheControl: 'private, no-store',
+        IfNoneMatch: '*',
         Metadata: {
           'padlhub-media-id': input.mediaId,
           'padlhub-sha256': input.sha256,
@@ -175,6 +188,7 @@ export class S3CommunityMediaObjectStore implements CommunityMediaObjectStore {
       requiredHeaders: {
         'Content-Type': input.contentType,
         'Cache-Control': 'private, no-store',
+        'If-None-Match': '*',
       },
       expiresAt: input.expiresAt,
     };

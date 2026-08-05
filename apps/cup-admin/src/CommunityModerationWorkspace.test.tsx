@@ -103,6 +103,43 @@ describe('CommunityModerationWorkspace', () => {
     expect(screen.queryByText(/токен/i)).not.toBeInTheDocument();
   });
 
+  it('creates a user-scoped one-use grant with explicit scopes and audit evidence', async () => {
+    const createCommunityCreateQuotaGrant = vi.fn().mockResolvedValue({
+      status: 'ACTIVE',
+      scopes: ['ACTIVE_OWNER_LIMIT'],
+      expiresAt: '2026-08-05T12:00:00.000Z',
+    });
+    const client = {
+      listPendingCommunityJoinRequests: vi.fn().mockResolvedValue({ items: [] }),
+      listPendingCommunityContent: vi.fn().mockResolvedValue({ items: [] }),
+      createCommunityCreateQuotaGrant,
+    } as unknown as NotificationAdminClient;
+
+    render(<CommunityModerationWorkspace client={client} />);
+    fireEvent.change(screen.getByLabelText('User UUID'), {
+      target: { value: request.requesterUserId },
+    });
+    const ownerScope = screen.getByLabelText('Лимит активного владения');
+    fireEvent.click(ownerScope);
+    await waitFor(() => expect(ownerScope).toBeChecked());
+    fireEvent.change(screen.getByLabelText('Код причины создания'), {
+      target: { value: 'operations_exception' },
+    });
+    fireEvent.change(screen.getByLabelText('Ticket ID создания'), {
+      target: { value: 'CUP-1842' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Создать grant создания' }));
+
+    await waitFor(() =>
+      expect(createCommunityCreateQuotaGrant).toHaveBeenCalledWith(request.requesterUserId, {
+        scopes: ['ACTIVE_OWNER_LIMIT'],
+        reasonCode: 'OPERATIONS_EXCEPTION',
+        ticketId: 'CUP-1842',
+      }),
+    );
+    expect(await screen.findByText('Grant создания создан.')).toBeInTheDocument();
+  });
+
   it('loads and approves pending content with only the canonical revision', async () => {
     const post = {
       id: '44444444-4444-4444-8444-444444444444',

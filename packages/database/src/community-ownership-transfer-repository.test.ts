@@ -35,6 +35,7 @@ function successfulPool() {
     if (text.includes('from communities.ownership_transfer_commands')) return [];
     if (text.includes('from identity.users')) return [{ status: 'ACTIVE' }];
     if (text.includes('from communities.communities')) return [{ status: 'ACTIVE' }];
+    if (text.includes('select count(*)::integer')) return [{ count: 2 }];
     if (text.includes('from communities.memberships')) {
       return [
         { user_id: input.actorUserId, role: 'OWNER', status: 'ACTIVE', revision: 4 },
@@ -72,6 +73,13 @@ describe('community ownership transfer repository', () => {
     expect(
       query.mock.calls.filter(([text]) => String(text).includes('update communities.memberships')),
     ).toHaveLength(2);
+    expect(
+      query.mock.calls.some(
+        ([text, values]) =>
+          String(text).includes('pg_advisory_xact_lock') &&
+          values?.[0] === `community-owner-quota:${input.tenantId}:${input.targetUserId}`,
+      ),
+    ).toBe(true);
     expect(
       query.mock.calls.some(([text]) => String(text).includes('ownership_transfer_commands')),
     ).toBe(true);
@@ -142,5 +150,45 @@ describe('community ownership transfer repository', () => {
     await expect(
       createCommunityOwnershipTransferRepository(inactive.pool).transfer(input),
     ).resolves.toEqual({ outcome: 'target_not_active' });
+  });
+
+  it('rejects a target that already owns three active communities', async () => {
+    const limited = successfulPool();
+    limited.query.mockImplementation((text: string) => {
+      if (text === 'begin' || text === 'commit' || text === 'rollback') {
+        return Promise.resolve({ rows: [] });
+      }
+      if (text.includes("set_config('app.tenant_id'")) return Promise.resolve({ rows: [] });
+      if (text.includes('from communities.ownership_transfer_commands')) {
+        return Promise.resolve({ rows: [] });
+      }
+      if (text.includes('from identity.users')) {
+        return Promise.resolve({ rows: [{ status: 'ACTIVE' }] });
+      }
+      if (text.includes('from communities.communities')) {
+        return Promise.resolve({ rows: [{ status: 'ACTIVE' }] });
+      }
+      if (text.includes('from communities.memberships') && !text.includes('count(*)')) {
+        return Promise.resolve({
+          rows: [
+            { user_id: input.actorUserId, role: 'OWNER', status: 'ACTIVE', revision: 4 },
+            { user_id: input.targetUserId, role: 'MEMBER', status: 'ACTIVE', revision: 2 },
+          ],
+        });
+      }
+      if (text.includes('select count(*)::integer')) {
+        return Promise.resolve({ rows: [{ count: 3 }] });
+      }
+      return Promise.resolve({ rows: [] });
+    });
+
+    await expect(
+      createCommunityOwnershipTransferRepository(limited.pool).transfer(input),
+    ).resolves.toEqual({ outcome: 'target_active_owner_quota_exceeded' });
+    expect(
+      limited.query.mock.calls.some(([text]) =>
+        String(text).includes('update communities.memberships'),
+      ),
+    ).toBe(false);
   });
 });

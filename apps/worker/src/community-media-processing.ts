@@ -31,6 +31,7 @@ export interface CommunityMediaStoredVariant {
 }
 
 export interface CommunityMediaWorkerObjectStore {
+  checkReady?(): Promise<void>;
   getExact(input: {
     readonly objectKey: string;
     readonly versionId: string;
@@ -97,15 +98,28 @@ export class S3CommunityMediaWorkerObjectStore implements CommunityMediaWorkerOb
     });
   }
 
-  private ensureReady(): Promise<void> {
-    this.ready ??= this.client
+  private probeReady(): Promise<void> {
+    return this.client
       .send(new GetBucketVersioningCommand({ Bucket: this.options.bucket }))
       .then((result) => {
         if (result.Status !== 'Enabled') {
           throw new Error('COMMUNITY_MEDIA_BUCKET_VERSIONING_REQUIRED');
         }
       });
-    return this.ready;
+  }
+
+  private ensureReady(): Promise<void> {
+    if (this.ready) return this.ready;
+    const attempt = this.probeReady();
+    this.ready = attempt;
+    void attempt.catch(() => {
+      if (this.ready === attempt) this.ready = undefined;
+    });
+    return attempt;
+  }
+
+  public checkReady(): Promise<void> {
+    return this.probeReady();
   }
 
   public async getExact(input: {
@@ -218,10 +232,15 @@ export type CommunityMediaScanResult =
   { readonly outcome: 'clean' } | { readonly outcome: 'infected'; readonly signature: string };
 
 export interface CommunityMediaMalwareScanner {
+  checkReady?(): Promise<void>;
   scan(body: Buffer): Promise<CommunityMediaScanResult>;
 }
 
 export class MockCommunityMediaMalwareScanner implements CommunityMediaMalwareScanner {
+  public checkReady(): Promise<void> {
+    return Promise.resolve();
+  }
+
   public scan(): Promise<CommunityMediaScanResult> {
     return Promise.resolve({ outcome: 'clean' });
   }
@@ -235,6 +254,33 @@ export class ClamAvCommunityMediaMalwareScanner implements CommunityMediaMalware
       readonly timeoutMs: number;
     },
   ) {}
+
+  public checkReady(): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const socket = net.createConnection({ host: this.options.host, port: this.options.port });
+      let response = '';
+      let settled = false;
+      const finish = (error?: Error): void => {
+        if (settled) return;
+        settled = true;
+        socket.destroy();
+        if (error) return reject(error);
+        if (response === 'PONG\0' || response === 'PONG\n') return resolve();
+        return reject(new Error('COMMUNITY_MEDIA_SCAN_HEALTH_INVALID'));
+      };
+      socket.setTimeout(this.options.timeoutMs, () =>
+        finish(new Error('COMMUNITY_MEDIA_SCAN_TIMEOUT')),
+      );
+      socket.on('error', () => finish(new Error('COMMUNITY_MEDIA_SCAN_UNAVAILABLE')));
+      socket.on('data', (chunk: Buffer) => {
+        response += chunk.toString('utf8');
+        if (response.length > 64) return finish(new Error('COMMUNITY_MEDIA_SCAN_HEALTH_INVALID'));
+        if (response.includes('\0') || response.includes('\n')) finish();
+      });
+      socket.on('end', () => finish());
+      socket.on('connect', () => socket.end('zPING\0'));
+    });
+  }
 
   public scan(body: Buffer): Promise<CommunityMediaScanResult> {
     return new Promise((resolve, reject) => {

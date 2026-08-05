@@ -346,6 +346,55 @@ describe('NotificationAdminClient community moderation', () => {
     expect(headers.get('Idempotency-Key')).toMatch(/^[A-Za-z0-9-]{16,}$/);
   });
 
+  it('creates a user-scoped community create grant without client-controlled capability', async () => {
+    const calls: Array<{
+      readonly input: Parameters<typeof fetch>[0];
+      readonly init?: RequestInit;
+    }> = [];
+    const fetchImplementation: typeof fetch = (input, init) => {
+      calls.push({ input, ...(init ? { init } : {}) });
+      return Promise.resolve(
+        Response.json({
+          id: '22222222-2222-4222-8222-222222222222',
+          subjectUserId: '11111111-1111-4111-8111-111111111111',
+          scopes: ['ACTIVE_OWNER_LIMIT'],
+          status: 'ACTIVE',
+          revision: 1,
+          createdAt: '2026-08-04T12:00:00.000Z',
+          updatedAt: '2026-08-04T12:00:00.000Z',
+          expiresAt: '2026-08-05T12:00:00.000Z',
+          consumedAt: null,
+          replayed: false,
+        }),
+      );
+    };
+    const client = createNotificationAdminClient({
+      baseUrl: 'https://api.padlhub.test',
+      tenantKey: 'local-padel',
+      appVersion: '0.1.0',
+      fetchImplementation,
+    });
+
+    await client.createCommunityCreateQuotaGrant('11111111-1111-4111-8111-111111111111', {
+      scopes: ['ACTIVE_OWNER_LIMIT'],
+      reasonCode: 'OPERATIONS_EXCEPTION',
+      ticketId: 'CUP-1842',
+    });
+
+    expect(calls[0]?.input).toBe(
+      'https://api.padlhub.test/admin/api/v1/local-padel/users/11111111-1111-4111-8111-111111111111/community-create-quota-grants',
+    );
+    const requestBody = calls[0]?.init?.body;
+    expect(typeof requestBody).toBe('string');
+    if (typeof requestBody !== 'string') throw new Error('Expected a JSON request body');
+    expect(JSON.parse(requestBody) as unknown).toEqual({
+      scopes: ['ACTIVE_OWNER_LIMIT'],
+      reasonCode: 'OPERATIONS_EXCEPTION',
+      ticketId: 'CUP-1842',
+    });
+    expect(requestBody).not.toMatch(/capability|actor|quotaOverride|grantId/i);
+  });
+
   it('covers the remaining moderation reads and commands with encoded server-owned identifiers', async () => {
     const calls: Array<{
       readonly input: Parameters<typeof fetch>[0];

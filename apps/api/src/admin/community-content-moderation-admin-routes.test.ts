@@ -254,4 +254,45 @@ describe('community content moderation admin routes', () => {
       }),
     );
   });
+
+  it('replays a terminal media scan through the CUP-only idempotent operations path', async () => {
+    const replayFailedScan = vi.fn().mockResolvedValue({
+      outcome: 'replayed',
+      targetId: mediaId,
+      replayed: false,
+    });
+    const app = await buildApp({
+      config,
+      logger: createLogger('api-test', 'silent'),
+      pool: fakePool(),
+      communityMediaOperationsRepository: {
+        replayFailedScan,
+        replayDeadGc: vi.fn(),
+      },
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/admin/api/v1/local-padel/community-media/scans/${mediaId}/replay`,
+      headers: {
+        authorization: `Bearer ${await token(['communities.content.moderation.decide'])}`,
+        'x-app-platform': 'cup-admin',
+        'idempotency-key': 'community-media-replay-0001',
+      },
+      payload: { reasonCode: 'DEPENDENCY_RECOVERED' },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['x-idempotent-replayed']).toBe('false');
+    expect(response.json()).toMatchObject({ targetId: mediaId, operation: 'SCAN' });
+    expect(replayFailedScan).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tenantId,
+        actorUserId,
+        targetId: mediaId,
+        reasonCode: 'DEPENDENCY_RECOVERED',
+      }),
+    );
+  });
 });

@@ -122,12 +122,20 @@ those are separate gates.
 Before enabling Community media, provision the bucket outside the application runtime and keep
 `S3_AUTO_CREATE_BUCKET=false`. The read-only preflight fails unless versioning is enabled, anonymous
 ACL/policy read is absent, CORS contains only the explicitly approved origins/methods/headers, and
-no lifecycle rule can delete current or exact historical objects under `community-media/ready/`:
+no lifecycle rule can delete current or exact historical objects under `community-media/ready/`.
+CORS must allow the signed `If-None-Match` upload header, and lifecycle must remove noncurrent
+`community-media/quarantine/` versions within seven days:
 
 ```bash
 COMMUNITIES_MEDIA_ALLOWED_ORIGINS=https://lk-staging.example,https://cup-staging.example \
 npm run communities:media:storage:preflight
 ```
+
+The mutating storage probe must observe HTTP 412 from a second PUT with the same signed capability.
+A 2xx replay is a release blocker because it permits provider-version accumulation under one upload
+intent. API readiness must recover after a transient S3 failure. Worker readiness must recover after
+transient S3 or ClamAV failure and must never report ready while either configured dependency fails
+its bounded probe.
 
 Then run the mutating media journey only with a synthetic ACTIVE MEMBER in a `MODERATED_FEED`
 community and a synthetic CUP principal. The harness requires an absolute secret fixture outside
@@ -135,6 +143,32 @@ the checkout plus the exact acknowledgement `I_ACKNOWLEDGE_SYNTHETIC_COMMUNITY_W
 public signed PUT, worker `READY`, moderation preview/approval, feed visibility, archive denial,
 five-year retention and restore/re-approval. Archive cleanup is part of the assertion. Never point
 the harness at production.
+
+Configure bounded attempts explicitly for the release environment:
+
+```text
+COMMUNITY_MEDIA_SCAN_MAX_ATTEMPTS=8
+COMMUNITY_MEDIA_GC_MAX_ATTEMPTS=8
+```
+
+Monitor `phub_worker_communities_media_scan_backlog`,
+`phub_worker_communities_media_scan_oldest_age_seconds`,
+`phub_worker_communities_media_failed_scans`, `phub_worker_communities_media_gc_backlog`,
+`phub_worker_communities_media_gc_oldest_age_seconds` and
+`phub_worker_communities_media_dead_gc_jobs`. A terminal count above zero requires an incident note.
+After dependency recovery, a CUP operator with `communities.content.moderation.decide` may replay the
+exact terminal item through one of these idempotent commands; never reset attempts with ad-hoc SQL:
+
+```text
+POST /admin/api/v1/{tenantKey}/community-media/scans/{mediaId}/replay
+POST /admin/api/v1/{tenantKey}/community-media/gc-jobs/{jobId}/replay
+Idempotency-Key: <unique command key>
+{"reasonCode":"DEPENDENCY_RECOVERED"}
+```
+
+Confirm the 200 response, audit/outbox event and decreasing terminal gauge. A 409 means the target is
+not terminal and must not be forced. If oldest active scan age exceeds five minutes, oldest GC age
+exceeds one hour, or any terminal gauge remains non-zero, keep Community media rollout disabled.
 
 ## Gate 3: command, outbox and recovery
 

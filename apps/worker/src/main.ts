@@ -334,12 +334,20 @@ const handleHealthRequest = async (
     return;
   }
   if (request.url === '/health/ready') {
-    const [databaseReady, vivaSyncReady] = await Promise.all([
+    const [databaseReady, vivaSyncReady, communityMediaReady] = await Promise.all([
       checkDatabaseReady(pool),
       redis
         ? redis
             .ping()
             .then((result) => result === 'PONG')
+            .catch(() => false)
+        : Promise.resolve(true),
+      communityMediaRuntime
+        ? Promise.all([
+            communityMediaRuntime.store.checkReady(),
+            communityMediaRuntime.scanner.checkReady?.() ?? Promise.resolve(),
+          ])
+            .then(() => true)
             .catch(() => false)
         : Promise.resolve(true),
     ]);
@@ -348,6 +356,7 @@ const handleHealthRequest = async (
       database: databaseReady,
       rabbitmq: rabbitReady,
       vivaSync: vivaSyncReady,
+      communityMedia: communityMediaReady,
       forwardProgress: forwardProgress.ready,
     };
     response.statusCode = Object.values(checks).every(Boolean) ? 200 : 503;
@@ -561,8 +570,10 @@ const runCommunityMedia = async (): Promise<void> => {
     scanned: 0,
     rejected: 0,
     scanRetried: 0,
+    scanFailed: 0,
     gcCompleted: 0,
     gcRetried: 0,
+    gcDead: 0,
   };
   let failures = 0;
   try {
@@ -578,6 +589,8 @@ const runCommunityMedia = async (): Promise<void> => {
         tenantId: tenant.id,
         workerId: communityMediaWorkerId,
         batchSize: config.COMMUNITY_MEDIA_BATCH_SIZE,
+        scanMaxAttempts: config.COMMUNITY_MEDIA_SCAN_MAX_ATTEMPTS,
+        gcMaxAttempts: config.COMMUNITY_MEDIA_GC_MAX_ATTEMPTS,
       });
       if (Object.values(result).some((value) => value > 0)) {
         logger.info({ tenantId: tenant.id, result }, 'community media cycle completed');
@@ -586,8 +599,10 @@ const runCommunityMedia = async (): Promise<void> => {
       aggregate.scanned += result.scanned;
       aggregate.rejected += result.rejected;
       aggregate.scanRetried += result.scanRetried;
+      aggregate.scanFailed += result.scanFailed;
       aggregate.gcCompleted += result.gcCompleted;
       aggregate.gcRetried += result.gcRetried;
+      aggregate.gcDead += result.gcDead;
     }
   } catch (error) {
     failures += 1;

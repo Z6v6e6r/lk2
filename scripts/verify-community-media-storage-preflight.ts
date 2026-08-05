@@ -11,6 +11,7 @@ import { NodeHttpHandler } from '@smithy/node-http-handler';
 
 import {
   lifecycleCanDeleteReady,
+  lifecycleCleansQuarantineVersions,
   policyAllowsAnonymousAccess,
 } from './community-media-storage-preflight-support.js';
 
@@ -50,7 +51,7 @@ const allowedMethods = new Set(['GET', 'HEAD', 'PUT']);
 const allowedHeaders = new Set(
   (
     process.env.COMMUNITIES_MEDIA_ALLOWED_UPLOAD_HEADERS ??
-    'content-type,cache-control,x-amz-checksum-sha256,x-amz-meta-padlhub-media-id,x-amz-meta-padlhub-sha256'
+    'content-type,cache-control,if-none-match,x-amz-checksum-sha256,x-amz-meta-padlhub-media-id,x-amz-meta-padlhub-sha256'
   )
     .split(',')
     .map((value) => value.trim().toLowerCase())
@@ -95,8 +96,12 @@ try {
 
   const cors = await client.send(new GetBucketCorsCommand({ Bucket: bucket }));
   const observedOrigins = new Set<string>();
+  const uploadReadyOrigins = new Set<string>();
   for (const rule of cors.CORSRules ?? []) {
-    for (const origin of rule.AllowedOrigins ?? []) {
+    const ruleOrigins = rule.AllowedOrigins ?? [];
+    const ruleMethods = new Set((rule.AllowedMethods ?? []).map((method) => method.toUpperCase()));
+    const ruleHeaders = new Set((rule.AllowedHeaders ?? []).map((header) => header.toLowerCase()));
+    for (const origin of ruleOrigins) {
       if (!expectedOrigins.has(origin)) {
         throw new Error(`COMMUNITY_MEDIA_CORS_ORIGIN_FORBIDDEN:${origin}`);
       }
@@ -112,10 +117,19 @@ try {
         throw new Error(`COMMUNITY_MEDIA_CORS_HEADER_FORBIDDEN:${header}`);
       }
     }
+    if (ruleMethods.has('PUT') && [...allowedHeaders].every((header) => ruleHeaders.has(header))) {
+      for (const origin of ruleOrigins) uploadReadyOrigins.add(origin);
+    }
   }
   const missingOrigins = [...expectedOrigins].filter((origin) => !observedOrigins.has(origin));
   if (missingOrigins.length > 0) {
     throw new Error(`COMMUNITY_MEDIA_CORS_ORIGINS_MISSING:${missingOrigins.join(',')}`);
+  }
+  const uploadMissingOrigins = [...expectedOrigins].filter(
+    (origin) => !uploadReadyOrigins.has(origin),
+  );
+  if (uploadMissingOrigins.length > 0) {
+    throw new Error(`COMMUNITY_MEDIA_CORS_UPLOAD_RULE_MISSING:${uploadMissingOrigins.join(',')}`);
   }
 
   let lifecycleRules: readonly LifecycleRule[] = [];
@@ -132,6 +146,9 @@ try {
   if (lifecycleRules.some(lifecycleCanDeleteReady)) {
     throw new Error('COMMUNITY_MEDIA_READY_LIFECYCLE_DELETE_FORBIDDEN');
   }
+  if (!lifecycleRules.some((rule) => lifecycleCleansQuarantineVersions(rule))) {
+    throw new Error('COMMUNITY_MEDIA_QUARANTINE_NONCURRENT_CLEANUP_REQUIRED');
+  }
 
   process.stdout.write(
     `${JSON.stringify({
@@ -141,6 +158,7 @@ try {
       publicRead: false,
       corsOrigins: [...observedOrigins].sort(),
       readyLifecycleDeletion: false,
+      quarantineNoncurrentCleanupDays: 7,
     })}\n`,
   );
 } finally {

@@ -191,6 +191,7 @@ describe('community media routes', () => {
       pool: fakePool(),
       communityMediaDeliveryAuthorizer: { authorizeVariant },
       communityMediaObjectStore: {
+        checkReady: vi.fn().mockResolvedValue(undefined),
         createUploadGrant: vi.fn(),
         statUploadedObject: vi.fn(),
         createReadUrl,

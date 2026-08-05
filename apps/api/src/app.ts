@@ -22,6 +22,7 @@ import type {
 import { checkDatabaseReady } from '@phub/database';
 import type {
   ClientRoutingPlanRepository,
+  CommunityMediaPersistenceRepository,
   AdminNotificationRepository,
   BookingPreferencesRepository,
   BookingScreenMappingRepository,
@@ -70,6 +71,7 @@ import { registerLocationAdminRoutes } from './admin/location-admin-routes.js';
 import { registerGiftCertificateAdminRoutes } from './admin/gift-certificate-admin-routes.js';
 import { registerCommunityMembershipAdminRoutes } from './admin/community-membership-admin-routes.js';
 import { registerCommunityDirectInviteAdminRoutes } from './admin/community-direct-invite-admin-routes.js';
+import { registerCommunityCreateQuotaAdminRoutes } from './admin/community-create-quota-admin-routes.js';
 import { registerCommunityContentModerationAdminRoutes } from './admin/community-content-moderation-admin-routes.js';
 import type { AuthService } from './auth/auth-service.js';
 import { registerBookingPreferenceRoutes } from './bookings/booking-preference-routes.js';
@@ -226,6 +228,10 @@ export interface BuildAppOptions {
   readonly communityMediaDeliveryAuthorizer?: CommunityMediaDeliveryAuthorizer;
   readonly communityMediaModerationAuthorizer?: CommunityMediaDeliveryAuthorizer;
   readonly communityMediaObjectStore?: CommunityMediaObjectStore;
+  readonly communityMediaOperationsRepository?: Pick<
+    CommunityMediaPersistenceRepository,
+    'replayFailedScan' | 'replayDeadGc'
+  >;
   readonly homeDashboardRepository?: Pick<HomeDashboardProjectionRepository, 'get'>;
   readonly homeBaseRepository?: Pick<HomeBaseProjectionRepository, 'get'>;
   readonly homeBaseProjector?: (input: {
@@ -684,16 +690,27 @@ export async function buildApp(options: BuildAppOptions) {
   app.get('/health', () => ({ status: 'ok', service: 'phub-api' }));
   app.get('/health/live', () => ({ status: 'ok', service: 'phub-api' }));
   app.get('/health/ready', async (_request, reply) => {
-    const databaseReady = options.pool ? await checkDatabaseReady(options.pool) : false;
-    const authReady = options.authDependencyReady
-      ? await options.authDependencyReady().catch(() => false)
-      : true;
-    if (!databaseReady || !authReady) {
-      return reply
-        .status(503)
-        .send({ status: 'not_ready', database: databaseReady, auth: authReady });
+    const [databaseReady, authReady, communityMediaReady] = await Promise.all([
+      options.pool ? checkDatabaseReady(options.pool) : Promise.resolve(false),
+      options.authDependencyReady
+        ? options.authDependencyReady().catch(() => false)
+        : Promise.resolve(true),
+      options.communityMediaObjectStore
+        ? options.communityMediaObjectStore
+            .checkReady()
+            .then(() => true)
+            .catch(() => false)
+        : Promise.resolve(true),
+    ]);
+    if (!databaseReady || !authReady || !communityMediaReady) {
+      return reply.status(503).send({
+        status: 'not_ready',
+        database: databaseReady,
+        auth: authReady,
+        communityMedia: communityMediaReady,
+      });
     }
-    return { status: 'ready', database: true, auth: true };
+    return { status: 'ready', database: true, auth: true, communityMedia: true };
   });
 
   if (options.authService) {
@@ -809,6 +826,10 @@ export async function buildApp(options: BuildAppOptions) {
       : {}),
     commandHandlers: [authenticateAdmin, resolveTenant, requireIdempotencyKey],
   });
+  registerCommunityCreateQuotaAdminRoutes(app as unknown as FastifyInstance, {
+    ...(options.communityCreateService ? { service: options.communityCreateService } : {}),
+    commandHandlers: [authenticateAdmin, resolveTenant, requireIdempotencyKey],
+  });
   registerCommunityContentModerationAdminRoutes(app as unknown as FastifyInstance, {
     ...(options.communityContentModerationService
       ? { service: options.communityContentModerationService }
@@ -818,6 +839,9 @@ export async function buildApp(options: BuildAppOptions) {
       : {}),
     ...(options.communityMediaObjectStore
       ? { mediaObjectStore: options.communityMediaObjectStore }
+      : {}),
+    ...(options.communityMediaOperationsRepository
+      ? { mediaOperationsRepository: options.communityMediaOperationsRepository }
       : {}),
     mediaReadUrlTtlSeconds: options.config.COMMUNITY_MEDIA_READ_URL_TTL_SECONDS,
     authenticatedTenantHandlers: [authenticateAdmin, resolveTenant],

@@ -11,6 +11,7 @@ import {
 
 const SCAN_LEASE_SECONDS = 120;
 const GC_LEASE_SECONDS = 120;
+const DEFAULT_MAX_ATTEMPTS = 8;
 
 const permanentRejections = new Map<string, string>([
   ['COMMUNITY_MEDIA_MALWARE_DETECTED', 'MALWARE_DETECTED'],
@@ -31,13 +32,28 @@ function retryAt(attempt: number): string {
   return new Date(Date.now() + delayMs).toISOString();
 }
 
+export function communityMediaVariantObjectKey(input: {
+  readonly tenantId: string;
+  readonly communityId: string;
+  readonly mediaId: string;
+  readonly variant: 'thumbnail' | 'feed';
+  readonly sha256: string;
+}): string {
+  if (!/^[0-9a-f]{64}$/.test(input.sha256)) {
+    throw new Error('COMMUNITY_MEDIA_VARIANT_SHA256_INVALID');
+  }
+  return `community-media/ready/${input.tenantId}/${input.communityId}/${input.mediaId}/${input.variant}/${input.sha256}.webp`;
+}
+
 export interface CommunityMediaCycleResult {
   readonly expired: number;
   readonly scanned: number;
   readonly rejected: number;
   readonly scanRetried: number;
+  readonly scanFailed: number;
   readonly gcCompleted: number;
   readonly gcRetried: number;
+  readonly gcDead: number;
 }
 
 export async function runCommunityMediaCycle(input: {
@@ -48,6 +64,8 @@ export async function runCommunityMediaCycle(input: {
   readonly tenantId: string;
   readonly workerId: string;
   readonly batchSize: number;
+  readonly scanMaxAttempts?: number;
+  readonly gcMaxAttempts?: number;
 }): Promise<CommunityMediaCycleResult> {
   const correlationId = randomUUID();
   const expired = await input.repository.expireDue({
@@ -83,6 +101,7 @@ export async function runCommunityMediaCycle(input: {
   let scanned = 0;
   let rejected = 0;
   let scanRetried = 0;
+  let scanFailed = 0;
   const scans = await input.repository.claimScans({
     tenantId: input.tenantId,
     leaseOwner: input.workerId,
@@ -112,12 +131,24 @@ export async function runCommunityMediaCycle(input: {
       }
       const [thumbnail, feed] = await Promise.all([
         input.store.putReady({
-          objectKey: `community-media/ready/${input.tenantId}/${claim.mediaId}/thumbnail.webp`,
+          objectKey: communityMediaVariantObjectKey({
+            tenantId: input.tenantId,
+            communityId: claim.communityId,
+            mediaId: claim.mediaId,
+            variant: 'thumbnail',
+            sha256: prepared.thumbnail.sha256,
+          }),
           body: prepared.thumbnail.body,
           sha256: prepared.thumbnail.sha256,
         }),
         input.store.putReady({
-          objectKey: `community-media/ready/${input.tenantId}/${claim.mediaId}/feed.webp`,
+          objectKey: communityMediaVariantObjectKey({
+            tenantId: input.tenantId,
+            communityId: claim.communityId,
+            mediaId: claim.mediaId,
+            variant: 'feed',
+            sha256: prepared.feed.sha256,
+          }),
           body: prepared.feed.body,
           sha256: prepared.feed.sha256,
         }),
@@ -168,20 +199,37 @@ export async function runCommunityMediaCycle(input: {
         });
         if (outcome === 'rejected' || outcome === 'already_rejected') rejected += 1;
       } else {
-        await input.repository.releaseScan({
-          tenantId: input.tenantId,
-          mediaId: claim.mediaId,
-          leaseOwner: input.workerId,
-          retryAt: retryAt(claim.scanAttempt),
-          errorCode: code,
-        });
-        scanRetried += 1;
+        if (claim.scanAttempt >= (input.scanMaxAttempts ?? DEFAULT_MAX_ATTEMPTS)) {
+          if (
+            await input.repository.failScan({
+              tenantId: input.tenantId,
+              mediaId: claim.mediaId,
+              leaseOwner: input.workerId,
+              errorCode: code,
+            })
+          ) {
+            scanFailed += 1;
+          }
+        } else {
+          if (
+            await input.repository.releaseScan({
+              tenantId: input.tenantId,
+              mediaId: claim.mediaId,
+              leaseOwner: input.workerId,
+              retryAt: retryAt(claim.scanAttempt),
+              errorCode: code,
+            })
+          ) {
+            scanRetried += 1;
+          }
+        }
       }
     }
   }
 
   let gcCompleted = 0;
   let gcRetried = 0;
+  let gcDead = 0;
   const gcClaims = await input.repository.claimGc({
     tenantId: input.tenantId,
     leaseOwner: input.workerId,
@@ -205,14 +253,29 @@ export async function runCommunityMediaCycle(input: {
         gcCompleted += 1;
       }
     } catch (error) {
-      await input.repository.failGc({
-        tenantId: input.tenantId,
-        jobId: claim.jobId,
-        leaseOwner: input.workerId,
-        retryAt: retryAt(claim.attempt),
-        errorCode: errorCode(error),
-      });
-      gcRetried += 1;
+      const code = errorCode(error);
+      if (claim.attempt >= (input.gcMaxAttempts ?? DEFAULT_MAX_ATTEMPTS)) {
+        if (
+          await input.repository.deadLetterGc({
+            tenantId: input.tenantId,
+            jobId: claim.jobId,
+            leaseOwner: input.workerId,
+            errorCode: code,
+          })
+        ) {
+          gcDead += 1;
+        }
+      } else if (
+        await input.repository.failGc({
+          tenantId: input.tenantId,
+          jobId: claim.jobId,
+          leaseOwner: input.workerId,
+          retryAt: retryAt(claim.attempt),
+          errorCode: code,
+        })
+      ) {
+        gcRetried += 1;
+      }
     }
   }
 
@@ -221,7 +284,9 @@ export async function runCommunityMediaCycle(input: {
     scanned,
     rejected,
     scanRetried,
+    scanFailed,
     gcCompleted,
     gcRetried,
+    gcDead,
   };
 }

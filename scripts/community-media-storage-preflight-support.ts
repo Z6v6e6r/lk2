@@ -47,3 +47,19 @@ export function lifecycleCanDeleteReady(rule: LifecycleRule): boolean {
       (rule.NoncurrentVersionTransitions?.length ?? 0) > 0),
   );
 }
+
+export function lifecycleCleansQuarantineVersions(
+  rule: LifecycleRule,
+  maximumNoncurrentDays = 7,
+): boolean {
+  if (rule.Status !== 'Enabled') return false;
+  const prefix = lifecyclePrefix(rule);
+  const appliesToQuarantine = prefix === '' || 'community-media/quarantine/'.startsWith(prefix);
+  const noncurrentDays = rule.NoncurrentVersionExpiration?.NoncurrentDays;
+  return Boolean(
+    appliesToQuarantine &&
+    typeof noncurrentDays === 'number' &&
+    noncurrentDays >= 1 &&
+    noncurrentDays <= maximumNoncurrentDays,
+  );
+}

@@ -295,8 +295,8 @@ The product owner approved independent community axes:
 
 Create requires an active authenticated principal with a server-issued `communities.create`
 capability. Standard quota permits fewer than three ACTIVE owned communities and no successful
-create in the preceding 24 hours. Only a separate authorized ЦУП/Admin path may bypass quota; the
-User API never accepts an override field.
+create in the preceding 24 hours. Only a separate authorized ЦУП/Admin path may issue a user-scoped
+one-use grant; the User API never accepts an override or grant selector.
 
 The create request explicitly selects one publishing preset, with no server default:
 
@@ -311,8 +311,13 @@ use the PadlHub UUID and do not create a slug.
 The implemented create command is enabled only in canonical `local` mode. It serializes concurrent
 quota checks per tenant/user and commits the community, its sole ACTIVE OWNER membership,
 idempotency result, audit record and `community.created.v1` outbox event in one tenant transaction.
-The public User API always passes `quotaOverride=false`; a future ЦУП command must authorize an
-override independently and cannot reuse a browser-supplied flag.
+The public User API carries no override field. ЦУП may create one ACTIVE grant for a specific user
+with the exact `communities.create.quota.override` capability, mandatory reason/ticket evidence and
+one or both scopes: `DAILY_CREATE_LIMIT`, `ACTIVE_OWNER_LIMIT`. The grant expires after 24 hours and
+is consumed only inside the successful create transaction when it covers every exceeded quota.
+Ordinary in-quota creation does not consume it. Creation and ownership transfer share the same
+target-user owner-quota advisory lock; transfer always rejects a target that already owns three
+ACTIVE communities and never consumes a grant.
 
 Before ACTIVE membership, `PUBLIC` exposes public detail/feed plus member count and public profile
 summaries; `LISTED_PRIVATE` exposes only directory/minimal detail; `HIDDEN` is absent and returns

@@ -23,9 +23,11 @@ function repository(overrides: Partial<CommunityMediaPersistenceRepository> = {}
     completeScan: vi.fn().mockResolvedValue('ready'),
     rejectScan: vi.fn().mockResolvedValue('rejected'),
     releaseScan: vi.fn().mockResolvedValue(true),
+    failScan: vi.fn().mockResolvedValue(true),
     claimGc: vi.fn().mockResolvedValue([]),
     completeGc: vi.fn().mockResolvedValue(true),
     failGc: vi.fn().mockResolvedValue(true),
+    deadLetterGc: vi.fn().mockResolvedValue(true),
     ...overrides,
   } as unknown as CommunityMediaPersistenceRepository;
 }
@@ -73,27 +75,24 @@ describe('community media worker cycle', () => {
       completeScan,
     });
     const deleteExact = vi.fn().mockResolvedValue(undefined);
+    const putReady = vi
+      .fn()
+      .mockImplementation(
+        (variant: { readonly objectKey: string; readonly body: Buffer; readonly sha256: string }) =>
+          Promise.resolve({
+            objectKey: variant.objectKey,
+            versionId: `${variant.objectKey}-v1`,
+            etag: `${variant.objectKey}-etag`,
+            sha256: variant.sha256,
+            sizeBytes: variant.body.byteLength,
+            width: 16,
+            height: 12,
+          }),
+      );
     const store = {
       currentVersion: vi.fn().mockResolvedValue('late-source-v2'),
       getExact: vi.fn().mockResolvedValue({ body: source, contentType: 'image/webp' }),
-      putReady: vi
-        .fn()
-        .mockImplementation(
-          (variant: {
-            readonly objectKey: string;
-            readonly body: Buffer;
-            readonly sha256: string;
-          }) =>
-            Promise.resolve({
-              objectKey: variant.objectKey,
-              versionId: `${variant.objectKey}-v1`,
-              etag: `${variant.objectKey}-etag`,
-              sha256: variant.sha256,
-              sizeBytes: variant.body.byteLength,
-              width: 16,
-              height: 12,
-            }),
-        ),
+      putReady,
       deleteExact,
     } as CommunityMediaWorkerObjectStore;
 
@@ -112,8 +111,10 @@ describe('community media worker cycle', () => {
       scanned: 1,
       rejected: 0,
       scanRetried: 0,
+      scanFailed: 0,
       gcCompleted: 1,
       gcRetried: 0,
+      gcDead: 0,
     });
     expect(scheduleExpiredSourceVersion).toHaveBeenCalledWith({
       tenantId,
@@ -127,6 +128,23 @@ describe('community media worker cycle', () => {
     );
     expect(JSON.stringify(completeScan.mock.calls)).toContain('"variant":"THUMBNAIL"');
     expect(JSON.stringify(completeScan.mock.calls)).toContain('"variant":"FEED"');
+    const variantKeys = putReady.mock.calls.map(
+      ([value]) => (value as { readonly objectKey: string }).objectKey,
+    );
+    expect(variantKeys).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(
+          new RegExp(
+            `^community-media/ready/${tenantId}/098486ab-5a42-43be-9188-6a43908af97c/${mediaId}/thumbnail/[0-9a-f]{64}\\.webp$`,
+          ),
+        ),
+        expect.stringMatching(
+          new RegExp(
+            `^community-media/ready/${tenantId}/098486ab-5a42-43be-9188-6a43908af97c/${mediaId}/feed/[0-9a-f]{64}\\.webp$`,
+          ),
+        ),
+      ]),
+    );
     expect(deleteExact).toHaveBeenCalledWith({
       objectKey: 'quarantine/source',
       versionId: 'source-v1',
@@ -396,5 +414,67 @@ describe('community media worker cycle', () => {
       2,
       expect.objectContaining({ errorCode: 'COMMUNITY_MEDIA_TRANSIENT_FAILURE' }),
     );
+  });
+
+  it('terminalizes scan and GC work after the configured bounded attempt count', async () => {
+    const failScan = vi.fn().mockResolvedValue(true);
+    const deadLetterGc = vi.fn().mockResolvedValue(true);
+    const releaseScan = vi.fn().mockResolvedValue(true);
+    const failGc = vi.fn().mockResolvedValue(true);
+    const repo = repository({
+      claimScans: vi.fn().mockResolvedValue([
+        {
+          mediaId,
+          communityId: '098486ab-5a42-43be-9188-6a43908af97c',
+          sourceObjectKey: 'source',
+          sourceObjectVersion: 'v1',
+          sourceEtag: 'etag',
+          declaredContentType: 'image/webp',
+          declaredByteSize: 1,
+          declaredSha256: 'a'.repeat(64),
+          scanAttempt: 3,
+        },
+      ]),
+      claimGc: vi.fn().mockResolvedValue([
+        {
+          jobId: '00000000-0000-4000-8000-000000000099',
+          objectKey: 'source',
+          objectVersion: 'v1',
+          attempt: 3,
+        },
+      ]),
+      failScan,
+      deadLetterGc,
+      releaseScan,
+      failGc,
+    });
+    const store = {
+      currentVersion: vi.fn(),
+      getExact: vi.fn().mockRejectedValue(new Error('COMMUNITY_MEDIA_SCAN_UNAVAILABLE')),
+      putReady: vi.fn(),
+      deleteExact: vi.fn().mockRejectedValue(new Error('COMMUNITY_MEDIA_DELETE_FAILED')),
+    } as CommunityMediaWorkerObjectStore;
+
+    const result = await runCommunityMediaCycle({
+      repository: repo,
+      store,
+      scanner: new MockCommunityMediaMalwareScanner(),
+      logger: logger(),
+      tenantId,
+      workerId: 'media-worker-1',
+      batchSize: 10,
+      scanMaxAttempts: 3,
+      gcMaxAttempts: 3,
+    });
+
+    expect(result).toMatchObject({ scanFailed: 1, gcDead: 1, scanRetried: 0, gcRetried: 0 });
+    expect(failScan).toHaveBeenCalledWith(
+      expect.objectContaining({ errorCode: 'COMMUNITY_MEDIA_SCAN_UNAVAILABLE' }),
+    );
+    expect(deadLetterGc).toHaveBeenCalledWith(
+      expect.objectContaining({ errorCode: 'COMMUNITY_MEDIA_DELETE_FAILED' }),
+    );
+    expect(releaseScan).not.toHaveBeenCalled();
+    expect(failGc).not.toHaveBeenCalled();
   });
 });

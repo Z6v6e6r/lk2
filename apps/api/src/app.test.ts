@@ -191,6 +191,32 @@ describe('health endpoints', () => {
     ).toBe(200);
   });
 
+  it('retries Community media object-store readiness after a transient failure', async () => {
+    const checkReady = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(new Error('s3 unavailable'))
+      .mockResolvedValue(undefined);
+    const app = await buildApp({
+      config,
+      logger: createLogger('api-test', 'silent'),
+      pool: fakePool(),
+      communityMediaObjectStore: { checkReady } as never,
+    });
+    apps.push(app);
+
+    const unavailable = await app.inject({ method: 'GET', url: '/health/ready' });
+    const recovered = await app.inject({ method: 'GET', url: '/health/ready' });
+
+    expect(unavailable.statusCode).toBe(503);
+    expect(recovered.statusCode).toBe(200);
+    expect(recovered.json()).toMatchObject({
+      status: 'ready',
+      database: true,
+      communityMedia: true,
+    });
+    expect(checkReady).toHaveBeenCalledTimes(2);
+  });
+
   it('requires a PadlHub token before tenant resolution', async () => {
     const app = await buildApp({
       config,

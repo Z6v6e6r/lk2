@@ -102,6 +102,21 @@ export interface AdminCommunityDirectInviteQuotaGrant {
   readonly replayed: boolean;
 }
 
+export type AdminCommunityCreateQuotaScope = 'DAILY_CREATE_LIMIT' | 'ACTIVE_OWNER_LIMIT';
+
+export interface AdminCommunityCreateQuotaGrant {
+  readonly id: string;
+  readonly subjectUserId: string;
+  readonly scopes: readonly AdminCommunityCreateQuotaScope[];
+  readonly status: 'ACTIVE';
+  readonly revision: number;
+  readonly createdAt: string;
+  readonly expiresAt: string;
+  readonly updatedAt: string;
+  readonly consumedAt: null;
+  readonly replayed: boolean;
+}
+
 export interface AdminCommunityPendingPost {
   readonly post: CommunityPost & { readonly status: 'PENDING_MODERATION' };
 }
@@ -157,6 +172,14 @@ export interface NotificationAdminClient {
       readonly ticketId: string;
     },
   ): Promise<AdminCommunityDirectInviteQuotaGrant>;
+  createCommunityCreateQuotaGrant(
+    userId: string,
+    input: {
+      readonly scopes: readonly AdminCommunityCreateQuotaScope[];
+      readonly reasonCode: string;
+      readonly ticketId: string;
+    },
+  ): Promise<AdminCommunityCreateQuotaGrant>;
   listPendingCommunityContent(input?: {
     readonly communityId?: string;
     readonly cursor?: string;
@@ -347,6 +370,13 @@ export function createNotificationAdminClient(
     createCommunityDirectInviteQuotaGrant(communityId, input) {
       return adminRequest<AdminCommunityDirectInviteQuotaGrant>(
         `/communities/${encodeURIComponent(communityId)}/direct-invite-quota-grants`,
+        { method: 'POST', body: JSON.stringify(input) },
+        operationId(),
+      );
+    },
+    createCommunityCreateQuotaGrant(userId, input) {
+      return adminRequest<AdminCommunityCreateQuotaGrant>(
+        `/users/${encodeURIComponent(userId)}/community-create-quota-grants`,
         { method: 'POST', body: JSON.stringify(input) },
         operationId(),
       );

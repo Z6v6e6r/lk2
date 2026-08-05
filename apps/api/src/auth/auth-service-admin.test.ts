@@ -22,6 +22,15 @@ const user: AuthUser = {
   displayName: 'Оператор',
 };
 
+const communityAdminPermissions = [
+  'communities.moderation.read',
+  'communities.join.decide',
+  'communities.content.moderation.read',
+  'communities.content.moderation.decide',
+  'communities.invite.quota.override',
+  'communities.create.quota.override',
+] as const;
+
 function service(access: {
   readonly roles: readonly string[];
   readonly permissions: readonly string[];
@@ -96,6 +105,66 @@ describe('admin access token audience', () => {
 
     expect(claims.roles).toEqual(['client']);
     expect(claims.permissions).toEqual(['profile.read']);
+  });
+
+  it.each(communityAdminPermissions)(
+    'allows a Communities-only operator with %s into the admin audience',
+    async (permission) => {
+      const permissions = ['profile.read', permission] as const;
+      const session = await service({
+        roles: ['client', 'admin'],
+        permissions,
+      }).refreshSession(
+        'local-padel',
+        'existing-refresh-token',
+        'communities-admin-auth-correlation',
+        'communities-admin-auth-idempotency-0001',
+        'admin',
+      );
+      const claims = await jwtVerify(
+        session.accessToken,
+        new TextEncoder().encode(config.JWT_ACCESS_SECRET),
+        {
+          issuer: config.JWT_ISSUER,
+          audience: config.JWT_ADMIN_AUDIENCE,
+          algorithms: ['HS256'],
+        },
+      );
+
+      expect(claims.payload.roles).toEqual(['client', 'admin']);
+      expect(claims.payload.permissions).toEqual(permissions);
+    },
+  );
+
+  it('strips every Communities admin capability from a normal client token', async () => {
+    const session = await service({
+      roles: ['client', 'admin'],
+      permissions: ['profile.read', ...communityAdminPermissions],
+    }).refreshSession(
+      'local-padel',
+      'existing-refresh-token',
+      'communities-client-auth-correlation',
+      'communities-client-auth-idempotency-0001',
+      'client',
+    );
+
+    expect(decodeJwt(session.accessToken).roles).toEqual(['client']);
+    expect(decodeJwt(session.accessToken).permissions).toEqual(['profile.read']);
+  });
+
+  it('does not treat the user Communities create capability as an admin grant', async () => {
+    await expect(
+      service({
+        roles: ['client', 'admin'],
+        permissions: ['profile.read', 'communities.create'],
+      }).refreshSession(
+        'local-padel',
+        'existing-refresh-token',
+        'communities-create-denied-correlation',
+        'communities-create-denied-idempotency-0001',
+        'admin',
+      ),
+    ).rejects.toEqual(expect.objectContaining({ code: 'AUTH_ADMIN_ACCESS_DENIED' }));
   });
 
   it('allows a location-only operator into the admin audience without leaking location grants', async () => {

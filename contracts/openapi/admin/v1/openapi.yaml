@@ -233,6 +233,58 @@ paths:
                 $ref: '#/components/schemas/ApiError'
         '503':
           $ref: '#/components/responses/ApiError'
+  /admin/api/v1/{tenantKey}/users/{userId}/community-create-quota-grants:
+    post:
+      tags: [Communities]
+      operationId: createCommunityCreateQuotaGrant
+      summary: Create an audited one-use community creation quota grant
+      description: |
+        Requires the exact admin-audience `communities.create.quota.override` capability and
+        `X-App-Platform: cup-admin`. Tenant and operator come from the verified phub-admin JWT;
+        the subject comes from the path. The strict body accepts only one or both server-defined
+        scopes plus mandatory reason and ticket evidence. The grant expires after exactly 24 hours
+        and is consumed atomically only by a successful create that exceeds every selected limit.
+        It never applies to ownership transfer, and the User API cannot select a grant or override.
+      parameters:
+        - $ref: '#/components/parameters/TenantKey'
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminCommunityCreateQuotaGrantRequest'
+      responses:
+        '201':
+          description: Active 24-hour user-scoped grant, or its idempotent replay.
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                const: no-store
+            X-Idempotent-Replayed:
+              schema:
+                type: boolean
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminCommunityCreateQuotaGrant'
+        '400':
+          $ref: '#/components/responses/ApiError'
+        '401':
+          $ref: '#/components/responses/ApiError'
+        '403':
+          $ref: '#/components/responses/ApiError'
+        '409':
+          $ref: '#/components/responses/ApiError'
+        '503':
+          $ref: '#/components/responses/ApiError'
   /admin/api/v1/{tenantKey}/community-content/pending:
     get:
       tags: [Communities]
@@ -318,6 +370,92 @@ paths:
         '403':
           $ref: '#/components/responses/ApiError'
         '404':
+          $ref: '#/components/responses/ApiError'
+        '503':
+          $ref: '#/components/responses/ApiError'
+  /admin/api/v1/{tenantKey}/community-media/scans/{mediaId}/replay:
+    post:
+      tags: [Communities]
+      operationId: replayFailedCommunityMediaScan
+      summary: Replay a terminally failed community-media malware scan
+      description: |
+        CUP-only recovery command requiring `communities.content.moderation.decide`. Only a scan
+        marked terminally failed can be replayed. The command is tenant-scoped, idempotent and
+        records its operator reason in the audit trail.
+      parameters:
+        - $ref: '#/components/parameters/TenantKey'
+        - name: mediaId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminCommunityMediaReplayRequest'
+      responses:
+        '200':
+          description: The scan was released for a bounded fresh retry or the original result was replayed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminCommunityMediaReplayResult'
+        '400':
+          $ref: '#/components/responses/ApiError'
+        '401':
+          $ref: '#/components/responses/ApiError'
+        '403':
+          $ref: '#/components/responses/ApiError'
+        '404':
+          $ref: '#/components/responses/ApiError'
+        '409':
+          $ref: '#/components/responses/ApiError'
+        '503':
+          $ref: '#/components/responses/ApiError'
+  /admin/api/v1/{tenantKey}/community-media/gc-jobs/{jobId}/replay:
+    post:
+      tags: [Communities]
+      operationId: replayDeadCommunityMediaGcJob
+      summary: Replay a terminally dead community-media garbage-collection job
+      description: |
+        CUP-only recovery command requiring `communities.content.moderation.decide`. Only a GC job
+        marked terminally dead can be replayed. The command is tenant-scoped, idempotent and records
+        its operator reason in the audit trail.
+      parameters:
+        - $ref: '#/components/parameters/TenantKey'
+        - name: jobId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminCommunityMediaReplayRequest'
+      responses:
+        '200':
+          description: The GC job was released for a bounded fresh retry or the original result was replayed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminCommunityMediaReplayResult'
+        '400':
+          $ref: '#/components/responses/ApiError'
+        '401':
+          $ref: '#/components/responses/ApiError'
+        '403':
+          $ref: '#/components/responses/ApiError'
+        '404':
+          $ref: '#/components/responses/ApiError'
+        '409':
           $ref: '#/components/responses/ApiError'
         '503':
           $ref: '#/components/responses/ApiError'
@@ -1154,6 +1292,78 @@ components:
           type: 'null'
         replayed:
           type: boolean
+    AdminCommunityCreateQuotaScope:
+      type: string
+      enum: [DAILY_CREATE_LIMIT, ACTIVE_OWNER_LIMIT]
+    AdminCommunityCreateQuotaGrantRequest:
+      type: object
+      additionalProperties: false
+      required: [scopes, reasonCode, ticketId]
+      properties:
+        scopes:
+          type: array
+          minItems: 1
+          maxItems: 2
+          uniqueItems: true
+          items:
+            $ref: '#/components/schemas/AdminCommunityCreateQuotaScope'
+        reasonCode:
+          type: string
+          minLength: 2
+          maxLength: 64
+          pattern: '^[A-Z][A-Z0-9_]{1,63}$'
+        ticketId:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: '^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$'
+    AdminCommunityCreateQuotaGrant:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - subjectUserId
+        - scopes
+        - status
+        - revision
+        - createdAt
+        - expiresAt
+        - updatedAt
+        - consumedAt
+        - replayed
+      properties:
+        id:
+          type: string
+          format: uuid
+        subjectUserId:
+          type: string
+          format: uuid
+        scopes:
+          type: array
+          minItems: 1
+          maxItems: 2
+          uniqueItems: true
+          items:
+            $ref: '#/components/schemas/AdminCommunityCreateQuotaScope'
+        status:
+          type: string
+          const: ACTIVE
+        revision:
+          type: integer
+          minimum: 1
+        createdAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        consumedAt:
+          type: 'null'
+        replayed:
+          type: boolean
     AdminCommunityPostStatus:
       type: string
       enum: [PENDING_MODERATION, PUBLISHED, ARCHIVED, HIDDEN]
@@ -1216,6 +1426,27 @@ components:
         expiresAt:
           type: string
           format: date-time
+    AdminCommunityMediaReplayRequest:
+      type: object
+      additionalProperties: false
+      required: [reasonCode]
+      properties:
+        reasonCode:
+          type: string
+          pattern: '^[A-Z][A-Z0-9_]{2,63}$'
+    AdminCommunityMediaReplayResult:
+      type: object
+      additionalProperties: false
+      required: [targetId, operation, replayed]
+      properties:
+        targetId:
+          type: string
+          format: uuid
+        operation:
+          type: string
+          enum: [SCAN, GC]
+        replayed:
+          type: boolean
     AdminCommunityPost:
       type: object
       additionalProperties: false

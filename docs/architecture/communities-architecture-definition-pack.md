@@ -470,8 +470,9 @@ than an open product decision.
   flag.
 - Standard quota: fewer than three ACTIVE communities owned and no successful create during the
   preceding 24 hours.
-- Override: only an explicit authorized ЦУП/Admin command may bypass quota; User API never accepts
-  an override field.
+- Override: only an explicit authorized ЦУП/Admin command may issue a one-use, 24-hour user grant
+  scoped to `DAILY_CREATE_LIMIT`, `ACTIVE_OWNER_LIMIT`, or both. User API accepts neither an
+  override field nor a grant selector; ownership transfer never uses a grant.
 - Required request values: title `1..120`, explicit visibility, join policy and publishing preset.
 - Optional request value: description up to 2,000 characters.
 - City and logo are optional later steps; tags/minimum level/rules are backward-compatible later
@@ -479,8 +480,9 @@ than an open product decision.
 - Commit boundary: ACTIVE community revision 1 + ACTIVE OWNER membership revision 1 + publishing
   policy + stored idempotency result + audit + `community.created.v1` outbox event.
 - Implementation evidence: the User API, domain service, PostgreSQL repository, expand-safe
-  migration, OpenAPI and typed SDK implement this boundary. Actor-scoped advisory locking makes
-  quota decisions serializable for concurrent creates; User API hardcodes `quotaOverride=false`.
+  migration, OpenAPI and typed SDK implement this boundary. A target-user owner-quota advisory lock
+  is shared by create and ownership transfer. Grant consumption, community, OWNER membership,
+  command replay, audit and outbox commit in one PostgreSQL transaction.
 
 ## 16. Implemented canonical detail/discovery slice
 

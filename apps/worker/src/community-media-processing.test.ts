@@ -142,6 +142,23 @@ describe('prepareCommunityMedia', () => {
 });
 
 describe('S3 community media object store', () => {
+  it('retries bucket readiness after a transient first failure', async () => {
+    const store = new S3CommunityMediaWorkerObjectStore(objectStoreOptions);
+    let attempts = 0;
+    mockObjectStoreSend(store, (commandName) => {
+      if (commandName !== 'GetBucketVersioningCommand') throw new Error('unexpected command');
+      attempts += 1;
+      if (attempts === 1) throw new Error('temporary storage outage');
+      if (attempts === 3) throw new Error('later storage outage');
+      return { Status: 'Enabled' };
+    });
+
+    await expect(store.checkReady()).rejects.toThrow('temporary storage outage');
+    await expect(store.checkReady()).resolves.toBeUndefined();
+    await expect(store.checkReady()).rejects.toThrow('later storage outage');
+    expect(attempts).toBe(3);
+  });
+
   it('reads bounded exact versions, reports absence and deletes an exact version', async () => {
     const store = new S3CommunityMediaWorkerObjectStore(objectStoreOptions);
     const send = mockObjectStoreSend(store, (commandName) => {
@@ -286,6 +303,21 @@ describe('S3 community media object store', () => {
 });
 
 describe('ClamAV community media scanner', () => {
+  it('uses the bounded PING command for dependency readiness', async () => {
+    const socket = new FakeClamAvSocket();
+    vi.spyOn(net, 'createConnection').mockReturnValue(socket as never);
+    const scanner = new ClamAvCommunityMediaMalwareScanner({
+      host: 'clamav',
+      port: 3310,
+      timeoutMs: 500,
+    });
+    const ready = scanner.checkReady();
+    socket.emit('connect');
+    socket.emit('data', Buffer.from('PONG\0'));
+    await expect(ready).resolves.toBeUndefined();
+    expect(socket.end).toHaveBeenCalledWith('zPING\0');
+  });
+
   it.each([
     ['stream: OK\0', { outcome: 'clean' }],
     [

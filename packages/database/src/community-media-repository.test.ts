@@ -444,6 +444,42 @@ describe('community media repository', () => {
     );
   });
 
+  it('releases only a terminal failed scan through an audited idempotent operator command', async () => {
+    const replayInput = {
+      tenantId,
+      actorUserId,
+      targetId: mediaId,
+      idempotencyKey: 'community-media-replay-scan-0001',
+      requestHash: 'd'.repeat(64),
+      reasonCode: 'DEPENDENCY_RECOVERED',
+      correlationId: command.correlationId,
+    } as const;
+    const { pool, query } = poolWithQuery((text) => {
+      if (text.includes('from community_content.media_operations_commands')) return [];
+      if (text.includes('as allowed')) return [{ allowed: true }];
+      if (text.includes('from community_content.media_assets') && text.includes('for update')) {
+        return [mediaRow({ state: 'SCANNING', finalized_at: now })];
+      }
+      if (text.includes('set scan_failed_at = null')) return { rows: [], rowCount: 1 };
+      return [];
+    });
+
+    await expect(
+      createCommunityMediaRepository(pool).replayFailedScan(replayInput),
+    ).resolves.toEqual({ outcome: 'replayed', targetId: mediaId, replayed: false });
+
+    expect(query.mock.calls.some(([text]) => String(text).includes('scan_attempts = 0'))).toBe(
+      true,
+    );
+    const commandInsert = query.mock.calls.find(([text]) =>
+      String(text).includes('insert into community_content.media_operations_commands'),
+    );
+    expect(commandInsert?.[1]?.[2]).toBe('REPLAY_SCAN');
+    const outbox = query.mock.calls.find(([text]) => String(text).includes('audit.outbox_events'));
+    expect(outbox?.[1]?.[1]).toBe('community.media.scan_replayed.v1');
+    expect(outbox?.[1]?.[4]).toContain('DEPENDENCY_RECOVERED');
+  });
+
   it('replays an issued upload and rejects mismatched idempotency reuse before authorization', async () => {
     const intent = {
       id: mediaId,

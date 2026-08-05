@@ -63,7 +63,42 @@ describe('S3CommunityMediaObjectStore', () => {
     expect(grant.requiredHeaders).toEqual({
       'Content-Type': 'image/webp',
       'Cache-Control': 'private, no-store',
+      'If-None-Match': '*',
     });
+    expect(
+      (getSignedUrl.mock.calls[0]?.[1] as { input: { IfNoneMatch?: string } }).input,
+    ).toMatchObject({ IfNoneMatch: '*' });
     expect(send).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries readiness after a transient first S3 failure', async () => {
+    let headAttempts = 0;
+    vi.spyOn(S3Client.prototype, 'send').mockImplementation((command) => {
+      if (command instanceof HeadBucketCommand) {
+        headAttempts += 1;
+        if (headAttempts === 1) return Promise.reject(new Error('temporary outage')) as never;
+        if (headAttempts === 3) return Promise.reject(new Error('later outage')) as never;
+        return Promise.resolve({}) as never;
+      }
+      if (command instanceof GetBucketVersioningCommand) {
+        return Promise.resolve({ Status: 'Enabled' }) as never;
+      }
+      throw new Error(`Unexpected S3 command: ${command.constructor.name}`);
+    });
+    const store = new S3CommunityMediaObjectStore({
+      endpoint: 'http://minio:9000',
+      publicEndpoint: 'https://media.staging.example',
+      region: 'us-east-1',
+      bucket: 'phub-media',
+      accessKey: 'test-access-key',
+      secretKey: 'test-secret-key',
+      forcePathStyle: true,
+      autoCreateBucket: false,
+    });
+
+    await expect(store.checkReady()).rejects.toThrow('temporary outage');
+    await expect(store.checkReady()).resolves.toBeUndefined();
+    await expect(store.checkReady()).rejects.toThrow('later outage');
+    expect(headAttempts).toBe(3);
   });
 });

@@ -98,6 +98,14 @@ try {
     const diagnostic = (await upload.text()).replace(/<RequestId>.*?<\/RequestId>/s, '');
     throw new Error(`Verify upload failed with HTTP ${upload.status}: ${diagnostic.slice(0, 500)}`);
   }
+  const replayedUpload = await fetch(grant.url, {
+    method: 'PUT',
+    headers: grant.requiredHeaders,
+    body,
+  });
+  if (replayedUpload.status !== 412) {
+    throw new Error(`Verify upload replay expected HTTP 412, received ${replayedUpload.status}`);
+  }
   const observed = await store.statUploadedObject(objectKey);
   if (
     observed.byteSize !== body.byteLength ||
@@ -137,6 +145,7 @@ try {
       status: 'ok',
       versioning: 'Enabled',
       exactVersionRead: true,
+      singleUseUpload: true,
       idempotentVariantPut: true,
     })}\n`,
   );

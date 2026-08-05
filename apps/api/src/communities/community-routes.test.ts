@@ -321,9 +321,9 @@ describe('community routes', () => {
         tenantId,
         actorUserId: userId,
         title: 'Padel Friends',
-        quotaOverride: false,
       }),
     );
+    expect(create.mock.calls[0]?.[0]).not.toHaveProperty('quotaOverride');
   });
 
   it('requires communities.create and rejects client-supplied authority fields', async () => {
@@ -372,6 +372,24 @@ describe('community routes', () => {
     });
     expect(forgedOverride.statusCode).toBe(400);
     expect(forgedOverride.json()).toMatchObject({ code: 'COMMUNITY_CREATE_PAYLOAD_INVALID' });
+
+    const forgedGrant = await app.inject({
+      method: 'POST',
+      url: '/user/api/v1/local-padel/communities',
+      headers: {
+        authorization: `Bearer ${await accessToken(['communities.create'])}`,
+        'idempotency-key': 'community-create-route-0003-grant',
+      },
+      payload: {
+        title: 'Padel Friends',
+        visibility: 'PUBLIC',
+        joinPolicy: 'INSTANT',
+        publishingPreset: 'OPEN_COMMUNITY',
+        quotaGrantId: '22222222-2222-4222-8222-222222222222',
+      },
+    });
+    expect(forgedGrant.statusCode).toBe(400);
+    expect(forgedGrant.json()).toMatchObject({ code: 'COMMUNITY_CREATE_PAYLOAD_INVALID' });
     expect(create).not.toHaveBeenCalled();
   });
 
@@ -854,6 +872,7 @@ describe('community routes', () => {
     ['community_not_found', 404, 'COMMUNITY_NOT_FOUND'],
     ['actor_not_owner', 403, 'COMMUNITY_OWNER_REQUIRED'],
     ['target_not_active', 409, 'COMMUNITY_OWNERSHIP_TARGET_NOT_ACTIVE'],
+    ['target_active_owner_quota_exceeded', 409, 'COMMUNITY_OWNERSHIP_TARGET_QUOTA_EXCEEDED'],
     ['owner_revision_conflict', 409, 'COMMUNITY_MEMBERSHIP_REVISION_CONFLICT'],
   ] as const)('maps ownership transfer %s', async (outcome, status, code) => {
     const transfer = vi.fn().mockResolvedValue({ outcome });

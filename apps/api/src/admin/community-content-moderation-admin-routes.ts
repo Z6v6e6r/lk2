@@ -7,6 +7,10 @@ import {
   type CommunityContentModerationService,
 } from '@phub/communities';
 import type { FastifyInstance, FastifyReply, FastifyRequest, preHandlerHookHandler } from 'fastify';
+import type {
+  CommunityMediaPersistenceRepository,
+  CommunityMediaReplayResult,
+} from '@phub/database';
 import { z } from 'zod';
 
 import { sendApiError } from '../http-errors.js';
@@ -25,6 +29,8 @@ const mediaVariantParams = listParams
     variant: z.enum(COMMUNITY_MEDIA_VARIANTS),
   })
   .strict();
+const mediaScanReplayParams = listParams.extend({ mediaId: z.string().uuid() }).strict();
+const mediaGcReplayParams = listParams.extend({ jobId: z.string().uuid() }).strict();
 const listQuery = z
   .object({
     communityId: z.string().uuid().optional(),
@@ -36,6 +42,7 @@ const revisionBody = z.object({ expectedRevision: z.number().int().positive() })
 const reasonedBody = revisionBody
   .extend({ reasonCode: z.string().regex(/^[A-Z][A-Z0-9_]{1,63}$/) })
   .strict();
+const replayBody = z.object({ reasonCode: z.string().regex(/^[A-Z][A-Z0-9_]{1,63}$/) }).strict();
 
 function principal(request: FastifyRequest) {
   return request.tenantId && request.padlHubClaims?.sub
@@ -142,12 +149,51 @@ function routeError(request: FastifyRequest, reply: FastifyReply, error: unknown
   );
 }
 
+function replayFailure(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  result: Exclude<CommunityMediaReplayResult, { readonly outcome: 'replayed' }>,
+) {
+  switch (result.outcome) {
+    case 'idempotency_conflict':
+      return sendApiError(request, reply, 409, 'IDEMPOTENCY_KEY_REUSED', 'Ключ уже использован.');
+    case 'permission_denied':
+      return sendApiError(
+        request,
+        reply,
+        403,
+        'COMMUNITY_CONTENT_MODERATION_PERMISSION_REQUIRED',
+        'Нет права на повтор медиа-операции.',
+      );
+    case 'not_found':
+      return sendApiError(
+        request,
+        reply,
+        404,
+        'COMMUNITY_MEDIA_OPERATION_NOT_FOUND',
+        'Медиа-операция не найдена.',
+      );
+    case 'invalid_state':
+      return sendApiError(
+        request,
+        reply,
+        409,
+        'COMMUNITY_MEDIA_OPERATION_STATE_CONFLICT',
+        'Медиа-операция не находится в терминальном состоянии.',
+      );
+  }
+}
+
 export function registerCommunityContentModerationAdminRoutes(
   app: FastifyInstance,
   options: {
     readonly service?: CommunityContentModerationService;
     readonly mediaAuthorizer?: CommunityMediaDeliveryAuthorizer;
     readonly mediaObjectStore?: CommunityMediaObjectStore;
+    readonly mediaOperationsRepository?: Pick<
+      CommunityMediaPersistenceRepository,
+      'replayFailedScan' | 'replayDeadGc'
+    >;
     readonly mediaReadUrlTtlSeconds: number;
     readonly authenticatedTenantHandlers: readonly preHandlerHookHandler[];
     readonly commandHandlers: readonly preHandlerHookHandler[];
@@ -189,6 +235,66 @@ export function registerCommunityContentModerationAdminRoutes(
       }
     },
   );
+
+  for (const operation of ['scan', 'gc'] as const) {
+    app.post(
+      operation === 'scan'
+        ? '/admin/api/v1/:tenantKey/community-media/scans/:mediaId/replay'
+        : '/admin/api/v1/:tenantKey/community-media/gc-jobs/:jobId/replay',
+      { preHandler: [...options.commandHandlers] },
+      async (request, reply) => {
+        reply.header('Cache-Control', 'no-store');
+        if (!requirePermission(request, reply, 'communities.content.moderation.decide')) return;
+        const current = principal(request);
+        const idempotencyKey = request.headers['idempotency-key'];
+        const params =
+          operation === 'scan'
+            ? mediaScanReplayParams.safeParse(request.params)
+            : mediaGcReplayParams.safeParse(request.params);
+        const body = replayBody.safeParse(request.body);
+        if (!current || typeof idempotencyKey !== 'string') {
+          return sendApiError(request, reply, 401, 'AUTH_REQUIRED', 'Требуется авторизация.');
+        }
+        if (!params.success || !body.success) {
+          return sendApiError(
+            request,
+            reply,
+            400,
+            'COMMUNITY_MEDIA_REPLAY_INPUT_INVALID',
+            'Проверьте идентификатор и reasonCode.',
+          );
+        }
+        if (!options.mediaOperationsRepository) return routeError(request, reply, undefined);
+        const targetId =
+          operation === 'scan'
+            ? mediaScanReplayParams.parse(request.params).mediaId
+            : mediaGcReplayParams.parse(request.params).jobId;
+        const input = {
+          ...current,
+          targetId,
+          idempotencyKey,
+          requestHash: hash({ operation, targetId, reasonCode: body.data.reasonCode }),
+          reasonCode: body.data.reasonCode,
+          correlationId: request.id,
+        };
+        try {
+          const result =
+            operation === 'scan'
+              ? await options.mediaOperationsRepository.replayFailedScan(input)
+              : await options.mediaOperationsRepository.replayDeadGc(input);
+          if (result.outcome !== 'replayed') return replayFailure(request, reply, result);
+          reply.header('X-Idempotent-Replayed', String(result.replayed));
+          return {
+            targetId: result.targetId,
+            operation: operation.toUpperCase(),
+            replayed: result.replayed,
+          };
+        } catch (error) {
+          return routeError(request, reply, error);
+        }
+      },
+    );
+  }
 
   app.get(
     '/admin/api/v1/:tenantKey/communities/:communityId/content/media/:mediaId/variants/:variant/url',

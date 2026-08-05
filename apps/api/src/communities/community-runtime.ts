@@ -196,6 +196,7 @@ export function createCommunityMediaRuntime(input: {
 }):
   | {
       readonly service: CommunityMediaService;
+      readonly operationsRepository: ReturnType<typeof createCommunityMediaRepository>;
       readonly deliveryAuthorizer: CommunityMediaDeliveryAuthorizer;
       readonly moderationAuthorizer: CommunityMediaDeliveryAuthorizer;
     }
@@ -205,6 +206,7 @@ export function createCommunityMediaRuntime(input: {
   }
   const repository = createCommunityMediaRepository(input.pool);
   return {
+    operationsRepository: repository,
     service: createCommunityMediaService({
       repository,
       uploadSigner: input.objectStore,

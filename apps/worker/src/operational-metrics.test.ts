@@ -38,6 +38,29 @@ describe('worker operational metrics', () => {
             ],
           });
         }
+        if (text.includes('scan_backlog')) {
+          return Promise.resolve({
+            rows: [
+              values[0] === 'tenant-a'
+                ? {
+                    scan_backlog: 3,
+                    scan_oldest_age_seconds: 44,
+                    failed_scans: 1,
+                    gc_backlog: 2,
+                    gc_oldest_age_seconds: 55,
+                    dead_gc_jobs: 1,
+                  }
+                : {
+                    scan_backlog: 4,
+                    scan_oldest_age_seconds: 22,
+                    failed_scans: 2,
+                    gc_backlog: 5,
+                    gc_oldest_age_seconds: 33,
+                    dead_gc_jobs: 3,
+                  },
+            ],
+          });
+        }
         return Promise.resolve({ rows: [] });
       }),
       release,
@@ -66,6 +89,12 @@ describe('worker operational metrics', () => {
       communityMemberCountBuilding: 2,
       communityMemberCountStale: 2,
       communityMemberCountNotReadyAgeSeconds: 30,
+      communityMediaScanBacklog: 7,
+      communityMediaScanOldestAgeSeconds: 44,
+      communityMediaFailedScans: 3,
+      communityMediaGcBacklog: 7,
+      communityMediaGcOldestAgeSeconds: 55,
+      communityMediaDeadGcJobs: 4,
     });
     expect(connect).toHaveBeenCalledTimes(2);
     expect(release).toHaveBeenCalledTimes(2);
@@ -90,6 +119,12 @@ describe('worker operational metrics', () => {
       communityMemberCountBuilding: 0,
       communityMemberCountStale: 0,
       communityMemberCountNotReadyAgeSeconds: 0,
+      communityMediaScanBacklog: 0,
+      communityMediaScanOldestAgeSeconds: 0,
+      communityMediaFailedScans: 0,
+      communityMediaGcBacklog: 0,
+      communityMediaGcOldestAgeSeconds: 0,
+      communityMediaDeadGcJobs: 0,
     });
     expect(pool.connect).not.toHaveBeenCalled();
   });
@@ -157,6 +192,12 @@ describe('worker operational metrics', () => {
         communityMemberCountBuilding: 7,
         communityMemberCountStale: 8,
         communityMemberCountNotReadyAgeSeconds: 9,
+        communityMediaScanBacklog: 10,
+        communityMediaScanOldestAgeSeconds: 11,
+        communityMediaFailedScans: 12,
+        communityMediaGcBacklog: 13,
+        communityMediaGcOldestAgeSeconds: 14,
+        communityMediaDeadGcJobs: 15,
       },
       10,
     );
@@ -166,12 +207,30 @@ describe('worker operational metrics', () => {
     recorder.recordCommunityEventRetentionCycle(3, 2, 1, 14);
     recorder.recordCommunityEventRetentionCycle(0, 0, 0, 15);
     recorder.recordCommunityMediaCycle(
-      { expired: 1, scanned: 2, rejected: 3, scanRetried: 4, gcCompleted: 5, gcRetried: 6 },
-      7,
+      {
+        expired: 1,
+        scanned: 2,
+        rejected: 3,
+        scanRetried: 4,
+        scanFailed: 5,
+        gcCompleted: 6,
+        gcRetried: 7,
+        gcDead: 8,
+      },
+      9,
       16,
     );
     recorder.recordCommunityMediaCycle(
-      { expired: 0, scanned: 0, rejected: 0, scanRetried: 0, gcCompleted: 0, gcRetried: 0 },
+      {
+        expired: 0,
+        scanned: 0,
+        rejected: 0,
+        scanRetried: 0,
+        scanFailed: 0,
+        gcCompleted: 0,
+        gcRetried: 0,
+        gcDead: 0,
+      },
       0,
       17,
     );
@@ -184,10 +243,19 @@ describe('worker operational metrics', () => {
     ).toHaveBeenCalledOnce();
     expect(
       instruments.get(WORKER_METRIC_INSTRUMENTS.communityMediaGcRetried)?.add,
-    ).toHaveBeenCalledWith(6);
+    ).toHaveBeenCalledWith(7);
+    expect(
+      instruments.get(WORKER_METRIC_INSTRUMENTS.communityMediaScanFailed)?.add,
+    ).toHaveBeenCalledWith(5);
+    expect(
+      instruments.get(WORKER_METRIC_INSTRUMENTS.communityMediaGcDead)?.add,
+    ).toHaveBeenCalledWith(8);
+    expect(
+      instruments.get(WORKER_METRIC_INSTRUMENTS.communityMediaScanOldestAgeSeconds)?.record,
+    ).toHaveBeenCalledWith(11);
     expect(
       instruments.get(WORKER_METRIC_INSTRUMENTS.communityMediaFailures)?.add,
-    ).toHaveBeenCalledWith(7);
+    ).toHaveBeenCalledWith(9);
     expect(
       instruments.get(WORKER_METRIC_INSTRUMENTS.communityMediaCycleDurationMilliseconds)?.record,
     ).toHaveBeenCalledTimes(2);

@@ -374,6 +374,7 @@ const app = await buildApp({
         communityMediaDeliveryAuthorizer: communityMediaRuntime.deliveryAuthorizer,
         communityMediaModerationAuthorizer: communityMediaRuntime.moderationAuthorizer,
         communityMediaObjectStore,
+        communityMediaOperationsRepository: communityMediaRuntime.operationsRepository,
       }
     : {}),
   realtimeAuthorizationRepository: createRealtimeAuthorizationRepository(pool),

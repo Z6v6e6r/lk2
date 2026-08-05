@@ -163,6 +163,8 @@ const environmentSchema = z.object({
     .default(30_000),
   COMMUNITY_MEDIA_POLL_INTERVAL_MS: z.coerce.number().int().min(250).max(60_000).default(2_000),
   COMMUNITY_MEDIA_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(10),
+  COMMUNITY_MEDIA_SCAN_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(100).default(8),
+  COMMUNITY_MEDIA_GC_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(100).default(8),
   COMMUNITY_MEDIA_READ_URL_TTL_SECONDS: z.coerce.number().int().min(60).max(900).default(300),
   COMMUNITY_INVITE_TOKEN_KEYS: z.string().optional(),
   COMMUNITY_INVITE_ACTIVE_KEY_ID: z.string().min(1).max(64).optional(),

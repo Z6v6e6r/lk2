@@ -14,10 +14,21 @@ capability, finalizes that intent and polls canonical status. A post command may
 immutable post revision, idempotency result, audit and outbox event commit in one PostgreSQL
 transaction. A separate attach mutation is forbidden.
 
+The signed quarantine PUT is single-use: the signature binds `If-None-Match: *`, and storage CORS
+must allow that exact request header. A replayed browser PUT to an already-created key therefore
+fails instead of creating another provider version. Quarantine lifecycle removes noncurrent
+versions within seven days; this bounds provider-version residue from interrupted uploads without
+shortening READY or archived retention.
+
 Media follows `UPLOADING -> SCANNING -> READY | REJECTED`; an unused intent may become `EXPIRED`,
 and a retention or GC tombstone may become `PURGED`. The worker validates magic bytes, exact size
 and checksum, decoded pixel bounds and safety signals, removes metadata and creates immutable WebP
 variants. Quarantine originals are never served.
+
+Every generated key follows the internal contract
+`community-media/ready/{tenantId}/{communityId}/{mediaId}/{variant}/{sha256}.webp`. The scope UUIDs
+prevent cross-community aliasing, while the content hash makes each variant immutable. This key is
+provider-internal and is covered by a worker-to-repository regression test.
 
 Finalize binds the observed storage `VersionId`, checksum, size, content type and ETag. Every scan,
 transform and delivery operation addresses that exact immutable version. Provider version IDs and
@@ -52,6 +63,19 @@ events are never a source of truth.
   snapshot are part of the existing content command transaction.
 - GC: claims use a durable lease with bounded retries. Object deletion is idempotent; metadata and
   audit tombstones survive physical purge.
+- Recovery: scans and GC jobs have a configured maximum of bounded attempts. Exhaustion persists
+  `failure_code` plus `scan_failed_at` or `dead_at`, clears the lease and removes the item from
+  ordinary claims. An authorized CUP operator may release only that terminal item through an
+  idempotent replay command with a mandatory reason; the command writes audit and outbox evidence.
+
+## Dependency and backlog readiness
+
+API readiness verifies PostgreSQL and the configured S3 bucket. Worker readiness additionally
+verifies S3 and performs a bounded ClamAV PING. A failed readiness attempt is never cached: the next
+probe retries the dependency, allowing a recovered S3 or ClamAV to return the process to ready.
+Operational telemetry exports active scan/GC backlog counts, oldest-item age and terminal
+failed/dead counts. Terminal counts block release until an operator investigates and either replays
+the exact item through CUP or accepts its disposition.
 
 ## Release gates
 
@@ -61,8 +85,9 @@ The feature remains disabled until all gates pass:
    compatibility are green.
 2. Storage preflight proves versioning is `Enabled`, buckets are private, public ACL/policy access
    is absent, and CORS permits only the approved LK origins, `PUT`/`HEAD`/`GET` and the exact signed
-   required headers. Lifecycle policies must not delete attached or archived READY objects before
-   the five-year domain deadline.
+   required headers, including `If-None-Match`. Quarantine noncurrent versions must expire within
+   seven days. Lifecycle policies must not delete attached or archived READY objects before the
+   five-year domain deadline.
 3. Signed upload includes the media UUID metadata, exact content type/checksum constraints and a
    short expiry. Secrets, object keys, provider IDs and signed URLs are absent from audit/outbox/logs.
 4. Spoofed MIME, checksum/size mismatch, corrupt images, decompression bombs, duplicate finalize,

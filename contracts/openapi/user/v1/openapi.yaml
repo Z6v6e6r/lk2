@@ -3164,7 +3164,9 @@ paths:
       description: |
         Only the current ACTIVE OWNER may issue this command. The previous owner becomes ADMIN and
         the target becomes OWNER in the same tenant transaction. Optimistic revisions, stored
-        idempotency result, audit and outbox prevent split ownership and retry duplication.
+        idempotency result, audit and outbox prevent split ownership and retry duplication. The
+        target must own fewer than three ACTIVE communities; no quota grant applies to transfer.
+        The target-scoped owner quota lock is shared with community creation.
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:

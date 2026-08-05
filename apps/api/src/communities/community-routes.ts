@@ -198,7 +198,6 @@ export function registerCommunityRoutes(
           actorUserId: current.userId,
           ...requiredBody,
           ...(description === undefined ? {} : { description }),
-          quotaOverride: false,
           idempotencyKey,
           requestHash: requestHash(body.data),
           correlationId: request.id,
@@ -1006,6 +1005,14 @@ export function registerCommunityRoutes(
               409,
               'COMMUNITY_OWNERSHIP_TARGET_NOT_ACTIVE',
               'Новый владелец должен быть активным участником сообщества.',
+            );
+          case 'target_active_owner_quota_exceeded':
+            return sendApiError(
+              request,
+              reply,
+              409,
+              'COMMUNITY_OWNERSHIP_TARGET_QUOTA_EXCEEDED',
+              'Новый владелец уже владеет тремя активными сообществами.',
             );
           case 'owner_revision_conflict':
           case 'target_revision_conflict':

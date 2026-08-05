@@ -69,6 +69,13 @@ interface CommandRow extends QueryResultRow {
   readonly result_payload: unknown;
 }
 
+interface OperationsCommandRow extends QueryResultRow {
+  readonly operation: 'REPLAY_SCAN' | 'REPLAY_GC';
+  readonly target_id: string;
+  readonly request_hash: string;
+  readonly result_payload: unknown;
+}
+
 interface IssueContextRow extends QueryResultRow {
   readonly actor_active: boolean;
   readonly community_found: boolean;
@@ -333,6 +340,76 @@ async function recordTransition(
   );
 }
 
+async function lockOperationsCommand(
+  client: PoolClient,
+  input: Pick<CommunityMediaReplayInput, 'tenantId' | 'actorUserId' | 'idempotencyKey'>,
+): Promise<OperationsCommandRow | undefined> {
+  await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
+    `community-media-operations:${input.tenantId}:${input.actorUserId}:${input.idempotencyKey}`,
+  ]);
+  return queryOne<OperationsCommandRow>(
+    client,
+    `select operation, target_id, request_hash, result_payload
+       from community_content.media_operations_commands
+      where tenant_id = $1 and actor_user_id = $2 and idempotency_key = $3`,
+    [input.tenantId, input.actorUserId, input.idempotencyKey],
+  );
+}
+
+async function canReplayMedia(
+  client: PoolClient,
+  tenantId: string,
+  actorUserId: string,
+): Promise<boolean> {
+  const access = await queryOne<{ readonly allowed: boolean } & QueryResultRow>(
+    client,
+    `select current_user.status = 'ACTIVE'
+            and coalesce(profile.permissions && array[
+              'communities.content.moderation.decide'
+            ]::text[], false) as allowed
+       from identity.users current_user
+       left join identity.user_access_profiles profile
+         on profile.tenant_id = current_user.tenant_id and profile.user_id = current_user.id
+      where current_user.tenant_id = $1 and current_user.id = $2`,
+    [tenantId, actorUserId],
+  );
+  return access?.allowed === true;
+}
+
+async function recordOperationsCommand(
+  client: PoolClient,
+  input: CommunityMediaReplayInput,
+  operation: OperationsCommandRow['operation'],
+  result: CommunityMediaReplayResult,
+): Promise<void> {
+  await client.query(
+    `insert into community_content.media_operations_commands (
+       tenant_id, actor_user_id, operation, target_id,
+       idempotency_key, request_hash, result_payload
+     ) values ($1, $2, $3, $4, $5, $6, $7::jsonb)`,
+    [
+      input.tenantId,
+      input.actorUserId,
+      operation,
+      input.targetId,
+      input.idempotencyKey,
+      input.requestHash,
+      JSON.stringify(result),
+    ],
+  );
+}
+
+function replayedOperationsResult(row: OperationsCommandRow): CommunityMediaReplayResult {
+  if (!row.result_payload || typeof row.result_payload !== 'object') {
+    throw new Error('COMMUNITY_MEDIA_REPLAY_RESULT_INVALID');
+  }
+  const result = row.result_payload as { readonly outcome?: unknown; readonly targetId?: unknown };
+  if (result.outcome !== 'replayed' || typeof result.targetId !== 'string') {
+    throw new Error('COMMUNITY_MEDIA_REPLAY_RESULT_INVALID');
+  }
+  return { outcome: 'replayed', targetId: result.targetId, replayed: true };
+}
+
 function replayedStatus(command: CommandRow): CommunityMediaStatus {
   return communityMediaStatusSchema.parse(command.result_payload);
 }
@@ -414,6 +491,12 @@ export interface CommunityMediaPersistenceRepository extends CommunityMediaRepos
     readonly retryAt: string;
     readonly errorCode: string;
   }): Promise<boolean>;
+  failScan(input: {
+    readonly tenantId: string;
+    readonly mediaId: string;
+    readonly leaseOwner: string;
+    readonly errorCode: string;
+  }): Promise<boolean>;
   attachReadyMediaToPostRevision(input: {
     readonly tenantId: string;
     readonly actorUserId: string;
@@ -457,6 +540,14 @@ export interface CommunityMediaPersistenceRepository extends CommunityMediaRepos
     readonly retryAt: string;
     readonly errorCode: string;
   }): Promise<boolean>;
+  deadLetterGc(input: {
+    readonly tenantId: string;
+    readonly jobId: string;
+    readonly leaseOwner: string;
+    readonly errorCode: string;
+  }): Promise<boolean>;
+  replayFailedScan(input: CommunityMediaReplayInput): Promise<CommunityMediaReplayResult>;
+  replayDeadGc(input: CommunityMediaReplayInput): Promise<CommunityMediaReplayResult>;
   getAuthorizedVariant(input: {
     readonly tenantId: string;
     readonly viewerUserId: string;
@@ -486,6 +577,23 @@ export interface CommunityMediaPersistenceRepository extends CommunityMediaRepos
     | undefined
   >;
 }
+
+export interface CommunityMediaReplayInput {
+  readonly tenantId: string;
+  readonly actorUserId: string;
+  readonly targetId: string;
+  readonly idempotencyKey: string;
+  readonly requestHash: string;
+  readonly reasonCode: string;
+  readonly correlationId: string;
+}
+
+export type CommunityMediaReplayResult =
+  | { readonly outcome: 'replayed'; readonly targetId: string; readonly replayed: boolean }
+  | {
+      readonly outcome:
+        'idempotency_conflict' | 'permission_denied' | 'not_found' | 'invalid_state';
+    };
 
 function bounded(value: number, maximum: number, code: string): void {
   if (!Number.isInteger(value) || value < 1 || value > maximum) throw new Error(code);
@@ -837,8 +945,9 @@ export function createCommunityMediaRepository(pool: Pool): CommunityMediaPersis
         const result = await client.query<MediaRow & { readonly scan_attempts: number | string }>(
           `with candidates as (
              select id
-               from community_content.media_assets
+              from community_content.media_assets
               where tenant_id = $1 and state = 'SCANNING'
+                and scan_failed_at is null
                 and scan_available_at <= now()
                 and (scan_lease_owner is null or scan_lease_expires_at <= now())
               order by finalized_at, id
@@ -1027,6 +1136,23 @@ export function createCommunityMediaRepository(pool: Pool): CommunityMediaPersis
       });
     },
 
+    failScan(input) {
+      if (!validCode(input.errorCode)) throw new Error('COMMUNITY_MEDIA_SCAN_ERROR_CODE_INVALID');
+      return withTenantTransaction(pool, input.tenantId, async (client) => {
+        const result = await client.query(
+          `update community_content.media_assets
+              set scan_lease_owner = null, scan_lease_expires_at = null,
+                  scan_failed_at = now(), scan_failure_code = $4,
+                  last_scan_error_code = $4, updated_at = now()
+            where tenant_id = $1 and id = $2 and state = 'SCANNING'
+              and scan_failed_at is null
+              and scan_lease_owner = $3 and scan_lease_expires_at > now()`,
+          [input.tenantId, input.mediaId, input.leaseOwner, input.errorCode],
+        );
+        return (result.rowCount ?? 0) === 1;
+      });
+    },
+
     attachReadyMediaToPostRevision(input) {
       return withTenantTransaction(pool, input.tenantId, (client) =>
         attachReadyMediaToPostRevisionWithClient(client, input),
@@ -1160,6 +1286,7 @@ export function createCommunityMediaRepository(pool: Pool): CommunityMediaPersis
              select id
                from community_content.media_gc_jobs
               where tenant_id = $1 and available_at <= now()
+                and dead_at is null
                 and (state = 'PENDING' or (state = 'LEASED' and lease_expires_at <= now()))
               order by available_at, id
               for update skip locked
@@ -1254,6 +1381,139 @@ export function createCommunityMediaRepository(pool: Pool): CommunityMediaPersis
           [input.tenantId, input.jobId, input.leaseOwner, input.retryAt, input.errorCode],
         );
         return (result.rowCount ?? 0) === 1;
+      });
+    },
+
+    deadLetterGc(input) {
+      if (!validCode(input.errorCode)) throw new Error('COMMUNITY_MEDIA_GC_ERROR_CODE_INVALID');
+      return withTenantTransaction(pool, input.tenantId, async (client) => {
+        const result = await client.query(
+          `update community_content.media_gc_jobs
+              set state = 'PENDING', lease_owner = null, lease_expires_at = null,
+                  dead_at = now(), failure_code = $4, last_error_code = $4
+            where tenant_id = $1 and id = $2 and state = 'LEASED'
+              and dead_at is null
+              and lease_owner = $3 and lease_expires_at > now()`,
+          [input.tenantId, input.jobId, input.leaseOwner, input.errorCode],
+        );
+        return (result.rowCount ?? 0) === 1;
+      });
+    },
+
+    replayFailedScan(input) {
+      if (!validCode(input.reasonCode)) throw new Error('COMMUNITY_MEDIA_REPLAY_REASON_INVALID');
+      return withTenantTransaction(pool, input.tenantId, async (client) => {
+        const command = await lockOperationsCommand(client, input);
+        if (command) {
+          if (
+            command.operation !== 'REPLAY_SCAN' ||
+            command.target_id !== input.targetId ||
+            command.request_hash !== input.requestHash
+          ) {
+            return { outcome: 'idempotency_conflict' } as const;
+          }
+          return replayedOperationsResult(command);
+        }
+        if (!(await canReplayMedia(client, input.tenantId, input.actorUserId))) {
+          return { outcome: 'permission_denied' } as const;
+        }
+        const row = await queryOne<MediaRow>(
+          client,
+          `select ${mediaColumns} from community_content.media_assets
+            where tenant_id = $1 and id = $2 for update`,
+          [input.tenantId, input.targetId],
+        );
+        if (!row) return { outcome: 'not_found' } as const;
+        const updated = await client.query(
+          `update community_content.media_assets
+              set scan_failed_at = null, scan_failure_code = null,
+                  last_scan_error_code = null, scan_attempts = 0,
+                  scan_available_at = now(), updated_at = now()
+            where tenant_id = $1 and id = $2 and state = 'SCANNING'
+              and scan_failed_at is not null`,
+          [input.tenantId, input.targetId],
+        );
+        if ((updated.rowCount ?? 0) !== 1) return { outcome: 'invalid_state' } as const;
+        const result = { outcome: 'replayed', targetId: input.targetId, replayed: false } as const;
+        await recordOperationsCommand(client, input, 'REPLAY_SCAN', result);
+        await recordTransition(client, {
+          tenantId: input.tenantId,
+          communityId: row.community_id,
+          mediaId: row.id,
+          actorUserId: input.actorUserId,
+          correlationId: input.correlationId,
+          action: 'COMMUNITY_MEDIA_SCAN_REPLAYED',
+          eventType: 'community.media.scan_replayed.v1',
+          payload: {
+            communityId: row.community_id,
+            mediaId: row.id,
+            reasonCode: input.reasonCode,
+          },
+        });
+        return result;
+      });
+    },
+
+    replayDeadGc(input) {
+      if (!validCode(input.reasonCode)) throw new Error('COMMUNITY_MEDIA_REPLAY_REASON_INVALID');
+      return withTenantTransaction(pool, input.tenantId, async (client) => {
+        const command = await lockOperationsCommand(client, input);
+        if (command) {
+          if (
+            command.operation !== 'REPLAY_GC' ||
+            command.target_id !== input.targetId ||
+            command.request_hash !== input.requestHash
+          ) {
+            return { outcome: 'idempotency_conflict' } as const;
+          }
+          return replayedOperationsResult(command);
+        }
+        if (!(await canReplayMedia(client, input.tenantId, input.actorUserId))) {
+          return { outcome: 'permission_denied' } as const;
+        }
+        const job = await queryOne<
+          {
+            readonly media_id: string;
+            readonly community_id: string;
+            readonly dead_at: Date | string | null;
+          } & QueryResultRow
+        >(
+          client,
+          `select job.media_id, media.community_id, job.dead_at
+             from community_content.media_gc_jobs job
+             join community_content.media_assets media
+               on media.tenant_id = job.tenant_id and media.id = job.media_id
+            where job.tenant_id = $1 and job.id = $2 for update of job`,
+          [input.tenantId, input.targetId],
+        );
+        if (!job) return { outcome: 'not_found' } as const;
+        if (!job.dead_at) return { outcome: 'invalid_state' } as const;
+        const updated = await client.query(
+          `update community_content.media_gc_jobs
+              set dead_at = null, failure_code = null, last_error_code = null,
+                  attempts = 0, available_at = now()
+            where tenant_id = $1 and id = $2 and state = 'PENDING' and dead_at is not null`,
+          [input.tenantId, input.targetId],
+        );
+        if ((updated.rowCount ?? 0) !== 1) return { outcome: 'invalid_state' } as const;
+        const result = { outcome: 'replayed', targetId: input.targetId, replayed: false } as const;
+        await recordOperationsCommand(client, input, 'REPLAY_GC', result);
+        await recordTransition(client, {
+          tenantId: input.tenantId,
+          communityId: job.community_id,
+          mediaId: job.media_id,
+          actorUserId: input.actorUserId,
+          correlationId: input.correlationId,
+          action: 'COMMUNITY_MEDIA_GC_REPLAYED',
+          eventType: 'community.media.gc_replayed.v1',
+          payload: {
+            communityId: job.community_id,
+            mediaId: job.media_id,
+            gcJobId: input.targetId,
+            reasonCode: input.reasonCode,
+          },
+        });
+        return result;
       });
     },
 

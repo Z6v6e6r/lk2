@@ -10,7 +10,6 @@ const input = {
   visibility: 'PUBLIC',
   joinPolicy: 'MODERATED',
   publishingPreset: 'STAFF_FEED',
-  quotaOverride: false,
   idempotencyKey: 'community-create-test-0001',
   requestHash: 'a'.repeat(64),
   correlationId: 'community-create-correlation',
@@ -34,6 +33,7 @@ describe('community create service', () => {
   it('validates and delegates an explicit canonical create command', async () => {
     const repository = {
       create: vi.fn().mockResolvedValue({ outcome: 'created', community, replayed: false }),
+      createQuotaGrant: vi.fn(),
     };
     await expect(createCommunityCreateService(repository).create(input)).resolves.toEqual({
       outcome: 'created',
@@ -49,9 +49,9 @@ describe('community create service', () => {
     { ...input, description: 'a'.repeat(2_001) },
     { ...input, visibility: 'OPEN' },
     { ...input, publishingPreset: 'DEFAULT' },
-    { ...input, quotaOverride: 'true' },
+    { ...input, quotaOverride: true },
   ])('rejects an invalid command before persistence', async (invalidInput) => {
-    const repository = { create: vi.fn() };
+    const repository = { create: vi.fn(), createQuotaGrant: vi.fn() };
     await expect(
       createCommunityCreateService(repository).create(invalidInput as never),
     ).rejects.toEqual(new CommunityCreateError('COMMUNITY_CREATE_COMMAND_INVALID'));
@@ -65,9 +65,52 @@ describe('community create service', () => {
         community: { ...community, revision: 0 },
         replayed: false,
       }),
+      createQuotaGrant: vi.fn(),
     };
     await expect(createCommunityCreateService(repository).create(input)).rejects.toEqual(
       new CommunityCreateError('COMMUNITY_CREATE_COMMAND_INVALID'),
     );
+  });
+
+  it('validates a one-use create quota grant and rejects duplicate scopes', async () => {
+    const grant = {
+      id: '33333333-3333-4333-8333-333333333333',
+      subjectUserId: input.actorUserId,
+      authorizedByUserId: '44444444-4444-4444-8444-444444444444',
+      scopes: ['ACTIVE_OWNER_LIMIT'] as const,
+      state: 'ACTIVE' as const,
+      revision: 1,
+      expiresAt: '2026-08-04T10:00:00.000Z',
+      createdAt: '2026-08-03T10:00:00.000Z',
+      updatedAt: '2026-08-03T10:00:00.000Z',
+      consumedAt: null,
+    };
+    const repository = {
+      create: vi.fn(),
+      createQuotaGrant: vi.fn().mockResolvedValue({ outcome: 'granted', grant, replayed: false }),
+    };
+    const grantInput = {
+      tenantId: input.tenantId,
+      actorUserId: grant.authorizedByUserId,
+      subjectUserId: input.actorUserId,
+      capability: 'communities.create.quota.override',
+      scopes: ['ACTIVE_OWNER_LIMIT'],
+      reasonCode: 'OPERATIONS_EXCEPTION',
+      ticketId: 'CUP-1842',
+      idempotencyKey: 'community-create-grant-0001',
+      requestHash: 'b'.repeat(64),
+      correlationId: 'community-create-grant-correlation',
+    } as const;
+    const service = createCommunityCreateService(repository);
+    await expect(service.createQuotaGrant?.(grantInput)).resolves.toMatchObject({
+      outcome: 'granted',
+      grant,
+    });
+    await expect(
+      service.createQuotaGrant?.({
+        ...grantInput,
+        scopes: ['ACTIVE_OWNER_LIMIT', 'ACTIVE_OWNER_LIMIT'],
+      }),
+    ).rejects.toEqual(new CommunityCreateError('COMMUNITY_CREATE_COMMAND_INVALID'));
   });
 });

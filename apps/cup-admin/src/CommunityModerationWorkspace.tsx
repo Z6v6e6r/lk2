@@ -2,6 +2,8 @@ import { ApiClientError } from '@phub/api-sdk';
 import { useEffect, useState } from 'react';
 
 import type {
+  AdminCommunityCreateQuotaGrant,
+  AdminCommunityCreateQuotaScope,
   AdminCommunityDirectInviteQuotaGrant,
   AdminCommunityJoinRequest,
   AdminCommunityPendingPost,
@@ -67,6 +69,13 @@ export function CommunityModerationWorkspace({
   const [grantReasonCode, setGrantReasonCode] = useState('');
   const [grantTicketId, setGrantTicketId] = useState('');
   const [grantResult, setGrantResult] = useState<AdminCommunityDirectInviteQuotaGrant>();
+  const [createGrantUserId, setCreateGrantUserId] = useState('');
+  const [createGrantScopes, setCreateGrantScopes] = useState<
+    readonly AdminCommunityCreateQuotaScope[]
+  >([]);
+  const [createGrantReasonCode, setCreateGrantReasonCode] = useState('');
+  const [createGrantTicketId, setCreateGrantTicketId] = useState('');
+  const [createGrantResult, setCreateGrantResult] = useState<AdminCommunityCreateQuotaGrant>();
   const [busy, setBusy] = useState<string | undefined>('load');
   const [error, setError] = useState<string>();
 
@@ -202,6 +211,44 @@ export function CommunityModerationWorkspace({
     }
   }
 
+  function toggleCreateGrantScope(scope: AdminCommunityCreateQuotaScope): void {
+    setCreateGrantScopes((current) =>
+      current.includes(scope)
+        ? current.filter((candidate) => candidate !== scope)
+        : [...current, scope],
+    );
+  }
+
+  async function createCommunityCreateGrant(): Promise<void> {
+    if (
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+        createGrantUserId,
+      ) ||
+      createGrantScopes.length === 0 ||
+      !/^[A-Z][A-Z0-9_]{1,63}$/.test(createGrantReasonCode) ||
+      !/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/.test(createGrantTicketId)
+    ) {
+      setError('Для grant нужны User UUID, хотя бы один scope, код причины и ticket ID.');
+      return;
+    }
+    setBusy('create-quota-grant');
+    setError(undefined);
+    setCreateGrantResult(undefined);
+    try {
+      setCreateGrantResult(
+        await client.createCommunityCreateQuotaGrant(createGrantUserId, {
+          scopes: createGrantScopes,
+          reasonCode: createGrantReasonCode,
+          ticketId: createGrantTicketId,
+        }),
+      );
+    } catch (grantError) {
+      setError(errorText(grantError));
+    } finally {
+      setBusy(undefined);
+    }
+  }
+
   async function approveContent(item: AdminCommunityPendingPost): Promise<void> {
     setContentBusy(true);
     setError(undefined);
@@ -318,6 +365,93 @@ export function CommunityModerationWorkspace({
             <strong>Quota grant создан.</strong>
             <span>Статус: {grantResult.status}</span>
             <small>Истекает {new Date(grantResult.expiresAt).toLocaleString('ru-RU')}.</small>
+          </div>
+        ) : null}
+      </section>
+
+      <section className="panel invite-quota-grant-panel">
+        <div className="section-heading compact">
+          <div>
+            <p className="eyebrow">Контролируемое исключение</p>
+            <h2>Исключение из quota создания сообществ</h2>
+            <p>
+              Одноразовый grant привязан к пользователю, действует 24 часа и погашается только
+              успешным созданием сообщества.
+            </p>
+          </div>
+        </div>
+        <div className="invite-quota-grant-grid">
+          <label>
+            User UUID
+            <input
+              value={createGrantUserId}
+              onChange={(event) => setCreateGrantUserId(event.target.value.trim())}
+              placeholder="11111111-1111-4111-8111-111111111111"
+            />
+          </label>
+          <fieldset>
+            <legend>Scopes</legend>
+            <label>
+              <input
+                type="checkbox"
+                checked={createGrantScopes.includes('DAILY_CREATE_LIMIT')}
+                onChange={() => toggleCreateGrantScope('DAILY_CREATE_LIMIT')}
+              />
+              Суточный лимит создания
+            </label>
+            <label>
+              <input
+                type="checkbox"
+                checked={createGrantScopes.includes('ACTIVE_OWNER_LIMIT')}
+                onChange={() => toggleCreateGrantScope('ACTIVE_OWNER_LIMIT')}
+              />
+              Лимит активного владения
+            </label>
+          </fieldset>
+          <label>
+            Код причины создания
+            <input
+              value={createGrantReasonCode}
+              onChange={(event) =>
+                setCreateGrantReasonCode(
+                  event.target.value
+                    .toUpperCase()
+                    .replace(/[^A-Z0-9_]/g, '')
+                    .slice(0, 64),
+                )
+              }
+              placeholder="OPERATIONS_EXCEPTION"
+            />
+          </label>
+          <label>
+            Ticket ID создания
+            <input
+              value={createGrantTicketId}
+              onChange={(event) =>
+                setCreateGrantTicketId(
+                  event.target.value.replace(/[^A-Za-z0-9._:/-]/g, '').slice(0, 128),
+                )
+              }
+              placeholder="CUP-1842"
+            />
+          </label>
+        </div>
+        <div className="moderation-actions">
+          <small className="muted">Grant не применяется к ownership transfer.</small>
+          <button
+            className="primary-button"
+            type="button"
+            disabled={Boolean(busy)}
+            onClick={() => void createCommunityCreateGrant()}
+          >
+            {busy === 'create-quota-grant' ? 'Создаём…' : 'Создать grant создания'}
+          </button>
+        </div>
+        {createGrantResult ? (
+          <div className="notice success invite-quota-grant-result">
+            <strong>Grant создания создан.</strong>
+            <span>Scopes: {createGrantResult.scopes.join(', ')}</span>
+            <small>Истекает {new Date(createGrantResult.expiresAt).toLocaleString('ru-RU')}.</small>
           </div>
         ) : null}
       </section>
