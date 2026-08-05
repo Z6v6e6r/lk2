@@ -178,16 +178,14 @@ export function registerActivityHistoryRoutes(
       reply.header('Cache-Control', 'private, no-store');
       const current = principal(request);
       const body = (request.body ?? {}) as Record<string, unknown>;
+      if (!current) {
+        return sendApiError(request, reply, 401, 'AUTH_REQUIRED', 'Требуется авторизация.');
+      }
       const cursor = decodeCursor(body.cursor);
       const kind = typeof body.kind === 'string' ? body.kind : undefined;
       const status = typeof body.status === 'string' ? body.status : undefined;
       const limit = body.limit === undefined ? 20 : body.limit;
-      if (
-        !current ||
-        !options.repository ||
-        !options.clientAssistedJobStore ||
-        !options.projector
-      ) {
+      if (!options.repository || !options.clientAssistedJobStore || !options.projector) {
         return sendApiError(
           request,
           reply,
