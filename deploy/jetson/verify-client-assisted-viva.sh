@@ -17,11 +17,20 @@ case "$tenant_key" in
     ;;
 esac
 
-test -r "$base_runtime_env"
-test -r "$auth_runtime_env"
-test -r "$runtime_override_env"
-test -r "$games_runtime_env"
-test "$(stat -c %a "$runtime_override_env")" = 600
+fail() {
+  echo "$1" >&2
+  exit 1
+}
+
+for required_file in \
+  "$base_runtime_env" \
+  "$auth_runtime_env" \
+  "$runtime_override_env" \
+  "$games_runtime_env"; do
+  test -r "$required_file" || fail "Client-assisted Viva runtime file is not readable: ${required_file}"
+done
+test "$(stat -c %a "$runtime_override_env")" = 600 ||
+  fail 'Client-assisted Viva runtime override must have mode 600'
 
 file_value() {
   file="$1"
@@ -92,18 +101,34 @@ require_value ACTIVITY_HISTORY_ENABLED true
 require_value ACTIVITY_HISTORY_SYNC_ENABLED true
 
 compose exec -T api node -e '
-  if (process.env.APP_ENV !== "staging") process.exit(1);
-  if (process.env.CORS_ORIGINS !== "https://lk.nano.padlhub.su") process.exit(1);
-  if (process.env.VIVA_OAUTH_REDIRECT_URI !== "https://lk.nano.padlhub.su/user/api/v1/local-padel/auth/viva/callback") process.exit(1);
-  if (process.env.VIVA_DIRECT_READ_ENABLED !== "true") process.exit(1);
-  if (process.env.HOME_VIVA_SYNC_ENABLED !== "false") process.exit(1);
-  if (process.env.HOME_VIVA_LEGACY_GAME_BRIDGE_ENABLED !== "false") process.exit(1);
-  if (process.env.ACTIVITY_HISTORY_ENABLED !== "true") process.exit(1);
-  if (process.env.ACTIVITY_HISTORY_SYNC_ENABLED !== "true") process.exit(1);
+  const expected = {
+    APP_ENV: "staging",
+    CORS_ORIGINS: "https://lk.nano.padlhub.su",
+    VIVA_OAUTH_REDIRECT_URI: "https://lk.nano.padlhub.su/user/api/v1/local-padel/auth/viva/callback",
+    VIVA_DIRECT_READ_ENABLED: "true",
+    HOME_VIVA_SYNC_ENABLED: "false",
+    HOME_VIVA_LEGACY_GAME_BRIDGE_ENABLED: "false",
+    ACTIVITY_HISTORY_ENABLED: "true",
+    ACTIVITY_HISTORY_SYNC_ENABLED: "true",
+  };
+  for (const [key, value] of Object.entries(expected)) {
+    if (process.env[key] !== value) {
+      console.error(`Unsafe API runtime flag: ${key} must equal ${value}`);
+      process.exitCode = 1;
+    }
+  }
 '
 compose exec -T worker node -e '
-  if (process.env.HOME_VIVA_SYNC_ENABLED !== "false") process.exit(1);
-  if (process.env.HOME_VIVA_LEGACY_GAME_BRIDGE_ENABLED !== "false") process.exit(1);
+  const expected = {
+    HOME_VIVA_SYNC_ENABLED: "false",
+    HOME_VIVA_LEGACY_GAME_BRIDGE_ENABLED: "false",
+  };
+  for (const [key, value] of Object.entries(expected)) {
+    if (process.env[key] !== value) {
+      console.error(`Unsafe worker runtime flag: ${key} must equal ${value}`);
+      process.exitCode = 1;
+    }
+  }
 '
 
 active_delegations="$(sql "
@@ -145,9 +170,12 @@ other_mixed_plans="$(sql "
    where plan.mode = 'MIXED_END_USER_READS'
      and cardinality(plan.direct_read_operations) > 0
 ")"
-test "$active_delegations" -gt 0
-test "$routing_ready_delegations" = "$active_delegations"
-test "$other_mixed_plans" -eq 0
+test "$active_delegations" -gt 0 ||
+  fail 'Client-assisted Viva verification found no active delegations'
+test "$routing_ready_delegations" = "$active_delegations" ||
+  fail "Client-assisted Viva routing coverage mismatch: ${routing_ready_delegations}/${active_delegations}"
+test "$other_mixed_plans" -eq 0 ||
+  fail "Client-assisted Viva verification found ${other_mixed_plans} out-of-scope mixed tenants"
 
 provider_tenant_key="$(sql "
   select binding.provider_tenant_key
@@ -168,7 +196,7 @@ esac
 cors_headers="$(mktemp /tmp/phub-viva-cors.XXXXXX)"
 trap 'rm -f "$cors_headers"' EXIT HUP INT TERM
 viva_base_url="$(runtime_value VIVA_END_USER_API_URL)"
-test -n "$viva_base_url"
+test -n "$viva_base_url" || fail 'Viva end-user API URL is not configured'
 curl --fail --silent --show-error \
   --request OPTIONS \
   --output /dev/null \
@@ -177,8 +205,10 @@ curl --fail --silent --show-error \
   --header 'Access-Control-Request-Method: GET' \
   --header 'Access-Control-Request-Headers: authorization' \
   "${viva_base_url%/}/v1/${provider_tenant_key}/exercises?date=$(date -u +%Y-%m-%d)"
-tr -d '\r' < "$cors_headers" | grep -Eiq '^access-control-allow-origin: https://lk\.nano\.padlhub\.su$'
-tr -d '\r' < "$cors_headers" | grep -Eiq '^access-control-allow-headers:.*authorization'
+tr -d '\r' < "$cors_headers" | grep -Eiq '^access-control-allow-origin: https://lk\.nano\.padlhub\.su$' ||
+  fail 'Viva CORS response does not allow the canonical Nano origin'
+tr -d '\r' < "$cors_headers" | grep -Eiq '^access-control-allow-headers:.*authorization' ||
+  fail 'Viva CORS response does not allow the Authorization header'
 
 compose exec -T api node -e '
   const tenant = process.argv[1];
