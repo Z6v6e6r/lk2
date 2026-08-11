@@ -369,6 +369,10 @@ function createGateway(overrides: Partial<AuthGateway> = {}): AuthGateway {
       .fn<AuthGateway['getLocation']>()
       .mockRejectedValue(new Error('LOCATION_NOT_FOUND')),
     listMyCommunities: vi.fn().mockResolvedValue(communityMemberships),
+    getCommunityReadExperienceDetail: vi.fn().mockRejectedValue(new Error('NOT_CONFIGURED')),
+    listCommunityReadExperienceFeed: vi.fn().mockRejectedValue(new Error('NOT_CONFIGURED')),
+    listCommunityReadExperienceChat: vi.fn().mockRejectedValue(new Error('NOT_CONFIGURED')),
+    getCommunityReadExperienceRating: vi.fn().mockRejectedValue(new Error('NOT_CONFIGURED')),
     getProfileLevelHistory: vi.fn().mockResolvedValue({
       userId: session.context.user.id,
       items: [
@@ -1052,6 +1056,45 @@ describe('PadlHub web authentication', () => {
     expect(listMyCommunities).toHaveBeenNthCalledWith(1);
     expect(listMyCommunities).toHaveBeenNthCalledWith(2, 'opaque-community-cursor');
     expect(gateway.getHomeBase).not.toHaveBeenCalled();
+  });
+
+  it('opens the default-denied legacy read-only community route when detail is enabled', async () => {
+    const communityId = '11111111-1111-4111-8111-111111111111';
+    window.history.replaceState({}, '', `/communities/${communityId}`);
+    const getCommunityReadExperienceDetail = vi
+      .fn<AuthGateway['getCommunityReadExperienceDetail']>()
+      .mockResolvedValue({
+        id: communityId,
+        title: 'Padel Friends',
+        logoUrl: null,
+        isVerified: true,
+        description: 'Сообщество для просмотра',
+        memberCount: 42,
+        readOnly: true,
+      });
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue({
+        ...session,
+        context: {
+          ...session.context,
+          runtimeCapabilities: {
+            communityDirectory: true,
+            communityReadDetail: true,
+            communityReadFeed: false,
+            communityReadChat: false,
+            communityReadRating: false,
+          },
+        },
+      }),
+      getCommunityReadExperienceDetail,
+    });
+
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+
+    expect(await screen.findByRole('heading', { name: 'Padel Friends' })).toBeVisible();
+    expect(screen.getByText('42 участника')).toBeVisible();
+    expect(screen.getByLabelText('Сообщество доступно только для просмотра')).toBeVisible();
+    expect(getCommunityReadExperienceDetail).toHaveBeenCalledWith(communityId);
   });
 
   it('loads the notification inbox and exposes the tenant Web Push state', async () => {

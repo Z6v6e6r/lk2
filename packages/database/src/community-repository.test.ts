@@ -70,6 +70,23 @@ describe('community repositories', () => {
     ]);
   });
 
+  it('reverse maps a PadlHub community UUID only inside the same tenant and legacy source', async () => {
+    const communityId = '11111111-1111-4111-8111-111111111111';
+    const { pool } = poolWithQueries((text, values) => {
+      if (text.includes('from integration.external_entity_map')) {
+        expect(values).toEqual([tenantId, communityId]);
+        expect(text).toContain("external_system = 'LK_LEGACY'");
+        expect(text).toContain("entity_type = 'community'");
+        return { rows: [{ external_id: 'legacy-community-1', internal_id: communityId }] };
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+
+    await expect(
+      createCommunityLegacyBridgeRepository(pool).getCommunityExternalId?.(tenantId, communityId),
+    ).resolves.toBe('legacy-community-1');
+  });
+
   it('reads only PadlHub delivery URLs for copied community logos', async () => {
     const communityId = '11111111-1111-4111-8111-111111111111';
     const { pool } = poolWithQueries((text, values) => {

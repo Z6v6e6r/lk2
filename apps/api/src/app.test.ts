@@ -125,6 +125,70 @@ describe('health endpoints', () => {
     expect(response.statusCode).toBe(200);
   });
 
+  it('keeps legacy community detail default-off and serves it only with flag and service', async () => {
+    const communityId = '11111111-1111-4111-8111-111111111111';
+    const token = await accessToken();
+    const url = `/user/api/v1/local-padel/community-views/${communityId}`;
+    const disabled = await buildApp({
+      config,
+      logger: createLogger('api-test', 'silent'),
+      pool: fakePool(),
+    });
+    apps.push(disabled);
+
+    expect(
+      (
+        await disabled.inject({
+          method: 'GET',
+          url,
+          headers: { authorization: `Bearer ${token}` },
+        })
+      ).statusCode,
+    ).toBe(503);
+
+    const enabled = await buildApp({
+      config: loadConfig({
+        APP_ENV: 'ci',
+        DATABASE_URL: 'postgresql://phub:test@localhost:5432/phub',
+        REDIS_URL: 'redis://localhost:6379',
+        RABBITMQ_URL: 'amqp://phub:test@localhost:5672',
+        JWT_ISSUER: config.JWT_ISSUER,
+        JWT_AUDIENCE: config.JWT_AUDIENCE,
+        JWT_ACCESS_SECRET: config.JWT_ACCESS_SECRET,
+        JWT_REFRESH_SECRET: config.JWT_REFRESH_SECRET,
+        COMMUNITIES_READ_MODE: 'legacy',
+        COMMUNITY_LEGACY_READ_DETAIL_ENABLED: 'true',
+      }),
+      logger: createLogger('api-test', 'silent'),
+      pool: fakePool(),
+      communityReadExperienceService: {
+        getDetail: vi.fn().mockResolvedValue({
+          id: communityId,
+          title: 'Padel Friends',
+          logoUrl: null,
+          isVerified: true,
+          description: null,
+          memberCount: 42,
+          readOnly: true,
+        }),
+        getFeed: vi.fn(),
+        getChat: vi.fn(),
+        getRating: vi.fn(),
+      },
+    });
+    apps.push(enabled);
+
+    expect(
+      (
+        await enabled.inject({
+          method: 'GET',
+          url,
+          headers: { authorization: `Bearer ${token}` },
+        })
+      ).statusCode,
+    ).toBe(200);
+  });
+
   it('requires a PadlHub token before tenant resolution', async () => {
     const app = await buildApp({
       config,

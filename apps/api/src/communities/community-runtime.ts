@@ -1,9 +1,11 @@
 import {
   createCommunityDirectoryService,
+  createCommunityReadExperienceService,
   paginateCommunityDirectoryItems,
   type CommunityDirectoryItem,
   type CommunityDirectoryRepository,
   type CommunityDirectoryService,
+  type CommunityReadExperienceService,
 } from '@phub/communities';
 import type { AppConfig } from '@phub/config';
 import {
@@ -14,6 +16,7 @@ import type { Logger } from 'pino';
 import type { Pool } from 'pg';
 
 import { LegacyCommunityReadRepository } from './legacy-community-read-repository.js';
+import { LegacyCommunityExperienceRepository } from './legacy-community-experience-repository.js';
 
 const mockItems: readonly CommunityDirectoryItem[] = [
   {
@@ -82,4 +85,30 @@ export function createCommunityDirectoryRuntime(input: {
       break;
   }
   return createCommunityDirectoryService(repository);
+}
+
+export function createCommunityReadExperienceRuntime(input: {
+  readonly config: AppConfig;
+  readonly pool: Pool;
+  readonly logger: Logger;
+}): CommunityReadExperienceService | undefined {
+  if (
+    input.config.COMMUNITIES_READ_MODE !== 'legacy' ||
+    (!input.config.COMMUNITY_LEGACY_READ_DETAIL_ENABLED &&
+      !input.config.COMMUNITY_LEGACY_READ_FEED_ENABLED &&
+      !input.config.COMMUNITY_LEGACY_READ_CHAT_ENABLED &&
+      !input.config.COMMUNITY_LEGACY_READ_RATING_ENABLED)
+  )
+    return undefined;
+  return createCommunityReadExperienceService(
+    new LegacyCommunityExperienceRepository({
+      baseUrl: input.config.COMMUNITIES_LEGACY_BASE_URL,
+      timeoutMs: input.config.COMMUNITIES_LEGACY_TIMEOUT_MS,
+      maxAttempts: input.config.COMMUNITIES_LEGACY_MAX_ATTEMPTS,
+      circuitFailureThreshold: input.config.COMMUNITIES_LEGACY_CIRCUIT_FAILURE_THRESHOLD,
+      circuitResetMs: input.config.COMMUNITIES_LEGACY_CIRCUIT_RESET_MS,
+      onMetric: (metric) => input.logger.info({ metric }, 'legacy community experience read'),
+      bridge: createCommunityLegacyBridgeRepository(input.pool),
+    }),
+  );
 }

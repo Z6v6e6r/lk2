@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react';
 
 import type { CommunityMembershipPage } from './auth-gateway.js';
+import styles from './communities-ui/CommunitiesReadOnly.module.css';
 
 type CommunitySummary = CommunityMembershipPage['items'][number];
 
 interface CommunitiesPageProps {
   readonly tenantName: string;
   readonly loadPage: (cursor?: string) => Promise<CommunityMembershipPage>;
+  readonly readExperienceEnabled?: boolean;
 }
 
 function initials(title: string): string {
@@ -27,7 +29,10 @@ function accent(id: string): string {
 function CommunityAvatar({ community }: { readonly community: CommunitySummary }) {
   const background = accent(community.id);
   return (
-    <span className="community-directory-avatar" style={{ borderColor: background }}>
+    <span
+      className={styles.storyAvatar}
+      style={{ '--story-accent': background } as React.CSSProperties}
+    >
       {community.logoUrl ? (
         <img src={community.logoUrl} alt="" />
       ) : (
@@ -47,7 +52,11 @@ function mergeCommunities(
   return [...byId.values()];
 }
 
-export function CommunitiesPage({ tenantName, loadPage }: CommunitiesPageProps): React.JSX.Element {
+export function CommunitiesPage({
+  tenantName,
+  loadPage,
+  readExperienceEnabled = false,
+}: CommunitiesPageProps): React.JSX.Element {
   const [items, setItems] = useState<readonly CommunitySummary[]>([]);
   const [nextCursor, setNextCursor] = useState<string | undefined>();
   const [loading, setLoading] = useState(true);
@@ -93,51 +102,59 @@ export function CommunitiesPage({ tenantName, loadPage }: CommunitiesPageProps):
   }
 
   return (
-    <main className="community-directory-page">
-      <header className="community-directory-header">
-        <a href="/" aria-label="Вернуться на Главную">
+    <main className={styles.directory}>
+      <header className={styles.directoryHeader}>
+        <a className={styles.directoryBack} href="/" aria-label="Вернуться на Главную">
           ←
         </a>
-        <span>{tenantName}</span>
-        <h1>Мои сообщества</h1>
-        <p>Ваши активные сообщества. Остальные подгружаются по мере просмотра.</p>
+        <div>
+          <h1 aria-label="Мои сообщества">
+            <span aria-hidden="true">Сообщества</span>
+          </h1>
+          <p>{tenantName}</p>
+        </div>
       </header>
 
-      <section className="community-directory-content" aria-busy={loading || loadingMore}>
+      <section className={styles.directoryContent} aria-busy={loading || loadingMore}>
         {loading ? (
-          <p className="community-directory-status" role="status">
+          <p className={styles.directoryStatus} role="status">
             Загружаем сообщества…
           </p>
         ) : null}
         {!loading && items.length === 0 && !error ? (
-          <p className="community-directory-status">Вы пока не состоите в сообществах.</p>
+          <p className={styles.directoryStatus}>Вы пока не состоите в сообществах.</p>
         ) : null}
         {items.length > 0 ? (
-          <ul className="community-directory-list">
+          <ul className={styles.stories} aria-label="Лента сообществ">
             {items.map((community) => (
               <li key={community.id}>
-                <div className="community-directory-card">
-                  <CommunityAvatar community={community} />
-                  <span>
-                    <strong>{community.title}</strong>
-                    <small>
-                      {community.unreadChatCount > 0
-                        ? `Новых сообщений: ${community.unreadChatCount}`
-                        : 'Нет новых сообщений'}
-                    </small>
-                  </span>
-                </div>
+                {readExperienceEnabled ? (
+                  <a className={styles.story} href={community.route}>
+                    <CommunityAvatar community={community} />
+                    <strong title={community.title}>{community.title}</strong>
+                  </a>
+                ) : (
+                  <div className={styles.story}>
+                    <CommunityAvatar community={community} />
+                    <strong title={community.title}>{community.title}</strong>
+                  </div>
+                )}
               </li>
             ))}
           </ul>
         ) : null}
         {error ? (
-          <p className="community-directory-error" role="alert">
+          <p className={styles.directoryError} role="alert">
             {error}
           </p>
         ) : null}
         {nextCursor ? (
-          <button type="button" onClick={loadMore} disabled={loadingMore}>
+          <button
+            className={styles.loadMore}
+            type="button"
+            onClick={loadMore}
+            disabled={loadingMore}
+          >
             {loadingMore ? 'Загружаем…' : 'Показать ещё'}
           </button>
         ) : null}

@@ -131,6 +131,10 @@ const environmentSchema = z.object({
     .max(86_400_000)
     .default(300_000),
   COMMUNITIES_READ_MODE: z.enum(['mock', 'legacy', 'local']).default('mock'),
+  COMMUNITY_LEGACY_READ_DETAIL_ENABLED: booleanFromEnvironment,
+  COMMUNITY_LEGACY_READ_FEED_ENABLED: booleanFromEnvironment,
+  COMMUNITY_LEGACY_READ_CHAT_ENABLED: booleanFromEnvironment,
+  COMMUNITY_LEGACY_READ_RATING_ENABLED: booleanFromEnvironment,
   COMMUNITIES_LEGACY_BASE_URL: z.string().url().default('https://padlhub.su'),
   COMMUNITIES_LEGACY_TIMEOUT_MS: z.coerce.number().int().min(500).max(30_000).default(10_000),
   COMMUNITIES_LEGACY_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(2).default(2),
@@ -726,6 +730,15 @@ export function loadConfig(
   }
   if (parsed.data.APP_ENV === 'production' && parsed.data.COMMUNITIES_READ_MODE === 'mock') {
     throw new Error('COMMUNITIES_READ_MODE=mock is forbidden in production');
+  }
+  if (
+    (parsed.data.COMMUNITY_LEGACY_READ_DETAIL_ENABLED ||
+      parsed.data.COMMUNITY_LEGACY_READ_FEED_ENABLED ||
+      parsed.data.COMMUNITY_LEGACY_READ_CHAT_ENABLED ||
+      parsed.data.COMMUNITY_LEGACY_READ_RATING_ENABLED) &&
+    parsed.data.COMMUNITIES_READ_MODE !== 'legacy'
+  ) {
+    throw new Error('COMMUNITY_LEGACY_READ_*_ENABLED requires COMMUNITIES_READ_MODE=legacy');
   }
   if (parsed.data.APP_ENV === 'production' && parsed.data.PROMOTIONS_READ_MODE === 'mock') {
     throw new Error('PROMOTIONS_READ_MODE=mock is forbidden in production');

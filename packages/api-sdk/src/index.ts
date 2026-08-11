@@ -11,6 +11,12 @@ export type HomeBase = components['schemas']['HomeBase'];
 export type LocationList = components['schemas']['LocationList'];
 export type LocationDetail = components['schemas']['LocationDetail'];
 export type CommunityMembershipPage = components['schemas']['CommunityMembershipPage'];
+export type CommunityReadExperienceDetail = components['schemas']['CommunityReadExperienceDetail'];
+export type CommunityReadExperienceFeedPage =
+  components['schemas']['CommunityReadExperienceFeedPage'];
+export type CommunityReadExperienceChatPage =
+  components['schemas']['CommunityReadExperienceChatPage'];
+export type CommunityReadExperienceRating = components['schemas']['CommunityReadExperienceRating'];
 export type ClientRoutingPlan = components['schemas']['ClientRoutingPlan'];
 export type UserProfile = components['schemas']['UserProfile'];
 export type PlayerProfileView = components['schemas']['PlayerProfileView'];
@@ -1089,6 +1095,69 @@ export class PadlHubApiClient {
           body: jsonRequestBody({ throughSequence }),
         },
       ),
+    );
+  }
+
+  public getCommunityReadExperienceDetail(
+    communityId: string,
+  ): Promise<CommunityReadExperienceDetail> {
+    return this.request<CommunityReadExperienceDetail>(
+      `/community-views/${encodeURIComponent(communityId)}`,
+      { cache: 'no-store' },
+    );
+  }
+
+  public listCommunityReadExperienceFeed(
+    communityId: string,
+    input: { readonly limit?: number; readonly cursor?: string } = {},
+  ): Promise<CommunityReadExperienceFeedPage> {
+    return this.communityReadExperiencePage<CommunityReadExperienceFeedPage>(
+      communityId,
+      '/feed',
+      input,
+    );
+  }
+
+  public listCommunityReadExperienceChat(
+    communityId: string,
+    input: { readonly limit?: number; readonly cursor?: string } = {},
+  ): Promise<CommunityReadExperienceChatPage> {
+    return this.communityReadExperiencePage<CommunityReadExperienceChatPage>(
+      communityId,
+      '/chat',
+      input,
+    );
+  }
+
+  public getCommunityReadExperienceRating(
+    communityId: string,
+    input: {
+      readonly period?: 'all' | '30d';
+      readonly tab?: 'overall' | 'dynamics' | 'games' | 'tournaments';
+    } = {},
+  ): Promise<CommunityReadExperienceRating> {
+    const query = new URLSearchParams();
+    if (input.period) query.set('period', input.period);
+    if (input.tab) query.set('tab', input.tab);
+    const suffix = query.size > 0 ? `?${query.toString()}` : '';
+    return this.request<CommunityReadExperienceRating>(
+      `/community-views/${encodeURIComponent(communityId)}/rating${suffix}`,
+      { cache: 'no-store' },
+    );
+  }
+
+  private communityReadExperiencePage<T>(
+    communityId: string,
+    suffix: '/feed' | '/chat',
+    input: { readonly limit?: number; readonly cursor?: string },
+  ): Promise<T> {
+    const query = new URLSearchParams();
+    if (input.limit !== undefined) query.set('limit', String(input.limit));
+    if (input.cursor) query.set('cursor', input.cursor);
+    const querySuffix = query.size > 0 ? `?${query.toString()}` : '';
+    return this.request<T>(
+      `/community-views/${encodeURIComponent(communityId)}${suffix}${querySuffix}`,
+      { cache: 'no-store' },
     );
   }
 

@@ -5,7 +5,7 @@ import cookie from '@fastify/cookie';
 import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
 import type { AppConfig } from '@phub/config';
-import type { CommunityDirectoryService } from '@phub/communities';
+import type { CommunityDirectoryService, CommunityReadExperienceService } from '@phub/communities';
 import { checkDatabaseReady } from '@phub/database';
 import type {
   ClientRoutingPlanRepository,
@@ -63,6 +63,7 @@ import {
   type ActivityHistoryRefreshService,
 } from './bookings/activity-history-routes.js';
 import { registerCommunityRoutes } from './communities/community-routes.js';
+import { registerCommunityExperienceRoutes } from './communities/community-experience-routes.js';
 import {
   EventAvatarMediaProxy,
   PersistentTrainerAvatarMedia,
@@ -167,6 +168,7 @@ export interface BuildAppOptions {
   readonly authService?: AuthService;
   readonly authDependencyReady?: () => Promise<boolean>;
   readonly communityDirectory?: CommunityDirectoryService;
+  readonly communityReadExperienceService?: CommunityReadExperienceService;
   readonly homeDashboardRepository?: Pick<HomeDashboardProjectionRepository, 'get'>;
   readonly homeBaseRepository?: Pick<HomeBaseProjectionRepository, 'get'>;
   readonly homeBaseProjector?: (input: {
@@ -555,6 +557,22 @@ export async function buildApp(options: BuildAppOptions) {
         })
       : remoteEventAvatarMedia);
 
+  const userRuntimeCapabilities = {
+    communityDirectory: Boolean(options.communityDirectory),
+    communityReadDetail:
+      options.config.COMMUNITY_LEGACY_READ_DETAIL_ENABLED &&
+      Boolean(options.communityReadExperienceService),
+    communityReadFeed:
+      options.config.COMMUNITY_LEGACY_READ_FEED_ENABLED &&
+      Boolean(options.communityReadExperienceService),
+    communityReadChat:
+      options.config.COMMUNITY_LEGACY_READ_CHAT_ENABLED &&
+      Boolean(options.communityReadExperienceService),
+    communityReadRating:
+      options.config.COMMUNITY_LEGACY_READ_RATING_ENABLED &&
+      Boolean(options.communityReadExperienceService),
+  } as const;
+
   app.decorate('config', options.config);
   if (options.pool) app.decorate('pool', options.pool);
 
@@ -627,6 +645,7 @@ export async function buildApp(options: BuildAppOptions) {
               platform,
             })
         : undefined,
+      userRuntimeCapabilities,
     );
   }
 
@@ -661,6 +680,18 @@ export async function buildApp(options: BuildAppOptions) {
   registerCommunityRoutes(app as unknown as FastifyInstance, {
     ...(options.communityDirectory ? { service: options.communityDirectory } : {}),
     authenticatedTenantHandlers: [authenticate, resolveTenant],
+  });
+  registerCommunityExperienceRoutes(app as unknown as FastifyInstance, {
+    ...(options.communityReadExperienceService
+      ? { service: options.communityReadExperienceService }
+      : {}),
+    authenticatedTenantHandlers: [authenticate, resolveTenant],
+    enabled: {
+      detail: userRuntimeCapabilities.communityReadDetail,
+      feed: userRuntimeCapabilities.communityReadFeed,
+      chat: userRuntimeCapabilities.communityReadChat,
+      rating: userRuntimeCapabilities.communityReadRating,
+    },
   });
   registerGameRoutes(app as unknown as FastifyInstance, {
     ...(options.gameRosterRepository ? { repository: options.gameRosterRepository } : {}),

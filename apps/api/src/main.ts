@@ -60,7 +60,10 @@ import { S3ProfilePhotoMediaStore } from './profile/profile-photo-media-store.js
 import { AuthService } from './auth/auth-service.js';
 import { RedisAuthChallengeStore } from './auth/challenge-store.js';
 import { RedisVivaOAuthStateStore } from './auth/oauth-state-store.js';
-import { createCommunityDirectoryRuntime } from './communities/community-runtime.js';
+import {
+  createCommunityDirectoryRuntime,
+  createCommunityReadExperienceRuntime,
+} from './communities/community-runtime.js';
 import { PostgresAuthRepository } from './auth/postgres-auth-repository.js';
 import { LegacyPromotionEngagementSink } from './promotions/legacy-promotion-engagement-sink.js';
 import { S3TrainerAvatarMediaStore } from './trainer-avatar-media-store.js';
@@ -296,12 +299,18 @@ const giftCertificateArtifactStore = config.GIFT_CERTIFICATE_ISSUANCE_ENABLED
       timeoutMs: config.GIFT_CERTIFICATE_ARTIFACT_STORAGE_TIMEOUT_MS,
     })
   : undefined;
+const communityReadExperienceService = createCommunityReadExperienceRuntime({
+  config,
+  pool,
+  logger,
+});
 const app = await buildApp({
   config,
   logger,
   pool,
   authService,
   communityDirectory: createCommunityDirectoryRuntime({ config, pool, logger }),
+  ...(communityReadExperienceService ? { communityReadExperienceService } : {}),
   homeDashboardRepository: createHomeDashboardProjectionRepository(pool),
   homeBaseRepository: createHomeBaseProjectionRepository(pool),
   ...(config.HOME_BASE_SYNC_ENABLED
