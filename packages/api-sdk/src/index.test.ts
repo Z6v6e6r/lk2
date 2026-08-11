@@ -68,6 +68,30 @@ function createClient(
 }
 
 describe('PadlHubApiClient authentication boundary', () => {
+  it('uses only source-neutral read-only community view routes', async () => {
+    const fetchImplementation = vi
+      .fn<typeof fetch>()
+      .mockImplementation(() => Promise.resolve(jsonResponse({ items: [] })));
+    const client = createClient(fetchImplementation, {
+      initialAccessToken: authenticatedSession.accessToken,
+    });
+    const communityId = '11111111-1111-4111-8111-111111111111';
+
+    await client.listCommunityReadExperienceFeed(communityId, { limit: 20 });
+    await client.listCommunityReadExperienceChat(communityId, { limit: 50 });
+    await client.getCommunityReadExperienceRating(communityId, {
+      period: '30d',
+      tab: 'dynamics',
+    });
+
+    expect(fetchImplementation.mock.calls.map(([input]) => requestUrl(input))).toEqual([
+      `https://api.padlhub.test/user/api/v1/local-padel/community-views/${communityId}/feed?limit=20`,
+      `https://api.padlhub.test/user/api/v1/local-padel/community-views/${communityId}/chat?limit=50`,
+      `https://api.padlhub.test/user/api/v1/local-padel/community-views/${communityId}/rating?period=30d&tab=dynamics`,
+    ]);
+    for (const [, init] of fetchImplementation.mock.calls) expect(init?.cache).toBe('no-store');
+  });
+
   it('loads one public tournament summary by PadlHub id and bounded date range', async () => {
     const summary = {
       id: '91a1c7c6-73d0-4270-a400-3358873e4d9b',

@@ -15,6 +15,10 @@ import type {
   TrainingSchedulePage,
   ClientRoutingPlan,
   CommunityMembershipPage,
+  CommunityReadExperienceDetail,
+  CommunityReadExperienceFeedPage,
+  CommunityReadExperienceChatPage,
+  CommunityReadExperienceRating,
   GameCard,
   GameCardPage,
   GameCommandResult,
@@ -65,6 +69,10 @@ export type {
   TrainingSchedulePage,
   ClientRoutingPlan,
   CommunityMembershipPage,
+  CommunityReadExperienceDetail,
+  CommunityReadExperienceFeedPage,
+  CommunityReadExperienceChatPage,
+  CommunityReadExperienceRating,
   GameCard,
   GameCardPage,
   GameCommandResult,
@@ -131,6 +139,13 @@ export interface UserContext {
   readonly tenant: NormalizedTenant;
   readonly roles: readonly string[];
   readonly permissions: readonly string[];
+  readonly runtimeCapabilities?: {
+    readonly communityDirectory: boolean;
+    readonly communityReadDetail: boolean;
+    readonly communityReadFeed: boolean;
+    readonly communityReadChat: boolean;
+    readonly communityReadRating: boolean;
+  };
 }
 
 export interface AuthenticatedSession {
@@ -263,6 +278,22 @@ export interface AuthGateway {
   readonly listLocations: () => Promise<LocationList>;
   readonly getLocation: (locationId: string) => Promise<LocationDetail>;
   readonly listMyCommunities: (cursor?: string, limit?: number) => Promise<CommunityMembershipPage>;
+  readonly getCommunityReadExperienceDetail: (
+    communityId: string,
+  ) => Promise<CommunityReadExperienceDetail>;
+  readonly listCommunityReadExperienceFeed: (
+    communityId: string,
+    cursor?: string,
+  ) => Promise<CommunityReadExperienceFeedPage>;
+  readonly listCommunityReadExperienceChat: (
+    communityId: string,
+    cursor?: string,
+  ) => Promise<CommunityReadExperienceChatPage>;
+  readonly getCommunityReadExperienceRating: (
+    communityId: string,
+    period?: 'all' | '30d',
+    tab?: 'overall' | 'dynamics' | 'games' | 'tournaments',
+  ) => Promise<CommunityReadExperienceRating>;
   readonly getProfileLevelHistory: () => Promise<ProfileLevelHistory>;
   readonly listNotifications: () => Promise<NotificationInboxPage>;
   readonly markNotificationsRead: (throughId: string) => Promise<void>;
@@ -299,6 +330,13 @@ function normalizeContext(payload: ApiUserContext, tenantKey: string): UserConte
     },
     roles: payload.roles,
     permissions: payload.permissions,
+    runtimeCapabilities: {
+      communityDirectory: payload.runtimeCapabilities?.communityDirectory !== false,
+      communityReadDetail: payload.runtimeCapabilities?.communityReadDetail === true,
+      communityReadFeed: payload.runtimeCapabilities?.communityReadFeed === true,
+      communityReadChat: payload.runtimeCapabilities?.communityReadChat === true,
+      communityReadRating: payload.runtimeCapabilities?.communityReadRating === true,
+    },
   };
 }
 
@@ -1073,6 +1111,28 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       });
       communityMembershipPagePromises.set(limit, request);
       return request;
+    },
+
+    getCommunityReadExperienceDetail(communityId) {
+      return client.getCommunityReadExperienceDetail(communityId);
+    },
+
+    listCommunityReadExperienceFeed(communityId, cursor) {
+      return client.listCommunityReadExperienceFeed(communityId, {
+        limit: 20,
+        ...(cursor ? { cursor } : {}),
+      });
+    },
+
+    listCommunityReadExperienceChat(communityId, cursor) {
+      return client.listCommunityReadExperienceChat(communityId, {
+        limit: 50,
+        ...(cursor ? { cursor } : {}),
+      });
+    },
+
+    getCommunityReadExperienceRating(communityId, period = '30d', tab = 'overall') {
+      return client.getCommunityReadExperienceRating(communityId, { period, tab });
     },
 
     getProfileLevelHistory() {

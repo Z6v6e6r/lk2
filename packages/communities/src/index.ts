@@ -58,6 +58,7 @@ export interface LegacyCommunityViewerIdentity {
 
 export interface CommunityLegacyBridgeRepository {
   getViewerIdentity(tenantId: string, userId: string): Promise<LegacyCommunityViewerIdentity>;
+  getCommunityExternalId?(tenantId: string, communityId: string): Promise<string | undefined>;
   resolveCommunityIds(
     tenantId: string,
     externalIds: readonly string[],
@@ -195,6 +196,7 @@ export function createCommunityDirectoryService(
           logoUrl: item.logoUrl,
           isVerified: item.isVerified,
           unreadChatCount: item.unreadChatCount,
+          ...(item.memberRank === undefined ? {} : { memberRank: item.memberRank }),
           route: `/communities/${item.id}`,
         })),
         ...(parsed.data.hasMore && last
@@ -213,3 +215,4 @@ export function createCommunityDirectoryService(
 }
 
 export * from './legacy-community-read-repository.js';
+export * from './community-read-experience.js';

@@ -1105,6 +1105,132 @@ paths:
           $ref: ../../common/components.yaml#/components/responses/TooManyRequests
         '503':
           $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/community-views/{communityId}:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - name: communityId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [communities]
+      operationId: getCommunityReadExperienceDetail
+      summary: Load the source-neutral read-only community projection
+      responses:
+        '200':
+          description: Read-only community detail for an active member.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommunityReadExperienceDetail'
+        '400': { $ref: ../../common/components.yaml#/components/responses/BadRequest }
+        '401': { $ref: ../../common/components.yaml#/components/responses/Unauthorized }
+        '404': { $ref: ../../common/components.yaml#/components/responses/NotFound }
+        '429': { $ref: ../../common/components.yaml#/components/responses/TooManyRequests }
+        '503': { $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable }
+  /{tenantKey}/community-views/{communityId}/feed:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - name: communityId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - name: limit
+        in: query
+        schema: { type: integer, minimum: 1, maximum: 20, default: 20 }
+      - name: cursor
+        in: query
+        schema: { type: string, minLength: 16, maxLength: 512 }
+    get:
+      tags: [communities]
+      operationId: listCommunityReadExperienceFeed
+      summary: Load the read-only legacy-compatible community feed projection
+      responses:
+        '200':
+          description: Read-only feed page.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommunityReadExperienceFeedPage'
+        '400': { $ref: ../../common/components.yaml#/components/responses/BadRequest }
+        '401': { $ref: ../../common/components.yaml#/components/responses/Unauthorized }
+        '404': { $ref: ../../common/components.yaml#/components/responses/NotFound }
+        '429': { $ref: ../../common/components.yaml#/components/responses/TooManyRequests }
+        '503': { $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable }
+  /{tenantKey}/community-views/{communityId}/chat:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - name: communityId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - name: limit
+        in: query
+        schema: { type: integer, minimum: 1, maximum: 50, default: 20 }
+      - name: cursor
+        in: query
+        schema: { type: string, minLength: 16, maxLength: 512 }
+    get:
+      tags: [communities]
+      operationId: listCommunityReadExperienceChat
+      summary: Load a temporary read-only chat projection without read-cursor ownership
+      responses:
+        '200':
+          description: Read-only chat page.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommunityReadExperienceChatPage'
+        '400': { $ref: ../../common/components.yaml#/components/responses/BadRequest }
+        '401': { $ref: ../../common/components.yaml#/components/responses/Unauthorized }
+        '404': { $ref: ../../common/components.yaml#/components/responses/NotFound }
+        '429': { $ref: ../../common/components.yaml#/components/responses/TooManyRequests }
+        '503': { $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable }
+  /{tenantKey}/community-views/{communityId}/rating:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - name: communityId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - name: period
+        in: query
+        schema: { type: string, enum: [all, 30d], default: 30d }
+      - name: tab
+        in: query
+        schema: { type: string, enum: [overall, dynamics, games, tournaments], default: overall }
+    get:
+      tags: [communities]
+      operationId: getCommunityReadExperienceRating
+      summary: Load the versioned read-only legacy rating projection
+      responses:
+        '200':
+          description: Rating projection pinned to community-rating-v1.3.0.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommunityReadExperienceRating'
+        '400': { $ref: ../../common/components.yaml#/components/responses/BadRequest }
+        '401': { $ref: ../../common/components.yaml#/components/responses/Unauthorized }
+        '404': { $ref: ../../common/components.yaml#/components/responses/NotFound }
+        '429': { $ref: ../../common/components.yaml#/components/responses/TooManyRequests }
+        '503': { $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable }
   /{tenantKey}/communities/mine:
     parameters:
       - $ref: ../../common/components.yaml#/components/parameters/TenantKey
@@ -2073,6 +2199,28 @@ components:
           type: array
           items:
             type: string
+        runtimeCapabilities:
+          $ref: '#/components/schemas/UserRuntimeCapabilities'
+          description: >-
+            Current server-owned read-only runtime availability. The field is optional during the
+            expand release and clients must treat absence as all false.
+    UserRuntimeCapabilities:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          communityDirectory,
+          communityReadDetail,
+          communityReadFeed,
+          communityReadChat,
+          communityReadRating,
+        ]
+      properties:
+        communityDirectory: { type: boolean }
+        communityReadDetail: { type: boolean }
+        communityReadFeed: { type: boolean }
+        communityReadChat: { type: boolean }
+        communityReadRating: { type: boolean }
     HomeDashboard:
       type: object
       additionalProperties: false
@@ -2658,6 +2806,89 @@ components:
           type: string
           minLength: 16
           maxLength: 512
+    CommunityReadExperienceDetail:
+      type: object
+      additionalProperties: false
+      required: [id, title, logoUrl, isVerified, description, memberCount, readOnly]
+      properties:
+        id: { type: string, format: uuid }
+        title: { type: string, minLength: 1, maxLength: 120 }
+        logoUrl: { type: ['string', 'null'], format: uri }
+        isVerified: { type: boolean }
+        description: { type: ['string', 'null'], maxLength: 2000 }
+        memberCount: { type: integer, minimum: 0 }
+        readOnly: { type: boolean, const: true }
+    CommunityReadExperienceAuthor:
+      type: object
+      additionalProperties: false
+      required: [displayName]
+      properties:
+        displayName: { type: string, minLength: 1, maxLength: 120 }
+    CommunityReadExperienceFeedItem:
+      type: object
+      additionalProperties: false
+      required: [kind, title, body, publishedAt, author]
+      properties:
+        kind: { type: string, enum: [PHOTO, GAME, TOURNAMENT, SYSTEM] }
+        title: { type: ['string', 'null'], minLength: 1, maxLength: 240 }
+        body: { type: string, maxLength: 8000 }
+        publishedAt: { type: string, format: date-time }
+        author: { $ref: '#/components/schemas/CommunityReadExperienceAuthor' }
+        likesCount: { type: integer, minimum: 0 }
+        commentsCount: { type: integer, minimum: 0 }
+    CommunityReadExperienceFeedPage:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          maxItems: 20
+          items: { $ref: '#/components/schemas/CommunityReadExperienceFeedItem' }
+        nextCursor: { type: string, minLength: 16, maxLength: 512 }
+    CommunityReadExperienceChatMessage:
+      type: object
+      additionalProperties: false
+      required: [body, sentAt, author, isViewer]
+      properties:
+        body: { type: string, minLength: 1, maxLength: 8000 }
+        sentAt: { type: string, format: date-time }
+        author: { $ref: '#/components/schemas/CommunityReadExperienceAuthor' }
+        isViewer: { type: boolean }
+    CommunityReadExperienceChatPage:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          maxItems: 50
+          items: { $ref: '#/components/schemas/CommunityReadExperienceChatMessage' }
+        nextCursor: { type: string, minLength: 16, maxLength: 512 }
+    CommunityReadExperienceRatingRow:
+      type: object
+      additionalProperties: false
+      required: [place, displayName, currentLevel, score, delta, games, tournaments]
+      properties:
+        place: { type: integer, minimum: 1 }
+        displayName: { type: string, minLength: 1, maxLength: 120 }
+        currentLevel: { type: number }
+        score: { type: number }
+        delta: { type: number }
+        games: { type: number }
+        tournaments: { type: number }
+    CommunityReadExperienceRating:
+      type: object
+      additionalProperties: false
+      required: [period, tab, calculationVersion, rows]
+      properties:
+        period: { type: string, enum: [all, 30d] }
+        tab: { type: string, enum: [overall, dynamics, games, tournaments] }
+        calculationVersion: { type: string, const: community-rating-v1.3.0 }
+        rows:
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/CommunityReadExperienceRatingRow' }
     HomePromotion:
       type: object
       additionalProperties: false
