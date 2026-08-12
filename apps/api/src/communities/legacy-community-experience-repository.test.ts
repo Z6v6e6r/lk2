@@ -206,6 +206,40 @@ describe('legacy community experience repository', () => {
     const cappedRating = await capped.getRating({ ...input, period: '30d', tab: 'overall' });
     expect(cappedRating.rows).toHaveLength(100);
     expect(cappedRating.rows[0]).toMatchObject({ place: 1 });
+
+    const fullSnapshot = repository(
+      vi.fn<typeof fetch>().mockImplementation((url) => {
+        const path = fetchUrl(url).pathname;
+        return Promise.resolve(
+          new Response(
+            JSON.stringify(
+              path.endsWith('/rating')
+                ? {
+                    calculationVersion: 'community-rating-v1.3.0',
+                    rows: Array.from({ length: 101 }, (_, index) => ({
+                      rank: index + 1,
+                      playerName: `Player ${index + 1}`,
+                      currentLevel: 1,
+                      overallScore: 2,
+                      ignoredLegacySnapshotData: 'x'.repeat(21_000),
+                    })),
+                  }
+                : path === '/lk/communities'
+                  ? summary
+                  : detail,
+            ),
+            { status: 200 },
+          ),
+        );
+      }),
+    );
+    const fullSnapshotRating = await fullSnapshot.getRating({
+      ...input,
+      period: 'all',
+      tab: 'overall',
+    });
+    expect(fullSnapshotRating.rows).toHaveLength(100);
+    expect(fullSnapshotRating.rows.at(-1)).toMatchObject({ place: 100 });
     const wrong = repository(
       vi
         .fn<typeof fetch>()
