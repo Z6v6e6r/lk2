@@ -24,7 +24,11 @@ interface AuthorizedCommunityAccess {
   readonly identity: { readonly phoneE164?: string; readonly clientId?: string };
   readonly summary: RecordValue;
 }
-const maxBytes = 2 * 1024 * 1024;
+const maxProviderBytes = 2 * 1024 * 1024;
+// The legacy rating provider can return its complete persisted snapshot even
+// when `limit=100` is requested. Keep the general provider boundary small, but
+// allow a separately bounded rating response before projecting at most 100 rows.
+const maxRatingProviderBytes = 8 * 1024 * 1024;
 const maxRows = 100;
 const maxSummaryCommunities = 1_000;
 function record(value: unknown): value is RecordValue {
@@ -348,6 +352,7 @@ export class LegacyCommunityExperienceRepository implements CommunityReadExperie
           : path.includes('view=summary')
             ? 'membership'
             : 'detail';
+    const responseMaxBytes = operation === 'rating' ? maxRatingProviderBytes : maxProviderBytes;
     const state = this.circuit.get(operation);
     if (state && state.openUntil > Date.now()) {
       this.options.onMetric?.({
@@ -377,9 +382,10 @@ export class LegacyCommunityExperienceRepository implements CommunityReadExperie
         if (!response.ok)
           throw new LegacyCommunityExperienceError('COMMUNITY_EXPERIENCE_UNAVAILABLE');
         const length = Number(response.headers.get('content-length'));
-        if (Number.isFinite(length) && length > maxBytes) invalid('provider-content-length');
+        if (Number.isFinite(length) && length > responseMaxBytes)
+          invalid('provider-content-length');
         const body = await response.text();
-        if (Buffer.byteLength(body) > maxBytes) invalid('provider-body-bytes');
+        if (Buffer.byteLength(body) > responseMaxBytes) invalid('provider-body-bytes');
         let parsed: unknown;
         try {
           parsed = JSON.parse(body) as unknown;
