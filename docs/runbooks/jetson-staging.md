@@ -120,7 +120,12 @@ that mixed plan as their transport envelope; they are not added to the general d
 allowlist. Activation and post-deploy verification fail when an active delegation cannot receive
 the envelope. The full-Home override additionally bounds the synchronous legacy community bridge
 to one 2.5-second attempt and keeps successful pages for two minutes; optional member-rank
-enrichment has a 150 ms response budget.
+enrichment has a 150 ms response budget. It explicitly enables the four independent, read-only
+legacy community projections (`DETAIL`, `FEED`, `CHAT`, and `RATING`) only during the guarded
+Full Live Home activation. They remain default-off in every other profile. The post-activation
+verifier checks all four values both in the effective runtime files and inside the API container;
+none of these gates enables community commands, media uploads, invites, canonical writes or
+realtime ownership.
 
 Every confirmed staging deployment creates a PostgreSQL custom-format archive under
 `/opt/phub/backups/postgres-pre-<release>-<UTC timestamp>.dump`. The workflow

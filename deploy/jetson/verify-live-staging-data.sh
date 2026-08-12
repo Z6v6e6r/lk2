@@ -84,6 +84,10 @@ if test "${1:-}" = preflight; then
 fi
 
 require_value VIVA_DIRECT_READ_ENABLED true
+require_value COMMUNITY_LEGACY_READ_DETAIL_ENABLED true
+require_value COMMUNITY_LEGACY_READ_FEED_ENABLED true
+require_value COMMUNITY_LEGACY_READ_CHAT_ENABLED true
+require_value COMMUNITY_LEGACY_READ_RATING_ENABLED true
 require_value COMMUNITIES_LEGACY_TIMEOUT_MS 2500
 require_value COMMUNITIES_LEGACY_MAX_ATTEMPTS 1
 require_value COMMUNITIES_LEGACY_CACHE_TTL_MS 120000
@@ -126,6 +130,10 @@ compose exec -T api node -e "
   if (env.LEGACY_GAMES_ROSTER_SYNC_SOURCE !== 'mongo') process.exit(1);
   if (!env.LEGACY_GAMES_MONGODB_URI) process.exit(1);
   if (env.ACTIVITY_HISTORY_GAME_BACKFILL_ENABLED !== 'true') process.exit(1);
+  if (env.COMMUNITY_LEGACY_READ_DETAIL_ENABLED !== 'true') process.exit(1);
+  if (env.COMMUNITY_LEGACY_READ_FEED_ENABLED !== 'true') process.exit(1);
+  if (env.COMMUNITY_LEGACY_READ_CHAT_ENABLED !== 'true') process.exit(1);
+  if (env.COMMUNITY_LEGACY_READ_RATING_ENABLED !== 'true') process.exit(1);
   if (env.COMMUNITIES_LEGACY_TIMEOUT_MS !== '2500') process.exit(1);
   if (env.COMMUNITIES_LEGACY_MAX_ATTEMPTS !== '1') process.exit(1);
   if (env.S3_BUCKET !== 'phub-media') process.exit(1);
