@@ -113,6 +113,13 @@ describe('browser auth gateway', () => {
     const restored = await gateway.restoreSession();
 
     expect(restored?.context.user.displayName).toBe('Анна');
+    expect(restored?.context.runtimeCapabilities).toEqual({
+      communityDirectory: true,
+      communityReadDetail: false,
+      communityReadFeed: false,
+      communityReadChat: false,
+      communityReadRating: false,
+    });
     expect(fetchImplementation).toHaveBeenCalledTimes(1);
 
     const [refreshUrl, refreshInit] = fetchImplementation.mock.calls[0] ?? [];

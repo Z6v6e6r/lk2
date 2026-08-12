@@ -56,6 +56,11 @@ const ChatsPage = lazy(() =>
 const CommunitiesPage = lazy(() =>
   import('./CommunitiesPage.js').then((module) => ({ default: module.CommunitiesPage })),
 );
+const CommunityReadOnlyPage = lazy(() =>
+  import('./CommunityReadOnlyPage.js').then((module) => ({
+    default: module.CommunityReadOnlyPage,
+  })),
+);
 const GamesPage = lazy(() =>
   import('./GamesPage.js').then((module) => ({ default: module.GamesPage })),
 );
@@ -106,6 +111,7 @@ type ProtectedRoute =
     }
   | { readonly kind: 'notifications' }
   | { readonly kind: 'communities' }
+  | { readonly kind: 'community'; readonly communityId: string }
   | { readonly kind: 'locations' }
   | { readonly kind: 'location'; readonly locationId: string }
   | { readonly kind: 'games' }
@@ -145,6 +151,10 @@ function resolveProtectedRoute(pathname: string): ProtectedRoute {
   }
   if (normalizedPath === '/notifications') return { kind: 'notifications' };
   if (normalizedPath === '/communities') return { kind: 'communities' };
+  const communityMatch = normalizedPath.match(
+    /^\/communities\/([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i,
+  );
+  if (communityMatch?.[1]) return { kind: 'community', communityId: communityMatch[1] };
   if (normalizedPath === '/locations') return { kind: 'locations' };
   const locationMatch = normalizedPath.match(
     /^\/locations\/([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i,
@@ -419,6 +429,24 @@ function userMessage(
 
 function Brand(): React.JSX.Element {
   return <img className="brand" src={padlHubLogoUrl} alt="ПадлХАБ" />;
+}
+
+function CommunityRuntimeUnavailablePage(): React.JSX.Element {
+  return (
+    <main className="community-runtime-unavailable">
+      <header className="community-runtime-unavailable__header">
+        <a href="/" aria-label="Вернуться на главную">
+          ←
+        </a>
+        <h1>Сообщества временно недоступны</h1>
+      </header>
+      <section className="community-runtime-unavailable__content">
+        <p role="status">
+          Сервис сообществ ещё не подключён для этой организации. Попробуйте позднее.
+        </p>
+      </section>
+    </main>
+  );
 }
 
 function BusyStatus({ action }: { readonly action: BusyAction }): React.JSX.Element {
@@ -1635,8 +1663,33 @@ export function App({ gateway, tenantKey, realtimeBaseUrl }: AppProps): React.JS
       );
     }
     if (protectedRoute.kind === 'communities') {
+      if (context.runtimeCapabilities?.communityDirectory === false) {
+        return <CommunityRuntimeUnavailablePage />;
+      }
       return (
-        <CommunitiesPage tenantName={context.tenant.name} loadPage={gateway.listMyCommunities} />
+        <CommunitiesPage
+          tenantName={context.tenant.name}
+          loadPage={gateway.listMyCommunities}
+          readExperienceEnabled={context.runtimeCapabilities?.communityReadDetail === true}
+        />
+      );
+    }
+    if (protectedRoute.kind === 'community') {
+      if (context.runtimeCapabilities?.communityReadDetail !== true) {
+        return <CommunityRuntimeUnavailablePage />;
+      }
+      return (
+        <CommunityReadOnlyPage
+          key={protectedRoute.communityId}
+          communityId={protectedRoute.communityId}
+          feedEnabled={context.runtimeCapabilities?.communityReadFeed === true}
+          chatEnabled={context.runtimeCapabilities?.communityReadChat === true}
+          ratingEnabled={context.runtimeCapabilities?.communityReadRating === true}
+          loadDetail={gateway.getCommunityReadExperienceDetail}
+          loadFeed={gateway.listCommunityReadExperienceFeed}
+          loadChat={gateway.listCommunityReadExperienceChat}
+          loadRating={gateway.getCommunityReadExperienceRating}
+        />
       );
     }
     if (protectedRoute.kind === 'locations') {

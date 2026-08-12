@@ -48,6 +48,10 @@ describe('loadConfig', () => {
       HOME_VIVA_SYNC_INTERVAL_MS: 120_000,
       HOME_VIVA_SYNC_FAILURE_BACKOFF_MS: 300_000,
       COMMUNITIES_READ_MODE: 'mock',
+      COMMUNITY_LEGACY_READ_DETAIL_ENABLED: false,
+      COMMUNITY_LEGACY_READ_FEED_ENABLED: false,
+      COMMUNITY_LEGACY_READ_CHAT_ENABLED: false,
+      COMMUNITY_LEGACY_READ_RATING_ENABLED: false,
       COMMUNITIES_LEGACY_TIMEOUT_MS: 10_000,
       COMMUNITIES_LEGACY_MAX_ATTEMPTS: 2,
       COMMUNITIES_LEGACY_CACHE_TTL_MS: 30_000,
@@ -80,6 +84,26 @@ describe('loadConfig', () => {
       CUP_DEV_AUTH_ENABLED: false,
       VIVA_OAUTH_EXISTING_SUBJECT_BOOTSTRAP_ENABLED: false,
     });
+  });
+
+  it('keeps legacy community experience sections default-off and legacy-only', () => {
+    expect(
+      loadConfig({
+        ...validEnvironment,
+        COMMUNITIES_READ_MODE: 'legacy',
+        COMMUNITY_LEGACY_READ_DETAIL_ENABLED: 'true',
+      }),
+    ).toMatchObject({
+      COMMUNITY_LEGACY_READ_DETAIL_ENABLED: true,
+      COMMUNITY_LEGACY_READ_FEED_ENABLED: false,
+    });
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        COMMUNITIES_READ_MODE: 'local',
+        COMMUNITY_LEGACY_READ_DETAIL_ENABLED: 'true',
+      }),
+    ).toThrow('COMMUNITY_LEGACY_READ_*_ENABLED requires COMMUNITIES_READ_MODE=legacy');
   });
 
   it('keeps leased outbox publication explicit, staging-only and lease-safe', () => {

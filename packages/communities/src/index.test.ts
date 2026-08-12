@@ -23,6 +23,7 @@ const items: readonly CommunityDirectoryItem[] = [
     logoUrl: null,
     isVerified: true,
     unreadChatCount: 2,
+    memberRank: 4,
     pinned: true,
     sortAt: '2026-07-01T10:00:00.000Z',
   },
@@ -53,6 +54,7 @@ describe('community directory service', () => {
     expect(first.items.map((item) => item.title)).toEqual(['Закреплённое', 'Недавнее']);
     expect(first.nextCursor).toBeTruthy();
     expect(first.items[0]?.route).toBe('/communities/22222222-2222-4222-8222-222222222222');
+    expect(first.items[0]?.memberRank).toBe(4);
 
     const second = await service.listMemberships({
       tenantId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',

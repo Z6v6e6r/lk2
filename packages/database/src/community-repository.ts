@@ -72,6 +72,25 @@ export function createCommunityLegacyBridgeRepository(pool: Pool): CommunityLega
       });
     },
 
+    getCommunityExternalId(tenantId, communityId) {
+      return withTenantTransaction(pool, tenantId, async (client) => {
+        const row = (
+          await client.query<CommunityMappingRow>(
+            `select external_id, internal_id
+               from integration.external_entity_map
+              where tenant_id = $1
+                and internal_id = $2::uuid
+                and external_system = 'LK_LEGACY'
+                and entity_type = 'community'
+              order by last_synced_at desc nulls last, id
+              limit 1`,
+            [tenantId, communityId],
+          )
+        ).rows[0];
+        return row?.external_id;
+      });
+    },
+
     resolveCommunityIds(tenantId, externalIds) {
       const uniqueExternalIds = [...new Set(externalIds.map((id) => id.trim()).filter(Boolean))];
       if (uniqueExternalIds.length === 0) return Promise.resolve(new Map());
