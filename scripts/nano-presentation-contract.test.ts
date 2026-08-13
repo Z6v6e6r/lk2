@@ -306,6 +306,13 @@ describe('Nano presentation release contract', () => {
   });
 
   it('bounds communities and activates all four independent CUP placements', () => {
+    for (const capability of ['DETAIL', 'FEED', 'CHAT', 'RATING']) {
+      expect(activation).toContain(`printf 'COMMUNITY_LEGACY_READ_${capability}_ENABLED=true\\n'`);
+      expect(verification).toContain(
+        `require_value COMMUNITY_LEGACY_READ_${capability}_ENABLED true`,
+      );
+      expect(verification).toContain(`env.COMMUNITY_LEGACY_READ_${capability}_ENABLED !== 'true'`);
+    }
     expect(activation).toContain("printf 'COMMUNITIES_LEGACY_TIMEOUT_MS=2500\\n'");
     expect(activation).toContain("printf 'COMMUNITIES_LEGACY_MAX_ATTEMPTS=1\\n'");
     expect(activation).toContain('PROMOTIONS_HERO_PLACEMENT=cabinet_home_top');
