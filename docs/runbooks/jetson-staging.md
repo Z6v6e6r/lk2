@@ -142,7 +142,9 @@ realtime ownership.
 `COMMUNITIES_LEGACY_READ_ONLY` is a separate, non-promotable preview profile. Its flags live only
 in `/opt/phub/staging.communities.env`, an optional env file attached to API and never to worker,
 realtime or migrator. Activation stops worker and realtime, requires media, invites and realtime
-flags to be false, probes the legacy summary endpoint, then signs a 60-second in-memory JWT for an
+flags to be false, pins `COMMUNITIES_LEGACY_BASE_URL=https://padlhub.su` inside that API-only file
+instead of inheriting the internal Full Live Home source, probes that HTTPS legacy summary
+endpoint, then signs a 60-second in-memory JWT for an
 existing active PadlHub identity and discards the authenticated community-detail response. It does
 not create identities or mappings and never logs the token or provider payload. A failed activation
 restores the previous API env file and the previous worker/realtime process state, then proves API

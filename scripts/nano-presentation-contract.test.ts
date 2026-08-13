@@ -210,6 +210,13 @@ describe('Nano presentation release contract', () => {
       /compose up -d --force-recreate api[^\n]*\|\| true/,
     );
     expect(communitiesReadOnlyVerification).toContain('/lk/communities?view=summary');
+    expect(communitiesReadOnlyActivation).toContain(
+      'COMMUNITIES_LEGACY_BASE_URL=https://padlhub.su',
+    );
+    expect(communitiesReadOnlyVerification).toContain(
+      'require_value COMMUNITIES_LEGACY_BASE_URL "$communities_legacy_base_url"',
+    );
+    expect(communitiesReadOnlyVerification).not.toContain('base_value COMMUNITIES_LEGACY_BASE_URL');
     expect(communitiesReadOnlyVerification).toContain(
       'integration.community_home_source_components',
     );
