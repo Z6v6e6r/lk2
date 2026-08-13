@@ -1,0 +1,117 @@
+name: Set staging client routing plan
+
+on:
+  workflow_dispatch:
+    inputs:
+      tenant_key:
+        description: Active staging tenant key
+        required: true
+        type: string
+      actor_id:
+        description: Operator UUID recorded in the audit log
+        required: true
+        type: string
+      apply_confirmation:
+        description: Leave empty for dry-run or type APPLY_ROUTING_PLAN to apply
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: staging-routing-plan
+  cancel-in-progress: false
+
+jobs:
+  validate-request:
+    runs-on: ubuntu-latest
+    outputs:
+      apply: ${{ steps.request.outputs.apply }}
+    steps:
+      - id: request
+        name: Validate requested routing operation
+        env:
+          REQUEST_REF: ${{ github.ref }}
+          TENANT_KEY: ${{ inputs.tenant_key }}
+          ACTOR_ID: ${{ inputs.actor_id }}
+          APPLY_CONFIRMATION: ${{ inputs.apply_confirmation }}
+        run: |
+          set -eu
+          if [ "$REQUEST_REF" != 'refs/heads/main' ]; then
+            echo '::error::Staging routing changes are allowed only from refs/heads/main.'
+            exit 1
+          fi
+          if ! printf '%s' "$TENANT_KEY" | grep -Eq '^[a-z0-9][a-z0-9-]{1,62}$'; then
+            echo '::error::Invalid tenant key.'
+            exit 1
+          fi
+          if ! printf '%s' "$ACTOR_ID" | grep -Eiq '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'; then
+            echo '::error::Actor ID must be a UUID.'
+            exit 1
+          fi
+          case "$APPLY_CONFIRMATION" in
+            '') printf '%s\n' 'apply=false' >> "$GITHUB_OUTPUT" ;;
+            APPLY_ROUTING_PLAN) printf '%s\n' 'apply=true' >> "$GITHUB_OUTPUT" ;;
+            *)
+              echo '::error::Apply requires the exact APPLY_ROUTING_PLAN confirmation.'
+              exit 1
+              ;;
+          esac
+
+  operate:
+    needs: validate-request
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+      - name: Join the staging tailnet
+        uses: tailscale/github-action@v4
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+          ping: ${{ secrets.STAGING_HOST }}
+      - name: Configure audited SSH
+        env:
+          DEPLOY_KEY: ${{ secrets.STAGING_DEPLOY_KEY }}
+          KNOWN_HOSTS: ${{ secrets.STAGING_KNOWN_HOSTS }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+      - name: Install the reviewed routing operator
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+        run: |
+          scp deploy/jetson/run-client-routing-plan.sh \
+            "phub-deploy@$HOST:/opt/phub/run-client-routing-plan.sh.next"
+          scp scripts/set-client-routing-plan.ts \
+            "phub-deploy@$HOST:/opt/phub/set-client-routing-plan.ts.next"
+          ssh "phub-deploy@$HOST" '
+            set -eu
+            mv /opt/phub/run-client-routing-plan.sh.next /opt/phub/run-client-routing-plan.sh
+            chmod 0755 /opt/phub/run-client-routing-plan.sh
+            mv /opt/phub/set-client-routing-plan.ts.next /opt/phub/set-client-routing-plan.ts
+            chmod 0644 /opt/phub/set-client-routing-plan.ts
+          '
+      - name: Validate the requested routing plan without writes
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+          TENANT_KEY: ${{ inputs.tenant_key }}
+          ACTOR_ID: ${{ inputs.actor_id }}
+        run: |
+          operation_id="routing-mixed-staging-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          reason="staging-live-home-${GITHUB_SHA}"
+          ssh "phub-deploy@$HOST" /opt/phub/run-client-routing-plan.sh \
+            "$TENANT_KEY" "$ACTOR_ID" "$operation_id" "$operation_id" "$reason" false
+      - name: Apply the audited routing plan
+        if: ${{ needs.validate-request.outputs.apply == 'true' }}
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+          TENANT_KEY: ${{ inputs.tenant_key }}
+          ACTOR_ID: ${{ inputs.actor_id }}
+        run: |
+          operation_id="routing-mixed-staging-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          reason="staging-live-home-${GITHUB_SHA}"
+          ssh "phub-deploy@$HOST" /opt/phub/run-client-routing-plan.sh \
+            "$TENANT_KEY" "$ACTOR_ID" "$operation_id" "$operation_id" "$reason" true

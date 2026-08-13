@@ -224,6 +224,7 @@ describe('GameCard display policy', () => {
     );
     expect(card.displayState).toBe('IN_PROGRESS');
     expect(card.rosterState).toBe('LOCKED');
+    expect(card.allowedActions).not.toContain('OPEN_CHAT');
   });
 
   it('shows result required only to a game participant', () => {

@@ -103,6 +103,23 @@ function repository(syncState: ActivityHistorySyncState): ActivityHistoryReposit
 }
 
 describe('activity history routes', () => {
+  it('requires authentication before reporting history infrastructure availability', async () => {
+    const app = await buildApp({
+      config,
+      logger: createLogger('activity-history-test', 'silent'),
+      pool: fakePool(),
+    });
+    const response = await app.inject({
+      method: 'POST',
+      url: '/user/api/v1/local-padel/activity-history-read-jobs',
+      payload: {},
+    });
+    await app.close();
+
+    expect(response.statusCode).toBe(401);
+    expect(response.json()).toMatchObject({ code: 'AUTH_REQUIRED' });
+  });
+
   it('refreshes a stale projection through a browser-relayed history page', async () => {
     const stale = state({ freshness: 'STALE', coverageStatus: 'PARTIAL', nextProviderCursor: '1' });
     const project = vi.fn<ActivityHistoryProjectionService['project']>().mockResolvedValue();

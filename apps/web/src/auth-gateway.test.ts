@@ -113,6 +113,13 @@ describe('browser auth gateway', () => {
     const restored = await gateway.restoreSession();
 
     expect(restored?.context.user.displayName).toBe('Анна');
+    expect(restored?.context.runtimeCapabilities).toEqual({
+      communityDirectory: true,
+      communityReadDetail: false,
+      communityReadFeed: false,
+      communityReadChat: false,
+      communityReadRating: false,
+    });
     expect(fetchImplementation).toHaveBeenCalledTimes(1);
 
     const [refreshUrl, refreshInit] = fetchImplementation.mock.calls[0] ?? [];
@@ -1510,5 +1517,173 @@ describe('browser auth gateway', () => {
       urls.filter((url) => url.endsWith('/user/api/v1/padlhub/booking-screen-read-jobs')),
     ).toHaveLength(1);
     expect(urls.filter((url) => url.includes('/results/'))).toHaveLength(1);
+  });
+
+  it('keeps direct-chat commands on PadlHub HTTP with stable idempotency across a network retry', async () => {
+    const userId = '00000000-0000-4000-8000-000000000001';
+    const conversationId = '22222222-2222-4222-8222-222222222222';
+    const gameId = '55555555-5555-4555-8555-555555555555';
+    const clientMessageId = '33333333-3333-4333-8333-333333333333';
+    const session = {
+      accessToken: 'short-lived-padlhub-token',
+      tokenType: 'Bearer',
+      expiresAt: '2099-07-11T12:10:00.000Z',
+      user: { id: userId, displayName: 'Анна' },
+      context: {
+        userId,
+        tenantId: '00000000-0000-4000-8000-000000000002',
+        displayName: 'Анна',
+        phoneLast4: '0001',
+        roles: ['client'],
+        permissions: ['profile.read'],
+      },
+    };
+    const sentMessage = {
+      id: '44444444-4444-4444-8444-444444444444',
+      conversationId,
+      sequence: 1,
+      sender: { userId, displayName: 'Анна' },
+      messageType: 'TEXT',
+      body: 'Привет',
+      createdAt: '2026-08-03T10:00:00.000Z',
+    };
+    const conversation = {
+      id: conversationId,
+      kind: 'DIRECT',
+      participant: {
+        userId: '11111111-1111-4111-8111-111111111111',
+        displayName: 'Борис',
+      },
+      unreadCount: 0,
+      updatedAt: '2026-08-03T10:00:00.000Z',
+    };
+    const gameConversation = {
+      id: '66666666-6666-4666-8666-666666666666',
+      kind: 'GAME',
+      contextId: gameId,
+      title: 'Игра в среду',
+      unreadCount: 0,
+      updatedAt: '2026-08-03T10:00:00.000Z',
+    };
+    let sendAttempts = 0;
+    const fetchImplementation = vi.fn<typeof fetch>((input, init) => {
+      const url = requestUrl(input);
+      if (url.endsWith('/auth/session/refresh')) return Promise.resolve(Response.json(session));
+      if (url.endsWith('/conversations?limit=50')) {
+        return Promise.resolve(Response.json({ items: [conversation] }));
+      }
+      if (url.endsWith('/conversations/direct')) {
+        return Promise.resolve(
+          Response.json({ outcome: 'ok', conversation, created: false, replayed: false }),
+        );
+      }
+      if (url.endsWith('/conversations/game')) {
+        return Promise.resolve(
+          Response.json({
+            outcome: 'ok',
+            conversation: gameConversation,
+            created: true,
+            replayed: false,
+          }),
+        );
+      }
+      if (url.includes(`/conversations/${conversationId}/messages?`)) {
+        return Promise.resolve(Response.json({ messages: [] }));
+      }
+      if (url.endsWith(`/conversations/${conversationId}/read-cursor`)) {
+        if (typeof init?.body !== 'string') throw new Error('Expected a JSON request body');
+        const parsedBody: unknown = JSON.parse(init.body);
+        if (
+          typeof parsedBody !== 'object' ||
+          parsedBody === null ||
+          !('throughSequence' in parsedBody) ||
+          typeof parsedBody.throughSequence !== 'number'
+        ) {
+          throw new Error('Expected a numeric throughSequence');
+        }
+        return Promise.resolve(
+          Response.json({
+            outcome: 'ok',
+            readThroughSequence: parsedBody.throughSequence,
+            changed: true,
+            replayed: false,
+          }),
+        );
+      }
+      if (url.endsWith(`/conversations/${conversationId}/messages`)) {
+        sendAttempts += 1;
+        if (sendAttempts === 1) return Promise.reject(new TypeError('network interrupted'));
+        return Promise.resolve(
+          Response.json({ outcome: 'ok', message: sentMessage, replayed: false }),
+        );
+      }
+      return Promise.resolve(new Response(null, { status: 404 }));
+    });
+    const gateway = createBrowserAuthGateway({
+      baseUrl: 'https://api.padlhub.test/',
+      tenantKey: 'padlhub',
+      appVersion: 'test',
+      fetchImplementation,
+    });
+
+    await gateway.restoreSession();
+    await expect(gateway.listConversations()).resolves.toEqual({ items: [conversation] });
+    await expect(
+      gateway.createDirectConversation(conversation.participant.userId, clientMessageId),
+    ).resolves.toMatchObject({ conversation, created: false });
+    await expect(gateway.getOrCreateGameConversation(gameId)).resolves.toMatchObject({
+      conversation: gameConversation,
+      created: true,
+    });
+    await expect(gateway.listConversationMessages(conversationId, 7)).resolves.toEqual({
+      messages: [],
+    });
+    await expect(
+      gateway.markConversationRead(conversationId, 7, clientMessageId),
+    ).resolves.toMatchObject({ readThroughSequence: 7 });
+    await expect(
+      gateway.sendConversationMessage(conversationId, { clientMessageId, body: 'Привет' }),
+    ).resolves.toEqual({ outcome: 'ok', message: sentMessage, replayed: false });
+
+    const sendCalls = fetchImplementation.mock.calls.filter(([input]) =>
+      requestUrl(input).endsWith(`/conversations/${conversationId}/messages`),
+    );
+    expect(sendCalls).toHaveLength(2);
+    for (const [, init] of sendCalls) {
+      expect(init?.method).toBe('POST');
+      expect(new Headers(init?.headers).get('Idempotency-Key')).toBe(clientMessageId);
+      expect(typeof init?.body).toBe('string');
+      if (typeof init?.body !== 'string') throw new Error('Expected a JSON request body');
+      expect(JSON.parse(init.body)).toEqual({ clientMessageId, body: 'Привет' });
+    }
+    const callsByUrl = new Map(
+      fetchImplementation.mock.calls.map(([input, init]) => [requestUrl(input), init]),
+    );
+    const createInit = callsByUrl.get(
+      'https://api.padlhub.test/user/api/v1/padlhub/conversations/direct',
+    );
+    expect(createInit?.method).toBe('POST');
+    expect(new Headers(createInit?.headers).get('Idempotency-Key')).toBe(clientMessageId);
+    expect(typeof createInit?.body).toBe('string');
+    if (typeof createInit?.body !== 'string') throw new Error('Expected a JSON request body');
+    expect(JSON.parse(createInit.body)).toEqual({ otherUserId: conversation.participant.userId });
+    const createGameInit = callsByUrl.get(
+      'https://api.padlhub.test/user/api/v1/padlhub/conversations/game',
+    );
+    expect(createGameInit?.method).toBe('POST');
+    expect(new Headers(createGameInit?.headers).get('Idempotency-Key')).toMatch(/^[0-9a-f-]{36}$/);
+    expect(typeof createGameInit?.body).toBe('string');
+    if (typeof createGameInit?.body !== 'string') throw new Error('Expected a JSON request body');
+    expect(JSON.parse(createGameInit.body)).toEqual({ gameId });
+    expect(
+      [...callsByUrl.keys()].some((url) =>
+        url.endsWith(`/conversations/${conversationId}/messages?afterSequence=7&limit=100`),
+      ),
+    ).toBe(true);
+    const readInit = callsByUrl.get(
+      `https://api.padlhub.test/user/api/v1/padlhub/conversations/${conversationId}/read-cursor`,
+    );
+    expect(readInit?.method).toBe('PUT');
+    expect(new Headers(readInit?.headers).get('Idempotency-Key')).toBe(clientMessageId);
   });
 });

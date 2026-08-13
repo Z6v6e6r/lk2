@@ -5,7 +5,7 @@ import cookie from '@fastify/cookie';
 import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
 import type { AppConfig } from '@phub/config';
-import type { CommunityDirectoryService } from '@phub/communities';
+import type { CommunityDirectoryService, CommunityReadExperienceService } from '@phub/communities';
 import { checkDatabaseReady } from '@phub/database';
 import type {
   ClientRoutingPlanRepository,
@@ -24,6 +24,7 @@ import type {
   GiftCertificateSaleRepository,
   LocationMediaRepository,
   LocationRepository,
+  MessagingRepository,
   NotificationEndpointRepository,
   NotificationInboxRepository,
   ProfileFriendshipRepository,
@@ -65,6 +66,7 @@ import {
   type ActivityHistoryRefreshService,
 } from './bookings/activity-history-routes.js';
 import { registerCommunityRoutes } from './communities/community-routes.js';
+import { registerCommunityExperienceRoutes } from './communities/community-experience-routes.js';
 import {
   EventAvatarMediaProxy,
   PersistentTrainerAvatarMedia,
@@ -92,6 +94,8 @@ import { sendApiError } from './http-errors.js';
 import { registerLocationRoutes } from './locations/location-routes.js';
 import { registerLocationMediaRoutes } from './locations/location-media-routes.js';
 import type { LocationMediaStore } from './locations/location-media-store.js';
+import { registerMessagingRoutes } from './messaging/messaging-routes.js';
+import type { RealtimeTicketIssuer } from './messaging/realtime-ticket-issuer.js';
 import type { TrainerAvatarMediaStore } from './trainer-avatar-media-store.js';
 import { registerNotificationRoutes } from './notifications/notification-routes.js';
 import { registerWebPushRoutes } from './notifications/web-push-routes.js';
@@ -167,8 +171,14 @@ export interface BuildAppOptions {
   readonly authService?: AuthService;
   readonly authDependencyReady?: () => Promise<boolean>;
   readonly communityDirectory?: CommunityDirectoryService;
+  readonly communityReadExperienceService?: CommunityReadExperienceService;
   readonly homeDashboardRepository?: Pick<HomeDashboardProjectionRepository, 'get'>;
   readonly homeBaseRepository?: Pick<HomeBaseProjectionRepository, 'get'>;
+  readonly homeBaseProjector?: (input: {
+    readonly tenantId: string;
+    readonly userId: string;
+    readonly correlationId: string;
+  }) => Promise<unknown>;
   readonly gameRosterRepository?: Pick<
     GameRosterRepository,
     'join' | 'joinWaitlist' | 'leave' | 'leaveWaitlist' | 'getOperation'
@@ -184,6 +194,8 @@ export interface BuildAppOptions {
   readonly notificationEndpointRepository?: NotificationEndpointRepository;
   readonly notificationEndpointCipher?: NotificationEndpointCipher;
   readonly adminNotificationRepository?: AdminNotificationRepository;
+  readonly messagingRepository?: MessagingRepository;
+  readonly realtimeTicketIssuer?: RealtimeTicketIssuer;
   readonly locationRepository?: LocationRepository;
   readonly locationMediaRepository?: LocationMediaRepository;
   readonly giftCertificateCatalogRepository?: GiftCertificateCatalogRepository;
@@ -406,6 +418,29 @@ function authorizeGamesPlayer(request: FastifyRequest, reply: FastifyReply): Pro
   return Promise.resolve();
 }
 
+function authorizeDirectChat(request: FastifyRequest, reply: FastifyReply): Promise<void> {
+  if (reply.sent) return Promise.resolve();
+  if (!request.padlHubClaims?.permissions.includes('chat.direct.create')) {
+    sendApiError(
+      request,
+      reply,
+      403,
+      'CHAT_PERMISSION_REQUIRED',
+      'Нет права на создание личного диалога.',
+    );
+  }
+  return Promise.resolve();
+}
+
+function authorizeMessagingCommand(request: FastifyRequest, reply: FastifyReply): Promise<void> {
+  if (reply.sent) return Promise.resolve();
+  const permissions = request.padlHubClaims?.permissions ?? [];
+  if (!permissions.includes('chat.direct.create') && !permissions.includes('games.play')) {
+    sendApiError(request, reply, 403, 'CHAT_PERMISSION_REQUIRED', 'Нет права на операцию с чатом.');
+  }
+  return Promise.resolve();
+}
+
 async function resolveTenant(request: FastifyRequest, reply: FastifyReply): Promise<void> {
   if (reply.sent) return;
   const tenantKey = (request.params as { tenantKey?: string }).tenantKey;
@@ -529,6 +564,22 @@ export async function buildApp(options: BuildAppOptions) {
         })
       : remoteEventAvatarMedia);
 
+  const userRuntimeCapabilities = {
+    communityDirectory: Boolean(options.communityDirectory),
+    communityReadDetail:
+      options.config.COMMUNITY_LEGACY_READ_DETAIL_ENABLED &&
+      Boolean(options.communityReadExperienceService),
+    communityReadFeed:
+      options.config.COMMUNITY_LEGACY_READ_FEED_ENABLED &&
+      Boolean(options.communityReadExperienceService),
+    communityReadChat:
+      options.config.COMMUNITY_LEGACY_READ_CHAT_ENABLED &&
+      Boolean(options.communityReadExperienceService),
+    communityReadRating:
+      options.config.COMMUNITY_LEGACY_READ_RATING_ENABLED &&
+      Boolean(options.communityReadExperienceService),
+  } as const;
+
   app.decorate('config', options.config);
   if (options.pool) app.decorate('pool', options.pool);
 
@@ -601,6 +652,7 @@ export async function buildApp(options: BuildAppOptions) {
               platform,
             })
         : undefined,
+      userRuntimeCapabilities,
     );
   }
 
@@ -609,9 +661,44 @@ export async function buildApp(options: BuildAppOptions) {
     authenticatedTenantHandlers: [authenticate, resolveTenant],
     commandHandlers: [authenticate, resolveTenant, requireIdempotencyKey],
   });
+  registerMessagingRoutes(app as unknown as FastifyInstance, {
+    ...(options.messagingRepository ? { repository: options.messagingRepository } : {}),
+    ...(options.realtimeTicketIssuer ? { realtimeTicketIssuer: options.realtimeTicketIssuer } : {}),
+    authenticatedTenantHandlers: [authenticate, resolveTenant],
+    directCommandHandlers: [
+      authenticate,
+      authorizeDirectChat,
+      resolveTenant,
+      requireIdempotencyKey,
+    ],
+    contextualCommandHandlers: [
+      authenticate,
+      authorizeGamesPlayer,
+      resolveTenant,
+      requireIdempotencyKey,
+    ],
+    commandHandlers: [
+      authenticate,
+      authorizeMessagingCommand,
+      resolveTenant,
+      requireIdempotencyKey,
+    ],
+  });
   registerCommunityRoutes(app as unknown as FastifyInstance, {
     ...(options.communityDirectory ? { service: options.communityDirectory } : {}),
     authenticatedTenantHandlers: [authenticate, resolveTenant],
+  });
+  registerCommunityExperienceRoutes(app as unknown as FastifyInstance, {
+    ...(options.communityReadExperienceService
+      ? { service: options.communityReadExperienceService }
+      : {}),
+    authenticatedTenantHandlers: [authenticate, resolveTenant],
+    enabled: {
+      detail: userRuntimeCapabilities.communityReadDetail,
+      feed: userRuntimeCapabilities.communityReadFeed,
+      chat: userRuntimeCapabilities.communityReadChat,
+      rating: userRuntimeCapabilities.communityReadRating,
+    },
   });
   registerGameRoutes(app as unknown as FastifyInstance, {
     ...(options.gameRosterRepository ? { repository: options.gameRosterRepository } : {}),
@@ -1032,6 +1119,16 @@ export async function buildApp(options: BuildAppOptions) {
         targetUserId === viewerUserId
           ? undefined
           : await options.profilePrivacyRepository?.get(tenantId, targetUserId);
+      const shouldResolveDirectChatRuntime =
+        targetUserId !== viewerUserId &&
+        permissions.includes('chat.direct.create') &&
+        privacyPolicy?.chatPolicy !== 'NOBODY';
+      const messagingRuntime = shouldResolveDirectChatRuntime
+        ? await options.messagingRepository?.getRuntimeSettings(tenantId)
+        : undefined;
+      const directChatEnabled = Boolean(
+        messagingRuntime?.httpEnabled && messagingRuntime.directEnabled,
+      );
 
       if (options.config.HOME_READ_MODE === 'mock') {
         const isSelf = targetUserId === viewerUserId;
@@ -1052,6 +1149,7 @@ export async function buildApp(options: BuildAppOptions) {
           profile,
           viewerUserId,
           permissions,
+          directChatEnabled,
           ...(privacyPolicy ? { policy: privacyPolicy } : {}),
         });
       }
@@ -1088,6 +1186,7 @@ export async function buildApp(options: BuildAppOptions) {
             },
             viewerUserId,
             permissions,
+            directChatEnabled,
             ...(privacyPolicy ? { policy: privacyPolicy } : {}),
           });
         }
@@ -1136,6 +1235,7 @@ export async function buildApp(options: BuildAppOptions) {
         profile: parsedDashboard.data.profile,
         viewerUserId,
         permissions,
+        directChatEnabled,
         ...(privacyPolicy ? { policy: privacyPolicy } : {}),
       });
     },
@@ -1379,7 +1479,22 @@ export async function buildApp(options: BuildAppOptions) {
       if (options.authService && !user) {
         return sendApiError(request, reply, 401, 'AUTH_SESSION_REVOKED', 'Сессия завершена.');
       }
-      const projection = await options.homeBaseRepository?.get(tenantId, userId);
+      let projection = await options.homeBaseRepository?.get(tenantId, userId);
+      if (!projection && options.homeBaseProjector) {
+        try {
+          await options.homeBaseProjector({
+            tenantId,
+            userId,
+            correlationId: correlationIdFromHeader(request),
+          });
+          projection = await options.homeBaseRepository?.get(tenantId, userId);
+        } catch (error) {
+          request.log.warn(
+            { err: error, tenantId, userId },
+            'on-demand HomeBase projection failed',
+          );
+        }
+      }
       if (!projection) {
         return sendApiError(
           request,

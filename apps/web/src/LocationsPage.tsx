@@ -13,9 +13,6 @@ function LocationNavigation(): React.JSX.Element {
       <a className="is-create" href="/games/new" aria-label="Создать игру">
         ＋
       </a>
-      <a href="/chats" aria-label="Чаты">
-        ▢
-      </a>
       <a href="/profile" aria-label="Профиль">
         ♙
       </a>

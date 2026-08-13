@@ -1017,6 +1017,8 @@ function lockedActionMessage(capability: ProfileActionCapability): string {
       return 'Игрок ограничил это действие в настройках профиля.';
     case 'ACCESS_REQUIRED':
       return 'Для этого действия пока нет доступа.';
+    case 'FEATURE_UNAVAILABLE':
+      return 'Действие скоро появится.';
     default:
       return 'Действие сейчас недоступно.';
   }

@@ -15,6 +15,9 @@ export const WORKER_METRIC_INSTRUMENTS = {
   outboxPublishFailures: 'phub.worker.outbox.publish_failures',
   outboxPublishCycleDurationMilliseconds: 'phub.worker.outbox.publish_cycle_duration_milliseconds',
   deadLetterMessagesReady: 'phub.worker.dlq.messages_ready',
+  pushDeliveriesDue: 'phub.worker.notifications.push_deliveries_due',
+  pushDeliveryOldestDueAgeSeconds: 'phub.worker.notifications.push_delivery_oldest_due_age_seconds',
+  pushDeliveriesDead: 'phub.worker.notifications.push_deliveries_dead',
   operationalCollectionSuccess: 'phub.worker.operational.collection_success',
   operationalCollectionFailures: 'phub.worker.operational.collection_failures',
   operationalCollectionDurationMilliseconds:
@@ -25,10 +28,19 @@ interface OutboxAgeRow extends QueryResultRow {
   readonly oldest_age_seconds: number | string;
 }
 
+interface PushDeliveryMetricRow extends QueryResultRow {
+  readonly due_count: number | string;
+  readonly oldest_due_age_seconds: number | string;
+  readonly dead_count: number | string;
+}
+
 export interface WorkerOperationalSnapshot {
   readonly outboxOldestAgeSeconds: number;
   readonly outboxBackloggedTenants: number;
   readonly deadLetterMessagesReady: number;
+  readonly pushDeliveriesDue: number;
+  readonly pushDeliveryOldestDueAgeSeconds: number;
+  readonly pushDeliveriesDead: number;
 }
 
 async function mapWithConcurrency<TInput, TOutput>(
@@ -67,12 +79,12 @@ export async function collectWorkerOperationalSnapshot(options: {
   const tenants = await options.pool.query<{ id: string }>(
     'select id from identity.tenants where active = true',
   );
-  const tenantAges = await mapWithConcurrency(
+  const tenantSnapshots = await mapWithConcurrency(
     tenants.rows,
     METRICS_TENANT_CONCURRENCY,
-    async (tenant): Promise<number> =>
+    async (tenant) =>
       withTenantTransaction(options.pool, tenant.id, async (client) => {
-        const result = await client.query<OutboxAgeRow>(
+        const outbox = await client.query<OutboxAgeRow>(
           `select extract(epoch from (clock_timestamp() - occurred_at))::double precision
                     as oldest_age_seconds
              from audit.outbox_events
@@ -81,15 +93,65 @@ export async function collectWorkerOperationalSnapshot(options: {
             limit 1`,
           [tenant.id],
         );
-        const row = result.rows[0];
-        return row ? parseNonNegativeMetric(row.oldest_age_seconds, 'outbox oldest age') : 0;
+        const deliveries = await client.query<PushDeliveryMetricRow>(
+          `select count(*) filter (
+                    where (state = 'PENDING' and next_attempt_at <= clock_timestamp())
+                       or (state = 'SENDING' and lease_expires_at <= clock_timestamp())
+                  )::bigint as due_count,
+                  coalesce(max(
+                    extract(epoch from (clock_timestamp() - created_at))
+                  ) filter (
+                    where (state = 'PENDING' and next_attempt_at <= clock_timestamp())
+                       or (state = 'SENDING' and lease_expires_at <= clock_timestamp())
+                  ), 0)::double precision as oldest_due_age_seconds,
+                  count(*) filter (where state = 'DEAD')::bigint as dead_count
+             from notifications.deliveries
+            where tenant_id = $1 and channel = 'PUSH'`,
+          [tenant.id],
+        );
+        const outboxRow = outbox.rows[0];
+        const deliveryRow = deliveries.rows[0];
+        return {
+          outboxOldestAgeSeconds: outboxRow
+            ? parseNonNegativeMetric(outboxRow.oldest_age_seconds, 'outbox oldest age')
+            : 0,
+          pushDeliveriesDue: deliveryRow
+            ? parseNonNegativeMetric(deliveryRow.due_count, 'push deliveries due')
+            : 0,
+          pushDeliveryOldestDueAgeSeconds: deliveryRow
+            ? parseNonNegativeMetric(
+                deliveryRow.oldest_due_age_seconds,
+                'push delivery oldest due age',
+              )
+            : 0,
+          pushDeliveriesDead: deliveryRow
+            ? parseNonNegativeMetric(deliveryRow.dead_count, 'push deliveries dead')
+            : 0,
+        };
       }),
   );
   const queue = await options.channel.checkQueue(DEAD_LETTER_QUEUE);
   return {
-    outboxOldestAgeSeconds: Math.max(0, ...tenantAges),
-    outboxBackloggedTenants: tenantAges.filter((age) => age > 0).length,
+    outboxOldestAgeSeconds: Math.max(
+      0,
+      ...tenantSnapshots.map((snapshot) => snapshot.outboxOldestAgeSeconds),
+    ),
+    outboxBackloggedTenants: tenantSnapshots.filter(
+      (snapshot) => snapshot.outboxOldestAgeSeconds > 0,
+    ).length,
     deadLetterMessagesReady: queue.messageCount,
+    pushDeliveriesDue: tenantSnapshots.reduce(
+      (sum, snapshot) => sum + snapshot.pushDeliveriesDue,
+      0,
+    ),
+    pushDeliveryOldestDueAgeSeconds: Math.max(
+      0,
+      ...tenantSnapshots.map((snapshot) => snapshot.pushDeliveryOldestDueAgeSeconds),
+    ),
+    pushDeliveriesDead: tenantSnapshots.reduce(
+      (sum, snapshot) => sum + snapshot.pushDeliveriesDead,
+      0,
+    ),
   };
 }
 
@@ -120,6 +182,11 @@ export function createWorkerMetricRecorder(): WorkerMetricRecorder {
     WORKER_METRIC_INSTRUMENTS.outboxPublishCycleDurationMilliseconds,
   );
   const deadLetterReady = meter.createGauge(WORKER_METRIC_INSTRUMENTS.deadLetterMessagesReady);
+  const pushDeliveriesDue = meter.createGauge(WORKER_METRIC_INSTRUMENTS.pushDeliveriesDue);
+  const pushDeliveryOldestDueAge = meter.createGauge(
+    WORKER_METRIC_INSTRUMENTS.pushDeliveryOldestDueAgeSeconds,
+  );
+  const pushDeliveriesDead = meter.createGauge(WORKER_METRIC_INSTRUMENTS.pushDeliveriesDead);
   const collectionSuccess = meter.createGauge(
     WORKER_METRIC_INSTRUMENTS.operationalCollectionSuccess,
   );
@@ -135,6 +202,9 @@ export function createWorkerMetricRecorder(): WorkerMetricRecorder {
       outboxOldestAge.record(snapshot.outboxOldestAgeSeconds);
       outboxBackloggedTenants.record(snapshot.outboxBackloggedTenants);
       deadLetterReady.record(snapshot.deadLetterMessagesReady);
+      pushDeliveriesDue.record(snapshot.pushDeliveriesDue);
+      pushDeliveryOldestDueAge.record(snapshot.pushDeliveryOldestDueAgeSeconds);
+      pushDeliveriesDead.record(snapshot.pushDeliveriesDead);
       collectionSuccess.record(1);
       collectionDuration.record(durationMilliseconds);
     },

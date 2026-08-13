@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import '@testing-library/jest-dom/vitest';
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -55,7 +55,7 @@ describe('TournamentDetailPage', () => {
     render(<TournamentDetailPage gateway={gateway} tournamentId={tournament.id} />);
 
     expect(await screen.findByRole('heading', { name: tournament.title })).toBeVisible();
-    expect(screen.getByText('11')).toBeVisible();
+    expect(within(screen.getByRole('tabpanel')).getByText('11')).toBeVisible();
     expect(screen.getByText('/ 12')).toBeVisible();
     const level = screen.getByText('от D+ до C');
     expect(level).toBeVisible();

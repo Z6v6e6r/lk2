@@ -41,6 +41,60 @@ enabling chats.
    false-positive review. No authoritative mode exists.
 10. Expand tenant coverage gradually while watching the metrics below.
 
+### Direct chat M1 runtime gate
+
+An absent `messaging.tenant_runtime_settings` row keeps every messaging capability off. M1 needs
+only `http` and `direct`; keep `realtime` and `contextual` off. Preview and apply both require the
+current actor to be active with role `admin` and the existing comms-operator authority
+`notifications.manage`. Apply rechecks it after taking the tenant advisory lock.
+
+```bash
+npm run messaging:runtime:set -- \
+  --tenant-key=<internal-test-tenant> \
+  --actor-id=<authorized-padlhub-admin-uuid> \
+  --http=on \
+  --direct=on
+
+npm run messaging:runtime:set -- \
+  --tenant-key=<internal-test-tenant> \
+  --actor-id=<authorized-padlhub-admin-uuid> \
+  --http=on \
+  --direct=on \
+  --confirm=APPLY_MESSAGING_RUNTIME
+```
+
+Do not run the apply command until migration/API/authorization smokes pass. Roll back the capability
+with a reviewed `--http=off --direct=off` apply; leave the expand-only schema in place. Enabling
+runtime does not add block-list enforcement: the repository has no authoritative block table yet,
+so external rollout remains blocked on that later policy gate.
+
+### Direct chat realtime M2 gate
+
+Realtime включается только после HTTP/direct M1. До apply проверьте, что
+`/health/ready` realtime показывает `redis=true`, `database=true`, `rabbit=true`, exclusive
+instance queue и durable quarantine созданы, а HTTP polling проходит на двух тестовых игроках.
+
+```bash
+npm run messaging:runtime:set -- \
+  --tenant-key=<internal-test-tenant> \
+  --actor-id=<authorized-padlhub-admin-uuid> \
+  --http=on --direct=on --realtime=on
+
+npm run messaging:runtime:set -- \
+  --tenant-key=<internal-test-tenant> \
+  --actor-id=<authorized-padlhub-admin-uuid> \
+  --http=on --direct=on --realtime=on \
+  --confirm=APPLY_MESSAGING_RUNTIME
+```
+
+Принятие: ticket используется один раз; после logout/отзыва permission socket
+закрывается; снятие membership запрещает subscribe/fanout; разрыв Rabbit даёт
+readiness 503 до повторной регистрации consumer; после reconnect клиент забирает gap через
+HTTP. В логах, Rabbit и quarantine не должно быть body сообщения.
+
+Rollback: сначала `--realtime=off` с теми же `http/direct=on`; поллинг остаётся
+рабочим. При инциденте HTTP/direct выключаются отдельно. Схему и Rabbit queues не удалять.
+
 ### In-app runtime gate
 
 The in-app User API and projector are disabled when a tenant has no runtime-settings row. Preview a
@@ -143,6 +197,26 @@ while already-created jobs reach a terminal state; disable the global flag only 
 incident. `PROVIDER_ACCEPTED` is not a display or open receipt. The current Web slice does not yet
 collect client `DISPLAYED`/`OPENED` receipts.
 
+The delivery worker finalizes only while its 60-second database lease is still current; the Web
+Push provider timeout is capped at 30 seconds. An expired/lost lease is reported as `stale` and
+must not produce attempt, receipt, provider-link or outbox evidence. A conflicting external
+provider message ID for the same delivery aborts the transaction rather than silently replacing
+the original link.
+
+Runtime evidence is content-free. Alert and retain release evidence for:
+
+```text
+phub.worker.notifications.push_deliveries_due
+phub.worker.notifications.push_delivery_oldest_due_age_seconds
+phub.worker.notifications.push_deliveries_dead
+phub.worker.outbox.oldest_age_seconds
+phub.worker.dlq.messages_ready
+```
+
+The first two gauges and outbox/DLQ must return to the approved baseline after a smoke or retry
+window. `push_deliveries_dead` is durable operator work, not a transient success metric; investigate
+by delivery UUID and stable error code without querying or logging endpoint ciphertext.
+
 After enablement, verify the live loopback API without exposing JWT or subscription material:
 
 ```bash
@@ -235,11 +309,81 @@ credentials exist. Resolve a known internal phone, send one test campaign, then 
 - the same `Idempotency-Key` returns the original campaign with `replayed=true`;
 - logs and RabbitMQ contain no title, body, phone or endpoint material.
 
+### Nano CUP binding
+
+On Nano the active operator surface is `https://cup.nano.padlhub.su/api/ui/admin`. Configure its
+CUP container with these server-side values and recreate that container:
+
+```text
+PADLHUB_NOTIFICATION_API_BASE_URL=https://cup.nano.padlhub.su
+PADLHUB_NOTIFICATION_TENANT_KEY=local-padel
+ADVERTISING_ENGAGEMENT_SECRET=<same 32+ character value as PadlHub PROMOTIONS_ENGAGEMENT_SECRET>
+```
+
+Caddy sends only `/user/api/*`, `/admin/api/*` and `/public/api/*` on the CUP host to PadlHub API;
+all other paths stay on the CUP showcase. The browser therefore calls PadlHub through a same-origin
+PadlHub-controlled route and no system credential enters the bundle. Before the presentation,
+grant one real operator `admin` plus `notifications.manage`, enable in-app delivery for the tenant,
+and configure Web Push only when Nano has the VAPID and endpoint-encryption secrets in both API and
+worker. Then run:
+
+```sh
+sh /opt/phub/verify-cup-integrations.sh local-padel
+```
+
+The check validates the four advertising sources, the shared engagement secret without printing
+it, CUP-to-PadlHub settings, tenant runtime, optional Web Push provider state and an authorized CUP
+operator. It does not send a campaign; final acceptance still requires one operator login, one
+recipient preview, one test campaign and an inbox read-back.
+
 Revoke access by applying the desired non-admin roles/permissions. Disable the affected tenant
 channel before stopping the delivery worker during an incident.
 
 ## Required smoke tests
 
+### Booking notification ruleset M1
+
+Provisioning is an explicit, tenant-scoped operation. It installs immutable `ru-RU` v2 templates and
+rules, but it never changes `notifications.tenant_runtime_settings`; the existing in-app/Web Push
+gates remain authoritative and default off. Both preview and apply require the actor's current
+`identity.user_access_profiles` row to contain role `admin` and permission
+`notifications.manage`; apply checks this again inside its transaction. Preview first, then apply
+with a unique operator idempotency key:
+
+The v2 templates link to the supported `/bookings` list route. Provisioning creates version 2,
+repoints each stable rule and only deactivates an older active template; it never rewrites v1
+content. Do not provision a booking-detail deep link until an authoritative booking detail model
+and matching Web route exist.
+
+```bash
+npm run notifications:booking:provision -- \
+  --tenant-key=local-padel \
+  --actor-id=<active-padlhub-user-uuid> \
+  --idempotency-key=booking-ruleset-2026-08-03
+
+npm run notifications:booking:provision -- \
+  --tenant-key=local-padel \
+  --actor-id=<active-padlhub-user-uuid> \
+  --idempotency-key=booking-ruleset-2026-08-03 \
+  --confirm=APPLY_BOOKING_NOTIFICATION_RULESET
+```
+
+Replaying the same key and ruleset returns the stored result; reusing it for different provisioning
+content fails closed. Inspect `notifications.ruleset_provision_commands` and the
+`BOOKING_NOTIFICATION_RULESET_PROVISIONED` audit record before enabling a runtime transport.
+
+M1 does not produce booking events. At this revision the repository has no authoritative
+`LOCAL_PRIMARY` booking command path or durable reminder scheduler that can emit the canonical
+revision after committing business state. Viva-assisted and browser-derived booking read snapshots
+are explicitly non-authoritative and must not be used as producers. Runtime activation therefore
+remains blocked until the booking write owner emits confirmed/changed/cancelled events in the same
+transaction as the booking change, and a leased durable scheduler emits `booking.reminder.due.v1`
+with cancellation/reschedule dedupe.
+
+- With no messaging runtime row, chat routes return `MESSAGING_DISABLED`; with HTTP only they return
+  `DIRECT_MESSAGING_DISABLED`.
+- Create a direct conversation twice with one key and verify one canonical pair. A missing,
+  inactive or `chatPolicy=NOBODY` target must return the same non-enumerating 404.
 - Repeat a send command with the same `Idempotency-Key` and `clientMessageId`; only one sequence is
   allocated and the original response is returned.
 - Disconnect realtime, create messages, reconnect with `afterSequence`; the client fills the exact
@@ -284,6 +428,13 @@ Worker startup must declare `phub.dead-letter.v1` as a durable quorum queue and 
 `phub.dead-letter` topic exchange with routing key `#`. This is shared retention for rejected
 events; it does not change the routing keys or delivery policy of existing consumers.
 
+The notification projector queue is intentionally different: it binds only the four explicit
+booking source contracts listed in the domain event catalog. During an in-place upgrade the worker
+creates those exact bindings first and then removes the legacy `phub.events` / `#` binding. Verify
+that `phub.notification-intent-projector.v1` has no wildcard binding before enabling booking rules.
+Every future notification-producing vertical must add its versioned routing key to the code-owned
+topology manifest and topology test; a database rule alone must not broaden broker consumption.
+
 Before enabling a new tenant or transport, verify the queue and binding in the target environment:
 
 ```bash
@@ -312,15 +463,51 @@ tenant, user, phone, message, endpoint or provider identifiers. Prometheus evalu
 | `PadlHubOutboxPublishFailures`              | A publish cycle failed in the last 5 minutes                   | P1       | Inspect PostgreSQL/RabbitMQ connectivity and correlation-safe worker logs.                   |
 | `PadlHubOperationalMetricsCollectionFailed` | PostgreSQL/RabbitMQ snapshot failed for 2 minutes              | P2       | Treat backlog monitoring as blind until collection is restored.                              |
 
-Backlog does not change `/health/ready`: restarting a healthy worker does not repair retained or
-delayed work and can amplify an incident. Readiness remains dependency-based; alerts drive
-containment. Validate both local and Jetson rule copies before promotion:
+Backlog depth alone does not change `/health/ready`: restarting a worker does not repair retained or
+delayed work and can amplify an incident. Readiness requires PostgreSQL, RabbitMQ, optional Viva
+sync Redis, and recent successful forward progress by the worker core cycle. A new worker stays
+unready until its first complete core cycle succeeds. Any failed cycle makes it unready until a
+later complete cycle succeeds; a running cycle becomes stale when it has made no progress within
+`max(30s, 3 * OUTBOX_POLL_INTERVAL_MS, 2 * OUTBOX_CONFIRM_TIMEOUT_MS)`. The readiness response
+exposes only content-free `checks` and `coreCycle` state/age fields.
+
+The active tenant list is read globally in deterministic UUID order. Failure to read that list fails
+the whole cycle. Work after that boundary is tenant-local: a lifecycle or outbox failure for one
+tenant is logged and marks the complete cycle failed, but does not prevent the remaining tenants
+from running. The starting offset advances by one on each cycle, including partially failed cycles,
+so a repeatedly slow or failing tenant cannot permanently occupy the first slot. Progress is
+recorded after every attempted tenant, including failures; readiness still remains false until one
+complete cycle finishes without any tenant failure. A terminal RabbitMQ failure sets shutdown state,
+which stops the orchestrator from starting another tenant and proceeds through fail-fast exit.
+
+An unexpected RabbitMQ connection `error` or `close` is terminal because all publisher and consumer
+channels belong to that connection. The worker first drops readiness, then performs a cleanup
+bounded to five seconds and exits with status 1. The configured supervisor must restart it; after
+restart, require a successful core cycle and restored consumers before reopening rollout gates. If
+the process remains running after a logged terminal Rabbit event, treat supervisor/runtime wiring as
+broken rather than manually marking the worker healthy.
+
+Validate both local and Jetson rule copies before promotion:
 
 ```bash
 cmp infra/monitoring/padlhub-alerts.yaml deploy/jetson/monitoring/padlhub-alerts.yaml
 docker compose --profile monitoring exec -T prometheus \
   promtool check rules /etc/prometheus/rules/padlhub-alerts.yaml
 ```
+
+### Transactional outbox confirm bound
+
+`OUTBOX_CONFIRM_TIMEOUT_MS` applies to both transactional and leased publishers. In transactional
+mode, the database row lock is held only until RabbitMQ confirms the batch or this bound expires.
+On timeout, the transaction rolls back, the event remains unpublished, the core cycle is marked
+failed, and readiness stays false until a later complete cycle succeeds.
+
+A broker may accept an event immediately before the local confirm deadline. Retrying that
+unpublished row can therefore deliver the same event again; all consumers must deduplicate on event
+`id`. Do not raise the timeout to mask RabbitMQ latency. Investigate connection/channel health,
+broker resource alarms, confirm latency and outbox age. A repeated
+`OUTBOX_CONFIRM_TIMEOUT` blocks rollout expansion even if the TCP connection has not emitted a
+terminal event.
 
 ### Leased outbox staging gate
 

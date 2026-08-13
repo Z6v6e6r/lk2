@@ -17,6 +17,15 @@ describe('worker operational metrics', () => {
             rows: values[0] === 'tenant-a' ? [{ oldest_age_seconds: 42.5 }] : [],
           });
         }
+        if (text.includes("channel = 'PUSH'")) {
+          return Promise.resolve({
+            rows: [
+              values[0] === 'tenant-a'
+                ? { due_count: '2', oldest_due_age_seconds: 31.25, dead_count: '1' }
+                : { due_count: '3', oldest_due_age_seconds: 12, dead_count: '4' },
+            ],
+          });
+        }
         return Promise.resolve({ rows: [] });
       }),
       release,
@@ -39,6 +48,9 @@ describe('worker operational metrics', () => {
       outboxOldestAgeSeconds: 42.5,
       outboxBackloggedTenants: 1,
       deadLetterMessagesReady: 3,
+      pushDeliveriesDue: 5,
+      pushDeliveryOldestDueAgeSeconds: 31.25,
+      pushDeliveriesDead: 5,
     });
     expect(connect).toHaveBeenCalledTimes(2);
     expect(release).toHaveBeenCalledTimes(2);

@@ -310,8 +310,9 @@ describe('Games read APIs', () => {
       nextCursor: null,
     });
     expect(body.items[0]?.allowedActions).toEqual(
-      expect.arrayContaining(['INVITE', 'EDIT', 'CANCEL', 'OPEN_CHAT']),
+      expect.arrayContaining(['INVITE', 'EDIT', 'CANCEL']),
     );
+    expect(body.items[0]?.allowedActions).not.toContain('OPEN_CHAT');
     expect(listViewerCardProjections).toHaveBeenCalledWith(
       expect.objectContaining({ tenantId, viewerUserId: userId, scope: 'UPCOMING' }),
     );

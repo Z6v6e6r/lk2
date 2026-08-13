@@ -1,13 +1,74 @@
 name: Build and deploy staging
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
     inputs:
+      deploy_confirmation:
+        description: Type DEPLOY_STAGING to deploy the main branch to staging
+        required: false
+        type: string
+      deployment_profile:
+        description: Select full Home, Communities read-only, isolated client-assisted Viva reads, or messaging test
+        required: true
+        type: choice
+        default: FULL_LIVE_HOME
+        options:
+          - FULL_LIVE_HOME
+          - COMMUNITIES_LEGACY_READ_ONLY
+          - CLIENT_ASSISTED_VIVA
+          - MESSAGING_TEST
+      messaging_player_a_id:
+        description: First active PadlHub player UUID required by MESSAGING_TEST
+        required: false
+        type: string
+      messaging_player_b_id:
+        description: Second active PadlHub player UUID required by MESSAGING_TEST
+        required: false
+        type: string
+      routing_tenant_key:
+        description: Active staging tenant whose routing plan is refreshed before Viva activation
+        required: false
+        type: string
+      routing_actor_id:
+        description: Operator UUID recorded for the just-in-time routing refresh
+        required: false
+        type: string
+      routing_apply_confirmation:
+        description: Type APPLY_ROUTING_PLAN to authorize the audited just-in-time routing refresh
+        required: false
+        type: string
       diagnose_home:
         description: Read-only live Home source diagnostics
         required: true
+        type: boolean
+        default: false
+      diagnostic_phone_last4:
+        description: Optional comma-separated phone suffixes for read-only player/delegation diagnostics
+        required: false
+        type: string
+      access_target_user_id:
+        description: Target PadlHub user UUID for an isolated audited access operation
+        required: false
+        type: string
+      access_roles:
+        description: Complete comma-separated desired role set
+        required: false
+        type: string
+      access_permissions:
+        description: Complete comma-separated desired permission set
+        required: false
+        type: string
+      access_actor_id:
+        description: Active PadlHub operator UUID recorded in the audit log
+        required: false
+        type: string
+      access_apply_confirmation:
+        description: Leave empty for dry-run or type APPLY_USER_ACCESS to apply
+        required: false
+        type: string
+      recover_udisks:
+        description: Restart a leaking udisks2 service, then run diagnostics
+        required: false
         type: boolean
         default: false
 
@@ -20,10 +81,146 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  diagnose-home:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.diagnose_home }}
+  validate-request:
+    runs-on: ubuntu-latest
+    outputs:
+      mode: ${{ steps.request.outputs.mode }}
+      access_apply: ${{ steps.request.outputs.access_apply }}
+    steps:
+      - id: request
+        name: Validate requested staging operation
+        env:
+          DEPLOY_CONFIRMATION: ${{ inputs.deploy_confirmation }}
+          DEPLOYMENT_PROFILE: ${{ inputs.deployment_profile }}
+          MESSAGING_PLAYER_A_ID: ${{ inputs.messaging_player_a_id }}
+          MESSAGING_PLAYER_B_ID: ${{ inputs.messaging_player_b_id }}
+          ROUTING_TENANT_KEY: ${{ inputs.routing_tenant_key }}
+          ROUTING_ACTOR_ID: ${{ inputs.routing_actor_id }}
+          ROUTING_APPLY_CONFIRMATION: ${{ inputs.routing_apply_confirmation }}
+          DIAGNOSE_HOME: ${{ inputs.diagnose_home }}
+          DIAGNOSTIC_PHONE_LAST4: ${{ inputs.diagnostic_phone_last4 }}
+          ACCESS_TARGET_USER_ID: ${{ inputs.access_target_user_id }}
+          ACCESS_ROLES: ${{ inputs.access_roles }}
+          ACCESS_PERMISSIONS: ${{ inputs.access_permissions }}
+          ACCESS_ACTOR_ID: ${{ inputs.access_actor_id }}
+          ACCESS_APPLY_CONFIRMATION: ${{ inputs.access_apply_confirmation }}
+          RECOVER_UDISKS: ${{ inputs.recover_udisks }}
+          REQUEST_REF: ${{ github.ref }}
+        run: |
+          set -eu
+          diagnostics_requested=false
+          if [ "$DIAGNOSE_HOME" = 'true' ] || [ "$RECOVER_UDISKS" = 'true' ] || [ -n "$DIAGNOSTIC_PHONE_LAST4" ]; then
+            diagnostics_requested=true
+          fi
+          access_requested=false
+          if [ -n "$ACCESS_TARGET_USER_ID$ACCESS_ROLES$ACCESS_PERMISSIONS$ACCESS_ACTOR_ID$ACCESS_APPLY_CONFIRMATION" ]; then
+            access_requested=true
+          fi
+          if [ "$access_requested" = 'true' ]; then
+            if [ "$diagnostics_requested" = 'true' ] || [ -n "$DEPLOY_CONFIRMATION" ]; then
+              echo '::error::User-access operation cannot be combined with diagnostics or deployment.'
+              exit 1
+            fi
+            if ! printf '%s' "$ACCESS_TARGET_USER_ID" | grep -Eiq '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'; then
+              echo '::error::Target user ID must be a UUID.'
+              exit 1
+            fi
+            if ! printf '%s' "$ACCESS_ACTOR_ID" | grep -Eiq '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'; then
+              echo '::error::Access actor ID must be a UUID.'
+              exit 1
+            fi
+            for access_values in "$ACCESS_ROLES" "$ACCESS_PERMISSIONS"; do
+              if ! printf '%s' "$access_values" | grep -Eq '^[a-z][a-z0-9._-]{1,63}(,[a-z][a-z0-9._-]{1,63})*$'; then
+                echo '::error::Roles and permissions must be complete comma-separated access identifiers.'
+                exit 1
+              fi
+            done
+            case "$ACCESS_APPLY_CONFIRMATION" in
+              '') printf '%s\n' 'access_apply=false' >> "$GITHUB_OUTPUT" ;;
+              APPLY_USER_ACCESS) printf '%s\n' 'access_apply=true' >> "$GITHUB_OUTPUT" ;;
+              *)
+                echo '::error::Access apply requires the exact APPLY_USER_ACCESS confirmation.'
+                exit 1
+                ;;
+            esac
+            printf '%s\n' 'mode=user-access' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$diagnostics_requested" = 'true' ]; then
+            if [ -n "$DEPLOY_CONFIRMATION" ]; then
+              echo '::error::Diagnostics cannot be combined with a deployment confirmation.'
+              exit 1
+            fi
+            printf '%s\n' 'mode=diagnostics' >> "$GITHUB_OUTPUT"
+            if [ -n "$DIAGNOSTIC_PHONE_LAST4" ] && ! printf '%s' "$DIAGNOSTIC_PHONE_LAST4" | grep -Eq '^[0-9]{4}(,[0-9]{4}){0,9}$'; then
+              echo '::error::Player diagnostics require one to ten comma-separated four-digit phone suffixes.'
+              exit 1
+            fi
+            exit 0
+          fi
+          if [ "$DEPLOY_CONFIRMATION" != 'DEPLOY_STAGING' ]; then
+            echo '::error::Deployment requires the exact DEPLOY_STAGING confirmation.'
+            exit 1
+          fi
+          if [ "$REQUEST_REF" != 'refs/heads/main' ]; then
+            echo '::error::Staging deployment is allowed only from refs/heads/main.'
+            exit 1
+          fi
+          case "$DEPLOYMENT_PROFILE" in
+            FULL_LIVE_HOME | CLIENT_ASSISTED_VIVA)
+              if ! printf '%s' "$ROUTING_TENANT_KEY" | grep -Eq '^[a-z0-9][a-z0-9-]{1,62}$'; then
+                echo '::error::Viva-backed deployment requires a valid staging routing tenant key.'
+                exit 1
+              fi
+              if ! printf '%s' "$ROUTING_ACTOR_ID" | grep -Eiq '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'; then
+                echo '::error::Viva-backed deployment routing actor ID must be a UUID.'
+                exit 1
+              fi
+              if [ "$ROUTING_APPLY_CONFIRMATION" != 'APPLY_ROUTING_PLAN' ]; then
+                echo '::error::Viva-backed deployment requires the exact APPLY_ROUTING_PLAN confirmation.'
+                exit 1
+              fi
+              if [ -n "$MESSAGING_PLAYER_A_ID$MESSAGING_PLAYER_B_ID" ]; then
+                echo '::error::Viva-backed deployment cannot include messaging-test players.'
+                exit 1
+              fi
+              ;;
+            COMMUNITIES_LEGACY_READ_ONLY)
+              if [ -n "$ROUTING_TENANT_KEY$ROUTING_ACTOR_ID$ROUTING_APPLY_CONFIRMATION$MESSAGING_PLAYER_A_ID$MESSAGING_PLAYER_B_ID" ]; then
+                echo '::error::Communities read-only deployment cannot refresh routing or include messaging-test players.'
+                exit 1
+              fi
+              ;;
+            MESSAGING_TEST)
+              if [ -n "$ROUTING_TENANT_KEY$ROUTING_ACTOR_ID$ROUTING_APPLY_CONFIRMATION" ]; then
+                echo '::error::Messaging-test deployment cannot refresh or activate Live Home routing.'
+                exit 1
+              fi
+              for player_id in "$MESSAGING_PLAYER_A_ID" "$MESSAGING_PLAYER_B_ID"; do
+                if ! printf '%s' "$player_id" | grep -Eiq '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'; then
+                  echo '::error::Messaging-test player IDs must be UUIDs.'
+                  exit 1
+                fi
+              done
+              if [ "$MESSAGING_PLAYER_A_ID" = "$MESSAGING_PLAYER_B_ID" ]; then
+                echo '::error::Messaging-test deployment requires two distinct players.'
+                exit 1
+              fi
+              ;;
+            *)
+              echo '::error::Unknown deployment profile.'
+              exit 1
+              ;;
+          esac
+          printf '%s\n' 'mode=deploy' >> "$GITHUB_OUTPUT"
+
+  set-user-access:
+    needs: validate-request
+    if: ${{ needs.validate-request.outputs.mode == 'user-access' }}
     runs-on: ubuntu-latest
     environment: staging
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
       - name: Join the staging tailnet
@@ -40,15 +237,196 @@ jobs:
           printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
           printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+      - name: Install the reviewed user-access operator
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+        run: |
+          scp deploy/jetson/run-user-access.sh \
+            "phub-deploy@$HOST:/opt/phub/run-user-access.sh.next"
+          scp scripts/set-user-access.ts \
+            "phub-deploy@$HOST:/opt/phub/set-user-access.ts.next"
+          ssh "phub-deploy@$HOST" '
+            set -eu
+            mv /opt/phub/run-user-access.sh.next /opt/phub/run-user-access.sh
+            chmod 0755 /opt/phub/run-user-access.sh
+            mv /opt/phub/set-user-access.ts.next /opt/phub/set-user-access.ts
+            chmod 0644 /opt/phub/set-user-access.ts
+          '
+      - name: Preview the complete user-access replacement without writes
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+          TENANT_KEY: local-padel
+          ACTOR_ID: ${{ inputs.access_actor_id }}
+          TARGET_USER_ID: ${{ inputs.access_target_user_id }}
+          ACCESS_ROLES: ${{ inputs.access_roles }}
+          ACCESS_PERMISSIONS: ${{ inputs.access_permissions }}
+        run: |
+          ssh "phub-deploy@$HOST" /opt/phub/run-user-access.sh \
+            "$TENANT_KEY" "$ACTOR_ID" "$TARGET_USER_ID" \
+            "$ACCESS_ROLES" "$ACCESS_PERMISSIONS" false
+      - name: Apply the audited complete user-access replacement
+        if: ${{ needs.validate-request.outputs.access_apply == 'true' }}
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+          TENANT_KEY: local-padel
+          ACTOR_ID: ${{ inputs.access_actor_id }}
+          TARGET_USER_ID: ${{ inputs.access_target_user_id }}
+          ACCESS_ROLES: ${{ inputs.access_roles }}
+          ACCESS_PERMISSIONS: ${{ inputs.access_permissions }}
+        run: |
+          ssh "phub-deploy@$HOST" /opt/phub/run-user-access.sh \
+            "$TENANT_KEY" "$ACTOR_ID" "$TARGET_USER_ID" \
+            "$ACCESS_ROLES" "$ACCESS_PERMISSIONS" true
+
+  diagnose-home:
+    needs: validate-request
+    if: ${{ needs.validate-request.outputs.mode == 'diagnostics' }}
+    runs-on: ubuntu-latest
+    environment: staging
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Join the staging tailnet
+        uses: tailscale/github-action@v4
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+          ping: ${{ secrets.STAGING_HOST }}
+      - name: Configure audited SSH
+        env:
+          DEPLOY_KEY: ${{ secrets.STAGING_DEPLOY_KEY }}
+          KNOWN_HOSTS: ${{ secrets.STAGING_KNOWN_HOSTS }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+      - name: Inspect active release metadata without values
+        continue-on-error: true
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+        run: |
+          ssh -o ServerAliveInterval=10 -o ServerAliveCountMax=2 "phub-deploy@$HOST" \
+            'sh -s -- /opt/phub/release.env' < deploy/jetson/inspect-release-env.sh
+      - name: Inspect migration 0057 state read-only
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+        run: |
+          checksum_line="$(sha256sum packages/database/migrations/0057_messaging_runtime.sql)"
+          expected_checksum="${checksum_line%% *}"
+          ssh -o ServerAliveInterval=10 -o ServerAliveCountMax=2 "phub-deploy@$HOST" \
+            sh -s -- "$expected_checksum" < deploy/jetson/diagnose-migration-0057.sh
+      - name: Inspect selected test-player delegations read-only
+        if: ${{ inputs.diagnostic_phone_last4 != '' }}
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+          DIAGNOSTIC_PHONE_LAST4: ${{ inputs.diagnostic_phone_last4 }}
+        run: |
+          ssh -o ServerAliveInterval=10 -o ServerAliveCountMax=2 "phub-deploy@$HOST" \
+            sh -s -- "$DIAGNOSTIC_PHONE_LAST4" < deploy/jetson/diagnose-test-player-delegations.sh
+      - name: Inspect recent messaging API failures read-only
+        if: ${{ inputs.diagnostic_phone_last4 != '' }}
+        continue-on-error: true
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+        run: |
+          ssh -o ServerAliveInterval=10 -o ServerAliveCountMax=2 "phub-deploy@$HOST" '
+            set +e
+            docker logs --since 45m --tail 600 phub-staging-api-1 2>&1 \
+              | sed -E "s/(Bearer )[A-Za-z0-9._-]+/\1[REDACTED]/g" \
+              | grep -Ei "conversation|messaging|error|failed|correlation" \
+              | tail -120
+            exit 0
+          '
+      - name: Recover leaked udisks memory
+        if: ${{ inputs.recover_udisks }}
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+        run: |
+          ssh -o ServerAliveInterval=10 -o ServerAliveCountMax=2 "phub-deploy@$HOST" '
+            set -eu
+            echo udisks_before
+            systemctl status udisks2 --no-pager || true
+            pid="$(pidof udisksd || true)"
+            if [ -n "$pid" ]; then
+              grep -E "^(Rss|Pss|Swap):" "/proc/$pid/smaps_rollup" || true
+            fi
+            sudo -n systemctl restart udisks2
+            sleep 5
+            echo udisks_after
+            systemctl status udisks2 --no-pager || true
+            free -m
+          '
       - name: Inspect live Home source readiness
         env:
           HOST: ${{ secrets.STAGING_HOST }}
         run: |
-          scp deploy/jetson/diagnose-live-home.sh "phub-deploy@$HOST:/opt/phub/diagnose-live-home.sh"
-          ssh "phub-deploy@$HOST" 'sh /opt/phub/diagnose-live-home.sh'
+          ssh -o ServerAliveInterval=10 -o ServerAliveCountMax=2 "phub-deploy@$HOST" '
+            set +e
+            echo host_resources
+            uptime
+            free -m
+            df -h /
+            echo vmstat
+            timeout 8 vmstat 1 5
+            echo top_processes
+            ps -eo state,pid,ppid,comm,%cpu,%mem,rss --sort=-%cpu | head -25
+            echo docker_memory
+            timeout 10 docker stats --no-stream --format \
+              "container={{.Name}} cpu={{.CPUPerc}} memory={{.MemUsage}} block={{.BlockIO}}"
+            echo unhealthy_healthchecks
+            for container in phub-staging-api-1 phub-staging-realtime-1 phub-staging-worker-1; do
+              docker inspect --format \
+                "container={{.Name}} status={{.State.Health.Status}} failing_streak={{.State.Health.FailingStreak}} checks={{range .State.Health.Log}}{{.End}} exit={{.ExitCode}} output={{json .Output}}; {{end}}" \
+                "$container"
+            done
+            exit 0
+          '
+      - name: Inspect public staging ingress
+        env:
+          BASE_URL: ${{ vars.STAGING_BASE_URL }}
+        run: |
+          set +e
+          for path in /healthz /manifest.json /health/live /health/ready; do
+            echo "public_path=$path"
+            curl \
+              --connect-timeout 10 \
+              --max-time 15 \
+              --silent \
+              --show-error \
+              --write-out '\npublic_http_status=%{http_code}\n' \
+              "${BASE_URL%/}$path"
+          done
+          canonical_base_url=https://lk.nano.padlhub.su
+          manifest="$(curl --fail --silent --show-error --max-time 15 "$canonical_base_url/manifest.json")"
+          entry_path="$(printf '%s' "$manifest" | node -e '
+            let input = "";
+            process.stdin.setEncoding("utf8");
+            process.stdin.on("data", (chunk) => { input += chunk; });
+            process.stdin.on("end", () => process.stdout.write(JSON.parse(input).entry));
+          ')"
+          style_path="$(printf '%s' "$manifest" | node -e '
+            let input = "";
+            process.stdin.setEncoding("utf8");
+            process.stdin.on("data", (chunk) => { input += chunk; });
+            process.stdin.on("end", () => process.stdout.write(JSON.parse(input).styles[0]));
+          ')"
+          for asset_path in "$entry_path" "$style_path"; do
+            curl \
+              --fail \
+              --silent \
+              --show-error \
+              --range 0-65535 \
+              --max-time 20 \
+              --output /dev/null \
+              --write-out "hop=github-public path=${asset_path} status=%{http_code} bytes=%{size_download} speed=%{speed_download} seconds=%{time_total}\n" \
+              "$canonical_base_url$asset_path"
+          done
+          exit 0
 
   build:
-    if: ${{ github.event_name == 'push' || !inputs.diagnose_home }}
+    needs: validate-request
+    if: ${{ needs.validate-request.outputs.mode == 'deploy' }}
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -83,9 +461,12 @@ jobs:
           retention-days: 30
 
   deploy:
-    needs: build
+    needs: [validate-request, build]
+    if: ${{ always() && needs.validate-request.outputs.mode == 'deploy' && needs.build.result == 'success' }}
     runs-on: ubuntu-latest
     environment: staging
+    env:
+      STAGING_RELEASE_BACKUP_DIR: /opt/phub/backups/releases/pre-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -111,6 +492,26 @@ jobs:
           printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
           printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+      - id: application-backup
+        name: Preserve the active digest-pinned application release
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+        run: |
+          scp deploy/jetson/backup-application.sh \
+            "phub-deploy@$HOST:/opt/phub/backup-application.sh.next"
+          scp deploy/jetson/rollback-application.sh \
+            "phub-deploy@$HOST:/opt/phub/rollback-application.sh.next"
+          ssh "phub-deploy@$HOST" '
+            set -eu
+            install -m 755 /opt/phub/backup-application.sh.next /opt/phub/backup-application.sh
+            install -m 755 /opt/phub/rollback-application.sh.next /opt/phub/rollback-application.sh
+            rm -f /opt/phub/backup-application.sh.next /opt/phub/rollback-application.sh.next
+          '
+          ssh "phub-deploy@$HOST" \
+            "PHUB_BACKUP_ROOT=/opt/phub/backups/releases sh /opt/phub/backup-application.sh '$STAGING_RELEASE_BACKUP_DIR' BACKUP_STAGING_RELEASE"
+          ssh "phub-deploy@$HOST" \
+            "PHUB_ROLLBACK_BACKUP_ROOT=/opt/phub/backups/releases sh /opt/phub/rollback-application.sh '$STAGING_RELEASE_BACKUP_DIR' --validate-only"
+          printf '%s\n' 'ready=true' >> "$GITHUB_OUTPUT"
       - name: Install release and ingress definitions
         env:
           HOST: ${{ secrets.STAGING_HOST }}
@@ -118,8 +519,51 @@ jobs:
           scp deploy/compose.staging.yaml "phub-deploy@$HOST:/opt/phub/compose.yaml"
           scp deploy/jetson/nginx/default.conf "phub-deploy@$HOST:/opt/phub/nginx/default.conf"
           scp deploy/jetson/activate-live-home.sh "phub-deploy@$HOST:/opt/phub/activate-live-home.sh"
+          scp deploy/jetson/activate-communities-legacy-read-only.sh \
+            "phub-deploy@$HOST:/opt/phub/activate-communities-legacy-read-only.sh"
+          scp deploy/jetson/verify-communities-legacy-read-only.sh \
+            "phub-deploy@$HOST:/opt/phub/verify-communities-legacy-read-only.sh"
+          scp deploy/jetson/activate-client-assisted-viva.sh \
+            "phub-deploy@$HOST:/opt/phub/activate-client-assisted-viva.sh"
+          scp deploy/jetson/run-client-routing-plan.sh \
+            "phub-deploy@$HOST:/opt/phub/run-client-routing-plan.sh.next"
+          scp scripts/set-client-routing-plan.ts \
+            "phub-deploy@$HOST:/opt/phub/set-client-routing-plan.ts.next"
+          scp deploy/jetson/verify-home-base.sh \
+            "phub-deploy@$HOST:/opt/phub/verify-home-base.sh"
           scp deploy/jetson/verify-live-staging-data.sh \
             "phub-deploy@$HOST:/opt/phub/verify-live-staging-data.sh"
+          scp deploy/jetson/verify-client-assisted-viva.sh \
+            "phub-deploy@$HOST:/opt/phub/verify-client-assisted-viva.sh"
+          scp deploy/jetson/verify-cup-integrations.sh \
+            "phub-deploy@$HOST:/opt/phub/verify-cup-integrations.sh"
+          scp deploy/jetson/verify-messaging-test-release.sh \
+            "phub-deploy@$HOST:/opt/phub/verify-messaging-test-release.sh"
+          scp deploy/jetson/tls-ingress/Caddyfile \
+            "phub-deploy@$HOST:/opt/phub/tls-ingress/Caddyfile.next"
+          ssh "phub-deploy@$HOST" '
+            set -eu
+            mv /opt/phub/run-client-routing-plan.sh.next /opt/phub/run-client-routing-plan.sh
+            chmod 0755 /opt/phub/run-client-routing-plan.sh
+            mv /opt/phub/set-client-routing-plan.ts.next /opt/phub/set-client-routing-plan.ts
+            chmod 0644 /opt/phub/set-client-routing-plan.ts
+            auth_env=/opt/phub/staging.auth.env
+            auth_env_tmp="${auth_env}.$$"
+            umask 077
+            trap "rm -f \"$auth_env_tmp\"" EXIT HUP INT TERM
+            {
+              printf "%s\n" "CORS_ORIGINS=https://lk.nano.padlhub.su"
+              printf "%s\n" "VIVA_OAUTH_EXISTING_SUBJECT_BOOTSTRAP_ENABLED=true"
+              printf "%s\n" "VIVA_DIRECT_READ_ENABLED=false"
+              printf "%s\n" "VIVA_END_USER_API_URL=https://api.vivacrm.ru/end-user/api"
+              printf "%s\n" "VIVA_OAUTH_REDIRECT_URI=https://lk.nano.padlhub.su/user/api/v1/local-padel/auth/viva/callback"
+              printf "%s\n" "VIVA_OAUTH_SUCCESS_REDIRECT_URL=https://lk.nano.padlhub.su/"
+              printf "%s\n" "HOME_BASE_SYNC_ENABLED=true"
+            } > "$auth_env_tmp"
+            chmod 600 "$auth_env_tmp"
+            mv "$auth_env_tmp" "$auth_env"
+            trap - EXIT HUP INT TERM
+          '
           {
             echo "REGISTRY=ghcr.io/z6v6e6r"
             echo "WEB_IMAGE_DIGEST=$(cat digests/web)"
@@ -133,19 +577,30 @@ jobs:
           } > release.env
           scp release.env "phub-deploy@$HOST:/opt/phub/release.env"
       - name: Verify real staging source configuration
+        if: ${{ inputs.deployment_profile != 'COMMUNITIES_LEGACY_READ_ONLY' }}
         env:
           HOST: ${{ secrets.STAGING_HOST }}
         run: ssh "phub-deploy@$HOST" 'sh /opt/phub/verify-live-staging-data.sh preflight'
+      - name: Verify Communities legacy read-only source configuration
+        if: ${{ inputs.deployment_profile == 'COMMUNITIES_LEGACY_READ_ONLY' }}
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+        run: ssh "phub-deploy@$HOST" 'sh /opt/phub/verify-communities-legacy-read-only.sh preflight'
       - name: Pull, migrate and deploy the same image digests
         env:
           HOST: ${{ secrets.STAGING_HOST }}
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DEPLOYMENT_PROFILE: ${{ inputs.deployment_profile }}
         run: |
           printf '%s' "$GHCR_TOKEN" | ssh "phub-deploy@$HOST" '
             set -eu
+            deployment_profile="${{ inputs.deployment_profile }}"
             trap "docker logout ghcr.io >/dev/null 2>&1 || true" EXIT
             docker login ghcr.io --username "${{ github.actor }}" --password-stdin
             cd /opt/phub
+            if [ "$deployment_profile" != COMMUNITIES_LEGACY_READ_ONLY ]; then
+              rm -f /opt/phub/staging.communities.env
+            fi
             compose() {
               docker compose --env-file infrastructure.env --env-file release.env "$@"
             }
@@ -186,7 +641,14 @@ jobs:
             infrastructure exec -T postgres sh -ec \
               "psql -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -Atc \"select filename from public.schema_migrations\"" \
               | grep -Fx "$latest_migration"
-            compose up -d --remove-orphans
+            if [ "$deployment_profile" = COMMUNITIES_LEGACY_READ_ONLY ]; then
+              compose up -d --remove-orphans web api
+              compose stop worker realtime
+              [ -z "$(compose ps --status running -q worker)" ]
+              [ -z "$(compose ps --status running -q realtime)" ]
+            else
+              compose up -d --remove-orphans
+            fi
             # The ingress configuration is bind-mounted. Recreate this one
             # stateless container so it loads the newly copied configuration.
             docker compose --env-file infrastructure.env -f compose.infrastructure.yaml up -d --force-recreate nginx
@@ -200,7 +662,13 @@ jobs:
             ready=0
             attempt=0
             while [ "$attempt" -lt 36 ]; do
-              if service_is_healthy api \
+              if [ "$deployment_profile" = COMMUNITIES_LEGACY_READ_ONLY ] \
+                && service_is_healthy api; then
+                ready=1
+                break
+              fi
+              if [ "$deployment_profile" != COMMUNITIES_LEGACY_READ_ONLY ] \
+                && service_is_healthy api \
                 && service_is_healthy realtime \
                 && service_is_healthy worker; then
                 ready=1
@@ -215,14 +683,150 @@ jobs:
               exit 1
             fi
           '
+      - name: Promote canonical Nano TLS ingress
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+          DEPLOYMENT_PROFILE: ${{ inputs.deployment_profile }}
+        run: |
+          ssh "phub-deploy@$HOST" '
+            set -eu
+            deployment_profile="${{ inputs.deployment_profile }}"
+            cd /opt/phub/tls-ingress
+            backup_dir=/opt/phub/backups
+            backup_timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+            backup_path="$backup_dir/Caddyfile-pre-${{ github.sha }}-$backup_timestamp"
+            mkdir -p "$backup_dir"
+            test -s Caddyfile.next
+            cp Caddyfile "$backup_path"
+            mv Caddyfile.next Caddyfile
+
+            rollback_caddy() {
+              cp "$backup_path" Caddyfile
+              docker compose up -d --force-recreate caddy >/dev/null 2>&1 || true
+            }
+
+            if ! docker compose run --rm --no-deps caddy caddy validate --config /etc/caddy/Caddyfile; then
+              rollback_caddy
+              exit 1
+            fi
+            if ! docker compose up -d --force-recreate caddy; then
+              rollback_caddy
+              exit 1
+            fi
+
+            probe_canonical_ready() {
+              curl --fail --silent \
+                --connect-timeout 2 \
+                --max-time 5 \
+                --resolve lk.nano.padlhub.su:443:127.0.0.1 \
+                "$1" >/dev/null
+            }
+
+            ingress_ready=0
+            attempt=0
+            while [ "$attempt" -lt 15 ]; do
+              if [ "$deployment_profile" = COMMUNITIES_LEGACY_READ_ONLY ] \
+                && probe_canonical_ready https://lk.nano.padlhub.su/health/ready; then
+                ingress_ready=1
+                break
+              fi
+              if [ "$deployment_profile" != COMMUNITIES_LEGACY_READ_ONLY ] \
+                && probe_canonical_ready https://lk.nano.padlhub.su/health/ready \
+                && probe_canonical_ready https://lk.nano.padlhub.su/realtime/health/ready; then
+                ingress_ready=1
+                break
+              fi
+              attempt=$((attempt + 1))
+              sleep 2
+            done
+            if [ "$ingress_ready" -ne 1 ]; then
+              curl --fail --silent --show-error --connect-timeout 2 --max-time 5 \
+                --resolve lk.nano.padlhub.su:443:127.0.0.1 \
+                https://lk.nano.padlhub.su/health/ready >/dev/null || true
+              if [ "$deployment_profile" != COMMUNITIES_LEGACY_READ_ONLY ]; then
+                curl --fail --silent --show-error --connect-timeout 2 --max-time 5 \
+                  --resolve lk.nano.padlhub.su:443:127.0.0.1 \
+                  https://lk.nano.padlhub.su/realtime/health/ready >/dev/null || true
+              fi
+              rollback_caddy
+              exit 1
+            fi
+            location="$(curl --silent --show-error --output /dev/null --write-out "%{redirect_url}" \
+              -H "Host: 185.155.18.146" http://127.0.0.1/games)"
+            if test "$location" != "https://lk.nano.padlhub.su/games"; then
+              rollback_caddy
+              exit 1
+            fi
+            echo "Verified TLS ingress backup: $backup_path"
+          '
+      - name: Verify local HomeBase projections
+        if: ${{ inputs.deployment_profile != 'COMMUNITIES_LEGACY_READ_ONLY' }}
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+        run: ssh "phub-deploy@$HOST" 'sh /opt/phub/verify-home-base.sh'
+      - name: Refresh the audited routing plan for browser-assisted Viva reads
+        if: ${{ inputs.deployment_profile == 'FULL_LIVE_HOME' || inputs.deployment_profile == 'CLIENT_ASSISTED_VIVA' }}
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+          TENANT_KEY: ${{ inputs.routing_tenant_key }}
+          ACTOR_ID: ${{ inputs.routing_actor_id }}
+          DEPLOYMENT_PROFILE: ${{ inputs.deployment_profile }}
+        run: |
+          operation_id="routing-mixed-deploy-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          reason="staging-${DEPLOYMENT_PROFILE}-${GITHUB_SHA}"
+          ssh "phub-deploy@$HOST" /opt/phub/run-client-routing-plan.sh \
+            "$TENANT_KEY" "$ACTOR_ID" "$operation_id" "$operation_id" "$reason" false
+          ssh "phub-deploy@$HOST" /opt/phub/run-client-routing-plan.sh \
+            "$TENANT_KEY" "$ACTOR_ID" "$operation_id" "$operation_id" "$reason" true
       - name: Activate and verify live Home projection
+        if: ${{ inputs.deployment_profile == 'FULL_LIVE_HOME' }}
         env:
           HOST: ${{ secrets.STAGING_HOST }}
         run: ssh "phub-deploy@$HOST" 'sh /opt/phub/activate-live-home.sh'
+      - name: Activate and verify Communities legacy read-only projection
+        if: ${{ inputs.deployment_profile == 'COMMUNITIES_LEGACY_READ_ONLY' }}
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+        run: ssh "phub-deploy@$HOST" 'sh /opt/phub/activate-communities-legacy-read-only.sh'
+      - name: Activate and verify client-assisted Viva reads independently of Home sync
+        if: ${{ inputs.deployment_profile == 'CLIENT_ASSISTED_VIVA' }}
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+          TENANT_KEY: ${{ inputs.routing_tenant_key }}
+        run: |
+          ssh "phub-deploy@$HOST" sh /opt/phub/activate-client-assisted-viva.sh "$TENANT_KEY"
+          ssh "phub-deploy@$HOST" sh /opt/phub/verify-client-assisted-viva.sh "$TENANT_KEY"
       - name: Verify real staging identities and Games
+        if: ${{ inputs.deployment_profile == 'FULL_LIVE_HOME' }}
         env:
           HOST: ${{ secrets.STAGING_HOST }}
         run: ssh "phub-deploy@$HOST" 'sh /opt/phub/verify-live-staging-data.sh'
+      - name: Verify CUP campaigns and notifications binding
+        if: ${{ inputs.deployment_profile == 'FULL_LIVE_HOME' }}
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+        run: ssh "phub-deploy@$HOST" 'sh /opt/phub/verify-cup-integrations.sh local-padel'
+      - name: Verify messaging test release and preserve the current Home mode
+        if: ${{ inputs.deployment_profile == 'MESSAGING_TEST' }}
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+          PLAYER_A_ID: ${{ inputs.messaging_player_a_id }}
+          PLAYER_B_ID: ${{ inputs.messaging_player_b_id }}
+        run: |
+          checksum_line="$(sha256sum packages/database/migrations/0057_messaging_runtime.sql)"
+          expected_checksum="${checksum_line%% *}"
+          ssh "phub-deploy@$HOST" sh -s -- "$STAGING_RELEASE_BACKUP_DIR" <<'REMOTE'
+            set -eu
+            backup_dir="$1"
+            if [ -f "$backup_dir/staging.override.env" ]; then
+              cmp "$backup_dir/staging.override.env" /opt/phub/staging.override.env
+            else
+              test -f "$backup_dir/staging.override.env.absent"
+              test ! -e /opt/phub/staging.override.env
+            fi
+          REMOTE
+          ssh "phub-deploy@$HOST" sh /opt/phub/verify-messaging-test-release.sh \
+            local-padel "$PLAYER_A_ID" "$PLAYER_B_ID" "$expected_checksum"
       - name: Verify the web entrypoint
         env:
           SMOKE_BASE_URL: ${{ vars.STAGING_BASE_URL }}
@@ -244,3 +848,26 @@ jobs:
         env:
           SMOKE_BASE_URL: ${{ vars.STAGING_BASE_URL }}
         run: npm ci --ignore-scripts && npm run smoke
+      - name: Record production promotion eligibility
+        if: ${{ inputs.deployment_profile == 'FULL_LIVE_HOME' }}
+        run: |
+          install -d -m 700 promotion-eligibility
+          {
+            echo 'PROFILE=FULL_LIVE_HOME'
+            echo "RELEASE=$GITHUB_SHA"
+            echo "STAGING_RUN_ID=$GITHUB_RUN_ID"
+          } > promotion-eligibility/production-promotion-eligibility.env
+          chmod 600 promotion-eligibility/production-promotion-eligibility.env
+      - uses: actions/upload-artifact@v4
+        if: ${{ inputs.deployment_profile == 'FULL_LIVE_HOME' }}
+        with:
+          name: production-promotion-eligibility
+          path: promotion-eligibility/production-promotion-eligibility.env
+          retention-days: 30
+      - name: Roll back a failed staging application release
+        if: ${{ (failure() || cancelled()) && steps.application-backup.outputs.ready == 'true' }}
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+        run: |
+          ssh "phub-deploy@$HOST" \
+            "PHUB_ROLLBACK_BACKUP_ROOT=/opt/phub/backups/releases sh /opt/phub/rollback-application.sh '$STAGING_RELEASE_BACKUP_DIR' --confirm=ROLLBACK_STAGING_RELEASE"

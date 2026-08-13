@@ -47,15 +47,36 @@ export interface VivaIdentityMetric {
   readonly outcome: 'success' | 'invalid' | 'rate_limited' | 'unavailable';
   readonly status?: number;
   readonly correlationId?: string;
+  readonly failureStage?:
+    | 'token_request'
+    | 'token_payload'
+    | 'refresh_token'
+    | 'access_token'
+    | 'profile_request'
+    | 'profile_response'
+    | 'profile_payload';
   readonly durationMs: number;
   readonly circuitState: 'closed' | 'open';
 }
 
 type VivaIdentityMetricInput = Omit<VivaIdentityMetric, 'durationMs' | 'circuitState'>;
 
-class VivaProfileReadError extends IdentityProviderError {
-  public constructor(public readonly status?: number) {
+class VivaOAuthStageError extends IdentityProviderError {
+  public constructor(
+    public readonly failureStage: NonNullable<VivaIdentityMetric['failureStage']>,
+    public readonly status?: number,
+  ) {
     super('AUTH_PROVIDER_UNAVAILABLE');
+    this.name = 'VivaOAuthStageError';
+  }
+}
+
+class VivaProfileReadError extends VivaOAuthStageError {
+  public constructor(
+    status: number | undefined,
+    failureStage: 'profile_request' | 'profile_response' | 'profile_payload',
+  ) {
+    super(failureStage, status);
     this.name = 'VivaProfileReadError';
   }
 }
@@ -234,14 +255,16 @@ export class VivaIdentityProvider implements IdentityProviderPort, VivaOAuthProv
         {
           method: 'GET',
           headers: {
+            Accept: 'application/json',
             Authorization: `Bearer ${accessToken}`,
+            'X-Correlation-ID': correlationId,
           },
         },
         true,
       );
     } catch {
       this.emit({ operation: 'profile_read', outcome: 'unavailable', correlationId }, startedAt);
-      throw new VivaProfileReadError();
+      throw new VivaProfileReadError(undefined, 'profile_request');
     }
     if (!profileResponse.ok) {
       this.emit(
@@ -253,11 +276,13 @@ export class VivaIdentityProvider implements IdentityProviderPort, VivaOAuthProv
         },
         startedAt,
       );
-      throw new VivaProfileReadError(profileResponse.status);
+      throw new VivaProfileReadError(profileResponse.status, 'profile_response');
     }
     try {
       const profile = profileResponseSchema.parse(await profileResponse.json());
-      if (profile.id === undefined) throw new VivaProfileReadError(profileResponse.status);
+      if (profile.id === undefined) {
+        throw new VivaProfileReadError(profileResponse.status, 'profile_payload');
+      }
       this.emit(
         {
           operation: 'profile_read',
@@ -278,7 +303,7 @@ export class VivaIdentityProvider implements IdentityProviderPort, VivaOAuthProv
         },
         startedAt,
       );
-      throw new VivaProfileReadError(profileResponse.status);
+      throw new VivaProfileReadError(profileResponse.status, 'profile_payload');
     }
   }
 
@@ -299,11 +324,11 @@ export class VivaIdentityProvider implements IdentityProviderPort, VivaOAuthProv
       }));
     } catch {
       this.emit({ operation: 'jwt_verify', outcome: 'unavailable', correlationId }, startedAt);
-      throw new IdentityProviderError('AUTH_PROVIDER_UNAVAILABLE');
+      throw new VivaOAuthStageError('access_token');
     }
     if (payload.azp !== this.options.clientId || typeof payload.sub !== 'string' || !payload.sub) {
       this.emit({ operation: 'jwt_verify', outcome: 'unavailable', correlationId }, startedAt);
-      throw new IdentityProviderError('AUTH_PROVIDER_UNAVAILABLE');
+      throw new VivaOAuthStageError('access_token');
     }
     this.emit({ operation: 'jwt_verify', outcome: 'success', correlationId }, startedAt);
     let profile: Awaited<ReturnType<VivaIdentityProvider['resolveVivaProfile']>>;
@@ -417,7 +442,15 @@ export class VivaIdentityProvider implements IdentityProviderPort, VivaOAuthProv
         },
       );
     } catch {
-      this.emit({ operation: 'oauth_exchange', outcome: 'unavailable' }, startedAt);
+      this.emit(
+        {
+          operation: 'oauth_exchange',
+          outcome: 'unavailable',
+          correlationId: input.correlationId,
+          failureStage: 'token_request',
+        },
+        startedAt,
+      );
       throw new IdentityProviderError('AUTH_PROVIDER_UNAVAILABLE');
     }
     if (response.status === 400 || response.status === 401) {
@@ -441,8 +474,35 @@ export class VivaIdentityProvider implements IdentityProviderPort, VivaOAuthProv
       );
       throw new IdentityProviderError('AUTH_PROVIDER_UNAVAILABLE');
     }
-    const tokens = tokenResponseSchema.parse(await response.json());
-    if (!tokens.refresh_token) throw new IdentityProviderError('AUTH_PROVIDER_UNAVAILABLE');
+    let tokens: z.infer<typeof tokenResponseSchema>;
+    try {
+      tokens = tokenResponseSchema.parse(await response.json());
+    } catch {
+      this.emit(
+        {
+          operation: 'oauth_exchange',
+          outcome: 'unavailable',
+          status: response.status,
+          correlationId: input.correlationId,
+          failureStage: 'token_payload',
+        },
+        startedAt,
+      );
+      throw new IdentityProviderError('AUTH_PROVIDER_UNAVAILABLE');
+    }
+    if (!tokens.refresh_token) {
+      this.emit(
+        {
+          operation: 'oauth_exchange',
+          outcome: 'unavailable',
+          status: response.status,
+          correlationId: input.correlationId,
+          failureStage: 'refresh_token',
+        },
+        startedAt,
+      );
+      throw new IdentityProviderError('AUTH_PROVIDER_UNAVAILABLE');
+    }
     this.emit(
       {
         operation: 'oauth_token_exchange',
@@ -452,11 +512,28 @@ export class VivaIdentityProvider implements IdentityProviderPort, VivaOAuthProv
       },
       startedAt,
     );
-    const { identity, identityResolution } = await this.resolveOAuthIdentity(
-      tokens.access_token,
-      input.providerTenantKey,
-      input.correlationId,
-    );
+    let resolvedIdentity: Awaited<ReturnType<VivaIdentityProvider['resolveOAuthIdentity']>>;
+    try {
+      resolvedIdentity = await this.resolveOAuthIdentity(
+        tokens.access_token,
+        input.providerTenantKey,
+        input.correlationId,
+      );
+    } catch (error) {
+      const stageError = error instanceof VivaOAuthStageError ? error : undefined;
+      this.emit(
+        {
+          operation: 'oauth_exchange',
+          outcome: 'unavailable',
+          correlationId: input.correlationId,
+          failureStage: stageError?.failureStage ?? 'access_token',
+          ...(stageError?.status ? { status: stageError.status } : {}),
+        },
+        startedAt,
+      );
+      throw new IdentityProviderError('AUTH_PROVIDER_UNAVAILABLE');
+    }
+    const { identity, identityResolution } = resolvedIdentity;
     this.emit(
       { operation: 'oauth_exchange', outcome: 'success', status: response.status },
       startedAt,

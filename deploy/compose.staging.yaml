@@ -3,6 +3,8 @@ name: phub-staging
 x-runtime: &runtime
   env_file:
     - path: ${RUNTIME_ENV_FILE:-/etc/phub/staging.env}
+    - path: ${RUNTIME_AUTH_ENV_FILE:-/opt/phub/staging.auth.env}
+      required: false
     - path: ${RUNTIME_OVERRIDE_ENV_FILE:-/opt/phub/staging.override.env}
       required: false
     - path: ${RUNTIME_GAMES_ENV_FILE:-/opt/phub/staging.games.env}
@@ -34,6 +36,16 @@ services:
 
   api:
     <<: *runtime
+    env_file:
+      - path: ${RUNTIME_ENV_FILE:-/etc/phub/staging.env}
+      - path: ${RUNTIME_AUTH_ENV_FILE:-/opt/phub/staging.auth.env}
+        required: false
+      - path: ${RUNTIME_OVERRIDE_ENV_FILE:-/opt/phub/staging.override.env}
+        required: false
+      - path: ${RUNTIME_GAMES_ENV_FILE:-/opt/phub/staging.games.env}
+        required: false
+      - path: ${RUNTIME_COMMUNITIES_ENV_FILE:-/opt/phub/staging.communities.env}
+        required: false
     image: ${REGISTRY}/phub-api@${API_IMAGE_DIGEST}
     environment:
       <<: *object-storage

@@ -10,6 +10,7 @@ export async function publishOutboxBatch(options: {
   readonly logger: Logger;
   readonly tenantId: string;
   readonly batchSize?: number;
+  readonly confirmTimeoutMs: number;
 }): Promise<number> {
   const client = await options.pool.connect();
   try {
@@ -27,7 +28,11 @@ export async function publishOutboxBatch(options: {
     );
 
     if (result.rowCount && result.rowCount > 0) {
-      await publishOutboxRows({ channel: options.channel, rows: result.rows });
+      await publishOutboxRows({
+        channel: options.channel,
+        rows: result.rows,
+        confirmTimeoutMs: options.confirmTimeoutMs,
+      });
       await client.query(
         'update audit.outbox_events set published_at = now() where id = any($1::uuid[])',
         [result.rows.map((row) => row.id)],

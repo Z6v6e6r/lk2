@@ -17,10 +17,13 @@
     }
 }
 
-# Viva still has this exact callback origin. Remove the HTTP compatibility site
-# only after the provider accepts the HTTPS redirect URI.
+# Viva still has this exact callback origin. Bounce it to the canonical HTTPS
+# host before the API consumes the one-time state, so the host-only refresh
+# cookie is issued for lk.nano.padlhub.su instead of the legacy IP.
 http://185.155.18.146 {
-    reverse_proxy nginx:80
+    @viva_callback path /user/api/v1/*/auth/viva/callback
+    redir @viva_callback https://lk.nano.padlhub.su{uri} 302
+    redir https://lk.nano.padlhub.su{uri} permanent
 }
 
 nano.padlhub.su {
@@ -40,7 +43,17 @@ api.nano.padlhub.su {
 
 cup.nano.padlhub.su {
     import nano_security
-    reverse_proxy showcase-proxy:80
+
+    # The CUP browser remains a PadlHub client. Keep authenticated API calls
+    # same-origin; all other paths stay on the CUP showcase.
+    @padlhub_api path /user/api/* /admin/api/* /public/api/*
+    handle @padlhub_api {
+        reverse_proxy api:3000
+    }
+
+    handle {
+        reverse_proxy showcase-proxy:80
+    }
 }
 
 swagger.nano.padlhub.su {

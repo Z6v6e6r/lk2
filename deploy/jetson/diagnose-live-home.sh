@@ -4,6 +4,12 @@ set -eu
 
 cd /opt/phub
 
+auth_correlation_id='fd11bad9-4441-441e-b474-a0a51d8e00bf'
+
+compose() {
+  docker compose --env-file infrastructure.env --env-file release.env "$@"
+}
+
 infrastructure() {
   docker compose --env-file infrastructure.env -f compose.infrastructure.yaml "$@"
 }
@@ -13,6 +19,165 @@ sql() {
     'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -Atc "$1"' \
     sh "$1"
 }
+
+api_container_id="$(compose ps -q api)"
+test -n "$api_container_id"
+
+echo "runtime_status"
+compose ps api worker realtime web
+infrastructure ps nginx
+docker inspect \
+  --format 'nginx_status={{.State.Status}} nginx_ports={{json .NetworkSettings.Ports}}' \
+  "$(infrastructure ps -q nginx)"
+
+echo "internal_ingress"
+infrastructure exec -T nginx wget -qO- http://127.0.0.1/healthz
+echo
+infrastructure exec -T nginx wget -qO- http://127.0.0.1/manifest.json
+echo
+infrastructure exec -T nginx wget -qO- http://127.0.0.1/health/live
+echo
+infrastructure exec -T nginx wget -qO- http://127.0.0.1/health/ready
+echo
+
+echo "host_resources"
+uptime
+free -m
+df -h /
+docker system df
+docker stats --no-stream --format \
+  'container={{.Name}} cpu={{.CPUPerc}} memory={{.MemUsage}} net={{.NetIO}} block={{.BlockIO}}'
+
+manifest="$(infrastructure exec -T nginx wget -qO- http://127.0.0.1/manifest.json)"
+entry_path="$(printf '%s\n' "$manifest" | sed -n 's/.*"entry": "\([^"]*\)".*/\1/p')"
+style_path="$(printf '%s\n' "$manifest" | sed -n 's/.*"\(\/assets\/index-[^"]*\.css\)".*/\1/p' | head -1)"
+test -n "$entry_path"
+test -n "$style_path"
+
+echo "internal_asset_delivery"
+for asset_path in "$entry_path" "$style_path"; do
+  infrastructure exec -T nginx sh -ec '
+    asset_path="$1"
+    output="$(mktemp)"
+    trap '\''rm -f "$output"'\'' EXIT HUP INT TERM
+    started="$(date +%s)"
+    outcome=ok
+    if ! timeout 30 wget -qO "$output" "http://web:8080${asset_path}"; then
+      outcome=timeout_or_error
+    fi
+    finished="$(date +%s)"
+    echo "hop=web-direct path=${asset_path} result=${outcome} bytes=$(wc -c < "$output") seconds=$((finished - started))"
+  ' sh "$asset_path"
+
+  if ! curl \
+    --resolve lk.nano.padlhub.su:443:127.0.0.1 \
+    --fail \
+    --insecure \
+    --silent \
+    --show-error \
+    --max-time 30 \
+    --output /dev/null \
+    --write-out "hop=caddy-loopback path=${asset_path} status=%{http_code} bytes=%{size_download} speed=%{speed_download} seconds=%{time_total}\n" \
+    "https://lk.nano.padlhub.su${asset_path}"; then
+    echo "hop=caddy-loopback path=${asset_path} result=timeout_or_error"
+  fi
+done
+
+echo "auth_runtime"
+compose exec -T api node -e "
+  const env = process.env;
+  const decodedKeyBytes = (() => {
+    try { return Buffer.from(env.VIVA_DELEGATION_ENCRYPTION_KEY || '', 'base64url').length; }
+    catch { return -1; }
+  })();
+  console.log(JSON.stringify({
+    appEnv: env.APP_ENV,
+    vivaMode: env.VIVA_MODE,
+    oauthEnabled: env.VIVA_OAUTH_ENABLED,
+    redirectUri: env.VIVA_OAUTH_REDIRECT_URI,
+    successRedirectUrl: env.VIVA_OAUTH_SUCCESS_REDIRECT_URL,
+    oauthScopes: env.VIVA_OAUTH_SCOPES,
+    delegationKeyBytes: decodedKeyBytes,
+    delegationKeyVersionPresent: Boolean(env.VIVA_DELEGATION_KEY_VERSION)
+  }));
+"
+
+echo "auth_audit"
+sql "
+  select concat(action, '|', resource_type, '|', result)
+    from audit.audit_log
+   where correlation_id = '$auth_correlation_id'
+   order by occurred_at
+"
+
+echo "auth_acceptances"
+sql "
+  select concat(document_kind, '|', source)
+    from legal.document_acceptances
+   where correlation_id = '$auth_correlation_id'
+   order by document_kind
+"
+
+echo "auth_request_log"
+docker logs "$api_container_id" --since 3h 2>&1 \
+  | grep -F "$auth_correlation_id" \
+  | sed -E \
+      -e 's/(code=)[^&" ]+/\1<redacted>/g' \
+      -e 's/(state=)[^&" ]+/\1<redacted>/g' \
+      -e 's/("(access|refresh)?[Tt]oken"[[:space:]]*:[[:space:]]*")[^"]+/\1<redacted>/g' \
+      -e 's/("(authorization|cookie)"[[:space:]]*:[[:space:]]*")[^"]+/\1<redacted>/g' \
+  || true
+
+echo "recent_identity_provider_metrics"
+docker logs "$api_container_id" --since 30m 2>&1 \
+  | grep -F 'identity provider operation' \
+  | tail -40 \
+  || true
+
+echo "home_base_runtime"
+compose exec -T worker node -e "
+  const env = process.env;
+  console.log(JSON.stringify({
+    enabled: env.HOME_BASE_SYNC_ENABLED,
+    intervalMs: env.HOME_BASE_SYNC_INTERVAL_MS,
+    batchSize: env.HOME_BASE_SYNC_BATCH_SIZE
+  }));
+"
+
+echo "home_base_readiness"
+sql "
+  select concat(
+    'active=', count(*),
+    ' snapshot=', count(snapshot.user_id),
+    ' fresh=', count(snapshot.user_id) filter (where
+      snapshot.payload #>> '{snapshot,source}' = 'LOCAL_PROJECTION'
+      and snapshot.payload #>> '{snapshot,completeness}' = 'PARTIAL'
+      and snapshot.checked_at >= now() - interval '5 minutes'
+    )
+  )
+    from identity.users identity_user
+    left join home.base_snapshots snapshot
+      on snapshot.tenant_id = identity_user.tenant_id
+     and snapshot.user_id = identity_user.id
+   where identity_user.status = 'ACTIVE'
+"
+
+echo "recent_home_base_audit"
+sql "
+  select concat(action, '|', result, '|', occurred_at)
+    from audit.audit_log
+   where action = 'HOME_BASE_PROJECTED'
+   order by occurred_at desc
+   limit 20
+"
+
+echo "recent_home_base_worker_logs"
+docker logs "$(compose ps -q worker)" --since 30m 2>&1 \
+  | grep -E 'HomeBase|HOME_BASE' \
+  | tail -120 \
+  || true
+
+exit 0
 
 sql "
   select concat(

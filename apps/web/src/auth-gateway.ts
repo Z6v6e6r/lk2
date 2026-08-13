@@ -15,9 +15,14 @@ import type {
   TrainingSchedulePage,
   ClientRoutingPlan,
   CommunityMembershipPage,
+  CommunityReadExperienceDetail,
+  CommunityReadExperienceFeedPage,
+  CommunityReadExperienceChatPage,
+  CommunityReadExperienceRating,
   GameCard,
   GameCardPage,
   GameCommandResult,
+  GetOrCreateGameConversationResult,
   SubmitGameResultRequest,
   DisputeGameResultRequest,
   HomeBase,
@@ -28,6 +33,7 @@ import type {
   LocationDetail,
   LocationList,
   NotificationInboxPage,
+  MessagingRealtimeTicket,
   PlayerProfileView,
   PublicGameCardPage,
   PublicGameFilters,
@@ -65,9 +71,14 @@ export type {
   TrainingSchedulePage,
   ClientRoutingPlan,
   CommunityMembershipPage,
+  CommunityReadExperienceDetail,
+  CommunityReadExperienceFeedPage,
+  CommunityReadExperienceChatPage,
+  CommunityReadExperienceRating,
   GameCard,
   GameCardPage,
   GameCommandResult,
+  GetOrCreateGameConversationResult,
   SubmitGameResultRequest,
   DisputeGameResultRequest,
   HomeBase,
@@ -131,10 +142,93 @@ export interface UserContext {
   readonly tenant: NormalizedTenant;
   readonly roles: readonly string[];
   readonly permissions: readonly string[];
+  readonly runtimeCapabilities?: {
+    readonly communityDirectory: boolean;
+    readonly communityReadDetail: boolean;
+    readonly communityReadFeed: boolean;
+    readonly communityReadChat: boolean;
+    readonly communityReadRating: boolean;
+  };
 }
 
 export interface AuthenticatedSession {
   readonly context: UserContext;
+}
+
+export interface MessagingParticipant {
+  readonly userId: string;
+  readonly displayName: string;
+}
+
+export interface ConversationLastMessage {
+  readonly sequence: number;
+  readonly body: string;
+  readonly createdAt: string;
+}
+
+export interface DirectConversationSummary {
+  readonly id: string;
+  readonly kind: 'DIRECT';
+  readonly participant: MessagingParticipant;
+  readonly unreadCount: number;
+  readonly updatedAt: string;
+  readonly lastMessage?: ConversationLastMessage;
+}
+
+export interface GameConversationSummary {
+  readonly id: string;
+  readonly kind: 'GAME';
+  readonly contextId: string;
+  readonly title: string;
+  readonly unreadCount: number;
+  readonly updatedAt: string;
+  readonly lastMessage?: ConversationLastMessage;
+}
+
+export type ConversationSummary = DirectConversationSummary | GameConversationSummary;
+
+export interface ConversationPage {
+  readonly items: readonly ConversationSummary[];
+}
+
+export interface ConversationMessage {
+  readonly id: string;
+  readonly conversationId: string;
+  readonly sequence: number;
+  readonly sender: MessagingParticipant;
+  readonly messageType: 'TEXT';
+  readonly body: string;
+  readonly createdAt: string;
+}
+
+export interface ConversationMessagePage {
+  readonly messages: readonly ConversationMessage[];
+  readonly nextAfterSequence?: number;
+}
+
+export interface CreateDirectConversationResult {
+  readonly outcome: 'ok';
+  readonly conversation: DirectConversationSummary;
+  readonly created: boolean;
+  readonly replayed: boolean;
+}
+
+export interface SendConversationMessageResult {
+  readonly outcome: 'ok';
+  readonly message: ConversationMessage;
+  readonly replayed: boolean;
+}
+
+export interface ConversationReadCursorResult {
+  readonly outcome: 'ok';
+  readonly readThroughSequence: number;
+  readonly changed: boolean;
+  readonly replayed: boolean;
+}
+
+export interface SendConversationMessageCommand {
+  readonly clientMessageId: string;
+  readonly body: string;
 }
 
 export type ActivityHistoryQuery = ActivityHistoryFilters;
@@ -263,7 +357,45 @@ export interface AuthGateway {
   readonly listLocations: () => Promise<LocationList>;
   readonly getLocation: (locationId: string) => Promise<LocationDetail>;
   readonly listMyCommunities: (cursor?: string, limit?: number) => Promise<CommunityMembershipPage>;
+  readonly getCommunityReadExperienceDetail: (
+    communityId: string,
+  ) => Promise<CommunityReadExperienceDetail>;
+  readonly listCommunityReadExperienceFeed: (
+    communityId: string,
+    cursor?: string,
+  ) => Promise<CommunityReadExperienceFeedPage>;
+  readonly listCommunityReadExperienceChat: (
+    communityId: string,
+    cursor?: string,
+  ) => Promise<CommunityReadExperienceChatPage>;
+  readonly getCommunityReadExperienceRating: (
+    communityId: string,
+    period?: 'all' | '30d',
+    tab?: 'overall' | 'dynamics' | 'games' | 'tournaments',
+  ) => Promise<CommunityReadExperienceRating>;
   readonly getProfileLevelHistory: () => Promise<ProfileLevelHistory>;
+  readonly listConversations: () => Promise<ConversationPage>;
+  readonly createRealtimeTicket: () => Promise<MessagingRealtimeTicket>;
+  readonly createDirectConversation: (
+    otherUserId: string,
+    idempotencyKey: string,
+  ) => Promise<CreateDirectConversationResult>;
+  readonly getOrCreateGameConversation: (
+    gameId: string,
+  ) => Promise<GetOrCreateGameConversationResult>;
+  readonly listConversationMessages: (
+    conversationId: string,
+    afterSequence?: number,
+  ) => Promise<ConversationMessagePage>;
+  readonly sendConversationMessage: (
+    conversationId: string,
+    command: SendConversationMessageCommand,
+  ) => Promise<SendConversationMessageResult>;
+  readonly markConversationRead: (
+    conversationId: string,
+    throughSequence: number,
+    idempotencyKey: string,
+  ) => Promise<ConversationReadCursorResult>;
   readonly listNotifications: () => Promise<NotificationInboxPage>;
   readonly markNotificationsRead: (throughId: string) => Promise<void>;
   readonly getWebPushConfiguration: () => Promise<WebPushConfiguration>;
@@ -288,6 +420,18 @@ const HOME_INITIAL_SCHEDULE_DAYS = 3;
 const NOTIFICATION_CACHE_TTL_MS = 2_000;
 const VIVA_REAUTH_RETURN_PATH_STORAGE_KEY = 'phub.viva-reauth-return-path.v1';
 
+export function createMessagingCommandId(): string {
+  const webCrypto = typeof globalThis === 'object' ? globalThis.crypto : undefined;
+  if (typeof webCrypto?.randomUUID === 'function') return webCrypto.randomUUID();
+  const bytes = new Uint8Array(16);
+  if (typeof webCrypto?.getRandomValues === 'function') webCrypto.getRandomValues(bytes);
+  else for (let index = 0; index < bytes.length; index += 1) bytes[index] = Math.random() * 256;
+  bytes[6] = ((bytes[6] ?? 0) & 0x0f) | 0x40;
+  bytes[8] = ((bytes[8] ?? 0) & 0x3f) | 0x80;
+  const hex = [...bytes].map((value) => value.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
 function normalizeContext(payload: ApiUserContext, tenantKey: string): UserContext {
   return {
     user: {
@@ -302,6 +446,13 @@ function normalizeContext(payload: ApiUserContext, tenantKey: string): UserConte
     },
     roles: payload.roles,
     permissions: payload.permissions,
+    runtimeCapabilities: {
+      communityDirectory: payload.runtimeCapabilities?.communityDirectory !== false,
+      communityReadDetail: payload.runtimeCapabilities?.communityReadDetail === true,
+      communityReadFeed: payload.runtimeCapabilities?.communityReadFeed === true,
+      communityReadChat: payload.runtimeCapabilities?.communityReadChat === true,
+      communityReadRating: payload.runtimeCapabilities?.communityReadRating === true,
+    },
   };
 }
 
@@ -740,6 +891,17 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     }
   }
 
+  async function retryMessagingCommand<TResult>(
+    operation: () => Promise<TResult>,
+  ): Promise<TResult> {
+    try {
+      return await operation();
+    } catch (error) {
+      if (!(error instanceof TypeError)) throw error;
+      return operation();
+    }
+  }
+
   // React StrictMode may subscribe twice during development. Coalescing keeps a
   // rotating refresh cookie from being exchanged twice at startup.
   let restorePromise: Promise<AuthenticatedSession | null> | undefined;
@@ -1135,8 +1297,88 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       return request;
     },
 
+    getCommunityReadExperienceDetail(communityId) {
+      return client.getCommunityReadExperienceDetail(communityId);
+    },
+
+    listCommunityReadExperienceFeed(communityId, cursor) {
+      return client.listCommunityReadExperienceFeed(communityId, {
+        limit: 20,
+        ...(cursor ? { cursor } : {}),
+      });
+    },
+
+    listCommunityReadExperienceChat(communityId, cursor) {
+      return client.listCommunityReadExperienceChat(communityId, {
+        limit: 50,
+        ...(cursor ? { cursor } : {}),
+      });
+    },
+
+    getCommunityReadExperienceRating(communityId, period = '30d', tab = 'overall') {
+      return client.getCommunityReadExperienceRating(communityId, { period, tab });
+    },
+
     getProfileLevelHistory() {
       return client.getProfileLevelHistory();
+    },
+
+    listConversations() {
+      return client.request<ConversationPage>('/conversations?limit=50');
+    },
+
+    createRealtimeTicket() {
+      return client.issueMessagingRealtimeTicket();
+    },
+
+    createDirectConversation(otherUserId, idempotencyKey) {
+      return retryMessagingCommand(() =>
+        client.request<CreateDirectConversationResult>('/conversations/direct', {
+          method: 'POST',
+          idempotencyKey,
+          body: JSON.stringify({ otherUserId }),
+        }),
+      );
+    },
+
+    getOrCreateGameConversation(gameId) {
+      return client.getOrCreateGameConversation(gameId);
+    },
+
+    listConversationMessages(conversationId, afterSequence = 0) {
+      const query = new URLSearchParams({
+        afterSequence: String(afterSequence),
+        limit: '100',
+      });
+      return client.request<ConversationMessagePage>(
+        `/conversations/${encodeURIComponent(conversationId)}/messages?${query.toString()}`,
+      );
+    },
+
+    sendConversationMessage(conversationId, command) {
+      return retryMessagingCommand(() =>
+        client.request<SendConversationMessageResult>(
+          `/conversations/${encodeURIComponent(conversationId)}/messages`,
+          {
+            method: 'POST',
+            idempotencyKey: command.clientMessageId,
+            body: JSON.stringify(command),
+          },
+        ),
+      );
+    },
+
+    markConversationRead(conversationId, throughSequence, idempotencyKey) {
+      return retryMessagingCommand(() =>
+        client.request<ConversationReadCursorResult>(
+          `/conversations/${encodeURIComponent(conversationId)}/read-cursor`,
+          {
+            method: 'PUT',
+            idempotencyKey,
+            body: JSON.stringify({ throughSequence }),
+          },
+        ),
+      );
     },
 
     listNotifications() {

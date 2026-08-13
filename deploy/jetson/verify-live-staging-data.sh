@@ -5,12 +5,15 @@ set -eu
 cd /opt/phub
 
 base_runtime_env=/etc/phub/staging.env
+auth_runtime_env=/opt/phub/staging.auth.env
 home_runtime_env=/opt/phub/staging.override.env
 games_runtime_env=/opt/phub/staging.games.env
 
 test -r "$base_runtime_env"
+test -r "$auth_runtime_env"
 test -r "$home_runtime_env"
 test -r "$games_runtime_env"
+test "$(stat -c %a "$auth_runtime_env")" = 600
 test "$(stat -c %a "$games_runtime_env")" = 600
 
 file_value() {
@@ -21,7 +24,7 @@ file_value() {
 
 runtime_value() {
   key="$1"
-  for file in "$games_runtime_env" "$home_runtime_env" "$base_runtime_env"; do
+  for file in "$games_runtime_env" "$home_runtime_env" "$auth_runtime_env" "$base_runtime_env"; do
     value="$(file_value "$file" "$key")"
     if test -n "$value"; then
       printf '%s' "$value"
@@ -49,7 +52,12 @@ case "$(runtime_value VIVA_MODE)" in
     exit 1
     ;;
 esac
+require_value CORS_ORIGINS https://lk.nano.padlhub.su
 require_value VIVA_OAUTH_ENABLED true
+require_value VIVA_OAUTH_EXISTING_SUBJECT_BOOTSTRAP_ENABLED true
+require_value VIVA_OAUTH_REDIRECT_URI https://lk.nano.padlhub.su/user/api/v1/local-padel/auth/viva/callback
+require_value VIVA_OAUTH_SUCCESS_REDIRECT_URL https://lk.nano.padlhub.su/
+require_value HOME_BASE_SYNC_ENABLED true
 test "$(runtime_value CUP_DEV_AUTH_ENABLED)" != true
 require_value HOME_READ_MODE projection
 case "$(runtime_value COMMUNITIES_READ_MODE)" in
@@ -75,9 +83,19 @@ if test "${1:-}" = preflight; then
   exit 0
 fi
 
+require_value VIVA_DIRECT_READ_ENABLED true
+require_value COMMUNITY_LEGACY_READ_DETAIL_ENABLED true
+require_value COMMUNITY_LEGACY_READ_FEED_ENABLED true
+require_value COMMUNITY_LEGACY_READ_CHAT_ENABLED true
+require_value COMMUNITY_LEGACY_READ_RATING_ENABLED true
+require_value COMMUNITIES_LEGACY_TIMEOUT_MS 2500
+require_value COMMUNITIES_LEGACY_MAX_ATTEMPTS 1
+require_value COMMUNITIES_LEGACY_CACHE_TTL_MS 120000
 require_value PROMOTIONS_LEGACY_BASE_URL http://phab-showcase:3000
-require_value PROMOTIONS_HERO_PLACEMENT cabinet_home
+require_value PROMOTIONS_HERO_PLACEMENT cabinet_home_top
 require_value PROMOTIONS_STANDARD_PLACEMENT cabinet_home
+require_value PROMOTIONS_RECOMMENDATION_STRIP_PLACEMENT cabinet_for_me_strip
+require_value PROMOTIONS_RECOMMENDATION_CARD_PLACEMENT cabinet_for_me_card
 require_value PROMOTION_IMAGE_ALLOWED_HOSTS phab-showcase
 require_value PROMOTION_IMAGE_PRIVATE_HTTP_HOSTS phab-showcase
 
@@ -99,7 +117,12 @@ compose exec -T api node -e "
   const env = process.env;
   if (env.APP_ENV !== 'staging') process.exit(1);
   if (!['sandbox', 'production'].includes(env.VIVA_MODE)) process.exit(1);
+  if (env.CORS_ORIGINS !== 'https://lk.nano.padlhub.su') process.exit(1);
   if (env.VIVA_OAUTH_ENABLED !== 'true') process.exit(1);
+  if (env.VIVA_OAUTH_EXISTING_SUBJECT_BOOTSTRAP_ENABLED !== 'true') process.exit(1);
+  if (env.VIVA_OAUTH_REDIRECT_URI !== 'https://lk.nano.padlhub.su/user/api/v1/local-padel/auth/viva/callback') process.exit(1);
+  if (env.VIVA_OAUTH_SUCCESS_REDIRECT_URL !== 'https://lk.nano.padlhub.su/') process.exit(1);
+  if (env.VIVA_DIRECT_READ_ENABLED !== 'true') process.exit(1);
   if (env.CUP_DEV_AUTH_ENABLED === 'true') process.exit(1);
   if (env.HOME_READ_MODE !== 'projection') process.exit(1);
   if (env.GAMES_READ_ENABLED !== 'true') process.exit(1);
@@ -107,30 +130,45 @@ compose exec -T api node -e "
   if (env.LEGACY_GAMES_ROSTER_SYNC_SOURCE !== 'mongo') process.exit(1);
   if (!env.LEGACY_GAMES_MONGODB_URI) process.exit(1);
   if (env.ACTIVITY_HISTORY_GAME_BACKFILL_ENABLED !== 'true') process.exit(1);
+  if (env.COMMUNITY_LEGACY_READ_DETAIL_ENABLED !== 'true') process.exit(1);
+  if (env.COMMUNITY_LEGACY_READ_FEED_ENABLED !== 'true') process.exit(1);
+  if (env.COMMUNITY_LEGACY_READ_CHAT_ENABLED !== 'true') process.exit(1);
+  if (env.COMMUNITY_LEGACY_READ_RATING_ENABLED !== 'true') process.exit(1);
+  if (env.COMMUNITIES_LEGACY_TIMEOUT_MS !== '2500') process.exit(1);
+  if (env.COMMUNITIES_LEGACY_MAX_ATTEMPTS !== '1') process.exit(1);
   if (env.S3_BUCKET !== 'phub-media') process.exit(1);
 "
 
 compose exec -T worker node -e "
   const env = process.env;
   if (!['sandbox', 'production'].includes(env.VIVA_MODE)) process.exit(1);
+  if (env.HOME_BASE_SYNC_ENABLED !== 'true') process.exit(1);
   if (env.HOME_READ_MODE !== 'projection') process.exit(1);
   if (env.LEGACY_GAMES_ROSTER_SYNC_ENABLED !== 'true') process.exit(1);
   if (env.LEGACY_GAMES_ROSTER_SYNC_SOURCE !== 'mongo') process.exit(1);
   if (!env.LEGACY_GAMES_MONGODB_URI) process.exit(1);
   if (env.ACTIVITY_HISTORY_GAME_BACKFILL_ENABLED !== 'true') process.exit(1);
   if (env.S3_BUCKET !== 'phub-media') process.exit(1);
-  const promotionSource = new URL('/api/advertising/cabinet-home', env.PROMOTIONS_LEGACY_BASE_URL);
-  fetch(promotionSource, {
-    headers: {
-      Accept: 'application/json',
-      'X-Correlation-ID': 'staging-promotion-source-verification',
-    },
-    signal: AbortSignal.timeout(5000),
-  }).then(async (response) => {
-    if (!response.ok) process.exit(1);
+  const sources = [
+    ['cabinet_home_top', '/api/advertising/cabinet-home-top'],
+    ['cabinet_home', '/api/advertising/cabinet-home'],
+    ['cabinet_for_me_strip', '/api/advertising/cabinet-for-me-strip'],
+    ['cabinet_for_me_card', '/api/advertising/cabinet-for-me-card'],
+  ];
+  Promise.all(sources.map(async ([placement, path]) => {
+    const response = await fetch(new URL(path, env.PROMOTIONS_LEGACY_BASE_URL), {
+      headers: {
+        Accept: 'application/json',
+        'X-Correlation-ID': 'staging-promotion-source-verification',
+      },
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!response.ok) throw new Error('promotion source unavailable');
     const payload = await response.json();
-    if (payload.placement !== 'cabinet_home' || !Array.isArray(payload.ads)) process.exit(1);
-  }).catch(() => { process.exitCode = 1; });
+    if (payload.placement !== placement || !Array.isArray(payload.ads)) {
+      throw new Error('promotion source contract mismatch');
+    }
+  })).catch(() => { process.exitCode = 1; });
 "
 
 compose exec -T api node -e "
@@ -150,6 +188,28 @@ compose exec -T api node -e "
 
 attempt=0
 while test "$attempt" -lt 36; do
+  active_delegations="$(sql "
+    select count(*)
+      from integration.user_delegations
+     where provider = 'VIVA'
+       and revoked_at is null
+       and (refresh_expires_at is null or refresh_expires_at > now())
+  ")"
+  routing_ready_delegations="$(sql "
+    select count(*)
+      from integration.user_delegations delegation
+      join integration.client_routing_plans plan
+        on plan.tenant_id = delegation.tenant_id
+       and plan.mode = 'MIXED_END_USER_READS'
+       and plan.direct_read_operations @> array['profile.read']::text[]
+      join integration.identity_provider_bindings binding
+        on binding.tenant_id = delegation.tenant_id
+       and binding.provider = 'VIVA'
+       and nullif(btrim(binding.provider_tenant_key), '') is not null
+     where delegation.provider = 'VIVA'
+       and delegation.revoked_at is null
+       and (delegation.refresh_expires_at is null or delegation.refresh_expires_at > now())
+  ")"
   viva_identities="$(sql "
     select count(*)
       from integration.external_identity_map
@@ -172,14 +232,21 @@ while test "$attempt" -lt 36; do
       from integration.legacy_game_roster_sync_state
      where mode = 'MIRROR'
   ")"
+  community_components="$(sql "
+    select count(*)
+      from integration.community_home_source_components
+  ")"
 
-  if test "$viva_identities" -gt 0 \
+  if test "$active_delegations" -gt 0 \
+    && test "$routing_ready_delegations" = "$active_delegations" \
+    && test "$viva_identities" -gt 0 \
     && test "$non_viva_identities" -eq 0 \
     && test "$projection_home" -gt 0 \
     && test "$canonical_games" -gt 0 \
     && test "$game_cards" -gt 0 \
-    && test "$mirrored_rosters" -gt 0; then
-    echo "Real staging data verified: viva_identities=$viva_identities projection_home=$projection_home canonical_games=$canonical_games game_cards=$game_cards mirrored_rosters=$mirrored_rosters"
+    && test "$mirrored_rosters" -gt 0 \
+    && test "$community_components" -gt 0; then
+    echo "Real staging data verified: routing=$routing_ready_delegations/$active_delegations viva_identities=$viva_identities projection_home=$projection_home canonical_games=$canonical_games game_cards=$game_cards mirrored_rosters=$mirrored_rosters community_components=$community_components"
     exit 0
   fi
 
@@ -187,5 +254,5 @@ while test "$attempt" -lt 36; do
   sleep 5
 done
 
-echo "Real staging data did not become ready: viva_identities=$viva_identities non_viva_identities=$non_viva_identities projection_home=$projection_home canonical_games=$canonical_games game_cards=$game_cards mirrored_rosters=$mirrored_rosters" >&2
+echo "Real staging data did not become ready: routing=$routing_ready_delegations/$active_delegations viva_identities=$viva_identities non_viva_identities=$non_viva_identities projection_home=$projection_home canonical_games=$canonical_games game_cards=$game_cards mirrored_rosters=$mirrored_rosters community_components=$community_components" >&2
 exit 1

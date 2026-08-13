@@ -1,5 +1,3 @@
-import { createHash } from 'node:crypto';
-
 import { withTenantTransaction } from '@phub/database';
 import {
   webPushSubscriptionSchema,
@@ -8,7 +6,14 @@ import {
   type PushDeliveryResult,
 } from '@phub/notifications';
 import type { Logger } from 'pino';
-import type { Pool, PoolClient, QueryResultRow } from 'pg';
+import type { Pool, QueryResultRow } from 'pg';
+
+import { finalizeNotificationDelivery } from './notification-delivery-finalizer.js';
+
+export {
+  notificationRetryDelayMs as webPushRetryDelayMs,
+  resolveNotificationIntentState,
+} from './notification-delivery-finalizer.js';
 
 interface DeliveryRow extends QueryResultRow {
   readonly id: string;
@@ -21,10 +26,6 @@ interface DeliveryRow extends QueryResultRow {
   readonly notification_id: string;
   readonly deep_link: string | null;
   readonly attempt_count: number;
-}
-
-interface DeliveryStateRow extends QueryResultRow {
-  readonly state: string;
 }
 
 interface ClaimedDelivery {
@@ -42,25 +43,8 @@ interface ClaimedDelivery {
   readonly startedAt: string;
 }
 
-export function webPushRetryDelayMs(attemptNo: number, baseMs: number): number {
-  return Math.min(baseMs * 2 ** Math.max(0, attemptNo - 1), 3_600_000);
-}
-
-export function resolveNotificationIntentState(states: readonly string[]): {
-  readonly state: 'PROCESSING' | 'DELIVERED' | 'PARTIAL' | 'FAILED' | 'SUPPRESSED';
-  readonly completed: boolean;
-} {
-  if (states.some((state) => state === 'PENDING' || state === 'SENDING')) {
-    return { state: 'PROCESSING', completed: false };
-  }
-  const successful = states.some((state) => state === 'SENT' || state === 'DELIVERED');
-  const failed = states.some((state) => state === 'FAILED' || state === 'DEAD');
-  const suppressed = states.some((state) => state === 'SUPPRESSED');
-  if (successful && (failed || suppressed)) return { state: 'PARTIAL', completed: true };
-  if (successful) return { state: 'DELIVERED', completed: true };
-  if (suppressed && !failed) return { state: 'SUPPRESSED', completed: true };
-  return { state: 'FAILED', completed: true };
-}
+// Provider calls time out at no more than 30 seconds; the extra margin keeps finalization fenced.
+export const WEB_PUSH_DELIVERY_LEASE_SECONDS = 60;
 
 async function claimBatch(options: {
   readonly pool: Pool;
@@ -112,7 +96,7 @@ async function claimBatch(options: {
         `update notifications.deliveries
             set state = 'SENDING',
                 attempt_count = $3,
-                lease_expires_at = now() + interval '30 seconds',
+                lease_expires_at = now() + interval '60 seconds',
                 updated_at = now()
           where tenant_id = $1 and id = $2`,
         [options.tenantId, row.id, attemptNo],
@@ -136,145 +120,6 @@ async function claimBatch(options: {
   });
 }
 
-async function updateIntentState(
-  client: PoolClient,
-  tenantId: string,
-  intentId: string,
-): Promise<void> {
-  const states = await client.query<DeliveryStateRow>(
-    `select state
-       from notifications.deliveries
-      where tenant_id = $1 and intent_id = $2`,
-    [tenantId, intentId],
-  );
-  const resolved = resolveNotificationIntentState(states.rows.map((row) => row.state));
-  await client.query(
-    `update notifications.intents
-        set state = $3,
-            completed_at = case when $4 then coalesce(completed_at, now()) else null end
-      where tenant_id = $1 and id = $2`,
-    [tenantId, intentId, resolved.state, resolved.completed],
-  );
-}
-
-async function finalizeDelivery(options: {
-  readonly pool: Pool;
-  readonly job: ClaimedDelivery;
-  readonly result: PushDeliveryResult;
-  readonly maxAttempts: number;
-  readonly retryBaseMs: number;
-}): Promise<'sent' | 'retry' | 'dead'> {
-  return withTenantTransaction(options.pool, options.job.tenantId, async (client) => {
-    const now = new Date().toISOString();
-    let terminalState: 'sent' | 'retry' | 'dead';
-    let attemptOutcome: 'SENT' | 'RETRYABLE_FAILURE' | 'TERMINAL_FAILURE';
-    let errorCode: string | null = null;
-
-    if (options.result.outcome === 'accepted') {
-      terminalState = 'sent';
-      attemptOutcome = 'SENT';
-      await client.query(
-        `update notifications.deliveries
-            set state = 'SENT', lease_expires_at = null, completed_at = now(),
-                updated_at = now(), last_error_code = null
-          where tenant_id = $1 and id = $2 and state = 'SENDING' and attempt_count = $3`,
-        [options.job.tenantId, options.job.deliveryId, options.job.attemptNo],
-      );
-      const receiptKey = createHash('sha256')
-        .update(`provider-accepted:${options.job.deliveryId}:${options.job.attemptNo}`)
-        .digest('hex');
-      await client.query(
-        `insert into notifications.delivery_receipts (
-           tenant_id, delivery_id, receipt_key, receipt_type, source, platform, occurred_at
-         ) values ($1, $2, $3, 'PROVIDER_ACCEPTED', 'PROVIDER', 'WEB', $4)
-         on conflict (tenant_id, receipt_key) do nothing`,
-        [options.job.tenantId, options.job.deliveryId, receiptKey, now],
-      );
-    } else {
-      errorCode = options.result.errorCode;
-      const exhausted = options.job.attemptNo >= options.maxAttempts;
-      const retryable = options.result.outcome === 'retryable_failure' && !exhausted;
-      terminalState = retryable ? 'retry' : 'dead';
-      attemptOutcome = retryable ? 'RETRYABLE_FAILURE' : 'TERMINAL_FAILURE';
-      if (retryable) {
-        const delayMs = webPushRetryDelayMs(options.job.attemptNo, options.retryBaseMs);
-        await client.query(
-          `update notifications.deliveries
-              set state = 'PENDING',
-                  next_attempt_at = now() + ($4::integer * interval '1 millisecond'),
-                  lease_expires_at = null,
-                  updated_at = now(),
-                  last_error_code = $5
-            where tenant_id = $1 and id = $2 and state = 'SENDING' and attempt_count = $3`,
-          [options.job.tenantId, options.job.deliveryId, options.job.attemptNo, delayMs, errorCode],
-        );
-      } else {
-        await client.query(
-          `update notifications.deliveries
-              set state = 'DEAD', lease_expires_at = null, completed_at = now(),
-                  updated_at = now(), last_error_code = $4
-            where tenant_id = $1 and id = $2 and state = 'SENDING' and attempt_count = $3`,
-          [options.job.tenantId, options.job.deliveryId, options.job.attemptNo, errorCode],
-        );
-      }
-      if (options.result.outcome === 'terminal_failure' && options.result.invalidate) {
-        await client.query(
-          `update integration.notification_endpoints
-              set status = 'INVALID', updated_at = now()
-            where tenant_id = $1 and id = $2`,
-          [options.job.tenantId, options.job.endpointId],
-        );
-        await client.query(
-          `insert into audit.audit_log (
-             tenant_id, action, resource_type, resource_id, result, reason,
-             correlation_id, new_value
-           ) values ($1, 'WEB_PUSH_ENDPOINT_INVALIDATED', 'NOTIFICATION_ENDPOINT', $2,
-                     'SUCCESS', $3, $4, $5::jsonb)`,
-          [
-            options.job.tenantId,
-            options.job.endpointId,
-            errorCode,
-            `web-push-delivery-${options.job.deliveryId}`,
-            JSON.stringify({ status: 'INVALID' }),
-          ],
-        );
-      }
-    }
-
-    await client.query(
-      `insert into notifications.delivery_attempts (
-         tenant_id, delivery_id, attempt_no, outcome, error_code, started_at, completed_at
-       ) values ($1, $2, $3, $4, $5, $6, $7)`,
-      [
-        options.job.tenantId,
-        options.job.deliveryId,
-        options.job.attemptNo,
-        attemptOutcome,
-        errorCode,
-        options.job.startedAt,
-        now,
-      ],
-    );
-    await client.query(
-      `insert into audit.outbox_events (
-         tenant_id, event_type, aggregate_id, correlation_id, payload
-       ) values ($1, 'notifications.delivery.changed.v1', $2, $3, $4::jsonb)`,
-      [
-        options.job.tenantId,
-        options.job.deliveryId,
-        `web-push-delivery-${options.job.deliveryId}`,
-        JSON.stringify({
-          deliveryId: options.job.deliveryId,
-          state: terminalState === 'sent' ? 'SENT' : terminalState === 'retry' ? 'PENDING' : 'DEAD',
-          ...(errorCode ? { errorCode } : {}),
-        }),
-      ],
-    );
-    await updateIntentState(client, options.job.tenantId, options.job.intentId);
-    return terminalState;
-  });
-}
-
 export async function runWebPushDeliveryBatch(options: {
   readonly pool: Pool;
   readonly logger: Logger;
@@ -291,6 +136,7 @@ export async function runWebPushDeliveryBatch(options: {
   readonly sent: number;
   readonly retried: number;
   readonly dead: number;
+  readonly stale: number;
 }> {
   const jobs = await claimBatch({
     pool: options.pool,
@@ -302,6 +148,7 @@ export async function runWebPushDeliveryBatch(options: {
   let sent = 0;
   let retried = 0;
   let dead = 0;
+  let stale = 0;
   for (const job of jobs) {
     let result: PushDeliveryResult;
     if (job.endpointStatus !== 'ACTIVE') {
@@ -336,22 +183,25 @@ export async function runWebPushDeliveryBatch(options: {
         };
       }
     }
-    const outcome = await finalizeDelivery({
+    const outcome = await finalizeNotificationDelivery({
       pool: options.pool,
       job,
       result,
+      platform: 'WEB',
+      transport: 'WEB_PUSH',
       maxAttempts: options.maxAttempts,
       retryBaseMs: options.retryBaseMs,
     });
     if (outcome === 'sent') sent += 1;
     else if (outcome === 'retry') retried += 1;
-    else dead += 1;
+    else if (outcome === 'dead') dead += 1;
+    else stale += 1;
   }
   if (jobs.length > 0) {
     options.logger.info(
-      { tenantId: options.tenantId, claimed: jobs.length, sent, retried, dead },
+      { tenantId: options.tenantId, claimed: jobs.length, sent, retried, dead, stale },
       'Web Push delivery batch completed',
     );
   }
-  return { claimed: jobs.length, sent, retried, dead };
+  return { claimed: jobs.length, sent, retried, dead, stale };
 }

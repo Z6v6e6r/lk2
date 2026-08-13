@@ -393,6 +393,20 @@ Each screen has its own state machine:
 11. Update ADR 0005, ADR 0012 and the client-routing runbook before production rollout. The
     first-slice OpenAPI contract is already published in the repository.
 
+### Nano staging activation
+
+Nano staging treats this browser transport as independent from the server-owned Home projection.
+`CLIENT_ASSISTED_VIVA` preserves `HOME_READ_MODE`, sets `HOME_VIVA_SYNC_ENABLED=false`, disables the
+legacy Viva Home Game bridge and enables `VIVA_DIRECT_READ_ENABLED=true` only after an audited
+target-tenant `MIXED_END_USER_READS` plan exists. Its verifier checks exact
+`https://lk.nano.padlhub.su` CORS, active delegation and provider binding coverage, anonymous route
+boundaries for recommendation, schedule, upcoming-booking and history jobs, and absence of an
+out-of-scope mixed tenant. A failure restores the previous runtime override; the ordinary immutable
+release rollback remains the outer safety boundary.
+
+This staging profile does not waive the production rollout gates above and does not enable a Viva
+write path.
+
 ## Consequences
 
 - the user's network path can read Viva when PadlHub egress is blocked;

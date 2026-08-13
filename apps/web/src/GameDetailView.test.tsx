@@ -45,7 +45,7 @@ const game: GameCard = {
   viewerPaymentState: 'PAID',
   resultSummary: { state: 'AWAITING_SUBMISSION' },
   badges: ['RATING'],
-  allowedActions: ['OPEN_DETAILS', 'SUBMIT_RESULT'],
+  allowedActions: ['OPEN_DETAILS', 'SUBMIT_RESULT', 'OPEN_CHAT'],
   deepLink: '/games/6fe9dc1f-87b5-4efd-83a2-5cf9d8070b76',
   conversation: {
     conversationId: 'e82ed43e-4e8c-487e-a308-e926806125bb',
@@ -69,6 +69,7 @@ describe('GameDetailView', () => {
           busy={false}
           game={game}
           onAction={vi.fn()}
+          onChatOpen={vi.fn()}
           onSubmit={vi.fn().mockResolvedValue(undefined)}
           onTabChange={setActiveTab}
         />
@@ -88,7 +89,10 @@ describe('GameDetailView', () => {
     expect(screen.queryByText('2 пары по 2 игрока')).toBeNull();
     expect(screen.queryByText('Выбирается по сетам')).toBeNull();
     expect(screen.queryByText(/Состав пар задаётся отдельно/i)).toBeNull();
-    expect(screen.getByRole('link', { name: 'Чат игры' })).toHaveAttribute('href', '/chats');
+    expect(screen.getByRole('link', { name: 'Чат игры' })).toHaveAttribute(
+      'href',
+      `/chats/${game.conversation?.conversationId}`,
+    );
     expect(screen.queryByText('Чат игры')).toBeNull();
     expect(screen.queryByRole('heading', { name: 'Пары и счёт по сетам' })).toBeNull();
 
@@ -114,6 +118,34 @@ describe('GameDetailView', () => {
     expect(screen.getByRole('button', { name: 'Отправить на согласование' })).toBeInTheDocument();
   });
 
+  it('opens get/create only from the canonical participant game detail', async () => {
+    const user = userEvent.setup();
+    const onChatOpen = vi.fn();
+    const renderState = (overrides: Partial<GameCard>) => {
+      return render(
+        <GameDetailView
+          activeTab="GAME"
+          busy={false}
+          game={{ ...game, ...overrides }}
+          onAction={vi.fn()}
+          onChatOpen={onChatOpen}
+          onSubmit={vi.fn().mockResolvedValue(undefined)}
+          onTabChange={vi.fn()}
+        />,
+      );
+    };
+
+    const participant = renderState({ conversation: null });
+    expect(screen.queryByRole('link', { name: 'Чат игры' })).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Открыть чат игры' }));
+    expect(onChatOpen).toHaveBeenCalledTimes(1);
+    participant.unmount();
+
+    const outsider = renderState({ conversation: null, viewerRelation: 'NONE' });
+    expect(screen.queryByRole('button', { name: 'Открыть чат игры' })).toBeNull();
+    outsider.unmount();
+  });
+
   it('restores the lineup after remount and lets players be swapped or removed', async () => {
     const user = userEvent.setup();
     const renderGame = () =>
@@ -123,6 +155,7 @@ describe('GameDetailView', () => {
           busy={false}
           game={game}
           onAction={vi.fn()}
+          onChatOpen={vi.fn()}
           onSubmit={vi.fn().mockResolvedValue(undefined)}
           onTabChange={vi.fn()}
         />,
@@ -208,6 +241,7 @@ describe('GameDetailView', () => {
         busy={false}
         game={pendingGame}
         onAction={onAction}
+        onChatOpen={vi.fn()}
         onSubmit={vi.fn().mockResolvedValue(undefined)}
         onTabChange={vi.fn()}
       />,

@@ -52,6 +52,10 @@ describe('loadConfig', () => {
       HOME_VIVA_SYNC_INTERVAL_MS: 120_000,
       HOME_VIVA_SYNC_FAILURE_BACKOFF_MS: 300_000,
       COMMUNITIES_READ_MODE: 'mock',
+      COMMUNITY_LEGACY_READ_DETAIL_ENABLED: false,
+      COMMUNITY_LEGACY_READ_FEED_ENABLED: false,
+      COMMUNITY_LEGACY_READ_CHAT_ENABLED: false,
+      COMMUNITY_LEGACY_READ_RATING_ENABLED: false,
       COMMUNITIES_LEGACY_TIMEOUT_MS: 10_000,
       COMMUNITIES_LEGACY_MAX_ATTEMPTS: 2,
       COMMUNITIES_LEGACY_CACHE_TTL_MS: 30_000,
@@ -82,7 +86,28 @@ describe('loadConfig', () => {
       WEB_PUSH_CIRCUIT_FAILURE_THRESHOLD: 5,
       WEB_PUSH_CIRCUIT_RESET_MS: 30_000,
       CUP_DEV_AUTH_ENABLED: false,
+      VIVA_OAUTH_EXISTING_SUBJECT_BOOTSTRAP_ENABLED: false,
     });
+  });
+
+  it('keeps legacy community experience sections default-off and legacy-only', () => {
+    expect(
+      loadConfig({
+        ...validEnvironment,
+        COMMUNITIES_READ_MODE: 'legacy',
+        COMMUNITY_LEGACY_READ_DETAIL_ENABLED: 'true',
+      }),
+    ).toMatchObject({
+      COMMUNITY_LEGACY_READ_DETAIL_ENABLED: true,
+      COMMUNITY_LEGACY_READ_FEED_ENABLED: false,
+    });
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        COMMUNITIES_READ_MODE: 'local',
+        COMMUNITY_LEGACY_READ_DETAIL_ENABLED: 'true',
+      }),
+    ).toThrow('COMMUNITY_LEGACY_READ_*_ENABLED requires COMMUNITIES_READ_MODE=legacy');
   });
 
   it('keeps leased outbox publication explicit, staging-only and lease-safe', () => {
@@ -455,6 +480,39 @@ describe('loadConfig', () => {
         VIVA_DIRECT_READ_ENABLED: 'true',
       }),
     ).toThrow('VIVA_DIRECT_READ_ENABLED requires VIVA_OAUTH_ENABLED=true');
+  });
+
+  it('gates existing-subject OAuth bootstrap independently from browser Viva reads', () => {
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        VIVA_OAUTH_EXISTING_SUBJECT_BOOTSTRAP_ENABLED: 'true',
+      }),
+    ).toThrow(
+      'VIVA_OAUTH_EXISTING_SUBJECT_BOOTSTRAP_ENABLED requires VIVA_MODE=sandbox or production',
+    );
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        VIVA_MODE: 'sandbox',
+        VIVA_OAUTH_EXISTING_SUBJECT_BOOTSTRAP_ENABLED: 'true',
+      }),
+    ).toThrow('VIVA_OAUTH_EXISTING_SUBJECT_BOOTSTRAP_ENABLED requires VIVA_OAUTH_ENABLED=true');
+    expect(
+      loadConfig({
+        ...validEnvironment,
+        VIVA_MODE: 'sandbox',
+        VIVA_OAUTH_ENABLED: 'true',
+        VIVA_OAUTH_REDIRECT_URI:
+          'https://api.example.test/user/api/v1/local-padel/auth/viva/callback',
+        VIVA_OAUTH_SUCCESS_REDIRECT_URL: 'https://app.example.test/',
+        VIVA_DELEGATION_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString('base64url'),
+        VIVA_OAUTH_EXISTING_SUBJECT_BOOTSTRAP_ENABLED: 'true',
+      }),
+    ).toMatchObject({
+      VIVA_DIRECT_READ_ENABLED: false,
+      VIVA_OAUTH_EXISTING_SUBJECT_BOOTSTRAP_ENABLED: true,
+    });
   });
 
   it('requires complete VAPID and endpoint encryption secrets when Web Push is enabled', () => {

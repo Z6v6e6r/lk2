@@ -688,6 +688,21 @@ export function GamesPage({ gateway, gameId, eventId }: GamesPageProps): React.J
     }
   }
 
+  async function openGameChat(game: ViewerGameCard): Promise<void> {
+    if (busyGameId) return;
+    setBusyGameId(game.id);
+    setError(null);
+    setNotice(null);
+    try {
+      const result = await gateway.getOrCreateGameConversation(game.id);
+      window.location.assign(`/chats/${encodeURIComponent(result.conversation.id)}`);
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      setBusyGameId(null);
+    }
+  }
+
   if (gameId) {
     return (
       <main className="games-page games-page--detail">
@@ -721,6 +736,7 @@ export function GamesPage({ gateway, gameId, eventId }: GamesPageProps): React.J
             busy={busyGameId === detail.id}
             game={detail}
             onAction={(action) => void handleAction(action, detail)}
+            onChatOpen={() => void openGameChat(detail)}
             onSubmit={submitResult}
             onTabChange={setDetailTab}
           />

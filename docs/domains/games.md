@@ -247,24 +247,35 @@ roster” or “finished without score beats completed”. The API/card projecto
 
 ### 5.2 Primary display states
 
-| `displayState`          | User label            | Minimum condition                                | Typical action                      |
-| ----------------------- | --------------------- | ------------------------------------------------ | ----------------------------------- |
-| `FINDING_PLAYERS`       | Ищем игроков          | scheduled, more than one open spot               | `JOIN` or `INVITE`                  |
-| `ONE_SPOT_LEFT`         | Осталось 1 место      | scheduled, one open spot                         | `JOIN`                              |
-| `ROSTER_READY`          | Состав набран         | scheduled, no open spots                         | `OPEN_DETAILS`                      |
-| `SEAT_PAYMENT_REQUIRED` | Оплатите место        | viewer has an active unpaid reservation          | `PAY`                               |
-| `STARTING_SOON`         | Скоро начало          | within server-configured window                  | `OPEN_DETAILS`                      |
-| `REGISTRATION_CLOSED`   | Регистрация закрыта   | join cut-off passed before game transition       | `OPEN_DETAILS`                      |
-| `IN_PROGRESS`           | Игра идёт             | lifecycle is in progress                         | `OPEN_CHAT`                         |
-| `RESULT_REQUIRED`       | Внесите счёт          | finished, viewer may submit, no submission       | `SUBMIT_RESULT`                     |
-| `RESULT_PENDING`        | Счёт на подтверждении | result pending confirmation                      | `CONFIRM_RESULT` or view            |
-| `RESULT_DISPUTED`       | Результат оспорен     | dispute is open                                  | `OPEN_DISPUTE`                      |
-| `COMPLETED`             | Игра завершена        | confirmed, void, or no submission after 48 hours | `VIEW_RESULT` when confirmed        |
-| `CANCELLED`             | Игра отменена         | lifecycle cancelled                              | refund/details action if applicable |
+| `displayState`          | User label            | Minimum condition                                | Typical action                                                             |
+| ----------------------- | --------------------- | ------------------------------------------------ | -------------------------------------------------------------------------- |
+| `FINDING_PLAYERS`       | Ищем игроков          | scheduled, more than one open spot               | `JOIN` or `INVITE`                                                         |
+| `ONE_SPOT_LEFT`         | Осталось 1 место      | scheduled, one open spot                         | `JOIN`                                                                     |
+| `ROSTER_READY`          | Состав набран         | scheduled, no open spots                         | `OPEN_DETAILS`                                                             |
+| `SEAT_PAYMENT_REQUIRED` | Оплатите место        | viewer has an active unpaid reservation          | `PAY`                                                                      |
+| `STARTING_SOON`         | Скоро начало          | within server-configured window                  | `OPEN_DETAILS`                                                             |
+| `REGISTRATION_CLOSED`   | Регистрация закрыта   | join cut-off passed before game transition       | `OPEN_DETAILS`                                                             |
+| `IN_PROGRESS`           | Игра идёт             | lifecycle is in progress                         | `OPEN_DETAILS`; `OPEN_CHAT` only with an authorized conversation reference |
+| `RESULT_REQUIRED`       | Внесите счёт          | finished, viewer may submit, no submission       | `SUBMIT_RESULT`                                                            |
+| `RESULT_PENDING`        | Счёт на подтверждении | result pending confirmation                      | `CONFIRM_RESULT` or view                                                   |
+| `RESULT_DISPUTED`       | Результат оспорен     | dispute is open                                  | `OPEN_DISPUTE`                                                             |
+| `COMPLETED`             | Игра завершена        | confirmed, void, or no submission after 48 hours | `VIEW_RESULT` when confirmed                                               |
+| `CANCELLED`             | Игра отменена         | lifecycle cancelled                              | refund/details action if applicable                                        |
 
 The primary display state is not the complete domain state. Secondary badges can show `Рейтинговая`,
 `Закрытая`, `Лист ожидания`, `Возврат оформляется` or `Вы организатор` without changing the primary
 state.
+
+`OPEN_CHAT` is not inferred from game participation alone. The viewer DTO may expose it only
+alongside a non-null PadlHub `conversationId` resolved by the messaging membership repository.
+If the messaging route or repository is absent, the game remains usable but the chat action fails
+closed.
+
+The authenticated canonical game-detail surface may also issue the explicit idempotent
+`POST /conversations/game` get-or-create command with the card's PadlHub `gameId`. This is never a
+free-form identifier input: the messaging repository rechecks the active user, `games.play`, the
+tenant messaging gates and current `ACTIVE` participation before returning a conversation. A
+failed command leaves the game detail usable and does not synthesize an `OPEN_CHAT` capability.
 
 ### 5.2.1 End-to-end card state map
 

@@ -14,6 +14,11 @@ export default defineConfig({
         target: process.env.PHUB_DEV_API_PROXY_TARGET ?? 'http://127.0.0.1:3000',
         changeOrigin: true,
       },
+      '/realtime': {
+        target: process.env.PHUB_DEV_REALTIME_PROXY_TARGET ?? 'ws://127.0.0.1:3001',
+        changeOrigin: true,
+        ws: true,
+      },
     },
   },
   build: {

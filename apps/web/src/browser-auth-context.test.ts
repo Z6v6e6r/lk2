@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { isIOSBrowser, preferredAuthEntryView } from './browser-auth-context.js';
 
 describe('browser authentication context', () => {
-  it('recognizes an iPhone browser and prefers phone authentication', () => {
+  it('recognizes an iPhone browser and keeps the regular OAuth entry', () => {
     const browser = {
       userAgent:
         'Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 Mobile/23F77 Safari/604.1',
@@ -12,7 +12,7 @@ describe('browser authentication context', () => {
     };
 
     expect(isIOSBrowser(browser)).toBe(true);
-    expect(preferredAuthEntryView(browser)).toBe('phone');
+    expect(preferredAuthEntryView(browser)).toBe('oauth');
   });
 
   it('recognizes iPadOS desktop-mode user agents from touch capability', () => {

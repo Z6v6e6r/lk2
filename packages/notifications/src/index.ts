@@ -5,8 +5,87 @@ import { z } from 'zod';
 const uuid = z.string().uuid();
 const dateTime = z.string().datetime({ offset: true });
 const eventType = z.string().regex(/^[a-z][a-z0-9_.-]+\.v[1-9][0-9]*$/);
+const positiveRevision = z.string().regex(/^[1-9][0-9]*$/);
 
-export const notificationSourceEventSchema = z
+export const BOOKING_NOTIFICATION_EVENT_TYPES = [
+  'booking.confirmed.v1',
+  'booking.changed.v1',
+  'booking.cancelled.v1',
+  'booking.reminder.due.v1',
+] as const;
+
+export const MAX_NOTIFICATION_EVENT_RECIPIENTS = 50;
+
+const recipientUserIdsSchema = z
+  .array(uuid)
+  .min(1)
+  .max(MAX_NOTIFICATION_EVENT_RECIPIENTS)
+  .transform((items) => [...new Set(items)]);
+const bookingEventEnvelopeBase = z.object({
+  id: uuid,
+  aggregateId: uuid,
+  tenantId: uuid,
+  occurredAt: dateTime,
+  correlationId: z.string().min(8).max(128),
+});
+const bookingEventPayloadBase = {
+  bookingId: uuid,
+  revision: positiveRevision,
+  recipientUserIds: recipientUserIdsSchema,
+  serviceTitle: z.string().trim().min(1).max(160),
+  startsAt: dateTime,
+  timezone: z.string().trim().min(1).max(64),
+  locationName: z.string().trim().min(1).max(160),
+};
+
+function bookingEventSchema<
+  TType extends (typeof BOOKING_NOTIFICATION_EVENT_TYPES)[number],
+  TExtra extends z.ZodRawShape,
+>(type: TType, extra: TExtra) {
+  return bookingEventEnvelopeBase
+    .extend({
+      type: z.literal(type),
+      payload: z.object({ ...bookingEventPayloadBase, ...extra }).strict(),
+    })
+    .strict();
+}
+
+export const bookingNotificationSourceEventSchema = z
+  .discriminatedUnion('type', [
+    bookingEventSchema('booking.confirmed.v1', {}),
+    bookingEventSchema('booking.changed.v1', {
+      changedFields: z
+        .array(z.enum(['SERVICE', 'STARTS_AT', 'LOCATION', 'STATUS']))
+        .min(1)
+        .max(4)
+        .transform((items) => [...new Set(items)]),
+    }),
+    bookingEventSchema('booking.cancelled.v1', {
+      reasonCode: z.enum([
+        'USER_REQUEST',
+        'VENUE_REQUEST',
+        'PAYMENT_FAILED',
+        'SERVICE_UNAVAILABLE',
+        'OTHER',
+      ]),
+    }),
+    bookingEventSchema('booking.reminder.due.v1', {
+      reminderKind: z.enum(['HOURS_24', 'HOURS_2']),
+    }),
+  ])
+  .superRefine((event, context) => {
+    if (event.aggregateId !== event.payload.bookingId) {
+      context.addIssue({
+        code: 'custom',
+        path: ['aggregateId'],
+        message: 'aggregateId must match payload.bookingId',
+      });
+    }
+  });
+
+export type BookingNotificationSourceEvent = z.infer<typeof bookingNotificationSourceEventSchema>;
+
+const genericNotificationSourceEventSchema = z
   .object({
     id: uuid,
     type: eventType,
@@ -16,16 +95,36 @@ export const notificationSourceEventSchema = z
     correlationId: z.string().min(8).max(128),
     payload: z.record(z.string(), z.unknown()),
   })
-  .strict();
+  .strict()
+  .refine(
+    (event) =>
+      !BOOKING_NOTIFICATION_EVENT_TYPES.includes(
+        event.type as (typeof BOOKING_NOTIFICATION_EVENT_TYPES)[number],
+      ),
+    { message: 'Canonical booking events must use the booking notification event contract' },
+  );
+
+export const notificationSourceEventSchema = z.union([
+  bookingNotificationSourceEventSchema,
+  genericNotificationSourceEventSchema,
+]);
 
 export type NotificationSourceEvent = z.infer<typeof notificationSourceEventSchema>;
 
-export const notificationAudienceSelectorSchema = z
-  .object({
-    type: z.literal('EVENT_USER'),
-    field: z.enum(['userId', 'recipientUserId']),
-  })
-  .strict();
+export const notificationAudienceSelectorSchema = z.discriminatedUnion('type', [
+  z
+    .object({
+      type: z.literal('EVENT_USER'),
+      field: z.enum(['userId', 'recipientUserId']),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal('EVENT_USERS'),
+      field: z.literal('recipientUserIds'),
+    })
+    .strict(),
+]);
 
 export type NotificationAudienceSelector = z.infer<typeof notificationAudienceSelectorSchema>;
 
@@ -33,8 +132,12 @@ export function resolveNotificationRecipients(
   event: NotificationSourceEvent,
   selector: NotificationAudienceSelector,
 ): readonly string[] {
-  const recipient = event.payload[selector.field];
-  return typeof recipient === 'string' && uuid.safeParse(recipient).success ? [recipient] : [];
+  const recipient = (event.payload as Readonly<Record<string, unknown>>)[selector.field];
+  if (selector.type === 'EVENT_USER') {
+    return typeof recipient === 'string' && uuid.safeParse(recipient).success ? [recipient] : [];
+  }
+  const parsed = recipientUserIdsSchema.safeParse(recipient);
+  return parsed.success ? parsed.data : [];
 }
 
 const PLACEHOLDER_PATTERN = /{{\s*([A-Za-z][A-Za-z0-9_.]{0,127})\s*}}/g;
@@ -107,7 +210,7 @@ export interface PushDeliveryRequest {
   readonly providerIdempotencyKey: string;
 }
 
-export type PushDeliveryResult =
+export type NotificationProviderDeliveryResult =
   | { readonly outcome: 'accepted'; readonly externalMessageId?: string }
   | { readonly outcome: 'retryable_failure'; readonly errorCode: string }
   | {
@@ -116,9 +219,37 @@ export type PushDeliveryResult =
       readonly invalidate: boolean;
     };
 
+export type PushDeliveryResult = NotificationProviderDeliveryResult;
+
 export interface NotificationPushDeliveryPort {
   readonly platform: NotificationPushPlatform;
   send(request: PushDeliveryRequest): Promise<PushDeliveryResult>;
+}
+
+/**
+ * Messenger delivery is deliberately separate from mobile/browser push. External target IDs are
+ * resolved from encrypted integration storage by the worker and never become public user IDs.
+ */
+export interface MessengerDeliveryRequest {
+  readonly tenantId: string;
+  readonly deliveryId: string;
+  readonly providerAccountId: string;
+  readonly connector: 'MAX';
+  readonly target: {
+    readonly kind: 'USER' | 'CHAT';
+    readonly externalId: string;
+  };
+  readonly notification: {
+    readonly id: string;
+    readonly text: string;
+    readonly deepLink?: string;
+  };
+  readonly providerIdempotencyKey: string;
+}
+
+export interface NotificationMessengerDeliveryPort {
+  readonly connector: 'MAX';
+  send(request: MessengerDeliveryRequest): Promise<NotificationProviderDeliveryResult>;
 }
 
 const webPushKey = z

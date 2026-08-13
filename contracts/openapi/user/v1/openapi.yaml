@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: PadlHub User API
-  version: 1.16.0
+  version: 1.17.0
   description: Canonical user-facing API. Public identifiers are PadlHub UUIDs.
   license:
     name: Proprietary
@@ -23,7 +23,39 @@ tags:
     description: Authenticated tournament detail reads.
   - name: locations
     description: Published PadlHub location cards and detail views.
+  - name: messaging
+    description: Tenant-gated direct conversations with ordered HTTP history and recoverable realtime hints.
 paths:
+  /{tenantKey}/messaging/realtime-ticket:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+    post:
+      tags: [messaging]
+      operationId: issueMessagingRealtimeTicket
+      summary: Issue a one-time session-bound realtime connection ticket
+      description: |
+        The 30-second ticket is accepted once. Current session, user permission and tenant runtime
+        gates are revalidated before issuance and again by the realtime process. Message bodies are
+        never included in the ticket or broker event.
+      responses:
+        '200':
+          description: One-time ticket for the tenant realtime WebSocket endpoint.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessagingRealtimeTicket'
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
   /{tenantKey}/tournaments/{tournamentId}/participants:
     parameters:
       - $ref: ../../common/components.yaml#/components/parameters/TenantKey
@@ -1139,6 +1171,132 @@ paths:
           $ref: ../../common/components.yaml#/components/responses/TooManyRequests
         '503':
           $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/community-views/{communityId}:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - name: communityId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [communities]
+      operationId: getCommunityReadExperienceDetail
+      summary: Load the source-neutral read-only community projection
+      responses:
+        '200':
+          description: Read-only community detail for an active member.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommunityReadExperienceDetail'
+        '400': { $ref: ../../common/components.yaml#/components/responses/BadRequest }
+        '401': { $ref: ../../common/components.yaml#/components/responses/Unauthorized }
+        '404': { $ref: ../../common/components.yaml#/components/responses/NotFound }
+        '429': { $ref: ../../common/components.yaml#/components/responses/TooManyRequests }
+        '503': { $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable }
+  /{tenantKey}/community-views/{communityId}/feed:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - name: communityId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - name: limit
+        in: query
+        schema: { type: integer, minimum: 1, maximum: 20, default: 20 }
+      - name: cursor
+        in: query
+        schema: { type: string, minLength: 16, maxLength: 512 }
+    get:
+      tags: [communities]
+      operationId: listCommunityReadExperienceFeed
+      summary: Load the read-only legacy-compatible community feed projection
+      responses:
+        '200':
+          description: Read-only feed page.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommunityReadExperienceFeedPage'
+        '400': { $ref: ../../common/components.yaml#/components/responses/BadRequest }
+        '401': { $ref: ../../common/components.yaml#/components/responses/Unauthorized }
+        '404': { $ref: ../../common/components.yaml#/components/responses/NotFound }
+        '429': { $ref: ../../common/components.yaml#/components/responses/TooManyRequests }
+        '503': { $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable }
+  /{tenantKey}/community-views/{communityId}/chat:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - name: communityId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - name: limit
+        in: query
+        schema: { type: integer, minimum: 1, maximum: 50, default: 20 }
+      - name: cursor
+        in: query
+        schema: { type: string, minLength: 16, maxLength: 512 }
+    get:
+      tags: [communities]
+      operationId: listCommunityReadExperienceChat
+      summary: Load a temporary read-only chat projection without read-cursor ownership
+      responses:
+        '200':
+          description: Read-only chat page.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommunityReadExperienceChatPage'
+        '400': { $ref: ../../common/components.yaml#/components/responses/BadRequest }
+        '401': { $ref: ../../common/components.yaml#/components/responses/Unauthorized }
+        '404': { $ref: ../../common/components.yaml#/components/responses/NotFound }
+        '429': { $ref: ../../common/components.yaml#/components/responses/TooManyRequests }
+        '503': { $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable }
+  /{tenantKey}/community-views/{communityId}/rating:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - name: communityId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - name: period
+        in: query
+        schema: { type: string, enum: [all, 30d], default: 30d }
+      - name: tab
+        in: query
+        schema: { type: string, enum: [overall, dynamics, games, tournaments], default: overall }
+    get:
+      tags: [communities]
+      operationId: getCommunityReadExperienceRating
+      summary: Load the versioned read-only legacy rating projection
+      responses:
+        '200':
+          description: Rating projection pinned to community-rating-v1.3.0.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommunityReadExperienceRating'
+        '400': { $ref: ../../common/components.yaml#/components/responses/BadRequest }
+        '401': { $ref: ../../common/components.yaml#/components/responses/Unauthorized }
+        '404': { $ref: ../../common/components.yaml#/components/responses/NotFound }
+        '429': { $ref: ../../common/components.yaml#/components/responses/TooManyRequests }
+        '503': { $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable }
   /{tenantKey}/communities/mine:
     parameters:
       - $ref: ../../common/components.yaml#/components/parameters/TenantKey
@@ -1185,6 +1343,276 @@ paths:
           $ref: ../../common/components.yaml#/components/responses/Forbidden
         '404':
           $ref: ../../common/components.yaml#/components/responses/NotFound
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/conversations:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+    get:
+      tags: [messaging]
+      operationId: listConversations
+      summary: List the authenticated user's active direct and game conversations
+      description: |
+        Returns only conversations where the JWT subject is an active member. GAME rows additionally
+        require current ACTIVE games.participations membership; a stale messaging member row never
+        grants access. Direct rows remain closed until the direct gate is enabled, while GAME rows
+        remain absent until the contextual gate is enabled.
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+      responses:
+        '200':
+          description: Active direct conversations ordered by latest durable activity.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationPage'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/conversations/direct:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/IdempotencyKey'
+    post:
+      tags: [messaging]
+      operationId: createDirectConversation
+      summary: Create or return one direct conversation for a PadlHub user pair
+      description: |
+        Requires chat.direct.create. The pair is canonical and tenant-local; no provider or Viva
+        identifier is accepted. An exact Idempotency-Key replay returns the stored result.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateDirectConversationRequest'
+      responses:
+        '200':
+          description: Created, existing, or idempotently replayed direct conversation.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateDirectConversationResult'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/CommandConflict'
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/conversations/game:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/IdempotencyKey'
+    post:
+      tags: [messaging]
+      operationId: getOrCreateGameConversation
+      summary: Get or create the canonical conversation for one game
+      description: |
+        Accepts only a tenant-local PadlHub game UUID. Requires games.play and current ACTIVE
+        participation in games.participations. The same authoritative roster is checked again
+        before every history, send and read-cursor operation. The route remains closed while the
+        contextual messaging tenant gate is off.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GetOrCreateGameConversationRequest'
+      responses:
+        '200':
+          description: Created, existing, or idempotently replayed game conversation.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GetOrCreateGameConversationResult'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/CommandConflict'
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/conversations/{conversationId}/messages:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - name: conversationId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [messaging]
+      operationId: listConversationMessages
+      summary: Read ordered messages after a known sequence
+      description: |
+        Current membership is checked on every request. The client uses afterSequence for polling
+        and, in M2, for deterministic realtime gap recovery.
+      parameters:
+        - name: afterSequence
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: int64
+            minimum: 0
+            default: 0
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+      responses:
+        '200':
+          description: Messages ordered by ascending server-issued sequence.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationMessagePage'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+    post:
+      tags: [messaging]
+      operationId: sendConversationMessage
+      summary: Commit one ordered text message
+      description: |
+        Locks the conversation and writes the message, audit record and identifier-only outbox
+        event atomically. Message body is excluded from broker events and telemetry.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SendConversationMessageRequest'
+      responses:
+        '200':
+          description: Stored result of the idempotent message command.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SendConversationMessageResult'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/CommandConflict'
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/conversations/{conversationId}/read-cursor:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - name: conversationId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    put:
+      tags: [messaging]
+      operationId: updateConversationReadCursor
+      summary: Monotonically advance the authenticated member's read cursor
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConversationReadCursorRequest'
+      responses:
+        '200':
+          description: Stored result of the idempotent read-cursor command.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationReadCursorResult'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/CommandConflict'
         '429':
           $ref: ../../common/components.yaml#/components/responses/TooManyRequests
         '503':
@@ -1854,13 +2282,14 @@ components:
         status:
           type: string
           enum: [AVAILABLE, LOCKED, HIDDEN]
+          description: AVAILABLE is emitted only when a working PadlHub route for the action is mounted in the current release.
         reason:
           type: string
-          enum: [ACCESS_REQUIRED, PROFILE_RESTRICTED, SELF_PROFILE]
+          enum: [ACCESS_REQUIRED, PROFILE_RESTRICTED, SELF_PROFILE, FEATURE_UNAVAILABLE]
         route:
           type: string
           pattern: '^/'
-          description: Present only when the action is available; generated by PadlHub.
+          description: Present only when the action is available and its server-authorized PadlHub route is mounted.
     ProfileFriendship:
       type: object
       additionalProperties: false
@@ -2115,6 +2544,28 @@ components:
           type: array
           items:
             type: string
+        runtimeCapabilities:
+          $ref: '#/components/schemas/UserRuntimeCapabilities'
+          description: >-
+            Current server-owned read-only runtime availability. The field is optional during the
+            expand release and clients must treat absence as all false.
+    UserRuntimeCapabilities:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          communityDirectory,
+          communityReadDetail,
+          communityReadFeed,
+          communityReadChat,
+          communityReadRating,
+        ]
+      properties:
+        communityDirectory: { type: boolean }
+        communityReadDetail: { type: boolean }
+        communityReadFeed: { type: boolean }
+        communityReadChat: { type: boolean }
+        communityReadRating: { type: boolean }
     HomeDashboard:
       type: object
       additionalProperties: false
@@ -2700,6 +3151,89 @@ components:
           type: string
           minLength: 16
           maxLength: 512
+    CommunityReadExperienceDetail:
+      type: object
+      additionalProperties: false
+      required: [id, title, logoUrl, isVerified, description, memberCount, readOnly]
+      properties:
+        id: { type: string, format: uuid }
+        title: { type: string, minLength: 1, maxLength: 120 }
+        logoUrl: { type: ['string', 'null'], format: uri }
+        isVerified: { type: boolean }
+        description: { type: ['string', 'null'], maxLength: 2000 }
+        memberCount: { type: integer, minimum: 0 }
+        readOnly: { type: boolean, const: true }
+    CommunityReadExperienceAuthor:
+      type: object
+      additionalProperties: false
+      required: [displayName]
+      properties:
+        displayName: { type: string, minLength: 1, maxLength: 120 }
+    CommunityReadExperienceFeedItem:
+      type: object
+      additionalProperties: false
+      required: [kind, title, body, publishedAt, author]
+      properties:
+        kind: { type: string, enum: [PHOTO, GAME, TOURNAMENT, SYSTEM] }
+        title: { type: ['string', 'null'], minLength: 1, maxLength: 240 }
+        body: { type: string, maxLength: 8000 }
+        publishedAt: { type: string, format: date-time }
+        author: { $ref: '#/components/schemas/CommunityReadExperienceAuthor' }
+        likesCount: { type: integer, minimum: 0 }
+        commentsCount: { type: integer, minimum: 0 }
+    CommunityReadExperienceFeedPage:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          maxItems: 20
+          items: { $ref: '#/components/schemas/CommunityReadExperienceFeedItem' }
+        nextCursor: { type: string, minLength: 16, maxLength: 512 }
+    CommunityReadExperienceChatMessage:
+      type: object
+      additionalProperties: false
+      required: [body, sentAt, author, isViewer]
+      properties:
+        body: { type: string, minLength: 1, maxLength: 8000 }
+        sentAt: { type: string, format: date-time }
+        author: { $ref: '#/components/schemas/CommunityReadExperienceAuthor' }
+        isViewer: { type: boolean }
+    CommunityReadExperienceChatPage:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          maxItems: 50
+          items: { $ref: '#/components/schemas/CommunityReadExperienceChatMessage' }
+        nextCursor: { type: string, minLength: 16, maxLength: 512 }
+    CommunityReadExperienceRatingRow:
+      type: object
+      additionalProperties: false
+      required: [place, displayName, currentLevel, score, delta, games, tournaments]
+      properties:
+        place: { type: integer, minimum: 1 }
+        displayName: { type: string, minLength: 1, maxLength: 120 }
+        currentLevel: { type: number }
+        score: { type: number }
+        delta: { type: number }
+        games: { type: number }
+        tournaments: { type: number }
+    CommunityReadExperienceRating:
+      type: object
+      additionalProperties: false
+      required: [period, tab, calculationVersion, rows]
+      properties:
+        period: { type: string, enum: [all, 30d] }
+        tab: { type: string, enum: [overall, dynamics, games, tournaments] }
+        calculationVersion: { type: string, const: community-rating-v1.3.0 }
+        rows:
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/CommunityReadExperienceRatingRow' }
     HomePromotion:
       type: object
       additionalProperties: false
@@ -2880,6 +3414,245 @@ components:
         canManageTournaments:
           type: boolean
         canViewCommunities:
+          type: boolean
+    MessagingParticipant:
+      type: object
+      additionalProperties: false
+      required: [userId, displayName]
+      properties:
+        userId:
+          type: string
+          format: uuid
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 200
+    ConversationLastMessage:
+      type: object
+      additionalProperties: false
+      required: [sequence, body, createdAt]
+      properties:
+        sequence:
+          type: integer
+          format: int64
+          minimum: 1
+        body:
+          type: string
+          minLength: 1
+          maxLength: 8000
+        createdAt:
+          type: string
+          format: date-time
+    DirectConversationSummary:
+      type: object
+      additionalProperties: false
+      required: [id, kind, participant, unreadCount, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        kind:
+          type: string
+          const: DIRECT
+        participant:
+          $ref: '#/components/schemas/MessagingParticipant'
+        unreadCount:
+          type: integer
+          minimum: 0
+        updatedAt:
+          type: string
+          format: date-time
+        lastMessage:
+          $ref: '#/components/schemas/ConversationLastMessage'
+    ConversationSummary:
+      oneOf:
+        - $ref: '#/components/schemas/DirectConversationSummary'
+        - $ref: '#/components/schemas/GameConversationSummary'
+      discriminator:
+        propertyName: kind
+    ConversationPage:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/ConversationSummary'
+    MessagingRealtimeTicket:
+      type: object
+      additionalProperties: false
+      required: [ticket, expiresAt]
+      properties:
+        ticket:
+          type: string
+          minLength: 64
+          maxLength: 4096
+        expiresAt:
+          type: string
+          format: date-time
+    CreateDirectConversationRequest:
+      type: object
+      additionalProperties: false
+      required: [otherUserId]
+      properties:
+        otherUserId:
+          type: string
+          format: uuid
+    CreateDirectConversationResult:
+      type: object
+      additionalProperties: false
+      required: [outcome, conversation, created, replayed]
+      properties:
+        outcome:
+          type: string
+          const: ok
+        conversation:
+          $ref: '#/components/schemas/DirectConversationSummary'
+        created:
+          type: boolean
+        replayed:
+          type: boolean
+    GameConversationSummary:
+      type: object
+      additionalProperties: false
+      required: [id, kind, contextId, title, unreadCount, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        kind:
+          type: string
+          const: GAME
+        contextId:
+          type: string
+          format: uuid
+        title:
+          type: string
+          minLength: 1
+          maxLength: 160
+        unreadCount:
+          type: integer
+          minimum: 0
+        updatedAt:
+          type: string
+          format: date-time
+        lastMessage:
+          $ref: '#/components/schemas/ConversationLastMessage'
+    GetOrCreateGameConversationRequest:
+      type: object
+      additionalProperties: false
+      required: [gameId]
+      properties:
+        gameId:
+          type: string
+          format: uuid
+    GetOrCreateGameConversationResult:
+      type: object
+      additionalProperties: false
+      required: [outcome, conversation, created, replayed]
+      properties:
+        outcome:
+          type: string
+          const: ok
+        conversation:
+          $ref: '#/components/schemas/GameConversationSummary'
+        created:
+          type: boolean
+        replayed:
+          type: boolean
+    ConversationMessage:
+      type: object
+      additionalProperties: false
+      required: [id, conversationId, sequence, sender, messageType, body, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        conversationId:
+          type: string
+          format: uuid
+        sequence:
+          type: integer
+          format: int64
+          minimum: 1
+        sender:
+          $ref: '#/components/schemas/MessagingParticipant'
+        messageType:
+          type: string
+          const: TEXT
+        body:
+          type: string
+          minLength: 1
+          maxLength: 8000
+        createdAt:
+          type: string
+          format: date-time
+    ConversationMessagePage:
+      type: object
+      additionalProperties: false
+      required: [messages]
+      properties:
+        messages:
+          type: array
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/ConversationMessage'
+        nextAfterSequence:
+          type: integer
+          format: int64
+          minimum: 1
+    SendConversationMessageRequest:
+      type: object
+      additionalProperties: false
+      required: [clientMessageId, body]
+      properties:
+        clientMessageId:
+          type: string
+          minLength: 16
+          maxLength: 128
+          pattern: '^[A-Za-z0-9._:-]+$'
+        body:
+          type: string
+          minLength: 1
+          maxLength: 8000
+    SendConversationMessageResult:
+      type: object
+      additionalProperties: false
+      required: [outcome, message, replayed]
+      properties:
+        outcome:
+          type: string
+          const: ok
+        message:
+          $ref: '#/components/schemas/ConversationMessage'
+        replayed:
+          type: boolean
+    ConversationReadCursorRequest:
+      type: object
+      additionalProperties: false
+      required: [throughSequence]
+      properties:
+        throughSequence:
+          type: integer
+          format: int64
+          minimum: 0
+    ConversationReadCursorResult:
+      type: object
+      additionalProperties: false
+      required: [outcome, readThroughSequence, changed, replayed]
+      properties:
+        outcome:
+          type: string
+          const: ok
+        readThroughSequence:
+          type: integer
+          format: int64
+          minimum: 0
+        changed:
+          type: boolean
+        replayed:
           type: boolean
     NotificationInboxPage:
       type: object

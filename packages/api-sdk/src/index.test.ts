@@ -68,6 +68,30 @@ function createClient(
 }
 
 describe('PadlHubApiClient authentication boundary', () => {
+  it('uses only source-neutral read-only community view routes', async () => {
+    const fetchImplementation = vi
+      .fn<typeof fetch>()
+      .mockImplementation(() => Promise.resolve(jsonResponse({ items: [] })));
+    const client = createClient(fetchImplementation, {
+      initialAccessToken: authenticatedSession.accessToken,
+    });
+    const communityId = '11111111-1111-4111-8111-111111111111';
+
+    await client.listCommunityReadExperienceFeed(communityId, { limit: 20 });
+    await client.listCommunityReadExperienceChat(communityId, { limit: 50 });
+    await client.getCommunityReadExperienceRating(communityId, {
+      period: '30d',
+      tab: 'dynamics',
+    });
+
+    expect(fetchImplementation.mock.calls.map(([input]) => requestUrl(input))).toEqual([
+      `https://api.padlhub.test/user/api/v1/local-padel/community-views/${communityId}/feed?limit=20`,
+      `https://api.padlhub.test/user/api/v1/local-padel/community-views/${communityId}/chat?limit=50`,
+      `https://api.padlhub.test/user/api/v1/local-padel/community-views/${communityId}/rating?period=30d&tab=dynamics`,
+    ]);
+    for (const [, init] of fetchImplementation.mock.calls) expect(init?.cache).toBe('no-store');
+  });
+
   it('loads one public tournament summary by PadlHub id and bounded date range', async () => {
     const summary = {
       id: '91a1c7c6-73d0-4270-a400-3358873e4d9b',
@@ -812,6 +836,86 @@ describe('PadlHubApiClient booking personalization boundary', () => {
     expect(calls[0]?.init?.method).toBe('POST');
     expect(new Headers(calls[0]?.init?.headers).get('Idempotency-Key')).toBeTruthy();
     expect(JSON.parse(stringRequestBody(calls[0]?.init?.body))).toEqual({ kind: 'CLICK' });
+  });
+});
+
+describe('PadlHubApiClient messaging boundary', () => {
+  it('issues the realtime ticket through the authenticated PadlHub API only', async () => {
+    const calls: Array<{ input: Parameters<typeof fetch>[0]; init?: RequestInit }> = [];
+    const client = createClient(
+      (input, init) => {
+        calls.push({ input, ...(init === undefined ? {} : { init }) });
+        return Promise.resolve(
+          jsonResponse({ ticket: 'x'.repeat(64), expiresAt: '2026-08-03T12:00:30.000Z' }),
+        );
+      },
+      { initialAccessToken: authenticatedSession.accessToken },
+    );
+
+    await client.issueMessagingRealtimeTicket();
+
+    expect(requestUrl(calls[0]?.input ?? '')).toContain('/messaging/realtime-ticket');
+    expect(calls[0]?.init?.method).toBe('POST');
+    expect(new Headers(calls[0]?.init?.headers).get('Authorization')).toMatch(/^Bearer /);
+  });
+
+  it('uses only PadlHub conversation routes and retry-safe commands', async () => {
+    const calls: Array<{ input: Parameters<typeof fetch>[0]; init?: RequestInit }> = [];
+    const conversationId = '22222222-2222-4222-8222-222222222222';
+    const otherUserId = '11111111-1111-4111-8111-111111111111';
+    const gameId = '44444444-4444-4444-8444-444444444444';
+    const fetchImplementation: typeof fetch = (input, init) => {
+      calls.push({ input, ...(init === undefined ? {} : { init }) });
+      const url = requestUrl(input);
+      if (url.endsWith('/conversations?limit=25')) {
+        return Promise.resolve(jsonResponse({ items: [] }));
+      }
+      if (url.endsWith('/conversations/direct')) {
+        return Promise.resolve(
+          jsonResponse({ outcome: 'ok', conversation: {}, created: true, replayed: false }),
+        );
+      }
+      if (url.endsWith('/conversations/game')) {
+        return Promise.resolve(
+          jsonResponse({ outcome: 'ok', conversation: {}, created: true, replayed: false }),
+        );
+      }
+      if (url.includes('/messages') && init?.method === 'POST') {
+        return Promise.resolve(jsonResponse({ outcome: 'ok', message: {}, replayed: false }));
+      }
+      if (url.includes('/read-cursor')) {
+        return Promise.resolve(
+          jsonResponse({ outcome: 'ok', readThroughSequence: 1, changed: true, replayed: false }),
+        );
+      }
+      return Promise.resolve(jsonResponse({ messages: [] }));
+    };
+    const client = createClient(fetchImplementation, {
+      initialAccessToken: authenticatedSession.accessToken,
+    });
+
+    await client.listConversations(25);
+    await client.createDirectConversation(otherUserId);
+    await client.getOrCreateGameConversation(gameId);
+    await client.listConversationMessages(conversationId, { afterSequence: 4, limit: 50 });
+    await client.sendConversationMessage(conversationId, 'Привет');
+    await client.markConversationRead(conversationId, 5);
+
+    expect(requestUrl(calls[0]?.input ?? '')).toContain('/conversations?limit=25');
+    expect(JSON.parse(stringRequestBody(calls[1]?.init?.body))).toEqual({ otherUserId });
+    expect(JSON.parse(stringRequestBody(calls[2]?.init?.body))).toEqual({ gameId });
+    expect(requestUrl(calls[3]?.input ?? '')).toContain(
+      `/conversations/${conversationId}/messages?afterSequence=4&limit=50`,
+    );
+    const sendHeaders = new Headers(calls[4]?.init?.headers);
+    const sendBody = JSON.parse(stringRequestBody(calls[4]?.init?.body)) as {
+      clientMessageId: string;
+      body: string;
+    };
+    expect(sendHeaders.get('Idempotency-Key')).toBe(sendBody.clientMessageId);
+    expect(sendBody.body).toBe('Привет');
+    expect(JSON.parse(stringRequestBody(calls[5]?.init?.body))).toEqual({ throughSequence: 5 });
+    expect(calls.map((call) => requestUrl(call.input)).join(' ')).not.toMatch(/viva|provider/i);
   });
 });
 

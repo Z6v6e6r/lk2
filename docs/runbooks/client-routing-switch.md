@@ -39,6 +39,24 @@ Dry run validates input and resolves the active tenant but writes nothing. Repea
 only after review. A repeated apply with the same key and payload returns the recorded revision; a
 different payload with that key fails with `IDEMPOTENCY_KEY_CONFLICT`.
 
+For Jetson staging, use the manual `Set staging client routing plan` workflow from `main`. Supply the
+reviewed tenant key and operator UUID. An empty confirmation runs only the dry-run. The exact
+`APPLY_ROUTING_PLAN` confirmation first repeats that dry-run and then applies the same fixed
+`MIXED_END_USER_READS` plan with only `profile.read`, a 60-second client-envelope TTL and
+run-scoped idempotency/correlation identifiers. The stored plan remains in force until another
+audited plan command replaces it; each authenticated `/routing-plan` response receives a new
+bounded expiry. The workflow executes the repository operator inside the digest-pinned migrator
+image so `DATABASE_URL` is never copied to GitHub Actions or printed.
+
+The deploy performs a fresh audited dry-run and apply after image pull, migration, TLS and local
+HomeBase verification. `FULL_LIVE_HOME` then runs `activate-live-home.sh` and requires fresh Viva,
+community, promotion and platform projections. `CLIENT_ASSISTED_VIVA` instead runs
+`activate-client-assisted-viva.sh`: it preserves the current Home read mode, disables blocked
+server-side Viva Home sync and enables only the browser-assisted transport. Both profiles keep the
+global direct-read kill switch and the tenant routing plan as independent rollback controls. Do
+not lengthen the response envelope to hide refresh failures; the routing operator intentionally
+accepts only 30–300 seconds.
+
 ## Mixed-mode smoke
 
 1. Restore a real PadlHub user session with an active Viva delegation.

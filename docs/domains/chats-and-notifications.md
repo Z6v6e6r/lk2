@@ -1,8 +1,24 @@
 # Контур «Чаты и оповещения»
 
-Статус: целевая архитектура, expand-only фундамент, feature-gated in-app, Web Push/VAPID и ручная
-отправка из ЦУП. Остальные публичные операции остаются закрытыми, пока не реализованы авторизация,
-идемпотентность, аудит и обработчики соответствующего вертикального среза.
+Статус: целевая архитектура, expand-only фундамент, feature-gated direct-chat
+HTTP M1 и recoverable realtime M2 с Web UI, in-app, Web Push/VAPID и ручная отправка из ЦУП. Остальные публичные
+операции остаются закрытыми, пока не реализованы авторизация, идемпотентность, аудит и
+обработчики соответствующего вертикального среза.
+
+Локально собранный direct-chat M1 включает User API, типизированный SDK и Web-маршруты
+для list/create/history/send/read cursor. Каноническая пара PadlHub UUID дедуплицируется;
+создание и отправка повторно проверяют current permission, active membership, active target и его
+`chatPolicy`. Tenant gates по умолчанию выключены. Наличие кода не доказывает, что срез активирован
+или проверен в целевой среде. Block-list enforcement, tournament/station contextual chats,
+attachments, edit/delete, connectors и moderation в M1/M2 не входят. Realtime M2 добавляет одноразовый
+session-bound ticket, повторную проверку сессии/прав/membership, identifier-only fanout и
+HTTP gap recovery. Все команды и каноническая история остаются в HTTP/PostgreSQL.
+
+Следующий feature-gated slice реализует только `GAME`: canonical `games.games.id`, актуальная
+`games.participations(state='ACTIVE')` и `games.play` повторно проверяются перед list/history/send/
+read cursor. Tournament остаётся закрыт без identity-linked canonical roster; Station остаётся
+закрыт без утверждённой membership/privacy модели и не добавляется в enum разговоров. Матрица
+доказательств и открытые вопросы: [contextual-chats-evidence-2026-08-03.md](../plans/contextual-chats-evidence-2026-08-03.md).
 
 Реализованный in-app срез включает rule/template consumer, транзакционные intent/inbox/delivery,
 RabbitMQ inbox-дедупликацию, tenant gate, `GET /notifications`, идемпотентный `PUT
@@ -174,6 +190,21 @@ envelope key, а hash используется только для дедупл�
 notification UUID, безопасный preview и deep-link route; полный чувствительный текст клиент
 получает из User API после авторизации.
 
+Один общий atomic finalizer фиксирует результат любого push delivery port. Он проверяет не только
+`attempt_count`, но и непросроченный lease, а stale worker не может добавить attempt, receipt,
+provider link или outbox. Необязательный внешний message ID хранится только в tenant-scoped
+`integration.notification_provider_links`; конфликт ID для уже связанной delivery завершает
+delivery как `DEAD` со стабильным безопасным кодом без provider ID в audit, outbox или логах;
+точный replay той же связи остаётся идемпотентным. APNs/FCM смогут использовать этот finalizer, но
+их adapters, encrypted token lifecycle и native client bridges в текущем срезе отсутствуют и
+остаются выключенными.
+
+MAX является messenger connector, а не push platform. Для него определён отдельный delivery-port
+boundary, но network adapter отсутствует: в PadlHub пока нет подтверждённых bot account settings и
+tenant-scoped согласованного mapping пользователя на MAX `user_id`/`chat_id`. До появления этих
+входов MAX остаётся fail-closed. Текущая evidence/readiness matrix находится в
+[плане каналов доставки](../plans/push-delivery-readiness-wave-2026-08-03.md).
+
 ### Внешний контроль и модерация
 
 Источники: жалоба пользователя, правило PadlHub, действие сотрудника ЦУП или signed signal
@@ -211,12 +242,21 @@ window, timeout, circuit breaker и redacted telemetry. Режим аккаун�
 - при разрыве sequence или reconnect клиент вызывает HTTP `GET messages?afterSequence=...`;
 - отправка/редактирование/удаление сообщений всегда идёт через HTTP command API, а не WebSocket.
 
-Gateway держит connection registry в Redis только как эфемерную маршрутизацию. Если Redis или
+Gateway держит connection registry в памяти своего процесса; Redis хранит только
+короткоживущие one-time ticket markers. Если Redis или
 RabbitMQ недоступен, история остаётся корректной, клиент восстанавливается через API.
+
+Текущий M2 использует exclusive fanout queue на каждый realtime instance, `prefetch(1)` и keyed
+serialization по conversation. Потеря ephemeral queue закрывается HTTP gap recovery, а не хранением
+истории в RabbitMQ. Невалидные envelope создают publisher-confirmed запись в
+`phub.realtime.messaging.quarantine.v1` только с hash/reason, без raw body; transient projection failure снимает readiness и
+запускает bounded reconnect. Событие остаётся hint: пропуск, дубль или reconnect
+закрываются HTTP-чтением по `sequence`.
 
 ## 5. Целевые API-поверхности
 
-Это карта будущих контрактов, а не обещание уже работающих routes.
+Первые четыре direct-chat операции и read cursor реализованы за выключенными tenant
+gates; остальной список — целевая карта.
 
 ### User API
 
@@ -235,7 +275,7 @@ RabbitMQ недоступен, история остаётся корректн�
 - `POST|DELETE /{tenantKey}/notification-endpoints` для будущих iOS/Android установок
 - `POST /{tenantKey}/notification-deliveries/{deliveryId}/receipts`
 - `POST /{tenantKey}/conversations/{conversationId}/messages/{messageId}/reports`
-- `POST /{tenantKey}/realtime/tickets`
+- `POST /{tenantKey}/messaging/realtime-ticket`
 
 ### Admin API / ЦУП
 
@@ -275,11 +315,20 @@ recommendation и revoke signal. Она не получает user/admin JWT, н
 | `notifications.delivery.receipt.v1`        | deliveryId, receiptType, platform            | ЦУП, analytics                                    |
 | `notifications.read-cursor.updated.v1`     | recipientUserId, readThroughItemId           | home counters, analytics                          |
 | `notifications.admin-campaign.accepted.v1` | campaignId, matchedCount, requestedChannels  | ЦУП, analytics                                    |
+| `booking.confirmed.v1`                     | bookingId, revision, recipientUserIds        | notification policy                               |
+| `booking.changed.v1`                       | bookingId, revision, recipientUserIds        | notification policy                               |
+| `booking.cancelled.v1`                     | bookingId, revision, recipientUserIds        | notification policy                               |
+| `booking.reminder.due.v1`                  | bookingId, revision, recipientUserIds        | notification policy                               |
 | `moderation.case.created.v1`               | caseId, source, severity                     | ЦУП moderation queue                              |
 | `moderation.action.applied.v1`             | caseId, actionId, actionType, target IDs     | messaging, realtime, audit projection             |
 
 Broker payloads не содержат body, attachment URLs, телефон, email, push token или внешний contact
 ID. Версия является частью имени события; несовместимое изменение создаёт новую версию.
+
+Booking events используют только PadlHub UUID: envelope `aggregateId` равен payload
+`bookingId`, `revision` содержит монотонную ревизию авторитетного booking aggregate, а
+`recipientUserIds` — дедуплицированный ограниченный список PadlHub user UUID. Viva booking IDs и
+browser-derived projections в этот контракт не входят.
 
 ## 7. Авторизация, приватность и модерация
 
@@ -325,9 +374,11 @@ p95 < 2 s после commit; 99.9% intent либо доставлен хотя �
 ## 9. Поэтапное включение и rollback
 
 1. **Foundation:** expand-only таблицы, RLS, domain interfaces, события и feature flags; routes
-   закрыты.
-2. **Direct + contextual read/write:** HTTP history/send/read cursor, затем game/tournament/community
-   membership policies.
+   закрыты. В текущей release-линии `/chats` и `/chats/new` не публикуются;
+   game/profile DTO fail closed без смонтированного messaging route.
+2. **Direct + contextual read/write:** direct HTTP list/create/history/send/read cursor реализованы
+   за tenant gates; block policy и game/tournament/community membership остаются следующими
+   подэтапами.
 3. **Realtime:** tickets, subscriptions, sequence-gap recovery; HTTP остаётся fallback.
 4. **CUP support + один connector:** inbound/outbound dedupe, assignment, retry/DLQ.
 5. **In-app notifications:** templates, rules, intents, preferences и inbox. Пользовательский срез

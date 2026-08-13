@@ -201,7 +201,7 @@ Enable the existing CUP Home advertising placement as an independent producer:
 ```dotenv
 PROMOTIONS_READ_MODE=legacy
 PROMOTIONS_LEGACY_BASE_URL=https://padlhub.su
-PROMOTIONS_HERO_PLACEMENT=cabinet_home
+PROMOTIONS_HERO_PLACEMENT=cabinet_home_top
 PROMOTIONS_STANDARD_PLACEMENT=cabinet_home
 PROMOTIONS_RECOMMENDATION_STRIP_PLACEMENT=cabinet_for_me_strip
 PROMOTIONS_RECOMMENDATION_CARD_PLACEMENT=cabinet_for_me_card
@@ -225,11 +225,12 @@ for loopback, `host.docker.internal`, or the `phab-showcase` service name. The r
 list the exact hostname in `PROMOTION_IMAGE_PRIVATE_HTTP_HOSTS`.
 
 For Jetson staging, `deploy/jetson/activate-live-home.sh` replaces the legacy public origin with
-`http://phab-showcase:3000`, keeps both Home slots on CUP Block 2, and allowlists
+`http://phab-showcase:3000`, maps the Home hero to CUP Block 1 (`cabinet_home_top`) and the standard
+deck to CUP Block 2 (`cabinet_home`), and allowlists
 `phab-showcase` for the staging-only private HTTP media copy. Production rejects any non-empty
 `PROMOTION_IMAGE_PRIVATE_HTTP_HOSTS`. The staging worker is attached to the external
 `phab-showcase_default` network; absence of that network or an invalid
-`GET /api/advertising/cabinet-home` response is a rollout NO-GO. Do not expose this private HTTP
+response from any of the four configured advertising placements is a rollout NO-GO. Do not expose this private HTTP
 origin to web/mobile clients and do not bypass the showcase Basic Auth from a browser.
 
 Recreate only the worker after changing this gate. Verify a `promotion` row for the test user in

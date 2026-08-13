@@ -34,10 +34,12 @@ the audited routing-plan procedure in
 2. In staging, verify that the OAuth callback creates a stable PadlHub UUID from Viva
    `(issuer, subject)`, writes the two document-version acceptances, creates a PadlHub session and
    stores the Viva refresh-token only in encrypted delegation storage.
-   If the server-side Viva profile read is `403` and direct reads are enabled, prove separately that
-   the callback resolves an already-linked subject without an identity upsert. An unknown subject
-   must return `AUTH_IDENTITY_LINK_REQUIRED`, create neither user nor delegation, and never accept a
-   browser-supplied Viva identifier.
+   If the server-side Viva profile read is `403`, enable
+   `VIVA_OAUTH_EXISTING_SUBJECT_BOOTSTRAP_ENABLED` only after the identity-link reconciliation is
+   clean. Prove separately that the callback resolves an already-linked subject without an identity
+   upsert. This flag does not enable browser direct reads and must not change
+   `VIVA_DIRECT_READ_ENABLED`. An unknown subject must return `AUTH_IDENTITY_LINK_REQUIRED`, create
+   neither user nor delegation, and never accept a browser-supplied Viva identifier.
 3. Inspect browser storage, response bodies, logs, traces and metrics. The only permitted Viva
    credential in the browser is a current access-token held in memory. It must not appear in cookies,
    LocalStorage, SessionStorage, URLs, error reports or analytics.

@@ -1,12 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { listDueHomeBaseUsers, projectHomeBaseUser } from './home-base-projector.js';
+import { listDueHomeBaseUsers, projectHomeBaseUser } from '@phub/database';
 
 const tenantId = '86afbe01-0318-4dd2-bc25-303b7bf0d430';
 const userId = '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca';
 
 describe('HomeBase local projector', () => {
-  it('selects active users for initial backfill without requiring Viva delegation', async () => {
+  it('selects all active users while prioritizing a current Viva delegation', async () => {
     const sql: string[] = [];
     const query = vi.fn((text: string, values: readonly unknown[] = []) => {
       sql.push(text);
@@ -41,7 +41,10 @@ describe('HomeBase local projector', () => {
       }),
     ).resolves.toEqual([{ userId }]);
 
-    expect(sql.join('\n')).not.toMatch(/viva|delegation/i);
+    expect(sql.join('\n')).toContain('integration.user_delegations');
+    expect(sql.join('\n')).not.toMatch(
+      /where[\s\S]*identity_user\.status = 'ACTIVE'[\s\S]*and exists/i,
+    );
     expect(sql.join('\n')).toContain('snapshot.checked_at');
     expect(sql.join('\n')).toContain('hashtextextended(identity_user.id::text, $4::bigint)');
   });

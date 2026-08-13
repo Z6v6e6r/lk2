@@ -75,6 +75,8 @@ services:
     ports:
       - '${PHUB_BIND_ADDRESS:-127.0.0.1}:3001:3001'
     depends_on:
+      postgres:
+        condition: service_healthy
       redis:
         condition: service_healthy
       rabbitmq:
@@ -106,6 +108,7 @@ services:
     command: npm run dev:web
     environment:
       PHUB_DEV_API_PROXY_TARGET: http://api:3000
+      PHUB_DEV_REALTIME_PROXY_TARGET: ws://realtime:3001
     profiles: [clients]
     ports:
       - '${PHUB_BIND_ADDRESS:-127.0.0.1}:5173:5173'

@@ -19,6 +19,7 @@ import {
   createLegacyGameImportRepository,
   createLocationMediaRepository,
   createLocationRepository,
+  createMessagingRepository,
   createNotificationEndpointRepository,
   createNotificationInboxRepository,
   createProfilePrivacyRepository,
@@ -28,6 +29,7 @@ import {
   createPromotionEngagementRepository,
   createTrainerAvatarRepository,
   createUpcomingBookingsRepository,
+  projectHomeBaseUser,
 } from '@phub/database';
 import {
   LegacyGamesMongoAdapter,
@@ -49,6 +51,7 @@ import { ActivityHistoryProjectionCoordinator } from './bookings/activity-histor
 import { ActivityHistoryGameBackfill } from './bookings/activity-history-game-backfill.js';
 import { RedisBookingScreenReadJobStore } from './bookings/booking-screen-read-job-store.js';
 import { RedisEventCatalogSnapshotStore } from './bookings/event-catalog-snapshot-store.js';
+import { RedisRealtimeTicketIssuer } from './messaging/realtime-ticket-issuer.js';
 import type { EventCatalogItem } from './bookings/booking-recommendation-routes.js';
 import { listViewerGameCards } from './games/game-card-queries.js';
 import { S3GiftCertificateMediaStore } from './gift-certificates/gift-certificate-media-store.js';
@@ -58,7 +61,10 @@ import { S3ProfilePhotoMediaStore } from './profile/profile-photo-media-store.js
 import { AuthService } from './auth/auth-service.js';
 import { RedisAuthChallengeStore } from './auth/challenge-store.js';
 import { RedisVivaOAuthStateStore } from './auth/oauth-state-store.js';
-import { createCommunityDirectoryRuntime } from './communities/community-runtime.js';
+import {
+  createCommunityDirectoryRuntime,
+  createCommunityReadExperienceRuntime,
+} from './communities/community-runtime.js';
 import { PostgresAuthRepository } from './auth/postgres-auth-repository.js';
 import { LegacyPromotionEngagementSink } from './promotions/legacy-promotion-engagement-sink.js';
 import { S3TrainerAvatarMediaStore } from './trainer-avatar-media-store.js';
@@ -94,7 +100,7 @@ const vivaIdentityProvider = new VivaIdentityProvider({
   timeoutMs: config.VIVA_TIMEOUT_MS,
   devPhoneE164: config.AUTH_DEV_PHONE_E164,
   devOtpCode: config.AUTH_DEV_OTP_CODE,
-  allowExistingSubjectOAuthBootstrap: config.VIVA_DIRECT_READ_ENABLED,
+  allowExistingSubjectOAuthBootstrap: config.VIVA_OAUTH_EXISTING_SUBJECT_BOOTSTRAP_ENABLED,
   onMetric: (metric) => logger.info({ metric }, 'identity provider operation'),
 });
 const providers = new Map<IdentityProviderKey, IdentityProviderPort>([
@@ -325,16 +331,34 @@ const giftCertificateArtifactStore = config.GIFT_CERTIFICATE_ISSUANCE_ENABLED
       timeoutMs: config.GIFT_CERTIFICATE_ARTIFACT_STORAGE_TIMEOUT_MS,
     })
   : undefined;
+const communityReadExperienceService = createCommunityReadExperienceRuntime({
+  config,
+  pool,
+  logger,
+});
 const app = await buildApp({
   config,
   logger,
   pool,
   authService,
   communityDirectory: createCommunityDirectoryRuntime({ config, pool, logger }),
+  ...(communityReadExperienceService ? { communityReadExperienceService } : {}),
   homeDashboardRepository: createHomeDashboardProjectionRepository(pool),
   homeBaseRepository: createHomeBaseProjectionRepository(pool),
+  ...(config.HOME_BASE_SYNC_ENABLED
+    ? {
+        homeBaseProjector: (input: { tenantId: string; userId: string; correlationId: string }) =>
+          projectHomeBaseUser({
+            pool,
+            ...input,
+            ttlSeconds: config.HOME_PROJECTION_TTL_SECONDS,
+          }),
+      }
+    : {}),
   clientRoutingPlanRepository,
   notificationRepository: createNotificationInboxRepository(pool),
+  messagingRepository: createMessagingRepository(pool),
+  realtimeTicketIssuer: new RedisRealtimeTicketIssuer(redis, config),
   notificationEndpointRepository: createNotificationEndpointRepository(pool),
   adminNotificationRepository: createAdminNotificationRepository(pool),
   locationRepository: createLocationRepository(pool),

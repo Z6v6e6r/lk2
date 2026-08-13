@@ -48,11 +48,21 @@ write_runtime_override() {
   {
     printf 'HOME_READ_MODE=%s\n' "$home_read_mode"
     printf 'HOME_VIVA_SYNC_ENABLED=true\n'
+    printf 'VIVA_DIRECT_READ_ENABLED=true\n'
     printf 'COMMUNITIES_READ_MODE=legacy\n'
+    printf 'COMMUNITY_LEGACY_READ_DETAIL_ENABLED=true\n'
+    printf 'COMMUNITY_LEGACY_READ_FEED_ENABLED=true\n'
+    printf 'COMMUNITY_LEGACY_READ_CHAT_ENABLED=true\n'
+    printf 'COMMUNITY_LEGACY_READ_RATING_ENABLED=true\n'
+    printf 'COMMUNITIES_LEGACY_TIMEOUT_MS=2500\n'
+    printf 'COMMUNITIES_LEGACY_MAX_ATTEMPTS=1\n'
+    printf 'COMMUNITIES_LEGACY_CACHE_TTL_MS=120000\n'
     printf 'PROMOTIONS_READ_MODE=legacy\n'
     printf 'PROMOTIONS_LEGACY_BASE_URL=http://phab-showcase:3000\n'
-    printf 'PROMOTIONS_HERO_PLACEMENT=cabinet_home\n'
+    printf 'PROMOTIONS_HERO_PLACEMENT=cabinet_home_top\n'
     printf 'PROMOTIONS_STANDARD_PLACEMENT=cabinet_home\n'
+    printf 'PROMOTIONS_RECOMMENDATION_STRIP_PLACEMENT=cabinet_for_me_strip\n'
+    printf 'PROMOTIONS_RECOMMENDATION_CARD_PLACEMENT=cabinet_for_me_card\n'
     printf 'PROMOTION_IMAGE_ALLOWED_HOSTS=phab-showcase\n'
     printf 'PROMOTION_IMAGE_PRIVATE_HTTP_HOSTS=phab-showcase\n'
     if test -n "$promotion_sync_batch_size"; then
@@ -105,6 +115,31 @@ active_delegations_sql="
      and delegation.revoked_at is null
      and (delegation.refresh_expires_at is null or delegation.refresh_expires_at > now())
 "
+
+routing_ready_delegations_sql="
+  select count(*)
+    from integration.user_delegations delegation
+    join integration.client_routing_plans plan
+      on plan.tenant_id = delegation.tenant_id
+     and plan.mode = 'MIXED_END_USER_READS'
+     and plan.direct_read_operations @> array['profile.read']::text[]
+    join integration.identity_provider_bindings binding
+      on binding.tenant_id = delegation.tenant_id
+     and binding.provider = 'VIVA'
+     and nullif(btrim(binding.provider_tenant_key), '') is not null
+   where delegation.provider = 'VIVA'
+     and delegation.revoked_at is null
+     and (delegation.refresh_expires_at is null or delegation.refresh_expires_at > now())
+"
+
+active_delegations="$(sql "$active_delegations_sql")"
+routing_ready_delegations="$(sql "$routing_ready_delegations_sql")"
+if test "$active_delegations" -eq 0 || test "$routing_ready_delegations" != "$active_delegations"; then
+  echo "Live booking-screen routing is not ready: ${routing_ready_delegations}/${active_delegations} active delegations" >&2
+  echo "Set the tenant routing plan to MIXED_END_USER_READS with profile.read before activation" >&2
+  write_runtime_override "$previous_home_read_mode"
+  exit 1
+fi
 
 ready_delegations_sql="
   select count(*)

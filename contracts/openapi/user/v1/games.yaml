@@ -853,6 +853,7 @@ components:
         allowedActions:
           type: array
           uniqueItems: true
+          description: OPEN_CHAT is present only when conversation is non-null and membership was authorized server-side.
           items:
             $ref: '#/components/schemas/GameAllowedAction'
         deepLink:
@@ -860,6 +861,7 @@ components:
           pattern: '^/(?!/)'
           maxLength: 2000
         conversation:
+          description: Server-authorized game conversation reference; null until the conversation route is mounted and membership is active.
           oneOf:
             - $ref: '#/components/schemas/GameConversationSummary'
             - type: 'null'

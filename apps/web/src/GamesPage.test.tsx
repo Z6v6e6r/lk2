@@ -256,6 +256,46 @@ describe('GamesPage discovery', () => {
     expect(screen.getByRole('heading', { name: 'Пары и счёт по сетам' })).toBeInTheDocument();
   });
 
+  it('requests the game chat with the canonical detail id and no user-entered identifier', async () => {
+    const participantGame: ViewerGameCard = {
+      ...game,
+      surface: 'MY_UPCOMING',
+      startsAt: '2099-07-20T15:00:00.000Z',
+      endsAt: '2099-07-20T16:00:00.000Z',
+      levelRange: game.levelRange ?? null,
+      priceSummary: game.priceSummary ?? null,
+      capacity: { ...game.capacity, total: 4 },
+      participants: game.participants.map((participant, index) => ({
+        ...participant,
+        userId: `00000000-0000-4000-8000-00000000000${index}`,
+      })),
+      viewerRelation: 'PARTICIPANT',
+      viewerPaymentState: 'PAID',
+      resultSummary: null,
+      allowedActions: ['OPEN_DETAILS'],
+      conversation: null,
+    };
+    const getOrCreateGameConversation = vi
+      .fn<AuthGateway['getOrCreateGameConversation']>()
+      .mockRejectedValue(new Error('CONTEXTUAL_MESSAGING_DISABLED'));
+    const api: AuthGateway = {
+      ...gateway(),
+      getGame: vi.fn().mockResolvedValue(participantGame),
+      getOrCreateGameConversation,
+    };
+
+    render(<GamesPage gateway={api} gameId={participantGame.id} />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Открыть чат игры' }));
+
+    await waitFor(() =>
+      expect(getOrCreateGameConversation).toHaveBeenCalledWith(participantGame.id),
+    );
+    expect(getOrCreateGameConversation).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Не удалось выполнить действие. Проверьте связь и повторите.',
+    );
+  });
+
   it('uses the shared main navigation and exposes the MVP create-game call to action', async () => {
     const api = gateway();
     render(<GamesPage gateway={api} />);

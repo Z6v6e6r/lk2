@@ -590,10 +590,21 @@ describe('provider-neutral authentication routes', () => {
     });
     const verifiedBody = verifyResponse.json<{
       user: Record<string, unknown>;
-      context: { tenantId: string; phoneLast4?: string };
+      context: {
+        tenantId: string;
+        phoneLast4?: string;
+        runtimeCapabilities: Record<string, boolean>;
+      };
     }>();
     expect(Object.keys(verifiedBody.user).sort()).toEqual(['displayName', 'id']);
     expect(verifiedBody.context).toMatchObject({ tenantId: binding.tenantId, phoneLast4: '0001' });
+    expect(verifiedBody.context.runtimeCapabilities).toEqual({
+      communityDirectory: false,
+      communityReadDetail: false,
+      communityReadFeed: false,
+      communityReadChat: false,
+      communityReadRating: false,
+    });
     expect(repository.phoneLegalAcceptances).toBe(1);
     expect(verifyResponse.body).not.toContain('refreshToken');
     expect(verifyResponse.body).not.toContain('external-user-1');

@@ -125,6 +125,70 @@ describe('health endpoints', () => {
     expect(response.statusCode).toBe(200);
   });
 
+  it('keeps legacy community detail default-off and serves it only with flag and service', async () => {
+    const communityId = '11111111-1111-4111-8111-111111111111';
+    const token = await accessToken();
+    const url = `/user/api/v1/local-padel/community-views/${communityId}`;
+    const disabled = await buildApp({
+      config,
+      logger: createLogger('api-test', 'silent'),
+      pool: fakePool(),
+    });
+    apps.push(disabled);
+
+    expect(
+      (
+        await disabled.inject({
+          method: 'GET',
+          url,
+          headers: { authorization: `Bearer ${token}` },
+        })
+      ).statusCode,
+    ).toBe(503);
+
+    const enabled = await buildApp({
+      config: loadConfig({
+        APP_ENV: 'ci',
+        DATABASE_URL: 'postgresql://phub:test@localhost:5432/phub',
+        REDIS_URL: 'redis://localhost:6379',
+        RABBITMQ_URL: 'amqp://phub:test@localhost:5672',
+        JWT_ISSUER: config.JWT_ISSUER,
+        JWT_AUDIENCE: config.JWT_AUDIENCE,
+        JWT_ACCESS_SECRET: config.JWT_ACCESS_SECRET,
+        JWT_REFRESH_SECRET: config.JWT_REFRESH_SECRET,
+        COMMUNITIES_READ_MODE: 'legacy',
+        COMMUNITY_LEGACY_READ_DETAIL_ENABLED: 'true',
+      }),
+      logger: createLogger('api-test', 'silent'),
+      pool: fakePool(),
+      communityReadExperienceService: {
+        getDetail: vi.fn().mockResolvedValue({
+          id: communityId,
+          title: 'Padel Friends',
+          logoUrl: null,
+          isVerified: true,
+          description: null,
+          memberCount: 42,
+          readOnly: true,
+        }),
+        getFeed: vi.fn(),
+        getChat: vi.fn(),
+        getRating: vi.fn(),
+      },
+    });
+    apps.push(enabled);
+
+    expect(
+      (
+        await enabled.inject({
+          method: 'GET',
+          url,
+          headers: { authorization: `Bearer ${token}` },
+        })
+      ).statusCode,
+    ).toBe(200);
+  });
+
   it('requires a PadlHub token before tenant resolution', async () => {
     const app = await buildApp({
       config,
@@ -588,7 +652,7 @@ describe('health endpoints', () => {
     expect(JSON.stringify(body)).not.toContain('245000');
   });
 
-  it('exposes contact and chat actions only from server-side entitlements', async () => {
+  it('does not expose the chat route while messaging runtime is disabled', async () => {
     const targetUserId = '6a81e965-c508-4321-812c-4be323606a70';
     const app = await buildApp({
       config,
@@ -618,10 +682,49 @@ describe('health endpoints', () => {
       access: {
         audience: 'OTHER',
         tier: 'INTERACTION',
-        contact: { status: 'AVAILABLE' },
-        chat: { status: 'AVAILABLE' },
+        contact: { status: 'LOCKED', reason: 'FEATURE_UNAVAILABLE' },
+        chat: { status: 'HIDDEN' },
       },
     });
+  });
+
+  it('publishes profile-to-chat capability only when HTTP and direct gates are enabled', async () => {
+    const targetUserId = '6a81e965-c508-4321-812c-4be323606a70';
+    const getRuntimeSettings = vi.fn().mockResolvedValue({
+      httpEnabled: true,
+      directEnabled: true,
+      realtimeEnabled: false,
+      contextualEnabled: false,
+    });
+    const app = await buildApp({
+      config,
+      logger: createLogger('api-test', 'silent'),
+      pool: fakePool(),
+      messagingRepository: { getRuntimeSettings } as never,
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: `/user/api/v1/local-padel/profiles/${targetUserId}`,
+      headers: {
+        authorization: `Bearer ${await accessToken(
+          [tenantId],
+          ['profile.read', 'chat.direct.create'],
+        )}`,
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      access: {
+        chat: {
+          status: 'AVAILABLE',
+          route: `/chats/new?recipientUserId=${targetUserId}`,
+        },
+      },
+    });
+    expect(getRuntimeSettings).toHaveBeenCalledWith(tenantId);
   });
 
   it('lets the target privacy policy override viewer entitlements', async () => {
@@ -834,6 +937,73 @@ describe('health endpoints', () => {
     expect(response.body).not.toContain('"subscriptions"');
     expect(response.body).not.toContain('"counters"');
     expect(response.headers['cache-control']).toBe('private, no-store');
+  });
+
+  it('provisions a missing HomeBase synchronously for the authenticated viewer', async () => {
+    const userId = '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca';
+    const now = new Date();
+    const homeBase = buildHomeBase({
+      viewerUserId: userId,
+      sourceRevision: '1',
+      generatedAt: now,
+      ttlSeconds: 300,
+      quickActions: [],
+      locations: [],
+      additionalLinks: [],
+      capabilities: {
+        canCreateGame: true,
+        canManageTournaments: false,
+        canViewCommunities: true,
+      },
+    });
+    const persistedProjection = {
+      tenantId,
+      userId,
+      sourceRevision: '1',
+      sourceEventId: '55555555-5555-4555-8555-555555555555',
+      producer: 'HOME_BASE_PROJECTOR',
+      snapshotVersion: homeBase.snapshot.version,
+      payload: homeBase,
+      payloadChecksum: 'a'.repeat(64),
+      generatedAt: homeBase.snapshot.generatedAt,
+      checkedAt: homeBase.snapshot.generatedAt,
+      updatedAt: homeBase.snapshot.generatedAt,
+    } as const;
+    let projection: typeof persistedProjection | undefined;
+    const get = vi.fn(() => Promise.resolve(projection));
+    const homeBaseProjector = vi.fn(() => {
+      projection = persistedProjection;
+      return Promise.resolve();
+    });
+    const app = await buildApp({
+      config,
+      logger: createLogger('api-test', 'silent'),
+      pool: fakePool(),
+      homeBaseRepository: { get },
+      homeBaseProjector,
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/user/api/v1/local-padel/home/base',
+      headers: {
+        authorization: `Bearer ${await accessToken()}`,
+        'x-correlation-id': 'home-base-on-demand-test',
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      snapshot: { source: 'LOCAL_PROJECTION', completeness: 'PARTIAL' },
+      viewerUserId: userId,
+    });
+    expect(homeBaseProjector).toHaveBeenCalledWith({
+      tenantId,
+      userId,
+      correlationId: 'home-base-on-demand-test',
+    });
+    expect(get).toHaveBeenCalledTimes(2);
   });
 
   it('serves a validated persisted Home projection independently of Viva mode', async () => {

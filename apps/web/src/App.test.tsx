@@ -1,7 +1,16 @@
 // @vitest-environment jsdom
 
 import '@testing-library/jest-dom/vitest';
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import {
+  act,
+  cleanup,
+  configure,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -19,6 +28,8 @@ import type {
   PublicGiftCertificateCatalog,
   UserUpcomingBookings,
 } from './auth-gateway.js';
+
+configure({ asyncUtilTimeout: 3_000 });
 
 const session: AuthenticatedSession = {
   context: {
@@ -369,6 +380,10 @@ function createGateway(overrides: Partial<AuthGateway> = {}): AuthGateway {
       .fn<AuthGateway['getLocation']>()
       .mockRejectedValue(new Error('LOCATION_NOT_FOUND')),
     listMyCommunities: vi.fn().mockResolvedValue(communityMemberships),
+    getCommunityReadExperienceDetail: vi.fn().mockRejectedValue(new Error('NOT_CONFIGURED')),
+    listCommunityReadExperienceFeed: vi.fn().mockRejectedValue(new Error('NOT_CONFIGURED')),
+    listCommunityReadExperienceChat: vi.fn().mockRejectedValue(new Error('NOT_CONFIGURED')),
+    getCommunityReadExperienceRating: vi.fn().mockRejectedValue(new Error('NOT_CONFIGURED')),
     getProfileLevelHistory: vi.fn().mockResolvedValue({
       userId: session.context.user.id,
       items: [
@@ -378,6 +393,20 @@ function createGateway(overrides: Partial<AuthGateway> = {}): AuthGateway {
           levelValue: 3.1,
         },
       ],
+    }),
+    listConversations: vi.fn().mockResolvedValue({ items: [] }),
+    createRealtimeTicket: vi.fn().mockRejectedValue(new Error('REALTIME_MESSAGING_DISABLED')),
+    createDirectConversation: vi.fn().mockRejectedValue(new Error('MESSAGING_HTTP_DISABLED')),
+    getOrCreateGameConversation: vi
+      .fn()
+      .mockRejectedValue(new Error('CONTEXTUAL_MESSAGING_DISABLED')),
+    listConversationMessages: vi.fn().mockResolvedValue({ messages: [] }),
+    sendConversationMessage: vi.fn().mockRejectedValue(new Error('MESSAGING_HTTP_DISABLED')),
+    markConversationRead: vi.fn().mockResolvedValue({
+      outcome: 'ok',
+      readThroughSequence: 0,
+      changed: false,
+      replayed: false,
     }),
     listNotifications: vi.fn().mockResolvedValue(notificationInbox),
     markNotificationsRead: vi.fn().mockResolvedValue(undefined),
@@ -1040,6 +1069,45 @@ describe('PadlHub web authentication', () => {
     expect(gateway.getHomeBase).not.toHaveBeenCalled();
   });
 
+  it('opens the default-denied legacy read-only community route when detail is enabled', async () => {
+    const communityId = '11111111-1111-4111-8111-111111111111';
+    window.history.replaceState({}, '', `/communities/${communityId}`);
+    const getCommunityReadExperienceDetail = vi
+      .fn<AuthGateway['getCommunityReadExperienceDetail']>()
+      .mockResolvedValue({
+        id: communityId,
+        title: 'Padel Friends',
+        logoUrl: null,
+        isVerified: true,
+        description: 'Сообщество для просмотра',
+        memberCount: 42,
+        readOnly: true,
+      });
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue({
+        ...session,
+        context: {
+          ...session.context,
+          runtimeCapabilities: {
+            communityDirectory: true,
+            communityReadDetail: true,
+            communityReadFeed: false,
+            communityReadChat: false,
+            communityReadRating: false,
+          },
+        },
+      }),
+      getCommunityReadExperienceDetail,
+    });
+
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+
+    expect(await screen.findByRole('heading', { name: 'Padel Friends' })).toBeVisible();
+    expect(screen.getByText('42 участника')).toBeVisible();
+    expect(screen.getByLabelText('Сообщество доступно только для просмотра')).toBeVisible();
+    expect(getCommunityReadExperienceDetail).toHaveBeenCalledWith(communityId);
+  });
+
   it('loads the notification inbox and exposes the tenant Web Push state', async () => {
     window.history.replaceState({}, '', '/notifications');
     const gateway = createGateway({ restoreSession: vi.fn().mockResolvedValue(session) });
@@ -1136,7 +1204,7 @@ describe('PadlHub web authentication', () => {
       '/coaches',
     );
     expect(screen.queryByText('Раздел подключается к API ПаделХАБ.')).not.toBeInTheDocument();
-    expect(gateway.listEventCatalog).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(gateway.listEventCatalog).toHaveBeenCalledTimes(1));
     expect(gateway.getHomeBase).not.toHaveBeenCalled();
   });
 
@@ -1322,6 +1390,129 @@ describe('PadlHub web authentication', () => {
     expect(code).toHaveAttribute('aria-invalid', 'true');
   });
 
+  it('exposes an explicit direct-chat deep link only when another profile capability is available', async () => {
+    const recipientUserId = '11111111-1111-4111-8111-111111111111';
+    window.history.replaceState({}, '', `/profile/${recipientUserId}`);
+    const otherProfile: PlayerProfileView = {
+      profile: {
+        userId: recipientUserId,
+        displayName: 'Борис',
+        firstName: 'Борис',
+        avatarUrl: null,
+        level: { label: 'C', value: 3.1, assessmentRequired: false },
+      },
+      access: {
+        audience: 'OTHER',
+        tier: 'INTERACTION',
+        visibleSections: ['BASIC', 'PLAYER_LEVEL'],
+        contact: { status: 'LOCKED', reason: 'ACCESS_REQUIRED' },
+        chat: {
+          status: 'AVAILABLE',
+          route: `/chats/new?recipientUserId=${recipientUserId}`,
+        },
+      },
+    };
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue(session),
+      getPlayerProfile: vi.fn().mockResolvedValue(otherProfile),
+    });
+
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+
+    expect(await screen.findByRole('link', { name: /Открыть чат/ })).toHaveAttribute(
+      'href',
+      `/chats/new?recipientUserId=${recipientUserId}`,
+    );
+  });
+
+  it('creates or reuses a direct conversation from the profile deep link and opens its thread', async () => {
+    const recipientUserId = '11111111-1111-4111-8111-111111111111';
+    const conversationId = '22222222-2222-4222-8222-222222222222';
+    window.history.replaceState({}, '', `/chats/new?recipientUserId=${recipientUserId}`);
+    const createDirectConversation = vi
+      .fn<AuthGateway['createDirectConversation']>()
+      .mockResolvedValue({
+        outcome: 'ok',
+        conversation: {
+          id: conversationId,
+          kind: 'DIRECT',
+          participant: { userId: recipientUserId, displayName: 'Борис' },
+          unreadCount: 0,
+          updatedAt: '2026-08-03T10:00:00.000Z',
+        },
+        created: false,
+        replayed: false,
+      });
+    const listConversationMessages = vi
+      .fn<AuthGateway['listConversationMessages']>()
+      .mockResolvedValue({ messages: [] });
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue(session),
+      createDirectConversation,
+      listConversationMessages,
+    });
+    const user = userEvent.setup();
+
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+    expect(await screen.findByRole('button', { name: 'Начать диалог' })).toBeVisible();
+    expect(screen.queryByText(recipientUserId)).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Начать диалог' }));
+
+    await waitFor(() => expect(window.location.pathname).toBe(`/chats/${conversationId}`));
+    expect(createDirectConversation).toHaveBeenCalledWith(recipientUserId, expect.any(String));
+    await waitFor(() => expect(listConversationMessages).toHaveBeenCalledWith(conversationId, 0));
+  });
+
+  it('retries an unconfirmed message with the same stable clientMessageId', async () => {
+    const recipientUserId = '11111111-1111-4111-8111-111111111111';
+    const conversationId = '22222222-2222-4222-8222-222222222222';
+    window.history.replaceState({}, '', `/chats/${conversationId}`);
+    const conversation = {
+      id: conversationId,
+      kind: 'DIRECT' as const,
+      participant: { userId: recipientUserId, displayName: 'Борис' },
+      unreadCount: 0,
+      updatedAt: '2026-08-03T10:00:00.000Z',
+    };
+    const sendConversationMessage = vi
+      .fn<AuthGateway['sendConversationMessage']>()
+      .mockRejectedValueOnce(new TypeError('network interrupted'))
+      .mockImplementation((_selectedConversationId, command) =>
+        Promise.resolve({
+          outcome: 'ok',
+          message: {
+            id: '33333333-3333-4333-8333-333333333333',
+            conversationId,
+            sequence: 1,
+            sender: { userId: session.context.user.id, displayName: 'Анна' },
+            messageType: 'TEXT',
+            body: command.body,
+            createdAt: '2026-08-03T10:01:00.000Z',
+          },
+          replayed: true,
+        }),
+      );
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue(session),
+      listConversations: vi.fn().mockResolvedValue({ items: [conversation] }),
+      listConversationMessages: vi.fn().mockResolvedValue({ messages: [] }),
+      sendConversationMessage,
+    });
+    const user = userEvent.setup();
+
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+    await user.type(await screen.findByLabelText('Сообщение'), 'Привет');
+    await user.click(screen.getByRole('button', { name: 'Отправить' }));
+    await user.click(await screen.findByRole('button', { name: 'Повторить отправку' }));
+
+    await waitFor(() => expect(sendConversationMessage).toHaveBeenCalledTimes(2));
+    const firstCommand = sendConversationMessage.mock.calls[0]?.[1];
+    const retryCommand = sendConversationMessage.mock.calls[1]?.[1];
+    expect(firstCommand?.clientMessageId).toEqual(retryCommand?.clientMessageId);
+    expect(firstCommand?.body).toBe('Привет');
+    expect(retryCommand?.body).toBe('Привет');
+  });
+
   it('falls back to phone login when session restoration is unavailable', async () => {
     const gateway = createGateway({
       restoreSession: vi.fn().mockRejectedValue(new Error('network unavailable')),
@@ -1333,24 +1524,19 @@ describe('PadlHub web authentication', () => {
     expect(screen.getByRole('heading', { name: 'Войти в личный кабинет' })).toBeVisible();
   });
 
-  it('defaults iPhone browsers to phone login and warns before external Viva OAuth', async () => {
+  it('keeps iPhone browsers on regular OAuth and does not offer SMS login', async () => {
     vi.spyOn(window.navigator, 'userAgent', 'get').mockReturnValue(
       'Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 Version/26.5 Mobile/23F77 Safari/604.1',
     );
     const gateway = createGateway();
-    const user = userEvent.setup();
-
     render(<App gateway={gateway} tenantKey="padlhub" />);
 
-    expect(await screen.findByRole('heading', { name: 'Вход по номеру' })).toBeVisible();
-    expect(screen.getByRole('note')).toHaveTextContent('Для iPhone выбран надёжный способ входа');
-    expect(screen.getByRole('note')).toHaveTextContent('откройте исходную страницу в Safari');
+    expect(await screen.findByRole('heading', { name: 'Войти в личный кабинет' })).toBeVisible();
+    expect(screen.getByRole('note')).toHaveTextContent('На iPhone откройте сайт в Safari');
+    expect(
+      screen.queryByRole('button', { name: 'Войти по номеру телефона' }),
+    ).not.toBeInTheDocument();
     expect(gateway.startVivaOAuth).not.toHaveBeenCalled();
-
-    await user.click(screen.getByRole('button', { name: /Войти через Viva/ }));
-
-    expect(screen.getByRole('heading', { name: 'Войти в личный кабинет' })).toBeVisible();
-    expect(screen.getByRole('note')).toHaveTextContent('Во встроенном браузере Telegram');
     expect(screen.getByRole('button', { name: 'VK ID или Mail.ru' })).toHaveAttribute(
       'aria-describedby',
       'ios-oauth-guidance',

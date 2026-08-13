@@ -7,7 +7,7 @@ const { listDueHomeBaseUsers, projectHomeBaseUser } = vi.hoisted(() => ({
   projectHomeBaseUser: vi.fn(),
 }));
 
-vi.mock('./home-base-projector.js', () => ({
+vi.mock('@phub/database', () => ({
   listDueHomeBaseUsers,
   projectHomeBaseUser,
 }));

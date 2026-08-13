@@ -1,10 +1,9 @@
 import { randomUUID } from 'node:crypto';
 
 import type { AppConfig } from '@phub/config';
+import { listDueHomeBaseUsers, projectHomeBaseUser } from '@phub/database';
 import type { Logger } from 'pino';
 import type { Pool } from 'pg';
-
-import { listDueHomeBaseUsers, projectHomeBaseUser } from './home-base-projector.js';
 
 export interface HomeBaseSyncCycleResult {
   readonly attempted: number;

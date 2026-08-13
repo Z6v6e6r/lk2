@@ -38,9 +38,14 @@ ignores both filenames.
    assets, Swagger, CUP authentication, and both Portainer auth layers.
 
 The current Viva OAuth redirect URI is still registered as
-`http://185.155.18.146/user/api/v1/local-padel/auth/viva/callback`. The exact
-HTTP IP site must remain until Viva accepts the HTTPS callback; removing it
-earlier breaks login.
+`http://185.155.18.146/user/api/v1/local-padel/auth/viva/callback`. The legacy
+HTTP IP answers that callback with a temporary redirect to the same path and
+query on `https://lk.nano.padlhub.su` before the API consumes the one-time OAuth
+state. The API still uses the registered IP redirect URI for the token exchange,
+but finishes the browser callback and issues its host-only refresh cookie on the
+canonical HTTPS domain. Every other IP path permanently redirects to the same
+HTTPS LK path. Remove the compatibility callback only after Viva accepts the
+HTTPS redirect URI.
 
 OpenWrt dnsmasq must override `nano.padlhub.su` and its subdomains to the Nano
 LAN address `192.168.31.100`. This split-DNS rule is required because requests

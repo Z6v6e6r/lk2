@@ -11,6 +11,12 @@ export type HomeBase = components['schemas']['HomeBase'];
 export type LocationList = components['schemas']['LocationList'];
 export type LocationDetail = components['schemas']['LocationDetail'];
 export type CommunityMembershipPage = components['schemas']['CommunityMembershipPage'];
+export type CommunityReadExperienceDetail = components['schemas']['CommunityReadExperienceDetail'];
+export type CommunityReadExperienceFeedPage =
+  components['schemas']['CommunityReadExperienceFeedPage'];
+export type CommunityReadExperienceChatPage =
+  components['schemas']['CommunityReadExperienceChatPage'];
+export type CommunityReadExperienceRating = components['schemas']['CommunityReadExperienceRating'];
 export type ClientRoutingPlan = components['schemas']['ClientRoutingPlan'];
 export type UserProfile = components['schemas']['UserProfile'];
 export type PlayerProfileView = components['schemas']['PlayerProfileView'];
@@ -37,6 +43,18 @@ export type ActivityHistoryKind = components['schemas']['ActivityHistoryKind'];
 export type ActivityHistoryStatus = components['schemas']['ActivityHistoryStatus'];
 export type ActivityHistoryItem = components['schemas']['ActivityHistoryItem'];
 export type ActivityHistoryPage = components['schemas']['ActivityHistoryPage'];
+export type ConversationPage = components['schemas']['ConversationPage'];
+export type ConversationSummary = components['schemas']['ConversationSummary'];
+export type ConversationMessagePage = components['schemas']['ConversationMessagePage'];
+export type ConversationMessage = components['schemas']['ConversationMessage'];
+export type CreateDirectConversationResult =
+  components['schemas']['CreateDirectConversationResult'];
+export type GameConversationSummary = components['schemas']['GameConversationSummary'];
+export type GetOrCreateGameConversationResult =
+  components['schemas']['GetOrCreateGameConversationResult'];
+export type SendConversationMessageResult = components['schemas']['SendConversationMessageResult'];
+export type ConversationReadCursorResult = components['schemas']['ConversationReadCursorResult'];
+export type MessagingRealtimeTicket = components['schemas']['MessagingRealtimeTicket'];
 export type NotificationInboxPage = components['schemas']['NotificationInboxPage'];
 export type NotificationReadCursorResult = components['schemas']['NotificationReadCursorResult'];
 export type WebPushConfiguration = components['schemas']['WebPushConfiguration'];
@@ -1007,6 +1025,149 @@ export class PadlHubApiClient {
     if (input.cursor) query.set('cursor', input.cursor);
     const suffix = query.size > 0 ? `?${query.toString()}` : '';
     return this.request<CommunityMembershipPage>(`/communities/mine${suffix}`);
+  }
+
+  public listConversations(limit = 50): Promise<ConversationPage> {
+    const query = new URLSearchParams({ limit: String(limit) });
+    return this.request<ConversationPage>(`/conversations?${query.toString()}`);
+  }
+
+  public issueMessagingRealtimeTicket(): Promise<MessagingRealtimeTicket> {
+    return this.request<MessagingRealtimeTicket>('/messaging/realtime-ticket', {
+      method: 'POST',
+    });
+  }
+
+  public createDirectConversation(otherUserId: string): Promise<CreateDirectConversationResult> {
+    const idempotencyKey = createCorrelationId();
+    return this.retryOnceOnNetworkFailure(() =>
+      this.request<CreateDirectConversationResult>('/conversations/direct', {
+        method: 'POST',
+        idempotencyKey,
+        body: jsonRequestBody({ otherUserId }),
+      }),
+    );
+  }
+
+  public getOrCreateGameConversation(gameId: string): Promise<GetOrCreateGameConversationResult> {
+    const idempotencyKey = createCorrelationId();
+    return this.retryOnceOnNetworkFailure(() =>
+      this.request<GetOrCreateGameConversationResult>('/conversations/game', {
+        method: 'POST',
+        idempotencyKey,
+        body: jsonRequestBody({ gameId }),
+      }),
+    );
+  }
+
+  public listConversationMessages(
+    conversationId: string,
+    input: { readonly afterSequence?: number; readonly limit?: number } = {},
+  ): Promise<ConversationMessagePage> {
+    const query = new URLSearchParams();
+    if (input.afterSequence !== undefined) query.set('afterSequence', String(input.afterSequence));
+    if (input.limit !== undefined) query.set('limit', String(input.limit));
+    const suffix = query.size > 0 ? `?${query.toString()}` : '';
+    return this.request<ConversationMessagePage>(
+      `/conversations/${encodeURIComponent(conversationId)}/messages${suffix}`,
+    );
+  }
+
+  public sendConversationMessage(
+    conversationId: string,
+    body: string,
+  ): Promise<SendConversationMessageResult> {
+    const commandId = createCorrelationId();
+    return this.retryOnceOnNetworkFailure(() =>
+      this.request<SendConversationMessageResult>(
+        `/conversations/${encodeURIComponent(conversationId)}/messages`,
+        {
+          method: 'POST',
+          idempotencyKey: commandId,
+          body: jsonRequestBody({ clientMessageId: commandId, body }),
+        },
+      ),
+    );
+  }
+
+  public markConversationRead(
+    conversationId: string,
+    throughSequence: number,
+  ): Promise<ConversationReadCursorResult> {
+    const idempotencyKey = createCorrelationId();
+    return this.retryOnceOnNetworkFailure(() =>
+      this.request<ConversationReadCursorResult>(
+        `/conversations/${encodeURIComponent(conversationId)}/read-cursor`,
+        {
+          method: 'PUT',
+          idempotencyKey,
+          body: jsonRequestBody({ throughSequence }),
+        },
+      ),
+    );
+  }
+
+  public getCommunityReadExperienceDetail(
+    communityId: string,
+  ): Promise<CommunityReadExperienceDetail> {
+    return this.request<CommunityReadExperienceDetail>(
+      `/community-views/${encodeURIComponent(communityId)}`,
+      { cache: 'no-store' },
+    );
+  }
+
+  public listCommunityReadExperienceFeed(
+    communityId: string,
+    input: { readonly limit?: number; readonly cursor?: string } = {},
+  ): Promise<CommunityReadExperienceFeedPage> {
+    return this.communityReadExperiencePage<CommunityReadExperienceFeedPage>(
+      communityId,
+      '/feed',
+      input,
+    );
+  }
+
+  public listCommunityReadExperienceChat(
+    communityId: string,
+    input: { readonly limit?: number; readonly cursor?: string } = {},
+  ): Promise<CommunityReadExperienceChatPage> {
+    return this.communityReadExperiencePage<CommunityReadExperienceChatPage>(
+      communityId,
+      '/chat',
+      input,
+    );
+  }
+
+  public getCommunityReadExperienceRating(
+    communityId: string,
+    input: {
+      readonly period?: 'all' | '30d';
+      readonly tab?: 'overall' | 'dynamics' | 'games' | 'tournaments';
+    } = {},
+  ): Promise<CommunityReadExperienceRating> {
+    const query = new URLSearchParams();
+    if (input.period) query.set('period', input.period);
+    if (input.tab) query.set('tab', input.tab);
+    const suffix = query.size > 0 ? `?${query.toString()}` : '';
+    return this.request<CommunityReadExperienceRating>(
+      `/community-views/${encodeURIComponent(communityId)}/rating${suffix}`,
+      { cache: 'no-store' },
+    );
+  }
+
+  private communityReadExperiencePage<T>(
+    communityId: string,
+    suffix: '/feed' | '/chat',
+    input: { readonly limit?: number; readonly cursor?: string },
+  ): Promise<T> {
+    const query = new URLSearchParams();
+    if (input.limit !== undefined) query.set('limit', String(input.limit));
+    if (input.cursor) query.set('cursor', input.cursor);
+    const querySuffix = query.size > 0 ? `?${query.toString()}` : '';
+    return this.request<T>(
+      `/community-views/${encodeURIComponent(communityId)}${suffix}${querySuffix}`,
+      { cache: 'no-store' },
+    );
   }
 
   public listNotifications(

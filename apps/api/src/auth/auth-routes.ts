@@ -124,7 +124,23 @@ function handleAuthError(
   throw error;
 }
 
-function publicSession(result: AuthSessionResult) {
+export interface UserRuntimeCapabilities {
+  readonly communityDirectory: boolean;
+  readonly communityReadDetail: boolean;
+  readonly communityReadFeed: boolean;
+  readonly communityReadChat: boolean;
+  readonly communityReadRating: boolean;
+}
+
+const disabledUserRuntimeCapabilities: UserRuntimeCapabilities = {
+  communityDirectory: false,
+  communityReadDetail: false,
+  communityReadFeed: false,
+  communityReadChat: false,
+  communityReadRating: false,
+};
+
+function publicSession(result: AuthSessionResult, runtimeCapabilities: UserRuntimeCapabilities) {
   return {
     accessToken: result.accessToken,
     tokenType: result.tokenType,
@@ -137,6 +153,7 @@ function publicSession(result: AuthSessionResult) {
       ...(result.user.phoneLast4 ? { phoneLast4: result.user.phoneLast4 } : {}),
       roles: result.roles,
       permissions: result.permissions,
+      runtimeCapabilities,
     },
   };
 }
@@ -184,7 +201,16 @@ export function registerAuthRoutes(
     userId: string,
     platform: ClientPlatform,
   ) => Promise<boolean>,
+  runtimeCapabilities:
+    | Partial<UserRuntimeCapabilities>
+    | (() => Promise<Partial<UserRuntimeCapabilities>>) = disabledUserRuntimeCapabilities,
 ): void {
+  const resolveRuntimeCapabilities = async (): Promise<UserRuntimeCapabilities> => ({
+    ...disabledUserRuntimeCapabilities,
+    ...(typeof runtimeCapabilities === 'function'
+      ? await runtimeCapabilities()
+      : runtimeCapabilities),
+  });
   app.post(
     '/user/api/v1/:tenantKey/auth/viva/authorize',
     { preHandler: requireAuthIdempotency },
@@ -368,7 +394,7 @@ export function registerAuthRoutes(
         });
         setRefreshCookie(reply, config, tenantKey, session);
         preventCredentialCaching(reply);
-        return reply.send(publicSession(session));
+        return reply.send(publicSession(session, await resolveRuntimeCapabilities()));
       } catch (error) {
         return handleAuthError(error, request, reply);
       }
@@ -410,7 +436,7 @@ export function registerAuthRoutes(
         );
         setRefreshCookie(reply, config, tenantKey, session);
         preventCredentialCaching(reply);
-        return reply.send(publicSession(session));
+        return reply.send(publicSession(session, await resolveRuntimeCapabilities()));
       } catch (error) {
         if (
           !(error instanceof AuthServiceError) ||

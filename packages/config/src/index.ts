@@ -135,6 +135,10 @@ const environmentSchema = z.object({
     .max(86_400_000)
     .default(300_000),
   COMMUNITIES_READ_MODE: z.enum(['mock', 'legacy', 'local']).default('mock'),
+  COMMUNITY_LEGACY_READ_DETAIL_ENABLED: booleanFromEnvironment,
+  COMMUNITY_LEGACY_READ_FEED_ENABLED: booleanFromEnvironment,
+  COMMUNITY_LEGACY_READ_CHAT_ENABLED: booleanFromEnvironment,
+  COMMUNITY_LEGACY_READ_RATING_ENABLED: booleanFromEnvironment,
   COMMUNITIES_LEGACY_BASE_URL: z.string().url().default('https://padlhub.su'),
   COMMUNITIES_LEGACY_TIMEOUT_MS: z.coerce.number().int().min(500).max(30_000).default(10_000),
   COMMUNITIES_LEGACY_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(2).default(2),
@@ -281,6 +285,7 @@ const environmentSchema = z.object({
   VIVA_AUTH_TENANT_KEY: z.string().min(1).default('iSkq6G'),
   VIVA_AUTH_CHANNEL: z.string().min(1).default('cascade'),
   VIVA_OAUTH_ENABLED: booleanFromEnvironment,
+  VIVA_OAUTH_EXISTING_SUBJECT_BOOTSTRAP_ENABLED: booleanFromEnvironment,
   VIVA_OAUTH_REDIRECT_URI: z.string().url().optional().or(z.literal('')),
   VIVA_OAUTH_SUCCESS_REDIRECT_URL: z.string().url().optional().or(z.literal('')),
   VIVA_OAUTH_SCOPES: z.string().min(1).default('openid'),
@@ -654,6 +659,22 @@ export function loadConfig(
   if (parsed.data.VIVA_DIRECT_READ_ENABLED && !parsed.data.VIVA_OAUTH_ENABLED) {
     throw new Error('VIVA_DIRECT_READ_ENABLED requires VIVA_OAUTH_ENABLED=true');
   }
+  if (
+    parsed.data.VIVA_OAUTH_EXISTING_SUBJECT_BOOTSTRAP_ENABLED &&
+    (parsed.data.VIVA_MODE === 'mock' || parsed.data.VIVA_MODE === 'disabled')
+  ) {
+    throw new Error(
+      'VIVA_OAUTH_EXISTING_SUBJECT_BOOTSTRAP_ENABLED requires VIVA_MODE=sandbox or production',
+    );
+  }
+  if (
+    parsed.data.VIVA_OAUTH_EXISTING_SUBJECT_BOOTSTRAP_ENABLED &&
+    !parsed.data.VIVA_OAUTH_ENABLED
+  ) {
+    throw new Error(
+      'VIVA_OAUTH_EXISTING_SUBJECT_BOOTSTRAP_ENABLED requires VIVA_OAUTH_ENABLED=true',
+    );
+  }
   if (parsed.data.WEB_PUSH_ENABLED) {
     const missingWebPush = [
       ['WEB_PUSH_VAPID_SUBJECT', parsed.data.WEB_PUSH_VAPID_SUBJECT],
@@ -713,6 +734,15 @@ export function loadConfig(
   }
   if (parsed.data.APP_ENV === 'production' && parsed.data.COMMUNITIES_READ_MODE === 'mock') {
     throw new Error('COMMUNITIES_READ_MODE=mock is forbidden in production');
+  }
+  if (
+    (parsed.data.COMMUNITY_LEGACY_READ_DETAIL_ENABLED ||
+      parsed.data.COMMUNITY_LEGACY_READ_FEED_ENABLED ||
+      parsed.data.COMMUNITY_LEGACY_READ_CHAT_ENABLED ||
+      parsed.data.COMMUNITY_LEGACY_READ_RATING_ENABLED) &&
+    parsed.data.COMMUNITIES_READ_MODE !== 'legacy'
+  ) {
+    throw new Error('COMMUNITY_LEGACY_READ_*_ENABLED requires COMMUNITIES_READ_MODE=legacy');
   }
   if (parsed.data.APP_ENV === 'production' && parsed.data.PROMOTIONS_READ_MODE === 'mock') {
     throw new Error('PROMOTIONS_READ_MODE=mock is forbidden in production');
