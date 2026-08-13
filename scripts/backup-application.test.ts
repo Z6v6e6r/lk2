@@ -15,6 +15,7 @@ interface Fixture {
   readonly appRoot: string;
   readonly backupDirectory: string;
   readonly backupRoot: string;
+  readonly bin: string;
 }
 
 class CommandFailure extends Error {
@@ -38,6 +39,9 @@ async function fixture(): Promise<Fixture> {
   temporaryDirectories.push(temporary);
   const appRoot = join(temporary, 'opt', 'phub');
   const backupRoot = join(appRoot, 'backups', 'releases');
+  const bin = join(temporary, 'bin');
+  await mkdir(bin, { recursive: true });
+  await write(join(appRoot, 'infrastructure.env'), 'POSTGRES_USER=phub\n', 0o600);
   await write(join(appRoot, 'compose.yaml'), 'compose\n');
   await write(
     join(appRoot, 'release.env'),
@@ -47,10 +51,24 @@ async function fixture(): Promise<Fixture> {
   await write(join(appRoot, 'nginx', 'default.conf'), 'nginx\n');
   await write(join(appRoot, 'staging.auth.env'), 'AUTH_SECRET=never-print-me\n', 0o600);
   await write(join(appRoot, 'tls-ingress', 'Caddyfile'), 'caddy\n');
+  await write(
+    join(bin, 'docker'),
+    `#!/bin/sh
+set -eu
+case "$*" in
+  *'ps -q web'*) echo web-container ;;
+  *'ps -q api'*) echo api-container ;;
+  *'ps -q worker'*) echo worker-container ;;
+  *'ps -q realtime'*) echo realtime-container ;;
+esac
+`,
+    0o755,
+  );
   await mkdir(backupRoot, { recursive: true });
   return {
     appRoot,
     backupRoot,
+    bin,
     backupDirectory: join(backupRoot, 'pre-abcdef-123-1'),
   };
 }
@@ -66,6 +84,7 @@ function execute(
       {
         env: {
           ...process.env,
+          PATH: `${input.bin}:${process.env.PATH ?? ''}`,
           PHUB_BACKUP_APP_ROOT: input.appRoot,
           PHUB_BACKUP_ROOT: input.backupRoot,
         },
@@ -86,6 +105,11 @@ describe('Nano staging application backup primitive', () => {
   it('atomically snapshots all release definitions and writes the completion marker last', async () => {
     const input = await fixture();
     await write(join(input.appRoot, 'staging.override.env'), 'HOME_READ_MODE=projection\n', 0o600);
+    await write(
+      join(input.appRoot, 'staging.communities.env'),
+      'COMMUNITIES_READ_MODE=legacy\n',
+      0o600,
+    );
     const result = await execute(input);
 
     await expect(readFile(join(input.backupDirectory, 'compose.yaml'), 'utf8')).resolves.toBe(
@@ -97,8 +121,14 @@ describe('Nano staging application backup primitive', () => {
     await expect(
       readFile(join(input.backupDirectory, 'staging.override.env'), 'utf8'),
     ).resolves.toBe('HOME_READ_MODE=projection\n');
+    await expect(
+      readFile(join(input.backupDirectory, 'staging.communities.env'), 'utf8'),
+    ).resolves.toBe('COMMUNITIES_READ_MODE=legacy\n');
     await expect(readFile(join(input.backupDirectory, 'backup.complete'), 'utf8')).resolves.toBe(
       `${'a'.repeat(40)}\n`,
+    );
+    await expect(readFile(join(input.backupDirectory, 'process-state.env'), 'utf8')).resolves.toBe(
+      'WEB=running\nAPI=running\nWORKER=running\nREALTIME=running\n',
     );
     expect((await lstat(input.backupDirectory)).isDirectory()).toBe(true);
     expect(result.stdout).not.toContain('never-print-me');
@@ -111,6 +141,9 @@ describe('Nano staging application backup primitive', () => {
 
     await expect(
       readFile(join(input.backupDirectory, 'staging.override.env.absent'), 'utf8'),
+    ).resolves.toBe('');
+    await expect(
+      readFile(join(input.backupDirectory, 'staging.communities.env.absent'), 'utf8'),
     ).resolves.toBe('');
   });
 

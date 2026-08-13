@@ -38,6 +38,22 @@ jobs:
           ref: ${{ env.RELEASE }}
       - uses: actions/download-artifact@v4
         with:
+          name: production-promotion-eligibility
+          path: promotion-eligibility
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.staging_run_id }}
+      - name: Require the full staging promotion profile
+        env:
+          RUN_ID: ${{ inputs.staging_run_id }}
+        run: |
+          marker=promotion-eligibility/production-promotion-eligibility.env
+          test -f "$marker"
+          test "$(awk -F= '$1 == "PROFILE" { count += 1; value = $2 } END { if (count == 1) print value }' "$marker")" = FULL_LIVE_HOME
+          test "$(awk -F= '$1 == "RELEASE" { count += 1; value = $2 } END { if (count == 1) print value }' "$marker")" = "$RELEASE"
+          test "$(awk -F= '$1 == "STAGING_RUN_ID" { count += 1; value = $2 } END { if (count == 1) print value }' "$marker")" = "$RUN_ID"
+          test "$(wc -l < "$marker" | tr -d ' ')" -eq 3
+      - uses: actions/download-artifact@v4
+        with:
           pattern: digest-*
           path: digests
           merge-multiple: true

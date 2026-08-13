@@ -27,6 +27,18 @@ fails if another active tenant would enter mixed mode through the global kill sw
 recommendations, group-training and event schedules, upcoming bookings and activity history
 without waiting for server-to-server Viva profile or schedule egress.
 
+Use `deployment_profile=COMMUNITIES_LEGACY_READ_ONLY` to deploy the authenticated legacy
+Communities directory, detail, feed, chat and rating projections without refreshing client routing
+or activating Viva Live Home. Leave every routing and messaging-player input empty. The profile
+uses the ordinary immutable-image, application-backup, PostgreSQL-backup, migration, TLS, health
+and smoke pipeline. Before application readiness it starts only web and API and keeps worker and
+realtime stopped. Its activation atomically changes only the API-specific Communities read mode,
+four default-off read capabilities and bounded legacy-client settings, then recreates only API. It
+fails and restores the previous API profile and process state if readiness or exact runtime
+verification fails. It does not authorize canonical
+Communities writes, media upload/processing, invites, realtime ownership, imports, cutover or
+production.
+
 Use `deployment_profile=MESSAGING_TEST` only for the isolated two-player chat contour;
 provide two distinct active PadlHub UUIDs in `messaging_player_a_id` and
 `messaging_player_b_id` and leave every routing input empty. This profile still builds and promotes
@@ -127,6 +139,20 @@ verifier checks all four values both in the effective runtime files and inside t
 none of these gates enables community commands, media uploads, invites, canonical writes or
 realtime ownership.
 
+`COMMUNITIES_LEGACY_READ_ONLY` is a separate, non-promotable preview profile. Its flags live only
+in `/opt/phub/staging.communities.env`, an optional env file attached to API and never to worker,
+realtime or migrator. Activation stops worker and realtime, requires media, invites and realtime
+flags to be false, probes the legacy summary endpoint, then signs a 60-second in-memory JWT for an
+existing active PadlHub identity and discards the authenticated community-detail response. It does
+not create identities or mappings and never logs the token or provider payload. A failed activation
+restores the previous API env file and the previous worker/realtime process state, then proves API
+readiness; failure to restore remains a failed deployment and invokes the full application rollback.
+
+Only a successful `FULL_LIVE_HOME` run writes the three-line
+`production-promotion-eligibility.env` artifact bound to its release SHA and workflow run ID.
+Production refuses every staging run without that exact artifact, so this lightweight Communities
+profile can never certify image digests for promotion.
+
 Every confirmed staging deployment creates a PostgreSQL custom-format archive under
 `/opt/phub/backups/postgres-pre-<release>-<UTC timestamp>.dump`. The workflow
 requires a non-empty archive, validates it with `pg_restore --list`, runs the
@@ -199,8 +225,8 @@ directory under `/opt/phub/backups/releases`. The backup primitive requires the 
 `release.env`; the release file must resolve web, API, worker, realtime and migrator only through
 full `sha256` digests. The snapshot must also contain `nginx/default.conf`, `staging.auth.env` and
 `tls-ingress/Caddyfile`. It stores either the previous `staging.override.env` or an empty
-`staging.override.env.absent` marker. Write `backup.complete` last with the exact previous release
-SHA.
+`staging.override.env.absent` marker, and independently stores `staging.communities.env` or its
+empty `.absent` marker. Write `backup.complete` last with the exact previous release SHA.
 
 The expected saved-release layout is:
 
@@ -211,6 +237,8 @@ The expected saved-release layout is:
   nginx/default.conf
   staging.auth.env            # mode 0600
   staging.override.env        # mode 0600; or staging.override.env.absent
+  staging.communities.env     # mode 0600; or staging.communities.env.absent
+  process-state.env           # exact running/stopped state for web, API, worker and realtime
   tls-ingress/Caddyfile
   backup.complete             # exact release SHA, written last
 ```

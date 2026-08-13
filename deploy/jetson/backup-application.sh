@@ -56,11 +56,39 @@ if [ -e "$app_root/staging.override.env" ]; then
   [ -f "$app_root/staging.override.env" ] && [ ! -L "$app_root/staging.override.env" ] ||
     fail 'current staging.override.env is unsafe'
 fi
+if [ -e "$app_root/staging.communities.env" ]; then
+  [ -f "$app_root/staging.communities.env" ] && [ ! -L "$app_root/staging.communities.env" ] ||
+    fail 'current staging.communities.env is unsafe'
+fi
 
 release_count="$(awk -F= '$1 == "RELEASE" { count += 1 } END { print count + 0 }' "$app_root/release.env")"
 [ "$release_count" -eq 1 ] || fail 'release.env must contain exactly one RELEASE'
 release="$(sed -n 's/^RELEASE=//p' "$app_root/release.env")"
 printf '%s' "$release" | grep -Eq '^[0-9a-f]{40}$' || fail 'current release SHA is invalid'
+
+compose() {
+  docker compose \
+    --env-file "$app_root/infrastructure.env" \
+    --env-file "$app_root/release.env" \
+    -f "$app_root/compose.yaml" \
+    "$@"
+}
+
+process_state() {
+  service="$1"
+  if [ -n "$(compose ps -q "$service")" ]; then
+    printf '%s' running
+  else
+    printf '%s' stopped
+  fi
+}
+
+web_state="$(process_state web)"
+api_state="$(process_state api)"
+worker_state="$(process_state worker)"
+realtime_state="$(process_state realtime)"
+[ "$web_state" = running ] && [ "$api_state" = running ] ||
+  fail 'web and api must be running before an application snapshot'
 
 stage_dir="$(mktemp -d "$backup_root/.snapshot.XXXXXX")"
 cleanup() {
@@ -80,7 +108,20 @@ else
   : > "$stage_dir/staging.override.env.absent"
   chmod 600 "$stage_dir/staging.override.env.absent"
 fi
+if [ -f "$app_root/staging.communities.env" ]; then
+  install -m 600 "$app_root/staging.communities.env" "$stage_dir/staging.communities.env"
+else
+  : > "$stage_dir/staging.communities.env.absent"
+  chmod 600 "$stage_dir/staging.communities.env.absent"
+fi
 install -m 644 "$app_root/tls-ingress/Caddyfile" "$stage_dir/tls-ingress/Caddyfile"
+{
+  printf '%s\n' "WEB=$web_state"
+  printf '%s\n' "API=$api_state"
+  printf '%s\n' "WORKER=$worker_state"
+  printf '%s\n' "REALTIME=$realtime_state"
+} > "$stage_dir/process-state.env"
+chmod 600 "$stage_dir/process-state.env"
 printf '%s\n' "$release" > "$stage_dir/backup.complete"
 chmod 600 "$stage_dir/backup.complete"
 mv "$stage_dir" "$requested_backup"

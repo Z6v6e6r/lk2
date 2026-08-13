@@ -8,12 +8,13 @@ on:
         required: false
         type: string
       deployment_profile:
-        description: Select full Home, isolated client-assisted Viva reads, or messaging test
+        description: Select full Home, Communities read-only, isolated client-assisted Viva reads, or messaging test
         required: true
         type: choice
         default: FULL_LIVE_HOME
         options:
           - FULL_LIVE_HOME
+          - COMMUNITIES_LEGACY_READ_ONLY
           - CLIENT_ASSISTED_VIVA
           - MESSAGING_TEST
       messaging_player_a_id:
@@ -181,6 +182,12 @@ jobs:
               fi
               if [ -n "$MESSAGING_PLAYER_A_ID$MESSAGING_PLAYER_B_ID" ]; then
                 echo '::error::Viva-backed deployment cannot include messaging-test players.'
+                exit 1
+              fi
+              ;;
+            COMMUNITIES_LEGACY_READ_ONLY)
+              if [ -n "$ROUTING_TENANT_KEY$ROUTING_ACTOR_ID$ROUTING_APPLY_CONFIRMATION$MESSAGING_PLAYER_A_ID$MESSAGING_PLAYER_B_ID" ]; then
+                echo '::error::Communities read-only deployment cannot refresh routing or include messaging-test players.'
                 exit 1
               fi
               ;;
@@ -512,6 +519,10 @@ jobs:
           scp deploy/compose.staging.yaml "phub-deploy@$HOST:/opt/phub/compose.yaml"
           scp deploy/jetson/nginx/default.conf "phub-deploy@$HOST:/opt/phub/nginx/default.conf"
           scp deploy/jetson/activate-live-home.sh "phub-deploy@$HOST:/opt/phub/activate-live-home.sh"
+          scp deploy/jetson/activate-communities-legacy-read-only.sh \
+            "phub-deploy@$HOST:/opt/phub/activate-communities-legacy-read-only.sh"
+          scp deploy/jetson/verify-communities-legacy-read-only.sh \
+            "phub-deploy@$HOST:/opt/phub/verify-communities-legacy-read-only.sh"
           scp deploy/jetson/activate-client-assisted-viva.sh \
             "phub-deploy@$HOST:/opt/phub/activate-client-assisted-viva.sh"
           scp deploy/jetson/run-client-routing-plan.sh \
@@ -566,19 +577,30 @@ jobs:
           } > release.env
           scp release.env "phub-deploy@$HOST:/opt/phub/release.env"
       - name: Verify real staging source configuration
+        if: ${{ inputs.deployment_profile != 'COMMUNITIES_LEGACY_READ_ONLY' }}
         env:
           HOST: ${{ secrets.STAGING_HOST }}
         run: ssh "phub-deploy@$HOST" 'sh /opt/phub/verify-live-staging-data.sh preflight'
+      - name: Verify Communities legacy read-only source configuration
+        if: ${{ inputs.deployment_profile == 'COMMUNITIES_LEGACY_READ_ONLY' }}
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+        run: ssh "phub-deploy@$HOST" 'sh /opt/phub/verify-communities-legacy-read-only.sh preflight'
       - name: Pull, migrate and deploy the same image digests
         env:
           HOST: ${{ secrets.STAGING_HOST }}
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DEPLOYMENT_PROFILE: ${{ inputs.deployment_profile }}
         run: |
           printf '%s' "$GHCR_TOKEN" | ssh "phub-deploy@$HOST" '
             set -eu
+            deployment_profile="${{ inputs.deployment_profile }}"
             trap "docker logout ghcr.io >/dev/null 2>&1 || true" EXIT
             docker login ghcr.io --username "${{ github.actor }}" --password-stdin
             cd /opt/phub
+            if [ "$deployment_profile" != COMMUNITIES_LEGACY_READ_ONLY ]; then
+              rm -f /opt/phub/staging.communities.env
+            fi
             compose() {
               docker compose --env-file infrastructure.env --env-file release.env "$@"
             }
@@ -619,7 +641,14 @@ jobs:
             infrastructure exec -T postgres sh -ec \
               "psql -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -Atc \"select filename from public.schema_migrations\"" \
               | grep -Fx "$latest_migration"
-            compose up -d --remove-orphans
+            if [ "$deployment_profile" = COMMUNITIES_LEGACY_READ_ONLY ]; then
+              compose up -d --remove-orphans web api
+              compose stop worker realtime
+              [ -z "$(compose ps --status running -q worker)" ]
+              [ -z "$(compose ps --status running -q realtime)" ]
+            else
+              compose up -d --remove-orphans
+            fi
             # The ingress configuration is bind-mounted. Recreate this one
             # stateless container so it loads the newly copied configuration.
             docker compose --env-file infrastructure.env -f compose.infrastructure.yaml up -d --force-recreate nginx
@@ -633,7 +662,13 @@ jobs:
             ready=0
             attempt=0
             while [ "$attempt" -lt 36 ]; do
-              if service_is_healthy api \
+              if [ "$deployment_profile" = COMMUNITIES_LEGACY_READ_ONLY ] \
+                && service_is_healthy api; then
+                ready=1
+                break
+              fi
+              if [ "$deployment_profile" != COMMUNITIES_LEGACY_READ_ONLY ] \
+                && service_is_healthy api \
                 && service_is_healthy realtime \
                 && service_is_healthy worker; then
                 ready=1
@@ -651,9 +686,11 @@ jobs:
       - name: Promote canonical Nano TLS ingress
         env:
           HOST: ${{ secrets.STAGING_HOST }}
+          DEPLOYMENT_PROFILE: ${{ inputs.deployment_profile }}
         run: |
           ssh "phub-deploy@$HOST" '
             set -eu
+            deployment_profile="${{ inputs.deployment_profile }}"
             cd /opt/phub/tls-ingress
             backup_dir=/opt/phub/backups
             backup_timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -688,7 +725,13 @@ jobs:
             ingress_ready=0
             attempt=0
             while [ "$attempt" -lt 15 ]; do
-              if probe_canonical_ready https://lk.nano.padlhub.su/health/ready \
+              if [ "$deployment_profile" = COMMUNITIES_LEGACY_READ_ONLY ] \
+                && probe_canonical_ready https://lk.nano.padlhub.su/health/ready; then
+                ingress_ready=1
+                break
+              fi
+              if [ "$deployment_profile" != COMMUNITIES_LEGACY_READ_ONLY ] \
+                && probe_canonical_ready https://lk.nano.padlhub.su/health/ready \
                 && probe_canonical_ready https://lk.nano.padlhub.su/realtime/health/ready; then
                 ingress_ready=1
                 break
@@ -700,9 +743,11 @@ jobs:
               curl --fail --silent --show-error --connect-timeout 2 --max-time 5 \
                 --resolve lk.nano.padlhub.su:443:127.0.0.1 \
                 https://lk.nano.padlhub.su/health/ready >/dev/null || true
-              curl --fail --silent --show-error --connect-timeout 2 --max-time 5 \
-                --resolve lk.nano.padlhub.su:443:127.0.0.1 \
-                https://lk.nano.padlhub.su/realtime/health/ready >/dev/null || true
+              if [ "$deployment_profile" != COMMUNITIES_LEGACY_READ_ONLY ]; then
+                curl --fail --silent --show-error --connect-timeout 2 --max-time 5 \
+                  --resolve lk.nano.padlhub.su:443:127.0.0.1 \
+                  https://lk.nano.padlhub.su/realtime/health/ready >/dev/null || true
+              fi
               rollback_caddy
               exit 1
             fi
@@ -715,6 +760,7 @@ jobs:
             echo "Verified TLS ingress backup: $backup_path"
           '
       - name: Verify local HomeBase projections
+        if: ${{ inputs.deployment_profile != 'COMMUNITIES_LEGACY_READ_ONLY' }}
         env:
           HOST: ${{ secrets.STAGING_HOST }}
         run: ssh "phub-deploy@$HOST" 'sh /opt/phub/verify-home-base.sh'
@@ -737,6 +783,11 @@ jobs:
         env:
           HOST: ${{ secrets.STAGING_HOST }}
         run: ssh "phub-deploy@$HOST" 'sh /opt/phub/activate-live-home.sh'
+      - name: Activate and verify Communities legacy read-only projection
+        if: ${{ inputs.deployment_profile == 'COMMUNITIES_LEGACY_READ_ONLY' }}
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+        run: ssh "phub-deploy@$HOST" 'sh /opt/phub/activate-communities-legacy-read-only.sh'
       - name: Activate and verify client-assisted Viva reads independently of Home sync
         if: ${{ inputs.deployment_profile == 'CLIENT_ASSISTED_VIVA' }}
         env:
@@ -797,6 +848,22 @@ jobs:
         env:
           SMOKE_BASE_URL: ${{ vars.STAGING_BASE_URL }}
         run: npm ci --ignore-scripts && npm run smoke
+      - name: Record production promotion eligibility
+        if: ${{ inputs.deployment_profile == 'FULL_LIVE_HOME' }}
+        run: |
+          install -d -m 700 promotion-eligibility
+          {
+            echo 'PROFILE=FULL_LIVE_HOME'
+            echo "RELEASE=$GITHUB_SHA"
+            echo "STAGING_RUN_ID=$GITHUB_RUN_ID"
+          } > promotion-eligibility/production-promotion-eligibility.env
+          chmod 600 promotion-eligibility/production-promotion-eligibility.env
+      - uses: actions/upload-artifact@v4
+        if: ${{ inputs.deployment_profile == 'FULL_LIVE_HOME' }}
+        with:
+          name: production-promotion-eligibility
+          path: promotion-eligibility/production-promotion-eligibility.env
+          retention-days: 30
       - name: Roll back a failed staging application release
         if: ${{ (failure() || cancelled()) && steps.application-backup.outputs.ready == 'true' }}
         env:

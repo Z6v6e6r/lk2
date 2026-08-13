@@ -10,6 +10,8 @@ function repositoryFile(relativePath: string): string {
 const caddyfile = repositoryFile('deploy/jetson/tls-ingress/Caddyfile');
 const nginxConfig = repositoryFile('deploy/jetson/nginx/default.conf');
 const stagingWorkflow = repositoryFile('.github/workflows/deploy-staging.yaml');
+const productionWorkflow = repositoryFile('.github/workflows/deploy-production.yaml');
+const stagingCompose = repositoryFile('deploy/compose.staging.yaml');
 const stagingRoutingWorkflow = repositoryFile('.github/workflows/set-staging-routing-plan.yaml');
 const stagingRoutingOperator = repositoryFile('deploy/jetson/run-client-routing-plan.sh');
 const migration0057Diagnostic = repositoryFile('deploy/jetson/diagnose-migration-0057.sh');
@@ -19,6 +21,12 @@ const messagingReleaseVerification = repositoryFile(
   'deploy/jetson/verify-messaging-test-release.sh',
 );
 const activation = repositoryFile('deploy/jetson/activate-live-home.sh');
+const communitiesReadOnlyActivation = repositoryFile(
+  'deploy/jetson/activate-communities-legacy-read-only.sh',
+);
+const communitiesReadOnlyVerification = repositoryFile(
+  'deploy/jetson/verify-communities-legacy-read-only.sh',
+);
 const clientAssistedActivation = repositoryFile('deploy/jetson/activate-client-assisted-viva.sh');
 const verification = repositoryFile('deploy/jetson/verify-live-staging-data.sh');
 const clientAssistedVerification = repositoryFile('deploy/jetson/verify-client-assisted-viva.sh');
@@ -186,6 +194,41 @@ describe('Nano presentation release contract', () => {
     expect(stagingWorkflow).toContain('PHUB_ROLLBACK_BACKUP_ROOT=/opt/phub/backups/releases');
   });
 
+  it('isolates the Communities legacy profile to API and proves its read-only source path', () => {
+    const apiService = stagingCompose.match(/\n {2}api:\n([\s\S]*?)\n {2}realtime:/)?.[1];
+    const workerService = stagingCompose.match(/\n {2}worker:\n([\s\S]*?)\n {2}migrator:/)?.[1];
+    const realtimeService = stagingCompose.match(/\n {2}realtime:\n([\s\S]*?)\n {2}worker:/)?.[1];
+
+    expect(apiService).toContain('RUNTIME_COMMUNITIES_ENV_FILE');
+    expect(workerService).not.toContain('RUNTIME_COMMUNITIES_ENV_FILE');
+    expect(realtimeService).not.toContain('RUNTIME_COMMUNITIES_ENV_FILE');
+    expect(communitiesReadOnlyActivation).toContain('stop_and_verify worker');
+    expect(communitiesReadOnlyActivation).toContain('stop_and_verify realtime');
+    expect(communitiesReadOnlyActivation).toContain('compose ps --status running -q');
+    expect(communitiesReadOnlyActivation).toContain('restore_profile');
+    expect(communitiesReadOnlyActivation).not.toMatch(
+      /compose up -d --force-recreate api[^\n]*\|\| true/,
+    );
+    expect(communitiesReadOnlyVerification).toContain('/lk/communities?view=summary');
+    expect(communitiesReadOnlyVerification).toContain(
+      'integration.community_home_source_components',
+    );
+    expect(communitiesReadOnlyVerification).toContain('new SignJWT');
+    expect(communitiesReadOnlyVerification).toContain('/community-views/$community_id');
+    expect(communitiesReadOnlyVerification).toContain('authenticated_projection_ok=true');
+  });
+
+  it('allows production promotion only from a successful Full Live Home staging gate', () => {
+    expect(stagingWorkflow).toContain("inputs.deployment_profile == 'FULL_LIVE_HOME'");
+    expect(stagingWorkflow).toContain('name: production-promotion-eligibility');
+    expect(stagingWorkflow).toContain('PROFILE=FULL_LIVE_HOME');
+    expect(productionWorkflow).toContain('name: production-promotion-eligibility');
+    expect(productionWorkflow).toContain('Require the full staging promotion profile');
+    expect(productionWorkflow).toContain('= FULL_LIVE_HOME');
+    expect(productionWorkflow).toContain('= "$RELEASE"');
+    expect(productionWorkflow).toContain('= "$RUN_ID"');
+  });
+
   it('moves the Viva callback to HTTPS before the API consumes it', () => {
     const legacyIpSite = caddyfile.match(/http:\/\/185\.155\.18\.146 \{([\s\S]*?)\n\}/)?.[1];
 
@@ -322,6 +365,34 @@ describe('Nano presentation release contract', () => {
     expect(verification).toContain(
       "['cabinet_for_me_card', '/api/advertising/cabinet-for-me-card']",
     );
+  });
+
+  it('provides a Viva-independent Communities legacy read-only staging profile', () => {
+    expect(stagingWorkflow).toContain('COMMUNITIES_LEGACY_READ_ONLY');
+    expect(stagingWorkflow).toContain(
+      'Activate and verify Communities legacy read-only projection',
+    );
+    expect(stagingWorkflow).toContain(
+      "inputs.deployment_profile == 'COMMUNITIES_LEGACY_READ_ONLY'",
+    );
+    expect(communitiesReadOnlyActivation).toContain('compose up -d --force-recreate api');
+    expect(communitiesReadOnlyActivation).not.toContain('force-recreate worker');
+    expect(communitiesReadOnlyActivation).not.toContain('force-recreate realtime');
+    expect(communitiesReadOnlyActivation).toContain(
+      'sh /opt/phub/verify-communities-legacy-read-only.sh',
+    );
+    expect(communitiesReadOnlyActivation).toContain('restoring the previous process state');
+    expect(communitiesReadOnlyActivation).toContain('restore_profile');
+    for (const capability of ['DETAIL', 'FEED', 'CHAT', 'RATING']) {
+      expect(communitiesReadOnlyActivation).toContain(
+        `COMMUNITY_LEGACY_READ_${capability}_ENABLED=true`,
+      );
+      expect(communitiesReadOnlyVerification).toContain(
+        `require_value COMMUNITY_LEGACY_READ_${capability}_ENABLED true`,
+      );
+    }
+    expect(communitiesReadOnlyVerification).not.toContain('VIVA_DELEGATION');
+    expect(communitiesReadOnlyVerification).not.toContain('MIXED_END_USER_READS');
   });
 
   it('requires same-origin CUP notifications, tenant authorization and shared engagement key', () => {
