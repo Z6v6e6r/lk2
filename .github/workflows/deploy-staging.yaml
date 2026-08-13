@@ -382,6 +382,13 @@ jobs:
             done
             exit 0
           '
+      - name: Inspect Live Home source failures read-only
+        continue-on-error: true
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+        run: |
+          ssh -o ServerAliveInterval=10 -o ServerAliveCountMax=2 "phub-deploy@$HOST" \
+            sh -s < deploy/jetson/diagnose-live-home-source-failures.sh
       - name: Inspect public staging ingress
         env:
           BASE_URL: ${{ vars.STAGING_BASE_URL }}
