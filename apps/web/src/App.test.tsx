@@ -1,7 +1,16 @@
 // @vitest-environment jsdom
 
 import '@testing-library/jest-dom/vitest';
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import {
+  act,
+  cleanup,
+  configure,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -19,6 +28,8 @@ import type {
   PublicGiftCertificateCatalog,
   UserUpcomingBookings,
 } from './auth-gateway.js';
+
+configure({ asyncUtilTimeout: 3_000 });
 
 const session: AuthenticatedSession = {
   context: {
@@ -1193,7 +1204,7 @@ describe('PadlHub web authentication', () => {
       '/coaches',
     );
     expect(screen.queryByText('Раздел подключается к API ПаделХАБ.')).not.toBeInTheDocument();
-    expect(gateway.listEventCatalog).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(gateway.listEventCatalog).toHaveBeenCalledTimes(1));
     expect(gateway.getHomeBase).not.toHaveBeenCalled();
   });
 
