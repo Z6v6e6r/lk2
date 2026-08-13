@@ -6,6 +6,7 @@ cd /opt/phub
 
 base_runtime_env=/etc/phub/staging.env
 communities_env=/opt/phub/staging.communities.env
+communities_legacy_base_url=https://padlhub.su
 
 test -r "$base_runtime_env"
 
@@ -40,20 +41,20 @@ require_value() {
 }
 
 test "$(base_value APP_ENV)" = staging
-legacy_base_url="$(base_value COMMUNITIES_LEGACY_BASE_URL)"
-case "$legacy_base_url" in
+case "$communities_legacy_base_url" in
   https://*) ;;
   *) echo 'Communities legacy source must use HTTPS' >&2; exit 1 ;;
 esac
 
 if test "${1:-}" = preflight; then
   curl --fail --silent --show-error --connect-timeout 2 --max-time 5 \
-    "${legacy_base_url%/}/lk/communities?view=summary" >/dev/null
+    "${communities_legacy_base_url%/}/lk/communities?view=summary" >/dev/null
   echo 'Communities legacy read-only source preflight verified'
   exit 0
 fi
 
 require_value COMMUNITIES_READ_MODE legacy
+require_value COMMUNITIES_LEGACY_BASE_URL "$communities_legacy_base_url"
 require_value COMMUNITY_LEGACY_READ_DETAIL_ENABLED true
 require_value COMMUNITY_LEGACY_READ_FEED_ENABLED true
 require_value COMMUNITY_LEGACY_READ_CHAT_ENABLED true
@@ -78,6 +79,7 @@ compose exec -T api node -e "
   const expected = {
     APP_ENV: 'staging',
     COMMUNITIES_READ_MODE: 'legacy',
+    COMMUNITIES_LEGACY_BASE_URL: 'https://padlhub.su',
     COMMUNITY_LEGACY_READ_DETAIL_ENABLED: 'true',
     COMMUNITY_LEGACY_READ_FEED_ENABLED: 'true',
     COMMUNITY_LEGACY_READ_CHAT_ENABLED: 'true',
