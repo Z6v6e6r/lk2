@@ -31,6 +31,7 @@ const vivaOAuthStartBodySchema = z.object({
     personalDataPolicyAccepted: z.literal(true),
   }),
 });
+const vivaOAuthRecoveryBodySchema = z.object({ provider: z.literal('yandex') });
 const vivaOAuthCallbackQuerySchema = z.object({
   state: z.string().min(20).max(512),
   code: z.string().min(1).max(4096),
@@ -205,6 +206,33 @@ export function registerAuthRoutes(
     },
   );
 
+  app.post(
+    '/user/api/v1/:tenantKey/auth/viva/reauthorize',
+    { preHandler: [...authenticatedPreHandlers, requireAuthIdempotency] },
+    async (request, reply) => {
+      try {
+        const { tenantKey } = paramsSchema.parse(request.params);
+        const body = vivaOAuthRecoveryBodySchema.parse(request.body ?? {});
+        const tenantId = request.tenantId;
+        const userId = request.padlHubClaims?.sub;
+        if (!tenantId || !userId) {
+          return sendApiError(request, reply, 401, 'AUTH_REQUIRED', 'Требуется авторизация.');
+        }
+        return reply.send(
+          await authService.startVivaOAuthRecovery({
+            tenantKey,
+            tenantId,
+            userId,
+            provider: body.provider,
+            correlationId: request.id,
+          }),
+        );
+      } catch (error) {
+        return handleAuthError(error, request, reply);
+      }
+    },
+  );
+
   app.get('/user/api/v1/:tenantKey/auth/viva/callback', async (request, reply) => {
     try {
       const { tenantKey } = paramsSchema.parse(request.params);
@@ -227,6 +255,7 @@ export function registerAuthRoutes(
       if (directVivaAllowed) {
         const fragment = new URLSearchParams(target.hash.replace(/^#/, ''));
         fragment.set('viva_handoff', session.vivaHandoffCode);
+        if (session.vivaRecovery) fragment.set('viva_recovery', '1');
         target.hash = fragment.toString();
       }
       return reply.redirect(target.toString());

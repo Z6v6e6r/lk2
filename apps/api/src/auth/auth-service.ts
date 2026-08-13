@@ -161,6 +161,12 @@ export interface AuthRepository {
     readonly publicOfferVersion: string;
     readonly personalDataPolicyVersion: string;
   }): Promise<void>;
+  hasCurrentLegalAcceptances(input: {
+    readonly tenantId: string;
+    readonly userId: string;
+    readonly publicOfferVersion: string;
+    readonly personalDataPolicyVersion: string;
+  }): Promise<boolean>;
 }
 
 export type AuthServiceErrorCode =
@@ -382,13 +388,73 @@ export class AuthService {
     };
   }
 
+  /**
+   * Replaces an invalid Viva delegation without manufacturing a new legal
+   * acceptance. The caller is already authenticated by PadlHub; the callback
+   * is additionally bound to that exact user.
+   */
+  public async startVivaOAuthRecovery(input: {
+    readonly tenantKey: string;
+    readonly tenantId: string;
+    readonly userId: string;
+    readonly provider: VivaOAuthProvider;
+    readonly correlationId: string;
+  }): Promise<{ redirectUrl: string }> {
+    if (
+      !this.options.config.VIVA_OAUTH_ENABLED ||
+      !this.options.vivaOAuthProvider ||
+      !this.options.vivaOAuthStateStore
+    ) {
+      throw new AuthServiceError('AUTH_PROVIDER_UNAVAILABLE');
+    }
+    const redirectUri = this.options.config.VIVA_OAUTH_REDIRECT_URI;
+    if (!redirectUri) throw new AuthServiceError('AUTH_PROVIDER_UNAVAILABLE');
+    const binding = await this.binding(input.tenantKey);
+    if (binding.provider !== 'VIVA' || binding.tenantId !== input.tenantId) {
+      throw new AuthServiceError('AUTH_PROVIDER_UNAVAILABLE');
+    }
+    const accepted = await this.options.repository.hasCurrentLegalAcceptances({
+      tenantId: input.tenantId,
+      userId: input.userId,
+      publicOfferVersion: this.options.config.PUBLIC_OFFER_VERSION,
+      personalDataPolicyVersion: this.options.config.PERSONAL_DATA_POLICY_VERSION,
+    });
+    if (!accepted) throw new AuthServiceError('LEGAL_ACCEPTANCE_REQUIRED');
+    const state = randomBytes(24).toString('base64url');
+    const codeVerifier = randomBytes(48).toString('base64url');
+    const codeChallenge = createHash('sha256').update(codeVerifier).digest('base64url');
+    await this.options.vivaOAuthStateStore.put(
+      {
+        state,
+        tenantKey: binding.tenantKey,
+        provider: input.provider,
+        codeVerifier,
+        publicOfferAccepted: true,
+        personalDataPolicyAccepted: true,
+        publicOfferVersion: this.options.config.PUBLIC_OFFER_VERSION,
+        personalDataPolicyVersion: this.options.config.PERSONAL_DATA_POLICY_VERSION,
+        recoveryUserId: input.userId,
+      },
+      this.options.config.AUTH_CHALLENGE_TTL_SECONDS,
+    );
+    return {
+      redirectUrl: this.options.vivaOAuthProvider.createAuthorizationUrl({
+        provider: input.provider,
+        tenantKey: binding.providerTenantKey,
+        redirectUri,
+        state,
+        codeChallenge,
+      }),
+    };
+  }
+
   public async completeVivaOAuth(input: {
     readonly tenantKey: string;
     readonly state: string;
     readonly code: string;
     readonly correlationId: string;
     readonly idempotencyKey: string;
-  }): Promise<AuthSessionResult & { readonly vivaHandoffCode: string }> {
+  }): Promise<AuthSessionResult & { readonly vivaHandoffCode: string; readonly vivaRecovery: boolean }> {
     if (
       !this.options.config.VIVA_OAUTH_ENABLED ||
       !this.options.vivaOAuthProvider ||
@@ -418,13 +484,16 @@ export class AuthService {
     }
     let user: AuthUser;
     try {
-      if (result.identityResolution === 'EXISTING_SUBJECT') {
+      if (pending.recoveryUserId || result.identityResolution === 'EXISTING_SUBJECT') {
         const existing = await this.options.repository.resolveExistingExternalIdentity({
           binding,
           identity: result.identity,
           correlationId: input.correlationId,
         });
         if (!existing) throw new AuthServiceError('AUTH_IDENTITY_LINK_REQUIRED');
+        if (pending.recoveryUserId && existing.id !== pending.recoveryUserId) {
+          throw new AuthServiceError('AUTH_IDENTITY_CONFLICT');
+        }
         user = existing;
       } else {
         user = await this.options.repository.upsertExternalIdentity({
@@ -437,15 +506,17 @@ export class AuthService {
       if (error instanceof AuthServiceError) throw error;
       this.mapIdentityRepositoryError(error);
     }
-    await this.options.repository.recordLegalAcceptances({
-      tenantId: binding.tenantId,
-      userId: user.id,
-      correlationId: input.correlationId,
-      source: 'VIVA_OAUTH',
-      publicOfferVersion: pending.publicOfferVersion,
-      personalDataPolicyVersion: pending.personalDataPolicyVersion,
-      oauthStateHash: createHash('sha256').update(input.state).digest('hex'),
-    });
+    if (!pending.recoveryUserId) {
+      await this.options.repository.recordLegalAcceptances({
+        tenantId: binding.tenantId,
+        userId: user.id,
+        correlationId: input.correlationId,
+        source: 'VIVA_OAUTH',
+        publicOfferVersion: pending.publicOfferVersion,
+        personalDataPolicyVersion: pending.personalDataPolicyVersion,
+        oauthStateHash: createHash('sha256').update(input.state).digest('hex'),
+      });
+    }
     await this.options.repository.saveVivaDelegation({
       tenantId: binding.tenantId,
       userId: user.id,
@@ -496,7 +567,7 @@ export class AuthService {
       { sessionId, tenantId: binding.tenantId, tenantKey: binding.tenantKey, user },
       refreshToken,
     );
-    return { ...session, vivaHandoffCode };
+    return { ...session, vivaHandoffCode, vivaRecovery: Boolean(pending.recoveryUserId) };
   }
 
   public async issueVivaAccessToken(input: {

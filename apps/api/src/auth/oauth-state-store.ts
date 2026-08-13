@@ -12,6 +12,8 @@ export interface VivaOAuthState {
   readonly personalDataPolicyAccepted: boolean;
   readonly publicOfferVersion: string;
   readonly personalDataPolicyVersion: string;
+  /** Binds a consent-preserving recovery flow to its already authenticated user. */
+  readonly recoveryUserId?: string;
 }
 
 export interface VivaOAuthStateStore {

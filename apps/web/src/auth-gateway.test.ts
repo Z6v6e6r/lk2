@@ -381,6 +381,7 @@ describe('browser auth gateway', () => {
 
   it('exchanges a fragment handoff once and keeps the Viva access token only in memory', async () => {
     window.history.replaceState({}, '', '/#viva_handoff=one-time-handoff-code-12345');
+    window.sessionStorage.setItem('phub.viva-reauth-return-path.v1', '/games/abandoned-recovery');
     const session = {
       accessToken: 'short-lived-padlhub-token',
       tokenType: 'Bearer',
@@ -415,6 +416,8 @@ describe('browser auth gateway', () => {
 
     expect(gateway.getVivaAccessToken()).toBe('short-lived-viva-access-token');
     expect(window.location.hash).toBe('');
+    expect(window.location.pathname).toBe('/');
+    expect(window.sessionStorage.getItem('phub.viva-reauth-return-path.v1')).toBeNull();
     const [brokerUrl, brokerInit] = fetchImplementation.mock.calls[1] ?? [];
     expect(brokerUrl).toBe('https://api.padlhub.test/user/api/v1/padlhub/auth/viva/access');
     expect(typeof brokerInit?.body).toBe('string');
@@ -424,6 +427,48 @@ describe('browser auth gateway', () => {
     expect(new Headers(brokerInit?.headers).get('Authorization')).toBe(
       'Bearer short-lived-padlhub-token',
     );
+  });
+
+  it('starts exactly one server-authorized Yandex recovery for a revoked Viva delegation', async () => {
+    window.history.replaceState({}, '', '/games?event=fixture#section');
+    const session = {
+      accessToken: 'short-lived-padlhub-token',
+      tokenType: 'Bearer',
+      expiresAt: '2099-07-11T12:10:00.000Z',
+      user: { id: '00000000-0000-4000-8000-000000000001', displayName: 'Анна' },
+      context: {
+        userId: '00000000-0000-4000-8000-000000000001', tenantId: '00000000-0000-4000-8000-000000000002',
+        displayName: 'Анна', phoneLast4: '0001', roles: ['client'], permissions: ['profile.read'],
+      },
+    };
+    const fetchImplementation = vi.fn<typeof fetch>((input) => {
+      const url = requestUrl(input);
+      if (url.endsWith('/auth/session/refresh')) return Promise.resolve(Response.json(session));
+      if (url.endsWith('/auth/viva/access')) {
+        return Promise.resolve(Response.json({ code: 'VIVA_REAUTH_REQUIRED' }, { status: 401 }));
+      }
+      if (url.endsWith('/auth/viva/reauthorize')) {
+        return Promise.resolve(Response.json({ redirectUrl: 'https://identity.example.test/yandex' }));
+      }
+      return Promise.resolve(new Response(null, { status: 404 }));
+    });
+    const redirected = vi.fn();
+    const gateway = createBrowserAuthGateway({
+      baseUrl: 'https://api.padlhub.test/', tenantKey: 'padlhub', appVersion: 'test', fetchImplementation,
+      onVivaRecoveryRedirect: redirected,
+    });
+
+    await gateway.restoreSession();
+    await Promise.allSettled([gateway.refreshVivaAccessToken(), gateway.refreshVivaAccessToken()]);
+    await vi.waitFor(() => expect(redirected).toHaveBeenCalledTimes(1));
+
+    const recoveryCalls = fetchImplementation.mock.calls.filter(([input]) =>
+      requestUrl(input).endsWith('/auth/viva/reauthorize'),
+    );
+    expect(recoveryCalls).toHaveLength(1);
+    expect(JSON.parse(recoveryCalls[0]?.[1]?.body as string)).toEqual({ provider: 'yandex' });
+    expect(redirected).toHaveBeenCalledWith('https://identity.example.test/yandex');
+    expect(window.sessionStorage.getItem('phub.viva-reauth-return-path.v1')).toBe('/games?event=fixture#section');
   });
 
   it('loads and caches the server-owned routing plan after authentication', async () => {

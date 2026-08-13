@@ -280,10 +280,13 @@ interface BrowserAuthGatewayOptions {
   readonly appVersion: string;
   readonly appBuild?: string;
   readonly fetchImplementation?: typeof fetch;
+  /** Test seam; production always navigates to the server-provided OAuth URL. */
+  readonly onVivaRecoveryRedirect?: (redirectUrl: string) => void;
 }
 
 const HOME_INITIAL_SCHEDULE_DAYS = 3;
 const NOTIFICATION_CACHE_TTL_MS = 2_000;
+const VIVA_REAUTH_RETURN_PATH_STORAGE_KEY = 'phub.viva-reauth-return-path.v1';
 
 function normalizeContext(payload: ApiUserContext, tenantKey: string): UserContext {
   return {
@@ -389,6 +392,46 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     { readonly page: NotificationInboxPage; readonly expiresAt: number } | undefined;
   let notificationsCacheRevision = 0;
   const publicTournamentSummaryPromises = new Map<string, Promise<PublicTournamentSummary>>();
+  let vivaReauthorizationStarted = false;
+
+  function startAutomaticVivaReauthorization(): Promise<void> {
+    if (typeof window === 'undefined' || vivaReauthorizationStarted) return Promise.resolve();
+    vivaReauthorizationStarted = true;
+    try {
+      window.sessionStorage.setItem(
+        VIVA_REAUTH_RETURN_PATH_STORAGE_KEY,
+        `${window.location.pathname}${window.location.search}${window.location.hash}`,
+      );
+    } catch {
+      // Return-path storage is optional; recovery authorization remains server-owned.
+    }
+    return client
+      .createVivaOAuthRecovery()
+      .then((response) => {
+        if (!response.redirectUrl) throw new Error('Viva OAuth redirect is unavailable');
+        if (options.onVivaRecoveryRedirect) options.onVivaRecoveryRedirect(response.redirectUrl);
+        else window.location.assign(response.redirectUrl);
+      })
+      .catch((error: unknown) => {
+        try {
+          window.sessionStorage.removeItem(VIVA_REAUTH_RETURN_PATH_STORAGE_KEY);
+        } catch {
+          // A failed recovery must not leave an old route for a later regular login.
+        }
+        throw error;
+      });
+  }
+
+  function restoreVivaReauthorizationReturnPath(): void {
+    if (typeof window === 'undefined') return;
+    try {
+      const path = window.sessionStorage.getItem(VIVA_REAUTH_RETURN_PATH_STORAGE_KEY);
+      window.sessionStorage.removeItem(VIVA_REAUTH_RETURN_PATH_STORAGE_KEY);
+      if (path?.startsWith('/') && !path.startsWith('//')) window.history.replaceState({}, '', path);
+    } catch {
+      // Storage availability must not block a completed OAuth callback.
+    }
+  }
 
   function resolvePaymentIntent(
     intent: GiftCertificatePaymentIntent,
@@ -410,6 +453,12 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
         vivaAccessToken = access.accessToken;
         vivaAccessExpiresAt = Date.parse(access.expiresAt);
         return access.accessToken;
+      })
+      .catch((error: unknown) => {
+        if (!handoffCode && error instanceof ApiClientError && error.code === 'VIVA_REAUTH_REQUIRED') {
+          void startAutomaticVivaReauthorization().catch(() => undefined);
+        }
+        throw error;
       });
     if (handoffCode) return request;
     const coalesced = request.finally(() => {
@@ -419,16 +468,19 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     return coalesced;
   }
 
-  async function consumeVivaHandoff(): Promise<void> {
-    if (typeof window === 'undefined') return;
+  async function consumeVivaHandoff(): Promise<'recovery' | 'normal' | false> {
+    if (typeof window === 'undefined') return false;
     const currentUrl = new URL(window.location.href);
     const fragment = new URLSearchParams(currentUrl.hash.replace(/^#/, ''));
     const handoffCode = fragment.get('viva_handoff');
-    if (!handoffCode) return;
+    if (!handoffCode) return false;
+    const vivaRecovery = fragment.get('viva_recovery') === '1';
     try {
       await applyVivaAccess(handoffCode);
+      return vivaRecovery ? 'recovery' : 'normal';
     } finally {
       fragment.delete('viva_handoff');
+      fragment.delete('viva_recovery');
       currentUrl.hash = fragment.toString();
       window.history.replaceState({}, '', currentUrl.toString());
     }
@@ -671,7 +723,15 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
   async function restore(): Promise<AuthenticatedSession | null> {
     try {
       const session = normalizeSession(await client.refreshSession());
-      await consumeVivaHandoff().catch(() => undefined);
+      const handoffKind = await consumeVivaHandoff().catch(() => false);
+      if (handoffKind === 'recovery') restoreVivaReauthorizationReturnPath();
+      else if (handoffKind === 'normal') {
+        try {
+          window.sessionStorage.removeItem(VIVA_REAUTH_RETURN_PATH_STORAGE_KEY);
+        } catch {
+          // A regular login must not leave an abandoned recovery route behind.
+        }
+      }
       return session;
     } catch (error) {
       client.clearAccessToken();

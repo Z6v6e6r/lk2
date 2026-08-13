@@ -486,6 +486,25 @@ export class PostgresAuthRepository implements AuthRepository {
     });
   }
 
+  public async hasCurrentLegalAcceptances(input: {
+    readonly tenantId: string;
+    readonly userId: string;
+    readonly publicOfferVersion: string;
+    readonly personalDataPolicyVersion: string;
+  }): Promise<boolean> {
+    return this.withTenant(input.tenantId, async (client) => {
+      const result = await client.query<{ accepted: boolean }>(
+        `select count(distinct document_kind) = 2 as accepted
+           from legal.document_acceptances
+          where tenant_id = $1 and user_id = $2
+            and ((document_kind = 'PUBLIC_OFFER' and document_version = $3)
+              or (document_kind = 'PERSONAL_DATA_POLICY' and document_version = $4))`,
+        [input.tenantId, input.userId, input.publicOfferVersion, input.personalDataPolicyVersion],
+      );
+      return result.rows[0]?.accepted === true;
+    });
+  }
+
   public async findRefreshSessionById(
     tenantKey: string,
     sessionId: string,
