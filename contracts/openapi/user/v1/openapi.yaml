@@ -320,6 +320,38 @@ paths:
           $ref: ../../common/components.yaml#/components/responses/TooManyRequests
         '503':
           $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/auth/viva/reauthorize:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/IdempotencyKey'
+    post:
+      operationId: createVivaOAuthRecovery
+      summary: Recover an expired Viva delegation without recording new legal acceptance
+      description: |
+        Available only to an authenticated PadlHub user who has already accepted the current
+        public-offer and personal-data-policy versions. The recovery flow is bound to that user.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VivaOAuthRecoveryRequest'
+      responses:
+        '200':
+          description: Server-owned Yandex OAuth redirect URL.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VivaOAuthAuthorization'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: '#/components/responses/AuthenticationRejected'
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
   /{tenantKey}/auth/viva/callback:
     parameters:
       - $ref: ../../common/components.yaml#/components/parameters/TenantKey
@@ -349,6 +381,8 @@ paths:
           $ref: ../../common/components.yaml#/components/responses/BadRequest
         '401':
           $ref: '#/components/responses/AuthenticationRejected'
+        '409':
+          $ref: '#/components/responses/AuthIdentityConflict'
         '410':
           $ref: '#/components/responses/AuthenticationRejected'
         '503':
@@ -2411,6 +2445,14 @@ components:
         redirectUrl:
           type: string
           format: uri
+    VivaOAuthRecoveryRequest:
+      type: object
+      additionalProperties: false
+      required: [provider]
+      properties:
+        provider:
+          type: string
+          const: yandex
     VivaDelegatedAccessRequest:
       type: object
       additionalProperties: false
@@ -4034,6 +4076,15 @@ components:
       schema:
         type: string
   responses:
+    AuthIdentityConflict:
+      description: The OAuth identity belongs to a different PadlHub user.
+      headers:
+        X-Correlation-ID:
+          $ref: ../../common/components.yaml#/components/headers/CorrelationId
+      content:
+        application/json:
+          schema:
+            $ref: ../../common/components.yaml#/components/schemas/ApiError
     CommandConflict:
       description: The idempotency key was already used for another command.
       headers:

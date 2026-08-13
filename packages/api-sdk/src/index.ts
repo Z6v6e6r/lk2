@@ -487,6 +487,15 @@ export class PadlHubApiClient {
     return this.request<UserContext>('/context');
   }
 
+  public createVivaOAuthRecovery(): Promise<{ readonly redirectUrl: string }> {
+    const idempotencyKey = createCorrelationId();
+    return this.request<{ readonly redirectUrl: string }>('/auth/viva/reauthorize', {
+      method: 'POST',
+      idempotencyKey,
+      body: jsonRequestBody({ provider: 'yandex' }),
+    });
+  }
+
   public getClientRoutingPlan(): Promise<ClientRoutingPlan> {
     return this.request<ClientRoutingPlan>('/routing-plan');
   }
