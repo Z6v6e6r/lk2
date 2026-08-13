@@ -67,6 +67,8 @@ class FakeRepository implements AuthRepository {
   private bindingValue: TenantAuthBinding = binding;
   private vivaDelegationRevocationCount = 0;
   private phoneLegalAcceptanceCount = 0;
+  private legalAcceptanceCount = 0;
+  private currentLegalAcceptances = true;
   private existingSubjectUser: AuthUser | undefined = user;
   private identityUpsertCount = 0;
   private vivaDelegation:
@@ -91,6 +93,10 @@ class FakeRepository implements AuthRepository {
     return this.phoneLegalAcceptanceCount;
   }
 
+  public get legalAcceptances(): number {
+    return this.legalAcceptanceCount;
+  }
+
   public get hasVivaDelegation(): boolean {
     return this.vivaDelegation !== undefined;
   }
@@ -101,6 +107,10 @@ class FakeRepository implements AuthRepository {
 
   public setExistingSubjectUser(nextUser: AuthUser | undefined): void {
     this.existingSubjectUser = nextUser;
+  }
+
+  public setCurrentLegalAcceptances(value: boolean): void {
+    this.currentLegalAcceptances = value;
   }
 
   public resolveTenantAuthBinding(tenantKey: string): Promise<TenantAuthBinding | undefined> {
@@ -205,6 +215,7 @@ class FakeRepository implements AuthRepository {
   }
 
   public recordLegalAcceptances(): Promise<void> {
+    this.legalAcceptanceCount += 1;
     return Promise.resolve();
   }
 
@@ -215,6 +226,10 @@ class FakeRepository implements AuthRepository {
 
   public recordLegalAcceptanceIntent(): Promise<void> {
     return Promise.resolve();
+  }
+
+  public hasCurrentLegalAcceptances(): Promise<boolean> {
+    return Promise.resolve(this.currentLegalAcceptances);
   }
 }
 
@@ -332,6 +347,38 @@ describe('provider-neutral authentication routes', () => {
       correlationId: 'oauth-refresh-correlation',
     });
     expect(refreshedAccess.accessToken).toBe('refreshed-viva-access-token');
+
+    const recovery = await service.startVivaOAuthRecovery({
+      tenantKey: binding.tenantKey,
+      tenantId: binding.tenantId,
+      userId: user.id,
+      provider: 'yandex',
+      correlationId: 'oauth-recovery-start-correlation',
+    });
+    const recoveryState = new URL(recovery.redirectUrl).searchParams.get('state') ?? '';
+    const beforeRecoveryAcceptances = repository.legalAcceptances;
+    const beforeRecoveryUpserts = repository.identityUpserts;
+    const completedRecovery = await service.completeVivaOAuth({
+      tenantKey: binding.tenantKey,
+      state: recoveryState,
+      code: 'recovery-authorization-code',
+      correlationId: 'oauth-recovery-complete-correlation',
+      idempotencyKey: 'oauth-recovery-complete-idempotency',
+    });
+    expect(completedRecovery.vivaRecovery).toBe(true);
+    expect(repository.legalAcceptances).toBe(beforeRecoveryAcceptances);
+    expect(repository.identityUpserts).toBe(beforeRecoveryUpserts);
+
+    repository.setCurrentLegalAcceptances(false);
+    await expect(
+      service.startVivaOAuthRecovery({
+        tenantKey: binding.tenantKey,
+        tenantId: binding.tenantId,
+        userId: user.id,
+        provider: 'yandex',
+        correlationId: 'oauth-recovery-stale-legal-correlation',
+      }),
+    ).rejects.toMatchObject({ code: 'LEGAL_ACCEPTANCE_REQUIRED' });
   });
 
   it('bootstraps mixed OAuth only through an already-linked issuer and subject', async () => {
