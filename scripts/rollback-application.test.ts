@@ -61,6 +61,7 @@ async function fixture(): Promise<Fixture> {
   await write(join(root, 'nginx', 'default.conf'), 'current nginx\n');
   await write(join(root, 'staging.auth.env'), 'CURRENT_SECRET=current\n', 0o600);
   await write(join(root, 'staging.override.env'), 'HOME_READ_MODE=current\n', 0o600);
+  await write(join(root, 'staging.communities.env'), 'COMMUNITIES_READ_MODE=legacy\n', 0o600);
   await write(join(root, 'tls-ingress', 'Caddyfile'), 'current caddy\n');
 
   const images = [
@@ -90,7 +91,13 @@ async function fixture(): Promise<Fixture> {
   await write(join(backup, 'nginx', 'default.conf'), 'previous nginx\n');
   await write(join(backup, 'staging.auth.env'), 'ROLLBACK_TEST_SECRET=never-print-me\n', 0o600);
   await write(join(backup, 'staging.override.env'), 'HOME_READ_MODE=previous\n', 0o600);
+  await write(join(backup, 'staging.communities.env'), 'COMMUNITIES_READ_MODE=mock\n', 0o600);
   await write(join(backup, 'tls-ingress', 'Caddyfile'), 'previous caddy\n');
+  await write(
+    join(backup, 'process-state.env'),
+    'WEB=running\nAPI=running\nWORKER=running\nREALTIME=running\n',
+    0o600,
+  );
   await write(join(backup, 'backup.complete'), `${'b'.repeat(40)}\n`, 0o600);
 
   await write(
@@ -158,6 +165,9 @@ describe('Nano staging application rollback primitive', () => {
     await expect(readFile(join(input.root, 'staging.override.env'), 'utf8')).resolves.toBe(
       'HOME_READ_MODE=previous\n',
     );
+    await expect(readFile(join(input.root, 'staging.communities.env'), 'utf8')).resolves.toBe(
+      'COMMUNITIES_READ_MODE=mock\n',
+    );
     await expect(readFile(join(input.root, 'tls-ingress', 'Caddyfile'), 'utf8')).resolves.toBe(
       'previous caddy\n',
     );
@@ -168,7 +178,9 @@ describe('Nano staging application rollback primitive', () => {
     expect(dockerCalls).toContain('--profile migration config --images');
     expect(dockerCalls).toContain('image inspect');
     expect(dockerCalls).not.toContain(' pull ');
-    expect(dockerCalls).toContain('up -d --remove-orphans web api worker realtime');
+    expect(dockerCalls).toContain('up -d --remove-orphans web api');
+    expect(dockerCalls).toContain('up -d worker');
+    expect(dockerCalls).toContain('up -d realtime');
     expect(dockerCalls).toContain('exec -T api node -e');
     expect(dockerCalls).toContain('exec -T realtime node -e');
     expect(dockerCalls).toContain('exec -T worker node -e');
@@ -235,6 +247,35 @@ describe('Nano staging application rollback primitive', () => {
     await execute(input);
 
     await expect(readFile(join(input.root, 'staging.override.env'), 'utf8')).rejects.toThrow();
+  });
+
+  it('removes a candidate Communities API profile when the saved release had none', async () => {
+    const input = await fixture();
+    await rm(join(input.backup, 'staging.communities.env'));
+    await writeFile(join(input.backup, 'staging.communities.env.absent'), '');
+    await execute(input);
+
+    await expect(readFile(join(input.root, 'staging.communities.env'), 'utf8')).rejects.toThrow();
+  });
+
+  it('keeps worker and realtime stopped when restoring a read-only Communities profile', async () => {
+    const input = await fixture();
+    await writeFile(
+      join(input.backup, 'process-state.env'),
+      'WEB=running\nAPI=running\nWORKER=stopped\nREALTIME=stopped\n',
+    );
+    await execute(input);
+
+    const dockerCalls = await readFile(input.dockerLog, 'utf8');
+    expect(dockerCalls).toContain('up -d --remove-orphans web api');
+    expect(dockerCalls).toContain('stop worker');
+    expect(dockerCalls).toContain('stop realtime');
+    expect(dockerCalls).toContain('ps --status running -q worker');
+    expect(dockerCalls).toContain('ps --status running -q realtime');
+    expect(dockerCalls).not.toContain('up -d worker');
+    expect(dockerCalls).not.toContain('up -d realtime');
+    expect(dockerCalls).not.toContain('exec -T worker node -e');
+    expect(dockerCalls).not.toContain('exec -T realtime node -e');
   });
 
   it('fails before changing files when a saved image reference is mutable', async () => {

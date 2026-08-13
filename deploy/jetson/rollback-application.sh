@@ -90,6 +90,7 @@ stage_file release.env required 600
 stage_file nginx/default.conf required 644
 stage_file staging.auth.env required 600
 stage_file tls-ingress/Caddyfile required 644
+stage_file process-state.env required 600
 stage_file backup.complete required 600
 if stage_file staging.override.env optional 600; then
   override_state=present
@@ -99,10 +100,42 @@ else
     fail 'staging.override.env.absent marker must be empty'
   override_state=absent
 fi
+if stage_file staging.communities.env optional 600; then
+  communities_state=present
+else
+  stage_file staging.communities.env.absent required 600
+  [ ! -s "$stage_dir/staging.communities.env.absent" ] ||
+    fail 'staging.communities.env.absent marker must be empty'
+  communities_state=absent
+fi
 [ ! -e "$backup_dir/staging.override.env" ] || [ "$override_state" = present ] ||
   fail 'saved runtime override state is ambiguous'
 [ ! -e "$backup_dir/staging.override.env.absent" ] || [ "$override_state" = absent ] ||
   fail 'saved runtime override state is ambiguous'
+[ ! -e "$backup_dir/staging.communities.env" ] || [ "$communities_state" = present ] ||
+  fail 'saved Communities runtime state is ambiguous'
+[ ! -e "$backup_dir/staging.communities.env.absent" ] || [ "$communities_state" = absent ] ||
+  fail 'saved Communities runtime state is ambiguous'
+
+process_state_value() {
+  process_key="$1"
+  process_count="$(awk -F= -v key="$process_key" '$1 == key { count += 1 } END { print count + 0 }' "$stage_dir/process-state.env")"
+  [ "$process_count" -eq 1 ] || fail "process-state.env must contain exactly one $process_key"
+  process_value="$(sed -n "s/^${process_key}=//p" "$stage_dir/process-state.env")"
+  case "$process_value" in
+    running | stopped) printf '%s' "$process_value" ;;
+    *) fail "process-state.env contains an invalid $process_key state" ;;
+  esac
+}
+
+web_state="$(process_state_value WEB)"
+api_state="$(process_state_value API)"
+worker_state="$(process_state_value WORKER)"
+realtime_state="$(process_state_value REALTIME)"
+[ "$web_state" = running ] && [ "$api_state" = running ] ||
+  fail 'saved process state must keep web and api running'
+[ "$(wc -l < "$stage_dir/process-state.env" | tr -d ' ')" -eq 4 ] ||
+  fail 'process-state.env must contain exactly four lines'
 
 release_env="$stage_dir/release.env"
 LC_ALL=C awk '
@@ -222,6 +255,12 @@ else
   : > "$recovery_dir/staging.override.env.absent"
   chmod 600 "$recovery_dir/staging.override.env.absent"
 fi
+if [ -e "$app_root/staging.communities.env" ]; then
+  capture_current staging.communities.env 600
+else
+  : > "$recovery_dir/staging.communities.env.absent"
+  chmod 600 "$recovery_dir/staging.communities.env.absent"
+fi
 capture_current tls-ingress/Caddyfile 644
 
 restore_staged() {
@@ -246,6 +285,11 @@ if [ "$override_state" = present ]; then
   restore_staged staging.override.env 600
 else
   rm -f "$app_root/staging.override.env"
+fi
+if [ "$communities_state" = present ]; then
+  restore_staged staging.communities.env 600
+else
+  rm -f "$app_root/staging.communities.env"
 fi
 restore_staged tls-ingress/Caddyfile 644
 
@@ -272,7 +316,23 @@ docker compose \
   docker compose up -d --force-recreate caddy
 )
 
-compose up -d --remove-orphans web api worker realtime
+compose up -d --remove-orphans web api
+stop_and_verify() {
+  service="$1"
+  compose stop "$service"
+  [ -z "$(compose ps --status running -q "$service")" ] ||
+    fail "restored $service process did not stop"
+}
+if [ "$worker_state" = running ]; then
+  compose up -d worker
+else
+  stop_and_verify worker
+fi
+if [ "$realtime_state" = running ]; then
+  compose up -d realtime
+else
+  stop_and_verify realtime
+fi
 
 service_ready() {
   service="$1"
@@ -284,7 +344,11 @@ service_ready() {
 
 attempt=0
 while [ "$attempt" -lt "$health_attempts" ]; do
-  if service_ready api 3000 && service_ready realtime 3001 && service_ready worker 3002; then
+  worker_ready=true
+  realtime_ready=true
+  [ "$worker_state" = stopped ] || service_ready worker 3002 || worker_ready=false
+  [ "$realtime_state" = stopped ] || service_ready realtime 3001 || realtime_ready=false
+  if service_ready api 3000 && [ "$worker_ready" = true ] && [ "$realtime_ready" = true ]; then
     printf '%s\n' "Application rollback ready for release $release"
     printf '%s\n' "Pre-rollback files saved under $recovery_dir"
     exit 0
