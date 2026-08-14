@@ -13,7 +13,7 @@ import {
   calculateStableMappingDigest,
   COMMUNITIES_LEGACY_REQUIRED_COLLECTIONS,
 } from './communities-legacy-preservation-support.js';
-import { runCommunitiesLegacyPreservationVerification } from './verify-communities-legacy-preservation.js';
+import { runCommunitiesLegacyPreservationVerification as runCli } from './verify-communities-legacy-preservation.js';
 
 const directories: string[] = [];
 const h = (character: string) => character.repeat(64);
@@ -29,6 +29,32 @@ afterEach(async () => {
 });
 
 function fixture() {
+  const writerReport = {
+    schemaVersion: 'communities-node-red-writer-inventory-report-v1' as const,
+    outcome: 'NODE_RED_WRITER_INVENTORY_COMPLETE' as const,
+    authorizesMutation: false as const,
+    total: 1,
+    inventoryDigest: h('2'),
+    sourceFlowSha256: h('7'),
+    functionAllowlistSha256: h('8'),
+    unknown: 0,
+    unknownByReason: {
+      UNSUPPORTED_OPERATION: 0,
+      OUT_OF_CONTRACT_COLLECTION: 0,
+      MISSING_INGRESS: 0,
+      UNAPPROVED_INGRESS: 0,
+      ROUTE_CONTRACT_MISMATCH: 0,
+      UNKNOWN_SINK_TYPE: 0,
+      DIRECT_DRIVER_CODE: 0,
+      UNREVIEWED_FUNCTION: 0,
+      FUNCTION_ALLOWLIST_EXTRA: 0,
+    },
+    duplicateHandlers: 0,
+    blockers: [],
+  };
+  const writerReportSha256 = createHash('sha256')
+    .update(JSON.stringify(writerReport))
+    .digest('hex');
   const aggregate = {
     tenantKey: 'local-padel',
     communityKeyHmac: h('0'),
@@ -74,7 +100,16 @@ function fixture() {
     sourceCheckpointDigest: h('a'),
     snapshotConsistent: true as const,
     mapping,
-    writeRoutes: { total: 1, inventoryDigest: h('2'), unknown: 0, duplicateHandlers: 0 },
+    writeRoutes: {
+      outcome: 'NODE_RED_WRITER_INVENTORY_COMPLETE' as const,
+      reportSha256: writerReportSha256,
+      sourceFlowSha256: h('7'),
+      functionAllowlistSha256: h('8'),
+      total: 1,
+      inventoryDigest: h('2'),
+      unknown: 0,
+      duplicateHandlers: 0,
+    },
     collections: COMMUNITIES_LEGACY_REQUIRED_COLLECTIONS.map((name) => ({
       name,
       scanned: accepted[name],
@@ -134,6 +169,7 @@ function fixture() {
   };
   return {
     manifest: { ...unsigned, idempotencyDigest: calculateManifestIdempotencyDigest(unsigned) },
+    writerReport,
     baseline: {
       schemaVersion: 'communities-legacy-mapping-baseline-v1',
       tenantKey: 'local-padel',
@@ -149,19 +185,54 @@ function fixture() {
 async function files() {
   const directory = await mkdtemp(join(tmpdir(), 'communities-cli-'));
   directories.push(directory);
-  const { manifest, baseline } = fixture();
+  const { manifest, baseline, writerReport } = fixture();
   const manifestPath = join(directory, 'manifest.json');
   const baselinePath = join(directory, 'baseline.json');
+  const writerReportPath = join(directory, 'writer-report.json');
   await Promise.all([
     writeFile(manifestPath, JSON.stringify(manifest), { mode: 0o600 }),
     writeFile(baselinePath, JSON.stringify(baseline), { mode: 0o600 }),
+    writeFile(writerReportPath, JSON.stringify(writerReport), { mode: 0o600 }),
   ]);
-  await Promise.all([chmod(manifestPath, 0o600), chmod(baselinePath, 0o600)]);
+  await Promise.all([
+    chmod(manifestPath, 0o600),
+    chmod(baselinePath, 0o600),
+    chmod(writerReportPath, 0o600),
+  ]);
   return {
     manifestPath,
     baselinePath,
+    writerReportPath,
     baselinePin: createHash('sha256').update(JSON.stringify(baseline)).digest('hex'),
+    writerReportPin: createHash('sha256').update(JSON.stringify(writerReport)).digest('hex'),
   };
+}
+
+async function runCommunitiesLegacyPreservationVerification(
+  arguments_: readonly string[],
+  requiredBaselineSha256: string | undefined,
+  requiredWriterReportSha256?: string,
+) {
+  const manifestIndex = arguments_.indexOf('--manifest');
+  const manifestPath = manifestIndex >= 0 ? arguments_[manifestIndex + 1] : undefined;
+  if (!manifestPath?.startsWith('/'))
+    return runCli(arguments_, requiredBaselineSha256, requiredWriterReportSha256);
+  const writerReportPath = join(dirname(manifestPath), 'writer-report.json');
+  let writerReportPin = requiredWriterReportSha256;
+  if (!writerReportPin) {
+    try {
+      const { readFile } = await import('node:fs/promises');
+      writerReportPin = createHash('sha256')
+        .update(await readFile(writerReportPath))
+        .digest('hex');
+    } catch {
+      writerReportPin = undefined;
+    }
+  }
+  const expandedArguments = arguments_.includes('--writer-report')
+    ? arguments_
+    : [...arguments_, '--writer-report', writerReportPath];
+  return runCli(expandedArguments, requiredBaselineSha256, writerReportPin);
 }
 
 describe('verify Communities legacy preservation CLI', () => {
@@ -177,6 +248,41 @@ describe('verify Communities legacy preservation CLI', () => {
     });
     expect(result.stdout).not.toContain(pair.manifestPath);
     expect(result.stdout).not.toContain('sourceTenantIdHmac');
+  });
+
+  it('requires an independently pinned exact exit-0 writer report matching the manifest', async () => {
+    const pair = await files();
+    const arguments_ = [
+      '--manifest',
+      pair.manifestPath,
+      '--baseline',
+      pair.baselinePath,
+      '--writer-report',
+      pair.writerReportPath,
+    ];
+    expect((await runCli(arguments_, pair.baselinePin, undefined)).exitCode).toBe(2);
+    expect((await runCli(arguments_, pair.baselinePin, 'f'.repeat(64))).exitCode).toBe(2);
+
+    const changed = fixture().writerReport;
+    changed.inventoryDigest = h('3');
+    const changedBytes = JSON.stringify(changed);
+    await writeFile(pair.writerReportPath, changedBytes, { mode: 0o600 });
+    const changedPin = createHash('sha256').update(changedBytes).digest('hex');
+    expect((await runCli(arguments_, pair.baselinePin, changedPin)).exitCode).toBe(2);
+
+    const inconsistent = fixture().writerReport;
+    inconsistent.unknownByReason.UNSUPPORTED_OPERATION = 1;
+    const inconsistentBytes = JSON.stringify(inconsistent);
+    await writeFile(pair.writerReportPath, inconsistentBytes, { mode: 0o600 });
+    const inconsistentPin = createHash('sha256').update(inconsistentBytes).digest('hex');
+    const inconsistentManifest = fixture().manifest;
+    inconsistentManifest.writeRoutes.reportSha256 = inconsistentPin;
+    const { idempotencyDigest, ...inconsistentUnsigned } = inconsistentManifest;
+    void idempotencyDigest;
+    inconsistentManifest.idempotencyDigest =
+      calculateManifestIdempotencyDigest(inconsistentUnsigned);
+    await writeFile(pair.manifestPath, JSON.stringify(inconsistentManifest), { mode: 0o600 });
+    expect((await runCli(arguments_, pair.baselinePin, inconsistentPin)).exitCode).toBe(2);
   });
 
   it('returns a report and exit 1 for a structural blocker', async () => {
@@ -262,22 +368,38 @@ describe('verify Communities legacy preservation CLI', () => {
   it.each([
     ['manifest symlink', 'manifest'],
     ['baseline symlink', 'baseline'],
+    ['writer report symlink', 'writerReport'],
     ['manifest non-private mode', 'manifest'],
     ['baseline non-private mode', 'baseline'],
+    ['writer report non-private mode', 'writerReport'],
   ] as const)('rejects %s independently', async (_label, target) => {
     const pair = await files();
-    const path = target === 'manifest' ? pair.manifestPath : pair.baselinePath;
+    const path =
+      target === 'manifest'
+        ? pair.manifestPath
+        : target === 'baseline'
+          ? pair.baselinePath
+          : pair.writerReportPath;
     if (_label.includes('symlink')) {
       const link = join(dirname(path), `${target}-link.json`);
       await symlink(path, link);
       if (target === 'manifest') pair.manifestPath = link;
-      else pair.baselinePath = link;
+      else if (target === 'baseline') pair.baselinePath = link;
+      else pair.writerReportPath = link;
     } else {
       await chmod(path, 0o644);
     }
     const result = await runCommunitiesLegacyPreservationVerification(
-      ['--manifest', pair.manifestPath, '--baseline', pair.baselinePath],
+      [
+        '--manifest',
+        pair.manifestPath,
+        '--baseline',
+        pair.baselinePath,
+        '--writer-report',
+        pair.writerReportPath,
+      ],
       pair.baselinePin,
+      pair.writerReportPin,
     );
     expect(result).toMatchObject({
       exitCode: 2,
@@ -308,9 +430,15 @@ describe('verify Communities legacy preservation CLI', () => {
   it.each([
     ['manifest', 32 * 1024 * 1024 + 1],
     ['baseline', 64 * 1024 + 1],
+    ['writerReport', 1024 * 1024 + 1],
   ] as const)('rejects %s files beyond their size bound', async (target, size) => {
     const pair = await files();
-    const path = target === 'manifest' ? pair.manifestPath : pair.baselinePath;
+    const path =
+      target === 'manifest'
+        ? pair.manifestPath
+        : target === 'baseline'
+          ? pair.baselinePath
+          : pair.writerReportPath;
     await truncate(path, size);
     const result = await runCommunitiesLegacyPreservationVerification(
       ['--manifest', pair.manifestPath, '--baseline', pair.baselinePath],

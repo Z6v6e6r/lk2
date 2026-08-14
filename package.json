@@ -61,6 +61,7 @@
     "games:legacy:import-server": "node --env-file-if-exists=.env --import tsx scripts/import-legacy-games-server.ts",
     "games:legacy:reconcile-server": "node --env-file-if-exists=.env --import tsx scripts/reconcile-legacy-games-server.ts",
     "communities:legacy:inventory:verify": "node --import tsx scripts/verify-communities-legacy-preservation.ts",
+    "communities:legacy:writers:verify": "node --import tsx scripts/verify-communities-legacy-writer-inventory.ts",
     "gift-certificates:sale:verify": "node --env-file-if-exists=.env --import tsx scripts/verify-gift-certificate-sale.ts",
     "runtime:imports": "node scripts/verify-runtime-imports.js",
     "smoke": "node --env-file-if-exists=.env --import tsx scripts/smoke-test.ts",
