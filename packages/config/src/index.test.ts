@@ -58,6 +58,8 @@ describe('loadConfig', () => {
       COMMUNITY_LOGO_MAX_BYTES: 5 * 1_024 * 1_024,
       COMMUNITY_LOGO_MAX_DIMENSION: 512,
       COMMUNITY_LOGO_WEBP_QUALITY: 82,
+      COMMUNITY_LOGO_STABLE_DELIVERY_ENABLED: false,
+      COMMUNITY_LOGO_COMPATIBILITY_BACKFILL_ENABLED: false,
       PROMOTIONS_READ_MODE: 'mock',
       PROMOTIONS_HERO_PLACEMENT: 'cabinet_home',
       PROMOTIONS_STANDARD_PLACEMENT: 'cabinet_home',
@@ -595,6 +597,33 @@ describe('loadConfig', () => {
         { profilePhotoStorage: true },
       ),
     ).toThrow('PROFILE_PHOTO_MAINTENANCE_ENABLED requires media storage');
+  });
+
+  it('requires worker media storage for community-logo rollback backfill', () => {
+    expect(() =>
+      loadConfig(
+        {
+          ...validEnvironment,
+          COMMUNITY_LOGO_COMPATIBILITY_BACKFILL_ENABLED: 'true',
+        },
+        { profilePhotoStorage: true },
+      ),
+    ).toThrow('COMMUNITY_LOGO_COMPATIBILITY_BACKFILL_ENABLED requires media storage');
+  });
+
+  it('rejects simultaneous stable delivery and rollback backfill', () => {
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        COMMUNITY_LOGO_STABLE_DELIVERY_ENABLED: 'true',
+        COMMUNITY_LOGO_COMPATIBILITY_BACKFILL_ENABLED: 'true',
+        S3_ENDPOINT: 'http://minio:9000',
+        S3_PUBLIC_ENDPOINT: 'https://media.padlhub.test',
+        S3_BUCKET: 'phub-media',
+        S3_ACCESS_KEY: 'test-access',
+        S3_SECRET_KEY: 'test-secret',
+      }),
+    ).toThrow('requires stable delivery disabled');
   });
 
   it('does not expose worker-only storage requirements to API and realtime', () => {

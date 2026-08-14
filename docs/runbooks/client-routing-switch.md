@@ -88,24 +88,40 @@ For the Home booking screens, additionally verify:
 
 ## Client-assisted profile photo rollout
 
-Keep `PROFILE_PHOTO_CLIENT_SYNC_ENABLED=false` through the migration and mixed-version window.
+Keep `PROFILE_PHOTO_CLIENT_SYNC_ENABLED=false` and
+`COMMUNITY_LOGO_STABLE_DELIVERY_ENABLED=false` through the migration and mixed-version window.
+Keep `COMMUNITY_LOGO_COMPATIBILITY_BACKFILL_ENABLED=false` during normal operation; it is a
+bounded rollback-only maintenance mode.
 `PROFILE_PHOTO_MAINTENANCE_ENABLED` is a separate worker-only lifecycle flag: turn it on before
 client writes and keep it on until pending commands and all object-GC rows are both zero. Existing
 `HOME_VIVA_SYNC_ENABLED=true` workers also continue maintenance for backward compatibility. The order
 is mandatory:
 
-1. integrate the migration into the final monotonic migration chain and run the migrator;
+1. integrate the Communities migration chain `0060` through `0073`, keep the client-assisted media
+   migrations at `0074` through `0076`, and run the migrator only from that final monotonic chain;
 2. deploy and drain **all** API nodes with `PROFILE_PHOTO_CLIENT_SYNC_ENABLED=false`; this makes the
    stable community-logo and profile-photo media routes available before any worker publishes a
    stable URL;
 3. deploy workers that accept nullable profile-photo `source_url`, preserve newer browser mappings,
+   continue writing legacy signed community-logo metadata while the stable-delivery flag is false,
    and run bounded object/command cleanup; set `PROFILE_PHOTO_MAINTENANCE_ENABLED=true` on workers;
 4. deploy the compatible web version, then verify every old API and worker is drained;
-5. set `PROFILE_PHOTO_CLIENT_SYNC_ENABLED=true` on API nodes sequentially;
+5. set `COMMUNITY_LOGO_STABLE_DELIVERY_ENABLED=true` on compatible workers only after the API route
+   is ready, then set `PROFILE_PHOTO_CLIENT_SYNC_ENABLED=true` on API nodes sequentially;
 6. verify one authenticated direct-profile journey returns a stable PadlHub avatar URL, the media
    route serves `image/webp`, and neither logs nor integration rows contain the Viva photo URL.
 
-For rollback, first disable `PROFILE_PHOTO_CLIENT_SYNC_ENABLED` on API nodes, but leave
+The generic staging deployment never enables stable community-logo delivery. It starts and verifies
+the API before the worker, then runs the rollback guard in `pre-cutover` mode, so normal signed-URL
+rotation and server-owned profile-photo GC do not disable automatic rollback. This mode still refuses
+nullable client-photo sources, client commands, null community delivery pairs, and any stable-route
+payload. The worker durably marks the first stable-logo publication, after which the pre-cutover guard
+fails closed even if runtime flags are later disabled. Once stable delivery is active, do not use the
+generic automatic old-image rollback; use the feature rollback below instead.
+
+For rollback, first disable `PROFILE_PHOTO_CLIENT_SYNC_ENABLED` on API nodes and set
+`COMMUNITY_LOGO_STABLE_DELIVERY_ENABLED=false` and
+`COMMUNITY_LOGO_COMPATIBILITY_BACKFILL_ENABLED=true` on compatible workers, but leave
 `PROFILE_PHOTO_MAINTENANCE_ENABLED=true` on compatible workers. Do not roll an old worker back over
 rows whose `source_url` is null. Stop client-assisted writes, retain a compatible worker until
 `profile_photo_client_commands` and `profile_photo_object_gc` are both empty (including completed
@@ -114,9 +130,40 @@ maintenance or roll back API/web. Existing normalized objects and stable
 delivery mappings remain readable.
 
 Community-logo stable delivery is also an expand/migrate cutover. The all-new-API drain in step 2 is
-required before workers persist it. Before a full rollback to an API without that route, stop new community
-sync, run the prior compatible worker until it has repopulated legacy signed delivery metadata and
-Home snapshots, and verify there are no active `(delivery_url, delivery_expires_at)` null pairs.
+required before workers persist it. Before a full rollback to an API without that route, disable the
+stable-delivery flag and run the compatible dual-mode worker until it has repopulated legacy signed
+delivery metadata and Home snapshots. Verify there are no active
+`(delivery_url, delivery_expires_at)` null pairs or stable-route Home payloads, then disable the
+compatibility-backfill flag before restoring an older API or worker.
+Restart the compatible API/worker after changing the flags so their actual container environments
+match the files. The rollback guard checks both, waits for source/components/snapshots and the Home
+projector queue to drain twice, then stops the compatible worker before an old image can start.
+Invoke this strict gate as
+`PHUB_MEDIA_ROLLBACK_MODE=feature sh /opt/phub/verify-media-rollback-safe.sh`; unlike the generic
+`pre-cutover` gate, it also requires zero profile-photo GC rows and fresh, fully converged signed
+community URLs. `feature` is the guard default. Only after both strict checks, queue drain, and worker
+stop does it clear the durable cutover marker and make future pre-cutover-compatible rollbacks eligible.
+
+Client-assisted mappings intentionally have `source_url=null`; maintenance does not and must not
+invent a provider source URL. If any such mapping exists, a full rollback to a pre-client-assisted
+worker is unsupported and the strict guard will refuse it. Preserve the last compatible immutable
+API and worker digests as the release rollback floor. The application snapshot records the versioned
+capability of both images. If a failed deploy replaced or broke the worker, restore the attested saved worker
+with `PHUB_ROLLBACK_BACKUP_ROOT=/opt/phub/backups/releases sh /opt/phub/prepare-compatible-worker-rollback.sh <saved-release-directory> PREPARE_COMPATIBLE_WORKER_ROLLBACK`.
+Then invoke the saved-release rollback with
+`PHUB_ROLLBACK_REQUIRE_COMPATIBLE_WORKER=true PHUB_ROLLBACK_BACKUP_ROOT=/opt/phub/backups/releases sh /opt/phub/rollback-application.sh <saved-release-directory> --confirm=ROLLBACK_STAGING_RELEASE`.
+This release rollback does not change feature flags or backfill data: the attested saved API still
+serves stable media routes and the attested worker still understands nullable mappings. The rollback
+script restores the snapshot's known-good immutable API/worker digests and proves the attested worker
+container remains running. Before changing release files it revalidates that exact container's
+versioned `phub.client-media-rollback.v1` capability, closing the gap between snapshot and rollback.
+
+This is distinct from a feature rollback to images without that capability. For such a rollback,
+disable writes and stable delivery, run compatibility backfill, and require
+`PHUB_MEDIA_ROLLBACK_MODE=compatible-worker` to drain client commands, community signed delivery, and
+the Home queue while the compatible worker remains running. Do not rewrite `source_url` or delete a
+user's avatar merely to make an old worker start; if nullable mappings remain, restoring a
+pre-client-assisted worker is unsupported and requires a separately approved user-data repair.
 
 API/worker logs must show zero server-side schedule or booking egress during the browser journey.
 

@@ -145,6 +145,45 @@ describe('legacy community logo synchronization', () => {
     expect(createReadUrl).not.toHaveBeenCalled();
   });
 
+  it('keeps legacy signed delivery until the stable-route cutover is enabled', async () => {
+    const objectKey = `community-logos/${tenantId}/${communityId}/${'c'.repeat(64)}.webp`;
+    const { pool } = poolWithLogoRows([
+      {
+        community_id: communityId,
+        source_url: 'https://legacy.padlhub.test/logo/current',
+        source_etag: null,
+        source_last_modified: null,
+        content_sha256: 'c'.repeat(64),
+        object_key: objectKey,
+        delivery_url: null,
+        delivery_expires_at: null,
+        synced_at: '2026-07-17T11:00:00.000Z',
+      },
+    ]);
+    const { store, put, createReadUrl } = objectStore();
+
+    const [result] = await synchronizeLegacyCommunityLogos({
+      ...defaults,
+      pool,
+      store,
+      items: [item('https://legacy.padlhub.test/logo/current')],
+      stableDeliveryEnabled: false,
+      readUrlTtlSeconds: 3_600,
+      fetchImplementation: vi.fn<typeof fetch>(),
+    });
+
+    expect(result).toMatchObject({
+      outcome: 'unchanged',
+      logoUrl: `https://media.padlhub.test/${objectKey}?sig=test`,
+      persistence: {
+        deliveryUrl: `https://media.padlhub.test/${objectKey}?sig=test`,
+        deliveryExpiresAt: '2026-07-17T13:00:00.000Z',
+      },
+    });
+    expect(createReadUrl).toHaveBeenCalledWith(objectKey);
+    expect(put).not.toHaveBeenCalled();
+  });
+
   it('prepares changed bytes without upload until the community object is reserved', async () => {
     const png = await sharp({
       create: { width: 32, height: 32, channels: 4, background: '#7654d7' },
@@ -202,5 +241,44 @@ describe('legacy community logo synchronization', () => {
       errorCode: 'COMMUNITY_LOGO_SOURCE_NOT_ALLOWED',
     });
     expect(result?.logoUrl).toBe(`/public/api/v1/media/community-logos/${tenantId}/${communityId}`);
+  });
+
+  it('signs the current local object during rollback even when the provider fetch fails', async () => {
+    const objectKey = `community-logos/${tenantId}/${communityId}/${'d'.repeat(64)}.webp`;
+    const { pool } = poolWithLogoRows([
+      {
+        community_id: communityId,
+        source_url: 'https://legacy.padlhub.test/logo/old',
+        source_etag: null,
+        source_last_modified: null,
+        content_sha256: 'd'.repeat(64),
+        object_key: objectKey,
+        delivery_url: null,
+        delivery_expires_at: null,
+        synced_at: '2026-07-17T11:00:00.000Z',
+      },
+    ]);
+    const { store, createReadUrl } = objectStore();
+
+    const [result] = await synchronizeLegacyCommunityLogos({
+      ...defaults,
+      pool,
+      store,
+      items: [item('https://attacker.example/logo.png')],
+      stableDeliveryEnabled: false,
+      readUrlTtlSeconds: 3_600,
+      fetchImplementation: vi.fn<typeof fetch>(),
+    });
+
+    expect(result).toMatchObject({
+      outcome: 'fallback',
+      errorCode: 'COMMUNITY_LOGO_SOURCE_NOT_ALLOWED',
+      logoUrl: `https://media.padlhub.test/${objectKey}?sig=test`,
+      persistence: {
+        deliveryUrl: `https://media.padlhub.test/${objectKey}?sig=test`,
+        deliveryExpiresAt: '2026-07-17T13:00:00.000Z',
+      },
+    });
+    expect(createReadUrl).toHaveBeenCalledWith(objectKey);
   });
 });

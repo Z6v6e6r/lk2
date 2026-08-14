@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 
-import type { CommunitySummary } from '@phub/communities';
+import { communitySummarySchema, type CommunitySummary } from '@phub/communities';
 import { withTenantTransaction } from '@phub/database';
 import { communityLogoDeliveryUrl } from '@phub/domain';
 import {
@@ -13,6 +13,7 @@ import type { CommunityLogoPersistence, CommunityLogoSyncRecord } from './commun
 
 interface SourceRow extends QueryResultRow {
   readonly source_revision: string;
+  readonly source_mode: 'LEGACY' | 'LOCAL';
   readonly payload_checksum: string;
 }
 
@@ -28,6 +29,8 @@ interface CommunityLogoRow extends QueryResultRow {
   readonly source_last_modified: string | null;
   readonly content_sha256: string;
   readonly object_key: string;
+  readonly delivery_url: string | null;
+  readonly delivery_expires_at: Date | string | null;
   readonly synced_at: Date | string;
 }
 
@@ -40,8 +43,21 @@ export interface CommunityHomeUser {
 }
 
 export interface CommunityHomePersistenceResult {
-  readonly outcome: 'published' | 'unchanged';
+  readonly outcome: 'published' | 'unchanged' | 'stale';
   readonly sourceRevision: string;
+}
+
+export interface CommunityLogoDeliveryBackfillItem {
+  readonly communityId: string;
+  readonly objectKey: string;
+}
+
+export interface CommunityHomeDeliveryBackfillItem {
+  readonly userId: string;
+  readonly sourceMode: 'LEGACY' | 'LOCAL';
+  readonly sourceRevision: string;
+  readonly payloadChecksum: string;
+  readonly communities: readonly CommunitySummary[];
 }
 
 function checksum(value: unknown): string {
@@ -90,7 +106,8 @@ export function loadCommunityLogoSyncRecords(input: {
   return withTenantTransaction(input.pool, input.tenantId, async (client) => {
     const result = await client.query<CommunityLogoRow>(
       `select community_id::text as community_id, source_url, source_etag,
-              source_last_modified, content_sha256, object_key, synced_at
+              source_last_modified, content_sha256, object_key, delivery_url,
+              delivery_expires_at, synced_at
          from integration.community_logo_sync
         where tenant_id = $1 and community_id = any($2::uuid[])`,
       [input.tenantId, communityIds],
@@ -105,10 +122,111 @@ export function loadCommunityLogoSyncRecords(input: {
           ...(row.source_last_modified ? { sourceLastModified: row.source_last_modified } : {}),
           contentSha256: row.content_sha256,
           objectKey: row.object_key,
+          ...(row.delivery_url ? { deliveryUrl: row.delivery_url } : {}),
+          ...(row.delivery_expires_at
+            ? { deliveryExpiresAt: new Date(row.delivery_expires_at).toISOString() }
+            : {}),
           syncedAt: new Date(row.synced_at).toISOString(),
         },
       ]),
     );
+  });
+}
+
+export function listCommunityLogoDeliveryBackfills(input: {
+  readonly pool: Pool;
+  readonly tenantId: string;
+  readonly limit: number;
+}): Promise<readonly CommunityLogoDeliveryBackfillItem[]> {
+  return withTenantTransaction(input.pool, input.tenantId, async (client) => {
+    const result = await client.query<
+      { community_id: string; object_key: string } & QueryResultRow
+    >(
+      `select community_id::text as community_id, object_key
+         from integration.community_logo_sync
+        where tenant_id = $1
+          and (
+            delivery_url is null or delivery_expires_at is null or
+            delivery_expires_at <= now() + interval '10 minutes'
+          )
+        order by community_id
+        limit $2`,
+      [input.tenantId, input.limit],
+    );
+    return result.rows.map((row) => ({
+      communityId: row.community_id,
+      objectKey: row.object_key,
+    }));
+  });
+}
+
+export function persistCommunityLogoSignedDelivery(input: {
+  readonly pool: Pool;
+  readonly tenantId: string;
+  readonly communityId: string;
+  readonly objectKey: string;
+  readonly deliveryUrl: string;
+  readonly deliveryExpiresAt: string;
+}): Promise<boolean> {
+  return withTenantTransaction(input.pool, input.tenantId, async (client) => {
+    await client.query('select pg_advisory_xact_lock(hashtextextended($1, 1))', [
+      input.communityId,
+    ]);
+    const result = await client.query(
+      `update integration.community_logo_sync
+          set delivery_url = $4, delivery_expires_at = $5, updated_at = now()
+        where tenant_id = $1 and community_id = $2 and object_key = $3
+          and (delivery_expires_at is null or delivery_expires_at < $5)`,
+      [
+        input.tenantId,
+        input.communityId,
+        input.objectKey,
+        input.deliveryUrl,
+        input.deliveryExpiresAt,
+      ],
+    );
+    return (result.rowCount ?? 0) > 0;
+  });
+}
+
+export function listCommunityHomeDeliveryBackfills(input: {
+  readonly pool: Pool;
+  readonly tenantId: string;
+  readonly limit: number;
+}): Promise<readonly CommunityHomeDeliveryBackfillItem[]> {
+  return withTenantTransaction(input.pool, input.tenantId, async (client) => {
+    const result = await client.query<
+      {
+        user_id: string;
+        source_mode: 'LEGACY' | 'LOCAL';
+        source_revision: string;
+        payload: unknown;
+        payload_checksum: string;
+      } & QueryResultRow
+    >(
+      `select user_id::text as user_id, source_mode, source_revision::text as source_revision,
+              payload, payload_checksum
+        from integration.community_home_source_components
+        where tenant_id = $1
+          and exists (
+            select 1
+              from jsonb_array_elements(payload) item
+              join integration.community_logo_sync logo
+                on logo.tenant_id = $1 and logo.community_id::text = item->>'id'
+             where logo.delivery_url is not null
+               and item->>'logoUrl' is distinct from logo.delivery_url
+          )
+        order by user_id
+        limit $2`,
+      [input.tenantId, input.limit],
+    );
+    return result.rows.map((row) => ({
+      userId: row.user_id,
+      sourceMode: row.source_mode,
+      sourceRevision: row.source_revision,
+      payloadChecksum: row.payload_checksum,
+      communities: communitySummarySchema.array().parse(row.payload),
+    }));
   });
 }
 
@@ -211,9 +329,14 @@ async function persistCommunityLogoAssets(input: {
       asset.communityId,
     ]);
     const current = await input.client.query<
-      { object_key: string; synced_at: Date | string } & QueryResultRow
+      {
+        object_key: string;
+        delivery_url: string | null;
+        delivery_expires_at: Date | string | null;
+        synced_at: Date | string;
+      } & QueryResultRow
     >(
-      `select object_key, synced_at
+      `select object_key, delivery_url, delivery_expires_at, synced_at
          from integration.community_logo_sync
         where tenant_id = $1 and community_id = $2
         for update`,
@@ -235,6 +358,28 @@ async function persistCommunityLogoAssets(input: {
         undefined,
       );
     if (latestObservation && Date.parse(String(latestObservation)) >= Date.parse(asset.syncedAt)) {
+      if (
+        currentRow &&
+        currentRow.object_key === asset.objectKey &&
+        asset.deliveryUrl &&
+        asset.deliveryExpiresAt &&
+        (!currentRow.delivery_expires_at ||
+          Date.parse(String(currentRow.delivery_expires_at)) < Date.parse(asset.deliveryExpiresAt))
+      ) {
+        await input.client.query(
+          `update integration.community_logo_sync
+              set delivery_url = $3, delivery_expires_at = $4, updated_at = now()
+            where tenant_id = $1 and community_id = $2 and object_key = $5
+              and (delivery_expires_at is null or delivery_expires_at < $4)`,
+          [
+            input.tenantId,
+            asset.communityId,
+            asset.deliveryUrl,
+            asset.deliveryExpiresAt,
+            asset.objectKey,
+          ],
+        );
+      }
       continue;
     }
     await input.client.query(
@@ -252,15 +397,15 @@ async function persistCommunityLogoAssets(input: {
         `insert into integration.community_logo_sync (
            tenant_id, community_id, source_url, source_etag, source_last_modified,
            content_sha256, object_key, delivery_url, delivery_expires_at, synced_at
-         ) values ($1, $2, $3, $4, $5, $6, $7, null, null, $8)
+         ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
          on conflict (tenant_id, community_id) do update set
            source_url = excluded.source_url,
            source_etag = excluded.source_etag,
            source_last_modified = excluded.source_last_modified,
            content_sha256 = excluded.content_sha256,
            object_key = excluded.object_key,
-           delivery_url = null,
-           delivery_expires_at = null,
+           delivery_url = excluded.delivery_url,
+           delivery_expires_at = excluded.delivery_expires_at,
            synced_at = excluded.synced_at,
            updated_at = now()`,
         [
@@ -271,6 +416,8 @@ async function persistCommunityLogoAssets(input: {
           asset.sourceLastModified ?? null,
           asset.contentSha256,
           asset.objectKey,
+          asset.deliveryUrl ?? null,
+          asset.deliveryExpiresAt ?? null,
           asset.syncedAt,
         ],
       );
@@ -348,11 +495,22 @@ export function persistCommunityHomeSource(input: {
   readonly communities: readonly CommunitySummary[];
   readonly logoAssets?: readonly CommunityLogoPersistence[];
   readonly publicApplicationOrigin: string;
+  readonly stableDeliveryEnabled?: boolean;
+  readonly expectedPayloadChecksum?: string;
+  readonly expectedSourceRevision?: string;
+  readonly expectedSourceMode?: 'LEGACY' | 'LOCAL';
   readonly correlationId: string;
   readonly fetchedAt: string;
 }): Promise<CommunityHomePersistenceResult> {
   return withTenantTransaction(input.pool, input.tenantId, async (client) => {
     await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [input.userId]);
+    if (input.stableDeliveryEnabled === true && (input.logoAssets?.length ?? 0) > 0) {
+      await client.query(
+        `insert into integration.media_cutover_state (feature, active)
+         values ('community_logo_stable_delivery', true)
+         on conflict (feature) do update set active = true, updated_at = now()`,
+      );
+    }
     if (input.logoAssets) {
       await persistCommunityLogoAssets({
         client,
@@ -361,29 +519,33 @@ export function persistCommunityHomeSource(input: {
       });
     }
     const affectedCommunityIds = [...new Set(input.logoAssets?.map((asset) => asset.communityId))];
-    const activeLogoCommunityIds =
+    const activeLogos =
       affectedCommunityIds.length > 0
-        ? new Set(
+        ? new Map(
             (
-              await client.query<{ community_id: string } & QueryResultRow>(
-                `select community_id::text as community_id
+              await client.query<
+                { community_id: string; delivery_url: string | null } & QueryResultRow
+              >(
+                `select community_id::text as community_id, delivery_url
                    from integration.community_logo_sync
                   where tenant_id = $1 and community_id = any($2::uuid[])`,
                 [input.tenantId, affectedCommunityIds],
               )
-            ).rows.map((row) => row.community_id),
+            ).rows.map((row) => [row.community_id, row.delivery_url] as const),
           )
-        : new Set<string>();
+        : new Map<string, string | null>();
     const affectedSet = new Set(affectedCommunityIds);
     const canonicalCommunities = input.communities.map((community) =>
       affectedSet.has(community.id)
         ? {
             ...community,
-            logoUrl: activeLogoCommunityIds.has(community.id)
-              ? new URL(
-                  communityLogoDeliveryUrl(input.tenantId, community.id),
-                  `${input.publicApplicationOrigin.replace(/\/$/, '')}/`,
-                ).toString()
+            logoUrl: activeLogos.has(community.id)
+              ? input.stableDeliveryEnabled !== false || !activeLogos.get(community.id)
+                ? new URL(
+                    communityLogoDeliveryUrl(input.tenantId, community.id),
+                    `${input.publicApplicationOrigin.replace(/\/$/, '')}/`,
+                  ).toString()
+                : activeLogos.get(community.id)!
               : null,
           }
         : community,
@@ -397,7 +559,7 @@ export function persistCommunityHomeSource(input: {
     const payloadChecksum = checksum(payload.value);
     const source = (
       await client.query<SourceRow>(
-        `select source_revision::text as source_revision, payload_checksum
+        `select source_revision::text as source_revision, source_mode, payload_checksum
            from integration.community_home_source_components
           where tenant_id = $1 and user_id = $2
           for update`,
@@ -412,6 +574,15 @@ export function persistCommunityHomeSource(input: {
         [input.tenantId, input.userId],
       )
     ).rows[0];
+
+    if (
+      (input.expectedPayloadChecksum &&
+        source?.payload_checksum !== input.expectedPayloadChecksum) ||
+      (input.expectedSourceRevision && source?.source_revision !== input.expectedSourceRevision) ||
+      (input.expectedSourceMode && source?.source_mode !== input.expectedSourceMode)
+    ) {
+      return { outcome: 'stale', sourceRevision: source?.source_revision ?? '0' };
+    }
 
     if (
       source?.payload_checksum === payloadChecksum &&

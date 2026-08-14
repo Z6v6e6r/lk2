@@ -8,7 +8,7 @@ describe('client-assisted profile photo migration', () => {
     const sql = readFileSync(
       resolve(
         process.cwd(),
-        'packages/database/migrations/0069_profile_photo_client_assisted_source.sql',
+        'packages/database/migrations/0074_profile_photo_client_assisted_source.sql',
       ),
       'utf8',
     );

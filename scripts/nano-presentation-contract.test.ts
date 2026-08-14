@@ -10,6 +10,12 @@ function repositoryFile(relativePath: string): string {
 const caddyfile = repositoryFile('deploy/jetson/tls-ingress/Caddyfile');
 const nginxConfig = repositoryFile('deploy/jetson/nginx/default.conf');
 const stagingWorkflow = repositoryFile('.github/workflows/deploy-staging.yaml');
+const mediaRollbackGuard = repositoryFile('deploy/jetson/verify-media-rollback-safe.sh');
+const applicationRollback = repositoryFile('deploy/jetson/rollback-application.sh');
+const compatibleWorkerRestore = repositoryFile(
+  'deploy/jetson/prepare-compatible-worker-rollback.sh',
+);
+const clientRoutingRunbook = repositoryFile('docs/runbooks/client-routing-switch.md');
 const productionWorkflow = repositoryFile('.github/workflows/deploy-production.yaml');
 const stagingCompose = repositoryFile('deploy/compose.staging.yaml');
 const stagingRoutingWorkflow = repositoryFile('.github/workflows/set-staging-routing-plan.yaml');
@@ -192,6 +198,48 @@ describe('Nano presentation release contract', () => {
     expect(stagingWorkflow).toContain('--validate-only');
     expect(stagingWorkflow).toContain('--confirm=ROLLBACK_STAGING_RELEASE');
     expect(stagingWorkflow).toContain('PHUB_ROLLBACK_BACKUP_ROOT=/opt/phub/backups/releases');
+    expect(stagingWorkflow.indexOf('compose up -d --remove-orphans web api')).toBeLessThan(
+      stagingWorkflow.indexOf('compose up -d --remove-orphans worker realtime'),
+    );
+    expect(stagingWorkflow).toContain('wait_for_service api');
+    expect(stagingWorkflow).toContain('verify-media-rollback-safe.sh');
+    expect(stagingWorkflow).toContain('PHUB_MEDIA_ROLLBACK_MODE=pre-cutover');
+    expect(mediaRollbackGuard).toContain('COMMUNITY_LOGO_STABLE_DELIVERY_ENABLED');
+    expect(mediaRollbackGuard).toContain('COMMUNITY_LOGO_COMPATIBILITY_BACKFILL_ENABLED');
+    expect(mediaRollbackGuard).toContain('PROFILE_PHOTO_CLIENT_SYNC_ENABLED');
+    expect(mediaRollbackGuard).toContain('source_url is null');
+    expect(mediaRollbackGuard).toContain('profile_photo_client_commands');
+    expect(mediaRollbackGuard).toContain('profile_photo_object_gc');
+    expect(mediaRollbackGuard).toContain('delivery_url is null');
+    expect(mediaRollbackGuard).toContain('/public/api/v1/media/community-logos/');
+    expect(mediaRollbackGuard).toContain('integration.community_home_source_components');
+    expect(mediaRollbackGuard).toContain('home.dashboard_snapshots');
+    expect(mediaRollbackGuard).toContain('home.base_snapshots');
+    expect(mediaRollbackGuard).toContain('published_at is null');
+    expect(mediaRollbackGuard).toContain('staging.games.env');
+    expect(mediaRollbackGuard).toContain('require_running_flag_disabled worker');
+    expect(mediaRollbackGuard).toContain('require_running_flag_disabled api');
+    expect(mediaRollbackGuard).toContain('phub.home-projector.v1');
+    expect(mediaRollbackGuard).toContain('compose stop worker');
+    expect(mediaRollbackGuard).toContain('PHUB_MEDIA_ROLLBACK_MODE');
+    expect(mediaRollbackGuard).toContain('PHUB_MEDIA_ROLLBACK_MODE:-feature');
+    expect(mediaRollbackGuard).toContain('integration.media_cutover_state');
+    expect(mediaRollbackGuard).toContain('compatible-worker');
+    expect(mediaRollbackGuard).toContain('client-media compatibility floor');
+    expect(mediaRollbackGuard).toContain('phub.client-media-rollback.v1');
+    expect(mediaRollbackGuard).not.toContain('payload::text like');
+    expect(mediaRollbackGuard).toContain("item->>'logoUrl' like");
+    expect(clientRoutingRunbook).toContain('PHUB_MEDIA_ROLLBACK_MODE=feature');
+    expect(clientRoutingRunbook).toContain('PHUB_MEDIA_ROLLBACK_MODE=compatible-worker');
+    expect(applicationRollback).toContain('PHUB_ROLLBACK_REQUIRE_COMPATIBLE_WORKER');
+    expect(applicationRollback).toContain('attested worker container changed');
+    expect(applicationRollback).toContain('WORKER_IMAGE_DIGEST');
+    expect(applicationRollback).toContain('phub.client-media-rollback.v1');
+    expect(compatibleWorkerRestore).toContain('CLIENT_MEDIA_ROLLBACK_V1=true');
+    expect(stagingWorkflow).toContain('prepare-compatible-worker-rollback.sh');
+    expect(stagingWorkflow).toContain('PHUB_ROLLBACK_REQUIRE_COMPATIBLE_WORKER=true');
+    expect(stagingWorkflow).toContain('guard_status="$?"');
+    expect(stagingWorkflow).toContain('guard_status" -ne 42');
   });
 
   it('isolates the Communities legacy profile to API and proves its read-only source path', () => {

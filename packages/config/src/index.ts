@@ -152,6 +152,8 @@ const environmentSchema = z.object({
     .string()
     .min(1)
     .default('padlhub.su,lk-reserve.89-108-64-209.sslip.io'),
+  COMMUNITY_LOGO_STABLE_DELIVERY_ENABLED: booleanFromEnvironment,
+  COMMUNITY_LOGO_COMPATIBILITY_BACKFILL_ENABLED: booleanFromEnvironment,
   COMMUNITY_LOGO_MAX_BYTES: z.coerce
     .number()
     .int()
@@ -592,6 +594,33 @@ export function loadConfig(
         `PROFILE_PHOTO_MAINTENANCE_ENABLED requires media storage: ${missingStorage.join(', ')}`,
       );
     }
+  }
+  if (
+    parsed.data.COMMUNITY_LOGO_COMPATIBILITY_BACKFILL_ENABLED &&
+    requirements.profilePhotoStorage
+  ) {
+    const missingStorage = [
+      ['S3_ENDPOINT', parsed.data.S3_ENDPOINT],
+      ['S3_PUBLIC_ENDPOINT', parsed.data.S3_PUBLIC_ENDPOINT],
+      ['S3_BUCKET', parsed.data.S3_BUCKET],
+      ['S3_ACCESS_KEY', parsed.data.S3_ACCESS_KEY],
+      ['S3_SECRET_KEY', parsed.data.S3_SECRET_KEY],
+    ]
+      .filter(([, value]) => !value)
+      .map(([name]) => name);
+    if (missingStorage.length > 0) {
+      throw new Error(
+        `COMMUNITY_LOGO_COMPATIBILITY_BACKFILL_ENABLED requires media storage: ${missingStorage.join(', ')}`,
+      );
+    }
+  }
+  if (
+    parsed.data.COMMUNITY_LOGO_STABLE_DELIVERY_ENABLED &&
+    parsed.data.COMMUNITY_LOGO_COMPATIBILITY_BACKFILL_ENABLED
+  ) {
+    throw new Error(
+      'COMMUNITY_LOGO_COMPATIBILITY_BACKFILL_ENABLED requires stable delivery disabled',
+    );
   }
   if (parsed.data.PROMOTIONS_READ_MODE === 'legacy' && requirements.profilePhotoStorage) {
     const missingStorage = [

@@ -159,7 +159,7 @@ describe('community Home source persistence', () => {
       ) {
         return Promise.resolve({ rows: [], rowCount: 0 });
       }
-      if (text.includes('select object_key, synced_at')) {
+      if (text.includes('select object_key, delivery_url')) {
         return Promise.resolve({ rows: [], rowCount: 0 });
       }
       if (text.includes('from integration.community_logo_observation_watermarks')) {
@@ -235,7 +235,7 @@ describe('community Home source persistence', () => {
     ];
     const { pool, query } = poolWithQueries((text) => {
       if (
-        text.includes('select object_key, synced_at') ||
+        text.includes('select object_key, delivery_url') ||
         text.includes('from integration.community_logo_observation_watermarks') ||
         text.includes('from integration.community_home_source_components') ||
         text.includes('from home.dashboard_components')
@@ -246,6 +246,7 @@ describe('community Home source persistence', () => {
         return { rows: [{ community_id: firstId }, { community_id: secondId }] };
       }
       if (
+        text.includes('insert into integration.media_cutover_state') ||
         text.includes('insert into integration.community_logo_observation_watermarks') ||
         text.includes('insert into integration.community_logo_sync') ||
         text.includes('delete from integration.community_logo_object_gc') ||
@@ -263,6 +264,7 @@ describe('community Home source persistence', () => {
       tenantId,
       userId,
       sourceMode: 'LEGACY',
+      stableDeliveryEnabled: true,
       publicApplicationOrigin: 'https://lk.padlhub.test',
       communities: items,
       logoAssets: items.map((item) => ({
@@ -281,6 +283,11 @@ describe('community Home source persistence', () => {
         .filter(([text]) => String(text).includes('hashtextextended($1, 1)'))
         .map(([, values]) => values?.[0]),
     ).toEqual([secondId, firstId]);
+    expect(
+      query.mock.calls.some(([text]) =>
+        String(text).includes('insert into integration.media_cutover_state'),
+      ),
+    ).toBe(true);
   });
 
   it('publishes a higher component revision than the previous synthetic Home component', async () => {
@@ -368,7 +375,7 @@ describe('community Home source persistence', () => {
       logoUrl: deliveryUrl,
     }));
     const { pool, query } = poolWithQueries((text) => {
-      if (text.includes('select object_key, synced_at')) return { rows: [] };
+      if (text.includes('select object_key, delivery_url')) return { rows: [] };
       if (text.includes('from integration.community_logo_observation_watermarks')) {
         return { rows: [] };
       }
@@ -420,5 +427,228 @@ describe('community Home source persistence', () => {
     );
     expect(String(outbox?.[1]?.[5])).toContain('/public/api/v1/media/community-logos/');
     expect(String(outbox?.[1]?.[5])).not.toContain('legacy.padlhub.test');
+  });
+
+  it('publishes signed delivery metadata while the stable-route cutover is disabled', async () => {
+    const communityId = communities[0]?.id as string;
+    const objectKey = `community-logos/${tenantId}/${communityId}/${'e'.repeat(64)}.webp`;
+    const signedUrl = `https://media.padlhub.test/${objectKey}?sig=legacy`;
+    const { pool, query } = poolWithQueries((text) => {
+      if (
+        text.includes('select object_key, delivery_url') ||
+        text.includes('from integration.community_logo_observation_watermarks') ||
+        text.includes('from integration.community_home_source_components') ||
+        text.includes('from home.dashboard_components')
+      ) {
+        return { rows: [] };
+      }
+      if (text.includes('select community_id::text as community_id')) {
+        return { rows: [{ community_id: communityId, delivery_url: signedUrl }] };
+      }
+      if (
+        text.includes('insert into integration.community_logo_observation_watermarks') ||
+        text.includes('insert into integration.community_logo_sync') ||
+        text.includes('delete from integration.community_logo_object_gc') ||
+        text.includes('insert into integration.community_home_source_components') ||
+        text.includes('insert into audit.outbox_events') ||
+        text.includes('insert into audit.audit_log')
+      ) {
+        return { rows: [] };
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+
+    await persistCommunityHomeSource({
+      pool,
+      tenantId,
+      userId,
+      sourceMode: 'LEGACY',
+      publicApplicationOrigin: 'https://lk.padlhub.test',
+      stableDeliveryEnabled: false,
+      communities,
+      logoAssets: [
+        {
+          communityId,
+          sourceUrl: 'https://legacy.padlhub.test/community-logo/source',
+          contentSha256: 'e'.repeat(64),
+          objectKey,
+          deliveryUrl: signedUrl,
+          deliveryExpiresAt: '2026-07-17T13:00:00.000Z',
+          syncedAt: '2026-07-17T12:00:00.000Z',
+        },
+      ],
+      correlationId: 'community-logo-signed-cutover-test',
+      fetchedAt: '2026-07-17T12:00:00.000Z',
+    });
+
+    const logoInsert = query.mock.calls.find(([text]) =>
+      String(text).includes('insert into integration.community_logo_sync'),
+    );
+    expect(logoInsert?.[1]).toEqual(expect.arrayContaining([signedUrl]));
+    const outbox = query.mock.calls.find(([text]) =>
+      String(text).includes('insert into audit.outbox_events'),
+    );
+    expect(String(outbox?.[1]?.[5])).toContain(signedUrl);
+    expect(String(outbox?.[1]?.[5])).not.toContain('/public/api/v1/media/community-logos/');
+  });
+
+  it('backfills signed metadata for an unchanged stable mapping before old-API rollback', async () => {
+    const communityId = communities[0]?.id as string;
+    const objectKey = `community-logos/${tenantId}/${communityId}/${'b'.repeat(64)}.webp`;
+    const signedUrl = `https://media.padlhub.test/${objectKey}?sig=rollback`;
+    const query = vi.fn((text: string) => {
+      if (
+        text === 'begin' ||
+        text === 'commit' ||
+        text === 'rollback' ||
+        text.includes("set_config('app.tenant_id'") ||
+        text.includes('pg_advisory_xact_lock')
+      ) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('select object_key, delivery_url')) {
+        return Promise.resolve({
+          rows: [
+            {
+              object_key: objectKey,
+              delivery_url: null,
+              delivery_expires_at: null,
+              synced_at: '2026-07-17T12:00:00.000Z',
+            },
+          ],
+          rowCount: 1,
+        });
+      }
+      if (text.includes('from integration.community_logo_observation_watermarks')) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('select community_id::text as community_id')) {
+        return Promise.resolve({
+          rows: [{ community_id: communityId, delivery_url: signedUrl }],
+          rowCount: 1,
+        });
+      }
+      if (
+        text.includes('update integration.community_logo_sync') ||
+        text.includes('insert into integration.community_home_source_components') ||
+        text.includes('insert into audit.outbox_events') ||
+        text.includes('insert into audit.audit_log')
+      ) {
+        return Promise.resolve({ rows: [], rowCount: 1 });
+      }
+      if (
+        text.includes('from integration.community_home_source_components') ||
+        text.includes('from home.dashboard_components')
+      ) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+
+    await persistCommunityHomeSource({
+      pool: {
+        connect: vi.fn().mockResolvedValue({ query, release: vi.fn() }),
+      } as never,
+      tenantId,
+      userId,
+      sourceMode: 'LEGACY',
+      publicApplicationOrigin: 'https://lk.padlhub.test',
+      stableDeliveryEnabled: false,
+      communities,
+      logoAssets: [
+        {
+          communityId,
+          sourceUrl: 'https://legacy.padlhub.test/community-logo/source',
+          contentSha256: 'b'.repeat(64),
+          objectKey,
+          deliveryUrl: signedUrl,
+          deliveryExpiresAt: '2026-07-17T13:00:00.000Z',
+          syncedAt: '2026-07-17T12:00:00.000Z',
+        },
+      ],
+      correlationId: 'community-logo-rollback-backfill-test',
+      fetchedAt: '2026-07-17T12:00:00.000Z',
+    });
+
+    expect(
+      query.mock.calls.some(([text]) =>
+        String(text).includes('update integration.community_logo_sync'),
+      ),
+    ).toBe(true);
+    expect(
+      query.mock.calls.some(([text]) =>
+        String(text).includes('insert into integration.community_logo_sync'),
+      ),
+    ).toBe(false);
+  });
+
+  it('does not replace a newer signed delivery with a late stale snapshot', async () => {
+    const communityId = communities[0]?.id as string;
+    const objectKey = `community-logos/${tenantId}/${communityId}/${'9'.repeat(64)}.webp`;
+    const newerSignedUrl = `https://media.padlhub.test/${objectKey}?sig=newer`;
+    let deliveryUpdated = false;
+    const { pool } = poolWithQueries((text) => {
+      if (text.includes('select object_key, delivery_url')) {
+        return {
+          rows: [
+            {
+              object_key: objectKey,
+              delivery_url: newerSignedUrl,
+              delivery_expires_at: '2026-07-17T14:00:00.000Z',
+              synced_at: '2026-07-17T12:01:00.000Z',
+            },
+          ],
+        };
+      }
+      if (text.includes('from integration.community_logo_observation_watermarks')) {
+        return { rows: [] };
+      }
+      if (text.includes('select community_id::text as community_id')) {
+        return { rows: [{ community_id: communityId, delivery_url: newerSignedUrl }] };
+      }
+      if (text.includes('update integration.community_logo_sync')) {
+        deliveryUpdated = true;
+        return { rows: [] };
+      }
+      if (
+        text.includes('from integration.community_home_source_components') ||
+        text.includes('from home.dashboard_components')
+      ) {
+        return { rows: [] };
+      }
+      if (
+        text.includes('insert into integration.community_home_source_components') ||
+        text.includes('insert into audit.outbox_events') ||
+        text.includes('insert into audit.audit_log')
+      ) {
+        return { rows: [] };
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+
+    await persistCommunityHomeSource({
+      pool,
+      tenantId,
+      userId,
+      sourceMode: 'LEGACY',
+      publicApplicationOrigin: 'https://lk.padlhub.test',
+      stableDeliveryEnabled: false,
+      communities,
+      logoAssets: [
+        {
+          communityId,
+          sourceUrl: 'https://legacy.padlhub.test/community-logo/source',
+          contentSha256: '9'.repeat(64),
+          objectKey,
+          deliveryUrl: `https://media.padlhub.test/${objectKey}?sig=stale`,
+          deliveryExpiresAt: '2026-07-17T13:00:00.000Z',
+          syncedAt: '2026-07-17T12:00:00.000Z',
+        },
+      ],
+      correlationId: 'community-logo-stale-signed-test',
+      fetchedAt: '2026-07-17T12:00:00.000Z',
+    });
+
+    expect(deliveryUpdated).toBe(false);
   });
 });

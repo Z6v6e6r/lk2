@@ -8,7 +8,7 @@ describe('community logo stable delivery migration', () => {
     const sql = readFileSync(
       resolve(
         process.cwd(),
-        'packages/database/migrations/0070_community_logo_stable_delivery.sql',
+        'packages/database/migrations/0075_community_logo_stable_delivery.sql',
       ),
       'utf8',
     );
@@ -19,6 +19,8 @@ describe('community logo stable delivery migration', () => {
     expect(sql).toContain('community_logo_sync_delivery_pair_chk');
     expect(sql).toContain('create table integration.community_logo_observation_watermarks');
     expect(sql).toContain('community_logo_observation_watermarks_tenant_isolation');
+    expect(sql).toContain('create table integration.media_cutover_state');
+    expect(sql).toContain("check (feature in ('community_logo_stable_delivery'))");
     expect(sql).toContain('not valid');
     expect(sql).not.toMatch(/drop\s+column/i);
     expect(sql).not.toMatch(/update\s+integration\.community_logo_sync/i);
@@ -28,7 +30,7 @@ describe('community logo stable delivery migration', () => {
     const sql = readFileSync(
       resolve(
         process.cwd(),
-        'packages/database/migrations/0071_community_logo_stable_delivery_validate.sql',
+        'packages/database/migrations/0076_community_logo_stable_delivery_validate.sql',
       ),
       'utf8',
     );

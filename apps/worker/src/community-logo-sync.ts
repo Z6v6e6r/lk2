@@ -18,6 +18,8 @@ export interface CommunityLogoSyncRecord {
   readonly sourceLastModified?: string;
   readonly contentSha256: string;
   readonly objectKey: string;
+  readonly deliveryUrl?: string;
+  readonly deliveryExpiresAt?: string;
   readonly syncedAt: string;
 }
 
@@ -28,6 +30,8 @@ export interface CommunityLogoPersistence {
   readonly sourceLastModified?: string;
   readonly contentSha256?: string;
   readonly objectKey?: string;
+  readonly deliveryUrl?: string | null;
+  readonly deliveryExpiresAt?: string;
   readonly supersededObjectKey?: string;
   readonly deleteAfter?: string;
   readonly syncedAt: string;
@@ -157,7 +161,10 @@ function deletionFields(
   };
 }
 
-function persistenceFromCurrent(current: CommunityLogoSyncRecord): CommunityLogoPersistence {
+function persistenceFromCurrent(
+  current: CommunityLogoSyncRecord,
+  delivery?: { readonly url: string; readonly expiresAt: string },
+): CommunityLogoPersistence {
   return {
     communityId: current.communityId,
     sourceUrl: current.sourceUrl,
@@ -165,7 +172,36 @@ function persistenceFromCurrent(current: CommunityLogoSyncRecord): CommunityLogo
     ...(current.sourceLastModified ? { sourceLastModified: current.sourceLastModified } : {}),
     contentSha256: current.contentSha256,
     objectKey: current.objectKey,
+    ...(delivery?.url || current.deliveryUrl
+      ? { deliveryUrl: delivery?.url ?? current.deliveryUrl }
+      : {}),
+    ...(delivery?.expiresAt || current.deliveryExpiresAt
+      ? { deliveryExpiresAt: delivery?.expiresAt ?? current.deliveryExpiresAt }
+      : {}),
     syncedAt: current.syncedAt,
+  };
+}
+
+async function refreshDeliveryUrl(input: {
+  readonly store: ProfilePhotoObjectStore;
+  readonly current: CommunityLogoSyncRecord;
+  readonly fetchedAt: string;
+  readonly readUrlTtlSeconds: number;
+}): Promise<{ readonly url: string; readonly expiresAt: string } | undefined> {
+  const refreshSkewSeconds = Math.min(300, Math.floor(input.readUrlTtlSeconds / 2));
+  if (
+    input.current.deliveryUrl &&
+    input.current.deliveryExpiresAt &&
+    Date.parse(input.current.deliveryExpiresAt) >
+      Date.parse(input.fetchedAt) + refreshSkewSeconds * 1_000
+  ) {
+    return undefined;
+  }
+  return {
+    url: await input.store.createReadUrl(input.current.objectKey),
+    expiresAt: new Date(
+      Date.parse(input.fetchedAt) + input.readUrlTtlSeconds * 1_000,
+    ).toISOString(),
   };
 }
 
@@ -180,6 +216,8 @@ async function synchronizeOne(input: {
   readonly maxDimension: number;
   readonly webpQuality: number;
   readonly previousObjectRetentionSeconds: number;
+  readonly readUrlTtlSeconds: number;
+  readonly stableDeliveryEnabled: boolean;
   readonly timeoutMs: number;
   readonly fetchImplementation: typeof fetch;
   readonly deferStorePut?: boolean;
@@ -203,10 +241,20 @@ async function synchronizeOne(input: {
 
   try {
     if (input.current?.sourceUrl === input.item.legacyLogoSourceUrl && input.current.objectKey) {
-      const persistence = persistenceFromCurrent(input.current);
+      const delivery = input.stableDeliveryEnabled
+        ? undefined
+        : await refreshDeliveryUrl({
+            store: input.store,
+            current: input.current,
+            fetchedAt: input.fetchedAt,
+            readUrlTtlSeconds: input.readUrlTtlSeconds,
+          });
+      const persistence = persistenceFromCurrent(input.current, delivery);
       return {
         communityId: input.item.id,
-        logoUrl: communityLogoDeliveryUrl(input.tenantId, input.item.id),
+        logoUrl: input.stableDeliveryEnabled
+          ? communityLogoDeliveryUrl(input.tenantId, input.item.id)
+          : (persistence.deliveryUrl ?? null),
         persistence,
         outcome: 'unchanged',
       };
@@ -240,9 +288,19 @@ async function synchronizeOne(input: {
       ? { key: objectKey, body: webp, sha256: contentSha256, deleteAfter }
       : undefined;
     if (preparedObject && !input.deferStorePut) await input.store.put(preparedObject);
+    const delivery = input.stableDeliveryEnabled
+      ? undefined
+      : {
+          url: await input.store.createReadUrl(objectKey),
+          expiresAt: new Date(
+            Date.parse(input.fetchedAt) + input.readUrlTtlSeconds * 1_000,
+          ).toISOString(),
+        };
     return {
       communityId: input.item.id,
-      logoUrl: communityLogoDeliveryUrl(input.tenantId, input.item.id),
+      logoUrl: input.stableDeliveryEnabled
+        ? communityLogoDeliveryUrl(input.tenantId, input.item.id)
+        : (delivery?.url ?? null),
       outcome: objectChanged ? 'stored' : 'unchanged',
       persistence: {
         communityId: input.item.id,
@@ -251,6 +309,7 @@ async function synchronizeOne(input: {
         ...(source.lastModified ? { sourceLastModified: source.lastModified } : {}),
         contentSha256,
         objectKey,
+        ...(delivery ? { deliveryUrl: delivery.url, deliveryExpiresAt: delivery.expiresAt } : {}),
         syncedAt: input.fetchedAt,
         ...(input.current?.objectKey && input.current.objectKey !== objectKey
           ? deletionFields(
@@ -275,10 +334,25 @@ async function synchronizeOne(input: {
         errorCode: errorCode(error),
       };
     }
-    const persistence = persistenceFromCurrent(input.current);
+    let delivery: { readonly url: string; readonly expiresAt: string } | undefined;
+    if (!input.stableDeliveryEnabled) {
+      try {
+        delivery = {
+          url: await input.store.createReadUrl(input.current.objectKey),
+          expiresAt: new Date(
+            Date.parse(input.fetchedAt) + input.readUrlTtlSeconds * 1_000,
+          ).toISOString(),
+        };
+      } catch {
+        delivery = undefined;
+      }
+    }
+    const persistence = persistenceFromCurrent(input.current, delivery);
     return {
       communityId: input.item.id,
-      logoUrl: communityLogoDeliveryUrl(input.tenantId, input.item.id),
+      logoUrl: input.stableDeliveryEnabled
+        ? communityLogoDeliveryUrl(input.tenantId, input.item.id)
+        : (persistence.deliveryUrl ?? communityLogoDeliveryUrl(input.tenantId, input.item.id)),
       persistence,
       outcome: 'fallback',
       errorCode: errorCode(error),
@@ -297,10 +371,14 @@ export async function synchronizeLegacyCommunityLogos(input: {
   readonly maxDimension: number;
   readonly webpQuality: number;
   readonly previousObjectRetentionSeconds: number;
+  readonly readUrlTtlSeconds?: number;
+  readonly stableDeliveryEnabled?: boolean;
   readonly timeoutMs: number;
   readonly fetchImplementation?: typeof fetch;
   readonly deferStorePut?: boolean;
 }): Promise<readonly CommunityLogoSyncResult[]> {
+  const readUrlTtlSeconds = input.readUrlTtlSeconds ?? 3_600;
+  const stableDeliveryEnabled = input.stableDeliveryEnabled ?? true;
   const current = await loadCommunityLogoSyncRecords({
     pool: input.pool,
     tenantId: input.tenantId,
@@ -311,6 +389,8 @@ export async function synchronizeLegacyCommunityLogos(input: {
       const existing = current.get(item.id);
       return synchronizeOne({
         ...input,
+        readUrlTtlSeconds,
+        stableDeliveryEnabled,
         item,
         ...(existing ? { current: existing } : {}),
         fetchImplementation: input.fetchImplementation ?? fetch,

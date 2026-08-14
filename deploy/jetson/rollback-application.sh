@@ -22,6 +22,7 @@ app_root="${PHUB_ROLLBACK_APP_ROOT:-/opt/phub}"
 backup_root="${PHUB_ROLLBACK_BACKUP_ROOT:-$app_root/backups}"
 health_attempts="${PHUB_ROLLBACK_HEALTH_ATTEMPTS:-36}"
 health_delay_seconds="${PHUB_ROLLBACK_HEALTH_DELAY_SECONDS:-5}"
+require_compatible_worker="${PHUB_ROLLBACK_REQUIRE_COMPATIBLE_WORKER:-false}"
 
 case "$app_root" in
   /*) ;;
@@ -37,6 +38,10 @@ case "$health_attempts" in
 esac
 case "$health_delay_seconds" in
   '' | *[!0-9]*) fail 'health delay must be a non-negative integer' ;;
+esac
+case "$require_compatible_worker" in
+  true | false) ;;
+  *) fail 'PHUB_ROLLBACK_REQUIRE_COMPATIBLE_WORKER must be true or false' ;;
 esac
 
 [ -d "$app_root" ] || fail 'application root does not exist'
@@ -92,6 +97,11 @@ stage_file staging.auth.env required 600
 stage_file tls-ingress/Caddyfile required 644
 stage_file process-state.env required 600
 stage_file backup.complete required 600
+if stage_file worker-capabilities.env optional 600; then
+  worker_capabilities_present=true
+else
+  worker_capabilities_present=false
+fi
 if stage_file staging.override.env optional 600; then
   override_state=present
 else
@@ -108,6 +118,14 @@ else
     fail 'staging.communities.env.absent marker must be empty'
   communities_state=absent
 fi
+if stage_file staging.games.env optional 600; then
+  games_state=present
+else
+  stage_file staging.games.env.absent required 600
+  [ ! -s "$stage_dir/staging.games.env.absent" ] ||
+    fail 'staging.games.env.absent marker must be empty'
+  games_state=absent
+fi
 [ ! -e "$backup_dir/staging.override.env" ] || [ "$override_state" = present ] ||
   fail 'saved runtime override state is ambiguous'
 [ ! -e "$backup_dir/staging.override.env.absent" ] || [ "$override_state" = absent ] ||
@@ -116,6 +134,10 @@ fi
   fail 'saved Communities runtime state is ambiguous'
 [ ! -e "$backup_dir/staging.communities.env.absent" ] || [ "$communities_state" = absent ] ||
   fail 'saved Communities runtime state is ambiguous'
+[ ! -e "$backup_dir/staging.games.env" ] || [ "$games_state" = present ] ||
+  fail 'saved Games runtime state is ambiguous'
+[ ! -e "$backup_dir/staging.games.env.absent" ] || [ "$games_state" = absent ] ||
+  fail 'saved Games runtime state is ambiguous'
 
 process_state_value() {
   process_key="$1"
@@ -172,6 +194,35 @@ realtime_digest="$(release_value REALTIME_IMAGE_DIGEST)"
 migrator_digest="$(release_value MIGRATOR_IMAGE_DIGEST)"
 release="$(release_value RELEASE)"
 latest_migration="$(release_value LATEST_MIGRATION)"
+
+compatible_worker_id=''
+if [ "$require_compatible_worker" = true ]; then
+  [ "$worker_capabilities_present" = true ] ||
+    fail 'saved release has no worker capability attestation'
+  grep -Fxq 'API_CLIENT_MEDIA_ROLLBACK_V1=true' "$stage_dir/worker-capabilities.env" ||
+    fail 'saved API is not attested for phub.client-media-rollback.v1'
+  grep -Fxq 'WORKER_CLIENT_MEDIA_ROLLBACK_V1=true' "$stage_dir/worker-capabilities.env" ||
+    fail 'saved worker is not attested for phub.client-media-rollback.v1'
+  [ "$worker_state" = running ] || fail 'saved compatible worker was not running'
+  current_compose() {
+    docker compose \
+      --env-file "$app_root/infrastructure.env" \
+      --env-file "$app_root/release.env" \
+      -f "$app_root/compose.yaml" \
+      "$@"
+  }
+  compatible_worker_id="$(current_compose ps --status running -q worker)"
+  [ -n "$compatible_worker_id" ] || fail 'attested saved worker is not running'
+  compatible_worker_image="$(docker inspect --format '{{.Config.Image}}' "$compatible_worker_id")"
+  [ "$compatible_worker_image" = "$registry/phub-worker@$worker_digest" ] ||
+    fail 'running worker does not match the attested saved digest'
+  if ! docker exec "$compatible_worker_id" node -e '
+    const code = require("node:fs").readFileSync("/app/apps/worker/dist/main.js", "utf8");
+    process.exit(code.includes("phub.client-media-rollback.v1") ? 0 : 1);
+  '; then
+    fail 'attested worker does not provide phub.client-media-rollback.v1'
+  fi
+fi
 
 printf '%s' "$registry" | grep -Eq '^ghcr\.io/[A-Za-z0-9._/-]+$' ||
   fail 'release registry is not an allowed GHCR path'
@@ -261,6 +312,12 @@ else
   : > "$recovery_dir/staging.communities.env.absent"
   chmod 600 "$recovery_dir/staging.communities.env.absent"
 fi
+if [ -e "$app_root/staging.games.env" ]; then
+  capture_current staging.games.env 600
+else
+  : > "$recovery_dir/staging.games.env.absent"
+  chmod 600 "$recovery_dir/staging.games.env.absent"
+fi
 capture_current tls-ingress/Caddyfile 644
 
 restore_staged() {
@@ -290,6 +347,11 @@ if [ "$communities_state" = present ]; then
   restore_staged staging.communities.env 600
 else
   rm -f "$app_root/staging.communities.env"
+fi
+if [ "$games_state" = present ]; then
+  restore_staged staging.games.env 600
+else
+  rm -f "$app_root/staging.games.env"
 fi
 restore_staged tls-ingress/Caddyfile 644
 
@@ -323,7 +385,12 @@ stop_and_verify() {
   [ -z "$(compose ps --status running -q "$service")" ] ||
     fail "restored $service process did not stop"
 }
-if [ "$worker_state" = running ]; then
+if [ "$require_compatible_worker" = true ]; then
+  restored_worker_id="$(compose ps --status running -q worker)"
+  [ "$restored_worker_id" = "$compatible_worker_id" ] ||
+    fail 'attested worker container changed during rollback'
+  worker_state=running
+elif [ "$worker_state" = running ]; then
   compose up -d worker
 else
   stop_and_verify worker

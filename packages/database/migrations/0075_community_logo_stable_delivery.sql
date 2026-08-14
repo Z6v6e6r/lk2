@@ -26,3 +26,11 @@ create policy community_logo_observation_watermarks_tenant_isolation
   with check (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid);
 
 alter table integration.community_logo_observation_watermarks force row level security;
+
+create table integration.media_cutover_state (
+  feature text primary key,
+  active boolean not null,
+  updated_at timestamptz not null default now(),
+  constraint media_cutover_state_feature_chk
+    check (feature in ('community_logo_stable_delivery'))
+);
