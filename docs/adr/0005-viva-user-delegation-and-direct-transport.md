@@ -80,12 +80,20 @@ HTTP method and expiry. Any other Viva URL, scope or command is rejected by the 
 Purchase, cancellation and every other command stay behind PadlHub APIs. Direct client command
 transport is not enabled by this ADR.
 
-The first-party web client reads both the authenticated user's profile and another player's profile
-through PadlHub APIs. This keeps the profile on one server-owned projection version and lets the API
-attach only the stable PadlHub profile-photo delivery URL; the web client must not combine a direct
-Viva profile with locally stored media. The Home surface composes that PadlHub self-profile
-aggregate with the separate `HomeBase` partial recovery contract defined by ADR 0019. A direct
-profile response never fills, refreshes or changes the source of a HomeBase section.
+The first-party web client routes the authenticated user's self-profile according to the
+server-issued plan. `PADLHUB_API` returns the PadlHub projection; `DIRECT_VIVA` performs the fixed
+browser read and keeps its normalized, provider-free result in memory only. The direct result is
+never merged with locally stored media, relayed back for persistence, or used to fill or refresh a
+Home projection. Another player's profile always stays behind the PadlHub API. The Home surface
+composes the separately routed self-profile aggregate with the `HomeBase` partial recovery contract
+defined by ADR 0019.
+
+An active delegation is runtime credential state, not a routing-policy prerequisite. When the
+tenant policy enables `profile.read`, the plan continues to advertise that fixed direct operation
+even if the delegation is missing, expired or revoked. The browser then requests an access token;
+`VIVA_REAUTH_REQUIRED` starts the server-bound recovery OAuth flow. Disabling the global gate,
+tenant mixed mode, provider binding or operation allowlist still returns `PADLHUB_ONLY` and must not
+start recovery.
 
 The general-purpose direct exception remains limited to `DIRECT_VIVA_CONTRACT_READY_OPERATIONS`.
 ADR 0020 defines a narrower server-directed exception for booking-screen read jobs: the browser may

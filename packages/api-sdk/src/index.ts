@@ -489,15 +489,32 @@ export class PadlHubApiClient {
 
   public createVivaOAuthRecovery(): Promise<{ readonly redirectUrl: string }> {
     const idempotencyKey = createCorrelationId();
-    return this.request<{ readonly redirectUrl: string }>('/auth/viva/reauthorize', {
-      method: 'POST',
-      idempotencyKey,
-      body: jsonRequestBody({ provider: 'yandex' }),
-    });
+    return this.retryOnceOnNetworkFailure(() =>
+      this.request<{ readonly redirectUrl: string }>('/auth/viva/reauthorize', {
+        method: 'POST',
+        credentials: 'include',
+        idempotencyKey,
+        body: jsonRequestBody({ provider: 'yandex' }),
+      }),
+    );
   }
 
   public getClientRoutingPlan(): Promise<ClientRoutingPlan> {
     return this.request<ClientRoutingPlan>('/routing-plan');
+  }
+
+  public recordDirectVivaReadMetric(input: {
+    readonly operation: string;
+    readonly routingRevision: string;
+    readonly outcome: string;
+    readonly statusClass?: string;
+    readonly durationMs: number;
+  }): Promise<void> {
+    return this.request<void>('/routing-outcomes', {
+      method: 'POST',
+      retryOnUnauthorized: false,
+      body: jsonRequestBody(input),
+    });
   }
 
   public getUserProfile(): Promise<UserProfile> {

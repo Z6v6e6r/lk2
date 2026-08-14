@@ -10,6 +10,7 @@ import { sendApiError } from '../http-errors.js';
 import { AuthServiceError, type AuthService, type AuthSessionResult } from './auth-service.js';
 
 export const REFRESH_COOKIE_NAME = 'phub_refresh';
+export const OAUTH_BROWSER_COOKIE_NAME = 'phub_oauth_browser';
 
 const challengeBodySchema = z.object({
   method: z.literal('phone_otp'),
@@ -75,6 +76,7 @@ function errorMessage(code: string): string {
     AUTH_CHALLENGE_IN_PROGRESS: 'Код уже проверяется. Подождите и повторите.',
     AUTH_RATE_LIMITED: 'Слишком много попыток. Повторите позже.',
     AUTH_PROVIDER_UNAVAILABLE: 'Вход временно недоступен. Повторите позже.',
+    AUTH_OAUTH_BROWSER_MISMATCH: 'Сессия входа открыта в другом браузере. Начните вход заново.',
     AUTH_ADMIN_ACCESS_DENIED: 'Для этой учётной записи доступ в ЦУП не выдан.',
     AUTH_SESSION_REVOKED: 'Сессия завершена. Войдите снова.',
     AUTH_REFRESH_RACE: 'Сессия обновляется в другой вкладке. Повторите запрос.',
@@ -191,6 +193,58 @@ function clearRefreshCookie(reply: FastifyReply, config: AppConfig, tenantKey: s
   });
 }
 
+function oauthCallbackPath(tenantKey: string): string {
+  return `/user/api/v1/${tenantKey}/auth/viva/callback`;
+}
+
+function oauthBrowserCookieName(config: AppConfig, state: string): string {
+  const suffix = createHmac('sha256', config.JWT_REFRESH_SECRET)
+    .update(state)
+    .digest('base64url')
+    .slice(0, 16);
+  return `${OAUTH_BROWSER_COOKIE_NAME}_${suffix}`;
+}
+
+function setOAuthBrowserCookie(
+  reply: FastifyReply,
+  config: AppConfig,
+  tenantKey: string,
+  state: string,
+  nonce: string,
+): void {
+  reply.setCookie(oauthBrowserCookieName(config, state), nonce, {
+    httpOnly: true,
+    secure: config.AUTH_COOKIE_SECURE,
+    sameSite: 'lax',
+    path: oauthCallbackPath(tenantKey),
+    maxAge: config.AUTH_CHALLENGE_TTL_SECONDS,
+  });
+}
+
+function clearOAuthBrowserCookie(
+  reply: FastifyReply,
+  config: AppConfig,
+  tenantKey: string,
+  state: string,
+): void {
+  reply.clearCookie(oauthBrowserCookieName(config, state), {
+    httpOnly: true,
+    secure: config.AUTH_COOKIE_SECURE,
+    sameSite: 'lax',
+    path: oauthCallbackPath(tenantKey),
+  });
+}
+
+function oauthBrowserBinding(
+  request: FastifyRequest,
+  config: AppConfig,
+  state: string,
+): { readonly matchesState: boolean; readonly nonce?: string } {
+  const cookie = request.cookies[oauthBrowserCookieName(config, state)];
+  if (!cookie) return { matchesState: false };
+  return cookie ? { matchesState: true, nonce: cookie } : { matchesState: true };
+}
+
 export function registerAuthRoutes(
   app: FastifyInstance,
   authService: AuthService,
@@ -225,7 +279,9 @@ export function registerAuthRoutes(
           personalDataPolicyAccepted: body.acceptance.personalDataPolicyAccepted,
           correlationId: request.id,
         });
-        return reply.status(200).send(result);
+        setOAuthBrowserCookie(reply, config, tenantKey, result.state, result.browserNonce);
+        preventCredentialCaching(reply);
+        return reply.status(200).send({ redirectUrl: result.redirectUrl });
       } catch (error) {
         return handleAuthError(error, request, reply);
       }
@@ -244,15 +300,17 @@ export function registerAuthRoutes(
         if (!tenantId || !userId) {
           return sendApiError(request, reply, 401, 'AUTH_REQUIRED', 'Требуется авторизация.');
         }
-        return reply.send(
-          await authService.startVivaOAuthRecovery({
-            tenantKey,
-            tenantId,
-            userId,
-            provider: body.provider,
-            correlationId: request.id,
-          }),
-        );
+        const result = await authService.startVivaOAuthRecovery({
+          tenantKey,
+          tenantId,
+          userId,
+          provider: body.provider,
+          correlationId: request.id,
+          idempotencyKey: idempotencyKey(request),
+        });
+        setOAuthBrowserCookie(reply, config, tenantKey, result.state, result.browserNonce);
+        preventCredentialCaching(reply);
+        return reply.send({ redirectUrl: result.redirectUrl });
       } catch (error) {
         return handleAuthError(error, request, reply);
       }
@@ -260,16 +318,28 @@ export function registerAuthRoutes(
   );
 
   app.get('/user/api/v1/:tenantKey/auth/viva/callback', async (request, reply) => {
+    let callbackTenantKey: string | undefined;
+    let callbackState: string | undefined;
+    let shouldClearOAuthBrowserCookie = false;
     try {
       const { tenantKey } = paramsSchema.parse(request.params);
+      callbackTenantKey = tenantKey;
       const query = vivaOAuthCallbackQuerySchema.parse(request.query);
+      callbackState = query.state;
+      const browserBinding = oauthBrowserBinding(request, config, query.state);
+      shouldClearOAuthBrowserCookie = browserBinding.matchesState;
       const session = await authService.completeVivaOAuth({
         tenantKey,
         state: query.state,
         code: query.code,
         correlationId: request.id,
         idempotencyKey: query.state,
+        ...(browserBinding.nonce ? { oauthBrowserNonce: browserBinding.nonce } : {}),
       });
+      if (shouldClearOAuthBrowserCookie) {
+        clearOAuthBrowserCookie(reply, config, tenantKey, query.state);
+        shouldClearOAuthBrowserCookie = false;
+      }
       setRefreshCookie(reply, config, tenantKey, session);
       preventCredentialCaching(reply);
       const redirectUrl = config.VIVA_OAUTH_SUCCESS_REDIRECT_URL;
@@ -286,6 +356,9 @@ export function registerAuthRoutes(
       }
       return reply.redirect(target.toString());
     } catch (error) {
+      if (callbackTenantKey && callbackState && shouldClearOAuthBrowserCookie) {
+        clearOAuthBrowserCookie(reply, config, callbackTenantKey, callbackState);
+      }
       return handleAuthError(error, request, reply);
     }
   });

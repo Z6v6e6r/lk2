@@ -11,6 +11,7 @@ import type { Pool } from 'pg';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { buildApp, requireIdempotencyKey, sanitizeRequestLogUrl } from './app.js';
+import { AuthServiceError } from './auth/auth-service.js';
 import { buildMockHomeDashboard } from './home/home-dashboard.js';
 
 const config = loadConfig({
@@ -258,6 +259,28 @@ describe('health endpoints', () => {
     });
   });
 
+  it('accepts only redacted direct Viva outcome metrics', async () => {
+    const app = await buildApp({
+      config,
+      logger: createLogger('api-test', 'silent'),
+      pool: fakePool(),
+    });
+    apps.push(app);
+    const response = await app.inject({
+      method: 'POST',
+      url: '/user/api/v1/local-padel/routing-outcomes',
+      headers: { authorization: `Bearer ${await accessToken()}` },
+      payload: {
+        operation: 'profile.read',
+        routingRevision: '7',
+        outcome: 'UNAVAILABLE',
+        statusClass: '5xx',
+        durationMs: 812,
+      },
+    });
+    expect(response.statusCode).toBe(204);
+  });
+
   it('fails closed for administrative clients even when the tenant is mixed', async () => {
     const app = await buildApp({
       config: { ...config, VIVA_DIRECT_READ_ENABLED: true },
@@ -326,6 +349,64 @@ describe('health endpoints', () => {
     expect(response.statusCode).toBe(403);
     expect(response.json()).toMatchObject({ code: 'DIRECT_VIVA_DISABLED' });
     expect(issueVivaAccessToken).not.toHaveBeenCalled();
+  });
+
+  it('lets the auth service report delegation recovery under an enabled direct policy', async () => {
+    const issueVivaAccessToken = vi
+      .fn()
+      .mockRejectedValue(new AuthServiceError('VIVA_REAUTH_REQUIRED'));
+    const directConfig = loadConfig({
+      APP_ENV: 'ci',
+      DATABASE_URL: 'postgresql://phub:test@localhost:5432/phub',
+      REDIS_URL: 'redis://localhost:6379',
+      RABBITMQ_URL: 'amqp://phub:test@localhost:5672',
+      JWT_ISSUER: config.JWT_ISSUER,
+      JWT_AUDIENCE: config.JWT_AUDIENCE,
+      JWT_ACCESS_SECRET: config.JWT_ACCESS_SECRET,
+      JWT_REFRESH_SECRET: config.JWT_REFRESH_SECRET,
+      VIVA_MODE: 'sandbox',
+      VIVA_DIRECT_READ_ENABLED: 'true',
+      VIVA_OAUTH_ENABLED: 'true',
+      VIVA_OAUTH_REDIRECT_URI:
+        'https://api.example.test/user/api/v1/local-padel/auth/viva/callback',
+      VIVA_OAUTH_SUCCESS_REDIRECT_URL: 'https://app.example.test/',
+      VIVA_DELEGATION_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString('base64url'),
+    });
+    const app = await buildApp({
+      config: directConfig,
+      logger: createLogger('api-test', 'silent'),
+      pool: fakePool(),
+      authService: { issueVivaAccessToken } as never,
+      clientRoutingPlanRepository: {
+        get: () =>
+          Promise.resolve({
+            mode: 'MIXED_END_USER_READS',
+            revision: '5',
+            validForSeconds: 60,
+            directOperations: ['profile.read'],
+            providerTenantKey: 'iSkq6G',
+            delegationReady: false,
+          }),
+      },
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/user/api/v1/local-padel/auth/viva/access',
+      headers: {
+        authorization: `Bearer ${await accessToken()}`,
+        'x-app-platform': 'web',
+        'idempotency-key': 'viva-access-recovery-test-0001',
+      },
+      payload: {},
+    });
+
+    expect(response.statusCode).toBe(401);
+    expect(response.json()).toMatchObject({ code: 'VIVA_REAUTH_REQUIRED' });
+    expect(issueVivaAccessToken).toHaveBeenCalledWith(
+      expect.objectContaining({ tenantId, userId: '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca' }),
+    );
   });
 
   it('omits the Viva handoff from the OAuth redirect when the effective plan is PadlHub-only', async () => {

@@ -46,6 +46,32 @@ export const DIRECT_VIVA_CLIENT_RULES = {
   trustedForCommands: false,
 } as const;
 
+const PROFILE_RESPONSE_MAX_BYTES = 64 * 1024;
+const DIRECT_RESPONSE_MAX_BYTES = 1024 * 1024;
+
+async function readBoundedResponseBody(response: Response, maxBytes: number): Promise<string> {
+  if (!response.body) return '';
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let total = 0;
+  let text = '';
+  try {
+    while (true) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      total += chunk.value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel('DIRECT_VIVA_RESPONSE_TOO_LARGE');
+        throw new Error('DIRECT_VIVA_RESPONSE_TOO_LARGE');
+      }
+      text += decoder.decode(chunk.value, { stream: true });
+    }
+    return text + decoder.decode();
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 const profileCustomFieldSchema = z.object({
   id: z.string().uuid(),
   value: z.array(z.string()),
@@ -270,8 +296,9 @@ export class ClientTransportError extends Error {
     public readonly code: ClientTransportErrorCode,
     public readonly operation: DirectVivaReadOperation,
     public readonly status?: number,
+    cause?: unknown,
   ) {
-    super(code);
+    super(code, cause === undefined ? undefined : { cause });
     this.name = 'ClientTransportError';
   }
 }
@@ -287,6 +314,15 @@ export interface ClientTransportExecutorOptions {
   readonly executePadlHub: (request: DirectVivaReadRequest) => Promise<unknown>;
   readonly fetchImplementation?: typeof fetch;
   readonly timeoutMs?: number;
+  readonly onMetric?: (metric: DirectVivaReadMetric) => void;
+}
+
+export interface DirectVivaReadMetric {
+  readonly operation: DirectVivaReadOperation;
+  readonly routingRevision: string;
+  readonly outcome: 'SUCCESS' | 'UNAVAILABLE' | 'REAUTH_REQUIRED' | 'INVALID' | 'CIRCUIT_OPEN';
+  readonly statusClass?: string;
+  readonly durationMs: number;
 }
 
 export interface ClientReadExecution<TResult> {
@@ -426,7 +462,9 @@ export function createClientTransportExecutor(options: ClientTransportExecutorOp
     options.fetchImplementation ??
     ((input: RequestInfo | URL, init?: RequestInit) => fetch(input, init));
 
-  async function directRead(
+  const circuit = new Map<DirectVivaReadOperation, { failures: number; retryAt: number }>();
+
+  async function directReadCore(
     plan: ClientRoutingPlan,
     request: ReturnType<typeof parseReadRequest>,
     allowTokenRefresh: boolean,
@@ -450,7 +488,7 @@ export function createClientTransportExecutor(options: ClientTransportExecutorOp
       });
       if (response.status === 401 && allowTokenRefresh) {
         await options.refreshVivaAccessToken();
-        return directRead(plan, request, false);
+        return directReadCore(plan, request, false);
       }
       if (!response.ok) {
         throw new ClientTransportError(
@@ -460,7 +498,16 @@ export function createClientTransportExecutor(options: ClientTransportExecutorOp
         );
       }
       try {
-        return await response.json();
+        const maxBytes =
+          request.operation === 'profile.read'
+            ? PROFILE_RESPONSE_MAX_BYTES
+            : DIRECT_RESPONSE_MAX_BYTES;
+        const contentLength = Number(response.headers.get('content-length'));
+        if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+          throw new Error('DIRECT_VIVA_RESPONSE_TOO_LARGE');
+        }
+        const body = await readBoundedResponseBody(response, maxBytes);
+        return JSON.parse(body) as unknown;
       } catch {
         throw new ClientTransportError(
           'DIRECT_VIVA_RESPONSE_INVALID',
@@ -473,6 +520,72 @@ export function createClientTransportExecutor(options: ClientTransportExecutorOp
       throw new ClientTransportError('DIRECT_VIVA_UNAVAILABLE', request.operation);
     } finally {
       clearTimeout(timeout);
+    }
+  }
+
+  async function directRead<TResult = unknown>(
+    plan: ClientRoutingPlan,
+    request: ReturnType<typeof parseReadRequest>,
+    allowTokenRefresh: boolean,
+    normalize?: (payload: unknown) => TResult,
+  ): Promise<TResult> {
+    const startedAt = Date.now();
+    const currentCircuit = circuit.get(request.operation);
+    if (currentCircuit && currentCircuit.retryAt > startedAt) {
+      options.onMetric?.({
+        operation: request.operation,
+        routingRevision: plan.revision,
+        outcome: 'CIRCUIT_OPEN',
+        durationMs: 0,
+      });
+      throw new ClientTransportError('DIRECT_VIVA_UNAVAILABLE', request.operation);
+    }
+    try {
+      const payload = await directReadCore(plan, request, allowTokenRefresh);
+      let result: TResult;
+      try {
+        result = normalize ? normalize(payload) : (payload as TResult);
+      } catch (error) {
+        throw new ClientTransportError(
+          'DIRECT_VIVA_RESPONSE_INVALID',
+          request.operation,
+          undefined,
+          error,
+        );
+      }
+      circuit.delete(request.operation);
+      options.onMetric?.({
+        operation: request.operation,
+        routingRevision: plan.revision,
+        outcome: 'SUCCESS',
+        durationMs: Date.now() - startedAt,
+      });
+      return result;
+    } catch (error) {
+      const transportError = error instanceof ClientTransportError ? error : undefined;
+      const outcome =
+        transportError?.code === 'DIRECT_VIVA_REAUTH_REQUIRED'
+          ? 'REAUTH_REQUIRED'
+          : transportError?.code === 'DIRECT_VIVA_RESPONSE_INVALID'
+            ? 'INVALID'
+            : 'UNAVAILABLE';
+      if (outcome === 'UNAVAILABLE' || outcome === 'INVALID') {
+        const failures = Math.min(5, (currentCircuit?.failures ?? 0) + 1);
+        circuit.set(request.operation, {
+          failures,
+          retryAt: Date.now() + Math.min(30_000, 1_000 * 2 ** (failures - 1)),
+        });
+      }
+      options.onMetric?.({
+        operation: request.operation,
+        routingRevision: plan.revision,
+        outcome,
+        ...(transportError?.status
+          ? { statusClass: `${Math.floor(transportError.status / 100)}xx` }
+          : {}),
+        durationMs: Date.now() - startedAt,
+      });
+      throw error;
     }
   }
 
@@ -553,7 +666,7 @@ export function createClientTransportExecutor(options: ClientTransportExecutorOp
       }
 
       try {
-        return execution.normalizeViva(await directRead(plan, request, true));
+        return await directRead(plan, request, true, execution.normalizeViva);
       } catch (error) {
         if (operationPlan?.fallback === 'PADLHUB_API') {
           return execution.normalizePadlHub(await options.executePadlHub(request));

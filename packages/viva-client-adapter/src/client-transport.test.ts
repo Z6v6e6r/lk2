@@ -215,6 +215,78 @@ describe('client transport executor', () => {
     expect(init?.credentials).toBe('omit');
   });
 
+  it('rejects an oversized direct profile response before normalization', async () => {
+    const executor = createClientTransportExecutor({
+      getRoutingPlan: vi.fn().mockResolvedValue(plan('MIXED_END_USER_READS')),
+      getVivaAccessToken: () => 'user-access-token',
+      refreshVivaAccessToken: vi.fn(),
+      executePadlHub: vi.fn(),
+      fetchImplementation: vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(new Response(JSON.stringify({ value: 'x'.repeat(70 * 1024) }))),
+    });
+
+    await expect(
+      executor.executeRead({
+        request: { operation: 'profile.read' },
+        normalizePadlHub: identity,
+        normalizeViva: identity,
+      }),
+    ).rejects.toMatchObject({
+      code: 'DIRECT_VIVA_RESPONSE_INVALID',
+      operation: 'profile.read',
+    });
+  });
+
+  it('counts semantic profile validation failures before opening the circuit', async () => {
+    const invalidMetrics: Array<{ outcome: string }> = [];
+    const invalidFetch = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ changed: true }));
+    const invalidExecutor = createClientTransportExecutor({
+      getRoutingPlan: vi.fn().mockResolvedValue(plan('MIXED_END_USER_READS')),
+      getVivaAccessToken: () => 'user-access-token',
+      refreshVivaAccessToken: vi.fn(),
+      executePadlHub: vi.fn(),
+      fetchImplementation: invalidFetch,
+      onMetric: (metric) => invalidMetrics.push(metric),
+    });
+    const invalidExecution = {
+      request: { operation: 'profile.read' as const },
+      normalizePadlHub: identity,
+      normalizeViva: () => {
+        throw new Error('profile schema changed');
+      },
+    };
+
+    await expect(invalidExecutor.executeRead(invalidExecution)).rejects.toMatchObject({
+      code: 'DIRECT_VIVA_RESPONSE_INVALID',
+      operation: 'profile.read',
+    });
+    await expect(invalidExecutor.executeRead(invalidExecution)).rejects.toMatchObject({
+      code: 'DIRECT_VIVA_UNAVAILABLE',
+      operation: 'profile.read',
+    });
+    expect(invalidFetch).toHaveBeenCalledTimes(1);
+    expect(invalidMetrics.map((metric) => metric.outcome)).toEqual(['INVALID', 'CIRCUIT_OPEN']);
+
+    const validMetrics: Array<{ outcome: string }> = [];
+    const validExecutor = createClientTransportExecutor({
+      getRoutingPlan: vi.fn().mockResolvedValue(plan('MIXED_END_USER_READS')),
+      getVivaAccessToken: () => 'user-access-token',
+      refreshVivaAccessToken: vi.fn(),
+      executePadlHub: vi.fn(),
+      fetchImplementation: vi.fn<typeof fetch>().mockResolvedValue(Response.json({ ok: true })),
+      onMetric: (metric) => validMetrics.push(metric),
+    });
+    await expect(
+      validExecutor.executeRead({
+        request: { operation: 'profile.read' },
+        normalizePadlHub: identity,
+        normalizeViva: (payload) => payload,
+      }),
+    ).resolves.toEqual({ ok: true });
+    expect(validMetrics.map((metric) => metric.outcome)).toEqual(['SUCCESS']);
+  });
+
   it('keeps provider-id reads behind PadlHub even if a plan is misconfigured', async () => {
     const executePadlHub = vi.fn().mockResolvedValue({ source: 'padlhub' });
     const vivaFetch = vi.fn<typeof fetch>();

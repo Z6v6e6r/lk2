@@ -16,7 +16,11 @@ import {
   type TenantAuthBinding,
 } from './auth-service.js';
 import { MemoryAuthChallengeStore } from './challenge-store.js';
-import { MemoryVivaOAuthStateStore } from './oauth-state-store.js';
+import {
+  MemoryVivaOAuthStateStore,
+  type VivaOAuthState,
+  type VivaOAuthStateStore,
+} from './oauth-state-store.js';
 
 const config = loadConfig({
   APP_ENV: 'ci',
@@ -323,6 +327,7 @@ describe('provider-neutral authentication routes', () => {
       code: 'authorization-code',
       correlationId: 'oauth-complete-correlation',
       idempotencyKey: 'oauth-complete-idempotency',
+      oauthBrowserNonce: started.browserNonce,
     });
 
     const initialAccess = await service.issueVivaAccessToken({
@@ -354,7 +359,28 @@ describe('provider-neutral authentication routes', () => {
       userId: user.id,
       provider: 'yandex',
       correlationId: 'oauth-recovery-start-correlation',
+      idempotencyKey: 'oauth-recovery-start-idempotency',
     });
+    await expect(
+      service.startVivaOAuthRecovery({
+        tenantKey: binding.tenantKey,
+        tenantId: binding.tenantId,
+        userId: user.id,
+        provider: 'yandex',
+        correlationId: 'oauth-recovery-replay-correlation',
+        idempotencyKey: 'oauth-recovery-start-idempotency',
+      }),
+    ).resolves.toEqual(recovery);
+    await expect(
+      service.startVivaOAuthRecovery({
+        tenantKey: binding.tenantKey,
+        tenantId: binding.tenantId,
+        userId: user.id,
+        provider: 'vkid',
+        correlationId: 'oauth-recovery-conflict-correlation',
+        idempotencyKey: 'oauth-recovery-start-idempotency',
+      }),
+    ).rejects.toMatchObject({ code: 'IDEMPOTENCY_KEY_CONFLICT' });
     const recoveryState = new URL(recovery.redirectUrl).searchParams.get('state') ?? '';
     const beforeRecoveryAcceptances = repository.legalAcceptances;
     const beforeRecoveryUpserts = repository.identityUpserts;
@@ -364,10 +390,79 @@ describe('provider-neutral authentication routes', () => {
       code: 'recovery-authorization-code',
       correlationId: 'oauth-recovery-complete-correlation',
       idempotencyKey: 'oauth-recovery-complete-idempotency',
+      oauthBrowserNonce: recovery.browserNonce,
     });
     expect(completedRecovery.vivaRecovery).toBe(true);
     expect(repository.legalAcceptances).toBe(beforeRecoveryAcceptances);
     expect(repository.identityUpserts).toBe(beforeRecoveryUpserts);
+
+    const crossBrowserRecovery = await service.startVivaOAuthRecovery({
+      tenantKey: binding.tenantKey,
+      tenantId: binding.tenantId,
+      userId: user.id,
+      provider: 'yandex',
+      correlationId: 'oauth-recovery-cross-browser-start',
+      idempotencyKey: 'oauth-recovery-cross-browser-idempotency',
+    });
+    await expect(
+      service.completeVivaOAuth({
+        tenantKey: binding.tenantKey,
+        state: new URL(crossBrowserRecovery.redirectUrl).searchParams.get('state') ?? '',
+        code: 'cross-browser-authorization-code',
+        correlationId: 'oauth-recovery-cross-browser-complete',
+        idempotencyKey: 'oauth-recovery-cross-browser-complete-idempotency',
+      }),
+    ).rejects.toMatchObject({ code: 'AUTH_OAUTH_BROWSER_MISMATCH' });
+
+    const legacyState = {
+      state: 'pre-browser-binding-state',
+      tenantKey: binding.tenantKey,
+      provider: 'yandex',
+      codeVerifier: 'pre-browser-binding-verifier',
+      publicOfferAccepted: true,
+      personalDataPolicyAccepted: true,
+      publicOfferVersion: oauthConfig.PUBLIC_OFFER_VERSION,
+      personalDataPolicyVersion: oauthConfig.PERSONAL_DATA_POLICY_VERSION,
+      recoveryUserId: user.id,
+    } as VivaOAuthState;
+    await stateStore.put(legacyState, oauthConfig.AUTH_CHALLENGE_TTL_SECONDS);
+    await expect(
+      service.completeVivaOAuth({
+        tenantKey: binding.tenantKey,
+        state: legacyState.state,
+        code: 'pre-browser-binding-code',
+        correlationId: 'pre-browser-binding-callback',
+        idempotencyKey: 'pre-browser-binding-idempotency',
+        oauthBrowserNonce: 'untrusted-pre-release-nonce',
+      }),
+    ).rejects.toMatchObject({ code: 'AUTH_OAUTH_BROWSER_MISMATCH' });
+
+    const mismatchedStateStore = {
+      take: () =>
+        Promise.resolve({
+          ...legacyState,
+          state: 'stored-state-that-does-not-match-the-callback',
+          browserNonceHash: 'b'.repeat(64),
+        }),
+    } as unknown as VivaOAuthStateStore;
+    const mismatchedStateService = new AuthService({
+      config: oauthConfig,
+      repository,
+      challengeStore: new MemoryAuthChallengeStore(),
+      providers: new Map([['VIVA', provider]]),
+      vivaOAuthProvider: oauthProvider,
+      vivaOAuthStateStore: mismatchedStateStore,
+    });
+    await expect(
+      mismatchedStateService.completeVivaOAuth({
+        tenantKey: binding.tenantKey,
+        state: 'callback-state',
+        code: 'mismatched-state-code',
+        correlationId: 'mismatched-state-callback',
+        idempotencyKey: 'mismatched-state-idempotency',
+        oauthBrowserNonce: 'untrusted-mismatched-state-nonce',
+      }),
+    ).rejects.toMatchObject({ code: 'AUTH_CODE_EXPIRED' });
 
     repository.setCurrentLegalAcceptances(false);
     await expect(
@@ -377,8 +472,127 @@ describe('provider-neutral authentication routes', () => {
         userId: user.id,
         provider: 'yandex',
         correlationId: 'oauth-recovery-stale-legal-correlation',
+        idempotencyKey: 'oauth-recovery-stale-legal-idempotency',
       }),
     ).rejects.toMatchObject({ code: 'LEGAL_ACCEPTANCE_REQUIRED' });
+  });
+
+  it('binds OAuth callback session issuance to the initiating browser cookie', async () => {
+    const oauthConfig = loadConfig({
+      APP_ENV: 'ci',
+      DATABASE_URL: 'postgresql://phub:test@localhost:5432/phub',
+      REDIS_URL: 'redis://localhost:6379',
+      RABBITMQ_URL: 'amqp://phub:test@localhost:5672',
+      JWT_ISSUER: 'phub-identity',
+      JWT_AUDIENCE: 'phub-api',
+      JWT_ACCESS_SECRET: 'test-access-secret-at-least-32-characters',
+      JWT_REFRESH_SECRET: 'test-refresh-secret-at-least-32-characters',
+      VIVA_MODE: 'sandbox',
+      VIVA_OAUTH_ENABLED: 'true',
+      VIVA_OAUTH_REDIRECT_URI:
+        'https://api.example.test/user/api/v1/local-padel/auth/viva/callback',
+      VIVA_OAUTH_SUCCESS_REDIRECT_URL: 'https://app.example.test/',
+      VIVA_DELEGATION_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString('base64url'),
+    });
+    const authService = new AuthService({
+      config: oauthConfig,
+      repository: new FakeRepository(),
+      challengeStore: new MemoryAuthChallengeStore(),
+      providers: new Map([['VIVA', provider]]),
+      vivaOAuthProvider: oauthProvider,
+      vivaOAuthStateStore: new MemoryVivaOAuthStateStore(),
+    });
+    const app = await buildApp({
+      config: oauthConfig,
+      logger: createLogger('api-viva-oauth-browser-binding-test', 'silent'),
+      authService,
+    });
+    apps.push(app);
+
+    const startOAuth = (key: string) =>
+      app.inject({
+        method: 'POST',
+        url: '/user/api/v1/local-padel/auth/viva/authorize',
+        headers: { 'idempotency-key': key },
+        payload: {
+          provider: 'yandex',
+          acceptance: { publicOfferAccepted: true, personalDataPolicyAccepted: true },
+        },
+      });
+    const firstStart = await startOAuth('viva-oauth-browser-binding-0001');
+    const firstState = new URL(
+      firstStart.json<{ redirectUrl: string }>().redirectUrl,
+    ).searchParams.get('state');
+    expect(firstStart.statusCode).toBe(200);
+    expect(firstStart.headers['cache-control']).toBe('no-store');
+
+    const crossBrowserCallback = await app.inject({
+      method: 'GET',
+      url: `/user/api/v1/local-padel/auth/viva/callback?state=${encodeURIComponent(firstState ?? '')}&code=cross-browser-code`,
+    });
+    expect(crossBrowserCallback.statusCode).toBe(401);
+    expect(crossBrowserCallback.json()).toMatchObject({ code: 'AUTH_OAUTH_BROWSER_MISMATCH' });
+    expect(String(crossBrowserCallback.headers['set-cookie'] ?? '')).not.toContain('phub_refresh=');
+
+    const secondStart = await startOAuth('viva-oauth-browser-binding-0002');
+    const secondState = new URL(
+      secondStart.json<{ redirectUrl: string }>().redirectUrl,
+    ).searchParams.get('state');
+    const startCookies = Array.isArray(secondStart.headers['set-cookie'])
+      ? secondStart.headers['set-cookie']
+      : [secondStart.headers['set-cookie']];
+    const browserCookie = startCookies
+      .find((value) => value?.startsWith('phub_oauth_browser_'))
+      ?.split(';')[0];
+    expect(browserCookie).toBeTruthy();
+    const browserCookieHeader = startCookies.find((value) =>
+      value?.startsWith('phub_oauth_browser_'),
+    );
+    expect(browserCookieHeader).toContain('HttpOnly');
+    expect(browserCookieHeader).toContain('SameSite=Lax');
+    expect(browserCookieHeader).toContain('Path=/user/api/v1/local-padel/auth/viva/callback');
+
+    const sameBrowserCallback = await app.inject({
+      method: 'GET',
+      url: `/user/api/v1/local-padel/auth/viva/callback?state=${encodeURIComponent(secondState ?? '')}&code=same-browser-code`,
+      headers: { cookie: browserCookie ?? '' },
+    });
+    const callbackCookies = Array.isArray(sameBrowserCallback.headers['set-cookie'])
+      ? sameBrowserCallback.headers['set-cookie']
+      : [sameBrowserCallback.headers['set-cookie']];
+    expect(sameBrowserCallback.statusCode).toBe(302);
+    expect(callbackCookies.some((value) => value?.startsWith('phub_refresh='))).toBe(true);
+    expect(
+      callbackCookies.some(
+        (value) => value?.startsWith('phub_oauth_browser_') && value.includes('Max-Age=0'),
+      ),
+    ).toBe(true);
+
+    const concurrentStarts = await Promise.all([
+      startOAuth('viva-oauth-browser-binding-0003'),
+      startOAuth('viva-oauth-browser-binding-0004'),
+    ]);
+    const concurrent = concurrentStarts.map((response) => {
+      const state = new URL(response.json<{ redirectUrl: string }>().redirectUrl).searchParams.get(
+        'state',
+      );
+      const cookies = Array.isArray(response.headers['set-cookie'])
+        ? response.headers['set-cookie']
+        : [response.headers['set-cookie']];
+      return {
+        state,
+        cookie: cookies.find((value) => value?.startsWith('phub_oauth_browser_'))?.split(';')[0],
+      };
+    });
+    for (const flow of [...concurrent].reverse()) {
+      const callback = await app.inject({
+        method: 'GET',
+        url: `/user/api/v1/local-padel/auth/viva/callback?state=${encodeURIComponent(flow.state ?? '')}&code=concurrent-browser-code`,
+        headers: { cookie: flow.cookie ?? '' },
+      });
+      expect(callback.statusCode).toBe(302);
+      expect(String(callback.headers['set-cookie'])).toContain('phub_refresh=');
+    }
   });
 
   it('bootstraps mixed OAuth only through an already-linked issuer and subject', async () => {
@@ -440,6 +654,7 @@ describe('provider-neutral authentication routes', () => {
       code: 'authorization-code',
       correlationId: 'mixed-oauth-complete-correlation',
       idempotencyKey: 'mixed-oauth-complete-idempotency',
+      oauthBrowserNonce: started.browserNonce,
     });
 
     expect(completed.user.id).toBe(user.id);
@@ -507,6 +722,7 @@ describe('provider-neutral authentication routes', () => {
         code: 'authorization-code',
         correlationId: 'unlinked-oauth-complete-correlation',
         idempotencyKey: 'unlinked-oauth-complete-idempotency',
+        oauthBrowserNonce: started.browserNonce,
       }),
     ).rejects.toMatchObject({ code: 'AUTH_IDENTITY_LINK_REQUIRED' });
     expect(repository.identityUpserts).toBe(0);

@@ -34,7 +34,7 @@ const enabledEnvironment = {
 } as const;
 
 describe('client routing plan', () => {
-  it('requires the global gate, tenant mode, user delegation and supported client together', () => {
+  it('requires the global gate, tenant policy, provider binding and supported client together', () => {
     const disabledConfig = loadConfig(baseEnvironment);
     expect(canUseDirectViva({ config: disabledConfig, stored, platform: 'web' })).toBe(false);
 
@@ -53,7 +53,7 @@ describe('client routing plan', () => {
         stored: { ...stored, delegationReady: false },
         platform: 'web',
       }),
-    ).toBe(false);
+    ).toBe(true);
     expect(canUseDirectViva({ config: enabledConfig, stored, platform: 'cup-admin' })).toBe(false);
   });
 
@@ -93,7 +93,7 @@ describe('client routing plan', () => {
     expect(JSON.stringify(result)).not.toContain('keyVersion');
   });
 
-  it('downgrades to PadlHub-only when any direct-read precondition is absent', () => {
+  it('keeps the direct route visible when the delegation needs recovery', () => {
     const config = loadConfig(enabledEnvironment);
     const result = buildClientRoutingPlan({
       config,
@@ -101,11 +101,13 @@ describe('client routing plan', () => {
       platform: 'android',
     });
 
-    expect(result.mode).toBe('PADLHUB_ONLY');
-    expect(result.directViva).toBeUndefined();
-    expect(result.operations.every((operation) => operation.transport === 'PADLHUB_API')).toBe(
-      true,
-    );
+    expect(result.mode).toBe('MIXED_END_USER_READS');
+    expect(result.directViva?.providerTenantKey).toBe('iSkq6G');
+    expect(result.operations).toContainEqual({
+      operation: 'profile.read',
+      transport: 'DIRECT_VIVA',
+      fallback: 'UNAVAILABLE',
+    });
   });
 
   it('fails closed when storage contains a read whose provider contract is not ready', () => {

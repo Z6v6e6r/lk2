@@ -52,6 +52,29 @@ the audited routing-plan procedure in
 7. Record release, actor, tenant, routing revision and correlation IDs. Monitor OAuth callback errors,
    delegation refresh failures, direct-route errors and reconciliation lag throughout the soak window.
 
+### Roll out browser-bound OAuth state
+
+OAuth starts created by the browser-binding release use the versioned Redis namespace
+`phub:auth:v2:viva-oauth:`. It does not share the legacy `phub:auth:viva-oauth:` prefix. This
+boundary is deliberate: an older API node cannot consume a new
+state and therefore cannot bypass the initiating-browser check during a sequential rollout.
+
+1. Deploy the exact API and web image pair proven in staging. Do not deploy the API change without
+   the SDK change that sends browser credentials on both OAuth-start requests.
+2. Roll API nodes sequentially and verify readiness after each node. A flow started on the previous
+   release may fail closed with `AUTH_OAUTH_BROWSER_MISMATCH` on a new callback node; ask the user to
+   start authentication again. Never fall back to accepting a state without its browser cookie.
+3. After the last old API node is drained, wait through the configured
+   `AUTH_CHALLENGE_TTL_SECONDS` window (60-900 seconds) before declaring the old unbound state cohort
+   expired. Monitor `AUTH_OAUTH_BROWSER_MISMATCH`, `AUTH_CODE_EXPIRED` and callback success rates.
+4. In an authenticated browser, force `VIVA_REAUTH_REQUIRED`, verify that the recovery start sets a
+   state-scoped `phub_oauth_browser_{digest}` cookie, the callback clears only that state's cookie, a
+   PadlHub refresh cookie is issued, and the original internal route is restored. Start two flows in
+   separate tabs and complete them in reverse order to prove neither binding is overwritten. Repeat
+   from a different browser without the matching cookie and prove that no refresh cookie is issued.
+5. A rollback to an older API cannot consume v2 states. Treat the resulting
+   `AUTH_CODE_EXPIRED` as a bounded restart requirement; do not move or rewrite Redis state keys.
+
 ### Emergency disable / switch to PadlHub
 
 1. Set the tenant plan to `PADLHUB_ONLY`; if a broader incident exists, disable
