@@ -45,7 +45,12 @@ point from the existing profile summary; it does not invent earlier dates or lev
 opens `/profile/level-history` as a separate protected page and plots date on X and level on Y.
 Historical game imports may initialize a snapshot-only player summary, but they never overwrite
 `level_label` or `level_value` on an existing summary. In particular, activity-history backfill
-must not manufacture level-history points while replaying old Games snapshots.
+must not overwrite the current profile level while replaying old Games snapshots. Legacy import
+and roster-sync transactions declare transaction-local `LK_LEGACY_SNAPSHOT` provenance as a
+compatibility seam for a later history-trigger migration. That migration must not ship until every
+relevant API and worker instance sets the provenance marker and remains a safe rollback target.
+Until that second phase, initializing a previously missing snapshot-only summary may still create
+one technical baseline point at import time.
 
 ## Visibility tiers
 

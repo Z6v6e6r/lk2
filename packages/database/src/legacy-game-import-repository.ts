@@ -831,6 +831,11 @@ async function importOne(
   readonly projectionEventId: string;
 }> {
   return withTenantTransaction(pool, input.tenantId, async (client) => {
+    // Compatibility marker for a later trigger migration. It is harmless until that migration
+    // ships, and deploying it first keeps old/new application rollouts and rollback safe.
+    await client.query("select set_config('app.profile_level_history_origin', $1, true)", [
+      EXTERNAL_SYSTEM,
+    ]);
     await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
       `legacy-game-import:${input.tenantId}`,
     ]);
@@ -1342,6 +1347,10 @@ async function synchronizeOne(
   | { readonly outcome: 'bootstrapped' | 'unchanged' | 'conflict' | 'skipped' }
 > {
   return withTenantTransaction(pool, input.tenantId, async (client) => {
+    // Keep this marker in both legacy write paths before the database trigger begins consuming it.
+    await client.query("select set_config('app.profile_level_history_origin', $1, true)", [
+      EXTERNAL_SYSTEM,
+    ]);
     const mappings = await findMappings(
       client,
       input.tenantId,
