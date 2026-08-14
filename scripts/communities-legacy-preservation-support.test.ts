@@ -69,7 +69,16 @@ function validManifest(): CommunitiesLegacyPreservationManifest {
     sourceCheckpointDigest: digest('a'),
     snapshotConsistent: true as const,
     mapping,
-    writeRoutes: { total: 1, inventoryDigest: digest('2'), unknown: 0, duplicateHandlers: 0 },
+    writeRoutes: {
+      outcome: 'NODE_RED_WRITER_INVENTORY_COMPLETE' as const,
+      reportSha256: digest('9'),
+      sourceFlowSha256: digest('7'),
+      functionAllowlistSha256: digest('8'),
+      total: 1,
+      inventoryDigest: digest('2'),
+      unknown: 0,
+      duplicateHandlers: 0,
+    },
     collections: COMMUNITIES_LEGACY_REQUIRED_COLLECTIONS.map((name) => ({
       name,
       scanned: acceptedByCollection[name],

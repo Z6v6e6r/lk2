@@ -9,9 +9,11 @@ import {
   communitiesLegacyPreservationManifestSchema,
   trustedCommunitiesLegacyMappingBaselineSchema,
 } from './communities-legacy-preservation-support.js';
+import { communitiesLegacyWriterInventoryReportSchema } from './communities-legacy-writer-inventory-support.js';
 
 const MANIFEST_MAX_BYTES = 32 * 1024 * 1024;
 const BASELINE_MAX_BYTES = 64 * 1024;
+const WRITER_REPORT_MAX_BYTES = 1024 * 1024;
 const INPUT_ERROR = 'COMMUNITIES_LEGACY_PRESERVATION_INVALID_INPUT';
 const INTERNAL_ERROR = 'COMMUNITIES_LEGACY_PRESERVATION_INCONCLUSIVE';
 
@@ -36,14 +38,19 @@ function inputError(): never {
   throw new InputError();
 }
 
-function parseArguments(arguments_: readonly string[]): { manifest: string; baseline: string } {
+function parseArguments(arguments_: readonly string[]): {
+  manifest: string;
+  baseline: string;
+  writerReport: string;
+} {
   let manifest: string | undefined;
   let baseline: string | undefined;
+  let writerReport: string | undefined;
   for (let index = 0; index < arguments_.length; index += 1) {
     const flag = arguments_[index];
     const value = arguments_[index + 1];
     if (
-      (flag !== '--manifest' && flag !== '--baseline') ||
+      (flag !== '--manifest' && flag !== '--baseline' && flag !== '--writer-report') ||
       !value ||
       value.startsWith('--') ||
       !value.startsWith('/')
@@ -52,14 +59,17 @@ function parseArguments(arguments_: readonly string[]): { manifest: string; base
     if (flag === '--manifest') {
       if (manifest) inputError();
       manifest = value;
-    } else {
+    } else if (flag === '--baseline') {
       if (baseline) inputError();
       baseline = value;
+    } else {
+      if (writerReport) inputError();
+      writerReport = value;
     }
     index += 1;
   }
-  if (!manifest || !baseline) inputError();
-  return { manifest, baseline };
+  if (!manifest || !baseline || !writerReport) inputError();
+  return { manifest, baseline, writerReport };
 }
 
 function identity(stat: {
@@ -149,28 +159,61 @@ async function readPrivateRegularFile(path: string, maxBytes: number): Promise<B
 export async function runCommunitiesLegacyPreservationVerification(
   arguments_: readonly string[],
   requiredBaselineSha256: string | undefined,
+  requiredWriterReportSha256: string | undefined,
 ): Promise<CliResult> {
   try {
     if (!requiredBaselineSha256 || !/^[0-9a-f]{64}$/.test(requiredBaselineSha256)) inputError();
-    const { manifest: manifestPath, baseline: baselinePath } = parseArguments(arguments_);
-    const [manifestBytes, baselineBytes] = await Promise.all([
+    if (!requiredWriterReportSha256 || !/^[0-9a-f]{64}$/.test(requiredWriterReportSha256))
+      inputError();
+    const {
+      manifest: manifestPath,
+      baseline: baselinePath,
+      writerReport: writerReportPath,
+    } = parseArguments(arguments_);
+    const [manifestBytes, baselineBytes, writerReportBytes] = await Promise.all([
       readPrivateRegularFile(manifestPath, MANIFEST_MAX_BYTES),
       readPrivateRegularFile(baselinePath, BASELINE_MAX_BYTES),
+      readPrivateRegularFile(writerReportPath, WRITER_REPORT_MAX_BYTES),
     ]);
     const actualBaselineSha256 = createHash('sha256').update(baselineBytes).digest();
+    const actualWriterReportSha256 = createHash('sha256').update(writerReportBytes).digest();
     if (!timingSafeEqual(actualBaselineSha256, Buffer.from(requiredBaselineSha256, 'hex')))
+      inputError();
+    if (!timingSafeEqual(actualWriterReportSha256, Buffer.from(requiredWriterReportSha256, 'hex')))
       inputError();
     let manifestPayload: unknown;
     let baselinePayload: unknown;
+    let writerReportPayload: unknown;
     try {
       manifestPayload = JSON.parse(manifestBytes.toString('utf8')) as unknown;
       baselinePayload = JSON.parse(baselineBytes.toString('utf8')) as unknown;
+      writerReportPayload = JSON.parse(writerReportBytes.toString('utf8')) as unknown;
     } catch {
       inputError();
     }
     const manifest = communitiesLegacyPreservationManifestSchema.safeParse(manifestPayload);
     const baseline = trustedCommunitiesLegacyMappingBaselineSchema.safeParse(baselinePayload);
-    if (!manifest.success || !baseline.success) inputError();
+    const writerReport =
+      communitiesLegacyWriterInventoryReportSchema.safeParse(writerReportPayload);
+    if (!manifest.success || !baseline.success || !writerReport.success) inputError();
+    const reportSha256 = actualWriterReportSha256.toString('hex');
+    if (
+      writerReport.data.outcome !== 'NODE_RED_WRITER_INVENTORY_COMPLETE' ||
+      writerReport.data.total < 1 ||
+      writerReport.data.unknown !== 0 ||
+      Object.values(writerReport.data.unknownByReason).some((count) => count !== 0) ||
+      writerReport.data.duplicateHandlers !== 0 ||
+      writerReport.data.blockers.length !== 0 ||
+      manifest.data.writeRoutes.reportSha256 !== reportSha256 ||
+      manifest.data.writeRoutes.sourceFlowSha256 !== writerReport.data.sourceFlowSha256 ||
+      manifest.data.writeRoutes.functionAllowlistSha256 !==
+        writerReport.data.functionAllowlistSha256 ||
+      manifest.data.writeRoutes.total !== writerReport.data.total ||
+      manifest.data.writeRoutes.inventoryDigest !== writerReport.data.inventoryDigest ||
+      manifest.data.writeRoutes.unknown !== writerReport.data.unknown ||
+      manifest.data.writeRoutes.duplicateHandlers !== writerReport.data.duplicateHandlers
+    )
+      inputError();
     const report = buildCommunitiesLegacyPreservationReport(manifest.data, baseline.data);
     return {
       exitCode: report.outcome === 'INVENTORY_STRUCTURALLY_CONSISTENT' ? 0 : 1,
@@ -187,6 +230,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
   const result = await runCommunitiesLegacyPreservationVerification(
     process.argv.slice(2),
     process.env.COMMUNITIES_LEGACY_BASELINE_SHA256_REQUIRED,
+    process.env.COMMUNITIES_LEGACY_WRITER_REPORT_SHA256_REQUIRED,
   );
   if (result.stdout) process.stdout.write(result.stdout);
   if (result.stderr) process.stderr.write(result.stderr);
