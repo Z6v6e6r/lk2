@@ -803,6 +803,12 @@ describe('provider-neutral authentication routes', () => {
     expect(verifyResponse.json()).toMatchObject({
       tokenType: 'Bearer',
       user: { id: user.id, displayName: user.displayName },
+      context: {
+        runtimeCapabilities: {
+          communityDirectInvites: false,
+          communityRealtime: false,
+        },
+      },
     });
     const verifiedBody = verifyResponse.json<{
       user: Record<string, unknown>;
@@ -820,6 +826,9 @@ describe('provider-neutral authentication routes', () => {
       communityReadFeed: false,
       communityReadChat: false,
       communityReadRating: false,
+      communityCanonical: false,
+      communityDirectInvites: false,
+      communityRealtime: false,
     });
     expect(repository.phoneLegalAcceptances).toBe(1);
     expect(verifyResponse.body).not.toContain('refreshToken');
@@ -858,6 +867,14 @@ describe('provider-neutral authentication routes', () => {
       },
     });
     expect(refreshResponse.statusCode).toBe(200);
+    expect(refreshResponse.json()).toMatchObject({
+      context: {
+        runtimeCapabilities: {
+          communityDirectInvites: false,
+          communityRealtime: false,
+        },
+      },
+    });
     expect(refreshResponse.body).not.toContain('refreshToken');
     const nextCookie = String(refreshResponse.headers['set-cookie']).split(';')[0];
     expect(nextCookie).not.toBe(firstCookie);

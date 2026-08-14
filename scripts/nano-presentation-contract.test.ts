@@ -33,6 +33,16 @@ const clientAssistedVerification = repositoryFile('deploy/jetson/verify-client-a
 const cupVerification = repositoryFile('deploy/jetson/verify-cup-integrations.sh');
 
 describe('Nano presentation release contract', () => {
+  it('keeps the legacy Communities pilot worker stopped without probing its readiness', () => {
+    expect(stagingWorkflow).toContain(
+      'if [ "$deployment_profile" = COMMUNITIES_LEGACY_READ_ONLY ]; then',
+    );
+    expect(stagingWorkflow).toContain('compose stop worker realtime');
+    expect(stagingWorkflow).toMatch(
+      /if \[ "\$deployment_profile" != COMMUNITIES_LEGACY_READ_ONLY \]; then\s+compose exec -T worker node -e/,
+    );
+  });
+
   it('requires an explicit main-branch confirmation for deploy while preserving diagnostics', () => {
     const validateJob = stagingWorkflow.match(
       / {2}validate-request:\n([\s\S]*?)\n {2}diagnose-home:/,
@@ -74,8 +84,9 @@ describe('Nano presentation release contract', () => {
     );
     expect(stagingWorkflow).toContain('Apply the audited complete user-access replacement');
     expect(stagingWorkflow).toContain("APPLY_USER_ACCESS) printf '%s\\n' 'access_apply=true'");
-    expect(buildGate).toContain('needs: validate-request');
+    expect(buildGate).toContain('needs: [validate-request, verify]');
     expect(buildGate).toContain("needs.validate-request.outputs.mode == 'deploy'");
+    expect(buildGate).toContain("needs.verify.result == 'success'");
     expect(deployGate).toContain('needs: [validate-request, build]');
     expect(deployGate).toContain('always()');
     expect(deployGate).toContain("needs.build.result == 'success'");

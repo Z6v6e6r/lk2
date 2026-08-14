@@ -9,6 +9,9 @@ import {
 import {
   checkDatabaseReady,
   createCommunityLegacyBridgeRepository,
+  createCommunityMemberCountProjectionRepository,
+  createCommunityEventRetentionRepository,
+  createCommunityMediaRepository,
   createDatabasePool,
   createGameRepository,
   createGameResultProjectionRepository,
@@ -23,6 +26,16 @@ import { connect } from 'amqplib';
 import Redis from 'ioredis';
 
 import { registerHomeProjectorConsumer } from './home-projector-consumer.js';
+import { isCanonicalCommunityWorkerEnabled } from './community-canonical-worker-capability.js';
+import { registerCommunityMemberCountProjectorConsumer } from './community-member-count-projector-consumer.js';
+import { runCommunityMemberCountReconciliationCycle } from './community-member-count-reconciler.js';
+import { runCommunityEventRetentionCycle } from './community-event-retention.js';
+import {
+  ClamAvCommunityMediaMalwareScanner,
+  MockCommunityMediaMalwareScanner,
+  S3CommunityMediaWorkerObjectStore,
+} from './community-media-processing.js';
+import { runCommunityMediaCycle } from './community-media-worker.js';
 import { registerCoreBrokerTopology } from './broker-topology.js';
 import { runGameLifecycleProcessManagerCycle } from './game-lifecycle-process-manager.js';
 import { registerGamesCardProjectorConsumer } from './games-card-projector-consumer.js';
@@ -31,6 +44,7 @@ import { registerCupRatingConsumer } from './cup-rating-consumer.js';
 import { CupRatingClient } from './cup-rating-client.js';
 import { S3GiftCertificateArtifactStore } from './gift-certificate-artifact-store.js';
 import { runGiftCertificateSandboxDeliveryBatch } from './gift-certificate-delivery.js';
+import { expireCommunityDirectInviteBatch } from './community-direct-invite-expiry.js';
 import { registerGiftCertificateIssuerConsumer } from './gift-certificate-issuer-consumer.js';
 import { registerLocationHomeProjectorConsumer } from './location-home-projector-consumer.js';
 import { registerNotificationProjectorConsumer } from './notification-projector-consumer.js';
@@ -68,6 +82,47 @@ const telemetry = startTelemetry({
 const pool = createDatabasePool(config.DATABASE_URL);
 const gameRepository = createGameRepository(pool);
 const gamesProcessManagerWorkerId = `games-process-manager-${randomUUID()}`;
+const COMMUNITY_DIRECT_INVITE_EXPIRY_INTERVAL_MS = 60_000;
+const COMMUNITY_DIRECT_INVITE_EXPIRY_BATCH_SIZE = 100;
+const COMMUNITY_MEMBER_COUNT_RECONCILIATION_INTERVAL_MS = 60_000;
+const COMMUNITY_MEMBER_COUNT_RECONCILIATION_MAX_AGE_MS = 24 * 60 * 60 * 1_000;
+const COMMUNITY_MEMBER_COUNT_RECONCILIATION_CANDIDATE_LIMIT = 10;
+const COMMUNITY_MEMBER_COUNT_RECONCILIATION_BATCH_SIZE = 250;
+const COMMUNITY_EVENT_RETENTION_INTERVAL_MS = 60_000;
+const COMMUNITY_EVENT_RETENTION_CANDIDATE_BATCH_SIZE = 20;
+const COMMUNITY_EVENT_RETENTION_EVENT_BATCH_SIZE = 1_000;
+const COMMUNITY_EVENT_RETENTION_LEASE_MS = 60_000;
+const canonicalCommunityWorkerEnabled = isCanonicalCommunityWorkerEnabled(
+  config.COMMUNITIES_READ_MODE,
+);
+const communityMemberCountRepository = canonicalCommunityWorkerEnabled
+  ? createCommunityMemberCountProjectionRepository(pool)
+  : undefined;
+const communityEventRetentionRepository = canonicalCommunityWorkerEnabled
+  ? createCommunityEventRetentionRepository(pool)
+  : undefined;
+const communityMediaWorkerId = `community-media-${randomUUID()}`;
+const communityMediaRuntime = config.COMMUNITY_MEDIA_ENABLED
+  ? {
+      repository: createCommunityMediaRepository(pool),
+      store: new S3CommunityMediaWorkerObjectStore({
+        endpoint: config.S3_ENDPOINT as string,
+        region: config.S3_REGION,
+        bucket: config.S3_BUCKET as string,
+        accessKey: config.S3_ACCESS_KEY as string,
+        secretKey: config.S3_SECRET_KEY as string,
+        forcePathStyle: config.S3_FORCE_PATH_STYLE,
+      }),
+      scanner:
+        config.COMMUNITY_MEDIA_SCAN_MODE === 'clamav'
+          ? new ClamAvCommunityMediaMalwareScanner({
+              host: config.COMMUNITY_MEDIA_CLAMAV_HOST as string,
+              port: config.COMMUNITY_MEDIA_CLAMAV_PORT,
+              timeoutMs: config.COMMUNITY_MEDIA_CLAMAV_TIMEOUT_MS,
+            })
+          : new MockCommunityMediaMalwareScanner(),
+    }
+  : undefined;
 const giftCertificateRuntime = config.GIFT_CERTIFICATE_ISSUANCE_ENABLED
   ? {
       repository: createGiftCertificateIssuanceRepository(pool),
@@ -186,6 +241,13 @@ await registerHomeProjectorConsumer({
   logger,
   ttlSeconds: config.HOME_PROJECTION_TTL_SECONDS,
 });
+if (communityMemberCountRepository) {
+  await registerCommunityMemberCountProjectorConsumer({
+    channel: consumerChannel,
+    repository: communityMemberCountRepository,
+    logger,
+  });
+}
 await registerLocationHomeProjectorConsumer({
   channel: consumerChannel,
   pool,
@@ -282,12 +344,20 @@ const handleHealthRequest = async (
     return;
   }
   if (request.url === '/health/ready') {
-    const [databaseReady, vivaSyncReady] = await Promise.all([
+    const [databaseReady, vivaSyncReady, communityMediaReady] = await Promise.all([
       checkDatabaseReady(pool),
       redis
         ? redis
             .ping()
             .then((result) => result === 'PONG')
+            .catch(() => false)
+        : Promise.resolve(true),
+      communityMediaRuntime
+        ? Promise.all([
+            communityMediaRuntime.store.checkReady(),
+            communityMediaRuntime.scanner.checkReady?.() ?? Promise.resolve(),
+          ])
+            .then(() => true)
             .catch(() => false)
         : Promise.resolve(true),
     ]);
@@ -296,6 +366,7 @@ const handleHealthRequest = async (
       database: databaseReady,
       rabbitmq: rabbitReady,
       vivaSync: vivaSyncReady,
+      communityMedia: communityMediaReady,
       forwardProgress: forwardProgress.ready,
     };
     response.statusCode = Object.values(checks).every(Boolean) ? 200 : 503;
@@ -401,6 +472,155 @@ const runOperationalMetricsCycle = async (): Promise<void> => {
   } finally {
     if (!shuttingDown) {
       setTimeout(() => void runOperationalMetricsCycle(), WORKER_OPERATIONAL_METRICS_INTERVAL_MS);
+    }
+  }
+};
+
+const runCommunityDirectInviteExpiryCycle = async (): Promise<void> => {
+  if (shuttingDown || !canonicalCommunityWorkerEnabled || !config.COMMUNITY_INVITES_ENABLED) return;
+  try {
+    const tenants = await pool.query<{ id: string }>(
+      'select id from identity.tenants where active = true',
+    );
+    for (const tenant of tenants.rows) {
+      await expireCommunityDirectInviteBatch({
+        pool,
+        logger,
+        tenantId: tenant.id,
+        batchSize: COMMUNITY_DIRECT_INVITE_EXPIRY_BATCH_SIZE,
+      });
+    }
+  } catch (error) {
+    logger.error({ error }, 'community direct invite expiry cycle failed');
+  } finally {
+    if (!shuttingDown) {
+      setTimeout(
+        () => void runCommunityDirectInviteExpiryCycle(),
+        COMMUNITY_DIRECT_INVITE_EXPIRY_INTERVAL_MS,
+      );
+    }
+  }
+};
+
+const runCommunityMemberCountReconciliation = async (): Promise<void> => {
+  if (shuttingDown || !communityMemberCountRepository) return;
+  try {
+    const tenants = await pool.query<{ id: string }>(
+      'select id from identity.tenants where active = true',
+    );
+    const reconcileBefore = new Date(
+      Date.now() - COMMUNITY_MEMBER_COUNT_RECONCILIATION_MAX_AGE_MS,
+    ).toISOString();
+    for (const tenant of tenants.rows) {
+      await runCommunityMemberCountReconciliationCycle({
+        repository: communityMemberCountRepository,
+        logger,
+        tenantId: tenant.id,
+        reconcileBefore,
+        candidateLimit: COMMUNITY_MEMBER_COUNT_RECONCILIATION_CANDIDATE_LIMIT,
+        batchSize: COMMUNITY_MEMBER_COUNT_RECONCILIATION_BATCH_SIZE,
+      });
+    }
+  } catch (error) {
+    logger.error({ error }, 'community member-count reconciliation cycle failed');
+  } finally {
+    if (!shuttingDown) {
+      setTimeout(
+        () => void runCommunityMemberCountReconciliation(),
+        COMMUNITY_MEMBER_COUNT_RECONCILIATION_INTERVAL_MS,
+      );
+    }
+  }
+};
+
+const runCommunityEventRetention = async (): Promise<void> => {
+  if (shuttingDown || !communityEventRetentionRepository) return;
+  const startedAt = Date.now();
+  let purged = 0;
+  let claimLost = 0;
+  let failures = 0;
+  try {
+    const tenants = await pool.query<{ id: string }>(
+      'select id from identity.tenants where active = true',
+    );
+    for (const tenant of tenants.rows) {
+      const result = await runCommunityEventRetentionCycle({
+        repository: communityEventRetentionRepository,
+        logger,
+        tenantId: tenant.id,
+        candidateBatchSize: COMMUNITY_EVENT_RETENTION_CANDIDATE_BATCH_SIZE,
+        eventBatchSize: COMMUNITY_EVENT_RETENTION_EVENT_BATCH_SIZE,
+        leaseMs: COMMUNITY_EVENT_RETENTION_LEASE_MS,
+      });
+      purged += result.purged;
+      claimLost += result.claimLost;
+      failures += result.failures;
+    }
+  } catch (error) {
+    failures += 1;
+    logger.error({ error }, 'community event retention cycle failed');
+  } finally {
+    workerMetrics.recordCommunityEventRetentionCycle(
+      purged,
+      claimLost,
+      failures,
+      Date.now() - startedAt,
+    );
+    if (!shuttingDown) {
+      setTimeout(() => void runCommunityEventRetention(), COMMUNITY_EVENT_RETENTION_INTERVAL_MS);
+    }
+  }
+};
+
+const runCommunityMedia = async (): Promise<void> => {
+  if (shuttingDown || !communityMediaRuntime) return;
+  const startedAt = Date.now();
+  const aggregate = {
+    expired: 0,
+    scanned: 0,
+    rejected: 0,
+    scanRetried: 0,
+    scanFailed: 0,
+    gcCompleted: 0,
+    gcRetried: 0,
+    gcDead: 0,
+  };
+  let failures = 0;
+  try {
+    const tenants = await pool.query<{ id: string }>(
+      'select id from identity.tenants where active = true',
+    );
+    for (const tenant of tenants.rows) {
+      const result = await runCommunityMediaCycle({
+        repository: communityMediaRuntime.repository,
+        store: communityMediaRuntime.store,
+        scanner: communityMediaRuntime.scanner,
+        logger,
+        tenantId: tenant.id,
+        workerId: communityMediaWorkerId,
+        batchSize: config.COMMUNITY_MEDIA_BATCH_SIZE,
+        scanMaxAttempts: config.COMMUNITY_MEDIA_SCAN_MAX_ATTEMPTS,
+        gcMaxAttempts: config.COMMUNITY_MEDIA_GC_MAX_ATTEMPTS,
+      });
+      if (Object.values(result).some((value) => value > 0)) {
+        logger.info({ tenantId: tenant.id, result }, 'community media cycle completed');
+      }
+      aggregate.expired += result.expired;
+      aggregate.scanned += result.scanned;
+      aggregate.rejected += result.rejected;
+      aggregate.scanRetried += result.scanRetried;
+      aggregate.scanFailed += result.scanFailed;
+      aggregate.gcCompleted += result.gcCompleted;
+      aggregate.gcRetried += result.gcRetried;
+      aggregate.gcDead += result.gcDead;
+    }
+  } catch (error) {
+    failures += 1;
+    logger.error({ error }, 'community media cycle failed');
+  } finally {
+    workerMetrics.recordCommunityMediaCycle(aggregate, failures, Date.now() - startedAt);
+    if (!shuttingDown) {
+      setTimeout(() => void runCommunityMedia(), config.COMMUNITY_MEDIA_POLL_INTERVAL_MS);
     }
   }
 };
@@ -669,3 +889,9 @@ void runPromotionSyncCycle();
 void runLegacyGamesRosterSync();
 void runWebPushCycle();
 void runGiftCertificateDeliveryCycle();
+void runCommunityDirectInviteExpiryCycle();
+if (canonicalCommunityWorkerEnabled) {
+  void runCommunityMemberCountReconciliation();
+  void runCommunityEventRetention();
+}
+void runCommunityMedia();

@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: PadlHub User API
-  version: 1.17.0
+  version: 1.22.0
   description: Canonical user-facing API. Public identifiers are PadlHub UUIDs.
   license:
     name: Proprietary
@@ -25,6 +25,10 @@ tags:
     description: Published PadlHub location cards and detail views.
   - name: messaging
     description: Tenant-gated direct conversations with ordered HTTP history and recoverable realtime hints.
+  - name: communities
+    description: Authenticated canonical community membership reads and commands.
+  - name: realtime
+    description: Short-lived one-time tickets for the PadlHub WebSocket gateway.
 paths:
   /{tenantKey}/messaging/realtime-ticket:
     parameters:
@@ -2023,6 +2027,1579 @@ paths:
           $ref: ../../common/components.yaml#/components/responses/NotFound
         '503':
           $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/realtime/tickets:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+    post:
+      tags: [realtime]
+      operationId: issueRealtimeTicket
+      summary: Issue a one-time session-bound WebSocket ticket
+      description: >-
+        Returns a 30-second JWT that is consumed atomically on the first authentication attempt.
+        The access-token session remains authoritative and community subscriptions are authorized
+        separately by canonical PostgreSQL membership. The endpoint is staging-gated until durable
+        sequence recovery and identifier-only fan-out are implemented and accepted.
+      responses:
+        '200':
+          description: One-time WebSocket ticket. The response must never be cached or logged.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RealtimeTicket'
+        '401':
+          $ref: '#/components/responses/AuthenticationRejected'
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/communities:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+    get:
+      tags: [communities]
+      operationId: discoverCommunities
+      summary: Discover visible canonical communities
+      description: |
+        Returns only ACTIVE PUBLIC and LISTED_PRIVATE communities for the authenticated viewer.
+        PUBLIC items contain allowlisted public detail fields. LISTED_PRIVATE items use a strict
+        minimal schema without description or member count. HIDDEN communities never appear.
+        Search may match a PUBLIC description, but LISTED_PRIVATE descriptions are neither searched
+        nor returned. The opaque cursor is bound to the normalized search query.
+      parameters:
+        - name: query
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 2
+            maxLength: 80
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 20
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 16
+            maxLength: 1024
+      responses:
+        '200':
+          description: One bounded page of field-filtered discoverable communities.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommunityDiscoveryPage'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+    post:
+      tags: [communities]
+      operationId: createCommunity
+      summary: Create a canonical community owned by the authenticated user
+      description: |
+        Requires the `communities.create` capability. The actor and tenant are derived from the
+        verified PadlHub session. The User API never accepts a quota override, role, owner ID or
+        source-system selector. The server atomically creates the ACTIVE community, its single
+        ACTIVE OWNER membership, idempotency result, audit record and `community.created.v1` event.
+        Without a separately authorized CUP override, a user may own at most three ACTIVE
+        communities and may create at most one community in any rolling 24-hour period.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CommunityCreateRequest'
+      responses:
+        '201':
+          description: Canonical community state. A replay returns the originally committed state.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+            X-Idempotent-Replayed:
+              description: Whether the response was replayed from the stored command result.
+              schema:
+                type: boolean
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommunityCreatedState'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '409':
+          $ref: '#/components/responses/CommandConflict'
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/communities/{communityId}:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - name: communityId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [communities]
+      operationId: getCommunityDetail
+      summary: Load viewer-filtered canonical community detail
+      description: |
+        PUBLIC returns allowlisted public detail. LISTED_PRIVATE returns only its minimal card until
+        the viewer has ACTIVE membership. HIDDEN is indistinguishable from a missing resource and
+        returns 404 unless the viewer has ACTIVE membership. Legacy invite codes and arbitrary
+        invite query parameters are rejected. A valid DIRECT invite can reveal only its dedicated,
+        authenticated minimal preview through the token-in-body endpoint below.
+      responses:
+        '200':
+          description: Detail filtered by current canonical membership and visibility.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommunityDetailView'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/communities/{communityId}/members/me:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - name: communityId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [communities]
+      operationId: getMyCommunityMembershipState
+      summary: Load the authenticated user's canonical membership and pending request state
+      description: |
+        The target user and tenant are always derived from the verified PadlHub session. The result
+        contains only the caller's own state and the current server-derived join action. For HIDDEN,
+        an existing canonical membership or pending request may return that own state without any
+        community detail; a caller with neither remains indistinguishable from a missing resource.
+        Signed invite preview is outside this endpoint.
+      responses:
+        '200':
+          description: Current own membership state and any pending JOIN or REJOIN request.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommunityOwnMembershipState'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/communities/{communityId}/members/me/join:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - name: communityId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [communities]
+      operationId: joinOrRequestCommunityMembership
+      summary: Join immediately or create a canonical JOIN or REJOIN request
+      description: |
+        The actor, tenant, role and target membership are derived server-side. The client cannot
+        choose ACTIVE versus PENDING: canonical join policy and current membership/request state
+        determine whether this command activates membership or creates a durable JOIN/REJOIN
+        request. REMOVED may request rejoin; BANNED and INVITE_ONLY remain fail-closed. Membership,
+        request, idempotency result, audit and outbox changes commit atomically.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CommunityMembershipRevisionRequest'
+      responses:
+        '200':
+          description: Updated own state. Replays return the originally committed result.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+            X-Idempotent-Replayed:
+              description: Whether this result was replayed from stored command state.
+              schema:
+                type: boolean
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommunityOwnMembershipState'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/CommandConflict'
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/communities/{communityId}/join-requests/{requestId}/cancel:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - name: communityId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: requestId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [communities]
+      operationId: cancelMyCommunityJoinRequest
+      summary: Cancel the authenticated user's pending JOIN or REJOIN request
+      description: |
+        The request must belong to the JWT subject in the requested tenant and community. The
+        browser cannot provide an actor, target user, role or request status. Both aggregate
+        revisions are checked before the pending request is cancelled atomically with audit,
+        idempotency and outbox state.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CommunityJoinRequestCancelRequest'
+      responses:
+        '200':
+          description: Own state after cancellation, or the stored idempotent replay.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+            X-Idempotent-Replayed:
+              description: Whether this result was replayed from stored command state.
+              schema:
+                type: boolean
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommunityOwnMembershipState'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/CommandConflict'
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/communities/{communityId}/members/me/leave:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - name: communityId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [communities]
+      operationId: leaveCommunity
+      summary: Leave an ACTIVE community membership
+      description: |
+        The JWT subject can leave only their own ACTIVE membership. OWNER must transfer ownership
+        first and receives `COMMUNITY_OWNER_TRANSFER_REQUIRED`. Actor, user, role and target status
+        are never accepted from the request body. The revision-checked state change, idempotency
+        result, audit and outbox event commit atomically.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CommunityMembershipRevisionRequest'
+      responses:
+        '200':
+          description: Own membership state after leaving, or the stored idempotent replay.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+            X-Idempotent-Replayed:
+              description: Whether this result was replayed from stored command state.
+              schema:
+                type: boolean
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommunityOwnMembershipState'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/CommandConflict'
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/communities/{communityId}/feed:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/CommunityId'
+    get:
+      tags: [communities]
+      operationId: listCommunityFeed
+      summary: Read one stable reverse-chronological community feed snapshot
+      parameters:
+        - $ref: '#/components/parameters/CommunityContentLimit'
+        - $ref: '#/components/parameters/CommunityContentCursor'
+      responses:
+        '200':
+          description: Published canonical posts at one watermark.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommunityFeedPage'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/communities/{communityId}/events:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/CommunityId'
+    get:
+      tags: [communities]
+      operationId: recoverCommunityEvents
+      summary: Recover identifier-only community events after a durable sequence
+      description: |
+        Requires the authenticated user's current ACTIVE membership. PostgreSQL is authoritative;
+        WebSocket and RabbitMQ delivery are hints. A retained-gap conflict instructs the client to
+        reload canonical feed/comment state before resuming from the latest sequence.
+      parameters:
+        - name: afterSequence
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+      responses:
+        '200':
+          description: Ordered events after the supplied sequence, bounded by a captured head.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommunityRealtimeEventPage'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          description: Cursor is ahead of the head or older than retained history.
+          headers:
+            X-Community-Latest-Sequence:
+              schema:
+                type: integer
+                minimum: 0
+            X-Community-Retained-From-Sequence:
+              description: Present only when the requested gap has expired.
+              schema:
+                type: integer
+                minimum: 1
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/CommunityEventGapExpiredResponse'
+                  - $ref: ../../common/components.yaml#/components/schemas/ApiError
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/communities/{communityId}/media/uploads:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/CommunityId'
+    post:
+      tags: [communities]
+      operationId: issueCommunityMediaUpload
+      summary: Issue one short-lived quarantine upload for a community image
+      description: |
+        The actor, tenant, community membership and publishing permission are server-derived.
+        The returned upload target is short-lived and never exposes a canonical object key.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CommunityMediaUploadIssueRequest'
+      responses:
+        '201':
+          description: New upload intent. A replay may return 200 with the same media UUID.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommunityMediaUploadIssued'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/CommandConflict'
+        '413':
+          description: Declared source image exceeds 15 MiB.
+          content:
+            application/json:
+              schema:
+                $ref: ../../common/components.yaml#/components/schemas/ApiError
+        '415':
+          description: Only JPEG, PNG and WebP source images are accepted.
+          content:
+            application/json:
+              schema:
+                $ref: ../../common/components.yaml#/components/schemas/ApiError
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/communities/{communityId}/media/{mediaId}:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/CommunityId'
+      - $ref: '#/components/parameters/CommunityMediaId'
+    get:
+      tags: [communities]
+      operationId: getCommunityMediaStatus
+      summary: Read the uploader-visible lifecycle state of one community image
+      responses:
+        '200':
+          description: Current canonical media lifecycle state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommunityMediaStatus'
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/communities/{communityId}/media/{mediaId}/finalize:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/CommunityId'
+      - $ref: '#/components/parameters/CommunityMediaId'
+    post:
+      tags: [communities]
+      operationId: finalizeCommunityMediaUpload
+      summary: Verify the quarantine object and request asynchronous scanning
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CommunityMediaFinalizeRequest'
+      responses:
+        '200':
+          description: Idempotent replay of an already applied finalize command.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommunityMediaStatus'
+        '202':
+          description: Object accepted for asynchronous validation and scanning.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommunityMediaStatus'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/CommandConflict'
+        '422':
+          description: Uploaded object metadata does not match the issued intent.
+          content:
+            application/json:
+              schema:
+                $ref: ../../common/components.yaml#/components/schemas/ApiError
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/communities/{communityId}/media/{mediaId}/variants/{variant}:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/CommunityId'
+      - $ref: '#/components/parameters/CommunityMediaId'
+      - $ref: '#/components/parameters/CommunityMediaVariant'
+    get:
+      tags: [communities]
+      operationId: getCommunityMediaVariant
+      summary: Download one authorized immutable WebP community-media variant
+      description: |
+        This authenticated PadlHub endpoint enforces canonical community/post visibility before
+        serving or redirecting. Community DTOs contain this stable PadlHub URL, never an S3 URL.
+      responses:
+        '302':
+          description: |
+            Redirect to a short-lived exact-version delivery URL. Clients persist and share only
+            the stable PadlHub request URL, never the Location value.
+          headers:
+            Location:
+              required: true
+              schema:
+                type: string
+                format: uri
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/communities/{communityId}/posts:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/CommunityId'
+    post:
+      tags: [communities]
+      operationId: createCommunityPost
+      summary: Publish or submit a post according to the server-owned publishing preset
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CommunityPostCreateRequest'
+      responses:
+        '201':
+          description: Created post, possibly pending moderation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommunityPost'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/CommandConflict'
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/communities/{communityId}/posts/{postId}:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/CommunityId'
+      - $ref: '#/components/parameters/CommunityPostId'
+    patch:
+      tags: [communities]
+      operationId: editCommunityPost
+      summary: Append an author revision without a time limit
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CommunityPostEditRequest'
+      responses:
+        '200':
+          description: Updated current post state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommunityPost'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/CommandConflict'
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/communities/{communityId}/posts/{postId}/archive:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/CommunityId'
+      - $ref: '#/components/parameters/CommunityPostId'
+    post:
+      tags: [communities]
+      operationId: archiveCommunityPost
+      summary: Archive an authored post for five-year retention
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CommunityContentRevisionRequest'
+      responses:
+        '200':
+          description: Archived post with server-owned restore and retention deadlines.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommunityPost'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/CommandConflict'
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/communities/{communityId}/posts/{postId}/restore:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/CommunityId'
+      - $ref: '#/components/parameters/CommunityPostId'
+    post:
+      tags: [communities]
+      operationId: restoreCommunityPost
+      summary: Restore an authored post within 30 days
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CommunityContentRevisionRequest'
+      responses:
+        '200':
+          description: Restored or moderation-pending post.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommunityPost'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/CommandConflict'
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/communities/{communityId}/posts/{postId}/comments:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/CommunityId'
+      - $ref: '#/components/parameters/CommunityPostId'
+    get:
+      tags: [communities]
+      operationId: listCommunityPostComments
+      summary: Read one stable flat-comment snapshot
+      parameters:
+        - $ref: '#/components/parameters/CommunityContentLimit'
+        - $ref: '#/components/parameters/CommunityContentCursor'
+      responses:
+        '200':
+          description: Published comments in chronological order.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommunityCommentPage'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+    post:
+      tags: [communities]
+      operationId: createCommunityPostComment
+      summary: Add a flat comment as an ACTIVE member
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CommunityCommentCreateRequest'
+      responses:
+        '201':
+          description: Created comment.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommunityComment'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/CommandConflict'
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/communities/{communityId}/posts/{postId}/comments/{commentId}:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/CommunityId'
+      - $ref: '#/components/parameters/CommunityPostId'
+      - $ref: '#/components/parameters/CommunityCommentId'
+    patch:
+      tags: [communities]
+      operationId: editCommunityComment
+      summary: Append an author comment revision without a time limit
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CommunityCommentEditRequest'
+      responses:
+        '200':
+          description: Updated comment.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommunityComment'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/CommandConflict'
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/communities/{communityId}/posts/{postId}/comments/{commentId}/archive:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/CommunityId'
+      - $ref: '#/components/parameters/CommunityPostId'
+      - $ref: '#/components/parameters/CommunityCommentId'
+    post:
+      tags: [communities]
+      operationId: archiveCommunityComment
+      summary: Archive an authored comment
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CommunityContentRevisionRequest'
+      responses:
+        '200':
+          description: Archived comment.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommunityComment'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/CommandConflict'
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/communities/{communityId}/posts/{postId}/comments/{commentId}/restore:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/CommunityId'
+      - $ref: '#/components/parameters/CommunityPostId'
+      - $ref: '#/components/parameters/CommunityCommentId'
+    post:
+      tags: [communities]
+      operationId: restoreCommunityComment
+      summary: Restore an authored comment within 30 days
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CommunityContentRevisionRequest'
+      responses:
+        '200':
+          description: Restored comment.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommunityComment'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/CommandConflict'
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/communities/{communityId}/posts/{targetId}/reaction:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/CommunityId'
+      - $ref: '#/components/parameters/CommunityReactionTargetId'
+    put:
+      tags: [communities]
+      operationId: setCommunityPostReaction
+      summary: Set the viewer's single current post reaction
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CommunityReactionRequest'
+      responses:
+        '200':
+          description: Current reaction state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommunityReactionState'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/CommandConflict'
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+    delete:
+      tags: [communities]
+      operationId: removeCommunityPostReaction
+      summary: Remove the viewer's current post reaction
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: Inactive reaction tombstone.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommunityReactionState'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/CommandConflict'
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/communities/{communityId}/comments/{targetId}/reaction:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/CommunityId'
+      - $ref: '#/components/parameters/CommunityReactionTargetId'
+    put:
+      tags: [communities]
+      operationId: setCommunityCommentReaction
+      summary: Set the viewer's single current comment reaction
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CommunityReactionRequest'
+      responses:
+        '200':
+          description: Current reaction state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommunityReactionState'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/CommandConflict'
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+    delete:
+      tags: [communities]
+      operationId: removeCommunityCommentReaction
+      summary: Remove the viewer's current comment reaction
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: Inactive reaction tombstone.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommunityReactionState'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/CommandConflict'
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/communities/{communityId}/ownership-transfers:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - name: communityId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [communities]
+      operationId: transferCommunityOwnership
+      summary: Transfer ownership to an ACTIVE community member
+      description: |
+        Only the current ACTIVE OWNER may issue this command. The previous owner becomes ADMIN and
+        the target becomes OWNER in the same tenant transaction. Optimistic revisions, stored
+        idempotency result, audit and outbox prevent split ownership and retry duplication. The
+        target must own fewer than three ACTIVE communities; no quota grant applies to transfer.
+        The target-scoped owner quota lock is shared with community creation.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CommunityOwnershipTransferRequest'
+      responses:
+        '200':
+          description: Applied transfer or the stored idempotent replay.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+            X-Idempotent-Replayed:
+              description: Whether this result was replayed from stored command state.
+              schema:
+                type: boolean
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommunityOwnershipTransferState'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/CommandConflict'
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/communities/{communityId}/direct-invites:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - name: communityId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [communities]
+      operationId: listCommunityDirectInvites
+      summary: List bounded DIRECT invite metadata for community staff
+      description: |
+        Requires capability derived from an ACTIVE OWNER or ADMIN membership. Results never contain
+        a plaintext token or token hash. The opaque cursor is bound to the community and stable
+        server-owned order so staff can revoke an invite after reloading the management surface.
+        Every response is emitted with `Cache-Control: no-store`.
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 20
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 16
+            maxLength: 1024
+      responses:
+        '200':
+          description: One bounded page of invite metadata without tokens.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+            Cache-Control:
+              $ref: '#/components/headers/SensitiveNoStore'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommunityDirectInvitePage'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          description: '`COMMUNITY_DIRECT_INVITE_LIST_FORBIDDEN`; no active OWNER/ADMIN capability.'
+          content:
+            application/json:
+              schema:
+                $ref: ../../common/components.yaml#/components/schemas/ApiError
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+    post:
+      tags: [communities]
+      operationId: createCommunityDirectInvite
+      summary: Create a reusable seven-day DIRECT membership invite
+      description: |
+        Requires the capability derived from an ACTIVE OWNER or ADMIN membership in this community.
+        The actor, tenant, issuer membership, target role and expiry are server-owned. The invite is
+        reusable until the server-fixed expiry exactly seven days after creation, always grants the
+        MEMBER role, and is not bound to a client-selected user. The plaintext URL-safe token is
+        returned only by this command (including an idempotent replay of the same command); only its
+        non-reversible hash is retained after the response. The request contains only the current
+        issuer membership revision; callers cannot set issuer, actor, user, role, status, expiry or
+        usage limits and cannot select or request a quota grant. At most five unexpired ACTIVE invite
+        links may exist per community, and at most twenty successful ISSUE commands are accepted in
+        the preceding rolling 24 hours. If CUP has created an eligible one-time 24-hour grant, the
+        server selects and consumes it atomically only when this otherwise-authorized OWNER/ADMIN
+        command exceeds a quota; no grant ID or override flag is accepted from the User API. Every
+        response is emitted with `Cache-Control: no-store`.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CommunityDirectInviteCreateRequest'
+      responses:
+        '201':
+          description: New invite and its sensitive token, or the original idempotent replay.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+            X-Idempotent-Replayed:
+              description: Whether this result was replayed from stored command state.
+              schema:
+                type: boolean
+            Cache-Control:
+              $ref: '#/components/headers/SensitiveNoStore'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommunityDirectInviteCreated'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          description: '`COMMUNITY_DIRECT_INVITE_CREATE_FORBIDDEN`; no active OWNER/ADMIN capability.'
+          content:
+            application/json:
+              schema:
+                $ref: ../../common/components.yaml#/components/schemas/ApiError
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          description: |
+            `COMMUNITY_MEMBERSHIP_REVISION_CONFLICT` when issuer membership changed, or the stable
+            idempotency conflict code when a key is reused for another command.
+          content:
+            application/json:
+              schema:
+                $ref: ../../common/components.yaml#/components/schemas/ApiError
+        '429':
+          description: |
+            No eligible server-side grant was consumed:
+            `COMMUNITY_DIRECT_INVITE_ACTIVE_LIMIT_EXCEEDED` or
+            `COMMUNITY_DIRECT_INVITE_DAILY_LIMIT_EXCEEDED`; includes the bounded `Retry-After`
+            seconds calculated from current server state.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+            Retry-After:
+              description: Seconds before a bounded retry.
+              schema:
+                type: integer
+                minimum: 1
+          content:
+            application/json:
+              schema:
+                $ref: ../../common/components.yaml#/components/schemas/ApiError
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/community-direct-invites/preview:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+    post:
+      tags: [communities]
+      operationId: previewCommunityDirectInvite
+      summary: Preview a DIRECT invite without changing membership
+      description: |
+        Requires an authenticated PadlHub user. A share link may carry the cryptographically verified
+        opaque token only in its client-side URL fragment. The fragment must be removed before
+        navigation and the token sent to this endpoint only in the JSON body, never in a server path,
+        query, referrer or log. A valid token reveals a bounded minimal community preview even for
+        HIDDEN visibility, plus the current invite and caller membership revisions.
+        Preview never redeems the invite: an explicit redeem command is required. Revoked or expired
+        invites, unknown tokens, and invites whose issuer is no longer an ACTIVE OWNER or ADMIN are
+        indistinguishable and return `COMMUNITY_DIRECT_INVITE_NOT_FOUND`. BANNED membership is
+        fail-closed and returns `COMMUNITY_DIRECT_INVITE_REDEEM_FORBIDDEN` without preview data.
+        Every response is emitted with `Cache-Control: no-store`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CommunityDirectInviteTokenRequest'
+      responses:
+        '200':
+          description: Minimal authenticated preview; no membership state was changed.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+            Cache-Control:
+              $ref: '#/components/headers/SensitiveNoStore'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommunityDirectInvitePreview'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          description: '`COMMUNITY_DIRECT_INVITE_REDEEM_FORBIDDEN`; BANNED membership remains blocked.'
+          content:
+            application/json:
+              schema:
+                $ref: ../../common/components.yaml#/components/schemas/ApiError
+        '404':
+          description: '`COMMUNITY_DIRECT_INVITE_NOT_FOUND`; invalid invites are not distinguishable.'
+          content:
+            application/json:
+              schema:
+                $ref: ../../common/components.yaml#/components/schemas/ApiError
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/community-direct-invites/redeem:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+    post:
+      tags: [communities]
+      operationId: redeemCommunityDirectInvite
+      summary: Explicitly confirm and redeem a DIRECT invite
+      description: |
+        The authenticated JWT subject is always the beneficiary and the token is accepted only in
+        the JSON body. A valid invite activates or restores membership with the fixed MEMBER role;
+        an existing ACTIVE membership is never downgraded. A PENDING JOIN or REJOIN request is not
+        auto-resolved and returns `COMMUNITY_DIRECT_INVITE_REQUEST_PENDING`. The server rechecks that
+        the invite issuer is still an ACTIVE OWNER or ADMIN before committing membership,
+        idempotency, audit and outbox state. BANNED membership fails closed with
+        `COMMUNITY_DIRECT_INVITE_REDEEM_FORBIDDEN`. The client cannot provide an issuer, actor, user,
+        role, status, expiry or usage limit. Every response is emitted with
+        `Cache-Control: no-store`.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CommunityDirectInviteRedeemRequest'
+      responses:
+        '200':
+          description: Current own membership state after confirmation or its idempotent replay.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+            X-Idempotent-Replayed:
+              description: Whether this result was replayed from stored command state.
+              schema:
+                type: boolean
+            Cache-Control:
+              $ref: '#/components/headers/SensitiveNoStore'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommunityOwnMembershipState'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          description: '`COMMUNITY_DIRECT_INVITE_REDEEM_FORBIDDEN`; BANNED membership remains blocked.'
+          content:
+            application/json:
+              schema:
+                $ref: ../../common/components.yaml#/components/schemas/ApiError
+        '404':
+          description: '`COMMUNITY_DIRECT_INVITE_NOT_FOUND`; invalid invites are not distinguishable.'
+          content:
+            application/json:
+              schema:
+                $ref: ../../common/components.yaml#/components/schemas/ApiError
+        '409':
+          description: |
+            `COMMUNITY_MEMBERSHIP_REVISION_CONFLICT`, `COMMUNITY_DIRECT_INVITE_REVISION_CONFLICT`,
+            or `COMMUNITY_DIRECT_INVITE_REQUEST_PENDING`; preview state is stale or a join request
+            must be resolved first.
+          content:
+            application/json:
+              schema:
+                $ref: ../../common/components.yaml#/components/schemas/ApiError
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/community-direct-invites/{inviteId}/revoke:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - name: inviteId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [communities]
+      operationId: revokeCommunityDirectInvite
+      summary: Revoke a DIRECT invite by its PadlHub UUID
+      description: |
+        The invite resolves its community server-side. Authorization is capability-derived and
+        requires an ACTIVE OWNER or ADMIN membership in that community; no finer client-visible
+        revocation policy is encoded. The actor, tenant, role and target status are never accepted
+        from the client; only the expected invite revision is supplied. Revocation, idempotency,
+        audit and outbox state commit atomically. Every response is emitted with
+        `Cache-Control: no-store`.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CommunityDirectInviteRevokeRequest'
+      responses:
+        '200':
+          description: Revoked invite state or the original idempotent replay.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+            X-Idempotent-Replayed:
+              description: Whether this result was replayed from stored command state.
+              schema:
+                type: boolean
+            Cache-Control:
+              $ref: '#/components/headers/SensitiveNoStore'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommunityDirectInviteState'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          description: '`COMMUNITY_DIRECT_INVITE_REVOKE_FORBIDDEN`; no active OWNER/ADMIN capability.'
+          content:
+            application/json:
+              schema:
+                $ref: ../../common/components.yaml#/components/schemas/ApiError
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          description: |
+            `COMMUNITY_DIRECT_INVITE_REVISION_CONFLICT` when invite state changed, or the stable
+            idempotency conflict code when a key is reused for another command.
+          content:
+            application/json:
+              schema:
+                $ref: ../../common/components.yaml#/components/schemas/ApiError
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/communities/{communityId}/members/me/pin:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - name: communityId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    put:
+      tags: [communities]
+      operationId: setMyCommunityMembershipPin
+      summary: Pin or unpin the authenticated user's active membership
+      description: |
+        Applies a LOCAL_ONLY membership command. The actor is always the JWT subject; clients cannot
+        supply a phone, user identifier, role or source system. State, idempotency result, audit event
+        and outbox event are committed atomically. The command remains unavailable while Communities
+        are running from the legacy read mode.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CommunityMembershipPinRequest'
+      responses:
+        '200':
+          description: Stored membership pin state. An idempotent replay returns the same revision.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+            X-Idempotent-Replayed:
+              description: Whether this response was replayed from the stored command result.
+              schema:
+                type: boolean
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommunityMembershipPinState'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/CommandConflict'
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
 components:
   schemas:
     TournamentParticipantRoster:
@@ -2624,6 +4201,9 @@ components:
           communityReadFeed,
           communityReadChat,
           communityReadRating,
+          communityCanonical,
+          communityDirectInvites,
+          communityRealtime,
         ]
       properties:
         communityDirectory: { type: boolean }
@@ -2631,6 +4211,9 @@ components:
         communityReadFeed: { type: boolean }
         communityReadChat: { type: boolean }
         communityReadRating: { type: boolean }
+        communityCanonical: { type: boolean }
+        communityDirectInvites: { type: boolean }
+        communityRealtime: { type: boolean }
     HomeDashboard:
       type: object
       additionalProperties: false
@@ -4097,6 +5680,1182 @@ components:
         route:
           type: string
           pattern: '^/'
+    RealtimeTicket:
+      type: object
+      additionalProperties: false
+      required: [ticket, expiresAt]
+      properties:
+        ticket:
+          type: string
+          minLength: 32
+          maxLength: 4096
+          description: One-time JWT sent only in the first WebSocket authenticate frame.
+        expiresAt:
+          type: string
+          format: date-time
+    CommunityJoinAction:
+      type: string
+      enum:
+        - JOIN_NOW
+        - REQUEST_TO_JOIN
+        - INVITE_REQUIRED
+        - MEMBERSHIP_PENDING
+        - REQUEST_REJOIN
+        - OPEN_COMMUNITY
+        - UNAVAILABLE
+    CommunityMembershipStatus:
+      type: string
+      enum: [NONE, PENDING, ACTIVE, LEFT, REMOVED, BANNED]
+    CommunityJoinRequestState:
+      type: object
+      additionalProperties: false
+      required: [id, communityId, kind, status, revision, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        communityId:
+          type: string
+          format: uuid
+        kind:
+          type: string
+          enum: [JOIN, REJOIN]
+        status:
+          type: string
+          enum: [PENDING, APPROVED, REJECTED, CANCELLED]
+        revision:
+          type: integer
+          minimum: 1
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    CommunityOwnMembershipState:
+      type: object
+      additionalProperties: false
+      required:
+        - communityId
+        - membershipStatus
+        - role
+        - membershipRevision
+        - joinRequest
+        - joinAction
+        - updatedAt
+      properties:
+        communityId:
+          type: string
+          format: uuid
+        membershipStatus:
+          $ref: '#/components/schemas/CommunityMembershipStatus'
+        role:
+          type: [string, 'null']
+          enum: [OWNER, ADMIN, MODERATOR, MEMBER, null]
+        membershipRevision:
+          type: integer
+          minimum: 0
+        joinRequest:
+          oneOf:
+            - $ref: '#/components/schemas/CommunityJoinRequestState'
+            - type: 'null'
+        joinAction:
+          $ref: '#/components/schemas/CommunityJoinAction'
+        updatedAt:
+          type: [string, 'null']
+          format: date-time
+    CommunityMembershipRevisionRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedMembershipRevision]
+      properties:
+        expectedMembershipRevision:
+          type: integer
+          minimum: 0
+    CommunityJoinRequestCancelRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedMembershipRevision, expectedRequestRevision]
+      properties:
+        expectedMembershipRevision:
+          type: integer
+          minimum: 0
+        expectedRequestRevision:
+          type: integer
+          minimum: 1
+    CommunityDirectInviteCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedIssuerMembershipRevision]
+      properties:
+        expectedIssuerMembershipRevision:
+          type: integer
+          minimum: 0
+          description: Current revision of the caller's ACTIVE OWNER or ADMIN membership.
+    CommunityDirectInviteTokenRequest:
+      type: object
+      additionalProperties: false
+      required: [token]
+      properties:
+        token:
+          type: string
+          minLength: 43
+          maxLength: 128
+          pattern: '^[A-Za-z0-9_-]+$'
+          writeOnly: true
+          description: |
+            Sensitive URL-safe opaque token. A client share URL may contain it only in the fragment;
+            never place it in a server path, query, referrer or log.
+    CommunityDirectInviteRedeemRequest:
+      type: object
+      additionalProperties: false
+      required: [token, expectedInviteRevision, expectedMembershipRevision]
+      properties:
+        token:
+          type: string
+          minLength: 43
+          maxLength: 128
+          pattern: '^[A-Za-z0-9_-]+$'
+          writeOnly: true
+          description: |
+            Sensitive URL-safe opaque token. A client share URL may contain it only in the fragment;
+            never place it in a server path, query, referrer or log.
+        expectedInviteRevision:
+          type: integer
+          minimum: 1
+        expectedMembershipRevision:
+          type: integer
+          minimum: 0
+    CommunityDirectInviteRevokeRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedInviteRevision]
+      properties:
+        expectedInviteRevision:
+          type: integer
+          minimum: 1
+    CommunityDirectInviteCreated:
+      type: object
+      additionalProperties: false
+      required: [id, communityId, status, revision, token, createdAt, expiresAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        communityId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          const: ACTIVE
+        revision:
+          type: integer
+          minimum: 1
+        token:
+          type: string
+          minLength: 43
+          maxLength: 128
+          pattern: '^[A-Za-z0-9_-]+$'
+          readOnly: true
+          description: |
+            Sensitive creation-command-only response value. An idempotent replay returns the same
+            value; only a non-reversible hash is persisted.
+        createdAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+          description: Server-fixed instant exactly seven days after createdAt.
+    CommunityDirectInviteState:
+      type: object
+      additionalProperties: false
+      required: [id, communityId, status, revision, createdAt, expiresAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        communityId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [ACTIVE, REVOKED, EXPIRED]
+        revision:
+          type: integer
+          minimum: 1
+        createdAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    CommunityDirectInvitePage:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          maxItems: 50
+          items:
+            $ref: '#/components/schemas/CommunityDirectInviteState'
+        nextCursor:
+          type: string
+          minLength: 16
+          maxLength: 1024
+    CommunityDirectInviteCommunityPreview:
+      type: object
+      additionalProperties: false
+      required: [id, title, logoUrl, isVerified, visibility]
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+          minLength: 1
+          maxLength: 120
+        logoUrl:
+          type: [string, 'null']
+          format: uri
+        isVerified:
+          type: boolean
+        visibility:
+          type: string
+          enum: [PUBLIC, LISTED_PRIVATE, HIDDEN]
+    CommunityDirectInvitePreview:
+      type: object
+      additionalProperties: false
+      required: [inviteId, inviteRevision, community, expiresAt, membershipRevision, redeemAction]
+      properties:
+        inviteId:
+          type: string
+          format: uuid
+        inviteRevision:
+          type: integer
+          minimum: 1
+        community:
+          $ref: '#/components/schemas/CommunityDirectInviteCommunityPreview'
+        expiresAt:
+          type: string
+          format: date-time
+        membershipRevision:
+          type: integer
+          minimum: 0
+        redeemAction:
+          type: string
+          enum: [CONFIRM_MEMBERSHIP, OPEN_COMMUNITY, REQUEST_PENDING]
+          description: |
+            Preview never mutates membership. CONFIRM_MEMBERSHIP requires explicit redeem;
+            REQUEST_PENDING must be resolved through the existing request lifecycle first.
+    CommunityMinimalView:
+      type: object
+      additionalProperties: false
+      required: [id, title, logoUrl, isVerified, visibility, joinAction]
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+          minLength: 1
+          maxLength: 120
+        logoUrl:
+          type: [string, 'null']
+          format: uri
+        isVerified:
+          type: boolean
+        visibility:
+          type: string
+          const: LISTED_PRIVATE
+        joinAction:
+          $ref: '#/components/schemas/CommunityJoinAction'
+    CommunityPublicView:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          id,
+          title,
+          logoUrl,
+          isVerified,
+          visibility,
+          joinAction,
+          description,
+          memberCount,
+          joinPolicy,
+          createdAt,
+        ]
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+          minLength: 1
+          maxLength: 120
+        logoUrl:
+          type: [string, 'null']
+          format: uri
+        isVerified:
+          type: boolean
+        visibility:
+          type: string
+          const: PUBLIC
+        joinAction:
+          $ref: '#/components/schemas/CommunityJoinAction'
+        description:
+          type: [string, 'null']
+          maxLength: 2000
+        memberCount:
+          type: integer
+          minimum: 0
+        joinPolicy:
+          type: string
+          enum: [INSTANT, MODERATED, INVITE_ONLY]
+        createdAt:
+          type: string
+          format: date-time
+    CommunityViewerMembership:
+      type: object
+      additionalProperties: false
+      required: [status, role, revision]
+      properties:
+        status:
+          type: string
+          const: ACTIVE
+        role:
+          type: string
+          enum: [OWNER, ADMIN, MODERATOR, MEMBER]
+        revision:
+          type: integer
+          minimum: 1
+        memberRank:
+          type: integer
+          minimum: 1
+    CommunityMemberView:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - title
+        - logoUrl
+        - isVerified
+        - visibility
+        - joinAction
+        - description
+        - memberCount
+        - joinPolicy
+        - publishingPreset
+        - revision
+        - createdAt
+        - updatedAt
+        - viewerMembership
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+          minLength: 1
+          maxLength: 120
+        logoUrl:
+          type: [string, 'null']
+          format: uri
+        isVerified:
+          type: boolean
+        visibility:
+          type: string
+          enum: [PUBLIC, LISTED_PRIVATE, HIDDEN]
+        joinAction:
+          $ref: '#/components/schemas/CommunityJoinAction'
+        description:
+          type: [string, 'null']
+          maxLength: 2000
+        memberCount:
+          type: integer
+          minimum: 0
+        joinPolicy:
+          type: string
+          enum: [INSTANT, MODERATED, INVITE_ONLY]
+        publishingPreset:
+          type: string
+          enum: [OPEN_COMMUNITY, STAFF_FEED, MODERATED_FEED]
+        revision:
+          type: integer
+          minimum: 0
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        viewerMembership:
+          $ref: '#/components/schemas/CommunityViewerMembership'
+    CommunityDiscoveryItem:
+      oneOf:
+        - $ref: '#/components/schemas/CommunityPublicView'
+        - $ref: '#/components/schemas/CommunityMinimalView'
+    CommunityDiscoveryPage:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          maxItems: 50
+          items:
+            $ref: '#/components/schemas/CommunityDiscoveryItem'
+        nextCursor:
+          type: string
+          minLength: 16
+          maxLength: 1024
+    CommunityDetailView:
+      oneOf:
+        - $ref: '#/components/schemas/CommunityPublicView'
+        - $ref: '#/components/schemas/CommunityMinimalView'
+        - $ref: '#/components/schemas/CommunityMemberView'
+    CommunityCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [title, visibility, joinPolicy, publishingPreset]
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 120
+        description:
+          type: string
+          maxLength: 2000
+        visibility:
+          type: string
+          enum: [PUBLIC, LISTED_PRIVATE, HIDDEN]
+        joinPolicy:
+          type: string
+          enum: [INSTANT, MODERATED, INVITE_ONLY]
+        publishingPreset:
+          type: string
+          enum: [OPEN_COMMUNITY, STAFF_FEED, MODERATED_FEED]
+    CommunityCreatedState:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - title
+        - description
+        - visibility
+        - joinPolicy
+        - publishingPreset
+        - status
+        - revision
+        - ownerUserId
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+          minLength: 1
+          maxLength: 120
+        description:
+          type: [string, 'null']
+          maxLength: 2000
+        visibility:
+          type: string
+          enum: [PUBLIC, LISTED_PRIVATE, HIDDEN]
+        joinPolicy:
+          type: string
+          enum: [INSTANT, MODERATED, INVITE_ONLY]
+        publishingPreset:
+          type: string
+          enum: [OPEN_COMMUNITY, STAFF_FEED, MODERATED_FEED]
+        status:
+          type: string
+          const: ACTIVE
+        revision:
+          type: integer
+          const: 1
+        ownerUserId:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    CommunityMediaContentType:
+      type: string
+      enum: [image/jpeg, image/png, image/webp]
+    CommunityMediaState:
+      type: string
+      enum: [UPLOADING, SCANNING, READY, REJECTED, EXPIRED, PURGED]
+    CommunityMediaVariantName:
+      type: string
+      enum: [THUMBNAIL, FEED]
+    CommunityMediaVariant:
+      type: object
+      additionalProperties: false
+      required: [variant, url, contentType, width, height, byteSize]
+      properties:
+        variant:
+          $ref: '#/components/schemas/CommunityMediaVariantName'
+        url:
+          type: string
+          pattern: '^/user/api/v1/'
+          description: Stable authenticated PadlHub delivery URL; never an object-store URL.
+        contentType:
+          type: string
+          const: image/webp
+        width:
+          type: integer
+          minimum: 1
+        height:
+          type: integer
+          minimum: 1
+        byteSize:
+          type: integer
+          minimum: 1
+    CommunityPostMedia:
+      type: object
+      additionalProperties: false
+      required: [id, mediaType, width, height, variants]
+      properties:
+        id:
+          type: string
+          format: uuid
+        mediaType:
+          type: string
+          const: IMAGE
+        width:
+          type: integer
+          minimum: 1
+        height:
+          type: integer
+          minimum: 1
+        variants:
+          type: array
+          minItems: 1
+          maxItems: 2
+          items:
+            $ref: '#/components/schemas/CommunityMediaVariant'
+    CommunityMediaUploadIssueRequest:
+      type: object
+      additionalProperties: false
+      required: [mediaType, contentType, byteSize, sha256]
+      properties:
+        mediaType:
+          type: string
+          const: IMAGE
+        contentType:
+          $ref: '#/components/schemas/CommunityMediaContentType'
+        byteSize:
+          type: integer
+          minimum: 1
+          maximum: 15728640
+        sha256:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+    CommunityMediaUploadTarget:
+      type: object
+      additionalProperties: false
+      required: [method, url, requiredHeaders, expiresAt]
+      properties:
+        method:
+          type: string
+          const: PUT
+        url:
+          type: string
+          format: uri
+          description: Short-lived quarantine upload capability; never persist this URL.
+        requiredHeaders:
+          type: object
+          additionalProperties:
+            type: string
+        expiresAt:
+          type: string
+          format: date-time
+    CommunityMediaUploadIssued:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - communityId
+        - uploaderUserId
+        - mediaType
+        - state
+        - revision
+        - declaredContentType
+        - declaredByteSize
+        - declaredSha256
+        - upload
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        communityId:
+          type: string
+          format: uuid
+        uploaderUserId:
+          type: string
+          format: uuid
+        mediaType:
+          type: string
+          const: IMAGE
+        state:
+          type: string
+          const: UPLOADING
+        revision:
+          type: integer
+          minimum: 1
+        declaredContentType:
+          $ref: '#/components/schemas/CommunityMediaContentType'
+        declaredByteSize:
+          type: integer
+          minimum: 1
+          maximum: 15728640
+        declaredSha256:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+        upload:
+          $ref: '#/components/schemas/CommunityMediaUploadTarget'
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    CommunityMediaFinalizeRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedRevision]
+      properties:
+        expectedRevision:
+          type: integer
+          minimum: 1
+    CommunityMediaStatus:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - communityId
+        - uploaderUserId
+        - mediaType
+        - state
+        - revision
+        - declaredContentType
+        - declaredByteSize
+        - declaredSha256
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        communityId:
+          type: string
+          format: uuid
+        uploaderUserId:
+          type: string
+          format: uuid
+        mediaType:
+          type: string
+          const: IMAGE
+        state:
+          $ref: '#/components/schemas/CommunityMediaState'
+        revision:
+          type: integer
+          minimum: 1
+        declaredContentType:
+          $ref: '#/components/schemas/CommunityMediaContentType'
+        declaredByteSize:
+          type: integer
+          minimum: 1
+          maximum: 15728640
+        declaredSha256:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+        uploadExpiresAt:
+          type: string
+          format: date-time
+        finalizedAt:
+          type: string
+          format: date-time
+        width:
+          type: integer
+          minimum: 1
+        height:
+          type: integer
+          minimum: 1
+        variants:
+          type: array
+          minItems: 1
+          maxItems: 2
+          items:
+            $ref: '#/components/schemas/CommunityMediaVariant'
+        readyAt:
+          type: string
+          format: date-time
+        unattachedExpiresAt:
+          type: [string, 'null']
+          format: date-time
+          description: READY media must be attached within 24 hours; null once bound to a post.
+        rejectionCode:
+          type: string
+          pattern: '^[A-Z][A-Z0-9_]{1,63}$'
+        rejectedAt:
+          type: string
+          format: date-time
+        expiredAt:
+          type: string
+          format: date-time
+        purgedAt:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    CommunityPostStatus:
+      type: string
+      enum: [PENDING_MODERATION, PUBLISHED, ARCHIVED, HIDDEN]
+    CommunityPost:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - communityId
+        - authorUserId
+        - status
+        - body
+        - revision
+        - createdAt
+        - publishedAt
+        - updatedAt
+        - archivedAt
+        - restoreUntil
+        - retentionUntil
+      properties:
+        id:
+          type: string
+          format: uuid
+        communityId:
+          type: string
+          format: uuid
+        authorUserId:
+          type: string
+          format: uuid
+        status:
+          $ref: '#/components/schemas/CommunityPostStatus'
+        body:
+          type: string
+          minLength: 1
+          maxLength: 10000
+        revision:
+          type: integer
+          minimum: 1
+        createdAt:
+          type: string
+          format: date-time
+        publishedAt:
+          type: [string, 'null']
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        archivedAt:
+          type: [string, 'null']
+          format: date-time
+        restoreUntil:
+          type: [string, 'null']
+          format: date-time
+        retentionUntil:
+          type: [string, 'null']
+          format: date-time
+        media:
+          type: array
+          maxItems: 10
+          description: Ordered immutable snapshot for this post revision. Absence means empty.
+          items:
+            $ref: '#/components/schemas/CommunityPostMedia'
+    CommunityFeedPage:
+      type: object
+      additionalProperties: false
+      required: [items, watermark]
+      properties:
+        items:
+          type: array
+          maxItems: 50
+          items:
+            $ref: '#/components/schemas/CommunityPost'
+        watermark:
+          type: string
+          format: date-time
+        nextCursor:
+          type: string
+          minLength: 16
+          maxLength: 1024
+    CommunityRealtimeEvent:
+      type: object
+      additionalProperties: false
+      required:
+        - communityId
+        - sequence
+        - eventType
+        - targetType
+        - targetId
+        - targetRevision
+        - targetStatus
+        - occurredAt
+      properties:
+        communityId:
+          type: string
+          format: uuid
+        sequence:
+          type: integer
+          minimum: 1
+        eventType:
+          type: string
+          pattern: '^community\.[a-z0-9_.-]+\.v[1-9][0-9]*$'
+        targetType:
+          type: string
+          enum: [POST, COMMENT, REACTION]
+        targetId:
+          type: string
+          format: uuid
+        targetRevision:
+          type: integer
+          minimum: 1
+        targetStatus:
+          type: [string, 'null']
+          maxLength: 64
+        occurredAt:
+          type: string
+          format: date-time
+    CommunityRealtimeEventPage:
+      type: object
+      additionalProperties: false
+      required:
+        - items
+        - afterSequence
+        - latestSequence
+        - retainedFromSequence
+        - hasMore
+      properties:
+        items:
+          type: array
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/CommunityRealtimeEvent'
+        afterSequence:
+          type: integer
+          minimum: 0
+        latestSequence:
+          type: integer
+          minimum: 0
+        retainedFromSequence:
+          type: integer
+          minimum: 1
+        nextAfterSequence:
+          type: integer
+          minimum: 1
+        hasMore:
+          type: boolean
+    CommunityEventGapExpiredResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - code
+        - message
+        - correlationId
+        - recoveryAction
+        - latestSequence
+        - retainedFromSequence
+      properties:
+        code:
+          type: string
+          const: COMMUNITY_EVENT_GAP_EXPIRED
+        message:
+          type: string
+          minLength: 1
+        correlationId:
+          type: string
+          minLength: 1
+        recoveryAction:
+          type: string
+          const: FULL_CANONICAL_RELOAD
+        latestSequence:
+          type: integer
+          minimum: 0
+        retainedFromSequence:
+          type: integer
+          minimum: 1
+    CommunityPostCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [body]
+      properties:
+        body:
+          type: string
+          minLength: 1
+          maxLength: 10000
+        mediaIds:
+          type: array
+          maxItems: 10
+          uniqueItems: true
+          items:
+            type: string
+            format: uuid
+    CommunityPostEditRequest:
+      type: object
+      additionalProperties: false
+      required: [body, expectedRevision]
+      properties:
+        body:
+          type: string
+          minLength: 1
+          maxLength: 10000
+        expectedRevision:
+          type: integer
+          minimum: 1
+        mediaIds:
+          type: array
+          maxItems: 10
+          uniqueItems: true
+          description: Omitted preserves current media; an empty array removes it from the new revision.
+          items:
+            type: string
+            format: uuid
+    CommunityContentRevisionRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedRevision]
+      properties:
+        expectedRevision:
+          type: integer
+          minimum: 1
+    CommunityComment:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - communityId
+        - postId
+        - authorUserId
+        - status
+        - body
+        - revision
+        - createdAt
+        - publishedAt
+        - updatedAt
+        - archivedAt
+        - restoreUntil
+        - retentionUntil
+      properties:
+        id:
+          type: string
+          format: uuid
+        communityId:
+          type: string
+          format: uuid
+        postId:
+          type: string
+          format: uuid
+        authorUserId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [PUBLISHED, ARCHIVED, HIDDEN]
+        body:
+          type: string
+          minLength: 1
+          maxLength: 2000
+        revision:
+          type: integer
+          minimum: 1
+        createdAt:
+          type: string
+          format: date-time
+        publishedAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        archivedAt:
+          type: [string, 'null']
+          format: date-time
+        restoreUntil:
+          type: [string, 'null']
+          format: date-time
+        retentionUntil:
+          type: [string, 'null']
+          format: date-time
+    CommunityCommentPage:
+      type: object
+      additionalProperties: false
+      required: [items, watermark]
+      properties:
+        items:
+          type: array
+          maxItems: 50
+          items:
+            $ref: '#/components/schemas/CommunityComment'
+        watermark:
+          type: string
+          format: date-time
+        nextCursor:
+          type: string
+          minLength: 16
+          maxLength: 1024
+    CommunityCommentCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [body]
+      properties:
+        body:
+          type: string
+          minLength: 1
+          maxLength: 2000
+    CommunityCommentEditRequest:
+      type: object
+      additionalProperties: false
+      required: [body, expectedRevision]
+      properties:
+        body:
+          type: string
+          minLength: 1
+          maxLength: 2000
+        expectedRevision:
+          type: integer
+          minimum: 1
+    CommunityReactionRequest:
+      type: object
+      additionalProperties: false
+      required: [reaction]
+      properties:
+        reaction:
+          type: string
+          enum: [LIKE, DISLIKE]
+    CommunityReactionState:
+      type: object
+      additionalProperties: false
+      required: [targetType, targetId, reaction, active, revision, updatedAt]
+      properties:
+        targetType:
+          type: string
+          enum: [POST, COMMENT]
+        targetId:
+          type: string
+          format: uuid
+        reaction:
+          type: [string, 'null']
+          enum: [LIKE, DISLIKE, null]
+        active:
+          type: boolean
+        revision:
+          type: integer
+          minimum: 1
+        updatedAt:
+          type: string
+          format: date-time
+    CommunityOwnershipTransferRequest:
+      type: object
+      additionalProperties: false
+      required: [targetUserId, expectedOwnerRevision, expectedTargetRevision]
+      properties:
+        targetUserId:
+          type: string
+          format: uuid
+        expectedOwnerRevision:
+          type: integer
+          minimum: 1
+        expectedTargetRevision:
+          type: integer
+          minimum: 1
+    CommunityOwnershipFormerOwner:
+      type: object
+      additionalProperties: false
+      required: [userId, role, revision]
+      properties:
+        userId:
+          type: string
+          format: uuid
+        role:
+          type: string
+          const: ADMIN
+        revision:
+          type: integer
+          minimum: 1
+    CommunityOwnershipNewOwner:
+      type: object
+      additionalProperties: false
+      required: [userId, previousRole, role, revision]
+      properties:
+        userId:
+          type: string
+          format: uuid
+        previousRole:
+          type: string
+          enum: [ADMIN, MODERATOR, MEMBER]
+        role:
+          type: string
+          const: OWNER
+        revision:
+          type: integer
+          minimum: 1
+    CommunityOwnershipTransferState:
+      type: object
+      additionalProperties: false
+      required: [communityId, previousOwner, owner, transferredAt]
+      properties:
+        communityId:
+          type: string
+          format: uuid
+        previousOwner:
+          $ref: '#/components/schemas/CommunityOwnershipFormerOwner'
+        owner:
+          $ref: '#/components/schemas/CommunityOwnershipNewOwner'
+        transferredAt:
+          type: string
+          format: date-time
+    CommunityMembershipPinRequest:
+      type: object
+      additionalProperties: false
+      required: [pinned, expectedRevision]
+      properties:
+        pinned:
+          type: boolean
+        expectedRevision:
+          type: integer
+          minimum: 0
+    CommunityMembershipPinState:
+      type: object
+      additionalProperties: false
+      required: [communityId, pinned, revision, updatedAt]
+      properties:
+        communityId:
+          type: string
+          format: uuid
+        pinned:
+          type: boolean
+        revision:
+          type: integer
+          minimum: 0
+        updatedAt:
+          type: string
+          format: date-time
   parameters:
     IdempotencyKey:
       name: Idempotency-Key
@@ -4132,6 +6891,62 @@ components:
       schema:
         type: string
         const: logout
+    CommunityId:
+      name: communityId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    CommunityPostId:
+      name: postId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    CommunityMediaId:
+      name: mediaId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    CommunityMediaVariant:
+      name: variant
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/CommunityMediaVariantName'
+    CommunityCommentId:
+      name: commentId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    CommunityReactionTargetId:
+      name: targetId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    CommunityContentLimit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 50
+        default: 20
+    CommunityContentCursor:
+      name: cursor
+      in: query
+      schema:
+        type: string
+        minLength: 16
+        maxLength: 1024
   headers:
     OAuthBrowserCookie:
       description: |
@@ -4157,6 +6972,12 @@ components:
       required: true
       schema:
         type: string
+    SensitiveNoStore:
+      description: Sensitive invite material must not be stored by browsers or intermediary caches.
+      required: true
+      schema:
+        type: string
+        const: no-store
   responses:
     AuthIdentityConflict:
       description: The OAuth identity belongs to a different PadlHub user.

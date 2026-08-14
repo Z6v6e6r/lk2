@@ -4,7 +4,7 @@ import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { loadConfig } from './index.js';
+import { loadConfig, loadRealtimeConfig } from './index.js';
 
 const validEnvironment = {
   APP_ENV: 'ci',
@@ -26,6 +26,14 @@ describe('loadConfig', () => {
       OUTBOX_CLAIM_TTL_MS: 60_000,
       OUTBOX_CONFIRM_TIMEOUT_MS: 10_000,
       OUTBOX_FAILURE_BACKOFF_MS: 5_000,
+      DATABASE_POOL_MAX: 20,
+      DATABASE_POOL_WARM_CONNECTIONS: 1,
+      REALTIME_MAX_CONNECTIONS: 10_000,
+      REALTIME_DATABASE_POOL_MAX: 10,
+      REALTIME_DATABASE_POOL_WARM_CONNECTIONS: 2,
+      REALTIME_MAX_SUBSCRIPTIONS_PER_CONNECTION: 100,
+      REALTIME_MAX_SOCKET_BUFFER_BYTES: 512 * 1_024,
+      REALTIME_HEARTBEAT_INTERVAL_MS: 30_000,
       VIVA_MODE: 'mock',
       HOME_READ_MODE: 'mock',
       GAMES_READ_ENABLED: false,
@@ -52,6 +60,17 @@ describe('loadConfig', () => {
       COMMUNITY_LEGACY_READ_FEED_ENABLED: false,
       COMMUNITY_LEGACY_READ_CHAT_ENABLED: false,
       COMMUNITY_LEGACY_READ_RATING_ENABLED: false,
+      COMMUNITY_INVITES_ENABLED: false,
+      COMMUNITIES_REALTIME_ENABLED: false,
+      COMMUNITY_MEDIA_ENABLED: false,
+      COMMUNITY_MEDIA_SCAN_MODE: 'mock',
+      COMMUNITY_MEDIA_CLAMAV_PORT: 3310,
+      COMMUNITY_MEDIA_CLAMAV_TIMEOUT_MS: 30_000,
+      COMMUNITY_MEDIA_POLL_INTERVAL_MS: 2_000,
+      COMMUNITY_MEDIA_BATCH_SIZE: 10,
+      COMMUNITY_MEDIA_SCAN_MAX_ATTEMPTS: 8,
+      COMMUNITY_MEDIA_GC_MAX_ATTEMPTS: 8,
+      COMMUNITY_MEDIA_READ_URL_TTL_SECONDS: 300,
       COMMUNITIES_LEGACY_TIMEOUT_MS: 10_000,
       COMMUNITIES_LEGACY_MAX_ATTEMPTS: 2,
       COMMUNITIES_LEGACY_CACHE_TTL_MS: 30_000,
@@ -104,6 +123,186 @@ describe('loadConfig', () => {
         COMMUNITY_LEGACY_READ_DETAIL_ENABLED: 'true',
       }),
     ).toThrow('COMMUNITY_LEGACY_READ_*_ENABLED requires COMMUNITIES_READ_MODE=legacy');
+  });
+
+  it('keeps Communities realtime staging-only until durable recovery is proven', () => {
+    expect(
+      loadConfig({
+        ...validEnvironment,
+        APP_ENV: 'staging',
+        COMMUNITIES_READ_MODE: 'local',
+        JWT_REALTIME_SECRET: 'staging-realtime-secret-at-least-32-characters',
+        COMMUNITIES_REALTIME_ENABLED: 'true',
+      }),
+    ).toMatchObject({ COMMUNITIES_REALTIME_ENABLED: true });
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        APP_ENV: 'production',
+        VIVA_MODE: 'production',
+        AUTH_COOKIE_SECURE: 'true',
+        TRUSTED_PROXY_CIDRS: '10.0.0.0/24',
+        JWT_ACCESS_SECRET: 'prod-access-secret-very-long-and-random-123',
+        JWT_REALTIME_SECRET: 'prod-realtime-secret-very-long-and-random-789',
+        JWT_REFRESH_SECRET: 'prod-refresh-secret-very-long-and-random-456',
+        HOME_READ_MODE: 'projection',
+        PUBLIC_OFFER_VERSION: '2026-07-18',
+        PERSONAL_DATA_POLICY_VERSION: '2026-07-18',
+        COMMUNITIES_READ_MODE: 'local',
+        PROMOTIONS_READ_MODE: 'legacy',
+        COMMUNITIES_REALTIME_ENABLED: 'true',
+      }),
+    ).toThrow('COMMUNITIES_REALTIME_ENABLED is staging-only');
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        APP_ENV: 'staging',
+        COMMUNITIES_READ_MODE: 'local',
+        COMMUNITIES_REALTIME_ENABLED: 'true',
+      }),
+    ).toThrow('COMMUNITIES_REALTIME_ENABLED requires JWT_REALTIME_SECRET');
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        APP_ENV: 'staging',
+        COMMUNITIES_READ_MODE: 'local',
+        COMMUNITIES_REALTIME_ENABLED: 'true',
+        JWT_REALTIME_SECRET: validEnvironment.JWT_ACCESS_SECRET,
+      }),
+    ).toThrow('JWT_REALTIME_SECRET must be distinct');
+  });
+
+  it('keeps API and refresh signing secrets out of an enabled staging realtime runtime', () => {
+    expect(() =>
+      loadRealtimeConfig({
+        ...validEnvironment,
+        APP_ENV: 'staging',
+        COMMUNITIES_READ_MODE: 'local',
+        JWT_REALTIME_SECRET: 'staging-realtime-secret-at-least-32-characters',
+        COMMUNITIES_REALTIME_ENABLED: 'true',
+      }),
+    ).toThrow('Realtime runtime must not receive JWT_ACCESS_SECRET or JWT_REFRESH_SECRET');
+
+    expect(
+      loadRealtimeConfig({
+        ...validEnvironment,
+        APP_ENV: 'staging',
+        COMMUNITIES_READ_MODE: 'local',
+        JWT_ACCESS_SECRET: undefined,
+        JWT_REFRESH_SECRET: undefined,
+        JWT_REALTIME_SECRET: 'staging-realtime-secret-at-least-32-characters',
+        COMMUNITIES_REALTIME_ENABLED: 'true',
+      }),
+    ).toMatchObject({ COMMUNITIES_REALTIME_ENABLED: true });
+
+    expect(() =>
+      loadRealtimeConfig({
+        ...validEnvironment,
+        APP_ENV: 'ci',
+        JWT_REALTIME_SECRET: undefined,
+        COMMUNITIES_REALTIME_ENABLED: 'false',
+      }),
+    ).toThrow('Realtime runtime requires JWT_REALTIME_SECRET');
+  });
+
+  it('requires versioned media dependencies and a real scanner outside local/ci', () => {
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        COMMUNITY_MEDIA_ENABLED: 'true',
+      }),
+    ).toThrow('COMMUNITY_MEDIA_ENABLED requires COMMUNITIES_READ_MODE=local');
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        COMMUNITIES_READ_MODE: 'local',
+        COMMUNITY_MEDIA_ENABLED: 'true',
+      }),
+    ).toThrow('COMMUNITY_MEDIA_ENABLED requires versioned media storage');
+
+    const storage = {
+      S3_ENDPOINT: 'http://minio:9000',
+      S3_PUBLIC_ENDPOINT: 'http://localhost:9000',
+      S3_BUCKET: 'phub-media',
+      S3_ACCESS_KEY: 'access',
+      S3_SECRET_KEY: 'secret',
+    } as const;
+    expect(
+      loadConfig({
+        ...validEnvironment,
+        ...storage,
+        COMMUNITIES_READ_MODE: 'local',
+        COMMUNITY_MEDIA_ENABLED: 'true',
+      }),
+    ).toMatchObject({ COMMUNITY_MEDIA_ENABLED: true, COMMUNITY_MEDIA_SCAN_MODE: 'mock' });
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        ...storage,
+        APP_ENV: 'staging',
+        COMMUNITIES_READ_MODE: 'local',
+        COMMUNITY_MEDIA_ENABLED: 'true',
+      }),
+    ).toThrow('COMMUNITY_MEDIA_ENABLED requires an HTTPS S3_PUBLIC_ENDPOINT origin');
+    const stagingStorage = { ...storage, S3_PUBLIC_ENDPOINT: 'https://media.staging.padlhub.test' };
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        ...stagingStorage,
+        APP_ENV: 'staging',
+        COMMUNITIES_READ_MODE: 'local',
+        COMMUNITY_MEDIA_ENABLED: 'true',
+      }),
+    ).toThrow('COMMUNITY_MEDIA_ENABLED requires COMMUNITY_MEDIA_SCAN_MODE=clamav');
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        ...stagingStorage,
+        APP_ENV: 'staging',
+        COMMUNITIES_READ_MODE: 'local',
+        COMMUNITY_MEDIA_ENABLED: 'true',
+        COMMUNITY_MEDIA_SCAN_MODE: 'clamav',
+      }),
+    ).toThrow('COMMUNITY_MEDIA_SCAN_MODE=clamav requires COMMUNITY_MEDIA_CLAMAV_HOST');
+    expect(
+      loadConfig({
+        ...validEnvironment,
+        ...stagingStorage,
+        APP_ENV: 'staging',
+        COMMUNITIES_READ_MODE: 'local',
+        COMMUNITY_MEDIA_ENABLED: 'true',
+        COMMUNITY_MEDIA_SCAN_MODE: 'clamav',
+        COMMUNITY_MEDIA_CLAMAV_HOST: 'clamav',
+      }),
+    ).toMatchObject({
+      COMMUNITY_MEDIA_ENABLED: true,
+      COMMUNITY_MEDIA_SCAN_MODE: 'clamav',
+      COMMUNITY_MEDIA_CLAMAV_HOST: 'clamav',
+    });
+  });
+
+  it('requires the startup pool warmup to fit inside the configured pool', () => {
+    expect(
+      loadConfig({
+        ...validEnvironment,
+        DATABASE_POOL_MAX: '20',
+        DATABASE_POOL_WARM_CONNECTIONS: '20',
+      }),
+    ).toMatchObject({ DATABASE_POOL_MAX: 20, DATABASE_POOL_WARM_CONNECTIONS: 20 });
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        DATABASE_POOL_MAX: '10',
+        DATABASE_POOL_WARM_CONNECTIONS: '11',
+      }),
+    ).toThrow('DATABASE_POOL_WARM_CONNECTIONS must not exceed DATABASE_POOL_MAX');
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        REALTIME_DATABASE_POOL_MAX: '4',
+        REALTIME_DATABASE_POOL_WARM_CONNECTIONS: '5',
+      }),
+    ).toThrow('REALTIME_DATABASE_POOL_WARM_CONNECTIONS must not exceed REALTIME_DATABASE_POOL_MAX');
   });
 
   it('keeps leased outbox publication explicit, staging-only and lease-safe', () => {
@@ -738,5 +937,48 @@ describe('loadConfig', () => {
         PERSONAL_DATA_POLICY_VERSION: '2026-07-18',
       }),
     ).toThrow('COMMUNITIES_READ_MODE=mock is forbidden in production');
+  });
+
+  it('requires a dedicated secret when community invites are enabled', () => {
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        COMMUNITY_INVITES_ENABLED: 'true',
+      }),
+    ).toThrow('COMMUNITY_INVITES_ENABLED requires COMMUNITIES_READ_MODE=local');
+
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        COMMUNITIES_READ_MODE: 'local',
+        COMMUNITY_INVITES_ENABLED: 'true',
+      }),
+    ).toThrow(
+      'COMMUNITY_INVITES_ENABLED requires COMMUNITY_INVITE_TOKEN_KEYS and COMMUNITY_INVITE_ACTIVE_KEY_ID',
+    );
+
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        COMMUNITIES_READ_MODE: 'local',
+        COMMUNITY_INVITES_ENABLED: 'true',
+        COMMUNITY_INVITE_TOKEN_KEYS: JSON.stringify({
+          current: Buffer.alloc(32, 7).toString('base64'),
+        }),
+        COMMUNITY_INVITE_ACTIVE_KEY_ID: 'missing',
+      }),
+    ).toThrow('COMMUNITY_INVITE_ACTIVE_KEY_ID must select a configured token key');
+
+    expect(
+      loadConfig({
+        ...validEnvironment,
+        COMMUNITIES_READ_MODE: 'local',
+        COMMUNITY_INVITES_ENABLED: 'true',
+        COMMUNITY_INVITE_TOKEN_KEYS: JSON.stringify({
+          current: Buffer.alloc(32, 7).toString('base64'),
+        }),
+        COMMUNITY_INVITE_ACTIVE_KEY_ID: 'current',
+      }),
+    ).toMatchObject({ COMMUNITY_INVITES_ENABLED: true, COMMUNITY_INVITE_ACTIVE_KEY_ID: 'current' });
   });
 });

@@ -1672,6 +1672,130 @@ select {
   }
 }
 
+.moderation-filter-panel {
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) auto;
+  gap: 16px;
+  align-items: end;
+  margin-bottom: 20px;
+  padding: 20px;
+}
+
+.invite-quota-grant-panel {
+  display: grid;
+  gap: 16px;
+  margin-bottom: 20px;
+  padding: 20px;
+}
+
+.invite-quota-grant-grid {
+  display: grid;
+  grid-template-columns: minmax(240px, 1.4fr) 1fr 1fr;
+  gap: 12px;
+}
+
+.invite-quota-grant-result {
+  display: grid;
+  gap: 8px;
+}
+
+.moderation-request-list {
+  display: grid;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.moderation-request-card {
+  display: grid;
+  gap: 18px;
+  padding: 22px;
+}
+
+.moderation-request-card > header,
+.moderation-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.moderation-request-card h2 {
+  margin: 2px 0 0;
+}
+
+.moderation-media-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+  gap: 10px;
+}
+
+.moderation-media-preview,
+.moderation-media-loading,
+.moderation-media-failed {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  border-radius: 14px;
+}
+
+.moderation-media-preview {
+  display: block;
+  object-fit: cover;
+  background: #eef0f5;
+}
+
+.moderation-media-loading,
+.moderation-media-failed {
+  display: grid;
+  place-items: center;
+  box-sizing: border-box;
+  padding: 12px;
+  background: #f6f7fb;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+.moderation-media-failed {
+  color: #a12525;
+}
+
+.moderation-request-card dl {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0;
+}
+
+.moderation-request-card dl > div {
+  border-radius: 14px;
+  background: #f6f7fb;
+  padding: 12px;
+}
+
+.moderation-request-card dt {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.moderation-request-card dd {
+  margin: 4px 0 0;
+  font-weight: 700;
+}
+
+.status-chip {
+  border-radius: 999px;
+  background: #fff0c9;
+  color: #885b00;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.danger-button {
+  border-color: #efc4c4;
+  color: #a12525;
+}
+
 @media (max-width: 760px) {
   .app-shell {
     grid-template-columns: 1fr;
@@ -1694,7 +1818,7 @@ select {
   }
 
   nav {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(5, minmax(0, 1fr));
   }
 
   .operator-card {
@@ -1756,6 +1880,12 @@ select {
 
   .gift-form-grid .span-two {
     grid-column: auto;
+  }
+
+  .moderation-filter-panel,
+  .invite-quota-grant-grid,
+  .moderation-request-card dl {
+    grid-template-columns: 1fr;
   }
 }
 

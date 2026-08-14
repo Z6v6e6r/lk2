@@ -51,7 +51,32 @@ function repository(
     fetchImplementation,
   });
 }
+
+function oversizedChunkedResponse(): Response {
+  const chunk = new Uint8Array(1024 * 1024 + 1);
+  return new Response(
+    new ReadableStream({
+      start(controller) {
+        controller.enqueue(chunk);
+        controller.enqueue(chunk);
+        controller.close();
+      },
+    }),
+    { status: 200 },
+  );
+}
 describe('legacy community experience repository', () => {
+  it('fails closed while streaming a chunked provider response beyond the byte limit', async () => {
+    const fetchImplementation = vi
+      .fn<typeof fetch>()
+      .mockImplementation(() => Promise.resolve(oversizedChunkedResponse()));
+
+    await expect(repository(fetchImplementation).getDetail(input)).rejects.toMatchObject({
+      code: 'COMMUNITY_EXPERIENCE_PROVIDER_INVALID',
+      diagnostic: 'provider-body-bytes',
+    });
+  });
+
   it('revalidates ACTIVE membership and strips source identities', async () => {
     const fetchImplementation = vi.fn<typeof fetch>().mockImplementation((url) => {
       const path = fetchUrl(url).pathname;
@@ -358,11 +383,16 @@ describe('legacy community experience repository', () => {
       if (path.endsWith('/feed')) {
         feedAttempts += 1;
         if (feedAttempts === 1) {
-          const response = new Response('', { status: 200 });
-          response.text = vi
-            .fn<typeof response.text>()
-            .mockRejectedValue(new DOMException('aborted', 'AbortError'));
-          return Promise.resolve(response);
+          return Promise.resolve(
+            new Response(
+              new ReadableStream({
+                pull() {
+                  throw new DOMException('aborted', 'AbortError');
+                },
+              }),
+              { status: 200 },
+            ),
+          );
         }
         return Promise.resolve(
           new Response(JSON.stringify({ posts: [], nextBeforeTs: 0 }), { status: 200 }),

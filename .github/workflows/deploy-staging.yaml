@@ -431,9 +431,23 @@ jobs:
           done
           exit 0
 
-  build:
+  verify:
     needs: validate-request
     if: ${{ needs.validate-request.outputs.mode == 'deploy' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run contracts:generate
+      - run: npm run check
+
+  build:
+    needs: [validate-request, verify]
+    if: ${{ needs.validate-request.outputs.mode == 'deploy' && needs.verify.result == 'success' }}
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -499,6 +513,18 @@ jobs:
           printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
           printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+      - name: Verify API and realtime secret isolation
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+        run: |
+          scp deploy/jetson/verify-runtime-env-isolation.sh \
+            "phub-deploy@$HOST:/tmp/verify-runtime-env-isolation-${{ github.run_id }}.sh"
+          ssh "phub-deploy@$HOST" '
+            set -eu
+            trap "rm -f /tmp/verify-runtime-env-isolation-${{ github.run_id }}.sh" EXIT HUP INT TERM
+            sh /tmp/verify-runtime-env-isolation-${{ github.run_id }}.sh \
+              /etc/phub/staging.env /etc/phub/realtime.env phub-deploy false
+          '
       - id: application-backup
         name: Preserve the active digest-pinned application release
         env:
@@ -571,6 +597,8 @@ jobs:
             mv "$auth_env_tmp" "$auth_env"
             trap - EXIT HUP INT TERM
           '
+          scp deploy/jetson/verify-runtime-env-isolation.sh \
+            "phub-deploy@$HOST:/opt/phub/verify-runtime-env-isolation.sh"
           {
             echo "REGISTRY=ghcr.io/z6v6e6r"
             echo "WEB_IMAGE_DIGEST=$(cat digests/web)"
@@ -587,12 +615,28 @@ jobs:
         if: ${{ inputs.deployment_profile != 'COMMUNITIES_LEGACY_READ_ONLY' }}
         env:
           HOST: ${{ secrets.STAGING_HOST }}
-        run: ssh "phub-deploy@$HOST" 'sh /opt/phub/verify-live-staging-data.sh preflight'
+        run: |
+          ssh "phub-deploy@$HOST" '
+            set -eu
+            sh /opt/phub/verify-runtime-env-isolation.sh \
+              /etc/phub/staging.env /etc/phub/realtime.env phub-deploy false
+            cd /opt/phub
+            docker compose --env-file infrastructure.env --env-file release.env config --quiet
+            sh /opt/phub/verify-live-staging-data.sh preflight
+          '
       - name: Verify Communities legacy read-only source configuration
         if: ${{ inputs.deployment_profile == 'COMMUNITIES_LEGACY_READ_ONLY' }}
         env:
           HOST: ${{ secrets.STAGING_HOST }}
-        run: ssh "phub-deploy@$HOST" 'sh /opt/phub/verify-communities-legacy-read-only.sh preflight'
+        run: |
+          ssh "phub-deploy@$HOST" '
+            set -eu
+            sh /opt/phub/verify-runtime-env-isolation.sh \
+              /etc/phub/staging.env /etc/phub/realtime.env phub-deploy false
+            cd /opt/phub
+            docker compose --env-file infrastructure.env --env-file release.env config --quiet
+            sh /opt/phub/verify-communities-legacy-read-only.sh preflight
+          '
       - name: Pull, migrate and deploy the same image digests
         env:
           HOST: ${{ secrets.STAGING_HOST }}
@@ -645,9 +689,10 @@ jobs:
             compose --profile migration run --rm migrator
             latest_migration="$(sed -n s/^LATEST_MIGRATION=//p release.env)"
             test -n "$latest_migration"
-            infrastructure exec -T postgres sh -ec \
+            applied_migrations="$(infrastructure exec -T postgres sh -ec \
               "psql -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -Atc \"select filename from public.schema_migrations\"" \
-              | grep -Fx "$latest_migration"
+            )"
+            printf "%s\n" "$applied_migrations" | grep -Fx "$latest_migration"
             if [ "$deployment_profile" = COMMUNITIES_LEGACY_READ_ONLY ]; then
               compose up -d --remove-orphans web api
               compose stop worker realtime
@@ -688,6 +733,16 @@ jobs:
               compose ps -a
               compose logs --no-color --tail=160 api worker realtime
               exit 1
+            fi
+            if [ "$deployment_profile" != COMMUNITIES_LEGACY_READ_ONLY ]; then
+              compose exec -T worker node -e "
+                fetch(\"http://127.0.0.1:3002/health/ready\", { signal: AbortSignal.timeout(5000) })
+                  .then(async (response) => {
+                    const body = await response.json();
+                    if (!response.ok || body.status !== \"ready\") process.exit(1);
+                  })
+                  .catch(() => process.exit(1));
+              "
             fi
           '
       - name: Promote canonical Nano TLS ingress
