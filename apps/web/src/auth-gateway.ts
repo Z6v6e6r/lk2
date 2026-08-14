@@ -121,8 +121,10 @@ export type {
 } from '@phub/api-sdk';
 import { maskPhone } from '@phub/auth';
 import {
+  ClientTransportError,
   createClientTransportExecutor,
   normalizePadlHubUserProfile,
+  normalizeVivaUserProfile,
 } from '@phub/viva-client-adapter';
 
 export interface NormalizedUser {
@@ -419,6 +421,9 @@ interface BrowserAuthGatewayOptions {
 const HOME_INITIAL_SCHEDULE_DAYS = 3;
 const NOTIFICATION_CACHE_TTL_MS = 2_000;
 const VIVA_REAUTH_RETURN_PATH_STORAGE_KEY = 'phub.viva-reauth-return-path.v1';
+const VIVA_REAUTH_ATTEMPT_STORAGE_KEY = 'phub.viva-reauth-attempt.v1';
+const VIVA_REAUTH_ATTEMPT_TTL_MS = 10 * 60 * 1_000;
+const SELF_PROFILE_CACHE_TTL_MS = 60 * 1_000;
 
 export function createMessagingCommandId(): string {
   const webCrypto = typeof globalThis === 'object' ? globalThis.crypto : undefined;
@@ -512,7 +517,9 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
   let routingPlan: ClientRoutingPlan | undefined;
   let routingPlanPromise: Promise<ClientRoutingPlan> | undefined;
   let selfProfilePromise: Promise<UserProfile> | undefined;
+  let selfProfileExpiresAt = 0;
   let currentUserId: string | undefined;
+  let principalGeneration = 0;
   const playerProfilePromises = new Map<string, Promise<PlayerProfileView>>();
   let profilePrivacyPromise: Promise<ProfilePrivacySettings> | undefined;
   let bookingPreferencesPromise: Promise<BookingPreferences> | undefined;
@@ -545,9 +552,39 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
   const publicTournamentSummaryPromises = new Map<string, Promise<PublicTournamentSummary>>();
   let vivaReauthorizationStarted = false;
 
+  function vivaRecoveryPrincipal(): string | undefined {
+    return currentUserId ? `${options.tenantKey}:${currentUserId}` : undefined;
+  }
+
   function startAutomaticVivaReauthorization(): Promise<void> {
     if (typeof window === 'undefined' || vivaReauthorizationStarted) return Promise.resolve();
+    const recoveryPrincipal = vivaRecoveryPrincipal();
+    if (!recoveryPrincipal) return Promise.resolve();
+    try {
+      const storedAttempt = window.sessionStorage.getItem(VIVA_REAUTH_ATTEMPT_STORAGE_KEY);
+      if (storedAttempt) {
+        try {
+          const attempt = JSON.parse(storedAttempt) as { principal?: unknown; startedAt?: unknown };
+          if (
+            attempt.principal === recoveryPrincipal &&
+            typeof attempt.startedAt === 'number' &&
+            attempt.startedAt > Date.now() - VIVA_REAUTH_ATTEMPT_TTL_MS
+          ) {
+            return Promise.resolve();
+          }
+        } catch {
+          // Replace malformed or legacy attempt state below.
+        }
+      }
+      window.sessionStorage.setItem(
+        VIVA_REAUTH_ATTEMPT_STORAGE_KEY,
+        JSON.stringify({ principal: recoveryPrincipal, startedAt: Date.now() }),
+      );
+    } catch {
+      // The in-memory latch still prevents duplicate starts in this gateway instance.
+    }
     vivaReauthorizationStarted = true;
+    const generation = principalGeneration;
     try {
       window.sessionStorage.setItem(
         VIVA_REAUTH_RETURN_PATH_STORAGE_KEY,
@@ -559,13 +596,29 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     return client
       .createVivaOAuthRecovery()
       .then((response) => {
+        if (generation !== principalGeneration) throw new Error('AUTH_PRINCIPAL_CHANGED');
         if (!response.redirectUrl) throw new Error('Viva OAuth redirect is unavailable');
         if (options.onVivaRecoveryRedirect) options.onVivaRecoveryRedirect(response.redirectUrl);
         else window.location.assign(response.redirectUrl);
       })
       .catch((error: unknown) => {
+        if (generation !== principalGeneration || vivaRecoveryPrincipal() !== recoveryPrincipal) {
+          throw error;
+        }
+        vivaReauthorizationStarted = false;
         try {
           window.sessionStorage.removeItem(VIVA_REAUTH_RETURN_PATH_STORAGE_KEY);
+          const storedAttempt = window.sessionStorage.getItem(VIVA_REAUTH_ATTEMPT_STORAGE_KEY);
+          if (storedAttempt) {
+            try {
+              const attempt = JSON.parse(storedAttempt) as { principal?: unknown };
+              if (attempt.principal === recoveryPrincipal) {
+                window.sessionStorage.removeItem(VIVA_REAUTH_ATTEMPT_STORAGE_KEY);
+              }
+            } catch {
+              window.sessionStorage.removeItem(VIVA_REAUTH_ATTEMPT_STORAGE_KEY);
+            }
+          }
         } catch {
           // A failed recovery must not leave an old route for a later regular login.
         }
@@ -597,11 +650,41 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     };
   }
 
+  async function issueVivaAccessWithBusyRetry(
+    generation: number,
+    handoffCode?: string,
+  ): Promise<{
+    readonly accessToken: string;
+    readonly expiresAt: string;
+  }> {
+    const delays = handoffCode ? [] : [150, 450, 900];
+    for (let attempt = 0; ; attempt += 1) {
+      if (generation !== principalGeneration) throw new Error('AUTH_PRINCIPAL_CHANGED');
+      try {
+        return await client.issueVivaAccessToken(handoffCode ? { handoffCode } : {});
+      } catch (error) {
+        if (
+          !(error instanceof ApiClientError) ||
+          error.code !== 'VIVA_DELEGATION_BUSY' ||
+          attempt >= delays.length
+        ) {
+          throw error;
+        }
+        const delay = delays[attempt] ?? 0;
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        if (generation !== principalGeneration) {
+          throw new Error('AUTH_PRINCIPAL_CHANGED', { cause: error });
+        }
+      }
+    }
+  }
+
   function applyVivaAccess(handoffCode?: string): Promise<string> {
     if (!handoffCode && vivaAccessPromise) return vivaAccessPromise;
-    const request = client
-      .issueVivaAccessToken(handoffCode ? { handoffCode } : {})
+    const generation = principalGeneration;
+    const request = issueVivaAccessWithBusyRetry(generation, handoffCode)
       .then((access) => {
+        if (generation !== principalGeneration) throw new Error('AUTH_PRINCIPAL_CHANGED');
         vivaAccessToken = access.accessToken;
         vivaAccessExpiresAt = Date.parse(access.expiresAt);
         return access.accessToken;
@@ -633,6 +716,10 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     const vivaRecovery = fragment.get('viva_recovery') === '1';
     try {
       await applyVivaAccess(handoffCode);
+      selfProfilePromise = undefined;
+      selfProfileExpiresAt = 0;
+      routingPlan = undefined;
+      routingPlanPromise = undefined;
       return vivaRecovery ? 'recovery' : 'normal';
     } finally {
       fragment.delete('viva_handoff');
@@ -643,6 +730,18 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
   }
 
   function normalizeSession(session: ApiAuthenticatedSession): AuthenticatedSession {
+    if (currentUserId && currentUserId !== session.context.userId) {
+      vivaAccessToken = undefined;
+      vivaAccessExpiresAt = 0;
+      routingPlan = undefined;
+      routingPlanPromise = undefined;
+      selfProfilePromise = undefined;
+      selfProfileExpiresAt = 0;
+      playerProfilePromises.clear();
+      vivaReauthorizationStarted = false;
+      vivaAccessPromise = undefined;
+      principalGeneration += 1;
+    }
     currentUserId = session.context.userId;
     return { context: normalizeContext(session.context, options.tenantKey) };
   }
@@ -665,15 +764,55 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     return request;
   }
 
+  function handleDirectVivaError(error: unknown, generation: number, userId: string): void {
+    if (generation !== principalGeneration || currentUserId !== userId) return;
+    if (error instanceof ClientTransportError && error.code === 'DIRECT_VIVA_REAUTH_REQUIRED') {
+      vivaAccessToken = undefined;
+      vivaAccessExpiresAt = 0;
+      void startAutomaticVivaReauthorization().catch(() => undefined);
+    }
+  }
+
   function loadSelfProfile(): Promise<UserProfile> {
     if (!currentUserId) return Promise.reject(new Error('AUTH_REQUIRED'));
-    selfProfilePromise ??= client
-      .getUserProfile()
-      .then(normalizePadlHubUserProfile)
+    if (selfProfilePromise && selfProfileExpiresAt > Date.now()) return selfProfilePromise;
+    const userId = currentUserId;
+    const generation = principalGeneration;
+    let directVivaRead = false;
+    selfProfileExpiresAt = Number.POSITIVE_INFINITY;
+    const request = clientTransport
+      .executeRead({
+        request: { operation: 'profile.read' },
+        normalizePadlHub: normalizePadlHubUserProfile,
+        normalizeViva: (payload) => {
+          directVivaRead = true;
+          return normalizeVivaUserProfile(payload, userId);
+        },
+      })
+      .then((profile) => {
+        if (generation !== principalGeneration || currentUserId !== userId) {
+          throw new Error('AUTH_PRINCIPAL_CHANGED');
+        }
+        if (selfProfilePromise === request)
+          selfProfileExpiresAt = Date.now() + SELF_PROFILE_CACHE_TTL_MS;
+        if (directVivaRead) {
+          try {
+            window.sessionStorage.removeItem(VIVA_REAUTH_ATTEMPT_STORAGE_KEY);
+          } catch {
+            // A successful direct read is sufficient even when storage is unavailable.
+          }
+        }
+        return profile;
+      })
       .catch((error: unknown) => {
-        selfProfilePromise = undefined;
+        if (selfProfilePromise === request) {
+          selfProfilePromise = undefined;
+          selfProfileExpiresAt = 0;
+        }
+        handleDirectVivaError(error, generation, userId);
         throw error;
       });
+    selfProfilePromise = request;
     return selfProfilePromise;
   }
 
@@ -682,7 +821,13 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     getVivaAccessToken: () =>
       vivaAccessToken && vivaAccessExpiresAt > Date.now() + 30_000 ? vivaAccessToken : undefined,
     refreshVivaAccessToken: applyVivaAccess,
-    executePadlHub: () => Promise.reject(new Error('CLIENT_ASSISTED_READ_HAS_NO_DIRECT_FALLBACK')),
+    executePadlHub: (request) =>
+      request.operation === 'profile.read'
+        ? client.getUserProfile()
+        : Promise.reject(new Error('CLIENT_ASSISTED_READ_HAS_NO_DIRECT_FALLBACK')),
+    onMetric: (metric) => {
+      void client.recordDirectVivaReadMetric(metric).catch(() => undefined);
+    },
     ...(options.fetchImplementation ? { fetchImplementation: options.fetchImplementation } : {}),
   });
 
@@ -690,6 +835,9 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     job: BookingScreenReadJob,
     commands: readonly BookingScreenScheduleReadCommand[],
   ): Promise<void> {
+    const generation = principalGeneration;
+    const userId = currentUserId;
+    if (!userId) throw new Error('AUTH_REQUIRED');
     let nextIndex = 0;
     const worker = async (): Promise<void> => {
       while (nextIndex < commands.length) {
@@ -702,7 +850,8 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
             date: command.date,
           });
           await client.submitBookingScreenReadResult(job.jobId, command.commandId, payload);
-        } catch {
+        } catch (error) {
+          handleDirectVivaError(error, generation, userId);
           // Completion reports PARTIAL and still returns eligible local games.
         }
       }
@@ -819,6 +968,9 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       const job = await client.startBookingScreenReadJob('MY_BOOKINGS');
       const command = job.commands.find((item) => item.operation === 'bookings.read');
       if (!command) throw new Error('BOOKING_SCREEN_READ_COMMAND_MISSING');
+      const generation = principalGeneration;
+      const userId = currentUserId;
+      if (!userId) throw new Error('AUTH_REQUIRED');
       try {
         const payload = await clientTransport.executeClientAssistedUpcomingBookingsRead({
           operation: command.operation,
@@ -827,7 +979,8 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
           size: command.size,
         });
         await client.submitBookingScreenReadResult(job.jobId, command.commandId, payload);
-      } catch {
+      } catch (error) {
+        handleDirectVivaError(error, generation, userId);
         // Completion keeps an existing stale projection readable when Viva is unavailable.
       }
       await client.completeBookingScreenReadJob(job.jobId, 50);
@@ -858,6 +1011,9 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
           item.operation === 'bookings.history.read',
       );
       if (command) {
+        const generation = principalGeneration;
+        const userId = currentUserId;
+        if (!userId) throw new Error('AUTH_REQUIRED');
         try {
           const payload = await clientTransport.executeClientAssistedActivityHistoryRead({
             operation: command.operation,
@@ -865,7 +1021,8 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
             size: command.size,
           });
           await client.submitActivityHistoryReadResult(job.jobId, command.commandId, payload);
-        } catch {
+        } catch (error) {
+          handleDirectVivaError(error, generation, userId);
           // Completion records the missing provider page and keeps stale local data readable.
         }
       }
@@ -1440,7 +1597,17 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       routingPlan = undefined;
       routingPlanPromise = undefined;
       selfProfilePromise = undefined;
+      selfProfileExpiresAt = 0;
       currentUserId = undefined;
+      vivaReauthorizationStarted = false;
+      vivaAccessPromise = undefined;
+      principalGeneration += 1;
+      try {
+        window.sessionStorage.removeItem(VIVA_REAUTH_RETURN_PATH_STORAGE_KEY);
+        window.sessionStorage.removeItem(VIVA_REAUTH_ATTEMPT_STORAGE_KEY);
+      } catch {
+        // Logout remains valid when browser storage is unavailable.
+      }
       playerProfilePromises.clear();
       profilePrivacyPromise = undefined;
       bookingPreferencesPromise = undefined;

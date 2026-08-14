@@ -35,7 +35,11 @@ import type {
   TrainerAvatarRepository,
   UpcomingBookingsRepository,
 } from '@phub/database';
-import { isValidIdempotencyKey, type ClientPlatform } from '@phub/domain';
+import {
+  DIRECT_VIVA_READ_OPERATIONS,
+  isValidIdempotencyKey,
+  type ClientPlatform,
+} from '@phub/domain';
 import { homeBaseSchema, normalizeHomeBaseFreshness, type HomeBase } from '@phub/home-projection';
 import type { NotificationEndpointCipher } from '@phub/notifications';
 import type { VivaExerciseRecommendationSourceAdapter } from '@phub/viva-adapter';
@@ -44,6 +48,7 @@ import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest }
 import type Redis from 'ioredis';
 import { jwtVerify, type JWTPayload } from 'jose';
 import type { Pool } from 'pg';
+import { z } from 'zod';
 
 import { registerAuthRoutes } from './auth/auth-routes.js';
 import { registerAdminNotificationRoutes } from './admin/notification-admin-routes.js';
@@ -122,6 +127,19 @@ interface PadlHubClaims extends JWTPayload {
   readonly permissions: readonly string[];
   readonly sid: string;
 }
+
+const directVivaOutcomeSchema = z
+  .object({
+    operation: z.enum(DIRECT_VIVA_READ_OPERATIONS),
+    routingRevision: z.string().regex(/^[0-9]+$/),
+    outcome: z.enum(['SUCCESS', 'UNAVAILABLE', 'REAUTH_REQUIRED', 'INVALID', 'CIRCUIT_OPEN']),
+    statusClass: z
+      .string()
+      .regex(/^[1-5]xx$/)
+      .optional(),
+    durationMs: z.number().int().min(0).max(60_000),
+  })
+  .strict();
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const CORRELATION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/;
@@ -959,6 +977,19 @@ export async function buildApp(options: BuildAppOptions) {
       const maxAge = Math.max(0, Math.min(30, Math.floor(stored.validForSeconds / 2)));
       reply.header('Cache-Control', `private, max-age=${maxAge}`);
       return plan;
+    },
+  );
+
+  app.post(
+    '/user/api/v1/:tenantKey/routing-outcomes',
+    { preHandler: [authenticate, resolveTenant] },
+    async (request, reply) => {
+      const outcome = directVivaOutcomeSchema.safeParse(request.body);
+      if (!outcome.success) {
+        return sendApiError(request, reply, 400, 'REQUEST_INVALID', 'Некорректный запрос.');
+      }
+      request.log.info({ event: 'direct_viva_read_outcome', ...outcome.data });
+      return reply.status(204).send();
     },
   );
 

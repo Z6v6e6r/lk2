@@ -566,6 +566,40 @@ describe('PadlHubApiClient authentication boundary', () => {
     expect(client.getAccessToken()).toBeUndefined();
   });
 
+  it('starts Viva recovery with browser credentials and one retry-safe operation key', async () => {
+    const calls: Array<{ input: Parameters<typeof fetch>[0]; init?: RequestInit }> = [];
+    const fetchImplementation: typeof fetch = (input, init) => {
+      calls.push({ input, ...(init === undefined ? {} : { init }) });
+      if (calls.length === 1) return Promise.reject(new TypeError('temporary network failure'));
+      return Promise.resolve(
+        jsonResponse({ redirectUrl: 'https://identity.example.test/yandex-recovery' }),
+      );
+    };
+    const client = createClient(fetchImplementation, {
+      initialAccessToken: authenticatedSession.accessToken,
+    });
+
+    await expect(client.createVivaOAuthRecovery()).resolves.toEqual({
+      redirectUrl: 'https://identity.example.test/yandex-recovery',
+    });
+
+    expect(calls).toHaveLength(2);
+    for (const call of calls) {
+      expect(requestUrl(call.input)).toBe(
+        'https://api.padlhub.test/user/api/v1/local-padel/auth/viva/reauthorize',
+      );
+      expect(call.init?.method).toBe('POST');
+      expect(call.init?.credentials).toBe('include');
+      expect(new Headers(call.init?.headers).get('Authorization')).toBe(
+        `Bearer ${authenticatedSession.accessToken}`,
+      );
+      expect(JSON.parse(stringRequestBody(call.init?.body))).toEqual({ provider: 'yandex' });
+    }
+    const firstKey = new Headers(calls[0]?.init?.headers).get('Idempotency-Key');
+    expect(firstKey).toBeTruthy();
+    expect(new Headers(calls[1]?.init?.headers).get('Idempotency-Key')).toBe(firstKey);
+  });
+
   it('keeps the in-memory access token when logout does not reach the server', async () => {
     const fetchImplementation: typeof fetch = () => Promise.reject(new TypeError('offline'));
     const client = createClient(fetchImplementation, {

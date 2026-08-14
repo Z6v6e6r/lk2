@@ -294,7 +294,10 @@ paths:
     post:
       operationId: createVivaOAuthAuthorization
       summary: Start server-owned Viva OAuth with PKCE
-      description: Creates an opaque, one-time OAuth state and returns the Viva authorization URL. No Viva credential is returned.
+      description: |
+        Creates an opaque, one-time OAuth state and returns the Viva authorization URL. The
+        response sets a short-lived HttpOnly browser-binding cookie, so a cross-origin browser
+        client must send the request with credentials enabled. No Viva credential is returned.
       security: []
       requestBody:
         required: true
@@ -308,6 +311,8 @@ paths:
           headers:
             X-Correlation-ID:
               $ref: ../../common/components.yaml#/components/headers/CorrelationId
+            Set-Cookie:
+              $ref: '#/components/headers/OAuthBrowserCookie'
           content:
             application/json:
               schema:
@@ -330,7 +335,10 @@ paths:
       summary: Recover an expired Viva delegation without recording new legal acceptance
       description: |
         Available only to an authenticated PadlHub user who has already accepted the current
-        public-offer and personal-data-policy versions. The recovery flow is bound to that user.
+        public-offer and personal-data-policy versions. The recovery flow is bound to that user
+        and to the browser that started it through a short-lived HttpOnly cookie. Retrying the
+        same request with the same Idempotency-Key returns the same authorization redirect;
+        reusing that key with different request data returns a conflict.
       requestBody:
         required: true
         content:
@@ -340,6 +348,11 @@ paths:
       responses:
         '200':
           description: Server-owned Yandex OAuth redirect URL.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+            Set-Cookie:
+              $ref: '#/components/headers/OAuthBrowserCookie'
           content:
             application/json:
               schema:
@@ -348,6 +361,8 @@ paths:
           $ref: ../../common/components.yaml#/components/responses/BadRequest
         '401':
           $ref: '#/components/responses/AuthenticationRejected'
+        '409':
+          $ref: '#/components/responses/CommandConflict'
         '429':
           $ref: ../../common/components.yaml#/components/responses/TooManyRequests
         '503':
@@ -359,6 +374,7 @@ paths:
     get:
       operationId: completeVivaOAuthAuthorization
       summary: Complete Viva OAuth callback and create a PadlHub session
+      description: The callback must carry the short-lived HttpOnly cookie set for the initiating browser.
       security: []
       parameters:
         - name: state
@@ -376,7 +392,7 @@ paths:
           description: PadlHub refresh cookie is set and the browser is redirected to the configured cabinet URL.
           headers:
             Set-Cookie:
-              $ref: '#/components/headers/RefreshCookie'
+              $ref: '#/components/headers/OAuthCallbackCookies'
         '400':
           $ref: ../../common/components.yaml#/components/responses/BadRequest
         '401':
@@ -647,6 +663,55 @@ paths:
           $ref: ../../common/components.yaml#/components/responses/TooManyRequests
         '503':
           $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/routing-outcomes:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+    post:
+      operationId: recordDirectVivaReadOutcome
+      summary: Record a redacted direct Viva read outcome
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [operation, routingRevision, outcome, durationMs]
+              properties:
+                operation:
+                  type: string
+                  enum:
+                    [
+                      profile.read,
+                      bookings.read,
+                      bookings.details.read,
+                      bookings.history.read,
+                      subscriptions.read,
+                      schedule.read,
+                    ]
+                routingRevision:
+                  type: string
+                  pattern: '^[0-9]+$'
+                outcome:
+                  type: string
+                  enum: [SUCCESS, UNAVAILABLE, REAUTH_REQUIRED, INVALID, CIRCUIT_OPEN]
+                statusClass:
+                  type: string
+                  pattern: '^[1-5]xx$'
+                durationMs:
+                  type: integer
+                  minimum: 0
+                  maximum: 60000
+      responses:
+        '204':
+          description: Outcome accepted without storing provider payload or credentials.
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
   /{tenantKey}/profile:
     parameters:
       - $ref: ../../common/components.yaml#/components/parameters/TenantKey
@@ -4068,6 +4133,23 @@ components:
         type: string
         const: logout
   headers:
+    OAuthBrowserCookie:
+      description: |
+        Short-lived state-scoped `phub_oauth_browser_{digest}` cookie binding one OAuth state to
+        the initiating browser without overwriting another tab's in-flight OAuth binding.
+        It is HttpOnly and SameSite=Lax; production also sets Secure. Browser JavaScript cannot
+        read its value, and cross-origin clients must enable credentials for the start request.
+      required: true
+      schema:
+        type: string
+    OAuthCallbackCookies:
+      description: |
+        Sets the HttpOnly `phub_refresh` session cookie and expires the one-time
+        matching `phub_oauth_browser_{digest}` binding cookie. Production sets Secure and both use
+        SameSite=Lax.
+      required: true
+      schema:
+        type: string
     RefreshCookie:
       description: |
         Rotated or expired `phub_refresh` cookie. It is HttpOnly and SameSite;

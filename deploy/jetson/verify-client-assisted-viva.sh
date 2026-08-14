@@ -198,17 +198,21 @@ trap 'rm -f "$cors_headers"' EXIT HUP INT TERM
 viva_base_url="$(runtime_value VIVA_END_USER_API_URL)"
 test -n "$viva_base_url" || fail 'Viva end-user API URL is not configured'
 curl --fail --silent --show-error \
+  --connect-timeout 5 \
+  --max-time 12 \
   --request OPTIONS \
   --output /dev/null \
   --dump-header "$cors_headers" \
   --header 'Origin: https://lk.nano.padlhub.su' \
   --header 'Access-Control-Request-Method: GET' \
   --header 'Access-Control-Request-Headers: authorization' \
-  "${viva_base_url%/}/v1/${provider_tenant_key}/exercises?date=$(date -u +%Y-%m-%d)"
+  "${viva_base_url%/}/v1/${provider_tenant_key}/profile"
 tr -d '\r' < "$cors_headers" | grep -Eiq '^access-control-allow-origin: https://lk\.nano\.padlhub\.su$' ||
   fail 'Viva CORS response does not allow the canonical Nano origin'
 tr -d '\r' < "$cors_headers" | grep -Eiq '^access-control-allow-headers:.*authorization' ||
   fail 'Viva CORS response does not allow the Authorization header'
+tr -d '\r' < "$cors_headers" | grep -Eiq '^access-control-allow-methods:.*get' ||
+  fail 'Viva CORS response does not allow GET'
 
 compose exec -T api node -e '
   const tenant = process.argv[1];

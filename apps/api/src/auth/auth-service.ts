@@ -1,4 +1,4 @@
-import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 
 import {
   IdentityProviderError,
@@ -19,7 +19,7 @@ import type { AppConfig } from '@phub/config';
 import { SignJWT } from 'jose';
 
 import type { AuthChallenge, AuthChallengeStore } from './challenge-store.js';
-import type { VivaOAuthStateStore } from './oauth-state-store.js';
+import type { VivaOAuthStart, VivaOAuthStateStore } from './oauth-state-store.js';
 
 const TENANT_KEY_PATTERN = /^[a-z0-9][a-z0-9-]{1,62}$/;
 const OTP_PATTERN = /^\d{4}$/;
@@ -176,6 +176,7 @@ export type AuthServiceErrorCode =
   | 'AUTH_CHALLENGE_IN_PROGRESS'
   | 'AUTH_RATE_LIMITED'
   | 'AUTH_PROVIDER_UNAVAILABLE'
+  | 'AUTH_OAUTH_BROWSER_MISMATCH'
   | 'AUTH_ADMIN_ACCESS_DENIED'
   | 'AUTH_SESSION_REVOKED'
   | 'AUTH_REFRESH_RACE'
@@ -195,6 +196,7 @@ const errorStatus: Readonly<Record<AuthServiceErrorCode, number>> = {
   AUTH_CHALLENGE_IN_PROGRESS: 409,
   AUTH_RATE_LIMITED: 429,
   AUTH_PROVIDER_UNAVAILABLE: 503,
+  AUTH_OAUTH_BROWSER_MISMATCH: 401,
   AUTH_ADMIN_ACCESS_DENIED: 403,
   AUTH_SESSION_REVOKED: 401,
   AUTH_REFRESH_RACE: 409,
@@ -307,6 +309,20 @@ export class AuthService {
     return this.deriveSecret(label, values).toString('base64url');
   }
 
+  private oauthBrowserNonceHash(nonce: string): string {
+    return createHash('sha256').update(nonce).digest('hex');
+  }
+
+  private oauthBrowserNonceMatches(
+    expectedHash: string | undefined,
+    nonce: string | undefined,
+  ): boolean {
+    if (!expectedHash || !nonce) return false;
+    const expected = Buffer.from(expectedHash, 'hex');
+    const actual = Buffer.from(this.oauthBrowserNonceHash(nonce), 'hex');
+    return expected.length === actual.length && timingSafeEqual(expected, actual);
+  }
+
   private encryptVivaRefreshToken(value: string): string {
     try {
       return encryptVivaDelegationToken(value, this.options.config.VIVA_DELEGATION_ENCRYPTION_KEY);
@@ -337,7 +353,7 @@ export class AuthService {
     readonly publicOfferAccepted: boolean;
     readonly personalDataPolicyAccepted: boolean;
     readonly correlationId: string;
-  }): Promise<{ redirectUrl: string }> {
+  }): Promise<{ redirectUrl: string; state: string; browserNonce: string }> {
     if (
       !this.options.config.VIVA_OAUTH_ENABLED ||
       !this.options.vivaOAuthProvider ||
@@ -354,6 +370,7 @@ export class AuthService {
     if (binding.provider !== 'VIVA') throw new AuthServiceError('AUTH_PROVIDER_UNAVAILABLE');
     const state = randomBytes(24).toString('base64url');
     const codeVerifier = randomBytes(48).toString('base64url');
+    const browserNonce = randomBytes(32).toString('base64url');
     const codeChallenge = createHash('sha256').update(codeVerifier).digest('base64url');
     const stateHash = createHash('sha256').update(state).digest('hex');
     await this.options.repository.recordLegalAcceptanceIntent({
@@ -374,6 +391,7 @@ export class AuthService {
         personalDataPolicyAccepted: true,
         publicOfferVersion: this.options.config.PUBLIC_OFFER_VERSION,
         personalDataPolicyVersion: this.options.config.PERSONAL_DATA_POLICY_VERSION,
+        browserNonceHash: this.oauthBrowserNonceHash(browserNonce),
       },
       this.options.config.AUTH_CHALLENGE_TTL_SECONDS,
     );
@@ -385,6 +403,8 @@ export class AuthService {
         state,
         codeChallenge,
       }),
+      state,
+      browserNonce,
     };
   }
 
@@ -399,7 +419,8 @@ export class AuthService {
     readonly userId: string;
     readonly provider: VivaOAuthProvider;
     readonly correlationId: string;
-  }): Promise<{ redirectUrl: string }> {
+    readonly idempotencyKey: string;
+  }): Promise<{ redirectUrl: string; state: string; browserNonce: string }> {
     if (
       !this.options.config.VIVA_OAUTH_ENABLED ||
       !this.options.vivaOAuthProvider ||
@@ -420,31 +441,60 @@ export class AuthService {
       personalDataPolicyVersion: this.options.config.PERSONAL_DATA_POLICY_VERSION,
     });
     if (!accepted) throw new AuthServiceError('LEGAL_ACCEPTANCE_REQUIRED');
-    const state = randomBytes(24).toString('base64url');
-    const codeVerifier = randomBytes(48).toString('base64url');
-    const codeChallenge = createHash('sha256').update(codeVerifier).digest('base64url');
-    await this.options.vivaOAuthStateStore.put(
-      {
-        state,
+    const proposedState = randomBytes(24).toString('base64url');
+    const proposedCodeVerifier = randomBytes(48).toString('base64url');
+    const proposedBrowserNonce = randomBytes(32).toString('base64url');
+    const proposedStart: VivaOAuthStart = {
+      state: {
+        state: proposedState,
         tenantKey: binding.tenantKey,
         provider: input.provider,
-        codeVerifier,
+        codeVerifier: proposedCodeVerifier,
         publicOfferAccepted: true,
         personalDataPolicyAccepted: true,
         publicOfferVersion: this.options.config.PUBLIC_OFFER_VERSION,
         personalDataPolicyVersion: this.options.config.PERSONAL_DATA_POLICY_VERSION,
+        browserNonceHash: this.oauthBrowserNonceHash(proposedBrowserNonce),
         recoveryUserId: input.userId,
       },
-      this.options.config.AUTH_CHALLENGE_TTL_SECONDS,
-    );
+      browserNonce: proposedBrowserNonce,
+    };
+    let reservation: Awaited<ReturnType<VivaOAuthStateStore['reserveStart']>>;
+    try {
+      reservation = await this.options.vivaOAuthStateStore.reserveStart({
+        commandKey: this.deriveRefreshToken('viva-oauth-recovery-command', [
+          binding.tenantId,
+          input.userId,
+          input.idempotencyKey,
+        ]),
+        requestHash: this.deriveRefreshToken('viva-oauth-recovery-request', [
+          binding.tenantKey,
+          input.userId,
+          input.provider,
+          this.options.config.PUBLIC_OFFER_VERSION,
+          this.options.config.PERSONAL_DATA_POLICY_VERSION,
+        ]),
+        start: proposedStart,
+        ttlSeconds: this.options.config.AUTH_CHALLENGE_TTL_SECONDS,
+      });
+    } catch {
+      throw new AuthServiceError('AUTH_PROVIDER_UNAVAILABLE');
+    }
+    if (reservation.outcome === 'conflict') {
+      throw new AuthServiceError('IDEMPOTENCY_KEY_CONFLICT');
+    }
+    const start = reservation.start;
+    const codeChallenge = createHash('sha256').update(start.state.codeVerifier).digest('base64url');
     return {
       redirectUrl: this.options.vivaOAuthProvider.createAuthorizationUrl({
-        provider: input.provider,
+        provider: start.state.provider,
         tenantKey: binding.providerTenantKey,
         redirectUri,
-        state,
+        state: start.state.state,
         codeChallenge,
       }),
+      state: start.state.state,
+      browserNonce: start.browserNonce,
     };
   }
 
@@ -454,6 +504,7 @@ export class AuthService {
     readonly code: string;
     readonly correlationId: string;
     readonly idempotencyKey: string;
+    readonly oauthBrowserNonce?: string;
   }): Promise<
     AuthSessionResult & { readonly vivaHandoffCode: string; readonly vivaRecovery: boolean }
   > {
@@ -467,8 +518,16 @@ export class AuthService {
     const redirectUri = this.options.config.VIVA_OAUTH_REDIRECT_URI;
     if (!redirectUri) throw new AuthServiceError('AUTH_PROVIDER_UNAVAILABLE');
     const pending = await this.options.vivaOAuthStateStore.take(input.state);
-    if (!pending || pending.tenantKey !== input.tenantKey || !input.code) {
+    if (
+      !pending ||
+      pending.state !== input.state ||
+      pending.tenantKey !== input.tenantKey ||
+      !input.code
+    ) {
       throw new AuthServiceError('AUTH_CODE_EXPIRED');
+    }
+    if (!this.oauthBrowserNonceMatches(pending.browserNonceHash, input.oauthBrowserNonce)) {
+      throw new AuthServiceError('AUTH_OAUTH_BROWSER_MISMATCH');
     }
     const binding = await this.binding(input.tenantKey);
     if (binding.provider !== 'VIVA') throw new AuthServiceError('AUTH_CODE_EXPIRED');

@@ -13,10 +13,10 @@ The two reads intentionally serve different purposes:
 | `GET /{tenantKey}/profiles/{userId}` | canonical viewer-filtered player card             | only when viewer is self |
 
 Web maps `/profile` to the signed-in user's UUID and `/profile/{userId}` to another player's UUID.
-The browser does not select a provider or request a wider DTO. The authenticated-self read also
-stays on the PadlHub API when a migration routing plan advertises a direct Viva profile read,
-because combining that provider response with a locally stored avatar would violate profile source
-consistency.
+The browser does not select a provider or request a wider DTO. The authenticated-self read follows
+the server-issued routing plan: a direct Viva result is strictly normalized, bound to the already
+authenticated PadlHub user UUID and kept in browser memory only. It is not combined with the local
+avatar or written into a PadlHub projection. Cross-user reads always stay on the PadlHub API.
 
 `avatarUrl` is either null or the stable PadlHub path
 `/public/api/v1/media/profile-photos/{tenantId}/{deliveryId}`. The opaque delivery UUID is not the

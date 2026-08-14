@@ -19,7 +19,6 @@ export function canUseDirectViva(input: {
   return Boolean(
     input.config.VIVA_DIRECT_READ_ENABLED &&
     input.stored.mode === 'MIXED_END_USER_READS' &&
-    input.stored.delegationReady &&
     input.stored.providerTenantKey &&
     DIRECT_VIVA_CONTRACT_READY_OPERATIONS.some((operation) =>
       input.stored.directOperations.includes(operation),
