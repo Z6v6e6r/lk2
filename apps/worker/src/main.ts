@@ -725,7 +725,7 @@ const getVivaHomeAdapter = (providerTenantKey: string): VivaHomeSourceAdapter =>
     apiBaseUrl: config.VIVA_END_USER_API_URL,
     tenantKey: providerTenantKey,
     timeoutMs: config.VIVA_TIMEOUT_MS,
-    onMetric: (metric) => logger.info({ metric, providerTenantKey }, 'Viva Home read operation'),
+    onMetric: (metric) => logger.info({ metric }, 'Viva Home read operation'),
   });
   vivaAdapters.set(providerTenantKey, adapter);
   return adapter;
