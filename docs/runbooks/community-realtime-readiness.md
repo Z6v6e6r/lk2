@@ -157,6 +157,7 @@ the gate:
 
 ```json
 {
+  "expectedOrigin": "wss://staging.example",
   "connections": [
     {
       "ticket": "unused-one-time-ticket",
@@ -180,6 +181,10 @@ the gate:
   }
 }
 ```
+
+The fixture is an owned regular file outside the checkout, mode `0600` or stricter and at most
+32 MiB for 20,000 one-time tickets. `expectedOrigin` must exactly match the approved non-production
+realtime ingress; no ticket is sent before this comparison succeeds.
 
 Commit that exact synthetic target only after the harness reports all subscriptions established.
 Then produce an approved bounded burst of synthetic events in the isolated hot community so the

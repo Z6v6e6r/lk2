@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 describe('community durable event migration', () => {
   it('adds a tenant-isolated monotonic recovery stream without destructive DDL', async () => {
     const sql = await readFile(
-      resolve(process.cwd(), 'packages/database/migrations/0069_community_durable_events.sql'),
+      resolve(process.cwd(), 'packages/database/migrations/0064_community_durable_events.sql'),
       'utf8',
     );
     expect(sql).toContain('create table if not exists community_content.event_heads');

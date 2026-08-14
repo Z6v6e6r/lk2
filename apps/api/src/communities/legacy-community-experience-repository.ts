@@ -31,6 +31,29 @@ const maxProviderBytes = 2 * 1024 * 1024;
 const maxRatingProviderBytes = 8 * 1024 * 1024;
 const maxRows = 100;
 const maxSummaryCommunities = 1_000;
+
+async function readBoundedResponseText(response: Response, maxBytes: number): Promise<string> {
+  if (!response.body) return '';
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let total = 0;
+  let body = '';
+  try {
+    while (true) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      total += chunk.value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel('COMMUNITY_EXPERIENCE_PROVIDER_TOO_LARGE');
+        invalid('provider-body-bytes');
+      }
+      body += decoder.decode(chunk.value, { stream: true });
+    }
+    return body + decoder.decode();
+  } finally {
+    reader.releaseLock();
+  }
+}
 function record(value: unknown): value is RecordValue {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -384,8 +407,7 @@ export class LegacyCommunityExperienceRepository implements CommunityReadExperie
         const length = Number(response.headers.get('content-length'));
         if (Number.isFinite(length) && length > responseMaxBytes)
           invalid('provider-content-length');
-        const body = await response.text();
-        if (Buffer.byteLength(body) > responseMaxBytes) invalid('provider-body-bytes');
+        const body = await readBoundedResponseText(response, responseMaxBytes);
         let parsed: unknown;
         try {
           parsed = JSON.parse(body) as unknown;

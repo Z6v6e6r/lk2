@@ -1,6 +1,4 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
-import { isAbsolute, relative, resolve } from 'node:path';
 
 import {
   communityFeedPageSchema,
@@ -11,6 +9,8 @@ import {
 } from '@phub/communities';
 import sharp from 'sharp';
 import { z } from 'zod';
+
+import { readPrivateFixture, requirePinnedOrigin } from './communities-private-fixture.js';
 
 const confirmation = 'I_ACKNOWLEDGE_SYNTHETIC_COMMUNITY_WRITES';
 if (process.env.COMMUNITIES_MEDIA_E2E_CONFIRM !== confirmation) {
@@ -29,14 +29,6 @@ function safeUrl(name: string): URL {
   if (url.protocol !== 'https:' && !(loopback && url.protocol === 'http:')) {
     throw new Error(`${name} must use HTTPS unless it is loopback`);
   }
-  if (
-    !loopback &&
-    !url.hostname.endsWith('.nano.padlhub.su') &&
-    !url.hostname.includes('staging') &&
-    !url.hostname.endsWith('.test')
-  ) {
-    throw new Error(`${name} must identify an explicit staging, Nano or test host`);
-  }
   url.pathname = url.pathname.replace(/\/$/, '');
   url.search = '';
   url.hash = '';
@@ -47,30 +39,28 @@ const userBase = safeUrl('COMMUNITIES_MEDIA_E2E_USER_BASE_URL');
 const cupBase = safeUrl('COMMUNITIES_MEDIA_E2E_CUP_BASE_URL');
 const tenantKey = required('COMMUNITIES_MEDIA_E2E_TENANT_KEY');
 if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(tenantKey)) throw new Error('Invalid tenant key');
-const fixtureInput = required('COMMUNITIES_MEDIA_E2E_AUTH_FILE');
-if (!isAbsolute(fixtureInput)) throw new Error('AUTH_FILE must be an absolute path');
-const fixturePath = resolve(fixtureInput);
-const workspaceRelative = relative(process.cwd(), fixturePath);
-if (
-  workspaceRelative !== '..' &&
-  !workspaceRelative.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`)
-) {
-  throw new Error('AUTH_FILE must stay outside the repository');
-}
 const fixture = z
   .object({
     synthetic: z.literal(true),
     userToken: z.string().min(32),
     cupToken: z.string().min(32),
     communityId: z.string().uuid(),
+    expectedUserOrigin: z.string().url(),
+    expectedCupOrigin: z.string().url(),
     allowedUploadOrigin: z.string().url(),
   })
   .strict()
-  .parse(JSON.parse(await readFile(fixturePath, 'utf8')));
+  .parse(
+    JSON.parse(
+      await readPrivateFixture(
+        required('COMMUNITIES_MEDIA_E2E_AUTH_FILE'),
+        'COMMUNITIES_MEDIA_E2E_AUTH_FILE',
+      ),
+    ),
+  );
 const allowedUploadOrigin = new URL(fixture.allowedUploadOrigin).origin;
-if (allowedUploadOrigin !== userBase.origin) {
-  throw new Error('allowedUploadOrigin must exactly match the user ingress origin');
-}
+requirePinnedOrigin(userBase, fixture.expectedUserOrigin, 'COMMUNITIES_MEDIA_E2E_USER_BASE_URL');
+requirePinnedOrigin(cupBase, fixture.expectedCupOrigin, 'COMMUNITIES_MEDIA_E2E_CUP_BASE_URL');
 
 const timeoutMs = Number(process.env.COMMUNITIES_MEDIA_E2E_TIMEOUT_MS ?? 120_000);
 if (!Number.isInteger(timeoutMs) || timeoutMs < 10_000 || timeoutMs > 300_000) {

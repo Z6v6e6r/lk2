@@ -26,6 +26,29 @@ describe('community media storage preflight policy', () => {
         }),
       ),
     ).toBe(false);
+    expect(
+      policyAllowsAnonymousAccess(
+        JSON.stringify({
+          Statement: { Effect: 'Allow', Principal: { AWS: ['*'] }, Action: 's3:GetObject' },
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      policyAllowsAnonymousAccess(
+        JSON.stringify({
+          Statement: {
+            Effect: 'Allow',
+            NotPrincipal: { AWS: 'arn:aws:iam::123456789012:role/phub-worker' },
+            Action: 's3:GetObject',
+          },
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      policyAllowsAnonymousAccess(
+        JSON.stringify({ Statement: { Effect: 'Allow', Principal: {}, Action: 's3:GetObject' } }),
+      ),
+    ).toBe(true);
   });
 
   it('rejects lifecycle deletion of current or exact historical ready versions', () => {
@@ -70,6 +93,30 @@ describe('community media storage preflight policy', () => {
         Status: 'Enabled',
         Filter: { Prefix: 'community-media/quarantine/' },
         NoncurrentVersionExpiration: { NoncurrentDays: 30 },
+      }),
+    ).toBe(false);
+    expect(
+      lifecycleCleansQuarantineVersions({
+        ID: 'tag-constrained-cleanup',
+        Status: 'Enabled',
+        Filter: {
+          And: {
+            Prefix: 'community-media/quarantine/',
+            Tags: [{ Key: 'never', Value: 'matches' }],
+          },
+        },
+        NoncurrentVersionExpiration: { NoncurrentDays: 1 },
+      }),
+    ).toBe(false);
+    expect(
+      lifecycleCleansQuarantineVersions({
+        ID: 'size-constrained-cleanup',
+        Status: 'Enabled',
+        Filter: {
+          Prefix: 'community-media/quarantine/',
+          ObjectSizeGreaterThan: 1,
+        },
+        NoncurrentVersionExpiration: { NoncurrentDays: 1 },
       }),
     ).toBe(false);
     expect(

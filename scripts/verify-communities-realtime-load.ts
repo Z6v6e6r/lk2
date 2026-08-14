@@ -1,5 +1,3 @@
-import { readFile } from 'node:fs/promises';
-import { isAbsolute, relative, resolve } from 'node:path';
 import { performance } from 'node:perf_hooks';
 
 import WebSocket, { type RawData } from 'ws';
@@ -12,6 +10,7 @@ import {
   type RealtimeConnectionGateObservation,
   type RealtimeLoadFixture,
 } from './communities-realtime-load-support.js';
+import { readPrivateFixture, requirePinnedOrigin } from './communities-private-fixture.js';
 
 function requiredEnvironment(name: string): string {
   const value = process.env[name]?.trim();
@@ -33,19 +32,16 @@ const loopback = ['127.0.0.1', 'localhost', '::1'].includes(endpoint.hostname);
 if (endpoint.protocol !== 'wss:' && !(endpoint.protocol === 'ws:' && loopback)) {
   throw new Error('COMMUNITIES_REALTIME_URL must use WSS unless it is a loopback target');
 }
-const fixtureInput = requiredEnvironment('COMMUNITIES_REALTIME_AUTH_FILE');
-if (!isAbsolute(fixtureInput)) {
-  throw new Error('COMMUNITIES_REALTIME_AUTH_FILE must be an absolute path');
-}
-const fixturePath = resolve(fixtureInput);
-const workspaceRelative = relative(process.cwd(), fixturePath);
-if (
-  workspaceRelative !== '..' &&
-  !workspaceRelative.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`)
-) {
-  throw new Error('COMMUNITIES_REALTIME_AUTH_FILE must stay outside the repository');
-}
-const fixture = realtimeLoadFixtureSchema.parse(JSON.parse(await readFile(fixturePath, 'utf8')));
+const fixture = realtimeLoadFixtureSchema.parse(
+  JSON.parse(
+    await readPrivateFixture(
+      requiredEnvironment('COMMUNITIES_REALTIME_AUTH_FILE'),
+      'COMMUNITIES_REALTIME_AUTH_FILE',
+      32 * 1024 * 1024,
+    ),
+  ),
+);
+requirePinnedOrigin(endpoint, fixture.expectedOrigin, 'COMMUNITIES_REALTIME_URL');
 const policy = resolveRealtimeLoadPolicy({ loopback });
 const connectionCount = boundedInteger(
   'COMMUNITIES_REALTIME_CONNECTIONS',

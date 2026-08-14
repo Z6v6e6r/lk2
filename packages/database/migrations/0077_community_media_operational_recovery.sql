@@ -1,9 +1,9 @@
 -- Backward-compatible operational recovery for Community media. Terminal
 -- scan/GC evidence is kept beside the existing lifecycle state so old
 -- application versions continue to understand every row during rolling
--- deployment. The only replacement below corrects an unusable 0072 CHECK.
+-- deployment. The only replacement below corrects an unusable 0067 CHECK.
 
--- 0072 originally escaped the WebP suffix for a JavaScript-style regular
+-- 0067 originally escaped the WebP suffix for a JavaScript-style regular
 -- expression. PostgreSQL standard-conforming strings retain both backslashes,
 -- so canonical READY keys were rejected. Replace the constraint transactionally
 -- for databases that already applied that migration before this repair.

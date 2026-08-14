@@ -17,6 +17,7 @@ const baseConfig = loadConfig({
   JWT_ACCESS_SECRET: 'test-access-secret-at-least-32-characters',
   JWT_REALTIME_SECRET: 'test-realtime-secret-distinct-at-least-32-characters',
   JWT_REFRESH_SECRET: 'test-refresh-secret-at-least-32-characters',
+  COMMUNITIES_READ_MODE: 'local',
   COMMUNITIES_REALTIME_ENABLED: 'true',
 });
 const tenantId = '86afbe01-0318-4dd2-bc25-303b7bf0d430';

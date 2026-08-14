@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 describe('community content moderation migration', () => {
   it('adds tenant-isolated command/evidence state and a bounded pending queue index', async () => {
     const sql = await readFile(
-      resolve(process.cwd(), 'packages/database/migrations/0070_community_content_moderation.sql'),
+      resolve(process.cwd(), 'packages/database/migrations/0065_community_content_moderation.sql'),
       'utf8',
     );
     expect(sql).toContain('community_content.moderation_commands');

@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 describe('community create quota grant migration', () => {
   it('adds tenant-isolated one-use user grants and links successful create commands', async () => {
     const sql = await readFile(
-      resolve(process.cwd(), 'packages/database/migrations/0074_community_create_quota_grants.sql'),
+      resolve(process.cwd(), 'packages/database/migrations/0076_community_create_quota_grants.sql'),
       'utf8',
     );
     expect(sql).toContain('create table if not exists communities.create_quota_grants');

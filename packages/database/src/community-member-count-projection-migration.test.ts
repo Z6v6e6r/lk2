@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 describe('community member-count projection migration', () => {
   it('creates a rebuildable, tenant-isolated projection with explicit readiness', async () => {
     const sql = await readFile(
-      new URL('../migrations/0071_community_member_count_projection.sql', import.meta.url),
+      new URL('../migrations/0066_community_member_count_projection.sql', import.meta.url),
       'utf8',
     );
     for (const table of [

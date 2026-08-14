@@ -826,6 +826,9 @@ describe('provider-neutral authentication routes', () => {
       communityReadFeed: false,
       communityReadChat: false,
       communityReadRating: false,
+      communityCanonical: false,
+      communityDirectInvites: false,
+      communityRealtime: false,
     });
     expect(repository.phoneLegalAcceptances).toBe(1);
     expect(verifyResponse.body).not.toContain('refreshToken');

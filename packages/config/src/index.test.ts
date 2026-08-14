@@ -130,6 +130,7 @@ describe('loadConfig', () => {
       loadConfig({
         ...validEnvironment,
         APP_ENV: 'staging',
+        COMMUNITIES_READ_MODE: 'local',
         JWT_REALTIME_SECRET: 'staging-realtime-secret-at-least-32-characters',
         COMMUNITIES_REALTIME_ENABLED: 'true',
       }),
@@ -147,7 +148,7 @@ describe('loadConfig', () => {
         HOME_READ_MODE: 'projection',
         PUBLIC_OFFER_VERSION: '2026-07-18',
         PERSONAL_DATA_POLICY_VERSION: '2026-07-18',
-        COMMUNITIES_READ_MODE: 'legacy',
+        COMMUNITIES_READ_MODE: 'local',
         PROMOTIONS_READ_MODE: 'legacy',
         COMMUNITIES_REALTIME_ENABLED: 'true',
       }),
@@ -156,6 +157,7 @@ describe('loadConfig', () => {
       loadConfig({
         ...validEnvironment,
         APP_ENV: 'staging',
+        COMMUNITIES_READ_MODE: 'local',
         COMMUNITIES_REALTIME_ENABLED: 'true',
       }),
     ).toThrow('COMMUNITIES_REALTIME_ENABLED requires JWT_REALTIME_SECRET');
@@ -163,6 +165,7 @@ describe('loadConfig', () => {
       loadConfig({
         ...validEnvironment,
         APP_ENV: 'staging',
+        COMMUNITIES_READ_MODE: 'local',
         COMMUNITIES_REALTIME_ENABLED: 'true',
         JWT_REALTIME_SECRET: validEnvironment.JWT_ACCESS_SECRET,
       }),
@@ -174,6 +177,7 @@ describe('loadConfig', () => {
       loadRealtimeConfig({
         ...validEnvironment,
         APP_ENV: 'staging',
+        COMMUNITIES_READ_MODE: 'local',
         JWT_REALTIME_SECRET: 'staging-realtime-secret-at-least-32-characters',
         COMMUNITIES_REALTIME_ENABLED: 'true',
       }),
@@ -183,6 +187,7 @@ describe('loadConfig', () => {
       loadRealtimeConfig({
         ...validEnvironment,
         APP_ENV: 'staging',
+        COMMUNITIES_READ_MODE: 'local',
         JWT_ACCESS_SECRET: undefined,
         JWT_REFRESH_SECRET: undefined,
         JWT_REALTIME_SECRET: 'staging-realtime-secret-at-least-32-characters',
@@ -238,11 +243,21 @@ describe('loadConfig', () => {
         COMMUNITIES_READ_MODE: 'local',
         COMMUNITY_MEDIA_ENABLED: 'true',
       }),
+    ).toThrow('COMMUNITY_MEDIA_ENABLED requires an HTTPS S3_PUBLIC_ENDPOINT origin');
+    const stagingStorage = { ...storage, S3_PUBLIC_ENDPOINT: 'https://media.staging.padlhub.test' };
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        ...stagingStorage,
+        APP_ENV: 'staging',
+        COMMUNITIES_READ_MODE: 'local',
+        COMMUNITY_MEDIA_ENABLED: 'true',
+      }),
     ).toThrow('COMMUNITY_MEDIA_ENABLED requires COMMUNITY_MEDIA_SCAN_MODE=clamav');
     expect(() =>
       loadConfig({
         ...validEnvironment,
-        ...storage,
+        ...stagingStorage,
         APP_ENV: 'staging',
         COMMUNITIES_READ_MODE: 'local',
         COMMUNITY_MEDIA_ENABLED: 'true',
@@ -252,7 +267,7 @@ describe('loadConfig', () => {
     expect(
       loadConfig({
         ...validEnvironment,
-        ...storage,
+        ...stagingStorage,
         APP_ENV: 'staging',
         COMMUNITIES_READ_MODE: 'local',
         COMMUNITY_MEDIA_ENABLED: 'true',
@@ -930,6 +945,14 @@ describe('loadConfig', () => {
         ...validEnvironment,
         COMMUNITY_INVITES_ENABLED: 'true',
       }),
+    ).toThrow('COMMUNITY_INVITES_ENABLED requires COMMUNITIES_READ_MODE=local');
+
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        COMMUNITIES_READ_MODE: 'local',
+        COMMUNITY_INVITES_ENABLED: 'true',
+      }),
     ).toThrow(
       'COMMUNITY_INVITES_ENABLED requires COMMUNITY_INVITE_TOKEN_KEYS and COMMUNITY_INVITE_ACTIVE_KEY_ID',
     );
@@ -937,6 +960,7 @@ describe('loadConfig', () => {
     expect(() =>
       loadConfig({
         ...validEnvironment,
+        COMMUNITIES_READ_MODE: 'local',
         COMMUNITY_INVITES_ENABLED: 'true',
         COMMUNITY_INVITE_TOKEN_KEYS: JSON.stringify({
           current: Buffer.alloc(32, 7).toString('base64'),
@@ -948,6 +972,7 @@ describe('loadConfig', () => {
     expect(
       loadConfig({
         ...validEnvironment,
+        COMMUNITIES_READ_MODE: 'local',
         COMMUNITY_INVITES_ENABLED: 'true',
         COMMUNITY_INVITE_TOKEN_KEYS: JSON.stringify({
           current: Buffer.alloc(32, 7).toString('base64'),

@@ -1,9 +1,9 @@
-import { readFile } from 'node:fs/promises';
-import { isAbsolute, relative, resolve } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { randomUUID } from 'node:crypto';
 
 import { z } from 'zod';
+
+import { readPrivateFixture, requirePinnedOrigin } from './communities-private-fixture.js';
 
 function requiredEnvironment(name: string): string {
   const value = process.env[name]?.trim();
@@ -22,6 +22,7 @@ function boundedInteger(name: string, fallback: number, minimum: number, maximum
 
 const authFixtureSchema = z
   .object({
+    expectedOrigin: z.string().url(),
     tokens: z.array(z.string().min(32)).min(1).max(1_000),
     communityIds: z.array(z.string().uuid()).min(1).max(1_000),
     contentTargets: z
@@ -51,19 +52,15 @@ const tenantKey = requiredEnvironment('COMMUNITIES_HTTP_TENANT_KEY');
 if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(tenantKey)) {
   throw new Error('COMMUNITIES_HTTP_TENANT_KEY is invalid');
 }
-const authFileInput = requiredEnvironment('COMMUNITIES_HTTP_AUTH_FILE');
-const authFile = resolve(authFileInput);
-if (!isAbsolute(authFileInput)) {
-  throw new Error('COMMUNITIES_HTTP_AUTH_FILE must be an absolute path');
-}
-const workspaceRelative = relative(process.cwd(), authFile);
-if (
-  workspaceRelative !== '..' &&
-  !workspaceRelative.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`)
-) {
-  throw new Error('COMMUNITIES_HTTP_AUTH_FILE must stay outside the repository');
-}
-const fixture = authFixtureSchema.parse(JSON.parse(await readFile(authFile, 'utf8')));
+const fixture = authFixtureSchema.parse(
+  JSON.parse(
+    await readPrivateFixture(
+      requiredEnvironment('COMMUNITIES_HTTP_AUTH_FILE'),
+      'COMMUNITIES_HTTP_AUTH_FILE',
+    ),
+  ),
+);
+requirePinnedOrigin(baseUrl, fixture.expectedOrigin, 'COMMUNITIES_HTTP_BASE_URL');
 
 const requests = boundedInteger('COMMUNITIES_HTTP_REQUESTS', 5_000, 100, 100_000);
 const concurrency = boundedInteger('COMMUNITIES_HTTP_CONCURRENCY', 40, 1, 500);

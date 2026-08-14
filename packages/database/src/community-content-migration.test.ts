@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 describe('community content migration', () => {
   it('adds tenant-isolated canonical content with bounded bodies and archive clocks', async () => {
     const sql = await readFile(
-      resolve(process.cwd(), 'packages/database/migrations/0068_community_content_foundation.sql'),
+      resolve(process.cwd(), 'packages/database/migrations/0063_community_content_foundation.sql'),
       'utf8',
     );
     expect(sql).toContain('create schema if not exists community_content');

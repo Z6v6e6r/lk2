@@ -92,6 +92,7 @@ Prepare a secret-mounted JSON file outside the checkout:
 
 ```json
 {
+  "expectedOrigin": "https://staging.example",
   "tokens": ["staging-user-jwt-1", "staging-user-jwt-2"],
   "communityIds": ["00000000-0000-4000-8000-000000000001"],
   "contentTargets": [
@@ -104,8 +105,10 @@ Prepare a secret-mounted JSON file outside the checkout:
 }
 ```
 
-Tokens must be synthetic user tokens for the load tenant. Do not paste them into commands, logs,
-tickets or Git. Run through the real staging ingress/load balancer:
+Tokens must be synthetic user tokens for the load tenant. The fixture must be an owned regular file
+outside the checkout, mode `0600` or stricter, at most 1 MiB. Its `expectedOrigin` must exactly pin
+the approved non-production ingress. Do not paste tokens into commands, logs, tickets or Git. Run
+through the real staging ingress/load balancer:
 
 ```bash
 COMMUNITIES_HTTP_BASE_URL=https://staging.example \
@@ -199,8 +202,9 @@ staging topology/failure proof, so public realtime rollout remains **NO-GO**.
 
 Prepare an external secret-mounted fixture as specified in
 `community-realtime-readiness.md`. It must contain an exact expected event target, one unused ticket
-per connection, at least 1,000 reconnect tickets, a foreign-tenant denied-subscription probe and a
-slow-client probe. Then run:
+per connection, at least 1,000 reconnect tickets, a foreign-tenant denied-subscription probe, a
+slow-client probe and the exact approved `expectedOrigin`. The file must be owned, mode `0600` or
+stricter and at most 32 MiB for the 20,000-ticket certification fixture. Then run:
 
 ```bash
 COMMUNITIES_REALTIME_URL=wss://staging.example/realtime/v1/synthetic-tenant \

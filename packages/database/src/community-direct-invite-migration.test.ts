@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 describe('community direct invite migration', () => {
   it('adds reusable hash-only tenant-isolated invites and replay-safe commands', async () => {
     const sql = await readFile(
-      resolve(process.cwd(), 'packages/database/migrations/0064_community_direct_invites.sql'),
+      resolve(process.cwd(), 'packages/database/migrations/0058_community_direct_invites.sql'),
       'utf8',
     );
 

@@ -8,7 +8,7 @@ describe('community DIRECT invite quota migration', () => {
     const sql = await readFile(
       resolve(
         process.cwd(),
-        'packages/database/migrations/0065_community_direct_invite_quotas.sql',
+        'packages/database/migrations/0059_community_direct_invite_quotas.sql',
       ),
       'utf8',
     );

@@ -26,6 +26,7 @@ import { connect } from 'amqplib';
 import Redis from 'ioredis';
 
 import { registerHomeProjectorConsumer } from './home-projector-consumer.js';
+import { isCanonicalCommunityWorkerEnabled } from './community-canonical-worker-capability.js';
 import { registerCommunityMemberCountProjectorConsumer } from './community-member-count-projector-consumer.js';
 import { runCommunityMemberCountReconciliationCycle } from './community-member-count-reconciler.js';
 import { runCommunityEventRetentionCycle } from './community-event-retention.js';
@@ -91,8 +92,15 @@ const COMMUNITY_EVENT_RETENTION_INTERVAL_MS = 60_000;
 const COMMUNITY_EVENT_RETENTION_CANDIDATE_BATCH_SIZE = 20;
 const COMMUNITY_EVENT_RETENTION_EVENT_BATCH_SIZE = 1_000;
 const COMMUNITY_EVENT_RETENTION_LEASE_MS = 60_000;
-const communityMemberCountRepository = createCommunityMemberCountProjectionRepository(pool);
-const communityEventRetentionRepository = createCommunityEventRetentionRepository(pool);
+const canonicalCommunityWorkerEnabled = isCanonicalCommunityWorkerEnabled(
+  config.COMMUNITIES_READ_MODE,
+);
+const communityMemberCountRepository = canonicalCommunityWorkerEnabled
+  ? createCommunityMemberCountProjectionRepository(pool)
+  : undefined;
+const communityEventRetentionRepository = canonicalCommunityWorkerEnabled
+  ? createCommunityEventRetentionRepository(pool)
+  : undefined;
 const communityMediaWorkerId = `community-media-${randomUUID()}`;
 const communityMediaRuntime = config.COMMUNITY_MEDIA_ENABLED
   ? {
@@ -233,11 +241,13 @@ await registerHomeProjectorConsumer({
   logger,
   ttlSeconds: config.HOME_PROJECTION_TTL_SECONDS,
 });
-await registerCommunityMemberCountProjectorConsumer({
-  channel: consumerChannel,
-  repository: communityMemberCountRepository,
-  logger,
-});
+if (communityMemberCountRepository) {
+  await registerCommunityMemberCountProjectorConsumer({
+    channel: consumerChannel,
+    repository: communityMemberCountRepository,
+    logger,
+  });
+}
 await registerLocationHomeProjectorConsumer({
   channel: consumerChannel,
   pool,
@@ -467,7 +477,7 @@ const runOperationalMetricsCycle = async (): Promise<void> => {
 };
 
 const runCommunityDirectInviteExpiryCycle = async (): Promise<void> => {
-  if (shuttingDown || !config.COMMUNITY_INVITES_ENABLED) return;
+  if (shuttingDown || !canonicalCommunityWorkerEnabled || !config.COMMUNITY_INVITES_ENABLED) return;
   try {
     const tenants = await pool.query<{ id: string }>(
       'select id from identity.tenants where active = true',
@@ -493,7 +503,7 @@ const runCommunityDirectInviteExpiryCycle = async (): Promise<void> => {
 };
 
 const runCommunityMemberCountReconciliation = async (): Promise<void> => {
-  if (shuttingDown) return;
+  if (shuttingDown || !communityMemberCountRepository) return;
   try {
     const tenants = await pool.query<{ id: string }>(
       'select id from identity.tenants where active = true',
@@ -524,7 +534,7 @@ const runCommunityMemberCountReconciliation = async (): Promise<void> => {
 };
 
 const runCommunityEventRetention = async (): Promise<void> => {
-  if (shuttingDown) return;
+  if (shuttingDown || !communityEventRetentionRepository) return;
   const startedAt = Date.now();
   let purged = 0;
   let claimLost = 0;
@@ -880,6 +890,8 @@ void runLegacyGamesRosterSync();
 void runWebPushCycle();
 void runGiftCertificateDeliveryCycle();
 void runCommunityDirectInviteExpiryCycle();
-void runCommunityMemberCountReconciliation();
-void runCommunityEventRetention();
+if (canonicalCommunityWorkerEnabled) {
+  void runCommunityMemberCountReconciliation();
+  void runCommunityEventRetention();
+}
 void runCommunityMedia();

@@ -734,14 +734,16 @@ jobs:
               compose logs --no-color --tail=160 api worker realtime
               exit 1
             fi
-            compose exec -T worker node -e "
-              fetch(\"http://127.0.0.1:3002/health/ready\", { signal: AbortSignal.timeout(5000) })
-                .then(async (response) => {
-                  const body = await response.json();
-                  if (!response.ok || body.status !== \"ready\") process.exit(1);
-                })
-                .catch(() => process.exit(1));
-            "
+            if [ "$deployment_profile" != COMMUNITIES_LEGACY_READ_ONLY ]; then
+              compose exec -T worker node -e "
+                fetch(\"http://127.0.0.1:3002/health/ready\", { signal: AbortSignal.timeout(5000) })
+                  .then(async (response) => {
+                    const body = await response.json();
+                    if (!response.ok || body.status !== \"ready\") process.exit(1);
+                  })
+                  .catch(() => process.exit(1));
+              "
+            fi
           '
       - name: Promote canonical Nano TLS ingress
         env:

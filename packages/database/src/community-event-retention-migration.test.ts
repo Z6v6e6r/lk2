@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 describe('community event retention migration', () => {
   it('backfills under FORCE RLS and adds durable bounded claims', async () => {
     const sql = await readFile(
-      new URL('../migrations/0073_community_event_retention.sql', import.meta.url),
+      new URL('../migrations/0068_community_event_retention.sql', import.meta.url),
       'utf8',
     );
     expect(sql).toContain("set_config('app.tenant_id', current_tenant_id::text, true)");

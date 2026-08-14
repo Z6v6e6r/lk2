@@ -35,6 +35,7 @@ describe('Communities realtime load gate support', () => {
   it('requires an exact external expected-event contract', () => {
     expect(() =>
       realtimeLoadFixtureSchema.parse({
+        expectedOrigin: 'wss://staging.padlhub.test',
         connections: [
           {
             ticket: 'x'.repeat(32),
@@ -45,6 +46,7 @@ describe('Communities realtime load gate support', () => {
     ).toThrow();
     expect(() =>
       realtimeLoadFixtureSchema.parse({
+        expectedOrigin: 'wss://staging.padlhub.test',
         connections: [
           {
             ticket: 'x'.repeat(32),

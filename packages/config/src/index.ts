@@ -784,6 +784,9 @@ export function loadConfig(
     throw new Error('COMMUNITY_LEGACY_READ_*_ENABLED requires COMMUNITIES_READ_MODE=legacy');
   }
   if (parsed.data.COMMUNITIES_REALTIME_ENABLED) {
+    if (parsed.data.COMMUNITIES_READ_MODE !== 'local') {
+      throw new Error('COMMUNITIES_REALTIME_ENABLED requires COMMUNITIES_READ_MODE=local');
+    }
     if (!parsed.data.JWT_REALTIME_SECRET) {
       throw new Error('COMMUNITIES_REALTIME_ENABLED requires JWT_REALTIME_SECRET');
     }
@@ -817,6 +820,26 @@ export function loadConfig(
         `COMMUNITY_MEDIA_ENABLED requires versioned media storage: ${missingStorage.join(', ')}`,
       );
     }
+    if (parsed.data.APP_ENV !== 'local' && parsed.data.APP_ENV !== 'ci') {
+      let publicEndpoint: URL;
+      try {
+        publicEndpoint = new URL(parsed.data.S3_PUBLIC_ENDPOINT as string);
+      } catch {
+        throw new Error('COMMUNITY_MEDIA_ENABLED requires a valid S3_PUBLIC_ENDPOINT URL');
+      }
+      if (
+        publicEndpoint.protocol !== 'https:' ||
+        publicEndpoint.username ||
+        publicEndpoint.password ||
+        publicEndpoint.pathname !== '/' ||
+        publicEndpoint.search ||
+        publicEndpoint.hash
+      ) {
+        throw new Error(
+          'COMMUNITY_MEDIA_ENABLED requires an HTTPS S3_PUBLIC_ENDPOINT origin outside local/ci',
+        );
+      }
+    }
     if (
       parsed.data.APP_ENV !== 'local' &&
       parsed.data.APP_ENV !== 'ci' &&
@@ -834,6 +857,9 @@ export function loadConfig(
     }
   }
   if (parsed.data.COMMUNITY_INVITES_ENABLED) {
+    if (parsed.data.COMMUNITIES_READ_MODE !== 'local') {
+      throw new Error('COMMUNITY_INVITES_ENABLED requires COMMUNITIES_READ_MODE=local');
+    }
     if (!parsed.data.COMMUNITY_INVITE_TOKEN_KEYS || !parsed.data.COMMUNITY_INVITE_ACTIVE_KEY_ID) {
       throw new Error(
         'COMMUNITY_INVITES_ENABLED requires COMMUNITY_INVITE_TOKEN_KEYS and COMMUNITY_INVITE_ACTIVE_KEY_ID',

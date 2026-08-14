@@ -11,20 +11,22 @@ export function policyAllowsAnonymousAccess(policy: string): boolean {
     if (!value || typeof value !== 'object') return false;
     const statement = value as Record<string, unknown>;
     if (statement.Effect !== 'Allow') return false;
-    const principal = statement.Principal;
-    const anonymous =
-      principal === '*' ||
-      (principal !== null &&
-        typeof principal === 'object' &&
-        Object.values(principal).some((entry) => entry === '*'));
     const actions = Array.isArray(statement.Action) ? statement.Action : [statement.Action];
-    return (
-      anonymous &&
-      actions.some((action) =>
-        typeof action === 'string' ? action === '*' || action.startsWith('s3:') : false,
-      )
+    const affectsS3 = actions.some((action) =>
+      typeof action === 'string' ? action === '*' || action.startsWith('s3:') : true,
     );
+    if (!affectsS3) return false;
+    if ('NotPrincipal' in statement) return true;
+    return !isScopedPrincipal(statement.Principal);
   });
+}
+
+function isScopedPrincipal(value: unknown): boolean {
+  if (typeof value === 'string') return value.length > 0 && value !== '*';
+  if (Array.isArray(value)) return value.length > 0 && value.every(isScopedPrincipal);
+  if (!value || typeof value !== 'object') return false;
+  const entries = Object.values(value);
+  return entries.length > 0 && entries.every(isScopedPrincipal);
 }
 
 function lifecyclePrefix(rule: LifecycleRule): string {
@@ -53,6 +55,7 @@ export function lifecycleCleansQuarantineVersions(
   maximumNoncurrentDays = 7,
 ): boolean {
   if (rule.Status !== 'Enabled') return false;
+  if (!hasOnlyPrefixFilter(rule)) return false;
   const prefix = lifecyclePrefix(rule);
   const appliesToQuarantine = prefix === '' || 'community-media/quarantine/'.startsWith(prefix);
   const noncurrentDays = rule.NoncurrentVersionExpiration?.NoncurrentDays;
@@ -62,4 +65,10 @@ export function lifecycleCleansQuarantineVersions(
     noncurrentDays >= 1 &&
     noncurrentDays <= maximumNoncurrentDays,
   );
+}
+
+function hasOnlyPrefixFilter(rule: LifecycleRule): boolean {
+  if (rule.Filter?.And) return Object.keys(rule.Filter.And).every((key) => key === 'Prefix');
+  if (rule.Filter) return Object.keys(rule.Filter).every((key) => key === 'Prefix');
+  return rule.Prefix !== undefined;
 }

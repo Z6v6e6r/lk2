@@ -28,6 +28,7 @@ const connectionSchema = z
 
 export const realtimeLoadFixtureSchema = z
   .object({
+    expectedOrigin: z.string().url(),
     connections: z.array(connectionSchema).min(1).max(20_000),
     expectedEvent: z
       .object({

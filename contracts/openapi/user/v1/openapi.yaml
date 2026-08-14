@@ -3545,56 +3545,6 @@ paths:
           $ref: ../../common/components.yaml#/components/responses/TooManyRequests
         '503':
           $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
-  /{tenantKey}/communities/mine:
-    parameters:
-      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
-      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
-    get:
-      operationId: listMyCommunities
-      summary: List active community memberships for the authenticated user
-      description: |
-        Returns PadlHub community UUIDs only. The cursor is opaque and follows the server-owned
-        order: pinned memberships first, then latest activity. During migration the server may
-        normalize this read from the current LK community store; clients never call that store or
-        provide phone, clientId or another identity selector.
-      parameters:
-        - name: limit
-          in: query
-          required: false
-          schema:
-            type: integer
-            minimum: 1
-            maximum: 50
-            default: 20
-        - name: cursor
-          in: query
-          required: false
-          schema:
-            type: string
-            minLength: 16
-            maxLength: 512
-      responses:
-        '200':
-          description: One page of active community memberships.
-          headers:
-            X-Correlation-ID:
-              $ref: ../../common/components.yaml#/components/headers/CorrelationId
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/CommunityMembershipPage'
-        '400':
-          $ref: ../../common/components.yaml#/components/responses/BadRequest
-        '401':
-          $ref: ../../common/components.yaml#/components/responses/Unauthorized
-        '403':
-          $ref: ../../common/components.yaml#/components/responses/Forbidden
-        '404':
-          $ref: ../../common/components.yaml#/components/responses/NotFound
-        '429':
-          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
-        '503':
-          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
   /{tenantKey}/communities/{communityId}/members/me/pin:
     parameters:
       - $ref: ../../common/components.yaml#/components/parameters/TenantKey

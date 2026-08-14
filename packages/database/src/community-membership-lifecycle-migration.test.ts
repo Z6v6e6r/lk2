@@ -8,7 +8,7 @@ describe('community membership lifecycle migration', () => {
     const sql = await readFile(
       resolve(
         process.cwd(),
-        'packages/database/migrations/0063_community_membership_lifecycle.sql',
+        'packages/database/migrations/0057_community_membership_lifecycle.sql',
       ),
       'utf8',
     );

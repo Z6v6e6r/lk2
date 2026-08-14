@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 describe('community ownership transfer migration', () => {
   it('adds an expand-only tenant-isolated replay record', async () => {
     const sql = await readFile(
-      resolve(process.cwd(), 'packages/database/migrations/0067_community_ownership_transfers.sql'),
+      resolve(process.cwd(), 'packages/database/migrations/0062_community_ownership_transfers.sql'),
       'utf8',
     );
     expect(sql).toContain('create table if not exists communities.ownership_transfer_commands');

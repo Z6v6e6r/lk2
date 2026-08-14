@@ -3,9 +3,9 @@ import { readFile } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
 
 describe('community media migration', () => {
-  it('creates a tenant-isolated immutable-version media lifecycle', async () => {
+  it('preserves the exact historical tenant-isolated media lifecycle before its forward repair', async () => {
     const sql = await readFile(
-      new URL('../migrations/0072_community_media_lifecycle.sql', import.meta.url),
+      new URL('../migrations/0067_community_media_lifecycle.sql', import.meta.url),
       'utf8',
     );
     for (const table of [
@@ -33,14 +33,13 @@ describe('community media migration', () => {
     expect(sql).toContain('community_media_gc_claim_idx');
     expect(sql).toContain('community_media_ready_variants_guard');
     expect(sql).toContain('community_post_revision_media_ready_guard');
-    expect(sql).toContain('[0-9a-f]{64}\\.webp$');
-    expect(sql).not.toContain('[0-9a-f]{64}\\\\.webp$');
+    expect(sql).toContain('[0-9a-f]{64}\\\\.webp$');
     expect(sql).not.toMatch(/drop\s+(table|column)|truncate/i);
   });
 
   it('adds terminal recovery evidence, repairs the READY key CHECK and keeps the RLS boundary', async () => {
     const sql = await readFile(
-      new URL('../migrations/0075_community_media_operational_recovery.sql', import.meta.url),
+      new URL('../migrations/0077_community_media_operational_recovery.sql', import.meta.url),
       'utf8',
     );
 

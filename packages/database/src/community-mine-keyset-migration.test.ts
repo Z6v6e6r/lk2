@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 describe('community mine keyset migration', () => {
   it('adds an expand-only partial index matching the membership-owned cursor order', async () => {
     const sql = await readFile(
-      resolve(process.cwd(), 'packages/database/migrations/0066_community_mine_keyset_index.sql'),
+      resolve(process.cwd(), 'packages/database/migrations/0061_community_mine_keyset_index.sql'),
       'utf8',
     );
 

@@ -116,7 +116,7 @@ create table if not exists community_content.media_variants (
   variant_name text not null check (variant_name in ('THUMBNAIL', 'FEED')),
   state text not null default 'ACTIVE' check (state in ('ACTIVE', 'PURGED')),
   object_key text not null check (
-    object_key ~ '^community-media/ready/[0-9a-f-]{36}/[0-9a-f-]{36}/[0-9a-f-]{36}/(thumbnail|feed)/[0-9a-f]{64}\.webp$'
+    object_key ~ '^community-media/ready/[0-9a-f-]{36}/[0-9a-f-]{36}/[0-9a-f-]{36}/(thumbnail|feed)/[0-9a-f]{64}\\.webp$'
   ),
   object_version text not null check (char_length(object_version) between 1 and 1024),
   object_etag text not null check (char_length(object_etag) between 1 and 1024),

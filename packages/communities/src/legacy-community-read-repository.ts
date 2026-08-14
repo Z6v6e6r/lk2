@@ -13,6 +13,29 @@ const MAX_SOURCE_COMMUNITIES = 1_000;
 const MAX_RANK_ENRICHMENTS = 8;
 const RANK_ENRICHMENT_RESPONSE_BUDGET_MS = 150;
 
+async function readBoundedResponseText(response: Response, maxBytes: number): Promise<string> {
+  if (!response.body) return '';
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let total = 0;
+  let text = '';
+  try {
+    while (true) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      total += chunk.value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel('COMMUNITY_LEGACY_RESPONSE_TOO_LARGE');
+        throw new LegacyCommunityReadError('COMMUNITY_LEGACY_RESPONSE_INVALID');
+      }
+      text += decoder.decode(chunk.value, { stream: true });
+    }
+    return text + decoder.decode();
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 export type LegacyCommunityReadErrorCode =
   | 'COMMUNITY_LEGACY_IDENTITY_UNAVAILABLE'
   | 'COMMUNITY_LEGACY_CIRCUIT_OPEN'
@@ -442,11 +465,7 @@ export class LegacyCommunityReadRepository implements CommunityDirectoryReposito
           this.recordRankFailure();
           return undefined;
         }
-        const text = await response.text();
-        if (Buffer.byteLength(text, 'utf8') > MAX_RANK_RESPONSE_BYTES) {
-          this.recordRankFailure();
-          return undefined;
-        }
+        const text = await readBoundedResponseText(response, MAX_RANK_RESPONSE_BYTES);
         const payload = JSON.parse(text) as unknown;
         const rank = extractViewerRank(payload, identity);
         this.rankConsecutiveFailures = 0;
@@ -612,10 +631,7 @@ export class LegacyCommunityReadRepository implements CommunityDirectoryReposito
         if (contentLength > MAX_RESPONSE_BYTES) {
           throw new LegacyCommunityReadError('COMMUNITY_LEGACY_RESPONSE_INVALID');
         }
-        const text = await response.text();
-        if (Buffer.byteLength(text, 'utf8') > MAX_RESPONSE_BYTES) {
-          throw new LegacyCommunityReadError('COMMUNITY_LEGACY_RESPONSE_INVALID');
-        }
+        const text = await readBoundedResponseText(response, MAX_RESPONSE_BYTES);
         let payload: unknown;
         try {
           payload = JSON.parse(text) as unknown;
