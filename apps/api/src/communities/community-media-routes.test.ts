@@ -178,6 +178,70 @@ describe('community media routes', () => {
     );
   });
 
+  it.each([
+    {
+      outcome: 'outstanding_upload_quota_exceeded' as const,
+      statusCode: 429,
+      code: 'COMMUNITY_MEDIA_OUTSTANDING_UPLOAD_QUOTA_EXCEEDED',
+      retryAfterSeconds: 45,
+    },
+    {
+      outcome: 'actor_pipeline_quota_exceeded' as const,
+      statusCode: 429,
+      code: 'COMMUNITY_MEDIA_ACTOR_PIPELINE_QUOTA_EXCEEDED',
+      retryAfterSeconds: 30,
+    },
+    {
+      outcome: 'daily_issue_count_quota_exceeded' as const,
+      statusCode: 429,
+      code: 'COMMUNITY_MEDIA_DAILY_ISSUE_COUNT_QUOTA_EXCEEDED',
+      retryAfterSeconds: 240,
+    },
+    {
+      outcome: 'daily_declared_bytes_quota_exceeded' as const,
+      statusCode: 429,
+      code: 'COMMUNITY_MEDIA_DAILY_DECLARED_BYTES_QUOTA_EXCEEDED',
+      retryAfterSeconds: 300,
+    },
+    {
+      outcome: 'scan_backlog_quota_exceeded' as const,
+      statusCode: 429,
+      code: 'COMMUNITY_MEDIA_SCAN_BACKLOG_QUOTA_EXCEEDED',
+      retryAfterSeconds: 30,
+    },
+  ])('returns stable quota error $code with Retry-After', async (quota) => {
+    const issueUpload = vi.fn<CommunityMediaService['issueUpload']>().mockResolvedValue({
+      outcome: quota.outcome,
+      retryAfterSeconds: quota.retryAfterSeconds,
+    });
+    const app = await buildApp({
+      config,
+      logger: createLogger('api-test', 'silent'),
+      pool: fakePool(),
+      communityMediaService: service({ issueUpload }),
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/user/api/v1/local-padel/communities/${communityId}/media/uploads`,
+      headers: {
+        authorization: `Bearer ${await token()}`,
+        'idempotency-key': `community-media-quota-${quota.statusCode}-${quota.retryAfterSeconds}`,
+      },
+      payload: {
+        mediaType: 'IMAGE',
+        contentType: 'image/png',
+        byteSize: 1_024,
+        sha256: 'a'.repeat(64),
+      },
+    });
+
+    expect(response.statusCode).toBe(quota.statusCode);
+    expect(response.headers['retry-after']).toBe(String(quota.retryAfterSeconds));
+    expect(response.json()).toMatchObject({ code: quota.code });
+  });
+
   it('authorizes a READY variant before redirecting to an exact-version short URL', async () => {
     const authorizeVariant = vi.fn().mockResolvedValue({
       outcome: 'found',

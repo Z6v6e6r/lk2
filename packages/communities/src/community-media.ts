@@ -7,6 +7,12 @@ const sha256 = z.string().regex(/^[0-9a-f]{64}$/);
 
 export const COMMUNITY_MEDIA_MAX_SOURCE_BYTES = 15 * 1_024 * 1_024;
 export const COMMUNITY_MEDIA_MAX_PER_POST = 10;
+export const COMMUNITY_MEDIA_MAX_OUTSTANDING_UPLOADS_PER_USER = 10;
+export const COMMUNITY_MEDIA_MAX_PIPELINE_ITEMS_PER_USER = 20;
+export const COMMUNITY_MEDIA_MAX_DAILY_ISSUES_PER_USER = 100;
+export const COMMUNITY_MEDIA_MAX_DAILY_BYTES_PER_USER =
+  COMMUNITY_MEDIA_MAX_SOURCE_BYTES * COMMUNITY_MEDIA_MAX_PER_POST;
+export const COMMUNITY_MEDIA_MAX_TENANT_PIPELINE_ITEMS = 100;
 export const COMMUNITY_MEDIA_UNATTACHED_READY_TTL_HOURS = 24;
 export const COMMUNITY_DURABLE_EVENT_RETENTION_DAYS = 30;
 
@@ -220,6 +226,14 @@ export type CommunityMediaFailure =
   | { readonly outcome: 'community_not_found' }
   | { readonly outcome: 'membership_required' }
   | { readonly outcome: 'publishing_forbidden' }
+  | { readonly outcome: 'outstanding_upload_quota_exceeded'; readonly retryAfterSeconds: number }
+  | { readonly outcome: 'actor_pipeline_quota_exceeded'; readonly retryAfterSeconds: number }
+  | { readonly outcome: 'daily_issue_count_quota_exceeded'; readonly retryAfterSeconds: number }
+  | {
+      readonly outcome: 'daily_declared_bytes_quota_exceeded';
+      readonly retryAfterSeconds: number;
+    }
+  | { readonly outcome: 'scan_backlog_quota_exceeded'; readonly retryAfterSeconds: number }
   | { readonly outcome: 'media_not_found' }
   | { readonly outcome: 'upload_expired' }
   | { readonly outcome: 'object_missing' }
@@ -364,6 +378,9 @@ export function createCommunityMediaService(options: {
       const intent = communityMediaUploadIntentSchema.safeParse(result.intent);
       if (!intent.success) {
         throw new CommunityMediaError('COMMUNITY_MEDIA_STATE_INVALID');
+      }
+      if (Date.parse(intent.data.uploadExpiresAt) - Date.now() < 2_000) {
+        return { outcome: 'upload_expired' };
       }
       const upload = await options.uploadSigner.issueUploadTarget({
         mediaId: intent.data.id,

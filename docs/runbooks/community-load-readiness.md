@@ -122,6 +122,23 @@ redacts credentials from output and enforces 750 RPS plus journey latency budget
 output with the candidate digest. HTTP success is not proof of command/outbox/realtime capacity;
 those are separate gates.
 
+Before enabling Community media, prove PostgreSQL issuance admission under concurrency. Ten
+unexpired actor uploads are allowed and the next new command returns
+`COMMUNITY_MEDIA_OUTSTANDING_UPLOAD_QUOTA_EXCEEDED`; a rolling total above 150 MiB returns
+`COMMUNITY_MEDIA_DAILY_DECLARED_BYTES_QUOTA_EXCEEDED`. Twenty actor pipeline reservations return
+`COMMUNITY_MEDIA_ACTOR_PIPELINE_QUOTA_EXCEEDED`; 100 issued actor intents in 24 hours return
+`COMMUNITY_MEDIA_DAILY_ISSUE_COUNT_QUOTA_EXCEEDED`; 100 tenant pipeline reservations return
+`COMMUNITY_MEDIA_SCAN_BACKLOG_QUOTA_EXCEEDED`. Prove the actor limits with one-byte finalized
+objects and multiple authenticated sessions for the same user. Replaying a previously successful
+`Idempotency-Key` must still return its original media UUID while saturated and must not add quota
+usage while the authoritative intent remains unexpired `UPLOADING`. After expiry, rejection, READY
+or PURGED cleanup, the same replay must return `COMMUNITY_MEDIA_UPLOAD_EXPIRED` and must not mint a
+new PUT target. Retain `Retry-After`, quota-lock latency and backlog metrics with the candidate
+evidence. These activation defaults require explicit capacity approval before production.
+Prove that a READY/REJECTED transition creates a SOURCE GC job with
+`available_at >= upload_expires_at`, that an immediate GC claim returns nothing, and that the job
+becomes claimable only after every previously issued PUT grant has expired.
+
 Before enabling Community media, provision the bucket outside the application runtime and keep
 `S3_AUTO_CREATE_BUCKET=false`. The read-only preflight fails unless versioning is enabled, anonymous
 ACL/policy read is absent, CORS contains only the explicitly approved origins/methods/headers, and

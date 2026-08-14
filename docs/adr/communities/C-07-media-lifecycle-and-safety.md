@@ -20,6 +20,25 @@ fails instead of creating another provider version. Quarantine lifecycle removes
 versions within seven days; this bounds provider-version residue from interrupted uploads without
 shortening READY or archived retention.
 
+Issuance capacity is enforced from durable `media_assets` evidence inside the same tenant
+transaction and before a new intent is inserted. An actor may hold at most ten unexpired
+`UPLOADING` intents, at most 20 actor pipeline slots across unexpired `UPLOADING` plus every
+`SCANNING` item, and at most 100 issued intents plus 150 MiB of declared source bytes in a rolling
+24-hour window. Rejected, expired and purged rows do not refund either rolling budget. A tenant may
+reserve at most 100 pipeline slots across unexpired `UPLOADING` plus every `SCANNING` item,
+including a terminal failed scan. Fixed-order tenant then actor advisory locks make these limits
+exact across concurrent API instances and prevent tiny uploads from monopolizing tenant scanning.
+An exact issue replay is resolved before quota evaluation and consumes no additional capacity, but
+only after current actor/membership/publishing authorization and an authoritative locked check that
+the same media row is still unexpired `UPLOADING`. Terminal or expired rows never receive another
+PUT grant. These are conservative activation defaults and require workload/capacity ratification
+before production enablement.
+
+Source-version GC is never eligible before the original `uploadExpiresAt`. This ensures every PUT
+grant already issued for that key has expired before exact source deletion can make `If-None-Match:
+*` true again; READY/REJECTED transitions may schedule GC immediately, but the worker cannot claim
+that job until the signed-upload window is closed.
+
 Media follows `UPLOADING -> SCANNING -> READY | REJECTED`; an unused intent may become `EXPIRED`,
 and a retention or GC tombstone may become `PURGED`. The worker validates magic bytes, exact size
 and checksum, decoded pixel bounds and safety signals, removes metadata and creates immutable WebP
@@ -53,7 +72,9 @@ events are never a source of truth.
 
 - Issue: asset intent, actor-scoped idempotency result, audit and
   `community.media.upload_requested.v1` outbox commit together. Signing happens after commit and may
-  issue a fresh short-lived URL for the same media UUID on replay.
+  issue a fresh short-lived URL for the same media UUID on replay. A new command first takes the
+  tenant pipeline and actor quota locks, evaluates durable rolling usage and either commits all
+  issue evidence or returns a stable quota outcome without a media row.
 - Finalize: replay/conflict is checked first. A bounded HEAD observes the current version, then
   `UPLOADING -> SCANNING`, the exact immutable object evidence, idempotency, audit and
   `community.media.scan_requested.v1` commit together.
@@ -95,6 +116,9 @@ The feature remains disabled until all gates pass:
 5. CUP displays every image before a moderator can decide. User composer enables post submission
    only when all selected media are READY.
 6. Load evidence covers concurrent issue/finalize, scan backlog age, ten-image feed posts, delivery
-   redirect latency, hot communities and GC recovery.
+   redirect latency, hot communities and GC recovery. The quota race proves exactly ten actor
+   intents, exactly 20 actor pipeline reservations and exactly 100 tenant pipeline reservations
+   under concurrent issuers; rolling count and byte tests prove state transitions and purge cannot
+   refund either 24-hour budget.
 7. Rollback disables new intent/finalize/attachment commands but continues READY delivery, scanning
    already-finalized objects and GC. No schema rollback is required.

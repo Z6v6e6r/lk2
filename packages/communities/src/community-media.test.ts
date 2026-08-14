@@ -40,7 +40,7 @@ function repository() {
         ...baseMedia,
         state: 'UPLOADING',
         objectKey: `community-media/${command.tenantId}/${baseMedia.id}/source`,
-        uploadExpiresAt: '2026-08-04T10:15:00.000Z',
+        uploadExpiresAt: '2030-08-04T10:15:00.000Z',
       },
     }),
     getFinalizeTarget: vi.fn(),
@@ -57,7 +57,7 @@ function service(repo = repository()) {
         method: 'PUT',
         url: 'https://quarantine.padlhub.test/upload',
         requiredHeaders: { 'Content-Type': 'image/jpeg' },
-        expiresAt: '2026-08-04T10:15:00.000Z',
+        expiresAt: '2030-08-04T10:15:00.000Z',
       }),
     },
     objectInspector: { inspectCurrentVersion: vi.fn() },
@@ -279,6 +279,36 @@ describe('community media domain', () => {
         sha256: 'b'.repeat(64),
       }),
     ).rejects.toEqual(new CommunityMediaError('COMMUNITY_MEDIA_STATE_INVALID'));
+    expect(uploadSigner.issueUploadTarget).not.toHaveBeenCalled();
+  });
+
+  it('does not sign a persisted upload intent that has already expired', async () => {
+    const repo = repository();
+    repo.issueUpload.mockResolvedValue({
+      outcome: 'issued',
+      replayed: true,
+      intent: {
+        ...baseMedia,
+        state: 'UPLOADING',
+        objectKey: `community-media/quarantine/${command.tenantId}/${command.communityId}/${baseMedia.id}/source`,
+        uploadExpiresAt: '2020-08-04T10:15:00.000Z',
+      },
+    });
+    const uploadSigner = { issueUploadTarget: vi.fn() };
+    const mediaService = createCommunityMediaService({
+      repository: repo,
+      uploadSigner,
+      objectInspector: { inspectCurrentVersion: vi.fn() },
+    });
+
+    await expect(
+      mediaService.issueUpload({
+        ...command,
+        contentType: 'image/jpeg',
+        byteSize: 1_024,
+        sha256: 'b'.repeat(64),
+      }),
+    ).resolves.toEqual({ outcome: 'upload_expired' });
     expect(uploadSigner.issueUploadTarget).not.toHaveBeenCalled();
   });
 
