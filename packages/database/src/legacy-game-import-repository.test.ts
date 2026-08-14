@@ -200,6 +200,12 @@ describe('legacy game import repository', () => {
     expect(
       clientQuery.mock.calls.find(([text]) => text.includes('set revision = revision + 1')),
     ).toBeDefined();
+    const profileSummaryUpsert = clientQuery.mock.calls.find(([text]) =>
+      text.includes('insert into profile.user_summaries'),
+    );
+    expect(profileSummaryUpsert?.[0]).toContain('display_name = excluded.display_name');
+    const conflictUpdate = profileSummaryUpsert?.[0].split('do update set')[1] ?? '';
+    expect(conflictUpdate).not.toMatch(/\blevel_(?:label|value)\s*=/);
   });
 
   it('refreshes real names for already mapped players without changing the existing roster', async () => {
@@ -237,6 +243,7 @@ describe('legacy game import repository', () => {
     );
     expect(nameRefreshes).toHaveLength(2);
     expect(nameRefreshes.map(([, values]) => values?.[2])).toEqual(['Анна', 'Борис']);
+    expect(nameRefreshes.every(([text]) => !/\blevel_(?:label|value)\s*=/.test(text))).toBe(true);
     expect(
       clientQuery.mock.calls.some(([text]) => text.includes('insert into games.participations')),
     ).toBe(false);
@@ -261,6 +268,17 @@ describe('legacy game import repository', () => {
     expect(clientQuery).toHaveBeenCalledWith("select set_config('app.tenant_id', $1, true)", [
       tenantId,
     ]);
+    expect(clientQuery).toHaveBeenCalledWith(
+      "select set_config('app.profile_level_history_origin', $1, true)",
+      ['LK_LEGACY_SNAPSHOT'],
+    );
+    const profileSummaryInserts = clientQuery.mock.calls.filter(([text]) =>
+      text.includes('insert into profile.user_summaries'),
+    );
+    expect(profileSummaryInserts.map(([, values]) => values?.slice(3, 5))).toEqual([
+      ['C+', 3.8],
+      ['B', 4.2],
+    ]);
     expect(
       clientQuery.mock.calls.some(([text]) => text.includes('insert into identity.users')),
     ).toBe(true);
@@ -270,14 +288,14 @@ describe('legacy game import repository', () => {
           'level_label = coalesce(excluded.level_label, profile.user_summaries.level_label)',
         ),
       ),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       clientQuery.mock.calls.some(([text]) =>
         text.includes(
           'level_value = coalesce(excluded.level_value, profile.user_summaries.level_value)',
         ),
       ),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       clientQuery.mock.calls.some(([text]) => text.includes('insert into locations.profiles')),
     ).toBe(true);
@@ -656,6 +674,10 @@ describe('legacy game import repository', () => {
     });
 
     expect(result).toMatchObject({ tenantId, synced: [{ gameId }] });
+    expect(clientQuery).toHaveBeenCalledWith(
+      "select set_config('app.profile_level_history_origin', $1, true)",
+      ['LK_LEGACY_SNAPSHOT'],
+    );
     expect(
       clientQuery.mock.calls.some(([text]) => text.includes('insert into games.participations')),
     ).toBe(true);
