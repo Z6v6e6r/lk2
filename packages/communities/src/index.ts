@@ -1,14 +1,17 @@
 import { z } from 'zod';
 
+import { communityLogoUrlSchema } from './community-logo-url.js';
+
+export { communityLogoUrlSchema } from './community-logo-url.js';
+
 const uuid = z.string().uuid();
 const dateTime = z.string().datetime({ offset: true });
 const route = z.string().startsWith('/');
-
 export const communitySummarySchema = z
   .object({
     id: uuid,
     title: z.string().min(1).max(120),
-    logoUrl: z.string().url().nullable(),
+    logoUrl: communityLogoUrlSchema.nullable(),
     isVerified: z.boolean(),
     unreadChatCount: z.number().int().nonnegative(),
     memberRank: z.number().int().positive().optional(),

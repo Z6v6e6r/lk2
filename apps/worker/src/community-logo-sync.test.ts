@@ -67,7 +67,6 @@ const defaults = {
   maxDimension: 512,
   webpQuality: 82,
   previousObjectRetentionSeconds: 4_000,
-  readUrlTtlSeconds: 3_600,
   timeoutMs: 1_000,
 } as const;
 
@@ -103,7 +102,7 @@ describe('legacy community logo synchronization', () => {
         sourceEtag: '"logo-v1"',
       },
     });
-    expect(result?.logoUrl).toContain('https://media.padlhub.test/community-logos/');
+    expect(result?.logoUrl).toBe(`/public/api/v1/media/community-logos/${tenantId}/${communityId}`);
     expect(result?.logoUrl).not.toContain('legacy.padlhub.test');
     expect(put).toHaveBeenCalledOnce();
     const stored = put.mock.calls[0]?.[0];
@@ -113,7 +112,7 @@ describe('legacy community logo synchronization', () => {
     await expect(sharp(stored?.body).metadata()).resolves.toMatchObject({ format: 'webp' });
   });
 
-  it('reuses an unexpired local object without downloading the same legacy URL again', async () => {
+  it('reuses the local object without downloading the same legacy URL again', async () => {
     const objectKey = `community-logos/${tenantId}/${communityId}/${'a'.repeat(64)}.webp`;
     const { pool } = poolWithLogoRows([
       {
@@ -123,8 +122,6 @@ describe('legacy community logo synchronization', () => {
         source_last_modified: null,
         content_sha256: 'a'.repeat(64),
         object_key: objectKey,
-        delivery_url: 'https://media.padlhub.test/current.webp?sig=still-valid',
-        delivery_expires_at: '2026-07-17T12:30:00.000Z',
         synced_at: '2026-07-17T11:00:00.000Z',
       },
     ]);
@@ -141,11 +138,40 @@ describe('legacy community logo synchronization', () => {
 
     expect(result).toMatchObject({
       outcome: 'unchanged',
-      logoUrl: 'https://media.padlhub.test/current.webp?sig=still-valid',
+      logoUrl: `/public/api/v1/media/community-logos/${tenantId}/${communityId}`,
     });
     expect(fetchImplementation).not.toHaveBeenCalled();
     expect(put).not.toHaveBeenCalled();
     expect(createReadUrl).not.toHaveBeenCalled();
+  });
+
+  it('prepares changed bytes without upload until the community object is reserved', async () => {
+    const png = await sharp({
+      create: { width: 32, height: 32, channels: 4, background: '#7654d7' },
+    })
+      .png()
+      .toBuffer();
+    const { pool } = poolWithLogoRows([]);
+    const { store, put } = objectStore();
+
+    const [result] = await synchronizeLegacyCommunityLogos({
+      ...defaults,
+      pool,
+      store,
+      items: [item('https://legacy.padlhub.test/logo/new')],
+      deferStorePut: true,
+      fetchImplementation: vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(new Response(png, { headers: { 'content-type': 'image/png' } })),
+    });
+
+    expect(result?.outcome).toBe('stored');
+    if (!result) throw new Error('Community logo result is missing');
+    expect(result?.preparedObject).toMatchObject({
+      key: result.persistence.objectKey,
+      sha256: result.persistence.contentSha256,
+    });
+    expect(put).not.toHaveBeenCalled();
   });
 
   it('fails closed on a non-allowlisted source and keeps the current local logo', async () => {
@@ -158,8 +184,6 @@ describe('legacy community logo synchronization', () => {
         source_last_modified: null,
         content_sha256: 'b'.repeat(64),
         object_key: objectKey,
-        delivery_url: 'https://media.padlhub.test/old.webp?sig=old',
-        delivery_expires_at: '2026-07-17T11:59:00.000Z',
         synced_at: '2026-07-17T11:00:00.000Z',
       },
     ]);
@@ -177,6 +201,6 @@ describe('legacy community logo synchronization', () => {
       outcome: 'fallback',
       errorCode: 'COMMUNITY_LOGO_SOURCE_NOT_ALLOWED',
     });
-    expect(result?.logoUrl).toContain('https://media.padlhub.test/community-logos/');
+    expect(result?.logoUrl).toBe(`/public/api/v1/media/community-logos/${tenantId}/${communityId}`);
   });
 });

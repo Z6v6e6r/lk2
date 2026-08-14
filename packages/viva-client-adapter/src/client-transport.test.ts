@@ -70,6 +70,24 @@ describe('client transport executor', () => {
     });
   });
 
+  it('accepts a bounded schedule response larger than the generic one-megabyte read limit', async () => {
+    const payload = { content: [{ id: 'provider-id', presentation: 'x'.repeat(1_200_000) }] };
+    const executor = createClientTransportExecutor({
+      getRoutingPlan: vi.fn().mockResolvedValue(plan('MIXED_END_USER_READS')),
+      getVivaAccessToken: () => 'user-access-token',
+      refreshVivaAccessToken: vi.fn(),
+      executePadlHub: vi.fn(),
+      fetchImplementation: vi.fn().mockResolvedValue(Response.json(payload)),
+    });
+
+    await expect(
+      executor.executeClientAssistedScheduleRead({
+        operation: 'schedule.read',
+        date: '2026-07-30',
+      }),
+    ).resolves.toEqual(payload);
+  });
+
   it('derives booking detail identifiers only from the active list response', async () => {
     const vivaFetch = vi
       .fn<typeof fetch>()

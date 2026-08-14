@@ -71,6 +71,7 @@ describe('client routing plan', () => {
         apiBaseUrl: 'https://api.vivacrm.ru/end-user/api',
         providerTenantKey: 'iSkq6G',
         allowedRequestHeaders: ['Authorization'],
+        allowedMediaHosts: ['.selcdn.ru', '.selstorage.ru'],
       },
     });
     expect(result.operations).toHaveLength(6);

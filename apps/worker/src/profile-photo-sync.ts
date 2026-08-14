@@ -37,6 +37,12 @@ export interface ProfilePhotoSyncResult {
   readonly persistence: ProfilePhotoPersistence;
   readonly outcome: 'stored' | 'unchanged' | 'removed' | 'fallback';
   readonly errorCode?: string;
+  readonly preparedObject?: {
+    readonly key: string;
+    readonly body: Buffer;
+    readonly sha256: string;
+    readonly deleteAfter: string;
+  };
 }
 
 export interface S3ProfilePhotoObjectStoreOptions {
@@ -49,6 +55,7 @@ export interface S3ProfilePhotoObjectStoreOptions {
   readonly forcePathStyle: boolean;
   readonly autoCreateBucket: boolean;
   readonly readUrlTtlSeconds: number;
+  readonly timeoutMs: number;
 }
 
 function status(error: unknown): number | undefined {
@@ -70,18 +77,40 @@ export class S3ProfilePhotoObjectStore implements ProfilePhotoObjectStore {
       credentials: { accessKeyId: options.accessKey, secretAccessKey: options.secretKey },
       forcePathStyle: options.forcePathStyle,
     };
-    this.internalClient = new S3Client({ ...shared, endpoint: options.endpoint });
-    this.deliveryClient = new S3Client({ ...shared, endpoint: options.publicEndpoint });
+    this.internalClient = new S3Client({ ...shared, endpoint: options.endpoint, maxAttempts: 2 });
+    this.deliveryClient = new S3Client({
+      ...shared,
+      endpoint: options.publicEndpoint,
+      maxAttempts: 2,
+    });
+  }
+
+  private async withTimeout<T>(operation: (signal: AbortSignal) => Promise<T>): Promise<T> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.options.timeoutMs);
+    try {
+      return await operation(controller.signal);
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 
   private ensureReady(): Promise<void> {
     this.ready ??= (async () => {
       try {
-        await this.internalClient.send(new HeadBucketCommand({ Bucket: this.options.bucket }));
+        await this.withTimeout((abortSignal) =>
+          this.internalClient.send(new HeadBucketCommand({ Bucket: this.options.bucket }), {
+            abortSignal,
+          }),
+        );
       } catch (error) {
         if (status(error) !== 404 || !this.options.autoCreateBucket) throw error;
         try {
-          await this.internalClient.send(new CreateBucketCommand({ Bucket: this.options.bucket }));
+          await this.withTimeout((abortSignal) =>
+            this.internalClient.send(new CreateBucketCommand({ Bucket: this.options.bucket }), {
+              abortSignal,
+            }),
+          );
         } catch (createError) {
           if (status(createError) !== 409) throw createError;
         }
@@ -96,15 +125,18 @@ export class S3ProfilePhotoObjectStore implements ProfilePhotoObjectStore {
     readonly sha256: string;
   }): Promise<void> {
     await this.ensureReady();
-    await this.internalClient.send(
-      new PutObjectCommand({
-        Bucket: this.options.bucket,
-        Key: input.key,
-        Body: input.body,
-        ContentType: 'image/webp',
-        CacheControl: 'private, max-age=31536000, immutable',
-        Metadata: { sha256: input.sha256 },
-      }),
+    await this.withTimeout((abortSignal) =>
+      this.internalClient.send(
+        new PutObjectCommand({
+          Bucket: this.options.bucket,
+          Key: input.key,
+          Body: input.body,
+          ContentType: 'image/webp',
+          CacheControl: 'private, max-age=31536000, immutable',
+          Metadata: { sha256: input.sha256 },
+        }),
+        { abortSignal },
+      ),
     );
   }
 
@@ -124,8 +156,10 @@ export class S3ProfilePhotoObjectStore implements ProfilePhotoObjectStore {
 
   public async delete(key: string): Promise<void> {
     await this.ensureReady();
-    await this.internalClient.send(
-      new DeleteObjectCommand({ Bucket: this.options.bucket, Key: key }),
+    await this.withTimeout((abortSignal) =>
+      this.internalClient.send(new DeleteObjectCommand({ Bucket: this.options.bucket, Key: key }), {
+        abortSignal,
+      }),
     );
   }
 }
@@ -291,6 +325,8 @@ export async function synchronizeProfilePhoto(input: {
   readonly timeoutMs: number;
   /** Legacy sources are fallback-only and must not replace a profile-owned avatar. */
   readonly replaceExistingSource?: boolean;
+  /** Home sync reserves the object durably, then uploads it outside this pure preparation step. */
+  readonly deferStorePut?: boolean;
   readonly fetchImplementation?: typeof fetch;
 }): Promise<ProfilePhotoSyncResult> {
   const current = await loadProfilePhotoSyncRecord({
@@ -358,15 +394,18 @@ export async function synchronizeProfilePhoto(input: {
       .toBuffer();
     const contentSha256 = createHash('sha256').update(webp).digest('hex');
     const objectKey = `profile-photos/${input.tenantId}/${input.userId}/${contentSha256}.webp`;
-    if (current.contentSha256 !== contentSha256 || current.objectKey !== objectKey) {
-      await input.store.put({ key: objectKey, body: webp, sha256: contentSha256 });
-    }
+    const objectChanged =
+      current.contentSha256 !== contentSha256 || current.objectKey !== objectKey;
+    const deleteAfter = new Date(
+      Date.parse(input.fetchedAt) + input.previousObjectRetentionSeconds * 1_000,
+    ).toISOString();
+    const preparedObject = objectChanged
+      ? { key: objectKey, body: webp, sha256: contentSha256, deleteAfter }
+      : undefined;
+    if (preparedObject && !input.deferStorePut) await input.store.put(preparedObject);
     const avatarUrl = profilePhotoDeliveryUrl(input.tenantId, deliveryId);
     return {
-      outcome:
-        current.contentSha256 === contentSha256 && current.objectKey === objectKey
-          ? 'unchanged'
-          : 'stored',
+      outcome: objectChanged ? 'stored' : 'unchanged',
       persistence: {
         avatarUrl,
         deliveryId,
@@ -376,10 +415,12 @@ export async function synchronizeProfilePhoto(input: {
         contentSha256,
         objectKey,
         syncedAt: input.fetchedAt,
+        ...(preparedObject ? { rejectedObjectDeleteAfter: deleteAfter } : {}),
         ...(current.objectKey && current.objectKey !== objectKey
           ? deletionFields(current.objectKey, input.fetchedAt, input.previousObjectRetentionSeconds)
           : {}),
       },
+      ...(input.deferStorePut && preparedObject ? { preparedObject } : {}),
     };
   } catch (error) {
     const avatarUrl = current.objectKey

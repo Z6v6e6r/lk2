@@ -279,6 +279,19 @@ describe('health endpoints', () => {
       },
     });
     expect(response.statusCode).toBe(204);
+    const mediaResponse = await app.inject({
+      method: 'POST',
+      url: '/user/api/v1/local-padel/routing-outcomes',
+      headers: { authorization: `Bearer ${await accessToken()}` },
+      payload: {
+        operation: 'profile.photo.sync',
+        routingRevision: '7',
+        outcome: 'SUCCESS',
+        statusClass: '2xx',
+        durationMs: 203,
+      },
+    });
+    expect(mediaResponse.statusCode).toBe(204);
   });
 
   it('fails closed for administrative clients even when the tenant is mixed', async () => {

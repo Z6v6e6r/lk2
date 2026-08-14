@@ -3,6 +3,7 @@ import type {
   CommunityDirectoryRepository,
   CommunityDirectoryRepositoryPage,
 } from '@phub/communities';
+import { communityLogoDeliveryUrl } from '@phub/domain';
 import type { Pool, QueryResultRow } from 'pg';
 
 import { withTenantTransaction } from './connection.js';
@@ -24,17 +25,41 @@ interface CommunityMappingRow extends QueryResultRow {
 
 interface CommunityLogoRow extends QueryResultRow {
   readonly community_id: string;
-  readonly delivery_url: string;
+  readonly object_key: string;
 }
 
 interface CommunityDirectoryRow extends QueryResultRow {
   readonly id: string;
   readonly title: string;
   readonly is_verified: boolean;
-  readonly logo_url: string | null;
+  readonly logo_object_key: string | null;
   readonly ranking_position: number | string | null;
   readonly pinned: boolean;
   readonly sort_at: Date | string;
+}
+
+export interface CommunityLogoMediaRepository {
+  getObjectKey(tenantId: string, communityId: string): Promise<string | undefined>;
+}
+
+export function createCommunityLogoMediaRepository(pool: Pool): CommunityLogoMediaRepository {
+  return {
+    getObjectKey(tenantId, communityId) {
+      return withTenantTransaction(pool, tenantId, async (client) => {
+        const row = (
+          await client.query<{ readonly object_key: string } & QueryResultRow>(
+            `select logo.object_key
+               from integration.community_logo_sync logo
+               join identity.tenants tenant
+                 on tenant.id = logo.tenant_id and tenant.active = true
+              where logo.tenant_id = $1 and logo.community_id = $2`,
+            [tenantId, communityId],
+          )
+        ).rows[0];
+        return row?.object_key;
+      });
+    },
+  };
 }
 
 function timestamp(value: Date | string): string {
@@ -124,12 +149,17 @@ export function createCommunityLegacyBridgeRepository(pool: Pool): CommunityLega
       if (uniqueCommunityIds.length === 0) return Promise.resolve(new Map());
       return withTenantTransaction(pool, tenantId, async (client) => {
         const result = await client.query<CommunityLogoRow>(
-          `select community_id::text as community_id, delivery_url
+          `select community_id::text as community_id, object_key
              from integration.community_logo_sync
             where tenant_id = $1 and community_id = any($2::uuid[])`,
           [tenantId, uniqueCommunityIds],
         );
-        return new Map(result.rows.map((row) => [row.community_id, row.delivery_url]));
+        return new Map(
+          result.rows.map((row) => [
+            row.community_id,
+            communityLogoDeliveryUrl(tenantId, row.community_id),
+          ]),
+        );
       });
     },
   };
@@ -140,7 +170,7 @@ export function createLocalCommunityDirectoryRepository(pool: Pool): CommunityDi
     listMemberships(input): Promise<CommunityDirectoryRepositoryPage> {
       return withTenantTransaction(pool, input.tenantId, async (client) => {
         const result = await client.query<CommunityDirectoryRow>(
-          `select c.id, c.title, c.is_verified, logo.delivery_url as logo_url,
+          `select c.id, c.title, c.is_verified, logo.object_key as logo_object_key,
                   m.ranking_position,
                   (m.pinned_at is not null) as pinned,
                   greatest(c.updated_at, m.updated_at) as sort_at
@@ -183,7 +213,7 @@ export function createLocalCommunityDirectoryRepository(pool: Pool): CommunityDi
         const items = result.rows.slice(0, input.limit).map((row) => ({
           id: row.id,
           title: row.title,
-          logoUrl: row.logo_url,
+          logoUrl: row.logo_object_key ? communityLogoDeliveryUrl(input.tenantId, row.id) : null,
           isVerified: row.is_verified,
           unreadChatCount: 0,
           ...(row.ranking_position === null ? {} : { memberRank: Number(row.ranking_position) }),

@@ -25,4 +25,4 @@ export type UserGameErrorCode = UserGeneratedComponents['schemas']['GameErrorCod
 export type InternalGameCommand = InternalGeneratedComponents['schemas']['GameInternalCommand'];
 export type InternalGameEvent = InternalGeneratedComponents['schemas']['GameDomainEvent'];
 
-export const CURRENT_CONTRACT_VERSION = '1.11.0-games-profile-access-policy' as const;
+export const CURRENT_CONTRACT_VERSION = '1.12.0-stable-media-delivery' as const;

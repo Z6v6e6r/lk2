@@ -71,6 +71,12 @@ paths:
           $ref: ../../common/components.yaml#/components/responses/Unauthorized
         '404':
           $ref: ../../common/components.yaml#/components/responses/NotFound
+        '413':
+          description: Provider result exceeds the bounded relay body limit.
+          content:
+            application/json:
+              schema:
+                $ref: ../../common/components.yaml#/components/schemas/ApiError
         '429':
           $ref: ../../common/components.yaml#/components/responses/TooManyRequests
 
@@ -232,6 +238,15 @@ components:
               items: {}
             - type: object
               additionalProperties: true
+              properties:
+                content:
+                  type: array
+                  maxItems: 500
+                  items: {}
+                items:
+                  type: array
+                  maxItems: 500
+                  items: {}
     BookingScreenReadResultAcceptance:
       type: object
       additionalProperties: false

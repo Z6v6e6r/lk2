@@ -210,8 +210,10 @@ signed operation vocabulary and the short-lived routing plan.
 `POST /user/api/v1/{tenantKey}/booking-screen-read-jobs/{jobId}/results/{commandId}`
 
 The result is bound to the authenticated tenant, user, job, operation, date, routing revision and
-expiry. The API validates content type, compressed and decompressed size, schema, item count and
-time range before any mapping or projection work.
+expiry. A schedule response is bounded to 5 MiB in the browser adapter; the JSON relay endpoint has
+a 6 MiB HTTP body limit so transport framing cannot reject a response the domain boundary accepts.
+The API validates content type, decompressed size, schema, item count and time range before any
+mapping or projection work.
 
 ### Complete the job
 

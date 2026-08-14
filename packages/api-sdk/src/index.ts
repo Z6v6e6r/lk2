@@ -125,6 +125,17 @@ export interface BookingRecommendationFilters {
   readonly cursor?: string;
 }
 
+export interface ProfilePhotoSyncResult {
+  readonly avatarUrl: string;
+  readonly replayed: boolean;
+}
+
+export interface VivaDelegatedAccess {
+  readonly accessToken: string;
+  readonly expiresAt: string;
+  readonly profilePhotoGrant: string;
+}
+
 function normalizeBookingPreferences(settings: BookingPreferences): BookingPreferences {
   const candidate = settings as Partial<BookingPreferences>;
   return {
@@ -444,18 +455,15 @@ export class PadlHubApiClient {
     input: {
       readonly handoffCode?: string;
     } = {},
-  ): Promise<{ readonly accessToken: string; readonly expiresAt: string }> {
+  ): Promise<VivaDelegatedAccess> {
     const idempotencyKey = createCorrelationId();
-    return this.request<{ readonly accessToken: string; readonly expiresAt: string }>(
-      '/auth/viva/access',
-      {
-        method: 'POST',
-        auth: 'required',
-        credentials: 'include',
-        idempotencyKey,
-        body: jsonRequestBody(input),
-      },
-    );
+    return this.request<VivaDelegatedAccess>('/auth/viva/access', {
+      method: 'POST',
+      auth: 'required',
+      credentials: 'include',
+      idempotencyKey,
+      body: jsonRequestBody(input),
+    });
   }
 
   public refreshSession(): Promise<AuthenticatedSession> {
@@ -519,6 +527,25 @@ export class PadlHubApiClient {
 
   public getUserProfile(): Promise<UserProfile> {
     return this.request<UserProfile>('/profile');
+  }
+
+  public async syncUserProfilePhoto(input: {
+    readonly body: ArrayBuffer;
+    readonly contentType: string;
+    readonly grant: string;
+  }): Promise<ProfilePhotoSyncResult> {
+    const idempotencyKey = createCorrelationId();
+    const result = await this.request<ProfilePhotoSyncResult>('/profile/photo', {
+      method: 'POST',
+      idempotencyKey,
+      retryOnUnauthorized: false,
+      headers: {
+        'Content-Type': input.contentType,
+        'X-Profile-Photo-Grant': input.grant,
+      },
+      body: input.body,
+    });
+    return { ...result, avatarUrl: this.resolveApiMediaUrl(result.avatarUrl) };
   }
 
   public getPlayerProfile(userId: string): Promise<PlayerProfileView> {
@@ -726,13 +753,24 @@ export class PadlHubApiClient {
 
   public async getHomeDashboard(): Promise<HomeDashboard> {
     const dashboard = await this.request<HomeDashboard>('/home');
-    if (!Array.isArray(dashboard.locations)) return dashboard;
     return {
       ...dashboard,
-      locations: dashboard.locations.map((location) => ({
-        ...location,
-        imageUrl: location.imageUrl ? this.resolveApiMediaUrl(location.imageUrl) : null,
-      })),
+      ...(Array.isArray(dashboard.locations)
+        ? {
+            locations: dashboard.locations.map((location) => ({
+              ...location,
+              imageUrl: location.imageUrl ? this.resolveApiMediaUrl(location.imageUrl) : null,
+            })),
+          }
+        : {}),
+      ...(Array.isArray(dashboard.communities)
+        ? {
+            communities: dashboard.communities.map((community) => ({
+              ...community,
+              logoUrl: community.logoUrl ? this.resolveApiMediaUrl(community.logoUrl) : null,
+            })),
+          }
+        : {}),
     };
   }
 
@@ -740,6 +778,16 @@ export class PadlHubApiClient {
     const homeBase = await this.request<HomeBase>('/home/base');
     return {
       ...homeBase,
+      communities:
+        homeBase.communities.status === 'UNAVAILABLE'
+          ? homeBase.communities
+          : {
+              ...homeBase.communities,
+              value: homeBase.communities.value.map((community) => ({
+                ...community,
+                logoUrl: community.logoUrl ? this.resolveApiMediaUrl(community.logoUrl) : null,
+              })),
+            },
       locations: homeBase.locations.map((location) => ({
         ...location,
         imageUrl: location.imageUrl ? this.resolveApiMediaUrl(location.imageUrl) : null,
@@ -1034,14 +1082,21 @@ export class PadlHubApiClient {
     };
   }
 
-  public listMyCommunities(
+  public async listMyCommunities(
     input: { readonly limit?: number; readonly cursor?: string } = {},
   ): Promise<CommunityMembershipPage> {
     const query = new URLSearchParams();
     if (input.limit !== undefined) query.set('limit', String(input.limit));
     if (input.cursor) query.set('cursor', input.cursor);
     const suffix = query.size > 0 ? `?${query.toString()}` : '';
-    return this.request<CommunityMembershipPage>(`/communities/mine${suffix}`);
+    const page = await this.request<CommunityMembershipPage>(`/communities/mine${suffix}`);
+    return {
+      ...page,
+      items: page.items.map((community) => ({
+        ...community,
+        logoUrl: community.logoUrl ? this.resolveApiMediaUrl(community.logoUrl) : null,
+      })),
+    };
   }
 
   public listConversations(limit = 50): Promise<ConversationPage> {
@@ -1124,13 +1179,17 @@ export class PadlHubApiClient {
     );
   }
 
-  public getCommunityReadExperienceDetail(
+  public async getCommunityReadExperienceDetail(
     communityId: string,
   ): Promise<CommunityReadExperienceDetail> {
-    return this.request<CommunityReadExperienceDetail>(
+    const detail = await this.request<CommunityReadExperienceDetail>(
       `/community-views/${encodeURIComponent(communityId)}`,
       { cache: 'no-store' },
     );
+    return {
+      ...detail,
+      logoUrl: detail.logoUrl ? this.resolveApiMediaUrl(detail.logoUrl) : null,
+    };
   }
 
   public listCommunityReadExperienceFeed(

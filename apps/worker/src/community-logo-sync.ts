@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 
 import type { CommunityDirectoryItem } from '@phub/communities';
+import { communityLogoDeliveryUrl } from '@phub/domain';
 import type { Pool } from 'pg';
 import sharp from 'sharp';
 
@@ -17,15 +18,11 @@ export interface CommunityLogoSyncRecord {
   readonly sourceLastModified?: string;
   readonly contentSha256: string;
   readonly objectKey: string;
-  readonly deliveryUrl: string;
-  readonly deliveryExpiresAt: string;
   readonly syncedAt: string;
 }
 
 export interface CommunityLogoPersistence {
   readonly communityId: string;
-  readonly deliveryUrl: string | null;
-  readonly deliveryExpiresAt?: string;
   readonly sourceUrl?: string;
   readonly sourceEtag?: string;
   readonly sourceLastModified?: string;
@@ -42,6 +39,12 @@ export interface CommunityLogoSyncResult {
   readonly persistence: CommunityLogoPersistence;
   readonly outcome: 'stored' | 'unchanged' | 'removed' | 'fallback';
   readonly errorCode?: string;
+  readonly preparedObject?: {
+    readonly key: string;
+    readonly body: Buffer;
+    readonly sha256: string;
+    readonly deleteAfter: string;
+  };
 }
 
 function allowedLogoUrl(value: string, allowedHosts: readonly string[]): URL {
@@ -89,6 +92,7 @@ async function fetchSourceLogo(input: {
   readonly maxBytes: number;
   readonly timeoutMs: number;
   readonly fetchImplementation: typeof fetch;
+  readonly deferStorePut?: boolean;
 }): Promise<{
   readonly body: Buffer;
   readonly etag?: string;
@@ -153,41 +157,15 @@ function deletionFields(
   };
 }
 
-function persistenceFromCurrent(
-  current: CommunityLogoSyncRecord,
-  delivery?: { readonly url: string; readonly expiresAt: string },
-): CommunityLogoPersistence {
+function persistenceFromCurrent(current: CommunityLogoSyncRecord): CommunityLogoPersistence {
   return {
     communityId: current.communityId,
-    deliveryUrl: delivery?.url ?? current.deliveryUrl,
-    deliveryExpiresAt: delivery?.expiresAt ?? current.deliveryExpiresAt,
     sourceUrl: current.sourceUrl,
     ...(current.sourceEtag ? { sourceEtag: current.sourceEtag } : {}),
     ...(current.sourceLastModified ? { sourceLastModified: current.sourceLastModified } : {}),
     contentSha256: current.contentSha256,
     objectKey: current.objectKey,
     syncedAt: current.syncedAt,
-  };
-}
-
-async function refreshDeliveryUrl(input: {
-  readonly store: ProfilePhotoObjectStore;
-  readonly current: CommunityLogoSyncRecord;
-  readonly fetchedAt: string;
-  readonly readUrlTtlSeconds: number;
-}): Promise<{ readonly url: string; readonly expiresAt: string } | undefined> {
-  const refreshSkewSeconds = Math.min(300, Math.floor(input.readUrlTtlSeconds / 2));
-  if (
-    Date.parse(input.current.deliveryExpiresAt) >
-    Date.parse(input.fetchedAt) + refreshSkewSeconds * 1_000
-  ) {
-    return undefined;
-  }
-  return {
-    url: await input.store.createReadUrl(input.current.objectKey),
-    expiresAt: new Date(
-      Date.parse(input.fetchedAt) + input.readUrlTtlSeconds * 1_000,
-    ).toISOString(),
   };
 }
 
@@ -202,9 +180,9 @@ async function synchronizeOne(input: {
   readonly maxDimension: number;
   readonly webpQuality: number;
   readonly previousObjectRetentionSeconds: number;
-  readonly readUrlTtlSeconds: number;
   readonly timeoutMs: number;
   readonly fetchImplementation: typeof fetch;
+  readonly deferStorePut?: boolean;
 }): Promise<CommunityLogoSyncResult> {
   if (!input.item.legacyLogoSourceUrl) {
     return {
@@ -213,7 +191,6 @@ async function synchronizeOne(input: {
       outcome: 'removed',
       persistence: {
         communityId: input.item.id,
-        deliveryUrl: null,
         syncedAt: input.fetchedAt,
         ...deletionFields(
           input.current?.objectKey,
@@ -226,16 +203,10 @@ async function synchronizeOne(input: {
 
   try {
     if (input.current?.sourceUrl === input.item.legacyLogoSourceUrl && input.current.objectKey) {
-      const delivery = await refreshDeliveryUrl({
-        store: input.store,
-        current: input.current,
-        fetchedAt: input.fetchedAt,
-        readUrlTtlSeconds: input.readUrlTtlSeconds,
-      });
-      const persistence = persistenceFromCurrent(input.current, delivery);
+      const persistence = persistenceFromCurrent(input.current);
       return {
         communityId: input.item.id,
-        logoUrl: persistence.deliveryUrl,
+        logoUrl: communityLogoDeliveryUrl(input.tenantId, input.item.id),
         persistence,
         outcome: 'unchanged',
       };
@@ -260,24 +231,21 @@ async function synchronizeOne(input: {
       .toBuffer();
     const contentSha256 = createHash('sha256').update(webp).digest('hex');
     const objectKey = `community-logos/${input.tenantId}/${input.item.id}/${contentSha256}.webp`;
-    if (input.current?.contentSha256 !== contentSha256 || input.current.objectKey !== objectKey) {
-      await input.store.put({ key: objectKey, body: webp, sha256: contentSha256 });
-    }
-    const deliveryUrl = await input.store.createReadUrl(objectKey);
-    const deliveryExpiresAt = new Date(
-      Date.parse(input.fetchedAt) + input.readUrlTtlSeconds * 1_000,
+    const objectChanged =
+      input.current?.contentSha256 !== contentSha256 || input.current.objectKey !== objectKey;
+    const deleteAfter = new Date(
+      Date.parse(input.fetchedAt) + input.previousObjectRetentionSeconds * 1_000,
     ).toISOString();
+    const preparedObject = objectChanged
+      ? { key: objectKey, body: webp, sha256: contentSha256, deleteAfter }
+      : undefined;
+    if (preparedObject && !input.deferStorePut) await input.store.put(preparedObject);
     return {
       communityId: input.item.id,
-      logoUrl: deliveryUrl,
-      outcome:
-        input.current?.contentSha256 === contentSha256 && input.current.objectKey === objectKey
-          ? 'unchanged'
-          : 'stored',
+      logoUrl: communityLogoDeliveryUrl(input.tenantId, input.item.id),
+      outcome: objectChanged ? 'stored' : 'unchanged',
       persistence: {
         communityId: input.item.id,
-        deliveryUrl,
-        deliveryExpiresAt,
         sourceUrl: input.item.legacyLogoSourceUrl,
         ...(source.etag ? { sourceEtag: source.etag } : {}),
         ...(source.lastModified ? { sourceLastModified: source.lastModified } : {}),
@@ -292,6 +260,7 @@ async function synchronizeOne(input: {
             )
           : {}),
       },
+      ...(input.deferStorePut && preparedObject ? { preparedObject } : {}),
     };
   } catch (error) {
     if (!input.current) {
@@ -300,26 +269,16 @@ async function synchronizeOne(input: {
         logoUrl: null,
         persistence: {
           communityId: input.item.id,
-          deliveryUrl: null,
           syncedAt: input.fetchedAt,
         },
         outcome: 'fallback',
         errorCode: errorCode(error),
       };
     }
-    const delivery = await input.store
-      .createReadUrl(input.current.objectKey)
-      .then((url) => ({
-        url,
-        expiresAt: new Date(
-          Date.parse(input.fetchedAt) + input.readUrlTtlSeconds * 1_000,
-        ).toISOString(),
-      }))
-      .catch(() => undefined);
-    const persistence = persistenceFromCurrent(input.current, delivery);
+    const persistence = persistenceFromCurrent(input.current);
     return {
       communityId: input.item.id,
-      logoUrl: persistence.deliveryUrl,
+      logoUrl: communityLogoDeliveryUrl(input.tenantId, input.item.id),
       persistence,
       outcome: 'fallback',
       errorCode: errorCode(error),
@@ -338,9 +297,9 @@ export async function synchronizeLegacyCommunityLogos(input: {
   readonly maxDimension: number;
   readonly webpQuality: number;
   readonly previousObjectRetentionSeconds: number;
-  readonly readUrlTtlSeconds: number;
   readonly timeoutMs: number;
   readonly fetchImplementation?: typeof fetch;
+  readonly deferStorePut?: boolean;
 }): Promise<readonly CommunityLogoSyncResult[]> {
   const current = await loadCommunityLogoSyncRecords({
     pool: input.pool,

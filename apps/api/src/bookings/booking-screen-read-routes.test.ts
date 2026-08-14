@@ -227,6 +227,137 @@ describe('client-assisted booking screen read routes', () => {
     });
   });
 
+  it("accepts a bounded schedule relay larger than Fastify's default one-megabyte body limit", async () => {
+    const app = Fastify();
+    apps.push(app);
+    const authenticate = (request: FastifyRequest): Promise<void> => {
+      request.tenantId = tenantId;
+      request.padlHubClaims = {
+        sub: userId,
+        tenants: [tenantId],
+        roles: ['client'],
+        permissions: ['games.play'],
+        sid: '30000000-0000-4000-8000-000000000001',
+      };
+      return Promise.resolve();
+    };
+    registerBookingRecommendationRoutes(app, {
+      clientAssistedJobStore: new MemoryBookingScreenReadJobStore(),
+      authenticatedTenantHandlers: [authenticate],
+      publicTenantHandlers: [],
+    });
+    const started = await app.inject({
+      method: 'POST',
+      url: '/user/api/v1/local-padel/booking-screen-read-jobs',
+      payload: { screen: 'GROUP_TRAININGS' },
+    });
+    const job = started.json<{
+      readonly jobId: string;
+      readonly commands: readonly { readonly commandId: string; readonly date: string }[];
+    }>();
+    const command = job.commands[0]!;
+    const accepted = await app.inject({
+      method: 'POST',
+      url: `/user/api/v1/local-padel/booking-screen-read-jobs/${job.jobId}/results/${command.commandId}`,
+      payload: {
+        payload: [
+          {
+            id: 'large-schedule-row',
+            type: { id: 605, name: 'Падел групповая тренировка' },
+            direction: { id: 1, name: 'Групповая тренировка уровень D' },
+            timeFrom: `${command.date}T12:00:00.000+03:00`,
+            timeTo: `${command.date}T13:00:00.000+03:00`,
+            studio: { id: 'private-studio', name: 'Терехово' },
+            providerPresentation: 'x'.repeat(1_200_000),
+          },
+        ],
+      },
+    });
+
+    expect(accepted.statusCode).toBe(202);
+    expect(accepted.json()).toMatchObject({ accepted: true, itemCount: 1 });
+  });
+
+  it('rejects schedule relays above the fixed 500-item provider boundary', async () => {
+    const app = Fastify();
+    apps.push(app);
+    const authenticate = (request: FastifyRequest): Promise<void> => {
+      request.tenantId = tenantId;
+      request.padlHubClaims = {
+        sub: userId,
+        tenants: [tenantId],
+        roles: ['client'],
+        permissions: ['games.play'],
+        sid: '30000000-0000-4000-8000-000000000001',
+      };
+      return Promise.resolve();
+    };
+    registerBookingRecommendationRoutes(app, {
+      clientAssistedJobStore: new MemoryBookingScreenReadJobStore(),
+      authenticatedTenantHandlers: [authenticate],
+      publicTenantHandlers: [],
+    });
+    const started = await app.inject({
+      method: 'POST',
+      url: '/user/api/v1/local-padel/booking-screen-read-jobs',
+      payload: { screen: 'GROUP_TRAININGS' },
+    });
+    const job = started.json<{
+      readonly jobId: string;
+      readonly commands: readonly { readonly commandId: string }[];
+    }>();
+    const command = job.commands[0]!;
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/user/api/v1/local-padel/booking-screen-read-jobs/${job.jobId}/results/${command.commandId}`,
+      payload: { payload: Array.from({ length: 501 }, (_, index) => ({ id: String(index) })) },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({ code: 'BOOKING_SCREEN_READ_RESULT_INVALID' });
+  });
+
+  it('rejects a provider relay above the fixed six-megabyte body boundary', async () => {
+    const app = Fastify();
+    apps.push(app);
+    const authenticate = (request: FastifyRequest): Promise<void> => {
+      request.tenantId = tenantId;
+      request.padlHubClaims = {
+        sub: userId,
+        tenants: [tenantId],
+        roles: ['client'],
+        permissions: ['games.play'],
+        sid: '30000000-0000-4000-8000-000000000001',
+      };
+      return Promise.resolve();
+    };
+    registerBookingRecommendationRoutes(app, {
+      clientAssistedJobStore: new MemoryBookingScreenReadJobStore(),
+      authenticatedTenantHandlers: [authenticate],
+      publicTenantHandlers: [],
+    });
+    const started = await app.inject({
+      method: 'POST',
+      url: '/user/api/v1/local-padel/booking-screen-read-jobs',
+      payload: { screen: 'GROUP_TRAININGS' },
+    });
+    const job = started.json<{
+      readonly jobId: string;
+      readonly commands: readonly { readonly commandId: string }[];
+    }>();
+    const command = job.commands[0]!;
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/user/api/v1/local-padel/booking-screen-read-jobs/${job.jobId}/results/${command.commandId}`,
+      headers: { 'content-type': 'application/json' },
+      payload: JSON.stringify({ payload: [{ presentation: 'x'.repeat(6 * 1_024 * 1_024) }] }),
+    });
+
+    expect(response.statusCode).toBe(413);
+  });
+
   it('builds GROUP_TRAININGS with the current cabinet types without personalization filters', async () => {
     const app = Fastify();
     apps.push(app);

@@ -6,6 +6,7 @@ import {
   createBookingPreferencesRepository,
   createBookingScreenMappingRepository,
   createClientRoutingPlanRepository,
+  createCommunityLogoMediaRepository,
   createDatabasePool,
   createGameRepository,
   createGameResultRepository,
@@ -340,6 +341,7 @@ const app = await buildApp({
   ...(giftCertificateMediaStore ? { giftCertificateMediaStore } : {}),
   ...(locationMediaStore ? { locationMediaStore } : {}),
   profilePhotoMediaRepository: profileSummaryRepository,
+  communityLogoMediaRepository: createCommunityLogoMediaRepository(pool),
   ...(profilePhotoMediaStore ? { profilePhotoMediaStore } : {}),
   ...(trainerAvatarMediaStore
     ? {

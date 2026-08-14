@@ -83,8 +83,15 @@ transport is not enabled by this ADR.
 The first-party web client routes the authenticated user's self-profile according to the
 server-issued plan. `PADLHUB_API` returns the PadlHub projection; `DIRECT_VIVA` performs the fixed
 browser read and keeps its normalized, provider-free result in memory only. The direct result is
-never merged with locally stored media, relayed back for persistence, or used to fill or refresh a
-Home projection. Another player's profile always stays behind the PadlHub API. The Home surface
+never merged with a different profile source or used to fill or refresh a Home projection. One
+narrow media exception applies when that exact response includes an HTTPS photo URL on the
+server-issued media-host allowlist: the browser
+may fetch bounded image bytes using no cookies or authorization header and send only those bytes to
+the authenticated, idempotent PadlHub photo command using a short-lived one-time media grant bound
+to the same tenant and user as the delegated access token. PadlHub revalidates and converts the bytes to
+WebP, persists only its own object mapping and returns a stable first-party URL. The provider URL,
+provider ID and raw profile payload are never relayed or persisted. Media failure does not invalidate
+the already-normalized identity result. Another player's profile always stays behind the PadlHub API. The Home surface
 composes the separately routed self-profile aggregate with the `HomeBase` partial recovery contract
 defined by ADR 0019.
 

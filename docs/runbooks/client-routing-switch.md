@@ -80,10 +80,45 @@ For the Home booking screens, additionally verify:
    identifiers returned by that response;
 4. each result submission returns `202` (or a harmless replay `200`) and completion returns
    `screen=MY_BOOKINGS`;
+   for a schedule payload between 1 MiB and 5 MiB, confirm the relay is accepted rather than
+   rejected by the framework default body limit;
 5. the public response, logs and Redis result contain no Viva booking/exercise identifier;
 6. known exercise mappings route to `/games/{padlhubUuid}`, while unmapped records use opaque
    snapshot UUIDs;
-7. API/worker logs show zero server-side schedule or booking egress during the browser journey.
+
+## Client-assisted profile photo rollout
+
+Keep `PROFILE_PHOTO_CLIENT_SYNC_ENABLED=false` through the migration and mixed-version window.
+`PROFILE_PHOTO_MAINTENANCE_ENABLED` is a separate worker-only lifecycle flag: turn it on before
+client writes and keep it on until pending commands and all object-GC rows are both zero. Existing
+`HOME_VIVA_SYNC_ENABLED=true` workers also continue maintenance for backward compatibility. The order
+is mandatory:
+
+1. integrate the migration into the final monotonic migration chain and run the migrator;
+2. deploy and drain **all** API nodes with `PROFILE_PHOTO_CLIENT_SYNC_ENABLED=false`; this makes the
+   stable community-logo and profile-photo media routes available before any worker publishes a
+   stable URL;
+3. deploy workers that accept nullable profile-photo `source_url`, preserve newer browser mappings,
+   and run bounded object/command cleanup; set `PROFILE_PHOTO_MAINTENANCE_ENABLED=true` on workers;
+4. deploy the compatible web version, then verify every old API and worker is drained;
+5. set `PROFILE_PHOTO_CLIENT_SYNC_ENABLED=true` on API nodes sequentially;
+6. verify one authenticated direct-profile journey returns a stable PadlHub avatar URL, the media
+   route serves `image/webp`, and neither logs nor integration rows contain the Viva photo URL.
+
+For rollback, first disable `PROFILE_PHOTO_CLIENT_SYNC_ENABLED` on API nodes, but leave
+`PROFILE_PHOTO_MAINTENANCE_ENABLED=true` on compatible workers. Do not roll an old worker back over
+rows whose `source_url` is null. Stop client-assisted writes, retain a compatible worker until
+`profile_photo_client_commands` and `profile_photo_object_gc` are both empty (including completed
+idempotency rows and future `delete_after` rows), and only then disable
+maintenance or roll back API/web. Existing normalized objects and stable
+delivery mappings remain readable.
+
+Community-logo stable delivery is also an expand/migrate cutover. The all-new-API drain in step 2 is
+required before workers persist it. Before a full rollback to an API without that route, stop new community
+sync, run the prior compatible worker until it has repopulated legacy signed delivery metadata and
+Home snapshots, and verify there are no active `(delivery_url, delivery_expires_at)` null pairs.
+
+API/worker logs must show zero server-side schedule or booking egress during the browser journey.
 
 Do not add `bookings.read` or `bookings.details.read` to
 `DIRECT_VIVA_CONTRACT_READY_OPERATIONS`; the fixed read-job chain is the only approved browser

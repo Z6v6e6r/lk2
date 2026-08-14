@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 
 import type { CommunitySummary } from '@phub/communities';
 import { withTenantTransaction } from '@phub/database';
+import { communityLogoDeliveryUrl } from '@phub/domain';
 import {
   HOME_PROJECTION_COMPONENT_EVENT,
   homeProjectionComponentPayloadSchema,
@@ -27,8 +28,6 @@ interface CommunityLogoRow extends QueryResultRow {
   readonly source_last_modified: string | null;
   readonly content_sha256: string;
   readonly object_key: string;
-  readonly delivery_url: string;
-  readonly delivery_expires_at: Date | string;
   readonly synced_at: Date | string;
 }
 
@@ -91,8 +90,7 @@ export function loadCommunityLogoSyncRecords(input: {
   return withTenantTransaction(input.pool, input.tenantId, async (client) => {
     const result = await client.query<CommunityLogoRow>(
       `select community_id::text as community_id, source_url, source_etag,
-              source_last_modified, content_sha256, object_key, delivery_url,
-              delivery_expires_at, synced_at
+              source_last_modified, content_sha256, object_key, synced_at
          from integration.community_logo_sync
         where tenant_id = $1 and community_id = any($2::uuid[])`,
       [input.tenantId, communityIds],
@@ -107,8 +105,6 @@ export function loadCommunityLogoSyncRecords(input: {
           ...(row.source_last_modified ? { sourceLastModified: row.source_last_modified } : {}),
           contentSha256: row.content_sha256,
           objectKey: row.object_key,
-          deliveryUrl: row.delivery_url,
-          deliveryExpiresAt: new Date(row.delivery_expires_at).toISOString(),
           syncedAt: new Date(row.synced_at).toISOString(),
         },
       ]),
@@ -126,6 +122,12 @@ export function listDueCommunityLogoObjects(input: {
       `select object_key
          from integration.community_logo_object_gc
         where tenant_id = $1 and delete_after <= now()
+          and not exists (
+            select 1
+              from integration.community_logo_sync active
+             where active.tenant_id = $1
+               and active.object_key = integration.community_logo_object_gc.object_key
+          )
         order by delete_after, object_key
         limit $2`,
       [input.tenantId, input.limit],
@@ -134,17 +136,46 @@ export function listDueCommunityLogoObjects(input: {
   });
 }
 
-export function completeCommunityLogoObjectGc(input: {
+export function deleteCommunityLogoObjectIfSafe(input: {
   readonly pool: Pool;
   readonly tenantId: string;
   readonly objectKey: string;
-}): Promise<void> {
+  readonly deleteObject: () => Promise<void>;
+}): Promise<boolean> {
   return withTenantTransaction(input.pool, input.tenantId, async (client) => {
+    const communityId = input.objectKey.split('/')[2];
+    if (!communityId) throw new Error('COMMUNITY_LOGO_OBJECT_KEY_INVALID');
+    await client.query('select pg_advisory_xact_lock(hashtextextended($1, 1))', [communityId]);
+    const due = await client.query(
+      `select object_key
+         from integration.community_logo_object_gc
+        where tenant_id = $1 and object_key = $2 and delete_after <= now()
+        for update`,
+      [input.tenantId, input.objectKey],
+    );
+    if ((due.rowCount ?? 0) === 0) return false;
+    const active = await client.query(
+      `select 1
+         from integration.community_logo_sync
+        where tenant_id = $1 and object_key = $2
+        limit 1`,
+      [input.tenantId, input.objectKey],
+    );
+    if ((active.rowCount ?? 0) > 0) {
+      await client.query(
+        `delete from integration.community_logo_object_gc
+          where tenant_id = $1 and object_key = $2`,
+        [input.tenantId, input.objectKey],
+      );
+      return false;
+    }
+    await input.deleteObject();
     await client.query(
       `delete from integration.community_logo_object_gc
         where tenant_id = $1 and object_key = $2`,
       [input.tenantId, input.objectKey],
     );
+    return true;
   });
 }
 
@@ -172,27 +203,64 @@ async function persistCommunityLogoAssets(input: {
   readonly tenantId: string;
   readonly assets: readonly CommunityLogoPersistence[];
 }): Promise<void> {
-  for (const asset of input.assets) {
-    if (
-      asset.sourceUrl &&
-      asset.contentSha256 &&
-      asset.objectKey &&
-      asset.deliveryUrl &&
-      asset.deliveryExpiresAt
-    ) {
+  const orderedAssets = [
+    ...new Map(input.assets.map((asset) => [asset.communityId, asset])).values(),
+  ].sort((left, right) => left.communityId.localeCompare(right.communityId));
+  for (const asset of orderedAssets) {
+    await input.client.query('select pg_advisory_xact_lock(hashtextextended($1, 1))', [
+      asset.communityId,
+    ]);
+    const current = await input.client.query<
+      { object_key: string; synced_at: Date | string } & QueryResultRow
+    >(
+      `select object_key, synced_at
+         from integration.community_logo_sync
+        where tenant_id = $1 and community_id = $2
+        for update`,
+      [input.tenantId, asset.communityId],
+    );
+    const currentRow = current.rows[0];
+    const watermark = await input.client.query<{ observed_at: Date | string } & QueryResultRow>(
+      `select observed_at
+         from integration.community_logo_observation_watermarks
+        where tenant_id = $1 and community_id = $2
+        for update`,
+      [input.tenantId, asset.communityId],
+    );
+    const latestObservation = [currentRow?.synced_at, watermark.rows[0]?.observed_at]
+      .filter((value): value is Date | string => Boolean(value))
+      .reduce<Date | string | undefined>(
+        (latest, value) =>
+          !latest || Date.parse(String(value)) > Date.parse(String(latest)) ? value : latest,
+        undefined,
+      );
+    if (latestObservation && Date.parse(String(latestObservation)) >= Date.parse(asset.syncedAt)) {
+      continue;
+    }
+    await input.client.query(
+      `insert into integration.community_logo_observation_watermarks (
+         tenant_id, community_id, observed_at
+       ) values ($1, $2, $3)
+       on conflict (tenant_id, community_id) do update set
+         observed_at = greatest(integration.community_logo_observation_watermarks.observed_at,
+                                excluded.observed_at),
+         updated_at = now()`,
+      [input.tenantId, asset.communityId, asset.syncedAt],
+    );
+    if (asset.sourceUrl && asset.contentSha256 && asset.objectKey) {
       await input.client.query(
         `insert into integration.community_logo_sync (
            tenant_id, community_id, source_url, source_etag, source_last_modified,
            content_sha256, object_key, delivery_url, delivery_expires_at, synced_at
-         ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+         ) values ($1, $2, $3, $4, $5, $6, $7, null, null, $8)
          on conflict (tenant_id, community_id) do update set
            source_url = excluded.source_url,
            source_etag = excluded.source_etag,
            source_last_modified = excluded.source_last_modified,
            content_sha256 = excluded.content_sha256,
            object_key = excluded.object_key,
-           delivery_url = excluded.delivery_url,
-           delivery_expires_at = excluded.delivery_expires_at,
+           delivery_url = null,
+           delivery_expires_at = null,
            synced_at = excluded.synced_at,
            updated_at = now()`,
         [
@@ -203,8 +271,6 @@ async function persistCommunityLogoAssets(input: {
           asset.sourceLastModified ?? null,
           asset.contentSha256,
           asset.objectKey,
-          asset.deliveryUrl,
-          asset.deliveryExpiresAt,
           asset.syncedAt,
         ],
       );
@@ -235,6 +301,45 @@ async function persistCommunityLogoAssets(input: {
   }
 }
 
+export function reserveCommunityLogoObjectUpload(input: {
+  readonly pool: Pool;
+  readonly tenantId: string;
+  readonly communityId: string;
+  readonly objectKey: string;
+  readonly deleteAfter: string;
+}): Promise<boolean> {
+  return withTenantTransaction(input.pool, input.tenantId, async (client) => {
+    await client.query('select pg_advisory_xact_lock(hashtextextended($1, 1))', [
+      input.communityId,
+    ]);
+    const active = await client.query<{ object_key: string } & QueryResultRow>(
+      `select object_key
+         from integration.community_logo_sync
+        where tenant_id = $1 and community_id = $2
+        for update`,
+      [input.tenantId, input.communityId],
+    );
+    if (active.rows[0]?.object_key === input.objectKey) {
+      await client.query(
+        `delete from integration.community_logo_object_gc
+          where tenant_id = $1 and object_key = $2`,
+        [input.tenantId, input.objectKey],
+      );
+      return false;
+    }
+    await client.query(
+      `insert into integration.community_logo_object_gc (tenant_id, object_key, delete_after)
+       values ($1, $2, $3)
+       on conflict (tenant_id, object_key) do update set
+         delete_after = greatest(integration.community_logo_object_gc.delete_after,
+                                 excluded.delete_after),
+         updated_at = now()`,
+      [input.tenantId, input.objectKey, input.deleteAfter],
+    );
+    return true;
+  });
+}
+
 export function persistCommunityHomeSource(input: {
   readonly pool: Pool;
   readonly tenantId: string;
@@ -242,17 +347,10 @@ export function persistCommunityHomeSource(input: {
   readonly sourceMode: 'LEGACY' | 'LOCAL';
   readonly communities: readonly CommunitySummary[];
   readonly logoAssets?: readonly CommunityLogoPersistence[];
+  readonly publicApplicationOrigin: string;
   readonly correlationId: string;
   readonly fetchedAt: string;
 }): Promise<CommunityHomePersistenceResult> {
-  const payload = homeProjectionComponentPayloadSchema.parse({
-    userId: input.userId,
-    component: 'communities',
-    componentRevision: '1',
-    value: input.communities,
-  });
-  const payloadChecksum = checksum(payload.value);
-
   return withTenantTransaction(input.pool, input.tenantId, async (client) => {
     await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [input.userId]);
     if (input.logoAssets) {
@@ -262,6 +360,41 @@ export function persistCommunityHomeSource(input: {
         assets: input.logoAssets,
       });
     }
+    const affectedCommunityIds = [...new Set(input.logoAssets?.map((asset) => asset.communityId))];
+    const activeLogoCommunityIds =
+      affectedCommunityIds.length > 0
+        ? new Set(
+            (
+              await client.query<{ community_id: string } & QueryResultRow>(
+                `select community_id::text as community_id
+                   from integration.community_logo_sync
+                  where tenant_id = $1 and community_id = any($2::uuid[])`,
+                [input.tenantId, affectedCommunityIds],
+              )
+            ).rows.map((row) => row.community_id),
+          )
+        : new Set<string>();
+    const affectedSet = new Set(affectedCommunityIds);
+    const canonicalCommunities = input.communities.map((community) =>
+      affectedSet.has(community.id)
+        ? {
+            ...community,
+            logoUrl: activeLogoCommunityIds.has(community.id)
+              ? new URL(
+                  communityLogoDeliveryUrl(input.tenantId, community.id),
+                  `${input.publicApplicationOrigin.replace(/\/$/, '')}/`,
+                ).toString()
+              : null,
+          }
+        : community,
+    );
+    const payload = homeProjectionComponentPayloadSchema.parse({
+      userId: input.userId,
+      component: 'communities',
+      componentRevision: '1',
+      value: canonicalCommunities,
+    });
+    const payloadChecksum = checksum(payload.value);
     const source = (
       await client.query<SourceRow>(
         `select source_revision::text as source_revision, payload_checksum

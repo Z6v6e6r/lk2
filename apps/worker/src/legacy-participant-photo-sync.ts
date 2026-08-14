@@ -9,6 +9,7 @@ import type { Pool } from 'pg';
 import { synchronizeProfilePhoto, type ProfilePhotoObjectStore } from './profile-photo-sync.js';
 import {
   persistProfilePhoto,
+  reserveProfilePhotoObjectUpload,
   resolveLegacyParticipantPhotoTargets,
 } from './viva-home-repository.js';
 
@@ -22,12 +23,14 @@ interface LegacyParticipantPhotoSyncPorts {
   readonly resolveTargets: typeof resolveLegacyParticipantPhotoTargets;
   readonly synchronizePhoto: typeof synchronizeProfilePhoto;
   readonly persistPhoto: typeof persistProfilePhoto;
+  readonly reserveObject?: typeof reserveProfilePhotoObjectUpload;
 }
 
 const defaultPorts: LegacyParticipantPhotoSyncPorts = {
   resolveTargets: resolveLegacyParticipantPhotoTargets,
   synchronizePhoto: synchronizeProfilePhoto,
   persistPhoto: persistProfilePhoto,
+  reserveObject: reserveProfilePhotoObjectUpload,
 };
 
 function failureCode(error: unknown): string {
@@ -79,7 +82,18 @@ export async function synchronizeLegacyParticipantPhotos(
           60,
         timeoutMs: input.config.VIVA_TIMEOUT_MS,
         replaceExistingSource: false,
+        deferStorePut: true,
       });
+      if (result.preparedObject) {
+        const shouldUpload = await (ports.reserveObject ?? reserveProfilePhotoObjectUpload)({
+          pool: input.pool,
+          tenantId: input.tenantId,
+          userId: target.userId,
+          objectKey: result.preparedObject.key,
+          deleteAfter: result.preparedObject.deleteAfter,
+        });
+        if (shouldUpload) await input.store.put(result.preparedObject);
+      }
       if (!result.errorCode || result.persistence.objectKey) {
         await ports.persistPhoto({
           pool: input.pool,

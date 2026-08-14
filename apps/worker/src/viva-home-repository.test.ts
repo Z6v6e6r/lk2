@@ -2,9 +2,13 @@ import { describe, expect, it, vi } from 'vitest';
 import { localVivaExerciseAssociationId } from '@phub/legacy-games-adapter';
 
 import {
+  deleteProfilePhotoObjectIfSafe,
   listLegacyHistoryParticipantPhotoAliases,
+  listDueProfilePhotoObjects,
+  persistProfilePhoto,
   persistLegacyParticipantViewerProfile,
   persistVivaHomeSource,
+  reserveProfilePhotoObjectUpload,
   resolveLegacyParticipantPhotoTargets,
   type VivaHomeDelegation,
 } from './viva-home-repository.js';
@@ -271,9 +275,16 @@ describe('Viva Home producer repository', () => {
           rowCount: 3,
         });
       }
+      if (text.includes('select client_grant_issued_at, object_key, source_url, synced_at')) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('from integration.profile_photo_observation_watermarks')) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
       if (
         text.includes('update profile.user_summaries') ||
         text.includes('insert into integration.user_profile_photo_sync') ||
+        text.includes('insert into integration.profile_photo_observation_watermarks') ||
         text.includes('delete from integration.profile_photo_object_gc')
       ) {
         return Promise.resolve({ rows: [], rowCount: 1 });
@@ -373,5 +384,393 @@ describe('Viva Home producer repository', () => {
     expect(serialized).toContain('"courtName":"Корт №4"');
     expect(query.mock.calls.at(-1)?.[0]).toBe('commit');
     expect(release).toHaveBeenCalledOnce();
+  });
+
+  it('keeps a newer browser avatar in both the mapping and Home when a stale worker finishes late', async () => {
+    const browserAvatarUrl =
+      '/public/api/v1/media/profile-photos/86afbe01-0318-4dd2-bc25-303b7bf0d430/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const outboxPayloads: string[] = [];
+    let revision = 0;
+    const query = vi.fn((text: string, values: readonly unknown[] = []) => {
+      if (
+        text === 'begin' ||
+        text === 'commit' ||
+        text === 'rollback' ||
+        text.includes("set_config('app.tenant_id'") ||
+        text.includes('pg_advisory_xact_lock')
+      ) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('insert into integration.external_entity_map')) {
+        return Promise.resolve({ rows: [{ internal_id: userId }], rowCount: 1 });
+      }
+      if (text.includes('set level_label')) {
+        return Promise.resolve({ rows: [], rowCount: 1 });
+      }
+      if (text.includes('select client_grant_issued_at, object_key, source_url, synced_at')) {
+        return Promise.resolve({
+          rows: [
+            {
+              client_grant_issued_at: '2026-07-15T12:03:00.000Z',
+              object_key: `profile-photos/${tenantId}/${userId}/${'a'.repeat(64)}.webp`,
+              source_url: null,
+              synced_at: '2026-07-15T12:03:00.000Z',
+            },
+          ],
+          rowCount: 1,
+        });
+      }
+      if (text.includes('select photo_url')) {
+        return Promise.resolve({ rows: [{ photo_url: browserAvatarUrl }], rowCount: 1 });
+      }
+      if (text.includes('from integration.profile_photo_observation_watermarks')) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('insert into integration.profile_photo_object_gc')) {
+        return Promise.resolve({ rows: [], rowCount: 1 });
+      }
+      if (
+        text.includes('set photo_url') ||
+        text.includes('insert into integration.user_profile_photo_sync')
+      ) {
+        throw new Error('stale worker must not overwrite the browser mapping');
+      }
+      if (text.includes('insert into integration.viva_home_source_components')) {
+        revision += 1;
+        return Promise.resolve({
+          rows: [{ source_revision: String(revision), payload_checksum: 'b'.repeat(64) }],
+          rowCount: 1,
+        });
+      }
+      if (text.includes('insert into audit.outbox_events')) {
+        outboxPayloads.push(String(values[5]));
+        return Promise.resolve({ rows: [], rowCount: 1 });
+      }
+      if (text.includes('insert into audit.audit_log')) {
+        return Promise.resolve({ rows: [], rowCount: 1 });
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const pool = { connect: vi.fn().mockResolvedValue({ query, release: vi.fn() }) };
+
+    await persistVivaHomeSource({
+      pool: pool as never,
+      delegation,
+      correlationId: 'stale-worker-correlation',
+      profilePhoto: {
+        avatarUrl: '/public/api/v1/media/profile-photos/stale-worker',
+        deliveryId: '2d650d6c-207a-449a-85f5-50f226499993',
+        sourceUrl: 'https://cdn.vivacrm.invalid/stale.jpg',
+        contentSha256: 'e'.repeat(64),
+        objectKey: `profile-photos/${tenantId}/${userId}/${'e'.repeat(64)}.webp`,
+        syncedAt: '2026-07-15T12:02:00.000Z',
+      },
+      snapshot: {
+        profile: {
+          externalId: externalProfileId,
+          displayName: 'Алексей Сергеев',
+          balanceMinor: 0,
+          level: { label: 'C', value: 3.1, assessmentRequired: false },
+        },
+        upcoming: [],
+        subscriptions: [],
+        fetchedAt: '2026-07-15T12:02:00.000Z',
+      },
+    });
+
+    expect(outboxPayloads.join(' ')).toContain(browserAvatarUrl);
+    expect(outboxPayloads.join(' ')).not.toContain('stale-worker');
+  });
+
+  it('does not let a late older worker observation replace a newer worker photo', async () => {
+    let rejectedObjectQueued = false;
+    const query = vi.fn((text: string) => {
+      if (
+        text === 'begin' ||
+        text === 'commit' ||
+        text === 'rollback' ||
+        text.includes("set_config('app.tenant_id'") ||
+        text.includes('pg_advisory_xact_lock')
+      ) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('select client_grant_issued_at, object_key, source_url, synced_at')) {
+        return Promise.resolve({
+          rows: [
+            {
+              client_grant_issued_at: null,
+              object_key: `profile-photos/${tenantId}/${userId}/${'b'.repeat(64)}.webp`,
+              source_url: 'https://cdn.vivacrm.invalid/newer.jpg',
+              synced_at: '2026-07-15T12:03:00.000Z',
+            },
+          ],
+          rowCount: 1,
+        });
+      }
+      if (text.includes('select photo_url')) {
+        return Promise.resolve({ rows: [{ photo_url: '/public/newer.webp' }], rowCount: 1 });
+      }
+      if (text.includes('from integration.profile_photo_observation_watermarks')) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('insert into integration.profile_photo_object_gc')) {
+        rejectedObjectQueued = true;
+        return Promise.resolve({ rows: [], rowCount: 1 });
+      }
+      throw new Error(`Unexpected write by stale worker: ${text}`);
+    });
+    const pool = { connect: vi.fn().mockResolvedValue({ query, release: vi.fn() }) };
+
+    await expect(
+      persistProfilePhoto({
+        pool: pool as never,
+        tenantId,
+        userId,
+        photo: {
+          avatarUrl: '/public/older.webp',
+          deliveryId: '2d650d6c-207a-449a-85f5-50f226499994',
+          sourceUrl: 'https://cdn.vivacrm.invalid/older.jpg',
+          contentSha256: 'd'.repeat(64),
+          objectKey: `profile-photos/${tenantId}/${userId}/${'d'.repeat(64)}.webp`,
+          syncedAt: '2026-07-15T12:02:00.000Z',
+        },
+      }),
+    ).resolves.toBeUndefined();
+    expect(rejectedObjectQueued).toBe(true);
+  });
+
+  it('retains a browser grant watermark when the worker only replays its source-less fallback', async () => {
+    const query = vi.fn((text: string) => {
+      if (
+        text === 'begin' ||
+        text === 'commit' ||
+        text === 'rollback' ||
+        text.includes("set_config('app.tenant_id'") ||
+        text.includes('pg_advisory_xact_lock')
+      ) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('select client_grant_issued_at, object_key, source_url, synced_at')) {
+        return Promise.resolve({
+          rows: [
+            {
+              client_grant_issued_at: '2026-07-15T12:01:00.000Z',
+              object_key: `profile-photos/${tenantId}/${userId}/${'c'.repeat(64)}.webp`,
+              source_url: null,
+              synced_at: '2026-07-15T12:02:00.000Z',
+            },
+          ],
+          rowCount: 1,
+        });
+      }
+      if (text.includes('select photo_url')) {
+        return Promise.resolve({ rows: [{ photo_url: '/public/browser.webp' }], rowCount: 1 });
+      }
+      if (text.includes('from integration.profile_photo_observation_watermarks')) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      throw new Error(`Source-less fallback must not mutate the browser mapping: ${text}`);
+    });
+    const pool = { connect: vi.fn().mockResolvedValue({ query, release: vi.fn() }) };
+
+    await expect(
+      persistProfilePhoto({
+        pool: pool as never,
+        tenantId,
+        userId,
+        photo: {
+          avatarUrl: '/public/browser.webp',
+          deliveryId: '2d650d6c-207a-449a-85f5-50f226499995',
+          contentSha256: 'c'.repeat(64),
+          objectKey: `profile-photos/${tenantId}/${userId}/${'c'.repeat(64)}.webp`,
+          syncedAt: '2026-07-15T12:02:00.000Z',
+        },
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it('keeps a removal watermark so a late older photo result cannot restore the avatar', async () => {
+    let mapping:
+      | {
+          client_grant_issued_at: null;
+          object_key: string;
+          source_url: string;
+          synced_at: string;
+        }
+      | undefined = {
+      client_grant_issued_at: null,
+      object_key: `profile-photos/${tenantId}/${userId}/${'a'.repeat(64)}.webp`,
+      source_url: 'https://cdn.vivacrm.invalid/current.jpg',
+      synced_at: '2026-07-15T12:02:00.000Z',
+    };
+    let watermark: string | undefined;
+    let staleMappingWrite = false;
+    const query = vi.fn((text: string, values: readonly unknown[] = []) => {
+      if (
+        text === 'begin' ||
+        text === 'commit' ||
+        text === 'rollback' ||
+        text.includes("set_config('app.tenant_id'") ||
+        text.includes('pg_advisory_xact_lock')
+      ) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('select client_grant_issued_at, object_key, source_url, synced_at')) {
+        return Promise.resolve({ rows: mapping ? [mapping] : [], rowCount: mapping ? 1 : 0 });
+      }
+      if (text.includes('from integration.profile_photo_observation_watermarks')) {
+        return Promise.resolve({
+          rows: watermark ? [{ observed_at: watermark }] : [],
+          rowCount: watermark ? 1 : 0,
+        });
+      }
+      if (text.includes('insert into integration.profile_photo_observation_watermarks')) {
+        watermark = String(values[2]);
+        return Promise.resolve({ rows: [], rowCount: 1 });
+      }
+      if (text.includes('delete from integration.user_profile_photo_sync')) {
+        mapping = undefined;
+        return Promise.resolve({ rows: [], rowCount: 1 });
+      }
+      if (text.includes('insert into integration.user_profile_photo_sync')) {
+        staleMappingWrite = true;
+        return Promise.resolve({ rows: [], rowCount: 1 });
+      }
+      if (
+        text.includes('update profile.user_summaries') ||
+        text.includes('insert into integration.profile_photo_object_gc') ||
+        text.includes('select photo_url')
+      ) {
+        return Promise.resolve({ rows: [], rowCount: 1 });
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const pool = { connect: vi.fn().mockResolvedValue({ query, release: vi.fn() }) };
+
+    await persistProfilePhoto({
+      pool: pool as never,
+      tenantId,
+      userId,
+      photo: {
+        avatarUrl: null,
+        supersededObjectKey: mapping.object_key,
+        deleteAfter: '2026-07-16T12:00:00.000Z',
+        syncedAt: '2026-07-15T12:03:00.000Z',
+      },
+    });
+    await persistProfilePhoto({
+      pool: pool as never,
+      tenantId,
+      userId,
+      photo: {
+        avatarUrl: '/public/stale.webp',
+        deliveryId: '2d650d6c-207a-449a-85f5-50f226499996',
+        sourceUrl: 'https://cdn.vivacrm.invalid/stale.jpg',
+        contentSha256: 'b'.repeat(64),
+        objectKey: `profile-photos/${tenantId}/${userId}/${'b'.repeat(64)}.webp`,
+        syncedAt: '2026-07-15T12:01:00.000Z',
+      },
+    });
+
+    expect(watermark).toBe('2026-07-15T12:03:00.000Z');
+    expect(staleMappingWrite).toBe(false);
+  });
+
+  it('filters active and pending objects before GC and rechecks active mappings under the user lock', async () => {
+    let listSql = '';
+    const listQuery = vi.fn((text: string) => {
+      if (
+        text === 'begin' ||
+        text === 'commit' ||
+        text === 'rollback' ||
+        text.includes("set_config('app.tenant_id'")
+      ) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      listSql = text;
+      return Promise.resolve({ rows: [], rowCount: 0 });
+    });
+    const listPool = {
+      connect: vi.fn().mockResolvedValue({ query: listQuery, release: vi.fn() }),
+    };
+    await listDueProfilePhotoObjects({ pool: listPool as never, tenantId, limit: 20 });
+    expect(listSql).toContain('not exists');
+    expect(listSql).toContain('user_profile_photo_sync active');
+    expect(listSql).toContain('profile_photo_client_commands pending');
+
+    const deleteObject = vi.fn().mockResolvedValue(undefined);
+    const safeQuery = vi.fn((text: string) => {
+      if (
+        text === 'begin' ||
+        text === 'commit' ||
+        text === 'rollback' ||
+        text.includes("set_config('app.tenant_id'") ||
+        text.includes('pg_advisory_xact_lock')
+      ) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('from integration.profile_photo_object_gc')) {
+        return Promise.resolve({ rows: [{ object_key: 'key' }], rowCount: 1 });
+      }
+      if (text.includes('from integration.user_profile_photo_sync')) {
+        return Promise.resolve({ rows: [{ '?column?': 1 }], rowCount: 1 });
+      }
+      if (text.includes('delete from integration.profile_photo_object_gc')) {
+        return Promise.resolve({ rows: [], rowCount: 1 });
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const safePool = {
+      connect: vi.fn().mockResolvedValue({ query: safeQuery, release: vi.fn() }),
+    };
+    const objectKey = `profile-photos/${tenantId}/${userId}/${'b'.repeat(64)}.webp`;
+    await expect(
+      deleteProfilePhotoObjectIfSafe({
+        pool: safePool as never,
+        tenantId,
+        objectKey,
+        deleteObject,
+      }),
+    ).resolves.toBe(false);
+    expect(deleteObject).not.toHaveBeenCalled();
+  });
+
+  it('moves a due GC deadline forward before a worker uploads an inactive object', async () => {
+    let reservationSql = '';
+    const query = vi.fn((text: string) => {
+      if (
+        text === 'begin' ||
+        text === 'commit' ||
+        text === 'rollback' ||
+        text.includes("set_config('app.tenant_id'") ||
+        text.includes('pg_advisory_xact_lock')
+      ) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('select object_key')) {
+        return Promise.resolve({
+          rows: [{ object_key: `profile-photos/${tenantId}/${userId}/${'a'.repeat(64)}.webp` }],
+          rowCount: 1,
+        });
+      }
+      if (text.includes('insert into integration.profile_photo_object_gc')) {
+        reservationSql = text;
+        return Promise.resolve({ rows: [], rowCount: 1 });
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const objectKey = `profile-photos/${tenantId}/${userId}/${'f'.repeat(64)}.webp`;
+    await expect(
+      reserveProfilePhotoObjectUpload({
+        pool: {
+          connect: vi.fn().mockResolvedValue({ query, release: vi.fn() }),
+        } as never,
+        tenantId,
+        userId,
+        objectKey,
+        deleteAfter: '2026-07-16T12:00:00.000Z',
+      }),
+    ).resolves.toBe(true);
+    expect(reservationSql).toContain('greatest');
   });
 });

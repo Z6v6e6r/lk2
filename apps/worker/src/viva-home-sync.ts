@@ -21,13 +21,15 @@ import type { Pool } from 'pg';
 import { synchronizeVivaProfilePhoto, type ProfilePhotoObjectStore } from './profile-photo-sync.js';
 import { synchronizeLegacyParticipantPhotos } from './legacy-participant-photo-sync.js';
 import {
-  completeProfilePhotoObjectGc,
+  deleteProfilePhotoObjectIfSafe,
+  deleteExpiredProfilePhotoClientCommands,
   listDueVivaHomeDelegations,
   listDueProfilePhotoObjects,
   persistLegacyParticipantViewerProfile,
   persistVivaHomeSource,
   recordProfilePhotoObjectGcFailure,
   recordVivaHomeSyncFailure,
+  reserveProfilePhotoObjectUpload,
   saveRefreshedVivaHomeDelegation,
   type VivaHomeDelegation,
 } from './viva-home-repository.js';
@@ -41,10 +43,66 @@ export interface VivaHomeSyncCycleResult {
   readonly failed: number;
 }
 
+export interface ProfilePhotoMaintenanceCycleResult {
+  readonly deleted: number;
+  readonly deferred: number;
+  readonly commandsDeleted: number;
+}
+
 export interface VivaHomeLegacyGameRosterBridge {
   /** Tenant selection is configuration, never inferred from a Viva or legacy document. */
   readonly tenantKey: string;
   readonly source: Pick<LegacyGamesMongoAdapter, 'readByVivaExerciseIds'>;
+}
+
+export async function runProfilePhotoMaintenanceCycle(input: {
+  readonly pool: Pool;
+  readonly config: AppConfig;
+  readonly logger: Logger;
+  readonly profilePhotoStore: ProfilePhotoObjectStore;
+}): Promise<ProfilePhotoMaintenanceCycleResult> {
+  const tenants = await input.pool.query<{ id: string }>(
+    `select id from identity.tenants order by id`,
+  );
+  let deleted = 0;
+  let deferred = 0;
+  let commandsDeleted = 0;
+  for (const tenant of tenants.rows) {
+    const dueObjects = await listDueProfilePhotoObjects({
+      pool: input.pool,
+      tenantId: tenant.id,
+      limit: input.config.PROFILE_PHOTO_GC_BATCH_SIZE,
+    }).catch(() => []);
+    for (const item of dueObjects) {
+      try {
+        const removed = await deleteProfilePhotoObjectIfSafe({
+          pool: input.pool,
+          tenantId: tenant.id,
+          objectKey: item.objectKey,
+          deleteObject: () => input.profilePhotoStore.delete(item.objectKey),
+        });
+        if (removed) deleted += 1;
+      } catch {
+        deferred += 1;
+        await recordProfilePhotoObjectGcFailure({
+          pool: input.pool,
+          tenantId: tenant.id,
+          objectKey: item.objectKey,
+          errorCode: 'PROFILE_PHOTO_OBJECT_DELETE_FAILED',
+        }).catch(() => undefined);
+        input.logger.warn(
+          { tenantId: tenant.id, code: 'PROFILE_PHOTO_OBJECT_DELETE_FAILED' },
+          'Profile photo object cleanup deferred',
+        );
+      }
+    }
+    commandsDeleted += await deleteExpiredProfilePhotoClientCommands({
+      pool: input.pool,
+      tenantId: tenant.id,
+      limit: input.config.PROFILE_PHOTO_GC_BATCH_SIZE,
+    }).catch(() => 0);
+  }
+  return { deleted, deferred, commandsDeleted };
 }
 
 async function synchronizeLegacyGameRostersForHome(input: {
@@ -348,6 +406,7 @@ export async function runVivaHomeSyncCycle(input: {
             input.config.HOME_PROJECTION_MAX_STALE_SECONDS +
             60,
           timeoutMs: input.config.VIVA_TIMEOUT_MS,
+          deferStorePut: true,
         });
         if (profilePhoto.errorCode) {
           input.logger.warn(
@@ -359,6 +418,16 @@ export async function runVivaHomeSyncCycle(input: {
             },
             'Viva profile photo synchronization retained the local photo',
           );
+        }
+        if (profilePhoto.preparedObject) {
+          const shouldUpload = await reserveProfilePhotoObjectUpload({
+            pool: input.pool,
+            tenantId: delegation.tenantId,
+            userId: delegation.userId,
+            objectKey: profilePhoto.preparedObject.key,
+            deleteAfter: profilePhoto.preparedObject.deleteAfter,
+          });
+          if (shouldUpload) await input.profilePhotoStore.put(profilePhoto.preparedObject);
         }
         const components = await persistVivaHomeSource({
           pool: input.pool,
@@ -400,34 +469,6 @@ export async function runVivaHomeSyncCycle(input: {
               : {}),
           },
           'Viva Home source synchronization failed',
-        );
-      }
-    }
-  }
-  for (const tenant of tenants.rows) {
-    const dueObjects = await listDueProfilePhotoObjects({
-      pool: input.pool,
-      tenantId: tenant.id,
-      limit: input.config.PROFILE_PHOTO_GC_BATCH_SIZE,
-    }).catch(() => []);
-    for (const item of dueObjects) {
-      try {
-        await input.profilePhotoStore.delete(item.objectKey);
-        await completeProfilePhotoObjectGc({
-          pool: input.pool,
-          tenantId: tenant.id,
-          objectKey: item.objectKey,
-        });
-      } catch {
-        await recordProfilePhotoObjectGcFailure({
-          pool: input.pool,
-          tenantId: tenant.id,
-          objectKey: item.objectKey,
-          errorCode: 'PROFILE_PHOTO_OBJECT_DELETE_FAILED',
-        }).catch(() => undefined);
-        input.logger.warn(
-          { tenantId: tenant.id, code: 'PROFILE_PHOTO_OBJECT_DELETE_FAILED' },
-          'Profile photo object cleanup deferred',
         );
       }
     }

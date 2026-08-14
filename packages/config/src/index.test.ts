@@ -576,6 +576,27 @@ describe('loadConfig', () => {
     ).toThrow('HOME_VIVA_SYNC_ENABLED requires profile photo storage');
   });
 
+  it('requires media storage when client-assisted profile photo writes are enabled', () => {
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        PROFILE_PHOTO_CLIENT_SYNC_ENABLED: 'true',
+      }),
+    ).toThrow('PROFILE_PHOTO_CLIENT_SYNC_ENABLED requires media storage');
+  });
+
+  it('requires worker media storage when profile photo maintenance is enabled', () => {
+    expect(() =>
+      loadConfig(
+        {
+          ...validEnvironment,
+          PROFILE_PHOTO_MAINTENANCE_ENABLED: 'true',
+        },
+        { profilePhotoStorage: true },
+      ),
+    ).toThrow('PROFILE_PHOTO_MAINTENANCE_ENABLED requires media storage');
+  });
+
   it('does not expose worker-only storage requirements to API and realtime', () => {
     const config = loadConfig({
       ...validEnvironment,

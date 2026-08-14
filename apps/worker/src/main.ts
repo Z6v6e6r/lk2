@@ -48,7 +48,7 @@ import { publishLeasedOutboxBatch } from './leased-outbox-publisher.js';
 import { S3ProfilePhotoObjectStore } from './profile-photo-sync.js';
 import { runPromotionHomeSyncCycle } from './promotion-home-sync.js';
 import { runLegacyGamesRosterSyncCycle } from './legacy-games-roster-sync.js';
-import { runVivaHomeSyncCycle } from './viva-home-sync.js';
+import { runProfilePhotoMaintenanceCycle, runVivaHomeSyncCycle } from './viva-home-sync.js';
 import { WebPushDeliveryAdapter } from './web-push-adapter.js';
 import { runWebPushDeliveryBatch } from './web-push-delivery.js';
 import { runFairTenantCycle } from './tenant-cycle-orchestrator.js';
@@ -483,6 +483,8 @@ const vivaIdentityProvider = new VivaIdentityProvider({
 const vivaAdapters = new Map<string, VivaHomeSourceAdapter>();
 const profilePhotoStore =
   config.HOME_VIVA_SYNC_ENABLED ||
+  config.PROFILE_PHOTO_CLIENT_SYNC_ENABLED ||
+  config.PROFILE_PHOTO_MAINTENANCE_ENABLED ||
   config.PROMOTIONS_READ_MODE === 'legacy' ||
   config.LEGACY_GAMES_ROSTER_SYNC_ENABLED
     ? new S3ProfilePhotoObjectStore({
@@ -495,6 +497,7 @@ const profilePhotoStore =
         forcePathStyle: config.S3_FORCE_PATH_STYLE,
         autoCreateBucket: config.S3_AUTO_CREATE_BUCKET,
         readUrlTtlSeconds: config.PROFILE_PHOTO_URL_TTL_SECONDS,
+        timeoutMs: config.VIVA_TIMEOUT_MS,
       })
     : undefined;
 const getVivaHomeAdapter = (providerTenantKey: string): VivaHomeSourceAdapter => {
@@ -536,6 +539,33 @@ const runVivaSyncCycle = async (): Promise<void> => {
     logger.error({ error }, 'Viva Home sync cycle failed');
   } finally {
     if (!shuttingDown) setTimeout(() => void runVivaSyncCycle(), config.HOME_VIVA_SYNC_INTERVAL_MS);
+  }
+};
+
+const runProfilePhotoMaintenance = async (): Promise<void> => {
+  if (
+    shuttingDown ||
+    !profilePhotoStore ||
+    (!config.HOME_VIVA_SYNC_ENABLED && !config.PROFILE_PHOTO_MAINTENANCE_ENABLED)
+  ) {
+    return;
+  }
+  try {
+    const result = await runProfilePhotoMaintenanceCycle({
+      pool,
+      config,
+      logger,
+      profilePhotoStore,
+    });
+    if (result.deleted > 0 || result.deferred > 0 || result.commandsDeleted > 0) {
+      logger.info({ result }, 'profile photo maintenance cycle completed');
+    }
+  } catch (error) {
+    logger.error({ error }, 'profile photo maintenance cycle failed');
+  } finally {
+    if (!shuttingDown) {
+      setTimeout(() => void runProfilePhotoMaintenance(), config.HOME_VIVA_SYNC_INTERVAL_MS);
+    }
   }
 };
 
@@ -662,6 +692,7 @@ process.once('SIGINT', () => void shutdown('SIGINT'));
 void runCycle();
 if (telemetry) void runOperationalMetricsCycle();
 void runVivaSyncCycle();
+void runProfilePhotoMaintenance();
 void runCommunitySyncCycle();
 void runPlatformSyncCycle();
 void runHomeBaseCycle();

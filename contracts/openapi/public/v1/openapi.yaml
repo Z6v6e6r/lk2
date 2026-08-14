@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: PadlHub Public API
-  version: 1.1.0
+  version: 1.2.0
   description: Anonymous PadlHub boundary. Commands are explicitly idempotent and session-scoped.
   license:
     name: Proprietary
@@ -22,7 +22,43 @@ tags:
     description: Public delivery of tenant-owned location gallery media.
   - name: profiles
     description: Stable delivery of PadlHub-owned public profile photos.
+  - name: communities
+    description: Stable delivery of PadlHub-owned community logos.
 paths:
+  /media/community-logos/{tenantId}/{communityId}:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - name: tenantId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: communityId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [communities]
+      operationId: getPublicCommunityLogo
+      summary: Stream the current PadlHub-owned community logo
+      responses:
+        '200':
+          description: Current normalized WebP community logo.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            image/webp:
+              schema:
+                type: string
+                contentEncoding: binary
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
   /media/profile-photos/{tenantId}/{deliveryId}:
     parameters:
       - $ref: ../../common/components.yaml#/components/parameters/CorrelationId

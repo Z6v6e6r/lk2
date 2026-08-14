@@ -1,6 +1,6 @@
-import { Readable } from 'node:stream';
+import { PassThrough, Readable } from 'node:stream';
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const s3Mocks = vi.hoisted(() => ({
   send: vi.fn<(command: unknown, options: unknown) => Promise<unknown>>(),
@@ -32,19 +32,30 @@ const options = {
   timeoutMs: 500,
 };
 
+async function readBody(body: Readable): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of body as AsyncIterable<unknown>) {
+    if (typeof chunk === 'string' || chunk instanceof Uint8Array) {
+      chunks.push(Buffer.from(chunk));
+      continue;
+    }
+    throw new Error('Unexpected stream chunk');
+  }
+  return Buffer.concat(chunks);
+}
+
 describe('S3 profile photo media store', () => {
   beforeEach(() => vi.clearAllMocks());
+  afterEach(() => vi.useRealTimers());
 
-  it('returns a readable body with optional object metadata', async () => {
-    const body = Readable.from(Buffer.from('avatar'));
-    s3Mocks.send.mockResolvedValue({ Body: body, ContentLength: 6, ETag: 'avatar-etag' });
+  it('returns a bounded readable body with optional object metadata', async () => {
+    const source = Readable.from(Buffer.from('avatar'));
+    s3Mocks.send.mockResolvedValue({ Body: source, ContentLength: 6, ETag: 'avatar-etag' });
     const store = new S3ProfilePhotoMediaStore(options);
 
-    await expect(store.read('tenant/user/avatar.webp')).resolves.toEqual({
-      body,
-      contentLength: 6,
-      etag: 'avatar-etag',
-    });
+    const result = await store.read('tenant/user/avatar.webp');
+    expect(result).toMatchObject({ contentLength: 6, etag: 'avatar-etag' });
+    await expect(readBody(result.body)).resolves.toEqual(Buffer.from('avatar'));
     const call: readonly unknown[] | undefined = s3Mocks.send.mock.calls[0];
     expect(call?.[0]).toMatchObject({
       input: { Bucket: options.bucket, Key: 'tenant/user/avatar.webp' },
@@ -54,13 +65,28 @@ describe('S3 profile photo media store', () => {
     ).toBeInstanceOf(AbortSignal);
   });
 
-  it('omits unavailable metadata without changing the stream', async () => {
-    const body = Readable.from(Buffer.from('avatar'));
-    s3Mocks.send.mockResolvedValue({ Body: body });
+  it('omits unavailable metadata without changing the bytes', async () => {
+    s3Mocks.send.mockResolvedValue({ Body: Readable.from(Buffer.from('avatar')) });
 
-    await expect(new S3ProfilePhotoMediaStore(options).read('avatar.webp')).resolves.toEqual({
-      body,
-    });
+    const result = await new S3ProfilePhotoMediaStore(options).read('avatar.webp');
+    expect(result.contentLength).toBeUndefined();
+    expect(result.etag).toBeUndefined();
+    await expect(readBody(result.body)).resolves.toEqual(Buffer.from('avatar'));
+  });
+
+  it('keeps the timeout active until the response stream finishes', async () => {
+    vi.useFakeTimers();
+    const source = new PassThrough();
+    s3Mocks.send.mockResolvedValue({ Body: source });
+    const result = await new S3ProfilePhotoMediaStore({ ...options, timeoutMs: 50 }).read(
+      'avatar.webp',
+    );
+    const streamError = new Promise<Error>((resolve) => result.body.once('error', resolve));
+
+    await vi.advanceTimersByTimeAsync(51);
+
+    await expect(streamError).resolves.toMatchObject({ message: 'PROFILE_PHOTO_MEDIA_TIMEOUT' });
+    expect(source.destroyed).toBe(true);
   });
 
   it('rejects provider responses without a Node readable body', async () => {

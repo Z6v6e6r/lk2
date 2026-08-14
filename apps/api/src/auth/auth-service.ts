@@ -636,7 +636,7 @@ export class AuthService {
     readonly userId: string;
     readonly handoffCode?: string;
     readonly correlationId: string;
-  }): Promise<{ accessToken: string; expiresAt: string }> {
+  }): Promise<{ accessToken: string; expiresAt: string; profilePhotoGrant: string }> {
     if (
       !this.options.config.VIVA_OAUTH_ENABLED ||
       !this.options.vivaOAuthProvider ||
@@ -649,7 +649,15 @@ export class AuthService {
       if (!handoff || handoff.tenantId !== input.tenantId || handoff.userId !== input.userId) {
         throw new AuthServiceError('VIVA_REAUTH_REQUIRED');
       }
-      return { accessToken: handoff.accessToken, expiresAt: handoff.expiresAt };
+      return {
+        accessToken: handoff.accessToken,
+        expiresAt: handoff.expiresAt,
+        profilePhotoGrant: await this.issueProfilePhotoGrant(
+          input.tenantId,
+          input.userId,
+          handoff.expiresAt,
+        ),
+      };
     }
 
     const claimId = randomUUID();
@@ -697,15 +705,39 @@ export class AuthService {
             : {}),
         correlationId: input.correlationId,
       });
+      const expiresAt = new Date(
+        this.now().getTime() + (refreshed.accessExpiresIn ?? 300) * 1000,
+      ).toISOString();
       return {
         accessToken: refreshed.accessToken,
-        expiresAt: new Date(
-          this.now().getTime() + (refreshed.accessExpiresIn ?? 300) * 1000,
-        ).toISOString(),
+        expiresAt,
+        profilePhotoGrant: await this.issueProfilePhotoGrant(
+          input.tenantId,
+          input.userId,
+          expiresAt,
+        ),
       };
     } finally {
       await this.options.vivaOAuthStateStore.releaseRefresh(lockKey, claimId);
     }
+  }
+
+  private async issueProfilePhotoGrant(
+    tenantId: string,
+    userId: string,
+    accessExpiresAt: string,
+  ): Promise<string> {
+    const issuedAt = this.now();
+    const expiresAt = Math.min(Date.parse(accessExpiresAt), issuedAt.getTime() + 5 * 60 * 1_000);
+    return new SignJWT({ tenantId, scope: 'profile.photo.sync', issuedAtMs: issuedAt.getTime() })
+      .setProtectedHeader({ alg: 'HS256', typ: 'phub-profile-photo-grant+jwt' })
+      .setIssuer(this.options.config.JWT_ISSUER)
+      .setAudience(`${this.options.config.JWT_AUDIENCE}:profile-photo-sync`)
+      .setSubject(userId)
+      .setJti(randomUUID())
+      .setIssuedAt(Math.floor(issuedAt.getTime() / 1_000))
+      .setExpirationTime(Math.floor(expiresAt / 1_000))
+      .sign(new TextEncoder().encode(this.options.config.JWT_ACCESS_SECRET));
   }
 
   private async issueAccessToken(

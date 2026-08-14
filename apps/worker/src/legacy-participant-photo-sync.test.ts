@@ -6,6 +6,72 @@ const tenantId = '86afbe01-0318-4dd2-bc25-303b7bf0d430';
 const fetchedAt = '2026-07-25T09:00:00.000Z';
 
 describe('legacy participant photo synchronization', () => {
+  it('reserves changed legacy bytes before upload and persistence', async () => {
+    const calls: string[] = [];
+    const objectKey = 'profile-photos/tenant/player/a.webp';
+    const store = {
+      put: vi.fn().mockImplementation(() => {
+        calls.push('put');
+        return Promise.resolve();
+      }),
+      createReadUrl: vi.fn(),
+      delete: vi.fn(),
+    };
+    await synchronizeLegacyParticipantPhotos(
+      {
+        pool: {} as never,
+        tenantId,
+        snapshots: [] as never,
+        config: {
+          PROFILE_PHOTO_ALLOWED_HOSTS: '.selcdn.ru',
+          PROFILE_PHOTO_MAX_BYTES: 5_000_000,
+          PROFILE_PHOTO_MAX_DIMENSION: 1_024,
+          PROFILE_PHOTO_WEBP_QUALITY: 82,
+          PROFILE_PHOTO_URL_TTL_SECONDS: 3_600,
+          HOME_PROJECTION_MAX_STALE_SECONDS: 900,
+          VIVA_TIMEOUT_MS: 8_000,
+        } as never,
+        store,
+        logger: { warn: vi.fn() } as never,
+        correlationId: 'legacy-reservation-test',
+        fetchedAt,
+      },
+      {
+        resolveTargets: vi.fn().mockResolvedValue([
+          {
+            userId: '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca',
+            sourceUrl: 'https://562807.selcdn.ru/player',
+          },
+        ]),
+        synchronizePhoto: vi.fn().mockResolvedValue({
+          outcome: 'stored',
+          persistence: {
+            avatarUrl: '/public/avatar',
+            objectKey,
+            contentSha256: 'a'.repeat(64),
+            syncedAt: fetchedAt,
+          },
+          preparedObject: {
+            key: objectKey,
+            body: Buffer.from('webp'),
+            sha256: 'a'.repeat(64),
+            deleteAfter: '2026-07-25T11:00:00.000Z',
+          },
+        }),
+        reserveObject: vi.fn().mockImplementation(() => {
+          calls.push('reserve');
+          return Promise.resolve(true);
+        }),
+        persistPhoto: vi.fn().mockImplementation(() => {
+          calls.push('persist');
+          return Promise.resolve();
+        }),
+      },
+    );
+
+    expect(calls).toEqual(['reserve', 'put', 'persist']);
+  });
+
   it('copies mapped source photos and retains a previously stored photo on source failure', async () => {
     const logger = { warn: vi.fn() };
     const resolveTargets = vi.fn().mockResolvedValue([

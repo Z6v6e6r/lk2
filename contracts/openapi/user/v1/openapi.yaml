@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: PadlHub User API
-  version: 1.17.0
+  version: 1.18.0
   description: Canonical user-facing API. Public identifiers are PadlHub UUIDs.
   license:
     name: Proprietary
@@ -50,6 +50,8 @@ paths:
                 $ref: '#/components/schemas/MessagingRealtimeTicket'
         '401':
           $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '409':
+          $ref: '#/components/responses/CommandConflict'
         '404':
           $ref: ../../common/components.yaml#/components/responses/NotFound
         '429':
@@ -684,6 +686,7 @@ paths:
                   enum:
                     [
                       profile.read,
+                      profile.photo.sync,
                       bookings.read,
                       bookings.details.read,
                       bookings.history.read,
@@ -740,6 +743,73 @@ paths:
           $ref: ../../common/components.yaml#/components/responses/Forbidden
         '404':
           $ref: ../../common/components.yaml#/components/responses/NotFound
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/profile/photo:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+    post:
+      tags: [profiles]
+      operationId: synchronizeUserProfilePhoto
+      summary: Normalize and store a client-assisted profile photo
+      description: |
+        Accepts only bounded image bytes already fetched by the authenticated browser from the
+        current direct Viva profile response. The provider URL and credentials are never accepted
+        or persisted. PadlHub validates the image, stores an immutable WebP object and returns its
+        stable first-party delivery URL.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - name: X-Profile-Photo-Grant
+          in: header
+          required: true
+          description: Short-lived, user-bound grant issued with the direct Viva access token.
+          schema:
+            type: string
+            minLength: 20
+            maxLength: 4096
+      requestBody:
+        required: true
+        content:
+          image/avif:
+            schema: { type: string, contentEncoding: binary }
+          image/jpeg:
+            schema: { type: string, contentEncoding: binary }
+          image/png:
+            schema: { type: string, contentEncoding: binary }
+          image/webp:
+            schema: { type: string, contentEncoding: binary }
+      responses:
+        '200':
+          description: An identical current photo was replayed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfilePhotoSyncResult'
+        '201':
+          description: The normalized photo was stored and activated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfilePhotoSyncResult'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '409':
+          $ref: '#/components/responses/CommandConflict'
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '413':
+          description: Image body exceeds the configured profile-photo limit.
+        '415':
+          description: Unsupported image media type.
+        '422':
+          description: Image bytes are invalid or unsafe to normalize.
         '429':
           $ref: ../../common/components.yaml#/components/responses/TooManyRequests
         '503':
@@ -2108,7 +2178,8 @@ components:
     DirectVivaTransport:
       type: object
       additionalProperties: false
-      required: [apiBaseUrl, providerTenantKey, accessTokenPath, allowedRequestHeaders]
+      required:
+        [apiBaseUrl, providerTenantKey, accessTokenPath, allowedRequestHeaders, allowedMediaHosts]
       properties:
         apiBaseUrl:
           type: string
@@ -2128,8 +2199,28 @@ components:
             - type: string
               const: Authorization
           items: false
+        allowedMediaHosts:
+          type: array
+          description: Server-owned exact hosts or dot-prefixed DNS suffixes allowed for profile media.
+          minItems: 1
+          maxItems: 32
+          uniqueItems: true
+          items:
+            type: string
+            minLength: 1
+            maxLength: 253
     UserProfile:
       $ref: '#/components/schemas/HomeProfile'
+    ProfilePhotoSyncResult:
+      type: object
+      additionalProperties: false
+      required: [avatarUrl, replayed]
+      properties:
+        avatarUrl:
+          type: string
+          pattern: '^/public/api/v1/media/profile-photos/[0-9a-f-]{36}/[0-9a-f-]{36}$'
+        replayed:
+          type: boolean
     ProfilePrivacySettings:
       type: object
       additionalProperties: false
@@ -2530,7 +2621,7 @@ components:
     VivaDelegatedAccess:
       type: object
       additionalProperties: false
-      required: [accessToken, expiresAt]
+      required: [accessToken, expiresAt, profilePhotoGrant]
       properties:
         accessToken:
           type: string
@@ -2540,6 +2631,11 @@ components:
         expiresAt:
           type: string
           format: date-time
+        profilePhotoGrant:
+          type: string
+          minLength: 20
+          maxLength: 4096
+          description: Short-lived one-time grant for relaying only the current profile-photo bytes.
     AuthenticatedSession:
       type: object
       additionalProperties: false
@@ -3184,7 +3280,7 @@ components:
           maxLength: 120
         logoUrl:
           type: [string, 'null']
-          format: uri
+          pattern: '^(https?://.+|/public/api/v1/media/community-logos/[0-9a-f-]{36}/[0-9a-f-]{36})$'
         isVerified:
           type: boolean
         unreadChatCount:
@@ -3218,7 +3314,9 @@ components:
       properties:
         id: { type: string, format: uuid }
         title: { type: string, minLength: 1, maxLength: 120 }
-        logoUrl: { type: ['string', 'null'], format: uri }
+        logoUrl:
+          type: [string, 'null']
+          pattern: '^(https?://.+|/public/api/v1/media/community-logos/[0-9a-f-]{36}/[0-9a-f-]{36})$'
         isVerified: { type: boolean }
         description: { type: ['string', 'null'], maxLength: 2000 }
         memberCount: { type: integer, minimum: 0 }

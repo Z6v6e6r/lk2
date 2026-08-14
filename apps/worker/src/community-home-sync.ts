@@ -12,11 +12,12 @@ import type { Logger } from 'pino';
 import type { Pool } from 'pg';
 
 import {
-  completeCommunityLogoObjectGc,
+  deleteCommunityLogoObjectIfSafe,
   listDueCommunityHomeUsers,
   listDueCommunityLogoObjects,
   persistCommunityHomeSource,
   recordCommunityLogoObjectGcFailure,
+  reserveCommunityLogoObjectUpload,
 } from './community-home-repository.js';
 import { synchronizeLegacyCommunityLogos } from './community-logo-sync.js';
 import type { ProfilePhotoObjectStore } from './profile-photo-sync.js';
@@ -62,6 +63,13 @@ function failureCode(error: unknown): string {
   }
   if (error instanceof Error && /^[A-Z0-9_]+$/.test(error.message)) return error.message;
   return 'COMMUNITY_HOME_SYNC_FAILED';
+}
+
+function publicApplicationOrigin(config: AppConfig): string {
+  const candidate =
+    config.VIVA_OAUTH_SUCCESS_REDIRECT_URL || config.CORS_ORIGINS.split(',')[0]?.trim();
+  if (!candidate) throw new Error('COMMUNITY_MEDIA_PUBLIC_ORIGIN_MISSING');
+  return new URL(candidate).origin;
 }
 
 export async function runCommunityHomeSyncCycle(input: {
@@ -120,8 +128,8 @@ export async function runCommunityHomeSyncCycle(input: {
                   input.config.PROFILE_PHOTO_URL_TTL_SECONDS +
                   input.config.HOME_PROJECTION_MAX_STALE_SECONDS +
                   60,
-                readUrlTtlSeconds: input.config.PROFILE_PHOTO_URL_TTL_SECONDS,
                 timeoutMs: input.config.COMMUNITIES_LEGACY_TIMEOUT_MS,
+                deferStorePut: true,
               })
             : [];
         const logosByCommunityId = new Map(
@@ -139,13 +147,29 @@ export async function runCommunityHomeSyncCycle(input: {
             'community logo synchronization retained the local logo',
           );
         }
+        for (const result of logoResults) {
+          if (!result.preparedObject) continue;
+          const shouldUpload = await reserveCommunityLogoObjectUpload({
+            pool: input.pool,
+            tenantId: tenant.id,
+            communityId: result.communityId,
+            objectKey: result.preparedObject.key,
+            deleteAfter: result.preparedObject.deleteAfter,
+          });
+          if (shouldUpload) await input.store.put(result.preparedObject);
+        }
         const communities = directoryItems.slice(0, HOME_COMMUNITY_SUMMARY_LIMIT).map((item) =>
           communitySummarySchema.parse({
             id: item.id,
             title: item.title,
-            logoUrl: logosByCommunityId.has(item.id)
-              ? (logosByCommunityId.get(item.id) ?? null)
-              : item.logoUrl,
+            logoUrl: (() => {
+              const logo = logosByCommunityId.has(item.id)
+                ? (logosByCommunityId.get(item.id) ?? null)
+                : item.logoUrl;
+              return logo
+                ? new URL(logo, `${publicApplicationOrigin(input.config)}/`).toString()
+                : null;
+            })(),
             isVerified: item.isVerified,
             unreadChatCount: item.unreadChatCount,
             route: `/communities/${item.id}`,
@@ -157,6 +181,7 @@ export async function runCommunityHomeSyncCycle(input: {
           userId: user.userId,
           sourceMode: input.sourceMode,
           communities,
+          publicApplicationOrigin: publicApplicationOrigin(input.config),
           ...(logoResults.length > 0
             ? { logoAssets: logoResults.map((result) => result.persistence) }
             : {}),
@@ -201,11 +226,11 @@ export async function runCommunityHomeSyncCycle(input: {
     }).catch(() => []);
     for (const item of dueObjects) {
       try {
-        await input.store.delete(item.objectKey);
-        await completeCommunityLogoObjectGc({
+        await deleteCommunityLogoObjectIfSafe({
           pool: input.pool,
           tenantId: tenant.id,
           objectKey: item.objectKey,
+          deleteObject: () => input.store.delete(item.objectKey),
         });
       } catch {
         await recordCommunityLogoObjectGcFailure({

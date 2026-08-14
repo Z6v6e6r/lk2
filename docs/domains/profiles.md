@@ -15,8 +15,23 @@ The two reads intentionally serve different purposes:
 Web maps `/profile` to the signed-in user's UUID and `/profile/{userId}` to another player's UUID.
 The browser does not select a provider or request a wider DTO. The authenticated-self read follows
 the server-issued routing plan: a direct Viva result is strictly normalized, bound to the already
-authenticated PadlHub user UUID and kept in browser memory only. It is not combined with the local
-avatar or written into a PadlHub projection. Cross-user reads always stay on the PadlHub API.
+authenticated PadlHub user UUID and kept in browser memory only. Profile identity and provider
+identifiers are not relayed or written into a PadlHub projection. When that response contains an
+HTTPS photo URL on the server-issued media-host allowlist, the browser may fetch only the bounded image bytes with `credentials: omit` and no
+authorization header, then send those bytes to the authenticated idempotent
+`POST /{tenantKey}/profile/photo` command with the short-lived, one-time user-bound media grant
+issued together with the Viva delegated access token. The API validates the grant and image again, strips metadata,
+normalizes it to WebP and persists only the PadlHub object mapping. The provider URL is never sent
+to or persisted by this client-assisted path. Cross-user reads always stay on the PadlHub API.
+The command is rollout-gated by `PROFILE_PHOTO_CLIENT_SYNC_ENABLED`, which defaults to `false` and
+must remain disabled until the migration and every compatible worker are deployed.
+
+Before object storage is written, the API reserves the idempotency key, one-time grant, request
+digest and content-addressed object key in PostgreSQL and queues that key for delayed GC. Exact
+retries resume the same pending command; conflicts and stale grants fail before S3. Finalization
+activates the mapping and removes its GC record in one tenant transaction. API and worker writers
+share the same per-user advisory lock, and a worker observation newer than the grant wins. Expired
+command rows are removed in bounded worker batches after their replay/GC window.
 
 `avatarUrl` is either null or the stable PadlHub path
 `/public/api/v1/media/profile-photos/{tenantId}/{deliveryId}`. The opaque delivery UUID is not the

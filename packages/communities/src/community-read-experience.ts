@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { communityLogoUrlSchema } from './community-logo-url.js';
+
 const uuid = z.string().uuid();
 const dateTime = z.string().datetime({ offset: true });
 const finite = z.number().finite();
@@ -9,7 +11,7 @@ export const communityReadExperienceDetailSchema = z
   .object({
     id: uuid,
     title: z.string().min(1).max(120),
-    logoUrl: z.string().url().nullable(),
+    logoUrl: communityLogoUrlSchema.nullable(),
     isVerified: z.boolean(),
     description: z.string().max(2_000).nullable(),
     memberCount: z.number().int().nonnegative(),
