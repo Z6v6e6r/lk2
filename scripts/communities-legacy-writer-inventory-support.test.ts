@@ -322,16 +322,19 @@ describe('Communities legacy Node-RED writer inventory', () => {
 
   it('binds the raw flow pin and graph blockers into the inventory digest', () => {
     const clean = [route('route', 'writer'), writer('writer')];
-    const broken = [
-      ...clean,
-      { id: 'unrelated', z: 'flow', type: 'function', wires: [['missing']] },
-    ];
+    const unrelated = {
+      id: 'unrelated',
+      z: 'flow',
+      type: 'function',
+      wires: [['missing']],
+    } satisfies CommunitiesLegacyNodeRedNode;
+    const broken = [...clean, unrelated];
     const cleanReport = buildInventoryReport(clean, 'a'.repeat(64), new Set(), 'c'.repeat(64));
     const repinnedReport = buildInventoryReport(clean, 'b'.repeat(64), new Set(), 'c'.repeat(64));
     const brokenReport = buildInventoryReport(
       broken,
       'a'.repeat(64),
-      new Set([calculateCommunitiesNodeRedFunctionDigest(broken[2])]),
+      new Set([calculateCommunitiesNodeRedFunctionDigest(unrelated)]),
       'c'.repeat(64),
     );
     expect(repinnedReport.inventoryDigest).not.toBe(cleanReport.inventoryDigest);
