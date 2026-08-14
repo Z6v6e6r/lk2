@@ -60,6 +60,10 @@ export const communitiesLegacyPreservationManifestSchema = z
       .strict(),
     writeRoutes: z
       .object({
+        outcome: z.literal('NODE_RED_WRITER_INVENTORY_COMPLETE'),
+        reportSha256: sha256,
+        sourceFlowSha256: sha256,
+        functionAllowlistSha256: sha256,
         total: positive,
         inventoryDigest: sha256,
         unknown: nonNegative,
