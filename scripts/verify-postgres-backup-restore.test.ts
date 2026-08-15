@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { chmod, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -10,6 +11,10 @@ const verifier = fileURLToPath(
   new URL('../deploy/jetson/verify-postgres-backup-restore.sh', import.meta.url),
 );
 const temporaryDirectories: string[] = [];
+const restoredLedgerManifest = `0001_test.sql|${'a'.repeat(64)}`;
+const restoredLedgerDigest = createHash('sha256')
+  .update(`${restoredLedgerManifest}\n`)
+  .digest('hex');
 
 class CommandFailure extends Error {
   constructor(
@@ -85,6 +90,11 @@ case "$*" in
     ;;
   *'dropdb'*)
     if [ "\${PHUB_TEST_FAIL_STAGE:-}" = drop ]; then exit 1; fi
+    rm -f "$PHUB_TEST_CREATED_STATE"
+    ;;
+  *'show server_version_num'*) echo 160009 ;;
+  *'select filename, checksum from public.schema_migrations order by filename'*)
+    printf '%s\n' '${restoredLedgerManifest}'
     ;;
   *'pg_dump --version'*) echo 'pg_dump (PostgreSQL) 16.9' ;;
   *'pg_restore --version'*) echo 'pg_restore (PostgreSQL) 16.9' ;;
@@ -107,6 +117,7 @@ function execute(
       | 'VERIFY_STAGING_POSTGRES_CAPACITY'
       | 'VERIFY_CHAT_PUSH_FOUNDATION_BACKUP';
     readonly createReachedServer?: boolean;
+    readonly expectedLedgerDigest?: string;
     readonly failStage?: string;
     readonly foundationRestoredSnapshot?: string;
   } = {},
@@ -136,6 +147,7 @@ function execute(
           PHUB_TEST_FOUNDATION_RESTORED: options.foundationRestoredSnapshot ?? 'snapshot-v1',
           PHUB_TEST_FOUNDATION_SNAPSHOT_STATE: join(input.root, 'foundation-snapshot.state'),
           PHUB_TEST_LOG: input.log,
+          PHUB_EXPECTED_SOURCE_LEDGER_DIGEST: options.expectedLedgerDigest ?? '',
         },
       },
       (error, stdout, stderr) => {
@@ -159,12 +171,35 @@ describe('PostgreSQL backup restore verifier', () => {
     expect(log).toContain('createdb --template=template0');
     expect(log).toContain('pg_restore -U');
     expect(log).toContain('select count(*) from public.schema_migrations');
+    expect(log).toContain('show server_version_num');
+    expect(log).toContain(
+      'select filename, checksum from public.schema_migrations order by filename',
+    );
     expect(log).toContain('dropdb --if-exists');
     expect(result.stdout).toContain('migrations=77');
+    expect(result.stdout).toContain(`ledger_sha256=${restoredLedgerDigest}`);
     await expect(
       readFile(join(input.markers, '.restore-cleanup-phub_restore_123_1')),
     ).rejects.toThrow();
   });
+
+  it('accepts only the exact source ledger digest and still removes the clone', async () => {
+    const input = await fixture();
+    const result = await execute(input, { expectedLedgerDigest: restoredLedgerDigest });
+    expect(result.stdout).toContain(restoredLedgerDigest);
+
+    const mismatchInput = await fixture();
+    const failure = await execute(mismatchInput, {
+      expectedLedgerDigest: 'b'.repeat(64),
+    }).catch((error: CommandFailure) => error);
+    const log = await readFile(mismatchInput.log, 'utf8');
+
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as CommandFailure).stderr).toContain(
+      'restored migration ledger digest does not match',
+    );
+    expect(log).toContain('dropdb --if-exists');
+  }, 15_000);
 
   it('never drops a colliding database that it did not create', async () => {
     const input = await fixture();
@@ -190,11 +225,20 @@ describe('PostgreSQL backup restore verifier', () => {
 
   it('compares a content-free foundation snapshot between source and restored databases', async () => {
     const input = await fixture();
-    const result = await execute(input, { confirmation: 'VERIFY_CHAT_PUSH_FOUNDATION_BACKUP' });
+    const result = await execute(input, {
+      confirmation: 'VERIFY_CHAT_PUSH_FOUNDATION_BACKUP',
+      expectedLedgerDigest: restoredLedgerDigest,
+    });
     const log = await readFile(input.log, 'utf8');
 
     expect(result.stdout).toContain('foundation source/restore snapshot verified');
+    expect(result.stdout).toContain(`ledger_sha256=${restoredLedgerDigest}`);
     expect(log.match(/chat_push_foundation_snapshot_v1/g)).toHaveLength(2);
+    expect(log).toContain('show server_version_num');
+    expect(log).toContain(
+      'select filename, checksum from public.schema_migrations order by filename',
+    );
+    expect(log).toContain('dropdb --if-exists');
   });
 
   it('fails closed and cleans the owned restore when the foundation snapshot differs', async () => {
@@ -285,5 +329,5 @@ describe('PostgreSQL backup restore verifier', () => {
     await expect(
       readFile(join(input.markers, '.restore-cleanup-phub_restore_123_1'), 'utf8'),
     ).resolves.toBe('CANDIDATE\n');
-  });
+  }, 15_000);
 });
