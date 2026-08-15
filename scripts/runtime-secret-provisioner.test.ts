@@ -12,6 +12,7 @@ import {
   completeRollback,
   finalize,
   prepare,
+  readField,
   recoverMarker,
   restoreFiles,
   verifyPrepared,
@@ -141,6 +142,12 @@ describe('runtime-secret file transaction', () => {
     expect(completeRollback(input.directory)).toEqual({ status: 'rolled-back' });
     expect(readFileSync(input.staging, 'utf8')).toBe(input.value);
     expect(lstatSync(input.staging).ino).toBe(input.inode);
+  });
+
+  it('exposes the non-secret runtime snapshot needed by files-only recovery', () => {
+    const input = fixture();
+    prepare(input.directory, options());
+    expect(readField(input.directory, 'runtimeSnapshot')).toBe(snapshot);
   });
 
   it('promotes a durable marker.next left before the initial rename', () => {

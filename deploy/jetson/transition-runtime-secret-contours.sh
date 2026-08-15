@@ -233,6 +233,23 @@ attest_recorded_state() {
   test "$(state_field oldRealtimeImageRef)" = "$(expected_ref realtime)" || fail 'realtime recorded image ref differs from release.env'
 }
 
+attest_original_runtime() {
+  original_api=$(container_id api)
+  original_worker=$(container_id worker)
+  original_realtime=$(container_id realtime)
+  health "$original_api" api
+  health "$original_worker" worker
+  health "$original_realtime" realtime
+  test "$(image_id "$original_api" api)" = "$(state_field oldApiImageId)" &&
+    test "$(image_ref "$original_api")" = "$(state_field oldApiImageRef)" || fail 'API original runtime differs'
+  test "$(image_id "$original_worker" worker)" = "$(state_field oldWorkerImageId)" &&
+    test "$(image_ref "$original_worker")" = "$(state_field oldWorkerImageRef)" || fail 'worker original runtime differs'
+  test "$(image_id "$original_realtime" realtime)" = "$(state_field oldRealtimeImageId)" &&
+    test "$(image_ref "$original_realtime")" = "$(state_field oldRealtimeImageRef)" || fail 'realtime original runtime differs'
+  assert_disabled_flags "$original_api" "$original_worker" "$original_realtime"
+  test "$(runtime_snapshot)" = "$(state_field runtimeSnapshot)" || fail 'original runtime changed during preflight'
+}
+
 attest_candidate_runtime() {
   attest_recorded_state
   test "$(state_field candidateComposeSha256)" = "$(sha256sum "$app_root/compose.yaml" | cut -d ' ' -f 1)" || fail 'candidate Compose changed'
@@ -261,6 +278,17 @@ restore_transition() {
   active_sha=$(state_field activeComposeSha256)
   candidate_sha=$(state_field candidateComposeSha256)
   current_sha=$(sha256sum "$app_root/compose.yaml" | cut -d ' ' -f 1)
+  if test "$current_sha" = "$active_sha" &&
+    { test "$phase" = initial || test "$phase" = prepared; } &&
+    test ! -e "$compose_backup" && test ! -L "$compose_backup" &&
+    test ! -e "$compose_next" && test ! -L "$compose_next"; then
+    run_helper restore-files >/dev/null
+    attest_original_runtime
+    run_helper advance-phase files-restored runtime-restored >/dev/null
+    run_helper complete-rollback >/dev/null
+    printf '%s\n' 'runtime_secret_transition operation=recover action=files-only status=passed'
+    return 0
+  fi
   if test -e "$compose_backup" || test -L "$compose_backup"; then
     test -f "$compose_backup" && test ! -L "$compose_backup" || fail 'Compose backup is unsafe'
     test "$(sha256sum "$compose_backup" | cut -d ' ' -f 1)" = "$active_sha" || fail 'Compose backup digest changed'
@@ -290,6 +318,9 @@ restore_transition() {
     api=$(container_id api)
     worker=$(container_id worker)
   fi
+  health "$api" api
+  health "$worker" worker
+  health "$realtime" realtime
   test "$(image_id "$api" api)" = "$(state_field oldApiImageId)" &&
     test "$(image_ref "$api")" = "$(state_field oldApiImageRef)" || fail 'API rollback image differs'
   test "$(image_id "$worker" worker)" = "$(state_field oldWorkerImageId)" &&

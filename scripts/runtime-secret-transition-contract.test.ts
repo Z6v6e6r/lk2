@@ -6,6 +6,14 @@ import { describe, expect, it } from 'vitest';
 const controller = readFileSync('deploy/jetson/transition-runtime-secret-contours.sh', 'utf8');
 const helper = readFileSync('deploy/jetson/provision-runtime-secret-files.mjs', 'utf8');
 const guard = readFileSync('deploy/jetson/verify-runtime-secret-transition-clear.sh', 'utf8');
+const communitiesInventory = readFileSync(
+  'deploy/jetson/inspect-communities-staging-target.sh',
+  'utf8',
+);
+const communitiesBackup = readFileSync(
+  'deploy/jetson/create-communities-staging-backup.sh',
+  'utf8',
+);
 const workflowSource = readFileSync(
   '.github/workflows/provision-staging-runtime-secrets.yaml',
   'utf8',
@@ -20,6 +28,16 @@ describe('runtime-secret transition delivery contract', () => {
     expect(workflowSource).toContain('environment: staging');
     expect(workflowSource).toContain('timeout-minutes: 45');
     expect(workflow).toBeTruthy();
+  });
+
+  it('pins every privileged workflow action to a full commit SHA', () => {
+    const actionReferences = [...workflowSource.matchAll(/uses:\s+([^\s#]+)/g)].map(
+      ([, reference]) => reference,
+    );
+    expect(actionReferences.length).toBeGreaterThan(0);
+    for (const reference of actionReferences) {
+      expect(reference).toMatch(/@[0-9a-f]{40}$/);
+    }
   });
 
   it('runs the helper without network, pulls or broad capabilities', () => {
@@ -64,6 +82,18 @@ describe('runtime-secret transition delivery contract', () => {
     expect(controller).toContain('--env-file "$secret_root/realtime.env" "$old_realtime_image"');
   });
 
+  it('rolls back a rejected preflight without recreating serving containers', () => {
+    const earlyRollback = controller.indexOf('action=files-only');
+    const earlyReturn = controller.indexOf('return 0', earlyRollback);
+    const servingStop = controller.indexOf('compose stop -t 30 api realtime', earlyReturn);
+    expect(earlyRollback).toBeGreaterThan(0);
+    expect(earlyReturn).toBeGreaterThan(earlyRollback);
+    expect(servingStop).toBeGreaterThan(earlyReturn);
+    expect(controller.slice(earlyRollback, earlyReturn)).not.toContain('compose up');
+    expect(controller.slice(earlyRollback, earlyReturn)).not.toContain('compose stop');
+    expect(controller).toContain('test "$(runtime_snapshot)" = "$(state_field runtimeSnapshot)"');
+  });
+
   it('resumes rollback after lost responses from file and runtime restoration', () => {
     expect(controller).toContain('if test "$phase" != files-restored; then');
     expect(controller).toContain('if test "$phase" != runtime-restored; then');
@@ -95,6 +125,11 @@ describe('runtime-secret transition delivery contract', () => {
     expect(guard).toContain('.runtime-secret-isolation.compose.backup');
     expect(guard).toContain('.runtime-secret-isolation.compose.next');
     expect(workflowSource).toContain('failure() || cancelled()');
+    for (const forcedCommand of [communitiesInventory, communitiesBackup]) {
+      expect(forcedCommand).toContain('.runtime-secret-isolation.transition.json.next');
+      expect(forcedCommand).toContain('.runtime-secret-isolation.compose.backup');
+      expect(forcedCommand).toContain('runtime-secret transition root is not safely inspectable');
+    }
   });
 
   it('runs all fallible runtime and public attestations before finalize', () => {
