@@ -2,7 +2,12 @@ import { randomUUID } from 'node:crypto';
 
 import {
   COMMUNITY_MEDIA_EXPIRED_EVENT,
+  COMMUNITY_MEDIA_MAX_DAILY_BYTES_PER_USER,
+  COMMUNITY_MEDIA_MAX_DAILY_ISSUES_PER_USER,
+  COMMUNITY_MEDIA_MAX_OUTSTANDING_UPLOADS_PER_USER,
+  COMMUNITY_MEDIA_MAX_PIPELINE_ITEMS_PER_USER,
   COMMUNITY_MEDIA_MAX_PER_POST,
+  COMMUNITY_MEDIA_MAX_TENANT_PIPELINE_ITEMS,
   COMMUNITY_MEDIA_PURGED_EVENT,
   COMMUNITY_MEDIA_READY_EVENT,
   COMMUNITY_MEDIA_REJECTED_EVENT,
@@ -83,11 +88,25 @@ interface IssueContextRow extends QueryResultRow {
   readonly publishing_allowed: boolean;
 }
 
+interface IssueQuotaRow extends QueryResultRow {
+  readonly outstanding_count: number | string;
+  readonly outstanding_retry_after_seconds: number | string | null;
+  readonly actor_pipeline_count: number | string;
+  readonly daily_issue_count: number | string;
+  readonly daily_bytes: number | string;
+  readonly daily_retry_after_seconds: number | string | null;
+  readonly tenant_pipeline_count: number | string;
+}
+
 const mediaColumns = `id, community_id, uploader_user_id, state, source_object_key,
   source_object_version, source_etag, declared_content_type, declared_size_bytes,
   declared_sha256, revision, upload_expires_at, finalized_at, ready_at,
   rejected_at, rejection_code, unattached_expires_at, expired_at, purged_at,
   bound_post_id, created_at, updated_at`;
+const qualifiedMediaColumns = mediaColumns
+  .split(',')
+  .map((column) => `media.${column.trim()}`)
+  .join(', ');
 
 function iso(value: Date | string): string {
   return new Date(value).toISOString();
@@ -235,7 +254,7 @@ async function issueContext(
 ) {
   return queryOne<IssueContextRow>(
     client,
-    `select coalesce(current_user.status = 'ACTIVE', false) as actor_active,
+    `select coalesce(actor_user.status = 'ACTIVE', false) as actor_active,
             exists (
               select 1 from communities.communities community
                where community.tenant_id = $1 and community.id = $3
@@ -262,10 +281,81 @@ async function issueContext(
                  )
             ) as publishing_allowed
        from (values (1)) seed(value)
-       left join identity.users current_user
-         on current_user.tenant_id = $1 and current_user.id = $2`,
+       left join identity.users actor_user
+         on actor_user.tenant_id = $1 and actor_user.id = $2`,
     [input.tenantId, input.actorUserId, input.communityId],
   );
+}
+
+async function lockIssueQuota(
+  client: PoolClient,
+  input: { readonly tenantId: string; readonly actorUserId: string },
+): Promise<void> {
+  for (const key of [
+    `community-media-tenant-pipeline:${input.tenantId}`,
+    `community-media-actor-quota:${input.tenantId}:${input.actorUserId}`,
+  ]) {
+    await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [key]);
+  }
+}
+
+async function currentIssueQuota(
+  client: PoolClient,
+  input: { readonly tenantId: string; readonly actorUserId: string },
+): Promise<IssueQuotaRow> {
+  const row = await queryOne<IssueQuotaRow>(
+    client,
+    `with actor_outstanding as (
+       select count(*) as outstanding_count,
+              ceil(extract(epoch from greatest(
+                min(upload_expires_at) - now(), interval '1 second'
+              )))::bigint as outstanding_retry_after_seconds
+         from community_content.media_assets
+        where tenant_id = $1 and uploader_user_id = $2
+          and state = 'UPLOADING' and upload_expires_at > now()
+     ), actor_pipeline as (
+       select count(*) as actor_pipeline_count
+         from community_content.media_assets
+        where tenant_id = $1 and uploader_user_id = $2
+          and (
+            state = 'SCANNING'
+            or (state = 'UPLOADING' and upload_expires_at > now())
+          )
+     ), actor_daily as (
+       select count(*) as daily_issue_count,
+              coalesce(sum(declared_size_bytes), 0)::bigint as daily_bytes,
+              ceil(extract(epoch from greatest(
+                min(created_at) + interval '24 hours' - now(), interval '1 second'
+              )))::bigint as daily_retry_after_seconds
+         from community_content.media_assets
+        where tenant_id = $1 and uploader_user_id = $2
+          and created_at > now() - interval '24 hours'
+     ), tenant_pipeline as (
+       select count(*) as tenant_pipeline_count
+         from community_content.media_assets
+        where tenant_id = $1
+          and (
+            state = 'SCANNING'
+            or (state = 'UPLOADING' and upload_expires_at > now())
+          )
+     )
+     select actor_outstanding.outstanding_count,
+            actor_outstanding.outstanding_retry_after_seconds,
+            actor_pipeline.actor_pipeline_count,
+            actor_daily.daily_issue_count, actor_daily.daily_bytes,
+            actor_daily.daily_retry_after_seconds,
+            tenant_pipeline.tenant_pipeline_count
+       from actor_outstanding cross join actor_pipeline
+       cross join actor_daily cross join tenant_pipeline`,
+    [input.tenantId, input.actorUserId],
+  );
+  if (!row) throw new Error('COMMUNITY_MEDIA_ISSUE_QUOTA_RESULT_INVALID');
+  return row;
+}
+
+function quotaRetryAfter(value: number | string | null, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 1 ? Math.ceil(parsed) : fallback;
 }
 
 async function recordCommand(
@@ -363,14 +453,14 @@ async function canReplayMedia(
 ): Promise<boolean> {
   const access = await queryOne<{ readonly allowed: boolean } & QueryResultRow>(
     client,
-    `select current_user.status = 'ACTIVE'
+    `select viewer_user.status = 'ACTIVE'
             and coalesce(profile.permissions && array[
               'communities.content.moderation.decide'
             ]::text[], false) as allowed
-       from identity.users current_user
+       from identity.users viewer_user
        left join identity.user_access_profiles profile
-         on profile.tenant_id = current_user.tenant_id and profile.user_id = current_user.id
-      where current_user.tenant_id = $1 and current_user.id = $2`,
+         on profile.tenant_id = viewer_user.tenant_id and profile.user_id = viewer_user.id
+      where viewer_user.tenant_id = $1 and viewer_user.id = $2`,
     [tenantId, actorUserId],
   );
   return access?.allowed === true;
@@ -607,10 +697,21 @@ async function scheduleSourceGc(client: PoolClient, tenantId: string, row: Media
   if (!row.source_object_version) return;
   await client.query(
     `insert into community_content.media_gc_jobs (
-       tenant_id, media_id, object_kind, object_key, object_version
-     ) values ($1, $2, 'SOURCE', $3, $4)
-     on conflict (tenant_id, object_key, object_version) do nothing`,
-    [tenantId, row.id, row.source_object_key, row.source_object_version],
+       tenant_id, media_id, object_kind, object_key, object_version, available_at
+     ) values ($1, $2, 'SOURCE', $3, $4, greatest(now(), $5::timestamptz))
+     on conflict (tenant_id, object_key, object_version) do update
+       set available_at = greatest(
+         community_content.media_gc_jobs.available_at,
+         excluded.available_at
+       )
+       where community_content.media_gc_jobs.state = 'PENDING'`,
+    [
+      tenantId,
+      row.id,
+      row.source_object_key,
+      row.source_object_version,
+      iso(row.upload_expires_at),
+    ],
   );
 }
 
@@ -749,9 +850,25 @@ export function createCommunityMediaRepository(pool: Pool): CommunityMediaPersis
           ) {
             return { outcome: 'idempotency_conflict' };
           }
+          const persistedIntent = communityMediaUploadIntentSchema.parse(command.result_payload);
+          const context = await issueContext(client, input);
+          if (!context?.actor_active) return { outcome: 'actor_not_active' };
+          if (!context.community_found) return { outcome: 'community_not_found' };
+          if (!context.member_active) return { outcome: 'membership_required' };
+          if (!context.publishing_allowed) return { outcome: 'publishing_forbidden' };
+          const current = await queryOne<MediaRow>(
+            client,
+            `select ${mediaColumns} from community_content.media_assets
+              where tenant_id = $1 and id = $2 and community_id = $3
+                and uploader_user_id = $4 and state = 'UPLOADING'
+                and upload_expires_at > now()
+              for update`,
+            [input.tenantId, persistedIntent.id, input.communityId, input.actorUserId],
+          );
+          if (!current) return { outcome: 'upload_expired' };
           return {
             outcome: 'issued',
-            intent: communityMediaUploadIntentSchema.parse(command.result_payload),
+            intent: uploadIntent(current),
             replayed: true,
           };
         }
@@ -760,6 +877,33 @@ export function createCommunityMediaRepository(pool: Pool): CommunityMediaPersis
         if (!context.community_found) return { outcome: 'community_not_found' };
         if (!context.member_active) return { outcome: 'membership_required' };
         if (!context.publishing_allowed) return { outcome: 'publishing_forbidden' };
+
+        await lockIssueQuota(client, input);
+        const quota = await currentIssueQuota(client, input);
+        if (Number(quota.outstanding_count) >= COMMUNITY_MEDIA_MAX_OUTSTANDING_UPLOADS_PER_USER) {
+          return {
+            outcome: 'outstanding_upload_quota_exceeded',
+            retryAfterSeconds: quotaRetryAfter(quota.outstanding_retry_after_seconds, 60),
+          };
+        }
+        if (Number(quota.actor_pipeline_count) >= COMMUNITY_MEDIA_MAX_PIPELINE_ITEMS_PER_USER) {
+          return { outcome: 'actor_pipeline_quota_exceeded', retryAfterSeconds: 30 };
+        }
+        if (Number(quota.daily_issue_count) >= COMMUNITY_MEDIA_MAX_DAILY_ISSUES_PER_USER) {
+          return {
+            outcome: 'daily_issue_count_quota_exceeded',
+            retryAfterSeconds: quotaRetryAfter(quota.daily_retry_after_seconds, 60),
+          };
+        }
+        if (Number(quota.daily_bytes) + input.byteSize > COMMUNITY_MEDIA_MAX_DAILY_BYTES_PER_USER) {
+          return {
+            outcome: 'daily_declared_bytes_quota_exceeded',
+            retryAfterSeconds: quotaRetryAfter(quota.daily_retry_after_seconds, 60),
+          };
+        }
+        if (Number(quota.tenant_pipeline_count) >= COMMUNITY_MEDIA_MAX_TENANT_PIPELINE_ITEMS) {
+          return { outcome: 'scan_backlog_quota_exceeded', retryAfterSeconds: 30 };
+        }
 
         const mediaId = randomUUID();
         const sourceObjectKey = `community-media/quarantine/${input.tenantId}/${input.communityId}/${mediaId}/source`;
@@ -962,7 +1106,7 @@ export function createCommunityMediaRepository(pool: Pool): CommunityMediaPersis
                   updated_at = now()
              from candidates
             where media.tenant_id = $1 and media.id = candidates.id
-           returning ${mediaColumns}, media.scan_attempts`,
+           returning ${qualifiedMediaColumns}, media.scan_attempts`,
           [input.tenantId, input.limit, input.leaseOwner, input.leaseSeconds],
         );
         return result.rows.map((row) => {
@@ -1181,7 +1325,7 @@ export function createCommunityMediaRepository(pool: Pool): CommunityMediaPersis
                   revision = revision + 1, updated_at = now()
              from candidates
             where media.tenant_id = $1 and media.id = candidates.id
-           returning ${mediaColumns}`,
+           returning ${qualifiedMediaColumns}`,
           [input.tenantId, input.limit],
         );
         for (const row of rows.rows) {
@@ -1224,13 +1368,10 @@ export function createCommunityMediaRepository(pool: Pool): CommunityMediaPersis
             where tenant_id = $1 and id = $2`,
           [input.tenantId, input.mediaId, input.objectVersion],
         );
-        await client.query(
-          `insert into community_content.media_gc_jobs (
-             tenant_id, media_id, object_kind, object_key, object_version
-           ) values ($1, $2, 'SOURCE', $3, $4)
-           on conflict (tenant_id, object_key, object_version) do nothing`,
-          [input.tenantId, input.mediaId, row.source_object_key, input.objectVersion],
-        );
+        await scheduleSourceGc(client, input.tenantId, {
+          ...row,
+          source_object_version: input.objectVersion,
+        });
         return true;
       });
     },

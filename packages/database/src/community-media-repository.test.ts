@@ -64,6 +64,19 @@ function scanningStatus() {
   };
 }
 
+function issueQuota(overrides: Record<string, unknown> = {}) {
+  return {
+    outstanding_count: 0,
+    outstanding_retry_after_seconds: null,
+    actor_pipeline_count: 0,
+    daily_issue_count: 0,
+    daily_bytes: 0,
+    daily_retry_after_seconds: null,
+    tenant_pipeline_count: 0,
+    ...overrides,
+  };
+}
+
 function poolWithQuery(
   handler: (
     text: string,
@@ -96,7 +109,7 @@ describe('community media repository', () => {
   it('issues a tracked quarantine key with command, audit and outbox in one transaction', async () => {
     const { pool, query } = poolWithQuery((text, values) => {
       if (text.includes('from community_content.media_commands')) return [];
-      if (text.includes('left join identity.users current_user')) {
+      if (text.includes('left join identity.users actor_user')) {
         return [
           {
             actor_active: true,
@@ -105,6 +118,9 @@ describe('community media repository', () => {
             publishing_allowed: true,
           },
         ];
+      }
+      if (text.includes('from actor_outstanding cross join actor_pipeline')) {
+        return [issueQuota()];
       }
       if (text.includes('insert into community_content.media_assets')) {
         return [
@@ -139,6 +155,103 @@ describe('community media repository', () => {
     expect(query).toHaveBeenCalledWith('commit');
   });
 
+  it.each([
+    {
+      quota: issueQuota({ actor_pipeline_count: 20 }),
+      expected: { outcome: 'actor_pipeline_quota_exceeded', retryAfterSeconds: 30 },
+    },
+    {
+      quota: issueQuota({ daily_issue_count: 100, daily_retry_after_seconds: 240 }),
+      expected: { outcome: 'daily_issue_count_quota_exceeded', retryAfterSeconds: 240 },
+    },
+    {
+      quota: issueQuota({
+        outstanding_count: 10,
+        outstanding_retry_after_seconds: 45,
+      }),
+      expected: { outcome: 'outstanding_upload_quota_exceeded', retryAfterSeconds: 45 },
+    },
+    {
+      quota: issueQuota({
+        daily_bytes: 150 * 1_024 * 1_024,
+        daily_retry_after_seconds: 300,
+      }),
+      expected: { outcome: 'daily_declared_bytes_quota_exceeded', retryAfterSeconds: 300 },
+    },
+    {
+      quota: issueQuota({ tenant_pipeline_count: 100 }),
+      expected: { outcome: 'scan_backlog_quota_exceeded', retryAfterSeconds: 30 },
+    },
+  ])(
+    'rejects issuance transactionally at quota: $expected.outcome',
+    async ({ quota, expected }) => {
+      const { pool, query } = poolWithQuery((text) => {
+        if (text.includes('from community_content.media_commands')) return [];
+        if (text.includes('left join identity.users actor_user')) {
+          return [
+            {
+              actor_active: true,
+              community_found: true,
+              member_active: true,
+              publishing_allowed: true,
+            },
+          ];
+        }
+        if (text.includes('from actor_outstanding cross join actor_pipeline')) return [quota];
+        return [];
+      });
+
+      await expect(
+        createCommunityMediaRepository(pool).issueUpload({
+          ...command,
+          contentType: 'image/jpeg',
+          byteSize: 1_024,
+          sha256: 'b'.repeat(64),
+        }),
+      ).resolves.toEqual(expected);
+      expect(
+        query.mock.calls.some(([text]) =>
+          String(text).includes('insert into community_content.media_assets'),
+        ),
+      ).toBe(false);
+    },
+  );
+
+  it('locks tenant pipeline before actor quota and evaluates replay before either quota lock', async () => {
+    const { pool, query } = poolWithQuery((text) => {
+      if (text.includes('from community_content.media_commands')) return [];
+      if (text.includes('left join identity.users actor_user')) {
+        return [
+          {
+            actor_active: true,
+            community_found: true,
+            member_active: true,
+            publishing_allowed: true,
+          },
+        ];
+      }
+      if (text.includes('from actor_outstanding cross join actor_pipeline')) {
+        return [issueQuota({ tenant_pipeline_count: 100 })];
+      }
+      return [];
+    });
+
+    await createCommunityMediaRepository(pool).issueUpload({
+      ...command,
+      contentType: 'image/jpeg',
+      byteSize: 1_024,
+      sha256: 'b'.repeat(64),
+    });
+    const lockValues = query.mock.calls
+      .filter(([text]) => String(text).includes('pg_advisory_xact_lock'))
+      .map(([, values]) => values?.[0]);
+    expect(lockValues).toEqual([
+      `community-media:${tenantId}:${actorUserId}:${command.idempotencyKey}`,
+      `community-media-tenant-pipeline:${tenantId}`,
+      `community-media-actor-quota:${tenantId}:${actorUserId}`,
+    ]);
+  });
+
   it('replays finalize before inspecting the object store target', async () => {
     const { pool, query } = poolWithQuery((text) => {
       if (text.includes('from community_content.media_commands')) {
@@ -167,7 +280,7 @@ describe('community media repository', () => {
   it('does not issue upload capacity to a member who cannot publish in STAFF_FEED', async () => {
     const { pool, query } = poolWithQuery((text) => {
       if (text.includes('from community_content.media_commands')) return [];
-      if (text.includes('left join identity.users current_user')) {
+      if (text.includes('left join identity.users actor_user')) {
         return [
           {
             actor_active: true,
@@ -331,9 +444,10 @@ describe('community media repository', () => {
     ).resolves.toBe('ready');
     expect(query.mock.calls.some(([text]) => String(text).includes('media_variants'))).toBe(true);
     const sourceGc = query.mock.calls.find(([text]) =>
-      String(text).includes("values ($1, $2, 'SOURCE', $3, $4)"),
+      String(text).includes("values ($1, $2, 'SOURCE', $3, $4, greatest(now(), $5::timestamptz))"),
     );
     expect(sourceGc?.[1]?.[3]).toBe('source-v1');
+    expect(sourceGc?.[1]?.[4]).toBe('2030-08-04T10:15:00.000Z');
   });
 
   it('attaches only READY media to one immutable post revision', async () => {
@@ -496,17 +610,31 @@ describe('community media repository', () => {
       createdAt: now.toISOString(),
       updatedAt: now.toISOString(),
     };
-    const replay = poolWithQuery((text) =>
-      text.includes('from community_content.media_commands')
-        ? [
-            {
-              command_type: 'ISSUE_UPLOAD',
-              request_hash: command.requestHash,
-              result_payload: intent,
-            },
-          ]
-        : [],
-    );
+    const replay = poolWithQuery((text) => {
+      if (text.includes('from community_content.media_commands')) {
+        return [
+          {
+            command_type: 'ISSUE_UPLOAD',
+            request_hash: command.requestHash,
+            result_payload: intent,
+          },
+        ];
+      }
+      if (text.includes('left join identity.users actor_user')) {
+        return [
+          {
+            actor_active: true,
+            community_found: true,
+            member_active: true,
+            publishing_allowed: true,
+          },
+        ];
+      }
+      if (text.includes("and uploader_user_id = $4 and state = 'UPLOADING'")) {
+        return [mediaRow()];
+      }
+      return [];
+    });
     await expect(
       createCommunityMediaRepository(replay.pool).issueUpload({
         ...command,
@@ -515,9 +643,16 @@ describe('community media repository', () => {
         sha256: 'b'.repeat(64),
       }),
     ).resolves.toEqual({ outcome: 'issued', intent, replayed: true });
-    expect(replay.query.mock.calls.some(([text]) => String(text).includes('current_user'))).toBe(
-      false,
-    );
+    expect(
+      replay.query.mock.calls.some(([text]) =>
+        String(text).includes('left join identity.users actor_user'),
+      ),
+    ).toBe(true);
+    expect(
+      replay.query.mock.calls.some(([text]) =>
+        String(text).includes('from actor_outstanding cross join actor_pipeline'),
+      ),
+    ).toBe(false);
 
     const conflict = poolWithQuery((text) =>
       text.includes('from community_content.media_commands')
@@ -538,6 +673,120 @@ describe('community media repository', () => {
         sha256: 'b'.repeat(64),
       }),
     ).resolves.toEqual({ outcome: 'idempotency_conflict' });
+    expect(
+      conflict.query.mock.calls.some(([text]) =>
+        String(text).includes('left join identity.users actor_user'),
+      ),
+    ).toBe(false);
+  });
+
+  it('refuses issue replay after the authoritative upload is terminal or expired', async () => {
+    const intent = {
+      id: mediaId,
+      communityId,
+      uploaderUserId: actorUserId,
+      mediaType: 'IMAGE',
+      state: 'UPLOADING',
+      revision: 1,
+      declaredContentType: 'image/jpeg',
+      declaredByteSize: 1_024,
+      declaredSha256: 'b'.repeat(64),
+      objectKey: `community-media/quarantine/${tenantId}/${communityId}/${mediaId}/source`,
+      uploadExpiresAt: new Date('2030-08-04T10:15:00.000Z').toISOString(),
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString(),
+    };
+    const { pool, query } = poolWithQuery((text) => {
+      if (text.includes('from community_content.media_commands')) {
+        return [
+          {
+            command_type: 'ISSUE_UPLOAD',
+            request_hash: command.requestHash,
+            result_payload: intent,
+          },
+        ];
+      }
+      if (text.includes('left join identity.users actor_user')) {
+        return [
+          {
+            actor_active: true,
+            community_found: true,
+            member_active: true,
+            publishing_allowed: true,
+          },
+        ];
+      }
+      if (text.includes("and uploader_user_id = $4 and state = 'UPLOADING'")) return [];
+      return [];
+    });
+
+    await expect(
+      createCommunityMediaRepository(pool).issueUpload({
+        ...command,
+        contentType: 'image/jpeg',
+        byteSize: 1_024,
+        sha256: 'b'.repeat(64),
+      }),
+    ).resolves.toEqual({ outcome: 'upload_expired' });
+    expect(
+      query.mock.calls.some(([text]) =>
+        String(text).includes('from actor_outstanding cross join actor_pipeline'),
+      ),
+    ).toBe(false);
+  });
+
+  it('revalidates current membership before returning an issue replay grant', async () => {
+    const intent = {
+      id: mediaId,
+      communityId,
+      uploaderUserId: actorUserId,
+      mediaType: 'IMAGE',
+      state: 'UPLOADING',
+      revision: 1,
+      declaredContentType: 'image/jpeg',
+      declaredByteSize: 1_024,
+      declaredSha256: 'b'.repeat(64),
+      objectKey: `community-media/quarantine/${tenantId}/${communityId}/${mediaId}/source`,
+      uploadExpiresAt: new Date('2030-08-04T10:15:00.000Z').toISOString(),
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString(),
+    };
+    const { pool, query } = poolWithQuery((text) => {
+      if (text.includes('from community_content.media_commands')) {
+        return [
+          {
+            command_type: 'ISSUE_UPLOAD',
+            request_hash: command.requestHash,
+            result_payload: intent,
+          },
+        ];
+      }
+      if (text.includes('left join identity.users actor_user')) {
+        return [
+          {
+            actor_active: true,
+            community_found: true,
+            member_active: false,
+            publishing_allowed: false,
+          },
+        ];
+      }
+      return [];
+    });
+
+    await expect(
+      createCommunityMediaRepository(pool).issueUpload({
+        ...command,
+        contentType: 'image/jpeg',
+        byteSize: 1_024,
+        sha256: 'b'.repeat(64),
+      }),
+    ).resolves.toEqual({ outcome: 'membership_required' });
+    expect(
+      query.mock.calls.some(([text]) =>
+        String(text).includes("and uploader_user_id = $4 and state = 'UPLOADING'"),
+      ),
+    ).toBe(false);
   });
 
   it.each([
@@ -569,7 +818,7 @@ describe('community media repository', () => {
   ])('does not allocate media for $name', async ({ context, outcome }) => {
     const { pool, query } = poolWithQuery((text) => {
       if (text.includes('from community_content.media_commands')) return [];
-      if (text.includes('left join identity.users current_user')) return context ? [context] : [];
+      if (text.includes('left join identity.users actor_user')) return context ? [context] : [];
       return [];
     });
     await expect(

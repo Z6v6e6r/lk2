@@ -161,10 +161,11 @@ export class S3CommunityMediaObjectStore implements CommunityMediaObjectStore {
     ) {
       throw new Error('COMMUNITY_MEDIA_OBJECT_SIZE_INVALID');
     }
-    const expiresIn = Math.max(
-      1,
-      Math.min(900, Math.floor((Date.parse(input.expiresAt) - Date.now()) / 1_000)),
-    );
+    const remainingSeconds = Math.floor((Date.parse(input.expiresAt) - Date.now()) / 1_000);
+    if (!Number.isFinite(remainingSeconds) || remainingSeconds < 1) {
+      throw new Error('COMMUNITY_MEDIA_UPLOAD_GRANT_EXPIRED');
+    }
+    const expiresIn = Math.min(900, remainingSeconds);
     const checksum = checksumBase64(input.sha256);
     const url = await getSignedUrl(
       this.deliveryClient,

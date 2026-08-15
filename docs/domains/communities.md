@@ -99,6 +99,18 @@ UUIDs. `mediaIds` is optional on create/edit for backward compatibility: absence
 media; absence on edit preserves the current snapshot; an explicit empty array removes media from
 the new revision. Comment requests remain strict and do not accept media.
 
+PostgreSQL admits a new upload intent only after replay and authorization. Fixed-order tenant and
+actor advisory locks enforce at most ten unexpired actor `UPLOADING` intents, 20 actor pipeline
+reservations across unexpired `UPLOADING` plus all `SCANNING` rows, 100 actor issues and 150 MiB of
+actor declared bytes in a rolling 24-hour window, and 100 tenant pipeline reservations. Every
+issued row remains in both rolling daily totals through reject, expiry and purge; replay consumes
+no additional quota. Issue replay revalidates the current actor and publishing permission, locks
+the authoritative row and signs only an unexpired `UPLOADING` intent; terminal/expired media never
+receive a replacement PUT target. Redis and the HTTP token limiter are defense in depth and never
+the source of admission truth.
+Exact source-version GC is scheduled no earlier than the original upload-intent expiry, so no
+previously issued PUT grant remains valid after deletion makes the quarantine key absent.
+
 Issue and finalize are separate idempotent commands. The database stores a provider-neutral intent;
 the API signs a short-lived private quarantine target after commit. Finalize first resolves replay
 or idempotency conflict, then observes exact object size, content type, checksum, ETag and immutable

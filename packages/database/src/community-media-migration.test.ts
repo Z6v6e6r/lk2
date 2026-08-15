@@ -59,4 +59,18 @@ describe('community media migration', () => {
     );
     expect(sql).not.toMatch(/drop\s+(table|column)|truncate|alter\s+column/i);
   });
+
+  it('adds quota-supporting indexes without rewriting media state', async () => {
+    const sql = await readFile(
+      new URL('../migrations/0078_community_media_issue_quotas.sql', import.meta.url),
+      'utf8',
+    );
+
+    expect(sql).toContain('community_media_actor_outstanding_quota_idx');
+    expect(sql).toContain('community_media_actor_daily_bytes_quota_idx');
+    expect(sql).toContain('community_media_actor_pipeline_quota_idx');
+    expect(sql).toContain('community_media_tenant_pipeline_quota_idx');
+    expect(sql).toContain("where state in ('UPLOADING', 'SCANNING')");
+    expect(sql).not.toMatch(/drop\s+(table|column)|truncate|update\s+community_content/i);
+  });
 });

@@ -102,6 +102,51 @@ function failure(request: FastifyRequest, reply: FastifyReply, result: Community
         'COMMUNITY_PUBLISHING_FORBIDDEN',
         'Недостаточно прав для публикации.',
       );
+    case 'outstanding_upload_quota_exceeded':
+      reply.header('Retry-After', String(result.retryAfterSeconds));
+      return sendApiError(
+        request,
+        reply,
+        429,
+        'COMMUNITY_MEDIA_OUTSTANDING_UPLOAD_QUOTA_EXCEEDED',
+        'Завершите или дождитесь истечения текущих загрузок.',
+      );
+    case 'daily_declared_bytes_quota_exceeded':
+      reply.header('Retry-After', String(result.retryAfterSeconds));
+      return sendApiError(
+        request,
+        reply,
+        429,
+        'COMMUNITY_MEDIA_DAILY_DECLARED_BYTES_QUOTA_EXCEEDED',
+        'Достигнут суточный лимит загрузки медиа.',
+      );
+    case 'actor_pipeline_quota_exceeded':
+      reply.header('Retry-After', String(result.retryAfterSeconds));
+      return sendApiError(
+        request,
+        reply,
+        429,
+        'COMMUNITY_MEDIA_ACTOR_PIPELINE_QUOTA_EXCEEDED',
+        'Дождитесь завершения проверки ранее загруженных медиа.',
+      );
+    case 'daily_issue_count_quota_exceeded':
+      reply.header('Retry-After', String(result.retryAfterSeconds));
+      return sendApiError(
+        request,
+        reply,
+        429,
+        'COMMUNITY_MEDIA_DAILY_ISSUE_COUNT_QUOTA_EXCEEDED',
+        'Достигнут суточный лимит количества загрузок медиа.',
+      );
+    case 'scan_backlog_quota_exceeded':
+      reply.header('Retry-After', String(result.retryAfterSeconds));
+      return sendApiError(
+        request,
+        reply,
+        429,
+        'COMMUNITY_MEDIA_SCAN_BACKLOG_QUOTA_EXCEEDED',
+        'Очередь проверки медиа временно заполнена.',
+      );
     case 'media_not_found':
       return sendApiError(request, reply, 404, 'COMMUNITY_MEDIA_NOT_FOUND', 'Медиа не найдено.');
     case 'upload_expired':

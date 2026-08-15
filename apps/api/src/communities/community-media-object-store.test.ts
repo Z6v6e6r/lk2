@@ -71,6 +71,39 @@ describe('S3CommunityMediaObjectStore', () => {
     expect(send).toHaveBeenCalledTimes(2);
   });
 
+  it('refuses to sign a grant at or after the authoritative intent expiry', async () => {
+    const send = vi.spyOn(S3Client.prototype, 'send').mockImplementation((command) => {
+      if (command instanceof HeadBucketCommand) return Promise.resolve({}) as never;
+      if (command instanceof GetBucketVersioningCommand) {
+        return Promise.resolve({ Status: 'Enabled' }) as never;
+      }
+      throw new Error(`Unexpected S3 command: ${command.constructor.name}`);
+    });
+    const store = new S3CommunityMediaObjectStore({
+      endpoint: 'http://minio:9000',
+      publicEndpoint: 'https://media.staging.example',
+      region: 'us-east-1',
+      bucket: 'phub-media',
+      accessKey: 'test-access-key',
+      secretKey: 'test-secret-key',
+      forcePathStyle: true,
+      autoCreateBucket: false,
+    });
+
+    await expect(
+      store.createUploadGrant({
+        objectKey: 'community-media/quarantine/tenant/community/media/source',
+        mediaId: '5dcdd751-e38e-4c35-99cc-48e394438c46',
+        contentType: 'image/webp',
+        byteSize: 128,
+        sha256: 'a'.repeat(64),
+        expiresAt: new Date(Date.now() - 1_000).toISOString(),
+      }),
+    ).rejects.toThrow('COMMUNITY_MEDIA_UPLOAD_GRANT_EXPIRED');
+    expect(getSignedUrl).not.toHaveBeenCalled();
+    expect(send).toHaveBeenCalledTimes(2);
+  });
+
   it('retries readiness after a transient first S3 failure', async () => {
     let headAttempts = 0;
     vi.spyOn(S3Client.prototype, 'send').mockImplementation((command) => {
