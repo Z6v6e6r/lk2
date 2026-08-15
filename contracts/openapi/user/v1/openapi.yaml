@@ -454,8 +454,12 @@ paths:
       - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
     get:
       operationId: completeVivaOAuthAuthorization
-      summary: Complete Viva OAuth callback and create a PadlHub session
-      description: The callback must carry the short-lived HttpOnly cookie set for the initiating browser.
+      summary: Complete Viva OAuth sign-in or authenticated delegation recovery
+      description: |
+        The callback must carry the short-lived HttpOnly cookie set for the initiating browser.
+        Initial sign-in creates a PadlHub session. Authenticated recovery is bound to the active
+        PadlHub session family and replaces only the Viva delegation; it does not create or rotate
+        the PadlHub session.
       security: []
       parameters:
         - name: state
@@ -470,7 +474,9 @@ paths:
             type: string
       responses:
         '302':
-          description: PadlHub refresh cookie is set and the browser is redirected to the configured cabinet URL.
+          description: |
+            The browser is redirected to the configured cabinet URL. Initial sign-in sets the
+            PadlHub refresh cookie; authenticated recovery preserves the existing refresh cookie.
           headers:
             Set-Cookie:
               $ref: '#/components/headers/OAuthCallbackCookies'
@@ -844,7 +850,7 @@ paths:
         - name: X-Profile-Photo-Grant
           in: header
           required: true
-          description: Short-lived, user-bound grant issued with the direct Viva access token.
+          description: Short-lived tenant-, user-, and PadlHub-session-bound grant issued with the direct Viva access token.
           schema:
             type: string
             minLength: 20
@@ -889,6 +895,49 @@ paths:
           description: Unsupported image media type.
         '422':
           description: Image bytes are invalid or unsafe to normalize.
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+    delete:
+      tags: [profiles]
+      operationId: removeUserProfilePhoto
+      summary: Remove the normalized profile photo after an authoritative Viva null observation
+      description: |
+        Consumes the same short-lived user-bound observation grant as photo synchronization.
+        The active stable mapping is removed atomically, the old immutable object is queued for
+        bounded garbage collection, and the command is idempotent.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - name: X-Profile-Photo-Grant
+          in: header
+          required: true
+          description: Short-lived tenant-, user-, and PadlHub-session-bound grant issued with the direct Viva access token.
+          schema:
+            type: string
+            minLength: 20
+            maxLength: 4096
+      responses:
+        '200':
+          description: The removal command was replayed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfilePhotoRemoveResult'
+        '201':
+          description: The current mapping was removed or its absence was recorded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfilePhotoRemoveResult'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '409':
+          $ref: '#/components/responses/CommandConflict'
         '429':
           $ref: ../../common/components.yaml#/components/responses/TooManyRequests
         '503':
@@ -3876,6 +3925,16 @@ components:
           pattern: '^/public/api/v1/media/profile-photos/[0-9a-f-]{36}/[0-9a-f-]{36}$'
         replayed:
           type: boolean
+    ProfilePhotoRemoveResult:
+      type: object
+      additionalProperties: false
+      required: [removed, replayed]
+      properties:
+        removed:
+          type: boolean
+          description: True means the authoritative no-photo state is durably recorded.
+        replayed:
+          type: boolean
     ProfilePrivacySettings:
       type: object
       additionalProperties: false
@@ -4291,6 +4350,20 @@ components:
           minLength: 20
           maxLength: 4096
           description: Short-lived one-time grant for relaying only the current profile-photo bytes.
+        profilePhoto:
+          type: [object, 'null']
+          additionalProperties: false
+          required: [avatarUrl, syncedAt]
+          description: |
+            Current PadlHub-owned WebP mapping. Null means no normalized photo exists; omission means
+            optional media metadata was unavailable and does not invalidate delegated access.
+          properties:
+            avatarUrl:
+              type: string
+              pattern: ^/public/api/v1/media/profile-photos/[0-9a-f-]{36}/[0-9a-f-]{36}$
+            syncedAt:
+              type: string
+              format: date-time
     AuthenticatedSession:
       type: object
       additionalProperties: false
@@ -7151,9 +7224,9 @@ components:
         type: string
     OAuthCallbackCookies:
       description: |
-        Sets the HttpOnly `phub_refresh` session cookie and expires the one-time
-        matching `phub_oauth_browser_{digest}` binding cookie. Production sets Secure and both use
-        SameSite=Lax.
+        Expires the one-time matching `phub_oauth_browser_{digest}` binding cookie. Initial sign-in
+        also sets the HttpOnly `phub_refresh` session cookie; authenticated recovery does not.
+        Production sets Secure and both cookies use SameSite=Lax.
       required: true
       schema:
         type: string

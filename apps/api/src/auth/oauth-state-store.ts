@@ -16,6 +16,8 @@ export interface VivaOAuthState {
   readonly browserNonceHash: string;
   /** Binds a consent-preserving recovery flow to its already authenticated user. */
   readonly recoveryUserId?: string;
+  /** Binds recovery to the active PadlHub refresh-session family that initiated it. */
+  readonly recoverySessionFamilyId?: string;
 }
 
 export interface VivaOAuthStart {
@@ -27,6 +29,10 @@ export type VivaOAuthStartReservation =
   | { readonly outcome: 'created' | 'replay'; readonly start: VivaOAuthStart }
   | { readonly outcome: 'conflict' };
 
+export type VivaOAuthCallbackClaim =
+  | { readonly outcome: 'claimed'; readonly state: VivaOAuthState }
+  | { readonly outcome: 'missing' | 'mismatch' };
+
 export interface VivaOAuthStateStore {
   reserveStart(input: {
     readonly commandKey: string;
@@ -36,6 +42,11 @@ export interface VivaOAuthStateStore {
   }): Promise<VivaOAuthStartReservation>;
   put(value: VivaOAuthState, ttlSeconds: number): Promise<void>;
   take(state: string): Promise<VivaOAuthState | undefined>;
+  claimCallback(input: {
+    readonly state: string;
+    readonly tenantKey: string;
+    readonly browserNonceHash?: string;
+  }): Promise<VivaOAuthCallbackClaim>;
   putHandoff(value: VivaAccessHandoff, ttlSeconds: number): Promise<void>;
   takeHandoff(code: string): Promise<VivaAccessHandoff | undefined>;
   claimRefresh(key: string, claimId: string, ttlSeconds: number): Promise<boolean>;
@@ -51,8 +62,9 @@ export interface VivaAccessHandoff {
 }
 
 const LEGACY_STATE_PREFIX = 'phub:auth:viva-oauth:';
-const STATE_PREFIX = 'phub:auth:v2:viva-oauth:';
-const START_PREFIX = 'phub:auth:v2:viva-oauth-start:';
+const V2_STATE_PREFIX = 'phub:auth:v2:viva-oauth:';
+const STATE_PREFIX = 'phub:auth:v3:viva-oauth:';
+const START_PREFIX = 'phub:auth:v3:viva-oauth-start:';
 const HANDOFF_PREFIX = 'phub:auth:viva-handoff:';
 
 interface StoredVivaOAuthStart {
@@ -131,12 +143,57 @@ export class RedisVivaOAuthStateStore implements VivaOAuthStateStore {
   public async take(state: string): Promise<VivaOAuthState | undefined> {
     const value =
       (await this.redis.getdel(`${STATE_PREFIX}${state}`)) ??
+      (await this.redis.getdel(`${V2_STATE_PREFIX}${state}`)) ??
       (await this.redis.getdel(`${LEGACY_STATE_PREFIX}${state}`));
     if (!value) return undefined;
     try {
       return JSON.parse(value) as VivaOAuthState;
     } catch {
       return undefined;
+    }
+  }
+
+  public async claimCallback(input: {
+    readonly state: string;
+    readonly tenantKey: string;
+    readonly browserNonceHash?: string;
+  }): Promise<VivaOAuthCallbackClaim> {
+    const result = await this.redis.eval(
+      `
+        for index = 1, #KEYS do
+          local encoded = redis.call('GET', KEYS[index])
+          if encoded then
+            local decodedOk, pending = pcall(cjson.decode, encoded)
+            if not decodedOk then
+              redis.call('DEL', KEYS[index])
+              return {'missing', ''}
+            end
+            if pending.state ~= ARGV[1]
+              or pending.tenantKey ~= ARGV[2]
+              or pending.browserNonceHash ~= ARGV[3] then
+              return {'mismatch', ''}
+            end
+            redis.call('DEL', KEYS[index])
+            return {'claimed', encoded}
+          end
+        end
+        return {'missing', ''}
+      `,
+      3,
+      `${STATE_PREFIX}${input.state}`,
+      `${V2_STATE_PREFIX}${input.state}`,
+      `${LEGACY_STATE_PREFIX}${input.state}`,
+      input.state,
+      input.tenantKey,
+      input.browserNonceHash ?? '',
+    );
+    if (!isStringPair(result)) return { outcome: 'missing' };
+    if (result[0] === 'mismatch') return { outcome: 'mismatch' };
+    if (result[0] !== 'claimed') return { outcome: 'missing' };
+    try {
+      return { outcome: 'claimed', state: JSON.parse(result[1]) as VivaOAuthState };
+    } catch {
+      return { outcome: 'missing' };
     }
   }
 
@@ -223,6 +280,28 @@ export class MemoryVivaOAuthStateStore implements VivaOAuthStateStore {
     const entry = this.values.get(state);
     this.values.delete(state);
     return Promise.resolve(this.liveValue(entry));
+  }
+
+  public claimCallback(input: {
+    readonly state: string;
+    readonly tenantKey: string;
+    readonly browserNonceHash?: string;
+  }): Promise<VivaOAuthCallbackClaim> {
+    const entry = this.values.get(input.state);
+    const pending = this.liveValue(entry);
+    if (!pending) {
+      if (entry) this.values.delete(input.state);
+      return Promise.resolve({ outcome: 'missing' });
+    }
+    if (
+      pending.state !== input.state ||
+      pending.tenantKey !== input.tenantKey ||
+      pending.browserNonceHash !== input.browserNonceHash
+    ) {
+      return Promise.resolve({ outcome: 'mismatch' });
+    }
+    this.values.delete(input.state);
+    return Promise.resolve({ outcome: 'claimed', state: pending });
   }
 
   public putHandoff(value: VivaAccessHandoff, ttlSeconds: number): Promise<void> {

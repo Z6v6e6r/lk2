@@ -142,6 +142,7 @@ describe('VivaIdentityProvider', () => {
       providerTenantKey: 'iSkq6G',
       redirectUri: 'https://app.example.test/callback',
       correlationId: 'oauth-correlation-123',
+      identityMode: 'STANDARD',
     });
 
     expect(result.identity).toMatchObject({
@@ -233,16 +234,77 @@ describe('VivaIdentityProvider', () => {
       providerTenantKey: 'iSkq6G',
       redirectUri: 'https://app.example.test/callback',
       correlationId: 'oauth-subject-correlation-123',
+      identityMode: 'STANDARD',
     });
 
     expect(result.identityResolution).toBe('EXISTING_SUBJECT');
     expect(result.identity).toEqual({
       issuer: 'https://kc.vivacrm.invalid/realms/clients',
       subject: 'already-linked-subject',
-      displayName: 'Social Account Name',
     });
     expect(result.accessToken).toBe(accessToken);
     expect(result.refreshToken).toBe('external-refresh');
+  });
+
+  it('resolves authenticated recovery from verified token claims without a profile request', async () => {
+    const { publicKey, privateKey } = await generateKeyPair('RS256');
+    const jwk = { ...(await exportJWK(publicKey)), kid: 'test-key', use: 'sig', alg: 'RS256' };
+    const accessToken = await new SignJWT({
+      azp: 'widget',
+      name: 'Existing Account Name',
+    })
+      .setProtectedHeader({ alg: 'RS256', kid: 'test-key' })
+      .setIssuer('https://kc.vivacrm.invalid/realms/clients')
+      .setSubject('already-linked-recovery-subject')
+      .setExpirationTime('5m')
+      .sign(privateKey);
+    const metrics: VivaIdentityMetric[] = [];
+    let profileCalls = 0;
+    const fetchImplementation = vi.fn<typeof fetch>((request) => {
+      const url = fetchUrl(request);
+      if (url.pathname.endsWith('/protocol/openid-connect/token')) {
+        return Promise.resolve(
+          Response.json({ access_token: accessToken, refresh_token: 'recovered-refresh-token' }),
+        );
+      }
+      if (url.pathname.endsWith('/protocol/openid-connect/certs')) {
+        return Promise.resolve(Response.json({ keys: [jwk] }));
+      }
+      if (url.pathname.endsWith('/iSkq6G/profile')) {
+        profileCalls += 1;
+        return Promise.resolve(new Response(null, { status: 403 }));
+      }
+      return Promise.resolve(new Response(null, { status: 404 }));
+    });
+    const provider = new VivaIdentityProvider({
+      ...options(),
+      mode: 'sandbox',
+      fetchImplementation,
+      onMetric: (metric) => metrics.push(metric),
+    });
+
+    const result = await provider.exchangeAuthorizationCode({
+      code: 'recovery-authorization-code',
+      codeVerifier: 'recovery-pkce-verifier',
+      providerTenantKey: 'iSkq6G',
+      redirectUri: 'https://app.example.test/callback',
+      correlationId: 'oauth-recovery-correlation-123',
+      identityMode: 'RECOVERY_SUBJECT_ONLY',
+    });
+
+    expect(result.identityResolution).toBe('EXISTING_SUBJECT');
+    expect(result.identity).toEqual({
+      issuer: 'https://kc.vivacrm.invalid/realms/clients',
+      subject: 'already-linked-recovery-subject',
+    });
+    expect(result.accessToken).toBe(accessToken);
+    expect(result.refreshToken).toBe('recovered-refresh-token');
+    expect(profileCalls).toBe(0);
+    expect(metrics.map((metric) => metric.operation)).toEqual([
+      'oauth_token_exchange',
+      'jwt_verify',
+      'oauth_exchange',
+    ]);
   });
 
   it('does not use subject-only OAuth bootstrap for non-policy profile failures', async () => {
@@ -283,6 +345,7 @@ describe('VivaIdentityProvider', () => {
         providerTenantKey: 'iSkq6G',
         redirectUri: 'https://app.example.test/callback',
         correlationId: 'oauth-non-policy-correlation-123',
+        identityMode: 'STANDARD',
       }),
     ).rejects.toMatchObject({ code: 'AUTH_PROVIDER_UNAVAILABLE' });
   });
@@ -305,6 +368,7 @@ describe('VivaIdentityProvider', () => {
         providerTenantKey: 'iSkq6G',
         redirectUri: 'https://app.example.test/callback',
         correlationId: 'oauth-correlation-123',
+        identityMode: 'STANDARD',
       }),
     ).rejects.toMatchObject({ code: 'AUTH_PROVIDER_UNAVAILABLE' });
 

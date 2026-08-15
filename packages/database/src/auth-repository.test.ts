@@ -110,6 +110,7 @@ describe('identity auth repository', () => {
     await expect(
       repository.resolveExistingExternalUser({
         tenantId,
+        provider: 'VIVA',
         issuer: 'https://kc.vivacrm.ru/realms/clients',
         subject: 'stable-viva-subject',
         correlationId: 'mixed-bootstrap-correlation-123',
@@ -163,7 +164,10 @@ describe('identity auth repository', () => {
     const identityLookup = statements.find((text) =>
       text.includes('from integration.external_identity_map e'),
     );
-    expect(identityLookup).toContain('e.issuer = $2 and e.subject = $3');
+    expect(identityLookup).toContain('e.provider = $2');
+    expect(identityLookup).toContain('e.issuer = $3');
+    expect(identityLookup).toContain('e.subject = $4');
+    expect(identityLookup).toContain("u.status = 'ACTIVE'");
     expect(identityLookup).not.toContain('phone_e164 =');
   });
 

@@ -1316,6 +1316,11 @@ describe('browser auth gateway', () => {
           accessToken: 'short-lived-viva-token',
           expiresAt: '2099-07-11T12:10:00.000Z',
           profilePhotoGrant: 'short-lived-profile-photo-grant',
+          profilePhoto: {
+            avatarUrl:
+              '/public/api/v1/media/profile-photos/00000000-0000-4000-8000-000000000002/55555555-5555-4555-8555-555555555555',
+            syncedAt: new Date(now - 25 * 60 * 60 * 1_000).toISOString(),
+          },
         }),
       )
       .mockResolvedValueOnce(Response.json(vivaProfile))
@@ -1334,6 +1339,18 @@ describe('browser auth gateway', () => {
         ),
       )
       .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(
+        Response.json({
+          accessToken: 'second-short-lived-viva-token',
+          expiresAt: '2099-07-11T12:10:00.000Z',
+          profilePhotoGrant: 'second-short-lived-profile-photo-grant',
+          profilePhoto: {
+            avatarUrl:
+              '/public/api/v1/media/profile-photos/00000000-0000-4000-8000-000000000002/44444444-4444-4444-8444-444444444444',
+            syncedAt: new Date(now).toISOString(),
+          },
+        }),
+      )
       .mockResolvedValueOnce(Response.json(vivaProfile))
       .mockResolvedValueOnce(new Response(null, { status: 204 }));
     const gateway = createBrowserAuthGateway({
@@ -1422,9 +1439,414 @@ describe('browser auth gateway', () => {
     const requestUrls = fetchImplementation.mock.calls.map(([input]) => requestUrl(input));
     expect(requestUrls.filter((url) => url === vivaProfile.photo)).toHaveLength(1);
     expect(requestUrls.filter((url) => url.endsWith('/profile/photo'))).toHaveLength(1);
-    expect(requestUrls.filter((url) => url.endsWith('/auth/viva/access'))).toHaveLength(1);
+    expect(requestUrls.filter((url) => url.endsWith('/auth/viva/access'))).toHaveLength(2);
     nowSpy.mockRestore();
   });
+
+  it('keeps an existing PadlHub WebP on a direct profile response without a Viva photo URL', async () => {
+    let now = Date.parse('2026-08-15T10:00:00.000Z');
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const userId = '00000000-0000-4000-8000-000000000001';
+    const tenantId = '00000000-0000-4000-8000-000000000002';
+    const avatarUrl = `/public/api/v1/media/profile-photos/${tenantId}/44444444-4444-4444-8444-444444444444`;
+    const session = {
+      accessToken: 'short-lived-padlhub-token',
+      tokenType: 'Bearer',
+      expiresAt: '2099-07-11T12:10:00.000Z',
+      user: { id: userId, displayName: 'Анна' },
+      context: {
+        userId,
+        tenantId,
+        displayName: 'Анна',
+        phoneLast4: '0001',
+        roles: ['client'],
+        permissions: ['profile.read'],
+      },
+    };
+    const routingPlan = {
+      revision: '7',
+      mode: 'MIXED_END_USER_READS',
+      issuedAt: new Date().toISOString(),
+      expiresAt: '2099-07-11T12:10:00.000Z',
+      operations: [
+        'profile.read',
+        'bookings.read',
+        'bookings.details.read',
+        'bookings.history.read',
+        'subscriptions.read',
+        'schedule.read',
+      ].map((operation) => ({
+        operation,
+        transport: operation === 'profile.read' ? 'DIRECT_VIVA' : 'PADLHUB_API',
+        fallback: operation === 'profile.read' ? 'UNAVAILABLE' : 'PADLHUB_API',
+      })),
+      directViva: {
+        apiBaseUrl: 'https://api.vivacrm.invalid/end-user/api',
+        providerTenantKey: 'iSkq6G',
+        accessTokenPath: '/auth/viva/access',
+        allowedRequestHeaders: ['Authorization'],
+        allowedMediaHosts: ['.vivacrm.invalid'],
+      },
+    };
+    const vivaProfile = {
+      id: '33333333-3333-4333-8333-333333333333',
+      firstName: 'Анна',
+      middleName: null,
+      lastName: 'Петрова',
+      phone: '+7 999 000-00-01',
+      deposit: 54_000,
+      customFields: [{ id: 'eabfe27b-3f72-4496-9185-1a2ec6e6465e', value: ['3,8'] }],
+    };
+    const fetchImplementation = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json(session))
+      .mockResolvedValueOnce(Response.json(routingPlan))
+      .mockResolvedValueOnce(
+        Response.json({
+          accessToken: 'short-lived-viva-token',
+          expiresAt: '2099-07-11T12:10:00.000Z',
+          profilePhotoGrant: 'short-lived-profile-photo-grant',
+          profilePhoto: { avatarUrl, syncedAt: new Date(now).toISOString() },
+        }),
+      )
+      .mockResolvedValueOnce(Response.json(vivaProfile))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(
+        Response.json({
+          accessToken: 'refreshed-short-lived-viva-token',
+          expiresAt: '2099-07-11T12:10:00.000Z',
+          profilePhotoGrant: 'refreshed-short-lived-profile-photo-grant',
+        }),
+      )
+      .mockResolvedValueOnce(Response.json(vivaProfile))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    const gateway = createBrowserAuthGateway({
+      baseUrl: 'https://api.padlhub.test/',
+      tenantKey: 'padlhub',
+      appVersion: 'test',
+      fetchImplementation,
+    });
+
+    await gateway.restoreSession();
+    await expect(gateway.getRoutingPlan()).resolves.toEqual(routingPlan);
+    await expect(gateway.getSelfProfile()).resolves.toMatchObject({
+      userId,
+      displayName: 'Анна Петрова',
+      avatarUrl: `https://api.padlhub.test${avatarUrl}`,
+    });
+
+    const requestUrls = fetchImplementation.mock.calls.map(([input]) => requestUrl(input));
+    expect(requestUrls.some((url) => url.endsWith('/profile/photo'))).toBe(false);
+    expect(requestUrls.some((url) => url.includes('profile/anna'))).toBe(false);
+
+    now += 25 * 60 * 60 * 1_000;
+    expect((await gateway.getSelfProfile()).avatarUrl).toBeUndefined();
+    nowSpy.mockRestore();
+  });
+
+  it('replaces, preserves on omission, and tombstones stable photo state in one browser session', async () => {
+    let now = Date.parse('2026-08-15T10:00:00.000Z');
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const userId = '00000000-0000-4000-8000-000000000001';
+    const tenantId = '00000000-0000-4000-8000-000000000002';
+    const avatarA = `/public/api/v1/media/profile-photos/${tenantId}/44444444-4444-4444-8444-444444444444`;
+    const avatarB = `/public/api/v1/media/profile-photos/${tenantId}/55555555-5555-4555-8555-555555555555`;
+    const sourceUrl = 'https://cdn.vivacrm.invalid/profile/anna.jpg';
+    const session = {
+      accessToken: 'short-lived-padlhub-token',
+      tokenType: 'Bearer',
+      expiresAt: '2099-07-11T12:10:00.000Z',
+      user: { id: userId, displayName: 'Анна' },
+      context: {
+        userId,
+        tenantId,
+        displayName: 'Анна',
+        phoneLast4: '0001',
+        roles: ['client'],
+        permissions: ['profile.read'],
+      },
+    };
+    const routingPlan = {
+      revision: '8',
+      mode: 'MIXED_END_USER_READS',
+      issuedAt: new Date(now).toISOString(),
+      expiresAt: '2099-07-11T12:10:00.000Z',
+      operations: [
+        'profile.read',
+        'bookings.read',
+        'bookings.details.read',
+        'bookings.history.read',
+        'subscriptions.read',
+        'schedule.read',
+      ].map((operation) => ({
+        operation,
+        transport: operation === 'profile.read' ? 'DIRECT_VIVA' : 'PADLHUB_API',
+        fallback: operation === 'profile.read' ? 'UNAVAILABLE' : 'PADLHUB_API',
+      })),
+      directViva: {
+        apiBaseUrl: 'https://api.vivacrm.invalid/end-user/api',
+        providerTenantKey: 'iSkq6G',
+        accessTokenPath: '/auth/viva/access',
+        allowedRequestHeaders: ['Authorization'],
+        allowedMediaHosts: ['.vivacrm.invalid'],
+      },
+    };
+    const accessResponses = [
+      {
+        accessToken: 'viva-token-a',
+        expiresAt: '2099-07-11T12:10:00.000Z',
+        profilePhotoGrant: 'profile-photo-grant-a',
+      },
+      {
+        accessToken: 'viva-token-b',
+        expiresAt: '2099-07-11T12:10:00.000Z',
+        profilePhotoGrant: 'profile-photo-grant-b',
+        profilePhoto: { avatarUrl: avatarB, syncedAt: new Date(now).toISOString() },
+      },
+      {
+        accessToken: 'viva-token-c',
+        expiresAt: '2099-07-11T12:10:00.000Z',
+        profilePhotoGrant: 'profile-photo-grant-c',
+      },
+      {
+        accessToken: 'viva-token-d',
+        expiresAt: '2099-07-11T12:10:00.000Z',
+        profilePhotoGrant: 'profile-photo-grant-d',
+        profilePhoto: null,
+      },
+      {
+        accessToken: 'viva-token-e',
+        expiresAt: '2099-07-11T12:10:00.000Z',
+        profilePhotoGrant: 'profile-photo-grant-e',
+        profilePhoto: null,
+      },
+    ];
+    const profilePhotos: Array<string | null> = [sourceUrl, sourceUrl, sourceUrl, null, null];
+    let deleteAttempts = 0;
+    const fetchImplementation = vi.fn<typeof fetch>((input, init) => {
+      const url = requestUrl(input);
+      if (url.endsWith('/auth/session/refresh')) return Promise.resolve(Response.json(session));
+      if (url.endsWith('/routing-plan')) return Promise.resolve(Response.json(routingPlan));
+      if (url.endsWith('/auth/viva/access')) {
+        const response = accessResponses.shift();
+        if (!response) throw new Error('Unexpected Viva access request');
+        return Promise.resolve(Response.json(response));
+      }
+      if (url.endsWith('/profile/photo') && init?.method === 'POST') {
+        return Promise.resolve(
+          Response.json({ avatarUrl: avatarA, replayed: false }, { status: 201 }),
+        );
+      }
+      if (url.endsWith('/profile/photo') && init?.method === 'DELETE') {
+        deleteAttempts += 1;
+        return Promise.resolve(
+          deleteAttempts === 1
+            ? Response.json({ code: 'PROFILE_PHOTO_GRANT_STALE' }, { status: 409 })
+            : Response.json({ removed: true, replayed: false }, { status: 201 }),
+        );
+      }
+      if (url.endsWith('/routing-outcomes')) {
+        return Promise.resolve(new Response(null, { status: 204 }));
+      }
+      if (url === sourceUrl) {
+        return Promise.resolve(
+          new Response(new Uint8Array([0xff, 0xd8, 0xff, 0xd9]), {
+            headers: { 'content-type': 'image/jpeg' },
+          }),
+        );
+      }
+      if (url.endsWith('/profile')) {
+        const photo = profilePhotos.shift();
+        if (photo === undefined) throw new Error('Unexpected direct profile request');
+        return Promise.resolve(
+          Response.json({
+            id: '33333333-3333-4333-8333-333333333333',
+            firstName: 'Анна',
+            middleName: null,
+            lastName: 'Петрова',
+            phone: null,
+            photo,
+            deposit: 0,
+            customFields: [],
+          }),
+        );
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    const gateway = createBrowserAuthGateway({
+      baseUrl: 'https://api.padlhub.test/',
+      tenantKey: 'padlhub',
+      appVersion: 'test',
+      fetchImplementation,
+    });
+
+    await gateway.restoreSession();
+    await gateway.getRoutingPlan();
+    await expect(gateway.getSelfProfile()).resolves.toMatchObject({
+      avatarUrl: `https://api.padlhub.test${avatarA}`,
+    });
+
+    now += 61_000;
+    await gateway.refreshVivaAccessToken();
+    await expect(gateway.getSelfProfile()).resolves.toMatchObject({
+      avatarUrl: `https://api.padlhub.test${avatarB}`,
+    });
+
+    now += 61_000;
+    await gateway.refreshVivaAccessToken();
+    await expect(gateway.getSelfProfile()).resolves.toMatchObject({
+      avatarUrl: `https://api.padlhub.test${avatarB}`,
+    });
+
+    now += 61_000;
+    await gateway.refreshVivaAccessToken();
+    const removed = await gateway.getSelfProfile();
+    expect(removed.avatarUrl).toBeUndefined();
+    const deleteCalls = fetchImplementation.mock.calls.filter(
+      ([input, init]) => requestUrl(input).endsWith('/profile/photo') && init?.method === 'DELETE',
+    );
+    expect(deleteCalls).toHaveLength(2);
+    expect(new Headers(deleteCalls[0]?.[1]?.headers).get('X-Profile-Photo-Grant')).toBe(
+      'profile-photo-grant-d',
+    );
+    expect(new Headers(deleteCalls[0]?.[1]?.headers).has('Idempotency-Key')).toBe(true);
+    expect(new Headers(deleteCalls[1]?.[1]?.headers).get('X-Profile-Photo-Grant')).toBe(
+      'profile-photo-grant-e',
+    );
+    expect(new Headers(deleteCalls[0]?.[1]?.headers).get('Idempotency-Key')).not.toBe(
+      new Headers(deleteCalls[1]?.[1]?.headers).get('Idempotency-Key'),
+    );
+    nowSpy.mockRestore();
+  });
+
+  it.each(['PRESENT', 'UNAVAILABLE'] as const)(
+    'restores a newer stable photo after a stale tombstone and a fresh %s observation',
+    async (freshObservation) => {
+      const now = Date.parse('2026-08-15T10:00:00.000Z');
+      const userId = '00000000-0000-4000-8000-000000000001';
+      const tenantId = '00000000-0000-4000-8000-000000000002';
+      const avatarA = `/public/api/v1/media/profile-photos/${tenantId}/44444444-4444-4444-8444-444444444444`;
+      const avatarB = `/public/api/v1/media/profile-photos/${tenantId}/55555555-5555-4555-8555-555555555555`;
+      const sourceUrl = 'https://cdn.vivacrm.invalid/profile/anna.jpg';
+      const session = {
+        accessToken: 'short-lived-padlhub-token',
+        tokenType: 'Bearer',
+        expiresAt: '2099-07-11T12:10:00.000Z',
+        user: { id: userId, displayName: 'Анна' },
+        context: {
+          userId,
+          tenantId,
+          displayName: 'Анна',
+          phoneLast4: '0001',
+          roles: ['client'],
+          permissions: ['profile.read'],
+        },
+      };
+      const routingPlan = {
+        revision: '8',
+        mode: 'MIXED_END_USER_READS',
+        issuedAt: new Date(now).toISOString(),
+        expiresAt: '2099-07-11T12:10:00.000Z',
+        operations: [
+          'profile.read',
+          'bookings.read',
+          'bookings.details.read',
+          'bookings.history.read',
+          'subscriptions.read',
+          'schedule.read',
+        ].map((operation) => ({
+          operation,
+          transport: operation === 'profile.read' ? 'DIRECT_VIVA' : 'PADLHUB_API',
+          fallback: operation === 'profile.read' ? 'UNAVAILABLE' : 'PADLHUB_API',
+        })),
+        directViva: {
+          apiBaseUrl: 'https://api.vivacrm.invalid/end-user/api',
+          providerTenantKey: 'iSkq6G',
+          accessTokenPath: '/auth/viva/access',
+          allowedRequestHeaders: ['Authorization'],
+          allowedMediaHosts: ['.vivacrm.invalid'],
+        },
+      };
+      const accessResponses = [
+        {
+          accessToken: 'viva-token-old',
+          expiresAt: '2099-07-11T12:10:00.000Z',
+          profilePhotoGrant: 'profile-photo-grant-old',
+          profilePhoto: { avatarUrl: avatarA, syncedAt: new Date(now).toISOString() },
+        },
+        {
+          accessToken: 'viva-token-new',
+          expiresAt: '2099-07-11T12:10:00.000Z',
+          profilePhotoGrant: 'profile-photo-grant-new',
+          profilePhoto: { avatarUrl: avatarB, syncedAt: new Date(now).toISOString() },
+        },
+      ];
+      const directProfiles: Array<Record<string, unknown>> = [
+        {
+          id: '33333333-3333-4333-8333-333333333333',
+          firstName: 'Анна',
+          middleName: null,
+          lastName: 'Петрова',
+          phone: null,
+          photo: null,
+          deposit: 0,
+          customFields: [],
+        },
+        {
+          id: '33333333-3333-4333-8333-333333333333',
+          firstName: 'Анна',
+          middleName: null,
+          lastName: 'Петрова',
+          phone: null,
+          ...(freshObservation === 'PRESENT' ? { photo: sourceUrl } : {}),
+          deposit: 0,
+          customFields: [],
+        },
+      ];
+      const fetchImplementation = vi.fn<typeof fetch>((input, init) => {
+        const url = requestUrl(input);
+        if (url.endsWith('/auth/session/refresh')) return Promise.resolve(Response.json(session));
+        if (url.endsWith('/routing-plan')) return Promise.resolve(Response.json(routingPlan));
+        if (url.endsWith('/auth/viva/access')) {
+          const response = accessResponses.shift();
+          if (!response) throw new Error('Unexpected Viva access request');
+          return Promise.resolve(Response.json(response));
+        }
+        if (url.endsWith('/profile/photo') && init?.method === 'DELETE') {
+          return Promise.resolve(
+            Response.json({ code: 'PROFILE_PHOTO_GRANT_STALE' }, { status: 409 }),
+          );
+        }
+        if (url.endsWith('/profile')) {
+          const profile = directProfiles.shift();
+          if (!profile) throw new Error('Unexpected direct profile request');
+          return Promise.resolve(Response.json(profile));
+        }
+        if (url.endsWith('/routing-outcomes')) {
+          return Promise.resolve(new Response(null, { status: 204 }));
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      });
+      const gateway = createBrowserAuthGateway({
+        baseUrl: 'https://api.padlhub.test/',
+        tenantKey: 'padlhub',
+        appVersion: 'test',
+        fetchImplementation,
+      });
+
+      await gateway.restoreSession();
+      await gateway.getRoutingPlan();
+      await expect(gateway.getSelfProfile()).resolves.toMatchObject({
+        avatarUrl: `https://api.padlhub.test${avatarB}`,
+      });
+      const deleteCalls = fetchImplementation.mock.calls.filter(
+        ([input, init]) =>
+          requestUrl(input).endsWith('/profile/photo') && init?.method === 'DELETE',
+      );
+      expect(deleteCalls).toHaveLength(1);
+      expect(directProfiles).toHaveLength(0);
+    },
+  );
 
   it('starts Viva recovery when a direct self-profile read has no active delegation', async () => {
     window.history.replaceState({}, '', '/profile#level');

@@ -33,4 +33,38 @@ describe('client-assisted profile photo migration', () => {
     expect(sql).toContain('force row level security');
     expect(sql).not.toMatch(/drop\s+column/i);
   });
+
+  it('adds a validated idempotent delete command without a table rewrite default', () => {
+    const sql = readFileSync(
+      resolve(
+        process.cwd(),
+        'packages/database/migrations/0082_profile_photo_removal_commands.sql',
+      ),
+      'utf8',
+    );
+
+    expect(sql).toContain("set local lock_timeout = '5s'");
+    expect(sql).toContain("command_kind in ('UPSERT', 'DELETE')");
+    expect(sql).toContain('profile_photo_client_commands_kind_check');
+    expect(sql).toContain("command_kind = 'DELETE'");
+    expect(sql).toContain('request_sha256 is null');
+    expect(sql).toContain('object_key is null');
+    expect(sql).toContain('not valid');
+    expect(sql).not.toContain('validate constraint profile_photo_client_commands_payload_check');
+    expect(sql).not.toMatch(/drop\s+(table|column)/i);
+
+    const validationSql = readFileSync(
+      resolve(
+        process.cwd(),
+        'packages/database/migrations/0083_profile_photo_removal_commands_validate.sql',
+      ),
+      'utf8',
+    );
+    expect(validationSql).toContain("set local lock_timeout = '5s'");
+    expect(validationSql).toContain("set local statement_timeout = '30s'");
+    expect(validationSql).toContain(
+      'validate constraint profile_photo_client_commands_payload_check',
+    );
+    expect(validationSql).toContain('validate constraint profile_photo_client_commands_kind_check');
+  });
 });

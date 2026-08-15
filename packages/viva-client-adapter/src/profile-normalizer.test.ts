@@ -5,6 +5,7 @@ import {
   normalizePadlHubUpcomingBookings,
   normalizePadlHubUserProfile,
   normalizeVivaUserProfile,
+  vivaProfilePhotoObservation,
   vivaProfilePhotoSourceUrl,
 } from './index.js';
 
@@ -130,6 +131,27 @@ describe('profile normalization', () => {
         fetchImplementation: oversizedFetch,
       }),
     ).rejects.toThrow('DIRECT_VIVA_PROFILE_PHOTO_TOO_LARGE');
+  });
+
+  it('distinguishes an authoritative null photo from omitted or invalid provider metadata', () => {
+    const base = {
+      id: vivaProfileId,
+      firstName: 'Alexey',
+      middleName: null,
+      lastName: null,
+      phone: null,
+      deposit: 0,
+      customFields: [],
+    };
+
+    expect(vivaProfilePhotoObservation({ ...base, photo: null })).toEqual({ kind: 'ABSENT' });
+    expect(vivaProfilePhotoObservation(base)).toEqual({ kind: 'UNAVAILABLE' });
+    expect(vivaProfilePhotoObservation({ ...base, photo: 'not-a-url' })).toEqual({
+      kind: 'UNAVAILABLE',
+    });
+    expect(
+      vivaProfilePhotoObservation({ ...base, photo: 'https://media.vivacrm.invalid/a.jpg' }),
+    ).toEqual({ kind: 'PRESENT', sourceUrl: 'https://media.vivacrm.invalid/a.jpg' });
   });
 
   it('rejects a malformed PadlHub fallback response', () => {

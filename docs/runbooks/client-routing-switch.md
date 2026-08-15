@@ -97,10 +97,43 @@ client writes and keep it on until pending commands and all object-GC rows are b
 `HOME_VIVA_SYNC_ENABLED=true` workers also continue maintenance for backward compatibility. The order
 is mandatory:
 
-1. integrate the reviewed migration history through `0078`, then apply
+Before using any release artifact that packages `0082` or `0083`, prove from
+`public.schema_migrations` that the protected chat/push foundation migrations
+`0069_booking_notification_projection_fence.sql` through
+`0073_booking_reminder_scheduler.sql` are already applied with the checksums from the reviewed
+foundation artifact. If any is missing, stop this rollout. First use the separate foundation
+release, which must not package `0082`/`0083`, and follow the maintenance-only procedure in
+`docs/runbooks/chats-notifications-moderation.md`. That procedure requires every packaged migration
+outside `0069`-`0073` to be applied before the one-shot acknowledgement is used. Verify all five
+ledger rows after that maintenance window, remove the acknowledgement, and only then return here.
+Never pass `CHAT_PUSH_FOUNDATION_MAINTENANCE_ACK` to the final media migrator: the execution policy
+correctly rejects a combined foundation-plus-media batch before DDL.
+
+```sql
+select filename, checksum, applied_at
+from public.schema_migrations
+where filename in (
+  '0069_booking_notification_projection_fence.sql',
+  '0070_web_push_endpoint_hardening.sql',
+  '0071_messaging_user_blocks.sql',
+  '0072_web_push_endpoint_status_validation.sql',
+  '0073_booking_reminder_scheduler.sql'
+)
+order by filename;
+```
+
+1. integrate the reviewed Communities migration history through `0078`, then apply
    `0079_profile_photo_client_assisted_source.sql`,
-   `0080_community_logo_stable_delivery.sql` and
-   `0081_community_logo_stable_delivery_validate.sql` in that monotonic order;
+   `0080_community_logo_stable_delivery.sql`,
+   `0081_community_logo_stable_delivery_validate.sql`,
+   `0082_profile_photo_removal_commands.sql` and
+   `0083_profile_photo_removal_commands_validate.sql` in that monotonic order; run the migrator only
+   from that final chain. Before starting the standard migrator, capture the legacy UPSERT row
+   count/size preflight below. The migrator applies each file in its own transaction and does not
+   pause between `0082` and `0083`; if the timeout-bounded `0083` validation fails, `0082` remains
+   safely applied and the next migrator run retries `0083`. Keep both client-media feature flags
+   disabled while `invalid_legacy_upsert_rows` is non-zero or validation has not completed; row,
+   size and GC counts are capacity evidence, not by themselves a migration blocker;
 2. deploy and drain **all** API nodes with `PROFILE_PHOTO_CLIENT_SYNC_ENABLED=false`; this makes the
    stable community-logo and profile-photo media routes available before any worker publishes a
    stable URL;
@@ -111,7 +144,93 @@ is mandatory:
 5. set `COMMUNITY_LOGO_STABLE_DELIVERY_ENABLED=true` on compatible workers only after the API route
    is ready, then set `PROFILE_PHOTO_CLIENT_SYNC_ENABLED=true` on API nodes sequentially;
 6. verify one authenticated direct-profile journey returns a stable PadlHub avatar URL, the media
-   route serves `image/webp`, and neither logs nor integration rows contain the Viva photo URL.
+   route serves `image/webp`, and neither logs nor integration rows contain the Viva photo URL;
+7. reload with an existing mapping and a direct profile response that has no photo source URL: the
+   delegated-access response must restore the same PadlHub avatar, while a mapping older than 24
+   hours must remain hidden until an allowlisted source is observed and revalidated. Then verify an
+   authoritative Viva `photo:null` sends exactly one idempotent `DELETE /profile/photo`, clears the
+   profile summary/mapping, queues the former object for GC, and makes the former delivery URL return
+   `404`; an omitted or invalid photo field must not create that tombstone.
+
+Before the standard migrator starts, run the data/volume preflight with a separate approved
+read-only backup/admin PostgreSQL contour, never an application connection and never
+`MIGRATOR_DATABASE_URL`. The first query must return `can_bypass_rls=true`; otherwise stop. If
+`command_table` is null on a target still at `0078`, record
+command rows and invalid legacy rows as zero: `0079` will create the table empty while both feature
+flags remain disabled. If it is non-null, run the legacy-row query below. It intentionally does not
+reference the not-yet-created `command_kind` column. `invalid_legacy_upsert_rows` must be zero;
+otherwise stop with both media flags disabled. The row/size and existing GC counts are capacity
+evidence. The `0083` validation has a 30-second statement timeout and may be retried after
+capacity/lock remediation:
+
+```sql
+select r.rolsuper or r.rolbypassrls as can_bypass_rls
+from pg_roles r
+where r.rolname = current_user;
+
+select to_regclass('integration.profile_photo_client_commands') as command_table;
+
+-- Run only when command_table is non-null.
+select
+  pg_size_pretty(pg_total_relation_size('integration.profile_photo_client_commands')) as total_size,
+  count(*) as rows,
+  count(*) filter (
+    where request_sha256 is null or content_sha256 is null or object_key is null
+  ) as invalid_legacy_upsert_rows,
+  count(*) filter (where expires_at <= now()) as expired_rows
+from integration.profile_photo_client_commands;
+
+select count(*) as gc_rows, min(delete_after) as oldest_due
+from integration.profile_photo_object_gc;
+```
+
+Separately, through the exact bounded `MIGRATOR_DATABASE_URL` identity, require
+`can_apply_profile_media_chain=true`. The bounded migrator remains `NOBYPASSRLS`: this catalog check
+proves only its DDL ownership boundary. The exact role must directly own the existing
+`user_profile_photo_sync` and `community_logo_sync` tables altered by `0079`-`0081`; membership in a
+broad owner role is not sufficient. It must also have schema `CREATE` when the command table is
+absent, because `0079` creates it, or directly own that table when it already exists for
+`0082`/`0083`. Stop before migration when the result is false.
+
+```sql
+with required_existing(relation_name) as (
+  values ('user_profile_photo_sync'), ('community_logo_sync')
+), existing_authority as (
+  select bool_and(
+    c.oid is not null and c.relowner = current_user::regrole
+  ) as allowed
+  from required_existing required
+  left join pg_namespace n on n.nspname = 'integration'
+  left join pg_class c
+    on c.relnamespace = n.oid and c.relname = required.relation_name
+), command_authority as (
+  select case
+    when to_regclass('integration.profile_photo_client_commands') is null
+      then has_schema_privilege(current_user, 'integration', 'CREATE')
+    else coalesce((
+      select c.relowner = current_user::regrole
+      from pg_class c
+      where c.oid = to_regclass('integration.profile_photo_client_commands')
+    ), false)
+  end as allowed
+)
+select existing_authority.allowed and command_authority.allowed
+  as can_apply_profile_media_chain
+from existing_authority, command_authority;
+```
+
+After `0083`, require `convalidated=true`:
+
+```sql
+select conname, convalidated, pg_get_constraintdef(oid)
+from pg_constraint
+where conrelid = 'integration.profile_photo_client_commands'::regclass
+  and conname in (
+    'profile_photo_client_commands_kind_check',
+    'profile_photo_client_commands_payload_check'
+  )
+order by conname;
+```
 
 The generic staging deployment never enables stable community-logo delivery. It starts and verifies
 the API before the worker, then runs the rollback guard in `pre-cutover` mode, so normal signed-URL
@@ -195,11 +314,13 @@ section; this logo cutover does not change booking relay limits.
 
 Keep `COMMUNITY_LOGO_STABLE_DELIVERY_ENABLED=false` and
 `COMMUNITY_LOGO_COMPATIBILITY_BACKFILL_ENABLED=false` explicitly in staging through migration and
-the mixed-version window. The second flag is rollback-only. The current migration chain ends at
-`0081_community_logo_stable_delivery_validate.sql`; its media prerequisites are
+the mixed-version window. The second flag is rollback-only. The current media migration chain ends
+at `0083_profile_photo_removal_commands_validate.sql`; its prerequisites are
 `0079_profile_photo_client_assisted_source.sql`, the logo expand migration
 `0080_community_logo_stable_delivery.sql`, and the separate logo validation migration
-`0081_community_logo_stable_delivery_validate.sql`.
+`0081_community_logo_stable_delivery_validate.sql`, followed by the profile-photo removal expand
+and validation migrations `0082_profile_photo_removal_commands.sql` and
+`0083_profile_photo_removal_commands_validate.sql`.
 
 The `MEDIA_BINARY_ONLY` role check extends the core split-role boundary with an explicit `media`
 scope. Before the release window, the exact bounded migrator role must directly own
@@ -238,7 +359,7 @@ Roll out in this order:
 
 1. run the read-only `diagnose_media` baseline with the exact currently serving release. Require
    its migration/storage/capacity artifact before authorizing `MEDIA_BINARY_ONLY`. The ledger must
-   already be complete through `0078`; only the monotonic `0079`–`0081` suffix may be pending, and
+   already be complete through `0078`; only the monotonic `0079`–`0083` suffix may be pending, and
    an active stable-logo cutover is not eligible for this pre-cutover profile;
 2. preserve and validate the digest-pinned application snapshot, including runtime env state and
    the `phub.client-media-rollback.v1` capability required by a client-media floor. The
@@ -249,7 +370,7 @@ Roll out in this order:
    rolled-back runtime DML/RLS probe, verify the full ledger/RLS/constraint manifest, and confirm
    strict clone deletion before the shared migration. The generic portability restore may suppress
    owner/ACL application, but the media rehearsal must not;
-4. verify migrations `0079`, `0080` and `0081` are recorded with both feature flags still false;
+4. verify migrations `0079` through `0083` are recorded with both feature flags still false;
 5. deploy and drain every API node first, then verify both profile-photo and community-logo routes
    through canonical Caddy/Nginx HTTPS while the previous web, worker and realtime binaries remain
    serving;
@@ -321,8 +442,8 @@ For a feature rollback to images without the stable route:
    `PHUB_MEDIA_ROLLBACK_MODE=feature sh /opt/phub/verify-media-rollback-safe.sh`;
 4. the guard verifies convergence twice, drains `phub.home-projector.v1`, stops the worker, rechecks
    state, and only then clears the durable cutover marker;
-5. restore the older API and worker only after the guard succeeds. Do not down-migrate `0079`, `0080` or
-   `0081`; preserve the expanded schema for a forward recovery.
+5. restore the older API and worker only after the guard succeeds. Do not down-migrate `0079`
+   through `0083`; preserve the expanded schema for a forward recovery.
 
 Do not add `bookings.read` or `bookings.details.read` to
 `DIRECT_VIVA_CONTRACT_READY_OPERATIONS`; the fixed read-job chain is the only approved browser

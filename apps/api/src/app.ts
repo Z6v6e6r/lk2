@@ -54,6 +54,7 @@ import type {
 import {
   DIRECT_VIVA_READ_OPERATIONS,
   isValidIdempotencyKey,
+  profilePhotoDeliveryUrl,
   type ClientPlatform,
 } from '@phub/domain';
 import { homeBaseSchema, normalizeHomeBaseFreshness, type HomeBase } from '@phub/home-projection';
@@ -283,8 +284,10 @@ export interface BuildAppOptions {
         ProfileSummaryRepository,
         | 'getDisplayNames'
         | 'getLevelValues'
+        | 'getPhotoDeliveryState'
         | 'reserveClientAssistedPhoto'
         | 'finalizeClientAssistedPhoto'
+        | 'removeClientAssistedPhoto'
       >
     >;
   readonly profilePhotoMediaStore?: ProfilePhotoMediaStore;
@@ -752,6 +755,20 @@ export async function buildApp(options: BuildAppOptions) {
             })
         : undefined,
       userRuntimeCapabilities,
+      options.profilePhotoMediaRepository?.getPhotoDeliveryState
+        ? async (tenantId, userId) => {
+            const state = await options.profilePhotoMediaRepository?.getPhotoDeliveryState?.(
+              tenantId,
+              userId,
+            );
+            return state
+              ? {
+                  avatarUrl: profilePhotoDeliveryUrl(tenantId, state.deliveryId),
+                  syncedAt: state.syncedAt,
+                }
+              : undefined;
+          }
+        : undefined,
     );
   }
 
@@ -953,14 +970,18 @@ export async function buildApp(options: BuildAppOptions) {
     ...(options.exerciseRecommendationSource && bookingRecommendationAuthService
       ? {
           getExerciseAccessToken: async (input: {
+            readonly tenantKey: string;
             readonly tenantId: string;
             readonly userId: string;
+            readonly sessionId: string;
             readonly correlationId: string;
           }) =>
             (
               await bookingRecommendationAuthService.issueVivaAccessToken({
+                tenantKey: input.tenantKey,
                 tenantId: input.tenantId,
                 userId: input.userId,
+                sessionId: input.sessionId,
                 correlationId: input.correlationId,
               })
             ).accessToken,

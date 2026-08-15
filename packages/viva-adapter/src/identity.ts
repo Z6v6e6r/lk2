@@ -6,7 +6,8 @@ import {
   type IdentityProviderPort,
   type PhoneVerificationResult,
   type VerifiedExternalIdentity,
-  type VivaOAuthIdentityResolution,
+  type VivaOAuthExchangeResult,
+  type VivaOAuthIdentityMode,
   type VivaOAuthProvider,
   type VivaOAuthProviderPort,
 } from '@phub/auth';
@@ -58,6 +59,16 @@ export interface VivaIdentityMetric {
   readonly durationMs: number;
   readonly circuitState: 'closed' | 'open';
 }
+
+type ResolvedOAuthIdentity =
+  | {
+      readonly identity: VerifiedExternalIdentity;
+      readonly identityResolution: 'CANONICAL_PROFILE';
+    }
+  | {
+      readonly identity: Pick<VerifiedExternalIdentity, 'issuer' | 'subject'>;
+      readonly identityResolution: 'EXISTING_SUBJECT';
+    };
 
 type VivaIdentityMetricInput = Omit<VivaIdentityMetric, 'durationMs' | 'circuitState'>;
 
@@ -311,10 +322,8 @@ export class VivaIdentityProvider implements IdentityProviderPort, VivaOAuthProv
     accessToken: string,
     providerTenantKey: string,
     correlationId: string,
-  ): Promise<{
-    readonly identity: VerifiedExternalIdentity;
-    readonly identityResolution: VivaOAuthIdentityResolution;
-  }> {
+    identityMode: VivaOAuthIdentityMode,
+  ): Promise<ResolvedOAuthIdentity> {
     const startedAt = Date.now();
     let payload: JWTPayload;
     try {
@@ -331,6 +340,15 @@ export class VivaIdentityProvider implements IdentityProviderPort, VivaOAuthProv
       throw new VivaOAuthStageError('access_token');
     }
     this.emit({ operation: 'jwt_verify', outcome: 'success', correlationId }, startedAt);
+    if (identityMode === 'RECOVERY_SUBJECT_ONLY') {
+      return {
+        identity: {
+          issuer: this.issuer,
+          subject: payload.sub,
+        },
+        identityResolution: 'EXISTING_SUBJECT',
+      };
+    }
     let profile: Awaited<ReturnType<VivaIdentityProvider['resolveVivaProfile']>>;
     try {
       profile = await this.resolveVivaProfile(accessToken, providerTenantKey, correlationId);
@@ -340,17 +358,10 @@ export class VivaIdentityProvider implements IdentityProviderPort, VivaOAuthProv
         error instanceof VivaProfileReadError &&
         error.status === 403
       ) {
-        const displayName =
-          stringClaim(payload, ['name', 'preferred_username']) ||
-          [stringClaim(payload, ['given_name']), stringClaim(payload, ['family_name'])]
-            .filter(Boolean)
-            .join(' ') ||
-          'Игрок ПадлхАБ';
         return {
           identity: {
             issuer: this.issuer,
             subject: payload.sub,
-            displayName,
           },
           identityResolution: 'EXISTING_SUBJECT',
         };
@@ -412,14 +423,8 @@ export class VivaIdentityProvider implements IdentityProviderPort, VivaOAuthProv
     readonly providerTenantKey: string;
     readonly redirectUri: string;
     readonly correlationId: string;
-  }): Promise<{
-    readonly identity: VerifiedExternalIdentity;
-    readonly identityResolution: VivaOAuthIdentityResolution;
-    readonly accessToken: string;
-    readonly accessExpiresIn?: number;
-    readonly refreshToken: string;
-    readonly refreshExpiresIn?: number;
-  }> {
+    readonly identityMode: VivaOAuthIdentityMode;
+  }): Promise<VivaOAuthExchangeResult> {
     const startedAt = Date.now();
     this.ensureAvailable();
     let response: Response;
@@ -518,6 +523,7 @@ export class VivaIdentityProvider implements IdentityProviderPort, VivaOAuthProv
         tokens.access_token,
         input.providerTenantKey,
         input.correlationId,
+        input.identityMode,
       );
     } catch (error) {
       const stageError = error instanceof VivaOAuthStageError ? error : undefined;
@@ -533,19 +539,19 @@ export class VivaIdentityProvider implements IdentityProviderPort, VivaOAuthProv
       );
       throw new IdentityProviderError('AUTH_PROVIDER_UNAVAILABLE');
     }
-    const { identity, identityResolution } = resolvedIdentity;
     this.emit(
       { operation: 'oauth_exchange', outcome: 'success', status: response.status },
       startedAt,
     );
-    return {
-      identity,
-      identityResolution,
+    const exchangedTokens = {
       accessToken: tokens.access_token,
       ...(tokens.expires_in ? { accessExpiresIn: tokens.expires_in } : {}),
       refreshToken: tokens.refresh_token,
       ...(tokens.refresh_expires_in ? { refreshExpiresIn: tokens.refresh_expires_in } : {}),
     };
+    return resolvedIdentity.identityResolution === 'CANONICAL_PROFILE'
+      ? { ...exchangedTokens, ...resolvedIdentity }
+      : { ...exchangedTokens, ...resolvedIdentity };
   }
 
   public async refreshUserDelegation(input: {

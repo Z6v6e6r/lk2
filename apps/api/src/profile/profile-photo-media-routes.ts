@@ -22,6 +22,7 @@ async function verifyProfilePhotoGrant(input: {
   readonly token: string | undefined;
   readonly tenantId: string;
   readonly userId: string;
+  readonly sessionId: string;
   readonly issuer: string;
   readonly audience: string;
   readonly secret: string;
@@ -37,6 +38,7 @@ async function verifyProfilePhotoGrant(input: {
       verified.protectedHeader.typ !== 'phub-profile-photo-grant+jwt' ||
       verified.payload.sub !== input.userId ||
       verified.payload.tenantId !== input.tenantId ||
+      verified.payload.sid !== input.sessionId ||
       verified.payload.scope !== 'profile.photo.sync' ||
       typeof verified.payload.jti !== 'string' ||
       !UUID_PATTERN.test(verified.payload.jti) ||
@@ -71,7 +73,10 @@ export function registerProfilePhotoMediaRoutes(
   options: {
     readonly repository?: Pick<ProfileSummaryRepository, 'getPhotoObjectKey'> &
       Partial<
-        Pick<ProfileSummaryRepository, 'reserveClientAssistedPhoto' | 'finalizeClientAssistedPhoto'>
+        Pick<
+          ProfileSummaryRepository,
+          'reserveClientAssistedPhoto' | 'finalizeClientAssistedPhoto' | 'removeClientAssistedPhoto'
+        >
       >;
     readonly store?: ProfilePhotoMediaStore;
     readonly maxBytes: number;
@@ -94,7 +99,8 @@ export function registerProfilePhotoMediaRoutes(
       reply.header('Cache-Control', 'private, no-store');
       const tenantId = request.tenantId;
       const userId = request.padlHubClaims?.sub;
-      if (!tenantId || !userId) {
+      const sessionId = request.padlHubClaims?.sid;
+      if (!tenantId || !userId || !sessionId) {
         return sendApiError(request, reply, 401, 'AUTH_REQUIRED', 'Требуется авторизация.');
       }
       if (!options.clientSyncEnabled) {
@@ -126,6 +132,7 @@ export function registerProfilePhotoMediaRoutes(
             : undefined,
         tenantId,
         userId,
+        sessionId,
         issuer: options.grantIssuer,
         audience: options.grantAudience,
         secret: options.grantSecret,
@@ -247,6 +254,107 @@ export function registerProfilePhotoMediaRoutes(
           503,
           'PROFILE_PHOTO_STORAGE_UNAVAILABLE',
           'Хранилище аватаров временно недоступно.',
+        );
+      }
+    },
+  );
+
+  app.delete(
+    '/user/api/v1/:tenantKey/profile/photo',
+    { preHandler: [...options.commandHandlers] },
+    async (request, reply) => {
+      reply.header('Cache-Control', 'private, no-store');
+      const tenantId = request.tenantId;
+      const userId = request.padlHubClaims?.sub;
+      const sessionId = request.padlHubClaims?.sid;
+      if (!tenantId || !userId || !sessionId) {
+        return sendApiError(request, reply, 401, 'AUTH_REQUIRED', 'Требуется авторизация.');
+      }
+      if (!options.clientSyncEnabled) {
+        return sendApiError(
+          request,
+          reply,
+          503,
+          'PROFILE_PHOTO_SYNC_DISABLED',
+          'Синхронизация аватара ещё не включена.',
+        );
+      }
+      if (!options.repository?.removeClientAssistedPhoto) {
+        return sendApiError(
+          request,
+          reply,
+          503,
+          'PROFILE_PHOTO_SYNC_UNAVAILABLE',
+          'Удаление аватара временно недоступно.',
+        );
+      }
+      const grant = await verifyProfilePhotoGrant({
+        token:
+          typeof request.headers['x-profile-photo-grant'] === 'string'
+            ? request.headers['x-profile-photo-grant']
+            : undefined,
+        tenantId,
+        userId,
+        sessionId,
+        issuer: options.grantIssuer,
+        audience: options.grantAudience,
+        secret: options.grantSecret,
+      });
+      if (!grant) {
+        return sendApiError(
+          request,
+          reply,
+          403,
+          'PROFILE_PHOTO_GRANT_REQUIRED',
+          'Разрешение на синхронизацию аватара отсутствует или истекло.',
+        );
+      }
+      const observedAt = new Date();
+      try {
+        const result = await options.repository.removeClientAssistedPhoto({
+          tenantId,
+          userId,
+          idempotencyKey: request.headers['idempotency-key'] as string,
+          grantId: grant.grantId,
+          grantIssuedAt: grant.issuedAt,
+          observedAt: observedAt.toISOString(),
+          expiresAt: new Date(
+            observedAt.getTime() + options.previousObjectRetentionSeconds * 1_000,
+          ).toISOString(),
+          previousObjectRetentionSeconds: options.previousObjectRetentionSeconds,
+          correlationId: request.id,
+        });
+        reply.status(result.replayed ? 200 : 201);
+        return result;
+      } catch (error) {
+        if (error instanceof ProfilePhotoIdempotencyConflictError) {
+          return sendApiError(
+            request,
+            reply,
+            409,
+            'PROFILE_PHOTO_IDEMPOTENCY_CONFLICT',
+            'Этот Idempotency-Key уже использован для другой команды.',
+          );
+        }
+        if (error instanceof ProfilePhotoGrantStaleError) {
+          return sendApiError(
+            request,
+            reply,
+            409,
+            'PROFILE_PHOTO_GRANT_STALE',
+            'Получено устаревшее разрешение на удаление аватара.',
+          );
+        }
+        request.log.error(
+          { error, tenantId, userId },
+          'client-assisted profile photo delete failed',
+        );
+        return sendApiError(
+          request,
+          reply,
+          503,
+          'PROFILE_PHOTO_STORAGE_UNAVAILABLE',
+          'Удаление аватара временно недоступно.',
         );
       }
     },

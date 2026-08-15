@@ -48,6 +48,7 @@ export interface UpsertExternalUserInput {
 
 export interface ResolveExistingExternalUserInput {
   readonly tenantId: string;
+  readonly provider: TenantAuthProvider;
   readonly issuer: string;
   readonly subject: string;
   readonly correlationId: string;
@@ -237,7 +238,7 @@ async function writeSecurityAudit(
 
 async function selectExternalUserForUpdate(
   client: PoolClient,
-  input: Pick<UpsertExternalUserInput, 'tenantId' | 'issuer' | 'subject'>,
+  input: Pick<UpsertExternalUserInput, 'tenantId' | 'provider' | 'issuer' | 'subject'>,
 ): Promise<AuthUser | undefined> {
   const row = await queryOne<AuthUserRow>(
     client,
@@ -252,10 +253,14 @@ async function selectExternalUserForUpdate(
         on u.tenant_id = e.tenant_id and u.id = e.user_id
       join profile.user_summaries p
         on p.tenant_id = u.tenant_id and p.user_id = u.id
-      where e.tenant_id = $1 and e.issuer = $2 and e.subject = $3
+      where e.tenant_id = $1
+        and e.provider = $2
+        and e.issuer = $3
+        and e.subject = $4
+        and u.status = 'ACTIVE'
       for update of e, u, p
     `,
-    [input.tenantId, input.issuer, input.subject],
+    [input.tenantId, input.provider, input.issuer, input.subject],
   );
   return row ? mapAuthUser(row) : undefined;
 }

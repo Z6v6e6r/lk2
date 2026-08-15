@@ -35,6 +35,19 @@ claims, or accept a Viva profile ID from the browser. An unknown subject fails w
 reconciliation must establish the link first. The resulting short-lived access-token is handed to
 the browser as described below, so the allowlisted profile read can run directly.
 
+The authenticated reauthorization flow uses the same verified-subject rule without making the
+server-side End User profile request. Its one-time OAuth state is bound to the initiating PadlHub
+tenant, user, active refresh-session family and browser. After token signature, issuer,
+audience/client and subject
+verification, the callback must resolve that exact `(tenant_id, issuer, subject)` mapping to the
+same PadlHub user recorded in the recovery state. An unknown mapping returns
+`AUTH_IDENTITY_LINK_REQUIRED`; a mapping to another user returns `AUTH_IDENTITY_CONFLICT`. In either
+case no delegation or PadlHub refresh session is written. The active family and identity mapping
+are rechecked in the same PostgreSQL transaction that replaces the encrypted delegation, closing
+logout and identity-remap races. Successful recovery creates only the user-bound Viva handoff: it
+does not create, rotate or set a PadlHub refresh session/cookie. Initial sign-in continues to use
+the canonical-profile flow (or the separately gated existing-subject bootstrap above).
+
 The successful callback may also create or rotate a **Viva user delegation**. It is not a PadlHub
 session and never changes the public PadlHub user UUID.
 
@@ -91,7 +104,27 @@ the authenticated, idempotent PadlHub photo command using a short-lived one-time
 to the same tenant and user as the delegated access token. PadlHub revalidates and converts the bytes to
 WebP, persists only its own object mapping and returns a stable first-party URL. The provider URL,
 provider ID and raw profile payload are never relayed or persisted. Media failure does not invalidate
-the already-normalized identity result. Another player's profile always stays behind the PadlHub API. The Home surface
+the already-normalized identity result. The delegated-access response may also carry the current
+same-user PadlHub photo delivery URL and its server synchronization timestamp. This optional media
+metadata is built from the tenant-scoped object mapping, never from a client or provider URL, and is
+used only as the avatar of that direct self-profile result. An explicit Viva `photo: null` is an
+authoritative removal observation: the browser immediately stops rendering the stable mapping and
+sends an idempotent, tenant/user/session-bound tombstone command using the one-time media grant.
+PadlHub atomically clears the profile summary and delivery mapping, advances the observation
+watermark, audits the command and queues the former immutable object for bounded garbage collection.
+The browser obtains a fresh media grant before the direct profile observation. Tombstones and
+uploads are ordered by that signed grant's issuance epoch, not by API receipt time, so a delayed
+older null observation cannot erase a mapping produced under a newer grant. If the tombstone is
+rejected as stale, the browser performs at most one bounded fresh-grant plus fresh-provider-read
+attempt and never attaches a new grant to the old null result. Once a tombstone is accepted, every
+upload grant issued before its signed epoch is stale and cannot resurrect the deleted mapping.
+The former delivery URL therefore returns `404` after commit. An omitted or invalid Viva photo field
+is treated as unavailable metadata, not as removal; it may preserve a fresh in-memory mapping but a
+mapping older than 24 hours is not displayed without an authoritative source. A present allowlisted
+photo URL revalidates an old mapping through the same bounded one-time-grant command. Public delivery
+caches can retain an already-fetched response for the configured five-minute freshness plus
+ten-minute stale-revalidation window; this bounded disclosure window is accepted. Another player's
+profile always stays behind the PadlHub API. The Home surface
 composes the separately routed self-profile aggregate with the `HomeBase` partial recovery contract
 defined by ADR 0019.
 
@@ -125,6 +158,9 @@ command. Subscription reads remain outside that exception.
 6. If the Viva refresh-token is expired, revoked or lacks the required scope, PadlHub returns
    `VIVA_REAUTH_REQUIRED`. The PadlHub session may remain valid, but Viva-primary operations are
    blocked until the user signs in with Viva again.
+   Recovery state uses the isolated `phub:auth:v3:viva-oauth:` namespace, is bound to the active
+   PadlHub session family, and cannot be completed by an older node using pre-recovery semantics.
+   A wrong browser or tenant does not consume the legitimate one-time state.
 7. Logout deletes/revokes the local delegation and the PadlHub refresh session. A security incident can
    revoke all delegations for one user or tenant without deleting identities or historical sessions.
 

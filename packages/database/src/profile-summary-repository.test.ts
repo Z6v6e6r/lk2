@@ -11,6 +11,41 @@ const firstUserId = '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca';
 const secondUserId = 'bd35543d-c565-443a-bd3d-eea68eb2fbe6';
 
 describe('profile summary repository', () => {
+  it('returns the current stable photo delivery state without exposing its source URL', async () => {
+    const query = vi.fn((text: string, values?: readonly unknown[]) => {
+      if (
+        text === 'begin' ||
+        text === 'commit' ||
+        text === 'rollback' ||
+        text.includes("set_config('app.tenant_id'")
+      ) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('select delivery_id, synced_at')) {
+        expect(values).toEqual([tenantId, firstUserId]);
+        expect(text).not.toContain('source_url');
+        return Promise.resolve({
+          rows: [
+            {
+              delivery_id: '33333333-3333-4333-8333-333333333333',
+              synced_at: '2026-08-14T10:00:00.000Z',
+            },
+          ],
+          rowCount: 1,
+        });
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const repository = createProfileSummaryRepository({
+      connect: vi.fn().mockResolvedValue({ query, release: vi.fn() }),
+    } as never);
+
+    await expect(repository.getPhotoDeliveryState(tenantId, firstUserId)).resolves.toEqual({
+      deliveryId: '33333333-3333-4333-8333-333333333333',
+      syncedAt: '2026-08-14T10:00:00.000Z',
+    });
+  });
+
   it('rejects an old browser grant after a newer provider removal tombstone', async () => {
     const query = vi.fn((text: string) => {
       if (
@@ -54,6 +89,144 @@ describe('profile summary repository', () => {
     ).rejects.toBeInstanceOf(ProfilePhotoGrantStaleError);
   });
 
+  it('rejects a delayed null observation made under an older grant than the current mapping', async () => {
+    const objectKey = `profile-photos/${tenantId}/${firstUserId}/${'a'.repeat(64)}.webp`;
+    const query = vi.fn((text: string) => {
+      if (
+        text === 'begin' ||
+        text === 'commit' ||
+        text === 'rollback' ||
+        text.includes("set_config('app.tenant_id'") ||
+        text.includes('pg_advisory_xact_lock')
+      ) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('from integration.profile_photo_client_commands')) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('select delivery_id, object_key, content_sha256')) {
+        return Promise.resolve({
+          rows: [
+            {
+              delivery_id: '33333333-3333-4333-8333-333333333333',
+              object_key: objectKey,
+              content_sha256: 'a'.repeat(64),
+              source_url: null,
+              synced_at: '2026-08-14T10:00:00.500Z',
+              client_grant_issued_at: '2026-08-14T10:00:00.500Z',
+            },
+          ],
+          rowCount: 1,
+        });
+      }
+      if (text.includes('from integration.profile_photo_observation_watermarks')) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const repository = createProfileSummaryRepository({
+      connect: vi.fn().mockResolvedValue({ query, release: vi.fn() }),
+    } as never);
+
+    await expect(
+      repository.removeClientAssistedPhoto?.({
+        tenantId,
+        userId: firstUserId,
+        idempotencyKey: 'delayed-profile-photo-delete',
+        grantId: '33333333-3333-4333-8333-333333333333',
+        grantIssuedAt: '2026-08-14T10:00:00.000Z',
+        observedAt: '2026-08-14T10:00:01.000Z',
+        expiresAt: '2026-08-14T11:00:00.000Z',
+        previousObjectRetentionSeconds: 3_600,
+        correlationId: 'delayed-profile-photo-delete',
+      }),
+    ).rejects.toBeInstanceOf(ProfilePhotoGrantStaleError);
+    expect(
+      query.mock.calls.some(([text]) =>
+        String(text).includes('delete from integration.user_profile_photo_sync'),
+      ),
+    ).toBe(false);
+  });
+
+  it('accepts a null observation with a newer grant and stores the signed grant watermark', async () => {
+    const objectKey = `profile-photos/${tenantId}/${firstUserId}/${'a'.repeat(64)}.webp`;
+    const query = vi.fn((text: string, values?: readonly unknown[]) => {
+      if (
+        text === 'begin' ||
+        text === 'commit' ||
+        text === 'rollback' ||
+        text.includes("set_config('app.tenant_id'") ||
+        text.includes('pg_advisory_xact_lock') ||
+        text.includes('insert into audit.audit_log')
+      ) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('from integration.profile_photo_client_commands')) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('select delivery_id, object_key, content_sha256')) {
+        return Promise.resolve({
+          rows: [
+            {
+              delivery_id: '33333333-3333-4333-8333-333333333333',
+              object_key: objectKey,
+              content_sha256: 'a'.repeat(64),
+              source_url: null,
+              synced_at: '2026-08-14T10:00:00.500Z',
+              client_grant_issued_at: '2026-08-14T10:00:00.500Z',
+            },
+          ],
+          rowCount: 1,
+        });
+      }
+      if (text.includes('from integration.profile_photo_observation_watermarks')) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('update profile.user_summaries')) {
+        expect(values).toEqual([tenantId, firstUserId]);
+        expect(text).toContain('photo_url = null');
+        return Promise.resolve({ rows: [], rowCount: 1 });
+      }
+      if (text.includes('delete from integration.user_profile_photo_sync')) {
+        expect(values).toEqual([tenantId, firstUserId]);
+        return Promise.resolve({ rows: [], rowCount: 1 });
+      }
+      if (text.includes('insert into integration.profile_photo_observation_watermarks')) {
+        expect(values?.[2]).toBe('2026-08-14T10:00:02.000Z');
+        return Promise.resolve({ rows: [], rowCount: 1 });
+      }
+      if (text.includes('insert into integration.profile_photo_object_gc')) {
+        expect(values?.[1]).toBe(objectKey);
+        return Promise.resolve({ rows: [], rowCount: 1 });
+      }
+      if (text.includes('insert into integration.profile_photo_client_commands')) {
+        expect(text).toContain("'DELETE'");
+        return Promise.resolve({ rows: [], rowCount: 1 });
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const repository = createProfileSummaryRepository({
+      connect: vi.fn().mockResolvedValue({ query, release: vi.fn() }),
+    } as never);
+
+    await expect(
+      repository.removeClientAssistedPhoto?.({
+        tenantId,
+        userId: firstUserId,
+        idempotencyKey: 'profile-photo-client-delete-test',
+        grantId: '33333333-3333-4333-8333-333333333333',
+        grantIssuedAt: '2026-08-14T10:00:02.000Z',
+        observedAt: '2026-08-14T10:00:03.000Z',
+        expiresAt: '2026-08-14T11:00:00.000Z',
+        previousObjectRetentionSeconds: 3_600,
+        correlationId: 'profile-photo-client-delete-test',
+      }),
+    ).resolves.toEqual({ removed: true, replayed: false });
+    expect(
+      query.mock.calls.some(([text]) => String(text).includes('profile_photo_object_gc')),
+    ).toBe(true);
+  });
+
   it('activates a client-assisted WebP without persisting its provider URL', async () => {
     const objectKey = `profile-photos/${tenantId}/${firstUserId}/${'a'.repeat(64)}.webp`;
     let commandReads = 0;
@@ -83,6 +256,7 @@ describe('profile summary repository', () => {
               ? []
               : [
                   {
+                    command_kind: 'UPSERT',
                     idempotency_key: 'profile-photo-client-sync-test',
                     grant_id: '33333333-3333-4333-8333-333333333333',
                     request_sha256: 'b'.repeat(64),
@@ -165,6 +339,7 @@ describe('profile summary repository', () => {
         return Promise.resolve({
           rows: [
             {
+              command_kind: 'UPSERT',
               idempotency_key: 'profile-photo-client-sync-replay',
               grant_id: '33333333-3333-4333-8333-333333333333',
               request_sha256: 'b'.repeat(64),
@@ -215,6 +390,7 @@ describe('profile summary repository', () => {
         return Promise.resolve({
           rows: [
             {
+              command_kind: 'UPSERT',
               idempotency_key: 'original-key',
               grant_id: '33333333-3333-4333-8333-333333333333',
               request_sha256: 'b'.repeat(64),

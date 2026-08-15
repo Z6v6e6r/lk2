@@ -137,10 +137,47 @@ media_invariants="$(sql "begin transaction read only;
         'integration.profile_photo_client_commands'::regclass,
         'integration.profile_photo_observation_watermarks'::regclass,
         'integration.community_logo_observation_watermarks'::regclass
-      ))::text;
+      ))::text || '|' ||
+    (select count(*)
+      from pg_constraint
+      where conrelid = 'integration.profile_photo_client_commands'::regclass
+        and contype = 'c'
+        and convalidated
+        and conname in (
+          'profile_photo_client_commands_kind_check',
+          'profile_photo_client_commands_payload_check'
+        ))::text || '|' ||
+    (select count(*)
+      from pg_constraint
+      where conrelid = 'integration.profile_photo_client_commands'::regclass
+        and contype = 'c'
+        and (
+          (conname = 'profile_photo_client_commands_kind_check' and
+            translate(lower(pg_get_expr(conbin, conrelid)), E' \n\t()', '') =
+              'command_kind::text=anyarray[''upsert''::charactervarying,''delete''::charactervarying]::text[]') or
+          (conname = 'profile_photo_client_commands_payload_check' and
+            translate(lower(pg_get_expr(conbin, conrelid)), E' \n\t()', '') =
+              'command_kind::text=''upsert''::textandrequest_sha256isnotnullandcontent_sha256isnotnullandobject_keyisnotnullorcommand_kind::text=''delete''::textandrequest_sha256isnullandcontent_sha256isnullandobject_keyisnullandavatar_urlisnull'))::text || '|' ||
+    (select count(*)
+      from pg_attribute
+      where attrelid = 'integration.profile_photo_client_commands'::regclass
+        and not attisdropped
+        and (
+          (attname = 'command_kind' and attnotnull) or
+          (attname in ('request_sha256', 'content_sha256', 'object_key') and not attnotnull)
+        ))::text || '|' ||
+    (select count(*)
+      from pg_attribute attribute
+      join pg_attrdef attribute_default
+        on attribute_default.adrelid = attribute.attrelid
+        and attribute_default.adnum = attribute.attnum
+      where attribute.attrelid = 'integration.profile_photo_client_commands'::regclass
+        and attribute.attname = 'command_kind'
+        and translate(lower(pg_get_expr(attribute_default.adbin, attribute_default.adrelid)), E' \n\t()', '') =
+          '''upsert''::charactervarying')::text;
   commit;")"
-media_invariants="$(printf '%s\n' "$media_invariants" | awk -F '|' 'NF == 6 { print; exit }')"
-test "$media_invariants" = '0|1|3|1|3|3' || fail "media schema, RLS or policy invariants failed ($media_invariants)"
+media_invariants="$(printf '%s\n' "$media_invariants" | awk -F '|' 'NF == 10 { print; exit }')"
+test "$media_invariants" = '0|1|3|1|3|3|2|2|4|1' || fail "media schema, RLS, policy or command-constraint invariants failed ($media_invariants)"
 
-printf 'media_migration_ledger database=%s postgres=%s packaged_migrations=%s reviewed_legacy_aliases=%s invalid_delivery_pairs=0 validated_constraint=1 forced_rls_tables=3 exact_rls_policies=3 total_rls_policies=3 nullable_profile_source=1 status=passed\n' \
+printf 'media_migration_ledger database=%s postgres=%s packaged_migrations=%s reviewed_legacy_aliases=%s invalid_delivery_pairs=0 validated_constraint=1 validated_profile_command_constraints=2 exact_profile_command_constraint_definitions=2 profile_command_column_state=4 profile_command_default=1 forced_rls_tables=3 exact_rls_policies=3 total_rls_policies=3 nullable_profile_source=1 status=passed\n' \
   "$database" "$server_version" "$manifest_count" "$legacy_alias_count"
