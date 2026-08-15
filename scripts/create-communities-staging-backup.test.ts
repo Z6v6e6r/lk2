@@ -33,6 +33,7 @@ afterEach(async () => {
   await Promise.all(
     temporaryDirectories.splice(0).map(async (path) => {
       await chmod(join(path, 'app'), 0o755).catch(() => undefined);
+      await chmod(join(path, 'secrets'), 0o700).catch(() => undefined);
       await rm(path, { recursive: true });
     }),
   );
@@ -43,11 +44,12 @@ describe('Communities staging backup forced command', () => {
     const root = await mkdtemp(join(tmpdir(), 'phub-communities-backup-'));
     temporaryDirectories.push(root);
     const appRoot = join(root, 'app');
+    const secretRoot = join(root, 'secrets');
     const backupRoot = join(root, 'backups');
     const bin = join(root, 'bin');
     const helper = join(root, 'verify-helper.sh');
     const dockerLog = join(root, 'docker.log');
-    await Promise.all([mkdir(appRoot), mkdir(backupRoot), mkdir(bin)]);
+    await Promise.all([mkdir(appRoot), mkdir(secretRoot), mkdir(backupRoot), mkdir(bin)]);
     await Promise.all([
       writeFile(join(appRoot, 'infrastructure.env'), 'POSTGRES_USER=phub\n', 'utf8'),
       writeFile(join(appRoot, 'compose.infrastructure.yaml'), 'services: {}\n', 'utf8'),
@@ -60,6 +62,7 @@ describe('Communities staging backup forced command', () => {
     ]);
     await Promise.all([
       chmod(appRoot, 0o555),
+      chmod(secretRoot, 0o100),
       chmod(join(appRoot, 'infrastructure.env'), 0o444),
       chmod(join(appRoot, 'compose.infrastructure.yaml'), 0o444),
       chmod(join(appRoot, 'release.env'), 0o444),
@@ -148,6 +151,7 @@ esac
       PHUB_BACKUP_ROOT: backupRoot,
       PHUB_POSTGRES_STORAGE_PATH: root,
       PHUB_RESTORE_HELPER: helper,
+      PHUB_SECRET_ROOT: secretRoot,
       PHUB_TEST_DOCKER_LOG: dockerLog,
       SSH_ORIGINAL_COMMAND: originalCommand,
     };
@@ -168,6 +172,18 @@ esac
     expect(retained).toHaveLength(1);
     expect(retained[0]).toMatch(/^postgres-communities-preflight-.*\.dump$/u);
     expect(await readFile(join(backupRoot, retained[0]!), 'utf8')).toBe('synthetic-custom-archive');
+
+    const transitionMarker = join(secretRoot, '.runtime-secret-isolation.transition.json');
+    const logBeforeBlockedTransition = await readFile(dockerLog, 'utf8');
+    await chmod(secretRoot, 0o700);
+    await writeFile(transitionMarker, '{}', 'utf8');
+    await chmod(secretRoot, 0o100);
+    const blockedTransition = await execute([], commandEnvironment).catch((error: Error) => error);
+    expect(blockedTransition).toBeInstanceOf(Error);
+    expect(await readFile(dockerLog, 'utf8')).toBe(logBeforeBlockedTransition);
+    await chmod(secretRoot, 0o700);
+    await rm(transitionMarker);
+    await chmod(secretRoot, 0o100);
 
     const logBeforeMismatch = await readFile(dockerLog, 'utf8');
     const backupRootModeBeforeMismatch = (await stat(backupRoot)).mode & 0o777;

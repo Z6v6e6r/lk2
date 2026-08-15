@@ -50,6 +50,24 @@ validate_readonly_input "$app_root/release.env"
 if [ -e "$app_root/.env" ] || [ -L "$app_root/.env" ]; then
   validate_readonly_input "$app_root/.env"
 fi
+secret_root=${PHUB_SECRET_ROOT:-/etc/phub}
+if [ ! -d "$secret_root" ] || [ -L "$secret_root" ] || [ ! -x "$secret_root" ]; then
+  echo "runtime-secret transition root is not safely inspectable" >&2
+  exit 1
+fi
+for artifact in \
+  "$secret_root/.runtime-secret-isolation.transition.json" \
+  "$secret_root/.runtime-secret-isolation.transition.json.next" \
+  "$secret_root/.runtime-secret-isolation.staging.backup" \
+  "$secret_root/.runtime-secret-isolation.staging.next" \
+  "$secret_root/.runtime-secret-isolation.realtime.next" \
+  "$app_root/.runtime-secret-isolation.compose.backup" \
+  "$app_root/.runtime-secret-isolation.compose.next"; do
+  if [ -e "$artifact" ] || [ -L "$artifact" ]; then
+    echo "unresolved runtime-secret transition blocks Communities staging inspection" >&2
+    exit 1
+  fi
+done
 
 cd "$app_root"
 
@@ -70,7 +88,7 @@ printf 'META|installedRestoreHelperSha|%s\n' "$(sha256sum "$restore_helper" | cu
 docker compose --env-file infrastructure.env -f compose.infrastructure.yaml exec -T postgres \
   sh -ec '
     export PGOPTIONS="-c default_transaction_read_only=on -c statement_timeout=15000 -c lock_timeout=2000 -c search_path=pg_catalog"
-    exec psql -X -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -At
+    exec psql -X -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -qAt
   ' <<'SQL'
 begin transaction isolation level repeatable read read only;
 set local idle_in_transaction_session_timeout = '30s';
