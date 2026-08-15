@@ -1,13 +1,17 @@
 import { createHash } from 'node:crypto';
 
 import {
+  BOOKING_NOTIFICATION_EVENT_TYPES,
   notificationAudienceSelectorSchema,
   renderNotificationTemplate,
   resolveNotificationRecipients,
+  type BookingNotificationSourceEvent,
   type NotificationSourceEvent,
 } from '@phub/notifications';
 import { queryOne } from '@phub/database';
 import type { Pool, QueryResultRow } from 'pg';
+
+import { reconcileBookingReminderSchedules } from './booking-reminder-scheduler.js';
 
 const CONSUMER_NAME = 'notification-intent-projector-v1';
 
@@ -37,8 +41,26 @@ interface PreferenceRow extends QueryResultRow {
   readonly enabled: boolean;
 }
 
+interface BookingNotificationFenceRow extends QueryResultRow {
+  readonly lifecycle_revision: string;
+  readonly lifecycle_event_type: LifecycleBookingNotificationEventType;
+  readonly lifecycle_fingerprint: string;
+  readonly reminder_hours_24_fingerprint: string | null;
+  readonly reminder_hours_2_fingerprint: string | null;
+}
+
+type LifecycleBookingNotificationEventType =
+  'booking.confirmed.v1' | 'booking.changed.v1' | 'booking.cancelled.v1';
+
+type BookingFenceOutcome = 'accepted' | 'duplicate' | 'stale' | 'suppressed' | 'revision_conflict';
+
+const bookingProjectionTails = new Map<string, Promise<void>>();
+
 export type NotificationProjectionResult =
   | { readonly outcome: 'duplicate' }
+  | { readonly outcome: 'stale' }
+  | { readonly outcome: 'suppressed' }
+  | { readonly outcome: 'revision_conflict' }
   | { readonly outcome: 'disabled' }
   | {
       readonly outcome: 'processed';
@@ -52,7 +74,152 @@ function dedupeKey(eventId: string, ruleId: string, recipientUserId: string): st
   return createHash('sha256').update(`${eventId}:${ruleId}:${recipientUserId}`).digest('hex');
 }
 
+function isBookingNotificationEvent(
+  event: NotificationSourceEvent,
+): event is BookingNotificationSourceEvent {
+  return BOOKING_NOTIFICATION_EVENT_TYPES.includes(
+    event.type as (typeof BOOKING_NOTIFICATION_EVENT_TYPES)[number],
+  );
+}
+
+function isLifecycleBookingNotificationEvent(
+  event: BookingNotificationSourceEvent,
+): event is BookingNotificationSourceEvent & {
+  readonly type: LifecycleBookingNotificationEventType;
+} {
+  return event.type !== 'booking.reminder.due.v1';
+}
+
+function bookingNotificationFingerprint(event: BookingNotificationSourceEvent): string {
+  const payload = event.payload as Readonly<Record<string, unknown>>;
+  const normalizedPayload = Object.fromEntries(
+    Object.entries(payload)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, value]) => [
+        key,
+        Array.isArray(value) && (key === 'recipientUserIds' || key === 'changedFields')
+          ? [...(value as readonly string[])].sort()
+          : value,
+      ]),
+  );
+  return createHash('sha256')
+    .update(JSON.stringify({ type: event.type, payload: normalizedPayload }))
+    .digest('hex');
+}
+
+async function serializeBookingProjection<T>(
+  tenantId: string,
+  bookingId: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const key = `${tenantId}:${bookingId}`;
+  const prior = bookingProjectionTails.get(key);
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  bookingProjectionTails.set(key, current);
+  try {
+    await prior;
+    return await operation();
+  } finally {
+    release();
+    if (bookingProjectionTails.get(key) === current) bookingProjectionTails.delete(key);
+  }
+}
+
+async function applyBookingNotificationFence(options: {
+  readonly client: { query: Pool['query'] };
+  readonly event: BookingNotificationSourceEvent;
+}): Promise<BookingFenceOutcome> {
+  const { client, event } = options;
+  const fingerprint = bookingNotificationFingerprint(event);
+  const revision = BigInt(event.payload.revision);
+  await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
+    `${event.tenantId}:${event.aggregateId}`,
+  ]);
+  const existing = await client.query<BookingNotificationFenceRow>(
+    `select lifecycle_revision::text as lifecycle_revision, lifecycle_event_type,
+            lifecycle_fingerprint, reminder_hours_24_fingerprint, reminder_hours_2_fingerprint
+       from notifications.booking_notification_projection_fences
+      where tenant_id = $1 and booking_id = $2
+      for update`,
+    [event.tenantId, event.aggregateId],
+  );
+  const fence = existing.rows[0];
+
+  if (isLifecycleBookingNotificationEvent(event)) {
+    if (!fence) {
+      await client.query(
+        `insert into notifications.booking_notification_projection_fences (
+           tenant_id, booking_id, lifecycle_revision, lifecycle_event_type, lifecycle_fingerprint
+         ) values ($1, $2, $3::numeric, $4, $5)`,
+        [event.tenantId, event.aggregateId, event.payload.revision, event.type, fingerprint],
+      );
+      return 'accepted';
+    }
+    const currentRevision = BigInt(fence.lifecycle_revision);
+    if (revision < currentRevision) return 'stale';
+    if (revision === currentRevision) {
+      return fence.lifecycle_event_type === event.type &&
+        fence.lifecycle_fingerprint === fingerprint
+        ? 'duplicate'
+        : 'revision_conflict';
+    }
+    await client.query(
+      `update notifications.booking_notification_projection_fences
+          set lifecycle_revision = $3::numeric,
+              lifecycle_event_type = $4,
+              lifecycle_fingerprint = $5,
+              reminder_hours_24_fingerprint = null,
+              reminder_hours_2_fingerprint = null,
+              updated_at = now()
+        where tenant_id = $1 and booking_id = $2`,
+      [event.tenantId, event.aggregateId, event.payload.revision, event.type, fingerprint],
+    );
+    return 'accepted';
+  }
+
+  if (!fence || revision > BigInt(fence.lifecycle_revision)) {
+    throw new Error('BOOKING_REMINDER_AHEAD_OF_LIFECYCLE');
+  }
+  if (revision < BigInt(fence.lifecycle_revision)) return 'stale';
+  if (fence.lifecycle_event_type === 'booking.cancelled.v1') return 'suppressed';
+
+  const fingerprintColumn =
+    event.payload.reminderKind === 'HOURS_24'
+      ? 'reminder_hours_24_fingerprint'
+      : 'reminder_hours_2_fingerprint';
+  const currentFingerprint = fence[fingerprintColumn];
+  if (currentFingerprint === fingerprint) return 'duplicate';
+  if (currentFingerprint) return 'revision_conflict';
+  await client.query(
+    `update notifications.booking_notification_projection_fences
+        set ${fingerprintColumn} = $3,
+            updated_at = now()
+      where tenant_id = $1 and booking_id = $2`,
+    [event.tenantId, event.aggregateId, fingerprint],
+  );
+  return 'accepted';
+}
+
 export async function applyNotificationSourceEvent(options: {
+  readonly pool: Pool;
+  readonly event: NotificationSourceEvent;
+  readonly webPush?: {
+    readonly appId: string;
+    readonly environment: 'SANDBOX' | 'PRODUCTION';
+  };
+}): Promise<NotificationProjectionResult> {
+  if (isBookingNotificationEvent(options.event)) {
+    return serializeBookingProjection(options.event.tenantId, options.event.aggregateId, () =>
+      applyNotificationSourceEventInTransaction(options),
+    );
+  }
+  return applyNotificationSourceEventInTransaction(options);
+}
+
+async function applyNotificationSourceEventInTransaction(options: {
   readonly pool: Pool;
   readonly event: NotificationSourceEvent;
   readonly webPush?: {
@@ -75,6 +242,29 @@ export async function applyNotificationSourceEvent(options: {
     if (inbox.rowCount === 0) {
       await client.query('commit');
       return { outcome: 'duplicate' };
+    }
+
+    if (isBookingNotificationEvent(event)) {
+      const fenceOutcome = await applyBookingNotificationFence({ client, event });
+      if (fenceOutcome !== 'accepted') {
+        if (fenceOutcome === 'revision_conflict') {
+          // Keep the inbox claim uncommitted so a worker crash before RabbitMQ dead-lettering
+          // cannot turn the conflict into an acknowledged event-id replay.
+          await client.query('rollback');
+          return { outcome: fenceOutcome };
+        }
+        await client.query(
+          `update audit.inbox_events
+              set processed_at = now()
+            where consumer_name = $1 and event_id = $2`,
+          [CONSUMER_NAME, event.id],
+        );
+        await client.query('commit');
+        return { outcome: fenceOutcome };
+      }
+      if (isLifecycleBookingNotificationEvent(event)) {
+        await reconcileBookingReminderSchedules({ client, event });
+      }
     }
 
     const runtime = await client.query<RuntimeRow>(

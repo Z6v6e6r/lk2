@@ -57,6 +57,126 @@ groups:
           description: Backlog alerts may be blind; inspect PostgreSQL, RabbitMQ and OTLP connectivity.
           runbook: docs/runbooks/chats-notifications-moderation.md
 
+      - alert: PadlHubPushDeliveryDelayed
+        expr: phub_worker_notifications_push_delivery_oldest_due_age_seconds > 60 and phub_worker_notifications_push_delivery_oldest_due_age_seconds <= 300
+        for: 5m
+        labels:
+          severity: p2
+          component: worker
+        annotations:
+          summary: PadlHub push delivery is delayed
+          description: The oldest due push delivery has exceeded the one minute rollout budget.
+          runbook: docs/runbooks/chats-notifications-moderation.md
+
+      - alert: PadlHubPushDeliveryStalled
+        expr: phub_worker_notifications_push_delivery_oldest_due_age_seconds > 300
+        for: 2m
+        labels:
+          severity: p1
+          component: worker
+        annotations:
+          summary: PadlHub push delivery is stalled
+          description: A due push delivery has remained pending for more than five minutes.
+          runbook: docs/runbooks/chats-notifications-moderation.md
+
+      - alert: PadlHubPushDeliveriesDead
+        expr: phub_worker_notifications_push_deliveries_dead > 0
+        for: 1m
+        labels:
+          severity: p1
+          component: worker
+        annotations:
+          summary: PadlHub has terminal push delivery failures
+          description: Dead push deliveries require stable-error analysis before rollout expansion.
+          runbook: docs/runbooks/chats-notifications-moderation.md
+
+      - alert: PadlHubPushPolicySuspended
+        expr: phub_worker_notifications_push_deliveries_policy_suspended > 0
+        for: 5m
+        labels:
+          severity: p2
+          component: worker
+        annotations:
+          summary: PadlHub Web Push deliveries are policy-suspended
+          description: Pending deliveries are retained behind a reversible endpoint policy suspension.
+          runbook: docs/runbooks/chats-notifications-moderation.md
+
+      - alert: PadlHubWebPushCycleFailed
+        expr: phub_worker_web_push_cycle_success == 0
+        for: 2m
+        labels:
+          severity: p1
+          component: worker
+        annotations:
+          summary: PadlHub Web Push cycle is degraded
+          description: A global or tenant-local Web Push cycle failure has persisted for two minutes.
+          runbook: docs/runbooks/chats-notifications-moderation.md
+
+      - alert: PadlHubWebPushTenantFailures
+        expr: increase(phub_worker_web_push_tenant_failures_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: p2
+          component: worker
+        annotations:
+          summary: PadlHub Web Push tenant delivery failed
+          description: At least one isolated tenant delivery failed in the last five minutes.
+          runbook: docs/runbooks/chats-notifications-moderation.md
+
+      - alert: PadlHubWebPushCircuitOpen
+        expr: sum by (environment) (increase(phub_worker_web_push_provider_outcomes_total{outcome="WEB_PUSH_CIRCUIT_OPEN"}[5m])) > 0
+        for: 1m
+        labels:
+          severity: p1
+          component: worker
+        annotations:
+          summary: PadlHub Web Push provider circuit is open
+          description: Provider calls are being suppressed after bounded Web Push failures; keep the transport disabled for expansion and inspect the provider boundary.
+          runbook: docs/runbooks/chats-notifications-moderation.md
+
+      - alert: PadlHubBookingReminderDelayed
+        expr: phub_worker_notifications_booking_reminder_oldest_due_age_seconds > 60
+        for: 2m
+        labels:
+          severity: p2
+          component: worker
+        annotations:
+          summary: PadlHub booking reminder scheduler is delayed
+          description: A reminder for an enabled tenant has remained due for more than one minute.
+          runbook: docs/runbooks/chats-notifications-moderation.md
+
+      - alert: PadlHubBookingReminderSchedulerFailed
+        expr: |
+          (
+            max by (service_instance_id) (phub_worker_booking_reminder_scheduler_success)
+              and on (service_instance_id)
+              (
+                max by (service_instance_id) (phub_worker_booking_reminder_scheduler_heartbeat_unixtime)
+                  > time() - 60
+              )
+          ) == 0
+          or time() - max(phub_worker_booking_reminder_scheduler_heartbeat_unixtime) > 60
+          or increase(phub_worker_booking_reminder_failures_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: p1
+          component: worker
+        annotations:
+          summary: PadlHub booking reminder scheduler is failing
+          description: The default-off scheduler has a current or recent global or tenant-local cycle failure.
+          runbook: docs/runbooks/chats-notifications-moderation.md
+
+      - alert: PadlHubBookingRemindersMissed
+        expr: phub_worker_notifications_booking_reminder_latest_missed_unixtime > 0 and (time() - phub_worker_notifications_booking_reminder_latest_missed_unixtime) < 300
+        for: 1m
+        labels:
+          severity: p1
+          component: worker
+        annotations:
+          summary: PadlHub booking reminders expired without emission
+          description: At least one reminder crossed its approved lateness boundary and was terminally suppressed.
+          runbook: docs/runbooks/chats-notifications-moderation.md
+
       - alert: PadlHubCommunityMediaScanRetries
         expr: increase(phub_worker_communities_media_scan_retried_total[15m]) > 2
         for: 5m
@@ -122,6 +242,149 @@ groups:
           summary: Community media garbage collection exhausted bounded attempts
           description: Investigate the terminal reason and use the audited CUP replay command only after recovery.
           runbook: docs/runbooks/community-load-readiness.md
+
+  - name: padlhub-realtime-reliability
+    interval: 15s
+    rules:
+      - alert: PadlHubRealtimeHeartbeatStale
+        expr: time() - max(phub_realtime_process_heartbeat_unixtime) > 60
+        for: 1m
+        labels:
+          severity: p1
+          component: realtime
+        annotations:
+          summary: PadlHub realtime process heartbeat is stale
+          description: No realtime process has exported a fresh timestamp heartbeat for more than one minute; cached OTLP gauges are not accepted as liveness.
+          runbook: docs/runbooks/chats-notifications-moderation.md
+
+      - alert: PadlHubRealtimeMetricsAbsent
+        expr: absent_over_time(phub_realtime_process_heartbeat_unixtime[2m])
+        for: 1m
+        labels:
+          severity: p1
+          component: realtime
+        annotations:
+          summary: PadlHub realtime metrics are absent
+          description: The realtime timestamp heartbeat series is absent; inspect process and metrics-target availability.
+          runbook: docs/runbooks/chats-notifications-moderation.md
+
+      - alert: PadlHubRealtimeReplicaCountLow
+        expr: |
+          (
+            count(
+              max by (service_instance_id) (phub_realtime_process_heartbeat_unixtime)
+                > time() - 60
+            ) < scalar(
+              max(
+                max by (service_instance_id) (phub_realtime_process_expected_replicas)
+                  and on (service_instance_id)
+                  (
+                    max by (service_instance_id) (phub_realtime_process_heartbeat_unixtime)
+                      > time() - 60
+                  )
+              )
+            )
+          )
+          or absent(
+            max by (service_instance_id) (phub_realtime_process_expected_replicas)
+              and on (service_instance_id)
+              (
+                max by (service_instance_id) (phub_realtime_process_heartbeat_unixtime)
+                  > time() - 60
+              )
+          )
+          or (
+            max(
+              max by (service_instance_id) (phub_realtime_process_expected_replicas)
+                and on (service_instance_id)
+                (
+                  max by (service_instance_id) (phub_realtime_process_heartbeat_unixtime)
+                    > time() - 60
+                )
+            )
+              != min(
+                max by (service_instance_id) (phub_realtime_process_expected_replicas)
+                  and on (service_instance_id)
+                  (
+                    max by (service_instance_id) (phub_realtime_process_heartbeat_unixtime)
+                      > time() - 60
+                  )
+              )
+          )
+          or (
+            count(
+              max by (service_instance_id) (phub_realtime_process_expected_replicas)
+                and on (service_instance_id)
+                (
+                  max by (service_instance_id) (phub_realtime_process_heartbeat_unixtime)
+                    > time() - 60
+                )
+            )
+              != count(
+                max by (service_instance_id) (phub_realtime_process_heartbeat_unixtime)
+                  > time() - 60
+              )
+          )
+        for: 1m
+        labels:
+          severity: p1
+          component: realtime
+        annotations:
+          summary: PadlHub realtime fresh replica count is below the declared target
+          description: Fresh unique realtime instances are below REALTIME_EXPECTED_REPLICAS, or replicas disagree on that target; keep HTTP fallback and stop expansion.
+          runbook: docs/runbooks/chats-notifications-moderation.md
+
+      - alert: PadlHubRealtimeConsumerUnavailable
+        expr: |
+          (
+            max by (service_instance_id) (phub_realtime_consumer_ready)
+              and on (service_instance_id)
+              (
+                max by (service_instance_id) (phub_realtime_process_heartbeat_unixtime)
+                  > time() - 60
+              )
+          ) == 0
+        for: 2m
+        labels:
+          severity: p1
+          component: realtime
+        annotations:
+          summary: PadlHub realtime consumer is unavailable
+          description: RabbitMQ realtime fanout has remained unavailable for two minutes; HTTP chat remains the fallback.
+          runbook: docs/runbooks/chats-notifications-moderation.md
+
+      - alert: PadlHubRealtimeConsumerFailures
+        expr: increase(phub_realtime_consumer_failures_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: p1
+          component: realtime
+        annotations:
+          summary: PadlHub realtime consumer is failing
+          description: Realtime projection or RabbitMQ connectivity failed during the last five minutes.
+          runbook: docs/runbooks/chats-notifications-moderation.md
+
+      - alert: PadlHubRealtimeEventsQuarantined
+        expr: increase(phub_realtime_quarantine_events_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: p1
+          component: realtime
+        annotations:
+          summary: PadlHub realtime event was quarantined
+          description: An invalid identifier-only realtime event was retained for contract analysis.
+          runbook: docs/runbooks/chats-notifications-moderation.md
+
+      - alert: PadlHubRealtimeReconnects
+        expr: increase(phub_realtime_rabbitmq_reconnects_total[10m]) > 2
+        for: 1m
+        labels:
+          severity: p2
+          component: realtime
+        annotations:
+          summary: PadlHub realtime RabbitMQ reconnects are elevated
+          description: More than two reconnects were scheduled in ten minutes.
+          runbook: docs/runbooks/chats-notifications-moderation.md
 
   - name: padlhub-communities-realtime
     interval: 15s

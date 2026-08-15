@@ -100,6 +100,7 @@ export async function registerCommunityEventConsumer(options: {
   readonly target: CommunityRealtimeFanoutTarget;
   readonly logger: Logger;
   readonly metrics?: RealtimeMetricRecorder;
+  readonly onConsumerFailure: (reason: string) => void;
 }): Promise<string> {
   const queue = await options.channel.assertQueue('', {
     durable: false,
@@ -114,7 +115,11 @@ export async function registerCommunityEventConsumer(options: {
   const consumer = await options.channel.consume(
     queue.queue,
     (message) => {
-      if (message) void handleMessage({ ...options, message });
+      if (!message) {
+        options.onConsumerFailure('community_consumer_cancelled');
+        return;
+      }
+      void handleMessage({ ...options, message });
     },
     { noAck: false },
   );

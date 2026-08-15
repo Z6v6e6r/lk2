@@ -23,6 +23,10 @@ REALTIME_MAX_SOCKET_BUFFER_BYTES=524288
 REALTIME_HEARTBEAT_INTERVAL_MS=30000
 REALTIME_DATABASE_POOL_MAX=10
 REALTIME_DATABASE_POOL_WARM_CONNECTIONS=2
+# Exact rollout target; every live replica must declare the same value.
+REALTIME_EXPECTED_REPLICAS=2
+# Stable and unique for each replica; do not reuse it during an overlapping rollout.
+OTEL_SERVICE_INSTANCE_ID=<staging-realtime-replica-id>
 ```
 
 The ingress WebSocket idle timeout must exceed two heartbeat intervals. The process/container file
@@ -61,10 +65,12 @@ unless every Compose and verification call uses an audited restricted sudo wrapp
 10. Confirm `/health/ready` fails closed if PostgreSQL, Redis, or the enabled RabbitMQ consumer is
     unavailable.
 
-An unexpected RabbitMQ connection close is fatal to the realtime process. The process exits with
-status 1 so the container restart policy creates a fresh exclusive queue and consumer; clients
-recover any missed sequence through the HTTP event endpoint. An unhealthy healthcheck alone is not
-treated as recovery because Docker does not restart an otherwise running unhealthy container.
+RabbitMQ error, connection close or a broker-side consumer cancellation immediately marks the
+shared realtime readiness check unavailable, closes both consumers/channels and returns
+`/health/ready` 503. The process performs bounded reconnects and recreates both exclusive consumers;
+readiness returns to 200 only after both registrations succeed. Clients recover every missed
+sequence through the HTTP event endpoint. Prove the 503→200 transition and consumer re-registration
+under a bounded broker interruption before production activation.
 
 Never use a successful acknowledgement or a received hint alone as persistence evidence.
 

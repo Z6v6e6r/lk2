@@ -20,6 +20,7 @@ const rollbackRunbook = repositoryFile('docs/runbooks/rollback.md');
 const userApiContract = repositoryFile('contracts/openapi/user/v1/openapi.yaml');
 const productionWorkflow = repositoryFile('.github/workflows/deploy-production.yaml');
 const stagingCompose = repositoryFile('deploy/compose.staging.yaml');
+const productionCompose = repositoryFile('deploy/compose.production.yaml');
 const stagingRoutingWorkflow = repositoryFile('.github/workflows/set-staging-routing-plan.yaml');
 const stagingRoutingOperator = repositoryFile('deploy/jetson/run-client-routing-plan.sh');
 const migration0057Diagnostic = repositoryFile('deploy/jetson/diagnose-migration-0057.sh');
@@ -391,6 +392,49 @@ describe('Nano presentation release contract', () => {
     expect(productionWorkflow).toContain('= "$RUN_ID"');
   });
 
+  it('keeps migrator DDL credentials out of application runtime services', () => {
+    const stagingWeb = stagingCompose.match(/\n {2}web:\n([\s\S]*?)\n {2}api:/)?.[1];
+    const stagingMigrator = stagingCompose.match(/\n {2}migrator:\n([\s\S]*?)\n\nnetworks:/)?.[1];
+    const productionMigrator = productionCompose.match(
+      /\n {2}migrator:\n([\s\S]*?)\n\nnetworks:/,
+    )?.[1];
+
+    for (const migrator of [stagingMigrator, productionMigrator]) {
+      expect(migrator).toBeDefined();
+      expect(migrator).toContain('env_file: []');
+      expect(migrator).toContain('DATABASE_URL: ${MIGRATOR_DATABASE_URL:-}');
+      expect(migrator).not.toContain('RUNTIME_ENV_FILE');
+    }
+    expect(stagingWeb).toBeDefined();
+    expect(stagingWeb).toContain('env_file: []');
+    expect(stagingWeb).not.toContain('RUNTIME_ENV_FILE');
+
+    expect(stagingWorkflow).toContain('migrator_env=/etc/phub/staging.migrator.env');
+    expect(productionWorkflow).toContain('migrator_env=/etc/phub/migrator.env');
+    for (const workflow of [stagingWorkflow, productionWorkflow]) {
+      const normalizedWorkflow = workflow.replaceAll('\\"', '"');
+      expect(normalizedWorkflow).toContain('test "$(stat -c %a "$migrator_env")" = 600');
+      expect(normalizedWorkflow).toContain('test ! "$runtime_env" -ef "$migrator_env"');
+      expect(normalizedWorkflow).toContain(
+        'test "$runtime_database_url" != "$migrator_database_url"',
+      );
+      expect(normalizedWorkflow).toContain(
+        '--entrypoint node migrator apps/migrator/dist/verify-role-boundary.js',
+      );
+      expect(normalizedWorkflow).toContain(
+        '-e RUNTIME_DATABASE_URL -e MIGRATOR_DATABASE_URL -e DATABASE_ROLE_BOUNDARY_PHASE',
+      );
+      expect(normalizedWorkflow).toContain('DATABASE_ROLE_BOUNDARY_PHASE=pre');
+      expect(normalizedWorkflow).toContain('DATABASE_ROLE_BOUNDARY_PHASE=post');
+      expect(
+        normalizedWorkflow.match(
+          /--entrypoint node migrator apps\/migrator\/dist\/verify-role-boundary\.js/g,
+        ),
+      ).toHaveLength(2);
+      expect(normalizedWorkflow).toContain('MIGRATOR_DATABASE_URL="$migrator_database_url"');
+    }
+  });
+
   it('moves the Viva callback to HTTPS before the API consumes it', () => {
     const legacyIpSite = caddyfile.match(/http:\/\/185\.155\.18\.146 \{([\s\S]*?)\n\}/)?.[1];
 
@@ -591,5 +635,16 @@ describe('Nano presentation release contract', () => {
     expect(cupVerification).toContain("'notifications.manage' = any(access.permissions)");
     expect(cupVerification).toContain('cup_engagement_secret" != "$api_engagement_secret');
     expect(cupVerification).not.toContain('echo "$api_engagement_secret"');
+    expect(cupVerification).toContain('API and worker WEB_PUSH_ENABLED gates must match');
+    expect(cupVerification).toContain('normalized_web_push_origins');
+    expect(cupVerification).toContain(
+      'Enabled Web Push requires the same app ID in API and worker',
+    );
+    expect(cupVerification).toContain(
+      'Enabled Web Push requires the same environment in API and worker',
+    );
+    expect(cupVerification).toContain(
+      'Enabled Web Push requires the same non-empty endpoint-origin allowlist in API and worker',
+    );
   });
 });

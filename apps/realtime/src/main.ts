@@ -1,5 +1,5 @@
 import { realtimeTicketRedisKey } from '@phub/auth';
-import { loadRealtimeConfig } from '@phub/config';
+import { loadRealtimeConfig, runtimeContourTargetFingerprint } from '@phub/config';
 import {
   checkDatabaseReady,
   createDatabasePool,
@@ -13,17 +13,39 @@ import Redis from 'ioredis';
 
 import { buildRealtimeApp } from './app.js';
 import { registerCommunityEventConsumer } from './community-event-consumer.js';
-import { registerMessagingRealtimeConsumer } from './message-consumer.js';
-import { createRealtimeMetricRecorder } from './operational-metrics.js';
+import {
+  createRealtimeEventDeduplicator,
+  registerMessagingRealtimeConsumer,
+} from './message-consumer.js';
+import { createRealtimeMetricRecorder as createCommunityRealtimeMetricRecorder } from './operational-metrics.js';
 import { rabbitReconnectDelayMs } from './rabbit-reconnect-policy.js';
+import { registerRabbitConsumersAtomically } from './rabbit-registration.js';
+import { createRealtimeMetricRecorder as createMessagingRealtimeMetricRecorder } from './realtime-metrics.js';
 
 const config = loadRealtimeConfig();
+const runtimeContourAttestation = config.LOCAL_RUNTIME_CONTOUR_ATTESTATION
+  ? {
+      database: runtimeContourTargetFingerprint(config.DATABASE_URL),
+      redis: runtimeContourTargetFingerprint(config.REDIS_URL),
+      rabbitmq: runtimeContourTargetFingerprint(config.RABBITMQ_URL),
+    }
+  : undefined;
 const logger = createLogger('realtime', config.LOG_LEVEL, process.env.RELEASE);
 const telemetry = startTelemetry({
   serviceName: 'realtime',
   serviceNamespace: config.OTEL_SERVICE_NAMESPACE,
   ...(config.OTEL_EXPORTER_OTLP_ENDPOINT ? { endpoint: config.OTEL_EXPORTER_OTLP_ENDPOINT } : {}),
 });
+const realtimeInstanceId =
+  config.OTEL_SERVICE_INSTANCE_ID?.trim() || process.env.HOSTNAME?.trim() || 'realtime-singleton';
+const realtimeMetrics = createMessagingRealtimeMetricRecorder({
+  instanceId: realtimeInstanceId,
+  expectedReplicas: config.REALTIME_EXPECTED_REPLICAS,
+});
+realtimeMetrics.recordHeartbeat();
+realtimeMetrics.recordConsumerReady(false);
+const heartbeatTimer = setInterval(() => realtimeMetrics.recordHeartbeat(), 15_000);
+heartbeatTimer.unref();
 const redis = new Redis(config.REDIS_URL, {
   lazyConnect: true,
   enableOfflineQueue: false,
@@ -38,7 +60,7 @@ await warmDatabasePool(
 );
 const messagingRepository = createMessagingRepository(pool);
 const authorizationRepository = createRealtimeAuthorizationRepository(pool);
-const metrics = createRealtimeMetricRecorder();
+const metrics = createCommunityRealtimeMetricRecorder({ instanceId: realtimeInstanceId });
 
 let rabbitReady = false;
 let shuttingDown = false;
@@ -54,6 +76,7 @@ let activeRabbit:
     }
   | undefined;
 let rabbitGeneration = 0;
+const realtimeEventDeduplicator = createRealtimeEventDeduplicator();
 
 const app = await buildRealtimeApp({
   config,
@@ -64,6 +87,7 @@ const app = await buildRealtimeApp({
   metrics,
   databaseReady: () => checkDatabaseReady(pool),
   rabbitReady: () => rabbitReady,
+  ...(runtimeContourAttestation ? { runtimeContourAttestation } : {}),
   ticketConsumer: {
     consume: async (ticketId, sessionId) =>
       (await redis.getdel(realtimeTicketRedisKey(ticketId))) === sessionId,
@@ -79,12 +103,15 @@ function scheduleReconnect(): void {
     void connectRabbit(false);
   }, delayMs);
   reconnectTimer.unref();
+  realtimeMetrics.recordRabbitReconnect();
   logger.warn({ delayMs, reconnectAttempt }, 'RabbitMQ realtime reconnect scheduled');
 }
 
 function invalidateRabbit(runtime: NonNullable<typeof activeRabbit>, cause: string): void {
   if (activeRabbit !== runtime) return;
   rabbitReady = false;
+  realtimeMetrics.recordConsumerReady(false);
+  realtimeMetrics.recordConsumerFailure();
   activeRabbit = undefined;
   logger.error({ cause, generation: runtime.generation }, 'RabbitMQ realtime consumer unavailable');
   void runtime.communityChannel?.close().catch(() => undefined);
@@ -105,10 +132,12 @@ async function connectRabbit(failFast: boolean): Promise<void> {
       if (config.COMMUNITIES_REALTIME_ENABLED) {
         communityChannel = await connection.createChannel();
       }
+      const registeredMessagingChannel = messagingChannel;
+      const registeredCommunityChannel = communityChannel;
       const runtime = {
         connection,
-        messagingChannel,
-        ...(communityChannel ? { communityChannel } : {}),
+        messagingChannel: registeredMessagingChannel,
+        ...(registeredCommunityChannel ? { communityChannel: registeredCommunityChannel } : {}),
         generation: ++rabbitGeneration,
       };
       activeRabbit = runtime;
@@ -127,25 +156,41 @@ async function connectRabbit(failFast: boolean): Promise<void> {
         invalidateRabbit(runtime, 'community_channel_error');
       });
       communityChannel?.on('close', () => invalidateRabbit(runtime, 'community_channel_closed'));
-      await registerMessagingRealtimeConsumer({
-        channel: messagingChannel,
-        logger,
-        publish: (event) => app.publishMessageCreated(event),
-        onConsumerFailure: (reason) => invalidateRabbit(runtime, reason),
+      await registerRabbitConsumersAtomically({
+        registerMessaging: () =>
+          registerMessagingRealtimeConsumer({
+            channel: registeredMessagingChannel,
+            logger,
+            publish: (event) => app.publishMessageCreated(event),
+            onConsumerFailure: (reason) => invalidateRabbit(runtime, reason),
+            onProjected: (delivered) => realtimeMetrics.recordProjectedEvent(delivered),
+            onQuarantined: () => realtimeMetrics.recordQuarantinedEvent(),
+            deduplicator: realtimeEventDeduplicator,
+          }),
+        ...(registeredCommunityChannel
+          ? {
+              registerCommunity: () =>
+                registerCommunityEventConsumer({
+                  channel: registeredCommunityChannel,
+                  target: app,
+                  logger,
+                  metrics,
+                  onConsumerFailure: (reason) => invalidateRabbit(runtime, reason),
+                }),
+            }
+          : {}),
+        isGenerationActive: () => activeRabbit === runtime,
+        markReady: () => {
+          rabbitReady = true;
+          realtimeMetrics.recordConsumerReady(true);
+          reconnectAttempt = 0;
+          logger.info({ generation: runtime.generation }, 'RabbitMQ realtime consumer ready');
+        },
       });
-      if (communityChannel) {
-        await registerCommunityEventConsumer({
-          channel: communityChannel,
-          target: app,
-          logger,
-          metrics,
-        });
-      }
-      rabbitReady = true;
-      reconnectAttempt = 0;
-      logger.info({ generation: runtime.generation }, 'RabbitMQ realtime consumer ready');
     } catch (err) {
       rabbitReady = false;
+      realtimeMetrics.recordConsumerReady(false);
+      realtimeMetrics.recordConsumerFailure();
       activeRabbit = undefined;
       await communityChannel?.close().catch(() => undefined);
       await messagingChannel?.close().catch(() => undefined);
@@ -168,6 +213,7 @@ await connectRabbit(true);
 const shutdown = async (signal: string): Promise<void> => {
   shuttingDown = true;
   rabbitReady = false;
+  clearInterval(heartbeatTimer);
   if (reconnectTimer) clearTimeout(reconnectTimer);
   logger.info({ signal }, 'shutting down');
   await app.close();

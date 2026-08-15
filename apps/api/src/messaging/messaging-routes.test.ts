@@ -117,6 +117,7 @@ function repository(overrides: Partial<MessagingRepository> = {}): MessagingRepo
       changed: true,
       replayed: false,
     }),
+    setUserBlock: vi.fn().mockResolvedValue({ outcome: 'ok', changed: true, replayed: false }),
     authorizeRealtimeConnection: vi.fn().mockResolvedValue({ outcome: 'disabled' }),
     authorizeRealtimeSubscription: vi.fn().mockResolvedValue({ outcome: 'disabled' }),
     listRealtimeRecipientUserIds: vi.fn().mockResolvedValue([]),
@@ -130,6 +131,102 @@ afterEach(async () => {
 });
 
 describe('messaging User API', () => {
+  it('keeps block mutations hidden until every reader is upgraded', async () => {
+    const setUserBlock = vi.fn();
+    const app = await buildApp({
+      config,
+      logger: createLogger('messaging-api-test', 'silent'),
+      pool: fakePool(),
+      messagingRepository: repository({ setUserBlock }),
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'PUT',
+      url: `/user/api/v1/local-padel/messaging/users/${otherUserId}/block`,
+      headers: {
+        authorization: `Bearer ${await accessToken()}`,
+        'idempotency-key': 'user-block-command-disabled',
+      },
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toMatchObject({ code: 'USER_BLOCK_COMMANDS_DISABLED' });
+    expect(setUserBlock).not.toHaveBeenCalled();
+  });
+
+  it('blocks and unblocks through critical idempotent commands without revealing an unknown target', async () => {
+    const setUserBlock = vi
+      .fn()
+      .mockResolvedValue({ outcome: 'ok', changed: true, replayed: false });
+    const app = await buildApp({
+      config: { ...config, MESSAGING_USER_BLOCK_COMMANDS_ENABLED: true },
+      logger: createLogger('messaging-api-test', 'silent'),
+      pool: fakePool(),
+      messagingRepository: repository({ setUserBlock }),
+    });
+    apps.push(app);
+
+    const headers = {
+      authorization: `Bearer ${await accessToken()}`,
+      'idempotency-key': 'user-block-command-0001',
+    };
+    const blocked = await app.inject({
+      method: 'PUT',
+      url: `/user/api/v1/local-padel/messaging/users/${otherUserId}/block`,
+      headers,
+    });
+    const unblocked = await app.inject({
+      method: 'DELETE',
+      url: `/user/api/v1/local-padel/messaging/users/${otherUserId}/block`,
+      headers: { ...headers, 'idempotency-key': 'user-unblock-command-0001' },
+    });
+
+    expect(blocked.statusCode).toBe(200);
+    expect(unblocked.statusCode).toBe(200);
+    expect(setUserBlock).toHaveBeenNthCalledWith(1, expect.objectContaining({ action: 'BLOCK' }));
+    expect(setUserBlock).toHaveBeenNthCalledWith(2, expect.objectContaining({ action: 'UNBLOCK' }));
+  });
+
+  it('uses stable conflict, permission and target-not-found responses for block commands', async () => {
+    const app = await buildApp({
+      config: { ...config, MESSAGING_USER_BLOCK_COMMANDS_ENABLED: true },
+      logger: createLogger('messaging-api-test', 'silent'),
+      pool: fakePool(),
+      messagingRepository: repository({
+        setUserBlock: vi
+          .fn()
+          .mockResolvedValueOnce({ outcome: 'idempotency_conflict' })
+          .mockResolvedValueOnce({ outcome: 'target_not_found' })
+          .mockResolvedValueOnce({ outcome: 'forbidden' }),
+      }),
+    });
+    apps.push(app);
+    const headers = {
+      authorization: `Bearer ${await accessToken()}`,
+      'idempotency-key': 'user-block-command-0002',
+    };
+    const conflictResponse = await app.inject({
+      method: 'PUT',
+      url: `/user/api/v1/local-padel/messaging/users/${otherUserId}/block`,
+      headers,
+    });
+    const notFoundResponse = await app.inject({
+      method: 'DELETE',
+      url: `/user/api/v1/local-padel/messaging/users/${otherUserId}/block`,
+      headers: { ...headers, 'idempotency-key': 'user-unblock-command-0002' },
+    });
+    const forbiddenResponse = await app.inject({
+      method: 'PUT',
+      url: `/user/api/v1/local-padel/messaging/users/${otherUserId}/block`,
+      headers: { ...headers, 'idempotency-key': 'user-block-command-0003' },
+    });
+
+    expect(conflictResponse.json()).toMatchObject({ code: 'IDEMPOTENCY_KEY_REUSED' });
+    expect(notFoundResponse.json()).toMatchObject({ code: 'CHAT_PARTICIPANT_NOT_FOUND' });
+    expect(forbiddenResponse.statusCode).toBe(403);
+    expect(forbiddenResponse.json()).toMatchObject({ code: 'CHAT_PERMISSION_REQUIRED' });
+  });
   it('issues an audited realtime ticket only after current session authorization', async () => {
     const authorizeRealtimeConnection = vi.fn().mockResolvedValue({ outcome: 'ok' });
     const recordRealtimeTicketIssued = vi

@@ -42,12 +42,14 @@ describe('community realtime event consumer', () => {
     const metrics = {
       recordCommunityFanoutHint: vi.fn(),
     };
+    const onConsumerFailure = vi.fn();
     await expect(
       registerCommunityEventConsumer({
         channel: channel as never,
         target: { publishCommunityEvent },
         logger: { warn: vi.fn(), error: vi.fn() } as never,
         metrics: metrics as never,
+        onConsumerFailure,
       }),
     ).resolves.toBe('community-realtime-consumer');
     expect(channel.bindQueue).toHaveBeenCalledWith(
@@ -73,6 +75,7 @@ describe('community realtime event consumer', () => {
     });
     expect(channel.ack).toHaveBeenCalledTimes(1);
     expect(metrics.recordCommunityFanoutHint).toHaveBeenCalledWith('accepted');
+    expect(onConsumerFailure).not.toHaveBeenCalled();
   });
 
   it('records a bounded failure metric and preserves safe broker correlation in logs', async () => {
@@ -102,6 +105,7 @@ describe('community realtime event consumer', () => {
       target: { publishCommunityEvent: vi.fn().mockRejectedValue(new Error('fanout failed')) },
       logger: logger as never,
       metrics: metrics as never,
+      onConsumerFailure: vi.fn(),
     });
 
     handler?.({
@@ -120,5 +124,33 @@ describe('community realtime event consumer', () => {
       }),
       expect.stringContaining('clients must recover over HTTP'),
     );
+  });
+
+  it('reports broker cancellation so runtime readiness can fail closed and reconnect', async () => {
+    let handler: ((message: ConsumeMessage | null) => void) | undefined;
+    const onConsumerFailure = vi.fn();
+    const channel = {
+      assertQueue: vi.fn().mockResolvedValue({ queue: 'generated-instance-queue' }),
+      bindQueue: vi.fn().mockResolvedValue(undefined),
+      prefetch: vi.fn().mockResolvedValue(undefined),
+      consume: vi
+        .fn()
+        .mockImplementation(
+          (_queue: string, callback: (message: ConsumeMessage | null) => void) => {
+            handler = callback;
+            return Promise.resolve({ consumerTag: 'community-realtime-consumer' });
+          },
+        ),
+    };
+    await registerCommunityEventConsumer({
+      channel: channel as never,
+      target: { publishCommunityEvent: vi.fn() },
+      logger: { warn: vi.fn(), error: vi.fn() } as never,
+      onConsumerFailure,
+    });
+
+    handler?.(null);
+
+    expect(onConsumerFailure).toHaveBeenCalledExactlyOnceWith('community_consumer_cancelled');
   });
 });

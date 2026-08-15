@@ -24,7 +24,7 @@ import {
 
 describe('realtime operational metrics', () => {
   it('uses bounded attributes and never accepts tenant, user or community identifiers', () => {
-    const recorder = createRealtimeMetricRecorder();
+    const recorder = createRealtimeMetricRecorder({ instanceId: 'realtime-replica-a' });
 
     recorder.recordConnectionOpened();
     recorder.recordConnectionClosed();
@@ -39,15 +39,16 @@ describe('realtime operational metrics', () => {
     expect(instruments.createUpDownCounter).toHaveBeenCalledWith(
       REALTIME_METRIC_INSTRUMENTS.activeConnections,
     );
+    const instanceAttributes = { 'service.instance.id': 'realtime-replica-a' };
     expect(instruments.add.mock.calls).toEqual(
       expect.arrayContaining([
-        [1],
-        [-1],
-        [1, { reason: 'capacity' }],
-        [1, { outcome: 'rejected' }],
-        [1, { outcome: 'not_found' }],
-        [12],
-        [1, { outcome: 'fanout_failed' }],
+        [1, instanceAttributes],
+        [-1, instanceAttributes],
+        [1, { ...instanceAttributes, reason: 'capacity' }],
+        [1, { ...instanceAttributes, outcome: 'rejected' }],
+        [1, { ...instanceAttributes, outcome: 'not_found' }],
+        [12, instanceAttributes],
+        [1, { ...instanceAttributes, outcome: 'fanout_failed' }],
       ]),
     );
     expect(JSON.stringify(instruments.add.mock.calls)).not.toMatch(

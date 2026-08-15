@@ -9,10 +9,16 @@ HTTP M1 и recoverable realtime M2 с Web UI, in-app, Web Push/VAPID и ручн
 для list/create/history/send/read cursor. Каноническая пара PadlHub UUID дедуплицируется;
 создание и отправка повторно проверяют current permission, active membership, active target и его
 `chatPolicy`. Tenant gates по умолчанию выключены. Наличие кода не доказывает, что срез активирован
-или проверен в целевой среде. Block-list enforcement, tournament/station contextual chats,
-attachments, edit/delete, connectors и moderation в M1/M2 не входят. Realtime M2 добавляет одноразовый
-session-bound ticket, повторную проверку сессии/прав/membership, identifier-only fanout и
-HTTP gap recovery. Все команды и каноническая история остаются в HTTP/PostgreSQL.
+или проверен в целевой среде. Tenant-local directed block-list теперь закрывает DIRECT create/list/
+history/send/read/realtime в обе стороны, но не удаляет историю и не меняет GAME roster policy.
+Мутации block-list дополнительно закрыты глобальным
+`MESSAGING_USER_BLOCK_COMMANDS_ENABLED=false`, пока все API/realtime readers не обновлены.
+Tournament/station contextual chats, attachments, edit/delete, connectors и moderation в M1/M2 не
+входят. Realtime M2 добавляет одноразовый session-bound ticket, повторную проверку сессии/прав/
+membership/active target/privacy, identifier-only fanout и HTTP gap recovery. Web подключает realtime только для
+загруженного DIRECT; GAME остаётся на HTTP polling. Все команды и каноническая история остаются в
+HTTP/PostgreSQL. Durable booking reminder scheduler реализован отдельно и default-off; он не
+заменяет отсутствующий authoritative booking event producer и сам по себе не разрешает активацию.
 
 Следующий feature-gated slice реализует только `GAME`: canonical `games.games.id`, актуальная
 `games.participations(state='ACTIVE')` и `games.play` повторно проверяются перед list/history/send/
@@ -77,6 +83,7 @@ PostgreSQL — единственный источник истины. Во вс
 
 - `messaging.conversations`: вид, контекст, состояние и следующий монотонный `sequence`;
 - `messaging.direct_conversations`: нормализованная пара пользователей для защиты от дублей;
+- `messaging.user_blocks` и `user_block_commands`: directed pair policy и durable idempotency;
 - `messaging.conversation_members`: внутренний пользователь, внешний контакт или system actor,
   роль, состояние, mute/notification policy и `last_read_sequence`;
 - `messaging.messages`: неизменный ID, порядковый номер внутри разговора, тип, текущий body/payload,
@@ -87,6 +94,11 @@ PostgreSQL — единственный источник истины. Во вс
 - `notifications.intents`: дедуплицированное решение доставить конкретному получателю;
 - `notifications.inbox_items`: долговечная лента оповещений приложения;
 - `notifications.deliveries` и `notifications.delivery_attempts`: состояние канала и история попыток;
+- `notifications.booking_notification_projection_fences` и `booking_reminder_schedules`:
+  монотонная lifecycle revision, текущий canonical booking snapshot, два leased reminder window и
+  terminal state без зависимости от браузерной booking projection;
+- `notifications.booking_reminder_recipients`: ordered recipient set с составным
+  tenant/user foreign key; raw cross-tenant UUID array в schedule не хранится;
 - `notifications.delivery_receipts`: раздельные provider accepted/delivered, client displayed и
   user opened факты;
 - `notifications.admin_campaigns`, `admin_campaign_recipients` и `admin_campaign_commands`:
@@ -151,6 +163,55 @@ circuit breaker ограничены. Успех фиксируется в `inte
 5. Повторы события не создают повторных intents. Delivery attempts сохраняют только стабильные
    коды результата; provider response/body и адрес получателя не логируются.
 
+### Durable booking reminder scheduler
+
+Расписание формируется только из принятого canonical `booking.confirmed.v1` или
+`booking.changed.v1`. В одной PostgreSQL-транзакции notification projector фиксирует inbox claim,
+монотонный booking fence и две строки `HOURS_24`/`HOURS_2`. Более новая revision полностью заменяет
+snapshot, due time, event UUID и lease; replay/stale/conflict расписание не меняют. Принятый
+`booking.cancelled.v1` под тем же booking advisory lock закрывает все ещё pending reminders и
+сбрасывает claims. `booking.upcoming_booking_projection`, браузерный Viva snapshot и Redis никогда
+не являются producer или repair source.
+
+Отдельный tenant-fair worker cycle захватывает due-строки короткой арендой и перед эмиссией под тем
+же booking advisory lock повторно проверяет claim token, tenant gate, текущую fence revision и
+отсутствие cancellation. `booking.reminder.due.v1` с заранее сохранённым event UUID и перевод
+schedule в `EMITTED` коммитятся одной транзакцией; outbox доставляется at-least-once с тем же event
+ID. Crash до finalize оставляет reclaimable lease, а rollback finalize не может оставить только
+outbox или только terminal state.
+
+Выключенный tenant gate не меняет `PENDING` даже после expiry. После включения expired
+terminalization и due claims делят один bounded batch и используют `FOR UPDATE SKIP LOCKED`.
+Process scheduler metrics несут `service.instance.id` и freshness heartbeat, а потерянные
+окна обнаруживаются DB-derived `latest MISSED` timestamp, а не только process counter.
+
+Tenant activation принимает только provisioned canonical ruleset `booking.ru-ru.v3`: ровно один
+активный `booking.reminder.default`, template `booking.reminder` v2/`ru-RU` с каноническими
+category, audience, content, deep link и каналами. Effective channels обязаны пересекаться с
+желаемым включённым IN_APP/Web Push transport. Provisioner и activation используют один
+content-addressed contract и общий tenant runtime advisory lock, поэтому old/custom/extra rule,
+template drift, отсутствие provision journal или несовместимый канал fail closed до изменения
+tenant gate. V3 расширяет fingerprint до каждого поля template/rule/event definition; существующий
+v2 provision journal не является доказательством v3 и требует нового preview/apply с новым
+idempotency key. Tenant runtime row связывает `booking_reminders_enabled=true` с exact v3
+ruleset version/hash; OFF хранит только `false/null/null`. Scheduler проверяет binding до expired
+sweep/claim и повторно перед finalize. Старый/чужой hash не меняет schedule, после claim приводит к
+commit lease release без outbox и отмечает tenant cycle failed.
+
+Eligibility использует время PostgreSQL и полуоткрытое окно `due_at <= now < expires_at`:
+
+- `HOURS_24`: `expires_at = min(due_at + max24, starts_at - 2 hours)`;
+- `HOURS_2`: `expires_at = min(due_at + max2, starts_at)`.
+
+На границе `expires_at` запись атомарно становится `MISSED` без outbox. Глобальный
+`BOOKING_REMINDER_SCHEDULER_ENABLED` и tenant-local `booking_reminders_enabled` по умолчанию
+выключены. Staging/production не запускают scheduler без двух явно заданных max-lateness values;
+все worker replicas одного окружения обязаны использовать одинаковые значения и exact contract
+binding. Tenant ON запрещён, пока хотя бы один worker игнорирует version/hash; rollback сначала
+записывает tenant `false/null/null` текущей командой, затем выключает global scheduler. Пока write owner
+бронирований не публикует lifecycle event в одной транзакции с authoritative change, booking
+notifications остаются NO-GO независимо от наличия scheduler-а.
+
 ### Ручная кампания из ЦУП
 
 1. ЦУП получает только короткоживущий PadlHub JWT с audience `phub-admin`. Токен выдаётся лишь
@@ -179,10 +240,23 @@ Push — три реализации одного delivery port, а не оди�
 | iOS       | APNs device token, bundle/app ID и `sandbox/production`            | APNs HTTP/2      | Capacitor/native bridge регистрирует token, показывает/открывает deep link  |
 | Android   | FCM registration token и app ID                                    | FCM HTTP v1      | Capacitor/native bridge обновляет token и передаёт displayed/opened receipt |
 
-Регистрация/замена endpoint — авторизованная идемпотентная команда. У одного пользователя может
-быть несколько установок. Logout может отвязать конкретную установку; reinstall, token refresh и
+Регистрация/замена endpoint — авторизованная идемпотентная команда. Число живых Web Push установок
+ограничено server-owned quota (по умолчанию 5). Физическая подписка имеет одного живого владельца
+в `(tenant, provider account, address hash)`: перенос между аккаунтами отзывает старую строку и
+создаёт/активирует строку нового пользователя, не меняя owner у endpoint, на который уже могут
+ссылаться старые deliveries. Logout отвязывает конкретную установку; reinstall, token refresh и
 ответы `invalid/unregistered` атомарно инвалидируют старую запись. Endpoint payload шифруется
-envelope key, а hash используется только для дедупликации.
+envelope key, а hash используется только для дедупликации и сериализации, не как credential.
+Полный URL Web Push endpoint один раз канонизируется до шифрования, command hash и address hash;
+эквивалентные записи host case и явного `:443` не создают новую физическую идентичность.
+
+Нарушение exact-origin/connect-time public-egress policy завершает текущую delivery и переводит
+endpoint в обратимый `SUSPENDED_POLICY`, а не в provider-invalid. Projector создаёт delivery только
+для `ACTIVE`; claimant отправляет провайдеру только `ACTIVE`, а `INVALID`/`REVOKED` забирает лишь для
+локальной terminalization без decrypt/provider call. `SUSPENDED_POLICY` остаётся pending для
+обратимого review. Повторная валидная регистрация может вернуть endpoint в `ACTIVE`; перед этим
+оператор проверяет retained pending backlog и причину policy denial. `INVALID` и `REVOKED` такой
+политикой автоматически не оживляются.
 
 `SENT` означает только принятие провайдером. `PROVIDER_DELIVERED` пишется лишь при наличии
 достоверного receipt. `DISPLAYED` и `OPENED` приходят отдельными идемпотентными событиями клиента;
@@ -251,7 +325,9 @@ serialization по conversation. Потеря ephemeral queue закрывает
 истории в RabbitMQ. Невалидные envelope создают publisher-confirmed запись в
 `phub.realtime.messaging.quarantine.v1` только с hash/reason, без raw body; transient projection failure снимает readiness и
 запускает bounded reconnect. Событие остаётся hint: пропуск, дубль или reconnect
-закрываются HTTP-чтением по `sequence`.
+закрываются HTTP-чтением по `sequence`. Каждый process держит bounded event-ID dedupe cache,
+сохраняемый между Rabbit reconnect внутри процесса. Глобальный dedupe запрещён: он подавил бы
+broadcast на другие realtime instances; после restart идемпотентность обеспечивает conversation sequence.
 
 ## 5. Целевые API-поверхности
 
@@ -276,6 +352,7 @@ gates; остальной список — целевая карта.
 - `POST /{tenantKey}/notification-deliveries/{deliveryId}/receipts`
 - `POST /{tenantKey}/conversations/{conversationId}/messages/{messageId}/reports`
 - `POST /{tenantKey}/messaging/realtime-ticket`
+- `PUT|DELETE /{tenantKey}/messaging/users/{otherUserId}/block`
 
 ### Admin API / ЦУП
 
@@ -309,6 +386,7 @@ recommendation и revoke signal. Она не получает user/admin JWT, н
 | `messaging.message.updated.v1`             | conversationId, messageId, sequence, version | realtime                                          |
 | `messaging.message.deleted.v1`             | conversationId, messageId, sequence          | realtime, connector policy                        |
 | `messaging.member.changed.v1`              | conversationId, memberId, state              | realtime, authorization cache invalidation        |
+| `messaging.user-block.changed.v1`          | otherUserId, action, changed                 | authorization cache invalidation, audit analytics |
 | `notifications.intent.created.v1`          | intentId, recipientUserId                    | delivery worker                                   |
 | `notifications.inbox.created.v1`           | inboxItemId, recipientUserId                 | realtime                                          |
 | `notifications.delivery.changed.v1`        | deliveryId, state, errorCode?                | ЦУП, metrics                                      |
@@ -330,13 +408,25 @@ Booking events используют только PadlHub UUID: envelope `aggrega
 `recipientUserIds` — дедуплицированный ограниченный список PadlHub user UUID. Viva booking IDs и
 browser-derived projections в этот контракт не входят.
 
+Notification projector хранит tenant-scoped booking fence в PostgreSQL. Lifecycle-событие может
+перейти только на строго большую revision; семантически одинаковый replay той же revision не
+создаёт второй intent, а конфликт одной revision уходит в DLQ. Напоминания не двигают lifecycle:
+`HOURS_24` и `HOURS_2` имеют независимые fingerprint-слоты только для текущей revision, а reminder
+впереди lifecycle повторяется bounded retry. Fence и все notification/outbox/audit записи входят в
+одну транзакцию. Это не заменяет сериализацию в авторитетном booking write owner.
+
 ## 7. Авторизация, приватность и модерация
 
 - Проверка доступа выполняется по текущему tenant-aware membership и политике контекстного домена.
   Наличие UUID или старого WebSocket subscription не даёт права чтения.
 - Выход из игры/турнира/сообщества вызывает membership policy: доступ закрывается сразу либо после
   явно заданного grace/read-history правила. Решение фиксируется на уровне домена, не клиента.
-- Direct chat учитывает user block policy до создания разговора и перед каждой отправкой.
+- Direct chat учитывает user block policy до создания/чтения разговора, перед каждой отправкой и
+  при realtime subscribe/fanout. Те же realtime checks повторно проверяют current permission,
+  active peer и `chatPolicy` peer-а; старый socket/subscription не обходит `NOBODY`. Любая directed запись
+  закрывает пару для обеих сторон; удаление
+  A→B не отменяет существующий B→A block. Сообщение, committed до block transaction, сохраняется,
+  но история недоступна, пока хотя бы один block активен.
 - Вложения загружаются по короткому signed URL, проверяются по MIME/размеру/hash и malware scan;
   download URL выдаётся только после авторизации на конкретный conversation.
 - Soft delete сохраняет sequence и audit. Legal hold/retention задаются tenant policy. Hard purge
@@ -376,10 +466,11 @@ p95 < 2 s после commit; 99.9% intent либо доставлен хотя �
 1. **Foundation:** expand-only таблицы, RLS, domain interfaces, события и feature flags; routes
    закрыты. В текущей release-линии `/chats` и `/chats/new` не публикуются;
    game/profile DTO fail closed без смонтированного messaging route.
-2. **Direct + contextual read/write:** direct HTTP list/create/history/send/read cursor реализованы
-   за tenant gates; block policy и game/tournament/community membership остаются следующими
-   подэтапами.
-3. **Realtime:** tickets, subscriptions, sequence-gap recovery; HTTP остаётся fallback.
+2. **Direct + contextual read/write:** direct HTTP list/create/history/send/read cursor и directed
+   block policy реализованы за tenant gates; GAME использует current roster, а tournament/community
+   membership остаются следующими подэтапами.
+3. **Realtime:** DIRECT tickets, subscriptions, sequence-gap recovery; HTTP остаётся fallback и
+   единственным live-refresh transport для GAME в текущем срезе.
 4. **CUP support + один connector:** inbound/outbound dedupe, assignment, retry/DLQ.
 5. **In-app notifications:** templates, rules, intents, preferences и inbox. Пользовательский срез
    и ручная отправка из ЦУП реализованы и закрыты tenant/admin gates; управление версиями

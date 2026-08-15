@@ -14,6 +14,12 @@ import {
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+const realtimeMocks = vi.hoisted(() => ({
+  connect: vi.fn(() => ({ stop: vi.fn() })),
+}));
+
+vi.mock('./chat-realtime-client.js', () => ({ connectChatRealtime: realtimeMocks.connect }));
+
 import { App } from './App.js';
 import { consumeCommunityInviteToken } from './community-invite-token.js';
 import type {
@@ -492,6 +498,7 @@ function createGateway(overrides: Partial<AuthGateway> = {}): AuthGateway {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  realtimeMocks.connect.mockClear();
   vi.useRealTimers();
   window.history.replaceState({}, '', '/');
 });
@@ -1656,6 +1663,357 @@ describe('PadlHub web authentication', () => {
     await waitFor(() => expect(window.location.pathname).toBe(`/chats/${conversationId}`));
     expect(createDirectConversation).toHaveBeenCalledWith(recipientUserId, expect.any(String));
     await waitFor(() => expect(listConversationMessages).toHaveBeenCalledWith(conversationId, 0));
+  });
+
+  it('does not request a realtime ticket or socket for a selected GAME conversation', async () => {
+    const gameConversation = {
+      id: '22222222-2222-4222-8222-222222222222',
+      kind: 'GAME' as const,
+      contextId: '11111111-1111-4111-8111-111111111111',
+      title: 'Игра',
+      unreadCount: 0,
+      updatedAt: '2026-08-03T10:00:00.000Z',
+    };
+    window.history.replaceState({}, '', `/chats/${gameConversation.id}`);
+    const createRealtimeTicket = vi.fn();
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue(session),
+      listConversations: vi.fn().mockResolvedValue({ items: [gameConversation] }),
+      listConversationMessages: vi.fn().mockResolvedValue({ messages: [] }),
+      createRealtimeTicket,
+    });
+
+    render(<App gateway={gateway} tenantKey="padlhub" realtimeBaseUrl="wss://realtime.example" />);
+
+    await waitFor(() =>
+      expect(gateway.listConversationMessages).toHaveBeenCalledWith(gameConversation.id, 0),
+    );
+    expect(realtimeMocks.connect).not.toHaveBeenCalled();
+    expect(createRealtimeTicket).not.toHaveBeenCalled();
+  });
+
+  it('keeps GAME polling HTTP-only across timer refreshes', async () => {
+    vi.useFakeTimers();
+    const gameConversation = {
+      id: '22222222-2222-4222-8222-222222222222',
+      kind: 'GAME' as const,
+      contextId: '11111111-1111-4111-8111-111111111111',
+      title: 'Игра',
+      unreadCount: 0,
+      updatedAt: '2026-08-03T10:00:00.000Z',
+    };
+    window.history.replaceState({}, '', `/chats/${gameConversation.id}`);
+    const createRealtimeTicket = vi.fn();
+    const listConversationMessages = vi.fn().mockResolvedValue({ messages: [] });
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue(session),
+      listConversations: vi.fn().mockResolvedValue({ items: [gameConversation] }),
+      listConversationMessages,
+      createRealtimeTicket,
+    });
+
+    render(<App gateway={gateway} tenantKey="padlhub" realtimeBaseUrl="wss://realtime.example" />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(listConversationMessages).toHaveBeenCalledOnce();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+
+    expect(listConversationMessages.mock.calls.length).toBeGreaterThan(1);
+    expect(realtimeMocks.connect).not.toHaveBeenCalled();
+    expect(createRealtimeTicket).not.toHaveBeenCalled();
+  });
+
+  it('waits for the initial DIRECT history before opening realtime', async () => {
+    const directConversation = {
+      id: '22222222-2222-4222-8222-222222222222',
+      kind: 'DIRECT' as const,
+      participant: { userId: '11111111-1111-4111-8111-111111111111', displayName: 'Борис' },
+      unreadCount: 0,
+      updatedAt: '2026-08-03T10:00:00.000Z',
+    };
+    let resolveHistory: ((page: { readonly messages: readonly [] }) => void) | undefined;
+    const history = new Promise<{ readonly messages: readonly [] }>((resolve) => {
+      resolveHistory = resolve;
+    });
+    window.history.replaceState({}, '', `/chats/${directConversation.id}`);
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue(session),
+      listConversations: vi.fn().mockResolvedValue({ items: [directConversation] }),
+      listConversationMessages: vi.fn().mockReturnValue(history),
+    });
+
+    render(<App gateway={gateway} tenantKey="padlhub" realtimeBaseUrl="wss://realtime.example" />);
+
+    await waitFor(() =>
+      expect(gateway.listConversationMessages).toHaveBeenCalledWith(directConversation.id, 0),
+    );
+    expect(realtimeMocks.connect).not.toHaveBeenCalled();
+    act(() => resolveHistory?.({ messages: [] }));
+    await waitFor(() =>
+      expect(realtimeMocks.connect).toHaveBeenCalledWith(
+        expect.objectContaining({ conversationId: directConversation.id }),
+      ),
+    );
+  });
+
+  it('keeps realtime closed when the initial DIRECT history fails', async () => {
+    const directConversation = {
+      id: '22222222-2222-4222-8222-222222222222',
+      kind: 'DIRECT' as const,
+      participant: { userId: '11111111-1111-4111-8111-111111111111', displayName: 'Борис' },
+      unreadCount: 0,
+      updatedAt: '2026-08-03T10:00:00.000Z',
+    };
+    window.history.replaceState({}, '', `/chats/${directConversation.id}`);
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue(session),
+      listConversations: vi.fn().mockResolvedValue({ items: [directConversation] }),
+      listConversationMessages: vi.fn().mockRejectedValue(new Error('history unavailable')),
+    });
+
+    render(<App gateway={gateway} tenantKey="padlhub" realtimeBaseUrl="wss://realtime.example" />);
+
+    expect(await screen.findByText('Проверьте соединение и повторите запрос.')).toBeVisible();
+    expect(realtimeMocks.connect).not.toHaveBeenCalled();
+  });
+
+  it('opens realtime only after the selected DIRECT conversation is loaded', async () => {
+    const directConversation = {
+      id: '22222222-2222-4222-8222-222222222222',
+      kind: 'DIRECT' as const,
+      participant: { userId: '11111111-1111-4111-8111-111111111111', displayName: 'Борис' },
+      unreadCount: 0,
+      updatedAt: '2026-08-03T10:00:00.000Z',
+    };
+    window.history.replaceState({}, '', `/chats/${directConversation.id}`);
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue(session),
+      listConversations: vi.fn().mockResolvedValue({ items: [directConversation] }),
+      listConversationMessages: vi.fn().mockResolvedValue({ messages: [] }),
+    });
+
+    render(<App gateway={gateway} tenantKey="padlhub" realtimeBaseUrl="wss://realtime.example" />);
+
+    await waitFor(() =>
+      expect(realtimeMocks.connect).toHaveBeenCalledWith(
+        expect.objectContaining({ conversationId: directConversation.id }),
+      ),
+    );
+  });
+
+  it('keeps an opened DIRECT realtime connection through a later history polling failure', async () => {
+    const directConversation = {
+      id: '22222222-2222-4222-8222-222222222222',
+      kind: 'DIRECT' as const,
+      participant: { userId: '11111111-1111-4111-8111-111111111111', displayName: 'Борис' },
+      unreadCount: 0,
+      updatedAt: '2026-08-03T10:00:00.000Z',
+    };
+    window.history.replaceState({}, '', `/chats/${directConversation.id}`);
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue(session),
+      listConversations: vi.fn().mockResolvedValue({ items: [directConversation] }),
+      listConversationMessages: vi
+        .fn()
+        .mockResolvedValueOnce({ messages: [] })
+        .mockRejectedValueOnce(new Error('history polling unavailable')),
+    });
+
+    render(<App gateway={gateway} tenantKey="padlhub" realtimeBaseUrl="wss://realtime.example" />);
+    await waitFor(() => expect(realtimeMocks.connect).toHaveBeenCalledOnce());
+    const connection = (
+      realtimeMocks.connect.mock.calls as unknown as readonly [
+        { readonly onRecoveryRequired: (afterSequence: number) => void },
+      ][]
+    )[0]?.[0];
+    expect(connection).toBeDefined();
+    act(() => connection?.onRecoveryRequired(0));
+
+    expect(await screen.findByText('Проверьте соединение и повторите запрос.')).toBeVisible();
+    expect(realtimeMocks.connect).toHaveBeenCalledOnce();
+  });
+
+  it('recovers a DIRECT sequence gap over paged HTTP without duplicate rendering', async () => {
+    const conversationId = '22222222-2222-4222-8222-222222222222';
+    const directConversation = {
+      id: conversationId,
+      kind: 'DIRECT' as const,
+      participant: { userId: '11111111-1111-4111-8111-111111111111', displayName: 'Борис' },
+      unreadCount: 0,
+      updatedAt: '2026-08-03T10:00:00.000Z',
+    };
+    const messages = [
+      {
+        id: '33333333-3333-4333-8333-333333333331',
+        conversationId,
+        sequence: 1,
+        sender: directConversation.participant,
+        messageType: 'TEXT' as const,
+        body: 'Первое',
+        createdAt: '2026-08-03T10:01:00.000Z',
+      },
+      {
+        id: '33333333-3333-4333-8333-333333333332',
+        conversationId,
+        sequence: 2,
+        sender: directConversation.participant,
+        messageType: 'TEXT' as const,
+        body: 'Второе',
+        createdAt: '2026-08-03T10:02:00.000Z',
+      },
+      {
+        id: '33333333-3333-4333-8333-333333333333',
+        conversationId,
+        sequence: 3,
+        sender: directConversation.participant,
+        messageType: 'TEXT' as const,
+        body: 'Третье',
+        createdAt: '2026-08-03T10:03:00.000Z',
+      },
+    ];
+    window.history.replaceState({}, '', `/chats/${conversationId}`);
+    const listConversationMessages = vi
+      .fn<AuthGateway['listConversationMessages']>()
+      .mockResolvedValueOnce({ messages: [messages[0]!] })
+      .mockResolvedValueOnce({ messages: [messages[0]!, messages[1]!], nextAfterSequence: 2 })
+      .mockResolvedValueOnce({ messages: [messages[2]!] });
+    const markConversationRead = vi.fn<AuthGateway['markConversationRead']>().mockResolvedValue({
+      outcome: 'ok',
+      readThroughSequence: 3,
+      changed: true,
+      replayed: false,
+    });
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue(session),
+      listConversations: vi.fn().mockResolvedValue({ items: [directConversation] }),
+      listConversationMessages,
+      markConversationRead,
+    });
+
+    render(<App gateway={gateway} tenantKey="padlhub" realtimeBaseUrl="wss://realtime.example" />);
+    await waitFor(() => expect(realtimeMocks.connect).toHaveBeenCalledOnce());
+    expect(await screen.findAllByText('Первое')).toHaveLength(1);
+    const connection = (
+      realtimeMocks.connect.mock.calls as unknown as readonly [
+        { readonly onRecoveryRequired: (afterSequence: number) => void },
+      ][]
+    )[0]?.[0];
+
+    act(() => connection?.onRecoveryRequired(0));
+
+    await waitFor(() => expect(listConversationMessages).toHaveBeenCalledTimes(3));
+    expect(listConversationMessages.mock.calls).toEqual([
+      [conversationId, 0],
+      [conversationId, 0],
+      [conversationId, 2],
+    ]);
+    expect(screen.getAllByText('Первое')).toHaveLength(1);
+    expect(screen.getAllByText('Второе')).toHaveLength(1);
+    expect(screen.getAllByText('Третье')).toHaveLength(1);
+    const thread = screen.getByRole('region', { name: 'История сообщений' });
+    expect(
+      within(thread)
+        .getAllByRole('listitem')
+        .map((item) => item.textContent),
+    ).toEqual([
+      expect.stringContaining('Первое'),
+      expect.stringContaining('Второе'),
+      expect.stringContaining('Третье'),
+    ]);
+    await waitFor(() =>
+      expect(markConversationRead).toHaveBeenCalledWith(conversationId, 3, expect.any(String)),
+    );
+  });
+
+  it('runs one pending recovery after a realtime hint arrives during an HTTP refresh', async () => {
+    const conversationId = '22222222-2222-4222-8222-222222222222';
+    const directConversation = {
+      id: conversationId,
+      kind: 'DIRECT' as const,
+      participant: { userId: '11111111-1111-4111-8111-111111111111', displayName: 'Борис' },
+      unreadCount: 0,
+      updatedAt: '2026-08-03T10:00:00.000Z',
+    };
+    const message = (sequence: number) => ({
+      id: `33333333-3333-4333-8333-${String(sequence).padStart(12, '0')}`,
+      conversationId,
+      sequence,
+      sender: directConversation.participant,
+      messageType: 'TEXT' as const,
+      body: `Сообщение ${sequence}`,
+      createdAt: `2026-08-03T10:0${sequence}:00.000Z`,
+    });
+    let finishPendingHistory:
+      ((value: { messages: readonly [ReturnType<typeof message>] }) => void) | undefined;
+    const pendingHistory = new Promise<{ messages: readonly [ReturnType<typeof message>] }>(
+      (resolve) => {
+        finishPendingHistory = resolve;
+      },
+    );
+    const listConversationMessages = vi
+      .fn<AuthGateway['listConversationMessages']>()
+      .mockResolvedValueOnce({ messages: [message(1)] })
+      .mockReturnValueOnce(pendingHistory)
+      .mockResolvedValueOnce({ messages: [message(3)] });
+    window.history.replaceState({}, '', `/chats/${conversationId}`);
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue(session),
+      listConversations: vi.fn().mockResolvedValue({ items: [directConversation] }),
+      listConversationMessages,
+    });
+
+    render(<App gateway={gateway} tenantKey="padlhub" realtimeBaseUrl="wss://realtime.example" />);
+    await waitFor(() => expect(realtimeMocks.connect).toHaveBeenCalledOnce());
+    const connection = (
+      realtimeMocks.connect.mock.calls as unknown as readonly [
+        { readonly onRecoveryRequired: (afterSequence: number) => void },
+      ][]
+    )[0]?.[0];
+
+    act(() => connection?.onRecoveryRequired(1));
+    await waitFor(() => expect(listConversationMessages).toHaveBeenCalledTimes(2));
+    act(() => connection?.onRecoveryRequired(1));
+    expect(listConversationMessages).toHaveBeenCalledTimes(2);
+    act(() => finishPendingHistory?.({ messages: [message(2)] }));
+
+    await waitFor(() => expect(listConversationMessages).toHaveBeenCalledTimes(3));
+    expect(listConversationMessages.mock.calls).toEqual([
+      [conversationId, 0],
+      [conversationId, 1],
+      [conversationId, 2],
+    ]);
+    expect(screen.getAllByText('Сообщение 1')).toHaveLength(1);
+    expect(screen.getAllByText('Сообщение 2')).toHaveLength(1);
+    expect(screen.getAllByText('Сообщение 3')).toHaveLength(1);
+  });
+
+  it('stops realtime when a loaded DIRECT chat unmounts', async () => {
+    const directConversation = {
+      id: '22222222-2222-4222-8222-222222222222',
+      kind: 'DIRECT' as const,
+      participant: { userId: '11111111-1111-4111-8111-111111111111', displayName: 'Борис' },
+      unreadCount: 0,
+      updatedAt: '2026-08-03T10:00:00.000Z',
+    };
+    const stop = vi.fn();
+    realtimeMocks.connect.mockReturnValueOnce({ stop });
+    window.history.replaceState({}, '', `/chats/${directConversation.id}`);
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue(session),
+      listConversations: vi.fn().mockResolvedValue({ items: [directConversation] }),
+      listConversationMessages: vi.fn().mockResolvedValue({ messages: [] }),
+    });
+
+    const rendered = render(
+      <App gateway={gateway} tenantKey="padlhub" realtimeBaseUrl="wss://realtime.example" />,
+    );
+    await waitFor(() => expect(realtimeMocks.connect).toHaveBeenCalledOnce());
+    rendered.unmount();
+
+    expect(stop).toHaveBeenCalledOnce();
   });
 
   it('retries an unconfirmed message with the same stable clientMessageId', async () => {

@@ -585,6 +585,7 @@ export function App({
   const [chatsError, setChatsError] = useState<ChatUiError | null>(null);
   const [chatsBusy, setChatsBusy] = useState<'create' | 'send' | 'refresh' | null>(null);
   const [chatsReloadToken, setChatsReloadToken] = useState(0);
+  const [loadedDirectConversationId, setLoadedDirectConversationId] = useState<string | null>(null);
   const [failedChatMessage, setFailedChatMessage] = useState<{
     readonly conversationId: string;
     readonly clientMessageId: string;
@@ -628,6 +629,8 @@ export function App({
   const chatLastSequenceRef = useRef(0);
   const chatReadThroughRef = useRef(0);
   const chatRefreshInFlightRef = useRef(false);
+  const chatRefreshPendingRef = useRef(false);
+  const chatRefreshRef = useRef<() => void>(() => undefined);
   const chatCreateCommandRef = useRef<{
     readonly recipientUserId: string;
     readonly idempotencyKey: string;
@@ -916,6 +919,10 @@ export function App({
       chatLastSequenceRef.current = 0;
       chatReadThroughRef.current = 0;
       chatRefreshInFlightRef.current = false;
+      chatRefreshPendingRef.current = false;
+      let initialHistoryOutcome: 'pending' | 'loaded' | 'failed' = requestedConversationId
+        ? 'pending'
+        : 'loaded';
 
       const readMessageGap = async (
         conversationId: string,
@@ -935,7 +942,11 @@ export function App({
       };
 
       const refreshChats = async (): Promise<void> => {
-        if (chatRefreshInFlightRef.current || !active) return;
+        if (!active) return;
+        if (chatRefreshInFlightRef.current) {
+          chatRefreshPendingRef.current = true;
+          return;
+        }
         chatRefreshInFlightRef.current = true;
         const listResult = await gateway.listConversations().then(
           (page) => ({ status: 'fulfilled' as const, page }),
@@ -948,22 +959,44 @@ export function App({
             )
           : ({ status: 'skipped' } as const);
         chatRefreshInFlightRef.current = false;
+        if (chatRefreshPendingRef.current && active) {
+          chatRefreshPendingRef.current = false;
+          void Promise.resolve().then(refreshChats);
+        }
         if (!active) return;
 
         if (listResult.status === 'fulfilled') setConversations(listResult.page);
         else {
           setConversations(null);
+          setLoadedDirectConversationId(null);
           setChatsError(chatUiError(listResult.error, 'list'));
           setChatsBusy(null);
           return;
         }
 
         if (historyResult.status === 'rejected') {
+          if (initialHistoryOutcome === 'pending') {
+            initialHistoryOutcome = 'failed';
+            setLoadedDirectConversationId(null);
+          }
           setChatsError(chatUiError(historyResult.error, 'history'));
           setChatsBusy(null);
           return;
         }
         if (historyResult.status === 'fulfilled') {
+          const selectedDirect = Boolean(
+            requestedConversationId &&
+            listResult.page.items.some(
+              (conversation) =>
+                conversation.id === requestedConversationId && conversation.kind === 'DIRECT',
+            ),
+          );
+          if (requestedConversationId && selectedDirect && initialHistoryOutcome === 'pending') {
+            initialHistoryOutcome = 'loaded';
+            setLoadedDirectConversationId(requestedConversationId);
+          } else if (!selectedDirect || initialHistoryOutcome === 'failed') {
+            setLoadedDirectConversationId(null);
+          }
           const newestSequence = historyResult.messages.at(-1)?.sequence;
           if (newestSequence !== undefined) {
             chatLastSequenceRef.current = Math.max(chatLastSequenceRef.current, newestSequence);
@@ -993,6 +1026,7 @@ export function App({
         setChatsError(null);
         setChatsBusy(null);
       };
+      chatRefreshRef.current = () => void refreshChats();
 
       void Promise.resolve().then(() => {
         if (!active) return;
@@ -1004,28 +1038,12 @@ export function App({
         () => void refreshChats(),
         CHATS_REFRESH_INTERVAL_MS,
       );
-      const realtime =
-        requestedConversationId && realtimeBaseUrl
-          ? connectChatRealtime({
-              baseUrl: realtimeBaseUrl,
-              tenantKey,
-              conversationId: requestedConversationId,
-              getTicket: () => gateway.createRealtimeTicket(),
-              getAfterSequence: () => chatLastSequenceRef.current,
-              onRecoveryRequired: (afterSequence) => {
-                if (afterSequence < chatLastSequenceRef.current) {
-                  chatLastSequenceRef.current = afterSequence;
-                  chatReadThroughRef.current = Math.min(chatReadThroughRef.current, afterSequence);
-                  if (afterSequence === 0) setConversationMessages([]);
-                }
-                void refreshChats();
-              },
-            })
-          : undefined;
       return () => {
         active = false;
         chatRefreshInFlightRef.current = false;
-        realtime?.stop();
+        chatRefreshPendingRef.current = false;
+        chatRefreshRef.current = () => undefined;
+        setLoadedDirectConversationId(null);
         window.clearInterval(refreshInterval);
       };
     }
@@ -1183,14 +1201,38 @@ export function App({
     chatsReloadToken,
     protectedRoute.kind,
     requestedConversationId,
-    realtimeBaseUrl,
-    tenantKey,
     requestedLocationId,
     requestedProfileUserId,
     homeReloadToken,
     state.session,
     state.view,
   ]);
+
+  useEffect(() => {
+    if (
+      !loadedDirectConversationId ||
+      loadedDirectConversationId !== requestedConversationId ||
+      !realtimeBaseUrl
+    ) {
+      return;
+    }
+    const realtime = connectChatRealtime({
+      baseUrl: realtimeBaseUrl,
+      tenantKey,
+      conversationId: loadedDirectConversationId,
+      getTicket: () => gateway.createRealtimeTicket(),
+      getAfterSequence: () => chatLastSequenceRef.current,
+      onRecoveryRequired: (afterSequence) => {
+        if (afterSequence < chatLastSequenceRef.current) {
+          chatLastSequenceRef.current = afterSequence;
+          chatReadThroughRef.current = Math.min(chatReadThroughRef.current, afterSequence);
+          if (afterSequence === 0) setConversationMessages([]);
+        }
+        chatRefreshRef.current();
+      },
+    });
+    return () => realtime.stop();
+  }, [gateway, loadedDirectConversationId, realtimeBaseUrl, requestedConversationId, tenantKey]);
 
   useEffect(() => {
     if (state.busy) return;

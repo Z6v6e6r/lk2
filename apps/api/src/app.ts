@@ -4,7 +4,7 @@ import cors from '@fastify/cors';
 import cookie from '@fastify/cookie';
 import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
-import type { AppConfig } from '@phub/config';
+import type { AppConfig, RuntimeContourAttestation } from '@phub/config';
 import type {
   CommunityCreateService,
   CommunityDirectoryService,
@@ -215,6 +215,7 @@ export interface BuildAppOptions {
   readonly pool?: Pool;
   readonly authService?: AuthService;
   readonly authDependencyReady?: () => Promise<boolean>;
+  readonly runtimeContourAttestation?: RuntimeContourAttestation;
   readonly communityDirectory?: CommunityDirectoryService;
   readonly communityReadExperienceService?: CommunityReadExperienceService;
   readonly communityCreateService?: CommunityCreateService;
@@ -720,9 +721,20 @@ export async function buildApp(options: BuildAppOptions) {
         database: databaseReady,
         auth: authReady,
         communityMedia: communityMediaReady,
+        ...(options.runtimeContourAttestation
+          ? { runtimeContour: options.runtimeContourAttestation }
+          : {}),
       });
     }
-    return { status: 'ready', database: true, auth: true, communityMedia: true };
+    return {
+      status: 'ready',
+      database: true,
+      auth: true,
+      communityMedia: true,
+      ...(options.runtimeContourAttestation
+        ? { runtimeContour: options.runtimeContourAttestation }
+        : {}),
+    };
   });
 
   if (options.authService) {
@@ -751,6 +763,7 @@ export async function buildApp(options: BuildAppOptions) {
   registerMessagingRoutes(app as unknown as FastifyInstance, {
     ...(options.messagingRepository ? { repository: options.messagingRepository } : {}),
     ...(options.realtimeTicketIssuer ? { realtimeTicketIssuer: options.realtimeTicketIssuer } : {}),
+    userBlockCommandsEnabled: options.config.MESSAGING_USER_BLOCK_COMMANDS_ENABLED,
     authenticatedTenantHandlers: [authenticate, resolveTenant],
     directCommandHandlers: [
       authenticate,
@@ -983,6 +996,9 @@ export async function buildApp(options: BuildAppOptions) {
       : {}),
     ...(options.notificationEndpointCipher ? { cipher: options.notificationEndpointCipher } : {}),
     enabledGlobally: options.config.WEB_PUSH_ENABLED,
+    maxEndpointsPerUser: options.config.WEB_PUSH_ENDPOINTS_PER_USER_MAX,
+    allowedEndpointOrigins:
+      options.config.WEB_PUSH_ALLOWED_ENDPOINT_ORIGINS.split(',').filter(Boolean),
     ...(options.config.WEB_PUSH_VAPID_PUBLIC_KEY
       ? { publicKey: options.config.WEB_PUSH_VAPID_PUBLIC_KEY }
       : {}),

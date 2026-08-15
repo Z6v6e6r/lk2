@@ -1,5 +1,33 @@
 import { metrics } from '@opentelemetry/api';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const instruments = vi.hoisted(() => ({
+  gaugeRecord: vi.fn(),
+  counterAdd: vi.fn(),
+  histogramRecord: vi.fn(),
+}));
+
+vi.mock('@opentelemetry/api', () => ({
+  metrics: {
+    getMeter: () => ({
+      createGauge: (name: string) => ({
+        record: (value: number, attributes?: Readonly<Record<string, string>>) => {
+          instruments.gaugeRecord(name, value, attributes);
+        },
+      }),
+      createCounter: (name: string) => ({
+        add: (value: number, attributes?: Readonly<Record<string, string>>) => {
+          instruments.counterAdd(name, value, attributes);
+        },
+      }),
+      createHistogram: (name: string) => ({
+        record: (value: number, attributes?: Readonly<Record<string, string>>) => {
+          instruments.histogramRecord(name, value, attributes);
+        },
+      }),
+    }),
+  },
+}));
 
 import { DEAD_LETTER_QUEUE } from './broker-topology.js';
 import {
@@ -9,23 +37,59 @@ import {
 } from './operational-metrics.js';
 
 describe('worker operational metrics', () => {
-  it('retains messaging metrics and adds Communities projection metrics per tenant', async () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('collects chat, push, booking and Communities metrics through tenant transactions', async () => {
     const release = vi.fn();
     const tenantContexts: string[] = [];
+    const pushDeliveryQueries: string[] = [];
+    const bookingReminderQueries: string[] = [];
     const connect = vi.fn(() => ({
       query: vi.fn((text: string, values: readonly unknown[] = []) => {
-        if (text.includes("set_config('app.tenant_id'")) tenantContexts.push(String(values[0]));
+        if (text.includes("set_config('app.tenant_id'")) {
+          tenantContexts.push(String(values[0]));
+        }
+        if (text.includes("schedule.state = 'MISSED'")) {
+          bookingReminderQueries.push(text);
+          return Promise.resolve({
+            rows:
+              values[0] === 'tenant-a'
+                ? [{ latest_missed_unixtime: 1_777_777_777 }]
+                : [{ latest_missed_unixtime: 1_666_666_666 }],
+          });
+        }
+        if (text.includes('from notifications.booking_reminder_schedules')) {
+          bookingReminderQueries.push(text);
+          return Promise.resolve({
+            rows: [
+              values[0] === 'tenant-a'
+                ? { due_count: '4', oldest_due_age_seconds: 50 }
+                : { due_count: '1', oldest_due_age_seconds: 10 },
+            ],
+          });
+        }
         if (text.includes('oldest_age_seconds') && text.includes('audit.outbox_events')) {
           return Promise.resolve({
             rows: values[0] === 'tenant-a' ? [{ oldest_age_seconds: 42.5 }] : [],
           });
         }
         if (text.includes("channel = 'PUSH'")) {
+          pushDeliveryQueries.push(text);
           return Promise.resolve({
             rows: [
               values[0] === 'tenant-a'
-                ? { due_count: '2', oldest_due_age_seconds: 31.25, dead_count: '1' }
-                : { due_count: '3', oldest_due_age_seconds: 12, dead_count: '4' },
+                ? {
+                    due_count: '2',
+                    oldest_due_age_seconds: 31.25,
+                    dead_count: '1',
+                    policy_suspended_count: '2',
+                  }
+                : {
+                    due_count: '3',
+                    oldest_due_age_seconds: 12,
+                    dead_count: '4',
+                    policy_suspended_count: '1',
+                  },
             ],
           });
         }
@@ -95,11 +159,96 @@ describe('worker operational metrics', () => {
       communityMediaGcBacklog: 7,
       communityMediaGcOldestAgeSeconds: 55,
       communityMediaDeadGcJobs: 4,
+      pushDeliveriesPolicySuspended: 3,
+      bookingRemindersDue: 5,
+      bookingReminderOldestDueAgeSeconds: 50,
+      bookingReminderLatestMissedUnixTime: 1_777_777_777,
     });
     expect(connect).toHaveBeenCalledTimes(2);
     expect(release).toHaveBeenCalledTimes(2);
     expect(tenantContexts.sort()).toEqual(['tenant-a', 'tenant-b']);
     expect(channel.checkQueue).toHaveBeenCalledWith(DEAD_LETTER_QUEUE);
+    const deliverySql = pushDeliveryQueries[0] ?? '';
+    expect(deliverySql).toContain("endpoint.status in ('ACTIVE', 'INVALID', 'REVOKED')");
+    expect(deliverySql).toContain("endpoint.status = 'SUSPENDED_POLICY'");
+    expect(bookingReminderQueries).toHaveLength(4);
+    const pendingSql = bookingReminderQueries.find((text) =>
+      text.includes("schedule.state = 'PENDING'"),
+    );
+    const missedSql = bookingReminderQueries.find((text) =>
+      text.includes("schedule.state = 'MISSED'"),
+    );
+    expect(pendingSql).toContain('runtime.booking_reminders_enabled');
+    expect(missedSql).toContain('order by schedule.completed_at desc');
+  });
+
+  it('labels every scheduler process measurement by worker instance', () => {
+    const recorder = createWorkerMetricRecorder({
+      instanceId: 'worker-replica-b',
+      now: () => 123_456,
+    });
+
+    recorder.recordBookingReminderSchedulerCycle(2, 1, 45, true);
+
+    const attributes = { 'service.instance.id': 'worker-replica-b' };
+    expect(instruments.gaugeRecord).toHaveBeenCalledWith(
+      WORKER_METRIC_INSTRUMENTS.bookingReminderSchedulerHeartbeatUnixTime,
+      123,
+      attributes,
+    );
+    expect(instruments.gaugeRecord).toHaveBeenCalledWith(
+      WORKER_METRIC_INSTRUMENTS.bookingReminderSchedulerSuccess,
+      0,
+      attributes,
+    );
+    expect(instruments.counterAdd).toHaveBeenCalledWith(
+      WORKER_METRIC_INSTRUMENTS.bookingReminderSchedulerEmitted,
+      2,
+      attributes,
+    );
+    expect(instruments.counterAdd).toHaveBeenCalledWith(
+      WORKER_METRIC_INSTRUMENTS.bookingReminderSchedulerMissed,
+      1,
+      attributes,
+    );
+    expect(instruments.counterAdd).toHaveBeenCalledWith(
+      WORKER_METRIC_INSTRUMENTS.bookingReminderSchedulerFailures,
+      1,
+      attributes,
+    );
+    expect(instruments.histogramRecord).toHaveBeenCalledWith(
+      WORKER_METRIC_INSTRUMENTS.bookingReminderSchedulerDurationMilliseconds,
+      45,
+      attributes,
+    );
+  });
+
+  it('records bounded Web Push provider outcomes per worker instance and environment', () => {
+    const recorder = createWorkerMetricRecorder({ instanceId: 'worker-replica-push' });
+
+    recorder.recordWebPushCycle(1, 2, 45, false);
+    recorder.recordWebPushProviderOutcome('SANDBOX', 'WEB_PUSH_CIRCUIT_OPEN');
+
+    const instanceAttributes = { 'service.instance.id': 'worker-replica-push' };
+    expect(instruments.gaugeRecord).toHaveBeenCalledWith(
+      WORKER_METRIC_INSTRUMENTS.webPushCycleSuccess,
+      0,
+      instanceAttributes,
+    );
+    expect(instruments.counterAdd).toHaveBeenCalledWith(
+      WORKER_METRIC_INSTRUMENTS.webPushTenantFailures,
+      1,
+      instanceAttributes,
+    );
+    expect(instruments.counterAdd).toHaveBeenCalledWith(
+      WORKER_METRIC_INSTRUMENTS.webPushProviderOutcomes,
+      1,
+      {
+        ...instanceAttributes,
+        environment: 'SANDBOX',
+        outcome: 'WEB_PUSH_CIRCUIT_OPEN',
+      },
+    );
   });
 
   it('returns a zero snapshot without opening tenant transactions when no tenant is active', async () => {
@@ -116,6 +265,10 @@ describe('worker operational metrics', () => {
       pushDeliveriesDue: 0,
       pushDeliveryOldestDueAgeSeconds: 0,
       pushDeliveriesDead: 0,
+      pushDeliveriesPolicySuspended: 0,
+      bookingRemindersDue: 0,
+      bookingReminderOldestDueAgeSeconds: 0,
+      bookingReminderLatestMissedUnixTime: 0,
       communityMemberCountBuilding: 0,
       communityMemberCountStale: 0,
       communityMemberCountNotReadyAgeSeconds: 0,
@@ -137,7 +290,14 @@ describe('worker operational metrics', () => {
         }
         if (text.includes("channel = 'PUSH'")) {
           return Promise.resolve({
-            rows: [{ due_count: 0, oldest_due_age_seconds: 0, dead_count: 0 }],
+            rows: [
+              {
+                due_count: 0,
+                oldest_due_age_seconds: 0,
+                dead_count: 0,
+                policy_suspended_count: 0,
+              },
+            ],
           });
         }
         if (text.includes('building_count')) {
@@ -179,7 +339,7 @@ describe('worker operational metrics', () => {
       createHistogram: vi.fn(instrument),
     };
     vi.spyOn(metrics, 'getMeter').mockReturnValue(meter as never);
-    const recorder = createWorkerMetricRecorder();
+    const recorder = createWorkerMetricRecorder({ instanceId: 'worker-replica-c' });
 
     recorder.recordOperationalSnapshot(
       {
@@ -189,6 +349,10 @@ describe('worker operational metrics', () => {
         pushDeliveriesDue: 4,
         pushDeliveryOldestDueAgeSeconds: 5,
         pushDeliveriesDead: 6,
+        pushDeliveriesPolicySuspended: 0,
+        bookingRemindersDue: 0,
+        bookingReminderOldestDueAgeSeconds: 0,
+        bookingReminderLatestMissedUnixTime: 0,
         communityMemberCountBuilding: 7,
         communityMemberCountStale: 8,
         communityMemberCountNotReadyAgeSeconds: 9,

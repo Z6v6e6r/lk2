@@ -1,7 +1,10 @@
 import type { Pool, QueryResult } from 'pg';
 import { describe, expect, it, vi } from 'vitest';
 
-import { finalizeNotificationDelivery } from './notification-delivery-finalizer.js';
+import {
+  deferNotificationDeliveryWithoutAttempt,
+  finalizeNotificationDelivery,
+} from './notification-delivery-finalizer.js';
 
 const job = {
   tenantId: '11111111-1111-4111-8111-111111111111',
@@ -36,6 +39,9 @@ function fakePool(
     if (text.includes('update notifications.deliveries')) {
       return Promise.resolve(result([], updateRowCount));
     }
+    if (text.includes('update integration.notification_endpoints')) {
+      return Promise.resolve(result([], 1));
+    }
     if (text.includes('insert into integration.notification_provider_links')) {
       return Promise.resolve(
         result(
@@ -62,6 +68,55 @@ function fakePool(
 }
 
 describe('notification delivery finalizer', () => {
+  it('defers an expired but unreclaimed circuit-suppressed claim without attempt evidence', async () => {
+    const { pool, queries } = fakePool(1);
+
+    await expect(
+      deferNotificationDeliveryWithoutAttempt({
+        pool,
+        job,
+        retryAfterMs: 30_000,
+        errorCode: 'WEB_PUSH_CIRCUIT_OPEN',
+      }),
+    ).resolves.toBe('retry');
+
+    const update = queries.find((entry) => entry.text.includes("set state = 'PENDING'"));
+    expect(update?.text).toContain('attempt_count = $3 - 1');
+    expect(update?.text).toContain("state = 'SENDING' and attempt_count = $3");
+    expect(update?.text).not.toContain('lease_expires_at > now()');
+    expect(update?.values).toEqual([
+      job.tenantId,
+      job.deliveryId,
+      job.attemptNo,
+      30_000,
+      'WEB_PUSH_CIRCUIT_OPEN',
+    ]);
+    const sql = queries.map((entry) => entry.text).join('\n');
+    expect(sql).not.toContain('delivery_attempts');
+    expect(sql).not.toContain('outbox_events');
+    expect(sql).not.toContain('select state');
+  });
+
+  it('does not decrement a circuit-suppressed attempt after a newer claim fenced it out', async () => {
+    const { pool, queries } = fakePool(0);
+
+    await expect(
+      deferNotificationDeliveryWithoutAttempt({
+        pool,
+        job,
+        retryAfterMs: 30_000,
+        errorCode: 'WEB_PUSH_CIRCUIT_OPEN',
+      }),
+    ).resolves.toBe('stale');
+
+    const update = queries.find((entry) => entry.text.includes("set state = 'PENDING'"));
+    expect(update?.text).toContain("state = 'SENDING' and attempt_count = $3");
+    expect(update?.values).toContain(job.attemptNo);
+    const sql = queries.map((entry) => entry.text).join('\n');
+    expect(sql).not.toContain('delivery_attempts');
+    expect(sql).not.toContain('outbox_events');
+  });
+
   it('treats an expired/lost lease as stale and appends no attempt, receipt or outbox', async () => {
     const { pool, queries } = fakePool(0);
 
@@ -170,5 +225,36 @@ describe('notification delivery finalizer', () => {
         retryBaseMs: 5_000,
       }),
     ).resolves.toBe('sent');
+  });
+
+  it('suspends a policy-denied Web Push endpoint without marking it provider-invalid', async () => {
+    const { pool, queries } = fakePool(1);
+
+    await expect(
+      finalizeNotificationDelivery({
+        pool,
+        job,
+        result: {
+          outcome: 'terminal_failure',
+          errorCode: 'WEB_PUSH_EGRESS_BLOCKED',
+          invalidate: false,
+          suspendPolicy: true,
+        },
+        platform: 'WEB',
+        transport: 'WEB_PUSH',
+        maxAttempts: 5,
+        retryBaseMs: 5_000,
+      }),
+    ).resolves.toBe('dead');
+
+    const endpointUpdate = queries.find((entry) =>
+      entry.text.includes('update integration.notification_endpoints'),
+    );
+    expect(endpointUpdate?.text).toContain("status = 'ACTIVE'");
+    expect(endpointUpdate?.values).toContain('SUSPENDED_POLICY');
+    expect(endpointUpdate?.values).not.toContain('INVALID');
+    const audit = queries.find((entry) => entry.text.includes('insert into audit.audit_log'));
+    expect(audit?.values).toContain('WEB_PUSH_ENDPOINT_POLICY_SUSPENDED');
+    expect(audit?.values).toContain(JSON.stringify({ status: 'SUSPENDED_POLICY' }));
   });
 });

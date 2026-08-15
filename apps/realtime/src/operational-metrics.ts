@@ -28,7 +28,9 @@ export interface RealtimeMetricRecorder {
   recordSocketBackpressureClosure(): void;
 }
 
-export function createRealtimeMetricRecorder(): RealtimeMetricRecorder {
+export function createRealtimeMetricRecorder(options: {
+  readonly instanceId: string;
+}): RealtimeMetricRecorder {
   const meter = metrics.getMeter('@phub/realtime');
   const activeConnections = meter.createUpDownCounter(
     REALTIME_METRIC_INSTRUMENTS.activeConnections,
@@ -52,34 +54,35 @@ export function createRealtimeMetricRecorder(): RealtimeMetricRecorder {
   const socketBackpressureClosures = meter.createCounter(
     REALTIME_METRIC_INSTRUMENTS.socketBackpressureClosures,
   );
+  const instanceAttributes = { 'service.instance.id': options.instanceId };
 
   return {
     recordConnectionOpened() {
-      activeConnections.add(1);
+      activeConnections.add(1, instanceAttributes);
     },
     recordConnectionClosed() {
-      activeConnections.add(-1);
+      activeConnections.add(-1, instanceAttributes);
     },
     recordConnectionRejected(reason) {
-      rejectedConnections.add(1, { reason });
+      rejectedConnections.add(1, { ...instanceAttributes, reason });
     },
     recordAuthentication(outcome) {
-      authenticationAttempts.add(1, { outcome });
+      authenticationAttempts.add(1, { ...instanceAttributes, outcome });
     },
     recordCommunitySubscription(outcome) {
-      communitySubscriptions.add(1, { outcome });
+      communitySubscriptions.add(1, { ...instanceAttributes, outcome });
     },
     recordCommunityFanout(recipients) {
-      if (recipients > 0) communityFanoutRecipients.add(recipients);
+      if (recipients > 0) communityFanoutRecipients.add(recipients, instanceAttributes);
     },
     recordCommunityFanoutHint(outcome) {
-      communityFanoutHints.add(1, { outcome });
+      communityFanoutHints.add(1, { ...instanceAttributes, outcome });
     },
     recordCommunityFanoutFailure() {
-      communityFanoutFailures.add(1);
+      communityFanoutFailures.add(1, instanceAttributes);
     },
     recordSocketBackpressureClosure() {
-      socketBackpressureClosures.add(1);
+      socketBackpressureClosures.add(1, instanceAttributes);
     },
   };
 }

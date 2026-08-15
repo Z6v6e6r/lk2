@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import websocket from '@fastify/websocket';
 import { REALTIME_TICKET_SCOPE } from '@phub/auth';
-import type { AppConfig } from '@phub/config';
+import type { AppConfig, RuntimeContourAttestation } from '@phub/config';
 import type { MessagingRepository, RealtimeAuthorizationRepository } from '@phub/database';
 import Fastify from 'fastify';
 import type Redis from 'ioredis';
@@ -147,6 +147,7 @@ export async function buildRealtimeApp(options: {
   readonly databaseReady?: () => Promise<boolean>;
   readonly rabbitReady?: () => boolean;
   readonly metrics?: RealtimeMetricRecorder;
+  readonly runtimeContourAttestation?: RuntimeContourAttestation;
 }) {
   const connections = new Set<ConnectionContext>();
   const deliveredSequences = new Map<string, number>();
@@ -329,6 +330,9 @@ export async function buildRealtimeApp(options: {
         database: databaseReady,
         rabbit: rabbitReady,
         communities: options.config.COMMUNITIES_REALTIME_ENABLED,
+        ...(options.runtimeContourAttestation
+          ? { runtimeContour: options.runtimeContourAttestation }
+          : {}),
       });
     }
     return {
@@ -337,6 +341,9 @@ export async function buildRealtimeApp(options: {
       database: true,
       rabbit: rabbitReady,
       communities: options.config.COMMUNITIES_REALTIME_ENABLED,
+      ...(options.runtimeContourAttestation
+        ? { runtimeContour: options.runtimeContourAttestation }
+        : {}),
     };
   });
 

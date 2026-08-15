@@ -25,6 +25,149 @@ describe('messaging repository', () => {
     expect(source).not.toMatch(/\b(?:join|from)\s+[^\s]+\s+current_user\b/i);
   });
 
+  it('keeps directed blocks tenant-local across direct reads, writes, subscriptions and fanout', async () => {
+    const source = await readFile(new URL('./messaging-repository.ts', import.meta.url), 'utf8');
+
+    expect(source).toContain('from messaging.user_blocks block');
+    expect(source).toContain('messaging.user_block_commands');
+    expect(source).toContain('messaging.user-block.changed.v1');
+    expect(source).toContain("conversation.kind = 'GAME'");
+    expect(source).toContain('getAuthorizedMember');
+    expect(source).toContain('listRealtimeRecipientUserIds');
+    expect(source).toContain('pg_advisory_xact_lock');
+  });
+
+  it('stores a directed block, command result, audit and outbox atomically', async () => {
+    const query = vi.fn((text: string, values: readonly unknown[] = []) => {
+      void values;
+      if (
+        text === 'begin' ||
+        text === 'commit' ||
+        text.includes("set_config('app.tenant_id'") ||
+        text.includes('pg_advisory_xact_lock')
+      ) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('from messaging.user_block_commands')) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('select user_account.id')) {
+        return Promise.resolve({ rows: [{ id: userId }], rowCount: 1 });
+      }
+      if (text.includes('select id from identity.users')) {
+        return Promise.resolve({ rows: [{ id: otherUserId }], rowCount: 1 });
+      }
+      if (text.includes('insert into messaging.user_blocks')) {
+        return Promise.resolve({ rows: [], rowCount: 1 });
+      }
+      if (
+        text.includes('insert into messaging.user_block_commands') ||
+        text.includes('insert into audit.outbox_events') ||
+        text.includes('insert into audit.audit_log')
+      ) {
+        return Promise.resolve({ rows: [], rowCount: 1 });
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const repository = createMessagingRepository(poolWithQuery(query) as never);
+
+    await expect(
+      repository.setUserBlock({
+        tenantId,
+        actorUserId: userId,
+        otherUserId,
+        action: 'BLOCK',
+        idempotencyKey: 'user-block-command-0001',
+        correlationId: 'user-block-correlation-0001',
+      }),
+    ).resolves.toEqual({ outcome: 'ok', changed: true, replayed: false });
+
+    expect(query.mock.calls.some(([text]) => String(text).includes('audit.outbox_events'))).toBe(
+      true,
+    );
+    expect(query.mock.calls.some(([text]) => String(text).includes('audit.audit_log'))).toBe(true);
+    expect(
+      query.mock.calls
+        .filter(([text]) => String(text).includes('pg_advisory_xact_lock'))
+        .map(([, values]) => String(values?.[0])),
+    ).toEqual([
+      `${tenantId}:${userId}:user-block-command-0001`,
+      `${tenantId}:${userId}:${otherUserId}`,
+    ]);
+  });
+
+  it('replays a stored block command after rechecking the current actor permission', async () => {
+    const query = vi.fn((text: string) => {
+      if (
+        text === 'begin' ||
+        text === 'commit' ||
+        text.includes("set_config('app.tenant_id'") ||
+        text.includes('pg_advisory_xact_lock')
+      ) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('select user_account.id')) {
+        return Promise.resolve({ rows: [{ id: userId }], rowCount: 1 });
+      }
+      if (text.includes('from messaging.user_block_commands')) {
+        return Promise.resolve({
+          rows: [{ other_user_id: otherUserId, action: 'BLOCK', changed: true }],
+          rowCount: 1,
+        });
+      }
+      throw new Error(`Replay must not query or mutate current target state: ${text}`);
+    });
+    const repository = createMessagingRepository(poolWithQuery(query) as never);
+
+    await expect(
+      repository.setUserBlock({
+        tenantId,
+        actorUserId: userId,
+        otherUserId,
+        action: 'BLOCK',
+        idempotencyKey: 'user-block-command-0001',
+        correlationId: 'user-block-correlation-0002',
+      }),
+    ).resolves.toEqual({ outcome: 'ok', changed: true, replayed: true });
+  });
+
+  it('denies block mutation and replay when current actor authorization was revoked', async () => {
+    const query = vi.fn((text: string) => {
+      if (
+        text === 'begin' ||
+        text === 'commit' ||
+        text.includes("set_config('app.tenant_id'") ||
+        text.includes('pg_advisory_xact_lock')
+      ) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('select user_account.id')) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      throw new Error(`Revoked actor must not read replay state or mutate blocks: ${text}`);
+    });
+    const repository = createMessagingRepository(poolWithQuery(query) as never);
+
+    await expect(
+      repository.setUserBlock({
+        tenantId,
+        actorUserId: userId,
+        otherUserId,
+        action: 'BLOCK',
+        idempotencyKey: 'user-block-command-0001',
+        correlationId: 'user-block-correlation-revoked',
+      }),
+    ).resolves.toEqual({ outcome: 'forbidden' });
+
+    expect(
+      query.mock.calls.some(([text]) =>
+        /user_block_commands|insert into messaging\.user_blocks|audit\.(?:audit_log|outbox_events)/.test(
+          String(text),
+        ),
+      ),
+    ).toBe(false);
+  });
+
   it('keeps every runtime gate disabled without an explicit tenant row', async () => {
     const query = vi.fn((text: string, values?: readonly unknown[]) => {
       void values;
@@ -289,6 +432,15 @@ describe('messaging repository', () => {
     expect(gameQuery).toContain("participation.state = 'ACTIVE'");
     expect(gameQuery).toContain("'games.play' = any(current_access.permissions)");
     expect(gameQuery).toContain('runtime.contextual_enabled');
+    const directQuery = String(
+      query.mock.calls.find(([text]) => String(text).includes("conversation.kind = 'DIRECT'"))?.[0],
+    );
+    expect(directQuery).toContain('identity.user_access_profiles current_access');
+    expect(directQuery).toContain("'chat.direct.create' = any(current_access.permissions)");
+    expect(directQuery).toContain("other_user.status = 'ACTIVE'");
+    expect(directQuery).toContain(
+      "coalesce(target_privacy.chat_policy, 'AUTHORIZED') = 'AUTHORIZED'",
+    );
   });
 
   it('allocates one sequence and emits only identifiers to the outbox', async () => {
@@ -526,6 +678,9 @@ describe('messaging repository', () => {
       if (text.includes('from messaging.direct_conversation_commands')) {
         return Promise.resolve({ rows: [], rowCount: 0 });
       }
+      if (text.includes('select true as blocked')) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
       if (text.includes('from identity.users user_account')) {
         return Promise.resolve({
           rows: [
@@ -554,6 +709,57 @@ describe('messaging repository', () => {
       ),
     ).toBe(false);
   });
+
+  it.each([
+    { actorUserId: userId, blockedUserId: otherUserId },
+    { actorUserId: otherUserId, blockedUserId: userId },
+  ])(
+    'hides direct creation when either pair direction is blocked: $actorUserId',
+    async ({ actorUserId, blockedUserId }) => {
+      const query = vi.fn((text: string) => {
+        if (
+          text === 'begin' ||
+          text === 'commit' ||
+          text.includes("set_config('app.tenant_id'") ||
+          text.includes('pg_advisory_xact_lock')
+        ) {
+          return Promise.resolve({ rows: [], rowCount: 0 });
+        }
+        if (text.includes('from identity.users user_account')) {
+          return Promise.resolve({
+            rows: [
+              { id: actorUserId, chat_policy: 'AUTHORIZED' },
+              { id: blockedUserId, chat_policy: 'AUTHORIZED' },
+            ],
+            rowCount: 2,
+          });
+        }
+        if (text.includes('from messaging.user_blocks')) {
+          return Promise.resolve({ rows: [{ blocked: true }], rowCount: 1 });
+        }
+        throw new Error(`Blocked direct pair must not reach command or mutation queries: ${text}`);
+      });
+      const repository = createMessagingRepository(poolWithQuery(query) as never);
+
+      await expect(
+        repository.createDirectConversation({
+          tenantId,
+          actorUserId,
+          otherUserId: blockedUserId,
+          idempotencyKey: 'direct-command-blocked-0001',
+          correlationId: 'direct-correlation-blocked-0001',
+        }),
+      ).resolves.toEqual({ outcome: 'target_not_found' });
+
+      expect(
+        query.mock.calls.some(([text]) =>
+          /direct_conversation_commands|insert into messaging\.(?:conversations|direct_conversations|conversation_members)|audit\.(?:audit_log|outbox_events)/.test(
+            String(text),
+          ),
+        ),
+      ).toBe(false);
+    },
+  );
 
   it('denies direct creation when the current database permission is missing', async () => {
     const query = vi.fn((text: string) => {
@@ -609,6 +815,9 @@ describe('messaging repository', () => {
         return Promise.resolve({ rows: [], rowCount: 0 });
       }
       if (text.includes('from messaging.direct_conversation_commands')) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('select true as blocked')) {
         return Promise.resolve({ rows: [], rowCount: 0 });
       }
       if (text.includes('from identity.users user_account')) {
@@ -738,6 +947,70 @@ describe('messaging repository', () => {
     ).resolves.toEqual({ outcome: 'not_found' });
   });
 
+  it('denies blocked history, send and read before any durable mutation', async () => {
+    const mutationPattern =
+      /insert into messaging\.(?:messages|read_cursor_commands)|update messaging\.(?:conversations|conversation_members)|insert into audit\.(?:audit_log|outbox_events)/;
+    const deniedMemberQuery = (text: string) => {
+      if (text === 'begin' || text === 'commit' || text.includes("set_config('app.tenant_id'")) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('select next_sequence, kind')) {
+        return Promise.resolve({ rows: [{ next_sequence: '5', kind: 'DIRECT' }], rowCount: 1 });
+      }
+      if (text.includes('select left_user_id, right_user_id')) {
+        return Promise.resolve({
+          rows: [{ left_user_id: userId, right_user_id: otherUserId }],
+          rowCount: 1,
+        });
+      }
+      if (text.includes('pg_advisory_xact_lock')) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('member.id as member_id')) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      throw new Error(`Denied member must not reach durable state: ${text}`);
+    };
+
+    for (const operation of ['history', 'send', 'read'] as const) {
+      const query = vi.fn(deniedMemberQuery);
+      const repository = createMessagingRepository(poolWithQuery(query) as never);
+      const result =
+        operation === 'history'
+          ? await repository.listMessages({
+              tenantId,
+              userId,
+              conversationId,
+              afterSequence: 0,
+              limit: 50,
+            })
+          : operation === 'send'
+            ? await repository.sendMessage({
+                tenantId,
+                userId,
+                conversationId,
+                clientMessageId: 'blocked-client-message-0001',
+                idempotencyKey: 'blocked-message-command-0001',
+                body: 'Сообщение не должно записаться',
+                correlationId: 'blocked-message-correlation-0001',
+              })
+            : await repository.markRead({
+                tenantId,
+                userId,
+                conversationId,
+                throughSequence: 4,
+                idempotencyKey: 'blocked-read-command-0001',
+                correlationId: 'blocked-read-correlation-0001',
+              });
+
+      expect(result).toEqual({ outcome: 'not_found' });
+      expect(query.mock.calls.some(([text]) => mutationPattern.test(String(text)))).toBe(false);
+      expect(query.mock.calls.some(([text]) => String(text).includes('read_cursor_commands'))).toBe(
+        false,
+      );
+    }
+  });
+
   it('authorizes realtime only while the tenant gate, permission and session family are active', async () => {
     const query = vi.fn((text: string) => {
       if (text === 'begin' || text === 'commit' || text.includes("set_config('app.tenant_id'")) {
@@ -817,5 +1090,64 @@ describe('messaging repository', () => {
     expect(membershipSql).toContain("member.state = 'ACTIVE'");
     expect(membershipSql).toContain("conversation.kind = 'DIRECT'");
     expect(membershipSql).toContain("'chat.direct.create' = any(current_access.permissions)");
+    expect(membershipSql).toContain("other_user.status = 'ACTIVE'");
+    expect(membershipSql).toContain(
+      "coalesce(target_privacy.chat_policy, 'AUTHORIZED') = 'AUTHORIZED'",
+    );
+  });
+
+  it('denies a blocked realtime subscription and returns no fanout recipients', async () => {
+    const query = vi.fn((text: string) => {
+      if (text === 'begin' || text === 'commit' || text.includes("set_config('app.tenant_id'")) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('select member.user_id')) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('from messaging.tenant_runtime_settings')) {
+        return Promise.resolve({
+          rows: [
+            {
+              http_enabled: true,
+              direct_enabled: true,
+              realtime_enabled: true,
+              contextual_enabled: false,
+            },
+          ],
+          rowCount: 1,
+        });
+      }
+      if (text.includes('conversation.next_sequence - 1 as latest_sequence')) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const repository = createMessagingRepository(poolWithQuery(query) as never);
+
+    await expect(
+      repository.authorizeRealtimeSubscription({ tenantId, userId, conversationId }),
+    ).resolves.toEqual({ outcome: 'not_found' });
+    await expect(
+      repository.listRealtimeRecipientUserIds({
+        tenantId,
+        conversationId,
+        messageId,
+        sequence: 4,
+      }),
+    ).resolves.toEqual([]);
+
+    const subscriptionSql = String(
+      query.mock.calls.find(([text]) =>
+        String(text).includes('conversation.next_sequence - 1 as latest_sequence'),
+      )?.[0],
+    );
+    const fanoutSql = String(
+      query.mock.calls.find(([text]) => String(text).includes('select member.user_id'))?.[0],
+    );
+    expect(subscriptionSql).toContain('messaging.user_blocks block');
+    expect(fanoutSql).toContain('messaging.user_blocks block');
+    expect(subscriptionSql).toContain('profile.privacy_settings target_privacy');
+    expect(fanoutSql).toContain('profile.privacy_settings target_privacy');
+    expect(fanoutSql).toContain("'chat.direct.create' = any(current_access.permissions)");
   });
 });

@@ -402,6 +402,60 @@ describe('messaging realtime gateway compatibility', () => {
     });
   });
 
+  it('conceals a blocked DIRECT subscription with the stable protocol error', async () => {
+    const authorizeRealtimeSubscription = vi.fn().mockResolvedValue({ outcome: 'not_found' });
+    const app = await buildRealtimeApp({
+      config: baseConfig,
+      logger: createLogger('realtime-test', 'silent'),
+      redis: { ping: vi.fn().mockResolvedValue('PONG') },
+      databaseReady: vi.fn().mockResolvedValue(true),
+      rabbitReady: () => true,
+      ticketConsumer: { consume: vi.fn().mockResolvedValue(true) },
+      messagingRepository: {
+        authorizeRealtimeConnection: vi.fn().mockResolvedValue({ outcome: 'ok' }),
+        authorizeRealtimeSubscription,
+        listRealtimeRecipientUserIds: vi.fn(),
+      },
+    });
+    apps.push(app);
+    await app.ready();
+    const socket = await app.injectWS('/realtime/v1/local-padel');
+    sockets.push(socket);
+    const ready = nextMessage(socket);
+    socket.send(JSON.stringify({ type: 'authenticate', ticket: await ticket() }));
+    await ready;
+
+    const denied = nextMessage(socket);
+    socket.send(
+      JSON.stringify({ type: 'conversation.subscribe', conversationId, afterSequence: 0 }),
+    );
+
+    await expect(denied).resolves.toMatchObject({
+      type: 'error',
+      code: 'CONVERSATION_NOT_FOUND',
+      conversationId,
+    });
+    expect(authorizeRealtimeSubscription).toHaveBeenCalledWith({
+      tenantId,
+      userId,
+      conversationId,
+    });
+  });
+
+  it('reports Rabbit dependency loss through fail-closed readiness', async () => {
+    const app = await buildRealtimeApp({
+      config: baseConfig,
+      logger: createLogger('realtime-test', 'silent'),
+      redis: { ping: vi.fn().mockResolvedValue('PONG') },
+      databaseReady: vi.fn().mockResolvedValue(true),
+      rabbitReady: () => false,
+    });
+    apps.push(app);
+    const response = await app.inject({ method: 'GET', url: '/health/ready' });
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toMatchObject({ rabbit: false });
+  });
+
   it('keeps RabbitMQ readiness mandatory when Communities realtime is disabled', async () => {
     const app = await buildRealtimeApp(
       dependencies({
@@ -440,5 +494,53 @@ describe('messaging realtime gateway compatibility', () => {
     );
     await expect(closed).resolves.toBe(4401);
     expect(authorizeRealtimeSubscription).not.toHaveBeenCalled();
+  });
+
+  it('exposes an explicitly supplied local contour attestation on readiness', async () => {
+    const runtimeContourAttestation = {
+      database: 'a'.repeat(64),
+      redis: 'b'.repeat(64),
+      rabbitmq: 'c'.repeat(64),
+    };
+    const app = await buildRealtimeApp({
+      config: baseConfig,
+      logger: createLogger('realtime-test', 'silent'),
+      redis: { ping: vi.fn().mockResolvedValue('PONG') },
+      databaseReady: vi.fn().mockResolvedValue(true),
+      rabbitReady: () => true,
+      runtimeContourAttestation,
+    });
+    apps.push(app);
+
+    const response = await app.inject({ method: 'GET', url: '/health/ready' });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ runtimeContour: runtimeContourAttestation });
+  });
+
+  it('closes an authenticated socket that exceeds its command budget', async () => {
+    const app = await buildRealtimeApp({
+      config: baseConfig,
+      logger: createLogger('realtime-test', 'silent'),
+      redis: { ping: vi.fn().mockResolvedValue('PONG') },
+      databaseReady: vi.fn().mockResolvedValue(true),
+      rabbitReady: () => true,
+      ticketConsumer: { consume: vi.fn().mockResolvedValue(true) },
+      messagingRepository: {
+        authorizeRealtimeConnection: vi.fn().mockResolvedValue({ outcome: 'ok' }),
+        authorizeRealtimeSubscription: vi.fn(),
+        listRealtimeRecipientUserIds: vi.fn(),
+      },
+    });
+    apps.push(app);
+    await app.ready();
+    const socket = await app.injectWS('/realtime/v1/local-padel');
+    sockets.push(socket);
+    const ready = nextMessage(socket);
+    socket.send(JSON.stringify({ type: 'authenticate', ticket: await ticket() }));
+    await ready;
+    const closed = new Promise<number>((resolve) => socket.once('close', resolve));
+    for (let index = 0; index < 61; index += 1) socket.send(JSON.stringify({ type: 'ping' }));
+    await expect(closed).resolves.toBe(4429);
   });
 });

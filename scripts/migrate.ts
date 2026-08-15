@@ -2,7 +2,12 @@ import { createHash } from 'node:crypto';
 import { readdir, readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
-import { assertMigrationLedgerCompatible, createDatabasePool } from '@phub/database';
+import {
+  assertMigrationExecutionAllowed,
+  assertMigrationLedgerCompatible,
+  CHAT_PUSH_FOUNDATION_EMPTY_DATABASE_CATALOG_SQL,
+  createDatabasePool,
+} from '@phub/database';
 
 const connectionString = process.env.DATABASE_URL;
 if (!connectionString) throw new Error('DATABASE_URL is required for migrations');
@@ -39,6 +44,26 @@ try {
 
   assertMigrationLedgerCompatible({ applied, packaged: packagedMigrations });
 
+  const appliedFilenames = new Set(applied.map((entry) => entry.filename));
+  const emptyDatabaseCatalogVerified =
+    appliedFilenames.size === 0
+      ? ((
+          await client.query<{ empty_database_catalog: boolean }>(
+            CHAT_PUSH_FOUNDATION_EMPTY_DATABASE_CATALOG_SQL,
+          )
+        ).rows[0]?.empty_database_catalog ?? false)
+      : false;
+  assertMigrationExecutionAllowed({
+    appliedFilenames,
+    packagedFilenames: packagedMigrations.map((migration) => migration.filename),
+    emptyDatabaseCatalogVerified,
+    ...(process.env.CHAT_PUSH_FOUNDATION_MAINTENANCE_ACK
+      ? {
+          maintenanceAcknowledgement: process.env.CHAT_PUSH_FOUNDATION_MAINTENANCE_ACK,
+        }
+      : {}),
+  });
+
   await client.query(`
     create table if not exists public.schema_migrations (
       filename text primary key,
@@ -47,7 +72,6 @@ try {
     )
   `);
 
-  const appliedFilenames = new Set(applied.map((entry) => entry.filename));
   for (const { filename, sql, checksum } of packagedMigrations) {
     if (appliedFilenames.has(filename)) continue;
 

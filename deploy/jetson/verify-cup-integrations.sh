@@ -33,6 +33,18 @@ runtime_value() {
     "process.stdout.write(String(process.env[process.argv[1]] || ''))" "$key"
 }
 
+normalized_web_push_origins() {
+  service="$1"
+  compose exec -T "$service" node -e '
+    const origins = String(process.env.WEB_PUSH_ALLOWED_ENDPOINT_ORIGINS || "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean)
+      .map((value) => new URL(value).origin);
+    process.stdout.write([...new Set(origins)].sort().join(","));
+  '
+}
+
 require_runtime_value() {
   service="$1"
   key="$2"
@@ -140,7 +152,36 @@ case "$notification_state" in
     ;;
 esac
 
-if test "$(runtime_value api WEB_PUSH_ENABLED)" = true; then
+api_web_push_enabled="$(runtime_value api WEB_PUSH_ENABLED)"
+worker_web_push_enabled="$(runtime_value worker WEB_PUSH_ENABLED)"
+if test "$api_web_push_enabled" != "$worker_web_push_enabled"; then
+  echo 'API and worker WEB_PUSH_ENABLED gates must match' >&2
+  exit 1
+fi
+
+if test "$api_web_push_enabled" = true; then
+  api_web_push_app_id="$(runtime_value api WEB_PUSH_APP_ID)"
+  worker_web_push_app_id="$(runtime_value worker WEB_PUSH_APP_ID)"
+  api_web_push_environment="$(runtime_value api WEB_PUSH_ENVIRONMENT)"
+  worker_web_push_environment="$(runtime_value worker WEB_PUSH_ENVIRONMENT)"
+  api_web_push_origins="$(normalized_web_push_origins api)"
+  worker_web_push_origins="$(normalized_web_push_origins worker)"
+  if test -z "$api_web_push_app_id"; then api_web_push_app_id=padlhub-web; fi
+  if test -z "$worker_web_push_app_id"; then worker_web_push_app_id=padlhub-web; fi
+  if test -z "$api_web_push_environment"; then api_web_push_environment=SANDBOX; fi
+  if test -z "$worker_web_push_environment"; then worker_web_push_environment=SANDBOX; fi
+  if test "$api_web_push_app_id" != "$worker_web_push_app_id"; then
+    echo 'Enabled Web Push requires the same app ID in API and worker' >&2
+    exit 1
+  fi
+  if test "$api_web_push_environment" != "$worker_web_push_environment"; then
+    echo 'Enabled Web Push requires the same environment in API and worker' >&2
+    exit 1
+  fi
+  if test -z "$api_web_push_origins" || test "$api_web_push_origins" != "$worker_web_push_origins"; then
+    echo 'Enabled Web Push requires the same non-empty endpoint-origin allowlist in API and worker' >&2
+    exit 1
+  fi
   require_runtime_secret api NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS
   require_runtime_secret api WEB_PUSH_VAPID_PRIVATE_KEY
   require_runtime_secret worker NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS

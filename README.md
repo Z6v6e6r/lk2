@@ -10,7 +10,8 @@ Requirements: Node.js 22+, npm 10.9+, Docker Desktop with Compose.
 cp .env.example .env
 npm install
 docker compose up -d postgres redis rabbitmq minio otel-collector
-npm run db:migrate
+# A fresh disposable/local database includes the maintenance-only chat/push foundation.
+CHAT_PUSH_FOUNDATION_MAINTENANCE_ACK=CHAT_PUSH_FOUNDATION_EMPTY_DATABASE_V1 npm run db:migrate
 npm run dev:api
 ```
 

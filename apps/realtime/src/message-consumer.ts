@@ -18,6 +18,7 @@ class InvalidRealtimeEventError extends Error {
 }
 
 interface OutboxEnvelope {
+  readonly id: string;
   readonly type: string;
   readonly tenantId: string;
   readonly occurredAt: string;
@@ -29,7 +30,65 @@ interface OutboxEnvelope {
   };
 }
 
-export function parseRealtimeEvent(message: ConsumeMessage): RealtimeMessageCreatedEvent {
+interface ParsedRealtimeEvent extends RealtimeMessageCreatedEvent {
+  readonly eventId: string;
+}
+
+export interface RealtimeEventDeduplicator {
+  runOnce<T>(
+    eventId: string,
+    operation: () => Promise<T>,
+  ): Promise<
+    | { readonly executed: true; readonly value: T }
+    | { readonly executed: false; readonly value?: never }
+  >;
+}
+
+export function createRealtimeEventDeduplicator(maxEntries = 10_000): RealtimeEventDeduplicator {
+  if (!Number.isSafeInteger(maxEntries) || maxEntries < 1) {
+    throw new Error('REALTIME_DEDUPLICATOR_SIZE_INVALID');
+  }
+  const processedEventIds = new Set<string>();
+  const inFlightEvents = new Map<string, Promise<unknown>>();
+
+  function remember(eventId: string): void {
+    processedEventIds.delete(eventId);
+    processedEventIds.add(eventId);
+    while (processedEventIds.size > maxEntries) {
+      const oldestEventId = processedEventIds.values().next().value;
+      if (!oldestEventId) break;
+      processedEventIds.delete(oldestEventId);
+    }
+  }
+
+  return {
+    async runOnce<T>(eventId: string, operation: () => Promise<T>) {
+      if (processedEventIds.has(eventId)) {
+        return { executed: false as const };
+      }
+
+      const existing = inFlightEvents.get(eventId);
+      if (existing) {
+        await existing;
+        return { executed: false as const };
+      }
+
+      const execution = Promise.resolve().then(operation);
+      inFlightEvents.set(eventId, execution);
+      try {
+        const value = await execution;
+        remember(eventId);
+        return { executed: true as const, value };
+      } finally {
+        if (inFlightEvents.get(eventId) === execution) {
+          inFlightEvents.delete(eventId);
+        }
+      }
+    },
+  };
+}
+
+export function parseRealtimeEvent(message: ConsumeMessage): ParsedRealtimeEvent {
   let parsed: unknown;
   try {
     parsed = JSON.parse(message.content.toString('utf8')) as unknown;
@@ -39,6 +98,7 @@ export function parseRealtimeEvent(message: ConsumeMessage): RealtimeMessageCrea
   if (
     typeof parsed !== 'object' ||
     parsed === null ||
+    !('id' in parsed) ||
     !('type' in parsed) ||
     !('tenantId' in parsed) ||
     !('occurredAt' in parsed) ||
@@ -50,6 +110,8 @@ export function parseRealtimeEvent(message: ConsumeMessage): RealtimeMessageCrea
   const envelope = parsed as OutboxEnvelope;
   const payload = envelope.payload;
   if (
+    typeof envelope.id !== 'string' ||
+    !UUID_PATTERN.test(envelope.id) ||
     envelope.type !== MESSAGE_CREATED_EVENT ||
     typeof envelope.tenantId !== 'string' ||
     !UUID_PATTERN.test(envelope.tenantId) ||
@@ -69,6 +131,7 @@ export function parseRealtimeEvent(message: ConsumeMessage): RealtimeMessageCrea
     throw new InvalidRealtimeEventError();
   }
   return {
+    eventId: envelope.id,
     tenantId: envelope.tenantId,
     conversationId: payload.conversationId,
     messageId: payload.messageId,
@@ -83,6 +146,9 @@ export async function registerMessagingRealtimeConsumer(options: {
   readonly logger: Logger;
   readonly publish: (event: RealtimeMessageCreatedEvent) => Promise<number>;
   readonly onConsumerFailure: (reason: 'cancelled' | 'projection_failed') => void;
+  readonly onProjected?: (delivered: number) => void;
+  readonly onQuarantined?: () => void;
+  readonly deduplicator?: RealtimeEventDeduplicator;
 }): Promise<{ readonly queueName: string; readonly consumerTag: string }> {
   await options.channel.assertExchange(EVENT_EXCHANGE, 'topic', { durable: true });
   await options.channel.assertQueue(QUARANTINE_QUEUE, { durable: true });
@@ -100,7 +166,19 @@ export async function registerMessagingRealtimeConsumer(options: {
       void (async () => {
         try {
           const event = parseRealtimeEvent(message);
-          const delivered = await options.publish(event);
+          const projection = options.deduplicator
+            ? await options.deduplicator.runOnce(event.eventId, () => options.publish(event))
+            : { executed: true, value: await options.publish(event) };
+          if (!projection.executed) {
+            options.logger.debug(
+              { eventId: event.eventId },
+              'duplicate realtime event acknowledged without repeated fanout',
+            );
+            options.channel.ack(message);
+            return;
+          }
+          const delivered = projection.value;
+          options.onProjected?.(delivered);
           options.logger.debug(
             {
               tenantId: event.tenantId,
@@ -127,6 +205,7 @@ export async function registerMessagingRealtimeConsumer(options: {
                 { persistent: true, contentType: 'application/json' },
               );
               await options.channel.waitForConfirms();
+              options.onQuarantined?.();
               options.logger.warn(quarantineRecord, 'invalid realtime event sent to quarantine');
               options.channel.ack(message);
             } catch (quarantineError) {

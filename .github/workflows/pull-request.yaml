@@ -70,6 +70,8 @@ jobs:
       - name: Check migration safety
         run: npm run db:migrate:check
       - name: Apply migrations to an empty database
+        env:
+          CHAT_PUSH_FOUNDATION_MAINTENANCE_ACK: CHAT_PUSH_FOUNDATION_EMPTY_DATABASE_V1
         run: npm run db:migrate
       - name: Formatting, lint and type safety
         run: npm run format:check && npm run lint && npm run typecheck

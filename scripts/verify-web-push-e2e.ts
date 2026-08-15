@@ -142,6 +142,7 @@ try {
     ciphertext: encrypted.ciphertext,
     addressHash: createHash('sha256').update(subscription.endpoint).digest('hex'),
     encryptionKeyId: encrypted.keyId,
+    endpointsPerUserMax: 5,
     requestHash: createHash('sha256').update(canonical).digest('hex'),
     idempotencyKey: 'web-push-e2e-register-0001',
     correlationId: 'web-push-e2e-register',

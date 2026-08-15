@@ -3,8 +3,10 @@ import { describe, expect, it } from 'vitest';
 import {
   MAX_NOTIFICATION_EVENT_RECIPIENTS,
   bookingNotificationSourceEventSchema,
+  canonicalWebPushEndpoint,
   canonicalWebPushSubscription,
   createNotificationEndpointCipher,
+  isWebPushEndpointOriginAllowed,
   notificationAudienceSelectorSchema,
   notificationSourceEventSchema,
   renderNotificationTemplate,
@@ -31,7 +33,7 @@ const event = notificationSourceEventSchema.parse({
 describe('Web Push endpoint protection', () => {
   it('validates and canonicalizes the browser subscription shape', () => {
     const subscription = webPushSubscriptionSchema.parse({
-      endpoint: 'https://push.example.test/subscriptions/abc',
+      endpoint: 'https://PUSH.EXAMPLE.TEST:443/subscriptions/abc',
       expirationTime: null,
       keys: {
         p256dh: 'B'.repeat(65),
@@ -43,6 +45,67 @@ describe('Web Push endpoint protection', () => {
         65,
       )}","auth":"${'a'.repeat(22)}"}}`,
     );
+    expect(subscription.endpoint).toBe('https://push.example.test/subscriptions/abc');
+    expect(canonicalWebPushEndpoint('https://push.example.test:443/subscriptions/abc')).toBe(
+      subscription.endpoint,
+    );
+  });
+
+  it('matches only exact trusted endpoint origins', () => {
+    const allowedOrigins = ['https://fcm.googleapis.com', 'https://push.example.test'];
+
+    expect(
+      isWebPushEndpointOriginAllowed(
+        'https://fcm.googleapis.com/fcm/send/opaque-capability',
+        allowedOrigins,
+      ),
+    ).toBe(true);
+    expect(
+      isWebPushEndpointOriginAllowed(
+        'https://push.example.test:443/subscriptions/abc',
+        allowedOrigins,
+      ),
+    ).toBe(true);
+    expect(
+      isWebPushEndpointOriginAllowed(
+        'https://fcm.googleapis.com.evil.test/fcm/send/abc',
+        allowedOrigins,
+      ),
+    ).toBe(false);
+    expect(isWebPushEndpointOriginAllowed('https://127.0.0.1/internal', allowedOrigins)).toBe(
+      false,
+    );
+    expect(
+      isWebPushEndpointOriginAllowed(
+        'https://user:secret@push.example.test/subscriptions/abc',
+        allowedOrigins,
+      ),
+    ).toBe(false);
+    expect(
+      isWebPushEndpointOriginAllowed(
+        'https://push.example.test/subscriptions/abc#internal',
+        allowedOrigins,
+      ),
+    ).toBe(false);
+    expect(
+      isWebPushEndpointOriginAllowed(
+        'https://push.example.test:8443/subscriptions/abc',
+        allowedOrigins,
+      ),
+    ).toBe(false);
+  });
+
+  it('rejects an endpoint whose canonical URL expands beyond the storage limit', () => {
+    const expandedEndpoint = `https://push.example.test/${'é'.repeat(900)}`;
+    expect(expandedEndpoint.length).toBeLessThan(2_048);
+    expect(canonicalWebPushEndpoint(expandedEndpoint)).toBeUndefined();
+    expect(
+      webPushSubscriptionSchema.safeParse({
+        endpoint: expandedEndpoint,
+        expirationTime: null,
+        keys: { p256dh: 'B'.repeat(65), auth: 'a'.repeat(22) },
+      }).success,
+    ).toBe(false);
   });
 
   it('encrypts endpoint material with key IDs and rejects tampering', () => {
