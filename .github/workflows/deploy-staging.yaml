@@ -580,6 +580,8 @@ jobs:
             "phub-deploy@$HOST:/opt/phub/verify-cup-integrations.sh"
           scp deploy/jetson/verify-messaging-test-release.sh \
             "phub-deploy@$HOST:/opt/phub/verify-messaging-test-release.sh"
+          scp deploy/jetson/verify-postgres-backup-restore.sh \
+            "phub-deploy@$HOST:/opt/phub/verify-postgres-backup-restore.sh.next"
           scp deploy/jetson/tls-ingress/Caddyfile \
             "phub-deploy@$HOST:/opt/phub/tls-ingress/Caddyfile.next"
           ssh "phub-deploy@$HOST" '
@@ -588,6 +590,9 @@ jobs:
             chmod 0755 /opt/phub/run-client-routing-plan.sh
             mv /opt/phub/set-client-routing-plan.ts.next /opt/phub/set-client-routing-plan.ts
             chmod 0644 /opt/phub/set-client-routing-plan.ts
+            install -m 755 /opt/phub/verify-postgres-backup-restore.sh.next \
+              /opt/phub/verify-postgres-backup-restore.sh
+            rm -f /opt/phub/verify-postgres-backup-restore.sh.next
             auth_env=/opt/phub/staging.auth.env
             auth_env_tmp="${auth_env}.$$"
             umask 077
@@ -683,16 +688,41 @@ jobs:
             backup_dir=/opt/phub/backups
             backup_timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
             backup_path="$backup_dir/postgres-pre-${{ github.sha }}-$backup_timestamp.dump"
-            backup_tmp="$backup_path.tmp"
-            mkdir -p "$backup_dir"
+            umask 077
+            if [ ! -e "$backup_dir" ] && [ ! -L "$backup_dir" ]; then
+              mkdir -m 700 "$backup_dir"
+            fi
+            [ -d "$backup_dir" ]
+            [ ! -L "$backup_dir" ]
+            [ "$(stat -c %u "$backup_dir")" = "$(id -u)" ]
+            chmod 700 "$backup_dir"
+            [ "$(stat -c %a "$backup_dir")" = 700 ]
+            [ ! -e "$backup_path" ]
+            [ ! -L "$backup_path" ]
+            PHUB_POSTGRES_STORAGE_PATH=/var/lib/docker \
+              sh /opt/phub/verify-postgres-backup-restore.sh \
+                - \
+                "phub_restore_${{ github.run_id }}_${{ github.run_attempt }}" \
+                VERIFY_STAGING_POSTGRES_CAPACITY
+            backup_tmp="$(mktemp "$backup_dir/.postgres-pre-${{ github.sha }}-$backup_timestamp.XXXXXX.dump")"
             trap "rm -f \"$backup_tmp\"; docker logout ghcr.io >/dev/null 2>&1 || true" EXIT
             infrastructure exec -T postgres sh -ec \
               "pg_dump -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" --format=custom --no-owner --no-acl" \
               > "$backup_tmp"
             test -s "$backup_tmp"
+            chmod 600 "$backup_tmp"
+            [ "$(stat -c %a "$backup_tmp")" = 600 ]
             infrastructure exec -T postgres pg_restore --list < "$backup_tmp" >/dev/null
+            PHUB_POSTGRES_STORAGE_PATH=/var/lib/docker \
+              sh /opt/phub/verify-postgres-backup-restore.sh \
+                "$backup_tmp" \
+                "phub_restore_${{ github.run_id }}_${{ github.run_attempt }}" \
+                VERIFY_STAGING_POSTGRES_BACKUP
+
             mv "$backup_tmp" "$backup_path"
-            echo "Verified staging PostgreSQL backup: $backup_path"
+            chmod 600 "$backup_path"
+            [ "$(stat -c %a "$backup_path")" = 600 ]
+            echo "Restore-verified staging PostgreSQL backup: $backup_path"
 
             compose --profile migration run --rm migrator
             latest_migration="$(sed -n s/^LATEST_MIGRATION=//p release.env)"

@@ -167,10 +167,25 @@ fallback or timeout fails the release even when the containers remain healthy.
 
 Every confirmed staging deployment creates a PostgreSQL custom-format archive under
 `/opt/phub/backups/postgres-pre-<release>-<UTC timestamp>.dump`. The workflow
-requires a non-empty archive, validates it with `pg_restore --list`, runs the
-digest-pinned migrator and confirms the latest repository migration in
-`public.schema_migrations` before it switches application containers. A failed
-backup or migration leaves the currently running application release untouched.
+requires a non-empty archive, records its size and SHA-256, validates its TOC, then restores the
+complete archive with `pg_restore --exit-on-error` into a clean temporary database on the same
+PostgreSQL 16 cluster. It requires the restored migration ledger to be queryable and drops the
+temporary database before running the digest-pinned migrator against staging. The workflow then
+confirms the latest repository migration in `public.schema_migrations` before it switches
+application containers. After pulling images and before creating the archive, it records the source
+database size and requires free disk headroom equal to three database copies plus 1 GiB for the
+archive, restored clone, WAL and temporary overhead. It repeats that check after the private
+mode-0600 archive exists, before the restore or shared-target migration. The backup directory is a
+non-symlink directory owned by the deploy user with mode 0700; archives are created exclusively with
+`mktemp`. A failed capacity check, backup, restore or migration leaves the currently running
+application release untouched.
+
+The restore verifier owns only a database it created successfully. It records that ownership in
+`/opt/phub/backups/.restore-cleanup-<database>` and removes the marker only after the temporary
+database is dropped. A leftover marker blocks the next verification. Inspect the exact marked
+database, drop only that database through the approved PostgreSQL administration path, and remove
+the marker only after the drop is independently confirmed. Never delete a colliding unmarked
+database.
 
 Before pulling a new digest, CI checks free space on `/`. Below 8 GiB it removes only Docker
 images that are not referenced by a container; it never prunes volumes. Deployment stops before
