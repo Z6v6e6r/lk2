@@ -122,14 +122,21 @@ jobs:
           test -s communities-staging-target.evidence
           test ! -s communities-staging-target.stderr
           rm -f communities-staging-target.stderr
+      - name: Calculate installed-artifact SHA expectations
+        id: artifact-shas
+        run: |
+          set -eu
+          printf 'remote_script_sha=%s\n' "$(sha256sum deploy/jetson/inspect-communities-staging-target.sh | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+          printf 'backup_script_sha=%s\n' "$(sha256sum deploy/jetson/create-communities-staging-backup.sh | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+          printf 'restore_helper_sha=%s\n' "$(sha256sum deploy/jetson/verify-postgres-backup-restore.sh | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
       - name: Verify exact ledger and release preconditions
         id: verify
         env:
           COMMUNITIES_STAGING_EVIDENCE_FILE: ${{ github.workspace }}/communities-staging-target.evidence
           COMMUNITIES_STAGING_CANDIDATE_RELEASE: ${{ github.sha }}
-          COMMUNITIES_STAGING_EXPECTED_REMOTE_SCRIPT_SHA: ${{ hashFiles('deploy/jetson/inspect-communities-staging-target.sh') }}
-          COMMUNITIES_STAGING_EXPECTED_BACKUP_SCRIPT_SHA: ${{ hashFiles('deploy/jetson/create-communities-staging-backup.sh') }}
-          COMMUNITIES_STAGING_EXPECTED_RESTORE_HELPER_SHA: ${{ hashFiles('deploy/jetson/verify-postgres-backup-restore.sh') }}
+          COMMUNITIES_STAGING_EXPECTED_REMOTE_SCRIPT_SHA: ${{ steps.artifact-shas.outputs.remote_script_sha }}
+          COMMUNITIES_STAGING_EXPECTED_BACKUP_SCRIPT_SHA: ${{ steps.artifact-shas.outputs.backup_script_sha }}
+          COMMUNITIES_STAGING_EXPECTED_RESTORE_HELPER_SHA: ${{ steps.artifact-shas.outputs.restore_helper_sha }}
           COMMUNITIES_STAGING_EXPECTED_DATABASE: ${{ secrets.STAGING_PREFLIGHT_DATABASE }}
           COMMUNITIES_STAGING_EXPECTED_SYSTEM_IDENTIFIER: ${{ secrets.STAGING_PREFLIGHT_SYSTEM_IDENTIFIER }}
         run: |

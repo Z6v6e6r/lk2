@@ -70,7 +70,7 @@ printf 'META|installedRestoreHelperSha|%s\n' "$(sha256sum "$restore_helper" | cu
 docker compose --env-file infrastructure.env -f compose.infrastructure.yaml exec -T postgres \
   sh -ec '
     export PGOPTIONS="-c default_transaction_read_only=on -c statement_timeout=15000 -c lock_timeout=2000 -c search_path=pg_catalog"
-    exec psql -X -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -At
+    exec psql -X -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -qAt
   ' <<'SQL'
 begin transaction isolation level repeatable read read only;
 set local idle_in_transaction_session_timeout = '30s';
