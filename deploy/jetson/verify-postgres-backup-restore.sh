@@ -7,6 +7,7 @@ confirmation=${3:-}
 app_root=${PHUB_APP_ROOT:-/opt/phub}
 marker_root=${PHUB_RESTORE_MARKER_ROOT:-/opt/phub/backups}
 storage_path=${PHUB_POSTGRES_STORAGE_PATH:-/var/lib/docker}
+expected_source_ledger_digest=${PHUB_EXPECTED_SOURCE_LEDGER_DIGEST:-}
 
 case "$confirmation" in
   VERIFY_STAGING_POSTGRES_CAPACITY|VERIFY_STAGING_POSTGRES_BACKUP) ;;
@@ -54,6 +55,15 @@ cleanup_restore() {
       sh "$restore_database"
     then
       echo "restore database cleanup failed; marker retained: $marker_path" >&2
+      return 1
+    fi
+    remaining_database_names="$(infrastructure exec -T postgres sh -ec \
+      "psql -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -Atc \"select datname from pg_database\"")" || {
+        echo "could not verify restore database cleanup; marker retained: $marker_path" >&2
+        return 1
+      }
+    if printf "%s\n" "$remaining_database_names" | grep -Fx "$restore_database" >/dev/null; then
+      echo "restore database still exists after cleanup; marker retained: $marker_path" >&2
       return 1
     fi
     restore_created=false
@@ -154,8 +164,24 @@ if [ "$restored_migration_count" -lt 1 ]; then
   echo "restored migration ledger is empty" >&2
   exit 1
 fi
+restored_server_version="$(infrastructure exec -T postgres sh -ec \
+  "psql -U \"\$POSTGRES_USER\" -d \"\$1\" -Atc \"show server_version_num\"" \
+  sh "$restore_database")"
+case "$restored_server_version" in
+  16[0-9][0-9][0-9][0-9]) ;;
+  *) echo "restored PostgreSQL major version is not 16" >&2; exit 1 ;;
+esac
+restored_ledger_manifest="$(infrastructure exec -T postgres sh -ec \
+  "psql -U \"\$POSTGRES_USER\" -d \"\$1\" -At -F '|' -c \"select filename, checksum from public.schema_migrations order by filename\"" \
+  sh "$restore_database")"
+restored_ledger_digest="$(printf '%s\n' "$restored_ledger_manifest" | sha256sum | cut -d ' ' -f 1)"
+if [ -n "$expected_source_ledger_digest" ] && [ "$restored_ledger_digest" != "$expected_source_ledger_digest" ]; then
+  echo "restored migration ledger digest does not match the source snapshot" >&2
+  exit 1
+fi
 
 cleanup_restore
+[ ! -e "$marker_path" ]
 trap - EXIT HUP INT TERM
-echo "Restore-verified PostgreSQL backup: size=$backup_size sha256=$backup_sha256 migrations=$restored_migration_count"
+echo "Restore-verified PostgreSQL backup: size=$backup_size sha256=$backup_sha256 migrations=$restored_migration_count ledger_sha256=$restored_ledger_digest"
 echo "Tools: $pg_dump_version; $pg_restore_version; $psql_version"
