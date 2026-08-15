@@ -24,6 +24,7 @@ import {
   reserveCommunityLogoObjectUpload,
 } from './community-home-repository.js';
 import { synchronizeLegacyCommunityLogos } from './community-logo-sync.js';
+import type { CommunityLogoHostCircuit } from './community-logo-sync.js';
 import type { ProfilePhotoObjectStore } from './profile-photo-sync.js';
 
 export interface CommunityHomeSyncCycleResult {
@@ -181,6 +182,8 @@ export async function runCommunityHomeSyncCycle(input: {
   readonly repository: CommunityDirectoryRepository;
   readonly sourceMode: 'LEGACY' | 'LOCAL';
   readonly store: ProfilePhotoObjectStore;
+  readonly logoCircuit?: CommunityLogoHostCircuit;
+  readonly synchronizeLogos?: typeof synchronizeLegacyCommunityLogos;
   readonly now?: Date;
 }): Promise<CommunityHomeSyncCycleResult> {
   const now = input.now ?? new Date();
@@ -212,13 +215,14 @@ export async function runCommunityHomeSyncCycle(input: {
           userId: user.userId,
           correlationId,
         });
+        const projectedDirectoryItems = directoryItems.slice(0, HOME_COMMUNITY_SUMMARY_LIMIT);
         const logoResults =
           input.sourceMode === 'LEGACY'
-            ? await synchronizeLegacyCommunityLogos({
+            ? await (input.synchronizeLogos ?? synchronizeLegacyCommunityLogos)({
                 pool: input.pool,
                 store: input.store,
                 tenantId: tenant.id,
-                items: directoryItems,
+                items: projectedDirectoryItems,
                 fetchedAt: now.toISOString(),
                 allowedHosts: input.config.COMMUNITY_LOGO_ALLOWED_HOSTS.split(',')
                   .map((host) => host.trim())
@@ -233,6 +237,7 @@ export async function runCommunityHomeSyncCycle(input: {
                 readUrlTtlSeconds: input.config.PROFILE_PHOTO_URL_TTL_SECONDS,
                 stableDeliveryEnabled: input.config.COMMUNITY_LOGO_STABLE_DELIVERY_ENABLED,
                 timeoutMs: input.config.COMMUNITIES_LEGACY_TIMEOUT_MS,
+                ...(input.logoCircuit ? { circuit: input.logoCircuit } : {}),
                 deferStorePut: true,
               })
             : [];
@@ -262,7 +267,7 @@ export async function runCommunityHomeSyncCycle(input: {
           });
           if (shouldUpload) await input.store.put(result.preparedObject);
         }
-        const communities = directoryItems.slice(0, HOME_COMMUNITY_SUMMARY_LIMIT).map((item) =>
+        const communities = projectedDirectoryItems.map((item) =>
           communitySummarySchema.parse({
             id: item.id,
             title: item.title,

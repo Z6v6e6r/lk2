@@ -318,8 +318,13 @@ community and promotion source components, three fresh canonical platform compon
 locations component and a fresh complete `LOCAL_PROJECTION` snapshot. Only after that database gate
 passes does it write `HOME_READ_MODE=projection` and recreate both API and worker from the persistent
 projection override. If the gate times out, the script prints only aggregate component readiness,
-restores the previous persistent read mode, recreates the worker from that mode and exits without
-changing the running API mode.
+restores the previous persistent read mode, captures a bounded redacted diagnostic from the still
+running candidate worker, recreates the worker from the restored mode and exits without changing the
+running API mode. From matching log lines, the diagnostic retains the required source operation,
+outcome, attempt, HTTP status and duration evidence; tokens, user/tenant/correlation identifiers and
+the Viva provider tenant key are redacted. Diagnostic failure never prevents worker rollback. This
+evidence distinguishes a provider authorization response such as `403` from transport and schema
+failures, but it does not satisfy the Viva egress gate or authorize another rollout.
 
 ## Failure and rollback
 

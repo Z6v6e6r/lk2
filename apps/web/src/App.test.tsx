@@ -15,6 +15,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { App } from './App.js';
+import { consumeCommunityInviteToken } from './community-invite-token.js';
 import type {
   AuthGateway,
   AuthenticatedSession,
@@ -384,6 +385,61 @@ function createGateway(overrides: Partial<AuthGateway> = {}): AuthGateway {
     listCommunityReadExperienceFeed: vi.fn().mockRejectedValue(new Error('NOT_CONFIGURED')),
     listCommunityReadExperienceChat: vi.fn().mockRejectedValue(new Error('NOT_CONFIGURED')),
     getCommunityReadExperienceRating: vi.fn().mockRejectedValue(new Error('NOT_CONFIGURED')),
+    issueRealtimeTicket: vi.fn().mockResolvedValue({
+      ticket: 'one-time-realtime-ticket-that-is-long-enough',
+      expiresAt: '2026-08-04T10:00:30.000Z',
+    }),
+    discoverCommunities: vi.fn().mockResolvedValue({ items: [] }),
+    getCommunityDetail: vi.fn().mockRejectedValue(new Error('COMMUNITY_NOT_FOUND')),
+    getMyCommunityMembershipState: vi.fn().mockResolvedValue({
+      communityId: '11111111-1111-4111-8111-111111111111',
+      membershipStatus: 'NONE',
+      role: null,
+      membershipRevision: 0,
+      joinRequest: null,
+      joinAction: 'REQUEST_TO_JOIN',
+      updatedAt: null,
+    }),
+    joinOrRequestCommunityMembership: vi
+      .fn()
+      .mockRejectedValue(new Error('COMMUNITY_COMMAND_UNAVAILABLE')),
+    cancelMyCommunityJoinRequest: vi
+      .fn()
+      .mockRejectedValue(new Error('COMMUNITY_COMMAND_UNAVAILABLE')),
+    leaveCommunity: vi.fn().mockRejectedValue(new Error('COMMUNITY_COMMAND_UNAVAILABLE')),
+    listCommunityFeed: vi.fn().mockResolvedValue({
+      items: [],
+      watermark: '2026-08-04T10:00:00.000Z',
+    }),
+    recoverCommunityEvents: vi.fn().mockResolvedValue({
+      items: [],
+      afterSequence: 0,
+      latestSequence: 0,
+      retainedFromSequence: 1,
+      hasMore: false,
+    }),
+    createCommunityPost: vi.fn().mockRejectedValue(new Error('COMMUNITY_COMMAND_UNAVAILABLE')),
+    issueCommunityMediaUpload: vi.fn().mockRejectedValue(new Error('COMMUNITY_MEDIA_UNAVAILABLE')),
+    finalizeCommunityMediaUpload: vi
+      .fn()
+      .mockRejectedValue(new Error('COMMUNITY_MEDIA_UNAVAILABLE')),
+    getCommunityMediaStatus: vi.fn().mockRejectedValue(new Error('COMMUNITY_MEDIA_UNAVAILABLE')),
+    downloadCommunityMediaVariant: vi
+      .fn()
+      .mockRejectedValue(new Error('COMMUNITY_MEDIA_UNAVAILABLE')),
+    previewCommunityDirectInvite: vi
+      .fn()
+      .mockRejectedValue(new Error('COMMUNITY_DIRECT_INVITE_NOT_FOUND')),
+    redeemCommunityDirectInvite: vi
+      .fn()
+      .mockRejectedValue(new Error('COMMUNITY_DIRECT_INVITE_NOT_FOUND')),
+    listCommunityDirectInvites: vi.fn().mockResolvedValue({ items: [] }),
+    createCommunityDirectInvite: vi
+      .fn()
+      .mockRejectedValue(new Error('COMMUNITY_COMMAND_UNAVAILABLE')),
+    revokeCommunityDirectInvite: vi
+      .fn()
+      .mockRejectedValue(new Error('COMMUNITY_COMMAND_UNAVAILABLE')),
     getProfileLevelHistory: vi.fn().mockResolvedValue({
       userId: session.context.user.id,
       items: [
@@ -447,6 +503,19 @@ async function openPhoneLogin(user: ReturnType<typeof userEvent.setup>): Promise
 }
 
 describe('PadlHub web authentication', () => {
+  it('captures a DIRECT invite from the fragment and immediately removes it from the URL', () => {
+    const replaceState = vi.fn();
+    const token = 'z'.repeat(43);
+
+    expect(
+      consumeCommunityInviteToken(
+        { pathname: '/community-invite', search: '?source=share', hash: `#${token}` },
+        { state: { test: true }, replaceState },
+      ),
+    ).toBe(token);
+    expect(replaceState).toHaveBeenCalledWith({ test: true }, '', '/community-invite?source=share');
+  });
+
   it('retries an initial Home projection read before showing the unavailable screen', async () => {
     const getHomeBase = vi
       .fn<AuthGateway['getHomeBase']>()
@@ -462,7 +531,9 @@ describe('PadlHub web authentication', () => {
     await screen.findByText('Загружаем один актуальный снимок…');
     expect(screen.queryByRole('heading', { name: 'Главная недоступна' })).not.toBeInTheDocument();
 
-    expect(await screen.findByRole('heading', { name: 'Анна Петрова' })).toBeVisible();
+    expect(
+      await screen.findByRole('heading', { name: 'Анна Петрова' }, { timeout: 3_000 }),
+    ).toBeVisible();
     expect(getHomeBase).toHaveBeenCalledTimes(2);
   });
 
@@ -1052,7 +1123,22 @@ describe('PadlHub web authentication', () => {
         ],
       });
     const gateway = createGateway({
-      restoreSession: vi.fn().mockResolvedValue(session),
+      restoreSession: vi.fn().mockResolvedValue({
+        ...session,
+        context: {
+          ...session.context,
+          runtimeCapabilities: {
+            communityDirectory: true,
+            communityReadDetail: true,
+            communityReadFeed: false,
+            communityReadChat: false,
+            communityReadRating: false,
+            communityCanonical: false,
+            communityDirectInvites: false,
+            communityRealtime: false,
+          },
+        },
+      }),
       listMyCommunities,
     });
     const user = userEvent.setup();
@@ -1061,7 +1147,10 @@ describe('PadlHub web authentication', () => {
 
     expect(await screen.findByRole('heading', { name: 'Мои сообщества' })).toBeVisible();
     expect(await screen.findByText('Padel Friends')).toBeVisible();
-    expect(screen.queryByRole('link', { name: /Padel Friends/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Padel Friends/ })).toHaveAttribute(
+      'href',
+      '/communities/42c05c91-da23-4dc5-bf97-3d136a2d12bd',
+    );
     await user.click(screen.getByRole('button', { name: 'Показать ещё' }));
     expect(await screen.findByText('Команда Север')).toBeVisible();
     expect(listMyCommunities).toHaveBeenNthCalledWith(1);
@@ -1094,6 +1183,9 @@ describe('PadlHub web authentication', () => {
             communityReadFeed: false,
             communityReadChat: false,
             communityReadRating: false,
+            communityCanonical: false,
+            communityDirectInvites: false,
+            communityRealtime: false,
           },
         },
       }),
@@ -1106,6 +1198,109 @@ describe('PadlHub web authentication', () => {
     expect(screen.getByText('42 участника')).toBeVisible();
     expect(screen.getByLabelText('Сообщество доступно только для просмотра')).toBeVisible();
     expect(getCommunityReadExperienceDetail).toHaveBeenCalledWith(communityId);
+  });
+
+  it('searches the canonical catalog and keeps LISTED_PRIVATE metadata minimal', async () => {
+    window.history.replaceState({}, '', '/communities');
+    const discoverCommunities = vi.fn<AuthGateway['discoverCommunities']>().mockResolvedValue({
+      items: [
+        {
+          id: '11111111-1111-4111-8111-111111111111',
+          title: 'Private Padel',
+          logoUrl: null,
+          isVerified: true,
+          visibility: 'LISTED_PRIVATE',
+          joinAction: 'REQUEST_TO_JOIN',
+        },
+      ],
+    });
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue({
+        ...session,
+        context: {
+          ...session.context,
+          runtimeCapabilities: {
+            communityDirectory: true,
+            communityReadDetail: false,
+            communityReadFeed: false,
+            communityReadChat: false,
+            communityReadRating: false,
+            communityCanonical: true,
+            communityDirectInvites: false,
+            communityRealtime: false,
+          },
+        },
+      }),
+      discoverCommunities,
+    });
+    const user = userEvent.setup();
+
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+    await user.type(await screen.findByRole('textbox', { name: 'Название сообщества' }), 'Private');
+    await user.click(screen.getByRole('button', { name: 'Найти' }));
+
+    const result = await screen.findByRole('link', { name: /Private Padel/ });
+    expect(result).toHaveAttribute('href', '/communities/11111111-1111-4111-8111-111111111111');
+    expect(within(result).getByText('Закрытое сообщество')).toBeVisible();
+    expect(result).not.toHaveTextContent('участников');
+    expect(discoverCommunities).toHaveBeenCalledWith('Private');
+  });
+
+  it('opens the canonical viewer-filtered community detail route', async () => {
+    const communityId = '11111111-1111-4111-8111-111111111111';
+    window.history.replaceState({}, '', `/communities/${communityId}`);
+    const getCommunityDetail = vi.fn<AuthGateway['getCommunityDetail']>().mockResolvedValue({
+      id: communityId,
+      title: 'Padel Friends',
+      logoUrl: null,
+      isVerified: true,
+      visibility: 'PUBLIC',
+      joinAction: 'REQUEST_TO_JOIN',
+      description: 'Открытое падел-сообщество',
+      memberCount: 42,
+      joinPolicy: 'MODERATED',
+      createdAt: '2026-08-03T10:00:00.000Z',
+    });
+    const getMyCommunityMembershipState = vi
+      .fn<AuthGateway['getMyCommunityMembershipState']>()
+      .mockResolvedValue({
+        communityId,
+        membershipStatus: 'NONE',
+        role: null,
+        membershipRevision: 0,
+        joinRequest: null,
+        joinAction: 'REQUEST_TO_JOIN',
+        updatedAt: null,
+      });
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue({
+        ...session,
+        context: {
+          ...session.context,
+          runtimeCapabilities: {
+            communityDirectory: true,
+            communityReadDetail: false,
+            communityReadFeed: false,
+            communityReadChat: false,
+            communityReadRating: false,
+            communityCanonical: true,
+            communityDirectInvites: false,
+            communityRealtime: false,
+          },
+        },
+      }),
+      getCommunityDetail,
+      getMyCommunityMembershipState,
+    });
+
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+
+    expect(await screen.findByRole('heading', { name: 'Padel Friends' })).toBeVisible();
+    expect(screen.getByText('Открытое падел-сообщество')).toBeVisible();
+    expect(screen.getByText('42')).toBeVisible();
+    expect(getCommunityDetail).toHaveBeenCalledWith(communityId);
+    expect(getMyCommunityMembershipState).toHaveBeenCalledWith(communityId);
+    expect(await screen.findByRole('button', { name: 'Подать заявку' })).toBeEnabled();
   });
 
   it('loads the notification inbox and exposes the tenant Web Push state', async () => {

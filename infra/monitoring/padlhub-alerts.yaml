@@ -56,3 +56,116 @@ groups:
           summary: PadlHub worker reliability metrics cannot be collected
           description: Backlog alerts may be blind; inspect PostgreSQL, RabbitMQ and OTLP connectivity.
           runbook: docs/runbooks/chats-notifications-moderation.md
+
+      - alert: PadlHubCommunityMediaScanRetries
+        expr: increase(phub_worker_communities_media_scan_retried_total[15m]) > 2
+        for: 5m
+        labels:
+          severity: p2
+          component: worker
+        annotations:
+          summary: Community media malware scanning is repeatedly retrying
+          description: More than two community media scan attempts were rescheduled in fifteen minutes; inspect ClamAV, object storage and the scan lease backlog.
+          runbook: docs/runbooks/community-load-readiness.md
+
+      - alert: PadlHubCommunityMediaGcRetries
+        expr: increase(phub_worker_communities_media_gc_retried_total[30m]) > 2
+        for: 5m
+        labels:
+          severity: p2
+          component: worker
+        annotations:
+          summary: Community media garbage collection is repeatedly retrying
+          description: More than two retained community media objects failed garbage collection in thirty minutes; inspect object version access and retention policy.
+          runbook: docs/runbooks/community-load-readiness.md
+
+      - alert: PadlHubCommunityMediaScanBacklogOld
+        expr: phub_worker_communities_media_scan_oldest_age_seconds > 300
+        for: 5m
+        labels:
+          severity: p2
+          component: worker
+        annotations:
+          summary: Community media scan backlog is older than five minutes
+          description: Inspect ClamAV, object storage readiness and worker claim throughput before enabling new uploads.
+          runbook: docs/runbooks/community-load-readiness.md
+
+      - alert: PadlHubCommunityMediaGcBacklogOld
+        expr: phub_worker_communities_media_gc_oldest_age_seconds > 3600
+        for: 10m
+        labels:
+          severity: p2
+          component: worker
+        annotations:
+          summary: Community media garbage collection is older than one hour
+          description: Inspect object-version deletion, retention locks and GC worker claims.
+          runbook: docs/runbooks/community-load-readiness.md
+
+      - alert: PadlHubCommunityMediaTerminalScanFailure
+        expr: phub_worker_communities_media_failed_scans > 0
+        for: 1m
+        labels:
+          severity: p1
+          component: worker
+        annotations:
+          summary: Community media scan exhausted bounded attempts
+          description: Investigate the terminal reason and use the audited CUP replay command only after recovery.
+          runbook: docs/runbooks/community-load-readiness.md
+
+      - alert: PadlHubCommunityMediaDeadGcJob
+        expr: phub_worker_communities_media_dead_gc_jobs > 0
+        for: 1m
+        labels:
+          severity: p1
+          component: worker
+        annotations:
+          summary: Community media garbage collection exhausted bounded attempts
+          description: Investigate the terminal reason and use the audited CUP replay command only after recovery.
+          runbook: docs/runbooks/community-load-readiness.md
+
+  - name: padlhub-communities-realtime
+    interval: 15s
+    rules:
+      - alert: PadlHubCommunitiesRealtimeFanoutFailure
+        expr: increase(phub_realtime_communities_fanout_failures_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: p1
+          component: realtime
+        annotations:
+          summary: Communities realtime fan-out failed
+          description: A broker hint could not be fanned out; clients must recover the durable sequence over canonical HTTP.
+          runbook: docs/runbooks/community-realtime-readiness.md
+
+      - alert: PadlHubCommunitiesRealtimeInvalidHints
+        expr: increase(phub_realtime_communities_fanout_hints_total{outcome="invalid"}[5m]) > 0
+        for: 1m
+        labels:
+          severity: p1
+          component: realtime
+        annotations:
+          summary: Communities realtime received invalid broker hints
+          description: The realtime consumer rejected an event contract; inspect the correlated outbox event before any replay.
+          runbook: docs/runbooks/community-realtime-readiness.md
+
+      - alert: PadlHubCommunitiesRealtimeAtCapacity
+        expr: increase(phub_realtime_connections_rejected_total{reason="capacity"}[5m]) > 0
+        for: 2m
+        labels:
+          severity: p1
+          component: realtime
+        annotations:
+          summary: Communities realtime is rejecting connections at capacity
+          description: At least one connection hit the configured per-instance ceiling; verify load distribution, file descriptors and instance saturation.
+          runbook: docs/runbooks/community-realtime-readiness.md
+
+      - alert: PadlHubCommunitiesRealtimeBackpressure
+        expr: increase(phub_realtime_socket_backpressure_closures_total[10m]) > 10
+        for: 2m
+        labels:
+          severity: p2
+          component: realtime
+        annotations:
+          summary: Communities realtime is shedding multiple slow clients
+          description: More than ten sockets exceeded the bounded send buffer in ten minutes; inspect network health and fan-out pressure.
+          runbook: docs/runbooks/community-realtime-readiness.md

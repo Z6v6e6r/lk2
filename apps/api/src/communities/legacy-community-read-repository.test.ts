@@ -68,7 +68,41 @@ function payload(options: { readonly embeddedRank?: boolean } = {}) {
   };
 }
 
+function oversizedChunkedResponse(): Response {
+  const chunk = new Uint8Array(1024 * 1024 + 1);
+  return new Response(
+    new ReadableStream({
+      start(controller) {
+        controller.enqueue(chunk);
+        controller.enqueue(chunk);
+        controller.close();
+      },
+    }),
+    { status: 200 },
+  );
+}
+
 describe('legacy community read repository', () => {
+  it('fails closed while streaming a chunked response beyond the byte limit', async () => {
+    const fetchImplementation = vi
+      .fn<typeof fetch>()
+      .mockImplementation(() => Promise.resolve(oversizedChunkedResponse()));
+    const repository = new LegacyCommunityReadRepository({
+      baseUrl: 'https://legacy.padlhub.test',
+      timeoutMs: 1_000,
+      maxAttempts: 1,
+      circuitFailureThreshold: 3,
+      circuitResetMs: 30_000,
+      cacheTtlMs: 0,
+      bridge: bridge(),
+      fetchImplementation,
+    });
+
+    await expect(
+      repository.listMemberships({ tenantId, userId, correlationId: 'chunked-limit', limit: 20 }),
+    ).rejects.toMatchObject({ code: 'COMMUNITY_LEGACY_RESPONSE_INVALID' });
+  });
+
   it('keeps only the authenticated membership and exposes no legacy identity', async () => {
     const fetchImplementation = vi.fn<typeof fetch>().mockResolvedValue(
       new Response(JSON.stringify(payload()), {

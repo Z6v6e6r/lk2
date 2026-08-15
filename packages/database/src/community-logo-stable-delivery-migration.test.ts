@@ -8,7 +8,7 @@ describe('community logo stable delivery migration', () => {
     const sql = readFileSync(
       resolve(
         process.cwd(),
-        'packages/database/migrations/0075_community_logo_stable_delivery.sql',
+        'packages/database/migrations/0080_community_logo_stable_delivery.sql',
       ),
       'utf8',
     );
@@ -30,7 +30,7 @@ describe('community logo stable delivery migration', () => {
     const sql = readFileSync(
       resolve(
         process.cwd(),
-        'packages/database/migrations/0076_community_logo_stable_delivery_validate.sql',
+        'packages/database/migrations/0081_community_logo_stable_delivery_validate.sql',
       ),
       'utf8',
     );

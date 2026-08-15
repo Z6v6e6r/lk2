@@ -132,6 +132,9 @@ export interface UserRuntimeCapabilities {
   readonly communityReadFeed: boolean;
   readonly communityReadChat: boolean;
   readonly communityReadRating: boolean;
+  readonly communityCanonical: boolean;
+  readonly communityDirectInvites: boolean;
+  readonly communityRealtime: boolean;
 }
 
 const disabledUserRuntimeCapabilities: UserRuntimeCapabilities = {
@@ -140,6 +143,9 @@ const disabledUserRuntimeCapabilities: UserRuntimeCapabilities = {
   communityReadFeed: false,
   communityReadChat: false,
   communityReadRating: false,
+  communityCanonical: false,
+  communityDirectInvites: false,
+  communityRealtime: false,
 };
 
 function publicSession(result: AuthSessionResult, runtimeCapabilities: UserRuntimeCapabilities) {

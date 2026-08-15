@@ -108,8 +108,8 @@ require_home_queue_drained() {
     fail "Home projector queue is missing or not drained (${queue_counts:-missing})"
 }
 
-profile_migration="0074_profile_photo_client_assisted_source.sql"
-community_migration="0075_community_logo_stable_delivery.sql"
+profile_migration="0079_profile_photo_client_assisted_source.sql"
+community_migration="0080_community_logo_stable_delivery.sql"
 
 if test "$(sql "select count(*) from public.schema_migrations where filename = '$profile_migration'")" != 0; then
   profile_counts="$(sql "select

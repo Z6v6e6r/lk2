@@ -19,6 +19,21 @@ import type {
   CommunityReadExperienceFeedPage,
   CommunityReadExperienceChatPage,
   CommunityReadExperienceRating,
+  CommunityDiscoveryPage,
+  CommunityDetailView,
+  CommunityFeedPage,
+  CommunityRealtimeEventPage,
+  CommunityPost,
+  CommunityPostCreateRequest,
+  CommunityMediaUploadIssueRequest,
+  CommunityMediaUploadIssued,
+  CommunityMediaStatus,
+  CommunityMediaVariantName,
+  CommunityDirectInvitePreview,
+  CommunityDirectInviteCreated,
+  CommunityDirectInvitePage,
+  CommunityDirectInviteState,
+  CommunityOwnMembershipState,
   GameCard,
   GameCardPage,
   GameCommandResult,
@@ -34,6 +49,7 @@ import type {
   LocationList,
   NotificationInboxPage,
   MessagingRealtimeTicket,
+  RealtimeTicket,
   PlayerProfileView,
   PublicGameCardPage,
   PublicGameFilters,
@@ -75,6 +91,21 @@ export type {
   CommunityReadExperienceFeedPage,
   CommunityReadExperienceChatPage,
   CommunityReadExperienceRating,
+  CommunityDiscoveryPage,
+  CommunityDetailView,
+  CommunityFeedPage,
+  CommunityRealtimeEventPage,
+  CommunityPost,
+  CommunityPostCreateRequest,
+  CommunityMediaUploadIssueRequest,
+  CommunityMediaUploadIssued,
+  CommunityMediaStatus,
+  CommunityMediaVariantName,
+  CommunityDirectInvitePreview,
+  CommunityDirectInviteCreated,
+  CommunityDirectInvitePage,
+  CommunityDirectInviteState,
+  CommunityOwnMembershipState,
   GameCard,
   GameCardPage,
   GameCommandResult,
@@ -89,6 +120,7 @@ export type {
   LocationDetail,
   LocationList,
   NotificationInboxPage,
+  RealtimeTicket,
   PlayerProfileView,
   PublicGameCard,
   PublicGameCardPage,
@@ -152,6 +184,9 @@ export interface UserContext {
     readonly communityReadFeed: boolean;
     readonly communityReadChat: boolean;
     readonly communityReadRating: boolean;
+    readonly communityCanonical: boolean;
+    readonly communityDirectInvites: boolean;
+    readonly communityRealtime: boolean;
   };
 }
 
@@ -274,6 +309,7 @@ export interface AuthGateway {
   }) => Promise<void>;
   readonly getVivaAccessToken: () => string | undefined;
   readonly refreshVivaAccessToken: () => Promise<string>;
+  readonly issueRealtimeTicket: () => Promise<RealtimeTicket>;
   readonly getRoutingPlan: (forceRefresh?: boolean) => Promise<ClientRoutingPlan>;
   readonly getSelfProfile: () => Promise<UserProfile>;
   readonly getUserProfile: (userId: string) => Promise<UserProfile>;
@@ -377,6 +413,74 @@ export interface AuthGateway {
     period?: 'all' | '30d',
     tab?: 'overall' | 'dynamics' | 'games' | 'tournaments',
   ) => Promise<CommunityReadExperienceRating>;
+  readonly discoverCommunities: (
+    query?: string,
+    cursor?: string,
+    limit?: number,
+  ) => Promise<CommunityDiscoveryPage>;
+  readonly getCommunityDetail: (communityId: string) => Promise<CommunityDetailView>;
+  readonly getMyCommunityMembershipState: (
+    communityId: string,
+  ) => Promise<CommunityOwnMembershipState>;
+  readonly joinOrRequestCommunityMembership: (
+    communityId: string,
+    expectedMembershipRevision: number,
+  ) => Promise<CommunityOwnMembershipState>;
+  readonly cancelMyCommunityJoinRequest: (
+    communityId: string,
+    requestId: string,
+    expectedMembershipRevision: number,
+    expectedRequestRevision: number,
+  ) => Promise<CommunityOwnMembershipState>;
+  readonly leaveCommunity: (
+    communityId: string,
+    expectedMembershipRevision: number,
+  ) => Promise<CommunityOwnMembershipState>;
+  readonly listCommunityFeed: (communityId: string, cursor?: string) => Promise<CommunityFeedPage>;
+  readonly recoverCommunityEvents: (
+    communityId: string,
+    input: { readonly afterSequence: number; readonly limit: number },
+  ) => Promise<CommunityRealtimeEventPage>;
+  readonly createCommunityPost: (
+    communityId: string,
+    input: CommunityPostCreateRequest,
+  ) => Promise<CommunityPost>;
+  readonly issueCommunityMediaUpload: (
+    communityId: string,
+    input: CommunityMediaUploadIssueRequest,
+  ) => Promise<CommunityMediaUploadIssued>;
+  readonly finalizeCommunityMediaUpload: (
+    communityId: string,
+    mediaId: string,
+    expectedRevision: number,
+  ) => Promise<CommunityMediaStatus>;
+  readonly getCommunityMediaStatus: (
+    communityId: string,
+    mediaId: string,
+  ) => Promise<CommunityMediaStatus>;
+  readonly downloadCommunityMediaVariant: (
+    communityId: string,
+    mediaId: string,
+    variant: CommunityMediaVariantName,
+  ) => Promise<Blob>;
+  readonly previewCommunityDirectInvite: (token: string) => Promise<CommunityDirectInvitePreview>;
+  readonly redeemCommunityDirectInvite: (
+    token: string,
+    expectedInviteRevision: number,
+    expectedMembershipRevision: number,
+  ) => Promise<CommunityOwnMembershipState>;
+  readonly listCommunityDirectInvites: (
+    communityId: string,
+    cursor?: string,
+  ) => Promise<CommunityDirectInvitePage>;
+  readonly createCommunityDirectInvite: (
+    communityId: string,
+    expectedIssuerMembershipRevision: number,
+  ) => Promise<CommunityDirectInviteCreated>;
+  readonly revokeCommunityDirectInvite: (
+    inviteId: string,
+    expectedInviteRevision: number,
+  ) => Promise<CommunityDirectInviteState>;
   readonly getProfileLevelHistory: () => Promise<ProfileLevelHistory>;
   readonly listConversations: () => Promise<ConversationPage>;
   readonly createRealtimeTicket: () => Promise<MessagingRealtimeTicket>;
@@ -460,6 +564,9 @@ function normalizeContext(payload: ApiUserContext, tenantKey: string): UserConte
       communityReadFeed: payload.runtimeCapabilities?.communityReadFeed === true,
       communityReadChat: payload.runtimeCapabilities?.communityReadChat === true,
       communityReadRating: payload.runtimeCapabilities?.communityReadRating === true,
+      communityCanonical: payload.runtimeCapabilities?.communityCanonical === true,
+      communityDirectInvites: payload.runtimeCapabilities?.communityDirectInvites === true,
+      communityRealtime: payload.runtimeCapabilities?.communityRealtime === true,
     },
   };
 }
@@ -1232,6 +1339,10 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       return applyVivaAccess();
     },
 
+    issueRealtimeTicket() {
+      return client.issueRealtimeTicket();
+    },
+
     getRoutingPlan(forceRefresh = false) {
       return loadRoutingPlan(forceRefresh);
     },
@@ -1582,6 +1693,51 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       });
     },
 
+    discoverCommunities(query, cursor, limit = 20) {
+      return client.discoverCommunities({
+        limit,
+        ...(query ? { query } : {}),
+        ...(cursor ? { cursor } : {}),
+      });
+    },
+
+    getCommunityDetail(communityId) {
+      return client.getCommunityDetail(communityId);
+    },
+
+    getMyCommunityMembershipState(communityId) {
+      return client.getMyCommunityMembershipState(communityId);
+    },
+
+    joinOrRequestCommunityMembership(communityId, expectedMembershipRevision) {
+      return client.joinOrRequestCommunityMembership(communityId, {
+        expectedMembershipRevision,
+      });
+    },
+
+    cancelMyCommunityJoinRequest(
+      communityId,
+      requestId,
+      expectedMembershipRevision,
+      expectedRequestRevision,
+    ) {
+      return client.cancelMyCommunityJoinRequest(communityId, requestId, {
+        expectedMembershipRevision,
+        expectedRequestRevision,
+      });
+    },
+
+    leaveCommunity(communityId, expectedMembershipRevision) {
+      return client.leaveCommunity(communityId, { expectedMembershipRevision });
+    },
+
+    listCommunityFeed(communityId, cursor) {
+      return client.listCommunityFeed(communityId, {
+        limit: 20,
+        ...(cursor ? { cursor } : {}),
+      });
+    },
+
     listCommunityReadExperienceChat(communityId, cursor) {
       return client.listCommunityReadExperienceChat(communityId, {
         limit: 50,
@@ -1589,8 +1745,61 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       });
     },
 
+    recoverCommunityEvents(communityId, input) {
+      return client.recoverCommunityEvents(communityId, input);
+    },
+
+    createCommunityPost(communityId, input) {
+      return client.createCommunityPost(communityId, input);
+    },
+
+    issueCommunityMediaUpload(communityId, input) {
+      return client.issueCommunityMediaUpload(communityId, input);
+    },
+
+    finalizeCommunityMediaUpload(communityId, mediaId, expectedRevision) {
+      return client.finalizeCommunityMediaUpload(communityId, mediaId, { expectedRevision });
+    },
+
+    getCommunityMediaStatus(communityId, mediaId) {
+      return client.getCommunityMediaStatus(communityId, mediaId);
+    },
+
+    downloadCommunityMediaVariant(communityId, mediaId, variant) {
+      return client.downloadCommunityMediaVariant(communityId, mediaId, variant);
+    },
+
+    previewCommunityDirectInvite(token) {
+      return client.previewCommunityDirectInvite({ token });
+    },
+
+    redeemCommunityDirectInvite(token, expectedInviteRevision, expectedMembershipRevision) {
+      return client.redeemCommunityDirectInvite({
+        token,
+        expectedInviteRevision,
+        expectedMembershipRevision,
+      });
+    },
+
+    listCommunityDirectInvites(communityId, cursor) {
+      return client.listCommunityDirectInvites(communityId, {
+        limit: 20,
+        ...(cursor ? { cursor } : {}),
+      });
+    },
+
     getCommunityReadExperienceRating(communityId, period = '30d', tab = 'overall') {
       return client.getCommunityReadExperienceRating(communityId, { period, tab });
+    },
+
+    createCommunityDirectInvite(communityId, expectedIssuerMembershipRevision) {
+      return client.createCommunityDirectInvite(communityId, {
+        expectedIssuerMembershipRevision,
+      });
+    },
+
+    revokeCommunityDirectInvite(inviteId, expectedInviteRevision) {
+      return client.revokeCommunityDirectInvite(inviteId, { expectedInviteRevision });
     },
 
     getProfileLevelHistory() {

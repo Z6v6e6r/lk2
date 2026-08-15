@@ -8,6 +8,7 @@ import {
   runCommunityHomeSyncCycle,
   runCommunityLogoCompatibilityBackfill,
 } from './community-home-sync.js';
+import type { synchronizeLegacyCommunityLogos } from './community-logo-sync.js';
 import type { ProfilePhotoObjectStore } from './profile-photo-sync.js';
 
 const tenantId = '86afbe01-0318-4dd2-bc25-303b7bf0d430';
@@ -93,6 +94,7 @@ describe('independent community Home synchronization', () => {
       createReadUrl: vi.fn(),
       delete: vi.fn().mockResolvedValue(undefined),
     };
+    const synchronizeLogos = vi.fn<typeof synchronizeLegacyCommunityLogos>().mockResolvedValue([]);
     const config = loadConfig({
       APP_ENV: 'ci',
       DATABASE_URL: 'postgresql://phub:test@localhost:5432/phub',
@@ -110,12 +112,17 @@ describe('independent community Home synchronization', () => {
         config,
         logger,
         repository,
-        sourceMode: 'LOCAL',
+        sourceMode: 'LEGACY',
         store,
+        synchronizeLogos,
         now: new Date('2026-07-17T12:00:00.000Z'),
       }),
     ).resolves.toEqual({ attempted: 1, synced: 1, failed: 0 });
     expect(listMemberships).toHaveBeenCalledTimes(2);
+    expect(synchronizeLogos).toHaveBeenCalledOnce();
+    expect(synchronizeLogos.mock.calls[0]?.[0].items.map((item) => item.id)).toEqual(
+      communityIds.slice(0, 10),
+    );
     expect(listMemberships).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({

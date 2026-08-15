@@ -4,6 +4,7 @@ import type {
   ProfileLevelHistoryRepository,
   ProfilePrivacyRepository,
 } from '@phub/database';
+import { DEFAULT_PROFILE_PRIVACY_SETTINGS } from '@phub/domain';
 import { buildHomeBase } from '@phub/home-projection';
 import { createLogger } from '@phub/observability';
 import { SignJWT } from 'jose';
@@ -81,6 +82,29 @@ describe('health endpoints', () => {
     expect(response.statusCode).toBe(204);
     expect(response.headers['access-control-allow-origin']).toBe('http://127.0.0.1:3001');
     expect(response.headers['access-control-allow-methods']).toContain('PUT');
+  });
+
+  it('allows the browser profile-photo grant header in cross-origin preflight', async () => {
+    const app = await buildApp({
+      config: { ...config, CORS_ORIGINS: 'https://app.padlhub.test' },
+      logger: createLogger('api-test', 'silent'),
+    });
+    apps.push(app);
+    const response = await app.inject({
+      method: 'OPTIONS',
+      url: '/user/api/v1/local-padel/profile/photo',
+      headers: {
+        origin: 'https://app.padlhub.test',
+        'access-control-request-method': 'POST',
+        'access-control-request-headers': 'content-type,idempotency-key,x-profile-photo-grant',
+      },
+    });
+
+    expect(response.statusCode).toBe(204);
+    expect(response.headers['access-control-allow-origin']).toBe('https://app.padlhub.test');
+    expect(response.headers['access-control-allow-headers']?.toLowerCase()).toContain(
+      'x-profile-photo-grant',
+    );
   });
 
   it('removes OAuth and other query parameters from request logs', () => {
@@ -190,6 +214,32 @@ describe('health endpoints', () => {
     ).toBe(200);
   });
 
+  it('retries Community media object-store readiness after a transient failure', async () => {
+    const checkReady = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(new Error('s3 unavailable'))
+      .mockResolvedValue(undefined);
+    const app = await buildApp({
+      config,
+      logger: createLogger('api-test', 'silent'),
+      pool: fakePool(),
+      communityMediaObjectStore: { checkReady } as never,
+    });
+    apps.push(app);
+
+    const unavailable = await app.inject({ method: 'GET', url: '/health/ready' });
+    const recovered = await app.inject({ method: 'GET', url: '/health/ready' });
+
+    expect(unavailable.statusCode).toBe(503);
+    expect(recovered.statusCode).toBe(200);
+    expect(recovered.json()).toMatchObject({
+      status: 'ready',
+      database: true,
+      communityMedia: true,
+    });
+    expect(checkReady).toHaveBeenCalledTimes(2);
+  });
+
   it('requires a PadlHub token before tenant resolution', async () => {
     const app = await buildApp({
       config,
@@ -217,7 +267,44 @@ describe('health endpoints', () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toMatchObject({ tenantId, roles: ['client'] });
+    expect(response.json()).toMatchObject({
+      tenantId,
+      roles: ['client'],
+      runtimeCapabilities: {
+        communityDirectInvites: false,
+        communityRealtime: false,
+      },
+    });
+  });
+
+  it('reports runtime capability only when the corresponding server runtime is wired', async () => {
+    const app = await buildApp({
+      config: {
+        ...config,
+        COMMUNITY_INVITES_ENABLED: true,
+        COMMUNITIES_REALTIME_ENABLED: true,
+      },
+      logger: createLogger('api-test', 'silent'),
+      pool: fakePool(),
+      communityDirectInviteService: {} as never,
+      realtimeAuthorizationRepository: {} as never,
+      realtimeTicketIssuer: {} as never,
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/user/api/v1/local-padel/context',
+      headers: { authorization: `Bearer ${await accessToken()}` },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      runtimeCapabilities: {
+        communityDirectInvites: true,
+        communityRealtime: true,
+      },
+    });
   });
 
   it('returns the effective server-owned routing plan for the authenticated client', async () => {
@@ -493,6 +580,7 @@ describe('health endpoints', () => {
 
   it('loads the authenticated owner privacy policy with no-store caching', async () => {
     const settings = {
+      ...DEFAULT_PROFILE_PRIVACY_SETTINGS,
       contactPolicy: 'AUTHORIZED' as const,
       chatPolicy: 'NOBODY' as const,
       version: 2,
@@ -520,6 +608,7 @@ describe('health endpoints', () => {
 
   it('updates owner privacy through an idempotent optimistic command', async () => {
     const settings = {
+      ...DEFAULT_PROFILE_PRIVACY_SETTINGS,
       contactPolicy: 'NOBODY' as const,
       chatPolicy: 'AUTHORIZED' as const,
       version: 3,

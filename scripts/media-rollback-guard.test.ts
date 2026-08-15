@@ -31,8 +31,8 @@ describe('media rollback safety guard', () => {
 args="$*"
 case "$args" in
   *"rabbitmq rabbitmqctl"*) exit 42 ;;
-  *"postgres"*"0074_profile_photo_client_assisted_source.sql"*) printf '0\\n' ;;
-  *"postgres"*"0075_community_logo_stable_delivery.sql"*) printf '1\\n' ;;
+  *"postgres"*"0079_profile_photo_client_assisted_source.sql"*) printf '0\\n' ;;
+  *"postgres"*"0080_community_logo_stable_delivery.sql"*) printf '1\\n' ;;
   *"postgres"*"media_cutover_state"*) printf '1\\n' ;;
   *"postgres"*) printf '0|0|0|0|0|0\\n' ;;
   *) exit 0 ;;
@@ -76,8 +76,8 @@ esac
 args="$*"
 case "$args" in
   *"rabbitmq rabbitmqctl"*) exit 42 ;;
-  *"postgres"*"0074_profile_photo_client_assisted_source.sql"*) printf '1\\n' ;;
-  *"postgres"*"0075_community_logo_stable_delivery.sql"*) printf '1\\n' ;;
+  *"postgres"*"0079_profile_photo_client_assisted_source.sql"*) printf '1\\n' ;;
+  *"postgres"*"0080_community_logo_stable_delivery.sql"*) printf '1\\n' ;;
   *"postgres"*"media_cutover_state"*) printf '0\\n' ;;
   *"postgres"*"profile_photo_client_commands"*) printf '0|0\\n' ;;
   *"postgres"*) printf '0|0|0|0|0|0\\n' ;;
@@ -121,8 +121,8 @@ esac
       `#!/bin/sh
 args="$*"
 case "$args" in
-  *"postgres"*"0074_profile_photo_client_assisted_source.sql"*) printf '0\\n' ;;
-  *"postgres"*"0075_community_logo_stable_delivery.sql"*) printf '1\\n' ;;
+  *"postgres"*"0079_profile_photo_client_assisted_source.sql"*) printf '0\\n' ;;
+  *"postgres"*"0080_community_logo_stable_delivery.sql"*) printf '1\\n' ;;
   *"postgres"*"media_cutover_state"*) printf '1\\n' ;;
   *) exit 0 ;;
 esac
@@ -165,8 +165,8 @@ esac
 args="$*"
 case "$args" in
   *"rabbitmq rabbitmqctl"*) exit 42 ;;
-  *"postgres"*"0074_profile_photo_client_assisted_source.sql"*) printf '1\\n' ;;
-  *"postgres"*"0075_community_logo_stable_delivery.sql"*) printf '1\\n' ;;
+  *"postgres"*"0079_profile_photo_client_assisted_source.sql"*) printf '1\\n' ;;
+  *"postgres"*"0080_community_logo_stable_delivery.sql"*) printf '1\\n' ;;
   *"postgres"*"profile_photo_client_commands"*) printf '1|0\\n' ;;
   *"postgres"*"media_cutover_state"*) printf '1\\n' ;;
   *"postgres"*) printf '0|0|0|0|0|0\\n' ;;

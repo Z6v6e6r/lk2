@@ -19,6 +19,17 @@ const environmentSchema = z.object({
   API_PORT: z.coerce.number().int().positive().default(3000),
   REALTIME_HOST: z.string().default('0.0.0.0'),
   REALTIME_PORT: z.coerce.number().int().positive().default(3001),
+  REALTIME_DATABASE_POOL_MAX: z.coerce.number().int().min(1).max(100).default(10),
+  REALTIME_DATABASE_POOL_WARM_CONNECTIONS: z.coerce.number().int().min(1).max(100).default(2),
+  REALTIME_MAX_CONNECTIONS: z.coerce.number().int().min(100).max(100_000).default(10_000),
+  REALTIME_MAX_SUBSCRIPTIONS_PER_CONNECTION: z.coerce.number().int().min(1).max(500).default(100),
+  REALTIME_MAX_SOCKET_BUFFER_BYTES: z.coerce
+    .number()
+    .int()
+    .min(64 * 1_024)
+    .max(8 * 1_024 * 1_024)
+    .default(512 * 1_024),
+  REALTIME_HEARTBEAT_INTERVAL_MS: z.coerce.number().int().min(5_000).max(120_000).default(30_000),
   WORKER_HEALTH_PORT: z.coerce.number().int().positive().default(3002),
   OUTBOX_POLL_INTERVAL_MS: z.coerce.number().int().positive().max(60_000).default(1000),
   OUTBOX_PUBLISH_MODE: z.enum(['transactional', 'leased']).default('transactional'),
@@ -29,6 +40,8 @@ const environmentSchema = z.object({
   CORS_ORIGINS: z.string().default('http://localhost:5173,http://127.0.0.1:5173'),
   TRUSTED_PROXY_CIDRS: z.string().default(''),
   DATABASE_URL: z.string().url(),
+  DATABASE_POOL_MAX: z.coerce.number().int().min(1).max(100).default(20),
+  DATABASE_POOL_WARM_CONNECTIONS: z.coerce.number().int().min(1).max(100).default(1),
   REDIS_URL: z.string().url(),
   RABBITMQ_URL: z.string().url(),
   S3_ENDPOINT: z.string().url().optional(),
@@ -60,6 +73,7 @@ const environmentSchema = z.object({
   JWT_ADMIN_AUDIENCE: z.string().min(1).default('phub-admin'),
   JWT_REALTIME_AUDIENCE: z.string().min(1).default('phub-realtime'),
   JWT_ACCESS_SECRET: z.string().min(32),
+  JWT_REALTIME_SECRET: z.string().min(32).optional(),
   JWT_REFRESH_SECRET: z.string().min(32),
   AUTH_ACCESS_TTL_SECONDS: z.coerce.number().int().min(60).max(3600).default(600),
   AUTH_REFRESH_TTL_SECONDS: z.coerce.number().int().min(3600).max(5_184_000).default(2_592_000),
@@ -137,6 +151,25 @@ const environmentSchema = z.object({
   COMMUNITY_LEGACY_READ_FEED_ENABLED: booleanFromEnvironment,
   COMMUNITY_LEGACY_READ_CHAT_ENABLED: booleanFromEnvironment,
   COMMUNITY_LEGACY_READ_RATING_ENABLED: booleanFromEnvironment,
+  COMMUNITY_INVITES_ENABLED: booleanFromEnvironment,
+  COMMUNITIES_REALTIME_ENABLED: booleanFromEnvironment,
+  COMMUNITY_MEDIA_ENABLED: booleanFromEnvironment,
+  COMMUNITY_MEDIA_SCAN_MODE: z.enum(['mock', 'clamav']).default('mock'),
+  COMMUNITY_MEDIA_CLAMAV_HOST: z.string().min(1).optional(),
+  COMMUNITY_MEDIA_CLAMAV_PORT: z.coerce.number().int().min(1).max(65_535).default(3310),
+  COMMUNITY_MEDIA_CLAMAV_TIMEOUT_MS: z.coerce
+    .number()
+    .int()
+    .min(1_000)
+    .max(120_000)
+    .default(30_000),
+  COMMUNITY_MEDIA_POLL_INTERVAL_MS: z.coerce.number().int().min(250).max(60_000).default(2_000),
+  COMMUNITY_MEDIA_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(10),
+  COMMUNITY_MEDIA_SCAN_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(100).default(8),
+  COMMUNITY_MEDIA_GC_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(100).default(8),
+  COMMUNITY_MEDIA_READ_URL_TTL_SECONDS: z.coerce.number().int().min(60).max(900).default(300),
+  COMMUNITY_INVITE_TOKEN_KEYS: z.string().optional(),
+  COMMUNITY_INVITE_ACTIVE_KEY_ID: z.string().min(1).max(64).optional(),
   COMMUNITIES_LEGACY_BASE_URL: z.string().url().default('https://padlhub.su'),
   COMMUNITIES_LEGACY_TIMEOUT_MS: z.coerce.number().int().min(500).max(30_000).default(10_000),
   COMMUNITIES_LEGACY_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(2).default(2),
@@ -351,6 +384,16 @@ export function loadConfig(
       .map((issue) => `${issue.path.join('.')}: ${issue.message}`)
       .join('; ');
     throw new Error(`Invalid application configuration: ${issues}`);
+  }
+  if (parsed.data.DATABASE_POOL_WARM_CONNECTIONS > parsed.data.DATABASE_POOL_MAX) {
+    throw new Error('DATABASE_POOL_WARM_CONNECTIONS must not exceed DATABASE_POOL_MAX');
+  }
+  if (
+    parsed.data.REALTIME_DATABASE_POOL_WARM_CONNECTIONS > parsed.data.REALTIME_DATABASE_POOL_MAX
+  ) {
+    throw new Error(
+      'REALTIME_DATABASE_POOL_WARM_CONNECTIONS must not exceed REALTIME_DATABASE_POOL_MAX',
+    );
   }
 
   if (parsed.data.APP_ENV === 'production' && parsed.data.GAMES_READ_ENABLED) {
@@ -803,6 +846,116 @@ export function loadConfig(
   ) {
     throw new Error('COMMUNITY_LEGACY_READ_*_ENABLED requires COMMUNITIES_READ_MODE=legacy');
   }
+  if (parsed.data.COMMUNITIES_REALTIME_ENABLED) {
+    if (parsed.data.COMMUNITIES_READ_MODE !== 'local') {
+      throw new Error('COMMUNITIES_REALTIME_ENABLED requires COMMUNITIES_READ_MODE=local');
+    }
+    if (!parsed.data.JWT_REALTIME_SECRET) {
+      throw new Error('COMMUNITIES_REALTIME_ENABLED requires JWT_REALTIME_SECRET');
+    }
+    if (
+      parsed.data.JWT_REALTIME_SECRET === parsed.data.JWT_ACCESS_SECRET ||
+      parsed.data.JWT_REALTIME_SECRET === parsed.data.JWT_REFRESH_SECRET
+    ) {
+      throw new Error('JWT_REALTIME_SECRET must be distinct from API and refresh secrets');
+    }
+  }
+  if (parsed.data.APP_ENV === 'production' && parsed.data.COMMUNITIES_REALTIME_ENABLED) {
+    throw new Error(
+      'COMMUNITIES_REALTIME_ENABLED is staging-only until durable event recovery and fan-out pass the production gate',
+    );
+  }
+  if (parsed.data.COMMUNITY_MEDIA_ENABLED) {
+    if (parsed.data.COMMUNITIES_READ_MODE !== 'local') {
+      throw new Error('COMMUNITY_MEDIA_ENABLED requires COMMUNITIES_READ_MODE=local');
+    }
+    const missingStorage = [
+      ['S3_ENDPOINT', parsed.data.S3_ENDPOINT],
+      ['S3_PUBLIC_ENDPOINT', parsed.data.S3_PUBLIC_ENDPOINT],
+      ['S3_BUCKET', parsed.data.S3_BUCKET],
+      ['S3_ACCESS_KEY', parsed.data.S3_ACCESS_KEY],
+      ['S3_SECRET_KEY', parsed.data.S3_SECRET_KEY],
+    ]
+      .filter(([, value]) => !value)
+      .map(([name]) => name);
+    if (missingStorage.length > 0) {
+      throw new Error(
+        `COMMUNITY_MEDIA_ENABLED requires versioned media storage: ${missingStorage.join(', ')}`,
+      );
+    }
+    if (parsed.data.APP_ENV !== 'local' && parsed.data.APP_ENV !== 'ci') {
+      let publicEndpoint: URL;
+      try {
+        publicEndpoint = new URL(parsed.data.S3_PUBLIC_ENDPOINT as string);
+      } catch {
+        throw new Error('COMMUNITY_MEDIA_ENABLED requires a valid S3_PUBLIC_ENDPOINT URL');
+      }
+      if (
+        publicEndpoint.protocol !== 'https:' ||
+        publicEndpoint.username ||
+        publicEndpoint.password ||
+        publicEndpoint.pathname !== '/' ||
+        publicEndpoint.search ||
+        publicEndpoint.hash
+      ) {
+        throw new Error(
+          'COMMUNITY_MEDIA_ENABLED requires an HTTPS S3_PUBLIC_ENDPOINT origin outside local/ci',
+        );
+      }
+    }
+    if (
+      parsed.data.APP_ENV !== 'local' &&
+      parsed.data.APP_ENV !== 'ci' &&
+      parsed.data.COMMUNITY_MEDIA_SCAN_MODE !== 'clamav'
+    ) {
+      throw new Error(
+        'COMMUNITY_MEDIA_ENABLED requires COMMUNITY_MEDIA_SCAN_MODE=clamav outside local/ci',
+      );
+    }
+    if (
+      parsed.data.COMMUNITY_MEDIA_SCAN_MODE === 'clamav' &&
+      !parsed.data.COMMUNITY_MEDIA_CLAMAV_HOST
+    ) {
+      throw new Error('COMMUNITY_MEDIA_SCAN_MODE=clamav requires COMMUNITY_MEDIA_CLAMAV_HOST');
+    }
+  }
+  if (parsed.data.COMMUNITY_INVITES_ENABLED) {
+    if (parsed.data.COMMUNITIES_READ_MODE !== 'local') {
+      throw new Error('COMMUNITY_INVITES_ENABLED requires COMMUNITIES_READ_MODE=local');
+    }
+    if (!parsed.data.COMMUNITY_INVITE_TOKEN_KEYS || !parsed.data.COMMUNITY_INVITE_ACTIVE_KEY_ID) {
+      throw new Error(
+        'COMMUNITY_INVITES_ENABLED requires COMMUNITY_INVITE_TOKEN_KEYS and COMMUNITY_INVITE_ACTIVE_KEY_ID',
+      );
+    }
+    let inviteTokenKeys: unknown;
+    try {
+      inviteTokenKeys = JSON.parse(parsed.data.COMMUNITY_INVITE_TOKEN_KEYS);
+    } catch {
+      throw new Error('COMMUNITY_INVITE_TOKEN_KEYS must be a JSON object');
+    }
+    if (
+      !inviteTokenKeys ||
+      typeof inviteTokenKeys !== 'object' ||
+      Array.isArray(inviteTokenKeys) ||
+      Object.keys(inviteTokenKeys).length === 0
+    ) {
+      throw new Error('COMMUNITY_INVITE_TOKEN_KEYS must be a non-empty JSON object');
+    }
+    for (const value of Object.values(inviteTokenKeys as Record<string, unknown>)) {
+      if (
+        typeof value !== 'string' ||
+        Buffer.from(value, 'base64').length !== 32 ||
+        Buffer.from(value, 'base64').toString('base64').replace(/=+$/, '') !==
+          value.replace(/=+$/, '')
+      ) {
+        throw new Error('Community invite token keys must be 32-byte base64 values');
+      }
+    }
+    if (!(parsed.data.COMMUNITY_INVITE_ACTIVE_KEY_ID in inviteTokenKeys)) {
+      throw new Error('COMMUNITY_INVITE_ACTIVE_KEY_ID must select a configured token key');
+    }
+  }
   if (parsed.data.APP_ENV === 'production' && parsed.data.PROMOTIONS_READ_MODE === 'mock') {
     throw new Error('PROMOTIONS_READ_MODE=mock is forbidden in production');
   }
@@ -820,4 +973,30 @@ export function loadConfig(
   }
 
   return parsed.data;
+}
+
+const REALTIME_ACCESS_SECRET_SENTINEL = 'x'.repeat(32);
+const REALTIME_REFRESH_SECRET_SENTINEL = 'y'.repeat(32);
+
+/**
+ * Realtime validates tickets with its dedicated key and must not receive API or refresh signing
+ * secrets when the Communities gate is enabled outside local/CI. Sentinels satisfy the shared
+ * config shape but are never accepted by an API process and are not read by the gateway.
+ */
+export function loadRealtimeConfig(environment: NodeJS.ProcessEnv = process.env): AppConfig {
+  if (!environment.JWT_REALTIME_SECRET) {
+    throw new Error('Realtime runtime requires JWT_REALTIME_SECRET');
+  }
+  if (
+    environment.APP_ENV !== 'local' &&
+    environment.APP_ENV !== 'ci' &&
+    (environment.JWT_ACCESS_SECRET || environment.JWT_REFRESH_SECRET)
+  ) {
+    throw new Error('Realtime runtime must not receive JWT_ACCESS_SECRET or JWT_REFRESH_SECRET');
+  }
+  return loadConfig({
+    ...environment,
+    JWT_ACCESS_SECRET: REALTIME_ACCESS_SECRET_SENTINEL,
+    JWT_REFRESH_SECRET: REALTIME_REFRESH_SECRET_SENTINEL,
+  });
 }

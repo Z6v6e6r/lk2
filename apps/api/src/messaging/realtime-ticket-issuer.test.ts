@@ -1,5 +1,5 @@
 import { realtimeTicketRedisKey } from '@phub/auth';
-import { decodeJwt } from 'jose';
+import { decodeJwt, jwtVerify } from 'jose';
 import { describe, expect, it, vi } from 'vitest';
 
 import { RedisRealtimeTicketIssuer } from './realtime-ticket-issuer.js';
@@ -11,7 +11,7 @@ describe('Redis realtime ticket issuer', () => {
     const issuer = new RedisRealtimeTicketIssuer(
       { set, del },
       {
-        JWT_ACCESS_SECRET: 'test-access-secret-at-least-32-characters',
+        JWT_REALTIME_SECRET: 'test-realtime-secret-at-least-32-characters',
         JWT_ISSUER: 'phub-identity',
         JWT_REALTIME_AUDIENCE: 'phub-realtime',
       },
@@ -24,6 +24,13 @@ describe('Redis realtime ticket issuer', () => {
       sessionId,
     });
     const claims = decodeJwt(result.ticket);
+    await expect(
+      jwtVerify(
+        result.ticket,
+        new TextEncoder().encode('test-realtime-secret-at-least-32-characters'),
+        { issuer: 'phub-identity', audience: 'phub-realtime' },
+      ),
+    ).resolves.toMatchObject({ payload: { sub: '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca' } });
 
     expect(claims).toMatchObject({
       scope: 'realtime.connect',

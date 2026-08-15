@@ -3,16 +3,19 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { CommunityDirectoryItem } from '@phub/communities';
 
-import { synchronizeLegacyCommunityLogos } from './community-logo-sync.js';
+import {
+  CommunityLogoHostCircuit,
+  synchronizeLegacyCommunityLogos,
+} from './community-logo-sync.js';
 import type { ProfilePhotoObjectStore } from './profile-photo-sync.js';
 
 const tenantId = '86afbe01-0318-4dd2-bc25-303b7bf0d430';
 const communityId = '11111111-1111-4111-8111-111111111111';
 const fetchedAt = '2026-07-17T12:00:00.000Z';
 
-function item(legacyLogoSourceUrl?: string): CommunityDirectoryItem {
+function item(legacyLogoSourceUrl?: string, id: string = communityId): CommunityDirectoryItem {
   return {
-    id: communityId,
+    id,
     title: 'Реальное сообщество',
     logoUrl: null,
     isVerified: true,
@@ -211,6 +214,176 @@ describe('legacy community logo synchronization', () => {
       sha256: result.persistence.contentSha256,
     });
     expect(put).not.toHaveBeenCalled();
+  });
+
+  it('limits external logo downloads and image normalization to three concurrent items', async () => {
+    const png = await sharp({
+      create: { width: 16, height: 16, channels: 4, background: '#7654d7' },
+    })
+      .png()
+      .toBuffer();
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const fetchImplementation = vi.fn<typeof fetch>().mockImplementation(async () => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      inFlight -= 1;
+      return new Response(png, { headers: { 'content-type': 'image/png' } });
+    });
+    const { pool } = poolWithLogoRows([]);
+    const { store } = objectStore();
+    const items = Array.from({ length: 8 }, (_, index) => {
+      const suffix = String(index + 1).padStart(12, '0');
+      const id = `00000000-0000-4000-8000-${suffix}`;
+      return item(`https://legacy.padlhub.test/logo/${index + 1}`, id);
+    });
+
+    await synchronizeLegacyCommunityLogos({
+      ...defaults,
+      pool,
+      store,
+      items,
+      fetchImplementation,
+    });
+
+    expect(fetchImplementation).toHaveBeenCalledTimes(items.length);
+    expect(maxInFlight).toBe(3);
+  });
+
+  it('opens a per-host circuit, skips fetches during cooldown and records recovery', async () => {
+    const png = await sharp({
+      create: { width: 16, height: 16, channels: 4, background: '#7654d7' },
+    })
+      .png()
+      .toBuffer();
+    let now = Date.parse(fetchedAt);
+    const onMetric = vi.fn();
+    const circuit = new CommunityLogoHostCircuit({
+      failureThreshold: 1,
+      resetMs: 1_000,
+      maxResetMs: 4_000,
+      now: () => now,
+      onMetric,
+    });
+    const fetchImplementation = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(null, { status: 503 }))
+      .mockResolvedValueOnce(new Response(png, { headers: { 'content-type': 'image/png' } }));
+    const { pool } = poolWithLogoRows([]);
+    const { store } = objectStore();
+    const input = {
+      ...defaults,
+      pool,
+      store,
+      items: [item('https://legacy.padlhub.test/logo/recovering')],
+      fetchImplementation,
+      circuit,
+    };
+
+    const [failed] = await synchronizeLegacyCommunityLogos(input);
+    const [open] = await synchronizeLegacyCommunityLogos(input);
+    now += 1_000;
+    const [recovered] = await synchronizeLegacyCommunityLogos(input);
+
+    expect(failed).toMatchObject({
+      outcome: 'fallback',
+      errorCode: 'COMMUNITY_LOGO_SOURCE_HTTP_503',
+    });
+    expect(open).toMatchObject({
+      outcome: 'fallback',
+      errorCode: 'COMMUNITY_LOGO_SOURCE_CIRCUIT_OPEN',
+    });
+    expect(recovered).toMatchObject({ outcome: 'stored' });
+    expect(fetchImplementation).toHaveBeenCalledTimes(2);
+    expect(onMetric).toHaveBeenNthCalledWith(1, {
+      outcome: 'failure',
+      errorCode: 'COMMUNITY_LOGO_SOURCE_HTTP_503',
+    });
+    expect(onMetric).toHaveBeenNthCalledWith(2, { outcome: 'circuit_open' });
+    expect(onMetric).toHaveBeenNthCalledWith(3, { outcome: 'circuit_probe' });
+    expect(onMetric).toHaveBeenNthCalledWith(4, { outcome: 'recovered' });
+  });
+
+  it('starts the full circuit cooldown when a failed request completes', async () => {
+    let now = Date.parse(fetchedAt);
+    const circuit = new CommunityLogoHostCircuit({
+      failureThreshold: 1,
+      resetMs: 1_000,
+      now: () => now,
+    });
+
+    await expect(
+      circuit.execute('legacy.padlhub.test', () => {
+        now += 5_000;
+        return Promise.reject(new Error('COMMUNITY_LOGO_SOURCE_HTTP_503'));
+      }),
+    ).rejects.toThrow('COMMUNITY_LOGO_SOURCE_HTTP_503');
+
+    const blockedOperation = vi.fn().mockResolvedValue('blocked');
+    await expect(circuit.execute('legacy.padlhub.test', blockedOperation)).rejects.toThrow(
+      'COMMUNITY_LOGO_SOURCE_CIRCUIT_OPEN',
+    );
+    now += 999;
+    await expect(circuit.execute('legacy.padlhub.test', blockedOperation)).rejects.toThrow(
+      'COMMUNITY_LOGO_SOURCE_CIRCUIT_OPEN',
+    );
+    expect(blockedOperation).not.toHaveBeenCalled();
+
+    now += 1;
+    await expect(
+      circuit.execute('legacy.padlhub.test', () => Promise.resolve('recovered')),
+    ).resolves.toBe('recovered');
+  });
+
+  it('does not let a slower pre-open success erase a newer open circuit', async () => {
+    const circuit = new CommunityLogoHostCircuit({ failureThreshold: 1, resetMs: 1_000 });
+    let resolveSlow: ((value: string) => void) | undefined;
+    const slowOperation = new Promise<string>((resolve) => {
+      resolveSlow = resolve;
+    });
+
+    const slowResult = circuit.execute('legacy.padlhub.test', () => slowOperation);
+    await expect(
+      circuit.execute('legacy.padlhub.test', () =>
+        Promise.reject(new Error('COMMUNITY_LOGO_SOURCE_HTTP_503')),
+      ),
+    ).rejects.toThrow('COMMUNITY_LOGO_SOURCE_HTTP_503');
+
+    resolveSlow?.('late success');
+    await expect(slowResult).resolves.toBe('late success');
+
+    const blockedOperation = vi.fn().mockResolvedValue('should not run');
+    await expect(circuit.execute('legacy.padlhub.test', blockedOperation)).rejects.toThrow(
+      'COMMUNITY_LOGO_SOURCE_CIRCUIT_OPEN',
+    );
+    expect(blockedOperation).not.toHaveBeenCalled();
+  });
+
+  it('recovers the host circuit when a half-open probe returns an item-specific error', async () => {
+    let now = Date.parse(fetchedAt);
+    const circuit = new CommunityLogoHostCircuit({
+      failureThreshold: 1,
+      resetMs: 1_000,
+      now: () => now,
+    });
+
+    await expect(
+      circuit.execute('legacy.padlhub.test', () =>
+        Promise.reject(new Error('COMMUNITY_LOGO_SOURCE_HTTP_503')),
+      ),
+    ).rejects.toThrow('COMMUNITY_LOGO_SOURCE_HTTP_503');
+
+    now += 1_000;
+    await expect(
+      circuit.execute('legacy.padlhub.test', () =>
+        Promise.reject(new Error('COMMUNITY_LOGO_SOURCE_HTTP_404')),
+      ),
+    ).rejects.toThrow('COMMUNITY_LOGO_SOURCE_HTTP_404');
+
+    const nextOperation = vi.fn().mockResolvedValue('next item');
+    await expect(circuit.execute('legacy.padlhub.test', nextOperation)).resolves.toBe('next item');
+    expect(nextOperation).toHaveBeenCalledOnce();
   });
 
   it('fails closed on a non-allowlisted source and keeps the current local logo', async () => {

@@ -97,8 +97,9 @@ client writes and keep it on until pending commands and all object-GC rows are b
 `HOME_VIVA_SYNC_ENABLED=true` workers also continue maintenance for backward compatibility. The order
 is mandatory:
 
-1. integrate the Communities migration chain `0060` through `0073`, keep the client-assisted media
-   migrations at `0074` through `0076`, and run the migrator only from that final monotonic chain;
+1. integrate the reviewed Communities migration history through `0078`, keep the client-assisted
+   media migrations at `0079` through `0081`, and run the migrator only from that final monotonic
+   chain;
 2. deploy and drain **all** API nodes with `PROFILE_PHOTO_CLIENT_SYNC_ENABLED=false`; this makes the
    stable community-logo and profile-photo media routes available before any worker publishes a
    stable URL;

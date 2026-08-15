@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { DEFAULT_PROFILE_PRIVACY_SETTINGS } from '@phub/domain';
 
 import { createBrowserAuthGateway } from './auth-gateway.js';
 
@@ -121,6 +122,9 @@ describe('browser auth gateway', () => {
       communityReadFeed: false,
       communityReadChat: false,
       communityReadRating: false,
+      communityCanonical: false,
+      communityDirectInvites: false,
+      communityRealtime: false,
     });
     expect(fetchImplementation).toHaveBeenCalledTimes(1);
 
@@ -128,6 +132,50 @@ describe('browser auth gateway', () => {
     expect(refreshUrl).toBe('https://api.padlhub.test/user/api/v1/padlhub/auth/session/refresh');
     expect(refreshInit?.credentials).toBe('include');
     expect(new Headers(refreshInit?.headers).has('Authorization')).toBe(false);
+  });
+
+  it('issues a no-store realtime ticket through the authenticated PadlHub client', async () => {
+    const session = {
+      accessToken: 'short-lived-padlhub-token',
+      tokenType: 'Bearer',
+      expiresAt: '2099-07-11T12:10:00.000Z',
+      user: { id: '00000000-0000-4000-8000-000000000001', displayName: 'Анна' },
+      context: {
+        userId: '00000000-0000-4000-8000-000000000001',
+        tenantId: '00000000-0000-4000-8000-000000000002',
+        displayName: 'Анна',
+        phoneLast4: '0001',
+        roles: ['client'],
+        permissions: ['profile.read'],
+      },
+    };
+    const ticket = {
+      ticket: 'one-time-realtime-ticket-that-is-long-enough',
+      expiresAt: '2026-08-04T12:00:30.000Z',
+    };
+    const fetchImplementation = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json(session))
+      .mockResolvedValueOnce(Response.json(ticket));
+    const gateway = createBrowserAuthGateway({
+      baseUrl: 'https://api.padlhub.test/',
+      tenantKey: 'padlhub',
+      appVersion: 'test',
+      fetchImplementation,
+    });
+    await gateway.restoreSession();
+
+    await expect(gateway.issueRealtimeTicket()).resolves.toEqual(ticket);
+
+    const [url, init] = fetchImplementation.mock.calls[1] ?? [];
+    expect(requestUrl(url ?? '')).toBe(
+      'https://api.padlhub.test/user/api/v1/padlhub/realtime/tickets',
+    );
+    expect(init?.method).toBe('POST');
+    expect(init?.cache).toBe('no-store');
+    expect(new Headers(init?.headers).get('Authorization')).toBe(
+      'Bearer short-lived-padlhub-token',
+    );
   });
 
   it('coalesces concurrent Home reads without pinning a resolved snapshot', async () => {
@@ -830,6 +878,7 @@ describe('browser auth gateway', () => {
       },
     };
     const current = {
+      ...DEFAULT_PROFILE_PRIVACY_SETTINGS,
       contactPolicy: 'AUTHORIZED',
       chatPolicy: 'AUTHORIZED',
       version: 1,

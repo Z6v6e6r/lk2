@@ -260,6 +260,13 @@ if test "$projection_ready" -ne 1; then
   ")"
   echo "Live Home component readiness: $component_readiness" >&2
   write_runtime_override "$previous_home_read_mode"
+  echo "Capturing redacted Live Home source evidence before worker rollback" >&2
+  if test -r /opt/phub/diagnose-live-home-source-failures.sh; then
+    sh /opt/phub/diagnose-live-home-source-failures.sh "$activation_started" worker ||
+      echo "Live Home source evidence capture failed; continuing worker rollback" >&2
+  else
+    echo "Live Home source diagnostic is unavailable; continuing worker rollback" >&2
+  fi
   compose up -d --force-recreate worker
   wait_for_service worker
   echo "Live Home projection did not become complete; previous API and worker read mode restored" >&2

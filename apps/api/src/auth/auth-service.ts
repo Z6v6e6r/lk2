@@ -53,6 +53,12 @@ const ADMIN_ONLY_PERMISSIONS = new Set([
   'gift_certificates.catalog.read',
   'gift_certificates.catalog.manage',
   'gift_certificates.catalog.publish',
+  'communities.moderation.read',
+  'communities.join.decide',
+  'communities.content.moderation.read',
+  'communities.content.moderation.decide',
+  'communities.invite.quota.override',
+  'communities.create.quota.override',
 ]);
 
 export interface RefreshSessionIdentity {

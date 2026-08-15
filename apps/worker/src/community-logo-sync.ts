@@ -11,6 +11,95 @@ import { loadCommunityLogoSyncRecords } from './community-home-repository.js';
 const IMAGE_CONTENT_TYPE = /^image\/(?:avif|gif|heic|heif|jpeg|png|webp)(?:;|$)/i;
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 
+export interface CommunityLogoSourceMetric {
+  readonly outcome: 'success' | 'failure' | 'circuit_open' | 'circuit_probe' | 'recovered';
+  readonly errorCode?: string;
+}
+
+interface CommunityLogoHostCircuitState {
+  readonly failures: number;
+  readonly openUntil: number;
+  readonly cooldownMs: number;
+  readonly probing: boolean;
+  readonly generation: number;
+}
+
+export class CommunityLogoHostCircuit {
+  private readonly states = new Map<string, CommunityLogoHostCircuitState>();
+
+  public constructor(
+    private readonly options: {
+      readonly failureThreshold: number;
+      readonly resetMs: number;
+      readonly maxResetMs?: number;
+      readonly now?: () => number;
+      readonly onMetric?: (metric: CommunityLogoSourceMetric) => void;
+    },
+  ) {}
+
+  public async execute<T>(hostname: string, operation: () => Promise<T>): Promise<T> {
+    const now = (this.options.now ?? Date.now)();
+    const current = this.states.get(hostname);
+    if (current && (current.openUntil > now || current.probing)) {
+      this.options.onMetric?.({ outcome: 'circuit_open' });
+      throw new Error('COMMUNITY_LOGO_SOURCE_CIRCUIT_OPEN');
+    }
+
+    const probing = Boolean(current?.openUntil && current.openUntil <= now);
+    let admittedGeneration = current?.generation ?? 0;
+    if (probing && current) {
+      admittedGeneration = current.generation + 1;
+      this.states.set(hostname, { ...current, probing: true, generation: admittedGeneration });
+      this.options.onMetric?.({ outcome: 'circuit_probe' });
+    }
+
+    try {
+      const result = await operation();
+      const latest = this.states.get(hostname);
+      const ownsLatestState = !latest || latest.generation === admittedGeneration;
+      if (ownsLatestState) this.states.delete(hostname);
+      this.options.onMetric?.({ outcome: probing && ownsLatestState ? 'recovered' : 'success' });
+      return result;
+    } catch (error) {
+      const code = errorCode(error);
+      this.options.onMetric?.({ outcome: 'failure', errorCode: code });
+      const failureNow = (this.options.now ?? Date.now)();
+      const latest = this.states.get(hostname);
+      const ownsProbe = Boolean(
+        probing && latest?.probing && latest.generation === admittedGeneration,
+      );
+      if (!isHostCircuitFailure(code)) {
+        if (ownsProbe) {
+          this.states.delete(hostname);
+          this.options.onMetric?.({ outcome: 'recovered' });
+        }
+        throw error;
+      }
+
+      const failures = (latest?.failures ?? 0) + 1;
+      const failureThreshold = Math.max(1, this.options.failureThreshold);
+      const baseResetMs = Math.max(1, this.options.resetMs);
+      const maxResetMs = Math.max(baseResetMs, this.options.maxResetMs ?? baseResetMs * 16);
+      const shouldOpen =
+        ownsProbe ||
+        Boolean(latest?.probing) ||
+        Boolean(latest && latest.openUntil > failureNow) ||
+        failures >= failureThreshold;
+      const cooldownMs = ownsProbe
+        ? Math.min(maxResetMs, Math.max(baseResetMs, (latest?.cooldownMs ?? baseResetMs) * 2))
+        : (latest?.cooldownMs ?? baseResetMs);
+      this.states.set(hostname, {
+        failures,
+        openUntil: shouldOpen ? Math.max(latest?.openUntil ?? 0, failureNow + cooldownMs) : 0,
+        cooldownMs,
+        probing: false,
+        generation: (latest?.generation ?? admittedGeneration) + 1,
+      });
+      throw error;
+    }
+  }
+}
+
 export interface CommunityLogoSyncRecord {
   readonly communityId: string;
   readonly sourceUrl: string;
@@ -96,6 +185,7 @@ async function fetchSourceLogo(input: {
   readonly maxBytes: number;
   readonly timeoutMs: number;
   readonly fetchImplementation: typeof fetch;
+  readonly circuit?: CommunityLogoHostCircuit;
   readonly deferStorePut?: boolean;
 }): Promise<{
   readonly body: Buffer;
@@ -103,43 +193,47 @@ async function fetchSourceLogo(input: {
   readonly lastModified?: string;
 }> {
   let url = allowedLogoUrl(input.sourceUrl, input.allowedHosts);
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), input.timeoutMs);
-  try {
-    for (let redirects = 0; redirects <= 2; redirects += 1) {
-      const response = await input.fetchImplementation(url, {
-        method: 'GET',
-        redirect: 'manual',
-        headers: { Accept: 'image/avif,image/webp,image/png,image/jpeg' },
-        signal: controller.signal,
-      });
-      if (REDIRECT_STATUSES.has(response.status)) {
-        const location = response.headers.get('location');
-        if (!location || redirects === 2) throw new Error('COMMUNITY_LOGO_REDIRECT_INVALID');
-        url = allowedLogoUrl(new URL(location, url).toString(), input.allowedHosts);
-        continue;
+  const hostname = url.hostname.toLowerCase();
+  const operation = async () => {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), input.timeoutMs);
+    try {
+      for (let redirects = 0; redirects <= 2; redirects += 1) {
+        const response = await input.fetchImplementation(url, {
+          method: 'GET',
+          redirect: 'manual',
+          headers: { Accept: 'image/avif,image/webp,image/png,image/jpeg' },
+          signal: controller.signal,
+        });
+        if (REDIRECT_STATUSES.has(response.status)) {
+          const location = response.headers.get('location');
+          if (!location || redirects === 2) throw new Error('COMMUNITY_LOGO_REDIRECT_INVALID');
+          url = allowedLogoUrl(new URL(location, url).toString(), input.allowedHosts);
+          continue;
+        }
+        if (!response.ok) throw new Error(`COMMUNITY_LOGO_SOURCE_HTTP_${response.status}`);
+        if (!IMAGE_CONTENT_TYPE.test(response.headers.get('content-type') ?? '')) {
+          throw new Error('COMMUNITY_LOGO_CONTENT_TYPE_INVALID');
+        }
+        const etag = response.headers.get('etag');
+        const lastModified = response.headers.get('last-modified');
+        return {
+          body: await readBoundedBody(response, input.maxBytes),
+          ...(etag ? { etag } : {}),
+          ...(lastModified ? { lastModified } : {}),
+        };
       }
-      if (!response.ok) throw new Error(`COMMUNITY_LOGO_SOURCE_HTTP_${response.status}`);
-      if (!IMAGE_CONTENT_TYPE.test(response.headers.get('content-type') ?? '')) {
-        throw new Error('COMMUNITY_LOGO_CONTENT_TYPE_INVALID');
+      throw new Error('COMMUNITY_LOGO_REDIRECT_INVALID');
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw new Error('COMMUNITY_LOGO_SOURCE_TIMEOUT', { cause: error });
       }
-      const etag = response.headers.get('etag');
-      const lastModified = response.headers.get('last-modified');
-      return {
-        body: await readBoundedBody(response, input.maxBytes),
-        ...(etag ? { etag } : {}),
-        ...(lastModified ? { lastModified } : {}),
-      };
+      throw error;
+    } finally {
+      clearTimeout(timeout);
     }
-    throw new Error('COMMUNITY_LOGO_REDIRECT_INVALID');
-  } catch (error) {
-    if (error instanceof Error && error.name === 'AbortError') {
-      throw new Error('COMMUNITY_LOGO_SOURCE_TIMEOUT', { cause: error });
-    }
-    throw error;
-  } finally {
-    clearTimeout(timeout);
-  }
+  };
+  return input.circuit ? input.circuit.execute(hostname, operation) : operation();
 }
 
 function errorCode(error: unknown): string {
@@ -147,6 +241,16 @@ function errorCode(error: unknown): string {
     return error.message;
   }
   return 'COMMUNITY_LOGO_SYNC_FAILED';
+}
+
+function isHostCircuitFailure(code: string): boolean {
+  if (code === 'COMMUNITY_LOGO_SOURCE_TIMEOUT' || code === 'COMMUNITY_LOGO_SYNC_FAILED') {
+    return true;
+  }
+  const status = /^COMMUNITY_LOGO_SOURCE_HTTP_([0-9]{3})$/.exec(code)?.[1];
+  if (!status) return false;
+  const numericStatus = Number(status);
+  return numericStatus === 429 || numericStatus >= 500;
 }
 
 function deletionFields(
@@ -220,6 +324,7 @@ async function synchronizeOne(input: {
   readonly stableDeliveryEnabled: boolean;
   readonly timeoutMs: number;
   readonly fetchImplementation: typeof fetch;
+  readonly circuit?: CommunityLogoHostCircuit;
   readonly deferStorePut?: boolean;
 }): Promise<CommunityLogoSyncResult> {
   if (!input.item.legacyLogoSourceUrl) {
@@ -266,6 +371,7 @@ async function synchronizeOne(input: {
       maxBytes: input.maxBytes,
       timeoutMs: input.timeoutMs,
       fetchImplementation: input.fetchImplementation,
+      ...(input.circuit ? { circuit: input.circuit } : {}),
     });
     const webp = await sharp(source.body, { failOn: 'error', limitInputPixels: 20_000_000 })
       .rotate()
@@ -375,8 +481,10 @@ export async function synchronizeLegacyCommunityLogos(input: {
   readonly stableDeliveryEnabled?: boolean;
   readonly timeoutMs: number;
   readonly fetchImplementation?: typeof fetch;
+  readonly circuit?: CommunityLogoHostCircuit;
   readonly deferStorePut?: boolean;
 }): Promise<readonly CommunityLogoSyncResult[]> {
+  const maxConcurrency = 3;
   const readUrlTtlSeconds = input.readUrlTtlSeconds ?? 3_600;
   const stableDeliveryEnabled = input.stableDeliveryEnabled ?? true;
   const current = await loadCommunityLogoSyncRecords({
@@ -384,10 +492,16 @@ export async function synchronizeLegacyCommunityLogos(input: {
     tenantId: input.tenantId,
     communityIds: input.items.map((item) => item.id),
   });
-  return Promise.all(
-    input.items.map((item) => {
+  const results = new Array<CommunityLogoSyncResult>(input.items.length);
+  let nextIndex = 0;
+  const workers = Array.from({ length: Math.min(maxConcurrency, input.items.length) }, async () => {
+    while (nextIndex < input.items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      const item = input.items[index];
+      if (!item) continue;
       const existing = current.get(item.id);
-      return synchronizeOne({
+      results[index] = await synchronizeOne({
         ...input,
         readUrlTtlSeconds,
         stableDeliveryEnabled,
@@ -395,6 +509,8 @@ export async function synchronizeLegacyCommunityLogos(input: {
         ...(existing ? { current: existing } : {}),
         fetchImplementation: input.fetchImplementation ?? fetch,
       });
-    }),
-  );
+    }
+  });
+  await Promise.all(workers);
+  return results;
 }

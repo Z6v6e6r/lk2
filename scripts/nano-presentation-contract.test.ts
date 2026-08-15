@@ -27,6 +27,10 @@ const messagingReleaseVerification = repositoryFile(
   'deploy/jetson/verify-messaging-test-release.sh',
 );
 const activation = repositoryFile('deploy/jetson/activate-live-home.sh');
+const liveHomeSourceDiagnostic = repositoryFile(
+  'deploy/jetson/diagnose-live-home-source-failures.sh',
+);
+const workerMain = repositoryFile('apps/worker/src/main.ts');
 const communitiesReadOnlyActivation = repositoryFile(
   'deploy/jetson/activate-communities-legacy-read-only.sh',
 );
@@ -39,6 +43,16 @@ const clientAssistedVerification = repositoryFile('deploy/jetson/verify-client-a
 const cupVerification = repositoryFile('deploy/jetson/verify-cup-integrations.sh');
 
 describe('Nano presentation release contract', () => {
+  it('keeps the legacy Communities pilot worker stopped without probing its readiness', () => {
+    expect(stagingWorkflow).toContain(
+      'if [ "$deployment_profile" = COMMUNITIES_LEGACY_READ_ONLY ]; then',
+    );
+    expect(stagingWorkflow).toContain('compose stop worker realtime');
+    expect(stagingWorkflow).toMatch(
+      /if \[ "\$deployment_profile" != COMMUNITIES_LEGACY_READ_ONLY \]; then\s+compose exec -T worker node -e/,
+    );
+  });
+
   it('requires an explicit main-branch confirmation for deploy while preserving diagnostics', () => {
     const validateJob = stagingWorkflow.match(
       / {2}validate-request:\n([\s\S]*?)\n {2}diagnose-home:/,
@@ -80,8 +94,9 @@ describe('Nano presentation release contract', () => {
     );
     expect(stagingWorkflow).toContain('Apply the audited complete user-access replacement');
     expect(stagingWorkflow).toContain("APPLY_USER_ACCESS) printf '%s\\n' 'access_apply=true'");
-    expect(buildGate).toContain('needs: validate-request');
+    expect(buildGate).toContain('needs: [validate-request, verify]');
     expect(buildGate).toContain("needs.validate-request.outputs.mode == 'deploy'");
+    expect(buildGate).toContain("needs.verify.result == 'success'");
     expect(deployGate).toContain('needs: [validate-request, build]');
     expect(deployGate).toContain('always()');
     expect(deployGate).toContain("needs.build.result == 'success'");
@@ -333,6 +348,33 @@ describe('Nano presentation release contract', () => {
     expect(activation).toContain("binding.provider = 'VIVA'");
     expect(verification).toContain('require_value VIVA_DIRECT_READ_ENABLED true');
     expect(verification).toContain('routing_ready_delegations');
+  });
+
+  it('captures redacted candidate-worker evidence before a failed Live Home rollback', () => {
+    const failureGate = activation.slice(
+      activation.indexOf('if test "$projection_ready" -ne 1; then'),
+      activation.indexOf('write_runtime_override projection'),
+    );
+    const restoreOverride = failureGate.indexOf(
+      'write_runtime_override "$previous_home_read_mode"',
+    );
+    const captureEvidence = failureGate.indexOf(
+      'sh /opt/phub/diagnose-live-home-source-failures.sh "$activation_started" worker',
+    );
+    const recreateWorker = failureGate.indexOf('compose up -d --force-recreate worker');
+
+    expect(stagingWorkflow).toContain('scp deploy/jetson/diagnose-live-home-source-failures.sh');
+    expect(restoreOverride).toBeGreaterThan(-1);
+    expect(captureEvidence).toBeGreaterThan(restoreOverride);
+    expect(recreateWorker).toBeGreaterThan(captureEvidence);
+    expect(failureGate).toContain('continuing worker rollback');
+    expect(liveHomeSourceDiagnostic).toContain('timeout 15 docker logs --since="$since"');
+    expect(liveHomeSourceDiagnostic).toContain('Viva Home read operation');
+    expect(liveHomeSourceDiagnostic).toContain('providerTenantKey');
+    expect(workerMain).toContain("logger.info({ metric }, 'Viva Home read operation')");
+    expect(workerMain).not.toContain(
+      "logger.info({ metric, providerTenantKey }, 'Viva Home read operation')",
+    );
   });
 
   it('activates Nano client-assisted Viva reads without the blocked server Home sync', () => {

@@ -219,3 +219,13 @@ export function createCommunityDirectoryService(
 
 export * from './legacy-community-read-repository.js';
 export * from './community-read-experience.js';
+export * from './membership-pin.js';
+export * from './community-create.js';
+export * from './community-read.js';
+export * from './membership-lifecycle.js';
+export * from './community-direct-invite.js';
+export * from './ownership-transfer.js';
+export * from './community-content.js';
+export * from './community-media.js';
+export * from './community-content-moderation.js';
+export * from './community-realtime-events.js';

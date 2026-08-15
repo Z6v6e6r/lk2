@@ -8,6 +8,7 @@ import {
   createClientRoutingPlanRepository,
   createCommunityLogoMediaRepository,
   createDatabasePool,
+  warmDatabasePool,
   createGameRepository,
   createGameResultRepository,
   createGiftCertificateCatalogRepository,
@@ -28,6 +29,7 @@ import {
   createProfileLevelHistoryRepository,
   createProfileSummaryRepository,
   createPromotionEngagementRepository,
+  createRealtimeAuthorizationRepository,
   createTrainerAvatarRepository,
   createUpcomingBookingsRepository,
   projectHomeBaseUser,
@@ -58,12 +60,23 @@ import { S3GiftCertificateMediaStore } from './gift-certificates/gift-certificat
 import { S3GiftCertificateArtifactReadStore } from './gift-certificates/gift-certificate-artifact-store.js';
 import { S3LocationMediaStore } from './locations/location-media-store.js';
 import { S3ProfilePhotoMediaStore } from './profile/profile-photo-media-store.js';
+import { S3CommunityMediaObjectStore } from './communities/community-media-object-store.js';
 import { AuthService } from './auth/auth-service.js';
 import { RedisAuthChallengeStore } from './auth/challenge-store.js';
 import { RedisVivaOAuthStateStore } from './auth/oauth-state-store.js';
 import {
+  createCommunityContentModerationRuntime,
+  createCommunityContentRuntime,
+  createCommunityCreateRuntime,
+  createCommunityDirectInviteRuntime,
   createCommunityDirectoryRuntime,
+  createCommunityEventRecoveryRuntime,
+  createCommunityMediaRuntime,
+  createCommunityMembershipLifecycleRuntime,
+  createCommunityMembershipPinRuntime,
+  createCommunityOwnershipTransferRuntime,
   createCommunityReadExperienceRuntime,
+  createCommunityReadRuntime,
 } from './communities/community-runtime.js';
 import { PostgresAuthRepository } from './auth/postgres-auth-repository.js';
 import { LegacyPromotionEngagementSink } from './promotions/legacy-promotion-engagement-sink.js';
@@ -78,7 +91,15 @@ const telemetry = startTelemetry({
   serviceNamespace: config.OTEL_SERVICE_NAMESPACE,
   ...(config.OTEL_EXPORTER_OTLP_ENDPOINT ? { endpoint: config.OTEL_EXPORTER_OTLP_ENDPOINT } : {}),
 });
-const pool = createDatabasePool(config.DATABASE_URL);
+const pool = createDatabasePool(config.DATABASE_URL, { max: config.DATABASE_POOL_MAX });
+await warmDatabasePool(pool, config.DATABASE_POOL_WARM_CONNECTIONS, config.DATABASE_POOL_MAX);
+logger.info(
+  {
+    databasePoolMax: config.DATABASE_POOL_MAX,
+    databasePoolWarmConnections: config.DATABASE_POOL_WARM_CONNECTIONS,
+  },
+  'database pool warmed before API readiness',
+);
 const clientRoutingPlanRepository = createClientRoutingPlanRepository(pool);
 const notificationEndpointCipher =
   config.WEB_PUSH_ENABLED && config.NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS
@@ -307,6 +328,33 @@ const communityReadExperienceService = createCommunityReadExperienceRuntime({
   pool,
   logger,
 });
+const communityMembershipPinService = createCommunityMembershipPinRuntime({ config, pool });
+const communityMembershipLifecycleService = createCommunityMembershipLifecycleRuntime({
+  config,
+  pool,
+});
+const communityCreateService = createCommunityCreateRuntime({ config, pool });
+const communityReadService = createCommunityReadRuntime({ config, pool });
+const communityDirectInviteService = createCommunityDirectInviteRuntime({ config, pool });
+const communityOwnershipTransferService = createCommunityOwnershipTransferRuntime({ config, pool });
+const communityContentService = createCommunityContentRuntime({ config, pool });
+const communityContentModerationService = createCommunityContentModerationRuntime({ config, pool });
+const communityEventRecoveryService = createCommunityEventRecoveryRuntime({ config, pool });
+const communityMediaObjectStore = config.COMMUNITY_MEDIA_ENABLED
+  ? new S3CommunityMediaObjectStore({
+      endpoint: config.S3_ENDPOINT as string,
+      publicEndpoint: config.S3_PUBLIC_ENDPOINT as string,
+      region: config.S3_REGION,
+      bucket: config.S3_BUCKET as string,
+      accessKey: config.S3_ACCESS_KEY as string,
+      secretKey: config.S3_SECRET_KEY as string,
+      forcePathStyle: config.S3_FORCE_PATH_STYLE,
+      autoCreateBucket: config.S3_AUTO_CREATE_BUCKET,
+    })
+  : undefined;
+const communityMediaRuntime = communityMediaObjectStore
+  ? createCommunityMediaRuntime({ config, pool, objectStore: communityMediaObjectStore })
+  : undefined;
 const app = await buildApp({
   config,
   logger,
@@ -314,6 +362,25 @@ const app = await buildApp({
   authService,
   communityDirectory: createCommunityDirectoryRuntime({ config, pool, logger }),
   ...(communityReadExperienceService ? { communityReadExperienceService } : {}),
+  ...(communityCreateService ? { communityCreateService } : {}),
+  ...(communityMembershipPinService ? { communityMembershipPinService } : {}),
+  ...(communityMembershipLifecycleService ? { communityMembershipLifecycleService } : {}),
+  ...(communityReadService ? { communityReadService } : {}),
+  ...(communityDirectInviteService ? { communityDirectInviteService } : {}),
+  ...(communityOwnershipTransferService ? { communityOwnershipTransferService } : {}),
+  ...(communityContentService ? { communityContentService } : {}),
+  ...(communityContentModerationService ? { communityContentModerationService } : {}),
+  ...(communityEventRecoveryService ? { communityEventRecoveryService } : {}),
+  ...(communityMediaRuntime && communityMediaObjectStore
+    ? {
+        communityMediaService: communityMediaRuntime.service,
+        communityMediaDeliveryAuthorizer: communityMediaRuntime.deliveryAuthorizer,
+        communityMediaModerationAuthorizer: communityMediaRuntime.moderationAuthorizer,
+        communityMediaObjectStore,
+        communityMediaOperationsRepository: communityMediaRuntime.operationsRepository,
+      }
+    : {}),
+  realtimeAuthorizationRepository: createRealtimeAuthorizationRepository(pool),
   homeDashboardRepository: createHomeDashboardProjectionRepository(pool),
   homeBaseRepository: createHomeBaseProjectionRepository(pool),
   ...(config.HOME_BASE_SYNC_ENABLED
