@@ -117,6 +117,34 @@ The application runtime uses separate API/worker and realtime secret contours:
 - `/opt/phub/staging.games.env` is mode `0600`, owned by `phub-deploy`, and contains the
   staging-only Games mirror gates. The Mongo mirror keeps its URI only here.
 
+### One-time staging runtime-secret isolation transition
+
+If an older staging release still gives realtime the shared `staging.env`, dispatch
+`Provision staging runtime-secret isolation` from `main` with the exact serving
+40-character release and confirmation `TRANSITION_STAGING_RUNTIME_SECRETS`. The workflow generates
+the 48-byte key inside a networkless local immutable image, writes neither values nor secret hashes
+to logs/artifacts, preserves the existing `staging.env` byte prefix and creates a strict allowlisted
+`realtime.env`. It does not enable Communities realtime, media, invites, routing, Home or Viva and
+does not run migrations.
+
+Before stopping a service, the workflow starts the exact active realtime image as a networkless,
+read-only, capability-dropped one-shot process with the candidate allowlisted environment and calls
+its real `loadRealtimeConfig`. A rejected contour restores the files without changing a running
+container. No source marker or assumed image version substitutes for this executable check.
+
+The one-key messaging boundary requires a short maintenance window: API and realtime stop together,
+then realtime, API and worker are recreated from the same recorded image IDs. Existing WebSocket
+connections disconnect and HTTP may briefly return 502 until API readiness; this is expected bounded
+availability impact, not a functional LK change. Public live/ready, manifest and the full media
+baseline must pass before backups and the durable marker are finalized.
+
+Every intermediate state blocks deploy, diagnostics, access and routing workflows. For an
+interrupted run, dispatch the same workflow with `RECOVER`, the same exact serving release and
+`RECOVER_STAGING_RUNTIME_SECRETS`. Recovery validates release, infrastructure metadata, Compose
+digests and old image IDs/refs. Before `verified` it restores the prior files/Compose and runtime;
+`verified` or `finalizing` converges forward idempotently. Never delete marker, `.next` or backup
+files manually.
+
 The migrator file is not part of the application runtime environment. It must be mode `0600`, be
 readable by `phub-deploy`, and contain exactly one non-comment setting: `DATABASE_URL`. That URL
 uses the reviewed DDL role required by the migration ledger and current migrations. It must differ
