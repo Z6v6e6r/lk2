@@ -46,10 +46,16 @@ New changes continue from:
 
 - `0076_community_create_quota_grants.sql`
 - `0077_community_media_operational_recovery.sql`
-- `0078_community_media_issue_quotas.sql`
+- `0078_community_media_issue_quotas.sql` (`SHA-256
+d91ad275840ca32a35a626fd0cfa4900cc21f2469d986923326c6522740de365`)
 - `0079_profile_photo_client_assisted_source.sql`
 - `0080_community_logo_stable_delivery.sql`
 - `0081_community_logo_stable_delivery_validate.sql`
+
+Migration 0078 creates four ordinary indexes on `community_content.media_assets`. Before applying it
+to a shared target, record the relation row count and size, measure all four index builds on the
+restored clone, and approve explicit lock and statement timeout budgets. A no-traffic clone result
+does not prove an acceptable production writer pause.
 
 ## Required preflight
 
@@ -57,8 +63,11 @@ New changes continue from:
 2. Query `public.schema_migrations` read-only and compare every packaged filename checksum.
 3. Stop on any unknown filename, superseded canonical filename, mixed history or checksum
    mismatch.
-4. Take a verified PostgreSQL backup and record its checksum, size and restore command.
-5. Restore the backup to an isolated PostgreSQL 16 clone with no application traffic.
+4. Take a PostgreSQL backup and record its checksum, size, tool versions and restore command. A
+   readable TOC is not sufficient backup evidence.
+5. Restore the complete backup with `pg_restore --exit-on-error` to a clean isolated PostgreSQL 16
+   database with no application traffic. Require the restored ledger to be queryable before any
+   migration is run against the shared target.
 6. Run the built `apps/migrator` image against the clone, then run it again and require no output.
 7. Compare Communities row counts before and after; require all indexes valid and all Communities
    tables to have both RLS and FORCE RLS.
@@ -68,7 +77,8 @@ New changes continue from:
 10. Before and after migration, count `profile.privacy_commands` rows whose `result_payload` lacks
     `visibilityMode` or `sections`. The exact historical 0053 backfill runs against a FORCE-RLS
     table; any non-zero post-count requires a separate forward tenant-scoped repair and blocks
-    activation.
+    activation. Record that the migrator and audit role has `rolsuper` or `rolbypassrls`; otherwise
+    a zero visible count is not valid evidence for this backfill.
 11. Only after CI and independent migration/security review may the code release be merged.
 
 ## Activation boundary

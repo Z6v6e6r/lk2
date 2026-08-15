@@ -221,6 +221,10 @@ describe('Nano presentation release contract', () => {
     const runtimeFlagStep = stagingWorkflow.match(
       /- name: Attest community-logo flags in every API and worker runtime\n([\s\S]*?)\n {6}- name:/,
     )?.[1];
+    const restoreVerificationStep = stagingWorkflow.indexOf('VERIFY_STAGING_POSTGRES_BACKUP');
+    const capacityVerificationStep = stagingWorkflow.indexOf('VERIFY_STAGING_POSTGRES_CAPACITY');
+    const dumpStep = stagingWorkflow.indexOf('pg_dump -U');
+    const migrationStep = stagingWorkflow.indexOf('compose --profile migration run --rm migrator');
 
     expect(stagingWorkflow).toContain(
       'STAGING_RELEASE_BACKUP_DIR: /opt/phub/backups/releases/pre-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}',
@@ -231,6 +235,24 @@ describe('Nano presentation release contract', () => {
     expect(stagingWorkflow).toContain('steps.application-backup.outputs.ready');
     expect(stagingWorkflow).toContain('failure() || cancelled()');
     expect(stagingWorkflow).toContain('BACKUP_STAGING_RELEASE');
+    expect(stagingWorkflow).toContain('verify-postgres-backup-restore.sh.next');
+    expect(stagingWorkflow).toContain('VERIFY_STAGING_POSTGRES_BACKUP');
+    expect(stagingWorkflow).toContain('umask 077');
+    expect(stagingWorkflow).toContain('mkdir -m 700 "$backup_dir"');
+    expect(stagingWorkflow).toContain('[ ! -L "$backup_dir" ]');
+    expect(stagingWorkflow).toContain('[ ! -L "$backup_path" ]');
+    expect(stagingWorkflow).toContain('mktemp "$backup_dir/.postgres-pre-');
+    expect(stagingWorkflow).toContain('[ "$(stat -c %a "$backup_tmp")" = 600 ]');
+    expect(stagingWorkflow).toContain('[ "$(stat -c %a "$backup_path")" = 600 ]');
+    expect(stagingWorkflow).toContain('PHUB_POSTGRES_STORAGE_PATH=/var/lib/docker');
+    expect(capacityVerificationStep).toBeGreaterThan(-1);
+    expect(dumpStep).toBeGreaterThan(capacityVerificationStep);
+    expect(restoreVerificationStep).toBeGreaterThan(dumpStep);
+    expect(restoreVerificationStep).toBeGreaterThan(-1);
+    expect(migrationStep).toBeGreaterThan(restoreVerificationStep);
+    const backupRestoreSegment = stagingWorkflow.slice(dumpStep, migrationStep);
+    expect(backupRestoreSegment).not.toContain('|| true');
+    expect(backupRestoreSegment).not.toContain('set +e');
     expect(stagingWorkflow).toContain('--validate-only');
     expect(stagingWorkflow).toContain('--confirm=ROLLBACK_STAGING_RELEASE');
     expect(stagingWorkflow).toContain('PHUB_ROLLBACK_BACKUP_ROOT=/opt/phub/backups/releases');
