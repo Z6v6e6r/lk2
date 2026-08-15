@@ -55,6 +55,18 @@ async function handleMessage(options: {
       event: parsed.data,
       ...(options.webPush ? { webPush: options.webPush } : {}),
     });
+    if (result.outcome === 'revision_conflict') {
+      options.logger.error(
+        {
+          eventId: parsed.data.id,
+          eventType: parsed.data.type,
+          tenantId: parsed.data.tenantId,
+        },
+        'booking notification revision conflict sent to dead letter',
+      );
+      options.channel.nack(options.message, false, false);
+      return;
+    }
     options.channel.ack(options.message);
     options.logger.info(
       {

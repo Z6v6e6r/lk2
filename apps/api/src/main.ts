@@ -1,5 +1,5 @@
 import type { IdentityProviderKey, IdentityProviderPort } from '@phub/auth';
-import { loadConfig } from '@phub/config';
+import { loadConfig, runtimeContourTargetFingerprint } from '@phub/config';
 import {
   createAdminNotificationRepository,
   createActivityHistoryRepository,
@@ -83,6 +83,12 @@ import { LegacyPromotionEngagementSink } from './promotions/legacy-promotion-eng
 import { S3TrainerAvatarMediaStore } from './trainer-avatar-media-store.js';
 
 const config = loadConfig();
+const runtimeContourAttestation = config.LOCAL_RUNTIME_CONTOUR_ATTESTATION
+  ? {
+      database: runtimeContourTargetFingerprint(config.DATABASE_URL),
+      redis: runtimeContourTargetFingerprint(config.REDIS_URL),
+    }
+  : undefined;
 const logger = createLogger('api', config.LOG_LEVEL, process.env.RELEASE);
 const clientMediaRollbackCapability = 'phub.client-media-rollback.v1';
 const communityLogoRollbackCapability = 'phub.community-logo-rollback.v1';
@@ -363,6 +369,7 @@ const app = await buildApp({
   config,
   logger,
   pool,
+  ...(runtimeContourAttestation ? { runtimeContourAttestation } : {}),
   authService,
   communityDirectory: createCommunityDirectoryRuntime({ config, pool, logger }),
   ...(communityReadExperienceService ? { communityReadExperienceService } : {}),

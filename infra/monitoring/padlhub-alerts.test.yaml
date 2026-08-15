@@ -1,0 +1,244 @@
+rule_files:
+  - padlhub-alerts.yaml
+
+evaluation_interval: 15s
+
+tests:
+  - name: open Web Push provider circuit raises an immediate transport alert
+    interval: 15s
+    input_series:
+      - series: 'phub_worker_web_push_provider_outcomes_total{service_instance_id="worker-a",environment="SANDBOX",outcome="WEB_PUSH_CIRCUIT_OPEN"}'
+        values: '0 1x10'
+    alert_rule_test:
+      - eval_time: 1m15s
+        alertname: PadlHubWebPushCircuitOpen
+        exp_alerts:
+          - exp_labels:
+              environment: SANDBOX
+              severity: p1
+              component: worker
+            exp_annotations:
+              summary: PadlHub Web Push provider circuit is open
+              description: Provider calls are being suppressed after bounded Web Push failures; keep the transport disabled for expansion and inspect the provider boundary.
+              runbook: docs/runbooks/chats-notifications-moderation.md
+
+  - name: enabled tenant reminder backlog raises delayed alert
+    interval: 15s
+    input_series:
+      - series: 'phub_worker_notifications_booking_reminder_oldest_due_age_seconds'
+        values: '120x10'
+    alert_rule_test:
+      - eval_time: 2m15s
+        alertname: PadlHubBookingReminderDelayed
+        exp_alerts:
+          - exp_labels:
+              severity: p2
+              component: worker
+            exp_annotations:
+              summary: PadlHub booking reminder scheduler is delayed
+              description: A reminder for an enabled tenant has remained due for more than one minute.
+              runbook: docs/runbooks/chats-notifications-moderation.md
+
+  - name: scheduler failure remains a release blocker
+    interval: 15s
+    input_series:
+      - series: 'phub_worker_booking_reminder_scheduler_success{service_instance_id="healthy"}'
+        values: '1x10'
+      - series: 'phub_worker_booking_reminder_scheduler_heartbeat_unixtime{service_instance_id="healthy"}'
+        values: '180x10'
+      - series: 'phub_worker_booking_reminder_scheduler_success{service_instance_id="broken"}'
+        values: '0x10'
+      - series: 'phub_worker_booking_reminder_scheduler_heartbeat_unixtime{service_instance_id="broken"}'
+        values: '180x10'
+    alert_rule_test:
+      - eval_time: 1m15s
+        alertname: PadlHubBookingReminderSchedulerFailed
+        exp_alerts:
+          - exp_labels:
+              service_instance_id: broken
+              severity: p1
+              component: worker
+            exp_annotations:
+              summary: PadlHub booking reminder scheduler is failing
+              description: The default-off scheduler has a current or recent global or tenant-local cycle failure.
+              runbook: docs/runbooks/chats-notifications-moderation.md
+
+  - name: stale stopped scheduler replica does not mask healthy replacement
+    interval: 15s
+    input_series:
+      - series: 'phub_worker_booking_reminder_scheduler_success{service_instance_id="healthy"}'
+        values: '1x10'
+      - series: 'phub_worker_booking_reminder_scheduler_heartbeat_unixtime{service_instance_id="healthy"}'
+        values: '300x10'
+      - series: 'phub_worker_booking_reminder_scheduler_success{service_instance_id="stopped"}'
+        values: '0x10'
+      - series: 'phub_worker_booking_reminder_scheduler_heartbeat_unixtime{service_instance_id="stopped"}'
+        values: '15x10'
+    alert_rule_test:
+      - eval_time: 2m15s
+        alertname: PadlHubBookingReminderSchedulerFailed
+        exp_alerts: []
+
+  - name: newly missed reminder raises terminal suppression alert
+    interval: 15s
+    input_series:
+      - series: 'phub_worker_notifications_booking_reminder_latest_missed_unixtime'
+        values: '0 15x28'
+    alert_rule_test:
+      - eval_time: 1m15s
+        alertname: PadlHubBookingRemindersMissed
+        exp_alerts:
+          - exp_labels:
+              severity: p1
+              component: worker
+            exp_annotations:
+              summary: PadlHub booking reminders expired without emission
+              description: At least one reminder crossed its approved lateness boundary and was terminally suppressed.
+              runbook: docs/runbooks/chats-notifications-moderation.md
+      - eval_time: 6m15s
+        alertname: PadlHubBookingRemindersMissed
+        exp_alerts: []
+
+  - name: stale replica target is excluded and the alert resolves
+    interval: 15s
+    input_series:
+      - series: 'phub_realtime_process_heartbeat_unixtime{service_instance_id="old"}'
+        values: '60x9'
+      - series: 'phub_realtime_process_expected_replicas{service_instance_id="old"}'
+        values: '3x9'
+      - series: 'phub_realtime_process_heartbeat_unixtime{service_instance_id="new-a"}'
+        values: '180x9'
+      - series: 'phub_realtime_process_expected_replicas{service_instance_id="new-a"}'
+        values: '2x9'
+      - series: 'phub_realtime_process_heartbeat_unixtime{service_instance_id="new-b"}'
+        values: '180x9'
+      - series: 'phub_realtime_process_expected_replicas{service_instance_id="new-b"}'
+        values: '2x9'
+    alert_rule_test:
+      - eval_time: 1m15s
+        alertname: PadlHubRealtimeReplicaCountLow
+        exp_alerts:
+          - exp_labels:
+              severity: p1
+              component: realtime
+            exp_annotations:
+              summary: PadlHub realtime fresh replica count is below the declared target
+              description: Fresh unique realtime instances are below REALTIME_EXPECTED_REPLICAS, or replicas disagree on that target; keep HTTP fallback and stop expansion.
+              runbook: docs/runbooks/chats-notifications-moderation.md
+      - eval_time: 2m15s
+        alertname: PadlHubRealtimeReplicaCountLow
+        exp_alerts: []
+
+  - name: fresh replicas disagree on their target
+    interval: 15s
+    input_series:
+      - series: 'phub_realtime_process_heartbeat_unixtime{service_instance_id="a"}'
+        values: '180x5'
+      - series: 'phub_realtime_process_expected_replicas{service_instance_id="a"}'
+        values: '2x5'
+      - series: 'phub_realtime_process_heartbeat_unixtime{service_instance_id="b"}'
+        values: '180x5'
+      - series: 'phub_realtime_process_expected_replicas{service_instance_id="b"}'
+        values: '3x5'
+    alert_rule_test:
+      - eval_time: 1m15s
+        alertname: PadlHubRealtimeReplicaCountLow
+        exp_alerts:
+          - exp_labels:
+              severity: p1
+              component: realtime
+            exp_annotations:
+              summary: PadlHub realtime fresh replica count is below the declared target
+              description: Fresh unique realtime instances are below REALTIME_EXPECTED_REPLICAS, or replicas disagree on that target; keep HTTP fallback and stop expansion.
+              runbook: docs/runbooks/chats-notifications-moderation.md
+
+  - name: one fresh replica omits its target
+    interval: 15s
+    input_series:
+      - series: 'phub_realtime_process_heartbeat_unixtime{service_instance_id="a"}'
+        values: '180x5'
+      - series: 'phub_realtime_process_expected_replicas{service_instance_id="a"}'
+        values: '2x5'
+      - series: 'phub_realtime_process_heartbeat_unixtime{service_instance_id="b"}'
+        values: '180x5'
+    alert_rule_test:
+      - eval_time: 1m15s
+        alertname: PadlHubRealtimeReplicaCountLow
+        exp_alerts:
+          - exp_labels:
+              severity: p1
+              component: realtime
+            exp_annotations:
+              summary: PadlHub realtime fresh replica count is below the declared target
+              description: Fresh unique realtime instances are below REALTIME_EXPECTED_REPLICAS, or replicas disagree on that target; keep HTTP fallback and stop expansion.
+              runbook: docs/runbooks/chats-notifications-moderation.md
+
+  - name: fresh replica count is below the declared target
+    interval: 15s
+    input_series:
+      - series: 'phub_realtime_process_heartbeat_unixtime{service_instance_id="a"}'
+        values: '180x5'
+      - series: 'phub_realtime_process_expected_replicas{service_instance_id="a"}'
+        values: '2x5'
+    alert_rule_test:
+      - eval_time: 1m15s
+        alertname: PadlHubRealtimeReplicaCountLow
+        exp_alerts:
+          - exp_labels:
+              severity: p1
+              component: realtime
+            exp_annotations:
+              summary: PadlHub realtime fresh replica count is below the declared target
+              description: Fresh unique realtime instances are below REALTIME_EXPECTED_REPLICAS, or replicas disagree on that target; keep HTTP fallback and stop expansion.
+              runbook: docs/runbooks/chats-notifications-moderation.md
+
+  - name: consumer readiness is isolated per fresh replica
+    interval: 15s
+    input_series:
+      - series: 'phub_realtime_process_heartbeat_unixtime{service_instance_id="healthy"}'
+        values: '300x9'
+      - series: 'phub_realtime_consumer_ready{service_instance_id="healthy"}'
+        values: '1x9'
+      - series: 'phub_realtime_process_heartbeat_unixtime{service_instance_id="broken"}'
+        values: '300x9'
+      - series: 'phub_realtime_consumer_ready{service_instance_id="broken"}'
+        values: '0x9'
+    alert_rule_test:
+      - eval_time: 2m15s
+        alertname: PadlHubRealtimeConsumerUnavailable
+        exp_alerts:
+          - exp_labels:
+              service_instance_id: broken
+              severity: p1
+              component: realtime
+            exp_annotations:
+              summary: PadlHub realtime consumer is unavailable
+              description: RabbitMQ realtime fanout has remained unavailable for two minutes; HTTP chat remains the fallback.
+              runbook: docs/runbooks/chats-notifications-moderation.md
+
+  - name: stale stopped consumer no longer masks recovery
+    interval: 15s
+    input_series:
+      - series: 'phub_realtime_process_heartbeat_unixtime{service_instance_id="healthy"}'
+        values: '600x17'
+      - series: 'phub_realtime_consumer_ready{service_instance_id="healthy"}'
+        values: '1x17'
+      - series: 'phub_realtime_process_heartbeat_unixtime{service_instance_id="stopped"}'
+        values: '180x17'
+      - series: 'phub_realtime_consumer_ready{service_instance_id="stopped"}'
+        values: '0x17'
+    alert_rule_test:
+      - eval_time: 2m15s
+        alertname: PadlHubRealtimeConsumerUnavailable
+        exp_alerts:
+          - exp_labels:
+              service_instance_id: stopped
+              severity: p1
+              component: realtime
+            exp_annotations:
+              summary: PadlHub realtime consumer is unavailable
+              description: RabbitMQ realtime fanout has remained unavailable for two minutes; HTTP chat remains the fallback.
+              runbook: docs/runbooks/chats-notifications-moderation.md
+      - eval_time: 4m15s
+        alertname: PadlHubRealtimeConsumerUnavailable
+        exp_alerts: []

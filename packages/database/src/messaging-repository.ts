@@ -105,6 +105,12 @@ export type MarkConversationReadResult =
       readonly replayed: boolean;
     };
 
+export type SetUserBlockResult =
+  | { readonly outcome: 'forbidden' }
+  | { readonly outcome: 'target_not_found' }
+  | { readonly outcome: 'idempotency_conflict' }
+  | { readonly outcome: 'ok'; readonly changed: boolean; readonly replayed: boolean };
+
 export type RealtimeConnectionAuthorization =
   { readonly outcome: 'disabled' | 'revoked' } | { readonly outcome: 'ok' };
 
@@ -158,6 +164,14 @@ export interface MessagingRepository {
     readonly idempotencyKey: string;
     readonly correlationId: string;
   }): Promise<MarkConversationReadResult>;
+  setUserBlock(input: {
+    readonly tenantId: string;
+    readonly actorUserId: string;
+    readonly otherUserId: string;
+    readonly action: 'BLOCK' | 'UNBLOCK';
+    readonly idempotencyKey: string;
+    readonly correlationId: string;
+  }): Promise<SetUserBlockResult>;
   authorizeRealtimeConnection(input: {
     readonly tenantId: string;
     readonly userId: string;
@@ -245,6 +259,12 @@ interface MemberRow extends QueryResultRow {
 interface ReadCommandRow extends QueryResultRow {
   readonly through_sequence: number | string;
   readonly result_sequence: number | string;
+  readonly changed: boolean;
+}
+
+interface UserBlockCommandRow extends QueryResultRow {
+  readonly other_user_id: string;
+  readonly action: 'BLOCK' | 'UNBLOCK';
   readonly changed: boolean;
 }
 
@@ -345,15 +365,26 @@ const CONVERSATION_SELECT = `
       on viewer_user.tenant_id = current_member.tenant_id
      and viewer_user.id = current_member.user_id
      and viewer_user.status = 'ACTIVE'
+    join identity.user_access_profiles current_access
+      on current_access.tenant_id = viewer_user.tenant_id
+     and current_access.user_id = viewer_user.id
+     and 'chat.direct.create' = any(current_access.permissions)
     join messaging.conversation_members other_member
       on other_member.tenant_id = conversation.tenant_id
      and other_member.conversation_id = conversation.id
      and other_member.user_id is not null
      and other_member.user_id <> $2
      and other_member.state = 'ACTIVE'
+    join identity.users other_user
+      on other_user.tenant_id = other_member.tenant_id
+     and other_user.id = other_member.user_id
+     and other_user.status = 'ACTIVE'
     left join profile.user_summaries other_summary
       on other_summary.tenant_id = other_member.tenant_id
      and other_summary.user_id = other_member.user_id
+    left join profile.privacy_settings target_privacy
+      on target_privacy.tenant_id = other_user.tenant_id
+     and target_privacy.user_id = other_user.id
     left join lateral (
       select message.sequence, message.body, message.created_at
         from messaging.messages message
@@ -365,7 +396,15 @@ const CONVERSATION_SELECT = `
     ) last_message on true
    where conversation.tenant_id = $1
      and conversation.kind = 'DIRECT'
-     and conversation.state = 'OPEN'`;
+     and conversation.state = 'OPEN'
+     and coalesce(target_privacy.chat_policy, 'AUTHORIZED') = 'AUTHORIZED'
+     and not exists (
+       select 1
+         from messaging.user_blocks block
+        where block.tenant_id = conversation.tenant_id
+          and ((block.blocker_user_id = current_member.user_id and block.blocked_user_id = other_member.user_id)
+            or (block.blocker_user_id = other_member.user_id and block.blocked_user_id = current_member.user_id))
+     )`;
 
 const GAME_CONVERSATION_SELECT = `
   select conversation.id,
@@ -533,6 +572,13 @@ async function getAuthorizedMember(
                  and other_member.user_id <> member.user_id
                  and other_member.state = 'ACTIVE'
                  and coalesce(target_privacy.chat_policy, 'AUTHORIZED') = 'AUTHORIZED'
+                 and not exists (
+                   select 1
+                     from messaging.user_blocks block
+                    where block.tenant_id = member.tenant_id
+                      and ((block.blocker_user_id = member.user_id and block.blocked_user_id = other_member.user_id)
+                        or (block.blocker_user_id = other_member.user_id and block.blocked_user_id = member.user_id))
+                 )
             )
           )
           or
@@ -640,6 +686,10 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
         await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
           `${input.tenantId}:${input.actorUserId}:${input.idempotencyKey}`,
         ]);
+        const [leftUserId, rightUserId] = [input.actorUserId, input.otherUserId].sort();
+        await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
+          `${input.tenantId}:${leftUserId}:${rightUserId}`,
+        ]);
         const activeUsers = await client.query<{ id: string; chat_policy: string }>(
           `select user_account.id,
                   coalesce(privacy.chat_policy, 'AUTHORIZED') as chat_policy
@@ -661,6 +711,16 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
         if (!target || target.chat_policy !== 'AUTHORIZED') {
           return { outcome: 'target_not_found' };
         }
+        const blocked = await queryOne<{ blocked: boolean }>(
+          client,
+          `select true as blocked
+             from messaging.user_blocks
+            where tenant_id = $1
+              and ((blocker_user_id = $2 and blocked_user_id = $3)
+                or (blocker_user_id = $3 and blocked_user_id = $2))`,
+          [input.tenantId, input.actorUserId, input.otherUserId],
+        );
+        if (blocked) return { outcome: 'target_not_found' };
 
         const previous = await queryOne<DirectCommandRow>(
           client,
@@ -683,10 +743,6 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
           return { outcome: 'ok', conversation, created: false, replayed: true };
         }
 
-        const [leftUserId, rightUserId] = [input.actorUserId, input.otherUserId].sort();
-        await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
-          `${input.tenantId}:${leftUserId}:${rightUserId}`,
-        ]);
         const existing = await queryOne<{ conversation_id: string }>(
           client,
           `select conversation_id
@@ -999,9 +1055,9 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
 
     sendMessage(input) {
       return withTenantTransaction(pool, input.tenantId, async (client) => {
-        const locked = await queryOne<{ next_sequence: number | string }>(
+        const locked = await queryOne<{ next_sequence: number | string; kind: 'DIRECT' | 'GAME' }>(
           client,
-          `select next_sequence
+          `select next_sequence, kind
              from messaging.conversations
             where tenant_id = $1
               and id = $2
@@ -1011,6 +1067,19 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
           [input.tenantId, input.conversationId],
         );
         if (!locked) return { outcome: 'not_found' };
+        if (locked.kind === 'DIRECT') {
+          const pair = await queryOne<{ left_user_id: string; right_user_id: string }>(
+            client,
+            `select left_user_id, right_user_id
+               from messaging.direct_conversations
+              where tenant_id = $1 and conversation_id = $2`,
+            [input.tenantId, input.conversationId],
+          );
+          if (!pair) return { outcome: 'not_found' };
+          await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
+            `${input.tenantId}:${pair.left_user_id}:${pair.right_user_id}`,
+          ]);
+        }
 
         // Re-evaluate the authoritative access source after serializing on the conversation.
         // GAME access is never inferred from the possibly stale messaging member row.
@@ -1229,6 +1298,104 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
       });
     },
 
+    setUserBlock(input) {
+      return withTenantTransaction(pool, input.tenantId, async (client) => {
+        await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
+          `${input.tenantId}:${input.actorUserId}:${input.idempotencyKey}`,
+        ]);
+        const [leftUserId, rightUserId] = [input.actorUserId, input.otherUserId].sort();
+        await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
+          `${input.tenantId}:${leftUserId}:${rightUserId}`,
+        ]);
+        const actor = await queryOne<{ id: string }>(
+          client,
+          `select user_account.id
+             from identity.users user_account
+             join identity.user_access_profiles current_access
+               on current_access.tenant_id = user_account.tenant_id
+              and current_access.user_id = user_account.id
+              and 'chat.direct.create' = any(current_access.permissions)
+            where user_account.tenant_id = $1
+              and user_account.id = $2
+              and user_account.status = 'ACTIVE'`,
+          [input.tenantId, input.actorUserId],
+        );
+        if (!actor) return { outcome: 'forbidden' };
+        const previous = await queryOne<UserBlockCommandRow>(
+          client,
+          `select other_user_id, action, changed
+             from messaging.user_block_commands
+            where tenant_id = $1 and actor_user_id = $2 and idempotency_key = $3`,
+          [input.tenantId, input.actorUserId, input.idempotencyKey],
+        );
+        if (previous) {
+          if (previous.other_user_id !== input.otherUserId || previous.action !== input.action) {
+            return { outcome: 'idempotency_conflict' };
+          }
+          return { outcome: 'ok', changed: previous.changed, replayed: true };
+        }
+        const target = await queryOne<{ id: string }>(
+          client,
+          `select id from identity.users
+            where tenant_id = $1 and id = $2 and status = 'ACTIVE'`,
+          [input.tenantId, input.otherUserId],
+        );
+        if (!target) return { outcome: 'target_not_found' };
+        const mutation =
+          input.action === 'BLOCK'
+            ? await client.query(
+                `insert into messaging.user_blocks (tenant_id, blocker_user_id, blocked_user_id)
+                 values ($1, $2, $3) on conflict do nothing`,
+                [input.tenantId, input.actorUserId, input.otherUserId],
+              )
+            : await client.query(
+                `delete from messaging.user_blocks
+                  where tenant_id = $1 and blocker_user_id = $2 and blocked_user_id = $3`,
+                [input.tenantId, input.actorUserId, input.otherUserId],
+              );
+        const changed = (mutation.rowCount ?? 0) > 0;
+        await client.query(
+          `insert into messaging.user_block_commands (
+             tenant_id, actor_user_id, idempotency_key, other_user_id, action, changed
+           ) values ($1, $2, $3, $4, $5, $6)`,
+          [
+            input.tenantId,
+            input.actorUserId,
+            input.idempotencyKey,
+            input.otherUserId,
+            input.action,
+            changed,
+          ],
+        );
+        await client.query(
+          `insert into audit.outbox_events (
+             tenant_id, event_type, aggregate_id, correlation_id, payload
+           ) values ($1, 'messaging.user-block.changed.v1', $2, $3, $4::jsonb)`,
+          [
+            input.tenantId,
+            input.actorUserId,
+            input.correlationId,
+            JSON.stringify({ otherUserId: input.otherUserId, action: input.action, changed }),
+          ],
+        );
+        await client.query(
+          `insert into audit.audit_log (
+             tenant_id, actor_id, action, resource_type, resource_id,
+             result, correlation_id, new_value
+           ) values ($1, $2, $3, 'USER_BLOCK', $4, 'SUCCESS', $5, $6::jsonb)`,
+          [
+            input.tenantId,
+            input.actorUserId,
+            `USER_${input.action}ED`,
+            input.otherUserId,
+            input.correlationId,
+            JSON.stringify({ action: input.action, changed }),
+          ],
+        );
+        return { outcome: 'ok', changed, replayed: false };
+      });
+    },
+
     authorizeRealtimeConnection(input) {
       return withTenantTransaction(pool, input.tenantId, async (client) => {
         const settings = await queryOne<RuntimeRow>(
@@ -1300,10 +1467,32 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
                on current_access.tenant_id = viewer_user.tenant_id
               and current_access.user_id = viewer_user.id
               and 'chat.direct.create' = any(current_access.permissions)
+             join messaging.conversation_members other_member
+               on other_member.tenant_id = conversation.tenant_id
+              and other_member.conversation_id = conversation.id
+              and other_member.member_type = 'USER'
+              and other_member.user_id is not null
+              and other_member.user_id <> member.user_id
+              and other_member.state = 'ACTIVE'
+             join identity.users other_user
+               on other_user.tenant_id = other_member.tenant_id
+              and other_user.id = other_member.user_id
+              and other_user.status = 'ACTIVE'
+             left join profile.privacy_settings target_privacy
+               on target_privacy.tenant_id = other_user.tenant_id
+              and target_privacy.user_id = other_user.id
             where conversation.tenant_id = $1
               and conversation.id = $3
               and conversation.kind = 'DIRECT'
-              and conversation.state = 'OPEN'`,
+              and conversation.state = 'OPEN'
+              and coalesce(target_privacy.chat_policy, 'AUTHORIZED') = 'AUTHORIZED'
+              and not exists (
+                select 1
+                  from messaging.user_blocks block
+                 where block.tenant_id = conversation.tenant_id
+                   and ((block.blocker_user_id = member.user_id and block.blocked_user_id = other_member.user_id)
+                     or (block.blocker_user_id = other_member.user_id and block.blocked_user_id = member.user_id))
+              )`,
           [input.tenantId, input.userId, input.conversationId],
         );
         return row
@@ -1338,10 +1527,38 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
                on viewer_user.tenant_id = member.tenant_id
               and viewer_user.id = member.user_id
               and viewer_user.status = 'ACTIVE'
+             join identity.user_access_profiles current_access
+               on current_access.tenant_id = viewer_user.tenant_id
+              and current_access.user_id = viewer_user.id
+              and 'chat.direct.create' = any(current_access.permissions)
+             join messaging.conversation_members other_member
+               on other_member.tenant_id = conversation.tenant_id
+              and other_member.conversation_id = conversation.id
+              and other_member.member_type = 'USER'
+              and other_member.user_id is not null
+              and other_member.user_id <> member.user_id
+              and other_member.state = 'ACTIVE'
+             join identity.users other_user
+               on other_user.tenant_id = other_member.tenant_id
+              and other_user.id = other_member.user_id
+              and other_user.status = 'ACTIVE'
+             left join profile.privacy_settings target_privacy
+               on target_privacy.tenant_id = other_user.tenant_id
+              and target_privacy.user_id = other_user.id
             where settings.tenant_id = $1
               and settings.http_enabled = true
               and settings.direct_enabled = true
-              and settings.realtime_enabled = true`,
+              and settings.realtime_enabled = true
+              and coalesce(target_privacy.chat_policy, 'AUTHORIZED') = 'AUTHORIZED'
+              and not exists (
+                select 1
+                  from messaging.direct_conversations pair
+                  join messaging.user_blocks block
+                    on block.tenant_id = pair.tenant_id
+                   and pair.conversation_id = conversation.id
+                   and ((block.blocker_user_id = pair.left_user_id and block.blocked_user_id = pair.right_user_id)
+                     or (block.blocker_user_id = pair.right_user_id and block.blocked_user_id = pair.left_user_id))
+              )`,
           [input.tenantId, input.conversationId, input.messageId, input.sequence],
         );
         return result.rows.map((row) => row.user_id);

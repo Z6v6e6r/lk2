@@ -26,6 +26,35 @@ export interface ClaimedNotificationDelivery {
 
 export type NotificationDeliveryFinalization = 'sent' | 'retry' | 'dead' | 'stale';
 
+export async function deferNotificationDeliveryWithoutAttempt(options: {
+  readonly pool: Pool;
+  readonly job: ClaimedNotificationDelivery;
+  readonly retryAfterMs: number;
+  readonly errorCode: 'WEB_PUSH_CIRCUIT_OPEN';
+}): Promise<'retry' | 'stale'> {
+  const retryAfterMs = Math.max(1_000, Math.min(Math.trunc(options.retryAfterMs), 3_600_000));
+  return withTenantTransaction(options.pool, options.job.tenantId, async (client) => {
+    const updated = await client.query(
+      `update notifications.deliveries
+          set state = 'PENDING',
+              attempt_count = $3 - 1,
+              next_attempt_at = now() + ($4::integer * interval '1 millisecond'),
+              lease_expires_at = null,
+              updated_at = now(),
+              last_error_code = $5
+        where tenant_id = $1 and id = $2 and state = 'SENDING' and attempt_count = $3`,
+      [
+        options.job.tenantId,
+        options.job.deliveryId,
+        options.job.attemptNo,
+        retryAfterMs,
+        options.errorCode,
+      ],
+    );
+    return updated.rowCount === 1 ? 'retry' : 'stale';
+  });
+}
+
 export function notificationRetryDelayMs(attemptNo: number, baseMs: number): number {
   return Math.min(baseMs * 2 ** Math.max(0, attemptNo - 1), 3_600_000);
 }
@@ -204,28 +233,42 @@ export async function finalizeNotificationDelivery(options: {
           [options.job.tenantId, options.job.deliveryId, receiptKey, options.platform, now],
         );
       }
-    } else if (options.result.outcome === 'terminal_failure' && options.result.invalidate) {
-      await client.query(
-        `update integration.notification_endpoints
-            set status = 'INVALID', updated_at = now()
-          where tenant_id = $1 and id = $2`,
-        [options.job.tenantId, options.job.endpointId],
-      );
-      await client.query(
-        `insert into audit.audit_log (
+    } else if (options.result.outcome === 'terminal_failure') {
+      const endpointStatus = options.result.invalidate
+        ? 'INVALID'
+        : options.result.suspendPolicy
+          ? 'SUSPENDED_POLICY'
+          : undefined;
+      const endpointAction = options.result.invalidate
+        ? `${options.transport}_ENDPOINT_INVALIDATED`
+        : options.result.suspendPolicy
+          ? `${options.transport}_ENDPOINT_POLICY_SUSPENDED`
+          : undefined;
+      const endpointUpdated = endpointStatus
+        ? await client.query(
+            `update integration.notification_endpoints
+                set status = $3, updated_at = now()
+              where tenant_id = $1 and id = $2 and status = 'ACTIVE'`,
+            [options.job.tenantId, options.job.endpointId, endpointStatus],
+          )
+        : undefined;
+      if (endpointAction && endpointStatus && endpointUpdated?.rowCount === 1) {
+        await client.query(
+          `insert into audit.audit_log (
            tenant_id, action, resource_type, resource_id, result, reason,
            correlation_id, new_value
          ) values ($1, $2, 'NOTIFICATION_ENDPOINT', $3,
                    'SUCCESS', $4, $5, $6::jsonb)`,
-        [
-          options.job.tenantId,
-          `${options.transport}_ENDPOINT_INVALIDATED`,
-          options.job.endpointId,
-          errorCode,
-          `${options.transport.toLowerCase()}-delivery-${options.job.deliveryId}`,
-          JSON.stringify({ status: 'INVALID' }),
-        ],
-      );
+          [
+            options.job.tenantId,
+            endpointAction,
+            options.job.endpointId,
+            errorCode,
+            `${options.transport.toLowerCase()}-delivery-${options.job.deliveryId}`,
+            JSON.stringify({ status: endpointStatus }),
+          ],
+        );
+      }
     }
 
     await client.query(

@@ -4,7 +4,7 @@ import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { loadConfig, loadRealtimeConfig } from './index.js';
+import { loadConfig, loadRealtimeConfig, runtimeContourTargetFingerprint } from './index.js';
 
 const validEnvironment = {
   APP_ENV: 'ci',
@@ -34,6 +34,14 @@ describe('loadConfig', () => {
       REALTIME_MAX_SUBSCRIPTIONS_PER_CONNECTION: 100,
       REALTIME_MAX_SOCKET_BUFFER_BYTES: 512 * 1_024,
       REALTIME_HEARTBEAT_INTERVAL_MS: 30_000,
+      BOOKING_REMINDER_SCHEDULER_ENABLED: false,
+      BOOKING_REMINDER_POLL_INTERVAL_MS: 1_000,
+      BOOKING_REMINDER_BATCH_SIZE: 20,
+      BOOKING_REMINDER_CLAIM_TTL_MS: 60_000,
+      BOOKING_REMINDER_DATABASE_TIMEOUT_MS: 5_000,
+      BOOKING_REMINDER_HOURS_24_MAX_LATENESS_MS: 21_600_000,
+      BOOKING_REMINDER_HOURS_2_MAX_LATENESS_MS: 1_800_000,
+      LOCAL_RUNTIME_CONTOUR_ATTESTATION: false,
       VIVA_MODE: 'mock',
       HOME_READ_MODE: 'mock',
       GAMES_READ_ENABLED: false,
@@ -99,12 +107,78 @@ describe('loadConfig', () => {
       PROFILE_PHOTO_WEBP_QUALITY: 82,
       WEB_PUSH_ENABLED: false,
       WEB_PUSH_ENVIRONMENT: 'SANDBOX',
+      WEB_PUSH_ALLOWED_ENDPOINT_ORIGINS: '',
+      WEB_PUSH_BATCH_SIZE: 1,
+      WEB_PUSH_ENDPOINTS_PER_USER_MAX: 5,
       WEB_PUSH_MAX_ATTEMPTS: 5,
       WEB_PUSH_CIRCUIT_FAILURE_THRESHOLD: 5,
       WEB_PUSH_CIRCUIT_RESET_MS: 30_000,
+      MESSAGING_USER_BLOCK_COMMANDS_ENABLED: false,
+      REALTIME_EXPECTED_REPLICAS: 1,
       CUP_DEV_AUTH_ENABLED: false,
       VIVA_OAUTH_EXISTING_SUBJECT_BOOTSTRAP_ENABLED: false,
     });
+  });
+
+  it('provides a credential-free target fingerprint and keeps attestation local-only', () => {
+    expect(
+      runtimeContourTargetFingerprint(
+        'postgresql://runtime:secret@127.0.0.1:55432/padlhub_chat_verify',
+      ),
+    ).toBe(
+      runtimeContourTargetFingerprint(
+        'postgresql://another:credential@127.0.0.1:55432/padlhub_chat_verify',
+      ),
+    );
+    expect(() =>
+      runtimeContourTargetFingerprint(
+        'postgresql://runtime:secret@127.0.0.1:55432/padlhub_chat_verify?host=remote',
+      ),
+    ).toThrow('Runtime contour attestation requires query-free dependency URLs');
+    expect(() =>
+      runtimeContourTargetFingerprint(
+        'postgresql://runtime@127.0.0.1:55432/padlhub_chat_verify?password=secret',
+      ),
+    ).toThrow('Runtime contour attestation requires query-free dependency URLs');
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        LOCAL_RUNTIME_CONTOUR_ATTESTATION: 'true',
+        DATABASE_URL: 'postgresql://runtime@127.0.0.1:55432/padlhub_chat_verify?password=secret',
+      }),
+    ).toThrow('Runtime contour attestation requires query-free dependency URLs');
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        APP_ENV: 'staging',
+        LOCAL_RUNTIME_CONTOUR_ATTESTATION: 'true',
+      }),
+    ).toThrow('LOCAL_RUNTIME_CONTOUR_ATTESTATION is allowed only in local or ci');
+  });
+
+  it('bounds the declared realtime replica count used by monitoring', () => {
+    expect(
+      loadConfig({ ...validEnvironment, REALTIME_EXPECTED_REPLICAS: '3' })
+        .REALTIME_EXPECTED_REPLICAS,
+    ).toBe(3);
+    expect(() => loadConfig({ ...validEnvironment, REALTIME_EXPECTED_REPLICAS: '0' })).toThrow(
+      'Invalid application configuration',
+    );
+    expect(() => loadConfig({ ...validEnvironment, REALTIME_EXPECTED_REPLICAS: '101' })).toThrow(
+      'Invalid application configuration',
+    );
+  });
+
+  it('requires an explicit replica target for deployed realtime processes', () => {
+    expect(() =>
+      loadConfig({ ...validEnvironment, APP_ENV: 'staging' }, { realtimeReplicaMonitoring: true }),
+    ).toThrow('REALTIME_EXPECTED_REPLICAS must be explicit for deployed realtime');
+    expect(
+      loadConfig(
+        { ...validEnvironment, APP_ENV: 'staging', REALTIME_EXPECTED_REPLICAS: '2' },
+        { realtimeReplicaMonitoring: true },
+      ).REALTIME_EXPECTED_REPLICAS,
+    ).toBe(2);
   });
 
   it('keeps legacy community experience sections default-off and legacy-only', () => {
@@ -185,7 +259,7 @@ describe('loadConfig', () => {
       }),
     ).toThrow('Realtime runtime must not receive JWT_ACCESS_SECRET or JWT_REFRESH_SECRET');
 
-    expect(
+    expect(() =>
       loadRealtimeConfig({
         ...validEnvironment,
         APP_ENV: 'staging',
@@ -195,7 +269,20 @@ describe('loadConfig', () => {
         JWT_REALTIME_SECRET: 'staging-realtime-secret-at-least-32-characters',
         COMMUNITIES_REALTIME_ENABLED: 'true',
       }),
-    ).toMatchObject({ COMMUNITIES_REALTIME_ENABLED: true });
+    ).toThrow('REALTIME_EXPECTED_REPLICAS must be explicit for deployed realtime');
+
+    expect(
+      loadRealtimeConfig({
+        ...validEnvironment,
+        APP_ENV: 'staging',
+        COMMUNITIES_READ_MODE: 'local',
+        JWT_ACCESS_SECRET: undefined,
+        JWT_REFRESH_SECRET: undefined,
+        JWT_REALTIME_SECRET: 'staging-realtime-secret-at-least-32-characters',
+        COMMUNITIES_REALTIME_ENABLED: 'true',
+        REALTIME_EXPECTED_REPLICAS: '2',
+      }),
+    ).toMatchObject({ COMMUNITIES_REALTIME_ENABLED: true, REALTIME_EXPECTED_REPLICAS: 2 });
 
     expect(() =>
       loadRealtimeConfig({
@@ -330,6 +417,43 @@ describe('loadConfig', () => {
         OUTBOX_CONFIRM_TIMEOUT_MS: '10000',
       }),
     ).toThrow('OUTBOX_CLAIM_TTL_MS must exceed OUTBOX_CONFIRM_TIMEOUT_MS by at least 5000ms');
+  });
+
+  it('keeps booking reminders off and requires explicit lateness on deployed enablement', () => {
+    expect(loadConfig(validEnvironment)).toMatchObject({
+      BOOKING_REMINDER_SCHEDULER_ENABLED: false,
+      BOOKING_REMINDER_HOURS_24_MAX_LATENESS_MS: 21_600_000,
+      BOOKING_REMINDER_HOURS_2_MAX_LATENESS_MS: 1_800_000,
+    });
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        APP_ENV: 'staging',
+        BOOKING_REMINDER_SCHEDULER_ENABLED: 'true',
+      }),
+    ).toThrow('requires explicit max lateness for HOURS_24 and HOURS_2');
+    expect(
+      loadConfig({
+        ...validEnvironment,
+        APP_ENV: 'staging',
+        BOOKING_REMINDER_SCHEDULER_ENABLED: 'true',
+        BOOKING_REMINDER_HOURS_24_MAX_LATENESS_MS: '7200000',
+        BOOKING_REMINDER_HOURS_2_MAX_LATENESS_MS: '900000',
+      }),
+    ).toMatchObject({
+      BOOKING_REMINDER_SCHEDULER_ENABLED: true,
+      BOOKING_REMINDER_HOURS_24_MAX_LATENESS_MS: 7_200_000,
+      BOOKING_REMINDER_HOURS_2_MAX_LATENESS_MS: 900_000,
+    });
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        BOOKING_REMINDER_CLAIM_TTL_MS: '10000',
+        BOOKING_REMINDER_DATABASE_TIMEOUT_MS: '6000',
+      }),
+    ).toThrow(
+      'BOOKING_REMINDER_CLAIM_TTL_MS must exceed BOOKING_REMINDER_DATABASE_TIMEOUT_MS by at least 5000ms',
+    );
   });
 
   it('gates the result writer and requires a complete worker-only CUP boundary', () => {
@@ -716,7 +840,7 @@ describe('loadConfig', () => {
     expect(() => loadConfig({ ...validEnvironment, WEB_PUSH_ENABLED: 'true' })).toThrow(
       'WEB_PUSH_ENABLED requires runtime secrets',
     );
-    expect(
+    expect(() =>
       loadConfig({
         ...validEnvironment,
         WEB_PUSH_ENABLED: 'true',
@@ -727,7 +851,74 @@ describe('loadConfig', () => {
           v1: Buffer.alloc(32, 7).toString('base64'),
         }),
       }),
-    ).toMatchObject({ WEB_PUSH_ENABLED: true, NOTIFICATION_ENDPOINT_ACTIVE_KEY_ID: 'v1' });
+    ).toThrow('WEB_PUSH_ENABLED requires WEB_PUSH_ALLOWED_ENDPOINT_ORIGINS');
+    expect(
+      loadConfig({
+        ...validEnvironment,
+        WEB_PUSH_ENABLED: 'true',
+        WEB_PUSH_VAPID_SUBJECT: 'mailto:ops@padlhub.test',
+        WEB_PUSH_VAPID_PUBLIC_KEY: 'public-vapid-key',
+        WEB_PUSH_VAPID_PRIVATE_KEY: 'private-vapid-key',
+        WEB_PUSH_ALLOWED_ENDPOINT_ORIGINS:
+          'https://push.example.test, https://fcm.googleapis.com:443',
+        NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS: JSON.stringify({
+          v1: Buffer.alloc(32, 7).toString('base64'),
+        }),
+      }),
+    ).toMatchObject({
+      WEB_PUSH_ENABLED: true,
+      WEB_PUSH_ALLOWED_ENDPOINT_ORIGINS: 'https://push.example.test,https://fcm.googleapis.com',
+      NOTIFICATION_ENDPOINT_ACTIVE_KEY_ID: 'v1',
+    });
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        WEB_PUSH_ENABLED: 'true',
+        WEB_PUSH_VAPID_SUBJECT: 'mailto:ops@padlhub.test',
+        WEB_PUSH_VAPID_PUBLIC_KEY: 'public-vapid-key',
+        WEB_PUSH_VAPID_PRIVATE_KEY: 'private-vapid-key',
+        WEB_PUSH_ALLOWED_ENDPOINT_ORIGINS: 'https://127.0.0.1',
+        NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS: JSON.stringify({
+          v1: Buffer.alloc(32, 7).toString('base64'),
+        }),
+      }),
+    ).toThrow('public credential-free HTTPS origins on port 443 only');
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        WEB_PUSH_ALLOWED_ENDPOINT_ORIGINS: 'https://[::1]',
+      }),
+    ).toThrow('public credential-free HTTPS origins on port 443 only');
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        WEB_PUSH_ALLOWED_ENDPOINT_ORIGINS: 'https://push.example.test:8443',
+      }),
+    ).toThrow('port 443 only');
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        WEB_PUSH_ALLOWED_ENDPOINT_ORIGINS: 'https://*.example.test',
+      }),
+    ).toThrow('port 443 only');
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        WEB_PUSH_BATCH_SIZE: '101',
+      }),
+    ).toThrow('Invalid application configuration');
+    expect(
+      loadConfig({
+        ...validEnvironment,
+        WEB_PUSH_ENDPOINTS_PER_USER_MAX: '20',
+      }).WEB_PUSH_ENDPOINTS_PER_USER_MAX,
+    ).toBe(20);
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        WEB_PUSH_ENDPOINTS_PER_USER_MAX: '21',
+      }),
+    ).toThrow('Invalid application configuration');
   });
 
   it('loads private Web Push material from mounted secret files', () => {
@@ -747,6 +938,7 @@ describe('loadConfig', () => {
           WEB_PUSH_ENABLED: 'true',
           WEB_PUSH_VAPID_SUBJECT: 'mailto:ops@padlhub.test',
           WEB_PUSH_VAPID_PUBLIC_KEY: 'public-vapid-key',
+          WEB_PUSH_ALLOWED_ENDPOINT_ORIGINS: 'https://push.example.test',
           WEB_PUSH_VAPID_PRIVATE_KEY_FILE: privateKeyPath,
           NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS_FILE: endpointKeyringPath,
         }),

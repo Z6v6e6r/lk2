@@ -1,4 +1,6 @@
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import { isIP } from 'node:net';
 
 import { z } from 'zod';
 
@@ -37,6 +39,23 @@ const environmentSchema = z.object({
   OUTBOX_CLAIM_TTL_MS: z.coerce.number().int().min(10_000).max(300_000).default(60_000),
   OUTBOX_CONFIRM_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(60_000).default(10_000),
   OUTBOX_FAILURE_BACKOFF_MS: z.coerce.number().int().min(1_000).max(60_000).default(5_000),
+  BOOKING_REMINDER_SCHEDULER_ENABLED: booleanFromEnvironment,
+  BOOKING_REMINDER_POLL_INTERVAL_MS: z.coerce.number().int().min(250).max(60_000).default(1_000),
+  BOOKING_REMINDER_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(20),
+  BOOKING_REMINDER_CLAIM_TTL_MS: z.coerce.number().int().min(10_000).max(300_000).default(60_000),
+  BOOKING_REMINDER_DATABASE_TIMEOUT_MS: z.coerce.number().int().min(500).max(30_000).default(5_000),
+  BOOKING_REMINDER_HOURS_24_MAX_LATENESS_MS: z.coerce
+    .number()
+    .int()
+    .min(60_000)
+    .max(86_400_000)
+    .default(21_600_000),
+  BOOKING_REMINDER_HOURS_2_MAX_LATENESS_MS: z.coerce
+    .number()
+    .int()
+    .min(60_000)
+    .max(7_200_000)
+    .default(1_800_000),
   CORS_ORIGINS: z.string().default('http://localhost:5173,http://127.0.0.1:5173'),
   TRUSTED_PROXY_CIDRS: z.string().default(''),
   DATABASE_URL: z.string().url(),
@@ -102,6 +121,7 @@ const environmentSchema = z.object({
   HOME_READ_MODE: z.enum(['mock', 'projection']).default('mock'),
   GAMES_READ_ENABLED: booleanFromEnvironment,
   GAMES_COMMANDS_ENABLED: booleanFromEnvironment,
+  MESSAGING_USER_BLOCK_COMMANDS_ENABLED: booleanFromEnvironment,
   GAMES_RESULTS_WRITE_MODE: z
     .enum(['disabled', 'shadow_compare', 'local_primary'])
     .default('disabled'),
@@ -294,6 +314,7 @@ const environmentSchema = z.object({
   WEB_PUSH_ENABLED: booleanFromEnvironment,
   WEB_PUSH_ENVIRONMENT: z.enum(['SANDBOX', 'PRODUCTION']).default('SANDBOX'),
   WEB_PUSH_APP_ID: z.string().min(1).max(300).default('padlhub-web'),
+  WEB_PUSH_ALLOWED_ENDPOINT_ORIGINS: z.string().default(''),
   WEB_PUSH_VAPID_SUBJECT: z.string().optional(),
   WEB_PUSH_VAPID_PUBLIC_KEY: z.string().optional(),
   WEB_PUSH_VAPID_PRIVATE_KEY: z.string().optional(),
@@ -302,6 +323,8 @@ const environmentSchema = z.object({
   WEB_PUSH_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(20).default(5),
   WEB_PUSH_RETRY_BASE_MS: z.coerce.number().int().min(1_000).max(3_600_000).default(5_000),
   WEB_PUSH_POLL_INTERVAL_MS: z.coerce.number().int().min(250).max(60_000).default(1_000),
+  WEB_PUSH_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(1),
+  WEB_PUSH_ENDPOINTS_PER_USER_MAX: z.coerce.number().int().min(1).max(20).default(5),
   WEB_PUSH_CIRCUIT_FAILURE_THRESHOLD: z.coerce.number().int().min(1).max(100).default(5),
   WEB_PUSH_CIRCUIT_RESET_MS: z.coerce.number().int().min(1_000).max(3_600_000).default(30_000),
   NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS: z.string().optional(),
@@ -327,6 +350,9 @@ const environmentSchema = z.object({
   PUBLIC_OFFER_VERSION: z.string().min(1).default('pending'),
   PERSONAL_DATA_POLICY_VERSION: z.string().min(1).default('pending'),
   OTEL_SERVICE_NAMESPACE: z.string().default('phub'),
+  OTEL_SERVICE_INSTANCE_ID: z.string().min(1).max(255).optional().or(z.literal('')),
+  REALTIME_EXPECTED_REPLICAS: z.coerce.number().int().min(1).max(100).default(1),
+  LOCAL_RUNTIME_CONTOUR_ATTESTATION: booleanFromEnvironment,
   OTEL_EXPORTER_OTLP_ENDPOINT: z.string().url().optional().or(z.literal('')),
   SENTRY_DSN: z.string().url().optional().or(z.literal('')),
 });
@@ -335,6 +361,23 @@ export type AppConfig = z.infer<typeof environmentSchema>;
 
 export interface ConfigRequirements {
   readonly profilePhotoStorage?: boolean;
+  readonly realtimeReplicaMonitoring?: boolean;
+}
+
+export interface RuntimeContourAttestation {
+  readonly database?: string;
+  readonly redis?: string;
+  readonly rabbitmq?: string;
+}
+
+export function runtimeContourTargetFingerprint(value: string): string {
+  const url = new URL(value);
+  if (url.search.length > 0 || url.hash.length > 0) {
+    throw new Error('Runtime contour attestation requires query-free dependency URLs');
+  }
+  url.username = '';
+  url.password = '';
+  return createHash('sha256').update(url.toString()).digest('hex');
 }
 
 function materializeFileSecret(
@@ -354,6 +397,44 @@ function materializeFileSecret(
   }
   if (!value) throw new Error(`${fileName} points to an empty secret`);
   return value;
+}
+
+function normalizeWebPushAllowedOrigins(serialized: string): string {
+  const normalized = new Set<string>();
+  for (const candidate of serialized.split(',')) {
+    const value = candidate.trim();
+    if (!value) continue;
+    let url: URL;
+    try {
+      url = new URL(value);
+    } catch {
+      throw new Error('WEB_PUSH_ALLOWED_ENDPOINT_ORIGINS must contain valid HTTPS origins');
+    }
+    const hostname = url.hostname.toLowerCase();
+    const addressCandidate =
+      hostname.startsWith('[') && hostname.endsWith(']') ? hostname.slice(1, -1) : hostname;
+    if (
+      url.protocol !== 'https:' ||
+      (url.port.length > 0 && url.port !== '443') ||
+      url.username.length > 0 ||
+      url.password.length > 0 ||
+      url.pathname !== '/' ||
+      url.search.length > 0 ||
+      url.hash.length > 0 ||
+      isIP(addressCandidate) !== 0 ||
+      hostname.includes('*') ||
+      hostname === 'localhost' ||
+      hostname.endsWith('.localhost') ||
+      hostname.endsWith('.local') ||
+      hostname.endsWith('.internal')
+    ) {
+      throw new Error(
+        'WEB_PUSH_ALLOWED_ENDPOINT_ORIGINS must contain public credential-free HTTPS origins on port 443 only',
+      );
+    }
+    normalized.add(url.origin);
+  }
+  return [...normalized].join(',');
 }
 
 export function loadConfig(
@@ -395,6 +476,30 @@ export function loadConfig(
       'REALTIME_DATABASE_POOL_WARM_CONNECTIONS must not exceed REALTIME_DATABASE_POOL_MAX',
     );
   }
+
+  if (
+    requirements.realtimeReplicaMonitoring &&
+    (parsed.data.APP_ENV === 'staging' || parsed.data.APP_ENV === 'production') &&
+    !environment.REALTIME_EXPECTED_REPLICAS?.trim()
+  ) {
+    throw new Error('REALTIME_EXPECTED_REPLICAS must be explicit for deployed realtime');
+  }
+  if (parsed.data.LOCAL_RUNTIME_CONTOUR_ATTESTATION) {
+    if (parsed.data.APP_ENV !== 'local' && parsed.data.APP_ENV !== 'ci') {
+      throw new Error('LOCAL_RUNTIME_CONTOUR_ATTESTATION is allowed only in local or ci');
+    }
+    for (const target of [
+      parsed.data.DATABASE_URL,
+      parsed.data.REDIS_URL,
+      parsed.data.RABBITMQ_URL,
+    ]) {
+      runtimeContourTargetFingerprint(target);
+    }
+  }
+
+  const webPushAllowedEndpointOrigins = normalizeWebPushAllowedOrigins(
+    parsed.data.WEB_PUSH_ALLOWED_ENDPOINT_ORIGINS,
+  );
 
   if (parsed.data.APP_ENV === 'production' && parsed.data.GAMES_READ_ENABLED) {
     throw new Error('GAMES_READ_ENABLED is staging-only until the Games production gate passes');
@@ -552,6 +657,24 @@ export function loadConfig(
     parsed.data.OUTBOX_CLAIM_TTL_MS - parsed.data.OUTBOX_CONFIRM_TIMEOUT_MS < 5_000
   ) {
     throw new Error('OUTBOX_CLAIM_TTL_MS must exceed OUTBOX_CONFIRM_TIMEOUT_MS by at least 5000ms');
+  }
+  if (
+    parsed.data.BOOKING_REMINDER_SCHEDULER_ENABLED &&
+    (parsed.data.APP_ENV === 'staging' || parsed.data.APP_ENV === 'production') &&
+    (!environment.BOOKING_REMINDER_HOURS_24_MAX_LATENESS_MS?.trim() ||
+      !environment.BOOKING_REMINDER_HOURS_2_MAX_LATENESS_MS?.trim())
+  ) {
+    throw new Error(
+      'Deployed booking reminder scheduler requires explicit max lateness for HOURS_24 and HOURS_2',
+    );
+  }
+  if (
+    parsed.data.BOOKING_REMINDER_CLAIM_TTL_MS - parsed.data.BOOKING_REMINDER_DATABASE_TIMEOUT_MS <
+    5_000
+  ) {
+    throw new Error(
+      'BOOKING_REMINDER_CLAIM_TTL_MS must exceed BOOKING_REMINDER_DATABASE_TIMEOUT_MS by at least 5000ms',
+    );
   }
   if (parsed.data.APP_ENV === 'production' && parsed.data.VIVA_MODE === 'mock') {
     throw new Error('VIVA_MODE=mock is forbidden in production');
@@ -805,6 +928,9 @@ export function loadConfig(
     if (missingWebPush.length > 0) {
       throw new Error(`WEB_PUSH_ENABLED requires runtime secrets: ${missingWebPush.join(', ')}`);
     }
+    if (!webPushAllowedEndpointOrigins) {
+      throw new Error('WEB_PUSH_ENABLED requires WEB_PUSH_ALLOWED_ENDPOINT_ORIGINS');
+    }
     if (
       !parsed.data.WEB_PUSH_VAPID_SUBJECT?.startsWith('mailto:') &&
       !parsed.data.WEB_PUSH_VAPID_SUBJECT?.startsWith('https://')
@@ -988,7 +1114,10 @@ export function loadConfig(
     throw new Error('PROMOTION_IMAGE_PRIVATE_HTTP_HOSTS is forbidden in production');
   }
 
-  return parsed.data;
+  return {
+    ...parsed.data,
+    WEB_PUSH_ALLOWED_ENDPOINT_ORIGINS: webPushAllowedEndpointOrigins,
+  };
 }
 
 const REALTIME_ACCESS_SECRET_SENTINEL = 'x'.repeat(32);
@@ -1010,9 +1139,12 @@ export function loadRealtimeConfig(environment: NodeJS.ProcessEnv = process.env)
   ) {
     throw new Error('Realtime runtime must not receive JWT_ACCESS_SECRET or JWT_REFRESH_SECRET');
   }
-  return loadConfig({
-    ...environment,
-    JWT_ACCESS_SECRET: REALTIME_ACCESS_SECRET_SENTINEL,
-    JWT_REFRESH_SECRET: REALTIME_REFRESH_SECRET_SENTINEL,
-  });
+  return loadConfig(
+    {
+      ...environment,
+      JWT_ACCESS_SECRET: REALTIME_ACCESS_SECRET_SENTINEL,
+      JWT_REFRESH_SECRET: REALTIME_REFRESH_SECRET_SENTINEL,
+    },
+    { realtimeReplicaMonitoring: true },
+  );
 }

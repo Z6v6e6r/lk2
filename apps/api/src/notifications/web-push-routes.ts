@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import type { NotificationEndpointRepository, WebPushProviderSelector } from '@phub/database';
 import {
   canonicalWebPushSubscription,
+  isWebPushEndpointOriginAllowed,
   webPushSubscriptionSchema,
   type NotificationEndpointCipher,
 } from '@phub/notifications';
@@ -32,6 +33,8 @@ export function registerWebPushRoutes(
     readonly repository?: NotificationEndpointRepository;
     readonly cipher?: NotificationEndpointCipher;
     readonly enabledGlobally: boolean;
+    readonly maxEndpointsPerUser: number;
+    readonly allowedEndpointOrigins: readonly string[];
     readonly publicKey?: string;
     readonly selector: WebPushProviderSelector;
     readonly authenticatedTenantHandlers: readonly preHandlerHookHandler[];
@@ -128,7 +131,10 @@ export function registerWebPushRoutes(
         );
       }
       const subscription = webPushSubscriptionSchema.safeParse(body.subscription);
-      if (!subscription.success) {
+      if (
+        !subscription.success ||
+        !isWebPushEndpointOriginAllowed(subscription.data.endpoint, options.allowedEndpointOrigins)
+      ) {
         return sendApiError(
           request,
           reply,
@@ -158,6 +164,7 @@ export function registerWebPushRoutes(
         ciphertext: encrypted.ciphertext,
         addressHash: createHash('sha256').update(subscription.data.endpoint).digest('hex'),
         encryptionKeyId: encrypted.keyId,
+        endpointsPerUserMax: options.maxEndpointsPerUser,
         requestHash: commandHash('REGISTER', `${body.installationId}:${canonical}`),
         idempotencyKey,
         correlationId: request.id,
@@ -178,6 +185,15 @@ export function registerWebPushRoutes(
           409,
           'IDEMPOTENCY_KEY_REUSED',
           'Idempotency-Key уже использован для другой команды.',
+        );
+      }
+      if (result.outcome === 'endpoint_limit_reached') {
+        return sendApiError(
+          request,
+          reply,
+          409,
+          'WEB_PUSH_ENDPOINT_LIMIT_REACHED',
+          'Достигнут лимит подписок Web Push.',
         );
       }
       if (result.outcome !== 'updated') {

@@ -38,6 +38,7 @@ x-object-storage: &object-storage
 services:
   web:
     <<: *runtime
+    env_file: []
     image: ${REGISTRY}/phub-web@${WEB_IMAGE_DIGEST}
     healthcheck:
       test: ['CMD-SHELL', 'wget -q -O /dev/null http://127.0.0.1:8080/healthz']
@@ -104,7 +105,10 @@ services:
       - cup-showcase
 
   migrator:
-    <<: *application-runtime
+    <<: *runtime
+    env_file: []
+    environment:
+      DATABASE_URL: ${MIGRATOR_DATABASE_URL:-}
     image: ${REGISTRY}/phub-migrator@${MIGRATOR_IMAGE_DIGEST}
     restart: 'no'
     profiles: [migration]

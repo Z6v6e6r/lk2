@@ -96,8 +96,10 @@ dependency tree.
    ```
 
 4. Before application deployment, verify the backup destination and populate
-   `/etc/phub/staging.env`. Run migrations once from the CI-published migrator
-   digest, then deploy web, API, realtime and worker.
+   `/etc/phub/staging.env` plus `/etc/phub/staging.migrator.env`. Run migrations once from the
+   CI-published migrator digest. Its preflight must confirm distinct unmasked login roles, a
+   DDL-free runtime role and a bounded migrator role on the same writable primary; only then deploy
+   web, API, realtime and worker.
 
 The application runtime uses separate API/worker and realtime secret contours:
 
@@ -112,6 +114,20 @@ The application runtime uses separate API/worker and realtime secret contours:
 - `/opt/phub/staging.override.env` contains only the Home/community/promotion live-read gates;
 - `/opt/phub/staging.games.env` is mode `0600`, owned by `phub-deploy`, and contains the
   staging-only Games mirror gates. The Mongo mirror keeps its URI only here.
+
+The migrator file is not part of the application runtime environment. It must be mode `0600`, be
+readable by `phub-deploy`, and contain exactly one non-comment setting: `DATABASE_URL`. That URL
+uses the reviewed DDL role required by the migration ledger and current migrations. It must differ
+from the runtime `DATABASE_URL`; API, worker, realtime and web containers never receive it. The
+deploy workflow rejects a missing file, extra keys, duplicate/malformed URLs, the same file inode or
+the same URL before it starts the digest-pinned migrator. The migrator image then verifies the
+actual PostgreSQL identities and privileges for both URLs without logging their values. Provision
+and rotate this file through the host secret-management procedure, never through Git or a workflow
+artifact.
+
+The staging `web` service is a static nginx image and receives no runtime env file. Database, JWT,
+Viva, object-storage and provider credentials are available only to the server process that owns
+the corresponding operation; never add the shared runtime anchor back to `web`.
 
 The Games file must select the Mongo source, enable canonical Games reads and Activity History
 game backfill, and keep commands disabled until their separate cutover approval. The deploy

@@ -4,6 +4,7 @@ import type { Channel } from 'amqplib';
 import type { Pool, QueryResultRow } from 'pg';
 
 import { DEAD_LETTER_QUEUE } from './broker-topology.js';
+import type { WebPushProviderOutcome } from './web-push-adapter.js';
 
 export const WORKER_OPERATIONAL_METRICS_INTERVAL_MS = 15_000;
 const METRICS_TENANT_CONCURRENCY = 4;
@@ -44,6 +45,26 @@ export const WORKER_METRIC_INSTRUMENTS = {
   communityMediaFailures: 'phub.worker.communities.media.failures',
   communityMediaCycleDurationMilliseconds:
     'phub.worker.communities.media.cycle_duration_milliseconds',
+  pushDeliveriesPolicySuspended: 'phub.worker.notifications.push_deliveries_policy_suspended',
+  bookingRemindersDue: 'phub.worker.notifications.booking_reminders_due',
+  bookingReminderOldestDueAgeSeconds:
+    'phub.worker.notifications.booking_reminder_oldest_due_age_seconds',
+  bookingReminderLatestMissedUnixTime:
+    'phub.worker.notifications.booking_reminder_latest_missed_unixtime',
+  bookingReminderSchedulerSuccess: 'phub.worker.booking_reminder.scheduler_success',
+  bookingReminderSchedulerHeartbeatUnixTime:
+    'phub.worker.booking_reminder.scheduler_heartbeat_unixtime',
+  bookingReminderSchedulerEmitted: 'phub.worker.booking_reminder.emitted',
+  bookingReminderSchedulerMissed: 'phub.worker.booking_reminder.missed',
+  bookingReminderSchedulerFailures: 'phub.worker.booking_reminder.failures',
+  bookingReminderSchedulerDurationMilliseconds:
+    'phub.worker.booking_reminder.duration_milliseconds',
+  webPushCycleSuccess: 'phub.worker.web_push.cycle_success',
+  webPushCycleFailures: 'phub.worker.web_push.cycle_failures',
+  webPushTenantFailures: 'phub.worker.web_push.tenant_failures',
+  webPushProviderOutcomes: 'phub.worker.web_push.provider_outcomes',
+  webPushRounds: 'phub.worker.web_push.rounds',
+  webPushCycleDurationMilliseconds: 'phub.worker.web_push.cycle_duration_milliseconds',
   operationalCollectionSuccess: 'phub.worker.operational.collection_success',
   operationalCollectionFailures: 'phub.worker.operational.collection_failures',
   operationalCollectionDurationMilliseconds:
@@ -58,6 +79,16 @@ interface PushDeliveryMetricRow extends QueryResultRow {
   readonly due_count: number | string;
   readonly oldest_due_age_seconds: number | string;
   readonly dead_count: number | string;
+  readonly policy_suspended_count: number | string;
+}
+
+interface BookingReminderMetricRow extends QueryResultRow {
+  readonly due_count: number | string;
+  readonly oldest_due_age_seconds: number | string;
+}
+
+interface BookingReminderMissedRow extends QueryResultRow {
+  readonly latest_missed_unixtime: number | string;
 }
 
 interface CommunityMemberCountRow extends QueryResultRow {
@@ -91,6 +122,10 @@ export interface WorkerOperationalSnapshot {
   readonly communityMediaGcBacklog: number;
   readonly communityMediaGcOldestAgeSeconds: number;
   readonly communityMediaDeadGcJobs: number;
+  readonly pushDeliveriesPolicySuspended: number;
+  readonly bookingRemindersDue: number;
+  readonly bookingReminderOldestDueAgeSeconds: number;
+  readonly bookingReminderLatestMissedUnixTime: number;
 }
 
 async function mapWithConcurrency<TInput, TOutput>(
@@ -143,18 +178,52 @@ export async function collectWorkerOperationalSnapshot(options: {
         );
         const deliveries = await client.query<PushDeliveryMetricRow>(
           `select count(*) filter (
-                    where (state = 'PENDING' and next_attempt_at <= clock_timestamp())
-                       or (state = 'SENDING' and lease_expires_at <= clock_timestamp())
+                    where endpoint.status in ('ACTIVE', 'INVALID', 'REVOKED')
+                      and ((state = 'PENDING' and next_attempt_at <= clock_timestamp())
+                        or (state = 'SENDING' and lease_expires_at <= clock_timestamp()))
                   )::bigint as due_count,
                   coalesce(max(
-                    extract(epoch from (clock_timestamp() - created_at))
+                    extract(epoch from (clock_timestamp() - delivery.created_at))
                   ) filter (
-                    where (state = 'PENDING' and next_attempt_at <= clock_timestamp())
-                       or (state = 'SENDING' and lease_expires_at <= clock_timestamp())
+                    where endpoint.status in ('ACTIVE', 'INVALID', 'REVOKED')
+                      and ((state = 'PENDING' and next_attempt_at <= clock_timestamp())
+                        or (state = 'SENDING' and lease_expires_at <= clock_timestamp()))
                   ), 0)::double precision as oldest_due_age_seconds,
-                  count(*) filter (where state = 'DEAD')::bigint as dead_count
-             from notifications.deliveries
-            where tenant_id = $1 and channel = 'PUSH'`,
+                  count(*) filter (where state = 'DEAD')::bigint as dead_count,
+                  count(*) filter (
+                    where endpoint.status = 'SUSPENDED_POLICY'
+                      and ((state = 'PENDING' and next_attempt_at <= clock_timestamp())
+                        or (state = 'SENDING' and lease_expires_at <= clock_timestamp()))
+                  )::bigint as policy_suspended_count
+             from notifications.deliveries delivery
+             join integration.notification_endpoints endpoint
+               on endpoint.tenant_id = delivery.tenant_id
+              and endpoint.id = delivery.endpoint_id
+            where delivery.tenant_id = $1 and delivery.channel = 'PUSH'`,
+          [tenant.id],
+        );
+        const reminders = await client.query<BookingReminderMetricRow>(
+          `select count(*)::bigint as due_count,
+                  coalesce(max(
+                    extract(epoch from (clock_timestamp() - schedule.due_at))
+                  ), 0)::double precision as oldest_due_age_seconds
+             from notifications.booking_reminder_schedules schedule
+             join notifications.tenant_runtime_settings runtime
+               on runtime.tenant_id = schedule.tenant_id
+            where schedule.tenant_id = $1
+              and runtime.booking_reminders_enabled
+              and schedule.state = 'PENDING'
+              and schedule.due_at <= clock_timestamp()`,
+          [tenant.id],
+        );
+        const latestMissed = await client.query<BookingReminderMissedRow>(
+          `select extract(epoch from schedule.completed_at)::double precision
+                    as latest_missed_unixtime
+             from notifications.booking_reminder_schedules schedule
+            where schedule.tenant_id = $1
+              and schedule.state = 'MISSED'
+            order by schedule.completed_at desc
+            limit 1`,
           [tenant.id],
         );
         const memberCount = await client.query<CommunityMemberCountRow>(
@@ -193,6 +262,7 @@ export async function collectWorkerOperationalSnapshot(options: {
         const deliveryRow = deliveries.rows[0];
         const projection = memberCount.rows[0];
         const mediaState = media.rows[0];
+        const reminderRow = reminders.rows[0];
         return {
           outboxAge: outboxRow
             ? parseNonNegativeMetric(outboxRow.oldest_age_seconds, 'outbox oldest age')
@@ -242,6 +312,27 @@ export async function collectWorkerOperationalSnapshot(options: {
           mediaDeadGcJobs: mediaState
             ? parseNonNegativeMetric(mediaState.dead_gc_jobs, 'community media dead GC jobs')
             : 0,
+          pushDeliveriesPolicySuspended: deliveryRow
+            ? parseNonNegativeMetric(
+                deliveryRow.policy_suspended_count,
+                'push deliveries policy suspended',
+              )
+            : 0,
+          bookingRemindersDue: reminderRow
+            ? parseNonNegativeMetric(reminderRow.due_count, 'booking reminders due')
+            : 0,
+          bookingReminderOldestDueAgeSeconds: reminderRow
+            ? parseNonNegativeMetric(
+                reminderRow.oldest_due_age_seconds,
+                'booking reminder oldest due age',
+              )
+            : 0,
+          bookingReminderLatestMissedUnixTime: latestMissed.rows[0]
+            ? parseNonNegativeMetric(
+                latestMissed.rows[0].latest_missed_unixtime,
+                'booking reminder latest missed timestamp',
+              )
+            : 0,
         };
       }),
   );
@@ -289,6 +380,22 @@ export async function collectWorkerOperationalSnapshot(options: {
       (sum, snapshot) => sum + snapshot.mediaDeadGcJobs,
       0,
     ),
+    pushDeliveriesPolicySuspended: tenantSnapshots.reduce(
+      (sum, snapshot) => sum + snapshot.pushDeliveriesPolicySuspended,
+      0,
+    ),
+    bookingRemindersDue: tenantSnapshots.reduce(
+      (sum, snapshot) => sum + snapshot.bookingRemindersDue,
+      0,
+    ),
+    bookingReminderOldestDueAgeSeconds: Math.max(
+      0,
+      ...tenantSnapshots.map((snapshot) => snapshot.bookingReminderOldestDueAgeSeconds),
+    ),
+    bookingReminderLatestMissedUnixTime: Math.max(
+      0,
+      ...tenantSnapshots.map((snapshot) => snapshot.bookingReminderLatestMissedUnixTime),
+    ),
   };
 }
 
@@ -323,9 +430,28 @@ export interface WorkerMetricRecorder {
     failures: number,
     durationMilliseconds: number,
   ): void;
+  recordWebPushCycle(
+    failedTenants: number,
+    rounds: number,
+    durationMilliseconds: number,
+    failed: boolean,
+  ): void;
+  recordWebPushProviderOutcome(
+    environment: 'SANDBOX' | 'PRODUCTION',
+    outcome: WebPushProviderOutcome,
+  ): void;
+  recordBookingReminderSchedulerCycle(
+    emitted: number,
+    missed: number,
+    durationMilliseconds: number,
+    failed: boolean,
+  ): void;
 }
 
-export function createWorkerMetricRecorder(): WorkerMetricRecorder {
+export function createWorkerMetricRecorder(options: {
+  readonly instanceId: string;
+  readonly now?: () => number;
+}): WorkerMetricRecorder {
   const meter = metrics.getMeter('@phub/worker');
   const outboxOldestAge = meter.createGauge(WORKER_METRIC_INSTRUMENTS.outboxOldestAgeSeconds);
   const outboxBackloggedTenants = meter.createGauge(
@@ -411,6 +537,46 @@ export function createWorkerMetricRecorder(): WorkerMetricRecorder {
   const communityMediaDuration = meter.createHistogram(
     WORKER_METRIC_INSTRUMENTS.communityMediaCycleDurationMilliseconds,
   );
+  const pushDeliveriesPolicySuspended = meter.createGauge(
+    WORKER_METRIC_INSTRUMENTS.pushDeliveriesPolicySuspended,
+  );
+  const bookingRemindersDue = meter.createGauge(WORKER_METRIC_INSTRUMENTS.bookingRemindersDue);
+  const bookingReminderOldestDueAge = meter.createGauge(
+    WORKER_METRIC_INSTRUMENTS.bookingReminderOldestDueAgeSeconds,
+  );
+  const bookingReminderLatestMissed = meter.createGauge(
+    WORKER_METRIC_INSTRUMENTS.bookingReminderLatestMissedUnixTime,
+  );
+  const bookingReminderSchedulerSuccess = meter.createGauge(
+    WORKER_METRIC_INSTRUMENTS.bookingReminderSchedulerSuccess,
+  );
+  const bookingReminderSchedulerHeartbeat = meter.createGauge(
+    WORKER_METRIC_INSTRUMENTS.bookingReminderSchedulerHeartbeatUnixTime,
+  );
+  const bookingReminderSchedulerEmitted = meter.createCounter(
+    WORKER_METRIC_INSTRUMENTS.bookingReminderSchedulerEmitted,
+  );
+  const bookingReminderSchedulerMissed = meter.createCounter(
+    WORKER_METRIC_INSTRUMENTS.bookingReminderSchedulerMissed,
+  );
+  const bookingReminderSchedulerFailures = meter.createCounter(
+    WORKER_METRIC_INSTRUMENTS.bookingReminderSchedulerFailures,
+  );
+  const bookingReminderSchedulerDuration = meter.createHistogram(
+    WORKER_METRIC_INSTRUMENTS.bookingReminderSchedulerDurationMilliseconds,
+  );
+  const webPushCycleSuccess = meter.createGauge(WORKER_METRIC_INSTRUMENTS.webPushCycleSuccess);
+  const webPushCycleFailures = meter.createCounter(WORKER_METRIC_INSTRUMENTS.webPushCycleFailures);
+  const webPushTenantFailures = meter.createCounter(
+    WORKER_METRIC_INSTRUMENTS.webPushTenantFailures,
+  );
+  const webPushProviderOutcomes = meter.createCounter(
+    WORKER_METRIC_INSTRUMENTS.webPushProviderOutcomes,
+  );
+  const webPushRounds = meter.createHistogram(WORKER_METRIC_INSTRUMENTS.webPushRounds);
+  const webPushCycleDuration = meter.createHistogram(
+    WORKER_METRIC_INSTRUMENTS.webPushCycleDurationMilliseconds,
+  );
   const collectionSuccess = meter.createGauge(
     WORKER_METRIC_INSTRUMENTS.operationalCollectionSuccess,
   );
@@ -420,6 +586,9 @@ export function createWorkerMetricRecorder(): WorkerMetricRecorder {
   const collectionDuration = meter.createHistogram(
     WORKER_METRIC_INSTRUMENTS.operationalCollectionDurationMilliseconds,
   );
+  const instanceAttributes = {
+    'service.instance.id': options.instanceId,
+  };
 
   return {
     recordOperationalSnapshot(snapshot, durationMilliseconds) {
@@ -438,6 +607,10 @@ export function createWorkerMetricRecorder(): WorkerMetricRecorder {
       communityMediaGcBacklog.record(snapshot.communityMediaGcBacklog);
       communityMediaGcOldestAge.record(snapshot.communityMediaGcOldestAgeSeconds);
       communityMediaDeadGcJobs.record(snapshot.communityMediaDeadGcJobs);
+      pushDeliveriesPolicySuspended.record(snapshot.pushDeliveriesPolicySuspended);
+      bookingRemindersDue.record(snapshot.bookingRemindersDue);
+      bookingReminderOldestDueAge.record(snapshot.bookingReminderOldestDueAgeSeconds);
+      bookingReminderLatestMissed.record(snapshot.bookingReminderLatestMissedUnixTime);
       collectionSuccess.record(1);
       collectionDuration.record(durationMilliseconds);
     },
@@ -468,6 +641,31 @@ export function createWorkerMetricRecorder(): WorkerMetricRecorder {
       if (result.gcDead > 0) communityMediaGcDead.add(result.gcDead);
       if (failures > 0) communityMediaFailures.add(failures);
       communityMediaDuration.record(durationMilliseconds);
+    },
+    recordWebPushCycle(failedTenants, rounds, durationMilliseconds, failed) {
+      webPushCycleSuccess.record(failed || failedTenants > 0 ? 0 : 1, instanceAttributes);
+      if (failed) webPushCycleFailures.add(1, instanceAttributes);
+      if (failedTenants > 0) webPushTenantFailures.add(failedTenants, instanceAttributes);
+      webPushRounds.record(rounds, instanceAttributes);
+      webPushCycleDuration.record(durationMilliseconds, instanceAttributes);
+    },
+    recordWebPushProviderOutcome(environment, outcome) {
+      webPushProviderOutcomes.add(1, {
+        ...instanceAttributes,
+        environment,
+        outcome,
+      });
+    },
+    recordBookingReminderSchedulerCycle(emitted, missed, durationMilliseconds, failed) {
+      bookingReminderSchedulerHeartbeat.record(
+        Math.floor((options.now?.() ?? Date.now()) / 1_000),
+        instanceAttributes,
+      );
+      bookingReminderSchedulerSuccess.record(failed ? 0 : 1, instanceAttributes);
+      if (emitted > 0) bookingReminderSchedulerEmitted.add(emitted, instanceAttributes);
+      if (missed > 0) bookingReminderSchedulerMissed.add(missed, instanceAttributes);
+      if (failed) bookingReminderSchedulerFailures.add(1, instanceAttributes);
+      bookingReminderSchedulerDuration.record(durationMilliseconds, instanceAttributes);
     },
   };
 }

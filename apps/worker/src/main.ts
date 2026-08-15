@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 
-import { loadConfig } from '@phub/config';
+import { loadConfig, runtimeContourTargetFingerprint } from '@phub/config';
 import {
   LegacyCommunityReadRepository,
   type CommunityDirectoryRepository,
@@ -48,6 +48,7 @@ import { expireCommunityDirectInviteBatch } from './community-direct-invite-expi
 import { registerGiftCertificateIssuerConsumer } from './gift-certificate-issuer-consumer.js';
 import { registerLocationHomeProjectorConsumer } from './location-home-projector-consumer.js';
 import { registerNotificationProjectorConsumer } from './notification-projector-consumer.js';
+import { runBookingReminderSchedulerBatch } from './booking-reminder-scheduler.js';
 import {
   collectWorkerOperationalSnapshot,
   createWorkerMetricRecorder,
@@ -69,6 +70,7 @@ import { runLegacyGamesRosterSyncCycle } from './legacy-games-roster-sync.js';
 import { runProfilePhotoMaintenanceCycle, runVivaHomeSyncCycle } from './viva-home-sync.js';
 import { WebPushDeliveryAdapter } from './web-push-adapter.js';
 import { runWebPushDeliveryBatch } from './web-push-delivery.js';
+import { runWebPushTenantCycle } from './web-push-tenant-cycle.js';
 import { runFairTenantCycle } from './tenant-cycle-orchestrator.js';
 import {
   calculateWorkerForwardProgressMaxStaleMs,
@@ -79,6 +81,12 @@ import {
 const config = loadConfig(process.env, { profilePhotoStorage: true });
 const clientMediaRollbackCapability = 'phub.client-media-rollback.v1';
 const communityLogoRollbackCapability = 'phub.community-logo-rollback.v1';
+const runtimeContourAttestation = config.LOCAL_RUNTIME_CONTOUR_ATTESTATION
+  ? {
+      database: runtimeContourTargetFingerprint(config.DATABASE_URL),
+      rabbitmq: runtimeContourTargetFingerprint(config.RABBITMQ_URL),
+    }
+  : undefined;
 const logger = createLogger('worker', config.LOG_LEVEL, process.env.RELEASE);
 const communityLogoSourceResilience = new CommunityLogoSourceResilience({
   maxAttempts: 2,
@@ -92,6 +100,10 @@ const telemetry = startTelemetry({
   serviceName: 'worker',
   serviceNamespace: config.OTEL_SERVICE_NAMESPACE,
   ...(config.OTEL_EXPORTER_OTLP_ENDPOINT ? { endpoint: config.OTEL_EXPORTER_OTLP_ENDPOINT } : {}),
+});
+const workerMetrics = createWorkerMetricRecorder({
+  instanceId:
+    config.OTEL_SERVICE_INSTANCE_ID?.trim() || process.env.HOSTNAME?.trim() || 'worker-singleton',
 });
 const pool = createDatabasePool(config.DATABASE_URL);
 const gameRepository = createGameRepository(pool);
@@ -263,6 +275,10 @@ const webPushRuntime =
           timeoutMs: config.WEB_PUSH_TIMEOUT_MS,
           circuitFailureThreshold: config.WEB_PUSH_CIRCUIT_FAILURE_THRESHOLD,
           circuitResetMs: config.WEB_PUSH_CIRCUIT_RESET_MS,
+          allowedEndpointOrigins:
+            config.WEB_PUSH_ALLOWED_ENDPOINT_ORIGINS.split(',').filter(Boolean),
+          onProviderOutcome: (outcome) =>
+            workerMetrics.recordWebPushProviderOutcome(config.WEB_PUSH_ENVIRONMENT, outcome),
         }),
       }
     : undefined;
@@ -340,13 +356,30 @@ if (giftCertificateRuntime) {
 
 let shuttingDown = false;
 let rabbitReady = true;
-const workerMetrics = createWorkerMetricRecorder();
 const workerForwardProgress = new WorkerForwardProgressTracker(
   calculateWorkerForwardProgressMaxStaleMs({
     pollIntervalMs: config.OUTBOX_POLL_INTERVAL_MS,
     confirmTimeoutMs: config.OUTBOX_CONFIRM_TIMEOUT_MS,
   }),
 );
+const webPushForwardProgress = webPushRuntime
+  ? new WorkerForwardProgressTracker(
+      calculateWorkerForwardProgressMaxStaleMs({
+        pollIntervalMs: config.WEB_PUSH_POLL_INTERVAL_MS,
+        confirmTimeoutMs: config.WEB_PUSH_TIMEOUT_MS,
+      }),
+    )
+  : undefined;
+const bookingReminderForwardProgress = config.BOOKING_REMINDER_SCHEDULER_ENABLED
+  ? new WorkerForwardProgressTracker(
+      calculateWorkerForwardProgressMaxStaleMs({
+        pollIntervalMs: config.BOOKING_REMINDER_POLL_INTERVAL_MS,
+        confirmTimeoutMs: config.BOOKING_REMINDER_CLAIM_TTL_MS,
+      }),
+    )
+  : undefined;
+let webPushTenantFailuresLastCycle = 0;
+let webPushRoundsLastCycle = 0;
 const handleRabbitFailure = createRabbitFailureHandler({
   logger,
   isShuttingDown: () => shuttingDown,
@@ -408,6 +441,8 @@ const handleHealthRequest = async (
           : Promise.resolve(true),
       ]);
     const forwardProgress = workerForwardProgress.snapshot();
+    const webPushProgress = webPushForwardProgress?.snapshot();
+    const bookingReminderProgress = bookingReminderForwardProgress?.snapshot();
     const checks = {
       database: databaseReady,
       rabbitmq: rabbitReady,
@@ -415,6 +450,8 @@ const handleHealthRequest = async (
       communityMedia: communityMediaReady,
       profileMedia: profileMediaReady,
       forwardProgress: forwardProgress.ready,
+      webPushForwardProgress: webPushProgress?.ready ?? true,
+      bookingReminderForwardProgress: bookingReminderProgress?.ready ?? true,
     };
     response.statusCode = Object.values(checks).every(Boolean) ? 200 : 503;
     response.end(
@@ -422,6 +459,22 @@ const handleHealthRequest = async (
         status: response.statusCode === 200 ? 'ready' : 'not_ready',
         checks,
         coreCycle: forwardProgress,
+        ...(runtimeContourAttestation ? { runtimeContour: runtimeContourAttestation } : {}),
+        ...(webPushProgress
+          ? {
+              webPushCycle: {
+                ...webPushProgress,
+                degraded: webPushTenantFailuresLastCycle > 0,
+                tenantFailuresLastCycle: webPushTenantFailuresLastCycle,
+                roundsLastCycle: webPushRoundsLastCycle,
+              },
+            }
+          : {}),
+        ...(bookingReminderProgress
+          ? {
+              bookingReminderCycle: bookingReminderProgress,
+            }
+          : {}),
       }),
     );
     return;
@@ -441,6 +494,8 @@ logger.info(
   'outbox publisher configured',
 );
 let tenantCycleStartOffset = 0;
+let webPushTenantCycleStartOffset = 0;
+let bookingReminderTenantCycleStartOffset = 0;
 
 const publishConfiguredOutboxBatch = (tenantId: string): Promise<number> => {
   if (config.OUTBOX_PUBLISH_MODE === 'leased') {
@@ -678,28 +733,121 @@ const runCommunityMedia = async (): Promise<void> => {
   }
 };
 
-const runWebPushCycle = async (): Promise<void> => {
-  if (shuttingDown || !webPushRuntime) return;
+const runBookingReminderCycle = async (): Promise<void> => {
+  if (shuttingDown || !config.BOOKING_REMINDER_SCHEDULER_ENABLED) return;
+  const startedAt = Date.now();
+  let emitted = 0;
+  let missed = 0;
+  let failed = false;
+  bookingReminderForwardProgress?.markCycleStarted(startedAt);
   try {
     const tenants = await pool.query<{ id: string }>(
-      'select id from identity.tenants where active = true',
+      'select id from identity.tenants where active = true order by id',
     );
-    for (const tenant of tenants.rows) {
-      await runWebPushDeliveryBatch({
-        pool,
-        logger,
-        tenantId: tenant.id,
-        appId: config.WEB_PUSH_APP_ID,
-        environment: config.WEB_PUSH_ENVIRONMENT,
-        cipher: webPushRuntime.cipher,
-        adapter: webPushRuntime.adapter,
-        maxAttempts: config.WEB_PUSH_MAX_ATTEMPTS,
-        retryBaseMs: config.WEB_PUSH_RETRY_BASE_MS,
-      });
+    bookingReminderForwardProgress?.markProgress();
+    const tenantCycle = await runFairTenantCycle({
+      tenants: tenants.rows,
+      startOffset: bookingReminderTenantCycleStartOffset,
+      shouldStop: () => shuttingDown,
+      runTenant: async (tenant) => {
+        const result = await runBookingReminderSchedulerBatch({
+          pool,
+          tenantId: tenant.id,
+          batchSize: config.BOOKING_REMINDER_BATCH_SIZE,
+          claimTtlMs: config.BOOKING_REMINDER_CLAIM_TTL_MS,
+          databaseTimeoutMs: config.BOOKING_REMINDER_DATABASE_TIMEOUT_MS,
+          maxHours24LatenessMs: config.BOOKING_REMINDER_HOURS_24_MAX_LATENESS_MS,
+          maxHours2LatenessMs: config.BOOKING_REMINDER_HOURS_2_MAX_LATENESS_MS,
+        });
+        emitted += result.emitted;
+        missed += result.missed;
+      },
+      onTenantFailure: (tenant, error) => {
+        logger.error(
+          { err: error, tenantId: tenant.id },
+          'booking reminder scheduler tenant cycle failed',
+        );
+      },
+      onProgress: () => bookingReminderForwardProgress?.markProgress(),
+    });
+    bookingReminderTenantCycleStartOffset = tenantCycle.nextStartOffset;
+    failed = tenantCycle.failedCount > 0 || tenantCycle.interrupted;
+    if (failed) bookingReminderForwardProgress?.markCycleFailed();
+    else bookingReminderForwardProgress?.markCycleSucceeded();
+    if (emitted > 0 || missed > 0) {
+      logger.info({ emitted, missed }, 'booking reminder scheduler cycle completed');
     }
   } catch (error) {
+    failed = true;
+    bookingReminderForwardProgress?.markCycleFailed();
+    logger.error({ error }, 'booking reminder scheduler cycle failed');
+  } finally {
+    workerMetrics.recordBookingReminderSchedulerCycle(
+      emitted,
+      missed,
+      Date.now() - startedAt,
+      failed,
+    );
+    if (!shuttingDown) {
+      setTimeout(() => void runBookingReminderCycle(), config.BOOKING_REMINDER_POLL_INTERVAL_MS);
+    }
+  }
+};
+
+const runWebPushCycle = async (): Promise<void> => {
+  if (shuttingDown || !webPushRuntime) return;
+  const startedAt = Date.now();
+  let failed = false;
+  webPushForwardProgress?.markCycleStarted();
+  try {
+    const tenantCycle = await runWebPushTenantCycle({
+      pool,
+      startOffset: webPushTenantCycleStartOffset,
+      maxDeliveriesPerTenant: config.WEB_PUSH_BATCH_SIZE,
+      shouldStop: () => shuttingDown,
+      runTenant: async (tenantId) => {
+        const batch = await runWebPushDeliveryBatch({
+          pool,
+          logger,
+          tenantId,
+          appId: config.WEB_PUSH_APP_ID,
+          environment: config.WEB_PUSH_ENVIRONMENT,
+          cipher: webPushRuntime.cipher,
+          adapter: webPushRuntime.adapter,
+          maxAttempts: config.WEB_PUSH_MAX_ATTEMPTS,
+          retryBaseMs: config.WEB_PUSH_RETRY_BASE_MS,
+          circuitOpenRetryMs: config.WEB_PUSH_CIRCUIT_RESET_MS,
+          batchSize: 1,
+        });
+        return batch.claimed;
+      },
+      onTenantFailure: (tenantId, error) => {
+        logger.error({ err: error, tenantId }, 'Web Push tenant delivery failed');
+      },
+      onProgress: () => webPushForwardProgress?.markProgress(),
+    });
+    webPushTenantCycleStartOffset = tenantCycle.nextStartOffset;
+    webPushTenantFailuresLastCycle = tenantCycle.failedCount;
+    webPushRoundsLastCycle = tenantCycle.rounds;
+    if (tenantCycle.interrupted) {
+      failed = true;
+      webPushForwardProgress?.markCycleFailed();
+    } else {
+      webPushForwardProgress?.markCycleSucceeded();
+    }
+  } catch (error) {
+    failed = true;
+    webPushTenantFailuresLastCycle = 0;
+    webPushRoundsLastCycle = 0;
+    webPushForwardProgress?.markCycleFailed();
     logger.error({ error }, 'Web Push delivery cycle failed');
   } finally {
+    workerMetrics.recordWebPushCycle(
+      webPushTenantFailuresLastCycle,
+      webPushRoundsLastCycle,
+      Date.now() - startedAt,
+      failed,
+    );
     if (!shuttingDown) {
       setTimeout(() => void runWebPushCycle(), config.WEB_PUSH_POLL_INTERVAL_MS);
     }
@@ -976,6 +1124,7 @@ async function shutdown(signal: string, exitCode = 0): Promise<void> {
 process.once('SIGTERM', () => void shutdown('SIGTERM'));
 process.once('SIGINT', () => void shutdown('SIGINT'));
 void runCycle();
+void runBookingReminderCycle();
 if (telemetry) void runOperationalMetricsCycle();
 void runVivaSyncCycle();
 void runProfilePhotoMaintenance();

@@ -81,6 +81,7 @@ export function registerMessagingRoutes(
   options: {
     readonly repository?: MessagingRepository;
     readonly realtimeTicketIssuer?: RealtimeTicketIssuer;
+    readonly userBlockCommandsEnabled: boolean;
     readonly authenticatedTenantHandlers: readonly preHandlerHookHandler[];
     readonly directCommandHandlers: readonly preHandlerHookHandler[];
     readonly contextualCommandHandlers: readonly preHandlerHookHandler[];
@@ -153,6 +154,82 @@ export function registerMessagingRoutes(
       return { ticket: issued.ticket, expiresAt: issued.expiresAt };
     },
   );
+
+  for (const [method, action] of [
+    ['put', 'BLOCK'],
+    ['delete', 'UNBLOCK'],
+  ] as const) {
+    app[method](
+      '/user/api/v1/:tenantKey/messaging/users/:otherUserId/block',
+      { preHandler: [...options.directCommandHandlers] },
+      async (request, reply) => {
+        reply.header('Cache-Control', 'no-store');
+        const current = principal(request);
+        if (!current) {
+          return sendApiError(request, reply, 401, 'AUTH_REQUIRED', 'Требуется авторизация.');
+        }
+        if (!options.userBlockCommandsEnabled) {
+          return sendApiError(
+            request,
+            reply,
+            404,
+            'USER_BLOCK_COMMANDS_DISABLED',
+            'Блокировка пользователей пока не включена.',
+          );
+        }
+        if (!options.repository) return unavailable(request, reply);
+        if (
+          !(await requireMessagingGate(
+            request,
+            reply,
+            options.repository,
+            current.tenantId,
+            'DIRECT',
+          ))
+        ) {
+          return;
+        }
+        const otherUserId = (request.params as { otherUserId?: string }).otherUserId;
+        if (!otherUserId || !UUID_PATTERN.test(otherUserId) || otherUserId === current.userId) {
+          return sendApiError(
+            request,
+            reply,
+            400,
+            'USER_BLOCK_INVALID',
+            'Не указан корректный пользователь.',
+          );
+        }
+        const result = await options.repository.setUserBlock({
+          tenantId: current.tenantId,
+          actorUserId: current.userId,
+          otherUserId,
+          action,
+          idempotencyKey: request.headers['idempotency-key'] as string,
+          correlationId: request.id,
+        });
+        if (result.outcome === 'forbidden') {
+          return sendApiError(
+            request,
+            reply,
+            403,
+            'CHAT_PERMISSION_REQUIRED',
+            'Нет права на операцию с чатом.',
+          );
+        }
+        if (result.outcome === 'target_not_found') {
+          return sendApiError(
+            request,
+            reply,
+            404,
+            'CHAT_PARTICIPANT_NOT_FOUND',
+            'Участник диалога не найден.',
+          );
+        }
+        if (result.outcome === 'idempotency_conflict') return conflict(request, reply);
+        return result;
+      },
+    );
+  }
 
   app.get(
     '/user/api/v1/:tenantKey/conversations',

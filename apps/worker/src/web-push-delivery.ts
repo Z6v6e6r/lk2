@@ -8,7 +8,10 @@ import {
 import type { Logger } from 'pino';
 import type { Pool, QueryResultRow } from 'pg';
 
-import { finalizeNotificationDelivery } from './notification-delivery-finalizer.js';
+import {
+  deferNotificationDeliveryWithoutAttempt,
+  finalizeNotificationDelivery,
+} from './notification-delivery-finalizer.js';
 
 export {
   notificationRetryDelayMs as webPushRetryDelayMs,
@@ -20,7 +23,7 @@ interface DeliveryRow extends QueryResultRow {
   readonly intent_id: string;
   readonly provider_account_id: string;
   readonly endpoint_id: string;
-  readonly endpoint_status: 'ACTIVE' | 'INVALID' | 'REVOKED';
+  readonly endpoint_status: 'ACTIVE' | 'INVALID' | 'REVOKED' | 'SUSPENDED_POLICY';
   readonly address_ciphertext: Buffer;
   readonly encryption_key_id: string;
   readonly notification_id: string;
@@ -34,7 +37,7 @@ interface ClaimedDelivery {
   readonly intentId: string;
   readonly providerAccountId: string;
   readonly endpointId: string;
-  readonly endpointStatus: 'ACTIVE' | 'INVALID' | 'REVOKED';
+  readonly endpointStatus: 'ACTIVE' | 'INVALID' | 'REVOKED' | 'SUSPENDED_POLICY';
   readonly addressCiphertext: Buffer;
   readonly encryptionKeyId: string;
   readonly notificationId: string;
@@ -79,6 +82,9 @@ async function claimBatch(options: {
           and a.app_id = $2
           and a.environment = $3
           and a.status = 'ACTIVE'
+          -- INVALID/REVOKED jobs are claimed only to terminalize retained delivery references
+          -- without a provider call. SUSPENDED_POLICY remains pending for reversible review.
+          and e.status in ('ACTIVE', 'INVALID', 'REVOKED')
           and exists (
             select 1
               from notifications.tenant_runtime_settings runtime
@@ -130,6 +136,7 @@ export async function runWebPushDeliveryBatch(options: {
   readonly adapter: NotificationPushDeliveryPort;
   readonly maxAttempts: number;
   readonly retryBaseMs: number;
+  readonly circuitOpenRetryMs?: number;
   readonly batchSize?: number;
 }): Promise<{
   readonly claimed: number;
@@ -183,15 +190,23 @@ export async function runWebPushDeliveryBatch(options: {
         };
       }
     }
-    const outcome = await finalizeNotificationDelivery({
-      pool: options.pool,
-      job,
-      result,
-      platform: 'WEB',
-      transport: 'WEB_PUSH',
-      maxAttempts: options.maxAttempts,
-      retryBaseMs: options.retryBaseMs,
-    });
+    const outcome =
+      result.outcome === 'retryable_failure' && result.errorCode === 'WEB_PUSH_CIRCUIT_OPEN'
+        ? await deferNotificationDeliveryWithoutAttempt({
+            pool: options.pool,
+            job,
+            retryAfterMs: options.circuitOpenRetryMs ?? 30_000,
+            errorCode: 'WEB_PUSH_CIRCUIT_OPEN',
+          })
+        : await finalizeNotificationDelivery({
+            pool: options.pool,
+            job,
+            result,
+            platform: 'WEB',
+            transport: 'WEB_PUSH',
+            maxAttempts: options.maxAttempts,
+            retryBaseMs: options.retryBaseMs,
+          });
     if (outcome === 'sent') sent += 1;
     else if (outcome === 'retry') retried += 1;
     else if (outcome === 'dead') dead += 1;

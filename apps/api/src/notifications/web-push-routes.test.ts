@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import { loadConfig } from '@phub/config';
 import type { NotificationEndpointRepository } from '@phub/database';
 import { createNotificationEndpointCipher } from '@phub/notifications';
@@ -22,6 +24,7 @@ const config = loadConfig({
   WEB_PUSH_VAPID_SUBJECT: 'mailto:ops@padlhub.test',
   WEB_PUSH_VAPID_PUBLIC_KEY: 'test-public-vapid-key',
   WEB_PUSH_VAPID_PRIVATE_KEY: 'test-private-vapid-key',
+  WEB_PUSH_ALLOWED_ENDPOINT_ORIGINS: 'https://push.example.test',
   NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS: endpointKeyring,
 });
 
@@ -118,20 +121,21 @@ describe('Web Push endpoint User API', () => {
       registerWebPush,
       revokeWebPush,
     };
+    const cipher = createNotificationEndpointCipher({
+      serializedKeys: endpointKeyring,
+      activeKeyId: 'v1',
+    });
     const app = await buildApp({
       config,
       logger: createLogger('web-push-api-test', 'silent'),
       pool: fakePool(),
       notificationEndpointRepository: repository,
-      notificationEndpointCipher: createNotificationEndpointCipher({
-        serializedKeys: endpointKeyring,
-        activeKeyId: 'v1',
-      }),
+      notificationEndpointCipher: cipher,
     });
     apps.push(app);
     const authorization = `Bearer ${await accessToken()}`;
     const subscription = {
-      endpoint: 'https://push.example.test/subscriptions/secret',
+      endpoint: 'https://PUSH.EXAMPLE.TEST:443/subscriptions/secret',
       expirationTime: null,
       keys: { p256dh: 'B'.repeat(65), auth: 'a'.repeat(22) },
     };
@@ -143,9 +147,18 @@ describe('Web Push endpoint User API', () => {
       payload: { installationId, subscription },
     });
     expect(registered.statusCode).toBe(200);
-    const input = registerWebPush.mock.calls[0]?.[0] as { ciphertext: Buffer; addressHash: string };
+    const input = registerWebPush.mock.calls[0]?.[0] as {
+      ciphertext: Buffer;
+      addressHash: string;
+      encryptionKeyId: string;
+    };
     expect(input.ciphertext.toString('utf8')).not.toContain(subscription.endpoint);
-    expect(input.addressHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(input.addressHash).toBe(
+      createHash('sha256').update('https://push.example.test/subscriptions/secret').digest('hex'),
+    );
+    expect(cipher.decrypt(input.ciphertext, input.encryptionKeyId)).toContain(
+      '"endpoint":"https://push.example.test/subscriptions/secret"',
+    );
 
     const revoked = await app.inject({
       method: 'DELETE',
@@ -189,5 +202,107 @@ describe('Web Push endpoint User API', () => {
 
     expect(response.statusCode).toBe(200);
     expect(revokeWebPush).toHaveBeenCalledOnce();
+  });
+
+  it('rejects untrusted origins and canonical endpoints that exceed the storage bound', async () => {
+    const registerWebPush = vi.fn();
+    const app = await buildApp({
+      config,
+      logger: createLogger('web-push-api-test', 'silent'),
+      pool: fakePool(),
+      notificationEndpointRepository: {
+        getWebPushCapabilities: vi.fn().mockResolvedValue({
+          tenantEnabled: true,
+          providerConfigured: true,
+        }),
+        registerWebPush,
+        revokeWebPush: vi.fn(),
+      },
+      notificationEndpointCipher: createNotificationEndpointCipher({
+        serializedKeys: endpointKeyring,
+        activeKeyId: 'v1',
+      }),
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/user/api/v1/local-padel/notification-endpoints/web',
+      headers: {
+        authorization: `Bearer ${await accessToken()}`,
+        'idempotency-key': 'web-push-untrusted-origin-0001',
+      },
+      payload: {
+        installationId,
+        subscription: {
+          endpoint: 'https://127.0.0.1/internal-capability',
+          expirationTime: null,
+          keys: { p256dh: 'B'.repeat(65), auth: 'a'.repeat(22) },
+        },
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({ code: 'WEB_PUSH_SUBSCRIPTION_INVALID' });
+    const expandedResponse = await app.inject({
+      method: 'POST',
+      url: '/user/api/v1/local-padel/notification-endpoints/web',
+      headers: {
+        authorization: `Bearer ${await accessToken()}`,
+        'idempotency-key': 'web-push-expanded-endpoint-0001',
+      },
+      payload: {
+        installationId,
+        subscription: {
+          endpoint: `https://push.example.test/${'é'.repeat(900)}`,
+          expirationTime: null,
+          keys: { p256dh: 'B'.repeat(65), auth: 'a'.repeat(22) },
+        },
+      },
+    });
+    expect(expandedResponse.statusCode).toBe(400);
+    expect(expandedResponse.json()).toMatchObject({ code: 'WEB_PUSH_SUBSCRIPTION_INVALID' });
+    expect(registerWebPush).not.toHaveBeenCalled();
+  });
+
+  it('maps a repository quota rejection to a stable conflict error', async () => {
+    const app = await buildApp({
+      config,
+      logger: createLogger('web-push-api-test', 'silent'),
+      pool: fakePool(),
+      notificationEndpointRepository: {
+        getWebPushCapabilities: vi.fn().mockResolvedValue({
+          tenantEnabled: true,
+          providerConfigured: true,
+        }),
+        registerWebPush: vi.fn().mockResolvedValue({ outcome: 'endpoint_limit_reached' }),
+        revokeWebPush: vi.fn(),
+      },
+      notificationEndpointCipher: createNotificationEndpointCipher({
+        serializedKeys: endpointKeyring,
+        activeKeyId: 'v1',
+      }),
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/user/api/v1/local-padel/notification-endpoints/web',
+      headers: {
+        authorization: `Bearer ${await accessToken()}`,
+        'idempotency-key': 'web-push-register-quota-0001',
+      },
+      payload: {
+        installationId,
+        subscription: {
+          endpoint: 'https://push.example.test/subscriptions/quota',
+          expirationTime: null,
+          keys: { p256dh: 'B'.repeat(65), auth: 'a'.repeat(22) },
+        },
+      },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({ code: 'WEB_PUSH_ENDPOINT_LIMIT_REACHED' });
   });
 });

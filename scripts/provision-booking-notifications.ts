@@ -1,59 +1,32 @@
-import { createHash } from 'node:crypto';
-
 import { createDatabasePool, queryOne, withTenantTransaction } from '@phub/database';
+import {
+  BOOKING_NOTIFICATION_AUDIENCE_SELECTOR,
+  BOOKING_NOTIFICATION_DEFINITIONS,
+  BOOKING_NOTIFICATION_LOCALE,
+  BOOKING_NOTIFICATION_REQUEST_HASH,
+  BOOKING_NOTIFICATION_RULE_ACTIVE,
+  BOOKING_NOTIFICATION_RULE_CHANNEL_OVERRIDE,
+  BOOKING_NOTIFICATION_RULE_KEY_SUFFIX,
+  BOOKING_NOTIFICATION_RULESET_VERSION,
+  BOOKING_NOTIFICATION_TEMPLATE_CATEGORY,
+  BOOKING_NOTIFICATION_TEMPLATE_CHANNELS,
+  BOOKING_NOTIFICATION_TEMPLATE_DEEP_LINK,
+  BOOKING_NOTIFICATION_TEMPLATE_ACTIVE,
+  BOOKING_NOTIFICATION_TEMPLATE_VERSION,
+} from '@phub/notifications';
 import type { PoolClient, QueryResultRow } from 'pg';
 
 const CONFIRMATION_TOKEN = 'APPLY_BOOKING_NOTIFICATION_RULESET';
-const RULESET_VERSION = 'booking.ru-ru.v2';
-const TEMPLATE_VERSION = 2;
-const LOCALE = 'ru-RU';
-const TEMPLATE_DEEP_LINK = '/bookings';
+const RULESET_VERSION = BOOKING_NOTIFICATION_RULESET_VERSION;
+const TEMPLATE_VERSION = BOOKING_NOTIFICATION_TEMPLATE_VERSION;
+const LOCALE = BOOKING_NOTIFICATION_LOCALE;
+const TEMPLATE_DEEP_LINK = BOOKING_NOTIFICATION_TEMPLATE_DEEP_LINK;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const TENANT_KEY_PATTERN = /^[a-z0-9][a-z0-9-]{1,62}$/;
 const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9._:-]{16,128}$/;
 
-const definitions = [
-  {
-    key: 'booking.confirmed',
-    sourceEventType: 'booking.confirmed.v1',
-    title: 'Запись подтверждена',
-    body: '{{serviceTitle}}: {{startsAt}}, {{locationName}}',
-    mandatory: true,
-  },
-  {
-    key: 'booking.changed',
-    sourceEventType: 'booking.changed.v1',
-    title: 'Запись изменена',
-    body: '{{serviceTitle}}: новое время {{startsAt}}, {{locationName}}',
-    mandatory: true,
-  },
-  {
-    key: 'booking.cancelled',
-    sourceEventType: 'booking.cancelled.v1',
-    title: 'Запись отменена',
-    body: '{{serviceTitle}}: {{startsAt}}, {{locationName}}',
-    mandatory: true,
-  },
-  {
-    key: 'booking.reminder',
-    sourceEventType: 'booking.reminder.due.v1',
-    title: 'Напоминание о записи',
-    body: '{{serviceTitle}} начнётся {{startsAt}}, {{locationName}}',
-    mandatory: false,
-  },
-] as const;
-
-const requestHash = createHash('sha256')
-  .update(
-    JSON.stringify({
-      rulesetVersion: RULESET_VERSION,
-      templateVersion: TEMPLATE_VERSION,
-      locale: LOCALE,
-      deepLink: TEMPLATE_DEEP_LINK,
-      definitions,
-    }),
-  )
-  .digest('hex');
+const definitions = BOOKING_NOTIFICATION_DEFINITIONS;
+const requestHash = BOOKING_NOTIFICATION_REQUEST_HASH;
 
 interface TenantRow extends QueryResultRow {
   readonly id: string;
@@ -93,8 +66,8 @@ function argument(name: string): string | undefined {
 
 function templateMatches(row: TemplateRow, definition: (typeof definitions)[number]): boolean {
   return (
-    row.category === 'BOOKING' &&
-    JSON.stringify(row.channels) === JSON.stringify(['IN_APP', 'PUSH']) &&
+    row.category === BOOKING_NOTIFICATION_TEMPLATE_CATEGORY &&
+    JSON.stringify(row.channels) === JSON.stringify(BOOKING_NOTIFICATION_TEMPLATE_CHANNELS) &&
     row.title_template === definition.title &&
     row.body_template === definition.body &&
     row.deep_link_template === TEMPLATE_DEEP_LINK
@@ -196,6 +169,9 @@ try {
   } else {
     const result = await withTenantTransaction(pool, tenantId, async (client) => {
       await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
+        `notification-runtime:${tenantId}`,
+      ]);
+      await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
         `notification-ruleset:${tenantId}:${RULESET_VERSION}`,
       ]);
       await assertNotificationAdminAccess(client, tenantId, actorId);
@@ -220,18 +196,29 @@ try {
           `insert into notifications.templates (
              tenant_id, template_key, version, locale, category, channels,
              title_template, body_template, deep_link_template, active, created_by_user_id
-           ) values ($1, $2, 2, $3, 'BOOKING', array['IN_APP', 'PUSH']::text[],
-                     $4, $5, '/bookings', false, $6)
+           ) values ($1, $2, $3, $4, $5, $6::text[], $7, $8, $9, $10, $11)
            on conflict (tenant_id, template_key, version, locale) do nothing`,
-          [tenantId, definition.key, LOCALE, definition.title, definition.body, actorId],
+          [
+            tenantId,
+            definition.key,
+            TEMPLATE_VERSION,
+            LOCALE,
+            BOOKING_NOTIFICATION_TEMPLATE_CATEGORY,
+            [...BOOKING_NOTIFICATION_TEMPLATE_CHANNELS],
+            definition.title,
+            definition.body,
+            TEMPLATE_DEEP_LINK,
+            BOOKING_NOTIFICATION_TEMPLATE_ACTIVE,
+            actorId,
+          ],
         );
         const template = await queryOne<TemplateRow>(
           client,
           `select id, category, channels, title_template, body_template, deep_link_template
              from notifications.templates
-            where tenant_id = $1 and template_key = $2 and version = 2 and locale = $3
+            where tenant_id = $1 and template_key = $2 and version = $3 and locale = $4
             for update`,
-          [tenantId, definition.key, LOCALE],
+          [tenantId, definition.key, TEMPLATE_VERSION, LOCALE],
         );
         if (!template) throw new Error('BOOKING_NOTIFICATION_TEMPLATE_WRITE_LOST');
         if (!templateMatches(template, definition)) {
@@ -245,9 +232,9 @@ try {
           [tenantId, definition.key, LOCALE, template.id],
         );
         await client.query(
-          `update notifications.templates set active = true
+          `update notifications.templates set active = $3
             where tenant_id = $1 and id = $2`,
-          [tenantId, template.id],
+          [tenantId, template.id, BOOKING_NOTIFICATION_TEMPLATE_ACTIVE],
         );
         templateIds.push(template.id);
 
@@ -256,9 +243,7 @@ try {
           `insert into notifications.trigger_rules (
              tenant_id, rule_key, source_event_type, template_id, audience_selector,
              channel_override, mandatory, active, created_by_user_id
-           ) values ($1, $2, $3, $4,
-                     '{"type":"EVENT_USERS","field":"recipientUserIds"}'::jsonb,
-                     array['IN_APP', 'PUSH']::text[], $5, true, $6)
+           ) values ($1, $2, $3, $4, $5::jsonb, $6::text[], $7, $8, $9)
            on conflict (tenant_id, rule_key) do update set
              source_event_type = excluded.source_event_type,
              template_id = excluded.template_id,
@@ -270,10 +255,13 @@ try {
           returning id`,
           [
             tenantId,
-            `${definition.key}.default`,
+            `${definition.key}.${BOOKING_NOTIFICATION_RULE_KEY_SUFFIX}`,
             definition.sourceEventType,
             template.id,
+            JSON.stringify(BOOKING_NOTIFICATION_AUDIENCE_SELECTOR),
+            [...BOOKING_NOTIFICATION_RULE_CHANNEL_OVERRIDE],
             definition.mandatory,
+            BOOKING_NOTIFICATION_RULE_ACTIVE,
             actorId,
           ],
         );

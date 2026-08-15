@@ -1,4 +1,6 @@
-import type { NotificationSourceEvent } from '@phub/notifications';
+import { createHash } from 'node:crypto';
+
+import type { BookingNotificationSourceEvent, NotificationSourceEvent } from '@phub/notifications';
 import { describe, expect, it, vi } from 'vitest';
 
 import { applyNotificationSourceEvent } from './notification-projector.js';
@@ -171,6 +173,16 @@ describe('notification intent projector', () => {
       if (text.includes('insert into audit.inbox_events')) {
         return Promise.resolve({ rows: [{ event_id: cancellationEvent.id }], rowCount: 1 });
       }
+      if (text.includes('pg_advisory_xact_lock')) return Promise.resolve({ rows: [], rowCount: 1 });
+      if (text.includes('from notifications.booking_notification_projection_fences')) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('insert into notifications.booking_notification_projection_fences')) {
+        return Promise.resolve({ rows: [], rowCount: 1 });
+      }
+      if (text.includes('notifications.booking_reminder_schedules')) {
+        return Promise.resolve({ rows: [], rowCount: 2 });
+      }
       if (text.includes('from notifications.tenant_runtime_settings')) {
         return Promise.resolve({ rows: [{ in_app_enabled: true }], rowCount: 1 });
       }
@@ -249,5 +261,355 @@ describe('notification intent projector', () => {
       ),
     ).toHaveLength(2);
     expect(release).toHaveBeenCalledOnce();
+  });
+});
+
+const bookingEvent = (
+  overrides: Partial<BookingNotificationSourceEvent> = {},
+): BookingNotificationSourceEvent =>
+  ({
+    id: '91111111-1111-4111-8111-111111111111',
+    type: 'booking.changed.v1',
+    aggregateId: '92222222-2222-4222-8222-222222222222',
+    tenantId,
+    occurredAt: '2026-08-14T12:00:00.000Z',
+    correlationId: 'booking-fence-worker-test',
+    payload: {
+      bookingId: '92222222-2222-4222-8222-222222222222',
+      revision: '3',
+      recipientUserIds: [userId],
+      serviceTitle: 'Падел',
+      startsAt: '2026-08-15T19:00:00+03:00',
+      timezone: 'Europe/Moscow',
+      locationName: 'ПаделхАБ',
+      changedFields: ['STARTS_AT'],
+    },
+    ...overrides,
+  }) as BookingNotificationSourceEvent;
+
+function fingerprint(event: BookingNotificationSourceEvent): string {
+  const payload = event.payload as Readonly<Record<string, unknown>>;
+  return createHash('sha256')
+    .update(
+      JSON.stringify({
+        type: event.type,
+        payload: Object.fromEntries(
+          Object.entries(payload)
+            .sort(([left], [right]) => left.localeCompare(right))
+            .map(([key, value]) => [
+              key,
+              Array.isArray(value) && (key === 'recipientUserIds' || key === 'changedFields')
+                ? [...(value as readonly string[])].sort()
+                : value,
+            ]),
+        ),
+      }),
+    )
+    .digest('hex');
+}
+
+function fencePool(options: {
+  readonly event: BookingNotificationSourceEvent;
+  readonly fence?: Record<string, string | null>;
+  readonly runtimeEnabled?: boolean;
+  readonly onQuery?: (text: string) => void;
+}) {
+  const query = vi.fn((text: string) => {
+    options.onQuery?.(text);
+    if (
+      text === 'begin' ||
+      text === 'commit' ||
+      text === 'rollback' ||
+      text.includes('set_config')
+    ) {
+      return Promise.resolve({ rows: [], rowCount: 0 });
+    }
+    if (text.includes('insert into audit.inbox_events')) {
+      return Promise.resolve({ rows: [{ event_id: options.event.id }], rowCount: 1 });
+    }
+    if (text.includes('pg_advisory_xact_lock')) return Promise.resolve({ rows: [], rowCount: 1 });
+    if (text.includes('from notifications.booking_notification_projection_fences')) {
+      return Promise.resolve({
+        rows: options.fence ? [options.fence] : [],
+        rowCount: options.fence ? 1 : 0,
+      });
+    }
+    if (
+      text.includes('insert into notifications.booking_notification_projection_fences') ||
+      text.includes('update notifications.booking_notification_projection_fences') ||
+      text.includes('notifications.booking_reminder_schedules') ||
+      text.includes('notifications.booking_reminder_recipients') ||
+      text.includes('update audit.inbox_events')
+    ) {
+      return Promise.resolve({ rows: [], rowCount: 1 });
+    }
+    if (text.includes('from notifications.tenant_runtime_settings')) {
+      return Promise.resolve({
+        rows: options.runtimeEnabled ? [{ in_app_enabled: true, web_push_enabled: false }] : [],
+        rowCount: options.runtimeEnabled ? 1 : 0,
+      });
+    }
+    throw new Error(`Unexpected query: ${text}`);
+  });
+  return { pool: { connect: vi.fn().mockResolvedValue({ query, release: vi.fn() }) }, query };
+}
+
+describe('booking notification projection fence', () => {
+  it('acknowledges stale and equal semantic lifecycle events without creating intents', async () => {
+    const event = bookingEvent();
+    const stale = fencePool({
+      event,
+      fence: {
+        lifecycle_revision: '4',
+        lifecycle_event_type: event.type,
+        lifecycle_fingerprint: fingerprint(event),
+        reminder_hours_24_fingerprint: null,
+        reminder_hours_2_fingerprint: null,
+      },
+    });
+    await expect(
+      applyNotificationSourceEvent({ pool: stale.pool as never, event }),
+    ).resolves.toEqual({
+      outcome: 'stale',
+    });
+    expect(
+      stale.query.mock.calls.some(([text]) => String(text).includes('notifications.intents')),
+    ).toBe(false);
+
+    const replay = fencePool({
+      event,
+      fence: {
+        lifecycle_revision: '3',
+        lifecycle_event_type: event.type,
+        lifecycle_fingerprint: fingerprint(event),
+        reminder_hours_24_fingerprint: null,
+        reminder_hours_2_fingerprint: null,
+      },
+    });
+    await expect(
+      applyNotificationSourceEvent({ pool: replay.pool as never, event }),
+    ).resolves.toEqual({
+      outcome: 'duplicate',
+    });
+  });
+
+  it('terminally rejects equal revision conflicts and advances higher lifecycle revisions', async () => {
+    const event = bookingEvent();
+    const conflict = fencePool({
+      event,
+      fence: {
+        lifecycle_revision: '3',
+        lifecycle_event_type: 'booking.confirmed.v1',
+        lifecycle_fingerprint: 'a'.repeat(64),
+        reminder_hours_24_fingerprint: null,
+        reminder_hours_2_fingerprint: null,
+      },
+    });
+    await expect(
+      applyNotificationSourceEvent({ pool: conflict.pool as never, event }),
+    ).resolves.toEqual({
+      outcome: 'revision_conflict',
+    });
+    expect(conflict.query).toHaveBeenCalledWith('rollback');
+    expect(conflict.query).not.toHaveBeenCalledWith('commit');
+    expect(
+      conflict.query.mock.calls.some(([text]) =>
+        String(text).includes('update audit.inbox_events'),
+      ),
+    ).toBe(false);
+
+    const advancedEvent = bookingEvent({ payload: { ...event.payload, revision: '4' } });
+    const advanced = fencePool({
+      event: advancedEvent,
+      fence: {
+        lifecycle_revision: '3',
+        lifecycle_event_type: 'booking.confirmed.v1',
+        lifecycle_fingerprint: 'a'.repeat(64),
+        reminder_hours_24_fingerprint: 'b'.repeat(64),
+        reminder_hours_2_fingerprint: 'c'.repeat(64),
+      },
+    });
+    await expect(
+      applyNotificationSourceEvent({ pool: advanced.pool as never, event: advancedEvent }),
+    ).resolves.toEqual({ outcome: 'disabled' });
+    expect(
+      advanced.query.mock.calls.some(([text]) =>
+        String(text).includes('reminder_hours_24_fingerprint = null'),
+      ),
+    ).toBe(true);
+  });
+
+  it('persists an accepted lifecycle fence while runtime delivery is disabled', async () => {
+    const event = bookingEvent();
+    const fixture = fencePool({ event });
+    await expect(
+      applyNotificationSourceEvent({ pool: fixture.pool as never, event }),
+    ).resolves.toEqual({
+      outcome: 'disabled',
+    });
+    expect(
+      fixture.query.mock.calls.some(([text]) =>
+        String(text).includes('insert into notifications.booking_notification_projection_fences'),
+      ),
+    ).toBe(true);
+    expect(
+      fixture.query.mock.calls.some(([text]) =>
+        String(text).includes('insert into notifications.booking_reminder_schedules'),
+      ),
+    ).toBe(true);
+  });
+
+  it.each(['HOURS_24', 'HOURS_2'] as const)(
+    'tracks %s independently and suppresses it after cancellation',
+    async (reminderKind) => {
+      const reminder = bookingEvent({
+        id:
+          reminderKind === 'HOURS_24'
+            ? '93111111-1111-4111-8111-111111111111'
+            : '94111111-1111-4111-8111-111111111111',
+        type: 'booking.reminder.due.v1',
+        payload: {
+          bookingId: '92222222-2222-4222-8222-222222222222',
+          revision: '3',
+          recipientUserIds: [userId],
+          serviceTitle: 'Падел',
+          startsAt: '2026-08-15T19:00:00+03:00',
+          timezone: 'Europe/Moscow',
+          locationName: 'ПаделхАБ',
+          reminderKind,
+        },
+      });
+      const accepted = fencePool({
+        event: reminder,
+        fence: {
+          lifecycle_revision: '3',
+          lifecycle_event_type: 'booking.confirmed.v1',
+          lifecycle_fingerprint: 'a'.repeat(64),
+          reminder_hours_24_fingerprint: null,
+          reminder_hours_2_fingerprint: null,
+        },
+      });
+      await expect(
+        applyNotificationSourceEvent({ pool: accepted.pool as never, event: reminder }),
+      ).resolves.toEqual({
+        outcome: 'disabled',
+      });
+      expect(
+        accepted.query.mock.calls.some(([text]) =>
+          String(text).includes(
+            reminderKind === 'HOURS_24'
+              ? 'set reminder_hours_24_fingerprint'
+              : 'set reminder_hours_2_fingerprint',
+          ),
+        ),
+      ).toBe(true);
+
+      const cancelled = fencePool({
+        event: reminder,
+        fence: {
+          lifecycle_revision: '3',
+          lifecycle_event_type: 'booking.cancelled.v1',
+          lifecycle_fingerprint: 'a'.repeat(64),
+          reminder_hours_24_fingerprint: null,
+          reminder_hours_2_fingerprint: null,
+        },
+      });
+      await expect(
+        applyNotificationSourceEvent({ pool: cancelled.pool as never, event: reminder }),
+      ).resolves.toEqual({
+        outcome: 'suppressed',
+      });
+    },
+  );
+
+  it('rolls back a reminder ahead of lifecycle for bounded redelivery', async () => {
+    const event = bookingEvent({
+      type: 'booking.reminder.due.v1',
+      payload: {
+        bookingId: '92222222-2222-4222-8222-222222222222',
+        revision: '4',
+        recipientUserIds: [userId],
+        serviceTitle: 'Падел',
+        startsAt: '2026-08-15T19:00:00+03:00',
+        timezone: 'Europe/Moscow',
+        locationName: 'ПаделхАБ',
+        reminderKind: 'HOURS_24',
+      },
+    });
+    const fixture = fencePool({
+      event,
+      fence: {
+        lifecycle_revision: '3',
+        lifecycle_event_type: 'booking.confirmed.v1',
+        lifecycle_fingerprint: 'a'.repeat(64),
+        reminder_hours_24_fingerprint: null,
+        reminder_hours_2_fingerprint: null,
+      },
+    });
+    await expect(
+      applyNotificationSourceEvent({ pool: fixture.pool as never, event }),
+    ).rejects.toThrow('BOOKING_REMINDER_AHEAD_OF_LIFECYCLE');
+    expect(fixture.query).toHaveBeenCalledWith('rollback');
+  });
+
+  it('serializes matching booking keys in-process without blocking another booking', async () => {
+    let firstFenceRelease: (() => void) | undefined;
+    const firstFence = new Promise<void>((resolve) => {
+      firstFenceRelease = resolve;
+    });
+    let delayedFenceRead = true;
+    const query = vi.fn(async (text: string) => {
+      if (
+        text === 'begin' ||
+        text === 'commit' ||
+        text === 'rollback' ||
+        text.includes('set_config')
+      ) {
+        return { rows: [], rowCount: 0 };
+      }
+      if (text.includes('insert into audit.inbox_events'))
+        return { rows: [{ event_id: 'event' }], rowCount: 1 };
+      if (text.includes('pg_advisory_xact_lock')) return { rows: [], rowCount: 1 };
+      if (text.includes('from notifications.booking_notification_projection_fences')) {
+        if (delayedFenceRead) {
+          delayedFenceRead = false;
+          await firstFence;
+        }
+        return { rows: [], rowCount: 0 };
+      }
+      if (
+        text.includes('insert into notifications.booking_notification_projection_fences') ||
+        text.includes('insert into notifications.booking_reminder_schedules') ||
+        text.includes('notifications.booking_reminder_recipients') ||
+        text.includes('update audit.inbox_events')
+      ) {
+        return { rows: [], rowCount: 1 };
+      }
+      if (text.includes('from notifications.tenant_runtime_settings'))
+        return { rows: [], rowCount: 0 };
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const pool = { connect: vi.fn().mockResolvedValue({ query, release: vi.fn() }) };
+    const sameBookingFirst = applyNotificationSourceEvent({
+      pool: pool as never,
+      event: bookingEvent(),
+    });
+    const sameBookingSecond = applyNotificationSourceEvent({
+      pool: pool as never,
+      event: bookingEvent({ id: '95111111-1111-4111-8111-111111111111' }),
+    });
+    const otherBooking = applyNotificationSourceEvent({
+      pool: pool as never,
+      event: bookingEvent({
+        id: '96111111-1111-4111-8111-111111111111',
+        aggregateId: '97222222-2222-4222-8222-222222222222',
+        payload: { ...bookingEvent().payload, bookingId: '97222222-2222-4222-8222-222222222222' },
+      }),
+    });
+    await vi.waitFor(() => expect(pool.connect).toHaveBeenCalledTimes(2));
+    firstFenceRelease?.();
+    await expect(Promise.all([sameBookingFirst, sameBookingSecond, otherBooking])).resolves.toEqual(
+      [{ outcome: 'disabled' }, { outcome: 'disabled' }, { outcome: 'disabled' }],
+    );
   });
 });

@@ -100,7 +100,44 @@ jobs:
         run: |
           scp deploy/compose.production.yaml "phub-deploy@$HOST:/opt/phub/compose.yaml"
           scp release.env "phub-deploy@$HOST:/opt/phub/release.env"
-          ssh "phub-deploy@$HOST" 'cd /opt/phub && docker compose --env-file release.env --profile migration run --rm migrator'
+          ssh "phub-deploy@$HOST" '
+            set -eu
+            cd /opt/phub
+            runtime_env=/etc/phub/runtime.env
+            migrator_env=/etc/phub/migrator.env
+            test -r "$runtime_env"
+            test -r "$migrator_env"
+            test "$(stat -c %a "$migrator_env")" = 600
+            test ! "$runtime_env" -ef "$migrator_env"
+            awk '\''
+              /^[[:space:]]*($|#)/ { next }
+              /^DATABASE_URL=/ { next }
+              { exit 1 }
+            '\'' "$migrator_env"
+            test "$(awk -F= '\''$1 == "DATABASE_URL" { count += 1 } END { print count + 0 }'\'' "$runtime_env")" -eq 1
+            test "$(awk -F= '\''$1 == "DATABASE_URL" { count += 1 } END { print count + 0 }'\'' "$migrator_env")" -eq 1
+            runtime_database_url="$(sed -n '\''s/^DATABASE_URL=//p'\'' "$runtime_env")"
+            migrator_database_url="$(sed -n '\''s/^DATABASE_URL=//p'\'' "$migrator_env")"
+            case "$migrator_database_url" in
+              postgresql://*|postgres://*) ;;
+              *) exit 64 ;;
+            esac
+            test "$runtime_database_url" != "$migrator_database_url"
+            DATABASE_ROLE_BOUNDARY_PHASE=pre \
+            RUNTIME_DATABASE_URL="$runtime_database_url" \
+            MIGRATOR_DATABASE_URL="$migrator_database_url" \
+              docker compose --env-file release.env --profile migration run --rm --no-deps -T \
+                -e RUNTIME_DATABASE_URL -e MIGRATOR_DATABASE_URL -e DATABASE_ROLE_BOUNDARY_PHASE \
+                --entrypoint node migrator apps/migrator/dist/verify-role-boundary.js
+            MIGRATOR_DATABASE_URL="$migrator_database_url" \
+              docker compose --env-file release.env --profile migration run --rm migrator
+            DATABASE_ROLE_BOUNDARY_PHASE=post \
+            RUNTIME_DATABASE_URL="$runtime_database_url" \
+            MIGRATOR_DATABASE_URL="$migrator_database_url" \
+              docker compose --env-file release.env --profile migration run --rm --no-deps -T \
+                -e RUNTIME_DATABASE_URL -e MIGRATOR_DATABASE_URL -e DATABASE_ROLE_BOUNDARY_PHASE \
+                --entrypoint node migrator apps/migrator/dist/verify-role-boundary.js
+          '
       - name: Deploy app nodes sequentially
         env:
           NODE_A: ${{ secrets.PRODUCTION_APP_NODE_A }}

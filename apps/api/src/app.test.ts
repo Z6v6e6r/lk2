@@ -150,6 +150,25 @@ describe('health endpoints', () => {
     expect(response.statusCode).toBe(200);
   });
 
+  it('exposes an explicitly supplied local contour attestation on readiness', async () => {
+    const runtimeContourAttestation = {
+      database: 'a'.repeat(64),
+      redis: 'b'.repeat(64),
+    };
+    const app = await buildApp({
+      config,
+      logger: createLogger('api-test', 'silent'),
+      pool: fakePool(),
+      runtimeContourAttestation,
+    });
+    apps.push(app);
+
+    const response = await app.inject({ method: 'GET', url: '/health/ready' });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ runtimeContour: runtimeContourAttestation });
+  });
+
   it('keeps legacy community detail default-off and serves it only with flag and service', async () => {
     const communityId = '11111111-1111-4111-8111-111111111111';
     const token = await accessToken();

@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
 
 import { z } from 'zod';
 
@@ -6,6 +6,91 @@ const uuid = z.string().uuid();
 const dateTime = z.string().datetime({ offset: true });
 const eventType = z.string().regex(/^[a-z][a-z0-9_.-]+\.v[1-9][0-9]*$/);
 const positiveRevision = z.string().regex(/^[1-9][0-9]*$/);
+
+export const BOOKING_NOTIFICATION_CANONICAL_CONTRACT = {
+  rulesetVersion: 'booking.ru-ru.v3',
+  template: {
+    version: 2,
+    locale: 'ru-RU',
+    category: 'BOOKING',
+    deepLink: '/bookings',
+    channels: ['IN_APP', 'PUSH'],
+    active: true,
+  },
+  rule: {
+    keySuffix: 'default',
+    audienceSelector: {
+      type: 'EVENT_USERS',
+      field: 'recipientUserIds',
+    },
+    channelOverride: ['IN_APP', 'PUSH'],
+    active: true,
+  },
+  definitions: [
+    {
+      key: 'booking.confirmed',
+      sourceEventType: 'booking.confirmed.v1',
+      title: 'Запись подтверждена',
+      body: '{{serviceTitle}}: {{startsAt}}, {{locationName}}',
+      mandatory: true,
+    },
+    {
+      key: 'booking.changed',
+      sourceEventType: 'booking.changed.v1',
+      title: 'Запись изменена',
+      body: '{{serviceTitle}}: новое время {{startsAt}}, {{locationName}}',
+      mandatory: true,
+    },
+    {
+      key: 'booking.cancelled',
+      sourceEventType: 'booking.cancelled.v1',
+      title: 'Запись отменена',
+      body: '{{serviceTitle}}: {{startsAt}}, {{locationName}}',
+      mandatory: true,
+    },
+    {
+      key: 'booking.reminder',
+      sourceEventType: 'booking.reminder.due.v1',
+      title: 'Напоминание о записи',
+      body: '{{serviceTitle}} начнётся {{startsAt}}, {{locationName}}',
+      mandatory: false,
+    },
+  ],
+} as const;
+
+export const BOOKING_NOTIFICATION_RULESET_VERSION =
+  BOOKING_NOTIFICATION_CANONICAL_CONTRACT.rulesetVersion;
+export const BOOKING_NOTIFICATION_TEMPLATE_VERSION =
+  BOOKING_NOTIFICATION_CANONICAL_CONTRACT.template.version;
+export const BOOKING_NOTIFICATION_LOCALE = BOOKING_NOTIFICATION_CANONICAL_CONTRACT.template.locale;
+export const BOOKING_NOTIFICATION_TEMPLATE_CATEGORY =
+  BOOKING_NOTIFICATION_CANONICAL_CONTRACT.template.category;
+export const BOOKING_NOTIFICATION_TEMPLATE_DEEP_LINK =
+  BOOKING_NOTIFICATION_CANONICAL_CONTRACT.template.deepLink;
+export const BOOKING_NOTIFICATION_TEMPLATE_CHANNELS =
+  BOOKING_NOTIFICATION_CANONICAL_CONTRACT.template.channels;
+export const BOOKING_NOTIFICATION_TEMPLATE_ACTIVE =
+  BOOKING_NOTIFICATION_CANONICAL_CONTRACT.template.active;
+export const BOOKING_NOTIFICATION_RULE_KEY_SUFFIX =
+  BOOKING_NOTIFICATION_CANONICAL_CONTRACT.rule.keySuffix;
+export const BOOKING_NOTIFICATION_AUDIENCE_SELECTOR =
+  BOOKING_NOTIFICATION_CANONICAL_CONTRACT.rule.audienceSelector;
+export const BOOKING_NOTIFICATION_RULE_CHANNEL_OVERRIDE =
+  BOOKING_NOTIFICATION_CANONICAL_CONTRACT.rule.channelOverride;
+export const BOOKING_NOTIFICATION_RULE_ACTIVE = BOOKING_NOTIFICATION_CANONICAL_CONTRACT.rule.active;
+export const BOOKING_NOTIFICATION_DEFINITIONS = BOOKING_NOTIFICATION_CANONICAL_CONTRACT.definitions;
+
+export type BookingNotificationDefinition = (typeof BOOKING_NOTIFICATION_DEFINITIONS)[number];
+
+export function bookingNotificationContractHash(contract: object): string {
+  const serialized = JSON.stringify(contract);
+  if (!serialized) throw new Error('BOOKING_NOTIFICATION_CONTRACT_NOT_SERIALIZABLE');
+  return createHash('sha256').update(serialized).digest('hex');
+}
+
+export const BOOKING_NOTIFICATION_REQUEST_HASH = bookingNotificationContractHash(
+  BOOKING_NOTIFICATION_CANONICAL_CONTRACT,
+);
 
 export const BOOKING_NOTIFICATION_EVENT_TYPES = [
   'booking.confirmed.v1',
@@ -217,6 +302,7 @@ export type NotificationProviderDeliveryResult =
       readonly outcome: 'terminal_failure';
       readonly errorCode: string;
       readonly invalidate: boolean;
+      readonly suspendPolicy?: boolean;
     };
 
 export type PushDeliveryResult = NotificationProviderDeliveryResult;
@@ -258,13 +344,50 @@ const webPushKey = z
   .min(16)
   .max(256);
 
+export const MAX_WEB_PUSH_ENDPOINT_LENGTH = 2_048;
+
+export function canonicalWebPushEndpoint(endpoint: string): string | undefined {
+  try {
+    const url = new URL(endpoint);
+    if (
+      url.protocol !== 'https:' ||
+      (url.port.length > 0 && url.port !== '443') ||
+      url.username.length > 0 ||
+      url.password.length > 0 ||
+      url.hash.length > 0
+    ) {
+      return undefined;
+    }
+    return url.href.length <= MAX_WEB_PUSH_ENDPOINT_LENGTH ? url.href : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function webPushEndpointOrigin(endpoint: string): string | undefined {
+  const canonical = canonicalWebPushEndpoint(endpoint);
+  return canonical === undefined ? undefined : new URL(canonical).origin;
+}
+
+export function isWebPushEndpointOriginAllowed(
+  endpoint: string,
+  allowedOrigins: readonly string[],
+): boolean {
+  const origin = webPushEndpointOrigin(endpoint);
+  return origin !== undefined && allowedOrigins.includes(origin);
+}
+
 export const webPushSubscriptionSchema = z
   .object({
     endpoint: z
       .string()
       .url()
-      .max(2_048)
-      .refine((value) => new URL(value).protocol === 'https:', 'Web Push endpoint must use HTTPS'),
+      .max(MAX_WEB_PUSH_ENDPOINT_LENGTH)
+      .refine(
+        (value) => canonicalWebPushEndpoint(value) !== undefined,
+        'Web Push endpoint must be a credential-free HTTPS URL without a fragment',
+      )
+      .transform((value) => canonicalWebPushEndpoint(value) as string),
     expirationTime: z.number().int().nonnegative().nullable().optional(),
     keys: z
       .object({

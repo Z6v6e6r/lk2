@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: PadlHub User API
-  version: 1.23.0
+  version: 1.24.0
   description: Canonical user-facing API. Public identifiers are PadlHub UUIDs.
   license:
     name: Proprietary
@@ -58,6 +58,81 @@ paths:
           $ref: '#/components/responses/CommandConflict'
         '404':
           $ref: ../../common/components.yaml#/components/responses/NotFound
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/messaging/users/{otherUserId}/block:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - name: otherUserId
+        in: path
+        required: true
+        description: Tenant-local PadlHub UUID of the other direct-messaging participant.
+        schema:
+          type: string
+          format: uuid
+    put:
+      tags: [messaging]
+      operationId: blockDirectMessagingUser
+      summary: Block direct messaging with another PadlHub user
+      description: |
+        Creates the authenticated user's directed block. Either direction makes the pair's DIRECT
+        conversation inaccessible to both participants without deleting stored history. GAME
+        conversation authorization remains roster-based and is unchanged.
+      responses:
+        '200':
+          description: Stored result of the idempotent block command.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserBlockCommandResult'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/CommandConflict'
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+    delete:
+      tags: [messaging]
+      operationId: unblockDirectMessagingUser
+      summary: Remove the authenticated user's directed direct-messaging block
+      description: |
+        Removes only the caller's directed block. DIRECT access remains denied while the reverse
+        participant-to-caller block exists. Stored conversations and messages are never rewritten.
+      responses:
+        '200':
+          description: Stored result of the idempotent unblock command.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserBlockCommandResult'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/CommandConflict'
         '429':
           $ref: ../../common/components.yaml#/components/responses/TooManyRequests
         '503':
@@ -1889,7 +1964,10 @@ paths:
       summary: Register or rotate the authenticated user's Web Push installation
       description: |
         Stores the PushSubscription encrypted at rest. The client supplies a stable PadlHub
-        installation UUID; provider account selection and encryption key IDs remain server-owned.
+        installation UUID; provider account selection, trusted push-service origins and encryption
+        key IDs remain server-owned. Endpoints outside the operator-approved exact origin list are
+        rejected before storage. A server-owned per-user quota bounds live installations; an exact
+        successful replay remains valid and a new installation over quota returns a stable 409.
       requestBody:
         required: true
         content:
@@ -1915,7 +1993,7 @@ paths:
         '404':
           $ref: ../../common/components.yaml#/components/responses/NotFound
         '409':
-          $ref: '#/components/responses/CommandConflict'
+          $ref: '#/components/responses/WebPushRegistrationConflict'
         '429':
           $ref: ../../common/components.yaml#/components/responses/TooManyRequests
         '503':
@@ -5255,6 +5333,19 @@ components:
           type: boolean
         replayed:
           type: boolean
+    UserBlockCommandResult:
+      type: object
+      additionalProperties: false
+      required: [outcome, changed, replayed]
+      properties:
+        outcome:
+          type: string
+          const: ok
+        changed:
+          type: boolean
+          description: False when the requested directed block state already existed.
+        replayed:
+          type: boolean
     GameConversationSummary:
       type: object
       additionalProperties: false
@@ -5516,6 +5607,9 @@ components:
           format: uri
           pattern: '^https://'
           maxLength: 2048
+          description: |
+            Credential-free HTTPS capability URL on port 443. Its exact origin must be present in
+            the server-managed Web Push endpoint allowlist; fragments are rejected.
         expirationTime:
           type: [integer, 'null']
           minimum: 0
@@ -7088,6 +7182,17 @@ components:
             $ref: ../../common/components.yaml#/components/schemas/ApiError
     CommandConflict:
       description: The idempotency key was already used for another command.
+      headers:
+        X-Correlation-ID:
+          $ref: ../../common/components.yaml#/components/headers/CorrelationId
+      content:
+        application/json:
+          schema:
+            $ref: ../../common/components.yaml#/components/schemas/ApiError
+    WebPushRegistrationConflict:
+      description: |
+        The Idempotency-Key was reused for another command, or the authenticated user already owns
+        the maximum permitted number of live Web Push installations.
       headers:
         X-Correlation-ID:
           $ref: ../../common/components.yaml#/components/headers/CorrelationId
