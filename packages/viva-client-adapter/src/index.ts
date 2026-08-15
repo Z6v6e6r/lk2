@@ -127,13 +127,26 @@ const vivaProfileSchema = z.object({
 });
 
 export function vivaProfilePhotoSourceUrl(input: unknown): string | undefined {
-  const value = vivaProfileSchema.parse(input).photo?.trim();
-  if (!value) return undefined;
+  const observation = vivaProfilePhotoObservation(input);
+  return observation.kind === 'PRESENT' ? observation.sourceUrl : undefined;
+}
+
+export type VivaProfilePhotoObservation =
+  | { readonly kind: 'PRESENT'; readonly sourceUrl: string }
+  | { readonly kind: 'ABSENT' }
+  | { readonly kind: 'UNAVAILABLE' };
+
+export function vivaProfilePhotoObservation(input: unknown): VivaProfilePhotoObservation {
+  const value = vivaProfileSchema.parse(input).photo;
+  if (value === null) return { kind: 'ABSENT' };
+  if (value === undefined || !value.trim()) return { kind: 'UNAVAILABLE' };
   try {
-    const url = new URL(value);
-    return url.protocol === 'https:' && !url.username && !url.password ? url.toString() : undefined;
+    const url = new URL(value.trim());
+    return url.protocol === 'https:' && !url.username && !url.password
+      ? { kind: 'PRESENT', sourceUrl: url.toString() }
+      : { kind: 'UNAVAILABLE' };
   } catch {
-    return undefined;
+    return { kind: 'UNAVAILABLE' };
   }
 }
 

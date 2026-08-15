@@ -16,6 +16,10 @@ export interface PlayerProfileSummary {
 export interface ProfileSummaryRepository {
   get(tenantId: string, userId: string): Promise<PlayerProfileSummary | undefined>;
   getPhotoObjectKey(tenantId: string, deliveryId: string): Promise<string | undefined>;
+  getPhotoDeliveryState(
+    tenantId: string,
+    userId: string,
+  ): Promise<{ readonly deliveryId: string; readonly syncedAt: string } | undefined>;
   getPhotoDeliveryIds(
     tenantId: string,
     userIds: readonly string[],
@@ -52,6 +56,17 @@ export interface ProfileSummaryRepository {
     readonly previousObjectRetentionSeconds: number;
     readonly correlationId: string;
   }): Promise<{ readonly avatarUrl: string; readonly replayed: boolean }>;
+  removeClientAssistedPhoto?(input: {
+    readonly tenantId: string;
+    readonly userId: string;
+    readonly idempotencyKey: string;
+    readonly grantId: string;
+    readonly grantIssuedAt: string;
+    readonly observedAt: string;
+    readonly expiresAt: string;
+    readonly previousObjectRetentionSeconds: number;
+    readonly correlationId: string;
+  }): Promise<{ readonly removed: boolean; readonly replayed: boolean }>;
 }
 
 export class ProfilePhotoIdempotencyConflictError extends Error {
@@ -77,11 +92,12 @@ interface ProfileSummaryRow extends QueryResultRow {
 }
 
 interface ClientPhotoCommandRow extends QueryResultRow {
+  readonly command_kind: 'UPSERT' | 'DELETE';
   readonly idempotency_key: string;
   readonly grant_id: string;
-  readonly request_sha256: string;
-  readonly content_sha256: string;
-  readonly object_key: string;
+  readonly request_sha256: string | null;
+  readonly content_sha256: string | null;
+  readonly object_key: string | null;
   readonly grant_issued_at: Date | string;
   readonly avatar_url: string | null;
 }
@@ -111,11 +127,28 @@ function commandMatches(
   },
 ): boolean {
   return (
+    row.command_kind === 'UPSERT' &&
     row.idempotency_key === input.idempotencyKey &&
     row.grant_id === input.grantId &&
     row.request_sha256 === input.requestSha256 &&
     row.content_sha256 === input.contentSha256 &&
     row.object_key === input.objectKey &&
+    Date.parse(String(row.grant_issued_at)) === Date.parse(input.grantIssuedAt)
+  );
+}
+
+function deleteCommandMatches(
+  row: ClientPhotoCommandRow,
+  input: {
+    readonly idempotencyKey: string;
+    readonly grantId: string;
+    readonly grantIssuedAt: string;
+  },
+): boolean {
+  return (
+    row.command_kind === 'DELETE' &&
+    row.idempotency_key === input.idempotencyKey &&
+    row.grant_id === input.grantId &&
     Date.parse(String(row.grant_issued_at)) === Date.parse(input.grantIssuedAt)
   );
 }
@@ -199,12 +232,29 @@ export function createProfileSummaryRepository(pool: Pool): ProfileSummaryReposi
       });
     },
 
+    getPhotoDeliveryState(tenantId, userId) {
+      return withTenantTransaction(pool, tenantId, async (client) => {
+        const row = await queryOne<
+          { readonly delivery_id: string; readonly synced_at: Date | string } & QueryResultRow
+        >(
+          client,
+          `select delivery_id, synced_at
+             from integration.user_profile_photo_sync
+            where tenant_id = $1 and user_id = $2`,
+          [tenantId, userId],
+        );
+        return row
+          ? { deliveryId: row.delivery_id, syncedAt: new Date(row.synced_at).toISOString() }
+          : undefined;
+      });
+    },
+
     reserveClientAssistedPhoto(input) {
       return withTenantTransaction(pool, input.tenantId, async (client) => {
         await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [input.userId]);
         const previousCommand = await queryOne<ClientPhotoCommandRow>(
           client,
-          `select idempotency_key, grant_id, request_sha256, content_sha256, object_key,
+          `select command_kind, idempotency_key, grant_id, request_sha256, content_sha256, object_key,
                   grant_issued_at, avatar_url
              from integration.profile_photo_client_commands
             where tenant_id = $1 and user_id = $2
@@ -245,9 +295,9 @@ export function createProfileSummaryRepository(pool: Pool): ProfileSummaryReposi
         if (!previousCommand) {
           await client.query(
             `insert into integration.profile_photo_client_commands (
-               tenant_id, user_id, idempotency_key, grant_id, request_sha256,
+               tenant_id, user_id, idempotency_key, grant_id, command_kind, request_sha256,
                content_sha256, object_key, grant_issued_at, expires_at
-             ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+             ) values ($1, $2, $3, $4, 'UPSERT', $5, $6, $7, $8, $9)`,
             [
               input.tenantId,
               input.userId,
@@ -281,7 +331,7 @@ export function createProfileSummaryRepository(pool: Pool): ProfileSummaryReposi
         await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [input.userId]);
         const command = await queryOne<ClientPhotoCommandRow>(
           client,
-          `select idempotency_key, grant_id, request_sha256, content_sha256, object_key,
+          `select command_kind, idempotency_key, grant_id, request_sha256, content_sha256, object_key,
                   grant_issued_at, avatar_url
              from integration.profile_photo_client_commands
             where tenant_id = $1 and user_id = $2 and idempotency_key = $3
@@ -408,6 +458,117 @@ export function createProfileSummaryRepository(pool: Pool): ProfileSummaryReposi
             current?.content_sha256 === input.contentSha256 &&
             current.object_key === input.objectKey,
         };
+      });
+    },
+
+    removeClientAssistedPhoto(input) {
+      return withTenantTransaction(pool, input.tenantId, async (client) => {
+        await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [input.userId]);
+        const previousCommand = await queryOne<ClientPhotoCommandRow>(
+          client,
+          `select command_kind, idempotency_key, grant_id, request_sha256, content_sha256,
+                  object_key, grant_issued_at, avatar_url
+             from integration.profile_photo_client_commands
+            where tenant_id = $1 and user_id = $2
+              and (idempotency_key = $3 or grant_id = $4)
+            for update`,
+          [input.tenantId, input.userId, input.idempotencyKey, input.grantId],
+        );
+        if (previousCommand) {
+          if (!deleteCommandMatches(previousCommand, input)) {
+            throw new ProfilePhotoIdempotencyConflictError();
+          }
+          return { removed: true, replayed: true };
+        }
+        const current = await queryOne<CurrentPhotoRow>(
+          client,
+          `select delivery_id, object_key, content_sha256, source_url, synced_at,
+                  client_grant_issued_at
+             from integration.user_profile_photo_sync
+            where tenant_id = $1 and user_id = $2
+            for update`,
+          [input.tenantId, input.userId],
+        );
+        const watermark = await queryOne<PhotoObservationWatermarkRow>(
+          client,
+          `select observed_at
+             from integration.profile_photo_observation_watermarks
+            where tenant_id = $1 and user_id = $2
+            for update`,
+          [input.tenantId, input.userId],
+        );
+        if (
+          grantIsStale(current, input.grantIssuedAt) ||
+          watermarkIsStale(watermark, input.grantIssuedAt)
+        ) {
+          throw new ProfilePhotoGrantStaleError();
+        }
+        await client.query(
+          `insert into integration.profile_photo_client_commands (
+             tenant_id, user_id, idempotency_key, grant_id, command_kind,
+             grant_issued_at, completed_at, expires_at
+           ) values ($1, $2, $3, $4, 'DELETE', $5, now(), $6)`,
+          [
+            input.tenantId,
+            input.userId,
+            input.idempotencyKey,
+            input.grantId,
+            input.grantIssuedAt,
+            input.expiresAt,
+          ],
+        );
+        const updated = await client.query(
+          `update profile.user_summaries
+              set photo_url = null, updated_at = now()
+            where tenant_id = $1 and user_id = $2`,
+          [input.tenantId, input.userId],
+        );
+        if ((updated.rowCount ?? 0) !== 1) throw new Error('PROFILE_SUMMARY_NOT_FOUND');
+        await client.query(
+          `delete from integration.user_profile_photo_sync
+            where tenant_id = $1 and user_id = $2`,
+          [input.tenantId, input.userId],
+        );
+        await client.query(
+          `insert into integration.profile_photo_observation_watermarks (
+             tenant_id, user_id, observed_at
+           ) values ($1, $2, $3)
+           on conflict (tenant_id, user_id) do update set
+             observed_at = greatest(integration.profile_photo_observation_watermarks.observed_at,
+                                    excluded.observed_at),
+             updated_at = now()`,
+          [input.tenantId, input.userId, input.grantIssuedAt],
+        );
+        if (current?.object_key) {
+          await client.query(
+            `insert into integration.profile_photo_object_gc (tenant_id, object_key, delete_after)
+             values ($1, $2, $3::timestamptz + ($4::text || ' seconds')::interval)
+             on conflict (tenant_id, object_key) do update set
+               delete_after = least(integration.profile_photo_object_gc.delete_after,
+                                    excluded.delete_after),
+               updated_at = now()`,
+            [
+              input.tenantId,
+              current.object_key,
+              input.observedAt,
+              input.previousObjectRetentionSeconds,
+            ],
+          );
+        }
+        await client.query(
+          `insert into audit.audit_log (
+             tenant_id, actor_id, action, resource_type, resource_id,
+             result, correlation_id, old_value
+           ) values ($1, $2, 'PROFILE_PHOTO_CLIENT_DELETE', 'PROFILE', $2,
+                     'SUCCESS', $3, $4::jsonb)`,
+          [
+            input.tenantId,
+            input.userId,
+            input.correlationId,
+            JSON.stringify({ deliveryId: current?.delivery_id ?? null }),
+          ],
+        );
+        return { removed: true, replayed: false };
       });
     },
 

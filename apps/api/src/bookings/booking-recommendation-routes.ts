@@ -72,10 +72,13 @@ const CLIENT_ASSISTED_RESULT_BODY_LIMIT_BYTES = 6 * 1_024 * 1_024;
 const EVENT_CATALOG_SNAPSHOT_TTL_SECONDS = 600;
 const EVENT_CATALOG_TIMEZONE = 'Europe/Moscow';
 
-function principal(request: FastifyRequest): { tenantId: string; userId: string } | undefined {
+function principal(
+  request: FastifyRequest,
+): { tenantId: string; userId: string; sessionId: string } | undefined {
   const tenantId = request.tenantId;
   const userId = request.padlHubClaims?.sub;
-  return tenantId && userId ? { tenantId, userId } : undefined;
+  const sessionId = request.padlHubClaims?.sid;
+  return tenantId && userId && sessionId ? { tenantId, userId, sessionId } : undefined;
 }
 
 function limitValue(value: unknown): number | undefined {
@@ -148,12 +151,16 @@ function samePrincipal(
 async function readActivities(input: {
   readonly source?: ExerciseRecommendationSource;
   readonly getAccessToken?: (input: {
+    readonly tenantKey: string;
     readonly tenantId: string;
     readonly userId: string;
+    readonly sessionId: string;
     readonly correlationId: string;
   }) => Promise<string>;
+  readonly tenantKey: string;
   readonly tenantId: string;
   readonly userId: string;
+  readonly sessionId: string;
   readonly correlationId: string;
   readonly now: Date;
 }): Promise<readonly VivaExerciseRecommendation[]> {
@@ -161,8 +168,10 @@ async function readActivities(input: {
   try {
     const source = input.source;
     const accessToken = await input.getAccessToken({
+      tenantKey: input.tenantKey,
       tenantId: input.tenantId,
       userId: input.userId,
+      sessionId: input.sessionId,
       correlationId: input.correlationId,
     });
     const pages = await Promise.allSettled(
@@ -384,8 +393,10 @@ export function registerBookingRecommendationRoutes(
     readonly upcomingBookingsRepository?: UpcomingBookingsRepository;
     readonly locationRepository?: Pick<LocationRepository, 'getPublished'>;
     readonly getExerciseAccessToken?: (input: {
+      readonly tenantKey: string;
       readonly tenantId: string;
       readonly userId: string;
+      readonly sessionId: string;
       readonly correlationId: string;
     }) => Promise<string>;
     readonly avatarMedia?: EventAvatarMedia;
@@ -1178,6 +1189,8 @@ export function registerBookingRecommendationRoutes(
                   : {}),
                 tenantId: current.tenantId,
                 userId: current.userId,
+                tenantKey,
+                sessionId: current.sessionId,
                 correlationId: request.id,
                 now,
               }),

@@ -20,6 +20,7 @@ function oauthStart(state: string, browserNonce = `nonce-${state}`): VivaOAuthSt
       personalDataPolicyVersion: 'privacy-v1',
       browserNonceHash: 'a'.repeat(64),
       recoveryUserId: '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca',
+      recoverySessionFamilyId: '5509e0c3-ab9f-48b3-9bfa-0900726e1f63',
     },
     browserNonce,
   };
@@ -71,7 +72,35 @@ describe('Viva OAuth state stores', () => {
     await expect(store.take(replacement.state.state)).resolves.toBeUndefined();
   });
 
-  it('atomically replays a Redis reservation from the browser-bound v2 namespace', async () => {
+  it('does not consume browser-bound state when the callback binding is wrong', async () => {
+    const store = new MemoryVivaOAuthStateStore();
+    const start = oauthStart('browser-bound-state');
+    await store.put(start.state, 300);
+
+    await expect(
+      store.claimCallback({
+        state: start.state.state,
+        tenantKey: start.state.tenantKey,
+        browserNonceHash: 'b'.repeat(64),
+      }),
+    ).resolves.toEqual({ outcome: 'mismatch' });
+    await expect(
+      store.claimCallback({
+        state: start.state.state,
+        tenantKey: start.state.tenantKey,
+        browserNonceHash: start.state.browserNonceHash,
+      }),
+    ).resolves.toEqual({ outcome: 'claimed', state: start.state });
+    await expect(
+      store.claimCallback({
+        state: start.state.state,
+        tenantKey: start.state.tenantKey,
+        browserNonceHash: start.state.browserNonceHash,
+      }),
+    ).resolves.toEqual({ outcome: 'missing' });
+  });
+
+  it('atomically replays a Redis reservation from the browser-bound v3 namespace', async () => {
     let reservedCommand: string | undefined;
     const stateKeys: string[] = [];
     const ttlArguments: string[] = [];
@@ -122,12 +151,12 @@ describe('Viva OAuth state stores', () => {
     ).resolves.toEqual({ outcome: 'conflict' });
 
     expect(stateKeys).toHaveLength(3);
-    expect(stateKeys.every((key) => key.startsWith('phub:auth:v2:viva-oauth:'))).toBe(true);
+    expect(stateKeys.every((key) => key.startsWith('phub:auth:v3:viva-oauth:'))).toBe(true);
     expect(stateKeys.every((key) => !key.startsWith('phub:auth:viva-oauth:'))).toBe(true);
     expect(ttlArguments).toEqual(['300', '300', '300']);
   });
 
-  it('consumes a pre-release state only after the v2 lookup misses', async () => {
+  it('consumes a pre-release state only after the v3 and v2 lookups miss', async () => {
     const requestedKeys: string[] = [];
     const legacyState = {
       state: 'legacy-state',
@@ -142,15 +171,41 @@ describe('Viva OAuth state stores', () => {
     };
     const getdelMock = vi.fn((key: string): Promise<string | null> => {
       requestedKeys.push(key);
-      return Promise.resolve(requestedKeys.length === 1 ? null : JSON.stringify(legacyState));
+      return Promise.resolve(requestedKeys.length < 3 ? null : JSON.stringify(legacyState));
     });
     const redis = { getdel: getdelMock } as unknown as Redis;
     const store = new RedisVivaOAuthStateStore(redis);
 
     await expect(store.take(legacyState.state)).resolves.toEqual(legacyState);
     expect(requestedKeys).toEqual([
+      'phub:auth:v3:viva-oauth:legacy-state',
       'phub:auth:v2:viva-oauth:legacy-state',
       'phub:auth:viva-oauth:legacy-state',
     ]);
+  });
+
+  it('claims a matching callback atomically across the versioned state namespaces', async () => {
+    const start = oauthStart('redis-callback-state');
+    const evalMock = vi.fn(() => Promise.resolve(['claimed', JSON.stringify(start.state)]));
+    const redis = { eval: evalMock } as unknown as Redis;
+    const store = new RedisVivaOAuthStateStore(redis);
+
+    await expect(
+      store.claimCallback({
+        state: start.state.state,
+        tenantKey: start.state.tenantKey,
+        browserNonceHash: start.state.browserNonceHash,
+      }),
+    ).resolves.toEqual({ outcome: 'claimed', state: start.state });
+    expect(evalMock).toHaveBeenCalledWith(
+      expect.stringContaining("return {'claimed', encoded}"),
+      3,
+      'phub:auth:v3:viva-oauth:redis-callback-state',
+      'phub:auth:v2:viva-oauth:redis-callback-state',
+      'phub:auth:viva-oauth:redis-callback-state',
+      'redis-callback-state',
+      'local-padel',
+      'a'.repeat(64),
+    );
   });
 });

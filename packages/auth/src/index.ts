@@ -104,6 +104,27 @@ export type VivaOAuthProvider = 'vkid' | 'yandex';
 
 export type VivaOAuthIdentityResolution = 'CANONICAL_PROFILE' | 'EXISTING_SUBJECT';
 
+export type VivaOAuthIdentityMode = 'STANDARD' | 'RECOVERY_SUBJECT_ONLY';
+
+type VivaOAuthTokens = {
+  readonly accessToken: string;
+  readonly accessExpiresIn?: number;
+  readonly refreshToken: string;
+  readonly refreshExpiresIn?: number;
+};
+
+export type VivaOAuthExchangeResult = VivaOAuthTokens &
+  (
+    | {
+        readonly identity: VerifiedExternalIdentity;
+        readonly identityResolution: 'CANONICAL_PROFILE';
+      }
+    | {
+        readonly identity: Pick<VerifiedExternalIdentity, 'issuer' | 'subject'>;
+        readonly identityResolution: 'EXISTING_SUBJECT';
+      }
+  );
+
 export interface VivaOAuthProviderPort {
   createAuthorizationUrl(input: {
     readonly provider: VivaOAuthProvider;
@@ -118,14 +139,8 @@ export interface VivaOAuthProviderPort {
     readonly providerTenantKey: string;
     readonly redirectUri: string;
     readonly correlationId: string;
-  }): Promise<{
-    readonly identity: VerifiedExternalIdentity;
-    readonly identityResolution: VivaOAuthIdentityResolution;
-    readonly accessToken: string;
-    readonly accessExpiresIn?: number;
-    readonly refreshToken: string;
-    readonly refreshExpiresIn?: number;
-  }>;
+    readonly identityMode: VivaOAuthIdentityMode;
+  }): Promise<VivaOAuthExchangeResult>;
   refreshUserDelegation(input: {
     readonly refreshToken: string;
     readonly correlationId: string;

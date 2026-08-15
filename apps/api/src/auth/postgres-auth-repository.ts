@@ -5,6 +5,7 @@ import type {
   AuthRepository,
   AuthUser,
   RefreshSessionRotation,
+  SaveVivaDelegationInput,
   TenantAuthBinding,
   UserAccessProfile,
 } from './auth-service.js';
@@ -79,6 +80,7 @@ export class PostgresAuthRepository implements AuthRepository {
   }): Promise<AuthUser | undefined> {
     return this.repository.resolveExistingExternalUser({
       tenantId: input.binding.tenantId,
+      provider: input.binding.provider,
       issuer: input.identity.issuer,
       subject: input.identity.subject,
       correlationId: input.correlationId,
@@ -127,6 +129,7 @@ export class PostgresAuthRepository implements AuthRepository {
       outcome: 'rotated',
       identity: {
         sessionId: result.session.id,
+        familyId: result.session.familyId,
         tenantId: result.session.tenantId,
         tenantKey: context.tenantKey,
         user: result.user,
@@ -149,36 +152,53 @@ export class PostgresAuthRepository implements AuthRepository {
     });
   }
 
-  public async revokeVivaDelegationForRefreshSession(
+  public async revokeSessionAndVivaDelegation(
     tenantKey: string,
     tokenHash: string,
     correlationId: string,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const context = await this.repository.resolveTenantAuthConfig(tenantKey);
-    if (!context) return;
-    await this.withTenant(context.tenantId, async (client) => {
-      const result = await client.query(
-        `
-          update integration.user_delegations d
-          set revoked_at = now(), revoke_reason = 'USER_LOGOUT', updated_at = now()
-          where d.tenant_id = $1
-            and d.user_id = (
-              select rs.user_id
-              from identity.refresh_sessions rs
-              where rs.tenant_id = $1 and rs.token_hash = $2
-              limit 1
-            )
-            and d.revoked_at is null
-        `,
+    if (!context) return false;
+    return this.withTenant(context.tenantId, async (client) => {
+      const current = await client.query<{ family_id: string; user_id: string }>(
+        `select family_id, user_id
+           from identity.refresh_sessions
+          where tenant_id = $1 and token_hash = $2
+          for update`,
         [context.tenantId, tokenHash],
       );
-      if (result.rowCount) {
+      const session = current.rows[0];
+      if (!session) return false;
+      await client.query(
+        `update identity.refresh_sessions
+            set revoked_at = coalesce(revoked_at, now()),
+                revoke_reason = coalesce(revoke_reason, 'USER_LOGOUT')
+          where tenant_id = $1 and family_id = $2`,
+        [context.tenantId, session.family_id],
+      );
+      const delegation = await client.query(
+        `update integration.user_delegations
+            set revoked_at = coalesce(revoked_at, now()),
+                revoke_reason = coalesce(revoke_reason, 'USER_LOGOUT'),
+                updated_at = now()
+          where tenant_id = $1 and user_id = $2 and revoked_at is null`,
+        [context.tenantId, session.user_id],
+      );
+      await client.query(
+        `insert into audit.audit_log (
+           tenant_id, actor_id, action, resource_type, resource_id, result, correlation_id
+         ) values ($1, $2, 'AUTH_SESSION_REVOKED', 'AUTH_SESSION', $3, 'SUCCESS', $4)`,
+        [context.tenantId, session.user_id, session.family_id, correlationId],
+      );
+      if (delegation.rowCount) {
         await client.query(
-          `insert into audit.audit_log (tenant_id, action, resource_type, result, correlation_id)
-           values ($1, 'VIVA_DELEGATION_REVOKED', 'VIVA_DELEGATION', 'SUCCESS', $2)`,
-          [context.tenantId, correlationId],
+          `insert into audit.audit_log (
+             tenant_id, actor_id, action, resource_type, result, correlation_id
+           ) values ($1, $2, 'VIVA_DELEGATION_REVOKED', 'VIVA_DELEGATION', 'SUCCESS', $3)`,
+          [context.tenantId, session.user_id, correlationId],
         );
       }
+      return true;
     });
   }
 
@@ -265,73 +285,98 @@ export class PostgresAuthRepository implements AuthRepository {
     });
   }
 
-  public saveVivaDelegation(input: {
-    readonly tenantId: string;
-    readonly userId: string;
-    readonly issuer: string;
-    readonly subject: string;
-    readonly refreshTokenCiphertext: string;
-    readonly encryptionKeyVersion: string;
-    readonly grantedScopes: readonly string[];
-    readonly refreshExpiresAt?: Date;
-    readonly correlationId: string;
-  }): Promise<void> {
+  private async persistVivaDelegation(
+    client: PoolClient,
+    input: SaveVivaDelegationInput,
+  ): Promise<void> {
+    // A canonical Viva profile can become linked to a newer OAuth subject/user
+    // after legacy duplicate users are reconciled. Serialize all delegation
+    // replacements for the canonical PadlHub user, remove an obsolete subject
+    // already attached to that user, then transfer the subject-owned row.
+    await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
+      `${input.tenantId}\u001f${input.userId}\u001fVIVA\u001f${input.issuer}`,
+    ]);
+    await client.query(
+      `
+        delete from integration.user_delegations
+        where tenant_id = $1
+          and user_id = $2
+          and provider = 'VIVA'
+          and issuer = $3
+          and subject <> $4
+      `,
+      [input.tenantId, input.userId, input.issuer, input.subject],
+    );
+    await client.query(
+      `
+        insert into integration.user_delegations (
+          tenant_id, user_id, provider, issuer, subject, refresh_token_ciphertext,
+          encryption_key_version, granted_scopes, refresh_expires_at, last_refreshed_at
+        ) values ($1, $2, 'VIVA', $3, $4, $5, $6, $7, $8, now())
+        on conflict (tenant_id, issuer, subject)
+        do update set
+          user_id = excluded.user_id,
+          provider = excluded.provider,
+          refresh_token_ciphertext = excluded.refresh_token_ciphertext,
+          encryption_key_version = excluded.encryption_key_version,
+          granted_scopes = excluded.granted_scopes,
+          refresh_expires_at = excluded.refresh_expires_at,
+          last_refreshed_at = now(),
+          refresh_failed_at = null,
+          refresh_failure_code = null,
+          revoked_at = null,
+          revoke_reason = null,
+          updated_at = now()
+      `,
+      [
+        input.tenantId,
+        input.userId,
+        input.issuer,
+        input.subject,
+        input.refreshTokenCiphertext,
+        input.encryptionKeyVersion,
+        input.grantedScopes,
+        input.refreshExpiresAt ?? null,
+      ],
+    );
+    await client.query(
+      `insert into audit.audit_log (tenant_id, actor_id, action, resource_type, result, correlation_id)
+       values ($1, $2, 'VIVA_DELEGATION_SAVED', 'VIVA_DELEGATION', 'SUCCESS', $3)`,
+      [input.tenantId, input.userId, input.correlationId],
+    );
+  }
+
+  public saveVivaDelegation(input: SaveVivaDelegationInput): Promise<void> {
+    return this.withTenant(input.tenantId, (client) => this.persistVivaDelegation(client, input));
+  }
+
+  public saveVivaDelegationForActiveSession(
+    input: SaveVivaDelegationInput & { readonly sessionFamilyId: string },
+  ): Promise<boolean> {
     return this.withTenant(input.tenantId, async (client) => {
-      // A canonical Viva profile can become linked to a newer OAuth subject/user
-      // after legacy duplicate users are reconciled. Serialize all delegation
-      // replacements for the canonical PadlHub user, remove an obsolete subject
-      // already attached to that user, then transfer the subject-owned row.
-      await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
-        `${input.tenantId}\u001f${input.userId}\u001fVIVA\u001f${input.issuer}`,
-      ]);
-      await client.query(
-        `
-          delete from integration.user_delegations
-          where tenant_id = $1
-            and user_id = $2
-            and provider = 'VIVA'
-            and issuer = $3
-            and subject <> $4
-        `,
-        [input.tenantId, input.userId, input.issuer, input.subject],
+      const active = await client.query(
+        `select 1
+           from identity.refresh_sessions rs
+           join identity.users u
+             on u.tenant_id = rs.tenant_id and u.id = rs.user_id
+           join integration.external_identity_map e
+             on e.tenant_id = u.tenant_id and e.user_id = u.id
+          where rs.tenant_id = $1
+            and rs.family_id = $2
+            and rs.user_id = $3
+            and rs.revoked_at is null
+            and rs.rotated_at is null
+            and rs.expires_at > now()
+            and u.status = 'ACTIVE'
+            and e.provider = 'VIVA'
+            and e.issuer = $4
+            and e.subject = $5
+          for update of rs, u, e`,
+        [input.tenantId, input.sessionFamilyId, input.userId, input.issuer, input.subject],
       );
-      await client.query(
-        `
-          insert into integration.user_delegations (
-            tenant_id, user_id, provider, issuer, subject, refresh_token_ciphertext,
-            encryption_key_version, granted_scopes, refresh_expires_at, last_refreshed_at
-          ) values ($1, $2, 'VIVA', $3, $4, $5, $6, $7, $8, now())
-          on conflict (tenant_id, issuer, subject)
-          do update set
-            user_id = excluded.user_id,
-            provider = excluded.provider,
-            refresh_token_ciphertext = excluded.refresh_token_ciphertext,
-            encryption_key_version = excluded.encryption_key_version,
-            granted_scopes = excluded.granted_scopes,
-            refresh_expires_at = excluded.refresh_expires_at,
-            last_refreshed_at = now(),
-            refresh_failed_at = null,
-            refresh_failure_code = null,
-            revoked_at = null,
-            revoke_reason = null,
-            updated_at = now()
-        `,
-        [
-          input.tenantId,
-          input.userId,
-          input.issuer,
-          input.subject,
-          input.refreshTokenCiphertext,
-          input.encryptionKeyVersion,
-          input.grantedScopes,
-          input.refreshExpiresAt ?? null,
-        ],
-      );
-      await client.query(
-        `insert into audit.audit_log (tenant_id, actor_id, action, resource_type, result, correlation_id)
-         values ($1, $2, 'VIVA_DELEGATION_SAVED', 'VIVA_DELEGATION', 'SUCCESS', $3)`,
-        [input.tenantId, input.userId, input.correlationId],
-      );
+      if (active.rowCount !== 1) return false;
+      await this.persistVivaDelegation(client, input);
+      return true;
     });
   }
 
@@ -511,6 +556,7 @@ export class PostgresAuthRepository implements AuthRepository {
   ): Promise<
     | {
         readonly sessionId: string;
+        readonly familyId: string;
         readonly tenantId: string;
         readonly tenantKey: string;
         readonly user: AuthUser;
@@ -526,6 +572,7 @@ export class PostgresAuthRepository implements AuthRepository {
     if (!result) return undefined;
     return {
       sessionId: result.session.id,
+      familyId: result.session.familyId,
       tenantId: result.session.tenantId,
       tenantKey: context.tenantKey,
       user: result.user,

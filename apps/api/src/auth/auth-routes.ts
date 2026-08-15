@@ -264,6 +264,10 @@ export function registerAuthRoutes(
   runtimeCapabilities:
     | Partial<UserRuntimeCapabilities>
     | (() => Promise<Partial<UserRuntimeCapabilities>>) = disabledUserRuntimeCapabilities,
+  resolveProfilePhotoState?: (
+    tenantId: string,
+    userId: string,
+  ) => Promise<{ readonly avatarUrl: string; readonly syncedAt: string } | undefined>,
 ): void {
   const resolveRuntimeCapabilities = async (): Promise<UserRuntimeCapabilities> => ({
     ...disabledUserRuntimeCapabilities,
@@ -303,13 +307,15 @@ export function registerAuthRoutes(
         const body = vivaOAuthRecoveryBodySchema.parse(request.body ?? {});
         const tenantId = request.tenantId;
         const userId = request.padlHubClaims?.sub;
-        if (!tenantId || !userId) {
+        const sessionId = request.padlHubClaims?.sid;
+        if (!tenantId || !userId || !sessionId) {
           return sendApiError(request, reply, 401, 'AUTH_REQUIRED', 'Требуется авторизация.');
         }
         const result = await authService.startVivaOAuthRecovery({
           tenantKey,
           tenantId,
           userId,
+          sessionId,
           provider: body.provider,
           correlationId: request.id,
           idempotencyKey: idempotencyKey(request),
@@ -334,7 +340,7 @@ export function registerAuthRoutes(
       callbackState = query.state;
       const browserBinding = oauthBrowserBinding(request, config, query.state);
       shouldClearOAuthBrowserCookie = browserBinding.matchesState;
-      const session = await authService.completeVivaOAuth({
+      const completion = await authService.completeVivaOAuth({
         tenantKey,
         state: query.state,
         code: query.code,
@@ -346,18 +352,20 @@ export function registerAuthRoutes(
         clearOAuthBrowserCookie(reply, config, tenantKey, query.state);
         shouldClearOAuthBrowserCookie = false;
       }
-      setRefreshCookie(reply, config, tenantKey, session);
+      if (!completion.vivaRecovery) {
+        setRefreshCookie(reply, config, tenantKey, completion);
+      }
       preventCredentialCaching(reply);
       const redirectUrl = config.VIVA_OAUTH_SUCCESS_REDIRECT_URL;
       if (!redirectUrl) throw new AuthServiceError('AUTH_PROVIDER_UNAVAILABLE');
       const target = new URL(redirectUrl);
       const directVivaAllowed =
         directVivaAccessAllowed &&
-        (await directVivaAccessAllowed(session.user.tenantId, session.user.id, 'web'));
+        (await directVivaAccessAllowed(completion.user.tenantId, completion.user.id, 'web'));
       if (directVivaAllowed) {
         const fragment = new URLSearchParams(target.hash.replace(/^#/, ''));
-        fragment.set('viva_handoff', session.vivaHandoffCode);
-        if (session.vivaRecovery) fragment.set('viva_recovery', '1');
+        fragment.set('viva_handoff', completion.vivaHandoffCode);
+        if (completion.vivaRecovery) fragment.set('viva_recovery', '1');
         target.hash = fragment.toString();
       }
       return reply.redirect(target.toString());
@@ -375,9 +383,11 @@ export function registerAuthRoutes(
     async (request, reply) => {
       try {
         const body = vivaAccessBodySchema.parse(request.body ?? {});
+        const { tenantKey } = paramsSchema.parse(request.params);
         const tenantId = request.tenantId;
         const userId = request.padlHubClaims?.sub;
-        if (!tenantId || !userId) {
+        const sessionId = request.padlHubClaims?.sid;
+        if (!tenantId || !userId || !sessionId) {
           return sendApiError(request, reply, 401, 'AUTH_REQUIRED', 'Требуется авторизация.');
         }
         const platformHeader = request.headers['x-app-platform'];
@@ -401,13 +411,28 @@ export function registerAuthRoutes(
           );
         }
         const access = await authService.issueVivaAccessToken({
+          tenantKey,
           tenantId,
           userId,
+          sessionId,
           ...(body.handoffCode ? { handoffCode: body.handoffCode } : {}),
           correlationId: request.id,
         });
+        let profilePhoto:
+          { readonly avatarUrl: string; readonly syncedAt: string } | null | undefined;
+        try {
+          if (resolveProfilePhotoState) {
+            profilePhoto = (await resolveProfilePhotoState(tenantId, userId)) ?? null;
+          }
+        } catch {
+          // Stable media metadata is optional. A transient projection read must not
+          // turn a valid delegated-access response into an authorization failure.
+        }
         preventCredentialCaching(reply);
-        return reply.send(access);
+        return reply.send({
+          ...access,
+          ...(profilePhoto !== undefined ? { profilePhoto } : {}),
+        });
       } catch (error) {
         return handleAuthError(error, request, reply);
       }

@@ -59,8 +59,15 @@ async function token(): Promise<string> {
     .sign(new TextEncoder().encode(config.JWT_ACCESS_SECRET));
 }
 
-async function profilePhotoGrant(): Promise<string> {
-  return new SignJWT({ tenantId, scope: 'profile.photo.sync', issuedAtMs: Date.now() })
+async function profilePhotoGrant(
+  sessionId = '44444444-4444-4444-8444-444444444444',
+): Promise<string> {
+  return new SignJWT({
+    tenantId,
+    sid: sessionId,
+    scope: 'profile.photo.sync',
+    issuedAtMs: Date.now(),
+  })
     .setProtectedHeader({ alg: 'HS256', typ: 'phub-profile-photo-grant+jwt' })
     .setIssuer(config.JWT_ISSUER)
     .setAudience(`${config.JWT_AUDIENCE}:profile-photo-sync`)
@@ -360,6 +367,89 @@ describe('profile photo media route', () => {
     expect(put).not.toHaveBeenCalled();
     expect(reserveClientAssistedPhoto).not.toHaveBeenCalled();
     expect(finalizeClientAssistedPhoto).not.toHaveBeenCalled();
+  });
+
+  it('removes an authoritative Viva-null photo with the same bound grant and idempotency key', async () => {
+    let active = true;
+    const removeClientAssistedPhoto = vi
+      .fn<NonNullable<ProfileSummaryRepository['removeClientAssistedPhoto']>>()
+      .mockImplementation(() => {
+        active = false;
+        return Promise.resolve({ removed: true, replayed: false });
+      });
+    const read = vi.fn<ProfilePhotoMediaStore['read']>();
+    const app = await buildApp({
+      config,
+      logger: createLogger('profile-photo-media-route-delete-test', 'silent'),
+      pool: fakePool(),
+      profilePhotoMediaRepository: {
+        getPhotoObjectKey: vi
+          .fn()
+          .mockImplementation(() => Promise.resolve(active ? objectKey : undefined)),
+        getPhotoDeliveryIds: vi.fn(),
+        removeClientAssistedPhoto,
+      },
+      profilePhotoMediaStore: { read },
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'DELETE',
+      url: '/user/api/v1/local-padel/profile/photo',
+      headers: {
+        authorization: `Bearer ${await token()}`,
+        'idempotency-key': 'profile-photo-client-delete-0001',
+        'x-profile-photo-grant': await profilePhotoGrant(),
+      },
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(response.json()).toEqual({ removed: true, replayed: false });
+    expect(removeClientAssistedPhoto).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tenantId,
+        userId,
+        idempotencyKey: 'profile-photo-client-delete-0001',
+        grantId: '55555555-5555-4555-8555-555555555555',
+      }),
+    );
+    const oldDelivery = await app.inject({
+      method: 'GET',
+      url: `/public/api/v1/media/profile-photos/${tenantId}/${deliveryId}`,
+    });
+    expect(oldDelivery.statusCode).toBe(404);
+    expect(oldDelivery.json()).toMatchObject({ code: 'PROFILE_PHOTO_NOT_FOUND' });
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it('rejects a photo command grant issued for another PadlHub session family', async () => {
+    const removeClientAssistedPhoto = vi.fn();
+    const app = await buildApp({
+      config,
+      logger: createLogger('profile-photo-media-route-session-binding-test', 'silent'),
+      pool: fakePool(),
+      profilePhotoMediaRepository: {
+        getPhotoObjectKey: vi.fn(),
+        getPhotoDeliveryIds: vi.fn(),
+        removeClientAssistedPhoto,
+      },
+      profilePhotoMediaStore: { read: vi.fn() },
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'DELETE',
+      url: '/user/api/v1/local-padel/profile/photo',
+      headers: {
+        authorization: `Bearer ${await token()}`,
+        'idempotency-key': 'profile-photo-client-delete-wrong-session',
+        'x-profile-photo-grant': await profilePhotoGrant('66666666-6666-4666-8666-666666666666'),
+      },
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toMatchObject({ code: 'PROFILE_PHOTO_GRANT_REQUIRED' });
+    expect(removeClientAssistedPhoto).not.toHaveBeenCalled();
   });
 
   it('streams the current private WebP object through the stable PadlHub URL', async () => {

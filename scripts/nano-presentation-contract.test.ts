@@ -321,16 +321,33 @@ describe('Nano presentation release contract', () => {
     expect(applicationRollback).toContain('phub.community-logo-rollback.v1');
     expect(compatibleWorkerRestore).toContain('COMMUNITY_LOGO_ROLLBACK_V1=true');
     expect(clientRoutingRunbook).toMatch(
-      /current migration chain ends at\s+`0081_community_logo_stable_delivery_validate\.sql`/,
+      /current media migration chain ends\s+at `0083_profile_photo_removal_commands_validate\.sql`/,
     );
     expect(clientRoutingRunbook).toContain('0079_profile_photo_client_assisted_source.sql');
     expect(clientRoutingRunbook).toContain('0080_community_logo_stable_delivery.sql');
     expect(clientRoutingRunbook).toContain('0081_community_logo_stable_delivery_validate.sql');
-    expect(clientRoutingRunbook).toMatch(/Do not down-migrate `0079`, `0080` or\s+`0081`/);
+    expect(clientRoutingRunbook).toContain('0082_profile_photo_removal_commands.sql');
+    expect(clientRoutingRunbook).toContain('0083_profile_photo_removal_commands_validate.sql');
+    expect(clientRoutingRunbook).toContain('CHAT_PUSH_FOUNDATION_MAINTENANCE_ACK');
+    expect(clientRoutingRunbook).toContain('0069_booking_notification_projection_fence.sql');
+    expect(clientRoutingRunbook).toContain('0073_booking_reminder_scheduler.sql');
+    expect(clientRoutingRunbook).toContain('docs/runbooks/chats-notifications-moderation.md');
+    expect(clientRoutingRunbook).toContain('can_bypass_rls=true');
+    expect(clientRoutingRunbook).toContain('`MIGRATOR_DATABASE_URL`');
+    expect(clientRoutingRunbook).toContain('can_apply_profile_media_chain=true');
+    expect(clientRoutingRunbook).toContain(
+      "values ('user_profile_photo_sync'), ('community_logo_sync')",
+    );
+    expect(clientRoutingRunbook).toContain('c.relowner = current_user::regrole');
+    expect(clientRoutingRunbook).toContain(
+      "to_regclass('integration.profile_photo_client_commands')",
+    );
+    expect(clientRoutingRunbook).toContain('`invalid_legacy_upsert_rows` is non-zero');
+    expect(clientRoutingRunbook).toMatch(/Do not down-migrate `0079`\s+through `0083`/);
     expect(clientRoutingRunbook).toContain('normal repeat-deploy rollback is stable-to-stable');
     expect(clientRoutingRunbook).toContain('returning community logos to signed URLs');
     expect(rollbackRunbook).toContain(
-      'Migrations `0079`, `0080` and `0081` remain applied in both rollback paths.',
+      'Migrations `0079` through `0083` remain applied in both rollback paths.',
     );
     for (const schema of ['CommunityMinimalView', 'CommunityPublicView', 'CommunityMemberView']) {
       const schemaBlock = userApiContract.match(

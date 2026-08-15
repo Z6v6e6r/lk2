@@ -158,7 +158,7 @@ import {
   fetchClientAssistedVivaProfilePhoto,
   normalizePadlHubUserProfile,
   normalizeVivaUserProfile,
-  vivaProfilePhotoSourceUrl,
+  vivaProfilePhotoObservation,
 } from '@phub/viva-client-adapter';
 
 export interface NormalizedUser {
@@ -531,6 +531,10 @@ const VIVA_REAUTH_ATTEMPT_STORAGE_KEY = 'phub.viva-reauth-attempt.v1';
 const VIVA_REAUTH_ATTEMPT_TTL_MS = 10 * 60 * 1_000;
 const SELF_PROFILE_CACHE_TTL_MS = 60 * 1_000;
 const PROFILE_PHOTO_SYNC_RETRY_MAX_MS = 30 * 60 * 1_000;
+const PROFILE_PHOTO_REVALIDATE_MS = 24 * 60 * 60 * 1_000;
+const PROFILE_PHOTO_GRANT_REUSE_MS = 4 * 60 * 1_000;
+const PROFILE_PHOTO_DELIVERY_PATH_PATTERN =
+  /^\/public\/api\/v1\/media\/profile-photos\/([0-9a-f-]{36})\/[0-9a-f-]{36}$/;
 
 export function createMessagingCommandId(): string {
   const webCrypto = typeof globalThis === 'object' ? globalThis.crypto : undefined;
@@ -573,6 +577,19 @@ function normalizeContext(payload: ApiUserContext, tenantKey: string): UserConte
 
 function isUnauthorized(error: unknown): boolean {
   return error instanceof ApiClientError && error.status === 401;
+}
+
+function requiresFreshProfilePhotoGrant(error: unknown): boolean {
+  return (
+    error instanceof ApiClientError &&
+    (error.code === 'PROFILE_PHOTO_GRANT_REQUIRED' ||
+      error.code === 'PROFILE_PHOTO_GRANT_STALE' ||
+      error.code === 'PROFILE_PHOTO_IDEMPOTENCY_CONFLICT')
+  );
+}
+
+function isStaleProfilePhotoGrant(error: unknown): boolean {
+  return error instanceof ApiClientError && error.code === 'PROFILE_PHOTO_GRANT_STALE';
 }
 
 function buildSelfPlayerProfileView(profile: UserProfile): PlayerProfileView {
@@ -620,8 +637,9 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
   const client = new PadlHubApiClient(clientOptions);
   let vivaAccessToken: string | undefined;
   let vivaProfilePhotoGrant: string | undefined;
-  let synchronizedProfilePhoto:
-    { readonly userId: string; readonly sourceUrl: string; readonly avatarUrl: string } | undefined;
+  let vivaProfilePhotoCommandIdempotencyKey: string | undefined;
+  let vivaProfilePhotoGrantExpiresAt = 0;
+  let vivaStableProfilePhoto: { readonly avatarUrl: string; readonly syncedAt: number } | undefined;
   let profilePhotoSyncRetryAfter = 0;
   let profilePhotoSyncFailureCount = 0;
   let profilePhotoSyncFailureSourceUrl: string | undefined;
@@ -635,6 +653,7 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
   let selfProfilePromise: Promise<UserProfile> | undefined;
   let selfProfileExpiresAt = 0;
   let currentUserId: string | undefined;
+  let currentTenantId: string | undefined;
   let principalGeneration = 0;
   const playerProfilePromises = new Map<string, Promise<PlayerProfileView>>();
   let profilePrivacyPromise: Promise<ProfilePrivacySettings> | undefined;
@@ -773,6 +792,7 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     readonly accessToken: string;
     readonly expiresAt: string;
     readonly profilePhotoGrant: string;
+    readonly profilePhoto?: { readonly avatarUrl: string; readonly syncedAt: string } | null;
   }> {
     const delays = handoffCode ? [] : [150, 450, 900];
     for (let attempt = 0; ; attempt += 1) {
@@ -803,7 +823,37 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       .then((access) => {
         if (generation !== principalGeneration) throw new Error('AUTH_PRINCIPAL_CHANGED');
         vivaAccessToken = access.accessToken;
+        if (vivaProfilePhotoGrant !== access.profilePhotoGrant) {
+          vivaProfilePhotoCommandIdempotencyKey = createMessagingCommandId();
+          vivaProfilePhotoGrantExpiresAt = Date.now() + PROFILE_PHOTO_GRANT_REUSE_MS;
+        }
         vivaProfilePhotoGrant = access.profilePhotoGrant;
+        if (access.profilePhoto === null) {
+          if (vivaStableProfilePhoto) {
+            profilePhotoSyncRetryAfter = 0;
+            profilePhotoSyncFailureCount = 0;
+            profilePhotoSyncFailureSourceUrl = undefined;
+          }
+          vivaStableProfilePhoto = undefined;
+        } else if (access.profilePhoto) {
+          const pathMatch = PROFILE_PHOTO_DELIVERY_PATH_PATTERN.exec(access.profilePhoto.avatarUrl);
+          const syncedAt = Date.parse(access.profilePhoto.syncedAt);
+          if (pathMatch?.[1] === currentTenantId && Number.isFinite(syncedAt)) {
+            const avatarUrl = new URL(
+              access.profilePhoto.avatarUrl,
+              `${clientOptions.baseUrl}/`,
+            ).toString();
+            if (
+              vivaStableProfilePhoto?.avatarUrl !== avatarUrl ||
+              vivaStableProfilePhoto.syncedAt !== syncedAt
+            ) {
+              profilePhotoSyncRetryAfter = 0;
+              profilePhotoSyncFailureCount = 0;
+              profilePhotoSyncFailureSourceUrl = undefined;
+            }
+            vivaStableProfilePhoto = { avatarUrl, syncedAt };
+          }
+        }
         vivaAccessExpiresAt = Date.parse(access.expiresAt);
         return access.accessToken;
       })
@@ -848,10 +898,15 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
   }
 
   function normalizeSession(session: ApiAuthenticatedSession): AuthenticatedSession {
-    if (currentUserId && currentUserId !== session.context.userId) {
+    if (
+      currentUserId &&
+      (currentUserId !== session.context.userId || currentTenantId !== session.context.tenantId)
+    ) {
       vivaAccessToken = undefined;
       vivaProfilePhotoGrant = undefined;
-      synchronizedProfilePhoto = undefined;
+      vivaProfilePhotoCommandIdempotencyKey = undefined;
+      vivaProfilePhotoGrantExpiresAt = 0;
+      vivaStableProfilePhoto = undefined;
       profilePhotoSyncRetryAfter = 0;
       profilePhotoSyncFailureCount = 0;
       profilePhotoSyncFailureSourceUrl = undefined;
@@ -866,6 +921,7 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       principalGeneration += 1;
     }
     currentUserId = session.context.userId;
+    currentTenantId = session.context.tenantId;
     return { context: normalizeContext(session.context, options.tenantKey) };
   }
 
@@ -892,6 +948,8 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     if (error instanceof ClientTransportError && error.code === 'DIRECT_VIVA_REAUTH_REQUIRED') {
       vivaAccessToken = undefined;
       vivaProfilePhotoGrant = undefined;
+      vivaProfilePhotoCommandIdempotencyKey = undefined;
+      vivaProfilePhotoGrantExpiresAt = 0;
       vivaAccessExpiresAt = 0;
       void startAutomaticVivaReauthorization().catch(() => undefined);
     }
@@ -903,24 +961,145 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     const userId = currentUserId;
     const generation = principalGeneration;
     let directVivaRead = false;
-    let directVivaPhotoSourceUrl: string | undefined;
+    let directVivaPhotoObservation = { kind: 'UNAVAILABLE' } as ReturnType<
+      typeof vivaProfilePhotoObservation
+    >;
     selfProfileExpiresAt = Number.POSITIVE_INFINITY;
-    const request = clientTransport
-      .executeRead({
+    const prepareDirectProfileObservation = async (): Promise<void> => {
+      let plan = routingPlan;
+      if (!plan) {
+        try {
+          plan = await loadRoutingPlan();
+        } catch {
+          // Preserve the executor's existing plan-failure/fallback behavior below.
+          return;
+        }
+      }
+      const profileOperation = plan.operations.find(
+        (operation) => operation.operation === 'profile.read',
+      );
+      if (vivaProfilePhotoGrant && vivaProfilePhotoGrantExpiresAt <= Date.now()) {
+        vivaProfilePhotoGrant = undefined;
+        vivaProfilePhotoCommandIdempotencyKey = undefined;
+        vivaProfilePhotoGrantExpiresAt = 0;
+      }
+      if (profileOperation?.transport === 'DIRECT_VIVA' && !vivaProfilePhotoGrant) {
+        await applyVivaAccess();
+      }
+      if (generation !== principalGeneration || currentUserId !== userId) {
+        throw new Error('AUTH_PRINCIPAL_CHANGED');
+      }
+    };
+    const executeProfileRead = (): Promise<UserProfile> =>
+      clientTransport.executeRead({
         request: { operation: 'profile.read' },
         normalizePadlHub: normalizePadlHubUserProfile,
         normalizeViva: (payload) => {
           directVivaRead = true;
-          directVivaPhotoSourceUrl = vivaProfilePhotoSourceUrl(payload);
+          directVivaPhotoObservation = vivaProfilePhotoObservation(payload);
           return normalizeVivaUserProfile(payload, userId);
         },
-      })
+      });
+    const clearProfilePhotoGrant = (): void => {
+      vivaProfilePhotoGrant = undefined;
+      vivaProfilePhotoCommandIdempotencyKey = undefined;
+      vivaProfilePhotoGrantExpiresAt = 0;
+    };
+    const request = prepareDirectProfileObservation()
+      .then(executeProfileRead)
       .then(async (profile) => {
         if (generation !== principalGeneration || currentUserId !== userId) {
           throw new Error('AUTH_PRINCIPAL_CHANGED');
         }
-        let resolvedProfile = profile;
+        const applyStablePhoto = (candidate: UserProfile): UserProfile => {
+          const stablePhotoIsFresh = Boolean(
+            vivaStableProfilePhoto &&
+            Number.isFinite(vivaStableProfilePhoto.syncedAt) &&
+            Date.now() - vivaStableProfilePhoto.syncedAt < PROFILE_PHOTO_REVALIDATE_MS,
+          );
+          return directVivaRead &&
+            vivaStableProfilePhoto &&
+            directVivaPhotoObservation.kind !== 'ABSENT' &&
+            (directVivaPhotoObservation.kind === 'PRESENT' || stablePhotoIsFresh)
+            ? { ...candidate, avatarUrl: vivaStableProfilePhoto.avatarUrl }
+            : candidate;
+        };
+        let resolvedProfile = applyStablePhoto(profile);
         const allowedMediaHosts = routingPlan?.directViva?.allowedMediaHosts;
+        if (directVivaRead && directVivaPhotoObservation.kind === 'ABSENT') {
+          vivaStableProfilePhoto = undefined;
+          if (Date.now() >= profilePhotoSyncRetryAfter) {
+            let tombstoneAttempts = 0;
+            while (
+              directVivaRead &&
+              directVivaPhotoObservation.kind === 'ABSENT' &&
+              tombstoneAttempts < 2
+            ) {
+              tombstoneAttempts += 1;
+              try {
+                if (!vivaProfilePhotoGrant) await applyVivaAccess();
+                const grant = vivaProfilePhotoGrant;
+                const idempotencyKey = vivaProfilePhotoCommandIdempotencyKey;
+                if (!grant || !idempotencyKey) throw new Error('PROFILE_PHOTO_GRANT_UNAVAILABLE');
+                await client.removeUserProfilePhoto({ grant, idempotencyKey });
+                if (generation !== principalGeneration || currentUserId !== userId) {
+                  throw new Error('AUTH_PRINCIPAL_CHANGED');
+                }
+                vivaStableProfilePhoto = undefined;
+                if (
+                  vivaProfilePhotoGrant === grant &&
+                  vivaProfilePhotoCommandIdempotencyKey === idempotencyKey
+                ) {
+                  clearProfilePhotoGrant();
+                }
+                profilePhotoSyncRetryAfter = 0;
+                profilePhotoSyncFailureCount = 0;
+                profilePhotoSyncFailureSourceUrl = undefined;
+                break;
+              } catch (caught) {
+                if (generation !== principalGeneration || currentUserId !== userId) throw caught;
+                vivaStableProfilePhoto = undefined;
+                if (isStaleProfilePhotoGrant(caught) && tombstoneAttempts === 1) {
+                  clearProfilePhotoGrant();
+                  try {
+                    await applyVivaAccess();
+                    directVivaRead = false;
+                    directVivaPhotoObservation = { kind: 'UNAVAILABLE' };
+                    resolvedProfile = applyStablePhoto(await executeProfileRead());
+                    if (generation !== principalGeneration || currentUserId !== userId) {
+                      throw new Error('AUTH_PRINCIPAL_CHANGED', { cause: caught });
+                    }
+                    continue;
+                  } catch (freshObservationError) {
+                    if (generation !== principalGeneration || currentUserId !== userId) {
+                      throw new Error('AUTH_PRINCIPAL_CHANGED', {
+                        cause: freshObservationError,
+                      });
+                    }
+                    clearProfilePhotoGrant();
+                  }
+                } else if (requiresFreshProfilePhotoGrant(caught)) {
+                  clearProfilePhotoGrant();
+                  profilePhotoSyncFailureCount = 0;
+                  profilePhotoSyncRetryAfter = 0;
+                  break;
+                }
+                profilePhotoSyncFailureCount += 1;
+                profilePhotoSyncRetryAfter =
+                  Date.now() +
+                  Math.min(
+                    PROFILE_PHOTO_SYNC_RETRY_MAX_MS,
+                    SELF_PROFILE_CACHE_TTL_MS * 2 ** (profilePhotoSyncFailureCount - 1),
+                  );
+                break;
+              }
+            }
+          }
+        }
+        const directVivaPhotoSourceUrl =
+          directVivaPhotoObservation.kind === 'PRESENT'
+            ? directVivaPhotoObservation.sourceUrl
+            : undefined;
         if (
           directVivaPhotoSourceUrl &&
           profilePhotoSyncFailureSourceUrl !== directVivaPhotoSourceUrl
@@ -932,23 +1111,18 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
         if (
           directVivaRead &&
           directVivaPhotoSourceUrl &&
-          synchronizedProfilePhoto?.userId === userId &&
-          synchronizedProfilePhoto.sourceUrl === directVivaPhotoSourceUrl
-        ) {
-          resolvedProfile = { ...profile, avatarUrl: synchronizedProfilePhoto.avatarUrl };
-        }
-        if (
-          directVivaRead &&
-          directVivaPhotoSourceUrl &&
           allowedMediaHosts?.length &&
-          !resolvedProfile.avatarUrl &&
+          (!vivaStableProfilePhoto ||
+            !Number.isFinite(vivaStableProfilePhoto.syncedAt) ||
+            Date.now() - vivaStableProfilePhoto.syncedAt >= PROFILE_PHOTO_REVALIDATE_MS) &&
           Date.now() >= profilePhotoSyncRetryAfter
         ) {
           const startedAt = Date.now();
           try {
             if (!vivaProfilePhotoGrant) await applyVivaAccess();
             const grant = vivaProfilePhotoGrant;
-            if (!grant) throw new Error('PROFILE_PHOTO_GRANT_UNAVAILABLE');
+            const idempotencyKey = vivaProfilePhotoCommandIdempotencyKey;
+            if (!grant || !idempotencyKey) throw new Error('PROFILE_PHOTO_GRANT_UNAVAILABLE');
             const photo = await fetchClientAssistedVivaProfilePhoto({
               sourceUrl: directVivaPhotoSourceUrl,
               allowedHosts: allowedMediaHosts,
@@ -962,16 +1136,20 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
             const synchronized = await client.syncUserProfilePhoto({
               ...photo,
               grant,
+              idempotencyKey,
             });
-            if (vivaProfilePhotoGrant === grant) vivaProfilePhotoGrant = undefined;
             if (generation !== principalGeneration || currentUserId !== userId) {
               throw new Error('AUTH_PRINCIPAL_CHANGED');
             }
-            synchronizedProfilePhoto = {
-              userId,
-              sourceUrl: directVivaPhotoSourceUrl,
-              avatarUrl: synchronized.avatarUrl,
-            };
+            vivaStableProfilePhoto = { avatarUrl: synchronized.avatarUrl, syncedAt: Date.now() };
+            if (
+              vivaProfilePhotoGrant === grant &&
+              vivaProfilePhotoCommandIdempotencyKey === idempotencyKey
+            ) {
+              vivaProfilePhotoGrant = undefined;
+              vivaProfilePhotoCommandIdempotencyKey = undefined;
+              vivaProfilePhotoGrantExpiresAt = 0;
+            }
             profilePhotoSyncRetryAfter = 0;
             profilePhotoSyncFailureCount = 0;
             resolvedProfile = { ...profile, avatarUrl: synchronized.avatarUrl };
@@ -991,7 +1169,11 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
             if (generation !== principalGeneration || currentUserId !== userId) {
               throw new Error('AUTH_PRINCIPAL_CHANGED', { cause: error });
             }
-            vivaProfilePhotoGrant = undefined;
+            if (requiresFreshProfilePhotoGrant(error)) {
+              vivaProfilePhotoGrant = undefined;
+              vivaProfilePhotoCommandIdempotencyKey = undefined;
+              vivaProfilePhotoGrantExpiresAt = 0;
+            }
             profilePhotoSyncFailureCount += 1;
             profilePhotoSyncRetryAfter =
               Date.now() +
@@ -1911,7 +2093,9 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       await client.revokeSession();
       vivaAccessToken = undefined;
       vivaProfilePhotoGrant = undefined;
-      synchronizedProfilePhoto = undefined;
+      vivaProfilePhotoCommandIdempotencyKey = undefined;
+      vivaProfilePhotoGrantExpiresAt = 0;
+      vivaStableProfilePhoto = undefined;
       profilePhotoSyncRetryAfter = 0;
       profilePhotoSyncFailureCount = 0;
       profilePhotoSyncFailureSourceUrl = undefined;
@@ -1925,6 +2109,7 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       selfProfilePromise = undefined;
       selfProfileExpiresAt = 0;
       currentUserId = undefined;
+      currentTenantId = undefined;
       vivaReauthorizationStarted = false;
       vivaAccessPromise = undefined;
       principalGeneration += 1;

@@ -55,24 +55,30 @@ the audited routing-plan procedure in
 ### Roll out browser-bound OAuth state
 
 OAuth starts created by the browser-binding release use the versioned Redis namespace
-`phub:auth:v2:viva-oauth:`. It does not share the legacy `phub:auth:viva-oauth:` prefix. This
-boundary is deliberate: an older API node cannot consume a new
-state and therefore cannot bypass the initiating-browser check during a sequential rollout.
+`phub:auth:v3:viva-oauth:`. It does not share the v2 or legacy prefixes. This boundary is
+deliberate: an older API node cannot consume new recovery state and therefore cannot apply the old
+session-creation behavior or bypass the initiating-browser and active-session-family checks during
+a sequential rollout.
 
 1. Deploy the exact API and web image pair proven in staging. Do not deploy the API change without
    the SDK change that sends browser credentials on both OAuth-start requests.
 2. Roll API nodes sequentially and verify readiness after each node. A flow started on the previous
-   release may fail closed with `AUTH_OAUTH_BROWSER_MISMATCH` on a new callback node; ask the user to
-   start authentication again. Never fall back to accepting a state without its browser cookie.
+   release may fail closed with `AUTH_OAUTH_BROWSER_MISMATCH`, `AUTH_SESSION_REVOKED` or
+   `AUTH_CODE_EXPIRED` on a new callback node; ask the user to start authentication again. Never
+   fall back to accepting state without its browser cookie and active PadlHub session family.
 3. After the last old API node is drained, wait through the configured
    `AUTH_CHALLENGE_TTL_SECONDS` window (60-900 seconds) before declaring the old unbound state cohort
    expired. Monitor `AUTH_OAUTH_BROWSER_MISMATCH`, `AUTH_CODE_EXPIRED` and callback success rates.
 4. In an authenticated browser, force `VIVA_REAUTH_REQUIRED`, verify that the recovery start sets a
    state-scoped `phub_oauth_browser_{digest}` cookie, the callback clears only that state's cookie, a
-   PadlHub refresh cookie is issued, and the original internal route is restored. Start two flows in
-   separate tabs and complete them in reverse order to prove neither binding is overwritten. Repeat
-   from a different browser without the matching cookie and prove that no refresh cookie is issued.
-5. A rollback to an older API cannot consume v2 states. Treat the resulting
+   new PadlHub refresh cookie is **not** issued, the existing session refreshes normally after the
+   redirect, the one-time Viva handoff succeeds, and the original internal route is restored. Log
+   out in another tab before completing one flow and prove the callback returns
+   `AUTH_SESSION_REVOKED` without replacing the delegation. Start two flows in separate tabs and
+   complete them in reverse order to prove neither binding is overwritten. Repeat from a different
+   browser without the matching cookie, then complete from the original browser to prove the wrong
+   browser did not consume its state.
+5. A rollback to an older API cannot consume v3 states. Treat the resulting
    `AUTH_CODE_EXPIRED` as a bounded restart requirement; do not move or rewrite Redis state keys.
 
 ### Emergency disable / switch to PadlHub

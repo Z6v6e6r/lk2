@@ -186,10 +186,19 @@ export interface ProfilePhotoSyncResult {
   readonly replayed: boolean;
 }
 
+export interface ProfilePhotoRemoveResult {
+  readonly removed: boolean;
+  readonly replayed: boolean;
+}
+
 export interface VivaDelegatedAccess {
   readonly accessToken: string;
   readonly expiresAt: string;
   readonly profilePhotoGrant: string;
+  readonly profilePhoto?: {
+    readonly avatarUrl: string;
+    readonly syncedAt: string;
+  } | null;
 }
 
 export interface CommunityDiscoveryFilters {
@@ -617,8 +626,9 @@ export class PadlHubApiClient {
     readonly body: ArrayBuffer;
     readonly contentType: string;
     readonly grant: string;
+    readonly idempotencyKey?: string;
   }): Promise<ProfilePhotoSyncResult> {
-    const idempotencyKey = createCorrelationId();
+    const idempotencyKey = input.idempotencyKey ?? createCorrelationId();
     const result = await this.request<ProfilePhotoSyncResult>('/profile/photo', {
       method: 'POST',
       idempotencyKey,
@@ -630,6 +640,18 @@ export class PadlHubApiClient {
       body: input.body,
     });
     return { ...result, avatarUrl: this.resolveApiMediaUrl(result.avatarUrl) };
+  }
+
+  public removeUserProfilePhoto(input: {
+    readonly grant: string;
+    readonly idempotencyKey?: string;
+  }): Promise<ProfilePhotoRemoveResult> {
+    return this.request<ProfilePhotoRemoveResult>('/profile/photo', {
+      method: 'DELETE',
+      idempotencyKey: input.idempotencyKey ?? createCorrelationId(),
+      retryOnUnauthorized: false,
+      headers: { 'X-Profile-Photo-Grant': input.grant },
+    });
   }
 
   public getPlayerProfile(userId: string): Promise<PlayerProfileView> {

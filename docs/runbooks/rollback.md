@@ -79,4 +79,4 @@ and compatibility backfill enabled until signed logo mappings, Home projections 
 projector queue converge. Disable backfill, restart the worker, then require
 `PHUB_MEDIA_ROLLBACK_MODE=feature sh /opt/phub/verify-media-rollback-safe.sh`. The guard checks the
 running flags, validates convergence twice, stops the worker, rechecks the queue and only then clears
-the cutover marker. Migrations `0079`, `0080` and `0081` remain applied in both rollback paths.
+the cutover marker. Migrations `0079` through `0083` remain applied in both rollback paths.

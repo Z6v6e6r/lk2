@@ -1,3 +1,5 @@
+import { createHmac } from 'node:crypto';
+
 import type {
   IdentityProviderPort,
   VerifiedExternalIdentity,
@@ -13,6 +15,7 @@ import {
   AuthService,
   type AuthRepository,
   type AuthUser,
+  type RefreshSessionIdentity,
   type RefreshSessionRotation,
   type TenantAuthBinding,
 } from './auth-service.js';
@@ -71,11 +74,15 @@ class FakeRepository implements AuthRepository {
   private sessionId: string | undefined;
   private bindingValue: TenantAuthBinding = binding;
   private vivaDelegationRevocationCount = 0;
+  private readonly revocationSteps: string[] = [];
   private phoneLegalAcceptanceCount = 0;
   private legalAcceptanceCount = 0;
   private currentLegalAcceptances = true;
   private existingSubjectUser: AuthUser | undefined = user;
   private identityUpsertCount = 0;
+  private refreshSessionCreationCount = 0;
+  private vivaDelegationSaveCount = 0;
+  private rejectNextActiveSessionSave = false;
   private vivaDelegation:
     | {
         issuer: string;
@@ -94,6 +101,10 @@ class FakeRepository implements AuthRepository {
     return this.vivaDelegationRevocationCount;
   }
 
+  public get revocationOrder(): readonly string[] {
+    return this.revocationSteps;
+  }
+
   public get phoneLegalAcceptances(): number {
     return this.phoneLegalAcceptanceCount;
   }
@@ -108,6 +119,26 @@ class FakeRepository implements AuthRepository {
 
   public get identityUpserts(): number {
     return this.identityUpsertCount;
+  }
+
+  public get refreshSessionCreations(): number {
+    return this.refreshSessionCreationCount;
+  }
+
+  public get vivaDelegationSaves(): number {
+    return this.vivaDelegationSaveCount;
+  }
+
+  public get activeSessionId(): string | undefined {
+    return this.sessionId;
+  }
+
+  public setActiveSessionId(sessionId: string | undefined): void {
+    this.sessionId = sessionId;
+  }
+
+  public rejectNextGuardedDelegationSave(): void {
+    this.rejectNextActiveSessionSave = true;
   }
 
   public setExistingSubjectUser(nextUser: AuthUser | undefined): void {
@@ -137,6 +168,7 @@ class FakeRepository implements AuthRepository {
     readonly sessionId: string;
     readonly tokenHash: string;
   }): Promise<void> {
+    this.refreshSessionCreationCount += 1;
     this.sessionId = input.sessionId;
     this.tokenHash = input.tokenHash;
     return Promise.resolve();
@@ -163,14 +195,18 @@ class FakeRepository implements AuthRepository {
   }
 
   public revokeRefreshSession(_tenantKey: string, tokenHash: string): Promise<boolean> {
+    this.revocationSteps.push('session');
     const revoked = tokenHash === this.tokenHash;
     if (revoked) this.tokenHash = undefined;
     return Promise.resolve(revoked);
   }
 
-  public revokeVivaDelegationForRefreshSession(): Promise<void> {
+  public revokeSessionAndVivaDelegation(tenantKey: string, tokenHash: string): Promise<boolean> {
+    this.revocationSteps.push('session+delegation');
     this.vivaDelegationRevocationCount += 1;
-    return Promise.resolve();
+    const revoked = tenantKey === binding.tenantKey && tokenHash === this.tokenHash;
+    if (revoked) this.tokenHash = undefined;
+    return Promise.resolve(revoked);
   }
 
   public getUserContext(tenantId: string, userId: string): Promise<AuthUser | undefined> {
@@ -193,8 +229,20 @@ class FakeRepository implements AuthRepository {
     });
   }
 
-  public findRefreshSessionById(): Promise<undefined> {
-    return Promise.resolve(undefined);
+  public findRefreshSessionById(
+    tenantKey: string,
+    sessionId: string,
+  ): Promise<RefreshSessionIdentity | undefined> {
+    if (tenantKey !== binding.tenantKey || sessionId !== this.sessionId) {
+      return Promise.resolve(undefined);
+    }
+    return Promise.resolve({
+      sessionId,
+      familyId: sessionId,
+      tenantId: binding.tenantId,
+      tenantKey: binding.tenantKey,
+      user,
+    });
   }
 
   public saveVivaDelegation(input: {
@@ -205,6 +253,7 @@ class FakeRepository implements AuthRepository {
     readonly grantedScopes: readonly string[];
     readonly refreshExpiresAt?: Date;
   }): Promise<void> {
+    this.vivaDelegationSaveCount += 1;
     this.vivaDelegation = {
       issuer: input.issuer,
       subject: input.subject,
@@ -213,6 +262,17 @@ class FakeRepository implements AuthRepository {
       ...(input.refreshExpiresAt ? { refreshExpiresAt: input.refreshExpiresAt.toISOString() } : {}),
     };
     return Promise.resolve();
+  }
+
+  public saveVivaDelegationForActiveSession(
+    input: Parameters<AuthRepository['saveVivaDelegationForActiveSession']>[0],
+  ): Promise<boolean> {
+    if (this.rejectNextActiveSessionSave) {
+      this.rejectNextActiveSessionSave = false;
+      return Promise.resolve(false);
+    }
+    if (input.sessionFamilyId !== this.sessionId) return Promise.resolve(false);
+    return this.saveVivaDelegation(input).then(() => true);
   }
 
   public getVivaDelegation(): Promise<typeof this.vivaDelegation> {
@@ -304,12 +364,20 @@ describe('provider-neutral authentication routes', () => {
     });
     const repository = new FakeRepository();
     const stateStore = new MemoryVivaOAuthStateStore();
+    const identityModes: Array<'STANDARD' | 'RECOVERY_SUBJECT_ONLY'> = [];
+    const recordingOAuthProvider: VivaOAuthProviderPort = {
+      ...oauthProvider,
+      exchangeAuthorizationCode: (input) => {
+        identityModes.push(input.identityMode);
+        return oauthProvider.exchangeAuthorizationCode(input);
+      },
+    };
     const service = new AuthService({
       config: oauthConfig,
       repository,
       challengeStore: new MemoryAuthChallengeStore(),
       providers: new Map([['VIVA', provider]]),
-      vivaOAuthProvider: oauthProvider,
+      vivaOAuthProvider: recordingOAuthProvider,
       vivaOAuthStateStore: stateStore,
     });
 
@@ -330,10 +398,27 @@ describe('provider-neutral authentication routes', () => {
       idempotencyKey: 'oauth-complete-idempotency',
       oauthBrowserNonce: started.browserNonce,
     });
+    expect(identityModes).toEqual(['STANDARD']);
+    const padlHubSessionId = repository.activeSessionId;
+    if (!padlHubSessionId) throw new Error('Expected an active PadlHub session');
 
+    repository.setActiveSessionId(undefined);
+    await expect(
+      service.issueVivaAccessToken({
+        tenantKey: binding.tenantKey,
+        tenantId: binding.tenantId,
+        userId: user.id,
+        sessionId: padlHubSessionId,
+        handoffCode: completed.vivaHandoffCode,
+        correlationId: 'oauth-handoff-revoked-session',
+      }),
+    ).rejects.toMatchObject({ code: 'AUTH_SESSION_REVOKED' });
+    repository.setActiveSessionId(padlHubSessionId);
     const initialAccess = await service.issueVivaAccessToken({
+      tenantKey: binding.tenantKey,
       tenantId: binding.tenantId,
       userId: user.id,
+      sessionId: padlHubSessionId,
       handoffCode: completed.vivaHandoffCode,
       correlationId: 'oauth-handoff-correlation',
     });
@@ -353,29 +438,48 @@ describe('provider-neutral authentication routes', () => {
       payload: {
         sub: user.id,
         tenantId: binding.tenantId,
+        sid: padlHubSessionId,
         scope: 'profile.photo.sync',
       },
     });
     await expect(
       service.issueVivaAccessToken({
+        tenantKey: binding.tenantKey,
         tenantId: binding.tenantId,
         userId: user.id,
+        sessionId: padlHubSessionId,
         handoffCode: completed.vivaHandoffCode,
         correlationId: 'oauth-handoff-replay',
       }),
     ).rejects.toMatchObject({ code: 'VIVA_REAUTH_REQUIRED' });
 
     const refreshedAccess = await service.issueVivaAccessToken({
+      tenantKey: binding.tenantKey,
       tenantId: binding.tenantId,
       userId: user.id,
+      sessionId: padlHubSessionId,
       correlationId: 'oauth-refresh-correlation',
     });
     expect(refreshedAccess.accessToken).toBe('refreshed-viva-access-token');
+    const savesBeforeRevokedRefresh = repository.vivaDelegationSaves;
+    repository.rejectNextGuardedDelegationSave();
+    await expect(
+      service.issueVivaAccessToken({
+        tenantKey: binding.tenantKey,
+        tenantId: binding.tenantId,
+        userId: user.id,
+        sessionId: padlHubSessionId,
+        correlationId: 'oauth-refresh-after-logout-correlation',
+      }),
+    ).rejects.toMatchObject({ code: 'VIVA_REAUTH_REQUIRED' });
+    expect(repository.vivaDelegationSaves).toBe(savesBeforeRevokedRefresh);
+    const recoverySessionId = padlHubSessionId;
 
     const recovery = await service.startVivaOAuthRecovery({
       tenantKey: binding.tenantKey,
       tenantId: binding.tenantId,
       userId: user.id,
+      sessionId: recoverySessionId,
       provider: 'yandex',
       correlationId: 'oauth-recovery-start-correlation',
       idempotencyKey: 'oauth-recovery-start-idempotency',
@@ -385,6 +489,7 @@ describe('provider-neutral authentication routes', () => {
         tenantKey: binding.tenantKey,
         tenantId: binding.tenantId,
         userId: user.id,
+        sessionId: recoverySessionId,
         provider: 'yandex',
         correlationId: 'oauth-recovery-replay-correlation',
         idempotencyKey: 'oauth-recovery-start-idempotency',
@@ -395,6 +500,7 @@ describe('provider-neutral authentication routes', () => {
         tenantKey: binding.tenantKey,
         tenantId: binding.tenantId,
         userId: user.id,
+        sessionId: recoverySessionId,
         provider: 'vkid',
         correlationId: 'oauth-recovery-conflict-correlation',
         idempotencyKey: 'oauth-recovery-start-idempotency',
@@ -403,6 +509,7 @@ describe('provider-neutral authentication routes', () => {
     const recoveryState = new URL(recovery.redirectUrl).searchParams.get('state') ?? '';
     const beforeRecoveryAcceptances = repository.legalAcceptances;
     const beforeRecoveryUpserts = repository.identityUpserts;
+    const beforeRecoverySessions = repository.refreshSessionCreations;
     const completedRecovery = await service.completeVivaOAuth({
       tenantKey: binding.tenantKey,
       state: recoveryState,
@@ -412,13 +519,16 @@ describe('provider-neutral authentication routes', () => {
       oauthBrowserNonce: recovery.browserNonce,
     });
     expect(completedRecovery.vivaRecovery).toBe(true);
+    expect(identityModes).toEqual(['STANDARD', 'RECOVERY_SUBJECT_ONLY']);
     expect(repository.legalAcceptances).toBe(beforeRecoveryAcceptances);
     expect(repository.identityUpserts).toBe(beforeRecoveryUpserts);
+    expect(repository.refreshSessionCreations).toBe(beforeRecoverySessions);
 
     const crossBrowserRecovery = await service.startVivaOAuthRecovery({
       tenantKey: binding.tenantKey,
       tenantId: binding.tenantId,
       userId: user.id,
+      sessionId: recoverySessionId,
       provider: 'yandex',
       correlationId: 'oauth-recovery-cross-browser-start',
       idempotencyKey: 'oauth-recovery-cross-browser-idempotency',
@@ -432,6 +542,16 @@ describe('provider-neutral authentication routes', () => {
         idempotencyKey: 'oauth-recovery-cross-browser-complete-idempotency',
       }),
     ).rejects.toMatchObject({ code: 'AUTH_OAUTH_BROWSER_MISMATCH' });
+    await expect(
+      service.completeVivaOAuth({
+        tenantKey: binding.tenantKey,
+        state: new URL(crossBrowserRecovery.redirectUrl).searchParams.get('state') ?? '',
+        code: 'original-browser-authorization-code',
+        correlationId: 'oauth-recovery-original-browser-complete',
+        idempotencyKey: 'oauth-recovery-original-browser-complete-idempotency',
+        oauthBrowserNonce: crossBrowserRecovery.browserNonce,
+      }),
+    ).resolves.toMatchObject({ vivaRecovery: true });
 
     const legacyState = {
       state: 'pre-browser-binding-state',
@@ -457,11 +577,14 @@ describe('provider-neutral authentication routes', () => {
     ).rejects.toMatchObject({ code: 'AUTH_OAUTH_BROWSER_MISMATCH' });
 
     const mismatchedStateStore = {
-      take: () =>
+      claimCallback: () =>
         Promise.resolve({
-          ...legacyState,
-          state: 'stored-state-that-does-not-match-the-callback',
-          browserNonceHash: 'b'.repeat(64),
+          outcome: 'claimed',
+          state: {
+            ...legacyState,
+            state: 'stored-state-that-does-not-match-the-callback',
+            browserNonceHash: 'b'.repeat(64),
+          },
         }),
     } as unknown as VivaOAuthStateStore;
     const mismatchedStateService = new AuthService({
@@ -489,11 +612,160 @@ describe('provider-neutral authentication routes', () => {
         tenantKey: binding.tenantKey,
         tenantId: binding.tenantId,
         userId: user.id,
+        sessionId: recoverySessionId,
         provider: 'yandex',
         correlationId: 'oauth-recovery-stale-legal-correlation',
         idempotencyKey: 'oauth-recovery-stale-legal-idempotency',
       }),
     ).rejects.toMatchObject({ code: 'LEGAL_ACCEPTANCE_REQUIRED' });
+
+    repository.setCurrentLegalAcceptances(true);
+    const revokedRecovery = await service.startVivaOAuthRecovery({
+      tenantKey: binding.tenantKey,
+      tenantId: binding.tenantId,
+      userId: user.id,
+      sessionId: recoverySessionId,
+      provider: 'yandex',
+      correlationId: 'oauth-recovery-revoked-family-start',
+      idempotencyKey: 'oauth-recovery-revoked-family-start-idempotency',
+    });
+    const beforeRevokedRecoverySaves = repository.vivaDelegationSaves;
+    repository.setActiveSessionId(undefined);
+    await expect(
+      service.completeVivaOAuth({
+        tenantKey: binding.tenantKey,
+        state: new URL(revokedRecovery.redirectUrl).searchParams.get('state') ?? '',
+        code: 'oauth-recovery-revoked-family-code',
+        correlationId: 'oauth-recovery-revoked-family-complete',
+        idempotencyKey: 'oauth-recovery-revoked-family-complete-idempotency',
+        oauthBrowserNonce: revokedRecovery.browserNonce,
+      }),
+    ).rejects.toMatchObject({ code: 'AUTH_SESSION_REVOKED' });
+    expect(repository.vivaDelegationSaves).toBe(beforeRevokedRecoverySaves);
+    expect(repository.refreshSessionCreations).toBe(beforeRecoverySessions);
+  });
+
+  it('fails recovery closed when the verified subject belongs to another PadlHub user', async () => {
+    const oauthConfig = loadConfig({
+      APP_ENV: 'ci',
+      DATABASE_URL: 'postgresql://phub:test@localhost:5432/phub',
+      REDIS_URL: 'redis://localhost:6379',
+      RABBITMQ_URL: 'amqp://phub:test@localhost:5672',
+      JWT_ISSUER: 'phub-identity',
+      JWT_AUDIENCE: 'phub-api',
+      JWT_ACCESS_SECRET: 'test-access-secret-at-least-32-characters',
+      JWT_REFRESH_SECRET: 'test-refresh-secret-at-least-32-characters',
+      VIVA_MODE: 'sandbox',
+      VIVA_OAUTH_ENABLED: 'true',
+      VIVA_OAUTH_REDIRECT_URI:
+        'https://api.example.test/user/api/v1/local-padel/auth/viva/callback',
+      VIVA_OAUTH_SUCCESS_REDIRECT_URL: 'https://app.example.test/',
+      VIVA_DELEGATION_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString('base64url'),
+    });
+    const repository = new FakeRepository();
+    const recoverySessionId = '22ab6e2e-5bb0-4453-9f2c-fd4b8ed32767';
+    repository.setActiveSessionId(recoverySessionId);
+    repository.setExistingSubjectUser({
+      ...user,
+      id: '750f25f5-59fe-413c-a5f2-4256a919c674',
+    });
+    const stateStore = new MemoryVivaOAuthStateStore();
+    const service = new AuthService({
+      config: oauthConfig,
+      repository,
+      challengeStore: new MemoryAuthChallengeStore(),
+      providers: new Map([['VIVA', provider]]),
+      vivaOAuthProvider: oauthProvider,
+      vivaOAuthStateStore: stateStore,
+    });
+
+    const recovery = await service.startVivaOAuthRecovery({
+      tenantKey: binding.tenantKey,
+      tenantId: binding.tenantId,
+      userId: user.id,
+      sessionId: recoverySessionId,
+      provider: 'yandex',
+      correlationId: 'oauth-recovery-conflicting-subject-start',
+      idempotencyKey: 'oauth-recovery-conflicting-subject-start-idempotency',
+    });
+
+    await expect(
+      service.completeVivaOAuth({
+        tenantKey: binding.tenantKey,
+        state: new URL(recovery.redirectUrl).searchParams.get('state') ?? '',
+        code: 'oauth-recovery-conflicting-subject-code',
+        correlationId: 'oauth-recovery-conflicting-subject-complete',
+        idempotencyKey: 'oauth-recovery-conflicting-subject-complete-idempotency',
+        oauthBrowserNonce: recovery.browserNonce,
+      }),
+    ).rejects.toMatchObject({ code: 'AUTH_IDENTITY_CONFLICT' });
+    expect(repository.identityUpserts).toBe(0);
+    expect(repository.vivaDelegationSaves).toBe(0);
+    expect(repository.refreshSessionCreations).toBe(0);
+  });
+
+  it('does not set a new PadlHub refresh cookie after a successful Viva recovery callback', async () => {
+    const oauthConfig = loadConfig({
+      APP_ENV: 'ci',
+      DATABASE_URL: 'postgresql://phub:test@localhost:5432/phub',
+      REDIS_URL: 'redis://localhost:6379',
+      RABBITMQ_URL: 'amqp://phub:test@localhost:5672',
+      JWT_ISSUER: 'phub-identity',
+      JWT_AUDIENCE: 'phub-api',
+      JWT_ACCESS_SECRET: 'test-access-secret-at-least-32-characters',
+      JWT_REFRESH_SECRET: 'test-refresh-secret-at-least-32-characters',
+      VIVA_MODE: 'sandbox',
+      VIVA_OAUTH_ENABLED: 'true',
+      VIVA_OAUTH_REDIRECT_URI:
+        'https://api.example.test/user/api/v1/local-padel/auth/viva/callback',
+      VIVA_OAUTH_SUCCESS_REDIRECT_URL: 'https://app.example.test/',
+      VIVA_DELEGATION_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString('base64url'),
+    });
+    const repository = new FakeRepository();
+    const recoverySessionId = '676d1677-c503-4478-889f-f5e848ebdaf9';
+    repository.setActiveSessionId(recoverySessionId);
+    const stateStore = new MemoryVivaOAuthStateStore();
+    const authService = new AuthService({
+      config: oauthConfig,
+      repository,
+      challengeStore: new MemoryAuthChallengeStore(),
+      providers: new Map([['VIVA', provider]]),
+      vivaOAuthProvider: oauthProvider,
+      vivaOAuthStateStore: stateStore,
+    });
+    const recovery = await authService.startVivaOAuthRecovery({
+      tenantKey: binding.tenantKey,
+      tenantId: binding.tenantId,
+      userId: user.id,
+      sessionId: recoverySessionId,
+      provider: 'yandex',
+      correlationId: 'oauth-recovery-cookie-start',
+      idempotencyKey: 'oauth-recovery-cookie-start-idempotency',
+    });
+    const app = await buildApp({
+      config: oauthConfig,
+      logger: createLogger('api-viva-oauth-recovery-cookie-test', 'silent'),
+      authService,
+    });
+    apps.push(app);
+    const state = new URL(recovery.redirectUrl).searchParams.get('state') ?? '';
+    const cookieSuffix = createHmac('sha256', oauthConfig.JWT_REFRESH_SECRET)
+      .update(state)
+      .digest('base64url')
+      .slice(0, 16);
+
+    const callback = await app.inject({
+      method: 'GET',
+      url: `/user/api/v1/local-padel/auth/viva/callback?state=${encodeURIComponent(state)}&code=recovery-cookie-code`,
+      headers: {
+        cookie: `phub_oauth_browser_${cookieSuffix}=${recovery.browserNonce}`,
+      },
+    });
+
+    expect(callback.statusCode).toBe(302);
+    expect(String(callback.headers['set-cookie'] ?? '')).not.toContain('phub_refresh=');
+    expect(repository.refreshSessionCreations).toBe(0);
+    expect(repository.vivaDelegationSaves).toBe(1);
   });
 
   it('binds OAuth callback session issuance to the initiating browser cookie', async () => {
@@ -919,6 +1191,7 @@ describe('provider-neutral authentication routes', () => {
       },
     });
     expect(logoutResponse.statusCode).toBe(204);
+    expect(repository.revocationOrder).toEqual(['session+delegation']);
   });
 
   it('persists the server-only Viva refresh delegation from phone authentication', async () => {

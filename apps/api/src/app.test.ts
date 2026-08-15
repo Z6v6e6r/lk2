@@ -528,6 +528,70 @@ describe('health endpoints', () => {
     );
   });
 
+  it('returns the current PadlHub WebP mapping with delegated Viva access', async () => {
+    const issueVivaAccessToken = vi.fn().mockResolvedValue({
+      accessToken: 'short-lived-viva-access-token',
+      expiresAt: '2099-01-01T00:00:00.000Z',
+      profilePhotoGrant: 'short-lived-profile-photo-grant',
+    });
+    const getPhotoDeliveryState = vi.fn().mockResolvedValue({
+      deliveryId: '33333333-3333-4333-8333-333333333333',
+      syncedAt: '2026-08-15T08:00:00.000Z',
+    });
+    const app = await buildApp({
+      config: {
+        ...config,
+        VIVA_MODE: 'sandbox',
+        VIVA_DIRECT_READ_ENABLED: true,
+        VIVA_OAUTH_ENABLED: true,
+      },
+      logger: createLogger('api-test', 'silent'),
+      pool: fakePool(),
+      authService: { issueVivaAccessToken } as never,
+      clientRoutingPlanRepository: {
+        get: () =>
+          Promise.resolve({
+            mode: 'MIXED_END_USER_READS',
+            revision: '6',
+            validForSeconds: 60,
+            directOperations: ['profile.read'],
+            providerTenantKey: 'iSkq6G',
+            delegationReady: true,
+          }),
+      },
+      profilePhotoMediaRepository: {
+        getPhotoObjectKey: vi.fn(),
+        getPhotoDeliveryIds: vi.fn(),
+        getPhotoDeliveryState,
+      },
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/user/api/v1/local-padel/auth/viva/access',
+      headers: {
+        authorization: `Bearer ${await accessToken()}`,
+        'x-app-platform': 'web',
+        'idempotency-key': 'viva-access-photo-state-test-0001',
+      },
+      payload: {},
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      accessToken: 'short-lived-viva-access-token',
+      profilePhoto: {
+        avatarUrl: `/public/api/v1/media/profile-photos/${tenantId}/33333333-3333-4333-8333-333333333333`,
+        syncedAt: '2026-08-15T08:00:00.000Z',
+      },
+    });
+    expect(getPhotoDeliveryState).toHaveBeenCalledWith(
+      tenantId,
+      '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca',
+    );
+  });
+
   it('omits the Viva handoff from the OAuth redirect when the effective plan is PadlHub-only', async () => {
     const app = await buildApp({
       config: {
