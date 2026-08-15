@@ -48,6 +48,10 @@ on:
         description: Original foundation run attempt, required only by the recovery profile
         required: false
         type: string
+      foundation_runtime_env_repair_confirmation:
+        description: Type REPAIR_STAGING_RUNTIME_ENV_PERMISSIONS for the isolated metadata-only repair
+        required: false
+        type: string
       messaging_player_a_id:
         description: First active PadlHub player UUID required by MESSAGING_TEST
         required: false
@@ -138,6 +142,7 @@ jobs:
           FOUNDATION_NO_BOOKING_PRODUCER_CONFIRMATION: ${{ inputs.foundation_no_booking_producer_confirmation }}
           FOUNDATION_ORIGINAL_RUN_ID: ${{ inputs.foundation_original_run_id }}
           FOUNDATION_ORIGINAL_RUN_ATTEMPT: ${{ inputs.foundation_original_run_attempt }}
+          FOUNDATION_RUNTIME_ENV_REPAIR_CONFIRMATION: ${{ inputs.foundation_runtime_env_repair_confirmation }}
           MESSAGING_PLAYER_A_ID: ${{ inputs.messaging_player_a_id }}
           MESSAGING_PLAYER_B_ID: ${{ inputs.messaging_player_b_id }}
           ROUTING_TENANT_KEY: ${{ inputs.routing_tenant_key }}
@@ -172,6 +177,30 @@ jobs:
           foundation_inputs_requested=false
           if [ -n "$FOUNDATION_MAINTENANCE_CONFIRMATION$FOUNDATION_EXPECTED_CANDIDATE_SHA$FOUNDATION_EXPECTED_ACTIVE_RELEASE_SHA$FOUNDATION_TENANT_KEYS$FOUNDATION_NO_BOOKING_PRODUCER_CONFIRMATION$FOUNDATION_ORIGINAL_RUN_ID$FOUNDATION_ORIGINAL_RUN_ATTEMPT" ]; then
             foundation_inputs_requested=true
+          fi
+          repair_requested=false
+          if [ -n "$FOUNDATION_RUNTIME_ENV_REPAIR_CONFIRMATION" ]; then
+            repair_requested=true
+          fi
+          if [ "$repair_requested" = true ]; then
+            if [ "$FOUNDATION_RUNTIME_ENV_REPAIR_CONFIRMATION" != REPAIR_STAGING_RUNTIME_ENV_PERMISSIONS ]; then
+              echo '::error::Runtime env repair requires the exact REPAIR_STAGING_RUNTIME_ENV_PERMISSIONS confirmation.'
+              exit 1
+            fi
+            if [ "$DEPLOYMENT_PROFILE" != CHAT_PUSH_FOUNDATION ] || [ -n "$DEPLOY_CONFIRMATION" ] \
+              || [ "$foundation_inputs_requested" = true ] || [ "$access_requested" = true ] \
+              || [ "$diagnostics_requested" = true ] || [ -n "$EXPECTED_ACTIVE_RELEASE" ] \
+              || [ -n "$ROUTING_TENANT_KEY$ROUTING_ACTOR_ID$ROUTING_APPLY_CONFIRMATION$MESSAGING_PLAYER_A_ID$MESSAGING_PLAYER_B_ID" ]; then
+              echo '::error::Runtime env repair must be an isolated CHAT_PUSH_FOUNDATION operation.'
+              exit 1
+            fi
+            if [ "$REQUEST_REF" != refs/heads/main ] || [ "$RUN_ATTEMPT" != 1 ] \
+              || [ "$ACTOR" != "$TRIGGERING_ACTOR" ] || [ "$WORKFLOW_SHA" != "$REQUEST_SHA" ]; then
+              echo '::error::Runtime env repair requires an exact first-attempt main workflow.'
+              exit 1
+            fi
+            printf '%s\n' 'mode=repair-runtime-env' >> "$GITHUB_OUTPUT"
+            exit 0
           fi
           if { [ "$DEPLOYMENT_PROFILE" = CHAT_PUSH_FOUNDATION ] || [ "$DEPLOYMENT_PROFILE" = CHAT_PUSH_FOUNDATION_RECOVERY ]; } \
             && { [ "$access_requested" = true ] || [ "$diagnostics_requested" = true ]; }; then
@@ -411,32 +440,44 @@ jobs:
 
   authorize-foundation-maintenance:
     needs: validate-request
-    if: ${{ needs.validate-request.outputs.mode == 'deploy' && (inputs.deployment_profile == 'CHAT_PUSH_FOUNDATION' || inputs.deployment_profile == 'CHAT_PUSH_FOUNDATION_RECOVERY') }}
+    if: >-
+      ${{
+        needs.validate-request.outputs.mode == 'repair-runtime-env' ||
+        (needs.validate-request.outputs.mode == 'deploy' &&
+          (inputs.deployment_profile == 'CHAT_PUSH_FOUNDATION' || inputs.deployment_profile == 'CHAT_PUSH_FOUNDATION_RECOVERY'))
+      }}
     runs-on: ubuntu-latest
     environment: staging-foundation-maintenance
     permissions:
       actions: read
       contents: read
     steps:
-      - name: Require the independently protected maintenance environment
+      - name: Require the explicitly approved solo-owner maintenance environment
         env:
           MAINTENANCE_READY: ${{ vars.STAGING_FOUNDATION_MAINTENANCE_READY_V1 }}
           ALLOWED_OPERATOR_IDS: ${{ vars.STAGING_FOUNDATION_OPERATOR_IDS }}
+          SOLO_OWNER_ID: ${{ vars.STAGING_FOUNDATION_SOLO_OWNER_ID }}
           ACTOR_ID: ${{ github.actor_id }}
+          ACTOR: ${{ github.actor }}
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
         run: |
           set -eu
-          [ "$MAINTENANCE_READY" = 'APPROVED_WITH_REQUIRED_REVIEWER_V1' ] || {
-            echo '::error::The protected staging-foundation-maintenance Environment is not attested.'
+          [ "$MAINTENANCE_READY" = 'APPROVED_SOLO_OWNER_V1' ] || {
+            echo '::error::The solo-owner staging-foundation-maintenance Environment is not attested.'
             exit 1
           }
-          printf '%s' "$ALLOWED_OPERATOR_IDS" | grep -Eq '^[0-9]+(,[0-9]+)*$' || {
-            echo '::error::Foundation operator allowlist is absent or invalid.'
+          printf '%s' "$SOLO_OWNER_ID" | grep -Eq '^[0-9]+$' || {
+            echo '::error::Foundation solo-owner ID is absent or invalid.'
             exit 1
           }
-          case ",$ALLOWED_OPERATOR_IDS," in
-            *",$ACTOR_ID,"*) ;;
-            *) echo '::error::Actor is not authorized for foundation maintenance.'; exit 1 ;;
-          esac
+          [ "$ALLOWED_OPERATOR_IDS" = "$SOLO_OWNER_ID" ] || {
+            echo '::error::Foundation operator allowlist must contain only the attested solo owner.'
+            exit 1
+          }
+          [ "$ACTOR_ID" = "$SOLO_OWNER_ID" ] && [ "$ACTOR" = "$REPOSITORY_OWNER" ] || {
+            echo '::error::Only the attested repository owner may run solo-owner foundation maintenance.'
+            exit 1
+          }
       - name: Bind recovery to the original failed workflow run
         if: ${{ inputs.deployment_profile == 'CHAT_PUSH_FOUNDATION_RECOVERY' }}
         env:
@@ -445,6 +486,7 @@ jobs:
           REPOSITORY: ${{ github.repository }}
           ORIGINAL_RUN_ID: ${{ inputs.foundation_original_run_id }}
           CANDIDATE_SHA: ${{ inputs.foundation_expected_candidate_sha }}
+          SOLO_OWNER_ID: ${{ vars.STAGING_FOUNDATION_SOLO_OWNER_ID }}
         run: |
           set -eu
           run_json="$RUNNER_TEMP/foundation-original-run-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.json"
@@ -453,7 +495,7 @@ jobs:
             --header "Authorization: Bearer $GH_TOKEN" \
             --header 'Accept: application/vnd.github+json' \
             "$API_URL/repos/$REPOSITORY/actions/runs/$ORIGINAL_RUN_ID" > "$run_json"
-          node - "$run_json" "$ORIGINAL_RUN_ID" "$CANDIDATE_SHA" <<'NODE'
+          node - "$run_json" "$ORIGINAL_RUN_ID" "$CANDIDATE_SHA" "$SOLO_OWNER_ID" <<'NODE'
           const { readFileSync } = require('node:fs');
           const run = JSON.parse(readFileSync(process.argv[2], 'utf8'));
           const allowedConclusions = new Set(['failure', 'cancelled', 'timed_out', 'action_required', 'stale', 'startup_failure']);
@@ -465,6 +507,8 @@ jobs:
             run.run_attempt !== 1 ||
             run.path !== '.github/workflows/deploy-staging.yaml' ||
             run.status !== 'completed' ||
+            String(run.actor?.id) !== process.argv[5] ||
+            String(run.triggering_actor?.id) !== process.argv[5] ||
             !allowedConclusions.has(run.conclusion)
           ) {
             console.error('FOUNDATION_ORIGINAL_RUN_MISMATCH');
@@ -501,6 +545,45 @@ jobs:
           }
           process.stdout.write(`Foundation Action pins verified: ${useLines.length}\n`);
           NODE
+
+  repair-foundation-runtime-env-permissions:
+    needs: [validate-request, authorize-foundation-maintenance]
+    if: ${{ needs.validate-request.outputs.mode == 'repair-runtime-env' && needs.authorize-foundation-maintenance.result == 'success' }}
+    runs-on: ubuntu-latest
+    environment: staging
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Join the staging tailnet
+        uses: tailscale/github-action@306e68a486fd2350f2bfc3b19fcd143891a4a2d8 # v4
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+          ping: ${{ secrets.STAGING_HOST }}
+      - name: Configure audited SSH
+        env:
+          DEPLOY_KEY: ${{ secrets.STAGING_DEPLOY_KEY }}
+          KNOWN_HOSTS: ${{ secrets.STAGING_KNOWN_HOSTS }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+      - name: Repair staging runtime env metadata without reading values
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+        run: |
+          ssh -o ServerAliveInterval=10 -o ServerAliveCountMax=2 "phub-deploy@$HOST" '
+            set -eu
+            runtime_env=/etc/phub/staging.env
+            [ ! -w /etc/phub ]
+            test -f "$runtime_env"
+            test ! -L "$runtime_env"
+            sudo -n chown phub-deploy:phub-deploy "$runtime_env"
+            sudo -n chmod 0600 "$runtime_env"
+            [ "$(stat -c "%U:%G:%a" "$runtime_env")" = phub-deploy:phub-deploy:600 ]
+            echo staging_runtime_env_metadata_repaired
+          '
 
   set-user-access:
     needs: validate-request

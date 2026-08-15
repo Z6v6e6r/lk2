@@ -49,6 +49,7 @@ const validFoundationEnvironment: Readonly<Record<string, string>> = {
   FOUNDATION_NO_BOOKING_PRODUCER_CONFIRMATION: 'NO_BOOKING_PRODUCER_ACTIVE',
   FOUNDATION_ORIGINAL_RUN_ID: '',
   FOUNDATION_ORIGINAL_RUN_ATTEMPT: '',
+  FOUNDATION_RUNTIME_ENV_REPAIR_CONFIRMATION: '',
   MESSAGING_PLAYER_A_ID: '',
   MESSAGING_PLAYER_B_ID: '',
   ROUTING_TENANT_KEY: '',
@@ -90,6 +91,127 @@ function executeValidation(overrides: Readonly<Record<string, string>> = {}) {
 }
 
 describe('CHAT_PUSH_FOUNDATION request validation', () => {
+  it('accepts only the isolated exact runtime-env metadata repair', () => {
+    const result = executeValidation({
+      DEPLOY_CONFIRMATION: '',
+      FOUNDATION_MAINTENANCE_CONFIRMATION: '',
+      FOUNDATION_EXPECTED_CANDIDATE_SHA: '',
+      FOUNDATION_EXPECTED_ACTIVE_RELEASE_SHA: '',
+      FOUNDATION_TENANT_KEYS: '',
+      FOUNDATION_NO_BOOKING_PRODUCER_CONFIRMATION: '',
+      FOUNDATION_RUNTIME_ENV_REPAIR_CONFIRMATION: 'REPAIR_STAGING_RUNTIME_ENV_PERMISSIONS',
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.output).toBe('mode=repair-runtime-env\n');
+  });
+
+  it.each([
+    ['wrong confirmation', { FOUNDATION_RUNTIME_ENV_REPAIR_CONFIRMATION: 'REPAIR' }],
+    [
+      'deployment confirmation',
+      {
+        FOUNDATION_RUNTIME_ENV_REPAIR_CONFIRMATION: 'REPAIR_STAGING_RUNTIME_ENV_PERMISSIONS',
+      },
+    ],
+    [
+      'diagnostic input',
+      {
+        DEPLOY_CONFIRMATION: '',
+        FOUNDATION_MAINTENANCE_CONFIRMATION: '',
+        FOUNDATION_EXPECTED_CANDIDATE_SHA: '',
+        FOUNDATION_EXPECTED_ACTIVE_RELEASE_SHA: '',
+        FOUNDATION_TENANT_KEYS: '',
+        FOUNDATION_NO_BOOKING_PRODUCER_CONFIRMATION: '',
+        FOUNDATION_RUNTIME_ENV_REPAIR_CONFIRMATION: 'REPAIR_STAGING_RUNTIME_ENV_PERMISSIONS',
+        DIAGNOSE_HOME: 'true',
+      },
+    ],
+    [
+      'non-main ref',
+      {
+        DEPLOY_CONFIRMATION: '',
+        FOUNDATION_MAINTENANCE_CONFIRMATION: '',
+        FOUNDATION_EXPECTED_CANDIDATE_SHA: '',
+        FOUNDATION_EXPECTED_ACTIVE_RELEASE_SHA: '',
+        FOUNDATION_TENANT_KEYS: '',
+        FOUNDATION_NO_BOOKING_PRODUCER_CONFIRMATION: '',
+        FOUNDATION_RUNTIME_ENV_REPAIR_CONFIRMATION: 'REPAIR_STAGING_RUNTIME_ENV_PERMISSIONS',
+        REQUEST_REF: 'refs/heads/codex/unsafe',
+      },
+    ],
+    [
+      'rerun',
+      {
+        DEPLOY_CONFIRMATION: '',
+        FOUNDATION_MAINTENANCE_CONFIRMATION: '',
+        FOUNDATION_EXPECTED_CANDIDATE_SHA: '',
+        FOUNDATION_EXPECTED_ACTIVE_RELEASE_SHA: '',
+        FOUNDATION_TENANT_KEYS: '',
+        FOUNDATION_NO_BOOKING_PRODUCER_CONFIRMATION: '',
+        FOUNDATION_RUNTIME_ENV_REPAIR_CONFIRMATION: 'REPAIR_STAGING_RUNTIME_ENV_PERMISSIONS',
+        RUN_ATTEMPT: '2',
+      },
+    ],
+    [
+      'different triggering actor',
+      {
+        DEPLOY_CONFIRMATION: '',
+        FOUNDATION_MAINTENANCE_CONFIRMATION: '',
+        FOUNDATION_EXPECTED_CANDIDATE_SHA: '',
+        FOUNDATION_EXPECTED_ACTIVE_RELEASE_SHA: '',
+        FOUNDATION_TENANT_KEYS: '',
+        FOUNDATION_NO_BOOKING_PRODUCER_CONFIRMATION: '',
+        FOUNDATION_RUNTIME_ENV_REPAIR_CONFIRMATION: 'REPAIR_STAGING_RUNTIME_ENV_PERMISSIONS',
+        TRIGGERING_ACTOR: 'other-operator',
+      },
+    ],
+    [
+      'different workflow SHA',
+      {
+        DEPLOY_CONFIRMATION: '',
+        FOUNDATION_MAINTENANCE_CONFIRMATION: '',
+        FOUNDATION_EXPECTED_CANDIDATE_SHA: '',
+        FOUNDATION_EXPECTED_ACTIVE_RELEASE_SHA: '',
+        FOUNDATION_TENANT_KEYS: '',
+        FOUNDATION_NO_BOOKING_PRODUCER_CONFIRMATION: '',
+        FOUNDATION_RUNTIME_ENV_REPAIR_CONFIRMATION: 'REPAIR_STAGING_RUNTIME_ENV_PERMISSIONS',
+        WORKFLOW_SHA: 'c'.repeat(40),
+      },
+    ],
+    [
+      'routing input',
+      {
+        DEPLOY_CONFIRMATION: '',
+        FOUNDATION_MAINTENANCE_CONFIRMATION: '',
+        FOUNDATION_EXPECTED_CANDIDATE_SHA: '',
+        FOUNDATION_EXPECTED_ACTIVE_RELEASE_SHA: '',
+        FOUNDATION_TENANT_KEYS: '',
+        FOUNDATION_NO_BOOKING_PRODUCER_CONFIRMATION: '',
+        FOUNDATION_RUNTIME_ENV_REPAIR_CONFIRMATION: 'REPAIR_STAGING_RUNTIME_ENV_PERMISSIONS',
+        ROUTING_TENANT_KEY: 'local-padel',
+      },
+    ],
+    [
+      'user-access input',
+      {
+        DEPLOY_CONFIRMATION: '',
+        FOUNDATION_MAINTENANCE_CONFIRMATION: '',
+        FOUNDATION_EXPECTED_CANDIDATE_SHA: '',
+        FOUNDATION_EXPECTED_ACTIVE_RELEASE_SHA: '',
+        FOUNDATION_TENANT_KEYS: '',
+        FOUNDATION_NO_BOOKING_PRODUCER_CONFIRMATION: '',
+        FOUNDATION_RUNTIME_ENV_REPAIR_CONFIRMATION: 'REPAIR_STAGING_RUNTIME_ENV_PERMISSIONS',
+        ACCESS_ROLES: 'admin',
+      },
+    ],
+  ])('rejects runtime-env repair with %s', (_name, overrides) => {
+    const result = executeValidation(overrides);
+
+    expect(result.status).not.toBe(0);
+    expect(result.output).toBe('');
+  });
+
   it('accepts only the exact first-attempt main request', () => {
     const result = executeValidation();
 
