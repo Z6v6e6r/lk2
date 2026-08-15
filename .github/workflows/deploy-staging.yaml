@@ -8,7 +8,7 @@ on:
         required: false
         type: string
       deployment_profile:
-        description: Select full Home, Communities read-only, isolated client-assisted Viva reads, or messaging test
+        description: Select an explicitly bounded staging deployment profile
         required: true
         type: choice
         default: FULL_LIVE_HOME
@@ -17,6 +17,36 @@ on:
           - COMMUNITIES_LEGACY_READ_ONLY
           - CLIENT_ASSISTED_VIVA
           - MESSAGING_TEST
+          - CHAT_PUSH_FOUNDATION
+          - CHAT_PUSH_FOUNDATION_RECOVERY
+      foundation_maintenance_confirmation:
+        description: Type the exact APPLY or RESUME confirmation required by the selected foundation profile
+        required: false
+        type: string
+      foundation_expected_candidate_sha:
+        description: Exact 40-character main SHA expected for the foundation candidate
+        required: false
+        type: string
+      foundation_expected_active_release_sha:
+        description: Exact 40-character release SHA currently active on staging
+        required: false
+        type: string
+      foundation_tenant_keys:
+        description: Complete comma-separated approved staging tenant-key inventory
+        required: false
+        type: string
+      foundation_no_booking_producer_confirmation:
+        description: Type NO_BOOKING_PRODUCER_ACTIVE after checking every external producer
+        required: false
+        type: string
+      foundation_original_run_id:
+        description: Original foundation run ID, required only by the recovery profile
+        required: false
+        type: string
+      foundation_original_run_attempt:
+        description: Original foundation run attempt, required only by the recovery profile
+        required: false
+        type: string
       messaging_player_a_id:
         description: First active PadlHub player UUID required by MESSAGING_TEST
         required: false
@@ -74,7 +104,6 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 concurrency:
   group: staging
@@ -92,6 +121,13 @@ jobs:
         env:
           DEPLOY_CONFIRMATION: ${{ inputs.deploy_confirmation }}
           DEPLOYMENT_PROFILE: ${{ inputs.deployment_profile }}
+          FOUNDATION_MAINTENANCE_CONFIRMATION: ${{ inputs.foundation_maintenance_confirmation }}
+          FOUNDATION_EXPECTED_CANDIDATE_SHA: ${{ inputs.foundation_expected_candidate_sha }}
+          FOUNDATION_EXPECTED_ACTIVE_RELEASE_SHA: ${{ inputs.foundation_expected_active_release_sha }}
+          FOUNDATION_TENANT_KEYS: ${{ inputs.foundation_tenant_keys }}
+          FOUNDATION_NO_BOOKING_PRODUCER_CONFIRMATION: ${{ inputs.foundation_no_booking_producer_confirmation }}
+          FOUNDATION_ORIGINAL_RUN_ID: ${{ inputs.foundation_original_run_id }}
+          FOUNDATION_ORIGINAL_RUN_ATTEMPT: ${{ inputs.foundation_original_run_attempt }}
           MESSAGING_PLAYER_A_ID: ${{ inputs.messaging_player_a_id }}
           MESSAGING_PLAYER_B_ID: ${{ inputs.messaging_player_b_id }}
           ROUTING_TENANT_KEY: ${{ inputs.routing_tenant_key }}
@@ -106,6 +142,11 @@ jobs:
           ACCESS_APPLY_CONFIRMATION: ${{ inputs.access_apply_confirmation }}
           RECOVER_UDISKS: ${{ inputs.recover_udisks }}
           REQUEST_REF: ${{ github.ref }}
+          REQUEST_SHA: ${{ github.sha }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          ACTOR: ${{ github.actor }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
           set -eu
           diagnostics_requested=false
@@ -116,8 +157,17 @@ jobs:
           if [ -n "$ACCESS_TARGET_USER_ID$ACCESS_ROLES$ACCESS_PERMISSIONS$ACCESS_ACTOR_ID$ACCESS_APPLY_CONFIRMATION" ]; then
             access_requested=true
           fi
+          foundation_inputs_requested=false
+          if [ -n "$FOUNDATION_MAINTENANCE_CONFIRMATION$FOUNDATION_EXPECTED_CANDIDATE_SHA$FOUNDATION_EXPECTED_ACTIVE_RELEASE_SHA$FOUNDATION_TENANT_KEYS$FOUNDATION_NO_BOOKING_PRODUCER_CONFIRMATION$FOUNDATION_ORIGINAL_RUN_ID$FOUNDATION_ORIGINAL_RUN_ATTEMPT" ]; then
+            foundation_inputs_requested=true
+          fi
+          if { [ "$DEPLOYMENT_PROFILE" = CHAT_PUSH_FOUNDATION ] || [ "$DEPLOYMENT_PROFILE" = CHAT_PUSH_FOUNDATION_RECOVERY ]; } \
+            && { [ "$access_requested" = true ] || [ "$diagnostics_requested" = true ]; }; then
+            echo '::error::Foundation maintenance cannot be combined with diagnostics or user-access operations.'
+            exit 1
+          fi
           if [ "$access_requested" = 'true' ]; then
-            if [ "$diagnostics_requested" = 'true' ] || [ -n "$DEPLOY_CONFIRMATION" ]; then
+            if [ "$diagnostics_requested" = 'true' ] || [ -n "$DEPLOY_CONFIRMATION" ] || [ "$foundation_inputs_requested" = true ]; then
               echo '::error::User-access operation cannot be combined with diagnostics or deployment.'
               exit 1
             fi
@@ -147,7 +197,7 @@ jobs:
             exit 0
           fi
           if [ "$diagnostics_requested" = 'true' ]; then
-            if [ -n "$DEPLOY_CONFIRMATION" ]; then
+            if [ -n "$DEPLOY_CONFIRMATION" ] || [ "$foundation_inputs_requested" = true ]; then
               echo '::error::Diagnostics cannot be combined with a deployment confirmation.'
               exit 1
             fi
@@ -168,6 +218,10 @@ jobs:
           fi
           case "$DEPLOYMENT_PROFILE" in
             FULL_LIVE_HOME | CLIENT_ASSISTED_VIVA)
+              if [ -n "$FOUNDATION_MAINTENANCE_CONFIRMATION$FOUNDATION_EXPECTED_CANDIDATE_SHA$FOUNDATION_EXPECTED_ACTIVE_RELEASE_SHA$FOUNDATION_TENANT_KEYS$FOUNDATION_NO_BOOKING_PRODUCER_CONFIRMATION$FOUNDATION_ORIGINAL_RUN_ID$FOUNDATION_ORIGINAL_RUN_ATTEMPT" ]; then
+                echo '::error::Viva-backed deployment cannot include foundation-maintenance inputs.'
+                exit 1
+              fi
               if ! printf '%s' "$ROUTING_TENANT_KEY" | grep -Eq '^[a-z0-9][a-z0-9-]{1,62}$'; then
                 echo '::error::Viva-backed deployment requires a valid staging routing tenant key.'
                 exit 1
@@ -186,7 +240,7 @@ jobs:
               fi
               ;;
             COMMUNITIES_LEGACY_READ_ONLY)
-              if [ -n "$ROUTING_TENANT_KEY$ROUTING_ACTOR_ID$ROUTING_APPLY_CONFIRMATION$MESSAGING_PLAYER_A_ID$MESSAGING_PLAYER_B_ID" ]; then
+              if [ -n "$ROUTING_TENANT_KEY$ROUTING_ACTOR_ID$ROUTING_APPLY_CONFIRMATION$MESSAGING_PLAYER_A_ID$MESSAGING_PLAYER_B_ID$FOUNDATION_MAINTENANCE_CONFIRMATION$FOUNDATION_EXPECTED_CANDIDATE_SHA$FOUNDATION_EXPECTED_ACTIVE_RELEASE_SHA$FOUNDATION_TENANT_KEYS$FOUNDATION_NO_BOOKING_PRODUCER_CONFIRMATION$FOUNDATION_ORIGINAL_RUN_ID$FOUNDATION_ORIGINAL_RUN_ATTEMPT" ]; then
                 echo '::error::Communities read-only deployment cannot refresh routing or include messaging-test players.'
                 exit 1
               fi
@@ -206,6 +260,77 @@ jobs:
                 echo '::error::Messaging-test deployment requires two distinct players.'
                 exit 1
               fi
+              if [ -n "$FOUNDATION_MAINTENANCE_CONFIRMATION$FOUNDATION_EXPECTED_CANDIDATE_SHA$FOUNDATION_EXPECTED_ACTIVE_RELEASE_SHA$FOUNDATION_TENANT_KEYS$FOUNDATION_NO_BOOKING_PRODUCER_CONFIRMATION$FOUNDATION_ORIGINAL_RUN_ID$FOUNDATION_ORIGINAL_RUN_ATTEMPT" ]; then
+                echo '::error::Messaging-test deployment cannot include foundation-maintenance inputs.'
+                exit 1
+              fi
+              ;;
+            CHAT_PUSH_FOUNDATION | CHAT_PUSH_FOUNDATION_RECOVERY)
+              for foundation_value in "$FOUNDATION_MAINTENANCE_CONFIRMATION" \
+                "$FOUNDATION_EXPECTED_CANDIDATE_SHA" \
+                "$FOUNDATION_EXPECTED_ACTIVE_RELEASE_SHA" \
+                "$FOUNDATION_TENANT_KEYS" \
+                "$FOUNDATION_NO_BOOKING_PRODUCER_CONFIRMATION" \
+                "$FOUNDATION_ORIGINAL_RUN_ID" \
+                "$FOUNDATION_ORIGINAL_RUN_ATTEMPT"; do
+                if [ "$(printf '%s' "$foundation_value" | tr -d '\r\n')" != "$foundation_value" ]; then
+                  echo '::error::Foundation inputs must each be exactly one line.'
+                  exit 1
+                fi
+              done
+              if [ -n "$ROUTING_TENANT_KEY$ROUTING_ACTOR_ID$ROUTING_APPLY_CONFIRMATION$MESSAGING_PLAYER_A_ID$MESSAGING_PLAYER_B_ID" ]; then
+                echo '::error::Foundation maintenance cannot refresh routing or include messaging-test players.'
+                exit 1
+              fi
+              if [ "$DEPLOYMENT_PROFILE" = CHAT_PUSH_FOUNDATION ]; then
+                if [ "$FOUNDATION_MAINTENANCE_CONFIRMATION" != APPLY_CHAT_PUSH_FOUNDATION_STAGING ]; then
+                  echo '::error::Foundation maintenance requires the exact APPLY_CHAT_PUSH_FOUNDATION_STAGING confirmation.'
+                  exit 1
+                fi
+                if [ -n "$FOUNDATION_ORIGINAL_RUN_ID$FOUNDATION_ORIGINAL_RUN_ATTEMPT" ]; then
+                  echo '::error::Initial foundation maintenance cannot include recovery identity inputs.'
+                  exit 1
+                fi
+              else
+                if [ "$FOUNDATION_MAINTENANCE_CONFIRMATION" != RESUME_CHAT_PUSH_FOUNDATION_STAGING ]; then
+                  echo '::error::Foundation recovery requires the exact RESUME_CHAT_PUSH_FOUNDATION_STAGING confirmation.'
+                  exit 1
+                fi
+                if ! printf '%s' "$FOUNDATION_ORIGINAL_RUN_ID" | grep -Eq '^[0-9]+$' \
+                  || [ "$FOUNDATION_ORIGINAL_RUN_ATTEMPT" != 1 ]; then
+                  echo '::error::Foundation recovery requires the original numeric run ID and attempt 1.'
+                  exit 1
+                fi
+              fi
+              if [ "$FOUNDATION_NO_BOOKING_PRODUCER_CONFIRMATION" != NO_BOOKING_PRODUCER_ACTIVE ]; then
+                echo '::error::Foundation maintenance requires an explicit no-booking-producer attestation.'
+                exit 1
+              fi
+              if ! printf '%s' "$FOUNDATION_EXPECTED_CANDIDATE_SHA" | grep -Eq '^[0-9a-f]{40}$'; then
+                echo '::error::Foundation candidate SHA must be a full commit SHA.'
+                exit 1
+              fi
+              if [ "$DEPLOYMENT_PROFILE" = CHAT_PUSH_FOUNDATION ] \
+                && [ "$FOUNDATION_EXPECTED_CANDIDATE_SHA" != "$REQUEST_SHA" ]; then
+                echo '::error::Initial foundation candidate SHA must exactly match the dispatched main SHA.'
+                exit 1
+              fi
+              if ! printf '%s' "$FOUNDATION_EXPECTED_ACTIVE_RELEASE_SHA" | grep -Eq '^[0-9a-f]{40}$'; then
+                echo '::error::Foundation expected active release must be a full SHA.'
+                exit 1
+              fi
+              if ! printf '%s' "$FOUNDATION_TENANT_KEYS" | grep -Eq '^[a-z0-9][a-z0-9-]{1,62}(,[a-z0-9][a-z0-9-]{1,62})*$'; then
+                echo '::error::Foundation tenant inventory must be a complete comma-separated key list.'
+                exit 1
+              fi
+              if [ "$RUN_ATTEMPT" != 1 ] || [ "$ACTOR" != "$TRIGGERING_ACTOR" ]; then
+                echo '::error::Foundation maintenance cannot be rerun or triggered under another actor.'
+                exit 1
+              fi
+              if [ "$WORKFLOW_SHA" != "$REQUEST_SHA" ]; then
+                echo '::error::Foundation workflow definition must come from the candidate SHA.'
+                exit 1
+              fi
               ;;
             *)
               echo '::error::Unknown deployment profile.'
@@ -213,6 +338,99 @@ jobs:
               ;;
           esac
           printf '%s\n' 'mode=deploy' >> "$GITHUB_OUTPUT"
+
+  authorize-foundation-maintenance:
+    needs: validate-request
+    if: ${{ needs.validate-request.outputs.mode == 'deploy' && (inputs.deployment_profile == 'CHAT_PUSH_FOUNDATION' || inputs.deployment_profile == 'CHAT_PUSH_FOUNDATION_RECOVERY') }}
+    runs-on: ubuntu-latest
+    environment: staging-foundation-maintenance
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Require the independently protected maintenance environment
+        env:
+          MAINTENANCE_READY: ${{ vars.STAGING_FOUNDATION_MAINTENANCE_READY_V1 }}
+          ALLOWED_OPERATOR_IDS: ${{ vars.STAGING_FOUNDATION_OPERATOR_IDS }}
+          ACTOR_ID: ${{ github.actor_id }}
+        run: |
+          set -eu
+          [ "$MAINTENANCE_READY" = 'APPROVED_WITH_REQUIRED_REVIEWER_V1' ] || {
+            echo '::error::The protected staging-foundation-maintenance Environment is not attested.'
+            exit 1
+          }
+          printf '%s' "$ALLOWED_OPERATOR_IDS" | grep -Eq '^[0-9]+(,[0-9]+)*$' || {
+            echo '::error::Foundation operator allowlist is absent or invalid.'
+            exit 1
+          }
+          case ",$ALLOWED_OPERATOR_IDS," in
+            *",$ACTOR_ID,"*) ;;
+            *) echo '::error::Actor is not authorized for foundation maintenance.'; exit 1 ;;
+          esac
+      - name: Bind recovery to the original failed workflow run
+        if: ${{ inputs.deployment_profile == 'CHAT_PUSH_FOUNDATION_RECOVERY' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          API_URL: ${{ github.api_url }}
+          REPOSITORY: ${{ github.repository }}
+          ORIGINAL_RUN_ID: ${{ inputs.foundation_original_run_id }}
+          CANDIDATE_SHA: ${{ inputs.foundation_expected_candidate_sha }}
+        run: |
+          set -eu
+          run_json="$RUNNER_TEMP/foundation-original-run-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.json"
+          trap 'rm -f "$run_json"' EXIT HUP INT TERM
+          curl --fail --silent --show-error \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header 'Accept: application/vnd.github+json' \
+            "$API_URL/repos/$REPOSITORY/actions/runs/$ORIGINAL_RUN_ID" > "$run_json"
+          node - "$run_json" "$ORIGINAL_RUN_ID" "$CANDIDATE_SHA" <<'NODE'
+          const { readFileSync } = require('node:fs');
+          const run = JSON.parse(readFileSync(process.argv[2], 'utf8'));
+          const allowedConclusions = new Set(['failure', 'cancelled', 'timed_out', 'action_required', 'stale', 'startup_failure']);
+          if (
+            String(run.id) !== process.argv[3] ||
+            run.head_sha !== process.argv[4] ||
+            run.head_branch !== 'main' ||
+            run.event !== 'workflow_dispatch' ||
+            run.run_attempt !== 1 ||
+            run.path !== '.github/workflows/deploy-staging.yaml' ||
+            run.status !== 'completed' ||
+            !allowedConclusions.has(run.conclusion)
+          ) {
+            console.error('FOUNDATION_ORIGINAL_RUN_MISMATCH');
+            process.exit(1);
+          }
+          process.stdout.write('Foundation original failed run verified\n');
+          NODE
+      - name: Require full commit pins for every third-party Action before maintenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+          API_URL: ${{ github.api_url }}
+          REPOSITORY: ${{ github.repository }}
+          REQUEST_SHA: ${{ github.sha }}
+        run: |
+          set -eu
+          workflow_source="$RUNNER_TEMP/foundation-workflow-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.yaml"
+          trap 'rm -f "$workflow_source"' EXIT HUP INT TERM
+          curl --fail --silent --show-error \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header 'Accept: application/vnd.github.raw+json' \
+            "$API_URL/repos/$REPOSITORY/contents/.github/workflows/deploy-staging.yaml?ref=$REQUEST_SHA" \
+            > "$workflow_source"
+          node - "$workflow_source" <<'NODE'
+          const { readFileSync } = require('node:fs');
+          const source = readFileSync(process.argv[2], 'utf8');
+          const useLines = source.split(/\r?\n/).filter((line) => /^\s*(?:-\s*)?uses\s*:/.test(line));
+          if (useLines.length === 0) process.exit(1);
+          for (const line of useLines) {
+            if (/^\s*(?:-\s*)?uses\s*:\s*\.\//.test(line)) continue;
+            if (!/^\s*(?:-\s*)?uses\s*:\s*[A-Za-z0-9_.\/-]+@[0-9a-f]{40}\s*(?:#.*)?$/.test(line)) {
+              console.error('FOUNDATION_ACTION_REVISION_NOT_PINNED');
+              process.exit(1);
+            }
+          }
+          process.stdout.write(`Foundation Action pins verified: ${useLines.length}\n`);
+          NODE
 
   set-user-access:
     needs: validate-request
@@ -222,9 +440,9 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Join the staging tailnet
-        uses: tailscale/github-action@v4
+        uses: tailscale/github-action@306e68a486fd2350f2bfc3b19fcd143891a4a2d8 # v4
         with:
           authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
           ping: ${{ secrets.STAGING_HOST }}
@@ -286,9 +504,9 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Join the staging tailnet
-        uses: tailscale/github-action@v4
+        uses: tailscale/github-action@306e68a486fd2350f2bfc3b19fcd143891a4a2d8 # v4
         with:
           authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
           ping: ${{ secrets.STAGING_HOST }}
@@ -432,12 +650,15 @@ jobs:
           exit 0
 
   verify:
-    needs: validate-request
-    if: ${{ needs.validate-request.outputs.mode == 'deploy' }}
+    needs: [validate-request, authorize-foundation-maintenance]
+    if: ${{ always() && needs.validate-request.outputs.mode == 'deploy' && ((inputs.deployment_profile != 'CHAT_PUSH_FOUNDATION' && inputs.deployment_profile != 'CHAT_PUSH_FOUNDATION_RECOVERY') || needs.authorize-foundation-maintenance.result == 'success') }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.deployment_profile == 'CHAT_PUSH_FOUNDATION_RECOVERY' && inputs.foundation_expected_candidate_sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: npm
@@ -447,21 +668,27 @@ jobs:
 
   build:
     needs: [validate-request, verify]
-    if: ${{ needs.validate-request.outputs.mode == 'deploy' && needs.verify.result == 'success' }}
+    if: ${{ needs.validate-request.outputs.mode == 'deploy' && needs.verify.result == 'success' && inputs.deployment_profile != 'CHAT_PUSH_FOUNDATION_RECOVERY' }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     strategy:
       matrix:
         service: [web, api, worker, realtime, migrator]
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - id: image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           file: apps/${{ matrix.service }}/Dockerfile
@@ -475,32 +702,62 @@ jobs:
       - run: |
           mkdir -p digests
           printf '%s' '${{ steps.image.outputs.digest }}' > digests/${{ matrix.service }}
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: digest-${{ matrix.service }}
           path: digests/${{ matrix.service }}
           retention-days: 30
 
   deploy:
-    needs: [validate-request, build]
-    if: ${{ always() && needs.validate-request.outputs.mode == 'deploy' && needs.build.result == 'success' }}
+    needs: [validate-request, verify, build]
+    if: ${{ always() && needs.validate-request.outputs.mode == 'deploy' && needs.verify.result == 'success' && ((inputs.deployment_profile == 'CHAT_PUSH_FOUNDATION_RECOVERY' && needs.build.result == 'skipped') || (inputs.deployment_profile != 'CHAT_PUSH_FOUNDATION_RECOVERY' && needs.build.result == 'success')) && ((inputs.deployment_profile != 'CHAT_PUSH_FOUNDATION' && inputs.deployment_profile != 'CHAT_PUSH_FOUNDATION_RECOVERY') || (github.run_attempt == 1 && github.actor == github.triggering_actor && github.ref == 'refs/heads/main' && github.workflow_sha == github.sha)) }}
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     environment: staging
+    permissions:
+      actions: read
+      contents: read
+      packages: read
     env:
       STAGING_RELEASE_BACKUP_DIR: /opt/phub/backups/releases/pre-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.deployment_profile == 'CHAT_PUSH_FOUNDATION_RECOVERY' && inputs.foundation_expected_candidate_sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: npm
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        if: ${{ inputs.deployment_profile != 'CHAT_PUSH_FOUNDATION_RECOVERY' }}
         with:
           pattern: digest-*
           path: digests
           merge-multiple: true
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        if: ${{ inputs.deployment_profile == 'CHAT_PUSH_FOUNDATION_RECOVERY' }}
+        with:
+          pattern: digest-*
+          path: digests
+          merge-multiple: true
+          run-id: ${{ inputs.foundation_original_run_id }}
+          github-token: ${{ github.token }}
+      - name: Verify exact current-run image digest artifacts
+        run: |
+          set -eu
+          test ! -L digests
+          test "$(find digests -mindepth 1 -maxdepth 1 -type f | wc -l | tr -d ' ')" -eq 5
+          test -z "$(find digests -mindepth 1 -maxdepth 1 ! -type f -print -quit)"
+          for service in web api worker realtime migrator; do
+            digest_file="digests/$service"
+            test -f "$digest_file" && test ! -L "$digest_file"
+            digest="$(cat "$digest_file")"
+            printf '%s' "$digest" | grep -Eq '^sha256:[0-9a-f]{64}$'
+            test "$(wc -c < "$digest_file" | tr -d ' ')" -eq 71
+          done
       - name: Join the staging tailnet
-        uses: tailscale/github-action@v4
+        uses: tailscale/github-action@306e68a486fd2350f2bfc3b19fcd143891a4a2d8 # v4
         with:
           authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
           ping: ${{ secrets.STAGING_HOST }}
@@ -525,8 +782,77 @@ jobs:
             sh /tmp/verify-runtime-env-isolation-${{ github.run_id }}.sh \
               /etc/phub/staging.env /etc/phub/realtime.env phub-deploy false
           '
+      - name: Verify the active staging release and closed foundation gates before snapshot
+        if: ${{ inputs.deployment_profile == 'CHAT_PUSH_FOUNDATION' }}
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+          EXPECTED_ACTIVE_RELEASE: ${{ inputs.foundation_expected_active_release_sha }}
+          SMOKE_BASE_URL: ${{ vars.STAGING_BASE_URL }}
+        run: |
+          scp deploy/jetson/verify-chat-push-foundation-runtime.sh \
+            "phub-deploy@$HOST:/tmp/verify-chat-push-foundation-runtime-${{ github.run_id }}.sh"
+          ssh "phub-deploy@$HOST" '
+            set -eu
+            verifier=/tmp/verify-chat-push-foundation-runtime-${{ github.run_id }}.sh
+            trap "rm -f \"$verifier\"" EXIT HUP INT TERM
+            chmod 0700 "$verifier"
+            cd /opt/phub
+            test "$(awk -F= '\''$1 == "RELEASE" { count += 1 } END { print count + 0 }'\'' release.env)" -eq 1
+            active_release="$(sed -n s/^RELEASE=//p release.env)"
+            test "$active_release" = "${{ inputs.foundation_expected_active_release_sha }}"
+            PHUB_APP_ROOT=/opt/phub sh "$verifier" preflight
+            for service in api worker realtime; do
+              container_id="$(docker compose --env-file infrastructure.env --env-file release.env ps --status running -q "$service")"
+              test -n "$container_id"
+              test "$(docker inspect --format "{{.State.Health.Status}}" "$container_id")" = healthy
+            done
+          '
+          curl --fail --silent --show-error "${SMOKE_BASE_URL%/}/manifest.json" | node -e '
+            let input = "";
+            process.stdin.setEncoding("utf8");
+            process.stdin.on("data", (chunk) => { input += chunk; });
+            process.stdin.on("end", () => {
+              const manifest = JSON.parse(input);
+              if (manifest.release !== process.env.EXPECTED_ACTIVE_RELEASE) process.exit(1);
+            });
+          '
+      - name: Verify the exact recoverable foundation state
+        if: ${{ inputs.deployment_profile == 'CHAT_PUSH_FOUNDATION_RECOVERY' }}
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+        run: |
+          ssh "phub-deploy@$HOST" '
+            set -eu
+            backup_dir="/opt/phub/backups/releases/pre-${{ inputs.foundation_expected_candidate_sha }}-${{ inputs.foundation_original_run_id }}-${{ inputs.foundation_original_run_attempt }}"
+            test -d "$backup_dir" && test ! -L "$backup_dir"
+            for recovery_file in release.env backup.complete foundation.candidate-release.env \
+              chat-push-foundation.recovery chat-push-foundation.catalog-digest \
+              chat-push-foundation.database-backup chat-push-foundation.monitoring-digest \
+              chat-push-foundation.phase; do
+              test -f "$backup_dir/$recovery_file" && test ! -L "$backup_dir/$recovery_file"
+            done
+            test "$(sed -n s/^CANDIDATE_SHA=//p "$backup_dir/chat-push-foundation.recovery")" = "${{ inputs.foundation_expected_candidate_sha }}"
+            test "$(sed -n s/^ORIGINAL_RUN_ID=//p "$backup_dir/chat-push-foundation.recovery")" = "${{ inputs.foundation_original_run_id }}"
+            test "$(sed -n s/^ORIGINAL_RUN_ATTEMPT=//p "$backup_dir/chat-push-foundation.recovery")" = "${{ inputs.foundation_original_run_attempt }}"
+            test -f /opt/phub/release.env && test ! -L /opt/phub/release.env
+            if ! cmp /opt/phub/release.env "$backup_dir/release.env" >/dev/null \
+              && ! cmp /opt/phub/release.env "$backup_dir/foundation.candidate-release.env" >/dev/null; then
+              echo "Active release changed after the failed foundation run." >&2
+              exit 1
+            fi
+            PHUB_APP_ROOT=/opt/phub sh /opt/phub/run-chat-push-foundation-release.sh \
+              "${{ inputs.foundation_tenant_keys }}" \
+              "${{ inputs.foundation_expected_candidate_sha }}" \
+              "${{ inputs.foundation_original_run_id }}" \
+              "${{ inputs.foundation_original_run_attempt }}" \
+              "${{ inputs.foundation_expected_active_release_sha }}" \
+              "$backup_dir" \
+              prepare-recovery \
+              "$backup_dir/foundation.candidate-release.env"
+          '
       - id: application-backup
         name: Preserve the active digest-pinned application release
+        if: ${{ inputs.deployment_profile != 'CHAT_PUSH_FOUNDATION_RECOVERY' }}
         env:
           HOST: ${{ secrets.STAGING_HOST }}
         run: |
@@ -554,64 +880,151 @@ jobs:
       - name: Install release and ingress definitions
         env:
           HOST: ${{ secrets.STAGING_HOST }}
+          DEPLOYMENT_PROFILE: ${{ inputs.deployment_profile }}
         run: |
-          scp deploy/compose.staging.yaml "phub-deploy@$HOST:/opt/phub/compose.yaml"
-          scp deploy/jetson/nginx/default.conf "phub-deploy@$HOST:/opt/phub/nginx/default.conf"
-          scp deploy/jetson/activate-live-home.sh "phub-deploy@$HOST:/opt/phub/activate-live-home.sh"
-          scp deploy/jetson/diagnose-live-home-source-failures.sh \
-            "phub-deploy@$HOST:/opt/phub/diagnose-live-home-source-failures.sh"
-          scp deploy/jetson/activate-communities-legacy-read-only.sh \
-            "phub-deploy@$HOST:/opt/phub/activate-communities-legacy-read-only.sh"
-          scp deploy/jetson/verify-communities-legacy-read-only.sh \
-            "phub-deploy@$HOST:/opt/phub/verify-communities-legacy-read-only.sh"
-          scp deploy/jetson/activate-client-assisted-viva.sh \
-            "phub-deploy@$HOST:/opt/phub/activate-client-assisted-viva.sh"
-          scp deploy/jetson/run-client-routing-plan.sh \
-            "phub-deploy@$HOST:/opt/phub/run-client-routing-plan.sh.next"
-          scp scripts/set-client-routing-plan.ts \
-            "phub-deploy@$HOST:/opt/phub/set-client-routing-plan.ts.next"
-          scp deploy/jetson/verify-home-base.sh \
-            "phub-deploy@$HOST:/opt/phub/verify-home-base.sh"
-          scp deploy/jetson/verify-live-staging-data.sh \
-            "phub-deploy@$HOST:/opt/phub/verify-live-staging-data.sh"
-          scp deploy/jetson/verify-client-assisted-viva.sh \
-            "phub-deploy@$HOST:/opt/phub/verify-client-assisted-viva.sh"
-          scp deploy/jetson/verify-cup-integrations.sh \
-            "phub-deploy@$HOST:/opt/phub/verify-cup-integrations.sh"
-          scp deploy/jetson/verify-messaging-test-release.sh \
-            "phub-deploy@$HOST:/opt/phub/verify-messaging-test-release.sh"
+          compose_next="/opt/phub/.compose-staging-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.next"
+          ssh "phub-deploy@$HOST" "test ! -e '$compose_next' && test ! -L '$compose_next'"
+          cleanup_compose_next() {
+            ssh "phub-deploy@$HOST" "rm -f '$compose_next'" >/dev/null 2>&1 || true
+          }
+          trap cleanup_compose_next EXIT HUP INT TERM
+          scp deploy/compose.staging.yaml "phub-deploy@$HOST:$compose_next"
+          if [ "$DEPLOYMENT_PROFILE" != CHAT_PUSH_FOUNDATION ] && [ "$DEPLOYMENT_PROFILE" != CHAT_PUSH_FOUNDATION_RECOVERY ]; then
+            scp deploy/jetson/nginx/default.conf "phub-deploy@$HOST:/opt/phub/nginx/default.conf"
+            scp deploy/jetson/activate-live-home.sh \
+              "phub-deploy@$HOST:/opt/phub/activate-live-home.sh"
+            scp deploy/jetson/diagnose-live-home-source-failures.sh \
+              "phub-deploy@$HOST:/opt/phub/diagnose-live-home-source-failures.sh"
+            scp deploy/jetson/activate-communities-legacy-read-only.sh \
+              "phub-deploy@$HOST:/opt/phub/activate-communities-legacy-read-only.sh"
+            scp deploy/jetson/verify-communities-legacy-read-only.sh \
+              "phub-deploy@$HOST:/opt/phub/verify-communities-legacy-read-only.sh"
+            scp deploy/jetson/activate-client-assisted-viva.sh \
+              "phub-deploy@$HOST:/opt/phub/activate-client-assisted-viva.sh"
+            scp deploy/jetson/run-client-routing-plan.sh \
+              "phub-deploy@$HOST:/opt/phub/run-client-routing-plan.sh.next"
+            scp scripts/set-client-routing-plan.ts \
+              "phub-deploy@$HOST:/opt/phub/set-client-routing-plan.ts.next"
+            scp deploy/jetson/verify-home-base.sh \
+              "phub-deploy@$HOST:/opt/phub/verify-home-base.sh"
+            scp deploy/jetson/verify-live-staging-data.sh \
+              "phub-deploy@$HOST:/opt/phub/verify-live-staging-data.sh"
+            scp deploy/jetson/verify-client-assisted-viva.sh \
+              "phub-deploy@$HOST:/opt/phub/verify-client-assisted-viva.sh"
+            scp deploy/jetson/verify-cup-integrations.sh \
+              "phub-deploy@$HOST:/opt/phub/verify-cup-integrations.sh"
+            scp deploy/jetson/verify-messaging-test-release.sh \
+              "phub-deploy@$HOST:/opt/phub/verify-messaging-test-release.sh"
+          fi
           scp deploy/jetson/verify-postgres-backup-restore.sh \
             "phub-deploy@$HOST:/opt/phub/verify-postgres-backup-restore.sh.next"
-          scp deploy/jetson/tls-ingress/Caddyfile \
-            "phub-deploy@$HOST:/opt/phub/tls-ingress/Caddyfile.next"
+          scp deploy/jetson/verify-chat-push-foundation-runtime.sh \
+            "phub-deploy@$HOST:/opt/phub/verify-chat-push-foundation-runtime.sh.next"
+          scp deploy/jetson/run-chat-push-foundation-release.sh \
+            "phub-deploy@$HOST:/opt/phub/run-chat-push-foundation-release.sh.next"
+          scp deploy/jetson/verify-chat-push-foundation-clone.sh \
+            "phub-deploy@$HOST:/opt/phub/verify-chat-push-foundation-clone.sh.next"
+          if [ "$DEPLOYMENT_PROFILE" = CHAT_PUSH_FOUNDATION ] || [ "$DEPLOYMENT_PROFILE" = CHAT_PUSH_FOUNDATION_RECOVERY ]; then
+            scp deploy/jetson/monitoring/padlhub-alerts.yaml \
+              "phub-deploy@$HOST:/tmp/padlhub-alerts-foundation-${{ github.run_id }}.yaml"
+          fi
+          if [ "$DEPLOYMENT_PROFILE" != CHAT_PUSH_FOUNDATION ] && [ "$DEPLOYMENT_PROFILE" != CHAT_PUSH_FOUNDATION_RECOVERY ]; then
+            scp deploy/jetson/tls-ingress/Caddyfile \
+              "phub-deploy@$HOST:/opt/phub/tls-ingress/Caddyfile.next"
+          fi
           ssh "phub-deploy@$HOST" '
             set -eu
-            mv /opt/phub/run-client-routing-plan.sh.next /opt/phub/run-client-routing-plan.sh
-            chmod 0755 /opt/phub/run-client-routing-plan.sh
-            mv /opt/phub/set-client-routing-plan.ts.next /opt/phub/set-client-routing-plan.ts
-            chmod 0644 /opt/phub/set-client-routing-plan.ts
+            deployment_profile="${{ inputs.deployment_profile }}"
+            compose_next="/opt/phub/.compose-staging-${{ github.run_id }}-${{ github.run_attempt }}.next"
+            test -f "$compose_next" && test ! -L "$compose_next"
+            docker compose --env-file /opt/phub/infrastructure.env \
+              -f "$compose_next" config --quiet --no-interpolate
+            chmod 0644 "$compose_next"
+            mv "$compose_next" /opt/phub/compose.yaml
+            if [ "$deployment_profile" != CHAT_PUSH_FOUNDATION ] && [ "$deployment_profile" != CHAT_PUSH_FOUNDATION_RECOVERY ]; then
+              mv /opt/phub/run-client-routing-plan.sh.next /opt/phub/run-client-routing-plan.sh
+              chmod 0755 /opt/phub/run-client-routing-plan.sh
+              mv /opt/phub/set-client-routing-plan.ts.next /opt/phub/set-client-routing-plan.ts
+              chmod 0644 /opt/phub/set-client-routing-plan.ts
+            fi
             install -m 755 /opt/phub/verify-postgres-backup-restore.sh.next \
               /opt/phub/verify-postgres-backup-restore.sh
-            rm -f /opt/phub/verify-postgres-backup-restore.sh.next
-            auth_env=/opt/phub/staging.auth.env
-            auth_env_tmp="${auth_env}.$$"
+            install -m 755 /opt/phub/verify-chat-push-foundation-runtime.sh.next \
+              /opt/phub/verify-chat-push-foundation-runtime.sh
+            install -m 755 /opt/phub/run-chat-push-foundation-release.sh.next \
+              /opt/phub/run-chat-push-foundation-release.sh
+            install -m 755 /opt/phub/verify-chat-push-foundation-clone.sh.next \
+              /opt/phub/verify-chat-push-foundation-clone.sh
+            rm -f /opt/phub/verify-postgres-backup-restore.sh.next \
+              /opt/phub/verify-chat-push-foundation-runtime.sh.next \
+              /opt/phub/run-chat-push-foundation-release.sh.next \
+              /opt/phub/verify-chat-push-foundation-clone.sh.next
             umask 077
-            trap "rm -f \"$auth_env_tmp\"" EXIT HUP INT TERM
-            {
-              printf "%s\n" "CORS_ORIGINS=https://lk.nano.padlhub.su"
-              printf "%s\n" "VIVA_OAUTH_EXISTING_SUBJECT_BOOTSTRAP_ENABLED=true"
-              printf "%s\n" "VIVA_DIRECT_READ_ENABLED=false"
-              printf "%s\n" "VIVA_END_USER_API_URL=https://api.vivacrm.ru/end-user/api"
-              printf "%s\n" "VIVA_OAUTH_REDIRECT_URI=https://lk.nano.padlhub.su/user/api/v1/local-padel/auth/viva/callback"
-              printf "%s\n" "VIVA_OAUTH_SUCCESS_REDIRECT_URL=https://lk.nano.padlhub.su/"
-              printf "%s\n" "HOME_BASE_SYNC_ENABLED=true"
-            } > "$auth_env_tmp"
-            chmod 600 "$auth_env_tmp"
-            mv "$auth_env_tmp" "$auth_env"
-            trap - EXIT HUP INT TERM
+            if [ "$deployment_profile" = CHAT_PUSH_FOUNDATION ] || [ "$deployment_profile" = CHAT_PUSH_FOUNDATION_RECOVERY ]; then
+              if [ "$deployment_profile" = CHAT_PUSH_FOUNDATION ]; then
+                foundation_backup="/opt/phub/backups/releases/pre-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}"
+                test -d "$foundation_backup" && test ! -L "$foundation_backup"
+                test ! -e "$foundation_backup/monitoring.padlhub-alerts.yaml" \
+                  && test ! -L "$foundation_backup/monitoring.padlhub-alerts.yaml"
+                test ! -e "$foundation_backup/monitoring.padlhub-alerts.yaml.absent" \
+                  && test ! -L "$foundation_backup/monitoring.padlhub-alerts.yaml.absent"
+                if test -e /opt/phub/monitoring/padlhub-alerts.yaml || test -L /opt/phub/monitoring/padlhub-alerts.yaml; then
+                  test -f /opt/phub/monitoring/padlhub-alerts.yaml \
+                    && test ! -L /opt/phub/monitoring/padlhub-alerts.yaml
+                  install -m 600 /opt/phub/monitoring/padlhub-alerts.yaml \
+                    "$foundation_backup/monitoring.padlhub-alerts.yaml"
+                else
+                  install -m 600 /dev/null "$foundation_backup/monitoring.padlhub-alerts.yaml.absent"
+                fi
+              fi
+              install -d -m 755 /opt/phub/monitoring
+              install -m 644 "/tmp/padlhub-alerts-foundation-${{ github.run_id }}.yaml" \
+                /opt/phub/monitoring/padlhub-alerts.yaml
+              rm -f "/tmp/padlhub-alerts-foundation-${{ github.run_id }}.yaml"
+              docker compose --env-file infrastructure.env -f compose.infrastructure.yaml \
+                run --rm --no-deps -T --entrypoint promtool prometheus \
+                check rules /etc/prometheus/rules/padlhub-alerts.yaml
+              docker compose --env-file infrastructure.env -f compose.infrastructure.yaml \
+                up -d --no-deps --force-recreate prometheus
+              foundation_env=/opt/phub/staging.chat-push-foundation.env
+              foundation_env_tmp="${foundation_env}.$$"
+              trap "rm -f \"$foundation_env_tmp\"" EXIT HUP INT TERM
+              {
+                printf "%s\n" "WEB_PUSH_ENABLED=false"
+                printf "%s\n" "MESSAGING_USER_BLOCK_COMMANDS_ENABLED=false"
+                printf "%s\n" "BOOKING_REMINDER_SCHEDULER_ENABLED=false"
+              } > "$foundation_env_tmp"
+              chmod 600 "$foundation_env_tmp"
+              mv "$foundation_env_tmp" "$foundation_env"
+              trap - EXIT HUP INT TERM
+              sh /opt/phub/verify-chat-push-foundation-runtime.sh overlay
+            else
+              auth_env=/opt/phub/staging.auth.env
+              auth_env_tmp="${auth_env}.$$"
+              trap "rm -f \"$auth_env_tmp\"" EXIT HUP INT TERM
+              {
+                printf "%s\n" "CORS_ORIGINS=https://lk.nano.padlhub.su"
+                printf "%s\n" "VIVA_OAUTH_EXISTING_SUBJECT_BOOTSTRAP_ENABLED=true"
+                printf "%s\n" "VIVA_DIRECT_READ_ENABLED=false"
+                printf "%s\n" "VIVA_END_USER_API_URL=https://api.vivacrm.ru/end-user/api"
+                printf "%s\n" "VIVA_OAUTH_REDIRECT_URI=https://lk.nano.padlhub.su/user/api/v1/local-padel/auth/viva/callback"
+                printf "%s\n" "VIVA_OAUTH_SUCCESS_REDIRECT_URL=https://lk.nano.padlhub.su/"
+                printf "%s\n" "HOME_BASE_SYNC_ENABLED=true"
+              } > "$auth_env_tmp"
+              chmod 600 "$auth_env_tmp"
+              mv "$auth_env_tmp" "$auth_env"
+              trap - EXIT HUP INT TERM
+            fi
           '
-          scp deploy/jetson/verify-runtime-env-isolation.sh \
-            "phub-deploy@$HOST:/opt/phub/verify-runtime-env-isolation.sh"
+          trap - EXIT HUP INT TERM
+          if [ "$DEPLOYMENT_PROFILE" != CHAT_PUSH_FOUNDATION ] && [ "$DEPLOYMENT_PROFILE" != CHAT_PUSH_FOUNDATION_RECOVERY ]; then
+            scp deploy/jetson/verify-runtime-env-isolation.sh \
+              "phub-deploy@$HOST:/opt/phub/verify-runtime-env-isolation.sh"
+          fi
+          release_sha="${{ github.sha }}"
+          if [ "$DEPLOYMENT_PROFILE" = CHAT_PUSH_FOUNDATION ] || [ "$DEPLOYMENT_PROFILE" = CHAT_PUSH_FOUNDATION_RECOVERY ]; then
+            release_sha="${{ inputs.foundation_expected_candidate_sha }}"
+          fi
           {
             echo "REGISTRY=ghcr.io/z6v6e6r"
             echo "WEB_IMAGE_DIGEST=$(cat digests/web)"
@@ -619,13 +1032,22 @@ jobs:
             echo "WORKER_IMAGE_DIGEST=$(cat digests/worker)"
             echo "REALTIME_IMAGE_DIGEST=$(cat digests/realtime)"
             echo "MIGRATOR_IMAGE_DIGEST=$(cat digests/migrator)"
-            echo "RELEASE=${{ github.sha }}"
+            echo "RELEASE=$release_sha"
             echo "LATEST_MIGRATION=$(find packages/database/migrations -maxdepth 1 -type f -name '*.sql' -exec basename {} \; | sort | tail -1)"
             echo "S3_PUBLIC_ENDPOINT=${{ vars.STAGING_BASE_URL }}"
+            if [ "$DEPLOYMENT_PROFILE" = CHAT_PUSH_FOUNDATION ] || [ "$DEPLOYMENT_PROFILE" = CHAT_PUSH_FOUNDATION_RECOVERY ]; then
+              echo "FOUNDATION_MONITORING_RULES_SHA256=$(sha256sum deploy/jetson/monitoring/padlhub-alerts.yaml | cut -d ' ' -f 1)"
+            fi
           } > release.env
-          scp release.env "phub-deploy@$HOST:/opt/phub/release.env"
+          if [ "$DEPLOYMENT_PROFILE" = CHAT_PUSH_FOUNDATION ] || [ "$DEPLOYMENT_PROFILE" = CHAT_PUSH_FOUNDATION_RECOVERY ]; then
+            candidate_release="/opt/phub/release.foundation.${{ github.run_id }}.env"
+            scp release.env "phub-deploy@$HOST:$candidate_release"
+            ssh "phub-deploy@$HOST" "chmod 0600 '$candidate_release'"
+          else
+            scp release.env "phub-deploy@$HOST:/opt/phub/release.env"
+          fi
       - name: Verify real staging source configuration
-        if: ${{ inputs.deployment_profile != 'COMMUNITIES_LEGACY_READ_ONLY' }}
+        if: ${{ inputs.deployment_profile != 'COMMUNITIES_LEGACY_READ_ONLY' && inputs.deployment_profile != 'CHAT_PUSH_FOUNDATION' && inputs.deployment_profile != 'CHAT_PUSH_FOUNDATION_RECOVERY' }}
         env:
           HOST: ${{ secrets.STAGING_HOST }}
         run: |
@@ -659,9 +1081,35 @@ jobs:
           printf '%s' "$GHCR_TOKEN" | ssh "phub-deploy@$HOST" '
             set -eu
             deployment_profile="${{ inputs.deployment_profile }}"
-            trap "docker logout ghcr.io >/dev/null 2>&1 || true" EXIT
+            candidate_release_input="/opt/phub/release.foundation.${{ github.run_id }}.env"
+            cleanup_remote() {
+              rm -f "$candidate_release_input"
+              docker logout ghcr.io >/dev/null 2>&1 || true
+            }
+            trap cleanup_remote EXIT HUP INT TERM
             docker login ghcr.io --username "${{ github.actor }}" --password-stdin
             cd /opt/phub
+            if [ "$deployment_profile" = CHAT_PUSH_FOUNDATION ] || [ "$deployment_profile" = CHAT_PUSH_FOUNDATION_RECOVERY ]; then
+              if [ "$deployment_profile" = CHAT_PUSH_FOUNDATION ]; then
+                foundation_run_id="${{ github.run_id }}"
+                foundation_run_attempt="${{ github.run_attempt }}"
+                foundation_operation=start
+              else
+                foundation_run_id="${{ inputs.foundation_original_run_id }}"
+                foundation_run_attempt="${{ inputs.foundation_original_run_attempt }}"
+                foundation_operation=recover
+              fi
+              sh /opt/phub/run-chat-push-foundation-release.sh \
+                "${{ inputs.foundation_tenant_keys }}" \
+                "${{ inputs.foundation_expected_candidate_sha }}" \
+                "$foundation_run_id" \
+                "$foundation_run_attempt" \
+                "${{ inputs.foundation_expected_active_release_sha }}" \
+                "/opt/phub/backups/releases/pre-${{ inputs.foundation_expected_candidate_sha }}-${foundation_run_id}-${foundation_run_attempt}" \
+                "$foundation_operation" \
+                "$candidate_release_input"
+              exit 0
+            fi
             if [ "$deployment_profile" != COMMUNITIES_LEGACY_READ_ONLY ]; then
               rm -f /opt/phub/staging.communities.env
             fi
@@ -839,6 +1287,7 @@ jobs:
             fi
           '
       - name: Promote canonical Nano TLS ingress
+        if: ${{ inputs.deployment_profile != 'CHAT_PUSH_FOUNDATION' && inputs.deployment_profile != 'CHAT_PUSH_FOUNDATION_RECOVERY' }}
         env:
           HOST: ${{ secrets.STAGING_HOST }}
           DEPLOYMENT_PROFILE: ${{ inputs.deployment_profile }}
@@ -915,12 +1364,12 @@ jobs:
             echo "Verified TLS ingress backup: $backup_path"
           '
       - name: Attest community-logo flags in every API and worker runtime
-        if: ${{ inputs.deployment_profile != 'COMMUNITIES_LEGACY_READ_ONLY' }}
+        if: ${{ inputs.deployment_profile != 'COMMUNITIES_LEGACY_READ_ONLY' && inputs.deployment_profile != 'CHAT_PUSH_FOUNDATION' && inputs.deployment_profile != 'CHAT_PUSH_FOUNDATION_RECOVERY' }}
         env:
           HOST: ${{ secrets.STAGING_HOST }}
         run: ssh "phub-deploy@$HOST" 'sh /opt/phub/verify-live-staging-data.sh runtime-flags'
       - name: Verify local HomeBase projections
-        if: ${{ inputs.deployment_profile != 'COMMUNITIES_LEGACY_READ_ONLY' }}
+        if: ${{ inputs.deployment_profile != 'COMMUNITIES_LEGACY_READ_ONLY' && inputs.deployment_profile != 'CHAT_PUSH_FOUNDATION' && inputs.deployment_profile != 'CHAT_PUSH_FOUNDATION_RECOVERY' }}
         env:
           HOST: ${{ secrets.STAGING_HOST }}
         run: ssh "phub-deploy@$HOST" 'sh /opt/phub/verify-home-base.sh'
@@ -990,6 +1439,7 @@ jobs:
       - name: Verify the web entrypoint
         env:
           SMOKE_BASE_URL: ${{ vars.STAGING_BASE_URL }}
+          EXPECTED_WEB_RELEASE: ${{ (inputs.deployment_profile == 'CHAT_PUSH_FOUNDATION' || inputs.deployment_profile == 'CHAT_PUSH_FOUNDATION_RECOVERY') && inputs.foundation_expected_candidate_sha || github.sha }}
         run: |
           curl --fail --silent --show-error "$SMOKE_BASE_URL/" | grep -q 'id="phub-app"'
           curl --fail --silent --show-error "${SMOKE_BASE_URL%/}/manifest.json" | node -e '
@@ -998,8 +1448,8 @@ jobs:
             process.stdin.on("data", (chunk) => { input += chunk; });
             process.stdin.on("end", () => {
               const manifest = JSON.parse(input);
-              if (manifest.release !== process.env.GITHUB_SHA) {
-                console.error(`Expected web release ${process.env.GITHUB_SHA}, received ${manifest.release}`);
+              if (manifest.release !== process.env.EXPECTED_WEB_RELEASE) {
+                console.error(`Expected web release ${process.env.EXPECTED_WEB_RELEASE}, received ${manifest.release}`);
                 process.exit(1);
               }
             });
@@ -1018,17 +1468,101 @@ jobs:
             echo "STAGING_RUN_ID=$GITHUB_RUN_ID"
           } > promotion-eligibility/production-promotion-eligibility.env
           chmod 600 promotion-eligibility/production-promotion-eligibility.env
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: ${{ inputs.deployment_profile == 'FULL_LIVE_HOME' }}
         with:
           name: production-promotion-eligibility
           path: promotion-eligibility/production-promotion-eligibility.env
           retention-days: 30
+      - name: Contain a failed foundation recovery without starting old writers
+        if: ${{ (failure() || cancelled()) && inputs.deployment_profile == 'CHAT_PUSH_FOUNDATION_RECOVERY' }}
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+        run: |
+          ssh "phub-deploy@$HOST" '
+            set -eu
+            backup_dir="/opt/phub/backups/releases/pre-${{ inputs.foundation_expected_candidate_sha }}-${{ inputs.foundation_original_run_id }}-${{ inputs.foundation_original_run_attempt }}"
+            phase_path="$backup_dir/chat-push-foundation.phase"
+            test -f "$phase_path" && test ! -L "$phase_path"
+            phase="$(cat "$phase_path")"
+            if [ "$phase" = CANDIDATE_RUNTIME_VERIFIED ] || [ "$phase" = EXTERNAL_SMOKE_FAILED ]; then
+              candidate_release="$backup_dir/foundation.candidate-release.env"
+              if PHUB_APP_ROOT=/opt/phub sh /opt/phub/verify-chat-push-foundation-runtime.sh \
+                candidate-active "$candidate_release"; then
+                phase_tmp="$backup_dir/.chat-push-foundation-phase.$$"
+                printf "%s\n" EXTERNAL_SMOKE_FAILED > "$phase_tmp"
+                chmod 600 "$phase_tmp"
+                mv "$phase_tmp" "$phase_path"
+                echo "Candidate remains active; external smoke requires inspected recovery."
+                exit 0
+              fi
+            fi
+            cd /opt/phub
+            docker compose --env-file infrastructure.env --env-file release.env stop api worker realtime
+            sh /opt/phub/verify-chat-push-foundation-runtime.sh drained
+            echo "Foundation recovery stopped with writers drained; old-writer rollback is forbidden." >&2
+            exit 1
+          '
       - name: Roll back a failed staging application release
         if: ${{ (failure() || cancelled()) && steps.application-backup.outputs.ready == 'true' }}
         env:
           HOST: ${{ secrets.STAGING_HOST }}
+          DEPLOYMENT_PROFILE: ${{ inputs.deployment_profile }}
         run: |
+          monitoring_restore_status=0
+          if [ "$DEPLOYMENT_PROFILE" = CHAT_PUSH_FOUNDATION ]; then
+            if ssh "phub-deploy@$HOST" "test -f '$STAGING_RELEASE_BACKUP_DIR/chat-push-foundation.phase'"; then
+              phase="$(ssh "phub-deploy@$HOST" "cat '$STAGING_RELEASE_BACKUP_DIR/chat-push-foundation.phase'")"
+              if [ "$phase" = CANDIDATE_RUNTIME_VERIFIED ] || [ "$phase" = EXTERNAL_SMOKE_FAILED ]; then
+                if ssh "phub-deploy@$HOST" '
+                  set -eu
+                  backup_dir="'"$STAGING_RELEASE_BACKUP_DIR"'"
+                  candidate_release="$backup_dir/foundation.candidate-release.env"
+                  PHUB_APP_ROOT=/opt/phub sh /opt/phub/verify-chat-push-foundation-runtime.sh \
+                    candidate-active "$candidate_release"
+                  phase_path="$backup_dir/chat-push-foundation.phase"
+                  phase_tmp="$backup_dir/.chat-push-foundation-phase.$$"
+                  printf "%s\n" EXTERNAL_SMOKE_FAILED > "$phase_tmp"
+                  chmod 600 "$phase_tmp"
+                  mv "$phase_tmp" "$phase_path"
+                '; then
+                  echo 'Candidate remains active; external smoke requires inspected recovery.' >&2
+                  exit 0
+                fi
+              fi
+              ssh "phub-deploy@$HOST" '
+                set -eu
+                cd /opt/phub
+                docker compose --env-file infrastructure.env --env-file release.env stop api worker realtime
+                sh /opt/phub/verify-chat-push-foundation-runtime.sh drained
+              '
+              echo 'Foundation migration started; automatic old-writer rollback is blocked.' >&2
+              exit 1
+            fi
+            set +e
+            ssh "phub-deploy@$HOST" '
+              set -eu
+              backup_dir="'"$STAGING_RELEASE_BACKUP_DIR"'"
+              monitoring_path=/opt/phub/monitoring/padlhub-alerts.yaml
+              monitoring_changed=false
+              if test -f "$backup_dir/monitoring.padlhub-alerts.yaml"; then
+                install -m 644 "$backup_dir/monitoring.padlhub-alerts.yaml" "$monitoring_path"
+                monitoring_changed=true
+              elif test -f "$backup_dir/monitoring.padlhub-alerts.yaml.absent"; then
+                rm -f "$monitoring_path"
+                monitoring_changed=true
+              else
+                echo 'Monitoring was not mutated before the failed foundation install.'
+              fi
+              if test "$monitoring_changed" = true; then
+                cd /opt/phub
+                docker compose --env-file infrastructure.env -f compose.infrastructure.yaml \
+                  up -d --no-deps --force-recreate prometheus
+              fi
+            '
+            monitoring_restore_status="$?"
+            set -e
+          fi
           if ssh "phub-deploy@$HOST" \
             'PHUB_MEDIA_ROLLBACK_MODE=pre-cutover sh /opt/phub/verify-media-rollback-safe.sh'; then
             ssh "phub-deploy@$HOST" \
@@ -1055,4 +1589,8 @@ jobs:
               "PHUB_ROLLBACK_COMPATIBILITY_FLOOR=$compatibility_floor PHUB_MEDIA_ROLLBACK_MODE=$compatible_guard_mode sh /opt/phub/verify-media-rollback-safe.sh"
             ssh "phub-deploy@$HOST" \
               "PHUB_ROLLBACK_COMPATIBILITY_FLOOR=$compatibility_floor PHUB_ROLLBACK_REQUIRE_COMPATIBLE_WORKER=true PHUB_ROLLBACK_BACKUP_ROOT=/opt/phub/backups/releases sh /opt/phub/rollback-application.sh '$STAGING_RELEASE_BACKUP_DIR' --confirm=ROLLBACK_STAGING_RELEASE"
+          fi
+          if [ "$monitoring_restore_status" -ne 0 ]; then
+            echo "Application rollback completed, but monitoring restoration failed (exit=$monitoring_restore_status)." >&2
+            exit "$monitoring_restore_status"
           fi

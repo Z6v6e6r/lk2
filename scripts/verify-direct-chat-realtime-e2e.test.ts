@@ -1,13 +1,14 @@
-import { once } from 'node:events';
+import { EventEmitter } from 'node:events';
 
 import { runtimeContourTargetFingerprint } from '@phub/config';
 import { SignJWT } from 'jose';
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { WebSocketServer, type WebSocket } from 'ws';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   openRealtimeConnection,
   runDirectChatRealtimeVerify,
+  type RealtimeSocket,
+  type RealtimeSocketFactory,
 } from './verify-direct-chat-realtime-e2e.js';
 
 const tenantId = '86afbe01-0318-4dd2-bc25-303b7bf0d430';
@@ -75,45 +76,77 @@ function validOptions(playerAToken: string, playerBToken: string) {
   } as const;
 }
 
-const servers: WebSocketServer[] = [];
+class FakeRealtimeSocket extends EventEmitter implements RealtimeSocket {
+  readyState = 0;
+  readonly closeCodes: number[] = [];
+  terminated = false;
+  private closeEmitted = false;
 
-afterEach(async () => {
-  await Promise.all(
-    servers.splice(0).map(async (server) => {
-      for (const client of server.clients) client.terminate();
-      server.close();
-      await once(server, 'close');
-    }),
-  );
-});
-
-async function rawRealtimeServer(
-  onMessage: (socket: WebSocket, message: string) => void,
-): Promise<string> {
-  const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
-  servers.push(server);
-  await once(server, 'listening');
-  server.on('connection', (socket) => {
-    socket.on('message', (raw) => {
-      const text = Array.isArray(raw)
-        ? Buffer.concat(raw).toString('utf8')
-        : raw instanceof ArrayBuffer
-          ? Buffer.from(raw).toString('utf8')
-          : raw.toString('utf8');
-      onMessage(socket, text);
+  constructor(
+    private readonly onClientMessage: (socket: FakeRealtimeSocket, message: string) => void,
+  ) {
+    super();
+    queueMicrotask(() => {
+      if (this.readyState !== 0) return;
+      this.readyState = 1;
+      this.emit('open');
     });
-  });
-  const address = server.address();
-  if (typeof address === 'string' || address === null)
-    throw new Error('TEST_SERVER_ADDRESS_INVALID');
-  return `http://127.0.0.1:${address.port}`;
+  }
+
+  send(data: string): void {
+    this.onClientMessage(this, data);
+  }
+
+  serverSend(data: string): void {
+    this.emit('message', Buffer.from(data));
+  }
+
+  close(code = 1000): void {
+    if (this.readyState === 3) return;
+    this.readyState = 2;
+    this.closeCodes.push(code);
+    setTimeout(() => this.finishClose(code), 0);
+  }
+
+  terminate(): void {
+    this.terminated = true;
+    this.finishClose(1006);
+  }
+
+  private finishClose(code: number): void {
+    if (this.closeEmitted) return;
+    this.closeEmitted = true;
+    this.readyState = 3;
+    this.emit('close', code);
+  }
 }
 
-async function realtimeServer(onSubscribed: (socket: WebSocket) => void): Promise<string> {
-  return rawRealtimeServer((socket, text) => {
+function fakeRealtimeTransport(
+  onClientMessage: (socket: FakeRealtimeSocket, message: string) => void,
+): {
+  readonly factory: RealtimeSocketFactory;
+  readonly sockets: FakeRealtimeSocket[];
+} {
+  const sockets: FakeRealtimeSocket[] = [];
+  return {
+    sockets,
+    factory: vi.fn((url: URL, options: { readonly maxPayload: number }): RealtimeSocket => {
+      expect(url.href).toBe('ws://127.0.0.1:3001/realtime/v1/local-padel');
+      expect(options).toEqual({ maxPayload: 65_536 });
+      const socket = new FakeRealtimeSocket(onClientMessage);
+      sockets.push(socket);
+      return socket;
+    }),
+  };
+}
+
+function authenticatedTransport(
+  onSubscribed: (socket: FakeRealtimeSocket) => void,
+): ReturnType<typeof fakeRealtimeTransport> {
+  return fakeRealtimeTransport((socket, text) => {
     const message = JSON.parse(text) as { type?: string };
     if (message.type === 'authenticate') {
-      socket.send(JSON.stringify({ type: 'connection.ready' }));
+      socket.serverSend(JSON.stringify({ type: 'connection.ready' }));
     } else if (message.type === 'conversation.subscribe') {
       onSubscribed(socket);
     }
@@ -259,86 +292,84 @@ describe('local DIRECT realtime end-to-end verifier', () => {
     },
   );
 
-  it('fails closed when a loopback realtime target sends an oversized message', async () => {
-    const baseUrl = await realtimeServer((socket) => {
-      socket.send(JSON.stringify({ type: 'noise', value: 'x'.repeat(20_000) }));
+  it('fails closed when the realtime target sends an oversized message', async () => {
+    const transport = authenticatedTransport((socket) => {
+      socket.serverSend(JSON.stringify({ type: 'noise', value: 'x'.repeat(20_000) }));
     });
     const connection = await openRealtimeConnection({
-      baseUrl,
+      baseUrl: 'http://127.0.0.1:3001',
       tenantKey: 'local-padel',
       ticket: 'synthetic-ticket',
       conversationId: '11111111-1111-4111-8111-111111111111',
       afterSequence: 0,
+      socketFactory: transport.factory,
     });
 
     await expect(connection.waitFor(() => false, 'UNREACHABLE_TIMEOUT')).rejects.toThrow(
       'DIRECT_REALTIME_VERIFY_SOCKET_MESSAGE_TOO_LARGE',
     );
     await connection.close();
+    expect(transport.sockets[0]?.closeCodes).toContain(1009);
   });
 
-  it('fails closed when a loopback realtime target floods the bounded message buffer', async () => {
-    const baseUrl = await realtimeServer((socket) => {
+  it('fails closed when the realtime target floods the bounded message buffer', async () => {
+    const transport = authenticatedTransport((socket) => {
       for (let index = 0; index <= 100; index += 1) {
-        socket.send(JSON.stringify({ type: 'noise', index }));
+        socket.serverSend(JSON.stringify({ type: 'noise', index }));
       }
     });
     const connection = await openRealtimeConnection({
-      baseUrl,
+      baseUrl: 'http://127.0.0.1:3001',
       tenantKey: 'local-padel',
       ticket: 'synthetic-ticket',
       conversationId: '11111111-1111-4111-8111-111111111111',
       afterSequence: 0,
+      socketFactory: transport.factory,
     });
 
     await expect(connection.waitFor(() => false, 'UNREACHABLE_TIMEOUT')).rejects.toThrow(
       'DIRECT_REALTIME_VERIFY_SOCKET_BUFFER_LIMIT',
     );
     await connection.close();
+    expect(transport.sockets[0]?.closeCodes).toContain(1009);
   });
 
   it('terminates the socket when authentication receives malformed JSON', async () => {
-    let clientClosed = false;
-    const baseUrl = await rawRealtimeServer((socket, text) => {
+    const transport = fakeRealtimeTransport((socket, text) => {
       const message = JSON.parse(text) as { type?: string };
       if (message.type === 'authenticate') {
-        socket.once('close', () => {
-          clientClosed = true;
-        });
-        socket.send('{');
+        socket.serverSend('{');
       }
     });
 
     await expect(
       openRealtimeConnection({
-        baseUrl,
+        baseUrl: 'http://127.0.0.1:3001',
         tenantKey: 'local-padel',
         ticket: 'synthetic-ticket',
         timeoutMs: 100,
+        socketFactory: transport.factory,
       }),
     ).rejects.toThrow('DIRECT_REALTIME_VERIFY_SOCKET_MESSAGE_INVALID');
-    await vi.waitFor(() => expect(clientClosed).toBe(true));
+    expect(transport.sockets[0]?.closeCodes).toContain(1007);
+    expect(transport.sockets[0]?.terminated).toBe(true);
   });
 
   it('terminates the socket when authentication readiness times out', async () => {
-    let clientClosed = false;
-    const baseUrl = await rawRealtimeServer((socket, text) => {
+    const transport = fakeRealtimeTransport((_socket, text) => {
       const message = JSON.parse(text) as { type?: string };
-      if (message.type === 'authenticate') {
-        socket.once('close', () => {
-          clientClosed = true;
-        });
-      }
+      expect(message.type).toBe('authenticate');
     });
 
     await expect(
       openRealtimeConnection({
-        baseUrl,
+        baseUrl: 'http://127.0.0.1:3001',
         tenantKey: 'local-padel',
         ticket: 'synthetic-ticket',
         timeoutMs: 50,
+        socketFactory: transport.factory,
       }),
     ).rejects.toThrow('DIRECT_REALTIME_VERIFY_CONNECTION_READY_TIMEOUT');
-    await vi.waitFor(() => expect(clientClosed).toBe(true));
+    expect(transport.sockets[0]?.terminated).toBe(true);
   });
 });

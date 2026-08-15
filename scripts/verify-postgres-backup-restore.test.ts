@@ -71,6 +71,14 @@ case "$*" in
   *'pg_restore -U'*)
     if [ "\${PHUB_TEST_FAIL_STAGE:-}" = restore ]; then exit 1; fi
     ;;
+  *'chat_push_foundation_snapshot_v1'*)
+    if [ ! -f "$PHUB_TEST_FOUNDATION_SNAPSHOT_STATE" ]; then
+      : > "$PHUB_TEST_FOUNDATION_SNAPSHOT_STATE"
+      printf '%s\n' "\${PHUB_TEST_FOUNDATION_SOURCE:-snapshot-v1}"
+    else
+      printf '%s\n' "\${PHUB_TEST_FOUNDATION_RESTORED:-snapshot-v1}"
+    fi
+    ;;
   *'select count(*) from public.schema_migrations'*)
     if [ "\${PHUB_TEST_FAIL_STAGE:-}" = query ]; then exit 1; fi
     echo 77
@@ -94,9 +102,13 @@ function execute(
   options: {
     readonly availableKb?: number;
     readonly collision?: boolean;
-    readonly confirmation?: 'VERIFY_STAGING_POSTGRES_BACKUP' | 'VERIFY_STAGING_POSTGRES_CAPACITY';
+    readonly confirmation?:
+      | 'VERIFY_STAGING_POSTGRES_BACKUP'
+      | 'VERIFY_STAGING_POSTGRES_CAPACITY'
+      | 'VERIFY_CHAT_PUSH_FOUNDATION_BACKUP';
     readonly createReachedServer?: boolean;
     readonly failStage?: string;
+    readonly foundationRestoredSnapshot?: string;
   } = {},
 ): Promise<{ readonly stdout: string; readonly stderr: string }> {
   return new Promise((resolve, reject) => {
@@ -120,6 +132,9 @@ function execute(
           PHUB_TEST_CREATED_STATE: join(input.root, 'created.state'),
           PHUB_TEST_CREATE_REACHED_SERVER: options.createReachedServer ? 'true' : 'false',
           PHUB_TEST_FAIL_STAGE: options.failStage ?? '',
+          PHUB_TEST_FOUNDATION_SOURCE: 'snapshot-v1',
+          PHUB_TEST_FOUNDATION_RESTORED: options.foundationRestoredSnapshot ?? 'snapshot-v1',
+          PHUB_TEST_FOUNDATION_SNAPSHOT_STATE: join(input.root, 'foundation-snapshot.state'),
           PHUB_TEST_LOG: input.log,
         },
       },
@@ -171,6 +186,28 @@ describe('PostgreSQL backup restore verifier', () => {
     expect(result.stdout).toContain('restore capacity verified');
     expect(log).not.toContain('createdb');
     expect(log).not.toContain('pg_restore -U');
+  });
+
+  it('compares a content-free foundation snapshot between source and restored databases', async () => {
+    const input = await fixture();
+    const result = await execute(input, { confirmation: 'VERIFY_CHAT_PUSH_FOUNDATION_BACKUP' });
+    const log = await readFile(input.log, 'utf8');
+
+    expect(result.stdout).toContain('foundation source/restore snapshot verified');
+    expect(log.match(/chat_push_foundation_snapshot_v1/g)).toHaveLength(2);
+  });
+
+  it('fails closed and cleans the owned restore when the foundation snapshot differs', async () => {
+    const input = await fixture();
+    const failure = await execute(input, {
+      confirmation: 'VERIFY_CHAT_PUSH_FOUNDATION_BACKUP',
+      foundationRestoredSnapshot: 'different-snapshot',
+    }).catch((error: CommandFailure) => error);
+    const log = await readFile(input.log, 'utf8');
+
+    expect(failure).toBeInstanceOf(CommandFailure);
+    expect((failure as CommandFailure).stderr).toContain('source and restored snapshots differ');
+    expect(log).toContain('dropdb --if-exists');
   });
 
   it('fails the pre-dump capacity gate before creating a database', async () => {

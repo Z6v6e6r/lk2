@@ -251,6 +251,61 @@ describe('worker operational metrics', () => {
     );
   });
 
+  it('binds operational success, heartbeat and booking gauges to the worker instance', () => {
+    const recorder = createWorkerMetricRecorder({
+      instanceId: 'worker-candidate',
+      now: () => 123_456,
+    });
+    const attributes = { 'service.instance.id': 'worker-candidate' };
+
+    recorder.recordOperationalSnapshot(
+      {
+        outboxOldestAgeSeconds: 0,
+        outboxBackloggedTenants: 0,
+        deadLetterMessagesReady: 0,
+        pushDeliveriesDue: 0,
+        pushDeliveryOldestDueAgeSeconds: 0,
+        pushDeliveriesDead: 0,
+        pushDeliveriesPolicySuspended: 0,
+        bookingRemindersDue: 0,
+        bookingReminderOldestDueAgeSeconds: 0,
+        bookingReminderLatestMissedUnixTime: 0,
+        communityMemberCountBuilding: 0,
+        communityMemberCountStale: 0,
+        communityMemberCountNotReadyAgeSeconds: 0,
+        communityMediaScanBacklog: 0,
+        communityMediaScanOldestAgeSeconds: 0,
+        communityMediaFailedScans: 0,
+        communityMediaGcBacklog: 0,
+        communityMediaGcOldestAgeSeconds: 0,
+        communityMediaDeadGcJobs: 0,
+      },
+      10,
+    );
+    recorder.recordOperationalCollectionFailure(11);
+
+    expect(instruments.gaugeRecord).toHaveBeenCalledWith(
+      WORKER_METRIC_INSTRUMENTS.operationalCollectionHeartbeatUnixTime,
+      123,
+      attributes,
+    );
+    expect(instruments.gaugeRecord).toHaveBeenCalledWith(
+      WORKER_METRIC_INSTRUMENTS.operationalCollectionSuccess,
+      1,
+      attributes,
+    );
+    expect(instruments.gaugeRecord).toHaveBeenCalledWith(
+      WORKER_METRIC_INSTRUMENTS.operationalCollectionSuccess,
+      0,
+      attributes,
+    );
+    expect(instruments.gaugeRecord).toHaveBeenCalledWith(
+      WORKER_METRIC_INSTRUMENTS.bookingReminderOldestDueAgeSeconds,
+      0,
+      attributes,
+    );
+  });
+
   it('returns a zero snapshot without opening tenant transactions when no tenant is active', async () => {
     const pool = { query: vi.fn().mockResolvedValue({ rows: [] }), connect: vi.fn() };
     const channel = {
