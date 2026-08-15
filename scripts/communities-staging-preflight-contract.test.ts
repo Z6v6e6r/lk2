@@ -53,6 +53,12 @@ describe('Communities staging preflight operational boundary', () => {
     expect(workflow).toContain('actual_phase_binding_sha');
     expect(workflow).toContain('COMMUNITIES_STAGING_EXPECTED_BACKUP_SCRIPT_SHA');
     expect(workflow).toContain('COMMUNITIES_STAGING_EXPECTED_RESTORE_HELPER_SHA');
+    expect(workflow).toContain('id: artifact-shas');
+    expect(workflow).toContain('steps.artifact-shas.outputs.remote_script_sha');
+    expect(workflow).toContain('steps.artifact-shas.outputs.backup_script_sha');
+    expect(workflow).toContain('steps.artifact-shas.outputs.restore_helper_sha');
+    expect(workflow).toContain('sha256sum deploy/jetson/inspect-communities-staging-target.sh');
+    expect(workflow).not.toContain("hashFiles('deploy/jetson/");
     expect(workflow).toContain('META|sourceLedgerSha|$EXPECTED_SOURCE_LEDGER_SHA');
     expect(workflow).toContain('META|systemIdentifier|$EXPECTED_SYSTEM_IDENTIFIER');
     expect(workflow).toContain('timeout --signal=TERM --kill-after=30s 10m');
@@ -79,6 +85,7 @@ describe('Communities staging preflight operational boundary', () => {
     expect(inventory).toContain('default_transaction_read_only=on');
     expect(inventory).toContain('statement_timeout=15000');
     expect(inventory).toContain('lock_timeout=2000');
+    expect(inventory).toContain('-qAt');
     expect(inventory).toContain('repeatable read read only');
     expect(inventory).toContain('pg_catalog.pg_control_system()');
     expect(inventory).toContain('/usr/bin/timeout --signal=TERM --kill-after=30s 10m');
