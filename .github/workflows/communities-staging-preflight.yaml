@@ -1,0 +1,276 @@
+name: Communities staging preflight
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Select inventory only or an explicitly authorized backup/restore verification
+        required: true
+        type: choice
+        default: INVENTORY_ONLY
+        options:
+          - INVENTORY_ONLY
+          - BACKUP_RESTORE_VERIFY
+      expected_main_sha:
+        description: Exact 40-character main SHA being inspected
+        required: true
+        type: string
+      confirmation:
+        description: Type INVENTORY_COMMUNITIES_STAGING or BACKUP_RESTORE_COMMUNITIES_STAGING
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: staging
+  cancel-in-progress: false
+
+jobs:
+  validate-request:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      operation: ${{ steps.request.outputs.operation }}
+    steps:
+      - id: request
+        env:
+          OPERATION: ${{ inputs.operation }}
+          EXPECTED_MAIN_SHA: ${{ inputs.expected_main_sha }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+          EVENT_SHA: ${{ github.sha }}
+          REQUEST_REF: ${{ github.ref }}
+        run: |
+          set -eu
+          if [ "$REQUEST_REF" != refs/heads/main ]; then
+            echo '::error::Communities staging preflight is allowed only from main.'
+            exit 1
+          fi
+          case "$EXPECTED_MAIN_SHA" in
+            ''|*[!0-9a-f]*)
+              echo '::error::Expected main SHA must be lowercase hexadecimal.'
+              exit 1
+              ;;
+          esac
+          if [ "${#EXPECTED_MAIN_SHA}" -ne 40 ] || [ "$EXPECTED_MAIN_SHA" != "$EVENT_SHA" ]; then
+            echo '::error::Expected main SHA must exactly match the workflow event SHA.'
+            exit 1
+          fi
+          case "$OPERATION" in
+            INVENTORY_ONLY)
+              if [ "$CONFIRMATION" != INVENTORY_COMMUNITIES_STAGING ]; then
+                echo '::error::Inventory-only mode requires its exact confirmation.'
+                exit 1
+              fi
+              ;;
+            BACKUP_RESTORE_VERIFY)
+              if [ "$CONFIRMATION" != BACKUP_RESTORE_COMMUNITIES_STAGING ]; then
+                echo '::error::Backup/restore mode requires its exact separate confirmation.'
+                exit 1
+              fi
+              ;;
+            *)
+              echo '::error::Unknown Communities staging preflight operation.'
+              exit 1
+              ;;
+          esac
+          printf '%s\n' "operation=$OPERATION" >> "$GITHUB_OUTPUT"
+
+  inventory:
+    needs: validate-request
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: staging
+    outputs:
+      active_release: ${{ steps.verify.outputs.active_release }}
+      source_ledger_sha: ${{ steps.verify.outputs.source_ledger_sha }}
+      phase_binding_sha: ${{ steps.verify.outputs.phase_binding_sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install verifier dependencies
+        run: npm ci --ignore-scripts
+      - name: Join the staging tailnet
+        uses: tailscale/github-action@306e68a486fd2350f2bfc3b19fcd143891a4a2d8 # v4
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+          ping: ${{ secrets.STAGING_HOST }}
+      - name: Configure audited SSH
+        env:
+          PREFLIGHT_KEY: ${{ secrets.STAGING_PREFLIGHT_INVENTORY_KEY }}
+          KNOWN_HOSTS: ${{ secrets.STAGING_PREFLIGHT_KNOWN_HOSTS }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$PREFLIGHT_KEY" > ~/.ssh/communities_inventory_ed25519
+          chmod 600 ~/.ssh/communities_inventory_ed25519
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+      - name: Capture target database evidence without writes
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+        run: |
+          set -eu
+          timeout --signal=TERM --kill-after=30s 10m \
+            ssh -i ~/.ssh/communities_inventory_ed25519 \
+            -o IdentitiesOnly=yes -o ServerAliveInterval=10 -o ServerAliveCountMax=2 \
+            "phub-preflight@$HOST" INVENTORY_COMMUNITIES_STAGING \
+            > communities-staging-target.evidence \
+            2> communities-staging-target.stderr
+          test -s communities-staging-target.evidence
+          test ! -s communities-staging-target.stderr
+          rm -f communities-staging-target.stderr
+      - name: Verify exact ledger and release preconditions
+        id: verify
+        env:
+          COMMUNITIES_STAGING_EVIDENCE_FILE: ${{ github.workspace }}/communities-staging-target.evidence
+          COMMUNITIES_STAGING_CANDIDATE_RELEASE: ${{ github.sha }}
+          COMMUNITIES_STAGING_EXPECTED_REMOTE_SCRIPT_SHA: ${{ hashFiles('deploy/jetson/inspect-communities-staging-target.sh') }}
+          COMMUNITIES_STAGING_EXPECTED_BACKUP_SCRIPT_SHA: ${{ hashFiles('deploy/jetson/create-communities-staging-backup.sh') }}
+          COMMUNITIES_STAGING_EXPECTED_RESTORE_HELPER_SHA: ${{ hashFiles('deploy/jetson/verify-postgres-backup-restore.sh') }}
+          COMMUNITIES_STAGING_EXPECTED_DATABASE: ${{ secrets.STAGING_PREFLIGHT_DATABASE }}
+          COMMUNITIES_STAGING_EXPECTED_SYSTEM_IDENTIFIER: ${{ secrets.STAGING_PREFLIGHT_SYSTEM_IDENTIFIER }}
+        run: |
+          set -eu
+          node --import tsx scripts/verify-communities-staging-preflight.ts \
+            > communities-staging-preflight-report.json
+          test -s communities-staging-preflight-report.json
+          cat communities-staging-preflight-report.json
+          node --input-type=module -e '
+            import { readFileSync } from "node:fs";
+            const report = JSON.parse(readFileSync("communities-staging-preflight-report.json", "utf8"));
+            for (const [key, value] of [
+              ["active_release", report.activeRelease],
+              ["source_ledger_sha", report.appliedLedgerSha256],
+            ]) process.stdout.write(`${key}=${value}\n`);
+            const { createHash } = await import("node:crypto");
+            const binding = createHash("sha256")
+              .update(`${report.activeRelease}\n${report.appliedLedgerSha256}\n${report.targetDatabase}\n${report.systemIdentifier}\n`)
+              .digest("hex");
+            process.stdout.write(`phase_binding_sha=${binding}\n`);
+          ' >> "$GITHUB_OUTPUT"
+      - name: Publish redacted preflight evidence
+        if: ${{ success() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: communities-staging-inventory-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            communities-staging-target.evidence
+            communities-staging-preflight-report.json
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Record a redacted inventory failure marker
+        if: ${{ failure() }}
+        env:
+          CANDIDATE_RELEASE: ${{ github.sha }}
+        run: |
+          rm -f communities-staging-target.evidence communities-staging-target.stderr communities-staging-preflight-report.json
+          printf '%s\n' \
+            "{\"outcome\":\"COMMUNITIES_STAGING_PREFLIGHT_FAILED\",\"candidateRelease\":\"$CANDIDATE_RELEASE\",\"authorizesMigration\":false,\"authorizesDeploy\":false,\"authorizesImport\":false,\"authorizesActivation\":false}" \
+            > communities-staging-preflight-failure.json
+      - name: Publish only the redacted inventory failure marker
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: communities-staging-inventory-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: communities-staging-preflight-failure.json
+          if-no-files-found: error
+          retention-days: 30
+
+  backup-restore:
+    needs: [validate-request, inventory]
+    if: ${{ needs.validate-request.outputs.operation == 'BACKUP_RESTORE_VERIFY' && needs.inventory.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    environment: staging-backup
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Join the staging tailnet
+        uses: tailscale/github-action@306e68a486fd2350f2bfc3b19fcd143891a4a2d8 # v4
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+          ping: ${{ secrets.STAGING_HOST }}
+      - name: Configure restricted backup SSH
+        env:
+          PREFLIGHT_KEY: ${{ secrets.STAGING_PREFLIGHT_BACKUP_KEY }}
+          KNOWN_HOSTS: ${{ secrets.STAGING_PREFLIGHT_KNOWN_HOSTS }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$PREFLIGHT_KEY" > ~/.ssh/communities_backup_ed25519
+          chmod 600 ~/.ssh/communities_backup_ed25519
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+      - name: Create and restore-verify a private PostgreSQL backup
+        env:
+          EXPECTED_ACTIVE_RELEASE: ${{ needs.inventory.outputs.active_release }}
+          EXPECTED_PHASE_BINDING_SHA: ${{ needs.inventory.outputs.phase_binding_sha }}
+          EXPECTED_SOURCE_LEDGER_SHA: ${{ needs.inventory.outputs.source_ledger_sha }}
+          EXPECTED_SYSTEM_IDENTIFIER: ${{ secrets.STAGING_PREFLIGHT_SYSTEM_IDENTIFIER }}
+          EXPECTED_TARGET_DATABASE: ${{ secrets.STAGING_PREFLIGHT_DATABASE }}
+          HOST: ${{ secrets.STAGING_HOST }}
+        run: |
+          set -eu
+          actual_phase_binding_sha="$({
+            printf '%s\n' "$EXPECTED_ACTIVE_RELEASE"
+            printf '%s\n' "$EXPECTED_SOURCE_LEDGER_SHA"
+            printf '%s\n' "$EXPECTED_TARGET_DATABASE"
+            printf '%s\n' "$EXPECTED_SYSTEM_IDENTIFIER"
+          } | sha256sum | cut -d ' ' -f 1)"
+          if [ "$actual_phase_binding_sha" != "$EXPECTED_PHASE_BINDING_SHA" ]; then
+            echo '::error::Backup environment identity does not match the inventory phase binding.'
+            exit 1
+          fi
+          expected_backup_script_sha="$(sha256sum deploy/jetson/create-communities-staging-backup.sh | cut -d ' ' -f 1)"
+          expected_restore_helper_sha="$(sha256sum deploy/jetson/verify-postgres-backup-restore.sh | cut -d ' ' -f 1)"
+          timeout --signal=TERM --kill-after=30s 150m \
+            ssh -i ~/.ssh/communities_backup_ed25519 \
+            -o IdentitiesOnly=yes -o ServerAliveInterval=10 -o ServerAliveCountMax=2 \
+            "phub-preflight@$HOST" \
+            "BACKUP_RESTORE_COMMUNITIES_STAGING $EXPECTED_ACTIVE_RELEASE $EXPECTED_SOURCE_LEDGER_SHA $EXPECTED_TARGET_DATABASE $EXPECTED_SYSTEM_IDENTIFIER $expected_backup_script_sha $expected_restore_helper_sha" \
+            > communities-staging-backup.evidence \
+            2> communities-staging-backup.stderr
+          test -s communities-staging-backup.evidence
+          test ! -s communities-staging-backup.stderr
+          rm -f communities-staging-backup.stderr
+          grep -Fx "META|backupScriptSha|$expected_backup_script_sha" communities-staging-backup.evidence
+          grep -Fx "META|restoreHelperSha|$expected_restore_helper_sha" communities-staging-backup.evidence
+          grep -Fx "META|activeRelease|$EXPECTED_ACTIVE_RELEASE" communities-staging-backup.evidence
+          grep -Fx "META|sourceLedgerSha|$EXPECTED_SOURCE_LEDGER_SHA" communities-staging-backup.evidence
+          grep -Fx "META|systemIdentifier|$EXPECTED_SYSTEM_IDENTIFIER" communities-staging-backup.evidence
+          grep -Fx "META|targetDatabase|$EXPECTED_TARGET_DATABASE" communities-staging-backup.evidence
+          test "$(wc -l < communities-staging-backup.evidence | tr -d ' ')" -eq 14
+          grep -Eq '^META\|backupPath\|/var/lib/phub-preflight/backups/postgres-communities-preflight-[0-9]{8}T[0-9]{6}Z-[0-9]+\.dump$' communities-staging-backup.evidence
+          grep -Eq '^META\|backupBytes\|[1-9][0-9]*$' communities-staging-backup.evidence
+          grep -Eq '^META\|backupSha\|[0-9a-f]{64}$' communities-staging-backup.evidence
+          grep -Eq '^META\|dumpSeconds\|(0|[1-9][0-9]*)$' communities-staging-backup.evidence
+          grep -Eq '^META\|restoreSeconds\|(0|[1-9][0-9]*)$' communities-staging-backup.evidence
+          grep -Eq '^META\|pgDumpVersion\|16(\.[0-9]+)*$' communities-staging-backup.evidence
+          grep -Eq '^META\|pgRestoreVersion\|16(\.[0-9]+)*$' communities-staging-backup.evidence
+          grep -Eq '^META\|psqlVersion\|16(\.[0-9]+)*$' communities-staging-backup.evidence
+          cat communities-staging-backup.evidence
+      - name: Publish redacted backup metadata
+        if: ${{ success() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: communities-staging-backup-${{ github.run_id }}-${{ github.run_attempt }}
+          path: communities-staging-backup.evidence
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Record a redacted backup failure marker
+        if: ${{ failure() }}
+        env:
+          CANDIDATE_RELEASE: ${{ github.sha }}
+        run: |
+          rm -f communities-staging-backup.evidence communities-staging-backup.stderr
+          printf '%s\n' \
+            "{\"outcome\":\"COMMUNITIES_STAGING_BACKUP_FAILED\",\"candidateRelease\":\"$CANDIDATE_RELEASE\",\"authorizesMigration\":false,\"authorizesDeploy\":false,\"authorizesImport\":false,\"authorizesActivation\":false}" \
+            > communities-staging-backup-failure.json
+      - name: Publish only the redacted backup failure marker
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: communities-staging-backup-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: communities-staging-backup-failure.json
+          if-no-files-found: error
+          retention-days: 30

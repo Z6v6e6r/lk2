@@ -70,9 +70,18 @@ does not prove an acceptable production writer pause.
    same-cluster owners and ACLs; a portable `--no-owner --no-acl` restore is backup evidence but is
    not a valid bounded-migrator rehearsal. Require the restored ledger to be queryable before any
    migration is run against the shared target.
-6. Pass the clone `media` role precheck, run the built `apps/migrator` image against the clone, run it
-   again and require no output, then pass the role postcheck and rolled-back runtime tenant DML/RLS
-   probe.
+6. Classify the exact missing-filename set before running any migrator against the clone:
+   - if none of the maintenance-only chat/push migrations `0069`–`0073` are pending, pass the clone
+     `media` role precheck, run the built `apps/migrator` image against the clone, run it again and
+     require no output, then pass the role postcheck and rolled-back runtime tenant DML/RLS probe;
+   - if any `0069`–`0073` migration is pending, stop without invoking the migrator. This Communities
+     procedure has no reviewed clone mode that combines the chat/push maintenance acknowledgement
+     with the required media role precheck, postcheck and rolled-back runtime tenant DML/RLS probe.
+     Complete the separately authorized maintenance procedure in
+     `docs/runbooks/chats-notifications-moderation.md`, then restart this preflight from a fresh
+     inventory whose `0069`–`0073` pending set is empty. If any other packaged migration is pending
+     alongside `0069`–`0073`, the current policy also returns
+     `CHAT_PUSH_FOUNDATION_MAINTENANCE_UNEXPECTED_PENDING` before DDL.
 7. Compare Communities row counts before and after; require all indexes valid and all Communities
    tables to have both RLS and FORCE RLS.
 8. Validate existing `NOT VALID` Communities constraints in a transaction and roll it back.
@@ -84,6 +93,91 @@ does not prove an acceptable production writer pause.
     activation. Record that the migrator and audit role has `rolsuper` or `rolbypassrls`; otherwise
     a zero visible count is not valid evidence for this backfill.
 11. Only after CI and independent migration/security review may the code release be merged.
+
+### Dedicated staging evidence workflow
+
+`.github/workflows/communities-staging-preflight.yaml` is the only workflow for collecting this
+target-bound evidence. It is manual, accepts only `main`, pins the exact 40-character event SHA,
+shares the `staging` concurrency group, and has no migrator, deploy, restart or application process
+step. Its successful report explicitly does not authorize migration, deploy, import or activation.
+
+The workflow must not reuse `STAGING_DEPLOY_KEY`. Before its first use, an authorized staging
+administrator must install these repository-matched files as root-owned, non-writable commands:
+
+- `/usr/local/libexec/phub/inspect-communities-staging-target.sh`;
+- `/usr/local/libexec/phub/create-communities-staging-backup.sh`;
+- `/usr/local/libexec/phub/verify-postgres-backup-restore.sh`.
+
+Provision two distinct SSH principals or keys with `restrict` and exact forced commands in
+`authorized_keys`:
+
+```text
+restrict,command="/usr/local/libexec/phub/inspect-communities-staging-target.sh" <inventory-public-key>
+restrict,command="env PHUB_BACKUP_ROOT=/var/lib/phub-preflight/backups /usr/local/libexec/phub/create-communities-staging-backup.sh" <backup-public-key>
+```
+
+The inventory key is stored as `STAGING_PREFLIGHT_INVENTORY_KEY` in the protected `staging`
+environment. The independently approved backup key is stored as `STAGING_PREFLIGHT_BACKUP_KEY` in
+the `staging-backup` environment, which requires manual approval. Both use the pinned
+`STAGING_PREFLIGHT_KNOWN_HOSTS`; neither principal may receive a shell, port forwarding, arbitrary
+Docker, migrator or deploy access. Installing or rotating these principals is a separate privileged
+administrator action and is not performed by the workflow.
+
+The forced-command account is a dedicated non-root account. It may have only the group access
+needed to read the fixed infrastructure inputs and invoke Docker through these commands. It must
+not own or be able to write `/opt/phub`, `infrastructure.env`, `compose.infrastructure.yaml`,
+`release.env` or an optional `.env`; both commands reject writable or same-owner inputs. The backup
+directory is the separate exception and is private to the backup command.
+
+Both commands require a non-empty exact `SSH_ORIGINAL_COMMAND`; a connection that supplies no
+requested command fails closed. Each installed script also establishes a host-side GNU `timeout`
+process group (10 minutes for inventory, 150 minutes for backup/restore), terminates remaining
+children after a 30-second grace, and runs the backup cleanup trap on termination.
+
+The administrator pre-creates `/var/lib/phub-preflight/backups` as mode 0700 and owned by the
+dedicated forced-command account. Do not reuse or chown `/opt/phub/backups`: it belongs to the
+existing deploy backup lifecycle and has a different owner. The exact backup root is pinned in the
+forced command above and is used for both the private archive and restore-cleanup markers.
+
+The protected staging environment also pins `STAGING_PREFLIGHT_DATABASE` and
+`STAGING_PREFLIGHT_SYSTEM_IDENTIFIER`. Record them through the approved DBA inventory channel;
+never derive either expected value from the same remote evidence being checked. The database role
+used inside the forced command must have BYPASSRLS (or superuser) for tenant-wide row evidence and
+usable `pg_read_all_stats` visibility (or superuser) for transaction evidence.
+
+The protected `staging-backup` environment independently stores the same approved database and
+system-identifier pins. GitHub job outputs carry only a SHA-256 phase commitment, never those exact
+secret values; the backup job recomputes that commitment before SSH. The requested forced command
+also carries the exact checked-out backup-wrapper and restore-helper SHA-256 values. The installed
+wrapper verifies both files before capacity inspection or any filesystem/database mutation, while
+the inventory phase independently reports their installed hashes. All third-party workflow actions
+are pinned to full commit SHAs, not mutable major-version tags.
+
+Run `INVENTORY_ONLY` first with confirmation `INVENTORY_COMMUNITIES_STAGING`. The remote command
+uses one bounded `REPEATABLE READ READ ONLY` transaction and emits only release, database identity,
+role capability, relation sizes/counts, lock/index/RLS summaries and the complete migration ledger.
+The runner verifies the installed command SHA against the checked-out file and fails closed on an
+unknown, superseded canonical, duplicate or checksum-mismatched ledger. Compatible historical gaps
+are reported as explicit missing filenames and are not treated as a prefix violation. That report
+is compatibility evidence, not blanket execution authority: before a clone rehearsal, classify it
+against the maintenance-only chat/push `0069`–`0073` policy in step 6. Any pending `0069`–`0073`
+file must stop this Communities rehearsal without invoking the migrator; after separately approved
+foundation maintenance, restart from a fresh inventory.
+
+Run `BACKUP_RESTORE_VERIFY` only after separate backup authority, with confirmation
+`BACKUP_RESTORE_COMMUNITIES_STAGING`. It repeats the inventory gate, creates a private mode-0600
+archive, requires the source ledger to stay unchanged during `pg_dump`, restores to a temporary
+PostgreSQL 16 database, compares the source and clone ledger digests, proves the temporary database
+was dropped, then retains the verified archive. The workflow also requires the source database,
+cluster system identifier, active release and ledger digest to equal the immediately preceding
+inventory job inside the forced command before capacity inspection, `pg_dump`, clone creation or
+archive retention. The runner repeats the equality check before it publishes the backup evidence.
+Failure evidence and cleanup markers remain available for reconciliation; an unresolved marker
+blocks subsequent attempts.
+
+Neither operation applies migration 0078, so its four index build durations remain `UNMEASURED`.
+Measuring them requires a separately authorized migration rehearsal on the restored clone and an
+explicit lock, statement-timeout and storage budget.
 
 ## Activation boundary
 
