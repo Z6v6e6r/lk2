@@ -25,6 +25,7 @@ const row = {
   id: communityId,
   title: 'Padel Friends',
   description: 'Description',
+  logo_object_key: null,
   logo_url: null,
   is_verified: true,
   visibility: 'PUBLIC',
@@ -86,5 +87,45 @@ describe('community read repository', () => {
     const call = query.mock.calls.find(([text]) => String(text).includes('c.id = $3'));
     expect(call?.[0]).toContain("c.visibility = 'PUBLIC' or viewer.status = 'ACTIVE'");
     expect(call?.[1]).toEqual([tenantId, viewerUserId, communityId]);
+  });
+
+  it('selects the stable PadlHub logo route for canonical discovery and detail reads', async () => {
+    const stablePath = `/public/api/v1/media/community-logos/${tenantId}/${communityId}` as const;
+    const { pool, query } = poolWithRows([
+      {
+        ...row,
+        logo_object_key: `community-logos/${tenantId}/${communityId}/${'a'.repeat(64)}.webp`,
+        logo_url: null,
+      },
+    ]);
+    const repository = createCommunityReadRepository(pool, {
+      stableLogoDeliveryEnabled: true,
+    });
+
+    await expect(
+      repository.listDiscoverable({ tenantId, viewerUserId, limit: 20 }),
+    ).resolves.toMatchObject({ items: [{ logoUrl: stablePath }] });
+    await expect(
+      repository.getDetail({ tenantId, viewerUserId, communityId }),
+    ).resolves.toMatchObject({ logoUrl: stablePath });
+
+    const reads = query.mock.calls.filter(([text]) => String(text).includes('logo.delivery_url'));
+    expect(reads).toHaveLength(2);
+    expect(reads.every(([text]) => String(text).includes('logo.object_key'))).toBe(true);
+  });
+
+  it('preserves signed logo delivery while stable delivery is disabled', async () => {
+    const signedUrl = 'https://media.padlhub.test/community.webp?sig=test';
+    const { pool } = poolWithRows([
+      {
+        ...row,
+        logo_object_key: `community-logos/${tenantId}/${communityId}/${'b'.repeat(64)}.webp`,
+        logo_url: signedUrl,
+      },
+    ]);
+
+    await expect(
+      createCommunityReadRepository(pool).getDetail({ tenantId, viewerUserId, communityId }),
+    ).resolves.toMatchObject({ logoUrl: signedUrl });
   });
 });

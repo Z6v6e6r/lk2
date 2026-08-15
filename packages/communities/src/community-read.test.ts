@@ -28,6 +28,24 @@ const input = {
 };
 
 describe('community read policy', () => {
+  it('accepts the exact relative PadlHub logo route in discovery and detail responses', async () => {
+    const stableLogoUrl =
+      `/public/api/v1/media/community-logos/${input.tenantId}/${base.id}` as const;
+    const stable = { ...base, logoUrl: stableLogoUrl };
+    const service = createCommunityReadService({
+      listDiscoverable: vi.fn().mockResolvedValue({ items: [stable], hasMore: false }),
+      getDetail: vi.fn().mockResolvedValue(stable),
+    });
+
+    await expect(service.listDiscoverable({ ...input, limit: 20 })).resolves.toMatchObject({
+      items: [{ logoUrl: stableLogoUrl }],
+    });
+    await expect(service.getDetail({ ...input, communityId: base.id })).resolves.toMatchObject({
+      outcome: 'found',
+      detail: { logoUrl: stableLogoUrl },
+    });
+  });
+
   it('returns full public fields but a strict minimal LISTED_PRIVATE card', async () => {
     const service = createCommunityReadService({
       listDiscoverable: vi.fn().mockResolvedValue({

@@ -825,6 +825,15 @@ describe('loadConfig', () => {
     ).toThrow('requires stable delivery disabled');
   });
 
+  it('requires media storage before stable community-logo delivery can be enabled', () => {
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        COMMUNITY_LOGO_STABLE_DELIVERY_ENABLED: 'true',
+      }),
+    ).toThrow('COMMUNITY_LOGO_STABLE_DELIVERY_ENABLED requires media storage');
+  });
+
   it('does not expose worker-only storage requirements to API and realtime', () => {
     const config = loadConfig({
       ...validEnvironment,

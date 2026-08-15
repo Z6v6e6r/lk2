@@ -850,6 +850,11 @@ jobs:
             fi
             echo "Verified TLS ingress backup: $backup_path"
           '
+      - name: Attest community-logo flags in every API and worker runtime
+        if: ${{ inputs.deployment_profile != 'COMMUNITIES_LEGACY_READ_ONLY' }}
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+        run: ssh "phub-deploy@$HOST" 'sh /opt/phub/verify-live-staging-data.sh runtime-flags'
       - name: Verify local HomeBase projections
         if: ${{ inputs.deployment_profile != 'COMMUNITIES_LEGACY_READ_ONLY' }}
         env:
@@ -966,12 +971,24 @@ jobs:
               "PHUB_ROLLBACK_BACKUP_ROOT=/opt/phub/backups/releases sh /opt/phub/rollback-application.sh '$STAGING_RELEASE_BACKUP_DIR' --confirm=ROLLBACK_STAGING_RELEASE"
           else
             guard_status="$?"
-            if [ "$guard_status" -ne 42 ]; then
-              echo "Media rollback precheck failed without a confirmed compatibility transition (exit=$guard_status)" >&2
-              exit "$guard_status"
-            fi
+            case "$guard_status" in
+              42)
+                compatibility_floor=client-media
+                compatible_guard_mode=compatible-client
+                ;;
+              43)
+                compatibility_floor=community-logo
+                compatible_guard_mode=compatible-logo
+                ;;
+              *)
+                echo "Media rollback precheck failed without a confirmed compatibility transition (exit=$guard_status)" >&2
+                exit "$guard_status"
+                ;;
+            esac
             ssh "phub-deploy@$HOST" \
-              "PHUB_ROLLBACK_BACKUP_ROOT=/opt/phub/backups/releases sh /opt/phub/prepare-compatible-worker-rollback.sh '$STAGING_RELEASE_BACKUP_DIR' PREPARE_COMPATIBLE_WORKER_ROLLBACK"
+              "PHUB_ROLLBACK_COMPATIBILITY_FLOOR=$compatibility_floor PHUB_ROLLBACK_BACKUP_ROOT=/opt/phub/backups/releases sh /opt/phub/prepare-compatible-worker-rollback.sh '$STAGING_RELEASE_BACKUP_DIR' PREPARE_COMPATIBLE_WORKER_ROLLBACK"
             ssh "phub-deploy@$HOST" \
-              "PHUB_ROLLBACK_REQUIRE_COMPATIBLE_WORKER=true PHUB_ROLLBACK_BACKUP_ROOT=/opt/phub/backups/releases sh /opt/phub/rollback-application.sh '$STAGING_RELEASE_BACKUP_DIR' --confirm=ROLLBACK_STAGING_RELEASE"
+              "PHUB_ROLLBACK_COMPATIBILITY_FLOOR=$compatibility_floor PHUB_MEDIA_ROLLBACK_MODE=$compatible_guard_mode sh /opt/phub/verify-media-rollback-safe.sh"
+            ssh "phub-deploy@$HOST" \
+              "PHUB_ROLLBACK_COMPATIBILITY_FLOOR=$compatibility_floor PHUB_ROLLBACK_REQUIRE_COMPATIBLE_WORKER=true PHUB_ROLLBACK_BACKUP_ROOT=/opt/phub/backups/releases sh /opt/phub/rollback-application.sh '$STAGING_RELEASE_BACKUP_DIR' --confirm=ROLLBACK_STAGING_RELEASE"
           fi

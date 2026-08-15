@@ -238,7 +238,9 @@ directory under `/opt/phub/backups/releases`. The backup primitive requires the 
 full `sha256` digests. The snapshot must also contain `nginx/default.conf`, `staging.auth.env` and
 `tls-ingress/Caddyfile`. It stores either the previous `staging.override.env` or an empty
 `staging.override.env.absent` marker, and independently stores `staging.communities.env` or its
-empty `.absent` marker. Write `backup.complete` last with the exact previous release SHA.
+empty `.absent` marker. It also stores `staging.games.env` or its empty `.absent` marker and a
+`worker-capabilities.env` attestation tied to the running API/worker digests. Write
+`backup.complete` last with the exact previous release SHA.
 
 The expected saved-release layout is:
 
@@ -250,6 +252,8 @@ The expected saved-release layout is:
   staging.auth.env            # mode 0600
   staging.override.env        # mode 0600; or staging.override.env.absent
   staging.communities.env     # mode 0600; or staging.communities.env.absent
+  staging.games.env           # mode 0600; or staging.games.env.absent
+  worker-capabilities.env     # API/worker community-logo rollback attestation
   process-state.env           # exact running/stopped state for web, API, worker and realtime
   tls-ingress/Caddyfile
   backup.complete             # exact release SHA, written last

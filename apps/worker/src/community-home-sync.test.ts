@@ -1,14 +1,17 @@
+import { createHash } from 'node:crypto';
+
 import { communitySummarySchema, type CommunityDirectoryRepository } from '@phub/communities';
 import { loadConfig } from '@phub/config';
 import { homeProjectionComponentPayloadSchema } from '@phub/home-projection';
 import type { Logger } from 'pino';
+import sharp from 'sharp';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
   runCommunityHomeSyncCycle,
   runCommunityLogoCompatibilityBackfill,
 } from './community-home-sync.js';
-import type { synchronizeLegacyCommunityLogos } from './community-logo-sync.js';
+import { CommunityLogoSourceResilience } from './community-logo-sync.js';
 import type { ProfilePhotoObjectStore } from './profile-photo-sync.js';
 
 const tenantId = '86afbe01-0318-4dd2-bc25-303b7bf0d430';
@@ -92,9 +95,9 @@ describe('independent community Home synchronization', () => {
     const store: ProfilePhotoObjectStore = {
       put: vi.fn().mockResolvedValue(undefined),
       createReadUrl: vi.fn(),
+      exists: vi.fn().mockResolvedValue(true),
       delete: vi.fn().mockResolvedValue(undefined),
     };
-    const synchronizeLogos = vi.fn<typeof synchronizeLegacyCommunityLogos>().mockResolvedValue([]);
     const config = loadConfig({
       APP_ENV: 'ci',
       DATABASE_URL: 'postgresql://phub:test@localhost:5432/phub',
@@ -112,17 +115,12 @@ describe('independent community Home synchronization', () => {
         config,
         logger,
         repository,
-        sourceMode: 'LEGACY',
+        sourceMode: 'LOCAL',
         store,
-        synchronizeLogos,
         now: new Date('2026-07-17T12:00:00.000Z'),
       }),
     ).resolves.toEqual({ attempted: 1, synced: 1, failed: 0 });
     expect(listMemberships).toHaveBeenCalledTimes(2);
-    expect(synchronizeLogos).toHaveBeenCalledOnce();
-    expect(synchronizeLogos.mock.calls[0]?.[0].items.map((item) => item.id)).toEqual(
-      communityIds.slice(0, 10),
-    );
     expect(listMemberships).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
@@ -143,6 +141,180 @@ describe('independent community Home synchronization', () => {
     expect(outboxPayload).toMatchObject({ component: 'communities' });
     expect(projectedCommunities).toHaveLength(10);
     expect(projectedCommunities.map((item) => item.id)).toEqual(communityIds.slice(0, 10));
+  });
+
+  it('re-uploads a physically missing active object through the production deferred-put path', async () => {
+    const communityId = communityIds[0];
+    const sourceUrl = 'https://legacy.padlhub.test/logo.png';
+    const png = await sharp({
+      create: { width: 32, height: 24, channels: 4, background: '#7654d7' },
+    })
+      .png()
+      .toBuffer();
+    const webp = await sharp(png, { failOn: 'error', limitInputPixels: 20_000_000 })
+      .rotate()
+      .resize({
+        width: 512,
+        height: 512,
+        fit: 'inside',
+        withoutEnlargement: true,
+      })
+      .webp({ quality: 82, effort: 4 })
+      .toBuffer();
+    const contentSha256 = createHash('sha256').update(webp).digest('hex');
+    const objectKey = `community-logos/${tenantId}/${communityId}/${contentSha256}.webp`;
+    const now = '2026-07-17T13:00:00.000Z';
+    const previousSync = '2026-07-17T11:00:00.000Z';
+    let cutoverRecorded = false;
+    const query = vi.fn((text: string) => {
+      if (
+        text === 'begin' ||
+        text === 'commit' ||
+        text === 'rollback' ||
+        text.includes("set_config('app.tenant_id'") ||
+        text.includes('pg_advisory_xact_lock')
+      ) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('from identity.tenants')) {
+        return Promise.resolve({ rows: [{ id: tenantId }], rowCount: 1 });
+      }
+      if (text.includes('from identity.users u')) {
+        return Promise.resolve({ rows: [{ user_id: userId }], rowCount: 1 });
+      }
+      if (text.includes('source_last_modified, content_sha256, object_key, delivery_url')) {
+        return Promise.resolve({
+          rows: [
+            {
+              community_id: communityId,
+              source_url: sourceUrl,
+              source_etag: '"old"',
+              source_last_modified: null,
+              content_sha256: contentSha256,
+              object_key: objectKey,
+              delivery_url: null,
+              delivery_expires_at: null,
+              synced_at: previousSync,
+            },
+          ],
+          rowCount: 1,
+        });
+      }
+      if (text.includes('select object_key, delivery_url, delivery_expires_at, synced_at')) {
+        return Promise.resolve({
+          rows: [
+            {
+              object_key: objectKey,
+              delivery_url: null,
+              delivery_expires_at: null,
+              synced_at: previousSync,
+            },
+          ],
+          rowCount: 1,
+        });
+      }
+      if (text.includes('select object_key') && text.includes('for update')) {
+        return Promise.resolve({ rows: [{ object_key: objectKey }], rowCount: 1 });
+      }
+      if (text.includes('from integration.community_logo_observation_watermarks')) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('select community_id::text as community_id, delivery_url, synced_at')) {
+        return Promise.resolve({
+          rows: [{ community_id: communityId, delivery_url: null, synced_at: now }],
+          rowCount: 1,
+        });
+      }
+      if (
+        text.includes('from integration.community_home_source_components') ||
+        text.includes('from home.dashboard_components') ||
+        text.includes('from integration.community_logo_object_gc')
+      ) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (
+        text.includes('insert into integration.community_logo_observation_watermarks') ||
+        text.includes('insert into integration.community_logo_sync') ||
+        text.includes('delete from integration.community_logo_object_gc') ||
+        text.includes('insert into integration.community_home_source_components') ||
+        text.includes('insert into audit.outbox_events') ||
+        text.includes('insert into audit.audit_log')
+      ) {
+        return Promise.resolve({ rows: [], rowCount: 1 });
+      }
+      if (text.includes('insert into integration.media_cutover_state')) {
+        cutoverRecorded = true;
+        return Promise.resolve({ rows: [], rowCount: 1 });
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const pool = {
+      query,
+      connect: vi.fn().mockResolvedValue({ query, release: vi.fn() }),
+    } as never;
+    const repository: CommunityDirectoryRepository = {
+      listMemberships: vi.fn().mockResolvedValue({
+        items: [
+          {
+            id: communityId,
+            title: 'Сообщество с восстанавливаемым логотипом',
+            logoUrl: null,
+            legacyLogoSourceUrl: sourceUrl,
+            isVerified: true,
+            unreadChatCount: 0,
+            pinned: false,
+            sortAt: previousSync,
+          },
+        ],
+        hasMore: false,
+      }),
+    };
+    const put = vi.fn().mockResolvedValue(undefined);
+    const store: ProfilePhotoObjectStore = {
+      put,
+      createReadUrl: vi.fn(),
+      exists: vi.fn().mockResolvedValue(false),
+      delete: vi.fn().mockResolvedValue(undefined),
+    };
+    const config = loadConfig({
+      APP_ENV: 'ci',
+      DATABASE_URL: 'postgresql://phub:test@localhost:5432/phub',
+      REDIS_URL: 'redis://localhost:6379',
+      RABBITMQ_URL: 'amqp://phub:test@localhost:5672',
+      JWT_ISSUER: 'phub-identity',
+      JWT_AUDIENCE: 'phub-api',
+      JWT_ACCESS_SECRET: 'test-access-secret-at-least-32-characters',
+      JWT_REFRESH_SECRET: 'test-refresh-secret-at-least-32-characters',
+      COMMUNITY_LOGO_ALLOWED_HOSTS: 'legacy.padlhub.test',
+      COMMUNITY_LOGO_STABLE_DELIVERY_ENABLED: 'true',
+      S3_ENDPOINT: 'http://minio:9000',
+      S3_PUBLIC_ENDPOINT: 'https://media.padlhub.test',
+      S3_BUCKET: 'phub-media',
+      S3_ACCESS_KEY: 'test-access-key',
+      S3_SECRET_KEY: 'test-secret-key',
+    });
+    const fetchImplementation = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(
+        new Response(png, { status: 200, headers: { 'content-type': 'image/png' } }),
+      );
+
+    await expect(
+      runCommunityHomeSyncCycle({
+        pool,
+        config,
+        logger: { info: vi.fn(), warn: vi.fn() } as unknown as Logger,
+        repository,
+        sourceMode: 'LEGACY',
+        store,
+        sourceResilience: new CommunityLogoSourceResilience({ fetchImplementation }),
+        now: new Date(now),
+      }),
+    ).resolves.toEqual({ attempted: 1, synced: 1, failed: 0 });
+
+    expect(put).toHaveBeenCalledOnce();
+    expect(put).toHaveBeenCalledWith(expect.objectContaining({ key: objectKey, body: webp }));
+    expect(cutoverRecorded).toBe(true);
   });
 
   it('refreshes expiring signed delivery without Viva and rejects source-mode drift', async () => {
@@ -252,6 +424,7 @@ describe('independent community Home synchronization', () => {
     const store: ProfilePhotoObjectStore = {
       put: vi.fn(),
       createReadUrl,
+      exists: vi.fn().mockResolvedValue(true),
       delete: vi.fn(),
     };
 

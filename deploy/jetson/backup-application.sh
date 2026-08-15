@@ -130,6 +130,20 @@ if [ "$worker_state" = running ] && compose exec -T worker node -e '
 '; then
   worker_client_media_rollback_v1=true
 fi
+api_community_logo_rollback_v1=false
+if compose exec -T api node -e '
+  const code = require("node:fs").readFileSync("/app/apps/api/dist/main.js", "utf8");
+  process.exit(code.includes("phub.community-logo-rollback.v1") ? 0 : 1);
+'; then
+  api_community_logo_rollback_v1=true
+fi
+worker_community_logo_rollback_v1=false
+if [ "$worker_state" = running ] && compose exec -T worker node -e '
+  const code = require("node:fs").readFileSync("/app/apps/worker/dist/main.js", "utf8");
+  process.exit(code.includes("phub.community-logo-rollback.v1") ? 0 : 1);
+'; then
+  worker_community_logo_rollback_v1=true
+fi
 
 stage_dir="$(mktemp -d "$backup_root/.snapshot.XXXXXX")"
 cleanup() {
@@ -172,6 +186,8 @@ chmod 600 "$stage_dir/process-state.env"
 {
   printf '%s\n' "API_CLIENT_MEDIA_ROLLBACK_V1=$api_client_media_rollback_v1"
   printf '%s\n' "WORKER_CLIENT_MEDIA_ROLLBACK_V1=$worker_client_media_rollback_v1"
+  printf '%s\n' "API_COMMUNITY_LOGO_ROLLBACK_V1=$api_community_logo_rollback_v1"
+  printf '%s\n' "WORKER_COMMUNITY_LOGO_ROLLBACK_V1=$worker_community_logo_rollback_v1"
 } > "$stage_dir/worker-capabilities.env"
 chmod 600 "$stage_dir/worker-capabilities.env"
 printf '%s\n' "$release" > "$stage_dir/backup.complete"

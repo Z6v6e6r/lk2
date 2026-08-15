@@ -19,6 +19,7 @@ interface Fixture {
   readonly bin: string;
   readonly dockerLog: string;
   readonly images: string;
+  readonly stable: boolean;
 }
 
 interface CommandResult {
@@ -42,7 +43,16 @@ async function write(path: string, content: string, mode?: number): Promise<void
   if (mode !== undefined) await chmod(path, mode);
 }
 
-async function fixture(): Promise<Fixture> {
+async function fixture(
+  input: {
+    readonly stable?: boolean;
+    readonly apiClientCapability?: boolean;
+    readonly workerClientCapability?: boolean;
+    readonly apiCommunityCapability?: boolean;
+    readonly workerCommunityCapability?: boolean;
+  } = {},
+): Promise<Fixture> {
+  const stable = input.stable ?? true;
   const temporary = await mkdtemp(join(tmpdir(), 'phub-rollback-'));
   temporaryDirectories.push(temporary);
   const root = join(temporary, 'opt', 'phub');
@@ -92,7 +102,12 @@ async function fixture(): Promise<Fixture> {
   await write(join(backup, 'staging.auth.env'), 'ROLLBACK_TEST_SECRET=never-print-me\n', 0o600);
   await write(join(backup, 'staging.override.env'), 'HOME_READ_MODE=previous\n', 0o600);
   await write(join(backup, 'staging.communities.env'), 'COMMUNITIES_READ_MODE=mock\n', 0o600);
-  await write(join(backup, 'staging.games.env.absent'), '', 0o600);
+  await write(
+    join(backup, 'staging.games.env'),
+    `COMMUNITY_LOGO_STABLE_DELIVERY_ENABLED=${stable ? 'true' : 'false'}\n` +
+      'COMMUNITY_LOGO_COMPATIBILITY_BACKFILL_ENABLED=false\n',
+    0o600,
+  );
   await write(join(backup, 'tls-ingress', 'Caddyfile'), 'previous caddy\n');
   await write(
     join(backup, 'process-state.env'),
@@ -102,7 +117,10 @@ async function fixture(): Promise<Fixture> {
   await write(join(backup, 'backup.complete'), `${'b'.repeat(40)}\n`, 0o600);
   await write(
     join(backup, 'worker-capabilities.env'),
-    'API_CLIENT_MEDIA_ROLLBACK_V1=true\nWORKER_CLIENT_MEDIA_ROLLBACK_V1=true\n',
+    `API_CLIENT_MEDIA_ROLLBACK_V1=${input.apiClientCapability === false ? 'false' : 'true'}\n` +
+      `WORKER_CLIENT_MEDIA_ROLLBACK_V1=${input.workerClientCapability === false ? 'false' : 'true'}\n` +
+      `API_COMMUNITY_LOGO_ROLLBACK_V1=${input.apiCommunityCapability === false ? 'false' : 'true'}\n` +
+      `WORKER_COMMUNITY_LOGO_ROLLBACK_V1=${input.workerCommunityCapability === false ? 'false' : 'true'}\n`,
     0o600,
   );
 
@@ -117,6 +135,9 @@ case "$*" in
   *'ps --status running -q worker'*) printf '%s\\n' "\${FAKE_COMPATIBLE_WORKER_ID:-}" ;;
   *"inspect --format {{.Config.Image}} \${FAKE_COMPATIBLE_WORKER_ID:-__missing__}"*)
     printf '%s\\n' "\${FAKE_COMPATIBLE_WORKER_IMAGE:-}" ;;
+  *"inspect --format {{range .Config.Env}}"*"\${FAKE_COMPATIBLE_WORKER_ID:-__missing__}"*)
+    printf 'COMMUNITY_LOGO_STABLE_DELIVERY_ENABLED=${stable ? 'true' : 'false'}\\n'
+    printf 'COMMUNITY_LOGO_COMPATIBILITY_BACKFILL_ENABLED=false\\n' ;;
   *"exec \${FAKE_COMPATIBLE_WORKER_ID:-__missing__} node -e"*)
     exit "\${FAKE_WORKER_CAPABILITY_STATUS:-0}" ;;
 esac
@@ -124,7 +145,7 @@ esac
     0o755,
   );
 
-  return { root, backup, backupRoot, bin, dockerLog, images };
+  return { root, backup, backupRoot, bin, dockerLog, images, stable };
 }
 
 function execute(
@@ -297,16 +318,80 @@ describe('Nano staging application rollback primitive', () => {
 
     await execute(input, '--confirm=ROLLBACK_STAGING_RELEASE', {
       PHUB_ROLLBACK_REQUIRE_COMPATIBLE_WORKER: 'true',
+      PHUB_ROLLBACK_COMPATIBILITY_FLOOR: 'community-logo',
       FAKE_COMPATIBLE_WORKER_ID: 'worker-compatible-id',
       FAKE_COMPATIBLE_WORKER_IMAGE: compatibleImage,
     });
 
     const restoredRelease = await readFile(join(input.root, 'release.env'), 'utf8');
     expect(restoredRelease).toContain(`WORKER_IMAGE_DIGEST=${digest}`);
+    await expect(readFile(join(input.root, 'staging.games.env'), 'utf8')).resolves.toBe(
+      'COMMUNITY_LOGO_STABLE_DELIVERY_ENABLED=true\nCOMMUNITY_LOGO_COMPATIBILITY_BACKFILL_ENABLED=false\n',
+    );
     const dockerCalls = await readFile(input.dockerLog, 'utf8');
     expect(dockerCalls).not.toContain('up -d worker');
     expect(dockerCalls.match(/ps --status running -q worker/g)).toHaveLength(2);
     expect(dockerCalls).toContain('inspect --format {{.Config.Image}} worker-compatible-id');
+  });
+
+  it('preserves a client-only saved worker without requiring community-logo capabilities', async () => {
+    const input = await fixture({
+      stable: false,
+      apiCommunityCapability: false,
+      workerCommunityCapability: false,
+    });
+    const compatibleImage = `ghcr.io/z6v6e6r/phub-worker@${digest}`;
+
+    await execute(input, '--confirm=ROLLBACK_STAGING_RELEASE', {
+      PHUB_ROLLBACK_REQUIRE_COMPATIBLE_WORKER: 'true',
+      PHUB_ROLLBACK_COMPATIBILITY_FLOOR: 'client-media',
+      FAKE_COMPATIBLE_WORKER_ID: 'worker-compatible-id',
+      FAKE_COMPATIBLE_WORKER_IMAGE: compatibleImage,
+    });
+
+    await expect(readFile(join(input.root, 'staging.games.env'), 'utf8')).resolves.toBe(
+      'COMMUNITY_LOGO_STABLE_DELIVERY_ENABLED=false\nCOMMUNITY_LOGO_COMPATIBILITY_BACKFILL_ENABLED=false\n',
+    );
+    const dockerCalls = await readFile(input.dockerLog, 'utf8');
+    expect(dockerCalls).not.toContain('up -d worker');
+  });
+
+  it('rejects a client-only rollback without the saved client capability before mutation', async () => {
+    const input = await fixture({
+      stable: false,
+      workerClientCapability: false,
+      apiCommunityCapability: false,
+      workerCommunityCapability: false,
+    });
+    const failure = await execute(input, '--confirm=ROLLBACK_STAGING_RELEASE', {
+      PHUB_ROLLBACK_REQUIRE_COMPATIBLE_WORKER: 'true',
+      PHUB_ROLLBACK_COMPATIBILITY_FLOOR: 'client-media',
+      FAKE_COMPATIBLE_WORKER_ID: 'worker-compatible-id',
+      FAKE_COMPATIBLE_WORKER_IMAGE: `ghcr.io/z6v6e6r/phub-worker@${digest}`,
+    }).catch((error: CommandFailure) => error);
+
+    expect(failure).toBeInstanceOf(CommandFailure);
+    expect((failure as CommandFailure).stderr).toContain(
+      'saved worker is not attested for phub.client-media-rollback.v1',
+    );
+    await expect(readFile(join(input.root, 'compose.yaml'), 'utf8')).resolves.toBe(
+      'current compose\n',
+    );
+  });
+
+  it('rejects the community-logo floor without both saved community capabilities', async () => {
+    const input = await fixture({ workerCommunityCapability: false });
+    const failure = await execute(input, '--confirm=ROLLBACK_STAGING_RELEASE', {
+      PHUB_ROLLBACK_REQUIRE_COMPATIBLE_WORKER: 'true',
+      PHUB_ROLLBACK_COMPATIBILITY_FLOOR: 'community-logo',
+      FAKE_COMPATIBLE_WORKER_ID: 'worker-compatible-id',
+      FAKE_COMPATIBLE_WORKER_IMAGE: `ghcr.io/z6v6e6r/phub-worker@${digest}`,
+    }).catch((error: CommandFailure) => error);
+
+    expect(failure).toBeInstanceOf(CommandFailure);
+    expect((failure as CommandFailure).stderr).toContain(
+      'saved worker is not attested for phub.community-logo-rollback.v1',
+    );
   });
 
   it('refuses rollback before mutation when the attested worker fails runtime capability', async () => {
@@ -315,13 +400,14 @@ describe('Nano staging application rollback primitive', () => {
 
     const failure = await execute(input, '--confirm=ROLLBACK_STAGING_RELEASE', {
       PHUB_ROLLBACK_REQUIRE_COMPATIBLE_WORKER: 'true',
+      PHUB_ROLLBACK_COMPATIBILITY_FLOOR: 'community-logo',
       FAKE_COMPATIBLE_WORKER_ID: 'worker-compatible-id',
       FAKE_COMPATIBLE_WORKER_IMAGE: compatibleImage,
       FAKE_WORKER_CAPABILITY_STATUS: '1',
     }).catch((error: CommandFailure) => error);
 
     expect(failure).toBeInstanceOf(CommandFailure);
-    expect((failure as CommandFailure).stderr).toContain('phub.client-media-rollback.v1');
+    expect((failure as CommandFailure).stderr).toContain('both media rollback capabilities');
     await expect(readFile(join(input.root, 'compose.yaml'), 'utf8')).resolves.toBe(
       'current compose\n',
     );

@@ -198,8 +198,10 @@ async function warmDatabasePools(): Promise<void> {
 const pools = Array.from({ length: apiNodes }, () => createDatabasePool(connectionString));
 const pool = pools[0];
 if (!pool) throw new Error('Communities load verification requires at least one API pool');
-const readRepositories = pools.map(createCommunityReadRepository);
-const mineRepositories = pools.map(createLocalCommunityDirectoryRepository);
+const readRepositories = pools.map((currentPool) => createCommunityReadRepository(currentPool));
+const mineRepositories = pools.map((currentPool) =>
+  createLocalCommunityDirectoryRepository(currentPool),
+);
 const membershipRepositories = pools.map(createCommunityMembershipLifecycleRepository);
 const memberCountRepositories = pools.map(createCommunityMemberCountProjectionRepository);
 const contentRepositories = pools.map(createCommunityContentRepository);

@@ -29,6 +29,7 @@ describe('profile photo maintenance', () => {
     const store = {
       put: vi.fn(),
       createReadUrl: vi.fn(),
+      exists: vi.fn().mockResolvedValue(true),
       delete: vi.fn(),
     };
 
@@ -96,6 +97,7 @@ describe('profile photo maintenance', () => {
     const store = {
       put: vi.fn(),
       createReadUrl: vi.fn(),
+      exists: vi.fn().mockResolvedValue(true),
       delete: vi.fn().mockRejectedValue(new Error('storage timeout')),
     };
 

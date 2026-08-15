@@ -138,7 +138,12 @@ describe('Nano staging application backup primitive', () => {
     );
     await expect(
       readFile(join(input.backupDirectory, 'worker-capabilities.env'), 'utf8'),
-    ).resolves.toBe('API_CLIENT_MEDIA_ROLLBACK_V1=true\nWORKER_CLIENT_MEDIA_ROLLBACK_V1=true\n');
+    ).resolves.toBe(
+      'API_CLIENT_MEDIA_ROLLBACK_V1=true\n' +
+        'WORKER_CLIENT_MEDIA_ROLLBACK_V1=true\n' +
+        'API_COMMUNITY_LOGO_ROLLBACK_V1=true\n' +
+        'WORKER_COMMUNITY_LOGO_ROLLBACK_V1=true\n',
+    );
     expect((await lstat(input.backupDirectory)).isDirectory()).toBe(true);
     expect(result.stdout).not.toContain('never-print-me');
     expect(result.stderr).not.toContain('never-print-me');

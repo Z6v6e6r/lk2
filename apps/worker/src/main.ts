@@ -60,7 +60,7 @@ import {
   runCommunityHomeSyncCycle,
   runCommunityLogoCompatibilityBackfill,
 } from './community-home-sync.js';
-import { CommunityLogoHostCircuit } from './community-logo-sync.js';
+import { CommunityLogoSourceResilience } from './community-logo-sync.js';
 import { LegacyPromotionSource, type LegacyPromotionPlacement } from './legacy-promotion-source.js';
 import { publishLeasedOutboxBatch } from './leased-outbox-publisher.js';
 import { S3ProfilePhotoObjectStore } from './profile-photo-sync.js';
@@ -78,7 +78,16 @@ import {
 
 const config = loadConfig(process.env, { profilePhotoStorage: true });
 const clientMediaRollbackCapability = 'phub.client-media-rollback.v1';
+const communityLogoRollbackCapability = 'phub.community-logo-rollback.v1';
 const logger = createLogger('worker', config.LOG_LEVEL, process.env.RELEASE);
+const communityLogoSourceResilience = new CommunityLogoSourceResilience({
+  maxAttempts: 2,
+  retryBaseDelayMs: 100,
+  maxRetryAfterMs: 5_000,
+  circuitFailureThreshold: config.COMMUNITIES_LEGACY_CIRCUIT_FAILURE_THRESHOLD,
+  circuitResetMs: config.COMMUNITIES_LEGACY_CIRCUIT_RESET_MS,
+  onMetric: (metric) => logger.info({ metric }, 'legacy community logo source operation'),
+});
 const telemetry = startTelemetry({
   serviceName: 'worker',
   serviceNamespace: config.OTEL_SERVICE_NAMESPACE,
@@ -128,6 +137,27 @@ const communityMediaRuntime = config.COMMUNITY_MEDIA_ENABLED
           : new MockCommunityMediaMalwareScanner(),
     }
   : undefined;
+const profilePhotoStore =
+  config.HOME_VIVA_SYNC_ENABLED ||
+  config.PROFILE_PHOTO_CLIENT_SYNC_ENABLED ||
+  config.PROFILE_PHOTO_MAINTENANCE_ENABLED ||
+  config.COMMUNITY_LOGO_STABLE_DELIVERY_ENABLED ||
+  config.COMMUNITY_LOGO_COMPATIBILITY_BACKFILL_ENABLED ||
+  config.PROMOTIONS_READ_MODE === 'legacy' ||
+  config.LEGACY_GAMES_ROSTER_SYNC_ENABLED
+    ? new S3ProfilePhotoObjectStore({
+        endpoint: config.S3_ENDPOINT as string,
+        publicEndpoint: config.S3_PUBLIC_ENDPOINT as string,
+        region: config.S3_REGION,
+        bucket: config.S3_BUCKET as string,
+        accessKey: config.S3_ACCESS_KEY as string,
+        secretKey: config.S3_SECRET_KEY as string,
+        forcePathStyle: config.S3_FORCE_PATH_STYLE,
+        autoCreateBucket: config.S3_AUTO_CREATE_BUCKET,
+        readUrlTtlSeconds: config.PROFILE_PHOTO_URL_TTL_SECONDS,
+        timeoutMs: config.VIVA_TIMEOUT_MS,
+      })
+    : undefined;
 const giftCertificateRuntime = config.GIFT_CERTIFICATE_ISSUANCE_ENABLED
   ? {
       repository: createGiftCertificateIssuanceRepository(pool),
@@ -148,7 +178,9 @@ const communityHome = (() => {
   if (config.COMMUNITIES_READ_MODE === 'mock') return undefined;
   let repository: CommunityDirectoryRepository;
   if (config.COMMUNITIES_READ_MODE === 'local') {
-    repository = createLocalCommunityDirectoryRepository(pool);
+    repository = createLocalCommunityDirectoryRepository(pool, {
+      stableLogoDeliveryEnabled: config.COMMUNITY_LOGO_STABLE_DELIVERY_ENABLED,
+    });
   } else {
     repository = new LegacyCommunityReadRepository({
       baseUrl: config.COMMUNITIES_LEGACY_BASE_URL,
@@ -157,7 +189,9 @@ const communityHome = (() => {
       circuitFailureThreshold: config.COMMUNITIES_LEGACY_CIRCUIT_FAILURE_THRESHOLD,
       circuitResetMs: config.COMMUNITIES_LEGACY_CIRCUIT_RESET_MS,
       cacheTtlMs: config.COMMUNITIES_LEGACY_CACHE_TTL_MS,
-      bridge: createCommunityLegacyBridgeRepository(pool),
+      bridge: createCommunityLegacyBridgeRepository(pool, {
+        stableLogoDeliveryEnabled: config.COMMUNITY_LOGO_STABLE_DELIVERY_ENABLED,
+      }),
       onMetric: (metric) => logger.info({ metric }, 'legacy community Home read'),
     });
   }
@@ -167,11 +201,6 @@ const communityHome = (() => {
       config.COMMUNITIES_READ_MODE === 'legacy' ? ('LEGACY' as const) : ('LOCAL' as const),
   };
 })();
-const communityLogoCircuit = new CommunityLogoHostCircuit({
-  failureThreshold: config.COMMUNITIES_LEGACY_CIRCUIT_FAILURE_THRESHOLD,
-  resetMs: config.COMMUNITIES_LEGACY_CIRCUIT_RESET_MS,
-  onMetric: (metric) => logger.info({ metric }, 'legacy community logo source read'),
-});
 const promotionSources = (() => {
   if (config.PROMOTIONS_READ_MODE !== 'legacy') return undefined;
   const createSource = (placement: LegacyPromotionPlacement): LegacyPromotionSource =>
@@ -354,29 +383,37 @@ const handleHealthRequest = async (
     return;
   }
   if (request.url === '/health/ready') {
-    const [databaseReady, vivaSyncReady, communityMediaReady] = await Promise.all([
-      checkDatabaseReady(pool),
-      redis
-        ? redis
-            .ping()
-            .then((result) => result === 'PONG')
-            .catch(() => false)
-        : Promise.resolve(true),
-      communityMediaRuntime
-        ? Promise.all([
-            communityMediaRuntime.store.checkReady(),
-            communityMediaRuntime.scanner.checkReady?.() ?? Promise.resolve(),
-          ])
-            .then(() => true)
-            .catch(() => false)
-        : Promise.resolve(true),
-    ]);
+    const [databaseReady, vivaSyncReady, communityMediaReady, profileMediaReady] =
+      await Promise.all([
+        checkDatabaseReady(pool),
+        redis
+          ? redis
+              .ping()
+              .then((result) => result === 'PONG')
+              .catch(() => false)
+          : Promise.resolve(true),
+        communityMediaRuntime
+          ? Promise.all([
+              communityMediaRuntime.store.checkReady(),
+              communityMediaRuntime.scanner.checkReady?.() ?? Promise.resolve(),
+            ])
+              .then(() => true)
+              .catch(() => false)
+          : Promise.resolve(true),
+        profilePhotoStore
+          ? profilePhotoStore
+              .checkReady()
+              .then(() => true)
+              .catch(() => false)
+          : Promise.resolve(true),
+      ]);
     const forwardProgress = workerForwardProgress.snapshot();
     const checks = {
       database: databaseReady,
       rabbitmq: rabbitReady,
       vivaSync: vivaSyncReady,
       communityMedia: communityMediaReady,
+      profileMedia: profileMediaReady,
       forwardProgress: forwardProgress.ready,
     };
     response.statusCode = Object.values(checks).every(Boolean) ? 200 : 503;
@@ -397,7 +434,10 @@ const healthServer = createServer((request, response) => {
 });
 healthServer.listen(config.WORKER_HEALTH_PORT, '0.0.0.0');
 logger.info(
-  { mode: config.OUTBOX_PUBLISH_MODE, capabilities: [clientMediaRollbackCapability] },
+  {
+    mode: config.OUTBOX_PUBLISH_MODE,
+    capabilities: [clientMediaRollbackCapability, communityLogoRollbackCapability],
+  },
   'outbox publisher configured',
 );
 let tenantCycleStartOffset = 0;
@@ -714,26 +754,6 @@ const vivaIdentityProvider = new VivaIdentityProvider({
   onMetric: (metric) => logger.info({ metric }, 'Viva identity operation'),
 });
 const vivaAdapters = new Map<string, VivaHomeSourceAdapter>();
-const profilePhotoStore =
-  config.HOME_VIVA_SYNC_ENABLED ||
-  config.PROFILE_PHOTO_CLIENT_SYNC_ENABLED ||
-  config.PROFILE_PHOTO_MAINTENANCE_ENABLED ||
-  config.COMMUNITY_LOGO_COMPATIBILITY_BACKFILL_ENABLED ||
-  config.PROMOTIONS_READ_MODE === 'legacy' ||
-  config.LEGACY_GAMES_ROSTER_SYNC_ENABLED
-    ? new S3ProfilePhotoObjectStore({
-        endpoint: config.S3_ENDPOINT as string,
-        publicEndpoint: config.S3_PUBLIC_ENDPOINT as string,
-        region: config.S3_REGION,
-        bucket: config.S3_BUCKET as string,
-        accessKey: config.S3_ACCESS_KEY as string,
-        secretKey: config.S3_SECRET_KEY as string,
-        forcePathStyle: config.S3_FORCE_PATH_STYLE,
-        autoCreateBucket: config.S3_AUTO_CREATE_BUCKET,
-        readUrlTtlSeconds: config.PROFILE_PHOTO_URL_TTL_SECONDS,
-        timeoutMs: config.VIVA_TIMEOUT_MS,
-      })
-    : undefined;
 const getVivaHomeAdapter = (providerTenantKey: string): VivaHomeSourceAdapter => {
   const existing = vivaAdapters.get(providerTenantKey);
   if (existing) return existing;
@@ -815,7 +835,7 @@ const runCommunitySyncCycle = async (): Promise<void> => {
       repository: communityHome.repository,
       sourceMode: communityHome.sourceMode,
       store: profilePhotoStore,
-      logoCircuit: communityLogoCircuit,
+      sourceResilience: communityLogoSourceResilience,
     });
     if (result.attempted > 0) logger.info({ result }, 'community Home sync cycle completed');
   } catch (error) {

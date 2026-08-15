@@ -41,6 +41,7 @@ function store() {
     createReadUrl: vi
       .fn<ProfilePhotoObjectStore['createReadUrl']>()
       .mockImplementation((key) => Promise.resolve(`https://media.padlhub.test/${key}?signed=1`)),
+    exists: vi.fn<ProfilePhotoObjectStore['exists']>().mockResolvedValue(true),
     delete: vi.fn<ProfilePhotoObjectStore['delete']>().mockResolvedValue(undefined),
   };
 }

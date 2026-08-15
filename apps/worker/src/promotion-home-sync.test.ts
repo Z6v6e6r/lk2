@@ -167,6 +167,7 @@ describe('promotion Home source slots', () => {
     const store: ProfilePhotoObjectStore = {
       put: vi.fn().mockResolvedValue(undefined),
       createReadUrl: vi.fn(),
+      exists: vi.fn().mockResolvedValue(true),
       delete: vi.fn((key: string) =>
         key.endsWith('stale-failed.webp')
           ? Promise.reject(new Error('object storage unavailable'))
@@ -225,6 +226,7 @@ describe('promotion Home source slots', () => {
     const store: ProfilePhotoObjectStore = {
       put: vi.fn(),
       createReadUrl: vi.fn(),
+      exists: vi.fn().mockResolvedValue(true),
       delete: vi.fn(),
     };
 

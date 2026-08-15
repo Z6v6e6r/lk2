@@ -14,6 +14,7 @@ vi.mock('@aws-sdk/client-s3', () => {
     DeleteObjectCommand: Command,
     GetObjectCommand: Command,
     HeadBucketCommand: Command,
+    HeadObjectCommand: Command,
     PutObjectCommand: Command,
     S3Client: class S3Client {
       public constructor(options: unknown) {
@@ -66,5 +67,82 @@ describe('S3 profile photo object store', () => {
       expect.objectContaining({ maxAttempts: 2 }),
       expect.objectContaining({ maxAttempts: 2 }),
     ]);
+  });
+
+  it('retries readiness after a transient bucket probe failure', async () => {
+    vi.useFakeTimers();
+    s3Mocks.send.mockRejectedValueOnce(new Error('temporary outage')).mockResolvedValueOnce({});
+    const store = new S3ProfilePhotoObjectStore({
+      endpoint: 'https://s3.internal.test',
+      publicEndpoint: 'https://s3.public.test',
+      region: 'ru-central1',
+      bucket: 'profile-media',
+      accessKey: 'test-access',
+      secretKey: 'test-secret',
+      forcePathStyle: true,
+      autoCreateBucket: false,
+      readUrlTtlSeconds: 600,
+      timeoutMs: 50,
+    });
+
+    await expect(store.checkReady()).rejects.toThrow('temporary outage');
+    await expect(store.checkReady()).rejects.toThrow('temporary outage');
+    expect(s3Mocks.send).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(251);
+    await expect(store.checkReady()).resolves.toBeUndefined();
+    expect(s3Mocks.send).toHaveBeenCalledTimes(2);
+  });
+
+  it('degrades readiness on a later storage outage and recovers after bounded backoff', async () => {
+    vi.useFakeTimers();
+    s3Mocks.send
+      .mockResolvedValueOnce({})
+      .mockRejectedValueOnce(new Error('later outage'))
+      .mockResolvedValueOnce({});
+    const store = new S3ProfilePhotoObjectStore({
+      endpoint: 'https://s3.internal.test',
+      publicEndpoint: 'https://s3.public.test',
+      region: 'ru-central1',
+      bucket: 'profile-media',
+      accessKey: 'test-access',
+      secretKey: 'test-secret',
+      forcePathStyle: true,
+      autoCreateBucket: false,
+      readUrlTtlSeconds: 600,
+      timeoutMs: 50,
+    });
+
+    await expect(store.checkReady()).resolves.toBeUndefined();
+    await expect(store.checkReady()).rejects.toThrow('later outage');
+    await expect(store.checkReady()).rejects.toThrow('later outage');
+    expect(s3Mocks.send).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(251);
+    await expect(store.checkReady()).resolves.toBeUndefined();
+    expect(s3Mocks.send).toHaveBeenCalledTimes(3);
+  });
+
+  it('checks object existence without treating a missing immutable object as storage failure', async () => {
+    s3Mocks.send
+      .mockResolvedValueOnce({})
+      .mockRejectedValueOnce({ $metadata: { httpStatusCode: 404 } })
+      .mockResolvedValueOnce({});
+    const store = new S3ProfilePhotoObjectStore({
+      endpoint: 'https://s3.internal.test',
+      publicEndpoint: 'https://s3.public.test',
+      region: 'ru-central1',
+      bucket: 'profile-media',
+      accessKey: 'test-access',
+      secretKey: 'test-secret',
+      forcePathStyle: true,
+      autoCreateBucket: false,
+      readUrlTtlSeconds: 600,
+      timeoutMs: 50,
+    });
+
+    await expect(store.exists('community-logos/tenant/community/missing.webp')).resolves.toBe(
+      false,
+    );
+    await expect(store.exists('community-logos/tenant/community/present.webp')).resolves.toBe(true);
+    expect(s3Mocks.send).toHaveBeenCalledTimes(3);
   });
 });

@@ -235,19 +235,26 @@ For a missing local logo in `legacy` mode, the worker downloads the source image
 metadata, constrains the dimensions, encodes WebP and stores an immutable
 `community-logos/{tenant}/{community}/{sha256}.webp` object in the private S3-compatible bucket.
 `integration.community_logo_sync` keeps the integration-only source URL, content hash, object key
-and optional legacy delivery metadata used only during rolling compatibility. Logo metadata and the
-Home community component commit in one tenant transaction; the browser sees only the stable
-`/public/api/v1/media/community-logos/{tenantId}/{communityId}` PadlHub route. The API resolves the
-current private object under tenant RLS and streams WebP bytes, so an expired object-store signature
-cannot break a persisted Home or directory response.
+and optional delivery metadata used during rolling compatibility and rollback. Logo metadata and the
+Home community component commit in one tenant transaction. Before cutover the browser receives a
+signed PadlHub object URL; afterward it receives only the stable
+`/public/api/v1/media/community-logos/{tenantId}/{communityId}` route. The API resolves the current
+private object under tenant RLS and streams WebP bytes, so an expired object-store signature cannot
+break a post-cutover Home or directory response.
 
-The source URL contains a stable legacy asset token, so an unchanged URL reuses the stored WebP
-without another download. A changed source URL creates a
-new immutable object. A temporary media/storage failure retains the last local logo and does not
-fail the community component; a removed source logo clears the projection. Replaced objects enter
-delayed garbage collection after stale Home snapshots can no longer reference them.
-The paginated directory derives the same stable delivery route from the stored object mapping, so it never serves the
-legacy media origin directly.
+An unchanged source URL reuses the stored WebP between hourly conditional revalidations. Before a
+stale conditional read, a bounded S3 HEAD proves the immutable object still exists; a missing object
+removes the validators and forces a full refetch/re-upload even when its content hash is unchanged.
+A `304` advances the observation watermark only after that existence proof, while changed bytes at
+the same URL create a new immutable object. One cycle processes at most 20 source URLs with four
+concurrent operations and at most two HTTP attempts per URL. Retryable `429`/`5xx`, timeout and
+network failures use capped `Retry-After`/backoff and a worker-lifetime host circuit; metrics expose
+only operation, outcome, attempt, status, code and duration. S3 canaries participate in worker
+readiness and retry after bounded backoff. A temporary media/storage failure retains the last local
+logo and does not fail the community component; a removed source logo clears the projection.
+Replaced objects enter delayed garbage collection after stale Home snapshots can no longer reference
+them. The paginated directory chooses signed or stable PadlHub delivery from the same stored mapping
+and never serves the legacy origin.
 
 ## Runtime modes and cutover
 

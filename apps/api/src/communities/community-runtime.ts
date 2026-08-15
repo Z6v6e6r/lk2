@@ -123,7 +123,11 @@ export function createCommunityReadRuntime(input: {
   readonly pool: Pool;
 }): CommunityReadService | undefined {
   if (input.config.COMMUNITIES_READ_MODE !== 'local') return undefined;
-  return createCommunityReadService(createCommunityReadRepository(input.pool));
+  return createCommunityReadService(
+    createCommunityReadRepository(input.pool, {
+      stableLogoDeliveryEnabled: input.config.COMMUNITY_LOGO_STABLE_DELIVERY_ENABLED,
+    }),
+  );
 }
 
 export function createCommunityDirectInviteRuntime(input: {
@@ -253,7 +257,9 @@ export function createCommunityDirectoryRuntime(input: {
   let repository: CommunityDirectoryRepository;
   switch (input.config.COMMUNITIES_READ_MODE) {
     case 'local':
-      repository = createLocalCommunityDirectoryRepository(input.pool);
+      repository = createLocalCommunityDirectoryRepository(input.pool, {
+        stableLogoDeliveryEnabled: input.config.COMMUNITY_LOGO_STABLE_DELIVERY_ENABLED,
+      });
       break;
     case 'legacy':
       repository = new LegacyCommunityReadRepository({
@@ -263,7 +269,9 @@ export function createCommunityDirectoryRuntime(input: {
         circuitFailureThreshold: input.config.COMMUNITIES_LEGACY_CIRCUIT_FAILURE_THRESHOLD,
         circuitResetMs: input.config.COMMUNITIES_LEGACY_CIRCUIT_RESET_MS,
         cacheTtlMs: input.config.COMMUNITIES_LEGACY_CACHE_TTL_MS,
-        bridge: createCommunityLegacyBridgeRepository(input.pool),
+        bridge: createCommunityLegacyBridgeRepository(input.pool, {
+          stableLogoDeliveryEnabled: input.config.COMMUNITY_LOGO_STABLE_DELIVERY_ENABLED,
+        }),
         onMetric: (metric) => input.logger.info({ metric }, 'legacy community read'),
       });
       break;
@@ -295,7 +303,9 @@ export function createCommunityReadExperienceRuntime(input: {
       circuitFailureThreshold: input.config.COMMUNITIES_LEGACY_CIRCUIT_FAILURE_THRESHOLD,
       circuitResetMs: input.config.COMMUNITIES_LEGACY_CIRCUIT_RESET_MS,
       onMetric: (metric) => input.logger.info({ metric }, 'legacy community experience read'),
-      bridge: createCommunityLegacyBridgeRepository(input.pool),
+      bridge: createCommunityLegacyBridgeRepository(input.pool, {
+        stableLogoDeliveryEnabled: input.config.COMMUNITY_LOGO_STABLE_DELIVERY_ENABLED,
+      }),
     }),
   );
 }

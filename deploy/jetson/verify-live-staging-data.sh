@@ -58,6 +58,15 @@ require_value VIVA_OAUTH_EXISTING_SUBJECT_BOOTSTRAP_ENABLED true
 require_value VIVA_OAUTH_REDIRECT_URI https://lk.nano.padlhub.su/user/api/v1/local-padel/auth/viva/callback
 require_value VIVA_OAUTH_SUCCESS_REDIRECT_URL https://lk.nano.padlhub.su/
 require_value HOME_BASE_SYNC_ENABLED true
+community_logo_stable_delivery="$(runtime_value COMMUNITY_LOGO_STABLE_DELIVERY_ENABLED)"
+case "$community_logo_stable_delivery" in
+  false | true) ;;
+  *)
+    echo "Unsafe staging configuration: COMMUNITY_LOGO_STABLE_DELIVERY_ENABLED must equal false or true" >&2
+    exit 1
+    ;;
+esac
+require_value COMMUNITY_LOGO_COMPATIBILITY_BACKFILL_ENABLED false
 test "$(runtime_value CUP_DEV_AUTH_ENABLED)" != true
 require_value HOME_READ_MODE projection
 case "$(runtime_value COMMUNITIES_READ_MODE)" in
@@ -78,8 +87,47 @@ require_value ACTIVITY_HISTORY_ENABLED true
 require_value ACTIVITY_HISTORY_SYNC_ENABLED true
 require_value ACTIVITY_HISTORY_GAME_BACKFILL_ENABLED true
 
-if test "${1:-}" = preflight; then
+verification_mode=full
+if test "$#" -gt 0; then
+  verification_mode="$1"
+fi
+case "$verification_mode" in
+  preflight | runtime-flags | full) ;;
+  *)
+    echo "Unknown live staging verification mode: $verification_mode" >&2
+    exit 1
+    ;;
+esac
+
+if test "$verification_mode" = preflight; then
   echo "Real staging data configuration verified"
+  exit 0
+fi
+
+compose() {
+  docker compose --env-file infrastructure.env --env-file release.env "$@"
+}
+
+require_running_flag() {
+  service="$1"
+  key="$2"
+  expected="$3"
+  if ! compose exec -T "$service" node -e '
+    const [key, expected] = process.argv.slice(1);
+    if (process.env[key] !== expected) process.exit(1);
+  ' "$key" "$expected"; then
+    echo "Unsafe staging runtime: ${service} ${key} must equal ${expected}" >&2
+    exit 1
+  fi
+}
+
+require_running_flag api COMMUNITY_LOGO_STABLE_DELIVERY_ENABLED "$community_logo_stable_delivery"
+require_running_flag worker COMMUNITY_LOGO_STABLE_DELIVERY_ENABLED "$community_logo_stable_delivery"
+require_running_flag api COMMUNITY_LOGO_COMPATIBILITY_BACKFILL_ENABLED false
+require_running_flag worker COMMUNITY_LOGO_COMPATIBILITY_BACKFILL_ENABLED false
+
+if test "$verification_mode" = runtime-flags; then
+  echo "Community-logo runtime flags verified"
   exit 0
 fi
 
@@ -98,10 +146,6 @@ require_value PROMOTIONS_RECOMMENDATION_STRIP_PLACEMENT cabinet_for_me_strip
 require_value PROMOTIONS_RECOMMENDATION_CARD_PLACEMENT cabinet_for_me_card
 require_value PROMOTION_IMAGE_ALLOWED_HOSTS phab-showcase
 require_value PROMOTION_IMAGE_PRIVATE_HTTP_HOSTS phab-showcase
-
-compose() {
-  docker compose --env-file infrastructure.env --env-file release.env "$@"
-}
 
 infrastructure() {
   docker compose --env-file infrastructure.env -f compose.infrastructure.yaml "$@"

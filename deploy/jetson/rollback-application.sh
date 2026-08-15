@@ -23,6 +23,7 @@ backup_root="${PHUB_ROLLBACK_BACKUP_ROOT:-$app_root/backups}"
 health_attempts="${PHUB_ROLLBACK_HEALTH_ATTEMPTS:-36}"
 health_delay_seconds="${PHUB_ROLLBACK_HEALTH_DELAY_SECONDS:-5}"
 require_compatible_worker="${PHUB_ROLLBACK_REQUIRE_COMPATIBLE_WORKER:-false}"
+compatibility_floor="${PHUB_ROLLBACK_COMPATIBILITY_FLOOR:-}"
 
 case "$app_root" in
   /*) ;;
@@ -42,6 +43,12 @@ esac
 case "$require_compatible_worker" in
   true | false) ;;
   *) fail 'PHUB_ROLLBACK_REQUIRE_COMPATIBLE_WORKER must be true or false' ;;
+esac
+case "$require_compatible_worker:$compatibility_floor" in
+  false:) ;;
+  true:client-media | true:community-logo) ;;
+  true:*) fail 'compatible rollback requires an explicit client-media or community-logo floor' ;;
+  false:*) fail 'PHUB_ROLLBACK_COMPATIBILITY_FLOOR requires a compatible worker rollback' ;;
 esac
 
 [ -d "$app_root" ] || fail 'application root does not exist'
@@ -203,6 +210,12 @@ if [ "$require_compatible_worker" = true ]; then
     fail 'saved API is not attested for phub.client-media-rollback.v1'
   grep -Fxq 'WORKER_CLIENT_MEDIA_ROLLBACK_V1=true' "$stage_dir/worker-capabilities.env" ||
     fail 'saved worker is not attested for phub.client-media-rollback.v1'
+  if [ "$compatibility_floor" = community-logo ]; then
+    grep -Fxq 'API_COMMUNITY_LOGO_ROLLBACK_V1=true' "$stage_dir/worker-capabilities.env" ||
+      fail 'saved API is not attested for phub.community-logo-rollback.v1'
+    grep -Fxq 'WORKER_COMMUNITY_LOGO_ROLLBACK_V1=true' "$stage_dir/worker-capabilities.env" ||
+      fail 'saved worker is not attested for phub.community-logo-rollback.v1'
+  fi
   [ "$worker_state" = running ] || fail 'saved compatible worker was not running'
   current_compose() {
     docker compose \
@@ -216,12 +229,35 @@ if [ "$require_compatible_worker" = true ]; then
   compatible_worker_image="$(docker inspect --format '{{.Config.Image}}' "$compatible_worker_id")"
   [ "$compatible_worker_image" = "$registry/phub-worker@$worker_digest" ] ||
     fail 'running worker does not match the attested saved digest'
-  if ! docker exec "$compatible_worker_id" node -e '
-    const code = require("node:fs").readFileSync("/app/apps/worker/dist/main.js", "utf8");
-    process.exit(code.includes("phub.client-media-rollback.v1") ? 0 : 1);
-  '; then
-    fail 'attested worker does not provide phub.client-media-rollback.v1'
+  if ! compatible_env="$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$compatible_worker_id")"; then
+    fail 'cannot inspect the attested saved worker environment'
   fi
+  compatible_stable="$(printf '%s\n' "$compatible_env" |
+    sed -n 's/^COMMUNITY_LOGO_STABLE_DELIVERY_ENABLED=//p' | tail -n 1)"
+  compatible_backfill="$(printf '%s\n' "$compatible_env" |
+    sed -n 's/^COMMUNITY_LOGO_COMPATIBILITY_BACKFILL_ENABLED=//p' | tail -n 1)"
+  case "$compatibility_floor:$compatible_stable:$compatible_backfill" in
+    client-media:false:false)
+      if ! docker exec "$compatible_worker_id" node -e '
+        const code = require("node:fs").readFileSync("/app/apps/worker/dist/main.js", "utf8");
+        process.exit(code.includes("phub.client-media-rollback.v1") ? 0 : 1);
+      '; then
+        fail 'attested worker does not provide the client-media rollback capability'
+      fi
+      ;;
+    community-logo:true:false)
+      if ! docker exec "$compatible_worker_id" node -e '
+        const code = require("node:fs").readFileSync("/app/apps/worker/dist/main.js", "utf8");
+        process.exit(
+          code.includes("phub.client-media-rollback.v1") &&
+          code.includes("phub.community-logo-rollback.v1") ? 0 : 1,
+        );
+      '; then
+        fail 'attested worker does not provide both media rollback capabilities'
+      fi
+      ;;
+    *) fail 'attested worker flags do not match the requested compatibility floor' ;;
+  esac
 fi
 
 printf '%s' "$registry" | grep -Eq '^ghcr\.io/[A-Za-z0-9._/-]+$' ||

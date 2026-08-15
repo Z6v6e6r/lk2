@@ -9,6 +9,10 @@ import {
   persistCommunityHomeSource,
   reserveCommunityLogoObjectUpload,
 } from './community-home-repository.js';
+import {
+  CommunityLogoSourceResilience,
+  synchronizeLegacyCommunityLogos,
+} from './community-logo-sync.js';
 
 const tenantId = '86afbe01-0318-4dd2-bc25-303b7bf0d430';
 const userId = '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca';
@@ -146,6 +150,228 @@ describe('community Home source persistence', () => {
     expect(reservationSql).toContain('greatest');
   });
 
+  it('re-uploads a prepared content-addressed object when the active DB key is unchanged', async () => {
+    const communityId = communities[0]?.id as string;
+    const objectKey = `community-logos/${tenantId}/${communityId}/${'e'.repeat(64)}.webp`;
+    const { pool } = poolWithQueries((text) => {
+      if (text.includes('select object_key')) return { rows: [{ object_key: objectKey }] };
+      if (text.includes('delete from integration.community_logo_object_gc')) return { rows: [] };
+      throw new Error(`Unexpected query: ${text}`);
+    });
+
+    await expect(
+      reserveCommunityLogoObjectUpload({
+        pool,
+        tenantId,
+        communityId,
+        objectKey,
+        deleteAfter: '2026-07-17T14:00:00.000Z',
+      }),
+    ).resolves.toBe(true);
+  });
+
+  it('keeps a missing-object 304 fallback null through sync and Home persistence', async () => {
+    const community = communities[0] as CommunitySummary;
+    const syncedAt = '2026-07-17T12:00:00.000Z';
+    const objectKey = `community-logos/${tenantId}/${community.id}/${'c'.repeat(64)}.webp`;
+    const sourceUrl = 'https://legacy.padlhub.test/community-logo/source';
+    const syncPool = poolWithQueries((text) => {
+      if (text.includes('from integration.community_logo_sync')) {
+        return {
+          rows: [
+            {
+              community_id: community.id,
+              source_url: sourceUrl,
+              source_etag: '"old"',
+              source_last_modified: null,
+              content_sha256: 'c'.repeat(64),
+              object_key: objectKey,
+              delivery_url: null,
+              delivery_expires_at: null,
+              synced_at: syncedAt,
+            },
+          ],
+        };
+      }
+      throw new Error(`Unexpected sync query: ${text}`);
+    });
+    const fetchImplementation = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response(null, { status: 304 }));
+    const [syncResult] = await synchronizeLegacyCommunityLogos({
+      pool: syncPool.pool,
+      store: {
+        exists: vi.fn().mockResolvedValue(false),
+        put: vi.fn(),
+        createReadUrl: vi.fn(),
+      } as never,
+      tenantId,
+      items: [
+        {
+          id: community.id,
+          title: community.title,
+          logoUrl: null,
+          legacyLogoSourceUrl: sourceUrl,
+          isVerified: true,
+          unreadChatCount: 0,
+          pinned: false,
+          sortAt: syncedAt,
+        },
+      ],
+      fetchedAt: '2026-07-17T13:00:00.000Z',
+      allowedHosts: ['legacy.padlhub.test'],
+      maxBytes: 5 * 1024 * 1024,
+      maxDimension: 512,
+      webpQuality: 82,
+      previousObjectRetentionSeconds: 3_600,
+      stableDeliveryEnabled: true,
+      timeoutMs: 1_000,
+      sourceResilience: new CommunityLogoSourceResilience({
+        fetchImplementation,
+        sleep: () => Promise.resolve(),
+      }),
+    });
+    expect(fetchImplementation).toHaveBeenCalledTimes(2);
+    expect(syncResult).toMatchObject({ logoUrl: null, outcome: 'fallback' });
+
+    let outboxPayload = '';
+    let cutoverRecorded = false;
+    const persistencePool = poolWithQueries((text, values) => {
+      if (text.includes('select object_key, delivery_url')) {
+        return {
+          rows: [
+            {
+              object_key: objectKey,
+              delivery_url: null,
+              delivery_expires_at: null,
+              synced_at: syncedAt,
+            },
+          ],
+        };
+      }
+      if (text.includes('from integration.community_logo_observation_watermarks')) {
+        return { rows: [] };
+      }
+      if (text.includes('select community_id::text as community_id')) {
+        return {
+          rows: [{ community_id: community.id, delivery_url: null, synced_at: syncedAt }],
+        };
+      }
+      if (
+        text.includes('from integration.community_home_source_components') ||
+        text.includes('from home.dashboard_components')
+      ) {
+        return { rows: [] };
+      }
+      if (text.includes('insert into audit.outbox_events')) {
+        outboxPayload = String(values[5]);
+        return { rows: [] };
+      }
+      if (text.includes('insert into integration.media_cutover_state')) {
+        cutoverRecorded = true;
+        return { rows: [] };
+      }
+      if (
+        text.includes('insert into integration.community_home_source_components') ||
+        text.includes('insert into audit.audit_log')
+      ) {
+        return { rows: [] };
+      }
+      throw new Error(`Unexpected persistence query: ${text}`);
+    });
+    await persistCommunityHomeSource({
+      pool: persistencePool.pool,
+      tenantId,
+      userId,
+      sourceMode: 'LEGACY',
+      stableDeliveryEnabled: true,
+      publicApplicationOrigin: 'https://lk.padlhub.test',
+      communities: [{ ...community, logoUrl: syncResult?.logoUrl ?? null }],
+      logoAssets: syncResult ? [syncResult.persistence] : [],
+      correlationId: 'missing-object-sync-persistence-test',
+      fetchedAt: '2026-07-17T13:00:00.000Z',
+    });
+
+    expect(outboxPayload).toContain('"logoUrl":null');
+    expect(outboxPayload).not.toContain('/public/api/v1/media/community-logos/');
+    expect(cutoverRecorded).toBe(false);
+  });
+
+  it('uses a newer valid mapping that wins while a null fallback is being persisted', async () => {
+    const community = communities[0] as CommunitySummary;
+    const objectKey = `community-logos/${tenantId}/${community.id}/${'8'.repeat(64)}.webp`;
+    let outboxPayload = '';
+    const { pool } = poolWithQueries((text, values) => {
+      if (text.includes('select object_key, delivery_url')) {
+        return {
+          rows: [
+            {
+              object_key: objectKey,
+              delivery_url: null,
+              delivery_expires_at: null,
+              synced_at: '2026-07-17T13:01:00.000Z',
+            },
+          ],
+        };
+      }
+      if (text.includes('from integration.community_logo_observation_watermarks')) {
+        return { rows: [] };
+      }
+      if (text.includes('select community_id::text as community_id')) {
+        return {
+          rows: [
+            {
+              community_id: community.id,
+              delivery_url: null,
+              synced_at: '2026-07-17T13:01:00.000Z',
+            },
+          ],
+        };
+      }
+      if (
+        text.includes('from integration.community_home_source_components') ||
+        text.includes('from home.dashboard_components')
+      ) {
+        return { rows: [] };
+      }
+      if (text.includes('insert into audit.outbox_events')) {
+        outboxPayload = String(values[5]);
+        return { rows: [] };
+      }
+      if (
+        text.includes('insert into integration.media_cutover_state') ||
+        text.includes('insert into integration.community_home_source_components') ||
+        text.includes('insert into audit.audit_log')
+      ) {
+        return { rows: [] };
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+
+    await persistCommunityHomeSource({
+      pool,
+      tenantId,
+      userId,
+      sourceMode: 'LEGACY',
+      stableDeliveryEnabled: true,
+      publicApplicationOrigin: 'https://lk.padlhub.test',
+      communities: [{ ...community, logoUrl: null }],
+      logoAssets: [
+        {
+          communityId: community.id,
+          sourceUrl: 'https://legacy.padlhub.test/community-logo/source',
+          contentSha256: '7'.repeat(64),
+          objectKey: `community-logos/${tenantId}/${community.id}/${'7'.repeat(64)}.webp`,
+          syncedAt: '2026-07-17T13:00:00.000Z',
+        },
+      ],
+      correlationId: 'newer-logo-race-test',
+      fetchedAt: '2026-07-17T13:00:00.000Z',
+    });
+
+    expect(outboxPayload).toContain('/public/api/v1/media/community-logos/');
+  });
+
   it('publishes the canonical null logo when a late photo loses to a newer removal watermark', async () => {
     let outboxPayload = '';
     let mappingRestored = false;
@@ -230,8 +456,16 @@ describe('community Home source persistence', () => {
     const secondId = '00000000-0000-4000-8000-000000000001';
     const firstId = 'ffffffff-ffff-4fff-8fff-ffffffffffff';
     const items: CommunitySummary[] = [
-      { ...communities[0]!, id: firstId },
-      { ...communities[0]!, id: secondId },
+      {
+        ...communities[0]!,
+        id: firstId,
+        logoUrl: `/public/api/v1/media/community-logos/${tenantId}/${firstId}`,
+      },
+      {
+        ...communities[0]!,
+        id: secondId,
+        logoUrl: `/public/api/v1/media/community-logos/${tenantId}/${secondId}`,
+      },
     ];
     const { pool, query } = poolWithQueries((text) => {
       if (
@@ -283,6 +517,50 @@ describe('community Home source persistence', () => {
         .filter(([text]) => String(text).includes('hashtextextended($1, 1)'))
         .map(([, values]) => values?.[0]),
     ).toEqual([secondId, firstId]);
+    expect(
+      query.mock.calls.some(([text]) =>
+        String(text).includes('insert into integration.media_cutover_state'),
+      ),
+    ).toBe(true);
+  });
+
+  it('records the cutover when local mode publishes a stable logo without sync assets', async () => {
+    const community = communities[0] as CommunitySummary;
+    const { pool, query } = poolWithQueries((text) => {
+      if (
+        text.includes('from integration.community_home_source_components') ||
+        text.includes('from home.dashboard_components')
+      ) {
+        return { rows: [] };
+      }
+      if (
+        text.includes('insert into integration.media_cutover_state') ||
+        text.includes('insert into integration.community_home_source_components') ||
+        text.includes('insert into audit.outbox_events') ||
+        text.includes('insert into audit.audit_log')
+      ) {
+        return { rows: [] };
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+
+    await persistCommunityHomeSource({
+      pool,
+      tenantId,
+      userId,
+      sourceMode: 'LOCAL',
+      stableDeliveryEnabled: true,
+      publicApplicationOrigin: 'https://lk.padlhub.test',
+      communities: [
+        {
+          ...community,
+          logoUrl: `https://lk.padlhub.test/public/api/v1/media/community-logos/${tenantId}/${community.id}`,
+        },
+      ],
+      correlationId: 'community-local-cutover-test',
+      fetchedAt: '2026-07-17T12:00:00.000Z',
+    });
+
     expect(
       query.mock.calls.some(([text]) =>
         String(text).includes('insert into integration.media_cutover_state'),
@@ -385,6 +663,7 @@ describe('community Home source persistence', () => {
       if (text.includes('from integration.community_home_source_components')) return { rows: [] };
       if (text.includes('from home.dashboard_components')) return { rows: [] };
       if (
+        text.includes('insert into integration.media_cutover_state') ||
         text.includes('insert into integration.community_logo_sync') ||
         text.includes('insert into integration.community_logo_observation_watermarks') ||
         text.includes('delete from integration.community_logo_object_gc') ||
@@ -403,6 +682,7 @@ describe('community Home source persistence', () => {
       userId,
       sourceMode: 'LEGACY',
       publicApplicationOrigin: 'https://lk.padlhub.test',
+      stableDeliveryEnabled: true,
       communities: communitiesWithLogo,
       logoAssets: [
         {
@@ -465,7 +745,7 @@ describe('community Home source persistence', () => {
       sourceMode: 'LEGACY',
       publicApplicationOrigin: 'https://lk.padlhub.test',
       stableDeliveryEnabled: false,
-      communities,
+      communities: communities.map((community) => ({ ...community, logoUrl: signedUrl })),
       logoAssets: [
         {
           communityId,

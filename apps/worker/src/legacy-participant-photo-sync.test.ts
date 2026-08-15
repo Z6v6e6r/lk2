@@ -15,6 +15,7 @@ describe('legacy participant photo synchronization', () => {
         return Promise.resolve();
       }),
       createReadUrl: vi.fn(),
+      exists: vi.fn().mockResolvedValue(true),
       delete: vi.fn(),
     };
     await synchronizeLegacyParticipantPhotos(
