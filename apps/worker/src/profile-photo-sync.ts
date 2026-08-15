@@ -5,6 +5,7 @@ import {
   DeleteObjectCommand,
   GetObjectCommand,
   HeadBucketCommand,
+  HeadObjectCommand,
   PutObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3';
@@ -30,6 +31,7 @@ export interface ProfilePhotoObjectStore {
     readonly sha256: string;
   }): Promise<void>;
   createReadUrl(key: string): Promise<string>;
+  exists(key: string): Promise<boolean>;
   delete(key: string): Promise<void>;
 }
 
@@ -70,6 +72,9 @@ export class S3ProfilePhotoObjectStore implements ProfilePhotoObjectStore {
   private readonly internalClient: S3Client;
   private readonly deliveryClient: S3Client;
   private ready: Promise<void> | undefined;
+  private initialized = false;
+  private readinessFailure: Error | undefined;
+  private readinessRetryAt = 0;
 
   public constructor(private readonly options: S3ProfilePhotoObjectStoreOptions) {
     const shared = {
@@ -95,8 +100,23 @@ export class S3ProfilePhotoObjectStore implements ProfilePhotoObjectStore {
     }
   }
 
+  private markUnavailable(error: unknown): void {
+    this.initialized = false;
+    this.ready = undefined;
+    this.readinessFailure =
+      error instanceof Error
+        ? error
+        : new Error('PROFILE_PHOTO_STORAGE_UNAVAILABLE', { cause: error });
+    this.readinessRetryAt = Date.now() + Math.min(5_000, Math.max(250, this.options.timeoutMs));
+  }
+
   private ensureReady(): Promise<void> {
-    this.ready ??= (async () => {
+    if (this.initialized) return Promise.resolve();
+    if (this.ready) return this.ready;
+    if (this.readinessFailure !== undefined && Date.now() < this.readinessRetryAt) {
+      return Promise.reject(this.readinessFailure);
+    }
+    const readiness = (async () => {
       try {
         await this.withTimeout((abortSignal) =>
           this.internalClient.send(new HeadBucketCommand({ Bucket: this.options.bucket }), {
@@ -116,7 +136,32 @@ export class S3ProfilePhotoObjectStore implements ProfilePhotoObjectStore {
         }
       }
     })();
+    this.ready = readiness
+      .then(() => {
+        this.initialized = true;
+        this.ready = undefined;
+        this.readinessFailure = undefined;
+        this.readinessRetryAt = 0;
+      })
+      .catch((error: unknown) => {
+        this.markUnavailable(error);
+        throw error;
+      });
     return this.ready;
+  }
+
+  public async checkReady(): Promise<void> {
+    if (!this.initialized) return this.ensureReady();
+    try {
+      await this.withTimeout((abortSignal) =>
+        this.internalClient.send(new HeadBucketCommand({ Bucket: this.options.bucket }), {
+          abortSignal,
+        }),
+      );
+    } catch (error) {
+      this.markUnavailable(error);
+      throw error;
+    }
   }
 
   public async put(input: {
@@ -125,19 +170,24 @@ export class S3ProfilePhotoObjectStore implements ProfilePhotoObjectStore {
     readonly sha256: string;
   }): Promise<void> {
     await this.ensureReady();
-    await this.withTimeout((abortSignal) =>
-      this.internalClient.send(
-        new PutObjectCommand({
-          Bucket: this.options.bucket,
-          Key: input.key,
-          Body: input.body,
-          ContentType: 'image/webp',
-          CacheControl: 'private, max-age=31536000, immutable',
-          Metadata: { sha256: input.sha256 },
-        }),
-        { abortSignal },
-      ),
-    );
+    try {
+      await this.withTimeout((abortSignal) =>
+        this.internalClient.send(
+          new PutObjectCommand({
+            Bucket: this.options.bucket,
+            Key: input.key,
+            Body: input.body,
+            ContentType: 'image/webp',
+            CacheControl: 'private, max-age=31536000, immutable',
+            Metadata: { sha256: input.sha256 },
+          }),
+          { abortSignal },
+        ),
+      );
+    } catch (error) {
+      this.markUnavailable(error);
+      throw error;
+    }
   }
 
   public async createReadUrl(key: string): Promise<string> {
@@ -154,13 +204,37 @@ export class S3ProfilePhotoObjectStore implements ProfilePhotoObjectStore {
     );
   }
 
+  public async exists(key: string): Promise<boolean> {
+    await this.ensureReady();
+    try {
+      await this.withTimeout((abortSignal) =>
+        this.internalClient.send(new HeadObjectCommand({ Bucket: this.options.bucket, Key: key }), {
+          abortSignal,
+        }),
+      );
+      return true;
+    } catch (error) {
+      if (status(error) === 404) return false;
+      this.markUnavailable(error);
+      throw error;
+    }
+  }
+
   public async delete(key: string): Promise<void> {
     await this.ensureReady();
-    await this.withTimeout((abortSignal) =>
-      this.internalClient.send(new DeleteObjectCommand({ Bucket: this.options.bucket, Key: key }), {
-        abortSignal,
-      }),
-    );
+    try {
+      await this.withTimeout((abortSignal) =>
+        this.internalClient.send(
+          new DeleteObjectCommand({ Bucket: this.options.bucket, Key: key }),
+          {
+            abortSignal,
+          },
+        ),
+      );
+    } catch (error) {
+      this.markUnavailable(error);
+      throw error;
+    }
   }
 }
 

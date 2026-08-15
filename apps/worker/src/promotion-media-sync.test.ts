@@ -20,6 +20,7 @@ describe('promotion media synchronization', () => {
       createReadUrl: vi.fn<ProfilePhotoObjectStore['createReadUrl']>((key) =>
         Promise.resolve(`https://media.padlhub.test/${key}`),
       ),
+      exists: vi.fn<ProfilePhotoObjectStore['exists']>(() => Promise.resolve(true)),
       delete: vi.fn<ProfilePhotoObjectStore['delete']>(() => Promise.resolve()),
     };
 
@@ -83,6 +84,7 @@ describe('promotion media synchronization', () => {
     const store: ProfilePhotoObjectStore = {
       put: vi.fn(() => Promise.resolve()),
       createReadUrl: vi.fn((key) => Promise.resolve(`https://media.padlhub.test/${key}`)),
+      exists: vi.fn(() => Promise.resolve(true)),
       delete: vi.fn(() => Promise.resolve()),
     };
 

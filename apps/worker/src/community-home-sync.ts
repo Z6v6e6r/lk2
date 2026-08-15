@@ -24,7 +24,7 @@ import {
   reserveCommunityLogoObjectUpload,
 } from './community-home-repository.js';
 import { synchronizeLegacyCommunityLogos } from './community-logo-sync.js';
-import type { CommunityLogoHostCircuit } from './community-logo-sync.js';
+import type { CommunityLogoSourceResilience } from './community-logo-sync.js';
 import type { ProfilePhotoObjectStore } from './profile-photo-sync.js';
 
 export interface CommunityHomeSyncCycleResult {
@@ -35,6 +35,8 @@ export interface CommunityHomeSyncCycleResult {
 
 const COMMUNITY_DIRECTORY_PAGE_SIZE = 50;
 const MAX_COMMUNITIES_PER_USER = 1_000;
+const COMMUNITY_LOGO_FETCH_BUDGET_PER_CYCLE = 20;
+const COMMUNITY_LOGO_FETCH_CONCURRENCY = 4;
 
 async function listAllCommunityMemberships(input: {
   readonly repository: CommunityDirectoryRepository;
@@ -182,8 +184,7 @@ export async function runCommunityHomeSyncCycle(input: {
   readonly repository: CommunityDirectoryRepository;
   readonly sourceMode: 'LEGACY' | 'LOCAL';
   readonly store: ProfilePhotoObjectStore;
-  readonly logoCircuit?: CommunityLogoHostCircuit;
-  readonly synchronizeLogos?: typeof synchronizeLegacyCommunityLogos;
+  readonly sourceResilience?: CommunityLogoSourceResilience;
   readonly now?: Date;
 }): Promise<CommunityHomeSyncCycleResult> {
   const now = input.now ?? new Date();
@@ -195,6 +196,7 @@ export async function runCommunityHomeSyncCycle(input: {
   let synced = 0;
   let failed = 0;
   let remaining = input.config.HOME_VIVA_SYNC_BATCH_SIZE;
+  let remainingLogoFetches = COMMUNITY_LOGO_FETCH_BUDGET_PER_CYCLE;
 
   for (const tenant of tenants.rows) {
     if (remaining <= 0) break;
@@ -215,14 +217,13 @@ export async function runCommunityHomeSyncCycle(input: {
           userId: user.userId,
           correlationId,
         });
-        const projectedDirectoryItems = directoryItems.slice(0, HOME_COMMUNITY_SUMMARY_LIMIT);
         const logoResults =
           input.sourceMode === 'LEGACY'
-            ? await (input.synchronizeLogos ?? synchronizeLegacyCommunityLogos)({
+            ? await synchronizeLegacyCommunityLogos({
                 pool: input.pool,
                 store: input.store,
                 tenantId: tenant.id,
-                items: projectedDirectoryItems,
+                items: directoryItems.slice(0, HOME_COMMUNITY_SUMMARY_LIMIT),
                 fetchedAt: now.toISOString(),
                 allowedHosts: input.config.COMMUNITY_LOGO_ALLOWED_HOSTS.split(',')
                   .map((host) => host.trim())
@@ -237,10 +238,16 @@ export async function runCommunityHomeSyncCycle(input: {
                 readUrlTtlSeconds: input.config.PROFILE_PHOTO_URL_TTL_SECONDS,
                 stableDeliveryEnabled: input.config.COMMUNITY_LOGO_STABLE_DELIVERY_ENABLED,
                 timeoutMs: input.config.COMMUNITIES_LEGACY_TIMEOUT_MS,
-                ...(input.logoCircuit ? { circuit: input.logoCircuit } : {}),
                 deferStorePut: true,
+                maxConcurrency: COMMUNITY_LOGO_FETCH_CONCURRENCY,
+                maxFetches: remainingLogoFetches,
+                ...(input.sourceResilience ? { sourceResilience: input.sourceResilience } : {}),
               })
             : [];
+        remainingLogoFetches = Math.max(
+          0,
+          remainingLogoFetches - logoResults.filter((result) => result.fetchAttempted).length,
+        );
         const logosByCommunityId = new Map(
           logoResults.map((result) => [result.communityId, result.logoUrl]),
         );
@@ -267,7 +274,7 @@ export async function runCommunityHomeSyncCycle(input: {
           });
           if (shouldUpload) await input.store.put(result.preparedObject);
         }
-        const communities = projectedDirectoryItems.map((item) =>
+        const communities = directoryItems.slice(0, HOME_COMMUNITY_SUMMARY_LIMIT).map((item) =>
           communitySummarySchema.parse({
             id: item.id,
             title: item.title,

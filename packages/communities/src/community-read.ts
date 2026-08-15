@@ -5,6 +5,7 @@ import {
   COMMUNITY_PUBLISHING_PRESETS,
   COMMUNITY_VISIBILITIES,
 } from './community-create.js';
+import { communityLogoUrlSchema } from './community-logo-url.js';
 
 const uuid = z.string().uuid();
 const dateTime = z.string().datetime({ offset: true });
@@ -24,7 +25,7 @@ export const communityJoinActionSchema = z.enum([
 const visibleBase = {
   id: uuid,
   title: z.string().min(1).max(120),
-  logoUrl: z.string().url().nullable(),
+  logoUrl: communityLogoUrlSchema.nullable(),
   isVerified: z.boolean(),
   visibility: z.enum(COMMUNITY_VISIBILITIES),
   joinAction: communityJoinActionSchema,

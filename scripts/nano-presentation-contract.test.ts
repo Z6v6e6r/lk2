@@ -16,6 +16,8 @@ const compatibleWorkerRestore = repositoryFile(
   'deploy/jetson/prepare-compatible-worker-rollback.sh',
 );
 const clientRoutingRunbook = repositoryFile('docs/runbooks/client-routing-switch.md');
+const rollbackRunbook = repositoryFile('docs/runbooks/rollback.md');
+const userApiContract = repositoryFile('contracts/openapi/user/v1/openapi.yaml');
 const productionWorkflow = repositoryFile('.github/workflows/deploy-production.yaml');
 const stagingCompose = repositoryFile('deploy/compose.staging.yaml');
 const stagingRoutingWorkflow = repositoryFile('.github/workflows/set-staging-routing-plan.yaml');
@@ -189,6 +191,22 @@ describe('Nano presentation release contract', () => {
     expect(verification).toContain(
       'require_value VIVA_OAUTH_REDIRECT_URI https://lk.nano.padlhub.su/user/api/v1/local-padel/auth/viva/callback',
     );
+    expect(verification).toContain(
+      'community_logo_stable_delivery="$(runtime_value COMMUNITY_LOGO_STABLE_DELIVERY_ENABLED)"',
+    );
+    expect(verification).toContain('false | true)');
+    expect(verification).not.toContain(
+      'require_value COMMUNITY_LOGO_STABLE_DELIVERY_ENABLED false',
+    );
+    expect(verification).toContain(
+      'require_value COMMUNITY_LOGO_COMPATIBILITY_BACKFILL_ENABLED false',
+    );
+    expect(verification).toContain(
+      'require_running_flag api COMMUNITY_LOGO_STABLE_DELIVERY_ENABLED "$community_logo_stable_delivery"',
+    );
+    expect(verification).toContain(
+      'require_running_flag worker COMMUNITY_LOGO_STABLE_DELIVERY_ENABLED "$community_logo_stable_delivery"',
+    );
   });
 
   it('snapshots the active application before mutation and rolls it back after later failures', () => {
@@ -200,6 +218,9 @@ describe('Nano presentation release contract', () => {
     const rollbackStep = stagingWorkflow.indexOf(
       'name: Roll back a failed staging application release',
     );
+    const runtimeFlagStep = stagingWorkflow.match(
+      /- name: Attest community-logo flags in every API and worker runtime\n([\s\S]*?)\n {6}- name:/,
+    )?.[1];
 
     expect(stagingWorkflow).toContain(
       'STAGING_RELEASE_BACKUP_DIR: /opt/phub/backups/releases/pre-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}',
@@ -216,6 +237,7 @@ describe('Nano presentation release contract', () => {
     expect(stagingWorkflow.indexOf('compose up -d --remove-orphans web api')).toBeLessThan(
       stagingWorkflow.indexOf('compose up -d --remove-orphans worker realtime'),
     );
+    expect(stagingWorkflow).not.toMatch(/^\s+compose up -d --remove-orphans\s*$/m);
     expect(stagingWorkflow).toContain('wait_for_service api');
     expect(stagingWorkflow).toContain('verify-media-rollback-safe.sh');
     expect(stagingWorkflow).toContain('PHUB_MEDIA_ROLLBACK_MODE=pre-cutover');
@@ -232,29 +254,77 @@ describe('Nano presentation release contract', () => {
     expect(mediaRollbackGuard).toContain('home.base_snapshots');
     expect(mediaRollbackGuard).toContain('published_at is null');
     expect(mediaRollbackGuard).toContain('staging.games.env');
-    expect(mediaRollbackGuard).toContain('require_running_flag_disabled worker');
-    expect(mediaRollbackGuard).toContain('require_running_flag_disabled api');
+    expect(mediaRollbackGuard).toContain(
+      'require_running_service_flag worker COMMUNITY_LOGO_STABLE_DELIVERY_ENABLED true',
+    );
+    expect(mediaRollbackGuard).toContain(
+      'require_running_flag api COMMUNITY_LOGO_STABLE_DELIVERY_ENABLED false',
+    );
     expect(mediaRollbackGuard).toContain('phub.home-projector.v1');
     expect(mediaRollbackGuard).toContain('compose stop worker');
     expect(mediaRollbackGuard).toContain('PHUB_MEDIA_ROLLBACK_MODE');
     expect(mediaRollbackGuard).toContain('PHUB_MEDIA_ROLLBACK_MODE:-feature');
     expect(mediaRollbackGuard).toContain('integration.media_cutover_state');
-    expect(mediaRollbackGuard).toContain('compatible-worker');
-    expect(mediaRollbackGuard).toContain('client-media compatibility floor');
+    expect(mediaRollbackGuard).toContain('compatible-client');
+    expect(mediaRollbackGuard).toContain('compatible-logo');
+    expect(mediaRollbackGuard).toContain('client_compatible');
+    expect(mediaRollbackGuard).toContain('community_compatible');
     expect(mediaRollbackGuard).toContain('phub.client-media-rollback.v1');
+    expect(mediaRollbackGuard).toContain('phub.community-logo-rollback.v1');
     expect(mediaRollbackGuard).not.toContain('payload::text like');
     expect(mediaRollbackGuard).toContain("item->>'logoUrl' like");
     expect(clientRoutingRunbook).toContain('PHUB_MEDIA_ROLLBACK_MODE=feature');
-    expect(clientRoutingRunbook).toContain('PHUB_MEDIA_ROLLBACK_MODE=compatible-worker');
+    expect(clientRoutingRunbook).toContain('PHUB_ROLLBACK_COMPATIBILITY_FLOOR=client-media');
+    expect(clientRoutingRunbook).toContain('PHUB_MEDIA_ROLLBACK_MODE=compatible-client');
+    expect(clientRoutingRunbook).toContain('PHUB_ROLLBACK_COMPATIBILITY_FLOOR=community-logo');
+    expect(clientRoutingRunbook).toContain('PHUB_MEDIA_ROLLBACK_MODE=compatible-logo');
+    expect(clientRoutingRunbook).toMatch(
+      /For such a rollback,[\s\S]{0,180}`PHUB_MEDIA_ROLLBACK_MODE=feature`/,
+    );
+    expect(clientRoutingRunbook).not.toMatch(
+      /For such a rollback,[\s\S]{0,180}`PHUB_MEDIA_ROLLBACK_MODE=compatible-(?:client|logo)`/,
+    );
     expect(applicationRollback).toContain('PHUB_ROLLBACK_REQUIRE_COMPATIBLE_WORKER');
     expect(applicationRollback).toContain('attested worker container changed');
     expect(applicationRollback).toContain('WORKER_IMAGE_DIGEST');
     expect(applicationRollback).toContain('phub.client-media-rollback.v1');
     expect(compatibleWorkerRestore).toContain('CLIENT_MEDIA_ROLLBACK_V1=true');
+    expect(applicationRollback).toContain('phub.community-logo-rollback.v1');
+    expect(compatibleWorkerRestore).toContain('COMMUNITY_LOGO_ROLLBACK_V1=true');
+    expect(clientRoutingRunbook).toMatch(
+      /current migration chain ends at\s+`0081_community_logo_stable_delivery_validate\.sql`/,
+    );
+    expect(clientRoutingRunbook).toContain('0079_profile_photo_client_assisted_source.sql');
+    expect(clientRoutingRunbook).toContain('0080_community_logo_stable_delivery.sql');
+    expect(clientRoutingRunbook).toContain('0081_community_logo_stable_delivery_validate.sql');
+    expect(clientRoutingRunbook).toMatch(/Do not down-migrate `0079`, `0080` or\s+`0081`/);
+    expect(clientRoutingRunbook).toContain('normal repeat-deploy rollback is stable-to-stable');
+    expect(clientRoutingRunbook).toContain('returning community logos to signed URLs');
+    expect(rollbackRunbook).toContain(
+      'Migrations `0079`, `0080` and `0081` remain applied in both rollback paths.',
+    );
+    for (const schema of ['CommunityMinimalView', 'CommunityPublicView', 'CommunityMemberView']) {
+      const schemaBlock = userApiContract.match(
+        new RegExp(`^    ${schema}:[\\s\\S]*?(?=^    [A-Z][A-Za-z0-9]+:)`, 'm'),
+      )?.[0];
+      expect(schemaBlock, `${schema} must be present`).toBeDefined();
+      expect(schemaBlock).toContain(
+        "pattern: '^(https?://.+|/public/api/v1/media/community-logos/[0-9a-f-]{36}/[0-9a-f-]{36})$'",
+      );
+    }
     expect(stagingWorkflow).toContain('prepare-compatible-worker-rollback.sh');
     expect(stagingWorkflow).toContain('PHUB_ROLLBACK_REQUIRE_COMPATIBLE_WORKER=true');
     expect(stagingWorkflow).toContain('guard_status="$?"');
-    expect(stagingWorkflow).toContain('guard_status" -ne 42');
+    expect(stagingWorkflow).toContain('42)');
+    expect(stagingWorkflow).toContain('43)');
+    expect(stagingWorkflow).toContain('compatibility_floor=client-media');
+    expect(stagingWorkflow).toContain('compatible_guard_mode=compatible-client');
+    expect(stagingWorkflow).toContain('compatibility_floor=community-logo');
+    expect(stagingWorkflow).toContain('compatible_guard_mode=compatible-logo');
+    expect(runtimeFlagStep).toContain(
+      "if: ${{ inputs.deployment_profile != 'COMMUNITIES_LEGACY_READ_ONLY' }}",
+    );
+    expect(runtimeFlagStep).toContain('verify-live-staging-data.sh runtime-flags');
   });
 
   it('isolates the Communities legacy profile to API and proves its read-only source path', () => {

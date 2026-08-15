@@ -46,10 +46,14 @@ the last valid community component.
 When a legacy summary exposes a logo and no matching local asset exists, the worker downloads it
 through an HTTPS host allowlist, applies byte/pixel/time bounds, strips metadata, converts it to WebP
 and writes a content-addressed private object under the PadlHub community UUID. Integration metadata
-and the Home component are committed together. Clients receive only the stable PadlHub media route;
-the API resolves the current object key under tenant RLS and streams the private WebP. The stable
-legacy asset URL is the change token: equal URLs reuse the existing object;
-a changed URL imports a new immutable object and queues the old one for delayed deletion.
+and the Home component are committed together. During rollout clients receive a compatible signed
+PadlHub object URL; after cutover they receive the stable PadlHub media route and the API resolves
+the current object key under tenant RLS. Equal source URLs reuse the existing object between bounded
+conditional revalidations; changed bytes import a new immutable object and queue the old one for
+delayed deletion. A bounded S3 HEAD precedes stale conditional reads, so a missing immutable object
+forces an unconditional refetch and re-upload. Provider calls have two attempts, capped
+`Retry-After`, a host-level circuit breaker and identifier-free outcome metrics; storage canaries
+participate in worker readiness and recover after bounded backoff.
 
 ## Consequences
 

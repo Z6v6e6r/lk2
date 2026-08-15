@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 
 import { communitySummarySchema, type CommunitySummary } from '@phub/communities';
 import { withTenantTransaction } from '@phub/database';
-import { communityLogoDeliveryUrl } from '@phub/domain';
+import { COMMUNITY_LOGO_DELIVERY_PATH_PATTERN, communityLogoDeliveryUrl } from '@phub/domain';
 import {
   HOME_PROJECTION_COMPONENT_EVENT,
   homeProjectionComponentPayloadSchema,
@@ -472,7 +472,10 @@ export function reserveCommunityLogoObjectUpload(input: {
           where tenant_id = $1 and object_key = $2`,
         [input.tenantId, input.objectKey],
       );
-      return false;
+      // A prepared object with the active content-addressed key means the sync observed that the
+      // immutable object is physically absent. Re-uploading identical bytes is safe and repairs
+      // the DB-to-object-store split-brain; concurrent repairs remain idempotent by key.
+      return true;
     }
     await client.query(
       `insert into integration.community_logo_object_gc (tenant_id, object_key, delete_after)
@@ -504,13 +507,6 @@ export function persistCommunityHomeSource(input: {
 }): Promise<CommunityHomePersistenceResult> {
   return withTenantTransaction(input.pool, input.tenantId, async (client) => {
     await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [input.userId]);
-    if (input.stableDeliveryEnabled === true && (input.logoAssets?.length ?? 0) > 0) {
-      await client.query(
-        `insert into integration.media_cutover_state (feature, active)
-         values ('community_logo_stable_delivery', true)
-         on conflict (feature) do update set active = true, updated_at = now()`,
-      );
-    }
     if (input.logoAssets) {
       await persistCommunityLogoAssets({
         client,
@@ -519,37 +515,67 @@ export function persistCommunityHomeSource(input: {
       });
     }
     const affectedCommunityIds = [...new Set(input.logoAssets?.map((asset) => asset.communityId))];
+    const logoAssetsByCommunityId = new Map(
+      input.logoAssets?.map((asset) => [asset.communityId, asset] as const) ?? [],
+    );
     const activeLogos =
       affectedCommunityIds.length > 0
         ? new Map(
             (
               await client.query<
-                { community_id: string; delivery_url: string | null } & QueryResultRow
+                {
+                  community_id: string;
+                  delivery_url: string | null;
+                  synced_at: Date | string;
+                } & QueryResultRow
               >(
-                `select community_id::text as community_id, delivery_url
+                `select community_id::text as community_id, delivery_url, synced_at
                    from integration.community_logo_sync
                   where tenant_id = $1 and community_id = any($2::uuid[])`,
                 [input.tenantId, affectedCommunityIds],
               )
-            ).rows.map((row) => [row.community_id, row.delivery_url] as const),
+            ).rows.map((row) => [row.community_id, row] as const),
           )
-        : new Map<string, string | null>();
+        : new Map<
+            string,
+            { community_id: string; delivery_url: string | null; synced_at: Date | string }
+          >();
     const affectedSet = new Set(affectedCommunityIds);
-    const canonicalCommunities = input.communities.map((community) =>
-      affectedSet.has(community.id)
-        ? {
-            ...community,
-            logoUrl: activeLogos.has(community.id)
-              ? input.stableDeliveryEnabled !== false || !activeLogos.get(community.id)
-                ? new URL(
-                    communityLogoDeliveryUrl(input.tenantId, community.id),
-                    `${input.publicApplicationOrigin.replace(/\/$/, '')}/`,
-                  ).toString()
-                : activeLogos.get(community.id)!
-              : null,
-          }
-        : community,
-    );
+    const canonicalCommunities = input.communities.map((community) => {
+      if (!affectedSet.has(community.id)) return community;
+      const activeLogo = activeLogos.get(community.id);
+      const attemptedAsset = logoAssetsByCommunityId.get(community.id);
+      const newerValidObservationWon = Boolean(
+        activeLogo &&
+        attemptedAsset &&
+        Number.isFinite(Date.parse(String(activeLogo.synced_at))) &&
+        Date.parse(String(activeLogo.synced_at)) > Date.parse(attemptedAsset.syncedAt),
+      );
+      // A null result is an explicit fail-closed signal from source/S3 synchronization. Do not
+      // reconstruct a stable route from the unchanged stale mapping unless a newer successful
+      // observation won the per-community race while this Home snapshot was being persisted.
+      const canonicalLogo =
+        activeLogo && (community.logoUrl !== null || newerValidObservationWon)
+          ? input.stableDeliveryEnabled === true
+            ? new URL(
+                communityLogoDeliveryUrl(input.tenantId, community.id),
+                `${input.publicApplicationOrigin.replace(/\/$/, '')}/`,
+              ).toString()
+            : activeLogo.delivery_url
+          : null;
+      return { ...community, logoUrl: canonicalLogo };
+    });
+    const publishesStableLogo = canonicalCommunities.some((community) => {
+      if (!community.logoUrl) return false;
+      try {
+        return COMMUNITY_LOGO_DELIVERY_PATH_PATTERN.test(
+          new URL(community.logoUrl, `${input.publicApplicationOrigin.replace(/\/$/, '')}/`)
+            .pathname,
+        );
+      } catch {
+        return false;
+      }
+    });
     const payload = homeProjectionComponentPayloadSchema.parse({
       userId: input.userId,
       component: 'communities',
@@ -582,6 +608,14 @@ export function persistCommunityHomeSource(input: {
       (input.expectedSourceMode && source?.source_mode !== input.expectedSourceMode)
     ) {
       return { outcome: 'stale', sourceRevision: source?.source_revision ?? '0' };
+    }
+
+    if (input.stableDeliveryEnabled === true && publishesStableLogo) {
+      await client.query(
+        `insert into integration.media_cutover_state (feature, active)
+         values ('community_logo_stable_delivery', true)
+         on conflict (feature) do update set active = true, updated_at = now()`,
+      );
     }
 
     if (

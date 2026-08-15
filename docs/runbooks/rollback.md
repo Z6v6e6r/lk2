@@ -18,8 +18,10 @@ Nano staging uses `deploy/jetson/backup-application.sh` and
 before overwriting any application or ingress definition. It accepts one explicit saved release
 directory under `/opt/phub/backups/releases` and the exact confirmation token. The directory must contain the
 previous `compose.yaml`, digest-pinned `release.env`, `nginx/default.conf`, `staging.auth.env`,
-`tls-ingress/Caddyfile`, the prior `staging.override.env` state and a `backup.complete` marker
-written last with the previous release SHA.
+`tls-ingress/Caddyfile`, prior `staging.override.env`, `staging.communities.env` and
+`staging.games.env` state (or their empty `.absent` markers), `process-state.env`, a
+`worker-capabilities.env` attestation and a `backup.complete` marker written last with the previous
+release SHA.
 
 ```sh
 PHUB_ROLLBACK_BACKUP_ROOT=/opt/phub/backups/releases \
@@ -43,3 +45,28 @@ file is overwritten. Any later failed or cancelled deploy step invokes the rollb
 automatically. A successful workflow retains
 both the application snapshot and its separate PostgreSQL custom-format archive as release
 evidence. Rollback never runs a downmigration; expand-only schema changes remain applied.
+
+## Stable community-logo cutover
+
+After `integration.media_cutover_state` records `community_logo_stable_delivery` as active, do not
+restore an API without the stable media route directly. Automatic recovery of a failed repeat deploy
+is stable-to-stable: restore the saved `true/false` worker, require the recorded
+`phub.community-logo-rollback.v1` capability and immutable digest, verify stable mappings twice and
+drain the Home queue, then preserve that worker while restoring the saved compatible API. The
+workflow identifies this state with precheck exit `43` and uses
+`PHUB_ROLLBACK_COMPATIBILITY_FLOOR=community-logo` together with
+`PHUB_MEDIA_ROLLBACK_MODE=compatible-logo` for the prepare, guard and rollback sequence.
+
+Client-assisted profile media without an active community-logo cutover is a separate compatibility
+floor. Precheck exit `42` selects `PHUB_ROLLBACK_COMPATIBILITY_FLOOR=client-media` and
+`PHUB_MEDIA_ROLLBACK_MODE=compatible-client`; that path requires only the client-media capability
+and preserves the saved `false/false` worker. Stable-logo evidence always takes precedence over the
+client-only classification. Crossed flags, pending client commands or an unresolved stable mapping
+fail closed instead of selecting either automatic rollback path.
+
+A deliberate feature rollback is separate. Run the compatible worker with stable delivery disabled
+and compatibility backfill enabled until signed logo mappings, Home projections and the Home
+projector queue converge. Disable backfill, restart the worker, then require
+`PHUB_MEDIA_ROLLBACK_MODE=feature sh /opt/phub/verify-media-rollback-safe.sh`. The guard checks the
+running flags, validates convergence twice, stops the worker, rechecks the queue and only then clears
+the cutover marker. Migrations `0079`, `0080` and `0081` remain applied in both rollback paths.

@@ -26,6 +26,7 @@ interface CommunityMappingRow extends QueryResultRow {
 interface CommunityLogoRow extends QueryResultRow {
   readonly community_id: string;
   readonly object_key: string;
+  readonly delivery_url: string | null;
 }
 
 interface CommunityDirectoryRow extends QueryResultRow {
@@ -33,6 +34,7 @@ interface CommunityDirectoryRow extends QueryResultRow {
   readonly title: string;
   readonly is_verified: boolean;
   readonly logo_object_key: string | null;
+  readonly logo_delivery_url: string | null;
   readonly ranking_position: number | string | null;
   readonly pinned: boolean;
   readonly sort_at: Date | string;
@@ -66,7 +68,10 @@ function timestamp(value: Date | string): string {
   return new Date(value).toISOString();
 }
 
-export function createCommunityLegacyBridgeRepository(pool: Pool): CommunityLegacyBridgeRepository {
+export function createCommunityLegacyBridgeRepository(
+  pool: Pool,
+  options: { readonly stableLogoDeliveryEnabled?: boolean } = {},
+): CommunityLegacyBridgeRepository {
   return {
     getViewerIdentity(tenantId, userId) {
       return withTenantTransaction(pool, tenantId, async (client) => {
@@ -149,28 +154,34 @@ export function createCommunityLegacyBridgeRepository(pool: Pool): CommunityLega
       if (uniqueCommunityIds.length === 0) return Promise.resolve(new Map());
       return withTenantTransaction(pool, tenantId, async (client) => {
         const result = await client.query<CommunityLogoRow>(
-          `select community_id::text as community_id, object_key
+          `select community_id::text as community_id, object_key, delivery_url
              from integration.community_logo_sync
             where tenant_id = $1 and community_id = any($2::uuid[])`,
           [tenantId, uniqueCommunityIds],
         );
         return new Map(
-          result.rows.map((row) => [
-            row.community_id,
-            communityLogoDeliveryUrl(tenantId, row.community_id),
-          ]),
+          result.rows.flatMap((row) => {
+            const logoUrl = options.stableLogoDeliveryEnabled
+              ? communityLogoDeliveryUrl(tenantId, row.community_id)
+              : row.delivery_url;
+            return logoUrl ? [[row.community_id, logoUrl] as const] : [];
+          }),
         );
       });
     },
   };
 }
 
-export function createLocalCommunityDirectoryRepository(pool: Pool): CommunityDirectoryRepository {
+export function createLocalCommunityDirectoryRepository(
+  pool: Pool,
+  options: { readonly stableLogoDeliveryEnabled?: boolean } = {},
+): CommunityDirectoryRepository {
   return {
     listMemberships(input): Promise<CommunityDirectoryRepositoryPage> {
       return withTenantTransaction(pool, input.tenantId, async (client) => {
         const result = await client.query<CommunityDirectoryRow>(
           `select c.id, c.title, c.is_verified, logo.object_key as logo_object_key,
+                  logo.delivery_url as logo_delivery_url,
                   m.ranking_position,
                   (m.pinned_at is not null) as pinned,
                   greatest(c.updated_at, m.updated_at) as sort_at
@@ -213,7 +224,11 @@ export function createLocalCommunityDirectoryRepository(pool: Pool): CommunityDi
         const items = result.rows.slice(0, input.limit).map((row) => ({
           id: row.id,
           title: row.title,
-          logoUrl: row.logo_object_key ? communityLogoDeliveryUrl(input.tenantId, row.id) : null,
+          logoUrl: row.logo_object_key
+            ? options.stableLogoDeliveryEnabled
+              ? communityLogoDeliveryUrl(input.tenantId, row.id)
+              : row.logo_delivery_url
+            : null,
           isVerified: row.is_verified,
           unreadChatCount: 0,
           ...(row.ranking_position === null ? {} : { memberRank: Number(row.ranking_position) }),

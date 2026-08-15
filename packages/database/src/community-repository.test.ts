@@ -97,6 +97,34 @@ describe('community repositories', () => {
             {
               community_id: communityId,
               object_key: `community-logos/${tenantId}/${communityId}/${'a'.repeat(64)}.webp`,
+              delivery_url: 'https://media.padlhub.test/community.webp?sig=legacy',
+            },
+          ],
+        };
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+
+    await expect(
+      createCommunityLegacyBridgeRepository(pool, {
+        stableLogoDeliveryEnabled: true,
+      }).getCommunityLogoUrls?.(tenantId, [communityId]),
+    ).resolves.toEqual(
+      new Map([[communityId, `/public/api/v1/media/community-logos/${tenantId}/${communityId}`]]),
+    );
+  });
+
+  it('keeps signed community-logo delivery while the stable flag is disabled', async () => {
+    const communityId = '11111111-1111-4111-8111-111111111111';
+    const signedUrl = 'https://media.padlhub.test/community.webp?sig=legacy';
+    const { pool } = poolWithQueries((text) => {
+      if (text.includes('from integration.community_logo_sync')) {
+        return {
+          rows: [
+            {
+              community_id: communityId,
+              object_key: `community-logos/${tenantId}/${communityId}/${'a'.repeat(64)}.webp`,
+              delivery_url: signedUrl,
             },
           ],
         };
@@ -106,9 +134,7 @@ describe('community repositories', () => {
 
     await expect(
       createCommunityLegacyBridgeRepository(pool).getCommunityLogoUrls?.(tenantId, [communityId]),
-    ).resolves.toEqual(
-      new Map([[communityId, `/public/api/v1/media/community-logos/${tenantId}/${communityId}`]]),
-    );
+    ).resolves.toEqual(new Map([[communityId, signedUrl]]));
   });
 
   it('reads active local memberships without exposing storage or external identifiers', async () => {
@@ -122,6 +148,7 @@ describe('community repositories', () => {
               title: 'Локальное сообщество',
               is_verified: true,
               logo_object_key: null,
+              logo_delivery_url: null,
               ranking_position: 4,
               pinned: true,
               sort_at: new Date('2026-07-17T10:00:00.000Z'),
@@ -154,5 +181,45 @@ describe('community repositories', () => {
       ],
       hasMore: false,
     });
+  });
+
+  it('publishes a stable local logo only when the rollout flag is enabled', async () => {
+    const communityId = '11111111-1111-4111-8111-111111111111';
+    const signedUrl = 'https://media.padlhub.test/community.webp?sig=legacy';
+    const { pool } = poolWithQueries((text) => {
+      if (text.includes('from communities.memberships')) {
+        return {
+          rows: [
+            {
+              id: communityId,
+              title: 'Локальное сообщество',
+              is_verified: true,
+              logo_object_key: `community-logos/${tenantId}/${communityId}/${'a'.repeat(64)}.webp`,
+              logo_delivery_url: signedUrl,
+              ranking_position: null,
+              pinned: false,
+              sort_at: new Date('2026-07-17T10:00:00.000Z'),
+            },
+          ],
+        };
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const request = {
+      tenantId,
+      userId,
+      correlationId: 'community-local-logo-test',
+      limit: 20,
+    };
+
+    const signed = await createLocalCommunityDirectoryRepository(pool).listMemberships(request);
+    const stable = await createLocalCommunityDirectoryRepository(pool, {
+      stableLogoDeliveryEnabled: true,
+    }).listMemberships(request);
+
+    expect(signed.items[0]?.logoUrl).toBe(signedUrl);
+    expect(stable.items[0]?.logoUrl).toBe(
+      `/public/api/v1/media/community-logos/${tenantId}/${communityId}`,
+    );
   });
 });

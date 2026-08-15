@@ -1,4 +1,5 @@
 import type { CommunityReadRecord, CommunityReadRepository } from '@phub/communities';
+import { communityLogoDeliveryUrl } from '@phub/domain';
 import type { Pool, QueryResultRow } from 'pg';
 
 import { withTenantTransaction } from './connection.js';
@@ -7,6 +8,7 @@ interface CommunityReadRow extends QueryResultRow {
   readonly id: string;
   readonly title: string;
   readonly description: string | null;
+  readonly logo_object_key: string | null;
   readonly logo_url: string | null;
   readonly is_verified: boolean;
   readonly visibility: CommunityReadRecord['visibility'];
@@ -27,7 +29,11 @@ function timestamp(value: Date | string): string {
   return new Date(value).toISOString();
 }
 
-function mapRow(row: CommunityReadRow): CommunityReadRecord {
+function mapRow(
+  row: CommunityReadRow,
+  tenantId: string,
+  stableLogoDeliveryEnabled: boolean,
+): CommunityReadRecord {
   if (!row.publishing_preset) throw new Error('COMMUNITY_CANONICAL_POLICY_MISSING');
   const viewerMembership =
     row.membership_status && row.membership_role && row.membership_revision !== null
@@ -42,7 +48,11 @@ function mapRow(row: CommunityReadRow): CommunityReadRecord {
     id: row.id,
     title: row.title,
     description: row.description,
-    logoUrl: row.logo_url,
+    logoUrl: row.logo_object_key
+      ? stableLogoDeliveryEnabled
+        ? communityLogoDeliveryUrl(tenantId, row.id)
+        : row.logo_url
+      : null,
     isVerified: row.is_verified,
     visibility: row.visibility,
     joinPolicy: row.join_policy,
@@ -63,6 +73,7 @@ const READ_COLUMNS = `
     when c.visibility = 'PUBLIC' or viewer.status = 'ACTIVE' then c.description
     else null
   end as description,
+  logo.object_key as logo_object_key,
   logo.delivery_url as logo_url,
   c.is_verified,
   c.visibility,
@@ -92,7 +103,10 @@ const READ_COLUMNS = `
   viewer.ranking_position
 `;
 
-export function createCommunityReadRepository(pool: Pool): CommunityReadRepository {
+export function createCommunityReadRepository(
+  pool: Pool,
+  options: { readonly stableLogoDeliveryEnabled?: boolean } = {},
+): CommunityReadRepository {
   return {
     listDiscoverable(input) {
       return withTenantTransaction(pool, input.tenantId, async (client) => {
@@ -135,7 +149,9 @@ export function createCommunityReadRepository(pool: Pool): CommunityReadReposito
           ],
         );
         return {
-          items: result.rows.slice(0, input.limit).map(mapRow),
+          items: result.rows
+            .slice(0, input.limit)
+            .map((row) => mapRow(row, input.tenantId, options.stableLogoDeliveryEnabled ?? false)),
           hasMore: result.rows.length > input.limit,
         };
       });
@@ -161,7 +177,9 @@ export function createCommunityReadRepository(pool: Pool): CommunityReadReposito
           [input.tenantId, input.viewerUserId, input.communityId],
         );
         const row = result.rows[0];
-        return row ? mapRow(row) : undefined;
+        return row
+          ? mapRow(row, input.tenantId, options.stableLogoDeliveryEnabled ?? false)
+          : undefined;
       });
     },
   };

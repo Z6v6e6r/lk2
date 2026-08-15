@@ -10,95 +10,14 @@ import { loadCommunityLogoSyncRecords } from './community-home-repository.js';
 
 const IMAGE_CONTENT_TYPE = /^image\/(?:avif|gif|heic|heif|jpeg|png|webp)(?:;|$)/i;
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
-
-export interface CommunityLogoSourceMetric {
-  readonly outcome: 'success' | 'failure' | 'circuit_open' | 'circuit_probe' | 'recovered';
-  readonly errorCode?: string;
-}
-
-interface CommunityLogoHostCircuitState {
-  readonly failures: number;
-  readonly openUntil: number;
-  readonly cooldownMs: number;
-  readonly probing: boolean;
-  readonly generation: number;
-}
-
-export class CommunityLogoHostCircuit {
-  private readonly states = new Map<string, CommunityLogoHostCircuitState>();
-
-  public constructor(
-    private readonly options: {
-      readonly failureThreshold: number;
-      readonly resetMs: number;
-      readonly maxResetMs?: number;
-      readonly now?: () => number;
-      readonly onMetric?: (metric: CommunityLogoSourceMetric) => void;
-    },
-  ) {}
-
-  public async execute<T>(hostname: string, operation: () => Promise<T>): Promise<T> {
-    const now = (this.options.now ?? Date.now)();
-    const current = this.states.get(hostname);
-    if (current && (current.openUntil > now || current.probing)) {
-      this.options.onMetric?.({ outcome: 'circuit_open' });
-      throw new Error('COMMUNITY_LOGO_SOURCE_CIRCUIT_OPEN');
-    }
-
-    const probing = Boolean(current?.openUntil && current.openUntil <= now);
-    let admittedGeneration = current?.generation ?? 0;
-    if (probing && current) {
-      admittedGeneration = current.generation + 1;
-      this.states.set(hostname, { ...current, probing: true, generation: admittedGeneration });
-      this.options.onMetric?.({ outcome: 'circuit_probe' });
-    }
-
-    try {
-      const result = await operation();
-      const latest = this.states.get(hostname);
-      const ownsLatestState = !latest || latest.generation === admittedGeneration;
-      if (ownsLatestState) this.states.delete(hostname);
-      this.options.onMetric?.({ outcome: probing && ownsLatestState ? 'recovered' : 'success' });
-      return result;
-    } catch (error) {
-      const code = errorCode(error);
-      this.options.onMetric?.({ outcome: 'failure', errorCode: code });
-      const failureNow = (this.options.now ?? Date.now)();
-      const latest = this.states.get(hostname);
-      const ownsProbe = Boolean(
-        probing && latest?.probing && latest.generation === admittedGeneration,
-      );
-      if (!isHostCircuitFailure(code)) {
-        if (ownsProbe) {
-          this.states.delete(hostname);
-          this.options.onMetric?.({ outcome: 'recovered' });
-        }
-        throw error;
-      }
-
-      const failures = (latest?.failures ?? 0) + 1;
-      const failureThreshold = Math.max(1, this.options.failureThreshold);
-      const baseResetMs = Math.max(1, this.options.resetMs);
-      const maxResetMs = Math.max(baseResetMs, this.options.maxResetMs ?? baseResetMs * 16);
-      const shouldOpen =
-        ownsProbe ||
-        Boolean(latest?.probing) ||
-        Boolean(latest && latest.openUntil > failureNow) ||
-        failures >= failureThreshold;
-      const cooldownMs = ownsProbe
-        ? Math.min(maxResetMs, Math.max(baseResetMs, (latest?.cooldownMs ?? baseResetMs) * 2))
-        : (latest?.cooldownMs ?? baseResetMs);
-      this.states.set(hostname, {
-        failures,
-        openUntil: shouldOpen ? Math.max(latest?.openUntil ?? 0, failureNow + cooldownMs) : 0,
-        cooldownMs,
-        probing: false,
-        generation: (latest?.generation ?? admittedGeneration) + 1,
-      });
-      throw error;
-    }
-  }
-}
+const DEFAULT_REVALIDATE_AFTER_SECONDS = 3_600;
+const DEFAULT_MAX_CONCURRENCY = 4;
+const DEFAULT_MAX_FETCHES = 20;
+const DEFAULT_SOURCE_MAX_ATTEMPTS = 2;
+const DEFAULT_SOURCE_RETRY_BASE_DELAY_MS = 100;
+const DEFAULT_SOURCE_MAX_RETRY_AFTER_MS = 5_000;
+const DEFAULT_SOURCE_CIRCUIT_FAILURE_THRESHOLD = 3;
+const DEFAULT_SOURCE_CIRCUIT_RESET_MS = 30_000;
 
 export interface CommunityLogoSyncRecord {
   readonly communityId: string;
@@ -131,6 +50,7 @@ export interface CommunityLogoSyncResult {
   readonly logoUrl: string | null;
   readonly persistence: CommunityLogoPersistence;
   readonly outcome: 'stored' | 'unchanged' | 'removed' | 'fallback';
+  readonly fetchAttempted?: boolean;
   readonly errorCode?: string;
   readonly preparedObject?: {
     readonly key: string;
@@ -138,6 +58,201 @@ export interface CommunityLogoSyncResult {
     readonly sha256: string;
     readonly deleteAfter: string;
   };
+}
+
+type SourceLogoResponse =
+  | {
+      readonly status: 'not-modified';
+      readonly etag?: string;
+      readonly lastModified?: string;
+    }
+  | {
+      readonly status: 'modified';
+      readonly body: Buffer;
+      readonly etag?: string;
+      readonly lastModified?: string;
+    };
+
+export interface CommunityLogoSourceMetric {
+  readonly operation: 'community_logo_source_fetch';
+  readonly outcome: 'success' | 'retry' | 'failure' | 'circuit_open';
+  readonly attempt: number;
+  readonly durationMs: number;
+  readonly status?: number;
+  readonly code?: string;
+}
+
+interface CommunityLogoSourceCircuitState {
+  failures: number;
+  openUntil: number;
+  probeInFlight: boolean;
+  failureVersion: number;
+}
+
+class CommunityLogoSourceError extends Error {
+  public constructor(
+    code: string,
+    public readonly retryable: boolean,
+    public readonly status?: number,
+    public readonly retryAfterMs?: number,
+    cause?: unknown,
+  ) {
+    super(code, cause === undefined ? undefined : { cause });
+    this.name = 'CommunityLogoSourceError';
+  }
+}
+
+function retryAfterMs(response: Response): number | undefined {
+  const value = response.headers.get('retry-after')?.trim();
+  if (!value) return undefined;
+  if (/^\d+$/.test(value)) return Number(value) * 1_000;
+  const retryAt = Date.parse(value);
+  return Number.isFinite(retryAt) ? Math.max(0, retryAt - Date.now()) : undefined;
+}
+
+export class CommunityLogoSourceResilience {
+  private readonly circuits = new Map<string, CommunityLogoSourceCircuitState>();
+  private readonly fetchImplementation: typeof fetch;
+
+  public constructor(
+    private readonly options: {
+      readonly maxAttempts?: number;
+      readonly retryBaseDelayMs?: number;
+      readonly maxRetryAfterMs?: number;
+      readonly circuitFailureThreshold?: number;
+      readonly circuitResetMs?: number;
+      readonly fetchImplementation?: typeof fetch;
+      readonly onMetric?: (metric: CommunityLogoSourceMetric) => void;
+      readonly now?: () => number;
+      readonly sleep?: (delayMs: number) => Promise<void>;
+    } = {},
+  ) {
+    this.fetchImplementation = options.fetchImplementation ?? fetch;
+  }
+
+  private circuitState(hostname: string): CommunityLogoSourceCircuitState {
+    const current = this.circuits.get(hostname);
+    if (current) return current;
+    const created: CommunityLogoSourceCircuitState = {
+      failures: 0,
+      openUntil: 0,
+      probeInFlight: false,
+      failureVersion: 0,
+    };
+    this.circuits.set(hostname, created);
+    return created;
+  }
+
+  private resetCircuitIfUnchanged(
+    state: CommunityLogoSourceCircuitState,
+    startFailureVersion: number,
+  ): void {
+    if (state.failureVersion !== startFailureVersion) return;
+    state.failures = 0;
+    state.openUntil = 0;
+  }
+
+  public async fetch(input: {
+    readonly sourceUrl: string;
+    readonly allowedHosts: readonly string[];
+    readonly maxBytes: number;
+    readonly timeoutMs: number;
+    readonly acceptNotModified?: boolean;
+    readonly sourceEtag?: string;
+    readonly sourceLastModified?: string;
+  }): Promise<SourceLogoResponse> {
+    const hostname = allowedLogoUrl(input.sourceUrl, input.allowedHosts).hostname.toLowerCase();
+    const now = this.options.now?.() ?? Date.now();
+    const state = this.circuitState(hostname);
+    if (state.openUntil > now || state.probeInFlight) {
+      this.options.onMetric?.({
+        operation: 'community_logo_source_fetch',
+        outcome: 'circuit_open',
+        attempt: 0,
+        durationMs: 0,
+        code: 'COMMUNITY_LOGO_SOURCE_CIRCUIT_OPEN',
+      });
+      throw new CommunityLogoSourceError('COMMUNITY_LOGO_SOURCE_CIRCUIT_OPEN', true);
+    }
+    const halfOpenProbe = state.openUntil > 0 && state.openUntil <= now;
+    if (halfOpenProbe) state.probeInFlight = true;
+    const startFailureVersion = state.failureVersion;
+
+    const maxAttempts = Math.max(
+      1,
+      Math.min(3, this.options.maxAttempts ?? DEFAULT_SOURCE_MAX_ATTEMPTS),
+    );
+    let lastError: unknown;
+    try {
+      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        const startedAt = this.options.now?.() ?? Date.now();
+        try {
+          const result = await fetchSourceLogoAttempt({
+            ...input,
+            fetchImplementation: this.fetchImplementation,
+          });
+          if (result.status === 'not-modified' && input.acceptNotModified === false) {
+            throw new CommunityLogoSourceError(
+              'COMMUNITY_LOGO_NOT_MODIFIED_WITHOUT_LOCAL_OBJECT',
+              true,
+              304,
+            );
+          }
+          this.resetCircuitIfUnchanged(state, startFailureVersion);
+          this.options.onMetric?.({
+            operation: 'community_logo_source_fetch',
+            outcome: 'success',
+            attempt,
+            durationMs: (this.options.now?.() ?? Date.now()) - startedAt,
+            status: result.status === 'not-modified' ? 304 : 200,
+          });
+          return result;
+        } catch (error) {
+          lastError = error;
+          const retryable = error instanceof CommunityLogoSourceError && error.retryable;
+          const willRetry = retryable && attempt < maxAttempts;
+          this.options.onMetric?.({
+            operation: 'community_logo_source_fetch',
+            outcome: willRetry ? 'retry' : 'failure',
+            attempt,
+            durationMs: (this.options.now?.() ?? Date.now()) - startedAt,
+            ...(error instanceof CommunityLogoSourceError && error.status !== undefined
+              ? { status: error.status }
+              : {}),
+            code: errorCode(error),
+          });
+          if (!willRetry) break;
+          const delayMs = Math.min(
+            error.retryAfterMs ??
+              (this.options.retryBaseDelayMs ?? DEFAULT_SOURCE_RETRY_BASE_DELAY_MS) *
+                2 ** (attempt - 1),
+            this.options.maxRetryAfterMs ?? DEFAULT_SOURCE_MAX_RETRY_AFTER_MS,
+          );
+          await (
+            this.options.sleep ??
+            ((delay: number) => new Promise<void>((resolve) => setTimeout(resolve, delay)))
+          )(delayMs);
+        }
+      }
+
+      if (lastError instanceof CommunityLogoSourceError && lastError.retryable) {
+        state.failures += 1;
+        state.failureVersion += 1;
+        const threshold =
+          this.options.circuitFailureThreshold ?? DEFAULT_SOURCE_CIRCUIT_FAILURE_THRESHOLD;
+        state.openUntil =
+          halfOpenProbe || state.failures >= threshold
+            ? (this.options.now?.() ?? Date.now()) +
+              (this.options.circuitResetMs ?? DEFAULT_SOURCE_CIRCUIT_RESET_MS)
+            : 0;
+      } else if (halfOpenProbe) {
+        this.resetCircuitIfUnchanged(state, startFailureVersion);
+      }
+      throw lastError;
+    } finally {
+      if (halfOpenProbe) state.probeInFlight = false;
+    }
+  }
 }
 
 function allowedLogoUrl(value: string, allowedHosts: readonly string[]): URL {
@@ -155,9 +270,15 @@ function allowedLogoUrl(value: string, allowedHosts: readonly string[]): URL {
   return url;
 }
 
+async function cancelResponseBody(response: Response): Promise<void> {
+  if (!response.body) return;
+  await response.body.cancel().catch(() => undefined);
+}
+
 async function readBoundedBody(response: Response, maxBytes: number): Promise<Buffer> {
   const announcedLength = Number(response.headers.get('content-length') ?? '0');
   if (Number.isFinite(announcedLength) && announcedLength > maxBytes) {
+    await cancelResponseBody(response);
     throw new Error('COMMUNITY_LOGO_TOO_LARGE');
   }
   if (!response.body) throw new Error('COMMUNITY_LOGO_BODY_MISSING');
@@ -172,6 +293,9 @@ async function readBoundedBody(response: Response, maxBytes: number): Promise<Bu
       if (total > maxBytes) throw new Error('COMMUNITY_LOGO_TOO_LARGE');
       chunks.push(Buffer.from(chunk.value));
     }
+  } catch (error) {
+    await reader.cancel().catch(() => undefined);
+    throw error;
   } finally {
     reader.releaseLock();
   }
@@ -179,61 +303,94 @@ async function readBoundedBody(response: Response, maxBytes: number): Promise<Bu
   return Buffer.concat(chunks, total);
 }
 
-async function fetchSourceLogo(input: {
+async function fetchSourceLogoAttempt(input: {
   readonly sourceUrl: string;
   readonly allowedHosts: readonly string[];
   readonly maxBytes: number;
   readonly timeoutMs: number;
   readonly fetchImplementation: typeof fetch;
-  readonly circuit?: CommunityLogoHostCircuit;
-  readonly deferStorePut?: boolean;
-}): Promise<{
-  readonly body: Buffer;
-  readonly etag?: string;
-  readonly lastModified?: string;
-}> {
+  readonly sourceEtag?: string;
+  readonly sourceLastModified?: string;
+}): Promise<SourceLogoResponse> {
   let url = allowedLogoUrl(input.sourceUrl, input.allowedHosts);
-  const hostname = url.hostname.toLowerCase();
-  const operation = async () => {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), input.timeoutMs);
-    try {
-      for (let redirects = 0; redirects <= 2; redirects += 1) {
-        const response = await input.fetchImplementation(url, {
-          method: 'GET',
-          redirect: 'manual',
-          headers: { Accept: 'image/avif,image/webp,image/png,image/jpeg' },
-          signal: controller.signal,
-        });
-        if (REDIRECT_STATUSES.has(response.status)) {
-          const location = response.headers.get('location');
-          if (!location || redirects === 2) throw new Error('COMMUNITY_LOGO_REDIRECT_INVALID');
-          url = allowedLogoUrl(new URL(location, url).toString(), input.allowedHosts);
-          continue;
-        }
-        if (!response.ok) throw new Error(`COMMUNITY_LOGO_SOURCE_HTTP_${response.status}`);
-        if (!IMAGE_CONTENT_TYPE.test(response.headers.get('content-type') ?? '')) {
-          throw new Error('COMMUNITY_LOGO_CONTENT_TYPE_INVALID');
-        }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), input.timeoutMs);
+  const headers = new Headers({ Accept: 'image/avif,image/webp,image/png,image/jpeg' });
+  if (input.sourceEtag) headers.set('If-None-Match', input.sourceEtag);
+  if (input.sourceLastModified) headers.set('If-Modified-Since', input.sourceLastModified);
+  try {
+    for (let redirects = 0; redirects <= 2; redirects += 1) {
+      const response = await input.fetchImplementation(url, {
+        method: 'GET',
+        redirect: 'manual',
+        headers,
+        signal: controller.signal,
+      });
+      if (REDIRECT_STATUSES.has(response.status)) {
+        await cancelResponseBody(response);
+        const location = response.headers.get('location');
+        if (!location || redirects === 2) throw new Error('COMMUNITY_LOGO_REDIRECT_INVALID');
+        url = allowedLogoUrl(new URL(location, url).toString(), input.allowedHosts);
+        continue;
+      }
+      if (response.status === 304) {
+        await cancelResponseBody(response);
         const etag = response.headers.get('etag');
         const lastModified = response.headers.get('last-modified');
         return {
-          body: await readBoundedBody(response, input.maxBytes),
+          status: 'not-modified',
           ...(etag ? { etag } : {}),
           ...(lastModified ? { lastModified } : {}),
         };
       }
-      throw new Error('COMMUNITY_LOGO_REDIRECT_INVALID');
-    } catch (error) {
-      if (error instanceof Error && error.name === 'AbortError') {
-        throw new Error('COMMUNITY_LOGO_SOURCE_TIMEOUT', { cause: error });
+      if (!response.ok) {
+        const retryDelayMs = retryAfterMs(response);
+        await cancelResponseBody(response);
+        throw new CommunityLogoSourceError(
+          `COMMUNITY_LOGO_SOURCE_HTTP_${response.status}`,
+          response.status === 429 || response.status >= 500,
+          response.status,
+          retryDelayMs,
+        );
       }
-      throw error;
-    } finally {
-      clearTimeout(timeout);
+      if (!IMAGE_CONTENT_TYPE.test(response.headers.get('content-type') ?? '')) {
+        await cancelResponseBody(response);
+        throw new Error('COMMUNITY_LOGO_CONTENT_TYPE_INVALID');
+      }
+      const etag = response.headers.get('etag');
+      const lastModified = response.headers.get('last-modified');
+      return {
+        status: 'modified',
+        body: await readBoundedBody(response, input.maxBytes),
+        ...(etag ? { etag } : {}),
+        ...(lastModified ? { lastModified } : {}),
+      };
     }
-  };
-  return input.circuit ? input.circuit.execute(hostname, operation) : operation();
+    throw new Error('COMMUNITY_LOGO_REDIRECT_INVALID');
+  } catch (error) {
+    if (error instanceof CommunityLogoSourceError) throw error;
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new CommunityLogoSourceError(
+        'COMMUNITY_LOGO_SOURCE_TIMEOUT',
+        true,
+        undefined,
+        undefined,
+        error,
+      );
+    }
+    if (error instanceof TypeError) {
+      throw new CommunityLogoSourceError(
+        'COMMUNITY_LOGO_SOURCE_UNAVAILABLE',
+        true,
+        undefined,
+        undefined,
+        error,
+      );
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function errorCode(error: unknown): string {
@@ -241,16 +398,6 @@ function errorCode(error: unknown): string {
     return error.message;
   }
   return 'COMMUNITY_LOGO_SYNC_FAILED';
-}
-
-function isHostCircuitFailure(code: string): boolean {
-  if (code === 'COMMUNITY_LOGO_SOURCE_TIMEOUT' || code === 'COMMUNITY_LOGO_SYNC_FAILED') {
-    return true;
-  }
-  const status = /^COMMUNITY_LOGO_SOURCE_HTTP_([0-9]{3})$/.exec(code)?.[1];
-  if (!status) return false;
-  const numericStatus = Number(status);
-  return numericStatus === 429 || numericStatus >= 500;
 }
 
 function deletionFields(
@@ -268,12 +415,16 @@ function deletionFields(
 function persistenceFromCurrent(
   current: CommunityLogoSyncRecord,
   delivery?: { readonly url: string; readonly expiresAt: string },
+  syncedAt = current.syncedAt,
+  validators?: { readonly etag?: string; readonly lastModified?: string },
 ): CommunityLogoPersistence {
+  const sourceEtag = validators?.etag ?? current.sourceEtag;
+  const sourceLastModified = validators?.lastModified ?? current.sourceLastModified;
   return {
     communityId: current.communityId,
     sourceUrl: current.sourceUrl,
-    ...(current.sourceEtag ? { sourceEtag: current.sourceEtag } : {}),
-    ...(current.sourceLastModified ? { sourceLastModified: current.sourceLastModified } : {}),
+    ...(sourceEtag ? { sourceEtag } : {}),
+    ...(sourceLastModified ? { sourceLastModified } : {}),
     contentSha256: current.contentSha256,
     objectKey: current.objectKey,
     ...(delivery?.url || current.deliveryUrl
@@ -282,8 +433,43 @@ function persistenceFromCurrent(
     ...(delivery?.expiresAt || current.deliveryExpiresAt
       ? { deliveryExpiresAt: delivery?.expiresAt ?? current.deliveryExpiresAt }
       : {}),
-    syncedAt: current.syncedAt,
+    syncedAt,
   };
+}
+
+function requiresSourceFetch(input: {
+  readonly item: CommunityDirectoryItem;
+  readonly current?: CommunityLogoSyncRecord;
+  readonly fetchedAt: string;
+  readonly revalidateAfterSeconds: number;
+}): boolean {
+  if (!input.item.legacyLogoSourceUrl) return false;
+  if (input.current?.sourceUrl !== input.item.legacyLogoSourceUrl || !input.current.objectKey) {
+    return true;
+  }
+  const ageMs = Date.parse(input.fetchedAt) - Date.parse(input.current.syncedAt);
+  return !Number.isFinite(ageMs) || ageMs < 0 || ageMs >= input.revalidateAfterSeconds * 1_000;
+}
+
+async function mapWithConcurrency<T, R>(input: {
+  readonly items: readonly T[];
+  readonly concurrency: number;
+  readonly operation: (item: T, index: number) => Promise<R>;
+}): Promise<readonly R[]> {
+  if (input.items.length === 0) return [];
+  const results = new Array<R>(input.items.length);
+  let cursor = 0;
+  const workerCount = Math.min(input.concurrency, input.items.length);
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (cursor < input.items.length) {
+        const index = cursor;
+        cursor += 1;
+        results[index] = await input.operation(input.items[index] as T, index);
+      }
+    }),
+  );
+  return results;
 }
 
 async function refreshDeliveryUrl(input: {
@@ -322,9 +508,10 @@ async function synchronizeOne(input: {
   readonly previousObjectRetentionSeconds: number;
   readonly readUrlTtlSeconds: number;
   readonly stableDeliveryEnabled: boolean;
+  readonly revalidateAfterSeconds: number;
+  readonly allowFetch: boolean;
   readonly timeoutMs: number;
-  readonly fetchImplementation: typeof fetch;
-  readonly circuit?: CommunityLogoHostCircuit;
+  readonly sourceResilience: CommunityLogoSourceResilience;
   readonly deferStorePut?: boolean;
 }): Promise<CommunityLogoSyncResult> {
   if (!input.item.legacyLogoSourceUrl) {
@@ -344,8 +531,11 @@ async function synchronizeOne(input: {
     };
   }
 
+  let sourceFetchAttempted = false;
+  let currentObjectPresent: boolean | undefined;
   try {
-    if (input.current?.sourceUrl === input.item.legacyLogoSourceUrl && input.current.objectKey) {
+    const sourceFetchRequired = requiresSourceFetch(input);
+    if (!sourceFetchRequired && input.current) {
       const delivery = input.stableDeliveryEnabled
         ? undefined
         : await refreshDeliveryUrl({
@@ -365,14 +555,70 @@ async function synchronizeOne(input: {
       };
     }
 
-    const source = await fetchSourceLogo({
+    if (!input.allowFetch) {
+      if (!input.current) {
+        return {
+          communityId: input.item.id,
+          logoUrl: null,
+          persistence: { communityId: input.item.id, syncedAt: input.fetchedAt },
+          outcome: 'fallback',
+        };
+      }
+      const persistence = persistenceFromCurrent(input.current);
+      return {
+        communityId: input.item.id,
+        logoUrl: input.stableDeliveryEnabled
+          ? communityLogoDeliveryUrl(input.tenantId, input.item.id)
+          : (persistence.deliveryUrl ?? null),
+        persistence,
+        outcome: 'unchanged',
+      };
+    }
+
+    const sameSourceCurrent =
+      input.current?.sourceUrl === input.item.legacyLogoSourceUrl ? input.current : undefined;
+    currentObjectPresent = sameSourceCurrent
+      ? await input.store.exists(sameSourceCurrent.objectKey)
+      : undefined;
+    const validators = currentObjectPresent ? sameSourceCurrent : undefined;
+    sourceFetchAttempted = true;
+    const source = await input.sourceResilience.fetch({
       sourceUrl: input.item.legacyLogoSourceUrl,
       allowedHosts: input.allowedHosts,
       maxBytes: input.maxBytes,
       timeoutMs: input.timeoutMs,
-      fetchImplementation: input.fetchImplementation,
-      ...(input.circuit ? { circuit: input.circuit } : {}),
+      acceptNotModified: currentObjectPresent === true,
+      ...(validators?.sourceEtag ? { sourceEtag: validators.sourceEtag } : {}),
+      ...(validators?.sourceLastModified
+        ? { sourceLastModified: validators.sourceLastModified }
+        : {}),
     });
+    if (source.status === 'not-modified') {
+      if (!input.current || currentObjectPresent !== true) {
+        throw new Error('COMMUNITY_LOGO_NOT_MODIFIED_WITHOUT_LOCAL_OBJECT');
+      }
+      const delivery = input.stableDeliveryEnabled
+        ? undefined
+        : await refreshDeliveryUrl({
+            store: input.store,
+            current: input.current,
+            fetchedAt: input.fetchedAt,
+            readUrlTtlSeconds: input.readUrlTtlSeconds,
+          });
+      const persistence = persistenceFromCurrent(input.current, delivery, input.fetchedAt, {
+        ...(source.etag ? { etag: source.etag } : {}),
+        ...(source.lastModified ? { lastModified: source.lastModified } : {}),
+      });
+      return {
+        communityId: input.item.id,
+        logoUrl: input.stableDeliveryEnabled
+          ? communityLogoDeliveryUrl(input.tenantId, input.item.id)
+          : (persistence.deliveryUrl ?? null),
+        persistence,
+        outcome: 'unchanged',
+        fetchAttempted: true,
+      };
+    }
     const webp = await sharp(source.body, { failOn: 'error', limitInputPixels: 20_000_000 })
       .rotate()
       .resize({
@@ -386,7 +632,9 @@ async function synchronizeOne(input: {
     const contentSha256 = createHash('sha256').update(webp).digest('hex');
     const objectKey = `community-logos/${input.tenantId}/${input.item.id}/${contentSha256}.webp`;
     const objectChanged =
-      input.current?.contentSha256 !== contentSha256 || input.current.objectKey !== objectKey;
+      currentObjectPresent === false ||
+      input.current?.contentSha256 !== contentSha256 ||
+      input.current.objectKey !== objectKey;
     const deleteAfter = new Date(
       Date.parse(input.fetchedAt) + input.previousObjectRetentionSeconds * 1_000,
     ).toISOString();
@@ -408,6 +656,7 @@ async function synchronizeOne(input: {
         ? communityLogoDeliveryUrl(input.tenantId, input.item.id)
         : (delivery?.url ?? null),
       outcome: objectChanged ? 'stored' : 'unchanged',
+      fetchAttempted: true,
       persistence: {
         communityId: input.item.id,
         sourceUrl: input.item.legacyLogoSourceUrl,
@@ -437,11 +686,12 @@ async function synchronizeOne(input: {
           syncedAt: input.fetchedAt,
         },
         outcome: 'fallback',
+        ...(sourceFetchAttempted ? { fetchAttempted: true } : {}),
         errorCode: errorCode(error),
       };
     }
     let delivery: { readonly url: string; readonly expiresAt: string } | undefined;
-    if (!input.stableDeliveryEnabled) {
+    if (!input.stableDeliveryEnabled && currentObjectPresent !== false) {
       try {
         delivery = {
           url: await input.store.createReadUrl(input.current.objectKey),
@@ -453,15 +703,24 @@ async function synchronizeOne(input: {
         delivery = undefined;
       }
     }
-    const persistence = persistenceFromCurrent(input.current, delivery);
+    const code = errorCode(error);
+    const persistence = persistenceFromCurrent(
+      input.current,
+      delivery,
+      currentObjectPresent === false ? input.current.syncedAt : input.fetchedAt,
+    );
     return {
       communityId: input.item.id,
-      logoUrl: input.stableDeliveryEnabled
-        ? communityLogoDeliveryUrl(input.tenantId, input.item.id)
-        : (persistence.deliveryUrl ?? communityLogoDeliveryUrl(input.tenantId, input.item.id)),
+      logoUrl:
+        currentObjectPresent === false
+          ? null
+          : input.stableDeliveryEnabled
+            ? communityLogoDeliveryUrl(input.tenantId, input.item.id)
+            : (persistence.deliveryUrl ?? communityLogoDeliveryUrl(input.tenantId, input.item.id)),
       persistence,
       outcome: 'fallback',
-      errorCode: errorCode(error),
+      ...(sourceFetchAttempted ? { fetchAttempted: true } : {}),
+      errorCode: code,
     };
   }
 }
@@ -481,36 +740,51 @@ export async function synchronizeLegacyCommunityLogos(input: {
   readonly stableDeliveryEnabled?: boolean;
   readonly timeoutMs: number;
   readonly fetchImplementation?: typeof fetch;
-  readonly circuit?: CommunityLogoHostCircuit;
+  readonly sourceResilience?: CommunityLogoSourceResilience;
   readonly deferStorePut?: boolean;
+  readonly revalidateAfterSeconds?: number;
+  readonly maxConcurrency?: number;
+  readonly maxFetches?: number;
 }): Promise<readonly CommunityLogoSyncResult[]> {
-  const maxConcurrency = 3;
   const readUrlTtlSeconds = input.readUrlTtlSeconds ?? 3_600;
   const stableDeliveryEnabled = input.stableDeliveryEnabled ?? true;
+  const revalidateAfterSeconds = input.revalidateAfterSeconds ?? DEFAULT_REVALIDATE_AFTER_SECONDS;
+  const maxConcurrency = Math.max(1, input.maxConcurrency ?? DEFAULT_MAX_CONCURRENCY);
+  const maxFetches = Math.max(0, input.maxFetches ?? DEFAULT_MAX_FETCHES);
+  const sourceResilience =
+    input.sourceResilience ??
+    new CommunityLogoSourceResilience({ fetchImplementation: input.fetchImplementation ?? fetch });
   const current = await loadCommunityLogoSyncRecords({
     pool: input.pool,
     tenantId: input.tenantId,
     communityIds: input.items.map((item) => item.id),
   });
-  const results = new Array<CommunityLogoSyncResult>(input.items.length);
-  let nextIndex = 0;
-  const workers = Array.from({ length: Math.min(maxConcurrency, input.items.length) }, async () => {
-    while (nextIndex < input.items.length) {
-      const index = nextIndex;
-      nextIndex += 1;
-      const item = input.items[index];
-      if (!item) continue;
-      const existing = current.get(item.id);
-      results[index] = await synchronizeOne({
+  let remainingFetches = maxFetches;
+  const work = input.items.map((item) => {
+    const existing = current.get(item.id);
+    const fetchRequired = requiresSourceFetch({
+      item,
+      ...(existing ? { current: existing } : {}),
+      fetchedAt: input.fetchedAt,
+      revalidateAfterSeconds,
+    });
+    const allowFetch = !fetchRequired || remainingFetches > 0;
+    if (fetchRequired && allowFetch) remainingFetches -= 1;
+    return { item, existing, allowFetch };
+  });
+  return mapWithConcurrency({
+    items: work,
+    concurrency: maxConcurrency,
+    operation: ({ item, existing, allowFetch }) =>
+      synchronizeOne({
         ...input,
         readUrlTtlSeconds,
         stableDeliveryEnabled,
+        revalidateAfterSeconds,
+        allowFetch,
         item,
         ...(existing ? { current: existing } : {}),
-        fetchImplementation: input.fetchImplementation ?? fetch,
-      });
-    }
+        sourceResilience,
+      }),
   });
-  await Promise.all(workers);
-  return results;
 }

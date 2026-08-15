@@ -6064,7 +6064,7 @@ components:
           maxLength: 120
         logoUrl:
           type: [string, 'null']
-          format: uri
+          pattern: '^(https?://.+|/public/api/v1/media/community-logos/[0-9a-f-]{36}/[0-9a-f-]{36})$'
         isVerified:
           type: boolean
         visibility:
@@ -6098,7 +6098,7 @@ components:
           maxLength: 120
         logoUrl:
           type: [string, 'null']
-          format: uri
+          pattern: '^(https?://.+|/public/api/v1/media/community-logos/[0-9a-f-]{36}/[0-9a-f-]{36})$'
         isVerified:
           type: boolean
         visibility:
@@ -6163,7 +6163,7 @@ components:
           maxLength: 120
         logoUrl:
           type: [string, 'null']
-          format: uri
+          pattern: '^(https?://.+|/public/api/v1/media/community-logos/[0-9a-f-]{36}/[0-9a-f-]{36})$'
         isVerified:
           type: boolean
         visibility:
