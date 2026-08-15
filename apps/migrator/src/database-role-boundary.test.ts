@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import {
   assertDatabaseRoleBoundary,
   hasExactTenantIsolationPolicy,
+  assertPreMigrationMediaRuntimeBoundary,
   assertPostMigrationRuntimeBoundary,
   type DatabaseRoleSnapshot,
   type PostMigrationRuntimeTableSnapshot,
@@ -49,6 +50,13 @@ const runtime: DatabaseRoleSnapshot = {
   unexpectedMessagingDefaultPrivileges: 0,
   dangerousMessagingDefaultPrivileges: 0,
   publicMessagingDefaultPrivileges: 0,
+  ownsUserProfilePhotoSync: false,
+  ownsCommunityLogoSync: false,
+  runtimeIntegrationDefaultDml: false,
+  runtimeIntegrationDefaultGrantOptions: 0,
+  unexpectedIntegrationDefaultPrivileges: 0,
+  dangerousIntegrationDefaultPrivileges: 0,
+  publicIntegrationDefaultPrivileges: 0,
   nonOwnerGlobalTableDefaultPrivileges: 0,
 };
 
@@ -91,6 +99,13 @@ const migrator: DatabaseRoleSnapshot = {
   unexpectedMessagingDefaultPrivileges: 0,
   dangerousMessagingDefaultPrivileges: 0,
   publicMessagingDefaultPrivileges: 0,
+  ownsUserProfilePhotoSync: true,
+  ownsCommunityLogoSync: true,
+  runtimeIntegrationDefaultDml: true,
+  runtimeIntegrationDefaultGrantOptions: 0,
+  unexpectedIntegrationDefaultPrivileges: 0,
+  dangerousIntegrationDefaultPrivileges: 0,
+  publicIntegrationDefaultPrivileges: 0,
   nonOwnerGlobalTableDefaultPrivileges: 0,
 };
 
@@ -98,6 +113,7 @@ const reminderSchedule: PostMigrationRuntimeTableSnapshot = {
   schemaName: 'notifications',
   relationName: 'booking_reminder_schedules',
   policyName: 'booking_reminder_schedules_tenant_isolation',
+  requiresTenantRls: true,
   exists: true,
   ownedByMigrator: true,
   forceRls: true,
@@ -124,6 +140,7 @@ const reminderRecipients: PostMigrationRuntimeTableSnapshot = {
   schemaName: 'notifications',
   relationName: 'booking_reminder_recipients',
   policyName: 'booking_reminder_recipients_tenant_isolation',
+  requiresTenantRls: true,
   exists: true,
   ownedByMigrator: true,
   forceRls: true,
@@ -191,9 +208,90 @@ const runtimeTables: readonly PostMigrationRuntimeTableSnapshot[] = [
   userBlockCommands,
 ];
 
+function mediaTenantTable(
+  relationName: PostMigrationRuntimeTableSnapshot['relationName'],
+  policyName: Exclude<PostMigrationRuntimeTableSnapshot['policyName'], null>,
+): PostMigrationRuntimeTableSnapshot {
+  return {
+    ...reminderSchedule,
+    schemaName: 'integration',
+    relationName,
+    policyName,
+    policies: [{ ...reminderSchedule.policies[0]!, name: policyName }],
+  };
+}
+
+const mediaRuntimeTables: readonly PostMigrationRuntimeTableSnapshot[] = [
+  ...runtimeTables,
+  mediaTenantTable('user_profile_photo_sync', 'user_profile_photo_sync_tenant_isolation'),
+  mediaTenantTable('community_logo_sync', 'community_logo_sync_tenant_isolation'),
+  mediaTenantTable(
+    'profile_photo_client_commands',
+    'profile_photo_client_commands_tenant_isolation',
+  ),
+  mediaTenantTable(
+    'profile_photo_observation_watermarks',
+    'profile_photo_observation_watermarks_tenant_isolation',
+  ),
+  mediaTenantTable(
+    'community_logo_observation_watermarks',
+    'community_logo_observation_watermarks_tenant_isolation',
+  ),
+  {
+    ...reminderSchedule,
+    schemaName: 'integration',
+    relationName: 'media_cutover_state',
+    policyName: null,
+    requiresTenantRls: false,
+    forceRls: false,
+    policies: [],
+  },
+];
+
 describe('database role boundary', () => {
   it('accepts distinct least-privilege runtime and bounded DDL roles', () => {
     expect(() => assertDatabaseRoleBoundary(runtime, migrator, false)).not.toThrow();
+  });
+
+  it('accepts the extra bounded media ownership and integration default ACL only in media scope', () => {
+    expect(() => assertDatabaseRoleBoundary(runtime, migrator, false, 'media')).not.toThrow();
+    expect(() =>
+      assertDatabaseRoleBoundary(
+        runtime,
+        { ...migrator, ownsUserProfilePhotoSync: false },
+        false,
+        'core',
+      ),
+    ).not.toThrow();
+  });
+
+  it.each([
+    [
+      'MIGRATOR_DATABASE_ROLE_MISSING_MEDIA_DDL_AUTHORITY',
+      { ...migrator, ownsCommunityLogoSync: false },
+    ],
+    [
+      'MIGRATOR_DATABASE_ROLE_MISSING_INTEGRATION_DEFAULT_DML',
+      { ...migrator, runtimeIntegrationDefaultDml: false },
+    ],
+    [
+      'MIGRATOR_DATABASE_ROLE_INTEGRATION_DEFAULT_GRANT_OPTION',
+      { ...migrator, runtimeIntegrationDefaultGrantOptions: 1 },
+    ],
+    [
+      'MIGRATOR_DATABASE_ROLE_UNEXPECTED_INTEGRATION_DEFAULT_GRANTEE',
+      { ...migrator, unexpectedIntegrationDefaultPrivileges: 1 },
+    ],
+    [
+      'MIGRATOR_DATABASE_ROLE_UNSAFE_INTEGRATION_DEFAULT_ACL',
+      { ...migrator, dangerousIntegrationDefaultPrivileges: 1 },
+    ],
+    [
+      'MIGRATOR_DATABASE_ROLE_PUBLIC_INTEGRATION_DEFAULT_ACL',
+      { ...migrator, publicIntegrationDefaultPrivileges: 1 },
+    ],
+  ] as const)('rejects %s in media scope', (code, mediaMigrator) => {
+    expect(() => assertDatabaseRoleBoundary(runtime, mediaMigrator, false, 'media')).toThrow(code);
   });
 
   it('rejects a broad notification default ACL that includes TRUNCATE or TRIGGER', () => {
@@ -249,6 +347,9 @@ describe('database role boundary', () => {
     );
     expect(source).toMatch(
       /privilege\.grantee = \(\s*select oid from pg_catalog\.pg_roles where rolname = \$1\s*\)\s*\), false\) as runtime_messaging_default_dml/,
+    );
+    expect(source).toMatch(
+      /privilege\.grantee = \(\s*select oid from pg_catalog\.pg_roles where rolname = \$1\s*\)\s*\), false\) as runtime_integration_default_dml/,
     );
     expect(source).not.toContain("pg_has_role($1, privilege.grantee, 'USAGE')");
   });
@@ -514,6 +615,44 @@ describe('database role boundary', () => {
 
   it('accepts the complete post-migration runtime table boundary', () => {
     expect(() => assertPostMigrationRuntimeBoundary(runtimeTables)).not.toThrow();
+  });
+
+  it('accepts exact media ownership, runtime DML and tenant policies in media scope', () => {
+    expect(() => assertPostMigrationRuntimeBoundary(mediaRuntimeTables, 'media')).not.toThrow();
+    expect(() => assertPreMigrationMediaRuntimeBoundary(mediaRuntimeTables)).not.toThrow();
+  });
+
+  it('rejects missing runtime DML on an altered media mapping before migration', () => {
+    expect(() =>
+      assertPreMigrationMediaRuntimeBoundary(
+        mediaRuntimeTables.map((table) =>
+          table.relationName === 'community_logo_sync' ? { ...table, runtimeDml: false } : table,
+        ),
+      ),
+    ).toThrow('POST_MIGRATION_RUNTIME_TABLE_DML_MISSING');
+  });
+
+  it('rejects a missing media runtime grant and a policy on the global cutover table', () => {
+    expect(() =>
+      assertPostMigrationRuntimeBoundary(
+        mediaRuntimeTables.map((table) =>
+          table.relationName === 'profile_photo_observation_watermarks'
+            ? { ...table, runtimeDml: false }
+            : table,
+        ),
+        'media',
+      ),
+    ).toThrow('POST_MIGRATION_RUNTIME_TABLE_DML_MISSING');
+    expect(() =>
+      assertPostMigrationRuntimeBoundary(
+        mediaRuntimeTables.map((table) =>
+          table.relationName === 'media_cutover_state'
+            ? { ...table, policies: [reminderSchedule.policies[0]!] }
+            : table,
+        ),
+        'media',
+      ),
+    ).toThrow('POST_MIGRATION_RUNTIME_TABLE_POLICY_INVALID');
   });
 
   it.each([

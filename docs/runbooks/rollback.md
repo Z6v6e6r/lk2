@@ -46,6 +46,16 @@ automatically. A successful workflow retains
 both the application snapshot and its separate PostgreSQL custom-format archive as release
 evidence. Rollback never runs a downmigration; expand-only schema changes remain applied.
 
+For `MEDIA_BINARY_ONLY`, the workflow records only an `ordinary` or `client-media` pre-cutover
+baseline before build and repeats the same read-only classification immediately before the
+snapshot. An active `community-logo` floor is rejected and must use the dedicated stable-to-stable
+rollout path below. The database archive must restore successfully into a new isolated local
+PostgreSQL 16 clone; the exact candidate migrator must pass, run a second time without applying
+anything, satisfy the complete ledger/RLS/constraint gate and confirm clone deletion before the
+shared database is migrated. A changed active release, effective runtime/routing fingerprint or
+rollback floor stops before deployment. Feature enablement and compatibility backfill are never
+part of this binary-only path.
+
 ## Stable community-logo cutover
 
 After `integration.media_cutover_state` records `community_logo_stable_delivery` as active, do not

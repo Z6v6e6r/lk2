@@ -100,7 +100,7 @@ describe('Nano presentation release contract', () => {
     expect(buildGate).toContain('needs: [validate-request, verify]');
     expect(buildGate).toContain("needs.validate-request.outputs.mode == 'deploy'");
     expect(buildGate).toContain("needs.verify.result == 'success'");
-    expect(deployGate).toContain('needs: [validate-request, build]');
+    expect(deployGate).toContain('needs: [validate-request, media-baseline, build]');
     expect(deployGate).toContain('always()');
     expect(deployGate).toContain("needs.build.result == 'success'");
     expect(deployGate).toContain("needs.validate-request.outputs.mode == 'deploy'");
@@ -421,9 +421,8 @@ describe('Nano presentation release contract', () => {
       expect(normalizedWorkflow).toContain(
         '--entrypoint node migrator apps/migrator/dist/verify-role-boundary.js',
       );
-      expect(normalizedWorkflow).toContain(
-        '-e RUNTIME_DATABASE_URL -e MIGRATOR_DATABASE_URL -e DATABASE_ROLE_BOUNDARY_PHASE',
-      );
+      expect(normalizedWorkflow).toContain('-e RUNTIME_DATABASE_URL -e MIGRATOR_DATABASE_URL');
+      expect(normalizedWorkflow).toContain('-e DATABASE_ROLE_BOUNDARY_PHASE');
       expect(normalizedWorkflow).toContain('DATABASE_ROLE_BOUNDARY_PHASE=pre');
       expect(normalizedWorkflow).toContain('DATABASE_ROLE_BOUNDARY_PHASE=post');
       expect(
@@ -433,6 +432,12 @@ describe('Nano presentation release contract', () => {
       ).toHaveLength(2);
       expect(normalizedWorkflow).toContain('MIGRATOR_DATABASE_URL="$migrator_database_url"');
     }
+    expect(stagingWorkflow).toContain(
+      'DATABASE_ROLE_BOUNDARY_SCOPE="$database_role_boundary_scope"',
+    );
+    expect(stagingWorkflow).toContain(
+      '-e DATABASE_ROLE_BOUNDARY_PHASE -e DATABASE_ROLE_BOUNDARY_SCOPE',
+    );
   });
 
   it('moves the Viva callback to HTTPS before the API consumes it', () => {

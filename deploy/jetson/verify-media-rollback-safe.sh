@@ -11,6 +11,7 @@ runtime_override_env="$app_root/staging.override.env"
 recheck_seconds="${PHUB_MEDIA_ROLLBACK_RECHECK_SECONDS:-5}"
 rollback_mode="${PHUB_MEDIA_ROLLBACK_MODE:-feature}"
 compatibility_floor="${PHUB_ROLLBACK_COMPATIBILITY_FLOOR:-}"
+feature_worker_restart_required=false
 
 file_value() {
   file="$1"
@@ -61,6 +62,33 @@ esac
 
 compose() {
   docker compose --env-file infrastructure.env --env-file release.env "$@"
+}
+
+wait_for_restarted_feature_worker() {
+  restart_attempt=0
+  while test "$restart_attempt" -lt 15; do
+    if container_id="$(compose ps --status running -q worker 2>/dev/null)" &&
+      test -n "$container_id" &&
+      health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}' \
+        "$container_id" 2>/dev/null)" && test "$health" = healthy; then
+      return 0
+    fi
+    restart_attempt=$((restart_attempt + 1))
+    sleep 2
+  done
+  return 1
+}
+
+restart_feature_worker_on_exit() {
+  exit_status="$?"
+  trap - 0
+  trap '' 1 2 15
+  if test "$feature_worker_restart_required" = true; then
+    if ! compose start worker >/dev/null 2>&1 || ! wait_for_restarted_feature_worker; then
+      printf '%s\n' 'Media rollback recovery warning: worker restart/readiness failed' >&2
+    fi
+  fi
+  exit "$exit_status"
 }
 
 running_flag_value() {
@@ -176,8 +204,12 @@ infrastructure() {
 }
 
 sql() {
-  infrastructure exec -T postgres sh -ec \
-    'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -Atc "$1"' \
+  pgoptions='-c statement_timeout=30000 -c lock_timeout=2000 -c idle_in_transaction_session_timeout=30000'
+  if test "$rollback_mode" != feature; then
+    pgoptions="-c default_transaction_read_only=on $pgoptions"
+  fi
+  infrastructure exec -T -e "PGOPTIONS=$pgoptions" postgres sh -ec \
+    'psql -X -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -Atc "$1"' \
     sh "$1"
 }
 
@@ -396,11 +428,20 @@ if test "$(sql "select count(*) from public.schema_migrations where filename = '
       sleep "$recheck_seconds"
       verify_community_drain
       require_home_queue_drained
+      feature_worker_restart_required=true
+      trap restart_feature_worker_on_exit 0
+      trap 'exit 129' 1
+      trap 'exit 130' 2
+      trap 'exit 143' 15
       compose stop worker
       verify_community_drain
       require_home_queue_drained
-      sql "update integration.media_cutover_state set active = false, updated_at = now()
-        where feature = 'community_logo_stable_delivery'" >/dev/null
+      if ! sql "update integration.media_cutover_state set active = false, updated_at = now()
+        where feature = 'community_logo_stable_delivery'" >/dev/null; then
+        fail 'bounded community-logo cutover rollback failed; compatible worker restart will be attempted'
+      fi
+      feature_worker_restart_required=false
+      trap - 0 1 2 15
       ;;
   esac
 fi

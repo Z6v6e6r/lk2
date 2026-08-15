@@ -8,12 +8,13 @@ on:
         required: false
         type: string
       deployment_profile:
-        description: Select full Home, Communities read-only, isolated client-assisted Viva reads, or messaging test
+        description: Select full Home, media binary-only, Communities read-only, isolated client-assisted Viva reads, or messaging test
         required: true
         type: choice
         default: FULL_LIVE_HOME
         options:
           - FULL_LIVE_HOME
+          - MEDIA_BINARY_ONLY
           - COMMUNITIES_LEGACY_READ_ONLY
           - CLIENT_ASSISTED_VIVA
           - MESSAGING_TEST
@@ -37,8 +38,17 @@ on:
         description: Type APPLY_ROUTING_PLAN to authorize the audited just-in-time routing refresh
         required: false
         type: string
+      expected_active_release:
+        description: Exact currently serving 40-character release required by media baseline/binary-only operations
+        required: false
+        type: string
       diagnose_home:
         description: Read-only live Home source diagnostics
+        required: true
+        type: boolean
+        default: false
+      diagnose_media:
+        description: Strict read-only media, migration, storage and capacity baseline before any build or deploy
         required: true
         type: boolean
         default: false
@@ -97,7 +107,9 @@ jobs:
           ROUTING_TENANT_KEY: ${{ inputs.routing_tenant_key }}
           ROUTING_ACTOR_ID: ${{ inputs.routing_actor_id }}
           ROUTING_APPLY_CONFIRMATION: ${{ inputs.routing_apply_confirmation }}
+          EXPECTED_ACTIVE_RELEASE: ${{ inputs.expected_active_release }}
           DIAGNOSE_HOME: ${{ inputs.diagnose_home }}
+          DIAGNOSE_MEDIA: ${{ inputs.diagnose_media }}
           DIAGNOSTIC_PHONE_LAST4: ${{ inputs.diagnostic_phone_last4 }}
           ACCESS_TARGET_USER_ID: ${{ inputs.access_target_user_id }}
           ACCESS_ROLES: ${{ inputs.access_roles }}
@@ -109,7 +121,7 @@ jobs:
         run: |
           set -eu
           diagnostics_requested=false
-          if [ "$DIAGNOSE_HOME" = 'true' ] || [ "$RECOVER_UDISKS" = 'true' ] || [ -n "$DIAGNOSTIC_PHONE_LAST4" ]; then
+          if [ "$DIAGNOSE_HOME" = 'true' ] || [ "$DIAGNOSE_MEDIA" = 'true' ] || [ "$RECOVER_UDISKS" = 'true' ] || [ -n "$DIAGNOSTIC_PHONE_LAST4" ]; then
             diagnostics_requested=true
           fi
           access_requested=false
@@ -151,9 +163,22 @@ jobs:
               echo '::error::Diagnostics cannot be combined with a deployment confirmation.'
               exit 1
             fi
+            if [ "$DIAGNOSE_MEDIA" = 'true' ] && [ "$RECOVER_UDISKS" = 'true' ]; then
+              echo '::error::Strict media diagnostics are read-only and cannot restart udisks.'
+              exit 1
+            fi
             printf '%s\n' 'mode=diagnostics' >> "$GITHUB_OUTPUT"
             if [ -n "$DIAGNOSTIC_PHONE_LAST4" ] && ! printf '%s' "$DIAGNOSTIC_PHONE_LAST4" | grep -Eq '^[0-9]{4}(,[0-9]{4}){0,9}$'; then
               echo '::error::Player diagnostics require one to ten comma-separated four-digit phone suffixes.'
+              exit 1
+            fi
+            if [ "$DIAGNOSE_MEDIA" = 'true' ]; then
+              if ! printf '%s' "$EXPECTED_ACTIVE_RELEASE" | grep -Eq '^[0-9a-f]{40}$'; then
+                echo '::error::Media diagnostics require the exact current 40-character staging release.'
+                exit 1
+              fi
+            elif [ -n "$EXPECTED_ACTIVE_RELEASE" ]; then
+              echo '::error::Expected active release is valid only for media diagnostics or MEDIA_BINARY_ONLY.'
               exit 1
             fi
             exit 0
@@ -191,6 +216,16 @@ jobs:
                 exit 1
               fi
               ;;
+            MEDIA_BINARY_ONLY)
+              if [ -n "$ROUTING_TENANT_KEY$ROUTING_ACTOR_ID$ROUTING_APPLY_CONFIRMATION$MESSAGING_PLAYER_A_ID$MESSAGING_PLAYER_B_ID" ]; then
+                echo '::error::Media binary-only deployment cannot refresh routing or include messaging-test players.'
+                exit 1
+              fi
+              if ! printf '%s' "$EXPECTED_ACTIVE_RELEASE" | grep -Eq '^[0-9a-f]{40}$'; then
+                echo '::error::Media binary-only deployment requires the exact current 40-character staging release.'
+                exit 1
+              fi
+              ;;
             MESSAGING_TEST)
               if [ -n "$ROUTING_TENANT_KEY$ROUTING_ACTOR_ID$ROUTING_APPLY_CONFIRMATION" ]; then
                 echo '::error::Messaging-test deployment cannot refresh or activate Live Home routing.'
@@ -212,6 +247,10 @@ jobs:
               exit 1
               ;;
           esac
+          if [ "$DEPLOYMENT_PROFILE" != 'MEDIA_BINARY_ONLY' ] && [ -n "$EXPECTED_ACTIVE_RELEASE" ]; then
+            echo '::error::Expected active release is valid only for media diagnostics or MEDIA_BINARY_ONLY.'
+            exit 1
+          fi
           printf '%s\n' 'mode=deploy' >> "$GITHUB_OUTPUT"
 
   set-user-access:
@@ -431,9 +470,146 @@ jobs:
           done
           exit 0
 
-  verify:
+  media-baseline:
     needs: validate-request
-    if: ${{ needs.validate-request.outputs.mode == 'deploy' }}
+    if: >-
+      ${{
+        (needs.validate-request.outputs.mode == 'diagnostics' && inputs.diagnose_media) ||
+        (needs.validate-request.outputs.mode == 'deploy' && inputs.deployment_profile == 'MEDIA_BINARY_ONLY')
+      }}
+    runs-on: ubuntu-latest
+    environment: staging
+    permissions:
+      contents: read
+    outputs:
+      compatibility_floor: ${{ steps.attest.outputs.compatibility_floor }}
+      routing_fingerprint: ${{ steps.attest.outputs.routing_fingerprint }}
+      runtime_config_fingerprint: ${{ steps.attest.outputs.runtime_config_fingerprint }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Join the staging tailnet
+        uses: tailscale/github-action@v4
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+          ping: ${{ secrets.STAGING_HOST }}
+      - name: Configure audited SSH
+        env:
+          DEPLOY_KEY: ${{ secrets.STAGING_DEPLOY_KEY }}
+          KNOWN_HOSTS: ${{ secrets.STAGING_KNOWN_HOSTS }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+      - name: Verify current runtime secret isolation read-only
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+        run: |
+          ssh -o ServerAliveInterval=10 -o ServerAliveCountMax=2 "phub-deploy@$HOST" \
+            'sh -s -- /etc/phub/staging.env /etc/phub/realtime.env phub-deploy false' \
+            < deploy/jetson/verify-runtime-env-isolation.sh
+      - id: attest
+        name: Attest media baseline before build or staging writes
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+          EXPECTED_ACTIVE_RELEASE: ${{ inputs.expected_active_release }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 media-baseline
+          migration_manifest=media-baseline/candidate-migrations.manifest
+          find packages/database/migrations -maxdepth 1 -type f -name '*.sql' -print \
+            | LC_ALL=C sort \
+            | while IFS= read -r migration; do
+                checksum_line="$(sha256sum "$migration")"
+                printf '%s|%s\n' "${checksum_line%% *}" "$(basename "$migration")"
+              done > "$migration_manifest"
+          migration_manifest_base64="$(base64 -w 0 "$migration_manifest")"
+          candidate_compose_base64="$(base64 -w 0 deploy/compose.staging.yaml)"
+          candidate_tree="$(git rev-parse 'HEAD^{tree}')"
+          attestation=media-baseline/attestation.txt
+          ssh -o ServerAliveInterval=10 -o ServerAliveCountMax=2 "phub-deploy@$HOST" \
+            sh -s -- "$EXPECTED_ACTIVE_RELEASE" "$GITHUB_SHA" "$candidate_tree" \
+            "$migration_manifest_base64" "$candidate_compose_base64" \
+            < deploy/jetson/verify-media-staging-baseline.sh \
+            | tee "$attestation"
+
+          manifest="$(curl --fail --silent --show-error --max-time 15 \
+            "https://lk.nano.padlhub.su/manifest.json")"
+          printf '%s' "$manifest" | EXPECTED_ACTIVE_RELEASE="$EXPECTED_ACTIVE_RELEASE" node -e '
+            let input = "";
+            process.stdin.setEncoding("utf8");
+            process.stdin.on("data", (chunk) => { input += chunk; });
+            process.stdin.on("end", () => {
+              const manifest = JSON.parse(input);
+              if (manifest.release !== process.env.EXPECTED_ACTIVE_RELEASE) process.exit(1);
+            });
+          '
+          printf 'public_manifest release=%s status=matched\n' "$EXPECTED_ACTIVE_RELEASE" | tee -a "$attestation"
+
+          run_guard() {
+            mode="$1"
+            floor="$2"
+            if [ -n "$floor" ]; then
+              ssh -o ServerAliveInterval=10 -o ServerAliveCountMax=2 "phub-deploy@$HOST" \
+                "PHUB_ROLLBACK_COMPATIBILITY_FLOOR=$floor PHUB_MEDIA_ROLLBACK_MODE=$mode sh -s" \
+                < deploy/jetson/verify-media-rollback-safe.sh
+            else
+              ssh -o ServerAliveInterval=10 -o ServerAliveCountMax=2 "phub-deploy@$HOST" \
+                "PHUB_MEDIA_ROLLBACK_MODE=$mode sh -s" \
+                < deploy/jetson/verify-media-rollback-safe.sh
+            fi
+          }
+
+          set +e
+          run_guard pre-cutover '' >> "$attestation" 2>&1
+          guard_status=$?
+          set -e
+          case "$guard_status" in
+            0)
+              compatibility_floor=ordinary
+              ;;
+            42)
+              compatibility_floor=client-media
+              run_guard compatible-client client-media >> "$attestation" 2>&1
+              ;;
+            43)
+              cat "$attestation"
+              echo '::error::MEDIA_BINARY_ONLY is pre-cutover only; stable community-logo state requires its dedicated rollout path.'
+              exit 1
+              ;;
+            *)
+              cat "$attestation"
+              echo "::error::Media baseline guard failed closed (exit=$guard_status)."
+              exit "$guard_status"
+              ;;
+          esac
+          printf 'compatibility_floor=%s\n' "$compatibility_floor" | tee -a "$attestation"
+
+          routing_fingerprint="$(sed -n 's/^routing_fingerprint=//p' "$attestation" | tail -n 1)"
+          runtime_config_fingerprint="$(sed -n 's/^runtime_config_fingerprint=//p' "$attestation" | tail -n 1)"
+          printf '%s' "$routing_fingerprint" | grep -Eq '^[0-9a-f]{32}$'
+          printf '%s' "$runtime_config_fingerprint" | grep -Eq '^[0-9a-f]{64}$'
+          {
+            printf 'compatibility_floor=%s\n' "$compatibility_floor"
+            printf 'routing_fingerprint=%s\n' "$routing_fingerprint"
+            printf 'runtime_config_fingerprint=%s\n' "$runtime_config_fingerprint"
+          } >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: media-baseline-${{ github.run_id }}-${{ github.run_attempt }}
+          path: media-baseline
+          if-no-files-found: ignore
+          retention-days: 30
+
+  verify:
+    needs: [validate-request, media-baseline]
+    if: >-
+      ${{
+        always() &&
+        needs.validate-request.outputs.mode == 'deploy' &&
+        (inputs.deployment_profile != 'MEDIA_BINARY_ONLY' || needs.media-baseline.result == 'success')
+      }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -482,8 +658,14 @@ jobs:
           retention-days: 30
 
   deploy:
-    needs: [validate-request, build]
-    if: ${{ always() && needs.validate-request.outputs.mode == 'deploy' && needs.build.result == 'success' }}
+    needs: [validate-request, media-baseline, build]
+    if: >-
+      ${{
+        always() &&
+        needs.validate-request.outputs.mode == 'deploy' &&
+        needs.build.result == 'success' &&
+        (inputs.deployment_profile != 'MEDIA_BINARY_ONLY' || needs.media-baseline.result == 'success')
+      }}
     runs-on: ubuntu-latest
     environment: staging
     env:
@@ -517,19 +699,71 @@ jobs:
         env:
           HOST: ${{ secrets.STAGING_HOST }}
         run: |
-          scp deploy/jetson/verify-runtime-env-isolation.sh \
-            "phub-deploy@$HOST:/tmp/verify-runtime-env-isolation-${{ github.run_id }}.sh"
-          ssh "phub-deploy@$HOST" '
-            set -eu
-            trap "rm -f /tmp/verify-runtime-env-isolation-${{ github.run_id }}.sh" EXIT HUP INT TERM
-            sh /tmp/verify-runtime-env-isolation-${{ github.run_id }}.sh \
-              /etc/phub/staging.env /etc/phub/realtime.env phub-deploy false
-          '
+          ssh -o ServerAliveInterval=10 -o ServerAliveCountMax=2 "phub-deploy@$HOST" \
+            'sh -s -- /etc/phub/staging.env /etc/phub/realtime.env phub-deploy false' \
+            < deploy/jetson/verify-runtime-env-isolation.sh
+      - name: Re-attest the media baseline before the first staging write
+        if: ${{ inputs.deployment_profile == 'MEDIA_BINARY_ONLY' }}
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+          EXPECTED_ACTIVE_RELEASE: ${{ inputs.expected_active_release }}
+          EXPECTED_COMPATIBILITY_FLOOR: ${{ needs.media-baseline.outputs.compatibility_floor }}
+          EXPECTED_ROUTING_FINGERPRINT: ${{ needs.media-baseline.outputs.routing_fingerprint }}
+          EXPECTED_RUNTIME_CONFIG_FINGERPRINT: ${{ needs.media-baseline.outputs.runtime_config_fingerprint }}
+        run: |
+          set -euo pipefail
+          temporary="$(mktemp -d)"
+          trap 'rm -rf "$temporary"' EXIT HUP INT TERM
+          migration_manifest="$temporary/candidate-migrations.manifest"
+          find packages/database/migrations -maxdepth 1 -type f -name '*.sql' -print \
+            | LC_ALL=C sort \
+            | while IFS= read -r migration; do
+                checksum_line="$(sha256sum "$migration")"
+                printf '%s|%s\n' "${checksum_line%% *}" "$(basename "$migration")"
+              done > "$migration_manifest"
+          migration_manifest_base64="$(base64 -w 0 "$migration_manifest")"
+          candidate_compose_base64="$(base64 -w 0 deploy/compose.staging.yaml)"
+          candidate_tree="$(git rev-parse 'HEAD^{tree}')"
+          attestation="$temporary/attestation.txt"
+          ssh -o ServerAliveInterval=10 -o ServerAliveCountMax=2 "phub-deploy@$HOST" \
+            sh -s -- "$EXPECTED_ACTIVE_RELEASE" "$GITHUB_SHA" "$candidate_tree" \
+            "$migration_manifest_base64" "$candidate_compose_base64" \
+            < deploy/jetson/verify-media-staging-baseline.sh \
+            | tee "$attestation"
+
+          observed_routing="$(sed -n 's/^routing_fingerprint=//p' "$attestation" | tail -n 1)"
+          observed_runtime="$(sed -n 's/^runtime_config_fingerprint=//p' "$attestation" | tail -n 1)"
+          test "$observed_routing" = "$EXPECTED_ROUTING_FINGERPRINT"
+          test "$observed_runtime" = "$EXPECTED_RUNTIME_CONFIG_FINGERPRINT"
+
+          set +e
+          ssh -o ServerAliveInterval=10 -o ServerAliveCountMax=2 "phub-deploy@$HOST" \
+            'PHUB_MEDIA_ROLLBACK_MODE=pre-cutover sh -s' \
+            < deploy/jetson/verify-media-rollback-safe.sh
+          guard_status=$?
+          set -e
+          case "$guard_status:$EXPECTED_COMPATIBILITY_FLOOR" in
+            0:ordinary) ;;
+            42:client-media)
+              ssh -o ServerAliveInterval=10 -o ServerAliveCountMax=2 "phub-deploy@$HOST" \
+                'PHUB_ROLLBACK_COMPATIBILITY_FLOOR=client-media PHUB_MEDIA_ROLLBACK_MODE=compatible-client sh -s' \
+                < deploy/jetson/verify-media-rollback-safe.sh
+              ;;
+            *)
+              echo "::error::Media compatibility floor changed before the first staging write."
+              exit 1
+              ;;
+          esac
       - id: application-backup
         name: Preserve the active digest-pinned application release
         env:
           HOST: ${{ secrets.STAGING_HOST }}
+          EXPECTED_ACTIVE_RELEASE: ${{ inputs.expected_active_release }}
+          DEPLOYMENT_PROFILE: ${{ inputs.deployment_profile }}
         run: |
+          if [ "$DEPLOYMENT_PROFILE" = MEDIA_BINARY_ONLY ]; then
+            install -d -m 700 media-rollout
+          fi
           scp deploy/jetson/backup-application.sh \
             "phub-deploy@$HOST:/opt/phub/backup-application.sh.next"
           scp deploy/jetson/prepare-compatible-worker-rollback.sh \
@@ -550,6 +784,14 @@ jobs:
             "PHUB_BACKUP_ROOT=/opt/phub/backups/releases sh /opt/phub/backup-application.sh '$STAGING_RELEASE_BACKUP_DIR' BACKUP_STAGING_RELEASE"
           ssh "phub-deploy@$HOST" \
             "PHUB_ROLLBACK_BACKUP_ROOT=/opt/phub/backups/releases sh /opt/phub/rollback-application.sh '$STAGING_RELEASE_BACKUP_DIR' --validate-only"
+          if [ "$DEPLOYMENT_PROFILE" = MEDIA_BINARY_ONLY ]; then
+            snapshot_release="$(ssh "phub-deploy@$HOST" \
+              "sed -n '1p' '$STAGING_RELEASE_BACKUP_DIR/backup.complete'")"
+            test "$snapshot_release" = "$EXPECTED_ACTIVE_RELEASE"
+            printf 'media_application_snapshot release=%s expected_release=%s status=validated\n' \
+              "$snapshot_release" "$EXPECTED_ACTIVE_RELEASE" \
+              > media-rollout/application-snapshot.txt
+          fi
           printf '%s\n' 'ready=true' >> "$GITHUB_OUTPUT"
       - name: Install release and ingress definitions
         env:
@@ -574,6 +816,16 @@ jobs:
             "phub-deploy@$HOST:/opt/phub/verify-home-base.sh"
           scp deploy/jetson/verify-live-staging-data.sh \
             "phub-deploy@$HOST:/opt/phub/verify-live-staging-data.sh"
+          scp deploy/jetson/verify-media-staging-baseline.sh \
+            "phub-deploy@$HOST:/opt/phub/verify-media-staging-baseline.sh.next"
+          scp deploy/jetson/verify-media-migration-ledger.sh \
+            "phub-deploy@$HOST:/opt/phub/verify-media-migration-ledger.sh.next"
+          scp deploy/jetson/rehearse-media-migration.sh \
+            "phub-deploy@$HOST:/opt/phub/rehearse-media-migration.sh.next"
+          scp deploy/jetson/verify-media-binary-api.sh \
+            "phub-deploy@$HOST:/opt/phub/verify-media-binary-api.sh.next"
+          scp deploy/jetson/verify-media-disk-budget.sh \
+            "phub-deploy@$HOST:/opt/phub/verify-media-disk-budget.sh.next"
           scp deploy/jetson/verify-client-assisted-viva.sh \
             "phub-deploy@$HOST:/opt/phub/verify-client-assisted-viva.sh"
           scp deploy/jetson/verify-cup-integrations.sh \
@@ -584,8 +836,17 @@ jobs:
             "phub-deploy@$HOST:/opt/phub/verify-postgres-backup-restore.sh.next"
           scp deploy/jetson/tls-ingress/Caddyfile \
             "phub-deploy@$HOST:/opt/phub/tls-ingress/Caddyfile.next"
+          find packages/database/migrations -maxdepth 1 -type f -name '*.sql' -print \
+            | LC_ALL=C sort \
+            | while IFS= read -r migration; do
+                checksum_line="$(sha256sum "$migration")"
+                printf '%s|%s\n' "${checksum_line%% *}" "$(basename "$migration")"
+              done > candidate-migrations.manifest
+          scp candidate-migrations.manifest \
+            "phub-deploy@$HOST:/opt/phub/candidate-migrations.manifest.next"
           ssh "phub-deploy@$HOST" '
             set -eu
+            deployment_profile="${{ inputs.deployment_profile }}"
             mv /opt/phub/run-client-routing-plan.sh.next /opt/phub/run-client-routing-plan.sh
             chmod 0755 /opt/phub/run-client-routing-plan.sh
             mv /opt/phub/set-client-routing-plan.ts.next /opt/phub/set-client-routing-plan.ts
@@ -593,22 +854,43 @@ jobs:
             install -m 755 /opt/phub/verify-postgres-backup-restore.sh.next \
               /opt/phub/verify-postgres-backup-restore.sh
             rm -f /opt/phub/verify-postgres-backup-restore.sh.next
-            auth_env=/opt/phub/staging.auth.env
-            auth_env_tmp="${auth_env}.$$"
-            umask 077
-            trap "rm -f \"$auth_env_tmp\"" EXIT HUP INT TERM
-            {
-              printf "%s\n" "CORS_ORIGINS=https://lk.nano.padlhub.su"
-              printf "%s\n" "VIVA_OAUTH_EXISTING_SUBJECT_BOOTSTRAP_ENABLED=true"
-              printf "%s\n" "VIVA_DIRECT_READ_ENABLED=false"
-              printf "%s\n" "VIVA_END_USER_API_URL=https://api.vivacrm.ru/end-user/api"
-              printf "%s\n" "VIVA_OAUTH_REDIRECT_URI=https://lk.nano.padlhub.su/user/api/v1/local-padel/auth/viva/callback"
-              printf "%s\n" "VIVA_OAUTH_SUCCESS_REDIRECT_URL=https://lk.nano.padlhub.su/"
-              printf "%s\n" "HOME_BASE_SYNC_ENABLED=true"
-            } > "$auth_env_tmp"
-            chmod 600 "$auth_env_tmp"
-            mv "$auth_env_tmp" "$auth_env"
-            trap - EXIT HUP INT TERM
+            install -m 755 /opt/phub/verify-media-staging-baseline.sh.next \
+              /opt/phub/verify-media-staging-baseline.sh
+            install -m 755 /opt/phub/verify-media-migration-ledger.sh.next \
+              /opt/phub/verify-media-migration-ledger.sh
+            install -m 755 /opt/phub/rehearse-media-migration.sh.next \
+              /opt/phub/rehearse-media-migration.sh
+            install -m 755 /opt/phub/verify-media-binary-api.sh.next \
+              /opt/phub/verify-media-binary-api.sh
+            install -m 755 /opt/phub/verify-media-disk-budget.sh.next \
+              /opt/phub/verify-media-disk-budget.sh
+            install -m 644 /opt/phub/candidate-migrations.manifest.next \
+              /opt/phub/candidate-migrations.manifest
+            rm -f \
+              /opt/phub/verify-media-staging-baseline.sh.next \
+              /opt/phub/verify-media-migration-ledger.sh.next \
+              /opt/phub/rehearse-media-migration.sh.next \
+              /opt/phub/verify-media-binary-api.sh.next \
+              /opt/phub/verify-media-disk-budget.sh.next \
+              /opt/phub/candidate-migrations.manifest.next
+            if [ "$deployment_profile" != MEDIA_BINARY_ONLY ]; then
+              auth_env=/opt/phub/staging.auth.env
+              auth_env_tmp="${auth_env}.$$"
+              umask 077
+              trap "rm -f \"$auth_env_tmp\"" EXIT HUP INT TERM
+              {
+                printf "%s\n" "CORS_ORIGINS=https://lk.nano.padlhub.su"
+                printf "%s\n" "VIVA_OAUTH_EXISTING_SUBJECT_BOOTSTRAP_ENABLED=true"
+                printf "%s\n" "VIVA_DIRECT_READ_ENABLED=false"
+                printf "%s\n" "VIVA_END_USER_API_URL=https://api.vivacrm.ru/end-user/api"
+                printf "%s\n" "VIVA_OAUTH_REDIRECT_URI=https://lk.nano.padlhub.su/user/api/v1/local-padel/auth/viva/callback"
+                printf "%s\n" "VIVA_OAUTH_SUCCESS_REDIRECT_URL=https://lk.nano.padlhub.su/"
+                printf "%s\n" "HOME_BASE_SYNC_ENABLED=true"
+              } > "$auth_env_tmp"
+              chmod 600 "$auth_env_tmp"
+              mv "$auth_env_tmp" "$auth_env"
+              trap - EXIT HUP INT TERM
+            fi
           '
           scp deploy/jetson/verify-runtime-env-isolation.sh \
             "phub-deploy@$HOST:/opt/phub/verify-runtime-env-isolation.sh"
@@ -656,13 +938,21 @@ jobs:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DEPLOYMENT_PROFILE: ${{ inputs.deployment_profile }}
         run: |
+          set -euo pipefail
+          if [ "$DEPLOYMENT_PROFILE" = MEDIA_BINARY_ONLY ]; then
+            install -d -m 700 media-rollout
+          fi
+          rollout_log="$(mktemp)"
+          trap 'rm -f "$rollout_log"' EXIT HUP INT TERM
+          set +e
           printf '%s' "$GHCR_TOKEN" | ssh "phub-deploy@$HOST" '
             set -eu
             deployment_profile="${{ inputs.deployment_profile }}"
             trap "docker logout ghcr.io >/dev/null 2>&1 || true" EXIT
             docker login ghcr.io --username "${{ github.actor }}" --password-stdin
             cd /opt/phub
-            if [ "$deployment_profile" != COMMUNITIES_LEGACY_READ_ONLY ]; then
+            if [ "$deployment_profile" != COMMUNITIES_LEGACY_READ_ONLY ] \
+              && [ "$deployment_profile" != MEDIA_BINARY_ONLY ]; then
               rm -f /opt/phub/staging.communities.env
             fi
             compose() {
@@ -684,6 +974,9 @@ jobs:
               exit 1
             fi
             compose pull
+            if [ "$deployment_profile" = MEDIA_BINARY_ONLY ]; then
+              sh /opt/phub/verify-media-disk-budget.sh post-pull
+            fi
 
             runtime_env=/etc/phub/staging.env
             migrator_env=/etc/phub/staging.migrator.env
@@ -705,11 +998,17 @@ jobs:
               *) exit 64 ;;
             esac
             test "$runtime_database_url" != "$migrator_database_url"
+            database_role_boundary_scope=core
+            if [ "$deployment_profile" = MEDIA_BINARY_ONLY ]; then
+              database_role_boundary_scope=media
+            fi
             DATABASE_ROLE_BOUNDARY_PHASE=pre \
+            DATABASE_ROLE_BOUNDARY_SCOPE="$database_role_boundary_scope" \
             RUNTIME_DATABASE_URL="$runtime_database_url" \
             MIGRATOR_DATABASE_URL="$migrator_database_url" \
               compose --profile migration run --rm --no-deps -T \
-                -e RUNTIME_DATABASE_URL -e MIGRATOR_DATABASE_URL -e DATABASE_ROLE_BOUNDARY_PHASE \
+                -e RUNTIME_DATABASE_URL -e MIGRATOR_DATABASE_URL \
+                -e DATABASE_ROLE_BOUNDARY_PHASE -e DATABASE_ROLE_BOUNDARY_SCOPE \
                 --entrypoint node migrator apps/migrator/dist/verify-role-boundary.js
 
             backup_dir=/opt/phub/backups
@@ -734,7 +1033,7 @@ jobs:
             backup_tmp="$(mktemp "$backup_dir/.postgres-pre-${{ github.sha }}-$backup_timestamp.XXXXXX.dump")"
             trap "rm -f \"$backup_tmp\"; docker logout ghcr.io >/dev/null 2>&1 || true" EXIT
             infrastructure exec -T postgres sh -ec \
-              "pg_dump -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" --format=custom --no-owner --no-acl" \
+              "pg_dump -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" --format=custom" \
               > "$backup_tmp"
             test -s "$backup_tmp"
             chmod 600 "$backup_tmp"
@@ -750,14 +1049,38 @@ jobs:
             chmod 600 "$backup_path"
             [ "$(stat -c %a "$backup_path")" = 600 ]
             echo "Restore-verified staging PostgreSQL backup: $backup_path"
+            backup_checksum_line="$(sha256sum "$backup_path")"
+            backup_size_bytes="$(wc -c < "$backup_path" | tr -d " ")"
+            printf "media_backup path=%s bytes=%s checksum=%s status=verified\n" \
+              "$backup_path" "$backup_size_bytes" "${backup_checksum_line%% *}"
 
-            MIGRATOR_DATABASE_URL="$migrator_database_url" \
-              compose --profile migration run --rm migrator
+            if [ "$deployment_profile" = MEDIA_BINARY_ONLY ]; then
+              manifest_base64="$(base64 -w 0 /opt/phub/candidate-migrations.manifest)"
+              restore_database="phub_restore_${{ github.run_id }}_${{ github.run_attempt }}"
+              RUNTIME_DATABASE_URL="$runtime_database_url" \
+              MIGRATOR_DATABASE_URL="$migrator_database_url" \
+                sh /opt/phub/rehearse-media-migration.sh \
+                  "$backup_path" "$restore_database" "$manifest_base64"
+            fi
+
+            migration_started="$(date +%s)"
+            if [ "$deployment_profile" = MEDIA_BINARY_ONLY ]; then
+              MIGRATOR_DATABASE_URL="$migrator_database_url" \
+                compose --profile migration run --rm \
+                  -e "PGOPTIONS=-c lock_timeout=5000 -c statement_timeout=600000 -c idle_in_transaction_session_timeout=600000" \
+                  migrator
+            else
+              MIGRATOR_DATABASE_URL="$migrator_database_url" \
+                compose --profile migration run --rm migrator
+            fi
+            migration_seconds=$(($(date +%s) - migration_started))
             DATABASE_ROLE_BOUNDARY_PHASE=post \
+            DATABASE_ROLE_BOUNDARY_SCOPE="$database_role_boundary_scope" \
             RUNTIME_DATABASE_URL="$runtime_database_url" \
             MIGRATOR_DATABASE_URL="$migrator_database_url" \
               compose --profile migration run --rm --no-deps -T \
-                -e RUNTIME_DATABASE_URL -e MIGRATOR_DATABASE_URL -e DATABASE_ROLE_BOUNDARY_PHASE \
+                -e RUNTIME_DATABASE_URL -e MIGRATOR_DATABASE_URL \
+                -e DATABASE_ROLE_BOUNDARY_PHASE -e DATABASE_ROLE_BOUNDARY_SCOPE \
                 --entrypoint node migrator apps/migrator/dist/verify-role-boundary.js
             latest_migration="$(sed -n s/^LATEST_MIGRATION=//p release.env)"
             test -n "$latest_migration"
@@ -765,6 +1088,11 @@ jobs:
               "psql -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -Atc \"select filename from public.schema_migrations\"" \
             )"
             printf "%s\n" "$applied_migrations" | grep -Fx "$latest_migration"
+            if [ "$deployment_profile" = MEDIA_BINARY_ONLY ]; then
+              manifest_base64="$(base64 -w 0 /opt/phub/candidate-migrations.manifest)"
+              sh /opt/phub/verify-media-migration-ledger.sh "$manifest_base64"
+              printf "media_shared_migration duration_seconds=%s status=passed\n" "$migration_seconds"
+            fi
 
             service_is_healthy() {
               container_id="$(compose ps -q "$1")"
@@ -793,6 +1121,31 @@ jobs:
               compose stop worker realtime
               [ -z "$(compose ps --status running -q worker)" ]
               [ -z "$(compose ps --status running -q realtime)" ]
+            elif [ "$deployment_profile" = MEDIA_BINARY_ONLY ]; then
+              # Preserve the currently serving web/worker/realtime while the candidate API is
+              # drained and proven against old-client media reads. Then roll each remaining
+              # process independently and publish the candidate web bundle last.
+              compose up -d --no-deps api
+              wait_for_service api
+              sh /opt/phub/verify-media-binary-api.sh \
+                '${{ inputs.expected_active_release }}' '${{ github.sha }}'
+              compose up -d --no-deps worker
+              wait_for_service worker
+              compose exec -T worker node -e "
+                fetch(\"http://127.0.0.1:3002/health/ready\", { signal: AbortSignal.timeout(5000) })
+                  .then(async (response) => {
+                    const body = await response.json();
+                    if (!response.ok || body.status !== \"ready\") process.exit(1);
+                  })
+                  .catch(() => process.exit(1));
+              "
+              compose up -d --no-deps realtime
+              wait_for_service realtime
+              docker compose --env-file infrastructure.env -f compose.infrastructure.yaml up -d --force-recreate nginx
+              sh /opt/phub/verify-media-binary-api.sh \
+                '${{ inputs.expected_active_release }}' '${{ github.sha }}'
+              compose up -d --no-deps web
+              wait_for_service web
             else
               # Media cutovers publish stable first-party URLs. Start the API route first so a
               # worker can never publish a URL that the currently serving API cannot resolve.
@@ -802,7 +1155,9 @@ jobs:
             fi
             # The ingress configuration is bind-mounted. Recreate this one
             # stateless container so it loads the newly copied configuration.
-            docker compose --env-file infrastructure.env -f compose.infrastructure.yaml up -d --force-recreate nginx
+            if [ "$deployment_profile" != MEDIA_BINARY_ONLY ]; then
+              docker compose --env-file infrastructure.env -f compose.infrastructure.yaml up -d --force-recreate nginx
+            fi
 
             ready=0
             attempt=0
@@ -837,7 +1192,14 @@ jobs:
                   .catch(() => process.exit(1));
               "
             fi
-          '
+          ' | tee "$rollout_log"
+          remote_status=${PIPESTATUS[1]}
+          set -e
+          if [ "$DEPLOYMENT_PROFILE" = MEDIA_BINARY_ONLY ]; then
+            awk '/^media_/' "$rollout_log" > media-rollout/restore-evidence.txt
+            chmod 600 media-rollout/restore-evidence.txt
+          fi
+          test "$remote_status" -eq 0
       - name: Promote canonical Nano TLS ingress
         env:
           HOST: ${{ secrets.STAGING_HOST }}
@@ -914,6 +1276,15 @@ jobs:
             fi
             echo "Verified TLS ingress backup: $backup_path"
           '
+      - name: Verify media through the promoted canonical ingress
+        if: ${{ inputs.deployment_profile == 'MEDIA_BINARY_ONLY' }}
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+        run: |
+          ssh -o ServerAliveInterval=10 -o ServerAliveCountMax=2 "phub-deploy@$HOST" \
+            "sh /opt/phub/verify-media-binary-api.sh '$GITHUB_SHA' '$GITHUB_SHA'" \
+            | tee media-rollout/promoted-ingress.txt
+          chmod 600 media-rollout/promoted-ingress.txt
       - name: Attest community-logo flags in every API and worker runtime
         if: ${{ inputs.deployment_profile != 'COMMUNITIES_LEGACY_READ_ONLY' }}
         env:
@@ -924,6 +1295,70 @@ jobs:
         env:
           HOST: ${{ secrets.STAGING_HOST }}
         run: ssh "phub-deploy@$HOST" 'sh /opt/phub/verify-home-base.sh'
+      - name: Attest preserved media baseline after binary-only rollout
+        if: ${{ inputs.deployment_profile == 'MEDIA_BINARY_ONLY' }}
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+          EXPECTED_COMPATIBILITY_FLOOR: ${{ needs.media-baseline.outputs.compatibility_floor }}
+          EXPECTED_ROUTING_FINGERPRINT: ${{ needs.media-baseline.outputs.routing_fingerprint }}
+          EXPECTED_RUNTIME_CONFIG_FINGERPRINT: ${{ needs.media-baseline.outputs.runtime_config_fingerprint }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 media-postdeploy
+          migration_manifest=media-postdeploy/candidate-migrations.manifest
+          find packages/database/migrations -maxdepth 1 -type f -name '*.sql' -print \
+            | LC_ALL=C sort \
+            | while IFS= read -r migration; do
+                checksum_line="$(sha256sum "$migration")"
+                printf '%s|%s\n' "${checksum_line%% *}" "$(basename "$migration")"
+              done > "$migration_manifest"
+          migration_manifest_base64="$(base64 -w 0 "$migration_manifest")"
+          candidate_compose_base64="$(base64 -w 0 deploy/compose.staging.yaml)"
+          candidate_tree="$(git rev-parse 'HEAD^{tree}')"
+          attestation=media-postdeploy/attestation.txt
+          ssh -o ServerAliveInterval=10 -o ServerAliveCountMax=2 "phub-deploy@$HOST" \
+            sh -s -- "$GITHUB_SHA" "$GITHUB_SHA" "$candidate_tree" \
+            "$migration_manifest_base64" "$candidate_compose_base64" \
+            < deploy/jetson/verify-media-staging-baseline.sh \
+            | tee "$attestation"
+
+          observed_routing="$(sed -n 's/^routing_fingerprint=//p' "$attestation" | tail -n 1)"
+          observed_runtime="$(sed -n 's/^runtime_config_fingerprint=//p' "$attestation" | tail -n 1)"
+          test "$observed_routing" = "$EXPECTED_ROUTING_FINGERPRINT"
+          test "$observed_runtime" = "$EXPECTED_RUNTIME_CONFIG_FINGERPRINT"
+
+          manifest="$(curl --fail --silent --show-error --max-time 15 \
+            "https://lk.nano.padlhub.su/manifest.json")"
+          printf '%s' "$manifest" | node -e '
+            let input = "";
+            process.stdin.setEncoding("utf8");
+            process.stdin.on("data", (chunk) => { input += chunk; });
+            process.stdin.on("end", () => {
+              if (JSON.parse(input).release !== process.env.GITHUB_SHA) process.exit(1);
+            });
+          '
+          printf 'public_manifest release=%s status=matched\n' "$GITHUB_SHA" | tee -a "$attestation"
+
+          set +e
+          ssh -o ServerAliveInterval=10 -o ServerAliveCountMax=2 "phub-deploy@$HOST" \
+            'PHUB_MEDIA_ROLLBACK_MODE=pre-cutover sh /opt/phub/verify-media-rollback-safe.sh' \
+            >> "$attestation" 2>&1
+          guard_status=$?
+          set -e
+          case "$guard_status:$EXPECTED_COMPATIBILITY_FLOOR" in
+            0:ordinary) ;;
+            42:client-media)
+              ssh -o ServerAliveInterval=10 -o ServerAliveCountMax=2 "phub-deploy@$HOST" \
+                'PHUB_ROLLBACK_COMPATIBILITY_FLOOR=client-media PHUB_MEDIA_ROLLBACK_MODE=compatible-client sh /opt/phub/verify-media-rollback-safe.sh' \
+                >> "$attestation" 2>&1
+              ;;
+            *)
+              cat "$attestation"
+              echo "::error::Media compatibility floor changed during binary-only rollout."
+              exit 1
+              ;;
+          esac
+          printf 'compatibility_floor=%s status=preserved\n' "$EXPECTED_COMPATIBILITY_FLOOR" | tee -a "$attestation"
       - name: Refresh the audited routing plan for browser-assisted Viva reads
         if: ${{ inputs.deployment_profile == 'FULL_LIVE_HOME' || inputs.deployment_profile == 'CLIENT_ASSISTED_VIVA' }}
         env:
@@ -1008,6 +1443,15 @@ jobs:
         env:
           SMOKE_BASE_URL: ${{ vars.STAGING_BASE_URL }}
         run: npm ci --ignore-scripts && npm run smoke
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() && inputs.deployment_profile == 'MEDIA_BINARY_ONLY' }}
+        with:
+          name: media-postdeploy-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            media-postdeploy
+            media-rollout
+          if-no-files-found: ignore
+          retention-days: 30
       - name: Record production promotion eligibility
         if: ${{ inputs.deployment_profile == 'FULL_LIVE_HOME' }}
         run: |
