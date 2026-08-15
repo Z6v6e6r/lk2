@@ -10,10 +10,11 @@ storage_path=${PHUB_POSTGRES_STORAGE_PATH:-/var/lib/docker}
 expected_source_ledger_digest=${PHUB_EXPECTED_SOURCE_LEDGER_DIGEST:-}
 
 case "$confirmation" in
-  VERIFY_STAGING_POSTGRES_CAPACITY|VERIFY_STAGING_POSTGRES_BACKUP) ;;
+  VERIFY_STAGING_POSTGRES_CAPACITY|VERIFY_STAGING_POSTGRES_BACKUP|VERIFY_CHAT_PUSH_FOUNDATION_BACKUP) ;;
   *) echo "valid staging PostgreSQL verification confirmation is required" >&2; exit 64 ;;
 esac
-if [ "$confirmation" = VERIFY_STAGING_POSTGRES_BACKUP ]; then
+if [ "$confirmation" = VERIFY_STAGING_POSTGRES_BACKUP ] ||
+  [ "$confirmation" = VERIFY_CHAT_PUSH_FOUNDATION_BACKUP ]; then
   case "$backup_file" in
     /*) ;;
     *) echo "backup path must be absolute" >&2; exit 64 ;;
@@ -141,6 +142,45 @@ pg_dump_version="$(infrastructure exec -T postgres pg_dump --version)"
 pg_restore_version="$(infrastructure exec -T postgres pg_restore --version)"
 psql_version="$(infrastructure exec -T postgres psql --version)"
 
+foundation_snapshot_sql="
+select concat_ws('|',
+  'chat_push_foundation_snapshot_v1',
+  (select count(*)::text from public.schema_migrations),
+  (select pg_catalog.md5(coalesce(pg_catalog.string_agg(filename || ':' || checksum, ',' order by filename), ''))
+     from public.schema_migrations),
+  (select count(*)::text from identity.tenants),
+  (select pg_catalog.md5(coalesce(pg_catalog.string_agg(id::text || ':' || tenant_key, ',' order by tenant_key, id), ''))
+     from identity.tenants),
+  (select count(*)::text from notifications.tenant_runtime_settings),
+  (select count(*) filter (where web_push_enabled)::text from notifications.tenant_runtime_settings),
+  (select count(*)::text from messaging.tenant_runtime_settings),
+  (select count(*) filter (where http_enabled or direct_enabled or realtime_enabled or contextual_enabled)::text
+     from messaging.tenant_runtime_settings),
+  (select count(*)::text from integration.notification_endpoints),
+  (select count(*) filter (where status = 'SUSPENDED_POLICY')::text
+     from integration.notification_endpoints),
+  (select count(*) filter (
+     where published_at is null
+       and event_type in ('booking.confirmed.v1', 'booking.changed.v1', 'booking.cancelled.v1')
+   )::text from audit.outbox_events)
+)"
+
+foundation_snapshot() {
+  snapshot_database="$1"
+  infrastructure exec -T postgres sh -ec \
+    'snapshot_database="$1"; if [ "$snapshot_database" = __SOURCE__ ]; then snapshot_database="$POSTGRES_DB"; fi; PGOPTIONS="-c default_transaction_read_only=on" psql -U "$POSTGRES_USER" -d "$snapshot_database" -v ON_ERROR_STOP=1 -Atc "$2"' \
+    sh "$snapshot_database" "$foundation_snapshot_sql"
+}
+
+foundation_source_snapshot=''
+if [ "$confirmation" = VERIFY_CHAT_PUSH_FOUNDATION_BACKUP ]; then
+  foundation_source_snapshot="$(foundation_snapshot __SOURCE__)"
+  test -n "$foundation_source_snapshot" || {
+    echo "foundation source snapshot is empty" >&2
+    exit 1
+  }
+fi
+
 if ! (umask 077; set -C; printf "%s\n" CANDIDATE > "$marker_path"); then
   echo "could not create exclusive restore cleanup marker" >&2
   exit 1
@@ -179,9 +219,21 @@ if [ -n "$expected_source_ledger_digest" ] && [ "$restored_ledger_digest" != "$e
   echo "restored migration ledger digest does not match the source snapshot" >&2
   exit 1
 fi
+foundation_snapshot_sha256=''
+if [ "$confirmation" = VERIFY_CHAT_PUSH_FOUNDATION_BACKUP ]; then
+  foundation_restored_snapshot="$(foundation_snapshot "$restore_database")"
+  if [ "$foundation_restored_snapshot" != "$foundation_source_snapshot" ]; then
+    echo "foundation source and restored snapshots differ" >&2
+    exit 1
+  fi
+  foundation_snapshot_sha256="$(printf '%s' "$foundation_source_snapshot" | sha256sum | cut -d ' ' -f 1)"
+fi
 
 cleanup_restore
 [ ! -e "$marker_path" ]
 trap - EXIT HUP INT TERM
 echo "Restore-verified PostgreSQL backup: size=$backup_size sha256=$backup_sha256 migrations=$restored_migration_count ledger_sha256=$restored_ledger_digest"
+if [ -n "$foundation_snapshot_sha256" ]; then
+  echo "Chat/push foundation source/restore snapshot verified: sha256=$foundation_snapshot_sha256"
+fi
 echo "Tools: $pg_dump_version; $pg_restore_version; $psql_version"

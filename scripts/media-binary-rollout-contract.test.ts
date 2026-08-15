@@ -41,6 +41,7 @@ describe('media binary-only staging rollout contract', () => {
       'Expected active release is valid only for media diagnostics or MEDIA_BINARY_ONLY.',
     );
     expect(validate).toContain('Strict media diagnostics are read-only and cannot restart udisks.');
+    expect(validate).toContain('or include foundation-maintenance inputs.');
     expect(mediaBaseline).toContain('Attest media baseline before build or staging writes');
     expect(mediaBaseline).toContain('< deploy/jetson/verify-media-staging-baseline.sh');
     expect(mediaBaseline).toContain('< deploy/jetson/verify-media-rollback-safe.sh');
@@ -48,6 +49,13 @@ describe('media binary-only staging rollout contract', () => {
     expect(mediaBaseline).not.toContain('docker compose up');
     expect(verify).toContain("needs.media-baseline.result == 'success'");
     expect(workflow.indexOf('  media-baseline:')).toBeLessThan(workflow.indexOf('  build:'));
+  });
+
+  it('preserves the final-precedence chat/push overlay in the media baseline', () => {
+    expect(baseline).toContain('staging.chat-push-foundation.env');
+    expect(baseline).toContain('RUNTIME_CHAT_PUSH_FOUNDATION_ENV_FILE');
+    expect(baseline).toContain('must not redirect the chat/push foundation overlay');
+    expect(baseline).toContain('files="$foundation_runtime_env $app_root/staging.communities.env');
   });
 
   it('keeps the read-only baseline fail-closed across flags, migration journal and storage', () => {

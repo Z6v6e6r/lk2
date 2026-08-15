@@ -58,8 +58,10 @@ Migrations `0069_booking_notification_projection_fence.sql` through
 `0073_booking_reminder_scheduler.sql` are not ordinary rolling migrations. Both the packaged
 migrator and `npm run db:migrate` inspect the ledger before creating or changing any relation and
 fail with `CHAT_PUSH_FOUNDATION_MAINTENANCE_REQUIRED` while one of those five files is pending.
-Normal staging and production workflows intentionally do not pass the acknowledgement, so they
-stop before DDL instead of applying 0070/0071 beside legacy API or worker processes.
+The ordinary staging and production paths intentionally do not pass the acknowledgement, so they
+stop before DDL instead of applying 0070/0071 beside legacy API or worker processes. Staging has a
+separate `CHAT_PUSH_FOUNDATION` maintenance profile described below; selecting another profile can
+never reach its acknowledgement.
 
 Use the exact one-shot acknowledgement
 `CHAT_PUSH_FOUNDATION_MAINTENANCE_ACK=CHAT_PUSH_FOUNDATION_MAINTENANCE_V1` only after all of these
@@ -171,6 +173,123 @@ starting only the new API/worker images. If any check fails, keep writers stoppe
 gates off. A disposable local `_verify` database uses the same explicit acknowledgement; it is not
 an activation signal.
 
+#### Dedicated staging foundation profile
+
+`CHAT_PUSH_FOUNDATION` is a non-promotable initial maintenance profile. It runs only when all five
+0069–0073 migrations are pending, installs that expand-only foundation and the same candidate API,
+worker, realtime and web images, but it does not
+enable chat, Web Push, block commands or booking reminders. It does not refresh routing, rewrite
+authentication/Home/Communities/Games settings, change Caddy or Nginx, run a provider call, activate
+CUP, or create a production-promotion artifact.
+
+Do not dispatch this profile until the separate GitHub Environment
+`staging-foundation-maintenance` has all of the following controls:
+
+- at least one required reviewer, with self-review prevented;
+- deployments restricted to `main`, with administrator bypass disabled;
+- environment variable `STAGING_FOUNDATION_MAINTENANCE_READY_V1` exactly equal to
+  `APPROVED_WITH_REQUIRED_REVIEWER_V1`;
+- environment variable `STAGING_FOUNDATION_OPERATOR_IDS` containing only the complete
+  comma-separated numeric GitHub actor-ID allowlist.
+
+The initial dispatch must be a new first attempt from `main`, not a workflow rerun. Supply
+`deploy_confirmation=DEPLOY_STAGING`, the exact
+`foundation_maintenance_confirmation=APPLY_CHAT_PUSH_FOUNDATION_STAGING`, the candidate SHA equal
+to the dispatched SHA, the exact active staging release SHA, the complete comma-separated tenant-key
+inventory, and `foundation_no_booking_producer_confirmation=NO_BOOKING_PRODUCER_ACTIVE`. The last
+value is an operator attestation, not automatic evidence: first inspect every external scheduler,
+Viva/Node-RED route and event publisher that could emit booking lifecycle events. Leave every
+routing, messaging-test, diagnostic and access input empty.
+
+If the initial run reaches `MIGRATION_STARTED` and then fails, do not rerun it and do not dispatch a
+new initial profile. Use only `CHAT_PUSH_FOUNDATION_RECOVERY` with
+`foundation_maintenance_confirmation=RESUME_CHAT_PUSH_FOUNDATION_STAGING`, the same candidate and
+expected pre-maintenance release SHAs, the same tenant/no-producer attestations, and the original
+numeric run ID plus original attempt `1`. Recovery requires the original mode-0600 application
+snapshot, candidate release digest set, PostgreSQL archive manifest with exact path, byte size and
+SHA-256, clone-derived catalog digest,
+source-bound monitoring digest and phase marker. The candidate metadata carries the SHA-256 of the
+reviewed monitoring rule file, and the host file must match it before recovery state is created. It
+rejects rebuilt image drift, a different tenant inventory,
+an arbitrary/non-prefix ledger or any missing/changed recovery input. Recovery never takes a new
+backup, restores the database, creates a new clone or starts the old writer images. Before the
+workflow installs candidate definitions, monitoring or the foundation overlay, it invokes the
+already installed release helper in compare-only `prepare-recovery` mode. That step rechecks the
+archive size, SHA-256 and `pg_restore --list`, then atomically changes the old healthy phase to
+`RECOVERY_STARTED`; drain progress is recorded as
+`RECOVERY_DRAINING` and `RECOVERY_WRITERS_DRAINED`. It skips the
+image build and downloads the five digest artifacts from the exact original workflow run; those
+artifacts must still exist and match the stored candidate release byte-for-byte. The protected
+workflow definition still comes from the current `main`, while verify/deploy checkout the exact
+original candidate commit, so advancing `main` does not force a different runtime into recovery.
+The candidate Compose definition is uploaded to a run-bound same-directory temporary file,
+structurally validated and atomically renamed, so an interrupted transfer cannot corrupt the
+known-good definition used by failure containment to stop the writers.
+
+The profile then fails closed in this order:
+
+1. bind the workflow file, checkout and five image digests to the exact candidate SHA; reject a
+   rerun, different triggering actor, unexpected active release, artifact symlink/extra file or
+   malformed digest;
+2. verify the current API, worker and realtime are healthy and all global foundation gates are
+   absent or false; snapshot the current release and the present/absent state of
+   `staging.auth.env`, `staging.override.env`, `staging.communities.env`, `staging.games.env` and the
+   foundation overlay;
+3. install a final-precedence mode-0600 API/worker-only overlay containing exactly
+   `WEB_PUSH_ENABLED=false`, `MESSAGING_USER_BLOCK_COMMANDS_ENABLED=false` and
+   `BOOKING_REMINDER_SCHEDULER_ENABLED=false`; realtime and migrator never receive this file;
+4. install and syntax-check the candidate alert definitions while preserving the prior
+   present/absent file, then require the two exact alerting expressions, labels, durations,
+   inactive state, healthy/fresh evaluation and no active alert. Require the exact
+   `otel-collector:8889` Prometheus target to be UP with a fresh scrape. Verify the complete tenant
+   inventory under each runtime-role RLS context, all messaging and notification tenant gates off,
+   zero endpoint/SUSPENDED rows, zero unpublished booking lifecycle outbox events, zero foundation
+   semantic rows, exact five-pending 0069–0073 ledger state, split role boundary and exact empty
+   projector/DLQ queue shapes, arguments and explicit booking bindings;
+5. stop API, worker and realtime, prove zero named containers and zero other runtime-role database
+   sessions, then repeat the database and broker checks;
+6. bind the API/worker, realtime, migrator and infrastructure-admin observations to the same
+   server `system_identifier` and database; require realtime to use the exact runtime role and the
+   migrator to use a distinct restricted role. Take the final PostgreSQL archive after the drain,
+   perform a real restore and compare a
+   content-free ledger/tenant/gate/endpoint fingerprint, then rehearse the exact remaining prefix on
+   an owned same-cluster template clone and drop only that marked clone;
+7. derive a SHA-256 digest from the clone's complete relation/column/constraint/index/policy
+   catalog. After the clone completes, repeat runtime drain, database target/role/session,
+   tenant/admin zero-state, Rabbit and role preflight immediately before writing the irreversible
+   phase marker and passing `CHAT_PUSH_FOUNDATION_MAINTENANCE_ACK` only to the single target
+   migrator invocation;
+8. prove exact ledger, clone-equal catalog digest, FORCE-RLS/ACL/default-off/zero-row postconditions
+   and a final no-ACK
+   migrator no-op, then write the phase marker before any candidate runtime starts;
+9. atomically activate the stored candidate release metadata and start/attest API, then worker,
+   then realtime, then web by exact digest. After worker readiness, require a current-instance
+   operational heartbeat value emitted after that worker started, collection success exactly `1`
+   and the current-instance booking-reminder gauge to exist; then require the exact Rabbit topology
+   and a monotonic minimum
+   30-second quiet window with a final check at or after the deadline and repeated live
+   tenant/admin/outbox/queue
+   checks before realtime starts. Finish with the live tenant/zero-row check, inactive healthy
+   alerts, ordinary web/smoke checks and byte-for-byte preserved-file comparison.
+
+Any unknown/true gate, tenant mismatch, nonzero endpoint or semantic row, extra pending migration,
+checksum/catalog/role drift, unvalidated constraint, runtime session, Rabbit backlog, missing alert,
+backup/restore/clone failure, lock/timeout, digest mismatch or preserved-file drift is a stop
+condition. Before the phase marker the ordinary application snapshot and prior monitoring file may
+be restored. At or after the marker, automation keeps API, worker and realtime stopped and must not
+restore the database or restart the previous writer images; continuation is possible only through
+the exact protected recovery profile above. If the candidate runtime reached
+`CANDIDATE_RUNTIME_VERIFIED` but an external web/smoke check fails, keep that exact candidate
+running only after rechecking the active release, health and immutable image digest of API, worker,
+realtime and web; atomically record `EXTERNAL_SMOKE_FAILED`, and use the same recovery profile for a bounded
+re-attestation. Production remains untouched.
+
+The foundation verifier uses bounded connection, statement and client-query timeouts. The one-shot
+migrator also bounds its advisory-lock wait to 30 seconds and clears that temporary timeout after
+the lock is acquired. Before dispatch, use an administrator read-only catalog query to prove the
+exact runtime/realtime and migrator roles can execute `pg_catalog.pg_control_system()`; absence is
+a pre-DDL stop condition and must not be repaired by broad `pg_monitor` membership.
+
 ### Direct chat M1 runtime gate
 
 An absent `messaging.tenant_runtime_settings` row keeps every messaging capability off. M1 needs
@@ -250,6 +369,16 @@ npm run messaging:direct:realtime:verify -- \
   --tenant-key=<synthetic-tenant> \
   --recipient-user-id=<synthetic-player-b-uuid> \
   --run-id=<content-free-run-id>
+```
+
+The bounded message, buffer and authentication failure cases run without a listening socket in the
+default unit suite through an injected transport. The same cases retain a real loopback WebSocket
+integration suite, which is mandatory when `CI=true` and can be invoked explicitly outside a
+restricted sandbox with:
+
+```bash
+DIRECT_REALTIME_LOOPBACK_TEST=true npx vitest run \
+  scripts/verify-direct-chat-realtime-e2e.loopback.test.ts
 ```
 
 A PASS means the verifier connected directly to the validated RabbitMQ vhost and Redis database,

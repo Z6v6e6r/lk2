@@ -133,6 +133,14 @@ else
     fail 'staging.games.env.absent marker must be empty'
   games_state=absent
 fi
+if stage_file staging.chat-push-foundation.env optional 600; then
+  chat_push_foundation_state=present
+else
+  stage_file staging.chat-push-foundation.env.absent required 600
+  [ ! -s "$stage_dir/staging.chat-push-foundation.env.absent" ] ||
+    fail 'staging.chat-push-foundation.env.absent marker must be empty'
+  chat_push_foundation_state=absent
+fi
 [ ! -e "$backup_dir/staging.override.env" ] || [ "$override_state" = present ] ||
   fail 'saved runtime override state is ambiguous'
 [ ! -e "$backup_dir/staging.override.env.absent" ] || [ "$override_state" = absent ] ||
@@ -145,6 +153,12 @@ fi
   fail 'saved Games runtime state is ambiguous'
 [ ! -e "$backup_dir/staging.games.env.absent" ] || [ "$games_state" = absent ] ||
   fail 'saved Games runtime state is ambiguous'
+[ ! -e "$backup_dir/staging.chat-push-foundation.env" ] ||
+  [ "$chat_push_foundation_state" = present ] ||
+  fail 'saved chat/push foundation runtime state is ambiguous'
+[ ! -e "$backup_dir/staging.chat-push-foundation.env.absent" ] ||
+  [ "$chat_push_foundation_state" = absent ] ||
+  fail 'saved chat/push foundation runtime state is ambiguous'
 
 process_state_value() {
   process_key="$1"
@@ -354,6 +368,12 @@ else
   : > "$recovery_dir/staging.games.env.absent"
   chmod 600 "$recovery_dir/staging.games.env.absent"
 fi
+if [ -e "$app_root/staging.chat-push-foundation.env" ]; then
+  capture_current staging.chat-push-foundation.env 600
+else
+  : > "$recovery_dir/staging.chat-push-foundation.env.absent"
+  chmod 600 "$recovery_dir/staging.chat-push-foundation.env.absent"
+fi
 capture_current tls-ingress/Caddyfile 644
 
 restore_staged() {
@@ -388,6 +408,11 @@ if [ "$games_state" = present ]; then
   restore_staged staging.games.env 600
 else
   rm -f "$app_root/staging.games.env"
+fi
+if [ "$chat_push_foundation_state" = present ]; then
+  restore_staged staging.chat-push-foundation.env 600
+else
+  rm -f "$app_root/staging.chat-push-foundation.env"
 fi
 restore_staged tls-ingress/Caddyfile 644
 

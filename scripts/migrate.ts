@@ -11,6 +11,13 @@ import {
 
 const connectionString = process.env.DATABASE_URL;
 if (!connectionString) throw new Error('DATABASE_URL is required for migrations');
+const advisoryLockTimeoutValue = process.env.MIGRATOR_ADVISORY_LOCK_TIMEOUT_MS;
+if (
+  advisoryLockTimeoutValue !== undefined &&
+  (!/^[1-9][0-9]*$/.test(advisoryLockTimeoutValue) || Number(advisoryLockTimeoutValue) > 300_000)
+) {
+  throw new Error('MIGRATOR_ADVISORY_LOCK_TIMEOUT_MS is invalid');
+}
 
 const migrationsDirectory = resolve(process.cwd(), 'packages/database/migrations');
 const migrationFiles = (await readdir(migrationsDirectory))
@@ -30,7 +37,15 @@ const pool = createDatabasePool(connectionString);
 const client = await pool.connect();
 
 try {
+  if (advisoryLockTimeoutValue) {
+    await client.query("select pg_catalog.set_config('statement_timeout', $1, false)", [
+      `${advisoryLockTimeoutValue}ms`,
+    ]);
+  }
   await client.query('select pg_advisory_lock($1)', [7_140_221]);
+  if (advisoryLockTimeoutValue) {
+    await client.query("select pg_catalog.set_config('statement_timeout', '0', false)");
+  }
   const ledgerExists = await client.query<{ ledger: string | null }>(
     "select to_regclass('public.schema_migrations')::text as ledger",
   );

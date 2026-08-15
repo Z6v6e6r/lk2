@@ -109,7 +109,7 @@ describe('migration execution policy', () => {
     },
   );
 
-  it('allows the acknowledgement only in the disposable empty-database CI step', () => {
+  it('keeps production ACK-free and scopes staging maintenance to one reviewed helper', () => {
     const pullRequestWorkflow = readFileSync(
       new URL('../../../.github/workflows/pull-request.yaml', import.meta.url),
       'utf8',
@@ -122,6 +122,10 @@ describe('migration execution policy', () => {
       new URL('../../../.github/workflows/deploy-production.yaml', import.meta.url),
       'utf8',
     );
+    const stagingFoundationHelper = readFileSync(
+      new URL('../../../deploy/jetson/run-chat-push-foundation-release.sh', import.meta.url),
+      'utf8',
+    );
 
     expect(pullRequestWorkflow).toContain(
       'CHAT_PUSH_FOUNDATION_MAINTENANCE_ACK: CHAT_PUSH_FOUNDATION_EMPTY_DATABASE_V1',
@@ -129,7 +133,34 @@ describe('migration execution policy', () => {
     expect(pullRequestWorkflow.match(/CHAT_PUSH_FOUNDATION_MAINTENANCE_ACK/g)).toHaveLength(1);
     expect(stagingWorkflow).not.toContain('CHAT_PUSH_FOUNDATION_MAINTENANCE_ACK');
     expect(productionWorkflow).not.toContain('CHAT_PUSH_FOUNDATION_MAINTENANCE_ACK');
+    expect(stagingFoundationHelper.match(/CHAT_PUSH_FOUNDATION_MAINTENANCE_V1/g)).toHaveLength(1);
+    expect(stagingFoundationHelper).toContain(
+      'CHAT_PUSH_FOUNDATION_MAINTENANCE_ACK=CHAT_PUSH_FOUNDATION_MAINTENANCE_V1',
+    );
+    expect(stagingFoundationHelper).toContain('-e CHAT_PUSH_FOUNDATION_MAINTENANCE_ACK');
+    expect(stagingFoundationHelper).toContain('-e MIGRATOR_ADVISORY_LOCK_TIMEOUT_MS migrator');
+    expect(stagingFoundationHelper.indexOf('compose stop api worker realtime')).toBeLessThan(
+      stagingFoundationHelper.indexOf(
+        'CHAT_PUSH_FOUNDATION_MAINTENANCE_ACK=CHAT_PUSH_FOUNDATION_MAINTENANCE_V1',
+      ),
+    );
   });
+
+  it.each(['../../../apps/migrator/src/main.ts', '../../../scripts/migrate.ts'])(
+    'bounds an explicitly requested migration advisory-lock wait in %s',
+    (sourcePath) => {
+      const source = readFileSync(new URL(sourcePath, import.meta.url), 'utf8');
+      const configureTimeout = source.indexOf(
+        "pg_catalog.set_config('statement_timeout', $1, false)",
+      );
+      const advisoryLock = source.indexOf('select pg_advisory_lock($1)');
+      const clearTimeout = source.indexOf("pg_catalog.set_config('statement_timeout', '0', false)");
+      expect(source).toContain('MIGRATOR_ADVISORY_LOCK_TIMEOUT_MS');
+      expect(configureTimeout).toBeGreaterThan(-1);
+      expect(advisoryLock).toBeGreaterThan(configureTimeout);
+      expect(clearTimeout).toBeGreaterThan(advisoryLock);
+    },
+  );
 
   it('keeps both documented maintenance invocations fail-closed before acknowledgement', () => {
     const runbook = readFileSync(

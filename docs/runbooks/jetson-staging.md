@@ -49,6 +49,34 @@ and CUP gates. Instead it proves the saved `staging.override.env` is byte-identi
 has the repository checksum, both players retain chat permission/privacy, the anonymous
 conversation boundary returns `AUTH_REQUIRED`, and realtime readiness reports PostgreSQL, Redis
 and RabbitMQ ready. Any failure invokes the same application rollback.
+
+Use `deployment_profile=CHAT_PUSH_FOUNDATION` only for the reviewed, default-off 0069–0073
+initial maintenance window when exactly those five migrations are pending. It requires the
+independently protected `staging-foundation-maintenance`
+Environment, an allowlisted actor, exact candidate and active-release SHAs, the complete tenant
+inventory and the explicit no-booking-producer attestation. It preserves the current
+authentication, Home, Communities and Games files; skips routing, ingress, activation, CUP and
+promotion; drains API/worker/realtime before the final database backup and one-shot migration; and
+starts the candidate API, worker, realtime and web sequentially. The exact operational sequence,
+stop conditions and post-marker recovery rule are in
+[Chats, notifications and moderation rollout](chats-notifications-moderation.md#dedicated-staging-foundation-profile).
+After an irreversible phase marker, use only
+`deployment_profile=CHAT_PUSH_FOUNDATION_RECOVERY` with the exact
+`RESUME_CHAT_PUSH_FOUNDATION_STAGING` confirmation, original first-attempt run ID and its retained
+backup. That path reuses the original database backup, candidate digests, clone-derived catalog
+digest and monitoring digest; it revalidates the backup's stored path, byte size, SHA-256 and
+`pg_restore --list`, but never restores the database, creates another clone or starts the old
+writers. Before installing candidate definitions, monitoring or the overlay, the workflow calls the
+already installed helper in compare-only `prepare-recovery` mode and invalidates any prior healthy
+phase. An external smoke
+failure after candidate runtime verification leaves the candidate running and records
+`EXTERNAL_SMOKE_FAILED` only after the active release, health and immutable digest of API, worker,
+realtime and web are rechecked for this same protected recovery path.
+This profile is not dispatchable until the Environment has a required reviewer, prevents
+self-review, is restricted to `main`, disables administrator bypass, and exposes the two attested
+environment variables named in that runbook. It never authorizes a provider call or feature
+activation.
+
 An isolated staging user-access change uses the same workflow with `access_target_user_id`,
 `access_actor_id`, and the complete `access_roles` and `access_permissions` sets. It cannot be
 combined with deployment or diagnostics. The workflow always previews current versus desired
@@ -109,13 +137,18 @@ The application runtime uses separate API/worker and realtime secret contours:
 - `/etc/phub/realtime.env` is mode `0600`, owned by `phub-deploy`, and contains only the common
   database/broker metadata plus `JWT_REALTIME_SECRET`; access/refresh signing keys are forbidden;
 - `/opt/phub/staging.auth.env` is mode `0600`, owned by `phub-deploy`, and contains the audited
-  authentication gates plus `HOME_BASE_SYNC_ENABLED=true`. The deploy workflow rewrites this
+  authentication gates plus `HOME_BASE_SYNC_ENABLED=true`. Ordinary deploy profiles rewrite this
   non-secret file atomically before preflight so OAuth recovery and the local HomeBase projector
-  cannot drift from the working local contour. `MEDIA_BINARY_ONLY` is the exception: it fingerprints
-  and preserves this file byte-for-byte so a media baseline cannot change the active auth/Home mode;
+  cannot drift from the working local contour. Both chat/push foundation profiles and
+  `MEDIA_BINARY_ONLY` are exceptions: they fingerprint, snapshot/reuse where applicable, and
+  preserve this file byte-for-byte;
 - `/opt/phub/staging.override.env` contains only the Home/community/promotion live-read gates;
 - `/opt/phub/staging.games.env` is mode `0600`, owned by `phub-deploy`, and contains the
   staging-only Games mirror gates. The Mongo mirror keeps its URI only here.
+- `/opt/phub/staging.chat-push-foundation.env` is an optional mode-`0600`, API/worker-only,
+  final-precedence maintenance overlay. During the foundation profile it contains exactly the three
+  global false kill switches documented in the chat/push runbook. It is never attached to realtime,
+  migrator or web, and application backup/rollback preserves both its present and absent state.
 
 ### One-time staging runtime-secret isolation transition
 
@@ -321,6 +354,13 @@ expiry. Configure these GitHub environment `staging` secrets:
 - `STAGING_DEPLOY_KEY`, the dedicated `phub-deploy` private key;
 - `STAGING_KNOWN_HOSTS`, the Nano host key for `100.70.62.47`.
 
+The separate `staging-foundation-maintenance` Environment owns no deployment secrets; the deploy
+job still receives those only from `staging`. It supplies the reviewed readiness attestation and
+numeric operator allowlist described in the chat/push runbook, and it must enforce a required
+reviewer, prevent self-review, restrict deployments to `main` and disable administrator bypass.
+Every third-party Action used by the foundation path must be pinned to a reviewed full commit SHA
+before this Environment is marked ready; a mutable `@vN` reference is a release stop condition.
+
 The staging workflow joins the tailnet as an ephemeral `tag:ci` node, verifies
 the Nano with Tailscale ping, then uploads the digest-pinned release definition and the non-secret
 public media endpoint.
@@ -360,7 +400,8 @@ directory under `/opt/phub/backups/releases`. The backup primitive requires the 
 full `sha256` digests. The snapshot must also contain `nginx/default.conf`, `staging.auth.env` and
 `tls-ingress/Caddyfile`. It stores either the previous `staging.override.env` or an empty
 `staging.override.env.absent` marker, and independently stores `staging.communities.env` or its
-empty `.absent` marker. It also stores `staging.games.env` or its empty `.absent` marker and a
+empty `.absent` marker. It also stores `staging.games.env` and
+`staging.chat-push-foundation.env` or their empty `.absent` markers, plus a
 `worker-capabilities.env` attestation tied to the running API/worker digests. Write
 `backup.complete` last with the exact previous release SHA.
 
@@ -375,6 +416,7 @@ The expected saved-release layout is:
   staging.override.env        # mode 0600; or staging.override.env.absent
   staging.communities.env     # mode 0600; or staging.communities.env.absent
   staging.games.env           # mode 0600; or staging.games.env.absent
+  staging.chat-push-foundation.env # mode 0600; or matching .absent marker
   worker-capabilities.env     # API/worker community-logo rollback attestation
   process-state.env           # exact running/stopped state for web, API, worker and realtime
   tls-ingress/Caddyfile

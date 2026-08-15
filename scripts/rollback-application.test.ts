@@ -72,6 +72,13 @@ async function fixture(
   await write(join(root, 'staging.auth.env'), 'CURRENT_SECRET=current\n', 0o600);
   await write(join(root, 'staging.override.env'), 'HOME_READ_MODE=current\n', 0o600);
   await write(join(root, 'staging.communities.env'), 'COMMUNITIES_READ_MODE=legacy\n', 0o600);
+  await write(
+    join(root, 'staging.chat-push-foundation.env'),
+    'WEB_PUSH_ENABLED=false\n' +
+      'MESSAGING_USER_BLOCK_COMMANDS_ENABLED=false\n' +
+      'BOOKING_REMINDER_SCHEDULER_ENABLED=false\n',
+    0o600,
+  );
   await write(join(root, 'tls-ingress', 'Caddyfile'), 'current caddy\n');
 
   const images = [
@@ -102,6 +109,7 @@ async function fixture(
   await write(join(backup, 'staging.auth.env'), 'ROLLBACK_TEST_SECRET=never-print-me\n', 0o600);
   await write(join(backup, 'staging.override.env'), 'HOME_READ_MODE=previous\n', 0o600);
   await write(join(backup, 'staging.communities.env'), 'COMMUNITIES_READ_MODE=mock\n', 0o600);
+  await write(join(backup, 'staging.chat-push-foundation.env.absent'), '', 0o600);
   await write(
     join(backup, 'staging.games.env'),
     `COMMUNITY_LOGO_STABLE_DELIVERY_ENABLED=${stable ? 'true' : 'false'}\n` +
@@ -202,6 +210,9 @@ describe('Nano staging application rollback primitive', () => {
     await expect(readFile(join(input.root, 'staging.communities.env'), 'utf8')).resolves.toBe(
       'COMMUNITIES_READ_MODE=mock\n',
     );
+    await expect(
+      readFile(join(input.root, 'staging.chat-push-foundation.env'), 'utf8'),
+    ).rejects.toThrow();
     await expect(readFile(join(input.root, 'tls-ingress', 'Caddyfile'), 'utf8')).resolves.toBe(
       'previous caddy\n',
     );
@@ -290,6 +301,23 @@ describe('Nano staging application rollback primitive', () => {
     await execute(input);
 
     await expect(readFile(join(input.root, 'staging.communities.env'), 'utf8')).rejects.toThrow();
+  });
+
+  it('restores a pre-existing chat/push foundation kill-switch overlay', async () => {
+    const input = await fixture();
+    await rm(join(input.backup, 'staging.chat-push-foundation.env.absent'));
+    await write(
+      join(input.backup, 'staging.chat-push-foundation.env'),
+      'WEB_PUSH_ENABLED=false\n' +
+        'MESSAGING_USER_BLOCK_COMMANDS_ENABLED=false\n' +
+        'BOOKING_REMINDER_SCHEDULER_ENABLED=false\n',
+      0o600,
+    );
+    await execute(input);
+
+    await expect(
+      readFile(join(input.root, 'staging.chat-push-foundation.env'), 'utf8'),
+    ).resolves.toContain('BOOKING_REMINDER_SCHEDULER_ENABLED=false');
   });
 
   it('keeps worker and realtime stopped when restoring a read-only Communities profile', async () => {

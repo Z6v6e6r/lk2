@@ -15,6 +15,8 @@ x-application-runtime: &application-runtime
       required: false
     - path: ${RUNTIME_GAMES_ENV_FILE:-/opt/phub/staging.games.env}
       required: false
+    - path: ${RUNTIME_CHAT_PUSH_FOUNDATION_ENV_FILE:-/opt/phub/staging.chat-push-foundation.env}
+      required: false
 
 x-realtime-runtime: &realtime-runtime
   <<: *runtime
@@ -58,6 +60,8 @@ services:
       - path: ${RUNTIME_GAMES_ENV_FILE:-/opt/phub/staging.games.env}
         required: false
       - path: ${RUNTIME_COMMUNITIES_ENV_FILE:-/opt/phub/staging.communities.env}
+        required: false
+      - path: ${RUNTIME_CHAT_PUSH_FOUNDATION_ENV_FILE:-/opt/phub/staging.chat-push-foundation.env}
         required: false
     image: ${REGISTRY}/phub-api@${API_IMAGE_DIGEST}
     environment:

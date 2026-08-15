@@ -116,6 +116,13 @@ describe('Nano staging application backup primitive', () => {
       'COMMUNITIES_READ_MODE=legacy\n',
       0o600,
     );
+    await write(
+      join(input.appRoot, 'staging.chat-push-foundation.env'),
+      'WEB_PUSH_ENABLED=false\n' +
+        'MESSAGING_USER_BLOCK_COMMANDS_ENABLED=false\n' +
+        'BOOKING_REMINDER_SCHEDULER_ENABLED=false\n',
+      0o600,
+    );
     const result = await execute(input);
 
     await expect(readFile(join(input.backupDirectory, 'compose.yaml'), 'utf8')).resolves.toBe(
@@ -130,6 +137,9 @@ describe('Nano staging application backup primitive', () => {
     await expect(
       readFile(join(input.backupDirectory, 'staging.communities.env'), 'utf8'),
     ).resolves.toBe('COMMUNITIES_READ_MODE=legacy\n');
+    await expect(
+      readFile(join(input.backupDirectory, 'staging.chat-push-foundation.env'), 'utf8'),
+    ).resolves.toContain('WEB_PUSH_ENABLED=false');
     await expect(readFile(join(input.backupDirectory, 'backup.complete'), 'utf8')).resolves.toBe(
       `${'a'.repeat(40)}\n`,
     );
@@ -161,6 +171,9 @@ describe('Nano staging application backup primitive', () => {
     ).resolves.toBe('');
     await expect(
       readFile(join(input.backupDirectory, 'staging.games.env.absent'), 'utf8'),
+    ).resolves.toBe('');
+    await expect(
+      readFile(join(input.backupDirectory, 'staging.chat-push-foundation.env.absent'), 'utf8'),
     ).resolves.toBe('');
   });
 
