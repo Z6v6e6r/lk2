@@ -105,6 +105,7 @@ export interface ProfilePhotoPersistence {
   readonly objectKey?: string;
   readonly supersededObjectKey?: string;
   readonly deleteAfter?: string;
+  readonly rejectedObjectDeleteAfter?: string;
   readonly syncedAt: string;
 }
 
@@ -295,14 +296,89 @@ async function persistProfilePhotoWithClient(
     readonly userId: string;
     readonly photo: ProfilePhotoPersistence;
   },
-): Promise<void> {
+): Promise<string | null> {
+  await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [input.userId]);
+  const current = await client.query<
+    {
+      client_grant_issued_at: Date | string | null;
+      object_key: string;
+      source_url: string | null;
+      synced_at: Date | string;
+    } & QueryResultRow
+  >(
+    `select client_grant_issued_at, object_key, source_url, synced_at
+       from integration.user_profile_photo_sync
+      where tenant_id = $1 and user_id = $2
+      for update`,
+    [input.tenantId, input.userId],
+  );
+  const currentRow = current.rows[0];
+  const watermark = await client.query<{ observed_at: Date | string } & QueryResultRow>(
+    `select observed_at
+       from integration.profile_photo_observation_watermarks
+      where tenant_id = $1 and user_id = $2
+      for update`,
+    [input.tenantId, input.userId],
+  );
+  const sourceLessFallbackOverClientMapping =
+    currentRow?.source_url === null &&
+    currentRow.client_grant_issued_at !== null &&
+    !input.photo.sourceUrl &&
+    Boolean(input.photo.objectKey);
+  const mappingObservationAt = currentRow?.source_url
+    ? currentRow.synced_at
+    : currentRow?.client_grant_issued_at;
+  const currentObservationAt = [mappingObservationAt, watermark.rows[0]?.observed_at]
+    .filter((value): value is Date | string => Boolean(value))
+    .reduce<Date | string | undefined>(
+      (latest, value) =>
+        !latest || Date.parse(String(value)) > Date.parse(String(latest)) ? value : latest,
+      undefined,
+    );
+  if (
+    sourceLessFallbackOverClientMapping ||
+    (currentObservationAt &&
+      Date.parse(String(currentObservationAt)) >= Date.parse(input.photo.syncedAt))
+  ) {
+    if (input.photo.objectKey && input.photo.objectKey !== currentRow?.object_key) {
+      const deleteAfter =
+        input.photo.rejectedObjectDeleteAfter ??
+        new Date(Date.parse(input.photo.syncedAt) + 24 * 60 * 60 * 1_000).toISOString();
+      await client.query(
+        `insert into integration.profile_photo_object_gc (tenant_id, object_key, delete_after)
+         values ($1, $2, $3)
+         on conflict (tenant_id, object_key) do update set
+           delete_after = greatest(integration.profile_photo_object_gc.delete_after,
+                                   excluded.delete_after),
+           updated_at = now()`,
+        [input.tenantId, input.photo.objectKey, deleteAfter],
+      );
+    }
+    const summary = await client.query<{ photo_url: string | null } & QueryResultRow>(
+      `select photo_url
+         from profile.user_summaries
+        where tenant_id = $1 and user_id = $2`,
+      [input.tenantId, input.userId],
+    );
+    return summary.rows[0]?.photo_url ?? null;
+  }
+  await client.query(
+    `insert into integration.profile_photo_observation_watermarks (
+       tenant_id, user_id, observed_at
+     ) values ($1, $2, $3)
+     on conflict (tenant_id, user_id) do update set
+       observed_at = greatest(integration.profile_photo_observation_watermarks.observed_at,
+                              excluded.observed_at),
+       updated_at = now()`,
+    [input.tenantId, input.userId, input.photo.syncedAt],
+  );
   await client.query(
     `update profile.user_summaries
         set photo_url = $3, updated_at = now()
       where tenant_id = $1 and user_id = $2`,
     [input.tenantId, input.userId, input.photo.avatarUrl],
   );
-  if (input.photo.sourceUrl && input.photo.contentSha256 && input.photo.objectKey) {
+  if (input.photo.contentSha256 && input.photo.objectKey) {
     if (!input.photo.deliveryId) throw new Error('PROFILE_PHOTO_DELIVERY_ID_MISSING');
     await client.query(
       `insert into integration.user_profile_photo_sync (
@@ -316,12 +392,16 @@ async function persistProfilePhotoWithClient(
          content_sha256 = excluded.content_sha256,
          object_key = excluded.object_key,
          synced_at = excluded.synced_at,
+         client_grant_issued_at = case
+           when excluded.source_url is not null then null
+           else integration.user_profile_photo_sync.client_grant_issued_at
+         end,
          updated_at = now()`,
       [
         input.tenantId,
         input.userId,
         input.photo.deliveryId,
-        input.photo.sourceUrl,
+        input.photo.sourceUrl ?? null,
         input.photo.sourceEtag ?? null,
         input.photo.sourceLastModified ?? null,
         input.photo.contentSha256,
@@ -353,6 +433,7 @@ async function persistProfilePhotoWithClient(
       [input.tenantId, input.photo.supersededObjectKey, input.photo.deleteAfter],
     );
   }
+  return input.photo.avatarUrl;
 }
 
 export function persistProfilePhoto(input: {
@@ -366,6 +447,43 @@ export function persistProfilePhoto(input: {
   });
 }
 
+export function reserveProfilePhotoObjectUpload(input: {
+  readonly pool: Pool;
+  readonly tenantId: string;
+  readonly userId: string;
+  readonly objectKey: string;
+  readonly deleteAfter: string;
+}): Promise<boolean> {
+  return withTenantTransaction(input.pool, input.tenantId, async (client) => {
+    await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [input.userId]);
+    const active = await client.query<{ object_key: string } & QueryResultRow>(
+      `select object_key
+         from integration.user_profile_photo_sync
+        where tenant_id = $1 and user_id = $2
+        for update`,
+      [input.tenantId, input.userId],
+    );
+    if (active.rows[0]?.object_key === input.objectKey) {
+      await client.query(
+        `delete from integration.profile_photo_object_gc
+          where tenant_id = $1 and object_key = $2`,
+        [input.tenantId, input.objectKey],
+      );
+      return false;
+    }
+    await client.query(
+      `insert into integration.profile_photo_object_gc (tenant_id, object_key, delete_after)
+       values ($1, $2, $3)
+       on conflict (tenant_id, object_key) do update set
+         delete_after = greatest(integration.profile_photo_object_gc.delete_after,
+                                 excluded.delete_after),
+         updated_at = now()`,
+      [input.tenantId, input.objectKey, input.deleteAfter],
+    );
+    return true;
+  });
+}
+
 export function listDueProfilePhotoObjects(input: {
   readonly pool: Pool;
   readonly tenantId: string;
@@ -376,6 +494,20 @@ export function listDueProfilePhotoObjects(input: {
       `select object_key
          from integration.profile_photo_object_gc
         where tenant_id = $1 and delete_after <= now()
+          and not exists (
+            select 1
+              from integration.user_profile_photo_sync active
+             where active.tenant_id = $1
+               and active.object_key = integration.profile_photo_object_gc.object_key
+          )
+          and not exists (
+            select 1
+              from integration.profile_photo_client_commands pending
+             where pending.tenant_id = $1
+               and pending.object_key = integration.profile_photo_object_gc.object_key
+               and pending.avatar_url is null
+               and pending.expires_at > now()
+          )
         order by delete_after, object_key
         limit $2`,
       [input.tenantId, input.limit],
@@ -384,17 +516,54 @@ export function listDueProfilePhotoObjects(input: {
   });
 }
 
-export function completeProfilePhotoObjectGc(input: {
+export function deleteProfilePhotoObjectIfSafe(input: {
   readonly pool: Pool;
   readonly tenantId: string;
   readonly objectKey: string;
-}): Promise<void> {
+  readonly deleteObject: () => Promise<void>;
+}): Promise<boolean> {
   return withTenantTransaction(input.pool, input.tenantId, async (client) => {
+    const userId = input.objectKey.split('/')[2];
+    if (!userId) throw new Error('PROFILE_PHOTO_OBJECT_KEY_INVALID');
+    await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [userId]);
+    const due = await client.query(
+      `select object_key
+         from integration.profile_photo_object_gc
+        where tenant_id = $1 and object_key = $2 and delete_after <= now()
+        for update`,
+      [input.tenantId, input.objectKey],
+    );
+    if ((due.rowCount ?? 0) === 0) return false;
+    const active = await client.query(
+      `select 1
+         from integration.user_profile_photo_sync
+        where tenant_id = $1 and object_key = $2
+        limit 1`,
+      [input.tenantId, input.objectKey],
+    );
+    if ((active.rowCount ?? 0) > 0) {
+      await client.query(
+        `delete from integration.profile_photo_object_gc
+          where tenant_id = $1 and object_key = $2`,
+        [input.tenantId, input.objectKey],
+      );
+      return false;
+    }
+    const pending = await client.query(
+      `select 1
+         from integration.profile_photo_client_commands
+        where tenant_id = $1 and object_key = $2 and avatar_url is null and expires_at > now()
+        limit 1`,
+      [input.tenantId, input.objectKey],
+    );
+    if ((pending.rowCount ?? 0) > 0) return false;
+    await input.deleteObject();
     await client.query(
       `delete from integration.profile_photo_object_gc
         where tenant_id = $1 and object_key = $2`,
       [input.tenantId, input.objectKey],
     );
+    return true;
   });
 }
 
@@ -414,6 +583,27 @@ export function recordProfilePhotoObjectGcFailure(input: {
         where tenant_id = $1 and object_key = $2`,
       [input.tenantId, input.objectKey, input.errorCode.slice(0, 100)],
     );
+  });
+}
+
+export function deleteExpiredProfilePhotoClientCommands(input: {
+  readonly pool: Pool;
+  readonly tenantId: string;
+  readonly limit: number;
+}): Promise<number> {
+  return withTenantTransaction(input.pool, input.tenantId, async (client) => {
+    const result = await client.query(
+      `delete from integration.profile_photo_client_commands command
+        where command.ctid in (
+          select candidate.ctid
+            from integration.profile_photo_client_commands candidate
+           where candidate.tenant_id = $1 and candidate.expires_at <= now()
+           order by candidate.expires_at, candidate.user_id
+           limit $2
+        )`,
+      [input.tenantId, input.limit],
+    );
+    return result.rowCount ?? 0;
   });
 }
 
@@ -831,8 +1021,9 @@ export function persistVivaHomeSource(input: {
         input.snapshot.profile.level.value,
       ],
     );
+    let resolvedAvatarUrl = input.profilePhoto?.avatarUrl ?? null;
     if (input.profilePhoto) {
-      await persistProfilePhotoWithClient(client, {
+      resolvedAvatarUrl = await persistProfilePhotoWithClient(client, {
         tenantId: input.delegation.tenantId,
         userId: input.delegation.userId,
         photo: input.profilePhoto,
@@ -876,7 +1067,7 @@ export function persistVivaHomeSource(input: {
     for (const item of asHomeValues({
       userId: input.delegation.userId,
       snapshot: input.snapshot,
-      avatarUrl: input.profilePhoto?.avatarUrl ?? null,
+      avatarUrl: resolvedAvatarUrl,
       bookingIds,
       subscriptionIds,
       gameRosters,

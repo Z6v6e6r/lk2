@@ -5,6 +5,7 @@ import type {
 } from '@phub/auth';
 import { loadConfig } from '@phub/config';
 import { createLogger } from '@phub/observability';
+import { jwtVerify } from 'jose';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { buildApp } from '../app.js';
@@ -337,6 +338,24 @@ describe('provider-neutral authentication routes', () => {
       correlationId: 'oauth-handoff-correlation',
     });
     expect(initialAccess.accessToken).toBe('initial-viva-access-token');
+    await expect(
+      jwtVerify(
+        initialAccess.profilePhotoGrant,
+        new TextEncoder().encode(config.JWT_ACCESS_SECRET),
+        {
+          issuer: config.JWT_ISSUER,
+          audience: `${config.JWT_AUDIENCE}:profile-photo-sync`,
+          algorithms: ['HS256'],
+        },
+      ),
+    ).resolves.toMatchObject({
+      protectedHeader: { typ: 'phub-profile-photo-grant+jwt' },
+      payload: {
+        sub: user.id,
+        tenantId: binding.tenantId,
+        scope: 'profile.photo.sync',
+      },
+    });
     await expect(
       service.issueVivaAccessToken({
         tenantId: binding.tenantId,

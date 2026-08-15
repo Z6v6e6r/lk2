@@ -84,6 +84,29 @@ describe('health endpoints', () => {
     expect(response.headers['access-control-allow-methods']).toContain('PUT');
   });
 
+  it('allows the browser profile-photo grant header in cross-origin preflight', async () => {
+    const app = await buildApp({
+      config: { ...config, CORS_ORIGINS: 'https://app.padlhub.test' },
+      logger: createLogger('api-test', 'silent'),
+    });
+    apps.push(app);
+    const response = await app.inject({
+      method: 'OPTIONS',
+      url: '/user/api/v1/local-padel/profile/photo',
+      headers: {
+        origin: 'https://app.padlhub.test',
+        'access-control-request-method': 'POST',
+        'access-control-request-headers': 'content-type,idempotency-key,x-profile-photo-grant',
+      },
+    });
+
+    expect(response.statusCode).toBe(204);
+    expect(response.headers['access-control-allow-origin']).toBe('https://app.padlhub.test');
+    expect(response.headers['access-control-allow-headers']?.toLowerCase()).toContain(
+      'x-profile-photo-grant',
+    );
+  });
+
   it('removes OAuth and other query parameters from request logs', () => {
     expect(
       sanitizeRequestLogUrl(
@@ -343,6 +366,19 @@ describe('health endpoints', () => {
       },
     });
     expect(response.statusCode).toBe(204);
+    const mediaResponse = await app.inject({
+      method: 'POST',
+      url: '/user/api/v1/local-padel/routing-outcomes',
+      headers: { authorization: `Bearer ${await accessToken()}` },
+      payload: {
+        operation: 'profile.photo.sync',
+        routingRevision: '7',
+        outcome: 'SUCCESS',
+        statusClass: '2xx',
+        durationMs: 203,
+      },
+    });
+    expect(mediaResponse.statusCode).toBe(204);
   });
 
   it('fails closed for administrative clients even when the tenant is mixed', async () => {

@@ -60,11 +60,28 @@ if [ -e "$app_root/staging.communities.env" ]; then
   [ -f "$app_root/staging.communities.env" ] && [ ! -L "$app_root/staging.communities.env" ] ||
     fail 'current staging.communities.env is unsafe'
 fi
+if [ -e "$app_root/staging.games.env" ]; then
+  [ -f "$app_root/staging.games.env" ] && [ ! -L "$app_root/staging.games.env" ] ||
+    fail 'current staging.games.env is unsafe'
+fi
 
-release_count="$(awk -F= '$1 == "RELEASE" { count += 1 } END { print count + 0 }' "$app_root/release.env")"
-[ "$release_count" -eq 1 ] || fail 'release.env must contain exactly one RELEASE'
-release="$(sed -n 's/^RELEASE=//p' "$app_root/release.env")"
+release_value() {
+  key="$1"
+  count="$(awk -F= -v key="$key" '$1 == key { count += 1 } END { print count + 0 }' "$app_root/release.env")"
+  [ "$count" -eq 1 ] || fail "release.env must contain exactly one $key"
+  sed -n "s/^${key}=//p" "$app_root/release.env"
+}
+release="$(release_value RELEASE)"
+registry="$(release_value REGISTRY)"
+api_digest="$(release_value API_IMAGE_DIGEST)"
+worker_digest="$(release_value WORKER_IMAGE_DIGEST)"
 printf '%s' "$release" | grep -Eq '^[0-9a-f]{40}$' || fail 'current release SHA is invalid'
+printf '%s' "$registry" | grep -Eq '^ghcr\.io/[A-Za-z0-9._/-]+$' ||
+  fail 'current registry is invalid'
+for digest in "$api_digest" "$worker_digest"; do
+  printf '%s' "$digest" | grep -Eq '^sha256:[0-9a-f]{64}$' ||
+    fail 'current API and worker digests must be immutable'
+done
 
 compose() {
   docker compose \
@@ -89,6 +106,30 @@ worker_state="$(process_state worker)"
 realtime_state="$(process_state realtime)"
 [ "$web_state" = running ] && [ "$api_state" = running ] ||
   fail 'web and api must be running before an application snapshot'
+api_id="$(compose ps --status running -q api)"
+worker_id="$(compose ps --status running -q worker)"
+[ -n "$api_id" ] || fail 'running API container is required for snapshot attestation'
+[ "$(docker inspect --format '{{.Config.Image}}' "$api_id")" = "$registry/phub-api@$api_digest" ] ||
+  fail 'running API does not match release.env digest'
+if [ "$worker_state" = running ]; then
+  [ -n "$worker_id" ] || fail 'running worker container is required for snapshot attestation'
+  [ "$(docker inspect --format '{{.Config.Image}}' "$worker_id")" = "$registry/phub-worker@$worker_digest" ] ||
+    fail 'running worker does not match release.env digest'
+fi
+api_client_media_rollback_v1=false
+if compose exec -T api node -e '
+  const code = require("node:fs").readFileSync("/app/apps/api/dist/main.js", "utf8");
+  process.exit(code.includes("phub.client-media-rollback.v1") ? 0 : 1);
+'; then
+  api_client_media_rollback_v1=true
+fi
+worker_client_media_rollback_v1=false
+if [ "$worker_state" = running ] && compose exec -T worker node -e '
+  const code = require("node:fs").readFileSync("/app/apps/worker/dist/main.js", "utf8");
+  process.exit(code.includes("phub.client-media-rollback.v1") ? 0 : 1);
+'; then
+  worker_client_media_rollback_v1=true
+fi
 
 stage_dir="$(mktemp -d "$backup_root/.snapshot.XXXXXX")"
 cleanup() {
@@ -114,6 +155,12 @@ else
   : > "$stage_dir/staging.communities.env.absent"
   chmod 600 "$stage_dir/staging.communities.env.absent"
 fi
+if [ -f "$app_root/staging.games.env" ]; then
+  install -m 600 "$app_root/staging.games.env" "$stage_dir/staging.games.env"
+else
+  : > "$stage_dir/staging.games.env.absent"
+  chmod 600 "$stage_dir/staging.games.env.absent"
+fi
 install -m 644 "$app_root/tls-ingress/Caddyfile" "$stage_dir/tls-ingress/Caddyfile"
 {
   printf '%s\n' "WEB=$web_state"
@@ -122,6 +169,11 @@ install -m 644 "$app_root/tls-ingress/Caddyfile" "$stage_dir/tls-ingress/Caddyfi
   printf '%s\n' "REALTIME=$realtime_state"
 } > "$stage_dir/process-state.env"
 chmod 600 "$stage_dir/process-state.env"
+{
+  printf '%s\n' "API_CLIENT_MEDIA_ROLLBACK_V1=$api_client_media_rollback_v1"
+  printf '%s\n' "WORKER_CLIENT_MEDIA_ROLLBACK_V1=$worker_client_media_rollback_v1"
+} > "$stage_dir/worker-capabilities.env"
+chmod 600 "$stage_dir/worker-capabilities.env"
 printf '%s\n' "$release" > "$stage_dir/backup.complete"
 chmod 600 "$stage_dir/backup.complete"
 mv "$stage_dir" "$requested_backup"

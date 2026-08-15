@@ -6,6 +6,7 @@ import {
   createBookingPreferencesRepository,
   createBookingScreenMappingRepository,
   createClientRoutingPlanRepository,
+  createCommunityLogoMediaRepository,
   createDatabasePool,
   warmDatabasePool,
   createGameRepository,
@@ -83,6 +84,8 @@ import { S3TrainerAvatarMediaStore } from './trainer-avatar-media-store.js';
 
 const config = loadConfig();
 const logger = createLogger('api', config.LOG_LEVEL, process.env.RELEASE);
+const clientMediaRollbackCapability = 'phub.client-media-rollback.v1';
+logger.info({ capabilities: [clientMediaRollbackCapability] }, 'API capabilities configured');
 const telemetry = startTelemetry({
   serviceName: 'api',
   serviceNamespace: config.OTEL_SERVICE_NAMESPACE,
@@ -407,6 +410,7 @@ const app = await buildApp({
   ...(giftCertificateMediaStore ? { giftCertificateMediaStore } : {}),
   ...(locationMediaStore ? { locationMediaStore } : {}),
   profilePhotoMediaRepository: profileSummaryRepository,
+  communityLogoMediaRepository: createCommunityLogoMediaRepository(pool),
   ...(profilePhotoMediaStore ? { profilePhotoMediaStore } : {}),
   ...(trainerAvatarMediaStore
     ? {

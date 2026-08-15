@@ -1,9 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
+  fetchClientAssistedVivaProfilePhoto,
   normalizePadlHubUpcomingBookings,
   normalizePadlHubUserProfile,
   normalizeVivaUserProfile,
+  vivaProfilePhotoSourceUrl,
 } from './index.js';
 
 const padlHubUserId = '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca';
@@ -61,6 +63,73 @@ describe('profile normalization', () => {
       balanceMinor: -1500,
       level: { label: 'D', value: 0, assessmentRequired: true },
     });
+  });
+
+  it('keeps the provider photo URL out of the profile DTO and fetches bounded bytes without credentials', async () => {
+    const sourceUrl = 'https://media.vivacrm.invalid/profile/avatar.jpg';
+    const payload = {
+      id: vivaProfileId,
+      firstName: 'Алексей',
+      middleName: null,
+      lastName: 'Петров',
+      phone: null,
+      photo: sourceUrl,
+      deposit: 0,
+      customFields: [],
+    };
+    const fetchImplementation = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(new Uint8Array([1, 2, 3]), {
+        status: 200,
+        headers: { 'content-type': 'image/jpeg' },
+      }),
+    );
+
+    expect(vivaProfilePhotoSourceUrl(payload)).toBe(sourceUrl);
+    expect(JSON.stringify(normalizeVivaUserProfile(payload, padlHubUserId))).not.toContain(
+      sourceUrl,
+    );
+    await expect(
+      fetchClientAssistedVivaProfilePhoto({
+        sourceUrl,
+        allowedHosts: ['.vivacrm.invalid'],
+        fetchImplementation,
+      }),
+    ).resolves.toMatchObject({ contentType: 'image/jpeg' });
+    expect(fetchImplementation).toHaveBeenCalledWith(
+      sourceUrl,
+      expect.objectContaining({ method: 'GET', mode: 'cors', credentials: 'omit' }),
+    );
+    const headers = new Headers(fetchImplementation.mock.calls[0]?.[1]?.headers);
+    expect(headers.has('authorization')).toBe(false);
+    await expect(
+      fetchClientAssistedVivaProfilePhoto({
+        sourceUrl: 'https://127.0.0.1/private',
+        allowedHosts: ['.vivacrm.invalid'],
+        fetchImplementation,
+      }),
+    ).rejects.toThrow('DIRECT_VIVA_PROFILE_PHOTO_HOST_NOT_ALLOWED');
+    expect(fetchImplementation).toHaveBeenCalledOnce();
+
+    const oversizedFetch = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new Uint8Array([1, 2]));
+            controller.enqueue(new Uint8Array([3, 4]));
+            controller.close();
+          },
+        }),
+        { headers: { 'content-type': 'image/jpeg' } },
+      ),
+    );
+    await expect(
+      fetchClientAssistedVivaProfilePhoto({
+        sourceUrl,
+        allowedHosts: ['.vivacrm.invalid'],
+        maxBytes: 3,
+        fetchImplementation: oversizedFetch,
+      }),
+    ).rejects.toThrow('DIRECT_VIVA_PROFILE_PHOTO_TOO_LARGE');
   });
 
   it('rejects a malformed PadlHub fallback response', () => {

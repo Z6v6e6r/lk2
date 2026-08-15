@@ -48,6 +48,44 @@ export const DIRECT_VIVA_CLIENT_RULES = {
 
 const PROFILE_RESPONSE_MAX_BYTES = 64 * 1024;
 const DIRECT_RESPONSE_MAX_BYTES = 1024 * 1024;
+const SCHEDULE_RESPONSE_MAX_BYTES = 5 * 1024 * 1024;
+const PROFILE_PHOTO_MAX_BYTES = 5 * 1024 * 1024;
+const PROFILE_PHOTO_CONTENT_TYPE = /^image\/(?:avif|jpeg|png|webp)(?:;|$)/i;
+
+async function readBoundedBinaryBody(response: Response, maxBytes: number): Promise<ArrayBuffer> {
+  if (!response.body) {
+    const body = await response.arrayBuffer();
+    if (body.byteLength === 0 || body.byteLength > maxBytes) {
+      throw new Error('DIRECT_VIVA_PROFILE_PHOTO_TOO_LARGE');
+    }
+    return body;
+  }
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      total += chunk.value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel();
+        throw new Error('DIRECT_VIVA_PROFILE_PHOTO_TOO_LARGE');
+      }
+      chunks.push(chunk.value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  if (total === 0) throw new Error('DIRECT_VIVA_PROFILE_PHOTO_TOO_LARGE');
+  const body = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return body.buffer;
+}
 
 async function readBoundedResponseBody(response: Response, maxBytes: number): Promise<string> {
   if (!response.body) return '';
@@ -83,9 +121,75 @@ const vivaProfileSchema = z.object({
   middleName: z.string().nullish(),
   lastName: z.string().nullish(),
   phone: z.string().nullish(),
+  photo: z.string().max(2_048).nullish(),
   deposit: z.number().int(),
   customFields: z.array(profileCustomFieldSchema),
 });
+
+export function vivaProfilePhotoSourceUrl(input: unknown): string | undefined {
+  const value = vivaProfileSchema.parse(input).photo?.trim();
+  if (!value) return undefined;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' && !url.username && !url.password ? url.toString() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export async function fetchClientAssistedVivaProfilePhoto(input: {
+  readonly sourceUrl: string;
+  readonly allowedHosts: readonly string[];
+  readonly fetchImplementation?: typeof fetch;
+  readonly timeoutMs?: number;
+  readonly maxBytes?: number;
+}): Promise<{ readonly body: ArrayBuffer; readonly contentType: string }> {
+  const sourceUrl = vivaProfilePhotoSourceUrl({
+    id: '00000000-0000-4000-8000-000000000000',
+    firstName: null,
+    middleName: null,
+    lastName: null,
+    phone: null,
+    photo: input.sourceUrl,
+    deposit: 0,
+    customFields: [],
+  });
+  if (!sourceUrl) throw new Error('DIRECT_VIVA_PROFILE_PHOTO_URL_INVALID');
+  const hostname = new URL(sourceUrl).hostname.toLowerCase();
+  const allowed = input.allowedHosts.some((entry) => {
+    const candidate = entry.trim().toLowerCase();
+    return candidate.startsWith('.')
+      ? hostname.endsWith(candidate) && hostname.length > candidate.length
+      : hostname === candidate;
+  });
+  if (!allowed) throw new Error('DIRECT_VIVA_PROFILE_PHOTO_HOST_NOT_ALLOWED');
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), input.timeoutMs ?? 8_000);
+  try {
+    const response = await (input.fetchImplementation ?? fetch)(sourceUrl, {
+      method: 'GET',
+      mode: 'cors',
+      credentials: 'omit',
+      redirect: 'error',
+      headers: { Accept: 'image/avif,image/webp,image/png,image/jpeg' },
+      signal: controller.signal,
+    });
+    if (!response.ok) throw new Error(`DIRECT_VIVA_PROFILE_PHOTO_HTTP_${response.status}`);
+    const contentType = response.headers.get('content-type')?.split(';')[0]?.toLowerCase();
+    if (!contentType || !PROFILE_PHOTO_CONTENT_TYPE.test(contentType)) {
+      throw new Error('DIRECT_VIVA_PROFILE_PHOTO_TYPE_INVALID');
+    }
+    const maxBytes = input.maxBytes ?? PROFILE_PHOTO_MAX_BYTES;
+    const announcedLength = Number(response.headers.get('content-length'));
+    if (Number.isFinite(announcedLength) && announcedLength > maxBytes) {
+      throw new Error('DIRECT_VIVA_PROFILE_PHOTO_TOO_LARGE');
+    }
+    const body = await readBoundedBinaryBody(response, maxBytes);
+    return { body, contentType };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
 
 const absoluteUrlSchema = z.string().url();
 const normalizedAvatarUrlSchema = z
@@ -222,6 +326,7 @@ const routingPlanSchema = z
         providerTenantKey: z.string().min(1).max(128),
         accessTokenPath: z.literal('/auth/viva/access'),
         allowedRequestHeaders: z.tuple([z.literal('Authorization')]),
+        allowedMediaHosts: z.array(z.string().min(1).max(253)).max(32).optional(),
       })
       .optional(),
   })
@@ -501,7 +606,9 @@ export function createClientTransportExecutor(options: ClientTransportExecutorOp
         const maxBytes =
           request.operation === 'profile.read'
             ? PROFILE_RESPONSE_MAX_BYTES
-            : DIRECT_RESPONSE_MAX_BYTES;
+            : request.operation === 'schedule.read'
+              ? SCHEDULE_RESPONSE_MAX_BYTES
+              : DIRECT_RESPONSE_MAX_BYTES;
         const contentLength = Number(response.headers.get('content-length'));
         if (Number.isFinite(contentLength) && contentLength > maxBytes) {
           throw new Error('DIRECT_VIVA_RESPONSE_TOO_LARGE');

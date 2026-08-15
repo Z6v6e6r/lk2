@@ -46,6 +46,10 @@ New changes continue from:
 
 - `0076_community_create_quota_grants.sql`
 - `0077_community_media_operational_recovery.sql`
+- `0078_community_media_issue_quotas.sql`
+- `0079_profile_photo_client_assisted_source.sql`
+- `0080_community_logo_stable_delivery.sql`
+- `0081_community_logo_stable_delivery_validate.sql`
 
 ## Required preflight
 

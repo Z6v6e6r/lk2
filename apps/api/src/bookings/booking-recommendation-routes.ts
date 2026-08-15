@@ -68,6 +68,7 @@ type ExerciseRecommendationSource = Pick<VivaExerciseRecommendationSourceAdapter
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const CLIENT_ASSISTED_JOB_TTL_SECONDS = 120;
 const CLIENT_ASSISTED_DAYS = 7;
+const CLIENT_ASSISTED_RESULT_BODY_LIMIT_BYTES = 6 * 1_024 * 1_024;
 const EVENT_CATALOG_SNAPSHOT_TTL_SECONDS = 600;
 const EVENT_CATALOG_TIMEZONE = 'Europe/Moscow';
 
@@ -110,10 +111,15 @@ function recommendationDates(now: Date): readonly string[] {
 }
 
 function validProviderSchedulePayload(value: unknown): boolean {
-  if (Array.isArray(value)) return true;
+  if (Array.isArray(value)) return value.length <= 500;
   if (!value || typeof value !== 'object') return false;
   const record = value as Record<string, unknown>;
-  return Array.isArray(record.content) || Array.isArray(record.items);
+  const items = Array.isArray(record.content)
+    ? record.content
+    : Array.isArray(record.items)
+      ? record.items
+      : undefined;
+  return Boolean(items && items.length <= 500);
 }
 
 function exerciseAssociationIds(externalId: string): readonly string[] {
@@ -470,7 +476,10 @@ export function registerBookingRecommendationRoutes(
 
   app.post(
     '/user/api/v1/:tenantKey/booking-screen-read-jobs/:jobId/results/:commandId',
-    { preHandler: [...options.authenticatedTenantHandlers] },
+    {
+      preHandler: [...options.authenticatedTenantHandlers],
+      bodyLimit: CLIENT_ASSISTED_RESULT_BODY_LIMIT_BYTES,
+    },
     async (request, reply) => {
       reply.header('Cache-Control', 'private, no-store');
       const current = principal(request);

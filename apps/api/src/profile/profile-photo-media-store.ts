@@ -1,6 +1,6 @@
-import { Readable } from 'node:stream';
+import { PassThrough, Readable } from 'node:stream';
 
-import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 
 export interface ProfilePhotoMediaObject {
   readonly body: Readable;
@@ -10,6 +10,11 @@ export interface ProfilePhotoMediaObject {
 
 export interface ProfilePhotoMediaStore {
   read(key: string): Promise<ProfilePhotoMediaObject>;
+  put?(input: {
+    readonly key: string;
+    readonly body: Buffer;
+    readonly sha256: string;
+  }): Promise<void>;
 }
 
 export class ProfilePhotoMediaNotFoundError extends Error {
@@ -52,7 +57,11 @@ export class S3ProfilePhotoMediaStore implements ProfilePhotoMediaStore {
 
   public async read(key: string): Promise<ProfilePhotoMediaObject> {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.options.timeoutMs);
+    let activeBody: Readable | undefined;
+    const timeout = setTimeout(() => {
+      controller.abort();
+      activeBody?.destroy(new Error('PROFILE_PHOTO_MEDIA_TIMEOUT'));
+    }, this.options.timeoutMs);
     try {
       const result = await this.client.send(
         new GetObjectCommand({ Bucket: this.options.bucket, Key: key }),
@@ -61,14 +70,51 @@ export class S3ProfilePhotoMediaStore implements ProfilePhotoMediaStore {
       if (!result.Body || !(result.Body instanceof Readable)) {
         throw new Error('PROFILE_PHOTO_MEDIA_BODY_INVALID');
       }
+      const source = result.Body;
+      activeBody = source;
+      const boundedBody = new PassThrough();
+      const stopTimeout = (): void => clearTimeout(timeout);
+      source.once('error', (error: unknown) =>
+        boundedBody.destroy(
+          error instanceof Error ? error : new Error('PROFILE_PHOTO_MEDIA_STREAM_FAILED'),
+        ),
+      );
+      boundedBody.once('close', () => {
+        stopTimeout();
+        if (!source.destroyed) source.destroy();
+      });
+      source.pipe(boundedBody);
       return {
-        body: result.Body,
+        body: boundedBody,
         ...(result.ContentLength !== undefined ? { contentLength: result.ContentLength } : {}),
         ...(result.ETag ? { etag: result.ETag } : {}),
       };
     } catch (error) {
+      clearTimeout(timeout);
       if (status(error) === 404) throw new ProfilePhotoMediaNotFoundError();
       throw error;
+    }
+  }
+
+  public async put(input: {
+    readonly key: string;
+    readonly body: Buffer;
+    readonly sha256: string;
+  }): Promise<void> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.options.timeoutMs);
+    try {
+      await this.client.send(
+        new PutObjectCommand({
+          Bucket: this.options.bucket,
+          Key: input.key,
+          Body: input.body,
+          ContentType: 'image/webp',
+          CacheControl: 'private, max-age=31536000, immutable',
+          Metadata: { sha256: input.sha256 },
+        }),
+        { abortSignal: controller.signal },
+      );
     } finally {
       clearTimeout(timeout);
     }

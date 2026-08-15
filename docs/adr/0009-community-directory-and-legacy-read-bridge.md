@@ -46,8 +46,9 @@ the last valid community component.
 When a legacy summary exposes a logo and no matching local asset exists, the worker downloads it
 through an HTTPS host allowlist, applies byte/pixel/time bounds, strips metadata, converts it to WebP
 and writes a content-addressed private object under the PadlHub community UUID. Integration metadata
-and the Home component are committed together. Clients receive only a short-lived signed PadlHub
-delivery URL. The stable legacy asset URL is the change token: equal URLs reuse the existing object;
+and the Home component are committed together. Clients receive only the stable PadlHub media route;
+the API resolves the current object key under tenant RLS and streams the private WebP. The stable
+legacy asset URL is the change token: equal URLs reuse the existing object;
 a changed URL imports a new immutable object and queues the old one for delayed deletion.
 
 ## Consequences

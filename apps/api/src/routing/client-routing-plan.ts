@@ -65,6 +65,9 @@ export function buildClientRoutingPlan(input: {
             providerTenantKey: input.stored.providerTenantKey,
             accessTokenPath: '/auth/viva/access' as const,
             allowedRequestHeaders: ['Authorization'] as const,
+            allowedMediaHosts: input.config.PROFILE_PHOTO_ALLOWED_HOSTS.split(',')
+              .map((host) => host.trim().toLowerCase())
+              .filter(Boolean),
           },
         }
       : {}),

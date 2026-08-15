@@ -22,6 +22,7 @@ import type {
 import { checkDatabaseReady } from '@phub/database';
 import type {
   ClientRoutingPlanRepository,
+  CommunityLogoMediaRepository,
   CommunityMediaPersistenceRepository,
   AdminNotificationRepository,
   BookingPreferencesRepository,
@@ -87,6 +88,7 @@ import {
   type ActivityHistoryRefreshService,
 } from './bookings/activity-history-routes.js';
 import { registerCommunityRoutes } from './communities/community-routes.js';
+import { registerCommunityLogoMediaRoutes } from './communities/community-logo-media-routes.js';
 import { registerCommunityExperienceRoutes } from './communities/community-experience-routes.js';
 import { registerCommunityDirectInviteRoutes } from './communities/community-direct-invite-routes.js';
 import { registerCommunityContentRoutes } from './communities/community-content-routes.js';
@@ -158,7 +160,7 @@ interface PadlHubClaims extends JWTPayload {
 
 const directVivaOutcomeSchema = z
   .object({
-    operation: z.enum(DIRECT_VIVA_READ_OPERATIONS),
+    operation: z.enum([...DIRECT_VIVA_READ_OPERATIONS, 'profile.photo.sync']),
     routingRevision: z.string().regex(/^[0-9]+$/),
     outcome: z.enum(['SUCCESS', 'UNAVAILABLE', 'REAUTH_REQUIRED', 'INVALID', 'CIRCUIT_OPEN']),
     statusClass: z
@@ -275,8 +277,17 @@ export interface BuildAppOptions {
     ProfileSummaryRepository,
     'getPhotoObjectKey' | 'getPhotoDeliveryIds'
   > &
-    Partial<Pick<ProfileSummaryRepository, 'getDisplayNames' | 'getLevelValues'>>;
+    Partial<
+      Pick<
+        ProfileSummaryRepository,
+        | 'getDisplayNames'
+        | 'getLevelValues'
+        | 'reserveClientAssistedPhoto'
+        | 'finalizeClientAssistedPhoto'
+      >
+    >;
   readonly profilePhotoMediaStore?: ProfilePhotoMediaStore;
+  readonly communityLogoMediaRepository?: CommunityLogoMediaRepository;
   readonly bookingPreferencesRepository?: BookingPreferencesRepository;
   readonly bookingScreenReadJobStore?: BookingScreenReadJobStore;
   readonly eventCatalogSnapshotStore?: EventCatalogSnapshotStore<EventCatalogItem>;
@@ -665,6 +676,7 @@ export async function buildApp(options: BuildAppOptions) {
       'X-App-Platform',
       'X-App-Version',
       'X-Correlation-ID',
+      'X-Profile-Photo-Grant',
       'X-Session-Intent',
     ],
     exposedHeaders: ['Retry-After', 'X-Correlation-ID'],
@@ -1037,6 +1049,24 @@ export async function buildApp(options: BuildAppOptions) {
   registerProfilePhotoMediaRoutes(app as unknown as FastifyInstance, {
     ...(options.profilePhotoMediaRepository
       ? { repository: options.profilePhotoMediaRepository }
+      : {}),
+    ...(options.profilePhotoMediaStore ? { store: options.profilePhotoMediaStore } : {}),
+    maxBytes: options.config.PROFILE_PHOTO_MAX_BYTES,
+    maxDimension: options.config.PROFILE_PHOTO_MAX_DIMENSION,
+    webpQuality: options.config.PROFILE_PHOTO_WEBP_QUALITY,
+    previousObjectRetentionSeconds:
+      options.config.PROFILE_PHOTO_URL_TTL_SECONDS +
+      options.config.HOME_PROJECTION_MAX_STALE_SECONDS +
+      60,
+    clientSyncEnabled: options.config.PROFILE_PHOTO_CLIENT_SYNC_ENABLED,
+    commandHandlers: [authenticate, resolveTenant, requireIdempotencyKey],
+    grantIssuer: options.config.JWT_ISSUER,
+    grantAudience: options.config.JWT_AUDIENCE,
+    grantSecret: options.config.JWT_ACCESS_SECRET,
+  });
+  registerCommunityLogoMediaRoutes(app as unknown as FastifyInstance, {
+    ...(options.communityLogoMediaRepository
+      ? { repository: options.communityLogoMediaRepository }
       : {}),
     ...(options.profilePhotoMediaStore ? { store: options.profilePhotoMediaStore } : {}),
   });

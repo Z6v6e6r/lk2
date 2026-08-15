@@ -45,7 +45,7 @@ async function fixture(): Promise<Fixture> {
   await write(join(appRoot, 'compose.yaml'), 'compose\n');
   await write(
     join(appRoot, 'release.env'),
-    `RELEASE_SECRET=never-print-me\nRELEASE=${'a'.repeat(40)}\n`,
+    `RELEASE_SECRET=never-print-me\nRELEASE=${'a'.repeat(40)}\nREGISTRY=ghcr.io/z6v6e6r\nAPI_IMAGE_DIGEST=sha256:${'b'.repeat(64)}\nWORKER_IMAGE_DIGEST=sha256:${'c'.repeat(64)}\n`,
     0o600,
   );
   await write(join(appRoot, 'nginx', 'default.conf'), 'nginx\n');
@@ -60,6 +60,12 @@ case "$*" in
   *'ps -q api'*) echo api-container ;;
   *'ps -q worker'*) echo worker-container ;;
   *'ps -q realtime'*) echo realtime-container ;;
+  *'ps --status running -q api'*) echo api-container ;;
+  *'ps --status running -q worker'*) echo worker-container ;;
+  *'inspect --format {{.Config.Image}} api-container'*)
+    echo 'ghcr.io/z6v6e6r/phub-api@sha256:${'b'.repeat(64)}' ;;
+  *'inspect --format {{.Config.Image}} worker-container'*)
+    echo 'ghcr.io/z6v6e6r/phub-worker@sha256:${'c'.repeat(64)}' ;;
 esac
 `,
     0o755,
@@ -130,6 +136,9 @@ describe('Nano staging application backup primitive', () => {
     await expect(readFile(join(input.backupDirectory, 'process-state.env'), 'utf8')).resolves.toBe(
       'WEB=running\nAPI=running\nWORKER=running\nREALTIME=running\n',
     );
+    await expect(
+      readFile(join(input.backupDirectory, 'worker-capabilities.env'), 'utf8'),
+    ).resolves.toBe('API_CLIENT_MEDIA_ROLLBACK_V1=true\nWORKER_CLIENT_MEDIA_ROLLBACK_V1=true\n');
     expect((await lstat(input.backupDirectory)).isDirectory()).toBe(true);
     expect(result.stdout).not.toContain('never-print-me');
     expect(result.stderr).not.toContain('never-print-me');
@@ -145,6 +154,9 @@ describe('Nano staging application backup primitive', () => {
     await expect(
       readFile(join(input.backupDirectory, 'staging.communities.env.absent'), 'utf8'),
     ).resolves.toBe('');
+    await expect(
+      readFile(join(input.backupDirectory, 'staging.games.env.absent'), 'utf8'),
+    ).resolves.toBe('');
   });
 
   it('refuses to create a snapshot without the explicit confirmation', async () => {
@@ -153,6 +165,26 @@ describe('Nano staging application backup primitive', () => {
 
     expect(failure).toBeInstanceOf(Error);
     expect((failure as CommandFailure).stderr).toContain('BACKUP_STAGING_RELEASE');
+    await expect(lstat(input.backupDirectory)).rejects.toThrow();
+  });
+
+  it('refuses to attest a running worker that differs from release.env digest', async () => {
+    const input = await fixture();
+    const releasePath = join(input.appRoot, 'release.env');
+    const release = await readFile(releasePath, 'utf8');
+    await writeFile(
+      releasePath,
+      release.replace(
+        `WORKER_IMAGE_DIGEST=sha256:${'c'.repeat(64)}`,
+        `WORKER_IMAGE_DIGEST=sha256:${'d'.repeat(64)}`,
+      ),
+    );
+
+    const failure = await execute(input).catch((error: CommandFailure) => error);
+    expect(failure).toBeInstanceOf(CommandFailure);
+    expect((failure as CommandFailure).stderr).toContain(
+      'running worker does not match release.env digest',
+    );
     await expect(lstat(input.backupDirectory)).rejects.toThrow();
   });
 

@@ -60,6 +60,7 @@ export interface ClientRoutingPlan {
     readonly providerTenantKey: string;
     readonly accessTokenPath: '/auth/viva/access';
     readonly allowedRequestHeaders: readonly ['Authorization'];
+    readonly allowedMediaHosts?: readonly string[];
   };
 }
 
@@ -81,6 +82,17 @@ export function profilePhotoDeliveryUrl(tenantId: string, deliveryId: string): s
 
 export const PROFILE_PHOTO_DELIVERY_PATH_PATTERN =
   /^\/public\/api\/v1\/media\/profile-photos\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+/** Stable client-facing community-logo URL backed by the current private WebP object. */
+export function communityLogoDeliveryUrl(tenantId: string, communityId: string): string {
+  if (!PADLHUB_UUID_PATTERN.test(tenantId) || !PADLHUB_UUID_PATTERN.test(communityId)) {
+    throw new Error('COMMUNITY_LOGO_DELIVERY_ID_INVALID');
+  }
+  return `/public/api/v1/media/community-logos/${tenantId}/${communityId}`;
+}
+
+export const COMMUNITY_LOGO_DELIVERY_PATH_PATTERN =
+  /^\/public\/api\/v1\/media\/community-logos\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export type DomainName =
   | 'identity'

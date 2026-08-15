@@ -235,15 +235,18 @@ For a missing local logo in `legacy` mode, the worker downloads the source image
 metadata, constrains the dimensions, encodes WebP and stores an immutable
 `community-logos/{tenant}/{community}/{sha256}.webp` object in the private S3-compatible bucket.
 `integration.community_logo_sync` keeps the integration-only source URL, content hash, object key
-and expiring PadlHub delivery URL. Logo metadata and the Home community component commit in one
-tenant transaction; the browser sees only the signed PadlHub URL.
+and optional legacy delivery metadata used only during rolling compatibility. Logo metadata and the
+Home community component commit in one tenant transaction; the browser sees only the stable
+`/public/api/v1/media/community-logos/{tenantId}/{communityId}` PadlHub route. The API resolves the
+current private object under tenant RLS and streams WebP bytes, so an expired object-store signature
+cannot break a persisted Home or directory response.
 
 The source URL contains a stable legacy asset token, so an unchanged URL reuses the stored WebP
-without another download and only renews the signed URL near expiry. A changed source URL creates a
+without another download. A changed source URL creates a
 new immutable object. A temporary media/storage failure retains the last local logo and does not
 fail the community component; a removed source logo clears the projection. Replaced objects enter
-delayed garbage collection after signed URLs and stale Home snapshots can no longer reference them.
-The paginated directory reads the same stored delivery URL from PostgreSQL, so it never serves the
+delayed garbage collection after stale Home snapshots can no longer reference them.
+The paginated directory derives the same stable delivery route from the stored object mapping, so it never serves the
 legacy media origin directly.
 
 ## Runtime modes and cutover

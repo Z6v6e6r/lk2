@@ -532,13 +532,19 @@ jobs:
         run: |
           scp deploy/jetson/backup-application.sh \
             "phub-deploy@$HOST:/opt/phub/backup-application.sh.next"
+          scp deploy/jetson/prepare-compatible-worker-rollback.sh \
+            "phub-deploy@$HOST:/opt/phub/prepare-compatible-worker-rollback.sh.next"
           scp deploy/jetson/rollback-application.sh \
             "phub-deploy@$HOST:/opt/phub/rollback-application.sh.next"
+          scp deploy/jetson/verify-media-rollback-safe.sh \
+            "phub-deploy@$HOST:/opt/phub/verify-media-rollback-safe.sh.next"
           ssh "phub-deploy@$HOST" '
             set -eu
             install -m 755 /opt/phub/backup-application.sh.next /opt/phub/backup-application.sh
+            install -m 755 /opt/phub/prepare-compatible-worker-rollback.sh.next /opt/phub/prepare-compatible-worker-rollback.sh
             install -m 755 /opt/phub/rollback-application.sh.next /opt/phub/rollback-application.sh
-            rm -f /opt/phub/backup-application.sh.next /opt/phub/rollback-application.sh.next
+            install -m 755 /opt/phub/verify-media-rollback-safe.sh.next /opt/phub/verify-media-rollback-safe.sh
+            rm -f /opt/phub/backup-application.sh.next /opt/phub/prepare-compatible-worker-rollback.sh.next /opt/phub/rollback-application.sh.next /opt/phub/verify-media-rollback-safe.sh.next
           '
           ssh "phub-deploy@$HOST" \
             "PHUB_BACKUP_ROOT=/opt/phub/backups/releases sh /opt/phub/backup-application.sh '$STAGING_RELEASE_BACKUP_DIR' BACKUP_STAGING_RELEASE"
@@ -695,23 +701,44 @@ jobs:
               "psql -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -Atc \"select filename from public.schema_migrations\"" \
             )"
             printf "%s\n" "$applied_migrations" | grep -Fx "$latest_migration"
-            if [ "$deployment_profile" = COMMUNITIES_LEGACY_READ_ONLY ]; then
-              compose up -d --remove-orphans web api
-              compose stop worker realtime
-              [ -z "$(compose ps --status running -q worker)" ]
-              [ -z "$(compose ps --status running -q realtime)" ]
-            else
-              compose up -d --remove-orphans
-            fi
-            # The ingress configuration is bind-mounted. Recreate this one
-            # stateless container so it loads the newly copied configuration.
-            docker compose --env-file infrastructure.env -f compose.infrastructure.yaml up -d --force-recreate nginx
 
             service_is_healthy() {
               container_id="$(compose ps -q "$1")"
               [ -n "$container_id" ] &&
                 [ "$(docker inspect --format "{{.State.Health.Status}}" "$container_id")" = "healthy" ]
             }
+
+            wait_for_service() {
+              service="$1"
+              attempt=0
+              while [ "$attempt" -lt 36 ]; do
+                if service_is_healthy "$service"; then
+                  return 0
+                fi
+                attempt=$((attempt + 1))
+                sleep 5
+              done
+              compose ps -a
+              compose logs --no-color --tail=160 "$service"
+              return 1
+            }
+
+            if [ "$deployment_profile" = COMMUNITIES_LEGACY_READ_ONLY ]; then
+              compose up -d --remove-orphans web api
+              wait_for_service api
+              compose stop worker realtime
+              [ -z "$(compose ps --status running -q worker)" ]
+              [ -z "$(compose ps --status running -q realtime)" ]
+            else
+              # Media cutovers publish stable first-party URLs. Start the API route first so a
+              # worker can never publish a URL that the currently serving API cannot resolve.
+              compose up -d --remove-orphans web api
+              wait_for_service api
+              compose up -d --remove-orphans worker realtime
+            fi
+            # The ingress configuration is bind-mounted. Recreate this one
+            # stateless container so it loads the newly copied configuration.
+            docker compose --env-file infrastructure.env -f compose.infrastructure.yaml up -d --force-recreate nginx
 
             ready=0
             attempt=0
@@ -933,5 +960,18 @@ jobs:
         env:
           HOST: ${{ secrets.STAGING_HOST }}
         run: |
-          ssh "phub-deploy@$HOST" \
-            "PHUB_ROLLBACK_BACKUP_ROOT=/opt/phub/backups/releases sh /opt/phub/rollback-application.sh '$STAGING_RELEASE_BACKUP_DIR' --confirm=ROLLBACK_STAGING_RELEASE"
+          if ssh "phub-deploy@$HOST" \
+            'PHUB_MEDIA_ROLLBACK_MODE=pre-cutover sh /opt/phub/verify-media-rollback-safe.sh'; then
+            ssh "phub-deploy@$HOST" \
+              "PHUB_ROLLBACK_BACKUP_ROOT=/opt/phub/backups/releases sh /opt/phub/rollback-application.sh '$STAGING_RELEASE_BACKUP_DIR' --confirm=ROLLBACK_STAGING_RELEASE"
+          else
+            guard_status="$?"
+            if [ "$guard_status" -ne 42 ]; then
+              echo "Media rollback precheck failed without a confirmed compatibility transition (exit=$guard_status)" >&2
+              exit "$guard_status"
+            fi
+            ssh "phub-deploy@$HOST" \
+              "PHUB_ROLLBACK_BACKUP_ROOT=/opt/phub/backups/releases sh /opt/phub/prepare-compatible-worker-rollback.sh '$STAGING_RELEASE_BACKUP_DIR' PREPARE_COMPATIBLE_WORKER_ROLLBACK"
+            ssh "phub-deploy@$HOST" \
+              "PHUB_ROLLBACK_REQUIRE_COMPATIBLE_WORKER=true PHUB_ROLLBACK_BACKUP_ROOT=/opt/phub/backups/releases sh /opt/phub/rollback-application.sh '$STAGING_RELEASE_BACKUP_DIR' --confirm=ROLLBACK_STAGING_RELEASE"
+          fi

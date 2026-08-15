@@ -92,6 +92,7 @@ async function fixture(): Promise<Fixture> {
   await write(join(backup, 'staging.auth.env'), 'ROLLBACK_TEST_SECRET=never-print-me\n', 0o600);
   await write(join(backup, 'staging.override.env'), 'HOME_READ_MODE=previous\n', 0o600);
   await write(join(backup, 'staging.communities.env'), 'COMMUNITIES_READ_MODE=mock\n', 0o600);
+  await write(join(backup, 'staging.games.env.absent'), '', 0o600);
   await write(join(backup, 'tls-ingress', 'Caddyfile'), 'previous caddy\n');
   await write(
     join(backup, 'process-state.env'),
@@ -99,6 +100,11 @@ async function fixture(): Promise<Fixture> {
     0o600,
   );
   await write(join(backup, 'backup.complete'), `${'b'.repeat(40)}\n`, 0o600);
+  await write(
+    join(backup, 'worker-capabilities.env'),
+    'API_CLIENT_MEDIA_ROLLBACK_V1=true\nWORKER_CLIENT_MEDIA_ROLLBACK_V1=true\n',
+    0o600,
+  );
 
   await write(
     join(bin, 'docker'),
@@ -108,6 +114,11 @@ printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 case "$*" in
   *'--profile migration config --images'*) printf '%s\\n' "$FAKE_DOCKER_IMAGES" ;;
   *'config --images'*) printf '%s\\n' "$FAKE_DOCKER_IMAGES" | sed '/phub-migrator/d' ;;
+  *'ps --status running -q worker'*) printf '%s\\n' "\${FAKE_COMPATIBLE_WORKER_ID:-}" ;;
+  *"inspect --format {{.Config.Image}} \${FAKE_COMPATIBLE_WORKER_ID:-__missing__}"*)
+    printf '%s\\n' "\${FAKE_COMPATIBLE_WORKER_IMAGE:-}" ;;
+  *"exec \${FAKE_COMPATIBLE_WORKER_ID:-__missing__} node -e"*)
+    exit "\${FAKE_WORKER_CAPABILITY_STATUS:-0}" ;;
 esac
 `,
     0o755,
@@ -119,6 +130,7 @@ esac
 function execute(
   input: Fixture,
   operation: string | null = '--confirm=ROLLBACK_STAGING_RELEASE',
+  extraEnvironment: Readonly<Record<string, string>> = {},
 ): Promise<CommandResult> {
   return new Promise((resolve, reject) => {
     execFile(
@@ -134,6 +146,7 @@ function execute(
           PHUB_ROLLBACK_HEALTH_DELAY_SECONDS: '0',
           FAKE_DOCKER_LOG: input.dockerLog,
           FAKE_DOCKER_IMAGES: input.images,
+          ...extraEnvironment,
         },
       },
       (error, stdout, stderr) => {
@@ -276,6 +289,42 @@ describe('Nano staging application rollback primitive', () => {
     expect(dockerCalls).not.toContain('up -d realtime');
     expect(dockerCalls).not.toContain('exec -T worker node -e');
     expect(dockerCalls).not.toContain('exec -T realtime node -e');
+  });
+
+  it('restores the attested saved worker without replacing it during rollback', async () => {
+    const input = await fixture();
+    const compatibleImage = `ghcr.io/z6v6e6r/phub-worker@${digest}`;
+
+    await execute(input, '--confirm=ROLLBACK_STAGING_RELEASE', {
+      PHUB_ROLLBACK_REQUIRE_COMPATIBLE_WORKER: 'true',
+      FAKE_COMPATIBLE_WORKER_ID: 'worker-compatible-id',
+      FAKE_COMPATIBLE_WORKER_IMAGE: compatibleImage,
+    });
+
+    const restoredRelease = await readFile(join(input.root, 'release.env'), 'utf8');
+    expect(restoredRelease).toContain(`WORKER_IMAGE_DIGEST=${digest}`);
+    const dockerCalls = await readFile(input.dockerLog, 'utf8');
+    expect(dockerCalls).not.toContain('up -d worker');
+    expect(dockerCalls.match(/ps --status running -q worker/g)).toHaveLength(2);
+    expect(dockerCalls).toContain('inspect --format {{.Config.Image}} worker-compatible-id');
+  });
+
+  it('refuses rollback before mutation when the attested worker fails runtime capability', async () => {
+    const input = await fixture();
+    const compatibleImage = `ghcr.io/z6v6e6r/phub-worker@${digest}`;
+
+    const failure = await execute(input, '--confirm=ROLLBACK_STAGING_RELEASE', {
+      PHUB_ROLLBACK_REQUIRE_COMPATIBLE_WORKER: 'true',
+      FAKE_COMPATIBLE_WORKER_ID: 'worker-compatible-id',
+      FAKE_COMPATIBLE_WORKER_IMAGE: compatibleImage,
+      FAKE_WORKER_CAPABILITY_STATUS: '1',
+    }).catch((error: CommandFailure) => error);
+
+    expect(failure).toBeInstanceOf(CommandFailure);
+    expect((failure as CommandFailure).stderr).toContain('phub.client-media-rollback.v1');
+    await expect(readFile(join(input.root, 'compose.yaml'), 'utf8')).resolves.toBe(
+      'current compose\n',
+    );
   });
 
   it('fails before changing files when a saved image reference is mutable', async () => {

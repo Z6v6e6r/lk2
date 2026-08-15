@@ -87,7 +87,7 @@ describe('community repositories', () => {
     ).resolves.toBe('legacy-community-1');
   });
 
-  it('reads only PadlHub delivery URLs for copied community logos', async () => {
+  it('reads only stable PadlHub delivery URLs for copied community logos', async () => {
     const communityId = '11111111-1111-4111-8111-111111111111';
     const { pool } = poolWithQueries((text, values) => {
       if (text.includes('from integration.community_logo_sync')) {
@@ -96,7 +96,7 @@ describe('community repositories', () => {
           rows: [
             {
               community_id: communityId,
-              delivery_url: 'https://media.padlhub.test/community.webp?sig=test',
+              object_key: `community-logos/${tenantId}/${communityId}/${'a'.repeat(64)}.webp`,
             },
           ],
         };
@@ -107,7 +107,7 @@ describe('community repositories', () => {
     await expect(
       createCommunityLegacyBridgeRepository(pool).getCommunityLogoUrls?.(tenantId, [communityId]),
     ).resolves.toEqual(
-      new Map([[communityId, 'https://media.padlhub.test/community.webp?sig=test']]),
+      new Map([[communityId, `/public/api/v1/media/community-logos/${tenantId}/${communityId}`]]),
     );
   });
 
@@ -121,7 +121,7 @@ describe('community repositories', () => {
               id: '11111111-1111-4111-8111-111111111111',
               title: 'Локальное сообщество',
               is_verified: true,
-              logo_url: null,
+              logo_object_key: null,
               ranking_position: 4,
               pinned: true,
               sort_at: new Date('2026-07-17T10:00:00.000Z'),

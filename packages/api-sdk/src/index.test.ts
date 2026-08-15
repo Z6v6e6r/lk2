@@ -177,6 +177,56 @@ describe('PadlHubApiClient authentication boundary', () => {
     );
   });
 
+  it('resolves stable relative community logos in a ready HomeBase section', async () => {
+    const relativeLogo =
+      '/public/api/v1/media/community-logos/86afbe01-0318-4dd2-bc25-303b7bf0d430/11111111-1111-4111-8111-111111111111';
+    const fetchImplementation = vi.fn<typeof fetch>().mockResolvedValue(
+      jsonResponse({
+        snapshot: {
+          version: 'home-base-v1-8',
+          generatedAt: '2026-08-14T10:00:00.000Z',
+          source: 'LOCAL_PROJECTION',
+          completeness: 'PARTIAL',
+        },
+        viewerUserId: authenticatedSession.user.id,
+        quickActions: [],
+        communities: {
+          status: 'READY',
+          revision: '8',
+          observedAt: '2026-08-14T09:59:00.000Z',
+          staleAt: '2026-08-14T10:04:00.000Z',
+          value: [
+            {
+              id: '11111111-1111-4111-8111-111111111111',
+              title: 'ПаделХаб',
+              logoUrl: relativeLogo,
+              isVerified: true,
+              unreadChatCount: 0,
+              route: '/communities/11111111-1111-4111-8111-111111111111',
+            },
+          ],
+        },
+        promotions: { status: 'UNAVAILABLE' },
+        locations: [],
+        additionalLinks: [],
+        capabilities: {
+          canCreateGame: true,
+          canManageTournaments: false,
+          canViewCommunities: true,
+        },
+      }),
+    );
+    const client = createClient(fetchImplementation, {
+      initialAccessToken: authenticatedSession.accessToken,
+    });
+
+    const result = await client.getHomeBase();
+
+    expect(result.communities.status).toBe('READY');
+    if (result.communities.status === 'UNAVAILABLE') throw new Error('Expected ready communities');
+    expect(result.communities.value[0]?.logoUrl).toBe(`https://api.padlhub.test${relativeLogo}`);
+  });
+
   it('resolves stable relative location media paths against the configured API origin', async () => {
     const fetchImplementation: typeof fetch = () =>
       Promise.resolve(
@@ -203,6 +253,64 @@ describe('PadlHubApiClient authentication boundary', () => {
     expect(result.items[0]?.coverImageUrl).toBe(
       'https://api.padlhub.test/public/api/v1/local-padel/location-media/22222222-2222-4222-8222-222222222222',
     );
+  });
+
+  it('uploads client-assisted profile bytes with authentication and resolves the stable avatar URL', async () => {
+    const calls: Array<{ input: Parameters<typeof fetch>[0]; init?: RequestInit }> = [];
+    const fetchImplementation: typeof fetch = (input, init) => {
+      calls.push({ input, ...(init === undefined ? {} : { init }) });
+      return Promise.resolve(
+        jsonResponse(
+          {
+            avatarUrl:
+              '/public/api/v1/media/profile-photos/86afbe01-0318-4dd2-bc25-303b7bf0d430/33333333-3333-4333-8333-333333333333',
+            replayed: false,
+          },
+          201,
+        ),
+      );
+    };
+    const client = createClient(fetchImplementation, {
+      initialAccessToken: authenticatedSession.accessToken,
+    });
+
+    const result = await client.syncUserProfilePhoto({
+      body: new Uint8Array([1, 2, 3]).buffer,
+      contentType: 'image/jpeg',
+      grant: 'profile-photo-grant-token',
+    });
+
+    expect(result.avatarUrl).toBe(
+      'https://api.padlhub.test/public/api/v1/media/profile-photos/86afbe01-0318-4dd2-bc25-303b7bf0d430/33333333-3333-4333-8333-333333333333',
+    );
+    expect(calls).toHaveLength(1);
+    expect(requestUrl(calls[0]?.input ?? '')).toBe(
+      'https://api.padlhub.test/user/api/v1/local-padel/profile/photo',
+    );
+    expect(new Headers(calls[0]?.init?.headers).get('Content-Type')).toBe('image/jpeg');
+    expect(new Headers(calls[0]?.init?.headers).get('Authorization')).toBe(
+      `Bearer ${authenticatedSession.accessToken}`,
+    );
+    expect(new Headers(calls[0]?.init?.headers).get('Idempotency-Key')).toBeTruthy();
+    expect(new Headers(calls[0]?.init?.headers).get('X-Profile-Photo-Grant')).toBe(
+      'profile-photo-grant-token',
+    );
+  });
+
+  it('does not retry profile-photo bytes after a network failure', async () => {
+    const fetchImplementation = vi.fn<typeof fetch>().mockRejectedValue(new TypeError('offline'));
+    const client = createClient(fetchImplementation, {
+      initialAccessToken: authenticatedSession.accessToken,
+    });
+
+    await expect(
+      client.syncUserProfilePhoto({
+        body: new Uint8Array([1, 2, 3]).buffer,
+        contentType: 'image/jpeg',
+        grant: 'profile-photo-grant-token',
+      }),
+    ).rejects.toThrow();
+    expect(fetchImplementation).toHaveBeenCalledTimes(1);
   });
 
   it('reads the published gift certificate catalog without forwarding a token', async () => {
@@ -1078,13 +1186,27 @@ describe('PadlHubApiClient notification boundary', () => {
     const calls: Array<{ input: Parameters<typeof fetch>[0]; init?: RequestInit }> = [];
     const fetchImplementation: typeof fetch = (input, init) => {
       calls.push({ input, ...(init === undefined ? {} : { init }) });
-      return Promise.resolve(jsonResponse({ items: [] }));
+      return Promise.resolve(
+        jsonResponse({
+          items: [
+            {
+              id: '11111111-1111-4111-8111-111111111111',
+              title: 'Сообщество',
+              logoUrl:
+                '/public/api/v1/media/community-logos/86afbe01-0318-4dd2-bc25-303b7bf0d430/11111111-1111-4111-8111-111111111111',
+              isVerified: true,
+              unreadChatCount: 0,
+              route: '/communities/11111111-1111-4111-8111-111111111111',
+            },
+          ],
+        }),
+      );
     };
     const client = createClient(fetchImplementation, {
       initialAccessToken: authenticatedSession.accessToken,
     });
 
-    await client.listMyCommunities({ limit: 20, cursor: 'opaque-community-cursor' });
+    const page = await client.listMyCommunities({ limit: 20, cursor: 'opaque-community-cursor' });
 
     const url = requestUrl(calls[0]?.input ?? '');
     expect(url).toBe(
@@ -1092,6 +1214,33 @@ describe('PadlHubApiClient notification boundary', () => {
     );
     expect(url).not.toContain('phone');
     expect(url).not.toContain('clientId');
+    expect(page.items[0]?.logoUrl).toBe(
+      'https://api.padlhub.test/public/api/v1/media/community-logos/86afbe01-0318-4dd2-bc25-303b7bf0d430/11111111-1111-4111-8111-111111111111',
+    );
+  });
+
+  it('resolves the stable relative logo in community detail', async () => {
+    const communityId = '11111111-1111-4111-8111-111111111111';
+    const relativeLogo =
+      '/public/api/v1/media/community-logos/86afbe01-0318-4dd2-bc25-303b7bf0d430/11111111-1111-4111-8111-111111111111';
+    const fetchImplementation = vi.fn<typeof fetch>().mockResolvedValue(
+      jsonResponse({
+        id: communityId,
+        title: 'ПаделХаб',
+        logoUrl: relativeLogo,
+        isVerified: true,
+        description: null,
+        memberCount: 42,
+        readOnly: true,
+      }),
+    );
+    const client = createClient(fetchImplementation, {
+      initialAccessToken: authenticatedSession.accessToken,
+    });
+
+    const detail = await client.getCommunityReadExperienceDetail(communityId);
+
+    expect(detail.logoUrl).toBe(`https://api.padlhub.test${relativeLogo}`);
   });
 
   it('uses canonical discovery/detail without identity or invite selectors', async () => {

@@ -145,6 +145,44 @@ describe('Viva profile photo synchronization', () => {
     expect(requestHeaders.get('If-None-Match')).toBe('"photo-v1"');
   });
 
+  it('prepares changed bytes without uploading until the worker reserves the object', async () => {
+    const png = await sharp({
+      create: { width: 16, height: 16, channels: 4, background: '#7457ef' },
+    })
+      .png()
+      .toBuffer();
+    const database = poolWith({
+      photo_url: null,
+      delivery_id: null,
+      source_url: null,
+      source_etag: null,
+      source_last_modified: null,
+      content_sha256: null,
+      object_key: null,
+      synced_at: null,
+    });
+    const objectStore = store();
+
+    const result = await synchronizeVivaProfilePhoto({
+      ...settings,
+      pool: database.pool,
+      store: objectStore,
+      sourceUrl,
+      deferStorePut: true,
+      fetchImplementation: vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(new Response(png, { headers: { 'Content-Type': 'image/png' } })),
+    });
+
+    expect(result.outcome).toBe('stored');
+    expect(result.preparedObject).toMatchObject({
+      key: result.persistence.objectKey,
+      sha256: result.persistence.contentSha256,
+    });
+    expect(result.preparedObject?.deleteAfter).toBeDefined();
+    expect(objectStore.put).not.toHaveBeenCalled();
+  });
+
   it('clears the profile and schedules the previous object for deletion when Viva removes photo', async () => {
     const contentSha256 = 'b'.repeat(64);
     const objectKey = `profile-photos/${tenantId}/${userId}/${contentSha256}.webp`;

@@ -113,12 +113,16 @@ live external response with its local snapshot. See
 Legacy community logo URLs are worker-only integration hints. Missing local assets are fetched from
 an HTTPS allowlist, bounded, normalized to metadata-free WebP and stored under immutable
 `community-logos/{tenant}/{community}/{sha256}.webp` keys. PostgreSQL keeps the source/object mapping
-and short-lived signed delivery URL; the mapping and Home component outbox event share one tenant
-transaction. Browsers never load legacy media directly, and superseded objects are deleted only
-after signed URLs and stale projections have expired.
+while API and Home responses expose only the stable
+`/public/api/v1/media/community-logos/{tenantId}/{communityId}` route; the mapping and Home component
+outbox event share one tenant transaction. Browsers never load legacy media directly, and
+superseded objects are deleted only after stale projections have expired.
 
-Provider-hosted profile photos cross the integration boundary only in `apps/worker`. They are
+Server-mediated provider-hosted profile photos cross the integration boundary in `apps/worker`. They are
 allowlisted, size-limited, normalized to metadata-free WebP and stored under immutable SHA-256 keys.
+For a browser-direct self-profile, the same boundary also permits the authenticated browser to fetch
+bounded image bytes with no cookies or authorization header and submit only those bytes to the
+PadlHub profile-photo command; provider URLs and credentials never cross into PadlHub persistence.
 PostgreSQL keeps the tenant/user object mapping and provider change validators; profiles and read
 projections keep only the stable `/public/api/v1/media/profile-photos/{tenantId}/{deliveryId}` PadlHub URL.
 The API resolves the current object key under tenant RLS and streams the private WebP from object

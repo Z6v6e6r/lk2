@@ -1252,6 +1252,8 @@ describe('browser auth gateway', () => {
   });
 
   it('loads the self profile directly from Viva when the server routing plan allows it', async () => {
+    let now = Date.now();
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
     const userId = '00000000-0000-4000-8000-000000000001';
     const session = {
       accessToken: 'short-lived-padlhub-token',
@@ -1279,7 +1281,7 @@ describe('browser auth gateway', () => {
       revision: '6',
       mode: 'MIXED_END_USER_READS',
       issuedAt: new Date().toISOString(),
-      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      expiresAt: '2099-07-11T12:10:00.000Z',
       operations: operationNames.map((operation) => ({
         operation,
         transport: operation === 'profile.read' ? 'DIRECT_VIVA' : 'PADLHUB_API',
@@ -1290,6 +1292,7 @@ describe('browser auth gateway', () => {
         providerTenantKey: 'iSkq6G',
         accessTokenPath: '/auth/viva/access',
         allowedRequestHeaders: ['Authorization'],
+        allowedMediaHosts: ['.vivacrm.invalid'],
       },
     };
     const vivaProfileId = '33333333-3333-4333-8333-333333333333';
@@ -1300,8 +1303,10 @@ describe('browser auth gateway', () => {
       lastName: 'Петрова',
       phone: '+7 999 000-00-01',
       deposit: 54_000,
+      photo: 'https://cdn.vivacrm.invalid/profile/anna.jpg',
       customFields: [{ id: 'eabfe27b-3f72-4496-9185-1a2ec6e6465e', value: ['3,8'] }],
     };
+    const profilePhoto = new Uint8Array([0xff, 0xd8, 0xff, 0xd9]);
     const fetchImplementation = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(Response.json(session))
@@ -1310,9 +1315,27 @@ describe('browser auth gateway', () => {
         Response.json({
           accessToken: 'short-lived-viva-token',
           expiresAt: '2099-07-11T12:10:00.000Z',
+          profilePhotoGrant: 'short-lived-profile-photo-grant',
         }),
       )
-      .mockResolvedValueOnce(Response.json(vivaProfile));
+      .mockResolvedValueOnce(Response.json(vivaProfile))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(
+        new Response(profilePhoto, { headers: { 'content-type': 'image/jpeg' } }),
+      )
+      .mockResolvedValueOnce(
+        Response.json(
+          {
+            avatarUrl:
+              '/public/api/v1/media/profile-photos/00000000-0000-4000-8000-000000000002/44444444-4444-4444-8444-444444444444',
+            replayed: false,
+          },
+          { status: 201 },
+        ),
+      )
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(Response.json(vivaProfile))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
     const gateway = createBrowserAuthGateway({
       baseUrl: 'https://api.padlhub.test/',
       tenantKey: 'padlhub',
@@ -1331,6 +1354,8 @@ describe('browser auth gateway', () => {
       userId,
       displayName: 'Анна Петрова',
       balanceMinor: 54_000,
+      avatarUrl:
+        'https://api.padlhub.test/public/api/v1/media/profile-photos/00000000-0000-4000-8000-000000000002/44444444-4444-4444-8444-444444444444',
       level: { label: 'C+', value: 3.8, assessmentRequired: false },
     });
     expect(profile).toMatchObject({
@@ -1346,7 +1371,7 @@ describe('browser auth gateway', () => {
       },
       access: { audience: 'SELF', tier: 'SELF' },
     });
-    expect(fetchImplementation).toHaveBeenCalledTimes(5);
+    expect(fetchImplementation).toHaveBeenCalledTimes(8);
     expect(fetchImplementation.mock.calls[2]?.[0]).toBe(
       'https://api.padlhub.test/user/api/v1/padlhub/auth/viva/access',
     );
@@ -1360,7 +1385,45 @@ describe('browser auth gateway', () => {
       'Bearer short-lived-viva-token',
     );
     expect(directProfileInit?.credentials).toBe('omit');
+    const [photoInput, photoInit] = fetchImplementation.mock.calls[5] ?? [];
+    expect(requestUrl(photoInput as Parameters<typeof fetch>[0])).toBe(vivaProfile.photo);
+    expect(photoInit?.credentials).toBe('omit');
+    expect(new Headers(photoInit?.headers).has('Authorization')).toBe(false);
+    const [uploadInput, uploadInit] = fetchImplementation.mock.calls[6] ?? [];
+    expect(requestUrl(uploadInput as Parameters<typeof fetch>[0])).toBe(
+      'https://api.padlhub.test/user/api/v1/padlhub/profile/photo',
+    );
+    expect(uploadInit?.method).toBe('POST');
+    expect(new Headers(uploadInit?.headers).get('Content-Type')).toBe('image/jpeg');
+    expect(new Headers(uploadInit?.headers).get('X-Profile-Photo-Grant')).toBe(
+      'short-lived-profile-photo-grant',
+    );
+    expect(new Headers(uploadInit?.headers).has('Idempotency-Key')).toBe(true);
+    const [syncMetricInput, syncMetricInit] = fetchImplementation.mock.calls[7] ?? [];
+    expect(requestUrl(syncMetricInput as Parameters<typeof fetch>[0])).toBe(
+      'https://api.padlhub.test/user/api/v1/padlhub/routing-outcomes',
+    );
+    const syncMetricBody = syncMetricInit?.body;
+    expect(typeof syncMetricBody).toBe('string');
+    if (typeof syncMetricBody !== 'string') throw new Error('Profile photo metric body is missing');
+    expect(JSON.parse(syncMetricBody)).toMatchObject({
+      operation: 'profile.photo.sync',
+      outcome: 'SUCCESS',
+      statusClass: '2xx',
+    });
     expect(JSON.stringify(selfProfile)).not.toContain(vivaProfileId);
+    expect(JSON.stringify(selfProfile)).not.toContain(vivaProfile.photo);
+
+    now += 61_000;
+    await expect(gateway.getSelfProfile()).resolves.toMatchObject({
+      avatarUrl:
+        'https://api.padlhub.test/public/api/v1/media/profile-photos/00000000-0000-4000-8000-000000000002/44444444-4444-4444-8444-444444444444',
+    });
+    const requestUrls = fetchImplementation.mock.calls.map(([input]) => requestUrl(input));
+    expect(requestUrls.filter((url) => url === vivaProfile.photo)).toHaveLength(1);
+    expect(requestUrls.filter((url) => url.endsWith('/profile/photo'))).toHaveLength(1);
+    expect(requestUrls.filter((url) => url.endsWith('/auth/viva/access'))).toHaveLength(1);
+    nowSpy.mockRestore();
   });
 
   it('starts Viva recovery when a direct self-profile read has no active delegation', async () => {

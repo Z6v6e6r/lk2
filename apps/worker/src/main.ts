@@ -56,13 +56,17 @@ import {
 import { publishOutboxBatch } from './outbox-publisher.js';
 import { runHomeBaseSyncCycle } from './home-base-sync.js';
 import { runPlatformHomeSyncCycle } from './platform-home-sync.js';
-import { runCommunityHomeSyncCycle } from './community-home-sync.js';
+import {
+  runCommunityHomeSyncCycle,
+  runCommunityLogoCompatibilityBackfill,
+} from './community-home-sync.js';
+import { CommunityLogoHostCircuit } from './community-logo-sync.js';
 import { LegacyPromotionSource, type LegacyPromotionPlacement } from './legacy-promotion-source.js';
 import { publishLeasedOutboxBatch } from './leased-outbox-publisher.js';
 import { S3ProfilePhotoObjectStore } from './profile-photo-sync.js';
 import { runPromotionHomeSyncCycle } from './promotion-home-sync.js';
 import { runLegacyGamesRosterSyncCycle } from './legacy-games-roster-sync.js';
-import { runVivaHomeSyncCycle } from './viva-home-sync.js';
+import { runProfilePhotoMaintenanceCycle, runVivaHomeSyncCycle } from './viva-home-sync.js';
 import { WebPushDeliveryAdapter } from './web-push-adapter.js';
 import { runWebPushDeliveryBatch } from './web-push-delivery.js';
 import { runFairTenantCycle } from './tenant-cycle-orchestrator.js';
@@ -73,6 +77,7 @@ import {
 } from './worker-runtime-health.js';
 
 const config = loadConfig(process.env, { profilePhotoStorage: true });
+const clientMediaRollbackCapability = 'phub.client-media-rollback.v1';
 const logger = createLogger('worker', config.LOG_LEVEL, process.env.RELEASE);
 const telemetry = startTelemetry({
   serviceName: 'worker',
@@ -162,6 +167,11 @@ const communityHome = (() => {
       config.COMMUNITIES_READ_MODE === 'legacy' ? ('LEGACY' as const) : ('LOCAL' as const),
   };
 })();
+const communityLogoCircuit = new CommunityLogoHostCircuit({
+  failureThreshold: config.COMMUNITIES_LEGACY_CIRCUIT_FAILURE_THRESHOLD,
+  resetMs: config.COMMUNITIES_LEGACY_CIRCUIT_RESET_MS,
+  onMetric: (metric) => logger.info({ metric }, 'legacy community logo source read'),
+});
 const promotionSources = (() => {
   if (config.PROMOTIONS_READ_MODE !== 'legacy') return undefined;
   const createSource = (placement: LegacyPromotionPlacement): LegacyPromotionSource =>
@@ -386,7 +396,10 @@ const healthServer = createServer((request, response) => {
   void handleHealthRequest(request, response);
 });
 healthServer.listen(config.WORKER_HEALTH_PORT, '0.0.0.0');
-logger.info({ mode: config.OUTBOX_PUBLISH_MODE }, 'outbox publisher configured');
+logger.info(
+  { mode: config.OUTBOX_PUBLISH_MODE, capabilities: [clientMediaRollbackCapability] },
+  'outbox publisher configured',
+);
 let tenantCycleStartOffset = 0;
 
 const publishConfiguredOutboxBatch = (tenantId: string): Promise<number> => {
@@ -703,6 +716,9 @@ const vivaIdentityProvider = new VivaIdentityProvider({
 const vivaAdapters = new Map<string, VivaHomeSourceAdapter>();
 const profilePhotoStore =
   config.HOME_VIVA_SYNC_ENABLED ||
+  config.PROFILE_PHOTO_CLIENT_SYNC_ENABLED ||
+  config.PROFILE_PHOTO_MAINTENANCE_ENABLED ||
+  config.COMMUNITY_LOGO_COMPATIBILITY_BACKFILL_ENABLED ||
   config.PROMOTIONS_READ_MODE === 'legacy' ||
   config.LEGACY_GAMES_ROSTER_SYNC_ENABLED
     ? new S3ProfilePhotoObjectStore({
@@ -715,6 +731,7 @@ const profilePhotoStore =
         forcePathStyle: config.S3_FORCE_PATH_STYLE,
         autoCreateBucket: config.S3_AUTO_CREATE_BUCKET,
         readUrlTtlSeconds: config.PROFILE_PHOTO_URL_TTL_SECONDS,
+        timeoutMs: config.VIVA_TIMEOUT_MS,
       })
     : undefined;
 const getVivaHomeAdapter = (providerTenantKey: string): VivaHomeSourceAdapter => {
@@ -759,6 +776,33 @@ const runVivaSyncCycle = async (): Promise<void> => {
   }
 };
 
+const runProfilePhotoMaintenance = async (): Promise<void> => {
+  if (
+    shuttingDown ||
+    !profilePhotoStore ||
+    (!config.HOME_VIVA_SYNC_ENABLED && !config.PROFILE_PHOTO_MAINTENANCE_ENABLED)
+  ) {
+    return;
+  }
+  try {
+    const result = await runProfilePhotoMaintenanceCycle({
+      pool,
+      config,
+      logger,
+      profilePhotoStore,
+    });
+    if (result.deleted > 0 || result.deferred > 0 || result.commandsDeleted > 0) {
+      logger.info({ result }, 'profile photo maintenance cycle completed');
+    }
+  } catch (error) {
+    logger.error({ error }, 'profile photo maintenance cycle failed');
+  } finally {
+    if (!shuttingDown) {
+      setTimeout(() => void runProfilePhotoMaintenance(), config.HOME_VIVA_SYNC_INTERVAL_MS);
+    }
+  }
+};
+
 const runCommunitySyncCycle = async (): Promise<void> => {
   if (shuttingDown || !config.HOME_VIVA_SYNC_ENABLED || !profilePhotoStore || !communityHome) {
     return;
@@ -771,6 +815,7 @@ const runCommunitySyncCycle = async (): Promise<void> => {
       repository: communityHome.repository,
       sourceMode: communityHome.sourceMode,
       store: profilePhotoStore,
+      logoCircuit: communityLogoCircuit,
     });
     if (result.attempted > 0) logger.info({ result }, 'community Home sync cycle completed');
   } catch (error) {
@@ -778,6 +823,37 @@ const runCommunitySyncCycle = async (): Promise<void> => {
   } finally {
     if (!shuttingDown) {
       setTimeout(() => void runCommunitySyncCycle(), config.HOME_VIVA_SYNC_INTERVAL_MS);
+    }
+  }
+};
+
+const runCommunityLogoCompatibilityCycle = async (): Promise<void> => {
+  if (
+    shuttingDown ||
+    !profilePhotoStore ||
+    config.COMMUNITY_LOGO_STABLE_DELIVERY_ENABLED ||
+    config.COMMUNITY_LOGO_COMPATIBILITY_BACKFILL_ENABLED !== true
+  ) {
+    return;
+  }
+  try {
+    const result = await runCommunityLogoCompatibilityBackfill({
+      pool,
+      config,
+      logger,
+      store: profilePhotoStore,
+    });
+    if (result.logos > 0 || result.homes > 0 || result.failed > 0) {
+      logger.info({ result }, 'community logo compatibility backfill cycle completed');
+    }
+  } catch (error) {
+    logger.error({ error }, 'community logo compatibility backfill cycle failed');
+  } finally {
+    if (!shuttingDown) {
+      setTimeout(
+        () => void runCommunityLogoCompatibilityCycle(),
+        config.HOME_VIVA_SYNC_INTERVAL_MS,
+      );
     }
   }
 };
@@ -882,7 +958,9 @@ process.once('SIGINT', () => void shutdown('SIGINT'));
 void runCycle();
 if (telemetry) void runOperationalMetricsCycle();
 void runVivaSyncCycle();
+void runProfilePhotoMaintenance();
 void runCommunitySyncCycle();
+void runCommunityLogoCompatibilityCycle();
 void runPlatformSyncCycle();
 void runHomeBaseCycle();
 void runPromotionSyncCycle();
