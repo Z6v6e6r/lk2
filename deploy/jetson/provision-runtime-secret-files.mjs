@@ -537,6 +537,7 @@ export function finalize(directoryInput, finalSnapshot, options = {}) {
 export function readField(directoryInput, field) {
   const allowed = new Set([
     'phase',
+    'restoreFromPhase',
     'runtimeSnapshot',
     'activeComposeSha256',
     'candidateComposeSha256',

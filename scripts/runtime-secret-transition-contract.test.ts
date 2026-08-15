@@ -92,6 +92,9 @@ describe('runtime-secret transition delivery contract', () => {
     expect(controller.slice(earlyRollback, earlyReturn)).not.toContain('compose up');
     expect(controller.slice(earlyRollback, earlyReturn)).not.toContain('compose stop');
     expect(controller).toContain('test "$(runtime_snapshot)" = "$(state_field runtimeSnapshot)"');
+    expect(controller).toContain('restore_from_phase=$(state_field restoreFromPhase)');
+    expect(controller).toContain('if test "$phase" != files-restored; then');
+    expect(helper).toContain("'restoreFromPhase'");
   });
 
   it('resumes rollback after lost responses from file and runtime restoration', () => {

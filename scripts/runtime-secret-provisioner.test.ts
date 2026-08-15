@@ -136,6 +136,7 @@ describe('runtime-secret file transaction', () => {
       'injected failure',
     );
     expect(restoreFiles(input.directory)).toEqual({ status: 'files-restored' });
+    expect(readField(input.directory, 'restoreFromPhase')).toBe('prepared');
     expect(restoreFiles(input.directory)).toEqual({ status: 'files-restored' });
     advancePhase(input.directory, 'files-restored', 'runtime-restored');
     expect(restoreFiles(input.directory)).toEqual({ status: 'runtime-restored' });

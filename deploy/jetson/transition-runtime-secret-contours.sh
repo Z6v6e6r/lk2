@@ -278,11 +278,21 @@ restore_transition() {
   active_sha=$(state_field activeComposeSha256)
   candidate_sha=$(state_field candidateComposeSha256)
   current_sha=$(sha256sum "$app_root/compose.yaml" | cut -d ' ' -f 1)
+  files_only_recovery=false
+  case "$phase" in
+    initial | prepared) files_only_recovery=true ;;
+    files-restored)
+      restore_from_phase=$(state_field restoreFromPhase)
+      case "$restore_from_phase" in initial | prepared) files_only_recovery=true ;; esac
+      ;;
+  esac
   if test "$current_sha" = "$active_sha" &&
-    { test "$phase" = initial || test "$phase" = prepared; } &&
+    test "$files_only_recovery" = true &&
     test ! -e "$compose_backup" && test ! -L "$compose_backup" &&
     test ! -e "$compose_next" && test ! -L "$compose_next"; then
-    run_helper restore-files >/dev/null
+    if test "$phase" != files-restored; then
+      run_helper restore-files >/dev/null
+    fi
     attest_original_runtime
     run_helper advance-phase files-restored runtime-restored >/dev/null
     run_helper complete-rollback >/dev/null

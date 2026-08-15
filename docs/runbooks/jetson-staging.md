@@ -178,6 +178,12 @@ digests and old image IDs/refs. Before `verified` it restores the prior files/Co
 `verified` or `finalizing` converges forward idempotently. Never delete marker, `.next` or backup
 files manually.
 
+The restricted `phub-preflight` forced-command principal needs execute-only traversal on
+`/etc/phub` (for example an exact `u:phub-preflight:--x` ACL), but no read or write permission on
+the directory or its mode-`0600` env files. Inventory and backup commands fail closed unless they
+can test the fixed transition artifact names. Attest this ACL on the host before either Communities
+preflight mode; do not add the principal to a secret-reading group.
+
 The migrator file is not part of the application runtime environment. It must be mode `0600`, be
 readable by `phub-deploy`, and contain exactly one non-comment setting: `DATABASE_URL`. That URL
 uses the reviewed DDL role required by the migration ledger and current migrations. It must differ
