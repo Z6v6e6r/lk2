@@ -54,7 +54,9 @@ const validFoundationEnvironment: Readonly<Record<string, string>> = {
   ROUTING_TENANT_KEY: '',
   ROUTING_ACTOR_ID: '',
   ROUTING_APPLY_CONFIRMATION: '',
+  EXPECTED_ACTIVE_RELEASE: '',
   DIAGNOSE_HOME: 'false',
+  DIAGNOSE_MEDIA: 'false',
   DIAGNOSTIC_PHONE_LAST4: '',
   ACCESS_TARGET_USER_ID: '',
   ACCESS_ROLES: '',
@@ -177,6 +179,35 @@ describe('CHAT_PUSH_FOUNDATION request validation', () => {
       FOUNDATION_TENANT_KEYS: '',
       FOUNDATION_NO_BOOKING_PRODUCER_CONFIRMATION: '',
       ...mode,
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.output).toBe('');
+  });
+
+  it('rejects media-only inputs on a user-access operation', () => {
+    const result = executeValidation({
+      DEPLOY_CONFIRMATION: '',
+      FOUNDATION_MAINTENANCE_CONFIRMATION: '',
+      FOUNDATION_EXPECTED_CANDIDATE_SHA: '',
+      FOUNDATION_EXPECTED_ACTIVE_RELEASE_SHA: '',
+      FOUNDATION_TENANT_KEYS: '',
+      FOUNDATION_NO_BOOKING_PRODUCER_CONFIRMATION: '',
+      ACCESS_TARGET_USER_ID: '11111111-1111-4111-8111-111111111111',
+      ACCESS_ACTOR_ID: '22222222-2222-4222-8222-222222222222',
+      ACCESS_ROLES: 'player',
+      ACCESS_PERMISSIONS: 'profile.read',
+      EXPECTED_ACTIVE_RELEASE: 'c'.repeat(40),
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.output).toBe('');
+  });
+
+  it('rejects foundation inputs on MEDIA_BINARY_ONLY', () => {
+    const result = executeValidation({
+      DEPLOYMENT_PROFILE: 'MEDIA_BINARY_ONLY',
+      EXPECTED_ACTIVE_RELEASE: 'c'.repeat(40),
     });
 
     expect(result.status).not.toBe(0);

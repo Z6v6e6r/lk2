@@ -40,6 +40,21 @@ describe('chat/push staging foundation release contract', () => {
     );
   });
 
+  it('gates every staging operation on immutable third-party Action revisions', () => {
+    const useLines = workflow.split(/\r?\n/).filter((line) => /^\s*(?:-\s*)?uses\s*:/.test(line));
+    const thirdPartyUses = useLines.filter((line) => !/^\s*(?:-\s*)?uses\s*:\s*\.\//.test(line));
+
+    expect(useLines).toHaveLength(21);
+    expect(thirdPartyUses).toHaveLength(21);
+    for (const line of thirdPartyUses) {
+      expect(line).toMatch(/^\s*(?:-\s*)?uses\s*:\s*[A-Za-z0-9_./-]+@[0-9a-f]{40}\s*(?:#.*)?$/);
+    }
+    expect(workflow).toContain('STAGING_ACTION_REVISION_NOT_PINNED');
+    expect(workflow.indexOf('STAGING_ACTION_REVISION_NOT_PINNED')).toBeLessThan(
+      workflow.indexOf('  set-user-access:'),
+    );
+  });
+
   it('keeps the ACK in one helper command after drain and final backup only', () => {
     expect(workflow).not.toContain('CHAT_PUSH_FOUNDATION_MAINTENANCE_ACK');
     expect(releaseHelper.match(/CHAT_PUSH_FOUNDATION_MAINTENANCE_V1/g)).toHaveLength(1);

@@ -2,11 +2,14 @@ import { Client } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { verifyDatabaseRoleBoundary } from './database-role-boundary.js';
+import { verifyMediaRuntimeRole } from './media-runtime-role-probe.js';
 
 const runtimeConnectionString = process.env.DATABASE_ROLE_BOUNDARY_PG_VERIFY_RUNTIME_URL;
 const migratorConnectionString = process.env.DATABASE_ROLE_BOUNDARY_PG_VERIFY_MIGRATOR_URL;
 const describeDatabase =
   runtimeConnectionString && migratorConnectionString ? describe : describe.skip;
+const verifyMedia = process.env.DATABASE_ROLE_BOUNDARY_PG_VERIFY_MEDIA === 'true';
+const itMedia = verifyMedia ? it : it.skip;
 
 function quoteIdentifier(value: string): string {
   return `"${value.replaceAll('"', '""')}"`;
@@ -138,6 +141,46 @@ describeDatabase.sequential('database role boundary PostgreSQL drift verificatio
     await migrator.query(
       'revoke update (tenant_id) on notifications.booking_reminder_schedules from pg_monitor',
     );
+    if (verifyMedia) {
+      await migrator.query(`grant usage on schema integration to ${runtimeRole}`);
+      await migrator.query(
+        'alter default privileges in schema integration revoke all on tables from public',
+      );
+      await migrator.query(
+        `alter default privileges in schema integration
+           revoke grant option for select, insert, update, delete on tables from ${runtimeRole}`,
+      );
+      await migrator.query(
+        `alter default privileges in schema integration
+           revoke references on tables from ${runtimeRole}`,
+      );
+      await migrator.query(
+        'alter default privileges in schema integration revoke all on tables from pg_monitor',
+      );
+      await migrator.query(
+        `alter default privileges in schema integration
+           grant select, insert, update, delete on tables to ${runtimeRole}`,
+      );
+      for (const relation of [
+        'user_profile_photo_sync',
+        'community_logo_sync',
+        'profile_photo_client_commands',
+        'profile_photo_observation_watermarks',
+        'community_logo_observation_watermarks',
+        'media_cutover_state',
+      ]) {
+        await migrator.query(`revoke all on integration.${relation} from public`);
+        await migrator.query(`revoke all on integration.${relation} from pg_monitor`);
+        await migrator.query(
+          `revoke grant option for select, insert, update, delete
+             on integration.${relation} from ${runtimeRole}`,
+        );
+        await migrator.query(`revoke references on integration.${relation} from ${runtimeRole}`);
+        await migrator.query(
+          `grant select, insert, update, delete on integration.${relation} to ${runtimeRole}`,
+        );
+      }
+    }
   }
 
   async function verifyPost(): Promise<void> {
@@ -145,6 +188,15 @@ describeDatabase.sequential('database role boundary PostgreSQL drift verificatio
       runtimeConnectionString: runtimeConnectionString as string,
       migratorConnectionString: migratorConnectionString as string,
       phase: 'post',
+    });
+  }
+
+  async function verifyMediaPost(): Promise<void> {
+    await verifyDatabaseRoleBoundary({
+      runtimeConnectionString: runtimeConnectionString as string,
+      migratorConnectionString: migratorConnectionString as string,
+      phase: 'post',
+      scope: 'media',
     });
   }
 
@@ -161,6 +213,7 @@ describeDatabase.sequential('database role boundary PostgreSQL drift verificatio
     });
     await migrator.connect();
     await verifyPost();
+    if (verifyMedia) await verifyMediaPost();
   });
 
   afterAll(async () => {
@@ -347,5 +400,42 @@ describeDatabase.sequential('database role boundary PostgreSQL drift verificatio
       await restoreAclBoundary();
     }
     await expect(verifyPost()).resolves.toBeUndefined();
+  });
+
+  itMedia('proves media tenant DML and cross-tenant RLS with the real runtime role', async () => {
+    await expect(verifyMediaPost()).resolves.toBeUndefined();
+    await expect(
+      verifyMediaRuntimeRole({
+        connectionString: runtimeConnectionString as string,
+        tenantKey: 'local-padel',
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  itMedia('rejects missing integration default DML from the real catalog', async () => {
+    try {
+      await migrator.query(
+        `alter default privileges in schema integration
+           revoke delete on tables from ${runtimeRole}`,
+      );
+      await expect(verifyMediaPost()).rejects.toThrow(
+        'MIGRATOR_DATABASE_ROLE_MISSING_INTEGRATION_DEFAULT_DML',
+      );
+    } finally {
+      await restoreAclBoundary();
+    }
+    await expect(verifyMediaPost()).resolves.toBeUndefined();
+  });
+
+  itMedia('rejects PUBLIC access to a media runtime table', async () => {
+    try {
+      await migrator.query(
+        'grant select on integration.community_logo_observation_watermarks to public',
+      );
+      await expect(verifyMediaPost()).rejects.toThrow('POST_MIGRATION_RUNTIME_TABLE_PUBLIC_ACL');
+    } finally {
+      await restoreAclBoundary();
+    }
+    await expect(verifyMediaPost()).resolves.toBeUndefined();
   });
 });

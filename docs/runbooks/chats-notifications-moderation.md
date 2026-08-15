@@ -554,6 +554,11 @@ DATABASE_ROLE_BOUNDARY_PG_VERIFY_MIGRATOR_URL=postgresql://<migrator-role>@127.0
   npm run db:role-boundary:verify
 ```
 
+For a disposable database already migrated through `0081`, add
+`DATABASE_ROLE_BOUNDARY_PG_VERIFY_MEDIA=true` to the same command. That opt-in extension verifies
+the real integration default ACL and relation ACL catalogs, performs rolled-back runtime writes to
+the new media tables, and requires cross-tenant read/write denial.
+
 Provision this boundary outside the release window while connected as the exact bounded migrator
 role (replace identifiers from the approved role inventory, never interpolate a DSN value):
 
@@ -593,6 +598,12 @@ explodes each actual relation and non-dropped user-column ACL and rejects every 
 privilege, unrelated grantee, runtime grant option, runtime column grant or other non-DML runtime
 privilege on all five tables;
 a runtime DML check satisfied only through PUBLIC is never accepted.
+
+This core check intentionally provisions only `notifications` and `messaging`. A media rollout sets
+`DATABASE_ROLE_BOUNDARY_SCOPE=media` and additionally requires exact migrator ownership of the two
+pre-existing media mapping tables plus a separately reviewed schema-local `integration` default ACL.
+That extension and its same-cluster ownership-preserving clone rehearsal are defined in
+`docs/runbooks/client-routing-switch.md`; do not add a global integration default grant here.
 
 ```sql
 begin transaction read only;
