@@ -42,6 +42,10 @@ function execute(
     readonly secondMigratorOutput?: string;
     readonly sharedDatabase?: string;
     readonly totalPolicies?: number;
+    readonly validatedCommandConstraints?: number;
+    readonly exactCommandConstraintDefinitions?: number;
+    readonly profileCommandColumnState?: number;
+    readonly profileCommandDefault?: number;
     readonly runtimeUrl?: string;
   } = {},
 ) {
@@ -105,7 +109,7 @@ case "$*" in
   *'show server_version_num'*) printf '%s\n' 160010 ;;
   *'select rolsuper from pg_catalog.pg_roles'*) printf '%s\n' t ;;
   *"select filename || '|' || checksum"*) printf '%s|%s\n' '0001_test.sql' "$FAKE_LEDGER_CHECKSUM" ;;
-  *'where (delivery_url is null)'*) printf '0|1|3|1|3|%s\n' "$FAKE_TOTAL_POLICIES" ;;
+  *'where (delivery_url is null)'*) printf '0|1|3|1|3|%s|%s|%s|%s|%s\n' "$FAKE_TOTAL_POLICIES" "$FAKE_VALIDATED_COMMAND_CONSTRAINTS" "$FAKE_EXACT_COMMAND_CONSTRAINT_DEFINITIONS" "$FAKE_PROFILE_COMMAND_COLUMN_STATE" "$FAKE_PROFILE_COMMAND_DEFAULT" ;;
   *) exit 0 ;;
 esac
 `,
@@ -131,6 +135,12 @@ esac
       FAKE_SECOND_MIGRATOR_OUTPUT: input.secondMigratorOutput ?? '',
       FAKE_LEDGER_CHECKSUM: input.ledgerChecksum ?? checksum,
       FAKE_TOTAL_POLICIES: String(input.totalPolicies ?? 3),
+      FAKE_VALIDATED_COMMAND_CONSTRAINTS: String(input.validatedCommandConstraints ?? 2),
+      FAKE_EXACT_COMMAND_CONSTRAINT_DEFINITIONS: String(
+        input.exactCommandConstraintDefinitions ?? 2,
+      ),
+      FAKE_PROFILE_COMMAND_COLUMN_STATE: String(input.profileCommandColumnState ?? 4),
+      FAKE_PROFILE_COMMAND_DEFAULT: String(input.profileCommandDefault ?? 1),
       RUNTIME_DATABASE_URL:
         input.runtimeUrl ?? 'postgresql://runtime:runtime-secret@postgres:5432/phub',
       MIGRATOR_DATABASE_URL:
@@ -319,7 +329,29 @@ describe('media migration restore rehearsal', () => {
     const { result, log } = execute({ totalPolicies: 4 });
 
     expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain('media schema, RLS or policy invariants failed');
+    expect(result.stderr).toContain(
+      'media schema, RLS, policy or command-constraint invariants failed',
+    );
+    expect(log).toContain('dropdb -U "$POSTGRES_USER" --if-exists --force');
+  });
+
+  it('rejects an unvalidated profile-photo command constraint on the isolated clone', () => {
+    const { result, log } = execute({ validatedCommandConstraints: 1 });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      'media schema, RLS, policy or command-constraint invariants failed',
+    );
+    expect(log).toContain('dropdb -U "$POSTGRES_USER" --if-exists --force');
+  });
+
+  it('rejects a changed profile-photo command constraint definition on the isolated clone', () => {
+    const { result, log } = execute({ exactCommandConstraintDefinitions: 1 });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      'media schema, RLS, policy or command-constraint invariants failed',
+    );
     expect(log).toContain('dropdb -U "$POSTGRES_USER" --if-exists --force');
   });
 });

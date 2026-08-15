@@ -76,6 +76,25 @@ describe('media binary-only staging rollout contract', () => {
     expect(baseline).toContain(
       "approved_pending_migrations='0079_profile_photo_client_assisted_source.sql",
     );
+    expect(baseline).toContain('0082_profile_photo_removal_commands.sql');
+    expect(baseline).toContain('0083_profile_photo_removal_commands_validate.sql');
+    for (const orderedState of [
+      '0\\|0\\|0\\|0\\|0',
+      '1\\|0\\|0\\|0\\|0',
+      '1\\|1\\|0\\|0\\|0',
+      '1\\|1\\|1\\|0\\|0',
+      '1\\|1\\|1\\|1\\|0',
+      '1\\|1\\|1\\|1\\|1',
+    ]) {
+      expect(baseline).toContain(orderedState);
+    }
+    expect(baseline).not.toContain('1\\|1\\|1\\|0\\|1');
+    expect(baseline).toContain('profile_photo_client_commands_kind_check');
+    expect(baseline).toContain('profile_photo_client_commands_payload_check');
+    expect(baseline).toContain('pg_get_expr(conbin, conrelid)');
+    expect(baseline).not.toContain('pg_get_constraintdef(oid)');
+    expect(baseline).toContain("'2|0|2|4|1'");
+    expect(baseline).toContain("'2|2|2|4|1'");
     expect(baseline).not.toContain(
       "approved_pending_migrations='0053_profile_visibility_sections.sql",
     );
@@ -113,7 +132,13 @@ describe('media binary-only staging rollout contract', () => {
       "tenant_id=nullifcurrent_setting''app.tenant_id''::text,true,''''::text::uuid",
     );
     expect(ledger).toContain('total_rls_policies=3');
-    expect(ledger).toContain("media_invariants\" = '0|1|3|1|3|3'");
+    expect(ledger).toContain('validated_profile_command_constraints=2');
+    expect(ledger).toContain('exact_profile_command_constraint_definitions=2');
+    expect(ledger).toContain('profile_command_column_state=4');
+    expect(ledger).toContain('profile_command_default=1');
+    expect(ledger).toContain("media_invariants\" = '0|1|3|1|3|3|2|2|4|1'");
+    expect(stagingRunbook).toContain('`0079` through `0083`');
+    expect(stagingRunbook).toContain('`0082`-applied');
   });
 
   it('keeps the embedded storage probe syntactically valid', () => {

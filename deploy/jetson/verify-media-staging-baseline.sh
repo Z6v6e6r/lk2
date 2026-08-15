@@ -42,7 +42,9 @@ legacy_alias_filename=0043_messaging_runtime.sql
 legacy_alias_checksum=32512565880a9062a432eb68ec192b0640570f1636d2f2a946ab4ebc5bf96465
 approved_pending_migrations='0079_profile_photo_client_assisted_source.sql
 0080_community_logo_stable_delivery.sql
-0081_community_logo_stable_delivery_validate.sql'
+0081_community_logo_stable_delivery_validate.sql
+0082_profile_photo_removal_commands.sql
+0083_profile_photo_removal_commands_validate.sql'
 
 if ! printf '%s\n' "$migration_manifest" | awk -F '|' '
   NF != 2 || $1 !~ /^[0-9a-f]{64}$/ || $2 !~ /^[0-9]{4}_[A-Za-z0-9_.-]+\.sql$/ { invalid = 1 }
@@ -372,14 +374,17 @@ media_schema_state="$(sql "begin transaction read only;
   select
     (select count(*) from public.schema_migrations where filename = '0079_profile_photo_client_assisted_source.sql')::text || '|' ||
     (select count(*) from public.schema_migrations where filename = '0080_community_logo_stable_delivery.sql')::text || '|' ||
-    (select count(*) from public.schema_migrations where filename = '0081_community_logo_stable_delivery_validate.sql')::text;
+    (select count(*) from public.schema_migrations where filename = '0081_community_logo_stable_delivery_validate.sql')::text || '|' ||
+    (select count(*) from public.schema_migrations where filename = '0082_profile_photo_removal_commands.sql')::text || '|' ||
+    (select count(*) from public.schema_migrations where filename = '0083_profile_photo_removal_commands_validate.sql')::text;
   commit;")"
-media_schema_state="$(printf '%s\n' "$media_schema_state" | awk -F '|' 'NF == 3 { print; exit }')"
+media_schema_state="$(printf '%s\n' "$media_schema_state" | awk -F '|' 'NF == 5 { print; exit }')"
 case "$media_schema_state" in
-  0\|0\|0 | 1\|0\|0 | 1\|1\|0 | 1\|1\|1) ;;
+  0\|0\|0\|0\|0 | 1\|0\|0\|0\|0 | 1\|1\|0\|0\|0 | 1\|1\|1\|0\|0 | 1\|1\|1\|1\|0 | 1\|1\|1\|1\|1) ;;
   *) fail "media migration chain is partial or out of order ($media_schema_state)" ;;
 esac
-if test "$media_schema_state" = '1|1|1'; then
+case "$media_schema_state" in
+  1\|1\|1\|0\|0 | 1\|1\|1\|1\|0 | 1\|1\|1\|1\|1)
   media_invariants="$(sql "begin transaction read only;
     select
       (select count(*) from integration.community_logo_sync
@@ -394,7 +399,56 @@ if test "$media_schema_state" = '1|1|1'; then
     commit;")"
   media_invariants="$(printf '%s\n' "$media_invariants" | awk -F '|' 'NF == 2 { print; exit }')"
   test "$media_invariants" = '0|1' || fail "media schema invariants are not satisfied ($media_invariants)"
-fi
+  ;;
+esac
+case "$media_schema_state" in
+  1\|1\|1\|1\|0 | 1\|1\|1\|1\|1)
+    profile_command_constraints="$(sql "begin transaction read only;
+      select
+        count(*)::text || '|' ||
+        count(*) filter (where convalidated)::text || '|' ||
+        count(*) filter (where
+          (conname = 'profile_photo_client_commands_kind_check' and
+            translate(lower(pg_get_expr(conbin, conrelid)), E' \n\t()', '') =
+              'command_kind::text=anyarray[''upsert''::charactervarying,''delete''::charactervarying]::text[]') or
+          (conname = 'profile_photo_client_commands_payload_check' and
+            translate(lower(pg_get_expr(conbin, conrelid)), E' \n\t()', '') =
+              'command_kind::text=''upsert''::textandrequest_sha256isnotnullandcontent_sha256isnotnullandobject_keyisnotnullorcommand_kind::text=''delete''::textandrequest_sha256isnullandcontent_sha256isnullandobject_keyisnullandavatar_urlisnull'))::text || '|' ||
+        (select count(*)
+          from pg_attribute
+          where attrelid = 'integration.profile_photo_client_commands'::regclass
+            and not attisdropped
+            and (
+              (attname = 'command_kind' and attnotnull) or
+              (attname in ('request_sha256', 'content_sha256', 'object_key') and not attnotnull)
+            ))::text || '|' ||
+        (select count(*)
+          from pg_attribute attribute
+          join pg_attrdef attribute_default
+            on attribute_default.adrelid = attribute.attrelid
+            and attribute_default.adnum = attribute.attnum
+          where attribute.attrelid = 'integration.profile_photo_client_commands'::regclass
+            and attribute.attname = 'command_kind'
+            and translate(lower(pg_get_expr(attribute_default.adbin, attribute_default.adrelid)), E' \n\t()', '') =
+              '''upsert''::charactervarying')::text
+      from pg_constraint
+      where conrelid = 'integration.profile_photo_client_commands'::regclass
+        and contype = 'c'
+        and conname in (
+          'profile_photo_client_commands_kind_check',
+          'profile_photo_client_commands_payload_check'
+        );
+      commit;")"
+    profile_command_constraints="$(printf '%s\n' "$profile_command_constraints" | awk -F '|' 'NF == 5 { print; exit }')"
+    if test "$media_schema_state" = '1|1|1|1|0'; then
+      test "$profile_command_constraints" = '2|0|2|4|1' ||
+        fail "profile-photo command constraints do not match the unvalidated 0082 state ($profile_command_constraints)"
+    else
+      test "$profile_command_constraints" = '2|2|2|4|1' ||
+        fail "profile-photo command constraints are not validated ($profile_command_constraints)"
+    fi
+    ;;
+esac
 printf 'media_schema migrations=%s status=compatible\n' "$media_schema_state"
 
 docker_root="$(docker info --format '{{.DockerRootDir}}')"

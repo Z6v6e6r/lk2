@@ -262,8 +262,10 @@ gh workflow run deploy-staging.yaml --ref main \
 
 An actual `MEDIA_BINARY_ONLY` dispatch additionally requires `deploy_confirmation=DEPLOY_STAGING`.
 The staging migration ledger must already contain every packaged migration through
-`0078_community_media_issue_quotas.sql`; the only approved pending suffix is `0079`, `0080`, and
-`0081` in that order. Older Communities migrations are a separate rollout and must never be hidden
+`0078_community_media_issue_quotas.sql`; the only approved pending suffix is `0079` through `0083`
+in that exact order. `0082` is the expand step for profile-photo removal commands and `0083` is its
+bounded validation step; a retry may therefore legitimately observe the ordered `0082`-applied,
+`0083`-pending state. Older Communities migrations are a separate rollout and must never be hidden
 inside this media-binary profile. It re-runs the baseline immediately before the application
 snapshot, binds that snapshot back to `expected_active_release`, proves a real restore and two
 candidate-migrator invocations (the second must apply nothing) on an isolated local PostgreSQL 16
