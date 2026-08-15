@@ -17,6 +17,24 @@ const VERIFY_TIMEOUT_MS = 15_000;
 const MAX_SOCKET_MESSAGE_BYTES = 16_384;
 const MAX_SOCKET_TRANSPORT_PAYLOAD_BYTES = 65_536;
 const MAX_BUFFERED_SOCKET_MESSAGES = 100;
+const SOCKET_CLOSED_STATE = WebSocket.CLOSED;
+
+export interface RealtimeSocket {
+  readonly readyState: number;
+  on(event: 'message', listener: (raw: RawData) => void): RealtimeSocket;
+  on(event: 'error', listener: () => void): RealtimeSocket;
+  on(event: 'close', listener: (code: number) => void): RealtimeSocket;
+  once(event: 'open', listener: () => void): RealtimeSocket;
+  once(event: 'close', listener: () => void): RealtimeSocket;
+  send(data: string): void;
+  close(code?: number, reason?: string): void;
+  terminate(): void;
+}
+
+export type RealtimeSocketFactory = (
+  url: URL,
+  options: { readonly maxPayload: number },
+) => RealtimeSocket;
 
 interface RealtimeConnection {
   waitFor(
@@ -471,6 +489,7 @@ export async function openRealtimeConnection(input: {
   readonly conversationId?: string;
   readonly afterSequence?: number;
   readonly timeoutMs?: number;
+  readonly socketFactory?: RealtimeSocketFactory;
 }): Promise<RealtimeConnection> {
   if ((input.conversationId === undefined) !== (input.afterSequence === undefined)) {
     throw new Error('DIRECT_REALTIME_VERIFY_SOCKET_SUBSCRIPTION_INVALID');
@@ -481,7 +500,10 @@ export async function openRealtimeConnection(input: {
   }
   const url = new URL(`/realtime/v1/${encodeURIComponent(input.tenantKey)}`, input.baseUrl);
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
-  const socket = new WebSocket(url, { maxPayload: MAX_SOCKET_TRANSPORT_PAYLOAD_BYTES });
+  const socket = (input.socketFactory ?? ((target, options) => new WebSocket(target, options)))(
+    url,
+    { maxPayload: MAX_SOCKET_TRANSPORT_PAYLOAD_BYTES },
+  );
   const messages: Readonly<Record<string, unknown>>[] = [];
   let wake: (() => void) | undefined;
   let terminalCode: string | undefined;
@@ -544,7 +566,7 @@ export async function openRealtimeConnection(input: {
       throw new Error(failureCode);
     },
     async close() {
-      if (socket.readyState === WebSocket.CLOSED) return;
+      if (socket.readyState === SOCKET_CLOSED_STATE) return;
       const closed = new Promise<void>((resolve) => socket.once('close', () => resolve()));
       socket.close(1000, 'Verification complete');
       await Promise.race([closed, delay(2_000)]);
@@ -574,7 +596,7 @@ export async function openRealtimeConnection(input: {
     }
     return connection;
   } catch (error) {
-    if (socket.readyState !== WebSocket.CLOSED) socket.terminate();
+    if (socket.readyState !== SOCKET_CLOSED_STATE) socket.terminate();
     throw error;
   }
 }

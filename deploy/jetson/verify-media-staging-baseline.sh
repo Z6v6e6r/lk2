@@ -58,7 +58,16 @@ fi
 app_root="${PHUB_APP_ROOT:-/opt/phub}"
 base_runtime_env="${PHUB_BASE_RUNTIME_ENV:-/etc/phub/staging.env}"
 realtime_runtime_env="${PHUB_REALTIME_RUNTIME_ENV:-/etc/phub/realtime.env}"
+foundation_runtime_env="$app_root/staging.chat-push-foundation.env"
 cd "$app_root"
+
+test -z "${RUNTIME_CHAT_PUSH_FOUNDATION_ENV_FILE:-}" ||
+  fail 'runtime shell must not redirect the chat/push foundation overlay'
+for interpolation_file in infrastructure.env release.env; do
+  override_count="$(awk -F= '$1 == "RUNTIME_CHAT_PUSH_FOUNDATION_ENV_FILE" { count += 1 } END { print count + 0 }' "$interpolation_file")"
+  test "$override_count" -eq 0 ||
+    fail "$interpolation_file must not redirect the chat/push foundation overlay"
+done
 
 test -f release.env && test ! -L release.env || fail 'active release.env is absent or unsafe'
 active_release_count="$(awk -F= '$1 == "RELEASE" { count += 1 } END { print count + 0 }' release.env)"
@@ -100,11 +109,11 @@ runtime_value() {
   service="$1"
   key="$2"
   if test "$service" = api; then
-    files="$app_root/staging.communities.env $app_root/staging.games.env $app_root/staging.override.env $app_root/staging.auth.env $base_runtime_env"
+    files="$foundation_runtime_env $app_root/staging.communities.env $app_root/staging.games.env $app_root/staging.override.env $app_root/staging.auth.env $base_runtime_env"
   elif test "$service" = realtime; then
     files="$realtime_runtime_env"
   else
-    files="$app_root/staging.games.env $app_root/staging.override.env $app_root/staging.auth.env $base_runtime_env"
+    files="$foundation_runtime_env $app_root/staging.games.env $app_root/staging.override.env $app_root/staging.auth.env $base_runtime_env"
   fi
   for file in $files; do
     value="$(file_value "$file" "$key")"
@@ -194,7 +203,8 @@ file_config_fingerprint="$({
     "$app_root/staging.auth.env" \
     "$app_root/staging.override.env" \
     "$app_root/staging.communities.env" \
-    "$app_root/staging.games.env"; do
+    "$app_root/staging.games.env" \
+    "$foundation_runtime_env"; do
     if test -f "$file" && test ! -L "$file"; then
       checksum_line="$(sha256sum "$file")"
       printf 'present|%s|%s\n' "$file" "${checksum_line%% *}"

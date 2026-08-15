@@ -66,6 +66,7 @@ export const WORKER_METRIC_INSTRUMENTS = {
   webPushRounds: 'phub.worker.web_push.rounds',
   webPushCycleDurationMilliseconds: 'phub.worker.web_push.cycle_duration_milliseconds',
   operationalCollectionSuccess: 'phub.worker.operational.collection_success',
+  operationalCollectionHeartbeatUnixTime: 'phub.worker.operational.collection_heartbeat_unixtime',
   operationalCollectionFailures: 'phub.worker.operational.collection_failures',
   operationalCollectionDurationMilliseconds:
     'phub.worker.operational.collection_duration_milliseconds',
@@ -580,6 +581,9 @@ export function createWorkerMetricRecorder(options: {
   const collectionSuccess = meter.createGauge(
     WORKER_METRIC_INSTRUMENTS.operationalCollectionSuccess,
   );
+  const collectionHeartbeat = meter.createGauge(
+    WORKER_METRIC_INSTRUMENTS.operationalCollectionHeartbeatUnixTime,
+  );
   const collectionFailures = meter.createCounter(
     WORKER_METRIC_INSTRUMENTS.operationalCollectionFailures,
   );
@@ -608,16 +612,26 @@ export function createWorkerMetricRecorder(options: {
       communityMediaGcOldestAge.record(snapshot.communityMediaGcOldestAgeSeconds);
       communityMediaDeadGcJobs.record(snapshot.communityMediaDeadGcJobs);
       pushDeliveriesPolicySuspended.record(snapshot.pushDeliveriesPolicySuspended);
-      bookingRemindersDue.record(snapshot.bookingRemindersDue);
-      bookingReminderOldestDueAge.record(snapshot.bookingReminderOldestDueAgeSeconds);
-      bookingReminderLatestMissed.record(snapshot.bookingReminderLatestMissedUnixTime);
-      collectionSuccess.record(1);
-      collectionDuration.record(durationMilliseconds);
+      bookingRemindersDue.record(snapshot.bookingRemindersDue, instanceAttributes);
+      bookingReminderOldestDueAge.record(
+        snapshot.bookingReminderOldestDueAgeSeconds,
+        instanceAttributes,
+      );
+      bookingReminderLatestMissed.record(
+        snapshot.bookingReminderLatestMissedUnixTime,
+        instanceAttributes,
+      );
+      collectionSuccess.record(1, instanceAttributes);
+      collectionHeartbeat.record(
+        Math.floor((options.now?.() ?? Date.now()) / 1_000),
+        instanceAttributes,
+      );
+      collectionDuration.record(durationMilliseconds, instanceAttributes);
     },
     recordOperationalCollectionFailure(durationMilliseconds) {
-      collectionSuccess.record(0);
-      collectionFailures.add(1);
-      collectionDuration.record(durationMilliseconds);
+      collectionSuccess.record(0, instanceAttributes);
+      collectionFailures.add(1, instanceAttributes);
+      collectionDuration.record(durationMilliseconds, instanceAttributes);
     },
     recordOutboxPublishCycle(publishedEvents, durationMilliseconds, failed) {
       if (publishedEvents > 0) outboxPublished.add(publishedEvents);

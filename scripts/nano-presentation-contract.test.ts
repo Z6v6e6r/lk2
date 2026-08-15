@@ -100,9 +100,15 @@ describe('Nano presentation release contract', () => {
     expect(buildGate).toContain('needs: [validate-request, verify]');
     expect(buildGate).toContain("needs.validate-request.outputs.mode == 'deploy'");
     expect(buildGate).toContain("needs.verify.result == 'success'");
-    expect(deployGate).toContain('needs: [validate-request, media-baseline, build]');
+    expect(deployGate).toContain('needs: [validate-request, media-baseline, verify, build]');
     expect(deployGate).toContain('always()');
-    expect(deployGate).toContain("needs.build.result == 'success'");
+    expect(deployGate).toContain("needs.verify.result == 'success'");
+    expect(deployGate).toContain(
+      "inputs.deployment_profile == 'CHAT_PUSH_FOUNDATION_RECOVERY' && needs.build.result == 'skipped'",
+    );
+    expect(deployGate).toContain(
+      "inputs.deployment_profile != 'CHAT_PUSH_FOUNDATION_RECOVERY' && needs.build.result == 'success'",
+    );
     expect(deployGate).toContain("needs.validate-request.outputs.mode == 'deploy'");
   });
 
@@ -345,7 +351,7 @@ describe('Nano presentation release contract', () => {
     expect(stagingWorkflow).toContain('compatibility_floor=community-logo');
     expect(stagingWorkflow).toContain('compatible_guard_mode=compatible-logo');
     expect(runtimeFlagStep).toContain(
-      "if: ${{ inputs.deployment_profile != 'COMMUNITIES_LEGACY_READ_ONLY' }}",
+      "if: ${{ inputs.deployment_profile != 'COMMUNITIES_LEGACY_READ_ONLY' && inputs.deployment_profile != 'CHAT_PUSH_FOUNDATION' && inputs.deployment_profile != 'CHAT_PUSH_FOUNDATION_RECOVERY' }}",
     );
     expect(runtimeFlagStep).toContain('verify-live-staging-data.sh runtime-flags');
   });

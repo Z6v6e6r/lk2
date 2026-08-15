@@ -64,6 +64,11 @@ if [ -e "$app_root/staging.games.env" ]; then
   [ -f "$app_root/staging.games.env" ] && [ ! -L "$app_root/staging.games.env" ] ||
     fail 'current staging.games.env is unsafe'
 fi
+if [ -e "$app_root/staging.chat-push-foundation.env" ]; then
+  [ -f "$app_root/staging.chat-push-foundation.env" ] &&
+    [ ! -L "$app_root/staging.chat-push-foundation.env" ] ||
+    fail 'current staging.chat-push-foundation.env is unsafe'
+fi
 
 release_value() {
   key="$1"
@@ -174,6 +179,13 @@ if [ -f "$app_root/staging.games.env" ]; then
 else
   : > "$stage_dir/staging.games.env.absent"
   chmod 600 "$stage_dir/staging.games.env.absent"
+fi
+if [ -f "$app_root/staging.chat-push-foundation.env" ]; then
+  install -m 600 "$app_root/staging.chat-push-foundation.env" \
+    "$stage_dir/staging.chat-push-foundation.env"
+else
+  : > "$stage_dir/staging.chat-push-foundation.env.absent"
+  chmod 600 "$stage_dir/staging.chat-push-foundation.env.absent"
 fi
 install -m 644 "$app_root/tls-ingress/Caddyfile" "$stage_dir/tls-ingress/Caddyfile"
 {
