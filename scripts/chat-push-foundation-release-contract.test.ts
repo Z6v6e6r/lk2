@@ -16,7 +16,7 @@ const backup = repositoryFile('deploy/jetson/backup-application.sh');
 const rollback = repositoryFile('deploy/jetson/rollback-application.sh');
 
 describe('chat/push staging foundation release contract', () => {
-  it('requires an independently protected, main-only, non-rerunnable request', () => {
+  it('requires an explicit solo-owner, main-only, non-rerunnable request', () => {
     expect(workflow).toContain('- CHAT_PUSH_FOUNDATION');
     expect(workflow).toContain('- CHAT_PUSH_FOUNDATION_RECOVERY');
     expect(workflow).toContain('APPLY_CHAT_PUSH_FOUNDATION_STAGING');
@@ -28,8 +28,15 @@ describe('chat/push staging foundation release contract', () => {
     expect(workflow).toContain('[ "$ACTOR" != "$TRIGGERING_ACTOR" ]');
     expect(workflow).toContain('[ "$WORKFLOW_SHA" != "$REQUEST_SHA" ]');
     expect(workflow).toContain('environment: staging-foundation-maintenance');
-    expect(workflow).toContain('APPROVED_WITH_REQUIRED_REVIEWER_V1');
+    expect(workflow).toContain('APPROVED_SOLO_OWNER_V1');
+    expect(workflow).not.toContain('APPROVED_WITH_REQUIRED_REVIEWER_V1');
+    expect(workflow).toContain('STAGING_FOUNDATION_SOLO_OWNER_ID');
     expect(workflow).toContain('STAGING_FOUNDATION_OPERATOR_IDS');
+    expect(workflow).toContain('[ "$ALLOWED_OPERATOR_IDS" = "$SOLO_OWNER_ID" ]');
+    expect(workflow).toContain('[ "$ACTOR_ID" = "$SOLO_OWNER_ID" ]');
+    expect(workflow).toContain('[ "$ACTOR" = "$REPOSITORY_OWNER" ]');
+    expect(workflow).toContain('String(run.actor?.id) !== process.argv[5]');
+    expect(workflow).toContain('String(run.triggering_actor?.id) !== process.argv[5]');
     expect(workflow).toContain('FOUNDATION_ACTION_REVISION_NOT_PINNED');
     expect(workflow).toContain('application/vnd.github.raw+json');
     expect(workflow).toContain('?ref=$REQUEST_SHA');
@@ -44,8 +51,8 @@ describe('chat/push staging foundation release contract', () => {
     const useLines = workflow.split(/\r?\n/).filter((line) => /^\s*(?:-\s*)?uses\s*:/.test(line));
     const thirdPartyUses = useLines.filter((line) => !/^\s*(?:-\s*)?uses\s*:\s*\.\//.test(line));
 
-    expect(useLines).toHaveLength(21);
-    expect(thirdPartyUses).toHaveLength(21);
+    expect(useLines).toHaveLength(23);
+    expect(thirdPartyUses).toHaveLength(23);
     for (const line of thirdPartyUses) {
       expect(line).toMatch(/^\s*(?:-\s*)?uses\s*:\s*[A-Za-z0-9_./-]+@[0-9a-f]{40}\s*(?:#.*)?$/);
     }
@@ -53,6 +60,28 @@ describe('chat/push staging foundation release contract', () => {
     expect(workflow.indexOf('STAGING_ACTION_REVISION_NOT_PINNED')).toBeLessThan(
       workflow.indexOf('  set-user-access:'),
     );
+  });
+
+  it('repairs only the exact runtime env metadata through the solo-owner gate', () => {
+    expect(workflow).toContain('REPAIR_STAGING_RUNTIME_ENV_PERMISSIONS');
+    expect(workflow).toContain('mode=repair-runtime-env');
+    expect(workflow).toContain('needs: [validate-request, authorize-foundation-maintenance]');
+    expect(workflow).toContain('runtime_env=/etc/phub/staging.env');
+    expect(workflow).toContain('[ ! -w /etc/phub ]');
+    expect(workflow).toContain('test ! -L "$runtime_env"');
+    expect(workflow).toContain('sudo -n chown phub-deploy:phub-deploy "$runtime_env"');
+    expect(workflow).toContain('sudo -n chmod 0600 "$runtime_env"');
+    expect(workflow).toContain(
+      '[ "$(stat -c "%U:%G:%a" "$runtime_env")" = phub-deploy:phub-deploy:600 ]',
+    );
+
+    const repairStart = workflow.indexOf('  repair-foundation-runtime-env-permissions:');
+    const repairEnd = workflow.indexOf('\n  set-user-access:', repairStart);
+    const repairJob = workflow.slice(repairStart, repairEnd);
+    expect(repairJob).not.toContain('cat ');
+    expect(repairJob).not.toContain('docker compose');
+    expect(repairJob).not.toContain('db:migrate');
+    expect(repairJob).not.toContain('CHAT_PUSH_FOUNDATION_MAINTENANCE_ACK');
   });
 
   it('keeps the ACK in one helper command after drain and final backup only', () => {

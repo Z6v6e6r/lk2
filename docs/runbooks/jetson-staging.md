@@ -52,7 +52,7 @@ and RabbitMQ ready. Any failure invokes the same application rollback.
 
 Use `deployment_profile=CHAT_PUSH_FOUNDATION` only for the reviewed, default-off 0069–0073
 initial maintenance window when exactly those five migrations are pending. It requires the
-independently protected `staging-foundation-maintenance`
+explicitly attested `staging-foundation-maintenance`
 Environment, an allowlisted actor, exact candidate and active-release SHAs, the complete tenant
 inventory and the explicit no-booking-producer attestation. It preserves the current
 authentication, Home, Communities and Games files; skips routing, ingress, activation, CUP and
@@ -72,10 +72,18 @@ phase. An external smoke
 failure after candidate runtime verification leaves the candidate running and records
 `EXTERNAL_SMOKE_FAILED` only after the active release, health and immutable digest of API, worker,
 realtime and web are rechecked for this same protected recovery path.
-This profile is not dispatchable until the Environment has a required reviewer, prevents
-self-review, is restricted to `main`, disables administrator bypass, and exposes the two attested
-environment variables named in that runbook. It never authorizes a provider call or feature
-activation.
+This repository currently uses the staging-only `solo-owner` exception documented in that runbook:
+the Environment has no independent reviewer, but is restricted to `main`, disables administrator
+bypass, requires the exact solo-owner readiness value, and binds both the sole-owner ID and operator
+allowlist to the repository owner. This is an explicit reduction in human separation of duties, not
+a production precedent. It never authorizes a provider call or feature activation, and every
+technical foundation gate remains mandatory.
+
+If the staging runtime env metadata preflight fails, use the isolated
+`foundation_runtime_env_repair_confirmation=REPAIR_STAGING_RUNTIME_ENV_PERMISSIONS` operation from
+`main` before any diagnostic or deployment. It is gated by the same solo-owner Environment and
+changes only `/etc/phub/staging.env` ownership and mode; it does not read values, run Compose or
+migrate the database.
 
 An isolated staging user-access change uses the same workflow with `access_target_user_id`,
 `access_actor_id`, and the complete `access_roles` and `access_permissions` sets. It cannot be
@@ -362,8 +370,10 @@ expiry. Configure these GitHub environment `staging` secrets:
 
 The separate `staging-foundation-maintenance` Environment owns no deployment secrets; the deploy
 job still receives those only from `staging`. It supplies the reviewed readiness attestation and
-numeric operator allowlist described in the chat/push runbook, and it must enforce a required
-reviewer, prevent self-review, restrict deployments to `main` and disable administrator bypass.
+singleton owner/operator IDs described in the chat/push runbook. Under the explicitly approved
+staging-only `solo-owner` exception it has no required reviewer, restricts deployments to `main`,
+disables administrator bypass, and relies on the workflow to require the exact repository-owner
+login and numeric actor ID. This reduced separation of duties is not a production precedent.
 Every third-party Action used by the foundation path must be pinned to a reviewed full commit SHA
 before this Environment is marked ready; a mutable `@vN` reference is a release stop condition.
 

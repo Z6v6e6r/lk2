@@ -2,6 +2,13 @@
 
 ## Verdict
 
+> Operational supersession, 2026-08-15: this frozen audit originally required an independent
+> Environment reviewer. The repository owner subsequently approved the staging-only `solo-owner`
+> exception documented in the active chat/push and Jetson runbooks. That exception has no
+> second-person authorization and does not change this document's historical source/evidence
+> boundary. Use the active runbooks and exact current candidate evidence for dispatch decisions;
+> do not cite the reviewer condition below as a current control.
+
 - Local code and workflow design: `GO` for commit and immutable-CI preparation.
 - Staging dispatch: `NO-GO`. Immutable GitHub Action pinning is now closed in source, but the
   protected Environment, exact committed candidate and live staging preconditions remain external.
@@ -142,9 +149,10 @@ evidenced for the exact committed candidate SHA:
 1. Integrate the exact candidate commit with `origin/main` at or after `378701a0ca72`, preserve both
    the media binary-only rollout and staging-foundation semantics across the five overlapping files,
    then regenerate this source boundary and repeat the full R4 gates.
-2. Configure and independently verify the protected `staging-foundation-maintenance` Environment:
-   required reviewer, prevented self-review, `main`-only deployment branch, disabled administrator
-   bypass, exact readiness variable and numeric actor-ID allowlist.
+2. Historical condition superseded as noted above: configure and verify the explicit staging-only
+   `solo-owner` Environment contract from the active runbooks, including `main`-only deployment,
+   disabled administrator bypass, exact readiness value and identical singleton owner/operator
+   numeric actor IDs. This does not restore separation of duties.
 3. Run PR CI on the exact integrated SHA and prove the four real loopback tests
    executed rather than skipped.
 4. Capture read-only staging inventory for exact active release, tenant keys, per-tenant gates,

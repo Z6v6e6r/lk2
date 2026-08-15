@@ -185,12 +185,33 @@ CUP, or create a production-promotion artifact.
 Do not dispatch this profile until the separate GitHub Environment
 `staging-foundation-maintenance` has all of the following controls:
 
-- at least one required reviewer, with self-review prevented;
+- the explicitly approved staging-only `solo-owner` exception; this repository currently has no
+  collaborator who can act as an independent reviewer, so this exception provides no second-person
+  authorization and must not be reused as a production precedent;
 - deployments restricted to `main`, with administrator bypass disabled;
 - environment variable `STAGING_FOUNDATION_MAINTENANCE_READY_V1` exactly equal to
-  `APPROVED_WITH_REQUIRED_REVIEWER_V1`;
-- environment variable `STAGING_FOUNDATION_OPERATOR_IDS` containing only the complete
-  comma-separated numeric GitHub actor-ID allowlist.
+  `APPROVED_SOLO_OWNER_V1`;
+- environment variable `STAGING_FOUNDATION_SOLO_OWNER_ID` containing the sole authorized numeric
+  GitHub actor ID;
+- environment variable `STAGING_FOUNDATION_OPERATOR_IDS` exactly equal to that same single actor
+  ID. The workflow additionally requires the actor login to equal `github.repository_owner`.
+
+This exception removes only the independent-human approval gate. It does not weaken the first-run,
+exact-SHA, active-release, tenant, producer, backup/restore, role/RLS, Rabbit, monitoring, sequential
+startup, quiet-window or recovery checks below. A second eligible repository operator must restore
+required-reviewer protection before this procedure is generalized beyond the explicitly approved
+staging maintenance window.
+
+Before the first read-only media/runtime diagnostic, if `/etc/phub/staging.env` fails the required
+owner/mode check, run the same workflow from `main` with profile `CHAT_PUSH_FOUNDATION`, leave
+`deploy_confirmation` and every deploy/diagnostic/access/foundation field empty, and set only
+`foundation_runtime_env_repair_confirmation=REPAIR_STAGING_RUNTIME_ENV_PERMISSIONS`. That isolated
+mode passes the solo-owner Environment gate, refuses reruns and non-`main` workflow definitions, and
+first proves `/etc/phub` is not writable by `phub-deploy`. It then changes only the exact regular
+non-symlink file's owner to `phub-deploy:phub-deploy` and mode to `0600`; it never reads the file,
+starts/stops a service, invokes Compose or runs a migration. Missing narrowly scoped non-interactive
+sudo authority for those two metadata commands is a stop condition, not permission to grant broad
+sudo access.
 
 The initial dispatch must be a new first attempt from `main`, not a workflow rerun. Supply
 `deploy_confirmation=DEPLOY_STAGING`, the exact
