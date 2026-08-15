@@ -201,21 +201,68 @@ the mixed-version window. The second flag is rollback-only. The current migratio
 `0080_community_logo_stable_delivery.sql`, and the separate logo validation migration
 `0081_community_logo_stable_delivery_validate.sql`.
 
+The `MEDIA_BINARY_ONLY` role check extends the core split-role boundary with an explicit `media`
+scope. Before the release window, the exact bounded migrator role must directly own
+`integration.user_profile_photo_sync` and `integration.community_logo_sync`; membership in a broad
+owner or administrator role is not accepted. The exact runtime role must already hold direct
+`SELECT/INSERT/UPDATE/DELETE` (without grant option or other relation privilege) on both mappings,
+with no `PUBLIC` or third-party grant; the media precheck validates their owner, ACL and exact tenant
+RLS policy before shared DDL. Provision only the schema-local default privileges needed by the new
+media tables, while connected as the exact migrator role and after substituting identifiers from the
+approved role inventory:
+
+```sql
+revoke all on table
+  integration.user_profile_photo_sync,
+  integration.community_logo_sync
+  from public;
+grant select, insert, update, delete on table
+  integration.user_profile_photo_sync,
+  integration.community_logo_sync
+  to "<runtime-role>";
+alter default privileges for role "<migrator-role>" in schema integration
+  revoke all on tables from public;
+alter default privileges for role "<migrator-role>" in schema integration
+  grant select, insert, update, delete on tables to "<runtime-role>";
+```
+
+Do not create a global default grant and do not use `GRANT ALL`. The media precheck rejects a
+missing owner, missing runtime schema `USAGE`, a grant option, `PUBLIC`, a third grantee, or any
+privilege outside the four DML operations. Its postcheck covers both altered mappings, all four new
+media relations, their exact RLS policy inventory where tenant-scoped, and the non-tenant cutover
+row. The restored-clone runtime probe is bounded to the exact active `local-padel` staging tenant,
+performs tenant-local writes inside a rolled-back transaction, and proves a different tenant cannot
+read or write the observation row.
+
 Roll out in this order:
 
-1. preserve and validate the digest-pinned application snapshot, including runtime env state and
-   API/worker `phub.client-media-rollback.v1` and `phub.community-logo-rollback.v1` capability
-   attestations;
-2. verify migrations `0079`, `0080` and `0081` are recorded with both feature flags still false;
-3. deploy and drain every API node first, then verify the stable community-logo route is ready;
-4. only then deploy workers, still with stable delivery false, and verify they continue to publish
-   compatible signed URLs;
-5. prove all old API and worker processes are gone and run
+1. run the read-only `diagnose_media` baseline with the exact currently serving release. Require
+   its migration/storage/capacity artifact before authorizing `MEDIA_BINARY_ONLY`. The ledger must
+   already be complete through `0078`; only the monotonic `0079`–`0081` suffix may be pending, and
+   an active stable-logo cutover is not eligible for this pre-cutover profile;
+2. preserve and validate the digest-pinned application snapshot, including runtime env state and
+   the `phub.client-media-rollback.v1` capability required by a client-media floor. The
+   community-logo capability becomes mandatory only for the later stable-cutover path;
+3. retain ownership and ACL metadata in the backup, then restore it into a new isolated database on
+   the same approved PostgreSQL 16 server. Require the clone `media` role precheck, migrate it with
+   the exact bounded candidate, require a second no-op migrator run, pass the role postcheck and
+   rolled-back runtime DML/RLS probe, verify the full ledger/RLS/constraint manifest, and confirm
+   strict clone deletion before the shared migration. The generic portability restore may suppress
+   owner/ACL application, but the media rehearsal must not;
+4. verify migrations `0079`, `0080` and `0081` are recorded with both feature flags still false;
+5. deploy and drain every API node first, then verify both profile-photo and community-logo routes
+   through canonical Caddy/Nginx HTTPS while the previous web, worker and realtime binaries remain
+   serving;
+6. deploy worker and realtime sequentially with stable delivery still false, and verify workers
+   continue to publish compatible signed URLs. Recreate candidate Nginx, repeat the old-manifest
+   media smoke, then replace web last; after promoting Caddy, repeat the media smoke against the
+   candidate manifest;
+7. prove all old API and worker processes are gone and run
    `PHUB_MEDIA_ROLLBACK_MODE=pre-cutover sh /opt/phub/verify-media-rollback-safe.sh`;
-6. enable `COMMUNITY_LOGO_STABLE_DELIVERY_ENABLED=true` on compatible workers sequentially. Keep
+8. after a separate approval, enable `COMMUNITY_LOGO_STABLE_DELIVERY_ENABLED=true` on compatible workers sequentially. Keep
    compatibility backfill false. Verify the durable cutover marker, a Home response containing the
    PadlHub route, `image/webp` delivery, and the absence of legacy source URLs in clients or logs;
-7. with the same stable flag enabled, drain and restart every compatible API node. Verify directory
+9. with the same stable flag enabled, drain and restart every compatible API node. Verify directory
    and detail responses now contain the same PadlHub route and perform an exact route read-back.
 
 Normal deploy preflight accepts either the attested pre-cutover state (`false/false`) or the stable

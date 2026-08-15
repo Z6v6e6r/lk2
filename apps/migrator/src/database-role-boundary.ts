@@ -39,25 +39,46 @@ export type DatabaseRoleSnapshot = {
   readonly unexpectedMessagingDefaultPrivileges: number;
   readonly dangerousMessagingDefaultPrivileges: number;
   readonly publicMessagingDefaultPrivileges: number;
+  readonly ownsUserProfilePhotoSync: boolean;
+  readonly ownsCommunityLogoSync: boolean;
+  readonly runtimeIntegrationDefaultDml: boolean;
+  readonly runtimeIntegrationDefaultGrantOptions: number;
+  readonly unexpectedIntegrationDefaultPrivileges: number;
+  readonly dangerousIntegrationDefaultPrivileges: number;
+  readonly publicIntegrationDefaultPrivileges: number;
   readonly nonOwnerGlobalTableDefaultPrivileges: number;
 };
 
 export type DatabaseRoleBoundaryPhase = 'pre' | 'post';
+export type DatabaseRoleBoundaryScope = 'core' | 'media';
 
 export type PostMigrationRuntimeTableSnapshot = {
-  readonly schemaName: 'notifications' | 'messaging';
+  readonly schemaName: 'notifications' | 'messaging' | 'integration';
   readonly relationName:
     | 'booking_notification_projection_fences'
     | 'booking_reminder_schedules'
     | 'booking_reminder_recipients'
     | 'user_blocks'
-    | 'user_block_commands';
+    | 'user_block_commands'
+    | 'user_profile_photo_sync'
+    | 'community_logo_sync'
+    | 'profile_photo_client_commands'
+    | 'profile_photo_observation_watermarks'
+    | 'community_logo_observation_watermarks'
+    | 'media_cutover_state';
   readonly policyName:
     | 'booking_notification_projection_fences_tenant_isolation'
     | 'booking_reminder_schedules_tenant_isolation'
     | 'booking_reminder_recipients_tenant_isolation'
     | 'messaging_user_blocks_tenant_isolation'
-    | 'messaging_user_block_commands_tenant_isolation';
+    | 'messaging_user_block_commands_tenant_isolation'
+    | 'user_profile_photo_sync_tenant_isolation'
+    | 'community_logo_sync_tenant_isolation'
+    | 'profile_photo_client_commands_tenant_isolation'
+    | 'profile_photo_observation_watermarks_tenant_isolation'
+    | 'community_logo_observation_watermarks_tenant_isolation'
+    | null;
+  readonly requiresTenantRls: boolean;
   readonly exists: boolean;
   readonly ownedByMigrator: boolean;
   readonly forceRls: boolean;
@@ -87,7 +108,7 @@ function normalizePolicyExpression(expression: string | null): string | null {
 }
 
 export function hasExactTenantIsolationPolicy(
-  policyName: PostMigrationRuntimeTableSnapshot['policyName'],
+  policyName: Exclude<PostMigrationRuntimeTableSnapshot['policyName'], null>,
   policies: readonly NotificationReminderPolicySnapshot[],
 ): boolean {
   const policy = policies[0];
@@ -115,6 +136,7 @@ export function assertDatabaseRoleBoundary(
   runtime: DatabaseRoleSnapshot,
   migrator: DatabaseRoleSnapshot,
   runtimeCanAssumeMigrator: boolean,
+  scope: DatabaseRoleBoundaryScope = 'core',
 ): void {
   if (
     runtime.databaseName !== migrator.databaseName ||
@@ -227,43 +249,135 @@ export function assertDatabaseRoleBoundary(
   if (!migrator.runtimeMessagingDefaultDml) {
     throw new DatabaseRoleBoundaryError('MIGRATOR_DATABASE_ROLE_MISSING_MESSAGING_DEFAULT_DML');
   }
+  if (scope === 'media') {
+    if (!migrator.ownsUserProfilePhotoSync || !migrator.ownsCommunityLogoSync) {
+      throw new DatabaseRoleBoundaryError('MIGRATOR_DATABASE_ROLE_MISSING_MEDIA_DDL_AUTHORITY');
+    }
+    if (migrator.publicIntegrationDefaultPrivileges > 0) {
+      throw new DatabaseRoleBoundaryError('MIGRATOR_DATABASE_ROLE_PUBLIC_INTEGRATION_DEFAULT_ACL');
+    }
+    if (migrator.unexpectedIntegrationDefaultPrivileges > 0) {
+      throw new DatabaseRoleBoundaryError(
+        'MIGRATOR_DATABASE_ROLE_UNEXPECTED_INTEGRATION_DEFAULT_GRANTEE',
+      );
+    }
+    if (migrator.runtimeIntegrationDefaultGrantOptions > 0) {
+      throw new DatabaseRoleBoundaryError(
+        'MIGRATOR_DATABASE_ROLE_INTEGRATION_DEFAULT_GRANT_OPTION',
+      );
+    }
+    if (migrator.dangerousIntegrationDefaultPrivileges > 0) {
+      throw new DatabaseRoleBoundaryError('MIGRATOR_DATABASE_ROLE_UNSAFE_INTEGRATION_DEFAULT_ACL');
+    }
+    if (!migrator.runtimeIntegrationDefaultDml) {
+      throw new DatabaseRoleBoundaryError('MIGRATOR_DATABASE_ROLE_MISSING_INTEGRATION_DEFAULT_DML');
+    }
+  }
 }
 
-const expectedPostMigrationTables = [
+const expectedCorePostMigrationTables = [
   {
     schemaName: 'notifications',
     relationName: 'booking_notification_projection_fences',
     policyName: 'booking_notification_projection_fences_tenant_isolation',
+    requiresTenantRls: true,
   },
   {
     schemaName: 'notifications',
     relationName: 'booking_reminder_schedules',
     policyName: 'booking_reminder_schedules_tenant_isolation',
+    requiresTenantRls: true,
   },
   {
     schemaName: 'notifications',
     relationName: 'booking_reminder_recipients',
     policyName: 'booking_reminder_recipients_tenant_isolation',
+    requiresTenantRls: true,
   },
   {
     schemaName: 'messaging',
     relationName: 'user_blocks',
     policyName: 'messaging_user_blocks_tenant_isolation',
+    requiresTenantRls: true,
   },
   {
     schemaName: 'messaging',
     relationName: 'user_block_commands',
     policyName: 'messaging_user_block_commands_tenant_isolation',
+    requiresTenantRls: true,
   },
 ] as const satisfies readonly Pick<
   PostMigrationRuntimeTableSnapshot,
-  'schemaName' | 'relationName' | 'policyName'
+  'schemaName' | 'relationName' | 'policyName' | 'requiresTenantRls'
+>[];
+
+const expectedMediaPostMigrationTables = [
+  {
+    schemaName: 'integration',
+    relationName: 'user_profile_photo_sync',
+    policyName: 'user_profile_photo_sync_tenant_isolation',
+    requiresTenantRls: true,
+  },
+  {
+    schemaName: 'integration',
+    relationName: 'community_logo_sync',
+    policyName: 'community_logo_sync_tenant_isolation',
+    requiresTenantRls: true,
+  },
+  {
+    schemaName: 'integration',
+    relationName: 'profile_photo_client_commands',
+    policyName: 'profile_photo_client_commands_tenant_isolation',
+    requiresTenantRls: true,
+  },
+  {
+    schemaName: 'integration',
+    relationName: 'profile_photo_observation_watermarks',
+    policyName: 'profile_photo_observation_watermarks_tenant_isolation',
+    requiresTenantRls: true,
+  },
+  {
+    schemaName: 'integration',
+    relationName: 'community_logo_observation_watermarks',
+    policyName: 'community_logo_observation_watermarks_tenant_isolation',
+    requiresTenantRls: true,
+  },
+  {
+    schemaName: 'integration',
+    relationName: 'media_cutover_state',
+    policyName: null,
+    requiresTenantRls: false,
+  },
+] as const satisfies readonly Pick<
+  PostMigrationRuntimeTableSnapshot,
+  'schemaName' | 'relationName' | 'policyName' | 'requiresTenantRls'
 >[];
 
 export function assertPostMigrationRuntimeBoundary(
   tables: readonly PostMigrationRuntimeTableSnapshot[],
+  scope: DatabaseRoleBoundaryScope = 'core',
 ): void {
-  for (const expected of expectedPostMigrationTables) {
+  const expectedPostMigrationTables =
+    scope === 'media'
+      ? [...expectedCorePostMigrationTables, ...expectedMediaPostMigrationTables]
+      : expectedCorePostMigrationTables;
+  assertExpectedRuntimeTables(tables, expectedPostMigrationTables);
+}
+
+export function assertPreMigrationMediaRuntimeBoundary(
+  tables: readonly PostMigrationRuntimeTableSnapshot[],
+): void {
+  assertExpectedRuntimeTables(tables, expectedMediaPostMigrationTables.slice(0, 2));
+}
+
+function assertExpectedRuntimeTables(
+  tables: readonly PostMigrationRuntimeTableSnapshot[],
+  expectedTables: readonly Pick<
+    PostMigrationRuntimeTableSnapshot,
+    'schemaName' | 'relationName' | 'policyName' | 'requiresTenantRls'
+  >[],
+): void {
+  for (const expected of expectedTables) {
     const table = tables.find(
       (candidate) =>
         candidate.schemaName === expected.schemaName &&
@@ -273,10 +387,17 @@ export function assertPostMigrationRuntimeBoundary(
     if (!table.ownedByMigrator) {
       throw new DatabaseRoleBoundaryError('POST_MIGRATION_RUNTIME_TABLE_OWNER_INVALID');
     }
-    if (!table.forceRls) {
-      throw new DatabaseRoleBoundaryError('POST_MIGRATION_RUNTIME_TABLE_RLS_INVALID');
-    }
-    if (!hasExactTenantIsolationPolicy(expected.policyName, table.policies)) {
+    if (expected.requiresTenantRls) {
+      if (!table.forceRls) {
+        throw new DatabaseRoleBoundaryError('POST_MIGRATION_RUNTIME_TABLE_RLS_INVALID');
+      }
+      if (
+        expected.policyName === null ||
+        !hasExactTenantIsolationPolicy(expected.policyName, table.policies)
+      ) {
+        throw new DatabaseRoleBoundaryError('POST_MIGRATION_RUNTIME_TABLE_POLICY_INVALID');
+      }
+    } else if (table.policies.length > 0) {
       throw new DatabaseRoleBoundaryError('POST_MIGRATION_RUNTIME_TABLE_POLICY_INVALID');
     }
     if (!table.runtimeDml) {
@@ -357,6 +478,13 @@ async function inspectDatabaseRole(
       unexpected_messaging_default_privileges: string;
       dangerous_messaging_default_privileges: string;
       public_messaging_default_privileges: string;
+      owns_user_profile_photo_sync: boolean;
+      owns_community_logo_sync: boolean;
+      runtime_integration_default_dml: boolean;
+      runtime_integration_default_grant_options: string;
+      unexpected_integration_default_privileges: string;
+      dangerous_integration_default_privileges: string;
+      public_integration_default_privileges: string;
       non_owner_global_table_default_privileges: string;
     }>(
       `
@@ -608,6 +736,22 @@ async function inspectDatabaseRole(
                   and relation.relname = 'users'
              ), false) as can_reference_identity_users,
              coalesce((
+               select relation.relowner = roles.oid
+                 from pg_catalog.pg_class relation
+                 join pg_catalog.pg_namespace namespace
+                   on namespace.oid = relation.relnamespace
+                where namespace.nspname = 'integration'
+                  and relation.relname = 'user_profile_photo_sync'
+             ), false) as owns_user_profile_photo_sync,
+             coalesce((
+               select relation.relowner = roles.oid
+                 from pg_catalog.pg_class relation
+                 join pg_catalog.pg_namespace namespace
+                   on namespace.oid = relation.relnamespace
+                where namespace.nspname = 'integration'
+                  and relation.relname = 'community_logo_sync'
+             ), false) as owns_community_logo_sync,
+             coalesce((
                select pg_catalog.has_schema_privilege($1, namespace.oid, 'USAGE')
                  from pg_catalog.pg_namespace namespace
                 where namespace.nspname = 'notifications'
@@ -757,6 +901,81 @@ async function inspectDatabaseRole(
                   and defaults.defaclobjtype = 'r'
                   and privilege.grantee = 0
              )::text as public_messaging_default_privileges,
+             coalesce((
+               select pg_catalog.has_schema_privilege($1, namespace.oid, 'USAGE')
+                 from pg_catalog.pg_namespace namespace
+                where namespace.nspname = 'integration'
+             ), false) and coalesce((
+               select pg_catalog.count(distinct privilege.privilege_type) = 4
+                 from pg_catalog.pg_default_acl defaults
+                 left join pg_catalog.pg_namespace namespace
+                   on namespace.oid = defaults.defaclnamespace
+                 cross join lateral pg_catalog.aclexplode(defaults.defaclacl) privilege
+                where (defaults.defaclnamespace = 0 or namespace.nspname = 'integration')
+                  and defaults.defaclrole = (select oid from pg_catalog.pg_roles where rolname = current_user)
+                  and defaults.defaclobjtype = 'r'
+                  and privilege.privilege_type in ('SELECT', 'INSERT', 'UPDATE', 'DELETE')
+                  and privilege.grantee = (
+                    select oid from pg_catalog.pg_roles where rolname = $1
+                  )
+             ), false) as runtime_integration_default_dml,
+             (
+               select pg_catalog.count(*)
+                 from pg_catalog.pg_default_acl defaults
+                 left join pg_catalog.pg_namespace namespace
+                   on namespace.oid = defaults.defaclnamespace
+                 cross join lateral pg_catalog.aclexplode(defaults.defaclacl) privilege
+                where (defaults.defaclnamespace = 0 or namespace.nspname = 'integration')
+                  and defaults.defaclrole = (select oid from pg_catalog.pg_roles where rolname = current_user)
+                  and defaults.defaclobjtype = 'r'
+                  and privilege.is_grantable
+                  and privilege.grantee = (
+                    select oid from pg_catalog.pg_roles where rolname = $1
+                  )
+             )::text as runtime_integration_default_grant_options,
+             (
+               select pg_catalog.count(*)
+                 from pg_catalog.pg_default_acl defaults
+                 left join pg_catalog.pg_namespace namespace
+                   on namespace.oid = defaults.defaclnamespace
+                 cross join lateral pg_catalog.aclexplode(defaults.defaclacl) privilege
+                where (defaults.defaclnamespace = 0 or namespace.nspname = 'integration')
+                  and defaults.defaclrole = (select oid from pg_catalog.pg_roles where rolname = current_user)
+                  and defaults.defaclobjtype = 'r'
+                  and privilege.grantee <> 0
+                  and privilege.grantee <> defaults.defaclrole
+                  and privilege.grantee <> (
+                    select oid from pg_catalog.pg_roles where rolname = $1
+                  )
+             )::text as unexpected_integration_default_privileges,
+             (
+               select pg_catalog.count(*)
+                 from pg_catalog.pg_default_acl defaults
+                 left join pg_catalog.pg_namespace namespace
+                   on namespace.oid = defaults.defaclnamespace
+                 cross join lateral pg_catalog.aclexplode(defaults.defaclacl) privilege
+                where (defaults.defaclnamespace = 0 or namespace.nspname = 'integration')
+                  and defaults.defaclrole = (select oid from pg_catalog.pg_roles where rolname = current_user)
+                  and defaults.defaclobjtype = 'r'
+                  and privilege.privilege_type not in ('SELECT', 'INSERT', 'UPDATE', 'DELETE')
+                  and (
+                    privilege.grantee = 0
+                    or privilege.grantee = (
+                      select oid from pg_catalog.pg_roles where rolname = $1
+                    )
+                  )
+             )::text as dangerous_integration_default_privileges,
+             (
+               select pg_catalog.count(*)
+                 from pg_catalog.pg_default_acl defaults
+                 left join pg_catalog.pg_namespace namespace
+                   on namespace.oid = defaults.defaclnamespace
+                 cross join lateral pg_catalog.aclexplode(defaults.defaclacl) privilege
+                where (defaults.defaclnamespace = 0 or namespace.nspname = 'integration')
+                  and defaults.defaclrole = (select oid from pg_catalog.pg_roles where rolname = current_user)
+                  and defaults.defaclobjtype = 'r'
+                  and privilege.grantee = 0
+             )::text as public_integration_default_privileges,
              (
                select pg_catalog.count(*)
                  from pg_catalog.pg_default_acl defaults
@@ -818,6 +1037,13 @@ async function inspectDatabaseRole(
       unexpectedMessagingDefaultPrivileges: Number(row.unexpected_messaging_default_privileges),
       dangerousMessagingDefaultPrivileges: Number(row.dangerous_messaging_default_privileges),
       publicMessagingDefaultPrivileges: Number(row.public_messaging_default_privileges),
+      ownsUserProfilePhotoSync: row.owns_user_profile_photo_sync,
+      ownsCommunityLogoSync: row.owns_community_logo_sync,
+      runtimeIntegrationDefaultDml: row.runtime_integration_default_dml,
+      runtimeIntegrationDefaultGrantOptions: Number(row.runtime_integration_default_grant_options),
+      unexpectedIntegrationDefaultPrivileges: Number(row.unexpected_integration_default_privileges),
+      dangerousIntegrationDefaultPrivileges: Number(row.dangerous_integration_default_privileges),
+      publicIntegrationDefaultPrivileges: Number(row.public_integration_default_privileges),
       nonOwnerGlobalTableDefaultPrivileges: Number(row.non_owner_global_table_default_privileges),
     };
   });
@@ -832,6 +1058,7 @@ async function inspectPostMigrationRuntimeTables(
       schema_name: PostMigrationRuntimeTableSnapshot['schemaName'];
       relation_name: PostMigrationRuntimeTableSnapshot['relationName'];
       policy_name: PostMigrationRuntimeTableSnapshot['policyName'];
+      requires_tenant_rls: boolean;
       exists: boolean;
       owned_by_migrator: boolean;
       force_rls: boolean;
@@ -843,37 +1070,79 @@ async function inspectPostMigrationRuntimeTables(
       public_privileges: string;
       unexpected_grantee_privileges: string;
     }>(
-      `with expected(schema_name, relation_name, policy_name) as (
+      `with expected(schema_name, relation_name, policy_name, requires_tenant_rls) as (
          values
            (
              'notifications'::text,
              'booking_notification_projection_fences'::text,
-             'booking_notification_projection_fences_tenant_isolation'::text
+             'booking_notification_projection_fences_tenant_isolation'::text,
+             true
            ),
            (
              'notifications'::text,
              'booking_reminder_schedules'::text,
-             'booking_reminder_schedules_tenant_isolation'::text
+             'booking_reminder_schedules_tenant_isolation'::text,
+             true
            ),
            (
              'notifications'::text,
              'booking_reminder_recipients'::text,
-             'booking_reminder_recipients_tenant_isolation'::text
+             'booking_reminder_recipients_tenant_isolation'::text,
+             true
            ),
            (
              'messaging'::text,
              'user_blocks'::text,
-             'messaging_user_blocks_tenant_isolation'::text
+             'messaging_user_blocks_tenant_isolation'::text,
+             true
            ),
            (
              'messaging'::text,
              'user_block_commands'::text,
-             'messaging_user_block_commands_tenant_isolation'::text
+             'messaging_user_block_commands_tenant_isolation'::text,
+             true
+           ),
+           (
+             'integration'::text,
+             'user_profile_photo_sync'::text,
+             'user_profile_photo_sync_tenant_isolation'::text,
+             true
+           ),
+           (
+             'integration'::text,
+             'community_logo_sync'::text,
+             'community_logo_sync_tenant_isolation'::text,
+             true
+           ),
+           (
+             'integration'::text,
+             'profile_photo_client_commands'::text,
+             'profile_photo_client_commands_tenant_isolation'::text,
+             true
+           ),
+           (
+             'integration'::text,
+             'profile_photo_observation_watermarks'::text,
+             'profile_photo_observation_watermarks_tenant_isolation'::text,
+             true
+           ),
+           (
+             'integration'::text,
+             'community_logo_observation_watermarks'::text,
+             'community_logo_observation_watermarks_tenant_isolation'::text,
+             true
+           ),
+           (
+             'integration'::text,
+             'media_cutover_state'::text,
+             null::text,
+             false
            )
        )
        select expected.schema_name,
               expected.relation_name,
               expected.policy_name,
+              expected.requires_tenant_rls,
               relation.oid is not null and namespace.oid is not null as exists,
               coalesce(
                 relation.relowner = (select oid from pg_catalog.pg_roles where rolname = current_user),
@@ -1029,6 +1298,7 @@ async function inspectPostMigrationRuntimeTables(
       schemaName: row.schema_name,
       relationName: row.relation_name,
       policyName: row.policy_name,
+      requiresTenantRls: row.requires_tenant_rls,
       exists: row.exists,
       ownedByMigrator: row.owned_by_migrator,
       forceRls: row.force_rls,
@@ -1047,6 +1317,7 @@ export async function verifyDatabaseRoleBoundary(input: {
   readonly runtimeConnectionString: string;
   readonly migratorConnectionString: string;
   readonly phase: DatabaseRoleBoundaryPhase;
+  readonly scope?: DatabaseRoleBoundaryScope;
 }): Promise<void> {
   const runtime = await inspectDatabaseRole(input.runtimeConnectionString);
   const migrator = await inspectDatabaseRole(input.migratorConnectionString, runtime.roleName);
@@ -1060,10 +1331,14 @@ export async function verifyDatabaseRoleBoundary(input: {
       return result.rows[0]?.can_assume ?? true;
     },
   );
-  assertDatabaseRoleBoundary(runtime, migrator, runtimeCanAssumeMigrator);
-  if (input.phase === 'post') {
-    assertPostMigrationRuntimeBoundary(
-      await inspectPostMigrationRuntimeTables(input.migratorConnectionString, runtime.roleName),
+  const scope = input.scope ?? 'core';
+  assertDatabaseRoleBoundary(runtime, migrator, runtimeCanAssumeMigrator, scope);
+  if (input.phase === 'post' || scope === 'media') {
+    const tables = await inspectPostMigrationRuntimeTables(
+      input.migratorConnectionString,
+      runtime.roleName,
     );
+    if (input.phase === 'post') assertPostMigrationRuntimeBoundary(tables, scope);
+    else assertPreMigrationMediaRuntimeBoundary(tables);
   }
 }

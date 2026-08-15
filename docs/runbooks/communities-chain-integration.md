@@ -66,9 +66,13 @@ does not prove an acceptable production writer pause.
 4. Take a PostgreSQL backup and record its checksum, size, tool versions and restore command. A
    readable TOC is not sufficient backup evidence.
 5. Restore the complete backup with `pg_restore --exit-on-error` to a clean isolated PostgreSQL 16
-   database with no application traffic. Require the restored ledger to be queryable before any
+   database with no application traffic. For the split-role media suffix, retain and apply the exact
+   same-cluster owners and ACLs; a portable `--no-owner --no-acl` restore is backup evidence but is
+   not a valid bounded-migrator rehearsal. Require the restored ledger to be queryable before any
    migration is run against the shared target.
-6. Run the built `apps/migrator` image against the clone, then run it again and require no output.
+6. Pass the clone `media` role precheck, run the built `apps/migrator` image against the clone, run it
+   again and require no output, then pass the role postcheck and rolled-back runtime tenant DML/RLS
+   probe.
 7. Compare Communities row counts before and after; require all indexes valid and all Communities
    tables to have both RLS and FORCE RLS.
 8. Validate existing `NOT VALID` Communities constraints in a transaction and roll it back.

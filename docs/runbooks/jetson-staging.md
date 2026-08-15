@@ -9,8 +9,9 @@ Staging deployment is manual-only. Run `Build and deploy staging` with
 `deploy_confirmation=DEPLOY_STAGING` value. The validation job fails before checkout/build when the
 confirmation is absent or different, the selected ref is not `main`, no operation is selected, or
 deployment confirmation is mixed with either diagnostics option. `diagnose_home=true` with an
-empty confirmation runs only the independent read-only Home/public-ingress diagnostics; do not
-combine it with `recover_udisks=true` when a strictly read-only run is required.
+empty confirmation runs only the independent Home/public-ingress diagnostics. The stricter
+`diagnose_media=true` mode rejects `recover_udisks=true` outright, so its evidence cannot include a
+service restart or another staging write.
 Set `diagnostic_phone_last4` to one to ten comma-separated four-digit phone suffixes to add a
 read-only, redacted test-player check. It reports only the masked suffix, PadlHub user UUID, account
 and Viva-delegation status, refresh timestamps/error codes, and Home projection freshness. The
@@ -110,7 +111,8 @@ The application runtime uses separate API/worker and realtime secret contours:
 - `/opt/phub/staging.auth.env` is mode `0600`, owned by `phub-deploy`, and contains the audited
   authentication gates plus `HOME_BASE_SYNC_ENABLED=true`. The deploy workflow rewrites this
   non-secret file atomically before preflight so OAuth recovery and the local HomeBase projector
-  cannot drift from the working local contour;
+  cannot drift from the working local contour. `MEDIA_BINARY_ONLY` is the exception: it fingerprints
+  and preserves this file byte-for-byte so a media baseline cannot change the active auth/Home mode;
 - `/opt/phub/staging.override.env` contains only the Home/community/promotion live-read gates;
 - `/opt/phub/staging.games.env` is mode `0600`, owned by `phub-deploy`, and contains the
   staging-only Games mirror gates. The Mongo mirror keeps its URI only here.
@@ -169,6 +171,56 @@ not create identities or mappings and never logs the token or provider payload. 
 restores the previous API env file and the previous worker/realtime process state, then proves API
 readiness; failure to restore remains a failed deployment and invokes the full application rollback.
 
+`MEDIA_BINARY_ONLY` is a non-promotable expand-release profile. It requires the exact currently
+serving 40-character release as `expected_active_release` and never refreshes routing, activates
+Home/client-assisted/legacy modes, rewrites runtime override files, or stops worker/realtime as a
+profile side effect. Before CI builds or pushes an image, the `media-baseline` job streams reviewed
+scripts over SSH stdin and performs only read-only PostgreSQL, Docker, filesystem, capacity and S3
+checks. It binds a redacted artifact to the active release, candidate SHA/tree, immutable running
+images, runtime/routing fingerprints, full migration manifest and cause-aware rollback floor.
+Unknown/mismatched migration ledger rows, enabled profile/community media flags, missing or
+content-hash-mismatched referenced objects, destructive lifecycle rules, active lock waits, swap
+activity, OOM or excessive memory PSI fail closed. This profile is deliberately pre-cutover only:
+it accepts the ordinary or client-media rollback floor and rejects an active stable community-logo
+cutover.
+
+Run the same baseline without a deploy confirmation first:
+
+```sh
+gh workflow run deploy-staging.yaml --ref main \
+  -f deployment_profile=MEDIA_BINARY_ONLY \
+  -f diagnose_media=true \
+  -f expected_active_release=<currently-serving-40-character-release>
+```
+
+An actual `MEDIA_BINARY_ONLY` dispatch additionally requires `deploy_confirmation=DEPLOY_STAGING`.
+The staging migration ledger must already contain every packaged migration through
+`0078_community_media_issue_quotas.sql`; the only approved pending suffix is `0079`, `0080`, and
+`0081` in that order. Older Communities migrations are a separate rollout and must never be hidden
+inside this media-binary profile. It re-runs the baseline immediately before the application
+snapshot, binds that snapshot back to `expected_active_release`, proves a real restore and two
+candidate-migrator invocations (the second must apply nothing) on an isolated local PostgreSQL 16
+database, and only then mutates the shared schema with bounded SQL deadlines. The retained archive
+contains owner and ACL metadata. The generic restore verifier may apply it portably without owners,
+but the separate media clone restores the exact same-cluster ownership/ACL boundary, runs the
+`media` split-role verifier before and after migration, and executes a rolled-back runtime DML/RLS
+probe bound to the exact active `local-padel` staging tenant. The bounded migrator must already own
+both altered media mapping tables, and its
+schema-local `integration` default ACL must grant the exact runtime role only
+`SELECT/INSERT/UPDATE/DELETE`; `PUBLIC`, grant options, global defaults and third grantees block the
+profile.
+API is rolled first while the previous web/worker/realtime remain serving; existing profile-photo
+and community-logo objects must return `image/webp` both directly and through canonical Caddy/Nginx
+HTTPS before worker. Worker and realtime follow one at a time. Candidate Nginx is then recreated
+and rechecked while the old web manifest is still serving; web follows last, and the promoted Caddy
+path is checked again against the candidate manifest. Runtime files and the
+effective running operational environment must match before rollout and remain unchanged after it.
+The retained artifact includes the application-snapshot release, PostgreSQL archive checksum,
+post-pull disk budget, clone duration, no-op rerun, exact ledger and confirmed clone cleanup. Both
+stable-logo flags, client profile sync, community media, invites and Communities realtime remain
+explicitly false, so this profile changes no user-visible media URL. Feature enablement is a later,
+separately approved operation.
+
 Only a successful `FULL_LIVE_HOME` run writes the three-line
 `production-promotion-eligibility.env` artifact bound to its release SHA and workflow run ID.
 Production refuses every staging run without that exact artifact, so this lightweight Communities
@@ -183,27 +235,38 @@ fallback or timeout fails the release even when the containers remain healthy.
 
 Every confirmed staging deployment creates a PostgreSQL custom-format archive under
 `/opt/phub/backups/postgres-pre-<release>-<UTC timestamp>.dump`. The workflow
-requires a non-empty archive, records its size and SHA-256, validates its TOC, then restores the
-complete archive with `pg_restore --exit-on-error` into a clean temporary database on the same
-PostgreSQL 16 cluster. It requires the restored migration ledger to be queryable and drops the
-temporary database before running the digest-pinned migrator against staging. The workflow then
-confirms the latest repository migration in `public.schema_migrations` before it switches
+requires a non-empty private mode-0600 archive, records its size and SHA-256, validates its TOC,
+then restores the complete archive with `pg_restore --exit-on-error` into a clean temporary database
+on the same PostgreSQL 16 cluster. It requires the restored migration ledger to be queryable and
+drops the temporary database before running the digest-pinned migrator against staging. The workflow
+then confirms the latest repository migration in `public.schema_migrations` before it switches
 application containers. After pulling images and before creating the archive, it records the source
 database size and requires free disk headroom equal to three database copies plus 1 GiB for the
-archive, restored clone, WAL and temporary overhead. It repeats that check after the private
-mode-0600 archive exists, before the restore or shared-target migration. The backup directory is a
-non-symlink directory owned by the deploy user with mode 0700; archives are created exclusively with
-`mktemp`. A failed capacity check, backup, restore or migration leaves the currently running
-application release untouched.
+archive, restored clone, WAL and temporary overhead. It repeats that check after the private archive
+exists, before the restore or shared-target migration. The backup directory is a non-symlink
+directory owned by the deploy user with mode 0700; archives are created exclusively with `mktemp`.
+A failed capacity check, backup, restore or migration leaves the currently running application
+release untouched.
 
-The restore verifier owns only a database it created successfully. It records that ownership in
-`/opt/phub/backups/.restore-cleanup-<database>` and removes the marker only after the temporary
-database is dropped. A leftover marker blocks the next verification. Inspect the exact marked
+For `MEDIA_BINARY_ONLY`, the generic full-archive restore check remains mandatory and is followed
+by a second media-specific rehearsal against another non-existing isolated PostgreSQL 16 database
+on the same approved local server. That rehearsal runs the exact candidate migrator twice, requires
+the second invocation to apply nothing, verifies the complete filename/checksum ledger plus the
+exact media constraint and RLS-policy invariants, and strictly drops and reads back absence of its
+clone before the shared schema is touched.
+
+Each restore verification or rehearsal owns only a database it created successfully. It writes a
+`CANDIDATE` marker before `createdb`, replaces it with `OWNED` only after creation is acknowledged,
+and removes `/opt/phub/backups/.restore-cleanup-<database>` only after the temporary database is
+confirmed absent. A leftover marker blocks the next verification. Inspect the exact marked
 database, drop only that database through the approved PostgreSQL administration path, and remove
 the marker only after the drop is independently confirmed. Never delete a colliding unmarked
 database.
 
-Before pulling a new digest, CI checks free space on `/`. Below 8 GiB it removes only Docker
+Before pulling a new digest, CI checks free space on `/`. `MEDIA_BINARY_ONLY` additionally derives
+the required headroom from the live database size for the retained dump, restored clone, WAL,
+candidate images and safety reserve, then repeats the dynamic disk budget after image pull. Below
+8 GiB the generic deploy path removes only Docker
 images that are not referenced by a container; it never prunes volumes. Deployment stops before
 pull/migration if that safe cleanup still leaves less than 4 GiB. A Redis
 `MISCONF ... stop-writes-on-bgsave-error`, PostgreSQL restart loop, or RabbitMQ `541` must therefore

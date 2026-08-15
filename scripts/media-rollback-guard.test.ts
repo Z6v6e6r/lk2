@@ -23,6 +23,7 @@ function executeGuard(input: {
   readonly floor?: 'client-media' | 'community-logo';
   readonly cutoverActive: boolean;
   readonly queueInspectionFails?: boolean;
+  readonly postStopQueueInspectionFails?: boolean;
   readonly queueMessages?: number;
   readonly capabilityFails?: boolean;
   readonly apiProfileClient?: boolean;
@@ -73,6 +74,8 @@ case "$args" in
     test "\${FAKE_WORKER_PRESENT:-1}" = 0 || printf 'worker-id\\n' ;;
   *"ps --status running -q api"*)
     test "\${FAKE_API_PRESENT:-1}" = 0 || printf 'api-id\\n' ;;
+  *"inspect --format"*"State.Health"*"worker-id"*)
+    printf '%s\\n' "\${FAKE_WORKER_HEALTH:-healthy}" ;;
   *"inspect --format"*"worker-id"*)
     printf 'COMMUNITY_LOGO_STABLE_DELIVERY_ENABLED=%s\\n' "\${FAKE_WORKER_STABLE:-false}"
     printf 'COMMUNITY_LOGO_COMPATIBILITY_BACKFILL_ENABLED=%s\\n' "\${FAKE_WORKER_BACKFILL:-false}" ;;
@@ -83,6 +86,9 @@ case "$args" in
   *"exec -T worker node -e"*) exit "\${FAKE_CAPABILITY_STATUS:-0}" ;;
   *"rabbitmq rabbitmqctl"*)
     test "\${FAKE_QUEUE_FAILURE:-0}" = 0 || exit 42
+    if test "\${FAKE_POST_STOP_QUEUE_FAILURE:-0}" = 1 && grep -q 'stop worker' "$FAKE_DOCKER_LOG"; then
+      exit 42
+    fi
     printf 'phub.home-projector.v1 %s 0\\n' "\${FAKE_QUEUE_MESSAGES:-0}" ;;
   *"schema_migrations"*) printf '1\\n' ;;
   *"profile_photo_client_commands"*)
@@ -118,6 +124,7 @@ esac
       FAKE_DOCKER_LOG: dockerLog,
       FAKE_CUTOVER_ACTIVE: input.cutoverActive ? '1' : '0',
       FAKE_QUEUE_FAILURE: input.queueInspectionFails ? '1' : '0',
+      FAKE_POST_STOP_QUEUE_FAILURE: input.postStopQueueInspectionFails ? '1' : '0',
       FAKE_CAPABILITY_STATUS: input.capabilityFails ? '1' : '0',
       FAKE_API_PROFILE_CLIENT: input.apiProfileClient ? 'true' : 'false',
       FAKE_API_STABLE: apiStable ? 'true' : 'false',
@@ -424,6 +431,20 @@ describe('media rollback safety guard', () => {
 
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain('cannot inspect the Home projector queue');
+  });
+
+  it('restarts the worker when a post-stop feature rollback check fails', () => {
+    const { result, dockerLog } = executeGuard({
+      mode: 'feature',
+      cutoverActive: true,
+      postStopQueueInspectionFails: true,
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('cannot inspect the Home projector queue');
+    expect(dockerLog).toContain('stop worker');
+    expect(dockerLog).toContain('start worker');
+    expect(dockerLog).toContain('State.Health');
   });
 
   it('rejects a feature rollback while profile-photo object GC is not drained', () => {
