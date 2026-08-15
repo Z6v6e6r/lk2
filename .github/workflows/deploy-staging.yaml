@@ -525,6 +525,13 @@ jobs:
           printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
           printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+      - name: Refuse an unresolved runtime-secret transition
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+        run: |
+          ssh -o ConnectTimeout=10 -o ConnectionAttempts=1 -o ServerAliveInterval=10 -o ServerAliveCountMax=2 \
+            "phub-deploy@$HOST" 'sh -s -- /etc/phub /opt/phub' \
+            < deploy/jetson/verify-runtime-secret-transition-clear.sh
       - name: Install the reviewed user-access operator
         env:
           HOST: ${{ secrets.STAGING_HOST }}
@@ -589,6 +596,13 @@ jobs:
           printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
           printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+      - name: Refuse an unresolved runtime-secret transition
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+        run: |
+          ssh -o ConnectTimeout=10 -o ConnectionAttempts=1 -o ServerAliveInterval=10 -o ServerAliveCountMax=2 \
+            "phub-deploy@$HOST" 'sh -s -- /etc/phub /opt/phub' \
+            < deploy/jetson/verify-runtime-secret-transition-clear.sh
       - name: Inspect active release metadata without values
         continue-on-error: true
         env:
@@ -750,6 +764,13 @@ jobs:
           printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
           printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+      - name: Refuse an unresolved runtime-secret transition
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+        run: |
+          ssh -o ConnectTimeout=10 -o ConnectionAttempts=1 -o ServerAliveInterval=10 -o ServerAliveCountMax=2 \
+            "phub-deploy@$HOST" 'sh -s -- /etc/phub /opt/phub' \
+            < deploy/jetson/verify-runtime-secret-transition-clear.sh
       - name: Verify current runtime secret isolation read-only
         env:
           HOST: ${{ secrets.STAGING_HOST }}
@@ -1000,6 +1021,13 @@ jobs:
           printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
           printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+      - name: Refuse an unresolved runtime-secret transition
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+        run: |
+          ssh -o ConnectTimeout=10 -o ConnectionAttempts=1 -o ServerAliveInterval=10 -o ServerAliveCountMax=2 \
+            "phub-deploy@$HOST" 'sh -s -- /etc/phub /opt/phub' \
+            < deploy/jetson/verify-runtime-secret-transition-clear.sh
       - name: Verify API and realtime secret isolation
         env:
           HOST: ${{ secrets.STAGING_HOST }}

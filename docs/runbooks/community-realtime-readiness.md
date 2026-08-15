@@ -41,6 +41,13 @@ checks deployment-user ownership, mode `0600`, readability by the exact Compose 
 secret separation and key equality without printing values. Root-owned `0600` files are invalid
 unless every Compose and verification call uses an audited restricted sudo wrapper.
 
+The manual `Provision staging runtime-secret isolation` workflow verifies the exact active realtime
+image against the candidate allowlisted environment in a networkless, read-only one-shot container,
+then stops API and realtime together, publishes the dedicated key and starts realtime before API.
+This avoids issuing tickets under one key while the gateway verifies another. There is no
+shared-key fallback in the application. After a successful transition, the strict `realtime.env`
+contour is mandatory and the ordinary staging diagnostic must prove it independently.
+
 ## Functional smoke
 
 1. Authenticate through the normal PadlHub client flow.

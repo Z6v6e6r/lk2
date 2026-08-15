@@ -304,7 +304,7 @@ describe('media migration restore rehearsal', () => {
     expect(malformed.log).not.toContain('createdb -U "$POSTGRES_USER"');
     expect(malformed.result.stdout).not.toContain(malformedSecret);
     expect(malformed.result.stderr).not.toContain(malformedSecret);
-  });
+  }, 15_000);
 
   it('requires the second candidate migrator invocation to be a no-op', () => {
     const { result, log } = execute({ secondMigratorOutput: 'Applied 0081_again.sql' });

@@ -17,6 +17,17 @@ export default tseslint.config(
   eslint.configs.recommended,
   ...tseslint.configs.recommendedTypeChecked,
   {
+    files: [
+      'deploy/jetson/provision-runtime-secret-files.mjs',
+      'deploy/jetson/provision-runtime-secret-files.d.mts',
+    ],
+    ...tseslint.configs.disableTypeChecked,
+    languageOptions: {
+      ecmaVersion: 2023,
+      globals: globals.node,
+    },
+  },
+  {
     files: ['**/*.{ts,tsx}'],
     languageOptions: {
       ecmaVersion: 2023,
