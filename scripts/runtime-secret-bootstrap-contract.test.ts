@@ -12,6 +12,10 @@ const sourceVerifier = readFileSync(
   'deploy/jetson/verify-legacy-runtime-secret-bootstrap-source.sh',
   'utf8',
 );
+const candidateCheckout = readFileSync(
+  'deploy/jetson/checkout-legacy-runtime-secret-bootstrap-candidate.sh',
+  'utf8',
+);
 const runtimeObservation = readFileSync(
   'deploy/jetson/verify-legacy-runtime-secret-bootstrap-runtime.sh',
   'utf8',
@@ -82,6 +86,21 @@ describe('legacy runtime-secret bootstrap delivery contract', () => {
     expect(workflow).toContain('npm run build:packages');
     expect(workflow).toContain('npm run check');
     expect(workflow).toContain('npm run db:migrate:check');
+  });
+
+  it('acquires the immutable legacy candidate without invoking checkout submodule cleanup', () => {
+    expect(workflow.match(/Acquire the exact immutable B0 candidate/g)).toHaveLength(3);
+    expect(workflow).not.toContain('ref: ${{ inputs.bootstrap_candidate_sha }}');
+    expect(candidateCheckout).toContain('repository_url=https://github.com/Z6v6e6r/lk2.git');
+    expect(candidateCheckout).toContain('test "$destination" = candidate');
+    expect(candidateCheckout).toContain('test ! -e "$destination" && test ! -L "$destination"');
+    expect(candidateCheckout).toContain(
+      'git -C "$destination" -c protocol.version=2 fetch --no-tags --depth=2 origin "$candidate_sha"',
+    );
+    expect(candidateCheckout).toContain('rev-parse FETCH_HEAD');
+    expect(candidateCheckout).toContain('checkout --detach "$candidate_sha"');
+    expect(workflow).toContain('context: candidate');
+    expect(workflow).toContain('file: candidate/apps/${{ matrix.service }}/Dockerfile');
   });
 
   it('builds and records all five immutable candidate manifests without invoking migrator', () => {

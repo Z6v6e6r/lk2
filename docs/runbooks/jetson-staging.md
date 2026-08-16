@@ -173,7 +173,10 @@ For `e308181d`, use the separate `Bootstrap staging runtime-secret boundary (B0)
 candidate must be a reviewed, immutable, non-merge commit whose single parent is the exact serving
 release. The source verifier requires the exact reviewed B0 tree, the nine-file B0 allowlist,
 byte-identical migration and contract trees, and the dedicated API/realtime ticket-key
-implementation. The workflow uses a clean `npm ci` dependency contour and requires the complete
+implementation. The legacy source contains a historical gitlink without matching submodule
+metadata, so the workflow acquires the candidate through its fixed public repository and exact
+40-character SHA without submodule discovery; do not replace that step with a branch checkout or
+submodule initialization. The workflow uses a clean `npm ci` dependency contour and requires the complete
 generated-contract/package bootstrap followed by the complete repository `npm run check` gate plus
 migration validation. It then builds and publishes all five arm64 images from that one candidate SHA
 and records only full GHCR manifest digests. The B0
