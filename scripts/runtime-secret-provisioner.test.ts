@@ -101,13 +101,17 @@ REALTIME_HEARTBEAT_INTERVAL_MS=15000
 ${overrides}`;
 }
 
-function fixture(value = source()) {
+function fixture(value = source(), mode = 0o640) {
   const directory = mkdtempSync(join(tmpdir(), 'phub-runtime-secret-'));
   chmodSync(directory, 0o750);
   const staging = join(directory, 'staging.env');
-  writeFileSync(staging, value, { mode: 0o640 });
-  chmodSync(staging, 0o640);
+  writeFileSync(staging, value, { mode });
+  chmodSync(staging, mode);
   return { directory, staging, value, inode: lstatSync(staging).ino };
+}
+
+function bootstrapFixture(value = source()) {
+  return fixture(value, 0o600);
 }
 
 function options(failAfter?: string) {
@@ -149,7 +153,7 @@ function bootstrapOptions(failAfter?: string) {
   });
   return {
     directory: { uid, gid, mode: 0o750 },
-    staging: { uid, gid, mode: 0o640 },
+    staging: { uid, gid, mode: 0o600 },
     deployUid: uid,
     deployGid: gid,
     randomBytes: () => Buffer.alloc(48, 9),
@@ -643,7 +647,7 @@ describe('runtime-secret file transaction', () => {
 
 describe('legacy B0 runtime-secret bootstrap file transaction', () => {
   it('publishes a versioned bootstrap marker without secret material', () => {
-    const input = fixture();
+    const input = bootstrapFixture();
     expect(prepareBootstrap(input.directory, bootstrapOptions())).toEqual({
       status: 'files-prepared',
     });
@@ -661,7 +665,7 @@ describe('legacy B0 runtime-secret bootstrap file transaction', () => {
   it.each(['backup', 'realtime'])(
     'restores the original file after a bootstrap crash at %s',
     (failAfter) => {
-      const input = fixture();
+      const input = bootstrapFixture();
       expect(() => prepareBootstrap(input.directory, bootstrapOptions(failAfter))).toThrow(
         'injected failure',
       );
@@ -676,7 +680,7 @@ describe('legacy B0 runtime-secret bootstrap file transaction', () => {
   );
 
   it('recovers marker publication and finalization response loss idempotently', () => {
-    const input = fixture();
+    const input = bootstrapFixture();
     prepareBootstrap(input.directory, bootstrapOptions());
     expect(() =>
       advanceBootstrapPhase(input.directory, 'files-prepared', 'images-probed', {
@@ -718,7 +722,7 @@ describe('legacy B0 runtime-secret bootstrap file transaction', () => {
   it.each(['final-marker', 'receipt-renamed'])(
     'converges finalization after response loss at %s',
     (failAfter) => {
-      const input = fixture();
+      const input = bootstrapFixture();
       prepareBootstrap(input.directory, bootstrapOptions());
       for (const [from, to] of [
         ['files-prepared', 'images-probed'],
@@ -745,7 +749,7 @@ describe('legacy B0 runtime-secret bootstrap file transaction', () => {
   );
 
   it('binds a finalized marker to the serving runtime snapshot across response loss', () => {
-    const input = fixture();
+    const input = bootstrapFixture();
     prepareBootstrap(input.directory, bootstrapOptions());
     for (const [from, to] of [
       ['files-prepared', 'images-probed'],
@@ -771,11 +775,18 @@ describe('legacy B0 runtime-secret bootstrap file transaction', () => {
   });
 
   it('rejects a bootstrap whose migration manifests differ', () => {
-    const input = fixture();
+    const input = bootstrapFixture();
     const value = bootstrapOptions();
     value.attestation.hashes.candidateMigrationManifest = 'e'.repeat(64);
     expect(() => prepareBootstrap(input.directory, value)).toThrow(
       'bootstrap marker has an unknown schema or phase',
+    );
+  });
+
+  it('rejects the obsolete group-readable staging metadata', () => {
+    const input = fixture();
+    expect(() => prepareBootstrap(input.directory, bootstrapOptions())).toThrow(
+      'staging.env ownership or mode differs',
     );
   });
 });
