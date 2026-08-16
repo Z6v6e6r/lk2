@@ -17,6 +17,7 @@ import {
 import { randomBytes } from 'node:crypto';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isDeepStrictEqual } from 'node:util';
 
 const VERSION = 1;
 const BOOTSTRAP_VERSION = 2;
@@ -514,6 +515,72 @@ export function buildRuntimeSecretComposeCandidateFile(
   writeExclusiveForCurrentOwner(outputPath, candidate, uid, gid);
   syncPath(outputDirectory);
   return { status: 'compose-generated' };
+}
+
+function parseComposeRender(source, label) {
+  let value;
+  try {
+    value = JSON.parse(source);
+  } catch {
+    fail(`${label} Compose render is malformed`);
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    fail(`${label} Compose render must be an object`);
+  }
+  const services = value.services;
+  if (!services || typeof services !== 'object' || Array.isArray(services)) {
+    fail(`${label} Compose render lacks services`);
+  }
+  const realtime = services.realtime;
+  if (!realtime || typeof realtime !== 'object' || Array.isArray(realtime)) {
+    fail(`${label} Compose render lacks services.realtime`);
+  }
+  const environment = realtime.environment;
+  if (!environment || typeof environment !== 'object' || Array.isArray(environment)) {
+    fail(`${label} Compose render lacks services.realtime.environment`);
+  }
+  return { value, realtime };
+}
+
+export function verifyRuntimeSecretComposeRenderDelta(activeSource, candidateSource) {
+  const active = parseComposeRender(activeSource, 'active');
+  const candidate = parseComposeRender(candidateSource, 'candidate');
+  delete active.realtime.environment;
+  delete candidate.realtime.environment;
+  if (!isDeepStrictEqual(active.value, candidate.value)) {
+    fail('candidate Compose changes outside the approved realtime environment contour');
+  }
+  return { status: 'compose-render-approved' };
+}
+
+export function verifyRuntimeSecretComposeRenderDeltaFile(
+  activePathInput,
+  candidatePathInput,
+  uid,
+  gid,
+) {
+  const activePath = resolve(activePathInput);
+  const candidatePath = resolve(candidatePathInput);
+  if (dirname(activePath) !== dirname(candidatePath)) {
+    fail('Compose render inputs must share the reviewed tool directory');
+  }
+  if (
+    basename(activePath) !== '.runtime-secret-active-render.json' ||
+    basename(candidatePath) !== '.runtime-secret-candidate-render.json'
+  ) {
+    fail('Compose render input filenames differ from the reviewed contract');
+  }
+  if (!Number.isSafeInteger(uid) || uid <= 0 || !Number.isSafeInteger(gid) || gid <= 0) {
+    fail('Compose render ownership is invalid');
+  }
+  for (const path of [activePath, candidatePath]) {
+    const value = safeFile(path, { uid, gid, mode: 0o600 });
+    if (Number(value.size) > 2 * 1024 * 1024) fail('Compose render exceeds the size limit');
+  }
+  return verifyRuntimeSecretComposeRenderDelta(
+    readFileSync(activePath, 'utf8'),
+    readFileSync(candidatePath, 'utf8'),
+  );
 }
 
 function validateState(state) {
@@ -1240,6 +1307,14 @@ function cli() {
       activePath,
       reviewedPath,
       outputPath,
+      Number(deployUid),
+      Number(deployGid),
+    );
+  } else if (mode === 'verify-compose-render-delta') {
+    const [activePath, candidatePath, deployUid, deployGid] = args;
+    result = verifyRuntimeSecretComposeRenderDeltaFile(
+      activePath,
+      candidatePath,
       Number(deployUid),
       Number(deployGid),
     );

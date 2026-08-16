@@ -33,6 +33,8 @@ import {
   restoreFiles,
   verifyBootstrapPrepared,
   verifyBootstrapFinalized,
+  verifyRuntimeSecretComposeRenderDelta,
+  verifyRuntimeSecretComposeRenderDeltaFile,
   verifyPrepared,
 } from '../deploy/jetson/provision-runtime-secret-files.mjs';
 
@@ -240,6 +242,89 @@ describe('runtime-secret file transaction', () => {
     expect(() =>
       buildRuntimeSecretComposeCandidateFile(active, reviewed, output, uid, gid),
     ).toThrow('generated Compose already exists');
+  });
+
+  it('allows only the rendered realtime environment delta', () => {
+    type Render = {
+      name: string;
+      services: {
+        api: { image: string; environment: Record<string, string> };
+        realtime: { image: string; environment: Record<string, string> };
+        worker: { image: string; environment: Record<string, string> };
+      };
+      networks: Record<string, unknown>;
+    };
+    const active = JSON.stringify({
+      name: 'phub-staging',
+      services: {
+        api: { image: 'api', environment: { SHARED: 'one' } },
+        realtime: { image: 'realtime', environment: { SHARED: 'one', API_ONLY: 'secret' } },
+        worker: { image: 'worker', environment: { SHARED: 'one' } },
+      },
+      networks: { application: { name: 'phub-staging_application' } },
+    });
+    const candidateValue = JSON.parse(active) as Render;
+    candidateValue.services.realtime.environment = { SHARED: 'one' };
+    const candidate = JSON.stringify(candidateValue);
+    expect(verifyRuntimeSecretComposeRenderDelta(active, candidate)).toEqual({
+      status: 'compose-render-approved',
+    });
+
+    for (const mutate of [
+      (value: Render) => {
+        value.services.realtime.image = 'other';
+      },
+      (value: Render) => {
+        value.services.api.image = 'other';
+      },
+      (value: Render) => {
+        value.networks = { other: {} };
+      },
+    ]) {
+      const drifted = JSON.parse(candidate) as typeof candidateValue;
+      mutate(drifted);
+      expect(() => verifyRuntimeSecretComposeRenderDelta(active, JSON.stringify(drifted))).toThrow(
+        'changes outside the approved realtime environment contour',
+      );
+    }
+  });
+
+  it('rejects malformed or structurally incomplete Compose renders', () => {
+    const valid = JSON.stringify({
+      services: { realtime: { environment: { APP_ENV: 'staging' } } },
+    });
+    expect(() => verifyRuntimeSecretComposeRenderDelta('{', valid)).toThrow(
+      'active Compose render is malformed',
+    );
+    expect(() => verifyRuntimeSecretComposeRenderDelta('{}', valid)).toThrow(
+      'active Compose render lacks services',
+    );
+    expect(() =>
+      verifyRuntimeSecretComposeRenderDelta(JSON.stringify({ services: { realtime: {} } }), valid),
+    ).toThrow('active Compose render lacks services.realtime.environment');
+  });
+
+  it('verifies private same-directory rendered Compose files', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'phub-runtime-compose-render-'));
+    chmodSync(directory, 0o700);
+    const active = join(directory, '.runtime-secret-active-render.json');
+    const candidate = join(directory, '.runtime-secret-candidate-render.json');
+    const base = {
+      services: { realtime: { image: 'realtime', environment: { SHARED: 'one' } } },
+    };
+    writeFileSync(active, JSON.stringify(base), { mode: 0o600 });
+    writeFileSync(candidate, JSON.stringify(base), { mode: 0o600 });
+    expect(verifyRuntimeSecretComposeRenderDeltaFile(active, candidate, uid, gid)).toEqual({
+      status: 'compose-render-approved',
+    });
+    expect(() =>
+      verifyRuntimeSecretComposeRenderDeltaFile(
+        join(directory, 'unreviewed.json'),
+        candidate,
+        uid,
+        gid,
+      ),
+    ).toThrow('input filenames differ');
   });
 
   it.each([
@@ -496,6 +581,45 @@ describe('runtime-secret file transaction', () => {
     expect(readFileSync(output, 'utf8').replace(generatedRealtimeEnvForTest, '')).toBe(
       legacyCompose,
     );
+  });
+
+  it('executes the streamed render-delta CLI without exposing environment values', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'phub-runtime-compose-render-cli-'));
+    chmodSync(directory, 0o700);
+    const active = join(directory, '.runtime-secret-active-render.json');
+    const candidate = join(directory, '.runtime-secret-candidate-render.json');
+    writeFileSync(
+      active,
+      JSON.stringify({ services: { realtime: { environment: { PRIVATE: 'must-not-leak' } } } }),
+      { mode: 0o600 },
+    );
+    writeFileSync(
+      candidate,
+      JSON.stringify({ services: { realtime: { environment: { APP_ENV: 'staging' } } } }),
+      { mode: 0o600 },
+    );
+    const helper = fileURLToPath(
+      new URL('../deploy/jetson/provision-runtime-secret-files.mjs', import.meta.url),
+    );
+    const result = spawnSync(
+      process.execPath,
+      [
+        '--input-type=module',
+        '-',
+        'verify-compose-render-delta',
+        '/unused',
+        active,
+        candidate,
+        String(uid),
+        String(gid),
+      ],
+      { encoding: 'utf8', input: readFileSync(helper, 'utf8') },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout.trim()).toBe(
+      'runtime-secret-transition operation=verify-compose-render-delta result=compose-render-approved status=passed',
+    );
+    expect(`${result.stdout}${result.stderr}`).not.toContain('must-not-leak');
   });
 
   it.each([
