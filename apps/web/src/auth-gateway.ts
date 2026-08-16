@@ -65,6 +65,8 @@ import type {
   ProfilePrivacySettings,
   ProfilePrivacyUpdateRequest,
   ProfileLevelHistory,
+  PlayerLevelState,
+  PlayerSportLevel,
   ProfileFriendPage,
   ProfileFriendship,
   UserProfile,
@@ -138,6 +140,8 @@ export type {
   ProfilePrivacySettings,
   ProfilePrivacyUpdateRequest,
   ProfileLevelHistory,
+  PlayerLevelState,
+  PlayerSportLevel,
   ProfileFriendPage,
   ProfileFriendship,
   UserProfile,
@@ -379,9 +383,13 @@ export interface AuthGateway {
   }) => Promise<GameCardPage>;
   readonly getActivityHistory: (input?: ActivityHistoryQuery) => Promise<ActivityHistoryPage>;
   readonly getGame: (gameId: string) => Promise<GameCard>;
-  readonly joinGame: (gameId: string, expectedRevision?: number) => Promise<GameCommandResult>;
+  readonly joinGame: (
+    gameId: string,
+    expectedRevision?: number,
+    invitationId?: string,
+  ) => Promise<GameCommandResult>;
   readonly leaveGame: (gameId: string) => Promise<GameCommandResult>;
-  readonly joinGameWaitlist: (gameId: string) => Promise<GameCommandResult>;
+  readonly joinGameWaitlist: (gameId: string, invitationId?: string) => Promise<GameCommandResult>;
   readonly leaveGameWaitlist: (gameId: string) => Promise<GameCommandResult>;
   readonly submitGameResult: (
     gameId: string,
@@ -482,6 +490,8 @@ export interface AuthGateway {
     expectedInviteRevision: number,
   ) => Promise<CommunityDirectInviteState>;
   readonly getProfileLevelHistory: () => Promise<ProfileLevelHistory>;
+  readonly getOwnPlayerLevel?: (sportCode?: string) => Promise<PlayerLevelState>;
+  readonly setOwnPlayerLevel?: (levelId: string, sportCode?: string) => Promise<PlayerSportLevel>;
   readonly listConversations: () => Promise<ConversationPage>;
   readonly createRealtimeTicket: () => Promise<MessagingRealtimeTicket>;
   readonly createDirectConversation: (
@@ -1806,16 +1816,16 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       return client.getGame(gameId);
     },
 
-    joinGame(gameId, expectedRevision) {
-      return client.joinGame(gameId, expectedRevision);
+    joinGame(gameId, expectedRevision, invitationId) {
+      return client.joinGame(gameId, expectedRevision, invitationId);
     },
 
     leaveGame(gameId) {
       return client.leaveGame(gameId);
     },
 
-    joinGameWaitlist(gameId) {
-      return client.joinGameWaitlist(gameId);
+    joinGameWaitlist(gameId, invitationId) {
+      return client.joinGameWaitlist(gameId, invitationId);
     },
 
     leaveGameWaitlist(gameId) {
@@ -1986,6 +1996,20 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
 
     getProfileLevelHistory() {
       return client.getProfileLevelHistory();
+    },
+
+    getOwnPlayerLevel(sportCode) {
+      return client.getOwnPlayerLevel(sportCode);
+    },
+
+    async setOwnPlayerLevel(levelId, sportCode) {
+      const saved = await client.setOwnPlayerLevel(levelId, sportCode);
+      selfProfilePromise = undefined;
+      selfProfileExpiresAt = 0;
+      homeBasePromise = undefined;
+      homeDashboardPromise = undefined;
+      if (currentUserId) playerProfilePromises.delete(currentUserId);
+      return saved;
     },
 
     listConversations() {

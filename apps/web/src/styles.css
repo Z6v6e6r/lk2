@@ -4222,6 +4222,135 @@
   color: #a23e4b;
 }
 
+.games-level-recovery-backdrop {
+  position: fixed;
+  z-index: 1200;
+  inset: 0;
+  display: grid;
+  place-items: end center;
+  padding: 20px;
+  background: rgb(12 22 17 / 58%);
+  backdrop-filter: blur(4px);
+}
+
+.games-level-recovery {
+  position: relative;
+  box-sizing: border-box;
+  width: min(100%, 520px);
+  max-height: min(720px, calc(100dvh - 40px));
+  overflow-y: auto;
+  padding: 28px;
+  border-radius: 24px;
+  background: #fff;
+  box-shadow: 0 22px 70px rgb(9 28 18 / 24%);
+  color: #17241d;
+}
+
+.games-level-recovery__close {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: 50%;
+  background: #eef4ef;
+  color: #31463a;
+  cursor: pointer;
+  font-size: 24px;
+  line-height: 1;
+}
+
+.games-level-recovery__eyebrow {
+  color: #338a50;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.games-level-recovery h2 {
+  margin: 10px 40px 8px 0;
+  font-size: clamp(24px, 6vw, 34px);
+  line-height: 1.05;
+}
+
+.games-level-recovery > p {
+  margin: 0 0 20px;
+  color: #68766e;
+  line-height: 1.5;
+}
+
+.games-level-recovery__actions,
+.games-level-recovery__manual {
+  display: grid;
+  gap: 12px;
+}
+
+.games-level-recovery__primary,
+.games-level-recovery__secondary,
+.games-level-recovery__back {
+  min-height: 48px;
+  padding: 12px 18px;
+  border-radius: 14px;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 750;
+}
+
+.games-level-recovery__primary {
+  border: 1px solid #2f814a;
+  background: #2f814a;
+  color: #fff;
+}
+
+.games-level-recovery__secondary,
+.games-level-recovery__back {
+  border: 1px solid #dce5df;
+  background: #f7faf8;
+  color: #26372e;
+}
+
+.games-level-recovery__manual label {
+  display: grid;
+  gap: 8px;
+  color: #536158;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.games-level-recovery__manual select {
+  width: 100%;
+  min-height: 48px;
+  padding: 0 14px;
+  border: 1px solid #d7e0da;
+  border-radius: 12px;
+  background: #fff;
+  color: #17241d;
+  font: inherit;
+}
+
+.games-level-recovery__primary:disabled,
+.games-level-recovery__back:disabled {
+  cursor: wait;
+  opacity: 0.58;
+}
+
+.games-level-recovery__error {
+  margin: 14px 0 0 !important;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: #fff1f2;
+  color: #a23e4b !important;
+  font-size: 13px;
+}
+
+@media (min-width: 640px) {
+  .games-level-recovery-backdrop {
+    place-items: center;
+  }
+}
+
 .games-empty {
   padding: 38px 24px;
   text-align: center;

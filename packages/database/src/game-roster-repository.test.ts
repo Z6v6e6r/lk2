@@ -281,6 +281,43 @@ describe('game roster repository', () => {
           values?.includes(invitationId),
       ),
     ).toBe(true);
+    const validationSql = query.mock.calls.find(([text]) =>
+      text.includes('from eligibility.personal_invitations'),
+    )?.[0];
+    expect(validationSql).toContain("invitation_type = 'PERSONAL'");
+    expect(validationSql).toContain('tenant_id = $1');
+    expect(validationSql).toContain("activity_type = 'GAME'");
+    expect(validationSql).toContain('activity_id = $9');
+    expect(validationSql).toContain('recipient_player_id = $2');
+    expect(validationSql).toContain("status = 'ACTIVE'");
+    expect(validationSql).toContain('revoked_at is null');
+    expect(validationSql).toContain('expires_at > now()');
+    expect(validationSql).toContain('use_count < max_uses');
+  });
+
+  it('does not treat an unvalidated public or forged invitation id as a level bypass', async () => {
+    const invitationId = '95a76d36-d8a7-4ff5-a988-84f33c0fd05a';
+    const { pool } = poolWithHandler((text) => {
+      if (text.includes('eligibility.level_policies')) {
+        return { rows: [eligibilityFacts({ valid_invitation_id: null })] };
+      }
+      if (text.includes('from games.games') && text.includes('for update')) {
+        return {
+          rows: [
+            {
+              ...lockedGame(),
+              min_level_id: '1dfc1d4a-47cb-4b43-a735-761260a2e986',
+              max_level_id: '7d7556e6-f30b-48e5-9ff2-c39bdf062ff7',
+            },
+          ],
+        };
+      }
+      return baseHandler(text);
+    });
+
+    await expect(
+      createGameRosterRepository(pool as never).join(input({ invitationId })),
+    ).resolves.toMatchObject({ outcome: 'rejected', code: 'PLAYER_LEVEL_REQUIRED' });
   });
 
   it('does not consume an invitation when the level rule is OFF and no bypass was used', async () => {

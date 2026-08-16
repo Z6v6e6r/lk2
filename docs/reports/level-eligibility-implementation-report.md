@@ -13,6 +13,12 @@ Delivery stage: isolated implementation, not integrated or deployed
   impact preview, rollback-as-new-version, and readiness gates for `BLOCK`.
 - Server-side enforcement for the native PadlHub game join, waitlist join, and
   waitlist promotion commands. Caller-supplied player/rank/bypass facts are rejected.
+- Authenticated self-service level read/write for the JWT player. The write accepts only
+  a current canonical `levelId`, records `SELF_DECLARED`, updates the profile projection
+  and sport-level projection atomically, and is concurrency-safe and idempotent.
+- Native Games UX for `PLAYER_LEVEL_REQUIRED`: the interrupted game/action/invitation
+  context is retained, the player can choose a canonical level, stale client caches are
+  invalidated, and the original JOIN or WAITLIST command is retried against the server.
 - Exact personal-invitation validation by tenant, activity, recipient, status, expiry,
   revocation, and use count. Public/community/team links do not bypass level checks.
 - Immutable eligibility decision references on participation/reservation/waitlist records
@@ -37,8 +43,10 @@ No migration was executed and no runtime setting was changed by this checkpoint.
 ## Remaining work before production enforcement
 
 - Move the legacy LK/Node-RED join and waitlist writers behind the server command.
-- Add authenticated self-level/onboarding mutation and the LK recovery modal that
-  preserves and resumes the interrupted action.
+- Connect the existing assessment/onboarding owner through a trusted server command that
+  writes `ONBOARDING`; the legacy endpoint currently accepts caller-owned provenance and
+  therefore cannot safely be reused as proof. The recovery dialog exposes the required
+  assessment choice but does not fabricate a successful assessment.
 - Migrate tournament and training registration writers; their current impact cards are
   intentionally marked unsupported.
 - Define and migrate the activity personal-invitation creation/revocation command.
@@ -50,9 +58,11 @@ No migration was executed and no runtime setting was changed by this checkpoint.
 
 ## Verification evidence
 
-- Domain, database, API route, SDK, and CUP component regression tests passed.
+- Full Vitest suite passed: 327 files passed, 4 skipped; 2179 tests passed,
+  41 skipped. Targeted domain, database, API route, SDK, web recovery, and CUP component
+  regressions are included in that run.
 - TypeScript typecheck and ESLint passed.
-- Domain, database, API, and CUP production builds passed.
+- All package and application production builds passed, followed by the runtime import check.
 - Admin OpenAPI lint passed with only the existing unrelated warnings.
 - Migration static safety check passed; the SQL was not applied.
 - Browser QA passed for the CUP **Levels** rules and impact views at the default desktop
@@ -62,6 +72,7 @@ No migration was executed and no runtime setting was changed by this checkpoint.
 
 `NO-GO` for production `BLOCK`.
 
-The native game path and policy control plane are implemented, but the legacy writers,
-player recovery, tournament/training writers, and paid-flow reconciliation are not yet a
-single authoritative contour. `OFF` is the only safe initial migration default.
+The native game path, self-declared recovery, and policy control plane are implemented,
+but the legacy writers, trusted assessment completion, tournament/training writers, and
+paid-flow reconciliation are not yet a single authoritative contour. `OFF` is the only
+safe initial migration default.

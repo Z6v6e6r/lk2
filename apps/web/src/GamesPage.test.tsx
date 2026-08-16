@@ -377,8 +377,81 @@ describe('GamesPage discovery', () => {
     );
 
     await user.click(screen.getByRole('button', { name: 'Вступить в игру' }));
-    expect(api.joinGame).toHaveBeenCalledWith(game.id, game.revision);
+    expect(api.joinGame).toHaveBeenCalledWith(game.id, game.revision, undefined);
     expect(await screen.findByText(/Вы в игре/)).toBeInTheDocument();
+  });
+
+  it('saves a self-declared canonical level and resumes the interrupted join', async () => {
+    const levelId = '95a76d36-d8a7-4ff5-a988-84f33c0fd05a';
+    const api: AuthGateway = {
+      ...gateway(),
+      getOwnPlayerLevel: vi.fn().mockResolvedValue({
+        sportCode: 'PADEL',
+        scaleVersion: 1,
+        currentLevel: null,
+        levels: [
+          {
+            id: levelId,
+            sportCode: 'PADEL',
+            code: 'C+',
+            title: 'C+',
+            rank: 4,
+            sortOrder: 4,
+            aliases: ['C+'],
+            active: true,
+            scaleVersion: 1,
+          },
+        ],
+      }),
+      setOwnPlayerLevel: vi.fn().mockResolvedValue({
+        playerId: '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca',
+        sportCode: 'PADEL',
+        levelId,
+        code: 'C+',
+        title: 'C+',
+        rank: 4,
+        source: 'SELF_DECLARED',
+        scaleVersion: 1,
+        updatedAt: '2026-08-16T18:00:00.000Z',
+      }),
+    };
+    vi.mocked(api.joinGame)
+      .mockRejectedValueOnce(
+        Object.assign(new Error('level required'), { code: 'PLAYER_LEVEL_REQUIRED' }),
+      )
+      .mockResolvedValueOnce({
+        commandId: 'c3889c99-b0e3-4a3d-b3e8-a5c99af730ea',
+        operation: {
+          id: 'c3889c99-b0e3-4a3d-b3e8-a5c99af730ea',
+          type: 'JOIN_GAME',
+          status: 'SUCCEEDED',
+          gameId: null,
+          aggregateRevision: 8,
+          createdAt: '2026-08-16T18:00:00.000Z',
+          updatedAt: '2026-08-16T18:00:00.000Z',
+          nextAction: { type: 'NONE' },
+          error: null,
+        },
+        game: null,
+        replayed: false,
+      });
+    const user = userEvent.setup();
+    render(<GamesPage gateway={api} />);
+
+    await user.click(await screen.findByRole('button', { name: 'Вступить в игру' }));
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Укажите уровень, чтобы присоединиться',
+    });
+    expect(within(dialog).getByRole('button', { name: 'Знаю свой уровень' })).toBeVisible();
+    expect(within(dialog).getByRole('button', { name: 'Пройти определение уровня' })).toBeVisible();
+
+    await user.click(within(dialog).getByRole('button', { name: 'Знаю свой уровень' }));
+    expect(within(dialog).getByRole('combobox', { name: 'Ваш уровень' })).toHaveValue(levelId);
+    await user.click(within(dialog).getByRole('button', { name: 'Сохранить и продолжить запись' }));
+
+    await waitFor(() => expect(api.setOwnPlayerLevel).toHaveBeenCalledWith(levelId, 'PADEL'));
+    await waitFor(() => expect(api.joinGame).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText(/Вы в игре/)).toBeVisible();
   });
 
   it('selects multiple event types from a checkbox dropdown and translates the coach type', async () => {

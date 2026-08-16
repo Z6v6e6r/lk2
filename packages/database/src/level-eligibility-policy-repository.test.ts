@@ -63,6 +63,7 @@ describe('level eligibility policy repository', () => {
       if (text === 'begin' || text === 'commit' || text === 'rollback')
         return Promise.resolve({ rows: [] });
       if (text.includes("set_config('app.tenant_id'")) return Promise.resolve({ rows: [] });
+      if (text.includes('pg_advisory_xact_lock')) return Promise.resolve({ rows: [] });
       if (text.includes('from eligibility.policy_commands')) return Promise.resolve({ rows: [] });
       if (text.includes('count(*)::integer as count'))
         return Promise.resolve({ rows: [{ count: 7 }] });
@@ -87,6 +88,7 @@ describe('level eligibility policy repository', () => {
     expect(
       query.mock.calls.some(([text]) => text.includes('insert into eligibility.policy_commands')),
     ).toBe(true);
+    expect(query.mock.calls.some(([text]) => text.includes('pg_advisory_xact_lock'))).toBe(true);
   });
 
   it('replays the stored policy only for the same request hash', async () => {
@@ -109,6 +111,7 @@ describe('level eligibility policy repository', () => {
       if (text === 'begin' || text === 'commit' || text === 'rollback')
         return Promise.resolve({ rows: [] });
       if (text.includes("set_config('app.tenant_id'")) return Promise.resolve({ rows: [] });
+      if (text.includes('pg_advisory_xact_lock')) return Promise.resolve({ rows: [] });
       if (text.includes('from eligibility.policy_commands')) {
         return Promise.resolve({ rows: [{ request_hash: requestHash, result_payload: stored }] });
       }
@@ -124,6 +127,7 @@ describe('level eligibility policy repository', () => {
       if (text === 'begin' || text === 'commit' || text === 'rollback')
         return Promise.resolve({ rows: [] });
       if (text.includes("set_config('app.tenant_id'")) return Promise.resolve({ rows: [] });
+      if (text.includes('pg_advisory_xact_lock')) return Promise.resolve({ rows: [] });
       if (text.includes('from eligibility.policy_commands')) return Promise.resolve({ rows: [] });
       if (text.includes('count(*)::integer as count'))
         return Promise.resolve({ rows: [{ count: 7 }] });

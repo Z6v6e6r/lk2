@@ -84,6 +84,34 @@ export type ProfileFriendSummary = components['schemas']['ProfileFriendSummary']
 export type ProfileFriendPage = components['schemas']['ProfileFriendPage'];
 export type ProfileLevelHistory = components['schemas']['ProfileLevelHistory'];
 export type ProfileLevelHistoryPoint = components['schemas']['ProfileLevelHistoryPoint'];
+export interface CanonicalProfileLevel {
+  readonly id: string;
+  readonly sportCode: string;
+  readonly code: string;
+  readonly title: string;
+  readonly rank: number;
+  readonly sortOrder: number;
+  readonly aliases: readonly string[];
+  readonly active: boolean;
+  readonly scaleVersion: number;
+}
+export interface PlayerSportLevel {
+  readonly playerId: string;
+  readonly sportCode: string;
+  readonly levelId: string;
+  readonly code: string;
+  readonly title: string;
+  readonly rank: number;
+  readonly source: 'SELF_DECLARED' | 'ONBOARDING' | 'MANUAL' | 'CALCULATED' | 'VIVA' | 'MIGRATED';
+  readonly scaleVersion: number;
+  readonly updatedAt: string;
+}
+export interface PlayerLevelState {
+  readonly sportCode: string;
+  readonly scaleVersion: number | null;
+  readonly levels: readonly CanonicalProfileLevel[];
+  readonly currentLevel: PlayerSportLevel | null;
+}
 export type BookingPreferences = components['schemas']['BookingPreferences'];
 export type BookingPreferencesUpdateRequest =
   components['schemas']['BookingPreferencesUpdateRequest'];
@@ -683,6 +711,24 @@ export class PadlHubApiClient {
   public getProfileLevelHistory(limit = 100): Promise<ProfileLevelHistory> {
     return this.request<ProfileLevelHistory>(
       `/profile/level-history?limit=${encodeURIComponent(limit)}`,
+    );
+  }
+
+  public getOwnPlayerLevel(sportCode = 'PADEL'): Promise<PlayerLevelState> {
+    return this.request<PlayerLevelState>(
+      `/profile/level?sportCode=${encodeURIComponent(sportCode)}`,
+      { cache: 'no-store' },
+    );
+  }
+
+  public setOwnPlayerLevel(levelId: string, sportCode = 'PADEL'): Promise<PlayerSportLevel> {
+    const idempotencyKey = createCorrelationId();
+    return this.retryOnceOnNetworkFailure(() =>
+      this.request<PlayerSportLevel>('/profile/level', {
+        method: 'PUT',
+        idempotencyKey,
+        body: jsonRequestBody({ sportCode, levelId }),
+      }),
     );
   }
 

@@ -221,6 +221,9 @@ export function createLevelEligibilityPolicyRepository(
 
     publish(input) {
       return withTenantTransaction(pool, input.tenantId, async (client) => {
+        await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
+          `level-policy:${input.tenantId}:${input.idempotencyKey}`,
+        ]);
         const replay = await queryOne<
           QueryResultRow & { readonly request_hash: string; readonly result_payload: unknown }
         >(

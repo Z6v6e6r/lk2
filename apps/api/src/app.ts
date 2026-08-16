@@ -40,6 +40,7 @@ import type {
   LocationMediaRepository,
   LocationRepository,
   LevelEligibilityPolicyRepository,
+  PlayerLevelRepository,
   MessagingRepository,
   NotificationEndpointRepository,
   NotificationInboxRepository,
@@ -136,6 +137,7 @@ import { registerWebPushRoutes } from './notifications/web-push-routes.js';
 import { registerProfilePrivacyRoutes } from './profile/profile-privacy-routes.js';
 import { registerProfileFriendshipRoutes } from './profile/profile-friendship-routes.js';
 import { registerProfileLevelHistoryRoutes } from './profile/profile-level-history-routes.js';
+import { registerProfileLevelRoutes } from './profile/profile-level-routes.js';
 import { registerPromotionEngagementRoutes } from './promotions/promotion-engagement-routes.js';
 import type { PromotionEngagementSink } from './promotions/legacy-promotion-engagement-sink.js';
 import { registerProfilePhotoMediaRoutes } from './profile/profile-photo-media-routes.js';
@@ -264,6 +266,7 @@ export interface BuildAppOptions {
   readonly realtimeTicketIssuer?: RealtimeTicketIssuer;
   readonly locationRepository?: LocationRepository;
   readonly levelEligibilityPolicyRepository?: LevelEligibilityPolicyRepository;
+  readonly playerLevelRepository?: PlayerLevelRepository;
   readonly locationMediaRepository?: LocationMediaRepository;
   readonly giftCertificateCatalogRepository?: GiftCertificateCatalogRepository;
   readonly giftCertificateMediaRepository?: GiftCertificateMediaRepository;
@@ -1166,6 +1169,11 @@ export async function buildApp(options: BuildAppOptions) {
       ? { repository: options.profileLevelHistoryRepository }
       : {}),
     authenticatedTenantHandlers: [authenticate, resolveTenant],
+  });
+  registerProfileLevelRoutes(app as unknown as FastifyInstance, {
+    ...(options.playerLevelRepository ? { repository: options.playerLevelRepository } : {}),
+    authenticatedTenantHandlers: [authenticate, resolveTenant],
+    commandHandlers: [authenticate, resolveTenant, requireIdempotencyKey],
   });
   registerBookingPreferenceRoutes(app as unknown as FastifyInstance, {
     ...(options.bookingPreferencesRepository

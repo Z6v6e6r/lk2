@@ -47,6 +47,11 @@ Publishing is explicit, versioned, optimistic, idempotent and audited. Rollback 
 
 The LK must offer SELF_DECLARED and ONBOARDING flows and preserve the activity return context. That UX is an activation dependency, not a reason to weaken the server rule.
 
+The authenticated self-service command derives the player from JWT and always records
+`SELF_DECLARED`; callers cannot submit `playerId`, `rank`, `source` or assessment facts.
+`ONBOARDING` is reserved for a separate trusted assessment command owned by the assessment
+flow. A legacy client assertion is not sufficient evidence for that source.
+
 ### Invitations
 
 Only a server-loaded PERSONAL invitation for the same tenant/activity/recipient, active, unrevoked, unexpired and under its use limit can produce `PERSONAL_INVITE_BYPASS`. Public link, community and team invitations never do. ADMIN is a separate future RBAC/audit override.
@@ -83,6 +88,7 @@ New `eligibility` schema tables:
 
 - `canonical_levels`
 - `player_sport_levels`
+- `player_level_commands`
 - `level_policies`
 - `policy_commands`
 - `activation_readiness`

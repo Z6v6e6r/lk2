@@ -1130,6 +1130,70 @@ paths:
           $ref: ../../common/components.yaml#/components/responses/TooManyRequests
         '503':
           $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/profile/level:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+    get:
+      tags: [profiles]
+      operationId: getOwnPlayerLevel
+      summary: Load the authenticated player's current level and canonical scale
+      parameters:
+        - name: sportCode
+          in: query
+          schema:
+            type: string
+            default: PADEL
+            pattern: '^[A-Z][A-Z0-9_]{1,31}$'
+      responses:
+        '200':
+          description: Current level projection and the latest active canonical scale.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlayerLevelState'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+    put:
+      tags: [profiles]
+      operationId: setOwnPlayerLevel
+      summary: Save a self-declared level from the current canonical scale
+      description: |
+        The authenticated subject is always the target player. This endpoint records
+        `SELF_DECLARED`; an onboarding result requires a separate trusted assessment command.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetOwnPlayerLevelRequest'
+      responses:
+        '200':
+          description: The saved canonical player-level projection.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlayerSportLevel'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/CommandConflict'
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
   /{tenantKey}/profile/level-history:
     parameters:
       - $ref: ../../common/components.yaml#/components/parameters/TenantKey
@@ -4223,6 +4287,90 @@ components:
           type: [number, 'null']
           minimum: 0
           maximum: 10
+    CanonicalProfileLevel:
+      type: object
+      additionalProperties: false
+      required: [id, sportCode, code, title, rank, sortOrder, aliases, active, scaleVersion]
+      properties:
+        id:
+          type: string
+          format: uuid
+        sportCode:
+          type: string
+        code:
+          type: string
+        title:
+          type: string
+        rank:
+          type: integer
+        sortOrder:
+          type: integer
+        aliases:
+          type: array
+          items:
+            type: string
+        active:
+          type: boolean
+        scaleVersion:
+          type: integer
+          minimum: 1
+    PlayerSportLevel:
+      type: object
+      additionalProperties: false
+      required: [playerId, sportCode, levelId, code, title, rank, source, scaleVersion, updatedAt]
+      properties:
+        playerId:
+          type: string
+          format: uuid
+        sportCode:
+          type: string
+        levelId:
+          type: string
+          format: uuid
+        code:
+          type: string
+        title:
+          type: string
+        rank:
+          type: integer
+        source:
+          type: string
+          enum: [SELF_DECLARED, ONBOARDING, MANUAL, CALCULATED, VIVA, MIGRATED]
+        scaleVersion:
+          type: integer
+          minimum: 1
+        updatedAt:
+          type: string
+          format: date-time
+    PlayerLevelState:
+      type: object
+      additionalProperties: false
+      required: [sportCode, scaleVersion, levels, currentLevel]
+      properties:
+        sportCode:
+          type: string
+        scaleVersion:
+          type: [integer, 'null']
+          minimum: 1
+        levels:
+          type: array
+          items:
+            $ref: '#/components/schemas/CanonicalProfileLevel'
+        currentLevel:
+          anyOf:
+            - $ref: '#/components/schemas/PlayerSportLevel'
+            - type: 'null'
+    SetOwnPlayerLevelRequest:
+      type: object
+      additionalProperties: false
+      required: [sportCode, levelId]
+      properties:
+        sportCode:
+          type: string
+          pattern: '^[A-Z][A-Z0-9_]{1,31}$'
+        levelId:
+          type: string
+          format: uuid
     ProfileLevelHistory:
       type: object
       additionalProperties: false

@@ -54,6 +54,19 @@ create table eligibility.player_sport_levels (
     references eligibility.canonical_levels(tenant_id, sport_code, id)
 );
 
+create table eligibility.player_level_commands (
+  tenant_id uuid not null,
+  player_id uuid not null,
+  idempotency_key text not null,
+  request_hash text not null check (request_hash ~ '^[0-9a-f]{64}$'),
+  result_payload jsonb not null,
+  created_at timestamptz not null default now(),
+  primary key (tenant_id, player_id, idempotency_key),
+  foreign key (tenant_id, player_id) references identity.users(tenant_id, id),
+  check (char_length(idempotency_key) between 8 and 200),
+  check (jsonb_typeof(result_payload) = 'object')
+);
+
 insert into eligibility.player_sport_levels (
   tenant_id, player_id, sport_code, level_id, source, scale_version, updated_at
 )
@@ -247,6 +260,7 @@ alter table games.waitlist_entries
 
 alter table eligibility.canonical_levels enable row level security;
 alter table eligibility.player_sport_levels enable row level security;
+alter table eligibility.player_level_commands enable row level security;
 alter table eligibility.level_policies enable row level security;
 alter table eligibility.policy_commands enable row level security;
 alter table eligibility.activation_readiness enable row level security;
@@ -258,6 +272,9 @@ create policy eligibility_canonical_levels_tenant_isolation on eligibility.canon
   using (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid)
   with check (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid);
 create policy eligibility_player_levels_tenant_isolation on eligibility.player_sport_levels
+  using (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid)
+  with check (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid);
+create policy eligibility_player_level_commands_tenant_isolation on eligibility.player_level_commands
   using (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid)
   with check (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid);
 create policy eligibility_level_policies_tenant_isolation on eligibility.level_policies
@@ -281,6 +298,7 @@ create policy eligibility_payment_snapshots_tenant_isolation on eligibility.paym
 
 alter table eligibility.canonical_levels force row level security;
 alter table eligibility.player_sport_levels force row level security;
+alter table eligibility.player_level_commands force row level security;
 alter table eligibility.level_policies force row level security;
 alter table eligibility.policy_commands force row level security;
 alter table eligibility.activation_readiness force row level security;
