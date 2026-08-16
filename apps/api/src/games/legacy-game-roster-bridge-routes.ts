@@ -32,10 +32,15 @@ const commandSchema = z.discriminatedUnion('command', [
           provider: z.literal('VIVA'),
           operationType: z.enum(['TRANSACTION', 'SUBSCRIPTION_BOOKING']),
           operationId: z.string().trim().min(1).max(200),
+          bookingId: z.string().trim().min(1).max(200),
+          clientPhoneE164: z.string().regex(/^\+[1-9][0-9]{7,14}$/),
           status: z.literal('CONFIRMED'),
           verifiedAt: z.string().datetime({ offset: true }),
           amountMinor: z.number().int().nonnegative().optional(),
-          currency: z.string().regex(/^[A-Z]{3}$/).optional(),
+          currency: z
+            .string()
+            .regex(/^[A-Z]{3}$/)
+            .optional(),
         })
         .strict(),
     })
@@ -234,6 +239,18 @@ export function registerLegacyGameRosterBridgeRoutes(
           'Игра ещё не перенесена в канонический контур.',
         );
       }
+      if (
+        parsed.data.command === 'CONFIRM_PAYMENT' &&
+        parsed.data.evidence.clientPhoneE164 !== resolved.context.player.phoneE164
+      ) {
+        return sendApiError(
+          request,
+          reply,
+          409,
+          'GAME_PAYMENT_ACTOR_MISMATCH',
+          'Платёж относится к другому игроку.',
+        );
+      }
       const result =
         parsed.data.command === 'CONFIRM_PAYMENT'
           ? await options.rosterRepository.confirmPayment({
@@ -254,6 +271,8 @@ export function registerLegacyGameRosterBridgeRoutes(
                 provider: parsed.data.evidence.provider,
                 operationType: parsed.data.evidence.operationType,
                 operationId: parsed.data.evidence.operationId,
+                bookingId: parsed.data.evidence.bookingId,
+                clientPhoneE164: parsed.data.evidence.clientPhoneE164,
                 evidenceHash: requestHash({
                   command: parsed.data.command,
                   gameId: resolved.context.gameId,
@@ -282,9 +301,7 @@ export function registerLegacyGameRosterBridgeRoutes(
                 command: parsed.data.command,
                 gameId: resolved.context.gameId,
                 externalGameId,
-                ...(parsed.data.invitationId
-                  ? { invitationId: parsed.data.invitationId }
-                  : {}),
+                ...(parsed.data.invitationId ? { invitationId: parsed.data.invitationId } : {}),
               }),
               correlationId: request.id,
               expectedRevision: resolved.context.gameRevision,

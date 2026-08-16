@@ -15,6 +15,8 @@ describe('game payment confirmation evidence migration', () => {
       'unique (tenant_id, provider, provider_operation_type, provider_operation_id)',
     );
     expect(sql).toContain('unique (tenant_id, reservation_id)');
+    expect(sql).toContain('provider_booking_id text not null');
+    expect(sql).toContain('client_phone_e164 text not null');
     expect(sql).toContain('references eligibility.decisions(tenant_id, id)');
     expect(sql).toContain('enable row level security');
     expect(sql).toContain('force row level security');

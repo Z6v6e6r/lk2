@@ -208,7 +208,8 @@ components:
     LegacyGamePaymentEvidence:
       type: object
       additionalProperties: false
-      required: [provider, operationType, operationId, status, verifiedAt]
+      required:
+        [provider, operationType, operationId, bookingId, clientPhoneE164, status, verifiedAt]
       properties:
         provider:
           type: string
@@ -220,6 +221,13 @@ components:
           type: string
           minLength: 1
           maxLength: 200
+        bookingId:
+          type: string
+          minLength: 1
+          maxLength: 200
+        clientPhoneE164:
+          type: string
+          pattern: '^\+[1-9][0-9]{7,14}$'
         status:
           type: string
           const: CONFIRMED

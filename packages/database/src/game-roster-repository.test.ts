@@ -213,7 +213,10 @@ describe('game roster repository', () => {
     const evidenceId = '253153f0-6810-4f1d-9c3a-58be08fbd28c';
     const eligibilityDecisionId = 'd63ff37f-ed9b-45f7-a135-838ea74925e0';
     const { pool, query } = poolWithHandler((text) => {
-      if (text.includes('from games.seat_reservations') && text.includes('eligibility_decision_id')) {
+      if (
+        text.includes('from games.seat_reservations') &&
+        text.includes('eligibility_decision_id')
+      ) {
         return {
           rows: [
             {
@@ -248,6 +251,8 @@ describe('game roster repository', () => {
           provider: 'VIVA',
           operationType: 'TRANSACTION',
           operationId: 'viva-transaction-101',
+          bookingId: 'viva-booking-101',
+          clientPhoneE164: '+79000000001',
           evidenceHash: 'e'.repeat(64),
           verifiedAt: '2026-08-01T10:05:00.000Z',
           verifiedBy: 'LEGACY_NODE_RED',
@@ -264,9 +269,9 @@ describe('game roster repository', () => {
       reservationId,
       replayed: false,
     });
-    expect(
-      query.mock.calls.some(([text]) => text.includes('eligibility.level_policies')),
-    ).toBe(false);
+    expect(query.mock.calls.some(([text]) => text.includes('eligibility.level_policies'))).toBe(
+      false,
+    );
     expect(
       query.mock.calls.some(
         ([text, values]) =>
@@ -291,7 +296,10 @@ describe('game roster repository', () => {
   it('records a late provider confirmation for recovery without creating participation', async () => {
     const eligibilityDecisionId = 'd63ff37f-ed9b-45f7-a135-838ea74925e0';
     const { pool, query } = poolWithHandler((text) => {
-      if (text.includes('from games.seat_reservations') && text.includes('eligibility_decision_id')) {
+      if (
+        text.includes('from games.seat_reservations') &&
+        text.includes('eligibility_decision_id')
+      ) {
         return {
           rows: [
             {
@@ -322,6 +330,8 @@ describe('game roster repository', () => {
           provider: 'VIVA',
           operationType: 'TRANSACTION',
           operationId: 'viva-transaction-late',
+          bookingId: 'viva-booking-late',
+          clientPhoneE164: '+79000000001',
           evidenceHash: 'f'.repeat(64),
           verifiedAt: '2026-08-01T10:05:00.000Z',
           verifiedBy: 'LEGACY_NODE_RED',
@@ -336,8 +346,7 @@ describe('game roster repository', () => {
     expect(
       query.mock.calls.some(
         ([text, values]) =>
-          text.includes("resolution = 'REJECTED'") &&
-          values?.includes('GAME_RESERVATION_EXPIRED'),
+          text.includes("resolution = 'REJECTED'") && values?.includes('GAME_RESERVATION_EXPIRED'),
       ),
     ).toBe(true);
     expect(
@@ -348,7 +357,10 @@ describe('game roster repository', () => {
   it('rejects reuse of provider evidence for another reservation', async () => {
     const eligibilityDecisionId = 'd63ff37f-ed9b-45f7-a135-838ea74925e0';
     const { pool, query } = poolWithHandler((text) => {
-      if (text.includes('from games.seat_reservations') && text.includes('eligibility_decision_id')) {
+      if (
+        text.includes('from games.seat_reservations') &&
+        text.includes('eligibility_decision_id')
+      ) {
         return {
           rows: [
             {
@@ -393,6 +405,8 @@ describe('game roster repository', () => {
           provider: 'VIVA',
           operationType: 'TRANSACTION',
           operationId: 'viva-transaction-reused',
+          bookingId: 'viva-booking-reused',
+          clientPhoneE164: '+79000000001',
           evidenceHash: '1'.repeat(64),
           verifiedAt: '2026-08-01T10:05:00.000Z',
           verifiedBy: 'LEGACY_NODE_RED',

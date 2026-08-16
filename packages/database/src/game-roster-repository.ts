@@ -89,6 +89,8 @@ export interface ConfirmGamePaymentInput extends GameRosterUserCommandInput {
     readonly provider: 'VIVA';
     readonly operationType: 'TRANSACTION' | 'SUBSCRIPTION_BOOKING';
     readonly operationId: string;
+    readonly bookingId: string;
+    readonly clientPhoneE164: string;
     readonly evidenceHash: string;
     readonly verifiedAt: string;
     readonly verifiedBy: 'LEGACY_NODE_RED';
@@ -153,10 +155,7 @@ export interface GameRosterOperationInput {
 export interface GameRosterOperation {
   readonly commandId: string;
   readonly commandType:
-    | 'game.join.v1'
-    | 'game.leave.v1'
-    | 'game.waitlist.join.v1'
-    | 'game.waitlist.leave.v1';
+    'game.join.v1' | 'game.leave.v1' | 'game.waitlist.join.v1' | 'game.waitlist.leave.v1';
   readonly gameId: string | null;
   readonly state: 'COMPLETED' | 'FAILED';
   readonly committedAt: string;
@@ -1336,14 +1335,7 @@ export function createGameRosterRepository(
         const commandId = randomUUID();
         const game = await lockGame(client, input);
         if (!game) {
-          return storeRejected(
-            client,
-            input,
-            commandType,
-            commandId,
-            'GAME_NOT_FOUND',
-            false,
-          );
+          return storeRejected(client, input, commandType, commandId, 'GAME_NOT_FOUND', false);
         }
         const currentRevision = positiveInteger(game.revision);
         const reservation = await queryOne<ConfirmableReservationRow>(
@@ -1480,8 +1472,11 @@ export function createGameRosterRepository(
           `insert into games.payment_confirmation_evidence (
              tenant_id, game_id, reservation_id, user_id, eligibility_decision_id,
              provider, provider_operation_type, provider_operation_id, payment_mode,
-             amount_minor, currency, evidence_hash, verified_at, verified_by
-           ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+             provider_booking_id, client_phone_e164, amount_minor, currency,
+             evidence_hash, verified_at, verified_by
+           ) values (
+             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
+           )
            returning id`,
           [
             input.tenantId,
@@ -1493,6 +1488,8 @@ export function createGameRosterRepository(
             input.evidence.operationType,
             input.evidence.operationId,
             game.payment_mode,
+            input.evidence.bookingId,
+            input.evidence.clientPhoneE164,
             input.evidence.amountMinor ?? null,
             input.evidence.currency ?? null,
             input.evidence.evidenceHash,
@@ -1514,15 +1511,7 @@ export function createGameRosterRepository(
           if (rejectedEvidence.rowCount !== 1) {
             throw new Error('GAME_PAYMENT_EVIDENCE_REJECT_LOST');
           }
-          return storeRejected(
-            client,
-            input,
-            commandType,
-            commandId,
-            code,
-            true,
-            currentRevision,
-          );
+          return storeRejected(client, input, commandType, commandId, code, true, currentRevision);
         };
 
         if (!['SCHEDULED', 'IN_PROGRESS'].includes(game.lifecycle_state)) {
@@ -1562,7 +1551,8 @@ export function createGameRosterRepository(
             where tenant_id = $1 and game_id = $2 and id = $3 and state = 'ACTIVE'`,
           [input.tenantId, input.gameId, input.reservationId],
         );
-        if (reservationUpdate.rowCount !== 1) throw new Error('GAME_RESERVATION_CONFIRM_WRITE_LOST');
+        if (reservationUpdate.rowCount !== 1)
+          throw new Error('GAME_RESERVATION_CONFIRM_WRITE_LOST');
         const revision = await bumpRevision(client, input);
         const appliedEvidence = await client.query(
           `update games.payment_confirmation_evidence

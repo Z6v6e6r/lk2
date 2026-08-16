@@ -14,6 +14,9 @@ create table games.payment_confirmation_evidence (
     check (provider_operation_type in ('TRANSACTION', 'SUBSCRIPTION_BOOKING')),
   provider_operation_id text not null
     check (char_length(btrim(provider_operation_id)) between 1 and 200),
+  provider_booking_id text not null
+    check (char_length(btrim(provider_booking_id)) between 1 and 200),
+  client_phone_e164 text not null check (client_phone_e164 ~ '^\+[1-9][0-9]{7,14}$'),
   payment_mode text not null check (payment_mode in ('SPLIT', 'SUBSCRIPTION')),
   amount_minor bigint check (amount_minor is null or amount_minor >= 0),
   currency text check (currency is null or currency ~ '^[A-Z]{3}$'),

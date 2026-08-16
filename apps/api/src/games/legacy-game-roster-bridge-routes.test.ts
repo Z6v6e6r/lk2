@@ -240,6 +240,8 @@ describe('legacy game roster bridge routes', () => {
           provider: 'VIVA',
           operationType: 'TRANSACTION',
           operationId: 'viva-transaction-101',
+          bookingId: 'viva-booking-101',
+          clientPhoneE164: '+79000000001',
           status: 'CONFIRMED',
           verifiedAt: '2026-08-16T17:59:59.000Z',
           amountMinor: 250000,
@@ -265,6 +267,8 @@ describe('legacy game roster bridge routes', () => {
         provider: 'VIVA',
         operationType: 'TRANSACTION',
         operationId: 'viva-transaction-101',
+        bookingId: 'viva-booking-101',
+        clientPhoneE164: '+79000000001',
         verifiedBy: 'LEGACY_NODE_RED',
       },
     });
@@ -292,6 +296,37 @@ describe('legacy game roster bridge routes', () => {
 
     expect(response.statusCode).toBe(400);
     expect(response.json()).toMatchObject({ code: 'LEGACY_GAME_COMMAND_INVALID' });
+    expect(roster.confirmPayment).not.toHaveBeenCalled();
+  });
+
+  it('rejects provider evidence for a different profile phone', async () => {
+    const roster = rosterRepository();
+    const app = await appWith({ roster });
+    const response = await app.inject({
+      method: 'POST',
+      url: '/internal/api/v1/local-padel/legacy-games/pay_legacy-game/roster-commands',
+      headers: {
+        authorization: 'Bearer signed-legacy-jwt',
+        'idempotency-key': 'legacy-payment-confirmation-3',
+        'x-phub-legacy-roster-token': bridgeToken,
+      },
+      payload: {
+        command: 'CONFIRM_PAYMENT',
+        reservationId: '238df6f5-fec4-44dd-ad8c-39e98ade8366',
+        evidence: {
+          provider: 'VIVA',
+          operationType: 'TRANSACTION',
+          operationId: 'viva-transaction-102',
+          bookingId: 'viva-booking-102',
+          clientPhoneE164: '+79000000099',
+          status: 'CONFIRMED',
+          verifiedAt: '2026-08-16T17:59:59.000Z',
+        },
+      },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({ code: 'GAME_PAYMENT_ACTOR_MISMATCH' });
     expect(roster.confirmPayment).not.toHaveBeenCalled();
   });
 });
