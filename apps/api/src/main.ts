@@ -1,5 +1,5 @@
 import type { IdentityProviderKey, IdentityProviderPort } from '@phub/auth';
-import { loadConfig } from '@phub/config';
+import { loadApiConfig } from '@phub/config';
 import {
   createAdminNotificationRepository,
   createActivityHistoryRepository,
@@ -68,7 +68,7 @@ import { PostgresAuthRepository } from './auth/postgres-auth-repository.js';
 import { LegacyPromotionEngagementSink } from './promotions/legacy-promotion-engagement-sink.js';
 import { S3TrainerAvatarMediaStore } from './trainer-avatar-media-store.js';
 
-const config = loadConfig();
+const config = loadApiConfig();
 const logger = createLogger('api', config.LOG_LEVEL, process.env.RELEASE);
 const telemetry = startTelemetry({
   serviceName: 'api',

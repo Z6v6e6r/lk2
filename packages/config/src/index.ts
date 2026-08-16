@@ -58,6 +58,7 @@ const environmentSchema = z.object({
   JWT_ADMIN_AUDIENCE: z.string().min(1).default('phub-admin'),
   JWT_REALTIME_AUDIENCE: z.string().min(1).default('phub-realtime'),
   JWT_ACCESS_SECRET: z.string().min(32),
+  JWT_REALTIME_SECRET: z.string().min(32).optional(),
   JWT_REFRESH_SECRET: z.string().min(32),
   AUTH_ACCESS_TTL_SECONDS: z.coerce.number().int().min(60).max(3600).default(600),
   AUTH_REFRESH_TTL_SECONDS: z.coerce.number().int().min(3600).max(5_184_000).default(2_592_000),
@@ -718,6 +719,16 @@ export function loadConfig(
   ) {
     throw new Error('Production JWT secrets must be distinct non-placeholder values');
   }
+  if (
+    parsed.data.JWT_REALTIME_SECRET &&
+    (parsed.data.JWT_REALTIME_SECRET === parsed.data.JWT_ACCESS_SECRET ||
+      parsed.data.JWT_REALTIME_SECRET === parsed.data.JWT_REFRESH_SECRET ||
+      (parsed.data.APP_ENV !== 'local' &&
+        parsed.data.APP_ENV !== 'ci' &&
+        /replace|change|local|test|example|ci-/i.test(parsed.data.JWT_REALTIME_SECRET)))
+  ) {
+    throw new Error('Realtime JWT secret must be distinct and non-placeholder');
+  }
   if (parsed.data.APP_ENV === 'production' && parsed.data.HOME_READ_MODE !== 'projection') {
     throw new Error('HOME_READ_MODE=projection is required in production');
   }
@@ -757,4 +768,38 @@ export function loadConfig(
   }
 
   return parsed.data;
+}
+
+const REALTIME_ACCESS_SECRET_SENTINEL = 'x'.repeat(32);
+const REALTIME_REFRESH_SECRET_SENTINEL = 'y'.repeat(32);
+
+/**
+ * Realtime validates short-lived one-time tickets with its dedicated key. Outside local/CI it
+ * must never receive the API access or refresh signing secrets.
+ */
+export function loadRealtimeConfig(environment: NodeJS.ProcessEnv = process.env): AppConfig {
+  if (!environment.JWT_REALTIME_SECRET) {
+    throw new Error('Realtime runtime requires JWT_REALTIME_SECRET');
+  }
+  if (
+    environment.APP_ENV !== 'local' &&
+    environment.APP_ENV !== 'ci' &&
+    (environment.JWT_ACCESS_SECRET || environment.JWT_REFRESH_SECRET)
+  ) {
+    throw new Error('Realtime runtime must not receive JWT_ACCESS_SECRET or JWT_REFRESH_SECRET');
+  }
+  return loadConfig({
+    ...environment,
+    JWT_ACCESS_SECRET: REALTIME_ACCESS_SECRET_SENTINEL,
+    JWT_REFRESH_SECRET: REALTIME_REFRESH_SECRET_SENTINEL,
+  });
+}
+
+/** API must be able to issue realtime tickets before it is considered startable. */
+export function loadApiConfig(environment: NodeJS.ProcessEnv = process.env): AppConfig {
+  const config = loadConfig(environment);
+  if (config.APP_ENV !== 'local' && config.APP_ENV !== 'ci' && !config.JWT_REALTIME_SECRET) {
+    throw new Error('API runtime requires JWT_REALTIME_SECRET');
+  }
+  return config;
 }
