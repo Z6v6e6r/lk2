@@ -37,10 +37,16 @@ checksums are immutable and must remain packaged:
 The superseded canonical filenames `0060_community_membership_pin_commands.sql` through
 `0075_community_media_operational_recovery.sql` must never be inserted as aliases. Their presence
 means the target has an incompatible or mixed history; both migration entrypoints fail before DDL.
-Every other ledger filename must be present in the packaged release. The sole reviewed exception is
-legacy `0043_messaging_runtime.sql` with checksum
-`32512565880a9062a432eb68ec192b0640570f1636d2f2a946ab4ebc5bf96465`; the existing 0056 alias
-migration verifies its full schema before recording the current 0057 filename.
+Every other ledger filename must be present in the packaged release except these exact reviewed
+legacy messaging migrations:
+
+- `0043_messaging_runtime.sql` with checksum
+  `32512565880a9062a432eb68ec192b0640570f1636d2f2a946ab4ebc5bf96465`; the existing 0056 alias
+  migration verifies its full schema before recording the current 0057 filename;
+- `0044_contextual_messaging_projection.sql` with checksum
+  `103976b96034ac3996c47c9adc536d22c06c5bc0ad12352af1413241b9c50832`; this expand-only
+  historical migration created the default-disabled contextual projection inbox. It is accepted
+  only under this original repository checksum and does not replace any packaged migration.
 
 New changes continue from:
 

@@ -62,13 +62,24 @@ describe('migration ledger policy', () => {
     );
   });
 
-  it('accepts only the reviewed exact-checksum legacy messaging alias', () => {
+  it('accepts only the reviewed exact-checksum legacy messaging migrations', () => {
     expect(() =>
       assertMigrationLedgerCompatible({
         applied: [
           {
             filename: '0043_messaging_runtime.sql',
             checksum: '32512565880a9062a432eb68ec192b0640570f1636d2f2a946ab4ebc5bf96465',
+          },
+        ],
+        packaged: [shifted],
+      }),
+    ).not.toThrow();
+    expect(() =>
+      assertMigrationLedgerCompatible({
+        applied: [
+          {
+            filename: '0044_contextual_messaging_projection.sql',
+            checksum: '103976b96034ac3996c47c9adc536d22c06c5bc0ad12352af1413241b9c50832',
           },
         ],
         packaged: [shifted],
@@ -81,6 +92,17 @@ describe('migration ledger policy', () => {
         packaged: [shifted],
       }),
     ).toThrow('MIGRATION_CHECKSUM_MISMATCH:0043_messaging_runtime.sql');
+    expect(() =>
+      assertMigrationLedgerCompatible({
+        applied: [
+          {
+            filename: '0044_contextual_messaging_projection.sql',
+            checksum: 'e'.repeat(64),
+          },
+        ],
+        packaged: [shifted],
+      }),
+    ).toThrow('MIGRATION_CHECKSUM_MISMATCH:0044_contextual_messaging_projection.sql');
   });
 
   it('rejects every unreviewed ledger row while accepting the restored exact 0053 bytes', () => {

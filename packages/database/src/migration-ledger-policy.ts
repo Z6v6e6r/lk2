@@ -22,10 +22,14 @@ const forbiddenCommunitiesHistory = new Set([
   '0075_community_media_operational_recovery.sql',
 ]);
 
-const reviewedLegacyAliases = new Map([
+const reviewedLegacyMigrations = new Map([
   [
     '0043_messaging_runtime.sql',
     '32512565880a9062a432eb68ec192b0640570f1636d2f2a946ab4ebc5bf96465',
+  ],
+  [
+    '0044_contextual_messaging_projection.sql',
+    '103976b96034ac3996c47c9adc536d22c06c5bc0ad12352af1413241b9c50832',
   ],
 ]);
 
@@ -47,7 +51,8 @@ export function assertMigrationLedgerCompatible(input: {
     }
 
     const expectedChecksum =
-      packagedByFilename.get(entry.filename)?.checksum ?? reviewedLegacyAliases.get(entry.filename);
+      packagedByFilename.get(entry.filename)?.checksum ??
+      reviewedLegacyMigrations.get(entry.filename);
     if (!expectedChecksum) {
       throw new Error(`MIGRATION_LEDGER_UNKNOWN:${entry.filename}`);
     }
