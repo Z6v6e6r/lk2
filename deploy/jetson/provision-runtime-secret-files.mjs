@@ -56,6 +56,7 @@ const BOOTSTRAP_PHASES = new Set([
   'initial',
   'files-prepared',
   'images-probed',
+  'runtime-stopping',
   'runtime-stopped',
   'compose-committed',
   'release-committed',
@@ -72,7 +73,8 @@ const BOOTSTRAP_PHASES = new Set([
 ]);
 const BOOTSTRAP_PHASE_TRANSITIONS = new Map([
   ['files-prepared', 'images-probed'],
-  ['images-probed', 'runtime-stopped'],
+  ['images-probed', 'runtime-stopping'],
+  ['runtime-stopping', 'runtime-stopped'],
   ['runtime-stopped', 'compose-committed'],
   ['compose-committed', 'release-committed'],
   ['release-committed', 'realtime-ready'],
@@ -867,6 +869,9 @@ export function finalizeBootstrap(directoryInput, finalSnapshot, options = {}) {
   }
   if (!isSha256(finalSnapshot)) fail('final snapshot must be sha256');
   if (finalSnapshot === state.hashes.runtimeSnapshot) fail('serving snapshot did not change');
+  if (state.phase === 'finalized' && state.finalSnapshot !== finalSnapshot) {
+    fail('finalized bootstrap snapshot differs');
+  }
   if (state.phase === 'verified') {
     verifyCandidatePair(directory, state);
     state.phase = 'finalizing';
@@ -1073,7 +1078,7 @@ function cli() {
     }
     result = prepareBootstrap(directory, {
       directory: { uid: 0, gid: Number(deployGid), mode: 0o750 },
-      staging: { uid: 0, gid: Number(deployGid), mode: 0o600 },
+      staging: { uid: 0, gid: Number(deployGid), mode: 0o640 },
       deployUid: Number(deployUid),
       deployGid: Number(deployGid),
       attestation,

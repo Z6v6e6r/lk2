@@ -567,7 +567,7 @@ for path in "$marker" "$marker_next" "$compose_next" "$release_next" "$finalized
   test ! -e "$path" && test ! -L "$path" || fail "unresolved transition artifact exists: $path"
 done
 test "$(stat -c '%u:%g:%a' "$secret_root")" = "0:$(id -g phub-deploy):750" || fail 'secret root ownership or mode differs'
-test "$(stat -c '%h:%u:%g:%a' "$secret_root/staging.env")" = "1:0:$(id -g phub-deploy):600" || fail 'staging.env metadata differs'
+test "$(stat -c '%h:%u:%g:%a' "$secret_root/staging.env")" = "1:0:$(id -g phub-deploy):640" || fail 'staging.env metadata differs'
 test "$(df -Pk "$secret_root" | awk 'NR == 2 { print $4 }')" -ge 65536 || fail 'secret filesystem lacks block headroom'
 test "$(df -Pi "$secret_root" | awk 'NR == 2 { print $4 }')" -ge 128 || fail 'secret filesystem lacks inode headroom'
 assert_no_secret_shadowing
@@ -725,7 +725,7 @@ docker run --rm --pull=never --network none --read-only --user "$deploy_uid:$dep
     import { loadApiConfig } from "@phub/config";
     const config = loadApiConfig(process.env);
     const encoder = new TextEncoder();
-    const claims = { scope: "realtime:connect", tenantId: "00000000-0000-4000-8000-000000000001", tenantKey: "nano", sid: "00000000-0000-4000-8000-000000000002" };
+    const claims = { scope: "realtime.connect", tenantId: "00000000-0000-4000-8000-000000000001", tenantKey: "nano", sid: "00000000-0000-4000-8000-000000000002" };
     const base = () => new SignJWT(claims).setProtectedHeader({alg:"HS256",typ:"JWT"}).setIssuer(config.JWT_ISSUER).setAudience(config.JWT_REALTIME_AUDIENCE).setSubject("00000000-0000-4000-8000-000000000003").setJti(crypto.randomUUID()).setExpirationTime("2m");
     const dedicated = await base().sign(encoder.encode(config.JWT_REALTIME_SECRET));
     const access = await base().sign(encoder.encode(config.JWT_ACCESS_SECRET));
@@ -743,7 +743,8 @@ docker run --rm --pull=never --network none --read-only --user "$deploy_uid:$dep
     const config = loadRealtimeConfig(process.env);
     const tickets = JSON.parse(await readFile("/probe/tickets.json", "utf8"));
     const key = new TextEncoder().encode(config.JWT_REALTIME_SECRET);
-    await jwtVerify(tickets.dedicated, key, {issuer:config.JWT_ISSUER,audience:config.JWT_REALTIME_AUDIENCE,algorithms:["HS256"]});
+    const { payload, protectedHeader } = await jwtVerify(tickets.dedicated, key, {issuer:config.JWT_ISSUER,audience:config.JWT_REALTIME_AUDIENCE,algorithms:["HS256"]});
+    if (protectedHeader.alg !== "HS256" || payload.scope !== "realtime.connect" || payload.tenantId !== "00000000-0000-4000-8000-000000000001" || payload.tenantKey !== "nano" || payload.sid !== "00000000-0000-4000-8000-000000000002" || payload.sub !== "00000000-0000-4000-8000-000000000003" || typeof payload.jti !== "string") process.exit(1);
     try { await jwtVerify(tickets.access, key, {issuer:config.JWT_ISSUER,audience:config.JWT_REALTIME_AUDIENCE,algorithms:["HS256"]}); process.exit(1); } catch {}
   ' >/dev/null
 cleanup_probe
@@ -753,8 +754,10 @@ maybe_fail images-probed
 
 stage_definition "$bundle_path/compose.staging.yaml" "$compose_next"
 stage_definition "$candidate_release_file" "$release_next"
+run_helper advance-bootstrap-phase images-probed runtime-stopping
+maybe_fail runtime-stopping
 stop_runtime
-run_helper advance-bootstrap-phase images-probed runtime-stopped
+run_helper advance-bootstrap-phase runtime-stopping runtime-stopped
 maybe_fail runtime-stopped
 mv "$compose_next" "$app_root/compose.yaml"
 sync_path "$app_root/compose.yaml"

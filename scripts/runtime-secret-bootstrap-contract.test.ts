@@ -153,7 +153,7 @@ describe('legacy runtime-secret bootstrap delivery contract', () => {
     const finalize = workflow.indexOf('Finalize only after public and authenticated attestation');
     const observe = workflow.indexOf('Observe the finalized candidate for five minutes');
     expect(observe).toBeGreaterThan(finalize);
-    expect(workflow).toContain('for sample in $(seq 1 10)');
+    expect(workflow).toContain('for sample in $(seq 0 10)');
     expect(workflow).toContain('test "$sample" -eq 10 || sleep 30');
     expect(workflow).toContain('verify-legacy-runtime-secret-bootstrap-runtime.sh');
     expect(runtimeObservation).toContain('docker logs --since 90s');
@@ -190,9 +190,14 @@ describe('legacy runtime-secret bootstrap delivery contract', () => {
     expect(filesOnly).toBeLessThan(stopRuntime);
     expect(controller).toContain('initial | files-prepared | images-probed)');
     expect(controller).toContain('pre-runtime recovery found a changed serving runtime');
+    expect(controller).toContain('scope: "realtime.connect"');
+    expect(controller).toContain('payload.scope !== "realtime.connect"');
+    expect(controller).toContain(":640\" || fail 'staging.env metadata differs'");
+    expect(helper).toContain('staging: { uid: 0, gid: Number(deployGid), mode: 0o640 }');
     for (const phase of [
       'files-prepared',
       'images-probed',
+      'runtime-stopping',
       'runtime-stopped',
       'compose-committed',
       'release-committed',
@@ -203,6 +208,17 @@ describe('legacy runtime-secret bootstrap delivery contract', () => {
     ]) {
       expect(controller).toContain(`maybe_fail ${phase}`);
     }
+    const stoppingIntent = controller.indexOf(
+      'advance-bootstrap-phase images-probed runtime-stopping',
+    );
+    const stopRuntimeCall = controller.indexOf('stop_runtime', stoppingIntent);
+    const stoppedAttestation = controller.indexOf(
+      'advance-bootstrap-phase runtime-stopping runtime-stopped',
+      stopRuntimeCall,
+    );
+    expect(stoppingIntent).toBeGreaterThan(0);
+    expect(stopRuntimeCall).toBeGreaterThan(stoppingIntent);
+    expect(stoppedAttestation).toBeGreaterThan(stopRuntimeCall);
   });
 
   it('blocks every shared operation on both B0 definition next files', () => {

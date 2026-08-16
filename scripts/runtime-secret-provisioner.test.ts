@@ -399,7 +399,8 @@ describe('legacy B0 runtime-secret bootstrap file transaction', () => {
     ).toThrow('injected failure');
     expect(recoverMarker(input.directory)).toEqual({ status: 'marker-recovered' });
     for (const [from, to] of [
-      ['images-probed', 'runtime-stopped'],
+      ['images-probed', 'runtime-stopping'],
+      ['runtime-stopping', 'runtime-stopped'],
       ['runtime-stopped', 'compose-committed'],
       ['compose-committed', 'release-committed'],
       ['release-committed', 'realtime-ready'],
@@ -435,7 +436,8 @@ describe('legacy B0 runtime-secret bootstrap file transaction', () => {
       prepareBootstrap(input.directory, bootstrapOptions());
       for (const [from, to] of [
         ['files-prepared', 'images-probed'],
-        ['images-probed', 'runtime-stopped'],
+        ['images-probed', 'runtime-stopping'],
+        ['runtime-stopping', 'runtime-stopped'],
         ['runtime-stopped', 'compose-committed'],
         ['compose-committed', 'release-committed'],
         ['release-committed', 'realtime-ready'],
@@ -455,6 +457,32 @@ describe('legacy B0 runtime-secret bootstrap file transaction', () => {
       expect(verifyBootstrapFinalized(input.directory)).toEqual({ status: 'finalized' });
     },
   );
+
+  it('binds a finalized marker to the serving runtime snapshot across response loss', () => {
+    const input = fixture();
+    prepareBootstrap(input.directory, bootstrapOptions());
+    for (const [from, to] of [
+      ['files-prepared', 'images-probed'],
+      ['images-probed', 'runtime-stopping'],
+      ['runtime-stopping', 'runtime-stopped'],
+      ['runtime-stopped', 'compose-committed'],
+      ['compose-committed', 'release-committed'],
+      ['release-committed', 'realtime-ready'],
+      ['realtime-ready', 'api-ready'],
+      ['api-ready', 'worker-ready'],
+      ['worker-ready', 'web-ready'],
+      ['web-ready', 'verified'],
+    ] as const) {
+      advanceBootstrapPhase(input.directory, from, to);
+    }
+    expect(() =>
+      finalizeBootstrap(input.directory, 'e'.repeat(64), { failAfter: 'final-marker' }),
+    ).toThrow('injected failure');
+    expect(() => finalizeBootstrap(input.directory, 'f'.repeat(64))).toThrow(
+      'finalized bootstrap snapshot differs',
+    );
+    expect(finalizeBootstrap(input.directory, 'e'.repeat(64))).toEqual({ status: 'finalized' });
+  });
 
   it('rejects a bootstrap whose migration manifests differ', () => {
     const input = fixture();
