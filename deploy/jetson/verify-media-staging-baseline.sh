@@ -40,6 +40,8 @@ test -n "$candidate_compose" || fail 'candidate Compose definition is empty'
 
 legacy_alias_filename=0043_messaging_runtime.sql
 legacy_alias_checksum=32512565880a9062a432eb68ec192b0640570f1636d2f2a946ab4ebc5bf96465
+legacy_context_filename=0044_contextual_messaging_projection.sql
+legacy_context_checksum=103976b96034ac3996c47c9adc536d22c06c5bc0ad12352af1413241b9c50832
 approved_pending_migrations='0079_profile_photo_client_assisted_source.sql
 0080_community_logo_stable_delivery.sql
 0081_community_logo_stable_delivery_validate.sql
@@ -298,7 +300,8 @@ while IFS='|' read -r filename checksum; do
   expected_checksum="$(printf '%s\n' "$migration_manifest" |
     awk -F '|' -v filename="$filename" '$2 == filename { print $1 }')"
   if test -z "$expected_checksum"; then
-    if test "$filename" = "$legacy_alias_filename" && test "$checksum" = "$legacy_alias_checksum"; then
+    if { test "$filename" = "$legacy_alias_filename" && test "$checksum" = "$legacy_alias_checksum"; } ||
+      { test "$filename" = "$legacy_context_filename" && test "$checksum" = "$legacy_context_checksum"; }; then
       legacy_alias_count=$((legacy_alias_count + 1))
       printf 'migration filename=%s checksum=%s state=reviewed-legacy-alias\n' "$filename" "$checksum"
       continue
@@ -327,7 +330,7 @@ while IFS='|' read -r checksum filename; do
 done <<EOF
 $migration_manifest
 EOF
-test "$legacy_alias_count" -le 1 || fail 'staging migration ledger contains duplicate legacy aliases'
+test "$legacy_alias_count" -le 2 || fail 'staging migration ledger contains too many reviewed legacy entries'
 printf 'migration_manifest applied=%s pending=%s reviewed_legacy_aliases=%s status=compatible\n' \
   "$applied_count" "$pending_count" "$legacy_alias_count"
 

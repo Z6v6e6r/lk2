@@ -93,7 +93,7 @@ describe('migration execution policy', () => {
     ).toThrow('CHAT_PUSH_FOUNDATION_MAINTENANCE_REQUIRED');
   });
 
-  it.each(['../../../apps/migrator/src/main.ts', '../../../scripts/migrate.ts'])(
+  it.each(['../../../apps/migrator/src/migration-runner.ts', '../../../scripts/migrate.ts'])(
     'checks maintenance authorization before the first schema mutation in %s',
     (sourcePath) => {
       const source = readFileSync(new URL(sourcePath, import.meta.url), 'utf8');
@@ -146,7 +146,7 @@ describe('migration execution policy', () => {
     );
   });
 
-  it.each(['../../../apps/migrator/src/main.ts', '../../../scripts/migrate.ts'])(
+  it.each(['../../../apps/migrator/src/migration-runner.ts', '../../../scripts/migrate.ts'])(
     'bounds an explicitly requested migration advisory-lock wait in %s',
     (sourcePath) => {
       const source = readFileSync(new URL(sourcePath, import.meta.url), 'utf8');
