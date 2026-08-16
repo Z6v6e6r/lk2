@@ -12,6 +12,7 @@ const sourceVerifier = readFileSync(
   'deploy/jetson/verify-legacy-runtime-secret-bootstrap-source.sh',
   'utf8',
 );
+const candidateFetcher = readFileSync('deploy/jetson/fetch-immutable-b0-candidate.sh', 'utf8');
 const runtimeObservation = readFileSync(
   'deploy/jetson/verify-legacy-runtime-secret-bootstrap-runtime.sh',
   'utf8',
@@ -84,10 +85,30 @@ describe('legacy runtime-secret bootstrap delivery contract', () => {
     expect(workflow).toContain('npm run db:migrate:check');
   });
 
+  it('fetches the exact legacy candidate without credentials or submodule traversal', () => {
+    expect(workflow).not.toContain('ref: ${{ inputs.bootstrap_candidate_sha }}');
+    expect(
+      workflow.match(/Fetch the immutable candidate without submodule traversal/g),
+    ).toHaveLength(3);
+    expect(workflow).toContain(
+      'sh control/deploy/jetson/fetch-immutable-b0-candidate.sh "$CANDIDATE_SHA" candidate',
+    );
+    expect(candidateFetcher).toContain('repository_url=https://github.com/Z6v6e6r/lk2.git');
+    expect(candidateFetcher).toContain('--no-recurse-submodules');
+    expect(candidateFetcher).toContain('--depth=2');
+    expect(candidateFetcher).toContain('rev-parse FETCH_HEAD');
+    expect(candidateFetcher).toContain('rev-parse --verify HEAD^');
+    expect(candidateFetcher).toContain('remote remove origin');
+    expect(candidateFetcher).not.toContain('GITHUB_TOKEN');
+    expect(candidateFetcher).not.toContain('submodule foreach');
+  });
+
   it('builds and records all five immutable candidate manifests without invoking migrator', () => {
     expect(workflow).toContain('service: [web, api, worker, realtime, migrator]');
     expect(workflow).toContain('platforms: linux/arm64');
     expect(workflow).toContain('push: true');
+    expect(workflow).toContain('context: candidate');
+    expect(workflow).toContain('file: candidate/apps/${{ matrix.service }}/Dockerfile');
     expect(workflow).toContain('steps.image.outputs.digest');
     expect(workflow).not.toMatch(/npm run db:migrate(?:\s|$)/);
     expect(workflow).not.toMatch(/compose[^\n]*run[^\n]*migrator/);
