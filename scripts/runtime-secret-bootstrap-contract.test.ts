@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
@@ -29,6 +30,36 @@ const communitiesBackup = readFileSync(
 );
 const runbook = readFileSync('docs/runbooks/jetson-staging.md', 'utf8');
 
+const authorityStepStart = workflow.indexOf('      - id: request\n');
+const authorityRunStart = workflow.indexOf('        run: |\n', authorityStepStart);
+const authorityStepEnd = workflow.indexOf('\n      - uses:', authorityRunStart);
+const authorityScript = workflow
+  .slice(authorityRunStart + '        run: |\n'.length, authorityStepEnd)
+  .split('\n')
+  .map((line) => line.slice(10))
+  .join('\n');
+
+const runAuthorityValidation = (overrides: Record<string, string>) =>
+  spawnSync('sh', ['-c', authorityScript], {
+    env: {
+      ...process.env,
+      GITHUB_OUTPUT: '/dev/null',
+      OPERATION: 'RECOVER',
+      EXPECTED_ACTIVE_RELEASE: 'e308181da5222645d9a87d03642923c6841be8d1',
+      CANDIDATE_SHA: 'ffb12608fb16eae17096ab3ab3a7337cc5359c8a',
+      CONFIRMATION: 'RECOVER_STAGING_RUNTIME_SECRETS',
+      ORIGINAL_CONTROL_SHA: '14e1b1ee3a3950bc2cbad9631728e8f0c96162f9',
+      ORIGINAL_RUN_ID: '31959225494',
+      ORIGINAL_RUN_ATTEMPT: '1',
+      REQUEST_REF: 'refs/heads/main',
+      CONTROL_SHA: '14e1b1ee3a3950bc2cbad9631728e8f0c96162f9',
+      WORKFLOW_SHA: '14e1b1ee3a3950bc2cbad9631728e8f0c96162f9',
+      SUPPORTED_ACTIVE_RELEASE: 'e308181da5222645d9a87d03642923c6841be8d1',
+      SUPPORTED_CANDIDATE_SHA: 'ffb12608fb16eae17096ab3ab3a7337cc5359c8a',
+      ...overrides,
+    },
+  });
+
 describe('legacy runtime-secret bootstrap delivery contract', () => {
   it('is a main-only, serialized, manually confirmed and fully pinned workflow', () => {
     const parsedWorkflow: unknown = parse(workflow);
@@ -46,6 +77,25 @@ describe('legacy runtime-secret bootstrap delivery contract', () => {
       .filter((line) => line.startsWith('- uses:'));
     expect(uses.length).toBeGreaterThan(0);
     for (const use of uses) expect(use).toMatch(/@[0-9a-f]{40}(?:\s+#.*)?$/);
+  });
+
+  it('rejects multiline or quoted recovery identifiers before remote command construction', () => {
+    expect(runAuthorityValidation({}).status).toBe(0);
+    expect(
+      runAuthorityValidation({
+        CANDIDATE_SHA: "ffb12608fb16eae17096ab3ab3a7337cc5359c8a\n'; touch injected; '",
+      }).status,
+    ).not.toBe(0);
+    expect(
+      runAuthorityValidation({ ORIGINAL_RUN_ID: "31959225494\n'; touch injected; '" }).status,
+    ).not.toBe(0);
+    expect(
+      runAuthorityValidation({
+        ORIGINAL_CONTROL_SHA:
+          '14e1b1ee3a3950bc2cbad9631728e8f0c96162f9\n0000000000000000000000000000000000000000',
+      }).status,
+    ).not.toBe(0);
+    expect(workflow).toContain('test "$CANDIDATE_SHA" = "$SUPPORTED_CANDIDATE_SHA"');
   });
 
   it('binds a single-parent nine-file source candidate with no migration or contract delta', () => {
