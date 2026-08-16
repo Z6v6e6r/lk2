@@ -567,8 +567,10 @@ fi
 for path in "$marker" "$marker_next" "$compose_next" "$release_next" "$finalized_receipt"; do
   test ! -e "$path" && test ! -L "$path" || fail "unresolved transition artifact exists: $path"
 done
-test "$(stat -c '%u:%g:%a' "$secret_root")" = "0:$(id -g phub-deploy):750" || fail 'secret root ownership or mode differs'
-test "$(stat -c '%h:%u:%g:%a' "$secret_root/staging.env")" = "1:$(id -u phub-deploy):$(id -g phub-deploy):600" || fail 'staging.env metadata differs'
+deploy_uid=$(id -u phub-deploy)
+deploy_gid=$(id -g phub-deploy)
+test "$(stat -c '%u:%g:%a' "$secret_root")" = "0:$deploy_gid:750" || fail 'secret root ownership or mode differs'
+test "$(stat -c '%h:%u:%g:%a' "$secret_root/staging.env")" = "1:$deploy_uid:$deploy_gid:600" || fail 'staging.env metadata differs'
 test "$(df -Pk "$secret_root" | awk 'NR == 2 { print $4 }')" -ge 65536 || fail 'secret filesystem lacks block headroom'
 test "$(df -Pi "$secret_root" | awk 'NR == 2 { print $4 }')" -ge 128 || fail 'secret filesystem lacks inode headroom'
 assert_no_secret_shadowing
@@ -635,8 +637,6 @@ PHUB_BACKUP_ROOT="$backup_root" sh "$bundle_path/backup-application.sh" "$backup
 PHUB_ROLLBACK_BACKUP_ROOT="$backup_root" sh "$bundle_path/rollback-application.sh" "$backup_path" --validate-only
 test -f "$backup_path/backup.complete" && test ! -L "$backup_path/backup.complete" || fail 'application backup is incomplete'
 
-deploy_uid=$(id -u phub-deploy)
-deploy_gid=$(id -g phub-deploy)
 control_tree=$(cat "$bundle_path/control-tree")
 candidate_tree=$(cat "$bundle_path/candidate-tree")
 for value in "$control_tree" "$candidate_tree"; do printf '%s' "$value" | grep -Eq '^[0-9a-f]{40}$' || fail 'recorded tree is malformed'; done

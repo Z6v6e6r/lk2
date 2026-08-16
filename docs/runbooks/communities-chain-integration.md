@@ -236,14 +236,59 @@ the clone; a failed or uncertain cleanup retains a marker and blocks a later att
 manifest check, it records four named clone-only quota-index `REINDEX` durations with transaction
 rollback and requires `quota_index_measurements=4` in the final evidence line.
 
-This repository does not yet expose that command through the staging preflight workflow. Before a
-real run, add and independently review a dedicated protected-environment dispatch using a separate
-restricted forced-command key. It must bind the exact backup path/SHA, source ledger SHA, candidate
-SHA, migrator digest and root-owned rehearsal release file; it must not reuse `STAGING_DEPLOY_KEY`,
-must not reuse the existing `postgres-communities-preflight-*` portable archive,
-change shared `release.env`, run the shared migrator, start application processes, deploy, import or
-activate Communities. Until that dispatch and its host installation are approved, this section is
-an executable local/contract implementation only and grants no staging write authority.
+`.github/workflows/communities-staged-migration-rehearsal.yaml` exposes this contract only as a
+manual, exact-main-SHA dispatch. It repeats the read-only inventory under the protected `staging`
+environment, requires the exact ordered 29-file pending set, and carries only a SHA-256 phase
+commitment into the separately approved `staging-rehearsal` environment. The second environment
+must define `STAGING_REHEARSAL_KEY`, `STAGING_REHEARSAL_KNOWN_HOSTS`,
+`STAGING_REHEARSAL_DATABASE`, `STAGING_REHEARSAL_SYSTEM_IDENTIFIER`, `STAGING_HOST` and a
+short-lived `TAILSCALE_AUTHKEY`. Database and cluster pins must be approved independently of the
+fresh remote evidence. The immutable migrator digest and SHA-256 of the strict candidate override
+file are explicit dispatch inputs and must match the root-owned candidate release file below.
+
+Before the first real run, an authorized staging administrator installs these repository-matched
+files as root-owned, non-writable commands:
+
+- `/usr/local/libexec/phub/run-communities-staged-migration-rehearsal.sh`;
+- `/usr/local/libexec/phub/rehearse-media-migration.sh`;
+- `/usr/local/libexec/phub/verify-media-migration-ledger.sh`;
+- `/usr/local/libexec/phub/verify-postgres-backup-restore.sh`.
+
+The dedicated key has only this forced command:
+
+```text
+restrict,command="env PHUB_REHEARSAL_BACKUP_ROOT=/var/lib/phub-preflight/backups /usr/local/libexec/phub/run-communities-staged-migration-rehearsal.sh" <rehearsal-public-key>
+```
+
+It must not be the inventory key, backup key or `STAGING_DEPLOY_KEY`, and it receives no shell,
+forwarding, arbitrary Docker, shared migrator or deploy capability. The administrator separately
+creates `/opt/phub/release.communities-rehearsal-<candidate-sha>.env` as root-owned mode 0400 or
+0440 with exactly two lines: the reviewed `RELEASE` and `MIGRATOR_IMAGE_DIGEST`. Its SHA-256 is a
+dispatch input. The command uses shared root-owned `release.env` only as the full interpolation
+base, then applies this strict file as the final override. The administrator also installs the
+reviewed `deploy/compose.staging.yaml` as root-owned
+`/opt/phub/compose.communities-rehearsal-<candidate-sha>.yaml`; its SHA-256 is bound in the remote
+command. The forced-command account may read these files and `/etc/phub/staging.env` plus
+`/etc/phub/staging.migrator.env`, but may not modify them or any shared release/runtime file.
+
+The dispatch confirmation is `REHEARSE_COMMUNITIES_STAGING_29_V1`. Before any backup or clone
+write, the forced command verifies its own and all three helper SHA-256 values, the root-owned
+candidate release file, the complete migration-manifest digest, active release, source ledger,
+database and system identifier. It then creates a new private
+`postgres-communities-rehearsal-*` custom archive without `--no-owner` or `--no-acl`, requires owner,
+ACL and default-ACL TOC evidence, and rechecks that the source tuple did not change during the dump.
+Only that new archive can enter the bounded clone rehearsal. Failed attempts delete any newly
+created archive unless the full clone rehearsal succeeds; clone cleanup remains marker-guarded.
+Raw child stdout/stderr is not uploaded, while the successful artifact contains only the fixed
+29-line allowlisted evidence contract: metadata, four explicit false authorization fields, the
+privacy backfill audit, four named rollback-only index timings and the final staged completion line.
+The candidate image is pulled and digest-checked before the post-pull capacity gate and backup. Both
+runner and host use bounded timeouts.
+
+The workflow never changes shared `/opt/phub/release.env`, never targets the shared database with
+the migrator, never starts an application process, and has no deploy, import or activation step.
+Installing the commands/release file and dispatching the workflow are separate privileged actions;
+merging this implementation grants neither authority.
 
 ## Activation boundary
 

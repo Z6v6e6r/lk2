@@ -187,6 +187,22 @@ describe('legacy runtime-secret bootstrap delivery contract', () => {
     expect(helper).toContain("'release-committed'");
   });
 
+  it('limits the bootstrap helper to the capabilities required for deploy-owned 0600 files', () => {
+    const helperRaw = controller.slice(
+      controller.indexOf('helper_raw()'),
+      controller.indexOf('run_helper()'),
+    );
+    expect(helperRaw).toContain('--user 0:0');
+    expect(helperRaw).toContain('--network none');
+    expect(helperRaw).toContain('--read-only');
+    expect(helperRaw).toContain('--security-opt no-new-privileges');
+    expect(helperRaw).toContain('--cap-drop ALL');
+    expect(helperRaw).toContain('--cap-add CHOWN');
+    expect(helperRaw).toContain('--cap-add DAC_READ_SEARCH');
+    expect(helperRaw).toContain('--cap-add FOWNER');
+    expect(helperRaw).not.toContain('--cap-add DAC_OVERRIDE');
+  });
+
   it('probes the key boundary offline before stopping and starts candidate services in safe order', () => {
     const prepare = controller.indexOf('prepare-bootstrap-json');
     const dedicatedProbe = controller.indexOf('tickets.dedicated');
@@ -268,12 +284,8 @@ describe('legacy runtime-secret bootstrap delivery contract', () => {
     expect(controller).toContain('scope: "realtime.connect"');
     expect(controller).toContain('payload.scope !== "realtime.connect"');
     expect(controller).toContain(
-      ":$(id -u phub-deploy):$(id -g phub-deploy):600\" || fail 'staging.env metadata differs'",
+      ":$deploy_uid:$deploy_gid:600\" || fail 'staging.env metadata differs'",
     );
-    expect(controller).toContain('--cap-add CHOWN');
-    expect(controller).toContain('--cap-add DAC_READ_SEARCH');
-    expect(controller).toContain('--cap-add FOWNER');
-    expect(controller).not.toContain('--cap-add DAC_OVERRIDE');
     expect(helper).toContain(
       'staging: { uid: Number(deployUid), gid: Number(deployGid), mode: 0o600 }',
     );

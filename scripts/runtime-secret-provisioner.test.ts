@@ -101,13 +101,17 @@ REALTIME_HEARTBEAT_INTERVAL_MS=15000
 ${overrides}`;
 }
 
-function fixture(value = source()) {
+function fixture(value = source(), mode = 0o640) {
   const directory = mkdtempSync(join(tmpdir(), 'phub-runtime-secret-'));
   chmodSync(directory, 0o750);
   const staging = join(directory, 'staging.env');
-  writeFileSync(staging, value, { mode: 0o640 });
-  chmodSync(staging, 0o640);
+  writeFileSync(staging, value, { mode });
+  chmodSync(staging, mode);
   return { directory, staging, value, inode: lstatSync(staging).ino };
+}
+
+function bootstrapFixture(value = source()) {
+  return fixture(value, 0o600);
 }
 
 function options(failAfter?: string) {
@@ -197,12 +201,6 @@ function bootstrapOptions(failAfter?: string) {
       },
     },
   };
-}
-
-function bootstrapFixture(value = source()) {
-  const input = fixture(value);
-  chmodSync(input.staging, 0o600);
-  return input;
 }
 
 function advanceToVerified(directory: string): void {
@@ -782,6 +780,13 @@ describe('legacy B0 runtime-secret bootstrap file transaction', () => {
     value.attestation.hashes.candidateMigrationManifest = 'e'.repeat(64);
     expect(() => prepareBootstrap(input.directory, value)).toThrow(
       'bootstrap marker has an unknown schema or phase',
+    );
+  });
+
+  it('rejects the obsolete group-readable staging metadata', () => {
+    const input = fixture();
+    expect(() => prepareBootstrap(input.directory, bootstrapOptions())).toThrow(
+      'staging.env ownership or mode differs',
     );
   });
 });
