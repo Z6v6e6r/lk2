@@ -2,7 +2,7 @@
 
 Date: 2026-08-16
 Scope: `project-fixed 6` (legacy LK/Node-RED), `ph-ab` (current CUP/rating backend), and this PadlHub platform repository (`lk2`).
-Audit mode: source/history inspection only. No production requests, migrations, writes, deploys, or provider calls were made.
+Audit mode: source/history inspection plus a read-only pull of the live Node-RED flow on server 147. No migrations, writes, deploys, or provider API calls were made.
 
 ## Executive finding
 
@@ -19,7 +19,7 @@ The current change establishes the first canonical rule and authoritative game-c
 | Legacy payment/subscription | LK + Node-RED/Viva       | `src/api/tournamentSignupApi.ts`, Games handlers                              | Subscription/payment applicability runs before some roster writes, but is not a general Participation Eligibility service.                        |
 | Current CUP/rating backend  | `ph-ab`                  | `src/player-ratings/*`                                                        | Mongo `player_rating_state` is current numeric 1..7 CUP canonical ledger (`ownership='CUP_CANONICAL'`).                                           |
 | Tournament mutation         | `ph-ab` + legacy LK/Viva | `src/tournaments/tournaments.controller.ts`, `src/api/tournamentSignupApi.ts` | Identity/level data can be accepted from request/body in legacy adapters; ordinary signup/payment goes directly to legacy/Viva transaction paths. |
-| PadlHub profile projection  | `lk2`                    | `packages/database/src/player-level-repository.ts`, migrations `0044`, `0084` | Authenticated self-declared writes now update profile and sport-level projections atomically; trusted onboarding completion remains absent.       |
+| PadlHub profile projection  | `lk2`                    | `packages/database/src/player-level-repository.ts`, migrations `0044`, `0084` | Authenticated self-declared and server-evaluated onboarding writes update profile and sport-level projections atomically.                         |
 | PadlHub game aggregate      | `lk2`                    | `packages/database/src/game-repository.ts`                                    | Game had legacy `level_from/level_to`; organizer is inserted as ORGANIZER during create.                                                          |
 | PadlHub roster command      | `lk2`                    | `packages/database/src/game-roster-repository.ts`                             | Final join/waitlist/promotion transaction is the correct enforcement point.                                                                       |
 | CUP web                     | `lk2`                    | `apps/cup-admin/src/App.tsx`                                                  | Existing settings surface had locations only; no level policy editor/history/preview.                                                             |
@@ -188,6 +188,22 @@ History/blame inspection showed:
 
 Exact commit provenance remains in the repository histories; no historical commit was rewritten.
 
+## Live legacy onboarding evidence
+
+The fresh read-only audit of server 147 selected the live **LK Onboarding** contour from source
+SHA-256 `d9ae9ef519f5f1e1bc474ebd7aff955b20721af3467c92f079cf6f68dc26c76a` (4,734 total
+nodes; 21 selected; two HTTP inputs). The `/lk/onboarding/level` input is wired directly to its
+normalization handler. That handler accepts `clientId`, result level/numeric value and provenance
+such as `source`/`changedBy` from the request before writing through a service-token Viva call. No
+verified PadlHub principal is established on that route.
+
+Therefore the legacy route remains a compatibility writer, not trusted `ONBOARDING` evidence. It
+was not patched or deployed. Native PadlHub onboarding now uses the authenticated User API: the
+client fetches a scoring-free, versioned question definition and submits only option IDs; the
+server validates the branch, calculates the result and persists source `ONBOARDING` for the JWT
+player. A future legacy bridge must call this authenticated command or an equivalent narrowly
+scoped server-to-server adapter instead of forwarding a client-computed result.
+
 ## Client bypasses found
 
 1. Legacy LK can PATCH roster/waitlist without the new PadlHub command.
@@ -198,7 +214,7 @@ Exact commit provenance remains in the repository histories; no historical commi
 6. Waitlist promotion previously skipped level evaluation.
 7. Payment without a snapshot can be inconsistently re-evaluated after policy/level changes.
 
-The new User Games API accepts only `expectedRevision` and `invitationId`; attempts to send `playerId`, `playerLevelId`, `rank`, `personalInvite` or `skipLevelCheck` are rejected. The profile-level command accepts only `sportCode` and a canonical `levelId`; actor, source and rank are server-derived.
+The new User Games API accepts only `expectedRevision` and `invitationId`; attempts to send `playerId`, `playerLevelId`, `rank`, `personalInvite` or `skipLevelCheck` are rejected. The profile-level command accepts only `sportCode` and a canonical `levelId`; actor, source and rank are server-derived. The assessment command accepts only sport, assessment version and selected option IDs; client-computed score, label, rank, source and player identity are rejected.
 
 ## Backward compatibility plan
 
@@ -208,9 +224,8 @@ The new User Games API accepts only `expectedRevision` and `invitationId`; attem
 4. Route legacy game writer calls to the PadlHub game command. Do not add a second formula to Node-RED/React.
 5. Migrate tournament and training final commands or add trusted server-side adapters with local activity projections.
 6. Run SHADOW and compare decision distributions; clean missing/invalid/legacy constraints.
-7. Use the implemented SELF_DECLARED recovery for native games, then connect ONBOARDING
-   through a trusted assessment command and extend the same resume contract to tournaments
-   and trainings.
+7. Use the implemented SELF_DECLARED or trusted ONBOARDING recovery for native games, then extend
+   the same resume contract to tournaments and trainings.
 8. Enable WARN and then BLOCK independently per tenant/sport/activity only after impact and rollback rehearsal.
 
 ## Activation blockers
@@ -218,8 +233,10 @@ The new User Games API accepts only `expectedRevision` and `invitationId`; attem
 - No continuous authoritative bridge from current `ph-ab` numeric rating ledger into `eligibility.player_sport_levels` has been implemented.
 - Legacy LK/Node-RED game mutation can still bypass the PadlHub command.
 - Tournament/training/admin-add/invite-acceptance final mutations are not native PadlHub commands.
-- Native game self-declared recovery is implemented; trusted ONBOARDING completion and
-  tournament/training recovery are not.
+- Native game SELF_DECLARED and trusted ONBOARDING recovery are implemented;
+  tournament/training recovery is not.
+- Native ONBOARDING does not yet project the result back to Viva; legacy profile views may drift
+  until a transactional outbox/adapter is added.
 - Legacy payment callbacks/recovery do not consume PadlHub payment snapshots.
 - Waitlist denial notification is not yet emitted, although the queue continues and the reason is durable.
 

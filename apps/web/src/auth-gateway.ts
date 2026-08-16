@@ -67,6 +67,8 @@ import type {
   ProfileLevelHistory,
   PlayerLevelState,
   PlayerSportLevel,
+  LevelAssessmentDefinition,
+  CompleteLevelAssessmentResponse,
   ProfileFriendPage,
   ProfileFriendship,
   UserProfile,
@@ -142,6 +144,8 @@ export type {
   ProfileLevelHistory,
   PlayerLevelState,
   PlayerSportLevel,
+  LevelAssessmentDefinition,
+  CompleteLevelAssessmentResponse,
   ProfileFriendPage,
   ProfileFriendship,
   UserProfile,
@@ -492,6 +496,11 @@ export interface AuthGateway {
   readonly getProfileLevelHistory: () => Promise<ProfileLevelHistory>;
   readonly getOwnPlayerLevel?: (sportCode?: string) => Promise<PlayerLevelState>;
   readonly setOwnPlayerLevel?: (levelId: string, sportCode?: string) => Promise<PlayerSportLevel>;
+  readonly getOwnLevelAssessment?: () => Promise<LevelAssessmentDefinition>;
+  readonly completeOwnLevelAssessment?: (
+    assessmentVersion: LevelAssessmentDefinition['version'],
+    answers: Readonly<Record<string, readonly string[]>>,
+  ) => Promise<CompleteLevelAssessmentResponse>;
   readonly listConversations: () => Promise<ConversationPage>;
   readonly createRealtimeTicket: () => Promise<MessagingRealtimeTicket>;
   readonly createDirectConversation: (
@@ -2004,6 +2013,20 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
 
     async setOwnPlayerLevel(levelId, sportCode) {
       const saved = await client.setOwnPlayerLevel(levelId, sportCode);
+      selfProfilePromise = undefined;
+      selfProfileExpiresAt = 0;
+      homeBasePromise = undefined;
+      homeDashboardPromise = undefined;
+      if (currentUserId) playerProfilePromises.delete(currentUserId);
+      return saved;
+    },
+
+    getOwnLevelAssessment() {
+      return client.getOwnLevelAssessment();
+    },
+
+    async completeOwnLevelAssessment(assessmentVersion, answers) {
+      const saved = await client.completeOwnLevelAssessment(assessmentVersion, answers);
       selfProfilePromise = undefined;
       selfProfileExpiresAt = 0;
       homeBasePromise = undefined;

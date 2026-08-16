@@ -30,6 +30,7 @@ const level = {
   title: 'C+',
   rank: 4,
   source: 'SELF_DECLARED' as const,
+  numericValue: null,
   scaleVersion: 1,
   updatedAt: '2026-08-16T18:00:00.000Z',
 };
@@ -165,6 +166,113 @@ describe('profile level routes', () => {
     });
     expect(response.statusCode).toBe(400);
     expect(response.json()).toMatchObject({ code: 'PROFILE_LEVEL_PAYLOAD_INVALID' });
+    expect(repo.setLevel).not.toHaveBeenCalled();
+  });
+
+  it('publishes the established assessment without exposing its scoring operations', async () => {
+    const repo = repository();
+    const app = await buildApp({
+      config,
+      logger: createLogger('profile-level-route-test', 'silent'),
+      pool: fakePool(),
+      playerLevelRepository: repo.value,
+    });
+    apps.push(app);
+    const response = await app.inject({
+      method: 'GET',
+      url: '/user/api/v1/local-padel/profile/level-assessment',
+      headers: { authorization: `Bearer ${await token()}` },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      version: 'padel-self-assessment-v1',
+      sportCode: 'PADEL',
+      baseQuestionId: 'q1_1',
+    });
+    const payload: { readonly questions: readonly unknown[] } = response.json();
+    expect(payload.questions).toHaveLength(21);
+    expect(response.body).not.toContain('operation');
+    expect(response.body).not.toContain('cap');
+  });
+
+  it('derives ONBOARDING level and numeric value from answers on the server', async () => {
+    const repo = repository();
+    repo.setLevel.mockResolvedValue({
+      outcome: 'applied',
+      level: { ...level, source: 'ONBOARDING', numericValue: 3.63 },
+      replayed: false,
+    });
+    const app = await buildApp({
+      config,
+      logger: createLogger('profile-level-route-test', 'silent'),
+      pool: fakePool(),
+      playerLevelRepository: repo.value,
+    });
+    apps.push(app);
+    const response = await app.inject({
+      method: 'POST',
+      url: '/user/api/v1/local-padel/profile/level-assessment',
+      headers: {
+        authorization: `Bearer ${await token()}`,
+        'idempotency-key': 'profile-level-assessment-0001',
+      },
+      payload: {
+        sportCode: 'PADEL',
+        assessmentVersion: 'padel-self-assessment-v1',
+        answers: {
+          q1_1: ['one_two_years'],
+          q3_1: ['3_4'],
+          q3_2: ['yes'],
+          q3_3: ['regular'],
+          q3_4: ['unstable'],
+          q3_5: ['4_8'],
+          q3_6: ['1_3'],
+        },
+      },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      assessment: { numericScore: 3.63, levelCode: 'C+' },
+      level: { source: 'ONBOARDING', numericValue: 3.63 },
+    });
+    expect(repo.setLevel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tenantId,
+        playerId: userId,
+        source: 'ONBOARDING',
+        numericValue: 3.63,
+        levelId,
+      }),
+    );
+  });
+
+  it('rejects client-computed assessment output and hidden-branch answers', async () => {
+    const repo = repository();
+    const app = await buildApp({
+      config,
+      logger: createLogger('profile-level-route-test', 'silent'),
+      pool: fakePool(),
+      playerLevelRepository: repo.value,
+    });
+    apps.push(app);
+    const response = await app.inject({
+      method: 'POST',
+      url: '/user/api/v1/local-padel/profile/level-assessment',
+      headers: {
+        authorization: `Bearer ${await token()}`,
+        'idempotency-key': 'profile-level-assessment-0002',
+      },
+      payload: {
+        sportCode: 'PADEL',
+        assessmentVersion: 'padel-self-assessment-v1',
+        answers: { q1_1: ['less_month'], q4_6: ['3_plus'] },
+        levelCode: 'A',
+        numericScore: 10,
+        playerId: userId,
+      },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({ code: 'LEVEL_ASSESSMENT_PAYLOAD_INVALID' });
     expect(repo.setLevel).not.toHaveBeenCalled();
   });
 });

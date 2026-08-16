@@ -24,6 +24,7 @@ const savedRow = {
   title: 'C+',
   rank: 4,
   source: 'SELF_DECLARED',
+  numeric_value: null,
   scale_version: 1,
   updated_at: '2026-08-16T18:00:00.000Z',
 };
@@ -116,6 +117,7 @@ describe('player level repository', () => {
       title: 'C+',
       rank: 4,
       source: 'SELF_DECLARED',
+      numericValue: null,
       scaleVersion: 1,
       updatedAt: '2026-08-16T18:00:00.000Z',
     };
@@ -133,5 +135,47 @@ describe('player level repository', () => {
     await expect(
       createPlayerLevelRepository(pool(query) as never).setLevel(input()),
     ).resolves.toEqual({ outcome: 'applied', level: stored, replayed: true });
+  });
+
+  it('persists a server-computed onboarding numeric value with its source', async () => {
+    const onboardingRow = {
+      ...savedRow,
+      source: 'ONBOARDING',
+      numeric_value: '3.63000',
+    };
+    const query = vi.fn((text: string) => {
+      if (text === 'begin' || text === 'commit') return Promise.resolve({ rows: [] });
+      if (text.includes("set_config('app.tenant_id'")) return Promise.resolve({ rows: [] });
+      if (text.includes('from eligibility.player_level_commands'))
+        return Promise.resolve({ rows: [] });
+      if (text.includes('from eligibility.canonical_levels'))
+        return Promise.resolve({ rows: [levelRow] });
+      if (text.includes('from eligibility.player_sport_levels player'))
+        return Promise.resolve({ rows: [] });
+      if (text.includes('update profile.user_summaries')) {
+        return Promise.resolve({ rows: [], rowCount: 1 });
+      }
+      if (text.includes('insert into eligibility.player_sport_levels')) {
+        return Promise.resolve({ rows: [onboardingRow], rowCount: 1 });
+      }
+      return Promise.resolve({ rows: [], rowCount: 1 });
+    });
+
+    await expect(
+      createPlayerLevelRepository(pool(query) as never).setLevel({
+        ...input(),
+        source: 'ONBOARDING',
+        numericValue: 3.63,
+      }),
+    ).resolves.toMatchObject({
+      outcome: 'applied',
+      level: { source: 'ONBOARDING', numericValue: 3.63 },
+    });
+    expect(
+      query.mock.calls.some(
+        ([text]) =>
+          text.includes('update profile.user_summaries') && text.includes('level_value = $4'),
+      ),
+    ).toBe(true);
   });
 });

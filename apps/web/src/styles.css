@@ -4282,7 +4282,8 @@
 }
 
 .games-level-recovery__actions,
-.games-level-recovery__manual {
+.games-level-recovery__manual,
+.games-level-assessment {
   display: grid;
   gap: 12px;
 }
@@ -4331,9 +4332,55 @@
 }
 
 .games-level-recovery__primary:disabled,
-.games-level-recovery__back:disabled {
+.games-level-recovery__secondary:disabled,
+.games-level-recovery__back:disabled,
+.games-level-assessment button:disabled {
   cursor: wait;
   opacity: 0.58;
+}
+
+.games-level-assessment__progress {
+  margin: 0;
+  color: #338a50;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.games-level-assessment h3 {
+  margin: 0;
+  color: #17241d;
+  font-size: 20px;
+  line-height: 1.25;
+}
+
+.games-level-assessment__options {
+  display: grid;
+  gap: 8px;
+}
+
+.games-level-assessment__options button {
+  min-height: 44px;
+  padding: 10px 14px;
+  border: 1px solid #dce5df;
+  border-radius: 12px;
+  background: #f7faf8;
+  color: #26372e;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.games-level-assessment__options button.is-selected {
+  border-color: #2f814a;
+  background: #e8f4eb;
+  box-shadow: 0 0 0 1px #2f814a;
+  color: #1f6638;
+}
+
+.games-level-assessment__navigation {
+  display: grid;
+  grid-template-columns: minmax(0, 0.7fr) minmax(0, 1.3fr);
+  gap: 10px;
 }
 
 .games-level-recovery__error {

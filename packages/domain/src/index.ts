@@ -6,6 +6,7 @@ export const DOMAIN_OWNERSHIP_MODES = [
 ] as const;
 
 export * from './participation-eligibility.js';
+export * from './level-assessment.js';
 
 export type DomainOwnershipMode = (typeof DOMAIN_OWNERSHIP_MODES)[number];
 

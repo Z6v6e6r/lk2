@@ -11,6 +11,7 @@ export interface PlayerSportLevelView {
   readonly title: string;
   readonly rank: number;
   readonly source: 'SELF_DECLARED' | 'ONBOARDING' | 'MANUAL' | 'CALCULATED' | 'VIVA' | 'MIGRATED';
+  readonly numericValue: number | null;
   readonly scaleVersion: number;
   readonly updatedAt: string;
 }
@@ -28,6 +29,7 @@ export interface SetPlayerLevelInput {
   readonly sportCode: string;
   readonly levelId: string;
   readonly source: 'SELF_DECLARED' | 'ONBOARDING';
+  readonly numericValue?: number | null;
   readonly idempotencyKey: string;
   readonly requestHash: string;
   readonly correlationId: string;
@@ -68,6 +70,7 @@ interface PlayerLevelRow extends QueryResultRow {
   readonly title: string;
   readonly rank: number | string;
   readonly source: PlayerSportLevelView['source'];
+  readonly numeric_value: number | string | null;
   readonly scale_version: number | string;
   readonly updated_at: string;
 }
@@ -93,6 +96,13 @@ function levelView(row: LevelRow): CanonicalLevelView {
 }
 
 function playerLevelView(row: PlayerLevelRow): PlayerSportLevelView {
+  const numericValue = row.numeric_value === null ? null : Number(row.numeric_value);
+  if (
+    numericValue !== null &&
+    (!Number.isFinite(numericValue) || numericValue < 0 || numericValue > 10)
+  ) {
+    throw new Error('PLAYER_LEVEL_NUMERIC_INVALID');
+  }
   return {
     playerId: row.player_id,
     sportCode: row.sport_code,
@@ -101,6 +111,7 @@ function playerLevelView(row: PlayerLevelRow): PlayerSportLevelView {
     title: row.title,
     rank: integer(row.rank),
     source: row.source,
+    numericValue,
     scaleVersion: integer(row.scale_version),
     updatedAt: new Date(row.updated_at).toISOString(),
   };
@@ -108,7 +119,7 @@ function playerLevelView(row: PlayerLevelRow): PlayerSportLevelView {
 
 const PLAYER_LEVEL_COLUMNS = `player.player_id, player.sport_code, player.level_id,
   level.code, level.title, level.rank, player.source, player.scale_version,
-  player.updated_at::text as updated_at`;
+  player.updated_at::text as updated_at, profile.level_value as numeric_value`;
 
 export function createPlayerLevelRepository(pool: Pool): PlayerLevelRepository {
   return {
@@ -133,6 +144,8 @@ export function createPlayerLevelRepository(pool: Pool): PlayerLevelRepository {
                on level.tenant_id = player.tenant_id
               and level.sport_code = player.sport_code
               and level.id = player.level_id
+             join profile.user_summaries profile
+               on profile.tenant_id = player.tenant_id and profile.user_id = player.player_id
             where player.tenant_id = $1 and player.player_id = $2 and player.sport_code = $3`,
           [tenantId, playerId, sportCode],
         );
@@ -148,6 +161,15 @@ export function createPlayerLevelRepository(pool: Pool): PlayerLevelRepository {
 
     setLevel(input) {
       return withTenantTransaction(pool, input.tenantId, async (client) => {
+        if (
+          input.numericValue !== undefined &&
+          input.numericValue !== null &&
+          (!Number.isFinite(input.numericValue) ||
+            input.numericValue < 0 ||
+            input.numericValue > 10)
+        ) {
+          throw new Error('PLAYER_LEVEL_NUMERIC_INVALID');
+        }
         await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
           `player-level:${input.tenantId}:${input.playerId}:${input.idempotencyKey}`,
         ]);
@@ -192,15 +214,17 @@ export function createPlayerLevelRepository(pool: Pool): PlayerLevelRepository {
                on level.tenant_id = player.tenant_id
               and level.sport_code = player.sport_code
               and level.id = player.level_id
+             join profile.user_summaries profile
+               on profile.tenant_id = player.tenant_id and profile.user_id = player.player_id
             where player.tenant_id = $1 and player.player_id = $2 and player.sport_code = $3
             for update of player`,
           [input.tenantId, input.playerId, input.sportCode],
         );
         const profile = await client.query(
           `update profile.user_summaries
-              set level_label = $3, updated_at = now()
+              set level_label = $3, level_value = $4, updated_at = now()
             where tenant_id = $1 and user_id = $2`,
-          [input.tenantId, input.playerId, level.code],
+          [input.tenantId, input.playerId, level.code, input.numericValue ?? null],
         );
         if ((profile.rowCount ?? 0) !== 1) return { outcome: 'profile_not_found' };
 
@@ -215,7 +239,8 @@ export function createPlayerLevelRepository(pool: Pool): PlayerLevelRepository {
              scale_version = excluded.scale_version,
              updated_at = now()
            returning player_id, sport_code, level_id, $7::text as code, $8::text as title,
-                     $9::integer as rank, source, scale_version, updated_at::text as updated_at`,
+                     $9::integer as rank, source, scale_version, updated_at::text as updated_at,
+                     $10::numeric as numeric_value`,
           [
             input.tenantId,
             input.playerId,
@@ -226,6 +251,7 @@ export function createPlayerLevelRepository(pool: Pool): PlayerLevelRepository {
             level.code,
             level.title,
             integer(level.rank),
+            input.numericValue ?? null,
           ],
         );
         if (!saved) throw new Error('PLAYER_LEVEL_WRITE_LOST');

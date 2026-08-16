@@ -103,6 +103,7 @@ export interface PlayerSportLevel {
   readonly title: string;
   readonly rank: number;
   readonly source: 'SELF_DECLARED' | 'ONBOARDING' | 'MANUAL' | 'CALCULATED' | 'VIVA' | 'MIGRATED';
+  readonly numericValue: number | null;
   readonly scaleVersion: number;
   readonly updatedAt: string;
 }
@@ -111,6 +112,31 @@ export interface PlayerLevelState {
   readonly scaleVersion: number | null;
   readonly levels: readonly CanonicalProfileLevel[];
   readonly currentLevel: PlayerSportLevel | null;
+}
+export interface LevelAssessmentOption {
+  readonly id: string;
+  readonly label: string;
+}
+export interface LevelAssessmentQuestion {
+  readonly id: string;
+  readonly text: string;
+  readonly type: 'single' | 'multi';
+  readonly options: readonly LevelAssessmentOption[];
+}
+export interface LevelAssessmentDefinition {
+  readonly version: 'padel-self-assessment-v1';
+  readonly sportCode: 'PADEL';
+  readonly baseQuestionId: string;
+  readonly questions: readonly LevelAssessmentQuestion[];
+  readonly branches: Readonly<Record<string, readonly string[]>>;
+}
+export interface CompleteLevelAssessmentResponse {
+  readonly assessment: {
+    readonly version: string;
+    readonly numericScore: number;
+    readonly levelCode: string;
+  };
+  readonly level: PlayerSportLevel;
 }
 export type BookingPreferences = components['schemas']['BookingPreferences'];
 export type BookingPreferencesUpdateRequest =
@@ -728,6 +754,26 @@ export class PadlHubApiClient {
         method: 'PUT',
         idempotencyKey,
         body: jsonRequestBody({ sportCode, levelId }),
+      }),
+    );
+  }
+
+  public getOwnLevelAssessment(): Promise<LevelAssessmentDefinition> {
+    return this.request<LevelAssessmentDefinition>('/profile/level-assessment', {
+      cache: 'no-store',
+    });
+  }
+
+  public completeOwnLevelAssessment(
+    assessmentVersion: LevelAssessmentDefinition['version'],
+    answers: Readonly<Record<string, readonly string[]>>,
+  ): Promise<CompleteLevelAssessmentResponse> {
+    const idempotencyKey = createCorrelationId();
+    return this.retryOnceOnNetworkFailure(() =>
+      this.request<CompleteLevelAssessmentResponse>('/profile/level-assessment', {
+        method: 'POST',
+        idempotencyKey,
+        body: jsonRequestBody({ sportCode: 'PADEL', assessmentVersion, answers }),
       }),
     );
   }

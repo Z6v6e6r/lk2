@@ -19,6 +19,10 @@ Delivery stage: isolated implementation, not integrated or deployed
 - Native Games UX for `PLAYER_LEVEL_REQUIRED`: the interrupted game/action/invitation
   context is retained, the player can choose a canonical level, stale client caches are
   invalidated, and the original JOIN or WAITLIST command is retried against the server.
+- Versioned trusted level assessment for native Games. The browser receives only renderable
+  questions/options and submits selected option IDs; the server validates branch integrity,
+  computes the established result once in `@phub/domain`, records `ONBOARDING`, updates the
+  numeric/profile projection, invalidates client caches and retries the interrupted command.
 - Exact personal-invitation validation by tenant, activity, recipient, status, expiry,
   revocation, and use count. Public/community/team links do not bypass level checks.
 - Immutable eligibility decision references on participation/reservation/waitlist records
@@ -43,10 +47,11 @@ No migration was executed and no runtime setting was changed by this checkpoint.
 ## Remaining work before production enforcement
 
 - Move the legacy LK/Node-RED join and waitlist writers behind the server command.
-- Connect the existing assessment/onboarding owner through a trusted server command that
-  writes `ONBOARDING`; the legacy endpoint currently accepts caller-owned provenance and
-  therefore cannot safely be reused as proof. The recovery dialog exposes the required
-  assessment choice but does not fabricate a successful assessment.
+- Route the legacy onboarding UI to the trusted PadlHub assessment command. A fresh read-only
+  server-147 audit confirms the current `/lk/onboarding/level` handler accepts client-computed
+  level/numeric/provenance fields and therefore cannot safely be reused as proof.
+- Add a transactional outbox/adapter if the trusted PadlHub assessment result must also be shown
+  in Viva-backed legacy profile views.
 - Migrate tournament and training registration writers; their current impact cards are
   intentionally marked unsupported.
 - Define and migrate the activity personal-invitation creation/revocation command.
@@ -58,7 +63,7 @@ No migration was executed and no runtime setting was changed by this checkpoint.
 
 ## Verification evidence
 
-- Full Vitest suite passed: 327 files passed, 4 skipped; 2179 tests passed,
+- Full Vitest suite passed: 328 files passed, 4 skipped; 2192 tests passed,
   41 skipped. Targeted domain, database, API route, SDK, web recovery, and CUP component
   regressions are included in that run.
 - TypeScript typecheck and ESLint passed.
@@ -72,7 +77,6 @@ No migration was executed and no runtime setting was changed by this checkpoint.
 
 `NO-GO` for production `BLOCK`.
 
-The native game path, self-declared recovery, and policy control plane are implemented,
-but the legacy writers, trusted assessment completion, tournament/training writers, and
-paid-flow reconciliation are not yet a single authoritative contour. `OFF` is the only
-safe initial migration default.
+The native game path, both recovery methods, and policy control plane are implemented, but the
+legacy writers, tournament/training writers, Viva profile convergence and paid-flow reconciliation
+are not yet a single authoritative contour. `OFF` is the only safe initial migration default.

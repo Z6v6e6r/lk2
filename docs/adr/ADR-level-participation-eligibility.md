@@ -49,8 +49,18 @@ The LK must offer SELF_DECLARED and ONBOARDING flows and preserve the activity r
 
 The authenticated self-service command derives the player from JWT and always records
 `SELF_DECLARED`; callers cannot submit `playerId`, `rank`, `source` or assessment facts.
-`ONBOARDING` is reserved for a separate trusted assessment command owned by the assessment
-flow. A legacy client assertion is not sufficient evidence for that source.
+`ONBOARDING` is written only by the trusted PadlHub assessment command. The browser receives
+question, option and branch identifiers, but no score operations, caps, thresholds or result
+fields. It submits only the selected option IDs. The server validates the exact visible branch,
+rejects missing, hidden, duplicate or unknown answers, computes the numeric result with the
+versioned domain assessment and maps the derived label through the active canonical scale. Actor,
+tenant and provenance come from the JWT and command implementation. A legacy client assertion is
+not sufficient evidence for that source.
+
+The assessment algorithm lives once in `packages/domain/src/level-assessment.ts`. Its public
+definition and completion payload are deliberately asymmetric: clients can render the flow but
+cannot claim a score, label, rank, source or player identity. Assessment versions are immutable;
+an unsupported version fails closed and requires the client to reload the current definition.
 
 ### Invitations
 
@@ -114,6 +124,8 @@ Positive:
 Costs and constraints:
 
 - A local sport-level projection must be kept fresh.
+- The trusted assessment updates PadlHub profile and eligibility projections; a separate outbox or
+  adapter is still required if Viva must display the same value during the transition.
 - Legacy writers must be routed before BLOCK.
 - Tournament/training commands and callback/recovery integration still require migration.
 - Decision storage adds write volume; retention/aggregation must be monitored in SHADOW.
