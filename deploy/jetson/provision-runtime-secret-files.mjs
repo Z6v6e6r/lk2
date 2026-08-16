@@ -19,10 +19,12 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const VERSION = 1;
+const BOOTSTRAP_VERSION = 2;
 const FILES = Object.freeze({
   staging: 'staging.env',
   realtime: 'realtime.env',
   marker: '.runtime-secret-isolation.transition.json',
+  bootstrapReceipt: '.runtime-secret-bootstrap.finalized.json',
   backup: '.runtime-secret-isolation.staging.backup',
   stagingNext: '.runtime-secret-isolation.staging.next',
   realtimeNext: '.runtime-secret-isolation.realtime.next',
@@ -50,6 +52,40 @@ const PHASE_TRANSITIONS = new Map([
   ['worker-ready', 'verified'],
   ['files-restored', 'runtime-restored'],
 ]);
+const BOOTSTRAP_PHASES = new Set([
+  'initial',
+  'files-prepared',
+  'images-probed',
+  'runtime-stopping',
+  'runtime-stopped',
+  'compose-committed',
+  'release-committed',
+  'realtime-ready',
+  'api-ready',
+  'worker-ready',
+  'web-ready',
+  'verified',
+  'finalizing',
+  'files-restoring',
+  'files-restored',
+  'runtime-restored',
+  'finalized',
+]);
+const BOOTSTRAP_PHASE_TRANSITIONS = new Map([
+  ['files-prepared', 'images-probed'],
+  ['images-probed', 'runtime-stopping'],
+  ['runtime-stopping', 'runtime-stopped'],
+  ['runtime-stopped', 'compose-committed'],
+  ['compose-committed', 'release-committed'],
+  ['release-committed', 'realtime-ready'],
+  ['realtime-ready', 'api-ready'],
+  ['api-ready', 'worker-ready'],
+  ['worker-ready', 'web-ready'],
+  ['web-ready', 'verified'],
+  ['files-restored', 'runtime-restored'],
+]);
+const BOOTSTRAP_SERVICES = Object.freeze(['api', 'worker', 'realtime', 'web']);
+const BOOTSTRAP_IMAGES = Object.freeze([...BOOTSTRAP_SERVICES, 'migrator']);
 
 export const REALTIME_KEYS = Object.freeze([
   'APP_ENV',
@@ -272,6 +308,92 @@ function buildCandidates(source, secret) {
   };
 }
 
+function isSha256(value) {
+  return /^[0-9a-f]{64}$/.test(value ?? '');
+}
+
+function isCommit(value) {
+  return /^[0-9a-f]{40}$/.test(value ?? '');
+}
+
+function isImageId(value) {
+  return /^sha256:[0-9a-f]{64}$/.test(value ?? '');
+}
+
+function isImageRef(value) {
+  return /^ghcr\.io\/[A-Za-z0-9._/-]+@sha256:[0-9a-f]{64}$/.test(value ?? '');
+}
+
+function isContainerId(value) {
+  return /^[0-9a-f]{12,64}$/.test(value ?? '');
+}
+
+function isSafeAbsolutePath(value, root) {
+  if (typeof value !== 'string' || !value.startsWith(`${root}/`)) return false;
+  return !value.includes('/../') && /^[A-Za-z0-9._/-]+$/.test(value);
+}
+
+function validateBootstrapImageMap(images, services) {
+  if (!images || typeof images !== 'object') return false;
+  return services.every(
+    (service) => isImageId(images[service]?.id) && isImageRef(images[service]?.ref),
+  );
+}
+
+function validateBootstrapState(state) {
+  const hashes = state?.hashes ?? {};
+  const requiredHashes = [
+    hashes.runtimeSnapshot,
+    hashes.activeCompose,
+    hashes.candidateCompose,
+    hashes.activeReleaseEnv,
+    hashes.candidateReleaseEnv,
+    hashes.infrastructureCompose,
+    hashes.activeMigrationManifest,
+    hashes.candidateMigrationManifest,
+    hashes.applicationBackup,
+  ];
+  const oldContainers = state?.oldContainers ?? {};
+  const runtimeContainersValid = BOOTSTRAP_SERVICES.every(
+    (service) =>
+      isContainerId(oldContainers[service]?.id) &&
+      typeof oldContainers[service]?.startedAt === 'string' &&
+      oldContainers[service].startedAt.length >= 20 &&
+      oldContainers[service].startedAt.length <= 64,
+  );
+  const infrastructureContainers = state?.infrastructureContainers ?? {};
+  const valid =
+    state?.version === BOOTSTRAP_VERSION &&
+    state.operation === 'legacy-runtime-secret-bootstrap' &&
+    BOOTSTRAP_PHASES.has(state.phase) &&
+    requiredHashes.every(isSha256) &&
+    hashes.activeMigrationManifest === hashes.candidateMigrationManifest &&
+    [
+      state.expectedActiveRelease,
+      state.candidateRelease,
+      state.controlCommit,
+      state.controlTree,
+      state.candidateTree,
+    ].every(isCommit) &&
+    /^\d+$/.test(state.workflowRunId ?? '') &&
+    /^\d+$/.test(state.workflowRunAttempt ?? '') &&
+    /^\d+:\d+:\d+:\d+$/.test(state.infrastructureIdentity ?? '') &&
+    isSafeAbsolutePath(state.backupPath, '/opt/phub/backups/releases') &&
+    isSafeAbsolutePath(state.bundlePath, '/opt/phub/b0-candidates') &&
+    validateBootstrapImageMap(state.oldImages, BOOTSTRAP_SERVICES) &&
+    validateBootstrapImageMap(state.candidateImages, BOOTSTRAP_IMAGES) &&
+    runtimeContainersValid &&
+    isContainerId(infrastructureContainers.nginxId) &&
+    isContainerId(infrastructureContainers.caddyId) &&
+    Number.isSafeInteger(state.deployUid) &&
+    Number.isSafeInteger(state.deployGid) &&
+    (state.phase === 'finalized'
+      ? isSha256(state.finalSnapshot)
+      : state.finalSnapshot === undefined);
+  if (!valid) fail('bootstrap marker has an unknown schema or phase');
+  return state;
+}
+
 function exactLineIndexes(lines, expected) {
   return lines.flatMap((line, index) => (line === expected ? [index] : []));
 }
@@ -395,6 +517,7 @@ export function buildRuntimeSecretComposeCandidateFile(
 }
 
 function validateState(state) {
+  if (state?.version === BOOTSTRAP_VERSION) return validateBootstrapState(state);
   const hashes = [
     state.runtimeSnapshot,
     state.activeComposeSha256,
@@ -461,12 +584,14 @@ export function recoverMarker(directoryInput) {
   const nextState = readStateFile(next);
   if (exists(marker)) {
     const current = readStateFile(marker);
-    for (const field of [
-      'runtimeSnapshot',
-      'activeComposeSha256',
-      'candidateComposeSha256',
-      'activeRelease',
-    ]) {
+    if (current.version !== nextState.version || current.operation !== nextState.operation) {
+      fail('marker next belongs to another transition');
+    }
+    const fields =
+      current.version === BOOTSTRAP_VERSION
+        ? ['workflowRunId', 'workflowRunAttempt', 'candidateRelease', 'controlCommit']
+        : ['runtimeSnapshot', 'activeComposeSha256', 'candidateComposeSha256', 'activeRelease'];
+    for (const field of fields) {
       if (current[field] !== nextState[field]) fail('marker next belongs to another transition');
     }
   }
@@ -706,6 +831,309 @@ export function finalize(directoryInput, finalSnapshot, options = {}) {
   return { status: 'finalized' };
 }
 
+function loadBootstrapState(directory) {
+  const state = loadState(directory);
+  if (
+    state.version !== BOOTSTRAP_VERSION ||
+    state.operation !== 'legacy-runtime-secret-bootstrap'
+  ) {
+    fail('transition marker is not a legacy bootstrap');
+  }
+  return state;
+}
+
+function loadBootstrapReceipt(directory) {
+  const path = join(directory, FILES.bootstrapReceipt);
+  const state = readStateFile(path);
+  if (
+    state.version !== BOOTSTRAP_VERSION ||
+    state.operation !== 'legacy-runtime-secret-bootstrap' ||
+    state.phase !== 'finalized'
+  ) {
+    fail('bootstrap finalized receipt is invalid');
+  }
+  return state;
+}
+
+export function prepareBootstrap(directoryInput, options) {
+  const directory = resolve(directoryInput);
+  if (directory === '/') fail('target directory cannot be root');
+  const paths = Object.fromEntries(
+    Object.entries(FILES).map(([key, name]) => [key, join(directory, name)]),
+  );
+  const directoryMetadata = safeDirectory(directory, options.directory);
+  const original = safeFile(paths.staging, options.staging);
+  for (const path of [
+    paths.realtime,
+    paths.marker,
+    `${paths.marker}.next`,
+    paths.backup,
+    paths.stagingNext,
+    paths.realtimeNext,
+  ]) {
+    if (exists(path)) fail(`${basename(path)} already exists`);
+  }
+  const source = readFileSync(paths.staging, 'utf8');
+  const secret = (options.randomBytes ?? randomBytes)(48).toString('base64');
+  const candidates = buildCandidates(source, secret);
+  const state = validateBootstrapState({
+    version: BOOTSTRAP_VERSION,
+    operation: 'legacy-runtime-secret-bootstrap',
+    phase: 'initial',
+    ...options.attestation,
+    deployUid: options.deployUid,
+    deployGid: options.deployGid,
+    directory: { dev: directoryMetadata.dev, ino: directoryMetadata.ino },
+    original,
+  });
+  replaceMarker(directory, state, options.failAfter === 'initial-marker-next' ? 'marker-next' : '');
+  linkSync(paths.staging, paths.backup);
+  syncPath(directory);
+  if (options.failAfter === 'backup') throw new Error('injected failure after backup');
+  writeExclusive(paths.stagingNext, candidates.staging, options.deployUid, options.deployGid);
+  writeExclusive(paths.realtimeNext, candidates.realtime, options.deployUid, options.deployGid);
+  renameSync(paths.realtimeNext, paths.realtime);
+  syncPath(directory);
+  if (options.failAfter === 'realtime') throw new Error('injected failure after realtime');
+  renameSync(paths.stagingNext, paths.staging);
+  syncPath(directory);
+  state.candidate = { staging: metadata(paths.staging), realtime: metadata(paths.realtime) };
+  state.phase = 'files-prepared';
+  replaceMarker(directory, state);
+  verifyBootstrapPrepared(directory);
+  return { status: 'files-prepared' };
+}
+
+export function verifyBootstrapPrepared(directoryInput) {
+  const directory = resolve(directoryInput);
+  const state = loadBootstrapState(directory);
+  if (!state.candidate) fail('bootstrap marker lacks candidate metadata');
+  const currentDirectory = metadata(directory);
+  if (
+    currentDirectory.dev !== state.directory.dev ||
+    currentDirectory.ino !== state.directory.ino
+  ) {
+    fail('target directory identity changed');
+  }
+  verifyCandidatePair(directory, state, state.phase !== 'finalizing');
+  if (exists(join(directory, FILES.stagingNext)) || exists(join(directory, FILES.realtimeNext))) {
+    fail('candidate next file remains');
+  }
+  return { status: state.phase };
+}
+
+export function advanceBootstrapPhase(directoryInput, expected, next, options = {}) {
+  const directory = resolve(directoryInput);
+  const state = loadBootstrapState(directory);
+  if (state.phase !== expected || BOOTSTRAP_PHASE_TRANSITIONS.get(expected) !== next) {
+    fail(`invalid bootstrap phase advance ${state.phase} -> ${next}`);
+  }
+  state.phase = next;
+  replaceMarker(directory, state, options.failAfter === 'marker-next' ? 'marker-next' : '');
+  return { status: next };
+}
+
+export function restoreBootstrapFiles(directoryInput, options = {}) {
+  const directory = resolve(directoryInput);
+  const state = loadBootstrapState(directory);
+  const paths = Object.fromEntries(
+    Object.entries(FILES).map(([key, name]) => [key, join(directory, name)]),
+  );
+  if (['verified', 'finalizing'].includes(state.phase)) {
+    fail('verified bootstrap must finalize forward');
+  }
+  if (state.phase === 'files-restored' || state.phase === 'runtime-restored') {
+    if (!sameFile(paths.staging, state.original)) fail('original staging identity changed');
+    if (exists(paths.realtime) || exists(paths.backup)) fail('rollback files are not converged');
+    return { status: state.phase };
+  }
+  if (state.phase !== 'files-restoring') {
+    if (state.phase !== 'initial') verifyCandidatePair(directory, state);
+    state.restoreFromPhase = state.phase;
+    state.phase = 'files-restoring';
+    replaceMarker(directory, state);
+  }
+  const sourcePath = exists(paths.backup) ? paths.backup : paths.staging;
+  if (!sameFile(sourcePath, state.original)) fail('original staging identity changed');
+  const source = readFileSync(sourcePath, 'utf8');
+  const stagingIsOriginal = sameFile(paths.staging, state.original);
+  if (!stagingIsOriginal && exists(paths.staging)) {
+    validatePartialCandidate(source, paths.staging, 'staging', state);
+  }
+  if (exists(paths.stagingNext)) {
+    validatePartialCandidate(source, paths.stagingNext, 'staging', state);
+  }
+  for (const realtimePath of [paths.realtime, paths.realtimeNext]) {
+    if (exists(realtimePath)) validatePartialCandidate(source, realtimePath, 'realtime', state);
+  }
+  for (const path of [paths.realtime, paths.realtimeNext, paths.stagingNext]) {
+    if (exists(path)) rmSync(path);
+  }
+  syncPath(directory);
+  if (options.failAfter === 'realtime-removed') {
+    throw new Error('injected failure after realtime-removed');
+  }
+  if (exists(paths.backup)) {
+    if (!sameFile(paths.backup, state.original)) fail('staging backup identity changed');
+    if (stagingIsOriginal) rmSync(paths.backup);
+    else {
+      if (exists(paths.staging)) rmSync(paths.staging);
+      renameSync(paths.backup, paths.staging);
+    }
+    syncPath(directory);
+  } else if (!sameFile(paths.staging, state.original)) {
+    fail('original staging file is absent after restoration');
+  }
+  state.phase = 'files-restored';
+  replaceMarker(directory, state);
+  return { status: 'files-restored' };
+}
+
+export function completeBootstrapRollback(directoryInput) {
+  const directory = resolve(directoryInput);
+  const state = loadBootstrapState(directory);
+  if (state.phase !== 'runtime-restored') fail('bootstrap runtime rollback is not attested');
+  if (!sameFile(join(directory, FILES.staging), state.original)) {
+    fail('original staging metadata changed');
+  }
+  if (exists(join(directory, FILES.realtime))) fail('realtime.env remains after rollback');
+  rmSync(join(directory, FILES.marker));
+  syncPath(directory);
+  return { status: 'rolled-back' };
+}
+
+export function finalizeBootstrap(directoryInput, finalSnapshot, options = {}) {
+  const directory = resolve(directoryInput);
+  const receipt = join(directory, FILES.bootstrapReceipt);
+  const marker = join(directory, FILES.marker);
+  if (exists(receipt)) {
+    if (exists(marker)) fail('bootstrap marker and finalized receipt coexist');
+    const finalized = loadBootstrapReceipt(directory);
+    if (finalized.finalSnapshot !== finalSnapshot) fail('finalized bootstrap snapshot differs');
+    verifyCandidatePair(directory, finalized, false);
+    return { status: 'already-finalized' };
+  }
+  const state = loadBootstrapState(directory);
+  if (!['verified', 'finalizing', 'finalized'].includes(state.phase)) {
+    fail('bootstrap is not verified');
+  }
+  if (!isSha256(finalSnapshot)) fail('final snapshot must be sha256');
+  if (finalSnapshot === state.hashes.runtimeSnapshot) fail('serving snapshot did not change');
+  if (state.phase === 'finalized' && state.finalSnapshot !== finalSnapshot) {
+    fail('finalized bootstrap snapshot differs');
+  }
+  if (state.phase === 'verified') {
+    verifyCandidatePair(directory, state);
+    state.phase = 'finalizing';
+    replaceMarker(directory, state);
+  } else if (state.phase === 'finalizing') {
+    verifyCandidatePair(directory, state, false);
+  }
+  const backup = join(directory, FILES.backup);
+  if (exists(backup)) {
+    if (!sameFile(backup, state.original)) fail('staging backup identity changed');
+    rmSync(backup);
+    syncPath(directory);
+  }
+  if (options.failAfter === 'backup-removed') {
+    throw new Error('injected failure after backup-removed');
+  }
+  if (state.phase !== 'finalized') {
+    state.phase = 'finalized';
+    state.finalSnapshot = finalSnapshot;
+    replaceMarker(directory, state, options.failAfter === 'final-marker-next' ? 'marker-next' : '');
+  }
+  if (options.failAfter === 'final-marker') {
+    throw new Error('injected failure after final-marker');
+  }
+  renameSync(marker, receipt);
+  syncPath(directory);
+  if (options.failAfter === 'receipt-renamed') {
+    throw new Error('injected failure after receipt-renamed');
+  }
+  return { status: 'finalized' };
+}
+
+export function verifyBootstrapFinalized(directoryInput) {
+  const directory = resolve(directoryInput);
+  if (exists(join(directory, FILES.marker))) fail('bootstrap marker remains after finalization');
+  const state = loadBootstrapReceipt(directory);
+  verifyCandidatePair(directory, state, false);
+  return { status: 'finalized' };
+}
+
+export function readBootstrapField(directoryInput, field) {
+  const allowed = new Set([
+    'phase',
+    'restoreFromPhase',
+    'expectedActiveRelease',
+    'candidateRelease',
+    'controlCommit',
+    'controlTree',
+    'candidateTree',
+    'workflowRunId',
+    'workflowRunAttempt',
+    'backupPath',
+    'bundlePath',
+    'infrastructureIdentity',
+    'hashes.runtimeSnapshot',
+    'hashes.activeCompose',
+    'hashes.candidateCompose',
+    'hashes.activeReleaseEnv',
+    'hashes.candidateReleaseEnv',
+    'hashes.infrastructureCompose',
+    'hashes.activeMigrationManifest',
+    'hashes.candidateMigrationManifest',
+    'hashes.applicationBackup',
+    ...BOOTSTRAP_SERVICES.flatMap((service) => [
+      `oldImages.${service}.id`,
+      `oldImages.${service}.ref`,
+      `oldContainers.${service}.id`,
+      `oldContainers.${service}.startedAt`,
+    ]),
+    ...BOOTSTRAP_IMAGES.flatMap((service) => [
+      `candidateImages.${service}.id`,
+      `candidateImages.${service}.ref`,
+    ]),
+    'infrastructureContainers.nginxId',
+    'infrastructureContainers.caddyId',
+  ]);
+  if (!allowed.has(field)) fail('requested bootstrap marker field is not readable');
+  const value = field
+    .split('.')
+    .reduce((current, segment) => current?.[segment], loadBootstrapState(resolve(directoryInput)));
+  if (typeof value !== 'string') fail('requested bootstrap marker field is unavailable');
+  return value;
+}
+
+export function readBootstrapFinalizedField(directoryInput, field) {
+  const directory = resolve(directoryInput);
+  const state = loadBootstrapReceipt(directory);
+  const allowed = new Set([
+    'finalSnapshot',
+    'expectedActiveRelease',
+    'candidateRelease',
+    'controlCommit',
+    'workflowRunId',
+    'workflowRunAttempt',
+    'bundlePath',
+    'hashes.candidateCompose',
+    'hashes.candidateReleaseEnv',
+    'hashes.infrastructureCompose',
+    ...BOOTSTRAP_SERVICES.flatMap((service) => [
+      `candidateImages.${service}.id`,
+      `candidateImages.${service}.ref`,
+    ]),
+    'infrastructureIdentity',
+    'infrastructureContainers.nginxId',
+    'infrastructureContainers.caddyId',
+  ]);
+  if (!allowed.has(field)) fail('requested finalized bootstrap field is not readable');
+  const value = field.split('.').reduce((current, segment) => current?.[segment], state);
+  if (typeof value !== 'string') fail('requested finalized bootstrap field is unavailable');
+  return value;
+}
+
 export function readField(directoryInput, field) {
   const allowed = new Set([
     'phase',
@@ -764,6 +1192,47 @@ function cli() {
         attestationKeys.map((key, index) => [key, attestationValues[index]]),
       ),
     });
+  } else if (mode === 'prepare-bootstrap' || mode === 'prepare-bootstrap-json') {
+    const [deployUid, deployGid, encodedAttestation] = args;
+    if (!/^\d+$/.test(deployUid ?? '') || !/^\d+$/.test(deployGid ?? '')) {
+      fail('bootstrap deployment identity is malformed');
+    }
+    let attestation;
+    try {
+      let source;
+      if (mode === 'prepare-bootstrap-json') {
+        if (!/^\/bundle\/[A-Za-z0-9._-]+\.json$/.test(encodedAttestation ?? '')) {
+          fail('bootstrap attestation path is unsafe');
+        }
+        safeFile(encodedAttestation, {
+          uid: Number(deployUid),
+          gid: Number(deployGid),
+          mode: 0o600,
+        });
+        source = readFileSync(encodedAttestation, 'utf8');
+      } else {
+        source = Buffer.from(encodedAttestation ?? '', 'base64').toString('utf8');
+        if (Buffer.from(source, 'utf8').toString('base64') !== encodedAttestation) {
+          fail('bootstrap attestation is not canonical base64');
+        }
+      }
+      attestation = JSON.parse(source);
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        error.message.startsWith('runtime secret provisioning refused:')
+      ) {
+        throw error;
+      }
+      fail('bootstrap attestation is malformed');
+    }
+    result = prepareBootstrap(directory, {
+      directory: { uid: 0, gid: Number(deployGid), mode: 0o750 },
+      staging: { uid: 0, gid: Number(deployGid), mode: 0o640 },
+      deployUid: Number(deployUid),
+      deployGid: Number(deployGid),
+      attestation,
+    });
   } else if (mode === 'verify-prepared') result = verifyPrepared(directory);
   else if (mode === 'build-compose') {
     const [activePath, reviewedPath, outputPath, deployUid, deployGid] = args;
@@ -774,12 +1243,29 @@ function cli() {
       Number(deployUid),
       Number(deployGid),
     );
-  } else if (mode === 'recover-marker') result = recoverMarker(directory);
+  } else if (mode === 'verify-bootstrap-prepared') result = verifyBootstrapPrepared(directory);
+  else if (mode === 'recover-marker') result = recoverMarker(directory);
   else if (mode === 'advance-phase') result = advancePhase(directory, args[0], args[1]);
-  else if (mode === 'restore-files') result = restoreFiles(directory);
+  else if (mode === 'advance-bootstrap-phase') {
+    result = advanceBootstrapPhase(directory, args[0], args[1]);
+  } else if (mode === 'restore-files') result = restoreFiles(directory);
+  else if (mode === 'restore-bootstrap-files') result = restoreBootstrapFiles(directory);
   else if (mode === 'complete-rollback') result = completeRollback(directory);
+  else if (mode === 'complete-bootstrap-rollback') result = completeBootstrapRollback(directory);
   else if (mode === 'finalize') result = finalize(directory, args[0]);
-  else if (mode === 'read-field') {
+  else if (mode === 'finalize-bootstrap') result = finalizeBootstrap(directory, args[0]);
+  else if (mode === 'verify-bootstrap-finalized') result = verifyBootstrapFinalized(directory);
+  else if (mode === 'read-bootstrap-finalized-field') {
+    const field = args[0];
+    const value = readBootstrapFinalizedField(directory, field);
+    process.stdout.write(`runtime-secret-transition field=${field} value=${value} status=passed\n`);
+    return;
+  } else if (mode === 'read-bootstrap-field') {
+    const field = args[0];
+    const value = readBootstrapField(directory, field);
+    process.stdout.write(`runtime-secret-transition field=${field} value=${value} status=passed\n`);
+    return;
+  } else if (mode === 'read-field') {
     const field = args[0];
     const value = readField(directory, field);
     process.stdout.write(`runtime-secret-transition field=${field} value=${value} status=passed\n`);

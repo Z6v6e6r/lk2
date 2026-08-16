@@ -54,7 +54,8 @@ describe('runtime-secret transition delivery contract', () => {
     expect(helper).toContain(
       'staging: { uid: Number(deployUid), gid: Number(deployGid), mode: 0o600 }',
     );
-    expect(helper).not.toContain('staging: { uid: 0, gid: Number(deployGid), mode: 0o640 }');
+    expect(controller).toContain('run_helper prepare ');
+    expect(controller).not.toContain('prepare-bootstrap');
   });
 
   it('stops the one-key ticket boundary before starting realtime then API', () => {
