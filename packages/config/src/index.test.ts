@@ -4,7 +4,7 @@ import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { loadConfig } from './index.js';
+import { loadApiConfig, loadConfig, loadRealtimeConfig } from './index.js';
 
 const validEnvironment = {
   APP_ENV: 'ci',
@@ -738,5 +738,69 @@ describe('loadConfig', () => {
         PERSONAL_DATA_POLICY_VERSION: '2026-07-18',
       }),
     ).toThrow('COMMUNITIES_READ_MODE=mock is forbidden in production');
+  });
+
+  it('loads the isolated realtime contour with sentinels for shared config shape', () => {
+    const config = loadRealtimeConfig({
+      ...validEnvironment,
+      APP_ENV: 'staging',
+      JWT_ACCESS_SECRET: undefined,
+      JWT_REFRESH_SECRET: undefined,
+      JWT_REALTIME_SECRET: 'staging-realtime-key-7H3k9Q2m5V8x4N6p',
+    });
+
+    expect(config.JWT_REALTIME_SECRET).toBe('staging-realtime-key-7H3k9Q2m5V8x4N6p');
+    expect(config.JWT_ACCESS_SECRET).toBe('x'.repeat(32));
+    expect(config.JWT_REFRESH_SECRET).toBe('y'.repeat(32));
+  });
+
+  it('rejects a realtime contour without its dedicated key', () => {
+    expect(() =>
+      loadRealtimeConfig({
+        ...validEnvironment,
+        APP_ENV: 'staging',
+        JWT_ACCESS_SECRET: undefined,
+        JWT_REFRESH_SECRET: undefined,
+      }),
+    ).toThrow('Realtime runtime requires JWT_REALTIME_SECRET');
+  });
+
+  it('rejects a reused or placeholder dedicated realtime key', () => {
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        JWT_REALTIME_SECRET: validEnvironment.JWT_ACCESS_SECRET,
+      }),
+    ).toThrow('Realtime JWT secret must be distinct and non-placeholder');
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        APP_ENV: 'staging',
+        JWT_REALTIME_SECRET: 'replace-realtime-secret-at-least-32-characters',
+      }),
+    ).toThrow('Realtime JWT secret must be distinct and non-placeholder');
+  });
+
+  it('rejects leaked API signing secrets in the staging realtime contour', () => {
+    expect(() =>
+      loadRealtimeConfig({
+        ...validEnvironment,
+        APP_ENV: 'staging',
+        JWT_REALTIME_SECRET: 'staging-realtime-key-7H3k9Q2m5V8x4N6p',
+      }),
+    ).toThrow('Realtime runtime must not receive JWT_ACCESS_SECRET or JWT_REFRESH_SECRET');
+  });
+
+  it('requires the dedicated realtime key before a staging API can start', () => {
+    expect(() => loadApiConfig({ ...validEnvironment, APP_ENV: 'staging' })).toThrow(
+      'API runtime requires JWT_REALTIME_SECRET',
+    );
+    expect(
+      loadApiConfig({
+        ...validEnvironment,
+        APP_ENV: 'staging',
+        JWT_REALTIME_SECRET: 'staging-realtime-key-7H3k9Q2m5V8x4N6p',
+      }).JWT_REALTIME_SECRET,
+    ).toBe('staging-realtime-key-7H3k9Q2m5V8x4N6p');
   });
 });

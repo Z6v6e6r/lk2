@@ -261,9 +261,11 @@ export async function buildRealtimeApp(options: {
             ) {
               throw new Error('Authentication message invalid');
             }
+            const realtimeSecret = options.config.JWT_REALTIME_SECRET;
+            if (!realtimeSecret) throw new Error('Realtime signing key unavailable');
             const { payload } = await jwtVerify(
               message.ticket,
-              new TextEncoder().encode(options.config.JWT_ACCESS_SECRET),
+              new TextEncoder().encode(realtimeSecret),
               {
                 issuer: options.config.JWT_ISSUER,
                 audience: options.config.JWT_REALTIME_AUDIENCE,

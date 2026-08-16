@@ -30,7 +30,7 @@ export class RedisRealtimeTicketIssuer implements RealtimeTicketIssuer {
     private readonly redis: Pick<Redis, 'set' | 'del'>,
     private readonly config: Pick<
       AppConfig,
-      'JWT_ACCESS_SECRET' | 'JWT_ISSUER' | 'JWT_REALTIME_AUDIENCE'
+      'JWT_REALTIME_SECRET' | 'JWT_ISSUER' | 'JWT_REALTIME_AUDIENCE'
     >,
   ) {}
 
@@ -40,6 +40,9 @@ export class RedisRealtimeTicketIssuer implements RealtimeTicketIssuer {
     readonly userId: string;
     readonly sessionId: string;
   }): Promise<RealtimeTicketResult> {
+    if (!this.config.JWT_REALTIME_SECRET) {
+      throw new Error('REALTIME_TICKET_SIGNING_KEY_UNAVAILABLE');
+    }
     const ticketId = randomUUID();
     const issuedAt = Math.floor(Date.now() / 1_000);
     const expiresAtSeconds = issuedAt + REALTIME_TICKET_TTL_SECONDS;
@@ -65,7 +68,7 @@ export class RedisRealtimeTicketIssuer implements RealtimeTicketIssuer {
       .setJti(ticketId)
       .setIssuedAt(issuedAt)
       .setExpirationTime(expiresAtSeconds)
-      .sign(new TextEncoder().encode(this.config.JWT_ACCESS_SECRET));
+      .sign(new TextEncoder().encode(this.config.JWT_REALTIME_SECRET));
 
     return { ticketId, ticket, expiresAt: new Date(expiresAtSeconds * 1_000).toISOString() };
   }
