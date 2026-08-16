@@ -1,0 +1,310 @@
+name: Communities staged migration rehearsal
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_main_sha:
+        description: Exact 40-character main SHA containing the reviewed staged rehearsal
+        required: true
+        type: string
+      expected_migrator_digest:
+        description: Exact immutable phub-migrator sha256 digest in the root-owned rehearsal release file
+        required: true
+        type: string
+      expected_rehearsal_release_sha:
+        description: SHA-256 of the separately reviewed root-owned candidate rehearsal release file
+        required: true
+        type: string
+      confirmation:
+        description: Type REHEARSE_COMMUNITIES_STAGING_29_V1
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: staging
+  cancel-in-progress: false
+
+jobs:
+  validate-request:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - env:
+          CONFIRMATION: ${{ inputs.confirmation }}
+          EVENT_SHA: ${{ github.sha }}
+          EXPECTED_MAIN_SHA: ${{ inputs.expected_main_sha }}
+          EXPECTED_MIGRATOR_DIGEST: ${{ inputs.expected_migrator_digest }}
+          EXPECTED_RELEASE_ENV_SHA: ${{ inputs.expected_rehearsal_release_sha }}
+          REQUEST_REF: ${{ github.ref }}
+        run: |
+          set -eu
+          test "$REQUEST_REF" = refs/heads/main || {
+            echo '::error::Communities staged rehearsal is allowed only from main.'
+            exit 1
+          }
+          case "$EXPECTED_MAIN_SHA" in ''|*[!0-9a-f]*) exit 1 ;; esac
+          test "${#EXPECTED_MAIN_SHA}" -eq 40 && test "$EXPECTED_MAIN_SHA" = "$EVENT_SHA" || {
+            echo '::error::Expected main SHA must exactly match the workflow event SHA.'
+            exit 1
+          }
+          case "$EXPECTED_MIGRATOR_DIGEST" in sha256:[0-9a-f]*) ;; *) exit 1 ;; esac
+          test "${#EXPECTED_MIGRATOR_DIGEST}" -eq 71 || exit 1
+          case "$EXPECTED_RELEASE_ENV_SHA" in ''|*[!0-9a-f]*) exit 1 ;; esac
+          test "${#EXPECTED_RELEASE_ENV_SHA}" -eq 64 || exit 1
+          test "$CONFIRMATION" = REHEARSE_COMMUNITIES_STAGING_29_V1 || {
+            echo '::error::The exact staged rehearsal confirmation is required.'
+            exit 1
+          }
+
+  inventory:
+    needs: validate-request
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: staging
+    outputs:
+      active_release: ${{ steps.verify.outputs.active_release }}
+      source_ledger_sha: ${{ steps.verify.outputs.source_ledger_sha }}
+      phase_binding_sha: ${{ steps.verify.outputs.phase_binding_sha }}
+      manifest_sha: ${{ steps.verify.outputs.manifest_sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Join the staging tailnet
+        uses: tailscale/github-action@306e68a486fd2350f2bfc3b19fcd143891a4a2d8 # v4
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+          ping: ${{ secrets.STAGING_HOST }}
+      - name: Configure restricted inventory SSH
+        env:
+          INVENTORY_KEY: ${{ secrets.STAGING_PREFLIGHT_INVENTORY_KEY }}
+          KNOWN_HOSTS: ${{ secrets.STAGING_PREFLIGHT_KNOWN_HOSTS }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$INVENTORY_KEY" > ~/.ssh/communities_inventory_ed25519
+          chmod 600 ~/.ssh/communities_inventory_ed25519
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+      - name: Capture fresh read-only target evidence
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+        run: |
+          set -eu
+          timeout --signal=TERM --kill-after=30s 10m \
+            ssh -i ~/.ssh/communities_inventory_ed25519 \
+            -o IdentitiesOnly=yes -o ServerAliveInterval=10 -o ServerAliveCountMax=2 \
+            "phub-preflight@$HOST" INVENTORY_COMMUNITIES_STAGING \
+            > communities-staged-inventory.evidence \
+            2> communities-staged-inventory.stderr
+          test -s communities-staged-inventory.evidence
+          test ! -s communities-staged-inventory.stderr
+          rm -f communities-staged-inventory.stderr
+      - name: Verify exact inventory, 29-file pending set and phase binding
+        id: verify
+        env:
+          CANDIDATE_SHA: ${{ github.sha }}
+          EXPECTED_DATABASE: ${{ secrets.STAGING_PREFLIGHT_DATABASE }}
+          EXPECTED_MIGRATOR_DIGEST: ${{ inputs.expected_migrator_digest }}
+          EXPECTED_RELEASE_ENV_SHA: ${{ inputs.expected_rehearsal_release_sha }}
+          EXPECTED_SYSTEM_IDENTIFIER: ${{ secrets.STAGING_PREFLIGHT_SYSTEM_IDENTIFIER }}
+        run: |
+          set -eu
+          remote_script_sha="$(sha256sum deploy/jetson/inspect-communities-staging-target.sh | cut -d ' ' -f 1)"
+          backup_script_sha="$(sha256sum deploy/jetson/create-communities-staging-backup.sh | cut -d ' ' -f 1)"
+          restore_helper_sha="$(sha256sum deploy/jetson/verify-postgres-backup-restore.sh | cut -d ' ' -f 1)"
+          COMMUNITIES_STAGING_EVIDENCE_FILE="$GITHUB_WORKSPACE/communities-staged-inventory.evidence" \
+          COMMUNITIES_STAGING_CANDIDATE_RELEASE="$CANDIDATE_SHA" \
+          COMMUNITIES_STAGING_EXPECTED_REMOTE_SCRIPT_SHA="$remote_script_sha" \
+          COMMUNITIES_STAGING_EXPECTED_BACKUP_SCRIPT_SHA="$backup_script_sha" \
+          COMMUNITIES_STAGING_EXPECTED_RESTORE_HELPER_SHA="$restore_helper_sha" \
+          COMMUNITIES_STAGING_EXPECTED_DATABASE="$EXPECTED_DATABASE" \
+          COMMUNITIES_STAGING_EXPECTED_SYSTEM_IDENTIFIER="$EXPECTED_SYSTEM_IDENTIFIER" \
+            node --import tsx scripts/verify-communities-staging-preflight.ts \
+              > communities-staged-inventory-report.json
+          find packages/database/migrations -maxdepth 1 -type f -name '*.sql' -print \
+            | LC_ALL=C sort \
+            | while IFS= read -r migration; do
+                checksum_line="$(sha256sum "$migration")"
+                printf '%s|%s\n' "${checksum_line%% *}" "$(basename "$migration")"
+              done > communities-staged-migrations.manifest
+          manifest_sha="$(sha256sum communities-staged-migrations.manifest | cut -d ' ' -f 1)"
+          EXPECTED_MANIFEST_SHA="$manifest_sha" node --import tsx --input-type=module - \
+            > communities-staged-inventory.outputs <<'NODE'
+          import { createHash } from 'node:crypto';
+          import { readFileSync } from 'node:fs';
+          import { COMMUNITIES_STAGED_REHEARSAL_PENDING_FILENAMES } from './packages/database/src/communities-staged-rehearsal-policy.ts';
+          const report = JSON.parse(readFileSync('communities-staged-inventory-report.json', 'utf8'));
+          if (JSON.stringify(report.missingMigrationFilenames) !== JSON.stringify(COMMUNITIES_STAGED_REHEARSAL_PENDING_FILENAMES)) {
+            throw new Error('COMMUNITIES_STAGED_REHEARSAL_PENDING_SET_MISMATCH');
+          }
+          const fields = [
+            report.activeRelease,
+            report.appliedLedgerSha256,
+            report.targetDatabase,
+            report.systemIdentifier,
+            process.env.CANDIDATE_SHA,
+            process.env.EXPECTED_MIGRATOR_DIGEST,
+            process.env.EXPECTED_RELEASE_ENV_SHA,
+            process.env.EXPECTED_MANIFEST_SHA,
+          ];
+          const binding = createHash('sha256').update(`${fields.join('\n')}\n`).digest('hex');
+          process.stdout.write(`active_release=${report.activeRelease}\n`);
+          process.stdout.write(`source_ledger_sha=${report.appliedLedgerSha256}\n`);
+          process.stdout.write(`phase_binding_sha=${binding}\n`);
+          process.stdout.write(`manifest_sha=${process.env.EXPECTED_MANIFEST_SHA}\n`);
+          NODE
+          cat communities-staged-inventory.outputs >> "$GITHUB_OUTPUT"
+      - name: Publish redacted inventory and manifest evidence
+        if: ${{ success() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: communities-staged-inventory-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            communities-staged-inventory.evidence
+            communities-staged-inventory-report.json
+            communities-staged-migrations.manifest
+          if-no-files-found: error
+          retention-days: 30
+      - name: Remove raw evidence and record a fixed failure marker
+        if: ${{ failure() }}
+        run: |
+          rm -f communities-staged-inventory.evidence communities-staged-inventory.stderr \
+            communities-staged-inventory-report.json communities-staged-migrations.manifest \
+            communities-staged-inventory.outputs
+          printf '%s\n' '{"outcome":"COMMUNITIES_STAGED_INVENTORY_FAILED","authorizesMigration":false,"authorizesDeploy":false,"authorizesActivation":false}' \
+            > communities-staged-inventory-failure.json
+      - if: ${{ failure() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: communities-staged-inventory-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: communities-staged-inventory-failure.json
+          if-no-files-found: error
+          retention-days: 30
+
+  rehearse-clone:
+    needs: [validate-request, inventory]
+    runs-on: ubuntu-latest
+    timeout-minutes: 210
+    environment: staging-rehearsal
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Join the staging tailnet
+        uses: tailscale/github-action@306e68a486fd2350f2bfc3b19fcd143891a4a2d8 # v4
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+          ping: ${{ secrets.STAGING_HOST }}
+      - name: Configure dedicated staged rehearsal SSH
+        env:
+          KNOWN_HOSTS: ${{ secrets.STAGING_REHEARSAL_KNOWN_HOSTS }}
+          REHEARSAL_KEY: ${{ secrets.STAGING_REHEARSAL_KEY }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$REHEARSAL_KEY" > ~/.ssh/communities_rehearsal_ed25519
+          chmod 600 ~/.ssh/communities_rehearsal_ed25519
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+      - name: Recompute phase binding and run only the isolated clone rehearsal
+        env:
+          EXPECTED_ACTIVE_RELEASE: ${{ needs.inventory.outputs.active_release }}
+          EXPECTED_DATABASE: ${{ secrets.STAGING_REHEARSAL_DATABASE }}
+          EXPECTED_MANIFEST_SHA: ${{ needs.inventory.outputs.manifest_sha }}
+          EXPECTED_MIGRATOR_DIGEST: ${{ inputs.expected_migrator_digest }}
+          EXPECTED_RELEASE_ENV_SHA: ${{ inputs.expected_rehearsal_release_sha }}
+          EXPECTED_PHASE_BINDING_SHA: ${{ needs.inventory.outputs.phase_binding_sha }}
+          EXPECTED_SOURCE_LEDGER_SHA: ${{ needs.inventory.outputs.source_ledger_sha }}
+          EXPECTED_SYSTEM_IDENTIFIER: ${{ secrets.STAGING_REHEARSAL_SYSTEM_IDENTIFIER }}
+          HOST: ${{ secrets.STAGING_HOST }}
+        run: |
+          set -eu
+          find packages/database/migrations -maxdepth 1 -type f -name '*.sql' -print \
+            | LC_ALL=C sort \
+            | while IFS= read -r migration; do
+                checksum_line="$(sha256sum "$migration")"
+                printf '%s|%s\n' "${checksum_line%% *}" "$(basename "$migration")"
+              done > communities-staged-migrations.manifest
+          actual_manifest_sha="$(sha256sum communities-staged-migrations.manifest | cut -d ' ' -f 1)"
+          test "$actual_manifest_sha" = "$EXPECTED_MANIFEST_SHA"
+          actual_binding_sha="$({
+            printf '%s\n' "$EXPECTED_ACTIVE_RELEASE"
+            printf '%s\n' "$EXPECTED_SOURCE_LEDGER_SHA"
+            printf '%s\n' "$EXPECTED_DATABASE"
+            printf '%s\n' "$EXPECTED_SYSTEM_IDENTIFIER"
+            printf '%s\n' "$GITHUB_SHA"
+            printf '%s\n' "$EXPECTED_MIGRATOR_DIGEST"
+            printf '%s\n' "$EXPECTED_RELEASE_ENV_SHA"
+            printf '%s\n' "$actual_manifest_sha"
+          } | sha256sum | cut -d ' ' -f 1)"
+          test "$actual_binding_sha" = "$EXPECTED_PHASE_BINDING_SHA" || {
+            echo '::error::Rehearsal environment does not match the fresh inventory phase binding.'
+            exit 1
+          }
+          wrapper_sha="$(sha256sum deploy/jetson/run-communities-staged-migration-rehearsal.sh | cut -d ' ' -f 1)"
+          rehearsal_sha="$(sha256sum deploy/jetson/rehearse-media-migration.sh | cut -d ' ' -f 1)"
+          ledger_verifier_sha="$(sha256sum deploy/jetson/verify-media-migration-ledger.sh | cut -d ' ' -f 1)"
+          restore_helper_sha="$(sha256sum deploy/jetson/verify-postgres-backup-restore.sh | cut -d ' ' -f 1)"
+          compose_sha="$(sha256sum deploy/compose.staging.yaml | cut -d ' ' -f 1)"
+          manifest_base64="$(base64 -w 0 communities-staged-migrations.manifest)"
+          timeout --signal=TERM --kill-after=30s 190m \
+            ssh -i ~/.ssh/communities_rehearsal_ed25519 \
+            -o IdentitiesOnly=yes -o ServerAliveInterval=10 -o ServerAliveCountMax=2 \
+            "phub-preflight@$HOST" \
+            "REHEARSE_COMMUNITIES_STAGING_29_V1 $EXPECTED_ACTIVE_RELEASE $EXPECTED_SOURCE_LEDGER_SHA $EXPECTED_DATABASE $EXPECTED_SYSTEM_IDENTIFIER $GITHUB_SHA $EXPECTED_MIGRATOR_DIGEST $EXPECTED_RELEASE_ENV_SHA $compose_sha $actual_manifest_sha $manifest_base64 $wrapper_sha $rehearsal_sha $ledger_verifier_sha $restore_helper_sha" \
+            > communities-staged-rehearsal.evidence \
+            2> communities-staged-rehearsal.stderr
+          test -s communities-staged-rehearsal.evidence
+          test ! -s communities-staged-rehearsal.stderr
+          rm -f communities-staged-rehearsal.stderr
+          test "$(wc -l < communities-staged-rehearsal.evidence | tr -d ' ')" -eq 29
+          grep -Fx "META|wrapperSha|$wrapper_sha" communities-staged-rehearsal.evidence
+          grep -Fx "META|rehearsalScriptSha|$rehearsal_sha" communities-staged-rehearsal.evidence
+          grep -Fx "META|ledgerVerifierSha|$ledger_verifier_sha" communities-staged-rehearsal.evidence
+          grep -Fx "META|restoreHelperSha|$restore_helper_sha" communities-staged-rehearsal.evidence
+          grep -Fx "META|activeRelease|$EXPECTED_ACTIVE_RELEASE" communities-staged-rehearsal.evidence
+          grep -Fx "META|sourceLedgerSha|$EXPECTED_SOURCE_LEDGER_SHA" communities-staged-rehearsal.evidence
+          grep -Fx "META|targetDatabase|$EXPECTED_DATABASE" communities-staged-rehearsal.evidence
+          grep -Fx "META|systemIdentifier|$EXPECTED_SYSTEM_IDENTIFIER" communities-staged-rehearsal.evidence
+          grep -Fx "META|candidateSha|$GITHUB_SHA" communities-staged-rehearsal.evidence
+          grep -Fx "META|migratorDigest|$EXPECTED_MIGRATOR_DIGEST" communities-staged-rehearsal.evidence
+          grep -Fx "META|releaseEnvSha|$EXPECTED_RELEASE_ENV_SHA" communities-staged-rehearsal.evidence
+          grep -Fx "META|composeSha|$compose_sha" communities-staged-rehearsal.evidence
+          grep -Fx "META|manifestSha|$actual_manifest_sha" communities-staged-rehearsal.evidence
+          grep -Fx 'META|rehearsalStatus|passed' communities-staged-rehearsal.evidence
+          grep -Fx 'META|authorizesSharedMigration|false' communities-staged-rehearsal.evidence
+          grep -Fx 'META|authorizesDeploy|false' communities-staged-rehearsal.evidence
+          grep -Fx 'META|authorizesImport|false' communities-staged-rehearsal.evidence
+          grep -Fx 'META|authorizesActivation|false' communities-staged-rehearsal.evidence
+          grep -Eq '^META\|backupPath\|/var/lib/phub-preflight/backups/postgres-communities-rehearsal-[0-9]{8}T[0-9]{6}Z-[0-9]+\.dump$' communities-staged-rehearsal.evidence
+          grep -Eq '^META\|backupSha\|[0-9a-f]{64}$' communities-staged-rehearsal.evidence
+          grep -Eq '^META\|backupBytes\|[1-9][0-9]*$' communities-staged-rehearsal.evidence
+          grep -Eq '^META\|dumpSeconds\|(0|[1-9][0-9]*)$' communities-staged-rehearsal.evidence
+          grep -Eq '^META\|restoreDatabase\|phub_restore_[0-9]+_[0-9]+$' communities-staged-rehearsal.evidence
+          grep -Eq '^communities_profile_privacy_audit missing_before=[0-9]+ missing_after=0 authority=postgres_superuser status=passed$' communities-staged-rehearsal.evidence
+          test "$(grep -c '^community_media_quota_index_measurement .* rollback=confirmed status=passed$' communities-staged-rehearsal.evidence)" -eq 4
+          grep -Eq '^communities_staged_migration_rehearsal database=phub_restore_[0-9]+_[0-9]+ pre_foundation=16 foundation=5 post_foundation=8 quota_index_measurements=4 source_ledger_sha=[0-9a-f]{64} cleanup=confirmed status=passed$' communities-staged-rehearsal.evidence
+          cat communities-staged-rehearsal.evidence
+      - name: Publish redacted successful rehearsal evidence
+        if: ${{ success() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: communities-staged-rehearsal-${{ github.run_id }}-${{ github.run_attempt }}
+          path: communities-staged-rehearsal.evidence
+          if-no-files-found: error
+          retention-days: 30
+      - name: Remove raw output and record a fixed failure marker
+        if: ${{ failure() }}
+        run: |
+          rm -f communities-staged-rehearsal.evidence communities-staged-rehearsal.stderr \
+            communities-staged-migrations.manifest
+          printf '%s\n' '{"outcome":"COMMUNITIES_STAGED_REHEARSAL_FAILED","authorizesSharedMigration":false,"authorizesDeploy":false,"authorizesImport":false,"authorizesActivation":false}' \
+            > communities-staged-rehearsal-failure.json
+      - if: ${{ failure() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: communities-staged-rehearsal-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: communities-staged-rehearsal-failure.json
+          if-no-files-found: error
+          retention-days: 30

@@ -26,6 +26,8 @@ app_root="${PHUB_APP_ROOT:-/opt/phub}"
 backup_root="${PHUB_BACKUP_ROOT:-/opt/phub/backups}"
 marker_root="${PHUB_RESTORE_MARKER_ROOT:-$backup_root}"
 release_env="$app_root/release.env"
+ledger_verifier="${PHUB_MEDIA_LEDGER_VERIFIER:-$app_root/verify-media-migration-ledger.sh}"
+compose_file="${PHUB_REHEARSAL_COMPOSE_FILE:-}"
 cd "$app_root"
 
 case "$backup_root" in
@@ -111,7 +113,12 @@ case "$restore_suffix" in
 esac
 
 compose() {
-  docker compose --env-file infrastructure.env --env-file "$release_env" "$@"
+  if test -n "$compose_file"; then
+    docker compose --env-file infrastructure.env --env-file "$app_root/release.env" \
+      --env-file "$release_env" -f "$compose_file" "$@"
+  else
+    docker compose --env-file infrastructure.env --env-file "$release_env" "$@"
+  fi
 }
 
 infrastructure() {
@@ -134,7 +141,7 @@ test "$restore_database" != "$shared_database" || fail 'restore database must di
 
 if test "$staged_rehearsal" = true; then
   compose pull migrator
-  staged_migrator_image="$(compose config --images | grep -F "/phub-migrator@$COMMUNITIES_STAGED_REHEARSAL_EXPECTED_MIGRATOR_DIGEST" || true)"
+  staged_migrator_image="$(compose --profile migration config --images | grep -F "/phub-migrator@$COMMUNITIES_STAGED_REHEARSAL_EXPECTED_MIGRATOR_DIGEST" || true)"
   test -n "$staged_migrator_image" || fail 'staged migrator image is not digest-pinned in Compose'
   test "$(printf '%s\n' "$staged_migrator_image" | wc -l | tr -d ' ')" -eq 1 ||
     fail 'staged migrator image resolution is ambiguous'
@@ -457,7 +464,9 @@ fi
 run_clone_role_boundary post
 run_clone_runtime_probe
 
-PHUB_APP_ROOT="$app_root" sh "$app_root/verify-media-migration-ledger.sh" \
+test -f "$ledger_verifier" && test ! -L "$ledger_verifier" ||
+  fail 'media migration ledger verifier is absent or unsafe'
+PHUB_APP_ROOT="$app_root" sh "$ledger_verifier" \
   "$manifest_base64" "$restore_database"
 if test "$staged_rehearsal" = true; then
   measure_community_media_quota_indexes
