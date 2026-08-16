@@ -15,6 +15,7 @@ const config = loadConfig({
   JWT_ISSUER: 'phub-identity',
   JWT_AUDIENCE: 'phub-api',
   JWT_ACCESS_SECRET: 'test-access-secret-at-least-32-characters',
+  JWT_REALTIME_SECRET: 'test-realtime-secret-at-least-32-characters',
   JWT_REFRESH_SECRET: 'test-refresh-secret-at-least-32-characters',
 });
 const tenantId = '86afbe01-0318-4dd2-bc25-303b7bf0d430';
@@ -32,6 +33,22 @@ function rawDataToText(raw: RawData): string {
 }
 
 async function ticket(): Promise<string> {
+  return new SignJWT({
+    scope: 'realtime.connect',
+    tenantId,
+    tenantKey: 'local-padel',
+    sid: sessionId,
+  })
+    .setProtectedHeader({ alg: 'HS256' })
+    .setIssuer(config.JWT_ISSUER)
+    .setAudience(config.JWT_REALTIME_AUDIENCE)
+    .setSubject(userId)
+    .setJti(ticketId)
+    .setExpirationTime('30s')
+    .sign(new TextEncoder().encode(config.JWT_REALTIME_SECRET));
+}
+
+async function accessKeyTicket(): Promise<string> {
   return new SignJWT({
     scope: 'realtime.connect',
     tenantId,
@@ -127,6 +144,32 @@ describe('realtime messaging gateway', () => {
     ).resolves.toBe(1);
     await expect(projected).resolves.toMatchObject({ type: 'message.created', sequence: 4 });
     expect(authorizeRealtimeConnection).toHaveBeenCalledTimes(3);
+  });
+
+  it('rejects a realtime ticket signed with the API access key', async () => {
+    const consume = vi.fn();
+    const app = await buildRealtimeApp({
+      config,
+      logger: createLogger('realtime-test', 'silent'),
+      redis: { ping: vi.fn().mockResolvedValue('PONG') },
+      databaseReady: vi.fn().mockResolvedValue(true),
+      rabbitReady: () => true,
+      ticketConsumer: { consume },
+      messagingRepository: {
+        authorizeRealtimeConnection: vi.fn(),
+        authorizeRealtimeSubscription: vi.fn(),
+        listRealtimeRecipientUserIds: vi.fn(),
+      },
+    });
+    apps.push(app);
+    await app.ready();
+    const socket = await app.injectWS('/realtime/v1/local-padel');
+    sockets.push(socket);
+    const closed = new Promise<number>((resolve) => socket.once('close', resolve));
+    socket.send(JSON.stringify({ type: 'authenticate', ticket: await accessKeyTicket() }));
+
+    await expect(closed).resolves.toBe(4401);
+    expect(consume).not.toHaveBeenCalled();
   });
 
   it('does not register a socket closed while connection authority is pending', async () => {

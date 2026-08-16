@@ -13,6 +13,11 @@ x-runtime: &runtime
   networks:
     - application
 
+x-realtime-runtime: &realtime-runtime
+  <<: *runtime
+  env_file:
+    - path: ${REALTIME_RUNTIME_ENV_FILE:-/etc/phub/realtime.env}
+
 x-object-storage: &object-storage
   S3_ENDPOINT: http://minio:9000
   S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:?S3_PUBLIC_ENDPOINT is required}
@@ -26,6 +31,7 @@ x-object-storage: &object-storage
 services:
   web:
     <<: *runtime
+    env_file: []
     image: ${REGISTRY}/phub-web@${WEB_IMAGE_DIGEST}
     healthcheck:
       test: ['CMD-SHELL', 'wget -q -O /dev/null http://127.0.0.1:8080/healthz']
@@ -65,7 +71,7 @@ services:
       start_period: 30s
 
   realtime:
-    <<: *runtime
+    <<: *realtime-runtime
     image: ${REGISTRY}/phub-realtime@${REALTIME_IMAGE_DIGEST}
     ports:
       - '127.0.0.1:3001:3001'
@@ -93,6 +99,7 @@ services:
 
   migrator:
     <<: *runtime
+    env_file: []
     image: ${REGISTRY}/phub-migrator@${MIGRATOR_IMAGE_DIGEST}
     restart: 'no'
     profiles: [migration]

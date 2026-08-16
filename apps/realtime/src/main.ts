@@ -1,5 +1,5 @@
 import { realtimeTicketRedisKey } from '@phub/auth';
-import { loadConfig } from '@phub/config';
+import { loadRealtimeConfig } from '@phub/config';
 import { checkDatabaseReady, createDatabasePool, createMessagingRepository } from '@phub/database';
 import { createLogger, startTelemetry } from '@phub/observability';
 import { connect, type ChannelModel, type ConfirmChannel } from 'amqplib';
@@ -9,7 +9,7 @@ import { buildRealtimeApp } from './app.js';
 import { registerMessagingRealtimeConsumer } from './message-consumer.js';
 import { rabbitReconnectDelayMs } from './rabbit-reconnect-policy.js';
 
-const config = loadConfig();
+const config = loadRealtimeConfig();
 const logger = createLogger('realtime', config.LOG_LEVEL, process.env.RELEASE);
 const telemetry = startTelemetry({
   serviceName: 'realtime',
