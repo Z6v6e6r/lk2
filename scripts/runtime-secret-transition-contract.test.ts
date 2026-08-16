@@ -46,8 +46,16 @@ describe('runtime-secret transition delivery contract', () => {
     expect(controller).toContain('--read-only');
     expect(controller).toContain('--cap-drop ALL');
     expect(controller).toContain('--cap-add CHOWN');
+    expect(controller).toContain('--cap-add DAC_READ_SEARCH');
+    expect(controller).toContain('--cap-add FOWNER');
+    expect(controller).not.toContain('--cap-add DAC_OVERRIDE');
     expect(controller).toContain('--input-type=module -');
     expect(controller).not.toContain('--privileged');
+    expect(helper).toContain(
+      'staging: { uid: Number(deployUid), gid: Number(deployGid), mode: 0o600 }',
+    );
+    expect(controller).toContain('run_helper prepare ');
+    expect(controller).not.toContain('prepare-bootstrap');
   });
 
   it('stops the one-key ticket boundary before starting realtime then API', () => {
@@ -104,6 +112,41 @@ describe('runtime-secret transition delivery contract', () => {
     expect(helper).toContain("'PROFILE_PHOTO_CLIENT_SYNC_ENABLED'");
     expect(helper).toContain("'COMMUNITY_LOGO_COMPATIBILITY_BACKFILL_ENABLED'");
     expect(helper).toContain('candidate staging flag ${key} is unsafe');
+  });
+
+  it('generates a minimal active-Compose candidate only for a new transition', () => {
+    const recover = controller.indexOf('if test "$operation" = recover');
+    const finalize = controller.indexOf('if test "$operation" = finalize', recover);
+    const build = controller.indexOf('run_compose_helper >/dev/null', finalize);
+    const selectGenerated = controller.indexOf(
+      'candidate_compose=$generated_candidate_compose',
+      build,
+    );
+    const render = controller.indexOf('active_render=$(mktemp)', selectGenerated);
+    expect(recover).toBeGreaterThan(0);
+    expect(finalize).toBeGreaterThan(recover);
+    expect(build).toBeGreaterThan(finalize);
+    expect(selectGenerated).toBeGreaterThan(build);
+    expect(render).toBeGreaterThan(selectGenerated);
+    const buildOnlyHelper = controller.slice(
+      controller.indexOf('compose_helper_raw()'),
+      controller.indexOf('run_compose_helper()'),
+    );
+    expect(buildOnlyHelper).toContain('--user "$deploy_uid:$deploy_gid"');
+    expect(buildOnlyHelper).toContain('--cap-drop ALL');
+    expect(buildOnlyHelper).not.toContain('--cap-add');
+    expect(buildOnlyHelper).not.toContain('src="$secret_root"');
+    expect(buildOnlyHelper).toContain(
+      '--mount type=bind,src="$app_root/compose.yaml",dst=/active-compose.yaml,readonly',
+    );
+    expect(buildOnlyHelper).toContain(
+      '--mount type=bind,src="$candidate_tool_directory",dst=/reviewed',
+    );
+    expect(buildOnlyHelper).not.toContain('dst=/reviewed,rw');
+    expect(controller).not.toContain('dst=/target,rw');
+    expect(controller).toContain('stat -c \'%h:%u:%g:%a\' "$generated_candidate_compose"');
+    expect(helper).toContain('buildRuntimeSecretComposeCandidate');
+    expect(helper).toContain('active Compose realtime service already contains env_file');
   });
 
   it('rolls back a rejected preflight without recreating serving containers', () => {

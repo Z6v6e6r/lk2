@@ -14,6 +14,15 @@ candidate_compose=$4
 helper_script=$5
 app_root=${PHUB_APP_ROOT:-/opt/phub}
 secret_root=${PHUB_SECRET_ROOT:-/etc/phub}
+candidate_tool_directory=$(dirname "$candidate_compose")
+candidate_tool_name=$(basename "$candidate_compose")
+test "$candidate_tool_name" = compose.staging.yaml || fail 'reviewed candidate Compose filename differs'
+case "$candidate_tool_directory" in
+  /tmp/phub-runtime-secret.??????) ;;
+  *) fail 'reviewed candidate Compose directory differs' ;;
+esac
+generated_candidate_name="$candidate_tool_name.runtime-secret-generated"
+generated_candidate_compose="$candidate_tool_directory/$generated_candidate_name"
 marker="$secret_root/.runtime-secret-isolation.transition.json"
 marker_next="$marker.next"
 compose_backup="$app_root/.runtime-secret-isolation.compose.backup"
@@ -227,9 +236,32 @@ helper_raw() {
   resolve_helper_image
   docker run --rm -i --pull=never --entrypoint node --user 0:0 --network none --read-only \
     --tmpfs /tmp:rw,noexec,nosuid,nodev,size=1m --security-opt no-new-privileges \
-    --cap-drop ALL --cap-add CHOWN --memory 128m --pids-limit 64 \
-    --mount type=bind,src="$secret_root",dst=/target,rw \
+    --cap-drop ALL --cap-add CHOWN --cap-add DAC_READ_SEARCH --cap-add FOWNER \
+    --memory 128m --pids-limit 64 \
+    --mount type=bind,src="$secret_root",dst=/target \
     "$helper_image" --input-type=module - "$@" < "$helper_script"
+}
+
+compose_helper_raw() {
+  resolve_helper_image
+  docker run --rm -i --pull=never --entrypoint node \
+    --user "$deploy_uid:$deploy_gid" --network none --read-only \
+    --tmpfs /tmp:rw,noexec,nosuid,nodev,size=1m --security-opt no-new-privileges \
+    --cap-drop ALL --memory 128m --pids-limit 64 \
+    --mount type=bind,src="$app_root/compose.yaml",dst=/active-compose.yaml,readonly \
+    --mount type=bind,src="$candidate_tool_directory",dst=/reviewed \
+    "$helper_image" --input-type=module - build-compose /unused \
+    /active-compose.yaml "/reviewed/$candidate_tool_name" \
+    "/reviewed/$generated_candidate_name" "$deploy_uid" "$deploy_gid" < "$helper_script"
+}
+
+run_compose_helper() {
+  output=$(compose_helper_raw) || fail 'build-only Compose helper failed'
+  test "$(printf '%s\n' "$output" | wc -l | tr -d ' ')" -eq 1 ||
+    fail 'build-only Compose helper returned unexpected output'
+  test "$output" = 'runtime-secret-transition operation=build-compose result=compose-generated status=passed' ||
+    fail 'build-only Compose helper did not acknowledge completion'
+  printf '%s\n' "$output"
 }
 
 run_helper() {
@@ -451,6 +483,13 @@ old_realtime_ref=$(image_ref "$old_realtime")
 assert_original_flags_disabled "$old_api" "$old_worker" "$old_realtime"
 helper_image=$old_api_image
 initial_snapshot=$(runtime_snapshot)
+
+test ! -e "$generated_candidate_compose" && test ! -L "$generated_candidate_compose" ||
+  fail 'generated candidate Compose already exists'
+run_compose_helper >/dev/null
+test "$(stat -c '%h:%u:%g:%a' "$generated_candidate_compose")" = "1:$deploy_uid:$deploy_gid:600" ||
+  fail 'generated candidate Compose metadata differs'
+candidate_compose=$generated_candidate_compose
 
 active_render=$(mktemp)
 candidate_render=$(mktemp)
