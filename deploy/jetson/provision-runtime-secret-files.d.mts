@@ -38,6 +38,17 @@ export function prepare(
   directory: string,
   options: RuntimeSecretPrepareOptions,
 ): { status: 'prepared' };
+export function buildRuntimeSecretComposeCandidate(
+  activeSource: string,
+  reviewedSource: string,
+): string;
+export function buildRuntimeSecretComposeCandidateFile(
+  activePath: string,
+  reviewedPath: string,
+  outputPath: string,
+  uid: number,
+  gid: number,
+): { status: 'compose-generated' };
 export function verifyPrepared(directory: string): { status: string };
 export function recoverMarker(directory: string): { status: 'marker-current' | 'marker-recovered' };
 export function advancePhase(

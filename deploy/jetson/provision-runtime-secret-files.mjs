@@ -15,7 +15,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { randomBytes } from 'node:crypto';
-import { basename, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const VERSION = 1;
@@ -93,6 +93,15 @@ const REALTIME_ADDED_KEYS = Object.freeze([
   'JWT_REALTIME_SECRET',
   'COMMUNITIES_REALTIME_ENABLED',
   'REALTIME_EXPECTED_REPLICAS',
+]);
+const REVIEWED_REALTIME_ANCHOR = 'x-realtime-runtime: &realtime-runtime';
+const REVIEWED_REALTIME_ENV_PATH =
+  '    - path: ${REALTIME_RUNTIME_ENV_FILE:-/etc/phub/realtime.env}';
+const LEGACY_REALTIME_MERGE = '    <<: *runtime';
+const REVIEWED_REALTIME_MERGE = '    <<: *realtime-runtime';
+const GENERATED_REALTIME_ENV = Object.freeze([
+  '    env_file:',
+  '      - path: ${REALTIME_RUNTIME_ENV_FILE:-/etc/phub/realtime.env}',
 ]);
 
 function fail(message) {
@@ -187,6 +196,25 @@ function writeExclusive(path, content, uid, gid) {
   }
 }
 
+function writeExclusiveForCurrentOwner(path, content, uid, gid) {
+  const descriptor = openSync(
+    path,
+    constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL,
+    0o600,
+  );
+  try {
+    writeFileSync(descriptor, content, 'utf8');
+    fchmodSync(descriptor, 0o600);
+    fsyncSync(descriptor);
+  } finally {
+    closeSync(descriptor);
+  }
+  const value = metadata(path);
+  if (value.uid !== uid || value.gid !== gid || value.mode !== 0o600) {
+    fail('generated Compose ownership or mode differs');
+  }
+}
+
 function parseEnvironment(source) {
   const values = new Map();
   const lines = new Map();
@@ -242,6 +270,128 @@ function buildCandidates(source, secret) {
     staging: `${source}${stagingLines.join('\n')}\n`,
     realtime: `${realtimeLines.join('\n')}\n`,
   };
+}
+
+function exactLineIndexes(lines, expected) {
+  return lines.flatMap((line, index) => (line === expected ? [index] : []));
+}
+
+function topLevelBlock(lines, header) {
+  const starts = exactLineIndexes(lines, header);
+  if (starts.length !== 1) fail(`reviewed Compose must contain exactly one ${header} block`);
+  const start = starts[0];
+  const next = lines.findIndex(
+    (line, index) => index > start && /^[A-Za-z0-9][A-Za-z0-9_-]*:/.test(line),
+  );
+  return { start, end: next === -1 ? lines.length : next };
+}
+
+function serviceBlock(lines, service) {
+  const header = `  ${service}:`;
+  const starts = exactLineIndexes(lines, header);
+  if (starts.length !== 1) fail(`Compose must contain exactly one services.${service} block`);
+  const start = starts[0];
+  const next = lines.findIndex(
+    (line, index) =>
+      index > start && /^\x20{2}[A-Za-z0-9][A-Za-z0-9_-]*:$/.test(line) && line !== header,
+  );
+  return { start, end: next === -1 ? lines.length : next };
+}
+
+function isServiceMappingKey(line, key) {
+  if (!line.startsWith('    ') || line.startsWith('     ')) return false;
+  const value = line.slice(4);
+  if (key === 'env_file') return /^(?:env_file|'env_file'|"env_file")\s*:/.test(value);
+  if (key === 'merge') return /^(?:<<|'<<'|"<<")\s*:/.test(value);
+  fail('unknown scoped Compose key');
+}
+
+export function buildRuntimeSecretComposeCandidate(activeSource, reviewedSource) {
+  for (const [name, source] of [
+    ['active', activeSource],
+    ['reviewed', reviewedSource],
+  ]) {
+    if (!source.endsWith('\n')) fail(`${name} Compose must end with a newline`);
+    if (source.includes('\t')) fail(`${name} Compose must not contain tabs`);
+  }
+
+  const reviewedLines = reviewedSource.split('\n');
+  const reviewedAnchor = topLevelBlock(reviewedLines, REVIEWED_REALTIME_ANCHOR);
+  const reviewedAnchorLines = reviewedLines.slice(reviewedAnchor.start, reviewedAnchor.end);
+  if (exactLineIndexes(reviewedAnchorLines, REVIEWED_REALTIME_ENV_PATH).length !== 1) {
+    fail('reviewed Compose realtime anchor must contain the isolated env path exactly once');
+  }
+  const reviewedRealtime = serviceBlock(reviewedLines, 'realtime');
+  const reviewedRealtimeLines = reviewedLines.slice(reviewedRealtime.start, reviewedRealtime.end);
+  const reviewedMergeLines = reviewedRealtimeLines.filter((line) =>
+    isServiceMappingKey(line, 'merge'),
+  );
+  if (reviewedMergeLines.length !== 1 || reviewedMergeLines[0] !== REVIEWED_REALTIME_MERGE) {
+    fail('reviewed Compose realtime service must use the isolated runtime anchor exactly once');
+  }
+
+  const activeLines = activeSource.split('\n');
+  if (activeLines.some((line) => line.includes('REALTIME_RUNTIME_ENV_FILE'))) {
+    fail('active Compose already contains the isolated realtime env variable');
+  }
+  const activeRealtime = serviceBlock(activeLines, 'realtime');
+  const activeRealtimeLines = activeLines.slice(activeRealtime.start, activeRealtime.end);
+  if (activeRealtimeLines.some((line) => isServiceMappingKey(line, 'env_file'))) {
+    fail('active Compose realtime service already contains env_file');
+  }
+  const mergeIndexes = activeRealtimeLines.flatMap((line, index) =>
+    isServiceMappingKey(line, 'merge') ? [index] : [],
+  );
+  if (mergeIndexes.length !== 1 || activeRealtimeLines[mergeIndexes[0]] !== LEGACY_REALTIME_MERGE) {
+    fail('active Compose realtime service must use the legacy runtime anchor exactly once');
+  }
+  const insertionIndex = activeRealtime.start + mergeIndexes[0] + 1;
+  const candidateLines = [
+    ...activeLines.slice(0, insertionIndex),
+    ...GENERATED_REALTIME_ENV,
+    ...activeLines.slice(insertionIndex),
+  ];
+  return candidateLines.join('\n');
+}
+
+export function buildRuntimeSecretComposeCandidateFile(
+  activePathInput,
+  reviewedPathInput,
+  outputPathInput,
+  uid,
+  gid,
+) {
+  const activePath = resolve(activePathInput);
+  const reviewedPath = resolve(reviewedPathInput);
+  const outputPath = resolve(outputPathInput);
+  const outputDirectory = dirname(outputPath);
+  if (dirname(reviewedPath) !== outputDirectory) {
+    fail('generated Compose must share the reviewed tool directory');
+  }
+  if (basename(outputPath) !== `${basename(reviewedPath)}.runtime-secret-generated`) {
+    fail('generated Compose filename is not bound to the reviewed input');
+  }
+  if (!Number.isSafeInteger(uid) || uid <= 0 || !Number.isSafeInteger(gid) || gid <= 0) {
+    fail('generated Compose ownership is invalid');
+  }
+  for (const path of [activePath, reviewedPath]) {
+    const value = metadata(path);
+    if (!value.regular || value.symlink || value.nlink !== 1) {
+      fail(`${basename(path)} is not a single-link regular file`);
+    }
+  }
+  const directoryValue = metadata(outputDirectory);
+  if (!directoryValue.directory || directoryValue.symlink) {
+    fail('reviewed tool directory is unsafe');
+  }
+  if (exists(outputPath)) fail('generated Compose already exists');
+  const candidate = buildRuntimeSecretComposeCandidate(
+    readFileSync(activePath, 'utf8'),
+    readFileSync(reviewedPath, 'utf8'),
+  );
+  writeExclusiveForCurrentOwner(outputPath, candidate, uid, gid);
+  syncPath(outputDirectory);
+  return { status: 'compose-generated' };
 }
 
 function validateState(state) {
@@ -607,7 +757,7 @@ function cli() {
       fail('prepare attestation is incomplete');
     result = prepare(directory, {
       directory: { uid: 0, gid: Number(deployGid), mode: 0o750 },
-      staging: { uid: 0, gid: Number(deployGid), mode: 0o640 },
+      staging: { uid: Number(deployUid), gid: Number(deployGid), mode: 0o600 },
       deployUid: Number(deployUid),
       deployGid: Number(deployGid),
       attestation: Object.fromEntries(
@@ -615,7 +765,16 @@ function cli() {
       ),
     });
   } else if (mode === 'verify-prepared') result = verifyPrepared(directory);
-  else if (mode === 'recover-marker') result = recoverMarker(directory);
+  else if (mode === 'build-compose') {
+    const [activePath, reviewedPath, outputPath, deployUid, deployGid] = args;
+    result = buildRuntimeSecretComposeCandidateFile(
+      activePath,
+      reviewedPath,
+      outputPath,
+      Number(deployUid),
+      Number(deployGid),
+    );
+  } else if (mode === 'recover-marker') result = recoverMarker(directory);
   else if (mode === 'advance-phase') result = advancePhase(directory, args[0], args[1]);
   else if (mode === 'restore-files') result = restoreFiles(directory);
   else if (mode === 'complete-rollback') result = completeRollback(directory);
