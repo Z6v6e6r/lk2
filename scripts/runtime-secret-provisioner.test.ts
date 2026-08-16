@@ -9,6 +9,8 @@ import { describe, expect, it } from 'vitest';
 import { loadRealtimeConfig } from '../packages/config/src/index.js';
 import {
   advancePhase,
+  buildRuntimeSecretComposeCandidate,
+  buildRuntimeSecretComposeCandidateFile,
   completeRollback,
   finalize,
   prepare,
@@ -30,6 +32,32 @@ const disabledApplicationKeys = [
   'COMMUNITY_LOGO_STABLE_DELIVERY_ENABLED',
   'COMMUNITY_LOGO_COMPATIBILITY_BACKFILL_ENABLED',
 ] as const;
+const reviewedCompose = readFileSync('deploy/compose.staging.yaml', 'utf8');
+const generatedRealtimeEnvForTest = `    env_file:
+      - path: \${REALTIME_RUNTIME_ENV_FILE:-/etc/phub/realtime.env}
+`;
+const legacyCompose = `name: phub-staging
+
+x-runtime: &runtime
+  env_file:
+    - path: \${RUNTIME_ENV_FILE:-/etc/phub/staging.env}
+  restart: unless-stopped
+
+services:
+  api:
+    <<: *runtime
+    image: api
+
+  realtime:
+    <<: *runtime
+    image: realtime
+    healthcheck:
+      test: ['CMD', 'true']
+
+  worker:
+    <<: *runtime
+    image: worker
+`;
 
 function source(overrides = ''): string {
   return `APP_ENV=staging
@@ -106,6 +134,105 @@ function advanceToVerified(directory: string): void {
 }
 
 describe('runtime-secret file transaction', () => {
+  it('builds a byte-preserving active Compose candidate with only realtime env isolation', () => {
+    const candidate = buildRuntimeSecretComposeCandidate(legacyCompose, reviewedCompose);
+    expect(candidate).toBe(
+      legacyCompose.replace(
+        '    <<: *runtime\n    image: realtime',
+        `    <<: *runtime\n${generatedRealtimeEnvForTest}    image: realtime`,
+      ),
+    );
+    expect(candidate.replace(generatedRealtimeEnvForTest, '')).toBe(legacyCompose);
+  });
+
+  it('writes the generated Compose exclusively with the reviewed filename binding', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'phub-runtime-compose-'));
+    chmodSync(directory, 0o700);
+    const active = join(directory, 'active.yaml');
+    const reviewed = join(directory, 'compose.staging.yaml');
+    const output = `${reviewed}.runtime-secret-generated`;
+    writeFileSync(active, legacyCompose, { mode: 0o600 });
+    writeFileSync(reviewed, reviewedCompose, { mode: 0o400 });
+    expect(buildRuntimeSecretComposeCandidateFile(active, reviewed, output, uid, gid)).toEqual({
+      status: 'compose-generated',
+    });
+    expect(readFileSync(output, 'utf8')).toBe(
+      buildRuntimeSecretComposeCandidate(legacyCompose, reviewedCompose),
+    );
+    expect(lstatSync(output).mode & 0o777).toBe(0o600);
+    expect(() =>
+      buildRuntimeSecretComposeCandidateFile(active, reviewed, output, uid, gid),
+    ).toThrow('generated Compose already exists');
+  });
+
+  it.each([
+    [
+      'an existing isolated variable',
+      legacyCompose.replace(
+        '    image: realtime',
+        '    env_file:\n      - path: ${REALTIME_RUNTIME_ENV_FILE:-/etc/phub/realtime.env}\n    image: realtime',
+      ),
+      reviewedCompose,
+      'already contains the isolated realtime env variable',
+    ],
+    [
+      'an existing service env_file',
+      legacyCompose.replace('    image: realtime', '    env_file:\n    image: realtime'),
+      reviewedCompose,
+      'already contains env_file',
+    ],
+    [
+      'an inline service env_file',
+      legacyCompose.replace('    image: realtime', '    env_file: []\n    image: realtime'),
+      reviewedCompose,
+      'already contains env_file',
+    ],
+    [
+      'a quoted service env_file',
+      legacyCompose.replace('    image: realtime', '    "env_file": []\n    image: realtime'),
+      reviewedCompose,
+      'already contains env_file',
+    ],
+    [
+      'duplicate realtime services',
+      legacyCompose.replace('  worker:', '  realtime:\n    <<: *runtime\n  worker:'),
+      reviewedCompose,
+      'exactly one services.realtime block',
+    ],
+    [
+      'a missing legacy merge',
+      legacyCompose.replace('    <<: *runtime\n    image: realtime', '    image: realtime'),
+      reviewedCompose,
+      'must use the legacy runtime anchor exactly once',
+    ],
+    [
+      'an additional merge key',
+      legacyCompose.replace(
+        '    <<: *runtime\n    image: realtime',
+        '    <<: *runtime\n    "<<": *other\n    image: realtime',
+      ),
+      reviewedCompose,
+      'must use the legacy runtime anchor exactly once',
+    ],
+    [
+      'tabs',
+      legacyCompose.replace('    image: realtime', '\timage: realtime'),
+      reviewedCompose,
+      'must not contain tabs',
+    ],
+    [
+      'reviewed intent drift',
+      legacyCompose,
+      reviewedCompose.replace(
+        '    - path: ${REALTIME_RUNTIME_ENV_FILE:-/etc/phub/realtime.env}',
+        '    - path: /etc/phub/unreviewed.env',
+      ),
+      'isolated env path exactly once',
+    ],
+  ])('rejects %s', (_name, active, reviewed, message) => {
+    expect(() => buildRuntimeSecretComposeCandidate(active, reviewed)).toThrow(message);
+  });
+
   it('preserves staging bytes and publishes only the isolated realtime allowlist', () => {
     const input = fixture();
     expect(prepare(input.directory, options())).toEqual({ status: 'prepared' });
@@ -256,6 +383,41 @@ describe('runtime-secret file transaction', () => {
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout.trim()).toBe(
       'runtime-secret-transition operation=advance-phase result=compose-committed status=passed',
+    );
+  });
+
+  it('executes the streamed build-compose CLI used before transition state exists', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'phub-runtime-compose-cli-'));
+    chmodSync(directory, 0o700);
+    const active = join(directory, 'active.yaml');
+    const reviewed = join(directory, 'compose.staging.yaml');
+    const output = `${reviewed}.runtime-secret-generated`;
+    writeFileSync(active, legacyCompose, { mode: 0o600 });
+    writeFileSync(reviewed, reviewedCompose, { mode: 0o400 });
+    const helper = fileURLToPath(
+      new URL('../deploy/jetson/provision-runtime-secret-files.mjs', import.meta.url),
+    );
+    const result = spawnSync(
+      process.execPath,
+      [
+        '--input-type=module',
+        '-',
+        'build-compose',
+        '/unused',
+        active,
+        reviewed,
+        output,
+        String(uid),
+        String(gid),
+      ],
+      { encoding: 'utf8', input: readFileSync(helper, 'utf8') },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout.trim()).toBe(
+      'runtime-secret-transition operation=build-compose result=compose-generated status=passed',
+    );
+    expect(readFileSync(output, 'utf8').replace(generatedRealtimeEnvForTest, '')).toBe(
+      legacyCompose,
     );
   });
 

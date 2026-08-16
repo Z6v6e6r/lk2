@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { DEFAULT_PROFILE_PRIVACY_SETTINGS } from '@phub/domain';
 
 import { createBrowserAuthGateway } from './auth-gateway.js';
@@ -1723,6 +1723,8 @@ describe('browser auth gateway', () => {
     'restores a newer stable photo after a stale tombstone and a fresh %s observation',
     async (freshObservation) => {
       const now = Date.parse('2026-08-15T10:00:00.000Z');
+      const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+      onTestFinished(() => nowSpy.mockRestore());
       const userId = '00000000-0000-4000-8000-000000000001';
       const tenantId = '00000000-0000-4000-8000-000000000002';
       const avatarA = `/public/api/v1/media/profile-photos/${tenantId}/44444444-4444-4444-8444-444444444444`;
