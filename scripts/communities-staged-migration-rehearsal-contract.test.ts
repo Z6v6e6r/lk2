@@ -13,6 +13,9 @@ describe('Communities staged migration rehearsal contract', () => {
     ]) {
       expect(source(workflow)).not.toContain('COMMUNITIES_STAGED_REHEARSAL_29_V1');
     }
+    expect(source('.github/workflows/communities-staged-migration-rehearsal.yaml')).toContain(
+      'REHEARSE_COMMUNITIES_STAGING_29_V1',
+    );
   });
 
   it('binds backup, source ledger, candidate and migrator digest before clone creation', () => {
@@ -48,7 +51,7 @@ describe('Communities staged migration rehearsal contract', () => {
     const noOp = rehearsal.indexOf('rerun_output="$(run_clone_migrator)"');
     const rolePost = rehearsal.indexOf('run_clone_role_boundary post');
     const runtimeProbe = rehearsal.lastIndexOf('\nrun_clone_runtime_probe\n');
-    const verifyManifest = rehearsal.lastIndexOf('verify-media-migration-ledger.sh');
+    const verifyManifest = rehearsal.lastIndexOf('sh "$ledger_verifier"');
     const measureIndexes = rehearsal.lastIndexOf('measure_community_media_quota_indexes');
     const strictDrop = rehearsal.lastIndexOf('dropdb -U "$POSTGRES_USER" --force');
 
@@ -76,8 +79,8 @@ describe('Communities staged migration rehearsal contract', () => {
     const runbook = source('docs/runbooks/communities-chain-integration.md');
     expect(runbook).toContain('Exact 29-file staged clone rehearsal contract');
     expect(runbook).toContain('The shared `/opt/phub/release.env` is never changed.');
-    expect(runbook).toContain('grants no staging write authority');
-    expect(runbook).toContain('must not reuse `STAGING_DEPLOY_KEY`');
-    expect(runbook).toContain('must not reuse the existing `postgres-communities-preflight-*`');
+    expect(runbook).toContain('merging this implementation grants neither authority');
+    expect(runbook).toContain('must not be the inventory key, backup key or `STAGING_DEPLOY_KEY`');
+    expect(runbook).toContain('rejects the existing `postgres-communities-preflight-*`');
   });
 });
