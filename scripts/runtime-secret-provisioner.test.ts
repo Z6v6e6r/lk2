@@ -22,6 +22,14 @@ const uid = process.getuid?.() ?? 501;
 const gid = process.getgid?.() ?? 20;
 const snapshot = 'a'.repeat(64);
 const imageId = `sha256:${'b'.repeat(64)}`;
+const disabledApplicationKeys = [
+  'PROFILE_PHOTO_CLIENT_SYNC_ENABLED',
+  'COMMUNITY_INVITES_ENABLED',
+  'COMMUNITIES_REALTIME_ENABLED',
+  'COMMUNITY_MEDIA_ENABLED',
+  'COMMUNITY_LOGO_STABLE_DELIVERY_ENABLED',
+  'COMMUNITY_LOGO_COMPATIBILITY_BACKFILL_ENABLED',
+] as const;
 
 function source(overrides = ''): string {
   return `APP_ENV=staging
@@ -106,6 +114,9 @@ describe('runtime-secret file transaction', () => {
     const staging = readFileSync(input.staging, 'utf8');
     const realtime = readFileSync(join(input.directory, 'realtime.env'), 'utf8');
     expect(staging.startsWith(input.value)).toBe(true);
+    for (const key of disabledApplicationKeys) {
+      expect(staging.match(new RegExp(`^${key}=false$`, 'gm'))).toHaveLength(1);
+    }
     expect(realtime).not.toContain('JWT_ACCESS_SECRET');
     expect(realtime).not.toContain('JWT_REFRESH_SECRET');
     expect(realtime).not.toContain('VIVA_SYSTEM_KEY');
@@ -128,6 +139,26 @@ describe('runtime-secret file transaction', () => {
     expect(marker).not.toContain('BwcHBwcH');
     expect(marker).not.toContain('legacy-access-secret');
   });
+
+  it('preserves existing explicit false flags without duplicating them', () => {
+    const explicitFlags = disabledApplicationKeys.map((key) => `${key}=false`).join('\n');
+    const input = fixture(source(`${explicitFlags}\n`));
+    expect(prepare(input.directory, options())).toEqual({ status: 'prepared' });
+    const staging = readFileSync(input.staging, 'utf8');
+    for (const key of disabledApplicationKeys) {
+      expect(staging.match(new RegExp(`^${key}=false$`, 'gm'))).toHaveLength(1);
+    }
+  });
+
+  it.each(disabledApplicationKeys)(
+    'rejects an enabled or malformed application gate before publishing candidates: %s',
+    (key) => {
+      const input = fixture(source(`${key}=true\n`));
+      expect(() => prepare(input.directory, options())).toThrow(
+        `staging.env must omit ${key} or set it to false`,
+      );
+    },
+  );
 
   it('restores the original inode and bytes idempotently after realtime removal response loss', () => {
     const input = fixture();

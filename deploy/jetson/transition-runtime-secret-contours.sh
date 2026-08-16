@@ -120,8 +120,34 @@ runtime_snapshot() {
 running_flag() {
   id=$1
   key=$2
-  value=$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$id" | sed -n "s/^${key}=//p" | tail -n 1)
+  environment=$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$id")
+  count=$(printf '%s\n' "$environment" | awk -F= -v key="$key" '$1 == key { count += 1 } END { print count + 0 }')
+  test "$count" -eq 1 || fail "running $key must occur exactly once"
+  value=$(printf '%s\n' "$environment" | awk -F= -v key="$key" '$1 == key { print substr($0, length(key) + 2) }')
   test "$value" = false || fail "running $key must be false"
+}
+
+legacy_running_flag_disabled() {
+  id=$1
+  key=$2
+  environment=$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$id")
+  count=$(printf '%s\n' "$environment" | awk -F= -v key="$key" '$1 == key { count += 1 } END { print count + 0 }')
+  case "$count" in
+    0)
+      docker exec "$id" node --input-type=module -e '
+        const key = process.argv[1];
+        const { loadConfig } = await import("@phub/config");
+        const value = loadConfig(process.env)[key];
+        if (value !== undefined && value !== false) process.exit(1);
+      ' "$key" >/dev/null 2>&1 || fail "legacy effective $key must be absent or false"
+      return 0
+      ;;
+    1)
+      value=$(printf '%s\n' "$environment" | awk -F= -v key="$key" '$1 == key { print substr($0, length(key) + 2) }')
+      test "$value" = false || fail "legacy running $key must be absent or false"
+      ;;
+    *) fail "legacy running $key must occur at most once" ;;
+  esac
 }
 
 assert_disabled_flags() {
@@ -138,6 +164,18 @@ assert_application_flags_disabled() {
   for key in PROFILE_PHOTO_CLIENT_SYNC_ENABLED COMMUNITY_INVITES_ENABLED COMMUNITIES_REALTIME_ENABLED COMMUNITY_MEDIA_ENABLED COMMUNITY_LOGO_STABLE_DELIVERY_ENABLED COMMUNITY_LOGO_COMPATIBILITY_BACKFILL_ENABLED; do
     running_flag "$container" "$key"
   done
+}
+
+assert_original_flags_disabled() {
+  api_id=$1
+  worker_id=$2
+  realtime_id=$3
+  for container in "$api_id" "$worker_id"; do
+    for key in PROFILE_PHOTO_CLIENT_SYNC_ENABLED COMMUNITY_INVITES_ENABLED COMMUNITIES_REALTIME_ENABLED COMMUNITY_MEDIA_ENABLED COMMUNITY_LOGO_STABLE_DELIVERY_ENABLED COMMUNITY_LOGO_COMPATIBILITY_BACKFILL_ENABLED; do
+      legacy_running_flag_disabled "$container" "$key"
+    done
+  done
+  legacy_running_flag_disabled "$realtime_id" COMMUNITIES_REALTIME_ENABLED
 }
 
 assert_no_shadowing() {
@@ -246,7 +284,7 @@ attest_original_runtime() {
     test "$(image_ref "$original_worker")" = "$(state_field oldWorkerImageRef)" || fail 'worker original runtime differs'
   test "$(image_id "$original_realtime" realtime)" = "$(state_field oldRealtimeImageId)" &&
     test "$(image_ref "$original_realtime")" = "$(state_field oldRealtimeImageRef)" || fail 'realtime original runtime differs'
-  assert_disabled_flags "$original_api" "$original_worker" "$original_realtime"
+  assert_original_flags_disabled "$original_api" "$original_worker" "$original_realtime"
   test "$(runtime_snapshot)" = "$(state_field runtimeSnapshot)" || fail 'original runtime changed during preflight'
 }
 
@@ -337,7 +375,7 @@ restore_transition() {
     test "$(image_ref "$worker")" = "$(state_field oldWorkerImageRef)" || fail 'worker rollback image differs'
   test "$(image_id "$realtime" realtime)" = "$(state_field oldRealtimeImageId)" &&
     test "$(image_ref "$realtime")" = "$(state_field oldRealtimeImageRef)" || fail 'realtime rollback image differs'
-  assert_disabled_flags "$api" "$worker" "$realtime"
+  assert_original_flags_disabled "$api" "$worker" "$realtime"
   if test "$phase" != runtime-restored; then
     run_helper advance-phase files-restored runtime-restored >/dev/null
   fi
@@ -408,7 +446,7 @@ old_realtime_image=$(image_id "$old_realtime" realtime)
 old_api_ref=$(image_ref "$old_api")
 old_worker_ref=$(image_ref "$old_worker")
 old_realtime_ref=$(image_ref "$old_realtime")
-assert_disabled_flags "$old_api" "$old_worker" "$old_realtime"
+assert_original_flags_disabled "$old_api" "$old_worker" "$old_realtime"
 helper_image=$old_api_image
 initial_snapshot=$(runtime_snapshot)
 
