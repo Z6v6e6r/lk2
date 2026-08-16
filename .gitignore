@@ -13,6 +13,7 @@ packages/api-contracts/src/generated*.ts
 # Local data
 docker-data/
 .minio/
+.worktrees/
 
 # Editors and operating systems
 .DS_Store
