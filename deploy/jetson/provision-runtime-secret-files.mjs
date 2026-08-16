@@ -1295,7 +1295,7 @@ function cli() {
     }
     result = prepareBootstrap(directory, {
       directory: { uid: 0, gid: Number(deployGid), mode: 0o750 },
-      staging: { uid: 0, gid: Number(deployGid), mode: 0o640 },
+      staging: { uid: Number(deployUid), gid: Number(deployGid), mode: 0o600 },
       deployUid: Number(deployUid),
       deployGid: Number(deployGid),
       attestation,

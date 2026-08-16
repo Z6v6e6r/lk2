@@ -267,8 +267,16 @@ describe('legacy runtime-secret bootstrap delivery contract', () => {
     expect(controller).toContain('pre-runtime recovery found a changed serving runtime');
     expect(controller).toContain('scope: "realtime.connect"');
     expect(controller).toContain('payload.scope !== "realtime.connect"');
-    expect(controller).toContain(":640\" || fail 'staging.env metadata differs'");
-    expect(helper).toContain('staging: { uid: 0, gid: Number(deployGid), mode: 0o640 }');
+    expect(controller).toContain(
+      ":$(id -u phub-deploy):$(id -g phub-deploy):600\" || fail 'staging.env metadata differs'",
+    );
+    expect(controller).toContain('--cap-add CHOWN');
+    expect(controller).toContain('--cap-add DAC_READ_SEARCH');
+    expect(controller).toContain('--cap-add FOWNER');
+    expect(controller).not.toContain('--cap-add DAC_OVERRIDE');
+    expect(helper).toContain(
+      'staging: { uid: Number(deployUid), gid: Number(deployGid), mode: 0o600 }',
+    );
     for (const phase of [
       'files-prepared',
       'images-probed',

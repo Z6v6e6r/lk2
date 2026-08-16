@@ -270,7 +270,8 @@ helper_raw() {
   resolve_helper_image
   docker run --rm -i --pull=never --entrypoint node --user 0:0 --network none --read-only \
     --tmpfs /tmp:rw,noexec,nosuid,nodev,size=1m --security-opt no-new-privileges \
-    --cap-drop ALL --cap-add CHOWN --memory 128m --pids-limit 64 \
+    --cap-drop ALL --cap-add CHOWN --cap-add DAC_READ_SEARCH --cap-add FOWNER \
+    --memory 128m --pids-limit 64 \
     --mount type=bind,src="$secret_root",dst=/target,rw \
     --mount type=bind,src="$bundle_path",dst=/bundle,ro \
     "$helper_image" --input-type=module - "$@" < "$helper_script"
@@ -567,7 +568,7 @@ for path in "$marker" "$marker_next" "$compose_next" "$release_next" "$finalized
   test ! -e "$path" && test ! -L "$path" || fail "unresolved transition artifact exists: $path"
 done
 test "$(stat -c '%u:%g:%a' "$secret_root")" = "0:$(id -g phub-deploy):750" || fail 'secret root ownership or mode differs'
-test "$(stat -c '%h:%u:%g:%a' "$secret_root/staging.env")" = "1:0:$(id -g phub-deploy):640" || fail 'staging.env metadata differs'
+test "$(stat -c '%h:%u:%g:%a' "$secret_root/staging.env")" = "1:$(id -u phub-deploy):$(id -g phub-deploy):600" || fail 'staging.env metadata differs'
 test "$(df -Pk "$secret_root" | awk 'NR == 2 { print $4 }')" -ge 65536 || fail 'secret filesystem lacks block headroom'
 test "$(df -Pi "$secret_root" | awk 'NR == 2 { print $4 }')" -ge 128 || fail 'secret filesystem lacks inode headroom'
 assert_no_secret_shadowing

@@ -173,7 +173,11 @@ For `e308181d`, use the separate `Bootstrap staging runtime-secret boundary (B0)
 candidate must be a reviewed, immutable, non-merge commit whose single parent is the exact serving
 release. The source verifier requires the exact reviewed B0 tree, the nine-file B0 allowlist,
 byte-identical migration and contract trees, and the dedicated API/realtime ticket-key
-implementation. The legacy source contains a historical gitlink without matching submodule
+implementation. `START` requires the canonical deploy-owned `/etc/phub/staging.env` metadata
+`phub-deploy:phub-deploy:0600`; it records that exact inode for rollback and refuses the obsolete
+root-owned `0640` contour. The isolated root helper retains only `CHOWN`, `DAC_READ_SEARCH` and
+`FOWNER`: the latter two are required to read and hard-link the deploy-owned `0600` source without
+granting write bypass. The legacy source contains a historical gitlink without matching submodule
 metadata, so the workflow acquires the candidate through its fixed public repository and exact
 40-character SHA without submodule discovery; do not replace that step with a branch checkout or
 submodule initialization. The workflow uses a clean `npm ci` dependency contour and requires the complete
