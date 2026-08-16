@@ -141,15 +141,32 @@ describe('Communities staging preflight evidence', () => {
     ).toThrow('COMMUNITIES_CANONICAL_HISTORY_REJECTED:0060_community_membership_pin_commands.sql');
   });
 
-  it('accepts the sole exact reviewed legacy 0043 alias alongside packaged gaps', () => {
-    const legacy = {
+  it('accepts the exact reviewed legacy messaging migrations alongside packaged gaps', () => {
+    const legacyMessagingRuntime = {
       filename: '0043_messaging_runtime.sql',
       checksum: '32512565880a9062a432eb68ec192b0640570f1636d2f2a946ab4ebc5bf96465',
     } as const;
-    expect(verify([packaged[0], legacy, packaged[2]], packaged)).toMatchObject({
-      appliedMigrationCount: 3,
+    const legacyContextProjection = {
+      filename: '0044_contextual_messaging_projection.sql',
+      checksum: '103976b96034ac3996c47c9adc536d22c06c5bc0ad12352af1413241b9c50832',
+    } as const;
+    expect(
+      verify([packaged[0], legacyMessagingRuntime, legacyContextProjection, packaged[2]], packaged),
+    ).toMatchObject({
+      appliedMigrationCount: 4,
       missingMigrationFilenames: ['0002_second.sql', '0078_community_media_issue_quotas.sql'],
     });
+    expect(() =>
+      verify(
+        [
+          packaged[0],
+          legacyMessagingRuntime,
+          { ...legacyContextProjection, checksum: checksum('9') },
+          packaged[2],
+        ],
+        packaged,
+      ),
+    ).toThrow('MIGRATION_CHECKSUM_MISMATCH:0044_contextual_messaging_projection.sql');
   });
 
   it('requires exact remote script custody and authoritative 0053 evidence', () => {
