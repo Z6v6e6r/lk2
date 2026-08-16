@@ -16,12 +16,31 @@ import {
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const EXTERNAL_GAME_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/;
-const commandSchema = z
-  .object({
-    command: z.enum(['JOIN_GAME', 'JOIN_WAITLIST']),
-    invitationId: z.string().uuid().optional(),
-  })
-  .strict();
+const commandSchema = z.discriminatedUnion('command', [
+  z
+    .object({
+      command: z.enum(['JOIN_GAME', 'JOIN_WAITLIST']),
+      invitationId: z.string().uuid().optional(),
+    })
+    .strict(),
+  z
+    .object({
+      command: z.literal('CONFIRM_PAYMENT'),
+      reservationId: z.string().uuid(),
+      evidence: z
+        .object({
+          provider: z.literal('VIVA'),
+          operationType: z.enum(['TRANSACTION', 'SUBSCRIPTION_BOOKING']),
+          operationId: z.string().trim().min(1).max(200),
+          status: z.literal('CONFIRMED'),
+          verifiedAt: z.string().datetime({ offset: true }),
+          amountMinor: z.number().int().nonnegative().optional(),
+          currency: z.string().regex(/^[A-Z]{3}$/).optional(),
+        })
+        .strict(),
+    })
+    .strict(),
+]);
 
 const PUBLIC_ERROR_MESSAGES: Partial<Record<GameRosterCommandErrorCode, string>> = {
   GAME_NOT_FOUND: 'Игра не найдена.',
@@ -42,6 +61,12 @@ const PUBLIC_ERROR_MESSAGES: Partial<Record<GameRosterCommandErrorCode, string>>
   ACTIVITY_LEVEL_UNDEFINED: 'Для игры не настроен диапазон уровней.',
   ACTIVITY_LEVEL_INVALID: 'Диапазон уровней игры настроен некорректно.',
   LEVEL_POLICY_MISCONFIGURED: 'Правило допуска временно настроено некорректно.',
+  GAME_NOT_CONFIRMABLE: 'Участие уже нельзя подтвердить.',
+  GAME_PAYMENT_EVIDENCE_CONFLICT: 'Данные подтверждения оплаты противоречат сохранённым.',
+  GAME_PAYMENT_MODE_MISMATCH: 'Платёж не соответствует способу оплаты игры.',
+  GAME_PAYMENT_SNAPSHOT_MISSING: 'Не найдено исходное решение о допуске.',
+  GAME_RESERVATION_EXPIRED: 'Срок резерва места истёк.',
+  GAME_RESERVATION_NOT_FOUND: 'Резерв места не найден.',
 };
 
 function constantTimeEqual(expected: string, supplied: string | undefined): boolean {
@@ -54,10 +79,12 @@ function constantTimeEqual(expected: string, supplied: string | undefined): bool
 }
 
 function requestHash(input: {
-  readonly command: 'JOIN_GAME' | 'JOIN_WAITLIST';
+  readonly command: 'JOIN_GAME' | 'JOIN_WAITLIST' | 'CONFIRM_PAYMENT';
   readonly gameId: string;
   readonly externalGameId: string;
   readonly invitationId?: string;
+  readonly reservationId?: string;
+  readonly evidence?: unknown;
 }): string {
   return createHash('sha256').update(JSON.stringify(input)).digest('hex');
 }
@@ -74,7 +101,10 @@ export function registerLegacyGameRosterBridgeRoutes(
     readonly integrationToken?: string;
     readonly identityVerifier?: LegacyLkIdentityVerifier;
     readonly contextRepository?: LegacyGameRosterBridgeRepository;
-    readonly rosterRepository?: Pick<GameRosterRepository, 'join' | 'joinWaitlist'>;
+    readonly rosterRepository?: Pick<
+      GameRosterRepository,
+      'join' | 'joinWaitlist' | 'confirmPayment'
+    >;
     readonly commandHandlers: readonly preHandlerHookHandler[];
   },
 ): void {
@@ -204,25 +234,62 @@ export function registerLegacyGameRosterBridgeRoutes(
           'Игра ещё не перенесена в канонический контур.',
         );
       }
-      const input = {
-        tenantId,
-        actorUserId: resolved.context.userId,
-        gameId: resolved.context.gameId,
-        idempotencyKey: commandIdempotencyKey,
-        requestHash: requestHash({
-          command: parsed.data.command,
-          gameId: resolved.context.gameId,
-          externalGameId,
-          ...(parsed.data.invitationId ? { invitationId: parsed.data.invitationId } : {}),
-        }),
-        correlationId: request.id,
-        expectedRevision: resolved.context.gameRevision,
-        ...(parsed.data.invitationId ? { invitationId: parsed.data.invitationId } : {}),
-      };
       const result =
-        parsed.data.command === 'JOIN_GAME'
-          ? await options.rosterRepository.join(input)
-          : await options.rosterRepository.joinWaitlist(input);
+        parsed.data.command === 'CONFIRM_PAYMENT'
+          ? await options.rosterRepository.confirmPayment({
+              tenantId,
+              actorUserId: resolved.context.userId,
+              gameId: resolved.context.gameId,
+              idempotencyKey: commandIdempotencyKey,
+              requestHash: requestHash({
+                command: parsed.data.command,
+                gameId: resolved.context.gameId,
+                externalGameId,
+                reservationId: parsed.data.reservationId,
+                evidence: parsed.data.evidence,
+              }),
+              correlationId: request.id,
+              reservationId: parsed.data.reservationId,
+              evidence: {
+                provider: parsed.data.evidence.provider,
+                operationType: parsed.data.evidence.operationType,
+                operationId: parsed.data.evidence.operationId,
+                evidenceHash: requestHash({
+                  command: parsed.data.command,
+                  gameId: resolved.context.gameId,
+                  externalGameId,
+                  reservationId: parsed.data.reservationId,
+                  evidence: parsed.data.evidence,
+                }),
+                verifiedAt: parsed.data.evidence.verifiedAt,
+                verifiedBy: 'LEGACY_NODE_RED',
+                ...(parsed.data.evidence.amountMinor === undefined
+                  ? {}
+                  : { amountMinor: parsed.data.evidence.amountMinor }),
+                ...(parsed.data.evidence.currency
+                  ? { currency: parsed.data.evidence.currency }
+                  : {}),
+              },
+            })
+          : await options.rosterRepository[
+              parsed.data.command === 'JOIN_GAME' ? 'join' : 'joinWaitlist'
+            ]({
+              tenantId,
+              actorUserId: resolved.context.userId,
+              gameId: resolved.context.gameId,
+              idempotencyKey: commandIdempotencyKey,
+              requestHash: requestHash({
+                command: parsed.data.command,
+                gameId: resolved.context.gameId,
+                externalGameId,
+                ...(parsed.data.invitationId
+                  ? { invitationId: parsed.data.invitationId }
+                  : {}),
+              }),
+              correlationId: request.id,
+              expectedRevision: resolved.context.gameRevision,
+              ...(parsed.data.invitationId ? { invitationId: parsed.data.invitationId } : {}),
+            });
       if (result.outcome === 'idempotency_conflict') {
         return sendApiError(
           request,
@@ -254,6 +321,7 @@ export function registerLegacyGameRosterBridgeRoutes(
           canonicalGameId: result.gameId,
           aggregateRevision: result.revision,
           relation: result.viewerRelation,
+          ...(result.reservationId ? { reservationId: result.reservationId } : {}),
           player: resolved.context.player,
         },
       });

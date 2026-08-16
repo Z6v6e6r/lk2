@@ -13,6 +13,8 @@ paths:
         Node-RED forwards the original signed legacy bearer token and a server-only integration
         credential. PadlHub resolves the actor and legacy game mapping server-side, applies the
         canonical eligibility policy, and returns only trusted facts for the legacy projection.
+        Payment confirmation is accepted only after Node-RED has verified the provider operation;
+        it consumes the eligibility snapshot captured by the original seat reservation.
       security:
         - LegacyLkBearer: []
           LegacyRosterIntegrationToken: []
@@ -176,6 +178,10 @@ components:
 
   schemas:
     LegacyGameRosterCommand:
+      oneOf:
+        - $ref: '#/components/schemas/LegacyGameJoinCommand'
+        - $ref: '#/components/schemas/LegacyGamePaymentConfirmationCommand'
+    LegacyGameJoinCommand:
       type: object
       additionalProperties: false
       required: [command]
@@ -186,6 +192,46 @@ components:
         invitationId:
           type: string
           format: uuid
+    LegacyGamePaymentConfirmationCommand:
+      type: object
+      additionalProperties: false
+      required: [command, reservationId, evidence]
+      properties:
+        command:
+          type: string
+          const: CONFIRM_PAYMENT
+        reservationId:
+          type: string
+          format: uuid
+        evidence:
+          $ref: '#/components/schemas/LegacyGamePaymentEvidence'
+    LegacyGamePaymentEvidence:
+      type: object
+      additionalProperties: false
+      required: [provider, operationType, operationId, status, verifiedAt]
+      properties:
+        provider:
+          type: string
+          const: VIVA
+        operationType:
+          type: string
+          enum: [TRANSACTION, SUBSCRIPTION_BOOKING]
+        operationId:
+          type: string
+          minLength: 1
+          maxLength: 200
+        status:
+          type: string
+          const: CONFIRMED
+        verifiedAt:
+          type: string
+          format: date-time
+        amountMinor:
+          type: integer
+          minimum: 0
+        currency:
+          type: string
+          pattern: '^[A-Z]{3}$'
     LegacyGameRosterCommandResult:
       type: object
       additionalProperties: false
@@ -216,6 +262,9 @@ components:
         relation:
           type: string
           enum: [SEAT_RESERVED, PARTICIPANT, WAITLISTED, NONE]
+        reservationId:
+          type: string
+          format: uuid
         player:
           $ref: '#/components/schemas/LegacyGameRosterProjectionPlayer'
     LegacyGameRosterProjectionPlayer:

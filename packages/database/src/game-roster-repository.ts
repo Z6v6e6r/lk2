@@ -24,7 +24,16 @@ import { queryOne, withTenantTransaction } from './connection.js';
 import type { GamePaymentMode } from './game-repository.js';
 
 export type GameRosterCommandErrorCode =
-  GameDomainErrorCode | LevelEligibilityReasonCode | 'GAME_NOT_FOUND' | 'GAME_REVISION_CONFLICT';
+  | GameDomainErrorCode
+  | LevelEligibilityReasonCode
+  | 'GAME_NOT_FOUND'
+  | 'GAME_REVISION_CONFLICT'
+  | 'GAME_NOT_CONFIRMABLE'
+  | 'GAME_PAYMENT_EVIDENCE_CONFLICT'
+  | 'GAME_PAYMENT_MODE_MISMATCH'
+  | 'GAME_PAYMENT_SNAPSHOT_MISSING'
+  | 'GAME_RESERVATION_EXPIRED'
+  | 'GAME_RESERVATION_NOT_FOUND';
 
 export type GameRosterCommandResult =
   | {
@@ -74,6 +83,20 @@ export interface GameRosterUserCommandInput {
   readonly invitationId?: string;
 }
 
+export interface ConfirmGamePaymentInput extends GameRosterUserCommandInput {
+  readonly reservationId: string;
+  readonly evidence: {
+    readonly provider: 'VIVA';
+    readonly operationType: 'TRANSACTION' | 'SUBSCRIPTION_BOOKING';
+    readonly operationId: string;
+    readonly evidenceHash: string;
+    readonly verifiedAt: string;
+    readonly verifiedBy: 'LEGACY_NODE_RED';
+    readonly amountMinor?: number;
+    readonly currency?: string;
+  };
+}
+
 export interface LevelEligibilityDecisionTelemetry {
   readonly decisionId: string;
   readonly tenantId: string;
@@ -113,6 +136,7 @@ export interface PromoteGameWaitlistInput extends ProcessCommandInput {
 export interface GameRosterRepository {
   join(input: GameRosterUserCommandInput): Promise<GameRosterCommandResult>;
   joinWaitlist(input: GameRosterUserCommandInput): Promise<GameRosterCommandResult>;
+  confirmPayment(input: ConfirmGamePaymentInput): Promise<GameRosterCommandResult>;
   leave(input: GameRosterUserCommandInput): Promise<GameRosterCommandResult>;
   leaveWaitlist(input: GameRosterUserCommandInput): Promise<GameRosterCommandResult>;
   expireReservation(input: ExpireGameReservationInput): Promise<GameRosterProcessResult>;
@@ -129,7 +153,10 @@ export interface GameRosterOperationInput {
 export interface GameRosterOperation {
   readonly commandId: string;
   readonly commandType:
-    'game.join.v1' | 'game.leave.v1' | 'game.waitlist.join.v1' | 'game.waitlist.leave.v1';
+    | 'game.join.v1'
+    | 'game.leave.v1'
+    | 'game.waitlist.join.v1'
+    | 'game.waitlist.leave.v1';
   readonly gameId: string | null;
   readonly state: 'COMPLETED' | 'FAILED';
   readonly committedAt: string;
@@ -184,6 +211,28 @@ interface IdentifierRow extends QueryResultRow {
 
 interface ReservationRow extends IdentifierRow {
   readonly expires_at: Date | string;
+}
+
+interface ConfirmableReservationRow extends ReservationRow {
+  readonly user_id: string;
+  readonly state: 'ACTIVE' | 'CONFIRMED' | 'EXPIRED' | 'CANCELLED';
+  readonly payment_state: 'REQUIRES_ACTION' | 'PROCESSING' | 'PAID' | 'FAILED' | 'EXPIRED';
+  readonly eligibility_decision_id: string | null;
+  readonly payment_snapshot_exists: boolean;
+}
+
+interface PaymentEvidenceRow extends QueryResultRow {
+  readonly id: string;
+  readonly reservation_id: string;
+  readonly provider: 'VIVA';
+  readonly provider_operation_type: 'TRANSACTION' | 'SUBSCRIPTION_BOOKING';
+  readonly provider_operation_id: string;
+  readonly evidence_hash: string;
+  readonly resolution: 'RECEIVED' | 'APPLIED' | 'REJECTED';
+  readonly error_code: string | null;
+  readonly participation_id: string | null;
+  readonly aggregate_revision: string | number | null;
+  readonly resolved_at: Date | string | null;
 }
 
 interface WaitlistRow extends IdentifierRow {
@@ -1270,6 +1319,280 @@ export function createGameRosterRepository(
           });
         }
         await consumePersonalInvitation(client, input.tenantId, eligibility.validatedInvitationId);
+        await recordSuccess(client, input, commandType, result);
+        return result;
+      });
+    },
+
+    confirmPayment(input) {
+      const commandType = 'game.payment.confirm.v1';
+      return withTenantTransaction(pool, input.tenantId, async (client) => {
+        const replay = replayCommand(
+          await lockIdempotency(client, input),
+          commandType,
+          input.requestHash,
+        );
+        if (replay) return replay;
+        const commandId = randomUUID();
+        const game = await lockGame(client, input);
+        if (!game) {
+          return storeRejected(
+            client,
+            input,
+            commandType,
+            commandId,
+            'GAME_NOT_FOUND',
+            false,
+          );
+        }
+        const currentRevision = positiveInteger(game.revision);
+        const reservation = await queryOne<ConfirmableReservationRow>(
+          client,
+          `select id, user_id, state, payment_state, expires_at::text as expires_at,
+                  eligibility_decision_id,
+                  exists (
+                    select 1
+                      from eligibility.payment_snapshots snapshot
+                     where snapshot.tenant_id = games.seat_reservations.tenant_id
+                       and snapshot.decision_id = games.seat_reservations.eligibility_decision_id
+                       and snapshot.player_id = games.seat_reservations.user_id
+                       and snapshot.activity_type = 'GAME'
+                       and snapshot.activity_id = games.seat_reservations.game_id
+                  ) as payment_snapshot_exists
+             from games.seat_reservations
+            where tenant_id = $1 and game_id = $2 and id = $3 and user_id = $4
+            for update`,
+          [input.tenantId, input.gameId, input.reservationId, input.actorUserId],
+        );
+        if (!reservation) {
+          return storeRejected(
+            client,
+            input,
+            commandType,
+            commandId,
+            'GAME_RESERVATION_NOT_FOUND',
+            true,
+            currentRevision,
+          );
+        }
+        if (!reservation.eligibility_decision_id || !reservation.payment_snapshot_exists) {
+          return storeRejected(
+            client,
+            input,
+            commandType,
+            commandId,
+            'GAME_PAYMENT_SNAPSHOT_MISSING',
+            true,
+            currentRevision,
+          );
+        }
+
+        await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
+          `game-payment-evidence:${input.tenantId}:${input.evidence.provider}:${input.evidence.operationType}:${input.evidence.operationId}`,
+        ]);
+
+        const existingEvidence = await client.query<PaymentEvidenceRow>(
+          `select id, reservation_id, provider, provider_operation_type,
+                  provider_operation_id, evidence_hash, resolution, error_code,
+                  participation_id, aggregate_revision, resolved_at
+             from games.payment_confirmation_evidence
+            where tenant_id = $1
+              and (
+                reservation_id = $2
+                or (provider = $3 and provider_operation_type = $4 and provider_operation_id = $5)
+              )
+            for update`,
+          [
+            input.tenantId,
+            input.reservationId,
+            input.evidence.provider,
+            input.evidence.operationType,
+            input.evidence.operationId,
+          ],
+        );
+        const exactEvidence = existingEvidence.rows.find(
+          (row) =>
+            row.reservation_id === input.reservationId &&
+            row.provider === input.evidence.provider &&
+            row.provider_operation_type === input.evidence.operationType &&
+            row.provider_operation_id === input.evidence.operationId &&
+            row.evidence_hash === input.evidence.evidenceHash,
+        );
+        if (existingEvidence.rows.length > 0 && !exactEvidence) {
+          return storeRejected(
+            client,
+            input,
+            commandType,
+            commandId,
+            'GAME_PAYMENT_EVIDENCE_CONFLICT',
+            true,
+            currentRevision,
+          );
+        }
+        if (exactEvidence?.resolution === 'APPLIED') {
+          if (
+            !exactEvidence.participation_id ||
+            exactEvidence.aggregate_revision === null ||
+            exactEvidence.resolved_at === null
+          ) {
+            throw new Error('GAME_PAYMENT_EVIDENCE_RESULT_INVALID');
+          }
+          const result = {
+            outcome: 'applied' as const,
+            commandId,
+            gameId: input.gameId,
+            revision: positiveInteger(exactEvidence.aggregate_revision),
+            viewerRelation: 'PARTICIPANT' as const,
+            participationId: exactEvidence.participation_id,
+            reservationId: input.reservationId,
+            committedAt: timestamp(exactEvidence.resolved_at),
+            replayed: false,
+          };
+          await recordSuccess(client, input, commandType, result);
+          return result;
+        }
+        if (exactEvidence?.resolution === 'REJECTED') {
+          if (!exactEvidence.error_code) throw new Error('GAME_PAYMENT_EVIDENCE_RESULT_INVALID');
+          return storeRejected(
+            client,
+            input,
+            commandType,
+            commandId,
+            exactEvidence.error_code as GameRosterCommandErrorCode,
+            true,
+            currentRevision,
+          );
+        }
+        if (exactEvidence) {
+          return storeRejected(
+            client,
+            input,
+            commandType,
+            commandId,
+            'GAME_PAYMENT_EVIDENCE_CONFLICT',
+            true,
+            currentRevision,
+          );
+        }
+
+        const evidence = await queryOne<IdentifierRow>(
+          client,
+          `insert into games.payment_confirmation_evidence (
+             tenant_id, game_id, reservation_id, user_id, eligibility_decision_id,
+             provider, provider_operation_type, provider_operation_id, payment_mode,
+             amount_minor, currency, evidence_hash, verified_at, verified_by
+           ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+           returning id`,
+          [
+            input.tenantId,
+            input.gameId,
+            input.reservationId,
+            input.actorUserId,
+            reservation.eligibility_decision_id,
+            input.evidence.provider,
+            input.evidence.operationType,
+            input.evidence.operationId,
+            game.payment_mode,
+            input.evidence.amountMinor ?? null,
+            input.evidence.currency ?? null,
+            input.evidence.evidenceHash,
+            input.evidence.verifiedAt,
+            input.evidence.verifiedBy,
+          ],
+        );
+        if (!evidence) throw new Error('GAME_PAYMENT_EVIDENCE_WRITE_LOST');
+        const rejectEvidence = async (
+          code: GameRosterCommandErrorCode,
+        ): Promise<GameRosterCommandResult> => {
+          const rejectedEvidence = await client.query(
+            `update games.payment_confirmation_evidence
+                set resolution = 'REJECTED', error_code = $3,
+                    aggregate_revision = $4, resolved_at = now()
+              where tenant_id = $1 and id = $2 and resolution = 'RECEIVED'`,
+            [input.tenantId, evidence.id, code, currentRevision],
+          );
+          if (rejectedEvidence.rowCount !== 1) {
+            throw new Error('GAME_PAYMENT_EVIDENCE_REJECT_LOST');
+          }
+          return storeRejected(
+            client,
+            input,
+            commandType,
+            commandId,
+            code,
+            true,
+            currentRevision,
+          );
+        };
+
+        if (!['SCHEDULED', 'IN_PROGRESS'].includes(game.lifecycle_state)) {
+          return rejectEvidence('GAME_NOT_CONFIRMABLE');
+        }
+        if (reservation.state !== 'ACTIVE') {
+          return rejectEvidence('GAME_RESERVATION_NOT_FOUND');
+        }
+        const now = timestamp(game.database_now);
+        if (Date.parse(timestamp(reservation.expires_at)) <= Date.parse(now)) {
+          return rejectEvidence('GAME_RESERVATION_EXPIRED');
+        }
+        const operationTypeAllowed =
+          (game.payment_mode === 'SPLIT' &&
+            ['TRANSACTION', 'SUBSCRIPTION_BOOKING'].includes(input.evidence.operationType)) ||
+          (game.payment_mode === 'SUBSCRIPTION' &&
+            input.evidence.operationType === 'SUBSCRIPTION_BOOKING');
+        if (!operationTypeAllowed) {
+          return rejectEvidence('GAME_PAYMENT_MODE_MISMATCH');
+        }
+        if (!['REQUIRES_ACTION', 'PROCESSING'].includes(reservation.payment_state)) {
+          return rejectEvidence('GAME_NOT_CONFIRMABLE');
+        }
+
+        const participation = await queryOne<IdentifierRow>(
+          client,
+          `insert into games.participations (
+             tenant_id, game_id, user_id, role, state, payment_state, eligibility_decision_id
+           ) values ($1, $2, $3, 'PLAYER', 'ACTIVE', 'PAID', $4)
+           returning id`,
+          [input.tenantId, input.gameId, input.actorUserId, reservation.eligibility_decision_id],
+        );
+        if (!participation) throw new Error('GAME_PARTICIPATION_WRITE_LOST');
+        const reservationUpdate = await client.query(
+          `update games.seat_reservations
+              set state = 'CONFIRMED', payment_state = 'PAID', terminal_at = now(), updated_at = now()
+            where tenant_id = $1 and game_id = $2 and id = $3 and state = 'ACTIVE'`,
+          [input.tenantId, input.gameId, input.reservationId],
+        );
+        if (reservationUpdate.rowCount !== 1) throw new Error('GAME_RESERVATION_CONFIRM_WRITE_LOST');
+        const revision = await bumpRevision(client, input);
+        const appliedEvidence = await client.query(
+          `update games.payment_confirmation_evidence
+              set resolution = 'APPLIED', participation_id = $3,
+                  aggregate_revision = $4, resolved_at = now()
+            where tenant_id = $1 and id = $2 and resolution = 'RECEIVED'`,
+          [input.tenantId, evidence.id, participation.id, revision],
+        );
+        if (appliedEvidence.rowCount !== 1) throw new Error('GAME_PAYMENT_EVIDENCE_APPLY_LOST');
+        const result = {
+          outcome: 'applied' as const,
+          commandId,
+          gameId: input.gameId,
+          revision,
+          viewerRelation: 'PARTICIPANT' as const,
+          participationId: participation.id,
+          reservationId: reservation.id,
+          committedAt: now,
+          replayed: false,
+        };
+        const base = eventBase(input, commandId, revision, now);
+        await appendEvent(client, {
+          ...base,
+          type: 'game.participation.confirmed.v1',
+          payload: {
+            ...base.payload,
+            userId: input.actorUserId,
+            participationId: participation.id,
+          },
+        });
         await recordSuccess(client, input, commandType, result);
         return result;
       });

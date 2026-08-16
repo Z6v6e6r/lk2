@@ -253,7 +253,8 @@ export interface BuildAppOptions {
   readonly gameRosterRepository?: Pick<
     GameRosterRepository,
     'join' | 'joinWaitlist' | 'leave' | 'leaveWaitlist' | 'getOperation'
-  >;
+  > &
+    Partial<Pick<GameRosterRepository, 'confirmPayment'>>;
   readonly legacyGameRosterBridgeRepository?: LegacyGameRosterBridgeRepository;
   readonly legacyLkIdentityVerifier?: LegacyLkIdentityVerifier;
   readonly gameResultRepository?: Pick<GameResultRepository, 'submit' | 'confirm' | 'dispute'>;
@@ -928,7 +929,15 @@ export async function buildApp(options: BuildAppOptions) {
     ...(options.legacyGameRosterBridgeRepository
       ? { contextRepository: options.legacyGameRosterBridgeRepository }
       : {}),
-    ...(options.gameRosterRepository ? { rosterRepository: options.gameRosterRepository } : {}),
+    ...(options.gameRosterRepository?.confirmPayment
+      ? {
+          rosterRepository: {
+            join: options.gameRosterRepository.join,
+            joinWaitlist: options.gameRosterRepository.joinWaitlist,
+            confirmPayment: options.gameRosterRepository.confirmPayment,
+          },
+        }
+      : {}),
     commandHandlers: [resolvePublicTenant, requireIdempotencyKey],
   });
   registerGameResultRoutes(app as unknown as FastifyInstance, {

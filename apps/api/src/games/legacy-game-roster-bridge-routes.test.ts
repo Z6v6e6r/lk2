@@ -56,16 +56,17 @@ function rosterRepository(
     committedAt: '2026-08-16T18:00:00.000Z',
     replayed: false,
   },
-): Pick<GameRosterRepository, 'join' | 'joinWaitlist'> {
+): Pick<GameRosterRepository, 'join' | 'joinWaitlist' | 'confirmPayment'> {
   return {
     join: vi.fn().mockResolvedValue(joinResult),
     joinWaitlist: vi.fn().mockResolvedValue(joinResult),
+    confirmPayment: vi.fn().mockResolvedValue(joinResult),
   };
 }
 
 async function appWith(input: {
   readonly context?: LegacyGameRosterBridgeRepository;
-  readonly roster?: Pick<GameRosterRepository, 'join' | 'joinWaitlist'>;
+  readonly roster?: Pick<GameRosterRepository, 'join' | 'joinWaitlist' | 'confirmPayment'>;
 }) {
   const app = Fastify();
   registerLegacyGameRosterBridgeRoutes(app, {
@@ -97,9 +98,13 @@ describe('legacy game roster bridge routes', () => {
     const resolveContext = vi.fn(context.resolve.bind(context));
     const joinRoster = vi.fn(roster.join.bind(roster));
     const instrumentedContext: LegacyGameRosterBridgeRepository = { resolve: resolveContext };
-    const instrumentedRoster: Pick<GameRosterRepository, 'join' | 'joinWaitlist'> = {
+    const instrumentedRoster: Pick<
+      GameRosterRepository,
+      'join' | 'joinWaitlist' | 'confirmPayment'
+    > = {
       join: joinRoster,
       joinWaitlist: roster.joinWaitlist.bind(roster),
+      confirmPayment: roster.confirmPayment.bind(roster),
     };
     const app = await appWith({ context: instrumentedContext, roster: instrumentedRoster });
     const response = await app.inject({
@@ -204,5 +209,89 @@ describe('legacy game roster bridge routes', () => {
     });
     expect(deniedResponse.statusCode).toBe(409);
     expect(deniedResponse.json()).toMatchObject({ code: 'LEVEL_NOT_ALLOWED' });
+  });
+
+  it('accepts payment confirmation only through strict server evidence and verified identity', async () => {
+    const roster = rosterRepository({
+      outcome: 'applied',
+      commandId,
+      gameId,
+      revision: 6,
+      viewerRelation: 'PARTICIPANT',
+      participationId: '05d8cc21-9ab9-4ec2-a966-cb52ef13dd29',
+      reservationId: '238df6f5-fec4-44dd-ad8c-39e98ade8366',
+      committedAt: '2026-08-16T18:00:00.000Z',
+      replayed: false,
+    });
+    const confirmPayment = vi.fn(roster.confirmPayment.bind(roster));
+    const app = await appWith({ roster: { ...roster, confirmPayment } });
+    const response = await app.inject({
+      method: 'POST',
+      url: '/internal/api/v1/local-padel/legacy-games/pay_legacy-game/roster-commands',
+      headers: {
+        authorization: 'Bearer signed-legacy-jwt',
+        'idempotency-key': 'legacy-payment-confirmation-1',
+        'x-phub-legacy-roster-token': bridgeToken,
+      },
+      payload: {
+        command: 'CONFIRM_PAYMENT',
+        reservationId: '238df6f5-fec4-44dd-ad8c-39e98ade8366',
+        evidence: {
+          provider: 'VIVA',
+          operationType: 'TRANSACTION',
+          operationId: 'viva-transaction-101',
+          status: 'CONFIRMED',
+          verifiedAt: '2026-08-16T17:59:59.000Z',
+          amountMinor: 250000,
+          currency: 'RUB',
+        },
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      projection: {
+        relation: 'PARTICIPANT',
+        reservationId: '238df6f5-fec4-44dd-ad8c-39e98ade8366',
+      },
+    });
+    const confirmation = confirmPayment.mock.calls[0]?.[0];
+    expect(confirmation).toMatchObject({
+      tenantId,
+      actorUserId: userId,
+      gameId,
+      reservationId: '238df6f5-fec4-44dd-ad8c-39e98ade8366',
+      evidence: {
+        provider: 'VIVA',
+        operationType: 'TRANSACTION',
+        operationId: 'viva-transaction-101',
+        verifiedBy: 'LEGACY_NODE_RED',
+      },
+    });
+    expect(confirmation?.evidence.evidenceHash).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('rejects browser-owned paid flags without trusted provider evidence', async () => {
+    const roster = rosterRepository();
+    const app = await appWith({ roster });
+    const response = await app.inject({
+      method: 'POST',
+      url: '/internal/api/v1/local-padel/legacy-games/pay_legacy-game/roster-commands',
+      headers: {
+        authorization: 'Bearer signed-legacy-jwt',
+        'idempotency-key': 'legacy-payment-confirmation-2',
+        'x-phub-legacy-roster-token': bridgeToken,
+      },
+      payload: {
+        command: 'CONFIRM_PAYMENT',
+        reservationId: '238df6f5-fec4-44dd-ad8c-39e98ade8366',
+        paid: true,
+        transactionId: 'forged-browser-transaction',
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({ code: 'LEGACY_GAME_COMMAND_INVALID' });
+    expect(roster.confirmPayment).not.toHaveBeenCalled();
   });
 });

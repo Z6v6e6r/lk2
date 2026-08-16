@@ -209,6 +209,204 @@ describe('game roster repository', () => {
     ).toEqual(['game.participation.reserved.v1']);
   });
 
+  it('atomically confirms a reserved split seat from trusted evidence and reuses its eligibility snapshot', async () => {
+    const evidenceId = '253153f0-6810-4f1d-9c3a-58be08fbd28c';
+    const eligibilityDecisionId = 'd63ff37f-ed9b-45f7-a135-838ea74925e0';
+    const { pool, query } = poolWithHandler((text) => {
+      if (text.includes('from games.seat_reservations') && text.includes('eligibility_decision_id')) {
+        return {
+          rows: [
+            {
+              id: reservationId,
+              user_id: playerId,
+              state: 'ACTIVE',
+              payment_state: 'REQUIRES_ACTION',
+              expires_at: '2026-08-01T10:15:00.000Z',
+              eligibility_decision_id: eligibilityDecisionId,
+              payment_snapshot_exists: true,
+            },
+          ],
+        };
+      }
+      if (text.includes('from games.payment_confirmation_evidence')) return { rows: [] };
+      if (text.includes('insert into games.payment_confirmation_evidence')) {
+        return { rows: [{ id: evidenceId }] };
+      }
+      if (text.includes('insert into games.participations')) {
+        return { rows: [{ id: participationId }] };
+      }
+      if (text.includes('update games.seat_reservations')) return { rowCount: 1 };
+      if (text.includes('update games.payment_confirmation_evidence')) return { rowCount: 1 };
+      return baseHandler(text, { paymentMode: 'SPLIT' });
+    });
+
+    await expect(
+      createGameRosterRepository(pool as never).confirmPayment({
+        ...input({ expectedRevision: undefined }),
+        reservationId,
+        evidence: {
+          provider: 'VIVA',
+          operationType: 'TRANSACTION',
+          operationId: 'viva-transaction-101',
+          evidenceHash: 'e'.repeat(64),
+          verifiedAt: '2026-08-01T10:05:00.000Z',
+          verifiedBy: 'LEGACY_NODE_RED',
+          amountMinor: 250000,
+          currency: 'RUB',
+        },
+      }),
+    ).resolves.toMatchObject({
+      outcome: 'applied',
+      gameId,
+      revision: 2,
+      viewerRelation: 'PARTICIPANT',
+      participationId,
+      reservationId,
+      replayed: false,
+    });
+    expect(
+      query.mock.calls.some(([text]) => text.includes('eligibility.level_policies')),
+    ).toBe(false);
+    expect(
+      query.mock.calls.some(
+        ([text, values]) =>
+          text.includes('insert into games.participations') &&
+          values?.includes(eligibilityDecisionId),
+      ),
+    ).toBe(true);
+    expect(
+      query.mock.calls.some(
+        ([text, values]) =>
+          text.includes("set state = 'CONFIRMED', payment_state = 'PAID'") &&
+          values?.includes(reservationId),
+      ),
+    ).toBe(true);
+    expect(
+      query.mock.calls
+        .filter(([text]) => text.includes('insert into audit.outbox_events'))
+        .map((call) => call[1]?.[2]),
+    ).toEqual(['game.participation.confirmed.v1']);
+  });
+
+  it('records a late provider confirmation for recovery without creating participation', async () => {
+    const eligibilityDecisionId = 'd63ff37f-ed9b-45f7-a135-838ea74925e0';
+    const { pool, query } = poolWithHandler((text) => {
+      if (text.includes('from games.seat_reservations') && text.includes('eligibility_decision_id')) {
+        return {
+          rows: [
+            {
+              id: reservationId,
+              user_id: playerId,
+              state: 'ACTIVE',
+              payment_state: 'REQUIRES_ACTION',
+              expires_at: '2026-08-01T09:59:00.000Z',
+              eligibility_decision_id: eligibilityDecisionId,
+              payment_snapshot_exists: true,
+            },
+          ],
+        };
+      }
+      if (text.includes('from games.payment_confirmation_evidence')) return { rows: [] };
+      if (text.includes('insert into games.payment_confirmation_evidence')) {
+        return { rows: [{ id: '253153f0-6810-4f1d-9c3a-58be08fbd28c' }] };
+      }
+      if (text.includes('update games.payment_confirmation_evidence')) return { rowCount: 1 };
+      return baseHandler(text, { paymentMode: 'SPLIT' });
+    });
+
+    await expect(
+      createGameRosterRepository(pool as never).confirmPayment({
+        ...input({ expectedRevision: undefined }),
+        reservationId,
+        evidence: {
+          provider: 'VIVA',
+          operationType: 'TRANSACTION',
+          operationId: 'viva-transaction-late',
+          evidenceHash: 'f'.repeat(64),
+          verifiedAt: '2026-08-01T10:05:00.000Z',
+          verifiedBy: 'LEGACY_NODE_RED',
+        },
+      }),
+    ).resolves.toEqual({
+      outcome: 'rejected',
+      code: 'GAME_RESERVATION_EXPIRED',
+      currentRevision: 1,
+      replayed: false,
+    });
+    expect(
+      query.mock.calls.some(
+        ([text, values]) =>
+          text.includes("resolution = 'REJECTED'") &&
+          values?.includes('GAME_RESERVATION_EXPIRED'),
+      ),
+    ).toBe(true);
+    expect(
+      query.mock.calls.some(([text]) => text.includes('insert into games.participations')),
+    ).toBe(false);
+  });
+
+  it('rejects reuse of provider evidence for another reservation', async () => {
+    const eligibilityDecisionId = 'd63ff37f-ed9b-45f7-a135-838ea74925e0';
+    const { pool, query } = poolWithHandler((text) => {
+      if (text.includes('from games.seat_reservations') && text.includes('eligibility_decision_id')) {
+        return {
+          rows: [
+            {
+              id: reservationId,
+              user_id: playerId,
+              state: 'ACTIVE',
+              payment_state: 'REQUIRES_ACTION',
+              expires_at: '2026-08-01T10:15:00.000Z',
+              eligibility_decision_id: eligibilityDecisionId,
+              payment_snapshot_exists: true,
+            },
+          ],
+        };
+      }
+      if (text.includes('from games.payment_confirmation_evidence')) {
+        return {
+          rows: [
+            {
+              id: '253153f0-6810-4f1d-9c3a-58be08fbd28c',
+              reservation_id: 'b56f61c7-0f40-49f2-bb5d-898f46406412',
+              provider: 'VIVA',
+              provider_operation_type: 'TRANSACTION',
+              provider_operation_id: 'viva-transaction-reused',
+              evidence_hash: '1'.repeat(64),
+              resolution: 'APPLIED',
+              error_code: null,
+              participation_id: participationId,
+              aggregate_revision: '2',
+              resolved_at: '2026-08-01T10:04:00.000Z',
+            },
+          ],
+        };
+      }
+      return baseHandler(text, { paymentMode: 'SPLIT' });
+    });
+
+    await expect(
+      createGameRosterRepository(pool as never).confirmPayment({
+        ...input({ expectedRevision: undefined }),
+        reservationId,
+        evidence: {
+          provider: 'VIVA',
+          operationType: 'TRANSACTION',
+          operationId: 'viva-transaction-reused',
+          evidenceHash: '1'.repeat(64),
+          verifiedAt: '2026-08-01T10:05:00.000Z',
+          verifiedBy: 'LEGACY_NODE_RED',
+        },
+      }),
+    ).resolves.toMatchObject({
+      outcome: 'rejected',
+      code: 'GAME_PAYMENT_EVIDENCE_CONFLICT',
+    });
+    expect(
+      query.mock.calls.some(([text]) => text.includes('insert into games.participations')),
+    ).toBe(false);
+  });
+
   it('blocks a join with no canonical player level before any roster or payment write', async () => {
     const { pool, query } = poolWithHandler((text) => {
       if (text.includes('eligibility.level_policies')) {
