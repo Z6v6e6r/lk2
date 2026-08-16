@@ -15,6 +15,8 @@ manifest_base64="$1"
 database="${2:-}"
 legacy_alias_filename=0043_messaging_runtime.sql
 legacy_alias_checksum=32512565880a9062a432eb68ec192b0640570f1636d2f2a946ab4ebc5bf96465
+legacy_context_filename=0044_contextual_messaging_projection.sql
+legacy_context_checksum=103976b96034ac3996c47c9adc536d22c06c5bc0ad12352af1413241b9c50832
 if ! manifest="$(printf '%s' "$manifest_base64" | base64 -d 2>/dev/null)"; then
   fail 'candidate migration manifest is not valid base64'
 fi
@@ -72,7 +74,8 @@ while IFS='|' read -r filename checksum; do
   expected_checksum="$(printf '%s\n' "$manifest" |
     awk -F '|' -v filename="$filename" '$2 == filename { print $1 }')"
   if test -z "$expected_checksum"; then
-    if test "$filename" = "$legacy_alias_filename" && test "$checksum" = "$legacy_alias_checksum"; then
+    if { test "$filename" = "$legacy_alias_filename" && test "$checksum" = "$legacy_alias_checksum"; } ||
+      { test "$filename" = "$legacy_context_filename" && test "$checksum" = "$legacy_context_checksum"; }; then
       legacy_alias_count=$((legacy_alias_count + 1))
       continue
     fi
@@ -82,7 +85,7 @@ while IFS='|' read -r filename checksum; do
 done <<EOF
 $ledger
 EOF
-test "$legacy_alias_count" -le 1 || fail 'migration ledger contains duplicate legacy aliases'
+test "$legacy_alias_count" -le 2 || fail 'migration ledger contains too many reviewed legacy entries'
 expected_ledger_count=$((manifest_count + legacy_alias_count))
 test "$ledger_count" -eq "$expected_ledger_count" ||
   fail "migration ledger count differs from candidate manifest and reviewed aliases (ledger=$ledger_count candidate=$manifest_count aliases=$legacy_alias_count)"

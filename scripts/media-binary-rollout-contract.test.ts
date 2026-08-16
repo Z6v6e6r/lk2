@@ -128,6 +128,9 @@ describe('media binary-only staging rollout contract', () => {
     expect(rollbackGuard).toContain('default_transaction_read_only=on');
     expect(rollbackGuard).toContain('statement_timeout=30000');
     expect(ledger).toContain('policy.polroles = array[0]::oid[]');
+    expect(ledger).toContain('0044_contextual_messaging_projection.sql');
+    expect(baseline).toContain('0044_contextual_messaging_projection.sql');
+    expect(baseline).toContain('test "$legacy_alias_count" -le 2');
     expect(ledger).toContain(
       "tenant_id=nullifcurrent_setting''app.tenant_id''::text,true,''''::text::uuid",
     );

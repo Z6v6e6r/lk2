@@ -80,8 +80,13 @@ does not prove an acceptable production writer pause.
    - if none of the maintenance-only chat/push migrations `0069`–`0073` are pending, pass the clone
      `media` role precheck, run the built `apps/migrator` image against the clone, run it again and
      require no output, then pass the role postcheck and rolled-back runtime tenant DML/RLS probe;
-   - if any `0069`–`0073` migration is pending, stop without invoking the migrator. This Communities
-     procedure has no reviewed clone mode that combines the chat/push maintenance acknowledgement
+   - if the pending set is exactly the reviewed 29-file staging set recorded below, use only the
+     three-phase clone-only rehearsal contract. It applies `0053`–`0068`, then `0069`–`0073`, then
+     `0076`–`0083` to a newly restored clone and performs an ordinary no-op migrator invocation only
+     after all three phases pass. It never targets the shared database and never resumes a partially
+     applied clone;
+   - for every other pending set, stop without invoking the migrator. This Communities procedure
+     has no reviewed clone mode that combines the chat/push maintenance acknowledgement
      with the required media role precheck, postcheck and rolled-back runtime tenant DML/RLS probe.
      Complete the separately authorized maintenance procedure in
      `docs/runbooks/chats-notifications-moderation.md`, then restart this preflight from a fresh
@@ -181,9 +186,64 @@ archive retention. The runner repeats the equality check before it publishes the
 Failure evidence and cleanup markers remain available for reconciliation; an unresolved marker
 blocks subsequent attempts.
 
-Neither operation applies migration 0078, so its four index build durations remain `UNMEASURED`.
-Measuring them requires a separately authorized migration rehearsal on the restored clone and an
-explicit lock, statement-timeout and storage budget.
+Neither preflight operation applies migration 0078, so its four index build durations remain
+`UNMEASURED` until the separately authorized staged rehearsal runs. That rehearsal records one
+isolated-clone, transactional `REINDEX` duration for each exact 0078 index after verifying the
+complete manifest, then rolls each measurement transaction back. These figures are conservative
+lock/storage-budget evidence, not the original first-build timings on the shared database.
+
+### Exact 29-file staged clone rehearsal contract
+
+The staging inventory associated with source-ledger SHA-256
+`60f0d7e4f93db67c1cf0e3a145745402a9b6153182ed8355a58c7cb2094ec8a2` reported this exact pending
+set:
+
+- pre-foundation: `0053_profile_visibility_sections.sql` through
+  `0068_community_event_retention.sql` as enumerated by
+  `COMMUNITIES_STAGED_REHEARSAL_PRE_FOUNDATION_FILENAMES`;
+- foundation: the five maintenance migrations `0069`–`0073`;
+- post-foundation: `0076_community_create_quota_grants.sql` through
+  `0083_profile_photo_removal_commands_validate.sql` as enumerated by
+  `COMMUNITIES_STAGED_REHEARSAL_POST_FOUNDATION_FILENAMES`.
+
+The candidate migrator resolves this mode only when all of the following are true:
+
+- `COMMUNITIES_STAGED_REHEARSAL_CONFIRMATION=COMMUNITIES_STAGED_REHEARSAL_29_V1`;
+- the phase is one of `pre_foundation`, `foundation`, or `post_foundation`;
+- `DATABASE_URL` targets the exact `PHUB_RESTORE_DATABASE`, whose name matches
+  `phub_restore_<run>_<attempt>`, on Compose service `postgres:5432`, with no URL options;
+- the complete ordered pending set equals the expected set for that phase;
+- the retained backup SHA-256 and restored initial ledger SHA-256 equal the approved backup evidence;
+- a distinct root-owned private rehearsal release file binds the exact candidate SHA and immutable
+  migrator image digest. The shared `/opt/phub/release.env` is never changed.
+
+The rehearsal uses the ownership-preserving restore path in
+`deploy/jetson/rehearse-media-migration.sh`. Before the first phase it verifies PostgreSQL 16,
+same-cluster ownership, distinct runtime/migrator roles, exact backup and ledger custody, and the
+media role boundary. Its input must be a newly authorized `postgres-communities-rehearsal-*`
+custom-format archive created without `--no-owner` and without `--no-acl`. The path intentionally
+rejects the existing `postgres-communities-preflight-*` archive because that portable backup omitted
+ownership and ACL restoration commands. Before creating a clone it uses the archive TOC only as a
+structural prefilter for the `profile.privacy_commands` owner plus ACL and default-ACL entries. The
+authoritative role precheck after restore verifies the required object owners, grants and default
+ACLs. It then requires the exact `Applied ...` transcript for all `16 + 5 + 8`
+migrations, runs the ordinary migrator once with no staged variables and requires empty output,
+records an authoritative infrastructure-superuser count of `profile.privacy_commands` rows missing
+`visibilityMode` or `sections` before and after migration, requires the post-count to be zero, passes
+the post-role check and rolled-back tenant DML/RLS probe, verifies the complete migration
+manifest and media invariants, and drops only its marked clone. Any mismatch or partial phase drops
+the clone; a failed or uncertain cleanup retains a marker and blocks a later attempt. After the
+manifest check, it records four named clone-only quota-index `REINDEX` durations with transaction
+rollback and requires `quota_index_measurements=4` in the final evidence line.
+
+This repository does not yet expose that command through the staging preflight workflow. Before a
+real run, add and independently review a dedicated protected-environment dispatch using a separate
+restricted forced-command key. It must bind the exact backup path/SHA, source ledger SHA, candidate
+SHA, migrator digest and root-owned rehearsal release file; it must not reuse `STAGING_DEPLOY_KEY`,
+must not reuse the existing `postgres-communities-preflight-*` portable archive,
+change shared `release.env`, run the shared migrator, start application processes, deploy, import or
+activate Communities. Until that dispatch and its host installation are approved, this section is
+an executable local/contract implementation only and grants no staging write authority.
 
 ## Activation boundary
 

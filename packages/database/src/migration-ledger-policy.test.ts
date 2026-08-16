@@ -85,6 +85,21 @@ describe('migration ledger policy', () => {
         packaged: [shifted],
       }),
     ).not.toThrow();
+    expect(() =>
+      assertMigrationLedgerCompatible({
+        applied: [
+          {
+            filename: '0043_messaging_runtime.sql',
+            checksum: '32512565880a9062a432eb68ec192b0640570f1636d2f2a946ab4ebc5bf96465',
+          },
+          {
+            filename: '0044_contextual_messaging_projection.sql',
+            checksum: '103976b96034ac3996c47c9adc536d22c06c5bc0ad12352af1413241b9c50832',
+          },
+        ],
+        packaged: [shifted],
+      }),
+    ).not.toThrow();
 
     expect(() =>
       assertMigrationLedgerCompatible({

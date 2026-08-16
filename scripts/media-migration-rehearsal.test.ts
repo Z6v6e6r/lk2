@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import {
   chmodSync,
   copyFileSync,
@@ -22,6 +23,7 @@ const ledgerVerifier = fileURLToPath(
 );
 const temporaryDirectories: string[] = [];
 const checksum = 'a'.repeat(64);
+const legacyContextChecksum = '103976b96034ac3996c47c9adc536d22c06c5bc0ad12352af1413241b9c50832';
 
 afterEach(() => {
   for (const directory of temporaryDirectories.splice(0)) {
@@ -47,6 +49,14 @@ function execute(
     readonly profileCommandColumnState?: number;
     readonly profileCommandDefault?: number;
     readonly runtimeUrl?: string;
+    readonly staged?: boolean;
+    readonly stagedBackupSha?: string;
+    readonly stagedSourceLedgerSha?: string;
+    readonly failStagedPhase?: string;
+    readonly privacyMissingBefore?: number;
+    readonly privacyMissingAfter?: number;
+    readonly stagedPortableBackup?: boolean;
+    readonly missingArchiveAcl?: boolean;
   } = {},
 ) {
   const directory = mkdtempSync(join(tmpdir(), 'phub-media-migration-rehearsal-'));
@@ -57,20 +67,46 @@ function execute(
   const dockerLog = join(directory, 'docker.log');
   const databaseState = join(directory, 'database.state');
   const migratorCount = join(directory, 'migrator.count');
+  const candidateSha = 'd'.repeat(40);
+  const migratorDigest = `sha256:${'c'.repeat(64)}`;
   mkdirSync(appRoot);
   mkdirSync(backupRoot);
   mkdirSync(fakeBin);
   copyFileSync(ledgerVerifier, join(appRoot, 'verify-media-migration-ledger.sh'));
-  const backup = join(backupRoot, 'postgres-pre-candidate.dump');
-  writeFileSync(backup, 'custom-format-backup');
+  const backupContents = 'custom-format-backup';
+  const backup = join(
+    backupRoot,
+    input.staged
+      ? input.stagedPortableBackup
+        ? 'postgres-communities-preflight-20260816T113900Z-18803.dump'
+        : 'postgres-communities-rehearsal-20260816T113900Z-18803.dump'
+      : 'postgres-pre-candidate.dump',
+  );
+  writeFileSync(backup, backupContents);
   writeFileSync(dockerLog, '');
   writeFileSync(databaseState, input.preexistingClone ? '1\n' : '0\n');
   writeFileSync(migratorCount, '0\n');
+  const rehearsalReleaseEnv = join(appRoot, `release.communities-rehearsal-${candidateSha}.env`);
+  writeFileSync(
+    rehearsalReleaseEnv,
+    `REGISTRY=ghcr.io/example\nMIGRATOR_IMAGE_DIGEST=${migratorDigest}\nRELEASE=${candidateSha}\n`,
+  );
+  chmodSync(rehearsalReleaseEnv, 0o400);
   writeFileSync(
     join(fakeBin, 'docker'),
     `#!/bin/sh
 printf '%s\n' "$*" >> "$FAKE_DOCKER_LOG"
 case "$*" in
+  *' config --images'*) printf '%s\n' "ghcr.io/example/phub-migrator@$FAKE_MIGRATOR_DIGEST" ;;
+  'image inspect '*) exit 0 ;;
+  *' pull migrator') exit 0 ;;
+  *'pg_restore --list'*)
+    printf '%s\n' '1; 0 0 TABLE profile privacy_commands phub_owner'
+    if test "$FAKE_MISSING_ARCHIVE_ACL" != true; then
+      printf '%s\n' '2; 0 0 ACL - TABLE profile privacy_commands phub_owner'
+      printf '%s\n' '3; 0 0 DEFAULT ACL - DEFAULT PRIVILEGES FOR TABLES phub_owner'
+    fi
+    ;;
   *'printf %s "$POSTGRES_DB"'*) printf '%s' "$FAKE_SHARED_DATABASE" ;;
   *'select count(*) from pg_database'*) cat "$FAKE_DATABASE_STATE" ;;
   *'--entrypoint node migrator -e'*)
@@ -84,6 +120,15 @@ case "$*" in
   *'apps/migrator/dist/verify-media-runtime-role.js'*)
     printf 'MEDIA_RUNTIME_PROBE tenant=%s\n' "$MEDIA_RUNTIME_TENANT_KEY" >> "$FAKE_DOCKER_LOG"
     test "$FAKE_MEDIA_RUNTIME_PROBE_FAIL" != true
+    ;;
+  *'reindex index community_content.'*) printf '%s\n' 1 ;;
+  *'from profile.privacy_commands'*)
+    count="$(cat "$FAKE_MIGRATOR_COUNT")"
+    if test "$count" -ge 3; then
+      printf '%s\n' "$FAKE_PRIVACY_MISSING_AFTER"
+    else
+      printf '%s\n' "$FAKE_PRIVACY_MISSING_BEFORE"
+    fi
     ;;
   *'createdb -U "$POSTGRES_USER" --template=template0'*)
     printf '%s\n' 1 > "$FAKE_DATABASE_STATE"
@@ -102,20 +147,92 @@ case "$*" in
     count="$(cat "$FAKE_MIGRATOR_COUNT")"
     count=$((count + 1))
     printf '%s\n' "$count" > "$FAKE_MIGRATOR_COUNT"
-    if test "$count" -eq 2 && test -n "$FAKE_SECOND_MIGRATOR_OUTPUT"; then
+    if test -n "\${COMMUNITIES_STAGED_REHEARSAL_PHASE:-}"; then
+      printf 'STAGED_PHASE=%s\n' "$COMMUNITIES_STAGED_REHEARSAL_PHASE" >> "$FAKE_DOCKER_LOG"
+      test "$FAKE_FAIL_STAGED_PHASE" != "$COMMUNITIES_STAGED_REHEARSAL_PHASE" || exit 1
+      case "$COMMUNITIES_STAGED_REHEARSAL_PHASE" in
+        pre_foundation) cat <<'EOF'
+Applied 0053_profile_visibility_sections.sql
+Applied 0054_community_membership_pin_commands.sql
+Applied 0055_community_create_commands.sql
+Applied 0056_community_discovery_indexes.sql
+Applied 0057_community_membership_lifecycle.sql
+Applied 0058_community_direct_invites.sql
+Applied 0059_community_direct_invite_quotas.sql
+Applied 0060_viva_home_booking_ownership.sql
+Applied 0061_community_mine_keyset_index.sql
+Applied 0062_community_ownership_transfers.sql
+Applied 0063_community_content_foundation.sql
+Applied 0064_community_durable_events.sql
+Applied 0065_community_content_moderation.sql
+Applied 0066_community_member_count_projection.sql
+Applied 0067_community_media_lifecycle.sql
+Applied 0068_community_event_retention.sql
+EOF
+          ;;
+        foundation) cat <<'EOF'
+Applied 0069_booking_notification_projection_fence.sql
+Applied 0070_web_push_endpoint_hardening.sql
+Applied 0071_messaging_user_blocks.sql
+Applied 0072_web_push_endpoint_status_validation.sql
+Applied 0073_booking_reminder_scheduler.sql
+EOF
+          ;;
+        post_foundation) cat <<'EOF'
+Applied 0076_community_create_quota_grants.sql
+Applied 0077_community_media_operational_recovery.sql
+Applied 0078_community_media_issue_quotas.sql
+Applied 0079_profile_photo_client_assisted_source.sql
+Applied 0080_community_logo_stable_delivery.sql
+Applied 0081_community_logo_stable_delivery_validate.sql
+Applied 0082_profile_photo_removal_commands.sql
+Applied 0083_profile_photo_removal_commands_validate.sql
+EOF
+          ;;
+        *) exit 1 ;;
+      esac
+    elif test "$count" -eq 2 && test -n "$FAKE_SECOND_MIGRATOR_OUTPUT"; then
       printf '%s\n' "$FAKE_SECOND_MIGRATOR_OUTPUT"
     fi
     ;;
   *'show server_version_num'*) printf '%s\n' 160010 ;;
   *'select rolsuper from pg_catalog.pg_roles'*) printf '%s\n' t ;;
-  *"select filename || '|' || checksum"*) printf '%s|%s\n' '0001_test.sql' "$FAKE_LEDGER_CHECKSUM" ;;
+  *"select filename || '|' || checksum"*)
+    printf '%s|%s\n' '0001_test.sql' "$FAKE_LEDGER_CHECKSUM"
+    printf '%s|%s\n' '0044_contextual_messaging_projection.sql' "$FAKE_LEGACY_CONTEXT_CHECKSUM"
+    ;;
+  *'select filename, checksum from public.schema_migrations'*)
+    printf '%s|%s\n' '0001_test.sql' "$FAKE_LEDGER_CHECKSUM"
+    printf '%s|%s\n' '0044_contextual_messaging_projection.sql' "$FAKE_LEGACY_CONTEXT_CHECKSUM"
+    ;;
   *'where (delivery_url is null)'*) printf '0|1|3|1|3|%s|%s|%s|%s|%s\n' "$FAKE_TOTAL_POLICIES" "$FAKE_VALIDATED_COMMAND_CONSTRAINTS" "$FAKE_EXACT_COMMAND_CONSTRAINT_DEFINITIONS" "$FAKE_PROFILE_COMMAND_COLUMN_STATE" "$FAKE_PROFILE_COMMAND_DEFAULT" ;;
   *) exit 0 ;;
 esac
 `,
   );
   chmodSync(join(fakeBin, 'docker'), 0o700);
+  writeFileSync(
+    join(fakeBin, 'stat'),
+    `#!/bin/sh
+if test "$#" -eq 3 && test "$1" = -c && test "$2" = %u && test "$3" = "$FAKE_RELEASE_ENV"; then
+  printf '%s\n' 0
+  exit 0
+fi
+if test "$#" -eq 3 && test "$1" = -c && test "$2" = %a && test "$3" = "$FAKE_RELEASE_ENV"; then
+  printf '%s\n' 400
+  exit 0
+fi
+exec /usr/bin/stat "$@"
+`,
+  );
+  chmodSync(join(fakeBin, 'stat'), 0o700);
   const manifest = Buffer.from(`${checksum}|0001_test.sql\n`, 'utf8').toString('base64');
+  const expectedBackupSha = createHash('sha256').update(backupContents).digest('hex');
+  const expectedSourceLedgerSha = createHash('sha256')
+    .update(
+      `0001_test.sql|${input.ledgerChecksum ?? checksum}\n0044_contextual_messaging_projection.sql|${legacyContextChecksum}\n`,
+    )
+    .digest('hex');
   const result = spawnSync('/bin/sh', [rehearsal, backup, 'phub_restore_123_1', manifest], {
     encoding: 'utf8',
     env: {
@@ -134,6 +251,7 @@ esac
       FAKE_FINAL_DROP_FAIL: String(input.failFinalDrop ?? false),
       FAKE_SECOND_MIGRATOR_OUTPUT: input.secondMigratorOutput ?? '',
       FAKE_LEDGER_CHECKSUM: input.ledgerChecksum ?? checksum,
+      FAKE_LEGACY_CONTEXT_CHECKSUM: legacyContextChecksum,
       FAKE_TOTAL_POLICIES: String(input.totalPolicies ?? 3),
       FAKE_VALIDATED_COMMAND_CONSTRAINTS: String(input.validatedCommandConstraints ?? 2),
       FAKE_EXACT_COMMAND_CONSTRAINT_DEFINITIONS: String(
@@ -141,10 +259,28 @@ esac
       ),
       FAKE_PROFILE_COMMAND_COLUMN_STATE: String(input.profileCommandColumnState ?? 4),
       FAKE_PROFILE_COMMAND_DEFAULT: String(input.profileCommandDefault ?? 1),
+      FAKE_FAIL_STAGED_PHASE: input.failStagedPhase ?? '',
+      FAKE_PRIVACY_MISSING_BEFORE: String(input.privacyMissingBefore ?? 2),
+      FAKE_PRIVACY_MISSING_AFTER: String(input.privacyMissingAfter ?? 0),
+      FAKE_MISSING_ARCHIVE_ACL: String(input.missingArchiveAcl ?? false),
+      FAKE_RELEASE_ENV: rehearsalReleaseEnv,
+      FAKE_MIGRATOR_DIGEST: migratorDigest,
       RUNTIME_DATABASE_URL:
         input.runtimeUrl ?? 'postgresql://runtime:runtime-secret@postgres:5432/phub',
       MIGRATOR_DATABASE_URL:
         input.migratorUrl ?? 'postgresql://migrator:migrator-secret@postgres:5432/phub',
+      ...(input.staged
+        ? {
+            COMMUNITIES_STAGED_REHEARSAL_CONFIRMATION: 'COMMUNITIES_STAGED_REHEARSAL_29_V1',
+            COMMUNITIES_STAGED_REHEARSAL_EXPECTED_BACKUP_SHA:
+              input.stagedBackupSha ?? expectedBackupSha,
+            COMMUNITIES_STAGED_REHEARSAL_EXPECTED_SOURCE_LEDGER_SHA:
+              input.stagedSourceLedgerSha ?? expectedSourceLedgerSha,
+            COMMUNITIES_STAGED_REHEARSAL_EXPECTED_CANDIDATE_SHA: candidateSha,
+            COMMUNITIES_STAGED_REHEARSAL_EXPECTED_MIGRATOR_DIGEST: migratorDigest,
+            PHUB_REHEARSAL_RELEASE_ENV: rehearsalReleaseEnv,
+          }
+        : {}),
     },
   });
   return {
@@ -179,6 +315,7 @@ describe('media migration restore rehearsal', () => {
     expect(verify).toBeGreaterThan(migrate);
     expect(finalDrop).toBeGreaterThan(verify);
     expect(result.stdout).toContain('media_migration_ledger database=phub_restore_123_1');
+    expect(result.stdout).toContain('reviewed_legacy_aliases=1');
     expect(result.stdout).toContain(
       'media_clone_role_boundary phase=pre scope=media status=passed',
     );
@@ -192,6 +329,86 @@ describe('media migration restore rehearsal', () => {
     expect(result.stdout).toContain('rerun_applied=0 cleanup=confirmed status=passed');
     expect(log).not.toContain('--no-owner');
     expect(log).not.toContain('--no-acl');
+  });
+
+  it('runs the exact three staged phases and a final ordinary no-op on the isolated clone', () => {
+    const { result, log } = execute({ staged: true });
+
+    expect(result.status, result.stderr).toBe(0);
+    const pre = log.indexOf('STAGED_PHASE=pre_foundation');
+    const foundation = log.indexOf('STAGED_PHASE=foundation');
+    const post = log.indexOf('STAGED_PHASE=post_foundation');
+    const finalDrop = log.lastIndexOf('dropdb -U "$POSTGRES_USER" --force');
+    expect(pre).toBeGreaterThan(log.indexOf('ROLE_BOUNDARY_PHASE=pre'));
+    expect(foundation).toBeGreaterThan(pre);
+    expect(post).toBeGreaterThan(foundation);
+    expect(log.match(/--entrypoint sh migrator -ec/g)).toHaveLength(4);
+    expect(log.indexOf('ROLE_BOUNDARY_PHASE=post')).toBeGreaterThan(post);
+    expect(finalDrop).toBeGreaterThan(log.indexOf('MEDIA_RUNTIME_PROBE'));
+    expect(result.stdout.match(/community_media_quota_index_measurement index=/g)).toHaveLength(4);
+    expect(result.stdout).toContain(
+      'community_media_quota_index_measurement index=community_media_actor_outstanding_quota_idx operation=reindex',
+    );
+    expect(result.stdout).toContain(
+      'community_media_quota_index_measurement index=community_media_tenant_pipeline_quota_idx operation=reindex',
+    );
+    expect(result.stdout).toContain(
+      'communities_profile_privacy_audit missing_before=2 missing_after=0 authority=postgres_superuser status=passed',
+    );
+    expect(result.stdout).toContain(
+      'communities_staged_migration_rehearsal database=phub_restore_123_1 pre_foundation=16 foundation=5 post_foundation=8 quota_index_measurements=4',
+    );
+    expect(result.stdout).toContain('cleanup=confirmed status=passed');
+  });
+
+  it('rejects a staged backup or source-ledger mismatch before migration', () => {
+    const wrongBackup = execute({ staged: true, stagedBackupSha: 'b'.repeat(64) });
+    expect(wrongBackup.result.status).not.toBe(0);
+    expect(wrongBackup.result.stderr).toContain('staged backup SHA does not match');
+    expect(wrongBackup.log).not.toContain('createdb -U "$POSTGRES_USER"');
+
+    const wrongLedger = execute({ staged: true, stagedSourceLedgerSha: 'b'.repeat(64) });
+    expect(wrongLedger.result.status).not.toBe(0);
+    expect(wrongLedger.result.stderr).toContain(
+      'restored source ledger does not match the approved backup evidence',
+    );
+    expect(wrongLedger.log).not.toContain('STAGED_PHASE=');
+    expect(wrongLedger.log).toContain('dropdb -U "$POSTGRES_USER" --if-exists --force');
+  });
+
+  it('rejects the portable preflight archive and missing ACL evidence before clone creation', () => {
+    const portable = execute({ staged: true, stagedPortableBackup: true });
+    expect(portable.result.status).not.toBe(0);
+    expect(portable.result.stderr).toContain(
+      'staged backup path is outside the approved Communities backup namespace',
+    );
+    expect(portable.log).not.toContain('createdb -U "$POSTGRES_USER"');
+
+    const missingAcl = execute({ staged: true, missingArchiveAcl: true });
+    expect(missingAcl.result.status).not.toBe(0);
+    expect(missingAcl.result.stderr).toContain('staged archive does not contain ACL entries');
+    expect(missingAcl.log).not.toContain('createdb -U "$POSTGRES_USER"');
+  });
+
+  it('drops the clone instead of resuming a partially failed staged phase', () => {
+    const { result, log } = execute({ staged: true, failStagedPhase: 'foundation' });
+
+    expect(result.status).not.toBe(0);
+    expect(log).toContain('STAGED_PHASE=pre_foundation');
+    expect(log).toContain('STAGED_PHASE=foundation');
+    expect(log).not.toContain('STAGED_PHASE=post_foundation');
+    expect(log).toContain('dropdb -U "$POSTGRES_USER" --if-exists --force');
+  });
+
+  it('rejects an incomplete authoritative 0053 backfill and drops the clone', () => {
+    const { result, log } = execute({ staged: true, privacyMissingAfter: 1 });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      'profile privacy payload backfill is incomplete after staged migration',
+    );
+    expect(log).toContain('dropdb -U "$POSTGRES_USER" --if-exists --force');
+    expect(result.stdout).not.toContain('communities_staged_migration_rehearsal');
   });
 
   it('fails before the clone migrator when ownership or default ACL role precheck fails', () => {
