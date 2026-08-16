@@ -29,6 +29,7 @@ export * from './gift-certificate-media-repository.js';
 export * from './gift-certificate-sale-repository.js';
 export * from './gift-certificate-issuance-repository.js';
 export * from './legacy-game-import-repository.js';
+export * from './legacy-game-roster-bridge-repository.js';
 export * from './legacy-game-reconciliation-repository.js';
 export * from './level-eligibility-policy-repository.js';
 export * from './player-level-repository.js';

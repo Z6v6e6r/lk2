@@ -308,8 +308,9 @@ describe('Games Internal API compatibility', () => {
     );
   });
 
-  it('contains command submission and read-only event inspection only', () => {
+  it('contains trusted command submission, legacy roster bridge and event inspection', () => {
     expect(Object.keys(internalContract.paths)).toEqual([
+      '/{tenantKey}/legacy-games/{legacyGameId}/roster-commands',
       '/{tenantKey}/game-commands',
       '/{tenantKey}/game-events/{eventId}',
     ]);

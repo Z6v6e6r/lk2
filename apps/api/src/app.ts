@@ -40,6 +40,7 @@ import type {
   LocationMediaRepository,
   LocationRepository,
   LevelEligibilityPolicyRepository,
+  LegacyGameRosterBridgeRepository,
   PlayerLevelRepository,
   MessagingRepository,
   NotificationEndpointRepository,
@@ -112,6 +113,8 @@ import {
   type CoachGameSummarySource,
 } from './coach-games/coach-game-summary-routes.js';
 import { registerGameRoutes } from './games/game-routes.js';
+import { registerLegacyGameRosterBridgeRoutes } from './games/legacy-game-roster-bridge-routes.js';
+import type { LegacyLkIdentityVerifier } from './games/legacy-lk-identity-verifier.js';
 import { registerGameResultRoutes } from './games/game-result-routes.js';
 import { registerGameReadRoutes } from './games/game-read-routes.js';
 import { registerGiftCertificateRoutes } from './gift-certificates/gift-certificate-routes.js';
@@ -251,6 +254,8 @@ export interface BuildAppOptions {
     GameRosterRepository,
     'join' | 'joinWaitlist' | 'leave' | 'leaveWaitlist' | 'getOperation'
   >;
+  readonly legacyGameRosterBridgeRepository?: LegacyGameRosterBridgeRepository;
+  readonly legacyLkIdentityVerifier?: LegacyLkIdentityVerifier;
   readonly gameResultRepository?: Pick<GameResultRepository, 'submit' | 'confirm' | 'dispute'>;
   readonly gameReadRepository?: Pick<
     GameRepository,
@@ -911,6 +916,20 @@ export async function buildApp(options: BuildAppOptions) {
     ...(options.gameRosterRepository ? { repository: options.gameRosterRepository } : {}),
     authenticatedTenantHandlers: [authenticate, authorizeGamesPlayer, resolveTenant],
     commandHandlers: [authenticate, authorizeGamesPlayer, resolveTenant, requireIdempotencyKey],
+  });
+  registerLegacyGameRosterBridgeRoutes(app as unknown as FastifyInstance, {
+    enabled: options.config.LEGACY_GAME_COMMAND_BRIDGE_ENABLED,
+    ...(options.config.LEGACY_GAME_COMMAND_BRIDGE_TOKEN
+      ? { integrationToken: options.config.LEGACY_GAME_COMMAND_BRIDGE_TOKEN }
+      : {}),
+    ...(options.legacyLkIdentityVerifier
+      ? { identityVerifier: options.legacyLkIdentityVerifier }
+      : {}),
+    ...(options.legacyGameRosterBridgeRepository
+      ? { contextRepository: options.legacyGameRosterBridgeRepository }
+      : {}),
+    ...(options.gameRosterRepository ? { rosterRepository: options.gameRosterRepository } : {}),
+    commandHandlers: [resolvePublicTenant, requireIdempotencyKey],
   });
   registerGameResultRoutes(app as unknown as FastifyInstance, {
     ...(options.gameResultRepository ? { repository: options.gameResultRepository } : {}),
