@@ -5,6 +5,8 @@ export const DOMAIN_OWNERSHIP_MODES = [
   'LOCAL_ONLY',
 ] as const;
 
+export * from './participation-eligibility.js';
+
 export type DomainOwnershipMode = (typeof DOMAIN_OWNERSHIP_MODES)[number];
 
 export const SOURCE_STRATEGIES = [

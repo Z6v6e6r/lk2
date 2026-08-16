@@ -30,6 +30,7 @@ export * from './gift-certificate-sale-repository.js';
 export * from './gift-certificate-issuance-repository.js';
 export * from './legacy-game-import-repository.js';
 export * from './legacy-game-reconciliation-repository.js';
+export * from './level-eligibility-policy-repository.js';
 export * from './client-routing-plan-repository.js';
 export * from './notification-repository.js';
 export * from './notification-endpoint-repository.js';

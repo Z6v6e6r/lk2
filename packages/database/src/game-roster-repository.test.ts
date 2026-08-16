@@ -33,6 +33,11 @@ function lockedGame(paymentMode: 'NO_PAYMENT' | 'SPLIT' = 'NO_PAYMENT') {
     capacity: 2,
     waitlist_enabled: true,
     payment_mode: paymentMode,
+    sport_code: 'PADEL',
+    min_level_id: null,
+    max_level_id: null,
+    level_from: null,
+    level_to: null,
     database_now: '2026-08-01T10:00:00.000Z',
   };
 }
@@ -46,6 +51,28 @@ function rosterFacts(overrides: Readonly<Record<string, unknown>> = {}) {
     reservation_id: null,
     waitlist_entry_id: null,
     waitlist_position: null,
+    ...overrides,
+  };
+}
+
+function eligibilityFacts(overrides: Readonly<Record<string, unknown>> = {}) {
+  return {
+    mode: 'BLOCK',
+    lower_tolerance_steps: 0,
+    upper_tolerance_steps: 0,
+    missing_activity_constraint_action: 'BLOCK',
+    legacy_text_constraint_action: 'WARN',
+    policy_version: '3',
+    player_level_id: null,
+    player_rank: null,
+    player_level_source: null,
+    player_scale_version: null,
+    minimum_level_id: '1dfc1d4a-47cb-4b43-a735-761260a2e986',
+    maximum_level_id: '7d7556e6-f30b-48e5-9ff2-c39bdf062ff7',
+    minimum_rank: 3,
+    maximum_rank: 5,
+    constraint_scale_version: 1,
+    valid_invitation_id: null,
     ...overrides,
   };
 }
@@ -79,6 +106,34 @@ function baseHandler(
   } = {},
 ) {
   if (text.includes('from games.command_idempotency')) return { rows: [] };
+  if (
+    text.includes('from (values (1)) source(marker)') &&
+    text.includes('eligibility.level_policies')
+  ) {
+    return {
+      rows: [
+        {
+          mode: null,
+          lower_tolerance_steps: null,
+          upper_tolerance_steps: null,
+          missing_activity_constraint_action: null,
+          legacy_text_constraint_action: null,
+          policy_version: null,
+          player_level_id: null,
+          player_rank: null,
+          player_level_source: null,
+          player_scale_version: null,
+          minimum_level_id: null,
+          maximum_level_id: null,
+          minimum_rank: null,
+          maximum_rank: null,
+          constraint_scale_version: null,
+          valid_invitation_id: null,
+        },
+      ],
+    };
+  }
+  if (text.includes('insert into eligibility.payment_snapshots')) return { rowCount: 1 };
   if (text.includes('from games.games') && text.includes('for update')) {
     return { rows: [lockedGame(options.paymentMode)] };
   }
@@ -152,6 +207,111 @@ describe('game roster repository', () => {
         .filter(([text]) => text.includes('insert into audit.outbox_events'))
         .map((call) => call[1]?.[2]),
     ).toEqual(['game.participation.reserved.v1']);
+  });
+
+  it('blocks a join with no canonical player level before any roster or payment write', async () => {
+    const { pool, query } = poolWithHandler((text) => {
+      if (text.includes('eligibility.level_policies')) {
+        return { rows: [eligibilityFacts()] };
+      }
+      if (text.includes('from games.games') && text.includes('for update')) {
+        return {
+          rows: [
+            {
+              ...lockedGame('SPLIT'),
+              min_level_id: '1dfc1d4a-47cb-4b43-a735-761260a2e986',
+              max_level_id: '7d7556e6-f30b-48e5-9ff2-c39bdf062ff7',
+            },
+          ],
+        };
+      }
+      return baseHandler(text, { paymentMode: 'SPLIT' });
+    });
+
+    await expect(createGameRosterRepository(pool as never).join(input())).resolves.toEqual({
+      outcome: 'rejected',
+      code: 'PLAYER_LEVEL_REQUIRED',
+      currentRevision: 1,
+      replayed: false,
+    });
+    expect(
+      query.mock.calls.some(([text]) => text.includes('insert into eligibility.decisions')),
+    ).toBe(true);
+    expect(
+      query.mock.calls.some(([text]) => text.includes('insert into games.seat_reservations')),
+    ).toBe(false);
+    expect(
+      query.mock.calls.some(([text]) => text.includes('insert into eligibility.payment_snapshots')),
+    ).toBe(false);
+  });
+
+  it('accepts only a repository-validated personal invitation and consumes it after the join', async () => {
+    const invitationId = '95a76d36-d8a7-4ff5-a988-84f33c0fd05a';
+    const { pool, query } = poolWithHandler((text) => {
+      if (text.includes('eligibility.level_policies')) {
+        return { rows: [eligibilityFacts({ valid_invitation_id: invitationId })] };
+      }
+      if (text.includes('from games.games') && text.includes('for update')) {
+        return {
+          rows: [
+            {
+              ...lockedGame(),
+              min_level_id: '1dfc1d4a-47cb-4b43-a735-761260a2e986',
+              max_level_id: '7d7556e6-f30b-48e5-9ff2-c39bdf062ff7',
+            },
+          ],
+        };
+      }
+      if (text.includes('insert into games.participations')) {
+        return { rows: [{ id: participationId }] };
+      }
+      if (text.includes('array_agg(user_id')) {
+        return { rows: [{ user_ids: [organizerId, playerId] }] };
+      }
+      return baseHandler(text);
+    });
+
+    await expect(
+      createGameRosterRepository(pool as never).join(input({ invitationId })),
+    ).resolves.toMatchObject({ outcome: 'applied', viewerRelation: 'PARTICIPANT' });
+    expect(
+      query.mock.calls.some(
+        ([text, values]) =>
+          text.includes('update eligibility.personal_invitations') &&
+          values?.includes(invitationId),
+      ),
+    ).toBe(true);
+  });
+
+  it('does not consume an invitation when the level rule is OFF and no bypass was used', async () => {
+    const invitationId = '95a76d36-d8a7-4ff5-a988-84f33c0fd05a';
+    const { pool, query } = poolWithHandler((text) => {
+      if (text.includes('eligibility.level_policies')) {
+        return {
+          rows: [
+            eligibilityFacts({
+              mode: null,
+              policy_version: null,
+              valid_invitation_id: invitationId,
+            }),
+          ],
+        };
+      }
+      if (text.includes('insert into games.participations')) {
+        return { rows: [{ id: participationId }] };
+      }
+      if (text.includes('array_agg(user_id')) {
+        return { rows: [{ user_ids: [organizerId, playerId] }] };
+      }
+      return baseHandler(text);
+    });
+
+    await expect(
+      createGameRosterRepository(pool as never).join(input({ invitationId })),
+    ).resolves.toMatchObject({ outcome: 'applied' });
+    expect(
+      query.mock.calls.some(([text]) => text.includes('update eligibility.personal_invitations')),
+    ).toBe(false);
   });
 
   it('persists a replayable capacity rejection without a roster write or outbox event', async () => {
@@ -349,6 +509,7 @@ describe('game roster repository', () => {
               user_id: playerId,
               position: '1',
               state: 'ACTIVE',
+              personal_invitation_id: null,
             },
           ],
         };

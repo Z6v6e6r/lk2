@@ -21,6 +21,7 @@ import {
   createLegacyGameImportRepository,
   createLocationMediaRepository,
   createLocationRepository,
+  createLevelEligibilityPolicyRepository,
   createMessagingRepository,
   createNotificationEndpointRepository,
   createNotificationInboxRepository,
@@ -40,7 +41,7 @@ import {
   LegacyTournamentSummaryAdapter,
 } from '@phub/legacy-games-adapter';
 import { createNotificationEndpointCipher } from '@phub/notifications';
-import { createLogger, startTelemetry } from '@phub/observability';
+import { createLogger, recordLevelEligibilityMetrics, startTelemetry } from '@phub/observability';
 import {
   VivaCoachGameSummaryAdapter,
   VivaExerciseRecommendationSourceAdapter,
@@ -411,6 +412,7 @@ const app = await buildApp({
   notificationEndpointRepository: createNotificationEndpointRepository(pool),
   adminNotificationRepository: createAdminNotificationRepository(pool),
   locationRepository: createLocationRepository(pool),
+  levelEligibilityPolicyRepository: createLevelEligibilityPolicyRepository(pool),
   locationMediaRepository: createLocationMediaRepository(pool),
   giftCertificateCatalogRepository: createGiftCertificateCatalogRepository(pool),
   giftCertificateMediaRepository: createGiftCertificateMediaRepository(pool),
@@ -457,7 +459,21 @@ const app = await buildApp({
   ...(exerciseRecommendationSource ? { exerciseRecommendationSource } : {}),
   ...(config.GAMES_COMMANDS_ENABLED
     ? {
-        gameRosterRepository: createGameRosterRepository(pool),
+        gameRosterRepository: createGameRosterRepository(pool, {
+          onEligibilityDecision: (decision) => {
+            recordLevelEligibilityMetrics({
+              tenant: decision.tenantId,
+              sport: decision.sportId,
+              activityType: decision.activityType,
+              mode: decision.mode,
+              outcome: decision.outcome,
+              reasonCode: decision.reasonCode,
+              constraintSource: decision.constraintSource,
+              action: decision.action,
+            });
+            logger.info({ eligibility: decision }, 'participation eligibility evaluated');
+          },
+        }),
         ...(config.GAMES_RESULTS_WRITE_MODE === 'local_primary'
           ? { gameResultRepository: createGameResultRepository(pool) }
           : {}),

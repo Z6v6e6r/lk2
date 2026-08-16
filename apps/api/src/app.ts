@@ -39,6 +39,7 @@ import type {
   GiftCertificateSaleRepository,
   LocationMediaRepository,
   LocationRepository,
+  LevelEligibilityPolicyRepository,
   MessagingRepository,
   NotificationEndpointRepository,
   NotificationInboxRepository,
@@ -70,6 +71,7 @@ import { z } from 'zod';
 import { registerAuthRoutes } from './auth/auth-routes.js';
 import { registerAdminNotificationRoutes } from './admin/notification-admin-routes.js';
 import { registerLocationAdminRoutes } from './admin/location-admin-routes.js';
+import { registerLevelEligibilityAdminRoutes } from './admin/level-eligibility-admin-routes.js';
 import { registerGiftCertificateAdminRoutes } from './admin/gift-certificate-admin-routes.js';
 import { registerCommunityMembershipAdminRoutes } from './admin/community-membership-admin-routes.js';
 import { registerCommunityDirectInviteAdminRoutes } from './admin/community-direct-invite-admin-routes.js';
@@ -261,6 +263,7 @@ export interface BuildAppOptions {
   readonly messagingRepository?: MessagingRepository;
   readonly realtimeTicketIssuer?: RealtimeTicketIssuer;
   readonly locationRepository?: LocationRepository;
+  readonly levelEligibilityPolicyRepository?: LevelEligibilityPolicyRepository;
   readonly locationMediaRepository?: LocationMediaRepository;
   readonly giftCertificateCatalogRepository?: GiftCertificateCatalogRepository;
   readonly giftCertificateMediaRepository?: GiftCertificateMediaRepository;
@@ -1047,6 +1050,13 @@ export async function buildApp(options: BuildAppOptions) {
   });
   registerLocationAdminRoutes(app as unknown as FastifyInstance, {
     ...(options.locationRepository ? { repository: options.locationRepository } : {}),
+    authenticatedTenantHandlers: [authenticateAdmin, resolveTenant],
+    commandHandlers: [authenticateAdmin, resolveTenant, requireIdempotencyKey],
+  });
+  registerLevelEligibilityAdminRoutes(app as unknown as FastifyInstance, {
+    ...(options.levelEligibilityPolicyRepository
+      ? { repository: options.levelEligibilityPolicyRepository }
+      : {}),
     authenticatedTenantHandlers: [authenticateAdmin, resolveTenant],
     commandHandlers: [authenticateAdmin, resolveTenant, requireIdempotencyKey],
   });

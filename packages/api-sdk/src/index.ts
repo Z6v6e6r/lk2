@@ -1114,16 +1114,20 @@ export class PadlHubApiClient {
     );
   }
 
-  public joinGame(gameId: string, expectedRevision?: number): Promise<GameCommandResult> {
-    return this.gameCommand(gameId, '/join', 'POST', { expectedRevision });
+  public joinGame(
+    gameId: string,
+    expectedRevision?: number,
+    invitationId?: string,
+  ): Promise<GameCommandResult> {
+    return this.gameCommand(gameId, '/join', 'POST', { expectedRevision, invitationId });
   }
 
   public leaveGame(gameId: string): Promise<GameCommandResult> {
     return this.gameCommand(gameId, '/participants/me', 'DELETE');
   }
 
-  public joinGameWaitlist(gameId: string): Promise<GameCommandResult> {
-    return this.gameCommand(gameId, '/waitlist', 'POST');
+  public joinGameWaitlist(gameId: string, invitationId?: string): Promise<GameCommandResult> {
+    return this.gameCommand(gameId, '/waitlist', 'POST', { invitationId });
   }
 
   public leaveGameWaitlist(gameId: string): Promise<GameCommandResult> {

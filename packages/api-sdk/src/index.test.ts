@@ -428,7 +428,11 @@ describe('PadlHubApiClient authentication boundary', () => {
       initialAccessToken: authenticatedSession.accessToken,
     });
 
-    await client.joinGame('751fe6a8-b0b1-4b2b-873d-a2d785c4e191', 9);
+    await client.joinGame(
+      '751fe6a8-b0b1-4b2b-873d-a2d785c4e191',
+      9,
+      '95a76d36-d8a7-4ff5-a988-84f33c0fd05a',
+    );
 
     expect(requestUrl(calls[0]?.input ?? '')).toBe(
       'https://api.padlhub.test/user/api/v1/local-padel/games/751fe6a8-b0b1-4b2b-873d-a2d785c4e191/join',
@@ -438,7 +442,10 @@ describe('PadlHubApiClient authentication boundary', () => {
       `Bearer ${authenticatedSession.accessToken}`,
     );
     expect(new Headers(calls[0]?.init?.headers).get('Idempotency-Key')).toBeTruthy();
-    expect(JSON.parse(stringRequestBody(calls[0]?.init?.body))).toEqual({ expectedRevision: 9 });
+    expect(JSON.parse(stringRequestBody(calls[0]?.init?.body))).toEqual({
+      expectedRevision: 9,
+      invitationId: '95a76d36-d8a7-4ff5-a988-84f33c0fd05a',
+    });
   });
 
   it('reads a Games operation from the authenticated user boundary', async () => {
