@@ -1,5 +1,6 @@
 #!/bin/sh
 set -eu
+umask 077
 
 fail() {
   printf '%s\n' "Runtime secret transition refused: $*" >&2
@@ -264,6 +265,28 @@ run_compose_helper() {
   printf '%s\n' "$output"
 }
 
+compose_render_helper_raw() {
+  resolve_helper_image
+  docker run --rm -i --pull=never --entrypoint node \
+    --user "$deploy_uid:$deploy_gid" --network none --read-only \
+    --tmpfs /tmp:rw,noexec,nosuid,nodev,size=1m --security-opt no-new-privileges \
+    --cap-drop ALL --memory 128m --pids-limit 64 \
+    --mount type=bind,src="$candidate_tool_directory",dst=/reviewed,readonly \
+    "$helper_image" --input-type=module - verify-compose-render-delta /unused \
+    /reviewed/.runtime-secret-active-render.json \
+    /reviewed/.runtime-secret-candidate-render.json \
+    "$deploy_uid" "$deploy_gid" < "$helper_script"
+}
+
+run_compose_render_helper() {
+  output=$(compose_render_helper_raw) || fail 'Compose render delta helper failed'
+  test "$(printf '%s\n' "$output" | wc -l | tr -d ' ')" -eq 1 ||
+    fail 'Compose render delta helper returned unexpected output'
+  test "$output" = 'runtime-secret-transition operation=verify-compose-render-delta result=compose-render-approved status=passed' ||
+    fail 'Compose render delta helper did not acknowledge completion'
+  printf '%s\n' "$output"
+}
+
 run_helper() {
   mode=$1
   shift
@@ -491,8 +514,11 @@ test "$(stat -c '%h:%u:%g:%a' "$generated_candidate_compose")" = "1:$deploy_uid:
   fail 'generated candidate Compose metadata differs'
 candidate_compose=$generated_candidate_compose
 
-active_render=$(mktemp)
-candidate_render=$(mktemp)
+active_render="$candidate_tool_directory/.runtime-secret-active-render.json"
+candidate_render="$candidate_tool_directory/.runtime-secret-candidate-render.json"
+for path in "$active_render" "$candidate_render"; do
+  test ! -e "$path" && test ! -L "$path" || fail 'Compose render artifact already exists'
+done
 cleanup_render() { rm -f "$active_render" "$candidate_render"; }
 trap cleanup_render EXIT HUP INT TERM
 render() {
@@ -501,7 +527,12 @@ render() {
 }
 render "$app_root/compose.yaml" > "$active_render" || fail 'active Compose does not render'
 render "$candidate_compose" > "$candidate_render" || fail 'candidate Compose does not render'
-cmp -s "$active_render" "$candidate_render" || fail 'candidate Compose changes more than the approved realtime env contour'
+chmod 600 "$active_render" "$candidate_render"
+for path in "$active_render" "$candidate_render"; do
+  test "$(stat -c '%h:%u:%g:%a' "$path")" = "1:$deploy_uid:$deploy_gid:600" ||
+    fail 'Compose render artifact metadata differs'
+done
+run_compose_render_helper >/dev/null
 cleanup_render
 trap - EXIT HUP INT TERM
 

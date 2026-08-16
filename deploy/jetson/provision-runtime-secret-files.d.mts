@@ -49,6 +49,16 @@ export function buildRuntimeSecretComposeCandidateFile(
   uid: number,
   gid: number,
 ): { status: 'compose-generated' };
+export function verifyRuntimeSecretComposeRenderDelta(
+  activeSource: string,
+  candidateSource: string,
+): { status: 'compose-render-approved' };
+export function verifyRuntimeSecretComposeRenderDeltaFile(
+  activePath: string,
+  candidatePath: string,
+  uid: number,
+  gid: number,
+): { status: 'compose-render-approved' };
 export function verifyPrepared(directory: string): { status: string };
 export function recoverMarker(directory: string): { status: 'marker-current' | 'marker-recovered' };
 export function advancePhase(
