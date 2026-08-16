@@ -160,31 +160,76 @@ The application runtime uses separate API/worker and realtime secret contours:
 
 ### One-time staging runtime-secret isolation transition
 
-If an older staging release still gives realtime the shared `staging.env`, dispatch
-`Provision staging runtime-secret isolation` from `main` with the exact serving
-40-character release and confirmation `TRANSITION_STAGING_RUNTIME_SECRETS`. The workflow generates
-the 48-byte key inside a networkless local immutable image, writes neither values nor secret hashes
-to logs/artifacts, preserves the existing `staging.env` byte prefix and creates a strict allowlisted
-`realtime.env`. It does not enable Communities realtime, media, invites, routing, Home or Viva and
-does not run migrations.
+There are two transition paths; they are not interchangeable.
 
-Before stopping a service, the workflow starts the exact active realtime image as a networkless,
-read-only, capability-dropped one-shot process with the candidate allowlisted environment and calls
-its real `loadRealtimeConfig`. A rejected contour restores the files without changing a running
-container. No source marker or assumed image version substitutes for this executable check.
+`Provision staging runtime-secret isolation` is the same-image path. Use it only when the exact
+active realtime image has already proved that it exports and accepts `loadRealtimeConfig`. The
+legacy release `e308181da5222645d9a87d03642923c6841be8d1` does not have that capability: its API signs
+realtime tickets with `JWT_ACCESS_SECRET` and its realtime process verifies the same key. Never put
+access/refresh secrets into `realtime.env`, add sentinel values, or run the same-image workflow
+against that release.
 
-The one-key messaging boundary requires a short maintenance window: API and realtime stop together,
-then realtime, API and worker are recreated from the same recorded image IDs. Existing WebSocket
-connections disconnect and HTTP may briefly return 502 until API readiness; this is expected bounded
-availability impact, not a functional LK change. Public live/ready, manifest and the full media
-baseline must pass before backups and the durable marker are finalized.
+For `e308181d`, use the separate `Bootstrap staging runtime-secret boundary (B0)` workflow. Its
+candidate must be a reviewed, immutable, non-merge commit whose single parent is the exact serving
+release. The source verifier requires the exact reviewed B0 tree, the nine-file B0 allowlist,
+byte-identical migration and contract trees, and the dedicated API/realtime ticket-key
+implementation. The workflow uses a clean `npm ci` dependency contour and requires the complete
+generated-contract/package bootstrap followed by the complete repository `npm run check` gate plus
+migration validation. It then builds and publishes all five arm64 images from that one candidate SHA
+and records only full GHCR manifest digests. The B0
+Compose keeps the static web and unused migrator services on an empty runtime-env
+contour; only API and worker retain the legacy application environment, while realtime receives
+the dedicated allowlist. It never invokes the migrator.
+
+Before `START`, provision a fresh, short-lived access token for the existing `nano` smoke principal
+in the staging environment secret `STAGING_REALTIME_SMOKE_ACCESS_TOKEN`. The workflow uses it only
+to request one session-authorized, 30-second realtime ticket and complete one WebSocket
+`connection.ready` handshake. It does not subscribe or send a message. Missing, expired or revoked
+credentials fail closed and trigger rollback.
+
+Dispatch `START` from `main` with the exact active release, exact B0 candidate and confirmation
+`BOOTSTRAP_STAGING_RUNTIME_SECRETS`. The workflow verifies the candidate parent and source, pulls
+all exact old and candidate images, creates and validates an application rollback snapshot, and
+only then publishes the durable version-2 marker and new secret files. It preserves all non-secret
+release metadata, changes only `RELEASE` and the five image digests, and leaves `LATEST_MIGRATION`
+unchanged. The 48-byte key is generated inside the constrained helper; neither its value nor a
+secret-derived hash enters logs, artifacts or the marker.
+
+Before stopping a service, B0 runs the exact candidate API and realtime images as networkless,
+read-only, capability-dropped processes. The API loader must accept the shared server contour, the
+realtime loader must reject leaked access/refresh keys, a ticket signed with the dedicated key must
+verify, and an access-key ticket must fail. A rejected probe restores the files without changing a
+running container. No source marker substitutes for this executable check.
+
+The signing-key change requires a short maintenance window. B0 stops API and realtime before either
+new definition is committed, then starts exact candidate images in the order realtime, API, worker,
+web with registry pulls disabled. Existing WebSocket connections disconnect and HTTP may briefly
+return 502. Nginx, Caddy, databases and queues are not recreated. Public live/ready, exact candidate
+manifest, isolated-file verification and the authenticated ticket-to-WebSocket handshake must pass
+before the marker is finalized.
 
 Every intermediate state blocks deploy, diagnostics, access and routing workflows. For an
-interrupted run, dispatch the same workflow with `RECOVER`, the same exact serving release and
-`RECOVER_STAGING_RUNTIME_SECRETS`. Recovery validates release, infrastructure metadata, Compose
-digests and old image IDs/refs. Before `verified` it restores the prior files/Compose and runtime;
-`verified` or `finalizing` converges forward idempotently. Never delete marker, `.next` or backup
-files manually.
+interrupted B0 run, dispatch the B0 workflow with `RECOVER`, the original expected active and
+candidate SHAs, original control SHA, run ID and run attempt, plus
+`RECOVER_STAGING_RUNTIME_SECRETS`. Recovery executes the controller retained in that durable bundle;
+it does not rebuild, pull or accept current-main artifacts. Before `verified` it restores the exact
+saved secret inode and definitions, then starts old realtime before old API, worker and web.
+`verified` or `finalizing` converges forward. Never delete the marker, bundle, `.next` files or
+application backup manually. Successful finalization atomically replaces the transient marker with
+a non-secret finalized receipt. A lost SSH or Actions response after that rename is resolved by
+attesting the exact receipt, candidate definitions, image IDs, infrastructure IDs, runtime snapshot
+and public manifest; it must never be guessed from a missing marker alone.
+
+After finalization the workflow keeps the staging concurrency lock for a five-minute observation
+window. Ten samples require the external public health routes and exact candidate manifest, plus
+healthy digest-pinned containers with zero restarts and no aggregated uncaught/fatal/panic signal
+in the preceding 90 seconds. Raw container logs are never printed or uploaded. A post-finalize
+observation failure retains the finalized receipt and is a forward-recovery incident, not authority
+to restore the incompatible legacy ticket-key pair.
+
+After B0 finalizes, rerun the read-only `MEDIA_BINARY_ONLY` diagnosis against the B0 release. The
+later main/media release and migrations are a separate approval and deployment; successful B0 is not
+authority to start them.
 
 The restricted `phub-preflight` forced-command principal needs execute-only traversal on
 `/etc/phub` (for example an exact `u:phub-preflight:--x` ACL), but no read or write permission on

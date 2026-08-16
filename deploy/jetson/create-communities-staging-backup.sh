@@ -105,7 +105,9 @@ for artifact in \
   "$secret_root/.runtime-secret-isolation.staging.next" \
   "$secret_root/.runtime-secret-isolation.realtime.next" \
   "$app_root/.runtime-secret-isolation.compose.backup" \
-  "$app_root/.runtime-secret-isolation.compose.next"; do
+  "$app_root/.runtime-secret-isolation.compose.next" \
+  "$app_root/.runtime-secret-bootstrap.compose.next" \
+  "$app_root/.runtime-secret-bootstrap.release.next"; do
   if [ -e "$artifact" ] || [ -L "$artifact" ]; then
     echo "unresolved runtime-secret transition blocks Communities staging backup" >&2
     exit 1

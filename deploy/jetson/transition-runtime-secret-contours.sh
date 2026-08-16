@@ -18,6 +18,8 @@ marker="$secret_root/.runtime-secret-isolation.transition.json"
 marker_next="$marker.next"
 compose_backup="$app_root/.runtime-secret-isolation.compose.backup"
 compose_next="$app_root/.runtime-secret-isolation.compose.next"
+bootstrap_compose_next="$app_root/.runtime-secret-bootstrap.compose.next"
+bootstrap_release_next="$app_root/.runtime-secret-bootstrap.release.next"
 
 case "$operation:$confirmation" in
   transition:TRANSITION_STAGING_RUNTIME_SECRETS | finalize:TRANSITION_STAGING_RUNTIME_SECRETS | recover:RECOVER_STAGING_RUNTIME_SECRETS) ;;
@@ -418,7 +420,7 @@ if test "$operation" = finalize; then
   exit 0
 fi
 
-for path in "$marker" "$marker_next" "$compose_backup" "$compose_next"; do
+for path in "$marker" "$marker_next" "$compose_backup" "$compose_next" "$bootstrap_compose_next" "$bootstrap_release_next"; do
   test ! -e "$path" && test ! -L "$path" || fail "unresolved transition artifact exists: $path"
 done
 test "$(stat -c '%u:%g:%a' "$secret_root")" = "0:$deploy_gid:750" || fail 'secret root ownership or mode differs'

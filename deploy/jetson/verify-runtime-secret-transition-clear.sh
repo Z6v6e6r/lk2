@@ -17,7 +17,9 @@ for unresolved in \
   "$secret_root/.runtime-secret-isolation.staging.next" \
   "$secret_root/.runtime-secret-isolation.realtime.next" \
   "$app_root/.runtime-secret-isolation.compose.backup" \
-  "$app_root/.runtime-secret-isolation.compose.next"; do
+  "$app_root/.runtime-secret-isolation.compose.next" \
+  "$app_root/.runtime-secret-bootstrap.compose.next" \
+  "$app_root/.runtime-secret-bootstrap.release.next"; do
   if test -e "$unresolved" || test -L "$unresolved"; then
     printf '%s\n' 'runtime secret transition is unresolved; deployment is blocked' >&2
     exit 1
