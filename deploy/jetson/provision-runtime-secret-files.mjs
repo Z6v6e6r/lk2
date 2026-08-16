@@ -80,7 +80,16 @@ const REQUIRED_REALTIME_KEYS = Object.freeze([
   'JWT_AUDIENCE',
   'JWT_REALTIME_AUDIENCE',
 ]);
-const ADDED_KEYS = Object.freeze([
+const APPLICATION_DISABLED_KEYS = Object.freeze([
+  'PROFILE_PHOTO_CLIENT_SYNC_ENABLED',
+  'COMMUNITY_INVITES_ENABLED',
+  'COMMUNITIES_REALTIME_ENABLED',
+  'COMMUNITY_MEDIA_ENABLED',
+  'COMMUNITY_LOGO_STABLE_DELIVERY_ENABLED',
+  'COMMUNITY_LOGO_COMPATIBILITY_BACKFILL_ENABLED',
+]);
+const STAGING_RESERVED_KEYS = Object.freeze(['JWT_REALTIME_SECRET', 'REALTIME_EXPECTED_REPLICAS']);
+const REALTIME_ADDED_KEYS = Object.freeze([
   'JWT_REALTIME_SECRET',
   'COMMUNITIES_REALTIME_ENABLED',
   'REALTIME_EXPECTED_REPLICAS',
@@ -204,8 +213,13 @@ function buildCandidates(source, secret) {
   const { values, lines } = parseEnvironment(source);
   if (!source.endsWith('\n')) fail('staging.env must end with a newline');
   if (values.get('APP_ENV') !== 'staging') fail('staging.env APP_ENV must be staging');
-  for (const key of ADDED_KEYS) {
+  for (const key of STAGING_RESERVED_KEYS) {
     if (values.has(key)) fail(`staging.env already contains ${key}`);
+  }
+  for (const key of APPLICATION_DISABLED_KEYS) {
+    if (values.has(key) && values.get(key) !== 'false') {
+      fail(`staging.env must omit ${key} or set it to false`);
+    }
   }
   for (const key of REQUIRED_REALTIME_KEYS) {
     if (!values.get(key)) fail(`staging.env is missing required realtime key ${key}`);
@@ -220,8 +234,12 @@ function buildCandidates(source, secret) {
     'COMMUNITIES_REALTIME_ENABLED=false',
     'REALTIME_EXPECTED_REPLICAS=1',
   );
+  const missingDisabledLines = APPLICATION_DISABLED_KEYS.filter((key) => !values.has(key)).map(
+    (key) => `${key}=false`,
+  );
+  const stagingLines = [`JWT_REALTIME_SECRET=${secret}`, ...missingDisabledLines];
   return {
-    staging: `${source}JWT_REALTIME_SECRET=${secret}\nCOMMUNITIES_REALTIME_ENABLED=false\n`,
+    staging: `${source}${stagingLines.join('\n')}\n`,
     realtime: `${realtimeLines.join('\n')}\n`,
   };
 }
@@ -329,7 +347,11 @@ function verifyCandidatePair(directory, state, requireBackup = true) {
   }
   const stagingText = readFileSync(staging, 'utf8');
   const realtimeText = readFileSync(realtime, 'utf8');
+  const stagingValues = parseEnvironment(stagingText).values;
   const secret = candidateSecret(stagingText);
+  for (const key of APPLICATION_DISABLED_KEYS) {
+    if (stagingValues.get(key) !== 'false') fail(`candidate staging flag ${key} is unsafe`);
+  }
   if (parseEnvironment(realtimeText).values.get('JWT_REALTIME_SECRET') !== secret) {
     fail('API and realtime candidate secrets differ');
   }
@@ -342,7 +364,7 @@ function verifyCandidatePair(directory, state, requireBackup = true) {
     }
   }
   const realtimeValues = parseEnvironment(realtimeText).values;
-  const allowed = new Set([...REALTIME_KEYS, ...ADDED_KEYS]);
+  const allowed = new Set([...REALTIME_KEYS, ...REALTIME_ADDED_KEYS]);
   for (const key of realtimeValues.keys()) {
     if (!allowed.has(key)) fail(`realtime.env contains forbidden key ${key}`);
   }

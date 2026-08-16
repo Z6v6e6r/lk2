@@ -82,6 +82,30 @@ describe('runtime-secret transition delivery contract', () => {
     expect(controller).toContain('--env-file "$secret_root/realtime.env" "$old_realtime_image"');
   });
 
+  it('accepts absent legacy gates but requires explicit false on the candidate contour', () => {
+    const legacyGuard = controller.indexOf('legacy_running_flag_disabled()');
+    const originalGuard = controller.indexOf('assert_original_flags_disabled()');
+    const oldRuntime = controller.lastIndexOf(
+      'assert_original_flags_disabled "$old_api" "$old_worker" "$old_realtime"',
+    );
+    const candidateRuntime = controller.lastIndexOf(
+      'assert_disabled_flags "$new_api" "$new_worker" "$new_realtime"',
+    );
+    expect(legacyGuard).toBeGreaterThan(0);
+    expect(controller.slice(legacyGuard, originalGuard)).toContain('0)');
+    expect(controller.slice(legacyGuard, originalGuard)).toContain(
+      'const { loadConfig } = await import("@phub/config")',
+    );
+    expect(controller.slice(legacyGuard, originalGuard)).toContain(
+      'value !== undefined && value !== false',
+    );
+    expect(oldRuntime).toBeGreaterThan(originalGuard);
+    expect(candidateRuntime).toBeGreaterThan(oldRuntime);
+    expect(helper).toContain("'PROFILE_PHOTO_CLIENT_SYNC_ENABLED'");
+    expect(helper).toContain("'COMMUNITY_LOGO_COMPATIBILITY_BACKFILL_ENABLED'");
+    expect(helper).toContain('candidate staging flag ${key} is unsafe');
+  });
+
   it('rolls back a rejected preflight without recreating serving containers', () => {
     const earlyRollback = controller.indexOf('action=files-only');
     const earlyReturn = controller.indexOf('return 0', earlyRollback);
