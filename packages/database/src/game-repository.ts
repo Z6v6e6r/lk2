@@ -243,6 +243,13 @@ interface IdempotencyRow extends QueryResultRow {
   readonly result_payload: unknown;
 }
 
+interface CanonicalGameLevelRow extends QueryResultRow {
+  readonly id: string;
+  readonly code: GamePlayerLevel;
+  readonly rank: number | string;
+  readonly scale_version: number | string;
+}
+
 interface ProjectionRow extends QueryResultRow {
   readonly game_id: string;
   readonly aggregate_revision: string | number;
@@ -527,15 +534,51 @@ export function createGameRepository(pool: Pool): GameRepository {
 
         const commandId = randomUUID();
         const operationId = randomUUID();
+        if (Boolean(input.levelFrom) !== Boolean(input.levelTo)) {
+          throw new Error('GAME_CREATE_LEVEL_RANGE_INVALID');
+        }
+        let minimumLevelId: string | null = null;
+        let maximumLevelId: string | null = null;
+        if (input.levelFrom && input.levelTo) {
+          const levels = await client.query<CanonicalGameLevelRow>(
+            `select id, code, rank, scale_version
+               from eligibility.canonical_levels
+              where tenant_id = $1
+                and sport_code = 'PADEL'
+                and active
+                and scale_version = (
+                  select max(scale_version)
+                    from eligibility.canonical_levels
+                   where tenant_id = $1 and sport_code = 'PADEL' and active
+                )
+                and code = any($2::text[])
+              order by rank, id`,
+            [input.tenantId, [input.levelFrom, input.levelTo]],
+          );
+          const byCode = new Map(levels.rows.map((level) => [level.code, level]));
+          const minimum = byCode.get(input.levelFrom);
+          const maximum = byCode.get(input.levelTo);
+          if (
+            !minimum ||
+            !maximum ||
+            Number(minimum.scale_version) !== Number(maximum.scale_version) ||
+            Number(minimum.rank) > Number(maximum.rank)
+          ) {
+            throw new Error('GAME_CREATE_LEVEL_RANGE_INVALID');
+          }
+          minimumLevelId = minimum.id;
+          maximumLevelId = maximum.id;
+        }
         const created = await queryOne<GameRow>(
           client,
           `insert into games.games (
              tenant_id, organizer_user_id, title, kind, visibility, lifecycle_state,
              station_id, court_id, starts_at, ends_at, timezone, capacity,
-             waitlist_enabled, join_cutoff_at, payment_mode, level_from, level_to
+             waitlist_enabled, join_cutoff_at, payment_mode, level_from, level_to,
+             sport_code, min_level_id, max_level_id
            ) values (
              $1, $2, $3, $4, $5, 'PROVISIONING', $6, $7, $8, $9, $10, $11,
-             $12, $13, $14, $15, $16
+             $12, $13, $14, $15, $16, 'PADEL', $17, $18
            ) returning ${GAME_COLUMNS}`,
           [
             input.tenantId,
@@ -554,6 +597,8 @@ export function createGameRepository(pool: Pool): GameRepository {
             input.paymentMode,
             input.levelFrom ?? null,
             input.levelTo ?? null,
+            minimumLevelId,
+            maximumLevelId,
           ],
         );
         if (!created) throw new Error('GAME_CREATE_WRITE_LOST');
@@ -616,6 +661,11 @@ export function createGameRepository(pool: Pool): GameRepository {
               kind: game.kind,
               visibility: game.visibility,
               operationId,
+              participationEligibility: {
+                ruleCode: 'LEVEL_RANGE',
+                outcome: 'BYPASS',
+                reasonCode: 'ORGANIZER_CREATION_BYPASS',
+              },
             }),
           ],
         );

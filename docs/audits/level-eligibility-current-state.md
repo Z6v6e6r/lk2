@@ -159,14 +159,14 @@ The new table requires tenant, activity type/id, invitation type, exact recipien
 
 ## Creation and organizer auto-participation
 
-`packages/database/src/game-repository.ts` inserts the organizer directly during aggregate creation. This is the natural `CREATE_ACTIVITY_WITH_ORGANIZER_PARTICIPATION` bypass and should not be routed through ordinary join. The pure rule restricts `ORGANIZER_CREATION_BYPASS` to creation actions; a later rejoin uses the normal check.
+`packages/database/src/game-repository.ts` inserts the organizer directly during aggregate creation. This is the natural `CREATE_ACTIVITY_WITH_ORGANIZER_PARTICIPATION` bypass and is not routed through ordinary join. The writer does not read or compare the organizer level, resolves the configured range to IDs from one active canonical scale, persists both canonical IDs with the legacy display codes, and records `ORGANIZER_CREATION_BYPASS` in the creation audit. A missing, mixed-version or reversed mapping fails before aggregate creation. The pure rule restricts the bypass to creation actions; a later rejoin uses the normal check.
 
 ## Waitlist, payment, callback and recovery
 
 - Join waitlist: final PadlHub command now checks the same rule.
 - Promotion: previously checked only queue order/capacity; now re-evaluates and continues to the next candidate after denial.
 - Payment initiation: paid game reservation now stores the exact decision snapshot before downstream payment work.
-- Callback/recovery: no new callback rejection was added. Existing callbacks should continue using the reservation/operation created from the snapshot and recheck only critical state/idempotency/security.
+- Callback/recovery: the isolated legacy bridge candidate verifies the supplied transaction or subscription-booking locators against Viva server-side, binds booking/operation/phone to the JWT actor and reservation, and then confirms from the stored PadlHub snapshot while rechecking critical lifecycle/reservation/payment state. Browser `paid` flags are rejected. This remains default-off and was not applied to live Node-RED.
 - Tournament/training callback and reconcile remain legacy; they do not yet reference the PadlHub snapshot.
 
 ## Idempotency, audit, RBAC and rollout
@@ -221,7 +221,7 @@ The new User Games API accepts only `expectedRevision` and `invitationId`; attem
 1. Deploy expand-only schema and code with all policies OFF.
 2. Keep existing registrations and payments untouched.
 3. Populate/continuously synchronize canonical player sport levels and activity constraints from trusted local projections; do not query Viva per click.
-4. Route legacy game writer calls to the PadlHub game command. Do not add a second formula to Node-RED/React.
+4. Validate and activate the default-off legacy game command/payment bridge candidate. It calls the PadlHub command and does not add a second formula to Node-RED/React.
 5. Migrate tournament and training final commands or add trusted server-side adapters with local activity projections.
 6. Run SHADOW and compare decision distributions; clean missing/invalid/legacy constraints.
 7. Use the implemented SELF_DECLARED or trusted ONBOARDING recovery for native games, then extend
@@ -231,13 +231,13 @@ The new User Games API accepts only `expectedRevision` and `invitationId`; attem
 ## Activation blockers
 
 - No continuous authoritative bridge from current `ph-ab` numeric rating ledger into `eligibility.player_sport_levels` has been implemented.
-- Legacy LK/Node-RED game mutation can still bypass the PadlHub command.
+- Live legacy LK/Node-RED can still bypass the PadlHub command until the isolated default-off bridge candidate is separately deployed and activated.
 - Tournament/training/admin-add/invite-acceptance final mutations are not native PadlHub commands.
 - Native game SELF_DECLARED and trusted ONBOARDING recovery are implemented;
   tournament/training recovery is not.
 - Native ONBOARDING does not yet project the result back to Viva; legacy profile views may drift
   until a transactional outbox/adapter is added.
-- Legacy payment callbacks/recovery do not consume PadlHub payment snapshots.
+- Live legacy payment callbacks/recovery do not consume PadlHub payment snapshots until the isolated verified-evidence callback candidate is separately deployed and activated.
 - Waitlist denial notification is not yet emitted, although the queue continues and the reason is durable.
 
 Therefore production `BLOCK` is a NO-GO at this checkpoint. `OFF` is safe; `SHADOW` is appropriate only after projection freshness and legacy writer routing are proven.

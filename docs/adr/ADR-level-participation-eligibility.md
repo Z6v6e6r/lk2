@@ -127,7 +127,9 @@ Costs and constraints:
 - The trusted assessment updates PadlHub profile and eligibility projections; a separate outbox or
   adapter is still required if Viva must display the same value during the transition.
 - Legacy writers must be routed before BLOCK.
-- Tournament/training commands and callback/recovery integration still require migration.
+- Tournament/training commands and their callback/recovery integration still require migration;
+  the legacy game callback bridge is implemented only as a default-off deployment candidate and
+  still needs callback-loss reconciliation.
 - Decision storage adds write volume; retention/aggregation must be monitored in SHADOW.
 
 ## Rejected alternatives

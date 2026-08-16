@@ -31,6 +31,13 @@ Delivery stage: isolated implementation, not integrated or deployed
   explicit commented publication.
 - Bounded OpenTelemetry counters and structured decision logging without player or
   activity IDs in metric labels.
+- A default-off legacy Games bridge candidate for JOIN/WAITLIST and split-payment confirmation.
+  Payment confirmation accepts browser locators only, re-reads Viva server-side, binds provider
+  operation, booking and phone to the JWT actor and reservation, and consumes the stored
+  eligibility snapshot before canonical participation is created.
+- Canonical game creation now resolves the configured level codes to IDs from one active scale
+  before writing the aggregate. Automatic organizer participation remains non-blocking, performs
+  no organizer-level lookup, and records `ORGANIZER_CREATION_BYPASS` in the creation audit.
 
 ## Deliberately not activated
 
@@ -46,7 +53,8 @@ No migration was executed and no runtime setting was changed by this checkpoint.
 
 ## Remaining work before production enforcement
 
-- Move the legacy LK/Node-RED join and waitlist writers behind the server command.
+- Validate, deploy and separately activate the default-off legacy Games/Node-RED bridge candidate;
+  the live flow remains unchanged.
 - Route the legacy onboarding UI to the trusted PadlHub assessment command. A fresh read-only
   server-147 audit confirms the current `/lk/onboarding/level` handler accepts client-computed
   level/numeric/provenance fields and therefore cannot safely be reused as proof.
@@ -55,7 +63,8 @@ No migration was executed and no runtime setting was changed by this checkpoint.
 - Migrate tournament and training registration writers; their current impact cards are
   intentionally marked unsupported.
 - Define and migrate the activity personal-invitation creation/revocation command.
-- Connect downstream payment callbacks/reconciliation to the stored eligibility snapshot.
+- Add scheduled reconciliation for provider-confirmed payments whose browser callback never
+  reaches the default-off bridge.
 - Reconcile the legacy letter/numeric/Viva mappings with the CUP-owned canonical rating
   ledger; legacy free text must remain informational until explicitly mapped.
 - Add denied-waitlist-promotion user notification and operational alert thresholds.
@@ -77,6 +86,7 @@ No migration was executed and no runtime setting was changed by this checkpoint.
 
 `NO-GO` for production `BLOCK`.
 
-The native game path, both recovery methods, and policy control plane are implemented, but the
-legacy writers, tournament/training writers, Viva profile convergence and paid-flow reconciliation
-are not yet a single authoritative contour. `OFF` is the only safe initial migration default.
+The native game path, both recovery methods, policy control plane and isolated legacy bridge
+candidate are implemented, but the candidate is not live and tournament/training writers, Viva
+profile convergence and callback-loss reconciliation are not yet a single authoritative contour.
+`OFF` is the only safe initial migration default.
