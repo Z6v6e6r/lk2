@@ -387,6 +387,39 @@ describe('legacy runtime-secret bootstrap delivery contract', () => {
     expect(helperRaw).toContain('--cap-add DAC_READ_SEARCH');
     expect(helperRaw).toContain('--cap-add FOWNER');
     expect(helperRaw).not.toContain('--cap-add DAC_OVERRIDE');
+    expect(helperRaw).toContain('--mount type=bind,src="$secret_root",dst=/target \\');
+    expect(helperRaw).not.toContain('dst=/target,rw');
+  });
+
+  it('executes the bootstrap helper with Docker-compatible read-write bind syntax', () => {
+    const functions = controller.slice(
+      controller.indexOf('resolve_helper_image()'),
+      controller.indexOf('run_helper()'),
+    );
+    const result = spawnSync(
+      '/bin/dash',
+      [
+        '-c',
+        [
+          'set -eu',
+          'bundle_path=/bundle',
+          'secret_root=/target-source',
+          'helper_script=/dev/null',
+          "helper_image='sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'",
+          'docker() {',
+          '  case "$*" in *",rw"*) return 64 ;; esac',
+          '  printf \'%s\\n\' "$*"',
+          '}',
+          functions,
+          'helper_raw verify-bootstrap-prepared /target',
+        ].join('\n'),
+      ],
+      { encoding: 'utf8' },
+    );
+
+    expect({ status: result.status, stderr: result.stderr }).toEqual({ status: 0, stderr: '' });
+    expect(result.stdout).toContain('--mount type=bind,src=/target-source,dst=/target');
+    expect(result.stdout).not.toContain('dst=/target,rw');
   });
 
   it('probes the key boundary offline before stopping and starts candidate services in safe order', () => {
@@ -405,6 +438,8 @@ describe('legacy runtime-secret bootstrap delivery contract', () => {
     expect(prepare).toBeGreaterThan(0);
     expect(dedicatedProbe).toBeGreaterThan(prepare);
     expect(accessReject).toBeGreaterThan(dedicatedProbe);
+    expect(controller).toContain('--mount type=bind,src="$probe_dir",dst=/probe \\');
+    expect(controller).not.toContain('dst=/probe,rw');
     expect(stop).toBeGreaterThan(accessReject);
     expect(realtime).toBeGreaterThan(stop);
     expect(api).toBeGreaterThan(realtime);

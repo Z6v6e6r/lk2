@@ -287,7 +287,7 @@ helper_raw() {
     --tmpfs /tmp:rw,noexec,nosuid,nodev,size=1m --security-opt no-new-privileges \
     --cap-drop ALL --cap-add CHOWN --cap-add DAC_READ_SEARCH --cap-add FOWNER \
     --memory 128m --pids-limit 64 \
-    --mount type=bind,src="$secret_root",dst=/target,rw \
+    --mount type=bind,src="$secret_root",dst=/target \
     --mount type=bind,src="$bundle_path",dst=/bundle,ro \
     "$helper_image" --input-type=module - "$@" < "$helper_script"
 }
@@ -771,7 +771,7 @@ candidate_realtime_ref=$(image_ref_from "$candidate_release_file" realtime)
 docker run --rm --pull=never --network none --read-only --user "$deploy_uid:$deploy_gid" \
   --tmpfs /tmp:rw,noexec,nosuid,nodev,size=1m --cap-drop ALL --security-opt no-new-privileges \
   --memory 128m --pids-limit 64 \
-  --env-file "$secret_root/staging.env" --mount type=bind,src="$probe_dir",dst=/probe,rw \
+  --env-file "$secret_root/staging.env" --mount type=bind,src="$probe_dir",dst=/probe \
   --entrypoint node "$candidate_api_ref" --input-type=module -e '
     import { SignJWT } from "jose";
     import { loadApiConfig } from "@phub/config";
