@@ -17,6 +17,8 @@ import type {
   EventCatalogQuery,
   GameCard as ViewerGameCard,
   GameCommandResult,
+  LevelAssessmentDefinition,
+  PlayerLevelState,
   PublicGameCard,
 } from './auth-gateway.js';
 import { usePaginatedEventSearch } from './usePaginatedEventSearch.js';
@@ -54,6 +56,17 @@ const levelRangeLabels: Readonly<Record<GameLevelRangeFilter, string>> = {
 
 const weekdayFormatter = new Intl.DateTimeFormat('ru-RU', { weekday: 'short' });
 const dayFormatter = new Intl.DateTimeFormat('ru-RU', { day: '2-digit' });
+const LEVEL_RECOVERY_STORAGE_KEY = 'phub.pending-level-recovery.v1';
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function clearPendingLevelRecovery(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.sessionStorage.removeItem(LEVEL_RECOVERY_STORAGE_KEY);
+  } catch {
+    // The authoritative command result does not depend on browser storage cleanup.
+  }
+}
 
 function dateKey(date: Date): string {
   const year = date.getFullYear();
@@ -199,6 +212,11 @@ function errorMessage(error: unknown): string {
         return 'Состав изменился. Проверьте актуальные места и повторите.';
       case 'GAME_NOT_FOUND':
         return 'Игра больше недоступна.';
+      case 'LEVEL_NOT_ALLOWED':
+        return 'Эта игра рассчитана на другой уровень.';
+      case 'PLAYER_LEVEL_UNKNOWN':
+      case 'LEVEL_SCALE_VERSION_MISMATCH':
+        return 'Не удалось подтвердить актуальный уровень. Обновите профиль и повторите.';
       case 'GAME_RESULT_INVALID_ROSTER':
         return 'Состав результата не совпадает с участниками игры.';
       case 'GAME_RESULT_REVIEW_FORBIDDEN':
@@ -210,6 +228,12 @@ function errorMessage(error: unknown): string {
     }
   }
   return 'Не удалось выполнить действие. Проверьте связь и повторите.';
+}
+
+function errorCode(error: unknown): string | undefined {
+  if (typeof error !== 'object' || error === null || !('code' in error)) return undefined;
+  const code = (error as { readonly code?: unknown }).code;
+  return typeof code === 'string' ? code : undefined;
 }
 
 function initialDetailTab(game: ViewerGameCard): GameDetailTab {
@@ -245,7 +269,46 @@ export function GamesPage({ gateway, gameId, eventId }: GamesPageProps): React.J
   const [notice, setNotice] = useState<string | null>(null);
   const [detailTab, setDetailTab] = useState<GameDetailTab>('GAME');
   const [reloadToken, setReloadToken] = useState(0);
+  const [levelRecovery, setLevelRecovery] = useState<{
+    readonly action: 'JOIN' | 'JOIN_WAITLIST';
+    readonly game: GameCardModel;
+  } | null>(null);
+  const [levelState, setLevelState] = useState<PlayerLevelState | null>(null);
+  const [selectedLevelId, setSelectedLevelId] = useState('');
+  const [levelRecoveryMode, setLevelRecoveryMode] = useState<'choice' | 'manual' | 'assessment'>(
+    'choice',
+  );
+  const [levelRecoveryBusy, setLevelRecoveryBusy] = useState<'loading' | 'saving' | null>(null);
+  const [levelRecoveryError, setLevelRecoveryError] = useState<string | null>(null);
+  const [assessmentDefinition, setAssessmentDefinition] =
+    useState<LevelAssessmentDefinition | null>(null);
+  const [assessmentAnswers, setAssessmentAnswers] = useState<
+    Readonly<Record<string, readonly string[]>>
+  >({});
+  const [assessmentIndex, setAssessmentIndex] = useState(0);
   const pendingViewerGame = useRef<ViewerGameCard | null>(null);
+  const invitationId = useMemo(() => {
+    if (typeof window === 'undefined' || !gameId) return undefined;
+    const candidate = new URLSearchParams(window.location.search).get('invitationId')?.trim();
+    return candidate && UUID_PATTERN.test(candidate) ? candidate : undefined;
+  }, [gameId]);
+  const assessmentQuestions = useMemo(() => {
+    if (!assessmentDefinition) return [];
+    const base = assessmentDefinition.questions.find(
+      (question) => question.id === assessmentDefinition.baseQuestionId,
+    );
+    if (!base) return [];
+    const baseOption = assessmentAnswers[assessmentDefinition.baseQuestionId]?.[0];
+    const branchIds = baseOption ? (assessmentDefinition.branches[baseOption] ?? []) : [];
+    return [
+      base,
+      ...branchIds.flatMap((questionId) => {
+        const question = assessmentDefinition.questions.find((item) => item.id === questionId);
+        return question ? [question] : [];
+      }),
+    ];
+  }, [assessmentAnswers, assessmentDefinition]);
+  const currentAssessmentQuestion = assessmentQuestions[assessmentIndex];
 
   const days = useMemo(
     () =>
@@ -545,6 +608,50 @@ export function GamesPage({ gateway, gameId, eventId }: GamesPageProps): React.J
     }
   }
 
+  async function openLevelRecovery(
+    action: 'JOIN' | 'JOIN_WAITLIST',
+    game: GameCardModel,
+  ): Promise<void> {
+    if (!gateway.getOwnPlayerLevel || !gateway.setOwnPlayerLevel) {
+      setError('Укажите уровень в профиле и повторите запись.');
+      return;
+    }
+    const pending = {
+      action,
+      gameId: game.id,
+      returnPath:
+        typeof window === 'undefined'
+          ? `/games/${encodeURIComponent(game.id)}`
+          : `${window.location.pathname}${window.location.search}${window.location.hash}`,
+      ...(invitationId ? { invitationId } : {}),
+    };
+    if (typeof window !== 'undefined') {
+      try {
+        window.sessionStorage.setItem(LEVEL_RECOVERY_STORAGE_KEY, JSON.stringify(pending));
+      } catch {
+        // In-memory recovery remains available when browser storage is unavailable.
+      }
+    }
+    setLevelRecovery({ action, game });
+    setLevelRecoveryMode('choice');
+    setLevelState(null);
+    setSelectedLevelId('');
+    setAssessmentDefinition(null);
+    setAssessmentAnswers({});
+    setAssessmentIndex(0);
+    setLevelRecoveryError(null);
+    setLevelRecoveryBusy('loading');
+    try {
+      const state = await gateway.getOwnPlayerLevel('PADEL');
+      setLevelState(state);
+      setSelectedLevelId(state.currentLevel?.levelId ?? state.levels[0]?.id ?? '');
+    } catch {
+      setLevelRecoveryError('Не удалось загрузить шкалу уровней. Повторите позже.');
+    } finally {
+      setLevelRecoveryBusy(null);
+    }
+  }
+
   async function handleAction(action: GameCardAction, game: GameCardModel): Promise<void> {
     if (
       ['SUBMIT_RESULT', 'CONFIRM_RESULT', 'DISPUTE_RESULT', 'VIEW_RESULT', 'OPEN_DISPUTE'].includes(
@@ -600,9 +707,13 @@ export function GamesPage({ gateway, gameId, eventId }: GamesPageProps): React.J
     try {
       const submitted =
         action === 'JOIN'
-          ? await gateway.joinGame(game.id, game.revision)
+          ? await gateway.joinGame(
+              game.id,
+              game.revision,
+              game.id === gameId ? invitationId : undefined,
+            )
           : action === 'JOIN_WAITLIST'
-            ? await gateway.joinGameWaitlist(game.id)
+            ? await gateway.joinGameWaitlist(game.id, game.id === gameId ? invitationId : undefined)
             : action === 'LEAVE_WAITLIST'
               ? await gateway.leaveGameWaitlist(game.id)
               : await gateway.leaveGame(game.id);
@@ -639,6 +750,7 @@ export function GamesPage({ gateway, gameId, eventId }: GamesPageProps): React.J
         );
       }
       if (result.operation.nextAction.type === 'OPEN_PAYMENT') {
+        clearPendingLevelRecovery();
         pendingViewerGame.current = result.game;
         window.location.assign(result.operation.nextAction.url);
         return;
@@ -657,12 +769,265 @@ export function GamesPage({ gateway, gameId, eventId }: GamesPageProps): React.J
       } else {
         setReloadToken((current) => current + 1);
       }
+      clearPendingLevelRecovery();
     } catch (cause) {
+      if (
+        errorCode(cause) === 'PLAYER_LEVEL_REQUIRED' &&
+        (action === 'JOIN' || action === 'JOIN_WAITLIST')
+      ) {
+        await openLevelRecovery(action, game);
+        return;
+      }
       setError(errorMessage(cause));
       setReloadToken((current) => current + 1);
     } finally {
       setBusyGameId(null);
     }
+  }
+
+  async function saveLevelAndContinue(): Promise<void> {
+    if (!levelRecovery || !selectedLevelId || !gateway.setOwnPlayerLevel || levelRecoveryBusy)
+      return;
+    setLevelRecoveryBusy('saving');
+    setLevelRecoveryError(null);
+    try {
+      await gateway.setOwnPlayerLevel(selectedLevelId, 'PADEL');
+      const pending = levelRecovery;
+      setLevelRecovery(null);
+      setLevelState(null);
+      setSelectedLevelId('');
+      await handleAction(pending.action, pending.game);
+    } catch (cause) {
+      setLevelRecoveryError(errorMessage(cause));
+    } finally {
+      setLevelRecoveryBusy(null);
+    }
+  }
+
+  async function startLevelAssessment(): Promise<void> {
+    if (!gateway.getOwnLevelAssessment || !gateway.completeOwnLevelAssessment) {
+      setLevelRecoveryError('Определение уровня временно недоступно.');
+      return;
+    }
+    setLevelRecoveryBusy('loading');
+    setLevelRecoveryError(null);
+    try {
+      const definition = await gateway.getOwnLevelAssessment();
+      setAssessmentDefinition(definition);
+      setAssessmentAnswers({});
+      setAssessmentIndex(0);
+      setLevelRecoveryMode('assessment');
+    } catch {
+      setLevelRecoveryError('Не удалось загрузить определение уровня. Повторите позже.');
+    } finally {
+      setLevelRecoveryBusy(null);
+    }
+  }
+
+  function selectAssessmentOption(optionId: string): void {
+    if (!assessmentDefinition || !currentAssessmentQuestion) return;
+    const current = assessmentAnswers[currentAssessmentQuestion.id] ?? [];
+    const selected =
+      currentAssessmentQuestion.type === 'multi'
+        ? current.includes(optionId)
+          ? current.filter((id) => id !== optionId)
+          : [...current, optionId]
+        : [optionId];
+    setAssessmentAnswers((answers) =>
+      currentAssessmentQuestion.id === assessmentDefinition.baseQuestionId
+        ? { [currentAssessmentQuestion.id]: selected }
+        : { ...answers, [currentAssessmentQuestion.id]: selected },
+    );
+    if (currentAssessmentQuestion.id === assessmentDefinition.baseQuestionId) {
+      setAssessmentIndex(0);
+    }
+  }
+
+  async function completeLevelAssessmentAndContinue(): Promise<void> {
+    if (
+      !levelRecovery ||
+      !assessmentDefinition ||
+      !gateway.completeOwnLevelAssessment ||
+      levelRecoveryBusy
+    ) {
+      return;
+    }
+    setLevelRecoveryBusy('saving');
+    setLevelRecoveryError(null);
+    try {
+      await gateway.completeOwnLevelAssessment(assessmentDefinition.version, assessmentAnswers);
+      const pending = levelRecovery;
+      setLevelRecovery(null);
+      setAssessmentDefinition(null);
+      setAssessmentAnswers({});
+      setAssessmentIndex(0);
+      await handleAction(pending.action, pending.game);
+    } catch (cause) {
+      setLevelRecoveryError(errorMessage(cause));
+    } finally {
+      setLevelRecoveryBusy(null);
+    }
+  }
+
+  function closeLevelRecovery(): void {
+    clearPendingLevelRecovery();
+    setLevelRecovery(null);
+    setLevelState(null);
+    setSelectedLevelId('');
+    setLevelRecoveryError(null);
+    setLevelRecoveryBusy(null);
+    setAssessmentDefinition(null);
+    setAssessmentAnswers({});
+    setAssessmentIndex(0);
+  }
+
+  function renderLevelRecoveryDialog(): React.JSX.Element | null {
+    if (!levelRecovery) return null;
+    return (
+      <div className="games-level-recovery-backdrop">
+        <section
+          className="games-level-recovery"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="games-level-recovery-title"
+        >
+          <button
+            className="games-level-recovery__close"
+            type="button"
+            aria-label="Закрыть выбор уровня"
+            onClick={closeLevelRecovery}
+          >
+            ×
+          </button>
+          <span className="games-level-recovery__eyebrow">Уровень игрока</span>
+          <h2 id="games-level-recovery-title">Укажите уровень, чтобы присоединиться</h2>
+          <p>Мы сохраним исходную игру и продолжим запись после подтверждения уровня.</p>
+          {levelRecoveryMode === 'choice' ? (
+            <div className="games-level-recovery__actions">
+              <button
+                className="games-level-recovery__primary"
+                type="button"
+                onClick={() => setLevelRecoveryMode('manual')}
+              >
+                Знаю свой уровень
+              </button>
+              <button
+                className="games-level-recovery__secondary"
+                type="button"
+                disabled={levelRecoveryBusy !== null}
+                onClick={() => void startLevelAssessment()}
+              >
+                {levelRecoveryBusy === 'loading'
+                  ? 'Загружаем определение…'
+                  : 'Пройти определение уровня'}
+              </button>
+            </div>
+          ) : levelRecoveryMode === 'manual' ? (
+            <div className="games-level-recovery__manual">
+              <label>
+                Ваш уровень
+                <select
+                  value={selectedLevelId}
+                  disabled={levelRecoveryBusy !== null}
+                  onChange={(event) => setSelectedLevelId(event.target.value)}
+                >
+                  {levelState?.levels.map((level) => (
+                    <option value={level.id} key={level.id}>
+                      {level.title}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button
+                className="games-level-recovery__primary"
+                type="button"
+                disabled={!selectedLevelId || levelRecoveryBusy !== null}
+                onClick={() => void saveLevelAndContinue()}
+              >
+                {levelRecoveryBusy === 'saving' ? 'Сохраняем…' : 'Сохранить и продолжить запись'}
+              </button>
+              <button
+                className="games-level-recovery__back"
+                type="button"
+                disabled={levelRecoveryBusy !== null}
+                onClick={() => setLevelRecoveryMode('choice')}
+              >
+                Назад
+              </button>
+            </div>
+          ) : currentAssessmentQuestion ? (
+            <div className="games-level-assessment">
+              <p className="games-level-assessment__progress">
+                Вопрос {assessmentIndex + 1} из {assessmentQuestions.length}
+              </p>
+              <h3>{currentAssessmentQuestion.text}</h3>
+              <div className="games-level-assessment__options">
+                {currentAssessmentQuestion.options.map((option) => {
+                  const selected = (assessmentAnswers[currentAssessmentQuestion.id] ?? []).includes(
+                    option.id,
+                  );
+                  return (
+                    <button
+                      key={option.id}
+                      type="button"
+                      className={selected ? 'is-selected' : undefined}
+                      aria-pressed={selected}
+                      disabled={levelRecoveryBusy !== null}
+                      onClick={() => selectAssessmentOption(option.id)}
+                    >
+                      {option.label}
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="games-level-assessment__navigation">
+                <button
+                  className="games-level-recovery__back"
+                  type="button"
+                  disabled={levelRecoveryBusy !== null}
+                  onClick={() => {
+                    if (assessmentIndex === 0) setLevelRecoveryMode('choice');
+                    else setAssessmentIndex((index) => Math.max(0, index - 1));
+                  }}
+                >
+                  Назад
+                </button>
+                <button
+                  className="games-level-recovery__primary"
+                  type="button"
+                  disabled={
+                    (assessmentAnswers[currentAssessmentQuestion.id]?.length ?? 0) === 0 ||
+                    levelRecoveryBusy !== null ||
+                    assessmentQuestions.length === 1
+                  }
+                  onClick={() => {
+                    if (assessmentIndex === assessmentQuestions.length - 1) {
+                      void completeLevelAssessmentAndContinue();
+                    } else {
+                      setAssessmentIndex((index) => index + 1);
+                    }
+                  }}
+                >
+                  {assessmentIndex === assessmentQuestions.length - 1
+                    ? levelRecoveryBusy === 'saving'
+                      ? 'Сохраняем…'
+                      : 'Завершить и продолжить'
+                    : 'Далее'}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <p role="alert">Анкета недоступна. Вернитесь назад и повторите.</p>
+          )}
+          {levelRecoveryBusy === 'loading' ? <p role="status">Загружаем шкалу уровней…</p> : null}
+          {levelRecoveryError ? (
+            <p className="games-level-recovery__error" role="alert">
+              {levelRecoveryError}
+            </p>
+          ) : null}
+        </section>
+      </div>
+    );
   }
 
   async function submitResult(
@@ -742,6 +1107,7 @@ export function GamesPage({ gateway, gameId, eventId }: GamesPageProps): React.J
           />
         ) : null}
         <MainBottomNavigation active="games" gamesDestination="games" />
+        {renderLevelRecoveryDialog()}
       </main>
     );
   }
@@ -774,6 +1140,7 @@ export function GamesPage({ gateway, gameId, eventId }: GamesPageProps): React.J
           </section>
         ) : null}
         <MainBottomNavigation active="games" gamesDestination="games" />
+        {renderLevelRecoveryDialog()}
       </main>
     );
   }
@@ -1118,6 +1485,7 @@ export function GamesPage({ gateway, gameId, eventId }: GamesPageProps): React.J
         ) : null}
       </section>
       <MainBottomNavigation active="games" gamesDestination="games" />
+      {renderLevelRecoveryDialog()}
     </main>
   );
 }

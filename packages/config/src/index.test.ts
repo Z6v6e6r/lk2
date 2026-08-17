@@ -50,6 +50,8 @@ describe('loadConfig', () => {
       CUP_RATING_CONSUMER_ENABLED: false,
       ACTIVITY_HISTORY_GAME_BACKFILL_ENABLED: false,
       LEGACY_GAMES_ROSTER_SYNC_ENABLED: false,
+      LEGACY_GAME_COMMAND_BRIDGE_ENABLED: false,
+      LEGACY_GAME_IDENTITY_VERIFY_TIMEOUT_MS: 5_000,
       LEGACY_GAMES_ROSTER_SYNC_INTERVAL_MS: 120_000,
       LEGACY_GAMES_ROSTER_SYNC_LOOKBACK_DAYS: 1,
       LEGACY_GAMES_ROSTER_SYNC_LOOKAHEAD_DAYS: 42,
@@ -579,6 +581,45 @@ describe('loadConfig', () => {
     expect(() =>
       loadConfig({ ...validEnvironment, APP_ENV: 'production', GAMES_COMMANDS_ENABLED: 'true' }),
     ).toThrow('GAMES_COMMANDS_ENABLED is staging-only');
+  });
+
+  it('keeps the legacy command bridge default-off and requires both server trust boundaries', () => {
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        APP_ENV: 'staging',
+        GAMES_READ_ENABLED: 'true',
+        GAMES_COMMANDS_ENABLED: 'true',
+        LEGACY_GAME_COMMAND_BRIDGE_ENABLED: 'true',
+      }),
+    ).toThrow('requires bridge and identity-verifier configuration');
+    expect(
+      loadConfig({
+        ...validEnvironment,
+        APP_ENV: 'staging',
+        GAMES_READ_ENABLED: 'true',
+        GAMES_COMMANDS_ENABLED: 'true',
+        LEGACY_GAME_COMMAND_BRIDGE_ENABLED: 'true',
+        LEGACY_GAME_COMMAND_BRIDGE_TOKEN: 'node-red-bridge-token-at-least-32-characters',
+        LEGACY_GAME_IDENTITY_VERIFY_URL: 'https://cup.example.test/api/internal/lk/identity/verify',
+        LEGACY_GAME_IDENTITY_VERIFY_TOKEN: 'cup-verifier-token-at-least-32-characters',
+      }),
+    ).toMatchObject({
+      LEGACY_GAME_COMMAND_BRIDGE_ENABLED: true,
+      LEGACY_GAME_IDENTITY_VERIFY_TIMEOUT_MS: 5_000,
+    });
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        APP_ENV: 'production',
+        GAMES_READ_ENABLED: 'true',
+        GAMES_COMMANDS_ENABLED: 'true',
+        LEGACY_GAME_COMMAND_BRIDGE_ENABLED: 'true',
+        LEGACY_GAME_COMMAND_BRIDGE_TOKEN: 'node-red-bridge-token-at-least-32-characters',
+        LEGACY_GAME_IDENTITY_VERIFY_URL: 'https://cup.example.test/api/internal/lk/identity/verify',
+        LEGACY_GAME_IDENTITY_VERIFY_TOKEN: 'cup-verifier-token-at-least-32-characters',
+      }),
+    ).toThrow('GAMES_READ_ENABLED is staging-only');
   });
 
   it('permits the anonymized public roster bridge in read-only local and staging runtimes', () => {

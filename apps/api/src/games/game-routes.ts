@@ -40,6 +40,14 @@ const ERROR_MESSAGES: Partial<Record<GameRosterCommandErrorCode, string>> = {
   GAME_NOT_LEAVABLE: 'Сейчас нельзя выйти из игры.',
   GAME_ORGANIZER_MUST_CANCEL: 'Организатор должен отменить игру.',
   GAME_NOT_WAITLISTED: 'Вы не состоите в очереди на эту игру.',
+  PLAYER_LEVEL_REQUIRED: 'Укажите уровень, чтобы присоединиться.',
+  PLAYER_LEVEL_UNKNOWN: 'Не удалось корректно определить ваш уровень.',
+  LEVEL_NOT_ALLOWED: 'Эта игра рассчитана на другой уровень.',
+  LEVEL_SPORT_MISMATCH: 'Уровень указан для другого вида спорта.',
+  LEVEL_SCALE_VERSION_MISMATCH: 'Версия вашего уровня устарела. Обновите уровень и повторите.',
+  ACTIVITY_LEVEL_UNDEFINED: 'Для игры не настроен диапазон уровней.',
+  ACTIVITY_LEVEL_INVALID: 'Диапазон уровней игры настроен некорректно.',
+  LEVEL_POLICY_MISCONFIGURED: 'Правило допуска временно настроено некорректно.',
 };
 
 const PUBLIC_ROSTER_ERROR_CODES = new Set<GameRosterCommandErrorCode>([
@@ -56,6 +64,14 @@ const PUBLIC_ROSTER_ERROR_CODES = new Set<GameRosterCommandErrorCode>([
   'GAME_NOT_LEAVABLE',
   'GAME_ORGANIZER_MUST_CANCEL',
   'GAME_NOT_WAITLISTED',
+  'PLAYER_LEVEL_REQUIRED',
+  'PLAYER_LEVEL_UNKNOWN',
+  'LEVEL_NOT_ALLOWED',
+  'LEVEL_SPORT_MISMATCH',
+  'LEVEL_SCALE_VERSION_MISMATCH',
+  'ACTIVITY_LEVEL_UNDEFINED',
+  'ACTIVITY_LEVEL_INVALID',
+  'LEVEL_POLICY_MISCONFIGURED',
 ]);
 
 function principal(request: FastifyRequest): { tenantId: string; userId: string } | undefined {
@@ -85,7 +101,7 @@ function gameId(request: FastifyRequest, reply: FastifyReply): string | undefine
 function parseJoinBody(
   request: FastifyRequest,
   reply: FastifyReply,
-): { readonly expectedRevision?: number } | undefined {
+): { readonly expectedRevision?: number; readonly invitationId?: string } | undefined {
   if (request.body === undefined || request.body === null) return {};
   if (typeof request.body !== 'object' || Array.isArray(request.body)) {
     sendApiError(request, reply, 400, 'INVALID_REQUEST', 'Некорректная команда входа в игру.');
@@ -93,16 +109,21 @@ function parseJoinBody(
   }
   const body = request.body as Record<string, unknown>;
   if (
-    Object.keys(body).some((key) => key !== 'expectedRevision') ||
+    Object.keys(body).some((key) => key !== 'expectedRevision' && key !== 'invitationId') ||
     (body.expectedRevision !== undefined &&
-      (!Number.isSafeInteger(body.expectedRevision) || Number(body.expectedRevision) < 0))
+      (!Number.isSafeInteger(body.expectedRevision) || Number(body.expectedRevision) < 0)) ||
+    (body.invitationId !== undefined &&
+      (typeof body.invitationId !== 'string' || !UUID_PATTERN.test(body.invitationId)))
   ) {
     sendApiError(request, reply, 400, 'INVALID_REQUEST', 'Некорректная команда входа в игру.');
     return undefined;
   }
-  return body.expectedRevision === undefined
-    ? {}
-    : { expectedRevision: Number(body.expectedRevision) };
+  return {
+    ...(body.expectedRevision === undefined
+      ? {}
+      : { expectedRevision: Number(body.expectedRevision) }),
+    ...(typeof body.invitationId === 'string' ? { invitationId: body.invitationId } : {}),
+  };
 }
 
 function requestHash(command: UserRosterCommand, currentGameId: string, payload: unknown): string {
@@ -274,6 +295,7 @@ export function registerGameRoutes(
           ...(payload.expectedRevision === undefined
             ? {}
             : { expectedRevision: payload.expectedRevision }),
+          ...(payload.invitationId === undefined ? {} : { invitationId: payload.invitationId }),
         });
         if (result.outcome !== 'applied') return rejected(request, reply, result);
         return reply
@@ -301,6 +323,7 @@ export function registerGameRoutes(
     '/user/api/v1/:tenantKey/games/:gameId/waitlist',
     'JOIN_WAITLIST',
     (repository, input) => repository.joinWaitlist(input),
+    true,
   );
   command(
     'DELETE',

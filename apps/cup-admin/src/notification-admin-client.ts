@@ -59,6 +59,64 @@ export interface AdminNotificationCampaignAccepted {
   readonly replayed: boolean;
 }
 
+export type LevelEligibilityActivityType = 'GAME' | 'TOURNAMENT' | 'TRAINING';
+export type LevelEligibilityMode = 'OFF' | 'SHADOW' | 'WARN' | 'BLOCK';
+
+export interface CanonicalLevelAdminView {
+  readonly id: string;
+  readonly sportCode: string;
+  readonly code: string;
+  readonly title: string;
+  readonly rank: number;
+  readonly sortOrder: number;
+  readonly aliases: readonly string[];
+  readonly active: boolean;
+  readonly scaleVersion: number;
+}
+
+export interface LevelEligibilityPolicyAdminView {
+  readonly id: string;
+  readonly sportCode: string;
+  readonly activityType: LevelEligibilityActivityType;
+  readonly mode: LevelEligibilityMode;
+  readonly lowerToleranceSteps: number;
+  readonly upperToleranceSteps: number;
+  readonly missingActivityConstraintAction: 'ALLOW' | 'WARN' | 'BLOCK';
+  readonly legacyTextConstraintAction: 'ALLOW' | 'WARN';
+  readonly recheckWaitlistPromotion: boolean;
+  readonly version: number;
+  readonly changeComment: string | null;
+  readonly updatedBy: string | null;
+  readonly createdAt: string;
+}
+
+export interface LevelEligibilityPolicyState {
+  readonly sportCode: string;
+  readonly levels: readonly CanonicalLevelAdminView[];
+  readonly policies: readonly LevelEligibilityPolicyAdminView[];
+}
+
+export interface LevelEligibilityImpactAdminView {
+  readonly activityType: LevelEligibilityActivityType;
+  readonly activitiesWithoutLevel: number;
+  readonly activitiesWithInvalidRange: number;
+  readonly legacyActivities: number;
+  readonly playersWithoutLevel: number;
+  readonly existingParticipantsOutsideRange: number;
+  readonly supported: boolean;
+}
+
+export interface LevelEligibilityPolicyInput {
+  readonly expectedVersion: number;
+  readonly mode: LevelEligibilityMode;
+  readonly lowerToleranceSteps: number;
+  readonly upperToleranceSteps: number;
+  readonly missingActivityConstraintAction: 'ALLOW' | 'WARN' | 'BLOCK';
+  readonly legacyTextConstraintAction: 'ALLOW' | 'WARN';
+  readonly recheckWaitlistPromotion: boolean;
+  readonly changeComment: string;
+}
+
 export interface AdminCommunityJoinRequest {
   readonly requestId: string;
   readonly communityId: string;
@@ -230,6 +288,46 @@ export interface NotificationAdminClient {
     expectedRevision: number,
   ): Promise<AdminGiftCertificateCatalogCommandResult>;
   uploadGiftCertificateMedia(file: File): Promise<AdminGiftCertificateMediaCommandResult>;
+  getLevelEligibilityState(sportCode?: string): Promise<LevelEligibilityPolicyState>;
+  getLevelEligibilityImpact(
+    sportCode?: string,
+  ): Promise<{ readonly items: readonly LevelEligibilityImpactAdminView[] }>;
+  getLevelEligibilityHistory(
+    activityType: LevelEligibilityActivityType,
+    sportCode?: string,
+  ): Promise<{ readonly items: readonly LevelEligibilityPolicyAdminView[] }>;
+  publishLevelEligibilityPolicy(
+    activityType: LevelEligibilityActivityType,
+    input: LevelEligibilityPolicyInput,
+    sportCode?: string,
+  ): Promise<{ readonly policy: LevelEligibilityPolicyAdminView; readonly replayed: boolean }>;
+  rollbackLevelEligibilityPolicy(
+    activityType: LevelEligibilityActivityType,
+    input: {
+      readonly expectedVersion: number;
+      readonly targetVersion: number;
+      readonly changeComment: string;
+    },
+    sportCode?: string,
+  ): Promise<{ readonly policy: LevelEligibilityPolicyAdminView; readonly replayed: boolean }>;
+  previewLevelEligibility(input: {
+    readonly sportCode: string;
+    readonly activityType: LevelEligibilityActivityType;
+    readonly playerLevelId: string | null;
+    readonly minimumLevelId: string | null;
+    readonly maximumLevelId: string | null;
+    readonly personalInvitation: boolean;
+    readonly organizerCreation: boolean;
+    readonly policy: Omit<LevelEligibilityPolicyInput, 'expectedVersion' | 'changeComment'>;
+  }): Promise<{
+    readonly allowed: boolean;
+    readonly status: 'ALLOWED' | 'WARNING' | 'DENIED';
+    readonly result: {
+      readonly outcome: string;
+      readonly reasonCode: string;
+      readonly metadata?: Record<string, unknown>;
+    };
+  }>;
 }
 
 interface NotificationAdminClientOptions {
@@ -484,6 +582,52 @@ export function createNotificationAdminClient(
         },
         operationId(),
       );
+    },
+    getLevelEligibilityState(sportCode = 'PADEL') {
+      return adminRequest<LevelEligibilityPolicyState>(
+        `/level-eligibility?sportCode=${encodeURIComponent(sportCode)}`,
+      );
+    },
+    getLevelEligibilityImpact(sportCode = 'PADEL') {
+      return adminRequest<{ readonly items: readonly LevelEligibilityImpactAdminView[] }>(
+        `/level-eligibility/impact?sportCode=${encodeURIComponent(sportCode)}`,
+      );
+    },
+    getLevelEligibilityHistory(activityType, sportCode = 'PADEL') {
+      return adminRequest<{ readonly items: readonly LevelEligibilityPolicyAdminView[] }>(
+        `/level-eligibility/${activityType}/history?sportCode=${encodeURIComponent(sportCode)}`,
+      );
+    },
+    publishLevelEligibilityPolicy(activityType, input, sportCode = 'PADEL') {
+      return adminRequest<{
+        readonly policy: LevelEligibilityPolicyAdminView;
+        readonly replayed: boolean;
+      }>(
+        `/level-eligibility/${activityType}?sportCode=${encodeURIComponent(sportCode)}`,
+        { method: 'PUT', body: JSON.stringify(input) },
+        operationId(),
+      );
+    },
+    rollbackLevelEligibilityPolicy(activityType, input, sportCode = 'PADEL') {
+      return adminRequest<{
+        readonly policy: LevelEligibilityPolicyAdminView;
+        readonly replayed: boolean;
+      }>(
+        `/level-eligibility/${activityType}/rollback?sportCode=${encodeURIComponent(sportCode)}`,
+        { method: 'POST', body: JSON.stringify(input) },
+        operationId(),
+      );
+    },
+    previewLevelEligibility(input) {
+      return adminRequest<{
+        readonly allowed: boolean;
+        readonly status: 'ALLOWED' | 'WARNING' | 'DENIED';
+        readonly result: {
+          readonly outcome: string;
+          readonly reasonCode: string;
+          readonly metadata?: Record<string, unknown>;
+        };
+      }>('/level-eligibility/preview', { method: 'POST', body: JSON.stringify(input) });
     },
   };
 }

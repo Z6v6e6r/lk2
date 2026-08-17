@@ -12,13 +12,28 @@ import {
   type GameRosterCommandFacts,
   type GameViewerRelation,
 } from '@phub/games';
+import {
+  evaluateLevelEligibility,
+  type LevelEligibilityReasonCode,
+  type LevelEligibilityPolicy,
+  type LevelEligibilityContext,
+} from '@phub/domain';
 import type { Pool, PoolClient, QueryResultRow } from 'pg';
 
 import { queryOne, withTenantTransaction } from './connection.js';
 import type { GamePaymentMode } from './game-repository.js';
 
 export type GameRosterCommandErrorCode =
-  GameDomainErrorCode | 'GAME_NOT_FOUND' | 'GAME_REVISION_CONFLICT';
+  | GameDomainErrorCode
+  | LevelEligibilityReasonCode
+  | 'GAME_NOT_FOUND'
+  | 'GAME_REVISION_CONFLICT'
+  | 'GAME_NOT_CONFIRMABLE'
+  | 'GAME_PAYMENT_EVIDENCE_CONFLICT'
+  | 'GAME_PAYMENT_MODE_MISMATCH'
+  | 'GAME_PAYMENT_SNAPSHOT_MISSING'
+  | 'GAME_RESERVATION_EXPIRED'
+  | 'GAME_RESERVATION_NOT_FOUND';
 
 export type GameRosterCommandResult =
   | {
@@ -65,6 +80,43 @@ export interface GameRosterUserCommandInput {
   readonly requestHash: string;
   readonly correlationId: string;
   readonly expectedRevision?: number;
+  readonly invitationId?: string;
+}
+
+export interface ConfirmGamePaymentInput extends GameRosterUserCommandInput {
+  readonly reservationId: string;
+  readonly evidence: {
+    readonly provider: 'VIVA';
+    readonly operationType: 'TRANSACTION' | 'SUBSCRIPTION_BOOKING';
+    readonly operationId: string;
+    readonly bookingId: string;
+    readonly exerciseId?: string;
+    readonly clientPhoneE164: string;
+    readonly evidenceHash: string;
+    readonly verifiedAt: string;
+    readonly verifiedBy: 'LEGACY_NODE_RED';
+    readonly amountMinor?: number;
+    readonly currency?: string;
+  };
+}
+
+export interface LevelEligibilityDecisionTelemetry {
+  readonly decisionId: string;
+  readonly tenantId: string;
+  readonly sportId: string;
+  readonly activityType: 'GAME';
+  readonly activityId: string;
+  readonly playerId: string;
+  readonly action: 'JOIN' | 'JOIN_WAITLIST' | 'PROMOTE_WAITLIST';
+  readonly ruleCode: 'LEVEL_RANGE';
+  readonly mode: LevelEligibilityPolicy['mode'];
+  readonly outcome: ReturnType<typeof evaluateLevelEligibility>['outcome'];
+  readonly reasonCode: ReturnType<typeof evaluateLevelEligibility>['reasonCode'];
+  readonly policyVersion: number;
+  readonly levelScaleVersion: number | null;
+  readonly constraintSource: string;
+  readonly invitationId: string | null;
+  readonly correlationId: string;
 }
 
 interface ProcessCommandInput {
@@ -87,6 +139,7 @@ export interface PromoteGameWaitlistInput extends ProcessCommandInput {
 export interface GameRosterRepository {
   join(input: GameRosterUserCommandInput): Promise<GameRosterCommandResult>;
   joinWaitlist(input: GameRosterUserCommandInput): Promise<GameRosterCommandResult>;
+  confirmPayment(input: ConfirmGamePaymentInput): Promise<GameRosterCommandResult>;
   leave(input: GameRosterUserCommandInput): Promise<GameRosterCommandResult>;
   leaveWaitlist(input: GameRosterUserCommandInput): Promise<GameRosterCommandResult>;
   expireReservation(input: ExpireGameReservationInput): Promise<GameRosterProcessResult>;
@@ -134,6 +187,11 @@ interface LockedGameRow extends QueryResultRow {
   readonly capacity: number;
   readonly waitlist_enabled: boolean;
   readonly payment_mode: GamePaymentMode;
+  readonly sport_code: string;
+  readonly level_from: string | null;
+  readonly level_to: string | null;
+  readonly min_level_id: string | null;
+  readonly max_level_id: string | null;
   readonly database_now: Date | string;
 }
 
@@ -153,6 +211,28 @@ interface IdentifierRow extends QueryResultRow {
 
 interface ReservationRow extends IdentifierRow {
   readonly expires_at: Date | string;
+}
+
+interface ConfirmableReservationRow extends ReservationRow {
+  readonly user_id: string;
+  readonly state: 'ACTIVE' | 'CONFIRMED' | 'EXPIRED' | 'CANCELLED';
+  readonly payment_state: 'REQUIRES_ACTION' | 'PROCESSING' | 'PAID' | 'FAILED' | 'EXPIRED';
+  readonly eligibility_decision_id: string | null;
+  readonly payment_snapshot_exists: boolean;
+}
+
+interface PaymentEvidenceRow extends QueryResultRow {
+  readonly id: string;
+  readonly reservation_id: string;
+  readonly provider: 'VIVA';
+  readonly provider_operation_type: 'TRANSACTION' | 'SUBSCRIPTION_BOOKING';
+  readonly provider_operation_id: string;
+  readonly evidence_hash: string;
+  readonly resolution: 'RECEIVED' | 'APPLIED' | 'REJECTED';
+  readonly error_code: string | null;
+  readonly participation_id: string | null;
+  readonly aggregate_revision: string | number | null;
+  readonly resolved_at: Date | string | null;
 }
 
 interface WaitlistRow extends IdentifierRow {
@@ -183,6 +263,28 @@ interface PromotableWaitlistRow extends QueryResultRow {
   readonly user_id: string;
   readonly position: string | number;
   readonly state: 'ACTIVE' | 'PROMOTED' | 'LEFT' | 'EXPIRED';
+  readonly personal_invitation_id: string | null;
+}
+
+interface EligibilityFactsRow extends QueryResultRow {
+  readonly mode: LevelEligibilityPolicy['mode'] | null;
+  readonly lower_tolerance_steps: number | null;
+  readonly upper_tolerance_steps: number | null;
+  readonly missing_activity_constraint_action:
+    LevelEligibilityPolicy['missingActivityConstraintAction'] | null;
+  readonly legacy_text_constraint_action:
+    LevelEligibilityPolicy['legacyTextConstraintAction'] | null;
+  readonly policy_version: number | null;
+  readonly player_level_id: string | null;
+  readonly player_rank: number | null;
+  readonly player_level_source: string | null;
+  readonly player_scale_version: number | null;
+  readonly minimum_level_id: string | null;
+  readonly maximum_level_id: string | null;
+  readonly minimum_rank: number | null;
+  readonly maximum_rank: number | null;
+  readonly constraint_scale_version: number | null;
+  readonly valid_invitation_id: string | null;
 }
 
 interface CapacityRow extends QueryResultRow {
@@ -378,7 +480,8 @@ async function lockGame(
   return queryOne<LockedGameRow>(
     client,
     `select id, revision, lifecycle_state, starts_at, join_cutoff_at,
-            capacity, waitlist_enabled, payment_mode, now()::text as database_now
+            capacity, waitlist_enabled, payment_mode, sport_code, level_from, level_to,
+            min_level_id, max_level_id, now()::text as database_now
        from games.games
       where tenant_id = $1 and id = $2
       for update`,
@@ -393,7 +496,8 @@ async function lockProcessGame(
   return queryOne<LockedGameRow>(
     client,
     `select id, revision, lifecycle_state, starts_at, join_cutoff_at,
-            capacity, waitlist_enabled, payment_mode, now()::text as database_now
+            capacity, waitlist_enabled, payment_mode, sport_code, level_from, level_to,
+            min_level_id, max_level_id, now()::text as database_now
        from games.games
       where tenant_id = $1 and id = $2
       for update`,
@@ -483,6 +587,292 @@ function commandFacts(game: LockedGameRow, facts: RosterFactsRow): GameRosterCom
     waitlistEnabled: game.waitlist_enabled,
     viewerRelation: viewerRelation(facts),
   };
+}
+
+async function evaluateGameParticipationEligibility(
+  client: PoolClient,
+  input: {
+    readonly tenantId: string;
+    readonly gameId: string;
+    readonly playerId: string;
+    readonly invitationId?: string;
+    readonly action: 'JOIN' | 'JOIN_WAITLIST' | 'PROMOTE_WAITLIST';
+    readonly correlationId: string;
+  },
+  game: LockedGameRow,
+  onEligibilityDecision?: (event: LevelEligibilityDecisionTelemetry) => void,
+): Promise<{
+  readonly decisionId: string;
+  readonly deniedCode?: LevelEligibilityReasonCode;
+  readonly validatedInvitationId?: string;
+}> {
+  const facts = await queryOne<EligibilityFactsRow>(
+    client,
+    `select
+       policy.mode,
+       policy.lower_tolerance_steps,
+       policy.upper_tolerance_steps,
+       policy.missing_activity_constraint_action,
+       policy.legacy_text_constraint_action,
+       policy.version as policy_version,
+       player.level_id as player_level_id,
+       player_level.rank as player_rank,
+       player.source as player_level_source,
+       player.scale_version as player_scale_version,
+       minimum.id as minimum_level_id,
+       maximum.id as maximum_level_id,
+       minimum.rank as minimum_rank,
+       maximum.rank as maximum_rank,
+       greatest(minimum.scale_version, maximum.scale_version) as constraint_scale_version,
+       invitation.id as valid_invitation_id
+      from (values (1)) source(marker)
+      left join lateral (
+        select mode, lower_tolerance_steps, upper_tolerance_steps,
+               missing_activity_constraint_action, legacy_text_constraint_action, version
+          from eligibility.level_policies
+         where tenant_id = $1 and sport_code = $3 and activity_type = 'GAME' and active
+         limit 1
+      ) policy on true
+      left join eligibility.player_sport_levels player
+        on player.tenant_id = $1 and player.player_id = $2 and player.sport_code = $3
+      left join eligibility.canonical_levels player_level
+        on player_level.tenant_id = player.tenant_id
+       and player_level.sport_code = player.sport_code
+       and player_level.id = player.level_id
+      left join lateral (
+        select id, rank, scale_version
+          from eligibility.canonical_levels
+         where tenant_id = $1 and sport_code = $3 and active
+           and (($4::uuid is not null and id = $4::uuid) or ($4::uuid is null and code = $5))
+         order by scale_version desc
+         limit 1
+      ) minimum on true
+      left join lateral (
+        select id, rank, scale_version
+          from eligibility.canonical_levels
+         where tenant_id = $1 and sport_code = $3 and active
+           and (($6::uuid is not null and id = $6::uuid) or ($6::uuid is null and code = $7))
+         order by scale_version desc
+         limit 1
+      ) maximum on true
+      left join lateral (
+        select id
+          from eligibility.personal_invitations
+         where tenant_id = $1
+           and id = $8::uuid
+           and activity_type = 'GAME'
+           and activity_id = $9
+           and invitation_type = 'PERSONAL'
+           and recipient_player_id = $2
+           and status = 'ACTIVE'
+           and revoked_at is null
+           and expires_at > now()
+           and use_count < max_uses
+         limit 1
+         for update
+      ) invitation on $8::uuid is not null`,
+    [
+      input.tenantId,
+      input.playerId,
+      game.sport_code,
+      game.min_level_id,
+      game.level_from,
+      game.max_level_id,
+      game.level_to,
+      input.invitationId ?? null,
+      input.gameId,
+    ],
+  );
+  if (!facts) throw new Error('GAME_ELIGIBILITY_FACTS_MISSING');
+
+  const policy: LevelEligibilityPolicy = facts.mode
+    ? {
+        mode: facts.mode,
+        lowerToleranceSteps: Number(facts.lower_tolerance_steps),
+        upperToleranceSteps: Number(facts.upper_tolerance_steps),
+        missingActivityConstraintAction: facts.missing_activity_constraint_action!,
+        legacyTextConstraintAction: facts.legacy_text_constraint_action!,
+        version: Number(facts.policy_version),
+      }
+    : {
+        mode: 'OFF',
+        lowerToleranceSteps: 0,
+        upperToleranceSteps: 0,
+        missingActivityConstraintAction: 'ALLOW',
+        legacyTextConstraintAction: 'ALLOW',
+        version: 0,
+      };
+  const hasDeclaredRange =
+    game.min_level_id !== null ||
+    game.max_level_id !== null ||
+    game.level_from !== null ||
+    game.level_to !== null;
+  const hasCompleteCanonicalRange =
+    facts.minimum_level_id !== null &&
+    facts.maximum_level_id !== null &&
+    facts.minimum_rank !== null &&
+    facts.maximum_rank !== null;
+  const source = game.min_level_id && game.max_level_id ? 'CANONICAL' : 'LEGACY_GAME_SETTINGS';
+  const decision = evaluateLevelEligibility(
+    {
+      action: input.action,
+      activityType: 'GAME',
+      activityId: input.gameId,
+      sportId: game.sport_code,
+      playerId: input.playerId,
+      playerLevel:
+        facts.player_level_id && facts.player_rank !== null && facts.player_level_source
+          ? {
+              playerId: input.playerId,
+              sportId: game.sport_code,
+              levelId: facts.player_level_id,
+              rank: Number(facts.player_rank),
+              source: facts.player_level_source as NonNullable<
+                LevelEligibilityContext['playerLevel']
+              >['source'],
+              scaleVersion: Number(facts.player_scale_version),
+            }
+          : null,
+      activityLevelConstraint: !hasDeclaredRange
+        ? { mode: 'NONE', source, dataQuality: 'VALID' }
+        : {
+            mode: 'RANGE',
+            ...(facts.minimum_level_id ? { minLevelId: facts.minimum_level_id } : {}),
+            ...(facts.maximum_level_id ? { maxLevelId: facts.maximum_level_id } : {}),
+            ...(facts.minimum_rank === null ? {} : { minRank: Number(facts.minimum_rank) }),
+            ...(facts.maximum_rank === null ? {} : { maxRank: Number(facts.maximum_rank) }),
+            source,
+            dataQuality: hasCompleteCanonicalRange ? 'VALID' : 'INVALID',
+            ...(facts.constraint_scale_version === null
+              ? {}
+              : { scaleVersion: Number(facts.constraint_scale_version) }),
+          },
+      ...(facts.valid_invitation_id
+        ? { validPersonalInvitationId: facts.valid_invitation_id }
+        : {}),
+    },
+    policy,
+  );
+  const decisionId = randomUUID();
+  const usedInvitationId =
+    decision.reasonCode === 'PERSONAL_INVITE_BYPASS' ? facts.valid_invitation_id : null;
+  const status =
+    decision.outcome === 'FAIL' ? 'DENIED' : decision.outcome === 'WARN' ? 'WARNING' : 'ALLOWED';
+  await client.query(
+    `insert into eligibility.decisions (
+       tenant_id, id, player_id, activity_type, activity_id, action, status,
+       rule_code, outcome, reason_code, policy_version, level_scale_version,
+       constraint_source, invitation_id, details
+     ) values ($1, $2, $3, 'GAME', $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb)`,
+    [
+      input.tenantId,
+      decisionId,
+      input.playerId,
+      input.gameId,
+      input.action,
+      status,
+      decision.ruleCode,
+      decision.outcome,
+      decision.reasonCode,
+      policy.version,
+      facts.constraint_scale_version ?? facts.player_scale_version,
+      source,
+      usedInvitationId,
+      JSON.stringify({ ...decision.metadata, correlationId: input.correlationId }),
+    ],
+  );
+  try {
+    onEligibilityDecision?.({
+      decisionId,
+      tenantId: input.tenantId,
+      sportId: game.sport_code,
+      activityType: 'GAME',
+      activityId: input.gameId,
+      playerId: input.playerId,
+      action: input.action,
+      ruleCode: decision.ruleCode,
+      mode: policy.mode,
+      outcome: decision.outcome,
+      reasonCode: decision.reasonCode,
+      policyVersion: policy.version,
+      levelScaleVersion:
+        facts.constraint_scale_version === null && facts.player_scale_version === null
+          ? null
+          : Number(facts.constraint_scale_version ?? facts.player_scale_version),
+      constraintSource: source,
+      invitationId: usedInvitationId,
+      correlationId: input.correlationId,
+    });
+  } catch {
+    // Telemetry must never change an eligibility decision or roster transaction.
+  }
+  return {
+    decisionId,
+    ...(decision.outcome === 'FAIL' ? { deniedCode: decision.reasonCode } : {}),
+    ...(usedInvitationId ? { validatedInvitationId: usedInvitationId } : {}),
+  };
+}
+
+async function persistPaymentEligibilitySnapshot(
+  client: PoolClient,
+  input: {
+    readonly tenantId: string;
+    readonly operationId: string;
+    readonly decisionId: string;
+    readonly playerId: string;
+    readonly gameId: string;
+    readonly paymentMode: 'SPLIT' | 'SUBSCRIPTION';
+  },
+): Promise<void> {
+  const result = await client.query(
+    `insert into eligibility.payment_snapshots (
+       tenant_id, operation_id, decision_id, player_id, activity_type, activity_id, snapshot
+     )
+     select $1, $2, decision.id, $4, 'GAME', $5,
+            jsonb_build_object(
+              'decisionId', decision.id,
+              'status', decision.status,
+              'ruleCode', decision.rule_code,
+              'outcome', decision.outcome,
+              'reasonCode', decision.reason_code,
+              'policyVersion', decision.policy_version,
+              'levelScaleVersion', decision.level_scale_version,
+              'constraintSource', decision.constraint_source,
+              'invitationId', decision.invitation_id,
+              'details', decision.details,
+              'evaluatedAt', decision.evaluated_at,
+              'paymentMode', $6
+            )
+       from eligibility.decisions decision
+      where decision.tenant_id = $1 and decision.id = $3
+     on conflict (tenant_id, operation_id) do nothing`,
+    [
+      input.tenantId,
+      input.operationId,
+      input.decisionId,
+      input.playerId,
+      input.gameId,
+      input.paymentMode,
+    ],
+  );
+  if (result.rowCount !== 1) throw new Error('GAME_PAYMENT_ELIGIBILITY_SNAPSHOT_WRITE_LOST');
+}
+
+async function consumePersonalInvitation(
+  client: PoolClient,
+  tenantId: string,
+  invitationId: string | undefined,
+): Promise<void> {
+  if (!invitationId) return;
+  await client.query(
+    `update eligibility.personal_invitations
+        set use_count = use_count + 1,
+            used_at = now(),
+            status = case when use_count + 1 >= max_uses then 'USED' else status end,
+            updated_at = now()
+      where tenant_id = $1 and id = $2 and status = 'ACTIVE' and use_count < max_uses`,
+    [tenantId, invitationId],
+  );
 }
 
 async function storeCompleted(
@@ -767,7 +1157,12 @@ async function scheduleWaitlistPromotion(
   );
 }
 
-export function createGameRosterRepository(pool: Pool): GameRosterRepository {
+export function createGameRosterRepository(
+  pool: Pool,
+  options: {
+    readonly onEligibilityDecision?: (event: LevelEligibilityDecisionTelemetry) => void;
+  } = {},
+): GameRosterRepository {
   return {
     join(input) {
       const commandType = 'game.join.v1';
@@ -785,6 +1180,31 @@ export function createGameRosterRepository(pool: Pool): GameRosterRepository {
         );
         if (rejected) return rejected;
 
+        const eligibility = await evaluateGameParticipationEligibility(
+          client,
+          {
+            tenantId: input.tenantId,
+            gameId: input.gameId,
+            playerId: input.actorUserId,
+            ...(input.invitationId ? { invitationId: input.invitationId } : {}),
+            action: 'JOIN',
+            correlationId: input.correlationId,
+          },
+          prepared.game,
+          options.onEligibilityDecision,
+        );
+        if (eligibility.deniedCode) {
+          return storeRejected(
+            client,
+            input,
+            commandType,
+            prepared.commandId,
+            eligibility.deniedCode,
+            true,
+            positiveInteger(prepared.game.revision),
+          );
+        }
+
         if (
           prepared.game.payment_mode === 'SPLIT' ||
           prepared.game.payment_mode === 'SUBSCRIPTION'
@@ -792,17 +1212,27 @@ export function createGameRosterRepository(pool: Pool): GameRosterRepository {
           const reservation = await queryOne<ReservationRow>(
             client,
             `insert into games.seat_reservations (
-               tenant_id, game_id, user_id, state, payment_state, expires_at
-             ) values ($1, $2, $3, 'ACTIVE', $4, now() + interval '15 minutes')
+               tenant_id, game_id, user_id, state, payment_state, expires_at,
+               eligibility_decision_id
+             ) values ($1, $2, $3, 'ACTIVE', $4, now() + interval '15 minutes', $5)
              returning id, expires_at::text as expires_at`,
             [
               input.tenantId,
               input.gameId,
               input.actorUserId,
               prepared.game.payment_mode === 'SPLIT' ? 'REQUIRES_ACTION' : 'PROCESSING',
+              eligibility.decisionId ?? null,
             ],
           );
           if (!reservation) throw new Error('GAME_RESERVATION_WRITE_LOST');
+          await persistPaymentEligibilitySnapshot(client, {
+            tenantId: input.tenantId,
+            operationId: prepared.commandId,
+            decisionId: eligibility.decisionId,
+            playerId: input.actorUserId,
+            gameId: input.gameId,
+            paymentMode: prepared.game.payment_mode,
+          });
           const revision = await bumpRevision(client, input);
           const expiresAt = timestamp(reservation.expires_at);
           const result = {
@@ -838,6 +1268,11 @@ export function createGameRosterRepository(pool: Pool): GameRosterRepository {
               expiresAt,
             },
           });
+          await consumePersonalInvitation(
+            client,
+            input.tenantId,
+            eligibility.validatedInvitationId,
+          );
           await recordSuccess(client, input, commandType, result);
           return result;
         }
@@ -845,10 +1280,10 @@ export function createGameRosterRepository(pool: Pool): GameRosterRepository {
         const participation = await queryOne<IdentifierRow>(
           client,
           `insert into games.participations (
-             tenant_id, game_id, user_id, role, state, payment_state
-           ) values ($1, $2, $3, 'PLAYER', 'ACTIVE', 'NOT_REQUIRED')
+             tenant_id, game_id, user_id, role, state, payment_state, eligibility_decision_id
+           ) values ($1, $2, $3, 'PLAYER', 'ACTIVE', 'NOT_REQUIRED', $4)
            returning id`,
-          [input.tenantId, input.gameId, input.actorUserId],
+          [input.tenantId, input.gameId, input.actorUserId, eligibility.decisionId ?? null],
         );
         if (!participation) throw new Error('GAME_PARTICIPATION_WRITE_LOST');
         const revision = await bumpRevision(client, input);
@@ -883,6 +1318,273 @@ export function createGameRosterRepository(pool: Pool): GameRosterRepository {
             },
           });
         }
+        await consumePersonalInvitation(client, input.tenantId, eligibility.validatedInvitationId);
+        await recordSuccess(client, input, commandType, result);
+        return result;
+      });
+    },
+
+    confirmPayment(input) {
+      const commandType = 'game.payment.confirm.v1';
+      return withTenantTransaction(pool, input.tenantId, async (client) => {
+        const replay = replayCommand(
+          await lockIdempotency(client, input),
+          commandType,
+          input.requestHash,
+        );
+        if (replay) return replay;
+        const commandId = randomUUID();
+        const game = await lockGame(client, input);
+        if (!game) {
+          return storeRejected(client, input, commandType, commandId, 'GAME_NOT_FOUND', false);
+        }
+        const currentRevision = positiveInteger(game.revision);
+        const reservation = await queryOne<ConfirmableReservationRow>(
+          client,
+          `select id, user_id, state, payment_state, expires_at::text as expires_at,
+                  eligibility_decision_id,
+                  exists (
+                    select 1
+                      from eligibility.payment_snapshots snapshot
+                     where snapshot.tenant_id = games.seat_reservations.tenant_id
+                       and snapshot.decision_id = games.seat_reservations.eligibility_decision_id
+                       and snapshot.player_id = games.seat_reservations.user_id
+                       and snapshot.activity_type = 'GAME'
+                       and snapshot.activity_id = games.seat_reservations.game_id
+                  ) as payment_snapshot_exists
+             from games.seat_reservations
+            where tenant_id = $1 and game_id = $2 and id = $3 and user_id = $4
+            for update`,
+          [input.tenantId, input.gameId, input.reservationId, input.actorUserId],
+        );
+        if (!reservation) {
+          return storeRejected(
+            client,
+            input,
+            commandType,
+            commandId,
+            'GAME_RESERVATION_NOT_FOUND',
+            true,
+            currentRevision,
+          );
+        }
+        if (!reservation.eligibility_decision_id || !reservation.payment_snapshot_exists) {
+          return storeRejected(
+            client,
+            input,
+            commandType,
+            commandId,
+            'GAME_PAYMENT_SNAPSHOT_MISSING',
+            true,
+            currentRevision,
+          );
+        }
+
+        await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
+          `game-payment-evidence:${input.tenantId}:${input.evidence.provider}:${input.evidence.operationType}:${input.evidence.operationId}`,
+        ]);
+
+        const existingEvidence = await client.query<PaymentEvidenceRow>(
+          `select id, reservation_id, provider, provider_operation_type,
+                  provider_operation_id, evidence_hash, resolution, error_code,
+                  participation_id, aggregate_revision, resolved_at
+             from games.payment_confirmation_evidence
+            where tenant_id = $1
+              and (
+                reservation_id = $2
+                or (provider = $3 and provider_operation_type = $4 and provider_operation_id = $5)
+              )
+            for update`,
+          [
+            input.tenantId,
+            input.reservationId,
+            input.evidence.provider,
+            input.evidence.operationType,
+            input.evidence.operationId,
+          ],
+        );
+        const exactEvidence = existingEvidence.rows.find(
+          (row) =>
+            row.reservation_id === input.reservationId &&
+            row.provider === input.evidence.provider &&
+            row.provider_operation_type === input.evidence.operationType &&
+            row.provider_operation_id === input.evidence.operationId &&
+            row.evidence_hash === input.evidence.evidenceHash,
+        );
+        if (existingEvidence.rows.length > 0 && !exactEvidence) {
+          return storeRejected(
+            client,
+            input,
+            commandType,
+            commandId,
+            'GAME_PAYMENT_EVIDENCE_CONFLICT',
+            true,
+            currentRevision,
+          );
+        }
+        if (exactEvidence?.resolution === 'APPLIED') {
+          if (
+            !exactEvidence.participation_id ||
+            exactEvidence.aggregate_revision === null ||
+            exactEvidence.resolved_at === null
+          ) {
+            throw new Error('GAME_PAYMENT_EVIDENCE_RESULT_INVALID');
+          }
+          const result = {
+            outcome: 'applied' as const,
+            commandId,
+            gameId: input.gameId,
+            revision: positiveInteger(exactEvidence.aggregate_revision),
+            viewerRelation: 'PARTICIPANT' as const,
+            participationId: exactEvidence.participation_id,
+            reservationId: input.reservationId,
+            committedAt: timestamp(exactEvidence.resolved_at),
+            replayed: false,
+          };
+          await recordSuccess(client, input, commandType, result);
+          return result;
+        }
+        if (exactEvidence?.resolution === 'REJECTED') {
+          if (!exactEvidence.error_code) throw new Error('GAME_PAYMENT_EVIDENCE_RESULT_INVALID');
+          return storeRejected(
+            client,
+            input,
+            commandType,
+            commandId,
+            exactEvidence.error_code as GameRosterCommandErrorCode,
+            true,
+            currentRevision,
+          );
+        }
+        if (exactEvidence) {
+          return storeRejected(
+            client,
+            input,
+            commandType,
+            commandId,
+            'GAME_PAYMENT_EVIDENCE_CONFLICT',
+            true,
+            currentRevision,
+          );
+        }
+
+        const evidence = await queryOne<IdentifierRow>(
+          client,
+          `insert into games.payment_confirmation_evidence (
+             tenant_id, game_id, reservation_id, user_id, eligibility_decision_id,
+             provider, provider_operation_type, provider_operation_id, payment_mode,
+             provider_booking_id, provider_exercise_id, client_phone_e164, amount_minor, currency,
+             evidence_hash, verified_at, verified_by
+           ) values (
+             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17
+           )
+           returning id`,
+          [
+            input.tenantId,
+            input.gameId,
+            input.reservationId,
+            input.actorUserId,
+            reservation.eligibility_decision_id,
+            input.evidence.provider,
+            input.evidence.operationType,
+            input.evidence.operationId,
+            game.payment_mode,
+            input.evidence.bookingId,
+            input.evidence.exerciseId ?? null,
+            input.evidence.clientPhoneE164,
+            input.evidence.amountMinor ?? null,
+            input.evidence.currency ?? null,
+            input.evidence.evidenceHash,
+            input.evidence.verifiedAt,
+            input.evidence.verifiedBy,
+          ],
+        );
+        if (!evidence) throw new Error('GAME_PAYMENT_EVIDENCE_WRITE_LOST');
+        const rejectEvidence = async (
+          code: GameRosterCommandErrorCode,
+        ): Promise<GameRosterCommandResult> => {
+          const rejectedEvidence = await client.query(
+            `update games.payment_confirmation_evidence
+                set resolution = 'REJECTED', error_code = $3,
+                    aggregate_revision = $4, resolved_at = now()
+              where tenant_id = $1 and id = $2 and resolution = 'RECEIVED'`,
+            [input.tenantId, evidence.id, code, currentRevision],
+          );
+          if (rejectedEvidence.rowCount !== 1) {
+            throw new Error('GAME_PAYMENT_EVIDENCE_REJECT_LOST');
+          }
+          return storeRejected(client, input, commandType, commandId, code, true, currentRevision);
+        };
+
+        if (!['SCHEDULED', 'IN_PROGRESS'].includes(game.lifecycle_state)) {
+          return rejectEvidence('GAME_NOT_CONFIRMABLE');
+        }
+        if (reservation.state !== 'ACTIVE') {
+          return rejectEvidence('GAME_RESERVATION_NOT_FOUND');
+        }
+        const now = timestamp(game.database_now);
+        if (Date.parse(timestamp(reservation.expires_at)) <= Date.parse(now)) {
+          return rejectEvidence('GAME_RESERVATION_EXPIRED');
+        }
+        const operationTypeAllowed =
+          (game.payment_mode === 'SPLIT' &&
+            ['TRANSACTION', 'SUBSCRIPTION_BOOKING'].includes(input.evidence.operationType)) ||
+          (game.payment_mode === 'SUBSCRIPTION' &&
+            input.evidence.operationType === 'SUBSCRIPTION_BOOKING');
+        if (!operationTypeAllowed) {
+          return rejectEvidence('GAME_PAYMENT_MODE_MISMATCH');
+        }
+        if (!['REQUIRES_ACTION', 'PROCESSING'].includes(reservation.payment_state)) {
+          return rejectEvidence('GAME_NOT_CONFIRMABLE');
+        }
+
+        const participation = await queryOne<IdentifierRow>(
+          client,
+          `insert into games.participations (
+             tenant_id, game_id, user_id, role, state, payment_state, eligibility_decision_id
+           ) values ($1, $2, $3, 'PLAYER', 'ACTIVE', 'PAID', $4)
+           returning id`,
+          [input.tenantId, input.gameId, input.actorUserId, reservation.eligibility_decision_id],
+        );
+        if (!participation) throw new Error('GAME_PARTICIPATION_WRITE_LOST');
+        const reservationUpdate = await client.query(
+          `update games.seat_reservations
+              set state = 'CONFIRMED', payment_state = 'PAID', terminal_at = now(), updated_at = now()
+            where tenant_id = $1 and game_id = $2 and id = $3 and state = 'ACTIVE'`,
+          [input.tenantId, input.gameId, input.reservationId],
+        );
+        if (reservationUpdate.rowCount !== 1)
+          throw new Error('GAME_RESERVATION_CONFIRM_WRITE_LOST');
+        const revision = await bumpRevision(client, input);
+        const appliedEvidence = await client.query(
+          `update games.payment_confirmation_evidence
+              set resolution = 'APPLIED', participation_id = $3,
+                  aggregate_revision = $4, resolved_at = now()
+            where tenant_id = $1 and id = $2 and resolution = 'RECEIVED'`,
+          [input.tenantId, evidence.id, participation.id, revision],
+        );
+        if (appliedEvidence.rowCount !== 1) throw new Error('GAME_PAYMENT_EVIDENCE_APPLY_LOST');
+        const result = {
+          outcome: 'applied' as const,
+          commandId,
+          gameId: input.gameId,
+          revision,
+          viewerRelation: 'PARTICIPANT' as const,
+          participationId: participation.id,
+          reservationId: reservation.id,
+          committedAt: now,
+          replayed: false,
+        };
+        const base = eventBase(input, commandId, revision, now);
+        await appendEvent(client, {
+          ...base,
+          type: 'game.participation.confirmed.v1',
+          payload: {
+            ...base.payload,
+            userId: input.actorUserId,
+            participationId: participation.id,
+          },
+        });
         await recordSuccess(client, input, commandType, result);
         return result;
       });
@@ -903,14 +1605,46 @@ export function createGameRosterRepository(pool: Pool): GameRosterRepository {
           () => assertCanJoinWaitlistFacts(commandFacts(prepared.game, prepared.facts), now),
         );
         if (rejected) return rejected;
+        const eligibility = await evaluateGameParticipationEligibility(
+          client,
+          {
+            tenantId: input.tenantId,
+            gameId: input.gameId,
+            playerId: input.actorUserId,
+            ...(input.invitationId ? { invitationId: input.invitationId } : {}),
+            action: 'JOIN_WAITLIST',
+            correlationId: input.correlationId,
+          },
+          prepared.game,
+          options.onEligibilityDecision,
+        );
+        if (eligibility.deniedCode) {
+          return storeRejected(
+            client,
+            input,
+            commandType,
+            prepared.commandId,
+            eligibility.deniedCode,
+            true,
+            positiveInteger(prepared.game.revision),
+          );
+        }
         const entry = await queryOne<WaitlistRow>(
           client,
-          `insert into games.waitlist_entries (tenant_id, game_id, user_id, position)
-           select $1, $2, $3, coalesce(max(position), 0) + 1
+          `insert into games.waitlist_entries (
+             tenant_id, game_id, user_id, position, eligibility_decision_id, personal_invitation_id
+           )
+           select $1, $2, $3, coalesce(max(position), 0) + 1, $4, $5
              from games.waitlist_entries
             where tenant_id = $1 and game_id = $2 and state = 'ACTIVE'
            returning id, position`,
-          [input.tenantId, input.gameId, input.actorUserId],
+          [
+            input.tenantId,
+            input.gameId,
+            input.actorUserId,
+            eligibility.decisionId ?? null,
+            eligibility.validatedInvitationId ?? null,
+          ],
         );
         if (!entry) throw new Error('GAME_WAITLIST_WRITE_LOST');
         const revision = await bumpRevision(client, input);
@@ -1153,7 +1887,7 @@ export function createGameRosterRepository(pool: Pool): GameRosterRepository {
         const capacity = await loadCapacity(client, input.tenantId, input.gameId);
         const entry = await queryOne<PromotableWaitlistRow>(
           client,
-          `select id, user_id, position, state
+          `select id, user_id, position, state, personal_invitation_id
              from games.waitlist_entries
             where tenant_id = $1 and game_id = $2 and id = $3
               and position = (
@@ -1180,6 +1914,40 @@ export function createGameRosterRepository(pool: Pool): GameRosterRepository {
           return result;
         }
 
+        const eligibility = await evaluateGameParticipationEligibility(
+          client,
+          {
+            tenantId: input.tenantId,
+            gameId: input.gameId,
+            playerId: entry.user_id,
+            ...(entry.personal_invitation_id ? { invitationId: entry.personal_invitation_id } : {}),
+            action: 'PROMOTE_WAITLIST',
+            correlationId: input.correlationId,
+          },
+          game,
+          options.onEligibilityDecision,
+        );
+        if (eligibility.deniedCode) {
+          await client.query(
+            `update games.waitlist_entries
+                set state = 'EXPIRED', terminal_at = now(), updated_at = now(),
+                    eligibility_decision_id = $4
+              where tenant_id = $1 and game_id = $2 and id = $3 and state = 'ACTIVE'`,
+            [input.tenantId, input.gameId, entry.id, eligibility.decisionId ?? null],
+          );
+          const revision = await bumpRevision(client, input);
+          await scheduleWaitlistPromotion(client, input, revision);
+          const result = {
+            outcome: 'applied' as const,
+            commandId: input.commandId,
+            gameId: input.gameId,
+            revision,
+            replayed: false,
+          };
+          await storeProcessResult(client, input, commandType, result);
+          return result;
+        }
+
         await client.query(
           `update games.waitlist_entries
               set state = 'PROMOTED', terminal_at = now(), updated_at = now()
@@ -1194,17 +1962,27 @@ export function createGameRosterRepository(pool: Pool): GameRosterRepository {
           const reservation = await queryOne<ReservationRow>(
             client,
             `insert into games.seat_reservations (
-               tenant_id, game_id, user_id, state, payment_state, expires_at
-             ) values ($1, $2, $3, 'ACTIVE', $4, now() + interval '15 minutes')
+               tenant_id, game_id, user_id, state, payment_state, expires_at,
+               eligibility_decision_id
+             ) values ($1, $2, $3, 'ACTIVE', $4, now() + interval '15 minutes', $5)
              returning id, expires_at::text as expires_at`,
             [
               input.tenantId,
               input.gameId,
               entry.user_id,
               game.payment_mode === 'SPLIT' ? 'REQUIRES_ACTION' : 'PROCESSING',
+              eligibility.decisionId ?? null,
             ],
           );
           if (!reservation) throw new Error('GAME_PROMOTION_RESERVATION_WRITE_LOST');
+          await persistPaymentEligibilitySnapshot(client, {
+            tenantId: input.tenantId,
+            operationId: input.commandId,
+            decisionId: eligibility.decisionId,
+            playerId: entry.user_id,
+            gameId: input.gameId,
+            paymentMode: game.payment_mode,
+          });
           targetRelation = 'SEAT_RESERVED';
           targetId = reservation.id;
           expiresAt = timestamp(reservation.expires_at);
@@ -1212,10 +1990,10 @@ export function createGameRosterRepository(pool: Pool): GameRosterRepository {
           const participation = await queryOne<IdentifierRow>(
             client,
             `insert into games.participations (
-               tenant_id, game_id, user_id, role, state, payment_state
-             ) values ($1, $2, $3, 'PLAYER', 'ACTIVE', 'NOT_REQUIRED')
+               tenant_id, game_id, user_id, role, state, payment_state, eligibility_decision_id
+             ) values ($1, $2, $3, 'PLAYER', 'ACTIVE', 'NOT_REQUIRED', $4)
              returning id`,
-            [input.tenantId, input.gameId, entry.user_id],
+            [input.tenantId, input.gameId, entry.user_id, eligibility.decisionId ?? null],
           );
           if (!participation) throw new Error('GAME_PROMOTION_PARTICIPATION_WRITE_LOST');
           targetRelation = 'PARTICIPANT';
@@ -1235,6 +2013,7 @@ export function createGameRosterRepository(pool: Pool): GameRosterRepository {
             targetId,
           },
         });
+        await consumePersonalInvitation(client, input.tenantId, eligibility.validatedInvitationId);
         const participationEvent = processEventBase(input, revision, now);
         if (targetRelation === 'SEAT_RESERVED' && expiresAt) {
           await appendEvent(client, {

@@ -7,6 +7,8 @@ const actorUserId = '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca';
 const gameId = '6418f90b-0fa6-4c04-a3da-57707e2f0ae2';
 const operationId = 'd724f040-f5ec-4432-8c59-d016f68348fe';
 const eventId = '7d04d95e-cfb9-40a1-a0a7-f8d03c5d385c';
+const levelCId = 'af1dd32c-fb29-4b8f-9de5-eae140157a91';
+const levelBId = '22228914-c9c2-49c8-8214-ffb2f42d240c';
 
 const gameRow = {
   id: gameId,
@@ -82,6 +84,14 @@ function poolWithHandler(
 describe('game repository', () => {
   it('creates canonical state, command result, audit and two outbox facts atomically', async () => {
     const { pool, query } = poolWithHandler((text) => {
+      if (text.includes('from eligibility.canonical_levels')) {
+        return {
+          rows: [
+            { id: levelCId, code: 'C', rank: 3, scale_version: 1 },
+            { id: levelBId, code: 'B', rank: 5, scale_version: 1 },
+          ],
+        };
+      }
       if (text.includes('insert into games.games')) return { rows: [gameRow] };
       return { rows: [] };
     });
@@ -104,6 +114,19 @@ describe('game repository', () => {
       true,
     );
     expect(query.mock.calls.some(([text]) => text.includes('audit.audit_log'))).toBe(true);
+    expect(query.mock.calls.some(([text]) => text.includes('player_sport_levels'))).toBe(false);
+
+    const gameInsert = query.mock.calls.find(([text]) => text.includes('insert into games.games'));
+    expect(gameInsert?.[0]).toContain('min_level_id, max_level_id');
+    expect(gameInsert?.[1]?.slice(-4)).toEqual(['C', 'B', levelCId, levelBId]);
+    const auditInsert = query.mock.calls.find(([text]) => text.includes('audit.audit_log'));
+    expect(JSON.parse(String(auditInsert?.[1]?.[4]))).toMatchObject({
+      participationEligibility: {
+        ruleCode: 'LEVEL_RANGE',
+        outcome: 'BYPASS',
+        reasonCode: 'ORGANIZER_CREATION_BYPASS',
+      },
+    });
 
     const outboxCalls = query.mock.calls.filter(([text]) =>
       text.includes('insert into audit.outbox_events'),
@@ -114,6 +137,30 @@ describe('game repository', () => {
       'game.provisioning.requested.v1',
     ]);
     expect(query).toHaveBeenCalledWith('commit');
+  });
+
+  it('rejects an unmapped or reversed canonical range before creating aggregate state', async () => {
+    const { pool, query } = poolWithHandler((text) => {
+      if (text.includes('from eligibility.canonical_levels')) {
+        return {
+          rows: [
+            { id: levelCId, code: 'C', rank: 3, scale_version: 1 },
+            { id: levelBId, code: 'B', rank: 5, scale_version: 1 },
+          ],
+        };
+      }
+      return { rows: [] };
+    });
+
+    await expect(
+      createGameRepository(pool as never).create({
+        ...createInput(),
+        levelFrom: 'B',
+        levelTo: 'C',
+      }),
+    ).rejects.toThrow('GAME_CREATE_LEVEL_RANGE_INVALID');
+    expect(query.mock.calls.some(([text]) => text.includes('insert into games.games'))).toBe(false);
+    expect(query).toHaveBeenCalledWith('rollback');
   });
 
   it('replays the original completed result without writing aggregate state again', async () => {

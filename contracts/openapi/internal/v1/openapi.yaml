@@ -16,6 +16,8 @@ tags:
 paths:
   /{tenantKey}/game-commands:
     $ref: ./games.yaml#/paths/~1{tenantKey}~1game-commands
+  /{tenantKey}/legacy-games/{legacyGameId}/roster-commands:
+    $ref: ./games.yaml#/paths/~1{tenantKey}~1legacy-games~1{legacyGameId}~1roster-commands
   /{tenantKey}/game-events/{eventId}:
     $ref: ./games.yaml#/paths/~1{tenantKey}~1game-events~1{eventId}
 components:
@@ -25,3 +27,13 @@ components:
       scheme: bearer
       bearerFormat: JWT
       description: Short-lived service JWT with the dedicated phub-internal audience.
+    LegacyLkBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Original signed legacy LK user token; verified server-side by the CUP identity verifier.
+    LegacyRosterIntegrationToken:
+      type: apiKey
+      in: header
+      name: X-Phub-Legacy-Roster-Token
+      description: Server-only Node-RED to PadlHub bridge credential; never exposed to a browser.

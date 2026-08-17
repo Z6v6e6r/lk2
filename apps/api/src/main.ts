@@ -19,8 +19,11 @@ import {
   createHomeBaseProjectionRepository,
   createHomeDashboardProjectionRepository,
   createLegacyGameImportRepository,
+  createLegacyGameRosterBridgeRepository,
   createLocationMediaRepository,
   createLocationRepository,
+  createLevelEligibilityPolicyRepository,
+  createPlayerLevelRepository,
   createMessagingRepository,
   createNotificationEndpointRepository,
   createNotificationInboxRepository,
@@ -40,7 +43,7 @@ import {
   LegacyTournamentSummaryAdapter,
 } from '@phub/legacy-games-adapter';
 import { createNotificationEndpointCipher } from '@phub/notifications';
-import { createLogger, startTelemetry } from '@phub/observability';
+import { createLogger, recordLevelEligibilityMetrics, startTelemetry } from '@phub/observability';
 import {
   VivaCoachGameSummaryAdapter,
   VivaExerciseRecommendationSourceAdapter,
@@ -56,6 +59,7 @@ import { RedisEventCatalogSnapshotStore } from './bookings/event-catalog-snapsho
 import { RedisRealtimeTicketIssuer } from './messaging/realtime-ticket-issuer.js';
 import type { EventCatalogItem } from './bookings/booking-recommendation-routes.js';
 import { listViewerGameCards } from './games/game-card-queries.js';
+import { CupLegacyLkIdentityVerifier } from './games/legacy-lk-identity-verifier.js';
 import { S3GiftCertificateMediaStore } from './gift-certificates/gift-certificate-media-store.js';
 import { S3GiftCertificateArtifactReadStore } from './gift-certificates/gift-certificate-artifact-store.js';
 import { S3LocationMediaStore } from './locations/location-media-store.js';
@@ -188,6 +192,30 @@ const exerciseRecommendationSource =
       })
     : undefined;
 const profileSummaryRepository = createProfileSummaryRepository(pool);
+const gameRosterRepository = config.GAMES_COMMANDS_ENABLED
+  ? createGameRosterRepository(pool, {
+      onEligibilityDecision: (decision) => {
+        recordLevelEligibilityMetrics({
+          tenant: decision.tenantId,
+          sport: decision.sportId,
+          activityType: decision.activityType,
+          mode: decision.mode,
+          outcome: decision.outcome,
+          reasonCode: decision.reasonCode,
+          constraintSource: decision.constraintSource,
+          action: decision.action,
+        });
+        logger.info({ eligibility: decision }, 'participation eligibility evaluated');
+      },
+    })
+  : undefined;
+const legacyLkIdentityVerifier = config.LEGACY_GAME_COMMAND_BRIDGE_ENABLED
+  ? new CupLegacyLkIdentityVerifier({
+      url: config.LEGACY_GAME_IDENTITY_VERIFY_URL as string,
+      integrationToken: config.LEGACY_GAME_IDENTITY_VERIFY_TOKEN as string,
+      timeoutMs: config.LEGACY_GAME_IDENTITY_VERIFY_TIMEOUT_MS,
+    })
+  : undefined;
 const promotionEngagementSink = config.PROMOTIONS_ENGAGEMENT_SECRET
   ? new LegacyPromotionEngagementSink({
       baseUrl: config.PROMOTIONS_LEGACY_BASE_URL,
@@ -411,6 +439,8 @@ const app = await buildApp({
   notificationEndpointRepository: createNotificationEndpointRepository(pool),
   adminNotificationRepository: createAdminNotificationRepository(pool),
   locationRepository: createLocationRepository(pool),
+  levelEligibilityPolicyRepository: createLevelEligibilityPolicyRepository(pool),
+  playerLevelRepository: createPlayerLevelRepository(pool),
   locationMediaRepository: createLocationMediaRepository(pool),
   giftCertificateCatalogRepository: createGiftCertificateCatalogRepository(pool),
   giftCertificateMediaRepository: createGiftCertificateMediaRepository(pool),
@@ -455,9 +485,15 @@ const app = await buildApp({
   ...(tournamentSummarySource ? { tournamentSummarySource } : {}),
   ...(coachGameSummarySource ? { coachGameSummarySource } : {}),
   ...(exerciseRecommendationSource ? { exerciseRecommendationSource } : {}),
-  ...(config.GAMES_COMMANDS_ENABLED
+  ...(gameRosterRepository
     ? {
-        gameRosterRepository: createGameRosterRepository(pool),
+        gameRosterRepository,
+        ...(config.LEGACY_GAME_COMMAND_BRIDGE_ENABLED && legacyLkIdentityVerifier
+          ? {
+              legacyGameRosterBridgeRepository: createLegacyGameRosterBridgeRepository(pool),
+              legacyLkIdentityVerifier,
+            }
+          : {}),
         ...(config.GAMES_RESULTS_WRITE_MODE === 'local_primary'
           ? { gameResultRepository: createGameResultRepository(pool) }
           : {}),

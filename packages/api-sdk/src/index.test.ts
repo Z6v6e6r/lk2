@@ -428,7 +428,11 @@ describe('PadlHubApiClient authentication boundary', () => {
       initialAccessToken: authenticatedSession.accessToken,
     });
 
-    await client.joinGame('751fe6a8-b0b1-4b2b-873d-a2d785c4e191', 9);
+    await client.joinGame(
+      '751fe6a8-b0b1-4b2b-873d-a2d785c4e191',
+      9,
+      '95a76d36-d8a7-4ff5-a988-84f33c0fd05a',
+    );
 
     expect(requestUrl(calls[0]?.input ?? '')).toBe(
       'https://api.padlhub.test/user/api/v1/local-padel/games/751fe6a8-b0b1-4b2b-873d-a2d785c4e191/join',
@@ -438,7 +442,10 @@ describe('PadlHubApiClient authentication boundary', () => {
       `Bearer ${authenticatedSession.accessToken}`,
     );
     expect(new Headers(calls[0]?.init?.headers).get('Idempotency-Key')).toBeTruthy();
-    expect(JSON.parse(stringRequestBody(calls[0]?.init?.body))).toEqual({ expectedRevision: 9 });
+    expect(JSON.parse(stringRequestBody(calls[0]?.init?.body))).toEqual({
+      expectedRevision: 9,
+      invitationId: '95a76d36-d8a7-4ff5-a988-84f33c0fd05a',
+    });
   });
 
   it('reads a Games operation from the authenticated user boundary', async () => {
@@ -775,6 +782,98 @@ describe('PadlHubApiClient authentication boundary', () => {
 });
 
 describe('PadlHubApiClient profile privacy boundary', () => {
+  it('saves only a canonical level id with retry-stable idempotency', async () => {
+    const calls: Array<{ input: Parameters<typeof fetch>[0]; init?: RequestInit }> = [];
+    let attempt = 0;
+    const fetchImplementation: typeof fetch = (input, init) => {
+      calls.push({ input, ...(init === undefined ? {} : { init }) });
+      attempt += 1;
+      if (attempt === 1) return Promise.reject(new TypeError('temporary network failure'));
+      return Promise.resolve(
+        jsonResponse({
+          playerId: authenticatedSession.user.id,
+          sportCode: 'PADEL',
+          levelId: '95a76d36-d8a7-4ff5-a988-84f33c0fd05a',
+          code: 'C+',
+          title: 'C+',
+          rank: 4,
+          source: 'SELF_DECLARED',
+          numericValue: null,
+          scaleVersion: 1,
+          updatedAt: '2026-08-16T18:00:00.000Z',
+        }),
+      );
+    };
+    const client = createClient(fetchImplementation, {
+      initialAccessToken: authenticatedSession.accessToken,
+    });
+
+    await client.setOwnPlayerLevel('95a76d36-d8a7-4ff5-a988-84f33c0fd05a');
+
+    expect(calls).toHaveLength(2);
+    expect(requestUrl(calls[0]?.input ?? '')).toBe(
+      'https://api.padlhub.test/user/api/v1/local-padel/profile/level',
+    );
+    expect(JSON.parse(stringRequestBody(calls[0]?.init?.body))).toEqual({
+      sportCode: 'PADEL',
+      levelId: '95a76d36-d8a7-4ff5-a988-84f33c0fd05a',
+    });
+    const firstHeaders = new Headers(calls[0]?.init?.headers);
+    const secondHeaders = new Headers(calls[1]?.init?.headers);
+    expect(firstHeaders.get('Idempotency-Key')).toBeTruthy();
+    expect(secondHeaders.get('Idempotency-Key')).toBe(firstHeaders.get('Idempotency-Key'));
+  });
+
+  it('submits only assessment version and answers with retry-stable idempotency', async () => {
+    const calls: Array<{ input: Parameters<typeof fetch>[0]; init?: RequestInit }> = [];
+    let attempt = 0;
+    const fetchImplementation: typeof fetch = (input, init) => {
+      calls.push({ input, ...(init === undefined ? {} : { init }) });
+      attempt += 1;
+      if (attempt === 1) return Promise.reject(new TypeError('temporary network failure'));
+      return Promise.resolve(
+        jsonResponse({
+          assessment: {
+            version: 'padel-self-assessment-v1',
+            numericScore: 2,
+            levelCode: 'D+',
+          },
+          level: {
+            playerId: authenticatedSession.user.id,
+            sportCode: 'PADEL',
+            levelId: '95a76d36-d8a7-4ff5-a988-84f33c0fd05a',
+            code: 'D+',
+            title: 'D+',
+            rank: 2,
+            source: 'ONBOARDING',
+            numericValue: 2,
+            scaleVersion: 1,
+            updatedAt: '2026-08-16T18:00:00.000Z',
+          },
+        }),
+      );
+    };
+    const client = createClient(fetchImplementation, {
+      initialAccessToken: authenticatedSession.accessToken,
+    });
+    await client.completeOwnLevelAssessment('padel-self-assessment-v1', {
+      q1_1: ['less_month'],
+    });
+
+    expect(calls).toHaveLength(2);
+    expect(requestUrl(calls[0]?.input ?? '')).toBe(
+      'https://api.padlhub.test/user/api/v1/local-padel/profile/level-assessment',
+    );
+    expect(JSON.parse(stringRequestBody(calls[0]?.init?.body))).toEqual({
+      sportCode: 'PADEL',
+      assessmentVersion: 'padel-self-assessment-v1',
+      answers: { q1_1: ['less_month'] },
+    });
+    const firstKey = new Headers(calls[0]?.init?.headers).get('Idempotency-Key');
+    expect(firstKey).toBeTruthy();
+    expect(new Headers(calls[1]?.init?.headers).get('Idempotency-Key')).toBe(firstKey);
+  });
+
   it('uses one idempotency key when a privacy update is retried after a network failure', async () => {
     const calls: Array<{ input: Parameters<typeof fetch>[0]; init?: RequestInit }> = [];
     let attempt = 0;

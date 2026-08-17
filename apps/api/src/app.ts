@@ -39,6 +39,9 @@ import type {
   GiftCertificateSaleRepository,
   LocationMediaRepository,
   LocationRepository,
+  LevelEligibilityPolicyRepository,
+  LegacyGameRosterBridgeRepository,
+  PlayerLevelRepository,
   MessagingRepository,
   NotificationEndpointRepository,
   NotificationInboxRepository,
@@ -70,6 +73,7 @@ import { z } from 'zod';
 import { registerAuthRoutes } from './auth/auth-routes.js';
 import { registerAdminNotificationRoutes } from './admin/notification-admin-routes.js';
 import { registerLocationAdminRoutes } from './admin/location-admin-routes.js';
+import { registerLevelEligibilityAdminRoutes } from './admin/level-eligibility-admin-routes.js';
 import { registerGiftCertificateAdminRoutes } from './admin/gift-certificate-admin-routes.js';
 import { registerCommunityMembershipAdminRoutes } from './admin/community-membership-admin-routes.js';
 import { registerCommunityDirectInviteAdminRoutes } from './admin/community-direct-invite-admin-routes.js';
@@ -109,6 +113,8 @@ import {
   type CoachGameSummarySource,
 } from './coach-games/coach-game-summary-routes.js';
 import { registerGameRoutes } from './games/game-routes.js';
+import { registerLegacyGameRosterBridgeRoutes } from './games/legacy-game-roster-bridge-routes.js';
+import type { LegacyLkIdentityVerifier } from './games/legacy-lk-identity-verifier.js';
 import { registerGameResultRoutes } from './games/game-result-routes.js';
 import { registerGameReadRoutes } from './games/game-read-routes.js';
 import { registerGiftCertificateRoutes } from './gift-certificates/gift-certificate-routes.js';
@@ -134,6 +140,7 @@ import { registerWebPushRoutes } from './notifications/web-push-routes.js';
 import { registerProfilePrivacyRoutes } from './profile/profile-privacy-routes.js';
 import { registerProfileFriendshipRoutes } from './profile/profile-friendship-routes.js';
 import { registerProfileLevelHistoryRoutes } from './profile/profile-level-history-routes.js';
+import { registerProfileLevelRoutes } from './profile/profile-level-routes.js';
 import { registerPromotionEngagementRoutes } from './promotions/promotion-engagement-routes.js';
 import type { PromotionEngagementSink } from './promotions/legacy-promotion-engagement-sink.js';
 import { registerProfilePhotoMediaRoutes } from './profile/profile-photo-media-routes.js';
@@ -246,7 +253,10 @@ export interface BuildAppOptions {
   readonly gameRosterRepository?: Pick<
     GameRosterRepository,
     'join' | 'joinWaitlist' | 'leave' | 'leaveWaitlist' | 'getOperation'
-  >;
+  > &
+    Partial<Pick<GameRosterRepository, 'confirmPayment'>>;
+  readonly legacyGameRosterBridgeRepository?: LegacyGameRosterBridgeRepository;
+  readonly legacyLkIdentityVerifier?: LegacyLkIdentityVerifier;
   readonly gameResultRepository?: Pick<GameResultRepository, 'submit' | 'confirm' | 'dispute'>;
   readonly gameReadRepository?: Pick<
     GameRepository,
@@ -261,6 +271,8 @@ export interface BuildAppOptions {
   readonly messagingRepository?: MessagingRepository;
   readonly realtimeTicketIssuer?: RealtimeTicketIssuer;
   readonly locationRepository?: LocationRepository;
+  readonly levelEligibilityPolicyRepository?: LevelEligibilityPolicyRepository;
+  readonly playerLevelRepository?: PlayerLevelRepository;
   readonly locationMediaRepository?: LocationMediaRepository;
   readonly giftCertificateCatalogRepository?: GiftCertificateCatalogRepository;
   readonly giftCertificateMediaRepository?: GiftCertificateMediaRepository;
@@ -906,6 +918,28 @@ export async function buildApp(options: BuildAppOptions) {
     authenticatedTenantHandlers: [authenticate, authorizeGamesPlayer, resolveTenant],
     commandHandlers: [authenticate, authorizeGamesPlayer, resolveTenant, requireIdempotencyKey],
   });
+  registerLegacyGameRosterBridgeRoutes(app as unknown as FastifyInstance, {
+    enabled: options.config.LEGACY_GAME_COMMAND_BRIDGE_ENABLED,
+    ...(options.config.LEGACY_GAME_COMMAND_BRIDGE_TOKEN
+      ? { integrationToken: options.config.LEGACY_GAME_COMMAND_BRIDGE_TOKEN }
+      : {}),
+    ...(options.legacyLkIdentityVerifier
+      ? { identityVerifier: options.legacyLkIdentityVerifier }
+      : {}),
+    ...(options.legacyGameRosterBridgeRepository
+      ? { contextRepository: options.legacyGameRosterBridgeRepository }
+      : {}),
+    ...(options.gameRosterRepository?.confirmPayment
+      ? {
+          rosterRepository: {
+            join: options.gameRosterRepository.join,
+            joinWaitlist: options.gameRosterRepository.joinWaitlist,
+            confirmPayment: options.gameRosterRepository.confirmPayment,
+          },
+        }
+      : {}),
+    commandHandlers: [resolvePublicTenant, requireIdempotencyKey],
+  });
   registerGameResultRoutes(app as unknown as FastifyInstance, {
     ...(options.gameResultRepository ? { repository: options.gameResultRepository } : {}),
     commandHandlers: [authenticate, authorizeGamesPlayer, resolveTenant, requireIdempotencyKey],
@@ -1050,6 +1084,13 @@ export async function buildApp(options: BuildAppOptions) {
     authenticatedTenantHandlers: [authenticateAdmin, resolveTenant],
     commandHandlers: [authenticateAdmin, resolveTenant, requireIdempotencyKey],
   });
+  registerLevelEligibilityAdminRoutes(app as unknown as FastifyInstance, {
+    ...(options.levelEligibilityPolicyRepository
+      ? { repository: options.levelEligibilityPolicyRepository }
+      : {}),
+    authenticatedTenantHandlers: [authenticateAdmin, resolveTenant],
+    commandHandlers: [authenticateAdmin, resolveTenant, requireIdempotencyKey],
+  });
   registerGiftCertificateAdminRoutes(app as unknown as FastifyInstance, {
     ...(options.giftCertificateCatalogRepository
       ? { repository: options.giftCertificateCatalogRepository }
@@ -1156,6 +1197,11 @@ export async function buildApp(options: BuildAppOptions) {
       ? { repository: options.profileLevelHistoryRepository }
       : {}),
     authenticatedTenantHandlers: [authenticate, resolveTenant],
+  });
+  registerProfileLevelRoutes(app as unknown as FastifyInstance, {
+    ...(options.playerLevelRepository ? { repository: options.playerLevelRepository } : {}),
+    authenticatedTenantHandlers: [authenticate, resolveTenant],
+    commandHandlers: [authenticate, resolveTenant, requireIdempotencyKey],
   });
   registerBookingPreferenceRoutes(app as unknown as FastifyInstance, {
     ...(options.bookingPreferencesRepository

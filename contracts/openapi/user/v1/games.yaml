@@ -228,6 +228,15 @@ paths:
       tags: [games]
       operationId: joinGameWaitlist
       summary: Join the server-ordered waitlist
+      description: |
+        The server derives the player level and validates an optional personal invitation. Public
+        links are discovery/navigation only and do not bypass eligibility.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JoinGameRequest'
       responses:
         '200':
           $ref: '#/components/responses/GameCommandCompleted'
@@ -1191,6 +1200,10 @@ components:
         expectedRevision:
           type: integer
           minimum: 0
+        invitationId:
+          type: string
+          format: uuid
+          description: Server-issued personal invitation addressed to the authenticated player.
     CancelGameRequest:
       type: object
       additionalProperties: false

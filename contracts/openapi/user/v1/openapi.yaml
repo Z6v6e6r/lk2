@@ -1130,6 +1130,123 @@ paths:
           $ref: ../../common/components.yaml#/components/responses/TooManyRequests
         '503':
           $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/profile/level:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+    get:
+      tags: [profiles]
+      operationId: getOwnPlayerLevel
+      summary: Load the authenticated player's current level and canonical scale
+      parameters:
+        - name: sportCode
+          in: query
+          schema:
+            type: string
+            default: PADEL
+            pattern: '^[A-Z][A-Z0-9_]{1,31}$'
+      responses:
+        '200':
+          description: Current level projection and the latest active canonical scale.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlayerLevelState'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+    put:
+      tags: [profiles]
+      operationId: setOwnPlayerLevel
+      summary: Save a self-declared level from the current canonical scale
+      description: |
+        The authenticated subject is always the target player. This endpoint records
+        `SELF_DECLARED`; an onboarding result requires a separate trusted assessment command.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetOwnPlayerLevelRequest'
+      responses:
+        '200':
+          description: The saved canonical player-level projection.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlayerSportLevel'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/CommandConflict'
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/profile/level-assessment:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+    get:
+      tags: [profiles]
+      operationId: getOwnLevelAssessment
+      summary: Load the current server-owned PADEL level assessment
+      responses:
+        '200':
+          description: Public question labels and branch structure; scoring stays server-side.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LevelAssessmentDefinition'
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+    post:
+      tags: [profiles]
+      operationId: completeOwnLevelAssessment
+      summary: Complete the authenticated player's level assessment
+      description: |
+        The server validates the active branch and computes the numeric score and canonical
+        level. Caller-supplied player, source, score, rank or level fields are rejected.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CompleteLevelAssessmentRequest'
+      responses:
+        '200':
+          description: Server-computed assessment and saved ONBOARDING level.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompleteLevelAssessmentResponse'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/CommandConflict'
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
   /{tenantKey}/profile/level-history:
     parameters:
       - $ref: ../../common/components.yaml#/components/parameters/TenantKey
@@ -4223,6 +4340,191 @@ components:
           type: [number, 'null']
           minimum: 0
           maximum: 10
+    CanonicalProfileLevel:
+      type: object
+      additionalProperties: false
+      required: [id, sportCode, code, title, rank, sortOrder, aliases, active, scaleVersion]
+      properties:
+        id:
+          type: string
+          format: uuid
+        sportCode:
+          type: string
+        code:
+          type: string
+        title:
+          type: string
+        rank:
+          type: integer
+        sortOrder:
+          type: integer
+        aliases:
+          type: array
+          items:
+            type: string
+        active:
+          type: boolean
+        scaleVersion:
+          type: integer
+          minimum: 1
+    PlayerSportLevel:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          playerId,
+          sportCode,
+          levelId,
+          code,
+          title,
+          rank,
+          source,
+          numericValue,
+          scaleVersion,
+          updatedAt,
+        ]
+      properties:
+        playerId:
+          type: string
+          format: uuid
+        sportCode:
+          type: string
+        levelId:
+          type: string
+          format: uuid
+        code:
+          type: string
+        title:
+          type: string
+        rank:
+          type: integer
+        source:
+          type: string
+          enum: [SELF_DECLARED, ONBOARDING, MANUAL, CALCULATED, VIVA, MIGRATED]
+        numericValue:
+          type: [number, 'null']
+          minimum: 0
+          maximum: 10
+        scaleVersion:
+          type: integer
+          minimum: 1
+        updatedAt:
+          type: string
+          format: date-time
+    PlayerLevelState:
+      type: object
+      additionalProperties: false
+      required: [sportCode, scaleVersion, levels, currentLevel]
+      properties:
+        sportCode:
+          type: string
+        scaleVersion:
+          type: [integer, 'null']
+          minimum: 1
+        levels:
+          type: array
+          items:
+            $ref: '#/components/schemas/CanonicalProfileLevel'
+        currentLevel:
+          anyOf:
+            - $ref: '#/components/schemas/PlayerSportLevel'
+            - type: 'null'
+    SetOwnPlayerLevelRequest:
+      type: object
+      additionalProperties: false
+      required: [sportCode, levelId]
+      properties:
+        sportCode:
+          type: string
+          pattern: '^[A-Z][A-Z0-9_]{1,31}$'
+        levelId:
+          type: string
+          format: uuid
+    LevelAssessmentOption:
+      type: object
+      additionalProperties: false
+      required: [id, label]
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+    LevelAssessmentQuestion:
+      type: object
+      additionalProperties: false
+      required: [id, text, type, options]
+      properties:
+        id:
+          type: string
+        text:
+          type: string
+        type:
+          type: string
+          enum: [single, multi]
+        options:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/LevelAssessmentOption'
+    LevelAssessmentDefinition:
+      type: object
+      additionalProperties: false
+      required: [version, sportCode, baseQuestionId, questions, branches]
+      properties:
+        version:
+          type: string
+          enum: [padel-self-assessment-v1]
+        sportCode:
+          type: string
+          enum: [PADEL]
+        baseQuestionId:
+          type: string
+        questions:
+          type: array
+          items:
+            $ref: '#/components/schemas/LevelAssessmentQuestion'
+        branches:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              type: string
+    CompleteLevelAssessmentRequest:
+      type: object
+      additionalProperties: false
+      required: [sportCode, assessmentVersion, answers]
+      properties:
+        sportCode:
+          type: string
+          enum: [PADEL]
+        assessmentVersion:
+          type: string
+          enum: [padel-self-assessment-v1]
+        answers:
+          type: object
+          additionalProperties:
+            type: array
+            minItems: 1
+            items:
+              type: string
+    CompleteLevelAssessmentResponse:
+      type: object
+      additionalProperties: false
+      required: [assessment, level]
+      properties:
+        assessment:
+          type: object
+          additionalProperties: false
+          required: [version, numericScore, levelCode]
+          properties:
+            version:
+              type: string
+            numericScore:
+              type: number
+            levelCode:
+              type: string
+        level:
+          $ref: '#/components/schemas/PlayerSportLevel'
     ProfileLevelHistory:
       type: object
       additionalProperties: false

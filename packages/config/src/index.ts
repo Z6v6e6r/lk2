@@ -137,6 +137,16 @@ const environmentSchema = z.object({
   // The old LK can supply roster changes through either a safe local public clone or the staged
   // Mongo migration mirror. Source selection is process-only and is never exposed to clients.
   LEGACY_GAMES_ROSTER_SYNC_ENABLED: booleanFromEnvironment,
+  LEGACY_GAME_COMMAND_BRIDGE_ENABLED: booleanFromEnvironment,
+  LEGACY_GAME_COMMAND_BRIDGE_TOKEN: z.string().min(32).optional(),
+  LEGACY_GAME_IDENTITY_VERIFY_URL: z.string().url().optional(),
+  LEGACY_GAME_IDENTITY_VERIFY_TOKEN: z.string().min(32).optional(),
+  LEGACY_GAME_IDENTITY_VERIFY_TIMEOUT_MS: z.coerce
+    .number()
+    .int()
+    .min(500)
+    .max(15_000)
+    .default(5_000),
   LEGACY_GAMES_ROSTER_SYNC_SOURCE: z.enum(['public', 'mongo']).default('mongo'),
   LEGACY_GAMES_MONGODB_URI: z.string().min(1).optional(),
   LEGACY_GAMES_PUBLIC_BASE_URL: z.string().url().default('https://padlhub.su'),
@@ -458,6 +468,16 @@ export function loadConfig(
       'CUP_RATING_SERVICE_TOKEN',
       'CUP_RATING_SERVICE_TOKEN_FILE',
     ),
+    LEGACY_GAME_COMMAND_BRIDGE_TOKEN: materializeFileSecret(
+      environment,
+      'LEGACY_GAME_COMMAND_BRIDGE_TOKEN',
+      'LEGACY_GAME_COMMAND_BRIDGE_TOKEN_FILE',
+    ),
+    LEGACY_GAME_IDENTITY_VERIFY_TOKEN: materializeFileSecret(
+      environment,
+      'LEGACY_GAME_IDENTITY_VERIFY_TOKEN',
+      'LEGACY_GAME_IDENTITY_VERIFY_TOKEN_FILE',
+    ),
   };
   const parsed = environmentSchema.safeParse(resolvedEnvironment);
   if (!parsed.success) {
@@ -508,6 +528,25 @@ export function loadConfig(
     throw new Error(
       'GAMES_COMMANDS_ENABLED is staging-only until the Games production gate passes',
     );
+  }
+  if (parsed.data.LEGACY_GAME_COMMAND_BRIDGE_ENABLED) {
+    if (parsed.data.APP_ENV !== 'local' && parsed.data.APP_ENV !== 'staging') {
+      throw new Error('LEGACY_GAME_COMMAND_BRIDGE_ENABLED is allowed only in local or staging');
+    }
+    if (!parsed.data.GAMES_COMMANDS_ENABLED || !parsed.data.GAMES_READ_ENABLED) {
+      throw new Error(
+        'LEGACY_GAME_COMMAND_BRIDGE_ENABLED requires GAMES_COMMANDS_ENABLED and GAMES_READ_ENABLED',
+      );
+    }
+    if (
+      !parsed.data.LEGACY_GAME_COMMAND_BRIDGE_TOKEN ||
+      !parsed.data.LEGACY_GAME_IDENTITY_VERIFY_URL ||
+      !parsed.data.LEGACY_GAME_IDENTITY_VERIFY_TOKEN
+    ) {
+      throw new Error(
+        'LEGACY_GAME_COMMAND_BRIDGE_ENABLED requires bridge and identity-verifier configuration',
+      );
+    }
   }
   if (
     parsed.data.GAMES_RESULTS_WRITE_MODE === 'local_primary' &&

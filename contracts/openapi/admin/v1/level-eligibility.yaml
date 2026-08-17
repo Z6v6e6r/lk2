@@ -1,0 +1,330 @@
+StatePath:
+  get:
+    tags: [LevelEligibility]
+    operationId: getLevelEligibilityState
+    summary: Read the active policies and canonical level scale
+    parameters:
+      - $ref: '#/TenantKey'
+      - $ref: '#/SportCode'
+    responses:
+      '200':
+        description: Active policies and level scale.
+        content:
+          application/json:
+            schema:
+              $ref: '#/LevelEligibilityPolicyState'
+      '400': { $ref: './openapi.yaml#/components/responses/ApiError' }
+      '401': { $ref: './openapi.yaml#/components/responses/ApiError' }
+      '403': { $ref: './openapi.yaml#/components/responses/ApiError' }
+      '503': { $ref: './openapi.yaml#/components/responses/ApiError' }
+
+ImpactPath:
+  get:
+    tags: [LevelEligibility]
+    operationId: getLevelEligibilityImpact
+    summary: Read bounded activation impact counters
+    parameters:
+      - $ref: '#/TenantKey'
+      - $ref: '#/SportCode'
+    responses:
+      '200':
+        description: Impact counters; unsupported legacy activity contours are marked explicitly.
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [items]
+              properties:
+                items:
+                  type: array
+                  items: { $ref: '#/LevelEligibilityImpactAdminView' }
+      '401': { $ref: './openapi.yaml#/components/responses/ApiError' }
+      '403': { $ref: './openapi.yaml#/components/responses/ApiError' }
+      '503': { $ref: './openapi.yaml#/components/responses/ApiError' }
+
+PreviewPath:
+  post:
+    tags: [LevelEligibility]
+    operationId: previewLevelEligibility
+    summary: Simulate the canonical level rule without mutation
+    parameters:
+      - $ref: '#/TenantKey'
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '#/LevelEligibilityPreviewInput' }
+    responses:
+      '200':
+        description: Deterministic preview result.
+        content:
+          application/json:
+            schema: { $ref: '#/LevelEligibilityPreviewResult' }
+      '400': { $ref: './openapi.yaml#/components/responses/ApiError' }
+      '401': { $ref: './openapi.yaml#/components/responses/ApiError' }
+      '403': { $ref: './openapi.yaml#/components/responses/ApiError' }
+      '503': { $ref: './openapi.yaml#/components/responses/ApiError' }
+
+PolicyPath:
+  put:
+    tags: [LevelEligibility]
+    operationId: publishLevelEligibilityPolicy
+    summary: Publish an immutable next policy version
+    parameters:
+      - $ref: '#/TenantKey'
+      - $ref: '#/ActivityType'
+      - $ref: '#/SportCode'
+      - $ref: './openapi.yaml#/components/parameters/IdempotencyKey'
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '#/LevelEligibilityPolicyInput' }
+    responses:
+      '200':
+        description: New version or an exact idempotent replay.
+        content:
+          application/json:
+            schema: { $ref: '#/LevelEligibilityPolicyCommandResult' }
+      '400': { $ref: './openapi.yaml#/components/responses/ApiError' }
+      '401': { $ref: './openapi.yaml#/components/responses/ApiError' }
+      '403': { $ref: './openapi.yaml#/components/responses/ApiError' }
+      '409': { $ref: './openapi.yaml#/components/responses/ApiError' }
+      '422': { $ref: './openapi.yaml#/components/responses/ApiError' }
+      '503': { $ref: './openapi.yaml#/components/responses/ApiError' }
+
+HistoryPath:
+  get:
+    tags: [LevelEligibility]
+    operationId: listLevelEligibilityPolicyHistory
+    summary: List immutable policy versions
+    parameters:
+      - $ref: '#/TenantKey'
+      - $ref: '#/ActivityType'
+      - $ref: '#/SportCode'
+    responses:
+      '200':
+        description: Policy history ordered by descending version.
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [items]
+              properties:
+                items:
+                  type: array
+                  items: { $ref: '#/LevelEligibilityPolicyAdminView' }
+      '401': { $ref: './openapi.yaml#/components/responses/ApiError' }
+      '403': { $ref: './openapi.yaml#/components/responses/ApiError' }
+      '503': { $ref: './openapi.yaml#/components/responses/ApiError' }
+
+RollbackPath:
+  post:
+    tags: [LevelEligibility]
+    operationId: rollbackLevelEligibilityPolicy
+    summary: Publish a new version copied from an immutable historical version
+    parameters:
+      - $ref: '#/TenantKey'
+      - $ref: '#/ActivityType'
+      - $ref: '#/SportCode'
+      - $ref: './openapi.yaml#/components/parameters/IdempotencyKey'
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            required: [expectedVersion, targetVersion, changeComment]
+            properties:
+              expectedVersion: { type: integer, minimum: 1 }
+              targetVersion: { type: integer, minimum: 1 }
+              changeComment: { type: string, minLength: 3, maxLength: 500 }
+    responses:
+      '200':
+        description: New rollback version or exact replay.
+        content:
+          application/json:
+            schema: { $ref: '#/LevelEligibilityPolicyCommandResult' }
+      '400': { $ref: './openapi.yaml#/components/responses/ApiError' }
+      '401': { $ref: './openapi.yaml#/components/responses/ApiError' }
+      '403': { $ref: './openapi.yaml#/components/responses/ApiError' }
+      '404': { $ref: './openapi.yaml#/components/responses/ApiError' }
+      '409': { $ref: './openapi.yaml#/components/responses/ApiError' }
+      '503': { $ref: './openapi.yaml#/components/responses/ApiError' }
+
+TenantKey:
+  name: tenantKey
+  in: path
+  required: true
+  schema: { type: string, minLength: 2, maxLength: 64 }
+ActivityType:
+  name: activityType
+  in: path
+  required: true
+  schema: { $ref: '#/ActivityTypeValue' }
+SportCode:
+  name: sportCode
+  in: query
+  required: false
+  schema: { type: string, pattern: '^[A-Z][A-Z0-9_]{1,31}$', default: PADEL }
+ActivityTypeValue:
+  type: string
+  enum: [GAME, TOURNAMENT, TRAINING]
+EligibilityMode:
+  type: string
+  enum: [OFF, SHADOW, WARN, BLOCK]
+CanonicalLevelAdminView:
+  type: object
+  additionalProperties: false
+  required: [id, sportCode, code, title, rank, sortOrder, aliases, active, scaleVersion]
+  properties:
+    id: { type: string, format: uuid }
+    sportCode: { type: string }
+    code: { type: string }
+    title: { type: string }
+    rank: { type: integer, minimum: 0 }
+    sortOrder: { type: integer, minimum: 0 }
+    aliases: { type: array, items: { type: string } }
+    active: { type: boolean }
+    scaleVersion: { type: integer, minimum: 1 }
+LevelEligibilityPolicyAdminView:
+  type: object
+  additionalProperties: false
+  required:
+    [
+      id,
+      sportCode,
+      activityType,
+      mode,
+      lowerToleranceSteps,
+      upperToleranceSteps,
+      missingActivityConstraintAction,
+      legacyTextConstraintAction,
+      recheckWaitlistPromotion,
+      version,
+      changeComment,
+      updatedBy,
+      createdAt,
+    ]
+  properties:
+    id: { type: string, format: uuid }
+    sportCode: { type: string }
+    activityType: { $ref: '#/ActivityTypeValue' }
+    mode: { $ref: '#/EligibilityMode' }
+    lowerToleranceSteps: { type: integer, minimum: 0 }
+    upperToleranceSteps: { type: integer, minimum: 0 }
+    missingActivityConstraintAction: { type: string, enum: [ALLOW, WARN, BLOCK] }
+    legacyTextConstraintAction: { type: string, enum: [ALLOW, WARN] }
+    recheckWaitlistPromotion: { type: boolean }
+    version: { type: integer, minimum: 1 }
+    changeComment: { type: [string, 'null'], maxLength: 500 }
+    updatedBy: { type: [string, 'null'], format: uuid }
+    createdAt: { type: string, format: date-time }
+LevelEligibilityPolicyState:
+  type: object
+  additionalProperties: false
+  required: [sportCode, levels, policies]
+  properties:
+    sportCode: { type: string }
+    levels: { type: array, items: { $ref: '#/CanonicalLevelAdminView' } }
+    policies: { type: array, items: { $ref: '#/LevelEligibilityPolicyAdminView' } }
+LevelEligibilityPolicyFields:
+  type: object
+  additionalProperties: false
+  required:
+    [
+      mode,
+      lowerToleranceSteps,
+      upperToleranceSteps,
+      missingActivityConstraintAction,
+      legacyTextConstraintAction,
+      recheckWaitlistPromotion,
+    ]
+  properties:
+    mode: { $ref: '#/EligibilityMode' }
+    lowerToleranceSteps: { type: integer, minimum: 0 }
+    upperToleranceSteps: { type: integer, minimum: 0 }
+    missingActivityConstraintAction: { type: string, enum: [ALLOW, WARN, BLOCK] }
+    legacyTextConstraintAction: { type: string, enum: [ALLOW, WARN] }
+    recheckWaitlistPromotion: { type: boolean }
+LevelEligibilityPolicyInput:
+  allOf:
+    - $ref: '#/LevelEligibilityPolicyFields'
+    - type: object
+      additionalProperties: false
+      required: [expectedVersion, changeComment]
+      properties:
+        expectedVersion: { type: integer, minimum: 0 }
+        changeComment: { type: string, minLength: 3, maxLength: 500 }
+LevelEligibilityPolicyCommandResult:
+  type: object
+  additionalProperties: false
+  required: [policy, replayed]
+  properties:
+    policy: { $ref: '#/LevelEligibilityPolicyAdminView' }
+    replayed: { type: boolean }
+LevelEligibilityImpactAdminView:
+  type: object
+  additionalProperties: false
+  required:
+    [
+      activityType,
+      activitiesWithoutLevel,
+      activitiesWithInvalidRange,
+      legacyActivities,
+      playersWithoutLevel,
+      existingParticipantsOutsideRange,
+      supported,
+    ]
+  properties:
+    activityType: { $ref: '#/ActivityTypeValue' }
+    activitiesWithoutLevel: { type: integer, minimum: 0 }
+    activitiesWithInvalidRange: { type: integer, minimum: 0 }
+    legacyActivities: { type: integer, minimum: 0 }
+    playersWithoutLevel: { type: integer, minimum: 0 }
+    existingParticipantsOutsideRange: { type: integer, minimum: 0 }
+    supported: { type: boolean }
+LevelEligibilityPreviewInput:
+  allOf:
+    - type: object
+      additionalProperties: false
+      required:
+        [
+          sportCode,
+          activityType,
+          playerLevelId,
+          minimumLevelId,
+          maximumLevelId,
+          personalInvitation,
+          organizerCreation,
+          policy,
+        ]
+      properties:
+        sportCode: { type: string }
+        activityType: { $ref: '#/ActivityTypeValue' }
+        playerLevelId: { type: [string, 'null'], format: uuid }
+        minimumLevelId: { type: [string, 'null'], format: uuid }
+        maximumLevelId: { type: [string, 'null'], format: uuid }
+        personalInvitation: { type: boolean }
+        organizerCreation: { type: boolean }
+        policy: { $ref: '#/LevelEligibilityPolicyFields' }
+LevelEligibilityPreviewResult:
+  type: object
+  additionalProperties: false
+  required: [allowed, status, result]
+  properties:
+    allowed: { type: boolean }
+    status: { type: string, enum: [ALLOWED, WARNING, DENIED] }
+    result:
+      type: object
+      additionalProperties: false
+      required: [ruleCode, outcome, reasonCode, publicMessageKey]
+      properties:
+        ruleCode: { type: string, const: LEVEL_RANGE }
+        outcome: { type: string, enum: [PASS, SKIP, WARN, FAIL, BYPASS] }
+        reasonCode: { type: string }
+        publicMessageKey: { type: string }
+        metadata: { type: object, additionalProperties: true }

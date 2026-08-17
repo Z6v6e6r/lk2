@@ -84,6 +84,60 @@ export type ProfileFriendSummary = components['schemas']['ProfileFriendSummary']
 export type ProfileFriendPage = components['schemas']['ProfileFriendPage'];
 export type ProfileLevelHistory = components['schemas']['ProfileLevelHistory'];
 export type ProfileLevelHistoryPoint = components['schemas']['ProfileLevelHistoryPoint'];
+export interface CanonicalProfileLevel {
+  readonly id: string;
+  readonly sportCode: string;
+  readonly code: string;
+  readonly title: string;
+  readonly rank: number;
+  readonly sortOrder: number;
+  readonly aliases: readonly string[];
+  readonly active: boolean;
+  readonly scaleVersion: number;
+}
+export interface PlayerSportLevel {
+  readonly playerId: string;
+  readonly sportCode: string;
+  readonly levelId: string;
+  readonly code: string;
+  readonly title: string;
+  readonly rank: number;
+  readonly source: 'SELF_DECLARED' | 'ONBOARDING' | 'MANUAL' | 'CALCULATED' | 'VIVA' | 'MIGRATED';
+  readonly numericValue: number | null;
+  readonly scaleVersion: number;
+  readonly updatedAt: string;
+}
+export interface PlayerLevelState {
+  readonly sportCode: string;
+  readonly scaleVersion: number | null;
+  readonly levels: readonly CanonicalProfileLevel[];
+  readonly currentLevel: PlayerSportLevel | null;
+}
+export interface LevelAssessmentOption {
+  readonly id: string;
+  readonly label: string;
+}
+export interface LevelAssessmentQuestion {
+  readonly id: string;
+  readonly text: string;
+  readonly type: 'single' | 'multi';
+  readonly options: readonly LevelAssessmentOption[];
+}
+export interface LevelAssessmentDefinition {
+  readonly version: 'padel-self-assessment-v1';
+  readonly sportCode: 'PADEL';
+  readonly baseQuestionId: string;
+  readonly questions: readonly LevelAssessmentQuestion[];
+  readonly branches: Readonly<Record<string, readonly string[]>>;
+}
+export interface CompleteLevelAssessmentResponse {
+  readonly assessment: {
+    readonly version: string;
+    readonly numericScore: number;
+    readonly levelCode: string;
+  };
+  readonly level: PlayerSportLevel;
+}
 export type BookingPreferences = components['schemas']['BookingPreferences'];
 export type BookingPreferencesUpdateRequest =
   components['schemas']['BookingPreferencesUpdateRequest'];
@@ -686,6 +740,44 @@ export class PadlHubApiClient {
     );
   }
 
+  public getOwnPlayerLevel(sportCode = 'PADEL'): Promise<PlayerLevelState> {
+    return this.request<PlayerLevelState>(
+      `/profile/level?sportCode=${encodeURIComponent(sportCode)}`,
+      { cache: 'no-store' },
+    );
+  }
+
+  public setOwnPlayerLevel(levelId: string, sportCode = 'PADEL'): Promise<PlayerSportLevel> {
+    const idempotencyKey = createCorrelationId();
+    return this.retryOnceOnNetworkFailure(() =>
+      this.request<PlayerSportLevel>('/profile/level', {
+        method: 'PUT',
+        idempotencyKey,
+        body: jsonRequestBody({ sportCode, levelId }),
+      }),
+    );
+  }
+
+  public getOwnLevelAssessment(): Promise<LevelAssessmentDefinition> {
+    return this.request<LevelAssessmentDefinition>('/profile/level-assessment', {
+      cache: 'no-store',
+    });
+  }
+
+  public completeOwnLevelAssessment(
+    assessmentVersion: LevelAssessmentDefinition['version'],
+    answers: Readonly<Record<string, readonly string[]>>,
+  ): Promise<CompleteLevelAssessmentResponse> {
+    const idempotencyKey = createCorrelationId();
+    return this.retryOnceOnNetworkFailure(() =>
+      this.request<CompleteLevelAssessmentResponse>('/profile/level-assessment', {
+        method: 'POST',
+        idempotencyKey,
+        body: jsonRequestBody({ sportCode: 'PADEL', assessmentVersion, answers }),
+      }),
+    );
+  }
+
   public updateProfilePrivacySettings(
     input: ProfilePrivacyUpdateRequest,
   ): Promise<ProfilePrivacySettings> {
@@ -1114,16 +1206,20 @@ export class PadlHubApiClient {
     );
   }
 
-  public joinGame(gameId: string, expectedRevision?: number): Promise<GameCommandResult> {
-    return this.gameCommand(gameId, '/join', 'POST', { expectedRevision });
+  public joinGame(
+    gameId: string,
+    expectedRevision?: number,
+    invitationId?: string,
+  ): Promise<GameCommandResult> {
+    return this.gameCommand(gameId, '/join', 'POST', { expectedRevision, invitationId });
   }
 
   public leaveGame(gameId: string): Promise<GameCommandResult> {
     return this.gameCommand(gameId, '/participants/me', 'DELETE');
   }
 
-  public joinGameWaitlist(gameId: string): Promise<GameCommandResult> {
-    return this.gameCommand(gameId, '/waitlist', 'POST');
+  public joinGameWaitlist(gameId: string, invitationId?: string): Promise<GameCommandResult> {
+    return this.gameCommand(gameId, '/waitlist', 'POST', { invitationId });
   }
 
   public leaveGameWaitlist(gameId: string): Promise<GameCommandResult> {

@@ -19,6 +19,8 @@ tags:
     description: Versioned gift certificate catalog management for authorized CUP staff.
   - name: Communities
     description: Bounded CUP review of canonical community JOIN and REJOIN requests.
+  - name: LevelEligibility
+    description: Versioned tenant and sport participation eligibility policy management.
 paths:
   /admin/api/v1/{tenantKey}/community-join-requests/pending:
     get:
@@ -1048,6 +1050,18 @@ paths:
           $ref: '#/components/responses/ApiError'
         '503':
           $ref: '#/components/responses/ApiError'
+  /admin/api/v1/{tenantKey}/level-eligibility:
+    $ref: ./level-eligibility.yaml#/StatePath
+  /admin/api/v1/{tenantKey}/level-eligibility/impact:
+    $ref: ./level-eligibility.yaml#/ImpactPath
+  /admin/api/v1/{tenantKey}/level-eligibility/preview:
+    $ref: ./level-eligibility.yaml#/PreviewPath
+  /admin/api/v1/{tenantKey}/level-eligibility/{activityType}:
+    $ref: ./level-eligibility.yaml#/PolicyPath
+  /admin/api/v1/{tenantKey}/level-eligibility/{activityType}/history:
+    $ref: ./level-eligibility.yaml#/HistoryPath
+  /admin/api/v1/{tenantKey}/level-eligibility/{activityType}/rollback:
+    $ref: ./level-eligibility.yaml#/RollbackPath
 components:
   securitySchemes:
     PadlHubAdminJwt:
@@ -1107,6 +1121,18 @@ components:
           schema:
             $ref: '#/components/schemas/ApiError'
   schemas:
+    CanonicalLevelAdminView:
+      $ref: ./level-eligibility.yaml#/CanonicalLevelAdminView
+    LevelEligibilityPolicyAdminView:
+      $ref: ./level-eligibility.yaml#/LevelEligibilityPolicyAdminView
+    LevelEligibilityPolicyState:
+      $ref: ./level-eligibility.yaml#/LevelEligibilityPolicyState
+    LevelEligibilityPolicyInput:
+      $ref: ./level-eligibility.yaml#/LevelEligibilityPolicyInput
+    LevelEligibilityPreviewInput:
+      $ref: ./level-eligibility.yaml#/LevelEligibilityPreviewInput
+    LevelEligibilityPreviewResult:
+      $ref: ./level-eligibility.yaml#/LevelEligibilityPreviewResult
     AdminCommunityMembershipStatus:
       type: string
       enum: [NONE, PENDING, ACTIVE, LEFT, REMOVED, BANNED]

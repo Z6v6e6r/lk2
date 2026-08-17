@@ -1,4 +1,63 @@
 paths:
+  /{tenantKey}/legacy-games/{legacyGameId}/roster-commands:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - $ref: '#/components/parameters/LegacyGameId'
+    post:
+      tags: [games]
+      operationId: submitLegacyGameRosterCommand
+      summary: Route a legacy LK join through the canonical Games write owner
+      description: |
+        Node-RED forwards the original signed legacy bearer token and a server-only integration
+        credential. PadlHub resolves the actor and legacy game mapping server-side, applies the
+        canonical eligibility policy, and returns only trusted facts for the legacy projection.
+        Payment confirmation is accepted only after Node-RED has verified the provider operation;
+        it consumes the eligibility snapshot captured by the original seat reservation.
+      security:
+        - LegacyLkBearer: []
+          LegacyRosterIntegrationToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LegacyGameRosterCommand'
+      responses:
+        '200':
+          description: Canonical participant or waitlist state committed.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyGameRosterCommandResult'
+        '202':
+          description: Canonical seat reservation committed and awaiting payment confirmation.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyGameRosterCommandResult'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/InternalCommandConflict'
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+
   /{tenantKey}/game-commands:
     parameters:
       - $ref: ../../common/components.yaml#/components/parameters/TenantKey
@@ -95,6 +154,16 @@ components:
       schema:
         type: string
         format: uuid
+    LegacyGameId:
+      name: legacyGameId
+      in: path
+      required: true
+      description: Exact legacy Mongo game identifier registered in the external entity map.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 200
+        pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$'
 
   responses:
     InternalCommandConflict:
@@ -108,6 +177,127 @@ components:
             $ref: ../../common/components.yaml#/components/schemas/ApiError
 
   schemas:
+    LegacyGameRosterCommand:
+      oneOf:
+        - $ref: '#/components/schemas/LegacyGameJoinCommand'
+        - $ref: '#/components/schemas/LegacyGamePaymentConfirmationCommand'
+    LegacyGameJoinCommand:
+      type: object
+      additionalProperties: false
+      required: [command]
+      properties:
+        command:
+          type: string
+          enum: [JOIN_GAME, JOIN_WAITLIST]
+        invitationId:
+          type: string
+          format: uuid
+    LegacyGamePaymentConfirmationCommand:
+      type: object
+      additionalProperties: false
+      required: [command, reservationId, evidence]
+      properties:
+        command:
+          type: string
+          const: CONFIRM_PAYMENT
+        reservationId:
+          type: string
+          format: uuid
+        evidence:
+          $ref: '#/components/schemas/LegacyGamePaymentEvidence'
+    LegacyGamePaymentEvidence:
+      type: object
+      additionalProperties: false
+      required:
+        [provider, operationType, operationId, bookingId, clientPhoneE164, status, verifiedAt]
+      properties:
+        provider:
+          type: string
+          const: VIVA
+        operationType:
+          type: string
+          enum: [TRANSACTION, SUBSCRIPTION_BOOKING]
+        operationId:
+          type: string
+          minLength: 1
+          maxLength: 200
+        bookingId:
+          type: string
+          minLength: 1
+          maxLength: 200
+        clientPhoneE164:
+          type: string
+          pattern: '^\+[1-9][0-9]{7,14}$'
+        status:
+          type: string
+          const: CONFIRMED
+        verifiedAt:
+          type: string
+          format: date-time
+        amountMinor:
+          type: integer
+          minimum: 0
+        currency:
+          type: string
+          pattern: '^[A-Z]{3}$'
+    LegacyGameRosterCommandResult:
+      type: object
+      additionalProperties: false
+      required: [commandId, replayed, projection]
+      properties:
+        commandId:
+          type: string
+          format: uuid
+        replayed:
+          type: boolean
+        projection:
+          $ref: '#/components/schemas/LegacyGameRosterProjection'
+    LegacyGameRosterProjection:
+      type: object
+      additionalProperties: false
+      required: [legacyGameId, canonicalGameId, aggregateRevision, relation, player]
+      properties:
+        legacyGameId:
+          type: string
+          minLength: 1
+          maxLength: 200
+        canonicalGameId:
+          type: string
+          format: uuid
+        aggregateRevision:
+          type: integer
+          minimum: 1
+        relation:
+          type: string
+          enum: [SEAT_RESERVED, PARTICIPANT, WAITLISTED, NONE]
+        reservationId:
+          type: string
+          format: uuid
+        player:
+          $ref: '#/components/schemas/LegacyGameRosterProjectionPlayer'
+    LegacyGameRosterProjectionPlayer:
+      type: object
+      additionalProperties: false
+      required: [userId, displayName, phoneE164, levelLabel, levelValue]
+      properties:
+        userId:
+          type: string
+          format: uuid
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 200
+        phoneE164:
+          type: [string, 'null']
+          pattern: '^\\+[1-9][0-9]{7,14}$'
+        levelLabel:
+          type: [string, 'null']
+          maxLength: 32
+        levelValue:
+          type: [number, 'null']
+          minimum: 0
+          maximum: 10
+
     GameInternalCommand:
       type: object
       additionalProperties: false

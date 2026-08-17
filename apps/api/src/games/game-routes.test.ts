@@ -22,6 +22,7 @@ const tenantId = '86afbe01-0318-4dd2-bc25-303b7bf0d430';
 const userId = '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca';
 const gameId = '6418f90b-0fa6-4c04-a3da-57707e2f0ae2';
 const commandId = 'd39e4287-e65c-4e75-88e4-4447e4c91ddb';
+const invitationId = '95a76d36-d8a7-4ff5-a988-84f33c0fd05a';
 const committedAt = '2026-08-01T10:00:00.000Z';
 const apps: Awaited<ReturnType<typeof buildApp>>[] = [];
 
@@ -120,7 +121,7 @@ describe('Games roster User API', () => {
         'idempotency-key': 'games-api-join-command-0001',
         'x-correlation-id': 'games-api-correlation-0001',
       },
-      payload: { expectedRevision: 1 },
+      payload: { expectedRevision: 1, invitationId },
     });
 
     expect(response.statusCode).toBe(200);
@@ -149,6 +150,7 @@ describe('Games roster User API', () => {
       idempotencyKey: 'games-api-join-command-0001',
       correlationId: 'games-api-correlation-0001',
       expectedRevision: 1,
+      invitationId,
     });
     expect(joinInput?.requestHash).toMatch(/^[0-9a-f]{64}$/);
   });
@@ -166,14 +168,22 @@ describe('Games roster User API', () => {
     expect(missingKey.statusCode).toBe(400);
     expect(missingKey.json()).toMatchObject({ code: 'IDEMPOTENCY_KEY_REQUIRED' });
 
-    const injectedIdentity = await app.inject({
-      method: 'POST',
-      url: `/user/api/v1/local-padel/games/${gameId}/join`,
-      headers: { authorization, 'idempotency-key': 'games-api-join-command-0002' },
-      payload: { playerId: '47b10c0e-2d9f-4775-96dc-2941adae4968' },
-    });
-    expect(injectedIdentity.statusCode).toBe(400);
-    expect(injectedIdentity.json()).toMatchObject({ code: 'INVALID_REQUEST' });
+    for (const [index, payload] of [
+      { playerId: '47b10c0e-2d9f-4775-96dc-2941adae4968' },
+      { playerLevelId: '47b10c0e-2d9f-4775-96dc-2941adae4968' },
+      { rank: 7 },
+      { personalInvite: true },
+      { skipLevelCheck: true },
+    ].entries()) {
+      const injectedField = await app.inject({
+        method: 'POST',
+        url: `/user/api/v1/local-padel/games/${gameId}/join`,
+        headers: { authorization, 'idempotency-key': `games-api-injection-${index}` },
+        payload,
+      });
+      expect(injectedField.statusCode).toBe(400);
+      expect(injectedField.json()).toMatchObject({ code: 'INVALID_REQUEST' });
+    }
     expect(join).not.toHaveBeenCalled();
   });
 
@@ -240,6 +250,7 @@ describe('Games roster User API', () => {
         method: 'POST',
         url: `/user/api/v1/local-padel/games/${gameId}/waitlist`,
         headers,
+        payload: { invitationId },
       }),
       app.inject({
         method: 'DELETE',
@@ -258,6 +269,7 @@ describe('Games roster User API', () => {
       responses.map((response) => response.json<{ operation: { type: string } }>().operation.type),
     ).toEqual(['JOIN_WAITLIST', 'LEAVE_GAME', 'LEAVE_WAITLIST']);
     expect(joinWaitlist).toHaveBeenCalledOnce();
+    expect(joinWaitlist).toHaveBeenCalledWith(expect.objectContaining({ invitationId }));
     expect(leave).toHaveBeenCalledOnce();
     expect(leaveWaitlist).toHaveBeenCalledOnce();
   });
