@@ -14,6 +14,10 @@ maybe_fail() {
   fi
 }
 
+verify_authenticated_smoke() {
+  sh "$bundle_path/verify-staging-realtime-smoke-session.sh" "$bundle_path"
+}
+
 test "$#" -eq 8 ||
   fail 'usage: bootstrap-legacy-runtime-secret-contours.sh <start|finalize|recover> <expected-active-release> <candidate-release> <control-commit> <run-id> <run-attempt> <confirmation> <bundle-path>'
 
@@ -605,6 +609,8 @@ for service in web api worker realtime; do
   docker image inspect "$expected_ref" >/dev/null 2>&1 || fail "old $service image is not local"
 done
 assert_flags_disabled "$(project_container_id api)" "$(project_container_id worker)" "$(project_container_id realtime)"
+verify_authenticated_smoke
+pre_marker_phase authenticated-smoke
 
 candidate_release_file="$bundle_path/candidate-release.env"
 active_release_copy="$bundle_path/active-release.env"
@@ -775,6 +781,7 @@ docker run --rm --pull=never --network none --read-only --user "$deploy_uid:$dep
   --entrypoint node "$candidate_api_ref" --input-type=module -e '
     import { SignJWT } from "jose";
     import { loadApiConfig } from "@phub/config";
+    if (typeof fetch !== "function" || typeof WebSocket !== "function") process.exit(1);
     const config = loadApiConfig(process.env);
     const encoder = new TextEncoder();
     const claims = { scope: "realtime.connect", tenantId: "00000000-0000-4000-8000-000000000001", tenantKey: "nano", sid: "00000000-0000-4000-8000-000000000002" };
@@ -840,5 +847,7 @@ assert_flags_disabled "$(project_container_id api)" "$(project_container_id work
 attest_infrastructure_unchanged
 verify_public_release "$candidate_release"
 run_helper verify-bootstrap-prepared
+verify_authenticated_smoke
+maybe_fail post-authenticated-smoke
 trap - EXIT HUP INT TERM
 printf '%s\n' "legacy_runtime_secret_bootstrap operation=start release=$candidate_release status=awaiting-authenticated-attestation"

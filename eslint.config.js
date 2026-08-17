@@ -20,6 +20,8 @@ export default tseslint.config(
     files: [
       'deploy/jetson/provision-runtime-secret-files.mjs',
       'deploy/jetson/provision-runtime-secret-files.d.mts',
+      'deploy/jetson/staging-realtime-smoke-session.mjs',
+      'deploy/jetson/staging-realtime-smoke-session.d.mts',
     ],
     ...tseslint.configs.disableTypeChecked,
     languageOptions: {
