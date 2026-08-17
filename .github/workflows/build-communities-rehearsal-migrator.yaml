@@ -1,0 +1,233 @@
+name: Build Communities rehearsal migrator
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_main_sha:
+        description: Exact 40-character main SHA to build
+        required: true
+        type: string
+      confirmation:
+        description: Type BUILD_COMMUNITIES_REHEARSAL_MIGRATOR
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: communities-rehearsal-migrator-build
+  cancel-in-progress: false
+
+jobs:
+  validate-request:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Validate exact first-attempt main request
+        env:
+          ACTOR: ${{ github.actor }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+          EVENT_SHA: ${{ github.sha }}
+          EXPECTED_MAIN_SHA: ${{ inputs.expected_main_sha }}
+          REQUEST_REF: ${{ github.ref }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -eu
+          test "$REQUEST_REF" = refs/heads/main || {
+            echo '::error::The rehearsal migrator must be built from main.'
+            exit 1
+          }
+          case "$EXPECTED_MAIN_SHA" in ''|*[!0-9a-f]*) exit 1 ;; esac
+          test "${#EXPECTED_MAIN_SHA}" -eq 40
+          test "$EXPECTED_MAIN_SHA" = "$EVENT_SHA"
+          test "$WORKFLOW_SHA" = "$EVENT_SHA"
+          test "$REPOSITORY" = Z6v6e6r/lk2
+          test "$RUN_ATTEMPT" = 1
+          test "$ACTOR" = "$TRIGGERING_ACTOR"
+          test "$CONFIRMATION" = BUILD_COMMUNITIES_REHEARSAL_MIGRATOR || {
+            echo '::error::The exact build confirmation is required.'
+            exit 1
+          }
+
+  verify-source:
+    needs: validate-request
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Verify exact clean source checkout
+        run: |
+          set -eu
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain)"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run contracts:generate
+      - run: npm run check
+      - run: npm run db:migrate:check
+
+  build-migrator:
+    needs: [validate-request, verify-source]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+      - name: Verify exact clean source checkout
+        run: |
+          set -eu
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain)"
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: image
+        name: Build and publish the isolated arm64 migrator
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: apps/migrator/Dockerfile
+          platforms: linux/arm64
+          push: true
+          tags: ghcr.io/z6v6e6r/phub-migrator:rehearsal-${{ github.sha }}-${{ github.run_id }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=migrator
+          cache-to: type=gha,mode=max,scope=migrator
+      - name: Verify immutable digest, platform and source binding
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+          IMAGE_REFERENCE: ghcr.io/z6v6e6r/phub-migrator
+        run: |
+          set -eu
+          printf '%s' "$IMAGE_DIGEST" | grep -Eq '^sha256:[0-9a-f]{64}$'
+          test "${#IMAGE_DIGEST}" -eq 71
+          docker buildx imagetools inspect "$IMAGE_REFERENCE@$IMAGE_DIGEST" --raw > migrator-oci-index.json
+          runtime_digest="$(node --experimental-strip-types \
+            scripts/prepare-communities-rehearsal-migrator-evidence.ts \
+            runtime-digest --oci-index migrator-oci-index.json)"
+          printf '%s' "$runtime_digest" | grep -Eq '^sha256:[0-9a-f]{64}$'
+          docker buildx imagetools inspect "$IMAGE_REFERENCE@$runtime_digest" --raw \
+            > migrator-runtime-manifest.json
+          config_digest="$(node --experimental-strip-types \
+            scripts/prepare-communities-rehearsal-migrator-evidence.ts \
+            config-digest --runtime-manifest migrator-runtime-manifest.json)"
+          docker pull --platform linux/arm64 "$IMAGE_REFERENCE@$runtime_digest"
+          docker image save "$IMAGE_REFERENCE@$runtime_digest" --output migrator-image.tar
+          tar -xOf migrator-image.tar "${config_digest#sha256:}.json" > migrator-image-config.json
+          rm migrator-image.tar
+          mkdir attestation-manifests
+          node --experimental-strip-types \
+            scripts/prepare-communities-rehearsal-migrator-evidence.ts \
+            attestation-digests --oci-index migrator-oci-index.json > attestation-digests.txt
+          while IFS= read -r attestation_digest; do
+            printf '%s' "$attestation_digest" | grep -Eq '^sha256:[0-9a-f]{64}$'
+            docker buildx imagetools inspect "$IMAGE_REFERENCE@$attestation_digest" --raw \
+              > "attestation-manifests/${attestation_digest#sha256:}.json"
+          done < attestation-digests.txt
+          mkdir attestation-statements
+          node --experimental-strip-types \
+            scripts/prepare-communities-rehearsal-migrator-evidence.ts \
+            attestation-layer-digests \
+            --oci-index migrator-oci-index.json \
+            --attestation-directory attestation-manifests > attestation-layer-digests.txt
+          while IFS= read -r statement_digest; do
+            printf '%s' "$statement_digest" | grep -Eq '^sha256:[0-9a-f]{64}$'
+            GHCR_ACTOR="$GITHUB_ACTOR" GHCR_TOKEN="$GITHUB_TOKEN" \
+              node --experimental-strip-types \
+              scripts/prepare-communities-rehearsal-migrator-evidence.ts \
+              fetch-blob --digest "$statement_digest" \
+              --output "attestation-statements/${statement_digest#sha256:}.json"
+          done < attestation-layer-digests.txt
+          docker buildx imagetools inspect "$IMAGE_REFERENCE@$IMAGE_DIGEST" \
+            --format '{{json .Provenance.SLSA}}' > migrator-provenance.json
+          docker buildx imagetools inspect "$IMAGE_REFERENCE@$IMAGE_DIGEST" \
+            --format '{{json .SBOM.SPDX}}' > migrator-sbom.json
+      - name: Create immutable digest and candidate release evidence
+        env:
+          ACTOR: ${{ github.actor }}
+          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+          IMAGE_REFERENCE: ghcr.io/z6v6e6r/phub-migrator
+          REPOSITORY: ${{ github.repository }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -eu
+          publication_tag="rehearsal-$GITHUB_SHA-$GITHUB_RUN_ID"
+          git_tree_sha="$(git rev-parse 'HEAD^{tree}')"
+          node --experimental-strip-types \
+            scripts/prepare-communities-rehearsal-migrator-evidence.ts prepare \
+            --candidate-sha "$GITHUB_SHA" \
+            --workflow-sha "$WORKFLOW_SHA" \
+            --git-tree-sha "$git_tree_sha" \
+            --migrator-digest "$IMAGE_DIGEST" \
+            --repository "$REPOSITORY" \
+            --actor "$ACTOR" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --publication-tag "$publication_tag" \
+            --repository-root "$GITHUB_WORKSPACE" \
+            --output-root "$GITHUB_WORKSPACE" \
+            --oci-index "$GITHUB_WORKSPACE/migrator-oci-index.json" \
+            --runtime-manifest "$GITHUB_WORKSPACE/migrator-runtime-manifest.json" \
+            --image-config "$GITHUB_WORKSPACE/migrator-image-config.json" \
+            --attestation-directory "$GITHUB_WORKSPACE/attestation-manifests" \
+            --statement-directory "$GITHUB_WORKSPACE/attestation-statements" \
+            --provenance "$GITHUB_WORKSPACE/migrator-provenance.json" \
+            --sbom "$GITHUB_WORKSPACE/migrator-sbom.json"
+          test "$(wc -l < communities-rehearsal-migrator.evidence | tr -d ' ')" -eq 30
+          cat communities-rehearsal-migrator.evidence
+      - name: Publish immutable migrator preparation evidence
+        id: artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: communities-rehearsal-migrator-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            communities-rehearsal-migrator.evidence
+            communities-rehearsal-migrations.manifest
+            migrator-oci-index.json
+            migrator-runtime-manifest.json
+            migrator-image-config.json
+            migrator-provenance.json
+            migrator-sbom.json
+            attestation-manifests/*.json
+            attestation-statements/*.json
+            release.communities-rehearsal-${{ github.sha }}.env
+          if-no-files-found: error
+          retention-days: 30
+      - name: Surface the GitHub artifact custody digest
+        env:
+          ARTIFACT_DIGEST: ${{ steps.artifact.outputs.artifact-digest }}
+          ARTIFACT_ID: ${{ steps.artifact.outputs.artifact-id }}
+        run: |
+          set -eu
+          printf '%s' "$ARTIFACT_DIGEST" | grep -Eq '^[0-9a-f]{64}$'
+          case "$ARTIFACT_ID" in ''|*[!0-9]*) exit 1 ;; esac
+          {
+            echo '## Communities rehearsal migrator artifact'
+            echo
+            echo "Artifact ID: $ARTIFACT_ID"
+            echo "Artifact digest: sha256:$ARTIFACT_DIGEST"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -246,6 +246,26 @@ short-lived `TAILSCALE_AUTHKEY`. Database and cluster pins must be approved inde
 fresh remote evidence. The immutable migrator digest and SHA-256 of the strict candidate override
 file are explicit dispatch inputs and must match the root-owned candidate release file below.
 
+Build that prerequisite only through
+`.github/workflows/build-communities-rehearsal-migrator.yaml`, dispatched from the exact reviewed
+`main` SHA with confirmation `BUILD_COMMUNITIES_REHEARSAL_MIGRATOR`. The workflow runs the source
+and migration gates, publishes only `phub-migrator` for `linux/arm64`, verifies its OCI platform,
+source-revision label, provenance and SBOM attestations, and emits the immutable image digest,
+migration-manifest digest and exact two-line candidate file. The retained artifact includes the raw
+OCI index, runtime manifest and config plus the raw attestation manifests and decoded provenance and
+SBOM. Before installation, record and verify the separate GitHub artifact digest shown in the build
+job summary as well as every digest inside the evidence file. It has no GitHub Environment, SSH,
+Tailscale, Compose, database, deploy or rehearsal authority. A successful build does not authorize
+installing the candidate file and does not authorize the staged rehearsal.
+If publication succeeds but evidence generation or upload fails, the run remains failed and its
+tag and digest are not eligible for installation. Do not rerun that workflow attempt; dispatch a
+fresh exact-main build, which receives a new run-unique tag and evidence bundle.
+
+An authorized staging administrator separately verifies the successful build artifact, copies its
+two-line candidate file without editing it, verifies the recorded SHA-256, and installs it as
+`root:phub-deploy` mode `0440` at the bounded path below. Installation and rehearsal dispatch are
+separate approval gates; neither is implied by the image build.
+
 Before the first real run, an authorized staging administrator installs these repository-matched
 files as root-owned, non-writable commands:
 
