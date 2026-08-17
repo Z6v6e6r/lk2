@@ -187,6 +187,48 @@ describe('legacy runtime-secret bootstrap delivery contract', () => {
     expect(helper).toContain("'release-committed'");
   });
 
+  it('renders the legacy snapshot and rollback through staging.env until realtime.env exists', () => {
+    const legacyCompose = controller.slice(
+      controller.indexOf('legacy_compose()'),
+      controller.indexOf('project_container_id()'),
+    );
+    expect(legacyCompose).toContain('RUNTIME_ENV_FILE="$secret_root/staging.env"');
+    expect(legacyCompose).toContain('REALTIME_RUNTIME_ENV_FILE="$secret_root/staging.env"');
+
+    const backup = controller.slice(
+      controller.indexOf('backup_path="$backup_root/pre-b0-'),
+      controller.indexOf('control_tree=$(cat'),
+    );
+    expect(backup).toContain('RUNTIME_ENV_FILE="$secret_root/staging.env"');
+    expect(backup).toContain('REALTIME_RUNTIME_ENV_FILE="$secret_root/staging.env"');
+    expect(backup).toContain('BACKUP_STAGING_RELEASE');
+    expect(backup).toContain('--validate-only');
+
+    const recovery = controller.slice(
+      controller.indexOf(
+        '# The old access-key ticket protocol requires old realtime before old API.',
+      ),
+      controller.indexOf(
+        "printf '%s\\n' 'legacy_runtime_secret_bootstrap operation=recover action=rollback status=passed'",
+      ),
+    );
+    for (const service of ['realtime', 'api', 'worker', 'web']) {
+      expect(recovery).toContain(
+        `legacy_compose up -d --no-deps --force-recreate --pull never ${service}`,
+      );
+    }
+
+    const candidateStart = controller.slice(
+      controller.indexOf('advance-bootstrap-phase images-probed runtime-stopping'),
+    );
+    expect(candidateStart).toContain(
+      'compose up -d --no-deps --force-recreate --pull never realtime',
+    );
+    expect(candidateStart).not.toContain(
+      'legacy_compose up -d --no-deps --force-recreate --pull never realtime',
+    );
+  });
+
   it('limits the bootstrap helper to the capabilities required for deploy-owned 0600 files', () => {
     const helperRaw = controller.slice(
       controller.indexOf('helper_raw()'),

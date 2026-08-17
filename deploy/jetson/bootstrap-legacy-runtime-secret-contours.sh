@@ -142,6 +142,12 @@ compose() {
   compose_with "$app_root/compose.yaml" "$app_root/release.env" "$@"
 }
 
+legacy_compose() {
+  RUNTIME_ENV_FILE="$secret_root/staging.env" \
+    REALTIME_RUNTIME_ENV_FILE="$secret_root/staging.env" \
+    compose_with "$app_root/compose.yaml" "$app_root/release.env" "$@"
+}
+
 project_container_id() {
   service=$1
   ids=$(docker ps --filter label=com.docker.compose.project=phub-staging \
@@ -510,19 +516,19 @@ restore_bootstrap() {
   # The old access-key ticket protocol requires old realtime before old API.
   old_realtime_ref=$(state_field oldImages.realtime.ref)
   old_realtime_id=$(state_field oldImages.realtime.id)
-  compose up -d --no-deps --force-recreate --pull never realtime
+  legacy_compose up -d --no-deps --force-recreate --pull never realtime
   wait_service realtime "$old_realtime_ref" "$old_realtime_id" >/dev/null
   old_api_ref=$(state_field oldImages.api.ref)
   old_api_id=$(state_field oldImages.api.id)
-  compose up -d --no-deps --force-recreate --pull never api
+  legacy_compose up -d --no-deps --force-recreate --pull never api
   wait_service api "$old_api_ref" "$old_api_id" >/dev/null
   old_worker_ref=$(state_field oldImages.worker.ref)
   old_worker_id=$(state_field oldImages.worker.id)
-  compose up -d --no-deps --force-recreate --pull never worker
+  legacy_compose up -d --no-deps --force-recreate --pull never worker
   wait_service worker "$old_worker_ref" "$old_worker_id" >/dev/null
   old_web_ref=$(state_field oldImages.web.ref)
   old_web_id=$(state_field oldImages.web.id)
-  compose up -d --no-deps --force-recreate --pull never web
+  legacy_compose up -d --no-deps --force-recreate --pull never web
   wait_service web "$old_web_ref" "$old_web_id" >/dev/null
   assert_flags_disabled "$(project_container_id api)" "$(project_container_id worker)" "$(project_container_id realtime)"
   attest_infrastructure_unchanged
@@ -633,8 +639,14 @@ for service in web api worker realtime migrator; do
 done
 
 backup_path="$backup_root/pre-b0-$workflow_run_id-$workflow_run_attempt"
-PHUB_BACKUP_ROOT="$backup_root" sh "$bundle_path/backup-application.sh" "$backup_path" BACKUP_STAGING_RELEASE
-PHUB_ROLLBACK_BACKUP_ROOT="$backup_root" sh "$bundle_path/rollback-application.sh" "$backup_path" --validate-only
+RUNTIME_ENV_FILE="$secret_root/staging.env" \
+  REALTIME_RUNTIME_ENV_FILE="$secret_root/staging.env" \
+  PHUB_BACKUP_ROOT="$backup_root" \
+  sh "$bundle_path/backup-application.sh" "$backup_path" BACKUP_STAGING_RELEASE
+RUNTIME_ENV_FILE="$secret_root/staging.env" \
+  REALTIME_RUNTIME_ENV_FILE="$secret_root/staging.env" \
+  PHUB_ROLLBACK_BACKUP_ROOT="$backup_root" \
+  sh "$bundle_path/rollback-application.sh" "$backup_path" --validate-only
 test -f "$backup_path/backup.complete" && test ! -L "$backup_path/backup.complete" || fail 'application backup is incomplete'
 
 control_tree=$(cat "$bundle_path/control-tree")

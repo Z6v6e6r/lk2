@@ -177,7 +177,10 @@ implementation. `START` requires the canonical deploy-owned `/etc/phub/staging.e
 `phub-deploy:phub-deploy:0600`; it records that exact inode for rollback and refuses the obsolete
 root-owned `0640` contour. The isolated root helper retains only `CHOWN`, `DAC_READ_SEARCH` and
 `FOWNER`: the latter two are required to read and hard-link the deploy-owned `0600` source without
-granting write bypass. The legacy source contains a historical gitlink without matching submodule
+granting write bypass. Before the helper atomically creates `/etc/phub/realtime.env`, snapshot
+validation and any old-runtime recovery explicitly render both API and realtime from the existing
+`staging.env`; candidate startup switches to the isolated file only after the durable marker records
+both prepared files. The legacy source contains a historical gitlink without matching submodule
 metadata, so the workflow acquires the candidate through its fixed public repository and exact
 40-character SHA without submodule discovery; do not replace that step with a branch checkout or
 submodule initialization. The workflow uses a clean `npm ci` dependency contour and requires the complete
