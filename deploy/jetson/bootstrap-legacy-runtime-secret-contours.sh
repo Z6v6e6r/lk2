@@ -142,11 +142,11 @@ compose() {
   compose_with "$app_root/compose.yaml" "$app_root/release.env" "$@"
 }
 
-legacy_compose() {
-  RUNTIME_ENV_FILE="$secret_root/staging.env" \
-    REALTIME_RUNTIME_ENV_FILE="$secret_root/staging.env" \
-    compose_with "$app_root/compose.yaml" "$app_root/release.env" "$@"
-}
+legacy_compose() (
+  export RUNTIME_ENV_FILE="$secret_root/staging.env"
+  export REALTIME_RUNTIME_ENV_FILE="$secret_root/staging.env"
+  compose_with "$app_root/compose.yaml" "$app_root/release.env" "$@"
+)
 
 project_container_id() {
   service=$1
@@ -627,6 +627,12 @@ require_release_shape "$candidate_release_file"
 test "$(env_value "$candidate_release_file" RELEASE)" = "$candidate_release" || fail 'candidate release file has wrong SHA'
 test "$(env_value "$candidate_release_file" LATEST_MIGRATION)" = "$(env_value "$app_root/release.env" LATEST_MIGRATION)" || fail 'B0 may not change latest migration'
 
+# The active definition can already contain the candidate realtime env_file expression while the
+# legacy runtime still has only staging.env. Keep both interpolation variables exported across every
+# pre-marker child process (including snapshot/rollback validators), then drop the compatibility
+# override immediately after the isolated files are durably prepared.
+export RUNTIME_ENV_FILE="$secret_root/staging.env"
+export REALTIME_RUNTIME_ENV_FILE="$secret_root/staging.env"
 RUNTIME_ENV_FILE="$secret_root/staging.env" REALTIME_RUNTIME_ENV_FILE="$secret_root/staging.env" \
   compose_with "$bundle_path/compose.staging.yaml" "$candidate_release_file" --profile migration config --quiet
 candidate_images=$(RUNTIME_ENV_FILE="$secret_root/staging.env" REALTIME_RUNTIME_ENV_FILE="$secret_root/staging.env" \
@@ -722,6 +728,7 @@ helper_image=$(docker image inspect --format '{{.Id}}' "$(image_ref_from "$app_r
 run_helper prepare-bootstrap-json "$deploy_uid" "$deploy_gid" /bundle/bootstrap-attestation.json
 run_helper verify-bootstrap-prepared
 maybe_fail files-prepared
+unset RUNTIME_ENV_FILE REALTIME_RUNTIME_ENV_FILE
 
 probe_dir=$(mktemp -d /tmp/phub-b0-probe.XXXXXX)
 chmod 700 "$probe_dir"
