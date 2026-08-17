@@ -21,4 +21,16 @@ describe('game payment confirmation evidence migration', () => {
     expect(sql).toContain('enable row level security');
     expect(sql).toContain('force row level security');
   });
+
+  it('adds an expand-only provider exercise binding for trusted evidence', async () => {
+    const sql = await readFile(
+      new URL('../migrations/0086_game_payment_provider_exercise_binding.sql', import.meta.url),
+      'utf8',
+    );
+
+    expect(sql).toContain('add column if not exists provider_exercise_id text');
+    expect(sql).toContain('provider_exercise_id is null');
+    expect(sql).toContain('char_length(btrim(provider_exercise_id)) between 1 and 200');
+    expect(sql).toContain('validate constraint payment_confirmation_evidence_provider_exercise_id_check');
+  });
 });

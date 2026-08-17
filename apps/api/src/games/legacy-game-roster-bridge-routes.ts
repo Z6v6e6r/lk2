@@ -33,6 +33,7 @@ const commandSchema = z.discriminatedUnion('command', [
           operationType: z.enum(['TRANSACTION', 'SUBSCRIPTION_BOOKING']),
           operationId: z.string().trim().min(1).max(200),
           bookingId: z.string().trim().min(1).max(200),
+          exerciseId: z.string().trim().min(1).max(200).optional(),
           clientPhoneE164: z.string().regex(/^\+[1-9][0-9]{7,14}$/),
           status: z.literal('CONFIRMED'),
           verifiedAt: z.string().datetime({ offset: true }),
@@ -251,6 +252,21 @@ export function registerLegacyGameRosterBridgeRoutes(
           'Платёж относится к другому игроку.',
         );
       }
+      if (
+        parsed.data.command === 'CONFIRM_PAYMENT' &&
+        parsed.data.evidence.exerciseId === undefined
+      ) {
+        request.log.warn(
+          {
+            event: 'legacy_payment_evidence_exercise_binding_missing',
+            tenantId,
+            externalGameId,
+            providerOperationType: parsed.data.evidence.operationType,
+            correlationId: request.id,
+          },
+          'legacy payment evidence arrived without provider exercise binding',
+        );
+      }
       const result =
         parsed.data.command === 'CONFIRM_PAYMENT'
           ? await options.rosterRepository.confirmPayment({
@@ -272,6 +288,9 @@ export function registerLegacyGameRosterBridgeRoutes(
                 operationType: parsed.data.evidence.operationType,
                 operationId: parsed.data.evidence.operationId,
                 bookingId: parsed.data.evidence.bookingId,
+                ...(parsed.data.evidence.exerciseId
+                  ? { exerciseId: parsed.data.evidence.exerciseId }
+                  : {}),
                 clientPhoneE164: parsed.data.evidence.clientPhoneE164,
                 evidenceHash: requestHash({
                   command: parsed.data.command,

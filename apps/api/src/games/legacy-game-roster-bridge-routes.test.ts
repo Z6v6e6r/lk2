@@ -241,6 +241,7 @@ describe('legacy game roster bridge routes', () => {
           operationType: 'TRANSACTION',
           operationId: 'viva-transaction-101',
           bookingId: 'viva-booking-101',
+          exerciseId: 'viva-exercise-101',
           clientPhoneE164: '+79000000001',
           status: 'CONFIRMED',
           verifiedAt: '2026-08-16T17:59:59.000Z',
@@ -268,6 +269,7 @@ describe('legacy game roster bridge routes', () => {
         operationType: 'TRANSACTION',
         operationId: 'viva-transaction-101',
         bookingId: 'viva-booking-101',
+        exerciseId: 'viva-exercise-101',
         clientPhoneE164: '+79000000001',
         verifiedBy: 'LEGACY_NODE_RED',
       },
@@ -299,6 +301,38 @@ describe('legacy game roster bridge routes', () => {
     expect(roster.confirmPayment).not.toHaveBeenCalled();
   });
 
+  it('accepts legacy evidence without exercise binding during the expand phase', async () => {
+    const roster = rosterRepository();
+    const confirmPayment = vi.fn(roster.confirmPayment.bind(roster));
+    const app = await appWith({ roster: { ...roster, confirmPayment } });
+    const response = await app.inject({
+      method: 'POST',
+      url: '/internal/api/v1/local-padel/legacy-games/pay_legacy-game/roster-commands',
+      headers: {
+        authorization: 'Bearer signed-legacy-jwt',
+        'idempotency-key': 'legacy-payment-confirmation-missing-exercise',
+        'x-phub-legacy-roster-token': bridgeToken,
+      },
+      payload: {
+        command: 'CONFIRM_PAYMENT',
+        reservationId: '238df6f5-fec4-44dd-ad8c-39e98ade8366',
+        evidence: {
+          provider: 'VIVA',
+          operationType: 'TRANSACTION',
+          operationId: 'viva-transaction-101',
+          bookingId: 'viva-booking-101',
+          clientPhoneE164: '+79000000001',
+          status: 'CONFIRMED',
+          verifiedAt: '2026-08-16T17:59:59.000Z',
+        },
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(confirmPayment).toHaveBeenCalledOnce();
+    expect(confirmPayment.mock.calls[0]?.[0].evidence.exerciseId).toBeUndefined();
+  });
+
   it('rejects provider evidence for a different profile phone', async () => {
     const roster = rosterRepository();
     const app = await appWith({ roster });
@@ -318,6 +352,7 @@ describe('legacy game roster bridge routes', () => {
           operationType: 'TRANSACTION',
           operationId: 'viva-transaction-102',
           bookingId: 'viva-booking-102',
+          exerciseId: 'viva-exercise-102',
           clientPhoneE164: '+79000000099',
           status: 'CONFIRMED',
           verifiedAt: '2026-08-16T17:59:59.000Z',

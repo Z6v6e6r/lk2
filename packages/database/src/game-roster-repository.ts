@@ -90,6 +90,7 @@ export interface ConfirmGamePaymentInput extends GameRosterUserCommandInput {
     readonly operationType: 'TRANSACTION' | 'SUBSCRIPTION_BOOKING';
     readonly operationId: string;
     readonly bookingId: string;
+    readonly exerciseId?: string;
     readonly clientPhoneE164: string;
     readonly evidenceHash: string;
     readonly verifiedAt: string;
@@ -1472,10 +1473,10 @@ export function createGameRosterRepository(
           `insert into games.payment_confirmation_evidence (
              tenant_id, game_id, reservation_id, user_id, eligibility_decision_id,
              provider, provider_operation_type, provider_operation_id, payment_mode,
-             provider_booking_id, client_phone_e164, amount_minor, currency,
+             provider_booking_id, provider_exercise_id, client_phone_e164, amount_minor, currency,
              evidence_hash, verified_at, verified_by
            ) values (
-             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
+             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17
            )
            returning id`,
           [
@@ -1489,6 +1490,7 @@ export function createGameRosterRepository(
             input.evidence.operationId,
             game.payment_mode,
             input.evidence.bookingId,
+            input.evidence.exerciseId ?? null,
             input.evidence.clientPhoneE164,
             input.evidence.amountMinor ?? null,
             input.evidence.currency ?? null,
