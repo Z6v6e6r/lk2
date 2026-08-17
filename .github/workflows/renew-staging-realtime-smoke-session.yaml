@@ -1,0 +1,73 @@
+name: Renew staging realtime smoke session
+
+on:
+  schedule:
+    - cron: '17 4 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: staging
+  cancel-in-progress: false
+
+jobs:
+  renew:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: staging
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Bind renewal to the immutable default-branch source
+        env:
+          SOURCE_REF: ${{ github.ref }}
+          SOURCE_SHA: ${{ github.sha }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -eu
+          test "$SOURCE_REF" = refs/heads/main
+          test "$WORKFLOW_SHA" = "$SOURCE_SHA"
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test -z "$(git status --short)"
+      - name: Join the staging tailnet
+        uses: tailscale/github-action@306e68a486fd2350f2bfc3b19fcd143891a4a2d8 # v4
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+          ping: ${{ secrets.STAGING_HOST }}
+      - name: Configure audited SSH
+        env:
+          DEPLOY_KEY: ${{ secrets.STAGING_DEPLOY_KEY }}
+          KNOWN_HOSTS: ${{ secrets.STAGING_KNOWN_HOSTS }}
+        run: |
+          set -eu
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+      - name: Rotate and verify without exporting credentials
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          SSH_OPTIONS: -o ConnectTimeout=10 -o ConnectionAttempts=1 -o ServerAliveInterval=10 -o ServerAliveCountMax=2
+        run: |
+          set -euo pipefail
+          run_directory="/opt/phub/staging-realtime-smoke-runs/$RUN_ID-$RUN_ATTEMPT"
+          cleanup() {
+            ssh $SSH_OPTIONS "phub-deploy@$HOST" \
+              "rm -f '$run_directory/staging-realtime-smoke-session.mjs' '$run_directory/verify-staging-realtime-smoke-session.sh'; rmdir '$run_directory' 2>/dev/null || true" \
+              >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT HUP INT TERM
+          ssh $SSH_OPTIONS "phub-deploy@$HOST" \
+            "test ! -e '$run_directory' && test ! -L '$run_directory' && install -d -m 700 '$run_directory'"
+          scp $SSH_OPTIONS \
+            deploy/jetson/staging-realtime-smoke-session.mjs \
+            deploy/jetson/verify-staging-realtime-smoke-session.sh \
+            "phub-deploy@$HOST:$run_directory/"
+          ssh $SSH_OPTIONS "phub-deploy@$HOST" \
+            "chmod 400 '$run_directory/staging-realtime-smoke-session.mjs'; chmod 500 '$run_directory/verify-staging-realtime-smoke-session.sh'; sh '$run_directory/verify-staging-realtime-smoke-session.sh' '$run_directory'"

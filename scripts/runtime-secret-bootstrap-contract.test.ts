@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -7,6 +7,10 @@ import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 
 const workflow = readFileSync('.github/workflows/bootstrap-staging-runtime-secrets.yaml', 'utf8');
+const renewalWorkflow = readFileSync(
+  '.github/workflows/renew-staging-realtime-smoke-session.yaml',
+  'utf8',
+);
 const controller = readFileSync(
   'deploy/jetson/bootstrap-legacy-runtime-secret-contours.sh',
   'utf8',
@@ -24,6 +28,15 @@ const runtimeObservation = readFileSync(
   'utf8',
 );
 const helper = readFileSync('deploy/jetson/provision-runtime-secret-files.mjs', 'utf8');
+const stagingSmoke = readFileSync('deploy/jetson/staging-realtime-smoke-session.mjs', 'utf8');
+const stagingSmokeWrapper = readFileSync(
+  'deploy/jetson/verify-staging-realtime-smoke-session.sh',
+  'utf8',
+);
+const stagingSmokeInstaller = readFileSync(
+  'deploy/jetson/install-staging-realtime-smoke-session.sh',
+  'utf8',
+);
 const sharedGuard = readFileSync('deploy/jetson/verify-runtime-secret-transition-clear.sh', 'utf8');
 const communitiesInspection = readFileSync(
   'deploy/jetson/inspect-communities-staging-target.sh',
@@ -82,6 +95,25 @@ describe('legacy runtime-secret bootstrap delivery contract', () => {
       .filter((line) => line.startsWith('- uses:'));
     expect(uses.length).toBeGreaterThan(0);
     for (const use of uses) expect(use).toMatch(/@[0-9a-f]{40}(?:\s+#.*)?$/);
+  });
+
+  it('renews the host-only smoke session weekly under the shared staging lock', () => {
+    expect(parse(renewalWorkflow)).toBeDefined();
+    expect(renewalWorkflow).toContain("cron: '17 4 * * 1'");
+    expect(renewalWorkflow).toContain('group: staging');
+    expect(renewalWorkflow).toContain('environment: staging');
+    expect(renewalWorkflow).toContain('test "$SOURCE_REF" = refs/heads/main');
+    expect(renewalWorkflow).toContain('test "$WORKFLOW_SHA" = "$SOURCE_SHA"');
+    expect(renewalWorkflow).toContain('/opt/phub/staging-realtime-smoke-runs/$RUN_ID-$RUN_ATTEMPT');
+    expect(renewalWorkflow).toContain('staging-realtime-smoke-session.mjs');
+    expect(renewalWorkflow).toContain('verify-staging-realtime-smoke-session.sh');
+    expect(renewalWorkflow).not.toMatch(/ACCESS_TOKEN|REFRESH_TOKEN|JWT_.*SECRET/u);
+    const uses = renewalWorkflow
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line.startsWith('uses:') || line.startsWith('- uses:'));
+    expect(uses).toHaveLength(2);
+    for (const use of uses) expect(use).toMatch(/@[0-9a-f]{40}(?:\s+# v\d+)?$/u);
   });
 
   it('rejects multiline or quoted recovery identifiers before remote command construction', () => {
@@ -498,37 +530,118 @@ describe('legacy runtime-secret bootstrap delivery contract', () => {
 
   it('keeps finalization behind isolation, public health and an authenticated WebSocket handshake', () => {
     const isolation = workflow.indexOf('Verify the isolated secret files');
-    const handshake = workflow.indexOf('Prove an authenticated API ticket reaches realtime');
     const publicManifest = workflow.indexOf('Attest the exact candidate through public ingress');
     const finalize = workflow.indexOf('Finalize only after public and authenticated attestation');
     expect(isolation).toBeGreaterThan(0);
-    expect(handshake).toBeGreaterThan(isolation);
-    expect(publicManifest).toBeGreaterThan(handshake);
+    expect(publicManifest).toBeGreaterThan(isolation);
     expect(finalize).toBeGreaterThan(publicManifest);
-    expect(workflow).toContain('Install control-owned handshake dependencies');
-    expect(workflow).toContain('STAGING_REALTIME_SMOKE_ACCESS_TOKEN');
-    expect(workflow).toContain('verify-realtime-ticket-handshake.ts');
+    expect(workflow).not.toContain('Install control-owned handshake dependencies');
+    expect(workflow).not.toContain('STAGING_REALTIME_SMOKE_ACCESS_TOKEN');
+    expect(workflow).not.toContain('verify-realtime-ticket-handshake.ts');
+    expect(workflow).toContain('staging-realtime-smoke-session.mjs');
+    expect(workflow).toContain('verify-staging-realtime-smoke-session.sh');
   });
 
-  it('validates the real staging tenant before writes and repeats the handshake after cutover', () => {
+  it('rotates and validates the dedicated smoke session before marker publication and after cutover', () => {
     const activeReleaseAttestation = workflow.indexOf(
       'Attest the exact public legacy release before writes',
     );
-    const tokenPreflight = workflow.indexOf(
-      'Validate the fresh local-padel smoke token before writes',
-    );
     const publish = workflow.indexOf('Publish the durable controller bundle without executing it');
     const cutover = workflow.indexOf('Perform the coordinated API and realtime B0 cutover');
-    const postCutoverHandshake = workflow.indexOf(
-      'Prove an authenticated API ticket reaches realtime',
-    );
     expect(activeReleaseAttestation).toBeGreaterThan(0);
-    expect(tokenPreflight).toBeGreaterThan(activeReleaseAttestation);
-    expect(publish).toBeGreaterThan(tokenPreflight);
+    expect(publish).toBeGreaterThan(activeReleaseAttestation);
     expect(cutover).toBeGreaterThan(publish);
-    expect(postCutoverHandshake).toBeGreaterThan(cutover);
-    expect(workflow.match(/--tenant-key=local-padel/g)).toHaveLength(2);
-    expect(workflow).not.toContain('--tenant-key=nano');
+    const calls = [...controller.matchAll(/^verify_authenticated_smoke$/gmu)].map(
+      (match) => match.index ?? -1,
+    );
+    expect(calls).toHaveLength(2);
+    const markerPublication = controller.indexOf('prepare-bootstrap-json');
+    const publicCandidate = controller.lastIndexOf('verify_public_release "$candidate_release"');
+    const clearRollbackTrap = controller.lastIndexOf('trap - EXIT HUP INT TERM');
+    expect(calls[0]).toBeGreaterThan(controller.indexOf('assert_flags_disabled'));
+    expect(calls[0]).toBeLessThan(markerPublication);
+    expect(calls[1]).toBeGreaterThan(publicCandidate);
+    expect(calls[1]).toBeLessThan(clearRollbackTrap);
+    expect(stagingSmoke).toContain("const BASE_URL = 'https://lk.nano.padlhub.su'");
+    expect(stagingSmoke).toContain("const TENANT_KEY = 'local-padel'");
+    expect(stagingSmoke).not.toContain('process.env');
+    expect(stagingSmokeWrapper).toContain('--add-host lk.nano.padlhub.su:host-gateway');
+    expect(stagingSmokeWrapper).toContain('--cap-drop ALL');
+    expect(stagingSmokeWrapper).toContain('--security-opt no-new-privileges');
+    expect(stagingSmokeWrapper).toContain("! -name 'session.json.next-*'");
+    expect(stagingSmokeWrapper).not.toContain('--env-file "$state');
+    expect(stagingSmokeInstaller).toContain('INSTALL_STAGING_REALTIME_SMOKE_SESSION');
+    expect(stagingSmokeInstaller).toContain('IFS= read -r refresh_token');
+    const rootOwnedTarget = stagingSmokeInstaller.indexOf('install -d -o 0 -g 0 -m 700 "$target"');
+    const noClobber = stagingSmokeInstaller.indexOf('set -C', rootOwnedTarget);
+    const createCredential = stagingSmokeInstaller.indexOf('> "$temporary"', noClobber);
+    const publishCredential = stagingSmokeInstaller.indexOf(
+      'mv "$temporary" "$target/session.json"',
+      createCredential,
+    );
+    const transferDirectory = stagingSmokeInstaller.indexOf(
+      'chown "$deploy_uid:$deploy_gid" "$target"',
+      publishCredential,
+    );
+    expect(rootOwnedTarget).toBeGreaterThan(0);
+    expect(noClobber).toBeGreaterThan(rootOwnedTarget);
+    expect(createCredential).toBeGreaterThan(noClobber);
+    expect(publishCredential).toBeGreaterThan(createCredential);
+    expect(transferDirectory).toBeGreaterThan(publishCredential);
+    expect(controller).toContain('typeof WebSocket !== "function"');
+    expect(controller).toContain('maybe_fail post-authenticated-smoke');
+  });
+
+  it('executes post-smoke failure through the rollback trap without restoring the successor', () => {
+    const functionSource = (name: string): string => {
+      const start = controller.indexOf(`${name}() {`);
+      const end = controller.indexOf('\n}\n', start);
+      expect(start).toBeGreaterThan(0);
+      expect(end).toBeGreaterThan(start);
+      return controller.slice(start, end + 3);
+    };
+    const directory = mkdtempSync(join(tmpdir(), 'phub-b0-post-smoke-'));
+    try {
+      const marker = join(directory, 'marker.json');
+      const markerNext = join(directory, 'marker.next');
+      const state = join(directory, 'session.json');
+      writeFileSync(marker, '{"phase":"web-ready"}\n', { mode: 0o600 });
+      writeFileSync(state, '{"refreshToken":"successor"}\n', { mode: 0o600 });
+      const result = spawnSync(
+        '/bin/dash',
+        [
+          '-c',
+          [
+            'set -eu',
+            'bundle_path=/bundle',
+            `marker=${JSON.stringify(marker)}`,
+            `marker_next=${JSON.stringify(markerNext)}`,
+            `state_path=${JSON.stringify(state)}`,
+            'fail() { printf "%s\\n" "$*" >&2; exit 71; }',
+            'maybe_fail() { test "${PHUB_B0_FAIL_AFTER:-}" != "$1" || fail "injected failure after $1"; }',
+            'sh() { return 0; }',
+            'restore_bootstrap() { test "$(cat "$state_path")" = \'{"refreshToken":"successor"}\'; printf "%s\\n" rollback-invoked; }',
+            functionSource('verify_authenticated_smoke'),
+            functionSource('on_error'),
+            'trap on_error EXIT HUP INT TERM',
+            'verify_authenticated_smoke',
+            'maybe_fail post-authenticated-smoke',
+            'trap - EXIT HUP INT TERM',
+          ].join('\n'),
+        ],
+        {
+          encoding: 'utf8',
+          env: { ...process.env, PHUB_B0_FAIL_AFTER: 'post-authenticated-smoke' },
+        },
+      );
+      expect(result.status).toBe(71);
+      expect(result.stdout.trim()).toBe('rollback-invoked');
+      expect(result.stderr).toContain('injected failure after post-authenticated-smoke');
+      expect(readFileSync(state, 'utf8')).toBe('{"refreshToken":"successor"}\n');
+      expect(existsSync(marker)).toBe(true);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   it('retains a bounded redacted observation window after finalization', () => {
@@ -617,9 +730,16 @@ describe('legacy runtime-secret bootstrap delivery contract', () => {
   it('documents the legacy capability boundary and separate later media release', () => {
     expect(runbook).toContain('e308181da5222645d9a87d03642923c6841be8d1');
     expect(runbook).toContain('Bootstrap staging runtime-secret boundary (B0)');
-    expect(runbook).toContain('STAGING_REALTIME_SMOKE_ACCESS_TOKEN');
-    expect(runbook).toContain('`local-padel` smoke');
-    expect(runbook).toContain('`nano` is not the staging tenant key');
+    expect(runbook).toContain('/etc/phub/staging-realtime-smoke/session.json');
+    expect(runbook).toContain('tenant `local-padel`; `nano` is not the tenant key');
+    expect(runbook).toContain("git rev-parse 'HEAD^{tree}'");
+    expect(runbook).toContain('git status --porcelain=v1 --untracked-files=all');
+    expect(runbook).toContain(
+      "git rev-parse 'HEAD:deploy/jetson/install-staging-realtime-smoke-session.sh'",
+    );
+    expect(runbook).toContain(
+      'git hash-object deploy/jetson/install-staging-realtime-smoke-session.sh',
+    );
     expect(runbook).toContain('later main/media release and migrations are a separate approval');
   });
 });

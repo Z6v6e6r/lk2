@@ -195,14 +195,70 @@ Compose keeps the static web and unused migrator services on an empty runtime-en
 contour; only API and worker retain the legacy application environment, while realtime receives
 the dedicated allowlist. It never invokes the migrator.
 
-Before `START`, provision a fresh, short-lived access token for the existing `local-padel` smoke
-principal in the staging environment secret `STAGING_REALTIME_SMOKE_ACCESS_TOKEN`. The public
-hostname remains `lk.nano.padlhub.su`; `nano` is not the staging tenant key. Before publishing any
-controller files, the workflow uses the token to request one session-authorized, 30-second realtime
-ticket and complete one WebSocket `connection.ready` handshake against the active release. It repeats
-the same authenticated handshake after cutover and before finalization. It does not subscribe or send
-a message. Missing, expired, revoked or wrong-tenant credentials fail closed before host writes; a
-post-cutover authentication failure still triggers rollback.
+Before `START`, provision one dedicated, non-personal synthetic smoke principal in the staging
+tenant `local-padel`; `nano` is not the tenant key. The user must be `ACTIVE`, use a dedicated
+non-personal staging test phone/SIM, have no Viva delegation, memberships, bookings or admin/CUP
+roles, have the exact display name `Staging Realtime Smoke`, and its exact access profile must be
+`roles=[client]`, `permissions=[chat.direct.create]`. The immutable legacy B0 candidate requires
+that existing permission to issue a messaging realtime ticket. This is a staging-only residual
+write capability: do not reuse a real user or broaden the permission set. A later candidate may
+replace it with a ticket-only permission, but that is outside the immutable B0 source contract.
+
+The refresh credential lives only on the staging host in
+`/etc/phub/staging-realtime-smoke/session.json`. It never enters a GitHub secret, workflow
+environment, SSH argument, bundle, application backup, log or artifact. Bootstrap it once through
+the normal login flow, capture only that synthetic user's `phub_refresh` cookie, and run the
+installer from a root-owned exact reviewed `main` checkout. Do not grant `phub-deploy` sudo over a
+mutable installer or execute a deploy-owned `/tmp` copy as root. A trusted operator opens a root
+shell, verifies the checkout SHA, then supplies the cookie only on stdin; missing root authority is
+a stop condition. Do not paste the cookie into a command argument or environment variable:
+
+```sh
+ssh -T root@<staging-host>
+cd /root/<root-owned-reviewed-main-checkout>
+test "$(git rev-parse HEAD)" = <exact-approved-main-sha>
+test "$(git rev-parse 'HEAD^{tree}')" = <exact-approved-main-tree>
+test -z "$(git status --porcelain=v1 --untracked-files=all)"
+installer_blob=$(git rev-parse 'HEAD:deploy/jetson/install-staging-realtime-smoke-session.sh')
+test "$(git hash-object deploy/jetson/install-staging-realtime-smoke-session.sh)" = "$installer_blob"
+unset installer_blob
+read -r -s smoke_refresh_token
+printf '%s\n' "$smoke_refresh_token" | \
+  sh deploy/jetson/install-staging-realtime-smoke-session.sh \
+  <expected-tenant-uuid> <expected-synthetic-user-uuid> <test-phone-last4> \
+  INSTALL_STAGING_REALTIME_SMOKE_SESSION
+unset smoke_refresh_token
+exit
+```
+
+The installer refuses an existing state directory; credential replacement requires a separately
+reviewed revoke-and-reprovision operation. The directory is deploy-owned mode `0700`; the exact
+single-link state file is mode `0600`. The state pins tenant UUID, synthetic user UUID, the
+dedicated test phone's last four digits, exact role and exact permission. A durable pending
+idempotency key is written and synchronized before every
+refresh. If the HTTP response is lost after the server rotates the session, the next attempt reuses
+the old cookie with that same key and receives the same deterministic successor. The successor is
+atomically written and directory-synchronized before the ticket/WebSocket handshake; application
+rollback never restores an old refresh credential.
+
+The B0 controller runs the host-only helper twice under the staging workflow lock: once after the
+durable bundle is published but before marker/runtime-secret/service mutation, and once after the
+candidate public release and runtime checks but before the rollback trap is removed. It resolves
+`lk.nano.padlhub.su` to the staging host gateway, forbids redirects, and requests only one
+session-authorized 30-second ticket plus one WebSocket `connection.ready`. It does not subscribe,
+create a conversation or send a message. Missing, expired, revoked, wrong-tenant or broadened
+credentials fail closed; post-cutover failure triggers the existing rollback. GitHub retains its
+independent public manifest, health and observation checks, so this host-path proof does not replace
+external ingress evidence.
+
+The separate `Renew staging realtime smoke session` workflow runs weekly under the same `staging`
+concurrency lock. It copies only the reviewed secret-free helper into a run-scoped mode-`0700`
+directory, executes it inside the exact running API image with a read-only root, no capabilities,
+no-new-privileges and only the smoke credential directory mounted writable, then deletes the
+run-scoped helper. The durable state records the last successful rotation and the cookie-derived
+expiry without logging either credential. The default refresh TTL is 30 days; a failed weekly job
+must be investigated before expiry, and an expired session fails closed until separately reviewed
+reprovisioning. `RECOVER` never rotates or requires the smoke credential.
 
 Dispatch `START` from `main` with the exact active release, exact B0 candidate and confirmation
 `BOOTSTRAP_STAGING_RUNTIME_SECRETS`. The workflow verifies the candidate parent and source, pulls
