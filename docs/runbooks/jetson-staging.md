@@ -191,11 +191,14 @@ Compose keeps the static web and unused migrator services on an empty runtime-en
 contour; only API and worker retain the legacy application environment, while realtime receives
 the dedicated allowlist. It never invokes the migrator.
 
-Before `START`, provision a fresh, short-lived access token for the existing `nano` smoke principal
-in the staging environment secret `STAGING_REALTIME_SMOKE_ACCESS_TOKEN`. The workflow uses it only
-to request one session-authorized, 30-second realtime ticket and complete one WebSocket
-`connection.ready` handshake. It does not subscribe or send a message. Missing, expired or revoked
-credentials fail closed and trigger rollback.
+Before `START`, provision a fresh, short-lived access token for the existing `local-padel` smoke
+principal in the staging environment secret `STAGING_REALTIME_SMOKE_ACCESS_TOKEN`. The public
+hostname remains `lk.nano.padlhub.su`; `nano` is not the staging tenant key. Before publishing any
+controller files, the workflow uses the token to request one session-authorized, 30-second realtime
+ticket and complete one WebSocket `connection.ready` handshake against the active release. It repeats
+the same authenticated handshake after cutover and before finalization. It does not subscribe or send
+a message. Missing, expired, revoked or wrong-tenant credentials fail closed before host writes; a
+post-cutover authentication failure still triggers rollback.
 
 Dispatch `START` from `main` with the exact active release, exact B0 candidate and confirmation
 `BOOTSTRAP_STAGING_RUNTIME_SECRETS`. The workflow verifies the candidate parent and source, pulls

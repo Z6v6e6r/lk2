@@ -28,7 +28,11 @@ class FakeSocket extends EventEmitter {
 describe('authenticated realtime ticket handshake', () => {
   it('requests one user-scoped ticket and proves connection.ready without logging credentials', async () => {
     const socket = new FakeSocket();
-    const fetchImpl = vi.fn((_url: URL | RequestInfo, init?: RequestInit) => {
+    const fetchImpl = vi.fn((url: URL | RequestInfo, init?: RequestInit) => {
+      const requestUrl = url instanceof URL ? url.href : typeof url === 'string' ? url : url.url;
+      expect(requestUrl).toBe(
+        'https://lk.nano.padlhub.su/user/api/v1/local-padel/messaging/realtime-ticket',
+      );
       expect(init?.method).toBe('POST');
       expect((init?.headers as Record<string, string>).Authorization).toBe('Bearer redacted-token');
       return Promise.resolve(
@@ -40,11 +44,11 @@ describe('authenticated realtime ticket handshake', () => {
     });
     const pending = verifyRealtimeTicketHandshake({
       baseUrl: 'https://lk.nano.padlhub.su',
-      tenantKey: 'nano',
+      tenantKey: 'local-padel',
       accessToken: 'redacted-token',
       fetchImpl,
       socketFactory: (url) => {
-        expect(url.href).toBe('wss://lk.nano.padlhub.su/realtime/v1/nano');
+        expect(url.href).toBe('wss://lk.nano.padlhub.su/realtime/v1/local-padel');
         queueMicrotask(() => socket.emit('open'));
         queueMicrotask(() => socket.emit('message', Buffer.from('{"type":"connection.ready"}')));
         return socket as unknown as WebSocket;
@@ -63,7 +67,7 @@ describe('authenticated realtime ticket handshake', () => {
     await expect(
       verifyRealtimeTicketHandshake({
         baseUrl: 'https://lk.nano.padlhub.su',
-        tenantKey: 'nano',
+        tenantKey: 'local-padel',
         accessToken: 'redacted-token',
         fetchImpl: vi.fn(() => Promise.resolve(new Response('{}', { status: 401 }))),
         socketFactory,
@@ -76,7 +80,7 @@ describe('authenticated realtime ticket handshake', () => {
     const socket = new FakeSocket();
     const pending = verifyRealtimeTicketHandshake({
       baseUrl: 'https://lk.nano.padlhub.su',
-      tenantKey: 'nano',
+      tenantKey: 'local-padel',
       accessToken: 'redacted-token',
       fetchImpl: vi.fn(() =>
         Promise.resolve(

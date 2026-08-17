@@ -282,6 +282,27 @@ describe('legacy runtime-secret bootstrap delivery contract', () => {
     expect(workflow).toContain('verify-realtime-ticket-handshake.ts');
   });
 
+  it('validates the real staging tenant before writes and repeats the handshake after cutover', () => {
+    const activeReleaseAttestation = workflow.indexOf(
+      'Attest the exact public legacy release before writes',
+    );
+    const tokenPreflight = workflow.indexOf(
+      'Validate the fresh local-padel smoke token before writes',
+    );
+    const publish = workflow.indexOf('Publish the durable controller bundle without executing it');
+    const cutover = workflow.indexOf('Perform the coordinated API and realtime B0 cutover');
+    const postCutoverHandshake = workflow.indexOf(
+      'Prove an authenticated API ticket reaches realtime',
+    );
+    expect(activeReleaseAttestation).toBeGreaterThan(0);
+    expect(tokenPreflight).toBeGreaterThan(activeReleaseAttestation);
+    expect(publish).toBeGreaterThan(tokenPreflight);
+    expect(cutover).toBeGreaterThan(publish);
+    expect(postCutoverHandshake).toBeGreaterThan(cutover);
+    expect(workflow.match(/--tenant-key=local-padel/g)).toHaveLength(2);
+    expect(workflow).not.toContain('--tenant-key=nano');
+  });
+
   it('retains a bounded redacted observation window after finalization', () => {
     const finalize = workflow.indexOf('Finalize only after public and authenticated attestation');
     const observe = workflow.indexOf('Observe the finalized candidate for five minutes');
@@ -369,6 +390,8 @@ describe('legacy runtime-secret bootstrap delivery contract', () => {
     expect(runbook).toContain('e308181da5222645d9a87d03642923c6841be8d1');
     expect(runbook).toContain('Bootstrap staging runtime-secret boundary (B0)');
     expect(runbook).toContain('STAGING_REALTIME_SMOKE_ACCESS_TOKEN');
+    expect(runbook).toContain('`local-padel` smoke');
+    expect(runbook).toContain('`nano` is not the staging tenant key');
     expect(runbook).toContain('later main/media release and migrations are a separate approval');
   });
 });
