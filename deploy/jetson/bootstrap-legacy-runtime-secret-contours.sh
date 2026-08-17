@@ -288,7 +288,7 @@ helper_raw() {
     --cap-drop ALL --cap-add CHOWN --cap-add DAC_READ_SEARCH --cap-add FOWNER \
     --memory 128m --pids-limit 64 \
     --mount type=bind,src="$secret_root",dst=/target \
-    --mount type=bind,src="$bundle_path",dst=/bundle,ro \
+    --mount type=bind,src="$bundle_path",dst=/bundle,readonly \
     "$helper_image" --input-type=module - "$@" < "$helper_script"
 }
 
@@ -786,7 +786,7 @@ docker run --rm --pull=never --network none --read-only --user "$deploy_uid:$dep
 docker run --rm --pull=never --network none --read-only --user "$deploy_uid:$deploy_gid" \
   --tmpfs /tmp:rw,noexec,nosuid,nodev,size=1m --cap-drop ALL --security-opt no-new-privileges \
   --memory 128m --pids-limit 64 \
-  --env-file "$secret_root/realtime.env" --mount type=bind,src="$probe_dir",dst=/probe,ro \
+  --env-file "$secret_root/realtime.env" --mount type=bind,src="$probe_dir",dst=/probe,readonly \
   --entrypoint node "$candidate_realtime_ref" --input-type=module -e '
     import { readFile } from "node:fs/promises";
     import { jwtVerify } from "jose";

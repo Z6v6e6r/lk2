@@ -388,10 +388,12 @@ describe('legacy runtime-secret bootstrap delivery contract', () => {
     expect(helperRaw).toContain('--cap-add FOWNER');
     expect(helperRaw).not.toContain('--cap-add DAC_OVERRIDE');
     expect(helperRaw).toContain('--mount type=bind,src="$secret_root",dst=/target \\');
-    expect(helperRaw).not.toContain('dst=/target,rw');
+    expect(helperRaw).toContain('--mount type=bind,src="$bundle_path",dst=/bundle,readonly \\');
+    expect(helperRaw).not.toMatch(/dst=\/target,rw(?:\s|\\)/u);
+    expect(helperRaw).not.toMatch(/dst=\/bundle,ro(?:\s|\\)/u);
   });
 
-  it('executes the bootstrap helper with Docker-compatible read-write bind syntax', () => {
+  it('executes the bootstrap helper with Docker-compatible bind syntax', () => {
     const functions = controller.slice(
       controller.indexOf('resolve_helper_image()'),
       controller.indexOf('run_helper()'),
@@ -407,7 +409,7 @@ describe('legacy runtime-secret bootstrap delivery contract', () => {
           'helper_script=/dev/null',
           "helper_image='sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'",
           'docker() {',
-          '  case "$*" in *",rw"*) return 64 ;; esac',
+          '  case "$*" in *",rw "*|*",ro "*) return 64 ;; esac',
           '  printf \'%s\\n\' "$*"',
           '}',
           functions,
@@ -419,7 +421,52 @@ describe('legacy runtime-secret bootstrap delivery contract', () => {
 
     expect({ status: result.status, stderr: result.stderr }).toEqual({ status: 0, stderr: '' });
     expect(result.stdout).toContain('--mount type=bind,src=/target-source,dst=/target');
-    expect(result.stdout).not.toContain('dst=/target,rw');
+    expect(result.stdout).toContain('--mount type=bind,src=/bundle,dst=/bundle,readonly');
+    expect(result.stdout).not.toMatch(/dst=\/target,rw(?:\s|\\)/u);
+    expect(result.stdout).not.toMatch(/dst=\/bundle,ro(?:\s|\\)/u);
+  });
+
+  it('passes writable and readonly bind mounts through the real Docker parser', () => {
+    const dockerInfo = spawnSync('docker', ['info', '--format', '{{.ServerVersion}}'], {
+      encoding: 'utf8',
+    });
+    expect(dockerInfo.status, dockerInfo.stderr).toBe(0);
+
+    const probeImage = 'example.invalid/phub-b0-mount-grammar-probe:never';
+    const imageLookup = spawnSync('docker', ['image', 'inspect', probeImage], {
+      encoding: 'utf8',
+    });
+    expect(imageLookup.status).not.toBe(0);
+
+    const directory = mkdtempSync(join(tmpdir(), 'phub-b0-mount-'));
+    try {
+      const mounts = [
+        `type=bind,src=${directory},dst=/target`,
+        `type=bind,src=${directory},dst=/bundle,readonly`,
+      ];
+      for (const mount of mounts) {
+        const result = spawnSync(
+          'docker',
+          [
+            'create',
+            '--pull=never',
+            '--network',
+            'none',
+            '--read-only',
+            '--mount',
+            mount,
+            probeImage,
+          ],
+          { encoding: 'utf8' },
+        );
+        const output = `${result.stdout}${result.stderr}`;
+        expect(result.status).toBe(1);
+        expect(output).toContain(`No such image: ${probeImage}`);
+        expect(output).not.toMatch(/invalid argument.*--mount|invalid field '(?:ro|rw)'/u);
+      }
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   it('probes the key boundary offline before stopping and starts candidate services in safe order', () => {
@@ -439,7 +486,9 @@ describe('legacy runtime-secret bootstrap delivery contract', () => {
     expect(dedicatedProbe).toBeGreaterThan(prepare);
     expect(accessReject).toBeGreaterThan(dedicatedProbe);
     expect(controller).toContain('--mount type=bind,src="$probe_dir",dst=/probe \\');
-    expect(controller).not.toContain('dst=/probe,rw');
+    expect(controller).toContain('--mount type=bind,src="$probe_dir",dst=/probe,readonly \\');
+    expect(controller).not.toMatch(/dst=\/probe,rw(?:\s|\\)/u);
+    expect(controller).not.toMatch(/dst=\/probe,ro(?:\s|\\)/u);
     expect(stop).toBeGreaterThan(accessReject);
     expect(realtime).toBeGreaterThan(stop);
     expect(api).toBeGreaterThan(realtime);
