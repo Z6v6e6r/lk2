@@ -50,6 +50,7 @@ function execute(
     readonly profileCommandDefault?: number;
     readonly runtimeUrl?: string;
     readonly staged?: boolean;
+    readonly stagedConfirmation?: '29_V1' | '32_V1';
     readonly stagedBackupSha?: string;
     readonly stagedSourceLedgerSha?: string;
     readonly failStagedPhase?: string;
@@ -271,7 +272,7 @@ exec /usr/bin/stat "$@"
         input.migratorUrl ?? 'postgresql://migrator:migrator-secret@postgres:5432/phub',
       ...(input.staged
         ? {
-            COMMUNITIES_STAGED_REHEARSAL_CONFIRMATION: 'COMMUNITIES_STAGED_REHEARSAL_29_V1',
+            COMMUNITIES_STAGED_REHEARSAL_CONFIRMATION: `COMMUNITIES_STAGED_REHEARSAL_${input.stagedConfirmation ?? '29_V1'}`,
             COMMUNITIES_STAGED_REHEARSAL_EXPECTED_BACKUP_SHA:
               input.stagedBackupSha ?? expectedBackupSha,
             COMMUNITIES_STAGED_REHEARSAL_EXPECTED_SOURCE_LEDGER_SHA:
@@ -291,6 +292,14 @@ exec /usr/bin/stat "$@"
 }
 
 describe('media migration restore rehearsal', () => {
+  it('fails closed for 32_V1 before any clone or Docker operation until its ACL matrix is approved', () => {
+    const { result, log } = execute({ staged: true, stagedConfirmation: '32_V1' });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('32_V1 is clone-evidence preparation only');
+    expect(log).toBe('');
+  });
+
   it('restores, migrates and verifies only the isolated database before cleanup', () => {
     const { result, log } = execute();
 

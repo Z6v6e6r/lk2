@@ -1,4 +1,7 @@
+import { createHash } from 'node:crypto';
+
 export const COMMUNITIES_STAGED_REHEARSAL_CONFIRMATION = 'COMMUNITIES_STAGED_REHEARSAL_29_V1';
+export const COMMUNITIES_STAGED_REHEARSAL_32_CONFIRMATION = 'COMMUNITIES_STAGED_REHEARSAL_32_V1';
 
 export const COMMUNITIES_STAGED_REHEARSAL_PHASES = [
   'pre_foundation',
@@ -6,7 +9,14 @@ export const COMMUNITIES_STAGED_REHEARSAL_PHASES = [
   'post_foundation',
 ] as const;
 
-export type CommunitiesStagedRehearsalPhase = (typeof COMMUNITIES_STAGED_REHEARSAL_PHASES)[number];
+export const COMMUNITIES_STAGED_REHEARSAL_32_PHASES = [
+  ...COMMUNITIES_STAGED_REHEARSAL_PHASES,
+  'eligibility_payment',
+] as const;
+
+export type CommunitiesStagedRehearsalPhase =
+  (typeof COMMUNITIES_STAGED_REHEARSAL_32_PHASES)[number];
+export type CommunitiesStagedRehearsalContractVersion = '29_V1' | '32_V1';
 
 export const COMMUNITIES_STAGED_REHEARSAL_PRE_FOUNDATION_FILENAMES = [
   '0053_profile_visibility_sections.sql',
@@ -52,7 +62,26 @@ export const COMMUNITIES_STAGED_REHEARSAL_PENDING_FILENAMES = [
   ...COMMUNITIES_STAGED_REHEARSAL_POST_FOUNDATION_FILENAMES,
 ] as const;
 
+export const COMMUNITIES_STAGED_REHEARSAL_ELIGIBILITY_PAYMENT_FILENAMES = [
+  '0084_participation_level_eligibility.sql',
+  '0085_game_payment_confirmation_evidence.sql',
+  '0086_game_payment_provider_exercise_binding.sql',
+] as const;
+
+export const COMMUNITIES_STAGED_REHEARSAL_32_PENDING_FILENAMES = [
+  ...COMMUNITIES_STAGED_REHEARSAL_PENDING_FILENAMES,
+  ...COMMUNITIES_STAGED_REHEARSAL_ELIGIBILITY_PAYMENT_FILENAMES,
+] as const;
+
+/** A phase binding commits to the contract version and this ordered filename digest. */
+export function communitiesStagedRehearsalPendingSetSha256(filenames: readonly string[]): string {
+  return createHash('sha256')
+    .update(`${filenames.join('\n')}\n`)
+    .digest('hex');
+}
+
 export interface CommunitiesStagedRehearsalRequest {
+  readonly contractVersion: CommunitiesStagedRehearsalContractVersion;
   readonly phase: CommunitiesStagedRehearsalPhase;
   readonly restoreDatabase: string;
 }
@@ -83,12 +112,21 @@ export function resolveCommunitiesStagedRehearsalRequest(input: {
   const requested = input.confirmation !== undefined || input.phase !== undefined;
   if (!requested) return null;
 
-  if (input.confirmation !== COMMUNITIES_STAGED_REHEARSAL_CONFIRMATION) {
+  if (input.confirmation === COMMUNITIES_STAGED_REHEARSAL_32_CONFIRMATION) {
+    fail('32_ACL_MATRIX_REQUIRED');
+  }
+  const contractVersion =
+    input.confirmation === COMMUNITIES_STAGED_REHEARSAL_CONFIRMATION ? '29_V1' : null;
+  if (!contractVersion) {
     fail('CONFIRMATION_REQUIRED');
   }
   if (
     !input.phase ||
-    !(COMMUNITIES_STAGED_REHEARSAL_PHASES as readonly string[]).includes(input.phase)
+    !(
+      contractVersion === '29_V1'
+        ? COMMUNITIES_STAGED_REHEARSAL_PHASES
+        : COMMUNITIES_STAGED_REHEARSAL_32_PHASES
+    ).includes(input.phase as never)
   ) {
     fail('PHASE_INVALID');
   }
@@ -121,6 +159,7 @@ export function resolveCommunitiesStagedRehearsalRequest(input: {
   if (connectionDatabase !== input.restoreDatabase) fail('DATABASE_TARGET_MISMATCH');
 
   return {
+    contractVersion,
     phase: input.phase as CommunitiesStagedRehearsalPhase,
     restoreDatabase: input.restoreDatabase,
   };
@@ -131,21 +170,48 @@ export function selectCommunitiesStagedRehearsalMigrations(input: {
   readonly appliedFilenames: ReadonlySet<string>;
   readonly packagedFilenames: readonly string[];
 }): readonly string[] {
+  const plan =
+    input.request.contractVersion === '29_V1'
+      ? {
+          phases: COMMUNITIES_STAGED_REHEARSAL_PHASES,
+          pending: COMMUNITIES_STAGED_REHEARSAL_PENDING_FILENAMES,
+        }
+      : {
+          phases: COMMUNITIES_STAGED_REHEARSAL_32_PHASES,
+          pending: COMMUNITIES_STAGED_REHEARSAL_32_PENDING_FILENAMES,
+        };
   const phaseFilenames =
     input.request.phase === 'pre_foundation'
       ? COMMUNITIES_STAGED_REHEARSAL_PRE_FOUNDATION_FILENAMES
       : input.request.phase === 'foundation'
         ? COMMUNITIES_STAGED_REHEARSAL_FOUNDATION_FILENAMES
-        : COMMUNITIES_STAGED_REHEARSAL_POST_FOUNDATION_FILENAMES;
+        : input.request.phase === 'post_foundation'
+          ? COMMUNITIES_STAGED_REHEARSAL_POST_FOUNDATION_FILENAMES
+          : COMMUNITIES_STAGED_REHEARSAL_ELIGIBILITY_PAYMENT_FILENAMES;
   const expectedPending =
     input.request.phase === 'pre_foundation'
-      ? COMMUNITIES_STAGED_REHEARSAL_PENDING_FILENAMES
+      ? plan.pending
       : input.request.phase === 'foundation'
-        ? [
-            ...COMMUNITIES_STAGED_REHEARSAL_FOUNDATION_FILENAMES,
-            ...COMMUNITIES_STAGED_REHEARSAL_POST_FOUNDATION_FILENAMES,
-          ]
-        : COMMUNITIES_STAGED_REHEARSAL_POST_FOUNDATION_FILENAMES;
+        ? input.request.contractVersion === '29_V1'
+          ? [
+              ...COMMUNITIES_STAGED_REHEARSAL_FOUNDATION_FILENAMES,
+              ...COMMUNITIES_STAGED_REHEARSAL_POST_FOUNDATION_FILENAMES,
+            ]
+          : [
+              ...COMMUNITIES_STAGED_REHEARSAL_FOUNDATION_FILENAMES,
+              ...COMMUNITIES_STAGED_REHEARSAL_POST_FOUNDATION_FILENAMES,
+              ...COMMUNITIES_STAGED_REHEARSAL_ELIGIBILITY_PAYMENT_FILENAMES,
+            ]
+        : input.request.phase === 'post_foundation'
+          ? input.request.contractVersion === '29_V1'
+            ? COMMUNITIES_STAGED_REHEARSAL_POST_FOUNDATION_FILENAMES
+            : [
+                ...COMMUNITIES_STAGED_REHEARSAL_POST_FOUNDATION_FILENAMES,
+                ...COMMUNITIES_STAGED_REHEARSAL_ELIGIBILITY_PAYMENT_FILENAMES,
+              ]
+          : COMMUNITIES_STAGED_REHEARSAL_ELIGIBILITY_PAYMENT_FILENAMES;
+
+  if (!(plan.phases as readonly string[]).includes(input.request.phase)) fail('PHASE_INVALID');
 
   const actualPending = exactOrderedDifference(input.packagedFilenames, input.appliedFilenames);
   if (!sameOrderedValues(actualPending, expectedPending)) {

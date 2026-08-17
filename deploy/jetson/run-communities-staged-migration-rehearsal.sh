@@ -16,24 +16,34 @@ IFS=$previous_ifs
 set +f
 
 confirmation=${1:-}
-expected_active_release=${2:-}
-expected_source_ledger_sha=${3:-}
-expected_target_database=${4:-}
-expected_system_identifier=${5:-}
-expected_candidate_sha=${6:-}
-expected_migrator_digest=${7:-}
-expected_release_env_sha=${8:-}
-expected_compose_sha=${9:-}
-expected_manifest_sha=${10:-}
-manifest_base64=${11:-}
-expected_wrapper_sha=${12:-}
-expected_rehearsal_sha=${13:-}
-expected_ledger_verifier_sha=${14:-}
-expected_restore_helper_sha=${15:-}
+expected_contract_version=${2:-}
+expected_pending_set_sha=${3:-}
+expected_active_release=${4:-}
+expected_source_ledger_sha=${5:-}
+expected_target_database=${6:-}
+expected_system_identifier=${7:-}
+expected_candidate_sha=${8:-}
+expected_migrator_digest=${9:-}
+expected_release_env_sha=${10:-}
+expected_compose_sha=${11:-}
+expected_manifest_sha=${12:-}
+manifest_base64=${13:-}
+expected_wrapper_sha=${14:-}
+expected_rehearsal_sha=${15:-}
+expected_ledger_verifier_sha=${16:-}
+expected_restore_helper_sha=${17:-}
 
-test "$#" -eq 15 || fail 'exact staged rehearsal binding tuple is required'
-test "$confirmation" = REHEARSE_COMMUNITIES_STAGING_29_V1 ||
-  fail 'exact staged rehearsal confirmation is required'
+case "$confirmation" in
+  REHEARSE_COMMUNITIES_STAGING_29_V1) ;;
+  REHEARSE_COMMUNITIES_STAGING_32_V1)
+    fail '32_V1 is clone-evidence preparation only until a separately approved runtime ACL matrix exists'
+    ;;
+  *) fail 'exact staged rehearsal confirmation is required' ;;
+esac
+test "$#" -eq 17 || fail 'exact staged rehearsal binding tuple is required'
+test "$expected_contract_version" = 29_V1 || fail 'staged rehearsal contract version is invalid'
+test "$expected_pending_set_sha" = 13b5ca1d0930fdc4b67852f01418c27f8946f538f2311d7e5f755ecb2df12747 ||
+  fail 'staged rehearsal pending set binding is invalid'
 
 validate_hex() {
   value=$1
@@ -44,6 +54,7 @@ validate_hex() {
 }
 
 validate_hex "$expected_active_release" 40 'active release binding'
+validate_hex "$expected_pending_set_sha" 64 'pending set binding'
 validate_hex "$expected_source_ledger_sha" 64 'source ledger binding'
 validate_hex "$expected_candidate_sha" 40 'candidate release binding'
 validate_hex "$expected_release_env_sha" 64 'candidate release file binding'
@@ -326,6 +337,8 @@ printf 'META|rehearsalScriptSha|%s\n' "$actual_rehearsal_sha"
 printf 'META|ledgerVerifierSha|%s\n' "$actual_ledger_verifier_sha"
 printf 'META|restoreHelperSha|%s\n' "$actual_restore_helper_sha"
 printf 'META|activeRelease|%s\n' "$expected_active_release"
+printf 'META|contractVersion|%s\n' "$expected_contract_version"
+printf 'META|pendingSetSha|%s\n' "$expected_pending_set_sha"
 printf 'META|sourceLedgerSha|%s\n' "$expected_source_ledger_sha"
 printf 'META|targetDatabase|%s\n' "$expected_target_database"
 printf 'META|systemIdentifier|%s\n' "$expected_system_identifier"
