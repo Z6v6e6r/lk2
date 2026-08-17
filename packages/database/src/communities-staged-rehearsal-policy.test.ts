@@ -4,10 +4,14 @@ import { describe, expect, it } from 'vitest';
 
 import {
   COMMUNITIES_STAGED_REHEARSAL_CONFIRMATION,
+  COMMUNITIES_STAGED_REHEARSAL_32_CONFIRMATION,
+  COMMUNITIES_STAGED_REHEARSAL_32_PENDING_FILENAMES,
+  COMMUNITIES_STAGED_REHEARSAL_ELIGIBILITY_PAYMENT_FILENAMES,
   COMMUNITIES_STAGED_REHEARSAL_FOUNDATION_FILENAMES,
   COMMUNITIES_STAGED_REHEARSAL_PENDING_FILENAMES,
   COMMUNITIES_STAGED_REHEARSAL_POST_FOUNDATION_FILENAMES,
   COMMUNITIES_STAGED_REHEARSAL_PRE_FOUNDATION_FILENAMES,
+  communitiesStagedRehearsalPendingSetSha256,
   resolveCommunitiesStagedRehearsalRequest,
   selectCommunitiesStagedRehearsalMigrations,
 } from './communities-staged-rehearsal-policy.js';
@@ -15,9 +19,19 @@ import {
 const restoreDatabase = 'phub_restore_31944858210_1';
 const connectionString = `postgresql://migrator:secret@postgres:5432/${restoreDatabase}`;
 
-function request(phase: 'pre_foundation' | 'foundation' | 'post_foundation') {
+function request(
+  phase: 'pre_foundation' | 'foundation' | 'post_foundation' | 'eligibility_payment',
+  confirmation = COMMUNITIES_STAGED_REHEARSAL_CONFIRMATION,
+) {
+  if (confirmation === COMMUNITIES_STAGED_REHEARSAL_32_CONFIRMATION) {
+    return {
+      contractVersion: '32_V1' as const,
+      phase,
+      restoreDatabase,
+    };
+  }
   const value = resolveCommunitiesStagedRehearsalRequest({
-    confirmation: COMMUNITIES_STAGED_REHEARSAL_CONFIRMATION,
+    confirmation,
     phase,
     restoreDatabase,
     connectionString,
@@ -29,6 +43,15 @@ function request(phase: 'pre_foundation' | 'foundation' | 'post_foundation') {
 describe('Communities staged migration rehearsal policy', () => {
   it('does not affect an ordinary migrator invocation', () => {
     expect(resolveCommunitiesStagedRehearsalRequest({ connectionString })).toBeNull();
+  });
+
+  it('binds each version to the SHA-256 of its ordered pending filenames', () => {
+    expect(
+      communitiesStagedRehearsalPendingSetSha256(COMMUNITIES_STAGED_REHEARSAL_PENDING_FILENAMES),
+    ).toBe('13b5ca1d0930fdc4b67852f01418c27f8946f538f2311d7e5f755ecb2df12747');
+    expect(
+      communitiesStagedRehearsalPendingSetSha256(COMMUNITIES_STAGED_REHEARSAL_32_PENDING_FILENAMES),
+    ).toBe('f5ea040e4498a45310ad671f321e3044c33743ca7b0cbee7c72bc01ee9b6a91d');
   });
 
   it.each([
@@ -43,6 +66,17 @@ describe('Communities staged migration rehearsal policy', () => {
     expect(() => resolveCommunitiesStagedRehearsalRequest({ ...input, connectionString })).toThrow(
       'COMMUNITIES_STAGED_REHEARSAL_',
     );
+  });
+
+  it('rejects the preparation-only 32-file contract at the migrator policy boundary', () => {
+    expect(() =>
+      resolveCommunitiesStagedRehearsalRequest({
+        confirmation: COMMUNITIES_STAGED_REHEARSAL_32_CONFIRMATION,
+        phase: 'pre_foundation',
+        restoreDatabase,
+        connectionString,
+      }),
+    ).toThrow('COMMUNITIES_STAGED_REHEARSAL_32_ACL_MATRIX_REQUIRED');
   });
 
   it.each([
@@ -96,6 +130,141 @@ describe('Communities staged migration rehearsal policy', () => {
       }),
     ).toEqual(COMMUNITIES_STAGED_REHEARSAL_POST_FOUNDATION_FILENAMES);
   });
+
+  it('keeps the 29-file contract frozen when the 32-file contract is present', () => {
+    const packaged = ['0001_initial.sql', ...COMMUNITIES_STAGED_REHEARSAL_32_PENDING_FILENAMES];
+    expect(() =>
+      selectCommunitiesStagedRehearsalMigrations({
+        request: request('pre_foundation'),
+        appliedFilenames: new Set(['0001_initial.sql']),
+        packagedFilenames: packaged,
+      }),
+    ).toThrow('COMMUNITIES_STAGED_REHEARSAL_PENDING_SET_MISMATCH');
+  });
+
+  it('selects the exact four phases for the reviewed 32-file pending set', () => {
+    const packaged = ['0001_initial.sql', ...COMMUNITIES_STAGED_REHEARSAL_32_PENDING_FILENAMES];
+    const initiallyApplied = new Set(['0001_initial.sql']);
+    const confirmation = COMMUNITIES_STAGED_REHEARSAL_32_CONFIRMATION;
+    expect(
+      selectCommunitiesStagedRehearsalMigrations({
+        request: request('pre_foundation', confirmation),
+        appliedFilenames: initiallyApplied,
+        packagedFilenames: packaged,
+      }),
+    ).toEqual(COMMUNITIES_STAGED_REHEARSAL_PRE_FOUNDATION_FILENAMES);
+
+    const afterPre = new Set([
+      ...initiallyApplied,
+      ...COMMUNITIES_STAGED_REHEARSAL_PRE_FOUNDATION_FILENAMES,
+    ]);
+    expect(
+      selectCommunitiesStagedRehearsalMigrations({
+        request: request('foundation', confirmation),
+        appliedFilenames: afterPre,
+        packagedFilenames: packaged,
+      }),
+    ).toEqual(COMMUNITIES_STAGED_REHEARSAL_FOUNDATION_FILENAMES);
+
+    const afterFoundation = new Set([
+      ...afterPre,
+      ...COMMUNITIES_STAGED_REHEARSAL_FOUNDATION_FILENAMES,
+    ]);
+    expect(
+      selectCommunitiesStagedRehearsalMigrations({
+        request: request('post_foundation', confirmation),
+        appliedFilenames: afterFoundation,
+        packagedFilenames: packaged,
+      }),
+    ).toEqual(COMMUNITIES_STAGED_REHEARSAL_POST_FOUNDATION_FILENAMES);
+
+    const afterPostFoundation = new Set([
+      ...afterFoundation,
+      ...COMMUNITIES_STAGED_REHEARSAL_POST_FOUNDATION_FILENAMES,
+    ]);
+    expect(
+      selectCommunitiesStagedRehearsalMigrations({
+        request: request('eligibility_payment', confirmation),
+        appliedFilenames: afterPostFoundation,
+        packagedFilenames: packaged,
+      }),
+    ).toEqual(COMMUNITIES_STAGED_REHEARSAL_ELIGIBILITY_PAYMENT_FILENAMES);
+  });
+
+  it('rejects a 32-file phase when its contract version does not match', () => {
+    expect(() =>
+      selectCommunitiesStagedRehearsalMigrations({
+        request: request('eligibility_payment', COMMUNITIES_STAGED_REHEARSAL_32_CONFIRMATION),
+        appliedFilenames: new Set(['0001_initial.sql']),
+        packagedFilenames: ['0001_initial.sql', ...COMMUNITIES_STAGED_REHEARSAL_PENDING_FILENAMES],
+      }),
+    ).toThrow('COMMUNITIES_STAGED_REHEARSAL_PENDING_SET_MISMATCH');
+  });
+
+  it.each([
+    ['missing', COMMUNITIES_STAGED_REHEARSAL_32_PENDING_FILENAMES.slice(1)],
+    ['additional', [...COMMUNITIES_STAGED_REHEARSAL_32_PENDING_FILENAMES, '0087_unreviewed.sql']],
+    [
+      'reordered',
+      [
+        COMMUNITIES_STAGED_REHEARSAL_32_PENDING_FILENAMES[1],
+        COMMUNITIES_STAGED_REHEARSAL_32_PENDING_FILENAMES[0],
+        ...COMMUNITIES_STAGED_REHEARSAL_32_PENDING_FILENAMES.slice(2),
+      ],
+    ],
+  ])('rejects a %s filename in the preparation-only 32-file plan', (_label, pending) => {
+    expect(() =>
+      selectCommunitiesStagedRehearsalMigrations({
+        request: request('pre_foundation', COMMUNITIES_STAGED_REHEARSAL_32_CONFIRMATION),
+        appliedFilenames: new Set(['0001_initial.sql']),
+        packagedFilenames: ['0001_initial.sql', ...pending],
+      }),
+    ).toThrow('COMMUNITIES_STAGED_REHEARSAL_PENDING_SET_MISMATCH');
+  });
+
+  it.each([
+    [
+      'pre_foundation',
+      [] as readonly string[],
+      COMMUNITIES_STAGED_REHEARSAL_PRE_FOUNDATION_FILENAMES[0],
+    ],
+    [
+      'foundation',
+      COMMUNITIES_STAGED_REHEARSAL_PRE_FOUNDATION_FILENAMES,
+      COMMUNITIES_STAGED_REHEARSAL_FOUNDATION_FILENAMES[0],
+    ],
+    [
+      'post_foundation',
+      [
+        ...COMMUNITIES_STAGED_REHEARSAL_PRE_FOUNDATION_FILENAMES,
+        ...COMMUNITIES_STAGED_REHEARSAL_FOUNDATION_FILENAMES,
+      ],
+      COMMUNITIES_STAGED_REHEARSAL_POST_FOUNDATION_FILENAMES[0],
+    ],
+    [
+      'eligibility_payment',
+      [
+        ...COMMUNITIES_STAGED_REHEARSAL_PRE_FOUNDATION_FILENAMES,
+        ...COMMUNITIES_STAGED_REHEARSAL_FOUNDATION_FILENAMES,
+        ...COMMUNITIES_STAGED_REHEARSAL_POST_FOUNDATION_FILENAMES,
+      ],
+      COMMUNITIES_STAGED_REHEARSAL_ELIGIBILITY_PAYMENT_FILENAMES[0],
+    ],
+  ] as const)(
+    'rejects a partial commit inside the 32-file %s phase',
+    (phase, previouslyApplied, partiallyApplied) => {
+      expect(() =>
+        selectCommunitiesStagedRehearsalMigrations({
+          request: request(phase, COMMUNITIES_STAGED_REHEARSAL_32_CONFIRMATION),
+          appliedFilenames: new Set(['0001_initial.sql', ...previouslyApplied, partiallyApplied]),
+          packagedFilenames: [
+            '0001_initial.sql',
+            ...COMMUNITIES_STAGED_REHEARSAL_32_PENDING_FILENAMES,
+          ],
+        }),
+      ).toThrow('COMMUNITIES_STAGED_REHEARSAL_PENDING_SET_MISMATCH');
+    },
+  );
 
   it.each([
     ['missing one reviewed file', COMMUNITIES_STAGED_REHEARSAL_PENDING_FILENAMES.slice(1)],

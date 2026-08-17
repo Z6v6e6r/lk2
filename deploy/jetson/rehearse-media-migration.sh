@@ -18,6 +18,9 @@ staged_rehearsal=false
 case "${COMMUNITIES_STAGED_REHEARSAL_CONFIRMATION:-}" in
   '') ;;
   COMMUNITIES_STAGED_REHEARSAL_29_V1) staged_rehearsal=true ;;
+  COMMUNITIES_STAGED_REHEARSAL_32_V1)
+    fail '32_V1 is clone-evidence preparation only until a separately approved runtime ACL matrix exists'
+    ;;
   *) fail 'staged rehearsal confirmation is invalid' ;;
 esac
 test -n "${RUNTIME_DATABASE_URL:-}" || fail 'RUNTIME_DATABASE_URL is required'

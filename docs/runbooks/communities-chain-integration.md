@@ -269,13 +269,19 @@ two-line candidate file without editing it, verifies the recorded SHA-256, and i
 `root:phub-deploy` mode `0440` at the bounded path below. Installation and rehearsal dispatch are
 separate approval gates; neither is implied by the image build.
 
-Before the first real run, an authorized staging administrator installs these repository-matched
-files as root-owned, non-writable commands:
+Before the next real run, an authorized staging administrator atomically reinstalls these
+repository-matched files as root-owned, non-writable commands:
 
 - `/usr/local/libexec/phub/run-communities-staged-migration-rehearsal.sh`;
 - `/usr/local/libexec/phub/rehearse-media-migration.sh`;
 - `/usr/local/libexec/phub/verify-media-migration-ledger.sh`;
 - `/usr/local/libexec/phub/verify-postgres-backup-restore.sh`.
+
+The strengthened `29_V1` wire binding has 17 fields and its successful evidence has exactly 31
+lines. It is intentionally fail-closed across a partial installation: an old 15-field caller is
+rejected by the new wrapper, while an old wrapper rejects the new 17-field call before Docker,
+backup or database access. Do not dispatch until all installed command SHA-256 values match the
+same merged revision and the 17-field contract test has passed.
 
 The dedicated key has only this forced command:
 
@@ -303,7 +309,7 @@ ACL and default-ACL TOC evidence, and rechecks that the source tuple did not cha
 Only that new archive can enter the bounded clone rehearsal. Failed attempts delete any newly
 created archive unless the full clone rehearsal succeeds; clone cleanup remains marker-guarded.
 Raw child stdout/stderr is not uploaded, while the successful artifact contains only the fixed
-29-line allowlisted evidence contract: metadata, four explicit false authorization fields, the
+31-line allowlisted evidence contract: metadata (including contract version and pending-set SHA), four explicit false authorization fields, the
 privacy backfill audit, four named rollback-only index timings and the final staged completion line.
 The candidate image is pulled and digest-checked before the post-pull capacity gate and backup. Both
 runner and host use bounded timeouts.
@@ -312,6 +318,39 @@ The workflow never changes shared `/opt/phub/release.env`, never targets the sha
 the migrator, never starts an application process, and has no deploy, import or activation step.
 Installing the commands/release file and dispatching the workflow are separate privileged actions;
 merging this implementation grants neither authority.
+
+### Reserved exact 32-file clone-evidence contract
+
+The later staging inventory has the same ordered 29-file set plus these exact three files in a
+fourth `eligibility_payment` phase:
+
+- `0084_participation_level_eligibility.sql`;
+- `0085_game_payment_confirmation_evidence.sql`;
+- `0086_game_payment_provider_exercise_binding.sql`.
+
+`COMMUNITIES_STAGED_REHEARSAL_32_V1` is a versioned, clone-only preparation contract. Its pending
+boundaries are exactly `16+5+8+3`, `5+8+3`, `8+3`, `3`, then an ordinary no-op. The phase binding
+must include the contract version and the SHA-256 of the ordered pending filenames; the current
+32-file value is `f5ea040e4498a45310ad671f321e3044c33743ca7b0cbee7c72bc01ee9b6a91d`. Missing,
+additional, reordered, partial or cross-version sets fail before DDL.
+
+This is explicitly **not execution-ready**. No authoritative runtime ACL matrix exists for the
+new `eligibility` and payment-evidence tables. The dispatch token
+`REHEARSE_COMMUNITIES_STAGING_32_V1`, the forced command, the clone helper and the migrator request
+policy deliberately fail closed before SSH, backup, clone, Docker, database-pool creation or DDL.
+Do not guess grants or add them as a rehearsal shortcut. The versioned policy proves the intended
+ordering; it is not an executable rehearsal path. A separately reviewed ACL matrix and a new
+bounded authorization are required before enabling any 32_V1 execution path.
+
+When that gate is separately implemented and approved, its fixed redacted evidence must contain
+the contract version, pending-set SHA, one aggregate eligibility audit and one aggregate payment
+evidence audit. The eligibility audit must prove exactly seven PADEL levels, three active OFF
+policies and three all-false readiness rows per tenant; known-label/mappable-range backfill checks;
+aggregate unknown, unmapped and reversed counts; and unchanged participant, reservation and
+waitlist primary-key counts and digests. The payment audit must prove the expected table, FORCE
+RLS, tenant policy, validated constraints and index, a nullable validated `provider_exercise_id`,
+and zero fresh-chain evidence rows without emitting identifiers or other sensitive values. Its final
+line must include `eligibility_payment=3`; every `authorizes*=false` boundary remains unchanged.
 
 ## Activation boundary
 

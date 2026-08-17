@@ -58,11 +58,8 @@ describe('Communities staged migration protected dispatch', () => {
     const ledgerVerifier = join(directory, 'verify-ledger.sh');
     const restoreHelper = join(directory, 'verify-restore.sh');
     const dockerLog = join(directory, 'docker.log');
+    await Promise.all([mkdir(appRoot), mkdir(backupRoot), mkdir(secretRoot), mkdir(bin)]);
     await Promise.all([
-      mkdir(appRoot),
-      mkdir(backupRoot),
-      mkdir(secretRoot),
-      mkdir(bin),
       writeFile(join(appRoot, 'infrastructure.env'), 'POSTGRES_USER=phub\n'),
       writeFile(join(appRoot, 'compose.infrastructure.yaml'), 'services: {}\n'),
       writeFile(composeFile, 'services: {}\n'),
@@ -180,6 +177,8 @@ esac
         .digest('hex');
     const arguments_ = [
       'REHEARSE_COMMUNITIES_STAGING_29_V1',
+      '29_V1',
+      '13b5ca1d0930fdc4b67852f01418c27f8946f538f2311d7e5f755ecb2df12747',
       activeRelease,
       sourceLedgerSha,
       'phub',
@@ -216,9 +215,13 @@ esac
     const result = await execute(environment);
     const retained = await readdir(backupRoot);
     expect(result.stderr).toBe('');
-    expect(result.stdout.trim().split('\n')).toHaveLength(29);
+    expect(result.stdout.trim().split('\n')).toHaveLength(31);
     expect(result.stdout).toContain('META|rehearsalStatus|passed');
     expect(result.stdout).toContain(`META|candidateSha|${candidateSha}`);
+    expect(result.stdout).toContain('META|contractVersion|29_V1');
+    expect(result.stdout).toContain(
+      'META|pendingSetSha|13b5ca1d0930fdc4b67852f01418c27f8946f538f2311d7e5f755ecb2df12747',
+    );
     expect(result.stdout).toContain('META|authorizesSharedMigration|false');
     expect(result.stdout.match(/community_media_quota_index_measurement index=/gu)).toHaveLength(4);
     expect(result.stdout).toContain('communities_profile_privacy_audit missing_before=2');
@@ -244,6 +247,16 @@ esac
       ].join(' '),
     }).catch((error: Error) => error);
     expect(mismatched).toBeInstanceOf(Error);
+    expect(await readdir(backupRoot)).toEqual(beforeMismatch);
+    expect(await readFile(dockerLog, 'utf8')).toBe(dockerBeforeMismatch);
+
+    const oldFifteenFieldTuple = [arguments_[0], ...arguments_.slice(3)];
+    expect(oldFifteenFieldTuple).toHaveLength(15);
+    const staleProtocol = await execute({
+      ...environment,
+      SSH_ORIGINAL_COMMAND: oldFifteenFieldTuple.join(' '),
+    }).catch((error: Error) => error);
+    expect(staleProtocol).toBeInstanceOf(Error);
     expect(await readdir(backupRoot)).toEqual(beforeMismatch);
     expect(await readFile(dockerLog, 'utf8')).toBe(dockerBeforeMismatch);
 
@@ -291,6 +304,8 @@ esac
     expect(workflow).toContain('STAGING_REHEARSAL_KEY');
     expect(workflow).not.toContain('STAGING_DEPLOY_KEY');
     expect(workflow).toContain('REHEARSE_COMMUNITIES_STAGING_29_V1');
+    expect(workflow).toContain('REHEARSE_COMMUNITIES_STAGING_32_V1');
+    expect(workflow).toContain('32_V1 is clone-evidence preparation only');
     expect(workflow).toContain('COMMUNITIES_STAGED_REHEARSAL_PENDING_FILENAMES');
     expect(workflow).toContain('phase_binding_sha');
     expect(workflow).toContain('sha256sum deploy/compose.staging.yaml');
@@ -308,5 +323,17 @@ esac
         'utf8',
       ),
     ).toContain('PHUB_MEDIA_LEDGER_VERIFIER');
+  });
+
+  it('rejects the reserved 32_V1 forced-command token before any backup or Docker access', async () => {
+    const error = await execute({
+      ...process.env,
+      SSH_ORIGINAL_COMMAND: 'REHEARSE_COMMUNITIES_STAGING_32_V1',
+    }).catch((value: Error) => value);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error & { stderr?: string }).stderr).toContain(
+      '32_V1 is clone-evidence preparation only',
+    );
   });
 });

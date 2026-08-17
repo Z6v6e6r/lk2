@@ -5,16 +5,20 @@ import { describe, expect, it } from 'vitest';
 const source = (path: string) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
 
 describe('Communities staged migration rehearsal contract', () => {
-  it('keeps the 29-file acknowledgement out of all deployment workflows', () => {
+  it('keeps staged acknowledgements out of all deployment workflows', () => {
     for (const workflow of [
       '.github/workflows/deploy-staging.yaml',
       '.github/workflows/deploy-production.yaml',
       '.github/workflows/communities-staging-preflight.yaml',
     ]) {
       expect(source(workflow)).not.toContain('COMMUNITIES_STAGED_REHEARSAL_29_V1');
+      expect(source(workflow)).not.toContain('COMMUNITIES_STAGED_REHEARSAL_32_V1');
     }
     expect(source('.github/workflows/communities-staged-migration-rehearsal.yaml')).toContain(
       'REHEARSE_COMMUNITIES_STAGING_29_V1',
+    );
+    expect(source('.github/workflows/communities-staged-migration-rehearsal.yaml')).toContain(
+      'REHEARSE_COMMUNITIES_STAGING_32_V1',
     );
   });
 
@@ -82,5 +86,19 @@ describe('Communities staged migration rehearsal contract', () => {
     expect(runbook).toContain('merging this implementation grants neither authority');
     expect(runbook).toContain('must not be the inventory key, backup key or `STAGING_DEPLOY_KEY`');
     expect(runbook).toContain('rejects the existing `postgres-communities-preflight-*`');
+  });
+
+  it('reserves 32_V1 as a fail-closed preparation contract until an ACL matrix is approved', () => {
+    const workflow = source('.github/workflows/communities-staged-migration-rehearsal.yaml');
+    const wrapper = source('deploy/jetson/run-communities-staged-migration-rehearsal.sh');
+    const rehearsal = source('deploy/jetson/rehearse-media-migration.sh');
+    const runbook = source('docs/runbooks/communities-chain-integration.md');
+
+    expect(workflow).toContain('32_V1 is clone-evidence preparation only');
+    expect(wrapper).toContain('32_V1 is clone-evidence preparation only');
+    expect(rehearsal).toContain('32_V1 is clone-evidence preparation only');
+    expect(runbook).toContain('f5ea040e4498a45310ad671f321e3044c33743ca7b0cbee7c72bc01ee9b6a91d');
+    expect(runbook).toContain('eligibility_payment=3');
+    expect(runbook).toContain('every `authorizes*=false` boundary remains unchanged');
   });
 });
