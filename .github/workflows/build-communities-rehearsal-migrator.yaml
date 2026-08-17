@@ -112,7 +112,7 @@ jobs:
           labels: |
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
-          provenance: mode=max
+          provenance: mode=max,version=v1
           sbom: true
           cache-from: type=gha,scope=migrator
           cache-to: type=gha,mode=max,scope=migrator

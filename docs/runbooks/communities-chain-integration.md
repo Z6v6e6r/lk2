@@ -250,13 +250,16 @@ Build that prerequisite only through
 `.github/workflows/build-communities-rehearsal-migrator.yaml`, dispatched from the exact reviewed
 `main` SHA with confirmation `BUILD_COMMUNITIES_REHEARSAL_MIGRATOR`. The workflow runs the source
 and migration gates, publishes only `phub-migrator` for `linux/arm64`, verifies its OCI platform,
-source-revision label, provenance and SBOM attestations, and emits the immutable image digest,
-migration-manifest digest and exact two-line candidate file. The retained artifact includes the raw
-OCI index, runtime manifest and config plus the raw attestation manifests and decoded provenance and
-SBOM. Before installation, record and verify the separate GitHub artifact digest shown in the build
-job summary as well as every digest inside the evidence file. It has no GitHub Environment, SSH,
-Tailscale, Compose, database, deploy or rehearsal authority. A successful build does not authorize
-installing the candidate file and does not authorize the staged rehearsal.
+source-revision label, exact in-toto `Statement/v1` attestations for SLSA provenance v1 and SPDX,
+and emits the immutable image digest, migration-manifest digest and exact two-line candidate file.
+The provenance request is pinned to `mode=max,version=v1`; evidence generation rejects legacy,
+hybrid, duplicate, missing or additional predicate types. The retained artifact includes the raw OCI
+index, runtime manifest and config, raw attestation manifests and statements, and decoded provenance
+and SBOM. The digest-bound statement predicates must exactly equal those decoded bodies. Before
+installation, record and verify the separate GitHub artifact digest shown in the build job summary
+as well as every digest inside the evidence file. It has no GitHub Environment, SSH, Tailscale,
+Compose, database, deploy or rehearsal authority. A successful build does not authorize installing
+the candidate file and does not authorize the staged rehearsal.
 If publication succeeds but evidence generation or upload fails, the run remains failed and its
 tag and digest are not eligible for installation. Do not rerun that workflow attempt; dispatch a
 fresh exact-main build, which receives a new run-unique tag and evidence bundle.
