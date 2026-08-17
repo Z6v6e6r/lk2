@@ -31,6 +31,8 @@ describe('game payment confirmation evidence migration', () => {
     expect(sql).toContain('add column if not exists provider_exercise_id text');
     expect(sql).toContain('provider_exercise_id is null');
     expect(sql).toContain('char_length(btrim(provider_exercise_id)) between 1 and 200');
-    expect(sql).toContain('validate constraint payment_confirmation_evidence_provider_exercise_id_check');
+    expect(sql).toContain(
+      'validate constraint payment_confirmation_evidence_provider_exercise_id_check',
+    );
   });
 });
