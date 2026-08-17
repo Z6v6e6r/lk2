@@ -194,6 +194,9 @@ describe('legacy runtime-secret bootstrap delivery contract', () => {
       controller.indexOf('legacy_compose()'),
       controller.indexOf('project_container_id()'),
     );
+    expect(legacyCompose).toContain('legacy_compose() (');
+    expect(legacyCompose).toContain('export RUNTIME_ENV_FILE="$secret_root/staging.env"');
+    expect(legacyCompose).toContain('export REALTIME_RUNTIME_ENV_FILE="$secret_root/staging.env"');
     expect(legacyCompose).toContain('RUNTIME_ENV_FILE="$secret_root/staging.env"');
     expect(legacyCompose).toContain('REALTIME_RUNTIME_ENV_FILE="$secret_root/staging.env"');
 
@@ -205,6 +208,19 @@ describe('legacy runtime-secret bootstrap delivery contract', () => {
     expect(backup).toContain('REALTIME_RUNTIME_ENV_FILE="$secret_root/staging.env"');
     expect(backup).toContain('BACKUP_STAGING_RELEASE');
     expect(backup).toContain('--validate-only');
+
+    const lifecycleExport = controller.indexOf(
+      'export REALTIME_RUNTIME_ENV_FILE="$secret_root/staging.env"',
+      controller.indexOf('candidate release file has wrong SHA'),
+    );
+    const prepared = controller.indexOf('run_helper verify-bootstrap-prepared');
+    const lifecycleUnset = controller.indexOf('unset RUNTIME_ENV_FILE REALTIME_RUNTIME_ENV_FILE');
+    const backupInvocation = controller.indexOf('BACKUP_STAGING_RELEASE', lifecycleExport);
+    const candidateProbe = controller.indexOf('candidate_api_ref=$(image_ref_from');
+    expect(lifecycleExport).toBeGreaterThan(0);
+    expect(lifecycleExport).toBeLessThan(backupInvocation);
+    expect(lifecycleUnset).toBeGreaterThan(prepared);
+    expect(lifecycleUnset).toBeLessThan(candidateProbe);
 
     const recovery = controller.slice(
       controller.indexOf(
@@ -242,13 +258,12 @@ describe('legacy runtime-secret bootstrap delivery contract', () => {
       controller.indexOf('pre_marker_phase rollback-validation'),
       controller.indexOf('control_tree=$(cat'),
     );
-    const explicitLegacyEnvironment = [
-      legacyCompose,
+    const explicitPreMarkerChildEnvironment = [
       candidateRender,
       backupCommand,
       rollbackValidationCommand,
     ];
-    for (const context of explicitLegacyEnvironment) {
+    for (const context of explicitPreMarkerChildEnvironment) {
       expect(context).toContain('env \\\n');
       expect(context).toContain('RUNTIME_ENV_FILE="$secret_root/staging.env"');
       expect(context).toContain('REALTIME_RUNTIME_ENV_FILE="$secret_root/staging.env"');
@@ -312,6 +327,50 @@ describe('legacy runtime-secret bootstrap delivery contract', () => {
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
+  });
+
+  it('executes the reviewed Compose functions with bounded legacy environment inheritance', () => {
+    const functions = controller.slice(
+      controller.indexOf('compose_with()'),
+      controller.indexOf('project_container_id()'),
+    );
+    const result = spawnSync(
+      '/bin/dash',
+      [
+        '-c',
+        [
+          'set -eu',
+          'app_root=/opt/phub',
+          'secret_root=/etc/phub',
+          'phase=unknown',
+          'docker() { printf "%s|%s|%s|%s\\n" "$phase" "${RUNTIME_ENV_FILE-unset}" "${REALTIME_RUNTIME_ENV_FILE-unset}" "$*"; }',
+          functions,
+          'export RUNTIME_ENV_FILE="$secret_root/staging.env"',
+          'export REALTIME_RUNTIME_ENV_FILE="$secret_root/staging.env"',
+          'phase=pre-marker',
+          'compose_with /candidate-compose.yaml /candidate-release.env config --quiet',
+          'phase=snapshot-child',
+          'sh -c \'printf "snapshot-child|%s|%s\\n" "$RUNTIME_ENV_FILE" "$REALTIME_RUNTIME_ENV_FILE"\'',
+          'unset RUNTIME_ENV_FILE REALTIME_RUNTIME_ENV_FILE',
+          'phase=candidate',
+          'compose_with /candidate-compose.yaml /candidate-release.env up realtime',
+          'phase=rollback',
+          'legacy_compose up realtime',
+          'printf "parent|%s|%s\\n" "${RUNTIME_ENV_FILE-unset}" "${REALTIME_RUNTIME_ENV_FILE-unset}"',
+        ].join('\n'),
+      ],
+      { encoding: 'utf8' },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe('');
+    expect(result.stdout.trim().split('\n')).toEqual([
+      'pre-marker|/etc/phub/staging.env|/etc/phub/staging.env|compose --project-name phub-staging --env-file /opt/phub/infrastructure.env --env-file /candidate-release.env -f /candidate-compose.yaml config --quiet',
+      'snapshot-child|/etc/phub/staging.env|/etc/phub/staging.env',
+      'candidate|unset|unset|compose --project-name phub-staging --env-file /opt/phub/infrastructure.env --env-file /candidate-release.env -f /candidate-compose.yaml up realtime',
+      'rollback|/etc/phub/staging.env|/etc/phub/staging.env|compose --project-name phub-staging --env-file /opt/phub/infrastructure.env --env-file /opt/phub/release.env -f /opt/phub/compose.yaml up realtime',
+      'parent|unset|unset',
+    ]);
   });
 
   it('limits the bootstrap helper to the capabilities required for deploy-owned 0600 files', () => {
