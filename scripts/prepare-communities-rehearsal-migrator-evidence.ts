@@ -61,6 +61,22 @@ export function requireDigest(bytes: Buffer, expectedDigest: string, code: strin
   }
 }
 
+export function selectDockerArchiveConfigPath(
+  entries: readonly string[],
+  configDigest: string,
+): string {
+  if (!digestPattern.test(configDigest)) {
+    fail('COMMUNITIES_REHEARSAL_RUNTIME_CONFIG_DIGEST_INVALID');
+  }
+  const configSha = configDigest.slice('sha256:'.length);
+  const supportedPaths = new Set([`${configSha}.json`, `blobs/sha256/${configSha}`]);
+  const matches = entries.filter((entry) => supportedPaths.has(entry));
+  if (matches.length !== 1) {
+    fail('COMMUNITIES_REHEARSAL_RUNTIME_CONFIG_ARCHIVE_PATH_INVALID');
+  }
+  return matches[0]!;
+}
+
 export function createCandidateReleaseBytes(candidateSha: string, migratorDigest: string): Buffer {
   if (!sha40Pattern.test(candidateSha)) fail('COMMUNITIES_REHEARSAL_CANDIDATE_SHA_INVALID');
   if (!digestPattern.test(migratorDigest)) fail('COMMUNITIES_REHEARSAL_MIGRATOR_DIGEST_INVALID');
@@ -433,6 +449,15 @@ async function main(): Promise<void> {
     const manifestBytes = await readFile(resolve(required(arguments_, '--runtime-manifest')));
     process.stdout.write(
       `${validateRuntimeManifest(JSON.parse(manifestBytes.toString('utf8')) as RuntimeManifest)}\n`,
+    );
+    return;
+  }
+  if (command === 'config-archive-path') {
+    const entries = (await readFile(resolve(required(arguments_, '--archive-list')), 'utf8')).split(
+      '\n',
+    );
+    process.stdout.write(
+      `${selectDockerArchiveConfigPath(entries, required(arguments_, '--config-digest'))}\n`,
     );
     return;
   }
