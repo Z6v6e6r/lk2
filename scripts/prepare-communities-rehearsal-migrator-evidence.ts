@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { readFile, readdir, writeFile } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { isDeepStrictEqual } from 'node:util';
 
 type Descriptor = {
   readonly digest?: string;
@@ -36,16 +37,27 @@ type AttestationLayer = {
 type InTotoStatement = {
   readonly _type?: string;
   readonly subject?: readonly {
+    readonly name?: string;
     readonly digest?: Readonly<Record<string, string>>;
   }[];
   readonly predicateType?: string;
   readonly predicate?: unknown;
+};
+export type AttestationStatementValidation = {
+  readonly predicateTypes: readonly string[];
+  readonly provenancePredicate: Readonly<Record<string, unknown>>;
+  readonly sbomPredicate: Readonly<Record<string, unknown>>;
 };
 
 const sha40Pattern = /^[0-9a-f]{40}$/u;
 const digestPattern = /^sha256:[0-9a-f]{64}$/u;
 const actorPattern = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/u;
 const runIdPattern = /^[1-9][0-9]*$/u;
+const provenancePredicateType = 'https://slsa.dev/provenance/v1';
+const sbomPredicateType = 'https://spdx.dev/Document';
+const statementType = 'https://in-toto.io/Statement/v1';
+const buildkitBuildType =
+  'https://github.com/moby/buildkit/blob/master/docs/attestations/slsa-definitions.md';
 
 function fail(code: string): never {
   throw new Error(code);
@@ -53,6 +65,10 @@ function fail(code: string): never {
 
 function sha256(bytes: string | Buffer): string {
   return createHash('sha256').update(bytes).digest('hex');
+}
+
+function isInTotoSubjects(value: unknown): value is NonNullable<InTotoStatement['subject']> {
+  return Array.isArray(value);
 }
 
 export function requireDigest(bytes: Buffer, expectedDigest: string, code: string): void {
@@ -156,10 +172,11 @@ export function validateAttestationManifests(
       layers.push({ digest: layer.digest!, predicateType });
     }
   }
-  const predicateTypes = new Set(layers.map((layer) => layer.predicateType));
+  const predicateTypes = layers.map((layer) => layer.predicateType).sort();
   if (
-    ![...predicateTypes].some((value) => value.startsWith('https://slsa.dev/provenance/')) ||
-    !predicateTypes.has('https://spdx.dev/Document')
+    predicateTypes.length !== 2 ||
+    predicateTypes[0] !== provenancePredicateType ||
+    predicateTypes[1] !== sbomPredicateType
   ) {
     fail('COMMUNITIES_REHEARSAL_REQUIRED_ATTESTATIONS_MISSING');
   }
@@ -170,29 +187,80 @@ export function validateAttestationStatements(
   layers: readonly AttestationLayer[],
   statements: readonly InTotoStatement[],
   runtimeDigest: string,
-): readonly string[] {
+): AttestationStatementValidation {
   if (layers.length !== statements.length || !digestPattern.test(runtimeDigest)) {
     fail('COMMUNITIES_REHEARSAL_ATTESTATION_STATEMENT_COUNT_MISMATCH');
   }
   const runtimeSha = runtimeDigest.slice('sha256:'.length);
-  const predicateTypes = new Set<string>();
+  const predicates = new Map<string, Readonly<Record<string, unknown>>>();
   for (let index = 0; index < layers.length; index += 1) {
     const layer = layers[index]!;
     const statement = statements[index]!;
+    if (!isInTotoSubjects(statement.subject)) {
+      fail('COMMUNITIES_REHEARSAL_ATTESTATION_STATEMENT_INVALID');
+    }
+    const subjects = statement.subject;
+    const subjectDigest = subjects[0]?.digest;
     if (
-      statement._type !== 'https://in-toto.io/Statement/v0.1' ||
+      statement._type !== statementType ||
       statement.predicateType !== layer.predicateType ||
-      statement.predicate === undefined ||
-      !Array.isArray(statement.subject) ||
-      !(statement.subject as NonNullable<InTotoStatement['subject']>).some(
-        (subject) => subject.digest?.sha256 === runtimeSha,
-      )
+      typeof statement.predicate !== 'object' ||
+      statement.predicate === null ||
+      Array.isArray(statement.predicate) ||
+      subjects.length !== 1 ||
+      !subjectDigest ||
+      Object.keys(subjectDigest).length !== 1 ||
+      subjectDigest.sha256 !== runtimeSha ||
+      predicates.has(layer.predicateType)
     ) {
       fail('COMMUNITIES_REHEARSAL_ATTESTATION_STATEMENT_INVALID');
     }
-    predicateTypes.add(layer.predicateType);
+    predicates.set(layer.predicateType, statement.predicate as Readonly<Record<string, unknown>>);
   }
-  return [...predicateTypes].sort();
+  const provenancePredicate = predicates.get(provenancePredicateType);
+  const sbomPredicate = predicates.get(sbomPredicateType);
+  if (!provenancePredicate || !sbomPredicate || predicates.size !== 2) {
+    fail('COMMUNITIES_REHEARSAL_REQUIRED_ATTESTATIONS_MISSING');
+  }
+  return {
+    predicateTypes: [...predicates.keys()].sort(),
+    provenancePredicate,
+    sbomPredicate,
+  };
+}
+
+export function validateAttestationContent(
+  validation: AttestationStatementValidation,
+  provenance: Readonly<Record<string, unknown>>,
+  sbom: Readonly<Record<string, unknown>>,
+  runId: string,
+): void {
+  const buildDefinition = validation.provenancePredicate.buildDefinition;
+  const runDetails = validation.provenancePredicate.runDetails;
+  const builder =
+    typeof runDetails === 'object' && runDetails !== null && !Array.isArray(runDetails)
+      ? (runDetails as Readonly<Record<string, unknown>>).builder
+      : undefined;
+  const buildType =
+    typeof buildDefinition === 'object' &&
+    buildDefinition !== null &&
+    !Array.isArray(buildDefinition)
+      ? (buildDefinition as Readonly<Record<string, unknown>>).buildType
+      : undefined;
+  const builderId =
+    typeof builder === 'object' && builder !== null && !Array.isArray(builder)
+      ? (builder as Readonly<Record<string, unknown>>).id
+      : undefined;
+  if (
+    !runIdPattern.test(runId) ||
+    buildType !== buildkitBuildType ||
+    builderId !== `https://github.com/Z6v6e6r/lk2/actions/runs/${runId}/attempts/1` ||
+    validation.sbomPredicate.SPDXID !== 'SPDXRef-DOCUMENT' ||
+    !isDeepStrictEqual(provenance, validation.provenancePredicate) ||
+    !isDeepStrictEqual(sbom, validation.sbomPredicate)
+  ) {
+    fail('COMMUNITIES_REHEARSAL_ATTESTATION_CONTENT_INVALID');
+  }
 }
 
 async function fetchGhcrBlob(digest: string, outputPath: string): Promise<void> {
@@ -364,16 +432,14 @@ async function prepare(arguments_: ReadonlyMap<string, string>): Promise<void> {
       'COMMUNITIES_REHEARSAL_ATTESTATION_STATEMENT_DIGEST_MISMATCH',
     );
   }
-  const predicateTypes = validateAttestationStatements(
+  const statementValidation = validateAttestationStatements(
     attestationLayers,
     statementBytes.map((bytes) => JSON.parse(bytes.toString('utf8')) as InTotoStatement),
     runtimeManifestDigest,
   );
   const provenance = JSON.parse(provenanceBytes.toString('utf8')) as Record<string, unknown>;
   const sbom = JSON.parse(sbomBytes.toString('utf8')) as Record<string, unknown>;
-  if (typeof provenance.buildType !== 'string' || sbom.SPDXID !== 'SPDXRef-DOCUMENT') {
-    fail('COMMUNITIES_REHEARSAL_ATTESTATION_CONTENT_INVALID');
-  }
+  validateAttestationContent(statementValidation, provenance, sbom, runId);
 
   const releaseBytes = createCandidateReleaseBytes(candidateSha, migratorDigest);
   const migrationManifestBytes = await buildMigrationManifest(repositoryRoot);
@@ -399,7 +465,7 @@ async function prepare(arguments_: ReadonlyMap<string, string>): Promise<void> {
     `META|runtimeConfigSha|${sha256(imageConfigBytes)}`,
     `META|attestationManifestShas|${attestationBytes.map((bytes) => sha256(bytes)).join(',')}`,
     `META|attestationStatementShas|${statementBytes.map((bytes) => sha256(bytes)).join(',')}`,
-    `META|attestationPredicateTypes|${predicateTypes.join(',')}`,
+    `META|attestationPredicateTypes|${statementValidation.predicateTypes.join(',')}`,
     `META|provenanceSha|${sha256(provenanceBytes)}`,
     `META|sbomSha|${sha256(sbomBytes)}`,
     `META|dockerfileSha|${sha256(dockerfileBytes)}`,

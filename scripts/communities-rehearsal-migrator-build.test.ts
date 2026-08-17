@@ -8,6 +8,7 @@ import {
   createCandidateReleaseBytes,
   requireDigest,
   selectDockerArchiveConfigPath,
+  validateAttestationContent,
   validateAttestationManifests,
   validateAttestationStatements,
   validateImageConfig,
@@ -68,7 +69,7 @@ describe('Communities rehearsal migrator build', () => {
     expect(workflow).toContain('test "$(git rev-parse HEAD)" = "$GITHUB_SHA"');
     expect(workflow).toContain('file: apps/migrator/Dockerfile');
     expect(workflow).toContain('platforms: linux/arm64');
-    expect(workflow).toContain('provenance: mode=max');
+    expect(workflow).toContain('provenance: mode=max,version=v1');
     expect(workflow).toContain('sbom: true');
     expect(workflow).toContain('org.opencontainers.image.revision=${{ github.sha }}');
     expect(workflow).toContain('release.communities-rehearsal-${{ github.sha }}.env');
@@ -129,7 +130,9 @@ describe('Communities rehearsal migrator build', () => {
   });
 
   it('requires provenance and SBOM statements bound to the runtime digest', () => {
-    const runtimeDigest = digest('b');
+    // Redacted regression shape from failed build run 32018208749. These are public OCI values.
+    const runtimeDigest = 'sha256:08116117bc9aaadbfbda3aef9649a5ce783d52699cbb0898093ff4e7d27c01e9';
+    const runId = '32018208749';
     const layers = validateAttestationManifests([
       {
         mediaType: 'application/vnd.oci.image.manifest.v1+json',
@@ -140,7 +143,7 @@ describe('Communities rehearsal migrator build', () => {
             digest: digest('c'),
             mediaType: 'application/vnd.in-toto+json',
             annotations: {
-              'in-toto.io/predicate-type': 'https://slsa.dev/provenance/v0.2',
+              'in-toto.io/predicate-type': 'https://slsa.dev/provenance/v1',
             },
           },
           {
@@ -151,26 +154,43 @@ describe('Communities rehearsal migrator build', () => {
         ],
       },
     ]);
-    const subject = [{ digest: { sha256: runtimeDigest.slice('sha256:'.length) } }];
+    const subject = [
+      {
+        name: 'pkg:docker/ghcr.io/z6v6e6r/phub-migrator@rehearsal-7005b7d1d831c8a21c05551bbc9130e20cf97611-32018208749?platform=linux%2Farm64',
+        digest: { sha256: runtimeDigest.slice('sha256:'.length) },
+      },
+    ];
+    const provenance = {
+      buildDefinition: {
+        buildType:
+          'https://github.com/moby/buildkit/blob/master/docs/attestations/slsa-definitions.md',
+      },
+      runDetails: {
+        builder: { id: `https://github.com/Z6v6e6r/lk2/actions/runs/${runId}/attempts/1` },
+      },
+    };
+    const sbom = { SPDXID: 'SPDXRef-DOCUMENT' };
     const statements = [
       {
-        _type: 'https://in-toto.io/Statement/v0.1',
+        _type: 'https://in-toto.io/Statement/v1',
         subject,
-        predicateType: 'https://slsa.dev/provenance/v0.2',
-        predicate: { buildType: 'https://mobyproject.org/buildkit@v1' },
+        predicateType: 'https://slsa.dev/provenance/v1',
+        predicate: provenance,
       },
       {
-        _type: 'https://in-toto.io/Statement/v0.1',
+        _type: 'https://in-toto.io/Statement/v1',
         subject,
         predicateType: 'https://spdx.dev/Document',
-        predicate: { SPDXID: 'SPDXRef-DOCUMENT' },
+        predicate: sbom,
       },
     ];
 
-    expect(validateAttestationStatements(layers, statements, runtimeDigest)).toEqual([
-      'https://slsa.dev/provenance/v0.2',
+    const validation = validateAttestationStatements(layers, statements, runtimeDigest);
+    expect(validation.predicateTypes).toEqual([
+      'https://slsa.dev/provenance/v1',
       'https://spdx.dev/Document',
     ]);
+    expect(() => validateAttestationContent(validation, provenance, sbom, runId)).not.toThrow();
     expect(() =>
       validateAttestationStatements(
         layers,
@@ -178,6 +198,87 @@ describe('Communities rehearsal migrator build', () => {
         runtimeDigest,
       ),
     ).toThrow('COMMUNITIES_REHEARSAL_ATTESTATION_STATEMENT_INVALID');
+    expect(() =>
+      validateAttestationStatements(
+        layers,
+        [{ ...statements[0], _type: 'https://in-toto.io/Statement/v0.1' }, statements[1]!],
+        runtimeDigest,
+      ),
+    ).toThrow('COMMUNITIES_REHEARSAL_ATTESTATION_STATEMENT_INVALID');
+    expect(() =>
+      validateAttestationStatements(
+        layers,
+        [{ ...statements[0], subject: [...subject, ...subject] }, statements[1]!],
+        runtimeDigest,
+      ),
+    ).toThrow('COMMUNITIES_REHEARSAL_ATTESTATION_STATEMENT_INVALID');
+    expect(() =>
+      validateAttestationContent(
+        validation,
+        { ...provenance, buildDefinition: { buildType: 'unexpected' } },
+        sbom,
+        runId,
+      ),
+    ).toThrow('COMMUNITIES_REHEARSAL_ATTESTATION_CONTENT_INVALID');
+    expect(() =>
+      validateAttestationContent(validation, provenance, { SPDXID: 'unexpected' }, runId),
+    ).toThrow('COMMUNITIES_REHEARSAL_ATTESTATION_CONTENT_INVALID');
+    const wrongBuilderProvenance = {
+      ...provenance,
+      runDetails: { builder: { id: 'https://github.com/Z6v6e6r/lk2/actions/runs/999/attempts/1' } },
+    };
+    expect(() =>
+      validateAttestationContent(
+        { ...validation, provenancePredicate: wrongBuilderProvenance },
+        wrongBuilderProvenance,
+        sbom,
+        runId,
+      ),
+    ).toThrow('COMMUNITIES_REHEARSAL_ATTESTATION_CONTENT_INVALID');
+    expect(() =>
+      validateAttestationContent(
+        validation,
+        { ...provenance, decodedOnlyField: 'substituted' },
+        sbom,
+        runId,
+      ),
+    ).toThrow('COMMUNITIES_REHEARSAL_ATTESTATION_CONTENT_INVALID');
+  });
+
+  it('rejects missing, duplicate or unexpected attestation predicates', () => {
+    const manifest = {
+      mediaType: 'application/vnd.oci.image.manifest.v1+json',
+      artifactType: 'application/vnd.docker.attestation.manifest.v1+json',
+      config: { digest: digest('e') },
+    };
+    const provenanceLayer = {
+      digest: digest('c'),
+      mediaType: 'application/vnd.in-toto+json',
+      annotations: { 'in-toto.io/predicate-type': 'https://slsa.dev/provenance/v1' },
+    };
+    const sbomLayer = {
+      digest: digest('d'),
+      mediaType: 'application/vnd.in-toto+json',
+      annotations: { 'in-toto.io/predicate-type': 'https://spdx.dev/Document' },
+    };
+
+    for (const layers of [
+      [provenanceLayer],
+      [provenanceLayer, provenanceLayer],
+      [
+        provenanceLayer,
+        sbomLayer,
+        {
+          ...sbomLayer,
+          digest: digest('f'),
+          annotations: { 'in-toto.io/predicate-type': 'https://example.invalid/predicate' },
+        },
+      ],
+    ]) {
+      expect(() => validateAttestationManifests([{ ...manifest, layers }])).toThrow(
+        'COMMUNITIES_REHEARSAL_REQUIRED_ATTESTATIONS_MISSING',
+      );
+    }
   });
 
   it('binds the runtime config and canonical two-line candidate bytes', () => {
@@ -266,7 +367,10 @@ describe('Communities rehearsal migrator build', () => {
     );
 
     expect(runbook).toContain('BUILD_COMMUNITIES_REHEARSAL_MIGRATOR');
-    expect(runbook).toMatch(/does not authorize\s+installing the candidate file/u);
+    expect(runbook).toContain('Statement/v1');
+    expect(runbook).toContain('mode=max,version=v1');
+    expect(runbook).toMatch(/statement predicates must exactly equal those decoded bodies/u);
+    expect(runbook).toMatch(/does not authorize\s+installing\s+the candidate file/u);
     expect(runbook).toContain('root:phub-deploy` mode `0440`');
     expect(runbook).toContain('does not authorize the staged rehearsal');
   });
