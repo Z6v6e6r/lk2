@@ -7,6 +7,7 @@ import { parse } from 'yaml';
 import {
   createCandidateReleaseBytes,
   requireDigest,
+  selectDockerArchiveConfigPath,
   validateAttestationManifests,
   validateAttestationStatements,
   validateImageConfig,
@@ -233,6 +234,29 @@ describe('Communities rehearsal migrator build', () => {
     ]) {
       expect(() => requireDigest(Buffer.from('substituted', 'utf8'), expected, code)).toThrow(code);
     }
+  });
+
+  it('selects exactly one supported Docker archive config layout', () => {
+    const configDigest = digest('7');
+    const configSha = configDigest.slice('sha256:'.length);
+    expect(selectDockerArchiveConfigPath([`${configSha}.json`], configDigest)).toBe(
+      `${configSha}.json`,
+    );
+    expect(selectDockerArchiveConfigPath([`blobs/sha256/${configSha}`], configDigest)).toBe(
+      `blobs/sha256/${configSha}`,
+    );
+    expect(() => selectDockerArchiveConfigPath(['manifest.json'], configDigest)).toThrow(
+      'COMMUNITIES_REHEARSAL_RUNTIME_CONFIG_ARCHIVE_PATH_INVALID',
+    );
+    expect(() =>
+      selectDockerArchiveConfigPath(
+        [`${configSha}.json`, `blobs/sha256/${configSha}`],
+        configDigest,
+      ),
+    ).toThrow('COMMUNITIES_REHEARSAL_RUNTIME_CONFIG_ARCHIVE_PATH_INVALID');
+    expect(() =>
+      selectDockerArchiveConfigPath([`../blobs/sha256/${configSha}`], configDigest),
+    ).toThrow('COMMUNITIES_REHEARSAL_RUNTIME_CONFIG_ARCHIVE_PATH_INVALID');
   });
 
   it('documents build, root installation and rehearsal as separate authority gates', async () => {

@@ -137,7 +137,13 @@ jobs:
             config-digest --runtime-manifest migrator-runtime-manifest.json)"
           docker pull --platform linux/arm64 "$IMAGE_REFERENCE@$runtime_digest"
           docker image save "$IMAGE_REFERENCE@$runtime_digest" --output migrator-image.tar
-          tar -xOf migrator-image.tar "${config_digest#sha256:}.json" > migrator-image-config.json
+          tar -tf migrator-image.tar > migrator-image-archive.list
+          config_path="$(node --experimental-strip-types \
+            scripts/prepare-communities-rehearsal-migrator-evidence.ts \
+            config-archive-path \
+            --config-digest "$config_digest" \
+            --archive-list migrator-image-archive.list)"
+          tar -xOf migrator-image.tar "$config_path" > migrator-image-config.json
           rm migrator-image.tar
           mkdir attestation-manifests
           node --experimental-strip-types \
