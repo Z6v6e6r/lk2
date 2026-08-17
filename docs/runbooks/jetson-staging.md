@@ -179,8 +179,12 @@ root-owned `0640` contour. The isolated root helper retains only `CHOWN`, `DAC_R
 `FOWNER`: the latter two are required to read and hard-link the deploy-owned `0600` source without
 granting write bypass. Before the helper atomically creates `/etc/phub/realtime.env`, snapshot
 validation and any old-runtime recovery explicitly render both API and realtime from the existing
-`staging.env`; candidate startup switches to the isolated file only after the durable marker records
-both prepared files. The legacy source contains a historical gitlink without matching submodule
+`staging.env`. The controller also requires the active Compose SHA-256
+`a9227a66be5044d0286592afb27aca073d50aa8d2ff21067504a0ffdb1804c2a`, which is the exact
+`e308181da5222645d9a87d03642923c6841be8d1` definition, and emits redacted pre-marker phase labels
+for the active render, candidate render, application backup and rollback validation. Candidate startup
+switches to the isolated file only after the durable marker records both prepared files. The legacy
+source contains a historical gitlink without matching submodule
 metadata, so the workflow acquires the candidate through its fixed public repository and exact
 40-character SHA without submodule discovery; do not replace that step with a branch checkout or
 submodule initialization. The workflow uses a clean `npm ci` dependency contour and requires the complete

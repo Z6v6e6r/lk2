@@ -1,5 +1,7 @@
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
@@ -227,6 +229,89 @@ describe('legacy runtime-secret bootstrap delivery contract', () => {
     expect(candidateStart).not.toContain(
       'legacy_compose up -d --no-deps --force-recreate --pull never realtime',
     );
+
+    const candidateRender = controller.slice(
+      controller.indexOf('pre_marker_phase candidate-compose-render'),
+      controller.indexOf('backup_path="$backup_root/pre-b0-'),
+    );
+    const backupCommand = controller.slice(
+      controller.indexOf('pre_marker_phase application-backup'),
+      controller.indexOf('pre_marker_phase rollback-validation'),
+    );
+    const rollbackValidationCommand = controller.slice(
+      controller.indexOf('pre_marker_phase rollback-validation'),
+      controller.indexOf('control_tree=$(cat'),
+    );
+    const explicitLegacyEnvironment = [
+      legacyCompose,
+      candidateRender,
+      backupCommand,
+      rollbackValidationCommand,
+    ];
+    for (const context of explicitLegacyEnvironment) {
+      expect(context).toContain('env \\\n');
+      expect(context).toContain('RUNTIME_ENV_FILE="$secret_root/staging.env"');
+      expect(context).toContain('REALTIME_RUNTIME_ENV_FILE="$secret_root/staging.env"');
+    }
+  });
+
+  it('fails closed on the exact legacy Compose and executes a missing-realtime-env render', () => {
+    expect(controller).toContain(
+      "supported_active_compose_sha='a9227a66be5044d0286592afb27aca073d50aa8d2ff21067504a0ffdb1804c2a'",
+    );
+    expect(controller).toContain('pre_marker_phase active-compose-render');
+    expect(controller).toContain('pre_marker_phase candidate-compose-render');
+    expect(controller).toContain('pre_marker_phase application-backup');
+    expect(controller).toContain('pre_marker_phase rollback-validation');
+    const rollbackValidation = controller.indexOf('pre_marker_phase rollback-validation');
+    const markerPublication = controller.indexOf('prepare-bootstrap-json');
+    const preMarkerRevalidation = controller.slice(rollbackValidation, markerPublication);
+    expect(preMarkerRevalidation).toContain('active Compose changed before marker publication');
+    expect(preMarkerRevalidation).toContain(
+      'saved active Compose differs from the reviewed legacy release',
+    );
+
+    const composeVersion = spawnSync('docker', ['compose', 'version'], { encoding: 'utf8' });
+    expect(composeVersion.status, composeVersion.stderr).toBe(0);
+
+    const directory = mkdtempSync(join(tmpdir(), 'phub-b0-compose-'));
+    try {
+      const stagingEnv = join(directory, 'staging.env');
+      const missingRealtimeEnv = join(directory, 'realtime.env');
+      writeFileSync(stagingEnv, 'B0_RENDER_PROBE=1\n', { mode: 0o600 });
+      const composePath = 'deploy/compose.staging.yaml';
+      const composeSource = readFileSync(composePath, 'utf8');
+      const requiredEnvironment: NodeJS.ProcessEnv = {};
+      for (const match of composeSource.matchAll(/\$\{([A-Z0-9_]+):\?/g)) {
+        const name = match[1];
+        if (name) requiredEnvironment[name] = `b0-${name.toLowerCase()}`;
+      }
+      const baseEnvironment: NodeJS.ProcessEnv = {
+        ...process.env,
+        REGISTRY: 'example.invalid/phub',
+        WEB_IMAGE_DIGEST: `sha256:${'0'.repeat(64)}`,
+        API_IMAGE_DIGEST: `sha256:${'1'.repeat(64)}`,
+        WORKER_IMAGE_DIGEST: `sha256:${'2'.repeat(64)}`,
+        REALTIME_IMAGE_DIGEST: `sha256:${'3'.repeat(64)}`,
+        MIGRATOR_IMAGE_DIGEST: `sha256:${'4'.repeat(64)}`,
+        RUNTIME_ENV_FILE: stagingEnv,
+        ...requiredEnvironment,
+      };
+      const missing = spawnSync('docker', ['compose', '-f', composePath, 'config', '--quiet'], {
+        encoding: 'utf8',
+        env: { ...baseEnvironment, REALTIME_RUNTIME_ENV_FILE: missingRealtimeEnv },
+      });
+      expect(missing.status).not.toBe(0);
+      expect(`${missing.stdout}${missing.stderr}`).toContain(missingRealtimeEnv);
+
+      const legacy = spawnSync('docker', ['compose', '-f', composePath, 'config', '--quiet'], {
+        encoding: 'utf8',
+        env: { ...baseEnvironment, REALTIME_RUNTIME_ENV_FILE: stagingEnv },
+      });
+      expect(legacy.status, `${legacy.stdout}${legacy.stderr}`).toBe(0);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   it('limits the bootstrap helper to the capabilities required for deploy-owned 0600 files', () => {

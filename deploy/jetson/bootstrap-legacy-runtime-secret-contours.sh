@@ -36,6 +36,11 @@ done
 printf '%s' "$workflow_run_id" | grep -Eq '^[0-9]+$' || fail 'workflow run ID is malformed'
 printf '%s' "$workflow_run_attempt" | grep -Eq '^[0-9]+$' || fail 'workflow run attempt is malformed'
 
+supported_active_release='e308181da5222645d9a87d03642923c6841be8d1'
+supported_active_compose_sha='a9227a66be5044d0286592afb27aca073d50aa8d2ff21067504a0ffdb1804c2a'
+test "$expected_active_release" = "$supported_active_release" ||
+  fail 'active release is not supported by this bootstrap controller'
+
 app_root=${PHUB_APP_ROOT:-/opt/phub}
 secret_root=${PHUB_SECRET_ROOT:-/etc/phub}
 backup_root="$app_root/backups/releases"
@@ -143,9 +148,17 @@ compose() {
 }
 
 legacy_compose() {
-  RUNTIME_ENV_FILE="$secret_root/staging.env" \
+  env \
+    RUNTIME_ENV_FILE="$secret_root/staging.env" \
     REALTIME_RUNTIME_ENV_FILE="$secret_root/staging.env" \
-    compose_with "$app_root/compose.yaml" "$app_root/release.env" "$@"
+    docker compose --project-name phub-staging \
+    --env-file "$app_root/infrastructure.env" \
+    --env-file "$app_root/release.env" \
+    -f "$app_root/compose.yaml" "$@"
+}
+
+pre_marker_phase() {
+  printf '%s\n' "legacy_runtime_secret_bootstrap pre_marker_phase=$1 status=started"
 }
 
 project_container_id() {
@@ -580,6 +593,10 @@ test "$(stat -c '%h:%u:%g:%a' "$secret_root/staging.env")" = "1:$deploy_uid:$dep
 test "$(df -Pk "$secret_root" | awk 'NR == 2 { print $4 }')" -ge 65536 || fail 'secret filesystem lacks block headroom'
 test "$(df -Pi "$secret_root" | awk 'NR == 2 { print $4 }')" -ge 128 || fail 'secret filesystem lacks inode headroom'
 assert_no_secret_shadowing
+test "$(sha256 "$app_root/compose.yaml")" = "$supported_active_compose_sha" ||
+  fail 'active Compose does not match the reviewed legacy release'
+pre_marker_phase active-compose-render
+legacy_compose --profile migration config --quiet
 
 old_nginx=$(nginx_id)
 old_caddy=$(caddy_id)
@@ -627,10 +644,21 @@ require_release_shape "$candidate_release_file"
 test "$(env_value "$candidate_release_file" RELEASE)" = "$candidate_release" || fail 'candidate release file has wrong SHA'
 test "$(env_value "$candidate_release_file" LATEST_MIGRATION)" = "$(env_value "$app_root/release.env" LATEST_MIGRATION)" || fail 'B0 may not change latest migration'
 
-RUNTIME_ENV_FILE="$secret_root/staging.env" REALTIME_RUNTIME_ENV_FILE="$secret_root/staging.env" \
-  compose_with "$bundle_path/compose.staging.yaml" "$candidate_release_file" --profile migration config --quiet
-candidate_images=$(RUNTIME_ENV_FILE="$secret_root/staging.env" REALTIME_RUNTIME_ENV_FILE="$secret_root/staging.env" \
-  compose_with "$bundle_path/compose.staging.yaml" "$candidate_release_file" --profile migration config --images)
+pre_marker_phase candidate-compose-render
+env \
+  RUNTIME_ENV_FILE="$secret_root/staging.env" \
+  REALTIME_RUNTIME_ENV_FILE="$secret_root/staging.env" \
+  docker compose --project-name phub-staging \
+  --env-file "$app_root/infrastructure.env" \
+  --env-file "$candidate_release_file" \
+  -f "$bundle_path/compose.staging.yaml" --profile migration config --quiet
+candidate_images=$(env \
+  RUNTIME_ENV_FILE="$secret_root/staging.env" \
+  REALTIME_RUNTIME_ENV_FILE="$secret_root/staging.env" \
+  docker compose --project-name phub-staging \
+  --env-file "$app_root/infrastructure.env" \
+  --env-file "$candidate_release_file" \
+  -f "$bundle_path/compose.staging.yaml" --profile migration config --images)
 test "$(printf '%s\n' "$candidate_images" | sed '/^$/d' | wc -l | tr -d ' ')" -eq 5 || fail 'candidate Compose must resolve exactly five images'
 for service in web api worker realtime migrator; do
   ref=$(image_ref_from "$candidate_release_file" "$service")
@@ -639,15 +667,23 @@ for service in web api worker realtime migrator; do
 done
 
 backup_path="$backup_root/pre-b0-$workflow_run_id-$workflow_run_attempt"
-RUNTIME_ENV_FILE="$secret_root/staging.env" \
+pre_marker_phase application-backup
+env \
+  RUNTIME_ENV_FILE="$secret_root/staging.env" \
   REALTIME_RUNTIME_ENV_FILE="$secret_root/staging.env" \
   PHUB_BACKUP_ROOT="$backup_root" \
   sh "$bundle_path/backup-application.sh" "$backup_path" BACKUP_STAGING_RELEASE
-RUNTIME_ENV_FILE="$secret_root/staging.env" \
+pre_marker_phase rollback-validation
+env \
+  RUNTIME_ENV_FILE="$secret_root/staging.env" \
   REALTIME_RUNTIME_ENV_FILE="$secret_root/staging.env" \
   PHUB_ROLLBACK_BACKUP_ROOT="$backup_root" \
   sh "$bundle_path/rollback-application.sh" "$backup_path" --validate-only
 test -f "$backup_path/backup.complete" && test ! -L "$backup_path/backup.complete" || fail 'application backup is incomplete'
+test "$(sha256 "$app_root/compose.yaml")" = "$supported_active_compose_sha" ||
+  fail 'active Compose changed before marker publication'
+test "$(sha256 "$backup_path/compose.yaml")" = "$supported_active_compose_sha" ||
+  fail 'saved active Compose differs from the reviewed legacy release'
 
 control_tree=$(cat "$bundle_path/control-tree")
 candidate_tree=$(cat "$bundle_path/candidate-tree")
