@@ -238,7 +238,22 @@ exact restore-helper and restore-owner script SHA-256 values. Redacted evidence 
 digests, counts and booleans and states that role creation, role split, shared-database mutation,
 migration, deploy, import and activation are all unauthorized.
 
-No current command is allowed to write that marker. A later restore-owner ceremony must be
+`deploy/jetson/prepare-communities-role-split-inventory-clone.sh` is a non-runnable preparation
+gate, not a marker writer. It accepts only
+`PREPARE_COMMUNITIES_ROLE_SPLIT_INVENTORY_CLONE_V1 <request-basename> <request-sha256>`, where the
+request is the exact-order, LF-terminated
+`PHUB_COMMUNITIES_ROLE_SPLIT_CLONE_MARKER_REQUEST_V1` contract. Before stopping, it verifies the
+root-owned request and command, the exact restore-helper SHA-256, the retained private
+`postgres-communities-rehearsal-*` archive bytes/SHA-256, its root-owned `.evidence` companion and
+all run, source, ledger, release, PostgreSQL 16 and object-manifest bindings. Even a completely
+valid request terminates with
+`COMMUNITIES_STAGING_ROLE_SPLIT_RESTORE_MARKER_WRITER_EXECUTION_NOT_AUTHORIZED`; the command has no
+Docker, PostgreSQL, clone, comment, cleanup or role/ACL operation.
+
+Do not install this preparation gate, create a forced-command key for it, add it to a workflow or
+place requests on staging. Turning it into a runnable marker writer requires a new independently
+reviewed diff, an executable PG16 clone/cleanup failure matrix and separate installation and run
+authority. No current command is allowed to write the marker. A later restore-owner ceremony must be
 independently reviewed and must create it only after exclusive clone creation, ownership/ACL-
 preserving restore, backup and archive-TOC verification, source and restored-ledger equality, and
 clone/source identity rechecks. The marker writer must be a separately installed root-owned forced
