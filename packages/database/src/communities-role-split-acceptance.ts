@@ -62,6 +62,10 @@ export type CommunitiesRoleSplitGrantDecision = {
   readonly fieldKeySha256: string;
   readonly action: 'PRESERVE' | 'ADD' | 'REMOVE';
   readonly granteeCategory: CommunitiesRoleSplitRoleCategory;
+  readonly granteeEvidenceSha256: string | null;
+  readonly grantorCategory: CommunitiesRoleSplitRoleCategory | 'PUBLIC' | 'THIRD_PARTY' | null;
+  readonly grantorEvidenceSha256: string | null;
+  readonly occurrenceSha256: string | null;
   readonly privileges: readonly CommunitiesRoleSplitPrivilege[];
   readonly beforeStateSha256: string;
   readonly targetStateSha256: string;
@@ -439,6 +443,10 @@ function assertGrantPlan(
         'fieldKeySha256',
         'action',
         'granteeCategory',
+        'granteeEvidenceSha256',
+        'grantorCategory',
+        'grantorEvidenceSha256',
+        'occurrenceSha256',
         'privileges',
         'beforeStateSha256',
         'targetStateSha256',
@@ -474,7 +482,20 @@ function assertGrantPlan(
       new Set(row.privileges).size !== row.privileges.length ||
       row.privileges.some((privilege) => !allowed.includes(privilege)) ||
       row.privileges.join('\0') !== [...row.privileges].sort().join('\0') ||
-      (row.action === 'PRESERVE' ? row.privileges.length !== 0 : row.privileges.length === 0)
+      (row.action === 'PRESERVE'
+        ? row.privileges.length !== 0 ||
+          row.granteeEvidenceSha256 !== null ||
+          row.grantorCategory !== null ||
+          row.grantorEvidenceSha256 !== null ||
+          row.occurrenceSha256 !== null
+        : row.privileges.length !== 1 ||
+          !isSha256(row.granteeEvidenceSha256) ||
+          !row.grantorCategory ||
+          ![...COMMUNITIES_ROLE_SPLIT_ROLE_CATEGORIES, 'PUBLIC', 'THIRD_PARTY'].includes(
+            row.grantorCategory,
+          ) ||
+          !isSha256(row.grantorEvidenceSha256) ||
+          !isSha256(row.occurrenceSha256))
     )
       fail('GRANT_PRIVILEGE_SET_INVALID');
     if (row.action === 'ADD' && equivalent(row.granteeCategory, 'INVENTORY_READER'))
@@ -506,10 +527,21 @@ function assertGrantPlan(
       plannedRemoved = new Set<string>();
     for (const row of rows)
       for (const privilege of row.privileges) {
+        if (
+          !row.granteeEvidenceSha256 ||
+          !row.grantorCategory ||
+          !row.grantorEvidenceSha256 ||
+          !row.occurrenceSha256
+        )
+          fail('GRANT_PLAN_INVALID');
         const entry = entryKey({
           granteeCategory: row.granteeCategory,
+          granteeEvidenceSha256: row.granteeEvidenceSha256,
+          grantorCategory: row.grantorCategory,
+          grantorEvidenceSha256: row.grantorEvidenceSha256,
           privilege,
           grantOption: row.grantOption,
+          occurrenceSha256: row.occurrenceSha256,
         });
         const target = row.action === 'ADD' ? plannedAdded : plannedRemoved;
         if (target.has(entry)) fail('GRANT_PLAN_DELTA_MISMATCH');

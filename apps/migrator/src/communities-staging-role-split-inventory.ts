@@ -89,6 +89,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+function exactKeys(value: object, keys: readonly string[]): boolean {
+  return (
+    Object.keys(value).sort(compareUtf8Bytes).join('\0') ===
+    [...keys].sort(compareUtf8Bytes).join('\0')
+  );
+}
+
 function canonicalJson(value: unknown): string {
   if (value === null || typeof value === 'string' || typeof value === 'boolean')
     return JSON.stringify(value);
@@ -348,27 +355,23 @@ select ${objectIdentity}::text object_identity,
        pg_catalog.jsonb_build_array('explicitAcl')::text field_identity,
        'ACL_EXPLICIT'::text field_kind,
        coalesce(pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
-         'granteeCategory',coalesce(mapped.category,case when entry.grantee=0 then 'PUBLIC' else 'THIRD_PARTY' end),
+         'granteeOid',entry.grantee::text,'grantorOid',entry.grantor::text,
          'privilege',entry.privilege_type,'grantOption',entry.is_grantable)
-         order by coalesce(mapped.category,case when entry.grantee=0 then 'PUBLIC' else 'THIRD_PARTY' end),entry.privilege_type,entry.is_grantable)
+         order by entry.grantee::text,entry.grantor::text,entry.privilege_type,entry.is_grantable)
          filter (where entry.grantee is not null),'[]'::jsonb)::text value,
        null::text owner_oid
   from (select 1) seed left join lateral pg_catalog.aclexplode(coalesce(${acl},'{}'::aclitem[])) entry on true
-  left join lateral (select value->>'category' category from pg_catalog.jsonb_array_elements($1::jsonb)
-    where value->>'roleOid'=entry.grantee::text order by value->>'category' limit 1) mapped on true
 union all
 select ${objectIdentity}::text object_identity,
        pg_catalog.jsonb_build_array('effectiveAcl')::text field_identity,
        'ACL_EFFECTIVE'::text field_kind,
        coalesce(pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
-         'granteeCategory',coalesce(mapped.category,case when entry.grantee=0 then 'PUBLIC' else 'THIRD_PARTY' end),
+         'granteeOid',entry.grantee::text,'grantorOid',entry.grantor::text,
          'privilege',entry.privilege_type,'grantOption',entry.is_grantable)
-         order by coalesce(mapped.category,case when entry.grantee=0 then 'PUBLIC' else 'THIRD_PARTY' end),entry.privilege_type,entry.is_grantable)
+         order by entry.grantee::text,entry.grantor::text,entry.privilege_type,entry.is_grantable)
          filter (where entry.grantee is not null),'[]'::jsonb)::text value,
        null::text owner_oid
-  from pg_catalog.aclexplode(coalesce(${acl},pg_catalog.acldefault('${code}',${owner}))) entry
-  left join lateral (select value->>'category' category from pg_catalog.jsonb_array_elements($1::jsonb)
-    where value->>'roleOid'=entry.grantee::text order by value->>'category' limit 1) mapped on true`;
+  from pg_catalog.aclexplode(coalesce(${acl},pg_catalog.acldefault('${code}',${owner}))) entry`;
 
 const categorySql: Readonly<Record<CategoryName, string>> = {
   roles: `/* communities-role-split-input-c:roles */
@@ -434,16 +437,14 @@ select pg_catalog.jsonb_build_array('column',namespace.nspname,relation.relname,
  attribute.attname,attribute.attnum)::text object_identity,
  pg_catalog.jsonb_build_array(kind.field_name)::text field_identity,kind.field_kind,
  coalesce(pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
-  'granteeCategory',coalesce(mapped.category,case when entry.grantee=0 then 'PUBLIC' else 'THIRD_PARTY' end),
+  'granteeOid',entry.grantee::text,'grantorOid',entry.grantor::text,
   'privilege',entry.privilege_type,'grantOption',entry.is_grantable)
-  order by coalesce(mapped.category,case when entry.grantee=0 then 'PUBLIC' else 'THIRD_PARTY' end),entry.privilege_type,entry.is_grantable)
+  order by entry.grantee::text,entry.grantor::text,entry.privilege_type,entry.is_grantable)
   filter (where entry.grantee is not null),'[]'::jsonb)::text value,null::text owner_oid
  from pg_catalog.pg_attribute attribute join pg_catalog.pg_class relation on relation.oid=attribute.attrelid
  join pg_catalog.pg_namespace namespace on namespace.oid=relation.relnamespace
  cross join (values ('explicitAcl','ACL_EXPLICIT'),('effectiveAcl','ACL_EFFECTIVE')) kind(field_name,field_kind)
  left join lateral pg_catalog.aclexplode(coalesce(attribute.attacl,'{}'::aclitem[])) entry on true
- left join lateral (select value->>'category' category from pg_catalog.jsonb_array_elements($1::jsonb)
-  where value->>'roleOid'=entry.grantee::text order by value->>'category' limit 1) mapped on true
  where namespace.nspname in (select name from relevant) and relation.relkind in ('r','p','v','m','f')
  and attribute.attnum>0 and not attribute.attisdropped
  group by namespace.nspname,relation.relname,relation.relkind,attribute.attname,attribute.attnum,kind.field_name,kind.field_kind`,
@@ -540,7 +541,8 @@ relevant(name) as (values ${relevantSchemas}), acl(owner_oid,acl_value,source) a
 ), exploded as (select acl.owner_oid,acl.source,entry.* from acl cross join lateral pg_catalog.aclexplode(acl.acl_value) entry)
 select (select count from dangerous) dangerous_roles,(select count from memberships) mapped_memberships,
  (select count(*)::text from exploded where grantee=0) public_grants,
- (select count(*)::text from exploded where grantee<>0 and not exists (select 1 from mapped where role_oid=grantee)) third_party_grants,
+ (select count(*)::text from exploded where (grantee<>0 and not exists (select 1 from mapped where role_oid=grantee))
+   or not exists (select 1 from mapped where role_oid=grantor)) third_party_grants,
  (select count(*)::text from exploded where is_grantable) grant_options,
  (select count(*)::text from pg_catalog.pg_attribute attribute join pg_catalog.pg_class relation on relation.oid=attribute.attrelid join pg_catalog.pg_namespace namespace on namespace.oid=relation.relnamespace where namespace.nspname in (select name from relevant) and attribute.attnum>0 and not attribute.attisdropped and cardinality(attribute.attacl)>0) column_grants,
  (select count(*)::text from pg_catalog.pg_default_acl defaults left join pg_catalog.pg_namespace namespace on namespace.oid=defaults.defaclnamespace where defaults.defaclnamespace=0 or namespace.nspname in (select name from relevant)) default_acls`;
@@ -716,7 +718,24 @@ function parseIdentity(value: string): readonly unknown[] {
   return parsed;
 }
 
-function parseAclEntries(value: string): readonly CommunitiesRoleSplitAclEntry[] {
+function aclPrincipal(
+  oid: string,
+  mapping: readonly RoleMappingEntry[],
+): {
+  category: CommunitiesRoleSplitAclEntry['granteeCategory'];
+  evidenceSha256: string;
+} {
+  const mapped = mapping.find((entry) => entry.roleOid === oid);
+  return {
+    category: oid === '0' ? 'PUBLIC' : (mapped?.category ?? 'THIRD_PARTY'),
+    evidenceSha256: sha256(communitiesRoleSplitCanonicalJson(['acl-principal-v1', oid])),
+  };
+}
+
+function parseAclEntries(
+  value: string,
+  mapping: readonly RoleMappingEntry[],
+): readonly CommunitiesRoleSplitAclEntry[] {
   let parsed: unknown;
   try {
     parsed = JSON.parse(value);
@@ -724,34 +743,47 @@ function parseAclEntries(value: string): readonly CommunitiesRoleSplitAclEntry[]
     fail('CATALOG_INVALID');
   }
   if (!Array.isArray(parsed)) fail('CATALOG_INVALID');
+  const occurrences = new Map<string, number>();
   const entries = parsed.map((entry) => {
     if (
       !isRecord(entry) ||
-      typeof entry.granteeCategory !== 'string' ||
-      ![...COMMUNITIES_STAGING_ROLE_SPLIT_ROLE_CATEGORIES, 'PUBLIC', 'THIRD_PARTY'].includes(
-        entry.granteeCategory,
-      ) ||
+      !exactKeys(entry, ['granteeOid', 'grantorOid', 'privilege', 'grantOption']) ||
+      typeof entry.granteeOid !== 'string' ||
+      !/^(0|[1-9][0-9]*)$/u.test(entry.granteeOid) ||
+      typeof entry.grantorOid !== 'string' ||
+      !positiveDecimal.test(entry.grantorOid) ||
       typeof entry.privilege !== 'string' ||
       !/^[A-Z][A-Z_]*$/u.test(entry.privilege) ||
       typeof entry.grantOption !== 'boolean'
     )
       fail('CATALOG_INVALID');
-    return {
-      granteeCategory: entry.granteeCategory as CommunitiesRoleSplitAclEntry['granteeCategory'],
+    const grantee = aclPrincipal(entry.granteeOid, mapping);
+    const grantor = aclPrincipal(entry.grantorOid, mapping);
+    const base = {
+      granteeCategory: grantee.category,
+      granteeEvidenceSha256: grantee.evidenceSha256,
+      grantorCategory: grantor.category,
+      grantorEvidenceSha256: grantor.evidenceSha256,
       privilege: entry.privilege,
       grantOption: entry.grantOption,
     };
+    const baseKey = communitiesRoleSplitCanonicalJson(base);
+    const occurrence = (occurrences.get(baseKey) ?? 0) + 1;
+    occurrences.set(baseKey, occurrence);
+    return {
+      ...base,
+      occurrenceSha256: sha256(
+        communitiesRoleSplitCanonicalJson(['acl-occurrence-v1', base, occurrence]),
+      ),
+    };
   });
-  const uniqueEntries = [
-    ...new Map(entries.map((entry) => [communitiesRoleSplitCanonicalJson(entry), entry])).values(),
-  ];
-  uniqueEntries.sort((left, right) =>
+  entries.sort((left, right) =>
     compareUtf8Bytes(
       communitiesRoleSplitCanonicalJson(left),
       communitiesRoleSplitCanonicalJson(right),
     ),
   );
-  return uniqueEntries;
+  return entries;
 }
 
 function normalizeRows(
@@ -759,6 +791,7 @@ function normalizeRows(
   rows: readonly CatalogRow[],
   provenanceDigest: string,
   mapping: CommunitiesRoleSplitMappingArtifact,
+  rawMapping: readonly RoleMappingEntry[],
   mixedOwnerObjects: Set<string>,
 ): readonly NormalizedRecord[] {
   const seen = new Set<string>();
@@ -791,7 +824,7 @@ function normalizeRows(
     let semantic: NormalizedRecord['semantic'] = null;
     let valueSha256 = sha256(row.value);
     if (fieldKind === 'ACL_EXPLICIT' || fieldKind === 'ACL_EFFECTIVE') {
-      const entries = parseAclEntries(row.value);
+      const entries = parseAclEntries(row.value, rawMapping);
       semantic = { entries };
       valueSha256 = sha256(communitiesRoleSplitCanonicalJson(entries));
     } else if (fieldKind === 'OWNER') {
@@ -964,6 +997,7 @@ export async function produceCommunitiesStagingRoleSplitInventory(
         ).rows,
         provenanceBase,
         mapping,
+        rawMapping,
         mixedOwnerObjects,
       );
     const anomalyRow = (await client.query<Record<string, string>>(anomalySql, [mappingQueryValue]))

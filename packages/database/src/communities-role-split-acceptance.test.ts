@@ -306,6 +306,10 @@ function envelope(
           ...common,
           action: 'PRESERVE',
           granteeCategory: 'FUTURE_RUNTIME',
+          granteeEvidenceSha256: null,
+          grantorCategory: null,
+          grantorEvidenceSha256: null,
+          occurrenceSha256: null,
           privileges: [],
         });
       else {
@@ -319,6 +323,10 @@ function envelope(
               ...common,
               action,
               granteeCategory: entry.granteeCategory as CommunitiesRoleSplitRoleCategory,
+              granteeEvidenceSha256: entry.granteeEvidenceSha256,
+              grantorCategory: entry.grantorCategory,
+              grantorEvidenceSha256: entry.grantorEvidenceSha256,
+              occurrenceSha256: entry.occurrenceSha256,
               privileges: [
                 entry.privilege as CommunitiesRoleSplitGrantDecision['privileges'][number],
               ],
@@ -355,16 +363,21 @@ function envelope(
 }
 
 describe('communities role split acceptance', () => {
-  const select: CommunitiesRoleSplitAclEntry = {
+  const aclEntry = (
+    privilege: string,
+    grantorEvidence: string,
+    occurrence = 1,
+  ): CommunitiesRoleSplitAclEntry => ({
     granteeCategory: 'FUTURE_RUNTIME',
-    privilege: 'SELECT',
+    granteeEvidenceSha256: fixed('principal:runtime'),
+    grantorCategory: 'FUTURE_MIGRATOR',
+    grantorEvidenceSha256: fixed(`grantor:${grantorEvidence}`),
+    privilege,
     grantOption: false,
-  };
-  const update: CommunitiesRoleSplitAclEntry = {
-    granteeCategory: 'FUTURE_RUNTIME',
-    privilege: 'UPDATE',
-    grantOption: false,
-  };
+    occurrenceSha256: fixed(`occurrence:${privilege}:${grantorEvidence}:${occurrence}`),
+  });
+  const select = aclEntry('SELECT', 'migrator');
+  const update = aclEntry('UPDATE', 'migrator');
 
   it('accepts exact semantic ADD and REMOVE against stable ACL field identities', () => {
     const roleMapping = mapping();
@@ -410,6 +423,69 @@ describe('communities role split acceptance', () => {
     ).granteeCategory = 'FUTURE_MIGRATOR';
     expect(() =>
       assertCommunitiesRoleSplitAcceptancePass(wrongCategory, pins(before, after)),
+    ).toThrow('GRANT_PLAN_DELTA_MISMATCH');
+  });
+
+  it('detects grantor-only transitions and binds duplicate occurrences exactly', () => {
+    const roleMapping = mapping();
+    const beforeGrantor = snapshot(roleMapping, {
+      [aclKey('relation', 'explicitAcl')]: [aclEntry('SELECT', 'grantor-a')],
+    });
+    const afterGrantor = snapshot(roleMapping, {
+      [aclKey('relation', 'explicitAcl')]: [aclEntry('SELECT', 'grantor-b')],
+    });
+    const missingGrantorPlan = structuredClone(envelope(beforeGrantor, afterGrantor));
+    const changedField = beforeGrantor.normalized.relations.find(
+      (entry) => entry.fieldKind === 'ACL_EXPLICIT',
+    )!;
+    (
+      missingGrantorPlan as unknown as { grantPlan: CommunitiesRoleSplitGrantDecision[] }
+    ).grantPlan = [
+      ...missingGrantorPlan.grantPlan.filter(
+        (entry) => entry.fieldKeySha256 !== changedField.fieldKeySha256,
+      ),
+      {
+        objectKind: 'relation',
+        objectKeySha256: changedField.objectKeySha256,
+        fieldKeySha256: changedField.fieldKeySha256,
+        action: 'PRESERVE',
+        granteeCategory: 'FUTURE_RUNTIME',
+        granteeEvidenceSha256: null,
+        grantorCategory: null,
+        grantorEvidenceSha256: null,
+        occurrenceSha256: null,
+        privileges: [],
+        beforeStateSha256: changedField.valueSha256!,
+        targetStateSha256: afterGrantor.normalized.relations.find(
+          (entry) => entry.fieldKeySha256 === changedField.fieldKeySha256,
+        )!.valueSha256!,
+        evidenceSha256: changedField.provenanceSha256!,
+        grantOption: false,
+      },
+    ];
+    expect(() =>
+      assertCommunitiesRoleSplitAcceptancePass(
+        missingGrantorPlan,
+        pins(beforeGrantor, afterGrantor),
+      ),
+    ).toThrow('GRANT_PLAN_DELTA_MISMATCH');
+
+    const first = aclEntry('SELECT', 'grantor-a', 1);
+    const second = aclEntry('SELECT', 'grantor-a', 2);
+    const beforeDuplicate = snapshot(roleMapping, {
+      [aclKey('relation', 'explicitAcl')]: [first, second],
+    });
+    const afterDuplicate = snapshot(roleMapping, {
+      [aclKey('relation', 'explicitAcl')]: [first],
+    });
+    const wrongOccurrence = structuredClone(envelope(beforeDuplicate, afterDuplicate));
+    const remove = wrongOccurrence.grantPlan.find((entry) => entry.action === 'REMOVE')!;
+    (remove as { occurrenceSha256: string }).occurrenceSha256 = first.occurrenceSha256;
+    expect(() =>
+      assertCommunitiesRoleSplitAcceptancePass(
+        wrongOccurrence,
+        pins(beforeDuplicate, afterDuplicate),
+      ),
     ).toThrow('GRANT_PLAN_DELTA_MISMATCH');
   });
 

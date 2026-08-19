@@ -71,8 +71,12 @@ export type CommunitiesRoleSplitAclGranteeCategory =
   CommunitiesRoleSplitRoleCategory | 'PUBLIC' | 'THIRD_PARTY';
 export type CommunitiesRoleSplitAclEntry = {
   readonly granteeCategory: CommunitiesRoleSplitAclGranteeCategory;
+  readonly granteeEvidenceSha256: string;
+  readonly grantorCategory: CommunitiesRoleSplitAclGranteeCategory;
+  readonly grantorEvidenceSha256: string;
   readonly privilege: string;
   readonly grantOption: boolean;
+  readonly occurrenceSha256: string;
 };
 
 export const COMMUNITIES_ROLE_SPLIT_FORBIDDEN_CODE_CONTRACT = [
@@ -261,10 +265,11 @@ export function communitiesRoleSplitInputCManifestSha256(
 ): string {
   return communitiesRoleSplitSha256(communitiesRoleSplitInputCManifestText(input));
 }
-function exactKeys(value: object, keys: readonly string[]): boolean {
+function exactKeys(value: unknown, keys: readonly string[]): boolean {
   return (
+    isRecord(value) &&
     Object.keys(value).sort(compareCommunitiesRoleSplitUtf8Bytes).join('\0') ===
-    [...keys].sort(compareCommunitiesRoleSplitUtf8Bytes).join('\0')
+      [...keys].sort(compareCommunitiesRoleSplitUtf8Bytes).join('\0')
   );
 }
 function assertMapping(mapping: CommunitiesRoleSplitMappingArtifact): void {
@@ -311,14 +316,17 @@ function assertMapping(mapping: CommunitiesRoleSplitMappingArtifact): void {
     throw new Error('INPUT_C_MAPPING_INVALID');
   mapping.identityRelations.forEach((relation, index) => {
     const expected = COMMUNITIES_ROLE_SPLIT_IDENTITY_RELATION_SPECS[index];
+    if (
+      !expected ||
+      !exactKeys(relation, ['left', 'right', 'requirement', 'relation', 'evidenceSha256'])
+    )
+      throw new Error('INPUT_C_MAPPING_INVALID');
     const left = mapping.categories.find((entry) => entry.category === relation.left);
     const right = mapping.categories.find((entry) => entry.category === relation.right);
     const same =
       left?.roleNameSha256 === right?.roleNameSha256 &&
       left?.roleOidSha256 === right?.roleOidSha256;
     if (
-      !expected ||
-      !exactKeys(relation, ['left', 'right', 'requirement', 'relation', 'evidenceSha256']) ||
       relation.left !== expected[0] ||
       relation.right !== expected[1] ||
       relation.requirement !== expected[2] ||
@@ -361,6 +369,33 @@ export function assertCommunitiesRoleSplitInputC(
   assertMapping(value.mapping as CommunitiesRoleSplitMappingArtifact);
   const input = value as unknown as CommunitiesRoleSplitInputC;
   if (
+    !exactKeys(input.provenance, [
+      'contractVersion',
+      'markerDigest',
+      'markerEvidenceDigest',
+      'requestDigest',
+      'creationReceiptSha256',
+      'cloneNamePatternValid',
+      'cloneOidBound',
+      'sourceOidBound',
+      'systemIdentifierDigest',
+      'pgMajor',
+      'objectManifestDigest',
+      'ledgerDigest',
+      'ledgerCount',
+      'mappingDigest',
+    ]) ||
+    !exactKeys(input.authorizes, [
+      'roleCreation',
+      'roleRepair',
+      'roleSplit',
+      'aclMutation',
+      'schemaMutation',
+      'sharedDatabaseMutation',
+      'migration',
+      'deploy',
+      'activation',
+    ]) ||
     input.provenance.mappingDigest !== input.mapping.mappingDigest ||
     !exactKeys(input.normalized, COMMUNITIES_ROLE_SPLIT_NORMALIZED_CATEGORIES) ||
     JSON.stringify(input.forbiddenCodeContract) !==
@@ -389,6 +424,8 @@ export function assertCommunitiesRoleSplitInputC(
   )
     throw new Error('INPUT_C_SCHEMA_INVALID');
   for (const category of COMMUNITIES_ROLE_SPLIT_NORMALIZED_CATEGORIES) {
+    if (!Array.isArray(Reflect.get(input.normalized, category)))
+      throw new Error('INPUT_C_SCHEMA_INVALID');
     let previous = '';
     for (const record of input.normalized[category]) {
       if (
@@ -420,7 +457,9 @@ export function assertCommunitiesRoleSplitInputC(
             record.semantic !== null))
       )
         throw new Error('INPUT_C_SCHEMA_INVALID');
-      if (record.fieldKind === 'OWNER') {
+      if (!observed) {
+        // UNKNOWN/UNOBSERVED have no semantic assertion by construction.
+      } else if (record.fieldKind === 'OWNER') {
         if (
           !isRecord(record.semantic) ||
           !exactKeys(record.semantic, ['ownerCategory']) ||
@@ -439,10 +478,24 @@ export function assertCommunitiesRoleSplitInputC(
         let prior = '';
         for (const entry of record.semantic.entries) {
           if (
-            !exactKeys(entry, ['granteeCategory', 'privilege', 'grantOption']) ||
+            !exactKeys(entry, [
+              'granteeCategory',
+              'granteeEvidenceSha256',
+              'grantorCategory',
+              'grantorEvidenceSha256',
+              'privilege',
+              'grantOption',
+              'occurrenceSha256',
+            ]) ||
             ![...COMMUNITIES_ROLE_SPLIT_ROLE_CATEGORIES, 'PUBLIC', 'THIRD_PARTY'].includes(
               entry.granteeCategory,
             ) ||
+            ![...COMMUNITIES_ROLE_SPLIT_ROLE_CATEGORIES, 'PUBLIC', 'THIRD_PARTY'].includes(
+              entry.grantorCategory,
+            ) ||
+            !sha256Pattern.test(entry.granteeEvidenceSha256) ||
+            !sha256Pattern.test(entry.grantorEvidenceSha256) ||
+            !sha256Pattern.test(entry.occurrenceSha256) ||
             !/^[A-Z][A-Z_]*$/u.test(entry.privilege) ||
             typeof entry.grantOption !== 'boolean'
           )

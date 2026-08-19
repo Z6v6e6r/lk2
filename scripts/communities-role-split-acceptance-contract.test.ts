@@ -81,6 +81,15 @@ describe('Communities role-split acceptance v1 contract', () => {
       'mappingDigest',
     ]);
     expect(schema.$defs.anomaly!.required).toEqual(['code', 'count', 'evidenceSha256']);
+    expect(schema.$defs.aclEntry!.required).toEqual([
+      'granteeCategory',
+      'granteeEvidenceSha256',
+      'grantorCategory',
+      'grantorEvidenceSha256',
+      'privilege',
+      'grantOption',
+      'occurrenceSha256',
+    ]);
     expect(plan).toContain('objectKeySha256');
     expect(plan).toContain('fieldKeySha256');
   });

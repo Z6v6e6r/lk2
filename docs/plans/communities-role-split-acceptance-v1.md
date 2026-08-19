@@ -81,8 +81,11 @@ The acceptance envelope requires all of the following:
 provenanceSha256, semantic}`. Owner, metadata, ACL and extension-member fields for one object share its
    `objectKeySha256`; records are ordered by `(objectKeySha256, fieldKeySha256)`. A null column ACL
    is an empty explicit semantic ACL, not a forbidden grant. Each ACL-bearing object has one stable
-   `explicitAcl` and one stable `effectiveAcl` field whose sorted entries are
-   `{granteeCategory, privilege, grantOption}`; only anomaly codes carry forbidden semantics.
+   `explicitAcl` and one stable `effectiveAcl` field. Every sorted occurrence binds
+   `{granteeCategory, granteeEvidenceSha256, grantorCategory, grantorEvidenceSha256, privilege,
+grantOption, occurrenceSha256}`. Principal evidence is a one-way digest of the verified catalog
+   identity, so distinct third-party grantors and duplicate ACL occurrences cannot collapse while
+   raw names/OIDs remain absent; only anomaly codes carry forbidden semantics.
 3. A complete anomaly list with stable codes and evidence digests. An empty list must be explicit;
    absence of the field is not equivalent to no anomalies. The trusted producer must emit an
    anomaly for every observed wildcard/`ALL`, grant option, PUBLIC grant, unclassified third-party
@@ -136,6 +139,8 @@ Empty, partial, duplicate and extra plans fail. Each row contains:
   `evidenceSha256` as lowercase SHA-256 values;
 - one explicit action: `PRESERVE`, `ADD` or `REMOVE`;
 - one of the six abstract grantee categories, never a raw name, `PUBLIC` or an unclassified role;
+- exact grantee/grantor evidence and occurrence digests plus a grantor category for `ADD`/`REMOVE`;
+  `PRESERVE` carries null entry bindings because it preserves the full field state;
 - a sorted, duplicate-free subset of the per-object privilege vocabulary;
 - literal `grantOption=false`.
 
@@ -145,9 +150,10 @@ finite vocabulary is database `CONNECT/TEMPORARY`, schema `USAGE/CREATE`, relati
 `EXECUTE`, and type `USAGE`. Wildcards and `ALL` are not values. `FUTURE_RUNTIME` may never receive
 schema `CREATE`; `INVENTORY_READER` may not receive an `ADD` transition.
 
-The evaluator computes exact semantic ACL set additions/removals and requires exact equality with
-the action, category, privilege and grant-option tuples in the plan. An observed `UPDATE` cannot
-satisfy a declared `SELECT`, and unchanged field keys support both `ADD` and `REMOVE`.
+The evaluator computes exact semantic ACL multiset additions/removals and requires exact equality
+with the action, grantee/grantor evidence, occurrence, category, privilege and grant-option tuples
+in the plan. An observed `UPDATE` cannot satisfy a declared `SELECT`, a grantor-only transition is
+not preservation, and unchanged field keys support both `ADD` and `REMOVE`.
 `beforeStateSha256` and `targetStateSha256` must equal those observed values; the evaluator never
 manufactures an after state from a transition-description hash. The planned changed set must equal
 the actual full twelve-category snapshot delta.

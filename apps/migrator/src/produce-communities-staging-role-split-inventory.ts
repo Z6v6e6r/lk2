@@ -1,12 +1,10 @@
-import { isAbsolute } from 'node:path';
-import { lstat, readFile } from 'node:fs/promises';
-
 import { communitiesRoleSplitInputCArtifactText } from '@phub/database';
 
 import {
   CommunitiesStagingRoleSplitInventoryError,
   produceCommunitiesStagingRoleSplitInventory,
 } from './communities-staging-role-split-inventory.js';
+import { readRootOwnedEvidence } from './root-owned-evidence.js';
 
 const requiredEnvironment = [
   'DATABASE_URL',
@@ -18,22 +16,6 @@ const requiredEnvironment = [
   'PHUB_ROLE_SPLIT_ROLE_MAPPING_PATH',
   'PHUB_ROLE_SPLIT_ROLE_MAPPING_SHA256',
 ] as const;
-
-async function readRootOwnedEvidence(path: string, maximumBytes: number): Promise<Buffer> {
-  if (!isAbsolute(path)) throw new Error('INPUT_CUSTODY_INVALID');
-  const metadata = await lstat(path);
-  if (
-    !metadata.isFile() ||
-    metadata.isSymbolicLink() ||
-    metadata.uid !== 0 ||
-    metadata.nlink !== 1 ||
-    (metadata.mode & 0o022) !== 0 ||
-    metadata.size < 1 ||
-    metadata.size > maximumBytes
-  )
-    throw new Error('INPUT_CUSTODY_INVALID');
-  return readFile(path);
-}
 
 async function main(): Promise<void> {
   if (requiredEnvironment.some((key) => !process.env[key])) throw new Error('INPUT_INVALID');

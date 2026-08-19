@@ -136,6 +136,24 @@
         "mappingDigest": { "$ref": "#/$defs/sha256" }
       }
     },
+    "ownerSemantic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ownerCategory"],
+      "properties": { "ownerCategory": { "$ref": "#/$defs/roleCategory" } }
+    },
+    "aclSemantic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entries"],
+      "properties": {
+        "entries": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/aclEntry" }
+        }
+      }
+    },
     "normalizedRecord": {
       "type": "object",
       "additionalProperties": false,
@@ -172,38 +190,92 @@
         "semantic": {
           "oneOf": [
             { "type": "null" },
-            {
-              "type": "object",
-              "additionalProperties": false,
-              "required": ["ownerCategory"],
-              "properties": { "ownerCategory": { "$ref": "#/$defs/roleCategory" } }
-            },
-            {
-              "type": "object",
-              "additionalProperties": false,
-              "required": ["entries"],
-              "properties": {
-                "entries": {
-                  "type": "array",
-                  "uniqueItems": true,
-                  "items": { "$ref": "#/$defs/aclEntry" }
-                }
-              }
-            }
+            { "$ref": "#/$defs/ownerSemantic" },
+            { "$ref": "#/$defs/aclSemantic" }
           ]
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "observationState": { "const": "OBSERVED" } } },
+          "then": {
+            "properties": {
+              "valueSha256": { "$ref": "#/$defs/sha256" },
+              "provenanceSha256": { "$ref": "#/$defs/sha256" }
+            }
+          },
+          "else": {
+            "properties": {
+              "valueSha256": { "type": "null" },
+              "provenanceSha256": { "type": "null" },
+              "semantic": { "type": "null" }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "observationState": { "const": "OBSERVED" },
+              "fieldKind": { "const": "OWNER" }
+            }
+          },
+          "then": { "properties": { "semantic": { "$ref": "#/$defs/ownerSemantic" } } }
+        },
+        {
+          "if": {
+            "properties": {
+              "observationState": { "const": "OBSERVED" },
+              "fieldKind": { "enum": ["ACL_EXPLICIT", "ACL_EFFECTIVE"] }
+            }
+          },
+          "then": { "properties": { "semantic": { "$ref": "#/$defs/aclSemantic" } } }
+        },
+        {
+          "if": {
+            "properties": {
+              "observationState": { "const": "OBSERVED" },
+              "fieldKind": {
+                "enum": [
+                  "ROLE",
+                  "MEMBERSHIP",
+                  "METADATA",
+                  "DEFAULT_ACL",
+                  "COLUMN",
+                  "RLS",
+                  "POLICY",
+                  "EXTENSION_MEMBER"
+                ]
+              }
+            }
+          },
+          "then": { "properties": { "semantic": { "type": "null" } } }
+        }
+      ]
     },
     "aclEntry": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["granteeCategory", "privilege", "grantOption"],
+      "required": [
+        "granteeCategory",
+        "granteeEvidenceSha256",
+        "grantorCategory",
+        "grantorEvidenceSha256",
+        "privilege",
+        "grantOption",
+        "occurrenceSha256"
+      ],
       "properties": {
         "granteeCategory": {
           "oneOf": [{ "$ref": "#/$defs/roleCategory" }, { "enum": ["PUBLIC", "THIRD_PARTY"] }]
         },
+        "granteeEvidenceSha256": { "$ref": "#/$defs/sha256" },
+        "grantorCategory": {
+          "oneOf": [{ "$ref": "#/$defs/roleCategory" }, { "enum": ["PUBLIC", "THIRD_PARTY"] }]
+        },
+        "grantorEvidenceSha256": { "$ref": "#/$defs/sha256" },
         "privilege": { "type": "string", "pattern": "^[A-Z][A-Z_]*$" },
-        "grantOption": { "type": "boolean" }
+        "grantOption": { "type": "boolean" },
+        "occurrenceSha256": { "$ref": "#/$defs/sha256" }
       }
     },
     "normalizedRecords": { "type": "array", "items": { "$ref": "#/$defs/normalizedRecord" } },
@@ -339,6 +411,10 @@
         "fieldKeySha256",
         "action",
         "granteeCategory",
+        "granteeEvidenceSha256",
+        "grantorCategory",
+        "grantorEvidenceSha256",
+        "occurrenceSha256",
         "privileges",
         "beforeStateSha256",
         "targetStateSha256",
@@ -353,6 +429,16 @@
         "fieldKeySha256": { "$ref": "#/$defs/sha256" },
         "action": { "enum": ["PRESERVE", "ADD", "REMOVE"] },
         "granteeCategory": { "$ref": "#/$defs/roleCategory" },
+        "granteeEvidenceSha256": { "type": ["string", "null"], "pattern": "^[a-f0-9]{64}$" },
+        "grantorCategory": {
+          "oneOf": [
+            { "$ref": "#/$defs/roleCategory" },
+            { "enum": ["PUBLIC", "THIRD_PARTY"] },
+            { "type": "null" }
+          ]
+        },
+        "grantorEvidenceSha256": { "type": ["string", "null"], "pattern": "^[a-f0-9]{64}$" },
+        "occurrenceSha256": { "type": ["string", "null"], "pattern": "^[a-f0-9]{64}$" },
         "privileges": {
           "type": "array",
           "uniqueItems": true,
@@ -377,7 +463,32 @@
         "targetStateSha256": { "$ref": "#/$defs/sha256" },
         "evidenceSha256": { "$ref": "#/$defs/sha256" },
         "grantOption": { "const": false }
-      }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "action": { "const": "PRESERVE" } } },
+          "then": {
+            "properties": {
+              "granteeEvidenceSha256": { "type": "null" },
+              "grantorCategory": { "type": "null" },
+              "grantorEvidenceSha256": { "type": "null" },
+              "occurrenceSha256": { "type": "null" },
+              "privileges": { "maxItems": 0 }
+            }
+          },
+          "else": {
+            "properties": {
+              "granteeEvidenceSha256": { "$ref": "#/$defs/sha256" },
+              "grantorCategory": {
+                "oneOf": [{ "$ref": "#/$defs/roleCategory" }, { "enum": ["PUBLIC", "THIRD_PARTY"] }]
+              },
+              "grantorEvidenceSha256": { "$ref": "#/$defs/sha256" },
+              "occurrenceSha256": { "$ref": "#/$defs/sha256" },
+              "privileges": { "minItems": 1, "maxItems": 1 }
+            }
+          }
+        }
+      ]
     },
     "comparison": {
       "type": "object",

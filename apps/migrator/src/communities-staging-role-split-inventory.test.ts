@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import {
   COMMUNITIES_ROLE_SPLIT_ACCEPTANCE_VERSION,
   assertCommunitiesRoleSplitAcceptancePass,
+  assertCommunitiesRoleSplitInputC,
   canonicalCommunitiesStagingRoleSplitLedger,
   canonicalCommunitiesStagingRoleSplitRestoreMarkerRequest,
   communitiesStagingRoleSplitRestoreMarker,
@@ -13,10 +14,12 @@ import {
   communitiesStagingRoleSplitRestoreMarkerRequestSha256,
   COMMUNITIES_STAGING_ROLE_SPLIT_CLONE_MANIFEST_SHA256,
   communitiesRoleSplitInputCArtifactSha256,
+  communitiesRoleSplitInputCManifestSha256,
   type CommunitiesRoleSplitAcceptanceEnvelope,
   type CommunitiesRoleSplitExpectedPins,
   type CommunitiesRoleSplitGrantDecision,
   type CommunitiesRoleSplitGrantObjectKind,
+  type CommunitiesRoleSplitInputC,
   type CommunitiesRoleSplitObjectKind,
   type CommunitiesStagingRoleSplitRestoreMarkerPayload,
   type CommunitiesStagingRoleSplitRestoreMarkerRequest,
@@ -62,6 +65,21 @@ function validatesJsonSchema(root: JsonSchema, schema: JsonSchema, value: unknow
   }
   if ('const' in schema && value !== schema.const) return false;
   if (Array.isArray(schema.enum) && !schema.enum.includes(value)) return false;
+  if (
+    Array.isArray(schema.allOf) &&
+    schema.allOf.some((candidate) => !validatesJsonSchema(root, candidate as JsonSchema, value))
+  )
+    return false;
+  if (typeof schema.if === 'object' && schema.if !== null) {
+    const condition = validatesJsonSchema(root, schema.if as JsonSchema, value);
+    const branch = condition ? schema.then : schema.else;
+    if (
+      typeof branch === 'object' &&
+      branch !== null &&
+      !validatesJsonSchema(root, branch as JsonSchema, value)
+    )
+      return false;
+  }
   if (
     Array.isArray(schema.oneOf) &&
     schema.oneOf.filter((candidate) => validatesJsonSchema(root, candidate as JsonSchema, value))
@@ -235,8 +253,9 @@ function result<T extends Record<string, unknown>>(rows: T[]): QueryResult<T> {
   return { rows, rowCount: rows.length, command: 'SELECT', oid: 0, fields: [] };
 }
 
-type SemanticAclEntry = {
-  granteeCategory: string;
+type CatalogAclEntry = {
+  granteeOid: string;
+  grantorOid: string;
   privilege: string;
   grantOption: boolean;
 };
@@ -246,7 +265,8 @@ function fake(
     changed?: string;
     added?: string;
     marker?: string | null;
-    acl?: Partial<Record<string, readonly SemanticAclEntry[]>>;
+    acl?: Partial<Record<string, readonly CatalogAclEntry[]>>;
+    thirdPartyGrants?: string;
   } = {},
 ) {
   const queries: string[] = [];
@@ -307,7 +327,14 @@ function fake(
         const aclEntries =
           options.acl?.[category] ??
           (options.changed === category
-            ? [{ granteeCategory: 'FUTURE_RUNTIME', privilege: 'SELECT', grantOption: false }]
+            ? [
+                {
+                  granteeOid: '17004',
+                  grantorOid: '17003',
+                  privilege: 'SELECT',
+                  grantOption: false,
+                },
+              ]
             : []);
         const objectIdentities = (
           category === 'functions'
@@ -424,7 +451,7 @@ function fake(
             mapped_memberships: '0',
             mixed_owners: '0',
             public_grants: '0',
-            third_party_grants: '0',
+            third_party_grants: options.thirdPartyGrants ?? '0',
             grant_options: '0',
             column_grants: '0',
             default_acls: '0',
@@ -510,12 +537,14 @@ describe('Communities role split INPUT_C producer', () => {
 
   it('passes a real C artifact through JSON Schema structural validation and the D evaluator', async () => {
     const select = {
-      granteeCategory: 'FUTURE_RUNTIME',
+      granteeOid: '17004',
+      grantorOid: '17003',
       privilege: 'SELECT',
       grantOption: false,
     } as const;
     const update = {
-      granteeCategory: 'FUTURE_RUNTIME',
+      granteeOid: '17004',
+      grantorOid: '17003',
       privilege: 'UPDATE',
       grantOption: false,
     } as const;
@@ -588,6 +617,10 @@ describe('Communities role split INPUT_C producer', () => {
                 action: 'ADD' as const,
                 granteeCategory:
                   entry.granteeCategory as CommunitiesRoleSplitGrantDecision['granteeCategory'],
+                granteeEvidenceSha256: entry.granteeEvidenceSha256,
+                grantorCategory: entry.grantorCategory,
+                grantorEvidenceSha256: entry.grantorEvidenceSha256,
+                occurrenceSha256: entry.occurrenceSha256,
                 privileges: [
                   entry.privilege as CommunitiesRoleSplitGrantDecision['privileges'][number],
                 ],
@@ -599,6 +632,10 @@ describe('Communities role split INPUT_C producer', () => {
                 action: 'REMOVE' as const,
                 granteeCategory:
                   entry.granteeCategory as CommunitiesRoleSplitGrantDecision['granteeCategory'],
+                granteeEvidenceSha256: entry.granteeEvidenceSha256,
+                grantorCategory: entry.grantorCategory,
+                grantorEvidenceSha256: entry.grantorEvidenceSha256,
+                occurrenceSha256: entry.occurrenceSha256,
                 privileges: [
                   entry.privilege as CommunitiesRoleSplitGrantDecision['privileges'][number],
                 ],
@@ -611,6 +648,10 @@ describe('Communities role split INPUT_C producer', () => {
                   ...common,
                   action: 'PRESERVE',
                   granteeCategory: 'FUTURE_RUNTIME',
+                  granteeEvidenceSha256: null,
+                  grantorCategory: null,
+                  grantorEvidenceSha256: null,
+                  occurrenceSha256: null,
                   privileges: [],
                 },
               ];
@@ -693,6 +734,127 @@ describe('Communities role split INPUT_C producer', () => {
     expect(COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_SQL.categories.extensions).toContain(
       "dependency.deptype='e'",
     );
+  });
+
+  it('redacts distinct third-party grantors and preserves duplicate ACL occurrences', async () => {
+    const report = await produceCommunitiesStagingRoleSplitInventory(
+      exactInput,
+      () =>
+        fake({
+          acl: {
+            relations: [
+              { granteeOid: '17004', grantorOid: '18001', privilege: 'SELECT', grantOption: false },
+              { granteeOid: '17004', grantorOid: '18001', privilege: 'SELECT', grantOption: false },
+              { granteeOid: '17004', grantorOid: '18002', privilege: 'SELECT', grantOption: false },
+            ],
+          },
+          thirdPartyGrants: '3',
+        }).client,
+    );
+    const explicit = report.normalized.relations.find(
+      (record) => record.fieldKind === 'ACL_EXPLICIT',
+    )!;
+    const entries =
+      explicit.semantic && 'entries' in explicit.semantic ? explicit.semantic.entries : [];
+    expect(entries).toHaveLength(3);
+    expect(new Set(entries.map((entry) => entry.grantorEvidenceSha256)).size).toBe(2);
+    expect(new Set(entries.map((entry) => entry.occurrenceSha256)).size).toBe(3);
+    expect(entries.every((entry) => entry.grantorCategory === 'THIRD_PARTY')).toBe(true);
+    expect(JSON.stringify(report)).not.toMatch(/18001|18002/u);
+  });
+
+  it('keeps JSON Schema and runtime INPUT_C validation in nested-key and semantic parity', async () => {
+    const valid = await produceCommunitiesStagingRoleSplitInventory(
+      exactInput,
+      () => fake().client,
+    );
+    const schema = JSON.parse(
+      readFileSync(
+        new URL(
+          '../../../docs/plans/communities-role-split-acceptance-v1.schema.json',
+          import.meta.url,
+        ),
+        'utf8',
+      ),
+    ) as JsonSchema;
+    const inputSchema = (schema.$defs as Record<string, JsonSchema>).inputC!;
+    const accepts = (candidate: unknown): [boolean, boolean] => {
+      const structural = validatesJsonSchema(schema, inputSchema, candidate);
+      let runtime = true;
+      try {
+        assertCommunitiesRoleSplitInputC(candidate);
+      } catch {
+        runtime = false;
+      }
+      return [structural, runtime];
+    };
+    expect(accepts(valid)).toEqual([true, true]);
+
+    const extraProvenance = structuredClone(valid) as CommunitiesRoleSplitInputC & {
+      provenance: CommunitiesRoleSplitInputC['provenance'] & { extra?: boolean };
+    };
+    extraProvenance.provenance.extra = true;
+    expect(accepts(extraProvenance)).toEqual([false, false]);
+
+    const missingAuthorization = structuredClone(valid) as unknown as {
+      authorizes: Record<string, boolean>;
+    };
+    delete missingAuthorization.authorizes.activation;
+    expect(accepts(missingAuthorization)).toEqual([false, false]);
+
+    const missingCapability = structuredClone(valid) as unknown as {
+      mapping: { categories: { capabilities: Record<string, boolean> }[] };
+    };
+    delete missingCapability.mapping.categories[0]!.capabilities.replication;
+    expect(accepts(missingCapability)).toEqual([false, false]);
+
+    const extraAclEntry = await produceCommunitiesStagingRoleSplitInventory(
+      exactInput,
+      () =>
+        fake({
+          acl: {
+            relations: [
+              { granteeOid: '17004', grantorOid: '17003', privilege: 'SELECT', grantOption: false },
+            ],
+          },
+        }).client,
+    );
+    const aclRecord = extraAclEntry.normalized.relations.find(
+      (record) => record.fieldKind === 'ACL_EXPLICIT',
+    )!;
+    if (!aclRecord.semantic || !('entries' in aclRecord.semantic)) throw new Error('test fixture');
+    (
+      aclRecord.semantic
+        .entries[0] as unknown as CommunitiesRoleSplitInputC['normalized']['relations'][number]['semantic'] & {
+        extra?: boolean;
+      }
+    ).extra = true;
+    expect(accepts(extraAclEntry)).toEqual([false, false]);
+
+    for (const fieldKind of ['OWNER', 'ACL_EXPLICIT'] as const) {
+      const unknown = structuredClone(valid);
+      const target = Object.values(unknown.normalized)
+        .flat()
+        .find((record) => record.fieldKind === fieldKind)!;
+      (target as { observationState: string }).observationState = 'UNKNOWN';
+      (target as { valueSha256: string | null }).valueSha256 = null;
+      (target as { provenanceSha256: string | null }).provenanceSha256 = null;
+      (target as { semantic: unknown }).semantic = null;
+      (unknown as { manifestSha256: string }).manifestSha256 =
+        communitiesRoleSplitInputCManifestSha256(unknown);
+      expect(accepts(unknown)).toEqual([true, true]);
+    }
+
+    for (const fieldKind of ['OWNER', 'ACL_EXPLICIT'] as const) {
+      const invalid = structuredClone(valid);
+      const target = Object.values(invalid.normalized)
+        .flat()
+        .find((record) => record.fieldKind === fieldKind)!;
+      (target as { semantic: unknown }).semantic = null;
+      (invalid as { manifestSha256: string }).manifestSha256 =
+        communitiesRoleSplitInputCManifestSha256(invalid);
+      expect(accepts(invalid)).toEqual([false, false]);
+    }
   });
 
   it('reports record deltas and rejects schema, canonicalization, sort or provenance drift', async () => {
