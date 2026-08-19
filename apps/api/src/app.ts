@@ -23,6 +23,7 @@ import { checkDatabaseReady } from '@phub/database';
 import type {
   ClientRoutingPlanRepository,
   CommunityLogoMediaRepository,
+  CupPlayerLevelProjectionRepository,
   CommunityMediaPersistenceRepository,
   AdminNotificationRepository,
   BookingPreferencesRepository,
@@ -141,6 +142,7 @@ import { registerProfilePrivacyRoutes } from './profile/profile-privacy-routes.j
 import { registerProfileFriendshipRoutes } from './profile/profile-friendship-routes.js';
 import { registerProfileLevelHistoryRoutes } from './profile/profile-level-history-routes.js';
 import { registerProfileLevelRoutes } from './profile/profile-level-routes.js';
+import { registerCupPlayerLevelProjectionRoutes } from './profile/cup-player-level-projection-routes.js';
 import { registerPromotionEngagementRoutes } from './promotions/promotion-engagement-routes.js';
 import type { PromotionEngagementSink } from './promotions/legacy-promotion-engagement-sink.js';
 import { registerProfilePhotoMediaRoutes } from './profile/profile-photo-media-routes.js';
@@ -273,6 +275,7 @@ export interface BuildAppOptions {
   readonly locationRepository?: LocationRepository;
   readonly levelEligibilityPolicyRepository?: LevelEligibilityPolicyRepository;
   readonly playerLevelRepository?: PlayerLevelRepository;
+  readonly cupPlayerLevelProjectionRepository?: CupPlayerLevelProjectionRepository;
   readonly locationMediaRepository?: LocationMediaRepository;
   readonly giftCertificateCatalogRepository?: GiftCertificateCatalogRepository;
   readonly giftCertificateMediaRepository?: GiftCertificateMediaRepository;
@@ -939,6 +942,19 @@ export async function buildApp(options: BuildAppOptions) {
         }
       : {}),
     commandHandlers: [resolvePublicTenant, requireIdempotencyKey],
+  });
+  registerCupPlayerLevelProjectionRoutes(app as unknown as FastifyInstance, {
+    enabled: options.config.CUP_PLAYER_LEVEL_PROJECTION_ENABLED,
+    ...(options.config.CUP_PLAYER_LEVEL_PROJECTION_TOKEN
+      ? { integrationToken: options.config.CUP_PLAYER_LEVEL_PROJECTION_TOKEN }
+      : {}),
+    ...(options.config.CUP_PLAYER_LEVEL_PROJECTION_TENANT_KEY
+      ? { authorizedTenantKey: options.config.CUP_PLAYER_LEVEL_PROJECTION_TENANT_KEY }
+      : {}),
+    ...(options.cupPlayerLevelProjectionRepository
+      ? { repository: options.cupPlayerLevelProjectionRepository }
+      : {}),
+    commandHandlers: [resolvePublicTenant],
   });
   registerGameResultRoutes(app as unknown as FastifyInstance, {
     ...(options.gameResultRepository ? { repository: options.gameResultRepository } : {}),

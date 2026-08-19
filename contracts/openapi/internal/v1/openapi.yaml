@@ -13,6 +13,8 @@ security:
 tags:
   - name: games
     description: Service-only Games commands and outbox diagnostics.
+  - name: player-levels
+    description: Service-only authoritative CUP level projection ingestion.
 paths:
   /{tenantKey}/game-commands:
     $ref: ./games.yaml#/paths/~1{tenantKey}~1game-commands
@@ -20,6 +22,8 @@ paths:
     $ref: ./games.yaml#/paths/~1{tenantKey}~1legacy-games~1{legacyGameId}~1roster-commands
   /{tenantKey}/game-events/{eventId}:
     $ref: ./games.yaml#/paths/~1{tenantKey}~1game-events~1{eventId}
+  /{tenantKey}/player-level-projections:
+    $ref: ./player-levels.yaml#/paths/~1{tenantKey}~1player-level-projections
 components:
   securitySchemes:
     PadlHubInternalJwt:
@@ -37,3 +41,8 @@ components:
       in: header
       name: X-Phub-Legacy-Roster-Token
       description: Server-only Node-RED to PadlHub bridge credential; never exposed to a browser.
+    CupPlayerLevelProjectionToken:
+      type: apiKey
+      in: header
+      name: X-Cup-Player-Level-Token
+      description: Server-only CUP to PadlHub projection credential; never exposed to a browser.

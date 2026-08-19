@@ -90,3 +90,20 @@ The native game path, both recovery methods, policy control plane and isolated l
 candidate are implemented, but the candidate is not live and tournament/training writers, Viva
 profile convergence and callback-loss reconciliation are not yet a single authoritative contour.
 `OFF` is the only safe initial migration default.
+
+## Continuation checkpoint: CUP projection sync (2026-08-19)
+
+Implemented in isolation and still not activated:
+
+- expand-only CUP projection inbox/revision fence plus append-only event-id ledger migration;
+- strict server-only ingestion contract with a dedicated default-off token;
+- server-side Viva identity and canonical-scale resolution;
+- atomic profile, sport-level, ordering-fence and audit writes;
+- safe replay/stale handling for coalesced full-snapshot revision jumps and conflicts;
+- ownership fence that prevents self-declared/onboarding writes from replacing a CUP-authoritative
+  level;
+- targeted repository, route, config and contract tests plus an activation runbook.
+
+The matching ph-ab branch contains the transactional sender outbox and bounded reconciliation for
+existing canonical rating states. Neither branch has been committed, integrated, pushed, migrated,
+deployed or enabled at this checkpoint.

@@ -73,6 +73,8 @@ describe('player level repository', () => {
       if (text === 'begin' || text === 'commit') return Promise.resolve({ rows: [] });
       if (text.includes("set_config('app.tenant_id'")) return Promise.resolve({ rows: [] });
       if (text.includes('pg_advisory_xact_lock')) return Promise.resolve({ rows: [] });
+      if (text.includes('from eligibility.cup_player_level_projections'))
+        return Promise.resolve({ rows: [] });
       if (text.includes('from eligibility.player_level_commands')) {
         return Promise.resolve({ rows: [] });
       }
@@ -125,6 +127,8 @@ describe('player level repository', () => {
       if (text === 'begin' || text === 'commit') return Promise.resolve({ rows: [] });
       if (text.includes("set_config('app.tenant_id'")) return Promise.resolve({ rows: [] });
       if (text.includes('pg_advisory_xact_lock')) return Promise.resolve({ rows: [] });
+      if (text.includes('from eligibility.cup_player_level_projections'))
+        return Promise.resolve({ rows: [] });
       if (text.includes('from eligibility.player_level_commands')) {
         return Promise.resolve({
           rows: [{ request_hash: input().requestHash, result_payload: stored }],
@@ -146,6 +150,9 @@ describe('player level repository', () => {
     const query = vi.fn((text: string) => {
       if (text === 'begin' || text === 'commit') return Promise.resolve({ rows: [] });
       if (text.includes("set_config('app.tenant_id'")) return Promise.resolve({ rows: [] });
+      if (text.includes('pg_advisory_xact_lock')) return Promise.resolve({ rows: [] });
+      if (text.includes('from eligibility.cup_player_level_projections'))
+        return Promise.resolve({ rows: [] });
       if (text.includes('from eligibility.player_level_commands'))
         return Promise.resolve({ rows: [] });
       if (text.includes('from eligibility.canonical_levels'))
@@ -177,5 +184,23 @@ describe('player level repository', () => {
           text.includes('update profile.user_summaries') && text.includes('level_value = $4'),
       ),
     ).toBe(true);
+  });
+
+  it('does not let self-declared or onboarding writes replace a CUP-authoritative level', async () => {
+    const query = vi.fn((text: string) => {
+      if (text === 'begin' || text === 'commit') return Promise.resolve({ rows: [] });
+      if (text.includes("set_config('app.tenant_id'")) return Promise.resolve({ rows: [] });
+      if (text.includes('pg_advisory_xact_lock')) return Promise.resolve({ rows: [] });
+      if (text.includes('from eligibility.cup_player_level_projections')) {
+        return Promise.resolve({ rows: [{ present: 1 }] });
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    await expect(
+      createPlayerLevelRepository(pool(query) as never).setLevel(input()),
+    ).resolves.toEqual({ outcome: 'cup_authoritative' });
+    expect(query.mock.calls.some(([text]) => text.includes('update profile.user_summaries'))).toBe(
+      false,
+    );
   });
 });

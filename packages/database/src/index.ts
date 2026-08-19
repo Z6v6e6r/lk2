@@ -34,6 +34,7 @@ export * from './legacy-game-reconciliation-repository.js';
 export * from './level-eligibility-policy-repository.js';
 export * from './player-level-repository.js';
 export * from './client-routing-plan-repository.js';
+export * from './cup-player-level-projection-repository.js';
 export * from './notification-repository.js';
 export * from './notification-endpoint-repository.js';
 export * from './admin-notification-repository.js';

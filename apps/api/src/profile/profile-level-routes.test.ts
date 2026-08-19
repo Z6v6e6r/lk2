@@ -169,6 +169,29 @@ describe('profile level routes', () => {
     expect(repo.setLevel).not.toHaveBeenCalled();
   });
 
+  it('reports CUP ownership instead of allowing self-declared overwrite', async () => {
+    const repo = repository();
+    repo.setLevel.mockResolvedValue({ outcome: 'cup_authoritative' });
+    const app = await buildApp({
+      config,
+      logger: createLogger('profile-level-route-test', 'silent'),
+      pool: fakePool(),
+      playerLevelRepository: repo.value,
+    });
+    apps.push(app);
+    const response = await app.inject({
+      method: 'PUT',
+      url: '/user/api/v1/local-padel/profile/level',
+      headers: {
+        authorization: `Bearer ${await token()}`,
+        'idempotency-key': 'profile-level-command-cup-owned',
+      },
+      payload: { sportCode: 'PADEL', levelId },
+    });
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({ code: 'PROFILE_LEVEL_CUP_AUTHORITATIVE' });
+  });
+
   it('publishes the established assessment without exposing its scoring operations', async () => {
     const repo = repository();
     const app = await buildApp({

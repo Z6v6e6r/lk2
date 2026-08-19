@@ -137,6 +137,15 @@ export function registerProfileLevelRoutes(
           'Idempotency-Key уже использован для другой команды.',
         );
       }
+      if (result.outcome === 'cup_authoritative') {
+        return sendApiError(
+          request,
+          reply,
+          409,
+          'PROFILE_LEVEL_CUP_AUTHORITATIVE',
+          'Уровень уже подтверждён в ЦУП и не может быть изменён самооценкой.',
+        );
+      }
       if (result.outcome === 'level_not_found') {
         return sendApiError(
           request,
@@ -240,6 +249,15 @@ export function registerProfileLevelRoutes(
           409,
           'IDEMPOTENCY_KEY_REUSED',
           'Idempotency-Key уже использован для другой команды.',
+        );
+      }
+      if (result.outcome === 'cup_authoritative') {
+        return sendApiError(
+          request,
+          reply,
+          409,
+          'PROFILE_LEVEL_CUP_AUTHORITATIVE',
+          'Уровень уже подтверждён в ЦУП и не может быть изменён повторной оценкой.',
         );
       }
       if (result.outcome === 'level_not_found') {

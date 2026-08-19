@@ -48,6 +48,7 @@ describe('loadConfig', () => {
       GAMES_COMMANDS_ENABLED: false,
       GAMES_RESULTS_WRITE_MODE: 'disabled',
       CUP_RATING_CONSUMER_ENABLED: false,
+      CUP_PLAYER_LEVEL_PROJECTION_ENABLED: false,
       ACTIVITY_HISTORY_GAME_BACKFILL_ENABLED: false,
       LEGACY_GAMES_ROSTER_SYNC_ENABLED: false,
       LEGACY_GAME_COMMAND_BRIDGE_ENABLED: false,
@@ -119,6 +120,30 @@ describe('loadConfig', () => {
       REALTIME_EXPECTED_REPLICAS: 1,
       CUP_DEV_AUTH_ENABLED: false,
       VIVA_OAUTH_EXISTING_SUBJECT_BOOTSTRAP_ENABLED: false,
+    });
+  });
+
+  it('requires a server token and exact tenant scope when CUP player level projection ingestion is enabled', () => {
+    expect(() =>
+      loadConfig({ ...validEnvironment, CUP_PLAYER_LEVEL_PROJECTION_ENABLED: 'true' }),
+    ).toThrow('requires CUP_PLAYER_LEVEL_PROJECTION_TOKEN');
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        CUP_PLAYER_LEVEL_PROJECTION_ENABLED: 'true',
+        CUP_PLAYER_LEVEL_PROJECTION_TOKEN: 'x'.repeat(32),
+      }),
+    ).toThrow('CUP_PLAYER_LEVEL_PROJECTION_TENANT_KEY');
+    expect(
+      loadConfig({
+        ...validEnvironment,
+        CUP_PLAYER_LEVEL_PROJECTION_ENABLED: 'true',
+        CUP_PLAYER_LEVEL_PROJECTION_TOKEN: 'x'.repeat(32),
+        CUP_PLAYER_LEVEL_PROJECTION_TENANT_KEY: 'local-padel',
+      }),
+    ).toMatchObject({
+      CUP_PLAYER_LEVEL_PROJECTION_ENABLED: true,
+      CUP_PLAYER_LEVEL_PROJECTION_TENANT_KEY: 'local-padel',
     });
   });
 

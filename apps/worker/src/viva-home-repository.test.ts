@@ -45,8 +45,14 @@ describe('Viva Home producer repository', () => {
       ) {
         return Promise.resolve({ rows: [], rowCount: 0 });
       }
+      if (text.includes('pg_advisory_xact_lock')) {
+        expect(values).toEqual([tenantId, 'legacy-viewer-key']);
+        expect(text).toContain('player-level:');
+        return Promise.resolve({ rows: [], rowCount: 1 });
+      }
       if (text.includes('update profile.user_summaries p')) {
         expect(values).toEqual([tenantId, 'legacy-viewer-key', 'Alexey Sergeev', 'C', 3.15022]);
+        expect(text).toContain('eligibility.cup_player_level_projections');
         return Promise.resolve({ rows: [], rowCount: 1 });
       }
       throw new Error(`Unexpected query: ${text}`);
@@ -281,8 +287,15 @@ describe('Viva Home producer repository', () => {
       if (text.includes('from integration.profile_photo_observation_watermarks')) {
         return Promise.resolve({ rows: [], rowCount: 0 });
       }
+      if (text.includes('update profile.user_summaries') && text.includes('set level_label')) {
+        expect(text).toContain('eligibility.cup_player_level_projections');
+        return Promise.resolve({
+          rows: [{ level_label: 'C+', level_value: '3.63000' }],
+          rowCount: 1,
+        });
+      }
       if (
-        text.includes('update profile.user_summaries') ||
+        text.includes('set photo_url') ||
         text.includes('insert into integration.user_profile_photo_sync') ||
         text.includes('insert into integration.profile_photo_observation_watermarks') ||
         text.includes('delete from integration.profile_photo_object_gc')
@@ -372,6 +385,7 @@ describe('Viva Home producer repository', () => {
     expect(serialized).toContain(`/subscriptions/${subscriptionId}`);
     expect(serialized).toContain('"firstName":"Алексей"');
     expect(serialized).toContain('"lastName":"Петров"');
+    expect(serialized).toContain('"level":{"label":"C+","value":3.63');
     expect(serialized).toContain('"nickname":null');
     expect(serialized).toContain('"displayName":"Дмитрий Крикунов"');
     expect(serialized).toContain('"displayName":"Александр Сосновский"');

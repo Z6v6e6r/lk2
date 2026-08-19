@@ -270,10 +270,26 @@ export function persistLegacyParticipantViewerProfile(input: {
   readonly levelValue: number;
 }): Promise<boolean> {
   return withTenantTransaction(input.pool, input.tenantId, async (client) => {
+    await client.query(
+      `select pg_advisory_xact_lock(hashtextextended(
+         'player-level:' || $1::text || ':' || mapping.internal_id::text || ':PADEL', 0
+       ))
+         from integration.external_entity_map mapping
+        where mapping.tenant_id = $1
+          and mapping.external_system = 'LK_LEGACY_SNAPSHOT'
+          and mapping.entity_type = 'game_player' and mapping.external_id = $2`,
+      [input.tenantId, input.participantExternalId],
+    );
     const result = await client.query(
       `update profile.user_summaries p
-          set display_name = $3, level_label = $4, level_value = $5, updated_at = now()
+          set display_name = $3,
+              level_label = case when cup.player_id is null then $4 else p.level_label end,
+              level_value = case when cup.player_id is null then $5 else p.level_value end,
+              updated_at = now()
          from integration.external_entity_map e
+         left join eligibility.cup_player_level_projections cup
+           on cup.tenant_id = e.tenant_id and cup.player_id = e.internal_id
+          and cup.sport_code = 'PADEL'
         where e.tenant_id = $1 and e.external_system = 'LK_LEGACY_SNAPSHOT'
           and e.entity_type = 'game_player' and e.external_id = $2
           and p.tenant_id = e.tenant_id and p.user_id = e.internal_id`,
@@ -1005,15 +1021,29 @@ export function persistVivaHomeSource(input: {
       fetchedAt: input.snapshot.fetchedAt,
       requiredInternalId: input.delegation.userId,
     });
+    // Keep the same mapping-row -> player-level lock order as the CUP projection consumer.
+    await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
+      `player-level:${input.delegation.tenantId}:${input.delegation.userId}:PADEL`,
+    ]);
     const levelLabel = ['D', 'D+', 'C', 'C+', 'B', 'B+', 'A'].includes(
       input.snapshot.profile.level.label,
     )
       ? input.snapshot.profile.level.label
       : null;
-    await client.query(
+    const savedProfileLevel = await client.query<
+      QueryResultRow & { readonly level_label: string | null; readonly level_value: number | string | null }
+    >(
       `update profile.user_summaries
-          set level_label = $3, level_value = $4, updated_at = now()
-        where tenant_id = $1 and user_id = $2`,
+          set level_label = case when cup.player_id is null then $3 else profile.user_summaries.level_label end,
+              level_value = case when cup.player_id is null then $4 else profile.user_summaries.level_value end,
+              updated_at = now()
+         from (select $1::uuid as tenant_id, $2::uuid as player_id) actor
+         left join eligibility.cup_player_level_projections cup
+           on cup.tenant_id = actor.tenant_id and cup.player_id = actor.player_id
+          and cup.sport_code = 'PADEL'
+        where profile.user_summaries.tenant_id = actor.tenant_id
+          and profile.user_summaries.user_id = actor.player_id
+        returning profile.user_summaries.level_label, profile.user_summaries.level_value`,
       [
         input.delegation.tenantId,
         input.delegation.userId,
@@ -1021,6 +1051,23 @@ export function persistVivaHomeSource(input: {
         input.snapshot.profile.level.value,
       ],
     );
+    const storedLevel = savedProfileLevel.rows[0];
+    const storedLevelValue = storedLevel?.level_value === null || storedLevel?.level_value === undefined
+      ? null
+      : Number(storedLevel.level_value);
+    const effectiveSnapshot = storedLevel?.level_label && Number.isFinite(storedLevelValue)
+      ? {
+          ...input.snapshot,
+          profile: {
+            ...input.snapshot.profile,
+            level: {
+              ...input.snapshot.profile.level,
+              label: storedLevel.level_label,
+              value: storedLevelValue as number,
+            },
+          }
+        }
+      : input.snapshot;
     let resolvedAvatarUrl = input.profilePhoto?.avatarUrl ?? null;
     if (input.profilePhoto) {
       resolvedAvatarUrl = await persistProfilePhotoWithClient(client, {
@@ -1066,7 +1113,7 @@ export function persistVivaHomeSource(input: {
     const results: { component: string; revision: string }[] = [];
     for (const item of asHomeValues({
       userId: input.delegation.userId,
-      snapshot: input.snapshot,
+      snapshot: effectiveSnapshot,
       avatarUrl: resolvedAvatarUrl,
       bookingIds,
       subscriptionIds,

@@ -42,6 +42,7 @@ export type SetPlayerLevelResult =
       readonly replayed: boolean;
     }
   | { readonly outcome: 'idempotency_conflict' }
+  | { readonly outcome: 'cup_authoritative' }
   | { readonly outcome: 'level_not_found' }
   | { readonly outcome: 'profile_not_found' };
 
@@ -171,8 +172,17 @@ export function createPlayerLevelRepository(pool: Pool): PlayerLevelRepository {
           throw new Error('PLAYER_LEVEL_NUMERIC_INVALID');
         }
         await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
-          `player-level:${input.tenantId}:${input.playerId}:${input.idempotencyKey}`,
+          `player-level:${input.tenantId}:${input.playerId}:${input.sportCode}`,
         ]);
+        const cupProjection = await queryOne<QueryResultRow & { readonly present: number }>(
+          client,
+          `select 1 as present
+             from eligibility.cup_player_level_projections
+            where tenant_id = $1 and player_id = $2 and sport_code = $3
+            for update`,
+          [input.tenantId, input.playerId, input.sportCode],
+        );
+        if (cupProjection) return { outcome: 'cup_authoritative' };
         const replay = await queryOne<
           QueryResultRow & { readonly request_hash: string; readonly result_payload: unknown }
         >(

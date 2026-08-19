@@ -129,6 +129,12 @@ const environmentSchema = z.object({
   CUP_RATING_API_URL: z.string().url().optional(),
   CUP_RATING_SERVICE_TOKEN: z.string().min(32).optional(),
   CUP_RATING_TIMEOUT_MS: z.coerce.number().int().min(500).max(30_000).default(5_000),
+  CUP_PLAYER_LEVEL_PROJECTION_ENABLED: booleanFromEnvironment,
+  CUP_PLAYER_LEVEL_PROJECTION_TOKEN: z.string().min(32).optional(),
+  CUP_PLAYER_LEVEL_PROJECTION_TENANT_KEY: z
+    .string()
+    .regex(/^[a-z0-9][a-z0-9-]{1,62}$/)
+    .optional(),
   ACTIVITY_HISTORY_ENABLED: booleanFromEnvironment,
   ACTIVITY_HISTORY_SYNC_ENABLED: booleanFromEnvironment,
   ACTIVITY_HISTORY_GAME_BACKFILL_ENABLED: booleanFromEnvironment,
@@ -468,6 +474,11 @@ export function loadConfig(
       'CUP_RATING_SERVICE_TOKEN',
       'CUP_RATING_SERVICE_TOKEN_FILE',
     ),
+    CUP_PLAYER_LEVEL_PROJECTION_TOKEN: materializeFileSecret(
+      environment,
+      'CUP_PLAYER_LEVEL_PROJECTION_TOKEN',
+      'CUP_PLAYER_LEVEL_PROJECTION_TOKEN_FILE',
+    ),
     LEGACY_GAME_COMMAND_BRIDGE_TOKEN: materializeFileSecret(
       environment,
       'LEGACY_GAME_COMMAND_BRIDGE_TOKEN',
@@ -563,6 +574,15 @@ export function loadConfig(
   ) {
     throw new Error(
       'CUP_RATING_CONSUMER_ENABLED requires CUP_RATING_API_URL and CUP_RATING_SERVICE_TOKEN',
+    );
+  }
+  if (
+    parsed.data.CUP_PLAYER_LEVEL_PROJECTION_ENABLED &&
+    (!parsed.data.CUP_PLAYER_LEVEL_PROJECTION_TOKEN ||
+      !parsed.data.CUP_PLAYER_LEVEL_PROJECTION_TENANT_KEY)
+  ) {
+    throw new Error(
+      'CUP_PLAYER_LEVEL_PROJECTION_ENABLED requires CUP_PLAYER_LEVEL_PROJECTION_TOKEN and CUP_PLAYER_LEVEL_PROJECTION_TENANT_KEY',
     );
   }
   if (parsed.data.APP_ENV === 'production' && parsed.data.ACTIVITY_HISTORY_ENABLED) {

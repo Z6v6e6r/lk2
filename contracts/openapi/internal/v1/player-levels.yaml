@@ -1,0 +1,96 @@
+paths:
+  /{tenantKey}/player-level-projections:
+    post:
+      tags: [player-levels]
+      summary: Apply one authoritative CUP player-level projection
+      operationId: applyCupPlayerLevelProjection
+      security:
+        - CupPlayerLevelProjectionToken: []
+      parameters:
+        - in: path
+          name: tenantKey
+          required: true
+          schema:
+            type: string
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
+          description: Must equal sourceEventId.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CupPlayerLevelProjection'
+      responses:
+        '200':
+          description: Applied, replayed or stale projection.
+        '400':
+          description: Invalid strict contract or idempotency key.
+        '403':
+          description: Invalid server credential or tenant outside its exact configured scope.
+        '409':
+          description: Identity, scale or idempotency conflict.
+        '503':
+          description: Projection ingestion is disabled.
+components:
+  schemas:
+    CupPlayerLevelProjection:
+      type: object
+      additionalProperties: false
+      required:
+        [schemaVersion, sourceEventId, sourceRevision, occurredAt, player, sportCode, level, source]
+      properties:
+        schemaVersion:
+          type: integer
+          const: 1
+        sourceEventId:
+          type: string
+          minLength: 8
+          maxLength: 200
+        sourceRevision:
+          type: integer
+          minimum: 0
+        occurredAt:
+          type: string
+          format: date-time
+        player:
+          type: object
+          additionalProperties: false
+          required: [externalClientId]
+          properties:
+            externalClientId:
+              type: string
+              minLength: 1
+              maxLength: 200
+        sportCode:
+          type: string
+          const: PADEL
+        level:
+          type: object
+          additionalProperties: false
+          required: [code, numericValue]
+          properties:
+            code:
+              type: string
+              enum: [D, D+, C, C+, B, B+, A]
+            numericValue:
+              type: number
+              minimum: 1
+              maximum: 7
+        source:
+          type: object
+          additionalProperties: false
+          required: [eventType, formulaVersion]
+          properties:
+            eventType:
+              type: string
+              enum:
+                - RATING_INITIAL_IMPORTED
+                - RATING_BOOTSTRAPPED_FROM_VIVA
+                - RATING_MANUALLY_CHANGED
+            formulaVersion:
+              type: string
+              const: padel-rating-grade-v1
