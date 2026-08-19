@@ -14,6 +14,7 @@ import {
   communitiesStagingRoleSplitRestoreMarkerRequestSha256,
   COMMUNITIES_STAGING_ROLE_SPLIT_CLONE_MANIFEST_SHA256,
   communitiesRoleSplitInputCArtifactSha256,
+  communitiesRoleSplitInputCArtifactText,
   communitiesRoleSplitInputCManifestSha256,
   type CommunitiesRoleSplitAcceptanceEnvelope,
   type CommunitiesRoleSplitExpectedPins,
@@ -42,6 +43,10 @@ import {
   produceCommunitiesStagingRoleSplitInventory,
   type CommunitiesStagingRoleSplitInventoryClientFactory,
 } from './communities-staging-role-split-inventory.js';
+import {
+  communitiesStagingRoleSplitInventoryArtifactVerificationText,
+  verifyCommunitiesStagingRoleSplitInventoryArtifact,
+} from './communities-staging-role-split-inventory-artifact.js';
 
 const sha = (value: string): string => createHash('sha256').update(value).digest('hex');
 type JsonSchema = Record<string, unknown>;
@@ -538,6 +543,56 @@ describe('Communities role split INPUT_C producer', () => {
     expect(target.queries.at(-1)).toBe('rollback');
   });
 
+  it('verifies only canonical INPUT_C bytes against an independently supplied artifact pin', async () => {
+    const report = await produceCommunitiesStagingRoleSplitInventory(
+      exactInput,
+      () => fake().client,
+    );
+    const artifactBytes = Buffer.from(communitiesRoleSplitInputCArtifactText(report), 'utf8');
+    const artifactSha256 = communitiesRoleSplitInputCArtifactSha256(report);
+    const verification = verifyCommunitiesStagingRoleSplitInventoryArtifact(
+      artifactBytes,
+      artifactSha256,
+    );
+    expect(verification).toMatchObject({
+      schemaVersion: 'communities-role-split-inventory-artifact-verification-v1',
+      artifactSha256,
+      manifestSha256: report.manifestSha256,
+      anomalyObservationCount: 0,
+      binding: { callerSuppliedArtifactPinMatched: true, canonicalArtifactBytes: true },
+      limitations: {
+        independentCustodyNotAttested: true,
+        cleanCloneProvenanceNotAttested: true,
+      },
+      authorizes: {
+        roleCreation: false,
+        roleRepair: false,
+        roleSplit: false,
+        aclMutation: false,
+        schemaMutation: false,
+        sharedDatabaseMutation: false,
+        migration: false,
+        deploy: false,
+        activation: false,
+      },
+    });
+    expect(Object.keys(verification.normalizedRecordCounts)).toEqual([
+      ...COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_CATEGORY_NAMES,
+    ]);
+    expect(communitiesStagingRoleSplitInventoryArtifactVerificationText(verification)).not.toMatch(
+      /phub_restore|phub_staging|inventory_reader|7421000000000000000|45678/u,
+    );
+    expect(() =>
+      verifyCommunitiesStagingRoleSplitInventoryArtifact(artifactBytes, repeated('9')),
+    ).toThrow('COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_ARTIFACT_INVALID');
+    expect(() =>
+      verifyCommunitiesStagingRoleSplitInventoryArtifact(
+        Buffer.from(` ${artifactBytes.toString('utf8')}`, 'utf8'),
+        artifactSha256,
+      ),
+    ).toThrow('COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_ARTIFACT_INVALID');
+  });
+
   it('passes a real C artifact through JSON Schema structural validation and the D evaluator', async () => {
     const select = {
       granteeOid: '17004',
@@ -956,8 +1011,13 @@ describe('Communities role split INPUT_C producer', () => {
       '../dist/compare-communities-staging-role-split-inventories.js',
       import.meta.url,
     );
+    const artifactVerifier = new URL(
+      '../dist/verify-communities-staging-role-split-inventory-artifact.js',
+      import.meta.url,
+    );
     expect(existsSync(producer)).toBe(true);
     expect(existsSync(comparison)).toBe(true);
+    expect(existsSync(artifactVerifier)).toBe(true);
     const smoke = spawnSync(process.execPath, [fileURLToPath(producer)], {
       env: {},
       encoding: 'utf8',
@@ -975,6 +1035,15 @@ describe('Communities role split INPUT_C producer', () => {
       status: 1,
       stdout: '',
       stderr: 'COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_COMPARISON_INPUT_INVALID\n',
+    });
+    const artifactVerifierSmoke = spawnSync(process.execPath, [fileURLToPath(artifactVerifier)], {
+      env: {},
+      encoding: 'utf8',
+    });
+    expect(artifactVerifierSmoke).toMatchObject({
+      status: 1,
+      stdout: '',
+      stderr: 'COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_ARTIFACT_INVALID\n',
     });
   }, 30_000);
 });

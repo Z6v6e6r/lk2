@@ -159,6 +159,8 @@ esac
 port="${binding##*:}"
 
 PHUB_COMMUNITIES_MARKER_PG16_VERIFY_URL="postgresql://postgres:$FIXTURE_PASSWORD@127.0.0.1:$port/$ADMIN_DATABASE" \
+PHUB_COMMUNITIES_MARKER_PG16_VERIFY_CONTAINER_ID="$CONTAINER_ID" \
+PHUB_COMMUNITIES_MARKER_PG16_VERIFY_CONTAINER_NAME="$CONTAINER_NAME" \
   ./node_modules/.bin/vitest run \
     apps/migrator/src/communities-staging-role-split-marker-ceremony-pg-host.pg.test.ts \
     --testTimeout 30000
@@ -173,4 +175,4 @@ if docker network inspect "$NETWORK_NAME" >/dev/null 2>&1; then
   fail network_retained
 fi
 
-printf '%s\n' 'PG16_VERIFY_PASSED|major=16|fixture=disposable|container_retained=false|network_retained=false'
+printf '%s\n' 'PG16_VERIFY_PASSED|major=16|fixture=disposable|restore=custom_archive|inventory=local_redacted|container_retained=false|network_retained=false'

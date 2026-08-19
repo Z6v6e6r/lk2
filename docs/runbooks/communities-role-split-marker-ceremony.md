@@ -86,17 +86,37 @@ explicit/effective ACL entries, including redacted grantor evidence and occurren
 before/after evaluator is review evidence only and does not authorize the ceremony or any role/ACL
 mutation.
 
+After `npm run build -w @phub/migrator`, a separate custodian verifies an independently retained
+artifact pin without rewriting the artifact:
+
+```sh
+node apps/migrator/dist/verify-communities-staging-role-split-inventory-artifact.js \
+  --artifact /absolute/root-owned/private/input-c.json \
+  --expected-sha256 '<independently-retained-sha256>'
+```
+
+The verifier requires a root-owned regular non-link artifact under the existing bounded evidence
+reader, rejects non-canonical JSON bytes or a mismatched digest, and emits no raw role, OID or object
+identity. It proves only that the caller-supplied pin matched: the report explicitly does not attest
+independent custody or clean-clone provenance and remains non-authorizing.
+
 ## Local disposable PostgreSQL 16 gate
 
 `npm run db:communities-role-split:pg16:verify` owns one uniquely named `postgres:16-alpine`
 container, one dedicated labelled bridge network and a random loopback port. It uses a fresh
 non-logged SCRAM credential, refuses to pull an image, does not join an application network and
 removes only resources whose exact ID, name and disposable label match. The runner creates a
-synthetic source database and a same-cluster template clone, then exercises real PG16
+synthetic source database, writes a private custom-format `pg_dump`, verifies a real
+`pg_restore --list`, creates an empty clone from `template0` and restores through
+`pg_restore --exit-on-error` using the already custody-checked archive descriptor. The restore does
+not use `--no-owner` or `--no-acl` and uses session authorization for archive owner/grantor
+semantics. Because PostgreSQL archives extension creation rather than independently dumping every
+extension member ACL/owner change, the fixture pre-seeds the exact pinned `pg_trgm` extension
+security baseline before restore. The gate then exercises real PG16
 catalog/OID/owner/system/ledger bindings, exact marker readback, receipt restart rejection,
-deterministic twelve-category INPUT_C production and a no-change acceptance evaluation. Quoted
-identifiers, overloaded functions, a sequence, a type, FORCE RLS, a named policy and a trusted
-extension member are present in the synthetic catalog.
+deterministic twelve-category INPUT_C production, a separately pinned canonical artifact readback
+and a no-change acceptance evaluation. Quoted identifiers, overloaded functions, a sequence, a
+type, FORCE RLS, a named policy and a trusted extension member are present in the synthetic catalog.
 
 Run `npm install` in the exact checkout or worktree before this gate. The runner refuses parent
 directory or global Vitest resolution and requires the checkout-local `./node_modules/.bin/vitest`.
@@ -107,25 +127,36 @@ Extension-managed objects are represented by the protected `extensions` category
 offered a second time to the ownership/ACL plan; implicit relation and array types are likewise not
 independent grant targets.
 
-This is not archive-restore evidence. The clone uses `CREATE DATABASE ... TEMPLATE ...`, the
-injected restore callback performs no `pg_restore`, and the marker/evidence used by INPUT_C is a
-synthetic local fixture. It does not prove the production CLI connection path, independent artifact
-custody, response-loss handling or a cluster-wide DDL fence. It creates no staging/production
-database, role, key, request or inventory.
+This is local synthetic archive-restore evidence, not trusted staging inventory. It proves that the
+test adapter preserves the synthetic owners, explicit/effective ACLs, extension state, FORCE RLS,
+policies and ledger through real PostgreSQL 16 archive tools. Database creation ownership and the
+database-level CONNECT ACL are established separately because a content-only archive does not
+create the target database. The extension pre-seed is part of the pinned synthetic fixture and must
+not be generalized to a real target until a trusted clean-clone preimage proves the exact installed
+extension names, versions, schemas, owners and member security state. The independently pinned
+artifact verifier accepts only exact canonical
+INPUT_C bytes from a root-owned private file and emits only digests, counts, booleans and false
+authorizations. Local generation and verification in one disposable contour do not prove
+organizationally independent pin custody, the production CLI connection path, independently sourced
+clean-clone provenance, response-loss handling or a cluster-wide DDL fence. The gate creates no
+staging/production database, role, key, request or inventory.
 
 ## Required before installation or execution
 
 1. Review the exact installation candidate, root-owned fixed request/state/evidence directories,
    forced-command key and operator-selected connections. Repository presence alone grants no
    installation or execution authority.
-2. Complete the concrete ownership-and-ACL-preserving archive restore callback. Do not reuse the
-   generic `--no-owner --no-acl` verifier.
-3. Complete the remaining PostgreSQL 16 archive-restore tests for owner/ACL preservation, response
-   loss, cleanup failure and evidence failure. The local template-clone gate proves catalog/RLS,
-   exact comment readback and restart behavior but is not `pg_restore` evidence.
+2. Bind the reviewed ownership-and-ACL-preserving restore command to the exact installed ceremony
+   candidate; do not reuse a generic `--no-owner --no-acl` verifier or infer installation authority
+   from the local disposable adapter.
+3. Complete the remaining PostgreSQL 16 failure matrix for response loss, cleanup failure and
+   evidence publication failure. The local custom-archive gate proves the successful synthetic
+   `pg_restore` path, catalog/RLS, exact comment readback and restart behavior only.
 4. Execute the structured `pg_catalog.aclexplode` INPUT_C producer against a separately authorized,
-   independently sourced clean clone and independently pin the redacted before/after artifacts. The
-   local synthetic producer/evaluator gate is catalog proof, but not trusted staging inventory.
+   independently sourced clean clone and independently pin the redacted before/after artifacts.
+   Verify each exact canonical artifact with the separately built
+   `verify-communities-staging-role-split-inventory-artifact` CLI and its independently supplied
+   SHA-256. The local synthetic producer/evaluator gate is catalog proof, not trusted inventory.
 5. Complete independent security and migration review of the real adapter and failure matrix.
 6. Obtain separate approvals for installation, forced-command key, one ceremony run and any later
    post-marker cleanup.

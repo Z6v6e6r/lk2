@@ -1,5 +1,24 @@
 # Worklog
 
+## 2026-08-20 — Communities real PG16 archive and inventory handoff gate
+
+- Replaced the disposable template clone with a private custom-format `pg_dump`, real TOC readback,
+  empty `template0` target and `pg_restore --exit-on-error` through the custody-checked archive
+  descriptor, without `--no-owner` or `--no-acl` and with archive session authorization.
+- Made the synthetic fixture pre-seed its exact `pg_trgm` security baseline because `pg_dump`
+  recreates an extension but does not preserve arbitrary owner/ACL changes on every member; the
+  real clean-clone preimage remains mandatory before generalizing that extension step.
+- Kept the synthetic owner, ACL, extension, empty-ACL, FORCE-RLS, policy and ledger assertions after
+  restore, while retaining exact labelled Docker cleanup and loopback-only SCRAM isolation.
+- Added an INPUT_C artifact verifier that accepts only canonical bytes matching an independently
+  supplied SHA-256 and emits a redacted digest/count/boolean report with all mutation, migration,
+  deploy and activation authorizations false. The report explicitly does not attest independent
+  custody or clean-clone provenance; those remain operator evidence gates.
+- Kept actual trusted inventory collection, staging installation, ceremony execution, role/ACL
+  mutation, migration, deployment and activation outside this local checkpoint. A trusted artifact
+  still requires a separately authorized and independently sourced clean clone and independent pin
+  custody.
+
 ## 2026-08-19 — Communities role-split clone evidence checkpoint
 
 - Added an isolated local PostgreSQL 16 runner that owns and removes one labelled container, one

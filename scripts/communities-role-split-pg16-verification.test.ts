@@ -6,6 +6,13 @@ const runner = readFileSync(
   new URL('./run-communities-role-split-pg16-verification.sh', import.meta.url),
   'utf8',
 );
+const operatorTest = readFileSync(
+  new URL(
+    '../apps/migrator/src/communities-staging-role-split-marker-ceremony-pg-host.pg.test.ts',
+    import.meta.url,
+  ),
+  'utf8',
+);
 
 describe('communities role-split disposable PG16 runner contract', () => {
   it('creates an isolated PG16 fixture without pulling or exposing a non-loopback port', () => {
@@ -40,11 +47,27 @@ describe('communities role-split disposable PG16 runner contract', () => {
 
   it('runs only the dedicated operator test and confirms teardown', () => {
     expect(runner).toContain('PHUB_COMMUNITIES_MARKER_PG16_VERIFY_URL=');
+    expect(runner).toContain('PHUB_COMMUNITIES_MARKER_PG16_VERIFY_CONTAINER_ID="$CONTAINER_ID"');
+    expect(runner).toContain(
+      'PHUB_COMMUNITIES_MARKER_PG16_VERIFY_CONTAINER_NAME="$CONTAINER_NAME"',
+    );
     expect(runner).toContain(
       'apps/migrator/src/communities-staging-role-split-marker-ceremony-pg-host.pg.test.ts',
     );
     expect(runner).toContain(
-      'PG16_VERIFY_PASSED|major=16|fixture=disposable|container_retained=false|network_retained=false',
+      'PG16_VERIFY_PASSED|major=16|fixture=disposable|restore=custom_archive|inventory=local_redacted|container_retained=false|network_retained=false',
     );
+  });
+
+  it('uses a custom archive and restores it into template0 without owner or ACL suppression', () => {
+    expect(operatorTest).toContain("'--format=custom'");
+    expect(operatorTest).toContain("'pg_restore', '--list'");
+    expect(operatorTest).toContain('WITH TEMPLATE template0 OWNER');
+    expect(operatorTest).toContain("'--exit-on-error'");
+    expect(operatorTest).toContain("'--use-set-session-authorization'");
+    expect(operatorTest).toContain('stdinFd: archiveFile.fd');
+    expect(operatorTest).toContain("expect(restoreArguments).not.toContain('--no-owner')");
+    expect(operatorTest).toContain("expect(restoreArguments).not.toContain('--no-acl')");
+    expect(operatorTest).not.toMatch(/pg_restore[^\n]*--no-(?:owner|acl)/u);
   });
 });

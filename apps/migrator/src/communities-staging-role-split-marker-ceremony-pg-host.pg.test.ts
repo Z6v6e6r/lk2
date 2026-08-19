@@ -1,5 +1,7 @@
+import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { chmod, mkdtemp, open, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -14,6 +16,7 @@ import {
   communitiesStagingRoleSplitRestoreMarkerPayloadSha256,
   communitiesStagingRoleSplitRestoreMarkerRequestSha256,
   communitiesRoleSplitInputCArtifactSha256,
+  communitiesRoleSplitInputCArtifactText,
   createCommunitiesStagingRoleSplitMarkerCeremonyCandidate,
   type CommunitiesRoleSplitAcceptanceEnvelope,
   type CommunitiesRoleSplitExpectedPins,
@@ -40,8 +43,10 @@ import {
   produceCommunitiesStagingRoleSplitInventory,
   type CommunitiesStagingRoleSplitInventoryClientFactory,
 } from './communities-staging-role-split-inventory.js';
+import { verifyCommunitiesStagingRoleSplitInventoryArtifact } from './communities-staging-role-split-inventory-artifact.js';
 
 const ADMIN_DATABASE = 'phub_role_split_admin_verify';
+const DISPOSABLE_CONTAINER_LABEL = 'communities-role-split-pg16-verification';
 const SOURCE_DATABASE = 'phub_source_verify';
 const CLONE_DATABASE = 'phub_restore_901_1';
 const OWNER_ROLE = 'phub_owner_verify';
@@ -59,7 +64,78 @@ const ledger: readonly CommunitiesStagingRoleSplitLedgerEntry[] = [
   { filename: '0002_acl_fixture.sql', checksum: 'b'.repeat(64) },
 ];
 
-const sha = (value: string) => createHash('sha256').update(value, 'utf8').digest('hex');
+const sha = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
+
+function parseDisposableContainerId(value: string | undefined): string {
+  if (value === undefined || !/^[a-f0-9]{64}$/u.test(value))
+    throw new Error('PG16_VERIFY_CONTAINER_ID_INVALID');
+  return value;
+}
+
+function parseDisposableContainerName(value: string | undefined): string {
+  if (value === undefined || !/^phub-communities-pg16-verify-[1-9][0-9]*$/u.test(value))
+    throw new Error('PG16_VERIFY_CONTAINER_NAME_INVALID');
+  return value;
+}
+
+type DisposableDockerCommandOptions = {
+  readonly stdinFd?: number;
+  readonly stdoutFd?: number;
+  readonly maximumStdoutBytes?: number;
+};
+
+async function runDockerCliCommand(
+  arguments_: readonly string[],
+  options: DisposableDockerCommandOptions = {},
+): Promise<Buffer> {
+  if (arguments_.length === 0) throw new Error('PG16_VERIFY_DOCKER_COMMAND_INVALID');
+  const maximumStdoutBytes = options.maximumStdoutBytes ?? 1024 * 1024;
+  return await new Promise<Buffer>((resolve, reject) => {
+    const child = spawn('docker', [...arguments_], {
+      stdio: [options.stdinFd ?? 'ignore', options.stdoutFd ?? 'pipe', 'pipe'],
+      timeout: 30_000,
+      killSignal: 'SIGKILL',
+    });
+    const stdout: Buffer[] = [];
+    let stdoutBytes = 0;
+    let stderrBytes = 0;
+    let outputExceeded = false;
+    child.stdout?.on('data', (chunk: Buffer) => {
+      stdoutBytes += chunk.length;
+      if (stdoutBytes > maximumStdoutBytes) {
+        outputExceeded = true;
+        child.kill('SIGKILL');
+        return;
+      }
+      stdout.push(chunk);
+    });
+    child.stderr?.on('data', (chunk: Buffer) => {
+      stderrBytes += chunk.length;
+      if (stderrBytes > 64 * 1024) {
+        outputExceeded = true;
+        child.kill('SIGKILL');
+      }
+    });
+    child.once('error', () => reject(new Error('PG16_VERIFY_DOCKER_COMMAND_FAILED')));
+    child.once('close', (code, signal) => {
+      if (outputExceeded) reject(new Error('PG16_VERIFY_DOCKER_COMMAND_OUTPUT_EXCEEDED'));
+      else if (code !== 0 || signal !== null)
+        reject(new Error('PG16_VERIFY_DOCKER_COMMAND_FAILED'));
+      else resolve(Buffer.concat(stdout));
+    });
+  });
+}
+
+async function runDisposableDockerCommand(
+  containerId: string,
+  command: readonly string[],
+  options: DisposableDockerCommandOptions = {},
+): Promise<Buffer> {
+  return await runDockerCliCommand(
+    ['exec', ...(options.stdinFd === undefined ? [] : ['--interactive']), containerId, ...command],
+    options,
+  );
+}
 
 function quoteIdentifier(value: string): string {
   return `"${value.replaceAll('"', '""')}"`;
@@ -92,6 +168,113 @@ function roleDatabaseUrl(base: URL, role: string, database: string): string {
   const result = new URL(databaseUrl(base, database));
   result.username = role;
   return result.toString();
+}
+
+async function normalizePgTrgmExtensionSecurity(client: Client): Promise<void> {
+  const functions = await client.query<{ identity: string }>(
+    `SELECT routine.oid::regprocedure::text AS identity
+       FROM pg_catalog.pg_proc routine
+       JOIN pg_catalog.pg_depend dependency
+         ON dependency.classid = 'pg_catalog.pg_proc'::pg_catalog.regclass
+        AND dependency.objid = routine.oid
+        AND dependency.objsubid = 0
+        AND dependency.deptype = 'e'
+       JOIN pg_catalog.pg_extension extension
+         ON extension.oid = dependency.refobjid
+        AND dependency.refclassid = 'pg_catalog.pg_extension'::pg_catalog.regclass
+      WHERE extension.extname = 'pg_trgm'`,
+  );
+  for (const routine of functions.rows) {
+    await client.query(
+      `ALTER FUNCTION ${routine.identity} OWNER TO ${quoteIdentifier(OWNER_ROLE)}`,
+    );
+    await client.query(`REVOKE ALL ON FUNCTION ${routine.identity} FROM PUBLIC`);
+  }
+  const types = await client.query<{ schema_name: string; type_name: string }>(
+    `SELECT namespace.nspname AS schema_name, object_type.typname AS type_name
+       FROM pg_catalog.pg_type object_type
+       JOIN pg_catalog.pg_namespace namespace ON namespace.oid = object_type.typnamespace
+       JOIN pg_catalog.pg_depend dependency
+         ON dependency.classid = 'pg_catalog.pg_type'::pg_catalog.regclass
+        AND dependency.objid = object_type.oid
+        AND dependency.objsubid = 0
+        AND dependency.deptype = 'e'
+       JOIN pg_catalog.pg_extension extension
+         ON extension.oid = dependency.refobjid
+        AND dependency.refclassid = 'pg_catalog.pg_extension'::pg_catalog.regclass
+      WHERE extension.extname = 'pg_trgm'`,
+  );
+  for (const type of types.rows) {
+    await client.query(
+      `ALTER TYPE ${quoteIdentifier(type.schema_name)}.${quoteIdentifier(type.type_name)} OWNER TO ${quoteIdentifier(OWNER_ROLE)}`,
+    );
+    await client.query(
+      `REVOKE ALL ON TYPE ${quoteIdentifier(type.schema_name)}.${quoteIdentifier(type.type_name)} FROM PUBLIC`,
+    );
+  }
+  const operators = await client.query<{ identity: string }>(
+    `SELECT operator.oid::regoperator::text AS identity
+       FROM pg_catalog.pg_operator operator
+       JOIN pg_catalog.pg_depend dependency
+         ON dependency.classid = 'pg_catalog.pg_operator'::pg_catalog.regclass
+        AND dependency.objid = operator.oid
+        AND dependency.objsubid = 0
+        AND dependency.deptype = 'e'
+       JOIN pg_catalog.pg_extension extension
+         ON extension.oid = dependency.refobjid
+        AND dependency.refclassid = 'pg_catalog.pg_extension'::pg_catalog.regclass
+      WHERE extension.extname = 'pg_trgm'`,
+  );
+  for (const operator of operators.rows)
+    await client.query(
+      `ALTER OPERATOR ${operator.identity} OWNER TO ${quoteIdentifier(OWNER_ROLE)}`,
+    );
+  const operatorClasses = await client.query<{
+    schema_name: string;
+    class_name: string;
+    access_method: string;
+  }>(
+    `SELECT namespace.nspname AS schema_name, operator_class.opcname AS class_name, access_method.amname AS access_method
+       FROM pg_catalog.pg_opclass operator_class
+       JOIN pg_catalog.pg_namespace namespace ON namespace.oid = operator_class.opcnamespace
+       JOIN pg_catalog.pg_am access_method ON access_method.oid = operator_class.opcmethod
+       JOIN pg_catalog.pg_depend dependency
+         ON dependency.classid = 'pg_catalog.pg_opclass'::pg_catalog.regclass
+        AND dependency.objid = operator_class.oid
+        AND dependency.objsubid = 0
+        AND dependency.deptype = 'e'
+       JOIN pg_catalog.pg_extension extension
+         ON extension.oid = dependency.refobjid
+        AND dependency.refclassid = 'pg_catalog.pg_extension'::pg_catalog.regclass
+      WHERE extension.extname = 'pg_trgm'`,
+  );
+  for (const operatorClass of operatorClasses.rows)
+    await client.query(
+      `ALTER OPERATOR CLASS ${quoteIdentifier(operatorClass.schema_name)}.${quoteIdentifier(operatorClass.class_name)} USING ${quoteIdentifier(operatorClass.access_method)} OWNER TO ${quoteIdentifier(OWNER_ROLE)}`,
+    );
+  const operatorFamilies = await client.query<{
+    schema_name: string;
+    family_name: string;
+    access_method: string;
+  }>(
+    `SELECT namespace.nspname AS schema_name, operator_family.opfname AS family_name, access_method.amname AS access_method
+       FROM pg_catalog.pg_opfamily operator_family
+       JOIN pg_catalog.pg_namespace namespace ON namespace.oid = operator_family.opfnamespace
+       JOIN pg_catalog.pg_am access_method ON access_method.oid = operator_family.opfmethod
+       JOIN pg_catalog.pg_depend dependency
+         ON dependency.classid = 'pg_catalog.pg_opfamily'::pg_catalog.regclass
+        AND dependency.objid = operator_family.oid
+        AND dependency.objsubid = 0
+        AND dependency.deptype = 'e'
+       JOIN pg_catalog.pg_extension extension
+         ON extension.oid = dependency.refobjid
+        AND dependency.refclassid = 'pg_catalog.pg_extension'::pg_catalog.regclass
+      WHERE extension.extname = 'pg_trgm'`,
+  );
+  for (const operatorFamily of operatorFamilies.rows)
+    await client.query(
+      `ALTER OPERATOR FAMILY ${quoteIdentifier(operatorFamily.schema_name)}.${quoteIdentifier(operatorFamily.family_name)} USING ${quoteIdentifier(operatorFamily.access_method)} OWNER TO ${quoteIdentifier(OWNER_ROLE)}`,
+    );
 }
 
 function markerEvidenceText(
@@ -291,6 +474,14 @@ interface Pg16Fixture {
 const configuredUrl = process.env.PHUB_COMMUNITIES_MARKER_PG16_VERIFY_URL;
 const parsedConfiguredUrl =
   configuredUrl === undefined ? null : parseDisposablePg16Url(configuredUrl);
+const configuredContainerId =
+  configuredUrl === undefined
+    ? null
+    : parseDisposableContainerId(process.env.PHUB_COMMUNITIES_MARKER_PG16_VERIFY_CONTAINER_ID);
+const configuredContainerName =
+  configuredUrl === undefined
+    ? null
+    : parseDisposableContainerName(process.env.PHUB_COMMUNITIES_MARKER_PG16_VERIFY_CONTAINER_NAME);
 
 describe('PG16 marker host integration guard', () => {
   it('accepts only the exact loopback disposable admin database', () => {
@@ -309,6 +500,29 @@ describe('PG16 marker host integration guard', () => {
       ),
     ).toThrow('PG16_VERIFY_URL_OPTIONS_FORBIDDEN');
   });
+
+  it('accepts only a full lowercase disposable container id', () => {
+    expect(parseDisposableContainerId('a'.repeat(64))).toBe('a'.repeat(64));
+    expect(() => parseDisposableContainerId(undefined)).toThrow('PG16_VERIFY_CONTAINER_ID_INVALID');
+    expect(() => parseDisposableContainerId('a'.repeat(63))).toThrow(
+      'PG16_VERIFY_CONTAINER_ID_INVALID',
+    );
+    expect(() => parseDisposableContainerId('A'.repeat(64))).toThrow(
+      'PG16_VERIFY_CONTAINER_ID_INVALID',
+    );
+  });
+
+  it('accepts only the dedicated disposable container name pattern', () => {
+    expect(parseDisposableContainerName('phub-communities-pg16-verify-123')).toBe(
+      'phub-communities-pg16-verify-123',
+    );
+    expect(() => parseDisposableContainerName(undefined)).toThrow(
+      'PG16_VERIFY_CONTAINER_NAME_INVALID',
+    );
+    expect(() => parseDisposableContainerName('postgres')).toThrow(
+      'PG16_VERIFY_CONTAINER_NAME_INVALID',
+    );
+  });
 });
 
 describe
@@ -323,6 +537,24 @@ describe
 
     beforeAll(async () => {
       const adminUrl = parsedConfiguredUrl as URL;
+      const containerId = configuredContainerId as string;
+      const containerName = configuredContainerName as string;
+      const observedContainer = (
+        await runDockerCliCommand(
+          [
+            'inspect',
+            '--format',
+            '{{.Id}}|{{.Name}}|{{ index .Config.Labels "com.padlhub.disposable" }}',
+            containerId,
+          ],
+          { maximumStdoutBytes: 1024 },
+        )
+      )
+        .toString('utf8')
+        .trim();
+      expect(observedContainer).toBe(
+        `${containerId}|/${containerName}|${DISPOSABLE_CONTAINER_LABEL}`,
+      );
       const admin = new Client({
         connectionString: adminUrl.toString(),
         connectionTimeoutMillis: 5_000,
@@ -454,69 +686,7 @@ describe
           `REVOKE ALL ON TYPE ${quoteIdentifier(type.schema_name)}.${quoteIdentifier(type.type_name)} FROM PUBLIC`,
         );
       }
-      const operators = await sourceSetup.query<{ identity: string }>(
-        `SELECT operator.oid::regoperator::text AS identity
-           FROM pg_catalog.pg_operator operator
-           JOIN pg_catalog.pg_depend dependency
-             ON dependency.classid = 'pg_catalog.pg_operator'::pg_catalog.regclass
-            AND dependency.objid = operator.oid
-            AND dependency.objsubid = 0
-            AND dependency.deptype = 'e'
-           JOIN pg_catalog.pg_extension extension
-             ON extension.oid = dependency.refobjid
-            AND dependency.refclassid = 'pg_catalog.pg_extension'::pg_catalog.regclass
-          WHERE extension.extname = 'pg_trgm'`,
-      );
-      for (const operator of operators.rows)
-        await sourceSetup.query(
-          `ALTER OPERATOR ${operator.identity} OWNER TO ${quoteIdentifier(OWNER_ROLE)}`,
-        );
-      const operatorClasses = await sourceSetup.query<{
-        schema_name: string;
-        class_name: string;
-        access_method: string;
-      }>(
-        `SELECT namespace.nspname AS schema_name, operator_class.opcname AS class_name, access_method.amname AS access_method
-           FROM pg_catalog.pg_opclass operator_class
-           JOIN pg_catalog.pg_namespace namespace ON namespace.oid = operator_class.opcnamespace
-           JOIN pg_catalog.pg_am access_method ON access_method.oid = operator_class.opcmethod
-           JOIN pg_catalog.pg_depend dependency
-             ON dependency.classid = 'pg_catalog.pg_opclass'::pg_catalog.regclass
-            AND dependency.objid = operator_class.oid
-            AND dependency.objsubid = 0
-            AND dependency.deptype = 'e'
-           JOIN pg_catalog.pg_extension extension
-             ON extension.oid = dependency.refobjid
-            AND dependency.refclassid = 'pg_catalog.pg_extension'::pg_catalog.regclass
-          WHERE extension.extname = 'pg_trgm'`,
-      );
-      for (const operatorClass of operatorClasses.rows)
-        await sourceSetup.query(
-          `ALTER OPERATOR CLASS ${quoteIdentifier(operatorClass.schema_name)}.${quoteIdentifier(operatorClass.class_name)} USING ${quoteIdentifier(operatorClass.access_method)} OWNER TO ${quoteIdentifier(OWNER_ROLE)}`,
-        );
-      const operatorFamilies = await sourceSetup.query<{
-        schema_name: string;
-        family_name: string;
-        access_method: string;
-      }>(
-        `SELECT namespace.nspname AS schema_name, operator_family.opfname AS family_name, access_method.amname AS access_method
-           FROM pg_catalog.pg_opfamily operator_family
-           JOIN pg_catalog.pg_namespace namespace ON namespace.oid = operator_family.opfnamespace
-           JOIN pg_catalog.pg_am access_method ON access_method.oid = operator_family.opfmethod
-           JOIN pg_catalog.pg_depend dependency
-             ON dependency.classid = 'pg_catalog.pg_opfamily'::pg_catalog.regclass
-            AND dependency.objid = operator_family.oid
-            AND dependency.objsubid = 0
-            AND dependency.deptype = 'e'
-           JOIN pg_catalog.pg_extension extension
-             ON extension.oid = dependency.refobjid
-            AND dependency.refclassid = 'pg_catalog.pg_extension'::pg_catalog.regclass
-          WHERE extension.extname = 'pg_trgm'`,
-      );
-      for (const operatorFamily of operatorFamilies.rows)
-        await sourceSetup.query(
-          `ALTER OPERATOR FAMILY ${quoteIdentifier(operatorFamily.schema_name)}.${quoteIdentifier(operatorFamily.family_name)} USING ${quoteIdentifier(operatorFamily.access_method)} OWNER TO ${quoteIdentifier(OWNER_ROLE)}`,
-        );
+      await normalizePgTrgmExtensionSecurity(sourceSetup);
       await sourceSetup.query('RESET ROLE');
       await sourceSetup.end();
 
@@ -555,9 +725,61 @@ describe
       const archivePath = join(directory, archiveBasename);
       const evidencePath = join(directory, evidenceBasename);
       const tocPath = join(directory, 'archive.toc');
-      await writeFile(archivePath, 'template-clone-fixture');
-      await writeFile(evidencePath, 'local-pg16-fixture');
-      await writeFile(tocPath, 'template source clone');
+      const dumpArguments = [
+        'pg_dump',
+        '-U',
+        'postgres',
+        '--format=custom',
+        '--no-password',
+        `--dbname=${SOURCE_DATABASE}`,
+      ] as const;
+      expect(dumpArguments).not.toContain('--no-owner');
+      expect(dumpArguments).not.toContain('--no-acl');
+      const archiveHandle = await open(
+        archivePath,
+        constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+        0o600,
+      );
+      try {
+        await runDisposableDockerCommand(containerId, dumpArguments, {
+          stdoutFd: archiveHandle.fd,
+          maximumStdoutBytes: 0,
+        });
+        await archiveHandle.sync();
+      } finally {
+        await archiveHandle.close();
+      }
+      const archiveBytes = await readFile(archivePath);
+      expect(archiveBytes.length).toBeGreaterThan(0);
+      expect(archiveBytes.length).toBeLessThanOrEqual(16 * 1024 * 1024);
+
+      const archiveForToc = await open(archivePath, constants.O_RDONLY | constants.O_NOFOLLOW);
+      let tocBytes: Buffer;
+      try {
+        tocBytes = await runDisposableDockerCommand(containerId, ['pg_restore', '--list'], {
+          stdinFd: archiveForToc.fd,
+          maximumStdoutBytes: 2 * 1024 * 1024,
+        });
+      } finally {
+        await archiveForToc.close();
+      }
+      expect(tocBytes.length).toBeGreaterThan(0);
+      const [pgDumpVersion, pgRestoreVersion] = await Promise.all([
+        runDisposableDockerCommand(containerId, ['pg_dump', '--version']),
+        runDisposableDockerCommand(containerId, ['pg_restore', '--version']),
+      ]);
+      const evidenceText = `${[
+        'schemaVersion=communities-role-split-local-archive-evidence-v1',
+        'archiveFormat=custom',
+        'restoreExitOnError=true',
+        'restoreNoOwner=false',
+        'restoreNoAcl=false',
+        'extensionSecurityPreseeded=true',
+        `pgDumpVersionSha256=${sha(pgDumpVersion)}`,
+        `pgRestoreVersionSha256=${sha(pgRestoreVersion)}`,
+      ].join('\n')}\n`;
+      await writeFile(evidencePath, evidenceText, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+      await writeFile(tocPath, tocBytes, { flag: 'wx', mode: 0o600 });
       await Promise.all([archivePath, evidencePath, tocPath].map((path) => chmod(path, 0o600)));
 
       const request = {
@@ -570,11 +792,11 @@ describe
         sourceDatabaseOwnerOid: binding.source_database_owner_oid,
         systemIdentifier: server.rows[0]!.system_identifier,
         backupBasename: archiveBasename,
-        backupSha256: sha('template-clone-fixture'),
-        backupBytes: String(Buffer.byteLength('template-clone-fixture')),
+        backupSha256: sha(archiveBytes),
+        backupBytes: String(archiveBytes.length),
         backupEvidenceBasename: evidenceBasename,
-        backupEvidenceSha256: sha('local-pg16-fixture'),
-        archiveTocSha256: sha('template source clone'),
+        backupEvidenceSha256: sha(evidenceText),
+        archiveTocSha256: sha(tocBytes),
         sourceLedgerSha256: communitiesStagingRoleSplitLedgerSha256(ledger),
         sourceLedgerCount: String(ledger.length),
         activeRelease: 'd'.repeat(40),
@@ -600,7 +822,7 @@ describe
         createCloneDatabase: async (restoreDatabase: string) => {
           expect(restoreDatabase).toBe(CLONE_DATABASE);
           await admin.query(
-            `CREATE DATABASE ${quoteIdentifier(restoreDatabase)} WITH TEMPLATE ${quoteIdentifier(SOURCE_DATABASE)} OWNER ${quoteIdentifier(OWNER_ROLE)}`,
+            `CREATE DATABASE ${quoteIdentifier(restoreDatabase)} WITH TEMPLATE template0 OWNER ${quoteIdentifier(OWNER_ROLE)}`,
           );
           await admin.query(`SET ROLE ${quoteIdentifier(OWNER_ROLE)}`);
           await admin.query(
@@ -610,10 +832,40 @@ describe
             `GRANT CONNECT ON DATABASE ${quoteIdentifier(CLONE_DATABASE)} TO ${quoteIdentifier(READER_ROLE)}`,
           );
           await admin.query('RESET ROLE');
+          const extensionSetup = new Client({
+            connectionString: databaseUrl(adminUrl, CLONE_DATABASE),
+            connectionTimeoutMillis: 5_000,
+            query_timeout: 5_000,
+            statement_timeout: 5_000,
+          });
+          try {
+            await extensionSetup.connect();
+            await extensionSetup.query(`SET ROLE ${quoteIdentifier(OWNER_ROLE)}`);
+            await extensionSetup.query('CREATE EXTENSION pg_trgm WITH SCHEMA public');
+            await extensionSetup.query('RESET ROLE');
+            await normalizePgTrgmExtensionSecurity(extensionSetup);
+          } finally {
+            await extensionSetup.end().catch(() => undefined);
+          }
         },
         restoreArchive: async ({ archiveFile, request: restoreRequest }) => {
           expect(restoreRequest).toEqual(request);
           expect((await archiveFile.stat()).isFile()).toBe(true);
+          const restoreArguments = [
+            'pg_restore',
+            '-U',
+            'postgres',
+            '--exit-on-error',
+            '--no-password',
+            '--use-set-session-authorization',
+            `--dbname=${CLONE_DATABASE}`,
+          ] as const;
+          expect(restoreArguments).not.toContain('--no-owner');
+          expect(restoreArguments).not.toContain('--no-acl');
+          await runDisposableDockerCommand(containerId, restoreArguments, {
+            stdinFd: archiveFile.fd,
+            maximumStdoutBytes: 1024 * 1024,
+          });
         },
       } satisfies CommunitiesStagingRoleSplitMarkerCeremonyPgHostConfig;
       fixture = {
@@ -637,7 +889,7 @@ describe
         await rm(cleanupDirectory, { recursive: true, force: true });
     });
 
-    it('binds a real PG16 template clone, ledger, ownership, ACL, RLS and marker readback', async () => {
+    it('binds a real PG16 custom archive restore, ledger, ownership, ACL, RLS and marker readback', async () => {
       const host = new CommunitiesStagingRoleSplitMarkerCeremonyPgHost(fixture.config);
       const lease = await host.acquireLease(fixture.requestSha256);
       const candidate = createCommunitiesStagingRoleSplitMarkerCeremonyCandidate(
@@ -782,6 +1034,37 @@ describe
       const second = await produceCommunitiesStagingRoleSplitInventory(input, createClient);
       expect(second).toEqual(first);
       expect(first.anomalies).toEqual([]);
+      const artifactPath = join(fixture.directory, 'inventory.input-c.json');
+      const artifactText = communitiesRoleSplitInputCArtifactText(first);
+      await writeFile(artifactPath, artifactText, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+      const artifactMetadata = await stat(artifactPath);
+      expect(artifactMetadata.mode & 0o777).toBe(0o600);
+      const independentlyPinnedArtifactSha256 = communitiesRoleSplitInputCArtifactSha256(first);
+      const artifactVerification = verifyCommunitiesStagingRoleSplitInventoryArtifact(
+        await readFile(artifactPath),
+        independentlyPinnedArtifactSha256,
+      );
+      expect(artifactVerification).toMatchObject({
+        artifactSha256: independentlyPinnedArtifactSha256,
+        manifestSha256: first.manifestSha256,
+        anomalyObservationCount: 0,
+        binding: { callerSuppliedArtifactPinMatched: true, canonicalArtifactBytes: true },
+        limitations: {
+          independentCustodyNotAttested: true,
+          cleanCloneProvenanceNotAttested: true,
+        },
+      });
+      expect(Object.values(artifactVerification.authorizes)).toEqual([
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+      ]);
       expect(Object.keys(first.normalized)).toHaveLength(12);
       expect(
         first.normalized.functions.filter((record) => record.fieldKind === 'OWNER').length,

@@ -285,12 +285,14 @@ review evidence only and grants no execution authority.
 
 Do not install either command, create a forced-command key, add a workflow, place requests on
 staging or collect a trusted inventory under this checkpoint. A separately owned local runner now
-passes the PG16 catalog/marker/INPUT_C/no-change-evaluator path against a disposable same-cluster
-template clone. It is not an ownership-preserving archive restore and produces only synthetic local
-evidence. Installation, the two host ceremony invocations, real `pg_restore`, trusted independently
-sourced before/after inventory production, any role/ownership/ACL mutation and the DBA quarantine
-resolution remain separate gates requiring separate approval. The inventory collector remains
-read-only and never creates, repairs or replaces the marker.
+passes the real PG16 custom-format `pg_dump`/`pg_restore`, catalog, marker, INPUT_C artifact pin and
+no-change-evaluator path against a disposable synthetic clone. This is ownership/ACL-preservation
+proof for that synthetic fixture only. It does not establish independently sourced clean-clone
+provenance or organizationally independent artifact custody. Installation, the two host ceremony
+invocations, trusted independently sourced before/after inventory production, any
+role/ownership/ACL mutation and the DBA quarantine resolution remain separate gates requiring
+separate approval. The inventory collector and artifact verifier remain read-only and never create,
+repair or replace the marker.
 
 ### Exact 29-file staged clone rehearsal contract
 
