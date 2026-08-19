@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
 
+import { assertEligibilityPaymentAclMatrixBinding } from './eligibility-payment-acl-matrix.js';
+
 export const COMMUNITIES_STAGED_REHEARSAL_CONFIRMATION = 'COMMUNITIES_STAGED_REHEARSAL_29_V1';
 export const COMMUNITIES_STAGED_REHEARSAL_32_CONFIRMATION = 'COMMUNITIES_STAGED_REHEARSAL_32_V1';
 
@@ -84,6 +86,8 @@ export interface CommunitiesStagedRehearsalRequest {
   readonly contractVersion: CommunitiesStagedRehearsalContractVersion;
   readonly phase: CommunitiesStagedRehearsalPhase;
   readonly restoreDatabase: string;
+  readonly aclMatrixVersion: string | null;
+  readonly aclMatrixSha256: string | null;
 }
 
 function fail(code: string): never {
@@ -162,6 +166,8 @@ export function resolveCommunitiesStagedRehearsalRequest(input: {
     contractVersion,
     phase: input.phase as CommunitiesStagedRehearsalPhase,
     restoreDatabase: input.restoreDatabase,
+    aclMatrixVersion: null,
+    aclMatrixSha256: null,
   };
 }
 
@@ -170,6 +176,20 @@ export function selectCommunitiesStagedRehearsalMigrations(input: {
   readonly appliedFilenames: ReadonlySet<string>;
   readonly packagedFilenames: readonly string[];
 }): readonly string[] {
+  if (input.request.contractVersion === '29_V1') {
+    if (input.request.aclMatrixVersion !== null || input.request.aclMatrixSha256 !== null) {
+      fail('ACL_MATRIX_UNEXPECTED');
+    }
+  } else {
+    try {
+      assertEligibilityPaymentAclMatrixBinding({
+        version: input.request.aclMatrixVersion ?? '',
+        sha256: input.request.aclMatrixSha256 ?? '',
+      });
+    } catch {
+      fail('ACL_MATRIX_BINDING_INVALID');
+    }
+  }
   const plan =
     input.request.contractVersion === '29_V1'
       ? {

@@ -334,13 +334,40 @@ must include the contract version and the SHA-256 of the ordered pending filenam
 32-file value is `f5ea040e4498a45310ad671f321e3044c33743ca7b0cbee7c72bc01ee9b6a91d`. Missing,
 additional, reordered, partial or cross-version sets fail before DDL.
 
-This is explicitly **not execution-ready**. No authoritative runtime ACL matrix exists for the
-new `eligibility` and payment-evidence tables. The dispatch token
+This is explicitly **not execution-ready**. The preparation branch pins the reviewed
+`eligibility-payment-acl-v1` runtime matrix at SHA-256
+`065df6510c35ea1be09dad9b6415b25c30543902837336739911555ec3dcad26`, but no authorized
+schema-provisioning, exact-grant, runtime-probe or workflow ceremony exists yet. The dispatch token
 `REHEARSE_COMMUNITIES_STAGING_32_V1`, the forced command, the clone helper and the migrator request
 policy deliberately fail closed before SSH, backup, clone, Docker, database-pool creation or DDL.
-Do not guess grants or add them as a rehearsal shortcut. The versioned policy proves the intended
-ordering; it is not an executable rehearsal path. A separately reviewed ACL matrix and a new
-bounded authorization are required before enabling any 32_V1 execution path.
+The versioned migration selector additionally rejects a 32-file request unless it carries this
+exact matrix version and digest. Do not guess grants or add them as a rehearsal shortcut. The
+versioned policy proves ordering and ACL intent; it is not an executable rehearsal path. A new
+bounded authorization and an independently reviewed end-to-end clone ceremony are required before
+enabling any 32_V1 execution path.
+
+The matrix grants the runtime role only `USAGE` (never `CREATE`) on schemas `eligibility` and
+`games`. It grants exact table privileges derived from current repository SQL: `SELECT` only on
+`canonical_levels` and `activation_readiness`; `SELECT, INSERT` on
+`player_level_commands`, `policy_commands`, `decisions` and `payment_snapshots`; `SELECT, UPDATE`
+on `personal_invitations`; and `SELECT, INSERT, UPDATE` on `player_sport_levels`, `level_policies`
+and `games.payment_confirmation_evidence`. Every matrix table must be migrator-owned, FORCE RLS,
+have exactly its migration-defined permissive `FOR ALL TO PUBLIC` tenant-isolation policy, and have
+no grant option, `PUBLIC` table/schema privilege, third-party grant or column ACL.
+Both runtime and migrator identities must be distinct, non-superuser, NOBYPASSRLS roles with no
+inbound or outbound role-membership edges. The migrator must own both schemas, retain `CREATE` on
+them, and own the four
+pre-existing `games` relations altered by migration 0084. Global or schema-specific default table
+ACLs may not grant any non-owner privilege.
+
+Because the bounded migrator is forbidden database-level object creation, a future clone ceremony
+must first prove that schema `eligibility` was separately pre-created under authorized DBA control,
+is owned by the exact migrator role, grants the runtime role `USAGE` without `CREATE`, and has no
+public or third-party schema ACL. The read-only
+`verify-eligibility-payment-acl-boundary` image entry now supports `pre` and `post` catalog
+attestation under a 30-second statement timeout and safe `pg_catalog` search path. It never grants
+privileges. The future grant provisioner and rolled-back cross-tenant runtime DML/RLS probes remain
+unimplemented gates, so the existing four fail-closed execution boundaries must not be removed.
 
 When that gate is separately implemented and approved, its fixed redacted evidence must contain
 the contract version, pending-set SHA, one aggregate eligibility audit and one aggregate payment

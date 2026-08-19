@@ -88,16 +88,25 @@ describe('Communities staged migration rehearsal contract', () => {
     expect(runbook).toContain('rejects the existing `postgres-communities-preflight-*`');
   });
 
-  it('reserves 32_V1 as a fail-closed preparation contract until an ACL matrix is approved', () => {
+  it('reserves 32_V1 as fail-closed while binding the reviewed ACL matrix and inspector', () => {
     const workflow = source('.github/workflows/communities-staged-migration-rehearsal.yaml');
     const wrapper = source('deploy/jetson/run-communities-staged-migration-rehearsal.sh');
     const rehearsal = source('deploy/jetson/rehearse-media-migration.sh');
     const runbook = source('docs/runbooks/communities-chain-integration.md');
+    const matrix = source('packages/database/src/eligibility-payment-acl-matrix.ts');
+    const inspector = source('apps/migrator/src/eligibility-payment-acl-boundary.ts');
 
     expect(workflow).toContain('32_V1 is clone-evidence preparation only');
     expect(wrapper).toContain('32_V1 is clone-evidence preparation only');
     expect(rehearsal).toContain('32_V1 is clone-evidence preparation only');
     expect(runbook).toContain('f5ea040e4498a45310ad671f321e3044c33743ca7b0cbee7c72bc01ee9b6a91d');
+    expect(runbook).toContain('eligibility-payment-acl-v1');
+    expect(runbook).toContain('065df6510c35ea1be09dad9b6415b25c30543902837336739911555ec3dcad26');
+    expect(runbook).toContain('runtime role only `USAGE` (never `CREATE`)');
+    expect(runbook).toContain('future grant provisioner');
+    expect(matrix).toContain('COLUMN_ACL=FORBIDDEN');
+    expect(inspector).toContain("set local search_path = 'pg_catalog'");
+    expect(inspector).toContain('begin transaction read only');
     expect(runbook).toContain('eligibility_payment=3');
     expect(runbook).toContain('every `authorizes*=false` boundary remains unchanged');
   });
