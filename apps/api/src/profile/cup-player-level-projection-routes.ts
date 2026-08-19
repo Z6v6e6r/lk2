@@ -113,9 +113,7 @@ export function registerCupPlayerLevelProjectionRoutes(
           'Некорректная проекция уровня.',
         );
       }
-      if (
-        parsed.data.source.formulaVersion !== 'padel-rating-grade-v1'
-      ) {
+      if (parsed.data.source.formulaVersion !== 'padel-rating-grade-v1') {
         return sendApiError(
           request,
           reply,
