@@ -1,8 +1,6 @@
 import { isAbsolute } from 'node:path';
 import { lstat, readFile } from 'node:fs/promises';
 
-import type { CommunitiesStagingRoleSplitRestoreMarkerEvidence } from '@phub/database';
-
 import {
   CommunitiesStagingRoleSplitInventoryError,
   produceCommunitiesStagingRoleSplitInventory,
@@ -14,6 +12,9 @@ const requiredEnvironment = [
   'PHUB_ROLE_SPLIT_MARKER_REQUEST_PATH',
   'PHUB_ROLE_SPLIT_MARKER_REQUEST_SHA256',
   'PHUB_ROLE_SPLIT_MARKER_EVIDENCE_PATH',
+  'PHUB_ROLE_SPLIT_MARKER_EVIDENCE_SHA256',
+  'PHUB_ROLE_SPLIT_ROLE_MAPPING_PATH',
+  'PHUB_ROLE_SPLIT_ROLE_MAPPING_SHA256',
 ] as const;
 
 async function readRootOwnedEvidence(path: string, maximumBytes: number): Promise<Buffer> {
@@ -42,14 +43,19 @@ async function main(): Promise<void> {
     process.env.PHUB_ROLE_SPLIT_MARKER_EVIDENCE_PATH!,
     64 * 1024,
   );
+  const mappingBytes = await readRootOwnedEvidence(
+    process.env.PHUB_ROLE_SPLIT_ROLE_MAPPING_PATH!,
+    64 * 1024,
+  );
   const report = await produceCommunitiesStagingRoleSplitInventory({
     confirmation: process.env.COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_CONFIRMATION!,
     connectionString: process.env.DATABASE_URL!,
     requestText: requestBytes.toString('utf8'),
     expectedRequestSha256: process.env.PHUB_ROLE_SPLIT_MARKER_REQUEST_SHA256!,
-    markerEvidence: JSON.parse(
-      evidenceBytes.toString('utf8'),
-    ) as CommunitiesStagingRoleSplitRestoreMarkerEvidence,
+    markerEvidenceText: evidenceBytes.toString('utf8'),
+    expectedMarkerEvidenceSha256: process.env.PHUB_ROLE_SPLIT_MARKER_EVIDENCE_SHA256!,
+    roleMappingText: mappingBytes.toString('utf8'),
+    expectedRoleMappingSha256: process.env.PHUB_ROLE_SPLIT_ROLE_MAPPING_SHA256!,
   });
   process.stdout.write(`${JSON.stringify(report)}\n`);
 }

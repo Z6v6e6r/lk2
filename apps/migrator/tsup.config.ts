@@ -12,6 +12,8 @@ export default defineConfig({
     'src/verify-eligibility-payment-acl-boundary.ts',
     'src/provision-eligibility-payment-acl.ts',
     'src/provision-communities-staging-role-split.ts',
+    'src/produce-communities-staging-role-split-inventory.ts',
+    'src/compare-communities-staging-role-split-inventories.ts',
     'src/verify-eligibility-payment-runtime-role.ts',
     'src/provision-eligibility-payment-cup-projection-acl.ts',
     'src/cup-player-level-projection-rehearsal.ts',
