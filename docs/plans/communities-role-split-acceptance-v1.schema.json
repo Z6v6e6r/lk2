@@ -1,0 +1,756 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://padlhub.invalid/contracts/communities-role-split-acceptance-v1.schema.json",
+  "title": "Communities role-split acceptance envelope v1",
+  "description": "A review-only, redacted decision envelope. It is not an executable ACL plan and carries no role, migration, deployment, or runtime authority.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contractVersion", "inputC", "mapping", "ownershipPlan", "comparison", "decision"],
+  "properties": {
+    "contractVersion": {
+      "const": "communities-role-split-acceptance-v1"
+    },
+    "inputC": {
+      "$ref": "#/$defs/inputC"
+    },
+    "mapping": {
+      "$ref": "#/$defs/roleMapping"
+    },
+    "ownershipPlan": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ownershipDecision"
+      }
+    },
+    "comparison": {
+      "$ref": "#/$defs/comparison"
+    },
+    "decision": {
+      "$ref": "#/$defs/decision"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "stableCode": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9_]{2,127}$"
+    },
+    "roleCategory": {
+      "enum": [
+        "RESTORE_OWNER",
+        "RESTORE_EXECUTOR",
+        "SHARED_OWNER",
+        "FUTURE_MIGRATOR",
+        "FUTURE_RUNTIME",
+        "INVENTORY_READER"
+      ]
+    },
+    "observationDigest": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["state", "valueSha256", "provenanceSha256"],
+          "properties": {
+            "state": {
+              "const": "OBSERVED"
+            },
+            "valueSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "provenanceSha256": {
+              "$ref": "#/$defs/sha256"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["state", "valueSha256", "provenanceSha256"],
+          "properties": {
+            "state": {
+              "enum": ["UNKNOWN", "UNOBSERVED"]
+            },
+            "valueSha256": {
+              "type": "null"
+            },
+            "provenanceSha256": {
+              "type": "null"
+            }
+          }
+        }
+      ]
+    },
+    "observedBoolean": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["state", "value", "provenanceSha256"],
+          "properties": {
+            "state": {
+              "const": "OBSERVED"
+            },
+            "value": {
+              "type": "boolean"
+            },
+            "provenanceSha256": {
+              "$ref": "#/$defs/sha256"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["state", "value", "provenanceSha256"],
+          "properties": {
+            "state": {
+              "enum": ["UNKNOWN", "UNOBSERVED"]
+            },
+            "value": {
+              "type": "null"
+            },
+            "provenanceSha256": {
+              "type": "null"
+            }
+          }
+        }
+      ]
+    },
+    "roleBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "category",
+        "roleName",
+        "roleOid",
+        "canLogin",
+        "superuser",
+        "bypassRls",
+        "createDatabase",
+        "createRole",
+        "replication"
+      ],
+      "properties": {
+        "category": {
+          "$ref": "#/$defs/roleCategory"
+        },
+        "roleName": {
+          "$ref": "#/$defs/observationDigest"
+        },
+        "roleOid": {
+          "$ref": "#/$defs/observationDigest"
+        },
+        "canLogin": {
+          "$ref": "#/$defs/observedBoolean"
+        },
+        "superuser": {
+          "$ref": "#/$defs/observedBoolean"
+        },
+        "bypassRls": {
+          "$ref": "#/$defs/observedBoolean"
+        },
+        "createDatabase": {
+          "$ref": "#/$defs/observedBoolean"
+        },
+        "createRole": {
+          "$ref": "#/$defs/observedBoolean"
+        },
+        "replication": {
+          "$ref": "#/$defs/observedBoolean"
+        }
+      }
+    },
+    "roleMapping": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "RESTORE_OWNER",
+        "RESTORE_EXECUTOR",
+        "SHARED_OWNER",
+        "FUTURE_MIGRATOR",
+        "FUTURE_RUNTIME",
+        "INVENTORY_READER",
+        "identityRelations"
+      ],
+      "properties": {
+        "RESTORE_OWNER": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/roleBinding"
+            },
+            {
+              "properties": {
+                "category": {
+                  "const": "RESTORE_OWNER"
+                }
+              }
+            }
+          ]
+        },
+        "RESTORE_EXECUTOR": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/roleBinding"
+            },
+            {
+              "properties": {
+                "category": {
+                  "const": "RESTORE_EXECUTOR"
+                }
+              }
+            }
+          ]
+        },
+        "SHARED_OWNER": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/roleBinding"
+            },
+            {
+              "properties": {
+                "category": {
+                  "const": "SHARED_OWNER"
+                }
+              }
+            }
+          ]
+        },
+        "FUTURE_MIGRATOR": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/roleBinding"
+            },
+            {
+              "properties": {
+                "category": {
+                  "const": "FUTURE_MIGRATOR"
+                }
+              }
+            }
+          ]
+        },
+        "FUTURE_RUNTIME": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/roleBinding"
+            },
+            {
+              "properties": {
+                "category": {
+                  "const": "FUTURE_RUNTIME"
+                }
+              }
+            }
+          ]
+        },
+        "INVENTORY_READER": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/roleBinding"
+            },
+            {
+              "properties": {
+                "category": {
+                  "const": "INVENTORY_READER"
+                }
+              }
+            }
+          ]
+        },
+        "identityRelations": {
+          "type": "array",
+          "minItems": 15,
+          "maxItems": 15,
+          "items": {
+            "$ref": "#/$defs/identityRelation"
+          }
+        }
+      }
+    },
+    "identityRelation": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["left", "right", "requirement", "relation", "provenanceSha256"],
+          "properties": {
+            "left": {
+              "$ref": "#/$defs/roleCategory"
+            },
+            "right": {
+              "$ref": "#/$defs/roleCategory"
+            },
+            "requirement": {
+              "enum": ["REQUIRED_DISTINCT", "ALIAS_ALLOWED"]
+            },
+            "relation": {
+              "enum": ["SAME", "DISTINCT"]
+            },
+            "provenanceSha256": {
+              "$ref": "#/$defs/sha256"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["left", "right", "requirement", "relation", "provenanceSha256"],
+          "properties": {
+            "left": {
+              "$ref": "#/$defs/roleCategory"
+            },
+            "right": {
+              "$ref": "#/$defs/roleCategory"
+            },
+            "requirement": {
+              "enum": ["REQUIRED_DISTINCT", "ALIAS_ALLOWED"]
+            },
+            "relation": {
+              "enum": ["UNKNOWN", "UNOBSERVED"]
+            },
+            "provenanceSha256": {
+              "type": "null"
+            }
+          }
+        }
+      ]
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contractVersion",
+        "markerDigest",
+        "requestDigest",
+        "cloneNamePatternValid",
+        "cloneOidBound",
+        "sourceOidBound",
+        "systemIdentifierDigest",
+        "pgMajor",
+        "objectManifestDigest",
+        "ledgerDigest",
+        "ledgerCount"
+      ],
+      "properties": {
+        "contractVersion": {
+          "type": "string",
+          "minLength": 1
+        },
+        "markerDigest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "requestDigest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "cloneNamePatternValid": {
+          "const": true
+        },
+        "cloneOidBound": {
+          "const": true
+        },
+        "sourceOidBound": {
+          "const": true
+        },
+        "systemIdentifierDigest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "pgMajor": {
+          "const": 16
+        },
+        "objectManifestDigest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "ledgerDigest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "ledgerCount": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "normalizedRecord": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["canonicalKey", "state", "valueSha256", "provenanceSha256"],
+          "properties": {
+            "canonicalKey": {
+              "type": "string",
+              "minLength": 1
+            },
+            "state": {
+              "const": "OBSERVED"
+            },
+            "valueSha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "provenanceSha256": {
+              "$ref": "#/$defs/sha256"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["canonicalKey", "state", "valueSha256", "provenanceSha256"],
+          "properties": {
+            "canonicalKey": {
+              "type": "string",
+              "minLength": 1
+            },
+            "state": {
+              "enum": ["UNKNOWN", "UNOBSERVED"]
+            },
+            "valueSha256": {
+              "type": "null"
+            },
+            "provenanceSha256": {
+              "type": "null"
+            }
+          }
+        }
+      ]
+    },
+    "normalizedInventory": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "roles",
+        "memberships",
+        "databaseAcl",
+        "schemas",
+        "defaultAcls",
+        "relations",
+        "columnAcls",
+        "rlsPolicies",
+        "sequences",
+        "functions",
+        "types",
+        "extensions"
+      ],
+      "properties": {
+        "roles": {
+          "$ref": "#/$defs/normalizedRecords"
+        },
+        "memberships": {
+          "$ref": "#/$defs/normalizedRecords"
+        },
+        "databaseAcl": {
+          "$ref": "#/$defs/normalizedRecords"
+        },
+        "schemas": {
+          "$ref": "#/$defs/normalizedRecords"
+        },
+        "defaultAcls": {
+          "$ref": "#/$defs/normalizedRecords"
+        },
+        "relations": {
+          "$ref": "#/$defs/normalizedRecords"
+        },
+        "columnAcls": {
+          "$ref": "#/$defs/normalizedRecords"
+        },
+        "rlsPolicies": {
+          "$ref": "#/$defs/normalizedRecords"
+        },
+        "sequences": {
+          "$ref": "#/$defs/normalizedRecords"
+        },
+        "functions": {
+          "$ref": "#/$defs/normalizedRecords"
+        },
+        "types": {
+          "$ref": "#/$defs/normalizedRecords"
+        },
+        "extensions": {
+          "$ref": "#/$defs/normalizedRecords"
+        }
+      }
+    },
+    "normalizedRecords": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/normalizedRecord"
+      }
+    },
+    "anomaly": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "canonicalKey", "evidenceSha256"],
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/stableCode"
+        },
+        "canonicalKey": {
+          "type": "string",
+          "minLength": 1
+        },
+        "evidenceSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "inputC": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "sortVersion",
+        "manifestSha256",
+        "provenance",
+        "normalized",
+        "anomalies"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sortVersion": {
+          "type": "string",
+          "minLength": 1
+        },
+        "manifestSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "provenance": {
+          "$ref": "#/$defs/provenance"
+        },
+        "normalized": {
+          "$ref": "#/$defs/normalizedInventory"
+        },
+        "anomalies": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/anomaly"
+          }
+        }
+      }
+    },
+    "ownerCategory": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/roleCategory"
+        },
+        {
+          "enum": ["PRESERVE_CURRENT", "UNKNOWN", "UNOBSERVED"]
+        }
+      ]
+    },
+    "ownershipDecision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "objectKind",
+        "canonicalKey",
+        "beforeOwnerCategory",
+        "targetOwnerCategory",
+        "ruleCode",
+        "provenanceSha256"
+      ],
+      "properties": {
+        "objectKind": {
+          "enum": ["DATABASE", "SCHEMA", "RELATION", "SEQUENCE", "FUNCTION", "TYPE", "EXTENSION"]
+        },
+        "canonicalKey": {
+          "type": "string",
+          "minLength": 1
+        },
+        "beforeOwnerCategory": {
+          "$ref": "#/$defs/ownerCategory"
+        },
+        "targetOwnerCategory": {
+          "$ref": "#/$defs/ownerCategory"
+        },
+        "ruleCode": {
+          "$ref": "#/$defs/stableCode"
+        },
+        "provenanceSha256": {
+          "type": ["string", "null"],
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      }
+    },
+    "comparison": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sortVersion",
+        "beforeManifestSha",
+        "afterManifestSha",
+        "changedCount",
+        "addedCount",
+        "removedCount",
+        "forbiddenTransitionCodes"
+      ],
+      "properties": {
+        "sortVersion": {
+          "type": "string",
+          "minLength": 1
+        },
+        "beforeManifestSha": {
+          "$ref": "#/$defs/sha256"
+        },
+        "afterManifestSha": {
+          "$ref": "#/$defs/sha256"
+        },
+        "changedCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "addedCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "removedCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "forbiddenTransitionCodes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/stableCode"
+          }
+        }
+      }
+    },
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "blockerCodes",
+        "authorizesRoleCreation",
+        "authorizesRoleAlteration",
+        "authorizesAclMutation",
+        "authorizesMigration",
+        "authorizesDeploy",
+        "authorizesRuntimeActivation"
+      ],
+      "properties": {
+        "status": {
+          "enum": ["PASS", "FAIL"]
+        },
+        "blockerCodes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/stableCode"
+          }
+        },
+        "authorizesRoleCreation": {
+          "const": false
+        },
+        "authorizesRoleAlteration": {
+          "const": false
+        },
+        "authorizesAclMutation": {
+          "const": false
+        },
+        "authorizesMigration": {
+          "const": false
+        },
+        "authorizesDeploy": {
+          "const": false
+        },
+        "authorizesRuntimeActivation": {
+          "const": false
+        }
+      }
+    }
+  },
+  "x-role-categories": [
+    "RESTORE_OWNER",
+    "RESTORE_EXECUTOR",
+    "SHARED_OWNER",
+    "FUTURE_MIGRATOR",
+    "FUTURE_RUNTIME",
+    "INVENTORY_READER"
+  ],
+  "x-observation-states": ["OBSERVED", "UNKNOWN", "UNOBSERVED"],
+  "x-identity-relation-states": ["SAME", "DISTINCT", "UNKNOWN", "UNOBSERVED"],
+  "x-required-distinct-pairs": ["FUTURE_MIGRATOR|FUTURE_RUNTIME"],
+  "x-frozen-contracts": ["29_V1", "32_V1", "33_V1", "34_V1"],
+  "x-input-c-required": [
+    "provenance.contractVersion",
+    "provenance.markerDigest",
+    "provenance.requestDigest",
+    "provenance.cloneNamePatternValid",
+    "provenance.cloneOidBound",
+    "provenance.sourceOidBound",
+    "provenance.systemIdentifierDigest",
+    "provenance.pgMajor",
+    "provenance.objectManifestDigest",
+    "provenance.ledgerDigest",
+    "provenance.ledgerCount",
+    "normalized.roles",
+    "normalized.memberships",
+    "normalized.databaseAcl",
+    "normalized.schemas",
+    "normalized.defaultAcls",
+    "normalized.relations",
+    "normalized.columnAcls",
+    "normalized.rlsPolicies",
+    "normalized.sequences",
+    "normalized.functions",
+    "normalized.types",
+    "normalized.extensions",
+    "anomalies",
+    "manifestSha256",
+    "schemaVersion",
+    "sortVersion",
+    "comparison.beforeManifestSha",
+    "comparison.afterManifestSha",
+    "comparison.changedCount",
+    "comparison.addedCount",
+    "comparison.removedCount",
+    "comparison.forbiddenTransitionCodes"
+  ],
+  "x-forbidden-transition-codes": [
+    "ACL_PRIVILEGE_UNDECIDED",
+    "COLUMN_GRANT_FORBIDDEN",
+    "DEFAULT_ACL_CHANGE_FORBIDDEN",
+    "EXTENSION_CHANGE_FORBIDDEN",
+    "GRANT_OPTION_FORBIDDEN",
+    "INPUT_C_ANOMALY_PRESENT",
+    "INVENTORY_READER_OWNERSHIP_FORBIDDEN",
+    "INVENTORY_READER_WRITE_FORBIDDEN",
+    "NON_DETERMINISTIC_COMPARISON",
+    "NORMALIZED_RECORD_UNKNOWN",
+    "OUT_OF_MANIFEST_CHANGE_FORBIDDEN",
+    "OWNER_TARGET_UNDECIDED",
+    "OWNER_UNOBSERVED",
+    "PUBLIC_GRANT_FORBIDDEN",
+    "REQUIRED_DISTINCT_NOT_OBSERVED",
+    "RESTORE_EXECUTOR_OWNERSHIP_FORBIDDEN",
+    "RLS_POLICY_CHANGE_FORBIDDEN",
+    "ROLE_CAPABILITY_FORBIDDEN",
+    "ROLE_CATEGORY_IDENTITY_NOT_OBSERVED",
+    "ROLE_MEMBERSHIP_FORBIDDEN",
+    "RUNTIME_OWNERSHIP_FORBIDDEN",
+    "RUNTIME_SCHEMA_CREATE_FORBIDDEN",
+    "SHARED_DATABASE_CHANGE_FORBIDDEN",
+    "THIRD_PARTY_GRANT_FORBIDDEN",
+    "WILDCARD_GRANT_FORBIDDEN"
+  ],
+  "x-redacted-34-v1-sidecar-template": [
+    "COMMUNITIES_ROLE_SPLIT_ACCEPTANCE_REPORT_V1",
+    "staged_contract=34_V1",
+    "staged_evidence_sha256=<SHA256>",
+    "input_c_contract=<VERSION>",
+    "input_c_manifest_sha256=<SHA256>",
+    "role_mapping_sha256=<SHA256>",
+    "role_categories=6 observed=<COUNT> unknown=<COUNT> unobserved=<COUNT>",
+    "identity_relations=15 same=<COUNT> distinct=<COUNT> unknown=<COUNT> unobserved=<COUNT> required_distinct_unmet=<COUNT>",
+    "before_manifest_sha256=<SHA256>",
+    "after_manifest_sha256=<SHA256>",
+    "comparison changed=<COUNT> added=<COUNT> removed=<COUNT> forbidden=<COUNT>",
+    "anomalies=<COUNT> blockers=<COUNT> decision=<PASS_OR_FAIL>",
+    "authorizes_role_creation=false authorizes_role_alteration=false authorizes_acl_mutation=false authorizes_migration=false authorizes_deploy=false authorizes_runtime_activation=false"
+  ]
+}
