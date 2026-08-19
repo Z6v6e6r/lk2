@@ -5,7 +5,6 @@ import { fileURLToPath } from 'node:url';
 
 import {
   COMMUNITIES_ROLE_SPLIT_ACCEPTANCE_VERSION,
-  COMMUNITIES_ROLE_SPLIT_IDENTITY_RELATION_SPECS,
   assertCommunitiesRoleSplitAcceptancePass,
   canonicalCommunitiesStagingRoleSplitLedger,
   canonicalCommunitiesStagingRoleSplitRestoreMarkerRequest,
@@ -16,6 +15,7 @@ import {
   communitiesRoleSplitInputCArtifactSha256,
   type CommunitiesRoleSplitAcceptanceEnvelope,
   type CommunitiesRoleSplitExpectedPins,
+  type CommunitiesRoleSplitGrantDecision,
   type CommunitiesRoleSplitGrantObjectKind,
   type CommunitiesRoleSplitObjectKind,
   type CommunitiesStagingRoleSplitRestoreMarkerPayload,
@@ -159,6 +159,7 @@ const requestText = canonicalCommunitiesStagingRoleSplitRestoreMarkerRequest(req
 const requestDigest = communitiesStagingRoleSplitRestoreMarkerRequestSha256(request);
 const payload = {
   requestSha256: requestDigest,
+  creationReceiptSha256: repeated('4'),
   restoreDatabase: request.restoreDatabase,
   cloneDatabaseOid: '45678',
   cloneDatabaseOwner: request.expectedCloneDatabaseOwner,
@@ -186,6 +187,7 @@ const marker = communitiesStagingRoleSplitRestoreMarker(payload);
 const evidenceValues = {
   status: 'MARKED',
   requestSha256: requestDigest,
+  creationReceiptSha256: payload.creationReceiptSha256,
   markerPayloadSha256: communitiesStagingRoleSplitRestoreMarkerPayloadSha256(payload),
   markerValueSha256: sha(marker),
   backupSha256: payload.backupSha256,
@@ -203,7 +205,7 @@ const evidenceValues = {
 };
 const evidenceText =
   [
-    'schemaVersion=communities-role-split-clone-marker-evidence-v1',
+    'schemaVersion=communities-role-split-clone-marker-evidence-v2',
     ...Object.entries(evidenceValues).map(([key, value]) => `${key}=${value}`),
     'binding.request=true',
     'binding.backup=true',
@@ -233,7 +235,20 @@ function result<T extends Record<string, unknown>>(rows: T[]): QueryResult<T> {
   return { rows, rowCount: rows.length, command: 'SELECT', oid: 0, fields: [] };
 }
 
-function fake(options: { changed?: string; added?: string; marker?: string | null } = {}) {
+type SemanticAclEntry = {
+  granteeCategory: string;
+  privilege: string;
+  grantOption: boolean;
+};
+
+function fake(
+  options: {
+    changed?: string;
+    added?: string;
+    marker?: string | null;
+    acl?: Partial<Record<string, readonly SemanticAclEntry[]>>;
+  } = {},
+) {
   const queries: string[] = [];
   const query = vi.fn(<T extends Record<string, unknown>>(text: string) => {
     queries.push(text);
@@ -267,6 +282,12 @@ function fake(options: { changed?: string; added?: string; marker?: string | nul
           COMMUNITIES_STAGING_ROLE_SPLIT_ROLE_CATEGORIES.map((category, index) => ({
             role_name: category === 'INVENTORY_READER' ? 'inventory_reader' : `role_${index + 1}`,
             role_oid: String(17000 + index),
+            can_login: true,
+            superuser: false,
+            bypass_rls: false,
+            create_database: false,
+            create_role: false,
+            replication: false,
           })),
         ) as unknown as QueryResult<T>,
       );
@@ -283,43 +304,116 @@ function fake(options: { changed?: string; added?: string; marker?: string | nul
         'types',
       ]);
       if (objectCategories.has(category)) {
-        const rows = [
-          { canonical_key: `${category}-object|owner`, value: 'role_3' },
+        const aclEntries =
+          options.acl?.[category] ??
+          (options.changed === category
+            ? [{ granteeCategory: 'FUTURE_RUNTIME', privilege: 'SELECT', grantOption: false }]
+            : []);
+        const objectIdentities = (
+          category === 'functions'
+            ? [
+                [category, 'a.b', 'c|d', 'integer'],
+                [category, 'a', 'b.c|d', 'integer'],
+                [category, 'a.b', 'c|d', 'text'],
+              ]
+            : [[category, 'quoted.name|part', '']]
+        ).map((identity) => JSON.stringify(identity));
+        const rows = objectIdentities.flatMap((objectIdentity) => [
           {
-            canonical_key: `${category}-object|acl|explicit|<NULL>`,
-            value: options.changed === category ? 'changed' : 'explicit',
+            object_identity: objectIdentity,
+            field_identity: JSON.stringify(['owner']),
+            field_kind: 'OWNER',
+            value: 'role_3',
+            owner_oid: '17002',
           },
-          { canonical_key: `${category}-object|acl|effective|role_3=ar`, value: 'effective' },
-        ];
+          {
+            object_identity: objectIdentity,
+            field_identity: JSON.stringify(['explicitAcl']),
+            field_kind: 'ACL_EXPLICIT',
+            value: JSON.stringify(aclEntries),
+            owner_oid: null,
+          },
+          {
+            object_identity: objectIdentity,
+            field_identity: JSON.stringify(['effectiveAcl']),
+            field_kind: 'ACL_EFFECTIVE',
+            value: JSON.stringify(aclEntries),
+            owner_oid: null,
+          },
+        ]);
         if (options.added === category)
-          rows.push({ canonical_key: `${category}-new|metadata`, value: 'new' });
+          rows.push({
+            object_identity: JSON.stringify([category, 'new']),
+            field_identity: JSON.stringify(['metadata']),
+            field_kind: 'METADATA',
+            value: 'new',
+            owner_oid: null,
+          });
         return Promise.resolve(result(rows.reverse()) as unknown as QueryResult<T>);
       }
       if (category === 'extensions') {
         const rows = [
-          { canonical_key: 'extension-object|owner', value: 'role_3' },
           {
-            canonical_key: 'extension-object|metadata',
+            object_identity: JSON.stringify(['extension', 'quoted.name|part']),
+            field_identity: JSON.stringify(['owner']),
+            field_kind: 'OWNER',
+            value: 'role_3',
+            owner_oid: '17002',
+          },
+          {
+            object_identity: JSON.stringify(['extension', 'quoted.name|part']),
+            field_identity: JSON.stringify(['metadata']),
+            field_kind: 'METADATA',
             value: options.changed === category ? 'changed' : 'metadata',
+            owner_oid: null,
           },
         ];
         if (options.added === category)
-          rows.push({ canonical_key: 'extension-object|member|new', value: 'new' });
+          rows.push({
+            object_identity: JSON.stringify(['extension', 'quoted.name|part']),
+            field_identity: JSON.stringify(['member', 'new']),
+            field_kind: 'EXTENSION_MEMBER',
+            value: 'new',
+            owner_oid: null,
+          });
         return Promise.resolve(result(rows.reverse()) as unknown as QueryResult<T>);
       }
-      const key = (suffix: string): string => {
-        if (category === 'roles') return `role-${suffix}`;
-        if (category === 'memberships') return `granted-${suffix}|member-${suffix}`;
-        if (category === 'defaultAcls') return `owner-${suffix}|public|r|acl-${suffix}`;
-        if (category === 'columnAcls') return `public.table-${suffix}|column|<NULL>`;
-        if (category === 'rlsPolicies') return `public.table-${suffix}|rls`;
-        return `${category}-${suffix}|metadata`;
-      };
+      const kind =
+        category === 'roles'
+          ? 'ROLE'
+          : category === 'memberships'
+            ? 'MEMBERSHIP'
+            : category === 'defaultAcls'
+              ? 'DEFAULT_ACL'
+              : category === 'columnAcls'
+                ? 'ACL_EXPLICIT'
+                : category === 'rlsPolicies'
+                  ? 'RLS'
+                  : 'METADATA';
       const rows = [
-        { canonical_key: key('é'), value: options.changed === category ? 'changed' : 'one' },
-        { canonical_key: key('z'), value: 'two' },
+        {
+          object_identity: JSON.stringify([category, 'é.name|part']),
+          field_identity: JSON.stringify([kind === 'ACL_EXPLICIT' ? 'explicitAcl' : 'metadata']),
+          field_kind: kind,
+          value: kind === 'ACL_EXPLICIT' ? '[]' : options.changed === category ? 'changed' : 'one',
+          owner_oid: null,
+        },
+        {
+          object_identity: JSON.stringify([category, 'z']),
+          field_identity: JSON.stringify([kind === 'ACL_EXPLICIT' ? 'explicitAcl' : 'metadata']),
+          field_kind: kind,
+          value: kind === 'ACL_EXPLICIT' ? '[]' : 'two',
+          owner_oid: null,
+        },
       ];
-      if (options.added === category) rows.push({ canonical_key: key('new'), value: 'new' });
+      if (options.added === category)
+        rows.push({
+          object_identity: JSON.stringify([category, 'new']),
+          field_identity: JSON.stringify(['metadata']),
+          field_kind: kind,
+          value: kind === 'ACL_EXPLICIT' ? '[]' : 'new',
+          owner_oid: null,
+        });
       return Promise.resolve(result(rows.reverse()) as unknown as QueryResult<T>);
     }
     if (text.includes(':anomalies'))
@@ -383,7 +477,12 @@ describe('Communities role split INPUT_C producer', () => {
       schemaVersion: COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_SCHEMA_VERSION,
       canonicalizationVersion: COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_CANONICALIZATION_VERSION,
       sortVersion: COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_SORT_VERSION,
-      provenance: { mappingObservationState: 'OBSERVED', cloneOidBound: true, pgMajor: 16 },
+      provenance: {
+        contractVersion: 'communities-role-split-clone-marker-evidence-v2',
+        creationReceiptSha256: payload.creationReceiptSha256,
+        cloneOidBound: true,
+        pgMajor: 16,
+      },
     });
     expect(Object.keys(report.normalized)).toEqual([
       ...COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_CATEGORY_NAMES,
@@ -397,6 +496,11 @@ describe('Communities role split INPUT_C producer', () => {
         expect(record.valueSha256).toMatch(/^[a-f0-9]{64}$/u);
         expect(record.provenanceSha256).toMatch(/^[a-f0-9]{64}$/u);
       }
+    const overloadedFunctionOwners = report.normalized.functions.filter(
+      (record) => record.fieldKind === 'OWNER',
+    );
+    expect(overloadedFunctionOwners).toHaveLength(3);
+    expect(new Set(overloadedFunctionOwners.map((record) => record.objectKeySha256)).size).toBe(3);
     expect(JSON.stringify(report)).not.toMatch(
       /phub_restore|phub_staging|inventory_reader|7421000000000000000|45678/u,
     );
@@ -405,56 +509,24 @@ describe('Communities role split INPUT_C producer', () => {
   });
 
   it('passes a real C artifact through JSON Schema structural validation and the D evaluator', async () => {
+    const select = {
+      granteeCategory: 'FUTURE_RUNTIME',
+      privilege: 'SELECT',
+      grantOption: false,
+    } as const;
+    const update = {
+      granteeCategory: 'FUTURE_RUNTIME',
+      privilege: 'UPDATE',
+      grantOption: false,
+    } as const;
     const observedBefore = await produceCommunitiesStagingRoleSplitInventory(
       exactInput,
-      () => fake().client,
+      () => fake({ acl: { sequences: [update] } }).client,
     );
-    const observedAfter = structuredClone(observedBefore);
-    const observedDigest = (value: string, provenance: string) => ({
-      observationState: 'OBSERVED' as const,
-      valueSha256: sha(value),
-      provenanceSha256: sha(provenance),
-    });
-    const observedBoolean = (value: string, state: boolean) => ({
-      observationState: 'OBSERVED' as const,
-      value: state,
-      provenanceSha256: sha(value),
-    });
-    const roles = Object.fromEntries(
-      COMMUNITIES_STAGING_ROLE_SPLIT_ROLE_CATEGORIES.map((category, index) => {
-        const roleName = category === 'INVENTORY_READER' ? 'inventory_reader' : `role_${index + 1}`;
-        return [
-          category,
-          {
-            category,
-            roleName: observedDigest(roleName, `name:${category}`),
-            roleOid: observedDigest(String(17_000 + index), `oid:${category}`),
-            canLogin: observedBoolean(`login:${category}`, true),
-            superuser: observedBoolean(`super:${category}`, false),
-            bypassRls: observedBoolean(`bypass:${category}`, false),
-            createDatabase: observedBoolean(`createdb:${category}`, false),
-            createRole: observedBoolean(`createrole:${category}`, false),
-            replication: observedBoolean(`replication:${category}`, false),
-          },
-        ];
-      }),
-    ) as unknown as Omit<
-      CommunitiesRoleSplitAcceptanceEnvelope['mapping'],
-      'identityRelations' | 'mappingDigest'
-    >;
-    const roleMapping: CommunitiesRoleSplitAcceptanceEnvelope['mapping'] = {
-      ...roles,
-      mappingDigest: observedBefore.provenance.mappingDigest!,
-      identityRelations: COMMUNITIES_ROLE_SPLIT_IDENTITY_RELATION_SPECS.map(
-        ([left, right, requirement]) => ({
-          left,
-          right,
-          requirement,
-          relation: 'DISTINCT',
-          provenanceSha256: sha(`relation:${left}:${right}`),
-        }),
-      ),
-    };
+    const observedAfter = await produceCommunitiesStagingRoleSplitInventory(
+      exactInput,
+      () => fake({ acl: { relations: [select] } }).client,
+    );
     const objectCategories = {
       database: 'databaseAcl',
       schema: 'schemas',
@@ -464,12 +536,12 @@ describe('Communities role split INPUT_C producer', () => {
       type: 'types',
       extension: 'extensions',
     } as const;
-    const ownershipPlan = (Object.keys(objectCategories) as CommunitiesRoleSplitObjectKind[]).map(
-      (objectKind) => {
-        const owner = observedBefore.normalized[objectCategories[objectKind]].find(
-          (record) => record.fieldKind === 'OWNER',
-        )!;
-        return {
+    const ownershipPlan = (
+      Object.keys(objectCategories) as CommunitiesRoleSplitObjectKind[]
+    ).flatMap((objectKind) =>
+      observedBefore.normalized[objectCategories[objectKind]]
+        .filter((record) => record.fieldKind === 'OWNER')
+        .map((owner) => ({
           objectKind,
           objectKeySha256: owner.objectKeySha256,
           ownerFieldKeySha256: owner.fieldKeySha256,
@@ -478,11 +550,9 @@ describe('Communities role split INPUT_C producer', () => {
           beforeOwnerValueSha256: owner.valueSha256!,
           afterOwnerValueSha256: owner.valueSha256!,
           ownerEvidenceSha256: owner.provenanceSha256!,
-          ruleSha256: sha(`owner-rule:${objectKind}`),
-        };
-      },
+        })),
     );
-    const grantPlan = (
+    const grantPlan: CommunitiesRoleSplitGrantDecision[] = (
       Object.keys(objectCategories).filter(
         (kind) => kind !== 'extension',
       ) as CommunitiesRoleSplitGrantObjectKind[]
@@ -491,32 +561,72 @@ describe('Communities role split INPUT_C producer', () => {
         .filter(
           (record) => record.fieldKind === 'ACL_EXPLICIT' || record.fieldKind === 'ACL_EFFECTIVE',
         )
-        .map((record) => ({
-          objectKind,
-          objectKeySha256: record.objectKeySha256,
-          fieldKeySha256: record.fieldKeySha256,
-          action: 'PRESERVE' as const,
-          granteeCategory: 'FUTURE_RUNTIME' as const,
-          privileges: [],
-          beforeStateSha256: record.valueSha256!,
-          targetStateSha256: record.valueSha256!,
-          evidenceSha256: record.provenanceSha256!,
-          grantOption: false as const,
-          ruleSha256: sha(`grant-rule:${record.fieldKeySha256}`),
-        })),
+        .flatMap((record): CommunitiesRoleSplitGrantDecision[] => {
+          const after = observedAfter.normalized[objectCategories[objectKind]].find(
+            (candidate) => candidate.fieldKeySha256 === record.fieldKeySha256,
+          )!;
+          const beforeEntries =
+            record.semantic && 'entries' in record.semantic ? record.semantic.entries : [];
+          const afterEntries =
+            after.semantic && 'entries' in after.semantic ? after.semantic.entries : [];
+          const beforeKeys = new Set(beforeEntries.map((entry) => JSON.stringify(entry)));
+          const afterKeys = new Set(afterEntries.map((entry) => JSON.stringify(entry)));
+          const common = {
+            objectKind,
+            objectKeySha256: record.objectKeySha256,
+            fieldKeySha256: record.fieldKeySha256,
+            beforeStateSha256: record.valueSha256!,
+            targetStateSha256: after.valueSha256!,
+            evidenceSha256: record.provenanceSha256!,
+            grantOption: false as const,
+          };
+          const changed = [
+            ...afterEntries
+              .filter((entry) => !beforeKeys.has(JSON.stringify(entry)))
+              .map((entry) => ({
+                ...common,
+                action: 'ADD' as const,
+                granteeCategory:
+                  entry.granteeCategory as CommunitiesRoleSplitGrantDecision['granteeCategory'],
+                privileges: [
+                  entry.privilege as CommunitiesRoleSplitGrantDecision['privileges'][number],
+                ],
+              })),
+            ...beforeEntries
+              .filter((entry) => !afterKeys.has(JSON.stringify(entry)))
+              .map((entry) => ({
+                ...common,
+                action: 'REMOVE' as const,
+                granteeCategory:
+                  entry.granteeCategory as CommunitiesRoleSplitGrantDecision['granteeCategory'],
+                privileges: [
+                  entry.privilege as CommunitiesRoleSplitGrantDecision['privileges'][number],
+                ],
+              })),
+          ];
+          return changed.length > 0
+            ? changed
+            : [
+                {
+                  ...common,
+                  action: 'PRESERVE',
+                  granteeCategory: 'FUTURE_RUNTIME',
+                  privileges: [],
+                },
+              ];
+        }),
     );
     const envelope: CommunitiesRoleSplitAcceptanceEnvelope = {
       contractVersion: COMMUNITIES_ROLE_SPLIT_ACCEPTANCE_VERSION,
       observedBefore,
       observedAfter,
-      mapping: roleMapping,
       ownershipPlan,
       grantPlan,
       comparison: {
         sortVersion: observedBefore.sortVersion,
         beforeManifestSha256: observedBefore.manifestSha256,
         afterManifestSha256: observedAfter.manifestSha256,
-        changedCount: 0,
+        changedCount: 4,
         addedCount: 0,
         removedCount: 0,
         forbiddenTransitionCodes: [],
@@ -547,39 +657,36 @@ describe('Communities role split INPUT_C producer', () => {
       afterArtifactSha256: communitiesRoleSplitInputCArtifactSha256(observedAfter),
       beforeManifestSha256: observedBefore.manifestSha256,
       afterManifestSha256: observedAfter.manifestSha256,
-      mappingDigest: observedBefore.provenance.mappingDigest!,
+      expectedMappingDigest: observedBefore.provenance.mappingDigest,
       markerDigest: observedBefore.provenance.markerDigest,
       markerEvidenceDigest: observedBefore.provenance.markerEvidenceDigest,
       requestDigest: observedBefore.provenance.requestDigest,
+      creationReceiptSha256: observedBefore.provenance.creationReceiptSha256,
       objectManifestDigest: observedBefore.provenance.objectManifestDigest,
       ledgerDigest: observedBefore.provenance.ledgerDigest,
     };
     expect(assertCommunitiesRoleSplitAcceptancePass(envelope, pins)).toEqual(envelope.comparison);
   });
 
-  it('uses Buffer byte sorting and marks missing mapping UNKNOWN/fail-closed', async () => {
+  it('uses Buffer byte sorting and rejects missing mapping before database access', async () => {
     expect(['é', 'z'].sort(compareUtf8Bytes)).toEqual(['z', 'é']);
-    const report = await produceCommunitiesStagingRoleSplitInventory(
-      baseInput,
-      () => fake().client,
-    );
-    expect(report.provenance).toMatchObject({
-      mappingObservationState: 'UNKNOWN',
-      mappingDigest: null,
-    });
-    expect(report.anomalies).toContainEqual(
-      expect.objectContaining({ code: 'MAPPING_INCOMPLETE', count: 1 }),
-    );
+    await expect(
+      produceCommunitiesStagingRoleSplitInventory(
+        baseInput as Parameters<typeof produceCommunitiesStagingRoleSplitInventory>[0],
+        () => fake().client,
+      ),
+    ).rejects.toThrow('MAPPING_INVALID');
   });
 
-  it('separates explicit/effective ACLs, expands NULL defaults and captures extension membership', () => {
+  it('uses structured identities, stable ACL fields, defaults and overloaded function identities', () => {
     const sql = Object.values(COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_SQL.categories).join('\n');
     for (const code of ['d', 'n', 'r', 's', 'f', 'T'])
       expect(sql).toContain(`acldefault('${code}'`);
-    expect(sql).toContain("'|explicit|'");
-    expect(sql).toContain("'|effective|'");
-    expect(sql).toContain("'<NULL>'");
-    expect(sql).not.toMatch(/order\s+by|collate/iu);
+    expect(sql).toContain("jsonb_build_array('explicitAcl')");
+    expect(sql).toContain("jsonb_build_array('effectiveAcl')");
+    expect(sql).toContain('pg_get_function_identity_arguments');
+    expect(sql).not.toContain('canonical_key');
+    expect(sql).not.toMatch(/\|owner|\|metadata|\|explicit|\|effective/u);
     expect(COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_SQL.categories.extensions).toContain(
       'pg_catalog.pg_depend',
     );
@@ -599,7 +706,7 @@ describe('Communities role split INPUT_C producer', () => {
     );
     const comparison = compareCommunitiesStagingRoleSplitInventories(before, after);
     expect(comparison).toMatchObject({
-      changedRecordCount: 1,
+      changedRecordCount: 6,
       addedRecordCount: 1,
       removedRecordCount: 0,
     });

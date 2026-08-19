@@ -3,7 +3,10 @@ import { createHash } from 'node:crypto';
 import {
   COMMUNITIES_ROLE_SPLIT_CANONICALIZATION_VERSION,
   COMMUNITIES_ROLE_SPLIT_FORBIDDEN_CODE_CONTRACT,
+  COMMUNITIES_ROLE_SPLIT_FIELD_KINDS,
   COMMUNITIES_ROLE_SPLIT_INPUT_C_SCHEMA_VERSION,
+  COMMUNITIES_ROLE_SPLIT_IDENTITY_RELATION_SPECS,
+  COMMUNITIES_ROLE_SPLIT_MAPPING_VERSION as INPUT_C_MAPPING_VERSION,
   COMMUNITIES_ROLE_SPLIT_NORMALIZED_CATEGORIES,
   COMMUNITIES_ROLE_SPLIT_ROLE_CATEGORIES,
   COMMUNITIES_ROLE_SPLIT_SORT_VERSION,
@@ -17,9 +20,14 @@ import {
   COMMUNITIES_STAGING_ROLE_SPLIT_CLONE_MANIFEST_SHA256,
   COMMUNITIES_STAGING_ROLE_SPLIT_RESTORE_MARKER_REQUEST_VERSION,
   communitiesRoleSplitInputCManifestSha256,
+  communitiesRoleSplitCanonicalJson,
+  communitiesRoleSplitMappingSha256,
   compareCommunitiesRoleSplitUtf8Bytes,
+  type CommunitiesRoleSplitAclEntry,
   type CommunitiesRoleSplitFieldKind,
   type CommunitiesRoleSplitInputC,
+  type CommunitiesRoleSplitMappingArtifact,
+  type CommunitiesRoleSplitMappingCategory,
   type CommunitiesRoleSplitNormalizedCategory,
   type CommunitiesRoleSplitNormalizedRecord,
   type CommunitiesStagingRoleSplitRestoreMarkerEvidence,
@@ -135,6 +143,7 @@ export function parseCommunitiesStagingRoleSplitMarkerRequest(
 const markerEvidenceLines = [
   'status',
   'requestSha256',
+  'creationReceiptSha256',
   'markerPayloadSha256',
   'markerValueSha256',
   'backupSha256',
@@ -168,7 +177,7 @@ export function parseCommunitiesStagingRoleSplitMarkerEvidence(
 ): CommunitiesStagingRoleSplitRestoreMarkerEvidence {
   const parsed = parseExactLines(
     value,
-    'schemaVersion=communities-role-split-clone-marker-evidence-v1',
+    'schemaVersion=communities-role-split-clone-marker-evidence-v2',
   );
   if (
     parsed.size !== markerEvidenceLines.length ||
@@ -190,9 +199,10 @@ export function parseCommunitiesStagingRoleSplitMarkerEvidence(
   };
   if (required('status') !== 'MARKED') fail('EVIDENCE_SHAPE_INVALID');
   return {
-    schemaVersion: 'communities-role-split-clone-marker-evidence-v1',
+    schemaVersion: 'communities-role-split-clone-marker-evidence-v2',
     status: required('status') as 'MARKED',
     requestSha256: required('requestSha256'),
+    creationReceiptSha256: required('creationReceiptSha256'),
     markerPayloadSha256: required('markerPayloadSha256'),
     markerValueSha256: required('markerValueSha256'),
     backupSha256: required('backupSha256'),
@@ -294,8 +304,8 @@ export interface InventoryInput {
   readonly expectedRequestSha256: string;
   readonly markerEvidenceText: string;
   readonly expectedMarkerEvidenceSha256: string;
-  readonly roleMappingText?: string;
-  readonly expectedRoleMappingSha256?: string;
+  readonly roleMappingText: string;
+  readonly expectedRoleMappingSha256: string;
 }
 
 type IdentityRow = {
@@ -333,135 +343,194 @@ select database.datname database_name, database.oid::text database_oid, owner.ro
   left join pg_catalog.pg_roles source_owner on source_owner.oid=source.datdba
  where database.datname=current_database()`;
 
-const aclRows = (acl: string, owner: string, code: string, prefix: string): string => `
-select ${prefix} || '|explicit|' || coalesce(item::text, '<NULL>') canonical_key,
-       pg_catalog.jsonb_build_array('explicit', item::text)::text value
-  from (select 1) seed left join lateral unnest(${acl}) item on true
+const aclRows = (objectIdentity: string, acl: string, owner: string, code: string): string => `
+select ${objectIdentity}::text object_identity,
+       pg_catalog.jsonb_build_array('explicitAcl')::text field_identity,
+       'ACL_EXPLICIT'::text field_kind,
+       coalesce(pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
+         'granteeCategory',coalesce(mapped.category,case when entry.grantee=0 then 'PUBLIC' else 'THIRD_PARTY' end),
+         'privilege',entry.privilege_type,'grantOption',entry.is_grantable)
+         order by coalesce(mapped.category,case when entry.grantee=0 then 'PUBLIC' else 'THIRD_PARTY' end),entry.privilege_type,entry.is_grantable)
+         filter (where entry.grantee is not null),'[]'::jsonb)::text value,
+       null::text owner_oid
+  from (select 1) seed left join lateral pg_catalog.aclexplode(coalesce(${acl},'{}'::aclitem[])) entry on true
+  left join lateral (select value->>'category' category from pg_catalog.jsonb_array_elements($1::jsonb)
+    where value->>'roleOid'=entry.grantee::text order by value->>'category' limit 1) mapped on true
 union all
-select ${prefix} || '|effective|' || item::text canonical_key,
-       pg_catalog.jsonb_build_array('effective', item::text)::text value
-  from unnest(coalesce(${acl}, pg_catalog.acldefault('${code}', ${owner}))) item`;
+select ${objectIdentity}::text object_identity,
+       pg_catalog.jsonb_build_array('effectiveAcl')::text field_identity,
+       'ACL_EFFECTIVE'::text field_kind,
+       coalesce(pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
+         'granteeCategory',coalesce(mapped.category,case when entry.grantee=0 then 'PUBLIC' else 'THIRD_PARTY' end),
+         'privilege',entry.privilege_type,'grantOption',entry.is_grantable)
+         order by coalesce(mapped.category,case when entry.grantee=0 then 'PUBLIC' else 'THIRD_PARTY' end),entry.privilege_type,entry.is_grantable)
+         filter (where entry.grantee is not null),'[]'::jsonb)::text value,
+       null::text owner_oid
+  from pg_catalog.aclexplode(coalesce(${acl},pg_catalog.acldefault('${code}',${owner}))) entry
+  left join lateral (select value->>'category' category from pg_catalog.jsonb_array_elements($1::jsonb)
+    where value->>'roleOid'=entry.grantee::text order by value->>'category' limit 1) mapped on true`;
 
 const categorySql: Readonly<Record<CategoryName, string>> = {
   roles: `/* communities-role-split-input-c:roles */
-select role.rolname canonical_key, pg_catalog.jsonb_build_array(role.oid::text, role.rolsuper,
- role.rolinherit, role.rolcreaterole, role.rolcreatedb, role.rolcanlogin, role.rolreplication,
- role.rolbypassrls)::text value from pg_catalog.pg_roles role where role.rolname !~ '^pg_'`,
+select pg_catalog.jsonb_build_array('role',role.rolname)::text object_identity,
+ pg_catalog.jsonb_build_array('metadata')::text field_identity,'ROLE'::text field_kind,
+ pg_catalog.jsonb_build_array(role.oid::text,role.rolsuper,role.rolinherit,role.rolcreaterole,
+ role.rolcreatedb,role.rolcanlogin,role.rolreplication,role.rolbypassrls)::text value,
+ null::text owner_oid from pg_catalog.pg_roles role where role.rolname !~ '^pg_'`,
   memberships: `/* communities-role-split-input-c:memberships */
-select granted.rolname || '|' || member.rolname canonical_key,
- pg_catalog.jsonb_build_array(granted.oid::text, member.oid::text, membership.admin_option,
- membership.inherit_option, membership.set_option)::text value
+select pg_catalog.jsonb_build_array('membership',granted.rolname,member.rolname)::text object_identity,
+ pg_catalog.jsonb_build_array('membership')::text field_identity,'MEMBERSHIP'::text field_kind,
+ pg_catalog.jsonb_build_array(granted.oid::text,member.oid::text,membership.admin_option,
+ membership.inherit_option,membership.set_option)::text value,null::text owner_oid
  from pg_catalog.pg_auth_members membership join pg_catalog.pg_roles granted on granted.oid=membership.roleid
  join pg_catalog.pg_roles member on member.oid=membership.member`,
   databaseAcl: `/* communities-role-split-input-c:databaseAcl */
-select 'database|owner' canonical_key, owner.rolname value from pg_catalog.pg_database database
+select pg_catalog.jsonb_build_array('database',database.datname)::text object_identity,
+ pg_catalog.jsonb_build_array('owner')::text field_identity,'OWNER'::text field_kind,
+ owner.rolname value,owner.oid::text owner_oid from pg_catalog.pg_database database
 join pg_catalog.pg_roles owner on owner.oid=database.datdba where database.datname=current_database()
 union all
-select rows.canonical_key, rows.value from pg_catalog.pg_database database
-cross join lateral (${aclRows('database.datacl', 'database.datdba', 'd', "'database'")}) rows
+select rows.* from pg_catalog.pg_database database
+cross join lateral (${aclRows("pg_catalog.jsonb_build_array('database',database.datname)", 'database.datacl', 'database.datdba', 'd')}) rows
 where database.datname=current_database()`,
   schemas: `/* communities-role-split-input-c:schemas */
 with relevant(name) as (values ${relevantSchemas})
-select namespace.nspname || '|owner' canonical_key, owner.rolname value
+select pg_catalog.jsonb_build_array('schema',namespace.nspname)::text object_identity,
+ pg_catalog.jsonb_build_array('owner')::text field_identity,'OWNER'::text field_kind,
+ owner.rolname value,owner.oid::text owner_oid
  from pg_catalog.pg_namespace namespace join pg_catalog.pg_roles owner on owner.oid=namespace.nspowner
  where namespace.nspname in (select name from relevant)
 union all
-select namespace.nspname || '|' || rows.canonical_key, rows.value
+select rows.*
  from pg_catalog.pg_namespace namespace
- cross join lateral (${aclRows('namespace.nspacl', 'namespace.nspowner', 'n', "'acl'")}) rows
+ cross join lateral (${aclRows("pg_catalog.jsonb_build_array('schema',namespace.nspname)", 'namespace.nspacl', 'namespace.nspowner', 'n')}) rows
  where namespace.nspname in (select name from relevant)`,
   defaultAcls: `/* communities-role-split-input-c:defaultAcls */
 with relevant(name) as (values ${relevantSchemas})
-select owner.rolname || '|' || coalesce(namespace.nspname,'<GLOBAL>') || '|' || defaults.defaclobjtype || '|' || item::text canonical_key,
- item::text value from pg_catalog.pg_default_acl defaults join pg_catalog.pg_roles owner on owner.oid=defaults.defaclrole
+select pg_catalog.jsonb_build_array('defaultAcl',owner.rolname,namespace.nspname,defaults.defaclobjtype)::text object_identity,
+ pg_catalog.jsonb_build_array('definition')::text field_identity,'DEFAULT_ACL'::text field_kind,
+ coalesce(pg_catalog.jsonb_agg(item::text order by item::text),'[]'::jsonb)::text value,null::text owner_oid
+ from pg_catalog.pg_default_acl defaults join pg_catalog.pg_roles owner on owner.oid=defaults.defaclrole
  left join pg_catalog.pg_namespace namespace on namespace.oid=defaults.defaclnamespace
- cross join lateral unnest(defaults.defaclacl) item
- where defaults.defaclnamespace=0 or namespace.nspname in (select name from relevant)`,
+ left join lateral unnest(defaults.defaclacl) item on true
+ where defaults.defaclnamespace=0 or namespace.nspname in (select name from relevant)
+ group by owner.rolname,namespace.nspname,defaults.defaclobjtype`,
   relations: `/* communities-role-split-input-c:relations */
 with relevant(name) as (values ${relevantSchemas}), base as (
  select namespace.nspname, relation.* from pg_catalog.pg_class relation join pg_catalog.pg_namespace namespace on namespace.oid=relation.relnamespace
  where namespace.nspname in (select name from relevant) and relation.relkind in ('r','p','v','m','f'))
-select nspname || '.' || relname || '|owner' canonical_key, owner.rolname value from base
+select pg_catalog.jsonb_build_array('relation',nspname,relname,relkind)::text object_identity,
+ pg_catalog.jsonb_build_array('owner')::text field_identity,'OWNER'::text field_kind,
+ owner.rolname value,owner.oid::text owner_oid from base
 join pg_catalog.pg_roles owner on owner.oid=base.relowner
-union all select nspname || '.' || relname || '|metadata' canonical_key,
- pg_catalog.jsonb_build_array(relkind)::text value from base
-union all select nspname || '.' || relname || '|' || rows.canonical_key, rows.value from base
-cross join lateral (${aclRows('base.relacl', 'base.relowner', 'r', "'acl'")}) rows`,
+union all select pg_catalog.jsonb_build_array('relation',nspname,relname,relkind)::text,
+ pg_catalog.jsonb_build_array('metadata')::text,'METADATA'::text,
+ pg_catalog.jsonb_build_array(relkind)::text,null::text from base
+union all select rows.* from base cross join lateral
+ (${aclRows("pg_catalog.jsonb_build_array('relation',base.nspname,base.relname,base.relkind)", 'base.relacl', 'base.relowner', 'r')}) rows`,
   columnAcls: `/* communities-role-split-input-c:columnAcls */
 with relevant(name) as (values ${relevantSchemas})
-select namespace.nspname || '.' || relation.relname || '|' || attribute.attname || '|' || coalesce(item::text,'<NULL>') canonical_key,
- pg_catalog.jsonb_build_array(attribute.attnum, pg_catalog.format_type(attribute.atttypid,attribute.atttypmod),
- attribute.attnotnull, item::text)::text value
+select pg_catalog.jsonb_build_array('column',namespace.nspname,relation.relname,relation.relkind,
+ attribute.attname,attribute.attnum)::text object_identity,
+ pg_catalog.jsonb_build_array(kind.field_name)::text field_identity,kind.field_kind,
+ coalesce(pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
+  'granteeCategory',coalesce(mapped.category,case when entry.grantee=0 then 'PUBLIC' else 'THIRD_PARTY' end),
+  'privilege',entry.privilege_type,'grantOption',entry.is_grantable)
+  order by coalesce(mapped.category,case when entry.grantee=0 then 'PUBLIC' else 'THIRD_PARTY' end),entry.privilege_type,entry.is_grantable)
+  filter (where entry.grantee is not null),'[]'::jsonb)::text value,null::text owner_oid
  from pg_catalog.pg_attribute attribute join pg_catalog.pg_class relation on relation.oid=attribute.attrelid
  join pg_catalog.pg_namespace namespace on namespace.oid=relation.relnamespace
- left join lateral unnest(attribute.attacl) item on true
+ cross join (values ('explicitAcl','ACL_EXPLICIT'),('effectiveAcl','ACL_EFFECTIVE')) kind(field_name,field_kind)
+ left join lateral pg_catalog.aclexplode(coalesce(attribute.attacl,'{}'::aclitem[])) entry on true
+ left join lateral (select value->>'category' category from pg_catalog.jsonb_array_elements($1::jsonb)
+  where value->>'roleOid'=entry.grantee::text order by value->>'category' limit 1) mapped on true
  where namespace.nspname in (select name from relevant) and relation.relkind in ('r','p','v','m','f')
- and attribute.attnum>0 and not attribute.attisdropped`,
+ and attribute.attnum>0 and not attribute.attisdropped
+ group by namespace.nspname,relation.relname,relation.relkind,attribute.attname,attribute.attnum,kind.field_name,kind.field_kind`,
   rlsPolicies: `/* communities-role-split-input-c:rlsPolicies */
 with relevant(name) as (values ${relevantSchemas})
-select namespace.nspname || '.' || relation.relname || '|rls' canonical_key,
- pg_catalog.jsonb_build_array(relation.relrowsecurity,relation.relforcerowsecurity)::text value
+select pg_catalog.jsonb_build_array('relation',namespace.nspname,relation.relname,relation.relkind)::text object_identity,
+ pg_catalog.jsonb_build_array('rls')::text field_identity,'RLS'::text field_kind,
+ pg_catalog.jsonb_build_array(relation.relrowsecurity,relation.relforcerowsecurity)::text value,null::text owner_oid
  from pg_catalog.pg_class relation join pg_catalog.pg_namespace namespace on namespace.oid=relation.relnamespace
  where namespace.nspname in (select name from relevant) and relation.relkind in ('r','p')
-union all select policy.schemaname || '.' || policy.tablename || '|' || policy.policyname canonical_key,
- pg_catalog.jsonb_build_array(policy.permissive,policy.roles,policy.cmd,policy.qual,policy.with_check)::text value
- from pg_catalog.pg_policies policy where policy.schemaname in (select name from relevant)`,
+union all select pg_catalog.jsonb_build_array('relation',policy.schemaname,policy.tablename,relation.relkind)::text,
+ pg_catalog.jsonb_build_array('policy',policy.policyname)::text,'POLICY'::text,
+ pg_catalog.jsonb_build_array(policy.permissive,policy.roles,policy.cmd,policy.qual,policy.with_check)::text,null::text
+ from pg_catalog.pg_policies policy join pg_catalog.pg_namespace namespace on namespace.nspname=policy.schemaname
+ join pg_catalog.pg_class relation on relation.relnamespace=namespace.oid and relation.relname=policy.tablename
+ where policy.schemaname in (select name from relevant)`,
   sequences: `/* communities-role-split-input-c:sequences */
 with relevant(name) as (values ${relevantSchemas}), base as (
  select namespace.nspname, relation.*, sequence.* from pg_catalog.pg_class relation
  join pg_catalog.pg_namespace namespace on namespace.oid=relation.relnamespace
  join pg_catalog.pg_sequence sequence on sequence.seqrelid=relation.oid where namespace.nspname in (select name from relevant))
-select nspname || '.' || relname || '|owner' canonical_key, owner.rolname value from base
+select pg_catalog.jsonb_build_array('sequence',nspname,relname)::text object_identity,
+ pg_catalog.jsonb_build_array('owner')::text field_identity,'OWNER'::text field_kind,
+ owner.rolname value,owner.oid::text owner_oid from base
 join pg_catalog.pg_roles owner on owner.oid=base.relowner
-union all select nspname || '.' || relname || '|metadata' canonical_key,
- pg_catalog.jsonb_build_array(seqstart,seqincrement,seqmin,seqmax,seqcache,seqcycle)::text value from base
-union all select nspname || '.' || relname || '|' || rows.canonical_key, rows.value from base
-cross join lateral (${aclRows('base.relacl', 'base.relowner', 's', "'acl'")}) rows`,
+union all select pg_catalog.jsonb_build_array('sequence',nspname,relname)::text,
+ pg_catalog.jsonb_build_array('metadata')::text,'METADATA'::text,
+ pg_catalog.jsonb_build_array(seqstart,seqincrement,seqmin,seqmax,seqcache,seqcycle)::text,null::text from base
+union all select rows.* from base cross join lateral
+ (${aclRows("pg_catalog.jsonb_build_array('sequence',base.nspname,base.relname)", 'base.relacl', 'base.relowner', 's')}) rows`,
   functions: `/* communities-role-split-input-c:functions */
 with relevant(name) as (values ${relevantSchemas}), base as (
  select namespace.nspname, routine.* from pg_catalog.pg_proc routine join pg_catalog.pg_namespace namespace on namespace.oid=routine.pronamespace
  where namespace.nspname in (select name from relevant))
-select nspname || '.' || proname || '(' || pg_catalog.pg_get_function_identity_arguments(base.oid) || ')|owner' canonical_key,
- owner.rolname value from base join pg_catalog.pg_roles owner on owner.oid=base.proowner
-union all select nspname || '.' || proname || '(' || pg_catalog.pg_get_function_identity_arguments(oid) || ')|metadata' canonical_key,
- pg_catalog.jsonb_build_array(prokind,prosecdef,proleakproof,provolatile,proparallel,proconfig)::text value from base
-union all select nspname || '.' || proname || '(' || pg_catalog.pg_get_function_identity_arguments(oid) || ')|' || rows.canonical_key, rows.value from base
-cross join lateral (${aclRows('base.proacl', 'base.proowner', 'f', "'acl'")}) rows`,
+select pg_catalog.jsonb_build_array('function',nspname,proname,pg_catalog.pg_get_function_identity_arguments(base.oid))::text object_identity,
+ pg_catalog.jsonb_build_array('owner')::text field_identity,'OWNER'::text field_kind,
+ owner.rolname value,owner.oid::text owner_oid from base join pg_catalog.pg_roles owner on owner.oid=base.proowner
+union all select pg_catalog.jsonb_build_array('function',nspname,proname,pg_catalog.pg_get_function_identity_arguments(oid))::text,
+ pg_catalog.jsonb_build_array('metadata')::text,'METADATA'::text,
+ pg_catalog.jsonb_build_array(prokind,prosecdef,proleakproof,provolatile,proparallel,proconfig)::text,null::text from base
+union all select rows.* from base cross join lateral
+ (${aclRows("pg_catalog.jsonb_build_array('function',base.nspname,base.proname,pg_catalog.pg_get_function_identity_arguments(base.oid))", 'base.proacl', 'base.proowner', 'f')}) rows`,
   types: `/* communities-role-split-input-c:types */
 with relevant(name) as (values ${relevantSchemas}), base as (
  select namespace.nspname, object_type.* from pg_catalog.pg_type object_type join pg_catalog.pg_namespace namespace on namespace.oid=object_type.typnamespace
  where namespace.nspname in (select name from relevant))
-select nspname || '.' || typname || '|owner' canonical_key, owner.rolname value from base
+select pg_catalog.jsonb_build_array('type',nspname,typname)::text object_identity,
+ pg_catalog.jsonb_build_array('owner')::text field_identity,'OWNER'::text field_kind,
+ owner.rolname value,owner.oid::text owner_oid from base
 join pg_catalog.pg_roles owner on owner.oid=base.typowner
-union all select nspname || '.' || typname || '|metadata' canonical_key,
- pg_catalog.jsonb_build_array(typtype,typcategory,typnotnull)::text value from base
-union all select nspname || '.' || typname || '|' || rows.canonical_key, rows.value from base
-cross join lateral (${aclRows('base.typacl', 'base.typowner', 'T', "'acl'")}) rows`,
+union all select pg_catalog.jsonb_build_array('type',nspname,typname)::text,
+ pg_catalog.jsonb_build_array('metadata')::text,'METADATA'::text,
+ pg_catalog.jsonb_build_array(typtype,typcategory,typnotnull)::text,null::text from base
+union all select rows.* from base cross join lateral
+ (${aclRows("pg_catalog.jsonb_build_array('type',base.nspname,base.typname)", 'base.typacl', 'base.typowner', 'T')}) rows`,
   extensions: `/* communities-role-split-input-c:extensions */
-select extension.extname || '|owner' canonical_key, owner.rolname value
+select pg_catalog.jsonb_build_array('extension',extension.extname)::text object_identity,
+ pg_catalog.jsonb_build_array('owner')::text field_identity,'OWNER'::text field_kind,
+ owner.rolname value,owner.oid::text owner_oid
  from pg_catalog.pg_extension extension join pg_catalog.pg_roles owner on owner.oid=extension.extowner
 union all
-select extension.extname || '|metadata' canonical_key,
- pg_catalog.jsonb_build_array(extension.extversion,extension.extnamespace::text,extension.extrelocatable)::text value
+select pg_catalog.jsonb_build_array('extension',extension.extname)::text,
+ pg_catalog.jsonb_build_array('metadata')::text,'METADATA'::text,
+ pg_catalog.jsonb_build_array(extension.extversion,extension.extnamespace::text,extension.extrelocatable)::text,null::text
  from pg_catalog.pg_extension extension
 union all
-select extension.extname || '|member|' || pg_catalog.pg_describe_object(dependency.classid,dependency.objid,dependency.objsubid) canonical_key,
- pg_catalog.jsonb_build_array(dependency.classid::text,dependency.objid::text,dependency.objsubid,dependency.deptype)::text value
+select pg_catalog.jsonb_build_array('extension',extension.extname)::text,
+ pg_catalog.jsonb_build_array('member',dependency.classid::text,dependency.objid::text,dependency.objsubid)::text,
+ 'EXTENSION_MEMBER'::text,
+ pg_catalog.jsonb_build_array(pg_catalog.pg_describe_object(dependency.classid,dependency.objid,dependency.objsubid),dependency.deptype)::text,null::text
  from pg_catalog.pg_depend dependency join pg_catalog.pg_extension extension on extension.oid=dependency.refobjid
  where dependency.refclassid='pg_catalog.pg_extension'::pg_catalog.regclass and dependency.deptype='e'`,
 };
 
 const mappingSql = `/* communities-role-split-input-c:mapping */
-select role.rolname role_name, role.oid::text role_oid
+select role.rolname role_name,role.oid::text role_oid,role.rolcanlogin can_login,
+ role.rolsuper superuser,role.rolbypassrls bypass_rls,role.rolcreatedb create_database,
+ role.rolcreaterole create_role,role.rolreplication replication
  from pg_catalog.pg_roles role where role.rolname=any($1::text[])`;
 
 const anomalySql = `/* communities-role-split-input-c:anomalies */
-with mapped(rolname) as (select value::text from pg_catalog.jsonb_array_elements_text($1::jsonb)),
-dangerous as (select count(*)::text count from pg_catalog.pg_roles role join mapped on mapped.rolname=role.rolname
+with mapped(category,rolname,role_oid) as (select value->>'category',value->>'roleName',(value->>'roleOid')::oid from pg_catalog.jsonb_array_elements($1::jsonb)),
+dangerous as (select count(*)::text count from pg_catalog.pg_roles role join mapped on mapped.role_oid=role.oid
  where role.rolsuper or role.rolbypassrls or role.rolcreatedb or role.rolcreaterole or role.rolreplication),
 memberships as (select count(*)::text count from pg_catalog.pg_auth_members membership
  join pg_catalog.pg_roles granted on granted.oid=membership.roleid join pg_catalog.pg_roles member on member.oid=membership.member
- where granted.rolname in (select rolname from mapped) or member.rolname in (select rolname from mapped)),
+ where granted.oid in (select role_oid from mapped) or member.oid in (select role_oid from mapped)),
 relevant(name) as (values ${relevantSchemas}), acl(owner_oid,acl_value,source) as (
  select database.datdba,coalesce(database.datacl,pg_catalog.acldefault('d',database.datdba)),'database' from pg_catalog.pg_database database where database.datname=current_database()
  union all select namespace.nspowner,coalesce(namespace.nspacl,pg_catalog.acldefault('n',namespace.nspowner)),'schema' from pg_catalog.pg_namespace namespace where namespace.nspname in (select name from relevant)
@@ -470,11 +539,10 @@ relevant(name) as (values ${relevantSchemas}), acl(owner_oid,acl_value,source) a
  union all select object_type.typowner,coalesce(object_type.typacl,pg_catalog.acldefault('T',object_type.typowner)),'type' from pg_catalog.pg_type object_type join pg_catalog.pg_namespace namespace on namespace.oid=object_type.typnamespace where namespace.nspname in (select name from relevant)
 ), exploded as (select acl.owner_oid,acl.source,entry.* from acl cross join lateral pg_catalog.aclexplode(acl.acl_value) entry)
 select (select count from dangerous) dangerous_roles,(select count from memberships) mapped_memberships,
- (select case when count(distinct owner_oid)>1 then count(distinct owner_oid)::text else '0' end from acl) mixed_owners,
  (select count(*)::text from exploded where grantee=0) public_grants,
- (select count(*)::text from exploded where grantee<>0 and grantee<>owner_oid) third_party_grants,
+ (select count(*)::text from exploded where grantee<>0 and not exists (select 1 from mapped where role_oid=grantee)) third_party_grants,
  (select count(*)::text from exploded where is_grantable) grant_options,
- (select count(*)::text from pg_catalog.pg_attribute attribute join pg_catalog.pg_class relation on relation.oid=attribute.attrelid join pg_catalog.pg_namespace namespace on namespace.oid=relation.relnamespace where namespace.nspname in (select name from relevant) and attribute.attnum>0 and not attribute.attisdropped and attribute.attacl is not null) column_grants,
+ (select count(*)::text from pg_catalog.pg_attribute attribute join pg_catalog.pg_class relation on relation.oid=attribute.attrelid join pg_catalog.pg_namespace namespace on namespace.oid=relation.relnamespace where namespace.nspname in (select name from relevant) and attribute.attnum>0 and not attribute.attisdropped and cardinality(attribute.attacl)>0) column_grants,
  (select count(*)::text from pg_catalog.pg_default_acl defaults left join pg_catalog.pg_namespace namespace on namespace.oid=defaults.defaclnamespace where defaults.defaclnamespace=0 or namespace.nspname in (select name from relevant)) default_acls`;
 
 function connectionRole(connectionString: string, databaseName: string): string {
@@ -500,10 +568,12 @@ function connectionRole(connectionString: string, databaseName: string): string 
 function payloadFrom(
   request: CommunitiesStagingRoleSplitRestoreMarkerRequest,
   requestDigest: string,
+  creationReceiptSha256: string,
   row: IdentityRow,
 ): CommunitiesStagingRoleSplitRestoreMarkerPayload {
   return {
     requestSha256: requestDigest,
+    creationReceiptSha256,
     restoreDatabase: request.restoreDatabase,
     cloneDatabaseOid: row.database_oid,
     cloneDatabaseOwner: row.database_owner,
@@ -539,69 +609,216 @@ function parseCount(value: unknown): number {
   return Number(value);
 }
 
+type CatalogRow = {
+  object_identity: string;
+  field_identity: string;
+  field_kind: string;
+  value: string;
+  owner_oid: string | null;
+};
+
+type ObservedMappingRow = {
+  role_name: string;
+  role_oid: string;
+  can_login: boolean;
+  superuser: boolean;
+  bypass_rls: boolean;
+  create_database: boolean;
+  create_role: boolean;
+  replication: boolean;
+};
+
+function buildMappingArtifact(
+  mapping: readonly RoleMappingEntry[],
+  observed: readonly ObservedMappingRow[],
+  evidenceBase: string,
+): CommunitiesRoleSplitMappingArtifact {
+  const byName = new Map(observed.map((row) => [row.role_name, row]));
+  if (byName.size !== new Set(mapping.map((entry) => entry.roleName)).size) fail('MAPPING_INVALID');
+  const categories: CommunitiesRoleSplitMappingCategory[] = mapping.map((entry) => {
+    const row = byName.get(entry.roleName);
+    if (!row || row.role_oid !== entry.roleOid) fail('MAPPING_INVALID');
+    const capabilities = {
+      canLogin: row.can_login,
+      superuser: row.superuser,
+      bypassRls: row.bypass_rls,
+      createDatabase: row.create_database,
+      createRole: row.create_role,
+      replication: row.replication,
+    };
+    if (Object.values(capabilities).some((value) => typeof value !== 'boolean'))
+      fail('MAPPING_INVALID');
+    const roleNameSha256 = sha256(entry.roleName);
+    const roleOidSha256 = sha256(entry.roleOid);
+    return {
+      category: entry.category,
+      roleNameSha256,
+      roleOidSha256,
+      capabilities,
+      evidenceSha256: sha256(
+        communitiesRoleSplitCanonicalJson([
+          evidenceBase,
+          entry.category,
+          roleNameSha256,
+          roleOidSha256,
+          capabilities,
+        ]),
+      ),
+    };
+  });
+  const identityRelations = COMMUNITIES_ROLE_SPLIT_IDENTITY_RELATION_SPECS.map(
+    ([left, right, requirement]) => {
+      const leftEntry = categories.find((entry) => entry.category === left)!;
+      const rightEntry = categories.find((entry) => entry.category === right)!;
+      const relation =
+        leftEntry.roleNameSha256 === rightEntry.roleNameSha256 &&
+        leftEntry.roleOidSha256 === rightEntry.roleOidSha256
+          ? ('SAME' as const)
+          : ('DISTINCT' as const);
+      if (requirement === 'REQUIRED_DISTINCT' && relation !== 'DISTINCT') fail('MAPPING_INVALID');
+      return {
+        left,
+        right,
+        requirement,
+        relation,
+        evidenceSha256: sha256(
+          communitiesRoleSplitCanonicalJson([
+            evidenceBase,
+            left,
+            right,
+            requirement,
+            relation,
+            leftEntry.roleNameSha256,
+            leftEntry.roleOidSha256,
+            rightEntry.roleNameSha256,
+            rightEntry.roleOidSha256,
+          ]),
+        ),
+      };
+    },
+  );
+  const draft = {
+    schemaVersion: INPUT_C_MAPPING_VERSION,
+    categories,
+    identityRelations,
+  } satisfies Omit<CommunitiesRoleSplitMappingArtifact, 'mappingDigest'>;
+  return { ...draft, mappingDigest: communitiesRoleSplitMappingSha256(draft) };
+}
+
+function parseIdentity(value: string): readonly unknown[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    fail('CATALOG_INVALID');
+  }
+  if (!Array.isArray(parsed) || parsed.length === 0) fail('CATALOG_INVALID');
+  return parsed;
+}
+
+function parseAclEntries(value: string): readonly CommunitiesRoleSplitAclEntry[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    fail('CATALOG_INVALID');
+  }
+  if (!Array.isArray(parsed)) fail('CATALOG_INVALID');
+  const entries = parsed.map((entry) => {
+    if (
+      !isRecord(entry) ||
+      typeof entry.granteeCategory !== 'string' ||
+      ![...COMMUNITIES_STAGING_ROLE_SPLIT_ROLE_CATEGORIES, 'PUBLIC', 'THIRD_PARTY'].includes(
+        entry.granteeCategory,
+      ) ||
+      typeof entry.privilege !== 'string' ||
+      !/^[A-Z][A-Z_]*$/u.test(entry.privilege) ||
+      typeof entry.grantOption !== 'boolean'
+    )
+      fail('CATALOG_INVALID');
+    return {
+      granteeCategory: entry.granteeCategory as CommunitiesRoleSplitAclEntry['granteeCategory'],
+      privilege: entry.privilege,
+      grantOption: entry.grantOption,
+    };
+  });
+  const uniqueEntries = [
+    ...new Map(entries.map((entry) => [communitiesRoleSplitCanonicalJson(entry), entry])).values(),
+  ];
+  uniqueEntries.sort((left, right) =>
+    compareUtf8Bytes(
+      communitiesRoleSplitCanonicalJson(left),
+      communitiesRoleSplitCanonicalJson(right),
+    ),
+  );
+  return uniqueEntries;
+}
+
 function normalizeRows(
   category: CategoryName,
-  rows: readonly { canonical_key: string; value: string }[],
+  rows: readonly CatalogRow[],
   provenanceDigest: string,
+  mapping: CommunitiesRoleSplitMappingArtifact,
+  mixedOwnerObjects: Set<string>,
 ): readonly NormalizedRecord[] {
   const seen = new Set<string>();
   const records = rows.map((row) => {
     if (
-      typeof row.canonical_key !== 'string' ||
+      typeof row.object_identity !== 'string' ||
+      typeof row.field_identity !== 'string' ||
+      typeof row.field_kind !== 'string' ||
       typeof row.value !== 'string' ||
-      row.canonical_key.includes('\n') ||
+      (row.owner_oid !== null && typeof row.owner_oid !== 'string') ||
+      row.object_identity.includes('\n') ||
+      row.field_identity.includes('\n') ||
       row.value.includes('\n')
     )
       fail('CATALOG_INVALID');
-    const parts = row.canonical_key.split('|');
-    let objectKey: string;
-    let fieldKey: string;
-    if (category === 'roles') [objectKey, fieldKey] = [row.canonical_key, 'metadata'];
-    else if (category === 'memberships') [objectKey, fieldKey] = [row.canonical_key, 'membership'];
-    else if (category === 'defaultAcls')
-      [objectKey, fieldKey] = [parts.slice(0, 3).join('|'), parts.slice(3).join('|')];
-    else if (category === 'columnAcls')
-      [objectKey, fieldKey] = [parts[0] ?? '', parts.slice(1).join('|')];
-    else if (category === 'rlsPolicies')
-      [objectKey, fieldKey] = [parts[0] ?? '', parts.slice(1).join('|')];
-    else [objectKey, fieldKey] = [parts[0] ?? '', parts.slice(1).join('|')];
-    if (!objectKey || !fieldKey) fail('CATALOG_INVALID');
-    const fieldKind: CommunitiesRoleSplitFieldKind =
-      category === 'roles'
-        ? 'ROLE'
-        : category === 'memberships'
-          ? 'MEMBERSHIP'
-          : category === 'defaultAcls'
-            ? 'DEFAULT_ACL'
-            : category === 'columnAcls'
-              ? 'COLUMN'
-              : category === 'rlsPolicies'
-                ? fieldKey === 'rls'
-                  ? 'RLS'
-                  : 'POLICY'
-                : category === 'extensions' && fieldKey.startsWith('member|')
-                  ? 'EXTENSION_MEMBER'
-                  : fieldKey === 'owner'
-                    ? 'OWNER'
-                    : fieldKey.startsWith('acl|explicit|') || fieldKey.startsWith('explicit|')
-                      ? 'ACL_EXPLICIT'
-                      : fieldKey.startsWith('acl|effective|') || fieldKey.startsWith('effective|')
-                        ? 'ACL_EFFECTIVE'
-                        : 'METADATA';
-    const objectKeySha256 = sha256(Buffer.from(`${category}\0${objectKey}`, 'utf8'));
-    const fieldKeySha256 = sha256(Buffer.from(`${category}\0${objectKey}\0${fieldKey}`, 'utf8'));
+    const objectIdentity = parseIdentity(row.object_identity);
+    const fieldIdentity = parseIdentity(row.field_identity);
+    if (
+      !COMMUNITIES_ROLE_SPLIT_FIELD_KINDS.includes(row.field_kind as CommunitiesRoleSplitFieldKind)
+    )
+      fail('CATALOG_INVALID');
+    const fieldKind = row.field_kind as CommunitiesRoleSplitFieldKind;
+    const objectKeySha256 = sha256(communitiesRoleSplitCanonicalJson([category, objectIdentity]));
+    const fieldKeySha256 = sha256(
+      communitiesRoleSplitCanonicalJson([category, objectIdentity, fieldIdentity]),
+    );
     const recordKey = `${objectKeySha256}|${fieldKeySha256}`;
     if (seen.has(recordKey)) fail('DUPLICATE_RECORD');
     seen.add(recordKey);
+    let semantic: NormalizedRecord['semantic'] = null;
+    let valueSha256 = sha256(row.value);
+    if (fieldKind === 'ACL_EXPLICIT' || fieldKind === 'ACL_EFFECTIVE') {
+      const entries = parseAclEntries(row.value);
+      semantic = { entries };
+      valueSha256 = sha256(communitiesRoleSplitCanonicalJson(entries));
+    } else if (fieldKind === 'OWNER') {
+      const owners = mapping.categories.filter(
+        (entry) => entry.roleOidSha256 === sha256(row.owner_oid ?? ''),
+      );
+      if (owners.length !== 1) mixedOwnerObjects.add(objectKeySha256);
+      const selected = owners[0] ?? mapping.categories[0];
+      if (!selected) fail('MAPPING_INVALID');
+      semantic = { ownerCategory: selected.category };
+    }
     return {
       objectKeySha256,
       fieldKeySha256,
       fieldKind,
       observationState: 'OBSERVED' as const,
-      valueSha256: sha256(Buffer.from(row.value, 'utf8')),
+      valueSha256,
       provenanceSha256: sha256(
-        Buffer.from(`${provenanceDigest}\0${category}\0${row.canonical_key}`, 'utf8'),
+        communitiesRoleSplitCanonicalJson([
+          provenanceDigest,
+          category,
+          objectIdentity,
+          fieldIdentity,
+          fieldKind,
+        ]),
       ),
+      semantic,
     };
   });
   return records.sort((a, b) =>
@@ -642,21 +859,14 @@ export async function produceCommunitiesStagingRoleSplitInventory(
   )
     fail('PIN_INVALID');
   const evidence = parseCommunitiesStagingRoleSplitMarkerEvidence(input.markerEvidenceText);
-  const mappingPresent =
-    input.roleMappingText !== undefined || input.expectedRoleMappingSha256 !== undefined;
-  let mapping: readonly RoleMappingEntry[] = [];
-  let mappingDigest: string | null = null;
-  if (mappingPresent) {
-    if (
-      !input.roleMappingText ||
-      !input.expectedRoleMappingSha256 ||
-      !shaPattern.test(input.expectedRoleMappingSha256) ||
-      sha256(input.roleMappingText) !== input.expectedRoleMappingSha256
-    )
-      fail('MAPPING_INVALID');
-    mapping = parseCommunitiesStagingRoleSplitRoleMapping(input.roleMappingText);
-    mappingDigest = input.expectedRoleMappingSha256;
-  }
+  if (
+    !input.roleMappingText ||
+    !input.expectedRoleMappingSha256 ||
+    !shaPattern.test(input.expectedRoleMappingSha256) ||
+    sha256(input.roleMappingText) !== input.expectedRoleMappingSha256
+  )
+    fail('MAPPING_INVALID');
+  const rawMapping = parseCommunitiesStagingRoleSplitRoleMapping(input.roleMappingText);
   const executor = connectionRole(input.connectionString, request.restoreDatabase);
   let client: InventoryClient;
   try {
@@ -690,24 +900,19 @@ export async function produceCommunitiesStagingRoleSplitInventory(
       !identity.role_safe
     )
       fail('BOUNDARY_INVALID');
-    if (mappingPresent) {
-      const observedMapping = (
-        await client.query<{ role_name: string; role_oid: string }>(mappingSql, [
-          mapping.map((entry) => entry.roleName),
-        ])
-      ).rows;
-      const expectedMapping = new Map(mapping.map((entry) => [entry.roleName, entry.roleOid]));
-      const inventoryReader = mapping.find((entry) => entry.category === 'INVENTORY_READER');
-      if (
-        observedMapping.length !== new Set(mapping.map((entry) => entry.roleName)).size ||
-        observedMapping.some((entry) => expectedMapping.get(entry.role_name) !== entry.role_oid) ||
-        !inventoryReader ||
-        inventoryReader.roleName !== identity.current_role ||
-        inventoryReader.roleOid !== identity.current_role_oid
-      )
-        fail('MAPPING_INVALID');
-    }
-    const payload = payloadFrom(request, requestDigest, identity);
+    const observedMapping = (
+      await client.query<ObservedMappingRow>(mappingSql, [
+        rawMapping.map((entry) => entry.roleName),
+      ])
+    ).rows;
+    const inventoryReader = rawMapping.find((entry) => entry.category === 'INVENTORY_READER');
+    if (
+      !inventoryReader ||
+      inventoryReader.roleName !== identity.current_role ||
+      inventoryReader.roleOid !== identity.current_role_oid
+    )
+      fail('MAPPING_INVALID');
+    const payload = payloadFrom(request, requestDigest, evidence.creationReceiptSha256, identity);
     const marker = communitiesStagingRoleSplitRestoreMarker(payload);
     if (identity.marker !== marker) fail('MARKER_INVALID');
     try {
@@ -731,28 +936,45 @@ export async function produceCommunitiesStagingRoleSplitInventory(
       sha256(ledger) !== request.sourceLedgerSha256
     )
       fail('LEDGER_INVALID');
-    const provenanceBase = sha256(
-      `${requestDigest}\0${sha256(marker)}\0${input.expectedMarkerEvidenceSha256}\0${request.sourceLedgerSha256}\0${mappingDigest ?? 'UNKNOWN'}`,
+    const mappingEvidenceBase = sha256(
+      communitiesRoleSplitCanonicalJson([
+        requestDigest,
+        sha256(marker),
+        input.expectedMarkerEvidenceSha256,
+        evidence.creationReceiptSha256,
+        request.sourceLedgerSha256,
+        input.expectedRoleMappingSha256,
+      ]),
     );
+    const mapping = buildMappingArtifact(rawMapping, observedMapping, mappingEvidenceBase);
+    const provenanceBase = sha256(
+      communitiesRoleSplitCanonicalJson([mappingEvidenceBase, mapping.mappingDigest]),
+    );
+    const mappingQueryValue = JSON.stringify(rawMapping);
     const normalized = {} as Record<CategoryName, readonly NormalizedRecord[]>;
+    const mixedOwnerObjects = new Set<string>();
     for (const category of COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_CATEGORY_NAMES)
       normalized[category] = normalizeRows(
         category,
-        (await client.query<{ canonical_key: string; value: string }>(categorySql[category])).rows,
+        (
+          await client.query<CatalogRow>(
+            categorySql[category],
+            categorySql[category].includes('$1') ? [mappingQueryValue] : undefined,
+          )
+        ).rows,
         provenanceBase,
+        mapping,
+        mixedOwnerObjects,
       );
-    const anomalyRow = (
-      await client.query<Record<string, string>>(anomalySql, [
-        JSON.stringify(mapping.map((entry) => entry.roleName)),
-      ])
-    ).rows[0];
+    const anomalyRow = (await client.query<Record<string, string>>(anomalySql, [mappingQueryValue]))
+      .rows[0];
     if (!anomalyRow) fail('CATALOG_INVALID');
     const anomalies: InventoryAnomaly[] = [];
-    if (!mappingPresent) anomalies.push(anomaly('MAPPING_INCOMPLETE', 1, provenanceBase));
+    if (mixedOwnerObjects.size > 0)
+      anomalies.push(anomaly('MIXED_OWNER_FORBIDDEN', mixedOwnerObjects.size, provenanceBase));
     const findings: [string, unknown][] = [
       ['ROLE_CAPABILITY_FORBIDDEN', anomalyRow.dangerous_roles],
       ['ROLE_MEMBERSHIP_FORBIDDEN', anomalyRow.mapped_memberships],
-      ['MIXED_OWNER_FORBIDDEN', anomalyRow.mixed_owners],
       ['PUBLIC_GRANT_FORBIDDEN', anomalyRow.public_grants],
       ['THIRD_PARTY_GRANT_FORBIDDEN', anomalyRow.third_party_grants],
       ['GRANT_OPTION_FORBIDDEN', anomalyRow.grant_options],
@@ -765,10 +987,11 @@ export async function produceCommunitiesStagingRoleSplitInventory(
     }
     anomalies.sort((a, b) => compareUtf8Bytes(a.code, b.code));
     const provenance = {
-      contractVersion: 'communities-role-split-clone-marker-evidence-v1' as const,
+      contractVersion: 'communities-role-split-clone-marker-evidence-v2' as const,
       markerDigest: sha256(marker),
       markerEvidenceDigest: input.expectedMarkerEvidenceSha256,
       requestDigest,
+      creationReceiptSha256: evidence.creationReceiptSha256,
       cloneNamePatternValid: true as const,
       cloneOidBound: true as const,
       sourceOidBound: true as const,
@@ -777,14 +1000,14 @@ export async function produceCommunitiesStagingRoleSplitInventory(
       objectManifestDigest: COMMUNITIES_STAGING_ROLE_SPLIT_CLONE_MANIFEST_SHA256,
       ledgerDigest: request.sourceLedgerSha256,
       ledgerCount: ledgerRows.length,
-      mappingObservationState: mappingPresent ? ('OBSERVED' as const) : ('UNKNOWN' as const),
-      mappingDigest,
+      mappingDigest: mapping.mappingDigest,
     };
     const draft = {
       schemaVersion: COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_SCHEMA_VERSION,
       canonicalizationVersion: COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_CANONICALIZATION_VERSION,
       sortVersion: COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_SORT_VERSION,
       provenance,
+      mapping,
       normalized,
       anomalies,
       forbiddenCodeContract: COMMUNITIES_STAGING_ROLE_SPLIT_FORBIDDEN_CODE_CONTRACT,

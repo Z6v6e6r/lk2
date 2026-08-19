@@ -37,14 +37,15 @@ present.
 | `FUTURE_RUNTIME`   | Candidate application identity for future data-plane SQL           | Must own no database object and may receive only an exact workload-derived object privilege set decided after INPUT_C                                                                      |
 | `INVENTORY_READER` | Read-only identity used only to collect redacted catalog evidence  | Must own no object, inherit no other role and receive no write, DDL or grant capability                                                                                                    |
 
-All six categories are mandatory. A concrete review must map each category through a private
-evidence channel to both a role-name observation and an OID observation. The tracked envelope keeps
-only the SHA-256 of each value and the SHA-256 of its provenance; raw values do not enter Git,
-reports, chat or logs.
+All six categories are mandatory. The producer verifies a private raw name/OID mapping against the
+catalog and places only a canonical redacted mapping artifact in each INPUT_C snapshot: category,
+name/OID digests, capability booleans, pair relations and evidence digests. Raw values do not enter
+Git, reports, chat or logs. The evaluator recomputes `mappingDigest`, requires identical before and
+after mapping artifacts, and compares them with an independently supplied expected digest.
 
 The mapping also contains all 15 unordered category pairs exactly once, ordered by category token.
-Each pair is `SAME`, `DISTINCT`, `UNKNOWN` or `UNOBSERVED`, with a provenance digest only for an
-observed `SAME` or `DISTINCT` result. Absence of an observation never implies `SAME`. The pair
+Each pair is producer-derived `SAME` or `DISTINCT` with an evidence digest. Absence of an
+observation never implies `SAME`. The pair
 `FUTURE_MIGRATOR|FUTURE_RUNTIME` is `REQUIRED_DISTINCT`: until trusted evidence reports
 `DISTINCT`, acceptance is `FAIL` with `REQUIRED_DISTINCT_NOT_OBSERVED`. Other pairs are
 `ALIAS_ALLOWED`, which means only that this contract does not predetermine the answer; their actual
@@ -69,16 +70,19 @@ and `sortVersion=sha256-byte-v1`. Each is shared-package canonical JSON plus one
 envelope; both normalized-manifest digests are separately recomputed by the evaluator.
 The acceptance envelope requires all of the following:
 
-1. Provenance: producer contract version; clone marker and marker-request digests; confirmed clone
+1. Provenance: strict `communities-role-split-clone-marker-evidence-v2`; clone marker,
+   marker-request, marker-evidence and `creationReceiptSha256` digests; confirmed clone
    name-pattern match; clone OID and source OID bindings; redacted cluster system-identifier digest;
    PostgreSQL major `16`; exact object-manifest digest; source ledger digest and count.
 2. Exactly twelve normalized categories, with no extra category: `roles`, `memberships`,
    `databaseAcl`, `schemas`, `defaultAcls`, `relations`, `columnAcls`, `rlsPolicies`, `sequences`,
    `functions`, `types` and `extensions`. Every record has exactly
    `{objectKeySha256, fieldKeySha256, fieldKind, observationState, valueSha256,
-provenanceSha256}`. Owner, metadata, ACL and extension-member fields for one object share its
+provenanceSha256, semantic}`. Owner, metadata, ACL and extension-member fields for one object share its
    `objectKeySha256`; records are ordered by `(objectKeySha256, fieldKeySha256)`. A null column ACL
-   observation is ordinary evidence; only `COLUMN_GRANT_FORBIDDEN` carries forbidden semantics.
+   is an empty explicit semantic ACL, not a forbidden grant. Each ACL-bearing object has one stable
+   `explicitAcl` and one stable `effectiveAcl` field whose sorted entries are
+   `{granteeCategory, privilege, grantOption}`; only anomaly codes carry forbidden semantics.
 3. A complete anomaly list with stable codes and evidence digests. An empty list must be explicit;
    absence of the field is not equivalent to no anomalies. The trusted producer must emit an
    anomaly for every observed wildcard/`ALL`, grant option, PUBLIC grant, unclassified third-party
@@ -86,9 +90,8 @@ provenanceSha256}`. Owner, metadata, ACL and extension-member fields for one obj
    unobserved required field; digested values do not waive that obligation.
 4. Both normalized manifest SHA-256 values, exact versions and both independently controlled
    external artifact SHA-256 values.
-5. A private, independently pinned lookup that resolves the six category identity digests and all
-   pairwise identity observations to the observed role names/OIDs for DBA review. It is not part of
-   the redacted envelope and must not be committed or pasted into the report.
+5. The complete redacted mapping artifact embedded in INPUT_C plus an independently supplied
+   `expectedMappingDigest`; the acceptance envelope cannot supply a replacement mapping.
 
 Until every input above exists and matches the same marker, request, clone OID, source OID, cluster,
 manifest and ledger, every role/owner/ACL cell stays `UNKNOWN` and the decision is `FAIL` with
@@ -100,7 +103,7 @@ The before and after manifests record a distinct `OWNER` field for every in-scop
 contains exactly one row per database, schema, relation, sequence, function, type and extension key
 digest and no extra row. Each row binds the exact `objectKeySha256`, `ownerFieldKeySha256`, owner
 value/evidence digests and observed before-owner category,
-an explicit target category or `PRESERVE_CURRENT`, and rule/provenance digests. There is no implicit
+an explicit target category or `PRESERVE_CURRENT` and producer evidence digests. There is no implicit
 default:
 
 1. The shared database and every object outside the isolated clone are immutable. Any observed
@@ -129,7 +132,7 @@ Empty, partial, duplicate and extra plans fail. Each row contains:
 
 - `objectKind` from the finite lower-case vocabulary `database`, `schema`, `relation`, `sequence`,
   `function`, `type`;
-- `objectKeySha256`, `fieldKeySha256`, `beforeStateSha256`, `targetStateSha256`, `ruleSha256` and
+- `objectKeySha256`, `fieldKeySha256`, `beforeStateSha256`, `targetStateSha256` and
   `evidenceSha256` as lowercase SHA-256 values;
 - one explicit action: `PRESERVE`, `ADD` or `REMOVE`;
 - one of the six abstract grantee categories, never a raw name, `PUBLIC` or an unclassified role;
@@ -142,7 +145,9 @@ finite vocabulary is database `CONNECT/TEMPORARY`, schema `USAGE/CREATE`, relati
 `EXECUTE`, and type `USAGE`. Wildcards and `ALL` are not values. `FUTURE_RUNTIME` may never receive
 schema `CREATE`; `INVENTORY_READER` may not receive an `ADD` transition.
 
-The evaluator joins every row to exact records in both independently observed snapshots.
+The evaluator computes exact semantic ACL set additions/removals and requires exact equality with
+the action, category, privilege and grant-option tuples in the plan. An observed `UPDATE` cannot
+satisfy a declared `SELECT`, and unchanged field keys support both `ADD` and `REMOVE`.
 `beforeStateSha256` and `targetStateSha256` must equal those observed values; the evaluator never
 manufactures an after state from a transition-description hash. The planned changed set must equal
 the actual full twelve-category snapshot delta.
@@ -186,11 +191,9 @@ other result is `FAIL` with one or more stable blocker codes.
    artifact SHA-256 values, and independently recompute both normalized-manifest SHA-256 values.
 2. Verify every provenance binding and require PostgreSQL major `16`. Any false, absent or mismatched
    binding fails.
-3. Require the exact six categories, each with `OBSERVED` name, OID and capability fields. Require
-   all 15 pairwise relations exactly once. A `REQUIRED_DISTINCT` pair without an observed
-   `DISTINCT` result is `REQUIRED_DISTINCT_NOT_OBSERVED`; `UNKNOWN`, `UNOBSERVED` and an absent pair
-   are never treated as `SAME`.
-4. Require exactly all twelve normalized inventory categories, exact six-field records, unique object/field
+3. Require the exact producer-redacted six-category mapping artifact, recompute its digest and all
+   15 pairwise relations, and apply prohibitions to every `SAME` equivalence class.
+4. Require exactly all twelve normalized inventory categories, exact seven-field records, unique object/field
    digests and the declared SHA-256 byte sorting order. Any `UNKNOWN`, `UNOBSERVED`, duplicate,
    missing, extra or out-of-order record fails.
 5. Require an empty INPUT_C anomaly list and no preimage forbidden condition.
@@ -220,7 +223,7 @@ forbidden transition codes from the schema.
 The producer serializes one UTF-8 LF-terminated record per line. Fields use JSON string escaping;
 there is no locale collation, insignificant whitespace or omitted nullable field. Sort object-state
 records by the UTF-8 byte order of `(objectKind, objectKeySha256, fieldKeySha256)` and diff records by
-`(objectKind, objectKeySha256, fieldKeySha256, ruleSha256)`. Sort blocker and transition codes by UTF-8
+the same stable tuple. Sort blocker and transition codes by UTF-8
 byte order and reject duplicates. Hash the exact bytes including the final LF.
 
 ```text

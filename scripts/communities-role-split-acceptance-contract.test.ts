@@ -43,7 +43,6 @@ describe('Communities role-split acceptance v1 contract', () => {
       'contractVersion',
       'observedBefore',
       'observedAfter',
-      'mapping',
       'ownershipPlan',
       'grantPlan',
       'comparison',
@@ -54,6 +53,8 @@ describe('Communities role-split acceptance v1 contract', () => {
     expect(schema['x-input-c-artifact-pins']).toEqual([
       'beforeArtifactSha256',
       'afterArtifactSha256',
+      'expectedMappingDigest',
+      'creationReceiptSha256',
     ]);
     expect(plan).toContain('independently pinned');
   });
@@ -67,9 +68,18 @@ describe('Communities role-split acceptance v1 contract', () => {
       'observationState',
       'valueSha256',
       'provenanceSha256',
+      'semantic',
     ]);
     expect(schema.$defs.provenance!.required).toContain('markerEvidenceDigest');
+    expect(schema.$defs.provenance!.required).toContain('creationReceiptSha256');
     expect(schema.$defs.provenance!.required).toContain('mappingDigest');
+    expect(schema.$defs.inputC!.required).toContain('mapping');
+    expect(schema.$defs.mappingArtifact!.required).toEqual([
+      'schemaVersion',
+      'categories',
+      'identityRelations',
+      'mappingDigest',
+    ]);
     expect(schema.$defs.anomaly!.required).toEqual(['code', 'count', 'evidenceSha256']);
     expect(plan).toContain('objectKeySha256');
     expect(plan).toContain('fieldKeySha256');
