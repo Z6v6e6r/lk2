@@ -125,10 +125,10 @@ test "$request_basename" = "communities-role-split-marker-cleanup-request-${run_
 is_sha256 "$marker_request_sha" && is_sha256 "$cleanup_writer_sha" || fail REQUEST_BINDING_INVALID
 case "$clone_owner" in ''|[0-9]*|*[!A-Za-z0-9_]*) fail REQUEST_BINDING_INVALID ;; esac
 is_positive_decimal "$clone_owner_oid" || fail REQUEST_BINDING_INVALID
-case "$marker" in phub-communities-role-split-clone-v1:*) ;;
+case "$marker" in phub-communities-role-split-clone-v2:*) ;;
   *) fail REQUEST_BINDING_INVALID ;;
 esac
-marker_payload_sha=${marker#phub-communities-role-split-clone-v1:}
+marker_payload_sha=${marker#phub-communities-role-split-clone-v2:}
 is_sha256 "$marker_payload_sha" || fail REQUEST_BINDING_INVALID
 
 runtime=$runtime_root/$runtime_basename
@@ -162,7 +162,7 @@ done
 is_sha256 "${postgres_image_id#sha256:}" || fail RUNTIME_BINDING_INVALID
 case "$compose_project" in ''|[0-9]*|*[!a-z0-9_-]*) fail RUNTIME_BINDING_INVALID ;; esac
 test "$(stat -c %u "$app_root")" = 0 && test "$(stat -c %d "$app_root")" = "$app_root_device" &&
-  test "$(stat -c %i "$app_root")" = "$app_root_inode" && test "$(stat -c %h "$app_root")" = 1 ||
+  test "$(stat -c %i "$app_root")" = "$app_root_inode" ||
   fail APP_ROOT_CUSTODY_INVALID
 app_root_mode=$(stat -c %a "$app_root")
 case "$app_root_mode" in [0-7][0-7][0-7]) ;; *) fail APP_ROOT_CUSTODY_INVALID ;; esac

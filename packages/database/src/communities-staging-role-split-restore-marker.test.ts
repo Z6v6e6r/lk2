@@ -75,6 +75,7 @@ markerWriterSha256=${sha('3')}
 `;
 const payload = {
   requestSha256: sha('a'),
+  creationReceiptSha256: sha('4'),
   restoreDatabase: 'phub_restore_123_4',
   cloneDatabaseOid: '45678',
   cloneDatabaseOwner: 'phub_staging',
@@ -101,6 +102,7 @@ const payload = {
 
 const expectedCanonical = `${COMMUNITIES_STAGING_ROLE_SPLIT_RESTORE_MARKER_VERSION}
 requestSha256=${sha('a')}
+creationReceiptSha256=${sha('4')}
 restoreDatabase=phub_restore_123_4
 cloneDatabaseOid=45678
 cloneDatabaseOwner=phub_staging
@@ -126,9 +128,10 @@ markerWriterSha256=${sha('3')}
 `;
 
 const evidence = {
-  schemaVersion: 'communities-role-split-clone-marker-evidence-v1',
+  schemaVersion: 'communities-role-split-clone-marker-evidence-v2',
   status: 'MARKED',
   requestSha256: payload.requestSha256,
+  creationReceiptSha256: payload.creationReceiptSha256,
   markerPayloadSha256: communitiesStagingRoleSplitRestoreMarkerPayloadSha256(payload),
   markerValueSha256: createHash('sha256')
     .update(communitiesStagingRoleSplitRestoreMarker(payload), 'utf8')
@@ -222,10 +225,10 @@ describe('Communities staging role-split restore marker contract', () => {
       expectedCanonical,
     );
     expect(communitiesStagingRoleSplitRestoreMarkerPayloadSha256(payload)).toBe(
-      '3c36a4526f2ff694914654d026eb593be9211cd01c2344f2267b2f6cd9c7cd79',
+      '3763797501b0891b891dcfed1f7371f5d676cc5d6a8c8b6d6a5dbd5e052208ae',
     );
     expect(communitiesStagingRoleSplitRestoreMarker(payload)).toMatch(
-      /^phub-communities-role-split-clone-v1:[a-f0-9]{64}$/,
+      /^phub-communities-role-split-clone-v2:[a-f0-9]{64}$/,
     );
   });
 
@@ -237,6 +240,7 @@ describe('Communities staging role-split restore marker contract', () => {
     ['system identifier', { systemIdentifier: '-1' }],
     ['run attempt', { restoreRunAttempt: '00' }],
     ['backup digest', { backupSha256: sha('A') }],
+    ['creation receipt digest', { creationReceiptSha256: sha('A') }],
     ['ledger count', { sourceLedgerCount: '-1' }],
     ['empty ledger count', { sourceLedgerCount: '0' }],
     ['release', { activeRelease: sha('f') }],
@@ -255,7 +259,7 @@ describe('Communities staging role-split restore marker contract', () => {
     expect(() =>
       assertCommunitiesStagingRoleSplitRestoreMarker(
         payload,
-        `phub-communities-role-split-clone-v1:${sha('9')}`,
+        `phub-communities-role-split-clone-v2:${sha('9')}`,
       ),
     ).toThrow('COMMUNITIES_STAGING_ROLE_SPLIT_RESTORE_MARKER_BINDING_INVALID');
   });
@@ -309,6 +313,7 @@ describe('Communities staging role-split restore marker contract', () => {
 
   it.each([
     ['request', { requestSha256: sha('9') }],
+    ['creation receipt', { creationReceiptSha256: sha('9') }],
     ['payload', { markerPayloadSha256: sha('9') }],
     ['marker value', { markerValueSha256: sha('9') }],
     ['backup', { backupSha256: sha('9') }],

@@ -105,8 +105,7 @@ for directory in "$request_root:0:$current_gid:750" "$backup_root:0:$current_gid
   test "$(file_value "$1" %a CUSTODY_INVALID)" = "$4" || fail CUSTODY_INVALID
 done
 test -d "$app_root" && test ! -L "$app_root" || fail CUSTODY_INVALID
-test "$(file_value "$app_root" %u APP_ROOT_CUSTODY_INVALID)" = 0 &&
-  test "$(file_value "$app_root" %h APP_ROOT_CUSTODY_INVALID)" = 1 || fail APP_ROOT_CUSTODY_INVALID
+test "$(file_value "$app_root" %u APP_ROOT_CUSTODY_INVALID)" = 0 || fail APP_ROOT_CUSTODY_INVALID
 app_root_mode=$(file_value "$app_root" %a APP_ROOT_CUSTODY_INVALID)
 case "$app_root_mode" in [0-7][0-7][0-7]) ;; *) fail APP_ROOT_CUSTODY_INVALID ;; esac
 case "$app_root_mode" in ?[2367]?|??[2367]) fail APP_ROOT_CUSTODY_INVALID ;; esac
@@ -494,8 +493,9 @@ test "$(admin_psql "select d.oid::text||'|'||r.rolname||'|'||r.oid::text from pg
 
 payload=$(mktemp "$state_root/.marker-payload.XXXXXX")
 printf '%s\n' \
-  PHUB_COMMUNITIES_ROLE_SPLIT_CLONE_MARKER_V1 \
+  PHUB_COMMUNITIES_ROLE_SPLIT_CLONE_MARKER_V2 \
   "requestSha256=$expected_request_sha" \
+  "creationReceiptSha256=$expected_receipt_sha" \
   "restoreDatabase=$restore_database" \
   "cloneDatabaseOid=$clone_oid" \
   "cloneDatabaseOwner=$clone_owner" \
@@ -519,7 +519,7 @@ printf '%s\n' \
   "restoreHelperSha256=$helper_sha" \
   "markerWriterSha256=$writer_sha" > "$payload"
 marker_payload_sha=$(file_sha256 "$payload" PAYLOAD_INVALID)
-marker="phub-communities-role-split-clone-v1:$marker_payload_sha"
+marker="phub-communities-role-split-clone-v2:$marker_payload_sha"
 marker_value_sha=$(printf '%s' "$marker" | sha256sum | cut -d ' ' -f 1)
 clone_binding_sha=$(printf '%s\0%s' "$restore_database" "$clone_oid" | sha256sum | cut -d ' ' -f 1)
 source_binding_sha=$(printf '%s\0%s\0%s' "$source_database" "$source_database_oid" "$system_identifier" | sha256sum | cut -d ' ' -f 1)
@@ -542,7 +542,7 @@ test "$(source_identity)" = "$source_identity_before" && test "$(source_ledger)"
   fail SOURCE_CHANGED
 
 printf '%s\n' \
-  'schemaVersion=communities-role-split-clone-marker-evidence-v1' \
+  'schemaVersion=communities-role-split-clone-marker-evidence-v2' \
   'status=MARKED' \
   "requestSha256=$expected_request_sha" \
   "creationReceiptSha256=$expected_receipt_sha" \

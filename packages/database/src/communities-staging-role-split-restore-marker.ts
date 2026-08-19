@@ -6,9 +6,9 @@ import {
 } from './communities-staging-role-split.js';
 
 export const COMMUNITIES_STAGING_ROLE_SPLIT_RESTORE_MARKER_VERSION =
-  'PHUB_COMMUNITIES_ROLE_SPLIT_CLONE_MARKER_V1';
+  'PHUB_COMMUNITIES_ROLE_SPLIT_CLONE_MARKER_V2';
 export const COMMUNITIES_STAGING_ROLE_SPLIT_RESTORE_MARKER_PREFIX =
-  'phub-communities-role-split-clone-v1:';
+  'phub-communities-role-split-clone-v2:';
 export const COMMUNITIES_STAGING_ROLE_SPLIT_RESTORE_MARKER_REQUEST_VERSION =
   'PHUB_COMMUNITIES_ROLE_SPLIT_CLONE_MARKER_REQUEST_V1';
 
@@ -40,6 +40,7 @@ export interface CommunitiesStagingRoleSplitRestoreMarkerRequest {
 
 export interface CommunitiesStagingRoleSplitRestoreMarkerPayload {
   readonly requestSha256: string;
+  readonly creationReceiptSha256: string;
   readonly restoreDatabase: string;
   readonly cloneDatabaseOid: string;
   readonly cloneDatabaseOwner: string;
@@ -65,9 +66,10 @@ export interface CommunitiesStagingRoleSplitRestoreMarkerPayload {
 }
 
 export interface CommunitiesStagingRoleSplitRestoreMarkerEvidence {
-  readonly schemaVersion: 'communities-role-split-clone-marker-evidence-v1';
+  readonly schemaVersion: 'communities-role-split-clone-marker-evidence-v2';
   readonly status: 'MARKED';
   readonly requestSha256: string;
+  readonly creationReceiptSha256: string;
   readonly markerPayloadSha256: string;
   readonly markerValueSha256: string;
   readonly backupSha256: string;
@@ -109,6 +111,7 @@ const rehearsalBackupBasename =
 
 const payloadKeys = [
   'requestSha256',
+  'creationReceiptSha256',
   'restoreDatabase',
   'cloneDatabaseOid',
   'cloneDatabaseOwner',
@@ -161,6 +164,7 @@ const evidenceKeys = [
   'schemaVersion',
   'status',
   'requestSha256',
+  'creationReceiptSha256',
   'markerPayloadSha256',
   'markerValueSha256',
   'backupSha256',
@@ -212,6 +216,7 @@ const payloadLines = (
   input: CommunitiesStagingRoleSplitRestoreMarkerPayload,
 ): readonly string[] => [
   `requestSha256=${input.requestSha256}`,
+  `creationReceiptSha256=${input.creationReceiptSha256}`,
   `restoreDatabase=${input.restoreDatabase}`,
   `cloneDatabaseOid=${input.cloneDatabaseOid}`,
   `cloneDatabaseOwner=${input.cloneDatabaseOwner}`,
@@ -330,6 +335,7 @@ export function assertCommunitiesStagingRoleSplitRestoreMarkerPayload(
   if (
     ![
       input.requestSha256,
+      input.creationReceiptSha256,
       input.backupSha256,
       input.backupEvidenceSha256,
       input.archiveTocSha256,
@@ -389,13 +395,14 @@ export function assertCommunitiesStagingRoleSplitRestoreMarkerEvidence(
   )
     failCommunitiesStagingRoleSplit('RESTORE_MARKER_EVIDENCE_INVALID');
   if (
-    evidence.schemaVersion !== 'communities-role-split-clone-marker-evidence-v1' ||
+    evidence.schemaVersion !== 'communities-role-split-clone-marker-evidence-v2' ||
     evidence.status !== 'MARKED'
   )
     failCommunitiesStagingRoleSplit('RESTORE_MARKER_EVIDENCE_VERSION_INVALID');
   if (
     ![
       evidence.requestSha256,
+      evidence.creationReceiptSha256,
       evidence.markerPayloadSha256,
       evidence.markerValueSha256,
       evidence.backupSha256,
@@ -426,6 +433,7 @@ export function assertCommunitiesStagingRoleSplitRestoreMarkerEvidence(
     .digest('hex');
   if (
     evidence.requestSha256 !== payload.requestSha256 ||
+    evidence.creationReceiptSha256 !== payload.creationReceiptSha256 ||
     evidence.markerPayloadSha256 !==
       communitiesStagingRoleSplitRestoreMarkerPayloadSha256(payload) ||
     evidence.markerValueSha256 !== markerValueSha256 ||

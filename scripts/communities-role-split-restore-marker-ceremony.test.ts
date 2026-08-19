@@ -6,8 +6,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
+  assertCommunitiesStagingRoleSplitRestoreMarkerEvidence,
   canonicalCommunitiesStagingRoleSplitRestoreMarkerRequest,
   COMMUNITIES_STAGING_ROLE_SPLIT_CLONE_MANIFEST_SHA256,
+  type CommunitiesStagingRoleSplitRestoreMarkerEvidence,
+  type CommunitiesStagingRoleSplitRestoreMarkerPayload,
   type CommunitiesStagingRoleSplitRestoreMarkerRequest,
 } from '@phub/database';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -37,6 +40,55 @@ interface Result {
   readonly code: number;
   readonly stdout: string;
   readonly stderr: string;
+}
+
+function parseMarkerEvidence(stdout: string): CommunitiesStagingRoleSplitRestoreMarkerEvidence {
+  const entries = Object.fromEntries(
+    stdout
+      .trimEnd()
+      .split('\n')
+      .map((line) => {
+        const separator = line.indexOf('=');
+        if (separator < 1) throw new Error(`invalid evidence line: ${line}`);
+        return [line.slice(0, separator), line.slice(separator + 1)];
+      }),
+  );
+  return {
+    schemaVersion: entries.schemaVersion,
+    status: entries.status,
+    requestSha256: entries.requestSha256,
+    creationReceiptSha256: entries.creationReceiptSha256,
+    markerPayloadSha256: entries.markerPayloadSha256,
+    markerValueSha256: entries.markerValueSha256,
+    backupSha256: entries.backupSha256,
+    sourceLedgerSha256: entries.sourceLedgerSha256,
+    sourceLedgerCount: entries.sourceLedgerCount,
+    cloneDatabaseOid: entries.cloneDatabaseOid,
+    cloneBindingSha256: entries.cloneBindingSha256,
+    sourceBindingSha256: entries.sourceBindingSha256,
+    restoreRunId: entries.restoreRunId,
+    restoreRunAttempt: entries.restoreRunAttempt,
+    restoreHelperSha256: entries.restoreHelperSha256,
+    markerWriterSha256: entries.markerWriterSha256,
+    bindings: {
+      request: entries['binding.request'] === 'true',
+      backup: entries['binding.backup'] === 'true',
+      archiveOwnershipAcl: entries['binding.archiveOwnershipAcl'] === 'true',
+      sourceStable: entries['binding.sourceStable'] === 'true',
+      restoredLedger: entries['binding.restoredLedger'] === 'true',
+      cloneIdentity: entries['binding.cloneIdentity'] === 'true',
+      markerReadback: entries['binding.markerReadback'] === 'true',
+    },
+    authorizes: {
+      roleCreation: entries['authorizes.roleCreation'] === 'true',
+      roleSplit: entries['authorizes.roleSplit'] === 'true',
+      sharedDatabaseMutation: entries['authorizes.sharedDatabaseMutation'] === 'true',
+      migration: entries['authorizes.migration'] === 'true',
+      deploy: entries['authorizes.deploy'] === 'true',
+      import: entries['authorizes.import'] === 'true',
+      activation: entries['authorizes.activation'] === 'true',
+    },
+  } as CommunitiesStagingRoleSplitRestoreMarkerEvidence;
 }
 
 let root = '';
@@ -106,19 +158,23 @@ async function runCreate(extraEnv = {}): Promise<Result> {
   );
 }
 
+function creationReceipt(markerRequestSha256: string): string {
+  return `PHUB_COMMUNITIES_ROLE_SPLIT_CLONE_CREATION_RECEIPT_V1
+restoreDatabase=phub_restore_123_4
+cloneDatabaseOid=45678
+cloneDatabaseOwner=phub_staging
+cloneDatabaseOwnerOid=16384
+markerRequestSha256=${markerRequestSha256}
+`;
+}
+
 async function runCeremony(extraEnv = {}): Promise<Result> {
   const created = await runCreate(extraEnv);
   expect(created.stderr).toBe(
     'COMMUNITIES_ROLE_SPLIT_RESTORE_MARKER_CEREMONY_CREATION_RECEIPT_REQUIRED\n',
   );
   const contents = canonicalCommunitiesStagingRoleSplitRestoreMarkerRequest(request);
-  const receipt = `PHUB_COMMUNITIES_ROLE_SPLIT_CLONE_CREATION_RECEIPT_V1
-restoreDatabase=phub_restore_123_4
-cloneDatabaseOid=45678
-cloneDatabaseOwner=phub_staging
-cloneDatabaseOwnerOid=16384
-markerRequestSha256=${sha256(contents)}
-`;
+  const receipt = creationReceipt(sha256(contents));
   await writeFile(receiptPath, receipt, 'utf8');
   return execute(
     ceremonyPath,
@@ -261,7 +317,7 @@ case "$path" in
   "$PHUB_TEST_REQUEST_ROOT"|"$PHUB_TEST_CLEANUP_REQUEST_ROOT") uid=0; gid=$(id -g); mode=750 ;;
   "$PHUB_TEST_BACKUP_ROOT") uid=0; gid=$(id -g); mode=750 ;;
   "$PHUB_TEST_STATE_ROOT") uid=$(id -u); gid=$(id -g); mode=700 ;;
-  "$PHUB_TEST_APP_ROOT") uid=0; gid=0; mode=755; inode=100 ;;
+  "$PHUB_TEST_APP_ROOT") uid=0; gid=0; mode=755; inode=100; links=3 ;;
   "$PHUB_TEST_APP_ROOT/infrastructure.env") uid=0; gid=$(id -g); mode=440; inode=101 ;;
   "$PHUB_TEST_APP_ROOT/compose.infrastructure.yaml") uid=0; gid=0; mode=644; inode=102 ;;
   "$PHUB_TEST_APP_ROOT/release.env") uid=0; gid=0; mode=644; inode=103 ;;
@@ -271,7 +327,7 @@ case "$path" in
   "$PHUB_TEST_STATE_ROOT"/*) uid=$(id -u); gid=$(id -g); mode=600 ;;
   *) exit 1 ;;
 esac
-inode=\${inode:-300}; device=1; links=1
+inode=\${inode:-300}; device=1; links=\${links:-1}
 size=0; test -f "$path" && size=$(wc -c < "$path" | tr -d ' ')
 case "$field" in
   %u) echo "$uid" ;; %g) echo "$gid" ;; %a) echo "$mode" ;; %d) echo "$device" ;;
@@ -314,7 +370,7 @@ case "$all" in
     ;;
   *begin*lock*pg_catalog.pg_database*access*exclusive*COMMENT*DATABASE*commit*)
     marker=$(printf '%s\n' "$all" | sed -n "s/.* IS '\\([^']*\\)'.*/\\1/p")
-    test -n "$marker" || marker=$(printf '%s\n' "$all" | grep -Eo 'phub-communities-role-split-clone-v1:[0-9a-f]{64}' | tail -1)
+    test -n "$marker" || marker=$(printf '%s\n' "$all" | grep -Eo 'phub-communities-role-split-clone-v2:[0-9a-f]{64}' | tail -1)
     printf '%s' "$marker" > "$PHUB_TEST_MARKER_STATE"
     test "\${PHUB_TEST_COMMENT_AMBIGUOUS:-0}" != 1 || exit 83
     ;;
@@ -421,6 +477,14 @@ afterEach(async () => {
 });
 
 describe('runnable role-split restore-marker clone ceremony', () => {
+  it('accepts a realistic Linux app directory link count greater than one', async () => {
+    const result = await runCreate();
+    expect(result.stderr).toBe(
+      'COMMUNITIES_ROLE_SPLIT_RESTORE_MARKER_CEREMONY_CREATION_RECEIPT_REQUIRED\n',
+    );
+    expect(result.stderr).not.toContain('APP_ROOT_CUSTODY_INVALID');
+  }, 15_000);
+
   it.runIf(hasTrustedGnuTimeout)(
     'kills a hanging child and grandchild with the trusted GNU timeout process group',
     async () => {
@@ -469,7 +533,7 @@ describe('runnable role-split restore-marker clone ceremony', () => {
     expect(result.stderr).toBe('');
     expect(result.stdout.trimEnd().split('\n')).toHaveLength(30);
     expect(result.stdout).toContain(
-      'schemaVersion=communities-role-split-clone-marker-evidence-v1\nstatus=MARKED\n',
+      'schemaVersion=communities-role-split-clone-marker-evidence-v2\nstatus=MARKED\n',
     );
     expect(result.stdout).toContain('binding.archiveOwnershipAcl=true\n');
     expect(result.stdout).toContain('authorizes.sharedDatabaseMutation=false\n');
@@ -484,6 +548,43 @@ describe('runnable role-split restore-marker clone ceremony', () => {
     expect(
       await readFile(join(stateRoot, '.communities-role-split-marker-123-4.state'), 'utf8'),
     ).toMatch(/^MARKED\|[a-f0-9]{64}\|45678\|[a-f0-9]{64}\n$/u);
+    const markerRequestSha256 = sha256(
+      canonicalCommunitiesStagingRoleSplitRestoreMarkerRequest(request),
+    );
+    const payload = {
+      requestSha256: markerRequestSha256,
+      creationReceiptSha256: sha256(creationReceipt(markerRequestSha256)),
+      restoreDatabase: request.restoreDatabase,
+      cloneDatabaseOid: '45678',
+      cloneDatabaseOwner: request.expectedCloneDatabaseOwner,
+      cloneDatabaseOwnerOid: request.expectedCloneDatabaseOwnerOid,
+      sourceDatabase: request.sourceDatabase,
+      sourceDatabaseOid: request.sourceDatabaseOid,
+      sourceDatabaseOwner: request.sourceDatabaseOwner,
+      sourceDatabaseOwnerOid: request.sourceDatabaseOwnerOid,
+      systemIdentifier: request.systemIdentifier,
+      backupSha256: request.backupSha256,
+      backupBytes: request.backupBytes,
+      backupEvidenceSha256: request.backupEvidenceSha256,
+      archiveTocSha256: request.archiveTocSha256,
+      sourceLedgerSha256: request.sourceLedgerSha256,
+      sourceLedgerCount: request.sourceLedgerCount,
+      activeRelease: request.activeRelease,
+      restoreRunId: request.restoreRunId,
+      restoreRunAttempt: request.restoreRunAttempt,
+      postgresMajor: request.postgresMajor,
+      objectManifestSha256: request.objectManifestSha256,
+      restoreHelperSha256: request.restoreHelperSha256,
+      markerWriterSha256: request.markerWriterSha256,
+    } satisfies CommunitiesStagingRoleSplitRestoreMarkerPayload;
+    const marker = await readFile(markerState, 'utf8');
+    expect(() =>
+      assertCommunitiesStagingRoleSplitRestoreMarkerEvidence(
+        payload,
+        marker,
+        parseMarkerEvidence(result.stdout),
+      ),
+    ).not.toThrow();
   }, 15_000);
 
   it('retains the receipt-bound clone without rename or delete after a pre-marker failure', async () => {
