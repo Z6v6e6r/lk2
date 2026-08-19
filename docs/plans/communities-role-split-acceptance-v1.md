@@ -7,6 +7,9 @@ clone-only PostgreSQL role split. It deliberately contains no role name, role OI
 ACL, grant or membership assertion. Those facts remain `UNKNOWN` until a trusted inventory from
 INPUT_C supplies observed evidence. The machine-readable envelope is
 [`communities-role-split-acceptance-v1.schema.json`](communities-role-split-acceptance-v1.schema.json).
+The authoritative cross-field evaluator is
+[`communities-role-split-acceptance.ts`](../../packages/database/src/communities-role-split-acceptance.ts).
+Schema validation alone is insufficient for `PASS`.
 
 This contract does not create or alter a role, change ownership or ACLs, apply a migration, connect
 to a database, run the inventory collector, install a command, modify a shared database, deploy an
@@ -59,22 +62,29 @@ must never be replaced with a guessed name, OID, owner, ACL or grant.
 
 ## INPUT_C evidence required before a concrete matrix
 
-INPUT_C must be one canonical, UTF-8, LF-terminated, deterministically sorted artifact. The raw-byte
-SHA-256 must be pinned independently before review. Its schema and sort versions are part of the
-digest. The acceptance envelope requires all of the following:
+INPUT_C must use `schemaVersion=communities-role-split-input-c-v1`,
+`canonicalizationVersion=utf8-byte-digest-v1` and `sortVersion=sha256-byte-v1`. It is one canonical,
+UTF-8, LF-terminated artifact. The external `artifactSha256` is independently pinned before
+review and remains outside the INPUT_C object; it must not be derived from the candidate during the
+acceptance run. The internal normalized-manifest digest is separately recomputed by the evaluator.
+The acceptance envelope requires all of the following:
 
 1. Provenance: producer contract version; clone marker and marker-request digests; confirmed clone
    name-pattern match; clone OID and source OID bindings; redacted cluster system-identifier digest;
    PostgreSQL major `16`; exact object-manifest digest; source ledger digest and count.
-2. Normalized categories: roles, membership edges, database ACL, schemas, default ACLs, relations,
-   column ACLs, RLS policies, sequences, functions, types and extensions. Every record needs a
-   canonical key, observation state, value digest and provenance digest.
+2. Exactly twelve normalized categories, with no extra category: `roles`, `memberships`,
+   `databaseAcl`, `schemas`, `defaultAcls`, `relations`, `columnAcls`, `rlsPolicies`, `sequences`,
+   `functions`, `types` and `extensions`. Every record has exactly
+   `{canonicalKeySha256, observationState, valueSha256, provenanceSha256}`. Records are strictly
+   ordered by the SHA-256 bytes represented by `canonicalKeySha256`; duplicates are invalid.
 3. A complete anomaly list with stable codes and evidence digests. An empty list must be explicit;
-   absence of the field is not equivalent to no anomalies.
-4. The normalized manifest SHA-256, schema version and deterministic sort version.
-5. A deterministic comparison object containing before/after manifest SHA-256 values; changed,
-   added and removed counts; and the complete sorted list of forbidden transition codes.
-6. A private, independently pinned lookup that resolves the six category identity digests and all
+   absence of the field is not equivalent to no anomalies. The trusted producer must emit an
+   anomaly for every observed wildcard/`ALL`, grant option, PUBLIC grant, unclassified third-party
+   grantee, column grant, explicit default ACL, forbidden membership/capability, mixed owner or
+   unobserved required field; digested values do not waive that obligation.
+4. The normalized manifest SHA-256, exact schema/canonicalization/sort versions, and the separately
+   controlled external artifact SHA-256.
+5. A private, independently pinned lookup that resolves the six category identity digests and all
    pairwise identity observations to the observed role names/OIDs for DBA review. It is not part of
    the redacted envelope and must not be committed or pasted into the report.
 
@@ -85,7 +95,10 @@ manifest and ledger, every role/owner/ACL cell stays `UNKNOWN` and the decision 
 ## Ownership rules
 
 The before manifest records the observed owner of every in-scope object. The ownership plan then
-contains exactly one row per manifest object and no extra row. There is no implicit default:
+contains exactly one row per database, schema, relation, sequence, function, type and extension key
+digest and no extra row. Each row uses only `canonicalKeySha256`, an observed before-owner category,
+an explicit target category or `PRESERVE_CURRENT`, and rule/provenance digests. There is no implicit
+default:
 
 1. The shared database and every object outside the isolated clone are immutable. Any observed
    change is `SHARED_DATABASE_CHANGE_FORBIDDEN`.
@@ -104,6 +117,32 @@ contains exactly one row per manifest object and no extra row. There is no impli
 
 The contract does not predetermine which manifest objects are application-owned. INPUT_C and a DBA
 review must classify every object before a concrete target owner can be selected.
+
+## Exact-manifest grant plan
+
+`grantPlan` contains exactly one row for every database, schema, relation, sequence, function and
+type key digest in INPUT_C, and no row for an extension or an out-of-manifest key. Empty, partial,
+duplicate and extra plans fail. Each row contains:
+
+- `objectKind` from the finite lower-case vocabulary `database`, `schema`, `relation`, `sequence`,
+  `function`, `type`;
+- `canonicalKeySha256`, `beforeStateSha256`, `targetStateSha256`, `ruleSha256` and
+  `provenanceSha256` as lowercase SHA-256 values;
+- one explicit action: `PRESERVE`, `ADD` or `REMOVE`;
+- one of the six abstract grantee categories, never a raw name, `PUBLIC` or an unclassified role;
+- a sorted, duplicate-free subset of the per-object privilege vocabulary;
+- literal `grantOption=false`.
+
+`PRESERVE` has an empty privilege list. `ADD` and `REMOVE` have at least one exact privilege. The
+finite vocabulary is database `CONNECT/TEMPORARY`, schema `USAGE/CREATE`, relation
+`SELECT/INSERT/UPDATE/DELETE/TRUNCATE/REFERENCES/TRIGGER`, sequence `USAGE/SELECT/UPDATE`, function
+`EXECUTE`, and type `USAGE`. Wildcards and `ALL` are not values. `FUTURE_RUNTIME` may never receive
+schema `CREATE`; `INVENTORY_READER` may not receive an `ADD` transition.
+
+The evaluator requires grant-plan and object-manifest set equality, joins each row to the exact
+ownership row, recomputes every target-state digest from the observed before-state digest and the
+complete transition, then rebuilds both manifests and comparison counts. Supplying arbitrary
+before, target, after or comparison hashes cannot produce `PASS`.
 
 ## Forbidden capabilities, grants and edges
 
@@ -138,26 +177,32 @@ the schema. Producers must not collapse multiple findings into a generic warning
 The result is binary. A conforming evaluator returns `PASS` only when all steps below pass; every
 other result is `FAIL` with one or more stable blocker codes.
 
-1. Validate the envelope against the v1 schema and independently recompute the INPUT_C raw-byte and
-   normalized-manifest SHA-256 values.
+1. Validate the envelope against the v1 schema, verify the external independently pinned INPUT_C
+   artifact SHA-256, and independently recompute the internal normalized-manifest SHA-256.
 2. Verify every provenance binding and require PostgreSQL major `16`. Any false, absent or mismatched
    binding fails.
 3. Require the exact six categories, each with `OBSERVED` name, OID and capability fields. Require
    all 15 pairwise relations exactly once. A `REQUIRED_DISTINCT` pair without an observed
    `DISTINCT` result is `REQUIRED_DISTINCT_NOT_OBSERVED`; `UNKNOWN`, `UNOBSERVED` and an absent pair
    are never treated as `SAME`.
-4. Require all twelve normalized inventory categories, unique canonical keys and the declared byte
-   sorting order. Any `UNKNOWN`, `UNOBSERVED`, duplicate, missing or out-of-order record fails.
+4. Require exactly all twelve normalized inventory categories, exact four-field records, unique key
+   digests and the declared SHA-256 byte sorting order. Any `UNKNOWN`, `UNOBSERVED`, duplicate,
+   missing, extra or out-of-order record fails.
 5. Require an empty INPUT_C anomaly list and no preimage forbidden condition.
-6. Require ownership-plan set equality with the object manifest. Every before owner must be observed;
-   every target must be `PRESERVE_CURRENT` or an allowed category under the ownership rules.
-7. Build an after manifest by applying only the exact ownership/grant decisions. No create, remove,
-   rename, RLS/policy, extension, column ACL or default ACL transition is allowed.
-8. Canonicalize before and after with the same schema/sort version; recompute both manifest digests
-   and all changed/added/removed counts.
-9. Require exact equality between the recomputed comparison and the supplied comparison. Require
-   `addedCount=0`, `removedCount=0` and an empty `forbiddenTransitionCodes` list.
-10. Require every authorization boolean to be literal `false`. `PASS` remains a review result only.
+6. Require ownership-plan set equality with the seven object categories. Every before owner must be
+   observed; every target must be `PRESERVE_CURRENT` or an allowed category under the ownership
+   rules.
+7. Require grant-plan set equality with the six grantable object categories. Reject every unknown
+   action, kind, privilege, grantee, grant option, empty/partial/duplicate/extra row or mismatched
+   before digest.
+8. Recompute each target-state digest from the joined grant and ownership decisions. Build the after
+   manifest from those computed states; extension states remain unchanged.
+9. Canonicalize before and after with the exact sort version; recompute both manifest digests and all
+   changed/added/removed counts.
+10. Require byte-for-byte field equality between the recomputed and supplied comparison, including
+    an empty `forbiddenTransitionCodes` list. Supplied hashes are never sufficient evidence.
+11. Require `status=PASS`, an empty blocker list and every authorization boolean literal `false`.
+    `PASS` remains a review result only.
 
 Suggested stable blockers for input failures are `INPUT_C_INCOMPLETE`,
 `INPUT_C_BINDING_INVALID`, `INPUT_C_DIGEST_INVALID`, `INPUT_C_SORT_INVALID`,
@@ -168,9 +213,10 @@ forbidden transition codes from the schema.
 ## Deterministic before/after diff
 
 The producer serializes one UTF-8 LF-terminated record per line. Fields use JSON string escaping;
-there is no locale collation, insignificant whitespace or omitted nullable field. Sort records by
-the UTF-8 byte order of `(objectKind, canonicalKey, field, ruleCode)`. Sort blocker and transition
-codes by UTF-8 byte order and reject duplicates. Hash the exact bytes including the final LF.
+there is no locale collation, insignificant whitespace or omitted nullable field. Sort object-state
+records by the UTF-8 byte order of `(objectKind, canonicalKeySha256)` and diff records by
+`(objectKind, canonicalKeySha256, field, ruleSha256)`. Sort blocker and transition codes by UTF-8
+byte order and reject duplicates. Hash the exact bytes including the final LF.
 
 ```text
 COMMUNITIES_ROLE_SPLIT_DIFF_V1
@@ -178,7 +224,7 @@ sort_version=<INPUT_C_SORT_VERSION>
 before_manifest_sha256=<SHA256>
 after_manifest_sha256=<SHA256>
 counts changed=<COUNT> added=<COUNT> removed=<COUNT> forbidden=<COUNT>
-CHANGE|<OBJECT_KIND>|<CANONICAL_KEY>|<FIELD>|<BEFORE_STATE>|<BEFORE_VALUE_SHA256_OR_NULL>|<AFTER_STATE>|<AFTER_VALUE_SHA256_OR_NULL>|<RULE_CODE>|<PROVENANCE_SHA256>
+CHANGE|<OBJECT_KIND>|<CANONICAL_KEY_SHA256>|<FIELD>|<BEFORE_STATE_SHA256>|<AFTER_STATE_SHA256>|<RULE_SHA256>|<PROVENANCE_SHA256>
 FORBIDDEN|<STABLE_CODE>
 ```
 
@@ -196,7 +242,9 @@ evidence. Placeholder tokens are mandatory until trusted evidence exists.
 COMMUNITIES_ROLE_SPLIT_ACCEPTANCE_REPORT_V1
 staged_contract=34_V1
 staged_evidence_sha256=<SHA256>
-input_c_contract=<VERSION>
+input_c_contract=communities-role-split-input-c-v1
+input_c_canonicalization=utf8-byte-digest-v1 sort=sha256-byte-v1
+input_c_artifact_sha256=<INDEPENDENT_SHA256>
 input_c_manifest_sha256=<SHA256>
 role_mapping_sha256=<SHA256>
 role_categories=6 observed=<COUNT> unknown=<COUNT> unobserved=<COUNT>

@@ -8,8 +8,23 @@ const schemaUrl = new URL(
   import.meta.url,
 );
 const plan = readFileSync(planUrl, 'utf8');
+const evaluator = readFileSync(
+  new URL('../packages/database/src/communities-role-split-acceptance.ts', import.meta.url),
+  'utf8',
+);
 const schema = JSON.parse(readFileSync(schemaUrl, 'utf8')) as Record<string, unknown> & {
-  $defs: Record<string, Record<string, unknown>>;
+  $defs: {
+    roleMapping: Record<string, unknown> & {
+      properties: Record<string, unknown>;
+      required: string[];
+    };
+    normalizedRecord: Record<string, unknown>;
+    normalizedInventory: Record<string, unknown> & { required: string[] };
+    inputC: Record<string, unknown> & { properties: Record<string, unknown> };
+    provenance: Record<string, unknown> & { properties: Record<string, unknown> };
+    decision: Record<string, unknown> & { properties: Record<string, unknown> };
+    grantDecision: Record<string, unknown> & { properties: Record<string, unknown> };
+  };
   'x-role-categories': string[];
   'x-observation-states': string[];
   'x-identity-relation-states': string[];
@@ -28,6 +43,37 @@ const expectedCategories = [
   'FUTURE_RUNTIME',
   'INVENTORY_READER',
 ];
+const expectedPairs = [
+  ['RESTORE_OWNER', 'RESTORE_EXECUTOR', 'ALIAS_ALLOWED'],
+  ['RESTORE_OWNER', 'SHARED_OWNER', 'ALIAS_ALLOWED'],
+  ['RESTORE_OWNER', 'FUTURE_MIGRATOR', 'ALIAS_ALLOWED'],
+  ['RESTORE_OWNER', 'FUTURE_RUNTIME', 'ALIAS_ALLOWED'],
+  ['RESTORE_OWNER', 'INVENTORY_READER', 'ALIAS_ALLOWED'],
+  ['RESTORE_EXECUTOR', 'SHARED_OWNER', 'ALIAS_ALLOWED'],
+  ['RESTORE_EXECUTOR', 'FUTURE_MIGRATOR', 'ALIAS_ALLOWED'],
+  ['RESTORE_EXECUTOR', 'FUTURE_RUNTIME', 'ALIAS_ALLOWED'],
+  ['RESTORE_EXECUTOR', 'INVENTORY_READER', 'ALIAS_ALLOWED'],
+  ['SHARED_OWNER', 'FUTURE_MIGRATOR', 'ALIAS_ALLOWED'],
+  ['SHARED_OWNER', 'FUTURE_RUNTIME', 'ALIAS_ALLOWED'],
+  ['SHARED_OWNER', 'INVENTORY_READER', 'ALIAS_ALLOWED'],
+  ['FUTURE_MIGRATOR', 'FUTURE_RUNTIME', 'REQUIRED_DISTINCT'],
+  ['FUTURE_MIGRATOR', 'INVENTORY_READER', 'ALIAS_ALLOWED'],
+  ['FUTURE_RUNTIME', 'INVENTORY_READER', 'ALIAS_ALLOWED'],
+];
+const normalizedCategories = [
+  'roles',
+  'memberships',
+  'databaseAcl',
+  'schemas',
+  'defaultAcls',
+  'relations',
+  'columnAcls',
+  'rlsPolicies',
+  'sequences',
+  'functions',
+  'types',
+  'extensions',
+];
 
 describe('Communities role-split acceptance v1 contract', () => {
   it('pins the six abstract categories and fail-closed observation states', () => {
@@ -43,12 +89,32 @@ describe('Communities role-split acceptance v1 contract', () => {
     expect(schema.$defs.roleMapping.required).toEqual([...expectedCategories, 'identityRelations']);
     expect(schema.$defs.roleMapping.properties).toHaveProperty('identityRelations.minItems', 15);
     expect(schema.$defs.roleMapping.properties).toHaveProperty('identityRelations.maxItems', 15);
+    expect(schema.$defs.roleMapping.properties).toHaveProperty('identityRelations.prefixItems');
+    const identityRelations = (
+      schema.$defs.roleMapping.properties as {
+        identityRelations: {
+          prefixItems: {
+            allOf: [unknown, { properties: Record<string, { const: string }> }];
+          }[];
+          items: boolean;
+        };
+      }
+    ).identityRelations;
+    expect(identityRelations.prefixItems).toHaveLength(15);
+    expect(identityRelations.items).toBe(false);
+    expect(
+      identityRelations.prefixItems.map((item) => [
+        item.allOf[1].properties.left?.const,
+        item.allOf[1].properties.right?.const,
+        item.allOf[1].properties.requirement?.const,
+      ]),
+    ).toEqual(expectedPairs);
     for (const category of expectedCategories) {
       expect(schema.$defs.roleMapping.properties).toHaveProperty(category);
       const categorySchema = (schema.$defs.roleMapping.properties as Record<string, unknown>)[
         category
       ];
-      expect(JSON.stringify(categorySchema)).toContain(`\"const\":\"${category}\"`);
+      expect(JSON.stringify(categorySchema)).toContain(`"const":"${category}"`);
     }
     expect(schema.$defs.normalizedRecord).toHaveProperty('oneOf');
     expect(plan).toContain('Absence of an observation never implies `SAME`');
@@ -60,6 +126,10 @@ describe('Communities role-split acceptance v1 contract', () => {
   it('requires every INPUT_C provenance, normalized catalog and comparison group', () => {
     expect(schema['x-input-c-required']).toEqual(
       expect.arrayContaining([
+        'schemaVersion',
+        'canonicalizationVersion',
+        'sortVersion',
+        'manifestSha256',
         'provenance.markerDigest',
         'provenance.requestDigest',
         'provenance.cloneOidBound',
@@ -81,11 +151,21 @@ describe('Communities role-split acceptance v1 contract', () => {
         'normalized.functions',
         'normalized.types',
         'normalized.extensions',
-        'comparison.beforeManifestSha',
-        'comparison.afterManifestSha',
-        'comparison.forbiddenTransitionCodes',
       ]),
     );
+    expect(schema.$defs.inputC.properties).toMatchObject({
+      schemaVersion: { const: 'communities-role-split-input-c-v1' },
+      canonicalizationVersion: { const: 'utf8-byte-digest-v1' },
+      sortVersion: { const: 'sha256-byte-v1' },
+    });
+    expect(schema.$defs.normalizedInventory.required).toEqual(normalizedCategories);
+    expect(schema.$defs.normalizedRecord).toHaveProperty('oneOf.0.required', [
+      'canonicalKeySha256',
+      'observationState',
+      'valueSha256',
+      'provenanceSha256',
+    ]);
+    expect(schema).toHaveProperty('x-input-c-artifact-pin', 'artifactSha256');
     expect(schema.$defs.provenance.properties).toMatchObject({
       cloneNamePatternValid: { const: true },
       cloneOidBound: { const: true },
@@ -121,6 +201,12 @@ describe('Communities role-split acceptance v1 contract', () => {
       authorizesDeploy: { const: false },
       authorizesRuntimeActivation: { const: false },
     });
+    expect(schema.$defs.grantDecision.properties).toMatchObject({
+      grantOption: { const: false },
+      action: { enum: ['PRESERVE', 'ADD', 'REMOVE'] },
+    });
+    expect(evaluator).toContain('assertCommunitiesRoleSplitAcceptancePass');
+    expect(evaluator).toContain('communitiesRoleSplitGrantTargetStateSha256');
   });
 
   it('keeps the existing rehearsal contracts frozen and defines a separate 34_V1 sidecar', () => {
@@ -134,13 +220,13 @@ describe('Communities role-split acceptance v1 contract', () => {
   });
 
   it('defines a deterministic redacted before/after diff', () => {
-    expect(plan).toContain('Sort records by');
-    expect(plan).toContain('(objectKind, canonicalKey, field, ruleCode)');
+    expect(plan).toContain('Sort object-state');
+    expect(plan).toContain('(objectKind, canonicalKeySha256, field, ruleSha256)');
     expect(plan).toContain(
       'counts changed=<COUNT> added=<COUNT> removed=<COUNT> forbidden=<COUNT>',
     );
     expect(plan).toContain(
-      'CHANGE|<OBJECT_KIND>|<CANONICAL_KEY>|<FIELD>|<BEFORE_STATE>|<BEFORE_VALUE_SHA256_OR_NULL>|<AFTER_STATE>|<AFTER_VALUE_SHA256_OR_NULL>|<RULE_CODE>|<PROVENANCE_SHA256>',
+      'CHANGE|<OBJECT_KIND>|<CANONICAL_KEY_SHA256>|<FIELD>|<BEFORE_STATE_SHA256>|<AFTER_STATE_SHA256>|<RULE_SHA256>|<PROVENANCE_SHA256>',
     );
     expect(plan).toContain('Hash the exact bytes including the final LF');
   });
