@@ -3,20 +3,76 @@ import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 
 import {
+  assertCommunitiesStagingRoleSplitRestoreMarkerRequest,
   assertCommunitiesStagingRoleSplitRestoreMarker,
   assertCommunitiesStagingRoleSplitRestoreMarkerEvidence,
   canonicalCommunitiesStagingRoleSplitLedger,
+  canonicalCommunitiesStagingRoleSplitRestoreMarkerRequest,
   canonicalCommunitiesStagingRoleSplitRestoreMarkerPayload,
   communitiesStagingRoleSplitLedgerSha256,
+  communitiesStagingRoleSplitRestoreMarkerRequestSha256,
   communitiesStagingRoleSplitRestoreMarker,
   communitiesStagingRoleSplitRestoreMarkerPayloadSha256,
+  COMMUNITIES_STAGING_ROLE_SPLIT_RESTORE_MARKER_REQUEST_VERSION,
   COMMUNITIES_STAGING_ROLE_SPLIT_RESTORE_MARKER_VERSION,
   type CommunitiesStagingRoleSplitRestoreMarkerEvidence,
+  type CommunitiesStagingRoleSplitRestoreMarkerRequest,
   type CommunitiesStagingRoleSplitRestoreMarkerPayload,
 } from './communities-staging-role-split-restore-marker.js';
 import { COMMUNITIES_STAGING_ROLE_SPLIT_CLONE_MANIFEST_SHA256 } from './communities-staging-role-split.js';
 
 const sha = (value: string) => value.repeat(64);
+const request = {
+  restoreDatabase: 'phub_restore_123_4',
+  expectedCloneDatabaseOwner: 'phub_staging',
+  expectedCloneDatabaseOwnerOid: '16384',
+  sourceDatabase: 'phub_staging',
+  sourceDatabaseOid: '16385',
+  sourceDatabaseOwner: 'phub_staging',
+  sourceDatabaseOwnerOid: '16384',
+  systemIdentifier: '7421000000000000000',
+  backupBasename: 'postgres-communities-rehearsal-20260819T120000Z-123.dump',
+  backupSha256: sha('b'),
+  backupBytes: '1048576',
+  backupEvidenceBasename: 'postgres-communities-rehearsal-20260819T120000Z-123.dump.evidence',
+  backupEvidenceSha256: sha('c'),
+  archiveTocSha256: sha('d'),
+  sourceLedgerSha256: sha('e'),
+  sourceLedgerCount: '91',
+  activeRelease: 'f'.repeat(40),
+  restoreRunId: '123',
+  restoreRunAttempt: '4',
+  postgresMajor: '16',
+  objectManifestSha256: COMMUNITIES_STAGING_ROLE_SPLIT_CLONE_MANIFEST_SHA256,
+  restoreHelperSha256: sha('2'),
+  markerWriterSha256: sha('3'),
+} satisfies CommunitiesStagingRoleSplitRestoreMarkerRequest;
+
+const expectedCanonicalRequest = `${COMMUNITIES_STAGING_ROLE_SPLIT_RESTORE_MARKER_REQUEST_VERSION}
+restoreDatabase=phub_restore_123_4
+expectedCloneDatabaseOwner=phub_staging
+expectedCloneDatabaseOwnerOid=16384
+sourceDatabase=phub_staging
+sourceDatabaseOid=16385
+sourceDatabaseOwner=phub_staging
+sourceDatabaseOwnerOid=16384
+systemIdentifier=7421000000000000000
+backupBasename=postgres-communities-rehearsal-20260819T120000Z-123.dump
+backupSha256=${sha('b')}
+backupBytes=1048576
+backupEvidenceBasename=postgres-communities-rehearsal-20260819T120000Z-123.dump.evidence
+backupEvidenceSha256=${sha('c')}
+archiveTocSha256=${sha('d')}
+sourceLedgerSha256=${sha('e')}
+sourceLedgerCount=91
+activeRelease=${'f'.repeat(40)}
+restoreRunId=123
+restoreRunAttempt=4
+postgresMajor=16
+objectManifestSha256=${COMMUNITIES_STAGING_ROLE_SPLIT_CLONE_MANIFEST_SHA256}
+restoreHelperSha256=${sha('2')}
+markerWriterSha256=${sha('3')}
+`;
 const payload = {
   requestSha256: sha('a'),
   restoreDatabase: 'phub_restore_123_4',
@@ -115,6 +171,52 @@ const evidence = {
 } satisfies CommunitiesStagingRoleSplitRestoreMarkerEvidence;
 
 describe('Communities staging role-split restore marker contract', () => {
+  it('canonicalizes the root-owned request with exact order, LF and a golden digest', () => {
+    expect(canonicalCommunitiesStagingRoleSplitRestoreMarkerRequest(request)).toBe(
+      expectedCanonicalRequest,
+    );
+    expect(communitiesStagingRoleSplitRestoreMarkerRequestSha256(request)).toBe(
+      '0d3802c2359899b75e737f8696438ad7dc5ff67f33f6e43437020b47d0e12ba6',
+    );
+  });
+
+  it.each([
+    ['restore database', { restoreDatabase: 'phub_restore_123_5' }],
+    ['restore run', { restoreRunId: '124' }],
+    ['restore attempt', { restoreRunAttempt: '04' }],
+    ['source database collision', { sourceDatabase: 'phub_restore_123_4' }],
+    ['backup basename', { backupBasename: '../backup.dump' }],
+    ['backup basename shape', { backupBasename: 'backup.dump' }],
+    ['evidence pairing', { backupEvidenceBasename: 'other.evidence' }],
+    ['empty ledger', { sourceLedgerCount: '0' }],
+    ['manifest', { objectManifestSha256: sha('1') }],
+    ['helper digest', { restoreHelperSha256: sha('A') }],
+  ])('rejects an invalid request %s', (_label, override) => {
+    expect(() =>
+      assertCommunitiesStagingRoleSplitRestoreMarkerRequest({
+        ...request,
+        ...override,
+      }),
+    ).toThrow(/^COMMUNITIES_STAGING_ROLE_SPLIT_RESTORE_MARKER_REQUEST_/);
+  });
+
+  it('rejects missing and extra request fields', () => {
+    const missing = Object.fromEntries(
+      Object.entries(request).filter(([key]) => key !== 'backupBytes'),
+    );
+    expect(() =>
+      assertCommunitiesStagingRoleSplitRestoreMarkerRequest(
+        missing as unknown as CommunitiesStagingRoleSplitRestoreMarkerRequest,
+      ),
+    ).toThrow('COMMUNITIES_STAGING_ROLE_SPLIT_RESTORE_MARKER_REQUEST_SHAPE_INVALID');
+    expect(() =>
+      assertCommunitiesStagingRoleSplitRestoreMarkerRequest({
+        ...request,
+        unexpected: 'value',
+      } as unknown as CommunitiesStagingRoleSplitRestoreMarkerRequest),
+    ).toThrow('COMMUNITIES_STAGING_ROLE_SPLIT_RESTORE_MARKER_REQUEST_SHAPE_INVALID');
+  });
+
   it('has exact line ordering, terminal LF and a pinned golden digest', () => {
     expect(canonicalCommunitiesStagingRoleSplitRestoreMarkerPayload(payload)).toBe(
       expectedCanonical,

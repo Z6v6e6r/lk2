@@ -9,6 +9,34 @@ export const COMMUNITIES_STAGING_ROLE_SPLIT_RESTORE_MARKER_VERSION =
   'PHUB_COMMUNITIES_ROLE_SPLIT_CLONE_MARKER_V1';
 export const COMMUNITIES_STAGING_ROLE_SPLIT_RESTORE_MARKER_PREFIX =
   'phub-communities-role-split-clone-v1:';
+export const COMMUNITIES_STAGING_ROLE_SPLIT_RESTORE_MARKER_REQUEST_VERSION =
+  'PHUB_COMMUNITIES_ROLE_SPLIT_CLONE_MARKER_REQUEST_V1';
+
+export interface CommunitiesStagingRoleSplitRestoreMarkerRequest {
+  readonly restoreDatabase: string;
+  readonly expectedCloneDatabaseOwner: string;
+  readonly expectedCloneDatabaseOwnerOid: string;
+  readonly sourceDatabase: string;
+  readonly sourceDatabaseOid: string;
+  readonly sourceDatabaseOwner: string;
+  readonly sourceDatabaseOwnerOid: string;
+  readonly systemIdentifier: string;
+  readonly backupBasename: string;
+  readonly backupSha256: string;
+  readonly backupBytes: string;
+  readonly backupEvidenceBasename: string;
+  readonly backupEvidenceSha256: string;
+  readonly archiveTocSha256: string;
+  readonly sourceLedgerSha256: string;
+  readonly sourceLedgerCount: string;
+  readonly activeRelease: string;
+  readonly restoreRunId: string;
+  readonly restoreRunAttempt: string;
+  readonly postgresMajor: '16';
+  readonly objectManifestSha256: string;
+  readonly restoreHelperSha256: string;
+  readonly markerWriterSha256: string;
+}
 
 export interface CommunitiesStagingRoleSplitRestoreMarkerPayload {
   readonly requestSha256: string;
@@ -76,6 +104,8 @@ const identifier = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const positiveDecimal = /^[1-9][0-9]*$/;
 const sha256 = /^[a-f0-9]{64}$/;
 const release = /^[a-f0-9]{40}$/;
+const rehearsalBackupBasename =
+  /^postgres-communities-rehearsal-[0-9]{8}T[0-9]{6}Z-[1-9][0-9]*\.dump$/;
 
 const payloadKeys = [
   'requestSha256',
@@ -90,6 +120,31 @@ const payloadKeys = [
   'systemIdentifier',
   'backupSha256',
   'backupBytes',
+  'backupEvidenceSha256',
+  'archiveTocSha256',
+  'sourceLedgerSha256',
+  'sourceLedgerCount',
+  'activeRelease',
+  'restoreRunId',
+  'restoreRunAttempt',
+  'postgresMajor',
+  'objectManifestSha256',
+  'restoreHelperSha256',
+  'markerWriterSha256',
+] as const;
+const requestKeys = [
+  'restoreDatabase',
+  'expectedCloneDatabaseOwner',
+  'expectedCloneDatabaseOwnerOid',
+  'sourceDatabase',
+  'sourceDatabaseOid',
+  'sourceDatabaseOwner',
+  'sourceDatabaseOwnerOid',
+  'systemIdentifier',
+  'backupBasename',
+  'backupSha256',
+  'backupBytes',
+  'backupEvidenceBasename',
   'backupEvidenceSha256',
   'archiveTocSha256',
   'sourceLedgerSha256',
@@ -180,6 +235,65 @@ const payloadLines = (
   `restoreHelperSha256=${input.restoreHelperSha256}`,
   `markerWriterSha256=${input.markerWriterSha256}`,
 ];
+
+function requestLines(input: CommunitiesStagingRoleSplitRestoreMarkerRequest): readonly string[] {
+  return requestKeys.map((key) => `${key}=${input[key]}`);
+}
+
+export function assertCommunitiesStagingRoleSplitRestoreMarkerRequest(
+  input: CommunitiesStagingRoleSplitRestoreMarkerRequest,
+): void {
+  if (!hasExactKeys(input, requestKeys))
+    failCommunitiesStagingRoleSplit('RESTORE_MARKER_REQUEST_SHAPE_INVALID');
+  if (
+    !/^phub_restore_[0-9]+_[0-9]+$/.test(input.restoreDatabase) ||
+    input.restoreDatabase !== `phub_restore_${input.restoreRunId}_${input.restoreRunAttempt}` ||
+    ![input.expectedCloneDatabaseOwner, input.sourceDatabase, input.sourceDatabaseOwner].every(
+      (value) => identifier.test(value),
+    ) ||
+    input.sourceDatabase === input.restoreDatabase ||
+    ![
+      input.expectedCloneDatabaseOwnerOid,
+      input.sourceDatabaseOid,
+      input.sourceDatabaseOwnerOid,
+      input.systemIdentifier,
+      input.backupBytes,
+      input.sourceLedgerCount,
+      input.restoreRunId,
+      input.restoreRunAttempt,
+    ].every((value) => positiveDecimal.test(value)) ||
+    !rehearsalBackupBasename.test(input.backupBasename) ||
+    input.backupEvidenceBasename !== `${input.backupBasename}.evidence` ||
+    ![
+      input.backupSha256,
+      input.backupEvidenceSha256,
+      input.archiveTocSha256,
+      input.sourceLedgerSha256,
+      input.objectManifestSha256,
+      input.restoreHelperSha256,
+      input.markerWriterSha256,
+    ].every((value) => sha256.test(value)) ||
+    !release.test(input.activeRelease) ||
+    input.postgresMajor !== '16' ||
+    input.objectManifestSha256 !== COMMUNITIES_STAGING_ROLE_SPLIT_CLONE_MANIFEST_SHA256
+  )
+    failCommunitiesStagingRoleSplit('RESTORE_MARKER_REQUEST_BINDING_INVALID');
+}
+
+export function canonicalCommunitiesStagingRoleSplitRestoreMarkerRequest(
+  input: CommunitiesStagingRoleSplitRestoreMarkerRequest,
+): string {
+  assertCommunitiesStagingRoleSplitRestoreMarkerRequest(input);
+  return `${COMMUNITIES_STAGING_ROLE_SPLIT_RESTORE_MARKER_REQUEST_VERSION}\n${requestLines(input).join('\n')}\n`;
+}
+
+export function communitiesStagingRoleSplitRestoreMarkerRequestSha256(
+  input: CommunitiesStagingRoleSplitRestoreMarkerRequest,
+): string {
+  return createHash('sha256')
+    .update(canonicalCommunitiesStagingRoleSplitRestoreMarkerRequest(input), 'utf8')
+    .digest('hex');
+}
 
 export function assertCommunitiesStagingRoleSplitRestoreMarkerPayload(
   input: CommunitiesStagingRoleSplitRestoreMarkerPayload,
