@@ -1,5 +1,18 @@
 # Worklog
 
+## 2026-08-19 — Communities role-split clone evidence checkpoint
+
+- Added an uninstalled, two-invocation V2 restore-marker ceremony: CREATE always stops for an
+  independently retained creation receipt, while RESUME binds that receipt to the exact clone,
+  restore and transactional COMMENT evidence.
+- Added fail-closed negative coverage and quarantine-only cleanup; no code path authorizes database
+  rename or deletion, and a separate DBA primitive is still required to resolve retained clones.
+- Added deterministic INPUT_C inventory, catalog-derived redacted role mapping, structured object
+  identities, semantic explicit/effective ACL evidence, and a before/after acceptance evaluator.
+- Kept installation, workflow wiring, real PostgreSQL execution, trusted inventory collection,
+  role/ownership/grant changes, shared migration, deployment and feature activation outside this
+  implementation checkpoint.
+
 ## 2026-08-19 — Isolated Communities rehearsal credential contour
 
 - Replaced direct forced-command access to the shared API/migrator environment files with two

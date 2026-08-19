@@ -232,16 +232,17 @@ gate must first establish the exact clone preimage: `pg_trgm` state, intentional
 ACLs, table/column ACLs, RLS/policies, sequences, functions and types. Only that evidence can
 support a separately versioned and approved persistent role/ownership/grant plan.
 
-The independent inventory producer is also blocked until the restore owner creates a trusted clone
-provenance marker. The preparation contract `PHUB_COMMUNITIES_ROLE_SPLIT_CLONE_MARKER_V1` defines
-an exact-order, LF-terminated UTF-8 line payload and derives the database comment value as
-`phub-communities-role-split-clone-v1:<payload-sha256>`. The payload binds the SHA of its root-owned
-request, clone name/OID/owner, source database/OID/owner and cluster system identifier, workflow
-run and attempt, backup bytes and SHA-256, backup-evidence and archive-TOC SHA-256 values, source
-ledger SHA-256 and count, active release, PostgreSQL major `16`, object-manifest SHA-256, and the
-exact restore-helper and restore-owner script SHA-256 values. Redacted evidence contains only
-digests, counts and booleans and states that role creation, role split, shared-database mutation,
-migration, deploy, import and activation are all unauthorized.
+The independent inventory producer remains blocked until the restore owner creates a trusted clone
+provenance marker. The current strict contract is
+`PHUB_COMMUNITIES_ROLE_SPLIT_CLONE_MARKER_V2`; it derives the database comment value as
+`phub-communities-role-split-clone-v2:<payload-sha256>`. In addition to the previously pinned
+request, clone/source identity, system identifier, workflow, archive, ledger, release, PostgreSQL
+major, manifest and helper fields, V2 binds an independently retained
+`creationReceiptSha256`. The matching evidence is exact-key
+`communities-role-split-clone-marker-evidence-v2`; the TypeScript validator recomputes the marker
+payload and requires the same receipt digest. Redacted evidence contains only digests, counts and
+booleans and states that role creation, role split, shared-database mutation, migration, deploy,
+import and activation are all unauthorized.
 
 `deploy/jetson/prepare-communities-role-split-inventory-clone.sh` is a non-runnable preparation
 gate, not a marker writer. It accepts only
@@ -255,19 +256,39 @@ valid request terminates with
 `COMMUNITIES_STAGING_ROLE_SPLIT_RESTORE_MARKER_WRITER_EXECUTION_NOT_AUTHORIZED`; the command has no
 Docker, PostgreSQL, clone, comment, cleanup or role/ACL operation.
 
-Do not install this preparation gate, create a forced-command key for it, add it to a workflow or
-place requests on staging. Turning it into a runnable marker writer requires a new independently
-reviewed diff, an executable PG16 clone/cleanup failure matrix and separate installation and run
-authority. No current command is allowed to write the marker. A later restore-owner ceremony must be
-independently reviewed and must create it only after exclusive clone creation, ownership/ACL-
-preserving restore, backup and archive-TOC verification, source and restored-ledger equality, and
-clone/source identity rechecks. The marker writer must be a separately installed root-owned forced
-command with a dedicated key and request; the inventory collector must remain read-only and must
-never create or repair the marker. Before marker readback, cleanup may drop only a ceremony-owned
-clone whose exact OID is recorded. After marker commit, automatic cleanup is forbidden and a
-separate approved cleanup command must bind the marker, request and clone OID. Until the writer,
-request custody, evidence retention and cleanup/idempotency rules exist, the producer and existing
-provisioner remain preparation-only and must fail before publishing trusted inventory evidence.
+The repository now contains a reviewed, but uninstalled, two-invocation ceremony implementation.
+`RUN_COMMUNITIES_ROLE_SPLIT_RESTORE_MARKER_CEREMONY_V2 CREATE` performs only the bounded exact
+`createdb` attempt and always stops in `CREATION_RECONCILIATION_REQUIRED`; even an observed success
+requires a separately prepared root-owned creation receipt. `RESUME` requires that receipt and its
+independently supplied SHA-256, verifies the exact clone OID/name/owner and archive/ledger bindings,
+performs the restore, and verifies and writes the COMMENT in one transaction while holding the
+catalog lock. All container calls use a pre-pinned container ID, GNU timeout bounds the sanitized
+child process group, and public output remains bounded and redacted.
+
+Pre-marker failure and `CLEANUP_COMMUNITIES_ROLE_SPLIT_RESTORE_MARKER_CLONE_V1` intentionally do
+not drop, rename or comment a database. They verify the exact observed OID/name/owner/comment and
+write only `QUARANTINE_PENDING_RECONCILIATION_REQUIRED`, with
+`authorizesDatabaseDeletion=false` and `authorizesDatabaseRename=false`. PostgreSQL 16 cannot run
+`ALTER DATABASE ... RENAME TO` inside the transaction that holds the catalog lock, so a safe
+rename/delete path is outside this implementation and requires a separately reviewed DBA
+primitive. Do not improvise cleanup or treat quarantine state as deletion authority.
+
+After valid V2 evidence exists, the clone-only producer can emit
+`communities-role-split-input-c-v1`. It verifies a root-owned private category-to-role mapping
+against `pg_roles`, emits only a canonical redacted mapping artifact, uses structured JSON machine
+identities for quoted identifiers and overloaded functions, and records stable explicit/effective
+ACL fields as sorted semantic entries that bind grantee, privilege, grant option, redacted grantor
+evidence and occurrence identity. The acceptance evaluator requires independently pinned
+before/after artifact hashes and mapping digest, compares the complete twelve-category manifests,
+and proves every proposed ACL ADD/REMOVE and ownership row against the observed delta. A PASS is
+review evidence only and grants no execution authority.
+
+Do not install either command, create a forced-command key, add a workflow, place requests on
+staging, run the producer or collect a trusted inventory under this checkpoint. Installation, the
+two ceremony invocations, a real PostgreSQL 16 disposable-clone test, trusted before/after
+inventory production, any role/ownership/ACL mutation and the DBA quarantine resolution are
+separate gates requiring separate approval. The inventory collector remains read-only and never
+creates, repairs or replaces the marker.
 
 ### Exact 29-file staged clone rehearsal contract
 
