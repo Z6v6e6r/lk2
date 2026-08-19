@@ -1,0 +1,201 @@
+{
+  "schemaVersion": "communities-role-split-negative-corpus-v1",
+  "contract": "PHUB_COMMUNITIES_ROLE_SPLIT_CLONE_MARKER_REQUEST_V1",
+  "cases": [
+    {
+      "id": "current-shell-command-injection",
+      "integration": "CURRENT_PREPARATION",
+      "attack": "SHELL_INJECTION",
+      "expected": {
+        "stableError": "COMMUNITIES_STAGING_ROLE_SPLIT_RESTORE_MARKER_WRITER_CONFIRMATION_INVALID",
+        "marker": "ABSENT",
+        "cleanup": "NOT_APPLICABLE",
+        "processGroup": "NOT_APPLICABLE",
+        "stdout": "EMPTY",
+        "redaction": "NO_SENSITIVE_VALUE"
+      }
+    },
+    {
+      "id": "current-request-sql-metacharacters",
+      "integration": "CURRENT_PREPARATION",
+      "attack": "SQL_INJECTION",
+      "expected": {
+        "stableError": "COMMUNITIES_STAGING_ROLE_SPLIT_RESTORE_MARKER_WRITER_REQUEST_SHAPE_INVALID",
+        "marker": "ABSENT",
+        "cleanup": "NOT_APPLICABLE",
+        "processGroup": "NOT_APPLICABLE",
+        "stdout": "EMPTY",
+        "redaction": "NO_SENSITIVE_VALUE"
+      }
+    },
+    {
+      "id": "current-shared-target-collision",
+      "integration": "CURRENT_PREPARATION",
+      "attack": "SHARED_TARGET",
+      "expected": {
+        "stableError": "COMMUNITIES_STAGING_ROLE_SPLIT_RESTORE_MARKER_WRITER_REQUEST_BINDING_INVALID",
+        "marker": "ABSENT",
+        "cleanup": "NOT_APPLICABLE",
+        "processGroup": "NOT_APPLICABLE",
+        "stdout": "EMPTY",
+        "redaction": "NO_SENSITIVE_VALUE"
+      }
+    },
+    {
+      "id": "current-forbidden-system-target",
+      "integration": "CURRENT_PREPARATION",
+      "attack": "FORBIDDEN_TARGET",
+      "expected": {
+        "stableError": "COMMUNITIES_STAGING_ROLE_SPLIT_RESTORE_MARKER_WRITER_REQUEST_BINDING_INVALID",
+        "marker": "ABSENT",
+        "cleanup": "NOT_APPLICABLE",
+        "processGroup": "NOT_APPLICABLE",
+        "stdout": "EMPTY",
+        "redaction": "NO_SENSITIVE_VALUE"
+      }
+    },
+    {
+      "id": "current-malformed-order",
+      "integration": "CURRENT_PREPARATION",
+      "attack": "MALFORMED_REQUEST",
+      "expected": {
+        "stableError": "COMMUNITIES_STAGING_ROLE_SPLIT_RESTORE_MARKER_WRITER_REQUEST_SHAPE_INVALID",
+        "marker": "ABSENT",
+        "cleanup": "NOT_APPLICABLE",
+        "processGroup": "NOT_APPLICABLE",
+        "stdout": "EMPTY",
+        "redaction": "NO_SENSITIVE_VALUE"
+      }
+    },
+    {
+      "id": "current-request-digest-mismatch",
+      "integration": "CURRENT_PREPARATION",
+      "attack": "DIGEST_MISMATCH",
+      "expected": {
+        "stableError": "COMMUNITIES_STAGING_ROLE_SPLIT_RESTORE_MARKER_WRITER_REQUEST_SHA_INVALID",
+        "marker": "ABSENT",
+        "cleanup": "NOT_APPLICABLE",
+        "processGroup": "NOT_APPLICABLE",
+        "stdout": "EMPTY",
+        "redaction": "NO_SENSITIVE_VALUE"
+      }
+    },
+    {
+      "id": "future-wrong-executor-session",
+      "integration": "AWAIT_MARKER_WRITER",
+      "attack": "WRONG_EXECUTOR_SESSION",
+      "expected": {
+        "stableError": "COMMUNITIES_STAGING_ROLE_SPLIT_RESTORE_MARKER_WRITER_EXECUTOR_SESSION_INVALID",
+        "marker": "ABSENT",
+        "cleanup": "REQUIRE_BEFORE_MARKER",
+        "processGroup": "TERMINATED",
+        "stdout": "EMPTY",
+        "redaction": "NO_SENSITIVE_VALUE"
+      }
+    },
+    {
+      "id": "future-wrong-clone-owner",
+      "integration": "AWAIT_MARKER_WRITER",
+      "attack": "OWNER_MISMATCH",
+      "expected": {
+        "stableError": "COMMUNITIES_STAGING_ROLE_SPLIT_RESTORE_MARKER_WRITER_CLONE_OWNER_INVALID",
+        "marker": "ABSENT",
+        "cleanup": "REQUIRE_BEFORE_MARKER",
+        "processGroup": "TERMINATED",
+        "stdout": "EMPTY",
+        "redaction": "NO_SENSITIVE_VALUE"
+      }
+    },
+    {
+      "id": "future-forbidden-role-capability",
+      "integration": "AWAIT_MARKER_WRITER",
+      "attack": "ROLE_CAPABILITY",
+      "expected": {
+        "stableError": "COMMUNITIES_STAGING_ROLE_SPLIT_RESTORE_MARKER_WRITER_ROLE_CAPABILITY_INVALID",
+        "marker": "ABSENT",
+        "cleanup": "REQUIRE_BEFORE_MARKER",
+        "processGroup": "TERMINATED",
+        "stdout": "EMPTY",
+        "redaction": "NO_SENSITIVE_VALUE"
+      }
+    },
+    {
+      "id": "future-repeated-request-conflict",
+      "integration": "AWAIT_MARKER_WRITER",
+      "attack": "REPLAY_CONFLICT",
+      "expected": {
+        "stableError": "COMMUNITIES_STAGING_ROLE_SPLIT_RESTORE_MARKER_WRITER_REPLAY_CONFLICT",
+        "marker": "PRESERVED",
+        "cleanup": "REFUSE_AFTER_MARKER",
+        "processGroup": "TERMINATED",
+        "stdout": "EMPTY",
+        "redaction": "NO_SENSITIVE_VALUE"
+      }
+    },
+    {
+      "id": "future-partial-failure-before-marker",
+      "integration": "AWAIT_MARKER_WRITER",
+      "attack": "PARTIAL_FAILURE_BEFORE_MARKER",
+      "expected": {
+        "stableError": "COMMUNITIES_STAGING_ROLE_SPLIT_RESTORE_MARKER_WRITER_PARTIAL_FAILURE",
+        "marker": "ABSENT",
+        "cleanup": "REQUIRE_BEFORE_MARKER",
+        "processGroup": "TERMINATED",
+        "stdout": "EMPTY",
+        "redaction": "NO_SENSITIVE_VALUE"
+      }
+    },
+    {
+      "id": "future-partial-failure-after-marker",
+      "integration": "AWAIT_MARKER_WRITER",
+      "attack": "PARTIAL_FAILURE_AFTER_MARKER",
+      "expected": {
+        "stableError": "COMMUNITIES_STAGING_ROLE_SPLIT_RESTORE_MARKER_WRITER_RECONCILIATION_REQUIRED",
+        "marker": "PRESERVED",
+        "cleanup": "REFUSE_AFTER_MARKER",
+        "processGroup": "TERMINATED",
+        "stdout": "EMPTY",
+        "redaction": "NO_SENSITIVE_VALUE"
+      }
+    },
+    {
+      "id": "future-cleanup-request-after-marker",
+      "integration": "AWAIT_MARKER_WRITER",
+      "attack": "CLEANUP_AFTER_MARKER",
+      "expected": {
+        "stableError": "COMMUNITIES_STAGING_ROLE_SPLIT_RESTORE_MARKER_WRITER_CLEANUP_NOT_AUTHORIZED",
+        "marker": "PRESERVED",
+        "cleanup": "REFUSE_AFTER_MARKER",
+        "processGroup": "TERMINATED",
+        "stdout": "EMPTY",
+        "redaction": "NO_SENSITIVE_VALUE"
+      }
+    },
+    {
+      "id": "future-timeout-process-group",
+      "integration": "AWAIT_MARKER_WRITER",
+      "attack": "TIMEOUT_PROCESS_GROUP",
+      "expected": {
+        "stableError": "COMMUNITIES_STAGING_ROLE_SPLIT_RESTORE_MARKER_WRITER_TIMEOUT",
+        "marker": "ABSENT",
+        "cleanup": "REQUIRE_BEFORE_MARKER",
+        "processGroup": "TERMINATED",
+        "stdout": "EMPTY",
+        "redaction": "NO_SENSITIVE_VALUE"
+      }
+    },
+    {
+      "id": "future-output-redaction",
+      "integration": "AWAIT_MARKER_WRITER",
+      "attack": "OUTPUT_REDACTION",
+      "expected": {
+        "stableError": "COMMUNITIES_STAGING_ROLE_SPLIT_RESTORE_MARKER_WRITER_EVIDENCE_REDACTION_INVALID",
+        "marker": "ABSENT",
+        "cleanup": "REQUIRE_BEFORE_MARKER",
+        "processGroup": "TERMINATED",
+        "stdout": "EMPTY",
+        "redaction": "NO_SENSITIVE_VALUE"
+      }
+    }
+  ]
+}
