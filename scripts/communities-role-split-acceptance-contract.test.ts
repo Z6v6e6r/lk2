@@ -136,6 +136,11 @@ describe('Communities role-split acceptance v1 contract', () => {
       cwd: root,
       stdio: 'ignore',
     });
+    execFileSync('npm', ['run', 'build', '-w', '@phub/games'], { cwd: root, stdio: 'ignore' });
+    execFileSync('npm', ['run', 'build', '-w', '@phub/gift-certificates'], {
+      cwd: root,
+      stdio: 'ignore',
+    });
     execFileSync('npm', ['run', 'build', '-w', '@phub/home-projection'], {
       cwd: root,
       stdio: 'ignore',
