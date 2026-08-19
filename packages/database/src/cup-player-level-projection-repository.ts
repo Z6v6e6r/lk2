@@ -12,9 +12,7 @@ export interface ApplyCupPlayerLevelProjectionInput {
   readonly sourceRevision: number;
   readonly sourceEventId: string;
   readonly sourceEventType:
-    | 'RATING_INITIAL_IMPORTED'
-    | 'RATING_BOOTSTRAPPED_FROM_VIVA'
-    | 'RATING_MANUALLY_CHANGED';
+    'RATING_INITIAL_IMPORTED' | 'RATING_BOOTSTRAPPED_FROM_VIVA' | 'RATING_MANUALLY_CHANGED';
   readonly formulaVersion: 'padel-rating-grade-v1';
   readonly occurredAt: string;
   readonly requestHash: string;

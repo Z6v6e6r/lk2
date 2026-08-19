@@ -1031,7 +1031,10 @@ export function persistVivaHomeSource(input: {
       ? input.snapshot.profile.level.label
       : null;
     const savedProfileLevel = await client.query<
-      QueryResultRow & { readonly level_label: string | null; readonly level_value: number | string | null }
+      QueryResultRow & {
+        readonly level_label: string | null;
+        readonly level_value: number | string | null;
+      }
     >(
       `update profile.user_summaries
           set level_label = case when cup.player_id is null then $3 else profile.user_summaries.level_label end,
@@ -1052,22 +1055,24 @@ export function persistVivaHomeSource(input: {
       ],
     );
     const storedLevel = savedProfileLevel.rows[0];
-    const storedLevelValue = storedLevel?.level_value === null || storedLevel?.level_value === undefined
-      ? null
-      : Number(storedLevel.level_value);
-    const effectiveSnapshot = storedLevel?.level_label && Number.isFinite(storedLevelValue)
-      ? {
-          ...input.snapshot,
-          profile: {
-            ...input.snapshot.profile,
-            level: {
-              ...input.snapshot.profile.level,
-              label: storedLevel.level_label,
-              value: storedLevelValue as number,
+    const storedLevelValue =
+      storedLevel?.level_value === null || storedLevel?.level_value === undefined
+        ? null
+        : Number(storedLevel.level_value);
+    const effectiveSnapshot =
+      storedLevel?.level_label && Number.isFinite(storedLevelValue)
+        ? {
+            ...input.snapshot,
+            profile: {
+              ...input.snapshot.profile,
+              level: {
+                ...input.snapshot.profile.level,
+                label: storedLevel.level_label,
+                value: storedLevelValue as number,
+              },
             },
           }
-        }
-      : input.snapshot;
+        : input.snapshot;
     let resolvedAvatarUrl = input.profilePhoto?.avatarUrl ?? null;
     if (input.profilePhoto) {
       resolvedAvatarUrl = await persistProfilePhotoWithClient(client, {
