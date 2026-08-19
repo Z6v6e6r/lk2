@@ -43,6 +43,7 @@ export * from './location-media-repository.js';
 export * from './migration-ledger-policy.js';
 export * from './migration-execution-policy.js';
 export * from './communities-staged-rehearsal-policy.js';
+export * from './communities-staging-role-split.js';
 export * from './eligibility-payment-acl-matrix.js';
 export * from './messaging-repository.js';
 export * from './profile-privacy-repository.js';
