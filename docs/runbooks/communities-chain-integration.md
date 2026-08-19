@@ -214,12 +214,17 @@ manifest (including `public.schema_migrations`, `profile.privacy_settings`, Comm
 Notification and Games targets). Mixed ownership, PUBLIC grants, grant options, column ACLs or
 third-party grants are a hard NO-GO before any mutation.
 
-Do not expose `/etc/phub/staging.env` to `phub-preflight`. The future rehearsal installation must
-use two separately root-owned, group-readable `0440` files containing exactly one
-`DATABASE_URL=...` line: one runtime URL and one distinct migrator URL. The forced command must
-validate ownership, mode, one-line grammar and distinct inode and URL without printing either
-value. Creating those credentials, database roles, grants, files, workflow wiring or any live
-application change remains a separately approved staging operation.
+Do not expose `/etc/phub/staging.env`, `/etc/phub/staging.migrator.env` or
+`/etc/phub/realtime.env` to `phub-preflight`. The rehearsal credential contract projects only the
+two database URLs into separately root-owned, `phub-preflight` group-readable `0440` files, each
+containing exactly one `DATABASE_URL=...` line. The forced command validates ownership, mode,
+single-link status, one-line grammar and distinct inode and URL without printing either value.
+Realtime isolation is represented by a metadata-only `0440` receipt; it binds the current API,
+realtime and optional override file identities, the disabled realtime state, the verifier SHA-256
+and both projected credential identities. It contains no URL, JWT or secret hash. Creating the
+database roles, installing or refreshing these files, workflow wiring or any live application
+change remains a separately approved staging operation; merging the implementation grants no such
+authority.
 
 This is inventory preparation only; it is not a complete safe role split. A future DBA-reviewed
 gate must first establish the exact clone preimage: `pg_trgm` state, intentionally absent
@@ -347,7 +352,34 @@ repository-matched files as root-owned, non-writable commands:
 - `/usr/local/libexec/phub/run-communities-staged-migration-rehearsal.sh`;
 - `/usr/local/libexec/phub/rehearse-media-migration.sh`;
 - `/usr/local/libexec/phub/verify-media-migration-ledger.sh`;
-- `/usr/local/libexec/phub/verify-postgres-backup-restore.sh`.
+- `/usr/local/libexec/phub/verify-postgres-backup-restore.sh`;
+- `/usr/local/libexec/phub/verify-runtime-env-isolation.sh`;
+- `/usr/local/libexec/phub/prepare-communities-rehearsal-credentials.sh`.
+
+The last command is a root-only preparation/verification command, never the SSH forced command.
+After separately confirming that the runtime and migrator PostgreSQL login roles already exist and
+are distinct, the administrator runs it with the exact token and then verifies the result:
+
+```sh
+sudo -- /usr/local/libexec/phub/prepare-communities-rehearsal-credentials.sh \
+  PREPARE_COMMUNITIES_REHEARSAL_CREDENTIALS_V1 prepare
+sudo -- /usr/local/libexec/phub/prepare-communities-rehearsal-credentials.sh \
+  PREPARE_COMMUNITIES_REHEARSAL_CREDENTIALS_V1 verify
+```
+
+`prepare` holds an exclusive lock, validates the canonical `0600` source files and runtime-secret
+isolation, checks distinct source inode and URL, rechecks source fingerprints around commit, and
+atomically installs only:
+
+- `/etc/phub/communities-rehearsal/runtime.database.env`;
+- `/etc/phub/communities-rehearsal/migrator.database.env`;
+- `/etc/phub/communities-rehearsal/realtime-isolation.receipt`.
+
+The directory is `root:phub-preflight` mode `0750`; all three files are
+`root:phub-preflight` mode `0440` and single-link. `verify` is read-only. Either command emits only
+one fixed status line and never prints credential values. Any source, override, verifier or target
+identity change invalidates the receipt and makes the forced command stop before Docker, backup or
+database access. Credential provisioning does not create or alter PostgreSQL roles or grants.
 
 The strengthened `29_V1` wire binding has 17 fields and its successful evidence has exactly 31
 lines. It is intentionally fail-closed across a partial installation: an old 15-field caller is
@@ -355,10 +387,10 @@ rejected by the new wrapper, while an old wrapper rejects the new 17-field call 
 backup or database access. Do not dispatch until all installed command SHA-256 values match the
 same merged revision and the 17-field contract test has passed.
 
-The dedicated key has only this forced command:
+Only after the root verification passes may the dedicated key retain this forced command:
 
 ```text
-restrict,command="env PHUB_REHEARSAL_BACKUP_ROOT=/var/lib/phub-preflight/backups /usr/local/libexec/phub/run-communities-staged-migration-rehearsal.sh" <rehearsal-public-key>
+restrict,command="env PHUB_REHEARSAL_BACKUP_ROOT=/var/lib/phub-preflight/backups PHUB_RUNTIME_ENV=/etc/phub/communities-rehearsal/runtime.database.env PHUB_MIGRATOR_ENV=/etc/phub/communities-rehearsal/migrator.database.env PHUB_REALTIME_ISOLATION_RECEIPT=/etc/phub/communities-rehearsal/realtime-isolation.receipt PHUB_RUNTIME_ISOLATION_VERIFIER=/usr/local/libexec/phub/verify-runtime-env-isolation.sh PHUB_API_ENV_SOURCE=/etc/phub/staging.env PHUB_REALTIME_ENV_SOURCE=/etc/phub/realtime.env PHUB_STAGING_OVERRIDE_SOURCE=/opt/phub/staging.override.env PHUB_STAGING_GAMES_SOURCE=/opt/phub/staging.games.env /usr/local/libexec/phub/run-communities-staged-migration-rehearsal.sh" <rehearsal-public-key>
 ```
 
 It must not be the inventory key, backup key or `STAGING_DEPLOY_KEY`, and it receives no shell,
@@ -369,8 +401,9 @@ dispatch input. The command uses shared root-owned `release.env` only as the ful
 base, then applies this strict file as the final override. The administrator also installs the
 reviewed `deploy/compose.staging.yaml` as root-owned
 `/opt/phub/compose.communities-rehearsal-<candidate-sha>.yaml`; its SHA-256 is bound in the remote
-command. The forced-command account may read these files and `/etc/phub/staging.env` plus
-`/etc/phub/staging.migrator.env`, but may not modify them or any shared release/runtime file.
+command. The forced-command account may read the candidate artifacts and the three bounded files
+under `/etc/phub/communities-rehearsal`, but it may not read the canonical runtime/migrator/realtime
+environment files and may not modify any credential, shared release or runtime file.
 
 The dispatch confirmation is `REHEARSE_COMMUNITIES_STAGING_29_V1`. Before any backup or clone
 write, the forced command verifies its own and all three helper SHA-256 values, the root-owned
@@ -506,8 +539,9 @@ The final line includes `eligibility_payment=3 cup_projection=1`, and every
 `29_V1` remains exactly 31 lines. The ceremony never targets the shared database, never changes a
 shared release/runtime file, never deploys an application and never enables CUP ingress, eligibility
 policy, roster guard or payment behavior. Installing the root-owned candidate artifacts and running
-this manual workflow remain separately approved operations. A missing or unverified
-`/etc/phub/realtime.env` on staging is still an external preflight blocker and must not be bypassed.
+this manual workflow remain separately approved operations. A missing, changed or unverified
+`/etc/phub/realtime.env` invalidates the metadata-only receipt and remains a hard preflight blocker;
+the forced command cannot bypass it by reading or accepting the secret file directly.
 
 ### Exact 34-file participation-command clone rehearsal contract
 

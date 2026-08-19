@@ -50,13 +50,23 @@ describe('Communities staged migration protected dispatch', () => {
     const backupRoot = join(directory, 'backups');
     const secretRoot = join(directory, 'secrets');
     const bin = join(directory, 'bin');
-    const runtimeEnv = join(directory, 'staging.env');
-    const migratorEnv = join(directory, 'staging.migrator.env');
+    const apiEnvSource = join(directory, 'staging.env');
+    const realtimeEnvSource = join(directory, 'realtime.env');
+    const runtimeEnv = join(directory, 'runtime.database.env');
+    const migratorEnv = join(directory, 'migrator.database.env');
+    const realtimeReceipt = join(directory, 'realtime-isolation.receipt');
+    const stagingOverride = join(directory, 'staging.override.env');
+    const stagingGames = join(directory, 'staging.games.env');
     const releaseEnv = join(appRoot, `release.communities-rehearsal-${candidateSha}.env`);
     const composeFile = join(appRoot, `compose.communities-rehearsal-${candidateSha}.yaml`);
     const rehearsal = join(directory, 'rehearse.sh');
     const ledgerVerifier = join(directory, 'verify-ledger.sh');
     const restoreHelper = join(directory, 'verify-restore.sh');
+    const runtimeIsolationVerifier = join(directory, 'verify-runtime-env-isolation.sh');
+    const runtimeIsolationVerifierSource = '#!/bin/sh\nexit 0\n';
+    const runtimeIsolationVerifierSha = createHash('sha256')
+      .update(runtimeIsolationVerifierSource)
+      .digest('hex');
     const dockerLog = join(directory, 'docker.log');
     await Promise.all([mkdir(appRoot), mkdir(backupRoot), mkdir(secretRoot), mkdir(bin)]);
     await Promise.all([
@@ -64,16 +74,43 @@ describe('Communities staged migration protected dispatch', () => {
       writeFile(join(appRoot, 'compose.infrastructure.yaml'), 'services: {}\n'),
       writeFile(composeFile, 'services: {}\n'),
       writeFile(join(appRoot, 'release.env'), `RELEASE=${activeRelease}\n`),
+      writeFile(apiEnvSource, 'DATABASE_URL=postgresql://runtime:secret@postgres:5432/phub\n'),
+      writeFile(realtimeEnvSource, 'DATABASE_URL=postgresql://runtime:secret@postgres:5432/phub\n'),
       writeFile(runtimeEnv, 'DATABASE_URL=postgresql://runtime:secret@postgres:5432/phub\n'),
       writeFile(migratorEnv, 'DATABASE_URL=postgresql://migrator:secret@postgres:5432/phub\n'),
       writeFile(releaseEnv, `RELEASE=${candidateSha}\nMIGRATOR_IMAGE_DIGEST=${migratorDigest}\n`),
       writeFile(ledgerVerifier, '#!/bin/sh\nexit 0\n'),
+      writeFile(runtimeIsolationVerifier, runtimeIsolationVerifierSource),
       writeFile(
         restoreHelper,
         '#!/bin/sh\ntest "$3" = VERIFY_STAGING_POSTGRES_CAPACITY\nprintf "%s\\n" capacity-ok\n',
       ),
       writeFile(dockerLog, ''),
     ]);
+    const currentGid = process.getgid?.() ?? 20;
+    const apiIdentity = '1:101:80:100:1:1:600:1';
+    const realtimeIdentity = '1:102:80:100:1:1:600:1';
+    const runtimeIdentity = `1:201:80:100:0:${currentGid}:440:1`;
+    const migratorIdentity = `1:202:81:100:0:${currentGid}:440:1`;
+    await writeFile(
+      realtimeReceipt,
+      [
+        'CONTRACT=COMMUNITIES_REHEARSAL_CREDENTIALS_V1',
+        `API_ENV_PATH=${apiEnvSource}`,
+        `API_ENV_IDENTITY=${apiIdentity}`,
+        `REALTIME_ENV_PATH=${realtimeEnvSource}`,
+        `REALTIME_ENV_IDENTITY=${realtimeIdentity}`,
+        `STAGING_OVERRIDE_PATH=${stagingOverride}`,
+        'STAGING_OVERRIDE_IDENTITY=absent',
+        `STAGING_GAMES_PATH=${stagingGames}`,
+        'STAGING_GAMES_IDENTITY=absent',
+        `RUNTIME_CREDENTIAL_IDENTITY=${runtimeIdentity}`,
+        `MIGRATOR_CREDENTIAL_IDENTITY=${migratorIdentity}`,
+        'EXPECTED_COMMUNITIES_REALTIME_ENABLED=false',
+        `ISOLATION_VERIFIER_SHA256=${runtimeIsolationVerifierSha}`,
+        '',
+      ].join('\n'),
+    );
     await writeFile(
       rehearsal,
       `#!/bin/sh
@@ -109,15 +146,22 @@ set -eu
 field=$2
 path=$3
 case "$field:$path" in
+  '%d:%i:%s:%y:%z:%u:%g:%a:%h:${apiEnvSource}') test "\${FAKE_API_IDENTITY_DRIFT:-}" != true && echo '${apiIdentity}' || echo '1:999:80:101:1:1:600:1' ;;
+  '%d:%i:%s:%y:%z:%u:%g:%a:%h:${realtimeEnvSource}') echo '${realtimeIdentity}' ;;
+  '%d:%i:%s:%y:%z:%u:%g:%a:%h:${runtimeEnv}') echo '${runtimeIdentity}' ;;
+  '%d:%i:%s:%y:%z:%u:%g:%a:%h:${migratorEnv}') echo '${migratorIdentity}' ;;
   '%u:${composeFile}') test "\${FAKE_COMPOSE_OWNER_BAD:-}" != true && echo 0 || echo 1 ;;
   '%a:${composeFile}') test "\${FAKE_COMPOSE_MODE_BAD:-}" != true && echo 444 || echo 666 ;;
-  '%u:${wrapper}'|'%u:${rehearsal}'|'%u:${ledgerVerifier}'|'%u:${restoreHelper}'|'%u:${releaseEnv}') echo 0 ;;
-  '%a:${wrapper}'|'%a:${rehearsal}'|'%a:${ledgerVerifier}'|'%a:${restoreHelper}') echo 755 ;;
+  '%u:${wrapper}'|'%u:${rehearsal}'|'%u:${ledgerVerifier}'|'%u:${restoreHelper}'|'%u:${runtimeIsolationVerifier}'|'%u:${releaseEnv}'|'%u:${runtimeEnv}'|'%u:${migratorEnv}'|'%u:${realtimeReceipt}') echo 0 ;;
+  '%a:${wrapper}'|'%a:${rehearsal}'|'%a:${ledgerVerifier}'|'%a:${restoreHelper}'|'%a:${runtimeIsolationVerifier}') echo 755 ;;
   '%a:${releaseEnv}') echo 400 ;;
+  '%a:${runtimeEnv}'|'%a:${migratorEnv}'|'%a:${realtimeReceipt}') echo 440 ;;
+  '%g:${runtimeEnv}'|'%g:${migratorEnv}'|'%g:${realtimeReceipt}') echo '${currentGid}' ;;
+  '%h:${runtimeEnv}'|'%h:${migratorEnv}'|'%h:${realtimeReceipt}') echo 1 ;;
   '%u:${backupRoot}') id -u ;;
   '%a:${backupRoot}') echo 700 ;;
   %a:${backupRoot}/*) echo 600 ;;
-  %u:${appRoot}*|%u:${runtimeEnv}|%u:${migratorEnv}) echo 1 ;;
+  %u:${appRoot}*) echo 1 ;;
   %a:*) echo 444 ;;
   %u:*) id -u ;;
   *) exit 1 ;;
@@ -157,12 +201,16 @@ esac
         join(appRoot, 'compose.infrastructure.yaml'),
         composeFile,
         join(appRoot, 'release.env'),
+        apiEnvSource,
+        realtimeEnvSource,
         runtimeEnv,
         migratorEnv,
+        realtimeReceipt,
         releaseEnv,
         rehearsal,
         ledgerVerifier,
         restoreHelper,
+        runtimeIsolationVerifier,
         join(bin, 'readlink'),
         join(bin, 'stat'),
         join(bin, 'docker'),
@@ -174,7 +222,9 @@ esac
             ? 0o555
             : path === secretRoot
               ? 0o100
-              : [rehearsal, ledgerVerifier, restoreHelper].includes(path) || path.startsWith(bin)
+              : [rehearsal, ledgerVerifier, restoreHelper, runtimeIsolationVerifier].includes(
+                    path,
+                  ) || path.startsWith(bin)
                 ? 0o755
                 : 0o444,
         ),
@@ -209,6 +259,7 @@ esac
       ...process.env,
       PATH: `${bin}:${process.env.PATH ?? ''}`,
       PHUB_APP_ROOT: appRoot,
+      PHUB_API_ENV_SOURCE: apiEnvSource,
       PHUB_MEDIA_LEDGER_VERIFIER: ledgerVerifier,
       PHUB_MIGRATOR_ENV: migratorEnv,
       PHUB_POSTGRES_STORAGE_PATH: directory,
@@ -216,8 +267,13 @@ esac
       PHUB_REHEARSAL_COMMAND: rehearsal,
       PHUB_REHEARSAL_TIMEOUT_ACTIVE: '1',
       PHUB_RESTORE_HELPER: restoreHelper,
+      PHUB_RUNTIME_ISOLATION_VERIFIER: runtimeIsolationVerifier,
+      PHUB_REALTIME_ENV_SOURCE: realtimeEnvSource,
+      PHUB_REALTIME_ISOLATION_RECEIPT: realtimeReceipt,
       PHUB_RUNTIME_ENV: runtimeEnv,
       PHUB_SECRET_ROOT: secretRoot,
+      PHUB_STAGING_GAMES_SOURCE: stagingGames,
+      PHUB_STAGING_OVERRIDE_SOURCE: stagingOverride,
       FAKE_DOCKER_LOG: dockerLog,
       FAKE_REHEARSAL_LOG: join(directory, 'rehearsal.log'),
       SSH_ORIGINAL_COMMAND: arguments_.join(' '),
@@ -327,6 +383,13 @@ esac
       expect(await readFile(dockerLog, 'utf8')).toBe(dockerBeforeMismatch);
     }
 
+    const driftedRuntimeSource = await execute({
+      ...environment,
+      FAKE_API_IDENTITY_DRIFT: 'true',
+    }).catch((error: Error) => error);
+    expect(driftedRuntimeSource).toBeInstanceOf(Error);
+    expect(await readFile(dockerLog, 'utf8')).toBe(dockerBeforeMismatch);
+
     const collision = await execute({ ...environment, FAKE_LN_COLLISION: 'true' }).catch(
       (error: Error) => error,
     );
@@ -347,7 +410,7 @@ esac
       'do-not-publish-provider-secret',
     );
     expect((await readdir(backupRoot)).filter((name) => name.endsWith('.dump'))).toHaveLength(4);
-  }, 20_000);
+  }, 60_000);
 
   it('keeps the workflow manual, exact-SHA pinned and isolated from deploy/shared migration', async () => {
     const workflow = await readFile(

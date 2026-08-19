@@ -110,6 +110,27 @@ describe('Communities staged migration rehearsal contract', () => {
     expect(runbook).toContain('rejects the existing `postgres-communities-preflight-*`');
   });
 
+  it('keeps shared runtime secrets outside the forced-command credential contour', () => {
+    const wrapper = source('deploy/jetson/run-communities-staged-migration-rehearsal.sh');
+    const provisioner = source('deploy/jetson/prepare-communities-rehearsal-credentials.sh');
+    const runbook = source('docs/runbooks/communities-chain-integration.md');
+
+    expect(wrapper).toContain('/etc/phub/communities-rehearsal/runtime.database.env');
+    expect(wrapper).toContain('/etc/phub/communities-rehearsal/migrator.database.env');
+    expect(wrapper).toContain('/etc/phub/communities-rehearsal/realtime-isolation.receipt');
+    expect(wrapper).toContain(
+      'API runtime environment changed after realtime isolation attestation',
+    );
+    expect(provisioner).toContain('PREPARE_COMMUNITIES_REHEARSAL_CREDENTIALS_V1');
+    expect(provisioner).toContain('EXPECTED_COMMUNITIES_REALTIME_ENABLED=false');
+    expect(provisioner).not.toContain("printf 'JWT_");
+    expect(runbook).toContain('may not read the canonical runtime/migrator/realtime');
+    expect(runbook).toContain('Credential provisioning does not create or alter PostgreSQL roles');
+    expect(runbook).toContain(
+      'PHUB_RUNTIME_ENV=/etc/phub/communities-rehearsal/runtime.database.env',
+    );
+  });
+
   it('keeps older contracts frozen and binds 34_V1 to its ACL matrix and runtime probes', () => {
     const workflow = source('.github/workflows/communities-staged-migration-rehearsal.yaml');
     const wrapper = source('deploy/jetson/run-communities-staged-migration-rehearsal.sh');

@@ -105,8 +105,14 @@ storage_path=${PHUB_POSTGRES_STORAGE_PATH:-/var/lib/docker}
 rehearsal_command=${PHUB_REHEARSAL_COMMAND:-/usr/local/libexec/phub/rehearse-media-migration.sh}
 ledger_verifier=${PHUB_MEDIA_LEDGER_VERIFIER:-/usr/local/libexec/phub/verify-media-migration-ledger.sh}
 restore_helper=${PHUB_RESTORE_HELPER:-/usr/local/libexec/phub/verify-postgres-backup-restore.sh}
-runtime_env=${PHUB_RUNTIME_ENV:-/etc/phub/staging.env}
-migrator_env=${PHUB_MIGRATOR_ENV:-/etc/phub/staging.migrator.env}
+runtime_isolation_verifier=${PHUB_RUNTIME_ISOLATION_VERIFIER:-/usr/local/libexec/phub/verify-runtime-env-isolation.sh}
+runtime_env=${PHUB_RUNTIME_ENV:-/etc/phub/communities-rehearsal/runtime.database.env}
+migrator_env=${PHUB_MIGRATOR_ENV:-/etc/phub/communities-rehearsal/migrator.database.env}
+realtime_receipt=${PHUB_REALTIME_ISOLATION_RECEIPT:-/etc/phub/communities-rehearsal/realtime-isolation.receipt}
+api_env_source=${PHUB_API_ENV_SOURCE:-/etc/phub/staging.env}
+realtime_env_source=${PHUB_REALTIME_ENV_SOURCE:-/etc/phub/realtime.env}
+staging_override_source=${PHUB_STAGING_OVERRIDE_SOURCE:-/opt/phub/staging.override.env}
+staging_games_source=${PHUB_STAGING_GAMES_SOURCE:-/opt/phub/staging.games.env}
 release_env="$app_root/release.communities-rehearsal-$expected_candidate_sha.env"
 compose_file="$app_root/compose.communities-rehearsal-$expected_candidate_sha.yaml"
 
@@ -126,11 +132,13 @@ fi
 rehearsal_command="$(validate_root_command "$rehearsal_command")"
 ledger_verifier="$(validate_root_command "$ledger_verifier")"
 restore_helper="$(validate_root_command "$restore_helper")"
+runtime_isolation_verifier="$(validate_root_command "$runtime_isolation_verifier")"
 
 actual_wrapper_sha="$(sha256sum "$wrapper_path" | cut -d ' ' -f 1)"
 actual_rehearsal_sha="$(sha256sum "$rehearsal_command" | cut -d ' ' -f 1)"
 actual_ledger_verifier_sha="$(sha256sum "$ledger_verifier" | cut -d ' ' -f 1)"
 actual_restore_helper_sha="$(sha256sum "$restore_helper" | cut -d ' ' -f 1)"
+actual_runtime_isolation_verifier_sha="$(sha256sum "$runtime_isolation_verifier" | cut -d ' ' -f 1)"
 test "$actual_wrapper_sha" = "$expected_wrapper_sha" || fail 'installed wrapper does not match the requested release'
 test "$actual_rehearsal_sha" = "$expected_rehearsal_sha" || fail 'installed rehearsal command does not match the requested release'
 test "$actual_ledger_verifier_sha" = "$expected_ledger_verifier_sha" || fail 'installed ledger verifier does not match the requested release'
@@ -156,8 +164,6 @@ validate_readonly_input "$app_root"
 validate_readonly_input "$app_root/infrastructure.env"
 validate_readonly_input "$app_root/compose.infrastructure.yaml"
 validate_readonly_input "$app_root/release.env"
-validate_readonly_input "$runtime_env"
-validate_readonly_input "$migrator_env"
 validate_readonly_input "$release_env"
 validate_readonly_input "$compose_file"
 test -f "$release_env" || fail 'candidate rehearsal release file is not a regular file'
@@ -166,6 +172,85 @@ test "$(stat -c %u "$release_env")" -eq 0 || fail 'candidate rehearsal release f
 test "$(stat -c %u "$compose_file")" -eq 0 || fail 'candidate rehearsal Compose file is not root-owned'
 case "$(stat -c %a "$release_env")" in 400|440|600|640) ;; *) fail 'candidate rehearsal release file mode is unsafe' ;; esac
 case "$(stat -c %a "$compose_file")" in 400|440|444|600|640|644) ;; *) fail 'candidate rehearsal Compose file mode is unsafe' ;; esac
+
+metadata_identity() {
+  path=$1
+  test -f "$path" && test ! -L "$path" || fail "realtime receipt source is absent or unsafe: $path"
+  stat -c '%d:%i:%s:%y:%z:%u:%g:%a:%h' "$path"
+}
+
+optional_metadata_identity() {
+  path=$1
+  if test ! -e "$path" && test ! -L "$path"; then
+    printf '%s' absent
+    return
+  fi
+  metadata_identity "$path"
+}
+
+validate_rehearsal_credential() {
+  path=$1
+  label=$2
+  test -f "$path" && test ! -L "$path" && test -r "$path" || fail "$label rehearsal credential is absent or unreadable"
+  test "$(stat -c %u "$path")" -eq 0 || fail "$label rehearsal credential is not root-owned"
+  test "$(stat -c %g "$path")" -eq "$(id -g)" || fail "$label rehearsal credential has the wrong group"
+  test "$(stat -c %a "$path")" = 440 || fail "$label rehearsal credential mode is not 0440"
+  test "$(stat -c %h "$path")" = 1 || fail "$label rehearsal credential must be a single-link file"
+  awk '
+    NR == 1 && /^DATABASE_URL=[^[:space:]]+$/ { found = 1; next }
+    { exit 1 }
+    END { if (NR != 1 || found != 1) exit 1 }
+  ' "$path" || fail "$label rehearsal credential must contain exactly one DATABASE_URL line"
+}
+
+receipt_value() {
+  key=$1
+  test "$(awk -F= -v key="$key" '$1 == key { count += 1 } END { print count + 0 }' "$realtime_receipt")" -eq 1 ||
+    fail "realtime isolation receipt must contain exactly one $key"
+  sed -n "s/^${key}=//p" "$realtime_receipt"
+}
+
+validate_rehearsal_credential "$runtime_env" runtime
+validate_rehearsal_credential "$migrator_env" migrator
+test ! "$runtime_env" -ef "$migrator_env" || fail 'runtime and migrator rehearsal credentials must have distinct inodes'
+test -f "$realtime_receipt" && test ! -L "$realtime_receipt" && test -r "$realtime_receipt" ||
+  fail 'realtime isolation receipt is absent or unreadable'
+test "$(stat -c %u "$realtime_receipt")" -eq 0 || fail 'realtime isolation receipt is not root-owned'
+test "$(stat -c %g "$realtime_receipt")" -eq "$(id -g)" || fail 'realtime isolation receipt has the wrong group'
+test "$(stat -c %a "$realtime_receipt")" = 440 || fail 'realtime isolation receipt mode is not 0440'
+test "$(stat -c %h "$realtime_receipt")" = 1 || fail 'realtime isolation receipt must be a single-link file'
+test "$(wc -l < "$realtime_receipt" | tr -d ' ')" -eq 13 || fail 'realtime isolation receipt has the wrong shape'
+awk -F= '
+  $1 == "CONTRACT" ||
+  $1 == "API_ENV_PATH" ||
+  $1 == "API_ENV_IDENTITY" ||
+  $1 == "REALTIME_ENV_PATH" ||
+  $1 == "REALTIME_ENV_IDENTITY" ||
+  $1 == "STAGING_OVERRIDE_PATH" ||
+  $1 == "STAGING_OVERRIDE_IDENTITY" ||
+  $1 == "STAGING_GAMES_PATH" ||
+  $1 == "STAGING_GAMES_IDENTITY" ||
+  $1 == "RUNTIME_CREDENTIAL_IDENTITY" ||
+  $1 == "MIGRATOR_CREDENTIAL_IDENTITY" ||
+  $1 == "EXPECTED_COMMUNITIES_REALTIME_ENABLED" ||
+  $1 == "ISOLATION_VERIFIER_SHA256" { next }
+  { exit 1 }
+' "$realtime_receipt" || fail 'realtime isolation receipt contains an unexpected key'
+test "$(receipt_value CONTRACT)" = COMMUNITIES_REHEARSAL_CREDENTIALS_V1 || fail 'realtime isolation receipt contract is invalid'
+test "$(receipt_value API_ENV_PATH)" = "$api_env_source" || fail 'realtime isolation receipt API path differs'
+test "$(receipt_value REALTIME_ENV_PATH)" = "$realtime_env_source" || fail 'realtime isolation receipt realtime path differs'
+test "$(receipt_value STAGING_OVERRIDE_PATH)" = "$staging_override_source" || fail 'realtime isolation receipt override path differs'
+test "$(receipt_value STAGING_GAMES_PATH)" = "$staging_games_source" || fail 'realtime isolation receipt games path differs'
+test "$(receipt_value API_ENV_IDENTITY)" = "$(metadata_identity "$api_env_source")" || fail 'API runtime environment changed after realtime isolation attestation'
+test "$(receipt_value REALTIME_ENV_IDENTITY)" = "$(metadata_identity "$realtime_env_source")" || fail 'realtime environment changed after isolation attestation'
+test "$(receipt_value STAGING_OVERRIDE_IDENTITY)" = "$(optional_metadata_identity "$staging_override_source")" || fail 'staging override changed after realtime isolation attestation'
+test "$(receipt_value STAGING_GAMES_IDENTITY)" = "$(optional_metadata_identity "$staging_games_source")" || fail 'staging games override changed after realtime isolation attestation'
+test "$(receipt_value RUNTIME_CREDENTIAL_IDENTITY)" = "$(metadata_identity "$runtime_env")" || fail 'runtime rehearsal credential changed after provisioning'
+test "$(receipt_value MIGRATOR_CREDENTIAL_IDENTITY)" = "$(metadata_identity "$migrator_env")" || fail 'migrator rehearsal credential changed after provisioning'
+test "$(receipt_value EXPECTED_COMMUNITIES_REALTIME_ENABLED)" = false || fail 'realtime isolation receipt does not bind the disabled state'
+validate_hex "$(receipt_value ISOLATION_VERIFIER_SHA256)" 64 'realtime isolation verifier binding'
+test "$(receipt_value ISOLATION_VERIFIER_SHA256)" = "$actual_runtime_isolation_verifier_sha" ||
+  fail 'runtime isolation verifier changed after receipt provisioning'
 
 release_candidate="$(sed -n 's/^RELEASE=//p' "$release_env")"
 release_migrator_digest="$(sed -n 's/^MIGRATOR_IMAGE_DIGEST=//p' "$release_env")"
@@ -203,11 +288,12 @@ test "$(stat -c %a "$backup_root")" = 700 || fail 'rehearsal backup root mode is
 
 database_url_from() {
   input=$1
-  test "$(grep -c '^DATABASE_URL=' "$input")" -eq 1 || fail 'database role input is ambiguous'
   sed -n 's/^DATABASE_URL=//p' "$input"
 }
 runtime_database_url="$(database_url_from "$runtime_env")"
 migrator_database_url="$(database_url_from "$migrator_env")"
+case "$runtime_database_url" in postgresql://*|postgres://*) ;; *) fail 'runtime database URL is malformed' ;; esac
+case "$migrator_database_url" in postgresql://*|postgres://*) ;; *) fail 'migrator database URL is malformed' ;; esac
 test "$runtime_database_url" != "$migrator_database_url" || fail 'runtime and migrator database roles must differ'
 
 cd "$app_root"

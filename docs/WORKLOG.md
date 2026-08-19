@@ -1,5 +1,14 @@
 # Worklog
 
+## 2026-08-19 — Isolated Communities rehearsal credential contour
+
+- Replaced direct forced-command access to the shared API/migrator environment files with two
+  root-owned, single-line, read-only database credential projections for `phub-preflight`.
+- Added a root-only atomic prepare/verify command and a metadata-only realtime-isolation receipt
+  that becomes invalid when a bound runtime, override, verifier or projected credential changes.
+- Kept role/grant creation, staging installation, rehearsal, shared migration, deployment and all
+  feature activation outside this implementation checkpoint.
+
 ## 2026-08-19 — Default-off participation command foundation
 
 - Added durable server-owned participation authorization, payment snapshot binding, writer ACK and
