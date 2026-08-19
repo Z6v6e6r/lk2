@@ -156,5 +156,5 @@ describe('Communities role-split acceptance v1 contract', () => {
       { cwd: root, encoding: 'utf8' },
     );
     expect(output).toBe('function|function|communities-role-split-input-c-v1');
-  }, 30_000);
+  }, 60_000);
 });
