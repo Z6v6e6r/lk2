@@ -128,13 +128,14 @@ export function assertRoleSplitNegativeCorpus(
       !['WRAPPER', 'CREATE', 'RESUME', 'CLEANUP'].includes(String(candidate.phase)) ||
       !/^[A-Z][A-Z0-9_]+$/u.test(String(candidate.attack)) ||
       !isRecord(candidate.expected) ||
-      !hasExactKeys(candidate.expected, expectedKeys) ||
-      !validOperations(candidate.expected.operations)
+      !hasExactKeys(candidate.expected, expectedKeys)
     )
       throw new Error('ROLE_SPLIT_NEGATIVE_CORPUS_CASE_INVALID');
     ids.add(String(candidate.id));
 
     const expected = candidate.expected;
+    const operations = expected.operations;
+    if (!validOperations(operations)) throw new Error('ROLE_SPLIT_NEGATIVE_CORPUS_CASE_INVALID');
     if (
       !['SUCCESS', 'FAILURE', 'TIMEOUT'].includes(String(expected.exit)) ||
       ![
@@ -166,15 +167,13 @@ export function assertRoleSplitNegativeCorpus(
       throw new Error('ROLE_SPLIT_NEGATIVE_CORPUS_EXIT_INVALID');
     if (
       candidate.phase === 'CREATE' &&
-      (expected.operations.adopt !== 0 ||
-        expected.operations.restore !== 0 ||
-        expected.operations.comment !== 0)
+      (operations.adopt !== 0 || operations.restore !== 0 || operations.comment !== 0)
     )
       throw new Error('ROLE_SPLIT_NEGATIVE_CORPUS_CREATE_BOUNDARY_INVALID');
     if (
       candidate.phase === 'RESUME' &&
       expected.receipt === 'REJECTED' &&
-      (expected.operations.restore !== 0 || expected.operations.comment !== 0)
+      (operations.restore !== 0 || operations.comment !== 0)
     )
       throw new Error('ROLE_SPLIT_NEGATIVE_CORPUS_RECEIPT_BOUNDARY_INVALID');
     if (
