@@ -11,6 +11,7 @@ vi.mock('node:child_process', () => ({ spawn: vi.fn() }));
 
 import {
   runCommunitiesStagingRoleSplitPgRestore,
+  type CommunitiesStagingRoleSplitPgRestoreTarget,
   type CommunitiesStagingRoleSplitPgRestoreRunnerConfig,
 } from './communities-staging-role-split-pg-restore-runner.js';
 
@@ -159,12 +160,13 @@ describe('runCommunitiesStagingRoleSplitPgRestore', () => {
     }
   });
 
-  it.each([
+  const invalidTargets = [
     ['zero oid', { ...target, databaseOid: '0' }],
     ['unknown ssl', { ...target, sslMode: 'prefer' as never }],
     ['remote disable', { ...target, host: 'db.example', sslMode: 'disable' }],
     ['localhost disable', { ...target, host: 'localhost', sslMode: 'disable' }],
-  ])('rejects %s before it can spawn', async (_name, invalidTarget) => {
+  ] satisfies readonly [string, CommunitiesStagingRoleSplitPgRestoreTarget][];
+  it.each(invalidTargets)('rejects %s before it can spawn', async (_name, invalidTarget) => {
     vi.spyOn(process, 'platform', 'get').mockReturnValue('linux');
     const handles = await fixture();
     try {

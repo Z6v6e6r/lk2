@@ -107,8 +107,8 @@ further observation. It must never be treated as a retry or cleanup signal.
 The preflight connection factory must accept the runner AbortSignal and close its database client on
 abort; an unacknowledged cancellation is `PREFLIGHT_TERMINATION_UNCONFIRMED` and blocks all restore.
 
-`apps/migrator/src/communities-staging-role-split-marker-ceremony-pg-host.pg.test.ts` is a real
-but opt-in Linux PG16 failure matrix. It skips unless the exact confirmation
+`apps/migrator/src/communities-staging-role-split-pg-restore-runner.pg.test.ts` is the real,
+descriptor-pinned, opt-in Linux PG16 invalid-archive child-process probe. It skips unless the exact confirmation
 `PHUB_COMMUNITIES_MARKER_PG16_VERIFY=I_UNDERSTAND_PG16_VERIFY_IS_DISPOSABLE`, separate loopback
 `*_verify` source and clone URLs, and an absolute `pg_restore` path are supplied. It queries the
 actual clone identity, proves an OID mismatch fails before spawn, then feeds an invalid custom
