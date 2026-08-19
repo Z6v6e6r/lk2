@@ -14,11 +14,12 @@ test -f "$timeout_path" && test ! -L "$timeout_path" && test -x "$timeout_path" 
   test "$(stat -c %u "$timeout_path" 2>/dev/null || true)" = 0 &&
   test "$(stat -c %h "$timeout_path" 2>/dev/null || true)" = 1 || exit 1
 "$timeout_path" --version 2>/dev/null | grep -F 'GNU coreutils' >/dev/null || exit 1
-if test "${PHUB_COMMUNITIES_MARKER_TIMEOUT_ACTIVE:-}" != 1; then
+if test "${1:-}" != __PHUB_COMMUNITIES_MARKER_BOUNDED_CHILD_V1; then
   exec "$timeout_path" --signal=TERM --kill-after=15s 45m \
-    /usr/bin/env -i PATH="$PATH" PHUB_COMMUNITIES_MARKER_TIMEOUT_ACTIVE=1 \
-    SSH_ORIGINAL_COMMAND="${SSH_ORIGINAL_COMMAND:-}" "$script_path"
+    /usr/bin/env -i PATH="$PATH" SSH_ORIGINAL_COMMAND="${SSH_ORIGINAL_COMMAND:-}" \
+    "$script_path" __PHUB_COMMUNITIES_MARKER_BOUNDED_CHILD_V1
 fi
+test "$#" -eq 1 || exit 1
 
 fail() {
   printf '%s\n' "COMMUNITIES_ROLE_SPLIT_RESTORE_MARKER_CEREMONY_$1" >&2
@@ -59,7 +60,7 @@ assert_file() {
 
 original_command=${SSH_ORIGINAL_COMMAND:-}
 printf '%s' "$original_command" | grep -Eq \
-  '^RUN_COMMUNITIES_ROLE_SPLIT_RESTORE_MARKER_CEREMONY_V1 [A-Za-z0-9._-]+ [0-9a-f]{64} [A-Za-z0-9._-]+ [0-9a-f]{64}$' \
+  '^RUN_COMMUNITIES_ROLE_SPLIT_RESTORE_MARKER_CEREMONY_V2 (CREATE [A-Za-z0-9._-]+ [0-9a-f]{64} [A-Za-z0-9._-]+ [0-9a-f]{64}|RESUME [A-Za-z0-9._-]+ [0-9a-f]{64} [A-Za-z0-9._-]+ [0-9a-f]{64} [A-Za-z0-9._-]+ [0-9a-f]{64})$' \
   >/dev/null 2>&1 || fail CONFIRMATION_INVALID
 old_ifs=$IFS
 IFS=' '
@@ -67,11 +68,14 @@ set -f
 set -- $original_command
 set +f
 IFS=$old_ifs
-test "$#" -eq 5 || fail CONFIRMATION_INVALID
-request_basename=$2
-expected_request_sha=$3
-runtime_basename=$4
-expected_runtime_sha=$5
+phase=$2
+case "$phase:$#" in CREATE:6|RESUME:8) ;; *) fail CONFIRMATION_INVALID ;; esac
+request_basename=$3
+expected_request_sha=$4
+runtime_basename=$5
+expected_runtime_sha=$6
+receipt_basename=${7:-}
+expected_receipt_sha=${8:-}
 printf '%s' "$request_basename" | grep -Eq \
   '^communities-role-split-marker-request-[1-9][0-9]*-[1-9][0-9]*\.txt$' \
   >/dev/null 2>&1 || fail REQUEST_PATH_INVALID
@@ -101,6 +105,11 @@ for directory in "$request_root:0:$current_gid:750" "$backup_root:0:$current_gid
   test "$(file_value "$1" %a CUSTODY_INVALID)" = "$4" || fail CUSTODY_INVALID
 done
 test -d "$app_root" && test ! -L "$app_root" || fail CUSTODY_INVALID
+test "$(file_value "$app_root" %u APP_ROOT_CUSTODY_INVALID)" = 0 &&
+  test "$(file_value "$app_root" %h APP_ROOT_CUSTODY_INVALID)" = 1 || fail APP_ROOT_CUSTODY_INVALID
+app_root_mode=$(file_value "$app_root" %a APP_ROOT_CUSTODY_INVALID)
+case "$app_root_mode" in [0-7][0-7][0-7]) ;; *) fail APP_ROOT_CUSTODY_INVALID ;; esac
+case "$app_root_mode" in ?[2367]?|??[2367]) fail APP_ROOT_CUSTODY_INVALID ;; esac
 
 request=$request_root/$request_basename
 assert_file "$request" 0 "$current_gid" 440 REQUEST_CUSTODY_INVALID
@@ -216,11 +225,19 @@ test "$(file_value "$app_root" %u APP_ROOT_CUSTODY_INVALID)" = 0 &&
   test "$(file_value "$app_root" %d APP_ROOT_CUSTODY_INVALID)" = "$app_root_device" &&
   test "$(file_value "$app_root" %i APP_ROOT_CUSTODY_INVALID)" = "$app_root_inode" ||
   fail APP_ROOT_CUSTODY_INVALID
-for binding in "infrastructure.env:600:$infrastructure_env_sha" \
+for binding in "infrastructure.env:READABLE:$infrastructure_env_sha" \
   "compose.infrastructure.yaml:644:$compose_sha" "release.env:644:$release_env_sha"; do
   old_ifs=$IFS; IFS=:; set -- $binding; IFS=$old_ifs
   artifact=$app_root/$1
-  assert_file "$artifact" 0 0 "$2" APP_ARTIFACT_CUSTODY_INVALID
+  if test "$2" = READABLE; then
+    artifact_mode=$(file_value "$artifact" %a APP_ARTIFACT_CUSTODY_INVALID)
+    artifact_gid=$(file_value "$artifact" %g APP_ARTIFACT_CUSTODY_INVALID)
+    test "$artifact_gid" = "$current_gid" && test -r "$artifact" || fail APP_ARTIFACT_CUSTODY_INVALID
+    case "$artifact_mode" in 440|640) ;; *) fail APP_ARTIFACT_CUSTODY_INVALID ;; esac
+    assert_file "$artifact" 0 "$current_gid" "$artifact_mode" APP_ARTIFACT_CUSTODY_INVALID
+  else
+    assert_file "$artifact" 0 0 "$2" APP_ARTIFACT_CUSTODY_INVALID
+  fi
   test "$(file_value "$artifact" %h APP_ARTIFACT_CUSTODY_INVALID)" = 1 ||
     fail APP_ARTIFACT_CUSTODY_INVALID
   before=$(stat -c '%d:%i:%s:%Y:%Z' "$artifact")
@@ -229,6 +246,13 @@ for binding in "infrastructure.env:600:$infrastructure_env_sha" \
   test "$(stat -c '%d:%i:%s:%Y:%Z' "$artifact")" = "$before" ||
     fail APP_ARTIFACT_CHANGED
 done
+if test -e "$app_root/.env" || test -L "$app_root/.env"; then
+  env_mode=$(file_value "$app_root/.env" %a APP_ARTIFACT_CUSTODY_INVALID)
+  case "$env_mode" in 440|640) ;; *) fail APP_ARTIFACT_CUSTODY_INVALID ;; esac
+  assert_file "$app_root/.env" 0 "$current_gid" "$env_mode" APP_ARTIFACT_CUSTODY_INVALID
+  test "$(file_value "$app_root/.env" %h APP_ARTIFACT_CUSTODY_INVALID)" = 1 &&
+    test -r "$app_root/.env" || fail APP_ARTIFACT_CUSTODY_INVALID
+fi
 cd "$app_root"
 
 script=$(readlink -f "$0" 2>/dev/null || true)
@@ -273,9 +297,6 @@ fi
 chmod 600 "$lock_path"
 exec 9<>"$lock_path"
 flock -n 9 || fail LOCK_BUSY
-unresolved=$(find "$state_root" -maxdepth 1 -type f -name '.communities-role-split-marker-*.state' \
-  ! -exec grep -Eq '^CLEANED(_PRE_MARKER)?\|' {} \; -print -quit)
-test -z "$unresolved" || fail UNRESOLVED_STATE
 state_path=$state_root/.communities-role-split-marker-${run_id}-${run_attempt}.state
 atomic_state() {
   state_value=$1
@@ -286,34 +307,39 @@ atomic_state() {
   mv -f "$state_tmp" "$state_path"
   /usr/bin/sync -f "$state_root"
 }
-test ! -e "$state_path" && test ! -L "$state_path" || fail STATE_CREATE_FAILED
-atomic_state "CANDIDATE|$expected_request_sha"
+if test "$phase" = CREATE; then
+  unresolved=$(find "$state_root" -maxdepth 1 -type f -name '.communities-role-split-marker-*.state' -print -quit)
+  test -z "$unresolved" || fail UNRESOLVED_STATE
+  test ! -e "$state_path" && test ! -L "$state_path" || fail STATE_CREATE_FAILED
+  atomic_state "CREATE_PENDING|$expected_request_sha"
+else
+  assert_file "$state_path" "$current_uid" "$current_gid" 600 STATE_CUSTODY_INVALID
+  test "$(sed -n '1p' "$state_path")" = "CREATION_RECONCILIATION_REQUIRED|$expected_request_sha" ||
+    fail STATE_BINDING_INVALID
+fi
 
-infrastructure() {
-  capture_command DOCKER_COMPOSE docker compose --project-name "$compose_project" \
-    --env-file infrastructure.env -f compose.infrastructure.yaml "$@"
-}
 capture_command() {
-  label=$1
+  test -n "$1" || return 1
   shift
-  diagnostic_out=$(mktemp "$state_root/.diagnostic-${run_id}-${run_attempt}-${label}.out.XXXXXX")
-  diagnostic_err=$(mktemp "$state_root/.diagnostic-${run_id}-${run_attempt}-${label}.err.XXXXXX")
-  chmod 600 "$diagnostic_out" "$diagnostic_err"
-  if (ulimit -f 128; "$@") >"$diagnostic_out" 2>"$diagnostic_err"; then
-    test "$(wc -c < "$diagnostic_out")" -le 65536 &&
-      test "$(wc -c < "$diagnostic_err")" -le 65536 || fail DIAGNOSTIC_OVERSIZE
-    cat "$diagnostic_out"
-    rm -f "$diagnostic_out" "$diagnostic_err"
-    return 0
-  fi
-  return 1
+  command_status=$(mktemp "$state_root/.command-status-${run_id}-${run_attempt}.XXXXXX")
+  chmod 600 "$command_status"
+  captured=$(
+    ("$@"; printf '%s' "$?" > "$command_status") 2>/dev/null |
+      head -c 65537
+  )
+  status=$(cat "$command_status" 2>/dev/null || true)
+  rm -f "$command_status"
+  test "$status" = 0 || return 1
+  test "$(printf '%s' "$captured" | wc -c)" -le 65536 || fail DIAGNOSTIC_OVERSIZE
+  printf '%s' "$captured"
 }
 docker_capture() {
   capture_command DOCKER docker "$@"
 }
+container_exec() {
+  capture_command DOCKER_EXEC docker exec -i "$postgres_container_id" "$@"
+}
 assert_container() {
-  observed_container=$(infrastructure ps -q postgres) || fail CONTAINER_IDENTITY_INVALID
-  test "$observed_container" = "$postgres_container_id" || fail CONTAINER_IDENTITY_INVALID
   observed_container_binding=$(docker_capture inspect --format \
     '{{.Id}}|{{.Image}}|{{index .Config.Labels "com.docker.compose.project"}}|{{index .Config.Labels "com.docker.compose.service"}}' \
     "$postgres_container_id") || fail CONTAINER_IDENTITY_INVALID
@@ -321,13 +347,13 @@ assert_container() {
     fail CONTAINER_IDENTITY_INVALID
 }
 admin_psql() {
-  infrastructure exec -T postgres sh -ec \
+  container_exec sh -ec \
     'PGOPTIONS="-c default_transaction_read_only=on -c statement_timeout=15000 -c lock_timeout=2000 -c search_path=pg_catalog" psql -X -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -At -F "|" -c "$1"' \
     sh "$1"
 }
 database_psql() {
   database=$1 sql=$2
-  infrastructure exec -T postgres sh -ec \
+  container_exec sh -ec \
     'PGOPTIONS="-c default_transaction_read_only=on -c statement_timeout=15000 -c lock_timeout=2000 -c search_path=pg_catalog" psql -X -U "$POSTGRES_USER" -d "$1" -v ON_ERROR_STOP=1 -At -F "|" -c "$2"' \
     sh "$database" "$sql"
 }
@@ -338,33 +364,28 @@ source_ledger() {
   database_psql "$source_database" 'select filename, checksum from public.schema_migrations order by filename;'
 }
 assert_container
-clone_created=false
+clone_authenticated=false
 clone_oid=
 cleanup_forbidden=false
 payload=
+retain_for_reconciliation() {
+  retained=$(admin_psql "select d.oid::text||'|'||d.datname||'|'||r.rolname||'|'||r.oid::text||'|'||coalesce(shobj_description(d.oid, 'pg_database'), '') from pg_catalog.pg_database d join pg_catalog.pg_roles r on r.oid=d.datdba where d.oid=$clone_oid::oid;") || return 1
+  test "$retained" = "$clone_oid|$restore_database|$clone_owner|$clone_owner_oid|" || return 1
+  atomic_state "QUARANTINE_PENDING_RECONCILIATION_REQUIRED|$expected_request_sha|$clone_oid|$clone_owner|$clone_owner_oid|NO_COMMENT"
+  clone_authenticated=false
+}
 cleanup_before_marker() {
   if test -n "$payload" && test -f "$payload" && test ! -L "$payload"; then
     rm -f "$payload"
     payload=
   fi
   test "$cleanup_forbidden" = false || return 0
-  if test "$clone_created" = true; then
+  if test "$clone_authenticated" = true; then
     test -n "$clone_oid" || return 1
     assert_container || return 1
     observed_binding=$(admin_psql "select d.oid::text||'|'||r.rolname||'|'||r.oid::text||'|'||coalesce(shobj_description(d.oid, 'pg_database'), '') from pg_catalog.pg_database d join pg_catalog.pg_roles r on r.oid=d.datdba where d.datname='$restore_database';") || return 1
     test "$observed_binding" = "$clone_oid|$clone_owner|$clone_owner_oid|" || return 1
-    atomic_state "PRE_MARKER_DROPPING|$expected_request_sha|$clone_oid"
-    if ! infrastructure exec -T postgres sh -ec 'dropdb -U "$POSTGRES_USER" "$1"' \
-      sh "$restore_database" >/dev/null; then
-      remaining_oid=$(admin_psql "select oid::text from pg_catalog.pg_database where datname='$restore_database';") || return 1
-      test -z "$remaining_oid" || return 1
-    fi
-    remaining_oid=$(admin_psql "select oid::text from pg_catalog.pg_database where datname='$restore_database';") || return 1
-    test -z "$remaining_oid" || return 1
-    atomic_state "CLEANED_PRE_MARKER|$expected_request_sha|$clone_oid"
-    clone_created=false
-  else
-    atomic_state "CLEANED_PRE_MARKER|$expected_request_sha|NONE"
+    retain_for_reconciliation || return 1
   fi
 }
 on_exit() {
@@ -399,11 +420,13 @@ server_version_num=$(admin_psql "show server_version_num;")
 case "$server_version_num" in 16[0-9][0-9][0-9][0-9]) ;; *) fail POSTGRES_MAJOR_MISMATCH ;; esac
 observed_release=$(sed -n 's/^RELEASE=//p' "$app_root/release.env" 2>/dev/null || true)
 test "$observed_release" = "$active_release" || fail ACTIVE_RELEASE_MISMATCH
-test -z "$(admin_psql "select oid::text from pg_catalog.pg_database where datname='$restore_database';")" ||
-  fail CLONE_ALREADY_EXISTS
+if test "$phase" = CREATE; then
+  test -z "$(admin_psql "select oid::text from pg_catalog.pg_database where datname='$restore_database';")" ||
+    fail CLONE_ALREADY_EXISTS
+fi
 
 test "$(stat -c '%d:%i:%s:%Y:%Z:%h:%u:%g:%a' "$backup")" = "$backup_stat" || fail BACKUP_CHANGED
-archive_toc=$(infrastructure exec -T postgres pg_restore --list < "$backup_fd") || fail ARCHIVE_TOC_INVALID
+archive_toc=$(container_exec pg_restore --list < "$backup_fd") || fail ARCHIVE_TOC_INVALID
 test "$(stat -c '%d:%i:%s:%Y:%Z:%h:%u:%g:%a' "$backup")" = "$backup_stat" || fail BACKUP_CHANGED
 test -n "$archive_toc" || fail ARCHIVE_TOC_INVALID
 test "$(printf '%s\n' "$archive_toc" | sha256sum | cut -d ' ' -f 1)" = "$archive_toc_sha" ||
@@ -412,24 +435,53 @@ printf '%s\n' "$archive_toc" | awk '$4 == "ACL" || ($4 == "DEFAULT" && $5 == "AC
   fail ARCHIVE_ACL_MISSING
 
 assert_container
-if ! infrastructure exec -T postgres sh -ec \
-  'createdb -U "$POSTGRES_USER" --template=template0 --owner="$1" "$2"' \
-  sh "$clone_owner" "$restore_database" >/dev/null; then
-  atomic_state "CANDIDATE_RECONCILIATION_REQUIRED|$expected_request_sha"
+if test "$phase" = CREATE; then
+  if ! container_exec sh -ec \
+    'createdb -U "$POSTGRES_USER" --template=template0 --owner="$1" "$2"' \
+    sh "$clone_owner" "$restore_database" >/dev/null; then
+    atomic_state "CREATION_RECONCILIATION_REQUIRED|$expected_request_sha"
+    cleanup_forbidden=true
+    fail CREATEDB_RECONCILIATION_REQUIRED
+  fi
+  atomic_state "CREATION_RECONCILIATION_REQUIRED|$expected_request_sha"
   cleanup_forbidden=true
-  fail CREATEDB_AMBIGUOUS
+  fail CREATION_RECEIPT_REQUIRED
 fi
-clone_created=true
-clone_identity=$(admin_psql "select d.oid::text, r.rolname, r.oid::text from pg_catalog.pg_database d join pg_catalog.pg_roles r on r.oid=d.datdba where d.datname='$restore_database';")
-clone_oid=${clone_identity%%|*}
-is_positive_decimal "$clone_oid" || fail CLONE_IDENTITY_MISMATCH
-test "$clone_oid" != "$source_database_oid" && test "$clone_identity" = "$clone_oid|$clone_owner|$clone_owner_oid" ||
-  fail CLONE_IDENTITY_MISMATCH
+
+printf '%s' "$receipt_basename" | grep -Eq \
+  '^communities-role-split-marker-creation-receipt-[1-9][0-9]*-[1-9][0-9]*\.txt$' \
+  >/dev/null 2>&1 || fail RECEIPT_PATH_INVALID
+is_sha256 "$expected_receipt_sha" || fail RECEIPT_SHA_INVALID
+receipt=$request_root/$receipt_basename
+assert_file "$receipt" 0 "$current_gid" 440 RECEIPT_CUSTODY_INVALID
+test "$(file_value "$receipt" %h RECEIPT_CUSTODY_INVALID)" = 1 || fail RECEIPT_CUSTODY_INVALID
+test "$(file_sha256 "$receipt" RECEIPT_SHA_INVALID)" = "$expected_receipt_sha" || fail RECEIPT_SHA_INVALID
+receipt_line=0
+while IFS= read -r line || test -n "$line"; do
+  receipt_line=$((receipt_line + 1))
+  case "$receipt_line:$line" in
+    1:PHUB_COMMUNITIES_ROLE_SPLIT_CLONE_CREATION_RECEIPT_V1) ;;
+    2:restoreDatabase=*) receipt_database=${line#*=} ;;
+    3:cloneDatabaseOid=*) clone_oid=${line#*=} ;;
+    4:cloneDatabaseOwner=*) receipt_owner=${line#*=} ;;
+    5:cloneDatabaseOwnerOid=*) receipt_owner_oid=${line#*=} ;;
+    6:markerRequestSha256=*) receipt_request_sha=${line#*=} ;;
+    *) fail RECEIPT_SHAPE_INVALID ;;
+  esac
+done < "$receipt"
+test "$receipt_line" -eq 6 && test "$receipt_basename" = \
+  "communities-role-split-marker-creation-receipt-${run_id}-${run_attempt}.txt" || fail RECEIPT_BINDING_INVALID
+is_positive_decimal "$clone_oid" && test "$clone_oid" != "$source_database_oid" &&
+  test "$receipt_database|$receipt_owner|$receipt_owner_oid|$receipt_request_sha" = \
+  "$restore_database|$clone_owner|$clone_owner_oid|$expected_request_sha" || fail RECEIPT_BINDING_INVALID
+clone_identity=$(admin_psql "select d.oid::text||'|'||d.datname||'|'||r.rolname||'|'||r.oid::text||'|'||coalesce(shobj_description(d.oid, 'pg_database'), '') from pg_catalog.pg_database d join pg_catalog.pg_roles r on r.oid=d.datdba where d.oid=$clone_oid::oid;")
+test "$clone_identity" = "$clone_oid|$restore_database|$clone_owner|$clone_owner_oid|" || fail CLONE_IDENTITY_MISMATCH
+clone_authenticated=true
 atomic_state "OWNED|$expected_request_sha|$clone_oid"
 
 assert_container
 test "$(stat -c '%d:%i:%s:%Y:%Z:%h:%u:%g:%a' "$backup")" = "$backup_stat" || fail BACKUP_CHANGED
-infrastructure exec -T postgres sh -ec \
+container_exec sh -ec \
   'pg_restore -U "$POSTGRES_USER" --exit-on-error --no-password --dbname="$1"' \
   sh "$restore_database" < "$backup_fd" >/dev/null || fail RESTORE_FAILED
 test "$(stat -c '%d:%i:%s:%Y:%Z:%h:%u:%g:%a' "$backup")" = "$backup_stat" || fail BACKUP_CHANGED
@@ -477,8 +529,8 @@ payload=
 atomic_state "MARKER_PENDING|$expected_request_sha|$clone_oid|$marker_value_sha"
 cleanup_forbidden=true
 assert_container
-comment_sql="do \$\$ declare observed_oid oid; observed_owner oid; observed_comment text; begin select d.oid,d.datdba,shobj_description(d.oid,'pg_database') into observed_oid,observed_owner,observed_comment from pg_catalog.pg_database d where d.datname='$restore_database'; if observed_oid is distinct from $clone_oid::oid or observed_owner is distinct from $clone_owner_oid::oid or observed_comment is not null then raise exception 'binding mismatch'; end if; execute format('COMMENT ON DATABASE %I IS %L','$restore_database','$marker'); end \$\$;"
-if ! infrastructure exec -T postgres sh -ec \
+comment_sql="begin; lock table pg_catalog.pg_database in access exclusive mode; do \$\$ declare observed_name name; observed_owner oid; observed_comment text; begin select d.datname,d.datdba,shobj_description(d.oid,'pg_database') into observed_name,observed_owner,observed_comment from pg_catalog.pg_database d where d.oid=$clone_oid::oid; if observed_name is distinct from '$restore_database'::name or observed_owner is distinct from $clone_owner_oid::oid or observed_comment is not null then raise exception 'binding mismatch'; end if; execute format('COMMENT ON DATABASE %I IS %L',observed_name,'$marker'); end \$\$; commit;"
+if ! container_exec sh -ec \
   'psql -X -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -c "$1"' \
   sh "$comment_sql" >/dev/null; then
   fail MARKER_ACTION_AMBIGUOUS
@@ -493,6 +545,7 @@ printf '%s\n' \
   'schemaVersion=communities-role-split-clone-marker-evidence-v1' \
   'status=MARKED' \
   "requestSha256=$expected_request_sha" \
+  "creationReceiptSha256=$expected_receipt_sha" \
   "markerPayloadSha256=$marker_payload_sha" \
   "markerValueSha256=$marker_value_sha" \
   "backupSha256=$backup_sha" \

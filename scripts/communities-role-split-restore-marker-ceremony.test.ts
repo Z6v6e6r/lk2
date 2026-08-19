@@ -1,6 +1,7 @@
-import { execFile } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { chmod, mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -21,6 +22,16 @@ const cleanupSource = new URL(
 );
 const sha256 = (value: Uint8Array | string): string =>
   createHash('sha256').update(value).digest('hex');
+const hasTrustedGnuTimeout = (() => {
+  if (!existsSync('/usr/bin/timeout')) return false;
+  try {
+    return execFileSync('/usr/bin/timeout', ['--version'], { encoding: 'utf8' }).includes(
+      'GNU coreutils',
+    );
+  } catch {
+    return false;
+  }
+})();
 
 interface Result {
   readonly code: number;
@@ -42,6 +53,7 @@ let requestPath = '';
 let backupPath = '';
 let evidencePath = '';
 let runtimePath = '';
+let receiptPath = '';
 let dockerLog = '';
 let cloneState = '';
 let markerState = '';
@@ -51,7 +63,12 @@ async function execute(path: string, originalCommand: string, extraEnv = {}): Pr
   return await new Promise((resolve) => {
     execFile(
       '/bin/sh',
-      [path],
+      [
+        path,
+        path === cleanupPath
+          ? '__PHUB_COMMUNITIES_MARKER_CLEANUP_BOUNDED_CHILD_V1'
+          : '__PHUB_COMMUNITIES_MARKER_BOUNDED_CHILD_V1',
+      ],
       {
         env: {
           ...process.env,
@@ -69,8 +86,6 @@ async function execute(path: string, originalCommand: string, extraEnv = {}): Pr
           PHUB_TEST_SCRIPT_CEREMONY: ceremonyPath,
           PHUB_TEST_STATE_ROOT: stateRoot,
           PHUB_TEST_BIN_ROOT: binRoot,
-          PHUB_COMMUNITIES_MARKER_TIMEOUT_ACTIVE: '1',
-          PHUB_COMMUNITIES_MARKER_CLEANUP_TIMEOUT_ACTIVE: '1',
           SSH_ORIGINAL_COMMAND: originalCommand,
           ...extraEnv,
         },
@@ -81,12 +96,33 @@ async function execute(path: string, originalCommand: string, extraEnv = {}): Pr
   });
 }
 
-async function runCeremony(extraEnv = {}): Promise<Result> {
+async function runCreate(extraEnv = {}): Promise<Result> {
   const contents = canonicalCommunitiesStagingRoleSplitRestoreMarkerRequest(request);
   await writeFile(requestPath, contents, 'utf8');
   return execute(
     ceremonyPath,
-    `RUN_COMMUNITIES_ROLE_SPLIT_RESTORE_MARKER_CEREMONY_V1 communities-role-split-marker-request-123-4.txt ${sha256(contents)} communities-role-split-marker-runtime-123-4.txt ${sha256(await readFile(runtimePath))}`,
+    `RUN_COMMUNITIES_ROLE_SPLIT_RESTORE_MARKER_CEREMONY_V2 CREATE communities-role-split-marker-request-123-4.txt ${sha256(contents)} communities-role-split-marker-runtime-123-4.txt ${sha256(await readFile(runtimePath))}`,
+    extraEnv,
+  );
+}
+
+async function runCeremony(extraEnv = {}): Promise<Result> {
+  const created = await runCreate(extraEnv);
+  expect(created.stderr).toBe(
+    'COMMUNITIES_ROLE_SPLIT_RESTORE_MARKER_CEREMONY_CREATION_RECEIPT_REQUIRED\n',
+  );
+  const contents = canonicalCommunitiesStagingRoleSplitRestoreMarkerRequest(request);
+  const receipt = `PHUB_COMMUNITIES_ROLE_SPLIT_CLONE_CREATION_RECEIPT_V1
+restoreDatabase=phub_restore_123_4
+cloneDatabaseOid=45678
+cloneDatabaseOwner=phub_staging
+cloneDatabaseOwnerOid=16384
+markerRequestSha256=${sha256(contents)}
+`;
+  await writeFile(receiptPath, receipt, 'utf8');
+  return execute(
+    ceremonyPath,
+    `RUN_COMMUNITIES_ROLE_SPLIT_RESTORE_MARKER_CEREMONY_V2 RESUME communities-role-split-marker-request-123-4.txt ${sha256(contents)} communities-role-split-marker-runtime-123-4.txt ${sha256(await readFile(runtimePath))} communities-role-split-marker-creation-receipt-123-4.txt ${sha256(receipt)}`,
     extraEnv,
   );
 }
@@ -137,6 +173,7 @@ beforeEach(async () => {
   cloneState = join(root, 'clone.exists');
   markerState = join(root, 'database.comment');
   runtimePath = join(requestRoot, 'communities-role-split-marker-runtime-123-4.txt');
+  receiptPath = join(requestRoot, 'communities-role-split-marker-creation-receipt-123-4.txt');
   await Promise.all(
     [requestRoot, cleanupRequestRoot, backupRoot, stateRoot, appRoot, binRoot].map((path) =>
       mkdir(path),
@@ -194,6 +231,7 @@ beforeEach(async () => {
     ),
   ]);
   await Promise.all([ceremonyPath, cleanupPath, helperPath].map((path) => chmod(path, 0o755)));
+  await chmod(join(appRoot, 'infrastructure.env'), 0o440);
 
   await writeFile(
     join(binRoot, 'readlink'),
@@ -224,7 +262,7 @@ case "$path" in
   "$PHUB_TEST_BACKUP_ROOT") uid=0; gid=$(id -g); mode=750 ;;
   "$PHUB_TEST_STATE_ROOT") uid=$(id -u); gid=$(id -g); mode=700 ;;
   "$PHUB_TEST_APP_ROOT") uid=0; gid=0; mode=755; inode=100 ;;
-  "$PHUB_TEST_APP_ROOT/infrastructure.env") uid=0; gid=0; mode=600; inode=101 ;;
+  "$PHUB_TEST_APP_ROOT/infrastructure.env") uid=0; gid=$(id -g); mode=440; inode=101 ;;
   "$PHUB_TEST_APP_ROOT/compose.infrastructure.yaml") uid=0; gid=0; mode=644; inode=102 ;;
   "$PHUB_TEST_APP_ROOT/release.env") uid=0; gid=0; mode=644; inode=103 ;;
   "$PHUB_TEST_SCRIPT_CEREMONY"|"$PHUB_TEST_SCRIPT_CLEANUP"|"$PHUB_TEST_HELPER"|"$PHUB_TEST_BIN_ROOT/timeout"|"$PHUB_TEST_BIN_ROOT/sync") uid=0; gid=0; mode=755 ;;
@@ -255,7 +293,6 @@ test -z "\${DOCKER_HOST:-}\${DOCKER_CONTEXT:-}\${COMPOSE_FILE:-}\${COMPOSE_PROJE
 printf '%s\n' "$*" >> "$PHUB_TEST_DOCKER_LOG"
 all=$*
 case "$all" in
-  *compose*ps*postgres*) printf '%s\n' '${'c'.repeat(64)}' ;;
   *inspect*com.docker.compose.project*) printf '%s\n' '${'c'.repeat(64)}|sha256:${'d'.repeat(64)}|phubmarker|postgres' ;;
   *pg_restore*--list*)
     printf '%s\n' '1; 0 0 ACL - public postgres' '2; 0 0 DEFAULT ACL - TABLES postgres'
@@ -271,16 +308,28 @@ case "$all" in
   *pg_restore*--exit-on-error*)
     test "\${PHUB_TEST_RESTORE_FAIL:-0}" != 1 || exit 82
     ;;
-  *dropdb*)
-    rm -f "$PHUB_TEST_CLONE_STATE"
-    if test "\${PHUB_TEST_DROP_REPLACEMENT:-0}" = 1; then printf '%s\n' 99999 > "$PHUB_TEST_CLONE_STATE"; exit 82; fi
-    test "\${PHUB_TEST_DROP_AMBIGUOUS:-0}" != 1 || exit 82
+  *ALTER*DATABASE*RENAME*)
+    test "\${PHUB_TEST_QUARANTINE_FAIL:-0}" != 1 || exit 84
+    printf '%s\n' "$all" | grep -Eo 'phub_quarantine_[0-9]+_[0-9a-f]{16}' | tail -1 > "$PHUB_TEST_CLONE_STATE.quarantined"
     ;;
-  *COMMENT*DATABASE*)
+  *begin*lock*pg_catalog.pg_database*access*exclusive*COMMENT*DATABASE*commit*)
     marker=$(printf '%s\n' "$all" | sed -n "s/.* IS '\\([^']*\\)'.*/\\1/p")
     test -n "$marker" || marker=$(printf '%s\n' "$all" | grep -Eo 'phub-communities-role-split-clone-v1:[0-9a-f]{64}' | tail -1)
     printf '%s' "$marker" > "$PHUB_TEST_MARKER_STATE"
     test "\${PHUB_TEST_COMMENT_AMBIGUOUS:-0}" != 1 || exit 83
+    ;;
+  *where*d.oid=45678*)
+    test -f "$PHUB_TEST_CLONE_STATE" || exit 0
+    marker=''; test ! -f "$PHUB_TEST_MARKER_STATE" || marker=$(cat "$PHUB_TEST_MARKER_STATE")
+    test "\${PHUB_TEST_BAD_READBACK:-0}" != 1 || marker=wrong
+    oid=$(cat "$PHUB_TEST_CLONE_STATE")
+    name=phub_restore_123_4
+    test ! -f "$PHUB_TEST_CLONE_STATE.quarantined" || name=$(cat "$PHUB_TEST_CLONE_STATE.quarantined")
+    case "$all" in
+      *d.oid::text*'|'*d.datname*) printf '%s|%s|phub_staging|16384|%s\n' "$oid" "$name" "$marker" ;;
+      *d.datname*'|'*) printf '%s|phub_staging|16384|%s\n' "$name" "$marker" ;;
+      *) printf '%s|phub_staging|16384|%s\n' "$oid" "$marker" ;;
+    esac
     ;;
   *shobj_description*)
     test -f "$PHUB_TEST_CLONE_STATE" || exit 0
@@ -372,11 +421,53 @@ afterEach(async () => {
 });
 
 describe('runnable role-split restore-marker clone ceremony', () => {
+  it.runIf(hasTrustedGnuTimeout)(
+    'kills a hanging child and grandchild with the trusted GNU timeout process group',
+    async () => {
+      const parentPid = join(root, 'timeout-parent.pid');
+      const childPid = join(root, 'timeout-child.pid');
+      const hanger = join(root, 'timeout-hanger.sh');
+      await writeFile(
+        hanger,
+        '#!/bin/sh\ntrap "" TERM\nprintf "%s\\n" "$$" > "$1"\n/bin/sh -c \'trap "" TERM; printf "%s\\n" "$$" > "$1"; while :; do sleep 1; done\' sh "$2" &\nwait\n',
+        'utf8',
+      );
+      await chmod(hanger, 0o755);
+      const result = await new Promise<Result>((resolve) => {
+        execFile(
+          '/usr/bin/timeout',
+          ['--signal=TERM', '--kill-after=1s', '1s', hanger, parentPid, childPid],
+          (error, stdout, stderr) =>
+            resolve({ code: error && 'code' in error ? Number(error.code) : 0, stdout, stderr }),
+        );
+      });
+      expect(result.code).not.toBe(0);
+      for (const pidPath of [parentPid, childPid]) {
+        const pid = Number((await readFile(pidPath, 'utf8')).trim());
+        expect(() => process.kill(pid, 0)).toThrow();
+      }
+    },
+    5_000,
+  );
+
+  it('always stops CREATE for an independently pinned OID receipt before restore', async () => {
+    const result = await runCreate();
+    expect(result.stderr).toBe(
+      'COMMUNITIES_ROLE_SPLIT_RESTORE_MARKER_CEREMONY_CREATION_RECEIPT_REQUIRED\n',
+    );
+    expect(
+      await readFile(join(stateRoot, '.communities-role-split-marker-123-4.state'), 'utf8'),
+    ).toMatch(/^CREATION_RECONCILIATION_REQUIRED\|[a-f0-9]{64}\n$/u);
+    const calls = await readFile(dockerLog, 'utf8');
+    expect(calls).toContain('createdb');
+    expect(calls).not.toContain('pg_restore -U "$POSTGRES_USER" --exit-on-error');
+  }, 15_000);
+
   it('restores ownership and ACLs, writes/readbacks the marker, and retains the clone', async () => {
     const result = await runCeremony();
     expect(result).toMatchObject({ code: 0, stderr: '' });
     expect(result.stderr).toBe('');
-    expect(result.stdout.trimEnd().split('\n')).toHaveLength(29);
+    expect(result.stdout.trimEnd().split('\n')).toHaveLength(30);
     expect(result.stdout).toContain(
       'schemaVersion=communities-role-split-clone-marker-evidence-v1\nstatus=MARKED\n',
     );
@@ -395,15 +486,18 @@ describe('runnable role-split restore-marker clone ceremony', () => {
     ).toMatch(/^MARKED\|[a-f0-9]{64}\|45678\|[a-f0-9]{64}\n$/u);
   }, 15_000);
 
-  it('auto-cleans only the recorded clone OID before marker commit', async () => {
+  it('retains the receipt-bound clone without rename or delete after a pre-marker failure', async () => {
     const result = await runCeremony({ PHUB_TEST_RESTORE_FAIL: '1' });
     expect(result.code).not.toBe(0);
     const calls = await readFile(dockerLog, 'utf8');
-    expect(calls).toContain('dropdb -U "$POSTGRES_USER" "$1"');
-    await expect(readFile(cloneState)).rejects.toThrow();
+    expect(calls).not.toContain('ALTER DATABASE');
+    expect(calls).not.toContain('dropdb');
+    await expect(readFile(cloneState)).resolves.toBeDefined();
     expect(
       await readFile(join(stateRoot, '.communities-role-split-marker-123-4.state'), 'utf8'),
-    ).toMatch(/^CLEANED_PRE_MARKER\|[a-f0-9]{64}\|45678\n$/u);
+    ).toMatch(
+      /^QUARANTINE_PENDING_RECONCILIATION_REQUIRED\|[a-f0-9]{64}\|45678\|phub_staging\|16384\|NO_COMMENT\n$/u,
+    );
   }, 15_000);
 
   it('never auto-cleans after the marker commit, including readback failure', async () => {
@@ -415,13 +509,13 @@ describe('runnable role-split restore-marker clone ceremony', () => {
   }, 15_000);
 
   it('never adopts or drops an ambiguous createdb outcome', async () => {
-    const result = await runCeremony({ PHUB_TEST_CREATEDB_AMBIGUOUS: '1' });
+    const result = await runCreate({ PHUB_TEST_CREATEDB_AMBIGUOUS: '1' });
     expect(result.stderr).toBe(
-      'COMMUNITIES_ROLE_SPLIT_RESTORE_MARKER_CEREMONY_CREATEDB_AMBIGUOUS\n',
+      'COMMUNITIES_ROLE_SPLIT_RESTORE_MARKER_CEREMONY_CREATEDB_RECONCILIATION_REQUIRED\n',
     );
     expect(
       await readFile(join(stateRoot, '.communities-role-split-marker-123-4.state'), 'utf8'),
-    ).toMatch(/^CANDIDATE_RECONCILIATION_REQUIRED\|[a-f0-9]{64}\n$/u);
+    ).toMatch(/^CREATION_RECONCILIATION_REQUIRED\|[a-f0-9]{64}\n$/u);
     expect(await readFile(dockerLog, 'utf8')).not.toContain('dropdb');
     await expect(readFile(cloneState)).resolves.toBeDefined();
   }, 15_000);
@@ -447,34 +541,51 @@ describe('runnable role-split restore-marker clone ceremony', () => {
     });
     expect(result.code).toBe(0);
     expect(`${result.stdout}${result.stderr}`).not.toContain('SECRET_SENTINEL');
+    const stateFiles = await readdir(stateRoot);
+    expect(stateFiles.some((name) => name.includes('diagnostic'))).toBe(false);
+    for (const name of stateFiles) {
+      expect(await readFile(join(stateRoot, name), 'utf8')).not.toContain('SECRET_SENTINEL');
+    }
+  }, 15_000);
+
+  it('uses a real executor-readable 0440 infrastructure.env fixture', async () => {
+    expect(process.getuid?.()).not.toBe(0);
+    await expect(readFile(join(appRoot, 'infrastructure.env'), 'utf8')).resolves.toContain(
+      'POSTGRES_DB=',
+    );
+    expect((await runCreate()).stderr).toContain('CREATION_RECEIPT_REQUIRED');
   }, 15_000);
 
   it('fails artifact digest custody before the first Docker call', async () => {
     await writeFile(join(appRoot, 'compose.infrastructure.yaml'), 'tampered\n', 'utf8');
-    const result = await runCeremony();
+    const result = await runCreate();
     expect(result.code).not.toBe(0);
     await expect(readFile(dockerLog)).rejects.toThrow();
   }, 15_000);
 
-  it('completes an ambiguous drop only when the recorded OID is absent', async () => {
+  it('records cleanup reconciliation without rename or database deletion', async () => {
     expect((await runCeremony()).code).toBe(0);
-    const result = await runCleanup({ PHUB_TEST_DROP_AMBIGUOUS: '1' });
+    const result = await runCleanup();
     expect(result.code).toBe(0);
+    expect(result.stdout).toContain('status=QUARANTINE_PENDING_RECONCILIATION_REQUIRED');
+    expect(await readFile(dockerLog, 'utf8')).not.toContain('ALTER DATABASE');
+    expect(await readFile(dockerLog, 'utf8')).not.toContain('dropdb');
     expect(
       await readFile(join(stateRoot, '.communities-role-split-marker-123-4.state'), 'utf8'),
-    ).toMatch(/^CLEANED\|[a-f0-9]{64}\|45678\|[a-f0-9]{64}\n$/u);
+    ).toMatch(
+      /^QUARANTINE_PENDING_RECONCILIATION_REQUIRED\|[a-f0-9]{64}\|45678\|phub_staging\|16384\|[a-f0-9]{64}\|[a-f0-9]{64}\n$/u,
+    );
   }, 20_000);
 
-  it('retains DROPPING and never drops a replacement database', async () => {
+  it('never calls a rename primitive during cleanup reconciliation', async () => {
     expect((await runCeremony()).code).toBe(0);
-    const result = await runCleanup({ PHUB_TEST_DROP_REPLACEMENT: '1' });
-    expect(result.stderr).toBe(
-      'COMMUNITIES_ROLE_SPLIT_RESTORE_MARKER_CLEANUP_DATABASE_REPLACEMENT_DETECTED\n',
-    );
-    expect(await readFile(cloneState, 'utf8')).toBe('99999\n');
+    const result = await runCleanup({ PHUB_TEST_QUARANTINE_FAIL: '1' });
+    expect(result.code).toBe(0);
+    expect(await readFile(cloneState, 'utf8')).toBe('45678\n');
     expect(
       await readFile(join(stateRoot, '.communities-role-split-marker-123-4.state'), 'utf8'),
-    ).toMatch(/^DROPPING\|[a-f0-9]{64}\|45678\|[a-f0-9]{64}\|[a-f0-9]{64}\n$/u);
+    ).toContain('QUARANTINE_PENDING_RECONCILIATION_REQUIRED');
+    expect(await readFile(dockerLog, 'utf8')).not.toContain('ALTER DATABASE');
   }, 20_000);
 
   it('requires a separate exact cleanup request bound to marker, request and clone OID', async () => {
@@ -522,9 +633,9 @@ cleanupWriterSha256=${sha256(installedCleanup)}
     expect(cleanupResult.code).toBe(0);
     expect(cleanupResult.stderr).toBe('');
     expect(cleanupResult.stdout).toContain(
-      'schemaVersion=communities-role-split-clone-marker-cleanup-evidence-v1\nstatus=CLEANED\n',
+      'schemaVersion=communities-role-split-clone-marker-cleanup-evidence-v1\nstatus=QUARANTINE_PENDING_RECONCILIATION_REQUIRED\n',
     );
-    await expect(readFile(cloneState)).rejects.toThrow();
+    await expect(readFile(cloneState)).resolves.toBeDefined();
   }, 15_000);
 
   it('contains no role, grant, migration, deploy or shared-database mutation primitive', async () => {
@@ -533,14 +644,20 @@ cleanupWriterSha256=${sha256(installedCleanup)}
       readFile(cleanupSource, 'utf8'),
     ]);
     expect(`${ceremony}\n${cleanup}`).not.toMatch(
-      /\b(?:CREATE|ALTER|DROP)\s+(?:ROLE|USER)\b|\bGRANT\b|\bREVOKE\b|\bdb:migrate\b|34_V1|docker\s+(?:push|deploy)|ALTER\s+DATABASE/iu,
+      /\b(?:CREATE|ALTER|DROP)\s+(?:ROLE|USER)\b|\bGRANT\b|\bREVOKE\b|\bdb:migrate\b|34_V1|docker\s+(?:push|deploy)|\bdropdb\b|(?:ALTER|DROP)\s+DATABASE/iu,
     );
     expect(ceremony).toContain('PATH=/usr/sbin:/usr/bin:/sbin:/bin');
     expect(ceremony).toContain('/proc/$$/fd/8');
-    expect(ceremony).toContain('CANDIDATE_RECONCILIATION_REQUIRED');
+    expect(ceremony).toContain('CREATION_RECONCILIATION_REQUIRED');
     expect(ceremony).toContain('MARKER_PENDING');
-    expect(cleanup).toContain('DROPPING');
+    expect(cleanup).toContain('QUARANTINE_PENDING_RECONCILIATION_REQUIRED');
+    expect(`${ceremony}\n${cleanup}`).toContain(
+      'lock table pg_catalog.pg_database in access exclusive mode',
+    );
+    expect(`${ceremony}\n${cleanup}`).not.toContain('docker compose');
+    expect(`${ceremony}\n${cleanup}`).not.toContain('TIMEOUT_ACTIVE');
+    expect(ceremony).toContain('__PHUB_COMMUNITIES_MARKER_BOUNDED_CHILD_V1');
     expect(`${ceremony}\n${cleanup}`).toContain('--kill-after=15s');
-    expect(`${ceremony}\n${cleanup}`).toContain('ulimit -f 128');
+    expect(`${ceremony}\n${cleanup}`).toContain('head -c 65537');
   });
 });

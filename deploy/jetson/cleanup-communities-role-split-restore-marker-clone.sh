@@ -14,11 +14,12 @@ test -f "$timeout_path" && test ! -L "$timeout_path" && test -x "$timeout_path" 
   test "$(stat -c %u "$timeout_path" 2>/dev/null || true)" = 0 &&
   test "$(stat -c %h "$timeout_path" 2>/dev/null || true)" = 1 || exit 1
 "$timeout_path" --version 2>/dev/null | grep -F 'GNU coreutils' >/dev/null || exit 1
-if test "${PHUB_COMMUNITIES_MARKER_CLEANUP_TIMEOUT_ACTIVE:-}" != 1; then
+if test "${1:-}" != __PHUB_COMMUNITIES_MARKER_CLEANUP_BOUNDED_CHILD_V1; then
   exec "$timeout_path" --signal=TERM --kill-after=15s 20m \
-    /usr/bin/env -i PATH="$PATH" PHUB_COMMUNITIES_MARKER_CLEANUP_TIMEOUT_ACTIVE=1 \
-    SSH_ORIGINAL_COMMAND="${SSH_ORIGINAL_COMMAND:-}" "$script_path"
+    /usr/bin/env -i PATH="$PATH" SSH_ORIGINAL_COMMAND="${SSH_ORIGINAL_COMMAND:-}" \
+    "$script_path" __PHUB_COMMUNITIES_MARKER_CLEANUP_BOUNDED_CHILD_V1
 fi
+test "$#" -eq 1 || exit 1
 
 fail() {
   printf '%s\n' "COMMUNITIES_ROLE_SPLIT_RESTORE_MARKER_CLEANUP_$1" >&2
@@ -161,18 +162,37 @@ done
 is_sha256 "${postgres_image_id#sha256:}" || fail RUNTIME_BINDING_INVALID
 case "$compose_project" in ''|[0-9]*|*[!a-z0-9_-]*) fail RUNTIME_BINDING_INVALID ;; esac
 test "$(stat -c %u "$app_root")" = 0 && test "$(stat -c %d "$app_root")" = "$app_root_device" &&
-  test "$(stat -c %i "$app_root")" = "$app_root_inode" || fail APP_ROOT_CUSTODY_INVALID
-for binding in "infrastructure.env:600:$infrastructure_env_sha" \
+  test "$(stat -c %i "$app_root")" = "$app_root_inode" && test "$(stat -c %h "$app_root")" = 1 ||
+  fail APP_ROOT_CUSTODY_INVALID
+app_root_mode=$(stat -c %a "$app_root")
+case "$app_root_mode" in [0-7][0-7][0-7]) ;; *) fail APP_ROOT_CUSTODY_INVALID ;; esac
+case "$app_root_mode" in ?[2367]?|??[2367]) fail APP_ROOT_CUSTODY_INVALID ;; esac
+for binding in "infrastructure.env:READABLE:$infrastructure_env_sha" \
   "compose.infrastructure.yaml:644:$compose_sha" "release.env:644:$release_env_sha"; do
   old_ifs=$IFS; IFS=:; set -- $binding; IFS=$old_ifs
   artifact=$app_root/$1
   test -f "$artifact" && test ! -L "$artifact" && test "$(stat -c %u "$artifact")" = 0 &&
-    test "$(stat -c %g "$artifact")" = 0 && test "$(stat -c %a "$artifact")" = "$2" &&
     test "$(stat -c %h "$artifact")" = 1 || fail APP_ARTIFACT_CUSTODY_INVALID
+  if test "$2" = READABLE; then
+    artifact_mode=$(stat -c %a "$artifact")
+    test "$(stat -c %g "$artifact")" = "$current_gid" && test -r "$artifact" ||
+      fail APP_ARTIFACT_CUSTODY_INVALID
+    case "$artifact_mode" in 440|640) ;; *) fail APP_ARTIFACT_CUSTODY_INVALID ;; esac
+  else
+    test "$(stat -c %g "$artifact")" = 0 && test "$(stat -c %a "$artifact")" = "$2" ||
+      fail APP_ARTIFACT_CUSTODY_INVALID
+  fi
   before=$(stat -c '%d:%i:%s:%Y:%Z' "$artifact")
   test "$(file_sha256 "$artifact" APP_ARTIFACT_DIGEST_INVALID)" = "$3" &&
     test "$(stat -c '%d:%i:%s:%Y:%Z' "$artifact")" = "$before" || fail APP_ARTIFACT_CHANGED
 done
+if test -e "$app_root/.env" || test -L "$app_root/.env"; then
+  env_mode=$(stat -c %a "$app_root/.env")
+  test -f "$app_root/.env" && test ! -L "$app_root/.env" && test "$(stat -c %u "$app_root/.env")" = 0 &&
+    test "$(stat -c %g "$app_root/.env")" = "$current_gid" && test "$(stat -c %h "$app_root/.env")" = 1 &&
+    test -r "$app_root/.env" || fail APP_ARTIFACT_CUSTODY_INVALID
+  case "$env_mode" in 440|640) ;; *) fail APP_ARTIFACT_CUSTODY_INVALID ;; esac
+fi
 
 script=$(readlink -f "$0" 2>/dev/null || true)
 test -f "$script" && test ! -L "$script" && test "$(stat -c %u "$script")" = 0 ||
@@ -197,7 +217,7 @@ test -f "$state_path" && test ! -L "$state_path" && test "$(stat -c %u "$state_p
 marker_value_sha=$(printf '%s' "$marker" | sha256sum | cut -d ' ' -f 1)
 state=$(sed -n '1p' "$state_path")
 case "$state" in
-  "MARKER_PENDING|$marker_request_sha|$clone_oid|$marker_value_sha"|"MARKED|$marker_request_sha|$clone_oid|$marker_value_sha"|"DROPPING|$marker_request_sha|$clone_oid|$marker_value_sha|$expected_cleanup_request_sha") ;;
+  "MARKER_PENDING|$marker_request_sha|$clone_oid|$marker_value_sha"|"MARKED|$marker_request_sha|$clone_oid|$marker_value_sha"|"QUARANTINE_PENDING_RECONCILIATION_REQUIRED|$marker_request_sha|$clone_oid|$clone_owner|$clone_owner_oid|$marker_value_sha|$expected_cleanup_request_sha") ;;
   *) fail STATE_BINDING_INVALID ;;
 esac
 
@@ -212,30 +232,27 @@ atomic_state() {
   /usr/bin/sync -f "$state_root"
 }
 capture_command() {
-  label=$1
+  test -n "$1" || return 1
   shift
-  diagnostic_out=$(mktemp "$state_root/.cleanup-diagnostic-${run_id}-${run_attempt}-${label}.out.XXXXXX")
-  diagnostic_err=$(mktemp "$state_root/.cleanup-diagnostic-${run_id}-${run_attempt}-${label}.err.XXXXXX")
-  chmod 600 "$diagnostic_out" "$diagnostic_err"
-  if (ulimit -f 128; "$@") >"$diagnostic_out" 2>"$diagnostic_err"; then
-    test "$(wc -c < "$diagnostic_out")" -le 65536 && test "$(wc -c < "$diagnostic_err")" -le 65536 ||
-      fail DIAGNOSTIC_OVERSIZE
-    cat "$diagnostic_out"
-    rm -f "$diagnostic_out" "$diagnostic_err"
-    return 0
-  fi
-  return 1
-}
-infrastructure() {
-  capture_command DOCKER_COMPOSE docker compose --project-name "$compose_project" \
-    --env-file infrastructure.env -f compose.infrastructure.yaml "$@"
+  command_status=$(mktemp "$state_root/.command-status-${run_id}-${run_attempt}.XXXXXX")
+  chmod 600 "$command_status"
+  captured=$(
+    ("$@"; printf '%s' "$?" > "$command_status") 2>/dev/null |
+      head -c 65537
+  )
+  status=$(cat "$command_status" 2>/dev/null || true)
+  rm -f "$command_status"
+  test "$status" = 0 || return 1
+  test "$(printf '%s' "$captured" | wc -c)" -le 65536 || fail DIAGNOSTIC_OVERSIZE
+  printf '%s' "$captured"
 }
 docker_capture() {
   capture_command DOCKER docker "$@"
 }
+container_exec() {
+  capture_command DOCKER_EXEC docker exec -i "$postgres_container_id" "$@"
+}
 assert_container() {
-  observed_container=$(infrastructure ps -q postgres) || fail CONTAINER_IDENTITY_INVALID
-  test "$observed_container" = "$postgres_container_id" || fail CONTAINER_IDENTITY_INVALID
   observed_container_binding=$(docker_capture inspect --format \
     '{{.Id}}|{{.Image}}|{{index .Config.Labels "com.docker.compose.project"}}|{{index .Config.Labels "com.docker.compose.service"}}' \
     "$postgres_container_id") || fail CONTAINER_IDENTITY_INVALID
@@ -243,42 +260,20 @@ assert_container() {
     fail CONTAINER_IDENTITY_INVALID
 }
 admin_psql() {
-  infrastructure exec -T postgres sh -ec \
+  container_exec sh -ec \
     'PGOPTIONS="-c default_transaction_read_only=on -c statement_timeout=15000 -c lock_timeout=2000 -c search_path=pg_catalog" psql -X -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -At -F "|" -c "$1"' \
     sh "$1"
 }
 assert_container
-observed=$(admin_psql "select d.oid::text||'|'||r.rolname||'|'||r.oid::text||'|'||coalesce(shobj_description(d.oid, 'pg_database'), '') from pg_catalog.pg_database d join pg_catalog.pg_roles r on r.oid=d.datdba where d.datname='$restore_database';") ||
-  fail DATABASE_BINDING_INVALID
-if test -z "$observed"; then
-  case "$state" in DROPPING\|*) atomic_state "CLEANED|$marker_request_sha|$clone_oid|$expected_cleanup_request_sha" ;;
-    *) fail DATABASE_BINDING_INVALID ;;
-  esac
-else
-  test "$observed" = "$clone_oid|$clone_owner|$clone_owner_oid|$marker" || fail DATABASE_REPLACEMENT_DETECTED
-  atomic_state "DROPPING|$marker_request_sha|$clone_oid|$marker_value_sha|$expected_cleanup_request_sha"
-  assert_container
-  action_binding=$(admin_psql "select d.oid::text||'|'||r.rolname||'|'||r.oid::text||'|'||coalesce(shobj_description(d.oid, 'pg_database'), '') from pg_catalog.pg_database d join pg_catalog.pg_roles r on r.oid=d.datdba where d.datname='$restore_database';") ||
-    fail DATABASE_BINDING_INVALID
-  test "$action_binding" = "$clone_oid|$clone_owner|$clone_owner_oid|$marker" || fail DATABASE_REPLACEMENT_DETECTED
-  if ! infrastructure exec -T postgres sh -ec 'dropdb -U "$POSTGRES_USER" "$1"' \
-    sh "$restore_database" >/dev/null; then
-    remaining=$(admin_psql "select oid::text from pg_catalog.pg_database where datname='$restore_database';") ||
-      fail DROP_AMBIGUOUS
-    if test -n "$remaining"; then
-      test "$remaining" = "$clone_oid" || fail DATABASE_REPLACEMENT_DETECTED
-      fail DROP_AMBIGUOUS
-    fi
-  fi
-  remaining=$(admin_psql "select oid::text from pg_catalog.pg_database where datname='$restore_database';") ||
-    fail DROP_AMBIGUOUS
-  test -z "$remaining" || fail DATABASE_REPLACEMENT_DETECTED
-  atomic_state "CLEANED|$marker_request_sha|$clone_oid|$expected_cleanup_request_sha"
-fi
+observed=$(admin_psql "select d.oid::text||'|'||d.datname||'|'||r.rolname||'|'||r.oid::text||'|'||coalesce(shobj_description(d.oid, 'pg_database'), '') from pg_catalog.pg_database d join pg_catalog.pg_roles r on r.oid=d.datdba where d.oid=$clone_oid::oid;") ||
+  fail QUARANTINE_RECONCILIATION_REQUIRED
+test "$observed" = "$clone_oid|$restore_database|$clone_owner|$clone_owner_oid|$marker" ||
+  fail QUARANTINE_RECONCILIATION_REQUIRED
+atomic_state "QUARANTINE_PENDING_RECONCILIATION_REQUIRED|$marker_request_sha|$clone_oid|$clone_owner|$clone_owner_oid|$marker_value_sha|$expected_cleanup_request_sha"
 
 printf '%s\n' \
   'schemaVersion=communities-role-split-clone-marker-cleanup-evidence-v1' \
-  'status=CLEANED' \
+  'status=QUARANTINE_PENDING_RECONCILIATION_REQUIRED' \
   "cleanupRequestSha256=$expected_cleanup_request_sha" \
   "markerRequestSha256=$marker_request_sha" \
   "markerValueSha256=$marker_value_sha" \
@@ -288,6 +283,8 @@ printf '%s\n' \
   'binding.marker=true' \
   'binding.request=true' \
   'binding.cloneOid=true' \
+  'authorizesDatabaseDeletion=false' \
+  'authorizesDatabaseRename=false' \
   'authorizes.roleCreation=false' \
   'authorizes.roleSplit=false' \
   'authorizes.sharedDatabaseMutation=false' \
