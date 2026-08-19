@@ -6,6 +6,9 @@ import {
   COMMUNITIES_STAGED_REHEARSAL_CONFIRMATION,
   COMMUNITIES_STAGED_REHEARSAL_32_CONFIRMATION,
   COMMUNITIES_STAGED_REHEARSAL_32_PENDING_FILENAMES,
+  COMMUNITIES_STAGED_REHEARSAL_33_CONFIRMATION,
+  COMMUNITIES_STAGED_REHEARSAL_33_PENDING_FILENAMES,
+  COMMUNITIES_STAGED_REHEARSAL_CUP_PROJECTION_FILENAMES,
   COMMUNITIES_STAGED_REHEARSAL_ELIGIBILITY_PAYMENT_FILENAMES,
   COMMUNITIES_STAGED_REHEARSAL_FOUNDATION_FILENAMES,
   COMMUNITIES_STAGED_REHEARSAL_PENDING_FILENAMES,
@@ -18,13 +21,16 @@ import {
 import {
   ELIGIBILITY_PAYMENT_ACL_MATRIX_SHA256,
   ELIGIBILITY_PAYMENT_ACL_MATRIX_VERSION,
+  ELIGIBILITY_PAYMENT_CUP_PROJECTION_ACL_MATRIX_SHA256,
+  ELIGIBILITY_PAYMENT_CUP_PROJECTION_ACL_MATRIX_VERSION,
 } from './eligibility-payment-acl-matrix.js';
 
 const restoreDatabase = 'phub_restore_31944858210_1';
 const connectionString = `postgresql://migrator:secret@postgres:5432/${restoreDatabase}`;
 
 function request(
-  phase: 'pre_foundation' | 'foundation' | 'post_foundation' | 'eligibility_payment',
+  phase:
+    'pre_foundation' | 'foundation' | 'post_foundation' | 'eligibility_payment' | 'cup_projection',
   confirmation = COMMUNITIES_STAGED_REHEARSAL_CONFIRMATION,
 ) {
   if (confirmation === COMMUNITIES_STAGED_REHEARSAL_32_CONFIRMATION) {
@@ -35,6 +41,18 @@ function request(
       aclMatrixVersion: ELIGIBILITY_PAYMENT_ACL_MATRIX_VERSION,
       aclMatrixSha256: ELIGIBILITY_PAYMENT_ACL_MATRIX_SHA256,
     };
+  }
+  if (confirmation === COMMUNITIES_STAGED_REHEARSAL_33_CONFIRMATION) {
+    const value = resolveCommunitiesStagedRehearsalRequest({
+      confirmation,
+      phase,
+      restoreDatabase,
+      connectionString,
+      aclMatrixVersion: ELIGIBILITY_PAYMENT_CUP_PROJECTION_ACL_MATRIX_VERSION,
+      aclMatrixSha256: ELIGIBILITY_PAYMENT_CUP_PROJECTION_ACL_MATRIX_SHA256,
+    });
+    expect(value).not.toBeNull();
+    return value!;
   }
   const value = resolveCommunitiesStagedRehearsalRequest({
     confirmation,
@@ -58,6 +76,9 @@ describe('Communities staged migration rehearsal policy', () => {
     expect(
       communitiesStagedRehearsalPendingSetSha256(COMMUNITIES_STAGED_REHEARSAL_32_PENDING_FILENAMES),
     ).toBe('f5ea040e4498a45310ad671f321e3044c33743ca7b0cbee7c72bc01ee9b6a91d');
+    expect(
+      communitiesStagedRehearsalPendingSetSha256(COMMUNITIES_STAGED_REHEARSAL_33_PENDING_FILENAMES),
+    ).toBe('3f61d60f27ab90bf4fe8498af29771b06925ece3b1ac6c7cac32b296d86c06d0');
   });
 
   it.each([
@@ -195,6 +216,87 @@ describe('Communities staged migration rehearsal policy', () => {
         packagedFilenames: packaged,
       }),
     ).toEqual(COMMUNITIES_STAGED_REHEARSAL_ELIGIBILITY_PAYMENT_FILENAMES);
+  });
+
+  it('selects the exact fifth CUP projection phase for the reviewed 33-file pending set', () => {
+    const confirmation = COMMUNITIES_STAGED_REHEARSAL_33_CONFIRMATION;
+    const packaged = ['0001_initial.sql', ...COMMUNITIES_STAGED_REHEARSAL_33_PENDING_FILENAMES];
+    const beforeCup = new Set([
+      '0001_initial.sql',
+      ...COMMUNITIES_STAGED_REHEARSAL_PRE_FOUNDATION_FILENAMES,
+      ...COMMUNITIES_STAGED_REHEARSAL_FOUNDATION_FILENAMES,
+      ...COMMUNITIES_STAGED_REHEARSAL_POST_FOUNDATION_FILENAMES,
+      ...COMMUNITIES_STAGED_REHEARSAL_ELIGIBILITY_PAYMENT_FILENAMES,
+    ]);
+    expect(
+      selectCommunitiesStagedRehearsalMigrations({
+        request: request('cup_projection', confirmation),
+        appliedFilenames: beforeCup,
+        packagedFilenames: packaged,
+      }),
+    ).toEqual(COMMUNITIES_STAGED_REHEARSAL_CUP_PROJECTION_FILENAMES);
+  });
+
+  it('selects all five 33-file phases only at their exact ordered boundaries', () => {
+    const packaged = ['0001_initial.sql', ...COMMUNITIES_STAGED_REHEARSAL_33_PENDING_FILENAMES];
+    const applied = new Set<string>(['0001_initial.sql']);
+    for (const [phase, expected] of [
+      ['pre_foundation', COMMUNITIES_STAGED_REHEARSAL_PRE_FOUNDATION_FILENAMES],
+      ['foundation', COMMUNITIES_STAGED_REHEARSAL_FOUNDATION_FILENAMES],
+      ['post_foundation', COMMUNITIES_STAGED_REHEARSAL_POST_FOUNDATION_FILENAMES],
+      ['eligibility_payment', COMMUNITIES_STAGED_REHEARSAL_ELIGIBILITY_PAYMENT_FILENAMES],
+      ['cup_projection', COMMUNITIES_STAGED_REHEARSAL_CUP_PROJECTION_FILENAMES],
+    ] as const) {
+      expect(
+        selectCommunitiesStagedRehearsalMigrations({
+          request: request(phase, COMMUNITIES_STAGED_REHEARSAL_33_CONFIRMATION),
+          appliedFilenames: applied,
+          packagedFilenames: packaged,
+        }),
+      ).toEqual(expected);
+      expected.forEach((filename) => applied.add(filename));
+    }
+  });
+
+  it('requires the exact v2 ACL matrix for every 33-file phase', () => {
+    const exact = request('pre_foundation', COMMUNITIES_STAGED_REHEARSAL_33_CONFIRMATION);
+    for (const invalid of [
+      { ...exact, aclMatrixVersion: ELIGIBILITY_PAYMENT_ACL_MATRIX_VERSION },
+      { ...exact, aclMatrixSha256: ELIGIBILITY_PAYMENT_ACL_MATRIX_SHA256 },
+      { ...exact, aclMatrixSha256: '0'.repeat(64) },
+    ]) {
+      expect(() =>
+        selectCommunitiesStagedRehearsalMigrations({
+          request: invalid,
+          appliedFilenames: new Set(['0001_initial.sql']),
+          packagedFilenames: [
+            '0001_initial.sql',
+            ...COMMUNITIES_STAGED_REHEARSAL_33_PENDING_FILENAMES,
+          ],
+        }),
+      ).toThrow('COMMUNITIES_STAGED_REHEARSAL_ACL_MATRIX_BINDING_INVALID');
+    }
+  });
+
+  it.each([
+    ['missing', COMMUNITIES_STAGED_REHEARSAL_33_PENDING_FILENAMES.slice(1)],
+    ['additional', [...COMMUNITIES_STAGED_REHEARSAL_33_PENDING_FILENAMES, '0088_unreviewed.sql']],
+    [
+      'reordered',
+      [
+        COMMUNITIES_STAGED_REHEARSAL_33_PENDING_FILENAMES[1],
+        COMMUNITIES_STAGED_REHEARSAL_33_PENDING_FILENAMES[0],
+        ...COMMUNITIES_STAGED_REHEARSAL_33_PENDING_FILENAMES.slice(2),
+      ],
+    ],
+  ])('rejects a %s filename in the executable 33-file clone plan', (_label, pending) => {
+    expect(() =>
+      selectCommunitiesStagedRehearsalMigrations({
+        request: request('pre_foundation', COMMUNITIES_STAGED_REHEARSAL_33_CONFIRMATION),
+        appliedFilenames: new Set(['0001_initial.sql']),
+        packagedFilenames: ['0001_initial.sql', ...pending],
+      }),
+    ).toThrow('COMMUNITIES_STAGED_REHEARSAL_PENDING_SET_MISMATCH');
   });
 
   it('rejects a 32-file phase when its contract version does not match', () => {

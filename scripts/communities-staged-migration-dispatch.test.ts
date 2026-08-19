@@ -87,7 +87,13 @@ printf '%s\n' 'communities_profile_privacy_audit missing_before=2 missing_after=
 for index in a b c d; do
   printf 'community_media_quota_index_measurement index=%s operation=reindex duration_ms=1 rollback=confirmed status=passed\n' "$index"
 done
-printf 'communities_staged_migration_rehearsal database=%s pre_foundation=16 foundation=5 post_foundation=8 quota_index_measurements=4 source_ledger_sha=%s cleanup=confirmed status=passed\n' "$2" "$COMMUNITIES_STAGED_REHEARSAL_EXPECTED_SOURCE_LEDGER_SHA"
+if test "$COMMUNITIES_STAGED_REHEARSAL_CONFIRMATION" = COMMUNITIES_STAGED_REHEARSAL_33_V1; then
+  printf 'eligibility_payment_acl matrix=%s pre=passed post=passed privileges=exact status=passed\n' "$COMMUNITIES_STAGED_REHEARSAL_ACL_MATRIX_VERSION"
+  printf '%s\n' 'cup_player_level_projection_clone_probe apply=passed replay=passed idempotency=passed cross_tenant_rls=passed status=passed'
+  printf 'communities_staged_migration_rehearsal database=%s contract=33_V1 pre_foundation=16 foundation=5 post_foundation=8 eligibility_payment=3 cup_projection=1 acl_matrix=%s projection_probe=passed quota_index_measurements=4 source_ledger_sha=%s cleanup=confirmed status=passed\n' "$2" "$COMMUNITIES_STAGED_REHEARSAL_ACL_MATRIX_VERSION" "$COMMUNITIES_STAGED_REHEARSAL_EXPECTED_SOURCE_LEDGER_SHA"
+else
+  printf 'communities_staged_migration_rehearsal database=%s pre_foundation=16 foundation=5 post_foundation=8 quota_index_measurements=4 source_ledger_sha=%s cleanup=confirmed status=passed\n' "$2" "$COMMUNITIES_STAGED_REHEARSAL_EXPECTED_SOURCE_LEDGER_SHA"
+fi
 `,
     );
     await writeFile(join(bin, 'readlink'), '#!/bin/sh\ntest "$1" = -f\nprintf "%s\\n" "$2"\n');
@@ -236,6 +242,30 @@ esac
     expect(successfulDockerLog).not.toContain('--no-owner');
     expect(successfulDockerLog).not.toContain('--no-acl');
 
+    const arguments33 = [
+      'REHEARSE_COMMUNITIES_STAGING_33_V1',
+      '33_V1',
+      '3f61d60f27ab90bf4fe8498af29771b06925ece3b1ac6c7cac32b296d86c06d0',
+      ...arguments_.slice(3),
+      'eligibility-payment-cup-projection-acl-v2',
+      '83cba43d957e8104fc91b139020342dc154f571155c5fadafe36874583310310',
+    ];
+    expect(arguments33).toHaveLength(19);
+    const result33 = await execute({
+      ...environment,
+      SSH_ORIGINAL_COMMAND: arguments33.join(' '),
+    });
+    expect(result33.stderr).toBe('');
+    expect(result33.stdout.trim().split('\n')).toHaveLength(35);
+    expect(result33.stdout).toContain('META|contractVersion|33_V1');
+    expect(result33.stdout).toContain(
+      'META|aclMatrixVersion|eligibility-payment-cup-projection-acl-v2',
+    );
+    expect(result33.stdout).toContain(
+      'cup_player_level_projection_clone_probe apply=passed replay=passed idempotency=passed cross_tenant_rls=passed status=passed',
+    );
+    expect((await readdir(backupRoot)).filter((name) => name.endsWith('.dump'))).toHaveLength(2);
+
     const beforeMismatch = await readdir(backupRoot);
     const dockerBeforeMismatch = await readFile(dockerLog, 'utf8');
     const mismatched = await execute({
@@ -290,7 +320,7 @@ esac
     expect((failed as Error & { stderr?: string }).stderr).not.toContain(
       'do-not-publish-provider-secret',
     );
-    expect((await readdir(backupRoot)).filter((name) => name.endsWith('.dump'))).toHaveLength(2);
+    expect((await readdir(backupRoot)).filter((name) => name.endsWith('.dump'))).toHaveLength(3);
   }, 20_000);
 
   it('keeps the workflow manual, exact-SHA pinned and isolated from deploy/shared migration', async () => {
@@ -305,8 +335,10 @@ esac
     expect(workflow).not.toContain('STAGING_DEPLOY_KEY');
     expect(workflow).toContain('REHEARSE_COMMUNITIES_STAGING_29_V1');
     expect(workflow).toContain('REHEARSE_COMMUNITIES_STAGING_32_V1');
-    expect(workflow).toContain('32_V1 is clone-evidence preparation only');
+    expect(workflow).toContain('REHEARSE_COMMUNITIES_STAGING_33_V1');
+    expect(workflow).toContain('32_V1 remains a frozen preparation-only contract');
     expect(workflow).toContain('COMMUNITIES_STAGED_REHEARSAL_PENDING_FILENAMES');
+    expect(workflow).toContain('COMMUNITIES_STAGED_REHEARSAL_33_PENDING_FILENAMES');
     expect(workflow).toContain('phase_binding_sha');
     expect(workflow).toContain('sha256sum deploy/compose.staging.yaml');
     expect(workflow).toContain('expected_rehearsal_release_sha');
@@ -332,8 +364,28 @@ esac
     }).catch((value: Error) => value);
 
     expect(error).toBeInstanceOf(Error);
+    expect((error as Error & { stderr?: string }).stderr).toContain('32_V1 remains frozen');
+  });
+
+  it('requires the exact 33_V1 ACL binding before any backup or Docker access', async () => {
+    const fields = [
+      'REHEARSE_COMMUNITIES_STAGING_33_V1',
+      '33_V1',
+      '3f61d60f27ab90bf4fe8498af29771b06925ece3b1ac6c7cac32b296d86c06d0',
+      'not-a-release',
+      ...Array.from({ length: 13 }, () => 'placeholder'),
+      'eligibility-payment-cup-projection-acl-v2',
+      '0'.repeat(64),
+    ];
+    expect(fields).toHaveLength(19);
+    const error = await execute({
+      ...process.env,
+      SSH_ORIGINAL_COMMAND: fields.join(' '),
+    }).catch((value: Error) => value);
+
+    expect(error).toBeInstanceOf(Error);
     expect((error as Error & { stderr?: string }).stderr).toContain(
-      '32_V1 is clone-evidence preparation only',
+      'staged rehearsal ACL matrix binding is invalid',
     );
   });
 });

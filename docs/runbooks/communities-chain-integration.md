@@ -391,15 +391,51 @@ existing four fail-closed 32_V1 execution boundaries must not be removed until a
 approved clone ceremony binds their exact image digest, environment and order and adds real-PG
 evidence for provisioner rollback/idempotency and runtime RLS denial.
 
-When that gate is separately implemented and approved, its fixed redacted evidence must contain
-the contract version, pending-set SHA, one aggregate eligibility audit and one aggregate payment
-evidence audit. The eligibility audit must prove exactly seven PADEL levels, three active OFF
-policies and three all-false readiness rows per tenant; known-label/mappable-range backfill checks;
-aggregate unknown, unmapped and reversed counts; and unchanged participant, reservation and
-waitlist primary-key counts and digests. The payment audit must prove the expected table, FORCE
-RLS, tenant policy, validated constraints and index, a nullable validated `provider_exercise_id`,
-and zero fresh-chain evidence rows without emitting identifiers or other sensitive values. Its final
-line must include `eligibility_payment=3`; every `authorizes*=false` boundary remains unchanged.
+The `32_V1` token stays frozen permanently. Its preparation contract is retained as historical,
+reviewable evidence; it is not upgraded in place and cannot become an execution authorization.
+
+### Exact 33-file executable clone rehearsal contract
+
+`COMMUNITIES_STAGED_REHEARSAL_33_V1` and forced-command token
+`REHEARSE_COMMUNITIES_STAGING_33_V1` define a separate clone-only ceremony. The ordered pending set
+is the exact `32_V1` set plus `0087_cup_player_level_projection.sql` in a fifth `cup_projection`
+phase. Its boundaries are `16+5+8+3+1`, `5+8+3+1`, `8+3+1`, `3+1`, `1`, then an ordinary no-op.
+The SHA-256 of the ordered 33 filenames is
+`3f61d60f27ab90bf4fe8498af29771b06925ece3b1ac6c7cac32b296d86c06d0`.
+Missing, additional, reordered, partial or cross-version sets fail before DDL.
+
+The phase binding also includes the exact
+`eligibility-payment-cup-projection-acl-v2` matrix at SHA-256
+`83cba43d957e8104fc91b139020342dc154f571155c5fadafe36874583310310`.
+It extends the v1 matrix with `SELECT, INSERT, UPDATE` on
+`eligibility.cup_player_level_projections` and `SELECT, INSERT` on
+`eligibility.cup_player_level_projection_events`. The clone ceremony, running only against a
+marker-guarded `phub_restore_*` database, creates the `eligibility` schema when absent under the
+migrator identity, revokes broad PUBLIC/runtime schema/table privileges, grants only the matrix
+privileges to the distinct runtime role, and verifies owners, FORCE RLS, exact tenant policies,
+grant options, PUBLIC, third-party and column ACLs before committing the clone transaction. An
+existing schema with the wrong owner or third-party grant fails closed instead of being rewritten.
+The runtime role has only `USAGE` (never `CREATE`) on `eligibility` and `games`.
+
+Before migration 0084 the ceremony inserts two synthetic tenants only into the disposable clone so
+the migration seeds canonical PADEL levels and OFF policies. After 0087 and post-ACL attestation it
+uses the real runtime repository to prove one authoritative projection apply, an identical replay,
+event-ledger idempotency, an unmapped cross-tenant write refusal and zero cross-tenant visibility in
+both projection relations. No phone, client ID, player ID or row payload is emitted. The fixed
+allowlist adds two matrix metadata lines and these two aggregate evidence lines:
+
+```text
+eligibility_payment_acl matrix=eligibility-payment-cup-projection-acl-v2 pre=passed post=passed privileges=exact status=passed
+cup_player_level_projection_clone_probe apply=passed replay=passed idempotency=passed cross_tenant_rls=passed status=passed
+```
+
+The final line includes `eligibility_payment=3 cup_projection=1`, and every
+`authorizes*=false` boundary remains unchanged. The successful `33_V1` artifact is exactly 35 lines;
+`29_V1` remains exactly 31 lines. The ceremony never targets the shared database, never changes a
+shared release/runtime file, never deploys an application and never enables CUP ingress, eligibility
+policy, roster guard or payment behavior. Installing the root-owned candidate artifacts and running
+this manual workflow remain separately approved operations. A missing or unverified
+`/etc/phub/realtime.env` on staging is still an external preflight blocker and must not be bypassed.
 
 ## Activation boundary
 

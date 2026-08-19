@@ -1,9 +1,13 @@
 import { createHash } from 'node:crypto';
 
-import { assertEligibilityPaymentAclMatrixBinding } from './eligibility-payment-acl-matrix.js';
+import {
+  assertEligibilityPaymentAclMatrixBinding,
+  assertEligibilityPaymentCupProjectionAclMatrixBinding,
+} from './eligibility-payment-acl-matrix.js';
 
 export const COMMUNITIES_STAGED_REHEARSAL_CONFIRMATION = 'COMMUNITIES_STAGED_REHEARSAL_29_V1';
 export const COMMUNITIES_STAGED_REHEARSAL_32_CONFIRMATION = 'COMMUNITIES_STAGED_REHEARSAL_32_V1';
+export const COMMUNITIES_STAGED_REHEARSAL_33_CONFIRMATION = 'COMMUNITIES_STAGED_REHEARSAL_33_V1';
 
 export const COMMUNITIES_STAGED_REHEARSAL_PHASES = [
   'pre_foundation',
@@ -16,9 +20,14 @@ export const COMMUNITIES_STAGED_REHEARSAL_32_PHASES = [
   'eligibility_payment',
 ] as const;
 
+export const COMMUNITIES_STAGED_REHEARSAL_33_PHASES = [
+  ...COMMUNITIES_STAGED_REHEARSAL_32_PHASES,
+  'cup_projection',
+] as const;
+
 export type CommunitiesStagedRehearsalPhase =
-  (typeof COMMUNITIES_STAGED_REHEARSAL_32_PHASES)[number];
-export type CommunitiesStagedRehearsalContractVersion = '29_V1' | '32_V1';
+  (typeof COMMUNITIES_STAGED_REHEARSAL_33_PHASES)[number];
+export type CommunitiesStagedRehearsalContractVersion = '29_V1' | '32_V1' | '33_V1';
 
 export const COMMUNITIES_STAGED_REHEARSAL_PRE_FOUNDATION_FILENAMES = [
   '0053_profile_visibility_sections.sql',
@@ -75,6 +84,15 @@ export const COMMUNITIES_STAGED_REHEARSAL_32_PENDING_FILENAMES = [
   ...COMMUNITIES_STAGED_REHEARSAL_ELIGIBILITY_PAYMENT_FILENAMES,
 ] as const;
 
+export const COMMUNITIES_STAGED_REHEARSAL_CUP_PROJECTION_FILENAMES = [
+  '0087_cup_player_level_projection.sql',
+] as const;
+
+export const COMMUNITIES_STAGED_REHEARSAL_33_PENDING_FILENAMES = [
+  ...COMMUNITIES_STAGED_REHEARSAL_32_PENDING_FILENAMES,
+  ...COMMUNITIES_STAGED_REHEARSAL_CUP_PROJECTION_FILENAMES,
+] as const;
+
 /** A phase binding commits to the contract version and this ordered filename digest. */
 export function communitiesStagedRehearsalPendingSetSha256(filenames: readonly string[]): string {
   return createHash('sha256')
@@ -112,6 +130,8 @@ export function resolveCommunitiesStagedRehearsalRequest(input: {
   readonly phase?: string;
   readonly restoreDatabase?: string;
   readonly connectionString: string;
+  readonly aclMatrixVersion?: string;
+  readonly aclMatrixSha256?: string;
 }): CommunitiesStagedRehearsalRequest | null {
   const requested = input.confirmation !== undefined || input.phase !== undefined;
   if (!requested) return null;
@@ -120,7 +140,11 @@ export function resolveCommunitiesStagedRehearsalRequest(input: {
     fail('32_ACL_MATRIX_REQUIRED');
   }
   const contractVersion =
-    input.confirmation === COMMUNITIES_STAGED_REHEARSAL_CONFIRMATION ? '29_V1' : null;
+    input.confirmation === COMMUNITIES_STAGED_REHEARSAL_CONFIRMATION
+      ? '29_V1'
+      : input.confirmation === COMMUNITIES_STAGED_REHEARSAL_33_CONFIRMATION
+        ? '33_V1'
+        : null;
   if (!contractVersion) {
     fail('CONFIRMATION_REQUIRED');
   }
@@ -129,7 +153,7 @@ export function resolveCommunitiesStagedRehearsalRequest(input: {
     !(
       contractVersion === '29_V1'
         ? COMMUNITIES_STAGED_REHEARSAL_PHASES
-        : COMMUNITIES_STAGED_REHEARSAL_32_PHASES
+        : COMMUNITIES_STAGED_REHEARSAL_33_PHASES
     ).includes(input.phase as never)
   ) {
     fail('PHASE_INVALID');
@@ -166,8 +190,8 @@ export function resolveCommunitiesStagedRehearsalRequest(input: {
     contractVersion,
     phase: input.phase as CommunitiesStagedRehearsalPhase,
     restoreDatabase: input.restoreDatabase,
-    aclMatrixVersion: null,
-    aclMatrixSha256: null,
+    aclMatrixVersion: contractVersion === '33_V1' ? (input.aclMatrixVersion ?? null) : null,
+    aclMatrixSha256: contractVersion === '33_V1' ? (input.aclMatrixSha256 ?? null) : null,
   };
 }
 
@@ -180,9 +204,18 @@ export function selectCommunitiesStagedRehearsalMigrations(input: {
     if (input.request.aclMatrixVersion !== null || input.request.aclMatrixSha256 !== null) {
       fail('ACL_MATRIX_UNEXPECTED');
     }
-  } else {
+  } else if (input.request.contractVersion === '32_V1') {
     try {
       assertEligibilityPaymentAclMatrixBinding({
+        version: input.request.aclMatrixVersion ?? '',
+        sha256: input.request.aclMatrixSha256 ?? '',
+      });
+    } catch {
+      fail('ACL_MATRIX_BINDING_INVALID');
+    }
+  } else {
+    try {
+      assertEligibilityPaymentCupProjectionAclMatrixBinding({
         version: input.request.aclMatrixVersion ?? '',
         sha256: input.request.aclMatrixSha256 ?? '',
       });
@@ -196,10 +229,15 @@ export function selectCommunitiesStagedRehearsalMigrations(input: {
           phases: COMMUNITIES_STAGED_REHEARSAL_PHASES,
           pending: COMMUNITIES_STAGED_REHEARSAL_PENDING_FILENAMES,
         }
-      : {
-          phases: COMMUNITIES_STAGED_REHEARSAL_32_PHASES,
-          pending: COMMUNITIES_STAGED_REHEARSAL_32_PENDING_FILENAMES,
-        };
+      : input.request.contractVersion === '32_V1'
+        ? {
+            phases: COMMUNITIES_STAGED_REHEARSAL_32_PHASES,
+            pending: COMMUNITIES_STAGED_REHEARSAL_32_PENDING_FILENAMES,
+          }
+        : {
+            phases: COMMUNITIES_STAGED_REHEARSAL_33_PHASES,
+            pending: COMMUNITIES_STAGED_REHEARSAL_33_PENDING_FILENAMES,
+          };
   const phaseFilenames =
     input.request.phase === 'pre_foundation'
       ? COMMUNITIES_STAGED_REHEARSAL_PRE_FOUNDATION_FILENAMES
@@ -207,7 +245,9 @@ export function selectCommunitiesStagedRehearsalMigrations(input: {
         ? COMMUNITIES_STAGED_REHEARSAL_FOUNDATION_FILENAMES
         : input.request.phase === 'post_foundation'
           ? COMMUNITIES_STAGED_REHEARSAL_POST_FOUNDATION_FILENAMES
-          : COMMUNITIES_STAGED_REHEARSAL_ELIGIBILITY_PAYMENT_FILENAMES;
+          : input.request.phase === 'eligibility_payment'
+            ? COMMUNITIES_STAGED_REHEARSAL_ELIGIBILITY_PAYMENT_FILENAMES
+            : COMMUNITIES_STAGED_REHEARSAL_CUP_PROJECTION_FILENAMES;
   const expectedPending =
     input.request.phase === 'pre_foundation'
       ? plan.pending
@@ -217,19 +257,39 @@ export function selectCommunitiesStagedRehearsalMigrations(input: {
               ...COMMUNITIES_STAGED_REHEARSAL_FOUNDATION_FILENAMES,
               ...COMMUNITIES_STAGED_REHEARSAL_POST_FOUNDATION_FILENAMES,
             ]
-          : [
-              ...COMMUNITIES_STAGED_REHEARSAL_FOUNDATION_FILENAMES,
-              ...COMMUNITIES_STAGED_REHEARSAL_POST_FOUNDATION_FILENAMES,
-              ...COMMUNITIES_STAGED_REHEARSAL_ELIGIBILITY_PAYMENT_FILENAMES,
-            ]
-        : input.request.phase === 'post_foundation'
-          ? input.request.contractVersion === '29_V1'
-            ? COMMUNITIES_STAGED_REHEARSAL_POST_FOUNDATION_FILENAMES
-            : [
+          : input.request.contractVersion === '32_V1'
+            ? [
+                ...COMMUNITIES_STAGED_REHEARSAL_FOUNDATION_FILENAMES,
                 ...COMMUNITIES_STAGED_REHEARSAL_POST_FOUNDATION_FILENAMES,
                 ...COMMUNITIES_STAGED_REHEARSAL_ELIGIBILITY_PAYMENT_FILENAMES,
               ]
-          : COMMUNITIES_STAGED_REHEARSAL_ELIGIBILITY_PAYMENT_FILENAMES;
+            : [
+                ...COMMUNITIES_STAGED_REHEARSAL_FOUNDATION_FILENAMES,
+                ...COMMUNITIES_STAGED_REHEARSAL_POST_FOUNDATION_FILENAMES,
+                ...COMMUNITIES_STAGED_REHEARSAL_ELIGIBILITY_PAYMENT_FILENAMES,
+                ...COMMUNITIES_STAGED_REHEARSAL_CUP_PROJECTION_FILENAMES,
+              ]
+        : input.request.phase === 'post_foundation'
+          ? input.request.contractVersion === '29_V1'
+            ? COMMUNITIES_STAGED_REHEARSAL_POST_FOUNDATION_FILENAMES
+            : input.request.contractVersion === '32_V1'
+              ? [
+                  ...COMMUNITIES_STAGED_REHEARSAL_POST_FOUNDATION_FILENAMES,
+                  ...COMMUNITIES_STAGED_REHEARSAL_ELIGIBILITY_PAYMENT_FILENAMES,
+                ]
+              : [
+                  ...COMMUNITIES_STAGED_REHEARSAL_POST_FOUNDATION_FILENAMES,
+                  ...COMMUNITIES_STAGED_REHEARSAL_ELIGIBILITY_PAYMENT_FILENAMES,
+                  ...COMMUNITIES_STAGED_REHEARSAL_CUP_PROJECTION_FILENAMES,
+                ]
+          : input.request.phase === 'eligibility_payment'
+            ? input.request.contractVersion === '32_V1'
+              ? COMMUNITIES_STAGED_REHEARSAL_ELIGIBILITY_PAYMENT_FILENAMES
+              : [
+                  ...COMMUNITIES_STAGED_REHEARSAL_ELIGIBILITY_PAYMENT_FILENAMES,
+                  ...COMMUNITIES_STAGED_REHEARSAL_CUP_PROJECTION_FILENAMES,
+                ]
+            : COMMUNITIES_STAGED_REHEARSAL_CUP_PROJECTION_FILENAMES;
 
   if (!(plan.phases as readonly string[]).includes(input.request.phase)) fail('PHASE_INVALID');
 

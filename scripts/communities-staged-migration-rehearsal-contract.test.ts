@@ -13,12 +13,16 @@ describe('Communities staged migration rehearsal contract', () => {
     ]) {
       expect(source(workflow)).not.toContain('COMMUNITIES_STAGED_REHEARSAL_29_V1');
       expect(source(workflow)).not.toContain('COMMUNITIES_STAGED_REHEARSAL_32_V1');
+      expect(source(workflow)).not.toContain('COMMUNITIES_STAGED_REHEARSAL_33_V1');
     }
     expect(source('.github/workflows/communities-staged-migration-rehearsal.yaml')).toContain(
       'REHEARSE_COMMUNITIES_STAGING_29_V1',
     );
     expect(source('.github/workflows/communities-staged-migration-rehearsal.yaml')).toContain(
       'REHEARSE_COMMUNITIES_STAGING_32_V1',
+    );
+    expect(source('.github/workflows/communities-staged-migration-rehearsal.yaml')).toContain(
+      'REHEARSE_COMMUNITIES_STAGING_33_V1',
     );
   });
 
@@ -46,12 +50,22 @@ describe('Communities staged migration rehearsal contract', () => {
     expect(rehearsal).toContain('staged archive does not contain default ACL entries');
   });
 
-  it('runs three exact phases, then an ordinary no-op, checks roles and cleans the clone', () => {
+  it('runs exact versioned phases, then an ordinary no-op, checks roles and cleans the clone', () => {
     const rehearsal = source('deploy/jetson/rehearse-media-migration.sh');
     const rolePre = rehearsal.indexOf('run_clone_role_boundary pre');
     const pre = rehearsal.indexOf('run_clone_migrator pre_foundation');
     const foundation = rehearsal.indexOf('run_clone_migrator foundation');
     const post = rehearsal.indexOf('run_clone_migrator post_foundation');
+    const aclPre = rehearsal.indexOf(
+      'run_eligibility_acl_command apps/migrator/dist/provision-eligibility-payment-cup-projection-acl.js pre',
+    );
+    const fixture = rehearsal.indexOf('run_cup_projection_rehearsal prepare');
+    const eligibility = rehearsal.indexOf('run_clone_migrator eligibility_payment');
+    const cup = rehearsal.indexOf('run_clone_migrator cup_projection');
+    const aclPost = rehearsal.indexOf(
+      'run_eligibility_acl_command apps/migrator/dist/provision-eligibility-payment-cup-projection-acl.js post',
+    );
+    const cupProbe = rehearsal.indexOf('run_cup_projection_rehearsal probe');
     const noOp = rehearsal.indexOf('rerun_output="$(run_clone_migrator)"');
     const rolePost = rehearsal.indexOf('run_clone_role_boundary post');
     const runtimeProbe = rehearsal.lastIndexOf('\nrun_clone_runtime_probe\n');
@@ -62,7 +76,13 @@ describe('Communities staged migration rehearsal contract', () => {
     expect(pre).toBeGreaterThan(rolePre);
     expect(foundation).toBeGreaterThan(pre);
     expect(post).toBeGreaterThan(foundation);
-    expect(noOp).toBeGreaterThan(post);
+    expect(aclPre).toBeGreaterThan(post);
+    expect(fixture).toBeGreaterThan(aclPre);
+    expect(eligibility).toBeGreaterThan(fixture);
+    expect(cup).toBeGreaterThan(eligibility);
+    expect(aclPost).toBeGreaterThan(cup);
+    expect(cupProbe).toBeGreaterThan(aclPost);
+    expect(noOp).toBeGreaterThan(cupProbe);
     expect(rolePost).toBeGreaterThan(noOp);
     expect(runtimeProbe).toBeGreaterThan(rolePost);
     expect(verifyManifest).toBeGreaterThan(runtimeProbe);
@@ -88,16 +108,20 @@ describe('Communities staged migration rehearsal contract', () => {
     expect(runbook).toContain('rejects the existing `postgres-communities-preflight-*`');
   });
 
-  it('reserves 32_V1 as fail-closed while binding the reviewed ACL matrix and inspector', () => {
+  it('keeps 32_V1 frozen and binds 33_V1 to the reviewed ACL matrix and runtime probe', () => {
     const workflow = source('.github/workflows/communities-staged-migration-rehearsal.yaml');
     const wrapper = source('deploy/jetson/run-communities-staged-migration-rehearsal.sh');
     const rehearsal = source('deploy/jetson/rehearse-media-migration.sh');
     const runbook = source('docs/runbooks/communities-chain-integration.md');
     const matrix = source('packages/database/src/eligibility-payment-acl-matrix.ts');
     const inspector = source('apps/migrator/src/eligibility-payment-acl-boundary.ts');
+    const provisioner = source(
+      'apps/migrator/src/provision-eligibility-payment-cup-projection-acl.ts',
+    );
+    const projectionProbe = source('apps/migrator/src/cup-player-level-projection-rehearsal.ts');
 
-    expect(workflow).toContain('32_V1 is clone-evidence preparation only');
-    expect(wrapper).toContain('32_V1 is clone-evidence preparation only');
+    expect(workflow).toContain('32_V1 remains a frozen preparation-only contract');
+    expect(wrapper).toContain('32_V1 remains frozen');
     expect(rehearsal).toContain('32_V1 is clone-evidence preparation only');
     expect(runbook).toContain('f5ea040e4498a45310ad671f321e3044c33743ca7b0cbee7c72bc01ee9b6a91d');
     expect(runbook).toContain('eligibility-payment-acl-v1');
@@ -105,7 +129,7 @@ describe('Communities staged migration rehearsal contract', () => {
     expect(runbook).toContain('VERIFY_ELIGIBILITY_PAYMENT_RUNTIME_RLS_V1');
     expect(runbook).toContain('not wired into any');
     expect(source('apps/migrator/tsup.config.ts')).toContain(
-      "'src/provision-eligibility-payment-acl.ts'",
+      "'src/provision-eligibility-payment-cup-projection-acl.ts'",
     );
     expect(source('apps/migrator/tsup.config.ts')).toContain(
       "'src/verify-eligibility-payment-runtime-role.ts'",
@@ -116,7 +140,13 @@ describe('Communities staged migration rehearsal contract', () => {
     expect(matrix).toContain('COLUMN_ACL=FORBIDDEN');
     expect(inspector).toContain("set local search_path = 'pg_catalog'");
     expect(inspector).toContain('begin transaction read only');
-    expect(runbook).toContain('eligibility_payment=3');
-    expect(runbook).toContain('every `authorizes*=false` boundary remains unchanged');
+    expect(provisioner).toContain('ELIGIBILITY_PAYMENT_CUP_PROJECTION_ACL_RELATIONS');
+    expect(projectionProbe).toContain("reusedEvent.outcome !== 'idempotency_conflict'");
+    expect(projectionProbe).toContain("crossTenant.outcome !== 'actor_not_mapped'");
+    expect(runbook).toContain('Exact 33-file executable clone rehearsal contract');
+    expect(runbook).toContain('3f61d60f27ab90bf4fe8498af29771b06925ece3b1ac6c7cac32b296d86c06d0');
+    expect(runbook).toContain('83cba43d957e8104fc91b139020342dc154f571155c5fadafe36874583310310');
+    expect(runbook).toContain('eligibility_payment=3 cup_projection=1');
+    expect(runbook).toContain('`authorizes*=false` boundary remains unchanged');
   });
 });

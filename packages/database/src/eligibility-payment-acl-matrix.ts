@@ -3,6 +3,10 @@ import { createHash } from 'node:crypto';
 export const ELIGIBILITY_PAYMENT_ACL_MATRIX_VERSION = 'eligibility-payment-acl-v1';
 export const ELIGIBILITY_PAYMENT_ACL_MATRIX_SHA256 =
   '065df6510c35ea1be09dad9b6415b25c30543902837336739911555ec3dcad26';
+export const ELIGIBILITY_PAYMENT_CUP_PROJECTION_ACL_MATRIX_VERSION =
+  'eligibility-payment-cup-projection-acl-v2';
+export const ELIGIBILITY_PAYMENT_CUP_PROJECTION_ACL_MATRIX_SHA256 =
+  '83cba43d957e8104fc91b139020342dc154f571155c5fadafe36874583310310';
 
 export type EligibilityPaymentRuntimePrivilege = 'SELECT' | 'INSERT' | 'UPDATE';
 
@@ -18,7 +22,9 @@ export type EligibilityPaymentAclRelation = {
     | 'personal_invitations'
     | 'decisions'
     | 'payment_snapshots'
-    | 'payment_confirmation_evidence';
+    | 'payment_confirmation_evidence'
+    | 'cup_player_level_projections'
+    | 'cup_player_level_projection_events';
   readonly policyName: string;
   readonly runtimePrivileges: readonly EligibilityPaymentRuntimePrivilege[];
 };
@@ -84,6 +90,26 @@ export const ELIGIBILITY_PAYMENT_ACL_RELATIONS = [
     policyName: 'games_payment_confirmation_evidence_tenant_isolation',
     runtimePrivileges: ['SELECT', 'INSERT', 'UPDATE'],
   },
+] as const satisfies readonly EligibilityPaymentAclRelation[];
+
+export const CUP_PLAYER_LEVEL_PROJECTION_ACL_RELATIONS = [
+  {
+    schemaName: 'eligibility',
+    relationName: 'cup_player_level_projections',
+    policyName: 'cup_player_level_projections_tenant_isolation',
+    runtimePrivileges: ['SELECT', 'INSERT', 'UPDATE'],
+  },
+  {
+    schemaName: 'eligibility',
+    relationName: 'cup_player_level_projection_events',
+    policyName: 'cup_player_level_projection_events_tenant_isolation',
+    runtimePrivileges: ['SELECT', 'INSERT'],
+  },
+] as const satisfies readonly EligibilityPaymentAclRelation[];
+
+export const ELIGIBILITY_PAYMENT_CUP_PROJECTION_ACL_RELATIONS = [
+  ...ELIGIBILITY_PAYMENT_ACL_RELATIONS,
+  ...CUP_PLAYER_LEVEL_PROJECTION_ACL_RELATIONS,
 ] as const satisfies readonly EligibilityPaymentAclRelation[];
 
 export const ELIGIBILITY_PAYMENT_ACL_SCHEMA_PRIVILEGES = [
@@ -205,6 +231,7 @@ export function assertEligibilityPaymentAclBoundary(input: {
   readonly schemas: readonly EligibilityPaymentSchemaAclSnapshot[];
   readonly preexistingRelations: readonly EligibilityPaymentPreexistingRelationSnapshot[];
   readonly relations?: readonly EligibilityPaymentRelationAclSnapshot[];
+  readonly expectedRelations?: readonly EligibilityPaymentAclRelation[];
 }): void {
   if (
     !input.roles.migratorSessionIdentityExact ||
@@ -268,10 +295,11 @@ export function assertEligibilityPaymentAclBoundary(input: {
   if (input.phase === 'pre') return;
 
   const relations = input.relations ?? [];
-  if (relations.length !== ELIGIBILITY_PAYMENT_ACL_RELATIONS.length) {
+  const expectedRelations = input.expectedRelations ?? ELIGIBILITY_PAYMENT_ACL_RELATIONS;
+  if (relations.length !== expectedRelations.length) {
     fail('ELIGIBILITY_PAYMENT_ACL_RELATION_SET_INVALID');
   }
-  for (const expected of ELIGIBILITY_PAYMENT_ACL_RELATIONS) {
+  for (const expected of expectedRelations) {
     const matchingRelations = relations.filter(
       (candidate) =>
         candidate.schemaName === expected.schemaName &&
@@ -355,6 +383,16 @@ export function assertEligibilityPaymentAclProvisioningBoundary(input: {
 }
 
 export function eligibilityPaymentAclMatrixCanonicalText(): string {
+  return aclMatrixCanonicalText(
+    ELIGIBILITY_PAYMENT_ACL_MATRIX_VERSION,
+    ELIGIBILITY_PAYMENT_ACL_RELATIONS,
+  );
+}
+
+function aclMatrixCanonicalText(
+  version: string,
+  relations: readonly EligibilityPaymentAclRelation[],
+): string {
   const roleLine =
     'ROLES|RUNTIME=EXISTS,DISTINCT,NOSUPERUSER,NOBYPASSRLS,NO_MEMBERSHIP_EDGES|MIGRATOR=SESSION_USER_EXACT,NOSUPERUSER,NOBYPASSRLS,NO_MEMBERSHIP_EDGES';
   const schemaLines = ELIGIBILITY_PAYMENT_ACL_SCHEMA_PRIVILEGES.map(
@@ -365,23 +403,32 @@ export function eligibilityPaymentAclMatrixCanonicalText(): string {
     (relation) =>
       `PREEXISTING_RELATION|${relation.schemaName}|${relation.relationName}|OWNER=MIGRATOR`,
   );
-  const relationLines = ELIGIBILITY_PAYMENT_ACL_RELATIONS.map(
+  const relationLines = relations.map(
     (relation) =>
       `RELATION|${relation.schemaName}|${relation.relationName}|OWNER=MIGRATOR|FORCE_RLS=REQUIRED|POLICY=${relation.policyName}:PERMISSIVE:ALL:PUBLIC:TENANT_EXACT|PRIVILEGES=${relation.runtimePrivileges.join(',')}|GRANT_OPTION=FORBIDDEN|PUBLIC=FORBIDDEN|THIRD_PARTY=FORBIDDEN|COLUMN_ACL=FORBIDDEN`,
   );
   return (
-    [
-      `VERSION|${ELIGIBILITY_PAYMENT_ACL_MATRIX_VERSION}`,
-      roleLine,
-      ...schemaLines,
-      ...preexistingLines,
-      ...relationLines,
-    ].join('\n') + '\n'
+    [`VERSION|${version}`, roleLine, ...schemaLines, ...preexistingLines, ...relationLines].join(
+      '\n',
+    ) + '\n'
+  );
+}
+
+export function eligibilityPaymentCupProjectionAclMatrixCanonicalText(): string {
+  return aclMatrixCanonicalText(
+    ELIGIBILITY_PAYMENT_CUP_PROJECTION_ACL_MATRIX_VERSION,
+    ELIGIBILITY_PAYMENT_CUP_PROJECTION_ACL_RELATIONS,
   );
 }
 
 export function eligibilityPaymentAclMatrixSha256(): string {
   return createHash('sha256').update(eligibilityPaymentAclMatrixCanonicalText()).digest('hex');
+}
+
+export function eligibilityPaymentCupProjectionAclMatrixSha256(): string {
+  return createHash('sha256')
+    .update(eligibilityPaymentCupProjectionAclMatrixCanonicalText())
+    .digest('hex');
 }
 
 export function assertEligibilityPaymentAclMatrixBinding(input: {
@@ -394,5 +441,19 @@ export function assertEligibilityPaymentAclMatrixBinding(input: {
     eligibilityPaymentAclMatrixSha256() !== ELIGIBILITY_PAYMENT_ACL_MATRIX_SHA256
   ) {
     throw new Error('ELIGIBILITY_PAYMENT_ACL_MATRIX_BINDING_INVALID');
+  }
+}
+
+export function assertEligibilityPaymentCupProjectionAclMatrixBinding(input: {
+  readonly version: string;
+  readonly sha256: string;
+}): void {
+  if (
+    input.version !== ELIGIBILITY_PAYMENT_CUP_PROJECTION_ACL_MATRIX_VERSION ||
+    input.sha256 !== ELIGIBILITY_PAYMENT_CUP_PROJECTION_ACL_MATRIX_SHA256 ||
+    eligibilityPaymentCupProjectionAclMatrixSha256() !==
+      ELIGIBILITY_PAYMENT_CUP_PROJECTION_ACL_MATRIX_SHA256
+  ) {
+    throw new Error('ELIGIBILITY_PAYMENT_CUP_PROJECTION_ACL_MATRIX_BINDING_INVALID');
   }
 }

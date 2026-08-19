@@ -8,12 +8,18 @@ import {
   ELIGIBILITY_PAYMENT_ACL_PREEXISTING_RELATIONS,
   ELIGIBILITY_PAYMENT_ACL_RELATIONS,
   ELIGIBILITY_PAYMENT_ACL_SCHEMA_PRIVILEGES,
+  ELIGIBILITY_PAYMENT_CUP_PROJECTION_ACL_MATRIX_SHA256,
+  ELIGIBILITY_PAYMENT_CUP_PROJECTION_ACL_MATRIX_VERSION,
+  ELIGIBILITY_PAYMENT_CUP_PROJECTION_ACL_RELATIONS,
   EligibilityPaymentAclMatrixError,
   assertEligibilityPaymentAclBoundary,
   assertEligibilityPaymentAclMatrixBinding,
   assertEligibilityPaymentAclProvisioningBoundary,
+  assertEligibilityPaymentCupProjectionAclMatrixBinding,
   eligibilityPaymentAclMatrixCanonicalText,
   eligibilityPaymentAclMatrixSha256,
+  eligibilityPaymentCupProjectionAclMatrixCanonicalText,
+  eligibilityPaymentCupProjectionAclMatrixSha256,
 } from './eligibility-payment-acl-matrix.js';
 
 function schemas() {
@@ -102,6 +108,31 @@ describe('eligibility/payment runtime ACL matrix', () => {
     expect(eligibilityPaymentAclMatrixCanonicalText()).toContain('GRANT_OPTION=FORBIDDEN');
   });
 
+  it('pins the CUP projection extension without changing the frozen v1 matrix', () => {
+    const projectionSource = readFileSync(
+      new URL('./cup-player-level-projection-repository.ts', import.meta.url),
+      'utf8',
+    );
+    expect(ELIGIBILITY_PAYMENT_CUP_PROJECTION_ACL_MATRIX_VERSION).toBe(
+      'eligibility-payment-cup-projection-acl-v2',
+    );
+    expect(ELIGIBILITY_PAYMENT_CUP_PROJECTION_ACL_RELATIONS).toHaveLength(12);
+    expect(eligibilityPaymentCupProjectionAclMatrixSha256()).toBe(
+      ELIGIBILITY_PAYMENT_CUP_PROJECTION_ACL_MATRIX_SHA256,
+    );
+    expect(eligibilityPaymentCupProjectionAclMatrixCanonicalText()).toContain(
+      'RELATION|eligibility|cup_player_level_projections',
+    );
+    expect(eligibilityPaymentCupProjectionAclMatrixCanonicalText()).toContain(
+      'RELATION|eligibility|cup_player_level_projection_events',
+    );
+    for (const relation of ELIGIBILITY_PAYMENT_CUP_PROJECTION_ACL_RELATIONS.slice(-2)) {
+      expect(projectionSource).toContain(`eligibility.${relation.relationName}`);
+      expect(relation.runtimePrivileges).not.toContain('DELETE');
+    }
+    expect(eligibilityPaymentAclMatrixSha256()).toBe(ELIGIBILITY_PAYMENT_ACL_MATRIX_SHA256);
+  });
+
   it('matches the runtime SQL operations without granting broader table privileges', () => {
     const sources = [
       readFileSync(new URL('./player-level-repository.ts', import.meta.url), 'utf8'),
@@ -139,6 +170,56 @@ describe('eligibility/payment runtime ACL matrix', () => {
     expect(() =>
       assertEligibilityPaymentAclMatrixBinding({ ...valid, sha256: '0'.repeat(64) }),
     ).toThrow('ELIGIBILITY_PAYMENT_ACL_MATRIX_BINDING_INVALID');
+  });
+
+  it('binds the CUP projection matrix independently from v1', () => {
+    const valid = {
+      version: ELIGIBILITY_PAYMENT_CUP_PROJECTION_ACL_MATRIX_VERSION,
+      sha256: ELIGIBILITY_PAYMENT_CUP_PROJECTION_ACL_MATRIX_SHA256,
+    };
+    expect(() => assertEligibilityPaymentCupProjectionAclMatrixBinding(valid)).not.toThrow();
+    expect(() =>
+      assertEligibilityPaymentCupProjectionAclMatrixBinding({
+        version: ELIGIBILITY_PAYMENT_ACL_MATRIX_VERSION,
+        sha256: ELIGIBILITY_PAYMENT_ACL_MATRIX_SHA256,
+      }),
+    ).toThrow('ELIGIBILITY_PAYMENT_CUP_PROJECTION_ACL_MATRIX_BINDING_INVALID');
+  });
+
+  it('accepts the exact post boundary for all 12 CUP projection relations', () => {
+    const extendedRelations = ELIGIBILITY_PAYMENT_CUP_PROJECTION_ACL_RELATIONS.map((relation) => ({
+      schemaName: relation.schemaName,
+      relationName: relation.relationName,
+      exists: true,
+      ownedByMigrator: true,
+      forceRls: true,
+      policies: [
+        {
+          name: relation.policyName,
+          command: '*',
+          roles: ['PUBLIC'],
+          permissive: true,
+          qual: "(tenant_id = (NULLIF(current_setting('app.tenant_id'::text, true), ''::text))::uuid)",
+          withCheck:
+            "(tenant_id = (NULLIF(current_setting('app.tenant_id'::text, true), ''::text))::uuid)",
+        },
+      ],
+      runtimePrivileges: [...relation.runtimePrivileges],
+      runtimeGrantOptions: 0,
+      publicPrivileges: 0,
+      unexpectedGranteePrivileges: 0,
+      columnPrivileges: 0,
+    }));
+    expect(() =>
+      assertEligibilityPaymentAclBoundary({
+        phase: 'post',
+        roles: roles(),
+        schemas: schemas(),
+        preexistingRelations: preexistingRelations(),
+        relations: extendedRelations,
+        expectedRelations: ELIGIBILITY_PAYMENT_CUP_PROJECTION_ACL_RELATIONS,
+      }),
+    ).not.toThrow();
   });
 
   it('accepts the exact pre and post migration ACL boundary', () => {

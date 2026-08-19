@@ -32,18 +32,31 @@ expected_wrapper_sha=${14:-}
 expected_rehearsal_sha=${15:-}
 expected_ledger_verifier_sha=${16:-}
 expected_restore_helper_sha=${17:-}
+expected_acl_matrix_version=${18:-}
+expected_acl_matrix_sha=${19:-}
 
 case "$confirmation" in
-  REHEARSE_COMMUNITIES_STAGING_29_V1) ;;
+  REHEARSE_COMMUNITIES_STAGING_29_V1)
+    test "$#" -eq 17 || fail 'exact staged rehearsal binding tuple is required'
+    test "$expected_contract_version" = 29_V1 || fail 'staged rehearsal contract version is invalid'
+    test "$expected_pending_set_sha" = 13b5ca1d0930fdc4b67852f01418c27f8946f538f2311d7e5f755ecb2df12747 ||
+      fail 'staged rehearsal pending set binding is invalid'
+    ;;
   REHEARSE_COMMUNITIES_STAGING_32_V1)
-    fail '32_V1 is clone-evidence preparation only until a separately approved runtime ACL matrix exists'
+    fail '32_V1 remains frozen and cannot authorize rehearsal execution'
+    ;;
+  REHEARSE_COMMUNITIES_STAGING_33_V1)
+    test "$#" -eq 19 || fail 'exact staged rehearsal binding tuple is required'
+    test "$expected_contract_version" = 33_V1 || fail 'staged rehearsal contract version is invalid'
+    test "$expected_pending_set_sha" = 3f61d60f27ab90bf4fe8498af29771b06925ece3b1ac6c7cac32b296d86c06d0 ||
+      fail 'staged rehearsal pending set binding is invalid'
+    test "$expected_acl_matrix_version" = eligibility-payment-cup-projection-acl-v2 ||
+      fail 'staged rehearsal ACL matrix version is invalid'
+    test "$expected_acl_matrix_sha" = 83cba43d957e8104fc91b139020342dc154f571155c5fadafe36874583310310 ||
+      fail 'staged rehearsal ACL matrix binding is invalid'
     ;;
   *) fail 'exact staged rehearsal confirmation is required' ;;
 esac
-test "$#" -eq 17 || fail 'exact staged rehearsal binding tuple is required'
-test "$expected_contract_version" = 29_V1 || fail 'staged rehearsal contract version is invalid'
-test "$expected_pending_set_sha" = 13b5ca1d0930fdc4b67852f01418c27f8946f538f2311d7e5f755ecb2df12747 ||
-  fail 'staged rehearsal pending set binding is invalid'
 
 validate_hex() {
   value=$1
@@ -64,6 +77,9 @@ validate_hex "$expected_wrapper_sha" 64 'wrapper command binding'
 validate_hex "$expected_rehearsal_sha" 64 'rehearsal command binding'
 validate_hex "$expected_ledger_verifier_sha" 64 'ledger verifier binding'
 validate_hex "$expected_restore_helper_sha" 64 'restore helper binding'
+if test "$expected_contract_version" = 33_V1; then
+  validate_hex "$expected_acl_matrix_sha" 64 'ACL matrix binding'
+fi
 case "$expected_migrator_digest" in sha256:[0-9a-f]*) ;; *) fail 'migrator digest binding is invalid' ;; esac
 test "${#expected_migrator_digest}" -eq 71 || fail 'migrator digest binding is invalid'
 case "$expected_target_database" in
@@ -303,7 +319,14 @@ test "$(stat -c %a "$backup_path")" = 600 || fail 'retained backup mode is unsaf
 
 rehearsal_stdout="$(mktemp "$backup_root/.communities-rehearsal.stdout.XXXXXX")"
 rehearsal_stderr="$(mktemp "$backup_root/.communities-rehearsal.stderr.XXXXXX")"
-if ! COMMUNITIES_STAGED_REHEARSAL_CONFIRMATION=COMMUNITIES_STAGED_REHEARSAL_29_V1 \
+if test "$expected_contract_version" = 33_V1; then
+  rehearsal_confirmation=COMMUNITIES_STAGED_REHEARSAL_33_V1
+else
+  rehearsal_confirmation=COMMUNITIES_STAGED_REHEARSAL_29_V1
+fi
+if ! COMMUNITIES_STAGED_REHEARSAL_CONFIRMATION="$rehearsal_confirmation" \
+  COMMUNITIES_STAGED_REHEARSAL_ACL_MATRIX_VERSION="$expected_acl_matrix_version" \
+  COMMUNITIES_STAGED_REHEARSAL_ACL_MATRIX_SHA256="$expected_acl_matrix_sha" \
   COMMUNITIES_STAGED_REHEARSAL_EXPECTED_BACKUP_SHA="$backup_sha" \
   COMMUNITIES_STAGED_REHEARSAL_EXPECTED_SOURCE_LEDGER_SHA="$expected_source_ledger_sha" \
   COMMUNITIES_STAGED_REHEARSAL_EXPECTED_CANDIDATE_SHA="$expected_candidate_sha" \
@@ -318,7 +341,11 @@ if ! COMMUNITIES_STAGED_REHEARSAL_CONFIRMATION=COMMUNITIES_STAGED_REHEARSAL_29_V
   fail 'isolated Communities staged rehearsal failed; inspect the retained cleanup marker locally'
 fi
 test ! -s "$rehearsal_stderr" || fail 'isolated Communities staged rehearsal emitted unexpected stderr'
-completion_evidence="communities_staged_migration_rehearsal database=$restore_database pre_foundation=16 foundation=5 post_foundation=8 quota_index_measurements=4 source_ledger_sha=$expected_source_ledger_sha cleanup=confirmed status=passed"
+if test "$expected_contract_version" = 33_V1; then
+  completion_evidence="communities_staged_migration_rehearsal database=$restore_database contract=33_V1 pre_foundation=16 foundation=5 post_foundation=8 eligibility_payment=3 cup_projection=1 acl_matrix=$expected_acl_matrix_version projection_probe=passed quota_index_measurements=4 source_ledger_sha=$expected_source_ledger_sha cleanup=confirmed status=passed"
+else
+  completion_evidence="communities_staged_migration_rehearsal database=$restore_database pre_foundation=16 foundation=5 post_foundation=8 quota_index_measurements=4 source_ledger_sha=$expected_source_ledger_sha cleanup=confirmed status=passed"
+fi
 grep -Fx "$completion_evidence" "$rehearsal_stdout" >/dev/null ||
   fail 'staged rehearsal completion evidence is missing'
 quota_evidence="$(grep '^community_media_quota_index_measurement .* rollback=confirmed status=passed$' "$rehearsal_stdout")"
@@ -327,6 +354,16 @@ test "$(printf '%s\n' "$quota_evidence" | wc -l | tr -d ' ')" -eq 4 ||
 privacy_evidence="$(grep -E '^communities_profile_privacy_audit missing_before=[0-9]+ missing_after=0 authority=postgres_superuser status=passed$' "$rehearsal_stdout")"
 test "$(printf '%s\n' "$privacy_evidence" | wc -l | tr -d ' ')" -eq 1 ||
   fail 'staged rehearsal privacy audit evidence is incomplete'
+acl_evidence=
+projection_evidence=
+if test "$expected_contract_version" = 33_V1; then
+  acl_evidence="$(grep -F "eligibility_payment_acl matrix=$expected_acl_matrix_version pre=passed post=passed privileges=exact status=passed" "$rehearsal_stdout")"
+  test "$(printf '%s\n' "$acl_evidence" | wc -l | tr -d ' ')" -eq 1 ||
+    fail 'staged rehearsal ACL evidence is incomplete'
+  projection_evidence="$(grep -F 'cup_player_level_projection_clone_probe apply=passed replay=passed idempotency=passed cross_tenant_rls=passed status=passed' "$rehearsal_stdout")"
+  test "$(printf '%s\n' "$projection_evidence" | wc -l | tr -d ' ')" -eq 1 ||
+    fail 'staged rehearsal CUP projection evidence is incomplete'
+fi
 
 assert_source_binding
 test "$source_manifest_before" = "$source_manifest_bound" && test "$source_identity_before" = "$source_identity_bound" ||
@@ -347,6 +384,10 @@ printf 'META|migratorDigest|%s\n' "$expected_migrator_digest"
 printf 'META|releaseEnvSha|%s\n' "$expected_release_env_sha"
 printf 'META|composeSha|%s\n' "$expected_compose_sha"
 printf 'META|manifestSha|%s\n' "$expected_manifest_sha"
+if test "$expected_contract_version" = 33_V1; then
+  printf 'META|aclMatrixVersion|%s\n' "$expected_acl_matrix_version"
+  printf 'META|aclMatrixSha|%s\n' "$expected_acl_matrix_sha"
+fi
 printf 'META|backupPath|%s\n' "$backup_path"
 printf 'META|backupSha|%s\n' "$backup_sha"
 printf 'META|backupBytes|%s\n' "$backup_bytes"
@@ -359,6 +400,10 @@ printf 'META|authorizesImport|false\n'
 printf 'META|authorizesActivation|false\n'
 printf '%s\n' "$privacy_evidence"
 printf '%s\n' "$quota_evidence"
+if test "$expected_contract_version" = 33_V1; then
+  printf '%s\n' "$acl_evidence"
+  printf '%s\n' "$projection_evidence"
+fi
 printf '%s\n' "$completion_evidence"
 
 backup_retained=true

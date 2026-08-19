@@ -12,6 +12,12 @@ const request = resolveCommunitiesStagedRehearsalRequest({
   ...(process.env.COMMUNITIES_STAGED_REHEARSAL_PHASE
     ? { phase: process.env.COMMUNITIES_STAGED_REHEARSAL_PHASE }
     : {}),
+  ...(process.env.COMMUNITIES_STAGED_REHEARSAL_ACL_MATRIX_VERSION
+    ? { aclMatrixVersion: process.env.COMMUNITIES_STAGED_REHEARSAL_ACL_MATRIX_VERSION }
+    : {}),
+  ...(process.env.COMMUNITIES_STAGED_REHEARSAL_ACL_MATRIX_SHA256
+    ? { aclMatrixSha256: process.env.COMMUNITIES_STAGED_REHEARSAL_ACL_MATRIX_SHA256 }
+    : {}),
   ...(process.env.PHUB_RESTORE_DATABASE
     ? { restoreDatabase: process.env.PHUB_RESTORE_DATABASE }
     : {}),

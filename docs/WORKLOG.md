@@ -1,5 +1,17 @@
 # Worklog
 
+## 2026-08-19 — Exact 33-file CUP projection clone rehearsal contract
+
+- Added a separately versioned `33_V1` clone-only rehearsal for the exact
+  `16+5+8+3+1` pending migration chain through `0087_cup_player_level_projection.sql`; the older
+  `29_V1` evidence contract remains unchanged and `32_V1` remains fail-closed.
+- Bound the ceremony to an immutable 12-relation ACL v2 matrix, a clone-only schema/table grant
+  provisioner and pre/post catalog verification under distinct non-privileged migrator/runtime
+  identities.
+- Added synthetic clone fixtures and a real repository probe for apply, replay, immutable event
+  idempotency and cross-tenant RLS, while preserving all false authorization markers. No shared
+  migration, deployment, feature activation, roster write or payment action is part of this change.
+
 ## 2026-07-30 — Games lifecycle process manager
 
 - Activated the existing server-owned `game.lifecycle.start.v1` and

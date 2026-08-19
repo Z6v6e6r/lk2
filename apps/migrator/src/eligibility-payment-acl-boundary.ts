@@ -3,6 +3,7 @@ import {
   ELIGIBILITY_PAYMENT_ACL_RELATIONS,
   ELIGIBILITY_PAYMENT_ACL_SCHEMA_PRIVILEGES,
   assertEligibilityPaymentAclBoundary,
+  type EligibilityPaymentAclRelation,
   type EligibilityPaymentPolicySnapshot,
   type EligibilityPaymentPreexistingRelationSnapshot,
   type EligibilityPaymentRelationAclSnapshot,
@@ -68,6 +69,7 @@ export async function inspectEligibilityPaymentAclBoundary(
   client: Queryable,
   runtimeRoleName: string,
   phase: 'pre' | 'post',
+  expectedRelations: readonly EligibilityPaymentAclRelation[] = ELIGIBILITY_PAYMENT_ACL_RELATIONS,
 ): Promise<{
   readonly roles: EligibilityPaymentRoleAclSnapshot;
   readonly schemas: readonly EligibilityPaymentSchemaAclSnapshot[];
@@ -333,7 +335,7 @@ export async function inspectEligibilityPaymentAclBoundary(
     [
       runtimeRoleName,
       JSON.stringify(
-        ELIGIBILITY_PAYMENT_ACL_RELATIONS.map((relation) => ({
+        expectedRelations.map((relation) => ({
           schema_name: relation.schemaName,
           relation_name: relation.relationName,
         })),
@@ -360,6 +362,7 @@ export async function verifyEligibilityPaymentAclBoundary(input: {
   readonly migratorConnectionString: string;
   readonly runtimeRoleName: string;
   readonly phase: 'pre' | 'post';
+  readonly expectedRelations?: readonly EligibilityPaymentAclRelation[];
 }): Promise<void> {
   const client = new Client({
     connectionString: input.migratorConnectionString,
@@ -374,8 +377,13 @@ export async function verifyEligibilityPaymentAclBoundary(input: {
       client,
       input.runtimeRoleName,
       input.phase,
+      input.expectedRelations,
     );
-    assertEligibilityPaymentAclBoundary({ phase: input.phase, ...snapshot });
+    assertEligibilityPaymentAclBoundary({
+      phase: input.phase,
+      ...snapshot,
+      ...(input.expectedRelations ? { expectedRelations: input.expectedRelations } : {}),
+    });
   } finally {
     await client.query('rollback').catch(() => undefined);
     await client.end();

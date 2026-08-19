@@ -16,7 +16,7 @@ on:
         required: true
         type: string
       confirmation:
-        description: Type REHEARSE_COMMUNITIES_STAGING_29_V1. The reserved 32_V1 token is fail-closed pending a separately approved runtime ACL matrix.
+        description: Type REHEARSE_COMMUNITIES_STAGING_29_V1 or REHEARSE_COMMUNITIES_STAGING_33_V1. The 32_V1 preparation token remains fail-closed.
         required: true
         type: string
 
@@ -55,9 +55,9 @@ jobs:
           case "$EXPECTED_RELEASE_ENV_SHA" in ''|*[!0-9a-f]*) exit 1 ;; esac
           test "${#EXPECTED_RELEASE_ENV_SHA}" -eq 64 || exit 1
           case "$CONFIRMATION" in
-            REHEARSE_COMMUNITIES_STAGING_29_V1) ;;
+            REHEARSE_COMMUNITIES_STAGING_29_V1 | REHEARSE_COMMUNITIES_STAGING_33_V1) ;;
             REHEARSE_COMMUNITIES_STAGING_32_V1)
-              echo '::error::32_V1 is clone-evidence preparation only: a separately approved runtime ACL matrix is required before this workflow can execute.'
+              echo '::error::32_V1 remains a frozen preparation-only contract; use the separately reviewed 33_V1 clone ceremony.'
               exit 1
               ;;
             *)
@@ -78,6 +78,8 @@ jobs:
       contract_version: ${{ steps.verify.outputs.contract_version }}
       manifest_sha: ${{ steps.verify.outputs.manifest_sha }}
       pending_set_sha: ${{ steps.verify.outputs.pending_set_sha }}
+      acl_matrix_version: ${{ steps.verify.outputs.acl_matrix_version }}
+      acl_matrix_sha: ${{ steps.verify.outputs.acl_matrix_sha }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -113,11 +115,11 @@ jobs:
           test -s communities-staged-inventory.evidence
           test ! -s communities-staged-inventory.stderr
           rm -f communities-staged-inventory.stderr
-      - name: Verify exact inventory, 29-file pending set and phase binding
+      - name: Verify exact versioned inventory, pending set and phase binding
         id: verify
         env:
           CANDIDATE_SHA: ${{ github.sha }}
-          CONTRACT_VERSION: 29_V1
+          CONFIRMATION: ${{ inputs.confirmation }}
           EXPECTED_DATABASE: ${{ secrets.STAGING_PREFLIGHT_DATABASE }}
           EXPECTED_MIGRATOR_DIGEST: ${{ inputs.expected_migrator_digest }}
           EXPECTED_RELEASE_ENV_SHA: ${{ inputs.expected_rehearsal_release_sha }}
@@ -149,15 +151,38 @@ jobs:
           import { readFileSync } from 'node:fs';
           import {
             COMMUNITIES_STAGED_REHEARSAL_PENDING_FILENAMES,
+            COMMUNITIES_STAGED_REHEARSAL_33_PENDING_FILENAMES,
             communitiesStagedRehearsalPendingSetSha256,
           } from './packages/database/src/communities-staged-rehearsal-policy.ts';
+          import {
+            ELIGIBILITY_PAYMENT_CUP_PROJECTION_ACL_MATRIX_SHA256,
+            ELIGIBILITY_PAYMENT_CUP_PROJECTION_ACL_MATRIX_VERSION,
+            assertEligibilityPaymentCupProjectionAclMatrixBinding,
+          } from './packages/database/src/eligibility-payment-acl-matrix.ts';
           const report = JSON.parse(readFileSync('communities-staged-inventory-report.json', 'utf8'));
-          if (JSON.stringify(report.missingMigrationFilenames) !== JSON.stringify(COMMUNITIES_STAGED_REHEARSAL_PENDING_FILENAMES)) {
+          const is33 = process.env.CONFIRMATION === 'REHEARSE_COMMUNITIES_STAGING_33_V1';
+          const pending = is33
+            ? COMMUNITIES_STAGED_REHEARSAL_33_PENDING_FILENAMES
+            : COMMUNITIES_STAGED_REHEARSAL_PENDING_FILENAMES;
+          const contractVersion = is33 ? '33_V1' : '29_V1';
+          const aclMatrixVersion = is33
+            ? ELIGIBILITY_PAYMENT_CUP_PROJECTION_ACL_MATRIX_VERSION
+            : 'NONE';
+          const aclMatrixSha = is33
+            ? ELIGIBILITY_PAYMENT_CUP_PROJECTION_ACL_MATRIX_SHA256
+            : 'NONE';
+          if (is33) {
+            assertEligibilityPaymentCupProjectionAclMatrixBinding({
+              version: aclMatrixVersion,
+              sha256: aclMatrixSha,
+            });
+          }
+          if (JSON.stringify(report.missingMigrationFilenames) !== JSON.stringify(pending)) {
             throw new Error('COMMUNITIES_STAGED_REHEARSAL_PENDING_SET_MISMATCH');
           }
-          const pendingSetSha = communitiesStagedRehearsalPendingSetSha256(COMMUNITIES_STAGED_REHEARSAL_PENDING_FILENAMES);
+          const pendingSetSha = communitiesStagedRehearsalPendingSetSha256(pending);
           const fields = [
-            process.env.CONTRACT_VERSION,
+            contractVersion,
             pendingSetSha,
             report.activeRelease,
             report.appliedLedgerSha256,
@@ -167,14 +192,17 @@ jobs:
             process.env.EXPECTED_MIGRATOR_DIGEST,
             process.env.EXPECTED_RELEASE_ENV_SHA,
             process.env.EXPECTED_MANIFEST_SHA,
+            ...(is33 ? [aclMatrixVersion, aclMatrixSha] : []),
           ];
           const binding = createHash('sha256').update(`${fields.join('\n')}\n`).digest('hex');
           process.stdout.write(`active_release=${report.activeRelease}\n`);
-          process.stdout.write(`contract_version=${process.env.CONTRACT_VERSION}\n`);
+          process.stdout.write(`contract_version=${contractVersion}\n`);
           process.stdout.write(`source_ledger_sha=${report.appliedLedgerSha256}\n`);
           process.stdout.write(`phase_binding_sha=${binding}\n`);
           process.stdout.write(`manifest_sha=${process.env.EXPECTED_MANIFEST_SHA}\n`);
           process.stdout.write(`pending_set_sha=${pendingSetSha}\n`);
+          process.stdout.write(`acl_matrix_version=${aclMatrixVersion}\n`);
+          process.stdout.write(`acl_matrix_sha=${aclMatrixSha}\n`);
           NODE
           cat communities-staged-inventory.outputs >> "$GITHUB_OUTPUT"
       - name: Publish redacted inventory and manifest evidence
@@ -227,7 +255,10 @@ jobs:
           printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
       - name: Recompute phase binding and run only the isolated clone rehearsal
         env:
+          CONFIRMATION: ${{ inputs.confirmation }}
           EXPECTED_ACTIVE_RELEASE: ${{ needs.inventory.outputs.active_release }}
+          EXPECTED_ACL_MATRIX_SHA: ${{ needs.inventory.outputs.acl_matrix_sha }}
+          EXPECTED_ACL_MATRIX_VERSION: ${{ needs.inventory.outputs.acl_matrix_version }}
           EXPECTED_CONTRACT_VERSION: ${{ needs.inventory.outputs.contract_version }}
           EXPECTED_DATABASE: ${{ secrets.STAGING_REHEARSAL_DATABASE }}
           EXPECTED_MANIFEST_SHA: ${{ needs.inventory.outputs.manifest_sha }}
@@ -259,6 +290,10 @@ jobs:
             printf '%s\n' "$EXPECTED_MIGRATOR_DIGEST"
             printf '%s\n' "$EXPECTED_RELEASE_ENV_SHA"
             printf '%s\n' "$actual_manifest_sha"
+            if [ "$EXPECTED_CONTRACT_VERSION" = 33_V1 ]; then
+              printf '%s\n' "$EXPECTED_ACL_MATRIX_VERSION"
+              printf '%s\n' "$EXPECTED_ACL_MATRIX_SHA"
+            fi
           } | sha256sum | cut -d ' ' -f 1)"
           test "$actual_binding_sha" = "$EXPECTED_PHASE_BINDING_SHA" || {
             echo '::error::Rehearsal environment does not match the fresh inventory phase binding.'
@@ -270,17 +305,23 @@ jobs:
           restore_helper_sha="$(sha256sum deploy/jetson/verify-postgres-backup-restore.sh | cut -d ' ' -f 1)"
           compose_sha="$(sha256sum deploy/compose.staging.yaml | cut -d ' ' -f 1)"
           manifest_base64="$(base64 -w 0 communities-staged-migrations.manifest)"
+          remote_command="$CONFIRMATION $EXPECTED_CONTRACT_VERSION $EXPECTED_PENDING_SET_SHA $EXPECTED_ACTIVE_RELEASE $EXPECTED_SOURCE_LEDGER_SHA $EXPECTED_DATABASE $EXPECTED_SYSTEM_IDENTIFIER $GITHUB_SHA $EXPECTED_MIGRATOR_DIGEST $EXPECTED_RELEASE_ENV_SHA $compose_sha $actual_manifest_sha $manifest_base64 $wrapper_sha $rehearsal_sha $ledger_verifier_sha $restore_helper_sha"
+          expected_evidence_lines=31
+          if [ "$EXPECTED_CONTRACT_VERSION" = 33_V1 ]; then
+            remote_command="$remote_command $EXPECTED_ACL_MATRIX_VERSION $EXPECTED_ACL_MATRIX_SHA"
+            expected_evidence_lines=35
+          fi
           timeout --signal=TERM --kill-after=30s 190m \
             ssh -i ~/.ssh/communities_rehearsal_ed25519 \
             -o IdentitiesOnly=yes -o ServerAliveInterval=10 -o ServerAliveCountMax=2 \
             "phub-preflight@$HOST" \
-            "REHEARSE_COMMUNITIES_STAGING_29_V1 $EXPECTED_CONTRACT_VERSION $EXPECTED_PENDING_SET_SHA $EXPECTED_ACTIVE_RELEASE $EXPECTED_SOURCE_LEDGER_SHA $EXPECTED_DATABASE $EXPECTED_SYSTEM_IDENTIFIER $GITHUB_SHA $EXPECTED_MIGRATOR_DIGEST $EXPECTED_RELEASE_ENV_SHA $compose_sha $actual_manifest_sha $manifest_base64 $wrapper_sha $rehearsal_sha $ledger_verifier_sha $restore_helper_sha" \
+            "$remote_command" \
             > communities-staged-rehearsal.evidence \
             2> communities-staged-rehearsal.stderr
           test -s communities-staged-rehearsal.evidence
           test ! -s communities-staged-rehearsal.stderr
           rm -f communities-staged-rehearsal.stderr
-          test "$(wc -l < communities-staged-rehearsal.evidence | tr -d ' ')" -eq 31
+          test "$(wc -l < communities-staged-rehearsal.evidence | tr -d ' ')" -eq "$expected_evidence_lines"
           grep -Fx "META|wrapperSha|$wrapper_sha" communities-staged-rehearsal.evidence
           grep -Fx "META|rehearsalScriptSha|$rehearsal_sha" communities-staged-rehearsal.evidence
           grep -Fx "META|ledgerVerifierSha|$ledger_verifier_sha" communities-staged-rehearsal.evidence
@@ -296,6 +337,10 @@ jobs:
           grep -Fx "META|releaseEnvSha|$EXPECTED_RELEASE_ENV_SHA" communities-staged-rehearsal.evidence
           grep -Fx "META|composeSha|$compose_sha" communities-staged-rehearsal.evidence
           grep -Fx "META|manifestSha|$actual_manifest_sha" communities-staged-rehearsal.evidence
+          if [ "$EXPECTED_CONTRACT_VERSION" = 33_V1 ]; then
+            grep -Fx "META|aclMatrixVersion|$EXPECTED_ACL_MATRIX_VERSION" communities-staged-rehearsal.evidence
+            grep -Fx "META|aclMatrixSha|$EXPECTED_ACL_MATRIX_SHA" communities-staged-rehearsal.evidence
+          fi
           grep -Fx 'META|rehearsalStatus|passed' communities-staged-rehearsal.evidence
           grep -Fx 'META|authorizesSharedMigration|false' communities-staged-rehearsal.evidence
           grep -Fx 'META|authorizesDeploy|false' communities-staged-rehearsal.evidence
@@ -308,7 +353,13 @@ jobs:
           grep -Eq '^META\|restoreDatabase\|phub_restore_[0-9]+_[0-9]+$' communities-staged-rehearsal.evidence
           grep -Eq '^communities_profile_privacy_audit missing_before=[0-9]+ missing_after=0 authority=postgres_superuser status=passed$' communities-staged-rehearsal.evidence
           test "$(grep -c '^community_media_quota_index_measurement .* rollback=confirmed status=passed$' communities-staged-rehearsal.evidence)" -eq 4
-          grep -Eq '^communities_staged_migration_rehearsal database=phub_restore_[0-9]+_[0-9]+ pre_foundation=16 foundation=5 post_foundation=8 quota_index_measurements=4 source_ledger_sha=[0-9a-f]{64} cleanup=confirmed status=passed$' communities-staged-rehearsal.evidence
+          if [ "$EXPECTED_CONTRACT_VERSION" = 33_V1 ]; then
+            grep -Fx "eligibility_payment_acl matrix=$EXPECTED_ACL_MATRIX_VERSION pre=passed post=passed privileges=exact status=passed" communities-staged-rehearsal.evidence
+            grep -Fx 'cup_player_level_projection_clone_probe apply=passed replay=passed idempotency=passed cross_tenant_rls=passed status=passed' communities-staged-rehearsal.evidence
+            grep -Eq '^communities_staged_migration_rehearsal database=phub_restore_[0-9]+_[0-9]+ contract=33_V1 pre_foundation=16 foundation=5 post_foundation=8 eligibility_payment=3 cup_projection=1 acl_matrix=eligibility-payment-cup-projection-acl-v2 projection_probe=passed quota_index_measurements=4 source_ledger_sha=[0-9a-f]{64} cleanup=confirmed status=passed$' communities-staged-rehearsal.evidence
+          else
+            grep -Eq '^communities_staged_migration_rehearsal database=phub_restore_[0-9]+_[0-9]+ pre_foundation=16 foundation=5 post_foundation=8 quota_index_measurements=4 source_ledger_sha=[0-9a-f]{64} cleanup=confirmed status=passed$' communities-staged-rehearsal.evidence
+          fi
           cat communities-staged-rehearsal.evidence
       - name: Publish redacted successful rehearsal evidence
         if: ${{ success() }}

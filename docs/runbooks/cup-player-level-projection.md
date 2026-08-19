@@ -36,6 +36,13 @@ Apply migration `0087_cup_player_level_projection.sql` before enabling the ingre
 deployment do not authorize activation. Keep all participation policies `OFF` until anonymized
 parity and join/waitlist/payment recovery gates have passed.
 
+Before any shared staging migration, run the separately approved exact `33_V1` clone-only rehearsal
+described in `docs/runbooks/communities-chain-integration.md`. Its success proves the ordered
+`16+5+8+3+1` migration path, exact ACL v2 catalog boundary and real apply/replay/cross-tenant RLS
+behavior only inside a disposable restored database. That evidence does not authorize a shared
+migration, deploy, sender/ingress activation, roster flag or payment action. A shared staging
+migration remains a separate release job and approval gate.
+
 ## Staging checks
 
 1. With the flag off, assert `503 CUP_PLAYER_LEVEL_PROJECTION_DISABLED`.
