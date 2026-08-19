@@ -132,7 +132,7 @@ export async function provisionCommunitiesStagingRoleSplitClone(
     );
     if (
       ledger.rows[0] === undefined ||
-      communitiesStagingRoleSplitInventorySha256(ledger.rows[0].ledger) !==
+      communitiesStagingRoleSplitInventorySha256(`${ledger.rows[0].ledger}\n`) !==
         input.sourceLedgerSha256 ||
       ledger.rows[0].count !== input.sourceLedgerCount
     )
