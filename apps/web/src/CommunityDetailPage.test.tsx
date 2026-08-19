@@ -277,7 +277,7 @@ describe('CommunityDetailPage content access', () => {
     renderPage(membershipState(), { loadFeed });
 
     expect(await screen.findByRole('region', { name: 'Лента сообщества' })).toBeVisible();
-    expect(loadFeed).toHaveBeenCalledWith(communityId);
+    await waitFor(() => expect(loadFeed).toHaveBeenCalledWith(communityId));
     expect(screen.queryByLabelText('Новая публикация')).not.toBeInTheDocument();
   });
 
