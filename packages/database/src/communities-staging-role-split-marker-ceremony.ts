@@ -3,10 +3,17 @@ import { createHash } from 'node:crypto';
 import { failCommunitiesStagingRoleSplit } from './communities-staging-role-split.js';
 
 export const COMMUNITIES_STAGING_ROLE_SPLIT_MARKER_CEREMONY_STATE_VERSION =
-  'communities-staging-role-split-marker-ceremony-state-v1';
+  'communities-staging-role-split-marker-ceremony-state-v2';
 
 export type CommunitiesStagingRoleSplitMarkerCeremonyPhase =
-  'CANDIDATE' | 'OWNED' | 'RESTORED' | 'VERIFIED' | 'MARKER_PENDING' | 'MARKED' | 'EVIDENCED';
+  | 'CANDIDATE'
+  | 'OWNED'
+  | 'RESTORE_PENDING'
+  | 'RESTORED'
+  | 'VERIFIED'
+  | 'MARKER_PENDING'
+  | 'MARKED'
+  | 'EVIDENCED';
 
 export interface CommunitiesStagingRoleSplitMarkerCeremonyState {
   readonly schemaVersion: typeof COMMUNITIES_STAGING_ROLE_SPLIT_MARKER_CEREMONY_STATE_VERSION;
@@ -42,6 +49,7 @@ export type CommunitiesStagingRoleSplitMarkerCeremonyCleanupAction =
 const phases = [
   'CANDIDATE',
   'OWNED',
+  'RESTORE_PENDING',
   'RESTORED',
   'VERIFIED',
   'MARKER_PENDING',
@@ -90,7 +98,7 @@ export function assertCommunitiesStagingRoleSplitMarkerCeremonyState(
   }
   if (state.cloneDatabaseOid === null || !positiveDecimal.test(state.cloneDatabaseOid))
     fail('STATE_INVALID');
-  if (['OWNED', 'RESTORED'].includes(state.phase)) {
+  if (['OWNED', 'RESTORE_PENDING', 'RESTORED'].includes(state.phase)) {
     if (state.markerPayloadSha256 !== null) fail('STATE_INVALID');
     return;
   }
@@ -185,6 +193,7 @@ export function recoverCommunitiesStagingRoleSplitMarkerCeremony(
     return observations.clone === 'absent' ? 'CREATE_CLONE' : 'RETAIN_AND_FAIL';
   if (observations.clone !== 'exact') return 'RETAIN_AND_FAIL';
   if (state.phase === 'OWNED') return 'RESTORE_CLONE';
+  if (state.phase === 'RESTORE_PENDING') return 'RETAIN_AND_FAIL';
   if (state.phase === 'RESTORED') return 'VERIFY_BINDINGS';
   if (state.phase === 'VERIFIED') return 'WRITE_MARKER';
   if (state.phase === 'MARKER_PENDING')
@@ -206,7 +215,7 @@ export function cleanupCommunitiesStagingRoleSplitMarkerCeremony(
   assertCommunitiesStagingRoleSplitMarkerCeremonyState(state);
   if (state.phase === 'CANDIDATE')
     return observations.clone === 'absent' ? 'CLEAR_STATE_AND_RETRY' : 'RETAIN_AND_FAIL';
-  if (['MARKED', 'EVIDENCED'].includes(state.phase)) return 'RETAIN_AND_FAIL';
+  if (['RESTORE_PENDING', 'MARKED', 'EVIDENCED'].includes(state.phase)) return 'RETAIN_AND_FAIL';
   if (observations.clone === 'absent') return 'CLEAR_STATE_AND_RETRY';
   if (observations.clone !== 'exact') return 'RETAIN_AND_FAIL';
   if (observations.marker !== 'absent') return 'RETAIN_AND_FAIL';

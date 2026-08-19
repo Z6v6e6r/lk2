@@ -19,9 +19,16 @@ function states(): Record<string, CommunitiesStagingRoleSplitMarkerCeremonyState
   const owned = advanceCommunitiesStagingRoleSplitMarkerCeremonyState(candidate, 'OWNED', {
     cloneDatabaseOid,
   });
-  const restored = advanceCommunitiesStagingRoleSplitMarkerCeremonyState(owned, 'RESTORED', {
-    cloneDatabaseOid,
-  });
+  const restorePending = advanceCommunitiesStagingRoleSplitMarkerCeremonyState(
+    owned,
+    'RESTORE_PENDING',
+    { cloneDatabaseOid },
+  );
+  const restored = advanceCommunitiesStagingRoleSplitMarkerCeremonyState(
+    restorePending,
+    'RESTORED',
+    { cloneDatabaseOid },
+  );
   const verified = advanceCommunitiesStagingRoleSplitMarkerCeremonyState(restored, 'VERIFIED', {
     cloneDatabaseOid,
     markerPayloadSha256,
@@ -39,7 +46,7 @@ function states(): Record<string, CommunitiesStagingRoleSplitMarkerCeremonyState
     cloneDatabaseOid,
     markerPayloadSha256,
   });
-  return { candidate, owned, restored, verified, pending, marked, evidenced };
+  return { candidate, owned, restorePending, restored, verified, pending, marked, evidenced };
 }
 
 describe('Communities role-split marker ceremony state', () => {
@@ -48,6 +55,7 @@ describe('Communities role-split marker ceremony state', () => {
     expect(Object.values(fixture).map((state) => state.phase)).toEqual([
       'CANDIDATE',
       'OWNED',
+      'RESTORE_PENDING',
       'RESTORED',
       'VERIFIED',
       'MARKER_PENDING',
@@ -55,7 +63,7 @@ describe('Communities role-split marker ceremony state', () => {
       'EVIDENCED',
     ]);
     expect(canonicalCommunitiesStagingRoleSplitMarkerCeremonyState(fixture.pending!)).toBe(
-      `communities-staging-role-split-marker-ceremony-state-v1\nrequestSha256=${requestSha256}\nphase=MARKER_PENDING\ncloneDatabaseOid=${cloneDatabaseOid}\nmarkerPayloadSha256=${markerPayloadSha256}\n`,
+      `communities-staging-role-split-marker-ceremony-state-v2\nrequestSha256=${requestSha256}\nphase=MARKER_PENDING\ncloneDatabaseOid=${cloneDatabaseOid}\nmarkerPayloadSha256=${markerPayloadSha256}\n`,
     );
     expect(communitiesStagingRoleSplitMarkerCeremonyStateSha256(fixture.pending!)).toMatch(
       /^[a-f0-9]{64}$/,
@@ -83,6 +91,13 @@ describe('Communities role-split marker ceremony state', () => {
         evidence: 'not_checked',
       }),
     ).toBe('CREATE_CLONE');
+    expect(
+      recoverCommunitiesStagingRoleSplitMarkerCeremony(fixture.restorePending!, {
+        clone: 'exact',
+        marker: 'not_checked',
+        evidence: 'not_checked',
+      }),
+    ).toBe('RETAIN_AND_FAIL');
     expect(
       recoverCommunitiesStagingRoleSplitMarkerCeremony(fixture.pending!, {
         clone: 'exact',
@@ -137,6 +152,12 @@ describe('Communities role-split marker ceremony state', () => {
         }),
       ).toBe('RETAIN_AND_FAIL');
     }
+    expect(
+      cleanupCommunitiesStagingRoleSplitMarkerCeremony(fixture.restorePending!, {
+        clone: 'exact',
+        marker: 'absent',
+      }),
+    ).toBe('RETAIN_AND_FAIL');
     expect(
       cleanupCommunitiesStagingRoleSplitMarkerCeremony(fixture.pending!, {
         clone: 'exact',
