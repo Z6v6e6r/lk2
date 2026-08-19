@@ -16,7 +16,7 @@ on:
         required: true
         type: string
       confirmation:
-        description: Type REHEARSE_COMMUNITIES_STAGING_29_V1 or REHEARSE_COMMUNITIES_STAGING_33_V1. The 32_V1 preparation token remains fail-closed.
+        description: Type REHEARSE_COMMUNITIES_STAGING_29_V1, REHEARSE_COMMUNITIES_STAGING_33_V1, or REHEARSE_COMMUNITIES_STAGING_34_V1. The 32_V1 token remains fail-closed.
         required: true
         type: string
 
@@ -55,7 +55,7 @@ jobs:
           case "$EXPECTED_RELEASE_ENV_SHA" in ''|*[!0-9a-f]*) exit 1 ;; esac
           test "${#EXPECTED_RELEASE_ENV_SHA}" -eq 64 || exit 1
           case "$CONFIRMATION" in
-            REHEARSE_COMMUNITIES_STAGING_29_V1 | REHEARSE_COMMUNITIES_STAGING_33_V1) ;;
+            REHEARSE_COMMUNITIES_STAGING_29_V1 | REHEARSE_COMMUNITIES_STAGING_33_V1 | REHEARSE_COMMUNITIES_STAGING_34_V1) ;;
             REHEARSE_COMMUNITIES_STAGING_32_V1)
               echo '::error::32_V1 remains a frozen preparation-only contract; use the separately reviewed 33_V1 clone ceremony.'
               exit 1
@@ -152,27 +152,45 @@ jobs:
           import {
             COMMUNITIES_STAGED_REHEARSAL_PENDING_FILENAMES,
             COMMUNITIES_STAGED_REHEARSAL_33_PENDING_FILENAMES,
+            COMMUNITIES_STAGED_REHEARSAL_34_PENDING_FILENAMES,
             communitiesStagedRehearsalPendingSetSha256,
           } from './packages/database/src/communities-staged-rehearsal-policy.ts';
           import {
             ELIGIBILITY_PAYMENT_CUP_PROJECTION_ACL_MATRIX_SHA256,
             ELIGIBILITY_PAYMENT_CUP_PROJECTION_ACL_MATRIX_VERSION,
             assertEligibilityPaymentCupProjectionAclMatrixBinding,
+            ELIGIBILITY_PAYMENT_PARTICIPATION_COMMAND_ACL_MATRIX_SHA256,
+            ELIGIBILITY_PAYMENT_PARTICIPATION_COMMAND_ACL_MATRIX_VERSION,
+            assertEligibilityPaymentParticipationCommandAclMatrixBinding,
           } from './packages/database/src/eligibility-payment-acl-matrix.ts';
           const report = JSON.parse(readFileSync('communities-staged-inventory-report.json', 'utf8'));
           const is33 = process.env.CONFIRMATION === 'REHEARSE_COMMUNITIES_STAGING_33_V1';
-          const pending = is33
-            ? COMMUNITIES_STAGED_REHEARSAL_33_PENDING_FILENAMES
-            : COMMUNITIES_STAGED_REHEARSAL_PENDING_FILENAMES;
-          const contractVersion = is33 ? '33_V1' : '29_V1';
-          const aclMatrixVersion = is33
-            ? ELIGIBILITY_PAYMENT_CUP_PROJECTION_ACL_MATRIX_VERSION
-            : 'NONE';
-          const aclMatrixSha = is33
-            ? ELIGIBILITY_PAYMENT_CUP_PROJECTION_ACL_MATRIX_SHA256
-            : 'NONE';
+          const is34 = process.env.CONFIRMATION === 'REHEARSE_COMMUNITIES_STAGING_34_V1';
+          const usesAcl = is33 || is34;
+          const pending = is34
+            ? COMMUNITIES_STAGED_REHEARSAL_34_PENDING_FILENAMES
+            : is33
+              ? COMMUNITIES_STAGED_REHEARSAL_33_PENDING_FILENAMES
+              : COMMUNITIES_STAGED_REHEARSAL_PENDING_FILENAMES;
+          const contractVersion = is34 ? '34_V1' : is33 ? '33_V1' : '29_V1';
+          const aclMatrixVersion = is34
+            ? ELIGIBILITY_PAYMENT_PARTICIPATION_COMMAND_ACL_MATRIX_VERSION
+            : is33
+              ? ELIGIBILITY_PAYMENT_CUP_PROJECTION_ACL_MATRIX_VERSION
+              : 'NONE';
+          const aclMatrixSha = is34
+            ? ELIGIBILITY_PAYMENT_PARTICIPATION_COMMAND_ACL_MATRIX_SHA256
+            : is33
+              ? ELIGIBILITY_PAYMENT_CUP_PROJECTION_ACL_MATRIX_SHA256
+              : 'NONE';
           if (is33) {
             assertEligibilityPaymentCupProjectionAclMatrixBinding({
+              version: aclMatrixVersion,
+              sha256: aclMatrixSha,
+            });
+          }
+          if (is34) {
+            assertEligibilityPaymentParticipationCommandAclMatrixBinding({
               version: aclMatrixVersion,
               sha256: aclMatrixSha,
             });
@@ -192,7 +210,7 @@ jobs:
             process.env.EXPECTED_MIGRATOR_DIGEST,
             process.env.EXPECTED_RELEASE_ENV_SHA,
             process.env.EXPECTED_MANIFEST_SHA,
-            ...(is33 ? [aclMatrixVersion, aclMatrixSha] : []),
+            ...(usesAcl ? [aclMatrixVersion, aclMatrixSha] : []),
           ];
           const binding = createHash('sha256').update(`${fields.join('\n')}\n`).digest('hex');
           process.stdout.write(`active_release=${report.activeRelease}\n`);
@@ -290,7 +308,7 @@ jobs:
             printf '%s\n' "$EXPECTED_MIGRATOR_DIGEST"
             printf '%s\n' "$EXPECTED_RELEASE_ENV_SHA"
             printf '%s\n' "$actual_manifest_sha"
-            if [ "$EXPECTED_CONTRACT_VERSION" = 33_V1 ]; then
+            if [ "$EXPECTED_CONTRACT_VERSION" != 29_V1 ]; then
               printf '%s\n' "$EXPECTED_ACL_MATRIX_VERSION"
               printf '%s\n' "$EXPECTED_ACL_MATRIX_SHA"
             fi
@@ -310,6 +328,9 @@ jobs:
           if [ "$EXPECTED_CONTRACT_VERSION" = 33_V1 ]; then
             remote_command="$remote_command $EXPECTED_ACL_MATRIX_VERSION $EXPECTED_ACL_MATRIX_SHA"
             expected_evidence_lines=35
+          elif [ "$EXPECTED_CONTRACT_VERSION" = 34_V1 ]; then
+            remote_command="$remote_command $EXPECTED_ACL_MATRIX_VERSION $EXPECTED_ACL_MATRIX_SHA"
+            expected_evidence_lines=36
           fi
           timeout --signal=TERM --kill-after=30s 190m \
             ssh -i ~/.ssh/communities_rehearsal_ed25519 \
@@ -337,7 +358,7 @@ jobs:
           grep -Fx "META|releaseEnvSha|$EXPECTED_RELEASE_ENV_SHA" communities-staged-rehearsal.evidence
           grep -Fx "META|composeSha|$compose_sha" communities-staged-rehearsal.evidence
           grep -Fx "META|manifestSha|$actual_manifest_sha" communities-staged-rehearsal.evidence
-          if [ "$EXPECTED_CONTRACT_VERSION" = 33_V1 ]; then
+          if [ "$EXPECTED_CONTRACT_VERSION" != 29_V1 ]; then
             grep -Fx "META|aclMatrixVersion|$EXPECTED_ACL_MATRIX_VERSION" communities-staged-rehearsal.evidence
             grep -Fx "META|aclMatrixSha|$EXPECTED_ACL_MATRIX_SHA" communities-staged-rehearsal.evidence
           fi
@@ -353,7 +374,12 @@ jobs:
           grep -Eq '^META\|restoreDatabase\|phub_restore_[0-9]+_[0-9]+$' communities-staged-rehearsal.evidence
           grep -Eq '^communities_profile_privacy_audit missing_before=[0-9]+ missing_after=0 authority=postgres_superuser status=passed$' communities-staged-rehearsal.evidence
           test "$(grep -c '^community_media_quota_index_measurement .* rollback=confirmed status=passed$' communities-staged-rehearsal.evidence)" -eq 4
-          if [ "$EXPECTED_CONTRACT_VERSION" = 33_V1 ]; then
+          if [ "$EXPECTED_CONTRACT_VERSION" = 34_V1 ]; then
+            grep -Fx "eligibility_payment_acl matrix=$EXPECTED_ACL_MATRIX_VERSION pre=passed post=passed privileges=exact status=passed" communities-staged-rehearsal.evidence
+            grep -Fx 'cup_player_level_projection_clone_probe apply=passed replay=passed idempotency=passed cross_tenant_rls=passed status=passed' communities-staged-rehearsal.evidence
+            grep -Fx 'participation_command_clone_probe authorize=passed deny=passed replay=passed idempotency=passed payment_snapshot=passed acknowledgement=passed cross_tenant_rls=passed status=passed' communities-staged-rehearsal.evidence
+            grep -Eq '^communities_staged_migration_rehearsal database=phub_restore_[0-9]+_[0-9]+ contract=34_V1 pre_foundation=16 foundation=5 post_foundation=8 eligibility_payment=3 cup_projection=1 participation_command=1 acl_matrix=eligibility-payment-participation-command-acl-v3 projection_probe=passed participation_probe=passed quota_index_measurements=4 source_ledger_sha=[0-9a-f]{64} cleanup=confirmed status=passed$' communities-staged-rehearsal.evidence
+          elif [ "$EXPECTED_CONTRACT_VERSION" = 33_V1 ]; then
             grep -Fx "eligibility_payment_acl matrix=$EXPECTED_ACL_MATRIX_VERSION pre=passed post=passed privileges=exact status=passed" communities-staged-rehearsal.evidence
             grep -Fx 'cup_player_level_projection_clone_probe apply=passed replay=passed idempotency=passed cross_tenant_rls=passed status=passed' communities-staged-rehearsal.evidence
             grep -Eq '^communities_staged_migration_rehearsal database=phub_restore_[0-9]+_[0-9]+ contract=33_V1 pre_foundation=16 foundation=5 post_foundation=8 eligibility_payment=3 cup_projection=1 acl_matrix=eligibility-payment-cup-projection-acl-v2 projection_probe=passed quota_index_measurements=4 source_ledger_sha=[0-9a-f]{64} cleanup=confirmed status=passed$' communities-staged-rehearsal.evidence

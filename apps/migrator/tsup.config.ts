@@ -15,6 +15,8 @@ export default defineConfig({
     'src/verify-eligibility-payment-runtime-role.ts',
     'src/provision-eligibility-payment-cup-projection-acl.ts',
     'src/cup-player-level-projection-rehearsal.ts',
+    'src/provision-eligibility-payment-participation-command-acl.ts',
+    'src/participation-command-foundation-rehearsal.ts',
   ],
   format: ['esm'],
   target: 'node22',

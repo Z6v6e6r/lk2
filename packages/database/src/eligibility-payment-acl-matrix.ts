@@ -7,6 +7,10 @@ export const ELIGIBILITY_PAYMENT_CUP_PROJECTION_ACL_MATRIX_VERSION =
   'eligibility-payment-cup-projection-acl-v2';
 export const ELIGIBILITY_PAYMENT_CUP_PROJECTION_ACL_MATRIX_SHA256 =
   '83cba43d957e8104fc91b139020342dc154f571155c5fadafe36874583310310';
+export const ELIGIBILITY_PAYMENT_PARTICIPATION_COMMAND_ACL_MATRIX_VERSION =
+  'eligibility-payment-participation-command-acl-v3';
+export const ELIGIBILITY_PAYMENT_PARTICIPATION_COMMAND_ACL_MATRIX_SHA256 =
+  '482afdc666acb2caa268c66b46575614acf10807727ca9e6a086eb805b38ca6e';
 
 export type EligibilityPaymentRuntimePrivilege = 'SELECT' | 'INSERT' | 'UPDATE';
 
@@ -24,7 +28,9 @@ export type EligibilityPaymentAclRelation = {
     | 'payment_snapshots'
     | 'payment_confirmation_evidence'
     | 'cup_player_level_projections'
-    | 'cup_player_level_projection_events';
+    | 'cup_player_level_projection_events'
+    | 'activity_level_projections'
+    | 'participation_commands';
   readonly policyName: string;
   readonly runtimePrivileges: readonly EligibilityPaymentRuntimePrivilege[];
 };
@@ -110,6 +116,26 @@ export const CUP_PLAYER_LEVEL_PROJECTION_ACL_RELATIONS = [
 export const ELIGIBILITY_PAYMENT_CUP_PROJECTION_ACL_RELATIONS = [
   ...ELIGIBILITY_PAYMENT_ACL_RELATIONS,
   ...CUP_PLAYER_LEVEL_PROJECTION_ACL_RELATIONS,
+] as const satisfies readonly EligibilityPaymentAclRelation[];
+
+export const PARTICIPATION_COMMAND_ACL_RELATIONS = [
+  {
+    schemaName: 'eligibility',
+    relationName: 'activity_level_projections',
+    policyName: 'eligibility_activity_level_projections_tenant_isolation',
+    runtimePrivileges: ['SELECT', 'INSERT', 'UPDATE'],
+  },
+  {
+    schemaName: 'eligibility',
+    relationName: 'participation_commands',
+    policyName: 'eligibility_participation_commands_tenant_isolation',
+    runtimePrivileges: ['SELECT', 'INSERT', 'UPDATE'],
+  },
+] as const satisfies readonly EligibilityPaymentAclRelation[];
+
+export const ELIGIBILITY_PAYMENT_PARTICIPATION_COMMAND_ACL_RELATIONS = [
+  ...ELIGIBILITY_PAYMENT_CUP_PROJECTION_ACL_RELATIONS,
+  ...PARTICIPATION_COMMAND_ACL_RELATIONS,
 ] as const satisfies readonly EligibilityPaymentAclRelation[];
 
 export const ELIGIBILITY_PAYMENT_ACL_SCHEMA_PRIVILEGES = [
@@ -421,6 +447,13 @@ export function eligibilityPaymentCupProjectionAclMatrixCanonicalText(): string 
   );
 }
 
+export function eligibilityPaymentParticipationCommandAclMatrixCanonicalText(): string {
+  return aclMatrixCanonicalText(
+    ELIGIBILITY_PAYMENT_PARTICIPATION_COMMAND_ACL_MATRIX_VERSION,
+    ELIGIBILITY_PAYMENT_PARTICIPATION_COMMAND_ACL_RELATIONS,
+  );
+}
+
 export function eligibilityPaymentAclMatrixSha256(): string {
   return createHash('sha256').update(eligibilityPaymentAclMatrixCanonicalText()).digest('hex');
 }
@@ -428,6 +461,12 @@ export function eligibilityPaymentAclMatrixSha256(): string {
 export function eligibilityPaymentCupProjectionAclMatrixSha256(): string {
   return createHash('sha256')
     .update(eligibilityPaymentCupProjectionAclMatrixCanonicalText())
+    .digest('hex');
+}
+
+export function eligibilityPaymentParticipationCommandAclMatrixSha256(): string {
+  return createHash('sha256')
+    .update(eligibilityPaymentParticipationCommandAclMatrixCanonicalText())
     .digest('hex');
 }
 
@@ -455,5 +494,19 @@ export function assertEligibilityPaymentCupProjectionAclMatrixBinding(input: {
       ELIGIBILITY_PAYMENT_CUP_PROJECTION_ACL_MATRIX_SHA256
   ) {
     throw new Error('ELIGIBILITY_PAYMENT_CUP_PROJECTION_ACL_MATRIX_BINDING_INVALID');
+  }
+}
+
+export function assertEligibilityPaymentParticipationCommandAclMatrixBinding(input: {
+  readonly version: string;
+  readonly sha256: string;
+}): void {
+  if (
+    input.version !== ELIGIBILITY_PAYMENT_PARTICIPATION_COMMAND_ACL_MATRIX_VERSION ||
+    input.sha256 !== ELIGIBILITY_PAYMENT_PARTICIPATION_COMMAND_ACL_MATRIX_SHA256 ||
+    eligibilityPaymentParticipationCommandAclMatrixSha256() !==
+      ELIGIBILITY_PAYMENT_PARTICIPATION_COMMAND_ACL_MATRIX_SHA256
+  ) {
+    throw new Error('ELIGIBILITY_PAYMENT_PARTICIPATION_COMMAND_ACL_MATRIX_BINDING_INVALID');
   }
 }

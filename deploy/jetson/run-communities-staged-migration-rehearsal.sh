@@ -55,6 +55,16 @@ case "$confirmation" in
     test "$expected_acl_matrix_sha" = 83cba43d957e8104fc91b139020342dc154f571155c5fadafe36874583310310 ||
       fail 'staged rehearsal ACL matrix binding is invalid'
     ;;
+  REHEARSE_COMMUNITIES_STAGING_34_V1)
+    test "$#" -eq 19 || fail 'exact staged rehearsal binding tuple is required'
+    test "$expected_contract_version" = 34_V1 || fail 'staged rehearsal contract version is invalid'
+    test "$expected_pending_set_sha" = 488d3c7a9494b3c4587b2e849f937fe161ce3a9c7c7e336e63188cfaafdedc98 ||
+      fail 'staged rehearsal pending set binding is invalid'
+    test "$expected_acl_matrix_version" = eligibility-payment-participation-command-acl-v3 ||
+      fail 'staged rehearsal ACL matrix version is invalid'
+    test "$expected_acl_matrix_sha" = 482afdc666acb2caa268c66b46575614acf10807727ca9e6a086eb805b38ca6e ||
+      fail 'staged rehearsal ACL matrix binding is invalid'
+    ;;
   *) fail 'exact staged rehearsal confirmation is required' ;;
 esac
 
@@ -77,7 +87,7 @@ validate_hex "$expected_wrapper_sha" 64 'wrapper command binding'
 validate_hex "$expected_rehearsal_sha" 64 'rehearsal command binding'
 validate_hex "$expected_ledger_verifier_sha" 64 'ledger verifier binding'
 validate_hex "$expected_restore_helper_sha" 64 'restore helper binding'
-if test "$expected_contract_version" = 33_V1; then
+if test "$expected_contract_version" = 33_V1 || test "$expected_contract_version" = 34_V1; then
   validate_hex "$expected_acl_matrix_sha" 64 'ACL matrix binding'
 fi
 case "$expected_migrator_digest" in sha256:[0-9a-f]*) ;; *) fail 'migrator digest binding is invalid' ;; esac
@@ -319,7 +329,9 @@ test "$(stat -c %a "$backup_path")" = 600 || fail 'retained backup mode is unsaf
 
 rehearsal_stdout="$(mktemp "$backup_root/.communities-rehearsal.stdout.XXXXXX")"
 rehearsal_stderr="$(mktemp "$backup_root/.communities-rehearsal.stderr.XXXXXX")"
-if test "$expected_contract_version" = 33_V1; then
+if test "$expected_contract_version" = 34_V1; then
+  rehearsal_confirmation=COMMUNITIES_STAGED_REHEARSAL_34_V1
+elif test "$expected_contract_version" = 33_V1; then
   rehearsal_confirmation=COMMUNITIES_STAGED_REHEARSAL_33_V1
 else
   rehearsal_confirmation=COMMUNITIES_STAGED_REHEARSAL_29_V1
@@ -341,7 +353,9 @@ if ! COMMUNITIES_STAGED_REHEARSAL_CONFIRMATION="$rehearsal_confirmation" \
   fail 'isolated Communities staged rehearsal failed; inspect the retained cleanup marker locally'
 fi
 test ! -s "$rehearsal_stderr" || fail 'isolated Communities staged rehearsal emitted unexpected stderr'
-if test "$expected_contract_version" = 33_V1; then
+if test "$expected_contract_version" = 34_V1; then
+  completion_evidence="communities_staged_migration_rehearsal database=$restore_database contract=34_V1 pre_foundation=16 foundation=5 post_foundation=8 eligibility_payment=3 cup_projection=1 participation_command=1 acl_matrix=$expected_acl_matrix_version projection_probe=passed participation_probe=passed quota_index_measurements=4 source_ledger_sha=$expected_source_ledger_sha cleanup=confirmed status=passed"
+elif test "$expected_contract_version" = 33_V1; then
   completion_evidence="communities_staged_migration_rehearsal database=$restore_database contract=33_V1 pre_foundation=16 foundation=5 post_foundation=8 eligibility_payment=3 cup_projection=1 acl_matrix=$expected_acl_matrix_version projection_probe=passed quota_index_measurements=4 source_ledger_sha=$expected_source_ledger_sha cleanup=confirmed status=passed"
 else
   completion_evidence="communities_staged_migration_rehearsal database=$restore_database pre_foundation=16 foundation=5 post_foundation=8 quota_index_measurements=4 source_ledger_sha=$expected_source_ledger_sha cleanup=confirmed status=passed"
@@ -356,13 +370,19 @@ test "$(printf '%s\n' "$privacy_evidence" | wc -l | tr -d ' ')" -eq 1 ||
   fail 'staged rehearsal privacy audit evidence is incomplete'
 acl_evidence=
 projection_evidence=
-if test "$expected_contract_version" = 33_V1; then
+participation_evidence=
+if test "$expected_contract_version" = 33_V1 || test "$expected_contract_version" = 34_V1; then
   acl_evidence="$(grep -F "eligibility_payment_acl matrix=$expected_acl_matrix_version pre=passed post=passed privileges=exact status=passed" "$rehearsal_stdout")"
   test "$(printf '%s\n' "$acl_evidence" | wc -l | tr -d ' ')" -eq 1 ||
     fail 'staged rehearsal ACL evidence is incomplete'
   projection_evidence="$(grep -F 'cup_player_level_projection_clone_probe apply=passed replay=passed idempotency=passed cross_tenant_rls=passed status=passed' "$rehearsal_stdout")"
   test "$(printf '%s\n' "$projection_evidence" | wc -l | tr -d ' ')" -eq 1 ||
     fail 'staged rehearsal CUP projection evidence is incomplete'
+  if test "$expected_contract_version" = 34_V1; then
+    participation_evidence="$(grep -F 'participation_command_clone_probe authorize=passed deny=passed replay=passed idempotency=passed payment_snapshot=passed acknowledgement=passed cross_tenant_rls=passed status=passed' "$rehearsal_stdout")"
+    test "$(printf '%s\n' "$participation_evidence" | wc -l | tr -d ' ')" -eq 1 ||
+      fail 'staged rehearsal participation command evidence is incomplete'
+  fi
 fi
 
 assert_source_binding
@@ -384,7 +404,7 @@ printf 'META|migratorDigest|%s\n' "$expected_migrator_digest"
 printf 'META|releaseEnvSha|%s\n' "$expected_release_env_sha"
 printf 'META|composeSha|%s\n' "$expected_compose_sha"
 printf 'META|manifestSha|%s\n' "$expected_manifest_sha"
-if test "$expected_contract_version" = 33_V1; then
+if test "$expected_contract_version" = 33_V1 || test "$expected_contract_version" = 34_V1; then
   printf 'META|aclMatrixVersion|%s\n' "$expected_acl_matrix_version"
   printf 'META|aclMatrixSha|%s\n' "$expected_acl_matrix_sha"
 fi
@@ -400,9 +420,12 @@ printf 'META|authorizesImport|false\n'
 printf 'META|authorizesActivation|false\n'
 printf '%s\n' "$privacy_evidence"
 printf '%s\n' "$quota_evidence"
-if test "$expected_contract_version" = 33_V1; then
+if test "$expected_contract_version" = 33_V1 || test "$expected_contract_version" = 34_V1; then
   printf '%s\n' "$acl_evidence"
   printf '%s\n' "$projection_evidence"
+  if test "$expected_contract_version" = 34_V1; then
+    printf '%s\n' "$participation_evidence"
+  fi
 fi
 printf '%s\n' "$completion_evidence"
 

@@ -32,6 +32,7 @@ export * from './legacy-game-import-repository.js';
 export * from './legacy-game-roster-bridge-repository.js';
 export * from './legacy-game-reconciliation-repository.js';
 export * from './level-eligibility-policy-repository.js';
+export * from './participation-command-repository.js';
 export * from './player-level-repository.js';
 export * from './client-routing-plan-repository.js';
 export * from './cup-player-level-projection-repository.js';

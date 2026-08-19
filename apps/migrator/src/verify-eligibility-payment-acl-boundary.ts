@@ -3,8 +3,12 @@ import {
   ELIGIBILITY_PAYMENT_CUP_PROJECTION_ACL_RELATIONS,
   ELIGIBILITY_PAYMENT_CUP_PROJECTION_ACL_MATRIX_SHA256,
   ELIGIBILITY_PAYMENT_CUP_PROJECTION_ACL_MATRIX_VERSION,
+  ELIGIBILITY_PAYMENT_PARTICIPATION_COMMAND_ACL_MATRIX_SHA256,
+  ELIGIBILITY_PAYMENT_PARTICIPATION_COMMAND_ACL_MATRIX_VERSION,
+  ELIGIBILITY_PAYMENT_PARTICIPATION_COMMAND_ACL_RELATIONS,
   EligibilityPaymentAclMatrixError,
   assertEligibilityPaymentCupProjectionAclMatrixBinding,
+  assertEligibilityPaymentParticipationCommandAclMatrixBinding,
 } from '@phub/database';
 
 import { verifyEligibilityPaymentAclBoundary } from './eligibility-payment-acl-boundary.js';
@@ -26,13 +30,21 @@ if (
 } else {
   try {
     const expectedRelations = matrixVersion
-      ? (() => {
-          assertEligibilityPaymentCupProjectionAclMatrixBinding({
-            version: matrixVersion,
-            sha256: matrixSha256 ?? '',
-          });
-          return ELIGIBILITY_PAYMENT_CUP_PROJECTION_ACL_RELATIONS;
-        })()
+      ? matrixVersion === ELIGIBILITY_PAYMENT_PARTICIPATION_COMMAND_ACL_MATRIX_VERSION
+        ? (() => {
+            assertEligibilityPaymentParticipationCommandAclMatrixBinding({
+              version: matrixVersion,
+              sha256: matrixSha256 ?? '',
+            });
+            return ELIGIBILITY_PAYMENT_PARTICIPATION_COMMAND_ACL_RELATIONS;
+          })()
+        : (() => {
+            assertEligibilityPaymentCupProjectionAclMatrixBinding({
+              version: matrixVersion,
+              sha256: matrixSha256 ?? '',
+            });
+            return ELIGIBILITY_PAYMENT_CUP_PROJECTION_ACL_RELATIONS;
+          })()
       : ELIGIBILITY_PAYMENT_ACL_RELATIONS;
     await verifyEligibilityPaymentAclBoundary({
       migratorConnectionString: connectionString,
@@ -41,7 +53,9 @@ if (
       expectedRelations,
     });
     const matrix = matrixVersion
-      ? `${ELIGIBILITY_PAYMENT_CUP_PROJECTION_ACL_MATRIX_VERSION}:${ELIGIBILITY_PAYMENT_CUP_PROJECTION_ACL_MATRIX_SHA256}`
+      ? matrixVersion === ELIGIBILITY_PAYMENT_PARTICIPATION_COMMAND_ACL_MATRIX_VERSION
+        ? `${ELIGIBILITY_PAYMENT_PARTICIPATION_COMMAND_ACL_MATRIX_VERSION}:${ELIGIBILITY_PAYMENT_PARTICIPATION_COMMAND_ACL_MATRIX_SHA256}`
+        : `${ELIGIBILITY_PAYMENT_CUP_PROJECTION_ACL_MATRIX_VERSION}:${ELIGIBILITY_PAYMENT_CUP_PROJECTION_ACL_MATRIX_SHA256}`
       : 'eligibility-payment-acl-v1';
     process.stdout.write(`ELIGIBILITY_PAYMENT_ACL_${phase.toUpperCase()}_READY matrix=${matrix}\n`);
   } catch (error) {

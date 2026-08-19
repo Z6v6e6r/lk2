@@ -15,6 +15,8 @@ tags:
     description: Service-only Games commands and outbox diagnostics.
   - name: player-levels
     description: Service-only authoritative CUP level projection ingestion.
+  - name: participation
+    description: Service-only participation authorization and writer acknowledgement.
 paths:
   /{tenantKey}/game-commands:
     $ref: ./games.yaml#/paths/~1{tenantKey}~1game-commands
@@ -24,6 +26,12 @@ paths:
     $ref: ./games.yaml#/paths/~1{tenantKey}~1game-events~1{eventId}
   /{tenantKey}/player-level-projections:
     $ref: ./player-levels.yaml#/paths/~1{tenantKey}~1player-level-projections
+  /{tenantKey}/participation-commands:
+    $ref: ./participation-commands.yaml#/paths/~1{tenantKey}~1participation-commands
+  /{tenantKey}/participation-commands/{commandId}:
+    $ref: ./participation-commands.yaml#/paths/~1{tenantKey}~1participation-commands~1{commandId}
+  /{tenantKey}/participation-commands/{commandId}/acknowledgements:
+    $ref: ./participation-commands.yaml#/paths/~1{tenantKey}~1participation-commands~1{commandId}~1acknowledgements
 components:
   securitySchemes:
     PadlHubInternalJwt:
@@ -46,3 +54,8 @@ components:
       in: header
       name: X-Cup-Player-Level-Token
       description: Server-only CUP to PadlHub projection credential; never exposed to a browser.
+    ParticipationCommandToken:
+      type: apiKey
+      in: header
+      name: X-Phub-Participation-Token
+      description: Exact-tenant server credential for a trusted roster or booking writer.

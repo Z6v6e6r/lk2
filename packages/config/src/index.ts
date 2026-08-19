@@ -135,6 +135,30 @@ const environmentSchema = z.object({
     .string()
     .regex(/^[a-z0-9][a-z0-9-]{1,62}$/)
     .optional(),
+  PARTICIPATION_COMMANDS_ENABLED: booleanFromEnvironment,
+  PARTICIPATION_COMMAND_TOKEN: z.string().min(32).optional(),
+  PARTICIPATION_COMMAND_TENANT_KEY: z
+    .string()
+    .regex(/^[a-z0-9][a-z0-9-]{1,62}$/)
+    .optional(),
+  PARTICIPATION_COMMAND_PRINCIPAL_KEY: z
+    .string()
+    .regex(/^[a-z0-9][a-z0-9._:-]{2,127}$/)
+    .optional(),
+  PARTICIPATION_COMMAND_AUTHORIZATION_TTL_SECONDS: z.coerce
+    .number()
+    .int()
+    .min(30)
+    .max(900)
+    .default(300),
+  PARTICIPATION_COMMAND_EXPIRY_WORKER_ENABLED: booleanFromEnvironment,
+  PARTICIPATION_COMMAND_EXPIRY_INTERVAL_MS: z.coerce
+    .number()
+    .int()
+    .min(10_000)
+    .max(3_600_000)
+    .default(60_000),
+  PARTICIPATION_COMMAND_EXPIRY_BATCH_SIZE: z.coerce.number().int().min(1).max(500).default(100),
   ACTIVITY_HISTORY_ENABLED: booleanFromEnvironment,
   ACTIVITY_HISTORY_SYNC_ENABLED: booleanFromEnvironment,
   ACTIVITY_HISTORY_GAME_BACKFILL_ENABLED: booleanFromEnvironment,
@@ -479,6 +503,11 @@ export function loadConfig(
       'CUP_PLAYER_LEVEL_PROJECTION_TOKEN',
       'CUP_PLAYER_LEVEL_PROJECTION_TOKEN_FILE',
     ),
+    PARTICIPATION_COMMAND_TOKEN: materializeFileSecret(
+      environment,
+      'PARTICIPATION_COMMAND_TOKEN',
+      'PARTICIPATION_COMMAND_TOKEN_FILE',
+    ),
     LEGACY_GAME_COMMAND_BRIDGE_TOKEN: materializeFileSecret(
       environment,
       'LEGACY_GAME_COMMAND_BRIDGE_TOKEN',
@@ -584,6 +613,20 @@ export function loadConfig(
     throw new Error(
       'CUP_PLAYER_LEVEL_PROJECTION_ENABLED requires CUP_PLAYER_LEVEL_PROJECTION_TOKEN and CUP_PLAYER_LEVEL_PROJECTION_TENANT_KEY',
     );
+  }
+  if (parsed.data.PARTICIPATION_COMMANDS_ENABLED) {
+    if (parsed.data.APP_ENV !== 'local' && parsed.data.APP_ENV !== 'staging') {
+      throw new Error('PARTICIPATION_COMMANDS_ENABLED is allowed only in local or staging');
+    }
+    if (
+      !parsed.data.PARTICIPATION_COMMAND_TOKEN ||
+      !parsed.data.PARTICIPATION_COMMAND_TENANT_KEY ||
+      !parsed.data.PARTICIPATION_COMMAND_PRINCIPAL_KEY
+    ) {
+      throw new Error(
+        'PARTICIPATION_COMMANDS_ENABLED requires token, tenant key, and principal key',
+      );
+    }
   }
   if (parsed.data.APP_ENV === 'production' && parsed.data.ACTIVITY_HISTORY_ENABLED) {
     throw new Error(

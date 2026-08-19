@@ -107,3 +107,37 @@ Implemented in isolation and still not activated:
 The matching ph-ab branch contains the transactional sender outbox and bounded reconciliation for
 existing canonical rating states. Neither branch has been committed, integrated, pushed, migrated,
 deployed or enabled at this checkpoint.
+
+## Continuation checkpoint: participation command foundation (2026-08-19)
+
+Implemented in an isolated lk2 worktree and default-off:
+
+- canonical activity-level projections that reference provider mappings without storing raw provider
+  identifiers in eligibility storage;
+- durable `AUTHORIZED`, `REJECTED`, `APPLIED`, `FAILED`, and `EXPIRED` participation commands;
+- one authoritative server-side evaluation using the existing domain rule, current player level,
+  activity revision and active policy;
+- strict idempotency, payment-operation binding, immutable decision snapshot, audit/outbox events,
+  writer acknowledgement and bounded expiry worker;
+- exact-tenant internal API authentication that rejects client-owned level, rank, bypass and invite
+  facts;
+- additive ACL matrix v3 and an exact 34-file disposable-clone rehearsal contract with runtime
+  authorize/deny/replay/payment/ACK/RLS probes;
+- OpenAPI, configuration, repository, route, migration, ACL and rehearsal regression coverage.
+
+This foundation does not route a legacy or native writer. Both API and expiry-worker flags remain
+false by default, production activation is rejected by configuration, and policy rows remain `OFF`.
+Migration 0088, ACL provisioning, the clone rehearsal, integration, push, deploy, booking and payment
+were not executed by this implementation stage.
+
+Verification for this continuation:
+
+- focused participation/domain/config/ACL/rehearsal coverage passed: 9 files, 144 tests;
+- the full suite covered 353 files: 342 passed and 4 skipped in the parallel run, while the seven
+  infrastructure-dependent failures were rerun cleanly as 6 files / 64 tests and 1 Docker-parser
+  file / 21 tests;
+- formatting, ESLint, TypeScript and OpenAPI validation passed; OpenAPI retained six unrelated
+  pre-existing warnings;
+- all packages and applications built successfully and the runtime import check passed;
+- migration static safety and both rehearsal shell syntax checks passed. Migration 0088 and the
+  disposable-clone rehearsal were not executed.

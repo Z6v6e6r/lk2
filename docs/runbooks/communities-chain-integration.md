@@ -472,6 +472,36 @@ policy, roster guard or payment behavior. Installing the root-owned candidate ar
 this manual workflow remain separately approved operations. A missing or unverified
 `/etc/phub/realtime.env` on staging is still an external preflight blocker and must not be bypassed.
 
+### Exact 34-file participation-command clone rehearsal contract
+
+`COMMUNITIES_STAGED_REHEARSAL_34_V1` and
+`REHEARSE_COMMUNITIES_STAGING_34_V1` are a new clone-only contract. They preserve the frozen
+`29_V1`, `32_V1`, and `33_V1` contracts and append
+`0088_participation_command_foundation.sql` as the sixth `participation_command` phase. The ordered
+34-file pending-set SHA-256 is
+`488d3c7a9494b3c4587b2e849f937fe161ce3a9c7c7e336e63188cfaafdedc98`.
+
+The phase binding uses `eligibility-payment-participation-command-acl-v3` at SHA-256
+`482afdc666acb2caa268c66b46575614acf10807727ca9e6a086eb805b38ca6e`. It adds only
+`SELECT, INSERT, UPDATE` for `eligibility.activity_level_projections` and
+`eligibility.participation_commands`; v1 and v2 digests remain unchanged. Pre/post catalog checks
+still require migrator ownership, FORCE RLS, exact tenant policies, no PUBLIC/third-party/column
+grants, and runtime schema `USAGE` without `CREATE`.
+
+After the existing CUP projection probe, the disposable-clone runtime probe creates two canonical
+activity constraints, authorizes an in-range command with a payment snapshot, proves exact replay
+and idempotency-key conflict, persists an out-of-range rejection, acknowledges the authorized writer
+result, and proves cross-tenant invisibility. It emits only aggregate fixed text:
+
+```text
+participation_command_clone_probe authorize=passed deny=passed replay=passed idempotency=passed payment_snapshot=passed acknowledgement=passed cross_tenant_rls=passed status=passed
+```
+
+The final line includes `participation_command=1` and `participation_probe=passed`; successful v34
+evidence is exactly 36 lines. The `authorizes*=false` boundary remains unchanged. This contract does
+not apply migration 0088 to staging, deploy an application, configure a server token, enable the API
+or expiry worker, route any writer, start a booking/payment, or enable `SHADOW`, `WARN`, or `BLOCK`.
+
 ## Activation boundary
 
 Merging the code and forward migrations does not authorize import or activation. Keep

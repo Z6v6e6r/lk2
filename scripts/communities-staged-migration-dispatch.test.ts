@@ -87,7 +87,12 @@ printf '%s\n' 'communities_profile_privacy_audit missing_before=2 missing_after=
 for index in a b c d; do
   printf 'community_media_quota_index_measurement index=%s operation=reindex duration_ms=1 rollback=confirmed status=passed\n' "$index"
 done
-if test "$COMMUNITIES_STAGED_REHEARSAL_CONFIRMATION" = COMMUNITIES_STAGED_REHEARSAL_33_V1; then
+if test "$COMMUNITIES_STAGED_REHEARSAL_CONFIRMATION" = COMMUNITIES_STAGED_REHEARSAL_34_V1; then
+  printf 'eligibility_payment_acl matrix=%s pre=passed post=passed privileges=exact status=passed\n' "$COMMUNITIES_STAGED_REHEARSAL_ACL_MATRIX_VERSION"
+  printf '%s\n' 'cup_player_level_projection_clone_probe apply=passed replay=passed idempotency=passed cross_tenant_rls=passed status=passed'
+  printf '%s\n' 'participation_command_clone_probe authorize=passed deny=passed replay=passed idempotency=passed payment_snapshot=passed acknowledgement=passed cross_tenant_rls=passed status=passed'
+  printf 'communities_staged_migration_rehearsal database=%s contract=34_V1 pre_foundation=16 foundation=5 post_foundation=8 eligibility_payment=3 cup_projection=1 participation_command=1 acl_matrix=%s projection_probe=passed participation_probe=passed quota_index_measurements=4 source_ledger_sha=%s cleanup=confirmed status=passed\n' "$2" "$COMMUNITIES_STAGED_REHEARSAL_ACL_MATRIX_VERSION" "$COMMUNITIES_STAGED_REHEARSAL_EXPECTED_SOURCE_LEDGER_SHA"
+elif test "$COMMUNITIES_STAGED_REHEARSAL_CONFIRMATION" = COMMUNITIES_STAGED_REHEARSAL_33_V1; then
   printf 'eligibility_payment_acl matrix=%s pre=passed post=passed privileges=exact status=passed\n' "$COMMUNITIES_STAGED_REHEARSAL_ACL_MATRIX_VERSION"
   printf '%s\n' 'cup_player_level_projection_clone_probe apply=passed replay=passed idempotency=passed cross_tenant_rls=passed status=passed'
   printf 'communities_staged_migration_rehearsal database=%s contract=33_V1 pre_foundation=16 foundation=5 post_foundation=8 eligibility_payment=3 cup_projection=1 acl_matrix=%s projection_probe=passed quota_index_measurements=4 source_ledger_sha=%s cleanup=confirmed status=passed\n' "$2" "$COMMUNITIES_STAGED_REHEARSAL_ACL_MATRIX_VERSION" "$COMMUNITIES_STAGED_REHEARSAL_EXPECTED_SOURCE_LEDGER_SHA"
@@ -266,6 +271,27 @@ esac
     );
     expect((await readdir(backupRoot)).filter((name) => name.endsWith('.dump'))).toHaveLength(2);
 
+    const arguments34 = [
+      'REHEARSE_COMMUNITIES_STAGING_34_V1',
+      '34_V1',
+      '488d3c7a9494b3c4587b2e849f937fe161ce3a9c7c7e336e63188cfaafdedc98',
+      ...arguments_.slice(3),
+      'eligibility-payment-participation-command-acl-v3',
+      '482afdc666acb2caa268c66b46575614acf10807727ca9e6a086eb805b38ca6e',
+    ];
+    expect(arguments34).toHaveLength(19);
+    const result34 = await execute({
+      ...environment,
+      SSH_ORIGINAL_COMMAND: arguments34.join(' '),
+    });
+    expect(result34.stderr).toBe('');
+    expect(result34.stdout.trim().split('\n')).toHaveLength(36);
+    expect(result34.stdout).toContain('META|contractVersion|34_V1');
+    expect(result34.stdout).toContain(
+      'participation_command_clone_probe authorize=passed deny=passed replay=passed idempotency=passed payment_snapshot=passed acknowledgement=passed cross_tenant_rls=passed status=passed',
+    );
+    expect((await readdir(backupRoot)).filter((name) => name.endsWith('.dump'))).toHaveLength(3);
+
     const beforeMismatch = await readdir(backupRoot);
     const dockerBeforeMismatch = await readFile(dockerLog, 'utf8');
     const mismatched = await execute({
@@ -320,7 +346,7 @@ esac
     expect((failed as Error & { stderr?: string }).stderr).not.toContain(
       'do-not-publish-provider-secret',
     );
-    expect((await readdir(backupRoot)).filter((name) => name.endsWith('.dump'))).toHaveLength(3);
+    expect((await readdir(backupRoot)).filter((name) => name.endsWith('.dump'))).toHaveLength(4);
   }, 20_000);
 
   it('keeps the workflow manual, exact-SHA pinned and isolated from deploy/shared migration', async () => {
@@ -336,9 +362,11 @@ esac
     expect(workflow).toContain('REHEARSE_COMMUNITIES_STAGING_29_V1');
     expect(workflow).toContain('REHEARSE_COMMUNITIES_STAGING_32_V1');
     expect(workflow).toContain('REHEARSE_COMMUNITIES_STAGING_33_V1');
+    expect(workflow).toContain('REHEARSE_COMMUNITIES_STAGING_34_V1');
     expect(workflow).toContain('32_V1 remains a frozen preparation-only contract');
     expect(workflow).toContain('COMMUNITIES_STAGED_REHEARSAL_PENDING_FILENAMES');
     expect(workflow).toContain('COMMUNITIES_STAGED_REHEARSAL_33_PENDING_FILENAMES');
+    expect(workflow).toContain('COMMUNITIES_STAGED_REHEARSAL_34_PENDING_FILENAMES');
     expect(workflow).toContain('phase_binding_sha');
     expect(workflow).toContain('sha256sum deploy/compose.staging.yaml');
     expect(workflow).toContain('expected_rehearsal_release_sha');

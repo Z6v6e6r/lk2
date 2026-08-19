@@ -21,6 +21,14 @@ The pure deterministic algorithm lives once in `packages/domain/src/participatio
 
 The final command derives actor/tenant from JWT and loads player level, activity constraint, policy and invitation from local trusted storage. Game join, waitlist join and waitlist promotion evaluate immediately before mutation within the tenant transaction. Client precheck is UX only.
 
+Legacy and cross-service writers use the internal participation-command boundary instead of a
+browser endpoint. The caller is authenticated by a dedicated exact-tenant server credential and may
+submit only canonical PadlHub actor/activity IDs plus the requested action. It cannot submit level,
+rank, policy, constraint, invitation, bypass or eligibility outcome. The authorization is durable,
+idempotent and expires unless the trusted writer acknowledges `APPLIED` or `FAILED`. A writer adapter
+must derive the canonical actor from its already authenticated session; browser-supplied identity is
+not authoritative.
+
 ### Canonical scale
 
 Eligibility uses `levelId` and integer `rank`, never a display string comparison. The first PADEL scale preserves the actual existing order: D, D+, C, C+, B, B+, A. Scale rows and player assignments carry `scaleVersion`. New scale versions are additive; historical decisions retain their version.
@@ -105,6 +113,8 @@ New `eligibility` schema tables:
 - `personal_invitations`
 - `decisions`
 - `payment_snapshots`
+- `activity_level_projections`
+- `participation_commands`
 
 Game rows gain sport and canonical range IDs. Roster rows reference their decision; waitlist entries also retain the personal invitation ID for revalidation.
 

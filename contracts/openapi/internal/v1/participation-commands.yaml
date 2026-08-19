@@ -1,0 +1,197 @@
+paths:
+  /{tenantKey}/participation-commands:
+    post:
+      tags: [participation]
+      operationId: authorizeParticipationCommand
+      summary: Evaluate and persist a server-owned participation authorization
+      security:
+        - ParticipationCommandToken: []
+      parameters:
+        - $ref: '#/components/parameters/TenantKey'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AuthorizeParticipationCommandRequest'
+      responses:
+        '200':
+          description: Persisted authorization or idempotent replay.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ParticipationCommand'
+        '400': { description: Invalid request. }
+        '403': { description: Invalid service credential or tenant scope. }
+        '409': { description: Rejected authorization or contract conflict. }
+        '503': { description: Participation command contour is disabled. }
+  /{tenantKey}/participation-commands/{commandId}:
+    get:
+      tags: [participation]
+      operationId: getParticipationCommand
+      summary: Read a server-owned participation command
+      security:
+        - ParticipationCommandToken: []
+      parameters:
+        - $ref: '#/components/parameters/TenantKey'
+        - $ref: '#/components/parameters/CommandId'
+      responses:
+        '200':
+          description: Persisted participation command.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ParticipationCommand'
+        '403': { description: Invalid service credential or tenant scope. }
+        '404': { description: Command not found. }
+        '503': { description: Participation command contour is disabled. }
+  /{tenantKey}/participation-commands/{commandId}/acknowledgements:
+    post:
+      tags: [participation]
+      operationId: acknowledgeParticipationCommand
+      summary: Acknowledge the authorized writer outcome
+      security:
+        - ParticipationCommandToken: []
+      parameters:
+        - $ref: '#/components/parameters/TenantKey'
+        - $ref: '#/components/parameters/CommandId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ParticipationCommandAcknowledgement'
+      responses:
+        '200':
+          description: Persisted acknowledgement or idempotent replay.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ParticipationCommand'
+        '400': { description: Invalid acknowledgement. }
+        '403': { description: Invalid service credential or tenant scope. }
+        '404': { description: Command not found. }
+        '409': { description: 'Idempotency conflict, failed writer, or expired authorization.' }
+        '503': { description: Participation command contour is disabled. }
+
+components:
+  parameters:
+    TenantKey:
+      name: tenantKey
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: '^[a-z0-9][a-z0-9-]{1,62}$'
+    CommandId:
+      name: commandId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: { type: string, minLength: 8, maxLength: 200 }
+  schemas:
+    AuthorizeParticipationCommandRequest:
+      type: object
+      additionalProperties: false
+      required: [actor, activity, action]
+      properties:
+        actor:
+          type: object
+          additionalProperties: false
+          required: [userId]
+          properties:
+            userId: { type: string, format: uuid }
+        activity:
+          type: object
+          additionalProperties: false
+          required: [type, id]
+          properties:
+            type: { type: string, enum: [GAME, TOURNAMENT, TRAINING] }
+            id: { type: string, format: uuid }
+            expectedSourceRevision: { type: integer, minimum: 0 }
+        action:
+          type: string
+          enum: [JOIN, JOIN_WAITLIST, PROMOTE_WAITLIST, BOOK, REGISTER, ADMIN_ADD]
+        payment:
+          type: object
+          additionalProperties: false
+          required: [operationId, mode]
+          properties:
+            operationId: { type: string, format: uuid }
+            mode: { type: string, enum: [SPLIT, SUBSCRIPTION, ONE_TIME] }
+    ParticipationCommandAcknowledgement:
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required: [outcome, writerOperationId]
+          properties:
+            outcome: { type: string, const: APPLIED }
+            writerOperationId: { type: string, format: uuid }
+        - type: object
+          additionalProperties: false
+          required: [outcome, writerOperationId, errorCode]
+          properties:
+            outcome: { type: string, const: FAILED }
+            writerOperationId: { type: string, format: uuid }
+            errorCode: { type: string, pattern: '^[A-Z][A-Z0-9_]{2,127}$' }
+    ParticipationCommand:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          outcome,
+          commandId,
+          state,
+          activityType,
+          activityId,
+          action,
+          activitySourceRevision,
+          decision,
+          replayed,
+        ]
+      properties:
+        outcome: { type: string, const: command }
+        commandId: { type: string, format: uuid }
+        state: { type: string, enum: [AUTHORIZED, REJECTED, APPLIED, FAILED, EXPIRED] }
+        activityType: { type: string, enum: [GAME, TOURNAMENT, TRAINING] }
+        activityId: { type: string, format: uuid }
+        action:
+          { type: string, enum: [JOIN, JOIN_WAITLIST, PROMOTE_WAITLIST, BOOK, REGISTER, ADMIN_ADD] }
+        activitySourceRevision: { type: integer, minimum: 0 }
+        paymentSnapshotOperationId: { type: string, format: uuid }
+        authorizationExpiresAt: { type: string, format: date-time }
+        writerOperationId: { type: string, format: uuid }
+        errorCode: { type: string }
+        replayed: { type: boolean }
+        decision:
+          type: object
+          additionalProperties: false
+          required:
+            [
+              decisionId,
+              status,
+              ruleCode,
+              outcome,
+              reasonCode,
+              policyVersion,
+              levelScaleVersion,
+              constraintSource,
+              evaluatedAt,
+            ]
+          properties:
+            decisionId: { type: string, format: uuid }
+            status: { type: string, enum: [ALLOWED, WARNING, DENIED] }
+            ruleCode: { type: string, const: LEVEL_RANGE }
+            outcome: { type: string, enum: [PASS, SKIP, WARN, FAIL, BYPASS] }
+            reasonCode: { type: string }
+            policyVersion: { type: integer, minimum: 0 }
+            levelScaleVersion:
+              oneOf: [{ type: integer, minimum: 1 }, { type: 'null' }]
+            constraintSource: { type: string }
+            evaluatedAt: { type: string, format: date-time }

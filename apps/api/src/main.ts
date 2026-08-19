@@ -28,6 +28,7 @@ import {
   createMessagingRepository,
   createNotificationEndpointRepository,
   createNotificationInboxRepository,
+  createParticipationCommandRepository,
   createProfilePrivacyRepository,
   createProfileFriendshipRepository,
   createProfileLevelHistoryRepository,
@@ -210,6 +211,21 @@ const gameRosterRepository = config.GAMES_COMMANDS_ENABLED
       },
     })
   : undefined;
+const participationCommandRepository = createParticipationCommandRepository(pool, {
+  onDecision: (decision) => {
+    recordLevelEligibilityMetrics({
+      tenant: decision.tenantId,
+      sport: decision.sportId,
+      activityType: decision.activityType,
+      mode: decision.mode,
+      outcome: decision.outcome,
+      reasonCode: decision.reasonCode,
+      constraintSource: decision.constraintSource,
+      action: decision.action,
+    });
+    logger.info({ eligibility: decision }, 'participation command eligibility evaluated');
+  },
+});
 const legacyLkIdentityVerifier = config.LEGACY_GAME_COMMAND_BRIDGE_ENABLED
   ? new CupLegacyLkIdentityVerifier({
       url: config.LEGACY_GAME_IDENTITY_VERIFY_URL as string,
@@ -443,6 +459,7 @@ const app = await buildApp({
   levelEligibilityPolicyRepository: createLevelEligibilityPolicyRepository(pool),
   playerLevelRepository: createPlayerLevelRepository(pool),
   cupPlayerLevelProjectionRepository: createCupPlayerLevelProjectionRepository(pool),
+  participationCommandRepository,
   locationMediaRepository: createLocationMediaRepository(pool),
   giftCertificateCatalogRepository: createGiftCertificateCatalogRepository(pool),
   giftCertificateMediaRepository: createGiftCertificateMediaRepository(pool),

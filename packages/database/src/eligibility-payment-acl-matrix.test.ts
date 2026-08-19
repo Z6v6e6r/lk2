@@ -11,15 +11,21 @@ import {
   ELIGIBILITY_PAYMENT_CUP_PROJECTION_ACL_MATRIX_SHA256,
   ELIGIBILITY_PAYMENT_CUP_PROJECTION_ACL_MATRIX_VERSION,
   ELIGIBILITY_PAYMENT_CUP_PROJECTION_ACL_RELATIONS,
+  ELIGIBILITY_PAYMENT_PARTICIPATION_COMMAND_ACL_MATRIX_SHA256,
+  ELIGIBILITY_PAYMENT_PARTICIPATION_COMMAND_ACL_MATRIX_VERSION,
+  ELIGIBILITY_PAYMENT_PARTICIPATION_COMMAND_ACL_RELATIONS,
   EligibilityPaymentAclMatrixError,
   assertEligibilityPaymentAclBoundary,
   assertEligibilityPaymentAclMatrixBinding,
   assertEligibilityPaymentAclProvisioningBoundary,
   assertEligibilityPaymentCupProjectionAclMatrixBinding,
+  assertEligibilityPaymentParticipationCommandAclMatrixBinding,
   eligibilityPaymentAclMatrixCanonicalText,
   eligibilityPaymentAclMatrixSha256,
   eligibilityPaymentCupProjectionAclMatrixCanonicalText,
   eligibilityPaymentCupProjectionAclMatrixSha256,
+  eligibilityPaymentParticipationCommandAclMatrixCanonicalText,
+  eligibilityPaymentParticipationCommandAclMatrixSha256,
 } from './eligibility-payment-acl-matrix.js';
 
 function schemas() {
@@ -133,6 +139,30 @@ describe('eligibility/payment runtime ACL matrix', () => {
     expect(eligibilityPaymentAclMatrixSha256()).toBe(ELIGIBILITY_PAYMENT_ACL_MATRIX_SHA256);
   });
 
+  it('pins the participation command extension without changing frozen v1 or v2 matrices', () => {
+    const source = readFileSync(
+      new URL('./participation-command-repository.ts', import.meta.url),
+      'utf8',
+    );
+    expect(ELIGIBILITY_PAYMENT_PARTICIPATION_COMMAND_ACL_MATRIX_VERSION).toBe(
+      'eligibility-payment-participation-command-acl-v3',
+    );
+    expect(ELIGIBILITY_PAYMENT_PARTICIPATION_COMMAND_ACL_RELATIONS).toHaveLength(14);
+    expect(eligibilityPaymentParticipationCommandAclMatrixSha256()).toBe(
+      ELIGIBILITY_PAYMENT_PARTICIPATION_COMMAND_ACL_MATRIX_SHA256,
+    );
+    for (const relation of ELIGIBILITY_PAYMENT_PARTICIPATION_COMMAND_ACL_RELATIONS.slice(-2)) {
+      expect(source).toContain(`eligibility.${relation.relationName}`);
+      expect(relation.runtimePrivileges).toEqual(['SELECT', 'INSERT', 'UPDATE']);
+    }
+    expect(eligibilityPaymentParticipationCommandAclMatrixCanonicalText()).toContain(
+      'RELATION|eligibility|participation_commands',
+    );
+    expect(eligibilityPaymentCupProjectionAclMatrixSha256()).toBe(
+      ELIGIBILITY_PAYMENT_CUP_PROJECTION_ACL_MATRIX_SHA256,
+    );
+  });
+
   it('matches the runtime SQL operations without granting broader table privileges', () => {
     const sources = [
       readFileSync(new URL('./player-level-repository.ts', import.meta.url), 'utf8'),
@@ -184,6 +214,21 @@ describe('eligibility/payment runtime ACL matrix', () => {
         sha256: ELIGIBILITY_PAYMENT_ACL_MATRIX_SHA256,
       }),
     ).toThrow('ELIGIBILITY_PAYMENT_CUP_PROJECTION_ACL_MATRIX_BINDING_INVALID');
+  });
+
+  it('binds the participation command matrix independently from v1 and v2', () => {
+    expect(() =>
+      assertEligibilityPaymentParticipationCommandAclMatrixBinding({
+        version: ELIGIBILITY_PAYMENT_PARTICIPATION_COMMAND_ACL_MATRIX_VERSION,
+        sha256: ELIGIBILITY_PAYMENT_PARTICIPATION_COMMAND_ACL_MATRIX_SHA256,
+      }),
+    ).not.toThrow();
+    expect(() =>
+      assertEligibilityPaymentParticipationCommandAclMatrixBinding({
+        version: ELIGIBILITY_PAYMENT_CUP_PROJECTION_ACL_MATRIX_VERSION,
+        sha256: ELIGIBILITY_PAYMENT_CUP_PROJECTION_ACL_MATRIX_SHA256,
+      }),
+    ).toThrow('ELIGIBILITY_PAYMENT_PARTICIPATION_COMMAND_ACL_MATRIX_BINDING_INVALID');
   });
 
   it('accepts the exact post boundary for all 12 CUP projection relations', () => {

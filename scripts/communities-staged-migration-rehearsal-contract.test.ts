@@ -14,6 +14,7 @@ describe('Communities staged migration rehearsal contract', () => {
       expect(source(workflow)).not.toContain('COMMUNITIES_STAGED_REHEARSAL_29_V1');
       expect(source(workflow)).not.toContain('COMMUNITIES_STAGED_REHEARSAL_32_V1');
       expect(source(workflow)).not.toContain('COMMUNITIES_STAGED_REHEARSAL_33_V1');
+      expect(source(workflow)).not.toContain('COMMUNITIES_STAGED_REHEARSAL_34_V1');
     }
     expect(source('.github/workflows/communities-staged-migration-rehearsal.yaml')).toContain(
       'REHEARSE_COMMUNITIES_STAGING_29_V1',
@@ -23,6 +24,9 @@ describe('Communities staged migration rehearsal contract', () => {
     );
     expect(source('.github/workflows/communities-staged-migration-rehearsal.yaml')).toContain(
       'REHEARSE_COMMUNITIES_STAGING_33_V1',
+    );
+    expect(source('.github/workflows/communities-staged-migration-rehearsal.yaml')).toContain(
+      'REHEARSE_COMMUNITIES_STAGING_34_V1',
     );
   });
 
@@ -56,15 +60,12 @@ describe('Communities staged migration rehearsal contract', () => {
     const pre = rehearsal.indexOf('run_clone_migrator pre_foundation');
     const foundation = rehearsal.indexOf('run_clone_migrator foundation');
     const post = rehearsal.indexOf('run_clone_migrator post_foundation');
-    const aclPre = rehearsal.indexOf(
-      'run_eligibility_acl_command apps/migrator/dist/provision-eligibility-payment-cup-projection-acl.js pre',
-    );
+    const aclPre = rehearsal.indexOf('pre_acl_output="$(run_eligibility_acl_command');
     const fixture = rehearsal.indexOf('run_cup_projection_rehearsal prepare');
     const eligibility = rehearsal.indexOf('run_clone_migrator eligibility_payment');
     const cup = rehearsal.indexOf('run_clone_migrator cup_projection');
-    const aclPost = rehearsal.indexOf(
-      'run_eligibility_acl_command apps/migrator/dist/provision-eligibility-payment-cup-projection-acl.js post',
-    );
+    const participation = rehearsal.indexOf('run_clone_migrator participation_command');
+    const aclPost = rehearsal.indexOf('post_acl_output="$(run_eligibility_acl_command');
     const cupProbe = rehearsal.indexOf('run_cup_projection_rehearsal probe');
     const noOp = rehearsal.indexOf('rerun_output="$(run_clone_migrator)"');
     const rolePost = rehearsal.indexOf('run_clone_role_boundary post');
@@ -80,7 +81,8 @@ describe('Communities staged migration rehearsal contract', () => {
     expect(fixture).toBeGreaterThan(aclPre);
     expect(eligibility).toBeGreaterThan(fixture);
     expect(cup).toBeGreaterThan(eligibility);
-    expect(aclPost).toBeGreaterThan(cup);
+    expect(participation).toBeGreaterThan(cup);
+    expect(aclPost).toBeGreaterThan(participation);
     expect(cupProbe).toBeGreaterThan(aclPost);
     expect(noOp).toBeGreaterThan(cupProbe);
     expect(rolePost).toBeGreaterThan(noOp);
@@ -108,7 +110,7 @@ describe('Communities staged migration rehearsal contract', () => {
     expect(runbook).toContain('rejects the existing `postgres-communities-preflight-*`');
   });
 
-  it('keeps 32_V1 frozen and binds 33_V1 to the reviewed ACL matrix and runtime probe', () => {
+  it('keeps older contracts frozen and binds 34_V1 to its ACL matrix and runtime probes', () => {
     const workflow = source('.github/workflows/communities-staged-migration-rehearsal.yaml');
     const wrapper = source('deploy/jetson/run-communities-staged-migration-rehearsal.sh');
     const rehearsal = source('deploy/jetson/rehearse-media-migration.sh');
@@ -119,6 +121,12 @@ describe('Communities staged migration rehearsal contract', () => {
       'apps/migrator/src/provision-eligibility-payment-cup-projection-acl.ts',
     );
     const projectionProbe = source('apps/migrator/src/cup-player-level-projection-rehearsal.ts');
+    const participationProvisioner = source(
+      'apps/migrator/src/provision-eligibility-payment-participation-command-acl.ts',
+    );
+    const participationProbe = source(
+      'apps/migrator/src/participation-command-foundation-rehearsal.ts',
+    );
 
     expect(workflow).toContain('32_V1 remains a frozen preparation-only contract');
     expect(wrapper).toContain('32_V1 remains frozen');
@@ -134,6 +142,12 @@ describe('Communities staged migration rehearsal contract', () => {
     expect(source('apps/migrator/tsup.config.ts')).toContain(
       "'src/verify-eligibility-payment-runtime-role.ts'",
     );
+    expect(source('apps/migrator/tsup.config.ts')).toContain(
+      "'src/provision-eligibility-payment-participation-command-acl.ts'",
+    );
+    expect(source('apps/migrator/tsup.config.ts')).toContain(
+      "'src/participation-command-foundation-rehearsal.ts'",
+    );
     expect(runbook).toContain('065df6510c35ea1be09dad9b6415b25c30543902837336739911555ec3dcad26');
     expect(runbook).toContain('runtime role only `USAGE` (never `CREATE`)');
     expect(runbook).toContain('implementation evidence only');
@@ -143,10 +157,18 @@ describe('Communities staged migration rehearsal contract', () => {
     expect(provisioner).toContain('ELIGIBILITY_PAYMENT_CUP_PROJECTION_ACL_RELATIONS');
     expect(projectionProbe).toContain("reusedEvent.outcome !== 'idempotency_conflict'");
     expect(projectionProbe).toContain("crossTenant.outcome !== 'actor_not_mapped'");
+    expect(participationProvisioner).toContain(
+      'ELIGIBILITY_PAYMENT_PARTICIPATION_COMMAND_ACL_RELATIONS',
+    );
+    expect(participationProbe).toContain("denied.state !== 'REJECTED'");
+    expect(participationProbe).toContain("applied.state !== 'APPLIED'");
     expect(runbook).toContain('Exact 33-file executable clone rehearsal contract');
     expect(runbook).toContain('3f61d60f27ab90bf4fe8498af29771b06925ece3b1ac6c7cac32b296d86c06d0');
     expect(runbook).toContain('83cba43d957e8104fc91b139020342dc154f571155c5fadafe36874583310310');
     expect(runbook).toContain('eligibility_payment=3 cup_projection=1');
     expect(runbook).toContain('`authorizes*=false` boundary remains unchanged');
+    expect(runbook).toContain('Exact 34-file participation-command clone rehearsal contract');
+    expect(runbook).toContain('488d3c7a9494b3c4587b2e849f937fe161ce3a9c7c7e336e63188cfaafdedc98');
+    expect(runbook).toContain('482afdc666acb2caa268c66b46575614acf10807727ca9e6a086eb805b38ca6e');
   });
 });

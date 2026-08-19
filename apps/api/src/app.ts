@@ -46,6 +46,7 @@ import type {
   MessagingRepository,
   NotificationEndpointRepository,
   NotificationInboxRepository,
+  ParticipationCommandRepository,
   ProfileFriendshipRepository,
   ProfileLevelHistoryRepository,
   ProfilePrivacyRepository,
@@ -131,6 +132,7 @@ import {
 } from './home/home-dashboard-schema.js';
 import { sendApiError } from './http-errors.js';
 import { registerLocationRoutes } from './locations/location-routes.js';
+import { registerParticipationCommandRoutes } from './eligibility/participation-command-routes.js';
 import { registerLocationMediaRoutes } from './locations/location-media-routes.js';
 import type { LocationMediaStore } from './locations/location-media-store.js';
 import { registerMessagingRoutes } from './messaging/messaging-routes.js';
@@ -276,6 +278,7 @@ export interface BuildAppOptions {
   readonly levelEligibilityPolicyRepository?: LevelEligibilityPolicyRepository;
   readonly playerLevelRepository?: PlayerLevelRepository;
   readonly cupPlayerLevelProjectionRepository?: CupPlayerLevelProjectionRepository;
+  readonly participationCommandRepository?: ParticipationCommandRepository;
   readonly locationMediaRepository?: LocationMediaRepository;
   readonly giftCertificateCatalogRepository?: GiftCertificateCatalogRepository;
   readonly giftCertificateMediaRepository?: GiftCertificateMediaRepository;
@@ -955,6 +958,24 @@ export async function buildApp(options: BuildAppOptions) {
       ? { repository: options.cupPlayerLevelProjectionRepository }
       : {}),
     commandHandlers: [resolvePublicTenant],
+  });
+  registerParticipationCommandRoutes(app as unknown as FastifyInstance, {
+    enabled: options.config.PARTICIPATION_COMMANDS_ENABLED,
+    ...(options.config.PARTICIPATION_COMMAND_TOKEN
+      ? { integrationToken: options.config.PARTICIPATION_COMMAND_TOKEN }
+      : {}),
+    ...(options.config.PARTICIPATION_COMMAND_TENANT_KEY
+      ? { authorizedTenantKey: options.config.PARTICIPATION_COMMAND_TENANT_KEY }
+      : {}),
+    ...(options.config.PARTICIPATION_COMMAND_PRINCIPAL_KEY
+      ? { principalKey: options.config.PARTICIPATION_COMMAND_PRINCIPAL_KEY }
+      : {}),
+    authorizationTtlSeconds: options.config.PARTICIPATION_COMMAND_AUTHORIZATION_TTL_SECONDS,
+    ...(options.participationCommandRepository
+      ? { repository: options.participationCommandRepository }
+      : {}),
+    commandHandlers: [resolvePublicTenant, requireIdempotencyKey],
+    readHandlers: [resolvePublicTenant],
   });
   registerGameResultRoutes(app as unknown as FastifyInstance, {
     ...(options.gameResultRepository ? { repository: options.gameResultRepository } : {}),

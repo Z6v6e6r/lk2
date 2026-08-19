@@ -1,5 +1,13 @@
 # Worklog
 
+## 2026-08-19 — Default-off participation command foundation
+
+- Added durable server-owned participation authorization, payment snapshot binding, writer ACK and
+  expiry semantics without routing any current writer.
+- Added migration 0088, exact tenant RLS, ACL matrix v3, and a new 34-file disposable-clone rehearsal
+  contract while preserving frozen v1/v2 and 29/32/33 contracts.
+- Kept API and worker flags false by default and production activation fail-closed.
+
 ## 2026-08-19 — Exact 33-file CUP projection clone rehearsal contract
 
 - Added a separately versioned `33_V1` clone-only rehearsal for the exact

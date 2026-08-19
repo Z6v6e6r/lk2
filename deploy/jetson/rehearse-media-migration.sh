@@ -36,6 +36,17 @@ case "${COMMUNITIES_STAGED_REHEARSAL_CONFIRMATION:-}" in
     test "${#COMMUNITIES_STAGED_REHEARSAL_ACL_MATRIX_SHA256}" -eq 64 ||
       fail '33_V1 ACL matrix SHA is invalid'
     ;;
+  COMMUNITIES_STAGED_REHEARSAL_34_V1)
+    staged_rehearsal=true
+    staged_contract_version=34_V1
+    test -n "${COMMUNITIES_STAGED_REHEARSAL_ACL_MATRIX_VERSION:-}" ||
+      fail '34_V1 requires an exact ACL matrix version'
+    case "${COMMUNITIES_STAGED_REHEARSAL_ACL_MATRIX_SHA256:-}" in
+      *[!0-9a-f]*|'') fail '34_V1 ACL matrix SHA is invalid' ;;
+    esac
+    test "${#COMMUNITIES_STAGED_REHEARSAL_ACL_MATRIX_SHA256}" -eq 64 ||
+      fail '34_V1 ACL matrix SHA is invalid'
+    ;;
   *) fail 'staged rehearsal confirmation is invalid' ;;
 esac
 test -n "${RUNTIME_DATABASE_URL:-}" || fail 'RUNTIME_DATABASE_URL is required'
@@ -520,17 +531,21 @@ Applied 0083_profile_photo_removal_commands_validate.sql'
   post_foundation_output="$(run_clone_migrator post_foundation)"
   test "$post_foundation_output" = "$expected_post_foundation_output" ||
     fail 'post-foundation stage did not apply the exact 8-file plan'
-  if test "$staged_contract_version" = 33_V1; then
-    pre_acl_output="$(run_eligibility_acl_command apps/migrator/dist/provision-eligibility-payment-cup-projection-acl.js pre)"
+  if test "$staged_contract_version" = 33_V1 || test "$staged_contract_version" = 34_V1; then
+    acl_provision_entrypoint=apps/migrator/dist/provision-eligibility-payment-cup-projection-acl.js
+    if test "$staged_contract_version" = 34_V1; then
+      acl_provision_entrypoint=apps/migrator/dist/provision-eligibility-payment-participation-command-acl.js
+    fi
+    pre_acl_output="$(run_eligibility_acl_command "$acl_provision_entrypoint" pre)"
     test "$pre_acl_output" = ELIGIBILITY_PAYMENT_ACL_PRE_PROVISIONED ||
-      fail '33_V1 pre-migration ACL provisioning failed'
+      fail "$staged_contract_version pre-migration ACL provisioning failed"
     pre_acl_verify_output="$(run_eligibility_acl_command apps/migrator/dist/verify-eligibility-payment-acl-boundary.js pre)"
     test "$pre_acl_verify_output" = \
       "ELIGIBILITY_PAYMENT_ACL_PRE_READY matrix=$COMMUNITIES_STAGED_REHEARSAL_ACL_MATRIX_VERSION:$COMMUNITIES_STAGED_REHEARSAL_ACL_MATRIX_SHA256" ||
-      fail '33_V1 pre-migration ACL verification failed'
+      fail "$staged_contract_version pre-migration ACL verification failed"
     fixture_output="$(run_cup_projection_rehearsal prepare)"
     test "$fixture_output" = 'CUP_PLAYER_LEVEL_PROJECTION_REHEARSAL_PREPARED tenants=2' ||
-      fail '33_V1 clone fixture preparation failed'
+      fail "$staged_contract_version clone fixture preparation failed"
     expected_eligibility_payment_output='Applied 0084_participation_level_eligibility.sql
 Applied 0085_game_payment_confirmation_evidence.sql
 Applied 0086_game_payment_provider_exercise_binding.sql'
@@ -540,21 +555,36 @@ Applied 0086_game_payment_provider_exercise_binding.sql'
     cup_projection_output="$(run_clone_migrator cup_projection)"
     test "$cup_projection_output" = 'Applied 0087_cup_player_level_projection.sql' ||
       fail 'CUP projection stage did not apply the exact 1-file plan'
-    post_acl_output="$(run_eligibility_acl_command apps/migrator/dist/provision-eligibility-payment-cup-projection-acl.js post)"
+    if test "$staged_contract_version" = 34_V1; then
+      participation_command_output="$(run_clone_migrator participation_command)"
+      test "$participation_command_output" = 'Applied 0088_participation_command_foundation.sql' ||
+        fail 'participation command stage did not apply the exact 1-file plan'
+    fi
+    post_acl_output="$(run_eligibility_acl_command "$acl_provision_entrypoint" post)"
     test "$post_acl_output" = ELIGIBILITY_PAYMENT_ACL_POST_PROVISIONED ||
-      fail '33_V1 post-migration ACL provisioning failed'
+      fail "$staged_contract_version post-migration ACL provisioning failed"
     post_acl_verify_output="$(run_eligibility_acl_command apps/migrator/dist/verify-eligibility-payment-acl-boundary.js post)"
     test "$post_acl_verify_output" = \
       "ELIGIBILITY_PAYMENT_ACL_POST_READY matrix=$COMMUNITIES_STAGED_REHEARSAL_ACL_MATRIX_VERSION:$COMMUNITIES_STAGED_REHEARSAL_ACL_MATRIX_SHA256" ||
-      fail '33_V1 post-migration ACL verification failed'
+      fail "$staged_contract_version post-migration ACL verification failed"
     cup_projection_probe_output="$(run_cup_projection_rehearsal probe)"
     test "$cup_projection_probe_output" = \
       'CUP_PLAYER_LEVEL_PROJECTION_REHEARSAL_PROBE apply=passed replay=passed idempotency=passed cross_tenant_rls=passed' ||
-      fail '33_V1 CUP projection runtime probe failed'
+      fail "$staged_contract_version CUP projection runtime probe failed"
+    if test "$staged_contract_version" = 34_V1; then
+      participation_probe_output="$(run_eligibility_acl_command apps/migrator/dist/participation-command-foundation-rehearsal.js post)"
+      test "$participation_probe_output" = \
+        'PARTICIPATION_COMMAND_REHEARSAL_PROBE authorize=passed deny=passed replay=passed idempotency=passed payment_snapshot=passed acknowledgement=passed cross_tenant_rls=passed' ||
+        fail '34_V1 participation command runtime probe failed'
+    fi
     printf 'eligibility_payment_acl matrix=%s pre=passed post=passed privileges=exact status=passed\n' \
       "$COMMUNITIES_STAGED_REHEARSAL_ACL_MATRIX_VERSION"
     printf '%s\n' \
       'cup_player_level_projection_clone_probe apply=passed replay=passed idempotency=passed cross_tenant_rls=passed status=passed'
+    if test "$staged_contract_version" = 34_V1; then
+      printf '%s\n' \
+        'participation_command_clone_probe authorize=passed deny=passed replay=passed idempotency=passed payment_snapshot=passed acknowledgement=passed cross_tenant_rls=passed status=passed'
+    fi
   fi
 else
   run_clone_migrator
@@ -592,7 +622,11 @@ trap - EXIT HUP INT TERM
 printf 'media_migration_rehearsal database=%s duration_seconds=%s migration_seconds=%s rerun_applied=0 cleanup=confirmed status=passed\n' \
   "$restore_database" "$restore_seconds" "$migration_seconds"
 if test "$staged_rehearsal" = true; then
-  if test "$staged_contract_version" = 33_V1; then
+  if test "$staged_contract_version" = 34_V1; then
+    printf 'communities_staged_migration_rehearsal database=%s contract=34_V1 pre_foundation=16 foundation=5 post_foundation=8 eligibility_payment=3 cup_projection=1 participation_command=1 acl_matrix=%s projection_probe=passed participation_probe=passed quota_index_measurements=4 source_ledger_sha=%s cleanup=confirmed status=passed\n' \
+      "$restore_database" "$COMMUNITIES_STAGED_REHEARSAL_ACL_MATRIX_VERSION" \
+      "$restored_source_ledger_sha"
+  elif test "$staged_contract_version" = 33_V1; then
     printf 'communities_staged_migration_rehearsal database=%s contract=33_V1 pre_foundation=16 foundation=5 post_foundation=8 eligibility_payment=3 cup_projection=1 acl_matrix=%s projection_probe=passed quota_index_measurements=4 source_ledger_sha=%s cleanup=confirmed status=passed\n' \
       "$restore_database" "$COMMUNITIES_STAGED_REHEARSAL_ACL_MATRIX_VERSION" \
       "$restored_source_ledger_sha"

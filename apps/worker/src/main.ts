@@ -17,6 +17,7 @@ import {
   createGameResultProjectionRepository,
   createGiftCertificateIssuanceRepository,
   createLocalCommunityDirectoryRepository,
+  createParticipationCommandRepository,
 } from '@phub/database';
 import { LegacyGamesMongoAdapter, LegacyGamesPublicAdapter } from '@phub/legacy-games-adapter';
 import { createNotificationEndpointCipher } from '@phub/notifications';
@@ -107,6 +108,7 @@ const workerMetrics = createWorkerMetricRecorder({
 });
 const pool = createDatabasePool(config.DATABASE_URL);
 const gameRepository = createGameRepository(pool);
+const participationCommandRepository = createParticipationCommandRepository(pool);
 const gamesProcessManagerWorkerId = `games-process-manager-${randomUUID()}`;
 const COMMUNITY_DIRECT_INVITE_EXPIRY_INTERVAL_MS = 60_000;
 const COMMUNITY_DIRECT_INVITE_EXPIRY_BATCH_SIZE = 100;
@@ -605,6 +607,36 @@ const runCommunityDirectInviteExpiryCycle = async (): Promise<void> => {
       setTimeout(
         () => void runCommunityDirectInviteExpiryCycle(),
         COMMUNITY_DIRECT_INVITE_EXPIRY_INTERVAL_MS,
+      );
+    }
+  }
+};
+
+const runParticipationCommandExpiryCycle = async (): Promise<void> => {
+  if (shuttingDown || !config.PARTICIPATION_COMMAND_EXPIRY_WORKER_ENABLED) return;
+  let expired = 0;
+  try {
+    const tenants = await pool.query<{ id: string }>(
+      'select id from identity.tenants where active = true order by id',
+    );
+    for (const tenant of tenants.rows) {
+      const result = await participationCommandRepository.expireAuthorizedBatch({
+        tenantId: tenant.id,
+        limit: config.PARTICIPATION_COMMAND_EXPIRY_BATCH_SIZE,
+        correlationId: `participation-expiry-${randomUUID()}`,
+      });
+      expired += result.expired;
+    }
+    if (expired > 0) {
+      logger.info({ expired }, 'participation command expiry cycle completed');
+    }
+  } catch (error) {
+    logger.error({ error }, 'participation command expiry cycle failed');
+  } finally {
+    if (!shuttingDown) {
+      setTimeout(
+        () => void runParticipationCommandExpiryCycle(),
+        config.PARTICIPATION_COMMAND_EXPIRY_INTERVAL_MS,
       );
     }
   }
@@ -1137,6 +1169,7 @@ void runLegacyGamesRosterSync();
 void runWebPushCycle();
 void runGiftCertificateDeliveryCycle();
 void runCommunityDirectInviteExpiryCycle();
+void runParticipationCommandExpiryCycle();
 if (canonicalCommunityWorkerEnabled) {
   void runCommunityMemberCountReconciliation();
   void runCommunityEventRetention();

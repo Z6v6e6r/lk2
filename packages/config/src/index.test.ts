@@ -49,6 +49,11 @@ describe('loadConfig', () => {
       GAMES_RESULTS_WRITE_MODE: 'disabled',
       CUP_RATING_CONSUMER_ENABLED: false,
       CUP_PLAYER_LEVEL_PROJECTION_ENABLED: false,
+      PARTICIPATION_COMMANDS_ENABLED: false,
+      PARTICIPATION_COMMAND_AUTHORIZATION_TTL_SECONDS: 300,
+      PARTICIPATION_COMMAND_EXPIRY_WORKER_ENABLED: false,
+      PARTICIPATION_COMMAND_EXPIRY_INTERVAL_MS: 60_000,
+      PARTICIPATION_COMMAND_EXPIRY_BATCH_SIZE: 100,
       ACTIVITY_HISTORY_GAME_BACKFILL_ENABLED: false,
       LEGACY_GAMES_ROSTER_SYNC_ENABLED: false,
       LEGACY_GAME_COMMAND_BRIDGE_ENABLED: false,
@@ -145,6 +150,49 @@ describe('loadConfig', () => {
       CUP_PLAYER_LEVEL_PROJECTION_ENABLED: true,
       CUP_PLAYER_LEVEL_PROJECTION_TENANT_KEY: 'local-padel',
     });
+  });
+
+  it('keeps participation commands default-off and requires an exact server boundary', () => {
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        APP_ENV: 'staging',
+        PARTICIPATION_COMMANDS_ENABLED: 'true',
+      }),
+    ).toThrow('requires token, tenant key, and principal key');
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        APP_ENV: 'staging',
+        PARTICIPATION_COMMANDS_ENABLED: 'true',
+        PARTICIPATION_COMMAND_TOKEN: 'x'.repeat(32),
+        PARTICIPATION_COMMAND_TENANT_KEY: 'local-padel',
+      }),
+    ).toThrow('principal key');
+    expect(
+      loadConfig({
+        ...validEnvironment,
+        APP_ENV: 'staging',
+        PARTICIPATION_COMMANDS_ENABLED: 'true',
+        PARTICIPATION_COMMAND_TOKEN: 'x'.repeat(32),
+        PARTICIPATION_COMMAND_TENANT_KEY: 'local-padel',
+        PARTICIPATION_COMMAND_PRINCIPAL_KEY: 'legacy-lk-writer',
+      }),
+    ).toMatchObject({
+      PARTICIPATION_COMMANDS_ENABLED: true,
+      PARTICIPATION_COMMAND_TENANT_KEY: 'local-padel',
+      PARTICIPATION_COMMAND_PRINCIPAL_KEY: 'legacy-lk-writer',
+    });
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        APP_ENV: 'production',
+        PARTICIPATION_COMMANDS_ENABLED: 'true',
+        PARTICIPATION_COMMAND_TOKEN: 'x'.repeat(32),
+        PARTICIPATION_COMMAND_TENANT_KEY: 'local-padel',
+        PARTICIPATION_COMMAND_PRINCIPAL_KEY: 'legacy-lk-writer',
+      }),
+    ).toThrow('allowed only in local or staging');
   });
 
   it('provides a credential-free target fingerprint and keeps attestation local-only', () => {
