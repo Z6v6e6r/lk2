@@ -127,6 +127,19 @@ describe('Communities role-split acceptance v1 contract', () => {
 
   it('exports the shared INPUT_C contract and evaluator from built @phub/database', () => {
     const root = new URL('..', import.meta.url);
+    execFileSync('npm', ['run', 'build', '-w', '@phub/domain'], { cwd: root, stdio: 'ignore' });
+    execFileSync('npm', ['run', 'build', '-w', '@phub/communities'], {
+      cwd: root,
+      stdio: 'ignore',
+    });
+    execFileSync('npm', ['run', 'build', '-w', '@phub/locations'], {
+      cwd: root,
+      stdio: 'ignore',
+    });
+    execFileSync('npm', ['run', 'build', '-w', '@phub/home-projection'], {
+      cwd: root,
+      stdio: 'ignore',
+    });
     execFileSync('npm', ['run', 'build', '-w', '@phub/database'], { cwd: root, stdio: 'ignore' });
     const output = execFileSync(
       process.execPath,
