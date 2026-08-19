@@ -30,7 +30,7 @@ const exact = {
   runtimeRoleOid: '111',
   migratorRoleName: 'phub_migrator',
   migratorRoleOid: '222',
-  sourceLedgerSha256: communitiesStagingRoleSplitInventorySha256(ledger),
+  sourceLedgerSha256: communitiesStagingRoleSplitInventorySha256(`${ledger}\n`),
   sourceLedgerCount: '1',
   cloneSourceBindingMarker: 'clone-source-binding-1234',
   expectedInventorySha256: communitiesStagingRoleSplitInventorySha256(inventory),

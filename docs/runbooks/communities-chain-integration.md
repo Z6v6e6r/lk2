@@ -227,6 +227,28 @@ gate must first establish the exact clone preimage: `pg_trgm` state, intentional
 ACLs, table/column ACLs, RLS/policies, sequences, functions and types. Only that evidence can
 support a separately versioned and approved persistent role/ownership/grant plan.
 
+The independent inventory producer is also blocked until the restore owner creates a trusted clone
+provenance marker. The preparation contract `PHUB_COMMUNITIES_ROLE_SPLIT_CLONE_MARKER_V1` defines
+an exact-order, LF-terminated UTF-8 line payload and derives the database comment value as
+`phub-communities-role-split-clone-v1:<payload-sha256>`. The payload binds the SHA of its root-owned
+request, clone name/OID/owner, source database/OID/owner and cluster system identifier, workflow
+run and attempt, backup bytes and SHA-256, backup-evidence and archive-TOC SHA-256 values, source
+ledger SHA-256 and count, active release, PostgreSQL major `16`, object-manifest SHA-256, and the
+exact restore-helper and restore-owner script SHA-256 values. Redacted evidence contains only
+digests, counts and booleans and states that role creation, role split, shared-database mutation,
+migration, deploy, import and activation are all unauthorized.
+
+No current command is allowed to write that marker. A later restore-owner ceremony must be
+independently reviewed and must create it only after exclusive clone creation, ownership/ACL-
+preserving restore, backup and archive-TOC verification, source and restored-ledger equality, and
+clone/source identity rechecks. The marker writer must be a separately installed root-owned forced
+command with a dedicated key and request; the inventory collector must remain read-only and must
+never create or repair the marker. Before marker readback, cleanup may drop only a ceremony-owned
+clone whose exact OID is recorded. After marker commit, automatic cleanup is forbidden and a
+separate approved cleanup command must bind the marker, request and clone OID. Until the writer,
+request custody, evidence retention and cleanup/idempotency rules exist, the producer and existing
+provisioner remain preparation-only and must fail before publishing trusted inventory evidence.
+
 ### Exact 29-file staged clone rehearsal contract
 
 The staging inventory associated with source-ledger SHA-256
