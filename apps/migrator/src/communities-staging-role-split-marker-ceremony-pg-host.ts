@@ -52,7 +52,7 @@ function fail(code: string): never {
 }
 
 export interface CommunitiesStagingRoleSplitMarkerCeremonyPgClient {
-  query<T extends Record<string, unknown> = Record<string, unknown>>(
+  query<T extends object = Record<string, unknown>>(
     sql: string,
     values?: readonly unknown[],
   ): Promise<{ readonly rows: readonly T[] }>;
@@ -135,6 +135,12 @@ function exactHex(value: string): boolean {
   return /^[a-f0-9]{64}$/.test(value);
 }
 
+function currentUid(): number {
+  const getuid = process.getuid;
+  if (getuid === undefined) fail('PLATFORM_UNSUPPORTED');
+  return getuid();
+}
+
 export class CommunitiesStagingRoleSplitMarkerCeremonyPgHost implements CommunitiesStagingRoleSplitMarkerCeremonyHost {
   private readonly statePath: string;
   private readonly leasePath: string;
@@ -164,7 +170,7 @@ export class CommunitiesStagingRoleSplitMarkerCeremonyPgHost implements Communit
       if (
         !stat.isDirectory() ||
         stat.isSymbolicLink() ||
-        stat.uid !== process.getuid() ||
+        stat.uid !== currentUid() ||
         !isRegularMode(stat.mode, MODE_0700)
       )
         fail('STATE_DIRECTORY_UNSAFE');
@@ -188,7 +194,7 @@ export class CommunitiesStagingRoleSplitMarkerCeremonyPgHost implements Communit
       if (
         !first.isFile() ||
         first.isSymbolicLink() ||
-        first.uid !== process.getuid() ||
+        first.uid !== currentUid() ||
         !isRegularMode(first.mode, MODE_0600)
       )
         fail('LEASE_LOST');
@@ -228,7 +234,7 @@ export class CommunitiesStagingRoleSplitMarkerCeremonyPgHost implements Communit
       if (
         !first.isFile() ||
         first.isSymbolicLink() ||
-        first.uid !== process.getuid() ||
+        first.uid !== currentUid() ||
         !isRegularMode(first.mode, MODE_0600) ||
         first.size > maxBytes
       )
@@ -434,7 +440,7 @@ export class CommunitiesStagingRoleSplitMarkerCeremonyPgHost implements Communit
           if (
             !first.isFile() ||
             first.isSymbolicLink() ||
-            first.uid !== process.getuid() ||
+            first.uid !== currentUid() ||
             !isRegularMode(first.mode, MODE_0600) ||
             first.size <= 0 ||
             first.size > maxBytes ||
@@ -445,7 +451,7 @@ export class CommunitiesStagingRoleSplitMarkerCeremonyPgHost implements Communit
           const opened = await handle.stat();
           if (
             !sameStat(first, opened) ||
-            opened.uid !== process.getuid() ||
+            opened.uid !== currentUid() ||
             !isRegularMode(opened.mode, MODE_0600) ||
             opened.size <= 0 ||
             opened.size > maxBytes ||
@@ -818,5 +824,7 @@ export class CommunitiesStagingRoleSplitMarkerCeremonyPgHost implements Communit
 
 /** Paths are intentionally never emitted by errors; useful only for unit assertions. */
 export function communitiesStagingRoleSplitMarkerCeremonyPgHostFilenames(): readonly string[] {
-  return ['ceremony-state.json', 'ceremony.lock', 'marker-evidence.json'].map(basename);
+  return ['ceremony-state.json', 'ceremony.lock', 'marker-evidence.json'].map((value) =>
+    basename(value),
+  );
 }

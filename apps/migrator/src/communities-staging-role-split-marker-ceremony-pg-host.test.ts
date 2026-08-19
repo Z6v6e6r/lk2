@@ -26,6 +26,16 @@ const ledger: readonly CommunitiesStagingRoleSplitLedgerEntry[] = [
   { filename: '0001_initial.sql', checksum: 'a'.repeat(64) },
 ];
 
+function fakePgClient(
+  resolve: (sql: string) => readonly object[],
+): CommunitiesStagingRoleSplitMarkerCeremonyPgClient {
+  return {
+    query<T extends object>(sql: string) {
+      return Promise.resolve({ rows: resolve(sql) as readonly T[] });
+    },
+  };
+}
+
 async function fixture() {
   const directory = await mkdtemp(join(tmpdir(), 'phub-marker-host-'));
   await chmod(directory, 0o700);
@@ -73,65 +83,51 @@ async function fixture() {
     restoreInputKeys: [] as string[],
     createCalls: 0,
   };
-  const admin: CommunitiesStagingRoleSplitMarkerCeremonyPgClient = {
-    query(sql: string) {
-      queries.push(sql);
-      if (sql.includes('system_identifier') && sql.includes('server_version'))
-        return Promise.resolve({
-          rows: [{ system_identifier: controls.adminSystemIdentifier, major: '16' }],
-        });
-      if (sql.includes('pg_database'))
-        return Promise.resolve(
-          controls.cloneExists
-            ? { rows: [{ oid: '45678', owner: 'phub_staging', owner_oid: '16384' }] }
-            : { rows: [] },
-        );
-      if (sql.includes('server_version')) return Promise.resolve({ rows: [{ major: '16' }] });
-      if (sql.includes('pg_control_system'))
-        return Promise.resolve({ rows: [{ system_identifier: controls.cloneSystemIdentifier }] });
-      return Promise.resolve({ rows: [] });
-    },
-  };
-  const source: CommunitiesStagingRoleSplitMarkerCeremonyPgClient = {
-    query(sql: string) {
-      queries.push(sql);
-      if (sql.includes('current_database'))
-        return Promise.resolve({
-          rows: [
-            {
-              database: request.sourceDatabase,
-              oid: request.sourceDatabaseOid,
-              owner: request.sourceDatabaseOwner,
-              owner_oid: request.sourceDatabaseOwnerOid,
-              system_identifier: controls.sourceSystemIdentifier,
-              major: '16',
-            },
-          ],
-        });
-      if (sql.includes('schema_migrations')) return Promise.resolve({ rows: ledger });
-      return Promise.resolve({ rows: [] });
-    },
-  };
-  const clone: CommunitiesStagingRoleSplitMarkerCeremonyPgClient = {
-    query(sql: string) {
-      queries.push(sql);
-      if (sql.includes('current_database'))
-        return Promise.resolve({
-          rows: [
-            {
-              database: request.restoreDatabase,
-              oid: '45678',
-              owner: request.expectedCloneDatabaseOwner,
-              owner_oid: request.expectedCloneDatabaseOwnerOid,
-              system_identifier: controls.cloneSystemIdentifier,
-              major: '16',
-            },
-          ],
-        });
-      if (sql.includes('schema_migrations')) return Promise.resolve({ rows: ledger });
-      return Promise.resolve({ rows: [] });
-    },
-  };
+  const admin = fakePgClient((sql) => {
+    queries.push(sql);
+    if (sql.includes('system_identifier') && sql.includes('server_version'))
+      return [{ system_identifier: controls.adminSystemIdentifier, major: '16' }];
+    if (sql.includes('pg_database'))
+      return controls.cloneExists
+        ? [{ oid: '45678', owner: 'phub_staging', owner_oid: '16384' }]
+        : [];
+    if (sql.includes('server_version')) return [{ major: '16' }];
+    if (sql.includes('pg_control_system'))
+      return [{ system_identifier: controls.cloneSystemIdentifier }];
+    return [];
+  });
+  const source = fakePgClient((sql) => {
+    queries.push(sql);
+    if (sql.includes('current_database'))
+      return [
+        {
+          database: request.sourceDatabase,
+          oid: request.sourceDatabaseOid,
+          owner: request.sourceDatabaseOwner,
+          owner_oid: request.sourceDatabaseOwnerOid,
+          system_identifier: controls.sourceSystemIdentifier,
+          major: '16',
+        },
+      ];
+    if (sql.includes('schema_migrations')) return ledger;
+    return [];
+  });
+  const clone = fakePgClient((sql) => {
+    queries.push(sql);
+    if (sql.includes('current_database'))
+      return [
+        {
+          database: request.restoreDatabase,
+          oid: '45678',
+          owner: request.expectedCloneDatabaseOwner,
+          owner_oid: request.expectedCloneDatabaseOwnerOid,
+          system_identifier: controls.cloneSystemIdentifier,
+          major: '16',
+        },
+      ];
+    if (sql.includes('schema_migrations')) return ledger;
+    return [];
+  });
   const config = {
     stateDirectory: directory,
     request,
