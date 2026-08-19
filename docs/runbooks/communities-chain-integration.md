@@ -337,7 +337,9 @@ additional, reordered, partial or cross-version sets fail before DDL.
 This is explicitly **not execution-ready**. The preparation branch pins the reviewed
 `eligibility-payment-acl-v1` runtime matrix at SHA-256
 `065df6510c35ea1be09dad9b6415b25c30543902837336739911555ec3dcad26`, but no authorized
-schema-provisioning, exact-grant, runtime-probe or workflow ceremony exists yet. The dispatch token
+schema-provisioning or workflow ceremony exists yet. Two image entrypoints now implement the
+otherwise missing clone-only exact-grant and runtime-probe steps, but they are not wired into any
+workflow, forced command or clone helper. The dispatch token
 `REHEARSE_COMMUNITIES_STAGING_32_V1`, the forced command, the clone helper and the migrator request
 policy deliberately fail closed before SSH, backup, clone, Docker, database-pool creation or DDL.
 The versioned migration selector additionally rejects a 32-file request unless it carries this
@@ -366,8 +368,28 @@ is owned by the exact migrator role, grants the runtime role `USAGE` without `CR
 public or third-party schema ACL. The read-only
 `verify-eligibility-payment-acl-boundary` image entry now supports `pre` and `post` catalog
 attestation under a 30-second statement timeout and safe `pg_catalog` search path. It never grants
-privileges. The future grant provisioner and rolled-back cross-tenant runtime DML/RLS probes remain
-unimplemented gates, so the existing four fail-closed execution boundaries must not be removed.
+privileges. `provision-eligibility-payment-acl` requires the exact matrix version/digest, the exact
+`phub_restore_<run>_<attempt>` database, the exact
+`PROVISION_ELIGIBILITY_PAYMENT_ACL_V1` confirmation and a migrator session with no role switch. It
+accepts only a query-free `postgres:5432` Compose URL for that exact clone name. It
+accepts only a wholly ungranted fresh relation set or the wholly exact idempotent state, rejects
+partial/unexpected ACLs before mutation, issues only the ten static table grants in one bounded
+transaction and runs the post catalog verifier before commit. It never creates schemas, revokes
+third-party grants, changes default ACLs, uses wildcards or grants schema `CREATE`.
+
+`verify-eligibility-payment-runtime-role` connects as the exact runtime role to that same clone,
+requires `VERIFY_ELIGIBILITY_PAYMENT_RUNTIME_RLS_V1`, exercises the static matrix with zero-row
+statements, inserts one tenant-local idempotency marker, proves it becomes invisible after changing
+the tenant context, proves cross-tenant INSERT plus table DELETE and schema CREATE fail with
+`42501`, and always rolls the transaction back. It emits only the fixed readiness line and never
+prints tenant, user, role or object identifiers. Catalog verification plus the zero-row statements
+remain authoritative for all four UPDATE grants; positive non-zero-row UPDATE on
+`personal_invitations` and `payment_confirmation_evidence` additionally needs domain fixtures.
+
+These two entrypoints are implementation evidence only. They have no standalone authority and the
+existing four fail-closed 32_V1 execution boundaries must not be removed until a separately
+approved clone ceremony binds their exact image digest, environment and order and adds real-PG
+evidence for provisioner rollback/idempotency and runtime RLS denial.
 
 When that gate is separately implemented and approved, its fixed redacted evidence must contain
 the contract version, pending-set SHA, one aggregate eligibility audit and one aggregate payment

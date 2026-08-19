@@ -10,6 +10,8 @@ export default defineConfig({
     'src/verify-chat-push-foundation-operational.ts',
     'src/verify-chat-push-foundation-contour.ts',
     'src/verify-eligibility-payment-acl-boundary.ts',
+    'src/provision-eligibility-payment-acl.ts',
+    'src/verify-eligibility-payment-runtime-role.ts',
   ],
   format: ['esm'],
   target: 'node22',

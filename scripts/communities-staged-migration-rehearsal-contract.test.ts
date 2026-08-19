@@ -101,9 +101,18 @@ describe('Communities staged migration rehearsal contract', () => {
     expect(rehearsal).toContain('32_V1 is clone-evidence preparation only');
     expect(runbook).toContain('f5ea040e4498a45310ad671f321e3044c33743ca7b0cbee7c72bc01ee9b6a91d');
     expect(runbook).toContain('eligibility-payment-acl-v1');
+    expect(runbook).toContain('PROVISION_ELIGIBILITY_PAYMENT_ACL_V1');
+    expect(runbook).toContain('VERIFY_ELIGIBILITY_PAYMENT_RUNTIME_RLS_V1');
+    expect(runbook).toContain('not wired into any');
+    expect(source('apps/migrator/tsup.config.ts')).toContain(
+      "'src/provision-eligibility-payment-acl.ts'",
+    );
+    expect(source('apps/migrator/tsup.config.ts')).toContain(
+      "'src/verify-eligibility-payment-runtime-role.ts'",
+    );
     expect(runbook).toContain('065df6510c35ea1be09dad9b6415b25c30543902837336739911555ec3dcad26');
     expect(runbook).toContain('runtime role only `USAGE` (never `CREATE`)');
-    expect(runbook).toContain('future grant provisioner');
+    expect(runbook).toContain('implementation evidence only');
     expect(matrix).toContain('COLUMN_ACL=FORBIDDEN');
     expect(inspector).toContain("set local search_path = 'pg_catalog'");
     expect(inspector).toContain('begin transaction read only');

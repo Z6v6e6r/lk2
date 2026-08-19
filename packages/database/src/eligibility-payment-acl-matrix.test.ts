@@ -11,6 +11,7 @@ import {
   EligibilityPaymentAclMatrixError,
   assertEligibilityPaymentAclBoundary,
   assertEligibilityPaymentAclMatrixBinding,
+  assertEligibilityPaymentAclProvisioningBoundary,
   eligibilityPaymentAclMatrixCanonicalText,
   eligibilityPaymentAclMatrixSha256,
 } from './eligibility-payment-acl-matrix.js';
@@ -158,6 +159,47 @@ describe('eligibility/payment runtime ACL matrix', () => {
         relations: relations(),
       }),
     ).not.toThrow();
+  });
+
+  it('accepts only a wholly ungranted or exact idempotent provisioning state', () => {
+    const exact = {
+      roles: roles(),
+      schemas: schemas(),
+      preexistingRelations: preexistingRelations(),
+      relations: relations(),
+    };
+    expect(() => assertEligibilityPaymentAclProvisioningBoundary(exact)).not.toThrow();
+    expect(() =>
+      assertEligibilityPaymentAclProvisioningBoundary({
+        ...exact,
+        relations: exact.relations.map((relation) => ({
+          ...relation,
+          runtimePrivileges: [],
+        })),
+      }),
+    ).not.toThrow();
+    expectBoundaryError(
+      () =>
+        assertEligibilityPaymentAclProvisioningBoundary({
+          ...exact,
+          relations: exact.relations.map((relation, index) => ({
+            ...relation,
+            runtimePrivileges: index === 0 ? relation.runtimePrivileges : [],
+          })),
+        }),
+      'ELIGIBILITY_PAYMENT_ACL_PROVISIONING_STATE_INVALID',
+    );
+    expectBoundaryError(
+      () =>
+        assertEligibilityPaymentAclProvisioningBoundary({
+          ...exact,
+          relations: exact.relations.map((relation, index) => ({
+            ...relation,
+            runtimePrivileges: index === 0 ? ['SELECT', 'UPDATE'] : [],
+          })),
+        }),
+      'ELIGIBILITY_PAYMENT_ACL_PROVISIONING_STATE_INVALID',
+    );
   });
 
   it('rejects privileged, identical or role-inheriting identities', () => {

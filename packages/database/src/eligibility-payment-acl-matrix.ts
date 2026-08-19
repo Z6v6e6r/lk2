@@ -303,6 +303,57 @@ export function assertEligibilityPaymentAclBoundary(input: {
   }
 }
 
+export function assertEligibilityPaymentAclProvisioningBoundary(input: {
+  readonly roles: EligibilityPaymentRoleAclSnapshot;
+  readonly schemas: readonly EligibilityPaymentSchemaAclSnapshot[];
+  readonly preexistingRelations: readonly EligibilityPaymentPreexistingRelationSnapshot[];
+  readonly relations: readonly EligibilityPaymentRelationAclSnapshot[];
+}): void {
+  assertEligibilityPaymentAclBoundary({ phase: 'pre', ...input });
+  if (input.relations.length !== ELIGIBILITY_PAYMENT_ACL_RELATIONS.length) {
+    fail('ELIGIBILITY_PAYMENT_ACL_RELATION_SET_INVALID');
+  }
+  let freshRelationCount = 0;
+  let exactRelationCount = 0;
+  for (const expected of ELIGIBILITY_PAYMENT_ACL_RELATIONS) {
+    const matching = input.relations.filter(
+      (candidate) =>
+        candidate.schemaName === expected.schemaName &&
+        candidate.relationName === expected.relationName,
+    );
+    if (matching.length !== 1) fail('ELIGIBILITY_PAYMENT_ACL_RELATION_SET_INVALID');
+    const relation = matching[0];
+    if (!relation?.exists) fail('ELIGIBILITY_PAYMENT_ACL_RELATION_MISSING');
+    if (!relation.ownedByMigrator) fail('ELIGIBILITY_PAYMENT_ACL_RELATION_OWNER_INVALID');
+    if (!relation.forceRls) fail('ELIGIBILITY_PAYMENT_ACL_RLS_INVALID');
+    if (!hasExactPolicy(expected.policyName, relation.policies)) {
+      fail('ELIGIBILITY_PAYMENT_ACL_POLICY_INVALID');
+    }
+    const actualPrivileges = [...new Set(relation.runtimePrivileges)].sort();
+    const expectedPrivileges = [...expected.runtimePrivileges].sort();
+    const isUngrantableFreshState = actualPrivileges.length === 0;
+    const isExactIdempotentState =
+      actualPrivileges.length === expectedPrivileges.length &&
+      actualPrivileges.join(',') === expectedPrivileges.join(',');
+    if (!isUngrantableFreshState && !isExactIdempotentState) {
+      fail('ELIGIBILITY_PAYMENT_ACL_PROVISIONING_STATE_INVALID');
+    }
+    if (isUngrantableFreshState) freshRelationCount += 1;
+    if (isExactIdempotentState) exactRelationCount += 1;
+    if (relation.runtimeGrantOptions > 0) {
+      fail('ELIGIBILITY_PAYMENT_ACL_GRANT_OPTION_FORBIDDEN');
+    }
+    if (relation.publicPrivileges > 0) fail('ELIGIBILITY_PAYMENT_ACL_PUBLIC_FORBIDDEN');
+    if (relation.unexpectedGranteePrivileges > 0) {
+      fail('ELIGIBILITY_PAYMENT_ACL_THIRD_PARTY_FORBIDDEN');
+    }
+    if (relation.columnPrivileges > 0) fail('ELIGIBILITY_PAYMENT_ACL_COLUMN_ACL_FORBIDDEN');
+  }
+  if (freshRelationCount > 0 && exactRelationCount > 0) {
+    fail('ELIGIBILITY_PAYMENT_ACL_PROVISIONING_STATE_INVALID');
+  }
+}
+
 export function eligibilityPaymentAclMatrixCanonicalText(): string {
   const roleLine =
     'ROLES|RUNTIME=EXISTS,DISTINCT,NOSUPERUSER,NOBYPASSRLS,NO_MEMBERSHIP_EDGES|MIGRATOR=SESSION_USER_EXACT,NOSUPERUSER,NOBYPASSRLS,NO_MEMBERSHIP_EDGES';
