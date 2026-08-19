@@ -207,16 +207,32 @@ export async function runCommunitiesStagingRoleSplitMarkerCeremony(
   } catch {
     fail('LEASE_UNAVAILABLE');
   }
+  let primaryError: CommunitiesStagingRoleSplitMarkerCeremonyError | null = null;
   try {
     if (lease.requestSha256 !== requestSha256 || !/^[a-f0-9]{64}$/.test(lease.fencingToken))
       fail('LEASE_INVALID');
     await runWithLease(requestSha256, host, lease);
   } catch (error) {
-    if (error instanceof CommunitiesStagingRoleSplitMarkerCeremonyError) throw error;
-    fail('EXECUTION_FAILED');
-  } finally {
-    await host.releaseLease(lease).catch(() => fail('LEASE_RELEASE_FAILED'));
+    primaryError =
+      error instanceof CommunitiesStagingRoleSplitMarkerCeremonyError
+        ? error
+        : new CommunitiesStagingRoleSplitMarkerCeremonyError(
+            'COMMUNITIES_STAGING_ROLE_SPLIT_MARKER_CEREMONY_EXECUTION_FAILED',
+          );
   }
+  let releaseError: CommunitiesStagingRoleSplitMarkerCeremonyError | null = null;
+  try {
+    await host.releaseLease(lease);
+  } catch {
+    releaseError = new CommunitiesStagingRoleSplitMarkerCeremonyError(
+      'COMMUNITIES_STAGING_ROLE_SPLIT_MARKER_CEREMONY_LEASE_RELEASE_FAILED',
+    );
+  }
+  if (primaryError !== null) {
+    if (releaseError !== null) primaryError.cause = releaseError;
+    throw primaryError;
+  }
+  if (releaseError !== null) throw releaseError;
 }
 
 async function runWithLease(
@@ -265,10 +281,17 @@ async function runWithLease(
         }) !== 'RESTORE_CLONE'
       )
         fail('CLONE_OUTCOME_AMBIGUOUS');
+      const pending = advanceCommunitiesStagingRoleSplitMarkerCeremonyState(
+        state,
+        'RESTORE_PENDING',
+        { cloneDatabaseOid: state.cloneDatabaseOid! },
+      );
+      await host.advanceState(lease, state, pending).catch(() => fail('STATE_WRITE_AMBIGUOUS'));
+      state = pending;
       try {
         await host.restoreClone(lease, state.cloneDatabaseOid!);
       } catch {
-        return cleanupBeforeMarker(host, lease, state);
+        fail('RESTORE_OUTCOME_AMBIGUOUS');
       }
       const restored = advanceCommunitiesStagingRoleSplitMarkerCeremonyState(state, 'RESTORED', {
         cloneDatabaseOid: state.cloneDatabaseOid!,
@@ -277,6 +300,8 @@ async function runWithLease(
       state = restored;
       continue;
     }
+
+    if (state.phase === 'RESTORE_PENDING') fail('RESTORE_OUTCOME_AMBIGUOUS');
 
     if (state.phase === 'RESTORED') {
       let artifacts: CommunitiesStagingRoleSplitMarkerCeremonyArtifacts;

@@ -64,6 +64,7 @@ class FakeHost implements CommunitiesStagingRoleSplitMarkerCeremonyHost {
   failVerify = false;
   writeMode: 'success' | 'lost_response' | 'absent_error' = 'success';
   failEvidence = false;
+  failRelease = false;
   failStateWriteAfterCommitPhase: CommunitiesStagingRoleSplitMarkerCeremonyState['phase'] | null =
     null;
   readonly log: string[] = [];
@@ -78,6 +79,7 @@ class FakeHost implements CommunitiesStagingRoleSplitMarkerCeremonyHost {
     await Promise.resolve();
     void observedLease;
     this.log.push('releaseLease');
+    if (this.failRelease) throw new Error('release');
   }
   async loadState(observedLease: CommunitiesStagingRoleSplitMarkerCeremonyLease) {
     await Promise.resolve();
@@ -261,7 +263,8 @@ describe('Communities role-split marker ceremony orchestration', () => {
     expect(host.log).toEqual(
       expect.arrayContaining([
         'advance:CANDIDATE->OWNED',
-        'advance:OWNED->RESTORED',
+        'advance:OWNED->RESTORE_PENDING',
+        'advance:RESTORE_PENDING->RESTORED',
         'saveVerified',
         'advance:VERIFIED->MARKER_PENDING',
         'writeMarker',
@@ -278,7 +281,7 @@ describe('Communities role-split marker ceremony orchestration', () => {
     expect(host.log).not.toContain('dropExactClone');
   });
 
-  it('cleans only an exact pre-marker clone after restore or verification failure', async () => {
+  it('retains ambiguous restore and cleans only a verified absent-marker clone after verify failure', async () => {
     for (const failure of ['restore', 'verify'] as const) {
       const host = new FakeHost();
       if (failure === 'restore') host.failRestore = true;
@@ -287,12 +290,19 @@ describe('Communities role-split marker ceremony orchestration', () => {
         runCommunitiesStagingRoleSplitMarkerCeremony(requestSha256, host),
       ).rejects.toEqual(
         new CommunitiesStagingRoleSplitMarkerCeremonyError(
-          'COMMUNITIES_STAGING_ROLE_SPLIT_MARKER_CEREMONY_RETRY_REQUIRED',
+          failure === 'restore'
+            ? 'COMMUNITIES_STAGING_ROLE_SPLIT_MARKER_CEREMONY_RESTORE_OUTCOME_AMBIGUOUS'
+            : 'COMMUNITIES_STAGING_ROLE_SPLIT_MARKER_CEREMONY_RETRY_REQUIRED',
         ),
       );
-      expect(host.log).toContain('dropExactClone');
-      expect(host.log).toContain('clearState');
-      expect(host.state).toBeNull();
+      if (failure === 'restore') {
+        expect(host.log).not.toContain('dropExactClone');
+        expect(host.state?.phase).toBe('RESTORE_PENDING');
+      } else {
+        expect(host.log).toContain('dropExactClone');
+        expect(host.log).toContain('clearState');
+        expect(host.state).toBeNull();
+      }
     }
   });
 
@@ -363,7 +373,7 @@ describe('Communities role-split marker ceremony orchestration', () => {
   });
 
   it('retains the clone after every pre-marker lost state-write response', async () => {
-    for (const phase of ['OWNED', 'RESTORED', 'VERIFIED'] as const) {
+    for (const phase of ['OWNED', 'RESTORE_PENDING', 'RESTORED', 'VERIFIED'] as const) {
       const host = new FakeHost();
       host.failStateWriteAfterCommitPhase = phase;
       await expect(
@@ -379,16 +389,39 @@ describe('Communities role-split marker ceremony orchestration', () => {
     }
   });
 
-  it('never drops a clone when any marker is present', async () => {
+  it('never drops a clone after an ambiguous restore response', async () => {
     const host = new FakeHost();
     host.failRestore = true;
     host.markerState = 'different';
     await expect(runCommunitiesStagingRoleSplitMarkerCeremony(requestSha256, host)).rejects.toEqual(
       new CommunitiesStagingRoleSplitMarkerCeremonyError(
-        'COMMUNITIES_STAGING_ROLE_SPLIT_MARKER_CEREMONY_OUTCOME_AMBIGUOUS',
+        'COMMUNITIES_STAGING_ROLE_SPLIT_MARKER_CEREMONY_RESTORE_OUTCOME_AMBIGUOUS',
       ),
     );
     expect(host.log).not.toContain('dropExactClone');
-    expect(host.state?.phase).toBe('OWNED');
+    expect(host.state?.phase).toBe('RESTORE_PENDING');
+    const restoreCalls = host.log.filter((entry) => entry === 'restoreClone').length;
+    host.failRestore = false;
+    await expect(runCommunitiesStagingRoleSplitMarkerCeremony(requestSha256, host)).rejects.toEqual(
+      new CommunitiesStagingRoleSplitMarkerCeremonyError(
+        'COMMUNITIES_STAGING_ROLE_SPLIT_MARKER_CEREMONY_RESTORE_OUTCOME_AMBIGUOUS',
+      ),
+    );
+    expect(host.log.filter((entry) => entry === 'restoreClone')).toHaveLength(restoreCalls);
+  });
+
+  it('preserves the primary ambiguous outcome when lease release also fails', async () => {
+    const host = new FakeHost();
+    host.failRestore = true;
+    host.failRelease = true;
+    const error = await runCommunitiesStagingRoleSplitMarkerCeremony(requestSha256, host).catch(
+      (caught: unknown) => caught,
+    );
+    expect(error).toMatchObject({
+      code: 'COMMUNITIES_STAGING_ROLE_SPLIT_MARKER_CEREMONY_RESTORE_OUTCOME_AMBIGUOUS',
+      cause: {
+        code: 'COMMUNITIES_STAGING_ROLE_SPLIT_MARKER_CEREMONY_LEASE_RELEASE_FAILED',
+      },
+    });
   });
 });
