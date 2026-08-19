@@ -111,9 +111,7 @@ describe('Communities role-split acceptance v1 contract', () => {
     ).toEqual(expectedPairs);
     for (const category of expectedCategories) {
       expect(schema.$defs.roleMapping.properties).toHaveProperty(category);
-      const categorySchema = (schema.$defs.roleMapping.properties as Record<string, unknown>)[
-        category
-      ];
+      const categorySchema = schema.$defs.roleMapping.properties[category];
       expect(JSON.stringify(categorySchema)).toContain(`"const":"${category}"`);
     }
     expect(schema.$defs.normalizedRecord).toHaveProperty('oneOf');
