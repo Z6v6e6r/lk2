@@ -15,6 +15,10 @@ import {
   resolveCommunitiesStagedRehearsalRequest,
   selectCommunitiesStagedRehearsalMigrations,
 } from './communities-staged-rehearsal-policy.js';
+import {
+  ELIGIBILITY_PAYMENT_ACL_MATRIX_SHA256,
+  ELIGIBILITY_PAYMENT_ACL_MATRIX_VERSION,
+} from './eligibility-payment-acl-matrix.js';
 
 const restoreDatabase = 'phub_restore_31944858210_1';
 const connectionString = `postgresql://migrator:secret@postgres:5432/${restoreDatabase}`;
@@ -28,6 +32,8 @@ function request(
       contractVersion: '32_V1' as const,
       phase,
       restoreDatabase,
+      aclMatrixVersion: ELIGIBILITY_PAYMENT_ACL_MATRIX_VERSION,
+      aclMatrixSha256: ELIGIBILITY_PAYMENT_ACL_MATRIX_SHA256,
     };
   }
   const value = resolveCommunitiesStagedRehearsalRequest({
@@ -199,6 +205,27 @@ describe('Communities staged migration rehearsal policy', () => {
         packagedFilenames: ['0001_initial.sql', ...COMMUNITIES_STAGED_REHEARSAL_PENDING_FILENAMES],
       }),
     ).toThrow('COMMUNITIES_STAGED_REHEARSAL_PENDING_SET_MISMATCH');
+  });
+
+  it('requires the exact eligibility/payment ACL matrix for every 32-file phase', () => {
+    const exact = request('pre_foundation', COMMUNITIES_STAGED_REHEARSAL_32_CONFIRMATION);
+    for (const invalid of [
+      { ...exact, aclMatrixVersion: null },
+      { ...exact, aclMatrixVersion: 'eligibility-payment-acl-v2' },
+      { ...exact, aclMatrixSha256: null },
+      { ...exact, aclMatrixSha256: '0'.repeat(64) },
+    ]) {
+      expect(() =>
+        selectCommunitiesStagedRehearsalMigrations({
+          request: invalid,
+          appliedFilenames: new Set(['0001_initial.sql']),
+          packagedFilenames: [
+            '0001_initial.sql',
+            ...COMMUNITIES_STAGED_REHEARSAL_32_PENDING_FILENAMES,
+          ],
+        }),
+      ).toThrow('COMMUNITIES_STAGED_REHEARSAL_ACL_MATRIX_BINDING_INVALID');
+    }
   });
 
   it.each([
