@@ -46,6 +46,8 @@ export * from './migration-execution-policy.js';
 export * from './communities-staged-rehearsal-policy.js';
 export * from './communities-staging-role-split.js';
 export * from './communities-staging-role-split-restore-marker.js';
+export * from './communities-role-split-input-c.js';
+export * from './communities-role-split-acceptance.js';
 export * from './eligibility-payment-acl-matrix.js';
 export * from './messaging-repository.js';
 export * from './profile-privacy-repository.js';

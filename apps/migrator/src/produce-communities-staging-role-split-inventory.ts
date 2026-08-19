@@ -1,6 +1,8 @@
 import { isAbsolute } from 'node:path';
 import { lstat, readFile } from 'node:fs/promises';
 
+import { communitiesRoleSplitInputCArtifactText } from '@phub/database';
+
 import {
   CommunitiesStagingRoleSplitInventoryError,
   produceCommunitiesStagingRoleSplitInventory,
@@ -57,7 +59,7 @@ async function main(): Promise<void> {
     roleMappingText: mappingBytes.toString('utf8'),
     expectedRoleMappingSha256: process.env.PHUB_ROLE_SPLIT_ROLE_MAPPING_SHA256!,
   });
-  process.stdout.write(`${JSON.stringify(report)}\n`);
+  process.stdout.write(communitiesRoleSplitInputCArtifactText(report));
 }
 
 try {

@@ -1,10 +1,18 @@
-import { createHash } from 'node:crypto';
+import {
+  COMMUNITIES_ROLE_SPLIT_CANONICALIZATION_VERSION,
+  COMMUNITIES_ROLE_SPLIT_FORBIDDEN_CODE_CONTRACT,
+  COMMUNITIES_ROLE_SPLIT_INPUT_C_SCHEMA_VERSION,
+  COMMUNITIES_ROLE_SPLIT_NORMALIZED_CATEGORIES,
+  COMMUNITIES_ROLE_SPLIT_SORT_VERSION,
+  assertCommunitiesRoleSplitInputC,
+  communitiesRoleSplitInputCArtifactSha256,
+  communitiesRoleSplitInputCManifestSha256,
+  type CommunitiesRoleSplitInputC,
+  type CommunitiesRoleSplitNormalizedCategory,
+  type CommunitiesRoleSplitNormalizedRecord,
+} from './communities-role-split-input-c.js';
 
 export const COMMUNITIES_ROLE_SPLIT_ACCEPTANCE_VERSION = 'communities-role-split-acceptance-v1';
-export const COMMUNITIES_ROLE_SPLIT_INPUT_C_SCHEMA_VERSION = 'communities-role-split-input-c-v1';
-export const COMMUNITIES_ROLE_SPLIT_CANONICALIZATION_VERSION = 'utf8-byte-digest-v1';
-export const COMMUNITIES_ROLE_SPLIT_SORT_VERSION = 'sha256-byte-v1';
-
 export const COMMUNITIES_ROLE_SPLIT_ROLE_CATEGORIES = [
   'RESTORE_OWNER',
   'RESTORE_EXECUTOR',
@@ -15,24 +23,6 @@ export const COMMUNITIES_ROLE_SPLIT_ROLE_CATEGORIES = [
 ] as const;
 export type CommunitiesRoleSplitRoleCategory =
   (typeof COMMUNITIES_ROLE_SPLIT_ROLE_CATEGORIES)[number];
-
-export const COMMUNITIES_ROLE_SPLIT_NORMALIZED_CATEGORIES = [
-  'roles',
-  'memberships',
-  'databaseAcl',
-  'schemas',
-  'defaultAcls',
-  'relations',
-  'columnAcls',
-  'rlsPolicies',
-  'sequences',
-  'functions',
-  'types',
-  'extensions',
-] as const;
-export type CommunitiesRoleSplitNormalizedCategory =
-  (typeof COMMUNITIES_ROLE_SPLIT_NORMALIZED_CATEGORIES)[number];
-
 export const COMMUNITIES_ROLE_SPLIT_IDENTITY_RELATION_SPECS = [
   ['RESTORE_OWNER', 'RESTORE_EXECUTOR', 'ALIAS_ALLOWED'],
   ['RESTORE_OWNER', 'SHARED_OWNER', 'ALIAS_ALLOWED'],
@@ -54,7 +44,6 @@ export const COMMUNITIES_ROLE_SPLIT_IDENTITY_RELATION_SPECS = [
   CommunitiesRoleSplitRoleCategory,
   'ALIAS_ALLOWED' | 'REQUIRED_DISTINCT',
 ])[];
-
 export const COMMUNITIES_ROLE_SPLIT_GRANT_OBJECT_KINDS = [
   'database',
   'schema',
@@ -66,7 +55,6 @@ export const COMMUNITIES_ROLE_SPLIT_GRANT_OBJECT_KINDS = [
 export type CommunitiesRoleSplitGrantObjectKind =
   (typeof COMMUNITIES_ROLE_SPLIT_GRANT_OBJECT_KINDS)[number];
 export type CommunitiesRoleSplitObjectKind = CommunitiesRoleSplitGrantObjectKind | 'extension';
-
 export const COMMUNITIES_ROLE_SPLIT_PRIVILEGES = [
   'CONNECT',
   'TEMPORARY',
@@ -83,115 +71,85 @@ export const COMMUNITIES_ROLE_SPLIT_PRIVILEGES = [
 ] as const;
 export type CommunitiesRoleSplitPrivilege = (typeof COMMUNITIES_ROLE_SPLIT_PRIVILEGES)[number];
 
-type Sha256 = string;
-type ObservationState = 'OBSERVED' | 'UNKNOWN' | 'UNOBSERVED';
-
-export type CommunitiesRoleSplitDigestObservation = {
-  readonly observationState: ObservationState;
-  readonly valueSha256: Sha256 | null;
-  readonly provenanceSha256: Sha256 | null;
+type DigestObservation = {
+  readonly observationState: 'OBSERVED' | 'UNKNOWN' | 'UNOBSERVED';
+  readonly valueSha256: string | null;
+  readonly provenanceSha256: string | null;
 };
-
-export type CommunitiesRoleSplitBooleanObservation = {
-  readonly observationState: ObservationState;
+type BooleanObservation = {
+  readonly observationState: 'OBSERVED' | 'UNKNOWN' | 'UNOBSERVED';
   readonly value: boolean | null;
-  readonly provenanceSha256: Sha256 | null;
+  readonly provenanceSha256: string | null;
 };
-
 export type CommunitiesRoleSplitRoleBinding = {
   readonly category: CommunitiesRoleSplitRoleCategory;
-  readonly roleName: CommunitiesRoleSplitDigestObservation;
-  readonly roleOid: CommunitiesRoleSplitDigestObservation;
-  readonly canLogin: CommunitiesRoleSplitBooleanObservation;
-  readonly superuser: CommunitiesRoleSplitBooleanObservation;
-  readonly bypassRls: CommunitiesRoleSplitBooleanObservation;
-  readonly createDatabase: CommunitiesRoleSplitBooleanObservation;
-  readonly createRole: CommunitiesRoleSplitBooleanObservation;
-  readonly replication: CommunitiesRoleSplitBooleanObservation;
+  readonly roleName: DigestObservation;
+  readonly roleOid: DigestObservation;
+  readonly canLogin: BooleanObservation;
+  readonly superuser: BooleanObservation;
+  readonly bypassRls: BooleanObservation;
+  readonly createDatabase: BooleanObservation;
+  readonly createRole: BooleanObservation;
+  readonly replication: BooleanObservation;
 };
-
 export type CommunitiesRoleSplitIdentityRelation = {
   readonly left: CommunitiesRoleSplitRoleCategory;
   readonly right: CommunitiesRoleSplitRoleCategory;
   readonly requirement: 'ALIAS_ALLOWED' | 'REQUIRED_DISTINCT';
   readonly relation: 'SAME' | 'DISTINCT' | 'UNKNOWN' | 'UNOBSERVED';
-  readonly provenanceSha256: Sha256 | null;
+  readonly provenanceSha256: string | null;
 };
-
-export type CommunitiesRoleSplitNormalizedRecord = {
-  readonly canonicalKeySha256: Sha256;
-  readonly observationState: ObservationState;
-  readonly valueSha256: Sha256 | null;
-  readonly provenanceSha256: Sha256 | null;
-};
-
-export type CommunitiesRoleSplitInputC = {
-  readonly schemaVersion: string;
-  readonly canonicalizationVersion: string;
-  readonly sortVersion: string;
-  readonly manifestSha256: Sha256;
-  readonly provenance: {
-    readonly contractVersion: string;
-    readonly markerDigest: Sha256;
-    readonly requestDigest: Sha256;
-    readonly cloneNamePatternValid: boolean;
-    readonly cloneOidBound: boolean;
-    readonly sourceOidBound: boolean;
-    readonly systemIdentifierDigest: Sha256;
-    readonly pgMajor: number;
-    readonly objectManifestDigest: Sha256;
-    readonly ledgerDigest: Sha256;
-    readonly ledgerCount: number;
-  };
-  readonly normalized: Record<
-    CommunitiesRoleSplitNormalizedCategory,
-    readonly CommunitiesRoleSplitNormalizedRecord[]
-  >;
-  readonly anomalies: readonly {
-    readonly code: string;
-    readonly canonicalKeySha256: Sha256;
-    readonly evidenceSha256: Sha256;
-  }[];
-};
-
 export type CommunitiesRoleSplitOwnershipDecision = {
   readonly objectKind: CommunitiesRoleSplitObjectKind;
-  readonly canonicalKeySha256: Sha256;
+  readonly objectKeySha256: string;
+  readonly ownerFieldKeySha256: string;
   readonly beforeOwnerCategory: CommunitiesRoleSplitRoleCategory;
   readonly targetOwnerCategory: CommunitiesRoleSplitRoleCategory | 'PRESERVE_CURRENT';
-  readonly ruleSha256: Sha256;
-  readonly provenanceSha256: Sha256;
+  readonly beforeOwnerValueSha256: string;
+  readonly afterOwnerValueSha256: string;
+  readonly ownerEvidenceSha256: string;
+  readonly ruleSha256: string;
 };
-
 export type CommunitiesRoleSplitGrantDecision = {
   readonly objectKind: CommunitiesRoleSplitGrantObjectKind;
-  readonly canonicalKeySha256: Sha256;
+  readonly objectKeySha256: string;
+  readonly fieldKeySha256: string;
   readonly action: 'PRESERVE' | 'ADD' | 'REMOVE';
   readonly granteeCategory: CommunitiesRoleSplitRoleCategory;
   readonly privileges: readonly CommunitiesRoleSplitPrivilege[];
-  readonly beforeStateSha256: Sha256;
-  readonly targetStateSha256: Sha256;
+  readonly beforeStateSha256: string;
+  readonly targetStateSha256: string;
+  readonly evidenceSha256: string;
   readonly grantOption: false;
-  readonly ruleSha256: Sha256;
-  readonly provenanceSha256: Sha256;
+  readonly ruleSha256: string;
 };
-
 export type CommunitiesRoleSplitComparison = {
-  readonly sortVersion: string;
-  readonly beforeManifestSha: Sha256;
-  readonly afterManifestSha: Sha256;
+  readonly sortVersion: typeof COMMUNITIES_ROLE_SPLIT_SORT_VERSION;
+  readonly beforeManifestSha256: string;
+  readonly afterManifestSha256: string;
   readonly changedCount: number;
   readonly addedCount: number;
   readonly removedCount: number;
   readonly forbiddenTransitionCodes: readonly string[];
 };
-
+export type CommunitiesRoleSplitExpectedPins = {
+  readonly beforeArtifactSha256: string;
+  readonly afterArtifactSha256: string;
+  readonly beforeManifestSha256: string;
+  readonly afterManifestSha256: string;
+  readonly mappingDigest: string;
+  readonly markerDigest: string;
+  readonly markerEvidenceDigest: string;
+  readonly requestDigest: string;
+  readonly objectManifestDigest: string;
+  readonly ledgerDigest: string;
+};
 export type CommunitiesRoleSplitAcceptanceEnvelope = {
-  readonly contractVersion: string;
-  /** Independently pinned raw artifact digest. It is deliberately outside INPUT_C. */
-  readonly artifactSha256: Sha256;
-  readonly inputC: CommunitiesRoleSplitInputC;
+  readonly contractVersion: typeof COMMUNITIES_ROLE_SPLIT_ACCEPTANCE_VERSION;
+  readonly observedBefore: CommunitiesRoleSplitInputC;
+  readonly observedAfter: CommunitiesRoleSplitInputC;
   readonly mapping: Record<CommunitiesRoleSplitRoleCategory, CommunitiesRoleSplitRoleBinding> & {
+    readonly mappingDigest: string;
     readonly identityRelations: readonly CommunitiesRoleSplitIdentityRelation[];
   };
   readonly ownershipPlan: readonly CommunitiesRoleSplitOwnershipDecision[];
@@ -215,28 +173,19 @@ export class CommunitiesRoleSplitAcceptanceError extends Error {
     this.name = 'CommunitiesRoleSplitAcceptanceError';
   }
 }
-
 function fail(code: string): never {
   throw new CommunitiesRoleSplitAcceptanceError(`COMMUNITIES_ROLE_SPLIT_ACCEPTANCE_${code}`);
 }
-
-function sha256(value: string): string {
-  return createHash('sha256').update(value).digest('hex');
-}
-
 function isSha256(value: unknown): value is string {
   return typeof value === 'string' && /^[a-f0-9]{64}$/u.test(value);
 }
-
-function hasExactKeys(value: object, expected: readonly string[]): boolean {
-  return Object.keys(value).sort().join('\0') === [...expected].sort().join('\0');
-}
-
 function assertSha256(value: unknown, code: string): asserts value is string {
   if (!isSha256(value)) fail(code);
 }
-
-function assertDigestObservation(value: CommunitiesRoleSplitDigestObservation, code: string): void {
+function exactKeys(value: object, keys: readonly string[]): boolean {
+  return Object.keys(value).sort().join('\0') === [...keys].sort().join('\0');
+}
+function assertObservedDigest(value: DigestObservation, code: string): void {
   if (
     value.observationState !== 'OBSERVED' ||
     !isSha256(value.valueSha256) ||
@@ -244,11 +193,7 @@ function assertDigestObservation(value: CommunitiesRoleSplitDigestObservation, c
   )
     fail(code);
 }
-
-function assertBooleanObservation(
-  value: CommunitiesRoleSplitBooleanObservation,
-  code: string,
-): void {
+function assertObservedBoolean(value: BooleanObservation, code: string): void {
   if (
     value.observationState !== 'OBSERVED' ||
     typeof value.value !== 'boolean' ||
@@ -256,33 +201,134 @@ function assertBooleanObservation(
   )
     fail(code);
 }
-
-export function communitiesRoleSplitInputCManifestText(input: CommunitiesRoleSplitInputC): string {
-  const lines = [
-    COMMUNITIES_ROLE_SPLIT_INPUT_C_SCHEMA_VERSION,
-    `canonicalizationVersion=${COMMUNITIES_ROLE_SPLIT_CANONICALIZATION_VERSION}`,
-    `sortVersion=${COMMUNITIES_ROLE_SPLIT_SORT_VERSION}`,
-  ];
-  for (const category of COMMUNITIES_ROLE_SPLIT_NORMALIZED_CATEGORIES) {
-    for (const record of input.normalized[category]) {
-      lines.push(
-        [
-          category,
-          record.canonicalKeySha256,
-          record.observationState,
-          record.valueSha256 ?? 'null',
-          record.provenanceSha256 ?? 'null',
-        ].join('|'),
-      );
-    }
+function assertSnapshot(snapshot: CommunitiesRoleSplitInputC): void {
+  try {
+    assertCommunitiesRoleSplitInputC(snapshot);
+  } catch (error) {
+    if (error instanceof Error && error.message === 'INPUT_C_MANIFEST_INVALID')
+      fail('INPUT_C_MANIFEST_INVALID');
+    fail('INPUT_C_SCHEMA_INVALID');
   }
-  return `${lines.join('\n')}\n`;
+  if (snapshot.anomalies.length > 0) fail('INPUT_C_ANOMALY_PRESENT');
+  for (const category of COMMUNITIES_ROLE_SPLIT_NORMALIZED_CATEGORIES)
+    for (const record of snapshot.normalized[category])
+      if (record.observationState !== 'OBSERVED') fail('NORMALIZED_RECORD_NOT_OBSERVED');
+  if (
+    JSON.stringify(snapshot.forbiddenCodeContract) !==
+    JSON.stringify(COMMUNITIES_ROLE_SPLIT_FORBIDDEN_CODE_CONTRACT)
+  )
+    fail('FORBIDDEN_CODE_CONTRACT_INVALID');
+}
+function assertPins(
+  before: CommunitiesRoleSplitInputC,
+  after: CommunitiesRoleSplitInputC,
+  pins: CommunitiesRoleSplitExpectedPins,
+): void {
+  for (const pin of Object.values(pins)) assertSha256(pin, 'EXPECTED_PIN_INVALID');
+  if (
+    communitiesRoleSplitInputCArtifactSha256(before) !== pins.beforeArtifactSha256 ||
+    communitiesRoleSplitInputCArtifactSha256(after) !== pins.afterArtifactSha256 ||
+    before.manifestSha256 !== pins.beforeManifestSha256 ||
+    after.manifestSha256 !== pins.afterManifestSha256
+  )
+    fail('INPUT_C_ARTIFACT_PIN_INVALID');
+  for (const snapshot of [before, after])
+    if (
+      snapshot.provenance.mappingObservationState !== 'OBSERVED' ||
+      snapshot.provenance.mappingDigest !== pins.mappingDigest ||
+      snapshot.provenance.markerDigest !== pins.markerDigest ||
+      snapshot.provenance.markerEvidenceDigest !== pins.markerEvidenceDigest ||
+      snapshot.provenance.requestDigest !== pins.requestDigest ||
+      snapshot.provenance.objectManifestDigest !== pins.objectManifestDigest ||
+      snapshot.provenance.ledgerDigest !== pins.ledgerDigest
+    )
+      fail('INPUT_C_BINDING_INVALID');
 }
 
-export function communitiesRoleSplitInputCManifestSha256(
-  input: CommunitiesRoleSplitInputC,
-): string {
-  return sha256(communitiesRoleSplitInputCManifestText(input));
+type Equivalence = (
+  left: CommunitiesRoleSplitRoleCategory,
+  right: CommunitiesRoleSplitRoleCategory,
+) => boolean;
+function assertMapping(
+  mapping: CommunitiesRoleSplitAcceptanceEnvelope['mapping'],
+  expectedMappingDigest: string,
+): Equivalence {
+  if (
+    !exactKeys(mapping, [
+      ...COMMUNITIES_ROLE_SPLIT_ROLE_CATEGORIES,
+      'mappingDigest',
+      'identityRelations',
+    ]) ||
+    mapping.mappingDigest !== expectedMappingDigest
+  )
+    fail('MAPPING_DIGEST_INVALID');
+  for (const category of COMMUNITIES_ROLE_SPLIT_ROLE_CATEGORIES) {
+    const role = mapping[category];
+    if (role.category !== category) fail('MAPPING_CATEGORY_SET_INVALID');
+    assertObservedDigest(role.roleName, 'ROLE_IDENTITY_NOT_OBSERVED');
+    assertObservedDigest(role.roleOid, 'ROLE_IDENTITY_NOT_OBSERVED');
+    for (const capability of [
+      role.canLogin,
+      role.superuser,
+      role.bypassRls,
+      role.createDatabase,
+      role.createRole,
+      role.replication,
+    ])
+      assertObservedBoolean(capability, 'ROLE_CAPABILITY_NOT_OBSERVED');
+    if (
+      role.superuser.value ||
+      role.bypassRls.value ||
+      role.createDatabase.value ||
+      role.createRole.value ||
+      role.replication.value
+    )
+      fail('ROLE_CAPABILITY_FORBIDDEN');
+  }
+  if (mapping.identityRelations.length !== COMMUNITIES_ROLE_SPLIT_IDENTITY_RELATION_SPECS.length)
+    fail('IDENTITY_RELATION_SET_INVALID');
+  const edges = new Map(
+    COMMUNITIES_ROLE_SPLIT_ROLE_CATEGORIES.map((category) => [
+      category,
+      new Set<CommunitiesRoleSplitRoleCategory>([category]),
+    ]),
+  );
+  mapping.identityRelations.forEach((relation, index) => {
+    const expected = COMMUNITIES_ROLE_SPLIT_IDENTITY_RELATION_SPECS[index];
+    if (
+      !expected ||
+      relation.left !== expected[0] ||
+      relation.right !== expected[1] ||
+      relation.requirement !== expected[2]
+    )
+      fail('IDENTITY_RELATION_SET_INVALID');
+    if (!['SAME', 'DISTINCT'].includes(relation.relation) || !isSha256(relation.provenanceSha256))
+      fail('IDENTITY_RELATION_NOT_OBSERVED');
+    if (relation.requirement === 'REQUIRED_DISTINCT' && relation.relation !== 'DISTINCT')
+      fail('REQUIRED_DISTINCT_NOT_OBSERVED');
+    const left = mapping[relation.left],
+      right = mapping[relation.right];
+    const sameDigest =
+      left.roleName.valueSha256 === right.roleName.valueSha256 &&
+      left.roleOid.valueSha256 === right.roleOid.valueSha256;
+    if ((relation.relation === 'SAME') !== sameDigest) fail('IDENTITY_RELATION_EVIDENCE_MISMATCH');
+    if (relation.relation === 'SAME') {
+      edges.get(relation.left)!.add(relation.right);
+      edges.get(relation.right)!.add(relation.left);
+    }
+  });
+  return (left, right) => {
+    const visited = new Set<CommunitiesRoleSplitRoleCategory>(),
+      queue = [left];
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      if (current === right) return true;
+      if (visited.has(current)) continue;
+      visited.add(current);
+      queue.push(...edges.get(current)!);
+    }
+    return false;
+  };
 }
 
 const objectCategoryByKind = {
@@ -294,317 +340,289 @@ const objectCategoryByKind = {
   type: 'types',
   extension: 'extensions',
 } as const satisfies Record<CommunitiesRoleSplitObjectKind, CommunitiesRoleSplitNormalizedCategory>;
-
 const privilegesByKind = {
   database: ['CONNECT', 'TEMPORARY'],
-  schema: ['USAGE', 'CREATE'],
-  relation: ['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER'],
-  sequence: ['USAGE', 'SELECT', 'UPDATE'],
+  schema: ['CREATE', 'USAGE'],
+  relation: ['DELETE', 'INSERT', 'REFERENCES', 'SELECT', 'TRIGGER', 'TRUNCATE', 'UPDATE'],
+  sequence: ['SELECT', 'UPDATE', 'USAGE'],
   function: ['EXECUTE'],
   type: ['USAGE'],
 } as const satisfies Record<
   CommunitiesRoleSplitGrantObjectKind,
   readonly CommunitiesRoleSplitPrivilege[]
 >;
-
-function objectKey(objectKind: CommunitiesRoleSplitObjectKind, digest: string): string {
-  return `${objectKind}|${digest}`;
-}
-
-function expectedObjects(input: CommunitiesRoleSplitInputC): Map<string, string> {
-  const result = new Map<string, string>();
-  for (const objectKind of [...COMMUNITIES_ROLE_SPLIT_GRANT_OBJECT_KINDS, 'extension'] as const) {
-    for (const record of input.normalized[objectCategoryByKind[objectKind]]) {
-      if (!isSha256(record.valueSha256)) fail('NORMALIZED_RECORD_NOT_OBSERVED');
-      const key = objectKey(objectKind, record.canonicalKeySha256);
-      if (result.has(key)) fail('OBJECT_MANIFEST_DUPLICATE');
-      result.set(key, record.valueSha256);
-    }
-  }
-  if (result.size === 0) fail('OBJECT_MANIFEST_EMPTY');
+const recordKey = (category: string, record: CommunitiesRoleSplitNormalizedRecord): string =>
+  `${category}|${record.objectKeySha256}|${record.fieldKeySha256}`;
+const objectPlanKey = (kind: CommunitiesRoleSplitObjectKind, object: string): string =>
+  `${kind}|${object}`;
+const fieldPlanKey = (
+  kind: CommunitiesRoleSplitGrantObjectKind,
+  object: string,
+  field: string,
+): string => `${kind}|${object}|${field}`;
+function snapshotRecords(
+  snapshot: CommunitiesRoleSplitInputC,
+): Map<string, CommunitiesRoleSplitNormalizedRecord> {
+  const result = new Map<string, CommunitiesRoleSplitNormalizedRecord>();
+  for (const category of COMMUNITIES_ROLE_SPLIT_NORMALIZED_CATEGORIES)
+    for (const record of snapshot.normalized[category])
+      result.set(recordKey(category, record), record);
   return result;
 }
-
-function grantTransitionText(
-  grant: Omit<CommunitiesRoleSplitGrantDecision, 'targetStateSha256'>,
-  ownership: CommunitiesRoleSplitOwnershipDecision,
-): string {
-  return `${[
-    'COMMUNITIES_ROLE_SPLIT_GRANT_TRANSITION_V1',
-    `objectKind=${grant.objectKind}`,
-    `canonicalKeySha256=${grant.canonicalKeySha256}`,
-    `beforeStateSha256=${grant.beforeStateSha256}`,
-    `action=${grant.action}`,
-    `granteeCategory=${grant.granteeCategory}`,
-    `privileges=${grant.privileges.join(',')}`,
-    'grantOption=false',
-    `beforeOwnerCategory=${ownership.beforeOwnerCategory}`,
-    `targetOwnerCategory=${ownership.targetOwnerCategory}`,
-    `grantRuleSha256=${grant.ruleSha256}`,
-    `grantProvenanceSha256=${grant.provenanceSha256}`,
-    `ownerRuleSha256=${ownership.ruleSha256}`,
-    `ownerProvenanceSha256=${ownership.provenanceSha256}`,
-  ].join('\n')}\n`;
-}
-
-export function communitiesRoleSplitGrantTargetStateSha256(
-  grant: Omit<CommunitiesRoleSplitGrantDecision, 'targetStateSha256'>,
-  ownership: CommunitiesRoleSplitOwnershipDecision,
-): string {
-  if (grant.action === 'PRESERVE' && ownership.targetOwnerCategory === 'PRESERVE_CURRENT')
-    return grant.beforeStateSha256;
-  return sha256(grantTransitionText(grant, ownership));
-}
-
-export function communitiesRoleSplitObjectStateManifestSha256(
-  entries: readonly [string, string][],
-): string {
-  return sha256(
-    `${[
-      'COMMUNITIES_ROLE_SPLIT_OBJECT_STATE_MANIFEST_V1',
-      `sortVersion=${COMMUNITIES_ROLE_SPLIT_SORT_VERSION}`,
-      ...entries.map(([key, state]) => `${key}|${state}`),
-    ].join('\n')}\n`,
-  );
-}
-
-function assertInputC(input: CommunitiesRoleSplitInputC): void {
-  if (
-    input.schemaVersion !== COMMUNITIES_ROLE_SPLIT_INPUT_C_SCHEMA_VERSION ||
-    input.canonicalizationVersion !== COMMUNITIES_ROLE_SPLIT_CANONICALIZATION_VERSION ||
-    input.sortVersion !== COMMUNITIES_ROLE_SPLIT_SORT_VERSION
-  )
-    fail('INPUT_C_VERSION_INVALID');
-  if (
-    !hasExactKeys(input.normalized, COMMUNITIES_ROLE_SPLIT_NORMALIZED_CATEGORIES) ||
-    typeof input.provenance.contractVersion !== 'string' ||
-    input.provenance.contractVersion.length === 0 ||
-    input.provenance.pgMajor !== 16 ||
-    !input.provenance.cloneNamePatternValid ||
-    !input.provenance.cloneOidBound ||
-    !input.provenance.sourceOidBound ||
-    !Number.isSafeInteger(input.provenance.ledgerCount) ||
-    input.provenance.ledgerCount < 0
-  )
-    fail('INPUT_C_BINDING_INVALID');
-  for (const digest of [
-    input.provenance.markerDigest,
-    input.provenance.requestDigest,
-    input.provenance.systemIdentifierDigest,
-    input.provenance.objectManifestDigest,
-    input.provenance.ledgerDigest,
-  ])
-    assertSha256(digest, 'INPUT_C_BINDING_INVALID');
-  if (input.anomalies.length > 0) fail('INPUT_C_ANOMALY_PRESENT');
-  for (const category of COMMUNITIES_ROLE_SPLIT_NORMALIZED_CATEGORIES) {
-    let previous = '';
-    const seen = new Set<string>();
-    for (const record of input.normalized[category]) {
-      if (
-        !hasExactKeys(record, [
-          'canonicalKeySha256',
-          'observationState',
-          'valueSha256',
-          'provenanceSha256',
-        ]) ||
-        !isSha256(record.canonicalKeySha256) ||
-        record.observationState !== 'OBSERVED' ||
-        !isSha256(record.valueSha256) ||
-        !isSha256(record.provenanceSha256)
-      )
-        fail('NORMALIZED_RECORD_NOT_OBSERVED');
-      if (seen.has(record.canonicalKeySha256)) fail('NORMALIZED_RECORD_DUPLICATE');
-      if (previous && previous >= record.canonicalKeySha256) fail('INPUT_C_SORT_INVALID');
-      previous = record.canonicalKeySha256;
-      seen.add(record.canonicalKeySha256);
+function expectedOwnerRecords(
+  snapshot: CommunitiesRoleSplitInputC,
+): Map<string, CommunitiesRoleSplitNormalizedRecord> {
+  const result = new Map<string, CommunitiesRoleSplitNormalizedRecord>();
+  for (const kind of [...COMMUNITIES_ROLE_SPLIT_GRANT_OBJECT_KINDS, 'extension'] as const)
+    for (const record of snapshot.normalized[objectCategoryByKind[kind]]) {
+      if (record.fieldKind !== 'OWNER') continue;
+      const key = objectPlanKey(kind, record.objectKeySha256);
+      if (result.has(key)) fail('MIXED_OWNER_FORBIDDEN');
+      result.set(key, record);
     }
-  }
-  if (input.normalized.memberships.length > 0) fail('ROLE_MEMBERSHIP_FORBIDDEN');
-  if (input.normalized.defaultAcls.length > 0) fail('DEFAULT_ACL_FORBIDDEN');
-  if (input.normalized.columnAcls.length > 0) fail('COLUMN_GRANT_FORBIDDEN');
-  if (communitiesRoleSplitInputCManifestSha256(input) !== input.manifestSha256)
-    fail('INPUT_C_MANIFEST_INVALID');
+  if (result.size === 0) fail('OWNER_UNOBSERVED');
+  return result;
 }
-
-function assertMapping(input: CommunitiesRoleSplitAcceptanceEnvelope['mapping']): void {
-  if (!hasExactKeys(input, [...COMMUNITIES_ROLE_SPLIT_ROLE_CATEGORIES, 'identityRelations']))
-    fail('MAPPING_CATEGORY_SET_INVALID');
-  for (const category of COMMUNITIES_ROLE_SPLIT_ROLE_CATEGORIES) {
-    const role = input[category];
-    if (role.category !== category) fail('MAPPING_CATEGORY_SET_INVALID');
-    assertDigestObservation(role.roleName, 'ROLE_IDENTITY_NOT_OBSERVED');
-    assertDigestObservation(role.roleOid, 'ROLE_IDENTITY_NOT_OBSERVED');
-    for (const capability of [
-      role.canLogin,
-      role.superuser,
-      role.bypassRls,
-      role.createDatabase,
-      role.createRole,
-      role.replication,
-    ])
-      assertBooleanObservation(capability, 'ROLE_CAPABILITY_NOT_OBSERVED');
-    if (
-      role.superuser.value ||
-      role.bypassRls.value ||
-      role.createDatabase.value ||
-      role.createRole.value ||
-      role.replication.value
-    )
-      fail('ROLE_CAPABILITY_FORBIDDEN');
-  }
-  if (input.identityRelations.length !== COMMUNITIES_ROLE_SPLIT_IDENTITY_RELATION_SPECS.length)
-    fail('IDENTITY_RELATION_SET_INVALID');
-  input.identityRelations.forEach((relation, index) => {
-    const expected = COMMUNITIES_ROLE_SPLIT_IDENTITY_RELATION_SPECS[index];
-    if (
-      !expected ||
-      relation.left !== expected[0] ||
-      relation.right !== expected[1] ||
-      relation.left === relation.right ||
-      relation.requirement !== expected[2]
-    )
-      fail('IDENTITY_RELATION_SET_INVALID');
-    if (!['SAME', 'DISTINCT'].includes(relation.relation) || !isSha256(relation.provenanceSha256))
-      fail('IDENTITY_RELATION_NOT_OBSERVED');
-    if (relation.requirement === 'REQUIRED_DISTINCT' && relation.relation !== 'DISTINCT')
-      fail('REQUIRED_DISTINCT_NOT_OBSERVED');
-    const left = input[relation.left];
-    const right = input[relation.right];
-    const sameIdentity =
-      left.roleName.valueSha256 === right.roleName.valueSha256 &&
-      left.roleOid.valueSha256 === right.roleOid.valueSha256;
-    if (
-      (relation.relation === 'SAME' && !sameIdentity) ||
-      (relation.relation === 'DISTINCT' && sameIdentity)
-    )
-      fail('IDENTITY_RELATION_EVIDENCE_MISMATCH');
-  });
+function expectedAclRecords(
+  snapshot: CommunitiesRoleSplitInputC,
+): Map<string, CommunitiesRoleSplitNormalizedRecord> {
+  const result = new Map<string, CommunitiesRoleSplitNormalizedRecord>();
+  for (const kind of COMMUNITIES_ROLE_SPLIT_GRANT_OBJECT_KINDS)
+    for (const record of snapshot.normalized[objectCategoryByKind[kind]]) {
+      if (!['ACL_EXPLICIT', 'ACL_EFFECTIVE'].includes(record.fieldKind)) continue;
+      const key = fieldPlanKey(kind, record.objectKeySha256, record.fieldKeySha256);
+      if (result.has(key)) fail('GRANT_PLAN_SET_INVALID');
+      result.set(key, record);
+    }
+  if (result.size === 0) fail('GRANT_PLAN_SET_INVALID');
+  return result;
 }
-
 function assertOwnershipPlan(
-  input: CommunitiesRoleSplitAcceptanceEnvelope,
-  objects: ReadonlyMap<string, string>,
-): Map<string, CommunitiesRoleSplitOwnershipDecision> {
-  if (input.ownershipPlan.length !== objects.size) fail('OWNERSHIP_PLAN_SET_INVALID');
-  const result = new Map<string, CommunitiesRoleSplitOwnershipDecision>();
-  for (const row of input.ownershipPlan) {
-    const key = objectKey(row.objectKind, row.canonicalKeySha256);
-    if (!objects.has(key) || result.has(key)) fail('OWNERSHIP_PLAN_SET_INVALID');
-    for (const digest of [row.canonicalKeySha256, row.ruleSha256, row.provenanceSha256])
+  envelope: CommunitiesRoleSplitAcceptanceEnvelope,
+  beforeOwners: ReadonlyMap<string, CommunitiesRoleSplitNormalizedRecord>,
+  afterOwners: ReadonlyMap<string, CommunitiesRoleSplitNormalizedRecord>,
+  equivalent: Equivalence,
+): Set<string> {
+  if (envelope.ownershipPlan.length !== beforeOwners.size || beforeOwners.size !== afterOwners.size)
+    fail('OWNERSHIP_PLAN_SET_INVALID');
+  const changed = new Set<string>(),
+    seen = new Set<string>();
+  for (const row of envelope.ownershipPlan) {
+    const key = objectPlanKey(row.objectKind, row.objectKeySha256),
+      before = beforeOwners.get(key),
+      after = afterOwners.get(key);
+    if (!before || !after || seen.has(key)) fail('OWNERSHIP_PLAN_SET_INVALID');
+    seen.add(key);
+    for (const digest of [
+      row.objectKeySha256,
+      row.ownerFieldKeySha256,
+      row.beforeOwnerValueSha256,
+      row.afterOwnerValueSha256,
+      row.ownerEvidenceSha256,
+      row.ruleSha256,
+    ])
       assertSha256(digest, 'OWNERSHIP_PLAN_INVALID');
     if (
-      ['RESTORE_EXECUTOR', 'FUTURE_RUNTIME', 'INVENTORY_READER'].includes(row.beforeOwnerCategory)
+      before.fieldKeySha256 !== row.ownerFieldKeySha256 ||
+      after.fieldKeySha256 !== row.ownerFieldKeySha256 ||
+      before.valueSha256 !== row.beforeOwnerValueSha256 ||
+      after.valueSha256 !== row.afterOwnerValueSha256 ||
+      before.provenanceSha256 !== row.ownerEvidenceSha256 ||
+      envelope.mapping[row.beforeOwnerCategory].roleName.valueSha256 !== before.valueSha256
+    )
+      fail('OWNER_EVIDENCE_BINDING_INVALID');
+    if (
+      ['RESTORE_EXECUTOR', 'FUTURE_RUNTIME', 'INVENTORY_READER'].some((category) =>
+        equivalent(row.beforeOwnerCategory, category as CommunitiesRoleSplitRoleCategory),
+      )
     )
       fail('OWNERSHIP_PREIMAGE_FORBIDDEN');
-    if (
-      ((row.objectKind === 'database' || row.objectKind === 'extension') &&
-        row.targetOwnerCategory !== 'PRESERVE_CURRENT') ||
-      (row.targetOwnerCategory !== 'PRESERVE_CURRENT' &&
-        row.targetOwnerCategory !== 'FUTURE_MIGRATOR')
-    )
-      fail('OWNERSHIP_TARGET_FORBIDDEN');
-    result.set(key, row);
+    if (row.targetOwnerCategory === 'PRESERVE_CURRENT') {
+      if (before.valueSha256 !== after.valueSha256) fail('OWNERSHIP_PLAN_DELTA_MISMATCH');
+    } else {
+      if (
+        row.objectKind === 'database' ||
+        row.objectKind === 'extension' ||
+        row.targetOwnerCategory !== 'FUTURE_MIGRATOR' ||
+        ['RESTORE_EXECUTOR', 'FUTURE_RUNTIME', 'INVENTORY_READER'].some((category) =>
+          equivalent(
+            row.targetOwnerCategory as CommunitiesRoleSplitRoleCategory,
+            category as CommunitiesRoleSplitRoleCategory,
+          ),
+        ) ||
+        envelope.mapping[row.targetOwnerCategory].roleName.valueSha256 !== after.valueSha256 ||
+        before.valueSha256 === after.valueSha256
+      )
+        fail('OWNERSHIP_TARGET_FORBIDDEN');
+      changed.add(
+        `${objectCategoryByKind[row.objectKind]}|${row.objectKeySha256}|${row.ownerFieldKeySha256}`,
+      );
+    }
   }
-  return result;
+  return changed;
 }
-
 function assertGrantPlan(
-  input: CommunitiesRoleSplitAcceptanceEnvelope,
-  objects: ReadonlyMap<string, string>,
-  ownership: ReadonlyMap<string, CommunitiesRoleSplitOwnershipDecision>,
-): Map<string, CommunitiesRoleSplitGrantDecision> {
-  const expectedKeys = [...objects.keys()].filter((key) => !key.startsWith('extension|'));
-  if (input.grantPlan.length !== expectedKeys.length || input.grantPlan.length === 0)
+  envelope: CommunitiesRoleSplitAcceptanceEnvelope,
+  beforeAcls: ReadonlyMap<string, CommunitiesRoleSplitNormalizedRecord>,
+  afterAcls: ReadonlyMap<string, CommunitiesRoleSplitNormalizedRecord>,
+  equivalent: Equivalence,
+): Set<string> {
+  if (envelope.grantPlan.length !== beforeAcls.size || beforeAcls.size !== afterAcls.size)
     fail('GRANT_PLAN_SET_INVALID');
-  const result = new Map<string, CommunitiesRoleSplitGrantDecision>();
-  for (const row of input.grantPlan) {
-    const key = objectKey(row.objectKind, row.canonicalKeySha256);
-    const before = objects.get(key);
-    const owner = ownership.get(key);
-    if (!before || !owner || result.has(key)) fail('GRANT_PLAN_SET_INVALID');
+  const changed = new Set<string>(),
+    seen = new Set<string>();
+  for (const row of envelope.grantPlan) {
+    const key = fieldPlanKey(row.objectKind, row.objectKeySha256, row.fieldKeySha256),
+      before = beforeAcls.get(key),
+      after = afterAcls.get(key);
+    if (!before || !after || seen.has(key)) fail('GRANT_PLAN_SET_INVALID');
+    seen.add(key);
     for (const digest of [
-      row.canonicalKeySha256,
+      row.objectKeySha256,
+      row.fieldKeySha256,
       row.beforeStateSha256,
       row.targetStateSha256,
+      row.evidenceSha256,
       row.ruleSha256,
-      row.provenanceSha256,
     ])
       assertSha256(digest, 'GRANT_PLAN_INVALID');
-    if (row.beforeStateSha256 !== before || row.grantOption !== false) fail('GRANT_PLAN_INVALID');
-    if (!['PRESERVE', 'ADD', 'REMOVE'].includes(row.action)) fail('GRANT_ACTION_INVALID');
-    if (!COMMUNITIES_ROLE_SPLIT_ROLE_CATEGORIES.includes(row.granteeCategory))
-      fail('GRANTEE_CATEGORY_FORBIDDEN');
-    if (row.action === 'PRESERVE' ? row.privileges.length !== 0 : row.privileges.length === 0)
-      fail('GRANT_PRIVILEGE_SET_INVALID');
+    if (
+      before.valueSha256 !== row.beforeStateSha256 ||
+      after.valueSha256 !== row.targetStateSha256 ||
+      before.provenanceSha256 !== row.evidenceSha256 ||
+      row.grantOption !== false ||
+      !['PRESERVE', 'ADD', 'REMOVE'].includes(row.action) ||
+      !COMMUNITIES_ROLE_SPLIT_ROLE_CATEGORIES.includes(row.granteeCategory)
+    )
+      fail('GRANT_PLAN_INVALID');
     const allowed: readonly CommunitiesRoleSplitPrivilege[] = privilegesByKind[row.objectKind];
     if (
       new Set(row.privileges).size !== row.privileges.length ||
       row.privileges.some((privilege) => !allowed.includes(privilege)) ||
-      row.privileges.join('\0') !== [...row.privileges].sort().join('\0')
+      row.privileges.join('\0') !== [...row.privileges].sort().join('\0') ||
+      (row.action === 'PRESERVE' ? row.privileges.length !== 0 : row.privileges.length === 0)
     )
       fail('GRANT_PRIVILEGE_SET_INVALID');
-    if (row.granteeCategory === 'FUTURE_RUNTIME' && row.privileges.includes('CREATE'))
-      fail('RUNTIME_CREATE_FORBIDDEN');
-    if (row.granteeCategory === 'INVENTORY_READER' && row.action === 'ADD')
+    if (row.action === 'ADD' && equivalent(row.granteeCategory, 'INVENTORY_READER'))
       fail('INVENTORY_READER_GRANT_FORBIDDEN');
-    const withoutTarget: Omit<CommunitiesRoleSplitGrantDecision, 'targetStateSha256'> = {
-      objectKind: row.objectKind,
-      canonicalKeySha256: row.canonicalKeySha256,
-      action: row.action,
-      granteeCategory: row.granteeCategory,
-      privileges: row.privileges,
-      beforeStateSha256: row.beforeStateSha256,
-      grantOption: row.grantOption,
-      ruleSha256: row.ruleSha256,
-      provenanceSha256: row.provenanceSha256,
-    };
-    if (communitiesRoleSplitGrantTargetStateSha256(withoutTarget, owner) !== row.targetStateSha256)
-      fail('GRANT_TARGET_STATE_INVALID');
-    result.set(key, row);
+    if (
+      row.objectKind === 'schema' &&
+      row.privileges.includes('CREATE') &&
+      equivalent(row.granteeCategory, 'FUTURE_RUNTIME')
+    )
+      fail('RUNTIME_CREATE_FORBIDDEN');
+    const differs = before.valueSha256 !== after.valueSha256;
+    if ((row.action === 'PRESERVE') !== !differs) fail('GRANT_PLAN_DELTA_MISMATCH');
+    if (differs)
+      changed.add(
+        `${objectCategoryByKind[row.objectKind]}|${row.objectKeySha256}|${row.fieldKeySha256}`,
+      );
   }
-  if (expectedKeys.some((key) => !result.has(key))) fail('GRANT_PLAN_SET_INVALID');
-  return result;
+  return changed;
+}
+function fullSnapshotDelta(
+  before: CommunitiesRoleSplitInputC,
+  after: CommunitiesRoleSplitInputC,
+): { changed: Set<string>; added: number; removed: number } {
+  const left = snapshotRecords(before),
+    right = snapshotRecords(after),
+    changed = new Set<string>();
+  let added = 0,
+    removed = 0;
+  for (const [key, record] of left) {
+    const candidate = right.get(key);
+    if (!candidate) removed++;
+    else if (
+      record.fieldKind !== candidate.fieldKind ||
+      record.valueSha256 !== candidate.valueSha256 ||
+      record.provenanceSha256 !== candidate.provenanceSha256
+    )
+      changed.add(key);
+  }
+  for (const key of right.keys()) if (!left.has(key)) added++;
+  return { changed, added, removed };
 }
 
 export function assertCommunitiesRoleSplitAcceptancePass(
-  input: CommunitiesRoleSplitAcceptanceEnvelope,
+  envelope: CommunitiesRoleSplitAcceptanceEnvelope,
+  expectedPins: CommunitiesRoleSplitExpectedPins,
 ): CommunitiesRoleSplitComparison {
-  if (input.contractVersion !== COMMUNITIES_ROLE_SPLIT_ACCEPTANCE_VERSION)
+  if (envelope.contractVersion !== COMMUNITIES_ROLE_SPLIT_ACCEPTANCE_VERSION)
     fail('CONTRACT_VERSION_INVALID');
-  assertSha256(input.artifactSha256, 'INPUT_C_ARTIFACT_PIN_INVALID');
-  assertInputC(input.inputC);
-  assertMapping(input.mapping);
-  const objects = expectedObjects(input.inputC);
-  const ownership = assertOwnershipPlan(input, objects);
-  const grants = assertGrantPlan(input, objects, ownership);
-
-  const orderedKeys = [...objects.keys()].sort();
-  const beforeEntries = orderedKeys.map((key) => [key, objects.get(key)!] as [string, string]);
-  const afterEntries = orderedKeys.map((key) => {
-    const grant = grants.get(key);
-    return [key, grant?.targetStateSha256 ?? objects.get(key)!] as [string, string];
-  });
+  assertSnapshot(envelope.observedBefore);
+  assertSnapshot(envelope.observedAfter);
+  assertPins(envelope.observedBefore, envelope.observedAfter, expectedPins);
+  const equivalent = assertMapping(envelope.mapping, expectedPins.mappingDigest);
+  const ownerChanges = assertOwnershipPlan(
+    envelope,
+    expectedOwnerRecords(envelope.observedBefore),
+    expectedOwnerRecords(envelope.observedAfter),
+    equivalent,
+  );
+  const grantChanges = assertGrantPlan(
+    envelope,
+    expectedAclRecords(envelope.observedBefore),
+    expectedAclRecords(envelope.observedAfter),
+    equivalent,
+  );
+  const delta = fullSnapshotDelta(envelope.observedBefore, envelope.observedAfter);
+  if (delta.added > 0 || delta.removed > 0) fail('OUT_OF_MANIFEST_CHANGE_FORBIDDEN');
+  for (const category of [
+    'roles',
+    'memberships',
+    'defaultAcls',
+    'columnAcls',
+    'rlsPolicies',
+    'extensions',
+  ] as const)
+    if ([...delta.changed].some((key) => key.startsWith(`${category}|`)))
+      fail(
+        category === 'roles'
+          ? 'ROLE_CAPABILITY_FORBIDDEN'
+          : category === 'memberships'
+            ? 'ROLE_MEMBERSHIP_FORBIDDEN'
+            : category === 'defaultAcls'
+              ? 'DEFAULT_ACL_CHANGE_FORBIDDEN'
+              : category === 'columnAcls'
+                ? 'COLUMN_GRANT_FORBIDDEN'
+                : category === 'rlsPolicies'
+                  ? 'RLS_POLICY_CHANGE_FORBIDDEN'
+                  : 'EXTENSION_CHANGE_FORBIDDEN',
+      );
+  const planned = new Set([...ownerChanges, ...grantChanges]);
+  if (
+    planned.size !== delta.changed.size ||
+    [...planned].some((key) => !delta.changed.has(key)) ||
+    [...delta.changed].some((key) => !planned.has(key))
+  )
+    fail('PLAN_DELTA_MISMATCH');
   const computed: CommunitiesRoleSplitComparison = {
     sortVersion: COMMUNITIES_ROLE_SPLIT_SORT_VERSION,
-    beforeManifestSha: communitiesRoleSplitObjectStateManifestSha256(beforeEntries),
-    afterManifestSha: communitiesRoleSplitObjectStateManifestSha256(afterEntries),
-    changedCount: afterEntries.filter((entry, index) => entry[1] !== beforeEntries[index]?.[1])
-      .length,
-    addedCount: input.grantPlan.filter((row) => row.action === 'ADD').length,
-    removedCount: input.grantPlan.filter((row) => row.action === 'REMOVE').length,
+    beforeManifestSha256: communitiesRoleSplitInputCManifestSha256(envelope.observedBefore),
+    afterManifestSha256: communitiesRoleSplitInputCManifestSha256(envelope.observedAfter),
+    changedCount: delta.changed.size,
+    addedCount: delta.added,
+    removedCount: delta.removed,
     forbiddenTransitionCodes: [],
   };
-  if (JSON.stringify(input.comparison) !== JSON.stringify(computed)) fail('COMPARISON_MISMATCH');
+  if (JSON.stringify(envelope.comparison) !== JSON.stringify(computed)) fail('COMPARISON_MISMATCH');
   if (
-    input.decision.status !== 'PASS' ||
-    input.decision.blockerCodes.length > 0 ||
-    input.decision.authorizesRoleCreation !== false ||
-    input.decision.authorizesRoleAlteration !== false ||
-    input.decision.authorizesAclMutation !== false ||
-    input.decision.authorizesMigration !== false ||
-    input.decision.authorizesDeploy !== false ||
-    input.decision.authorizesRuntimeActivation !== false
+    envelope.decision.status !== 'PASS' ||
+    envelope.decision.blockerCodes.length > 0 ||
+    Object.entries(envelope.decision).some(
+      ([key, value]) => key.startsWith('authorizes') && value !== false,
+    )
   )
     fail('DECISION_NOT_PASS');
   return computed;
 }
+
+export {
+  COMMUNITIES_ROLE_SPLIT_CANONICALIZATION_VERSION,
+  COMMUNITIES_ROLE_SPLIT_INPUT_C_SCHEMA_VERSION,
+  COMMUNITIES_ROLE_SPLIT_NORMALIZED_CATEGORIES,
+  COMMUNITIES_ROLE_SPLIT_SORT_VERSION,
+  communitiesRoleSplitInputCArtifactSha256,
+  communitiesRoleSplitInputCManifestSha256,
+  type CommunitiesRoleSplitInputC,
+};

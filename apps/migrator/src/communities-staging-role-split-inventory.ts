@@ -1,6 +1,13 @@
 import { createHash } from 'node:crypto';
 
 import {
+  COMMUNITIES_ROLE_SPLIT_CANONICALIZATION_VERSION,
+  COMMUNITIES_ROLE_SPLIT_FORBIDDEN_CODE_CONTRACT,
+  COMMUNITIES_ROLE_SPLIT_INPUT_C_SCHEMA_VERSION,
+  COMMUNITIES_ROLE_SPLIT_NORMALIZED_CATEGORIES,
+  COMMUNITIES_ROLE_SPLIT_ROLE_CATEGORIES,
+  COMMUNITIES_ROLE_SPLIT_SORT_VERSION,
+  assertCommunitiesRoleSplitInputC,
   assertCommunitiesStagingRoleSplitRestoreMarkerEvidence,
   assertCommunitiesStagingRoleSplitRestoreMarkerRequest,
   canonicalCommunitiesStagingRoleSplitLedger,
@@ -9,6 +16,12 @@ import {
   communitiesStagingRoleSplitRestoreMarkerRequestSha256,
   COMMUNITIES_STAGING_ROLE_SPLIT_CLONE_MANIFEST_SHA256,
   COMMUNITIES_STAGING_ROLE_SPLIT_RESTORE_MARKER_REQUEST_VERSION,
+  communitiesRoleSplitInputCManifestSha256,
+  compareCommunitiesRoleSplitUtf8Bytes,
+  type CommunitiesRoleSplitFieldKind,
+  type CommunitiesRoleSplitInputC,
+  type CommunitiesRoleSplitNormalizedCategory,
+  type CommunitiesRoleSplitNormalizedRecord,
   type CommunitiesStagingRoleSplitRestoreMarkerEvidence,
   type CommunitiesStagingRoleSplitRestoreMarkerPayload,
   type CommunitiesStagingRoleSplitRestoreMarkerRequest,
@@ -18,68 +31,26 @@ import { Client, type QueryResult } from 'pg';
 export const COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_CONFIRMATION =
   'PRODUCE_COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_V1';
 export const COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_SCHEMA_VERSION =
-  'communities-role-split-input-c-v1';
+  COMMUNITIES_ROLE_SPLIT_INPUT_C_SCHEMA_VERSION;
 export const COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_CANONICALIZATION_VERSION =
-  'utf8-byte-digest-v1';
-export const COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_SORT_VERSION = 'sha256-byte-v1';
+  COMMUNITIES_ROLE_SPLIT_CANONICALIZATION_VERSION;
+export const COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_SORT_VERSION =
+  COMMUNITIES_ROLE_SPLIT_SORT_VERSION;
 export const COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_COMPARISON_SCHEMA_VERSION =
   'communities-role-split-input-c-comparison-v1';
 export const COMMUNITIES_STAGING_ROLE_SPLIT_MAPPING_VERSION =
   'PHUB_COMMUNITIES_ROLE_SPLIT_INVENTORY_ROLE_MAPPING_V1';
 
-export const COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_CATEGORY_NAMES = [
-  'roles',
-  'memberships',
-  'databaseAcl',
-  'schemas',
-  'defaultAcls',
-  'relations',
-  'columnAcls',
-  'rlsPolicies',
-  'sequences',
-  'functions',
-  'types',
-  'extensions',
-] as const;
+export const COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_CATEGORY_NAMES =
+  COMMUNITIES_ROLE_SPLIT_NORMALIZED_CATEGORIES;
 
-export const COMMUNITIES_STAGING_ROLE_SPLIT_ROLE_CATEGORIES = [
-  'RESTORE_OWNER',
-  'RESTORE_EXECUTOR',
-  'SHARED_OWNER',
-  'FUTURE_MIGRATOR',
-  'FUTURE_RUNTIME',
-  'INVENTORY_READER',
-] as const;
+export const COMMUNITIES_STAGING_ROLE_SPLIT_ROLE_CATEGORIES =
+  COMMUNITIES_ROLE_SPLIT_ROLE_CATEGORIES;
 
-export const COMMUNITIES_STAGING_ROLE_SPLIT_FORBIDDEN_CODE_CONTRACT = [
-  'ACL_PRIVILEGE_UNDECIDED',
-  'COLUMN_GRANT_FORBIDDEN',
-  'DEFAULT_ACL_CHANGE_FORBIDDEN',
-  'EXTENSION_CHANGE_FORBIDDEN',
-  'GRANT_OPTION_FORBIDDEN',
-  'INPUT_C_ANOMALY_PRESENT',
-  'INVENTORY_READER_OWNERSHIP_FORBIDDEN',
-  'INVENTORY_READER_WRITE_FORBIDDEN',
-  'NON_DETERMINISTIC_COMPARISON',
-  'NORMALIZED_RECORD_UNKNOWN',
-  'OUT_OF_MANIFEST_CHANGE_FORBIDDEN',
-  'OWNER_TARGET_UNDECIDED',
-  'OWNER_UNOBSERVED',
-  'PUBLIC_GRANT_FORBIDDEN',
-  'REQUIRED_DISTINCT_NOT_OBSERVED',
-  'RESTORE_EXECUTOR_OWNERSHIP_FORBIDDEN',
-  'RLS_POLICY_CHANGE_FORBIDDEN',
-  'ROLE_CAPABILITY_FORBIDDEN',
-  'ROLE_CATEGORY_IDENTITY_NOT_OBSERVED',
-  'ROLE_MEMBERSHIP_FORBIDDEN',
-  'RUNTIME_OWNERSHIP_FORBIDDEN',
-  'RUNTIME_SCHEMA_CREATE_FORBIDDEN',
-  'SHARED_DATABASE_CHANGE_FORBIDDEN',
-  'THIRD_PARTY_GRANT_FORBIDDEN',
-  'WILDCARD_GRANT_FORBIDDEN',
-] as const;
+export const COMMUNITIES_STAGING_ROLE_SPLIT_FORBIDDEN_CODE_CONTRACT =
+  COMMUNITIES_ROLE_SPLIT_FORBIDDEN_CODE_CONTRACT;
 
-type CategoryName = (typeof COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_CATEGORY_NAMES)[number];
+type CategoryName = CommunitiesRoleSplitNormalizedCategory;
 type RoleCategory = (typeof COMMUNITIES_STAGING_ROLE_SPLIT_ROLE_CATEGORIES)[number];
 
 const shaPattern = /^[a-f0-9]{64}$/;
@@ -103,7 +74,7 @@ function fail(code: string): never {
 const sha256 = (value: string | Buffer): string => createHash('sha256').update(value).digest('hex');
 
 export function compareUtf8Bytes(left: string, right: string): number {
-  return Buffer.compare(Buffer.from(left, 'utf8'), Buffer.from(right, 'utf8'));
+  return compareCommunitiesRoleSplitUtf8Bytes(left, right);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -294,12 +265,7 @@ export function parseCommunitiesStagingRoleSplitRoleMapping(
   return mapping;
 }
 
-export interface NormalizedRecord {
-  readonly canonicalKeySha256: string;
-  readonly observationState: 'OBSERVED';
-  readonly valueSha256: string;
-  readonly provenanceSha256: string;
-}
+export type NormalizedRecord = CommunitiesRoleSplitNormalizedRecord;
 
 export interface InventoryAnomaly {
   readonly code: string;
@@ -307,43 +273,7 @@ export interface InventoryAnomaly {
   readonly evidenceSha256: string;
 }
 
-export interface InventoryReport {
-  readonly schemaVersion: typeof COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_SCHEMA_VERSION;
-  readonly canonicalizationVersion: typeof COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_CANONICALIZATION_VERSION;
-  readonly sortVersion: typeof COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_SORT_VERSION;
-  readonly provenance: {
-    readonly contractVersion: 'communities-role-split-clone-marker-evidence-v1';
-    readonly markerDigest: string;
-    readonly markerEvidenceDigest: string;
-    readonly requestDigest: string;
-    readonly cloneNamePatternValid: true;
-    readonly cloneOidBound: true;
-    readonly sourceOidBound: true;
-    readonly systemIdentifierDigest: string;
-    readonly pgMajor: 16;
-    readonly objectManifestDigest: string;
-    readonly ledgerDigest: string;
-    readonly ledgerCount: number;
-    readonly mappingObservationState: 'OBSERVED' | 'UNKNOWN';
-    readonly mappingDigest: string | null;
-  };
-  readonly normalized: Readonly<Record<CategoryName, readonly NormalizedRecord[]>>;
-  readonly anomalies: readonly InventoryAnomaly[];
-  readonly forbiddenCodeContract: typeof COMMUNITIES_STAGING_ROLE_SPLIT_FORBIDDEN_CODE_CONTRACT;
-  readonly manifestSha256: string;
-  readonly reportSha256: string;
-  readonly authorizes: {
-    readonly roleCreation: false;
-    readonly roleRepair: false;
-    readonly roleSplit: false;
-    readonly aclMutation: false;
-    readonly schemaMutation: false;
-    readonly sharedDatabaseMutation: false;
-    readonly migration: false;
-    readonly deploy: false;
-    readonly activation: false;
-  };
-}
+export type InventoryReport = CommunitiesRoleSplitInputC;
 
 type InventoryClient = {
   connect(): Promise<void>;
@@ -424,6 +354,9 @@ select granted.rolname || '|' || member.rolname canonical_key,
  from pg_catalog.pg_auth_members membership join pg_catalog.pg_roles granted on granted.oid=membership.roleid
  join pg_catalog.pg_roles member on member.oid=membership.member`,
   databaseAcl: `/* communities-role-split-input-c:databaseAcl */
+select 'database|owner' canonical_key, owner.rolname value from pg_catalog.pg_database database
+join pg_catalog.pg_roles owner on owner.oid=database.datdba where database.datname=current_database()
+union all
 select rows.canonical_key, rows.value from pg_catalog.pg_database database
 cross join lateral (${aclRows('database.datacl', 'database.datdba', 'd', "'database'")}) rows
 where database.datname=current_database()`,
@@ -448,8 +381,10 @@ select owner.rolname || '|' || coalesce(namespace.nspname,'<GLOBAL>') || '|' || 
 with relevant(name) as (values ${relevantSchemas}), base as (
  select namespace.nspname, relation.* from pg_catalog.pg_class relation join pg_catalog.pg_namespace namespace on namespace.oid=relation.relnamespace
  where namespace.nspname in (select name from relevant) and relation.relkind in ('r','p','v','m','f'))
-select nspname || '.' || relname || '|metadata' canonical_key,
- pg_catalog.jsonb_build_array(relkind, relowner::text)::text value from base
+select nspname || '.' || relname || '|owner' canonical_key, owner.rolname value from base
+join pg_catalog.pg_roles owner on owner.oid=base.relowner
+union all select nspname || '.' || relname || '|metadata' canonical_key,
+ pg_catalog.jsonb_build_array(relkind)::text value from base
 union all select nspname || '.' || relname || '|' || rows.canonical_key, rows.value from base
 cross join lateral (${aclRows('base.relacl', 'base.relowner', 'r', "'acl'")}) rows`,
   columnAcls: `/* communities-role-split-input-c:columnAcls */
@@ -476,29 +411,38 @@ with relevant(name) as (values ${relevantSchemas}), base as (
  select namespace.nspname, relation.*, sequence.* from pg_catalog.pg_class relation
  join pg_catalog.pg_namespace namespace on namespace.oid=relation.relnamespace
  join pg_catalog.pg_sequence sequence on sequence.seqrelid=relation.oid where namespace.nspname in (select name from relevant))
-select nspname || '.' || relname || '|metadata' canonical_key,
- pg_catalog.jsonb_build_array(relowner::text,seqstart,seqincrement,seqmin,seqmax,seqcache,seqcycle)::text value from base
+select nspname || '.' || relname || '|owner' canonical_key, owner.rolname value from base
+join pg_catalog.pg_roles owner on owner.oid=base.relowner
+union all select nspname || '.' || relname || '|metadata' canonical_key,
+ pg_catalog.jsonb_build_array(seqstart,seqincrement,seqmin,seqmax,seqcache,seqcycle)::text value from base
 union all select nspname || '.' || relname || '|' || rows.canonical_key, rows.value from base
 cross join lateral (${aclRows('base.relacl', 'base.relowner', 's', "'acl'")}) rows`,
   functions: `/* communities-role-split-input-c:functions */
 with relevant(name) as (values ${relevantSchemas}), base as (
  select namespace.nspname, routine.* from pg_catalog.pg_proc routine join pg_catalog.pg_namespace namespace on namespace.oid=routine.pronamespace
  where namespace.nspname in (select name from relevant))
-select nspname || '.' || proname || '(' || pg_catalog.pg_get_function_identity_arguments(oid) || ')|metadata' canonical_key,
- pg_catalog.jsonb_build_array(prokind,proowner::text,prosecdef,proleakproof,provolatile,proparallel,proconfig)::text value from base
+select nspname || '.' || proname || '(' || pg_catalog.pg_get_function_identity_arguments(base.oid) || ')|owner' canonical_key,
+ owner.rolname value from base join pg_catalog.pg_roles owner on owner.oid=base.proowner
+union all select nspname || '.' || proname || '(' || pg_catalog.pg_get_function_identity_arguments(oid) || ')|metadata' canonical_key,
+ pg_catalog.jsonb_build_array(prokind,prosecdef,proleakproof,provolatile,proparallel,proconfig)::text value from base
 union all select nspname || '.' || proname || '(' || pg_catalog.pg_get_function_identity_arguments(oid) || ')|' || rows.canonical_key, rows.value from base
 cross join lateral (${aclRows('base.proacl', 'base.proowner', 'f', "'acl'")}) rows`,
   types: `/* communities-role-split-input-c:types */
 with relevant(name) as (values ${relevantSchemas}), base as (
  select namespace.nspname, object_type.* from pg_catalog.pg_type object_type join pg_catalog.pg_namespace namespace on namespace.oid=object_type.typnamespace
  where namespace.nspname in (select name from relevant))
-select nspname || '.' || typname || '|metadata' canonical_key,
- pg_catalog.jsonb_build_array(typtype,typcategory,typowner::text,typnotnull)::text value from base
+select nspname || '.' || typname || '|owner' canonical_key, owner.rolname value from base
+join pg_catalog.pg_roles owner on owner.oid=base.typowner
+union all select nspname || '.' || typname || '|metadata' canonical_key,
+ pg_catalog.jsonb_build_array(typtype,typcategory,typnotnull)::text value from base
 union all select nspname || '.' || typname || '|' || rows.canonical_key, rows.value from base
 cross join lateral (${aclRows('base.typacl', 'base.typowner', 'T', "'acl'")}) rows`,
   extensions: `/* communities-role-split-input-c:extensions */
+select extension.extname || '|owner' canonical_key, owner.rolname value
+ from pg_catalog.pg_extension extension join pg_catalog.pg_roles owner on owner.oid=extension.extowner
+union all
 select extension.extname || '|metadata' canonical_key,
- pg_catalog.jsonb_build_array(extension.extversion,extension.extnamespace::text,extension.extowner::text,extension.extrelocatable)::text value
+ pg_catalog.jsonb_build_array(extension.extversion,extension.extnamespace::text,extension.extrelocatable)::text value
  from pg_catalog.pg_extension extension
 union all
 select extension.extname || '|member|' || pg_catalog.pg_describe_object(dependency.classid,dependency.objid,dependency.objsubid) canonical_key,
@@ -526,6 +470,7 @@ relevant(name) as (values ${relevantSchemas}), acl(owner_oid,acl_value,source) a
  union all select object_type.typowner,coalesce(object_type.typacl,pg_catalog.acldefault('T',object_type.typowner)),'type' from pg_catalog.pg_type object_type join pg_catalog.pg_namespace namespace on namespace.oid=object_type.typnamespace where namespace.nspname in (select name from relevant)
 ), exploded as (select acl.owner_oid,acl.source,entry.* from acl cross join lateral pg_catalog.aclexplode(acl.acl_value) entry)
 select (select count from dangerous) dangerous_roles,(select count from memberships) mapped_memberships,
+ (select case when count(distinct owner_oid)>1 then count(distinct owner_oid)::text else '0' end from acl) mixed_owners,
  (select count(*)::text from exploded where grantee=0) public_grants,
  (select count(*)::text from exploded where grantee<>0 and grantee<>owner_oid) third_party_grants,
  (select count(*)::text from exploded where is_grantable) grant_options,
@@ -608,11 +553,50 @@ function normalizeRows(
       row.value.includes('\n')
     )
       fail('CATALOG_INVALID');
-    const canonicalKeySha256 = sha256(Buffer.from(`${category}\0${row.canonical_key}`, 'utf8'));
-    if (seen.has(canonicalKeySha256)) fail('DUPLICATE_RECORD');
-    seen.add(canonicalKeySha256);
+    const parts = row.canonical_key.split('|');
+    let objectKey: string;
+    let fieldKey: string;
+    if (category === 'roles') [objectKey, fieldKey] = [row.canonical_key, 'metadata'];
+    else if (category === 'memberships') [objectKey, fieldKey] = [row.canonical_key, 'membership'];
+    else if (category === 'defaultAcls')
+      [objectKey, fieldKey] = [parts.slice(0, 3).join('|'), parts.slice(3).join('|')];
+    else if (category === 'columnAcls')
+      [objectKey, fieldKey] = [parts[0] ?? '', parts.slice(1).join('|')];
+    else if (category === 'rlsPolicies')
+      [objectKey, fieldKey] = [parts[0] ?? '', parts.slice(1).join('|')];
+    else [objectKey, fieldKey] = [parts[0] ?? '', parts.slice(1).join('|')];
+    if (!objectKey || !fieldKey) fail('CATALOG_INVALID');
+    const fieldKind: CommunitiesRoleSplitFieldKind =
+      category === 'roles'
+        ? 'ROLE'
+        : category === 'memberships'
+          ? 'MEMBERSHIP'
+          : category === 'defaultAcls'
+            ? 'DEFAULT_ACL'
+            : category === 'columnAcls'
+              ? 'COLUMN'
+              : category === 'rlsPolicies'
+                ? fieldKey === 'rls'
+                  ? 'RLS'
+                  : 'POLICY'
+                : category === 'extensions' && fieldKey.startsWith('member|')
+                  ? 'EXTENSION_MEMBER'
+                  : fieldKey === 'owner'
+                    ? 'OWNER'
+                    : fieldKey.startsWith('acl|explicit|') || fieldKey.startsWith('explicit|')
+                      ? 'ACL_EXPLICIT'
+                      : fieldKey.startsWith('acl|effective|') || fieldKey.startsWith('effective|')
+                        ? 'ACL_EFFECTIVE'
+                        : 'METADATA';
+    const objectKeySha256 = sha256(Buffer.from(`${category}\0${objectKey}`, 'utf8'));
+    const fieldKeySha256 = sha256(Buffer.from(`${category}\0${objectKey}\0${fieldKey}`, 'utf8'));
+    const recordKey = `${objectKeySha256}|${fieldKeySha256}`;
+    if (seen.has(recordKey)) fail('DUPLICATE_RECORD');
+    seen.add(recordKey);
     return {
-      canonicalKeySha256,
+      objectKeySha256,
+      fieldKeySha256,
+      fieldKind,
       observationState: 'OBSERVED' as const,
       valueSha256: sha256(Buffer.from(row.value, 'utf8')),
       provenanceSha256: sha256(
@@ -620,25 +604,16 @@ function normalizeRows(
       ),
     };
   });
-  return records.sort((a, b) => compareUtf8Bytes(a.canonicalKeySha256, b.canonicalKeySha256));
+  return records.sort((a, b) =>
+    compareUtf8Bytes(
+      `${a.objectKeySha256}|${a.fieldKeySha256}`,
+      `${b.objectKeySha256}|${b.fieldKeySha256}`,
+    ),
+  );
 }
 
 function anomaly(code: string, count: number, provenanceDigest: string): InventoryAnomaly {
   return { code, count, evidenceSha256: sha256(`${provenanceDigest}\0${code}\0${count}`) };
-}
-
-function manifestBytes(normalized: InventoryReport['normalized']): string {
-  const lines = [
-    COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_SCHEMA_VERSION,
-    COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_CANONICALIZATION_VERSION,
-    COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_SORT_VERSION,
-  ];
-  for (const category of COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_CATEGORY_NAMES)
-    for (const record of normalized[category])
-      lines.push(
-        `${category}|${record.canonicalKeySha256}|${record.observationState}|${record.valueSha256}|${record.provenanceSha256}`,
-      );
-  return `${lines.join('\n')}\n`;
 }
 
 export async function produceCommunitiesStagingRoleSplitInventory(
@@ -777,6 +752,7 @@ export async function produceCommunitiesStagingRoleSplitInventory(
     const findings: [string, unknown][] = [
       ['ROLE_CAPABILITY_FORBIDDEN', anomalyRow.dangerous_roles],
       ['ROLE_MEMBERSHIP_FORBIDDEN', anomalyRow.mapped_memberships],
+      ['MIXED_OWNER_FORBIDDEN', anomalyRow.mixed_owners],
       ['PUBLIC_GRANT_FORBIDDEN', anomalyRow.public_grants],
       ['THIRD_PARTY_GRANT_FORBIDDEN', anomalyRow.third_party_grants],
       ['GRANT_OPTION_FORBIDDEN', anomalyRow.grant_options],
@@ -804,8 +780,7 @@ export async function produceCommunitiesStagingRoleSplitInventory(
       mappingObservationState: mappingPresent ? ('OBSERVED' as const) : ('UNKNOWN' as const),
       mappingDigest,
     };
-    const manifestSha256 = sha256(manifestBytes(normalized));
-    const body = {
+    const draft = {
       schemaVersion: COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_SCHEMA_VERSION,
       canonicalizationVersion: COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_CANONICALIZATION_VERSION,
       sortVersion: COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_SORT_VERSION,
@@ -813,7 +788,7 @@ export async function produceCommunitiesStagingRoleSplitInventory(
       normalized,
       anomalies,
       forbiddenCodeContract: COMMUNITIES_STAGING_ROLE_SPLIT_FORBIDDEN_CODE_CONTRACT,
-      manifestSha256,
+      manifestSha256: '0'.repeat(64),
       authorizes: {
         roleCreation: false as const,
         roleRepair: false as const,
@@ -825,8 +800,11 @@ export async function produceCommunitiesStagingRoleSplitInventory(
         deploy: false as const,
         activation: false as const,
       },
-    } satisfies Omit<InventoryReport, 'reportSha256'>;
-    return { ...body, reportSha256: sha256(canonicalJson(body)) };
+    } satisfies InventoryReport;
+    return {
+      ...draft,
+      manifestSha256: communitiesRoleSplitInputCManifestSha256(draft),
+    };
   } catch (error) {
     if (error instanceof CommunitiesStagingRoleSplitInventoryError) throw error;
     fail('EXECUTION_FAILED');
@@ -852,57 +830,11 @@ export interface InventoryComparison {
 }
 
 function assertReport(value: unknown): asserts value is InventoryReport {
-  if (
-    !isRecord(value) ||
-    value.schemaVersion !== COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_SCHEMA_VERSION ||
-    value.canonicalizationVersion !==
-      COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_CANONICALIZATION_VERSION ||
-    value.sortVersion !== COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_SORT_VERSION ||
-    !shaPattern.test(String(value.manifestSha256)) ||
-    !shaPattern.test(String(value.reportSha256)) ||
-    !isRecord(value.provenance) ||
-    !isRecord(value.normalized) ||
-    !Array.isArray(value.anomalies) ||
-    !Array.isArray(value.forbiddenCodeContract) ||
-    !isRecord(value.authorizes)
-  )
+  try {
+    assertCommunitiesRoleSplitInputC(value);
+  } catch {
     fail('REPORT_INVALID');
-  if (
-    sha256(
-      canonicalJson(
-        Object.fromEntries(Object.entries(value).filter(([key]) => key !== 'reportSha256')),
-      ),
-    ) !== value.reportSha256
-  )
-    fail('REPORT_INVALID');
-  if (
-    canonicalJson(value.forbiddenCodeContract) !==
-      canonicalJson(COMMUNITIES_STAGING_ROLE_SPLIT_FORBIDDEN_CODE_CONTRACT) ||
-    Object.values(value.authorizes).some((item) => item !== false)
-  )
-    fail('REPORT_INVALID');
-  for (const category of COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_CATEGORY_NAMES) {
-    const records = value.normalized[category];
-    if (!Array.isArray(records)) fail('REPORT_INVALID');
-    let previous = '';
-    for (const record of records) {
-      if (
-        !isRecord(record) ||
-        !shaPattern.test(String(record.canonicalKeySha256)) ||
-        record.observationState !== 'OBSERVED' ||
-        !shaPattern.test(String(record.valueSha256)) ||
-        !shaPattern.test(String(record.provenanceSha256)) ||
-        (previous && compareUtf8Bytes(previous, String(record.canonicalKeySha256)) >= 0)
-      )
-        fail('REPORT_INVALID');
-      previous = String(record.canonicalKeySha256);
-    }
   }
-  if (
-    sha256(manifestBytes(value.normalized as InventoryReport['normalized'])) !==
-    value.manifestSha256
-  )
-    fail('REPORT_INVALID');
 }
 
 export function compareCommunitiesStagingRoleSplitInventories(
@@ -924,10 +856,16 @@ export function compareCommunitiesStagingRoleSplitInventories(
   const changedCategories = new Set<CategoryName>();
   for (const category of COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_CATEGORY_NAMES) {
     const left = new Map(
-      before.normalized[category].map((record) => [record.canonicalKeySha256, record]),
+      before.normalized[category].map((record) => [
+        `${record.objectKeySha256}|${record.fieldKeySha256}`,
+        record,
+      ]),
     );
     const right = new Map(
-      after.normalized[category].map((record) => [record.canonicalKeySha256, record]),
+      after.normalized[category].map((record) => [
+        `${record.objectKeySha256}|${record.fieldKeySha256}`,
+        record,
+      ]),
     );
     for (const [key, record] of left) {
       const candidate = right.get(key);
@@ -935,6 +873,7 @@ export function compareCommunitiesStagingRoleSplitInventories(
         removed++;
         changedCategories.add(category);
       } else if (
+        record.fieldKind !== candidate.fieldKind ||
         record.valueSha256 !== candidate.valueSha256 ||
         record.provenanceSha256 !== candidate.provenanceSha256
       ) {

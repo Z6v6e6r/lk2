@@ -62,11 +62,11 @@ must never be replaced with a guessed name, OID, owner, ACL or grant.
 
 ## INPUT_C evidence required before a concrete matrix
 
-INPUT_C must use `schemaVersion=communities-role-split-input-c-v1`,
-`canonicalizationVersion=utf8-byte-digest-v1` and `sortVersion=sha256-byte-v1`. It is one canonical,
-UTF-8, LF-terminated artifact. The external `artifactSha256` is independently pinned before
-review and remains outside the INPUT_C object; it must not be derived from the candidate during the
-acceptance run. The internal normalized-manifest digest is separately recomputed by the evaluator.
+Both `observedBefore` and `observedAfter` INPUT_C snapshots use
+`schemaVersion=communities-role-split-input-c-v1`, `canonicalizationVersion=utf8-byte-digest-v1`
+and `sortVersion=sha256-byte-v1`. Each is shared-package canonical JSON plus one LF. External
+`beforeArtifactSha256` and `afterArtifactSha256` values are independently pinned outside the
+envelope; both normalized-manifest digests are separately recomputed by the evaluator.
 The acceptance envelope requires all of the following:
 
 1. Provenance: producer contract version; clone marker and marker-request digests; confirmed clone
@@ -75,15 +75,17 @@ The acceptance envelope requires all of the following:
 2. Exactly twelve normalized categories, with no extra category: `roles`, `memberships`,
    `databaseAcl`, `schemas`, `defaultAcls`, `relations`, `columnAcls`, `rlsPolicies`, `sequences`,
    `functions`, `types` and `extensions`. Every record has exactly
-   `{canonicalKeySha256, observationState, valueSha256, provenanceSha256}`. Records are strictly
-   ordered by the SHA-256 bytes represented by `canonicalKeySha256`; duplicates are invalid.
+   `{objectKeySha256, fieldKeySha256, fieldKind, observationState, valueSha256,
+provenanceSha256}`. Owner, metadata, ACL and extension-member fields for one object share its
+   `objectKeySha256`; records are ordered by `(objectKeySha256, fieldKeySha256)`. A null column ACL
+   observation is ordinary evidence; only `COLUMN_GRANT_FORBIDDEN` carries forbidden semantics.
 3. A complete anomaly list with stable codes and evidence digests. An empty list must be explicit;
    absence of the field is not equivalent to no anomalies. The trusted producer must emit an
    anomaly for every observed wildcard/`ALL`, grant option, PUBLIC grant, unclassified third-party
    grantee, column grant, explicit default ACL, forbidden membership/capability, mixed owner or
    unobserved required field; digested values do not waive that obligation.
-4. The normalized manifest SHA-256, exact schema/canonicalization/sort versions, and the separately
-   controlled external artifact SHA-256.
+4. Both normalized manifest SHA-256 values, exact versions and both independently controlled
+   external artifact SHA-256 values.
 5. A private, independently pinned lookup that resolves the six category identity digests and all
    pairwise identity observations to the observed role names/OIDs for DBA review. It is not part of
    the redacted envelope and must not be committed or pasted into the report.
@@ -94,9 +96,10 @@ manifest and ledger, every role/owner/ACL cell stays `UNKNOWN` and the decision 
 
 ## Ownership rules
 
-The before manifest records the observed owner of every in-scope object. The ownership plan then
+The before and after manifests record a distinct `OWNER` field for every in-scope object. The ownership plan then
 contains exactly one row per database, schema, relation, sequence, function, type and extension key
-digest and no extra row. Each row uses only `canonicalKeySha256`, an observed before-owner category,
+digest and no extra row. Each row binds the exact `objectKeySha256`, `ownerFieldKeySha256`, owner
+value/evidence digests and observed before-owner category,
 an explicit target category or `PRESERVE_CURRENT`, and rule/provenance digests. There is no implicit
 default:
 
@@ -120,14 +123,14 @@ review must classify every object before a concrete target owner can be selected
 
 ## Exact-manifest grant plan
 
-`grantPlan` contains exactly one row for every database, schema, relation, sequence, function and
-type key digest in INPUT_C, and no row for an extension or an out-of-manifest key. Empty, partial,
-duplicate and extra plans fail. Each row contains:
+`grantPlan` contains exactly one row for every observed ACL field of every database, schema,
+relation, sequence, function and type, and no row for an extension or an out-of-manifest field.
+Empty, partial, duplicate and extra plans fail. Each row contains:
 
 - `objectKind` from the finite lower-case vocabulary `database`, `schema`, `relation`, `sequence`,
   `function`, `type`;
-- `canonicalKeySha256`, `beforeStateSha256`, `targetStateSha256`, `ruleSha256` and
-  `provenanceSha256` as lowercase SHA-256 values;
+- `objectKeySha256`, `fieldKeySha256`, `beforeStateSha256`, `targetStateSha256`, `ruleSha256` and
+  `evidenceSha256` as lowercase SHA-256 values;
 - one explicit action: `PRESERVE`, `ADD` or `REMOVE`;
 - one of the six abstract grantee categories, never a raw name, `PUBLIC` or an unclassified role;
 - a sorted, duplicate-free subset of the per-object privilege vocabulary;
@@ -139,10 +142,10 @@ finite vocabulary is database `CONNECT/TEMPORARY`, schema `USAGE/CREATE`, relati
 `EXECUTE`, and type `USAGE`. Wildcards and `ALL` are not values. `FUTURE_RUNTIME` may never receive
 schema `CREATE`; `INVENTORY_READER` may not receive an `ADD` transition.
 
-The evaluator requires grant-plan and object-manifest set equality, joins each row to the exact
-ownership row, recomputes every target-state digest from the observed before-state digest and the
-complete transition, then rebuilds both manifests and comparison counts. Supplying arbitrary
-before, target, after or comparison hashes cannot produce `PASS`.
+The evaluator joins every row to exact records in both independently observed snapshots.
+`beforeStateSha256` and `targetStateSha256` must equal those observed values; the evaluator never
+manufactures an after state from a transition-description hash. The planned changed set must equal
+the actual full twelve-category snapshot delta.
 
 ## Forbidden capabilities, grants and edges
 
@@ -156,6 +159,8 @@ requires a separately reviewed remediation design.
 - No membership edge, inherited privilege, `SET ROLE` path or admin option may connect any of the
   six categories or an unclassified third party. Identity sameness is decided only by the complete
   pairwise observation matrix; `FUTURE_MIGRATOR` and `FUTURE_RUNTIME` must be observed distinct.
+  `SAME` relations form equivalence classes and every prohibition is inherited by aliases; a
+  runtime alias is forbidden from ownership and schema `CREATE` exactly like `FUTURE_RUNTIME`.
 - `GRANT ALL`, wildcard selection, grant option and owner-derived substitution for an explicit
   grant are forbidden.
 - PUBLIC grants, third-party grants and column-level grants are forbidden for every in-scope
@@ -177,15 +182,15 @@ the schema. Producers must not collapse multiple findings into a generic warning
 The result is binary. A conforming evaluator returns `PASS` only when all steps below pass; every
 other result is `FAIL` with one or more stable blocker codes.
 
-1. Validate the envelope against the v1 schema, verify the external independently pinned INPUT_C
-   artifact SHA-256, and independently recompute the internal normalized-manifest SHA-256.
+1. Validate the envelope against the v1 schema, verify both external independently pinned INPUT_C
+   artifact SHA-256 values, and independently recompute both normalized-manifest SHA-256 values.
 2. Verify every provenance binding and require PostgreSQL major `16`. Any false, absent or mismatched
    binding fails.
 3. Require the exact six categories, each with `OBSERVED` name, OID and capability fields. Require
    all 15 pairwise relations exactly once. A `REQUIRED_DISTINCT` pair without an observed
    `DISTINCT` result is `REQUIRED_DISTINCT_NOT_OBSERVED`; `UNKNOWN`, `UNOBSERVED` and an absent pair
    are never treated as `SAME`.
-4. Require exactly all twelve normalized inventory categories, exact four-field records, unique key
+4. Require exactly all twelve normalized inventory categories, exact six-field records, unique object/field
    digests and the declared SHA-256 byte sorting order. Any `UNKNOWN`, `UNOBSERVED`, duplicate,
    missing, extra or out-of-order record fails.
 5. Require an empty INPUT_C anomaly list and no preimage forbidden condition.
@@ -195,9 +200,9 @@ other result is `FAIL` with one or more stable blocker codes.
 7. Require grant-plan set equality with the six grantable object categories. Reject every unknown
    action, kind, privilege, grantee, grant option, empty/partial/duplicate/extra row or mismatched
    before digest.
-8. Recompute each target-state digest from the joined grant and ownership decisions. Build the after
-   manifest from those computed states; extension states remain unchanged.
-9. Canonicalize before and after with the exact sort version; recompute both manifest digests and all
+8. Join each decision to exact before/after evidence and require the plan changed set to equal the
+   observed full-snapshot delta; extension states remain unchanged.
+9. Canonicalize both full INPUT_C snapshots with the exact sort version; recompute both manifest digests and all
    changed/added/removed counts.
 10. Require byte-for-byte field equality between the recomputed and supplied comparison, including
     an empty `forbiddenTransitionCodes` list. Supplied hashes are never sufficient evidence.
@@ -214,8 +219,8 @@ forbidden transition codes from the schema.
 
 The producer serializes one UTF-8 LF-terminated record per line. Fields use JSON string escaping;
 there is no locale collation, insignificant whitespace or omitted nullable field. Sort object-state
-records by the UTF-8 byte order of `(objectKind, canonicalKeySha256)` and diff records by
-`(objectKind, canonicalKeySha256, field, ruleSha256)`. Sort blocker and transition codes by UTF-8
+records by the UTF-8 byte order of `(objectKind, objectKeySha256, fieldKeySha256)` and diff records by
+`(objectKind, objectKeySha256, fieldKeySha256, ruleSha256)`. Sort blocker and transition codes by UTF-8
 byte order and reject duplicates. Hash the exact bytes including the final LF.
 
 ```text
@@ -224,7 +229,7 @@ sort_version=<INPUT_C_SORT_VERSION>
 before_manifest_sha256=<SHA256>
 after_manifest_sha256=<SHA256>
 counts changed=<COUNT> added=<COUNT> removed=<COUNT> forbidden=<COUNT>
-CHANGE|<OBJECT_KIND>|<CANONICAL_KEY_SHA256>|<FIELD>|<BEFORE_STATE_SHA256>|<AFTER_STATE_SHA256>|<RULE_SHA256>|<PROVENANCE_SHA256>
+CHANGE|<OBJECT_KIND>|<OBJECT_KEY_SHA256>|<FIELD_KEY_SHA256>|<BEFORE_STATE_SHA256>|<AFTER_STATE_SHA256>|<RULE_SHA256>|<PROVENANCE_SHA256>
 FORBIDDEN|<STABLE_CODE>
 ```
 

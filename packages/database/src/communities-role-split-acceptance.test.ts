@@ -4,92 +4,71 @@ import { describe, expect, it } from 'vitest';
 
 import {
   COMMUNITIES_ROLE_SPLIT_ACCEPTANCE_VERSION,
-  COMMUNITIES_ROLE_SPLIT_CANONICALIZATION_VERSION,
   COMMUNITIES_ROLE_SPLIT_IDENTITY_RELATION_SPECS,
-  COMMUNITIES_ROLE_SPLIT_INPUT_C_SCHEMA_VERSION,
   COMMUNITIES_ROLE_SPLIT_ROLE_CATEGORIES,
-  COMMUNITIES_ROLE_SPLIT_SORT_VERSION,
-  CommunitiesRoleSplitAcceptanceError,
   assertCommunitiesRoleSplitAcceptancePass,
-  communitiesRoleSplitGrantTargetStateSha256,
+  communitiesRoleSplitInputCArtifactSha256,
   communitiesRoleSplitInputCManifestSha256,
-  communitiesRoleSplitObjectStateManifestSha256,
   type CommunitiesRoleSplitAcceptanceEnvelope,
-  type CommunitiesRoleSplitGrantDecision,
+  type CommunitiesRoleSplitAcceptanceError,
+  type CommunitiesRoleSplitExpectedPins,
+  type CommunitiesRoleSplitGrantObjectKind,
   type CommunitiesRoleSplitInputC,
   type CommunitiesRoleSplitObjectKind,
-  type CommunitiesRoleSplitOwnershipDecision,
 } from './communities-role-split-acceptance.js';
+import {
+  COMMUNITIES_ROLE_SPLIT_CANONICALIZATION_VERSION,
+  COMMUNITIES_ROLE_SPLIT_FORBIDDEN_CODE_CONTRACT,
+  COMMUNITIES_ROLE_SPLIT_INPUT_C_SCHEMA_VERSION,
+  COMMUNITIES_ROLE_SPLIT_SORT_VERSION,
+  type CommunitiesRoleSplitFieldKind,
+  type CommunitiesRoleSplitNormalizedRecord,
+} from './communities-role-split-input-c.js';
 
-type DeepMutable<T> = {
-  -readonly [Key in keyof T]: T[Key] extends readonly (infer Item)[]
-    ? DeepMutable<Item>[]
-    : T[Key] extends object
-      ? DeepMutable<T[Key]>
-      : T[Key];
+type Mutable<T> = {
+  -readonly [K in keyof T]: T[K] extends readonly (infer I)[]
+    ? Mutable<I>[]
+    : T[K] extends object
+      ? Mutable<T[K]>
+      : T[K];
 };
+const digest = (value: string): string => createHash('sha256').update(value).digest('hex');
+const objectCategory = {
+  database: 'databaseAcl',
+  schema: 'schemas',
+  relation: 'relations',
+  sequence: 'sequences',
+  function: 'functions',
+  type: 'types',
+  extension: 'extensions',
+} as const;
 
-function digest(value: string): string {
-  return createHash('sha256').update(value).digest('hex');
-}
-
-function record(key: string) {
+function record(
+  object: string,
+  field: string,
+  kind: CommunitiesRoleSplitFieldKind,
+  value: string,
+): CommunitiesRoleSplitNormalizedRecord {
   return {
-    canonicalKeySha256: digest(`key:${key}`),
-    observationState: 'OBSERVED' as const,
-    valueSha256: digest(`value:${key}`),
-    provenanceSha256: digest(`provenance:${key}`),
+    objectKeySha256: digest(`object:${object}`),
+    fieldKeySha256: digest(`field:${object}:${field}`),
+    fieldKind: kind,
+    observationState: 'OBSERVED',
+    valueSha256: value,
+    provenanceSha256: digest(`evidence:${object}:${field}`),
   };
-}
-
-function inputC(): CommunitiesRoleSplitInputC {
-  const draft: CommunitiesRoleSplitInputC = {
-    schemaVersion: COMMUNITIES_ROLE_SPLIT_INPUT_C_SCHEMA_VERSION,
-    canonicalizationVersion: COMMUNITIES_ROLE_SPLIT_CANONICALIZATION_VERSION,
-    sortVersion: COMMUNITIES_ROLE_SPLIT_SORT_VERSION,
-    manifestSha256: digest('pending'),
-    provenance: {
-      contractVersion: 'INPUT_C_PRODUCER_V1',
-      markerDigest: digest('marker'),
-      requestDigest: digest('request'),
-      cloneNamePatternValid: true,
-      cloneOidBound: true,
-      sourceOidBound: true,
-      systemIdentifierDigest: digest('system'),
-      pgMajor: 16,
-      objectManifestDigest: digest('object-manifest'),
-      ledgerDigest: digest('ledger'),
-      ledgerCount: 34,
-    },
-    normalized: {
-      roles: [record('role')],
-      memberships: [],
-      databaseAcl: [record('database')],
-      schemas: [record('schema')],
-      defaultAcls: [],
-      relations: [record('relation')],
-      columnAcls: [],
-      rlsPolicies: [record('rls-policy')],
-      sequences: [record('sequence')],
-      functions: [record('function')],
-      types: [record('type')],
-      extensions: [record('extension')],
-    },
-    anomalies: [],
-  };
-  return { ...draft, manifestSha256: communitiesRoleSplitInputCManifestSha256(draft) };
 }
 
 function mapping(): CommunitiesRoleSplitAcceptanceEnvelope['mapping'] {
-  const observedDigest = (key: string) => ({
+  const observedDigest = (value: string) => ({
     observationState: 'OBSERVED' as const,
-    valueSha256: digest(key),
-    provenanceSha256: digest(`provenance:${key}`),
+    valueSha256: digest(value),
+    provenanceSha256: digest(`evidence:${value}`),
   });
-  const observedBoolean = (key: string, value: boolean) => ({
+  const observedBoolean = (value: string, state: boolean) => ({
     observationState: 'OBSERVED' as const,
-    value,
-    provenanceSha256: digest(`provenance:${key}`),
+    value: state,
+    provenanceSha256: digest(`evidence:${value}`),
   });
   const roles = Object.fromEntries(
     COMMUNITIES_ROLE_SPLIT_ROLE_CATEGORIES.map((category) => [
@@ -99,16 +78,20 @@ function mapping(): CommunitiesRoleSplitAcceptanceEnvelope['mapping'] {
         roleName: observedDigest(`name:${category}`),
         roleOid: observedDigest(`oid:${category}`),
         canLogin: observedBoolean(`login:${category}`, true),
-        superuser: observedBoolean(`superuser:${category}`, false),
+        superuser: observedBoolean(`super:${category}`, false),
         bypassRls: observedBoolean(`bypass:${category}`, false),
         createDatabase: observedBoolean(`createdb:${category}`, false),
         createRole: observedBoolean(`createrole:${category}`, false),
         replication: observedBoolean(`replication:${category}`, false),
       },
     ]),
-  ) as unknown as Omit<CommunitiesRoleSplitAcceptanceEnvelope['mapping'], 'identityRelations'>;
+  ) as unknown as Omit<
+    CommunitiesRoleSplitAcceptanceEnvelope['mapping'],
+    'identityRelations' | 'mappingDigest'
+  >;
   return {
     ...roles,
+    mappingDigest: digest('mapping'),
     identityRelations: COMMUNITIES_ROLE_SPLIT_IDENTITY_RELATION_SPECS.map(
       ([left, right, requirement]) => ({
         left,
@@ -121,85 +104,141 @@ function mapping(): CommunitiesRoleSplitAcceptanceEnvelope['mapping'] {
   };
 }
 
-const categoryForKind = {
-  database: 'databaseAcl',
-  schema: 'schemas',
-  relation: 'relations',
-  sequence: 'sequences',
-  function: 'functions',
-  type: 'types',
-  extension: 'extensions',
-} as const;
-
-function objectStateEntries(
-  inventory: CommunitiesRoleSplitInputC,
-  grants: readonly CommunitiesRoleSplitGrantDecision[] = [],
-): [string, string][] {
-  const grantByKey = new Map(
-    grants.map((grant) => [`${grant.objectKind}|${grant.canonicalKeySha256}`, grant]),
-  );
-  return (Object.keys(categoryForKind) as CommunitiesRoleSplitObjectKind[])
-    .map((kind) => {
-      const source = inventory.normalized[categoryForKind[kind]][0]!;
-      const key = `${kind}|${source.canonicalKeySha256}`;
-      return [key, grantByKey.get(key)?.targetStateSha256 ?? source.valueSha256!] as [
-        string,
-        string,
-      ];
-    })
-    .sort(([left], [right]) => left.localeCompare(right));
+function snapshot(
+  roleMapping: CommunitiesRoleSplitAcceptanceEnvelope['mapping'],
+): CommunitiesRoleSplitInputC {
+  const owner = roleMapping.SHARED_OWNER.roleName.valueSha256!;
+  const normalized: Mutable<CommunitiesRoleSplitInputC['normalized']> = {
+    roles: [record('role', 'metadata', 'ROLE', digest('role-state'))],
+    memberships: [],
+    databaseAcl: [],
+    schemas: [],
+    defaultAcls: [],
+    relations: [],
+    columnAcls: [
+      record('relation', 'column-null', 'COLUMN', digest('null-column-acl-observation')),
+    ],
+    rlsPolicies: [record('relation', 'rls', 'RLS', digest('rls-preserved'))],
+    sequences: [],
+    functions: [],
+    types: [],
+    extensions: [],
+  };
+  for (const kind of Object.keys(objectCategory) as CommunitiesRoleSplitObjectKind[]) {
+    const category = objectCategory[kind];
+    normalized[category].push(record(kind, 'owner', 'OWNER', owner));
+    if (kind === 'extension')
+      normalized[category].push(record(kind, 'metadata', 'METADATA', digest('extension-metadata')));
+    else {
+      normalized[category].push(
+        record(kind, 'acl-explicit', 'ACL_EXPLICIT', digest(`${kind}:acl-explicit`)),
+      );
+      normalized[category].push(
+        record(kind, 'acl-effective', 'ACL_EFFECTIVE', digest(`${kind}:acl-effective`)),
+      );
+    }
+    normalized[category].sort((a, b) =>
+      `${a.objectKeySha256}|${a.fieldKeySha256}`.localeCompare(
+        `${b.objectKeySha256}|${b.fieldKeySha256}`,
+      ),
+    );
+  }
+  const draft: CommunitiesRoleSplitInputC = {
+    schemaVersion: COMMUNITIES_ROLE_SPLIT_INPUT_C_SCHEMA_VERSION,
+    canonicalizationVersion: COMMUNITIES_ROLE_SPLIT_CANONICALIZATION_VERSION,
+    sortVersion: COMMUNITIES_ROLE_SPLIT_SORT_VERSION,
+    provenance: {
+      contractVersion: 'communities-role-split-clone-marker-evidence-v1',
+      markerDigest: digest('marker'),
+      markerEvidenceDigest: digest('marker-evidence'),
+      requestDigest: digest('request'),
+      cloneNamePatternValid: true,
+      cloneOidBound: true,
+      sourceOidBound: true,
+      systemIdentifierDigest: digest('system'),
+      pgMajor: 16,
+      objectManifestDigest: digest('object-manifest'),
+      ledgerDigest: digest('ledger'),
+      ledgerCount: 34,
+      mappingObservationState: 'OBSERVED',
+      mappingDigest: digest('mapping'),
+    },
+    normalized,
+    anomalies: [],
+    forbiddenCodeContract: COMMUNITIES_ROLE_SPLIT_FORBIDDEN_CODE_CONTRACT,
+    manifestSha256: digest('pending'),
+    authorizes: {
+      roleCreation: false,
+      roleRepair: false,
+      roleSplit: false,
+      aclMutation: false,
+      schemaMutation: false,
+      sharedDatabaseMutation: false,
+      migration: false,
+      deploy: false,
+      activation: false,
+    },
+  };
+  return { ...draft, manifestSha256: communitiesRoleSplitInputCManifestSha256(draft) };
 }
 
-function envelope(): DeepMutable<CommunitiesRoleSplitAcceptanceEnvelope> {
-  const inventory = inputC();
-  const kinds = Object.keys(categoryForKind) as CommunitiesRoleSplitObjectKind[];
-  const ownershipPlan = kinds.map((objectKind) => {
-    const source = inventory.normalized[categoryForKind[objectKind]][0]!;
-    return {
-      objectKind,
-      canonicalKeySha256: source.canonicalKeySha256,
-      beforeOwnerCategory: 'SHARED_OWNER',
-      targetOwnerCategory: 'PRESERVE_CURRENT',
-      ruleSha256: digest(`owner-rule:${objectKind}`),
-      provenanceSha256: digest(`owner-provenance:${objectKind}`),
-    } satisfies CommunitiesRoleSplitOwnershipDecision;
-  });
-  const ownershipByKind = new Map(ownershipPlan.map((row) => [row.objectKind, row]));
-  const grantPlan = kinds
-    .filter((kind) => kind !== 'extension')
-    .map((objectKind) => {
-      const source = inventory.normalized[categoryForKind[objectKind]][0]!;
-      const withoutTarget = {
-        objectKind,
-        canonicalKeySha256: source.canonicalKeySha256,
-        action: 'PRESERVE',
-        granteeCategory: 'FUTURE_RUNTIME',
-        privileges: [],
-        beforeStateSha256: source.valueSha256!,
-        grantOption: false,
-        ruleSha256: digest(`grant-rule:${objectKind}`),
-        provenanceSha256: digest(`grant-provenance:${objectKind}`),
-      } as const;
+function fixture(): {
+  envelope: Mutable<CommunitiesRoleSplitAcceptanceEnvelope>;
+  pins: Mutable<CommunitiesRoleSplitExpectedPins>;
+} {
+  const roleMapping = mapping(),
+    before = snapshot(roleMapping),
+    after = structuredClone(before);
+  const ownershipPlan = (Object.keys(objectCategory) as CommunitiesRoleSplitObjectKind[]).map(
+    (objectKind) => {
+      const owner = before.normalized[objectCategory[objectKind]].find(
+        (item) => item.fieldKind === 'OWNER',
+      )!;
       return {
-        ...withoutTarget,
-        targetStateSha256: communitiesRoleSplitGrantTargetStateSha256(
-          withoutTarget,
-          ownershipByKind.get(objectKind)!,
-        ),
-      } satisfies CommunitiesRoleSplitGrantDecision;
-    });
-  const beforeEntries = objectStateEntries(inventory);
-  return {
+        objectKind,
+        objectKeySha256: owner.objectKeySha256,
+        ownerFieldKeySha256: owner.fieldKeySha256,
+        beforeOwnerCategory: 'SHARED_OWNER' as const,
+        targetOwnerCategory: 'PRESERVE_CURRENT' as const,
+        beforeOwnerValueSha256: owner.valueSha256!,
+        afterOwnerValueSha256: owner.valueSha256!,
+        ownerEvidenceSha256: owner.provenanceSha256!,
+        ruleSha256: digest(`owner-rule:${objectKind}`),
+      };
+    },
+  );
+  const grantPlan = (
+    Object.keys(objectCategory).filter(
+      (kind) => kind !== 'extension',
+    ) as CommunitiesRoleSplitGrantObjectKind[]
+  ).flatMap((objectKind) =>
+    before.normalized[objectCategory[objectKind]]
+      .filter((item) => item.fieldKind === 'ACL_EXPLICIT' || item.fieldKind === 'ACL_EFFECTIVE')
+      .map((item) => ({
+        objectKind,
+        objectKeySha256: item.objectKeySha256,
+        fieldKeySha256: item.fieldKeySha256,
+        action: 'PRESERVE' as const,
+        granteeCategory: 'FUTURE_RUNTIME' as const,
+        privileges: [],
+        beforeStateSha256: item.valueSha256!,
+        targetStateSha256: item.valueSha256!,
+        evidenceSha256: item.provenanceSha256!,
+        grantOption: false as const,
+        ruleSha256: digest(`grant-rule:${objectKind}:${item.fieldKeySha256}`),
+      })),
+  );
+  const envelope: CommunitiesRoleSplitAcceptanceEnvelope = {
     contractVersion: COMMUNITIES_ROLE_SPLIT_ACCEPTANCE_VERSION,
-    artifactSha256: digest('independently-pinned-artifact'),
-    inputC: inventory,
-    mapping: mapping(),
+    observedBefore: before,
+    observedAfter: after,
+    mapping: roleMapping,
     ownershipPlan,
     grantPlan,
     comparison: {
       sortVersion: COMMUNITIES_ROLE_SPLIT_SORT_VERSION,
-      beforeManifestSha: communitiesRoleSplitObjectStateManifestSha256(beforeEntries),
-      afterManifestSha: communitiesRoleSplitObjectStateManifestSha256(beforeEntries),
+      beforeManifestSha256: before.manifestSha256,
+      afterManifestSha256: after.manifestSha256,
       changedCount: 0,
       addedCount: 0,
       removedCount: 0,
@@ -215,251 +254,240 @@ function envelope(): DeepMutable<CommunitiesRoleSplitAcceptanceEnvelope> {
       authorizesDeploy: false,
       authorizesRuntimeActivation: false,
     },
-  } as unknown as DeepMutable<CommunitiesRoleSplitAcceptanceEnvelope>;
+  };
+  const pins: CommunitiesRoleSplitExpectedPins = {
+    beforeArtifactSha256: communitiesRoleSplitInputCArtifactSha256(before),
+    afterArtifactSha256: communitiesRoleSplitInputCArtifactSha256(after),
+    beforeManifestSha256: before.manifestSha256,
+    afterManifestSha256: after.manifestSha256,
+    mappingDigest: before.provenance.mappingDigest!,
+    markerDigest: before.provenance.markerDigest,
+    markerEvidenceDigest: before.provenance.markerEvidenceDigest,
+    requestDigest: before.provenance.requestDigest,
+    objectManifestDigest: before.provenance.objectManifestDigest,
+    ledgerDigest: before.provenance.ledgerDigest,
+  };
+  return {
+    envelope: envelope as unknown as Mutable<CommunitiesRoleSplitAcceptanceEnvelope>,
+    pins,
+  };
 }
 
 function expectCode(run: () => unknown, suffix: string): void {
-  try {
-    run();
-    throw new Error('expected failure');
-  } catch (error) {
-    expect(error).toBeInstanceOf(CommunitiesRoleSplitAcceptanceError);
-    expect((error as CommunitiesRoleSplitAcceptanceError).code).toBe(
-      `COMMUNITIES_ROLE_SPLIT_ACCEPTANCE_${suffix}`,
-    );
-  }
+  expect(run).toThrowError(
+    expect.objectContaining({
+      code: `COMMUNITIES_ROLE_SPLIT_ACCEPTANCE_${suffix}`,
+    }) as CommunitiesRoleSplitAcceptanceError,
+  );
+}
+function repinAfter(target: ReturnType<typeof fixture>): void {
+  target.envelope.observedAfter.manifestSha256 = communitiesRoleSplitInputCManifestSha256(
+    target.envelope.observedAfter,
+  );
+  target.pins.afterManifestSha256 = target.envelope.observedAfter.manifestSha256;
+  target.pins.afterArtifactSha256 = communitiesRoleSplitInputCArtifactSha256(
+    target.envelope.observedAfter,
+  );
+  target.envelope.comparison.afterManifestSha256 = target.envelope.observedAfter.manifestSha256;
 }
 
 describe('Communities role-split acceptance evaluator', () => {
-  it('accepts only the exact complete observed redacted contract', () => {
-    const candidate = envelope();
-    expect(assertCommunitiesRoleSplitAcceptancePass(candidate)).toEqual(candidate.comparison);
-  });
-
-  it('recomputes and accepts one exact ADD transition and its comparison counts', () => {
-    const candidate = envelope();
-    const grantIndex = candidate.grantPlan.findIndex((row) => row.objectKind === 'relation');
-    const current = candidate.grantPlan[grantIndex]!;
-    const owner = candidate.ownershipPlan.find((row) => row.objectKind === 'relation')!;
-    const transition = {
-      objectKind: current.objectKind,
-      canonicalKeySha256: current.canonicalKeySha256,
-      action: 'ADD' as const,
-      granteeCategory: current.granteeCategory,
-      privileges: ['SELECT'] as DeepMutable<CommunitiesRoleSplitGrantDecision>['privileges'],
-      beforeStateSha256: current.beforeStateSha256,
-      grantOption: false as const,
-      ruleSha256: current.ruleSha256,
-      provenanceSha256: current.provenanceSha256,
-    };
-    candidate.grantPlan[grantIndex] = {
-      ...transition,
-      targetStateSha256: communitiesRoleSplitGrantTargetStateSha256(transition, owner),
-    };
-    const before = objectStateEntries(candidate.inputC);
-    const after = objectStateEntries(candidate.inputC, candidate.grantPlan);
-    candidate.comparison = {
-      sortVersion: COMMUNITIES_ROLE_SPLIT_SORT_VERSION,
-      beforeManifestSha: communitiesRoleSplitObjectStateManifestSha256(before),
-      afterManifestSha: communitiesRoleSplitObjectStateManifestSha256(after),
-      changedCount: 1,
-      addedCount: 1,
-      removedCount: 0,
-      forbiddenTransitionCodes: [],
-    };
-    expect(assertCommunitiesRoleSplitAcceptancePass(candidate)).toEqual(candidate.comparison);
-  });
-
-  it('rejects duplicate, missing and self identity pairs', () => {
-    const duplicate = envelope();
-    duplicate.mapping.identityRelations = [
-      duplicate.mapping.identityRelations[0]!,
-      duplicate.mapping.identityRelations[0]!,
-      ...duplicate.mapping.identityRelations.slice(2),
-    ];
-    expectCode(
-      () => assertCommunitiesRoleSplitAcceptancePass(duplicate),
-      'IDENTITY_RELATION_SET_INVALID',
-    );
-
-    const missing = envelope();
-    missing.mapping.identityRelations = missing.mapping.identityRelations.slice(0, -1);
-    expectCode(
-      () => assertCommunitiesRoleSplitAcceptancePass(missing),
-      'IDENTITY_RELATION_SET_INVALID',
-    );
-
-    const self = envelope();
-    self.mapping.identityRelations = [
-      { ...self.mapping.identityRelations[0]!, right: 'RESTORE_OWNER' },
-      ...self.mapping.identityRelations.slice(1),
-    ];
-    expectCode(
-      () => assertCommunitiesRoleSplitAcceptancePass(self),
-      'IDENTITY_RELATION_SET_INVALID',
+  it('accepts only two independently pinned full INPUT_C snapshots', () => {
+    const target = fixture();
+    expect(assertCommunitiesRoleSplitAcceptancePass(target.envelope, target.pins)).toEqual(
+      target.envelope.comparison,
     );
   });
 
-  it('rejects a wrong required-distinct declaration or SAME result', () => {
-    const wrongRequirement = envelope();
-    wrongRequirement.mapping.identityRelations = wrongRequirement.mapping.identityRelations.map(
-      (relation, index) =>
-        index === 12 ? { ...relation, requirement: 'ALIAS_ALLOWED' } : relation,
+  it('accepts an exact per-object/per-field ACL delta observed in the after snapshot', () => {
+    const target = fixture();
+    const grant = target.envelope.grantPlan.find(
+      (item) => item.objectKind === 'relation' && item.action === 'PRESERVE',
+    )!;
+    const after = target.envelope.observedAfter.normalized.relations.find(
+      (item) => item.fieldKeySha256 === grant.fieldKeySha256,
+    )!;
+    after.valueSha256 = digest('observed-after-select');
+    grant.action = 'ADD';
+    grant.privileges = ['SELECT'];
+    grant.targetStateSha256 = after.valueSha256;
+    target.envelope.comparison.changedCount = 1;
+    repinAfter(target);
+    expect(
+      assertCommunitiesRoleSplitAcceptancePass(target.envelope, target.pins).changedCount,
+    ).toBe(1);
+  });
+
+  it('rejects a forged self-signed snapshot when independent pins stay unchanged', () => {
+    const target = fixture();
+    target.envelope.observedBefore.normalized.roles[0]!.valueSha256 = digest('forged');
+    target.envelope.observedBefore.manifestSha256 = communitiesRoleSplitInputCManifestSha256(
+      target.envelope.observedBefore,
     );
     expectCode(
-      () => assertCommunitiesRoleSplitAcceptancePass(wrongRequirement),
-      'IDENTITY_RELATION_SET_INVALID',
+      () => assertCommunitiesRoleSplitAcceptancePass(target.envelope, target.pins),
+      'INPUT_C_ARTIFACT_PIN_INVALID',
     );
+  });
 
-    const same = envelope();
-    same.mapping.identityRelations = same.mapping.identityRelations.map((relation, index) =>
-      index === 12 ? { ...relation, relation: 'SAME' } : relation,
-    );
-    expectCode(
-      () => assertCommunitiesRoleSplitAcceptancePass(same),
-      'REQUIRED_DISTINCT_NOT_OBSERVED',
-    );
-
-    for (const relation of ['UNKNOWN', 'UNOBSERVED'] as const) {
-      const unobserved = envelope();
-      unobserved.mapping.identityRelations[0] = {
-        ...unobserved.mapping.identityRelations[0]!,
-        relation,
-        provenanceSha256: null,
-      };
+  it('preserves roles, memberships, default/column ACLs, RLS and extensions from full snapshots', () => {
+    for (const [category, code] of [
+      ['roles', 'ROLE_CAPABILITY_FORBIDDEN'],
+      ['memberships', 'ROLE_MEMBERSHIP_FORBIDDEN'],
+      ['defaultAcls', 'DEFAULT_ACL_CHANGE_FORBIDDEN'],
+      ['columnAcls', 'COLUMN_GRANT_FORBIDDEN'],
+      ['rlsPolicies', 'RLS_POLICY_CHANGE_FORBIDDEN'],
+      ['extensions', 'EXTENSION_CHANGE_FORBIDDEN'],
+    ] as const) {
+      const target = fixture();
+      const records = target.envelope.observedAfter.normalized[category];
+      if (records.length === 0)
+        records.push(
+          record(
+            category,
+            'field',
+            category === 'memberships'
+              ? 'MEMBERSHIP'
+              : category === 'defaultAcls'
+                ? 'DEFAULT_ACL'
+                : 'METADATA',
+            digest('after'),
+          ),
+        );
+      else {
+        const target =
+          category === 'extensions'
+            ? records.find((item) => item.fieldKind === 'METADATA')!
+            : records[0]!;
+        target.valueSha256 = digest(`after:${category}`);
+      }
+      repinAfter(target);
       expectCode(
-        () => assertCommunitiesRoleSplitAcceptancePass(unobserved),
-        'IDENTITY_RELATION_NOT_OBSERVED',
+        () => assertCommunitiesRoleSplitAcceptancePass(target.envelope, target.pins),
+        records.length > target.envelope.observedBefore.normalized[category].length
+          ? 'OUT_OF_MANIFEST_CHANGE_FORBIDDEN'
+          : code,
       );
     }
-
-    const contradicted = envelope();
-    contradicted.mapping.identityRelations[0] = {
-      ...contradicted.mapping.identityRelations[0]!,
-      relation: 'SAME',
-    };
-    expectCode(
-      () => assertCommunitiesRoleSplitAcceptancePass(contradicted),
-      'IDENTITY_RELATION_EVIDENCE_MISMATCH',
-    );
   });
 
-  it('makes PASS impossible with unknown evidence, blockers, anomalies or incomplete categories', () => {
-    const unknown = envelope();
-    unknown.inputC.normalized.relations[0] = {
-      ...unknown.inputC.normalized.relations[0]!,
-      observationState: 'UNKNOWN',
-      valueSha256: null,
-      provenanceSha256: null,
-    };
-    expectCode(
-      () => assertCommunitiesRoleSplitAcceptancePass(unknown),
-      'NORMALIZED_RECORD_NOT_OBSERVED',
-    );
-
-    const blocker = envelope();
-    blocker.decision.blockerCodes = ['INPUT_C_BLOCKED'];
-    expectCode(() => assertCommunitiesRoleSplitAcceptancePass(blocker), 'DECISION_NOT_PASS');
-
-    const anomaly = envelope();
-    anomaly.inputC.anomalies = [
-      {
-        code: 'PUBLIC_GRANT',
-        canonicalKeySha256: digest('key'),
-        evidenceSha256: digest('evidence'),
-      },
-    ];
-    expectCode(() => assertCommunitiesRoleSplitAcceptancePass(anomaly), 'INPUT_C_ANOMALY_PRESENT');
-
-    const incomplete = envelope();
-    delete (incomplete.inputC.normalized as Partial<typeof incomplete.inputC.normalized>)
-      .extensions;
-    expectCode(
-      () => assertCommunitiesRoleSplitAcceptancePass(incomplete),
-      'INPUT_C_BINDING_INVALID',
-    );
+  it('does not infer a forbidden column grant from a null column ACL observation', () => {
+    const target = fixture();
+    expect(target.envelope.observedBefore.normalized.columnAcls).toHaveLength(1);
+    expect(
+      assertCommunitiesRoleSplitAcceptancePass(target.envelope, target.pins).changedCount,
+    ).toBe(0);
   });
 
-  it('rejects an empty, partial or out-of-manifest grant plan', () => {
-    const empty = envelope();
-    empty.grantPlan = [];
-    expectCode(() => assertCommunitiesRoleSplitAcceptancePass(empty), 'GRANT_PLAN_SET_INVALID');
-
-    const partial = envelope();
-    partial.grantPlan = partial.grantPlan.slice(1);
-    expectCode(() => assertCommunitiesRoleSplitAcceptancePass(partial), 'GRANT_PLAN_SET_INVALID');
-
-    const extra = envelope();
-    extra.grantPlan = [
-      ...extra.grantPlan.slice(0, -1),
-      { ...extra.grantPlan.at(-1)!, canonicalKeySha256: digest('not-in-manifest') },
-    ];
-    expectCode(() => assertCommunitiesRoleSplitAcceptancePass(extra), 'GRANT_PLAN_SET_INVALID');
-  });
-
-  it('rejects wildcard, ALL, PUBLIC, grant option and runtime CREATE', () => {
-    for (const privilege of ['*', 'ALL']) {
-      const candidate = envelope();
-      candidate.grantPlan[2] = {
-        ...candidate.grantPlan[2]!,
-        action: 'ADD',
-        privileges: [
-          privilege,
-        ] as unknown as DeepMutable<CommunitiesRoleSplitGrantDecision>['privileges'],
-      };
-      expectCode(
-        () => assertCommunitiesRoleSplitAcceptancePass(candidate),
-        'GRANT_PRIVILEGE_SET_INVALID',
-      );
-    }
-
-    const publicGrant = envelope();
-    publicGrant.grantPlan[2] = {
-      ...publicGrant.grantPlan[2]!,
-      granteeCategory: 'PUBLIC' as never,
-    };
+  it('inherits ownership and CREATE prohibitions through SAME equivalence classes', () => {
+    const ownerAlias = fixture();
+    ownerAlias.envelope.mapping.FUTURE_RUNTIME.roleName = structuredClone(
+      ownerAlias.envelope.mapping.SHARED_OWNER.roleName,
+    );
+    ownerAlias.envelope.mapping.FUTURE_RUNTIME.roleOid = structuredClone(
+      ownerAlias.envelope.mapping.SHARED_OWNER.roleOid,
+    );
+    const relation = ownerAlias.envelope.mapping.identityRelations.find(
+      (item) => item.left === 'SHARED_OWNER' && item.right === 'FUTURE_RUNTIME',
+    )!;
+    relation.relation = 'SAME';
     expectCode(
-      () => assertCommunitiesRoleSplitAcceptancePass(publicGrant),
-      'GRANTEE_CATEGORY_FORBIDDEN',
+      () => assertCommunitiesRoleSplitAcceptancePass(ownerAlias.envelope, ownerAlias.pins),
+      'OWNERSHIP_PREIMAGE_FORBIDDEN',
     );
 
-    const grantOption = envelope();
-    grantOption.grantPlan[2] = { ...grantOption.grantPlan[2]!, grantOption: true as false };
-    expectCode(() => assertCommunitiesRoleSplitAcceptancePass(grantOption), 'GRANT_PLAN_INVALID');
-
-    const runtimeCreate = envelope();
-    const schemaIndex = runtimeCreate.grantPlan.findIndex((row) => row.objectKind === 'schema');
-    runtimeCreate.grantPlan[schemaIndex] = {
-      ...runtimeCreate.grantPlan[schemaIndex]!,
-      action: 'ADD',
-      privileges: ['CREATE'],
-    };
+    const createAlias = fixture();
+    createAlias.envelope.mapping.RESTORE_OWNER.roleName = structuredClone(
+      createAlias.envelope.mapping.FUTURE_RUNTIME.roleName,
+    );
+    createAlias.envelope.mapping.RESTORE_OWNER.roleOid = structuredClone(
+      createAlias.envelope.mapping.FUTURE_RUNTIME.roleOid,
+    );
+    const same = createAlias.envelope.mapping.identityRelations.find(
+      (item) => item.left === 'RESTORE_OWNER' && item.right === 'FUTURE_RUNTIME',
+    )!;
+    same.relation = 'SAME';
+    const schema = createAlias.envelope.grantPlan.find((item) => item.objectKind === 'schema')!;
+    const after = createAlias.envelope.observedAfter.normalized.schemas.find(
+      (item) => item.fieldKeySha256 === schema.fieldKeySha256,
+    )!;
+    after.valueSha256 = digest('create-after');
+    schema.action = 'ADD';
+    schema.granteeCategory = 'RESTORE_OWNER';
+    schema.privileges = ['CREATE'];
+    schema.targetStateSha256 = after.valueSha256;
+    createAlias.envelope.comparison.changedCount = 1;
+    repinAfter(createAlias);
     expectCode(
-      () => assertCommunitiesRoleSplitAcceptancePass(runtimeCreate),
+      () => assertCommunitiesRoleSplitAcceptancePass(createAlias.envelope, createAlias.pins),
       'RUNTIME_CREATE_FORBIDDEN',
     );
   });
 
-  it('recomputes target state and comparison instead of accepting arbitrary hashes', () => {
-    const inputManifest = envelope();
-    inputManifest.inputC.manifestSha256 = digest('arbitrary-input-manifest');
+  it('rejects missing mapping pins, mixed-owner evidence and partial grant plans', () => {
+    const mappingPin = fixture();
+    mappingPin.pins.mappingDigest = digest('wrong');
     expectCode(
-      () => assertCommunitiesRoleSplitAcceptancePass(inputManifest),
-      'INPUT_C_MANIFEST_INVALID',
+      () => assertCommunitiesRoleSplitAcceptancePass(mappingPin.envelope, mappingPin.pins),
+      'INPUT_C_BINDING_INVALID',
     );
-
-    const target = envelope();
-    target.grantPlan[0] = {
-      ...target.grantPlan[0]!,
-      targetStateSha256: digest('arbitrary-target'),
-    };
+    const mixed = fixture();
+    mixed.envelope.observedBefore.normalized.relations.push({
+      ...mixed.envelope.observedBefore.normalized.relations.find(
+        (item) => item.fieldKind === 'OWNER',
+      )!,
+      fieldKeySha256: digest('second-owner'),
+    });
+    mixed.envelope.observedBefore.normalized.relations.sort((a, b) =>
+      `${a.objectKeySha256}|${a.fieldKeySha256}`.localeCompare(
+        `${b.objectKeySha256}|${b.fieldKeySha256}`,
+      ),
+    );
+    mixed.envelope.observedBefore.manifestSha256 = communitiesRoleSplitInputCManifestSha256(
+      mixed.envelope.observedBefore,
+    );
+    mixed.pins.beforeManifestSha256 = mixed.envelope.observedBefore.manifestSha256;
+    mixed.pins.beforeArtifactSha256 = communitiesRoleSplitInputCArtifactSha256(
+      mixed.envelope.observedBefore,
+    );
     expectCode(
-      () => assertCommunitiesRoleSplitAcceptancePass(target),
-      'GRANT_TARGET_STATE_INVALID',
+      () => assertCommunitiesRoleSplitAcceptancePass(mixed.envelope, mixed.pins),
+      'MIXED_OWNER_FORBIDDEN',
     );
+    const partial = fixture();
+    partial.envelope.grantPlan.pop();
+    expectCode(
+      () => assertCommunitiesRoleSplitAcceptancePass(partial.envelope, partial.pins),
+      'GRANT_PLAN_SET_INVALID',
+    );
+  });
 
-    const comparison = envelope();
-    comparison.comparison.afterManifestSha = digest('arbitrary-comparison');
-    expectCode(() => assertCommunitiesRoleSplitAcceptancePass(comparison), 'COMPARISON_MISMATCH');
+  it('rejects wildcard/ALL/PUBLIC/grant option/third-party and out-of-snapshot plan claims', () => {
+    for (const privilege of ['*', 'ALL']) {
+      const target = fixture();
+      target.envelope.grantPlan[0]!.privileges = [privilege as never];
+      expectCode(
+        () => assertCommunitiesRoleSplitAcceptancePass(target.envelope, target.pins),
+        'GRANT_PRIVILEGE_SET_INVALID',
+      );
+    }
+    const publicGrant = fixture();
+    publicGrant.envelope.grantPlan[0]!.granteeCategory = 'PUBLIC' as never;
+    expectCode(
+      () => assertCommunitiesRoleSplitAcceptancePass(publicGrant.envelope, publicGrant.pins),
+      'GRANT_PLAN_INVALID',
+    );
+    const option = fixture();
+    option.envelope.grantPlan[0]!.grantOption = true as false;
+    expectCode(
+      () => assertCommunitiesRoleSplitAcceptancePass(option.envelope, option.pins),
+      'GRANT_PLAN_INVALID',
+    );
+    const fake = fixture();
+    fake.envelope.grantPlan[0]!.objectKeySha256 = digest('outside');
+    expectCode(
+      () => assertCommunitiesRoleSplitAcceptancePass(fake.envelope, fake.pins),
+      'GRANT_PLAN_SET_INVALID',
+    );
   });
 });
