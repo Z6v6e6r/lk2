@@ -172,8 +172,7 @@ export function createCupPlayerLevelProjectionRepository(
           client,
           `select player_id, sport_code, source_revision, request_hash
              from eligibility.cup_player_level_projection_events
-            where tenant_id = $1 and source_event_id = $2
-            for update`,
+            where tenant_id = $1 and source_event_id = $2`,
           [input.tenantId, input.sourceEventId],
         );
         if (
@@ -202,8 +201,7 @@ export function createCupPlayerLevelProjectionRepository(
               and scale_version = (
                 select max(scale_version) from eligibility.canonical_levels
                  where tenant_id = $1 and sport_code = $2 and active
-              )
-            for update`,
+              )`,
           [input.tenantId, input.sportCode, input.levelCode],
         );
         if (!level) return { outcome: 'level_not_found' };

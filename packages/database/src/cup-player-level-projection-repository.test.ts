@@ -100,6 +100,35 @@ describe('CUP player level projection repository', () => {
           values?.[0] === `player-level:${tenantId}:${playerId}:PADEL`,
       ),
     ).toBe(true);
+    expect(
+      (query.mock.calls as unknown as Array<[string, readonly unknown[] | undefined]>).some(
+        ([text, values]) =>
+          text.includes('pg_advisory_xact_lock') &&
+          values?.[0] === `cup-level-event:${tenantId}:${input().sourceEventId}`,
+      ),
+    ).toBe(true);
+    expect(
+      (query.mock.calls as unknown as Array<[string, readonly unknown[] | undefined]>).some(
+        ([text, values]) =>
+          text.includes('pg_advisory_xact_lock') &&
+          values?.[0] === `cup-level:${tenantId}:${input().externalClientId}:PADEL`,
+      ),
+    ).toBe(true);
+    const executedStatements = query.mock.calls.map(([text]) => text);
+    const eventRead = executedStatements.find((statement) =>
+      statement.includes('from eligibility.cup_player_level_projection_events'),
+    );
+    const canonicalRead = executedStatements.find((statement) =>
+      statement.includes('from eligibility.canonical_levels'),
+    );
+    const currentProjectionRead = executedStatements.find((statement) =>
+      statement.includes('from eligibility.cup_player_level_projections'),
+    );
+    expect(eventRead).toBeDefined();
+    expect(eventRead).not.toMatch(/for update/i);
+    expect(canonicalRead).toBeDefined();
+    expect(canonicalRead).not.toMatch(/for update/i);
+    expect(currentProjectionRead).toMatch(/for update/i);
   });
 
   it('accepts a newer full snapshot when coalescing skipped intermediate revisions', async () => {
