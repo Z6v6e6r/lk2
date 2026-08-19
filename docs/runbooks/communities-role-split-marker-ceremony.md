@@ -83,8 +83,32 @@ migration, deployment, import, writes or feature activation.
 
 The separate INPUT_C producer records catalog-derived structured identities and semantic
 explicit/effective ACL entries, including redacted grantor evidence and occurrence identity. Its
-before/after evaluator is review evidence only; it has not been run against a real PostgreSQL 16
-clone and does not authorize the ceremony or any role/ACL mutation.
+before/after evaluator is review evidence only and does not authorize the ceremony or any role/ACL
+mutation.
+
+## Local disposable PostgreSQL 16 gate
+
+`npm run db:communities-role-split:pg16:verify` owns one uniquely named `postgres:16-alpine`
+container, one dedicated labelled bridge network and a random loopback port. It uses a fresh
+non-logged SCRAM credential, refuses to pull an image, does not join an application network and
+removes only resources whose exact ID, name and disposable label match. The runner creates a
+synthetic source database and a same-cluster template clone, then exercises real PG16
+catalog/OID/owner/system/ledger bindings, exact marker readback, receipt restart rejection,
+deterministic twelve-category INPUT_C production and a no-change acceptance evaluation. Quoted
+identifiers, overloaded functions, a sequence, a type, FORCE RLS, a named policy and a trusted
+extension member are present in the synthetic catalog.
+
+The local gate found and now regresses two real catalog-wire failures: PostgreSQL `name` union type
+resolution truncating ACL JSON, and `aclexplode` rejecting a dimensionless empty ACL array.
+Extension-managed objects are represented by the protected `extensions` category instead of being
+offered a second time to the ownership/ACL plan; implicit relation and array types are likewise not
+independent grant targets.
+
+This is not archive-restore evidence. The clone uses `CREATE DATABASE ... TEMPLATE ...`, the
+injected restore callback performs no `pg_restore`, and the marker/evidence used by INPUT_C is a
+synthetic local fixture. It does not prove the production CLI connection path, independent artifact
+custody, response-loss handling or a cluster-wide DDL fence. It creates no staging/production
+database, role, key, request or inventory.
 
 ## Required before installation or execution
 
@@ -93,11 +117,12 @@ clone and does not authorize the ceremony or any role/ACL mutation.
    installation or execution authority.
 2. Complete the concrete ownership-and-ACL-preserving archive restore callback. Do not reuse the
    generic `--no-owner --no-acl` verifier.
-3. Run mandatory PostgreSQL 16 integration tests for owner/ACL/RLS preservation, exact comment
-   readback, response loss, cleanup failure, evidence failure and idempotent rerun.
-4. Execute the structured `pg_catalog.aclexplode` INPUT_C producer against a separately authorized
-   disposable clone and independently pin the redacted before/after artifacts; mock rows are not
-   catalog proof.
+3. Complete the remaining PostgreSQL 16 archive-restore tests for owner/ACL preservation, response
+   loss, cleanup failure and evidence failure. The local template-clone gate proves catalog/RLS,
+   exact comment readback and restart behavior but is not `pg_restore` evidence.
+4. Execute the structured `pg_catalog.aclexplode` INPUT_C producer against a separately authorized,
+   independently sourced clean clone and independently pin the redacted before/after artifacts. The
+   local synthetic producer/evaluator gate is catalog proof, but not trusted staging inventory.
 5. Complete independent security and migration review of the real adapter and failure matrix.
 6. Obtain separate approvals for installation, forced-command key, one ceremony run and any later
    post-marker cleanup.

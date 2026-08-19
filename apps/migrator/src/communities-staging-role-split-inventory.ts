@@ -360,7 +360,8 @@ select ${objectIdentity}::text object_identity,
          order by entry.grantee::text,entry.grantor::text,entry.privilege_type,entry.is_grantable)
          filter (where entry.grantee is not null),'[]'::jsonb)::text value,
        null::text owner_oid
-  from (select 1) seed left join lateral pg_catalog.aclexplode(coalesce(${acl},'{}'::aclitem[])) entry on true
+  from (select 1) seed left join lateral pg_catalog.aclexplode(
+    case when pg_catalog.cardinality(${acl})>0 then ${acl} else null end) entry on true
 union all
 select ${objectIdentity}::text object_identity,
        pg_catalog.jsonb_build_array('effectiveAcl')::text field_identity,
@@ -371,7 +372,9 @@ select ${objectIdentity}::text object_identity,
          order by entry.grantee::text,entry.grantor::text,entry.privilege_type,entry.is_grantable)
          filter (where entry.grantee is not null),'[]'::jsonb)::text value,
        null::text owner_oid
-  from pg_catalog.aclexplode(coalesce(${acl},pg_catalog.acldefault('${code}',${owner}))) entry`;
+  from (select 1) seed left join lateral pg_catalog.aclexplode(
+    case when ${acl} is null then pg_catalog.acldefault('${code}',${owner})
+         when pg_catalog.cardinality(${acl})>0 then ${acl} else null end) entry on true`;
 
 const categorySql: Readonly<Record<CategoryName, string>> = {
   roles: `/* communities-role-split-input-c:roles */
@@ -390,7 +393,7 @@ select pg_catalog.jsonb_build_array('membership',granted.rolname,member.rolname)
   databaseAcl: `/* communities-role-split-input-c:databaseAcl */
 select pg_catalog.jsonb_build_array('database',database.datname)::text object_identity,
  pg_catalog.jsonb_build_array('owner')::text field_identity,'OWNER'::text field_kind,
- owner.rolname value,owner.oid::text owner_oid from pg_catalog.pg_database database
+ owner.rolname::text value,owner.oid::text owner_oid from pg_catalog.pg_database database
 join pg_catalog.pg_roles owner on owner.oid=database.datdba where database.datname=current_database()
 union all
 select rows.* from pg_catalog.pg_database database
@@ -400,7 +403,7 @@ where database.datname=current_database()`,
 with relevant(name) as (values ${relevantSchemas})
 select pg_catalog.jsonb_build_array('schema',namespace.nspname)::text object_identity,
  pg_catalog.jsonb_build_array('owner')::text field_identity,'OWNER'::text field_kind,
- owner.rolname value,owner.oid::text owner_oid
+ owner.rolname::text value,owner.oid::text owner_oid
  from pg_catalog.pg_namespace namespace join pg_catalog.pg_roles owner on owner.oid=namespace.nspowner
  where namespace.nspname in (select name from relevant)
 union all
@@ -421,10 +424,12 @@ select pg_catalog.jsonb_build_array('defaultAcl',owner.rolname,namespace.nspname
   relations: `/* communities-role-split-input-c:relations */
 with relevant(name) as (values ${relevantSchemas}), base as (
  select namespace.nspname, relation.* from pg_catalog.pg_class relation join pg_catalog.pg_namespace namespace on namespace.oid=relation.relnamespace
- where namespace.nspname in (select name from relevant) and relation.relkind in ('r','p','v','m','f'))
+ where namespace.nspname in (select name from relevant) and relation.relkind in ('r','p','v','m','f')
+ and not exists (select 1 from pg_catalog.pg_depend dependency where dependency.classid='pg_catalog.pg_class'::pg_catalog.regclass
+  and dependency.objid=relation.oid and dependency.objsubid=0 and dependency.deptype='e'))
 select pg_catalog.jsonb_build_array('relation',nspname,relname,relkind)::text object_identity,
  pg_catalog.jsonb_build_array('owner')::text field_identity,'OWNER'::text field_kind,
- owner.rolname value,owner.oid::text owner_oid from base
+ owner.rolname::text value,owner.oid::text owner_oid from base
 join pg_catalog.pg_roles owner on owner.oid=base.relowner
 union all select pg_catalog.jsonb_build_array('relation',nspname,relname,relkind)::text,
  pg_catalog.jsonb_build_array('metadata')::text,'METADATA'::text,
@@ -444,9 +449,12 @@ select pg_catalog.jsonb_build_array('column',namespace.nspname,relation.relname,
  from pg_catalog.pg_attribute attribute join pg_catalog.pg_class relation on relation.oid=attribute.attrelid
  join pg_catalog.pg_namespace namespace on namespace.oid=relation.relnamespace
  cross join (values ('explicitAcl','ACL_EXPLICIT'),('effectiveAcl','ACL_EFFECTIVE')) kind(field_name,field_kind)
- left join lateral pg_catalog.aclexplode(coalesce(attribute.attacl,'{}'::aclitem[])) entry on true
+ left join lateral pg_catalog.aclexplode(
+  case when pg_catalog.cardinality(attribute.attacl)>0 then attribute.attacl else null end) entry on true
  where namespace.nspname in (select name from relevant) and relation.relkind in ('r','p','v','m','f')
  and attribute.attnum>0 and not attribute.attisdropped
+ and not exists (select 1 from pg_catalog.pg_depend dependency where dependency.classid='pg_catalog.pg_class'::pg_catalog.regclass
+  and dependency.objid=relation.oid and dependency.objsubid=0 and dependency.deptype='e')
  group by namespace.nspname,relation.relname,relation.relkind,attribute.attname,attribute.attnum,kind.field_name,kind.field_kind`,
   rlsPolicies: `/* communities-role-split-input-c:rlsPolicies */
 with relevant(name) as (values ${relevantSchemas})
@@ -455,20 +463,26 @@ select pg_catalog.jsonb_build_array('relation',namespace.nspname,relation.relnam
  pg_catalog.jsonb_build_array(relation.relrowsecurity,relation.relforcerowsecurity)::text value,null::text owner_oid
  from pg_catalog.pg_class relation join pg_catalog.pg_namespace namespace on namespace.oid=relation.relnamespace
  where namespace.nspname in (select name from relevant) and relation.relkind in ('r','p')
+ and not exists (select 1 from pg_catalog.pg_depend dependency where dependency.classid='pg_catalog.pg_class'::pg_catalog.regclass
+  and dependency.objid=relation.oid and dependency.objsubid=0 and dependency.deptype='e')
 union all select pg_catalog.jsonb_build_array('relation',policy.schemaname,policy.tablename,relation.relkind)::text,
  pg_catalog.jsonb_build_array('policy',policy.policyname)::text,'POLICY'::text,
  pg_catalog.jsonb_build_array(policy.permissive,policy.roles,policy.cmd,policy.qual,policy.with_check)::text,null::text
  from pg_catalog.pg_policies policy join pg_catalog.pg_namespace namespace on namespace.nspname=policy.schemaname
  join pg_catalog.pg_class relation on relation.relnamespace=namespace.oid and relation.relname=policy.tablename
- where policy.schemaname in (select name from relevant)`,
+ where policy.schemaname in (select name from relevant)
+ and not exists (select 1 from pg_catalog.pg_depend dependency where dependency.classid='pg_catalog.pg_class'::pg_catalog.regclass
+  and dependency.objid=relation.oid and dependency.objsubid=0 and dependency.deptype='e')`,
   sequences: `/* communities-role-split-input-c:sequences */
 with relevant(name) as (values ${relevantSchemas}), base as (
  select namespace.nspname, relation.*, sequence.* from pg_catalog.pg_class relation
  join pg_catalog.pg_namespace namespace on namespace.oid=relation.relnamespace
- join pg_catalog.pg_sequence sequence on sequence.seqrelid=relation.oid where namespace.nspname in (select name from relevant))
+ join pg_catalog.pg_sequence sequence on sequence.seqrelid=relation.oid where namespace.nspname in (select name from relevant)
+ and not exists (select 1 from pg_catalog.pg_depend dependency where dependency.classid='pg_catalog.pg_class'::pg_catalog.regclass
+  and dependency.objid=relation.oid and dependency.objsubid=0 and dependency.deptype='e'))
 select pg_catalog.jsonb_build_array('sequence',nspname,relname)::text object_identity,
  pg_catalog.jsonb_build_array('owner')::text field_identity,'OWNER'::text field_kind,
- owner.rolname value,owner.oid::text owner_oid from base
+ owner.rolname::text value,owner.oid::text owner_oid from base
 join pg_catalog.pg_roles owner on owner.oid=base.relowner
 union all select pg_catalog.jsonb_build_array('sequence',nspname,relname)::text,
  pg_catalog.jsonb_build_array('metadata')::text,'METADATA'::text,
@@ -478,10 +492,12 @@ union all select rows.* from base cross join lateral
   functions: `/* communities-role-split-input-c:functions */
 with relevant(name) as (values ${relevantSchemas}), base as (
  select namespace.nspname, routine.* from pg_catalog.pg_proc routine join pg_catalog.pg_namespace namespace on namespace.oid=routine.pronamespace
- where namespace.nspname in (select name from relevant))
+ where namespace.nspname in (select name from relevant)
+ and not exists (select 1 from pg_catalog.pg_depend dependency where dependency.classid='pg_catalog.pg_proc'::pg_catalog.regclass
+  and dependency.objid=routine.oid and dependency.objsubid=0 and dependency.deptype='e'))
 select pg_catalog.jsonb_build_array('function',nspname,proname,pg_catalog.pg_get_function_identity_arguments(base.oid))::text object_identity,
  pg_catalog.jsonb_build_array('owner')::text field_identity,'OWNER'::text field_kind,
- owner.rolname value,owner.oid::text owner_oid from base join pg_catalog.pg_roles owner on owner.oid=base.proowner
+ owner.rolname::text value,owner.oid::text owner_oid from base join pg_catalog.pg_roles owner on owner.oid=base.proowner
 union all select pg_catalog.jsonb_build_array('function',nspname,proname,pg_catalog.pg_get_function_identity_arguments(oid))::text,
  pg_catalog.jsonb_build_array('metadata')::text,'METADATA'::text,
  pg_catalog.jsonb_build_array(prokind,prosecdef,proleakproof,provolatile,proparallel,proconfig)::text,null::text from base
@@ -490,10 +506,13 @@ union all select rows.* from base cross join lateral
   types: `/* communities-role-split-input-c:types */
 with relevant(name) as (values ${relevantSchemas}), base as (
  select namespace.nspname, object_type.* from pg_catalog.pg_type object_type join pg_catalog.pg_namespace namespace on namespace.oid=object_type.typnamespace
- where namespace.nspname in (select name from relevant))
+ where namespace.nspname in (select name from relevant) and object_type.typelem=0
+ and (object_type.typrelid=0 or exists (select 1 from pg_catalog.pg_class relation where relation.oid=object_type.typrelid and relation.relkind='c'))
+ and not exists (select 1 from pg_catalog.pg_depend dependency where dependency.classid='pg_catalog.pg_type'::pg_catalog.regclass
+  and dependency.objid=object_type.oid and dependency.objsubid=0 and dependency.deptype='e'))
 select pg_catalog.jsonb_build_array('type',nspname,typname)::text object_identity,
  pg_catalog.jsonb_build_array('owner')::text field_identity,'OWNER'::text field_kind,
- owner.rolname value,owner.oid::text owner_oid from base
+ owner.rolname::text value,owner.oid::text owner_oid from base
 join pg_catalog.pg_roles owner on owner.oid=base.typowner
 union all select pg_catalog.jsonb_build_array('type',nspname,typname)::text,
  pg_catalog.jsonb_build_array('metadata')::text,'METADATA'::text,
@@ -501,21 +520,65 @@ union all select pg_catalog.jsonb_build_array('type',nspname,typname)::text,
 union all select rows.* from base cross join lateral
  (${aclRows("pg_catalog.jsonb_build_array('type',base.nspname,base.typname)", 'base.typacl', 'base.typowner', 'T')}) rows`,
   extensions: `/* communities-role-split-input-c:extensions */
+with relevant(name) as (values ${relevantSchemas}), base as (
+ select extension.* from pg_catalog.pg_extension extension join pg_catalog.pg_namespace namespace on namespace.oid=extension.extnamespace
+ where namespace.nspname in (select name from relevant)
+ or exists (
+  select 1 from pg_catalog.pg_depend dependency
+  where dependency.refclassid='pg_catalog.pg_extension'::pg_catalog.regclass and dependency.refobjid=extension.oid and dependency.deptype='e'
+  and (
+   (dependency.classid='pg_catalog.pg_class'::pg_catalog.regclass and exists (select 1 from pg_catalog.pg_class relation join pg_catalog.pg_namespace member_namespace on member_namespace.oid=relation.relnamespace where relation.oid=dependency.objid and member_namespace.nspname in (select name from relevant)))
+   or (dependency.classid='pg_catalog.pg_proc'::pg_catalog.regclass and exists (select 1 from pg_catalog.pg_proc routine join pg_catalog.pg_namespace member_namespace on member_namespace.oid=routine.pronamespace where routine.oid=dependency.objid and member_namespace.nspname in (select name from relevant)))
+   or (dependency.classid='pg_catalog.pg_type'::pg_catalog.regclass and exists (select 1 from pg_catalog.pg_type object_type join pg_catalog.pg_namespace member_namespace on member_namespace.oid=object_type.typnamespace where object_type.oid=dependency.objid and member_namespace.nspname in (select name from relevant)))
+   or (dependency.classid='pg_catalog.pg_namespace'::pg_catalog.regclass and exists (select 1 from pg_catalog.pg_namespace member_namespace where member_namespace.oid=dependency.objid and member_namespace.nspname in (select name from relevant)))
+   or (dependency.classid='pg_catalog.pg_operator'::pg_catalog.regclass and exists (select 1 from pg_catalog.pg_operator operator join pg_catalog.pg_namespace member_namespace on member_namespace.oid=operator.oprnamespace where operator.oid=dependency.objid and member_namespace.nspname in (select name from relevant)))
+   or (dependency.classid='pg_catalog.pg_opclass'::pg_catalog.regclass and exists (select 1 from pg_catalog.pg_opclass operator_class join pg_catalog.pg_namespace member_namespace on member_namespace.oid=operator_class.opcnamespace where operator_class.oid=dependency.objid and member_namespace.nspname in (select name from relevant)))
+   or (dependency.classid='pg_catalog.pg_opfamily'::pg_catalog.regclass and exists (select 1 from pg_catalog.pg_opfamily operator_family join pg_catalog.pg_namespace member_namespace on member_namespace.oid=operator_family.opfnamespace where operator_family.oid=dependency.objid and member_namespace.nspname in (select name from relevant)))
+  )))
 select pg_catalog.jsonb_build_array('extension',extension.extname)::text object_identity,
  pg_catalog.jsonb_build_array('owner')::text field_identity,'OWNER'::text field_kind,
- owner.rolname value,owner.oid::text owner_oid
- from pg_catalog.pg_extension extension join pg_catalog.pg_roles owner on owner.oid=extension.extowner
+ owner.rolname::text value,owner.oid::text owner_oid
+ from base extension join pg_catalog.pg_roles owner on owner.oid=extension.extowner
 union all
 select pg_catalog.jsonb_build_array('extension',extension.extname)::text,
  pg_catalog.jsonb_build_array('metadata')::text,'METADATA'::text,
  pg_catalog.jsonb_build_array(extension.extversion,extension.extnamespace::text,extension.extrelocatable)::text,null::text
- from pg_catalog.pg_extension extension
+ from base extension
 union all
 select pg_catalog.jsonb_build_array('extension',extension.extname)::text,
  pg_catalog.jsonb_build_array('member',dependency.classid::text,dependency.objid::text,dependency.objsubid)::text,
  'EXTENSION_MEMBER'::text,
- pg_catalog.jsonb_build_array(pg_catalog.pg_describe_object(dependency.classid,dependency.objid,dependency.objsubid),dependency.deptype)::text,null::text
- from pg_catalog.pg_depend dependency join pg_catalog.pg_extension extension on extension.oid=dependency.refobjid
+ pg_catalog.jsonb_build_array(
+  pg_catalog.pg_describe_object(dependency.classid,dependency.objid,dependency.objsubid),dependency.deptype,
+  case
+   when dependency.classid='pg_catalog.pg_class'::pg_catalog.regclass then (
+    select pg_catalog.jsonb_build_object(
+     'kind','relation','ownerOid',relation.relowner::text,'acl',coalesce(relation.relacl::text,''),
+     'rlsEnabled',relation.relrowsecurity,'rlsForced',relation.relforcerowsecurity,
+     'columnAcl',coalesce((select pg_catalog.jsonb_agg(pg_catalog.jsonb_build_array(attribute.attnum,attribute.attname,coalesce(attribute.attacl::text,'')) order by attribute.attnum) from pg_catalog.pg_attribute attribute where attribute.attrelid=relation.oid and attribute.attnum>0 and not attribute.attisdropped),'[]'::pg_catalog.jsonb),
+     'policies',coalesce((select pg_catalog.jsonb_agg(pg_catalog.jsonb_build_array(policy.polname,policy.polpermissive,policy.polroles,policy.polcmd,pg_catalog.pg_get_expr(policy.polqual,policy.polrelid),pg_catalog.pg_get_expr(policy.polwithcheck,policy.polrelid)) order by policy.polname) from pg_catalog.pg_policy policy where policy.polrelid=relation.oid),'[]'::pg_catalog.jsonb))
+    from pg_catalog.pg_class relation where relation.oid=dependency.objid)
+   when dependency.classid='pg_catalog.pg_proc'::pg_catalog.regclass then (
+    select pg_catalog.jsonb_build_object('kind','function','ownerOid',routine.proowner::text,'acl',coalesce(routine.proacl::text,''),'securityDefiner',routine.prosecdef,'config',routine.proconfig)
+    from pg_catalog.pg_proc routine where routine.oid=dependency.objid)
+   when dependency.classid='pg_catalog.pg_type'::pg_catalog.regclass then (
+    select pg_catalog.jsonb_build_object('kind','type','ownerOid',object_type.typowner::text,'acl',coalesce(object_type.typacl::text,''),'typeKind',object_type.typtype,'category',object_type.typcategory)
+    from pg_catalog.pg_type object_type where object_type.oid=dependency.objid)
+   when dependency.classid='pg_catalog.pg_operator'::pg_catalog.regclass then (
+    select pg_catalog.jsonb_build_object('kind','operator','ownerOid',operator.oprowner::text)
+    from pg_catalog.pg_operator operator where operator.oid=dependency.objid)
+   when dependency.classid='pg_catalog.pg_opclass'::pg_catalog.regclass then (
+    select pg_catalog.jsonb_build_object('kind','operatorClass','ownerOid',operator_class.opcowner::text)
+    from pg_catalog.pg_opclass operator_class where operator_class.oid=dependency.objid)
+   when dependency.classid='pg_catalog.pg_opfamily'::pg_catalog.regclass then (
+    select pg_catalog.jsonb_build_object('kind','operatorFamily','ownerOid',operator_family.opfowner::text)
+    from pg_catalog.pg_opfamily operator_family where operator_family.oid=dependency.objid)
+   when dependency.classid='pg_catalog.pg_namespace'::pg_catalog.regclass then (
+    select pg_catalog.jsonb_build_object('kind','schema','ownerOid',member_namespace.nspowner::text,'acl',coalesce(member_namespace.nspacl::text,''))
+    from pg_catalog.pg_namespace member_namespace where member_namespace.oid=dependency.objid)
+   else pg_catalog.jsonb_build_object('kind','other')
+  end)::text,null::text
+ from pg_catalog.pg_depend dependency join base extension on extension.oid=dependency.refobjid
  where dependency.refclassid='pg_catalog.pg_extension'::pg_catalog.regclass and dependency.deptype='e'`,
 };
 
@@ -532,14 +595,50 @@ dangerous as (select count(*)::text count from pg_catalog.pg_roles role join map
 memberships as (select count(*)::text count from pg_catalog.pg_auth_members membership
  join pg_catalog.pg_roles granted on granted.oid=membership.roleid join pg_catalog.pg_roles member on member.oid=membership.member
  where granted.oid in (select role_oid from mapped) or member.oid in (select role_oid from mapped)),
-relevant(name) as (values ${relevantSchemas}), acl(owner_oid,acl_value,source) as (
+relevant(name) as (values ${relevantSchemas}), relevant_extensions as (
+ select extension.* from pg_catalog.pg_extension extension join pg_catalog.pg_namespace namespace on namespace.oid=extension.extnamespace
+ where namespace.nspname in (select name from relevant)
+ or exists (
+  select 1 from pg_catalog.pg_depend dependency
+  where dependency.refclassid='pg_catalog.pg_extension'::pg_catalog.regclass and dependency.refobjid=extension.oid and dependency.deptype='e'
+  and (
+   (dependency.classid='pg_catalog.pg_class'::pg_catalog.regclass and exists (select 1 from pg_catalog.pg_class relation join pg_catalog.pg_namespace member_namespace on member_namespace.oid=relation.relnamespace where relation.oid=dependency.objid and member_namespace.nspname in (select name from relevant)))
+   or (dependency.classid='pg_catalog.pg_proc'::pg_catalog.regclass and exists (select 1 from pg_catalog.pg_proc routine join pg_catalog.pg_namespace member_namespace on member_namespace.oid=routine.pronamespace where routine.oid=dependency.objid and member_namespace.nspname in (select name from relevant)))
+   or (dependency.classid='pg_catalog.pg_type'::pg_catalog.regclass and exists (select 1 from pg_catalog.pg_type object_type join pg_catalog.pg_namespace member_namespace on member_namespace.oid=object_type.typnamespace where object_type.oid=dependency.objid and member_namespace.nspname in (select name from relevant)))
+   or (dependency.classid='pg_catalog.pg_namespace'::pg_catalog.regclass and exists (select 1 from pg_catalog.pg_namespace member_namespace where member_namespace.oid=dependency.objid and member_namespace.nspname in (select name from relevant)))
+   or (dependency.classid='pg_catalog.pg_operator'::pg_catalog.regclass and exists (select 1 from pg_catalog.pg_operator operator join pg_catalog.pg_namespace member_namespace on member_namespace.oid=operator.oprnamespace where operator.oid=dependency.objid and member_namespace.nspname in (select name from relevant)))
+   or (dependency.classid='pg_catalog.pg_opclass'::pg_catalog.regclass and exists (select 1 from pg_catalog.pg_opclass operator_class join pg_catalog.pg_namespace member_namespace on member_namespace.oid=operator_class.opcnamespace where operator_class.oid=dependency.objid and member_namespace.nspname in (select name from relevant)))
+   or (dependency.classid='pg_catalog.pg_opfamily'::pg_catalog.regclass and exists (select 1 from pg_catalog.pg_opfamily operator_family join pg_catalog.pg_namespace member_namespace on member_namespace.oid=operator_family.opfnamespace where operator_family.oid=dependency.objid and member_namespace.nspname in (select name from relevant)))
+  ))), extension_member_owners(extension_owner,member_owner) as (
+ select extension.extowner,relation.relowner from pg_catalog.pg_depend dependency join relevant_extensions extension on extension.oid=dependency.refobjid join pg_catalog.pg_class relation on dependency.classid='pg_catalog.pg_class'::pg_catalog.regclass and relation.oid=dependency.objid where dependency.refclassid='pg_catalog.pg_extension'::pg_catalog.regclass and dependency.deptype='e'
+ union all select extension.extowner,routine.proowner from pg_catalog.pg_depend dependency join relevant_extensions extension on extension.oid=dependency.refobjid join pg_catalog.pg_proc routine on dependency.classid='pg_catalog.pg_proc'::pg_catalog.regclass and routine.oid=dependency.objid where dependency.refclassid='pg_catalog.pg_extension'::pg_catalog.regclass and dependency.deptype='e'
+ union all select extension.extowner,object_type.typowner from pg_catalog.pg_depend dependency join relevant_extensions extension on extension.oid=dependency.refobjid join pg_catalog.pg_type object_type on dependency.classid='pg_catalog.pg_type'::pg_catalog.regclass and object_type.oid=dependency.objid where dependency.refclassid='pg_catalog.pg_extension'::pg_catalog.regclass and dependency.deptype='e'
+ union all select extension.extowner,namespace.nspowner from pg_catalog.pg_depend dependency join relevant_extensions extension on extension.oid=dependency.refobjid join pg_catalog.pg_namespace namespace on dependency.classid='pg_catalog.pg_namespace'::pg_catalog.regclass and namespace.oid=dependency.objid where dependency.refclassid='pg_catalog.pg_extension'::pg_catalog.regclass and dependency.deptype='e'
+ union all select extension.extowner,operator.oprowner from pg_catalog.pg_depend dependency join relevant_extensions extension on extension.oid=dependency.refobjid join pg_catalog.pg_operator operator on dependency.classid='pg_catalog.pg_operator'::pg_catalog.regclass and operator.oid=dependency.objid where dependency.refclassid='pg_catalog.pg_extension'::pg_catalog.regclass and dependency.deptype='e'
+ union all select extension.extowner,operator_class.opcowner from pg_catalog.pg_depend dependency join relevant_extensions extension on extension.oid=dependency.refobjid join pg_catalog.pg_opclass operator_class on dependency.classid='pg_catalog.pg_opclass'::pg_catalog.regclass and operator_class.oid=dependency.objid where dependency.refclassid='pg_catalog.pg_extension'::pg_catalog.regclass and dependency.deptype='e'
+ union all select extension.extowner,operator_family.opfowner from pg_catalog.pg_depend dependency join relevant_extensions extension on extension.oid=dependency.refobjid join pg_catalog.pg_opfamily operator_family on dependency.classid='pg_catalog.pg_opfamily'::pg_catalog.regclass and operator_family.oid=dependency.objid where dependency.refclassid='pg_catalog.pg_extension'::pg_catalog.regclass and dependency.deptype='e'
+), unsupported_extension_members as (
+ select count(*)::text count from pg_catalog.pg_depend dependency join relevant_extensions extension on extension.oid=dependency.refobjid
+ where dependency.refclassid='pg_catalog.pg_extension'::pg_catalog.regclass and dependency.deptype='e'
+ and dependency.classid not in (
+  'pg_catalog.pg_class'::pg_catalog.regclass,'pg_catalog.pg_proc'::pg_catalog.regclass,
+  'pg_catalog.pg_type'::pg_catalog.regclass,'pg_catalog.pg_namespace'::pg_catalog.regclass,
+  'pg_catalog.pg_operator'::pg_catalog.regclass,'pg_catalog.pg_opclass'::pg_catalog.regclass,
+  'pg_catalog.pg_opfamily'::pg_catalog.regclass,'pg_catalog.pg_amop'::pg_catalog.regclass,
+  'pg_catalog.pg_amproc'::pg_catalog.regclass,'pg_catalog.pg_cast'::pg_catalog.regclass)
+), acl(owner_oid,acl_value,source) as (
  select database.datdba,coalesce(database.datacl,pg_catalog.acldefault('d',database.datdba)),'database' from pg_catalog.pg_database database where database.datname=current_database()
  union all select namespace.nspowner,coalesce(namespace.nspacl,pg_catalog.acldefault('n',namespace.nspowner)),'schema' from pg_catalog.pg_namespace namespace where namespace.nspname in (select name from relevant)
- union all select relation.relowner,coalesce(relation.relacl,pg_catalog.acldefault(case when relation.relkind='S' then 's'::"char" else 'r'::"char" end,relation.relowner)),'relation' from pg_catalog.pg_class relation join pg_catalog.pg_namespace namespace on namespace.oid=relation.relnamespace where namespace.nspname in (select name from relevant)
+ union all select relation.relowner,coalesce(relation.relacl,pg_catalog.acldefault('r',relation.relowner)),'relation' from pg_catalog.pg_class relation join pg_catalog.pg_namespace namespace on namespace.oid=relation.relnamespace where namespace.nspname in (select name from relevant) and relation.relkind in ('r','p','v','m','f')
+ union all select relation.relowner,coalesce(relation.relacl,pg_catalog.acldefault('s',relation.relowner)),'sequence' from pg_catalog.pg_class relation join pg_catalog.pg_namespace namespace on namespace.oid=relation.relnamespace where namespace.nspname in (select name from relevant) and relation.relkind='S'
  union all select routine.proowner,coalesce(routine.proacl,pg_catalog.acldefault('f',routine.proowner)),'function' from pg_catalog.pg_proc routine join pg_catalog.pg_namespace namespace on namespace.oid=routine.pronamespace where namespace.nspname in (select name from relevant)
- union all select object_type.typowner,coalesce(object_type.typacl,pg_catalog.acldefault('T',object_type.typowner)),'type' from pg_catalog.pg_type object_type join pg_catalog.pg_namespace namespace on namespace.oid=object_type.typnamespace where namespace.nspname in (select name from relevant)
-), exploded as (select acl.owner_oid,acl.source,entry.* from acl cross join lateral pg_catalog.aclexplode(acl.acl_value) entry)
+ union all select object_type.typowner,coalesce(object_type.typacl,pg_catalog.acldefault('T',object_type.typowner)),'type' from pg_catalog.pg_type object_type join pg_catalog.pg_namespace namespace on namespace.oid=object_type.typnamespace where namespace.nspname in (select name from relevant) and object_type.typelem=0
+  and (object_type.typrelid=0 or exists (select 1 from pg_catalog.pg_class relation where relation.oid=object_type.typrelid and relation.relkind='c'))
+), exploded as (select acl.owner_oid,acl.source,entry.* from acl cross join lateral pg_catalog.aclexplode(
+ case when pg_catalog.cardinality(acl.acl_value)>0 then acl.acl_value else null end) entry)
 select (select count from dangerous) dangerous_roles,(select count from memberships) mapped_memberships,
+ (select count(*)::text from extension_member_owners where member_owner<>extension_owner) extension_owner_mismatches,
+ (select count from unsupported_extension_members) unsupported_extension_members,
  (select count(*)::text from exploded where grantee=0) public_grants,
  (select count(*)::text from exploded where (grantee<>0 and not exists (select 1 from mapped where role_oid=grantee))
    or not exists (select 1 from mapped where role_oid=grantor)) third_party_grants,
@@ -1004,8 +1103,10 @@ export async function produceCommunitiesStagingRoleSplitInventory(
       .rows[0];
     if (!anomalyRow) fail('CATALOG_INVALID');
     const anomalies: InventoryAnomaly[] = [];
-    if (mixedOwnerObjects.size > 0)
-      anomalies.push(anomaly('MIXED_OWNER_FORBIDDEN', mixedOwnerObjects.size, provenanceBase));
+    const mixedOwnerCount =
+      mixedOwnerObjects.size + parseCount(anomalyRow.extension_owner_mismatches);
+    if (mixedOwnerCount > 0)
+      anomalies.push(anomaly('MIXED_OWNER_FORBIDDEN', mixedOwnerCount, provenanceBase));
     const findings: [string, unknown][] = [
       ['ROLE_CAPABILITY_FORBIDDEN', anomalyRow.dangerous_roles],
       ['ROLE_MEMBERSHIP_FORBIDDEN', anomalyRow.mapped_memberships],
@@ -1014,6 +1115,7 @@ export async function produceCommunitiesStagingRoleSplitInventory(
       ['GRANT_OPTION_FORBIDDEN', anomalyRow.grant_options],
       ['COLUMN_GRANT_FORBIDDEN', anomalyRow.column_grants],
       ['DEFAULT_ACL_CHANGE_FORBIDDEN', anomalyRow.default_acls],
+      ['EXTENSION_CHANGE_FORBIDDEN', anomalyRow.unsupported_extension_members],
     ];
     for (const [code, value] of findings) {
       const count = parseCount(value);

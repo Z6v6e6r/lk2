@@ -2,6 +2,13 @@
 
 ## 2026-08-19 — Communities role-split clone evidence checkpoint
 
+- Added an isolated local PostgreSQL 16 runner that owns and removes one labelled container, one
+  dedicated labelled network and one loopback-only random port, then verifies the real catalog,
+  marker readback, receipt restart fence, deterministic INPUT_C output and no-change evaluator on a
+  synthetic template clone.
+- Fixed real PG16 catalog incompatibilities found by that gate: `name`-typed UNION truncation of ACL
+  JSON and invalid empty-array `aclexplode`; extension-managed and implicit type objects are no
+  longer duplicated into an impossible ownership/ACL mutation plan.
 - Added an uninstalled, two-invocation V2 restore-marker ceremony: CREATE always stops for an
   independently retained creation receipt, while RESUME binds that receipt to the exact clone,
   restore and transactional COMMENT evidence.
@@ -9,9 +16,9 @@
   rename or deletion, and a separate DBA primitive is still required to resolve retained clones.
 - Added deterministic INPUT_C inventory, catalog-derived redacted role mapping, structured object
   identities, semantic explicit/effective ACL evidence, and a before/after acceptance evaluator.
-- Kept installation, workflow wiring, real PostgreSQL execution, trusted inventory collection,
+- Kept installation, workflow wiring, archive `pg_restore`, trusted inventory collection,
   role/ownership/grant changes, shared migration, deployment and feature activation outside this
-  implementation checkpoint.
+  implementation checkpoint. Local template-clone evidence is not a substitute for those gates.
 
 ## 2026-08-19 — Isolated Communities rehearsal credential contour
 

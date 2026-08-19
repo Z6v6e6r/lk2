@@ -267,6 +267,7 @@ function fake(
     marker?: string | null;
     acl?: Partial<Record<string, readonly CatalogAclEntry[]>>;
     thirdPartyGrants?: string;
+    unsupportedExtensionMembers?: string;
   } = {},
 ) {
   const queries: string[] = [];
@@ -450,6 +451,8 @@ function fake(
             dangerous_roles: '0',
             mapped_memberships: '0',
             mixed_owners: '0',
+            extension_owner_mismatches: '0',
+            unsupported_extension_members: options.unsupportedExtensionMembers ?? '0',
             public_grants: '0',
             third_party_grants: options.thirdPartyGrants ?? '0',
             grant_options: '0',
@@ -725,11 +728,56 @@ describe('Communities role split INPUT_C producer', () => {
       expect(sql).toContain(`acldefault('${code}'`);
     expect(sql).toContain("jsonb_build_array('explicitAcl')");
     expect(sql).toContain("jsonb_build_array('effectiveAcl')");
+    expect(sql).toContain('when pg_catalog.cardinality(');
+    expect(sql).toContain("is null then pg_catalog.acldefault('");
     expect(sql).toContain('pg_get_function_identity_arguments');
+    expect(sql).toContain('owner.rolname::text value');
+    expect(sql).not.toContain("aclexplode(coalesce(attribute.attacl,'{}'::aclitem[]))");
+    expect(sql).not.toContain("'{}'::aclitem[]");
+    expect(COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_SQL.categories.functions).toContain(
+      "dependency.deptype='e'",
+    );
+    expect(COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_SQL.categories.types).toContain(
+      "relation.oid=object_type.typrelid and relation.relkind='c'",
+    );
     expect(sql).not.toContain('canonical_key');
     expect(sql).not.toMatch(/\|owner|\|metadata|\|explicit|\|effective/u);
     expect(COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_SQL.categories.extensions).toContain(
       'pg_catalog.pg_depend',
+    );
+    expect(COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_SQL.categories.extensions).toContain(
+      'namespace.oid=extension.extnamespace',
+    );
+    const anomalySql = COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_SQL.anomalies;
+    const anomalyAcl = anomalySql.slice(
+      anomalySql.indexOf('), acl('),
+      anomalySql.indexOf('), exploded as'),
+    );
+    expect(anomalyAcl).not.toContain("dependency.deptype='e'");
+    expect(COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_SQL.anomalies).toContain(
+      'extension_owner_mismatches',
+    );
+    expect(COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_SQL.anomalies).toContain(
+      'unsupported_extension_members',
+    );
+    for (const catalog of ['pg_amop', 'pg_amproc', 'pg_cast'])
+      expect(COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_SQL.anomalies).toContain(catalog);
+    for (const catalog of ['pg_operator', 'pg_opclass', 'pg_opfamily'])
+      expect(COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_SQL.categories.extensions).toContain(catalog);
+    for (const namespaceColumn of ['oprnamespace', 'opcnamespace', 'opfnamespace']) {
+      expect(COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_SQL.categories.extensions).toContain(
+        namespaceColumn,
+      );
+      expect(COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_SQL.anomalies).toContain(namespaceColumn);
+    }
+    expect(COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_SQL.categories.extensions).toContain(
+      "'columnAcl'",
+    );
+    expect(COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_SQL.categories.extensions).toContain(
+      "'policies'",
+    );
+    expect(COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_SQL.categories.extensions).toContain(
+      "'securityDefiner'",
     );
     expect(COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_SQL.categories.extensions).toContain(
       "dependency.deptype='e'",
@@ -761,6 +809,16 @@ describe('Communities role split INPUT_C producer', () => {
     expect(new Set(entries.map((entry) => entry.occurrenceSha256)).size).toBe(3);
     expect(entries.every((entry) => entry.grantorCategory === 'THIRD_PARTY')).toBe(true);
     expect(JSON.stringify(report)).not.toMatch(/18001|18002/u);
+  });
+
+  it('blocks an extension member from an unreviewed catalog class', async () => {
+    const report = await produceCommunitiesStagingRoleSplitInventory(
+      exactInput,
+      () => fake({ unsupportedExtensionMembers: '1' }).client,
+    );
+    expect(report.anomalies).toEqual([
+      expect.objectContaining({ code: 'EXTENSION_CHANGE_FORBIDDEN', count: 1 }),
+    ]);
   });
 
   it('keeps JSON Schema and runtime INPUT_C validation in nested-key and semantic parity', async () => {

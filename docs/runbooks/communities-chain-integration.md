@@ -284,11 +284,13 @@ and proves every proposed ACL ADD/REMOVE and ownership row against the observed 
 review evidence only and grants no execution authority.
 
 Do not install either command, create a forced-command key, add a workflow, place requests on
-staging, run the producer or collect a trusted inventory under this checkpoint. Installation, the
-two ceremony invocations, a real PostgreSQL 16 disposable-clone test, trusted before/after
-inventory production, any role/ownership/ACL mutation and the DBA quarantine resolution are
-separate gates requiring separate approval. The inventory collector remains read-only and never
-creates, repairs or replaces the marker.
+staging or collect a trusted inventory under this checkpoint. A separately owned local runner now
+passes the PG16 catalog/marker/INPUT_C/no-change-evaluator path against a disposable same-cluster
+template clone. It is not an ownership-preserving archive restore and produces only synthetic local
+evidence. Installation, the two host ceremony invocations, real `pg_restore`, trusted independently
+sourced before/after inventory production, any role/ownership/ACL mutation and the DBA quarantine
+resolution remain separate gates requiring separate approval. The inventory collector remains
+read-only and never creates, repairs or replaces the marker.
 
 ### Exact 29-file staged clone rehearsal contract
 
