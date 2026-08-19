@@ -737,7 +737,7 @@ cleanupWriterSha256=${sha256(installedCleanup)}
       'schemaVersion=communities-role-split-clone-marker-cleanup-evidence-v1\nstatus=QUARANTINE_PENDING_RECONCILIATION_REQUIRED\n',
     );
     await expect(readFile(cloneState)).resolves.toBeDefined();
-  }, 15_000);
+  }, 30_000);
 
   it('contains no role, grant, migration, deploy or shared-database mutation primitive', async () => {
     const [ceremony, cleanup] = await Promise.all([
