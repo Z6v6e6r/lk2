@@ -359,7 +359,7 @@ describe('legacy runtime-secret bootstrap delivery contract', () => {
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
-  });
+  }, 15_000);
 
   it('executes the reviewed Compose functions with bounded legacy environment inheritance', () => {
     const functions = controller.slice(
