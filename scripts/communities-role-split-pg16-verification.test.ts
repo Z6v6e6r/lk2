@@ -17,6 +17,9 @@ describe('communities role-split disposable PG16 runner contract', () => {
     expect(runner).toContain('docker network create');
     expect(runner).toContain('--network "$NETWORK_NAME"');
     expect(runner).toContain('phub_role_split_admin_verify');
+    expect(runner).toContain('[ -x ./node_modules/.bin/vitest ] || fail dependencies_missing');
+    expect(runner).toContain('./node_modules/.bin/vitest run');
+    expect(runner).not.toContain('npx vitest');
     expect(runner).not.toContain('POSTGRES_HOST_AUTH_METHOD=trust');
     expect(runner).not.toMatch(/0\.0\.0\.0|--network host|docker compose|docker pull/u);
   });

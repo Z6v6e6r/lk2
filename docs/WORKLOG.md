@@ -5,7 +5,8 @@
 - Added an isolated local PostgreSQL 16 runner that owns and removes one labelled container, one
   dedicated labelled network and one loopback-only random port, then verifies the real catalog,
   marker readback, receipt restart fence, deterministic INPUT_C output and no-change evaluator on a
-  synthetic template clone.
+  synthetic template clone. It requires checkout-local dependencies and refuses parent/global
+  Vitest resolution.
 - Fixed real PG16 catalog incompatibilities found by that gate: `name`-typed UNION truncation of ACL
   JSON and invalid empty-array `aclexplode`; extension-managed and implicit type objects are no
   longer duplicated into an impossible ownership/ACL mutation plan.

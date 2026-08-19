@@ -87,9 +87,9 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 command -v docker >/dev/null 2>&1 || fail docker_missing
-command -v npx >/dev/null 2>&1 || fail npx_missing
 command -v openssl >/dev/null 2>&1 || fail openssl_missing
 command -v mktemp >/dev/null 2>&1 || fail mktemp_missing
+[ -x ./node_modules/.bin/vitest ] || fail dependencies_missing
 
 case "$CONTAINER_NAME" in
   phub-communities-pg16-verify-[1-9][0-9]*) ;;
@@ -159,7 +159,7 @@ esac
 port="${binding##*:}"
 
 PHUB_COMMUNITIES_MARKER_PG16_VERIFY_URL="postgresql://postgres:$FIXTURE_PASSWORD@127.0.0.1:$port/$ADMIN_DATABASE" \
-  npx vitest run \
+  ./node_modules/.bin/vitest run \
     apps/migrator/src/communities-staging-role-split-marker-ceremony-pg-host.pg.test.ts \
     --testTimeout 30000
 

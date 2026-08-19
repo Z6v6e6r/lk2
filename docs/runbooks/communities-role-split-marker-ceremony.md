@@ -98,6 +98,9 @@ deterministic twelve-category INPUT_C production and a no-change acceptance eval
 identifiers, overloaded functions, a sequence, a type, FORCE RLS, a named policy and a trusted
 extension member are present in the synthetic catalog.
 
+Run `npm install` in the exact checkout or worktree before this gate. The runner refuses parent
+directory or global Vitest resolution and requires the checkout-local `./node_modules/.bin/vitest`.
+
 The local gate found and now regresses two real catalog-wire failures: PostgreSQL `name` union type
 resolution truncating ACL JSON, and `aclexplode` rejecting a dimensionless empty ACL array.
 Extension-managed objects are represented by the protected `extensions` category instead of being
