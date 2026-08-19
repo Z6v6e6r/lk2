@@ -11,6 +11,7 @@ export default defineConfig({
     'src/verify-chat-push-foundation-contour.ts',
     'src/verify-eligibility-payment-acl-boundary.ts',
     'src/provision-eligibility-payment-acl.ts',
+    'src/provision-communities-staging-role-split.ts',
     'src/verify-eligibility-payment-runtime-role.ts',
     'src/provision-eligibility-payment-cup-projection-acl.ts',
     'src/cup-player-level-projection-rehearsal.ts',

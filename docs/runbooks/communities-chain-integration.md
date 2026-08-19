@@ -192,6 +192,41 @@ isolated-clone, transactional `REINDEX` duration for each exact 0078 index after
 complete manifest, then rolls each measurement transaction back. These figures are conservative
 lock/storage-budget evidence, not the original first-build timings on the shared database.
 
+### Clone-only staging role-split preparation (no live apply)
+
+`communities-staging-role-split-clone-v1` is a preparation-only contract for the separate
+runtime/migrator PostgreSQL role split required before a new Communities rehearsal. It is not part
+of `33_V1`, is not dispatched by a workflow, and does not authorize a role change, shared database
+operation, deploy, migration, import or activation. Its confirmation
+`PREPARE_COMMUNITIES_STAGING_ROLE_SPLIT_CLONE_V1` accepts only an exact marked
+`phub_restore_<run>_<attempt>` clone, a separately supplied different shared database name, a
+cluster-system-id pin and the canonical manifest SHA. It requires pre-existing, distinct login
+roles with no superuser, BYPASSRLS, database/role creation, replication or memberships; it never
+creates or alters roles.
+
+The v1 provisioner intentionally opens a bounded `REPEATABLE READ READ ONLY` clone transaction,
+verifies the database, executor/session role, clone and shared database owners, role OIDs, ledger,
+clone-source marker and redacted catalog inventory, takes an advisory transaction lock, and terminates with
+`COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_REQUIRED`. It emits no `REASSIGN OWNED`, wildcard,
+`GRANT ALL`, owner transfer or default-ACL mutation. A later version may be designed only after a
+fresh restored-clone inventory proves the exact current owner/ACL state for the explicit object
+manifest (including `public.schema_migrations`, `profile.privacy_settings`, Community, Integration,
+Notification and Games targets). Mixed ownership, PUBLIC grants, grant options, column ACLs or
+third-party grants are a hard NO-GO before any mutation.
+
+Do not expose `/etc/phub/staging.env` to `phub-preflight`. The future rehearsal installation must
+use two separately root-owned, group-readable `0440` files containing exactly one
+`DATABASE_URL=...` line: one runtime URL and one distinct migrator URL. The forced command must
+validate ownership, mode, one-line grammar and distinct inode and URL without printing either
+value. Creating those credentials, database roles, grants, files, workflow wiring or any live
+application change remains a separately approved staging operation.
+
+This is inventory preparation only; it is not a complete safe role split. A future DBA-reviewed
+gate must first establish the exact clone preimage: `pg_trgm` state, intentionally absent
+`community_content`/`eligibility` schemas, each exact CREATE requirement, database/schema/default
+ACLs, table/column ACLs, RLS/policies, sequences, functions and types. Only that evidence can
+support a separately versioned and approved persistent role/ownership/grant plan.
+
 ### Exact 29-file staged clone rehearsal contract
 
 The staging inventory associated with source-ledger SHA-256
