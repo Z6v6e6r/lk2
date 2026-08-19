@@ -7,6 +7,7 @@ import {
   COMMUNITIES_STAGING_ROLE_SPLIT_CLONE_MANIFEST_SHA256,
   advanceCommunitiesStagingRoleSplitMarkerCeremonyState,
   communitiesStagingRoleSplitLedgerSha256,
+  communitiesStagingRoleSplitRestoreMarkerPayloadSha256,
   communitiesStagingRoleSplitRestoreMarkerRequestSha256,
   createCommunitiesStagingRoleSplitMarkerCeremonyCandidate,
   type CommunitiesStagingRoleSplitLedgerEntry,
@@ -203,7 +204,7 @@ describe('CommunitiesStagingRoleSplitMarkerCeremonyPgHost', () => {
   });
 
   it('persists canonical state and rejects stale compare-and-swap transitions', async () => {
-    const { host, requestSha256, directory } = await fixture();
+    const { host, requestSha256, directory, config } = await fixture();
     const lease = await host.acquireLease(requestSha256);
     const candidate = createCommunitiesStagingRoleSplitMarkerCeremonyCandidate(requestSha256);
     const owned = advanceCommunitiesStagingRoleSplitMarkerCeremonyState(candidate, 'OWNED', {
@@ -214,9 +215,101 @@ describe('CommunitiesStagingRoleSplitMarkerCeremonyPgHost', () => {
     await expect(host.advanceState(lease, candidate, owned)).rejects.toMatchObject({
       code: 'STATE_CAS_MISMATCH',
     });
-    expect((await readFile(join(directory, 'ceremony-state.json'), 'utf8')).endsWith('\n')).toBe(
-      true,
+    const persistedText = await readFile(join(directory, 'ceremony-state.json'), 'utf8');
+    expect(persistedText.endsWith('\n')).toBe(true);
+    const persisted = JSON.parse(persistedText) as Record<string, unknown>;
+    expect(Object.keys(persisted).sort()).toEqual([
+      'creationReceiptSha256',
+      'schemaVersion',
+      'state',
+    ]);
+    expect(persisted).toMatchObject({
+      schemaVersion: 'communities-role-split-marker-pg-host-state-v2',
+      creationReceiptSha256: config.creationReceiptSha256,
+    });
+  });
+
+  it('rejects a different valid receipt before resuming a pre-verified state', async () => {
+    const { host, requestSha256, directory, config } = await fixture();
+    const lease = await host.acquireLease(requestSha256);
+    const candidate = createCommunitiesStagingRoleSplitMarkerCeremonyCandidate(requestSha256);
+    await host.createCandidate(lease, candidate);
+    await host.releaseLease(lease);
+
+    const changed = new CommunitiesStagingRoleSplitMarkerCeremonyPgHost({
+      ...config,
+      creationReceiptSha256: '2'.repeat(64),
+    });
+    await expect(changed.acquireLease(requestSha256)).rejects.toMatchObject({
+      code: 'STATE_RECEIPT_MISMATCH',
+    });
+    await expect(readFile(join(directory, 'ceremony.lock'), 'utf8')).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+
+    const resumed = new CommunitiesStagingRoleSplitMarkerCeremonyPgHost(config);
+    const resumedLease = await resumed.acquireLease(requestSha256);
+    await expect(resumed.loadState(resumedLease)).resolves.toEqual(candidate);
+    await resumed.releaseLease(resumedLease);
+  });
+
+  it('rejects a different valid receipt before resuming verified artifacts', async () => {
+    const { host, requestSha256, directory, config } = await fixture();
+    const lease = await host.acquireLease(requestSha256);
+    const candidate = createCommunitiesStagingRoleSplitMarkerCeremonyCandidate(requestSha256);
+    const owned = advanceCommunitiesStagingRoleSplitMarkerCeremonyState(candidate, 'OWNED', {
+      cloneDatabaseOid: '45678',
+    });
+    const restorePending = advanceCommunitiesStagingRoleSplitMarkerCeremonyState(
+      owned,
+      'RESTORE_PENDING',
+      { cloneDatabaseOid: '45678' },
     );
+    const restored = advanceCommunitiesStagingRoleSplitMarkerCeremonyState(
+      restorePending,
+      'RESTORED',
+      { cloneDatabaseOid: '45678' },
+    );
+    await host.createCandidate(lease, candidate);
+    await host.advanceState(lease, candidate, owned);
+    await host.advanceState(lease, owned, restorePending);
+    await host.advanceState(lease, restorePending, restored);
+    const artifacts = await host.verifyBindings(lease, '45678');
+    const verified = advanceCommunitiesStagingRoleSplitMarkerCeremonyState(restored, 'VERIFIED', {
+      cloneDatabaseOid: '45678',
+      markerPayloadSha256: communitiesStagingRoleSplitRestoreMarkerPayloadSha256(artifacts.payload),
+    });
+    await host.saveVerified(lease, restored, verified, artifacts);
+    const persisted = JSON.parse(
+      await readFile(join(directory, 'ceremony-state.json'), 'utf8'),
+    ) as Record<string, unknown>;
+    expect(Object.keys(persisted).sort()).toEqual([
+      'artifacts',
+      'creationReceiptSha256',
+      'schemaVersion',
+      'state',
+    ]);
+    expect(persisted).toMatchObject({
+      creationReceiptSha256: config.creationReceiptSha256,
+      artifacts: { payload: { creationReceiptSha256: config.creationReceiptSha256 } },
+    });
+    await host.releaseLease(lease);
+
+    const changed = new CommunitiesStagingRoleSplitMarkerCeremonyPgHost({
+      ...config,
+      creationReceiptSha256: '2'.repeat(64),
+    });
+    await expect(changed.acquireLease(requestSha256)).rejects.toMatchObject({
+      code: 'STATE_RECEIPT_MISMATCH',
+    });
+    await expect(readFile(join(directory, 'ceremony.lock'), 'utf8')).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+
+    const resumed = new CommunitiesStagingRoleSplitMarkerCeremonyPgHost(config);
+    const resumedLease = await resumed.acquireLease(requestSha256);
+    await expect(resumed.loadVerifiedArtifacts(resumedLease)).resolves.toEqual(artifacts);
+    await resumed.releaseLease(resumedLease);
   });
 
   it('streams exact private archive custody before invoking restore', async () => {

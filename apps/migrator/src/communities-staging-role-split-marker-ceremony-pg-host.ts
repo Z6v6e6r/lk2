@@ -38,7 +38,7 @@ const MAX_ARCHIVE_BYTES = 1024 * 1024 * 1024 * 1024;
 const MAX_ARCHIVE_METADATA_BYTES = 1024 * 1024;
 const MODE_0700 = 0o700;
 const MODE_0600 = 0o600;
-const ENVELOPE_VERSION = 'communities-role-split-marker-pg-host-state-v1';
+const ENVELOPE_VERSION = 'communities-role-split-marker-pg-host-state-v2';
 
 export class CommunitiesStagingRoleSplitMarkerCeremonyPgHostError extends Error {
   constructor(readonly code: string) {
@@ -87,6 +87,7 @@ export interface CommunitiesStagingRoleSplitMarkerCeremonyPgHostConfig {
 
 interface PersistedEnvelope {
   readonly schemaVersion: typeof ENVELOPE_VERSION;
+  readonly creationReceiptSha256: string;
   readonly state: CommunitiesStagingRoleSplitMarkerCeremonyState;
   readonly artifacts?: CommunitiesStagingRoleSplitMarkerCeremonyArtifacts;
 }
@@ -135,6 +136,16 @@ function sameStat(
 
 function exactHex(value: string): boolean {
   return /^[a-f0-9]{64}$/.test(value);
+}
+
+function hasExactKeys(value: unknown, expected: readonly string[]): boolean {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const actual = Object.keys(value).sort();
+  const sortedExpected = [...expected].sort();
+  return (
+    actual.length === sortedExpected.length &&
+    actual.every((key, index) => key === sortedExpected[index])
+  );
 }
 
 function currentUid(): number {
@@ -215,7 +226,13 @@ export class CommunitiesStagingRoleSplitMarkerCeremonyPgHost implements Communit
       if (error instanceof CommunitiesStagingRoleSplitMarkerCeremonyPgHostError) throw error;
       fail('LEASE_LOST');
     }
-    if (content !== `${lease.requestSha256}\n${lease.fencingToken}\n`) fail('LEASE_LOST');
+    if (
+      content !==
+      `${lease.requestSha256}\n${this.config.creationReceiptSha256}\n${lease.fencingToken}\n`
+    )
+      fail('LEASE_LOST');
+    const state = await this.readRegular(this.statePath);
+    if (state !== null) this.parseEnvelope(state);
   }
 
   private async fsyncDirectory(): Promise<void> {
@@ -272,8 +289,31 @@ export class CommunitiesStagingRoleSplitMarkerCeremonyPgHost implements Communit
     if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed))
       fail('STATE_CORRUPT');
     const envelope = parsed as PersistedEnvelope;
-    if (envelope.schemaVersion !== ENVELOPE_VERSION || canonicalEnvelope(envelope) !== content)
+    const envelopeKeys =
+      envelope.artifacts === undefined
+        ? ['schemaVersion', 'creationReceiptSha256', 'state']
+        : ['schemaVersion', 'creationReceiptSha256', 'state', 'artifacts'];
+    if (
+      !hasExactKeys(envelope, envelopeKeys) ||
+      envelope.schemaVersion !== ENVELOPE_VERSION ||
+      canonicalEnvelope(envelope) !== content
+    )
       fail('STATE_CORRUPT');
+    if (
+      !exactHex(envelope.creationReceiptSha256) ||
+      envelope.creationReceiptSha256 !== this.config.creationReceiptSha256
+    )
+      fail('STATE_RECEIPT_MISMATCH');
+    if (envelope.artifacts !== undefined) {
+      if (
+        !hasExactKeys(envelope.artifacts, ['payload', 'marker']) ||
+        typeof envelope.artifacts.payload !== 'object' ||
+        envelope.artifacts.payload === null
+      )
+        fail('STATE_CORRUPT');
+      if (envelope.artifacts.payload.creationReceiptSha256 !== envelope.creationReceiptSha256)
+        fail('STATE_RECEIPT_MISMATCH');
+    }
     try {
       assertCommunitiesStagingRoleSplitMarkerCeremonyState(envelope.state);
       if (envelope.artifacts !== undefined)
@@ -290,7 +330,10 @@ export class CommunitiesStagingRoleSplitMarkerCeremonyPgHost implements Communit
   private async writeCas(expected: string | null, next: PersistedEnvelope): Promise<void> {
     const serialized = canonicalEnvelope(next);
     if (Buffer.byteLength(serialized, 'utf8') > MAX_PERSISTED_BYTES) fail('STATE_TOO_LARGE');
+    this.parseEnvelope(serialized);
+    if (expected !== null) this.parseEnvelope(expected);
     const current = await this.readRegular(this.statePath);
+    if (current !== null) this.parseEnvelope(current);
     if (current !== expected) fail('STATE_CAS_MISMATCH');
     const temporary = join(
       this.config.stateDirectory,
@@ -308,7 +351,9 @@ export class CommunitiesStagingRoleSplitMarkerCeremonyPgHost implements Communit
       await handle.close();
       handle = undefined;
       // Re-read immediately before rename; a concurrent writer must not be overwritten.
-      if ((await this.readRegular(this.statePath)) !== expected) fail('STATE_CAS_MISMATCH');
+      const beforeRename = await this.readRegular(this.statePath);
+      if (beforeRename !== null) this.parseEnvelope(beforeRename);
+      if (beforeRename !== expected) fail('STATE_CAS_MISMATCH');
       await rename(temporary, this.statePath);
       await this.fsyncDirectory();
     } catch (error) {
@@ -493,6 +538,8 @@ export class CommunitiesStagingRoleSplitMarkerCeremonyPgHost implements Communit
       requestSha256 !== communitiesStagingRoleSplitRestoreMarkerRequestSha256(this.config.request)
     )
       fail('REQUEST_SHA_INVALID');
+    const persistedState = await this.readRegular(this.statePath);
+    if (persistedState !== null) this.parseEnvelope(persistedState);
     const lease = { requestSha256, fencingToken: randomBytes(32).toString('hex') } as const;
     try {
       const handle = await open(
@@ -501,7 +548,10 @@ export class CommunitiesStagingRoleSplitMarkerCeremonyPgHost implements Communit
         MODE_0600,
       );
       try {
-        await handle.writeFile(`${lease.requestSha256}\n${lease.fencingToken}\n`, 'utf8');
+        await handle.writeFile(
+          `${lease.requestSha256}\n${this.config.creationReceiptSha256}\n${lease.fencingToken}\n`,
+          'utf8',
+        );
         await handle.sync();
       } finally {
         await handle.close();
@@ -539,7 +589,11 @@ export class CommunitiesStagingRoleSplitMarkerCeremonyPgHost implements Communit
     await this.assertLease(lease);
     assertCommunitiesStagingRoleSplitMarkerCeremonyState(state);
     if (state.phase !== 'CANDIDATE') fail('STATE_INVALID');
-    await this.writeCas(null, { schemaVersion: ENVELOPE_VERSION, state });
+    await this.writeCas(null, {
+      schemaVersion: ENVELOPE_VERSION,
+      creationReceiptSha256: this.config.creationReceiptSha256,
+      state,
+    });
   }
 
   async advanceState(
@@ -565,6 +619,8 @@ export class CommunitiesStagingRoleSplitMarkerCeremonyPgHost implements Communit
   ): Promise<void> {
     await this.assertLease(lease);
     assertCommunitiesStagingRoleSplitRestoreMarker(artifacts.payload, artifacts.marker);
+    if (artifacts.payload.creationReceiptSha256 !== this.config.creationReceiptSha256)
+      fail('STATE_RECEIPT_MISMATCH');
     const content = await this.readRegular(this.statePath);
     if (content === null) fail('STATE_CAS_MISMATCH');
     const envelope = this.parseEnvelope(content);
@@ -573,7 +629,12 @@ export class CommunitiesStagingRoleSplitMarkerCeremonyPgHost implements Communit
       envelope.artifacts !== undefined
     )
       fail('STATE_CAS_MISMATCH');
-    await this.writeCas(content, { schemaVersion: ENVELOPE_VERSION, state: next, artifacts });
+    await this.writeCas(content, {
+      schemaVersion: ENVELOPE_VERSION,
+      creationReceiptSha256: this.config.creationReceiptSha256,
+      state: next,
+      artifacts,
+    });
   }
 
   async loadVerifiedArtifacts(
@@ -584,6 +645,8 @@ export class CommunitiesStagingRoleSplitMarkerCeremonyPgHost implements Communit
     if (content === null) fail('ARTIFACTS_REQUIRED');
     const artifacts = this.parseEnvelope(content).artifacts;
     if (artifacts === undefined) fail('ARTIFACTS_REQUIRED');
+    if (artifacts.payload.creationReceiptSha256 !== this.config.creationReceiptSha256)
+      fail('STATE_RECEIPT_MISMATCH');
     return artifacts;
   }
 
