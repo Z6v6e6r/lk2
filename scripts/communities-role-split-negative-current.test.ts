@@ -1,297 +1,170 @@
-import { execFile } from 'node:child_process';
-import { createHash } from 'node:crypto';
-import { chmod, mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { readFile } from 'node:fs/promises';
 
+import corpusFixture from './communities-role-split-negative-corpus.fixture.json';
 import {
-  canonicalCommunitiesStagingRoleSplitRestoreMarkerRequest,
-  COMMUNITIES_STAGING_ROLE_SPLIT_CLONE_MANIFEST_SHA256,
-  type CommunitiesStagingRoleSplitRestoreMarkerRequest,
-} from '@phub/database';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+  assertRoleSplitNegativeCorpus,
+  type RoleSplitNegativeCorpus,
+} from './communities-role-split-negative-harness.test-helper.js';
+import { beforeAll, describe, expect, it } from 'vitest';
 
-const commandSource = new URL(
-  '../deploy/jetson/prepare-communities-role-split-inventory-clone.sh',
+const ceremonySource = new URL(
+  '../deploy/jetson/run-communities-role-split-restore-marker-ceremony.sh',
   import.meta.url,
 );
-const sha256 = (value: Uint8Array | string): string =>
-  createHash('sha256').update(value).digest('hex');
+const cleanupSource = new URL(
+  '../deploy/jetson/cleanup-communities-role-split-restore-marker-clone.sh',
+  import.meta.url,
+);
 
-interface Result {
-  readonly code: number;
-  readonly stdout: string;
-  readonly stderr: string;
+let ceremony = '';
+let cleanup = '';
+
+function corpus(): RoleSplitNegativeCorpus {
+  assertRoleSplitNegativeCorpus(corpusFixture);
+  return corpusFixture;
 }
 
-let root = '';
-let requestRoot = '';
-let backupRoot = '';
-let binRoot = '';
-let scriptPath = '';
-let helperPath = '';
-let requestPath = '';
-let backupPath = '';
-let evidencePath = '';
-let tripwireLog = '';
-let baseRequest: CommunitiesStagingRoleSplitRestoreMarkerRequest;
-
-async function execute(originalCommand: string, isolated = true): Promise<Result> {
-  const executable = isolated ? scriptPath : fileURLToPath(commandSource);
-  return await new Promise((resolve) => {
-    execFile(
-      '/bin/sh',
-      [executable],
-      {
-        env: {
-          ...process.env,
-          PATH: `${binRoot}:${process.env.PATH ?? ''}`,
-          PHUB_TEST_BACKUP_ROOT: backupRoot,
-          PHUB_TEST_HELPER: helperPath,
-          PHUB_TEST_REQUEST_ROOT: requestRoot,
-          PHUB_TEST_SCRIPT: scriptPath,
-          SSH_ORIGINAL_COMMAND: originalCommand,
-        },
-      },
-      (error, stdout, stderr) =>
-        resolve({ code: error && 'code' in error ? Number(error.code) : 0, stdout, stderr }),
-    );
-  });
-}
-
-async function installRequest(contents: string, requestSha = sha256(contents)): Promise<Result> {
-  await writeFile(requestPath, contents, 'utf8');
-  return execute(
-    `PREPARE_COMMUNITIES_ROLE_SPLIT_INVENTORY_CLONE_V1 communities-role-split-marker-request-123-4.txt ${requestSha}`,
-  );
-}
-
-beforeEach(async () => {
-  root = await mkdtemp(join(tmpdir(), 'phub-role-split-negative-'));
-  requestRoot = join(root, 'requests');
-  backupRoot = join(root, 'backups');
-  binRoot = join(root, 'bin');
-  scriptPath = join(root, 'prepare-marker.sh');
-  helperPath = join(root, 'verify-helper.sh');
-  requestPath = join(requestRoot, 'communities-role-split-marker-request-123-4.txt');
-  tripwireLog = join(root, 'dangerous-child.log');
-  const backupBasename = 'postgres-communities-rehearsal-20260819T120000Z-123.dump';
-  backupPath = join(backupRoot, backupBasename);
-  evidencePath = join(backupRoot, `${backupBasename}.evidence`);
-  await Promise.all([mkdir(requestRoot), mkdir(backupRoot), mkdir(binRoot)]);
-  await Promise.all([
-    writeFile(helperPath, '#!/usr/bin/env sh\nexit 99\n', 'utf8'),
-    writeFile(backupPath, 'ownership-preserving-backup', 'utf8'),
-    writeFile(evidencePath, 'redacted-backup-evidence\n', 'utf8'),
-  ]);
-
-  const original = await readFile(commandSource, 'utf8');
-  const isolated = original
-    .replace('/var/lib/phub-preflight/role-split-marker-requests', requestRoot)
-    .replace('/var/lib/phub-preflight/backups', backupRoot)
-    .replace('/usr/local/libexec/phub/verify-postgres-backup-restore.sh', helperPath);
-  await writeFile(scriptPath, isolated, 'utf8');
-  await chmod(scriptPath, 0o755);
-
-  await writeFile(
-    join(binRoot, 'readlink'),
-    '#!/usr/bin/env sh\ntest "$1" = -f || exit 1\nprintf "%s\\n" "$2"\n',
-    'utf8',
-  );
-  await writeFile(
-    join(binRoot, 'sha256sum'),
-    '#!/usr/bin/env sh\n/usr/bin/shasum -a 256 "$1"\n',
-    'utf8',
-  );
-  await writeFile(
-    join(binRoot, 'stat'),
-    `#!/usr/bin/env sh
-set -eu
-test "$1" = -c
-field=$2
-path=$3
-case "$path" in
-  "$PHUB_TEST_REQUEST_ROOT") uid=0; gid=$(id -g); mode=750 ;;
-  "$PHUB_TEST_BACKUP_ROOT") uid=$(id -u); gid=$(id -g); mode=700 ;;
-  "$PHUB_TEST_SCRIPT"|"$PHUB_TEST_HELPER") uid=0; gid=0; mode=755 ;;
-  "$PHUB_TEST_REQUEST_ROOT"/*|"$PHUB_TEST_BACKUP_ROOT"/*.evidence) uid=0; gid=$(id -g); mode=440 ;;
-  "$PHUB_TEST_BACKUP_ROOT"/*.dump) uid=$(id -u); gid=$(id -g); mode=600 ;;
-  *) exit 1 ;;
-esac
-case "$field" in %u) echo "$uid" ;; %g) echo "$gid" ;; %a) echo "$mode" ;; *) exit 1 ;; esac
-`,
-    'utf8',
-  );
-  for (const name of ['docker', 'psql', 'createdb', 'pg_restore', 'dropdb']) {
-    await writeFile(
-      join(binRoot, name),
-      `#!/usr/bin/env sh\nprintf '%s\\n' '${name}' >> '${tripwireLog}'\nexit 97\n`,
-      'utf8',
-    );
+function ordered(source: string, snippets: readonly string[]): void {
+  let cursor = -1;
+  for (const snippet of snippets) {
+    const next = source.indexOf(snippet, cursor + 1);
+    expect(next, `missing or out-of-order snippet: ${snippet}`).toBeGreaterThan(cursor);
+    cursor = next;
   }
-  await Promise.all(
-    ['readlink', 'sha256sum', 'stat', 'docker', 'psql', 'createdb', 'pg_restore', 'dropdb'].map(
-      (name) => chmod(join(binRoot, name), 0o755),
-    ),
-  );
+}
 
-  const [helper, script, backup, evidence] = await Promise.all([
-    readFile(helperPath),
-    readFile(scriptPath),
-    readFile(backupPath),
-    readFile(evidencePath),
+beforeAll(async () => {
+  [ceremony, cleanup] = await Promise.all([
+    readFile(ceremonySource, 'utf8'),
+    readFile(cleanupSource, 'utf8'),
   ]);
-  baseRequest = {
-    restoreDatabase: 'phub_restore_123_4',
-    expectedCloneDatabaseOwner: 'phub_staging',
-    expectedCloneDatabaseOwnerOid: '16384',
-    sourceDatabase: 'phub_staging',
-    sourceDatabaseOid: '16385',
-    sourceDatabaseOwner: 'phub_staging',
-    sourceDatabaseOwnerOid: '16384',
-    systemIdentifier: '7421000000000000000',
-    backupBasename,
-    backupSha256: sha256(backup),
-    backupBytes: String(backup.byteLength),
-    backupEvidenceBasename: `${backupBasename}.evidence`,
-    backupEvidenceSha256: sha256(evidence),
-    archiveTocSha256: 'd'.repeat(64),
-    sourceLedgerSha256: 'e'.repeat(64),
-    sourceLedgerCount: '91',
-    activeRelease: 'f'.repeat(40),
-    restoreRunId: '123',
-    restoreRunAttempt: '4',
-    postgresMajor: '16',
-    objectManifestSha256: COMMUNITIES_STAGING_ROLE_SPLIT_CLONE_MANIFEST_SHA256,
-    restoreHelperSha256: sha256(helper),
-    markerWriterSha256: sha256(script),
-  };
 });
 
-afterEach(async () => {
-  if (root) await rm(root, { recursive: true });
-});
-
-describe('current role-split preparation adversarial boundary', () => {
-  it.each([
-    ['semicolon', (sentinel: string) => `; touch ${sentinel}`],
-    ['subshell', (sentinel: string) => `$(touch ${sentinel})`],
-    ['backticks', (sentinel: string) => `\`touch ${sentinel}\``],
-    ['newline', () => '\nPREPARE_COMMUNITIES_ROLE_SPLIT_INVENTORY_CLONE_V1 injected'],
-  ])('rejects %s shell command injection without reflecting it', async (_label, suffix) => {
-    const sentinel = join(root, 'injected');
-    const secret = 'postgres://runtime:secret@example.invalid/shared';
-    const result = await execute(
-      `PREPARE_COMMUNITIES_ROLE_SPLIT_INVENTORY_CLONE_V1 request.txt ${'a'.repeat(64)}${suffix(sentinel)} ${secret}`,
-      false,
-    );
-    expect(result).toEqual({
-      code: 1,
-      stdout: '',
-      stderr: 'COMMUNITIES_STAGING_ROLE_SPLIT_RESTORE_MARKER_WRITER_CONFIRMATION_INVALID\n',
-    });
-    expect(result.stderr).not.toContain(secret);
-    await expect(readFile(sentinel, 'utf8')).rejects.toThrow();
+describe('current role-split V2 adversarial source contract', () => {
+  it('binds every corpus failure to an actual V2 stable error', () => {
+    for (const scenario of corpus().cases) {
+      if (scenario.expected.stableError === null) continue;
+      const prefix =
+        scenario.integration === 'CEREMONY'
+          ? 'COMMUNITIES_ROLE_SPLIT_RESTORE_MARKER_CEREMONY_'
+          : 'COMMUNITIES_ROLE_SPLIT_RESTORE_MARKER_CLEANUP_';
+      const source = scenario.integration === 'CEREMONY' ? ceremony : cleanup;
+      expect(scenario.expected.stableError.startsWith(prefix)).toBe(true);
+      expect(source).toContain(`fail ${scenario.expected.stableError.slice(prefix.length)}`);
+    }
   });
 
-  it.each([
-    [
-      'SQL metacharacters',
-      'sourceDatabase=phub_staging',
-      'sourceDatabase=phub_staging;DROP_DATABASE',
-    ],
-    [
-      'line injection',
-      'sourceDatabase=phub_staging',
-      'sourceDatabase=phub_staging\nrestoreRunId=999',
-    ],
-  ])(
-    'rejects %s before any operation',
-    async (_label, before, after) => {
-      const canonical = canonicalCommunitiesStagingRoleSplitRestoreMarkerRequest(baseRequest);
-      const result = await installRequest(canonical.replace(before, after));
-      expect(result).toEqual({
-        code: 1,
-        stdout: '',
-        stderr: 'COMMUNITIES_STAGING_ROLE_SPLIT_RESTORE_MARKER_WRITER_REQUEST_SHAPE_INVALID\n',
-      });
-      await expect(readFile(tripwireLog, 'utf8')).rejects.toThrow();
-    },
-    15_000,
-  );
-
-  it.each([
-    ['shared database', 'phub_staging'],
-    ['forbidden system database', 'postgres'],
-  ])(
-    'rejects the %s as the restore target',
-    async (_label, target) => {
-      const canonical = canonicalCommunitiesStagingRoleSplitRestoreMarkerRequest(baseRequest);
-      const collision = canonical.replace(
-        'restoreDatabase=phub_restore_123_4',
-        `restoreDatabase=${target}`,
-      );
-      const result = await installRequest(collision);
-      expect(result.stderr).toBe(
-        'COMMUNITIES_STAGING_ROLE_SPLIT_RESTORE_MARKER_WRITER_REQUEST_BINDING_INVALID\n',
-      );
-      await expect(readFile(tripwireLog, 'utf8')).rejects.toThrow();
-    },
-    15_000,
-  );
-
-  it('rejects reordered lines and a mismatched request digest independently', async () => {
-    const canonical = canonicalCommunitiesStagingRoleSplitRestoreMarkerRequest(baseRequest);
-    const lines = canonical.trimEnd().split('\n');
-    const reordered = `${[lines[0]!, lines[2]!, lines[1]!, ...lines.slice(3)].join('\n')}\n`;
-    const orderResult = await installRequest(reordered);
-    expect(orderResult.stderr).toBe(
-      'COMMUNITIES_STAGING_ROLE_SPLIT_RESTORE_MARKER_WRITER_REQUEST_SHAPE_INVALID\n',
+  it('keeps CREATE as create-once then receipt reconciliation, never restore, marker or adoption', () => {
+    const createBranch = ceremony.slice(
+      ceremony.lastIndexOf('if test "$phase" = CREATE; then'),
+      ceremony.indexOf('printf \'%s\' "$receipt_basename"'),
     );
-    const digestResult = await installRequest(canonical, '0'.repeat(64));
-    expect(digestResult.stderr).toBe(
-      'COMMUNITIES_STAGING_ROLE_SPLIT_RESTORE_MARKER_WRITER_REQUEST_SHA_INVALID\n',
+    ordered(createBranch, [
+      'createdb -U "$POSTGRES_USER" --template=template0 --owner="$1" "$2"',
+      'atomic_state "CREATION_RECONCILIATION_REQUIRED|$expected_request_sha"',
+      'fail CREATION_RECEIPT_REQUIRED',
+    ]);
+    expect(createBranch).toContain('fail CREATEDB_RECONCILIATION_REQUIRED');
+    expect(createBranch).not.toMatch(
+      /pg_restore|COMMENT ON DATABASE|adopt|dropdb|ALTER DATABASE/iu,
     );
-  }, 15_000);
-
-  it('replays a valid request as the same stateless refusal without cleanup or side effects', async () => {
-    const canonical = canonicalCommunitiesStagingRoleSplitRestoreMarkerRequest(baseRequest);
-    const first = await installRequest(canonical);
-    const second = await installRequest(canonical);
-    const expected = {
-      code: 1,
-      stdout: '',
-      stderr: 'COMMUNITIES_STAGING_ROLE_SPLIT_RESTORE_MARKER_WRITER_EXECUTION_NOT_AUTHORIZED\n',
-    };
-    expect(first).toEqual(expected);
-    expect(second).toEqual(expected);
-    expect(await readFile(requestPath, 'utf8')).toBe(canonical);
-    expect(await readFile(backupPath, 'utf8')).toBe('ownership-preserving-backup');
-    expect(await readFile(evidencePath, 'utf8')).toBe('redacted-backup-evidence\n');
-    await expect(readFile(tripwireLog, 'utf8')).rejects.toThrow();
-    expect(await readdir(requestRoot)).toEqual(['communities-role-split-marker-request-123-4.txt']);
-  }, 20_000);
-
-  it('fails closed on a partial inspector failure and preserves all pre-marker inputs', async () => {
-    await writeFile(join(binRoot, 'od'), '#!/usr/bin/env sh\nprintf partial\nexit 98\n', 'utf8');
-    await chmod(join(binRoot, 'od'), 0o755);
-    const canonical = canonicalCommunitiesStagingRoleSplitRestoreMarkerRequest(baseRequest);
-    const result = await installRequest(canonical);
-    expect(result).toEqual({
-      code: 1,
-      stdout: '',
-      stderr: 'COMMUNITIES_STAGING_ROLE_SPLIT_RESTORE_MARKER_WRITER_REQUEST_SHAPE_INVALID\n',
-    });
-    expect(await readFile(requestPath, 'utf8')).toBe(canonical);
-    expect(await readFile(backupPath, 'utf8')).toBe('ownership-preserving-backup');
-    await expect(readFile(tripwireLog, 'utf8')).rejects.toThrow();
-  }, 15_000);
-
-  it('contains no SQL, role mutation, clone or cleanup primitive', async () => {
-    const source = await readFile(commandSource, 'utf8');
-    expect(source).not.toMatch(
-      /\beval\b|\bsh\s+-c\b|\bpsql\b|\bcreatedb\b|\bpg_restore\b|\bdropdb\b|COMMENT ON DATABASE|\bGRANT\b|\bALTER\s+(?:ROLE|USER)\b|\brm\b/iu,
+    expect(ceremony.indexOf('fail CREATION_RECEIPT_REQUIRED')).toBeLessThan(
+      ceremony.indexOf('\'pg_restore -U "$POSTGRES_USER" --exit-on-error'),
     );
+  });
+
+  it('validates RESUME receipt custody, binding, OID and owner before restore', () => {
+    ordered(ceremony, [
+      'assert_file "$receipt" 0 "$current_gid" 440 RECEIPT_CUSTODY_INVALID',
+      'fail RECEIPT_BINDING_INVALID',
+      'where d.oid=$clone_oid::oid',
+      'fail CLONE_IDENTITY_MISMATCH',
+      '\'pg_restore -U "$POSTGRES_USER" --exit-on-error',
+    ]);
+    expect(ceremony).toContain('test "$clone_oid" != "$source_database_oid"');
+    expect(ceremony).toContain(
+      '"$restore_database|$clone_owner|$clone_owner_oid|$expected_request_sha"',
+    );
+  });
+
+  it('fails nonroot-readable env, writable app root, runtime drift and container mismatch closed', () => {
+    expect(ceremony).toContain('test -r "$artifact" || fail APP_ARTIFACT_CUSTODY_INVALID');
+    expect(ceremony).toContain(
+      'case "$app_root_mode" in ?[2367]?|??[2367]) fail APP_ROOT_CUSTODY_INVALID',
+    );
+    expect(ceremony).toContain(
+      '"communities-role-split-marker-runtime-${run_id}-${run_attempt}.txt"',
+    );
+    expect(ceremony).toContain('fail RUNTIME_BINDING_INVALID');
+    expect(ceremony).toContain(
+      '$postgres_container_id|$postgres_image_id|$compose_project|postgres',
+    );
+    expect(ceremony).toContain('fail CONTAINER_IDENTITY_INVALID');
+  });
+
+  it('owns timeout child mode and scrubs caller Docker/Compose routing variables', () => {
+    for (const source of [ceremony, cleanup]) {
+      expect(source).toContain('PATH=/usr/sbin:/usr/bin:/sbin:/bin');
+      expect(source).toContain('exec "$timeout_path" --signal=TERM --kill-after=15s');
+      expect(source).toContain('/usr/bin/env -i PATH="$PATH" SSH_ORIGINAL_COMMAND=');
+      expect(source).toContain('unset DOCKER_HOST DOCKER_CONTEXT COMPOSE_FILE');
+    }
+    expect(ceremony).toContain('__PHUB_COMMUNITIES_MARKER_BOUNDED_CHILD_V1');
+    expect(cleanup).toContain('__PHUB_COMMUNITIES_MARKER_CLEANUP_BOUNDED_CHILD_V1');
+    const forcedCommandGrammar = ceremony.slice(
+      ceremony.indexOf('original_command=${SSH_ORIGINAL_COMMAND:-}'),
+      ceremony.indexOf('request_root='),
+    );
+    expect(forcedCommandGrammar).toContain('RUN_COMMUNITIES_ROLE_SPLIT_RESTORE_MARKER_CEREMONY_V2');
+    expect(forcedCommandGrammar).not.toContain('__PHUB_COMMUNITIES_MARKER_BOUNDED_CHILD_V1');
+  });
+
+  it('persists MARKER_PENDING before COMMENT and retains ambiguous/nonzero outcomes', () => {
+    ordered(ceremony, [
+      'atomic_state "MARKER_PENDING|$expected_request_sha|$clone_oid|$marker_value_sha"',
+      'cleanup_forbidden=true',
+      'COMMENT ON DATABASE',
+      'fail MARKER_ACTION_AMBIGUOUS',
+      'fail MARKER_READBACK_MISMATCH',
+      'atomic_state "MARKED|$expected_request_sha|$clone_oid|$marker_value_sha"',
+    ]);
+    expect(ceremony).not.toContain('dropdb');
+  });
+
+  it('records pre-marker and explicit cleanup as quarantine without DROP, ALTER or rename', () => {
+    expect(ceremony).toContain(
+      'QUARANTINE_PENDING_RECONCILIATION_REQUIRED|$expected_request_sha|$clone_oid|$clone_owner|$clone_owner_oid|NO_COMMENT',
+    );
+    expect(cleanup).toContain(
+      'QUARANTINE_PENDING_RECONCILIATION_REQUIRED|$marker_request_sha|$clone_oid|$clone_owner|$clone_owner_oid|$marker_value_sha|$expected_cleanup_request_sha',
+    );
+    expect(cleanup).toContain('status=QUARANTINE_PENDING_RECONCILIATION_REQUIRED');
+    expect(`${ceremony}\n${cleanup}`).not.toMatch(
+      /\bdropdb\b|\b(?:ALTER|DROP)\s+DATABASE\b|\brename(?:db)?\b/iu,
+    );
+  });
+
+  it('caps and discards child diagnostics without a public or state-tree diagnostic artifact', () => {
+    for (const source of [ceremony, cleanup]) {
+      expect(source).toContain('2>/dev/null |');
+      expect(source).toContain('head -c 65537');
+      expect(source).toContain('rm -f "$command_status"');
+      expect(source).not.toContain('SECRET_SENTINEL');
+      expect(source).not.toMatch(/diagnostic[^_A-Z]/u);
+    }
+  });
+
+  it('retains replay and partial-failure states as non-destructive reconciliation', () => {
+    expect(ceremony).toContain('test -z "$unresolved" || fail UNRESOLVED_STATE');
+    expect(ceremony).toContain('fail RESTORE_FAILED');
+    expect(ceremony).toContain('fail MARKER_READBACK_MISMATCH');
+    for (const scenario of corpus().cases.filter(({ attack }) =>
+      ['REPLAY_CONFLICT', 'PARTIAL_FAILURE_BEFORE_MARKER', 'PARTIAL_FAILURE_AFTER_MARKER'].includes(
+        attack,
+      ),
+    )) {
+      expect(scenario.expected.clone).toBe('RETAINED');
+      expect(scenario.expected.operations).toMatchObject({ drop: 0, alter: 0, rename: 0 });
+    }
   });
 });

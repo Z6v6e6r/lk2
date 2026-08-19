@@ -1,200 +1,519 @@
 {
-  "schemaVersion": "communities-role-split-negative-corpus-v1",
-  "contract": "PHUB_COMMUNITIES_ROLE_SPLIT_CLONE_MARKER_REQUEST_V1",
+  "schemaVersion": "communities-role-split-negative-corpus-v2",
+  "ceremonyContract": "RUN_COMMUNITIES_ROLE_SPLIT_RESTORE_MARKER_CEREMONY_V2",
+  "cleanupContract": "CLEANUP_COMMUNITIES_ROLE_SPLIT_RESTORE_MARKER_CLONE_V1",
   "cases": [
     {
-      "id": "current-shell-command-injection",
-      "integration": "CURRENT_PREPARATION",
-      "attack": "SHELL_INJECTION",
+      "id": "create-requires-independent-receipt",
+      "integration": "CEREMONY",
+      "phase": "CREATE",
+      "attack": "NONE",
       "expected": {
-        "stableError": "COMMUNITIES_STAGING_ROLE_SPLIT_RESTORE_MARKER_WRITER_CONFIRMATION_INVALID",
+        "exit": "FAILURE",
+        "stableError": "COMMUNITIES_ROLE_SPLIT_RESTORE_MARKER_CEREMONY_CREATION_RECEIPT_REQUIRED",
+        "state": "CREATION_RECONCILIATION_REQUIRED",
+        "receipt": "REQUIRED",
         "marker": "ABSENT",
-        "cleanup": "NOT_APPLICABLE",
+        "clone": "RETAINED",
+        "stdout": "EMPTY",
         "processGroup": "NOT_APPLICABLE",
-        "stdout": "EMPTY",
-        "redaction": "NO_SENSITIVE_VALUE"
+        "callerEnvironment": "SCRUBBED",
+        "diagnosticSentinel": "ABSENT",
+        "operations": {
+          "create": 1,
+          "adopt": 0,
+          "restore": 0,
+          "comment": 0,
+          "drop": 0,
+          "alter": 0,
+          "rename": 0
+        }
       }
     },
     {
-      "id": "current-request-sql-metacharacters",
-      "integration": "CURRENT_PREPARATION",
-      "attack": "SQL_INJECTION",
+      "id": "create-ambiguous-enters-reconciliation",
+      "integration": "CEREMONY",
+      "phase": "CREATE",
+      "attack": "CREATE_AMBIGUOUS",
       "expected": {
-        "stableError": "COMMUNITIES_STAGING_ROLE_SPLIT_RESTORE_MARKER_WRITER_REQUEST_SHAPE_INVALID",
+        "exit": "FAILURE",
+        "stableError": "COMMUNITIES_ROLE_SPLIT_RESTORE_MARKER_CEREMONY_CREATEDB_RECONCILIATION_REQUIRED",
+        "state": "CREATION_RECONCILIATION_REQUIRED",
+        "receipt": "REQUIRED",
         "marker": "ABSENT",
-        "cleanup": "NOT_APPLICABLE",
+        "clone": "RETAINED",
+        "stdout": "EMPTY",
         "processGroup": "NOT_APPLICABLE",
-        "stdout": "EMPTY",
-        "redaction": "NO_SENSITIVE_VALUE"
+        "callerEnvironment": "SCRUBBED",
+        "diagnosticSentinel": "ABSENT",
+        "operations": {
+          "create": 1,
+          "adopt": 0,
+          "restore": 0,
+          "comment": 0,
+          "drop": 0,
+          "alter": 0,
+          "rename": 0
+        }
       }
     },
     {
-      "id": "current-shared-target-collision",
-      "integration": "CURRENT_PREPARATION",
-      "attack": "SHARED_TARGET",
+      "id": "resume-missing-root-receipt",
+      "integration": "CEREMONY",
+      "phase": "RESUME",
+      "attack": "RECEIPT_MISSING",
       "expected": {
-        "stableError": "COMMUNITIES_STAGING_ROLE_SPLIT_RESTORE_MARKER_WRITER_REQUEST_BINDING_INVALID",
+        "exit": "FAILURE",
+        "stableError": "COMMUNITIES_ROLE_SPLIT_RESTORE_MARKER_CEREMONY_RECEIPT_CUSTODY_INVALID",
+        "state": "CREATION_RECONCILIATION_REQUIRED",
+        "receipt": "REJECTED",
         "marker": "ABSENT",
-        "cleanup": "NOT_APPLICABLE",
+        "clone": "RETAINED",
+        "stdout": "EMPTY",
         "processGroup": "NOT_APPLICABLE",
-        "stdout": "EMPTY",
-        "redaction": "NO_SENSITIVE_VALUE"
+        "callerEnvironment": "SCRUBBED",
+        "diagnosticSentinel": "ABSENT",
+        "operations": {
+          "create": 0,
+          "adopt": 0,
+          "restore": 0,
+          "comment": 0,
+          "drop": 0,
+          "alter": 0,
+          "rename": 0
+        }
       }
     },
     {
-      "id": "current-forbidden-system-target",
-      "integration": "CURRENT_PREPARATION",
-      "attack": "FORBIDDEN_TARGET",
+      "id": "resume-wrong-root-receipt",
+      "integration": "CEREMONY",
+      "phase": "RESUME",
+      "attack": "RECEIPT_CUSTODY",
       "expected": {
-        "stableError": "COMMUNITIES_STAGING_ROLE_SPLIT_RESTORE_MARKER_WRITER_REQUEST_BINDING_INVALID",
+        "exit": "FAILURE",
+        "stableError": "COMMUNITIES_ROLE_SPLIT_RESTORE_MARKER_CEREMONY_RECEIPT_CUSTODY_INVALID",
+        "state": "CREATION_RECONCILIATION_REQUIRED",
+        "receipt": "REJECTED",
         "marker": "ABSENT",
-        "cleanup": "NOT_APPLICABLE",
+        "clone": "RETAINED",
+        "stdout": "EMPTY",
         "processGroup": "NOT_APPLICABLE",
-        "stdout": "EMPTY",
-        "redaction": "NO_SENSITIVE_VALUE"
+        "callerEnvironment": "SCRUBBED",
+        "diagnosticSentinel": "ABSENT",
+        "operations": {
+          "create": 0,
+          "adopt": 0,
+          "restore": 0,
+          "comment": 0,
+          "drop": 0,
+          "alter": 0,
+          "rename": 0
+        }
       }
     },
     {
-      "id": "current-malformed-order",
-      "integration": "CURRENT_PREPARATION",
-      "attack": "MALFORMED_REQUEST",
+      "id": "resume-receipt-oid-mismatch",
+      "integration": "CEREMONY",
+      "phase": "RESUME",
+      "attack": "RECEIPT_OID_MISMATCH",
       "expected": {
-        "stableError": "COMMUNITIES_STAGING_ROLE_SPLIT_RESTORE_MARKER_WRITER_REQUEST_SHAPE_INVALID",
+        "exit": "FAILURE",
+        "stableError": "COMMUNITIES_ROLE_SPLIT_RESTORE_MARKER_CEREMONY_RECEIPT_BINDING_INVALID",
+        "state": "CREATION_RECONCILIATION_REQUIRED",
+        "receipt": "REJECTED",
         "marker": "ABSENT",
-        "cleanup": "NOT_APPLICABLE",
+        "clone": "RETAINED",
+        "stdout": "EMPTY",
         "processGroup": "NOT_APPLICABLE",
-        "stdout": "EMPTY",
-        "redaction": "NO_SENSITIVE_VALUE"
+        "callerEnvironment": "SCRUBBED",
+        "diagnosticSentinel": "ABSENT",
+        "operations": {
+          "create": 0,
+          "adopt": 0,
+          "restore": 0,
+          "comment": 0,
+          "drop": 0,
+          "alter": 0,
+          "rename": 0
+        }
       }
     },
     {
-      "id": "current-request-digest-mismatch",
-      "integration": "CURRENT_PREPARATION",
-      "attack": "DIGEST_MISMATCH",
-      "expected": {
-        "stableError": "COMMUNITIES_STAGING_ROLE_SPLIT_RESTORE_MARKER_WRITER_REQUEST_SHA_INVALID",
-        "marker": "ABSENT",
-        "cleanup": "NOT_APPLICABLE",
-        "processGroup": "NOT_APPLICABLE",
-        "stdout": "EMPTY",
-        "redaction": "NO_SENSITIVE_VALUE"
-      }
-    },
-    {
-      "id": "future-wrong-executor-session",
-      "integration": "AWAIT_MARKER_WRITER",
-      "attack": "WRONG_EXECUTOR_SESSION",
-      "expected": {
-        "stableError": "COMMUNITIES_STAGING_ROLE_SPLIT_RESTORE_MARKER_WRITER_EXECUTOR_SESSION_INVALID",
-        "marker": "ABSENT",
-        "cleanup": "REQUIRE_BEFORE_MARKER",
-        "processGroup": "TERMINATED",
-        "stdout": "EMPTY",
-        "redaction": "NO_SENSITIVE_VALUE"
-      }
-    },
-    {
-      "id": "future-wrong-clone-owner",
-      "integration": "AWAIT_MARKER_WRITER",
+      "id": "resume-clone-owner-mismatch",
+      "integration": "CEREMONY",
+      "phase": "RESUME",
       "attack": "OWNER_MISMATCH",
       "expected": {
-        "stableError": "COMMUNITIES_STAGING_ROLE_SPLIT_RESTORE_MARKER_WRITER_CLONE_OWNER_INVALID",
+        "exit": "FAILURE",
+        "stableError": "COMMUNITIES_ROLE_SPLIT_RESTORE_MARKER_CEREMONY_CLONE_IDENTITY_MISMATCH",
+        "state": "CREATION_RECONCILIATION_REQUIRED",
+        "receipt": "VALIDATED",
         "marker": "ABSENT",
-        "cleanup": "REQUIRE_BEFORE_MARKER",
-        "processGroup": "TERMINATED",
+        "clone": "RETAINED",
         "stdout": "EMPTY",
-        "redaction": "NO_SENSITIVE_VALUE"
+        "processGroup": "NOT_APPLICABLE",
+        "callerEnvironment": "SCRUBBED",
+        "diagnosticSentinel": "ABSENT",
+        "operations": {
+          "create": 0,
+          "adopt": 0,
+          "restore": 0,
+          "comment": 0,
+          "drop": 0,
+          "alter": 0,
+          "rename": 0
+        }
       }
     },
     {
-      "id": "future-forbidden-role-capability",
-      "integration": "AWAIT_MARKER_WRITER",
-      "attack": "ROLE_CAPABILITY",
+      "id": "preflight-nonroot-env-unreadable",
+      "integration": "CEREMONY",
+      "phase": "CREATE",
+      "attack": "ENV_UNREADABLE",
       "expected": {
-        "stableError": "COMMUNITIES_STAGING_ROLE_SPLIT_RESTORE_MARKER_WRITER_ROLE_CAPABILITY_INVALID",
+        "exit": "FAILURE",
+        "stableError": "COMMUNITIES_ROLE_SPLIT_RESTORE_MARKER_CEREMONY_APP_ARTIFACT_CUSTODY_INVALID",
+        "state": "UNCHANGED",
+        "receipt": "NOT_APPLICABLE",
         "marker": "ABSENT",
-        "cleanup": "REQUIRE_BEFORE_MARKER",
-        "processGroup": "TERMINATED",
+        "clone": "ABSENT",
         "stdout": "EMPTY",
-        "redaction": "NO_SENSITIVE_VALUE"
+        "processGroup": "NOT_APPLICABLE",
+        "callerEnvironment": "SCRUBBED",
+        "diagnosticSentinel": "ABSENT",
+        "operations": {
+          "create": 0,
+          "adopt": 0,
+          "restore": 0,
+          "comment": 0,
+          "drop": 0,
+          "alter": 0,
+          "rename": 0
+        }
       }
     },
     {
-      "id": "future-repeated-request-conflict",
-      "integration": "AWAIT_MARKER_WRITER",
-      "attack": "REPLAY_CONFLICT",
+      "id": "preflight-app-root-group-writable",
+      "integration": "CEREMONY",
+      "phase": "CREATE",
+      "attack": "APP_ROOT_WRITABLE",
       "expected": {
-        "stableError": "COMMUNITIES_STAGING_ROLE_SPLIT_RESTORE_MARKER_WRITER_REPLAY_CONFLICT",
-        "marker": "PRESERVED",
-        "cleanup": "REFUSE_AFTER_MARKER",
-        "processGroup": "TERMINATED",
-        "stdout": "EMPTY",
-        "redaction": "NO_SENSITIVE_VALUE"
-      }
-    },
-    {
-      "id": "future-partial-failure-before-marker",
-      "integration": "AWAIT_MARKER_WRITER",
-      "attack": "PARTIAL_FAILURE_BEFORE_MARKER",
-      "expected": {
-        "stableError": "COMMUNITIES_STAGING_ROLE_SPLIT_RESTORE_MARKER_WRITER_PARTIAL_FAILURE",
+        "exit": "FAILURE",
+        "stableError": "COMMUNITIES_ROLE_SPLIT_RESTORE_MARKER_CEREMONY_APP_ROOT_CUSTODY_INVALID",
+        "state": "UNCHANGED",
+        "receipt": "NOT_APPLICABLE",
         "marker": "ABSENT",
-        "cleanup": "REQUIRE_BEFORE_MARKER",
-        "processGroup": "TERMINATED",
+        "clone": "ABSENT",
         "stdout": "EMPTY",
-        "redaction": "NO_SENSITIVE_VALUE"
+        "processGroup": "NOT_APPLICABLE",
+        "callerEnvironment": "SCRUBBED",
+        "diagnosticSentinel": "ABSENT",
+        "operations": {
+          "create": 0,
+          "adopt": 0,
+          "restore": 0,
+          "comment": 0,
+          "drop": 0,
+          "alter": 0,
+          "rename": 0
+        }
       }
     },
     {
-      "id": "future-partial-failure-after-marker",
-      "integration": "AWAIT_MARKER_WRITER",
-      "attack": "PARTIAL_FAILURE_AFTER_MARKER",
+      "id": "preflight-runtime-binding-mismatch",
+      "integration": "CEREMONY",
+      "phase": "CREATE",
+      "attack": "RUNTIME_BINDING_MISMATCH",
       "expected": {
-        "stableError": "COMMUNITIES_STAGING_ROLE_SPLIT_RESTORE_MARKER_WRITER_RECONCILIATION_REQUIRED",
-        "marker": "PRESERVED",
-        "cleanup": "REFUSE_AFTER_MARKER",
-        "processGroup": "TERMINATED",
+        "exit": "FAILURE",
+        "stableError": "COMMUNITIES_ROLE_SPLIT_RESTORE_MARKER_CEREMONY_RUNTIME_BINDING_INVALID",
+        "state": "UNCHANGED",
+        "receipt": "NOT_APPLICABLE",
+        "marker": "ABSENT",
+        "clone": "ABSENT",
         "stdout": "EMPTY",
-        "redaction": "NO_SENSITIVE_VALUE"
+        "processGroup": "NOT_APPLICABLE",
+        "callerEnvironment": "SCRUBBED",
+        "diagnosticSentinel": "ABSENT",
+        "operations": {
+          "create": 0,
+          "adopt": 0,
+          "restore": 0,
+          "comment": 0,
+          "drop": 0,
+          "alter": 0,
+          "rename": 0
+        }
       }
     },
     {
-      "id": "future-cleanup-request-after-marker",
-      "integration": "AWAIT_MARKER_WRITER",
-      "attack": "CLEANUP_AFTER_MARKER",
+      "id": "preflight-container-binding-mismatch",
+      "integration": "CEREMONY",
+      "phase": "CREATE",
+      "attack": "CONTAINER_MISMATCH",
       "expected": {
-        "stableError": "COMMUNITIES_STAGING_ROLE_SPLIT_RESTORE_MARKER_WRITER_CLEANUP_NOT_AUTHORIZED",
-        "marker": "PRESERVED",
-        "cleanup": "REFUSE_AFTER_MARKER",
-        "processGroup": "TERMINATED",
+        "exit": "FAILURE",
+        "stableError": "COMMUNITIES_ROLE_SPLIT_RESTORE_MARKER_CEREMONY_CONTAINER_IDENTITY_INVALID",
+        "state": "CREATE_PENDING",
+        "receipt": "NOT_APPLICABLE",
+        "marker": "ABSENT",
+        "clone": "ABSENT",
         "stdout": "EMPTY",
-        "redaction": "NO_SENSITIVE_VALUE"
+        "processGroup": "NOT_APPLICABLE",
+        "callerEnvironment": "SCRUBBED",
+        "diagnosticSentinel": "ABSENT",
+        "operations": {
+          "create": 0,
+          "adopt": 0,
+          "restore": 0,
+          "comment": 0,
+          "drop": 0,
+          "alter": 0,
+          "rename": 0
+        }
       }
     },
     {
-      "id": "future-timeout-process-group",
-      "integration": "AWAIT_MARKER_WRITER",
+      "id": "wrapper-timeout-kills-process-group",
+      "integration": "CEREMONY",
+      "phase": "WRAPPER",
       "attack": "TIMEOUT_PROCESS_GROUP",
       "expected": {
-        "stableError": "COMMUNITIES_STAGING_ROLE_SPLIT_RESTORE_MARKER_WRITER_TIMEOUT",
+        "exit": "TIMEOUT",
+        "stableError": null,
+        "state": "UNCHANGED",
+        "receipt": "NOT_APPLICABLE",
         "marker": "ABSENT",
-        "cleanup": "REQUIRE_BEFORE_MARKER",
-        "processGroup": "TERMINATED",
+        "clone": "UNKNOWN",
         "stdout": "EMPTY",
-        "redaction": "NO_SENSITIVE_VALUE"
+        "processGroup": "TERMINATED",
+        "callerEnvironment": "SCRUBBED",
+        "diagnosticSentinel": "ABSENT",
+        "operations": {
+          "create": 0,
+          "adopt": 0,
+          "restore": 0,
+          "comment": 0,
+          "drop": 0,
+          "alter": 0,
+          "rename": 0
+        }
       }
     },
     {
-      "id": "future-output-redaction",
-      "integration": "AWAIT_MARKER_WRITER",
+      "id": "wrapper-child-token-not-in-forced-command",
+      "integration": "CEREMONY",
+      "phase": "WRAPPER",
+      "attack": "CHILD_MODE_BYPASS",
+      "expected": {
+        "exit": "FAILURE",
+        "stableError": "COMMUNITIES_ROLE_SPLIT_RESTORE_MARKER_CEREMONY_CONFIRMATION_INVALID",
+        "state": "UNCHANGED",
+        "receipt": "NOT_APPLICABLE",
+        "marker": "ABSENT",
+        "clone": "ABSENT",
+        "stdout": "EMPTY",
+        "processGroup": "NOT_APPLICABLE",
+        "callerEnvironment": "SCRUBBED",
+        "diagnosticSentinel": "ABSENT",
+        "operations": {
+          "create": 0,
+          "adopt": 0,
+          "restore": 0,
+          "comment": 0,
+          "drop": 0,
+          "alter": 0,
+          "rename": 0
+        }
+      }
+    },
+    {
+      "id": "comment-nonzero-retains-marker-pending",
+      "integration": "CEREMONY",
+      "phase": "RESUME",
+      "attack": "COMMENT_NONZERO",
+      "expected": {
+        "exit": "FAILURE",
+        "stableError": "COMMUNITIES_ROLE_SPLIT_RESTORE_MARKER_CEREMONY_MARKER_ACTION_AMBIGUOUS",
+        "state": "MARKER_PENDING",
+        "receipt": "VALIDATED",
+        "marker": "POSSIBLY_COMMITTED",
+        "clone": "RETAINED",
+        "stdout": "EMPTY",
+        "processGroup": "NOT_APPLICABLE",
+        "callerEnvironment": "SCRUBBED",
+        "diagnosticSentinel": "ABSENT",
+        "operations": {
+          "create": 0,
+          "adopt": 0,
+          "restore": 1,
+          "comment": 1,
+          "drop": 0,
+          "alter": 0,
+          "rename": 0
+        }
+      }
+    },
+    {
+      "id": "marker-pending-replay-refused",
+      "integration": "CEREMONY",
+      "phase": "CREATE",
+      "attack": "REPLAY_CONFLICT",
+      "expected": {
+        "exit": "FAILURE",
+        "stableError": "COMMUNITIES_ROLE_SPLIT_RESTORE_MARKER_CEREMONY_UNRESOLVED_STATE",
+        "state": "MARKER_PENDING",
+        "receipt": "NOT_APPLICABLE",
+        "marker": "POSSIBLY_COMMITTED",
+        "clone": "RETAINED",
+        "stdout": "EMPTY",
+        "processGroup": "NOT_APPLICABLE",
+        "callerEnvironment": "SCRUBBED",
+        "diagnosticSentinel": "ABSENT",
+        "operations": {
+          "create": 0,
+          "adopt": 0,
+          "restore": 0,
+          "comment": 0,
+          "drop": 0,
+          "alter": 0,
+          "rename": 0
+        }
+      }
+    },
+    {
+      "id": "restore-failure-quarantines-before-marker",
+      "integration": "CEREMONY",
+      "phase": "RESUME",
+      "attack": "PARTIAL_FAILURE_BEFORE_MARKER",
+      "expected": {
+        "exit": "FAILURE",
+        "stableError": "COMMUNITIES_ROLE_SPLIT_RESTORE_MARKER_CEREMONY_RESTORE_FAILED",
+        "state": "QUARANTINE_PENDING_RECONCILIATION_REQUIRED",
+        "receipt": "VALIDATED",
+        "marker": "ABSENT",
+        "clone": "RETAINED",
+        "stdout": "EMPTY",
+        "processGroup": "NOT_APPLICABLE",
+        "callerEnvironment": "SCRUBBED",
+        "diagnosticSentinel": "ABSENT",
+        "operations": {
+          "create": 0,
+          "adopt": 0,
+          "restore": 1,
+          "comment": 0,
+          "drop": 0,
+          "alter": 0,
+          "rename": 0
+        }
+      }
+    },
+    {
+      "id": "readback-failure-preserves-marker",
+      "integration": "CEREMONY",
+      "phase": "RESUME",
+      "attack": "PARTIAL_FAILURE_AFTER_MARKER",
+      "expected": {
+        "exit": "FAILURE",
+        "stableError": "COMMUNITIES_ROLE_SPLIT_RESTORE_MARKER_CEREMONY_MARKER_READBACK_MISMATCH",
+        "state": "MARKER_PENDING",
+        "receipt": "VALIDATED",
+        "marker": "PRESERVED",
+        "clone": "RETAINED",
+        "stdout": "EMPTY",
+        "processGroup": "NOT_APPLICABLE",
+        "callerEnvironment": "SCRUBBED",
+        "diagnosticSentinel": "ABSENT",
+        "operations": {
+          "create": 0,
+          "adopt": 0,
+          "restore": 1,
+          "comment": 1,
+          "drop": 0,
+          "alter": 0,
+          "rename": 0
+        }
+      }
+    },
+    {
+      "id": "cleanup-after-marker-records-quarantine",
+      "integration": "CLEANUP",
+      "phase": "CLEANUP",
+      "attack": "CLEANUP_AFTER_MARKER",
+      "expected": {
+        "exit": "SUCCESS",
+        "stableError": null,
+        "state": "QUARANTINE_PENDING_RECONCILIATION_REQUIRED",
+        "receipt": "VALIDATED",
+        "marker": "PRESERVED",
+        "clone": "RETAINED",
+        "stdout": "CLEANUP_EVIDENCE",
+        "processGroup": "NOT_APPLICABLE",
+        "callerEnvironment": "SCRUBBED",
+        "diagnosticSentinel": "ABSENT",
+        "operations": {
+          "create": 0,
+          "adopt": 0,
+          "restore": 0,
+          "comment": 0,
+          "drop": 0,
+          "alter": 0,
+          "rename": 0
+        }
+      }
+    },
+    {
+      "id": "diagnostic-sentinel-never-published",
+      "integration": "CEREMONY",
+      "phase": "RESUME",
       "attack": "OUTPUT_REDACTION",
       "expected": {
-        "stableError": "COMMUNITIES_STAGING_ROLE_SPLIT_RESTORE_MARKER_WRITER_EVIDENCE_REDACTION_INVALID",
-        "marker": "ABSENT",
-        "cleanup": "REQUIRE_BEFORE_MARKER",
-        "processGroup": "TERMINATED",
+        "exit": "SUCCESS",
+        "stableError": null,
+        "state": "MARKED",
+        "receipt": "VALIDATED",
+        "marker": "PRESERVED",
+        "clone": "RETAINED",
+        "stdout": "MARKER_EVIDENCE",
+        "processGroup": "NOT_APPLICABLE",
+        "callerEnvironment": "SCRUBBED",
+        "diagnosticSentinel": "ABSENT",
+        "operations": {
+          "create": 0,
+          "adopt": 0,
+          "restore": 1,
+          "comment": 1,
+          "drop": 0,
+          "alter": 0,
+          "rename": 0
+        }
+      }
+    },
+    {
+      "id": "cleanup-request-binding-conflict",
+      "integration": "CLEANUP",
+      "phase": "CLEANUP",
+      "attack": "REPLAY_CONFLICT",
+      "expected": {
+        "exit": "FAILURE",
+        "stableError": "COMMUNITIES_ROLE_SPLIT_RESTORE_MARKER_CLEANUP_STATE_BINDING_INVALID",
+        "state": "MARKED",
+        "receipt": "REJECTED",
+        "marker": "PRESERVED",
+        "clone": "RETAINED",
         "stdout": "EMPTY",
-        "redaction": "NO_SENSITIVE_VALUE"
+        "processGroup": "NOT_APPLICABLE",
+        "callerEnvironment": "SCRUBBED",
+        "diagnosticSentinel": "ABSENT",
+        "operations": {
+          "create": 0,
+          "adopt": 0,
+          "restore": 0,
+          "comment": 0,
+          "drop": 0,
+          "alter": 0,
+          "rename": 0
+        }
       }
     }
   ]
