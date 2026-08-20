@@ -12,8 +12,16 @@ import {
   communitiesStagingRoleSplitRestoreLoginSubjectSha256,
   communitiesStagingRoleSplitRestoreMarkerRequestSha256,
   type CommunitiesStagingRoleSplitHostAuthorization,
+  communitiesStagingRoleSplitRestoreExecutionDescriptorSha256,
+  communitiesStagingRoleSplitSourceWriteDenialAttestationSha256,
+  communitiesSourceConnectAclObservationSha256,
+  communitiesSourceMembershipObservationSha256,
   type CommunitiesStagingRoleSplitRestoreExecutionDescriptor,
   type CommunitiesStagingRoleSplitRestoreMarkerRequest,
+  type CommunitiesStagingRoleSplitRestoreExecutionEvidence,
+  type CommunitiesStagingRoleSplitSourceWriteDenialAttestation,
+  type CommunitiesSourceConnectAclObservation,
+  type CommunitiesSourceMembershipObservation,
 } from '@phub/database';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -21,6 +29,7 @@ import {
   COMMUNITIES_STAGING_ROLE_SPLIT_DDL_FENCE_ADVISORY_KEY,
   CommunitiesStagingRoleSplitReviewedRunnerAdapter,
   CommunitiesStagingRoleSplitRunnerAdapter,
+  assertCommunitiesStagingRoleSplitRunnerAdapterBinding,
   type CommunitiesStagingRoleSplitRestoreArchiveInput,
 } from './communities-staging-role-split-runner-adapter.js';
 
@@ -28,7 +37,7 @@ const sha = (value: string) => createHash('sha256').update(value, 'utf8').digest
 const request = {
   restoreDatabase: 'phub_restore_123_4',
   expectedCloneDatabaseOwner: 'phub_restore',
-  expectedCloneDatabaseOwnerOid: '16384',
+  expectedCloneDatabaseOwnerOid: '16386',
   sourceDatabase: 'phub_staging',
   sourceDatabaseOid: '16385',
   sourceDatabaseOwner: 'phub_staging',
@@ -52,6 +61,72 @@ const request = {
   restoreHelperSha256: '2'.repeat(64),
   markerWriterSha256: '3'.repeat(64),
 } as const satisfies CommunitiesStagingRoleSplitRestoreMarkerRequest;
+const attestation = {
+  schemaVersion: 'communities-staging-role-split-source-write-denial-attestation-v1',
+  status: 'SOURCE_CONNECT_DENIED',
+  markerRequestSha256: communitiesStagingRoleSplitRestoreMarkerRequestSha256(request),
+  systemIdentifier: request.systemIdentifier,
+  postgresMajor: '16',
+  sourceDatabase: {
+    name: request.sourceDatabase,
+    oid: request.sourceDatabaseOid,
+    owner: { name: request.sourceDatabaseOwner, oid: request.sourceDatabaseOwnerOid },
+    connectAclObservationSha256: sha('source connect acl'),
+  },
+  restorePrincipal: {
+    name: 'phub_restore',
+    oid: '16386',
+    membershipObservationSha256: sha('restore membership'),
+    attributes: {
+      superuser: false,
+      createRole: false,
+      createDatabase: false,
+      replication: false,
+      bypassRls: false,
+    },
+  },
+  checks: { owner: false, effectiveConnect: false, rejectedBeforeQuery: true, sqlState: '42501' },
+  authorizes: {
+    execution: false,
+    cloneCreation: false,
+    restore: false,
+    markerWrite: false,
+    evidencePublication: false,
+    automaticCleanup: false,
+    roleCreation: false,
+    roleSplit: false,
+    sharedDatabaseMutation: false,
+    migration: false,
+    deploy: false,
+    import: false,
+    activation: false,
+  },
+} as const satisfies CommunitiesStagingRoleSplitSourceWriteDenialAttestation;
+const connectAclObservation = {
+  schemaVersion: 'communities-staging-role-split-source-connect-acl-observation-v1',
+  databaseOid: request.sourceDatabaseOid,
+  databaseOwnerOid: request.sourceDatabaseOwnerOid,
+  aclState: 'EXPLICIT',
+  rows: [],
+} as const satisfies CommunitiesSourceConnectAclObservation;
+const membershipObservation = {
+  schemaVersion: 'communities-staging-role-split-restore-principal-membership-observation-v1',
+  principalOid: attestation.restorePrincipal.oid,
+  rows: [],
+} as const satisfies CommunitiesSourceMembershipObservation;
+const boundAttestation = {
+  ...attestation,
+  sourceDatabase: {
+    ...attestation.sourceDatabase,
+    connectAclObservationSha256:
+      communitiesSourceConnectAclObservationSha256(connectAclObservation),
+  },
+  restorePrincipal: {
+    ...attestation.restorePrincipal,
+    membershipObservationSha256:
+      communitiesSourceMembershipObservationSha256(membershipObservation),
+  },
+} as const satisfies CommunitiesStagingRoleSplitSourceWriteDenialAttestation;
 const descriptor: CommunitiesStagingRoleSplitRestoreExecutionDescriptor = {
   schemaVersion: COMMUNITIES_STAGING_ROLE_SPLIT_RESTORE_EXECUTION_DESCRIPTOR_VERSION,
   mode: 'CODE_ONLY_DISABLED',
@@ -60,13 +135,17 @@ const descriptor: CommunitiesStagingRoleSplitRestoreExecutionDescriptor = {
   cloneDatabaseOid: '45678',
   connection: { host: '127.0.0.1', port: '5432', sslMode: 'disable' },
   identity: {
-    connectionLogin: { name: 'phub_restore', oid: '16384' },
-    restoreRole: { name: 'phub_restore', oid: '16384' },
+    connectionLogin: {
+      name: attestation.restorePrincipal.name,
+      oid: attestation.restorePrincipal.oid,
+    },
+    restoreRole: { name: attestation.restorePrincipal.name, oid: attestation.restorePrincipal.oid },
     relation: 'SAME',
   },
   pgRestoreSha256: '4'.repeat(64),
   pgpassBasename: 'role-split.pgpass',
-  sourceWriteDenialEvidenceSha256: '5'.repeat(64),
+  sourceWriteDenialEvidenceSha256:
+    communitiesStagingRoleSplitSourceWriteDenialAttestationSha256(boundAttestation),
   timeouts: { preflightMs: 10_000, restoreMs: 600_000 },
   authorizes: {
     execution: false,
@@ -84,6 +163,50 @@ const descriptor: CommunitiesStagingRoleSplitRestoreExecutionDescriptor = {
     activation: false,
   },
 };
+const restoreExecutionEvidence = {
+  schemaVersion: 'communities-staging-role-split-restore-execution-evidence-v1',
+  status: 'PREPARATION_ONLY',
+  markerRequestSha256: communitiesStagingRoleSplitRestoreMarkerRequestSha256(request),
+  sourceWriteDenialAttestationSha256: communitiesStagingRoleSplitSourceWriteDenialAttestationSha256(
+    {
+      ...attestation,
+      sourceDatabase: {
+        ...attestation.sourceDatabase,
+        connectAclObservationSha256:
+          communitiesSourceConnectAclObservationSha256(connectAclObservation),
+      },
+      restorePrincipal: {
+        ...attestation.restorePrincipal,
+        membershipObservationSha256:
+          communitiesSourceMembershipObservationSha256(membershipObservation),
+      },
+    },
+  ),
+  restoreExecutionDescriptorSha256:
+    communitiesStagingRoleSplitRestoreExecutionDescriptorSha256(descriptor),
+  creationReceiptSha256: descriptor.creationReceiptSha256,
+  cloneDatabaseOid: descriptor.cloneDatabaseOid,
+  systemIdentifier: request.systemIdentifier,
+  postgresMajor: '16',
+  restoreRunId: request.restoreRunId,
+  restoreRunAttempt: request.restoreRunAttempt,
+  authorizes: {
+    execution: false,
+    cloneCreation: false,
+    restore: false,
+    markerWrite: false,
+    evidencePublication: false,
+    automaticCleanup: false,
+    roleCreation: false,
+    roleSplit: false,
+    sharedDatabaseMutation: false,
+    migration: false,
+    deploy: false,
+    import: false,
+    activation: false,
+    statePersistence: false,
+  },
+} as const satisfies CommunitiesStagingRoleSplitRestoreExecutionEvidence;
 
 const execution = {
   cloneDatabaseOid: '45678',
@@ -157,10 +280,36 @@ function input(overrides: Partial<CommunitiesStagingRoleSplitRestoreArchiveInput
 }
 
 describe('CommunitiesStagingRoleSplitRunnerAdapter', () => {
+  it('accepts only the nominal binding synchronously', () => {
+    const fixture = input();
+    const config = {
+      request,
+      descriptor,
+      sourceWriteDenialAttestation: boundAttestation,
+      connectAclObservation,
+      membershipObservation,
+      restoreExecutionEvidence,
+      creationReceiptSha256: descriptor.creationReceiptSha256,
+    } as const;
+    expect(() =>
+      assertCommunitiesStagingRoleSplitRunnerAdapterBinding(config, fixture.value),
+    ).not.toThrow();
+    expect(() =>
+      assertCommunitiesStagingRoleSplitRunnerAdapterBinding(config, {
+        request,
+        cloneDatabaseOid: '45679',
+      }),
+    ).toThrow(/EXECUTION_NOT_AUTHORIZED/);
+  });
+
   it('rejects before touching the archive or invoking a fence/collaborator', async () => {
     const adapter = new CommunitiesStagingRoleSplitRunnerAdapter({
       request,
       descriptor,
+      sourceWriteDenialAttestation: boundAttestation,
+      connectAclObservation,
+      membershipObservation,
+      restoreExecutionEvidence,
       creationReceiptSha256: descriptor.creationReceiptSha256,
     });
     const fixture = input();
@@ -173,12 +322,47 @@ describe('CommunitiesStagingRoleSplitRunnerAdapter', () => {
   type FailureCase = {
     readonly descriptor?: CommunitiesStagingRoleSplitRestoreExecutionDescriptor;
     readonly creationReceiptSha256?: string;
+    readonly sourceWriteDenialAttestation?: CommunitiesStagingRoleSplitSourceWriteDenialAttestation;
+    readonly restoreExecutionEvidence?: CommunitiesStagingRoleSplitRestoreExecutionEvidence;
     readonly input?: Partial<CommunitiesStagingRoleSplitRestoreArchiveInput>;
   };
   const failureCases: readonly [string, FailureCase][] = [
     ['request SHA', { descriptor: { ...descriptor, markerRequestSha256: '0'.repeat(64) } }],
     ['receipt SHA', { creationReceiptSha256: '0'.repeat(64) }],
     ['callback clone OID', { input: { cloneDatabaseOid: '45679' } }],
+    [
+      'execution evidence descriptor digest',
+      {
+        restoreExecutionEvidence: {
+          ...restoreExecutionEvidence,
+          restoreExecutionDescriptorSha256: '0'.repeat(64),
+        },
+      },
+    ],
+    [
+      'execution evidence receipt',
+      {
+        restoreExecutionEvidence: {
+          ...restoreExecutionEvidence,
+          creationReceiptSha256: '0'.repeat(64),
+        },
+      },
+    ],
+    [
+      'execution evidence system/run binding',
+      {
+        restoreExecutionEvidence: { ...restoreExecutionEvidence, restoreRunAttempt: '5' },
+      },
+    ],
+    [
+      'source write denial attestation',
+      {
+        sourceWriteDenialAttestation: {
+          ...boundAttestation,
+          checks: { ...boundAttestation.checks, effectiveConnect: true },
+        } as unknown as CommunitiesStagingRoleSplitSourceWriteDenialAttestation,
+      },
+    ],
     [
       'restore role binding',
       {
@@ -207,6 +391,10 @@ describe('CommunitiesStagingRoleSplitRunnerAdapter', () => {
       const adapter = new CommunitiesStagingRoleSplitRunnerAdapter({
         request,
         descriptor: change.descriptor ?? descriptor,
+        sourceWriteDenialAttestation: change.sourceWriteDenialAttestation ?? boundAttestation,
+        connectAclObservation,
+        membershipObservation,
+        restoreExecutionEvidence: change.restoreExecutionEvidence ?? restoreExecutionEvidence,
         creationReceiptSha256: change.creationReceiptSha256 ?? descriptor.creationReceiptSha256,
       });
       await expect(adapter.restoreArchive(fixture.value)).rejects.toMatchObject({
@@ -232,7 +420,6 @@ describe('CommunitiesStagingRoleSplitReviewedRunnerAdapter', () => {
   } as const;
 
   function reviewed(overrides: Record<string, unknown> = {}) {
-    const calls: string[] = [];
     const lease = {
       requestSha256: authorization.markerRequestSha256,
       systemIdentifier: request.systemIdentifier,
@@ -241,25 +428,11 @@ describe('CommunitiesStagingRoleSplitReviewedRunnerAdapter', () => {
       advisoryKey: COMMUNITIES_STAGING_ROLE_SPLIT_DDL_FENCE_ADVISORY_KEY,
     } as const;
     const fence = {
-      acquire: vi.fn(async () => {
-        calls.push('fence:acquire');
-        return lease;
-      }),
-      assertHeld: vi.fn(async () => {
-        calls.push('fence:held');
-      }),
-      release: vi.fn(async () => {
-        calls.push('fence:release');
-      }),
+      acquire: vi.fn(async () => lease),
+      assertHeld: vi.fn(async () => undefined),
+      release: vi.fn(async () => undefined),
     };
-    const runRestore = vi.fn(
-      async (runnerConfig: unknown, runnerInput: { readonly archiveFile: unknown }) => {
-        void runnerConfig;
-        void runnerInput;
-        calls.push('restore');
-        return { discardedOutputBytes: 0 };
-      },
-    );
+    const preflight = vi.fn();
     const config = {
       request,
       creationReceiptSha256: authorization.creationReceiptSha256,
@@ -276,43 +449,44 @@ describe('CommunitiesStagingRoleSplitReviewedRunnerAdapter', () => {
       fenceTimeoutMs: 10_000,
       connectionFactory: {
         subjectSha256: execution.cloneOnlyConnectionFactorySha256,
-        preflight: vi.fn(),
+        preflight,
       },
       fence: { ...fence, subjectSha256: execution.ddlFenceSha256 },
       passwordFile: {} as never,
       executableFile: {} as never,
-      runRestore,
       ...overrides,
     };
     return {
       adapter: new CommunitiesStagingRoleSplitReviewedRunnerAdapter(config),
-      calls,
       fence,
       lease,
-      runRestore,
+      preflight,
     };
   }
 
-  it('runs the descriptor-pinned restore only while the reviewed fence is held', async () => {
-    const archiveFile = {} as never;
-    const restoreInput = { archiveFile, cloneDatabaseOid: target.databaseOid, request };
-    const { adapter, calls, runRestore } = reviewed();
-    await expect(adapter.restoreArchive(restoreInput)).resolves.toEqual({
-      discardedOutputBytes: 0,
+  it('requires a future durable V3 execution-evidence contract before touching collaborators', async () => {
+    const archiveTouched = vi.fn();
+    const archiveFile = new Proxy({} as never, {
+      get() {
+        archiveTouched();
+        return undefined;
+      },
     });
-    expect(calls).toEqual([
-      'fence:acquire',
-      'fence:held',
-      'restore',
-      'fence:held',
-      'fence:release',
-    ]);
-    const [runnerConfig, runnerInput] = runRestore.mock.calls[0]!;
-    expect(runnerConfig).toMatchObject({
-      target,
-      expectedPgRestoreSha256: subjects.PG_RESTORE_EXECUTABLE_SHA256,
-    });
-    expect(runnerInput.archiveFile).toBe(archiveFile);
+    const current = reviewed();
+
+    await expect(
+      current.adapter.restoreArchive({
+        archiveFile,
+        cloneDatabaseOid: target.databaseOid,
+        request,
+      }),
+    ).rejects.toMatchObject({ code: 'V3_EXECUTION_EVIDENCE_REQUIRED' });
+
+    expect(archiveTouched).not.toHaveBeenCalled();
+    expect(current.preflight).not.toHaveBeenCalled();
+    expect(current.fence.acquire).not.toHaveBeenCalled();
+    expect(current.fence.assertHeld).not.toHaveBeenCalled();
+    expect(current.fence.release).not.toHaveBeenCalled();
   });
 
   it('rejects an independently pinned authorization mismatch before acquiring the fence', () => {
@@ -321,23 +495,7 @@ describe('CommunitiesStagingRoleSplitReviewedRunnerAdapter', () => {
     );
   });
 
-  it('turns runner uncertainty into an ambiguous outcome and releases its fence', async () => {
-    const runnerFailure = reviewed({
-      runRestore: vi.fn(async () => {
-        throw new Error('secret provider error');
-      }),
-    });
-    await expect(
-      runnerFailure.adapter.restoreArchive({
-        archiveFile: {} as never,
-        cloneDatabaseOid: target.databaseOid,
-        request,
-      }),
-    ).rejects.toMatchObject({ code: 'RESTORE_OUTCOME_AMBIGUOUS' });
-    expect(runnerFailure.fence.release).toHaveBeenCalledTimes(1);
-  });
-
-  it('does not reacquire or release a fence already owned by the canonical adapter', async () => {
+  it('does not inspect even a borrowed canonical fence before V3 exists', async () => {
     const base = reviewed();
     const current = reviewed({ externalFenceLease: base.lease });
     await expect(
@@ -346,53 +504,10 @@ describe('CommunitiesStagingRoleSplitReviewedRunnerAdapter', () => {
         cloneDatabaseOid: target.databaseOid,
         request,
       }),
-    ).resolves.toEqual({ discardedOutputBytes: 0 });
-    expect(current.calls).toEqual(['fence:held', 'restore', 'fence:held']);
+    ).rejects.toMatchObject({ code: 'V3_EXECUTION_EVIDENCE_REQUIRED' });
+    expect(current.preflight).not.toHaveBeenCalled();
     expect(current.fence.acquire).not.toHaveBeenCalled();
+    expect(current.fence.assertHeld).not.toHaveBeenCalled();
     expect(current.fence.release).not.toHaveBeenCalled();
-  });
-
-  it('rejects a borrowed fence lease from another request before restore', async () => {
-    const base = reviewed();
-    const current = reviewed({
-      externalFenceLease: { ...base.lease, requestSha256: '0'.repeat(64) },
-    });
-    await expect(
-      current.adapter.restoreArchive({
-        archiveFile: {} as never,
-        cloneDatabaseOid: target.databaseOid,
-        request,
-      }),
-    ).rejects.toMatchObject({ code: 'FENCE_UNAVAILABLE' });
-    expect(current.runRestore).not.toHaveBeenCalled();
-    expect(current.fence.acquire).not.toHaveBeenCalled();
-    expect(current.fence.release).not.toHaveBeenCalled();
-  });
-
-  it('distinguishes an unavailable pre-restore fence from ambiguous post-restore loss', async () => {
-    const unavailable = reviewed();
-    unavailable.fence.assertHeld.mockRejectedValueOnce(new Error('unavailable'));
-    await expect(
-      unavailable.adapter.restoreArchive({
-        archiveFile: {} as never,
-        cloneDatabaseOid: target.databaseOid,
-        request,
-      }),
-    ).rejects.toMatchObject({ code: 'FENCE_UNAVAILABLE' });
-    expect(unavailable.runRestore).not.toHaveBeenCalled();
-
-    const lost = reviewed();
-    lost.fence.assertHeld
-      .mockResolvedValueOnce(undefined)
-      .mockRejectedValueOnce(new Error('lost after restore'));
-    await expect(
-      lost.adapter.restoreArchive({
-        archiveFile: {} as never,
-        cloneDatabaseOid: target.databaseOid,
-        request,
-      }),
-    ).rejects.toMatchObject({ code: 'RESTORE_OUTCOME_AMBIGUOUS' });
-    expect(lost.runRestore).toHaveBeenCalledTimes(1);
-    expect(lost.fence.release).toHaveBeenCalledTimes(1);
   });
 });

@@ -80,6 +80,28 @@ digest. Marker/evidence V1 is not accepted as a compatibility fallback.
   source-write-denial evidence and bounded timeouts. Every execution, clone, restore, marker,
   evidence, cleanup, role, shared-database, migration, deploy, import and activation authority is
   exactly `false`.
+- `packages/database/src/communities-staging-role-split-source-write-denial-attestation.ts` defines
+  the strict canonical JSON+LF V1 `SOURCE_CONNECT_DENIED` artifact. It binds the canonical marker
+  request, system identifier, PostgreSQL 16, exact source database/owner and a canonical source
+  CONNECT-ACL observation hash to the restore principal, canonical membership-observation hash and
+  disabled dangerous attributes. The observation artifacts faithfully retain boolean grant/options;
+  their binding, rather than their schema, establishes no PUBLIC/principal CONNECT row and no
+  membership row. The source owner check and effective CONNECT check are both `false`; connection
+  denial occurs before a query with SQLSTATE `42501`. Its SHA-256 is pinned one way by the
+  descriptor's `sourceWriteDenialEvidenceSha256`; it deliberately does not hash the descriptor,
+  avoiding a circular digest contract. All thirteen authority flags remain exactly `false`, and
+  the restore principal OID must differ from the source database owner OID.
+- `packages/database/src/communities-staging-role-split-restore-execution-evidence.ts` defines a
+  non-authorizing `PREPARATION_ONLY` execution envelope. It observes the one-way request,
+  source-write-denial-attestation and descriptor digests plus receipt, clone, system and run
+  bindings. It adds no reverse digest edge and keeps execution, state persistence and every other
+  authority exactly `false`; it is not marker evidence or an execution command.
+- The disabled `CommunitiesStagingRoleSplitRunnerAdapter` path in
+  `apps/migrator/src/communities-staging-role-split-runner-adapter.ts` cross-checks the descriptor
+  against the canonical request, source-denial attestation, preparation envelope, receipt, clone
+  OID and restore-owner binding, then always fails with `EXECUTION_NOT_AUTHORIZED` before it can
+  inspect archive/password/executable descriptors, invoke a fence, preflight, spawn `pg_restore`,
+  write marker/evidence, or create/drop a clone.
 - `packages/database/src/communities-staging-role-split-host-authorization.ts` defines an exact
   canonical twelve-binding host-authorization receipt. It binds the marker request, creation
   receipt, candidate commit, clone OID, loopback clone connection tuple, restore login/OID,
@@ -92,12 +114,10 @@ digest. Marker/evidence V1 is not accepted as a compatibility fallback.
   same-FD custody reader and checks every exact digest. Missing, reordered, aliased, mutable or
   non-root evidence fails before PostgreSQL access.
 - `apps/migrator/src/communities-staging-role-split-runner-adapter.ts` retains the old disabled
-  descriptor adapter and adds a separate reviewed restore adapter. The reviewed path cross-binds
-  the loaded authorization, request, creation receipt, clone/OID/login, executable digest,
-  connection-factory subject and DDL-fence subject before calling the FD-pinned runner. It can
-  borrow the execution-wide fence already held by the canonical host and never reacquires or
-  releases that lease. Runner failure or post-restore fence loss is an ambiguous restore outcome,
-  never a retry signal.
+  descriptor adapter and adds a separate reviewed configuration validator. Its constructor
+  cross-binds the loaded authorization, request, creation receipt, clone/OID/login, executable
+  digest, connection-factory subject and DDL-fence subject, but `restoreArchive` remains disabled:
+  it does not inspect a borrowed lease or call the fence, preflight or FD-pinned runner before V3.
 - `apps/migrator/src/communities-staging-role-split-canonical-host-adapter.ts` wraps the durable PG
   host with one execution-wide cluster fence. It validates every filesystem lease, asserts the
   fence before and after each state observation or mutation, routes COMMENT through the pinned
@@ -115,6 +135,20 @@ digest. Marker/evidence V1 is not accepted as a compatibility fallback.
   root-only mode-0700 sink with canonical evidence bytes, exclusive temporary creation,
   no-overwrite hard-link installation, fsync and exact root-owned readback. It is separate from the
   ceremony state directory and treats an existing different artifact as a conflict.
+
+Any future live wiring requires a newly reviewed, versioned V3 durable state, marker and evidence
+contract that carries `restoreExecutionEvidenceSha256` from the receipt/clone binding onward. The
+existing V2 state and marker formats are frozen and cannot be used as a compatibility fallback for
+V3 execution evidence.
+
+The V1 host-authorization receipt can describe a reviewed restore contour, but it is not sufficient
+execution authority. `CommunitiesStagingRoleSplitReviewedRunnerAdapter.restoreArchive` therefore
+returns `V3_EXECUTION_EVIDENCE_REQUIRED` before archive inspection, fence acquisition, preflight or
+runner invocation. It may become executable only after the V3 envelope is durably persisted and
+verified before `RESTORE_PENDING`; a post-restore attestation is not a substitute for that gate.
+Directly binding the raw `pg_restore` runner to the PG-host restore callback is prohibited before
+the same reviewed V3 contract and pre-restore source-denial gate exist; the non-entrypoint status of
+those libraries is not an alternative authorization path.
 
 These modules remain non-entrypoint libraries: there is no environment parser, forced command,
 installation target or workflow that composes them. The PG16 library validates catalog
