@@ -393,6 +393,12 @@ describe('communities role split acceptance', () => {
     expect(assertCommunitiesRoleSplitAcceptancePass(candidate, pins(before, after))).toEqual(
       candidate.comparison,
     );
+    const canonicalRoundTrip = JSON.parse(
+      communitiesRoleSplitCanonicalJson(candidate),
+    ) as CommunitiesRoleSplitAcceptanceEnvelope;
+    expect(
+      assertCommunitiesRoleSplitAcceptancePass(canonicalRoundTrip, pins(before, after)),
+    ).toEqual(candidate.comparison);
     expect(
       before.normalized.relations.find((entry) => entry.fieldKind === 'ACL_EXPLICIT')!
         .fieldKeySha256,

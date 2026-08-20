@@ -317,6 +317,39 @@ organizationally independent pin custody, the production CLI connection path, in
 clean-clone provenance or a cluster-wide DDL fence. The gate creates no
 staging/production database, role, key, request or inventory.
 
+## Independently pinned acceptance artifact gate
+
+`apps/migrator/src/verify-communities-role-split-acceptance-artifact.ts` is the local, read-only
+bridge between separately retained candidate INPUT_C artifacts and any future executable V3 design.
+It accepts only four root-owned, single-link, non-group/other-writable files: the exact canonical
+acceptance envelope, the separately retained canonical before and after INPUT_C artifacts, and a
+canonical pins artifact. A separately supplied SHA-256 binds the complete pins artifact; that
+artifact in turn binds the acceptance envelope, both INPUT_C artifacts and manifests, the mapping,
+marker, marker evidence, request, creation receipt, object manifest and ledger.
+
+The verifier requires the envelope's embedded before/after snapshots to be byte-identical to the
+external INPUT_C artifacts and runs the authoritative cross-field acceptance evaluator. Its output
+contains only digests, comparison counts, true binding booleans, explicit external-review
+limitations and false authorizations. `ACCEPTANCE_PASS_REVIEW_ONLY` is not a trusted-inventory
+designation and does not authorize an execution candidate, key, ceremony or database mutation.
+Independent custody, independently sourced clean-clone provenance and the DBA role matrix remain
+external evidence gates.
+
+After building `@phub/migrator`, the command shape is:
+
+```sh
+node apps/migrator/dist/verify-communities-role-split-acceptance-artifact.js \
+  --envelope '<root-owned-acceptance-envelope>' \
+  --before '<root-owned-before-input-c>' \
+  --after '<root-owned-after-input-c>' \
+  --pins '<root-owned-acceptance-pins>' \
+  --pins-sha256 '<independently-retained-pins-sha256>'
+```
+
+The verifier performs no PostgreSQL, SSH, Docker, filesystem mutation, role/ACL change, migration,
+deploy or activation. An invalid, noncanonical, unpinned, cross-boundary or incomplete artifact
+fails with one fixed public error.
+
 ## Exact disabled installable candidate
 
 `scripts/prepare-communities-role-split-installation-candidate.ts` now builds and verifies a

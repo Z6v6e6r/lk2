@@ -677,7 +677,11 @@ export function assertCommunitiesRoleSplitAcceptancePass(
     removedCount: delta.removed,
     forbiddenTransitionCodes: [],
   };
-  if (JSON.stringify(envelope.comparison) !== JSON.stringify(computed)) fail('COMPARISON_MISMATCH');
+  if (
+    communitiesRoleSplitCanonicalJson(envelope.comparison) !==
+    communitiesRoleSplitCanonicalJson(computed)
+  )
+    fail('COMPARISON_MISMATCH');
   if (
     envelope.decision.status !== 'PASS' ||
     envelope.decision.blockerCodes.length > 0 ||

@@ -13,6 +13,7 @@ import {
   communitiesStagingRoleSplitRestoreMarkerPayloadSha256,
   communitiesStagingRoleSplitRestoreMarkerRequestSha256,
   COMMUNITIES_STAGING_ROLE_SPLIT_CLONE_MANIFEST_SHA256,
+  communitiesRoleSplitCanonicalJson,
   communitiesRoleSplitInputCArtifactSha256,
   communitiesRoleSplitInputCArtifactText,
   communitiesRoleSplitInputCManifestSha256,
@@ -47,8 +48,15 @@ import {
   communitiesStagingRoleSplitInventoryArtifactVerificationText,
   verifyCommunitiesStagingRoleSplitInventoryArtifact,
 } from './communities-staging-role-split-inventory-artifact.js';
+import {
+  COMMUNITIES_ROLE_SPLIT_ACCEPTANCE_ARTIFACT_PINS_VERSION,
+  communitiesRoleSplitAcceptanceArtifactPinsText,
+  communitiesRoleSplitAcceptanceArtifactVerificationText,
+  verifyCommunitiesRoleSplitAcceptanceArtifact,
+  type CommunitiesRoleSplitAcceptanceArtifactPins,
+} from './communities-role-split-acceptance-artifact.js';
 
-const sha = (value: string): string => createHash('sha256').update(value).digest('hex');
+const sha = (value: string | Buffer): string => createHash('sha256').update(value).digest('hex');
 type JsonSchema = Record<string, unknown>;
 function validatesJsonSchema(root: JsonSchema, schema: JsonSchema, value: unknown): boolean {
   if (typeof schema.$ref === 'string') {
@@ -765,6 +773,98 @@ describe('Communities role split INPUT_C producer', () => {
       ledgerDigest: observedBefore.provenance.ledgerDigest,
     };
     expect(assertCommunitiesRoleSplitAcceptancePass(envelope, pins)).toEqual(envelope.comparison);
+
+    const acceptanceEnvelopeBytes = Buffer.from(
+      `${communitiesRoleSplitCanonicalJson(envelope)}\n`,
+      'utf8',
+    );
+    const acceptanceArtifactPins: CommunitiesRoleSplitAcceptanceArtifactPins = {
+      schemaVersion: COMMUNITIES_ROLE_SPLIT_ACCEPTANCE_ARTIFACT_PINS_VERSION,
+      acceptanceEnvelopeSha256: sha(acceptanceEnvelopeBytes),
+      ...pins,
+    };
+    const pinsText = communitiesRoleSplitAcceptanceArtifactPinsText(acceptanceArtifactPins);
+    const verification = verifyCommunitiesRoleSplitAcceptanceArtifact({
+      acceptanceEnvelopeBytes,
+      beforeArtifactBytes: Buffer.from(communitiesRoleSplitInputCArtifactText(observedBefore)),
+      afterArtifactBytes: Buffer.from(communitiesRoleSplitInputCArtifactText(observedAfter)),
+      pinsBytes: Buffer.from(pinsText),
+      independentlyPinnedPinsSha256: sha(pinsText),
+    });
+    expect(verification).toMatchObject({
+      status: 'ACCEPTANCE_PASS_REVIEW_ONLY',
+      pinsArtifactSha256: sha(pinsText),
+      acceptanceEnvelopeSha256: acceptanceArtifactPins.acceptanceEnvelopeSha256,
+      beforeArtifactSha256: pins.beforeArtifactSha256,
+      afterArtifactSha256: pins.afterArtifactSha256,
+      comparison: {
+        changedCount: 4,
+        addedCount: 0,
+        removedCount: 0,
+        forbiddenTransitionCount: 0,
+      },
+      bindings: {
+        callerSuppliedPinsArtifactMatched: true,
+        embeddedSnapshotsMatchedExternalArtifacts: true,
+        authoritativeAcceptanceEvaluatorPassed: true,
+      },
+      limitations: {
+        independentPinCustodyNotAttested: true,
+        independentlySourcedCleanCloneNotAttested: true,
+        dbaRoleMatrixReviewNotAttested: true,
+        v3ExecutableCompositionNotPresent: true,
+      },
+      authorizes: {
+        trustedInventoryDesignation: false,
+        executionCandidateBuild: false,
+        forcedCommandKey: false,
+        ceremony: false,
+        roleCreation: false,
+        roleSplit: false,
+        aclMutation: false,
+        sharedDatabaseMutation: false,
+        migration: false,
+        deploy: false,
+        activation: false,
+      },
+    });
+    expect(communitiesRoleSplitAcceptanceArtifactVerificationText(verification)).not.toMatch(
+      /phub_restore|phub_staging|inventory_reader|7421000000000000000|45678/u,
+    );
+    expect(() =>
+      verifyCommunitiesRoleSplitAcceptanceArtifact({
+        acceptanceEnvelopeBytes: Buffer.from(` ${acceptanceEnvelopeBytes.toString('utf8')}`),
+        beforeArtifactBytes: Buffer.from(communitiesRoleSplitInputCArtifactText(observedBefore)),
+        afterArtifactBytes: Buffer.from(communitiesRoleSplitInputCArtifactText(observedAfter)),
+        pinsBytes: Buffer.from(pinsText),
+        independentlyPinnedPinsSha256: sha(pinsText),
+      }),
+    ).toThrow('COMMUNITIES_ROLE_SPLIT_ACCEPTANCE_ARTIFACT_INVALID');
+    expect(() =>
+      verifyCommunitiesRoleSplitAcceptanceArtifact({
+        acceptanceEnvelopeBytes,
+        beforeArtifactBytes: Buffer.from(communitiesRoleSplitInputCArtifactText(observedBefore)),
+        afterArtifactBytes: Buffer.from(communitiesRoleSplitInputCArtifactText(observedAfter)),
+        pinsBytes: Buffer.from(pinsText),
+        independentlyPinnedPinsSha256: repeated('9'),
+      }),
+    ).toThrow('COMMUNITIES_ROLE_SPLIT_ACCEPTANCE_ARTIFACT_INVALID');
+    const mismatchedEnvelopeBytes = Buffer.from(
+      `${communitiesRoleSplitCanonicalJson({ ...envelope, observedBefore: observedAfter })}\n`,
+    );
+    const mismatchedPinsText = communitiesRoleSplitAcceptanceArtifactPinsText({
+      ...acceptanceArtifactPins,
+      acceptanceEnvelopeSha256: sha(mismatchedEnvelopeBytes),
+    });
+    expect(() =>
+      verifyCommunitiesRoleSplitAcceptanceArtifact({
+        acceptanceEnvelopeBytes: mismatchedEnvelopeBytes,
+        beforeArtifactBytes: Buffer.from(communitiesRoleSplitInputCArtifactText(observedBefore)),
+        afterArtifactBytes: Buffer.from(communitiesRoleSplitInputCArtifactText(observedAfter)),
+        pinsBytes: Buffer.from(mismatchedPinsText),
+        independentlyPinnedPinsSha256: sha(mismatchedPinsText),
+      }),
+    ).toThrow('COMMUNITIES_ROLE_SPLIT_ACCEPTANCE_ARTIFACT_INVALID');
   });
 
   it('uses Buffer byte sorting and rejects missing mapping before database access', async () => {
@@ -1015,9 +1115,14 @@ describe('Communities role split INPUT_C producer', () => {
       '../dist/verify-communities-staging-role-split-inventory-artifact.js',
       import.meta.url,
     );
+    const acceptanceArtifactVerifier = new URL(
+      '../dist/verify-communities-role-split-acceptance-artifact.js',
+      import.meta.url,
+    );
     expect(existsSync(producer)).toBe(true);
     expect(existsSync(comparison)).toBe(true);
     expect(existsSync(artifactVerifier)).toBe(true);
+    expect(existsSync(acceptanceArtifactVerifier)).toBe(true);
     const smoke = spawnSync(process.execPath, [fileURLToPath(producer)], {
       env: {},
       encoding: 'utf8',
@@ -1044,6 +1149,16 @@ describe('Communities role split INPUT_C producer', () => {
       status: 1,
       stdout: '',
       stderr: 'COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_ARTIFACT_INVALID\n',
+    });
+    const acceptanceArtifactVerifierSmoke = spawnSync(
+      process.execPath,
+      [fileURLToPath(acceptanceArtifactVerifier)],
+      { env: {}, encoding: 'utf8' },
+    );
+    expect(acceptanceArtifactVerifierSmoke).toMatchObject({
+      status: 1,
+      stdout: '',
+      stderr: 'COMMUNITIES_ROLE_SPLIT_ACCEPTANCE_ARTIFACT_INVALID\n',
     });
   }, 30_000);
 });

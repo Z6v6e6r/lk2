@@ -1,5 +1,16 @@
 # Worklog
 
+## 2026-08-20 — Communities trusted-inventory acceptance gate
+
+- Added a read-only acceptance-artifact verifier that binds independently retained canonical
+  before/after INPUT_C files to the envelope's embedded snapshots and to one separately pinned,
+  canonical digest ledger before running the authoritative cross-field evaluator.
+- Fixed the evaluator's comparison check to use canonical object equality, so a valid canonical
+  envelope survives a JSON round trip instead of failing because of JavaScript key insertion order.
+- The redacted result reports only digests, counts, verified bindings, external-review limitations
+  and false authorizations. It does not designate inventory as trusted, build an execution
+  candidate, connect to PostgreSQL, create a key or authorize ceremony/database mutation.
+
 ## 2026-08-20 — Communities staging mawk compatibility
 
 - Replaced the disabled installer's AWK character-class validation with fail-closed POSIX-shell
