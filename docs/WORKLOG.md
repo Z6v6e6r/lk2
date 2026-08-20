@@ -1,5 +1,15 @@
 # Worklog
 
+## 2026-08-20 — Communities disabled preparation candidate V5
+
+- Extended the exact disabled installation candidate from nine to twelve artifacts by adding
+  immutable source snapshots of the inventory-preparation contract, verifier and CLI.
+- Bumped the manifest, digest and host-control versions so the older V4 contour cannot accept the
+  expanded file set. The POSIX installer still requires no Node runtime and installs no runnable
+  preparation command, credential, evidence or database configuration.
+- Installation remains the only true authorization; inventory access, artifact publication,
+  ceremony, role/ACL mutation, migration, deploy and activation remain false.
+
 ## 2026-08-20 — Communities root-custody inventory preparation
 
 - Added a disabled canonical preparation envelope that binds one future before/after INPUT_C run

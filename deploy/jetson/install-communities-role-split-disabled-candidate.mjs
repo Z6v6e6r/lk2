@@ -21,7 +21,7 @@ import {
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const schemaVersion = 'communities-role-split-installation-candidate-v4';
+const schemaVersion = 'communities-role-split-installation-candidate-v5';
 const sha40 = /^[0-9a-f]{40}$/u;
 const sha256 = /^[0-9a-f]{64}$/u;
 const installPrefix = '/usr/local/libexec/phub/communities-role-split/candidates';
@@ -59,6 +59,27 @@ const expectedArtifacts = [
     targetRelativePath: `source/${artifactName ?? sourceName}`,
     installMode: '0444',
   })),
+  {
+    sourcePath: 'packages/database/src/communities-staging-role-split-inventory-preparation.ts',
+    sourceGitMode: '100644',
+    artifactPath: 'payload/source/communities-staging-role-split-inventory-preparation-database.ts',
+    targetRelativePath: 'source/communities-staging-role-split-inventory-preparation-database.ts',
+    installMode: '0444',
+  },
+  {
+    sourcePath: 'apps/migrator/src/communities-staging-role-split-inventory-preparation.ts',
+    sourceGitMode: '100644',
+    artifactPath: 'payload/source/communities-staging-role-split-inventory-preparation-verifier.ts',
+    targetRelativePath: 'source/communities-staging-role-split-inventory-preparation-verifier.ts',
+    installMode: '0444',
+  },
+  {
+    sourcePath: 'apps/migrator/src/verify-communities-staging-role-split-inventory-preparation.ts',
+    sourceGitMode: '100644',
+    artifactPath: 'payload/source/verify-communities-staging-role-split-inventory-preparation.ts',
+    targetRelativePath: 'source/verify-communities-staging-role-split-inventory-preparation.ts',
+    installMode: '0444',
+  },
 ];
 const expectedExecutionBindingCodes = [
   'BACKUP_CUSTODY_HANDOFF',

@@ -13,11 +13,11 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import { fileURLToPath } from 'node:url';
 
 export const INSTALLATION_CANDIDATE_SCHEMA_VERSION =
-  'communities-role-split-installation-candidate-v4';
+  'communities-role-split-installation-candidate-v5';
 export const INSTALLATION_CANDIDATE_DIGEST_VERSION =
-  'PHUB_COMMUNITIES_ROLE_SPLIT_INSTALLATION_CANDIDATE_DIGEST_V4';
+  'PHUB_COMMUNITIES_ROLE_SPLIT_INSTALLATION_CANDIDATE_DIGEST_V5';
 export const INSTALLATION_CANDIDATE_CONTROL_VERSION =
-  'PHUB_COMMUNITIES_ROLE_SPLIT_HOST_INSTALL_CONTROL_V1';
+  'PHUB_COMMUNITIES_ROLE_SPLIT_HOST_INSTALL_CONTROL_V2';
 
 const sha40Pattern = /^[0-9a-f]{40}$/u;
 const sha256Pattern = /^[0-9a-f]{64}$/u;
@@ -159,6 +159,39 @@ const fileDefinitions: readonly CandidateArtifactDefinition[] = [
     installMode: '0444',
     purpose: 'reviewed source snapshot; deliberately unwired and non-runnable',
   })),
+  {
+    sourcePath: 'packages/database/src/communities-staging-role-split-inventory-preparation.ts',
+    sourceGitMode: '100644',
+    artifactPath: 'payload/source/communities-staging-role-split-inventory-preparation-database.ts',
+    targetRelativePath: 'source/communities-staging-role-split-inventory-preparation-database.ts',
+    action: 'INSTALL_NEW',
+    installOwner: 'root',
+    installGroup: 'root',
+    installMode: '0444',
+    purpose: 'disabled canonical inventory-preparation contract snapshot; not a runtime entrypoint',
+  },
+  {
+    sourcePath: 'apps/migrator/src/communities-staging-role-split-inventory-preparation.ts',
+    sourceGitMode: '100644',
+    artifactPath: 'payload/source/communities-staging-role-split-inventory-preparation-verifier.ts',
+    targetRelativePath: 'source/communities-staging-role-split-inventory-preparation-verifier.ts',
+    action: 'INSTALL_NEW',
+    installOwner: 'root',
+    installGroup: 'root',
+    installMode: '0444',
+    purpose: 'disabled inventory-preparation verifier snapshot; deliberately unwired',
+  },
+  {
+    sourcePath: 'apps/migrator/src/verify-communities-staging-role-split-inventory-preparation.ts',
+    sourceGitMode: '100644',
+    artifactPath: 'payload/source/verify-communities-staging-role-split-inventory-preparation.ts',
+    targetRelativePath: 'source/verify-communities-staging-role-split-inventory-preparation.ts',
+    action: 'INSTALL_NEW',
+    installOwner: 'root',
+    installGroup: 'root',
+    installMode: '0444',
+    purpose: 'disabled preparation CLI source snapshot; Node runtime and execution wiring absent',
+  },
 ] as const;
 
 const unresolvedBindingCodes = [

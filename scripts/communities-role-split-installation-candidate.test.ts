@@ -36,6 +36,9 @@ const sourceDefinitions = [
   ['apps/migrator/src/communities-staging-role-split-runner-adapter.ts', 0o644],
   ['apps/migrator/src/communities-staging-role-split-pg-restore-runner.ts', 0o644],
   ['apps/migrator/src/root-owned-evidence.ts', 0o644],
+  ['packages/database/src/communities-staging-role-split-inventory-preparation.ts', 0o644],
+  ['apps/migrator/src/communities-staging-role-split-inventory-preparation.ts', 0o644],
+  ['apps/migrator/src/verify-communities-staging-role-split-inventory-preparation.ts', 0o644],
 ] as const;
 
 const sourcePaths = sourceDefinitions.map(([path]) => path);
@@ -205,6 +208,34 @@ describe('communities role-split installation candidate', () => {
     expect(
       manifest.artifactFiles.every(({ artifactPath }) => artifactPath.startsWith('payload/')),
     ).toBe(true);
+    expect(manifest.artifactFiles).toHaveLength(12);
+    expect(
+      manifest.artifactFiles.slice(-3).map(({ sourcePath, artifactPath, installMode }) => ({
+        sourcePath,
+        artifactPath,
+        installMode,
+      })),
+    ).toEqual([
+      {
+        sourcePath: 'packages/database/src/communities-staging-role-split-inventory-preparation.ts',
+        artifactPath:
+          'payload/source/communities-staging-role-split-inventory-preparation-database.ts',
+        installMode: '0444',
+      },
+      {
+        sourcePath: 'apps/migrator/src/communities-staging-role-split-inventory-preparation.ts',
+        artifactPath:
+          'payload/source/communities-staging-role-split-inventory-preparation-verifier.ts',
+        installMode: '0444',
+      },
+      {
+        sourcePath:
+          'apps/migrator/src/verify-communities-staging-role-split-inventory-preparation.ts',
+        artifactPath:
+          'payload/source/verify-communities-staging-role-split-inventory-preparation.ts',
+        installMode: '0444',
+      },
+    ]);
     expect(manifest.installation).toEqual({
       targetRoot: `/usr/local/libexec/phub/communities-role-split/candidates/${candidateSha}`,
       atomicNewVersionOnly: true,
@@ -557,6 +588,40 @@ describe('communities role-split installation candidate', () => {
         candidatePath: candidate,
         candidateSha,
         expectedManifestSha256: sha256(forged),
+        expectedControlSha256: pins.controlSha256,
+        expectedArtifactSetSha256: pins.artifactSetSha256,
+        installationRoot,
+        expectedUid: currentUid(),
+      }),
+    ).toThrow('COMMUNITIES_ROLE_SPLIT_CODE_INSTALLATION_MANIFEST_INVALID');
+  });
+
+  it('rejects the previous V4 manifest even when its expanded payload is freshly pinned', () => {
+    const parent = privateParent('phub-role-split-installation-v4-');
+    const candidate = candidatePath(parent, candidateSha);
+    const pins = buildCommunitiesRoleSplitInstallationCandidate({
+      repositoryRoot: repository,
+      candidateSha,
+      outputPath: candidate,
+    });
+    const manifestPath = join(candidate, 'installation-candidate.json');
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as Record<string, unknown>;
+    const stale = `${JSON.stringify(
+      {
+        ...manifest,
+        schemaVersion: 'communities-role-split-installation-candidate-v4',
+      },
+      null,
+      2,
+    )}\n`;
+    writeFileSync(manifestPath, stale, { mode: 0o600 });
+    const installationRoot = privateParent('phub-role-split-installation-v4-root-');
+
+    expect(() =>
+      installCommunitiesRoleSplitDisabledCandidate({
+        candidatePath: candidate,
+        candidateSha,
+        expectedManifestSha256: sha256(stale),
         expectedControlSha256: pins.controlSha256,
         expectedArtifactSetSha256: pins.artifactSetSha256,
         installationRoot,

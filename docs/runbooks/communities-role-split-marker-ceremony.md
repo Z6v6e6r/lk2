@@ -414,7 +414,7 @@ fails with one fixed public error.
 ## Exact disabled installable candidate
 
 `scripts/prepare-communities-role-split-installation-candidate.ts` now builds and verifies a
-private, deterministic V4 candidate directory from an independently supplied exact Git commit. It
+private, deterministic V5 candidate directory from an independently supplied exact Git commit. It
 reads every artifact from Git objects rather than the mutable worktree, validates each expected Git
 mode, disables Git replacement objects, rejects any replacement ref and requires the raw local repository origin
 to be exactly `https://github.com/Z6v6e6r/lk2.git`, refuses an existing output, and accepts only a
@@ -430,7 +430,10 @@ true authorization. It contains:
   exits nonzero without reading input or touching PostgreSQL;
 - mode-0444 exact source snapshots of the reviewed canonical host adapter, clone-only connection
   factory, DDL fence, marker writer, evidence sink, authorization loader, runner and root-owned
-  evidence reader.
+  evidence reader;
+- three additional mode-0444 source snapshots for the canonical inventory-preparation contract,
+  its verifier and its CLI. They are deliberately unwired and non-runnable: the candidate contains
+  no Node runtime, compiled bundle, credential, preparation envelope or evidence payload.
 
 The host entrypoint is a POSIX shell program bound to the exact GNU coreutils paths present on the
 ARM64 staging node; `/usr/bin/node` is not required. Its file-count validation uses shell numeric
@@ -494,7 +497,7 @@ command authorizes or runs the ceremony.
 
 ## Required before installation and before execution
 
-1. Review and, under a separate approval, install/post-check the exact disabled V4 candidate.
+1. Review and, under a separate approval, install/post-check the exact disabled V5 candidate.
    Candidate presence does not authorize installation; successful installation does not authorize
    execution, forced-command wiring or any database operation.
 2. Implement and review a V3-compatible executable composition entrypoint for the canonical host

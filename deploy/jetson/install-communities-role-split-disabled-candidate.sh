@@ -136,6 +136,9 @@ expected_artifact() {
     7) printf '%s\n' 'payload/source/communities-staging-role-split-runner-adapter.ts|source/communities-staging-role-split-runner-adapter.ts|0444' ;;
     8) printf '%s\n' 'payload/source/communities-staging-role-split-pg-restore-runner.ts|source/communities-staging-role-split-pg-restore-runner.ts|0444' ;;
     9) printf '%s\n' 'payload/source/root-owned-evidence.ts|source/root-owned-evidence.ts|0444' ;;
+    10) printf '%s\n' 'payload/source/communities-staging-role-split-inventory-preparation-database.ts|source/communities-staging-role-split-inventory-preparation-database.ts|0444' ;;
+    11) printf '%s\n' 'payload/source/communities-staging-role-split-inventory-preparation-verifier.ts|source/communities-staging-role-split-inventory-preparation-verifier.ts|0444' ;;
+    12) printf '%s\n' 'payload/source/verify-communities-staging-role-split-inventory-preparation.ts|source/verify-communities-staging-role-split-inventory-preparation.ts|0444' ;;
     *) fail CONTROL_INVALID ;;
   esac
 }
@@ -175,7 +178,7 @@ walk_count() {
 
 verify_candidate() {
   assert_directory "$candidate" "$expected_uid" "$expected_gid" 700
-  [ "$(walk_count "$candidate")" = 14 ] || fail FILE_SET_INVALID
+  [ "$(walk_count "$candidate")" = 17 ] || fail FILE_SET_INVALID
   assert_directory "$candidate/payload" "$expected_uid" "$expected_gid" 700
   assert_directory "$candidate/payload/source" "$expected_uid" "$expected_gid" 700
   for fixed in installation-candidate.json installation-candidate.control installation-candidate.sha256
@@ -187,14 +190,14 @@ verify_candidate() {
   [ "$(sha_file "$candidate/installation-candidate.control")" = "$control_sha" ] ||
     fail CONTROL_DIGEST_MISMATCH
 
-  [ "$(/bin/grep -Fxc '  "schemaVersion": "communities-role-split-installation-candidate-v4",' "$candidate/installation-candidate.json" 2>/dev/null)" = 1 ] || fail MANIFEST_INVALID
+  [ "$(/bin/grep -Fxc '  "schemaVersion": "communities-role-split-installation-candidate-v5",' "$candidate/installation-candidate.json" 2>/dev/null)" = 1 ] || fail MANIFEST_INVALID
   [ "$(/bin/grep -Fxc '    "runtime": "POSIX_SH_GNU_COREUTILS",' "$candidate/installation-candidate.json" 2>/dev/null)" = 1 ] || fail MANIFEST_INVALID
   [ "$(/bin/grep -Fxc '    "entrypoint": "payload/installer.sh",' "$candidate/installation-candidate.json" 2>/dev/null)" = 1 ] || fail MANIFEST_INVALID
   [ "$(/bin/grep -Fxc "    \"controlSha256\": \"$control_sha\"," "$candidate/installation-candidate.json" 2>/dev/null)" = 1 ] || fail MANIFEST_INVALID
   [ "$(/bin/grep -Fxc '    "nodeRequired": false' "$candidate/installation-candidate.json" 2>/dev/null)" = 1 ] || fail MANIFEST_INVALID
 
   exec 3< "$candidate/installation-candidate.sha256" || fail DIGEST_INVALID
-  read_exact_line DIGEST_INVALID PHUB_COMMUNITIES_ROLE_SPLIT_INSTALLATION_CANDIDATE_DIGEST_V4
+  read_exact_line DIGEST_INVALID PHUB_COMMUNITIES_ROLE_SPLIT_INSTALLATION_CANDIDATE_DIGEST_V5
   read_exact_line DIGEST_INVALID "candidateCommitSha=$candidate_sha"
   read_exact_line DIGEST_INVALID "manifestSha256=$manifest_sha"
   read_exact_line DIGEST_INVALID "controlSha256=$control_sha"
@@ -206,16 +209,16 @@ verify_candidate() {
   exec 3<&-
 
   exec 3< "$candidate/installation-candidate.control" || fail CONTROL_INVALID
-  read_exact_line CONTROL_INVALID PHUB_COMMUNITIES_ROLE_SPLIT_HOST_INSTALL_CONTROL_V1
+  read_exact_line CONTROL_INVALID PHUB_COMMUNITIES_ROLE_SPLIT_HOST_INSTALL_CONTROL_V2
   read_exact_line CONTROL_INVALID "candidateCommitSha=$candidate_sha"
   read_exact_line CONTROL_INVALID "artifactSetSha256=$artifact_set_sha"
-  read_exact_line CONTROL_INVALID artifactCount=9
+  read_exact_line CONTROL_INVALID artifactCount=12
   read_exact_line CONTROL_INVALID installable=true
   read_exact_line CONTROL_INVALID authorizesInstallation=true
   read_exact_line CONTROL_INVALID authorizesCeremony=false
   read_exact_line CONTROL_INVALID authorizesDatabaseMutation=false
   index=1
-  while [ "$index" -le 9 ]
+  while [ "$index" -le 12 ]
   do
     IFS= read -r line <&3 || fail CONTROL_INVALID
     parse_artifact_line "$line" "$index"
