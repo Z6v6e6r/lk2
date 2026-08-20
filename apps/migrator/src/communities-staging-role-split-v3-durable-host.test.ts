@@ -511,6 +511,7 @@ class FakeDurableStateStore extends CommunitiesStagingRoleSplitV3DurableStateSto
   readonly calls: string[];
   readonly lease = {
     requestSha256: durableRequestSha256,
+    creationReceiptSha256: durableReceiptSha256,
     fencingToken: sha('fs-token'),
   } as const satisfies CommunitiesStagingRoleSplitV3DurableStateLease;
   private readonly writeOutcomes: WriteOutcome[];
@@ -665,7 +666,15 @@ class FakeArchiveCustody implements CommunitiesStagingRoleSplitV3ArchiveCustody 
   async acquire(input: {
     readonly requestSha256: string;
     readonly restorePendingEnvelopeSha256: string;
-  }): Promise<{ readonly observation: typeof this.observation; close(): Promise<void> }> {
+  }): Promise<{
+    readonly observation: {
+      readonly device: string;
+      readonly inode: string;
+      readonly bytes: string;
+      readonly preSha256: string;
+    };
+    close(): Promise<void>;
+  }> {
     expect(input).toEqual({
       requestSha256: durableRequestSha256,
       restorePendingEnvelopeSha256:
@@ -702,14 +711,18 @@ function durableHostFixture(
   } = {},
 ) {
   const calls = input.calls ?? [];
-  const stateStore = new FakeDurableStateStore({
-    entry: input.entry,
-    writeOutcomes: input.writeOutcomes,
-    releaseFailure: input.stateReleaseFailure,
-    requestSha256: input.stateRequestSha256,
-    creationReceiptSha256: input.stateReceiptSha256,
+  const stateStoreInput: ConstructorParameters<typeof FakeDurableStateStore>[0] = {
     calls,
-  });
+  };
+  if (input.entry !== undefined) stateStoreInput.entry = input.entry;
+  if (input.writeOutcomes !== undefined) stateStoreInput.writeOutcomes = input.writeOutcomes;
+  if (input.stateReleaseFailure !== undefined)
+    stateStoreInput.releaseFailure = input.stateReleaseFailure;
+  if (input.stateRequestSha256 !== undefined)
+    stateStoreInput.requestSha256 = input.stateRequestSha256;
+  if (input.stateReceiptSha256 !== undefined)
+    stateStoreInput.creationReceiptSha256 = input.stateReceiptSha256;
+  const stateStore = new FakeDurableStateStore(stateStoreInput);
   const fence = new FakeFence(calls, input.fenceOutcomes, input.fenceReleaseFailure);
   const archiveCustody = new FakeArchiveCustody(
     calls,
