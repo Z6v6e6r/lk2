@@ -114,9 +114,11 @@ describe.skipIf(!canRun)('PG16 marker host restore failure matrix', () => {
         system_identifier: string;
         major: string;
         session_user: string;
+        session_user_oid: string;
         current_user: string;
+        current_user_oid: string;
       }>(
-        "SELECT current_database() AS database, d.oid::text AS oid, control.system_identifier::text AS system_identifier, split_part(current_setting('server_version'), '.', 1) AS major, session_user::text AS session_user, current_user::text AS current_user FROM pg_catalog.pg_database d CROSS JOIN pg_catalog.pg_control_system() control WHERE d.datname = current_database()",
+        "SELECT current_database() AS database, d.oid::text AS oid, control.system_identifier::text AS system_identifier, split_part(current_setting('server_version'), '.', 1) AS major, session_user::text AS session_user, session_user::regrole::oid::text AS session_user_oid, current_user::text AS current_user, current_user::regrole::oid::text AS current_user_oid FROM pg_catalog.pg_database d CROSS JOIN pg_catalog.pg_control_system() control WHERE d.datname = current_database()",
       );
       expect(result.rows).toHaveLength(1);
       return result.rows[0]!;
@@ -161,9 +163,11 @@ describe.skipIf(!canRun)('PG16 marker host restore failure matrix', () => {
             system_identifier: string;
             major: string;
             session_user: string;
+            session_user_oid: string;
             current_user: string;
+            current_user_oid: string;
           }>(
-            "SELECT current_database() AS database, d.oid::text AS oid, control.system_identifier::text AS system_identifier, split_part(current_setting('server_version'), '.', 1) AS major, session_user::text AS session_user, current_user::text AS current_user FROM pg_catalog.pg_database d CROSS JOIN pg_catalog.pg_control_system() control WHERE d.datname = current_database()",
+            "SELECT current_database() AS database, d.oid::text AS oid, control.system_identifier::text AS system_identifier, split_part(current_setting('server_version'), '.', 1) AS major, session_user::text AS session_user, session_user::regrole::oid::text AS session_user_oid, current_user::text AS current_user, current_user::regrole::oid::text AS current_user_oid FROM pg_catalog.pg_database d CROSS JOIN pg_catalog.pg_control_system() control WHERE d.datname = current_database()",
           );
           if (result.rows.length !== 1) throw new Error('clone preflight unavailable');
           const row = result.rows[0]!;
@@ -173,7 +177,9 @@ describe.skipIf(!canRun)('PG16 marker host restore failure matrix', () => {
             systemIdentifier: row.system_identifier,
             postgresMajor: row.major,
             sessionUser: row.session_user,
+            sessionUserOid: row.session_user_oid,
             currentUser: row.current_user,
+            currentUserOid: row.current_user_oid,
           };
         },
         signal,
@@ -186,7 +192,9 @@ describe.skipIf(!canRun)('PG16 marker host restore failure matrix', () => {
         systemIdentifier: cloneIdentity.system_identifier,
         postgresMajor: '16' as const,
         connectionUser: login,
+        connectionUserOid: cloneIdentity.session_user_oid,
         restoreRole: cloneIdentity.current_user,
+        restoreRoleOid: cloneIdentity.current_user_oid,
         host,
         port,
         sslMode: 'disable' as const,

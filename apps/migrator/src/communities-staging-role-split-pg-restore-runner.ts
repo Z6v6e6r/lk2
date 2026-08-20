@@ -33,7 +33,9 @@ export interface CommunitiesStagingRoleSplitPgRestoreTarget {
   readonly systemIdentifier: string;
   readonly postgresMajor: '16';
   readonly connectionUser: string;
+  readonly connectionUserOid: string;
   readonly restoreRole: string;
+  readonly restoreRoleOid: string;
   readonly host: string;
   readonly port: string;
   readonly sslMode: 'disable' | 'require' | 'verify-ca' | 'verify-full';
@@ -45,7 +47,9 @@ export interface CommunitiesStagingRoleSplitPgRestorePreflightObservation {
   readonly systemIdentifier: string;
   readonly postgresMajor: string;
   readonly sessionUser: string;
+  readonly sessionUserOid: string;
   readonly currentUser: string;
+  readonly currentUserOid: string;
 }
 
 export interface CommunitiesStagingRoleSplitPgRestoreRunnerConfig {
@@ -86,7 +90,9 @@ function assertTarget(target: CommunitiesStagingRoleSplitPgRestoreTarget): void 
     !/^[0-9]{10,32}$/.test(target.systemIdentifier) ||
     target.postgresMajor !== '16' ||
     !isName(target.connectionUser) ||
+    !isOid(target.connectionUserOid) ||
     !isName(target.restoreRole) ||
+    !isOid(target.restoreRoleOid) ||
     !/^[A-Za-z0-9._:-]{1,255}$/.test(target.host) ||
     !/^[1-9][0-9]{0,4}$/.test(target.port) ||
     Number(target.port) > 65535 ||
@@ -107,7 +113,9 @@ function assertObservation(
     observation.systemIdentifier !== target.systemIdentifier ||
     observation.postgresMajor !== '16' ||
     observation.sessionUser !== target.connectionUser ||
-    observation.currentUser !== target.restoreRole
+    observation.sessionUserOid !== target.connectionUserOid ||
+    observation.currentUser !== target.restoreRole ||
+    observation.currentUserOid !== target.restoreRoleOid
   )
     fail('TARGET_BINDING_INVALID');
 }

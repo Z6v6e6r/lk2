@@ -23,7 +23,9 @@ const target = {
   systemIdentifier: '7421000000000000000',
   postgresMajor: '16',
   connectionUser: 'phub_restore_login',
+  connectionUserOid: '16384',
   restoreRole: 'phub_restore_owner',
+  restoreRoleOid: '16385',
   host: '127.0.0.1',
   port: '5432',
   sslMode: 'disable',
@@ -34,7 +36,9 @@ const observation = {
   systemIdentifier: target.systemIdentifier,
   postgresMajor: '16',
   sessionUser: target.connectionUser,
+  sessionUserOid: target.connectionUserOid,
   currentUser: target.restoreRole,
+  currentUserOid: target.restoreRoleOid,
 } as const;
 
 function child(stdout = '', code = 0, error = false): EventEmitter {
@@ -162,6 +166,7 @@ describe('runCommunitiesStagingRoleSplitPgRestore', () => {
 
   const invalidTargets = [
     ['zero oid', { ...target, databaseOid: '0' }],
+    ['zero connection role oid', { ...target, connectionUserOid: '0' }],
     ['unknown ssl', { ...target, sslMode: 'prefer' as never }],
     ['remote disable', { ...target, host: 'db.example', sslMode: 'disable' }],
     ['localhost disable', { ...target, host: 'localhost', sslMode: 'disable' }],
@@ -261,6 +266,28 @@ describe('runCommunitiesStagingRoleSplitPgRestore', () => {
           handles,
         ),
       ).rejects.toMatchObject({ code: 'PREFLIGHT_UNAVAILABLE' });
+      expect(spawnMock).toHaveBeenCalledTimes(1);
+    } finally {
+      await handles.archiveFile.close();
+      await handles.passwordFile.close();
+      await handles.executableFile.close();
+    }
+  });
+
+  it('rejects a preflight role OID mismatch before restore spawn', async () => {
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('linux');
+    const handles = await fixture();
+    spawnMock.mockReturnValueOnce(child('pg_restore (PostgreSQL) 16.2\n') as never);
+    try {
+      await expect(
+        runCommunitiesStagingRoleSplitPgRestore(
+          {
+            ...config(handles.expectedPgRestoreSha256),
+            preflight: () => Promise.resolve({ ...observation, currentUserOid: '16386' }),
+          },
+          handles,
+        ),
+      ).rejects.toMatchObject({ code: 'TARGET_BINDING_INVALID' });
       expect(spawnMock).toHaveBeenCalledTimes(1);
     } finally {
       await handles.archiveFile.close();
