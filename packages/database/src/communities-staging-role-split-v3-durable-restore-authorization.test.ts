@@ -40,6 +40,17 @@ import {
 } from './index.js';
 
 const sha = (value: string) => createHash('sha256').update(value, 'utf8').digest('hex');
+
+const requireStringRestoreExecutionEvidenceSha256 = (
+  restoreExecutionEvidenceSha256: string | null,
+  context: string,
+): string => {
+  if (restoreExecutionEvidenceSha256 == null) {
+    throw new Error(`Expected ${context} to be present`);
+  }
+
+  return restoreExecutionEvidenceSha256;
+};
 const request = {
   restoreDatabase: 'phub_restore_123_4',
   expectedCloneDatabaseOwner: 'phub_restore',
@@ -268,7 +279,10 @@ const restoreAuthorization = {
   creationReceiptSha256: receiptSha256,
   preparationEnvelopeSha256:
     communitiesStagingRoleSplitV3PreparationEnvelopeSha256(preparationEnvelope),
-  restoreExecutionEvidenceSha256: preparationEnvelope.state.restoreExecutionEvidenceSha256,
+  restoreExecutionEvidenceSha256: requireStringRestoreExecutionEvidenceSha256(
+    restorePendingState.restoreExecutionEvidenceSha256,
+    'restorePendingState.restoreExecutionEvidenceSha256',
+  ),
   hostAuthorizationSha256: communitiesStagingRoleSplitHostAuthorizationSha256(hostAuthorization),
   cloneDatabaseOid: execution.cloneDatabaseOid,
   systemIdentifier: request.systemIdentifier,
