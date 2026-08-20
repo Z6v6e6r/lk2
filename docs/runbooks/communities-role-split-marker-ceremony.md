@@ -441,9 +441,9 @@ matching rather than AWK character classes because the staging host provides leg
 which rejects otherwise valid `[[:space:]]` and `[[:digit:]]` expressions. The canonical control
 ledger is independently pinned and binds the fixed artifact paths, target-relative paths, modes,
 byte counts, SHA-256 values and false execution authorizations without parsing JSON on the host.
-The V5 installed readback requires exactly twelve controlled artifacts plus the source directory
-and immutable receipt (`14` entries total); both install and verify loops require an exact count of
-twelve control records.
+The V5 installed readback requires exactly thirteen controlled artifacts plus the source directory
+and immutable receipt (`15` entries total); both install and verify loops require an exact count of
+thirteen control records. The fifth controlled artifact is the immutable shared DDL-fence source.
 The installer accepts independently retained manifest, control and artifact-set SHA-256 values. It installs
 only a previously absent version directory below
 `/usr/local/libexec/phub/communities-role-split/candidates/<commit>`, refuses an existing target or
@@ -507,13 +507,22 @@ then acquires the existing cluster DDL fence before a private filesystem lease. 
 `OWNED -> RESTORE_PENDING`, fsyncs and reads back each boundary, and asks an injected custody
 collaborator to attest the archive before minting an opaque one-shot capability.
 
-The capability has no consumer, runner, restore, `RESTORED` transition, command, installer,
-workflow, environment, key, SSH, Docker or PostgreSQL entrypoint. Its only exposed operation is
-abandonment, which releases its leases. This code is not an execution authorization; durable
-state persistence remains a prerequisite for a separately reviewed executable composition. The
-low-level exact-byte store admits only the separately authorized
-`RESTORE_PENDING -> RESTORED` transition for that future composition; this host never exposes or
-performs that promotion.
+The capability now has a single same-host consumer. `restore(capability)` accepts only the exact
+WeakMap-owned capability, rechecks the shared DDL fence, exact `RESTORE_PENDING` bytes and archive
+custody before invoking an independently SHA-bound executor, then rechecks the fence and archive
+before the one allowed `RESTORE_PENDING -> RESTORED` CAS. Exact response-loss readback may complete
+only within that same invocation; any other outcome retains the durable ambiguity boundary and the
+capability cannot be reused. An executor rejection is always treated as outcome-ambiguous, never as
+proof that no restore occurred. Cleanup remains archive, filesystem lease, then DDL fence.
+After executor dispatch and before exact `RESTORED` confirmation, every failure remains
+`RESTORE_OUTCOME_AMBIGUOUS`; if cleanup also fails, the same stable error retains
+`cleanupIncomplete=true` rather than hiding the restore ambiguity. A cleanup-only failure after
+exact `RESTORED` confirmation remains `CLEANUP_INCOMPLETE`.
+
+No concrete executor implementation is supplied by this slice. The reviewed runner adapter still
+returns `V3_DURABLE_EXECUTION_CAPABILITY_REQUIRED`, and there is no command, installer composition,
+workflow, environment, key, SSH, Docker or PostgreSQL entrypoint. The consumer API therefore proves
+the one-shot state/custody choreography only; it does not authorize or make a restore runnable.
 
 ## Required before installation and before execution
 
