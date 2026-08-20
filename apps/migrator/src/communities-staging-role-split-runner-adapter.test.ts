@@ -6,6 +6,9 @@ import {
   COMMUNITIES_STAGING_ROLE_SPLIT_HOST_AUTHORIZATION_VERSION,
   COMMUNITIES_STAGING_ROLE_SPLIT_HOST_BINDING_CODES,
   COMMUNITIES_STAGING_ROLE_SPLIT_RESTORE_EXECUTION_DESCRIPTOR_VERSION,
+  COMMUNITIES_STAGING_ROLE_SPLIT_V3_RESTORE_AUTHORIZATION_VERSION,
+  advanceCommunitiesStagingRoleSplitV3State,
+  canonicalCommunitiesStagingRoleSplitV3PreparationEnvelope,
   communitiesStagingRoleSplitConnectionSubjectSha256,
   communitiesStagingRoleSplitHostAuthorizationSha256,
   communitiesStagingRoleSplitLedgerSha256,
@@ -13,15 +16,22 @@ import {
   communitiesStagingRoleSplitRestoreMarkerRequestSha256,
   type CommunitiesStagingRoleSplitHostAuthorization,
   communitiesStagingRoleSplitRestoreExecutionDescriptorSha256,
+  communitiesStagingRoleSplitRestoreExecutionEvidenceSha256,
   communitiesStagingRoleSplitSourceWriteDenialAttestationSha256,
   communitiesSourceConnectAclObservationSha256,
   communitiesSourceMembershipObservationSha256,
+  communitiesStagingRoleSplitV3PreparationEnvelopeSha256,
+  communitiesStagingRoleSplitV3RestoreAuthorizationSha256,
+  createCommunitiesStagingRoleSplitV3Candidate,
   type CommunitiesStagingRoleSplitRestoreExecutionDescriptor,
   type CommunitiesStagingRoleSplitRestoreMarkerRequest,
   type CommunitiesStagingRoleSplitRestoreExecutionEvidence,
   type CommunitiesStagingRoleSplitSourceWriteDenialAttestation,
   type CommunitiesSourceConnectAclObservation,
   type CommunitiesSourceMembershipObservation,
+  type CommunitiesStagingRoleSplitV3PreparationEnvelope,
+  type CommunitiesStagingRoleSplitV3RestoreAuthorization,
+  type CommunitiesStagingRoleSplitV3RestoreExecutionEvidenceBinding,
 } from '@phub/database';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -32,7 +42,6 @@ import {
   assertCommunitiesStagingRoleSplitRunnerAdapterBinding,
   type CommunitiesStagingRoleSplitRestoreArchiveInput,
 } from './communities-staging-role-split-runner-adapter.js';
-
 const sha = (value: string) => createHash('sha256').update(value, 'utf8').digest('hex');
 const request = {
   restoreDatabase: 'phub_restore_123_4',
@@ -215,7 +224,7 @@ const execution = {
     name: request.expectedCloneDatabaseOwner,
     oid: request.expectedCloneDatabaseOwnerOid,
   },
-  pgRestoreSha256: sha('pg_restore'),
+  pgRestoreSha256: descriptor.pgRestoreSha256,
   canonicalHostAdapterSha256: sha('canonical adapter'),
   cloneOnlyConnectionFactorySha256: sha('connection factory'),
   ddlFenceSha256: sha('ddl fence'),
@@ -259,6 +268,93 @@ const authorization = {
     activation: false,
   },
 } as const satisfies CommunitiesStagingRoleSplitHostAuthorization;
+const v3RestoreExecutionEvidenceBinding = {
+  request,
+  attestation: boundAttestation,
+  descriptor,
+  evidence: restoreExecutionEvidence,
+  connectAclObservation,
+  membershipObservation,
+  creationReceiptSha256: descriptor.creationReceiptSha256,
+  cloneDatabaseOid: descriptor.cloneDatabaseOid,
+  systemIdentifier: request.systemIdentifier,
+  restoreRunId: request.restoreRunId,
+  restoreRunAttempt: request.restoreRunAttempt,
+  expectedRestoreExecutionEvidenceSha256:
+    communitiesStagingRoleSplitRestoreExecutionEvidenceSha256(restoreExecutionEvidence),
+} satisfies CommunitiesStagingRoleSplitV3RestoreExecutionEvidenceBinding;
+const v3RestorePendingState = advanceCommunitiesStagingRoleSplitV3State(
+  advanceCommunitiesStagingRoleSplitV3State(
+    createCommunitiesStagingRoleSplitV3Candidate(
+      communitiesStagingRoleSplitRestoreMarkerRequestSha256(request),
+    ),
+    'OWNED',
+    {
+      cloneDatabaseOid: descriptor.cloneDatabaseOid,
+      restoreExecutionEvidenceSha256:
+        v3RestoreExecutionEvidenceBinding.expectedRestoreExecutionEvidenceSha256,
+      restoreExecutionEvidenceBinding: v3RestoreExecutionEvidenceBinding,
+    },
+  ),
+  'RESTORE_PENDING',
+  {
+    cloneDatabaseOid: descriptor.cloneDatabaseOid,
+    restoreExecutionEvidenceSha256:
+      v3RestoreExecutionEvidenceBinding.expectedRestoreExecutionEvidenceSha256,
+  },
+);
+const v3PreparationEnvelope = {
+  schemaVersion: 'communities-staging-role-split-v3-preparation-envelope-v1',
+  status: 'CODE_ONLY_DISABLED',
+  requestSha256: communitiesStagingRoleSplitRestoreMarkerRequestSha256(request),
+  creationReceiptSha256: descriptor.creationReceiptSha256,
+  state: v3RestorePendingState,
+  restoreExecutionEvidenceBinding: v3RestoreExecutionEvidenceBinding,
+  authorizes: {
+    statePersistence: false,
+    cloneCreation: false,
+    restoreExecution: false,
+    markerWrite: false,
+    evidencePublication: false,
+    automaticCleanup: false,
+    roleCreation: false,
+    roleSplit: false,
+    sharedDatabaseMutation: false,
+    migration: false,
+    deploy: false,
+    import: false,
+    activation: false,
+  },
+} as const satisfies CommunitiesStagingRoleSplitV3PreparationEnvelope;
+const v3RestoreAuthorization = {
+  schemaVersion: COMMUNITIES_STAGING_ROLE_SPLIT_V3_RESTORE_AUTHORIZATION_VERSION,
+  status: 'RESTORE_EXECUTION_AUTHORIZED',
+  candidateCommitSha: authorization.candidateCommitSha,
+  markerRequestSha256: authorization.markerRequestSha256,
+  creationReceiptSha256: authorization.creationReceiptSha256,
+  preparationEnvelopeSha256:
+    communitiesStagingRoleSplitV3PreparationEnvelopeSha256(v3PreparationEnvelope),
+  restoreExecutionEvidenceSha256:
+    v3RestoreExecutionEvidenceBinding.expectedRestoreExecutionEvidenceSha256,
+  hostAuthorizationSha256: communitiesStagingRoleSplitHostAuthorizationSha256(authorization),
+  cloneDatabaseOid: descriptor.cloneDatabaseOid,
+  systemIdentifier: request.systemIdentifier,
+  authorizes: {
+    statePersistence: false,
+    cloneCreation: false,
+    restoreExecution: true,
+    markerWrite: false,
+    evidencePublication: false,
+    automaticCleanup: false,
+    roleCreation: false,
+    roleSplit: false,
+    sharedDatabaseMutation: false,
+    migration: false,
+    deploy: false,
+    import: false,
+    activation: false,
+  },
+} as const satisfies CommunitiesStagingRoleSplitV3RestoreAuthorization;
 
 function input(overrides: Partial<CommunitiesStagingRoleSplitRestoreArchiveInput> = {}) {
   const archiveTouched = vi.fn(() => {
@@ -509,5 +605,97 @@ describe('CommunitiesStagingRoleSplitReviewedRunnerAdapter', () => {
     expect(current.fence.acquire).not.toHaveBeenCalled();
     expect(current.fence.assertHeld).not.toHaveBeenCalled();
     expect(current.fence.release).not.toHaveBeenCalled();
+  });
+
+  function executable() {
+    const base = reviewed();
+    return reviewed({
+      externalFenceLease: base.lease,
+      v3Restore: {
+        authorization: v3RestoreAuthorization,
+        expectedAuthorizationSha256:
+          communitiesStagingRoleSplitV3RestoreAuthorizationSha256(v3RestoreAuthorization),
+      },
+    });
+  }
+
+  function v3Input(overrides: Record<string, unknown> = {}) {
+    return {
+      archiveFile: {} as never,
+      cloneDatabaseOid: target.databaseOid,
+      request,
+      v3PreparationEnvelopeBytes:
+        canonicalCommunitiesStagingRoleSplitV3PreparationEnvelope(v3PreparationEnvelope),
+      ...overrides,
+    };
+  }
+
+  it('validates exact V3 RESTORE_PENDING but refuses execution without a durable one-shot capability', async () => {
+    const current = executable();
+    const archiveTouched = vi.fn();
+    const archiveFile = new Proxy({} as never, {
+      get() {
+        archiveTouched();
+        return undefined;
+      },
+    });
+
+    await expect(current.adapter.restoreArchive(v3Input({ archiveFile }))).rejects.toMatchObject({
+      code: 'V3_DURABLE_EXECUTION_CAPABILITY_REQUIRED',
+    });
+
+    expect(archiveTouched).not.toHaveBeenCalled();
+    expect(current.fence.assertHeld).not.toHaveBeenCalled();
+    expect(current.fence.acquire).not.toHaveBeenCalled();
+    expect(current.fence.release).not.toHaveBeenCalled();
+  });
+
+  it('rejects noncanonical or mismatched V3 bytes before the fence and runner', async () => {
+    const current = executable();
+    for (const bytes of [
+      JSON.stringify(v3PreparationEnvelope),
+      `${JSON.stringify({ ...v3PreparationEnvelope, requestSha256: '0'.repeat(64) })}\n`,
+      'x'.repeat(1024 * 1024 + 1),
+    ]) {
+      await expect(
+        current.adapter.restoreArchive(v3Input({ v3PreparationEnvelopeBytes: bytes })),
+      ).rejects.toMatchObject({ code: 'BINDING_INVALID' });
+    }
+    expect(current.fence.assertHeld).not.toHaveBeenCalled();
+  });
+
+  it('redacts an invalid callback request before the fence and runner', async () => {
+    const current = executable();
+    await expect(
+      current.adapter.restoreArchive(v3Input({ request: { ...request, sourceDatabase: '' } })),
+    ).rejects.toMatchObject({ code: 'BINDING_INVALID' });
+    expect(current.fence.assertHeld).not.toHaveBeenCalled();
+  });
+
+  it('does not accept an envelope as a substitute for the future one-shot capability', async () => {
+    const withoutLease = reviewed({
+      v3Restore: {
+        authorization: v3RestoreAuthorization,
+        expectedAuthorizationSha256:
+          communitiesStagingRoleSplitV3RestoreAuthorizationSha256(v3RestoreAuthorization),
+      },
+    });
+    await expect(withoutLease.adapter.restoreArchive(v3Input())).rejects.toMatchObject({
+      code: 'V3_DURABLE_EXECUTION_CAPABILITY_REQUIRED',
+    });
+    expect(withoutLease.fence.assertHeld).not.toHaveBeenCalled();
+    expect(withoutLease.fence.acquire).not.toHaveBeenCalled();
+    expect(withoutLease.fence.release).not.toHaveBeenCalled();
+  });
+
+  it('requires an independently pinned V3 restore authorization', () => {
+    expect(() =>
+      reviewed({
+        v3Restore: {
+          authorization: v3RestoreAuthorization,
+          expectedAuthorizationSha256: '0'.repeat(64),
+        },
+      }),
+    ).toThrow('COMMUNITIES_STAGING_ROLE_SPLIT_REVIEWED_RUNNER_ADAPTER_AUTHORIZATION_INVALID');
   });
 });

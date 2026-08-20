@@ -166,13 +166,27 @@ immutable execution-evidence binding as descriptive only. This is not an install
 command, workflow, restore, cleanup or activation.
 
 The V2 host-authorization receipt can describe a reviewed restore contour, but it is not sufficient
-execution authority. `CommunitiesStagingRoleSplitReviewedRunnerAdapter.restoreArchive` therefore
-returns `V3_EXECUTION_EVIDENCE_REQUIRED` before archive inspection, fence acquisition, preflight or
-runner invocation. It may become executable only after the V3 envelope is durably persisted and
-verified before `RESTORE_PENDING`; a post-restore attestation is not a substitute for that gate.
-Directly binding the raw `pg_restore` runner to the PG-host restore callback is prohibited before
-the same reviewed V3 contract and pre-restore source-denial gate exist; the non-entrypoint status of
-those libraries is not an alternative authorization path.
+execution authority. The additional canonical V3 restore authorization binds the exact
+`RESTORE_PENDING` preparation-envelope digest, request, creation receipt, source-denial evidence,
+clone OID, system identifier, candidate commit and V2 host-authorization digest. It authorizes only
+`restoreExecution`; state persistence, clone creation, marker/evidence writes, cleanup, role/ACL
+changes, migration, deploy, import and activation remain false.
+
+`CommunitiesStagingRoleSplitReviewedRunnerAdapter.restoreArchive` can validate those exact canonical
+V3 envelope bytes and the independently pinned V3 restore authorization, but it still refuses before
+inspecting the archive, fence, preflight or runner with
+`V3_DURABLE_EXECUTION_CAPABILITY_REQUIRED`. Durable `RESTORE_PENDING` bytes are deliberately not an
+execution capability: they cannot distinguish the first post-CAS call from a restart, response-loss
+replay or concurrent duplicate. Directly binding the raw `pg_restore` runner to the PG-host restore
+callback remains prohibited.
+
+This remains an unwired, non-executable code-only authorization seam. A later V3 durable host must
+atomically create and consume a non-replayable in-memory capability only for the successful
+`OWNED -> RESTORE_PENDING` CAS under the same cluster fence. That capability must bind the exact
+opened archive device/inode, byte count and pre/post SHA-256 to the request before the adapter may
+call the runner. No installer manifest, forced command, workflow or CLI contains this authorization.
+A post-restore attestation is not a substitute for the pre-restore gate, and the non-entrypoint
+status of these libraries is not execution authority.
 
 These modules remain non-entrypoint libraries: there is no environment parser, forced command,
 installation target or workflow that composes them. The PG16 library validates catalog
