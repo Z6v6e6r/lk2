@@ -61,6 +61,7 @@ export * from './communities-staging-role-split-v3-envelope.js';
 export * from './communities-staging-role-split-v3-restore-authorization.js';
 export * from './communities-staging-role-split-v3-durable-state-envelope.js';
 export * from './communities-staging-role-split-v3-durable-restore-authorization.js';
+export * from './communities-staging-role-split-inventory-preparation.js';
 export * from './eligibility-payment-acl-matrix.js';
 export * from './messaging-repository.js';
 export * from './profile-privacy-repository.js';

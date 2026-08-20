@@ -1,5 +1,16 @@
 # Worklog
 
+## 2026-08-20 — Communities root-custody inventory preparation
+
+- Added a disabled canonical preparation envelope that binds one future before/after INPUT_C run
+  to eight exact root-custody evidence paths and contents plus the planned output path.
+- Added a non-executing CLI that validates the envelope and all paths before evidence access, reads
+  evidence with the existing bounded no-follow reader and cross-checks the V2 marker
+  request/evidence and role-mapping shape.
+- External provenance, connection, credential, executable and output-custody claims remain opaque
+  and explicitly unattested. The verifier does not read credentials, connect to PostgreSQL, create
+  an artifact or authorize inventory/role/ACL/migration/deploy/activation activity.
+
 ## 2026-08-20 — Communities trusted-inventory acceptance gate
 
 - Added a read-only acceptance-artifact verifier that binds independently retained canonical

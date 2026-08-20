@@ -13,7 +13,11 @@ import {
   communitiesStagingRoleSplitRestoreMarkerPayloadSha256,
   communitiesStagingRoleSplitRestoreMarkerRequestSha256,
   COMMUNITIES_STAGING_ROLE_SPLIT_CLONE_MANIFEST_SHA256,
+  COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_PREPARATION_INPUT_CODES,
+  COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_PREPARATION_VERSION,
+  canonicalCommunitiesStagingRoleSplitInventoryPreparation,
   communitiesRoleSplitCanonicalJson,
+  communitiesStagingRoleSplitInventoryPreparationSha256,
   communitiesRoleSplitInputCArtifactSha256,
   communitiesRoleSplitInputCArtifactText,
   communitiesRoleSplitInputCManifestSha256,
@@ -25,6 +29,7 @@ import {
   type CommunitiesRoleSplitObjectKind,
   type CommunitiesStagingRoleSplitRestoreMarkerPayload,
   type CommunitiesStagingRoleSplitRestoreMarkerRequest,
+  type CommunitiesStagingRoleSplitInventoryPreparation,
 } from '@phub/database';
 import type { QueryResult } from 'pg';
 import { describe, expect, it, vi } from 'vitest';
@@ -48,6 +53,11 @@ import {
   communitiesStagingRoleSplitInventoryArtifactVerificationText,
   verifyCommunitiesStagingRoleSplitInventoryArtifact,
 } from './communities-staging-role-split-inventory-artifact.js';
+import {
+  communitiesStagingRoleSplitInventoryPreparationVerificationText,
+  verifyCommunitiesStagingRoleSplitInventoryPreparation,
+  type CommunitiesStagingRoleSplitInventoryPreparationEvidence,
+} from './communities-staging-role-split-inventory-preparation.js';
 import {
   COMMUNITIES_ROLE_SPLIT_ACCEPTANCE_ARTIFACT_PINS_VERSION,
   communitiesRoleSplitAcceptanceArtifactPinsText,
@@ -601,6 +611,159 @@ describe('Communities role split INPUT_C producer', () => {
     ).toThrow('COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_ARTIFACT_INVALID');
   });
 
+  it('binds the exact root-custody preparation inputs without authorizing an inventory read', () => {
+    const paths = Object.fromEntries(
+      COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_PREPARATION_INPUT_CODES.map((code) => [
+        code,
+        `/var/lib/phub-preflight/communities-role-split/inventory/${code.toLowerCase()}.evidence`,
+      ]),
+    ) as Record<
+      (typeof COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_PREPARATION_INPUT_CODES)[number],
+      string
+    >;
+    const bytes = {
+      MARKER_REQUEST: Buffer.from(requestText),
+      MARKER_EVIDENCE: Buffer.from(evidenceText),
+      ROLE_MAPPING: Buffer.from(mappingText),
+      INDEPENDENT_SOURCE_PROVENANCE: Buffer.from('independent-source-provenance\n'),
+      CONNECTION_DESCRIPTOR: Buffer.from('connection-descriptor\n'),
+      CREDENTIAL_CUSTODY: Buffer.from('credential-custody\n'),
+      EXECUTABLE_CUSTODY: Buffer.from('executable-custody\n'),
+      OUTPUT_CUSTODY: Buffer.from('output-custody\n'),
+    } satisfies Record<
+      (typeof COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_PREPARATION_INPUT_CODES)[number],
+      Buffer
+    >;
+    const outputArtifactPath =
+      '/var/lib/phub-preflight/communities-role-split/inventory/input-c-before.json';
+    const preparation: CommunitiesStagingRoleSplitInventoryPreparation = {
+      schemaVersion: COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_PREPARATION_VERSION,
+      status: 'CODE_ONLY_DISABLED',
+      candidateCommitSha: 'a'.repeat(40),
+      phase: 'BEFORE',
+      requestSha256: requestDigest,
+      creationReceiptSha256: payload.creationReceiptSha256,
+      cloneDatabaseOid: payload.cloneDatabaseOid,
+      sourceDatabaseOid: request.sourceDatabaseOid,
+      systemIdentifier: request.systemIdentifier,
+      inputs: COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_PREPARATION_INPUT_CODES.map((code) => ({
+        code,
+        pathSha256: sha(`${paths[code]}\n`),
+        contentSha256: sha(bytes[code]),
+      })),
+      outputArtifactPathSha256: sha(`${outputArtifactPath}\n`),
+      authorizes: {
+        inventoryConnection: false,
+        inventoryRead: false,
+        artifactWrite: false,
+        trustedInventoryDesignation: false,
+        roleCreation: false,
+        roleSplit: false,
+        aclMutation: false,
+        sharedDatabaseMutation: false,
+        migration: false,
+        deploy: false,
+        activation: false,
+      },
+    };
+    const preparationBytes = Buffer.from(
+      canonicalCommunitiesStagingRoleSplitInventoryPreparation(preparation),
+    );
+    const evidence = Object.fromEntries(
+      COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_PREPARATION_INPUT_CODES.map((code) => [
+        code,
+        { path: paths[code], bytes: bytes[code] },
+      ]),
+    ) as unknown as CommunitiesStagingRoleSplitInventoryPreparationEvidence;
+    const verification = verifyCommunitiesStagingRoleSplitInventoryPreparation({
+      preparationPath: '/var/lib/phub-preflight/communities-role-split/inventory/preparation.json',
+      preparationBytes,
+      expectedPreparationSha256: communitiesStagingRoleSplitInventoryPreparationSha256(preparation),
+      evidence,
+      outputArtifactPath,
+    });
+    expect(verification).toMatchObject({
+      status: 'PREPARATION_VERIFIED_REVIEW_ONLY',
+      phase: 'BEFORE',
+      inputCount: 8,
+      bindings: {
+        exactInputPathSetMatched: true,
+        exactInputContentSetMatched: true,
+        markerRequestEvidenceMatched: true,
+        roleMappingShapeValidated: true,
+      },
+      limitations: {
+        organizationalIndependenceNotAttested: true,
+        databaseNotConnected: true,
+        artifactNotCreated: true,
+      },
+      authorizes: {
+        inventoryConnection: false,
+        inventoryRead: false,
+        artifactWrite: false,
+        trustedInventoryDesignation: false,
+        roleCreation: false,
+        roleSplit: false,
+        aclMutation: false,
+        sharedDatabaseMutation: false,
+        migration: false,
+        deploy: false,
+        activation: false,
+      },
+    });
+    expect(
+      communitiesStagingRoleSplitInventoryPreparationVerificationText(verification),
+    ).not.toMatch(
+      /phub_restore|phub_staging|inventory_reader|7421000000000000000|45678|\/var\/lib/u,
+    );
+    expect(() =>
+      verifyCommunitiesStagingRoleSplitInventoryPreparation({
+        preparationPath:
+          '/var/lib/phub-preflight/communities-role-split/inventory/preparation.json',
+        preparationBytes,
+        expectedPreparationSha256:
+          communitiesStagingRoleSplitInventoryPreparationSha256(preparation),
+        evidence: {
+          ...evidence,
+          OUTPUT_CUSTODY: {
+            ...evidence.OUTPUT_CUSTODY,
+            bytes: Buffer.from('different-output-custody\n'),
+          },
+        },
+        outputArtifactPath,
+      }),
+    ).toThrow('COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_PREPARATION_INVALID');
+    expect(() =>
+      verifyCommunitiesStagingRoleSplitInventoryPreparation({
+        preparationPath:
+          '/var/lib/phub-preflight/communities-role-split/inventory/preparation.json',
+        preparationBytes,
+        expectedPreparationSha256:
+          communitiesStagingRoleSplitInventoryPreparationSha256(preparation),
+        evidence: {
+          ...evidence,
+          OUTPUT_CUSTODY: {
+            ...evidence.OUTPUT_CUSTODY,
+            path: '/var/lib/phub-preflight/communities-role-split/inventory/substituted.evidence',
+          },
+        },
+        outputArtifactPath,
+      }),
+    ).toThrow('COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_PREPARATION_INVALID');
+    expect(() =>
+      verifyCommunitiesStagingRoleSplitInventoryPreparation({
+        preparationPath:
+          '/var/lib/phub-preflight/communities-role-split/inventory/preparation.json',
+        preparationBytes,
+        expectedPreparationSha256:
+          communitiesStagingRoleSplitInventoryPreparationSha256(preparation),
+        evidence,
+        outputArtifactPath:
+          '/var/lib/phub-preflight/communities-role-split/inventory/input-c-after.json',
+      }),
+    ).toThrow('COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_PREPARATION_INVALID');
+  });
+
   it('passes a real C artifact through JSON Schema structural validation and the D evaluator', async () => {
     const select = {
       granteeOid: '17004',
@@ -1119,10 +1282,15 @@ describe('Communities role split INPUT_C producer', () => {
       '../dist/verify-communities-role-split-acceptance-artifact.js',
       import.meta.url,
     );
+    const inventoryPreparationVerifier = new URL(
+      '../dist/verify-communities-staging-role-split-inventory-preparation.js',
+      import.meta.url,
+    );
     expect(existsSync(producer)).toBe(true);
     expect(existsSync(comparison)).toBe(true);
     expect(existsSync(artifactVerifier)).toBe(true);
     expect(existsSync(acceptanceArtifactVerifier)).toBe(true);
+    expect(existsSync(inventoryPreparationVerifier)).toBe(true);
     const smoke = spawnSync(process.execPath, [fileURLToPath(producer)], {
       env: {},
       encoding: 'utf8',
@@ -1159,6 +1327,16 @@ describe('Communities role split INPUT_C producer', () => {
       status: 1,
       stdout: '',
       stderr: 'COMMUNITIES_ROLE_SPLIT_ACCEPTANCE_ARTIFACT_INVALID\n',
+    });
+    const inventoryPreparationVerifierSmoke = spawnSync(
+      process.execPath,
+      [fileURLToPath(inventoryPreparationVerifier)],
+      { env: {}, encoding: 'utf8' },
+    );
+    expect(inventoryPreparationVerifierSmoke).toMatchObject({
+      status: 1,
+      stdout: '',
+      stderr: 'COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_PREPARATION_INVALID\n',
     });
   }, 30_000);
 });

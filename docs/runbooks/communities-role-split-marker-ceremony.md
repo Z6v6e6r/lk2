@@ -335,6 +335,49 @@ organizationally independent pin custody, the production CLI connection path, in
 clean-clone provenance or a cluster-wide DDL fence. The gate creates no
 staging/production database, role, key, request or inventory.
 
+## Root-custody trusted-inventory preparation
+
+`communities-staging-role-split-inventory-preparation-v1` is a code-only, disabled envelope for
+preparing one future `BEFORE` or `AFTER` INPUT_C collection. It binds the candidate commit, exact
+request/receipt/clone/source/cluster identity, planned output-path digest and eight ordered evidence
+files: marker request, marker evidence, private role mapping, independent-source provenance,
+connection descriptor, credential custody, executable custody and output custody. Each binding
+contains only its stable code plus the SHA-256 of the absolute path and exact bytes.
+
+`verify-communities-staging-role-split-inventory-preparation` accepts the envelope only from a
+root-owned, single-link, non-group/other-writable file matching an independently retained SHA-256.
+It validates all absolute paths and path uniqueness before evidence access, parses and pins the
+canonical envelope before reading the other files, then reads every evidence file with the bounded
+no-follow same-inode reader. It validates the V2 marker request/evidence relationship and private
+mapping shape, while treating the other five evidence payloads as externally reviewed opaque
+claims. It never reads a database credential, opens a PostgreSQL connection, creates the output
+artifact or changes a role/ACL.
+
+After building `@phub/migrator`, the preparation-only command shape is:
+
+```sh
+node apps/migrator/dist/verify-communities-staging-role-split-inventory-preparation.js \
+  --preparation '<root-owned-preparation-envelope>' \
+  --preparation-sha256 '<independently-retained-sha256>' \
+  --marker-request '<root-owned-marker-request>' \
+  --marker-evidence '<root-owned-marker-evidence>' \
+  --role-mapping '<root-owned-private-role-mapping>' \
+  --independent-source-provenance '<root-owned-independent-source-evidence>' \
+  --connection-descriptor '<root-owned-connection-descriptor-evidence>' \
+  --credential-custody '<root-owned-credential-custody-evidence>' \
+  --executable-custody '<root-owned-executable-custody-evidence>' \
+  --output-custody '<root-owned-output-custody-evidence>' \
+  --output-artifact '<planned-absent-output-path>'
+```
+
+Success is only `PREPARATION_VERIFIED_REVIEW_ONLY`. The report emits digests, binding booleans,
+explicit non-attestation limitations and false authorizations. It cannot designate an inventory as
+trusted or authorize connection, read, artifact write, role/ACL mutation, migration, deploy or
+activation. It also does not attest parent-directory custody or that the planned output path is
+absent. A later separately reviewed execution design must define the credential FD, pinned output
+directory, exclusive root-owned output publication, timeout/cancellation, connection read-only
+enforcement and exact readback receipt before any inventory collection can be authorized.
+
 ## Independently pinned acceptance artifact gate
 
 `apps/migrator/src/verify-communities-role-split-acceptance-artifact.ts` is the local, read-only
