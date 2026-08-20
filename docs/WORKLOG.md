@@ -1,5 +1,19 @@
 # Worklog
 
+## 2026-08-20 — Communities disabled installable candidate
+
+- Added a V3 candidate that authorizes only a new, versioned, root-owned code installation. It
+  contains an exact installer, an always-denied command and read-only source snapshots of the
+  reviewed canonical host components; it creates no activation link or runtime configuration.
+- The installer requires independent manifest and artifact-set pins, refuses existing or partial
+  targets, verifies every candidate byte before mutation, fsyncs and hashes installed readback,
+  and publishes only a canonical `INSTALLED_DISABLED` receipt.
+- Installation is the sole true authorization. Forced-command/key wiring, staging access,
+  ceremony, database mutation, cleanup, role split, migration, deploy and activation remain false;
+  all twelve runtime evidence bindings remain mandatory before any future executable candidate.
+- No installation, SSH, workflow dispatch, ceremony, database access, migration, deploy or
+  activation was performed by this checkpoint.
+
 ## 2026-08-20 — Communities canonical evidence security hardening
 
 - Bumped the unwired canonical host authorization to V2. Every one of its twelve evidence files is

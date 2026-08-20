@@ -211,10 +211,10 @@ The following remain external hard gates and are not satisfied by this code chec
 - actual source-write-denial and ownership/ACL/RLS attestation artifacts produced from the exact
   retained archive and clone;
 - the twelve root-owned evidence files plus a separately retained authorization-receipt SHA-256;
-- a separately reviewed composition entrypoint and installation candidate.
+- a separately reviewed executable composition entrypoint and execution-authorizing candidate.
 
-Until all of them exist and a later candidate explicitly verifies them, the current V2 candidate
-remains `REVIEW_ONLY`, `installable=false` and non-authorizing.
+Until all of them exist and a later candidate explicitly verifies them, V3 may install only its
+disabled versioned bytes. It remains non-authorizing for execution and every database operation.
 
 `apps/migrator/src/communities-staging-role-split-pg-restore-runner.pg.test.ts` is the real,
 descriptor-pinned, opt-in Linux PG16 invalid-archive child-process probe. It skips unless the exact confirmation
@@ -295,42 +295,41 @@ organizationally independent pin custody, the production CLI connection path, in
 clean-clone provenance or a cluster-wide DDL fence. The gate creates no
 staging/production database, role, key, request or inventory.
 
-## Exact review-only installation candidate
+## Exact disabled installable candidate
 
-`scripts/prepare-communities-role-split-installation-candidate.ts` builds and verifies a private,
-deterministic candidate directory from an independently supplied exact Git commit. It reads the
-four artifact files from Git objects rather than the mutable worktree, disables Git replacement
-objects, rejects any replacement ref and requires the raw local repository origin
+`scripts/prepare-communities-role-split-installation-candidate.ts` now builds and verifies a
+private, deterministic V3 candidate directory from an independently supplied exact Git commit. It
+reads every artifact from Git objects rather than the mutable worktree, validates each expected Git
+mode, disables Git replacement objects, rejects any replacement ref and requires the raw local repository origin
 to be exactly `https://github.com/Z6v6e6r/lk2.git`, refuses an existing output, and accepts only a
 private mode-0700 parent owned by the invoking user. Every candidate file is mode 0600 and
 single-link. Verification requires the same independently supplied commit and rejects changed,
 missing, additional, linked or non-canonical bytes.
 
-The candidate includes exact bytes only as review/reference evidence:
+The candidate is `status=INSTALLABLE_DISABLED` and `installable=true`, but installation is its only
+true authorization. It contains:
 
-- the non-runnable preparation guard as `REVIEW_ONLY`, with no target or install metadata;
-- the legacy shell CREATE/RESUME contour as `REVIEW_ONLY`, with no target or install metadata;
-- the quarantine-only cleanup source as `REVIEW_ONLY`, with no target or command exposure;
-- the existing backup/restore helper as `VERIFY_EXISTING`, without overwrite authority.
+- a dependency-free root installer/verifier;
+- an installed command that always emits `COMMUNITIES_ROLE_SPLIT_EXECUTION_NOT_AUTHORIZED` and
+  exits nonzero without reading input or touching PostgreSQL;
+- mode-0444 exact source snapshots of the reviewed canonical host adapter, clone-only connection
+  factory, DDL fence, marker writer, evidence sink, authorization loader, runner and root-owned
+  evidence reader.
 
-The shell ceremony source is not the canonical host adapter: it does not implement the complete
-durable partial-failure lifecycle or the required ownership/ACL/RLS attestation. Consequently the
-manifest contains no forced command (`command=null`, `commandIncluded=false`), does not expose the
-cleanup command and proposes no installation target for those three sources. It deliberately
-declares `status=REVIEW_ONLY`, `installable=false` and every authorization flag false. It includes
-no public key, `authorized_keys` mutation, credential, DSN, role name selected from staging or
-workflow.
+The installer accepts independently retained manifest and artifact-set SHA-256 values. It installs
+only a previously absent version directory below
+`/usr/local/libexec/phub/communities-role-split/candidates/<commit>`, refuses an existing target or
+an abandoned `.incomplete` directory, verifies post-copy hashes, fsyncs before publication and
+writes an exact `INSTALLED_DISABLED` receipt. It creates no current/active symlink, configuration,
+request/state directory, credential, key or `authorized_keys` entry. A partial failure is retained
+for manual reconciliation and is never deleted or overwritten automatically.
 
-Twelve bindings remain exact blockers in this version: backup custody handoff, canonical
-partial-failure host adapter, clone-only connection factory, cluster DDL fence, dedicated
-forced-command public key, independent evidence sink, operator-selected source and clone
-connections, ownership/ACL/RLS attestation, pinned `pg_restore` executable SHA-256, restore login
-role, server-side source write-denial attestation and staging known-hosts pin. The custody blocker is
-exact: the producer creates a `phub-preflight`-owned mode-0700 directory and mode-0600 archive,
-whereas the ceremony requires a root:`phub-preflight` mode-0750 directory and mode-0440 archive.
-Only a separately reviewed root-owned atomic handoff may bridge those contours; this candidate does
-not create, chown or reuse `/var/lib/phub-preflight/backups`. Resolving any blocker requires a new
-reviewed candidate version; editing this manifest or its digest receipt is rejected.
+The manifest still contains no forced command (`command=null`, `commandIncluded=false`), public key,
+cleanup exposure, workflow wiring, staging connection or runtime configuration. Key provisioning,
+staging access, database mutation, ceremony, cleanup, role split, migration, deploy and activation
+are all false. The twelve host-binding codes remain `REQUIRED_FOR_EXECUTION`; their evidence is not
+needed to install disabled bytes, but no installed artifact can consume or replace that evidence.
+Changing any of those authorizations requires a new reviewed candidate version.
 
 After a checkpoint commit, build and verify only in a fresh private local directory:
 
@@ -346,18 +345,38 @@ npm run db:communities-role-split:installation-candidate -- verify \
   --candidate "$candidate_review_root/communities-role-split-installation-candidate-<checkpoint-sha>"
 ```
 
-Both success lines contain only the commit, manifest digest, artifact-set digest and false
-authorization fields. This command has no installer, SSH, Docker, PostgreSQL, network or staging
-operation. An `.incomplete` directory is retained after an interrupted build for manual inspection;
-the tool never deletes or replaces it automatically.
+Both success lines contain only the commit, manifest digest, artifact-set digest,
+`installable=true`, `authorizes_installation=true` and `authorizes_ceremony=false`. Build and verify
+perform no installation, SSH, Docker, PostgreSQL, network or staging operation. A local
+`.incomplete` directory is retained after an interrupted build for manual inspection; the tool
+never deletes or replaces it automatically.
 
-## Required before installation or execution
+Installation is a later, separately approved host gate. Before invoking the candidate installer,
+the administrator must transfer the already verified candidate into a root-owned mode-0700
+directory with mode-0600 single-link files and independently retain the two digests from the local
+verification result. The later command shape is:
 
-1. Review the exact review-only candidate, fixed request/state/evidence custody, forced-command key
-   and operator-selected connections. The V2 manifest is explicitly not installable; repository or
-   candidate presence grants no installation or execution authority.
-2. Implement and review a V3-compatible composition or adapter that consumes the durable V3 state,
-   marker and marker-evidence contract with the lifecycle
+```sh
+sudo -- /usr/bin/node \
+  '<root-owned-candidate>/payload/installer.mjs' install \
+  --candidate '<root-owned-candidate>' \
+  --candidate-sha '<checkpoint-sha>' \
+  --manifest-sha256 '<independently-retained-manifest-sha256>' \
+  --artifact-set-sha256 '<independently-retained-artifact-set-sha256>'
+```
+
+The read-only post-check uses the same exact arguments with `verify`. It must also execute the
+versioned `disabled-command.sh` and observe exit 78 with the single fixed denial line. Neither
+command authorizes or runs the ceremony.
+
+## Required before installation and before execution
+
+1. Review and, under a separate approval, install/post-check the exact disabled V3 candidate.
+   Candidate presence does not authorize installation; successful installation does not authorize
+   execution, forced-command wiring or any database operation.
+2. Implement and review a V3-compatible executable composition entrypoint for the canonical host
+   adapter that consumes the durable V3 state, marker and marker-evidence contract with the
+   lifecycle
    `CANDIDATE -> OWNED -> RESTORE_PENDING -> RESTORED -> VERIFIED -> MARKER_PENDING -> MARKED -> EVIDENCED`,
    authoritative response-loss reconciliation, evidence resume, clone-only connection factory,
    server-enforced source denial and exact ownership/ACL/RLS attestation. Bind a forced command only
@@ -380,6 +399,7 @@ the tool never deletes or replaces it automatically.
 6. Obtain separate approvals for installation, forced-command key, one ceremony run and any later
    post-marker cleanup.
 
-Until all six gates pass, do not install the new scripts, create a key, wire a workflow, place
-requests on staging or run either ceremony contour. The existing preparation gate must continue to
-fail with `EXECUTION_NOT_AUTHORIZED` before PostgreSQL or filesystem mutation.
+Only item 1 is required for the separately approved disabled installation. Until items 2-6 also
+pass, do not create a key, wire a workflow, place requests on staging or run either ceremony
+contour. The installed command and the existing preparation gate must continue to fail with
+`EXECUTION_NOT_AUTHORIZED` before PostgreSQL or mutable ceremony filesystem access.

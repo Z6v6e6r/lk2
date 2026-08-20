@@ -22,6 +22,8 @@ export default tseslint.config(
       'deploy/jetson/provision-runtime-secret-files.d.mts',
       'deploy/jetson/staging-realtime-smoke-session.mjs',
       'deploy/jetson/staging-realtime-smoke-session.d.mts',
+      'deploy/jetson/install-communities-role-split-disabled-candidate.mjs',
+      'deploy/jetson/install-communities-role-split-disabled-candidate.d.mts',
     ],
     ...tseslint.configs.disableTypeChecked,
     languageOptions: {

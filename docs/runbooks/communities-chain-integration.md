@@ -299,29 +299,17 @@ repair or replace the marker.
 
 The exact installation surface can now be packaged locally with
 `npm run db:communities-role-split:installation-candidate`. The builder takes an independently
-supplied commit SHA, disables Git replacement objects, rejects replacement refs, reads four exact
-artifacts from that commit's Git objects and emits a private canonical manifest plus digest receipt.
-The V2 artifact set contains the preparation guard, legacy shell ceremony and quarantine-only
-cleanup source as `REVIEW_ONLY`, with null target/install metadata, plus an exact `VERIFY_EXISTING`
-copy of the restore helper. It contains no new installation payload, forced command, key,
-connection, credential or workflow mutation.
+supplied commit SHA, disables Git replacement objects, rejects replacement refs and emits a private
+canonical V3 manifest plus digest receipt. V3 is installable only as a disabled versioned code
+snapshot: a root installer, an always-denied command and read-only canonical host sources. It
+creates no active link, forced command, key, connection, credential or workflow mutation.
 
-This V2 manifest is `REVIEW_ONLY` and permanently `installable=false`. Later code-only checkpoints
-add a canonical partial-failure adapter, reviewed restore adapter, strict V2 twelve-evidence receipt
-loader with request/receipt/execution/path-bound evidence envelopes, clone-only connection factory,
-cooperative PostgreSQL DDL fence, transaction identity-bound marker writer and descriptor-pinned
-root-only attested-evidence sink. Recovery reruns the ownership/ACL/RLS and source-write-denial
-attestations before accepting exact evidence. Those libraries are deliberately not added to this
-candidate and do not alter its result. Its twelve blockers still require actual host evidence,
-including exact ownership/ACL/RLS attestation and a
-separate root-owned atomic handoff between the producer's `phub-preflight` 0700/0600 custody and the
-ceremony's root:`phub-preflight` 0750/0440 custody, in addition to clone routing, source-write
-denial, restore identity, executable pin, DDL fence, evidence sink, known-hosts pin and dedicated
-key. It neither proposes nor mutates `/var/lib/phub-preflight/backups`. A verifier reconstructs the
-candidate from the same independently supplied commit and rejects any extra, missing, linked or
-edited byte. Producing or verifying this directory is not installation approval and is not a
-staging preflight. No library can synthesize the key, known-host, real staging roles/connections,
-backup handoff receipt or trusted attestation bytes; all remain separately custodied inputs.
+Only `authorizes.installation` is true. The twelve binding codes remain required before execution,
+and every key, staging, database, ceremony, cleanup, role-split, migration, deploy and activation
+authorization remains false. The installer refuses overwrite/partial replay, verifies exact pins
+and installed readback, then publishes an `INSTALLED_DISABLED` receipt. Producing or verifying the
+candidate is not installation approval; installing it is not ceremony approval and cannot
+synthesize the separately custodied host evidence.
 
 ### Exact 29-file staged clone rehearsal contract
 

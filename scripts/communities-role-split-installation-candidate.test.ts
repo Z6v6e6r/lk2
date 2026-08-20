@@ -1,4 +1,5 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import {
   chmodSync,
   mkdirSync,
@@ -19,13 +20,26 @@ import {
   type CommunitiesRoleSplitInstallationCandidate,
   verifyCommunitiesRoleSplitInstallationCandidate,
 } from './prepare-communities-role-split-installation-candidate.js';
+import {
+  installCommunitiesRoleSplitDisabledCandidate,
+  verifyCommunitiesRoleSplitDisabledInstallation,
+} from '../deploy/jetson/install-communities-role-split-disabled-candidate.mjs';
 
-const sourcePaths = [
-  'deploy/jetson/prepare-communities-role-split-inventory-clone.sh',
-  'deploy/jetson/run-communities-role-split-restore-marker-ceremony.sh',
-  'deploy/jetson/cleanup-communities-role-split-restore-marker-clone.sh',
-  'deploy/jetson/verify-postgres-backup-restore.sh',
+const sourceDefinitions = [
+  ['deploy/jetson/install-communities-role-split-disabled-candidate.mjs', 0o755],
+  ['deploy/jetson/communities-role-split-disabled-command.sh', 0o755],
+  ['apps/migrator/src/communities-staging-role-split-canonical-host-adapter.ts', 0o644],
+  ['apps/migrator/src/communities-staging-role-split-canonical-pg-collaborators.ts', 0o644],
+  ['apps/migrator/src/communities-staging-role-split-file-evidence-sink.ts', 0o644],
+  ['apps/migrator/src/communities-staging-role-split-host-authorization-loader.ts', 0o644],
+  ['apps/migrator/src/communities-staging-role-split-runner-adapter.ts', 0o644],
+  ['apps/migrator/src/communities-staging-role-split-pg-restore-runner.ts', 0o644],
+  ['apps/migrator/src/root-owned-evidence.ts', 0o644],
 ] as const;
+
+const sourcePaths = sourceDefinitions.map(([path]) => path);
+const disabledCommandFixture =
+  "#!/bin/sh\nset -eu\nprintf '%s\\n' COMMUNITIES_ROLE_SPLIT_EXECUTION_NOT_AUTHORIZED >&2\nexit 78\n";
 
 function git(repository: string, args: readonly string[]): string {
   return execFileSync('/usr/bin/git', ['-C', repository, ...args], {
@@ -44,6 +58,16 @@ function candidatePath(parent: string, sha: string): string {
   return join(parent, `communities-role-split-installation-candidate-${sha}`);
 }
 
+function currentUid(): number {
+  const uid = process.getuid?.();
+  if (uid === undefined) throw new Error('POSIX_UID_REQUIRED');
+  return uid;
+}
+
+function sha256(bytes: string): string {
+  return createHash('sha256').update(bytes).digest('hex');
+}
+
 describe('communities role-split installation candidate', () => {
   let temporaryRoots: string[];
   let repository: string;
@@ -57,11 +81,13 @@ describe('communities role-split installation candidate', () => {
     git(repository, ['remote', 'add', 'origin', 'https://github.com/Z6v6e6r/lk2.git']);
     git(repository, ['config', 'user.name', 'Candidate Test']);
     git(repository, ['config', 'user.email', 'candidate-test@example.invalid']);
-    for (const [index, sourcePath] of sourcePaths.entries()) {
+    for (const [index, [sourcePath, mode]] of sourceDefinitions.entries()) {
       const absolutePath = join(repository, sourcePath);
       mkdirSync(dirname(absolutePath), { recursive: true, mode: 0o700 });
-      writeFileSync(absolutePath, `#!/bin/sh\n# fixture ${index}\nexit 1\n`, { mode: 0o600 });
-      chmodSync(absolutePath, 0o755);
+      writeFileSync(absolutePath, index === 1 ? disabledCommandFixture : `// fixture ${index}\n`, {
+        mode: 0o600,
+      });
+      chmodSync(absolutePath, mode);
     }
     git(repository, ['add', ...sourcePaths]);
     git(repository, ['commit', '--quiet', '-m', 'fixture']);
@@ -80,13 +106,13 @@ describe('communities role-split installation candidate', () => {
     return parent;
   }
 
-  it('builds deterministic exact-commit bytes with every authority false', () => {
+  it('builds deterministic installable bytes while retaining every execution authority false', () => {
     const firstParent = privateParent('phub-role-split-installation-first-');
     const secondParent = privateParent('phub-role-split-installation-second-');
     const first = candidatePath(firstParent, candidateSha);
     const second = candidatePath(secondParent, candidateSha);
 
-    writeFileSync(join(repository, sourcePaths[1]), '#!/bin/sh\n# dirty worktree\nexit 0\n');
+    writeFileSync(join(repository, sourcePaths[1]!), '# dirty worktree\n');
     const firstResult = buildCommunitiesRoleSplitInstallationCandidate({
       repositoryRoot: repository,
       candidateSha,
@@ -105,42 +131,33 @@ describe('communities role-split installation candidate', () => {
     const manifest = JSON.parse(
       readFileSync(join(first, 'installation-candidate.json'), 'utf8'),
     ) as CommunitiesRoleSplitInstallationCandidate;
-    expect(manifest.status).toBe('REVIEW_ONLY');
-    expect(manifest.installable).toBe(false);
-    expect(manifest.reasonCode).toBe('CODE_AND_EXTERNAL_BINDINGS_REQUIRED');
-    expect(Object.values(manifest.authorizes)).toEqual(Array(11).fill(false));
+    expect(manifest.status).toBe('INSTALLABLE_DISABLED');
+    expect(manifest.installable).toBe(true);
+    expect(manifest.reasonCode).toBe('RUNTIME_BINDINGS_REQUIRED');
+    expect(manifest.authorizes).toEqual({
+      installation: true,
+      keyProvisioning: false,
+      workflowWiring: false,
+      stagingAccess: false,
+      databaseMutation: false,
+      ceremony: false,
+      cleanup: false,
+      roleSplit: false,
+      migration: false,
+      deploy: false,
+      activation: false,
+    });
     expect(manifest.forcedCommandSurface).toEqual({
       principal: 'phub-preflight',
       options: ['restrict'],
       command: null,
       commandIncluded: false,
-      reviewedSourcePath: 'deploy/jetson/run-communities-role-split-restore-marker-ceremony.sh',
       publicKeyIncluded: false,
       authorizedKeysMutationIncluded: false,
-      status: 'BLOCKED_PENDING_CANONICAL_HOST_ADAPTER',
+      status: 'NOT_INSTALLED',
       cleanupCommandExposure: 'NOT_EXPOSED',
     });
-    expect(manifest.knownCustodyConflict).toEqual({
-      code: 'BACKUP_CUSTODY_HANDOFF_REQUIRED',
-      producer: {
-        principal: 'phub-preflight',
-        directoryOwner: 'phub-preflight',
-        directoryMode: '0700',
-        archiveOwner: 'phub-preflight',
-        archiveMode: '0600',
-      },
-      ceremony: {
-        directoryOwner: 'root',
-        directoryGroup: 'phub-preflight',
-        directoryMode: '0750',
-        archiveOwner: 'root',
-        archiveGroup: 'phub-preflight',
-        archiveMode: '0440',
-      },
-      requiredResolution: 'SEPARATE_ROOT_OWNED_ATOMIC_HANDOFF',
-      resolutionIncluded: false,
-    });
-    expect(manifest.unresolvedBindings.map(({ code }) => code)).toEqual([
+    expect(manifest.executionBindings.map(({ code }) => code)).toEqual([
       'BACKUP_CUSTODY_HANDOFF',
       'CANONICAL_PARTIAL_FAILURE_HOST_ADAPTER',
       'CLONE_ONLY_CONNECTION_FACTORY',
@@ -154,44 +171,23 @@ describe('communities role-split installation candidate', () => {
       'SOURCE_WRITE_DENIAL_ATTESTATION',
       'STAGING_KNOWN_HOSTS_PIN',
     ]);
-    expect(manifest.artifactFiles.map(({ action }) => action)).toEqual([
-      'REVIEW_ONLY',
-      'REVIEW_ONLY',
-      'REVIEW_ONLY',
-      'VERIFY_EXISTING',
-    ]);
-    expect(
-      manifest.artifactFiles
-        .filter(({ action }) => action === 'REVIEW_ONLY')
-        .map(({ targetPath, installOwner, installGroup, installMode }) => ({
-          targetPath,
-          installOwner,
-          installGroup,
-          installMode,
-        })),
-    ).toEqual(
-      Array(3).fill({
-        targetPath: null,
-        installOwner: null,
-        installGroup: null,
-        installMode: null,
-      }),
+    expect(manifest.executionBindings.every(({ blocksInstallation }) => !blocksInstallation)).toBe(
+      true,
     );
+    expect(manifest.artifactFiles.every(({ action }) => action === 'INSTALL_NEW')).toBe(true);
     expect(
-      manifest.artifactFiles.some(({ artifactPath }) => artifactPath.startsWith('payload/')),
-    ).toBe(false);
-    expect(manifest.directories.map(({ path }) => path)).not.toContain(
-      '/var/lib/phub-preflight/backups',
+      manifest.artifactFiles.every(({ artifactPath }) => artifactPath.startsWith('payload/')),
+    ).toBe(true);
+    expect(manifest.installation).toEqual({
+      targetRoot: `/usr/local/libexec/phub/communities-role-split/candidates/${candidateSha}`,
+      atomicNewVersionOnly: true,
+      existingTargetPolicy: 'REFUSE',
+      activationLinkIncluded: false,
+      runtimeConfigurationIncluded: false,
+    });
+    expect(readFileSync(join(first, 'payload/disabled-command.sh'), 'utf8')).toBe(
+      disabledCommandFixture,
     );
-    expect(
-      readFileSync(
-        join(
-          first,
-          'review-source/deploy/jetson/run-communities-role-split-restore-marker-ceremony.sh',
-        ),
-        'utf8',
-      ),
-    ).toBe('#!/bin/sh\n# fixture 1\nexit 1\n');
     expect(
       verifyCommunitiesRoleSplitInstallationCandidate({
         repositoryRoot: repository,
@@ -209,10 +205,7 @@ describe('communities role-split installation candidate', () => {
       candidateSha,
       outputPath: candidate,
     });
-    const payload = join(
-      candidate,
-      'review-source/deploy/jetson/run-communities-role-split-restore-marker-ceremony.sh',
-    );
+    const payload = join(candidate, 'payload/disabled-command.sh');
     writeFileSync(payload, '#!/bin/sh\nexit 0\n', { mode: 0o600 });
     expect(() =>
       verifyCommunitiesRoleSplitInstallationCandidate({
@@ -222,7 +215,7 @@ describe('communities role-split installation candidate', () => {
       }),
     ).toThrow('COMMUNITIES_ROLE_SPLIT_INSTALLATION_CANDIDATE_PAYLOAD_INVALID');
 
-    writeFileSync(payload, '#!/bin/sh\n# fixture 1\nexit 1\n', { mode: 0o600 });
+    writeFileSync(payload, disabledCommandFixture, { mode: 0o600 });
     writeFileSync(join(candidate, 'unexpected'), 'unexpected', { mode: 0o600 });
     expect(() =>
       verifyCommunitiesRoleSplitInstallationCandidate({
@@ -243,7 +236,7 @@ describe('communities role-split installation candidate', () => {
     ).toThrow('COMMUNITIES_ROLE_SPLIT_INSTALLATION_CANDIDATE_FILE_SET_INVALID');
   });
 
-  it('rejects manifest self-authorization even when payload bytes are intact', () => {
+  it('rejects manifest execution self-authorization even when payload bytes are intact', () => {
     const parent = privateParent('phub-role-split-installation-manifest-');
     const candidate = candidatePath(parent, candidateSha);
     buildCommunitiesRoleSplitInstallationCandidate({
@@ -257,7 +250,11 @@ describe('communities role-split installation candidate', () => {
     ) as CommunitiesRoleSplitInstallationCandidate;
     writeFileSync(
       manifestPath,
-      `${JSON.stringify({ ...manifest, installable: true }, null, 2)}\n`,
+      `${JSON.stringify(
+        { ...manifest, authorizes: { ...manifest.authorizes, ceremony: true } },
+        null,
+        2,
+      )}\n`,
       { mode: 0o600 },
     );
     expect(() =>
@@ -267,6 +264,146 @@ describe('communities role-split installation candidate', () => {
         candidatePath: candidate,
       }),
     ).toThrow('COMMUNITIES_ROLE_SPLIT_INSTALLATION_CANDIDATE_MANIFEST_INVALID');
+  });
+
+  it('installs a new immutable disabled version and verifies exact readback', () => {
+    const parent = privateParent('phub-role-split-installation-apply-');
+    const candidate = candidatePath(parent, candidateSha);
+    const pins = buildCommunitiesRoleSplitInstallationCandidate({
+      repositoryRoot: repository,
+      candidateSha,
+      outputPath: candidate,
+    });
+    const installationRoot = privateParent('phub-role-split-installation-root-');
+    const input = {
+      candidatePath: candidate,
+      candidateSha,
+      expectedManifestSha256: pins.manifestSha256,
+      expectedArtifactSetSha256: pins.artifactSetSha256,
+      installationRoot,
+      expectedUid: currentUid(),
+    };
+
+    const installed = installCommunitiesRoleSplitDisabledCandidate(input);
+    expect(verifyCommunitiesRoleSplitDisabledInstallation(input)).toEqual(installed);
+    expect(
+      readFileSync(join(installed.targetPath, 'installation-complete.json'), 'utf8'),
+    ).toContain('"status": "INSTALLED_DISABLED"');
+    const denied = spawnSync(join(installed.targetPath, 'disabled-command.sh'), [], {
+      encoding: 'utf8',
+    });
+    expect(denied.status).toBe(78);
+    expect(denied.stdout).toBe('');
+    expect(denied.stderr).toBe('COMMUNITIES_ROLE_SPLIT_EXECUTION_NOT_AUTHORIZED\n');
+    expect(() => installCommunitiesRoleSplitDisabledCandidate(input)).toThrow(
+      'COMMUNITIES_ROLE_SPLIT_CODE_INSTALLATION_TARGET_EXISTS',
+    );
+
+    writeFileSync(join(installed.targetPath, 'disabled-command.sh'), '# tampered\n', {
+      mode: 0o755,
+    });
+    expect(() => verifyCommunitiesRoleSplitDisabledInstallation(input)).toThrow(
+      'COMMUNITIES_ROLE_SPLIT_CODE_INSTALLATION_INSTALLED_PAYLOAD_INVALID',
+    );
+  }, 15_000);
+
+  it('refuses an abandoned partial version instead of overwriting or cleaning it', () => {
+    const parent = privateParent('phub-role-split-installation-partial-');
+    const candidate = candidatePath(parent, candidateSha);
+    const pins = buildCommunitiesRoleSplitInstallationCandidate({
+      repositoryRoot: repository,
+      candidateSha,
+      outputPath: candidate,
+    });
+    const installationRoot = privateParent('phub-role-split-installation-partial-root-');
+    const candidateParent = join(
+      installationRoot,
+      'usr/local/libexec/phub/communities-role-split/candidates',
+    );
+    mkdirSync(join(candidateParent, `.${candidateSha}.incomplete`), {
+      mode: 0o755,
+      recursive: true,
+    });
+    const sentinel = join(candidateParent, `.${candidateSha}.incomplete`, 'sentinel');
+    writeFileSync(sentinel, 'retain', { mode: 0o600 });
+
+    expect(() =>
+      installCommunitiesRoleSplitDisabledCandidate({
+        candidatePath: candidate,
+        candidateSha,
+        expectedManifestSha256: pins.manifestSha256,
+        expectedArtifactSetSha256: pins.artifactSetSha256,
+        installationRoot,
+        expectedUid: currentUid(),
+      }),
+    ).toThrow('COMMUNITIES_ROLE_SPLIT_CODE_INSTALLATION_INCOMPLETE_EXISTS');
+    expect(readFileSync(sentinel, 'utf8')).toBe('retain');
+  });
+
+  it('rejects a stale independent manifest pin before creating the installation path', () => {
+    const parent = privateParent('phub-role-split-installation-stale-pin-');
+    const candidate = candidatePath(parent, candidateSha);
+    const pins = buildCommunitiesRoleSplitInstallationCandidate({
+      repositoryRoot: repository,
+      candidateSha,
+      outputPath: candidate,
+    });
+    const installationRoot = privateParent('phub-role-split-installation-stale-root-');
+    expect(() =>
+      installCommunitiesRoleSplitDisabledCandidate({
+        candidatePath: candidate,
+        candidateSha,
+        expectedManifestSha256: '0'.repeat(64),
+        expectedArtifactSetSha256: pins.artifactSetSha256,
+        installationRoot,
+        expectedUid: currentUid(),
+      }),
+    ).toThrow('COMMUNITIES_ROLE_SPLIT_CODE_INSTALLATION_MANIFEST_DIGEST_MISMATCH');
+    expect(() =>
+      realpathSync(
+        join(
+          installationRoot,
+          'usr/local/libexec/phub/communities-role-split/candidates',
+          candidateSha,
+        ),
+      ),
+    ).toThrow();
+  });
+
+  it('rejects a freshly pinned manifest that changes the fixed install allowlist', () => {
+    const parent = privateParent('phub-role-split-installation-forged-');
+    const candidate = candidatePath(parent, candidateSha);
+    const pins = buildCommunitiesRoleSplitInstallationCandidate({
+      repositoryRoot: repository,
+      candidateSha,
+      outputPath: candidate,
+    });
+    const manifestPath = join(candidate, 'installation-candidate.json');
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as Record<string, unknown>;
+    const forged = `${JSON.stringify(
+      {
+        ...manifest,
+        forcedCommandSurface: {
+          ...(manifest.forcedCommandSurface as Record<string, unknown>),
+          publicKeyIncluded: true,
+        },
+      },
+      null,
+      2,
+    )}\n`;
+    writeFileSync(manifestPath, forged, { mode: 0o600 });
+    const installationRoot = privateParent('phub-role-split-installation-forged-root-');
+
+    expect(() =>
+      installCommunitiesRoleSplitDisabledCandidate({
+        candidatePath: candidate,
+        candidateSha,
+        expectedManifestSha256: sha256(forged),
+        expectedArtifactSetSha256: pins.artifactSetSha256,
+        installationRoot,
+        expectedUid: currentUid(),
+      }),
+    ).toThrow('COMMUNITIES_ROLE_SPLIT_CODE_INSTALLATION_MANIFEST_INVALID');
   });
 
   it('requires a private parent and refuses existing or symlink output', () => {
@@ -320,8 +457,8 @@ describe('communities role-split installation candidate', () => {
   });
 
   it('rejects a non-executable candidate source entry', () => {
-    chmodSync(join(repository, sourcePaths[0]), 0o644);
-    git(repository, ['add', sourcePaths[0]]);
+    chmodSync(join(repository, sourcePaths[0]!), 0o644);
+    git(repository, ['add', sourcePaths[0]!]);
     git(repository, ['commit', '--quiet', '-m', 'remove executable mode']);
     const nonExecutableSha = git(repository, ['rev-parse', 'HEAD']);
     const parent = privateParent('phub-role-split-installation-mode-');
@@ -348,11 +485,11 @@ describe('communities role-split installation candidate', () => {
 
   it('rejects Git replacement refs before reading the pinned commit tree', () => {
     writeFileSync(
-      join(repository, sourcePaths[1]),
+      join(repository, sourcePaths[1]!),
       '#!/bin/sh\n# replacement-only bytes\nexit 0\n',
       { mode: 0o755 },
     );
-    git(repository, ['add', sourcePaths[1]]);
+    git(repository, ['add', sourcePaths[1]!]);
     git(repository, ['commit', '--quiet', '-m', 'replacement payload']);
     const replacementSha = git(repository, ['rev-parse', 'HEAD']);
     git(repository, ['replace', candidateSha, replacementSha]);
