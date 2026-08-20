@@ -157,6 +157,14 @@ has no orchestrator, PG-host, runner, filesystem, forced-command, workflow or mi
 all marker-evidence authority flags remain false. In particular, defining the V3 bytes does not
 authorize state persistence or restore execution.
 
+The V3 preparation envelope is pure contract code only. It has no persistence, lease, fence, clone
+transition, PG, archive, runner, marker or evidence-publication API; all authorization fields are
+false, including state persistence, clone/restore, marker/evidence, cleanup and every role, schema,
+deploy, import or activation authority. It accepts only `CANDIDATE`, `OWNED` and
+`RESTORE_PENDING`, rejects V2 bytes rather than converting or adapting them, and treats its optional
+immutable execution-evidence binding as descriptive only. This is not an installation, forced
+command, workflow, restore, cleanup or activation.
+
 The V2 host-authorization receipt can describe a reviewed restore contour, but it is not sufficient
 execution authority. `CommunitiesStagingRoleSplitReviewedRunnerAdapter.restoreArchive` therefore
 returns `V3_EXECUTION_EVIDENCE_REQUIRED` before archive inspection, fence acquisition, preflight or
