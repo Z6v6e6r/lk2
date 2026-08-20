@@ -2,6 +2,7 @@ export interface CommunitiesRoleSplitDisabledCandidateInstallationInput {
   readonly candidatePath: string;
   readonly candidateSha: string;
   readonly expectedManifestSha256: string;
+  readonly expectedControlSha256: string;
   readonly expectedArtifactSetSha256: string;
   readonly installationRoot: string;
   readonly expectedUid?: number;

@@ -13,9 +13,11 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import { fileURLToPath } from 'node:url';
 
 export const INSTALLATION_CANDIDATE_SCHEMA_VERSION =
-  'communities-role-split-installation-candidate-v3';
+  'communities-role-split-installation-candidate-v4';
 export const INSTALLATION_CANDIDATE_DIGEST_VERSION =
-  'PHUB_COMMUNITIES_ROLE_SPLIT_INSTALLATION_CANDIDATE_DIGEST_V3';
+  'PHUB_COMMUNITIES_ROLE_SPLIT_INSTALLATION_CANDIDATE_DIGEST_V4';
+export const INSTALLATION_CANDIDATE_CONTROL_VERSION =
+  'PHUB_COMMUNITIES_ROLE_SPLIT_HOST_INSTALL_CONTROL_V1';
 
 const sha40Pattern = /^[0-9a-f]{40}$/u;
 const sha256Pattern = /^[0-9a-f]{64}$/u;
@@ -23,6 +25,7 @@ const gitExecutable = '/usr/bin/git';
 const maxGitBlobBytes = 2 * 1024 * 1024;
 const manifestName = 'installation-candidate.json';
 const digestName = 'installation-candidate.sha256';
+const controlName = 'installation-candidate.control';
 
 type CandidateArtifactDefinition = {
   readonly sourcePath: string;
@@ -49,6 +52,13 @@ export type CommunitiesRoleSplitInstallationCandidate = {
   readonly status: 'INSTALLABLE_DISABLED';
   readonly installable: true;
   readonly reasonCode: 'RUNTIME_BINDINGS_REQUIRED';
+  readonly hostInstaller: {
+    readonly runtime: 'POSIX_SH_GNU_COREUTILS';
+    readonly entrypoint: 'payload/installer.sh';
+    readonly controlFile: typeof controlName;
+    readonly controlSha256: string;
+    readonly nodeRequired: false;
+  };
   readonly artifactFiles: readonly CandidateArtifactFile[];
   readonly installation: {
     readonly targetRoot: string;
@@ -89,15 +99,15 @@ export type CommunitiesRoleSplitInstallationCandidate = {
 
 const fileDefinitions: readonly CandidateArtifactDefinition[] = [
   {
-    sourcePath: 'deploy/jetson/install-communities-role-split-disabled-candidate.mjs',
+    sourcePath: 'deploy/jetson/install-communities-role-split-disabled-candidate.sh',
     sourceGitMode: '100755',
-    artifactPath: 'payload/installer.mjs',
-    targetRelativePath: 'installer.mjs',
+    artifactPath: 'payload/installer.sh',
+    targetRelativePath: 'installer.sh',
     action: 'INSTALL_NEW',
     installOwner: 'root',
     installGroup: 'root',
     installMode: '0755',
-    purpose: 'exact verifier and new-version-only installer; no execution authority',
+    purpose: 'dependency-free verifier and new-version-only installer; no execution authority',
   },
   {
     sourcePath: 'deploy/jetson/communities-role-split-disabled-command.sh',
@@ -287,6 +297,31 @@ function artifactSetSha256(artifactFiles: readonly CandidateArtifactFile[]): str
   return sha256(bytes);
 }
 
+function controlBytes(
+  candidateSha: string,
+  artifactFiles: readonly CandidateArtifactFile[],
+): Buffer {
+  const targetRoot = `/usr/local/libexec/phub/communities-role-split/candidates/${candidateSha}`;
+  return Buffer.from(
+    [
+      INSTALLATION_CANDIDATE_CONTROL_VERSION,
+      `candidateCommitSha=${candidateSha}`,
+      `artifactSetSha256=${artifactSetSha256(artifactFiles)}`,
+      `artifactCount=${artifactFiles.length}`,
+      'installable=true',
+      'authorizesInstallation=true',
+      'authorizesCeremony=false',
+      'authorizesDatabaseMutation=false',
+      ...artifactFiles.map((file) => {
+        const targetRelativePath = file.targetPath.slice(`${targetRoot}/`.length);
+        return `artifact=${file.artifactPath}|${targetRelativePath}|${file.installMode}|${file.bytes}|${file.sha256}`;
+      }),
+      '',
+    ].join('\n'),
+    'utf8',
+  );
+}
+
 function createManifest(
   repositoryRoot: string,
   candidateSha: string,
@@ -311,6 +346,7 @@ function createManifest(
       sha256: sha256(bytes),
     };
   });
+  const serializedControl = controlBytes(candidateSha, artifactFiles);
   return {
     blobs,
     manifest: {
@@ -320,6 +356,13 @@ function createManifest(
       status: 'INSTALLABLE_DISABLED',
       installable: true,
       reasonCode: 'RUNTIME_BINDINGS_REQUIRED',
+      hostInstaller: {
+        runtime: 'POSIX_SH_GNU_COREUTILS',
+        entrypoint: 'payload/installer.sh',
+        controlFile: controlName,
+        controlSha256: sha256(serializedControl),
+        nodeRequired: false,
+      },
       artifactFiles,
       installation: {
         targetRoot: `/usr/local/libexec/phub/communities-role-split/candidates/${candidateSha}`,
@@ -367,6 +410,7 @@ function manifestBytes(manifest: CommunitiesRoleSplitInstallationCandidate): Buf
 function digestBytes(
   candidateSha: string,
   manifest: Buffer,
+  control: Buffer,
   artifactFiles: readonly CandidateArtifactFile[],
 ): Buffer {
   return Buffer.from(
@@ -374,6 +418,7 @@ function digestBytes(
       INSTALLATION_CANDIDATE_DIGEST_VERSION,
       `candidateCommitSha=${candidateSha}`,
       `manifestSha256=${sha256(manifest)}`,
+      `controlSha256=${sha256(control)}`,
       `artifactSetSha256=${artifactSetSha256(artifactFiles)}`,
       'installable=true',
       'authorizesInstallation=true',
@@ -489,7 +534,7 @@ function walkCandidate(root: string, current = root): readonly string[] {
 function expectedCandidateEntries(
   artifactFiles: readonly CandidateArtifactFile[],
 ): readonly string[] {
-  const entries = new Set<string>([digestName, manifestName]);
+  const entries = new Set<string>([controlName, digestName, manifestName]);
   for (const file of artifactFiles) {
     entries.add(file.artifactPath);
     const segments = dirname(file.artifactPath).split('/');
@@ -504,7 +549,11 @@ export function buildCommunitiesRoleSplitInstallationCandidate(input: {
   readonly repositoryRoot: string;
   readonly candidateSha: string;
   readonly outputPath: string;
-}): { readonly manifestSha256: string; readonly artifactSetSha256: string } {
+}): {
+  readonly manifestSha256: string;
+  readonly controlSha256: string;
+  readonly artifactSetSha256: string;
+} {
   const repositoryRoot = assertRepository(input.repositoryRoot, input.candidateSha);
   const outputPath = assertPrivateParent(input.outputPath, input.candidateSha);
   try {
@@ -533,18 +582,21 @@ export function buildCommunitiesRoleSplitInstallationCandidate(input: {
   ensurePrivateDirectory(temporaryPath);
   const { manifest, blobs } = createManifest(repositoryRoot, input.candidateSha);
   const serializedManifest = manifestBytes(manifest);
+  const serializedControl = controlBytes(input.candidateSha, manifest.artifactFiles);
   for (const file of manifest.artifactFiles) {
     ensureArtifactParents(temporaryPath, file.artifactPath);
     writePrivateFile(join(temporaryPath, file.artifactPath), blobs.get(file.artifactPath)!);
   }
   writePrivateFile(join(temporaryPath, manifestName), serializedManifest);
+  writePrivateFile(join(temporaryPath, controlName), serializedControl);
   writePrivateFile(
     join(temporaryPath, digestName),
-    digestBytes(input.candidateSha, serializedManifest, manifest.artifactFiles),
+    digestBytes(input.candidateSha, serializedManifest, serializedControl, manifest.artifactFiles),
   );
   renameSync(temporaryPath, outputPath);
   return {
     manifestSha256: sha256(serializedManifest),
+    controlSha256: sha256(serializedControl),
     artifactSetSha256: artifactSetSha256(manifest.artifactFiles),
   };
 }
@@ -553,7 +605,11 @@ export function verifyCommunitiesRoleSplitInstallationCandidate(input: {
   readonly repositoryRoot: string;
   readonly candidateSha: string;
   readonly candidatePath: string;
-}): { readonly manifestSha256: string; readonly artifactSetSha256: string } {
+}): {
+  readonly manifestSha256: string;
+  readonly controlSha256: string;
+  readonly artifactSetSha256: string;
+} {
   const repositoryRoot = assertRepository(input.repositoryRoot, input.candidateSha);
   const candidatePath = resolve(input.candidatePath);
   if (!isAbsolute(input.candidatePath) || realpathSync(candidatePath) !== candidatePath) {
@@ -570,7 +626,9 @@ export function verifyCommunitiesRoleSplitInstallationCandidate(input: {
   }
   const { manifest, blobs } = createManifest(repositoryRoot, input.candidateSha);
   const serializedManifest = manifestBytes(manifest);
+  const serializedControl = controlBytes(input.candidateSha, manifest.artifactFiles);
   const expectedFiles = [
+    controlName,
     digestName,
     manifestName,
     ...manifest.artifactFiles.map((file) => file.artifactPath),
@@ -597,6 +655,9 @@ export function verifyCommunitiesRoleSplitInstallationCandidate(input: {
   if (!readFileSync(join(candidatePath, manifestName)).equals(serializedManifest)) {
     fail('COMMUNITIES_ROLE_SPLIT_INSTALLATION_CANDIDATE_MANIFEST_INVALID');
   }
+  if (!readFileSync(join(candidatePath, controlName)).equals(serializedControl)) {
+    fail('COMMUNITIES_ROLE_SPLIT_INSTALLATION_CANDIDATE_CONTROL_INVALID');
+  }
   for (const file of manifest.artifactFiles) {
     if (
       !readFileSync(join(candidatePath, file.artifactPath)).equals(blobs.get(file.artifactPath)!)
@@ -607,17 +668,27 @@ export function verifyCommunitiesRoleSplitInstallationCandidate(input: {
   const expectedDigest = digestBytes(
     input.candidateSha,
     serializedManifest,
+    serializedControl,
     manifest.artifactFiles,
   );
   if (!readFileSync(join(candidatePath, digestName)).equals(expectedDigest)) {
     fail('COMMUNITIES_ROLE_SPLIT_INSTALLATION_CANDIDATE_DIGEST_INVALID');
   }
   const manifestDigest = sha256(serializedManifest);
+  const controlDigest = sha256(serializedControl);
   const artifactDigest = artifactSetSha256(manifest.artifactFiles);
-  if (!sha256Pattern.test(manifestDigest) || !sha256Pattern.test(artifactDigest)) {
+  if (
+    !sha256Pattern.test(manifestDigest) ||
+    !sha256Pattern.test(controlDigest) ||
+    !sha256Pattern.test(artifactDigest)
+  ) {
     fail('COMMUNITIES_ROLE_SPLIT_INSTALLATION_CANDIDATE_DIGEST_INVALID');
   }
-  return { manifestSha256: manifestDigest, artifactSetSha256: artifactDigest };
+  return {
+    manifestSha256: manifestDigest,
+    controlSha256: controlDigest,
+    artifactSetSha256: artifactDigest,
+  };
 }
 
 function parseCliArguments(args: readonly string[]): {
@@ -662,7 +733,7 @@ function main(): void {
           candidatePath: input.candidatePath,
         });
   process.stdout.write(
-    `COMMUNITIES_ROLE_SPLIT_INSTALLATION_CANDIDATE_${input.action.toUpperCase()}_PASSED|candidate=${input.candidateSha}|manifest=${result.manifestSha256}|artifacts=${result.artifactSetSha256}|installable=true|authorizes_installation=true|authorizes_ceremony=false\n`,
+    `COMMUNITIES_ROLE_SPLIT_INSTALLATION_CANDIDATE_${input.action.toUpperCase()}_PASSED|candidate=${input.candidateSha}|manifest=${result.manifestSha256}|control=${result.controlSha256}|artifacts=${result.artifactSetSha256}|installable=true|authorizes_installation=true|authorizes_ceremony=false\n`,
   );
 }
 
