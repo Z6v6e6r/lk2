@@ -43,7 +43,7 @@ const request = {
   restoreHelperSha256: '2'.repeat(64),
   markerWriterSha256: '3'.repeat(64),
 } as const satisfies CommunitiesStagingRoleSplitRestoreMarkerRequest;
-const descriptor = {
+const descriptor: CommunitiesStagingRoleSplitRestoreExecutionDescriptor = {
   schemaVersion: COMMUNITIES_STAGING_ROLE_SPLIT_RESTORE_EXECUTION_DESCRIPTOR_VERSION,
   mode: 'CODE_ONLY_DISABLED',
   markerRequestSha256: communitiesStagingRoleSplitRestoreMarkerRequestSha256(request),
@@ -74,7 +74,7 @@ const descriptor = {
     import: false,
     activation: false,
   },
-} as const satisfies CommunitiesStagingRoleSplitRestoreExecutionDescriptor;
+};
 
 function input(overrides: Partial<CommunitiesStagingRoleSplitRestoreArchiveInput> = {}) {
   const archiveTouched = vi.fn(() => {
@@ -129,7 +129,15 @@ describe('CommunitiesStagingRoleSplitRunnerAdapter', () => {
     ],
     [
       'disabled authority changed',
-      { descriptor: { ...descriptor, authorizes: { ...descriptor.authorizes, restore: true } } },
+      {
+        descriptor: {
+          ...descriptor,
+          authorizes: {
+            ...descriptor.authorizes,
+            restore: true,
+          } as unknown as CommunitiesStagingRoleSplitRestoreExecutionDescriptor['authorizes'],
+        },
+      },
     ],
   ];
   it('fails closed for every binding mismatch before execution', async () => {
