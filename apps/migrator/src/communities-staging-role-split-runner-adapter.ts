@@ -7,22 +7,26 @@
  */
 import {
   assertCommunitiesStagingRoleSplitHostAuthorization,
+  assertCommunitiesStagingRoleSplitSourceWriteDenialAttestationBinding,
+  assertCommunitiesStagingRoleSplitRestoreExecutionEvidenceBindings,
   assertCommunitiesStagingRoleSplitRestoreExecutionDescriptor,
   assertCommunitiesStagingRoleSplitRestoreMarkerRequest,
   communitiesStagingRoleSplitHostAuthorizationSha256,
   communitiesStagingRoleSplitRestoreMarkerRequestSha256,
   type CommunitiesStagingRoleSplitHostAuthorization,
+  type CommunitiesStagingRoleSplitSourceWriteDenialAttestation,
+  type CommunitiesStagingRoleSplitRestoreExecutionEvidence,
   type CommunitiesStagingRoleSplitRestoreExecutionDescriptor,
   type CommunitiesStagingRoleSplitRestoreMarkerRequest,
+  type CommunitiesSourceConnectAclObservation,
+  type CommunitiesSourceMembershipObservation,
 } from '@phub/database';
 import type { FileHandle } from 'node:fs/promises';
 
 import {
-  runCommunitiesStagingRoleSplitPgRestore,
   type CommunitiesStagingRoleSplitPgRestorePreflightObservation,
   type CommunitiesStagingRoleSplitPgRestoreResult,
   type CommunitiesStagingRoleSplitPgRestoreTarget,
-  type CommunitiesStagingRoleSplitPgRestoreRunnerConfig,
 } from './communities-staging-role-split-pg-restore-runner.js';
 
 export class CommunitiesStagingRoleSplitRunnerAdapterError extends Error {
@@ -81,7 +85,61 @@ export interface CommunitiesStagingRoleSplitRestoreArchiveInput {
 export interface CommunitiesStagingRoleSplitRunnerAdapterConfig {
   readonly request: CommunitiesStagingRoleSplitRestoreMarkerRequest;
   readonly descriptor: CommunitiesStagingRoleSplitRestoreExecutionDescriptor;
+  readonly sourceWriteDenialAttestation: CommunitiesStagingRoleSplitSourceWriteDenialAttestation;
+  readonly connectAclObservation: CommunitiesSourceConnectAclObservation;
+  readonly membershipObservation: CommunitiesSourceMembershipObservation;
+  readonly restoreExecutionEvidence: CommunitiesStagingRoleSplitRestoreExecutionEvidence;
   readonly creationReceiptSha256: string;
+}
+
+/**
+ * Pure, synchronous binding check for review and tests. It has no runtime collaborators and does
+ * not inspect the archive; restoreArchive still denies after this check succeeds.
+ */
+export function assertCommunitiesStagingRoleSplitRunnerAdapterBinding(
+  config: CommunitiesStagingRoleSplitRunnerAdapterConfig,
+  input: Pick<CommunitiesStagingRoleSplitRestoreArchiveInput, 'cloneDatabaseOid' | 'request'>,
+): void {
+  try {
+    assertCommunitiesStagingRoleSplitRestoreExecutionDescriptor(config.descriptor);
+    assertCommunitiesStagingRoleSplitRestoreMarkerRequest(config.request);
+    assertCommunitiesStagingRoleSplitRestoreMarkerRequest(input.request);
+    assertCommunitiesStagingRoleSplitRestoreExecutionEvidenceBindings({
+      request: config.request,
+      attestation: config.sourceWriteDenialAttestation,
+      descriptor: config.descriptor,
+      evidence: config.restoreExecutionEvidence,
+      connectAclObservation: config.connectAclObservation,
+      membershipObservation: config.membershipObservation,
+      creationReceiptSha256: config.creationReceiptSha256,
+      cloneDatabaseOid: input.cloneDatabaseOid,
+      systemIdentifier: config.request.systemIdentifier,
+      restoreRunId: config.request.restoreRunId,
+      restoreRunAttempt: config.request.restoreRunAttempt,
+    });
+    assertCommunitiesStagingRoleSplitSourceWriteDenialAttestationBinding({
+      request: config.request,
+      descriptor: config.descriptor,
+      attestation: config.sourceWriteDenialAttestation,
+      connectAclObservation: config.connectAclObservation,
+      membershipObservation: config.membershipObservation,
+    });
+    const requestSha256 = communitiesStagingRoleSplitRestoreMarkerRequestSha256(config.request);
+    if (
+      config.descriptor.markerRequestSha256 !== requestSha256 ||
+      communitiesStagingRoleSplitRestoreMarkerRequestSha256(input.request) !== requestSha256 ||
+      config.descriptor.creationReceiptSha256 !== config.creationReceiptSha256 ||
+      input.request.restoreDatabase !== config.request.restoreDatabase ||
+      input.request.expectedCloneDatabaseOwner !== config.descriptor.identity.restoreRole.name ||
+      input.request.expectedCloneDatabaseOwnerOid !== config.descriptor.identity.restoreRole.oid ||
+      input.cloneDatabaseOid !== config.descriptor.cloneDatabaseOid
+    ) {
+      throw new CommunitiesStagingRoleSplitRunnerAdapterError('EXECUTION_NOT_AUTHORIZED');
+    }
+  } catch (error) {
+    if (error instanceof CommunitiesStagingRoleSplitRunnerAdapterError) throw error;
+    throw new CommunitiesStagingRoleSplitRunnerAdapterError('EXECUTION_NOT_AUTHORIZED');
+  }
 }
 
 export class CommunitiesStagingRoleSplitRunnerAdapter {
@@ -89,33 +147,7 @@ export class CommunitiesStagingRoleSplitRunnerAdapter {
 
   restoreArchive(input: CommunitiesStagingRoleSplitRestoreArchiveInput): Promise<never> {
     try {
-      assertCommunitiesStagingRoleSplitRestoreExecutionDescriptor(this.config.descriptor);
-      assertCommunitiesStagingRoleSplitRestoreMarkerRequest(this.config.request);
-      assertCommunitiesStagingRoleSplitRestoreMarkerRequest(input.request);
-      const requestSha256 = communitiesStagingRoleSplitRestoreMarkerRequestSha256(
-        this.config.request,
-      );
-      const callbackRequestSha256 = communitiesStagingRoleSplitRestoreMarkerRequestSha256(
-        input.request,
-      );
-      if (
-        this.config.descriptor.markerRequestSha256 !== requestSha256 ||
-        callbackRequestSha256 !== requestSha256 ||
-        this.config.descriptor.creationReceiptSha256 !== this.config.creationReceiptSha256 ||
-        input.request.restoreDatabase !== this.config.request.restoreDatabase ||
-        input.request.expectedCloneDatabaseOwner !==
-          this.config.descriptor.identity.restoreRole.name ||
-        input.request.expectedCloneDatabaseOwnerOid !==
-          this.config.descriptor.identity.restoreRole.oid ||
-        input.cloneDatabaseOid !== this.config.descriptor.cloneDatabaseOid ||
-        this.config.descriptor.authorizes.execution !== false ||
-        this.config.descriptor.authorizes.cloneCreation !== false ||
-        this.config.descriptor.authorizes.restore !== false ||
-        this.config.descriptor.authorizes.markerWrite !== false ||
-        this.config.descriptor.authorizes.evidencePublication !== false ||
-        this.config.descriptor.authorizes.automaticCleanup !== false
-      )
-        return executionNotAuthorized();
+      assertCommunitiesStagingRoleSplitRunnerAdapterBinding(this.config, input);
     } catch {
       return executionNotAuthorized();
     }
@@ -131,14 +163,13 @@ export class CommunitiesStagingRoleSplitReviewedRunnerAdapterError extends Error
       | 'FENCE_UNAVAILABLE'
       | 'FENCE_LOST'
       | 'FENCE_RELEASE_FAILED'
-      | 'RESTORE_OUTCOME_AMBIGUOUS',
+      | 'RESTORE_OUTCOME_AMBIGUOUS'
+      | 'V3_EXECUTION_EVIDENCE_REQUIRED',
   ) {
     super(`COMMUNITIES_STAGING_ROLE_SPLIT_REVIEWED_RUNNER_ADAPTER_${code}`);
     this.name = 'CommunitiesStagingRoleSplitReviewedRunnerAdapterError';
   }
 }
-
-type RunRestore = typeof runCommunitiesStagingRoleSplitPgRestore;
 
 export interface CommunitiesStagingRoleSplitReviewedRunnerAdapterConfig {
   readonly request: CommunitiesStagingRoleSplitRestoreMarkerRequest;
@@ -169,8 +200,6 @@ export interface CommunitiesStagingRoleSplitReviewedRunnerAdapterConfig {
   readonly externalFenceLease?: CommunitiesStagingRoleSplitDdlFenceLease;
   readonly passwordFile: FileHandle;
   readonly executableFile: FileHandle;
-  /** Test seam only. Production callers omit it and use the descriptor-pinned runner. */
-  readonly runRestore?: RunRestore;
 }
 
 function reviewedFail(code: CommunitiesStagingRoleSplitReviewedRunnerAdapterError['code']): never {
@@ -232,105 +261,17 @@ function assertReviewedConfig(
     reviewedFail('BINDING_INVALID');
 }
 
-function assertFenceLease(lease: CommunitiesStagingRoleSplitDdlFenceLease): void {
-  if (
-    !exactSha256(lease.requestSha256) ||
-    !/^[0-9]{10,32}$/u.test(lease.systemIdentifier) ||
-    !/^[1-9][0-9]*$/u.test(lease.backendPid) ||
-    !exactSha256(lease.fencingToken) ||
-    lease.advisoryKey !== COMMUNITIES_STAGING_ROLE_SPLIT_DDL_FENCE_ADVISORY_KEY
-  )
-    reviewedFail('FENCE_LOST');
-}
-
 export class CommunitiesStagingRoleSplitReviewedRunnerAdapter {
   constructor(private readonly config: CommunitiesStagingRoleSplitReviewedRunnerAdapterConfig) {
     assertReviewedConfig(config);
   }
 
-  async restoreArchive(
-    input: CommunitiesStagingRoleSplitRestoreArchiveInput,
+  restoreArchive(
+    _input: CommunitiesStagingRoleSplitRestoreArchiveInput,
   ): Promise<CommunitiesStagingRoleSplitPgRestoreResult> {
-    try {
-      assertCommunitiesStagingRoleSplitRestoreMarkerRequest(input.request);
-    } catch {
-      reviewedFail('BINDING_INVALID');
-    }
-    if (
-      communitiesStagingRoleSplitRestoreMarkerRequestSha256(input.request) !==
-        this.config.authorization.markerRequestSha256 ||
-      input.cloneDatabaseOid !== this.config.target.databaseOid
-    )
-      reviewedFail('BINDING_INVALID');
-
-    let lease: CommunitiesStagingRoleSplitDdlFenceLease;
-    const ownsFenceLease = this.config.externalFenceLease === undefined;
-    try {
-      lease =
-        this.config.externalFenceLease ??
-        (await this.config.fence.acquire({
-          requestSha256: this.config.authorization.markerRequestSha256,
-          systemIdentifier: this.config.request.systemIdentifier,
-          timeoutMs: this.config.fenceTimeoutMs,
-          signal: AbortSignal.timeout(this.config.fenceTimeoutMs),
-        }));
-      assertFenceLease(lease);
-      if (
-        lease.requestSha256 !== this.config.authorization.markerRequestSha256 ||
-        lease.systemIdentifier !== this.config.request.systemIdentifier
-      )
-        reviewedFail('FENCE_UNAVAILABLE');
-      await this.config.fence.assertHeld(lease);
-    } catch {
-      reviewedFail('FENCE_UNAVAILABLE');
-    }
-
-    let primaryError: CommunitiesStagingRoleSplitReviewedRunnerAdapterError | null = null;
-    let result: CommunitiesStagingRoleSplitPgRestoreResult | null = null;
-    try {
-      const runnerConfig: CommunitiesStagingRoleSplitPgRestoreRunnerConfig = {
-        target: this.config.target,
-        preflight: this.config.connectionFactory.preflight,
-        expectedPgRestoreSha256: this.config.expectedPgRestoreSha256,
-        timeoutMs: this.config.restoreTimeoutMs,
-        preflightTimeoutMs: this.config.preflightTimeoutMs,
-      };
-      result = await (this.config.runRestore ?? runCommunitiesStagingRoleSplitPgRestore)(
-        runnerConfig,
-        {
-          archiveFile: input.archiveFile,
-          passwordFile: this.config.passwordFile,
-          executableFile: this.config.executableFile,
-        },
-      );
-      try {
-        await this.config.fence.assertHeld(lease);
-      } catch {
-        reviewedFail('RESTORE_OUTCOME_AMBIGUOUS');
-      }
-    } catch (error) {
-      primaryError =
-        error instanceof CommunitiesStagingRoleSplitReviewedRunnerAdapterError
-          ? error
-          : new CommunitiesStagingRoleSplitReviewedRunnerAdapterError('RESTORE_OUTCOME_AMBIGUOUS');
-    }
-
-    let releaseError: CommunitiesStagingRoleSplitReviewedRunnerAdapterError | null = null;
-    if (ownsFenceLease) {
-      try {
-        await this.config.fence.release(lease);
-      } catch {
-        releaseError = new CommunitiesStagingRoleSplitReviewedRunnerAdapterError(
-          'FENCE_RELEASE_FAILED',
-        );
-      }
-    }
-    if (primaryError !== null) {
-      if (releaseError !== null) primaryError.cause = releaseError;
-      throw primaryError;
-    }
-    if (releaseError !== null) throw releaseError;
-    if (result === null) reviewedFail('RESTORE_OUTCOME_AMBIGUOUS');
-    return result;
+    void _input;
+    return Promise.reject(
+      new CommunitiesStagingRoleSplitReviewedRunnerAdapterError('V3_EXECUTION_EVIDENCE_REQUIRED'),
+    );
   }
 }
