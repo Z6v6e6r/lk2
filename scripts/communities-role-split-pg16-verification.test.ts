@@ -55,8 +55,12 @@ describe('communities role-split disposable PG16 runner contract', () => {
       'apps/migrator/src/communities-staging-role-split-marker-ceremony-pg-host.pg.test.ts',
     );
     expect(runner).toContain(
-      'PG16_VERIFY_PASSED|major=16|fixture=disposable|restore=custom_archive|inventory=local_redacted|container_retained=false|network_retained=false',
+      'PG16_VERIFY_PASSED|major=16|fixture=disposable|restore=custom_archive|failure_matrix=response_loss_cleanup_evidence|inventory=local_redacted|container_retained=false|network_retained=false',
     );
+    expect(operatorTest).toContain('PG16_VERIFY_INJECTED_RESTORE_RESPONSE_LOSS');
+    expect(operatorTest).toContain('PG16_VERIFY_INJECTED_CLEANUP_FAILURE');
+    expect(operatorTest).toContain('PG16_VERIFY_INJECTED_EVIDENCE_WRITE_FAILURE');
+    expect(operatorTest).toContain('PG16_VERIFY_INJECTED_EVIDENCE_RESPONSE_LOSS');
   });
 
   it('uses a custom archive and restores it into template0 without owner or ACL suppression', () => {

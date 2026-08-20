@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { constants } from 'node:fs';
-import { chmod, mkdtemp, open, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, open, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -25,6 +25,7 @@ import {
   type CommunitiesRoleSplitInputC,
   type CommunitiesRoleSplitObjectKind,
   type CommunitiesStagingRoleSplitLedgerEntry,
+  type CommunitiesStagingRoleSplitRestoreMarkerEvidence,
   type CommunitiesStagingRoleSplitRestoreMarkerPayload,
   type CommunitiesStagingRoleSplitRestoreMarkerRequest,
 } from '@phub/database';
@@ -36,6 +37,13 @@ import {
   type CommunitiesStagingRoleSplitMarkerCeremonyPgClient,
   type CommunitiesStagingRoleSplitMarkerCeremonyPgHostConfig,
 } from './communities-staging-role-split-marker-ceremony-pg-host.js';
+import {
+  CommunitiesStagingRoleSplitMarkerCeremonyError,
+  runCommunitiesStagingRoleSplitMarkerCeremony,
+  type CommunitiesStagingRoleSplitMarkerCeremonyArtifacts,
+  type CommunitiesStagingRoleSplitMarkerCeremonyHost,
+  type CommunitiesStagingRoleSplitMarkerCeremonyLease,
+} from './communities-staging-role-split-marker-ceremony.js';
 import {
   COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_CONFIRMATION,
   COMMUNITIES_STAGING_ROLE_SPLIT_MAPPING_VERSION,
@@ -458,6 +466,84 @@ class LazyCountingPgClient implements CommunitiesStagingRoleSplitMarkerCeremonyP
   }
 }
 
+type FailureMatrixHostOverrides = Partial<
+  Pick<
+    CommunitiesStagingRoleSplitMarkerCeremonyHost,
+    'restoreClone' | 'verifyBindings' | 'writeMarker' | 'publishEvidence' | 'dropExactClone'
+  >
+>;
+
+function withFailureMatrixOverrides(
+  delegate: CommunitiesStagingRoleSplitMarkerCeremonyHost,
+  overrides: FailureMatrixHostOverrides,
+): CommunitiesStagingRoleSplitMarkerCeremonyHost {
+  return {
+    acquireLease: delegate.acquireLease.bind(delegate),
+    releaseLease: delegate.releaseLease.bind(delegate),
+    loadState: delegate.loadState.bind(delegate),
+    createCandidate: delegate.createCandidate.bind(delegate),
+    advanceState: delegate.advanceState.bind(delegate),
+    saveVerified: delegate.saveVerified.bind(delegate),
+    loadVerifiedArtifacts: delegate.loadVerifiedArtifacts.bind(delegate),
+    observeClone: delegate.observeClone.bind(delegate),
+    observeMarkerPresence: delegate.observeMarkerPresence.bind(delegate),
+    observeMarker: delegate.observeMarker.bind(delegate),
+    observeEvidence: delegate.observeEvidence.bind(delegate),
+    createClone: delegate.createClone.bind(delegate),
+    restoreClone: overrides.restoreClone ?? delegate.restoreClone.bind(delegate),
+    verifyBindings: overrides.verifyBindings ?? delegate.verifyBindings.bind(delegate),
+    writeMarker: overrides.writeMarker ?? delegate.writeMarker.bind(delegate),
+    publishEvidence: overrides.publishEvidence ?? delegate.publishEvidence.bind(delegate),
+    dropExactClone: overrides.dropExactClone ?? delegate.dropExactClone.bind(delegate),
+    clearState: delegate.clearState.bind(delegate),
+  };
+}
+
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value === 'boolean' || typeof value === 'number')
+    return JSON.stringify(value);
+  if (typeof value === 'string') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  if (typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`)
+      .join(',')}}`;
+  }
+  throw new Error('PG16_VERIFY_CANONICAL_VALUE_INVALID');
+}
+
+async function writeExactMarkerInCatalogTransaction(
+  admin: Client,
+  request: CommunitiesStagingRoleSplitRestoreMarkerRequest,
+  cloneDatabaseOid: string,
+  marker: string,
+): Promise<void> {
+  await admin.query('BEGIN');
+  try {
+    await admin.query('LOCK TABLE pg_catalog.pg_database IN ACCESS EXCLUSIVE MODE');
+    const binding = await admin.query<{ oid: string; owner: string; owner_oid: string }>(
+      'SELECT database.oid::text AS oid, owner.rolname AS owner, database.datdba::text AS owner_oid FROM pg_catalog.pg_database database JOIN pg_catalog.pg_roles owner ON owner.oid = database.datdba WHERE database.datname = $1',
+      [request.restoreDatabase],
+    );
+    expect(binding.rows).toEqual([
+      {
+        oid: cloneDatabaseOid,
+        owner: request.expectedCloneDatabaseOwner,
+        owner_oid: request.expectedCloneDatabaseOwnerOid,
+      },
+    ]);
+    await admin.query(
+      `COMMENT ON DATABASE ${quoteIdentifier(request.restoreDatabase)} IS ${quoteLiteral(marker)}`,
+    );
+    await admin.query('COMMIT');
+  } catch (error) {
+    await admin.query('ROLLBACK').catch(() => undefined);
+    throw error;
+  }
+}
+
 interface Pg16Fixture {
   readonly admin: Client;
   readonly adminUrl: URL;
@@ -534,6 +620,40 @@ describe
     >;
     const cleanupClients: { end(): Promise<void> }[] = [];
     let cleanupDirectory: string | null = null;
+
+    async function createFailureScenario(runId: string): Promise<{
+      readonly host: CommunitiesStagingRoleSplitMarkerCeremonyPgHost;
+      readonly cloneHost: LazyCountingPgClient;
+      readonly request: CommunitiesStagingRoleSplitRestoreMarkerRequest;
+      readonly requestSha256: string;
+      readonly stateDirectory: string;
+    }> {
+      const restoreRunAttempt = '1';
+      const restoreDatabase = `phub_restore_${runId}_${restoreRunAttempt}`;
+      const stateDirectory = join(fixture.directory, `failure-${runId}-${restoreRunAttempt}`);
+      await mkdir(stateDirectory, { mode: 0o700 });
+      const request = {
+        ...fixture.request,
+        restoreDatabase,
+        restoreRunId: runId,
+        restoreRunAttempt,
+      } satisfies CommunitiesStagingRoleSplitRestoreMarkerRequest;
+      const cloneHost = new LazyCountingPgClient(databaseUrl(fixture.adminUrl, restoreDatabase));
+      cleanupClients.push(cloneHost);
+      const host = new CommunitiesStagingRoleSplitMarkerCeremonyPgHost({
+        ...fixture.config,
+        stateDirectory,
+        request,
+        clone: cloneHost,
+      });
+      return {
+        host,
+        cloneHost,
+        request,
+        requestSha256: communitiesStagingRoleSplitRestoreMarkerRequestSha256(request),
+        stateDirectory,
+      };
+    }
 
     beforeAll(async () => {
       const adminUrl = parsedConfiguredUrl as URL;
@@ -820,20 +940,19 @@ describe
         clone: cloneHost,
         archive: { path: archivePath, evidencePath, tocPath },
         createCloneDatabase: async (restoreDatabase: string) => {
-          expect(restoreDatabase).toBe(CLONE_DATABASE);
           await admin.query(
             `CREATE DATABASE ${quoteIdentifier(restoreDatabase)} WITH TEMPLATE template0 OWNER ${quoteIdentifier(OWNER_ROLE)}`,
           );
           await admin.query(`SET ROLE ${quoteIdentifier(OWNER_ROLE)}`);
           await admin.query(
-            `REVOKE ALL ON DATABASE ${quoteIdentifier(CLONE_DATABASE)} FROM PUBLIC`,
+            `REVOKE ALL ON DATABASE ${quoteIdentifier(restoreDatabase)} FROM PUBLIC`,
           );
           await admin.query(
-            `GRANT CONNECT ON DATABASE ${quoteIdentifier(CLONE_DATABASE)} TO ${quoteIdentifier(READER_ROLE)}`,
+            `GRANT CONNECT ON DATABASE ${quoteIdentifier(restoreDatabase)} TO ${quoteIdentifier(READER_ROLE)}`,
           );
           await admin.query('RESET ROLE');
           const extensionSetup = new Client({
-            connectionString: databaseUrl(adminUrl, CLONE_DATABASE),
+            connectionString: databaseUrl(adminUrl, restoreDatabase),
             connectionTimeoutMillis: 5_000,
             query_timeout: 5_000,
             statement_timeout: 5_000,
@@ -849,7 +968,6 @@ describe
           }
         },
         restoreArchive: async ({ archiveFile, request: restoreRequest }) => {
-          expect(restoreRequest).toEqual(request);
           expect((await archiveFile.stat()).isFile()).toBe(true);
           const restoreArguments = [
             'pg_restore',
@@ -858,7 +976,7 @@ describe
             '--exit-on-error',
             '--no-password',
             '--use-set-session-authorization',
-            `--dbname=${CLONE_DATABASE}`,
+            `--dbname=${restoreRequest.restoreDatabase}`,
           ] as const;
           expect(restoreArguments).not.toContain('--no-owner');
           expect(restoreArguments).not.toContain('--no-acl');
@@ -889,7 +1007,7 @@ describe
         await rm(cleanupDirectory, { recursive: true, force: true });
     });
 
-    it('binds a real PG16 custom archive restore, ledger, ownership, ACL, RLS and marker readback', async () => {
+    it('binds a real PG16 custom archive restore, ledger, ownership, ACL and RLS', async () => {
       const host = new CommunitiesStagingRoleSplitMarkerCeremonyPgHost(fixture.config);
       const lease = await host.acquireLease(fixture.requestSha256);
       const candidate = createCommunitiesStagingRoleSplitMarkerCeremonyCandidate(
@@ -960,11 +1078,197 @@ describe
         },
       ]);
 
-      await fixture.admin.query(
-        `COMMENT ON DATABASE ${quoteIdentifier(CLONE_DATABASE)} IS ${quoteLiteral(artifacts.marker)}`,
-      );
-      expect(await host.observeMarker(lease, cloneDatabaseOid, artifacts.marker)).toBe('exact');
+      expect(await host.observeMarker(lease, cloneDatabaseOid, artifacts.marker)).toBe('absent');
       await host.releaseLease(lease);
+    }, 30_000);
+
+    it('retains a real restored clone after response loss and never retries pg_restore automatically', async () => {
+      const scenario = await createFailureScenario('902');
+      let restoreCalls = 0;
+      let loseRestoreResponse = true;
+      const lostRestoreResponse = withFailureMatrixOverrides(scenario.host, {
+        restoreClone: async (
+          lease: CommunitiesStagingRoleSplitMarkerCeremonyLease,
+          cloneDatabaseOid: string,
+        ) => {
+          restoreCalls += 1;
+          await scenario.host.restoreClone(lease, cloneDatabaseOid);
+          if (loseRestoreResponse) throw new Error('PG16_VERIFY_INJECTED_RESTORE_RESPONSE_LOSS');
+        },
+      });
+
+      await expect(
+        runCommunitiesStagingRoleSplitMarkerCeremony(scenario.requestSha256, lostRestoreResponse),
+      ).rejects.toEqual(
+        new CommunitiesStagingRoleSplitMarkerCeremonyError(
+          'COMMUNITIES_STAGING_ROLE_SPLIT_MARKER_CEREMONY_RESTORE_OUTCOME_AMBIGUOUS',
+        ),
+      );
+      expect(restoreCalls).toBe(1);
+      const lease = await scenario.host.acquireLease(scenario.requestSha256);
+      const state = await scenario.host.loadState(lease);
+      expect(state?.phase).toBe('RESTORE_PENDING');
+      expect(await scenario.host.observeClone(lease, state?.cloneDatabaseOid ?? null)).toBe(
+        'exact',
+      );
+      expect(await scenario.host.observeMarkerPresence(lease, state?.cloneDatabaseOid ?? '')).toBe(
+        'absent',
+      );
+      await scenario.host.releaseLease(lease);
+      expect(
+        await scenario.cloneHost.query<{ count: string }>(
+          'SELECT count(*)::text AS count FROM public.schema_migrations',
+        ),
+      ).toEqual({ rows: [{ count: String(ledger.length) }] });
+      await expect(
+        readFile(join(scenario.stateDirectory, 'marker-evidence.json'), 'utf8'),
+      ).rejects.toMatchObject({ code: 'ENOENT' });
+
+      loseRestoreResponse = false;
+      await expect(
+        runCommunitiesStagingRoleSplitMarkerCeremony(scenario.requestSha256, lostRestoreResponse),
+      ).rejects.toEqual(
+        new CommunitiesStagingRoleSplitMarkerCeremonyError(
+          'COMMUNITIES_STAGING_ROLE_SPLIT_MARKER_CEREMONY_RESTORE_OUTCOME_AMBIGUOUS',
+        ),
+      );
+      expect(restoreCalls).toBe(1);
+    }, 30_000);
+
+    it('retains the real clone and durable state when pre-marker cleanup fails', async () => {
+      const scenario = await createFailureScenario('903');
+      let cleanupAttempts = 0;
+      const cleanupFailure = withFailureMatrixOverrides(scenario.host, {
+        verifyBindings: async (
+          lease: CommunitiesStagingRoleSplitMarkerCeremonyLease,
+          cloneDatabaseOid: string,
+        ): Promise<CommunitiesStagingRoleSplitMarkerCeremonyArtifacts> => {
+          await scenario.host.verifyBindings(lease, cloneDatabaseOid);
+          throw new Error('PG16_VERIFY_INJECTED_POST_VERIFY_FAILURE');
+        },
+        dropExactClone: () => {
+          cleanupAttempts += 1;
+          return Promise.reject(new Error('PG16_VERIFY_INJECTED_CLEANUP_FAILURE'));
+        },
+      });
+
+      await expect(
+        runCommunitiesStagingRoleSplitMarkerCeremony(scenario.requestSha256, cleanupFailure),
+      ).rejects.toEqual(
+        new CommunitiesStagingRoleSplitMarkerCeremonyError(
+          'COMMUNITIES_STAGING_ROLE_SPLIT_MARKER_CEREMONY_CLEANUP_FAILED',
+        ),
+      );
+      expect(cleanupAttempts).toBe(1);
+      const lease = await scenario.host.acquireLease(scenario.requestSha256);
+      const state = await scenario.host.loadState(lease);
+      expect(state?.phase).toBe('RESTORED');
+      expect(await scenario.host.observeClone(lease, state?.cloneDatabaseOid ?? null)).toBe(
+        'exact',
+      );
+      expect(await scenario.host.observeMarkerPresence(lease, state?.cloneDatabaseOid ?? '')).toBe(
+        'absent',
+      );
+      await scenario.host.releaseLease(lease);
+      await expect(
+        readFile(join(scenario.stateDirectory, 'marker-evidence.json'), 'utf8'),
+      ).rejects.toMatchObject({ code: 'ENOENT' });
+    }, 30_000);
+
+    it('reconciles real marker and evidence response loss without rewriting either artifact', async () => {
+      const delegate = new CommunitiesStagingRoleSplitMarkerCeremonyPgHost(fixture.config);
+      let markerWrites = 0;
+      let evidenceWrites = 0;
+      let evidenceMode: 'fail_before_write' | 'write_then_lose_response' = 'fail_before_write';
+      const failureMatrixHost = withFailureMatrixOverrides(delegate, {
+        writeMarker: async (
+          lease: CommunitiesStagingRoleSplitMarkerCeremonyLease,
+          cloneDatabaseOid: string,
+          marker: string,
+        ) => {
+          void lease;
+          markerWrites += 1;
+          await writeExactMarkerInCatalogTransaction(
+            fixture.admin,
+            fixture.request,
+            cloneDatabaseOid,
+            marker,
+          );
+          throw new Error('PG16_VERIFY_INJECTED_MARKER_RESPONSE_LOSS');
+        },
+        publishEvidence: async (
+          lease: CommunitiesStagingRoleSplitMarkerCeremonyLease,
+          evidence: CommunitiesStagingRoleSplitRestoreMarkerEvidence,
+        ) => {
+          void lease;
+          evidenceWrites += 1;
+          if (evidenceMode === 'fail_before_write')
+            throw new Error('PG16_VERIFY_INJECTED_EVIDENCE_WRITE_FAILURE');
+          await writeFile(
+            join(fixture.directory, 'marker-evidence.json'),
+            `${canonicalJson(evidence)}\n`,
+            { encoding: 'utf8', flag: 'wx', mode: 0o600 },
+          );
+          throw new Error('PG16_VERIFY_INJECTED_EVIDENCE_RESPONSE_LOSS');
+        },
+      });
+
+      await expect(
+        runCommunitiesStagingRoleSplitMarkerCeremony(fixture.requestSha256, failureMatrixHost),
+      ).rejects.toEqual(
+        new CommunitiesStagingRoleSplitMarkerCeremonyError(
+          'COMMUNITIES_STAGING_ROLE_SPLIT_MARKER_CEREMONY_EVIDENCE_WRITE_FAILED',
+        ),
+      );
+      expect(markerWrites).toBe(1);
+      expect(evidenceWrites).toBe(1);
+      let lease = await delegate.acquireLease(fixture.requestSha256);
+      let state = await delegate.loadState(lease);
+      expect(state?.phase).toBe('MARKED');
+      expect(
+        await delegate.observeMarker(
+          lease,
+          state?.cloneDatabaseOid ?? '',
+          verifiedArtifacts.marker,
+        ),
+      ).toBe('exact');
+      await delegate.releaseLease(lease);
+      await expect(
+        readFile(join(fixture.directory, 'marker-evidence.json'), 'utf8'),
+      ).rejects.toMatchObject({ code: 'ENOENT' });
+
+      evidenceMode = 'write_then_lose_response';
+      await expect(
+        runCommunitiesStagingRoleSplitMarkerCeremony(fixture.requestSha256, failureMatrixHost),
+      ).rejects.toEqual(
+        new CommunitiesStagingRoleSplitMarkerCeremonyError(
+          'COMMUNITIES_STAGING_ROLE_SPLIT_MARKER_CEREMONY_EVIDENCE_WRITE_FAILED',
+        ),
+      );
+      expect(markerWrites).toBe(1);
+      expect(evidenceWrites).toBe(2);
+
+      await expect(
+        runCommunitiesStagingRoleSplitMarkerCeremony(fixture.requestSha256, failureMatrixHost),
+      ).resolves.toBeUndefined();
+      expect(markerWrites).toBe(1);
+      expect(evidenceWrites).toBe(2);
+      lease = await delegate.acquireLease(fixture.requestSha256);
+      state = await delegate.loadState(lease);
+      expect(state?.phase).toBe('EVIDENCED');
+      expect(
+        await delegate.observeMarker(
+          lease,
+          state?.cloneDatabaseOid ?? '',
+          verifiedArtifacts.marker,
+        ),
+      ).toBe('exact');
+      const persistedEvidence = await readFile(
+        join(fixture.directory, 'marker-evidence.json'),
+        'utf8',
+      );
+      expect(persistedEvidence).toMatch(/^\{"authorizes":/u);
+      await delegate.releaseLease(lease);
     }, 30_000);
 
     it('produces deterministic real-catalog INPUT_C and passes the no-change evaluator', async () => {
@@ -1169,7 +1473,7 @@ describe
       const resumed = new CommunitiesStagingRoleSplitMarkerCeremonyPgHost(fixture.config);
       const lease = await resumed.acquireLease(fixture.requestSha256);
       const state = await resumed.loadState(lease);
-      expect(state?.phase).toBe('VERIFIED');
+      expect(state?.phase).toBe('EVIDENCED');
       const artifacts = await resumed.loadVerifiedArtifacts(lease);
       await expect(
         resumed.verifyBindings(lease, artifacts.payload.cloneDatabaseOid),

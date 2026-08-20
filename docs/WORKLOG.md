@@ -10,6 +10,13 @@
   real clean-clone preimage remains mandatory before generalizing that extension step.
 - Kept the synthetic owner, ACL, extension, empty-ACL, FORCE-RLS, policy and ledger assertions after
   restore, while retaining exact labelled Docker cleanup and loopback-only SCRAM isolation.
+- Extended the same disposable PG16 gate with a real-side-effect failure matrix: a completed
+  `pg_restore` whose response is lost remains `RESTORE_PENDING` and is never retried automatically;
+  failed pre-marker cleanup retains the exact clone and durable state; marker and evidence response
+  loss reconcile by authoritative database/file readback without rewriting either artifact.
+- Kept every failure injection in the local test adapter. The unwired production host still cannot
+  write a marker, publish evidence or drop a clone, and the matrix grants no installation or
+  execution authority.
 - Added an INPUT_C artifact verifier that accepts only canonical bytes matching an independently
   supplied SHA-256 and emits a redacted digest/count/boolean report with all mutation, migration,
   deploy and activation authorizations false. The report explicitly does not attest independent

@@ -156,6 +156,12 @@ catalog/OID/owner/system/ledger bindings, exact marker readback, receipt restart
 deterministic twelve-category INPUT_C production, a separately pinned canonical artifact readback
 and a no-change acceptance evaluation. Quoted identifiers, overloaded functions, a sequence, a
 type, FORCE RLS, a named policy and a trusted extension member are present in the synthetic catalog.
+The disposable test adapter also injects failures after real side effects. It proves that a lost
+`pg_restore` response leaves durable `RESTORE_PENDING` state and is not replayed, a failed
+pre-marker cleanup retains the exact clone and state, a lost marker response is reconciled through
+the real database comment, and evidence failure or response loss resumes through the exact private
+evidence file without rewriting the marker or evidence. These are local synthetic tests and do not
+enable the corresponding methods on the unwired production host.
 
 Run `npm install` in the exact checkout or worktree before this gate. The runner refuses parent
 directory or global Vitest resolution and requires the checkout-local `./node_modules/.bin/vitest`.
@@ -177,7 +183,7 @@ artifact verifier accepts only exact canonical
 INPUT_C bytes from a root-owned private file and emits only digests, counts, booleans and false
 authorizations. Local generation and verification in one disposable contour do not prove
 organizationally independent pin custody, the production CLI connection path, independently sourced
-clean-clone provenance, response-loss handling or a cluster-wide DDL fence. The gate creates no
+clean-clone provenance or a cluster-wide DDL fence. The gate creates no
 staging/production database, role, key, request or inventory.
 
 ## Required before installation or execution
@@ -189,10 +195,12 @@ staging/production database, role, key, request or inventory.
    candidate only after review of the fixed clone-only connection factory, descriptor custody and
    server-enforced source denial for the restore identity. Do not reuse a generic
    `--no-owner --no-acl` verifier or infer installation authority from the local disposable adapter.
-3. Complete the remaining PostgreSQL 16 failure matrix for response loss, cleanup failure and
-   evidence publication failure. The local custom-archive gate proves the successful synthetic
-   `pg_restore` path, catalog/RLS, exact comment readback and restart behavior; the descriptor-pinned
-   invalid-archive gate proves only the fail-closed child-process path. Neither authorizes staging.
+3. Preserve the completed disposable PostgreSQL 16 response-loss, cleanup-failure and
+   evidence-publication matrix when reviewing the exact installation adapter. The local matrix
+   and custom-archive gate prove the successful synthetic `pg_restore` path, catalog/RLS, exact
+   comment readback, restart behavior and injected failure semantics only. The descriptor-pinned
+   invalid-archive gate proves only the fail-closed child-process path. Neither grants staging or
+   host execution authority.
 4. Execute the structured `pg_catalog.aclexplode` INPUT_C producer against a separately authorized,
    independently sourced clean clone and independently pin the redacted before/after artifacts.
    Verify each exact canonical artifact with the separately built

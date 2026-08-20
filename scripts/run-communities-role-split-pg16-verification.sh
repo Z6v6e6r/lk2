@@ -175,4 +175,4 @@ if docker network inspect "$NETWORK_NAME" >/dev/null 2>&1; then
   fail network_retained
 fi
 
-printf '%s\n' 'PG16_VERIFY_PASSED|major=16|fixture=disposable|restore=custom_archive|inventory=local_redacted|container_retained=false|network_retained=false'
+printf '%s\n' 'PG16_VERIFY_PASSED|major=16|fixture=disposable|restore=custom_archive|failure_matrix=response_loss_cleanup_evidence|inventory=local_redacted|container_retained=false|network_retained=false'
