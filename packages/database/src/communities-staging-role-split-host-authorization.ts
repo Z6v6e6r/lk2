@@ -3,7 +3,9 @@ import { createHash } from 'node:crypto';
 import { failCommunitiesStagingRoleSplit } from './communities-staging-role-split.js';
 
 export const COMMUNITIES_STAGING_ROLE_SPLIT_HOST_AUTHORIZATION_VERSION =
-  'communities-staging-role-split-host-authorization-v1';
+  'communities-staging-role-split-host-authorization-v2';
+export const COMMUNITIES_STAGING_ROLE_SPLIT_HOST_BINDING_EVIDENCE_VERSION =
+  'communities-staging-role-split-host-binding-evidence-v1';
 
 export const COMMUNITIES_STAGING_ROLE_SPLIT_HOST_BINDING_CODES = [
   'BACKUP_CUSTODY_HANDOFF',
@@ -22,6 +24,18 @@ export const COMMUNITIES_STAGING_ROLE_SPLIT_HOST_BINDING_CODES = [
 
 export type CommunitiesStagingRoleSplitHostBindingCode =
   (typeof COMMUNITIES_STAGING_ROLE_SPLIT_HOST_BINDING_CODES)[number];
+
+export interface CommunitiesStagingRoleSplitHostBindingEvidence {
+  readonly schemaVersion: typeof COMMUNITIES_STAGING_ROLE_SPLIT_HOST_BINDING_EVIDENCE_VERSION;
+  readonly code: CommunitiesStagingRoleSplitHostBindingCode;
+  readonly candidateCommitSha: string;
+  readonly markerRequestSha256: string;
+  readonly creationReceiptSha256: string;
+  readonly executionSubjectSha256: string;
+  readonly subjectSha256: string;
+  readonly payloadSha256: string;
+  readonly evidencePathSha256: string;
+}
 
 type CommunitiesStagingRoleSplitHostBinding = {
   readonly code: CommunitiesStagingRoleSplitHostBindingCode;
@@ -101,6 +115,17 @@ const authorityKeys = [
   'deploy',
   'import',
   'activation',
+] as const;
+const bindingEvidenceKeys = [
+  'schemaVersion',
+  'code',
+  'candidateCommitSha',
+  'markerRequestSha256',
+  'creationReceiptSha256',
+  'executionSubjectSha256',
+  'subjectSha256',
+  'payloadSha256',
+  'evidencePathSha256',
 ] as const;
 const positiveDecimal = /^[1-9][0-9]*$/u;
 const roleName = /^[a-z_][a-z0-9_]{0,62}$/u;
@@ -232,6 +257,49 @@ export function communitiesStagingRoleSplitConnectionSubjectSha256(
 ): string {
   return createHash('sha256')
     .update(`${canonicalJson(input)}\n`, 'utf8')
+    .digest('hex');
+}
+
+export function communitiesStagingRoleSplitExecutionSubjectSha256(
+  input: CommunitiesStagingRoleSplitHostAuthorization['execution'],
+): string {
+  return createHash('sha256')
+    .update(`${canonicalJson(input)}\n`, 'utf8')
+    .digest('hex');
+}
+
+export function assertCommunitiesStagingRoleSplitHostBindingEvidence(
+  input: CommunitiesStagingRoleSplitHostBindingEvidence,
+): void {
+  if (
+    !hasExactKeys(input, bindingEvidenceKeys) ||
+    input.schemaVersion !== COMMUNITIES_STAGING_ROLE_SPLIT_HOST_BINDING_EVIDENCE_VERSION ||
+    !COMMUNITIES_STAGING_ROLE_SPLIT_HOST_BINDING_CODES.includes(input.code) ||
+    !commitSha.test(input.candidateCommitSha) ||
+    ![
+      input.markerRequestSha256,
+      input.creationReceiptSha256,
+      input.executionSubjectSha256,
+      input.subjectSha256,
+      input.payloadSha256,
+      input.evidencePathSha256,
+    ].every((value) => sha256.test(value))
+  )
+    fail('BINDING_EVIDENCE_INVALID');
+}
+
+export function canonicalCommunitiesStagingRoleSplitHostBindingEvidence(
+  input: CommunitiesStagingRoleSplitHostBindingEvidence,
+): string {
+  assertCommunitiesStagingRoleSplitHostBindingEvidence(input);
+  return `${canonicalJson(input)}\n`;
+}
+
+export function communitiesStagingRoleSplitHostBindingEvidenceSha256(
+  input: CommunitiesStagingRoleSplitHostBindingEvidence,
+): string {
+  return createHash('sha256')
+    .update(canonicalCommunitiesStagingRoleSplitHostBindingEvidence(input), 'utf8')
     .digest('hex');
 }
 

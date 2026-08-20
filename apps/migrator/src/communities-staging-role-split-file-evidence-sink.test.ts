@@ -1,9 +1,14 @@
 import { createHash } from 'node:crypto';
 
-import type { CommunitiesStagingRoleSplitRestoreMarkerEvidence } from '@phub/database';
+import {
+  COMMUNITIES_STAGING_ROLE_SPLIT_ATTESTED_EVIDENCE_VERSION,
+  type CommunitiesStagingRoleSplitAttestedEvidence,
+  type CommunitiesStagingRoleSplitRestoreMarkerEvidence,
+} from '@phub/database';
 import { describe, expect, it } from 'vitest';
 
 import {
+  assertCommunitiesStagingRoleSplitPinnedEvidenceDirectory,
   canonicalCommunitiesStagingRoleSplitMarkerEvidence,
   CommunitiesStagingRoleSplitFileEvidenceSink,
 } from './communities-staging-role-split-file-evidence-sink.js';
@@ -45,11 +50,26 @@ const evidence = {
     activation: false,
   },
 } as const satisfies CommunitiesStagingRoleSplitRestoreMarkerEvidence;
+const attestedEvidence = {
+  schemaVersion: COMMUNITIES_STAGING_ROLE_SPLIT_ATTESTED_EVIDENCE_VERSION,
+  status: 'ATTESTED',
+  authorizationSha256: sha('authorization'),
+  markerEvidence: evidence,
+  ownershipAclAttestation: {
+    subjectSha256: sha('ownership subject'),
+    evidenceSha256: sha('ownership evidence'),
+  },
+  sourceWriteDenialAttestation: {
+    subjectSha256: sha('denial subject'),
+    evidenceSha256: sha('denial evidence'),
+  },
+  evidenceSinkSubjectSha256: sha('sink'),
+} as const satisfies CommunitiesStagingRoleSplitAttestedEvidence;
 
 describe('CommunitiesStagingRoleSplitFileEvidenceSink', () => {
   it('uses deterministic canonical LF-terminated evidence bytes', () => {
-    const first = canonicalCommunitiesStagingRoleSplitMarkerEvidence(evidence);
-    const reordered = { ...evidence, status: evidence.status };
+    const first = canonicalCommunitiesStagingRoleSplitMarkerEvidence(attestedEvidence);
+    const reordered = { ...attestedEvidence, status: attestedEvidence.status };
     expect(canonicalCommunitiesStagingRoleSplitMarkerEvidence(reordered)).toEqual(first);
     expect(first.at(-1)).toBe(10);
   });
@@ -58,5 +78,25 @@ describe('CommunitiesStagingRoleSplitFileEvidenceSink', () => {
     expect(
       () => new CommunitiesStagingRoleSplitFileEvidenceSink(sha('sink'), 'relative/path'),
     ).toThrow(/CONFIG_INVALID/u);
+  });
+
+  it('rejects path substitution while operations remain pinned to the opened directory inode', () => {
+    const directory = (ino: number) => ({
+      dev: 7,
+      ino,
+      uid: 0,
+      mode: 0o40700,
+      isDirectory: () => true,
+      isSymbolicLink: () => false,
+    });
+    expect(() =>
+      assertCommunitiesStagingRoleSplitPinnedEvidenceDirectory({
+        initialPath: directory(11),
+        initialHandle: directory(11),
+        finalHandle: directory(11),
+        finalPath: directory(12),
+        effectiveUid: 0,
+      }),
+    ).toThrow(/DIRECTORY_UNSAFE/u);
   });
 });

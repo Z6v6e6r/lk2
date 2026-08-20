@@ -103,16 +103,17 @@ digest. Marker/evidence V1 is not accepted as a compatibility fallback.
   inspect archive/password/executable descriptors, invoke a fence, preflight, spawn `pg_restore`,
   write marker/evidence, or create/drop a clone.
 - `packages/database/src/communities-staging-role-split-host-authorization.ts` defines an exact
-  canonical twelve-binding host-authorization receipt. It binds the marker request, creation
-  receipt, candidate commit, clone OID, loopback clone connection tuple, restore login/OID,
-  reviewed `pg_restore`, canonical adapter, connection factory and DDL-fence subjects. It grants
-  only restore execution, marker write and evidence publication; cleanup, role/ACL changes,
-  migration, deploy, import and activation remain false.
+  canonical V2 twelve-binding host-authorization receipt. Each binding's evidence is itself an
+  exact canonical envelope bound to the candidate commit, marker request, creation receipt,
+  complete execution subject, binding subject, payload digest and independently reviewed absolute
+  custody-path digest. It grants only restore execution, marker write and evidence publication;
+  cleanup, role/ACL changes, migration, deploy, import and activation remain false.
 - `apps/migrator/src/communities-staging-role-split-host-authorization-loader.ts` accepts the receipt
   only as canonical bytes matching a separately supplied SHA-256. Before returning it, the loader
   reads all twelve distinct evidence files through the existing bounded root-owned, no-follow,
-  same-FD custody reader and checks every exact digest. Missing, reordered, aliased, mutable or
-  non-root evidence fails before PostgreSQL access.
+  same-FD custody reader, verifies each canonical envelope and checks its semantic context and
+  custody path. Legacy opaque, missing, reordered, aliased, moved, mutable or non-root evidence
+  fails before PostgreSQL access.
 - `apps/migrator/src/communities-staging-role-split-runner-adapter.ts` retains the old disabled
   descriptor adapter and adds a separate reviewed configuration validator. Its constructor
   cross-binds the loaded authorization, request, creation receipt, clone/OID/login, executable
@@ -121,20 +122,26 @@ digest. Marker/evidence V1 is not accepted as a compatibility fallback.
 - `apps/migrator/src/communities-staging-role-split-canonical-host-adapter.ts` wraps the durable PG
   host with one execution-wide cluster fence. It validates every filesystem lease, asserts the
   fence before and after each state observation or mutation, routes COMMENT through the pinned
-  writer, requires both ownership/ACL/RLS and source-write-denial attestations, and publishes only
-  to the separately pinned evidence sink. Marker and evidence response loss retain the canonical
-  readback/restart semantics; automatic cleanup remains unavailable.
+  writer, requires both ownership/ACL/RLS and source-write-denial attestations, and publishes an
+  authorization-bound attested envelope only to the separately pinned evidence sink. Recovery
+  observations rerun both attestations before accepting exact evidence, so marker-only evidence
+  cannot advance state. Marker and evidence response loss retain canonical readback/restart
+  semantics without replaying the write; automatic cleanup remains unavailable.
 - `apps/migrator/src/communities-staging-role-split-canonical-pg-collaborators.ts` supplies a strict
   loopback clone-only PostgreSQL connection factory, a dedicated-session two-key advisory DDL
-  fence and a marker writer. The writer holds `ACCESS EXCLUSIVE` on `pg_catalog.pg_database`,
-  verifies exact name/OID/owner, writes COMMENT, reads it back and commits in one transaction.
+  fence and a marker writer composed only with the authorized clone-only connection factory. The
+  writer first verifies `current_database`, `session_user`, `current_user`, both role OIDs and the
+  system identifier inside the transaction, then holds `ACCESS EXCLUSIVE` on
+  `pg_catalog.pg_database`, verifies exact name/OID/owner, writes COMMENT, reads it back and commits.
   The advisory fence is deliberately cooperative and therefore still requires the externally
   reviewed cluster-fence evidence binding; it cannot constrain an unrelated DBA session that does
   not participate in the protocol.
-- `apps/migrator/src/communities-staging-role-split-file-evidence-sink.ts` is an independent,
-  root-only mode-0700 sink with canonical evidence bytes, exclusive temporary creation,
-  no-overwrite hard-link installation, fsync and exact root-owned readback. It is separate from the
-  ceremony state directory and treats an existing different artifact as a conflict.
+- `apps/migrator/src/communities-staging-role-split-file-evidence-sink.ts` is an independent Linux,
+  root-only mode-0700 sink with canonical attested-evidence bytes. It opens the directory once with
+  `O_DIRECTORY|O_NOFOLLOW`, performs temporary creation, no-overwrite hard-link installation,
+  fsync and readback through `/proc/self/fd/<dirfd>`, then rechecks the configured path and pinned
+  inode/mode/owner. It is separate from ceremony state and treats substitution or different
+  evidence as a hard failure.
 
 Any future live wiring requires a newly reviewed, versioned V3 durable state, marker and evidence
 contract that carries `restoreExecutionEvidenceSha256` from the receipt/clone binding onward. The

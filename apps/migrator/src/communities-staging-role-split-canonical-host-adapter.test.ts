@@ -234,6 +234,7 @@ function fixture(overrides: Partial<CommunitiesStagingRoleSplitCanonicalHostAdap
   };
   const markerWriter = {
     subjectSha256: request.markerWriterSha256,
+    connectionFactorySubjectSha256: execution.cloneOnlyConnectionFactorySha256,
     write: vi.fn(async () => {
       calls.push('marker:write');
     }),
@@ -303,6 +304,13 @@ describe('CommunitiesStagingRoleSplitCanonicalHostAdapter', () => {
     expect(current.markerWriter.write).toHaveBeenCalledTimes(1);
     expect(current.ownershipAclAttestor.attest).toHaveBeenCalledTimes(1);
     expect(current.evidenceSink.publish).toHaveBeenCalledTimes(1);
+    expect(current.evidenceSink.publish).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'ATTESTED',
+        authorizationSha256: communitiesStagingRoleSplitHostAuthorizationSha256(authorization),
+        markerEvidence: evidence,
+      }),
+    );
     expect(current.calls).toEqual([
       'fence:acquire',
       'fence:held',
@@ -326,6 +334,18 @@ describe('CommunitiesStagingRoleSplitCanonicalHostAdapter', () => {
     expect(() => fixture({ expectedAuthorizationSha256: '0'.repeat(64) })).toThrow(
       'COMMUNITIES_STAGING_ROLE_SPLIT_CANONICAL_HOST_ADAPTER_AUTHORIZATION_INVALID',
     );
+  });
+
+  it('rejects a marker writer composed with a different clone connection factory', () => {
+    expect(() =>
+      fixture({
+        markerWriter: {
+          subjectSha256: request.markerWriterSha256,
+          connectionFactorySubjectSha256: sha('different factory'),
+          write: vi.fn(async () => undefined),
+        },
+      }),
+    ).toThrow('COMMUNITIES_STAGING_ROLE_SPLIT_CANONICAL_HOST_ADAPTER_BINDING_INVALID');
   });
 
   it('blocks evidence publication when attestation does not match both pinned digests', async () => {
@@ -361,6 +381,21 @@ describe('CommunitiesStagingRoleSplitCanonicalHostAdapter', () => {
       code: 'ATTESTATION_INVALID',
     });
     expect(current.evidenceSink.publish).not.toHaveBeenCalled();
+    await current.adapter.releaseLease(lease);
+  });
+
+  it('rejects verified artifacts from a different creation receipt before attestation recovery', async () => {
+    const current = fixture();
+    current.delegate.loadVerifiedArtifacts.mockResolvedValue({
+      payload: { ...payload, creationReceiptSha256: sha('different receipt') },
+      marker,
+    });
+    const lease = await current.adapter.acquireLease(authorization.markerRequestSha256);
+    await expect(current.adapter.observeEvidence(lease, evidence)).rejects.toMatchObject({
+      code: 'ATTESTATION_INVALID',
+    });
+    expect(current.ownershipAclAttestor.attest).not.toHaveBeenCalled();
+    expect(current.evidenceSink.observe).not.toHaveBeenCalled();
     await current.adapter.releaseLease(lease);
   });
 
@@ -452,5 +487,10 @@ describe('CommunitiesStagingRoleSplitCanonicalHostAdapter', () => {
     expect(state.phase).toBe('EVIDENCED');
     expect(current.markerWriter.write).toHaveBeenCalledTimes(1);
     expect(current.evidenceSink.publish).toHaveBeenCalledTimes(1);
+    expect(current.ownershipAclAttestor.attest).toHaveBeenCalledTimes(4);
+    expect(current.sourceWriteDenialAttestor.attest).toHaveBeenCalledTimes(4);
+    expect(current.evidenceSink.observe).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'ATTESTED', markerEvidence: evidence }),
+    );
   });
 });

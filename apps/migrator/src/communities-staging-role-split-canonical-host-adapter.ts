@@ -1,9 +1,12 @@
 import {
+  assertCommunitiesStagingRoleSplitAttestedEvidence,
   assertCommunitiesStagingRoleSplitHostAuthorization,
   assertCommunitiesStagingRoleSplitRestoreMarkerEvidence,
   assertCommunitiesStagingRoleSplitRestoreMarkerRequest,
+  COMMUNITIES_STAGING_ROLE_SPLIT_ATTESTED_EVIDENCE_VERSION,
   communitiesStagingRoleSplitHostAuthorizationSha256,
   communitiesStagingRoleSplitRestoreMarkerRequestSha256,
+  type CommunitiesStagingRoleSplitAttestedEvidence,
   type CommunitiesStagingRoleSplitHostAuthorization,
   type CommunitiesStagingRoleSplitMarkerCeremonyObservation,
   type CommunitiesStagingRoleSplitMarkerCeremonyState,
@@ -24,6 +27,7 @@ import {
 
 export interface CommunitiesStagingRoleSplitCanonicalMarkerWriter {
   readonly subjectSha256: string;
+  readonly connectionFactorySubjectSha256: string;
   write(input: {
     readonly request: CommunitiesStagingRoleSplitRestoreMarkerRequest;
     readonly cloneDatabaseOid: string;
@@ -52,9 +56,9 @@ export interface CommunitiesStagingRoleSplitCanonicalSourceWriteDenialAttestor {
 export interface CommunitiesStagingRoleSplitCanonicalEvidenceSink {
   readonly subjectSha256: string;
   observe(
-    evidence: CommunitiesStagingRoleSplitRestoreMarkerEvidence,
+    evidence: CommunitiesStagingRoleSplitAttestedEvidence,
   ): Promise<CommunitiesStagingRoleSplitMarkerCeremonyObservation>;
-  publish(evidence: CommunitiesStagingRoleSplitRestoreMarkerEvidence): Promise<void>;
+  publish(evidence: CommunitiesStagingRoleSplitAttestedEvidence): Promise<void>;
 }
 
 export interface CommunitiesStagingRoleSplitCanonicalHostAdapterConfig {
@@ -132,6 +136,8 @@ function assertConfig(config: CommunitiesStagingRoleSplitCanonicalHostAdapterCon
       config.sourceWriteDenialAttestor.subjectSha256 ||
     binding(config.authorization, 'INDEPENDENT_EVIDENCE_SINK').subjectSha256 !==
       config.evidenceSink.subjectSha256 ||
+    binding(config.authorization, 'CLONE_ONLY_CONNECTION_FACTORY').subjectSha256 !==
+      config.markerWriter.connectionFactorySubjectSha256 ||
     config.markerWriter.subjectSha256 !== config.request.markerWriterSha256 ||
     !Number.isSafeInteger(config.fenceTimeoutMs) ||
     config.fenceTimeoutMs < 1 ||
@@ -191,6 +197,80 @@ export class CommunitiesStagingRoleSplitCanonicalHostAdapter implements Communit
     const result = await operation();
     await this.config.fence.assertHeld(ddlLease).catch(() => fail('FENCE_LOST'));
     return result;
+  }
+
+  private async attestedEvidence(
+    evidence: CommunitiesStagingRoleSplitRestoreMarkerEvidence,
+    artifacts: CommunitiesStagingRoleSplitMarkerCeremonyArtifacts,
+  ): Promise<CommunitiesStagingRoleSplitAttestedEvidence> {
+    if (
+      artifacts.payload.requestSha256 !== this.config.authorization.markerRequestSha256 ||
+      artifacts.payload.creationReceiptSha256 !== this.config.authorization.creationReceiptSha256 ||
+      artifacts.payload.cloneDatabaseOid !== this.config.authorization.execution.cloneDatabaseOid
+    )
+      fail('ATTESTATION_INVALID');
+    try {
+      assertCommunitiesStagingRoleSplitRestoreMarkerEvidence(
+        artifacts.payload,
+        artifacts.marker,
+        evidence,
+      );
+    } catch {
+      fail('ATTESTATION_INVALID');
+    }
+    let ownershipAclAttestation: {
+      readonly subjectSha256: string;
+      readonly evidenceSha256: string;
+    };
+    let sourceWriteDenialAttestation: {
+      readonly subjectSha256: string;
+      readonly evidenceSha256: string;
+    };
+    try {
+      ownershipAclAttestation = await this.config.ownershipAclAttestor.attest({
+        request: this.config.request,
+        evidence,
+        artifacts,
+      });
+      sourceWriteDenialAttestation = await this.config.sourceWriteDenialAttestor.attest({
+        request: this.config.request,
+        evidence,
+        artifacts,
+      });
+    } catch {
+      fail('ATTESTATION_INVALID');
+    }
+    const expectedOwnershipAcl = binding(this.config.authorization, 'OWNERSHIP_ACL_ATTESTATION');
+    const expectedSourceWriteDenial = binding(
+      this.config.authorization,
+      'SOURCE_WRITE_DENIAL_ATTESTATION',
+    );
+    if (
+      ownershipAclAttestation.subjectSha256 !== expectedOwnershipAcl.subjectSha256 ||
+      ownershipAclAttestation.evidenceSha256 !== expectedOwnershipAcl.evidenceSha256 ||
+      sourceWriteDenialAttestation.subjectSha256 !== expectedSourceWriteDenial.subjectSha256 ||
+      sourceWriteDenialAttestation.evidenceSha256 !== expectedSourceWriteDenial.evidenceSha256
+    )
+      fail('ATTESTATION_INVALID');
+    const attested = {
+      schemaVersion: COMMUNITIES_STAGING_ROLE_SPLIT_ATTESTED_EVIDENCE_VERSION,
+      status: 'ATTESTED',
+      authorizationSha256: this.config.expectedAuthorizationSha256,
+      markerEvidence: evidence,
+      ownershipAclAttestation,
+      sourceWriteDenialAttestation,
+      evidenceSinkSubjectSha256: this.config.evidenceSink.subjectSha256,
+    } as const satisfies CommunitiesStagingRoleSplitAttestedEvidence;
+    try {
+      assertCommunitiesStagingRoleSplitAttestedEvidence(
+        attested,
+        artifacts.payload,
+        artifacts.marker,
+      );
+    } catch {
+      fail('ATTESTATION_INVALID');
+    }
+    return attested;
   }
 
   async acquireLease(
@@ -321,16 +401,7 @@ export class CommunitiesStagingRoleSplitCanonicalHostAdapter implements Communit
   ) {
     return this.fenced(lease, async () => {
       const artifacts = await this.config.delegate.loadVerifiedArtifacts(lease);
-      try {
-        assertCommunitiesStagingRoleSplitRestoreMarkerEvidence(
-          artifacts.payload,
-          artifacts.marker,
-          evidence,
-        );
-      } catch {
-        fail('ATTESTATION_INVALID');
-      }
-      return this.config.evidenceSink.observe(evidence);
+      return this.config.evidenceSink.observe(await this.attestedEvidence(evidence, artifacts));
     });
   }
 
@@ -370,48 +441,9 @@ export class CommunitiesStagingRoleSplitCanonicalHostAdapter implements Communit
   ) {
     return this.fenced(lease, async () => {
       const artifacts = await this.config.delegate.loadVerifiedArtifacts(lease);
+      const attested = await this.attestedEvidence(evidence, artifacts);
       try {
-        assertCommunitiesStagingRoleSplitRestoreMarkerEvidence(
-          artifacts.payload,
-          artifacts.marker,
-          evidence,
-        );
-      } catch {
-        fail('ATTESTATION_INVALID');
-      }
-      let attestation: { readonly subjectSha256: string; readonly evidenceSha256: string };
-      let sourceWriteDenial: {
-        readonly subjectSha256: string;
-        readonly evidenceSha256: string;
-      };
-      try {
-        attestation = await this.config.ownershipAclAttestor.attest({
-          request: this.config.request,
-          evidence,
-          artifacts,
-        });
-        sourceWriteDenial = await this.config.sourceWriteDenialAttestor.attest({
-          request: this.config.request,
-          evidence,
-          artifacts,
-        });
-      } catch {
-        fail('ATTESTATION_INVALID');
-      }
-      const expected = binding(this.config.authorization, 'OWNERSHIP_ACL_ATTESTATION');
-      const expectedSourceWriteDenial = binding(
-        this.config.authorization,
-        'SOURCE_WRITE_DENIAL_ATTESTATION',
-      );
-      if (
-        attestation.subjectSha256 !== expected.subjectSha256 ||
-        attestation.evidenceSha256 !== expected.evidenceSha256 ||
-        sourceWriteDenial.subjectSha256 !== expectedSourceWriteDenial.subjectSha256 ||
-        sourceWriteDenial.evidenceSha256 !== expectedSourceWriteDenial.evidenceSha256
-      )
-        fail('ATTESTATION_INVALID');
-      try {
-        await this.config.evidenceSink.publish(evidence);
+        await this.config.evidenceSink.publish(attested);
       } catch {
         fail('EVIDENCE_OUTCOME_AMBIGUOUS');
       }

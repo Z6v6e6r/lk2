@@ -111,7 +111,7 @@ export class CommunitiesStagingRoleSplitCloneOnlyConnectionFactory {
   constructor(
     readonly subjectSha256: string,
     private readonly connectionString: string,
-    private readonly binding: CloneConnectionBinding,
+    readonly binding: CloneConnectionBinding,
     private readonly connectionTimeoutMs: number,
     private readonly queryTimeoutMs: number,
   ) {
@@ -371,9 +371,13 @@ export class CommunitiesStagingRoleSplitPgDdlFence implements CommunitiesStaging
 }
 
 export class CommunitiesStagingRoleSplitPgMarkerWriter implements CommunitiesStagingRoleSplitCanonicalMarkerWriter {
+  get connectionFactorySubjectSha256(): string {
+    return this.connectionFactory.subjectSha256;
+  }
+
   constructor(
     readonly subjectSha256: string,
-    private readonly createSession: CommunitiesStagingRoleSplitCanonicalPgSessionFactory,
+    private readonly connectionFactory: CommunitiesStagingRoleSplitCloneOnlyConnectionFactory,
     private readonly timeoutMs: number,
   ) {
     if (
@@ -397,16 +401,51 @@ export class CommunitiesStagingRoleSplitPgMarkerWriter implements CommunitiesSta
     }
     if (!oidPattern.test(input.cloneDatabaseOid) || !markerPattern.test(input.marker))
       fail('MARKER_BINDING_INVALID');
+    const factoryBinding = this.connectionFactory.binding;
+    if (
+      !validSubject(this.connectionFactory.subjectSha256) ||
+      factoryBinding.database !== input.request.restoreDatabase ||
+      factoryBinding.connectionUser !== input.request.expectedCloneDatabaseOwner ||
+      (factoryBinding.host !== '127.0.0.1' && factoryBinding.host !== '::1') ||
+      factoryBinding.sslMode !== 'disable'
+    )
+      fail('MARKER_BINDING_INVALID');
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
     let session: CommunitiesStagingRoleSplitCanonicalPgSession | null = null;
     let transaction = false;
     try {
-      session = await this.createSession(controller.signal);
+      session = await this.connectionFactory.openBoundedSession(controller.signal);
       await session.query('begin');
       transaction = true;
       await session.query("set local lock_timeout = '5s'");
       await session.query("set local statement_timeout = '30s'");
+      const identity = await session.query<{
+        readonly database: string;
+        readonly session_user: string;
+        readonly session_user_oid: string;
+        readonly current_user: string;
+        readonly current_user_oid: string;
+        readonly system_identifier: string;
+      }>(
+        `select current_database() as database,
+                session_user as session_user,
+                (select oid::text from pg_catalog.pg_roles where rolname = session_user) as session_user_oid,
+                current_user as current_user,
+                (select oid::text from pg_catalog.pg_roles where rolname = current_user) as current_user_oid,
+                (pg_control_system()).system_identifier::text as system_identifier`,
+      );
+      const identityRow = identity.rows[0];
+      if (
+        identity.rows.length !== 1 ||
+        identityRow?.database !== input.request.restoreDatabase ||
+        identityRow.session_user !== input.request.expectedCloneDatabaseOwner ||
+        identityRow.session_user_oid !== input.request.expectedCloneDatabaseOwnerOid ||
+        identityRow.current_user !== input.request.expectedCloneDatabaseOwner ||
+        identityRow.current_user_oid !== input.request.expectedCloneDatabaseOwnerOid ||
+        identityRow.system_identifier !== input.request.systemIdentifier
+      )
+        fail('MARKER_BINDING_INVALID');
       await session.query('lock table pg_catalog.pg_database in access exclusive mode');
       const before = await session.query<{
         readonly oid: string;

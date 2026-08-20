@@ -1,5 +1,22 @@
 # Worklog
 
+## 2026-08-20 — Communities canonical evidence security hardening
+
+- Bumped the unwired canonical host authorization to V2. Every one of its twelve evidence files is
+  now an exact canonical envelope bound to the candidate commit, marker request, creation receipt,
+  complete execution subject, binding subject, payload digest and independently reviewed absolute
+  custody path; legacy opaque evidence is rejected even when its digest is copied into a receipt.
+- Replaced marker-only publication/readback with an authorization-bound attested envelope. Both the
+  ownership/ACL/RLS and source-write-denial attestations are rerun on every recovery observation,
+  so a preexisting marker-evidence file cannot advance `MARKED` to `EVIDENCED` by itself.
+- Pinned evidence-file operations to one root-owned mode-0700 directory descriptor through
+  `/proc/self/fd`, with path/inode/mode/owner rechecks before and after the operation. Bound marker
+  writes to the authorized clone-only connection factory and verified database, session/current
+  role names and OIDs, and system identifier inside the COMMENT transaction before catalog lock.
+- This remains a code-only checkpoint. No composition entrypoint, installation, SSH, staging
+  ceremony, role/ACL change, migration, deploy, import or activation was performed; the V2
+  installation candidate remains `REVIEW_ONLY`, `installable=false` and non-authorizing.
+
 ## 2026-08-20 — Communities canonical host adapter checkpoint
 
 - Added a strict canonical host-authorization receipt and root-owned loader that requires all

@@ -306,10 +306,12 @@ cleanup source as `REVIEW_ONLY`, with null target/install metadata, plus an exac
 copy of the restore helper. It contains no new installation payload, forced command, key,
 connection, credential or workflow mutation.
 
-This V2 manifest is `REVIEW_ONLY` and permanently `installable=false`. A later code-only checkpoint
-adds a canonical partial-failure adapter, reviewed restore adapter, strict twelve-evidence receipt
-loader, clone-only connection factory, cooperative PostgreSQL DDL fence, transactional marker
-writer and independent root-only evidence sink. Those libraries are deliberately not added to this
+This V2 manifest is `REVIEW_ONLY` and permanently `installable=false`. Later code-only checkpoints
+add a canonical partial-failure adapter, reviewed restore adapter, strict V2 twelve-evidence receipt
+loader with request/receipt/execution/path-bound evidence envelopes, clone-only connection factory,
+cooperative PostgreSQL DDL fence, transaction identity-bound marker writer and descriptor-pinned
+root-only attested-evidence sink. Recovery reruns the ownership/ACL/RLS and source-write-denial
+attestations before accepting exact evidence. Those libraries are deliberately not added to this
 candidate and do not alter its result. Its twelve blockers still require actual host evidence,
 including exact ownership/ACL/RLS attestation and a
 separate root-owned atomic handoff between the producer's `phub-preflight` 0700/0600 custody and the

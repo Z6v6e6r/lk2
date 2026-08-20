@@ -59,6 +59,33 @@ function sessionFixture(responses: readonly (readonly Record<string, unknown>[])
   return { session, statements };
 }
 
+function cloneOnlyFactory(session: CommunitiesStagingRoleSplitCanonicalPgSession) {
+  const factory = new CommunitiesStagingRoleSplitCloneOnlyConnectionFactory(
+    sha('factory'),
+    `postgresql://${request.expectedCloneDatabaseOwner}:private@127.0.0.1:5432/${request.restoreDatabase}?sslmode=disable`,
+    {
+      database: request.restoreDatabase,
+      host: '127.0.0.1',
+      port: '5432',
+      connectionUser: request.expectedCloneDatabaseOwner,
+      sslMode: 'disable',
+    },
+    10_000,
+    30_000,
+  );
+  vi.spyOn(factory, 'openBoundedSession').mockResolvedValue(session);
+  return factory;
+}
+
+const markerIdentity = {
+  database: request.restoreDatabase,
+  session_user: request.expectedCloneDatabaseOwner,
+  session_user_oid: request.expectedCloneDatabaseOwnerOid,
+  current_user: request.expectedCloneDatabaseOwner,
+  current_user_oid: request.expectedCloneDatabaseOwnerOid,
+  system_identifier: request.systemIdentifier,
+};
+
 describe('CommunitiesStagingRoleSplitPgDdlFence', () => {
   it('owns one dedicated backend and proves the exact advisory lock before release', async () => {
     const current = sessionFixture([
@@ -150,6 +177,7 @@ describe('CommunitiesStagingRoleSplitPgMarkerWriter', () => {
       [],
       [],
       [],
+      [markerIdentity],
       [],
       [
         {
@@ -165,7 +193,7 @@ describe('CommunitiesStagingRoleSplitPgMarkerWriter', () => {
     ]);
     const writer = new CommunitiesStagingRoleSplitPgMarkerWriter(
       request.markerWriterSha256,
-      async () => current.session,
+      cloneOnlyFactory(current.session),
       10_000,
     );
     await expect(
@@ -175,6 +203,7 @@ describe('CommunitiesStagingRoleSplitPgMarkerWriter', () => {
       'begin',
       "set local lock_timeout = '5s'",
       "set local statement_timeout = '30s'",
+      expect.stringContaining('select current_database() as database'),
       'lock table pg_catalog.pg_database in access exclusive mode',
       expect.stringContaining('from pg_catalog.pg_database'),
       `comment on database "${request.restoreDatabase}" is '${marker}'`,
@@ -189,6 +218,7 @@ describe('CommunitiesStagingRoleSplitPgMarkerWriter', () => {
       [],
       [],
       [],
+      [markerIdentity],
       [],
       [
         {
@@ -202,7 +232,7 @@ describe('CommunitiesStagingRoleSplitPgMarkerWriter', () => {
     ]);
     const writer = new CommunitiesStagingRoleSplitPgMarkerWriter(
       request.markerWriterSha256,
-      async () => current.session,
+      cloneOnlyFactory(current.session),
       10_000,
     );
     await expect(
@@ -217,6 +247,7 @@ describe('CommunitiesStagingRoleSplitPgMarkerWriter', () => {
       [],
       [],
       [],
+      [markerIdentity],
       [],
       [
         {
@@ -230,7 +261,7 @@ describe('CommunitiesStagingRoleSplitPgMarkerWriter', () => {
     ]);
     const writer = new CommunitiesStagingRoleSplitPgMarkerWriter(
       request.markerWriterSha256,
-      async () => current.session,
+      cloneOnlyFactory(current.session),
       10_000,
     );
     await expect(
@@ -239,4 +270,27 @@ describe('CommunitiesStagingRoleSplitPgMarkerWriter', () => {
     expect(current.statements).toContain('rollback');
     expect(current.statements.some((sql) => sql.startsWith('comment on database'))).toBe(false);
   });
+
+  it.each([
+    ['database', { ...markerIdentity, database: request.sourceDatabase }],
+    ['current role', { ...markerIdentity, current_user: 'postgres', current_user_oid: '10' }],
+  ])(
+    'rolls back before catalog lock when the clone session %s differs',
+    async (_name, identity) => {
+      const current = sessionFixture([[], [], [], [identity], []]);
+      const writer = new CommunitiesStagingRoleSplitPgMarkerWriter(
+        request.markerWriterSha256,
+        cloneOnlyFactory(current.session),
+        10_000,
+      );
+      await expect(
+        writer.write({ request, cloneDatabaseOid: '45678', marker }),
+      ).rejects.toMatchObject({ code: 'MARKER_BINDING_INVALID' });
+      expect(current.statements).toContain('rollback');
+      expect(current.statements).not.toContain(
+        'lock table pg_catalog.pg_database in access exclusive mode',
+      );
+      expect(current.statements.some((sql) => sql.startsWith('comment on database'))).toBe(false);
+    },
+  );
 });

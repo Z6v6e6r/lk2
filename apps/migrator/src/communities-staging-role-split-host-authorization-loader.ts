@@ -1,11 +1,16 @@
 import { createHash } from 'node:crypto';
+import { isAbsolute, resolve } from 'node:path';
 
 import {
+  assertCommunitiesStagingRoleSplitHostBindingEvidence as assertCanonicalBindingEvidence,
   assertCommunitiesStagingRoleSplitHostAuthorization,
+  canonicalCommunitiesStagingRoleSplitHostBindingEvidence,
   canonicalCommunitiesStagingRoleSplitHostAuthorization,
   COMMUNITIES_STAGING_ROLE_SPLIT_HOST_BINDING_CODES,
+  communitiesStagingRoleSplitExecutionSubjectSha256,
   communitiesStagingRoleSplitHostAuthorizationSha256,
   type CommunitiesStagingRoleSplitHostAuthorization,
+  type CommunitiesStagingRoleSplitHostBindingEvidence,
   type CommunitiesStagingRoleSplitHostBindingCode,
 } from '@phub/database';
 
@@ -64,6 +69,7 @@ export function parseCommunitiesStagingRoleSplitHostAuthorization(
 export function assertCommunitiesStagingRoleSplitHostBindingEvidence(
   authorization: CommunitiesStagingRoleSplitHostAuthorization,
   evidence: Readonly<Record<CommunitiesStagingRoleSplitHostBindingCode, Buffer>>,
+  evidencePaths: Readonly<Record<CommunitiesStagingRoleSplitHostBindingCode, string>>,
 ): void {
   try {
     assertCommunitiesStagingRoleSplitHostAuthorization(authorization);
@@ -71,8 +77,18 @@ export function assertCommunitiesStagingRoleSplitHostBindingEvidence(
     fail('AUTHORIZATION_INVALID');
   }
   const keys = Object.keys(evidence).sort();
+  const pathKeys = Object.keys(evidencePaths).sort();
   const expectedKeys = [...COMMUNITIES_STAGING_ROLE_SPLIT_HOST_BINDING_CODES].sort();
-  if (keys.length !== expectedKeys.length || keys.some((key, index) => key !== expectedKeys[index]))
+  if (
+    keys.length !== expectedKeys.length ||
+    keys.some((key, index) => key !== expectedKeys[index]) ||
+    pathKeys.length !== expectedKeys.length ||
+    pathKeys.some((key, index) => key !== expectedKeys[index]) ||
+    Object.values(evidencePaths).some(
+      (path) => typeof path !== 'string' || !isAbsolute(path) || resolve(path) !== path,
+    ) ||
+    new Set(Object.values(evidencePaths)).size !== expectedKeys.length
+  )
     fail('EVIDENCE_INVALID');
   for (const binding of authorization.bindings) {
     const bytes = evidence[binding.code];
@@ -81,6 +97,29 @@ export function assertCommunitiesStagingRoleSplitHostBindingEvidence(
       bytes.length < 1 ||
       bytes.length > MAX_BINDING_EVIDENCE_BYTES ||
       digest(bytes) !== binding.evidenceSha256
+    )
+      fail('EVIDENCE_INVALID');
+    let envelope: CommunitiesStagingRoleSplitHostBindingEvidence;
+    try {
+      envelope = JSON.parse(
+        bytes.toString('utf8'),
+      ) as CommunitiesStagingRoleSplitHostBindingEvidence;
+      assertCanonicalBindingEvidence(envelope);
+    } catch {
+      fail('EVIDENCE_INVALID');
+    }
+    if (
+      canonicalCommunitiesStagingRoleSplitHostBindingEvidence(envelope) !==
+        bytes.toString('utf8') ||
+      envelope.code !== binding.code ||
+      envelope.candidateCommitSha !== authorization.candidateCommitSha ||
+      envelope.markerRequestSha256 !== authorization.markerRequestSha256 ||
+      envelope.creationReceiptSha256 !== authorization.creationReceiptSha256 ||
+      envelope.executionSubjectSha256 !==
+        communitiesStagingRoleSplitExecutionSubjectSha256(authorization.execution) ||
+      envelope.subjectSha256 !== binding.subjectSha256 ||
+      envelope.evidencePathSha256 !==
+        digest(Buffer.from(`${evidencePaths[binding.code]}\n`, 'utf8'))
     )
       fail('EVIDENCE_INVALID');
   }
@@ -110,6 +149,10 @@ export async function loadCommunitiesStagingRoleSplitHostAuthorization(input: {
       fail('EVIDENCE_INVALID'),
     );
   }
-  assertCommunitiesStagingRoleSplitHostBindingEvidence(authorization, evidence);
+  assertCommunitiesStagingRoleSplitHostBindingEvidence(
+    authorization,
+    evidence,
+    input.evidencePaths,
+  );
   return authorization;
 }

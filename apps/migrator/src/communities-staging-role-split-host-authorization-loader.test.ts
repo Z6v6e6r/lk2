@@ -1,12 +1,16 @@
 import { createHash } from 'node:crypto';
 
 import {
+  canonicalCommunitiesStagingRoleSplitHostBindingEvidence,
   canonicalCommunitiesStagingRoleSplitHostAuthorization,
+  COMMUNITIES_STAGING_ROLE_SPLIT_HOST_BINDING_EVIDENCE_VERSION,
   COMMUNITIES_STAGING_ROLE_SPLIT_HOST_AUTHORIZATION_VERSION,
   COMMUNITIES_STAGING_ROLE_SPLIT_HOST_BINDING_CODES,
   communitiesStagingRoleSplitConnectionSubjectSha256,
+  communitiesStagingRoleSplitExecutionSubjectSha256,
   communitiesStagingRoleSplitRestoreLoginSubjectSha256,
   type CommunitiesStagingRoleSplitHostAuthorization,
+  type CommunitiesStagingRoleSplitHostBindingEvidence as HostBindingEvidence,
   type CommunitiesStagingRoleSplitHostBindingCode,
 } from '@phub/database';
 import { describe, expect, it } from 'vitest';
@@ -17,12 +21,6 @@ import {
 } from './communities-staging-role-split-host-authorization-loader.js';
 
 const sha = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
-const evidence = Object.fromEntries(
-  COMMUNITIES_STAGING_ROLE_SPLIT_HOST_BINDING_CODES.map((code) => [
-    code,
-    Buffer.from(`evidence:${code}\n`, 'utf8'),
-  ]),
-) as Record<CommunitiesStagingRoleSplitHostBindingCode, Buffer>;
 const execution = {
   cloneDatabaseOid: '45678',
   connection: { host: '127.0.0.1', port: '5432', sslMode: 'disable' },
@@ -44,12 +42,46 @@ subjects.PG_RESTORE_EXECUTABLE_SHA256 = execution.pgRestoreSha256;
 subjects.RESTORE_LOGIN_ROLE = communitiesStagingRoleSplitRestoreLoginSubjectSha256(
   execution.restoreLogin,
 );
+const candidateCommitSha = 'a'.repeat(40);
+const markerRequestSha256 = sha('request');
+const creationReceiptSha256 = sha('receipt');
+const evidencePaths = Object.fromEntries(
+  COMMUNITIES_STAGING_ROLE_SPLIT_HOST_BINDING_CODES.map((code) => [
+    code,
+    `/run/phub/role-split/${code}.json`,
+  ]),
+) as Record<CommunitiesStagingRoleSplitHostBindingCode, string>;
+const bindingEvidence = Object.fromEntries(
+  COMMUNITIES_STAGING_ROLE_SPLIT_HOST_BINDING_CODES.map((code) => {
+    const envelope = {
+      schemaVersion: COMMUNITIES_STAGING_ROLE_SPLIT_HOST_BINDING_EVIDENCE_VERSION,
+      code,
+      candidateCommitSha,
+      markerRequestSha256,
+      creationReceiptSha256,
+      executionSubjectSha256: communitiesStagingRoleSplitExecutionSubjectSha256(execution),
+      subjectSha256: subjects[code],
+      payloadSha256: sha(`payload:${code}`),
+      evidencePathSha256: sha(`${evidencePaths[code]}\n`),
+    } as const satisfies HostBindingEvidence;
+    return [code, envelope];
+  }),
+) as Record<CommunitiesStagingRoleSplitHostBindingCode, HostBindingEvidence>;
+const evidence = Object.fromEntries(
+  COMMUNITIES_STAGING_ROLE_SPLIT_HOST_BINDING_CODES.map((code) => [
+    code,
+    Buffer.from(
+      canonicalCommunitiesStagingRoleSplitHostBindingEvidence(bindingEvidence[code]),
+      'utf8',
+    ),
+  ]),
+) as Record<CommunitiesStagingRoleSplitHostBindingCode, Buffer>;
 const authorization = {
   schemaVersion: COMMUNITIES_STAGING_ROLE_SPLIT_HOST_AUTHORIZATION_VERSION,
   status: 'REVIEWED',
-  candidateCommitSha: 'a'.repeat(40),
-  markerRequestSha256: sha('request'),
-  creationReceiptSha256: sha('receipt'),
+  candidateCommitSha,
+  markerRequestSha256,
+  creationReceiptSha256,
   execution,
   bindings: COMMUNITIES_STAGING_ROLE_SPLIT_HOST_BINDING_CODES.map((code) => ({
     code,
@@ -89,18 +121,73 @@ describe('communities role-split host authorization loader', () => {
 
   it('requires all twelve independently custodied evidence byte streams exactly once', () => {
     expect(() =>
-      assertCommunitiesStagingRoleSplitHostBindingEvidence(authorization, evidence),
+      assertCommunitiesStagingRoleSplitHostBindingEvidence(authorization, evidence, evidencePaths),
     ).not.toThrow();
     expect(() =>
-      assertCommunitiesStagingRoleSplitHostBindingEvidence(authorization, {
-        ...evidence,
-        CLUSTER_DDL_FENCE: Buffer.from('changed\n', 'utf8'),
-      }),
+      assertCommunitiesStagingRoleSplitHostBindingEvidence(
+        authorization,
+        { ...evidence, CLUSTER_DDL_FENCE: Buffer.from('changed\n', 'utf8') },
+        evidencePaths,
+      ),
     ).toThrow(/EVIDENCE_INVALID/u);
     const missing = { ...evidence };
     delete (missing as Partial<typeof missing>).STAGING_KNOWN_HOSTS_PIN;
     expect(() =>
-      assertCommunitiesStagingRoleSplitHostBindingEvidence(authorization, missing),
+      assertCommunitiesStagingRoleSplitHostBindingEvidence(authorization, missing, evidencePaths),
+    ).toThrow(/EVIDENCE_INVALID/u);
+  });
+
+  it('rejects canonically re-signed evidence from a different request context', () => {
+    const changed = {
+      ...bindingEvidence.BACKUP_CUSTODY_HANDOFF,
+      markerRequestSha256: sha('other request'),
+    };
+    const changedBytes = Buffer.from(
+      canonicalCommunitiesStagingRoleSplitHostBindingEvidence(changed),
+      'utf8',
+    );
+    const changedAuthorization = {
+      ...authorization,
+      bindings: authorization.bindings.map((binding) =>
+        binding.code === 'BACKUP_CUSTODY_HANDOFF'
+          ? { ...binding, evidenceSha256: sha(changedBytes) }
+          : binding,
+      ),
+    };
+    expect(() =>
+      assertCommunitiesStagingRoleSplitHostBindingEvidence(
+        changedAuthorization,
+        { ...evidence, BACKUP_CUSTODY_HANDOFF: changedBytes },
+        evidencePaths,
+      ),
+    ).toThrow(/EVIDENCE_INVALID/u);
+  });
+
+  it('rejects legacy opaque evidence even when its digest is copied into the authorization', () => {
+    const opaque = Buffer.from('legacy opaque evidence\n', 'utf8');
+    const changedAuthorization = {
+      ...authorization,
+      bindings: authorization.bindings.map((binding) =>
+        binding.code === 'BACKUP_CUSTODY_HANDOFF'
+          ? { ...binding, evidenceSha256: sha(opaque) }
+          : binding,
+      ),
+    };
+    expect(() =>
+      assertCommunitiesStagingRoleSplitHostBindingEvidence(
+        changedAuthorization,
+        { ...evidence, BACKUP_CUSTODY_HANDOFF: opaque },
+        evidencePaths,
+      ),
+    ).toThrow(/EVIDENCE_INVALID/u);
+  });
+
+  it('rejects an evidence file moved out of its independently reviewed custody path', () => {
+    expect(() =>
+      assertCommunitiesStagingRoleSplitHostBindingEvidence(authorization, evidence, {
+        ...evidencePaths,
+        INDEPENDENT_EVIDENCE_SINK: '/tmp/copied-evidence.json',
+      }),
     ).toThrow(/EVIDENCE_INVALID/u);
   });
 });

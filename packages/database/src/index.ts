@@ -55,6 +55,7 @@ export * from './communities-staging-role-split-host-authorization.js';
 export * from './communities-staging-role-split-source-write-denial-attestation.js';
 export * from './communities-staging-role-split-source-write-denial-observations.js';
 export * from './communities-staging-role-split-restore-execution-evidence.js';
+export * from './communities-staging-role-split-attested-evidence.js';
 export * from './eligibility-payment-acl-matrix.js';
 export * from './messaging-repository.js';
 export * from './profile-privacy-repository.js';
