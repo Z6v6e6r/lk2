@@ -297,6 +297,22 @@ role/ownership/ACL mutation and the DBA quarantine resolution remain separate ga
 separate approval. The inventory collector and artifact verifier remain read-only and never create,
 repair or replace the marker.
 
+The exact installation surface can now be packaged locally with
+`npm run db:communities-role-split:installation-candidate`. The builder takes an independently
+supplied commit SHA, reads four exact payloads from that commit's Git objects and emits a private
+canonical manifest plus digest receipt. The payload set contains the preparation guard, V2 ceremony
+command, quarantine-only cleanup command and an exact `VERIFY_EXISTING` copy of the restore helper.
+The manifest fixes target paths, modes, root/`phub-preflight` custody and the restricted ceremony
+command, but contains no key, connection, credential or workflow mutation.
+
+This first manifest is `REVIEW_ONLY` and permanently `installable=false`. It records all external
+bindings as unresolved, including clone-only connection routing, source-write denial, the restore
+identity, executable pin, DDL fence, evidence sink, known-hosts pin and dedicated key. It also calls
+out the current backup-root ownership mismatch as an unresolved custody conflict; it does not
+authorize changing the existing directory. A verifier reconstructs the candidate from the same
+independently supplied commit and rejects any extra, missing, linked or edited byte. Producing or
+verifying this directory is not installation approval and is not a staging preflight.
+
 ### Exact 29-file staged clone rehearsal contract
 
 The staging inventory associated with source-ledger SHA-256

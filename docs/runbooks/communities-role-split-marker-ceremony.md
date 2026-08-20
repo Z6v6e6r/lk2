@@ -186,11 +186,60 @@ organizationally independent pin custody, the production CLI connection path, in
 clean-clone provenance or a cluster-wide DDL fence. The gate creates no
 staging/production database, role, key, request or inventory.
 
+## Exact review-only installation candidate
+
+`scripts/prepare-communities-role-split-installation-candidate.ts` builds and verifies a private,
+deterministic candidate directory from an independently supplied exact Git commit. It reads the
+four payload files from Git objects rather than the mutable worktree, requires the repository origin
+to be exactly `https://github.com/Z6v6e6r/lk2.git`, refuses an existing output, and accepts only a
+private mode-0700 parent owned by the invoking user. Every candidate file is mode 0600 and
+single-link. Verification requires the same independently supplied commit and rejects changed,
+missing, additional, linked or non-canonical bytes.
+
+The candidate includes exact bytes and future target metadata for:
+
+- the non-runnable preparation guard;
+- the V2 CREATE/RESUME ceremony command;
+- the quarantine-only cleanup command;
+- the existing backup/restore helper as `VERIFY_EXISTING`, without overwrite authority.
+
+Its manifest fixes the current command and directory surface, including principal and group
+`phub-preflight`, but deliberately declares `status=REVIEW_ONLY`, `installable=false` and every
+authorization flag false. It includes no public key, `authorized_keys` mutation, credential, DSN,
+role name selected from staging or workflow. Cleanup remains administrator-only reconciliation.
+The manifest also records the existing backup-root custody conflict instead of authorizing a chown
+or reuse of the current rehearsal archive directory.
+
+Nine bindings remain exact blockers in this version: clone-only connection factory, cluster DDL
+fence, dedicated forced-command public key, independent evidence sink, operator-selected source and
+clone connections, pinned `pg_restore` executable SHA-256, restore login role, server-side source
+write-denial attestation and staging known-hosts pin. Resolving them requires a new reviewed
+candidate version; editing this manifest or its digest receipt is rejected.
+
+After a checkpoint commit, build and verify only in a fresh private local directory:
+
+```sh
+candidate_review_root=$(mktemp -d)
+npm run db:communities-role-split:installation-candidate -- build \
+  --repository "$PWD" \
+  --candidate-sha '<checkpoint-sha>' \
+  --output "$candidate_review_root/communities-role-split-installation-candidate-<checkpoint-sha>"
+npm run db:communities-role-split:installation-candidate -- verify \
+  --repository "$PWD" \
+  --candidate-sha '<checkpoint-sha>' \
+  --candidate "$candidate_review_root/communities-role-split-installation-candidate-<checkpoint-sha>"
+```
+
+Both success lines contain only the commit, manifest digest, payload-set digest and false
+authorization fields. This command has no installer, SSH, Docker, PostgreSQL, network or staging
+operation. An `.incomplete` directory is retained after an interrupted build for manual inspection;
+the tool never deletes or replaces it automatically.
+
 ## Required before installation or execution
 
-1. Review the exact installation candidate, root-owned fixed request/state/evidence directories,
-   forced-command key and operator-selected connections. Repository presence alone grants no
-   installation or execution authority.
+1. Review the exact review-only candidate, fixed request/state/evidence custody, forced-command key
+   and operator-selected connections. The V1 manifest is explicitly not installable; repository or
+   candidate presence grants no installation or execution authority.
 2. Bind the reviewed ownership-and-ACL-preserving restore command to the exact installed ceremony
    candidate only after review of the fixed clone-only connection factory, descriptor custody and
    server-enforced source denial for the restore identity. Do not reuse a generic

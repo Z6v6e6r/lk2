@@ -44,6 +44,7 @@
     "db:booking-reminders:verify": "vitest run apps/worker/src/booking-reminder-scheduler.pg.test.ts",
     "db:role-boundary:verify": "vitest run apps/migrator/src/database-role-boundary.pg.test.ts",
     "db:communities-role-split:pg16:verify": "sh scripts/run-communities-role-split-pg16-verification.sh",
+    "db:communities-role-split:installation-candidate": "node --import tsx scripts/prepare-communities-role-split-installation-candidate.ts",
     "home:projection:import": "node --env-file-if-exists=.env --import tsx scripts/import-home-projection.ts",
     "home:component:enqueue": "node --env-file-if-exists=.env --import tsx scripts/enqueue-home-component.ts",
     "routing:plan:set": "node --env-file-if-exists=.env --import tsx scripts/set-client-routing-plan.ts",

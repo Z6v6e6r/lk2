@@ -1,5 +1,17 @@
 # Worklog
 
+## 2026-08-20 — Communities role-split review-only installation candidate
+
+- Added a deterministic local builder/verifier that reads the exact ceremony payloads from an
+  independently supplied lk2 Git commit and emits only a private canonical candidate manifest,
+  digest receipt and mode-0600 payload copies.
+- Fixed the proposed install paths, ownership/modes, `phub-preflight` forced-command surface and
+  directory custody without adding an installer, SSH key, workflow, connection or staging action.
+- Kept the candidate permanently `REVIEW_ONLY` and `installable=false`, with every authorization
+  false and nine external bindings explicitly unresolved rather than inferred.
+- Recorded the existing backup-root ownership conflict as a blocker; no directory ownership,
+  archive, state, database, role, ACL or host configuration is changed by this checkpoint.
+
 ## 2026-08-20 — Communities real PG16 archive and inventory handoff gate
 
 - Replaced the disposable template clone with a private custom-format `pg_dump`, real TOC readback,
