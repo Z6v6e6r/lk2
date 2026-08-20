@@ -19,7 +19,10 @@ for unresolved in \
   "$app_root/.runtime-secret-isolation.compose.backup" \
   "$app_root/.runtime-secret-isolation.compose.next" \
   "$app_root/.runtime-secret-bootstrap.compose.next" \
-  "$app_root/.runtime-secret-bootstrap.release.next"; do
+  "$app_root/.runtime-secret-bootstrap.release.next" \
+  "$app_root/.legacy-otp-hotfix.transition.env" \
+  "$app_root/.legacy-otp-hotfix.transition.env.next" \
+  "$app_root/.legacy-otp-hotfix.release.next"; do
   if test -e "$unresolved" || test -L "$unresolved"; then
     printf '%s\n' 'runtime secret transition is unresolved; deployment is blocked' >&2
     exit 1

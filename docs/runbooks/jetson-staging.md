@@ -260,6 +260,63 @@ expiry without logging either credential. The default refresh TTL is 30 days; a 
 must be investigated before expiry, and an expired session fails closed until separately reviewed
 reprovisioning. `RECOVER` never rotates or requires the smoke credential.
 
+### Temporary legacy OTP canary
+
+If the exact active `e308181da5222645d9a87d03642923c6841be8d1` API cannot complete the
+Viva client-realm OTP exchange because it sends E.164 `+` on the provider wire, use only the
+dedicated `Legacy staging OTP hotfix canary` workflow. Its candidate must be a reviewed
+single-parent child of e308 whose binary diff changes only
+`packages/viva-adapter/src/identity.ts` and its test. The candidate keeps E.164 internally and
+removes the leading `+` only in the Viva SMS and token requests. Migrations, contracts, lockfiles,
+Dockerfiles and staging Compose must remain byte-identical to e308.
+
+This is not an API overlay. The workflow builds all five immutable ARM64 images from the same
+candidate SHA, installs web/API/worker/realtime as one coherent temporary release, and builds but
+never runs the migrator. It changes no environment file or feature flag. Before the marker it
+verifies all exact old images are already local, pulls every candidate image, validates the
+application rollback snapshot and creates a readable
+custom-format PostgreSQL archive. After the durable marker, it stops all four runtime services,
+atomically installs only the candidate `release.env`, and starts realtime, API, worker and web in
+that order. Nginx, Caddy and the database are not recreated or migrated.
+
+The public candidate remains available for a hard wall-clock maximum of fifteen minutes for one manually authorized
+browser canary in tenant `local-padel`. The phone and code are entered only in the browser; they
+must not be supplied as workflow inputs, command arguments, logs or artifacts. Do not retry a lost
+provider send or verify response. The canary may create a normal user/session/legal-acceptance and
+Viva delegation record; application rollback deliberately does not erase those records.
+
+Before rollback, the workflow requires exactly one new correlation-bound
+`PHONE_OTP_LEGAL_ACCEPTANCE_RECORDED` plus `AUTH_SESSION_CREATED` success for tenant
+`local-padel`, backed by a fresh Viva external identity and active delegation after the durable
+candidate-ready timestamp. That second timestamp advances from zero only after exact candidate
+service/image/public-manifest attestation and is atomically persisted in the marker. It prints only
+a fixed PASS token; phone, provider subject, user ID and
+correlation ID remain inside PostgreSQL. Zero or multiple matching successes fail closed and still
+enter rollback. Health, manifest and OTP evidence are polled inside the same hard 15-minute
+wall-clock window; the first valid evidence closes the window early and immediately enters
+rollback. The candidate is never kept active for a separate post-window attestation period.
+
+A failed or interrupted PostgreSQL dump before marker publication removes its exact `.next` and
+final archive paths. Once the marker exists, the completed archive and application bundle are
+retained as protected release evidence under the normal backup retention policy; never publish
+them as workflow artifacts or delete them ad hoc.
+
+The workflow gives START a bounded 40-minute controller budget, reserves a separate bounded
+rollback budget, and gives the whole operate job 120 minutes. It always attempts to restore the
+exact saved e308 release and observes it for a hard wall-clock maximum of five minutes. It
+never finalizes the hotfix as the active release. If the runner or SSH response is lost, dispatch
+`RECOVER` with the original control SHA, run ID and attempt. Recovery uses the retained bundle and
+application snapshot, performs no pull or build, and converges only backward. The shared transition
+guard blocks every other staging operation while `.legacy-otp-hotfix.transition.env` or either
+`.next` artifact exists. Rollback validates and removes only the two exact, regular, single-link,
+controller-owned `0600` `.next` files before retrying an atomic install and again before clearing
+the marker. A symlink or malformed `.next` file fails closed with the marker retained. Do not
+delete those artifacts manually.
+
+This temporary canary proves only the ordinary Viva OTP journey. It does not create the dedicated
+non-personal, no-delegation `Staging Realtime Smoke` principal required by B0. Exact e308 must be
+restored before the existing e308-to-B0 workflow is allowed to run.
+
 Dispatch `START` from `main` with the exact active release, exact B0 candidate and confirmation
 `BOOTSTRAP_STAGING_RUNTIME_SECRETS`. The workflow verifies the candidate parent and source, pulls
 all exact old and candidate images, creates and validates an application rollback snapshot, and

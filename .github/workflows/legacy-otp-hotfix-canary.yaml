@@ -1,0 +1,404 @@
+name: Legacy staging OTP hotfix canary
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Open the bounded canary window or recover the original run
+        required: true
+        type: choice
+        options: [START, RECOVER]
+      expected_active_release:
+        description: Exact currently serving legacy release SHA
+        required: true
+        type: string
+      candidate_sha:
+        description: Exact reviewed single-parent OTP hotfix SHA
+        required: true
+        type: string
+      confirmation:
+        description: Exact START or RECOVER confirmation phrase
+        required: true
+        type: string
+      original_control_sha:
+        description: For RECOVER only, the control SHA recorded by START
+        required: false
+        default: ''
+        type: string
+      original_run_id:
+        description: For RECOVER only, the original workflow run ID
+        required: false
+        default: ''
+        type: string
+      original_run_attempt:
+        description: For RECOVER only, the original workflow run attempt
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: staging
+  cancel-in-progress: false
+
+jobs:
+  validate-source:
+    runs-on: ubuntu-latest
+    outputs:
+      start: ${{ steps.authority.outputs.start }}
+    steps:
+      - id: authority
+        name: Validate exact operation authority
+        env:
+          OPERATION: ${{ inputs.operation }}
+          EXPECTED_ACTIVE_RELEASE: ${{ inputs.expected_active_release }}
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+          ORIGINAL_CONTROL_SHA: ${{ inputs.original_control_sha }}
+          ORIGINAL_RUN_ID: ${{ inputs.original_run_id }}
+          ORIGINAL_RUN_ATTEMPT: ${{ inputs.original_run_attempt }}
+          REQUEST_REF: ${{ github.ref }}
+          CONTROL_SHA: ${{ github.sha }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          SUPPORTED_ACTIVE_RELEASE: e308181da5222645d9a87d03642923c6841be8d1
+        run: |
+          set -eu
+          require_sha() {
+            test "${#1}" -eq 40
+            case "$1" in *[!0-9a-f]*) return 1 ;; esac
+          }
+          require_uint() {
+            test -n "$1"
+            case "$1" in *[!0-9]*) return 1 ;; esac
+          }
+          test "$REQUEST_REF" = refs/heads/main
+          test "$WORKFLOW_SHA" = "$CONTROL_SHA"
+          require_sha "$EXPECTED_ACTIVE_RELEASE"
+          require_sha "$CANDIDATE_SHA"
+          test "$EXPECTED_ACTIVE_RELEASE" = "$SUPPORTED_ACTIVE_RELEASE"
+          test "$CANDIDATE_SHA" != "$EXPECTED_ACTIVE_RELEASE"
+          case "$OPERATION:$CONFIRMATION" in
+            START:START_LEGACY_OTP_HOTFIX_CANARY)
+              test -z "$ORIGINAL_CONTROL_SHA$ORIGINAL_RUN_ID$ORIGINAL_RUN_ATTEMPT"
+              printf 'start=true\n' >> "$GITHUB_OUTPUT"
+              ;;
+            RECOVER:RECOVER_LEGACY_OTP_HOTFIX_CANARY)
+              require_sha "$ORIGINAL_CONTROL_SHA"
+              require_uint "$ORIGINAL_RUN_ID"
+              require_uint "$ORIGINAL_RUN_ATTEMPT"
+              printf 'start=false\n' >> "$GITHUB_OUTPUT"
+              ;;
+            *) echo '::error::Exact legacy OTP hotfix confirmation is required.'; exit 1 ;;
+          esac
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          path: control
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Acquire the exact immutable legacy candidate without submodule discovery
+        if: ${{ inputs.operation == 'START' }}
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: sh control/deploy/jetson/checkout-legacy-otp-hotfix-candidate.sh "$CANDIDATE_SHA" candidate
+      - name: Verify exact OTP hotfix source and parent contract
+        if: ${{ inputs.operation == 'START' }}
+        working-directory: control
+        env:
+          EXPECTED_ACTIVE_RELEASE: ${{ inputs.expected_active_release }}
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: sh deploy/jetson/verify-legacy-otp-hotfix-source.sh "$EXPECTED_ACTIVE_RELEASE" "$CANDIDATE_SHA" ../candidate
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        if: ${{ inputs.operation == 'START' }}
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: candidate/package-lock.json
+      - name: Run the complete immutable candidate gate
+        if: ${{ inputs.operation == 'START' }}
+        working-directory: candidate
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts
+          npm run contracts:generate
+          npm run build:packages
+          npm run check
+          npm run db:migrate:check
+
+  build:
+    needs: validate-source
+    if: ${{ needs.validate-source.outputs.start == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: true
+      matrix:
+        service: [web, api, worker, realtime, migrator]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          path: control
+          persist-credentials: false
+      - name: Acquire the exact immutable legacy candidate without submodule discovery
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: sh control/deploy/jetson/checkout-legacy-otp-hotfix-candidate.sh "$CANDIDATE_SHA" candidate
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: candidate
+          file: candidate/apps/${{ matrix.service }}/Dockerfile
+          platforms: linux/arm64
+          push: true
+          tags: ghcr.io/z6v6e6r/phub-${{ matrix.service }}:legacy-otp-${{ inputs.candidate_sha }}
+          build-args: |
+            PHUB_RELEASE=${{ inputs.candidate_sha }}
+          provenance: true
+          sbom: true
+          cache-from: type=gha,scope=legacy-otp-${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=legacy-otp-${{ matrix.service }}
+      - name: Retain the immutable manifest digest
+        run: |
+          install -d -m 700 digests
+          printf '%s' '${{ steps.image.outputs.digest }}' > 'digests/${{ matrix.service }}'
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: legacy-otp-digest-${{ matrix.service }}
+          path: digests/${{ matrix.service }}
+          retention-days: 30
+
+  operate:
+    needs: [validate-source, build]
+    if: >-
+      ${{
+        always() &&
+        needs.validate-source.result == 'success' &&
+        (
+          (needs.validate-source.outputs.start == 'true' && needs.build.result == 'success') ||
+          (needs.validate-source.outputs.start == 'false' && needs.build.result == 'skipped')
+        )
+      }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    environment: staging
+    env:
+      SSH_OPTIONS: -o ConnectTimeout=10 -o ConnectionAttempts=1 -o ServerAliveInterval=10 -o ServerAliveCountMax=2
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          path: control
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Acquire the exact immutable legacy candidate without submodule discovery
+        if: ${{ inputs.operation == 'START' }}
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: sh control/deploy/jetson/checkout-legacy-otp-hotfix-candidate.sh "$CANDIDATE_SHA" candidate
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        if: ${{ inputs.operation == 'START' }}
+        with:
+          pattern: legacy-otp-digest-*
+          path: digests
+          merge-multiple: true
+      - name: Join the staging tailnet
+        uses: tailscale/github-action@306e68a486fd2350f2bfc3b19fcd143891a4a2d8 # v4
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+          ping: ${{ secrets.STAGING_HOST }}
+      - name: Configure audited SSH
+        env:
+          DEPLOY_KEY: ${{ secrets.STAGING_DEPLOY_KEY }}
+          KNOWN_HOSTS: ${{ secrets.STAGING_KNOWN_HOSTS }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+      - id: identity
+        name: Bind the original or current workflow identity
+        env:
+          OPERATION: ${{ inputs.operation }}
+          ORIGINAL_CONTROL_SHA: ${{ inputs.original_control_sha }}
+          ORIGINAL_RUN_ID: ${{ inputs.original_run_id }}
+          ORIGINAL_RUN_ATTEMPT: ${{ inputs.original_run_attempt }}
+          CURRENT_CONTROL_SHA: ${{ github.sha }}
+          CURRENT_RUN_ID: ${{ github.run_id }}
+          CURRENT_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -eu
+          if test "$OPERATION" = START; then
+            control_sha=$CURRENT_CONTROL_SHA run_id=$CURRENT_RUN_ID run_attempt=$CURRENT_RUN_ATTEMPT
+          else
+            control_sha=$ORIGINAL_CONTROL_SHA run_id=$ORIGINAL_RUN_ID run_attempt=$ORIGINAL_RUN_ATTEMPT
+          fi
+          printf 'control_sha=%s\nrun_id=%s\nrun_attempt=%s\n' "$control_sha" "$run_id" "$run_attempt" >> "$GITHUB_OUTPUT"
+          printf 'bundle=/opt/phub/legacy-otp-hotfix-candidates/%s-%s\n' "$run_id" "$run_attempt" >> "$GITHUB_OUTPUT"
+      - name: Assemble the redacted durable hotfix bundle
+        if: ${{ inputs.operation == 'START' }}
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 bundle
+          printf 'RELEASE=%s\nREGISTRY=ghcr.io/z6v6e6r\n' "$CANDIDATE_SHA" > bundle/image-digests.env
+          for service in web api worker realtime migrator; do
+            digest=$(cat "digests/$service")
+            printf '%s' "$digest" | grep -Eq '^sha256:[0-9a-f]{64}$'
+            printf '%s_IMAGE_DIGEST=%s\n' "$(printf '%s' "$service" | tr '[:lower:]' '[:upper:]')" "$digest" >> bundle/image-digests.env
+          done
+          install -m 500 control/deploy/jetson/run-legacy-otp-hotfix-canary.sh bundle/
+          install -m 500 control/deploy/jetson/backup-application.sh bundle/
+          install -m 500 control/deploy/jetson/rollback-application.sh bundle/
+          install -m 400 candidate/deploy/compose.staging.yaml bundle/
+          chmod 600 bundle/image-digests.env
+      - name: Attest the exact public legacy release before host writes
+        if: ${{ inputs.operation == 'START' }}
+        env:
+          EXPECTED_ACTIVE_RELEASE: ${{ inputs.expected_active_release }}
+        run: |
+          set -euo pipefail
+          manifest=$(curl --fail --silent --show-error --connect-timeout 10 --max-time 15 https://lk.nano.padlhub.su/manifest.json)
+          printf '%s' "$manifest" | EXPECTED_ACTIVE_RELEASE="$EXPECTED_ACTIVE_RELEASE" node -e '
+            let value=""; process.stdin.on("data", chunk => { value += chunk; });
+            process.stdin.on("end", () => { if (JSON.parse(value).release !== process.env.EXPECTED_ACTIVE_RELEASE) process.exit(1); });
+          '
+      - name: Publish the durable controller bundle without executing it
+        if: ${{ inputs.operation == 'START' }}
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+          BUNDLE: ${{ steps.identity.outputs.bundle }}
+        run: |
+          set -euo pipefail
+          ssh $SSH_OPTIONS "phub-deploy@$HOST" "test ! -e '$BUNDLE' && install -d -m 700 '$BUNDLE'"
+          scp $SSH_OPTIONS bundle/* "phub-deploy@$HOST:$BUNDLE/"
+          ssh $SSH_OPTIONS "phub-deploy@$HOST" "chmod 500 '$BUNDLE/run-legacy-otp-hotfix-canary.sh' '$BUNDLE/backup-application.sh' '$BUNDLE/rollback-application.sh'; chmod 400 '$BUNDLE/compose.staging.yaml'; chmod 600 '$BUNDLE/image-digests.env'"
+      - id: start
+        name: Open the exact temporary legacy OTP canary window
+        if: ${{ inputs.operation == 'START' }}
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+          BUNDLE: ${{ steps.identity.outputs.bundle }}
+          CONTROL_SHA: ${{ steps.identity.outputs.control_sha }}
+          RUN_ID: ${{ steps.identity.outputs.run_id }}
+          RUN_ATTEMPT: ${{ steps.identity.outputs.run_attempt }}
+          EXPECTED_ACTIVE_RELEASE: ${{ inputs.expected_active_release }}
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 evidence
+          timeout --signal=TERM --kill-after=30s 2400s ssh $SSH_OPTIONS "phub-deploy@$HOST" \
+            "sh '$BUNDLE/run-legacy-otp-hotfix-canary.sh' start '$EXPECTED_ACTIVE_RELEASE' '$CANDIDATE_SHA' '$CONTROL_SHA' '$RUN_ID' '$RUN_ATTEMPT' START_LEGACY_OTP_HOTFIX_CANARY '$BUNDLE'" \
+            | tee evidence/transition.txt
+      - name: Hold the bounded browser OTP window and require correlation-bound success
+        if: ${{ inputs.operation == 'START' && steps.start.outcome == 'success' }}
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+          BUNDLE: ${{ steps.identity.outputs.bundle }}
+          CONTROL_SHA: ${{ steps.identity.outputs.control_sha }}
+          RUN_ID: ${{ steps.identity.outputs.run_id }}
+          RUN_ATTEMPT: ${{ steps.identity.outputs.run_attempt }}
+          EXPECTED_ACTIVE_RELEASE: ${{ inputs.expected_active_release }}
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: |
+          set -euo pipefail
+          printf '%s\n' 'legacy_otp_hotfix canary_window_seconds=900 status=started' | tee evidence/observation.txt
+          set +e
+          timeout --signal=TERM --kill-after=5s 900s sh -eu -c '
+            while :; do
+              for path in /healthz /health/live /health/ready; do
+                curl --fail --silent --show-error --connect-timeout 5 --max-time 10 --output /dev/null "https://lk.nano.padlhub.su$path"
+              done
+              curl --fail --silent --show-error --connect-timeout 5 --max-time 10 --output /dev/null https://lk.nano.padlhub.su/realtime/health/ready
+              manifest=$(curl --fail --silent --show-error --connect-timeout 5 --max-time 10 https://lk.nano.padlhub.su/manifest.json)
+              printf "%s" "$manifest" | node -e '\''
+                let value=""; process.stdin.on("data", chunk => { value += chunk; });
+                process.stdin.on("end", () => { if (JSON.parse(value).release !== process.env.CANDIDATE_SHA) process.exit(1); });
+              '\''
+              if timeout --signal=TERM --kill-after=5s 30s ssh $SSH_OPTIONS "phub-deploy@$HOST" \
+                "sh '$BUNDLE/run-legacy-otp-hotfix-canary.sh' attest '$EXPECTED_ACTIVE_RELEASE' '$CANDIDATE_SHA' '$CONTROL_SHA' '$RUN_ID' '$RUN_ATTEMPT' ATTEST_LEGACY_OTP_HOTFIX_CANARY '$BUNDLE'" \
+                >> evidence/observation.txt; then
+                exit 0
+              fi
+              sleep 30
+            done
+          '
+          observation_status=$?
+          set -e
+          test "$observation_status" -eq 0
+          printf '%s\n' 'legacy_otp_hotfix canary_window_seconds=900 otp_evidence=passed status=completed' | tee -a evidence/observation.txt
+      - name: Recover the selected interrupted hotfix run
+        if: ${{ inputs.operation == 'RECOVER' }}
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+          BUNDLE: ${{ steps.identity.outputs.bundle }}
+          CONTROL_SHA: ${{ steps.identity.outputs.control_sha }}
+          RUN_ID: ${{ steps.identity.outputs.run_id }}
+          RUN_ATTEMPT: ${{ steps.identity.outputs.run_attempt }}
+          EXPECTED_ACTIVE_RELEASE: ${{ inputs.expected_active_release }}
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 evidence
+          timeout --signal=TERM --kill-after=30s 1800s ssh $SSH_OPTIONS "phub-deploy@$HOST" \
+            "sh '$BUNDLE/run-legacy-otp-hotfix-canary.sh' rollback '$EXPECTED_ACTIVE_RELEASE' '$CANDIDATE_SHA' '$CONTROL_SHA' '$RUN_ID' '$RUN_ATTEMPT' ROLLBACK_LEGACY_OTP_HOTFIX_CANARY '$BUNDLE'" \
+            | tee evidence/recovery.txt
+      - id: rollback
+        name: Always restore the exact e308 runtime after START
+        if: ${{ always() && inputs.operation == 'START' && steps.start.outcome != 'skipped' }}
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+          BUNDLE: ${{ steps.identity.outputs.bundle }}
+          CONTROL_SHA: ${{ steps.identity.outputs.control_sha }}
+          RUN_ID: ${{ steps.identity.outputs.run_id }}
+          RUN_ATTEMPT: ${{ steps.identity.outputs.run_attempt }}
+          EXPECTED_ACTIVE_RELEASE: ${{ inputs.expected_active_release }}
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 evidence
+          timeout --signal=TERM --kill-after=30s 1800s ssh $SSH_OPTIONS "phub-deploy@$HOST" \
+            "sh '$BUNDLE/run-legacy-otp-hotfix-canary.sh' rollback '$EXPECTED_ACTIVE_RELEASE' '$CANDIDATE_SHA' '$CONTROL_SHA' '$RUN_ID' '$RUN_ATTEMPT' ROLLBACK_LEGACY_OTP_HOTFIX_CANARY '$BUNDLE'" \
+            | tee -a evidence/recovery.txt
+      - name: Observe the restored exact legacy runtime for five minutes
+        if: ${{ always() && inputs.operation == 'START' && steps.rollback.outcome == 'success' }}
+        env:
+          EXPECTED_ACTIVE_RELEASE: ${{ inputs.expected_active_release }}
+        run: |
+          set -euo pipefail
+          set +e
+          timeout --signal=TERM --kill-after=5s 300s sh -eu -c '
+            while :; do
+              for path in /healthz /health/live /health/ready; do
+                curl --fail --silent --show-error --connect-timeout 5 --max-time 10 --output /dev/null "https://lk.nano.padlhub.su$path"
+              done
+              curl --fail --silent --show-error --connect-timeout 5 --max-time 10 --output /dev/null https://lk.nano.padlhub.su/realtime/health/ready
+              manifest=$(curl --fail --silent --show-error --connect-timeout 5 --max-time 10 https://lk.nano.padlhub.su/manifest.json)
+              printf "%s" "$manifest" | node -e '\''
+                let value=""; process.stdin.on("data", chunk => { value += chunk; });
+                process.stdin.on("end", () => { if (JSON.parse(value).release !== process.env.EXPECTED_ACTIVE_RELEASE) process.exit(1); });
+              '\''
+              sleep 30
+            done
+          '
+          observation_status=$?
+          set -e
+          test "$observation_status" -eq 124
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: ${{ always() }}
+        with:
+          name: legacy-otp-hotfix-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence
+          if-no-files-found: ignore
+          retention-days: 30
