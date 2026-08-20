@@ -73,6 +73,19 @@ digest. Marker/evidence V1 is not accepted as a compatibility fallback.
   version and restore. It uses `shell:false`, allowlisted environment, discarded bounded stderr and a
   SIGTERM/SIGKILL timeout. A failed, timed-out or response-lost process has
   only a stable redacted code; it cannot advance `RESTORE_PENDING`, retry, or drop a clone.
+- `packages/database/src/communities-staging-role-split-restore-execution-descriptor.ts` defines a
+  strict canonical V1 `CODE_ONLY_DISABLED` descriptor. It pins the canonical marker-request and
+  creation-receipt SHA-256 values, clone OID, loopback-only `sslmode=disable` connection identity,
+  same login/restore role name and OID, reviewed `pg_restore` digest, private pgpass basename,
+  source-write-denial evidence and bounded timeouts. Every execution, clone, restore, marker,
+  evidence, cleanup, role, shared-database, migration, deploy, import and activation authority is
+  exactly `false`.
+- `apps/migrator/src/communities-staging-role-split-runner-adapter.ts` is a non-entrypoint adapter
+  for the host `restoreArchive` callback seam. It cross-checks the descriptor against the canonical
+  request, receipt, clone OID and restore-owner binding, then always fails with
+  `EXECUTION_NOT_AUTHORIZED` before it can inspect archive/password/executable descriptors, invoke
+  a fence, preflight, spawn `pg_restore`, write marker/evidence, or create/drop a clone. Its
+  advisory-DDL-fence types are review-only; no implementation or active connection factory exists.
 
 The PG16 library validates catalog name/OID/owner bindings, PostgreSQL major version,
 source/restored ledger equality and archive/evidence/TOC SHA custody. Its restore callback must
@@ -89,7 +102,7 @@ count; it never buffers the archive as a whole. This filesystem lease is not yet
 cluster-wide DDL fence: a future forced command must also provide outer process serialization and a
 reviewed PostgreSQL advisory-session lease before clone creation or marker writes.
 
-The new runner remains deliberately unwired: the current host request does not yet carry an
+The new runner and disabled adapter remain deliberately unwired: the current host request does not yet carry an
 immutable restore-login/role identity or a reviewed connection factory. Local target-name/OID argv
 binding cannot prove that a privileged restore identity cannot write the source database. Before
 any live wiring, staging must enforce and attest source denial for that identity at the server
