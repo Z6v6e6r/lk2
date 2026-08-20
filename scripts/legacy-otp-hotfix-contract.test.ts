@@ -117,9 +117,15 @@ cp "$PHUB_APP_ROOT/release.env" "$1/release.env"
 set -eu
 if test "$1" = ps; then
   service=''
+  include_stopped=0
   for argument in "$@"; do
     case "$argument" in label=com.docker.compose.service=*) service=\${argument##*=} ;; esac
+    test "$argument" != -a || include_stopped=1
   done
+  release=$(sed -n 's/^RELEASE=//p' "$PHUB_APP_ROOT/release.env")
+  if test "\${PHUB_FAKE_STOPPED_SERVICE:-}" = "$service" && test "\${PHUB_FAKE_STOPPED_RELEASE:-}" = "$release" && test "$include_stopped" -eq 0; then
+    exit 0
+  fi
   test -z "$service" || printf '%s-id\\n' "$service"
   exit 0
 fi
@@ -127,9 +133,23 @@ if test "$1" = inspect; then
   format=$3
   id=$4
   service=\${id%-id}
+  release=$(sed -n 's/^RELEASE=//p' "$PHUB_APP_ROOT/release.env")
+  stopped=false
+  if test "\${PHUB_FAKE_STOPPED_SERVICE:-}" = "$service" && test "\${PHUB_FAKE_STOPPED_RELEASE:-}" = "$release"; then stopped=true; fi
   case "$format" in
-    *State.Running*) printf 'true\\n' ;;
-    *State.Health.Status*) printf 'healthy\\n' ;;
+    *State.Running*) if test "$stopped" = true; then printf 'false\\n'; else printf 'true\\n'; fi ;;
+    *State.Health.Status* | *'if .State.Health'*)
+      if test "$stopped" = true; then
+        printf 'none\\n'
+      elif test "\${PHUB_FAKE_UNHEALTHY_SERVICE:-}" = "$service" && test "\${PHUB_FAKE_UNHEALTHY_RELEASE:-}" = "$release"; then
+        printf 'unhealthy\\n'
+      else
+        printf 'healthy\\n'
+      fi
+      ;;
+    *State.ExitCode*) if test "$stopped" = true; then printf '137\\n'; else printf '0\\n'; fi ;;
+    *State.OOMKilled*) if test "$stopped" = true; then printf 'true\\n'; else printf 'false\\n'; fi ;;
+    *RestartCount*) if test "$stopped" = true; then printf '2\\n'; else printf '0\\n'; fi ;;
     *Config.Image*)
       registry=$(sed -n 's/^REGISTRY=//p' "$PHUB_APP_ROOT/release.env")
       upper=$(printf '%s' "$service" | tr '[:lower:]' '[:upper:]')
@@ -142,6 +162,22 @@ if test "$1" = inspect; then
 fi
 if test "$1" = image && test "$2" = inspect; then exit 0; fi
 if test "$1" = pull; then exit 0; fi
+if test "$1" = exec; then
+  id=$2
+  service=\${id%-id}
+  release=$(sed -n 's/^RELEASE=//p' "$PHUB_APP_ROOT/release.env")
+  if test "\${PHUB_FAKE_STOPPED_SERVICE:-}" = "$service" && test "\${PHUB_FAKE_STOPPED_RELEASE:-}" = "$release"; then exit 1; fi
+  case "$*" in
+    *'/health/live'*) printf '200' ;;
+    *'/health/ready'*) printf '503' ;;
+    *) exit 1 ;;
+  esac
+  exit 0
+fi
+if test "$1" = logs; then
+  printf '%s\\n' "\${PHUB_FAKE_CONTAINER_LOG:-synthetic container log}"
+  exit 0
+fi
 if test "$1" = stop; then
   test "\${PHUB_FAKE_FAIL_RESTORE_STOP:-0}" != 1 || exit 91
   exit 0
@@ -191,7 +227,12 @@ printf 'fixture 20000000 1 19999999 1%% /fixture\\n'
 `,
   );
   executable(join(fakeBin, 'flock'), '#!/bin/sh\nexit 0\n');
+  executable(join(fakeBin, 'sleep'), '#!/bin/sh\nexit 0\n');
   executable(join(fakeBin, 'sync'), '#!/bin/sh\nexit 0\n');
+  executable(
+    join(fakeBin, 'timeout'),
+    '#!/bin/sh\nset -eu\ntest "$1" = --signal=TERM\nshift\ntest "$1" = --kill-after=1s\nshift\ntest "$1" = 5s\nshift\nexec "$@"\n',
+  );
   executable(
     join(fakeBin, 'date'),
     `#!/bin/sh
@@ -438,6 +479,17 @@ describe('legacy OTP hotfix canary release contract', () => {
     );
     expect(startFunction.indexOf('realtime api worker web')).toBeGreaterThan(0);
     expect(controller).toContain('assert_flags_disabled');
+    for (const endpoint of [
+      'http://127.0.0.1:3001/health/live',
+      'http://127.0.0.1:3001/health/ready',
+      'http://127.0.0.1:3000/health/live',
+      'http://127.0.0.1:3000/health/ready',
+      'http://127.0.0.1:3002/health/live',
+      'http://127.0.0.1:3002/health/ready',
+      'http://127.0.0.1:8080/healthz',
+    ]) {
+      expect(controller).toContain(endpoint);
+    }
     for (const artifact of [
       '.legacy-otp-hotfix.transition.env',
       '.legacy-otp-hotfix.transition.env.next',
@@ -576,5 +628,47 @@ describe('legacy OTP hotfix canary release contract', () => {
     } finally {
       rmSync(preMarker.root, { recursive: true, force: true });
     }
-  }, 90_000);
+
+    const unhealthy = prepareControllerFixture();
+    try {
+      const result = runController(unhealthy, 'start', {
+        PHUB_FAKE_UNHEALTHY_SERVICE: 'realtime',
+        PHUB_FAKE_UNHEALTHY_RELEASE: candidateRelease,
+        PHUB_FAKE_CONTAINER_LOG: 'PRIVATE_MARKER=must-not-leak connect ECONNREFUSED',
+      });
+      expect(result.status).not.toBe(0);
+      expect(result.stdout).toContain(
+        'service_readiness_diagnostic service=realtime running=true health=unhealthy exit_code=0 oom_killed=false restart_count=0 live_http=200 ready_http=503 log_class=dependency_connectivity',
+      );
+      expect(`${result.stdout}${result.stderr}`).not.toContain('PRIVATE_MARKER');
+      expect(`${result.stdout}${result.stderr}`).not.toContain('ECONNREFUSED');
+      expect(readFileSync(join(unhealthy.appRoot, 'release.env'), 'utf8')).toContain(
+        `RELEASE=${activeRelease}`,
+      );
+      expect(runTransitionClear(unhealthy).status).toBe(0);
+    } finally {
+      rmSync(unhealthy.root, { recursive: true, force: true });
+    }
+
+    const stopped = prepareControllerFixture();
+    try {
+      const result = runController(stopped, 'start', {
+        PHUB_FAKE_STOPPED_SERVICE: 'realtime',
+        PHUB_FAKE_STOPPED_RELEASE: candidateRelease,
+        PHUB_FAKE_CONTAINER_LOG: 'PRIVATE_MARKER=must-not-leak ERR_MODULE_NOT_FOUND',
+      });
+      expect(result.status).not.toBe(0);
+      expect(result.stdout).toContain(
+        'service_readiness_diagnostic service=realtime running=false health=none exit_code=137 oom_killed=true restart_count=2 live_http=unavailable ready_http=unavailable log_class=runtime_module_missing',
+      );
+      expect(`${result.stdout}${result.stderr}`).not.toContain('PRIVATE_MARKER');
+      expect(`${result.stdout}${result.stderr}`).not.toContain('ERR_MODULE_NOT_FOUND');
+      expect(readFileSync(join(stopped.appRoot, 'release.env'), 'utf8')).toContain(
+        `RELEASE=${activeRelease}`,
+      );
+      expect(runTransitionClear(stopped).status).toBe(0);
+    } finally {
+      rmSync(stopped.root, { recursive: true, force: true });
+    }
+  }, 120_000);
 });

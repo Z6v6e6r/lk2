@@ -279,6 +279,15 @@ custom-format PostgreSQL archive. After the durable marker, it stops all four ru
 atomically installs only the candidate `release.env`, and starts realtime, API, worker and web in
 that order. Nginx, Caddy and the database are not recreated or migrated.
 
+If a service does not become healthy within its bounded readiness window, the controller emits one
+redacted `service_readiness_diagnostic` record before rollback. It contains only the service name,
+normalized running/health/exit/OOM/restart state, internal live/ready HTTP status and one fixed log
+classification such as `dependency_connectivity`, `dependency_authentication`,
+`configuration_invalid` or `runtime_module_missing`. Raw container logs, response bodies,
+environment values and container identifiers must never enter workflow output or artifacts. Each
+Docker inspection, internal probe and bounded log classification has its own five-second timeout;
+diagnostics must not delay the rollback budget.
+
 The public candidate remains available for a hard wall-clock maximum of fifteen minutes for one manually authorized
 browser canary in tenant `local-padel`. The phone and code are entered only in the browser; they
 must not be supplied as workflow inputs, command arguments, logs or artifacts. Do not retry a lost
