@@ -188,6 +188,13 @@ export class CommunitiesStagingRoleSplitMarkerCeremonyPgHost implements Communit
         !isRegularMode(stat.mode, MODE_0700)
       )
         fail('STATE_DIRECTORY_UNSAFE');
+      try {
+        await lstat(join(this.config.stateDirectory, 'v3-durable-state.json'));
+        fail('STATE_DIRECTORY_UNSAFE');
+      } catch (error) {
+        if (error instanceof CommunitiesStagingRoleSplitMarkerCeremonyPgHostError) throw error;
+        if ((error as { code?: string }).code !== 'ENOENT') fail('STATE_DIRECTORY_UNSAFE');
+      }
     } catch (error) {
       if (error instanceof CommunitiesStagingRoleSplitMarkerCeremonyPgHostError) throw error;
       fail('STATE_DIRECTORY_UNSAFE');

@@ -498,6 +498,23 @@ The read-only post-check uses the same exact arguments with `verify`. It must al
 versioned `disabled-command.sh` and observe exit 78 with the single fixed denial line. Neither
 command authorizes or runs the ceremony.
 
+## V3 durable preparation boundary
+
+`apps/migrator/src/communities-staging-role-split-v3-durable-host.ts` is an unwired library-only
+boundary. It validates the merged durable authorization and all three exact V3 state envelopes,
+then acquires the existing cluster DDL fence before a private filesystem lease. It refuses the V2
+`ceremony.lock` and artifact namespace, persists only canonical exact bytes through
+`OWNED -> RESTORE_PENDING`, fsyncs and reads back each boundary, and asks an injected custody
+collaborator to attest the archive before minting an opaque one-shot capability.
+
+The capability has no consumer, runner, restore, `RESTORED` transition, command, installer,
+workflow, environment, key, SSH, Docker or PostgreSQL entrypoint. Its only exposed operation is
+abandonment, which releases its leases. This code is not an execution authorization; durable
+state persistence remains a prerequisite for a separately reviewed executable composition. The
+low-level exact-byte store admits only the separately authorized
+`RESTORE_PENDING -> RESTORED` transition for that future composition; this host never exposes or
+performs that promotion.
+
 ## Required before installation and before execution
 
 1. Review and, under a separate approval, install/post-check the exact disabled V5 candidate.

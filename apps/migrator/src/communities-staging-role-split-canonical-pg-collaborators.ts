@@ -16,7 +16,7 @@ import {
   COMMUNITIES_STAGING_ROLE_SPLIT_DDL_FENCE_ADVISORY_KEY,
   type CommunitiesStagingRoleSplitDdlFence,
   type CommunitiesStagingRoleSplitDdlFenceLease,
-} from './communities-staging-role-split-runner-adapter.js';
+} from './communities-staging-role-split-ddl-fence.js';
 
 const ADVISORY_KEY_1 = 1_836_020_338;
 const ADVISORY_KEY_2 = 1_936_876_912;
@@ -248,6 +248,7 @@ function assertLeaseShape(lease: CommunitiesStagingRoleSplitDdlFenceLease): void
 type FenceEntry = {
   readonly session: CommunitiesStagingRoleSplitCanonicalPgSession;
   readonly backendPid: string;
+  unlockConfirmed: boolean;
 };
 
 export class CommunitiesStagingRoleSplitPgDdlFence implements CommunitiesStagingRoleSplitDdlFence {
@@ -304,7 +305,11 @@ export class CommunitiesStagingRoleSplitPgDdlFence implements CommunitiesStaging
         fencingToken,
         advisoryKey: COMMUNITIES_STAGING_ROLE_SPLIT_DDL_FENCE_ADVISORY_KEY,
       } as const;
-      this.entries.set(fencingToken, { session, backendPid: row.backend_pid });
+      this.entries.set(fencingToken, {
+        session,
+        backendPid: row.backend_pid,
+        unlockConfirmed: false,
+      });
       session = null;
       return lease;
     } catch (error) {
@@ -350,23 +355,23 @@ export class CommunitiesStagingRoleSplitPgDdlFence implements CommunitiesStaging
     assertLeaseShape(lease);
     const entry = this.entries.get(lease.fencingToken);
     if (entry === undefined || entry.backendPid !== lease.backendPid) fail('FENCE_RELEASE_FAILED');
-    this.entries.delete(lease.fencingToken);
-    let released: boolean;
-    try {
-      const result = await entry.session.query<{ readonly released: boolean }>(
-        'select pg_advisory_unlock($1::integer, $2::integer) as released',
-        [ADVISORY_KEY_1, ADVISORY_KEY_2],
-      );
-      released = result.rows.length === 1 && result.rows[0]?.released === true;
-    } catch {
-      released = false;
+    if (!entry.unlockConfirmed) {
+      try {
+        const result = await entry.session.query<{ readonly released: boolean }>(
+          'select pg_advisory_unlock($1::integer, $2::integer) as released',
+          [ADVISORY_KEY_1, ADVISORY_KEY_2],
+        );
+        entry.unlockConfirmed = result.rows.length === 1 && result.rows[0]?.released === true;
+      } catch {
+        // A later successful close conclusively releases all session-held advisory locks.
+      }
     }
     try {
       await entry.session.close();
     } catch {
-      released = false;
+      fail('FENCE_RELEASE_FAILED');
     }
-    if (!released) fail('FENCE_RELEASE_FAILED');
+    this.entries.delete(lease.fencingToken);
   }
 }
 

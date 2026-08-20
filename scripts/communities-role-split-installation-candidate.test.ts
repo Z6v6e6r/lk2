@@ -31,6 +31,7 @@ const sourceDefinitions = [
   ['deploy/jetson/communities-role-split-disabled-command.sh', 0o755],
   ['apps/migrator/src/communities-staging-role-split-canonical-host-adapter.ts', 0o644],
   ['apps/migrator/src/communities-staging-role-split-canonical-pg-collaborators.ts', 0o644],
+  ['apps/migrator/src/communities-staging-role-split-ddl-fence.ts', 0o644],
   ['apps/migrator/src/communities-staging-role-split-file-evidence-sink.ts', 0o644],
   ['apps/migrator/src/communities-staging-role-split-host-authorization-loader.ts', 0o644],
   ['apps/migrator/src/communities-staging-role-split-runner-adapter.ts', 0o644],
@@ -208,7 +209,25 @@ describe('communities role-split installation candidate', () => {
     expect(
       manifest.artifactFiles.every(({ artifactPath }) => artifactPath.startsWith('payload/')),
     ).toBe(true);
-    expect(manifest.artifactFiles).toHaveLength(12);
+    expect(manifest.artifactFiles).toHaveLength(13);
+    const ddlFenceArtifact = manifest.artifactFiles.find(
+      ({ sourcePath }) =>
+        sourcePath === 'apps/migrator/src/communities-staging-role-split-ddl-fence.ts',
+    );
+    expect(ddlFenceArtifact).toBeDefined();
+    expect(ddlFenceArtifact).toMatchObject({
+      sourcePath: 'apps/migrator/src/communities-staging-role-split-ddl-fence.ts',
+      artifactPath: 'payload/source/communities-staging-role-split-ddl-fence.ts',
+      installMode: '0444',
+      sourceGitMode: '100644',
+      targetPath: `/usr/local/libexec/phub/communities-role-split/candidates/${candidateSha}/source/communities-staging-role-split-ddl-fence.ts`,
+      action: 'INSTALL_NEW',
+      installOwner: 'root',
+      installGroup: 'root',
+      purpose: 'canonical runner DDL fence snapshot; non-runnable source artifact',
+    });
+    expect(typeof ddlFenceArtifact?.bytes).toBe('number');
+    expect(typeof ddlFenceArtifact?.sha256).toBe('string');
     expect(
       manifest.artifactFiles.slice(-3).map(({ sourcePath, artifactPath, installMode }) => ({
         sourcePath,
@@ -253,9 +272,17 @@ describe('communities role-split installation candidate', () => {
       'case "$count" in \'\' | *[!0-9]*) fail FILE_SET_INVALID ;; esac',
     );
     expect(hostInstaller).toContain(
-      '[ "$(walk_count "$target")" = 14 ] || fail INSTALLED_FILE_SET_INVALID',
+      '[ "$(walk_count "$candidate")" = 18 ] || fail FILE_SET_INVALID',
     );
-    expect(hostInstaller.match(/\[ "\$index" = 12 \] \|\| fail CONTROL_INVALID/gu)).toHaveLength(2);
+    expect(hostInstaller).toContain('read_exact_line CONTROL_INVALID artifactCount=13');
+    expect(hostInstaller).toContain('while [ "$index" -le 13 ]');
+    expect(hostInstaller).toContain(
+      '[ "$(walk_count "$target")" = 15 ] || fail INSTALLED_FILE_SET_INVALID',
+    );
+    expect(hostInstaller).toContain('[ "$index" = 13 ] || fail CONTROL_INVALID');
+    expect(hostInstaller).toMatch(
+      /\s*5\) printf '%s\\n' 'payload\/source\/communities-staging-role-split-ddl-fence\.ts\|source\/communities-staging-role-split-ddl-fence\.ts\|0444' ;;/u,
+    );
     expect(hostInstaller).not.toContain('[ "$(walk_count "$target")" = 11 ]');
     expect(hostInstaller).not.toContain('[ "$index" = 9 ]');
     expect(hostInstaller).not.toMatch(/\/usr\/bin\/awk[^\n]*\[\[:(?:space|digit):\]\]/u);

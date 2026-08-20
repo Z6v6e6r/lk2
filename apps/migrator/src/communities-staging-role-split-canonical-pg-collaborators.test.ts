@@ -14,7 +14,7 @@ import {
   CommunitiesStagingRoleSplitCloneOnlyConnectionFactory,
   type CommunitiesStagingRoleSplitCanonicalPgSession,
 } from './communities-staging-role-split-canonical-pg-collaborators.js';
-import { COMMUNITIES_STAGING_ROLE_SPLIT_DDL_FENCE_ADVISORY_KEY } from './communities-staging-role-split-runner-adapter.js';
+import { COMMUNITIES_STAGING_ROLE_SPLIT_DDL_FENCE_ADVISORY_KEY } from './communities-staging-role-split-ddl-fence.js';
 
 const sha = (value: string) => createHash('sha256').update(value, 'utf8').digest('hex');
 const request = {
@@ -131,6 +131,110 @@ describe('CommunitiesStagingRoleSplitPgDdlFence', () => {
       }),
     ).rejects.toMatchObject({ code: 'FENCE_UNAVAILABLE' });
     expect(current.session.close).toHaveBeenCalledOnce();
+  });
+
+  it('treats a successful close as conclusive even when advisory unlock reports false', async () => {
+    const current = sessionFixture([
+      [{ acquired: true, backend_pid: '4242', system_identifier: request.systemIdentifier }],
+      [{ released: false }],
+    ]);
+    const fence = new CommunitiesStagingRoleSplitPgDdlFence(
+      sha('fence'),
+      async () => current.session,
+    );
+    const lease = await fence.acquire({
+      requestSha256: sha('request'),
+      systemIdentifier: request.systemIdentifier,
+      timeoutMs: 10_000,
+      signal: new AbortController().signal,
+    });
+    await expect(fence.release(lease)).resolves.toBeUndefined();
+    await expect(fence.release(lease)).rejects.toMatchObject({ code: 'FENCE_RELEASE_FAILED' });
+    expect(current.session.close).toHaveBeenCalledOnce();
+  });
+
+  it('treats a successful close as conclusive when the advisory unlock query errors', async () => {
+    let queryCalls = 0;
+    const session = {
+      query: vi.fn(async () => {
+        queryCalls += 1;
+        if (queryCalls === 1)
+          return {
+            rows: [
+              { acquired: true, backend_pid: '4242', system_identifier: request.systemIdentifier },
+            ],
+          };
+        throw new Error('unlock response lost');
+      }),
+      close: vi.fn(async () => undefined),
+    } as unknown as CommunitiesStagingRoleSplitCanonicalPgSession;
+    const fence = new CommunitiesStagingRoleSplitPgDdlFence(sha('fence'), async () => session);
+    const lease = await fence.acquire({
+      requestSha256: sha('request'),
+      systemIdentifier: request.systemIdentifier,
+      timeoutMs: 10_000,
+      signal: new AbortController().signal,
+    });
+    await expect(fence.release(lease)).resolves.toBeUndefined();
+    expect(session.close).toHaveBeenCalledOnce();
+  });
+
+  it('retries both unlock and close only when neither outcome was confirmed', async () => {
+    let queryCalls = 0;
+    const close = vi
+      .fn<CommunitiesStagingRoleSplitCanonicalPgSession['close']>()
+      .mockRejectedValueOnce(new Error('close lost'))
+      .mockResolvedValueOnce(undefined);
+    const session = {
+      query: vi.fn(async () => {
+        queryCalls += 1;
+        if (queryCalls === 1)
+          return {
+            rows: [
+              { acquired: true, backend_pid: '4242', system_identifier: request.systemIdentifier },
+            ],
+          };
+        if (queryCalls === 2) throw new Error('unlock response lost');
+        return { rows: [{ released: true }] };
+      }),
+      close,
+    } as unknown as CommunitiesStagingRoleSplitCanonicalPgSession;
+    const fence = new CommunitiesStagingRoleSplitPgDdlFence(sha('fence'), async () => session);
+    const lease = await fence.acquire({
+      requestSha256: sha('request'),
+      systemIdentifier: request.systemIdentifier,
+      timeoutMs: 10_000,
+      signal: new AbortController().signal,
+    });
+    await expect(fence.release(lease)).rejects.toMatchObject({ code: 'FENCE_RELEASE_FAILED' });
+    await expect(fence.release(lease)).resolves.toBeUndefined();
+    expect(queryCalls).toBe(3);
+    expect(close).toHaveBeenCalledTimes(2);
+  });
+
+  it('retains an unlock-confirmed entry after close failure and retries close without re-unlocking', async () => {
+    const current = sessionFixture([
+      [{ acquired: true, backend_pid: '4242', system_identifier: request.systemIdentifier }],
+      [{ released: true }],
+    ]);
+    const close = current.session.close as ReturnType<typeof vi.fn>;
+    close.mockRejectedValueOnce(new Error('close lost')).mockResolvedValueOnce(undefined);
+    const fence = new CommunitiesStagingRoleSplitPgDdlFence(
+      sha('fence'),
+      async () => current.session,
+    );
+    const lease = await fence.acquire({
+      requestSha256: sha('request'),
+      systemIdentifier: request.systemIdentifier,
+      timeoutMs: 10_000,
+      signal: new AbortController().signal,
+    });
+    await expect(fence.release(lease)).rejects.toMatchObject({ code: 'FENCE_RELEASE_FAILED' });
+    await expect(fence.release(lease)).resolves.toBeUndefined();
+    expect(
+      current.statements.filter((statement) => statement.includes('pg_advisory_unlock')),
+    ).toHaveLength(1);
+    expect(close).toHaveBeenCalledTimes(2);
   });
 });
 
