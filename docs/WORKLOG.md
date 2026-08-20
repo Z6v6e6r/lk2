@@ -2,15 +2,20 @@
 
 ## 2026-08-20 — Communities role-split review-only installation candidate
 
-- Added a deterministic local builder/verifier that reads the exact ceremony payloads from an
+- Added a deterministic local builder/verifier that reads the exact ceremony artifacts from an
   independently supplied lk2 Git commit and emits only a private canonical candidate manifest,
-  digest receipt and mode-0600 payload copies.
-- Fixed the proposed install paths, ownership/modes, `phub-preflight` forced-command surface and
-  directory custody without adding an installer, SSH key, workflow, connection or staging action.
+  digest receipt and mode-0600 artifact copies.
+- Corrected the candidate to V2 after independent review: Git replacement refs are rejected and
+  replacement-object resolution is disabled before exact-commit bytes are read.
+- Removed all new install targets and the forced command. The preparation, legacy shell ceremony
+  and cleanup files are retained only as `REVIEW_ONLY` source evidence; the existing restore helper
+  remains `VERIFY_EXISTING` without overwrite authority.
 - Kept the candidate permanently `REVIEW_ONLY` and `installable=false`, with every authorization
-  false and nine external bindings explicitly unresolved rather than inferred.
-- Recorded the existing backup-root ownership conflict as a blocker; no directory ownership,
-  archive, state, database, role, ACL or host configuration is changed by this checkpoint.
+  false and twelve exact blockers, including the canonical partial-failure adapter and
+  ownership/ACL/RLS attestation.
+- Bound the incompatible producer and ceremony archive modes/owners explicitly and requires a
+  separately reviewed root-owned atomic custody handoff. No directory ownership, archive, state,
+  database, role, ACL or host configuration is changed by this checkpoint.
 
 ## 2026-08-20 — Communities real PG16 archive and inventory handoff gate
 

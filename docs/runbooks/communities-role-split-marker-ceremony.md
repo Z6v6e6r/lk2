@@ -203,31 +203,38 @@ staging/production database, role, key, request or inventory.
 
 `scripts/prepare-communities-role-split-installation-candidate.ts` builds and verifies a private,
 deterministic candidate directory from an independently supplied exact Git commit. It reads the
-four payload files from Git objects rather than the mutable worktree, requires the repository origin
+four artifact files from Git objects rather than the mutable worktree, disables Git replacement
+objects, rejects any replacement ref and requires the raw local repository origin
 to be exactly `https://github.com/Z6v6e6r/lk2.git`, refuses an existing output, and accepts only a
 private mode-0700 parent owned by the invoking user. Every candidate file is mode 0600 and
 single-link. Verification requires the same independently supplied commit and rejects changed,
 missing, additional, linked or non-canonical bytes.
 
-The candidate includes exact bytes and future target metadata for:
+The candidate includes exact bytes only as review/reference evidence:
 
-- the non-runnable preparation guard;
-- the V2 CREATE/RESUME ceremony command;
-- the quarantine-only cleanup command;
+- the non-runnable preparation guard as `REVIEW_ONLY`, with no target or install metadata;
+- the legacy shell CREATE/RESUME contour as `REVIEW_ONLY`, with no target or install metadata;
+- the quarantine-only cleanup source as `REVIEW_ONLY`, with no target or command exposure;
 - the existing backup/restore helper as `VERIFY_EXISTING`, without overwrite authority.
 
-Its manifest fixes the current command and directory surface, including principal and group
-`phub-preflight`, but deliberately declares `status=REVIEW_ONLY`, `installable=false` and every
-authorization flag false. It includes no public key, `authorized_keys` mutation, credential, DSN,
-role name selected from staging or workflow. Cleanup remains administrator-only reconciliation.
-The manifest also records the existing backup-root custody conflict instead of authorizing a chown
-or reuse of the current rehearsal archive directory.
+The shell ceremony source is not the canonical host adapter: it does not implement the complete
+durable partial-failure lifecycle or the required ownership/ACL/RLS attestation. Consequently the
+manifest contains no forced command (`command=null`, `commandIncluded=false`), does not expose the
+cleanup command and proposes no installation target for those three sources. It deliberately
+declares `status=REVIEW_ONLY`, `installable=false` and every authorization flag false. It includes
+no public key, `authorized_keys` mutation, credential, DSN, role name selected from staging or
+workflow.
 
-Nine bindings remain exact blockers in this version: clone-only connection factory, cluster DDL
-fence, dedicated forced-command public key, independent evidence sink, operator-selected source and
-clone connections, pinned `pg_restore` executable SHA-256, restore login role, server-side source
-write-denial attestation and staging known-hosts pin. Resolving them requires a new reviewed
-candidate version; editing this manifest or its digest receipt is rejected.
+Twelve bindings remain exact blockers in this version: backup custody handoff, canonical
+partial-failure host adapter, clone-only connection factory, cluster DDL fence, dedicated
+forced-command public key, independent evidence sink, operator-selected source and clone
+connections, ownership/ACL/RLS attestation, pinned `pg_restore` executable SHA-256, restore login
+role, server-side source write-denial attestation and staging known-hosts pin. The custody blocker is
+exact: the producer creates a `phub-preflight`-owned mode-0700 directory and mode-0600 archive,
+whereas the ceremony requires a root:`phub-preflight` mode-0750 directory and mode-0440 archive.
+Only a separately reviewed root-owned atomic handoff may bridge those contours; this candidate does
+not create, chown or reuse `/var/lib/phub-preflight/backups`. Resolving any blocker requires a new
+reviewed candidate version; editing this manifest or its digest receipt is rejected.
 
 After a checkpoint commit, build and verify only in a fresh private local directory:
 
@@ -243,7 +250,7 @@ npm run db:communities-role-split:installation-candidate -- verify \
   --candidate "$candidate_review_root/communities-role-split-installation-candidate-<checkpoint-sha>"
 ```
 
-Both success lines contain only the commit, manifest digest, payload-set digest and false
+Both success lines contain only the commit, manifest digest, artifact-set digest and false
 authorization fields. This command has no installer, SSH, Docker, PostgreSQL, network or staging
 operation. An `.incomplete` directory is retained after an interrupted build for manual inspection;
 the tool never deletes or replaces it automatically.
@@ -251,12 +258,14 @@ the tool never deletes or replaces it automatically.
 ## Required before installation or execution
 
 1. Review the exact review-only candidate, fixed request/state/evidence custody, forced-command key
-   and operator-selected connections. The V1 manifest is explicitly not installable; repository or
+   and operator-selected connections. The V2 manifest is explicitly not installable; repository or
    candidate presence grants no installation or execution authority.
-2. Bind the reviewed ownership-and-ACL-preserving restore command to the exact installed ceremony
-   candidate only after review of the fixed clone-only connection factory, descriptor custody and
-   server-enforced source denial for the restore identity. Do not reuse a generic
-   `--no-owner --no-acl` verifier or infer installation authority from the local disposable adapter.
+2. Implement and review a canonical host adapter with the durable lifecycle
+   `CANDIDATE -> OWNED -> RESTORE_PENDING -> RESTORED -> VERIFIED -> MARKER_PENDING -> MARKED -> EVIDENCED`,
+   authoritative response-loss reconciliation, evidence resume, clone-only connection factory,
+   server-enforced source denial and exact ownership/ACL/RLS attestation. Bind a forced command only
+   to that future adapter. Do not install the review-only shell contour or reuse a generic
+   `--no-owner --no-acl` verifier.
 3. Preserve the completed disposable PostgreSQL 16 response-loss, cleanup-failure and
    evidence-publication matrix when reviewing the exact installation adapter. The local matrix
    and custom-archive gate prove the successful synthetic `pg_restore` path, catalog/RLS, exact

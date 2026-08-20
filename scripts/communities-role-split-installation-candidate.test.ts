@@ -107,38 +107,87 @@ describe('communities role-split installation candidate', () => {
     ) as CommunitiesRoleSplitInstallationCandidate;
     expect(manifest.status).toBe('REVIEW_ONLY');
     expect(manifest.installable).toBe(false);
+    expect(manifest.reasonCode).toBe('CODE_AND_EXTERNAL_BINDINGS_REQUIRED');
     expect(Object.values(manifest.authorizes)).toEqual(Array(11).fill(false));
     expect(manifest.forcedCommandSurface).toEqual({
       principal: 'phub-preflight',
       options: ['restrict'],
-      command: '/usr/local/libexec/phub/run-communities-role-split-restore-marker-ceremony.sh',
+      command: null,
+      commandIncluded: false,
+      reviewedSourcePath: 'deploy/jetson/run-communities-role-split-restore-marker-ceremony.sh',
       publicKeyIncluded: false,
       authorizedKeysMutationIncluded: false,
-      status: 'NOT_PROVISIONED',
-      cleanupCommandExposure: 'ADMIN_RECONCILIATION_ONLY',
+      status: 'BLOCKED_PENDING_CANONICAL_HOST_ADAPTER',
+      cleanupCommandExposure: 'NOT_EXPOSED',
+    });
+    expect(manifest.knownCustodyConflict).toEqual({
+      code: 'BACKUP_CUSTODY_HANDOFF_REQUIRED',
+      producer: {
+        principal: 'phub-preflight',
+        directoryOwner: 'phub-preflight',
+        directoryMode: '0700',
+        archiveOwner: 'phub-preflight',
+        archiveMode: '0600',
+      },
+      ceremony: {
+        directoryOwner: 'root',
+        directoryGroup: 'phub-preflight',
+        directoryMode: '0750',
+        archiveOwner: 'root',
+        archiveGroup: 'phub-preflight',
+        archiveMode: '0440',
+      },
+      requiredResolution: 'SEPARATE_ROOT_OWNED_ATOMIC_HANDOFF',
+      resolutionIncluded: false,
     });
     expect(manifest.unresolvedBindings.map(({ code }) => code)).toEqual([
+      'BACKUP_CUSTODY_HANDOFF',
+      'CANONICAL_PARTIAL_FAILURE_HOST_ADAPTER',
       'CLONE_ONLY_CONNECTION_FACTORY',
       'CLUSTER_DDL_FENCE',
       'DEDICATED_FORCED_COMMAND_PUBLIC_KEY',
       'INDEPENDENT_EVIDENCE_SINK',
       'OPERATOR_SELECTED_SOURCE_AND_CLONE_CONNECTIONS',
+      'OWNERSHIP_ACL_ATTESTATION',
       'PG_RESTORE_EXECUTABLE_SHA256',
       'RESTORE_LOGIN_ROLE',
       'SOURCE_WRITE_DENIAL_ATTESTATION',
       'STAGING_KNOWN_HOSTS_PIN',
     ]);
-    expect(manifest.payloadFiles.map(({ action }) => action)).toEqual([
-      'INSTALL_NEW',
-      'INSTALL_NEW',
-      'INSTALL_NEW',
+    expect(manifest.artifactFiles.map(({ action }) => action)).toEqual([
+      'REVIEW_ONLY',
+      'REVIEW_ONLY',
+      'REVIEW_ONLY',
       'VERIFY_EXISTING',
     ]);
+    expect(
+      manifest.artifactFiles
+        .filter(({ action }) => action === 'REVIEW_ONLY')
+        .map(({ targetPath, installOwner, installGroup, installMode }) => ({
+          targetPath,
+          installOwner,
+          installGroup,
+          installMode,
+        })),
+    ).toEqual(
+      Array(3).fill({
+        targetPath: null,
+        installOwner: null,
+        installGroup: null,
+        installMode: null,
+      }),
+    );
+    expect(
+      manifest.artifactFiles.some(({ artifactPath }) => artifactPath.startsWith('payload/')),
+    ).toBe(false);
+    expect(manifest.directories.map(({ path }) => path)).not.toContain(
+      '/var/lib/phub-preflight/backups',
+    );
     expect(
       readFileSync(
         join(
           first,
-          'payload/usr/local/libexec/phub/run-communities-role-split-restore-marker-ceremony.sh',
+          'review-source/deploy/jetson/run-communities-role-split-restore-marker-ceremony.sh',
         ),
         'utf8',
       ),
@@ -162,7 +211,7 @@ describe('communities role-split installation candidate', () => {
     });
     const payload = join(
       candidate,
-      'payload/usr/local/libexec/phub/run-communities-role-split-restore-marker-ceremony.sh',
+      'review-source/deploy/jetson/run-communities-role-split-restore-marker-ceremony.sh',
     );
     writeFileSync(payload, '#!/bin/sh\nexit 0\n', { mode: 0o600 });
     expect(() =>
@@ -295,5 +344,26 @@ describe('communities role-split installation candidate', () => {
         outputPath: candidatePath(parent, candidateSha),
       }),
     ).toThrow('COMMUNITIES_ROLE_SPLIT_INSTALLATION_CANDIDATE_REPOSITORY_ORIGIN_INVALID');
+  });
+
+  it('rejects Git replacement refs before reading the pinned commit tree', () => {
+    writeFileSync(
+      join(repository, sourcePaths[1]),
+      '#!/bin/sh\n# replacement-only bytes\nexit 0\n',
+      { mode: 0o755 },
+    );
+    git(repository, ['add', sourcePaths[1]]);
+    git(repository, ['commit', '--quiet', '-m', 'replacement payload']);
+    const replacementSha = git(repository, ['rev-parse', 'HEAD']);
+    git(repository, ['replace', candidateSha, replacementSha]);
+    const parent = privateParent('phub-role-split-installation-replace-');
+
+    expect(() =>
+      buildCommunitiesRoleSplitInstallationCandidate({
+        repositoryRoot: repository,
+        candidateSha,
+        outputPath: candidatePath(parent, candidateSha),
+      }),
+    ).toThrow('COMMUNITIES_ROLE_SPLIT_INSTALLATION_CANDIDATE_GIT_REPLACE_REFS_FORBIDDEN');
   });
 });
