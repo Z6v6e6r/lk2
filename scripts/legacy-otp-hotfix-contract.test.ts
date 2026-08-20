@@ -160,8 +160,23 @@ if test "$1" = inspect; then
   esac
   exit 0
 fi
-if test "$1" = image && test "$2" = inspect; then exit 0; fi
+if test "$1" = image && test "$2" = inspect; then
+  case " $* " in *' --format {{.Architecture}} '*) printf 'arm64\n' ;; esac
+  exit 0
+fi
 if test "$1" = pull; then exit 0; fi
+if test "$1" = run; then
+  service=''
+  case " $* " in
+    *'/phub-api@'*) service=api ;;
+    *'/phub-worker@'*) service=worker ;;
+    *'/phub-realtime@'*) service=realtime ;;
+    *'/phub-migrator@'*) service=migrator ;;
+  esac
+  test -z "\${PHUB_FAKE_IMPORT_PROBES:-}" || printf '%s|%s\n' "$service" "$*" >> "$PHUB_FAKE_IMPORT_PROBES"
+  test "\${PHUB_FAKE_IMPORT_FAILURE_SERVICE:-}" != "$service" || exit 93
+  exit 0
+fi
 if test "$1" = exec; then
   id=$2
   service=\${id%-id}
@@ -231,7 +246,16 @@ printf 'fixture 20000000 1 19999999 1%% /fixture\\n'
   executable(join(fakeBin, 'sync'), '#!/bin/sh\nexit 0\n');
   executable(
     join(fakeBin, 'timeout'),
-    '#!/bin/sh\nset -eu\ntest "$1" = --signal=TERM\nshift\ntest "$1" = --kill-after=1s\nshift\ntest "$1" = 5s\nshift\nexec "$@"\n',
+    `#!/bin/sh
+set -eu
+test "$1" = --signal=TERM
+shift
+case "$1" in --kill-after=1s | --kill-after=5s) ;; *) exit 98 ;; esac
+shift
+case "$1" in 5s | 60s) ;; *) exit 98 ;; esac
+shift
+exec "$@"
+`,
   );
   executable(
     join(fakeBin, 'date'),
@@ -329,26 +353,67 @@ describe('legacy OTP hotfix canary release contract', () => {
     }
   });
 
-  it('verifies the immutable two-file child of e308 and protects release inputs', () => {
+  it('verifies the immutable eight-file child of e308 and protects release inputs', () => {
     expect(verifier).toContain('supported_active_release=e308181da5222645d9a87d03642923c6841be8d1');
     expect(verifier).toContain(
-      'supported_patch_sha256=1ce854648f92b6dddf2d9105ad75197b4c6890da78a949245591767d4945b594',
+      'supported_patch_sha256=81e5618fe7222f02cef45a843b49dbaa2799c132c4a25a90957bc912fdde90d0',
     );
     expect(verifier).toContain(
       'test "$(printf \'%s\\n\' "$parent_line" | awk \'{ print NF }\')" -eq 2',
     );
     expect(verifier).toContain('packages/viva-adapter/src/identity.test.ts');
     expect(verifier).toContain('packages/viva-adapter/src/identity.ts');
+    expect(verifier).toContain('scripts/verify-production-workspace-imports.js');
+    expect(verifier).toContain('scripts/verify-production-workspace-imports.test.ts');
+    for (const service of ['api', 'worker', 'realtime', 'migrator']) {
+      expect(verifier).toContain(`apps/${service}/Dockerfile`);
+      expect(verifier).toContain(`node scripts/verify-production-workspace-imports.js $service`);
+    }
     for (const path of [
       'packages/database/migrations',
       'contracts',
       'package-lock.json',
       'deploy/compose.staging.yaml',
-      'apps/*/Dockerfile',
     ]) {
       expect(verifier).toContain(path);
     }
+    expect(verifier).toContain('candidate changed-path set differs from the eight-file allowlist');
+    expect(verifier).toContain('image copies builder node_modules');
+    expect(verifier).toContain('image prunes a copied dependency tree');
     expect(checkout).toContain('checkout-legacy-runtime-secret-bootstrap-candidate.sh');
+  });
+
+  it('gates exact ARM64 runtime imports before staging credentials and before host mutation', () => {
+    const gate = workflow.indexOf('  runtime-image-gate:\n');
+    const operate = workflow.indexOf('  operate:\n');
+    const publish = workflow.indexOf('Publish the durable controller bundle without executing it');
+    expect(gate).toBeGreaterThan(0);
+    expect(gate).toBeLessThan(operate);
+    expect(operate).toBeLessThan(publish);
+    const gateBody = workflow.slice(gate, operate);
+    expect(gateBody).toContain('permissions:\n      contents: read\n      packages: read');
+    expect(gateBody).not.toContain('environment: staging');
+    expect(gateBody).not.toContain('TAILSCALE_AUTHKEY');
+    expect(gateBody).not.toContain('STAGING_DEPLOY_KEY');
+    expect(gateBody).toContain('docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8');
+    for (const token of [
+      '--platform linux/arm64',
+      '--pull=never',
+      '--network none',
+      '--read-only',
+      '--user 1001:1001',
+      '--cap-drop ALL',
+      '--security-opt no-new-privileges:true',
+      '--pids-limit 64',
+      '--memory 256m',
+      '--cpus 1',
+    ]) {
+      expect(gateBody).toContain(token);
+    }
+    expect(gateBody).toContain('docker logout ghcr.io');
+    expect(workflow).toContain('needs: [validate-source, build, runtime-image-gate]');
+    expect(workflow).toContain("needs.runtime-image-gate.result == 'success'");
+    expect(workflow).toContain("needs.runtime-image-gate.result == 'skipped'");
   });
 
   it('builds one coherent five-image release and never invokes the migrator', () => {
@@ -461,16 +526,62 @@ describe('legacy OTP hotfix canary release contract', () => {
   });
 
   it('takes readable database and application backups before the marker and never restores DB', () => {
+    const importGate = controller.lastIndexOf('verify_candidate_runtime_imports "$service"');
     const appBackup = controller.indexOf('BACKUP_STAGING_RELEASE');
     const databaseBackup = controller.indexOf('pg_dump -U "$POSTGRES_USER"');
     const marker = controller.indexOf('mv "$marker_next" "$marker"');
-    expect(appBackup).toBeGreaterThan(0);
+    expect(importGate).toBeGreaterThan(0);
+    expect(appBackup).toBeGreaterThan(importGate);
     expect(databaseBackup).toBeGreaterThan(appBackup);
     expect(databaseBackup).toBeLessThan(marker);
     expect(controller).toContain('pg_restore --list');
     expect(controller).not.toContain('pg_restore --clean');
     expect(controller).not.toContain('psql <');
   });
+
+  it('checks all four candidate Node images offline and rejects failures before marker or backup', () => {
+    const fixture = prepareControllerFixture();
+    const probeLog = join(fixture.root, 'candidate-import-probes.log');
+    try {
+      const result = runController(fixture, 'start', {
+        PHUB_FAKE_IMPORT_PROBES: probeLog,
+        PHUB_FAKE_IMPORT_FAILURE_SERVICE: 'worker',
+      });
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain('worker candidate runtime imports failed');
+      expect(result.stderr).not.toContain('ERR_MODULE_NOT_FOUND');
+      expect(
+        readFileSync(probeLog, 'utf8')
+          .split('\n')
+          .filter(Boolean)
+          .map((line) => line.split('|')[0]),
+      ).toEqual(['api', 'worker']);
+      const probeArguments = readFileSync(probeLog, 'utf8');
+      for (const token of [
+        '--rm',
+        '--pull=never',
+        '--network none',
+        '--read-only',
+        '--user 1001:1001',
+        '--cap-drop ALL',
+        '--security-opt no-new-privileges:true',
+        '--pids-limit 64',
+        '--memory 256m',
+        '--cpus 1',
+      ]) {
+        expect(probeArguments).toContain(token);
+      }
+      expect(readdirSync(join(fixture.appRoot, 'backups', 'releases'))).toEqual([]);
+      expect(() =>
+        readFileSync(join(fixture.appRoot, '.legacy-otp-hotfix.transition.env')),
+      ).toThrow();
+      expect(readFileSync(join(fixture.appRoot, 'release.env'), 'utf8')).toContain(
+        `RELEASE=${activeRelease}`,
+      );
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  }, 15_000);
 
   it('starts realtime before API and blocks every other staging workflow while unresolved', () => {
     const startFunction = controller.slice(

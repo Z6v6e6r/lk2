@@ -265,10 +265,12 @@ reprovisioning. `RECOVER` never rotates or requires the smoke credential.
 If the exact active `e308181da5222645d9a87d03642923c6841be8d1` API cannot complete the
 Viva client-realm OTP exchange because it sends E.164 `+` on the provider wire, use only the
 dedicated `Legacy staging OTP hotfix canary` workflow. Its candidate must be a reviewed
-single-parent child of e308 whose binary diff changes only
-`packages/viva-adapter/src/identity.ts` and its test. The candidate keeps E.164 internally and
-removes the leading `+` only in the Viva SMS and token requests. Migrations, contracts, lockfiles,
-Dockerfiles and staging Compose must remain byte-identical to e308.
+single-parent child of e308 whose binary diff changes only the two Viva identity files, the four
+Node production Dockerfiles, and the production-workspace import probe with its test. The candidate
+keeps E.164 internally and removes the leading `+` only in the Viva SMS and token requests. Its Node
+images use a clean production install from the exact lockfile instead of copying and pruning
+builder `node_modules`; migrations, contracts, lockfiles, the web Dockerfile and staging Compose
+must remain byte-identical to e308.
 
 This is not an API overlay. The workflow builds all five immutable ARM64 images from the same
 candidate SHA, installs web/API/worker/realtime as one coherent temporary release, and builds but
@@ -278,6 +280,14 @@ application rollback snapshot and creates a readable
 custom-format PostgreSQL archive. After the durable marker, it stops all four runtime services,
 atomically installs only the candidate `release.env`, and starts realtime, API, worker and web in
 that order. Nginx, Caddy and the database are not recreated or migrated.
+
+Before any staging Environment, SSH or host write is reachable, a separate secret-free CI job
+pulls the exact pushed ARM64 API, worker, realtime and migrator digests and runs their production
+workspace import probes with no network, mounts or environment injection, a read-only root,
+non-root UID, dropped capabilities and bounded CPU, memory, PIDs and time. The host repeats the same
+offline check after pulling the exact digests and before application/database backup, marker
+publication or runtime stop. Any missing workspace, external or native production dependency fails
+closed without changing the serving e308 runtime.
 
 If a service does not become healthy within its bounded readiness window, the controller emits one
 redacted `service_readiness_diagnostic` record before rollback. It contains only the service name,

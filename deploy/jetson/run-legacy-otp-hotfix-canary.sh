@@ -144,6 +144,43 @@ image_ref_from() {
   printf '%s/phub-%s@%s' "$(env_value "$release_file" REGISTRY)" "$service" "$(env_value "$release_file" "${upper}_IMAGE_DIGEST")"
 }
 
+verify_candidate_runtime_imports() {
+  service=$1
+  case "$service" in api | worker | realtime | migrator) ;; *) fail 'candidate import service is unsupported' ;; esac
+  ref=$(image_ref_from "$candidate_release_file" "$service")
+  probe_name="phub-legacy-otp-import-$workflow_run_id-$workflow_run_attempt-$service"
+  test "$(docker image inspect --format '{{.Architecture}}' "$ref" 2>/dev/null)" = arm64 ||
+    fail "$service candidate image architecture is not arm64"
+  probe_status=0
+  if timeout --signal=TERM --kill-after=5s 60s docker run --rm \
+    --name "$probe_name" \
+    --pull=never \
+    --network none \
+    --read-only \
+    --user 1001:1001 \
+    --cap-drop ALL \
+    --security-opt no-new-privileges:true \
+    --pids-limit 64 \
+    --memory 256m \
+    --cpus 1 \
+    --entrypoint node \
+    "$ref" \
+    scripts/verify-production-workspace-imports.js "$service" >/dev/null 2>&1; then
+    :
+  else
+    probe_status=$?
+  fi
+  if ! leftover=$(bounded_docker ps -a --filter "name=^/$probe_name$" --format '{{.ID}}' 2>/dev/null); then
+    fail "$service candidate import cleanup attestation failed"
+  fi
+  if test -n "$leftover"; then
+    bounded_docker rm -f "$probe_name" >/dev/null 2>&1 || fail "$service candidate import cleanup failed"
+  fi
+  test "$probe_status" -eq 0 || fail "$service candidate runtime imports failed"
+  test -z "$leftover" || fail "$service candidate import container required cleanup"
+  printf '%s\n' "legacy_otp_hotfix candidate_runtime_imports service=$service status=passed"
+}
+
 project_container_id() {
   service=$1
   ids=$(docker ps --filter label=com.docker.compose.project=phub-staging --filter "label=com.docker.compose.service=$service" --format '{{.ID}}')
@@ -499,6 +536,9 @@ for service in web api worker realtime migrator; do
   ref=$(image_ref_from "$candidate_release_file" "$service")
   printf '%s\n' "$candidate_images" | grep -Fxq "$ref" || fail "candidate Compose does not bind $service digest"
   docker pull "$ref" >/dev/null
+done
+for service in api worker realtime migrator; do
+  verify_candidate_runtime_imports "$service"
 done
 require_headroom_kib 2097152
 

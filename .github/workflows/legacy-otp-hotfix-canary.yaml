@@ -178,15 +178,76 @@ jobs:
           path: digests/${{ matrix.service }}
           retention-days: 30
 
-  operate:
+  runtime-image-gate:
     needs: [validate-source, build]
+    if: ${{ needs.validate-source.outputs.start == 'true' && needs.build.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: legacy-otp-digest-*
+          path: digests
+          merge-multiple: true
+      - uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+        with:
+          platforms: arm64
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Verify exact ARM64 runtime images without network or secrets
+        run: |
+          set -euo pipefail
+          for service in api worker realtime migrator; do
+            digest=$(cat "digests/$service")
+            printf '%s' "$digest" | grep -Eq '^sha256:[0-9a-f]{64}$'
+            ref="ghcr.io/z6v6e6r/phub-$service@$digest"
+            docker pull "$ref" >/dev/null
+          done
+          docker logout ghcr.io >/dev/null
+          for service in api worker realtime migrator; do
+            digest=$(cat "digests/$service")
+            ref="ghcr.io/z6v6e6r/phub-$service@$digest"
+            if ! result=$(timeout --signal=TERM --kill-after=5s 60s docker run --rm \
+              --platform linux/arm64 \
+              --pull=never \
+              --network none \
+              --read-only \
+              --user 1001:1001 \
+              --cap-drop ALL \
+              --security-opt no-new-privileges:true \
+              --pids-limit 64 \
+              --memory 256m \
+              --cpus 1 \
+              --entrypoint node \
+              "$ref" scripts/verify-production-workspace-imports.js "$service" 2>/dev/null); then
+              echo "::error::Exact $service runtime import probe failed"
+              exit 1
+            fi
+            test "$result" = "production_workspace_imports application=$service status=passed"
+          done
+
+  operate:
+    needs: [validate-source, build, runtime-image-gate]
     if: >-
       ${{
         always() &&
         needs.validate-source.result == 'success' &&
         (
-          (needs.validate-source.outputs.start == 'true' && needs.build.result == 'success') ||
-          (needs.validate-source.outputs.start == 'false' && needs.build.result == 'skipped')
+          (
+            needs.validate-source.outputs.start == 'true' &&
+            needs.build.result == 'success' &&
+            needs.runtime-image-gate.result == 'success'
+          ) ||
+          (
+            needs.validate-source.outputs.start == 'false' &&
+            needs.build.result == 'skipped' &&
+            needs.runtime-image-gate.result == 'skipped'
+          )
         )
       }}
     runs-on: ubuntu-latest
