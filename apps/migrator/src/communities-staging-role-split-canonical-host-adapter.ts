@@ -23,7 +23,7 @@ import {
   COMMUNITIES_STAGING_ROLE_SPLIT_DDL_FENCE_ADVISORY_KEY,
   type CommunitiesStagingRoleSplitDdlFence,
   type CommunitiesStagingRoleSplitDdlFenceLease,
-} from './communities-staging-role-split-runner-adapter.js';
+} from './communities-staging-role-split-ddl-fence.js';
 
 export interface CommunitiesStagingRoleSplitCanonicalMarkerWriter {
   readonly subjectSha256: string;
@@ -158,7 +158,15 @@ function assertDdlLease(lease: CommunitiesStagingRoleSplitDdlFenceLease): void {
 }
 
 export class CommunitiesStagingRoleSplitCanonicalHostAdapter implements CommunitiesStagingRoleSplitMarkerCeremonyHost {
-  private readonly leases = new Map<string, CommunitiesStagingRoleSplitDdlFenceLease>();
+  private readonly leases = new Map<
+    string,
+    {
+      readonly ddlLease: CommunitiesStagingRoleSplitDdlFenceLease;
+      delegateReleaseAttempted: boolean;
+      delegateReleased: boolean;
+      delegateReleaseError: Error | null;
+    }
+  >();
 
   constructor(private readonly config: CommunitiesStagingRoleSplitCanonicalHostAdapterConfig) {
     assertConfig(config);
@@ -167,13 +175,13 @@ export class CommunitiesStagingRoleSplitCanonicalHostAdapter implements Communit
   private ddlLease(
     lease: CommunitiesStagingRoleSplitMarkerCeremonyLease,
   ): CommunitiesStagingRoleSplitDdlFenceLease {
-    const ddlLease = this.leases.get(lease.fencingToken);
+    const entry = this.leases.get(lease.fencingToken);
     if (
-      ddlLease === undefined ||
+      entry === undefined ||
       lease.requestSha256 !== this.config.authorization.markerRequestSha256
     )
       fail('FENCE_LOST');
-    return ddlLease;
+    return entry.ddlLease;
   }
 
   /**
@@ -311,26 +319,52 @@ export class CommunitiesStagingRoleSplitCanonicalHostAdapter implements Communit
       await this.config.fence.release(ddlLease).catch(() => undefined);
       fail('FENCE_UNAVAILABLE');
     }
-    this.leases.set(lease.fencingToken, ddlLease);
+    this.leases.set(lease.fencingToken, {
+      ddlLease,
+      delegateReleaseAttempted: false,
+      delegateReleased: false,
+      delegateReleaseError: null,
+    });
     return lease;
   }
 
   async releaseLease(lease: CommunitiesStagingRoleSplitMarkerCeremonyLease): Promise<void> {
-    const ddlLease = this.ddlLease(lease);
-    let primary: unknown = null;
+    const entry = this.leases.get(lease.fencingToken);
+    if (
+      entry === undefined ||
+      lease.requestSha256 !== this.config.authorization.markerRequestSha256
+    )
+      fail('FENCE_LOST');
+    if (!entry.delegateReleaseAttempted) {
+      await this.config.fence.assertHeld(entry.ddlLease).catch(() => fail('FENCE_LOST'));
+      entry.delegateReleaseAttempted = true;
+      try {
+        await this.config.delegate.releaseLease(lease);
+        entry.delegateReleased = true;
+      } catch (error) {
+        entry.delegateReleaseError =
+          error instanceof Error
+            ? error
+            : new CommunitiesStagingRoleSplitCanonicalHostAdapterError('FENCE_LOST');
+      }
+      if (entry.delegateReleaseError !== null) {
+        try {
+          await this.config.fence.release(entry.ddlLease);
+        } catch {
+          fail('FENCE_RELEASE_FAILED');
+        }
+        this.leases.delete(lease.fencingToken);
+        throw entry.delegateReleaseError;
+      }
+      await this.config.fence.assertHeld(entry.ddlLease).catch(() => fail('FENCE_LOST'));
+    }
     try {
-      await this.fenced(lease, () => this.config.delegate.releaseLease(lease));
-    } catch (error) {
-      primary = error;
+      await this.config.fence.release(entry.ddlLease);
+    } catch {
+      fail('FENCE_RELEASE_FAILED');
     }
     this.leases.delete(lease.fencingToken);
-    try {
-      await this.config.fence.release(ddlLease);
-    } catch {
-      if (primary === null) fail('FENCE_RELEASE_FAILED');
-    }
-    if (primary instanceof Error) throw primary;
-    if (primary !== null) fail('FENCE_LOST');
+    if (entry.delegateReleaseError !== null) throw entry.delegateReleaseError;
   }
 
   loadState(lease: CommunitiesStagingRoleSplitMarkerCeremonyLease) {

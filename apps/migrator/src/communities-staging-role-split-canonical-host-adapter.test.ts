@@ -27,7 +27,7 @@ import {
 } from './communities-staging-role-split-canonical-host-adapter.js';
 import type { CommunitiesStagingRoleSplitMarkerCeremonyHost } from './communities-staging-role-split-marker-ceremony.js';
 import { runCommunitiesStagingRoleSplitMarkerCeremony } from './communities-staging-role-split-marker-ceremony.js';
-import { COMMUNITIES_STAGING_ROLE_SPLIT_DDL_FENCE_ADVISORY_KEY } from './communities-staging-role-split-runner-adapter.js';
+import { COMMUNITIES_STAGING_ROLE_SPLIT_DDL_FENCE_ADVISORY_KEY } from './communities-staging-role-split-ddl-fence.js';
 
 const sha = (value: string) => createHash('sha256').update(value, 'utf8').digest('hex');
 const request = {
@@ -417,6 +417,74 @@ describe('CommunitiesStagingRoleSplitCanonicalHostAdapter', () => {
     await expect(current.adapter.ddlFenceLeaseForRestore(first)).resolves.toBe(current.ddlLease);
     await current.adapter.releaseLease(first);
     expect(current.fence.release).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['after-effect response loss', 'before-effect failure'] as const)(
+    'does not replay delegate release after a %s',
+    async (outcome) => {
+      const current = fixture();
+      const lease = await current.adapter.acquireLease(authorization.markerRequestSha256);
+      const delegateError = new Error('delegate release lost');
+      let delegateState = 'present';
+      current.delegate.releaseLease.mockImplementationOnce(async () => {
+        if (outcome === 'after-effect response loss') delegateState = 'removed';
+        throw delegateError;
+      });
+      await expect(current.adapter.releaseLease(lease)).rejects.toBe(delegateError);
+      expect(delegateState).toBe(outcome === 'after-effect response loss' ? 'removed' : 'present');
+      expect(current.delegate.releaseLease).toHaveBeenCalledOnce();
+      expect(current.fence.release).toHaveBeenCalledOnce();
+      await expect(current.adapter.releaseLease(lease)).rejects.toMatchObject({
+        code: 'FENCE_LOST',
+      });
+      expect(current.delegate.releaseLease).toHaveBeenCalledOnce();
+    },
+  );
+
+  it('retries DDL cleanup without replaying an ambiguous delegate release', async () => {
+    const current = fixture();
+    const lease = await current.adapter.acquireLease(authorization.markerRequestSha256);
+    const delegateError = new Error('delegate response lost after unlink');
+    current.delegate.releaseLease.mockRejectedValueOnce(delegateError);
+    current.fence.release.mockRejectedValueOnce(new Error('fence release lost'));
+    await expect(current.adapter.releaseLease(lease)).rejects.toMatchObject({
+      code: 'FENCE_RELEASE_FAILED',
+    });
+    expect(current.delegate.releaseLease).toHaveBeenCalledOnce();
+    expect(current.fence.release).toHaveBeenCalledOnce();
+    await expect(current.adapter.releaseLease(lease)).rejects.toBe(delegateError);
+    expect(current.delegate.releaseLease).toHaveBeenCalledOnce();
+    expect(current.fence.release).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries the DDL release without replaying a completed delegate release', async () => {
+    const current = fixture();
+    const lease = await current.adapter.acquireLease(authorization.markerRequestSha256);
+    current.fence.release.mockRejectedValueOnce(new Error('fence release lost'));
+    await expect(current.adapter.releaseLease(lease)).rejects.toMatchObject({
+      code: 'FENCE_RELEASE_FAILED',
+    });
+    await expect(current.adapter.ddlFenceLeaseForRestore(lease)).resolves.toBe(current.ddlLease);
+    await expect(current.adapter.releaseLease(lease)).resolves.toBeUndefined();
+    expect(current.delegate.releaseLease).toHaveBeenCalledOnce();
+    expect(current.fence.release).toHaveBeenCalledTimes(2);
+    await expect(current.adapter.ddlFenceLeaseForRestore(lease)).rejects.toMatchObject({
+      code: 'FENCE_LOST',
+    });
+  });
+
+  it('retains a completed delegate release when its post-release fence assertion is lost', async () => {
+    const current = fixture();
+    const lease = await current.adapter.acquireLease(authorization.markerRequestSha256);
+    current.fence.assertHeld
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error('lost'));
+    await expect(current.adapter.releaseLease(lease)).rejects.toMatchObject({ code: 'FENCE_LOST' });
+    expect(current.delegate.releaseLease).toHaveBeenCalledOnce();
+    expect(current.fence.release).not.toHaveBeenCalled();
+    await expect(current.adapter.releaseLease(lease)).resolves.toBeUndefined();
+    expect(current.delegate.releaseLease).toHaveBeenCalledOnce();
+    expect(current.fence.release).toHaveBeenCalledOnce();
   });
 
   it('recovers marker and evidence response loss through canonical readback without retrying writes', async () => {

@@ -47,6 +47,7 @@ const expectedArtifacts = [
       'communities-staging-role-split-canonical-pg-collaborators.ts',
       'canonical-pg-collaborators.ts',
     ],
+    ['communities-staging-role-split-ddl-fence.ts', 'communities-staging-role-split-ddl-fence.ts'],
     ['communities-staging-role-split-file-evidence-sink.ts', null],
     ['communities-staging-role-split-host-authorization-loader.ts', null],
     ['communities-staging-role-split-runner-adapter.ts', null],

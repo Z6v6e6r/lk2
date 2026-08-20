@@ -142,6 +142,17 @@ const fileDefinitions: readonly CandidateArtifactDefinition[] = [
     installMode: '0444',
     purpose: 'clone-only connection, DDL fence and marker-writer source snapshot',
   },
+  {
+    sourcePath: 'apps/migrator/src/communities-staging-role-split-ddl-fence.ts',
+    sourceGitMode: '100644',
+    artifactPath: 'payload/source/communities-staging-role-split-ddl-fence.ts',
+    targetRelativePath: 'source/communities-staging-role-split-ddl-fence.ts',
+    action: 'INSTALL_NEW',
+    installOwner: 'root',
+    installGroup: 'root',
+    installMode: '0444',
+    purpose: 'canonical runner DDL fence snapshot; non-runnable source artifact',
+  },
   ...[
     'communities-staging-role-split-file-evidence-sink.ts',
     'communities-staging-role-split-host-authorization-loader.ts',
