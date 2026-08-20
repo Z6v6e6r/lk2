@@ -51,6 +51,7 @@ export * from './communities-role-split-acceptance.js';
 export * from './communities-staging-role-split-inventory.js';
 export * from './communities-staging-role-split-marker-ceremony.js';
 export * from './communities-staging-role-split-restore-execution-descriptor.js';
+export * from './communities-staging-role-split-host-authorization.js';
 export * from './eligibility-payment-acl-matrix.js';
 export * from './messaging-repository.js';
 export * from './profile-privacy-repository.js';

@@ -1,16 +1,25 @@
+/* eslint-disable @typescript-eslint/require-await */
 import { createHash } from 'node:crypto';
 
 import {
   COMMUNITIES_STAGING_ROLE_SPLIT_CLONE_MANIFEST_SHA256,
+  COMMUNITIES_STAGING_ROLE_SPLIT_HOST_AUTHORIZATION_VERSION,
+  COMMUNITIES_STAGING_ROLE_SPLIT_HOST_BINDING_CODES,
   COMMUNITIES_STAGING_ROLE_SPLIT_RESTORE_EXECUTION_DESCRIPTOR_VERSION,
+  communitiesStagingRoleSplitConnectionSubjectSha256,
+  communitiesStagingRoleSplitHostAuthorizationSha256,
   communitiesStagingRoleSplitLedgerSha256,
+  communitiesStagingRoleSplitRestoreLoginSubjectSha256,
   communitiesStagingRoleSplitRestoreMarkerRequestSha256,
+  type CommunitiesStagingRoleSplitHostAuthorization,
   type CommunitiesStagingRoleSplitRestoreExecutionDescriptor,
   type CommunitiesStagingRoleSplitRestoreMarkerRequest,
 } from '@phub/database';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  COMMUNITIES_STAGING_ROLE_SPLIT_DDL_FENCE_ADVISORY_KEY,
+  CommunitiesStagingRoleSplitReviewedRunnerAdapter,
   CommunitiesStagingRoleSplitRunnerAdapter,
   type CommunitiesStagingRoleSplitRestoreArchiveInput,
 } from './communities-staging-role-split-runner-adapter.js';
@@ -75,6 +84,58 @@ const descriptor: CommunitiesStagingRoleSplitRestoreExecutionDescriptor = {
     activation: false,
   },
 };
+
+const execution = {
+  cloneDatabaseOid: '45678',
+  connection: { host: '127.0.0.1', port: '5432', sslMode: 'disable' },
+  restoreLogin: {
+    name: request.expectedCloneDatabaseOwner,
+    oid: request.expectedCloneDatabaseOwnerOid,
+  },
+  pgRestoreSha256: sha('pg_restore'),
+  canonicalHostAdapterSha256: sha('canonical adapter'),
+  cloneOnlyConnectionFactorySha256: sha('connection factory'),
+  ddlFenceSha256: sha('ddl fence'),
+} as const;
+const subjects = Object.fromEntries(
+  COMMUNITIES_STAGING_ROLE_SPLIT_HOST_BINDING_CODES.map((code) => [code, sha(`subject:${code}`)]),
+) as Record<(typeof COMMUNITIES_STAGING_ROLE_SPLIT_HOST_BINDING_CODES)[number], string>;
+subjects.CANONICAL_PARTIAL_FAILURE_HOST_ADAPTER = execution.canonicalHostAdapterSha256;
+subjects.CLONE_ONLY_CONNECTION_FACTORY = execution.cloneOnlyConnectionFactorySha256;
+subjects.CLUSTER_DDL_FENCE = execution.ddlFenceSha256;
+subjects.OPERATOR_SELECTED_SOURCE_AND_CLONE_CONNECTIONS =
+  communitiesStagingRoleSplitConnectionSubjectSha256(execution);
+subjects.PG_RESTORE_EXECUTABLE_SHA256 = execution.pgRestoreSha256;
+subjects.RESTORE_LOGIN_ROLE = communitiesStagingRoleSplitRestoreLoginSubjectSha256(
+  execution.restoreLogin,
+);
+const authorization = {
+  schemaVersion: COMMUNITIES_STAGING_ROLE_SPLIT_HOST_AUTHORIZATION_VERSION,
+  status: 'REVIEWED',
+  candidateCommitSha: 'a'.repeat(40),
+  markerRequestSha256: communitiesStagingRoleSplitRestoreMarkerRequestSha256(request),
+  creationReceiptSha256: '1'.repeat(64),
+  execution,
+  bindings: COMMUNITIES_STAGING_ROLE_SPLIT_HOST_BINDING_CODES.map((code) => ({
+    code,
+    status: 'VERIFIED' as const,
+    subjectSha256: subjects[code],
+    evidenceSha256: sha(`evidence:${code}`),
+  })),
+  authorizes: {
+    restoreExecution: true,
+    markerWrite: true,
+    evidencePublication: true,
+    automaticCleanup: false,
+    roleCreation: false,
+    roleSplit: false,
+    sharedDatabaseMutation: false,
+    migration: false,
+    deploy: false,
+    import: false,
+    activation: false,
+  },
+} as const satisfies CommunitiesStagingRoleSplitHostAuthorization;
 
 function input(overrides: Partial<CommunitiesStagingRoleSplitRestoreArchiveInput> = {}) {
   const archiveTouched = vi.fn(() => {
@@ -153,5 +214,185 @@ describe('CommunitiesStagingRoleSplitRunnerAdapter', () => {
       });
       expect(fixture.archiveTouched).not.toHaveBeenCalled();
     }
+  });
+});
+
+describe('CommunitiesStagingRoleSplitReviewedRunnerAdapter', () => {
+  const target = {
+    database: request.restoreDatabase,
+    databaseOid: execution.cloneDatabaseOid,
+    sourceDatabase: request.sourceDatabase,
+    systemIdentifier: request.systemIdentifier,
+    postgresMajor: '16',
+    connectionUser: request.expectedCloneDatabaseOwner,
+    connectionUserOid: request.expectedCloneDatabaseOwnerOid,
+    restoreRole: request.expectedCloneDatabaseOwner,
+    restoreRoleOid: request.expectedCloneDatabaseOwnerOid,
+    ...execution.connection,
+  } as const;
+
+  function reviewed(overrides: Record<string, unknown> = {}) {
+    const calls: string[] = [];
+    const lease = {
+      requestSha256: authorization.markerRequestSha256,
+      systemIdentifier: request.systemIdentifier,
+      backendPid: '1234',
+      fencingToken: sha('fence-token'),
+      advisoryKey: COMMUNITIES_STAGING_ROLE_SPLIT_DDL_FENCE_ADVISORY_KEY,
+    } as const;
+    const fence = {
+      acquire: vi.fn(async () => {
+        calls.push('fence:acquire');
+        return lease;
+      }),
+      assertHeld: vi.fn(async () => {
+        calls.push('fence:held');
+      }),
+      release: vi.fn(async () => {
+        calls.push('fence:release');
+      }),
+    };
+    const runRestore = vi.fn(
+      async (runnerConfig: unknown, runnerInput: { readonly archiveFile: unknown }) => {
+        void runnerConfig;
+        void runnerInput;
+        calls.push('restore');
+        return { discardedOutputBytes: 0 };
+      },
+    );
+    const config = {
+      request,
+      creationReceiptSha256: authorization.creationReceiptSha256,
+      authorization,
+      expectedAuthorizationSha256:
+        communitiesStagingRoleSplitHostAuthorizationSha256(authorization),
+      componentSha256: {
+        canonicalHostAdapter: execution.canonicalHostAdapterSha256,
+      },
+      target,
+      expectedPgRestoreSha256: subjects.PG_RESTORE_EXECUTABLE_SHA256,
+      preflightTimeoutMs: 10_000,
+      restoreTimeoutMs: 600_000,
+      fenceTimeoutMs: 10_000,
+      connectionFactory: {
+        subjectSha256: execution.cloneOnlyConnectionFactorySha256,
+        preflight: vi.fn(),
+      },
+      fence: { ...fence, subjectSha256: execution.ddlFenceSha256 },
+      passwordFile: {} as never,
+      executableFile: {} as never,
+      runRestore,
+      ...overrides,
+    };
+    return {
+      adapter: new CommunitiesStagingRoleSplitReviewedRunnerAdapter(config),
+      calls,
+      fence,
+      lease,
+      runRestore,
+    };
+  }
+
+  it('runs the descriptor-pinned restore only while the reviewed fence is held', async () => {
+    const archiveFile = {} as never;
+    const restoreInput = { archiveFile, cloneDatabaseOid: target.databaseOid, request };
+    const { adapter, calls, runRestore } = reviewed();
+    await expect(adapter.restoreArchive(restoreInput)).resolves.toEqual({
+      discardedOutputBytes: 0,
+    });
+    expect(calls).toEqual([
+      'fence:acquire',
+      'fence:held',
+      'restore',
+      'fence:held',
+      'fence:release',
+    ]);
+    const [runnerConfig, runnerInput] = runRestore.mock.calls[0]!;
+    expect(runnerConfig).toMatchObject({
+      target,
+      expectedPgRestoreSha256: subjects.PG_RESTORE_EXECUTABLE_SHA256,
+    });
+    expect(runnerInput.archiveFile).toBe(archiveFile);
+  });
+
+  it('rejects an independently pinned authorization mismatch before acquiring the fence', () => {
+    expect(() => reviewed({ expectedAuthorizationSha256: '0'.repeat(64) })).toThrow(
+      'COMMUNITIES_STAGING_ROLE_SPLIT_REVIEWED_RUNNER_ADAPTER_AUTHORIZATION_INVALID',
+    );
+  });
+
+  it('turns runner uncertainty into an ambiguous outcome and releases its fence', async () => {
+    const runnerFailure = reviewed({
+      runRestore: vi.fn(async () => {
+        throw new Error('secret provider error');
+      }),
+    });
+    await expect(
+      runnerFailure.adapter.restoreArchive({
+        archiveFile: {} as never,
+        cloneDatabaseOid: target.databaseOid,
+        request,
+      }),
+    ).rejects.toMatchObject({ code: 'RESTORE_OUTCOME_AMBIGUOUS' });
+    expect(runnerFailure.fence.release).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not reacquire or release a fence already owned by the canonical adapter', async () => {
+    const base = reviewed();
+    const current = reviewed({ externalFenceLease: base.lease });
+    await expect(
+      current.adapter.restoreArchive({
+        archiveFile: {} as never,
+        cloneDatabaseOid: target.databaseOid,
+        request,
+      }),
+    ).resolves.toEqual({ discardedOutputBytes: 0 });
+    expect(current.calls).toEqual(['fence:held', 'restore', 'fence:held']);
+    expect(current.fence.acquire).not.toHaveBeenCalled();
+    expect(current.fence.release).not.toHaveBeenCalled();
+  });
+
+  it('rejects a borrowed fence lease from another request before restore', async () => {
+    const base = reviewed();
+    const current = reviewed({
+      externalFenceLease: { ...base.lease, requestSha256: '0'.repeat(64) },
+    });
+    await expect(
+      current.adapter.restoreArchive({
+        archiveFile: {} as never,
+        cloneDatabaseOid: target.databaseOid,
+        request,
+      }),
+    ).rejects.toMatchObject({ code: 'FENCE_UNAVAILABLE' });
+    expect(current.runRestore).not.toHaveBeenCalled();
+    expect(current.fence.acquire).not.toHaveBeenCalled();
+    expect(current.fence.release).not.toHaveBeenCalled();
+  });
+
+  it('distinguishes an unavailable pre-restore fence from ambiguous post-restore loss', async () => {
+    const unavailable = reviewed();
+    unavailable.fence.assertHeld.mockRejectedValueOnce(new Error('unavailable'));
+    await expect(
+      unavailable.adapter.restoreArchive({
+        archiveFile: {} as never,
+        cloneDatabaseOid: target.databaseOid,
+        request,
+      }),
+    ).rejects.toMatchObject({ code: 'FENCE_UNAVAILABLE' });
+    expect(unavailable.runRestore).not.toHaveBeenCalled();
+
+    const lost = reviewed();
+    lost.fence.assertHeld
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error('lost after restore'));
+    await expect(
+      lost.adapter.restoreArchive({
+        archiveFile: {} as never,
+        cloneDatabaseOid: target.databaseOid,
+        request,
+      }),
+    ).rejects.toMatchObject({ code: 'RESTORE_OUTCOME_AMBIGUOUS' });
+    expect(lost.runRestore).toHaveBeenCalledTimes(1);
+    expect(lost.fence.release).toHaveBeenCalledTimes(1);
   });
 });

@@ -306,15 +306,20 @@ cleanup source as `REVIEW_ONLY`, with null target/install metadata, plus an exac
 copy of the restore helper. It contains no new installation payload, forced command, key,
 connection, credential or workflow mutation.
 
-This V2 manifest is `REVIEW_ONLY` and permanently `installable=false`. Its twelve blockers include
-the missing canonical partial-failure host adapter, exact ownership/ACL/RLS attestation and a
+This V2 manifest is `REVIEW_ONLY` and permanently `installable=false`. A later code-only checkpoint
+adds a canonical partial-failure adapter, reviewed restore adapter, strict twelve-evidence receipt
+loader, clone-only connection factory, cooperative PostgreSQL DDL fence, transactional marker
+writer and independent root-only evidence sink. Those libraries are deliberately not added to this
+candidate and do not alter its result. Its twelve blockers still require actual host evidence,
+including exact ownership/ACL/RLS attestation and a
 separate root-owned atomic handoff between the producer's `phub-preflight` 0700/0600 custody and the
 ceremony's root:`phub-preflight` 0750/0440 custody, in addition to clone routing, source-write
 denial, restore identity, executable pin, DDL fence, evidence sink, known-hosts pin and dedicated
 key. It neither proposes nor mutates `/var/lib/phub-preflight/backups`. A verifier reconstructs the
 candidate from the same independently supplied commit and rejects any extra, missing, linked or
 edited byte. Producing or verifying this directory is not installation approval and is not a
-staging preflight.
+staging preflight. No library can synthesize the key, known-host, real staging roles/connections,
+backup handoff receipt or trusted attestation bytes; all remain separately custodied inputs.
 
 ### Exact 29-file staged clone rehearsal contract
 

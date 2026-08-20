@@ -1,6 +1,6 @@
 # Communities role-split marker ceremony
 
-Status: **code-only preparation; neither the unwired PG16 library nor the separate host-facing V2
+Status: **code-only canonical host preparation; no host adapter, receipt, evidence, command or V2
 ceremony is installed or authorized to run**.
 
 The repository contains a pure v2 ceremony state machine and an injected-host orchestrator. They
@@ -80,20 +80,51 @@ digest. Marker/evidence V1 is not accepted as a compatibility fallback.
   source-write-denial evidence and bounded timeouts. Every execution, clone, restore, marker,
   evidence, cleanup, role, shared-database, migration, deploy, import and activation authority is
   exactly `false`.
-- `apps/migrator/src/communities-staging-role-split-runner-adapter.ts` is a non-entrypoint adapter
-  for the host `restoreArchive` callback seam. It cross-checks the descriptor against the canonical
-  request, receipt, clone OID and restore-owner binding, then always fails with
-  `EXECUTION_NOT_AUTHORIZED` before it can inspect archive/password/executable descriptors, invoke
-  a fence, preflight, spawn `pg_restore`, write marker/evidence, or create/drop a clone. Its
-  advisory-DDL-fence types are review-only; no implementation or active connection factory exists.
+- `packages/database/src/communities-staging-role-split-host-authorization.ts` defines an exact
+  canonical twelve-binding host-authorization receipt. It binds the marker request, creation
+  receipt, candidate commit, clone OID, loopback clone connection tuple, restore login/OID,
+  reviewed `pg_restore`, canonical adapter, connection factory and DDL-fence subjects. It grants
+  only restore execution, marker write and evidence publication; cleanup, role/ACL changes,
+  migration, deploy, import and activation remain false.
+- `apps/migrator/src/communities-staging-role-split-host-authorization-loader.ts` accepts the receipt
+  only as canonical bytes matching a separately supplied SHA-256. Before returning it, the loader
+  reads all twelve distinct evidence files through the existing bounded root-owned, no-follow,
+  same-FD custody reader and checks every exact digest. Missing, reordered, aliased, mutable or
+  non-root evidence fails before PostgreSQL access.
+- `apps/migrator/src/communities-staging-role-split-runner-adapter.ts` retains the old disabled
+  descriptor adapter and adds a separate reviewed restore adapter. The reviewed path cross-binds
+  the loaded authorization, request, creation receipt, clone/OID/login, executable digest,
+  connection-factory subject and DDL-fence subject before calling the FD-pinned runner. It can
+  borrow the execution-wide fence already held by the canonical host and never reacquires or
+  releases that lease. Runner failure or post-restore fence loss is an ambiguous restore outcome,
+  never a retry signal.
+- `apps/migrator/src/communities-staging-role-split-canonical-host-adapter.ts` wraps the durable PG
+  host with one execution-wide cluster fence. It validates every filesystem lease, asserts the
+  fence before and after each state observation or mutation, routes COMMENT through the pinned
+  writer, requires both ownership/ACL/RLS and source-write-denial attestations, and publishes only
+  to the separately pinned evidence sink. Marker and evidence response loss retain the canonical
+  readback/restart semantics; automatic cleanup remains unavailable.
+- `apps/migrator/src/communities-staging-role-split-canonical-pg-collaborators.ts` supplies a strict
+  loopback clone-only PostgreSQL connection factory, a dedicated-session two-key advisory DDL
+  fence and a marker writer. The writer holds `ACCESS EXCLUSIVE` on `pg_catalog.pg_database`,
+  verifies exact name/OID/owner, writes COMMENT, reads it back and commits in one transaction.
+  The advisory fence is deliberately cooperative and therefore still requires the externally
+  reviewed cluster-fence evidence binding; it cannot constrain an unrelated DBA session that does
+  not participate in the protocol.
+- `apps/migrator/src/communities-staging-role-split-file-evidence-sink.ts` is an independent,
+  root-only mode-0700 sink with canonical evidence bytes, exclusive temporary creation,
+  no-overwrite hard-link installation, fsync and exact root-owned readback. It is separate from the
+  ceremony state directory and treats an existing different artifact as a conflict.
 
-The PG16 library validates catalog name/OID/owner bindings, PostgreSQL major version,
-source/restored ledger equality and archive/evidence/TOC SHA custody. Its restore callback must
-consume the already verified archive descriptor, preserve ownership and ACLs, and must never use
-`pg_restore --no-owner` or `--no-acl`. It does not attest ACL/RLS correctness. Marker writing and
-evidence publication deliberately fail with `CLUSTER_DDL_FENCE_REQUIRED` and
-`OWNERSHIP_ACL_ATTESTATION_REQUIRED`; this prevents the existing evidence schema from asserting
-unproved `archiveOwnershipAcl=true`. `dropExactClone` always fails with
+These modules remain non-entrypoint libraries: there is no environment parser, forced command,
+installation target or workflow that composes them. The PG16 library validates catalog
+name/OID/owner bindings, PostgreSQL major version, source/restored ledger equality and
+archive/evidence/TOC SHA custody. Its restore callback must consume the already verified archive
+descriptor, preserve ownership and ACLs, and must never use `pg_restore --no-owner` or `--no-acl`.
+The unwrapped PG host does not attest ACL/RLS correctness. Its marker write and evidence publication
+continue to fail with `CLUSTER_DDL_FENCE_REQUIRED` and `OWNERSHIP_ACL_ATTESTATION_REQUIRED`; only
+the separately authorized canonical wrapper can route those operations through the reviewed
+collaborators. `dropExactClone` always fails with
 `AUTOMATIC_DROP_UNAVAILABLE`: PostgreSQL has no safe atomic `DROP DATABASE` by expected OID, so
 cleanup is a separate manual reconciliation gate.
 The library requires pre-created mode `0700` state storage and private mode `0600` archive copies
@@ -102,13 +133,12 @@ count; it never buffers the archive as a whole. This filesystem lease is not yet
 cluster-wide DDL fence: a future forced command must also provide outer process serialization and a
 reviewed PostgreSQL advisory-session lease before clone creation or marker writes.
 
-The new runner and disabled adapter remain deliberately unwired: the current host request does not yet carry an
-immutable restore-login/role identity or a reviewed connection factory. Local target-name/OID argv
-binding cannot prove that a privileged restore identity cannot write the source database. Before
-any live wiring, staging must enforce and attest source denial for that identity at the server
-boundary (HBA/`CONNECT`/fixed proxy or equivalent), as well as the exact clone-only connection
-factory used by both preflight and `pg_restore`. The future wrapper must open the reviewed
-`pg_restore` executable with no-follow semantics, bind its approved SHA-256, and pass that open
+The reviewed runner and canonical adapter remain deliberately unwired. The authorization receipt
+can describe immutable restore-login/role and connection-factory bindings, but code cannot invent
+their staging values or prove that a privileged identity cannot write the source database. Before
+any live wiring, staging must enforce and independently attest source denial for that identity at
+the server boundary (HBA/`CONNECT`/fixed proxy or equivalent). The host wrapper must open the
+reviewed `pg_restore` executable with no-follow semantics, bind its approved SHA-256, and pass that open
 descriptor to the runner. Both the version probe and restore execute the same inherited fd 4;
 there is no pathname or injectable production seam inside the runner. This executable-custody
 check is not authorization to run a ceremony. `--single-transaction` does not remove PostgreSQL
@@ -117,8 +147,24 @@ the restore completes within the isolated clone's capacity.
 If the runner reports `TERMINATION_UNCONFIRMED`, reconciliation is mandatory: prove both OS process
 absence and absence of the exact restore principal/clone session in `pg_stat_activity` before any
 further observation. It must never be treated as a retry or cleanup signal.
-The preflight connection factory must accept the runner AbortSignal and close its database client on
+The clone-only preflight connection factory accepts only an exact loopback URL for the clone and
+dedicated restore login. It accepts the runner AbortSignal and closes its database client on
 abort; an unacknowledged cancellation is `PREFLIGHT_TERMINATION_UNCONFIRMED` and blocks all restore.
+
+The following remain external hard gates and are not satisfied by this code checkpoint:
+
+- an atomic, separately reviewed root-owned backup custody handoff from the producer's private
+  `0700/0600` contour into the ceremony's `0750/0440` contour, without changing the producer copy;
+- a dedicated forced-command public key and an independently pinned staging `known_hosts` entry;
+- operator-selected source and clone connections, the exact restore login/OID and reviewed
+  root-owned `pg_restore` executable digest;
+- actual source-write-denial and ownership/ACL/RLS attestation artifacts produced from the exact
+  retained archive and clone;
+- the twelve root-owned evidence files plus a separately retained authorization-receipt SHA-256;
+- a separately reviewed composition entrypoint and installation candidate.
+
+Until all of them exist and a later candidate explicitly verifies them, the current V2 candidate
+remains `REVIEW_ONLY`, `installable=false` and non-authorizing.
 
 `apps/migrator/src/communities-staging-role-split-pg-restore-runner.pg.test.ts` is the real,
 descriptor-pinned, opt-in Linux PG16 invalid-archive child-process probe. It skips unless the exact confirmation

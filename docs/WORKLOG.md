@@ -1,5 +1,20 @@
 # Worklog
 
+## 2026-08-20 — Communities canonical host adapter checkpoint
+
+- Added a strict canonical host-authorization receipt and root-owned loader that requires all
+  twelve independently supplied evidence byte streams before returning execution authority.
+- Added a canonical partial-failure host wrapper, reviewed FD-pinned restore adapter, borrowed
+  execution-wide fence semantics, clone-only loopback connection factory, cooperative PostgreSQL
+  advisory fence and transactional exact-OID marker writer.
+- Added an independent root-only evidence sink plus source-write-denial and ownership/ACL/RLS
+  attestation gates. Marker and evidence response-loss tests preserve readback without replay.
+- Kept automatic clone cleanup, role/ACL changes, migration, deploy, import and activation false.
+  The existing V2 installation candidate remains `REVIEW_ONLY` and `installable=false`.
+- Kept the backup custody handoff, dedicated key, known-host pin, real staging roles/connections,
+  executable and trusted attestation artifacts outside this checkpoint. No staging access,
+  installation, ceremony, inventory collection or database mutation was performed.
+
 ## 2026-08-20 — Communities role-split review-only installation candidate
 
 - Added a deterministic local builder/verifier that reads the exact ceremony artifacts from an
