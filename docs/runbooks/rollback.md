@@ -46,6 +46,17 @@ automatically. A successful workflow retains
 both the application snapshot and its separate PostgreSQL custom-format archive as release
 evidence. Rollback never runs a downmigration; expand-only schema changes remain applied.
 
+The temporary legacy OTP canary has a stricter rollback-only contract. Its durable marker is
+`/opt/phub/.legacy-otp-hotfix.transition.env`; after opening the fixed browser window, the workflow
+always restores the exact e308 `release.env` and its locally retained web/API/worker/realtime image
+digests. It never keeps the candidate active and never restores the PostgreSQL archive
+automatically. On interruption, run the same workflow with `RECOVER`, the original control SHA,
+run ID and attempt, and `RECOVER_LEGACY_OTP_HOTFIX_CANARY`. A missing marker is accepted only when
+the exact e308 manifest, images and health already attest as restored. Do not proceed to B0 or any
+other staging workflow while the marker or `.next` files exist. RECOVER validates and removes only
+the exact regular, single-link, controller-owned `0600` OTP `.next` artifacts; malformed metadata
+or a symlink retains the marker and requires investigation rather than manual deletion.
+
 For `MEDIA_BINARY_ONLY`, the workflow records only an `ordinary` or `client-media` pre-cutover
 baseline before build and repeats the same read-only classification immediately before the
 snapshot. An active `community-logo` floor is rejected and must use the dedicated stable-to-stable
