@@ -83,12 +83,16 @@ describe('VivaIdentityProvider', () => {
 
     const sendUrl = fetchUrl(fetchImplementation.mock.calls[0]?.[0]);
     expect(sendUrl.pathname).toBe('/realms/clients/sms/authentication-code');
+    expect(sendUrl.searchParams.get('phoneNumber')).toBe('79991234567');
     expect(sendUrl.searchParams.get('tenantKey')).toBe('iSkq6G');
     const verifyBody = requestBody(fetchImplementation.mock.calls[1]?.[1]?.body);
-    expect(verifyBody).toContain('grant_type=password');
-    expect(verifyBody).toContain('client_id=widget');
+    const verifyParams = new URLSearchParams(verifyBody);
+    expect(verifyParams.get('grant_type')).toBe('password');
+    expect(verifyParams.get('phone_number')).toBe('79991234567');
+    expect(verifyParams.get('client_id')).toBe('widget');
+    expect(verifyParams.get('tenant_key')).toBe('iSkq6G');
     expect(verification).toMatchObject({
-      identity: { subject: 'viva-user-42' },
+      identity: { subject: 'viva-user-42', phoneE164: '+79991234567' },
       delegation: { refreshToken: 'external-refresh' },
     });
     expect(verification).not.toHaveProperty('accessToken');
