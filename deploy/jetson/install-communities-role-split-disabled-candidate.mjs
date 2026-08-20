@@ -21,17 +21,17 @@ import {
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const schemaVersion = 'communities-role-split-installation-candidate-v3';
+const schemaVersion = 'communities-role-split-installation-candidate-v4';
 const sha40 = /^[0-9a-f]{40}$/u;
 const sha256 = /^[0-9a-f]{64}$/u;
 const installPrefix = '/usr/local/libexec/phub/communities-role-split/candidates';
 const completeReceiptName = 'installation-complete.json';
 const expectedArtifacts = [
   {
-    sourcePath: 'deploy/jetson/install-communities-role-split-disabled-candidate.mjs',
+    sourcePath: 'deploy/jetson/install-communities-role-split-disabled-candidate.sh',
     sourceGitMode: '100755',
-    artifactPath: 'payload/installer.mjs',
-    targetRelativePath: 'installer.mjs',
+    artifactPath: 'payload/installer.sh',
+    targetRelativePath: 'installer.sh',
     installMode: '0755',
   },
   {
@@ -141,7 +141,7 @@ function fsyncDirectory(path) {
   }
 }
 
-function assertManifest(manifest, candidateSha) {
+function assertManifest(manifest, candidateSha, expectedControlSha256) {
   if (
     !exactKeys(manifest, [
       'schemaVersion',
@@ -150,6 +150,7 @@ function assertManifest(manifest, candidateSha) {
       'status',
       'installable',
       'reasonCode',
+      'hostInstaller',
       'artifactFiles',
       'installation',
       'forcedCommandSurface',
@@ -162,6 +163,18 @@ function assertManifest(manifest, candidateSha) {
     manifest.status !== 'INSTALLABLE_DISABLED' ||
     manifest.installable !== true ||
     manifest.reasonCode !== 'RUNTIME_BINDINGS_REQUIRED' ||
+    !exactKeys(manifest.hostInstaller, [
+      'runtime',
+      'entrypoint',
+      'controlFile',
+      'controlSha256',
+      'nodeRequired',
+    ]) ||
+    manifest.hostInstaller.runtime !== 'POSIX_SH_GNU_COREUTILS' ||
+    manifest.hostInstaller.entrypoint !== 'payload/installer.sh' ||
+    manifest.hostInstaller.controlFile !== 'installation-candidate.control' ||
+    manifest.hostInstaller.controlSha256 !== expectedControlSha256 ||
+    manifest.hostInstaller.nodeRequired !== false ||
     !Array.isArray(manifest.artifactFiles) ||
     manifest.artifactFiles.length !== expectedArtifacts.length ||
     !exactKeys(manifest.installation, [
@@ -289,6 +302,7 @@ function resolveInstalledPath(installationRoot, absoluteTarget) {
 function readAndVerifyCandidate(input) {
   if (!sha40.test(input.candidateSha) || !sha256.test(input.expectedManifestSha256))
     fail('PIN_INVALID');
+  if (!sha256.test(input.expectedControlSha256)) fail('PIN_INVALID');
   if (!sha256.test(input.expectedArtifactSetSha256)) fail('PIN_INVALID');
   if (!isAbsolute(input.candidatePath) || realpathSync(input.candidatePath) !== input.candidatePath)
     fail('CANDIDATE_PATH_INVALID');
@@ -302,13 +316,17 @@ function readAndVerifyCandidate(input) {
   assertCandidateFile(manifestPath, input.expectedUid);
   const manifestBytes = readFileSync(manifestPath);
   if (digest(manifestBytes) !== input.expectedManifestSha256) fail('MANIFEST_DIGEST_MISMATCH');
+  const controlPath = join(input.candidatePath, 'installation-candidate.control');
+  assertCandidateFile(controlPath, input.expectedUid);
+  if (digest(readFileSync(controlPath)) !== input.expectedControlSha256)
+    fail('CONTROL_DIGEST_MISMATCH');
   let manifest;
   try {
     manifest = JSON.parse(manifestBytes.toString('utf8'));
   } catch {
     fail('MANIFEST_INVALID');
   }
-  assertManifest(manifest, input.candidateSha);
+  assertManifest(manifest, input.candidateSha, input.expectedControlSha256);
   if (artifactSetSha256(manifest.artifactFiles) !== input.expectedArtifactSetSha256)
     fail('ARTIFACT_SET_DIGEST_MISMATCH');
   for (const file of manifest.artifactFiles) {
@@ -324,9 +342,10 @@ function canonicalReceipt(input, manifest) {
   return Buffer.from(
     `${JSON.stringify(
       {
-        schemaVersion: 'communities-role-split-code-installation-receipt-v1',
+        schemaVersion: 'communities-role-split-code-installation-receipt-v2',
         candidateCommitSha: input.candidateSha,
         manifestSha256: input.expectedManifestSha256,
+        controlSha256: input.expectedControlSha256,
         artifactSetSha256: input.expectedArtifactSetSha256,
         status: 'INSTALLED_DISABLED',
         targetRoot: manifest.installation.targetRoot,
@@ -435,12 +454,13 @@ export function verifyCommunitiesRoleSplitDisabledInstallation(input) {
 
 function parseCli(args) {
   if (
-    args.length !== 9 ||
+    args.length !== 11 ||
     !['install', 'verify'].includes(args[0]) ||
     args[1] !== '--candidate' ||
     args[3] !== '--candidate-sha' ||
     args[5] !== '--manifest-sha256' ||
-    args[7] !== '--artifact-set-sha256'
+    args[7] !== '--control-sha256' ||
+    args[9] !== '--artifact-set-sha256'
   )
     fail('USAGE');
   return {
@@ -448,7 +468,8 @@ function parseCli(args) {
     candidatePath: args[2],
     candidateSha: args[4],
     expectedManifestSha256: args[6],
-    expectedArtifactSetSha256: args[8],
+    expectedControlSha256: args[8],
+    expectedArtifactSetSha256: args[10],
     installationRoot: '/',
     expectedUid: 0,
   };

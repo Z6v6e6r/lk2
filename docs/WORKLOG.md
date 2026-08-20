@@ -1,5 +1,29 @@
 # Worklog
 
+## 2026-08-20 — Communities staging mawk compatibility
+
+- Replaced the disabled installer's AWK character-class validation with fail-closed POSIX-shell
+  numeric matching. Read-only staging reproduction proved that its legacy `mawk 1.3.3` rejects
+  `[[:space:]]` and `[[:digit:]]` even for the valid candidate entry count `14`.
+- Added a regression contract that requires the shell validator and forbids AWK POSIX character
+  classes in the host installer. The retained root-owned candidate remained disabled; no install
+  target, partial target, activation link, ceremony or database mutation was created.
+
+## 2026-08-20 — Communities dependency-free disabled installer
+
+- Replaced the V3 host entrypoint, which required an unavailable `/usr/bin/node` on the ARM64
+  staging node, with a V4 POSIX shell installer bound to the exact GNU coreutils paths observed by
+  read-only host preflight. Node remains a local candidate-builder/test dependency only.
+- Added an independently pinned canonical control ledger. It binds the exact nine-artifact
+  allowlist, target-relative paths, modes, byte counts, SHA-256 values and the still-false ceremony
+  and database-mutation authorizations without parsing JSON on the host.
+- Kept root custody, single-link candidate files, new-version-only publication, retained partial
+  state, exact installed readback, durable receipt and denial exit 78. No activation link, key,
+  workflow, connection, credential or execution authority was added.
+- Local TypeScript and candidate regressions pass. A network-disabled disposable Debian contour
+  completed install, read-only verify, denial exit 78 and repeat-install refusal without Node. No
+  candidate was transferred and staging was not modified by this checkpoint.
+
 ## 2026-08-20 — Communities disabled installable candidate
 
 - Added a V3 candidate that authorizes only a new, versioned, root-owned code installation. It

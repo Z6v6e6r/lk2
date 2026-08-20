@@ -300,16 +300,19 @@ repair or replace the marker.
 The exact installation surface can now be packaged locally with
 `npm run db:communities-role-split:installation-candidate`. The builder takes an independently
 supplied commit SHA, disables Git replacement objects, rejects replacement refs and emits a private
-canonical V3 manifest plus digest receipt. V3 is installable only as a disabled versioned code
-snapshot: a root installer, an always-denied command and read-only canonical host sources. It
+canonical V4 manifest, independently pinned host control ledger and digest receipt. V4 is
+installable only as a disabled versioned code snapshot: a POSIX shell root installer, an
+always-denied command and read-only canonical host sources. It requires no Node runtime on the
+ARM64 host and
 creates no active link, forced command, key, connection, credential or workflow mutation.
 
 Only `authorizes.installation` is true. The twelve binding codes remain required before execution,
 and every key, staging, database, ceremony, cleanup, role-split, migration, deploy and activation
-authorization remains false. The installer refuses overwrite/partial replay, verifies exact pins
-and installed readback, then publishes an `INSTALLED_DISABLED` receipt. Producing or verifying the
-candidate is not installation approval; installing it is not ceremony approval and cannot
-synthesize the separately custodied host evidence.
+authorization remains false. The installer refuses overwrite/partial replay, verifies the
+independent manifest, control and artifact-set pins plus installed readback, then publishes an
+`INSTALLED_DISABLED` receipt. Producing or verifying the candidate is not installation approval;
+installing it is not ceremony approval and cannot synthesize the separately custodied host
+evidence.
 
 ### Exact 29-file staged clone rehearsal contract
 

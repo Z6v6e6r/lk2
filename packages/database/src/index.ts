@@ -58,6 +58,7 @@ export * from './communities-staging-role-split-restore-execution-evidence.js';
 export * from './communities-staging-role-split-attested-evidence.js';
 export * from './communities-staging-role-split-v3-contract.js';
 export * from './communities-staging-role-split-v3-envelope.js';
+export * from './communities-staging-role-split-v3-restore-authorization.js';
 export * from './eligibility-payment-acl-matrix.js';
 export * from './messaging-repository.js';
 export * from './profile-privacy-repository.js';

@@ -166,13 +166,27 @@ immutable execution-evidence binding as descriptive only. This is not an install
 command, workflow, restore, cleanup or activation.
 
 The V2 host-authorization receipt can describe a reviewed restore contour, but it is not sufficient
-execution authority. `CommunitiesStagingRoleSplitReviewedRunnerAdapter.restoreArchive` therefore
-returns `V3_EXECUTION_EVIDENCE_REQUIRED` before archive inspection, fence acquisition, preflight or
-runner invocation. It may become executable only after the V3 envelope is durably persisted and
-verified before `RESTORE_PENDING`; a post-restore attestation is not a substitute for that gate.
-Directly binding the raw `pg_restore` runner to the PG-host restore callback is prohibited before
-the same reviewed V3 contract and pre-restore source-denial gate exist; the non-entrypoint status of
-those libraries is not an alternative authorization path.
+execution authority. The additional canonical V3 restore authorization binds the exact
+`RESTORE_PENDING` preparation-envelope digest, request, creation receipt, source-denial evidence,
+clone OID, system identifier, candidate commit and V2 host-authorization digest. It authorizes only
+`restoreExecution`; state persistence, clone creation, marker/evidence writes, cleanup, role/ACL
+changes, migration, deploy, import and activation remain false.
+
+`CommunitiesStagingRoleSplitReviewedRunnerAdapter.restoreArchive` can validate those exact canonical
+V3 envelope bytes and the independently pinned V3 restore authorization, but it still refuses before
+inspecting the archive, fence, preflight or runner with
+`V3_DURABLE_EXECUTION_CAPABILITY_REQUIRED`. Durable `RESTORE_PENDING` bytes are deliberately not an
+execution capability: they cannot distinguish the first post-CAS call from a restart, response-loss
+replay or concurrent duplicate. Directly binding the raw `pg_restore` runner to the PG-host restore
+callback remains prohibited.
+
+This remains an unwired, non-executable code-only authorization seam. A later V3 durable host must
+atomically create and consume a non-replayable in-memory capability only for the successful
+`OWNED -> RESTORE_PENDING` CAS under the same cluster fence. That capability must bind the exact
+opened archive device/inode, byte count and pre/post SHA-256 to the request before the adapter may
+call the runner. No installer manifest, forced command, workflow or CLI contains this authorization.
+A post-restore attestation is not a substitute for the pre-restore gate, and the non-entrypoint
+status of these libraries is not execution authority.
 
 These modules remain non-entrypoint libraries: there is no environment parser, forced command,
 installation target or workflow that composes them. The PG16 library validates catalog
@@ -306,7 +320,7 @@ staging/production database, role, key, request or inventory.
 ## Exact disabled installable candidate
 
 `scripts/prepare-communities-role-split-installation-candidate.ts` now builds and verifies a
-private, deterministic V3 candidate directory from an independently supplied exact Git commit. It
+private, deterministic V4 candidate directory from an independently supplied exact Git commit. It
 reads every artifact from Git objects rather than the mutable worktree, validates each expected Git
 mode, disables Git replacement objects, rejects any replacement ref and requires the raw local repository origin
 to be exactly `https://github.com/Z6v6e6r/lk2.git`, refuses an existing output, and accepts only a
@@ -324,7 +338,13 @@ true authorization. It contains:
   factory, DDL fence, marker writer, evidence sink, authorization loader, runner and root-owned
   evidence reader.
 
-The installer accepts independently retained manifest and artifact-set SHA-256 values. It installs
+The host entrypoint is a POSIX shell program bound to the exact GNU coreutils paths present on the
+ARM64 staging node; `/usr/bin/node` is not required. Its file-count validation uses shell numeric
+matching rather than AWK character classes because the staging host provides legacy `mawk 1.3.3`,
+which rejects otherwise valid `[[:space:]]` and `[[:digit:]]` expressions. The canonical control
+ledger is independently pinned and binds the fixed artifact paths, target-relative paths, modes,
+byte counts, SHA-256 values and false execution authorizations without parsing JSON on the host.
+The installer accepts independently retained manifest, control and artifact-set SHA-256 values. It installs
 only a previously absent version directory below
 `/usr/local/libexec/phub/communities-role-split/candidates/<commit>`, refuses an existing target or
 an abandoned `.incomplete` directory, verifies post-copy hashes, fsyncs before publication and
@@ -353,7 +373,7 @@ npm run db:communities-role-split:installation-candidate -- verify \
   --candidate "$candidate_review_root/communities-role-split-installation-candidate-<checkpoint-sha>"
 ```
 
-Both success lines contain only the commit, manifest digest, artifact-set digest,
+Both success lines contain only the commit, manifest digest, control digest, artifact-set digest,
 `installable=true`, `authorizes_installation=true` and `authorizes_ceremony=false`. Build and verify
 perform no installation, SSH, Docker, PostgreSQL, network or staging operation. A local
 `.incomplete` directory is retained after an interrupted build for manual inspection; the tool
@@ -361,15 +381,16 @@ never deletes or replaces it automatically.
 
 Installation is a later, separately approved host gate. Before invoking the candidate installer,
 the administrator must transfer the already verified candidate into a root-owned mode-0700
-directory with mode-0600 single-link files and independently retain the two digests from the local
+directory with mode-0600 single-link files and independently retain the three digests from the local
 verification result. The later command shape is:
 
 ```sh
-sudo -- /usr/bin/node \
-  '<root-owned-candidate>/payload/installer.mjs' install \
+sudo -- /bin/sh \
+  '<root-owned-candidate>/payload/installer.sh' install \
   --candidate '<root-owned-candidate>' \
   --candidate-sha '<checkpoint-sha>' \
   --manifest-sha256 '<independently-retained-manifest-sha256>' \
+  --control-sha256 '<independently-retained-control-sha256>' \
   --artifact-set-sha256 '<independently-retained-artifact-set-sha256>'
 ```
 
@@ -379,7 +400,7 @@ command authorizes or runs the ceremony.
 
 ## Required before installation and before execution
 
-1. Review and, under a separate approval, install/post-check the exact disabled V3 candidate.
+1. Review and, under a separate approval, install/post-check the exact disabled V4 candidate.
    Candidate presence does not authorize installation; successful installation does not authorize
    execution, forced-command wiring or any database operation.
 2. Implement and review a V3-compatible executable composition entrypoint for the canonical host
@@ -389,8 +410,8 @@ command authorizes or runs the ceremony.
    authoritative response-loss reconciliation, evidence resume, clone-only connection factory,
    server-enforced source denial and exact ownership/ACL/RLS attestation. Bind a forced command only
    to that future composition. The current V2-marker canonical adapter and attested-evidence V1
-   cannot be reused as a V3 compatibility fallback. Do not install the review-only shell contour or
-   reuse a generic `--no-owner --no-acl` verifier.
+   cannot be reused as a V3 compatibility fallback. Do not install the legacy review-only ceremony
+   shell contour or reuse a generic `--no-owner --no-acl` verifier.
 3. Preserve the completed disposable PostgreSQL 16 response-loss, cleanup-failure and
    evidence-publication matrix when reviewing the exact installation adapter. The local matrix
    and custom-archive gate prove the successful synthetic `pg_restore` path, catalog/RLS, exact
