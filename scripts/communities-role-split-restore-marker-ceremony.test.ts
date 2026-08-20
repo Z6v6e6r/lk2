@@ -497,15 +497,26 @@ describe('runnable role-split restore-marker clone ceremony', () => {
         'utf8',
       );
       await chmod(hanger, 0o755);
-      const result = await new Promise<Result>((resolve) => {
+      type ProcessGroupResult = {
+        readonly code: number | null;
+        readonly signal: NodeJS.Signals | null;
+        readonly stdout: string;
+        readonly stderr: string;
+      };
+      const result = await new Promise<ProcessGroupResult>((resolve) => {
         execFile(
           '/usr/bin/timeout',
           ['--signal=TERM', '--kill-after=1s', '1s', hanger, parentPid, childPid],
           (error, stdout, stderr) =>
-            resolve({ code: error && 'code' in error ? Number(error.code) : 0, stdout, stderr }),
+            resolve({
+              code: error ? (error.code == null ? null : Number(error.code)) : 0,
+              signal: error && 'signal' in error && error.signal ? error.signal : null,
+              stdout,
+              stderr,
+            }),
         );
       });
-      expect(result.code).not.toBe(0);
+      expect(result.code !== 0 || result.signal !== null).toBe(true);
       for (const pidPath of [parentPid, childPid]) {
         const pid = Number((await readFile(pidPath, 'utf8')).trim());
         expect(() => process.kill(pid, 0)).toThrow();

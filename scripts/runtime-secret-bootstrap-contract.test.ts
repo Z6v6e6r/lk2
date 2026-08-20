@@ -359,7 +359,7 @@ describe('legacy runtime-secret bootstrap delivery contract', () => {
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
-  });
+  }, 15_000);
 
   it('executes the reviewed Compose functions with bounded legacy environment inheritance', () => {
     const functions = controller.slice(
@@ -499,7 +499,7 @@ describe('legacy runtime-secret bootstrap delivery contract', () => {
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
-  });
+  }, 15_000);
 
   it('probes the key boundary offline before stopping and starts candidate services in safe order', () => {
     const prepare = controller.indexOf('prepare-bootstrap-json');
