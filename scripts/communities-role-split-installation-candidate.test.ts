@@ -252,6 +252,12 @@ describe('communities role-split installation candidate', () => {
     expect(hostInstaller).toContain(
       'case "$count" in \'\' | *[!0-9]*) fail FILE_SET_INVALID ;; esac',
     );
+    expect(hostInstaller).toContain(
+      '[ "$(walk_count "$target")" = 14 ] || fail INSTALLED_FILE_SET_INVALID',
+    );
+    expect(hostInstaller.match(/\[ "\$index" = 12 \] \|\| fail CONTROL_INVALID/gu)).toHaveLength(2);
+    expect(hostInstaller).not.toContain('[ "$(walk_count "$target")" = 11 ]');
+    expect(hostInstaller).not.toContain('[ "$index" = 9 ]');
     expect(hostInstaller).not.toMatch(/\/usr\/bin\/awk[^\n]*\[\[:(?:space|digit):\]\]/u);
     expect(hostInstaller).not.toMatch(/\/usr\/bin\/node|\b(?:docker|psql|ssh|sudo|jq|eval|rm)\b/u);
     expect(hostInstaller).not.toMatch(/^\s*(?:source|\.)\s/mu);

@@ -264,7 +264,7 @@ receipt_bytes() {
 
 verify_installed() {
   assert_directory "$target" "$expected_uid" "$expected_gid" 755
-  [ "$(walk_count "$target")" = 11 ] || fail INSTALLED_FILE_SET_INVALID
+  [ "$(walk_count "$target")" = 14 ] || fail INSTALLED_FILE_SET_INVALID
   assert_directory "$target/source" "$expected_uid" "$expected_gid" 755
   exec 3< "$candidate/installation-candidate.control" || fail CONTROL_INVALID
   index=0
@@ -281,7 +281,7 @@ verify_installed() {
     esac
   done
   exec 3<&-
-  [ "$index" = 9 ] || fail CONTROL_INVALID
+  [ "$index" = 12 ] || fail CONTROL_INVALID
   receipt="$target/installation-complete.json"
   assert_file "$receipt" "$expected_uid" "$expected_gid" 444
   expected_receipt_sha=$(receipt_bytes | /usr/bin/sha256sum | /usr/bin/awk '{print $1}') ||
@@ -374,7 +374,7 @@ if [ "$action" = install ]; then
     esac
   done
   exec 3<&-
-  [ "$index" = 9 ] || fail CONTROL_INVALID
+  [ "$index" = 12 ] || fail CONTROL_INVALID
   receipt_bytes > "$incomplete/installation-complete.json" || fail RECEIPT_WRITE_FAILED
   /bin/chmod 444 -- "$incomplete/installation-complete.json" 2>/dev/null || fail RECEIPT_WRITE_FAILED
   /bin/sync -f "$incomplete/installation-complete.json" 2>/dev/null || fail SYNC_FAILED

@@ -1,5 +1,14 @@
 # Worklog
 
+## 2026-08-20 — Communities V5 installed-count hotfix
+
+- Corrected the dependency-free V5 installer readback from the retained V4 counts to twelve
+  controlled artifacts and fourteen installed entries.
+- Added platform-independent source-contract assertions for both install/verify control loops and
+  the installed file-set count so macOS tests catch this Linux-only shell regression.
+- The failed staging attempt remains retained as an unpublished `.incomplete` version; this hotfix
+  does not authorize cleanup, retry, inventory, ceremony or database access.
+
 ## 2026-08-20 — Communities disabled preparation candidate V5
 
 - Extended the exact disabled installation candidate from nine to twelve artifacts by adding

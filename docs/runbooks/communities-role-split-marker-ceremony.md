@@ -441,6 +441,9 @@ matching rather than AWK character classes because the staging host provides leg
 which rejects otherwise valid `[[:space:]]` and `[[:digit:]]` expressions. The canonical control
 ledger is independently pinned and binds the fixed artifact paths, target-relative paths, modes,
 byte counts, SHA-256 values and false execution authorizations without parsing JSON on the host.
+The V5 installed readback requires exactly twelve controlled artifacts plus the source directory
+and immutable receipt (`14` entries total); both install and verify loops require an exact count of
+twelve control records.
 The installer accepts independently retained manifest, control and artifact-set SHA-256 values. It installs
 only a previously absent version directory below
 `/usr/local/libexec/phub/communities-role-split/candidates/<commit>`, refuses an existing target or
