@@ -105,6 +105,11 @@ function stringClaim(payload: JWTPayload, names: readonly string[]): string | un
   return undefined;
 }
 
+function toVivaPhoneNumber(phoneE164: string): string {
+  // Viva's client-realm OTP contract uses the canonical digits without the E.164 `+` prefix.
+  return phoneE164.startsWith('+') ? phoneE164.slice(1) : phoneE164;
+}
+
 export class VivaIdentityProvider implements IdentityProviderPort, VivaOAuthProviderPort {
   public readonly key = 'VIVA' as const;
   private readonly fetchImplementation: typeof fetch;
@@ -631,7 +636,7 @@ export class VivaIdentityProvider implements IdentityProviderPort, VivaOAuthProv
     }
 
     const url = new URL(`${this.issuer}/sms/authentication-code`);
-    url.searchParams.set('phoneNumber', input.phoneE164);
+    url.searchParams.set('phoneNumber', toVivaPhoneNumber(input.phoneE164));
     url.searchParams.set('channel', this.options.channel);
     url.searchParams.set('tenantKey', input.providerTenantKey);
     let response: Response;
@@ -700,7 +705,7 @@ export class VivaIdentityProvider implements IdentityProviderPort, VivaOAuthProv
           },
           body: new URLSearchParams({
             grant_type: 'password',
-            phone_number: input.phoneE164,
+            phone_number: toVivaPhoneNumber(input.phoneE164),
             code: input.code,
             client_id: this.options.clientId,
             tenant_key: input.providerTenantKey,
