@@ -410,6 +410,8 @@ describe('legacy OTP hotfix canary release contract', () => {
     ]) {
       expect(gateBody).toContain(token);
     }
+    expect(gateBody).toContain('docker pull --platform linux/arm64 "$ref" >/dev/null');
+    expect(gateBody).not.toContain('docker pull "$ref" >/dev/null');
     expect(gateBody).toContain('docker logout ghcr.io');
     expect(workflow).toContain('needs: [validate-source, build, runtime-image-gate]');
     expect(workflow).toContain("needs.runtime-image-gate.result == 'success'");

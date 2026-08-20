@@ -206,7 +206,7 @@ jobs:
             digest=$(cat "digests/$service")
             printf '%s' "$digest" | grep -Eq '^sha256:[0-9a-f]{64}$'
             ref="ghcr.io/z6v6e6r/phub-$service@$digest"
-            docker pull "$ref" >/dev/null
+            docker pull --platform linux/arm64 "$ref" >/dev/null
           done
           docker logout ghcr.io >/dev/null
           for service in api worker realtime migrator; do
