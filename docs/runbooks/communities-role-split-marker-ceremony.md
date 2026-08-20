@@ -188,6 +188,24 @@ call the runner. No installer manifest, forced command, workflow or CLI contains
 A post-restore attestation is not a substitute for the pre-restore gate, and the non-entrypoint
 status of these libraries is not execution authority.
 
+## V3 durable restore contract-only prerequisite
+
+`communities-staging-role-split-v3-durable-state-envelope-v1` is a strict canonical JSON+LF
+envelope for only `OWNED`, `RESTORE_PENDING` and `RESTORED`. It binds the request, creation receipt,
+restore-execution evidence, clone OID and the exact V3 state without modifying the frozen V2 or
+existing V3 preparation formats. `communities-staging-role-split-v3-durable-restore-authorization-v1`
+binds the existing V3 restore authorization and V2 host authorization digests, all three one-way
+durable-envelope digests, request/receipt/evidence/clone/system/commit bindings and independently
+pinned durable-host, state-store and archive-custody subjects. It grants only state persistence and
+restore execution; clone creation, markers, evidence, cleanup, roles, shared-database mutation,
+migration, deploy, import and activation remain false. The validator accepts only the exact forward
+`OWNED -> RESTORE_PENDING -> RESTORED` sequence; no envelope points back to this authorization.
+
+These are contract-only, unwired bytes. They expose no state store, host, filesystem, archive,
+lease, capability, CLI, install or workflow API, perform no state write and do not make the
+executable durable host GO. A future separately reviewed host must still provide atomic state
+persistence and a non-replayable pre-restore capability under the same cluster fence.
+
 These modules remain non-entrypoint libraries: there is no environment parser, forced command,
 installation target or workflow that composes them. The PG16 library validates catalog
 name/OID/owner bindings, PostgreSQL major version, source/restored ledger equality and
