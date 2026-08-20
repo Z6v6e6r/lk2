@@ -7,12 +7,16 @@
  */
 import {
   assertCommunitiesStagingRoleSplitHostAuthorization,
+  assertCommunitiesStagingRoleSplitV3RestoreAuthorization,
+  assertCommunitiesStagingRoleSplitV3RestoreAuthorizationBinding,
   assertCommunitiesStagingRoleSplitSourceWriteDenialAttestationBinding,
   assertCommunitiesStagingRoleSplitRestoreExecutionEvidenceBindings,
   assertCommunitiesStagingRoleSplitRestoreExecutionDescriptor,
   assertCommunitiesStagingRoleSplitRestoreMarkerRequest,
   communitiesStagingRoleSplitHostAuthorizationSha256,
   communitiesStagingRoleSplitRestoreMarkerRequestSha256,
+  communitiesStagingRoleSplitV3RestoreAuthorizationSha256,
+  parseCommunitiesStagingRoleSplitV3PreparationEnvelope,
   type CommunitiesStagingRoleSplitHostAuthorization,
   type CommunitiesStagingRoleSplitSourceWriteDenialAttestation,
   type CommunitiesStagingRoleSplitRestoreExecutionEvidence,
@@ -20,13 +24,14 @@ import {
   type CommunitiesStagingRoleSplitRestoreMarkerRequest,
   type CommunitiesSourceConnectAclObservation,
   type CommunitiesSourceMembershipObservation,
+  type CommunitiesStagingRoleSplitV3RestoreAuthorization,
 } from '@phub/database';
 import type { FileHandle } from 'node:fs/promises';
 
-import {
-  type CommunitiesStagingRoleSplitPgRestorePreflightObservation,
-  type CommunitiesStagingRoleSplitPgRestoreResult,
-  type CommunitiesStagingRoleSplitPgRestoreTarget,
+import type {
+  CommunitiesStagingRoleSplitPgRestorePreflightObservation,
+  CommunitiesStagingRoleSplitPgRestoreResult,
+  CommunitiesStagingRoleSplitPgRestoreTarget,
 } from './communities-staging-role-split-pg-restore-runner.js';
 
 export class CommunitiesStagingRoleSplitRunnerAdapterError extends Error {
@@ -44,6 +49,7 @@ function executionNotAuthorized(): Promise<never> {
 
 export const COMMUNITIES_STAGING_ROLE_SPLIT_DDL_FENCE_ADVISORY_KEY =
   'phub.communities.role-split.restore.v1' as const;
+const MAX_V3_PREPARATION_ENVELOPE_BYTES = 1024 * 1024;
 
 /** Review-only future fence contract. The disabled adapter never receives or invokes it. */
 export interface CommunitiesStagingRoleSplitDdlFence {
@@ -164,6 +170,7 @@ export class CommunitiesStagingRoleSplitReviewedRunnerAdapterError extends Error
       | 'FENCE_LOST'
       | 'FENCE_RELEASE_FAILED'
       | 'RESTORE_OUTCOME_AMBIGUOUS'
+      | 'V3_DURABLE_EXECUTION_CAPABILITY_REQUIRED'
       | 'V3_EXECUTION_EVIDENCE_REQUIRED',
   ) {
     super(`COMMUNITIES_STAGING_ROLE_SPLIT_REVIEWED_RUNNER_ADAPTER_${code}`);
@@ -200,6 +207,16 @@ export interface CommunitiesStagingRoleSplitReviewedRunnerAdapterConfig {
   readonly externalFenceLease?: CommunitiesStagingRoleSplitDdlFenceLease;
   readonly passwordFile: FileHandle;
   readonly executableFile: FileHandle;
+  readonly v3Restore?: {
+    readonly authorization: CommunitiesStagingRoleSplitV3RestoreAuthorization;
+    /** Independently retained digest; never derive it from authorization in the caller. */
+    readonly expectedAuthorizationSha256: string;
+  };
+}
+
+export interface CommunitiesStagingRoleSplitReviewedRestoreArchiveInput extends CommunitiesStagingRoleSplitRestoreArchiveInput {
+  /** Exact canonical bytes read by the pinned durable host after RESTORE_PENDING fsync/readback. */
+  readonly v3PreparationEnvelopeBytes?: string;
 }
 
 function reviewedFail(code: CommunitiesStagingRoleSplitReviewedRunnerAdapterError['code']): never {
@@ -259,6 +276,19 @@ function assertReviewedConfig(
     config.restoreTimeoutMs > 30 * 60_000
   )
     reviewedFail('BINDING_INVALID');
+  if (config.v3Restore !== undefined) {
+    try {
+      assertCommunitiesStagingRoleSplitV3RestoreAuthorization(config.v3Restore.authorization);
+    } catch {
+      reviewedFail('AUTHORIZATION_INVALID');
+    }
+    if (
+      !exactSha256(config.v3Restore.expectedAuthorizationSha256) ||
+      communitiesStagingRoleSplitV3RestoreAuthorizationSha256(config.v3Restore.authorization) !==
+        config.v3Restore.expectedAuthorizationSha256
+    )
+      reviewedFail('AUTHORIZATION_INVALID');
+  }
 }
 
 export class CommunitiesStagingRoleSplitReviewedRunnerAdapter {
@@ -267,11 +297,54 @@ export class CommunitiesStagingRoleSplitReviewedRunnerAdapter {
   }
 
   restoreArchive(
-    _input: CommunitiesStagingRoleSplitRestoreArchiveInput,
+    input: CommunitiesStagingRoleSplitReviewedRestoreArchiveInput,
   ): Promise<CommunitiesStagingRoleSplitPgRestoreResult> {
-    void _input;
-    return Promise.reject(
-      new CommunitiesStagingRoleSplitReviewedRunnerAdapterError('V3_EXECUTION_EVIDENCE_REQUIRED'),
-    );
+    try {
+      return Promise.resolve(this.restoreArchiveWithV3(input));
+    } catch (error) {
+      return Promise.reject(error instanceof Error ? error : new Error('RESTORE_REJECTED'));
+    }
+  }
+
+  private restoreArchiveWithV3(
+    input: CommunitiesStagingRoleSplitReviewedRestoreArchiveInput,
+  ): CommunitiesStagingRoleSplitPgRestoreResult {
+    if (this.config.v3Restore === undefined || input.v3PreparationEnvelopeBytes === undefined)
+      reviewedFail('V3_EXECUTION_EVIDENCE_REQUIRED');
+    if (
+      Buffer.byteLength(input.v3PreparationEnvelopeBytes, 'utf8') >
+      MAX_V3_PREPARATION_ENVELOPE_BYTES
+    )
+      reviewedFail('BINDING_INVALID');
+
+    let envelope;
+    try {
+      envelope = parseCommunitiesStagingRoleSplitV3PreparationEnvelope(
+        input.v3PreparationEnvelopeBytes,
+      );
+      assertCommunitiesStagingRoleSplitV3RestoreAuthorizationBinding({
+        request: this.config.request,
+        preparationEnvelope: envelope,
+        hostAuthorization: this.config.authorization,
+        restoreAuthorization: this.config.v3Restore.authorization,
+      });
+      if (
+        communitiesStagingRoleSplitRestoreMarkerRequestSha256(input.request) !==
+          communitiesStagingRoleSplitRestoreMarkerRequestSha256(this.config.request) ||
+        input.cloneDatabaseOid !== this.config.target.databaseOid ||
+        envelope.state.phase !== 'RESTORE_PENDING'
+      )
+        reviewedFail('BINDING_INVALID');
+    } catch (error) {
+      if (error instanceof CommunitiesStagingRoleSplitReviewedRunnerAdapterError) throw error;
+      reviewedFail('BINDING_INVALID');
+    }
+
+    // RESTORE_PENDING is a durable ambiguity boundary. Canonical bytes and authorization are
+    // deliberately insufficient to distinguish a fresh OWNED -> RESTORE_PENDING CAS from a
+    // replay after restart or response loss. Execution therefore stays unavailable until a
+    // separately reviewed durable V3 host can supply an atomic, one-shot capability and bind the
+    // exact opened archive inode, byte count and pre/post SHA-256 to that capability.
+    reviewedFail('V3_DURABLE_EXECUTION_CAPABILITY_REQUIRED');
   }
 }
