@@ -160,6 +160,88 @@ attest_service() {
   test "$(docker inspect --format '{{.Config.Image}}' "$id")" = "$(image_ref_from "$release_file" "$service")" || fail "$service image differs from release.env"
 }
 
+normalize_boolean() {
+  case "$1" in true | false) printf '%s' "$1" ;; *) printf 'unknown' ;; esac
+}
+
+normalize_number() {
+  case "$1" in '' | *[!0-9]*) printf 'unknown' ;; *) printf '%s' "$1" ;; esac
+}
+
+normalize_health() {
+  case "$1" in healthy | unhealthy | starting | none) printf '%s' "$1" ;; *) printf 'unknown' ;; esac
+}
+
+bounded_docker() {
+  timeout --signal=TERM --kill-after=1s 5s docker "$@"
+}
+
+container_http_status() {
+  service=$1
+  id=$2
+  kind=$3
+  case "$service:$kind" in
+    realtime:live) url=http://127.0.0.1:3001/health/live ;;
+    realtime:ready) url=http://127.0.0.1:3001/health/ready ;;
+    api:live) url=http://127.0.0.1:3000/health/live ;;
+    api:ready) url=http://127.0.0.1:3000/health/ready ;;
+    worker:live) url=http://127.0.0.1:3002/health/live ;;
+    worker:ready) url=http://127.0.0.1:3002/health/ready ;;
+    web:live | web:ready) url=http://127.0.0.1:8080/healthz ;;
+    *) printf 'unavailable'; return 0 ;;
+  esac
+  if test "$service" = web; then
+    if bounded_docker exec "$id" wget -q -O /dev/null "$url" 2>/dev/null; then
+      printf '200'
+    else
+      printf 'unavailable'
+    fi
+    return 0
+  fi
+  status=$(
+    bounded_docker exec "$id" node -e \
+      "fetch('${url}', { signal: AbortSignal.timeout(3000) }).then((response) => process.stdout.write(String(response.status))).catch(() => process.exit(1))" \
+      2>/dev/null || true
+  )
+  case "$status" in [1-5][0-9][0-9]) printf '%s' "$status" ;; *) printf 'unavailable' ;; esac
+}
+
+classify_container_logs() {
+  id=$1
+  logs=$(bounded_docker logs --tail 200 "$id" 2>&1 || true)
+  case "$logs" in
+    *ERR_MODULE_NOT_FOUND* | *MODULE_NOT_FOUND* | *'Cannot find package'*) printf 'runtime_module_missing' ;;
+    *'Invalid environment'* | *ZodError* | *'configuration is invalid'*) printf 'configuration_invalid' ;;
+    *ACCESS_REFUSED* | *'authentication failed'* | *'password authentication failed'*) printf 'dependency_authentication' ;;
+    *ECONNREFUSED* | *ETIMEDOUT* | *ENOTFOUND* | *'Connection timeout'* | *'connect ECONN'*) printf 'dependency_connectivity' ;;
+    *EACCES* | *'Permission denied'* | *'permission denied'*) printf 'permission_denied' ;;
+    '') printf 'no_logs' ;;
+    *) printf 'unclassified' ;;
+  esac
+}
+
+diagnose_service_readiness() {
+  service=$1
+  case "$service" in realtime | api | worker | web) ;; *) fail 'readiness diagnostic service is unsupported' ;; esac
+  ids=$(bounded_docker ps -a --filter label=com.docker.compose.project=phub-staging --filter "label=com.docker.compose.service=$service" --format '{{.ID}}' 2>/dev/null || true)
+  container_count=$(printf '%s\n' "$ids" | awk 'NF { count += 1 } END { print count + 0 }')
+  if test "$container_count" -ne 1; then
+    case "$container_count" in 0) container_count=none ;; *) container_count=multiple ;; esac
+    printf '%s\n' "service_readiness_diagnostic service=$service container_count=$container_count"
+    return 0
+  fi
+  running=$(normalize_boolean "$(bounded_docker inspect --format '{{.State.Running}}' "$ids" 2>/dev/null || true)")
+  health=$(normalize_health "$(bounded_docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$ids" 2>/dev/null || true)")
+  exit_code=$(normalize_number "$(bounded_docker inspect --format '{{.State.ExitCode}}' "$ids" 2>/dev/null || true)")
+  oom_killed=$(normalize_boolean "$(bounded_docker inspect --format '{{.State.OOMKilled}}' "$ids" 2>/dev/null || true)")
+  restart_count=$(normalize_number "$(bounded_docker inspect --format '{{.RestartCount}}' "$ids" 2>/dev/null || true)")
+  live_status=$(container_http_status "$service" "$ids" live)
+  ready_status=$(container_http_status "$service" "$ids" ready)
+  log_class=$(classify_container_logs "$ids")
+  printf '%s\n' \
+    "service_readiness_diagnostic service=$service running=$running health=$health exit_code=$exit_code oom_killed=$oom_killed restart_count=$restart_count live_http=$live_status ready_http=$ready_status log_class=$log_class"
+}
+
 wait_service() {
   service=$1
   release_file=$2
@@ -175,6 +257,7 @@ wait_service() {
     attempt=$((attempt + 1))
     sleep 5
   done
+  diagnose_service_readiness "$service"
   fail "$service did not become healthy on the exact image within 180 seconds"
 }
 
