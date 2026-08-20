@@ -325,10 +325,12 @@ true authorization. It contains:
   evidence reader.
 
 The host entrypoint is a POSIX shell program bound to the exact GNU coreutils paths present on the
-ARM64 staging node; `/usr/bin/node` is not required. The canonical control ledger is independently
-pinned and binds the fixed artifact paths, target-relative paths, modes, byte counts, SHA-256
-values and false execution authorizations without parsing JSON on the host. The installer accepts
-independently retained manifest, control and artifact-set SHA-256 values. It installs
+ARM64 staging node; `/usr/bin/node` is not required. Its file-count validation uses shell numeric
+matching rather than AWK character classes because the staging host provides legacy `mawk 1.3.3`,
+which rejects otherwise valid `[[:space:]]` and `[[:digit:]]` expressions. The canonical control
+ledger is independently pinned and binds the fixed artifact paths, target-relative paths, modes,
+byte counts, SHA-256 values and false execution authorizations without parsing JSON on the host.
+The installer accepts independently retained manifest, control and artifact-set SHA-256 values. It installs
 only a previously absent version directory below
 `/usr/local/libexec/phub/communities-role-split/candidates/<commit>`, refuses an existing target or
 an abandoned `.incomplete` directory, verifies post-copy hashes, fsyncs before publication and

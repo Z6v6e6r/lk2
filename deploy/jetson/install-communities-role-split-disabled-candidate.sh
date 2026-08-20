@@ -166,10 +166,11 @@ parse_artifact_line() {
 walk_count() {
   count=$(/usr/bin/find "$1" -xdev -mindepth 1 -printf x 2>/dev/null | /usr/bin/wc -c) ||
     fail FILE_SET_INVALID
-  /usr/bin/awk 'BEGIN { ok = 0 } /^[[:space:]]*[0-9]+[[:space:]]*$/ { ok = 1 } END { exit(ok ? 0 : 1) }' <<EOF >/dev/null 2>&1 || fail FILE_SET_INVALID
-$count
-EOF
-  printf '%s\n' "$count" | /bin/sed 's/[[:space:]]//g'
+  set -- $count
+  [ "$#" -eq 1 ] || fail FILE_SET_INVALID
+  count=$1
+  case "$count" in '' | *[!0-9]*) fail FILE_SET_INVALID ;; esac
+  printf '%s\n' "$count"
 }
 
 verify_candidate() {

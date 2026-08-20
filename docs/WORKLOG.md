@@ -1,5 +1,14 @@
 # Worklog
 
+## 2026-08-20 — Communities staging mawk compatibility
+
+- Replaced the disabled installer's AWK character-class validation with fail-closed POSIX-shell
+  numeric matching. Read-only staging reproduction proved that its legacy `mawk 1.3.3` rejects
+  `[[:space:]]` and `[[:digit:]]` even for the valid candidate entry count `14`.
+- Added a regression contract that requires the shell validator and forbids AWK POSIX character
+  classes in the host installer. The retained root-owned candidate remained disabled; no install
+  target, partial target, activation link, ceremony or database mutation was created.
+
 ## 2026-08-20 — Communities dependency-free disabled installer
 
 - Replaced the V3 host entrypoint, which required an unavailable `/usr/bin/node` on the ARM64

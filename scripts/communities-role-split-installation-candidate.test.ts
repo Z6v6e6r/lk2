@@ -218,6 +218,10 @@ describe('communities role-split installation candidate', () => {
     const hostInstaller = readFileSync(join(first, 'payload/installer.sh'), 'utf8');
     expect(hostInstaller).toContain('--control-sha256');
     expect(hostInstaller).toContain('/usr/bin/sha256sum');
+    expect(hostInstaller).toContain(
+      'case "$count" in \'\' | *[!0-9]*) fail FILE_SET_INVALID ;; esac',
+    );
+    expect(hostInstaller).not.toMatch(/\/usr\/bin\/awk[^\n]*\[\[:(?:space|digit):\]\]/u);
     expect(hostInstaller).not.toMatch(/\/usr\/bin\/node|\b(?:docker|psql|ssh|sudo|jq|eval|rm)\b/u);
     expect(hostInstaller).not.toMatch(/^\s*(?:source|\.)\s/mu);
     expect(
