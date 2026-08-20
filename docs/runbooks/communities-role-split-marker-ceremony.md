@@ -61,6 +61,18 @@ digest. Marker/evidence V1 is not accepted as a compatibility fallback.
   creation receipt; `RESUME` requires its exact SHA-256 before restore and marker work.
 - `deploy/jetson/cleanup-communities-role-split-restore-marker-clone.sh` never drops or renames a
   database. It can record only `QUARANTINE_PENDING_RECONCILIATION_REQUIRED` after exact readback.
+- `apps/migrator/src/communities-staging-role-split-pg-restore-runner.ts` is an unwired,
+  descriptor-only `pg_restore` library. It takes an already verified archive `FileHandle` as child
+  stdin and an already-open private password-file descriptor as child fd 3; the root-owned reviewed
+  PostgreSQL 16 executable is already-open on child fd 4 and executed only as `/proc/self/fd/4`.
+  It never takes or reopens an archive path, executable path, database URL or password string. Its fixed argv is
+  custom-format, `--exit-on-error` and `--single-transaction`, without `--no-owner`, `--no-acl`,
+  `--clean`, `--create` or parallel jobs. It checks an injected exact clone/OID/system/PG16/login
+  and restore-role preflight before spawn. The future root-owned wrapper, not this FD-only module,
+  must open the executable with `O_NOFOLLOW`; this module then SHA-pins the opened fd 4 for both
+  version and restore. It uses `shell:false`, allowlisted environment, discarded bounded stderr and a
+  SIGTERM/SIGKILL timeout. A failed, timed-out or response-lost process has
+  only a stable redacted code; it cannot advance `RESTORE_PENDING`, retry, or drop a clone.
 
 The PG16 library validates catalog name/OID/owner bindings, PostgreSQL major version,
 source/restored ledger equality and archive/evidence/TOC SHA custody. Its restore callback must
@@ -76,6 +88,33 @@ owned by its execution uid. It streams archive hashing and binds the exact decla
 count; it never buffers the archive as a whole. This filesystem lease is not yet a runnable
 cluster-wide DDL fence: a future forced command must also provide outer process serialization and a
 reviewed PostgreSQL advisory-session lease before clone creation or marker writes.
+
+The new runner remains deliberately unwired: the current host request does not yet carry an
+immutable restore-login/role identity or a reviewed connection factory. Local target-name/OID argv
+binding cannot prove that a privileged restore identity cannot write the source database. Before
+any live wiring, staging must enforce and attest source denial for that identity at the server
+boundary (HBA/`CONNECT`/fixed proxy or equivalent), as well as the exact clone-only connection
+factory used by both preflight and `pg_restore`. The future wrapper must open the reviewed
+`pg_restore` executable with no-follow semantics, bind its approved SHA-256, and pass that open
+descriptor to the runner. Both the version probe and restore execute the same inherited fd 4;
+there is no pathname or injectable production seam inside the runner. This executable-custody
+check is not authorization to run a ceremony. `--single-transaction` does not remove PostgreSQL
+lock-table limits; the mandatory matrix must include a representative archive to establish that
+the restore completes within the isolated clone's capacity.
+If the runner reports `TERMINATION_UNCONFIRMED`, reconciliation is mandatory: prove both OS process
+absence and absence of the exact restore principal/clone session in `pg_stat_activity` before any
+further observation. It must never be treated as a retry or cleanup signal.
+The preflight connection factory must accept the runner AbortSignal and close its database client on
+abort; an unacknowledged cancellation is `PREFLIGHT_TERMINATION_UNCONFIRMED` and blocks all restore.
+
+`apps/migrator/src/communities-staging-role-split-pg-restore-runner.pg.test.ts` is the real,
+descriptor-pinned, opt-in Linux PG16 invalid-archive child-process probe. It skips unless the exact confirmation
+`PHUB_COMMUNITIES_MARKER_PG16_VERIFY=I_UNDERSTAND_PG16_VERIFY_IS_DISPOSABLE`, separate loopback
+`*_verify` source and clone URLs, and an absolute `pg_restore` path are supplied. It queries the
+actual clone identity, proves an OID mismatch fails before spawn, then feeds an invalid custom
+archive through the descriptor to prove the real child-process nonzero path without restoring
+objects. It only checks the source remains reachable afterwards; it does not prove source-write
+denial, ownership/ACL/RLS preservation, valid archive restoration, marker writing or cleanup.
 
 This code does not attest ACL correctness, effective runtime/migrator privileges, tenant RLS or
 the provenance of a collected inventory. It does not authorize marker creation, role split,
@@ -147,16 +186,19 @@ staging/production database, role, key, request or inventory.
    forced-command key and operator-selected connections. Repository presence alone grants no
    installation or execution authority.
 2. Bind the reviewed ownership-and-ACL-preserving restore command to the exact installed ceremony
-   candidate; do not reuse a generic `--no-owner --no-acl` verifier or infer installation authority
-   from the local disposable adapter.
+   candidate only after review of the fixed clone-only connection factory, descriptor custody and
+   server-enforced source denial for the restore identity. Do not reuse a generic
+   `--no-owner --no-acl` verifier or infer installation authority from the local disposable adapter.
 3. Complete the remaining PostgreSQL 16 failure matrix for response loss, cleanup failure and
    evidence publication failure. The local custom-archive gate proves the successful synthetic
-   `pg_restore` path, catalog/RLS, exact comment readback and restart behavior only.
+   `pg_restore` path, catalog/RLS, exact comment readback and restart behavior; the descriptor-pinned
+   invalid-archive gate proves only the fail-closed child-process path. Neither authorizes staging.
 4. Execute the structured `pg_catalog.aclexplode` INPUT_C producer against a separately authorized,
    independently sourced clean clone and independently pin the redacted before/after artifacts.
    Verify each exact canonical artifact with the separately built
    `verify-communities-staging-role-split-inventory-artifact` CLI and its independently supplied
-   SHA-256. The local synthetic producer/evaluator gate is catalog proof, not trusted inventory.
+   SHA-256. The local synthetic producer/evaluator gate is catalog proof, not trusted inventory;
+   mock rows are not catalog proof.
 5. Complete independent security and migration review of the real adapter and failure matrix.
 6. Obtain separate approvals for installation, forced-command key, one ceremony run and any later
    post-marker cleanup.
