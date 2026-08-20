@@ -1,5 +1,19 @@
 # Worklog
 
+## 2026-08-20 — Communities V3 executable composition checkpoint
+
+- Added separate canonical clone-creation and continuation authorizations. Clone creation can only
+  persist `CANDIDATE/OWNED`; continuation independently binds the reviewed host, durable-restore
+  authorization, the exact preceding clone authorization and all executable collaborator subjects.
+- Added a code-only two-mode V3 composition for the full forward state lifecycle, exact marker
+  response-loss reconciliation, evidence resume and a distinct V3 attested-evidence envelope.
+- Added the durable restore coordinator that creates its one-shot execution edge only after the
+  successful `OWNED -> RESTORE_PENDING` CAS under the held fence, binds one already-open archive
+  before and after the runner, and never retries an ambiguous restore.
+- This checkpoint has no CLI, environment parser, forced command, credential, workflow or staging
+  configuration. It was not added to the installed disabled V5 candidate and authorizes no role or
+  ACL change, shared-database mutation, migration, deploy, activation or automatic cleanup.
+
 ## 2026-08-20 — Communities V5 installed-count hotfix
 
 - Corrected the dependency-free V5 installer readback from the retained V4 counts to twelve

@@ -1,14 +1,14 @@
 # Communities role-split marker ceremony
 
-Status: **code-only canonical host preparation; no host adapter, receipt, evidence, command or V2
-ceremony is installed or authorized to run**.
+Status: **a V3 executable composition and durable restore coordinator now exist as code-only,
+unwired modules; the staging host still has only disabled V5 bytes and no ceremony is authorized
+to run**.
 
-The repository contains a pure v2 ceremony state machine and an injected-host orchestrator. They
-exist to make partial failures, cleanup and idempotency reviewable. Neither module opens PostgreSQL
-connections, reads files, invokes Docker, creates or drops a database, writes a database comment,
-publishes evidence or changes roles and ACLs by itself. A separately reviewed shell implementation
-exists under `deploy/jetson`, but it remains uninstalled and has no forced-command key, workflow or
-execution authority.
+The repository contains frozen V2 preparation code and a distinct V3 state/authorization contour.
+The new composition coordinates injected collaborators only; it contains no environment parser,
+SSH command, credential loader or activation path. The installed staging V5 candidate remains
+disabled, has no active symlink, forced-command key, workflow or database authority, and does not
+contain or authorize the new composition bytes.
 
 ## State contract
 
@@ -142,20 +142,44 @@ digest. Marker/evidence V1 is not accepted as a compatibility fallback.
   fsync and readback through `/proc/self/fd/<dirfd>`, then rechecks the configured path and pinned
   inode/mode/owner. It is separate from ceremony state and treats substitution or different
   evidence as a hard failure.
+- `packages/database/src/communities-staging-role-split-v3-execution-authorization.ts` defines two
+  separate canonical approvals. `CLONE_CREATION_AUTHORIZED` grants only candidate-state
+  persistence and clone creation. `EXECUTION_AUTHORIZED` separately binds the exact host and
+  durable-restore authorization digests, the exact preceding clone-creation authorization and all
+  executable collaborator subjects. The two approvals must share the exact composition,
+  state-store and DDL-fence subjects. Continuation grants only state persistence, restore, marker
+  write and evidence publication. Neither grants role/ACL, shared-database, migration, deploy,
+  import, activation or automatic-cleanup authority.
+- `apps/migrator/src/communities-staging-role-split-v3-executable-composition.ts` is the code-only
+  two-mode V3 composition. `CREATE` can reach only `OWNED_CONTINUATION_REQUIRED`; it cannot restore
+  or mark. `CONTINUE` requires the separate exact execution authorization and drives only the
+  canonical forward lifecycle. It refuses durable `RESTORE_PENDING`, reconciles marker response
+  loss by exact readback and resumes an already published exact evidence envelope without
+  rewriting marker or evidence.
+- `apps/migrator/src/communities-staging-role-split-v3-durable-restore-coordinator.ts` implements
+  the mandatory restore edge behind the host interface. Under the same injected fence it hashes
+  an already-open regular single-link archive, performs the exact `OWNED -> RESTORE_PENDING` CAS,
+  creates and consumes a process-local one-shot edge only after that successful CAS, runs the
+  pinned adapter, verifies the same device/inode/size/SHA-256 again and performs the exact
+  `RESTORE_PENDING -> RESTORED` CAS. Conflict, ambiguous write or lost runner result never retries
+  `pg_restore` automatically.
+- `packages/database/src/communities-staging-role-split-v3-attested-evidence.ts` defines a distinct
+  V3 evidence envelope bound to the V3 marker evidence, execution-authorization digest,
+  ownership/ACL attestation, source-write-denial attestation and independently pinned evidence
+  sink. It cannot be substituted with the V2 attested-evidence format.
 
-Any future live wiring requires a newly reviewed, versioned V3 durable state, marker and evidence
-contract that carries `restoreExecutionEvidenceSha256` from the receipt/clone binding onward. The
-existing V2 state and marker formats are frozen and cannot be used as a compatibility fallback for
-V3 execution evidence.
+Any future live wiring must consume these exact V3 contracts. The existing V2 state, marker and
+attested-evidence formats are frozen and cannot be used as a compatibility fallback.
 
 The package-local `communities-staging-role-split-v3-contract` now defines that canonical hash DAG
 as code-only preparation. Its V3 `OWNED` state and every later phase require the exact SHA-256 of
 the fully cross-bound V1 `PREPARATION_ONLY` restore-execution evidence; the V3 marker payload and
 redacted marker evidence carry the same immutable edge. V3 has distinct state, marker prefix,
-payload and evidence versions and rejects V1/V2 artifacts rather than converting them. This module
-has no orchestrator, PG-host, runner, filesystem, forced-command, workflow or migration wiring and
-all marker-evidence authority flags remain false. In particular, defining the V3 bytes does not
-authorize state persistence or restore execution.
+payload and evidence versions and rejects V1/V2 artifacts rather than converting them. The
+contract itself has no side effects and all marker-evidence authority flags remain false. State
+persistence and restore are available only through the separately pinned authorizations and
+injected code-only composition described above; defining or importing the V3 bytes does not grant
+either authority.
 
 The V3 preparation envelope is pure contract code only. It has no persistence, lease, fence, clone
 transition, PG, archive, runner, marker or evidence-publication API; all authorization fields are
@@ -172,23 +196,15 @@ clone OID, system identifier, candidate commit and V2 host-authorization digest.
 `restoreExecution`; state persistence, clone creation, marker/evidence writes, cleanup, role/ACL
 changes, migration, deploy, import and activation remain false.
 
-`CommunitiesStagingRoleSplitReviewedRunnerAdapter.restoreArchive` can validate those exact canonical
-V3 envelope bytes and the independently pinned V3 restore authorization, but it still refuses before
-inspecting the archive, fence, preflight or runner with
-`V3_DURABLE_EXECUTION_CAPABILITY_REQUIRED`. Durable `RESTORE_PENDING` bytes are deliberately not an
-execution capability: they cannot distinguish the first post-CAS call from a restart, response-loss
-replay or concurrent duplicate. Directly binding the raw `pg_restore` runner to the PG-host restore
-callback remains prohibited.
+`CommunitiesStagingRoleSplitReviewedRunnerAdapter.restoreArchive` remains disabled and continues to
+fail with `V3_DURABLE_EXECUTION_CAPABILITY_REQUIRED`; it is not silently upgraded into an execution
+path. The new durable coordinator owns the distinct post-CAS one-shot edge and invokes only its
+separately pinned runner collaborator. Durable `RESTORE_PENDING` bytes remain non-executable on
+restart, response loss or concurrent replay. No installer manifest, forced command, workflow or
+CLI currently contains the new composition or either execution authorization. A post-restore
+attestation is not a substitute for the pre-restore gate.
 
-This remains an unwired, non-executable code-only authorization seam. A later V3 durable host must
-atomically create and consume a non-replayable in-memory capability only for the successful
-`OWNED -> RESTORE_PENDING` CAS under the same cluster fence. That capability must bind the exact
-opened archive device/inode, byte count and pre/post SHA-256 to the request before the adapter may
-call the runner. No installer manifest, forced command, workflow or CLI contains this authorization.
-A post-restore attestation is not a substitute for the pre-restore gate, and the non-entrypoint
-status of these libraries is not execution authority.
-
-## V3 durable restore contract-only prerequisite
+## V3 durable restore contract and code-only coordinator
 
 `communities-staging-role-split-v3-durable-state-envelope-v1` is a strict canonical JSON+LF
 envelope for only `OWNED`, `RESTORE_PENDING` and `RESTORED`. It binds the request, creation receipt,
@@ -201,13 +217,10 @@ restore execution; clone creation, markers, evidence, cleanup, roles, shared-dat
 migration, deploy, import and activation remain false. The validator accepts only the exact forward
 `OWNED -> RESTORE_PENDING -> RESTORED` sequence; no envelope points back to this authorization.
 
-These are contract-only, unwired bytes. They expose no state store, host, filesystem, archive,
-lease, capability, CLI, install or workflow API, perform no state write and do not make the
-executable durable host GO. A future separately reviewed host must still provide atomic state
-persistence and a non-replayable pre-restore capability under the same cluster fence.
-
-These modules remain non-entrypoint libraries: there is no environment parser, forced command,
-installation target or workflow that composes them. The PG16 library validates catalog
+The durable envelopes remain pure bytes. The new coordinator can consume them only through an
+injected CAS store, held fence, archive-custody subject and runner whose exact digests are bound by
+the separate execution authorization. There is still no environment parser, forced command,
+installation target or workflow that supplies those collaborators. The PG16 library validates catalog
 name/OID/owner bindings, PostgreSQL major version, source/restored ledger equality and
 archive/evidence/TOC SHA custody. Its restore callback must consume the already verified archive
 descriptor, preserve ownership and ACLs, and must never use `pg_restore --no-owner` or `--no-acl`.
@@ -251,7 +264,8 @@ The following remain external hard gates and are not satisfied by this code chec
 - actual source-write-denial and ownership/ACL/RLS attestation artifacts produced from the exact
   retained archive and clone;
 - the twelve root-owned evidence files plus a separately retained authorization-receipt SHA-256;
-- a separately reviewed executable composition entrypoint and execution-authorizing candidate.
+- independent security/PostgreSQL review of the code-only V3 composition and a later exact
+  execution-authorizing installation candidate that contains it.
 
 Until all of them exist and a later candidate explicitly verifies them, V3 may install only its
 disabled versioned bytes. It remains non-authorizing for execution and every database operation.
@@ -524,20 +538,17 @@ returns `V3_DURABLE_EXECUTION_CAPABILITY_REQUIRED`, and there is no command, ins
 workflow, environment, key, SSH, Docker or PostgreSQL entrypoint. The consumer API therefore proves
 the one-shot state/custody choreography only; it does not authorize or make a restore runnable.
 
-## Required before installation and before execution
+## Remaining gates before execution
 
-1. Review and, under a separate approval, install/post-check the exact disabled V5 candidate.
-   Candidate presence does not authorize installation; successful installation does not authorize
-   execution, forced-command wiring or any database operation.
-2. Implement and review a V3-compatible executable composition entrypoint for the canonical host
-   adapter that consumes the durable V3 state, marker and marker-evidence contract with the
-   lifecycle
-   `CANDIDATE -> OWNED -> RESTORE_PENDING -> RESTORED -> VERIFIED -> MARKER_PENDING -> MARKED -> EVIDENCED`,
-   authoritative response-loss reconciliation, evidence resume, clone-only connection factory,
-   server-enforced source denial and exact ownership/ACL/RLS attestation. Bind a forced command only
-   to that future composition. The current V2-marker canonical adapter and attested-evidence V1
-   cannot be reused as a V3 compatibility fallback. Do not install the legacy review-only ceremony
-   shell contour or reuse a generic `--no-owner --no-acl` verifier.
+1. The exact disabled V5 candidate at commit
+   `55655760a4dee1ab0a614cf464ad9d2b68bbf8c0` has been installed and its disabled readback passed.
+   It contains no active link and grants no execution or database authority. It predates and does
+   not contain the new V3 composition.
+2. Complete independent security and PostgreSQL review of the code-only V3 composition, durable
+   restore coordinator, split clone/execution authorization and distinct V3 evidence. After that,
+   build a new exact candidate that contains those reviewed bytes but still adds no key, workflow
+   or live configuration. Do not reuse the V2 marker/attested-evidence contour or the permanently
+   disabled reviewed-runner path as a compatibility fallback.
 3. Preserve the completed disposable PostgreSQL 16 response-loss, cleanup-failure and
    evidence-publication matrix when reviewing the exact installation adapter. The local matrix
    and custom-archive gate prove the successful synthetic `pg_restore` path, catalog/RLS, exact
@@ -550,11 +561,11 @@ the one-shot state/custody choreography only; it does not authorize or make a re
    `verify-communities-staging-role-split-inventory-artifact` CLI and its independently supplied
    SHA-256. The local synthetic producer/evaluator gate is catalog proof, not trusted inventory;
    mock rows are not catalog proof.
-5. Complete independent security and migration review of the real adapter and failure matrix.
-6. Obtain separate approvals for installation, forced-command key, one ceremony run and any later
-   post-marker cleanup.
+5. Complete independent security and migration review of the final installed adapter, candidate
+   manifest and failure matrix.
+6. Obtain separate approvals, in order, for the new disabled installation, execution-authorizing
+   candidate, forced-command key, one ceremony run and any later post-marker cleanup.
 
-Only item 1 is required for the separately approved disabled installation. Until items 2-6 also
-pass, do not create a key, wire a workflow, place requests on staging or run either ceremony
-contour. The installed command and the existing preparation gate must continue to fail with
-`EXECUTION_NOT_AUTHORIZED` before PostgreSQL or mutable ceremony filesystem access.
+Until items 2-6 pass, do not create a key, wire a workflow, place requests on staging or run either
+ceremony contour. The currently installed V5 command and existing preparation gate must continue
+to fail with `EXECUTION_NOT_AUTHORIZED` before PostgreSQL or mutable ceremony filesystem access.
