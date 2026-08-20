@@ -148,7 +148,16 @@ contract that carries `restoreExecutionEvidenceSha256` from the receipt/clone bi
 existing V2 state and marker formats are frozen and cannot be used as a compatibility fallback for
 V3 execution evidence.
 
-The V1 host-authorization receipt can describe a reviewed restore contour, but it is not sufficient
+The package-local `communities-staging-role-split-v3-contract` now defines that canonical hash DAG
+as code-only preparation. Its V3 `OWNED` state and every later phase require the exact SHA-256 of
+the fully cross-bound V1 `PREPARATION_ONLY` restore-execution evidence; the V3 marker payload and
+redacted marker evidence carry the same immutable edge. V3 has distinct state, marker prefix,
+payload and evidence versions and rejects V1/V2 artifacts rather than converting them. This module
+has no orchestrator, PG-host, runner, filesystem, forced-command, workflow or migration wiring and
+all marker-evidence authority flags remain false. In particular, defining the V3 bytes does not
+authorize state persistence or restore execution.
+
+The V2 host-authorization receipt can describe a reviewed restore contour, but it is not sufficient
 execution authority. `CommunitiesStagingRoleSplitReviewedRunnerAdapter.restoreArchive` therefore
 returns `V3_EXECUTION_EVIDENCE_REQUIRED` before archive inspection, fence acquisition, preflight or
 runner invocation. It may become executable only after the V3 envelope is durably persisted and
@@ -347,12 +356,14 @@ the tool never deletes or replaces it automatically.
 1. Review the exact review-only candidate, fixed request/state/evidence custody, forced-command key
    and operator-selected connections. The V2 manifest is explicitly not installable; repository or
    candidate presence grants no installation or execution authority.
-2. Implement and review a canonical host adapter with the durable lifecycle
+2. Implement and review a V3-compatible composition or adapter that consumes the durable V3 state,
+   marker and marker-evidence contract with the lifecycle
    `CANDIDATE -> OWNED -> RESTORE_PENDING -> RESTORED -> VERIFIED -> MARKER_PENDING -> MARKED -> EVIDENCED`,
    authoritative response-loss reconciliation, evidence resume, clone-only connection factory,
    server-enforced source denial and exact ownership/ACL/RLS attestation. Bind a forced command only
-   to that future adapter. Do not install the review-only shell contour or reuse a generic
-   `--no-owner --no-acl` verifier.
+   to that future composition. The current V2-marker canonical adapter and attested-evidence V1
+   cannot be reused as a V3 compatibility fallback. Do not install the review-only shell contour or
+   reuse a generic `--no-owner --no-acl` verifier.
 3. Preserve the completed disposable PostgreSQL 16 response-loss, cleanup-failure and
    evidence-publication matrix when reviewing the exact installation adapter. The local matrix
    and custom-archive gate prove the successful synthetic `pg_restore` path, catalog/RLS, exact
