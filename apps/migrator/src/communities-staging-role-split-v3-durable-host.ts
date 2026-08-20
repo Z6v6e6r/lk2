@@ -2,11 +2,14 @@
  * Unwired V3 durable-restore preparation boundary.
  *
  * It may persist the reviewed OWNED -> RESTORE_PENDING boundary and retain an
- * opaque, same-invocation capability.  It deliberately has no restore runner,
- * consumption method, RESTORED transition, command entrypoint or cleanup API.
+ * opaque, same-invocation capability.  A same-host consumer may use that exact
+ * capability once to invoke an injected SHA-bound executor and persist an exact
+ * RESTORED readback.  This module deliberately provides no concrete executor,
+ * command entrypoint, installer or live wiring.
  */
 import { constants } from 'node:fs';
 import { lstat, open, rename, unlink } from 'node:fs/promises';
+import type { FileHandle } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 
@@ -56,8 +59,10 @@ export class CommunitiesStagingRoleSplitV3DurableHostError extends Error {
       | 'STATE_CAS_MISMATCH'
       | 'STATE_WRITE_FAILED'
       | 'ARCHIVE_CUSTODY_INVALID'
+      | 'RESTORE_OUTCOME_AMBIGUOUS'
       | 'CLEANUP_INCOMPLETE'
       | 'CAPABILITY_INVALID',
+    readonly cleanupIncomplete = false,
   ) {
     super(`COMMUNITIES_STAGING_ROLE_SPLIT_V3_DURABLE_HOST_${code}`);
     this.name = 'CommunitiesStagingRoleSplitV3DurableHostError';
@@ -66,6 +71,13 @@ export class CommunitiesStagingRoleSplitV3DurableHostError extends Error {
 
 function fail(code: CommunitiesStagingRoleSplitV3DurableHostError['code']): never {
   throw new CommunitiesStagingRoleSplitV3DurableHostError(code);
+}
+function deepFreeze<T>(value: T): T {
+  if (value !== null && typeof value === 'object' && !Object.isFrozen(value)) {
+    for (const nested of Object.values(value as Record<string, unknown>)) deepFreeze(nested);
+    Object.freeze(value);
+  }
+  return value;
 }
 function currentUid(): number {
   if (process.getuid === undefined) fail('STATE_DIRECTORY_UNSAFE');
@@ -315,8 +327,41 @@ export interface CommunitiesStagingRoleSplitV3ArchiveCustody {
       readonly bytes: string;
       readonly preSha256: string;
     };
+    observe(): Promise<{
+      readonly device: string;
+      readonly inode: string;
+      readonly bytes: string;
+      readonly preSha256: string;
+    }>;
+    restore(
+      executor: CommunitiesStagingRoleSplitV3DurableRestoreExecutor,
+      input: CommunitiesStagingRoleSplitV3DurableRestoreExecutorInput,
+    ): Promise<CommunitiesStagingRoleSplitV3DurableRestoreExecutorResult>;
     close(): Promise<void>;
   }>;
+}
+export interface CommunitiesStagingRoleSplitV3DurableRestoreExecutorInput {
+  readonly request: CommunitiesStagingRoleSplitRestoreMarkerRequest;
+  readonly cloneDatabaseOid: string;
+  readonly restorePendingEnvelopeBytes: string;
+  readonly externalFenceLease: CommunitiesStagingRoleSplitDdlFenceLease;
+}
+export interface CommunitiesStagingRoleSplitV3DurableRestoreExecutorResult {
+  readonly discardedOutputBytes: number;
+  readonly archiveObservation: {
+    readonly device: string;
+    readonly inode: string;
+    readonly bytes: string;
+    readonly preSha256: string;
+  };
+}
+export interface CommunitiesStagingRoleSplitV3DurableRestoreExecutor {
+  readonly subjectSha256: string;
+  restore(
+    input: CommunitiesStagingRoleSplitV3DurableRestoreExecutorInput & {
+      readonly archiveFile: FileHandle;
+    },
+  ): Promise<CommunitiesStagingRoleSplitV3DurableRestoreExecutorResult>;
 }
 export interface CommunitiesStagingRoleSplitV3DurableHostConfig {
   readonly request: CommunitiesStagingRoleSplitRestoreMarkerRequest;
@@ -327,6 +372,7 @@ export interface CommunitiesStagingRoleSplitV3DurableHostConfig {
   readonly expectedAuthorizationSha256: string;
   readonly stateStore: CommunitiesStagingRoleSplitV3DurableStateStore;
   readonly archiveCustody: CommunitiesStagingRoleSplitV3ArchiveCustody;
+  readonly restoreExecutor: CommunitiesStagingRoleSplitV3DurableRestoreExecutor;
   readonly fence: CommunitiesStagingRoleSplitDdlFence & { readonly subjectSha256: string };
   readonly durableHostSha256: string;
   readonly fenceTimeoutMs: number;
@@ -367,37 +413,50 @@ const tokenSha256 = (value: string) => createHash('sha256').update(value, 'utf8'
 
 export class CommunitiesStagingRoleSplitV3DurableHost {
   private readonly capabilities = new WeakMap<object, CapabilityRecord>();
-  constructor(private readonly config: CommunitiesStagingRoleSplitV3DurableHostConfig) {
+  private readonly config: CommunitiesStagingRoleSplitV3DurableHostConfig;
+  constructor(config: CommunitiesStagingRoleSplitV3DurableHostConfig) {
+    this.config = Object.freeze({
+      ...config,
+      request: deepFreeze(structuredClone(config.request)),
+      preparationEnvelope: deepFreeze(structuredClone(config.preparationEnvelope)),
+      restoreAuthorization: deepFreeze(structuredClone(config.restoreAuthorization)),
+      hostAuthorization: deepFreeze(structuredClone(config.hostAuthorization)),
+      authorization: deepFreeze(structuredClone(config.authorization)),
+      envelopes: deepFreeze(structuredClone(config.envelopes)),
+    });
     try {
       assertCommunitiesStagingRoleSplitV3DurableRestoreAuthorizationBinding({
-        request: config.request,
-        preparationEnvelope: config.preparationEnvelope,
-        restoreAuthorization: config.restoreAuthorization,
-        hostAuthorization: config.hostAuthorization,
-        ownedEnvelope: config.envelopes.owned,
-        restorePendingEnvelope: config.envelopes.restorePending,
-        restoredEnvelope: config.envelopes.restored,
+        request: this.config.request,
+        preparationEnvelope: this.config.preparationEnvelope,
+        restoreAuthorization: this.config.restoreAuthorization,
+        hostAuthorization: this.config.hostAuthorization,
+        ownedEnvelope: this.config.envelopes.owned,
+        restorePendingEnvelope: this.config.envelopes.restorePending,
+        restoredEnvelope: this.config.envelopes.restored,
         componentSubjects: {
-          durableHostSha256: config.durableHostSha256,
-          stateStoreSha256: config.stateStore.subjectSha256,
-          archiveCustodySha256: config.archiveCustody.subjectSha256,
+          durableHostSha256: this.config.durableHostSha256,
+          stateStoreSha256: this.config.stateStore.subjectSha256,
+          archiveCustodySha256: this.config.archiveCustody.subjectSha256,
         },
-        authorization: config.authorization,
+        authorization: this.config.authorization,
       });
     } catch {
       fail('AUTHORIZATION_INVALID');
     }
     if (
-      !sha256Pattern.test(config.expectedAuthorizationSha256) ||
-      !sha256Pattern.test(config.fence.subjectSha256) ||
-      config.fence.subjectSha256 !== config.hostAuthorization.execution.ddlFenceSha256 ||
-      config.authorization.markerRequestSha256 !== config.stateStore.requestSha256 ||
-      config.authorization.creationReceiptSha256 !== config.stateStore.creationReceiptSha256 ||
-      config.expectedAuthorizationSha256 !==
-        communitiesStagingRoleSplitV3DurableRestoreAuthorizationSha256(config.authorization) ||
-      !Number.isSafeInteger(config.fenceTimeoutMs) ||
-      config.fenceTimeoutMs < 1 ||
-      config.fenceTimeoutMs > 60_000
+      !sha256Pattern.test(this.config.expectedAuthorizationSha256) ||
+      !sha256Pattern.test(this.config.fence.subjectSha256) ||
+      this.config.fence.subjectSha256 !== this.config.hostAuthorization.execution.ddlFenceSha256 ||
+      this.config.restoreExecutor.subjectSha256 !==
+        this.config.hostAuthorization.execution.canonicalHostAdapterSha256 ||
+      this.config.authorization.markerRequestSha256 !== this.config.stateStore.requestSha256 ||
+      this.config.authorization.creationReceiptSha256 !==
+        this.config.stateStore.creationReceiptSha256 ||
+      this.config.expectedAuthorizationSha256 !==
+        communitiesStagingRoleSplitV3DurableRestoreAuthorizationSha256(this.config.authorization) ||
+      !Number.isSafeInteger(this.config.fenceTimeoutMs) ||
+      this.config.fenceTimeoutMs < 1 ||
+      this.config.fenceTimeoutMs > 60_000
     )
       fail('BINDING_INVALID');
   }
@@ -541,5 +600,110 @@ export class CommunitiesStagingRoleSplitV3DurableHost {
     }
     if (primary instanceof Error) throw primary;
     if (primary !== null) fail('FENCE_RELEASE_FAILED');
+  }
+
+  async restore(capability: CommunitiesStagingRoleSplitV3DurablePreparationCapability): Promise<{
+    readonly discardedOutputBytes: number;
+    readonly restoredEnvelopeSha256: string;
+  }> {
+    const record = this.capabilities.get(capability);
+    if (record === undefined || record.used) fail('CAPABILITY_INVALID');
+    record.used = true;
+    this.capabilities.delete(capability);
+
+    const pending = canonicalCommunitiesStagingRoleSplitV3DurableStateEnvelope(
+      this.config.envelopes.restorePending,
+    );
+    const restored = canonicalCommunitiesStagingRoleSplitV3DurableStateEnvelope(
+      this.config.envelopes.restored,
+    );
+    let result: CommunitiesStagingRoleSplitV3DurableRestoreExecutorResult | undefined;
+    let primary: CommunitiesStagingRoleSplitV3DurableHostError | undefined;
+    let restoreDispatched = false;
+    let cleanupFailed = false;
+    try {
+      await this.assertFenceHeld(record.ddlLease);
+      if ((await this.config.stateStore.read(record.fsLease)) !== pending)
+        fail('RESTORE_OUTCOME_AMBIGUOUS');
+      const before = await record.archive.observe().catch(() => fail('ARCHIVE_CUSTODY_INVALID'));
+      if (
+        before.device !== capability.claims.archive.device ||
+        before.inode !== capability.claims.archive.inode ||
+        before.bytes !== capability.claims.archive.bytes ||
+        before.preSha256 !== capability.claims.archive.preSha256
+      )
+        fail('ARCHIVE_CUSTODY_INVALID');
+      await this.assertFenceHeld(record.ddlLease);
+      try {
+        restoreDispatched = true;
+        result = await record.archive.restore(this.config.restoreExecutor, {
+          request: this.config.request,
+          cloneDatabaseOid: this.config.authorization.cloneDatabaseOid,
+          restorePendingEnvelopeBytes: pending,
+          externalFenceLease: record.ddlLease,
+        });
+      } catch {
+        fail('RESTORE_OUTCOME_AMBIGUOUS');
+      }
+      await this.assertFenceHeld(record.ddlLease);
+      const after = await record.archive.observe().catch(() => fail('ARCHIVE_CUSTODY_INVALID'));
+      if (
+        !Number.isSafeInteger(result.discardedOutputBytes) ||
+        result.discardedOutputBytes < 0 ||
+        result.discardedOutputBytes > 8 * 1024 ||
+        result.archiveObservation.device !== before.device ||
+        result.archiveObservation.inode !== before.inode ||
+        result.archiveObservation.bytes !== before.bytes ||
+        result.archiveObservation.preSha256 !== before.preSha256 ||
+        after.device !== before.device ||
+        after.inode !== before.inode ||
+        after.bytes !== before.bytes ||
+        after.preSha256 !== before.preSha256
+      )
+        fail('ARCHIVE_CUSTODY_INVALID');
+      await this.assertFenceHeld(record.ddlLease);
+      try {
+        await this.config.stateStore.writeCas(
+          record.fsLease,
+          pending,
+          this.config.envelopes.restored,
+        );
+      } catch {
+        await this.assertFenceHeld(record.ddlLease);
+        if ((await this.config.stateStore.read(record.fsLease)) !== restored)
+          fail('RESTORE_OUTCOME_AMBIGUOUS');
+      }
+      if ((await this.config.stateStore.read(record.fsLease)) !== restored)
+        fail('RESTORE_OUTCOME_AMBIGUOUS');
+      await this.assertFenceHeld(record.ddlLease);
+    } catch (error) {
+      primary = restoreDispatched
+        ? new CommunitiesStagingRoleSplitV3DurableHostError('RESTORE_OUTCOME_AMBIGUOUS')
+        : error instanceof CommunitiesStagingRoleSplitV3DurableHostError
+          ? error
+          : new CommunitiesStagingRoleSplitV3DurableHostError('RESTORE_OUTCOME_AMBIGUOUS');
+    }
+    await record.archive.close().catch(() => {
+      cleanupFailed = true;
+    });
+    await this.config.stateStore.release(record.fsLease).catch(() => {
+      cleanupFailed = true;
+    });
+    await this.config.fence.release(record.ddlLease).catch(() => {
+      cleanupFailed = true;
+    });
+    if (cleanupFailed) {
+      if (primary?.code === 'RESTORE_OUTCOME_AMBIGUOUS')
+        throw new CommunitiesStagingRoleSplitV3DurableHostError('RESTORE_OUTCOME_AMBIGUOUS', true);
+      fail('CLEANUP_INCOMPLETE');
+    }
+    if (primary !== undefined) throw primary;
+    if (result === undefined) fail('RESTORE_OUTCOME_AMBIGUOUS');
+    return Object.freeze({
+      discardedOutputBytes: result.discardedOutputBytes,
+      restoredEnvelopeSha256: communitiesStagingRoleSplitV3DurableStateEnvelopeSha256(
+        this.config.envelopes.restored,
+      ),
+    });
   }
 }

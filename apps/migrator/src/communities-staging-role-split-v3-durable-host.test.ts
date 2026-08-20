@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/require-await */
 import { createHash } from 'node:crypto';
 import { chmod, link, mkdtemp, symlink, writeFile } from 'node:fs/promises';
+import type { FileHandle } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -45,6 +46,9 @@ import {
   type CommunitiesStagingRoleSplitV3ArchiveCustody,
   type CommunitiesStagingRoleSplitV3DurableHostConfig,
   type CommunitiesStagingRoleSplitV3DurableHostError,
+  type CommunitiesStagingRoleSplitV3DurableRestoreExecutor,
+  type CommunitiesStagingRoleSplitV3DurableRestoreExecutorInput,
+  type CommunitiesStagingRoleSplitV3DurableRestoreExecutorResult,
   type CommunitiesStagingRoleSplitV3DurableStateLease,
 } from './communities-staging-role-split-v3-durable-host.js';
 import {
@@ -643,6 +647,9 @@ class FakeArchiveCustody implements CommunitiesStagingRoleSplitV3ArchiveCustody 
     readonly preSha256: string;
   };
   private readonly closeFailure: Error | undefined;
+  private readonly postObserveFailure: Error | undefined;
+  private readonly archiveFile = {} as FileHandle;
+  private observeCount = 0;
 
   constructor(
     calls: string[],
@@ -658,10 +665,12 @@ class FakeArchiveCustody implements CommunitiesStagingRoleSplitV3ArchiveCustody 
       preSha256: durableRequest.backupSha256,
     },
     closeFailure?: Error,
+    postObserveFailure?: Error,
   ) {
     this.calls = calls;
     this.observation = observation;
     this.closeFailure = closeFailure;
+    this.postObserveFailure = postObserveFailure;
   }
   async acquire(input: {
     readonly requestSha256: string;
@@ -673,6 +682,16 @@ class FakeArchiveCustody implements CommunitiesStagingRoleSplitV3ArchiveCustody 
       readonly bytes: string;
       readonly preSha256: string;
     };
+    observe(): Promise<{
+      readonly device: string;
+      readonly inode: string;
+      readonly bytes: string;
+      readonly preSha256: string;
+    }>;
+    restore(
+      executor: CommunitiesStagingRoleSplitV3DurableRestoreExecutor,
+      input: CommunitiesStagingRoleSplitV3DurableRestoreExecutorInput,
+    ): Promise<CommunitiesStagingRoleSplitV3DurableRestoreExecutorResult>;
     close(): Promise<void>;
   }> {
     expect(input).toEqual({
@@ -681,12 +700,65 @@ class FakeArchiveCustody implements CommunitiesStagingRoleSplitV3ArchiveCustody 
         communitiesStagingRoleSplitV3DurableStateEnvelopeSha256(durablePendingEnvelope),
     });
     this.calls.push('archive.acquire');
+    const observation = this.observation;
+    const archiveFile = this.archiveFile;
     return {
-      observation: this.observation,
+      observation,
+      observe: async () => {
+        this.calls.push('archive.observe');
+        this.observeCount += 1;
+        if (this.observeCount === 2 && this.postObserveFailure !== undefined)
+          throw this.postObserveFailure;
+        return observation;
+      },
+      restore: async (executor, restoreInput) => {
+        this.calls.push('archive.restore');
+        return executor.restore({ ...restoreInput, archiveFile });
+      },
       close: async () => {
         this.calls.push('archive.close');
         if (this.closeFailure !== undefined) throw this.closeFailure;
       },
+    };
+  }
+}
+
+class FakeRestoreExecutor implements CommunitiesStagingRoleSplitV3DurableRestoreExecutor {
+  readonly subjectSha256: string;
+  constructor(
+    private readonly calls: string[],
+    private readonly failure?: Error,
+    private readonly resultObservation: FakeArchiveCustody['observation'] = {
+      device: '2049',
+      inode: '123',
+      bytes: durableRequest.backupBytes,
+      preSha256: durableRequest.backupSha256,
+    },
+    private readonly discardedOutputBytes = 0,
+    subjectSha256 = durableExecution.canonicalHostAdapterSha256,
+  ) {
+    this.subjectSha256 = subjectSha256;
+  }
+  async restore(
+    input: CommunitiesStagingRoleSplitV3DurableRestoreExecutorInput & {
+      readonly archiveFile: FileHandle;
+    },
+  ): Promise<CommunitiesStagingRoleSplitV3DurableRestoreExecutorResult> {
+    expect(input.request).toEqual(durableRequest);
+    expect(input.cloneDatabaseOid).toBe(cloneDatabaseOid);
+    expect(input.restorePendingEnvelopeBytes).toBe(
+      canonicalCommunitiesStagingRoleSplitV3DurableStateEnvelope(durablePendingEnvelope),
+    );
+    expect(input.externalFenceLease).toMatchObject({
+      requestSha256: durableRequestSha256,
+      systemIdentifier: durableRequest.systemIdentifier,
+      advisoryKey: COMMUNITIES_STAGING_ROLE_SPLIT_DDL_FENCE_ADVISORY_KEY,
+    });
+    this.calls.push('executor.restore');
+    if (this.failure !== undefined) throw this.failure;
+    return {
+      discardedOutputBytes: this.discardedOutputBytes,
+      archiveObservation: this.resultObservation,
     };
   }
 }
@@ -703,10 +775,15 @@ function durableHostFixture(
       readonly preSha256: string;
     };
     archiveCloseFailure?: Error;
+    postObserveFailure?: Error;
     stateReleaseFailure?: Error;
     fenceReleaseFailure?: Error;
     stateRequestSha256?: string;
     stateReceiptSha256?: string;
+    executorFailure?: Error;
+    executorObservation?: FakeArchiveCustody['observation'];
+    executorDiscardedOutputBytes?: number;
+    executorSubjectSha256?: string;
     calls?: string[];
   } = {},
 ) {
@@ -728,6 +805,14 @@ function durableHostFixture(
     calls,
     input.observation,
     input.archiveCloseFailure,
+    input.postObserveFailure,
+  );
+  const restoreExecutor = new FakeRestoreExecutor(
+    calls,
+    input.executorFailure,
+    input.executorObservation,
+    input.executorDiscardedOutputBytes,
+    input.executorSubjectSha256,
   );
   const config = {
     request: durableRequest,
@@ -739,6 +824,7 @@ function durableHostFixture(
       communitiesStagingRoleSplitV3DurableRestoreAuthorizationSha256(durableAuthorization),
     stateStore,
     archiveCustody,
+    restoreExecutor,
     fence,
     durableHostSha256: durableComponents.durableHostSha256,
     fenceTimeoutMs: 1_000,
@@ -753,6 +839,8 @@ function durableHostFixture(
     stateStore,
     fence,
     archiveCustody,
+    restoreExecutor,
+    config,
     host: new CommunitiesStagingRoleSplitV3DurableHost(config),
   };
 }
@@ -984,6 +1072,154 @@ describe('CommunitiesStagingRoleSplitV3DurableHost', () => {
     expect(origin.calls.slice(-3)).toEqual(['archive.close', 'fs.release', 'ddl.release']);
   });
 
+  it('consumes the exact capability once, restores, persists RESTORED and releases in order', async () => {
+    const current = durableHostFixture();
+    const capability = await current.host.prepare();
+    await expect(current.host.restore(capability)).resolves.toEqual({
+      discardedOutputBytes: 0,
+      restoredEnvelopeSha256:
+        communitiesStagingRoleSplitV3DurableStateEnvelopeSha256(durableRestoredEnvelope),
+    });
+    expect(current.stateStore.entry).toBe(
+      canonicalCommunitiesStagingRoleSplitV3DurableStateEnvelope(durableRestoredEnvelope),
+    );
+    expect(current.calls.slice(-15)).toEqual([
+      'ddl.assert',
+      'fs.read',
+      'archive.observe',
+      'ddl.assert',
+      'archive.restore',
+      'executor.restore',
+      'ddl.assert',
+      'archive.observe',
+      'ddl.assert',
+      'fs.cas:RESTORED',
+      'fs.read',
+      'ddl.assert',
+      'archive.close',
+      'fs.release',
+      'ddl.release',
+    ]);
+    await expect(current.host.restore(capability)).rejects.toMatchObject({
+      code: 'CAPABILITY_INVALID',
+    });
+    await expect(current.host.abandon(capability)).rejects.toMatchObject({
+      code: 'CAPABILITY_INVALID',
+    });
+  });
+
+  it('retains RESTORE_PENDING and releases custody when the executor rejects', async () => {
+    const current = durableHostFixture({ executorFailure: new Error('restore failed') });
+    const capability = await current.host.prepare();
+    await expect(current.host.restore(capability)).rejects.toMatchObject({
+      code: 'RESTORE_OUTCOME_AMBIGUOUS',
+    });
+    expect(current.stateStore.entry).toBe(
+      canonicalCommunitiesStagingRoleSplitV3DurableStateEnvelope(durablePendingEnvelope),
+    );
+    expect(current.calls.slice(-3)).toEqual(['archive.close', 'fs.release', 'ddl.release']);
+  });
+
+  it('does not persist RESTORED when the fence is lost after executor success', async () => {
+    const current = durableHostFixture({
+      fenceOutcomes: ['held', 'held', 'held', 'held', 'held', 'held', 'lost'],
+    });
+    const capability = await current.host.prepare();
+    await expect(current.host.restore(capability)).rejects.toMatchObject({
+      code: 'RESTORE_OUTCOME_AMBIGUOUS',
+    });
+    expect(current.stateStore.entry).toBe(
+      canonicalCommunitiesStagingRoleSplitV3DurableStateEnvelope(durablePendingEnvelope),
+    );
+    expect(current.calls).not.toContain('fs.cas:RESTORED');
+  });
+
+  it('rejects changed archive readback before persisting RESTORED', async () => {
+    const current = durableHostFixture({
+      executorObservation: {
+        device: '2049',
+        inode: '123',
+        bytes: durableRequest.backupBytes,
+        preSha256: sha('changed'),
+      },
+    });
+    const capability = await current.host.prepare();
+    await expect(current.host.restore(capability)).rejects.toMatchObject({
+      code: 'RESTORE_OUTCOME_AMBIGUOUS',
+    });
+    expect(current.stateStore.entry).toBe(
+      canonicalCommunitiesStagingRoleSplitV3DurableStateEnvelope(durablePendingEnvelope),
+    );
+  });
+
+  it('rejects an invalid executor result before persisting RESTORED', async () => {
+    const current = durableHostFixture({ executorDiscardedOutputBytes: -1 });
+    const capability = await current.host.prepare();
+    await expect(current.host.restore(capability)).rejects.toMatchObject({
+      code: 'RESTORE_OUTCOME_AMBIGUOUS',
+    });
+    expect(current.stateStore.entry).toBe(
+      canonicalCommunitiesStagingRoleSplitV3DurableStateEnvelope(durablePendingEnvelope),
+    );
+  });
+
+  it.each([
+    ['exact restored readback', 'throw-after-write', true],
+    ['pending readback', 'throw-without-write', false],
+    ['owned readback', 'throw-after-owned-write', false],
+  ] as const)('handles RESTORED CAS response loss with %s', async (_name, outcome, accepted) => {
+    const current = durableHostFixture({ writeOutcomes: ['succeed', 'succeed', outcome] });
+    const capability = await current.host.prepare();
+    if (accepted) {
+      await expect(current.host.restore(capability)).resolves.toMatchObject({
+        restoredEnvelopeSha256:
+          communitiesStagingRoleSplitV3DurableStateEnvelopeSha256(durableRestoredEnvelope),
+      });
+      return;
+    }
+    await expect(current.host.restore(capability)).rejects.toMatchObject({
+      code: 'RESTORE_OUTCOME_AMBIGUOUS',
+    });
+  });
+
+  it('rechecks the fence after post-restore observation and before RESTORED CAS', async () => {
+    const current = durableHostFixture({
+      fenceOutcomes: ['held', 'held', 'held', 'held', 'held', 'held', 'held', 'lost'],
+    });
+    const capability = await current.host.prepare();
+    await expect(current.host.restore(capability)).rejects.toMatchObject({
+      code: 'RESTORE_OUTCOME_AMBIGUOUS',
+    });
+    expect(current.stateStore.entry).toBe(
+      canonicalCommunitiesStagingRoleSplitV3DurableStateEnvelope(durablePendingEnvelope),
+    );
+    expect(current.calls).not.toContain('fs.cas:RESTORED');
+  });
+
+  it('keeps a failed post-dispatch archive observation outcome ambiguous', async () => {
+    const current = durableHostFixture({ postObserveFailure: new Error('observe failed') });
+    const capability = await current.host.prepare();
+    await expect(current.host.restore(capability)).rejects.toMatchObject({
+      code: 'RESTORE_OUTCOME_AMBIGUOUS',
+    });
+    expect(current.stateStore.entry).toBe(
+      canonicalCommunitiesStagingRoleSplitV3DurableStateEnvelope(durablePendingEnvelope),
+    );
+  });
+
+  it('returns ambiguity after final fence loss while retaining exact RESTORED state', async () => {
+    const current = durableHostFixture({
+      fenceOutcomes: ['held', 'held', 'held', 'held', 'held', 'held', 'held', 'held', 'lost'],
+    });
+    const capability = await current.host.prepare();
+    await expect(current.host.restore(capability)).rejects.toMatchObject({
+      code: 'RESTORE_OUTCOME_AMBIGUOUS',
+    });
+    expect(current.stateStore.entry).toBe(
+      canonicalCommunitiesStagingRoleSplitV3DurableStateEnvelope(durableRestoredEnvelope),
+    );
+  });
+
   it.each([
     ['request', { stateRequestSha256: sha('wrong-request') }],
     ['receipt', { stateReceiptSha256: sha('wrong-receipt') }],
@@ -995,6 +1231,77 @@ describe('CommunitiesStagingRoleSplitV3DurableHost', () => {
       expect(calls).toEqual([]);
     },
   );
+
+  it('rejects an unpinned restore executor before collaborator access', () => {
+    const calls: string[] = [];
+    expect(() =>
+      durableHostFixture({ executorSubjectSha256: sha('wrong-executor'), calls }),
+    ).toThrow(/BINDING_INVALID/u);
+    expect(calls).toEqual([]);
+  });
+
+  it('uses the immutable data snapshot and collaborator references validated at construction', async () => {
+    const current = durableHostFixture();
+    const replacementCalls: string[] = [];
+    const replacementExecutor = new FakeRestoreExecutor(
+      replacementCalls,
+      new Error('replacement executor used'),
+      undefined,
+      0,
+      sha('evil'),
+    );
+    const replacementStateStore = new FakeDurableStateStore({ calls: replacementCalls });
+    const replacementFence = new FakeFence(replacementCalls);
+    Object.assign(current.config, {
+      request: { ...durableRequest, backupSha256: sha('replacement archive') },
+      authorization: { ...durableAuthorization, cloneDatabaseOid: '99999' },
+      envelopes: { ...current.config.envelopes, restored: durablePendingEnvelope },
+      restoreExecutor: replacementExecutor,
+      stateStore: replacementStateStore,
+      fence: replacementFence,
+    });
+    const capability = await current.host.prepare();
+    await expect(current.host.restore(capability)).resolves.toMatchObject({
+      restoredEnvelopeSha256:
+        communitiesStagingRoleSplitV3DurableStateEnvelopeSha256(durableRestoredEnvelope),
+    });
+    expect(current.calls.filter((call) => call === 'executor.restore')).toHaveLength(1);
+    expect(replacementCalls).toEqual([]);
+  });
+
+  it('reports incomplete cleanup after RESTORED while attempting every release', async () => {
+    const current = durableHostFixture({
+      archiveCloseFailure: new Error('archive-close'),
+      stateReleaseFailure: new Error('state-release'),
+      fenceReleaseFailure: new Error('fence-release'),
+    });
+    const capability = await current.host.prepare();
+    await expect(current.host.restore(capability)).rejects.toMatchObject({
+      code: 'CLEANUP_INCOMPLETE',
+    });
+    expect(current.stateStore.entry).toBe(
+      canonicalCommunitiesStagingRoleSplitV3DurableStateEnvelope(durableRestoredEnvelope),
+    );
+    expect(current.calls.slice(-3)).toEqual(['archive.close', 'fs.release', 'ddl.release']);
+  });
+
+  it('preserves restore ambiguity when every cleanup step also fails', async () => {
+    const current = durableHostFixture({
+      executorFailure: new Error('lost response'),
+      archiveCloseFailure: new Error('archive-close'),
+      stateReleaseFailure: new Error('state-release'),
+      fenceReleaseFailure: new Error('fence-release'),
+    });
+    const capability = await current.host.prepare();
+    await expect(current.host.restore(capability)).rejects.toMatchObject({
+      code: 'RESTORE_OUTCOME_AMBIGUOUS',
+      cleanupIncomplete: true,
+    });
+    expect(current.stateStore.entry).toBe(
+      canonicalCommunitiesStagingRoleSplitV3DurableStateEnvelope(durablePendingEnvelope),
+    );
+    expect(current.calls.slice(-3)).toEqual(['archive.close', 'fs.release', 'ddl.release']);
+  });
 
   it('releases archive, filesystem, then DDL fence and preserves the first cleanup failure', async () => {
     const archiveFailure = new Error('archive-close');
