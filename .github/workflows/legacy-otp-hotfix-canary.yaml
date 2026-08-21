@@ -182,10 +182,16 @@ jobs:
     needs: [validate-source, build]
     if: ${{ needs.validate-source.outputs.start == 'true' && needs.build.result == 'success' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: read
       packages: read
     steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          path: control
+          persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: legacy-otp-digest-*
@@ -213,23 +219,7 @@ jobs:
           for service in api worker realtime migrator; do
             digest=$(cat "digests/$service")
             ref="ghcr.io/z6v6e6r/phub-$service@$digest"
-            if ! result=$(timeout --signal=TERM --kill-after=5s 60s docker run --rm \
-              --platform linux/arm64 \
-              --pull=never \
-              --network none \
-              --read-only \
-              --user 1001:1001 \
-              --cap-drop ALL \
-              --security-opt no-new-privileges:true \
-              --pids-limit 64 \
-              --memory 256m \
-              --cpus 1 \
-              --entrypoint node \
-              "$ref" scripts/verify-production-workspace-imports.js "$service" 2>/dev/null); then
-              echo "::error::Exact $service runtime import probe failed"
-              exit 1
-            fi
-            test "$result" = "production_workspace_imports application=$service status=passed"
+            sh control/deploy/jetson/verify-otp-runtime-image.sh "$service" "$ref"
           done
 
   operate:

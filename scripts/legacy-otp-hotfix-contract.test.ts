@@ -19,6 +19,7 @@ const workflow = readFileSync('.github/workflows/legacy-otp-hotfix-canary.yaml',
 const controller = readFileSync('deploy/jetson/run-legacy-otp-hotfix-canary.sh', 'utf8');
 const verifier = readFileSync('deploy/jetson/verify-legacy-otp-hotfix-source.sh', 'utf8');
 const checkout = readFileSync('deploy/jetson/checkout-legacy-otp-hotfix-candidate.sh', 'utf8');
+const runtimeImageProbe = readFileSync('deploy/jetson/verify-otp-runtime-image.sh', 'utf8');
 const guard = readFileSync('deploy/jetson/verify-runtime-secret-transition-clear.sh', 'utf8');
 const integrationIdentityMigration = readFileSync(
   'packages/database/migrations/0004_integration_identity_boundary.sql',
@@ -83,6 +84,119 @@ function digestManifest(release: string, digestCharacter: string) {
 function executable(path: string, contents: string) {
   writeFileSync(path, contents, { mode: 0o700 });
   chmodSync(path, 0o700);
+}
+
+function runRuntimeImageProbe(
+  mode: 'pass' | 'oom-then-pass' | 'timeout-then-pass' | 'module-not-found' | 'cleanup-failed',
+) {
+  const root = mkdtempSync(join(tmpdir(), 'phub-otp-runtime-image-probe-'));
+  const fakeBin = join(root, 'bin');
+  const state = join(root, 'state');
+  const log = join(root, 'docker.log');
+  mkdirSync(fakeBin);
+  executable(
+    join(fakeBin, 'timeout'),
+    `#!/bin/sh
+set -eu
+test "$1" = --signal=TERM
+shift
+case "$1" in --kill-after=2s | --kill-after=5s) ;; *) exit 98 ;; esac
+shift
+case "$1" in 10s | 30s | 60s) ;; *) exit 98 ;; esac
+shift
+exec "$@"
+`,
+  );
+  executable(
+    join(fakeBin, 'docker'),
+    `#!/bin/sh
+set -eu
+command=$1
+shift
+case "$command" in
+  rm)
+    if test "$PHUB_FAKE_PROBE_MODE" = cleanup-failed && test -e "$PHUB_FAKE_PROBE_STATE"; then
+      exit 1
+    fi
+    rm -f "$PHUB_FAKE_PROBE_STATE"
+    ;;
+  create)
+    printf '%s\\n' "$*" >> "$PHUB_FAKE_PROBE_LOG"
+    memory=
+    while test "$#" -gt 0; do
+      if test "$1" = --memory; then
+        shift
+        memory=$1
+        break
+      fi
+      shift
+    done
+    test -n "$memory"
+    printf '%s' "$memory" > "$PHUB_FAKE_PROBE_STATE"
+    printf '%s\\n' fake-container-id
+    ;;
+  start)
+    memory=$(cat "$PHUB_FAKE_PROBE_STATE")
+    case "$PHUB_FAKE_PROBE_MODE:$memory" in
+      pass:*)
+        printf '%s\\n' 'production_workspace_imports application=api status=passed'
+        ;;
+      oom-then-pass:256m)
+        exit 137
+        ;;
+      oom-then-pass:512m)
+        printf '%s\\n' 'production_workspace_imports application=api status=passed'
+        ;;
+      timeout-then-pass:256m)
+        exit 124
+        ;;
+      timeout-then-pass:512m | cleanup-failed:*)
+        printf '%s\\n' 'production_workspace_imports application=api status=passed'
+        ;;
+      module-not-found:*)
+        printf '%s\\n' 'production_workspace_imports application=api status=failed class=module-not-found'
+        printf '%s\\n' 'RAW_SECRET_LIKE_ERROR_MUST_NOT_ESCAPE' >&2
+        exit 70
+        ;;
+      *) exit 2 ;;
+    esac
+    ;;
+  inspect)
+    memory=$(cat "$PHUB_FAKE_PROBE_STATE")
+    case "$PHUB_FAKE_PROBE_MODE:$memory" in
+      oom-then-pass:256m) printf '%s\\n' true ;;
+      *) printf '%s\\n' false ;;
+    esac
+    ;;
+  ps)
+    if test -e "$PHUB_FAKE_PROBE_STATE"; then
+      printf '%s\\n' fake-container-id
+    fi
+    ;;
+  *) exit 3 ;;
+esac
+`,
+  );
+  const result = spawnSync(
+    'sh',
+    [
+      'deploy/jetson/verify-otp-runtime-image.sh',
+      'api',
+      `ghcr.io/z6v6e6r/phub-api@sha256:${'a'.repeat(64)}`,
+    ],
+    {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${fakeBin}:${process.env.PATH ?? ''}`,
+        PHUB_FAKE_PROBE_LOG: log,
+        PHUB_FAKE_PROBE_MODE: mode,
+        PHUB_FAKE_PROBE_STATE: state,
+      },
+    },
+  );
+  return { root, log, result };
 }
 
 function prepareControllerFixture() {
@@ -395,6 +509,8 @@ describe('legacy OTP hotfix canary release contract', () => {
     expect(gateBody).not.toContain('environment: staging');
     expect(gateBody).not.toContain('TAILSCALE_AUTHKEY');
     expect(gateBody).not.toContain('STAGING_DEPLOY_KEY');
+    expect(gateBody).toContain('timeout-minutes: 20');
+    expect(gateBody).toContain('path: control');
     expect(gateBody).toContain('docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8');
     const binfmtImage = gateBody.match(/image: (docker\.io\/tonistiigi\/binfmt:[^\s]+)/)?.[1];
     expect(binfmtImage).toBe(
@@ -402,6 +518,9 @@ describe('legacy OTP hotfix canary release contract', () => {
     );
     expect(binfmtImage).toMatch(/^docker\.io\/tonistiigi\/binfmt:[^@\s]+@sha256:[0-9a-f]{64}$/);
     expect(gateBody).not.toContain('docker.io/tonistiigi/binfmt:latest');
+    expect(gateBody).toContain(
+      'sh control/deploy/jetson/verify-otp-runtime-image.sh "$service" "$ref"',
+    );
     for (const token of [
       '--platform linux/arm64',
       '--pull=never',
@@ -411,11 +530,23 @@ describe('legacy OTP hotfix canary release contract', () => {
       '--cap-drop ALL',
       '--security-opt no-new-privileges:true',
       '--pids-limit 64',
-      '--memory 256m',
       '--cpus 1',
     ]) {
-      expect(gateBody).toContain(token);
+      expect(runtimeImageProbe).toContain(token);
     }
+    expect(runtimeImageProbe).toContain('run_probe 256m');
+    expect(runtimeImageProbe).toContain('run_probe 512m');
+    expect(runtimeImageProbe).toContain("'{{.State.OOMKilled}}'");
+    expect(runtimeImageProbe).toContain('class=memory-budget-exceeded');
+    expect(runtimeImageProbe).toContain('final_class=nondeterministic');
+    expect(runtimeImageProbe).toContain('probe_class=container-create-failed');
+    expect(runtimeImageProbe).toContain('probe_class=container-inspect-failed');
+    expect(runtimeImageProbe).toContain('probe_class=container-cleanup-failed');
+    expect(runtimeImageProbe).toContain('bounded_docker 10s rm -f');
+    expect(runtimeImageProbe).toContain('bounded_docker 30s create');
+    expect(runtimeImageProbe).toContain('bounded_docker 10s inspect');
+    expect(runtimeImageProbe).toContain('"$service" >/dev/null 2>&1');
+    expect(runtimeImageProbe).not.toContain('cat "$stderr"');
     expect(gateBody).toContain('docker pull --platform linux/arm64 "$ref" >/dev/null');
     expect(gateBody).not.toContain('docker pull "$ref" >/dev/null');
     expect(gateBody).toContain('docker logout ghcr.io');
@@ -423,6 +554,50 @@ describe('legacy OTP hotfix canary release contract', () => {
     expect(workflow).toContain("needs.runtime-image-gate.result == 'success'");
     expect(workflow).toContain("needs.runtime-image-gate.result == 'skipped'");
   });
+
+  it('classifies the constrained runtime probe without exposing raw stderr', () => {
+    const passing = runRuntimeImageProbe('pass');
+    const memoryLimited = runRuntimeImageProbe('oom-then-pass');
+    const transient = runRuntimeImageProbe('timeout-then-pass');
+    const missingModule = runRuntimeImageProbe('module-not-found');
+    const cleanupFailure = runRuntimeImageProbe('cleanup-failed');
+    try {
+      expect(passing.result.status, JSON.stringify(passing.result)).toBe(0);
+      expect(passing.result.stdout).toContain(
+        'otp_runtime_image_probe application=api memory=256m status=passed',
+      );
+      expect(readFileSync(passing.log, 'utf8')).toContain('--memory 256m');
+      expect(readFileSync(passing.log, 'utf8')).not.toContain('--memory 512m');
+
+      expect(memoryLimited.result.status).toBe(1);
+      expect(memoryLimited.result.stderr).toContain(
+        'class=memory-budget-exceeded first=oom retry=passed',
+      );
+      expect(readFileSync(memoryLimited.log, 'utf8')).toContain('--memory 256m');
+      expect(readFileSync(memoryLimited.log, 'utf8')).toContain('--memory 512m');
+
+      expect(transient.result.status).toBe(1);
+      expect(transient.result.stderr).toContain(
+        'class=nondeterministic first=timeout retry=passed',
+      );
+
+      expect(missingModule.result.status).toBe(1);
+      expect(missingModule.result.stderr).toContain(
+        'class=module-not-found retry=module-not-found',
+      );
+      expect(missingModule.result.stderr).not.toContain('RAW_SECRET_LIKE_ERROR_MUST_NOT_ESCAPE');
+      expect(missingModule.result.stdout).not.toContain('RAW_SECRET_LIKE_ERROR_MUST_NOT_ESCAPE');
+
+      expect(cleanupFailure.result.status).toBe(1);
+      expect(cleanupFailure.result.stderr).toContain(
+        'class=container-cleanup-failed retry=container-cleanup-failed',
+      );
+    } finally {
+      for (const fixture of [passing, memoryLimited, transient, missingModule, cleanupFailure]) {
+        rmSync(fixture.root, { recursive: true, force: true });
+      }
+    }
+  }, 30_000);
 
   it('builds one coherent five-image release and never invokes the migrator', () => {
     expect(workflow).toContain('matrix:\n        service: [web, api, worker, realtime, migrator]');
