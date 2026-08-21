@@ -592,10 +592,21 @@ After executor dispatch and before exact `RESTORED` confirmation, every failure 
 `cleanupIncomplete=true` rather than hiding the restore ambiguity. A cleanup-only failure after
 exact `RESTORED` confirmation remains `CLEANUP_INCOMPLETE`.
 
-No concrete executor implementation is supplied by this slice. The reviewed runner adapter still
-returns `V3_DURABLE_EXECUTION_CAPABILITY_REQUIRED`, and there is no command, installer composition,
-workflow, environment, key, SSH, Docker or PostgreSQL entrypoint. The consumer API therefore proves
-the one-shot state/custody choreography only; it does not authorize or make a restore runnable.
+`apps/migrator/src/communities-staging-role-split-v3-pg-restore-executor.ts` is a separate,
+unwired descriptor bridge. It consumes only exact canonical `RESTORE_PENDING` bytes, an already
+held external DDL-fence lease and three pairwise-distinct borrowed descriptors (by FD and by
+device/inode). Its independently
+retained execution-authorization digest binds the bridge subject to `runnerAdapterSha256` (not the
+canonical-host adapter), validates the clone-creation/host/durable authorization DAG, verifies the
+archive descriptor's device, inode, size and SHA-256 before and after dispatch, and never closes a
+borrowed descriptor or acquires/releases the supplied fence. Once dispatch begins, every runner,
+fence, output, response-loss or archive-observation failure is `RESTORE_OUTCOME_AMBIGUOUS` and the
+instance cannot be reused.
+
+This remains review-only code: the reviewed runner adapter still returns
+`V3_DURABLE_EXECUTION_CAPABILITY_REQUIRED`, and there is no command, executable-composition import,
+installer snapshot, workflow, environment, key, SSH, Docker or PostgreSQL entrypoint for the new
+bridge. It therefore neither makes a restore runnable nor changes the existing disabled candidate.
 
 ## Remaining gates before execution
 
@@ -621,8 +632,9 @@ the one-shot state/custody choreography only; it does not authorize or make a re
    `verify-communities-staging-role-split-inventory-artifact` CLI and its independently supplied
    SHA-256. The local synthetic producer/evaluator gate is catalog proof, not trusted inventory;
    mock rows are not catalog proof.
-5. Complete independent security and migration review of the final installed adapter, candidate
-   manifest and failure matrix.
+5. Complete independent security and migration review of the final executor bridge, any later
+   installed adapter/candidate manifest, and the failure matrix. A review-only bridge is not an
+   installable or execution-authorizing artifact.
 6. Obtain separate approvals, in order, for the new disabled installation, execution-authorizing
    candidate, forced-command key, one ceremony run and any later post-marker cleanup.
 
