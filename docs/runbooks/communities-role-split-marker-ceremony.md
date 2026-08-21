@@ -487,7 +487,7 @@ fails with one fixed public error.
 ## Exact disabled installable candidate
 
 `scripts/prepare-communities-role-split-installation-candidate.ts` now builds and verifies a
-private, deterministic V7 candidate directory from an independently supplied exact Git commit. It
+private, deterministic V8 candidate directory from an independently supplied exact Git commit. It
 reads every artifact from Git objects rather than the mutable worktree, validates each expected Git
 mode, disables Git replacement objects, rejects any replacement ref and requires the raw local repository origin
 to be exactly `https://github.com/Z6v6e6r/lk2.git`, refuses an existing output, and accepts only a
@@ -507,11 +507,11 @@ true authorization. It contains:
 - three additional mode-0444 source snapshots for the canonical inventory-preparation contract,
   its verifier and its CLI. They are deliberately unwired and non-runnable: the candidate contains
   no Node runtime, compiled bundle, credential, preparation envelope or evidence payload.
-- twelve additional mode-0444 source snapshots for the reviewed V3 durable host, continuation
-  host, restore coordinator, executable composition, state/continuation/authorization envelopes
-  and host-bound attested evidence. These
+- thirteen additional mode-0444 source snapshots for the reviewed V3 durable host, continuation
+  host, descriptor-pinned restore executor, restore coordinator, executable composition,
+  state/continuation/authorization envelopes and host-bound attested evidence. These
   are code-only review bytes: the candidate still has no compiled entrypoint, concrete restore
-  executor, DDL-fence lease wiring or runtime loader.
+  executor construction, password/executable descriptors, DDL-fence lease wiring or runtime loader.
 
 The host entrypoint is a POSIX shell program bound to the exact GNU coreutils paths present on the
 ARM64 staging node; `/usr/bin/node` is not required. Its file-count validation uses shell numeric
@@ -521,12 +521,14 @@ ledger is independently pinned and binds the fixed artifact paths, target-relati
 byte counts, SHA-256 values and false execution authorizations. The shell verifier reconstructs
 the complete canonical JSON bytes from that fixed policy and the exact control records, then
 requires its SHA-256 to equal both the supplied pin and the candidate file digest. A freshly pinned
-authorization change, added field or V6 downgrade therefore fails before target creation.
-The V7 installed readback requires exactly twenty-five controlled artifacts plus the source
-directory and immutable receipt (`27` entries total); both install and verify loops require an
-exact count of twenty-five control records. The fifth controlled artifact is the immutable shared
-DDL-fence source. The host-control version is V4 so a V6 allowlist cannot be accepted with freshly
-pinned V7 digests.
+authorization change, added field or V7 downgrade therefore fails before target creation.
+The V8 installed readback requires exactly twenty-six controlled artifacts plus the source
+directory and immutable receipt (`28` entries total); both install and verify loops require an
+exact count of twenty-six control records. The fifth controlled artifact is the immutable shared
+DDL-fence source. The host-control version is V5 so a V7 allowlist cannot be accepted with freshly
+pinned V8 digests. Both the Node review helper and dependency-free shell verifier enumerate the
+complete candidate and installed trees without following symbolic links; additional files, empty
+directories or non-file/non-directory entries fail before a successful verification result.
 The installer accepts independently retained manifest, control and artifact-set SHA-256 values. It installs
 only a previously absent version directory below
 `/usr/local/libexec/phub/communities-role-split/candidates/<commit>`, refuses an existing target or
@@ -620,9 +622,10 @@ fence, output, response-loss or archive-observation failure is `RESTORE_OUTCOME_
 instance cannot be reused.
 
 This remains review-only code: the reviewed runner adapter still returns
-`V3_DURABLE_EXECUTION_CAPABILITY_REQUIRED`, and there is no command, executable-composition import,
-installer snapshot, workflow, environment, key, SSH, Docker or PostgreSQL entrypoint for the new
-bridge. It therefore neither makes a restore runnable nor changes the existing disabled candidate.
+`V3_DURABLE_EXECUTION_CAPABILITY_REQUIRED`. V8 adds the bridge only as an immutable mode-0444 source
+snapshot; there is still no command, executable-composition import, compiled bridge, runtime
+construction, workflow, environment, key, SSH, Docker or PostgreSQL entrypoint. It therefore does
+not make a restore runnable.
 
 ## Remaining gates before execution
 
@@ -632,8 +635,9 @@ bridge. It therefore neither makes a restore runnable nor changes the existing d
    not contain the new V3 composition.
 2. The independent re-review of the exact V3 security-fix range completed with no reportable P0-P2
    findings. V3 evidence V2 binds both attestations to the exact host authorization, and the
-   composition/coordinator retain immutable entry snapshots. V6 packages those reviewed sources
-   only as disabled mode-0444 bytes and adds no key, workflow or live configuration. Do not reuse
+   composition/coordinator retain immutable entry snapshots. V8 packages those reviewed sources
+   and the executor bridge only as disabled mode-0444 bytes and adds no key, workflow or live
+   configuration. Do not reuse
    the legacy V2 marker/attested-evidence contour, V3 evidence V1 or the permanently disabled
    reviewed-runner path as a compatibility fallback.
 3. Preserve the completed disposable PostgreSQL 16 response-loss, cleanup-failure and

@@ -13,6 +13,7 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   renameSync,
   rmSync,
@@ -21,7 +22,7 @@ import {
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const schemaVersion = 'communities-role-split-installation-candidate-v7';
+const schemaVersion = 'communities-role-split-installation-candidate-v8';
 const sha40 = /^[0-9a-f]{40}$/u;
 const sha256 = /^[0-9a-f]{64}$/u;
 const installPrefix = '/usr/local/libexec/phub/communities-role-split/candidates';
@@ -84,6 +85,7 @@ const expectedArtifacts = [
   ...[
     'communities-staging-role-split-v3-durable-host.ts',
     'communities-staging-role-split-v3-durable-continuation-host.ts',
+    'communities-staging-role-split-v3-pg-restore-executor.ts',
     'communities-staging-role-split-v3-durable-restore-coordinator.ts',
     'communities-staging-role-split-v3-executable-composition.ts',
   ].map((name) => ({
@@ -146,6 +148,58 @@ function artifactSetSha256(files) {
   return digest(
     files.map((file) => `${file.artifactPath}\0${file.sha256}\0${file.bytes}\n`).join(''),
   );
+}
+
+function expectedTreeEntries(files) {
+  const entries = new Set();
+  for (const file of files) {
+    const parts = file.split('/');
+    for (let index = 1; index < parts.length; index += 1)
+      entries.add(`${parts.slice(0, index).join('/')}/`);
+    entries.add(file);
+  }
+  return [...entries].sort();
+}
+
+function observedTreeEntries(root, failureCode) {
+  const entries = [];
+  const walk = (directory, prefix) => {
+    let names;
+    try {
+      names = readdirSync(directory).sort();
+    } catch {
+      fail(failureCode);
+    }
+    for (const name of names) {
+      const relative = prefix.length === 0 ? name : `${prefix}/${name}`;
+      const path = join(directory, name);
+      let stat;
+      try {
+        stat = lstatSync(path);
+      } catch {
+        fail(failureCode);
+      }
+      if (stat.isSymbolicLink()) fail(failureCode);
+      if (stat.isDirectory()) {
+        entries.push(`${relative}/`);
+        walk(path, relative);
+      } else if (stat.isFile()) {
+        entries.push(relative);
+      } else {
+        fail(failureCode);
+      }
+    }
+  };
+  walk(root, '');
+  return entries.sort();
+}
+
+function assertExactTree(root, files, failureCode) {
+  if (
+    JSON.stringify(observedTreeEntries(root, failureCode)) !==
+    JSON.stringify(expectedTreeEntries(files))
+  )
+    fail(failureCode);
 }
 
 function assertCandidateFile(path, expectedUid, expectedMode = 0o600) {
@@ -362,6 +416,18 @@ function readAndVerifyCandidate(input) {
   )
     fail('CANDIDATE_PATH_INVALID');
   assertDirectory(input.candidatePath, input.expectedUid, 0o700);
+  assertDirectory(join(input.candidatePath, 'payload'), input.expectedUid, 0o700);
+  assertDirectory(join(input.candidatePath, 'payload/source'), input.expectedUid, 0o700);
+  assertExactTree(
+    input.candidatePath,
+    [
+      'installation-candidate.json',
+      'installation-candidate.control',
+      'installation-candidate.sha256',
+      ...expectedArtifacts.map(({ artifactPath }) => artifactPath),
+    ],
+    'CANDIDATE_FILE_SET_INVALID',
+  );
   const manifestPath = join(input.candidatePath, 'installation-candidate.json');
   assertCandidateFile(manifestPath, input.expectedUid);
   const manifestBytes = readFileSync(manifestPath);
@@ -487,6 +553,12 @@ export function verifyCommunitiesRoleSplitDisabledInstallation(input) {
   const { manifest } = readAndVerifyCandidate({ ...input, expectedUid });
   const targetPath = resolveInstalledPath(input.installationRoot, manifest.installation.targetRoot);
   assertDirectory(targetPath, expectedUid, 0o755);
+  assertDirectory(join(targetPath, 'source'), expectedUid, 0o755);
+  assertExactTree(
+    targetPath,
+    [completeReceiptName, ...expectedArtifacts.map(({ targetRelativePath }) => targetRelativePath)],
+    'INSTALLED_FILE_SET_INVALID',
+  );
   for (const file of manifest.artifactFiles) {
     const relativeTarget = file.targetPath.slice(`${manifest.installation.targetRoot}/`.length);
     const installed = join(targetPath, relativeTarget);
