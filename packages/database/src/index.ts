@@ -60,6 +60,7 @@ export * from './communities-staging-role-split-v3-contract.js';
 export * from './communities-staging-role-split-v3-envelope.js';
 export * from './communities-staging-role-split-v3-restore-authorization.js';
 export * from './communities-staging-role-split-v3-durable-state-envelope.js';
+export * from './communities-staging-role-split-v3-durable-continuation-envelope.js';
 export * from './communities-staging-role-split-v3-durable-restore-authorization.js';
 export * from './communities-staging-role-split-v3-execution-authorization.js';
 export * from './communities-staging-role-split-v3-attested-evidence.js';
