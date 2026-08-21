@@ -12,6 +12,8 @@ import {
   COMMUNITIES_STAGING_ROLE_SPLIT_V3_DURABLE_STATE_ENVELOPE_VERSION,
   COMMUNITIES_STAGING_ROLE_SPLIT_V3_STATE_VERSION,
   COMMUNITIES_STAGING_ROLE_SPLIT_V3_DURABLE_RESTORE_AUTHORIZATION_VERSION,
+  COMMUNITIES_STAGING_ROLE_SPLIT_V3_CLONE_CREATION_AUTHORIZATION_VERSION,
+  COMMUNITIES_STAGING_ROLE_SPLIT_V3_EXECUTION_AUTHORIZATION_VERSION,
   COMMUNITIES_STAGING_ROLE_SPLIT_V3_PREPARATION_ENVELOPE_VERSION,
   COMMUNITIES_STAGING_ROLE_SPLIT_V3_RESTORE_AUTHORIZATION_VERSION,
   advanceCommunitiesStagingRoleSplitV3State,
@@ -27,12 +29,16 @@ import {
   communitiesStagingRoleSplitSourceWriteDenialAttestationSha256,
   communitiesStagingRoleSplitV3DurableRestoreAuthorizationSha256,
   communitiesStagingRoleSplitV3DurableStateEnvelopeSha256,
+  communitiesStagingRoleSplitV3CloneCreationAuthorizationSha256,
+  communitiesStagingRoleSplitV3ExecutionAuthorizationSha256,
   communitiesStagingRoleSplitV3PreparationEnvelopeSha256,
   communitiesStagingRoleSplitV3RestoreAuthorizationSha256,
   createCommunitiesStagingRoleSplitV3Candidate,
   type CommunitiesStagingRoleSplitHostAuthorization,
   type CommunitiesStagingRoleSplitRestoreMarkerRequest,
   type CommunitiesStagingRoleSplitV3DurableRestoreAuthorization,
+  type CommunitiesStagingRoleSplitV3CloneCreationAuthorization,
+  type CommunitiesStagingRoleSplitV3ExecutionAuthorization,
   type CommunitiesStagingRoleSplitV3DurableStateEnvelope,
   type CommunitiesStagingRoleSplitV3PreparationEnvelope,
   type CommunitiesStagingRoleSplitV3RestoreAuthorization,
@@ -502,6 +508,79 @@ const durableAuthorization = {
     activation: false,
   },
 } as const satisfies CommunitiesStagingRoleSplitV3DurableRestoreAuthorization;
+const durableExecutionComponents = {
+  executableCompositionSha256: durableComponents.durableHostSha256,
+  stateStoreSha256: durableComponents.stateStoreSha256,
+  archiveCustodySha256: durableComponents.archiveCustodySha256,
+  runnerAdapterSha256: sha('runner-adapter'),
+  canonicalHostAdapterSha256: durableExecution.canonicalHostAdapterSha256,
+  cloneOnlyConnectionFactorySha256: durableExecution.cloneOnlyConnectionFactorySha256,
+  ddlFenceSha256: durableExecution.ddlFenceSha256,
+  markerWriterSha256: durableRequest.markerWriterSha256,
+  ownershipAclAttestorSha256: durableSubjects.OWNERSHIP_ACL_ATTESTATION,
+  sourceWriteDenialAttestorSha256: durableSubjects.SOURCE_WRITE_DENIAL_ATTESTATION,
+  evidenceSinkSha256: durableSubjects.INDEPENDENT_EVIDENCE_SINK,
+} as const;
+const durableCloneCreationAuthorization = {
+  schemaVersion: COMMUNITIES_STAGING_ROLE_SPLIT_V3_CLONE_CREATION_AUTHORIZATION_VERSION,
+  status: 'CLONE_CREATION_AUTHORIZED',
+  candidateCommitSha: durableHostAuthorization.candidateCommitSha,
+  markerRequestSha256: durableRequestSha256,
+  components: {
+    executableCompositionSha256: durableExecutionComponents.executableCompositionSha256,
+    stateStoreSha256: durableExecutionComponents.stateStoreSha256,
+    cloneFactorySha256: sha('clone-factory'),
+    ddlFenceSha256: durableExecutionComponents.ddlFenceSha256,
+  },
+  authorizes: {
+    statePersistence: true,
+    cloneCreation: true,
+    restoreExecution: false,
+    markerWrite: false,
+    evidencePublication: false,
+    automaticCleanup: false,
+    roleCreation: false,
+    roleSplit: false,
+    sharedDatabaseMutation: false,
+    migration: false,
+    deploy: false,
+    import: false,
+    activation: false,
+  },
+} as const satisfies CommunitiesStagingRoleSplitV3CloneCreationAuthorization;
+const durableExecutionAuthorization = {
+  schemaVersion: COMMUNITIES_STAGING_ROLE_SPLIT_V3_EXECUTION_AUTHORIZATION_VERSION,
+  status: 'EXECUTION_AUTHORIZED',
+  candidateCommitSha: durableHostAuthorization.candidateCommitSha,
+  markerRequestSha256: durableRequestSha256,
+  creationReceiptSha256: durableReceiptSha256,
+  restoreExecutionEvidenceSha256: durableEvidenceSha256,
+  cloneDatabaseOid,
+  systemIdentifier: durableRequest.systemIdentifier,
+  cloneCreationAuthorizationSha256: communitiesStagingRoleSplitV3CloneCreationAuthorizationSha256(
+    durableCloneCreationAuthorization,
+  ),
+  hostAuthorizationSha256:
+    communitiesStagingRoleSplitHostAuthorizationSha256(durableHostAuthorization),
+  durableRestoreAuthorizationSha256:
+    communitiesStagingRoleSplitV3DurableRestoreAuthorizationSha256(durableAuthorization),
+  components: durableExecutionComponents,
+  authorizes: {
+    statePersistence: true,
+    cloneCreation: false,
+    restoreExecution: true,
+    markerWrite: true,
+    evidencePublication: true,
+    automaticCleanup: false,
+    roleCreation: false,
+    roleSplit: false,
+    sharedDatabaseMutation: false,
+    migration: false,
+    deploy: false,
+    import: false,
+    activation: false,
+  },
+} as const satisfies CommunitiesStagingRoleSplitV3ExecutionAuthorization;
 
 type WriteOutcome =
   | 'succeed'
@@ -735,7 +814,7 @@ class FakeRestoreExecutor implements CommunitiesStagingRoleSplitV3DurableRestore
       preSha256: durableRequest.backupSha256,
     },
     private readonly discardedOutputBytes = 0,
-    subjectSha256 = durableExecution.canonicalHostAdapterSha256,
+    subjectSha256 = durableExecutionComponents.runnerAdapterSha256,
   ) {
     this.subjectSha256 = subjectSha256;
   }
@@ -822,6 +901,11 @@ function durableHostFixture(
     authorization: durableAuthorization,
     expectedAuthorizationSha256:
       communitiesStagingRoleSplitV3DurableRestoreAuthorizationSha256(durableAuthorization),
+    cloneCreationAuthorization: durableCloneCreationAuthorization,
+    executionAuthorization: durableExecutionAuthorization,
+    expectedExecutionAuthorizationSha256: communitiesStagingRoleSplitV3ExecutionAuthorizationSha256(
+      durableExecutionAuthorization,
+    ),
     stateStore,
     archiveCustody,
     restoreExecutor,
@@ -846,6 +930,30 @@ function durableHostFixture(
 }
 
 describe('CommunitiesStagingRoleSplitV3DurableHost', () => {
+  it('requires the independently retained execution authorization and runner adapter subject', () => {
+    const current = durableHostFixture();
+    expect(
+      () =>
+        new CommunitiesStagingRoleSplitV3DurableHost({
+          ...current.config,
+          expectedExecutionAuthorizationSha256: sha('wrong execution authorization'),
+        }),
+    ).toThrow(/BINDING_INVALID/);
+    expect(
+      () =>
+        new CommunitiesStagingRoleSplitV3DurableHost({
+          ...current.config,
+          restoreExecutor: new FakeRestoreExecutor(
+            current.calls,
+            undefined,
+            undefined,
+            undefined,
+            durableExecution.canonicalHostAdapterSha256,
+          ),
+        }),
+    ).toThrow(/BINDING_INVALID/);
+  });
+
   it('does not touch collaborators in the constructor and binds a complete, frozen capability', async () => {
     const current = durableHostFixture();
     expect(current.calls).toEqual([]);

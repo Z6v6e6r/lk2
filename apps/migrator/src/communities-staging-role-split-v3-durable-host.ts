@@ -17,11 +17,15 @@ import { isDeepStrictEqual } from 'node:util';
 import {
   assertCommunitiesStagingRoleSplitV3DurableRestoreAuthorizationBinding,
   canonicalCommunitiesStagingRoleSplitV3DurableStateEnvelope,
+  assertCommunitiesStagingRoleSplitV3ExecutionAuthorizationBinding,
   canonicalCommunitiesStagingRoleSplitV3DurableContinuationEnvelope,
   COMMUNITIES_STAGING_ROLE_SPLIT_V3_DURABLE_CONTINUATION_ENVELOPE_VERSION,
   communitiesStagingRoleSplitV3DurableRestoreAuthorizationSha256,
   communitiesStagingRoleSplitV3DurableContinuationEnvelopeSha256,
   communitiesStagingRoleSplitV3DurableStateEnvelopeSha256,
+  communitiesStagingRoleSplitV3ExecutionAuthorizationSha256,
+  type CommunitiesStagingRoleSplitV3CloneCreationAuthorization,
+  type CommunitiesStagingRoleSplitV3ExecutionAuthorization,
   parseCommunitiesStagingRoleSplitV3DurableStateEnvelope,
   parseCommunitiesStagingRoleSplitV3DurableContinuationEnvelope,
   type CommunitiesStagingRoleSplitHostAuthorization,
@@ -414,6 +418,10 @@ export interface CommunitiesStagingRoleSplitV3DurableHostConfig {
   readonly hostAuthorization: CommunitiesStagingRoleSplitHostAuthorization;
   readonly authorization: CommunitiesStagingRoleSplitV3DurableRestoreAuthorization;
   readonly expectedAuthorizationSha256: string;
+  readonly cloneCreationAuthorization: CommunitiesStagingRoleSplitV3CloneCreationAuthorization;
+  readonly executionAuthorization: CommunitiesStagingRoleSplitV3ExecutionAuthorization;
+  /** Independently retained digest; never derive it from authorization at use time. */
+  readonly expectedExecutionAuthorizationSha256: string;
   readonly stateStore: CommunitiesStagingRoleSplitV3DurableStateStore;
   readonly archiveCustody: CommunitiesStagingRoleSplitV3ArchiveCustody;
   readonly restoreExecutor: CommunitiesStagingRoleSplitV3DurableRestoreExecutor;
@@ -466,6 +474,8 @@ export class CommunitiesStagingRoleSplitV3DurableHost {
       restoreAuthorization: deepFreeze(structuredClone(config.restoreAuthorization)),
       hostAuthorization: deepFreeze(structuredClone(config.hostAuthorization)),
       authorization: deepFreeze(structuredClone(config.authorization)),
+      cloneCreationAuthorization: deepFreeze(structuredClone(config.cloneCreationAuthorization)),
+      executionAuthorization: deepFreeze(structuredClone(config.executionAuthorization)),
       envelopes: deepFreeze(structuredClone(config.envelopes)),
     });
     try {
@@ -487,17 +497,33 @@ export class CommunitiesStagingRoleSplitV3DurableHost {
     } catch {
       fail('AUTHORIZATION_INVALID');
     }
+    try {
+      assertCommunitiesStagingRoleSplitV3ExecutionAuthorizationBinding({
+        request: this.config.request,
+        cloneCreationAuthorization: this.config.cloneCreationAuthorization,
+        hostAuthorization: this.config.hostAuthorization,
+        durableRestoreAuthorization: this.config.authorization,
+        authorization: this.config.executionAuthorization,
+      });
+    } catch {
+      fail('AUTHORIZATION_INVALID');
+    }
     if (
       !sha256Pattern.test(this.config.expectedAuthorizationSha256) ||
       !sha256Pattern.test(this.config.fence.subjectSha256) ||
       this.config.fence.subjectSha256 !== this.config.hostAuthorization.execution.ddlFenceSha256 ||
       this.config.restoreExecutor.subjectSha256 !==
-        this.config.hostAuthorization.execution.canonicalHostAdapterSha256 ||
+        this.config.executionAuthorization.components.runnerAdapterSha256 ||
       this.config.authorization.markerRequestSha256 !== this.config.stateStore.requestSha256 ||
       this.config.authorization.creationReceiptSha256 !==
         this.config.stateStore.creationReceiptSha256 ||
       this.config.expectedAuthorizationSha256 !==
         communitiesStagingRoleSplitV3DurableRestoreAuthorizationSha256(this.config.authorization) ||
+      !sha256Pattern.test(this.config.expectedExecutionAuthorizationSha256) ||
+      this.config.expectedExecutionAuthorizationSha256 !==
+        communitiesStagingRoleSplitV3ExecutionAuthorizationSha256(
+          this.config.executionAuthorization,
+        ) ||
       !Number.isSafeInteger(this.config.fenceTimeoutMs) ||
       this.config.fenceTimeoutMs < 1 ||
       this.config.fenceTimeoutMs > 60_000
