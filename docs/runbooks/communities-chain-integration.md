@@ -300,17 +300,18 @@ repair or replace the marker.
 The exact installation surface can now be packaged locally with
 `npm run db:communities-role-split:installation-candidate`. The builder takes an independently
 supplied commit SHA, disables Git replacement objects, rejects replacement refs and emits a private
-canonical V7 manifest, independently pinned V4 host control ledger and digest receipt. V7 is
+canonical V9 manifest, independently pinned V6 host control ledger and digest receipt. V9 is
 installable only as a disabled versioned code snapshot: a POSIX shell root installer, an
 always-denied command and read-only canonical host sources. It requires no Node runtime on the
 ARM64 host and
 creates no active link, forced command, key, connection, credential or workflow mutation.
-The V7 source set also includes the canonical inventory-preparation contract, verifier and CLI
+The V9 source set also includes the canonical inventory-preparation contract, verifier and CLI
 source snapshots. They remain unwired and non-runnable; their presence does not authorize evidence
-access, inventory collection or artifact publication. Ten further mode-0444 snapshots retain the
-independently reviewed V3 durable host, coordinator, composition and authorization/evidence
-contracts, plus the durable continuation host and envelope, without adding a compiled entrypoint,
-runner wiring, key, credential or connection. The POSIX installer reconstructs the complete
+access, inventory collection or artifact publication. Fourteen further mode-0444 snapshots retain
+the independently reviewed V3 durable host, external monotonic phase anchor, descriptor-pinned
+executor, coordinator, composition and authorization/evidence contracts, plus the durable
+continuation host and envelope, without adding a compiled entrypoint, runner wiring, key,
+credential or connection. The POSIX installer reconstructs the complete
 canonical manifest from its fixed allowlist and control records before accepting the manifest
 digest; freshly pinned policy changes and schema downgrades remain rejected.
 The unwired durable store now records every forward phase in an append-only canonical journal and
@@ -320,10 +321,17 @@ journal is exactly one phase ahead atomically promotes the head under the held l
 `VERIFIED -> MARKER_PENDING` transition can recreate an in-memory dispatch edge, the continuation
 host also reconciles the exact external marker; a previously completed marker therefore cannot be
 written again after a restored older snapshot.
+The V2 clone-creation and execution authorizations also require an independently pinned external
+phase-anchor subject. Every forward CAS appends the local journal, advances that predecessor-bound
+anchor, then publishes the mutable head. The two one-step crash shapes reconcile; a full local
+rollback, anchor rollback, skipped phase or changed envelope digest fails closed. The file provider
+requires a separate non-nested private process-owner custody directory and exposes no reset/delete
+operation, but its
+concrete staging path and independent custody evidence remain a later gate.
 
-Only `authorizes.installation` is true. The twelve binding codes remain required before execution,
-and every key, staging, database, ceremony, cleanup, role-split, migration, deploy and activation
-authorization remains false. The installer refuses overwrite/partial replay, verifies the
+Only `authorizes.installation` is true. The twelve host-binding codes plus the external monotonic
+phase anchor remain required before execution, and every key, staging, database, ceremony,
+cleanup, role-split, migration, deploy and activation authorization remains false. The installer refuses overwrite/partial replay, verifies the
 independent manifest, control and artifact-set pins plus installed readback, then publishes an
 `INSTALLED_DISABLED` receipt. Producing or verifying the candidate is not installation approval;
 installing it is not ceremony approval and cannot synthesize the separately custodied host

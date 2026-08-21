@@ -141,18 +141,19 @@ expected_artifact() {
     12) printf '%s\n' 'payload/source/communities-staging-role-split-inventory-preparation-verifier.ts|source/communities-staging-role-split-inventory-preparation-verifier.ts|0444' ;;
     13) printf '%s\n' 'payload/source/verify-communities-staging-role-split-inventory-preparation.ts|source/verify-communities-staging-role-split-inventory-preparation.ts|0444' ;;
     14) printf '%s\n' 'payload/source/communities-staging-role-split-v3-durable-host.ts|source/communities-staging-role-split-v3-durable-host.ts|0444' ;;
-    15) printf '%s\n' 'payload/source/communities-staging-role-split-v3-durable-continuation-host.ts|source/communities-staging-role-split-v3-durable-continuation-host.ts|0444' ;;
-    16) printf '%s\n' 'payload/source/communities-staging-role-split-v3-pg-restore-executor.ts|source/communities-staging-role-split-v3-pg-restore-executor.ts|0444' ;;
-    17) printf '%s\n' 'payload/source/communities-staging-role-split-v3-durable-restore-coordinator.ts|source/communities-staging-role-split-v3-durable-restore-coordinator.ts|0444' ;;
-    18) printf '%s\n' 'payload/source/communities-staging-role-split-v3-executable-composition.ts|source/communities-staging-role-split-v3-executable-composition.ts|0444' ;;
-    19) printf '%s\n' 'payload/source/communities-staging-role-split-v3-contract.ts|source/communities-staging-role-split-v3-contract.ts|0444' ;;
-    20) printf '%s\n' 'payload/source/communities-staging-role-split-v3-envelope.ts|source/communities-staging-role-split-v3-envelope.ts|0444' ;;
-    21) printf '%s\n' 'payload/source/communities-staging-role-split-v3-restore-authorization.ts|source/communities-staging-role-split-v3-restore-authorization.ts|0444' ;;
-    22) printf '%s\n' 'payload/source/communities-staging-role-split-v3-durable-restore-authorization.ts|source/communities-staging-role-split-v3-durable-restore-authorization.ts|0444' ;;
-    23) printf '%s\n' 'payload/source/communities-staging-role-split-v3-durable-state-envelope.ts|source/communities-staging-role-split-v3-durable-state-envelope.ts|0444' ;;
-    24) printf '%s\n' 'payload/source/communities-staging-role-split-v3-durable-continuation-envelope.ts|source/communities-staging-role-split-v3-durable-continuation-envelope.ts|0444' ;;
-    25) printf '%s\n' 'payload/source/communities-staging-role-split-v3-execution-authorization.ts|source/communities-staging-role-split-v3-execution-authorization.ts|0444' ;;
-    26) printf '%s\n' 'payload/source/communities-staging-role-split-v3-attested-evidence.ts|source/communities-staging-role-split-v3-attested-evidence.ts|0444' ;;
+    15) printf '%s\n' 'payload/source/communities-staging-role-split-v3-external-phase-anchor.ts|source/communities-staging-role-split-v3-external-phase-anchor.ts|0444' ;;
+    16) printf '%s\n' 'payload/source/communities-staging-role-split-v3-durable-continuation-host.ts|source/communities-staging-role-split-v3-durable-continuation-host.ts|0444' ;;
+    17) printf '%s\n' 'payload/source/communities-staging-role-split-v3-pg-restore-executor.ts|source/communities-staging-role-split-v3-pg-restore-executor.ts|0444' ;;
+    18) printf '%s\n' 'payload/source/communities-staging-role-split-v3-durable-restore-coordinator.ts|source/communities-staging-role-split-v3-durable-restore-coordinator.ts|0444' ;;
+    19) printf '%s\n' 'payload/source/communities-staging-role-split-v3-executable-composition.ts|source/communities-staging-role-split-v3-executable-composition.ts|0444' ;;
+    20) printf '%s\n' 'payload/source/communities-staging-role-split-v3-contract.ts|source/communities-staging-role-split-v3-contract.ts|0444' ;;
+    21) printf '%s\n' 'payload/source/communities-staging-role-split-v3-envelope.ts|source/communities-staging-role-split-v3-envelope.ts|0444' ;;
+    22) printf '%s\n' 'payload/source/communities-staging-role-split-v3-restore-authorization.ts|source/communities-staging-role-split-v3-restore-authorization.ts|0444' ;;
+    23) printf '%s\n' 'payload/source/communities-staging-role-split-v3-durable-restore-authorization.ts|source/communities-staging-role-split-v3-durable-restore-authorization.ts|0444' ;;
+    24) printf '%s\n' 'payload/source/communities-staging-role-split-v3-durable-state-envelope.ts|source/communities-staging-role-split-v3-durable-state-envelope.ts|0444' ;;
+    25) printf '%s\n' 'payload/source/communities-staging-role-split-v3-durable-continuation-envelope.ts|source/communities-staging-role-split-v3-durable-continuation-envelope.ts|0444' ;;
+    26) printf '%s\n' 'payload/source/communities-staging-role-split-v3-execution-authorization.ts|source/communities-staging-role-split-v3-execution-authorization.ts|0444' ;;
+    27) printf '%s\n' 'payload/source/communities-staging-role-split-v3-attested-evidence.ts|source/communities-staging-role-split-v3-attested-evidence.ts|0444' ;;
     *) fail CONTROL_INVALID ;;
   esac
 }
@@ -173,18 +174,19 @@ expected_manifest_artifact() {
     12) printf '%s\n' 'apps/migrator/src/communities-staging-role-split-inventory-preparation.ts|100644|disabled inventory-preparation verifier snapshot; deliberately unwired' ;;
     13) printf '%s\n' 'apps/migrator/src/verify-communities-staging-role-split-inventory-preparation.ts|100644|disabled preparation CLI source snapshot; Node runtime and execution wiring absent' ;;
     14) printf '%s\n' 'apps/migrator/src/communities-staging-role-split-v3-durable-host.ts|100644|reviewed V3 code-only source snapshot; deliberately unwired and non-runnable' ;;
-    15) printf '%s\n' 'apps/migrator/src/communities-staging-role-split-v3-durable-continuation-host.ts|100644|reviewed V3 code-only source snapshot; deliberately unwired and non-runnable' ;;
-    16) printf '%s\n' 'apps/migrator/src/communities-staging-role-split-v3-pg-restore-executor.ts|100644|reviewed V3 code-only source snapshot; deliberately unwired and non-runnable' ;;
-    17) printf '%s\n' 'apps/migrator/src/communities-staging-role-split-v3-durable-restore-coordinator.ts|100644|reviewed V3 code-only source snapshot; deliberately unwired and non-runnable' ;;
-    18) printf '%s\n' 'apps/migrator/src/communities-staging-role-split-v3-executable-composition.ts|100644|reviewed V3 code-only source snapshot; deliberately unwired and non-runnable' ;;
-    19) printf '%s\n' 'packages/database/src/communities-staging-role-split-v3-contract.ts|100644|reviewed V3 authorization source snapshot; deliberately unwired and non-runnable' ;;
-    20) printf '%s\n' 'packages/database/src/communities-staging-role-split-v3-envelope.ts|100644|reviewed V3 authorization source snapshot; deliberately unwired and non-runnable' ;;
-    21) printf '%s\n' 'packages/database/src/communities-staging-role-split-v3-restore-authorization.ts|100644|reviewed V3 authorization source snapshot; deliberately unwired and non-runnable' ;;
-    22) printf '%s\n' 'packages/database/src/communities-staging-role-split-v3-durable-restore-authorization.ts|100644|reviewed V3 authorization source snapshot; deliberately unwired and non-runnable' ;;
-    23) printf '%s\n' 'packages/database/src/communities-staging-role-split-v3-durable-state-envelope.ts|100644|reviewed V3 authorization source snapshot; deliberately unwired and non-runnable' ;;
-    24) printf '%s\n' 'packages/database/src/communities-staging-role-split-v3-durable-continuation-envelope.ts|100644|reviewed V3 authorization source snapshot; deliberately unwired and non-runnable' ;;
-    25) printf '%s\n' 'packages/database/src/communities-staging-role-split-v3-execution-authorization.ts|100644|reviewed V3 authorization source snapshot; deliberately unwired and non-runnable' ;;
-    26) printf '%s\n' 'packages/database/src/communities-staging-role-split-v3-attested-evidence.ts|100644|reviewed V3 authorization source snapshot; deliberately unwired and non-runnable' ;;
+    15) printf '%s\n' 'apps/migrator/src/communities-staging-role-split-v3-external-phase-anchor.ts|100644|reviewed V3 external monotonic anchor source snapshot; deliberately unwired and non-runnable' ;;
+    16) printf '%s\n' 'apps/migrator/src/communities-staging-role-split-v3-durable-continuation-host.ts|100644|reviewed V3 code-only source snapshot; deliberately unwired and non-runnable' ;;
+    17) printf '%s\n' 'apps/migrator/src/communities-staging-role-split-v3-pg-restore-executor.ts|100644|reviewed V3 code-only source snapshot; deliberately unwired and non-runnable' ;;
+    18) printf '%s\n' 'apps/migrator/src/communities-staging-role-split-v3-durable-restore-coordinator.ts|100644|reviewed V3 code-only source snapshot; deliberately unwired and non-runnable' ;;
+    19) printf '%s\n' 'apps/migrator/src/communities-staging-role-split-v3-executable-composition.ts|100644|reviewed V3 code-only source snapshot; deliberately unwired and non-runnable' ;;
+    20) printf '%s\n' 'packages/database/src/communities-staging-role-split-v3-contract.ts|100644|reviewed V3 authorization source snapshot; deliberately unwired and non-runnable' ;;
+    21) printf '%s\n' 'packages/database/src/communities-staging-role-split-v3-envelope.ts|100644|reviewed V3 authorization source snapshot; deliberately unwired and non-runnable' ;;
+    22) printf '%s\n' 'packages/database/src/communities-staging-role-split-v3-restore-authorization.ts|100644|reviewed V3 authorization source snapshot; deliberately unwired and non-runnable' ;;
+    23) printf '%s\n' 'packages/database/src/communities-staging-role-split-v3-durable-restore-authorization.ts|100644|reviewed V3 authorization source snapshot; deliberately unwired and non-runnable' ;;
+    24) printf '%s\n' 'packages/database/src/communities-staging-role-split-v3-durable-state-envelope.ts|100644|reviewed V3 authorization source snapshot; deliberately unwired and non-runnable' ;;
+    25) printf '%s\n' 'packages/database/src/communities-staging-role-split-v3-durable-continuation-envelope.ts|100644|reviewed V3 authorization source snapshot; deliberately unwired and non-runnable' ;;
+    26) printf '%s\n' 'packages/database/src/communities-staging-role-split-v3-execution-authorization.ts|100644|reviewed V3 authorization source snapshot; deliberately unwired and non-runnable' ;;
+    27) printf '%s\n' 'packages/database/src/communities-staging-role-split-v3-attested-evidence.ts|100644|reviewed V3 authorization source snapshot; deliberately unwired and non-runnable' ;;
     *) fail MANIFEST_INVALID ;;
   esac
 }
@@ -196,23 +198,24 @@ expected_execution_binding() {
     3) printf '%s\n' CLONE_ONLY_CONNECTION_FACTORY ;;
     4) printf '%s\n' CLUSTER_DDL_FENCE ;;
     5) printf '%s\n' DEDICATED_FORCED_COMMAND_PUBLIC_KEY ;;
-    6) printf '%s\n' INDEPENDENT_EVIDENCE_SINK ;;
-    7) printf '%s\n' OPERATOR_SELECTED_SOURCE_AND_CLONE_CONNECTIONS ;;
-    8) printf '%s\n' OWNERSHIP_ACL_ATTESTATION ;;
-    9) printf '%s\n' PG_RESTORE_EXECUTABLE_SHA256 ;;
-    10) printf '%s\n' RESTORE_LOGIN_ROLE ;;
-    11) printf '%s\n' SOURCE_WRITE_DENIAL_ATTESTATION ;;
-    12) printf '%s\n' STAGING_KNOWN_HOSTS_PIN ;;
+    6) printf '%s\n' EXTERNAL_MONOTONIC_PHASE_ANCHOR ;;
+    7) printf '%s\n' INDEPENDENT_EVIDENCE_SINK ;;
+    8) printf '%s\n' OPERATOR_SELECTED_SOURCE_AND_CLONE_CONNECTIONS ;;
+    9) printf '%s\n' OWNERSHIP_ACL_ATTESTATION ;;
+    10) printf '%s\n' PG_RESTORE_EXECUTABLE_SHA256 ;;
+    11) printf '%s\n' RESTORE_LOGIN_ROLE ;;
+    12) printf '%s\n' SOURCE_WRITE_DENIAL_ATTESTATION ;;
+    13) printf '%s\n' STAGING_KNOWN_HOSTS_PIN ;;
     *) fail MANIFEST_INVALID ;;
   esac
 }
 
 expected_manifest_bytes() {
   exec 3< "$candidate/installation-candidate.control" || fail MANIFEST_INVALID
-  read_exact_line MANIFEST_INVALID PHUB_COMMUNITIES_ROLE_SPLIT_HOST_INSTALL_CONTROL_V5
+  read_exact_line MANIFEST_INVALID PHUB_COMMUNITIES_ROLE_SPLIT_HOST_INSTALL_CONTROL_V6
   read_exact_line MANIFEST_INVALID "candidateCommitSha=$candidate_sha"
   read_exact_line MANIFEST_INVALID "artifactSetSha256=$artifact_set_sha"
-  read_exact_line MANIFEST_INVALID artifactCount=26
+  read_exact_line MANIFEST_INVALID artifactCount=27
   read_exact_line MANIFEST_INVALID installable=true
   read_exact_line MANIFEST_INVALID authorizesInstallation=true
   read_exact_line MANIFEST_INVALID authorizesCeremony=false
@@ -220,7 +223,7 @@ expected_manifest_bytes() {
 
   printf '%s\n' \
     '{' \
-    '  "schemaVersion": "communities-role-split-installation-candidate-v8",' \
+    '  "schemaVersion": "communities-role-split-installation-candidate-v9",' \
     "  \"candidateCommitSha\": \"$candidate_sha\"," \
     '  "sourceRepository": "https://github.com/Z6v6e6r/lk2.git",' \
     '  "status": "INSTALLABLE_DISABLED",' \
@@ -236,7 +239,7 @@ expected_manifest_bytes() {
     '  "artifactFiles": ['
 
   index=1
-  while [ "$index" -le 26 ]
+  while [ "$index" -le 27 ]
   do
     IFS= read -r line <&3 || fail MANIFEST_INVALID
     parse_artifact_line "$line" "$index"
@@ -262,7 +265,7 @@ expected_manifest_bytes() {
       "      \"targetPath\": \"/usr/local/libexec/phub/communities-role-split/candidates/$candidate_sha/$target_relative\"," \
       "      \"bytes\": $artifact_bytes," \
       "      \"sha256\": \"$artifact_sha\""
-    if [ "$index" -lt 26 ]; then printf '%s\n' '    },'; else printf '%s\n' '    }'; fi
+    if [ "$index" -lt 27 ]; then printf '%s\n' '    },'; else printf '%s\n' '    }'; fi
     index=$((index + 1))
   done
   if IFS= read -r line <&3; then fail MANIFEST_INVALID; fi
@@ -291,7 +294,7 @@ expected_manifest_bytes() {
     '  },' \
     '  "executionBindings": ['
   index=1
-  while [ "$index" -le 12 ]
+  while [ "$index" -le 13 ]
   do
     binding=$(expected_execution_binding "$index")
     printf '%s\n' \
@@ -299,7 +302,7 @@ expected_manifest_bytes() {
       "      \"code\": \"$binding\"," \
       '      "status": "REQUIRED_FOR_EXECUTION",' \
       '      "blocksInstallation": false'
-    if [ "$index" -lt 12 ]; then printf '%s\n' '    },'; else printf '%s\n' '    }'; fi
+    if [ "$index" -lt 13 ]; then printf '%s\n' '    },'; else printf '%s\n' '    }'; fi
     index=$((index + 1))
   done
   printf '%s\n' \
@@ -355,7 +358,7 @@ walk_count() {
 
 verify_candidate() {
   assert_directory "$candidate" "$expected_uid" "$expected_gid" 700
-  [ "$(walk_count "$candidate")" = 31 ] || fail FILE_SET_INVALID
+  [ "$(walk_count "$candidate")" = 32 ] || fail FILE_SET_INVALID
   assert_directory "$candidate/payload" "$expected_uid" "$expected_gid" 700
   assert_directory "$candidate/payload/source" "$expected_uid" "$expected_gid" 700
   for fixed in installation-candidate.json installation-candidate.control installation-candidate.sha256
@@ -371,7 +374,7 @@ verify_candidate() {
   [ "$expected_manifest_sha" = "$manifest_sha" ] || fail MANIFEST_INVALID
 
   exec 3< "$candidate/installation-candidate.sha256" || fail DIGEST_INVALID
-  read_exact_line DIGEST_INVALID PHUB_COMMUNITIES_ROLE_SPLIT_INSTALLATION_CANDIDATE_DIGEST_V8
+  read_exact_line DIGEST_INVALID PHUB_COMMUNITIES_ROLE_SPLIT_INSTALLATION_CANDIDATE_DIGEST_V9
   read_exact_line DIGEST_INVALID "candidateCommitSha=$candidate_sha"
   read_exact_line DIGEST_INVALID "manifestSha256=$manifest_sha"
   read_exact_line DIGEST_INVALID "controlSha256=$control_sha"
@@ -383,16 +386,16 @@ verify_candidate() {
   exec 3<&-
 
   exec 3< "$candidate/installation-candidate.control" || fail CONTROL_INVALID
-  read_exact_line CONTROL_INVALID PHUB_COMMUNITIES_ROLE_SPLIT_HOST_INSTALL_CONTROL_V5
+  read_exact_line CONTROL_INVALID PHUB_COMMUNITIES_ROLE_SPLIT_HOST_INSTALL_CONTROL_V6
   read_exact_line CONTROL_INVALID "candidateCommitSha=$candidate_sha"
   read_exact_line CONTROL_INVALID "artifactSetSha256=$artifact_set_sha"
-  read_exact_line CONTROL_INVALID artifactCount=26
+  read_exact_line CONTROL_INVALID artifactCount=27
   read_exact_line CONTROL_INVALID installable=true
   read_exact_line CONTROL_INVALID authorizesInstallation=true
   read_exact_line CONTROL_INVALID authorizesCeremony=false
   read_exact_line CONTROL_INVALID authorizesDatabaseMutation=false
   index=1
-  while [ "$index" -le 26 ]
+  while [ "$index" -le 27 ]
   do
     IFS= read -r line <&3 || fail CONTROL_INVALID
     parse_artifact_line "$line" "$index"
@@ -438,7 +441,7 @@ receipt_bytes() {
 
 verify_installed() {
   assert_directory "$target" "$expected_uid" "$expected_gid" 755
-  [ "$(walk_count "$target")" = 28 ] || fail INSTALLED_FILE_SET_INVALID
+  [ "$(walk_count "$target")" = 29 ] || fail INSTALLED_FILE_SET_INVALID
   assert_directory "$target/source" "$expected_uid" "$expected_gid" 755
   exec 3< "$candidate/installation-candidate.control" || fail CONTROL_INVALID
   index=0
@@ -455,7 +458,7 @@ verify_installed() {
     esac
   done
   exec 3<&-
-  [ "$index" = 26 ] || fail CONTROL_INVALID
+  [ "$index" = 27 ] || fail CONTROL_INVALID
   receipt="$target/installation-complete.json"
   assert_file "$receipt" "$expected_uid" "$expected_gid" 444
   expected_receipt_sha=$(receipt_bytes | /usr/bin/sha256sum | /usr/bin/awk '{print $1}') ||
@@ -548,7 +551,7 @@ if [ "$action" = install ]; then
     esac
   done
   exec 3<&-
-  [ "$index" = 26 ] || fail CONTROL_INVALID
+  [ "$index" = 27 ] || fail CONTROL_INVALID
   receipt_bytes > "$incomplete/installation-complete.json" || fail RECEIPT_WRITE_FAILED
   /bin/chmod 444 -- "$incomplete/installation-complete.json" 2>/dev/null || fail RECEIPT_WRITE_FAILED
   /bin/sync -f "$incomplete/installation-complete.json" 2>/dev/null || fail SYNC_FAILED

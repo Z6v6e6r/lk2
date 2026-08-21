@@ -280,6 +280,46 @@ describe('V3 executable role-split composition', () => {
       runCommunitiesStagingRoleSplitV3ExecutableComposition(continueConfig(changed)),
     ).rejects.toMatchObject({ code: 'BINDING_INVALID' });
     expect(changed.log).toEqual([]);
+
+    const legacy = continueConfig(new FakeHost());
+    await expect(
+      runCommunitiesStagingRoleSplitV3ExecutableComposition({
+        ...legacy,
+        authorization: {
+          ...legacy.authorization,
+          schemaVersion: 'communities-staging-role-split-v3-execution-authorization-v1',
+        } as unknown as typeof legacy.authorization,
+      }),
+    ).rejects.toMatchObject({ code: 'AUTHORIZATION_INVALID' });
+    expect(legacy.host.log).toEqual([]);
+
+    const unanchored = new FakeHost();
+    unanchored.subjects.externalPhaseAnchorSha256 = fixtureSha('changed-external-anchor');
+    await expect(
+      runCommunitiesStagingRoleSplitV3ExecutableComposition(continueConfig(unanchored)),
+    ).rejects.toMatchObject({ code: 'BINDING_INVALID' });
+    expect(unanchored.log).toEqual([]);
+
+    const crossBoundaryHost = new FakeHost();
+    const crossBoundary = continueConfig(crossBoundaryHost);
+    const changedAnchor = fixtureSha('different-authorized-external-anchor');
+    const changedAuthorization = {
+      ...crossBoundary.authorization,
+      components: {
+        ...crossBoundary.authorization.components,
+        externalPhaseAnchorSha256: changedAnchor,
+      },
+    };
+    crossBoundaryHost.subjects.externalPhaseAnchorSha256 = changedAnchor;
+    await expect(
+      runCommunitiesStagingRoleSplitV3ExecutableComposition({
+        ...crossBoundary,
+        authorization: changedAuthorization,
+        expectedAuthorizationSha256:
+          communitiesStagingRoleSplitV3ExecutionAuthorizationSha256(changedAuthorization),
+      }),
+    ).rejects.toMatchObject({ code: 'AUTHORIZATION_INVALID' });
+    expect(crossBoundaryHost.log).toEqual([]);
   });
 
   it('rejects replayed attestation digests before persisting VERIFIED state', async () => {

@@ -361,6 +361,7 @@ export function createCommunitiesStagingRoleSplitV3Fixture() {
     ownershipAclAttestorSha256: subjects.OWNERSHIP_ACL_ATTESTATION,
     sourceWriteDenialAttestorSha256: subjects.SOURCE_WRITE_DENIAL_ATTESTATION,
     evidenceSinkSha256: subjects.INDEPENDENT_EVIDENCE_SINK,
+    externalPhaseAnchorSha256: fixtureSha('external-phase-anchor'),
   } as const;
   const cloneCreationAuthorization = {
     schemaVersion: COMMUNITIES_STAGING_ROLE_SPLIT_V3_CLONE_CREATION_AUTHORIZATION_VERSION,
@@ -372,6 +373,7 @@ export function createCommunitiesStagingRoleSplitV3Fixture() {
       stateStoreSha256: executionComponents.stateStoreSha256,
       cloneFactorySha256: fixtureSha('clone-factory'),
       ddlFenceSha256: executionComponents.ddlFenceSha256,
+      externalPhaseAnchorSha256: executionComponents.externalPhaseAnchorSha256,
     },
     authorizes: {
       statePersistence: true,

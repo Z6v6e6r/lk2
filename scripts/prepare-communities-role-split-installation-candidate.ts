@@ -13,11 +13,11 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import { fileURLToPath } from 'node:url';
 
 export const INSTALLATION_CANDIDATE_SCHEMA_VERSION =
-  'communities-role-split-installation-candidate-v8';
+  'communities-role-split-installation-candidate-v9';
 export const INSTALLATION_CANDIDATE_DIGEST_VERSION =
-  'PHUB_COMMUNITIES_ROLE_SPLIT_INSTALLATION_CANDIDATE_DIGEST_V8';
+  'PHUB_COMMUNITIES_ROLE_SPLIT_INSTALLATION_CANDIDATE_DIGEST_V9';
 export const INSTALLATION_CANDIDATE_CONTROL_VERSION =
-  'PHUB_COMMUNITIES_ROLE_SPLIT_HOST_INSTALL_CONTROL_V5';
+  'PHUB_COMMUNITIES_ROLE_SPLIT_HOST_INSTALL_CONTROL_V6';
 
 const sha40Pattern = /^[0-9a-f]{40}$/u;
 const sha256Pattern = /^[0-9a-f]{64}$/u;
@@ -205,6 +205,7 @@ const fileDefinitions: readonly CandidateArtifactDefinition[] = [
   },
   ...[
     'communities-staging-role-split-v3-durable-host.ts',
+    'communities-staging-role-split-v3-external-phase-anchor.ts',
     'communities-staging-role-split-v3-durable-continuation-host.ts',
     'communities-staging-role-split-v3-pg-restore-executor.ts',
     'communities-staging-role-split-v3-durable-restore-coordinator.ts',
@@ -218,7 +219,10 @@ const fileDefinitions: readonly CandidateArtifactDefinition[] = [
     installOwner: 'root',
     installGroup: 'root',
     installMode: '0444',
-    purpose: 'reviewed V3 code-only source snapshot; deliberately unwired and non-runnable',
+    purpose:
+      name === 'communities-staging-role-split-v3-external-phase-anchor.ts'
+        ? 'reviewed V3 external monotonic anchor source snapshot; deliberately unwired and non-runnable'
+        : 'reviewed V3 code-only source snapshot; deliberately unwired and non-runnable',
   })),
   ...[
     'communities-staging-role-split-v3-contract.ts',
@@ -248,6 +252,7 @@ const unresolvedBindingCodes = [
   'CLONE_ONLY_CONNECTION_FACTORY',
   'CLUSTER_DDL_FENCE',
   'DEDICATED_FORCED_COMMAND_PUBLIC_KEY',
+  'EXTERNAL_MONOTONIC_PHASE_ANCHOR',
   'INDEPENDENT_EVIDENCE_SINK',
   'OPERATOR_SELECTED_SOURCE_AND_CLONE_CONNECTIONS',
   'OWNERSHIP_ACL_ATTESTATION',

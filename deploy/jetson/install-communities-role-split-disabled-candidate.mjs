@@ -22,7 +22,7 @@ import {
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const schemaVersion = 'communities-role-split-installation-candidate-v8';
+const schemaVersion = 'communities-role-split-installation-candidate-v9';
 const sha40 = /^[0-9a-f]{40}$/u;
 const sha256 = /^[0-9a-f]{64}$/u;
 const installPrefix = '/usr/local/libexec/phub/communities-role-split/candidates';
@@ -84,6 +84,7 @@ const expectedArtifacts = [
   },
   ...[
     'communities-staging-role-split-v3-durable-host.ts',
+    'communities-staging-role-split-v3-external-phase-anchor.ts',
     'communities-staging-role-split-v3-durable-continuation-host.ts',
     'communities-staging-role-split-v3-pg-restore-executor.ts',
     'communities-staging-role-split-v3-durable-restore-coordinator.ts',
@@ -118,6 +119,7 @@ const expectedExecutionBindingCodes = [
   'CLONE_ONLY_CONNECTION_FACTORY',
   'CLUSTER_DDL_FENCE',
   'DEDICATED_FORCED_COMMAND_PUBLIC_KEY',
+  'EXTERNAL_MONOTONIC_PHASE_ANCHOR',
   'INDEPENDENT_EVIDENCE_SINK',
   'OPERATOR_SELECTED_SOURCE_AND_CLONE_CONNECTIONS',
   'OWNERSHIP_ACL_ATTESTATION',

@@ -1,14 +1,14 @@
 # Communities role-split marker ceremony
 
-Status: **a V3 executable composition and durable restore coordinator now exist as code-only,
-unwired modules; the staging host still has only disabled V5 bytes and no ceremony is authorized
-to run**.
+Status: **a V3 executable composition, durable restore coordinator and externally anchored state
+gate now exist as code-only, unwired modules; the staging host still has only disabled V7 bytes and
+no ceremony is authorized to run**.
 
 The repository contains frozen V2 preparation code and a distinct V3 state/authorization contour.
 The new composition coordinates injected collaborators only; it contains no environment parser,
-SSH command, credential loader or activation path. The installed staging V5 candidate remains
+SSH command, credential loader or activation path. The installed staging V7 candidate remains
 disabled, has no active symlink, forced-command key, workflow or database authority, and does not
-contain or authorize the new composition bytes.
+contain or authorize the new executor/anchor bytes.
 
 ## State contract
 
@@ -487,7 +487,7 @@ fails with one fixed public error.
 ## Exact disabled installable candidate
 
 `scripts/prepare-communities-role-split-installation-candidate.ts` now builds and verifies a
-private, deterministic V8 candidate directory from an independently supplied exact Git commit. It
+private, deterministic V9 candidate directory from an independently supplied exact Git commit. It
 reads every artifact from Git objects rather than the mutable worktree, validates each expected Git
 mode, disables Git replacement objects, rejects any replacement ref and requires the raw local repository origin
 to be exactly `https://github.com/Z6v6e6r/lk2.git`, refuses an existing output, and accepts only a
@@ -507,8 +507,8 @@ true authorization. It contains:
 - three additional mode-0444 source snapshots for the canonical inventory-preparation contract,
   its verifier and its CLI. They are deliberately unwired and non-runnable: the candidate contains
   no Node runtime, compiled bundle, credential, preparation envelope or evidence payload.
-- thirteen additional mode-0444 source snapshots for the reviewed V3 durable host, continuation
-  host, descriptor-pinned restore executor, restore coordinator, executable composition,
+- fourteen additional mode-0444 source snapshots for the reviewed V3 durable host, external
+  monotonic phase anchor, continuation host, descriptor-pinned restore executor, restore coordinator, executable composition,
   state/continuation/authorization envelopes and host-bound attested evidence. These
   are code-only review bytes: the candidate still has no compiled entrypoint, concrete restore
   executor construction, password/executable descriptors, DDL-fence lease wiring or runtime loader.
@@ -521,12 +521,12 @@ ledger is independently pinned and binds the fixed artifact paths, target-relati
 byte counts, SHA-256 values and false execution authorizations. The shell verifier reconstructs
 the complete canonical JSON bytes from that fixed policy and the exact control records, then
 requires its SHA-256 to equal both the supplied pin and the candidate file digest. A freshly pinned
-authorization change, added field or V7 downgrade therefore fails before target creation.
-The V8 installed readback requires exactly twenty-six controlled artifacts plus the source
-directory and immutable receipt (`28` entries total); both install and verify loops require an
-exact count of twenty-six control records. The fifth controlled artifact is the immutable shared
-DDL-fence source. The host-control version is V5 so a V7 allowlist cannot be accepted with freshly
-pinned V8 digests. Both the Node review helper and dependency-free shell verifier enumerate the
+authorization change, added field or V8 downgrade therefore fails before target creation.
+The V9 installed readback requires exactly twenty-seven controlled artifacts plus the source
+directory and immutable receipt (`29` entries total); both install and verify loops require an
+exact count of twenty-seven control records. The fifth controlled artifact is the immutable shared
+DDL-fence source. The host-control version is V6 so a V8 allowlist cannot be accepted with freshly
+pinned V9 digests. Both the Node review helper and dependency-free shell verifier enumerate the
 complete candidate and installed trees without following symbolic links; additional files, empty
 directories or non-file/non-directory entries fail before a successful verification result.
 The installer accepts independently retained manifest, control and artifact-set SHA-256 values. It installs
@@ -540,8 +540,9 @@ for manual reconciliation and is never deleted or overwritten automatically.
 The manifest still contains no forced command (`command=null`, `commandIncluded=false`), public key,
 cleanup exposure, workflow wiring, staging connection or runtime configuration. Key provisioning,
 staging access, database mutation, ceremony, cleanup, role split, migration, deploy and activation
-are all false. The twelve host-binding codes remain `REQUIRED_FOR_EXECUTION`; their evidence is not
-needed to install disabled bytes, but no installed artifact can consume or replace that evidence.
+are all false. The twelve host-binding codes plus `EXTERNAL_MONOTONIC_PHASE_ANCHOR` remain
+`REQUIRED_FOR_EXECUTION`; their evidence is not needed to install disabled bytes, but no installed
+artifact can consume or replace that evidence.
 Changing any of those authorizations requires a new reviewed candidate version.
 
 After a checkpoint commit, build and verify only in a fresh private local directory:
@@ -598,6 +599,16 @@ exactly one phase ahead atomically republishes that entry as the head under the 
 any larger divergence fails as `STATE_ROLLBACK_DETECTED` before an external observation or side
 effect. The store exposes no journal deletion or rewrite operation.
 
+V9 additionally requires an external monotonic phase anchor whose exact subject is present in both
+the V2 clone-creation and V2 execution authorizations. Each transition publishes the fsynced local
+journal entry, advances the external anchor by one exact predecessor-bound phase, then publishes
+the mutable head. A crash before either of the last two publications has one exact recovery path.
+A complete rollback of the local head and journal, a rollback of the external anchor, a skipped
+phase or a different envelope digest is terminal `STATE_ROLLBACK_DETECTED`. The reviewed file
+provider requires a distinct non-nested private process-owner custody directory and has no
+reset/delete API. Its concrete
+staging path and custody proof are still absent, so this code cannot be executed.
+
 The capability now has a single same-host consumer. `restore(capability)` accepts only the exact
 WeakMap-owned capability, rechecks the shared DDL fence, exact `RESTORE_PENDING` bytes and archive
 custody before invoking an independently SHA-bound executor, then rechecks the fence and archive
@@ -622,22 +633,22 @@ fence, output, response-loss or archive-observation failure is `RESTORE_OUTCOME_
 instance cannot be reused.
 
 This remains review-only code: the reviewed runner adapter still returns
-`V3_DURABLE_EXECUTION_CAPABILITY_REQUIRED`. V8 adds the bridge only as an immutable mode-0444 source
-snapshot; there is still no command, executable-composition import, compiled bridge, runtime
+`V3_DURABLE_EXECUTION_CAPABILITY_REQUIRED`. V9 adds the bridge and external anchor only as immutable
+mode-0444 source snapshots; there is still no command, executable-composition import, compiled bridge, runtime
 construction, workflow, environment, key, SSH, Docker or PostgreSQL entrypoint. It therefore does
 not make a restore runnable.
 
 ## Remaining gates before execution
 
-1. The exact disabled V5 candidate at commit
-   `55655760a4dee1ab0a614cf464ad9d2b68bbf8c0` has been installed and its disabled readback passed.
+1. The exact disabled V7 candidate at commit
+   `199fad37cda3849aca964420ff2d317d0f3b73ef` has been installed and its disabled readback passed.
    It contains no active link and grants no execution or database authority. It predates and does
-   not contain the new V3 composition.
+   not contain the V9 authorization/anchor contour.
 2. The independent re-review of the exact V3 security-fix range completed with no reportable P0-P2
    findings. V3 evidence V2 binds both attestations to the exact host authorization, and the
-   composition/coordinator retain immutable entry snapshots. V8 packages those reviewed sources
-   and the executor bridge only as disabled mode-0444 bytes and adds no key, workflow or live
-   configuration. Do not reuse
+   composition/coordinator retain immutable entry snapshots. V9 packages those reviewed sources,
+   executor bridge and external anchor only as disabled mode-0444 bytes and adds no key, workflow
+   or live configuration. Do not reuse
    the legacy V2 marker/attested-evidence contour, V3 evidence V1 or the permanently disabled
    reviewed-runner path as a compatibility fallback.
 3. Preserve the completed disposable PostgreSQL 16 response-loss, cleanup-failure and
@@ -652,12 +663,18 @@ not make a restore runnable.
    `verify-communities-staging-role-split-inventory-artifact` CLI and its independently supplied
    SHA-256. The local synthetic producer/evaluator gate is catalog proof, not trusted inventory;
    mock rows are not catalog proof.
-5. Complete independent security and migration review of the final executor bridge, any later
+5. Independently choose and pin the concrete external-anchor subject and a private process-owner
+   custody path
+   outside the durable-state directory and its backup/restore scope. Prove the exact one-step crash
+   matrix on the target Linux filesystem and prove that restoring an older complete state directory
+   is rejected while the retained anchor remains later.
+6. Complete independent security and migration review of the final executor bridge, external
+   anchor, any later
    installed adapter/candidate manifest, and the failure matrix. A review-only bridge is not an
    installable or execution-authorizing artifact.
-6. Obtain separate approvals, in order, for the new disabled installation, execution-authorizing
+7. Obtain separate approvals, in order, for the new disabled installation, execution-authorizing
    candidate, forced-command key, one ceremony run and any later post-marker cleanup.
 
-Until items 2-6 pass, do not create a key, wire a workflow, place requests on staging or run either
-ceremony contour. The currently installed V5 command and existing preparation gate must continue
+Until items 2-7 pass, do not create a key, wire a workflow, place requests on staging or run either
+ceremony contour. The currently installed V7 command and existing preparation gate must continue
 to fail with `EXECUTION_NOT_AUTHORIZED` before PostgreSQL or mutable ceremony filesystem access.

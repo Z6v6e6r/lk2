@@ -1,6 +1,7 @@
 import { chmod, mkdtemp, readdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 
 import {
   advanceCommunitiesStagingRoleSplitV3State,
@@ -26,12 +27,32 @@ import {
 } from './communities-staging-role-split-v3-durable-continuation-host.js';
 import { CommunitiesStagingRoleSplitV3DurableStateStore } from './communities-staging-role-split-v3-durable-host.js';
 import { runCommunitiesStagingRoleSplitV3ExecutableComposition } from './communities-staging-role-split-v3-executable-composition.js';
+import type {
+  CommunitiesStagingRoleSplitV3ExternalPhaseAnchor,
+  CommunitiesStagingRoleSplitV3ExternalPhaseAnchorObservation,
+} from './communities-staging-role-split-v3-external-phase-anchor.js';
 import {
   createCommunitiesStagingRoleSplitV3Fixture,
   fixtureSha,
 } from './communities-staging-role-split-v3-test-fixtures.js';
 
 const fixture = createCommunitiesStagingRoleSplitV3Fixture();
+class TestExternalPhaseAnchor implements CommunitiesStagingRoleSplitV3ExternalPhaseAnchor {
+  value: CommunitiesStagingRoleSplitV3ExternalPhaseAnchorObservation | null = null;
+  constructor(readonly subjectSha256: string) {}
+  async assertIndependent() {}
+  observe() {
+    return Promise.resolve(this.value === null ? null : structuredClone(this.value));
+  }
+  advance(input: {
+    readonly expected: CommunitiesStagingRoleSplitV3ExternalPhaseAnchorObservation | null;
+    readonly next: CommunitiesStagingRoleSplitV3ExternalPhaseAnchorObservation;
+  }) {
+    if (!isDeepStrictEqual(this.value, input.expected)) throw new Error('anchor conflict');
+    this.value = structuredClone(input.next);
+    return Promise.resolve();
+  }
+}
 const fence: CommunitiesStagingRoleSplitDdlFence = {
   acquire(input) {
     return Promise.resolve({
@@ -58,11 +79,15 @@ type HostFixtureOptions = {
 async function hostFixture(options: HostFixtureOptions = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'phub-v3-continuation-'));
   await chmod(directory, 0o700);
+  const anchor = new TestExternalPhaseAnchor(
+    fixture.executionAuthorization.components.externalPhaseAnchorSha256,
+  );
   const store = new CommunitiesStagingRoleSplitV3DurableStateStore(
     fixture.executionAuthorization.components.stateStoreSha256,
     directory,
     fixture.requestSha256,
     fixture.receiptSha256,
+    anchor,
   );
   const seed = await store.acquire();
   const owned = await store.writeCas(seed, null, fixture.ownedEnvelope);
@@ -79,6 +104,7 @@ async function hostFixture(options: HostFixtureOptions = {}) {
     options.throwAfterWriteAt === undefined
       ? store
       : ({
+          externalAnchorSubjectSha256: store.externalAnchorSubjectSha256,
           acquire: store.acquire.bind(store),
           release: store.release.bind(store),
           read: store.read.bind(store),
@@ -420,7 +446,7 @@ describe('V3 durable continuation host', () => {
     ['RESTORED', 2, 'v3-durable-journal-02-restored-'],
     ['VERIFIED', 3, 'v3-durable-journal-03-verified-'],
   ] as const)(
-    'reconciles an exact external marker/evidence after a full %s journal rollback without repeated writes',
+    'rejects a full %s journal rollback against the external monotonic anchor without repeated writes',
     async (_phase, retainedIndex, journalPrefix) => {
       const prepared = await hostFixture();
       const first = await runCommunitiesStagingRoleSplitV3ExecutableComposition({
@@ -449,19 +475,20 @@ describe('V3 durable continuation host', () => {
       const markerWritesBeforeRestart = prepared.markerWrites();
       const evidencePublishesBeforeRestart = prepared.evidencePublishes();
 
-      const resumed = await runCommunitiesStagingRoleSplitV3ExecutableComposition({
-        mode: 'CONTINUE',
-        request: fixture.request,
-        cloneCreationAuthorization: fixture.cloneCreationAuthorization,
-        hostAuthorization: fixture.hostAuthorization,
-        durableRestoreAuthorization: fixture.durableRestoreAuthorization,
-        authorization: fixture.executionAuthorization,
-        expectedAuthorizationSha256: communitiesStagingRoleSplitV3ExecutionAuthorizationSha256(
-          fixture.executionAuthorization,
-        ),
-        host: prepared.createHost(),
-      });
-      expect(resumed.status).toBe('EVIDENCED');
+      await expect(
+        runCommunitiesStagingRoleSplitV3ExecutableComposition({
+          mode: 'CONTINUE',
+          request: fixture.request,
+          cloneCreationAuthorization: fixture.cloneCreationAuthorization,
+          hostAuthorization: fixture.hostAuthorization,
+          durableRestoreAuthorization: fixture.durableRestoreAuthorization,
+          authorization: fixture.executionAuthorization,
+          expectedAuthorizationSha256: communitiesStagingRoleSplitV3ExecutionAuthorizationSha256(
+            fixture.executionAuthorization,
+          ),
+          host: prepared.createHost(),
+        }),
+      ).rejects.toMatchObject({ code: 'HOST_OPERATION_FAILED' });
       expect(prepared.markerWrites()).toBe(markerWritesBeforeRestart);
       expect(prepared.evidencePublishes()).toBe(evidencePublishesBeforeRestart);
     },
@@ -823,6 +850,7 @@ describe('V3 durable continuation host', () => {
     const events: string[] = [];
     let stateReleaseFails = true;
     const stateStore = {
+      externalAnchorSubjectSha256: prepared.store.externalAnchorSubjectSha256,
       acquire: prepared.store.acquire.bind(prepared.store),
       read: prepared.store.read.bind(prepared.store),
       writeCas: prepared.store.writeCas.bind(prepared.store),
@@ -862,6 +890,7 @@ describe('V3 durable continuation host', () => {
     const host = new CommunitiesStagingRoleSplitV3DurableContinuationHost({
       ...prepared.config,
       stateStore: {
+        externalAnchorSubjectSha256: prepared.store.externalAnchorSubjectSha256,
         acquire: () => Promise.reject(new Error('filesystem lease unavailable')),
         release: prepared.store.release.bind(prepared.store),
         read: prepared.store.read.bind(prepared.store),

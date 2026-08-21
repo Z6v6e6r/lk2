@@ -42,6 +42,12 @@ import {
   type CommunitiesStagingRoleSplitDdlFence,
   type CommunitiesStagingRoleSplitDdlFenceLease,
 } from './communities-staging-role-split-ddl-fence.js';
+import {
+  COMMUNITIES_STAGING_ROLE_SPLIT_V3_DURABLE_PHASES,
+  COMMUNITIES_STAGING_ROLE_SPLIT_V3_EXTERNAL_PHASE_ANCHOR_VERSION,
+  type CommunitiesStagingRoleSplitV3ExternalPhaseAnchor,
+  type CommunitiesStagingRoleSplitV3ExternalPhaseAnchorObservation,
+} from './communities-staging-role-split-v3-external-phase-anchor.js';
 
 const MODE_0700 = 0o700;
 const MODE_0600 = 0o600;
@@ -51,15 +57,7 @@ const LEASE_BASENAME = 'ceremony.lock';
 const JOURNAL_PREFIX = 'v3-durable-journal';
 const V2_ARTIFACT_BASENAMES = ['ceremony-state.json', 'marker-evidence.json'];
 const sha256Pattern = /^[a-f0-9]{64}$/u;
-const durablePhases = [
-  'OWNED',
-  'RESTORE_PENDING',
-  'RESTORED',
-  'VERIFIED',
-  'MARKER_PENDING',
-  'MARKED',
-  'EVIDENCED',
-] as const;
+const durablePhases = COMMUNITIES_STAGING_ROLE_SPLIT_V3_DURABLE_PHASES;
 const journalNamePattern =
   /^v3-durable-journal-(\d{2})-(owned|restore_pending|restored|verified|marker_pending|marked|evidenced)-([a-f0-9]{64})\.json$/u;
 
@@ -141,22 +139,33 @@ export type CommunitiesStagingRoleSplitV3DurableStoredEnvelope =
 export class CommunitiesStagingRoleSplitV3DurableStateStore {
   private readonly statePath: string;
   private readonly leasePath: string;
+  private readonly externalAnchor: CommunitiesStagingRoleSplitV3ExternalPhaseAnchor;
+  readonly externalAnchorSubjectSha256: string;
 
   constructor(
     readonly subjectSha256: string,
     private readonly stateDirectory: string,
     readonly requestSha256: string,
     readonly creationReceiptSha256: string,
+    externalAnchor: CommunitiesStagingRoleSplitV3ExternalPhaseAnchor,
   ) {
     if (
       !sha256Pattern.test(subjectSha256) ||
       !sha256Pattern.test(requestSha256) ||
       !sha256Pattern.test(creationReceiptSha256) ||
-      !isAbsolute(stateDirectory)
+      !isAbsolute(stateDirectory) ||
+      !sha256Pattern.test(externalAnchor.subjectSha256)
     )
       fail('BINDING_INVALID');
     this.statePath = join(stateDirectory, STATE_BASENAME);
     this.leasePath = join(stateDirectory, LEASE_BASENAME);
+    this.externalAnchorSubjectSha256 = externalAnchor.subjectSha256;
+    this.externalAnchor = Object.freeze({
+      subjectSha256: externalAnchor.subjectSha256,
+      assertIndependent: externalAnchor.assertIndependent.bind(externalAnchor),
+      observe: externalAnchor.observe.bind(externalAnchor),
+      advance: externalAnchor.advance.bind(externalAnchor),
+    });
   }
 
   private async assertDirectory(): Promise<void> {
@@ -178,6 +187,11 @@ export class CommunitiesStagingRoleSplitV3DurableStateStore {
           if ((error as { code?: string }).code !== 'ENOENT') fail('STATE_DIRECTORY_UNSAFE');
         }
       }
+      await this.externalAnchor.assertIndependent({
+        stateDirectory: this.stateDirectory,
+        requestSha256: this.requestSha256,
+        creationReceiptSha256: this.creationReceiptSha256,
+      });
     } catch (error) {
       if (error instanceof CommunitiesStagingRoleSplitV3DurableHostError) throw error;
       fail('STATE_DIRECTORY_UNSAFE');
@@ -294,6 +308,22 @@ export class CommunitiesStagingRoleSplitV3DurableStateStore {
     if (index < 0) fail('STATE_CORRUPT');
     return `${JOURNAL_PREFIX}-${String(index).padStart(2, '0')}-${envelope.phase.toLowerCase()}-${this.digest(envelope)}.json`;
   }
+  private anchorObservation(
+    envelope: CommunitiesStagingRoleSplitV3DurableStoredEnvelope,
+    previousEnvelopeSha256: string | null,
+  ): CommunitiesStagingRoleSplitV3ExternalPhaseAnchorObservation {
+    const phaseIndex = durablePhases.indexOf(envelope.phase);
+    if (phaseIndex < 0) fail('STATE_CORRUPT');
+    return {
+      schemaVersion: COMMUNITIES_STAGING_ROLE_SPLIT_V3_EXTERNAL_PHASE_ANCHOR_VERSION,
+      requestSha256: this.requestSha256,
+      creationReceiptSha256: this.creationReceiptSha256,
+      phaseIndex,
+      phase: envelope.phase,
+      envelopeSha256: this.digest(envelope),
+      previousEnvelopeSha256,
+    };
+  }
   private async readJournal(): Promise<
     readonly {
       readonly bytes: string;
@@ -342,15 +372,45 @@ export class CommunitiesStagingRoleSplitV3DurableStateStore {
   private async readAlignedState(): Promise<string | null> {
     const state = await this.readExact(this.statePath);
     const journal = await this.readJournal();
-    if (state === null && journal.length === 0) return null;
+    const anchor = await this.externalAnchor.observe().catch(() => fail('STATE_ROLLBACK_DETECTED'));
+    if (state === null && journal.length === 0) {
+      if (anchor !== null) fail('STATE_ROLLBACK_DETECTED');
+      return null;
+    }
     if (journal.length === 0) fail('STATE_ROLLBACK_DETECTED');
-    const latest = journal.at(-1)?.bytes;
-    if (latest === undefined) fail('STATE_ROLLBACK_DETECTED');
-    if (state === latest) return state;
-    const penultimate = journal.length === 1 ? null : journal.at(-2)?.bytes;
-    if (state !== penultimate) fail('STATE_ROLLBACK_DETECTED');
-    await this.publishHead(state, latest);
-    return latest;
+    const latestEntry = journal.at(-1);
+    if (latestEntry === undefined) fail('STATE_ROLLBACK_DETECTED');
+    const previousEntry = journal.at(-2) ?? null;
+    const latestAnchor = this.anchorObservation(
+      latestEntry.envelope,
+      previousEntry === null ? null : this.digest(previousEntry.envelope),
+    );
+    const previousAnchor =
+      previousEntry === null
+        ? null
+        : this.anchorObservation(
+            previousEntry.envelope,
+            journal.length < 3 ? null : this.digest(journal[journal.length - 3]!.envelope),
+          );
+    if (state === latestEntry.bytes) {
+      if (!isDeepStrictEqual(anchor, latestAnchor)) fail('STATE_ROLLBACK_DETECTED');
+      return state;
+    }
+    if (state !== previousEntry?.bytes && !(state === null && previousEntry === null))
+      fail('STATE_ROLLBACK_DETECTED');
+    if (isDeepStrictEqual(anchor, previousAnchor)) {
+      await this.externalAnchor
+        .advance({ expected: previousAnchor, next: latestAnchor })
+        .catch(() => fail('STATE_WRITE_FAILED'));
+      const advanced = await this.externalAnchor
+        .observe()
+        .catch(() => fail('STATE_ROLLBACK_DETECTED'));
+      if (!isDeepStrictEqual(advanced, latestAnchor)) fail('STATE_ROLLBACK_DETECTED');
+    } else if (!isDeepStrictEqual(anchor, latestAnchor)) {
+      fail('STATE_ROLLBACK_DETECTED');
+    }
+    await this.publishHead(state, latestEntry.bytes);
+    return latestEntry.bytes;
   }
   private async publishHead(expected: string | null, canonical: string): Promise<void> {
     const temporary = join(
@@ -459,6 +519,7 @@ export class CommunitiesStagingRoleSplitV3DurableStateStore {
     }
   }
   async release(lease: CommunitiesStagingRoleSplitV3DurableStateLease): Promise<void> {
+    await this.assertDirectory();
     await this.assertLease(lease);
     try {
       await unlink(this.leasePath);
@@ -468,6 +529,7 @@ export class CommunitiesStagingRoleSplitV3DurableStateStore {
     }
   }
   async read(lease: CommunitiesStagingRoleSplitV3DurableStateLease): Promise<string | null> {
+    await this.assertDirectory();
     await this.assertLease(lease);
     const content = await this.readAlignedState();
     if (content !== null) this.parse(content);
@@ -478,6 +540,7 @@ export class CommunitiesStagingRoleSplitV3DurableStateStore {
     expected: string | null,
     next: CommunitiesStagingRoleSplitV3DurableStoredEnvelope,
   ): Promise<string> {
+    await this.assertDirectory();
     await this.assertLease(lease);
     const canonical = this.canonical(next);
     if (
@@ -491,6 +554,25 @@ export class CommunitiesStagingRoleSplitV3DurableStateStore {
     const currentEnvelope = current === null ? null : this.parse(current);
     if (!this.transitionAllowed(currentEnvelope, next)) fail('STATE_CAS_MISMATCH');
     await this.appendJournal(next, canonical);
+    const journal = await this.readJournal();
+    const previousEntry = journal.at(-2) ?? null;
+    const exactExpectedAnchor =
+      previousEntry === null
+        ? null
+        : this.anchorObservation(
+            previousEntry.envelope,
+            journal.length < 3 ? null : this.digest(journal[journal.length - 3]!.envelope),
+          );
+    const nextAnchor = this.anchorObservation(
+      next,
+      currentEnvelope === null ? null : this.digest(currentEnvelope),
+    );
+    try {
+      await this.externalAnchor.advance({ expected: exactExpectedAnchor, next: nextAnchor });
+    } catch {
+      const observed = await this.externalAnchor.observe().catch(() => fail('STATE_WRITE_FAILED'));
+      if (!isDeepStrictEqual(observed, nextAnchor)) fail('STATE_WRITE_FAILED');
+    }
     await this.publishHead(expected, canonical);
     if ((await this.readAlignedState()) !== canonical) fail('STATE_WRITE_FAILED');
     return canonical;
@@ -648,6 +730,8 @@ export class CommunitiesStagingRoleSplitV3DurableHost {
       this.config.fence.subjectSha256 !== this.config.hostAuthorization.execution.ddlFenceSha256 ||
       this.config.restoreExecutor.subjectSha256 !==
         this.config.executionAuthorization.components.runnerAdapterSha256 ||
+      this.config.stateStore.externalAnchorSubjectSha256 !==
+        this.config.executionAuthorization.components.externalPhaseAnchorSha256 ||
       this.config.authorization.markerRequestSha256 !== this.config.stateStore.requestSha256 ||
       this.config.authorization.creationReceiptSha256 !==
         this.config.stateStore.creationReceiptSha256 ||

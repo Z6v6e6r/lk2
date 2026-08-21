@@ -63,6 +63,7 @@ export interface CommunitiesStagingRoleSplitV3ExecutableHost {
     readonly ownershipAclAttestorSha256: string;
     readonly sourceWriteDenialAttestorSha256: string;
     readonly evidenceSinkSha256: string;
+    readonly externalPhaseAnchorSha256: string;
   };
   acquireLease(requestSha256: string): Promise<CommunitiesStagingRoleSplitV3ExecutableLease>;
   releaseLease(lease: CommunitiesStagingRoleSplitV3ExecutableLease): Promise<void>;
@@ -270,7 +271,8 @@ function assertHostSubjects(
       subjects.executableCompositionSha256 !== expected.executableCompositionSha256 ||
       subjects.stateStoreSha256 !== expected.stateStoreSha256 ||
       subjects.cloneFactorySha256 !== expected.cloneFactorySha256 ||
-      subjects.ddlFenceSha256 !== expected.ddlFenceSha256
+      subjects.ddlFenceSha256 !== expected.ddlFenceSha256 ||
+      subjects.externalPhaseAnchorSha256 !== expected.externalPhaseAnchorSha256
     )
       fail('BINDING_INVALID');
     return;
@@ -298,6 +300,7 @@ function assertConfig(config: CommunitiesStagingRoleSplitV3ExecutableComposition
           stateStoreSha256: config.host.subjects.stateStoreSha256,
           cloneFactorySha256: config.host.subjects.cloneFactorySha256,
           ddlFenceSha256: config.host.subjects.ddlFenceSha256,
+          externalPhaseAnchorSha256: config.host.subjects.externalPhaseAnchorSha256,
         },
         authorization: config.authorization,
       });

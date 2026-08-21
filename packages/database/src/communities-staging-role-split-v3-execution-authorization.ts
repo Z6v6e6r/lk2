@@ -18,9 +18,9 @@ import {
 import { failCommunitiesStagingRoleSplit } from './communities-staging-role-split.js';
 
 export const COMMUNITIES_STAGING_ROLE_SPLIT_V3_CLONE_CREATION_AUTHORIZATION_VERSION =
-  'communities-staging-role-split-v3-clone-creation-authorization-v1';
+  'communities-staging-role-split-v3-clone-creation-authorization-v2';
 export const COMMUNITIES_STAGING_ROLE_SPLIT_V3_EXECUTION_AUTHORIZATION_VERSION =
-  'communities-staging-role-split-v3-execution-authorization-v1';
+  'communities-staging-role-split-v3-execution-authorization-v2';
 
 const sha256 = /^[a-f0-9]{64}$/u;
 const commitSha = /^[a-f0-9]{40}$/u;
@@ -45,6 +45,7 @@ const cloneComponentKeys = [
   'stateStoreSha256',
   'cloneFactorySha256',
   'ddlFenceSha256',
+  'externalPhaseAnchorSha256',
 ] as const;
 const executionComponentKeys = [
   'executableCompositionSha256',
@@ -58,6 +59,7 @@ const executionComponentKeys = [
   'ownershipAclAttestorSha256',
   'sourceWriteDenialAttestorSha256',
   'evidenceSinkSha256',
+  'externalPhaseAnchorSha256',
 ] as const;
 
 type FalseAuthorities = {
@@ -74,6 +76,7 @@ export interface CommunitiesStagingRoleSplitV3CloneCreationAuthorization {
     readonly stateStoreSha256: string;
     readonly cloneFactorySha256: string;
     readonly ddlFenceSha256: string;
+    readonly externalPhaseAnchorSha256: string;
   };
   readonly authorizes: Omit<FalseAuthorities, 'statePersistence' | 'cloneCreation'> & {
     readonly statePersistence: true;
@@ -105,6 +108,7 @@ export interface CommunitiesStagingRoleSplitV3ExecutionAuthorization {
     readonly ownershipAclAttestorSha256: string;
     readonly sourceWriteDenialAttestorSha256: string;
     readonly evidenceSinkSha256: string;
+    readonly externalPhaseAnchorSha256: string;
   };
   readonly authorizes: Omit<
     FalseAuthorities,
@@ -371,6 +375,8 @@ export function assertCommunitiesStagingRoleSplitV3ExecutionAuthorizationBinding
       host.execution.cloneOnlyConnectionFactorySha256 ||
     authorization.components.ddlFenceSha256 !== host.execution.ddlFenceSha256 ||
     authorization.components.ddlFenceSha256 !== clone.components.ddlFenceSha256 ||
+    authorization.components.externalPhaseAnchorSha256 !==
+      clone.components.externalPhaseAnchorSha256 ||
     authorization.components.markerWriterSha256 !== input.request.markerWriterSha256 ||
     authorization.components.ownershipAclAttestorSha256 !==
       hostBinding(host, 'OWNERSHIP_ACL_ATTESTATION') ||

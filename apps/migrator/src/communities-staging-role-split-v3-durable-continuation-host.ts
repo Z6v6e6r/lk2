@@ -182,6 +182,8 @@ export class CommunitiesStagingRoleSplitV3DurableContinuationHost implements Com
         config.executionAuthorization.cloneDatabaseOid !==
           config.restoredEnvelope.cloneDatabaseOid ||
         config.executionAuthorization.systemIdentifier !== config.systemIdentifier ||
+        config.stateStore.externalAnchorSubjectSha256 !==
+          config.executionAuthorization.components.externalPhaseAnchorSha256 ||
         config.executionAuthorization.hostAuthorizationSha256 !==
           communitiesStagingRoleSplitHostAuthorizationSha256(config.hostAuthorization) ||
         communitiesStagingRoleSplitRestoreMarkerRequestSha256(

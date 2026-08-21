@@ -1,5 +1,23 @@
 # Worklog
 
+## 2026-08-21 — Communities V9 external monotonic runtime gate
+
+- Added an independently bound external phase-anchor to the V3 durable state store. The local
+  journal is published first, the external anchor advances second and the mutable head is published
+  last; the two exact one-step crash shapes reconcile, while a complete local rollback to `OWNED`,
+  an anchor rollback or any larger divergence fails before another restore, marker or evidence
+  operation.
+- Bumped clone-creation and execution authorization envelopes to V2 and bound the exact external
+  anchor subject in both contours. The file-backed implementation uses separate private
+  process-owner custody,
+  append-only phase files, an exclusive retained-on-crash lock, canonical exact bytes and no reset,
+  delete or rewrite operation.
+- Added the anchor only as a mode-0444 source snapshot in a V9/V6 disabled candidate. The candidate
+  still contains no runtime loader, compiled entrypoint, active link, key, workflow, credential,
+  connection or execution authority; ceremony and every database mutation remain false.
+- No candidate installation, SSH mutation, trusted inventory, ceremony, PostgreSQL operation,
+  role/ACL change, migration, deploy or activation was performed by this checkpoint.
+
 ## 2026-08-21 — Communities V8 durable continuation and executor-source candidate
 
 - Upgraded the post-restore continuation envelope to V2 and persisted the exact full V3

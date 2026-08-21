@@ -1,9 +1,19 @@
 /* eslint-disable @typescript-eslint/require-await */
 import { createHash } from 'node:crypto';
-import { chmod, link, mkdtemp, readFile, symlink, writeFile } from 'node:fs/promises';
+import {
+  chmod,
+  link,
+  mkdtemp,
+  readdir,
+  readFile,
+  symlink,
+  unlink,
+  writeFile,
+} from 'node:fs/promises';
 import type { FileHandle } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 
 import {
   COMMUNITIES_STAGING_ROLE_SPLIT_CLONE_MANIFEST_SHA256,
@@ -62,12 +72,36 @@ import {
   type CommunitiesStagingRoleSplitDdlFence,
   type CommunitiesStagingRoleSplitDdlFenceLease,
 } from './communities-staging-role-split-ddl-fence.js';
+import type {
+  CommunitiesStagingRoleSplitV3ExternalPhaseAnchor,
+  CommunitiesStagingRoleSplitV3ExternalPhaseAnchorObservation,
+} from './communities-staging-role-split-v3-external-phase-anchor.js';
 
 const sha = (value: string) => createHash('sha256').update(value, 'utf8').digest('hex');
 const requestSha256 = sha('request');
 const receiptSha256 = sha('receipt');
 const evidenceSha256 = sha('evidence');
 const cloneDatabaseOid = '45678';
+class TestExternalPhaseAnchor implements CommunitiesStagingRoleSplitV3ExternalPhaseAnchor {
+  value: CommunitiesStagingRoleSplitV3ExternalPhaseAnchorObservation | null = null;
+  throwAfterAdvance = false;
+  constructor(readonly subjectSha256: string) {}
+  async assertIndependent() {}
+  async observe() {
+    return this.value === null ? null : structuredClone(this.value);
+  }
+  async advance(input: {
+    readonly expected: CommunitiesStagingRoleSplitV3ExternalPhaseAnchorObservation | null;
+    readonly next: CommunitiesStagingRoleSplitV3ExternalPhaseAnchorObservation;
+  }) {
+    if (!isDeepStrictEqual(this.value, input.expected)) throw new Error('anchor conflict');
+    this.value = structuredClone(input.next);
+    if (this.throwAfterAdvance) {
+      this.throwAfterAdvance = false;
+      throw new Error('anchor response lost');
+    }
+  }
+}
 const state = (
   phase: 'OWNED' | 'RESTORE_PENDING' | 'RESTORED',
 ): CommunitiesStagingRoleSplitV3State => ({
@@ -95,13 +129,16 @@ function envelope(
 async function storeFixture() {
   const directory = await mkdtemp(join(tmpdir(), 'phub-v3-durable-'));
   await chmod(directory, 0o700);
+  const anchor = new TestExternalPhaseAnchor(sha('external-phase-anchor'));
   return {
     directory,
+    anchor,
     store: new CommunitiesStagingRoleSplitV3DurableStateStore(
       sha('state-store'),
       directory,
       requestSha256,
       receiptSha256,
+      anchor,
     ),
   };
 }
@@ -140,7 +177,7 @@ describe('CommunitiesStagingRoleSplitV3DurableStateStore', () => {
   });
 
   it('recovers the unique journal-one-ahead crash state by publishing the exact journal head', async () => {
-    const { directory, store } = await storeFixture();
+    const { anchor, directory, store } = await storeFixture();
     const lease = await store.acquire();
     const owned = await store.writeCas(lease, null, envelope('OWNED', state('OWNED')));
     const pendingEnvelope = envelope('RESTORE_PENDING', state('RESTORE_PENDING'));
@@ -158,6 +195,69 @@ describe('CommunitiesStagingRoleSplitV3DurableStateStore', () => {
     expect(owned).not.toBe(pending);
     expect(await store.read(lease)).toBe(pending);
     expect(await readFile(join(directory, 'v3-durable-state.json'), 'utf8')).toBe(pending);
+    expect(anchor.value?.phase).toBe('RESTORE_PENDING');
+    await store.release(lease);
+  });
+
+  it('rejects a complete local rollback to OWNED while the independent anchor remains RESTORED', async () => {
+    const { directory, store } = await storeFixture();
+    const lease = await store.acquire();
+    const owned = await store.writeCas(lease, null, envelope('OWNED', state('OWNED')));
+    const pending = await store.writeCas(
+      lease,
+      owned,
+      envelope('RESTORE_PENDING', state('RESTORE_PENDING')),
+    );
+    await store.writeCas(lease, pending, envelope('RESTORED', state('RESTORED')));
+    for (const name of await readdir(directory)) {
+      const match = /^v3-durable-journal-(\d{2})-/u.exec(name);
+      if (match !== null && Number(match[1]) > 0) await unlink(join(directory, name));
+    }
+    await writeFile(join(directory, 'v3-durable-state.json'), owned, { mode: 0o600 });
+
+    await expect(store.read(lease)).rejects.toMatchObject({
+      code: 'STATE_ROLLBACK_DETECTED',
+    } satisfies Partial<CommunitiesStagingRoleSplitV3DurableHostError>);
+    await store.release(lease);
+  });
+
+  it('rejects an external-anchor rollback even when the local head and journal remain current', async () => {
+    const { anchor, store } = await storeFixture();
+    const lease = await store.acquire();
+    const owned = await store.writeCas(lease, null, envelope('OWNED', state('OWNED')));
+    const pending = await store.writeCas(
+      lease,
+      owned,
+      envelope('RESTORE_PENDING', state('RESTORE_PENDING')),
+    );
+    await store.writeCas(lease, pending, envelope('RESTORED', state('RESTORED')));
+    if (anchor.value?.phase !== 'RESTORED') throw new Error('anchor fixture missing');
+    anchor.value = {
+      ...anchor.value,
+      phaseIndex: 1,
+      phase: 'RESTORE_PENDING',
+      envelopeSha256: communitiesStagingRoleSplitV3DurableStateEnvelopeSha256(
+        envelope('RESTORE_PENDING', state('RESTORE_PENDING')),
+      ),
+      previousEnvelopeSha256: communitiesStagingRoleSplitV3DurableStateEnvelopeSha256(
+        envelope('OWNED', state('OWNED')),
+      ),
+    };
+
+    await expect(store.read(lease)).rejects.toMatchObject({
+      code: 'STATE_ROLLBACK_DETECTED',
+    } satisfies Partial<CommunitiesStagingRoleSplitV3DurableHostError>);
+    await store.release(lease);
+  });
+
+  it('reconciles an exact lost external-anchor response before publishing the local head', async () => {
+    const { anchor, store } = await storeFixture();
+    const lease = await store.acquire();
+    anchor.throwAfterAdvance = true;
+    const owned = await store.writeCas(lease, null, envelope('OWNED', state('OWNED')));
+
+    expect(anchor.value?.phase).toBe('OWNED');
+    expect(await store.read(lease)).toBe(owned);
     await store.release(lease);
   });
 
@@ -595,6 +695,7 @@ const durableExecutionComponents = {
   ownershipAclAttestorSha256: durableSubjects.OWNERSHIP_ACL_ATTESTATION,
   sourceWriteDenialAttestorSha256: durableSubjects.SOURCE_WRITE_DENIAL_ATTESTATION,
   evidenceSinkSha256: durableSubjects.INDEPENDENT_EVIDENCE_SINK,
+  externalPhaseAnchorSha256: sha('external-phase-anchor'),
 } as const;
 const durableCloneCreationAuthorization = {
   schemaVersion: COMMUNITIES_STAGING_ROLE_SPLIT_V3_CLONE_CREATION_AUTHORIZATION_VERSION,
@@ -606,6 +707,7 @@ const durableCloneCreationAuthorization = {
     stateStoreSha256: durableExecutionComponents.stateStoreSha256,
     cloneFactorySha256: sha('clone-factory'),
     ddlFenceSha256: durableExecutionComponents.ddlFenceSha256,
+    externalPhaseAnchorSha256: durableExecutionComponents.externalPhaseAnchorSha256,
   },
   authorizes: {
     statePersistence: true,
@@ -688,6 +790,7 @@ class FakeDurableStateStore extends CommunitiesStagingRoleSplitV3DurableStateSto
       '/tmp/phub-test-state',
       input.requestSha256 ?? durableRequestSha256,
       input.creationReceiptSha256 ?? durableReceiptSha256,
+      new TestExternalPhaseAnchor(durableExecutionComponents.externalPhaseAnchorSha256),
     );
     this.entry = input.entry ?? null;
     this.calls = input.calls;
