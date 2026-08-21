@@ -396,6 +396,12 @@ describe('legacy OTP hotfix canary release contract', () => {
     expect(gateBody).not.toContain('TAILSCALE_AUTHKEY');
     expect(gateBody).not.toContain('STAGING_DEPLOY_KEY');
     expect(gateBody).toContain('docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8');
+    const binfmtImage = gateBody.match(/image: (docker\.io\/tonistiigi\/binfmt:[^\s]+)/)?.[1];
+    expect(binfmtImage).toBe(
+      'docker.io/tonistiigi/binfmt:qemu-v10.2.3-68@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0',
+    );
+    expect(binfmtImage).toMatch(/^docker\.io\/tonistiigi\/binfmt:[^@\s]+@sha256:[0-9a-f]{64}$/);
+    expect(gateBody).not.toContain('docker.io/tonistiigi/binfmt:latest');
     for (const token of [
       '--platform linux/arm64',
       '--pull=never',
@@ -410,6 +416,8 @@ describe('legacy OTP hotfix canary release contract', () => {
     ]) {
       expect(gateBody).toContain(token);
     }
+    expect(gateBody).toContain('docker pull --platform linux/arm64 "$ref" >/dev/null');
+    expect(gateBody).not.toContain('docker pull "$ref" >/dev/null');
     expect(gateBody).toContain('docker logout ghcr.io');
     expect(workflow).toContain('needs: [validate-source, build, runtime-image-gate]');
     expect(workflow).toContain("needs.runtime-image-gate.result == 'success'");
