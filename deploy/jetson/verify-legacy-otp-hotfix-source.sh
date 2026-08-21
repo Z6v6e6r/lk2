@@ -3,7 +3,7 @@
 set -eu
 
 supported_active_release=e308181da5222645d9a87d03642923c6841be8d1
-supported_patch_sha256=81e5618fe7222f02cef45a843b49dbaa2799c132c4a25a90957bc912fdde90d0
+supported_patch_sha256=7fe04830af2ba1cc83a9bd2b6440712ed1251f8ecb1066ddde48ad7704b79597
 
 fail() {
   printf '%s\n' "Legacy OTP hotfix source verification refused: $*" >&2
@@ -75,10 +75,26 @@ for service in api worker realtime migrator; do
     fail "$service image does not remove copied nested workspace installs"
   printf '%s' "$dockerfile" | grep -Fq "node scripts/verify-production-workspace-imports.js $service" ||
     fail "$service image lacks the reviewed production import probe"
+  printf '%s' "$dockerfile" | grep -Fq 'chmod -R a+rX apps packages' ||
+    fail "$service image does not normalize workspace read permissions"
+  printf '%s' "$dockerfile" | grep -Fq 'scripts node_modules' ||
+    fail "$service image does not normalize probe and dependency read permissions"
+  printf '%s' "$dockerfile" | grep -Fq 'chmod a+r package.json package-lock.json .npmrc' ||
+    fail "$service image does not normalize root manifest read permissions"
+  user_line=$(printf '%s\n' "$dockerfile" | grep -nFx 'USER appuser' | cut -d: -f1)
+  probe_line=$(printf '%s\n' "$dockerfile" | grep -nF "RUN node scripts/verify-production-workspace-imports.js $service" | cut -d: -f1)
+  test -n "$user_line" && test -n "$probe_line" && test "$user_line" -lt "$probe_line" ||
+    fail "$service image does not run the import probe as appuser"
+  printf '%s\n' "$dockerfile" | grep -Eq 'chmod.*(a\+w|o\+w|777)' &&
+    fail "$service image grants broad write permissions"
   printf '%s' "$dockerfile" | grep -Fq 'COPY --from=build /workspace/node_modules ./node_modules' &&
     fail "$service image copies builder node_modules"
   printf '%s' "$dockerfile" | grep -Fq 'npm prune' && fail "$service image prunes a copied dependency tree"
 done
+
+migrator_dockerfile=$(git -C "$candidate_checkout" show "$candidate:apps/migrator/Dockerfile")
+printf '%s' "$migrator_dockerfile" | grep -Fq 'chmod -R a+rX apps packages migrations scripts node_modules' ||
+  fail 'migrator image does not normalize migration read permissions'
 
 probe_source=$(git -C "$candidate_checkout" show "$candidate:scripts/verify-production-workspace-imports.js")
 printf '%s' "$probe_source" | grep -Fq "supportedApplications = new Set(['api', 'worker', 'realtime', 'migrator'])" ||

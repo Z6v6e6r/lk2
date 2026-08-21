@@ -269,7 +269,10 @@ single-parent child of e308 whose binary diff changes only the two Viva identity
 Node production Dockerfiles, and the production-workspace import probe with its test. The candidate
 keeps E.164 internally and removes the leading `+` only in the Viva SMS and token requests. Its Node
 images use a clean production install from the exact lockfile instead of copying and pruning
-builder `node_modules`; migrations, contracts, lockfiles, the web Dockerfile and staging Compose
+builder `node_modules`. Because the public source checkout may be created with a restrictive umask,
+the final image explicitly grants read/traverse (never write) access to application, workspace,
+dependency, probe and migrator files, switches to the non-root `appuser`, and only then executes the
+production import probes. Migrations, contracts, lockfiles, the web Dockerfile and staging Compose
 must remain byte-identical to e308.
 
 This is not an API overlay. The workflow builds all five immutable ARM64 images from the same
