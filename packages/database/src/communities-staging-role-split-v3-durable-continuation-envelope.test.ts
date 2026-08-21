@@ -578,7 +578,9 @@ describe('communitiesStagingRoleSplitV3DurableContinuationEnvelope', () => {
       },
     ]) {
       expect(() =>
-        canonicalCommunitiesStagingRoleSplitV3DurableContinuationEnvelope(changed),
+        canonicalCommunitiesStagingRoleSplitV3DurableContinuationEnvelope(
+          changed as unknown as CommunitiesStagingRoleSplitV3DurableContinuationEnvelope,
+        ),
       ).toThrow();
     }
   });
