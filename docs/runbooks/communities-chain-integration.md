@@ -326,8 +326,11 @@ phase-anchor subject. Every forward CAS appends the local journal, advances that
 anchor, then publishes the mutable head. The two one-step crash shapes reconcile; a full local
 rollback, anchor rollback, skipped phase or changed envelope digest fails closed. The file provider
 requires a separate non-nested private process-owner custody directory and exposes no reset/delete
-operation, but its
-concrete staging path and independent custody evidence remain a later gate.
+operation. V10 pins a distinct production subject under the root-owned
+`/var/lib/phub-role-split-external-anchor` contour and a separate non-authorizing rehearsal subject.
+The Linux runner keeps the production anchor unmounted and covers only supervised-worker `SIGKILL`
+and full local snapshot rollback; target-host execution and its root-owned report remain a later
+gate, and whole-host stale-lease recovery is not authorized.
 
 Only `authorizes.installation` is true. The twelve host-binding codes plus the external monotonic
 phase anchor remain required before execution, and every key, staging, database, ceremony,

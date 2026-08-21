@@ -9,3 +9,5 @@ contracts/imported/
 apps/mobile/android
 apps/mobile/ios
 .worktrees
+deploy/jetson/communities-role-split-v3-production-external-anchor-subject.json
+deploy/jetson/communities-role-split-v3-anchor-rehearsal-subject.json

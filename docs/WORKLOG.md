@@ -1,5 +1,24 @@
 # Worklog
 
+## 2026-08-21 — Communities V10 external-anchor custody and crash rehearsal gate
+
+- Pinned separate canonical production and rehearsal subjects for candidate
+  `74478e8f2ec91443709159ced1ee123345eb29e6`. The production anchor path is under the root-owned
+  `/var/lib/phub-role-split-external-anchor` contour and is pairwise disjoint from both the existing
+  durable state and backup roots. Exact staging ownership is retained: `phub-preflight` uid/gid
+  `998:993` for the anchor/state leaves and `root:993 0750` for the existing backup root.
+- Added a custody-bound file-provider constructor and a deterministic rehearsal entrypoint. It
+  kills a supervised worker with `SIGKILL` before anchor advance and after anchor advance, proves
+  the two exact one-step recoveries, restores the complete local `OWNED` snapshot and requires
+  `STATE_ROLLBACK_DETECTED` while the independent anchor remains `RESTORED`.
+- Added a root-only Linux/Docker runner that requires exact root-owned mode-0444 bundle and subject
+  pins plus an immutable local image ID. It runs as uid/gid `998:993` with no network, read-only
+  rootfs, dropped capabilities and three isolated rehearsal mounts. The production anchor is not
+  mounted and must remain absent before and after the run.
+- This checkpoint tests the `SUPERVISED_WORKER_PROCESS` crash domain only. It does not test a whole
+  host/container crash and grants no stale-lease removal, ceremony, database mutation, production
+  activation, key, workflow, deployment or staging execution authority.
+
 ## 2026-08-21 — Communities V9 external monotonic runtime gate
 
 - Added an independently bound external phase-anchor to the V3 durable state store. The local

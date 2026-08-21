@@ -606,8 +606,30 @@ the mutable head. A crash before either of the last two publications has one exa
 A complete rollback of the local head and journal, a rollback of the external anchor, a skipped
 phase or a different envelope digest is terminal `STATE_ROLLBACK_DETECTED`. The reviewed file
 provider requires a distinct non-nested private process-owner custody directory and has no
-reset/delete API. Its concrete
-staging path and custody proof are still absent, so this code cannot be executed.
+reset/delete API. V10 pins the production subject to
+`/var/lib/phub-role-split-external-anchor/74478e8f2ec91443709159ced1ee123345eb29e6/production`,
+owned by `phub-preflight` uid/gid `998:993` beneath a root-owned mode-0700 parent. It also binds the
+existing state root and the distinct `root:993 0750` backup root. The subject and rehearsal runner
+grant no execution authority; the production anchor is not provisioned or mounted by rehearsal.
+
+The V10 rehearsal kills only supervised worker children while the root runner retains the exact
+synthetic lease capability. It covers the journal-before-anchor and anchor-before-head windows and
+then proves rejection of a complete local rollback while the real file anchor remains later. It is
+not evidence for whole-host/container power loss, does not authorize stale-lease removal, and must
+not be presented as a ceremony or database rehearsal.
+
+For the later separately approved staging gate, build
+`apps/migrator/dist/communities-staging-role-split-v3-anchor-rehearsal.js`, copy it and both canonical
+subject files into one newly created root-owned mode-0700 input directory, and install each input as
+`root:root 0444` with link count one. Independently record the exact bundle SHA-256 and full local
+`sha256:<64 hex>` Node image ID. Invoke the root runner with exactly seven arguments in this order:
+bundle path/digest, production-subject path/digest, rehearsal-subject path/digest and image ID. The
+runner itself pins production subject
+`078103b490907098b0815185a2442d5744ecf124c89aa92e103b94aef34dff77` and rehearsal subject
+`035f03b71776c475e90236f90f789d44eb491fa4af67a34289ced9833f42e7cb`; any alternate freshly
+hashed subject is rejected. A successful run retains its isolated root-owned directory and report
+under `/var/lib/phub-role-split-anchor-rehearsals`; do not delete or reuse that directory as a
+production anchor.
 
 The capability now has a single same-host consumer. `restore(capability)` accepts only the exact
 WeakMap-owned capability, rechecks the shared DDL fence, exact `RESTORE_PENDING` bytes and archive
@@ -640,10 +662,10 @@ not make a restore runnable.
 
 ## Remaining gates before execution
 
-1. The exact disabled V7 candidate at commit
-   `199fad37cda3849aca964420ff2d317d0f3b73ef` has been installed and its disabled readback passed.
-   It contains no active link and grants no execution or database authority. It predates and does
-   not contain the V9 authorization/anchor contour.
+1. The exact disabled V9 candidate at commit
+   `74478e8f2ec91443709159ced1ee123345eb29e6` has been installed and its disabled readback passed.
+   It has no active link and grants no execution or database authority. The V10 subject and
+   rehearsal bytes remain a later isolated checkpoint and are not installed by that receipt.
 2. The independent re-review of the exact V3 security-fix range completed with no reportable P0-P2
    findings. V3 evidence V2 binds both attestations to the exact host authorization, and the
    composition/coordinator retain immutable entry snapshots. V9 packages those reviewed sources,
@@ -663,11 +685,10 @@ not make a restore runnable.
    `verify-communities-staging-role-split-inventory-artifact` CLI and its independently supplied
    SHA-256. The local synthetic producer/evaluator gate is catalog proof, not trusted inventory;
    mock rows are not catalog proof.
-5. Independently choose and pin the concrete external-anchor subject and a private process-owner
-   custody path
-   outside the durable-state directory and its backup/restore scope. Prove the exact one-step crash
-   matrix on the target Linux filesystem and prove that restoring an older complete state directory
-   is rejected while the retained anchor remains later.
+5. Independently verify the pinned V10 production/rehearsal subject digests and immutable Node image
+   ID, then run the non-authorizing rehearsal on the target Linux filesystem. Retain its root-owned
+   report and prove the production anchor stayed absent. The gate covers supervised-worker
+   `SIGKILL`, not whole-host recovery or stale-lease removal.
 6. Complete independent security and migration review of the final executor bridge, external
    anchor, any later
    installed adapter/candidate manifest, and the failure matrix. A review-only bridge is not an
@@ -676,5 +697,5 @@ not make a restore runnable.
    candidate, forced-command key, one ceremony run and any later post-marker cleanup.
 
 Until items 2-7 pass, do not create a key, wire a workflow, place requests on staging or run either
-ceremony contour. The currently installed V7 command and existing preparation gate must continue
+ceremony contour. The currently installed V9 command and existing preparation gate must continue
 to fail with `EXECUTION_NOT_AUTHORIZED` before PostgreSQL or mutable ceremony filesystem access.
