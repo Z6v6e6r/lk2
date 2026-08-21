@@ -155,18 +155,25 @@ digest. Marker/evidence V1 is not accepted as a compatibility fallback.
   or mark. `CONTINUE` requires the separate exact execution authorization and drives only the
   canonical forward lifecycle. It refuses durable `RESTORE_PENDING`, reconciles marker response
   loss by exact readback and resumes an already published exact evidence envelope without
-  rewriting marker or evidence.
+  rewriting marker or evidence. At entry it clones and deeply freezes the request and every
+  authorization and captures the exact host method references; caller-side mutation or method
+  replacement after lease acquisition cannot change the validated execution.
 - `apps/migrator/src/communities-staging-role-split-v3-durable-restore-coordinator.ts` implements
   the mandatory restore edge behind the host interface. Under the same injected fence it hashes
   an already-open regular single-link archive, performs the exact `OWNED -> RESTORE_PENDING` CAS,
   creates and consumes a process-local one-shot edge only after that successful CAS, runs the
   pinned adapter, verifies the same device/inode/size/SHA-256 again and performs the exact
   `RESTORE_PENDING -> RESTORED` CAS. Conflict, ambiguous write or lost runner result never retries
-  `pg_restore` automatically.
+  `pg_restore` automatically. Its constructor keeps an internal deeply frozen copy of every
+  request, authorization and durable envelope plus bound collaborator method references. The exact
+  internal authorization is checked again after the successful pending CAS and immediately before
+  runner dispatch.
 - `packages/database/src/communities-staging-role-split-v3-attested-evidence.ts` defines a distinct
-  V3 evidence envelope bound to the V3 marker evidence, execution-authorization digest,
-  ownership/ACL attestation, source-write-denial attestation and independently pinned evidence
-  sink. It cannot be substituted with the V2 attested-evidence format.
+  V3 evidence V2 envelope bound to the V3 marker evidence, execution- and host-authorization
+  digests, ownership/ACL attestation, source-write-denial attestation and independently pinned
+  evidence sink. Both attestation subject/evidence pairs must exactly match the current
+  context-bound host-authorization bindings; an opaque or replayed digest is rejected. It cannot be
+  substituted with the legacy V2 ceremony attested-evidence format or V3 evidence V1 bytes.
 
 Any future live wiring must consume these exact V3 contracts. The existing V2 state, marker and
 attested-evidence formats are frozen and cannot be used as a compatibility fallback.
@@ -544,11 +551,14 @@ the one-shot state/custody choreography only; it does not authorize or make a re
    `55655760a4dee1ab0a614cf464ad9d2b68bbf8c0` has been installed and its disabled readback passed.
    It contains no active link and grants no execution or database authority. It predates and does
    not contain the new V3 composition.
-2. Complete independent security and PostgreSQL review of the code-only V3 composition, durable
-   restore coordinator, split clone/execution authorization and distinct V3 evidence. After that,
-   build a new exact candidate that contains those reviewed bytes but still adds no key, workflow
-   or live configuration. Do not reuse the V2 marker/attested-evidence contour or the permanently
-   disabled reviewed-runner path as a compatibility fallback.
+2. The first independent security review of the code-only V3 composition identified three P2
+   boundaries: opaque replayable attestation digests and mutable configuration reuse in the
+   composition and coordinator. The 2026-08-21 checkpoint changes the V3 evidence format to V2,
+   binds both attestations to the exact host authorization and introduces immutable entry
+   snapshots. Complete an independent re-review of those exact bytes before building a new
+   candidate; the candidate must still add no key, workflow or live configuration. Do not reuse the
+   legacy V2 marker/attested-evidence contour, V3 evidence V1 or the permanently disabled
+   reviewed-runner path as a compatibility fallback.
 3. Preserve the completed disposable PostgreSQL 16 response-loss, cleanup-failure and
    evidence-publication matrix when reviewing the exact installation adapter. The local matrix
    and custom-archive gate prove the successful synthetic `pg_restore` path, catalog/RLS, exact

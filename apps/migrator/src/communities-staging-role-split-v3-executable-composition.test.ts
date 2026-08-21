@@ -22,6 +22,9 @@ import {
 
 const fixture = createCommunitiesStagingRoleSplitV3Fixture();
 
+const hostBinding = (code: 'OWNERSHIP_ACL_ATTESTATION' | 'SOURCE_WRITE_DENIAL_ATTESTATION') =>
+  fixture.hostAuthorization.bindings.find((binding) => binding.code === code)!;
+
 class FakeHost implements CommunitiesStagingRoleSplitV3ExecutableHost {
   readonly subjects = {
     ...fixture.executionAuthorization.components,
@@ -140,11 +143,11 @@ class FakeHost implements CommunitiesStagingRoleSplitV3ExecutableHost {
       restoreExecutionEvidenceBinding: fixture.restoreExecutionEvidenceBinding,
       ownershipAclAttestation: {
         subjectSha256: fixture.executionAuthorization.components.ownershipAclAttestorSha256,
-        evidenceSha256: fixtureSha('ownership-acl-evidence'),
+        evidenceSha256: hostBinding('OWNERSHIP_ACL_ATTESTATION').evidenceSha256,
       },
       sourceWriteDenialAttestation: {
         subjectSha256: fixture.executionAuthorization.components.sourceWriteDenialAttestorSha256,
-        evidenceSha256: fixtureSha('source-denial-evidence'),
+        evidenceSha256: hostBinding('SOURCE_WRITE_DENIAL_ATTESTATION').evidenceSha256,
       },
     };
   }
@@ -165,9 +168,9 @@ class FakeHost implements CommunitiesStagingRoleSplitV3ExecutableHost {
 
 const createConfig = (host: FakeHost) => ({
   mode: 'CREATE' as const,
-  request: fixture.request,
+  request: structuredClone(fixture.request),
   expectedCandidateCommitSha: fixture.cloneCreationAuthorization.candidateCommitSha,
-  authorization: fixture.cloneCreationAuthorization,
+  authorization: structuredClone(fixture.cloneCreationAuthorization),
   expectedAuthorizationSha256: communitiesStagingRoleSplitV3CloneCreationAuthorizationSha256(
     fixture.cloneCreationAuthorization,
   ),
@@ -176,11 +179,11 @@ const createConfig = (host: FakeHost) => ({
 
 const continueConfig = (host: FakeHost) => ({
   mode: 'CONTINUE' as const,
-  request: fixture.request,
-  cloneCreationAuthorization: fixture.cloneCreationAuthorization,
-  hostAuthorization: fixture.hostAuthorization,
-  durableRestoreAuthorization: fixture.durableRestoreAuthorization,
-  authorization: fixture.executionAuthorization,
+  request: structuredClone(fixture.request),
+  cloneCreationAuthorization: structuredClone(fixture.cloneCreationAuthorization),
+  hostAuthorization: structuredClone(fixture.hostAuthorization),
+  durableRestoreAuthorization: structuredClone(fixture.durableRestoreAuthorization),
+  authorization: structuredClone(fixture.executionAuthorization),
   expectedAuthorizationSha256: communitiesStagingRoleSplitV3ExecutionAuthorizationSha256(
     fixture.executionAuthorization,
   ),
@@ -277,6 +280,47 @@ describe('V3 executable role-split composition', () => {
       runCommunitiesStagingRoleSplitV3ExecutableComposition(continueConfig(changed)),
     ).rejects.toMatchObject({ code: 'BINDING_INVALID' });
     expect(changed.log).toEqual([]);
+  });
+
+  it('rejects replayed attestation digests before persisting VERIFIED state', async () => {
+    const host = new FakeHost();
+    host.state = fixture.restoredState;
+    const exactVerifyBindings = host.verifyBindings.bind(host);
+    host.verifyBindings = async () => ({
+      ...(await exactVerifyBindings()),
+      ownershipAclAttestation: {
+        subjectSha256: fixture.executionAuthorization.components.ownershipAclAttestorSha256,
+        evidenceSha256: fixtureSha('replayed-ownership-evidence'),
+      },
+    });
+
+    await expect(
+      runCommunitiesStagingRoleSplitV3ExecutableComposition(continueConfig(host)),
+    ).rejects.toMatchObject({ code: 'VERIFICATION_FAILED' });
+    expect(host.state?.phase).toBe('RESTORED');
+    expect(host.artifacts).toBeNull();
+  });
+
+  it('uses one immutable config and host-method snapshot across awaited callbacks', async () => {
+    const host = new FakeHost();
+    host.state = fixture.ownedState;
+    const config = continueConfig(host);
+    const originalAcquireLease = host.acquireLease.bind(host);
+    const substitutedVerifyBindings = vi.fn(async () => {
+      throw new Error('must not be reached');
+    });
+    host.acquireLease = async (requestSha256: string) => {
+      (config.authorization as unknown as { cloneDatabaseOid: string }).cloneDatabaseOid = '99999';
+      (config.request as unknown as { backupSha256: string }).backupSha256 =
+        fixtureSha('substituted-backup');
+      host.verifyBindings = substitutedVerifyBindings;
+      return originalAcquireLease(requestSha256);
+    };
+
+    await expect(
+      runCommunitiesStagingRoleSplitV3ExecutableComposition(config),
+    ).resolves.toMatchObject({ status: 'EVIDENCED' });
+    expect(substitutedVerifyBindings).not.toHaveBeenCalled();
   });
 
   it('maps an injected host failure to a stable redacted code', async () => {

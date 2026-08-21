@@ -1,5 +1,20 @@
 # Worklog
 
+## 2026-08-21 — Communities V3 security boundary hardening
+
+- Replaced the V3 attested-evidence V1 shape with V2. Ownership/ACL and source-write-denial
+  evidence must now match the exact corresponding bindings in the current host authorization,
+  whose digest is carried in the evidence envelope and is already bound by the execution
+  authorization. A valid digest from another request, receipt, clone or execution subject is
+  rejected before `VERIFIED` persistence and again on readback.
+- The executable composition and durable restore coordinator now clone and deeply freeze all
+  security-relevant data at their entry boundaries and capture the exact collaborator methods
+  before the first asynchronous operation. The coordinator revalidates its immutable authorization
+  snapshot immediately before runner dispatch.
+- Added regressions for replayed attestation digests, nested authorization/request mutation and
+  host/runner method substitution across awaited callbacks. The checkpoint remains code-only and
+  does not add a concrete runner, command, key, installation, database access or ceremony authority.
+
 ## 2026-08-20 — Communities V3 executable composition checkpoint
 
 - Added separate canonical clone-creation and continuation authorizations. Clone creation can only

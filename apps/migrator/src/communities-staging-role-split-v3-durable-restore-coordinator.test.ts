@@ -50,24 +50,24 @@ function scenario(
     subjectSha256: fixture.executionAuthorization.components.archiveCustodySha256,
     openArchive: vi.fn(async () => open(archivePath, 'r')),
   };
-  const coordinator = new CommunitiesStagingRoleSplitV3DurableRestoreCoordinator({
-    request: fixture.request,
-    cloneCreationAuthorization: fixture.cloneCreationAuthorization,
-    preparationEnvelope: fixture.preparationEnvelope,
-    restoreAuthorization: fixture.restoreAuthorization,
-    hostAuthorization: fixture.hostAuthorization,
-    durableRestoreAuthorization: fixture.durableRestoreAuthorization,
+  const config = {
+    request: structuredClone(fixture.request),
+    cloneCreationAuthorization: structuredClone(fixture.cloneCreationAuthorization),
+    preparationEnvelope: structuredClone(fixture.preparationEnvelope),
+    restoreAuthorization: structuredClone(fixture.restoreAuthorization),
+    hostAuthorization: structuredClone(fixture.hostAuthorization),
+    durableRestoreAuthorization: structuredClone(fixture.durableRestoreAuthorization),
     expectedDurableRestoreAuthorizationSha256:
       communitiesStagingRoleSplitV3DurableRestoreAuthorizationSha256(
         fixture.durableRestoreAuthorization,
       ),
-    executionAuthorization: fixture.executionAuthorization,
+    executionAuthorization: structuredClone(fixture.executionAuthorization),
     expectedExecutionAuthorizationSha256: communitiesStagingRoleSplitV3ExecutionAuthorizationSha256(
       fixture.executionAuthorization,
     ),
-    ownedEnvelope: fixture.ownedEnvelope,
-    restorePendingEnvelope: fixture.restorePendingEnvelope,
-    restoredEnvelope: fixture.restoredEnvelope,
+    ownedEnvelope: structuredClone(fixture.ownedEnvelope),
+    restorePendingEnvelope: structuredClone(fixture.restorePendingEnvelope),
+    restoredEnvelope: structuredClone(fixture.restoredEnvelope),
     stateStore: {
       subjectSha256: fixture.executionAuthorization.components.stateStoreSha256,
       compareAndSwap: cas,
@@ -75,14 +75,15 @@ function scenario(
     archiveCustody,
     runner,
     fence,
-  });
+  };
+  const coordinator = new CommunitiesStagingRoleSplitV3DurableRestoreCoordinator(config);
   const input = {
     lease: { requestSha256: fixture.requestSha256, fencingToken: fixtureSha('lease') },
     current: fixture.ownedState,
     pending: fixture.restorePendingState,
     restored: fixture.restoredState,
   };
-  return { coordinator, input, cas, fence, run, archiveCustody };
+  return { coordinator, input, config, cas, fence, run, runner, archiveCustody };
 }
 
 describe('V3 durable restore coordinator', () => {
@@ -142,5 +143,25 @@ describe('V3 durable restore coordinator', () => {
       code: 'ARCHIVE_CHANGED',
     });
     expect(current.cas).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses only its immutable authorization and collaborator snapshot after construction', async () => {
+    const current = scenario();
+    (
+      current.config.executionAuthorization as unknown as { cloneDatabaseOid: string }
+    ).cloneDatabaseOid = '99999';
+    (current.config.request as unknown as { backupSha256: string }).backupSha256 =
+      fixtureSha('substituted-backup');
+    const substitutedRun = vi.fn(async () => undefined);
+    current.runner.run = substitutedRun;
+
+    await expect(current.coordinator.restoreOwned(current.input)).resolves.toBeUndefined();
+    expect(substitutedRun).not.toHaveBeenCalled();
+    expect(current.run).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cloneDatabaseOid: fixture.executionAuthorization.cloneDatabaseOid,
+        request: fixture.request,
+      }),
+    );
   });
 });

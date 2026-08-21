@@ -104,6 +104,51 @@ function exactSha256(value: string): boolean {
   return /^[a-f0-9]{64}$/u.test(value);
 }
 
+function deepFreeze<T>(value: T): T {
+  if (typeof value !== 'object' || value === null || Object.isFrozen(value)) return value;
+  for (const nested of Object.values(value)) deepFreeze(nested);
+  return Object.freeze(value);
+}
+
+function immutableData<T>(value: T): T {
+  return deepFreeze(structuredClone(value));
+}
+
+function immutableConfig(
+  config: CommunitiesStagingRoleSplitV3DurableRestoreCoordinatorConfig,
+): CommunitiesStagingRoleSplitV3DurableRestoreCoordinatorConfig {
+  return Object.freeze({
+    request: immutableData(config.request),
+    cloneCreationAuthorization: immutableData(config.cloneCreationAuthorization),
+    preparationEnvelope: immutableData(config.preparationEnvelope),
+    restoreAuthorization: immutableData(config.restoreAuthorization),
+    hostAuthorization: immutableData(config.hostAuthorization),
+    durableRestoreAuthorization: immutableData(config.durableRestoreAuthorization),
+    expectedDurableRestoreAuthorizationSha256: config.expectedDurableRestoreAuthorizationSha256,
+    executionAuthorization: immutableData(config.executionAuthorization),
+    expectedExecutionAuthorizationSha256: config.expectedExecutionAuthorizationSha256,
+    ownedEnvelope: immutableData(config.ownedEnvelope),
+    restorePendingEnvelope: immutableData(config.restorePendingEnvelope),
+    restoredEnvelope: immutableData(config.restoredEnvelope),
+    stateStore: Object.freeze({
+      subjectSha256: config.stateStore.subjectSha256,
+      compareAndSwap: config.stateStore.compareAndSwap.bind(config.stateStore),
+    }),
+    archiveCustody: Object.freeze({
+      subjectSha256: config.archiveCustody.subjectSha256,
+      openArchive: config.archiveCustody.openArchive.bind(config.archiveCustody),
+    }),
+    runner: Object.freeze({
+      subjectSha256: config.runner.subjectSha256,
+      run: config.runner.run.bind(config.runner),
+    }),
+    fence: Object.freeze({
+      subjectSha256: config.fence.subjectSha256,
+      assertHeld: config.fence.assertHeld.bind(config.fence),
+    }),
+  });
+}
+
 function sameState(
   left: CommunitiesStagingRoleSplitV3State,
   right: CommunitiesStagingRoleSplitV3State,
@@ -213,11 +258,15 @@ function sameArchive(left: ArchiveIdentity, right: ArchiveIdentity): boolean {
 
 export class CommunitiesStagingRoleSplitV3DurableRestoreCoordinator {
   private readonly consumed = new Set<string>();
+  private readonly config: CommunitiesStagingRoleSplitV3DurableRestoreCoordinatorConfig;
 
-  constructor(
-    private readonly config: CommunitiesStagingRoleSplitV3DurableRestoreCoordinatorConfig,
-  ) {
-    assertConfig(config);
+  constructor(config: CommunitiesStagingRoleSplitV3DurableRestoreCoordinatorConfig) {
+    try {
+      this.config = immutableConfig(config);
+    } catch {
+      fail('BINDING_INVALID');
+    }
+    assertConfig(this.config);
   }
 
   async restoreOwned(input: {
@@ -289,6 +338,7 @@ export class CommunitiesStagingRoleSplitV3DurableRestoreCoordinator {
       this.consumed.add(capabilityKey);
       await this.config.fence.assertHeld(input.lease).catch(() => fail('FENCE_LOST'));
       try {
+        assertConfig(this.config);
         await this.config.runner.run({
           archiveFile: file,
           request: this.config.request,

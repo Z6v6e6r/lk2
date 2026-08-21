@@ -200,6 +200,65 @@ function exactSha256(value: string): boolean {
   return /^[a-f0-9]{64}$/u.test(value);
 }
 
+function deepFreeze<T>(value: T): T {
+  if (typeof value !== 'object' || value === null || Object.isFrozen(value)) return value;
+  for (const nested of Object.values(value)) deepFreeze(nested);
+  return Object.freeze(value);
+}
+
+function immutableData<T>(value: T): T {
+  return deepFreeze(structuredClone(value));
+}
+
+function immutableHost(
+  host: CommunitiesStagingRoleSplitV3ExecutableHost,
+): CommunitiesStagingRoleSplitV3ExecutableHost {
+  return Object.freeze({
+    subjects: immutableData(host.subjects),
+    acquireLease: host.acquireLease.bind(host),
+    releaseLease: host.releaseLease.bind(host),
+    loadState: host.loadState.bind(host),
+    createCandidate: host.createCandidate.bind(host),
+    advanceState: host.advanceState.bind(host),
+    saveVerified: host.saveVerified.bind(host),
+    loadVerifiedArtifacts: host.loadVerifiedArtifacts.bind(host),
+    observeClone: host.observeClone.bind(host),
+    observeRestoreExecutionEvidence: host.observeRestoreExecutionEvidence.bind(host),
+    observeMarker: host.observeMarker.bind(host),
+    observeEvidence: host.observeEvidence.bind(host),
+    createClone: host.createClone.bind(host),
+    restoreOwned: host.restoreOwned.bind(host),
+    verifyBindings: host.verifyBindings.bind(host),
+    writeMarker: host.writeMarker.bind(host),
+    publishEvidence: host.publishEvidence.bind(host),
+  });
+}
+
+function immutableConfig(
+  config: CommunitiesStagingRoleSplitV3ExecutableCompositionConfig,
+): CommunitiesStagingRoleSplitV3ExecutableCompositionConfig {
+  const host = immutableHost(config.host);
+  if (config.mode === 'CREATE')
+    return Object.freeze({
+      mode: config.mode,
+      request: immutableData(config.request),
+      expectedCandidateCommitSha: config.expectedCandidateCommitSha,
+      authorization: immutableData(config.authorization),
+      expectedAuthorizationSha256: config.expectedAuthorizationSha256,
+      host,
+    });
+  return Object.freeze({
+    mode: config.mode,
+    request: immutableData(config.request),
+    cloneCreationAuthorization: immutableData(config.cloneCreationAuthorization),
+    hostAuthorization: immutableData(config.hostAuthorization),
+    durableRestoreAuthorization: immutableData(config.durableRestoreAuthorization),
+    authorization: immutableData(config.authorization),
+    expectedAuthorizationSha256: config.expectedAuthorizationSha256,
+    host,
+  });
+}
+
 function assertHostSubjects(
   config: CommunitiesStagingRoleSplitV3ExecutableCompositionConfig,
 ): void {
@@ -267,6 +326,7 @@ function assertArtifacts(
   state: CommunitiesStagingRoleSplitV3State,
   artifacts: CommunitiesStagingRoleSplitV3VerifiedArtifacts,
   authorization: CommunitiesStagingRoleSplitV3ExecutionAuthorization,
+  hostAuthorization: CommunitiesStagingRoleSplitHostAuthorization,
 ): void {
   try {
     assertCommunitiesStagingRoleSplitV3RestoreExecutionEvidenceBinding(
@@ -292,7 +352,19 @@ function assertArtifacts(
     artifacts.sourceWriteDenialAttestation.subjectSha256 !==
       authorization.components.sourceWriteDenialAttestorSha256 ||
     !exactSha256(artifacts.ownershipAclAttestation.evidenceSha256) ||
-    !exactSha256(artifacts.sourceWriteDenialAttestation.evidenceSha256)
+    !exactSha256(artifacts.sourceWriteDenialAttestation.evidenceSha256) ||
+    !hostAuthorization.bindings.some(
+      (binding) =>
+        binding.code === 'OWNERSHIP_ACL_ATTESTATION' &&
+        binding.subjectSha256 === artifacts.ownershipAclAttestation.subjectSha256 &&
+        binding.evidenceSha256 === artifacts.ownershipAclAttestation.evidenceSha256,
+    ) ||
+    !hostAuthorization.bindings.some(
+      (binding) =>
+        binding.code === 'SOURCE_WRITE_DENIAL_ATTESTATION' &&
+        binding.subjectSha256 === artifacts.sourceWriteDenialAttestation.subjectSha256 &&
+        binding.evidenceSha256 === artifacts.sourceWriteDenialAttestation.evidenceSha256,
+    )
   )
     fail('ARTIFACT_BINDING_INVALID');
 }
@@ -300,6 +372,7 @@ function assertArtifacts(
 function attestedEvidence(
   artifacts: CommunitiesStagingRoleSplitV3VerifiedArtifacts,
   authorization: CommunitiesStagingRoleSplitV3ExecutionAuthorization,
+  hostAuthorization: CommunitiesStagingRoleSplitHostAuthorization,
 ): CommunitiesStagingRoleSplitV3AttestedEvidence {
   const markerEvidence = createCommunitiesStagingRoleSplitV3MarkerEvidence(
     artifacts.payload,
@@ -310,6 +383,7 @@ function attestedEvidence(
     marker: artifacts.marker,
     markerEvidence,
     executionAuthorization: authorization,
+    hostAuthorization,
     ownershipAclAttestation: artifacts.ownershipAclAttestation,
     sourceWriteDenialAttestation: artifacts.sourceWriteDenialAttestation,
     evidenceSinkSubjectSha256: authorization.components.evidenceSinkSha256,
@@ -317,19 +391,26 @@ function attestedEvidence(
 }
 
 export async function runCommunitiesStagingRoleSplitV3ExecutableComposition(
-  config: CommunitiesStagingRoleSplitV3ExecutableCompositionConfig,
+  inputConfig: CommunitiesStagingRoleSplitV3ExecutableCompositionConfig,
 ): Promise<CommunitiesStagingRoleSplitV3ExecutableCompositionResult> {
+  let config: CommunitiesStagingRoleSplitV3ExecutableCompositionConfig;
+  try {
+    config = immutableConfig(inputConfig);
+  } catch {
+    fail('AUTHORIZATION_INVALID');
+  }
   assertConfig(config);
   const requestSha256 = communitiesStagingRoleSplitRestoreMarkerRequestSha256(config.request);
   let lease: CommunitiesStagingRoleSplitV3ExecutableLease;
   try {
-    lease = await config.host.acquireLease(requestSha256);
+    lease = immutableData(await config.host.acquireLease(requestSha256));
   } catch {
     fail('LEASE_UNAVAILABLE');
   }
   let primary: unknown = null;
   let result: CommunitiesStagingRoleSplitV3ExecutableCompositionResult | null = null;
   try {
+    assertConfig(config);
     if (lease.requestSha256 !== requestSha256 || !exactSha256(lease.fencingToken))
       fail('LEASE_INVALID');
     result =
@@ -388,7 +469,7 @@ async function runCreateWithLease(
   if (clone !== 'absent') fail('CREATE_OUTCOME_AMBIGUOUS');
   let created: Awaited<ReturnType<CommunitiesStagingRoleSplitV3ExecutableHost['createClone']>>;
   try {
-    created = await config.host.createClone(lease);
+    created = immutableData(await config.host.createClone(lease));
     assertCommunitiesStagingRoleSplitV3RestoreExecutionEvidenceBinding(
       created.restoreExecutionEvidenceBinding,
     );
@@ -462,8 +543,8 @@ async function runContinueWithLease(
     if (state.phase === 'RESTORED') {
       let artifacts: CommunitiesStagingRoleSplitV3VerifiedArtifacts;
       try {
-        artifacts = await config.host.verifyBindings(lease, state);
-        assertArtifacts(state, artifacts, config.authorization);
+        artifacts = immutableData(await config.host.verifyBindings(lease, state));
+        assertArtifacts(state, artifacts, config.authorization, config.hostAuthorization);
       } catch {
         fail('VERIFICATION_FAILED');
       }
@@ -479,10 +560,16 @@ async function runContinueWithLease(
       continue;
     }
 
-    const artifacts = await config.host
+    const loadedArtifacts = await config.host
       .loadVerifiedArtifacts(lease)
       .catch(() => fail('ARTIFACT_BINDING_INVALID'));
-    assertArtifacts(state, artifacts, config.authorization);
+    let artifacts: CommunitiesStagingRoleSplitV3VerifiedArtifacts;
+    try {
+      artifacts = immutableData(loadedArtifacts);
+    } catch {
+      fail('ARTIFACT_BINDING_INVALID');
+    }
+    assertArtifacts(state, artifacts, config.authorization, config.hostAuthorization);
     if (
       state.markerPayloadSha256 !==
       communitiesStagingRoleSplitV3MarkerPayloadSha256(artifacts.payload)
@@ -538,7 +625,7 @@ async function runContinueWithLease(
       continue;
     }
 
-    const evidence = attestedEvidence(artifacts, config.authorization);
+    const evidence = attestedEvidence(artifacts, config.authorization, config.hostAuthorization);
     const evidenceObservation = await config.host.observeEvidence(lease, evidence);
     const action = recoverCommunitiesStagingRoleSplitV3(state, {
       clone,

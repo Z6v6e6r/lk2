@@ -21,6 +21,8 @@ import {
 } from './communities-staging-role-split-v3-test-fixtures.js';
 
 const fixture = createCommunitiesStagingRoleSplitV3Fixture();
+const hostBinding = (code: 'OWNERSHIP_ACL_ATTESTATION' | 'SOURCE_WRITE_DENIAL_ATTESTATION') =>
+  fixture.hostAuthorization.bindings.find((binding) => binding.code === code)!;
 
 describe('V3 execution authorization and attested evidence', () => {
   it('keeps clone creation separate from continuation authority', () => {
@@ -138,17 +140,18 @@ describe('V3 execution authorization and attested evidence', () => {
       marker,
       markerEvidence,
       executionAuthorization: fixture.executionAuthorization,
+      hostAuthorization: fixture.hostAuthorization,
       ownershipAclAttestation: {
         subjectSha256: fixture.executionAuthorization.components.ownershipAclAttestorSha256,
-        evidenceSha256: fixtureSha('ownership'),
+        evidenceSha256: hostBinding('OWNERSHIP_ACL_ATTESTATION').evidenceSha256,
       },
       sourceWriteDenialAttestation: {
         subjectSha256: fixture.executionAuthorization.components.sourceWriteDenialAttestorSha256,
-        evidenceSha256: fixtureSha('source-denial'),
+        evidenceSha256: hostBinding('SOURCE_WRITE_DENIAL_ATTESTATION').evidenceSha256,
       },
       evidenceSinkSubjectSha256: fixture.executionAuthorization.components.evidenceSinkSha256,
     });
-    expect(evidence.schemaVersion).toBe('communities-staging-role-split-v3-attested-evidence-v1');
+    expect(evidence.schemaVersion).toBe('communities-staging-role-split-v3-attested-evidence-v2');
     expect(evidence.authorizes).toEqual({
       roleCreation: false,
       roleSplit: false,
@@ -163,6 +166,7 @@ describe('V3 execution authorization and attested evidence', () => {
         payload: fixture.markerPayload,
         marker,
         executionAuthorization: fixture.executionAuthorization,
+        hostAuthorization: fixture.hostAuthorization,
         evidence,
       }),
     ).not.toThrow();
@@ -171,19 +175,50 @@ describe('V3 execution authorization and attested evidence', () => {
         payload: fixture.markerPayload,
         marker,
         executionAuthorization: fixture.executionAuthorization,
+        hostAuthorization: fixture.hostAuthorization,
         evidence,
       }),
-    ).toMatch(/"schemaVersion":"communities-staging-role-split-v3-attested-evidence-v1"/u);
+    ).toMatch(/"schemaVersion":"communities-staging-role-split-v3-attested-evidence-v2"/u);
     expect(() =>
       assertCommunitiesStagingRoleSplitV3AttestedEvidence({
         payload: fixture.markerPayload,
         marker,
         executionAuthorization: fixture.executionAuthorization,
+        hostAuthorization: fixture.hostAuthorization,
         evidence: {
           ...evidence,
           executionAuthorizationSha256: fixtureSha('other'),
         },
       }),
     ).toThrow('V3_ATTESTED_EVIDENCE_BINDING_INVALID');
+
+    expect(() =>
+      assertCommunitiesStagingRoleSplitV3AttestedEvidence({
+        payload: fixture.markerPayload,
+        marker,
+        executionAuthorization: fixture.executionAuthorization,
+        hostAuthorization: fixture.hostAuthorization,
+        evidence: {
+          ...evidence,
+          ownershipAclAttestation: {
+            ...evidence.ownershipAclAttestation,
+            evidenceSha256: fixtureSha('replayed-other-context'),
+          },
+        },
+      }),
+    ).toThrow('V3_ATTESTED_EVIDENCE_BINDING_INVALID');
+
+    expect(() =>
+      assertCommunitiesStagingRoleSplitV3AttestedEvidence({
+        payload: fixture.markerPayload,
+        marker,
+        executionAuthorization: fixture.executionAuthorization,
+        hostAuthorization: fixture.hostAuthorization,
+        evidence: {
+          ...evidence,
+          schemaVersion: 'communities-staging-role-split-v3-attested-evidence-v1',
+        } as unknown as typeof evidence,
+      }),
+    ).toThrow('V3_ATTESTED_EVIDENCE_SHAPE_INVALID');
   });
 });

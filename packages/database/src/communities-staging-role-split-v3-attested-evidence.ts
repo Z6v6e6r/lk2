@@ -10,10 +10,15 @@ import {
   communitiesStagingRoleSplitV3ExecutionAuthorizationSha256,
   type CommunitiesStagingRoleSplitV3ExecutionAuthorization,
 } from './communities-staging-role-split-v3-execution-authorization.js';
+import {
+  assertCommunitiesStagingRoleSplitHostAuthorization,
+  communitiesStagingRoleSplitHostAuthorizationSha256,
+  type CommunitiesStagingRoleSplitHostAuthorization,
+} from './communities-staging-role-split-host-authorization.js';
 import { failCommunitiesStagingRoleSplit } from './communities-staging-role-split.js';
 
 export const COMMUNITIES_STAGING_ROLE_SPLIT_V3_ATTESTED_EVIDENCE_VERSION =
-  'communities-staging-role-split-v3-attested-evidence-v1';
+  'communities-staging-role-split-v3-attested-evidence-v2';
 
 const authorityKeys = [
   'roleCreation',
@@ -29,6 +34,7 @@ const envelopeKeys = [
   'schemaVersion',
   'status',
   'executionAuthorizationSha256',
+  'hostAuthorizationSha256',
   'markerEvidence',
   'ownershipAclAttestation',
   'sourceWriteDenialAttestation',
@@ -41,6 +47,7 @@ export interface CommunitiesStagingRoleSplitV3AttestedEvidence {
   readonly schemaVersion: typeof COMMUNITIES_STAGING_ROLE_SPLIT_V3_ATTESTED_EVIDENCE_VERSION;
   readonly status: 'ATTESTED';
   readonly executionAuthorizationSha256: string;
+  readonly hostAuthorizationSha256: string;
   readonly markerEvidence: CommunitiesStagingRoleSplitV3MarkerEvidence;
   readonly ownershipAclAttestation: {
     readonly subjectSha256: string;
@@ -82,11 +89,21 @@ function canonicalJson(value: unknown): string {
   return fail('VALUE_INVALID');
 }
 
+function binding(
+  authorization: CommunitiesStagingRoleSplitHostAuthorization,
+  code: 'OWNERSHIP_ACL_ATTESTATION' | 'SOURCE_WRITE_DENIAL_ATTESTATION',
+): CommunitiesStagingRoleSplitHostAuthorization['bindings'][number] {
+  const result = authorization.bindings.find((entry) => entry.code === code);
+  if (result === undefined) fail('BINDING_INVALID');
+  return result;
+}
+
 export function createCommunitiesStagingRoleSplitV3AttestedEvidence(input: {
   readonly payload: CommunitiesStagingRoleSplitV3MarkerPayload;
   readonly marker: string;
   readonly markerEvidence: CommunitiesStagingRoleSplitV3MarkerEvidence;
   readonly executionAuthorization: CommunitiesStagingRoleSplitV3ExecutionAuthorization;
+  readonly hostAuthorization: CommunitiesStagingRoleSplitHostAuthorization;
   readonly ownershipAclAttestation: CommunitiesStagingRoleSplitV3AttestedEvidence['ownershipAclAttestation'];
   readonly sourceWriteDenialAttestation: CommunitiesStagingRoleSplitV3AttestedEvidence['sourceWriteDenialAttestation'];
   readonly evidenceSinkSubjectSha256: string;
@@ -96,6 +113,9 @@ export function createCommunitiesStagingRoleSplitV3AttestedEvidence(input: {
     status: 'ATTESTED',
     executionAuthorizationSha256: communitiesStagingRoleSplitV3ExecutionAuthorizationSha256(
       input.executionAuthorization,
+    ),
+    hostAuthorizationSha256: communitiesStagingRoleSplitHostAuthorizationSha256(
+      input.hostAuthorization,
     ),
     markerEvidence: input.markerEvidence,
     ownershipAclAttestation: input.ownershipAclAttestation,
@@ -119,6 +139,7 @@ export function assertCommunitiesStagingRoleSplitV3AttestedEvidence(input: {
   readonly payload: CommunitiesStagingRoleSplitV3MarkerPayload;
   readonly marker: string;
   readonly executionAuthorization: CommunitiesStagingRoleSplitV3ExecutionAuthorization;
+  readonly hostAuthorization: CommunitiesStagingRoleSplitHostAuthorization;
   readonly evidence: CommunitiesStagingRoleSplitV3AttestedEvidence;
 }): void {
   const evidence = input.evidence;
@@ -132,6 +153,7 @@ export function assertCommunitiesStagingRoleSplitV3AttestedEvidence(input: {
     authorityKeys.some((key) => evidence.authorizes[key] !== false) ||
     ![
       evidence.executionAuthorizationSha256,
+      evidence.hostAuthorizationSha256,
       evidence.ownershipAclAttestation.subjectSha256,
       evidence.ownershipAclAttestation.evidenceSha256,
       evidence.sourceWriteDenialAttestation.subjectSha256,
@@ -142,6 +164,7 @@ export function assertCommunitiesStagingRoleSplitV3AttestedEvidence(input: {
     fail('SHAPE_INVALID');
   try {
     assertCommunitiesStagingRoleSplitV3ExecutionAuthorization(input.executionAuthorization);
+    assertCommunitiesStagingRoleSplitHostAuthorization(input.hostAuthorization);
     assertCommunitiesStagingRoleSplitV3MarkerEvidence(
       input.payload,
       input.marker,
@@ -151,9 +174,22 @@ export function assertCommunitiesStagingRoleSplitV3AttestedEvidence(input: {
     fail('BINDING_INVALID');
   }
   const authorization = input.executionAuthorization;
+  const hostAuthorizationSha256 = communitiesStagingRoleSplitHostAuthorizationSha256(
+    input.hostAuthorization,
+  );
+  const ownershipAclBinding = binding(input.hostAuthorization, 'OWNERSHIP_ACL_ATTESTATION');
+  const sourceWriteDenialBinding = binding(
+    input.hostAuthorization,
+    'SOURCE_WRITE_DENIAL_ATTESTATION',
+  );
   if (
     evidence.executionAuthorizationSha256 !==
       communitiesStagingRoleSplitV3ExecutionAuthorizationSha256(authorization) ||
+    evidence.hostAuthorizationSha256 !== hostAuthorizationSha256 ||
+    authorization.hostAuthorizationSha256 !== hostAuthorizationSha256 ||
+    input.hostAuthorization.markerRequestSha256 !== authorization.markerRequestSha256 ||
+    input.hostAuthorization.creationReceiptSha256 !== authorization.creationReceiptSha256 ||
+    input.hostAuthorization.execution.cloneDatabaseOid !== authorization.cloneDatabaseOid ||
     evidence.markerEvidence.requestSha256 !== authorization.markerRequestSha256 ||
     evidence.markerEvidence.creationReceiptSha256 !== authorization.creationReceiptSha256 ||
     evidence.markerEvidence.restoreExecutionEvidenceSha256 !==
@@ -161,8 +197,14 @@ export function assertCommunitiesStagingRoleSplitV3AttestedEvidence(input: {
     evidence.markerEvidence.cloneDatabaseOid !== authorization.cloneDatabaseOid ||
     evidence.ownershipAclAttestation.subjectSha256 !==
       authorization.components.ownershipAclAttestorSha256 ||
+    evidence.ownershipAclAttestation.subjectSha256 !== ownershipAclBinding.subjectSha256 ||
+    evidence.ownershipAclAttestation.evidenceSha256 !== ownershipAclBinding.evidenceSha256 ||
     evidence.sourceWriteDenialAttestation.subjectSha256 !==
       authorization.components.sourceWriteDenialAttestorSha256 ||
+    evidence.sourceWriteDenialAttestation.subjectSha256 !==
+      sourceWriteDenialBinding.subjectSha256 ||
+    evidence.sourceWriteDenialAttestation.evidenceSha256 !==
+      sourceWriteDenialBinding.evidenceSha256 ||
     evidence.evidenceSinkSubjectSha256 !== authorization.components.evidenceSinkSha256
   )
     fail('BINDING_INVALID');
@@ -172,6 +214,7 @@ export function canonicalCommunitiesStagingRoleSplitV3AttestedEvidence(input: {
   readonly payload: CommunitiesStagingRoleSplitV3MarkerPayload;
   readonly marker: string;
   readonly executionAuthorization: CommunitiesStagingRoleSplitV3ExecutionAuthorization;
+  readonly hostAuthorization: CommunitiesStagingRoleSplitHostAuthorization;
   readonly evidence: CommunitiesStagingRoleSplitV3AttestedEvidence;
 }): string {
   assertCommunitiesStagingRoleSplitV3AttestedEvidence(input);
@@ -182,6 +225,7 @@ export function communitiesStagingRoleSplitV3AttestedEvidenceSha256(input: {
   readonly payload: CommunitiesStagingRoleSplitV3MarkerPayload;
   readonly marker: string;
   readonly executionAuthorization: CommunitiesStagingRoleSplitV3ExecutionAuthorization;
+  readonly hostAuthorization: CommunitiesStagingRoleSplitHostAuthorization;
   readonly evidence: CommunitiesStagingRoleSplitV3AttestedEvidence;
 }): string {
   return createHash('sha256')
