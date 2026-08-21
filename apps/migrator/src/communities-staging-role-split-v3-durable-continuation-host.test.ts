@@ -437,11 +437,29 @@ describe('V3 durable continuation host', () => {
     await expect(prepared.host.loadState(lease)).rejects.toMatchObject({ code: 'BINDING_INVALID' });
   });
 
+  it('binds verification to the exact durable RESTORED state argument', async () => {
+    const prepared = await hostFixture();
+    const lease = await prepared.host.acquireLease(fixture.requestSha256);
+    const restored = await prepared.host.loadState(lease);
+    if (restored === null || restored.phase !== 'RESTORED') throw new Error('state missing');
+
+    await expect(
+      prepared.host.verifyBindings(lease, {
+        ...restored,
+        requestSha256: fixtureSha('foreign-restored-state'),
+      }),
+    ).rejects.toMatchObject({ code: 'STATE_AMBIGUOUS' });
+    await prepared.host.releaseLease(lease);
+  });
+
   it('takes a construction-time snapshot of callbacks and bindings', async () => {
     const prepared = await hostFixture();
     const original = prepared.config.observeMarker;
-    (prepared.config as { observeMarker: () => Promise<'different'> }).observeMarker = () =>
-      Promise.resolve('different');
+    (
+      prepared.config as unknown as {
+        observeMarker: () => Promise<'different'>;
+      }
+    ).observeMarker = () => Promise.resolve('different');
     const lease = await prepared.host.acquireLease(fixture.requestSha256);
     const restored = await prepared.host.loadState(lease);
     expect(restored?.phase).toBe('RESTORED');

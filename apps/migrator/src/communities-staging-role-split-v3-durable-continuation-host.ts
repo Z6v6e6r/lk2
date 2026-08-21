@@ -58,9 +58,9 @@ export class CommunitiesStagingRoleSplitV3DurableContinuationHostError extends E
     this.name = 'CommunitiesStagingRoleSplitV3DurableContinuationHostError';
   }
 }
-const fail = (code: CommunitiesStagingRoleSplitV3DurableContinuationHostError['code']): never => {
+function fail(code: CommunitiesStagingRoleSplitV3DurableContinuationHostError['code']): never {
   throw new CommunitiesStagingRoleSplitV3DurableContinuationHostError(code);
-};
+}
 const deepFreeze = <T>(value: T, seen = new WeakSet<object>()): T => {
   if (value !== null && typeof value === 'object' && !Object.isFrozen(value)) {
     if (seen.has(value)) return value;
@@ -540,11 +540,15 @@ export class CommunitiesStagingRoleSplitV3DurableContinuationHost implements Com
     held.evidenceObservationPreimageSha256 = result === 'exact' ? currentSha256 : null;
     return result;
   }
-  async verifyBindings(lease: CommunitiesStagingRoleSplitV3ExecutableLease) {
+  async verifyBindings(
+    lease: CommunitiesStagingRoleSplitV3ExecutableLease,
+    state: CommunitiesStagingRoleSplitV3State,
+  ) {
     const held = await this.held(lease);
     const current = await this.read(held);
     if (
       current.envelope.state.phase !== 'RESTORED' ||
+      !isDeepStrictEqual(current.envelope.state, state) ||
       current.bytes !==
         canonicalCommunitiesStagingRoleSplitV3DurableStateEnvelope(this.config.restoredEnvelope)
     )
@@ -603,17 +607,32 @@ export class CommunitiesStagingRoleSplitV3DurableContinuationHost implements Com
     await this.config.publishEvidence(evidence);
     await this.held(lease);
   }
-  createCandidate(): Promise<void> {
+  createCandidate(
+    _lease: CommunitiesStagingRoleSplitV3ExecutableLease,
+    _state: CommunitiesStagingRoleSplitV3State,
+  ): Promise<void> {
+    void _lease;
+    void _state;
     return Promise.reject(
       new CommunitiesStagingRoleSplitV3DurableContinuationHostError('UNAVAILABLE'),
     );
   }
-  createClone(): Promise<never> {
+  createClone(_lease: CommunitiesStagingRoleSplitV3ExecutableLease): Promise<never> {
+    void _lease;
     return Promise.reject(
       new CommunitiesStagingRoleSplitV3DurableContinuationHostError('UNAVAILABLE'),
     );
   }
-  restoreOwned(): Promise<void> {
+  restoreOwned(
+    _lease: CommunitiesStagingRoleSplitV3ExecutableLease,
+    _current: CommunitiesStagingRoleSplitV3State,
+    _pending: CommunitiesStagingRoleSplitV3State,
+    _restored: CommunitiesStagingRoleSplitV3State,
+  ): Promise<void> {
+    void _lease;
+    void _current;
+    void _pending;
+    void _restored;
     return Promise.reject(
       new CommunitiesStagingRoleSplitV3DurableContinuationHostError('UNAVAILABLE'),
     );
