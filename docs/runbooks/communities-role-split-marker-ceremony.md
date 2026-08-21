@@ -261,6 +261,29 @@ reviewed gates. This codec does not complete item 2 in the required-before-insta
 execution list: it supplies no V3 executable composition, response-loss reconciliation, clone-only
 connection factory, source-denial proof or ownership/ACL/RLS attestation.
 
+## V3 durable continuation host (code-only, unwired)
+
+`apps/migrator/src/communities-staging-role-split-v3-durable-continuation-host.ts` is the separate
+injected host for the post-restore half only. It refuses candidate creation, clone creation and
+restore. It accepts only the exact persisted `RESTORED` durable envelope, acquires the reviewed DDL
+fence before the private filesystem lease, and releases filesystem then DDL on every exit. Every
+state read, CAS recovery read, observation and injected side effect is fenced before and after.
+
+The host creates no durable authorization token. Its marker capability exists solely in memory
+after this invocation has successfully persisted `VERIFIED -> MARKER_PENDING`; it is consumed
+before dispatch. A restarted `MARKER_PENDING` host therefore reconciles only the authoritative
+marker observation and cannot replay a marker write. Similarly, an evidence-publication capability
+is minted only after the same invocation observes the exact V3 attested evidence as absent and is
+consumed before publishing. Lost side-effect responses are reconciled from exact readback; absent,
+different or unknown results retain the state for manual reconciliation.
+
+The host deep-freezes authoritative structured inputs and captures collaborator methods during
+construction, validates the execution-authorization digest, component subjects and canonical host
+adapter subject, and has no PostgreSQL, SSH, filesystem installation, environment parsing or
+workflow wiring of its own. It is not an authorization to run a ceremony, migrate, deploy, activate
+or clean up a clone. A future exact installation candidate remains subject to independent security
+and PostgreSQL review, staging authorization and a separately approved ceremony run.
+
 The full-chain semantic validator additionally requires the exact V3 restore-execution binding and
 matches its request, receipt, execution-evidence, clone-OID and system-identifier facts before it
 accepts any continuation state. This detects a self-consistent continuation artifact from another

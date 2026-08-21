@@ -12,17 +12,23 @@ import { lstat, open, rename, unlink } from 'node:fs/promises';
 import type { FileHandle } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 
 import {
   assertCommunitiesStagingRoleSplitV3DurableRestoreAuthorizationBinding,
   canonicalCommunitiesStagingRoleSplitV3DurableStateEnvelope,
+  canonicalCommunitiesStagingRoleSplitV3DurableContinuationEnvelope,
+  COMMUNITIES_STAGING_ROLE_SPLIT_V3_DURABLE_CONTINUATION_ENVELOPE_VERSION,
   communitiesStagingRoleSplitV3DurableRestoreAuthorizationSha256,
+  communitiesStagingRoleSplitV3DurableContinuationEnvelopeSha256,
   communitiesStagingRoleSplitV3DurableStateEnvelopeSha256,
   parseCommunitiesStagingRoleSplitV3DurableStateEnvelope,
+  parseCommunitiesStagingRoleSplitV3DurableContinuationEnvelope,
   type CommunitiesStagingRoleSplitHostAuthorization,
   type CommunitiesStagingRoleSplitRestoreMarkerRequest,
   type CommunitiesStagingRoleSplitV3DurableRestoreAuthorization,
   type CommunitiesStagingRoleSplitV3DurableStateEnvelope,
+  type CommunitiesStagingRoleSplitV3DurableContinuationEnvelope,
   type CommunitiesStagingRoleSplitV3PreparationEnvelope,
   type CommunitiesStagingRoleSplitV3RestoreAuthorization,
 } from '@phub/database';
@@ -108,6 +114,9 @@ export interface CommunitiesStagingRoleSplitV3DurableStateLease {
   readonly creationReceiptSha256: string;
   readonly fencingToken: string;
 }
+export type CommunitiesStagingRoleSplitV3DurableStoredEnvelope =
+  | CommunitiesStagingRoleSplitV3DurableStateEnvelope
+  | CommunitiesStagingRoleSplitV3DurableContinuationEnvelope;
 
 /** Exact-byte, single-directory state store; V2 artifacts and lock namespace are refused. */
 export class CommunitiesStagingRoleSplitV3DurableStateStore {
@@ -191,9 +200,14 @@ export class CommunitiesStagingRoleSplitV3DurableStateStore {
     }
   }
 
-  private parse(value: string): CommunitiesStagingRoleSplitV3DurableStateEnvelope {
+  private parse(value: string): CommunitiesStagingRoleSplitV3DurableStoredEnvelope {
     if (Buffer.byteLength(value, 'utf8') > MAX_STATE_BYTES) fail('STATE_CORRUPT');
     try {
+      if (
+        (JSON.parse(value) as { schemaVersion?: string }).schemaVersion ===
+        COMMUNITIES_STAGING_ROLE_SPLIT_V3_DURABLE_CONTINUATION_ENVELOPE_VERSION
+      )
+        return parseCommunitiesStagingRoleSplitV3DurableContinuationEnvelope(value);
       return parseCommunitiesStagingRoleSplitV3DurableStateEnvelope(value);
     } catch {
       fail('STATE_CORRUPT');
@@ -259,10 +273,13 @@ export class CommunitiesStagingRoleSplitV3DurableStateStore {
   async writeCas(
     lease: CommunitiesStagingRoleSplitV3DurableStateLease,
     expected: string | null,
-    next: CommunitiesStagingRoleSplitV3DurableStateEnvelope,
+    next: CommunitiesStagingRoleSplitV3DurableStoredEnvelope,
   ): Promise<string> {
     await this.assertLease(lease);
-    const canonical = canonicalCommunitiesStagingRoleSplitV3DurableStateEnvelope(next);
+    const canonical =
+      next.schemaVersion === COMMUNITIES_STAGING_ROLE_SPLIT_V3_DURABLE_CONTINUATION_ENVELOPE_VERSION
+        ? canonicalCommunitiesStagingRoleSplitV3DurableContinuationEnvelope(next)
+        : canonicalCommunitiesStagingRoleSplitV3DurableStateEnvelope(next);
     if (
       next.requestSha256 !== this.requestSha256 ||
       next.creationReceiptSha256 !== this.creationReceiptSha256
@@ -281,10 +298,37 @@ export class CommunitiesStagingRoleSplitV3DurableStateStore {
     )
       fail('STATE_CAS_MISMATCH');
     const currentPhase = currentEnvelope?.phase ?? null;
+    const currentIsContinuation =
+      currentEnvelope?.schemaVersion ===
+      COMMUNITIES_STAGING_ROLE_SPLIT_V3_DURABLE_CONTINUATION_ENVELOPE_VERSION;
+    const nextIsContinuation =
+      next.schemaVersion ===
+      COMMUNITIES_STAGING_ROLE_SPLIT_V3_DURABLE_CONTINUATION_ENVELOPE_VERSION;
+    const continuationBound =
+      currentPhase === 'RESTORED'
+        ? currentEnvelope !== null &&
+          !currentIsContinuation &&
+          nextIsContinuation &&
+          next.restoredEnvelopeSha256 ===
+            communitiesStagingRoleSplitV3DurableStateEnvelopeSha256(currentEnvelope) &&
+          next.previousEnvelopeSha256 ===
+            communitiesStagingRoleSplitV3DurableStateEnvelopeSha256(currentEnvelope)
+        : currentIsContinuation &&
+          nextIsContinuation &&
+          next.restoredEnvelopeSha256 === currentEnvelope.restoredEnvelopeSha256 &&
+          next.previousEnvelopeSha256 ===
+            communitiesStagingRoleSplitV3DurableContinuationEnvelopeSha256(currentEnvelope) &&
+          isDeepStrictEqual(next.artifacts.payload, currentEnvelope.artifacts.payload) &&
+          next.artifacts.marker === currentEnvelope.artifacts.marker;
     const allowed =
       (currentPhase === null && next.phase === 'OWNED') ||
       (currentPhase === 'OWNED' && next.phase === 'RESTORE_PENDING') ||
-      (currentPhase === 'RESTORE_PENDING' && next.phase === 'RESTORED');
+      (currentPhase === 'RESTORE_PENDING' && next.phase === 'RESTORED') ||
+      (continuationBound &&
+        ((currentPhase === 'RESTORED' && next.phase === 'VERIFIED') ||
+          (currentPhase === 'VERIFIED' && next.phase === 'MARKER_PENDING') ||
+          (currentPhase === 'MARKER_PENDING' && next.phase === 'MARKED') ||
+          (currentPhase === 'MARKED' && next.phase === 'EVIDENCED')));
     if (!allowed) fail('STATE_CAS_MISMATCH');
     const temporary = join(
       this.stateDirectory,
