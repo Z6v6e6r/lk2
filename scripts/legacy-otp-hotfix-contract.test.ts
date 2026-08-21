@@ -470,7 +470,7 @@ describe('legacy OTP hotfix canary release contract', () => {
   it('verifies the immutable eight-file child of e308 and protects release inputs', () => {
     expect(verifier).toContain('supported_active_release=e308181da5222645d9a87d03642923c6841be8d1');
     expect(verifier).toContain(
-      'supported_patch_sha256=81e5618fe7222f02cef45a843b49dbaa2799c132c4a25a90957bc912fdde90d0',
+      'supported_patch_sha256=7fe04830af2ba1cc83a9bd2b6440712ed1251f8ecb1066ddde48ad7704b79597',
     );
     expect(verifier).toContain(
       'test "$(printf \'%s\\n\' "$parent_line" | awk \'{ print NF }\')" -eq 2',
@@ -483,6 +483,12 @@ describe('legacy OTP hotfix canary release contract', () => {
       expect(verifier).toContain(`apps/${service}/Dockerfile`);
       expect(verifier).toContain(`node scripts/verify-production-workspace-imports.js $service`);
     }
+    expect(verifier).toContain('chmod -R a+rX apps packages');
+    expect(verifier).toContain('scripts node_modules');
+    expect(verifier).toContain('chmod a+r package.json package-lock.json .npmrc');
+    expect(verifier).toContain('does not run the import probe as appuser');
+    expect(verifier).toContain('image grants broad write permissions');
+    expect(verifier).toContain('chmod -R a+rX apps packages migrations scripts node_modules');
     for (const path of [
       'packages/database/migrations',
       'contracts',
