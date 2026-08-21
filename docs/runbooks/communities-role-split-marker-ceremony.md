@@ -243,6 +243,29 @@ count; it never buffers the archive as a whole. This filesystem lease is not yet
 cluster-wide DDL fence: a future forced command must also provide outer process serialization and a
 reviewed PostgreSQL advisory-session lease before clone creation or marker writes.
 
+## V3 durable continuation contract-only prerequisite
+
+`communities-staging-role-split-v3-durable-continuation-envelope-v1` is a separate strict
+canonical JSON+LF codec for the post-restore `VERIFIED -> MARKER_PENDING -> MARKED -> EVIDENCED`
+sequence. It begins only from the exact digest of the existing durable `RESTORED` V1 envelope and
+each envelope points one way to the previous canonical digest. Every phase repeats the immutable
+request, receipt, restore-evidence and clone-OID bindings, carries the exact V3 state and one
+V3 marker payload/marker pair. `VERIFIED` and `MARKER_PENDING` carry no evidence; `MARKED` and
+`EVIDENCED` require the same exact V3 marker-evidence bytes.
+
+This codec does not validate a catalog/ACL/RLS attestation, INPUT_C, an evidence-sink namespace or
+any authority. It does not create state, acquire a fence, write a marker, publish evidence, access
+the filesystem or database, call a runner, or provide a host, CLI, installer, workflow or forced
+command. Those executable operations remain separately designed, authorized and independently
+reviewed gates. This codec does not complete item 2 in the required-before-installation-and-
+execution list: it supplies no V3 executable composition, response-loss reconciliation, clone-only
+connection factory, source-denial proof or ownership/ACL/RLS attestation.
+
+The full-chain semantic validator additionally requires the exact V3 restore-execution binding and
+matches its request, receipt, execution-evidence, clone-OID and system-identifier facts before it
+accepts any continuation state. This detects a self-consistent continuation artifact from another
+restore context, but still does not prove archive custody, runtime authority or an executable gate.
+
 The reviewed runner and canonical adapter remain deliberately unwired. The authorization receipt
 can describe immutable restore-login/role and connection-factory bindings, but code cannot invent
 their staging values or prove that a privileged identity cannot write the source database. Before
