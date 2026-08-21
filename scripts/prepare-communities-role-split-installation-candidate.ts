@@ -13,11 +13,11 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import { fileURLToPath } from 'node:url';
 
 export const INSTALLATION_CANDIDATE_SCHEMA_VERSION =
-  'communities-role-split-installation-candidate-v5';
+  'communities-role-split-installation-candidate-v6';
 export const INSTALLATION_CANDIDATE_DIGEST_VERSION =
-  'PHUB_COMMUNITIES_ROLE_SPLIT_INSTALLATION_CANDIDATE_DIGEST_V5';
+  'PHUB_COMMUNITIES_ROLE_SPLIT_INSTALLATION_CANDIDATE_DIGEST_V6';
 export const INSTALLATION_CANDIDATE_CONTROL_VERSION =
-  'PHUB_COMMUNITIES_ROLE_SPLIT_HOST_INSTALL_CONTROL_V2';
+  'PHUB_COMMUNITIES_ROLE_SPLIT_HOST_INSTALL_CONTROL_V3';
 
 const sha40Pattern = /^[0-9a-f]{40}$/u;
 const sha256Pattern = /^[0-9a-f]{64}$/u;
@@ -203,6 +203,40 @@ const fileDefinitions: readonly CandidateArtifactDefinition[] = [
     installMode: '0444',
     purpose: 'disabled preparation CLI source snapshot; Node runtime and execution wiring absent',
   },
+  ...[
+    'communities-staging-role-split-v3-durable-host.ts',
+    'communities-staging-role-split-v3-durable-restore-coordinator.ts',
+    'communities-staging-role-split-v3-executable-composition.ts',
+  ].map((name): CandidateArtifactDefinition => ({
+    sourcePath: `apps/migrator/src/${name}`,
+    sourceGitMode: '100644',
+    artifactPath: `payload/source/${name}`,
+    targetRelativePath: `source/${name}`,
+    action: 'INSTALL_NEW',
+    installOwner: 'root',
+    installGroup: 'root',
+    installMode: '0444',
+    purpose: 'reviewed V3 code-only source snapshot; deliberately unwired and non-runnable',
+  })),
+  ...[
+    'communities-staging-role-split-v3-contract.ts',
+    'communities-staging-role-split-v3-envelope.ts',
+    'communities-staging-role-split-v3-restore-authorization.ts',
+    'communities-staging-role-split-v3-durable-restore-authorization.ts',
+    'communities-staging-role-split-v3-durable-state-envelope.ts',
+    'communities-staging-role-split-v3-execution-authorization.ts',
+    'communities-staging-role-split-v3-attested-evidence.ts',
+  ].map((name): CandidateArtifactDefinition => ({
+    sourcePath: `packages/database/src/${name}`,
+    sourceGitMode: '100644',
+    artifactPath: `payload/source/${name}`,
+    targetRelativePath: `source/${name}`,
+    action: 'INSTALL_NEW',
+    installOwner: 'root',
+    installGroup: 'root',
+    installMode: '0444',
+    purpose: 'reviewed V3 authorization source snapshot; deliberately unwired and non-runnable',
+  })),
 ] as const;
 
 const unresolvedBindingCodes = [

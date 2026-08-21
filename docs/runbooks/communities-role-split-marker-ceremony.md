@@ -458,7 +458,7 @@ fails with one fixed public error.
 ## Exact disabled installable candidate
 
 `scripts/prepare-communities-role-split-installation-candidate.ts` now builds and verifies a
-private, deterministic V5 candidate directory from an independently supplied exact Git commit. It
+private, deterministic V6 candidate directory from an independently supplied exact Git commit. It
 reads every artifact from Git objects rather than the mutable worktree, validates each expected Git
 mode, disables Git replacement objects, rejects any replacement ref and requires the raw local repository origin
 to be exactly `https://github.com/Z6v6e6r/lk2.git`, refuses an existing output, and accepts only a
@@ -478,6 +478,10 @@ true authorization. It contains:
 - three additional mode-0444 source snapshots for the canonical inventory-preparation contract,
   its verifier and its CLI. They are deliberately unwired and non-runnable: the candidate contains
   no Node runtime, compiled bundle, credential, preparation envelope or evidence payload.
+- ten additional mode-0444 source snapshots for the reviewed V3 durable host, restore coordinator,
+  executable composition, state/authorization envelopes and host-bound attested evidence. These
+  are code-only review bytes: the candidate still has no compiled entrypoint, concrete restore
+  executor, DDL-fence lease wiring or runtime loader.
 
 The host entrypoint is a POSIX shell program bound to the exact GNU coreutils paths present on the
 ARM64 staging node; `/usr/bin/node` is not required. Its file-count validation uses shell numeric
@@ -485,9 +489,11 @@ matching rather than AWK character classes because the staging host provides leg
 which rejects otherwise valid `[[:space:]]` and `[[:digit:]]` expressions. The canonical control
 ledger is independently pinned and binds the fixed artifact paths, target-relative paths, modes,
 byte counts, SHA-256 values and false execution authorizations without parsing JSON on the host.
-The V5 installed readback requires exactly thirteen controlled artifacts plus the source directory
-and immutable receipt (`15` entries total); both install and verify loops require an exact count of
-thirteen control records. The fifth controlled artifact is the immutable shared DDL-fence source.
+The V6 installed readback requires exactly twenty-three controlled artifacts plus the source
+directory and immutable receipt (`25` entries total); both install and verify loops require an
+exact count of twenty-three control records. The fifth controlled artifact is the immutable shared
+DDL-fence source. The host-control version is V3 so a V5 allowlist cannot be accepted with freshly
+pinned V6 digests.
 The installer accepts independently retained manifest, control and artifact-set SHA-256 values. It installs
 only a previously absent version directory below
 `/usr/local/libexec/phub/communities-role-split/candidates/<commit>`, refuses an existing target or
@@ -574,13 +580,11 @@ the one-shot state/custody choreography only; it does not authorize or make a re
    `55655760a4dee1ab0a614cf464ad9d2b68bbf8c0` has been installed and its disabled readback passed.
    It contains no active link and grants no execution or database authority. It predates and does
    not contain the new V3 composition.
-2. The first independent security review of the code-only V3 composition identified three P2
-   boundaries: opaque replayable attestation digests and mutable configuration reuse in the
-   composition and coordinator. The 2026-08-21 checkpoint changes the V3 evidence format to V2,
-   binds both attestations to the exact host authorization and introduces immutable entry
-   snapshots. Complete an independent re-review of those exact bytes before building a new
-   candidate; the candidate must still add no key, workflow or live configuration. Do not reuse the
-   legacy V2 marker/attested-evidence contour, V3 evidence V1 or the permanently disabled
+2. The independent re-review of the exact V3 security-fix range completed with no reportable P0-P2
+   findings. V3 evidence V2 binds both attestations to the exact host authorization, and the
+   composition/coordinator retain immutable entry snapshots. V6 packages those reviewed sources
+   only as disabled mode-0444 bytes and adds no key, workflow or live configuration. Do not reuse
+   the legacy V2 marker/attested-evidence contour, V3 evidence V1 or the permanently disabled
    reviewed-runner path as a compatibility fallback.
 3. Preserve the completed disposable PostgreSQL 16 response-loss, cleanup-failure and
    evidence-publication matrix when reviewing the exact installation adapter. The local matrix

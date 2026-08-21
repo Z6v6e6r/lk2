@@ -1,5 +1,16 @@
 # Worklog
 
+## 2026-08-21 — Communities V6 disabled V3 source candidate
+
+- Bumped the private installation manifest, digest and host-control contracts to V6/V3 and added
+  ten exact mode-0444 production-source snapshots for the reviewed V3 durable host, coordinator,
+  executable composition, state/authorization envelopes and attested evidence.
+- Kept the POSIX installer and installed command fail-closed. The expanded candidate has no Node
+  runtime, compiled entrypoint, active link, key, workflow, connection, credential or database
+  access, and every execution/database/ceremony authorization remains false.
+- The V6 candidate is a new immutable disabled version only; producing and verifying it locally
+  does not authorize installation, staging access, inventory, ceremony or database mutation.
+
 ## 2026-08-21 — Communities V3 security boundary hardening
 
 - Replaced the V3 attested-evidence V1 shape with V2. Ownership/ACL and source-write-denial

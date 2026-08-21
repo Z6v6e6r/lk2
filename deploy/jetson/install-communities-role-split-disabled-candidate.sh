@@ -140,6 +140,16 @@ expected_artifact() {
     11) printf '%s\n' 'payload/source/communities-staging-role-split-inventory-preparation-database.ts|source/communities-staging-role-split-inventory-preparation-database.ts|0444' ;;
     12) printf '%s\n' 'payload/source/communities-staging-role-split-inventory-preparation-verifier.ts|source/communities-staging-role-split-inventory-preparation-verifier.ts|0444' ;;
     13) printf '%s\n' 'payload/source/verify-communities-staging-role-split-inventory-preparation.ts|source/verify-communities-staging-role-split-inventory-preparation.ts|0444' ;;
+    14) printf '%s\n' 'payload/source/communities-staging-role-split-v3-durable-host.ts|source/communities-staging-role-split-v3-durable-host.ts|0444' ;;
+    15) printf '%s\n' 'payload/source/communities-staging-role-split-v3-durable-restore-coordinator.ts|source/communities-staging-role-split-v3-durable-restore-coordinator.ts|0444' ;;
+    16) printf '%s\n' 'payload/source/communities-staging-role-split-v3-executable-composition.ts|source/communities-staging-role-split-v3-executable-composition.ts|0444' ;;
+    17) printf '%s\n' 'payload/source/communities-staging-role-split-v3-contract.ts|source/communities-staging-role-split-v3-contract.ts|0444' ;;
+    18) printf '%s\n' 'payload/source/communities-staging-role-split-v3-envelope.ts|source/communities-staging-role-split-v3-envelope.ts|0444' ;;
+    19) printf '%s\n' 'payload/source/communities-staging-role-split-v3-restore-authorization.ts|source/communities-staging-role-split-v3-restore-authorization.ts|0444' ;;
+    20) printf '%s\n' 'payload/source/communities-staging-role-split-v3-durable-restore-authorization.ts|source/communities-staging-role-split-v3-durable-restore-authorization.ts|0444' ;;
+    21) printf '%s\n' 'payload/source/communities-staging-role-split-v3-durable-state-envelope.ts|source/communities-staging-role-split-v3-durable-state-envelope.ts|0444' ;;
+    22) printf '%s\n' 'payload/source/communities-staging-role-split-v3-execution-authorization.ts|source/communities-staging-role-split-v3-execution-authorization.ts|0444' ;;
+    23) printf '%s\n' 'payload/source/communities-staging-role-split-v3-attested-evidence.ts|source/communities-staging-role-split-v3-attested-evidence.ts|0444' ;;
     *) fail CONTROL_INVALID ;;
   esac
 }
@@ -179,7 +189,7 @@ walk_count() {
 
 verify_candidate() {
   assert_directory "$candidate" "$expected_uid" "$expected_gid" 700
-  [ "$(walk_count "$candidate")" = 18 ] || fail FILE_SET_INVALID
+  [ "$(walk_count "$candidate")" = 28 ] || fail FILE_SET_INVALID
   assert_directory "$candidate/payload" "$expected_uid" "$expected_gid" 700
   assert_directory "$candidate/payload/source" "$expected_uid" "$expected_gid" 700
   for fixed in installation-candidate.json installation-candidate.control installation-candidate.sha256
@@ -191,14 +201,14 @@ verify_candidate() {
   [ "$(sha_file "$candidate/installation-candidate.control")" = "$control_sha" ] ||
     fail CONTROL_DIGEST_MISMATCH
 
-  [ "$(/bin/grep -Fxc '  "schemaVersion": "communities-role-split-installation-candidate-v5",' "$candidate/installation-candidate.json" 2>/dev/null)" = 1 ] || fail MANIFEST_INVALID
+  [ "$(/bin/grep -Fxc '  "schemaVersion": "communities-role-split-installation-candidate-v6",' "$candidate/installation-candidate.json" 2>/dev/null)" = 1 ] || fail MANIFEST_INVALID
   [ "$(/bin/grep -Fxc '    "runtime": "POSIX_SH_GNU_COREUTILS",' "$candidate/installation-candidate.json" 2>/dev/null)" = 1 ] || fail MANIFEST_INVALID
   [ "$(/bin/grep -Fxc '    "entrypoint": "payload/installer.sh",' "$candidate/installation-candidate.json" 2>/dev/null)" = 1 ] || fail MANIFEST_INVALID
   [ "$(/bin/grep -Fxc "    \"controlSha256\": \"$control_sha\"," "$candidate/installation-candidate.json" 2>/dev/null)" = 1 ] || fail MANIFEST_INVALID
   [ "$(/bin/grep -Fxc '    "nodeRequired": false' "$candidate/installation-candidate.json" 2>/dev/null)" = 1 ] || fail MANIFEST_INVALID
 
   exec 3< "$candidate/installation-candidate.sha256" || fail DIGEST_INVALID
-  read_exact_line DIGEST_INVALID PHUB_COMMUNITIES_ROLE_SPLIT_INSTALLATION_CANDIDATE_DIGEST_V5
+  read_exact_line DIGEST_INVALID PHUB_COMMUNITIES_ROLE_SPLIT_INSTALLATION_CANDIDATE_DIGEST_V6
   read_exact_line DIGEST_INVALID "candidateCommitSha=$candidate_sha"
   read_exact_line DIGEST_INVALID "manifestSha256=$manifest_sha"
   read_exact_line DIGEST_INVALID "controlSha256=$control_sha"
@@ -210,16 +220,16 @@ verify_candidate() {
   exec 3<&-
 
   exec 3< "$candidate/installation-candidate.control" || fail CONTROL_INVALID
-  read_exact_line CONTROL_INVALID PHUB_COMMUNITIES_ROLE_SPLIT_HOST_INSTALL_CONTROL_V2
+  read_exact_line CONTROL_INVALID PHUB_COMMUNITIES_ROLE_SPLIT_HOST_INSTALL_CONTROL_V3
   read_exact_line CONTROL_INVALID "candidateCommitSha=$candidate_sha"
   read_exact_line CONTROL_INVALID "artifactSetSha256=$artifact_set_sha"
-  read_exact_line CONTROL_INVALID artifactCount=13
+  read_exact_line CONTROL_INVALID artifactCount=23
   read_exact_line CONTROL_INVALID installable=true
   read_exact_line CONTROL_INVALID authorizesInstallation=true
   read_exact_line CONTROL_INVALID authorizesCeremony=false
   read_exact_line CONTROL_INVALID authorizesDatabaseMutation=false
   index=1
-  while [ "$index" -le 13 ]
+  while [ "$index" -le 23 ]
   do
     IFS= read -r line <&3 || fail CONTROL_INVALID
     parse_artifact_line "$line" "$index"
@@ -265,7 +275,7 @@ receipt_bytes() {
 
 verify_installed() {
   assert_directory "$target" "$expected_uid" "$expected_gid" 755
-  [ "$(walk_count "$target")" = 15 ] || fail INSTALLED_FILE_SET_INVALID
+  [ "$(walk_count "$target")" = 25 ] || fail INSTALLED_FILE_SET_INVALID
   assert_directory "$target/source" "$expected_uid" "$expected_gid" 755
   exec 3< "$candidate/installation-candidate.control" || fail CONTROL_INVALID
   index=0
@@ -282,7 +292,7 @@ verify_installed() {
     esac
   done
   exec 3<&-
-  [ "$index" = 13 ] || fail CONTROL_INVALID
+  [ "$index" = 23 ] || fail CONTROL_INVALID
   receipt="$target/installation-complete.json"
   assert_file "$receipt" "$expected_uid" "$expected_gid" 444
   expected_receipt_sha=$(receipt_bytes | /usr/bin/sha256sum | /usr/bin/awk '{print $1}') ||
@@ -375,7 +385,7 @@ if [ "$action" = install ]; then
     esac
   done
   exec 3<&-
-  [ "$index" = 13 ] || fail CONTROL_INVALID
+  [ "$index" = 23 ] || fail CONTROL_INVALID
   receipt_bytes > "$incomplete/installation-complete.json" || fail RECEIPT_WRITE_FAILED
   /bin/chmod 444 -- "$incomplete/installation-complete.json" 2>/dev/null || fail RECEIPT_WRITE_FAILED
   /bin/sync -f "$incomplete/installation-complete.json" 2>/dev/null || fail SYNC_FAILED

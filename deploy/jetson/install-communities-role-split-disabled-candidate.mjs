@@ -21,7 +21,7 @@ import {
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const schemaVersion = 'communities-role-split-installation-candidate-v5';
+const schemaVersion = 'communities-role-split-installation-candidate-v6';
 const sha40 = /^[0-9a-f]{40}$/u;
 const sha256 = /^[0-9a-f]{64}$/u;
 const installPrefix = '/usr/local/libexec/phub/communities-role-split/candidates';
@@ -81,6 +81,32 @@ const expectedArtifacts = [
     targetRelativePath: 'source/verify-communities-staging-role-split-inventory-preparation.ts',
     installMode: '0444',
   },
+  ...[
+    'communities-staging-role-split-v3-durable-host.ts',
+    'communities-staging-role-split-v3-durable-restore-coordinator.ts',
+    'communities-staging-role-split-v3-executable-composition.ts',
+  ].map((name) => ({
+    sourcePath: `apps/migrator/src/${name}`,
+    sourceGitMode: '100644',
+    artifactPath: `payload/source/${name}`,
+    targetRelativePath: `source/${name}`,
+    installMode: '0444',
+  })),
+  ...[
+    'communities-staging-role-split-v3-contract.ts',
+    'communities-staging-role-split-v3-envelope.ts',
+    'communities-staging-role-split-v3-restore-authorization.ts',
+    'communities-staging-role-split-v3-durable-restore-authorization.ts',
+    'communities-staging-role-split-v3-durable-state-envelope.ts',
+    'communities-staging-role-split-v3-execution-authorization.ts',
+    'communities-staging-role-split-v3-attested-evidence.ts',
+  ].map((name) => ({
+    sourcePath: `packages/database/src/${name}`,
+    sourceGitMode: '100644',
+    artifactPath: `payload/source/${name}`,
+    targetRelativePath: `source/${name}`,
+    installMode: '0444',
+  })),
 ];
 const expectedExecutionBindingCodes = [
   'BACKUP_CUSTODY_HANDOFF',

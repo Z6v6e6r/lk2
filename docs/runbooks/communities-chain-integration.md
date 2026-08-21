@@ -300,14 +300,16 @@ repair or replace the marker.
 The exact installation surface can now be packaged locally with
 `npm run db:communities-role-split:installation-candidate`. The builder takes an independently
 supplied commit SHA, disables Git replacement objects, rejects replacement refs and emits a private
-canonical V5 manifest, independently pinned host control ledger and digest receipt. V5 is
+canonical V6 manifest, independently pinned V3 host control ledger and digest receipt. V6 is
 installable only as a disabled versioned code snapshot: a POSIX shell root installer, an
 always-denied command and read-only canonical host sources. It requires no Node runtime on the
 ARM64 host and
 creates no active link, forced command, key, connection, credential or workflow mutation.
-The V5 source set also includes the canonical inventory-preparation contract, verifier and CLI
+The V6 source set also includes the canonical inventory-preparation contract, verifier and CLI
 source snapshots. They remain unwired and non-runnable; their presence does not authorize evidence
-access, inventory collection or artifact publication.
+access, inventory collection or artifact publication. Ten further mode-0444 snapshots retain the
+independently reviewed V3 durable host, coordinator, composition and authorization/evidence
+contracts without adding a compiled entrypoint, runner wiring, key, credential or connection.
 
 Only `authorizes.installation` is true. The twelve binding codes remain required before execution,
 and every key, staging, database, ceremony, cleanup, role-split, migration, deploy and activation
