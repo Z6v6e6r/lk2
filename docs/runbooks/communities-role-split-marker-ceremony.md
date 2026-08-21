@@ -245,13 +245,15 @@ reviewed PostgreSQL advisory-session lease before clone creation or marker write
 
 ## V3 durable continuation contract-only prerequisite
 
-`communities-staging-role-split-v3-durable-continuation-envelope-v1` is a separate strict
+`communities-staging-role-split-v3-durable-continuation-envelope-v2` is a separate strict
 canonical JSON+LF codec for the post-restore `VERIFIED -> MARKER_PENDING -> MARKED -> EVIDENCED`
 sequence. It begins only from the exact digest of the existing durable `RESTORED` V1 envelope and
 each envelope points one way to the previous canonical digest. Every phase repeats the immutable
 request, receipt, restore-evidence and clone-OID bindings, carries the exact V3 state and one
 V3 marker payload/marker pair. `VERIFIED` and `MARKER_PENDING` carry no evidence; `MARKED` and
-`EVIDENCED` require the same exact V3 marker-evidence bytes.
+`EVIDENCED` require the same exact V3 marker-evidence bytes. Only `EVIDENCED` also carries the
+SHA-256 of the complete V3 attested-evidence bytes, so the durable terminal state cannot be
+reopened with marker-only evidence.
 
 This codec does not validate a catalog/ACL/RLS attestation, INPUT_C, an evidence-sink namespace or
 any authority. It does not create state, acquire a fence, write a marker, publish evidence, access
@@ -274,8 +276,10 @@ after this invocation has successfully persisted `VERIFIED -> MARKER_PENDING`; i
 before dispatch. A restarted `MARKER_PENDING` host therefore reconciles only the authoritative
 marker observation and cannot replay a marker write. Similarly, an evidence-publication capability
 is minted only after the same invocation observes the exact V3 attested evidence as absent and is
-consumed before publishing. Lost side-effect responses are reconciled from exact readback; absent,
-different or unknown results retain the state for manual reconciliation.
+consumed before publishing. The exact complete attested-evidence digest is persisted in the
+`EVIDENCED` envelope after exact readback and is rechecked before any evidence-sink observation on
+restart. Lost side-effect responses are reconciled from exact readback; absent, different or
+unknown results retain the state for manual reconciliation.
 
 The host deep-freezes authoritative structured inputs and captures collaborator methods during
 construction, validates the execution-authorization digest, component subjects and canonical host
@@ -481,7 +485,7 @@ fails with one fixed public error.
 ## Exact disabled installable candidate
 
 `scripts/prepare-communities-role-split-installation-candidate.ts` now builds and verifies a
-private, deterministic V6 candidate directory from an independently supplied exact Git commit. It
+private, deterministic V7 candidate directory from an independently supplied exact Git commit. It
 reads every artifact from Git objects rather than the mutable worktree, validates each expected Git
 mode, disables Git replacement objects, rejects any replacement ref and requires the raw local repository origin
 to be exactly `https://github.com/Z6v6e6r/lk2.git`, refuses an existing output, and accepts only a
@@ -501,8 +505,9 @@ true authorization. It contains:
 - three additional mode-0444 source snapshots for the canonical inventory-preparation contract,
   its verifier and its CLI. They are deliberately unwired and non-runnable: the candidate contains
   no Node runtime, compiled bundle, credential, preparation envelope or evidence payload.
-- ten additional mode-0444 source snapshots for the reviewed V3 durable host, restore coordinator,
-  executable composition, state/authorization envelopes and host-bound attested evidence. These
+- twelve additional mode-0444 source snapshots for the reviewed V3 durable host, continuation
+  host, restore coordinator, executable composition, state/continuation/authorization envelopes
+  and host-bound attested evidence. These
   are code-only review bytes: the candidate still has no compiled entrypoint, concrete restore
   executor, DDL-fence lease wiring or runtime loader.
 
@@ -511,12 +516,15 @@ ARM64 staging node; `/usr/bin/node` is not required. Its file-count validation u
 matching rather than AWK character classes because the staging host provides legacy `mawk 1.3.3`,
 which rejects otherwise valid `[[:space:]]` and `[[:digit:]]` expressions. The canonical control
 ledger is independently pinned and binds the fixed artifact paths, target-relative paths, modes,
-byte counts, SHA-256 values and false execution authorizations without parsing JSON on the host.
-The V6 installed readback requires exactly twenty-three controlled artifacts plus the source
-directory and immutable receipt (`25` entries total); both install and verify loops require an
-exact count of twenty-three control records. The fifth controlled artifact is the immutable shared
-DDL-fence source. The host-control version is V3 so a V5 allowlist cannot be accepted with freshly
-pinned V6 digests.
+byte counts, SHA-256 values and false execution authorizations. The shell verifier reconstructs
+the complete canonical JSON bytes from that fixed policy and the exact control records, then
+requires its SHA-256 to equal both the supplied pin and the candidate file digest. A freshly pinned
+authorization change, added field or V6 downgrade therefore fails before target creation.
+The V7 installed readback requires exactly twenty-five controlled artifacts plus the source
+directory and immutable receipt (`27` entries total); both install and verify loops require an
+exact count of twenty-five control records. The fifth controlled artifact is the immutable shared
+DDL-fence source. The host-control version is V4 so a V6 allowlist cannot be accepted with freshly
+pinned V7 digests.
 The installer accepts independently retained manifest, control and artifact-set SHA-256 values. It installs
 only a previously absent version directory below
 `/usr/local/libexec/phub/communities-role-split/candidates/<commit>`, refuses an existing target or

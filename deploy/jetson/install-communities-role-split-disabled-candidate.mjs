@@ -21,7 +21,7 @@ import {
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const schemaVersion = 'communities-role-split-installation-candidate-v6';
+const schemaVersion = 'communities-role-split-installation-candidate-v7';
 const sha40 = /^[0-9a-f]{40}$/u;
 const sha256 = /^[0-9a-f]{64}$/u;
 const installPrefix = '/usr/local/libexec/phub/communities-role-split/candidates';
@@ -83,6 +83,7 @@ const expectedArtifacts = [
   },
   ...[
     'communities-staging-role-split-v3-durable-host.ts',
+    'communities-staging-role-split-v3-durable-continuation-host.ts',
     'communities-staging-role-split-v3-durable-restore-coordinator.ts',
     'communities-staging-role-split-v3-executable-composition.ts',
   ].map((name) => ({
@@ -98,6 +99,7 @@ const expectedArtifacts = [
     'communities-staging-role-split-v3-restore-authorization.ts',
     'communities-staging-role-split-v3-durable-restore-authorization.ts',
     'communities-staging-role-split-v3-durable-state-envelope.ts',
+    'communities-staging-role-split-v3-durable-continuation-envelope.ts',
     'communities-staging-role-split-v3-execution-authorization.ts',
     'communities-staging-role-split-v3-attested-evidence.ts',
   ].map((name) => ({

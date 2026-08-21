@@ -1,5 +1,17 @@
 # Worklog
 
+## 2026-08-21 — Communities V7 durable continuation evidence
+
+- Upgraded the post-restore continuation envelope to V2 and persisted the exact full V3
+  attested-evidence SHA-256 only at `EVIDENCED`; restart readback rejects marker-only or replaced
+  evidence before consulting the evidence sink.
+- Added the durable continuation host and envelope to a new immutable V7/V4 disabled candidate.
+  The candidate remains unwired and grants no ceremony, database, role-split, migration, deploy or
+  activation authority.
+- Replaced selective JSON line checks in the POSIX installer with deterministic reconstruction of
+  the complete canonical manifest from the fixed allowlist and exact control ledger. Freshly
+  pinned authorization changes and schema downgrade are rejected before target creation.
+
 ## 2026-08-21 — Communities V6 disabled V3 source candidate
 
 - Bumped the private installation manifest, digest and host-control contracts to V6/V3 and added

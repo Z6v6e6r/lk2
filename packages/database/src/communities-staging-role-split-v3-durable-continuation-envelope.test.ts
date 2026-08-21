@@ -258,6 +258,7 @@ function envelope(
       payload: currentPayload,
       marker: currentMarker,
       markerEvidence: ['MARKED', 'EVIDENCED'].includes(phase) ? currentEvidence : null,
+      attestedEvidenceSha256: phase === 'EVIDENCED' ? sha('attested-evidence') : null,
     },
   };
 }
@@ -302,6 +303,7 @@ function withPayload(
       payload: nextPayload,
       marker: nextMarker,
       markerEvidence: ['MARKED', 'EVIDENCED'].includes(input.phase) ? nextEvidence : null,
+      attestedEvidenceSha256: input.phase === 'EVIDENCED' ? sha('next-attested-evidence') : null,
     },
   };
 }
@@ -330,21 +332,23 @@ describe('communitiesStagingRoleSplitV3DurableContinuationEnvelope', () => {
   it('is strict canonical JSON+LF with deterministic hashes for every phase', () => {
     const chain = legalChain();
     const expected = [
-      '8a91db1dd42fc7b3eb62d2ab2096313e0490139ec7442954cc67d2982d12ccda',
-      'b090fa59fbd9a5535fdb99f9ff875da85782c094cc994fdce4a6956eebfd50a2',
-      '87ca843a411f55ebd2de59715f44519eae7d14ffb8b4e8b22e4582d796fa9291',
-      '41e26d13e812cc5e76cec837656830dbe8c7439388499de72da19670156630a1',
+      '813909790893bd8f324ef7d4e1bef62a47bf218727b2b47aa875a1af0e3c992c',
+      '7e911eea4baeeae6d50991290fb917aa422cb1e447094bc2def972af07e28228',
+      'cad3a9542d685b03ac28929f6a8cb79bf79a7f6c379abe1ac27c54bf0bff277b',
+      '8ec2479d0f93591e85b3f455657514161b5a9431b40837ba5ed099424528d8d5',
     ];
-    for (const [index, value] of Object.values(chain).entries()) {
+    for (const value of Object.values(chain)) {
       const canonical = canonicalCommunitiesStagingRoleSplitV3DurableContinuationEnvelope(value);
       expect(canonical.endsWith('\n')).toBe(true);
       expect(parseCommunitiesStagingRoleSplitV3DurableContinuationEnvelope(canonical)).toEqual(
         value,
       );
-      expect(communitiesStagingRoleSplitV3DurableContinuationEnvelopeSha256(value)).toBe(
-        expected[index],
-      );
     }
+    expect(
+      Object.values(chain).map((value) =>
+        communitiesStagingRoleSplitV3DurableContinuationEnvelopeSha256(value),
+      ),
+    ).toEqual(expected);
   });
 
   it('accepts only the full one-way chain from the exact RESTORED envelope', () => {
@@ -554,6 +558,10 @@ describe('communitiesStagingRoleSplitV3DurableContinuationEnvelope', () => {
       missingPrevious,
       { ...verified, artifacts: { payload, marker, markerEvidence: null, extra: true } },
       { ...verified, requestSha256: 'invalid' },
+      {
+        ...verified,
+        schemaVersion: 'communities-staging-role-split-v3-durable-continuation-envelope-v1',
+      },
       { ...verified, cloneDatabaseOid: '0' },
       { ...verified, restoredEnvelopeSha256: 'invalid' },
       { ...verified, previousEnvelopeSha256: 'invalid' },
@@ -574,6 +582,13 @@ describe('communitiesStagingRoleSplitV3DurableContinuationEnvelope', () => {
             ...markerEvidence,
             schemaVersion: 'communities-role-split-clone-marker-evidence-v2',
           },
+        },
+      },
+      {
+        ...legalChain().evidenced,
+        artifacts: {
+          ...legalChain().evidenced.artifacts,
+          attestedEvidenceSha256: null,
         },
       },
     ]) {

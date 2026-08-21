@@ -23,7 +23,7 @@ import {
 import { failCommunitiesStagingRoleSplit } from './communities-staging-role-split.js';
 
 export const COMMUNITIES_STAGING_ROLE_SPLIT_V3_DURABLE_CONTINUATION_ENVELOPE_VERSION =
-  'communities-staging-role-split-v3-durable-continuation-envelope-v1';
+  'communities-staging-role-split-v3-durable-continuation-envelope-v2';
 
 export type CommunitiesStagingRoleSplitV3DurableContinuationPhase =
   'VERIFIED' | 'MARKER_PENDING' | 'MARKED' | 'EVIDENCED';
@@ -42,6 +42,7 @@ export interface CommunitiesStagingRoleSplitV3DurableContinuationEnvelope {
     readonly payload: CommunitiesStagingRoleSplitV3MarkerPayload;
     readonly marker: string;
     readonly markerEvidence: CommunitiesStagingRoleSplitV3MarkerEvidence | null;
+    readonly attestedEvidenceSha256: string | null;
   };
 }
 
@@ -60,7 +61,7 @@ const envelopeKeys = [
   'state',
   'artifacts',
 ] as const;
-const artifactKeys = ['payload', 'marker', 'markerEvidence'] as const;
+const artifactKeys = ['payload', 'marker', 'markerEvidence', 'attestedEvidenceSha256'] as const;
 
 function fail(code: string): never {
   return failCommunitiesStagingRoleSplit(`V3_DURABLE_CONTINUATION_ENVELOPE_${code}`);
@@ -103,7 +104,8 @@ function assertArtifacts(
     fail('ARTIFACTS_BINDING_INVALID');
   }
   if (['VERIFIED', 'MARKER_PENDING'].includes(phase)) {
-    if (artifacts.markerEvidence !== null) fail('ARTIFACTS_PHASE_INVALID');
+    if (artifacts.markerEvidence !== null || artifacts.attestedEvidenceSha256 !== null)
+      fail('ARTIFACTS_PHASE_INVALID');
     return;
   }
   if (artifacts.markerEvidence === null) fail('ARTIFACTS_PHASE_INVALID');
@@ -116,6 +118,12 @@ function assertArtifacts(
   } catch {
     fail('ARTIFACTS_BINDING_INVALID');
   }
+  if (phase === 'MARKED') {
+    if (artifacts.attestedEvidenceSha256 !== null) fail('ARTIFACTS_PHASE_INVALID');
+    return;
+  }
+  if (artifacts.attestedEvidenceSha256 === null || !sha256.test(artifacts.attestedEvidenceSha256))
+    fail('ARTIFACTS_PHASE_INVALID');
 }
 
 export function assertCommunitiesStagingRoleSplitV3DurableContinuationEnvelope(
@@ -283,4 +291,5 @@ export function assertCommunitiesStagingRoleSplitV3DurableContinuationChain(inpu
       )
   )
     fail('CHAIN_INVALID');
+  if (input.evidenced.artifacts.attestedEvidenceSha256 === null) fail('CHAIN_INVALID');
 }

@@ -16,6 +16,7 @@ import {
   createCommunitiesStagingRoleSplitV3MarkerEvidence,
   parseCommunitiesStagingRoleSplitV3DurableContinuationEnvelope,
   parseCommunitiesStagingRoleSplitV3DurableStateEnvelope,
+  communitiesStagingRoleSplitV3AttestedEvidenceSha256,
   communitiesStagingRoleSplitV3DurableContinuationEnvelopeSha256,
   communitiesStagingRoleSplitV3DurableStateEnvelopeSha256,
   communitiesStagingRoleSplitV3ExecutionAuthorizationSha256,
@@ -113,6 +114,7 @@ type Held = {
   markerObservationPreimageSha256: string | null;
   evidencePublishPreimageSha256: string | null;
   evidenceObservationPreimageSha256: string | null;
+  evidenceObservationSha256: string | null;
   releasing: boolean;
   fsReleased: boolean;
   ddlReleased: boolean;
@@ -262,6 +264,7 @@ export class CommunitiesStagingRoleSplitV3DurableContinuationHost implements Com
       payload: CommunitiesStagingRoleSplitV3MarkerPayload;
       marker: string;
       markerEvidence: CommunitiesStagingRoleSplitV3DurableContinuationEnvelope['artifacts']['markerEvidence'];
+      attestedEvidenceSha256: string | null;
     },
     previousEnvelopeSha256: string,
   ): CommunitiesStagingRoleSplitV3DurableContinuationEnvelope {
@@ -334,6 +337,7 @@ export class CommunitiesStagingRoleSplitV3DurableContinuationHost implements Com
       markerObservationPreimageSha256: null,
       evidencePublishPreimageSha256: null,
       evidenceObservationPreimageSha256: null,
+      evidenceObservationSha256: null,
       releasing: false,
       fsReleased: false,
       ddlReleased: false,
@@ -388,7 +392,12 @@ export class CommunitiesStagingRoleSplitV3DurableContinuationHost implements Com
     const nextEnvelope = this.continuation(
       'VERIFIED',
       next,
-      { payload: artifacts.payload, marker: artifacts.marker, markerEvidence: null },
+      {
+        payload: artifacts.payload,
+        marker: artifacts.marker,
+        markerEvidence: null,
+        attestedEvidenceSha256: null,
+      },
       communitiesStagingRoleSplitV3DurableStateEnvelopeSha256(this.config.restoredEnvelope),
     );
     const exact = canonicalCommunitiesStagingRoleSplitV3DurableContinuationEnvelope(nextEnvelope);
@@ -441,10 +450,13 @@ export class CommunitiesStagingRoleSplitV3DurableContinuationHost implements Com
           : null;
     if ((next.phase === 'MARKED' || next.phase === 'EVIDENCED') && markerEvidence === null)
       fail('STATE_AMBIGUOUS');
+    const attestedEvidenceSha256 =
+      next.phase === 'EVIDENCED' ? held.evidenceObservationSha256 : null;
+    if (next.phase === 'EVIDENCED' && attestedEvidenceSha256 === null) fail('STATE_AMBIGUOUS');
     const envelope = this.continuation(
       next.phase as CommunitiesStagingRoleSplitV3DurableContinuationEnvelope['phase'],
       next,
-      { ...read.envelope.artifacts, markerEvidence },
+      { ...read.envelope.artifacts, markerEvidence, attestedEvidenceSha256 },
       communitiesStagingRoleSplitV3DurableContinuationEnvelopeSha256(read.envelope),
     );
     const exact = canonicalCommunitiesStagingRoleSplitV3DurableContinuationEnvelope(envelope);
@@ -458,6 +470,7 @@ export class CommunitiesStagingRoleSplitV3DurableContinuationHost implements Com
     if (current.phase === 'MARKED' && next.phase === 'EVIDENCED') {
       if (held.evidenceObservationPreimageSha256 !== currentSha256) fail('STATE_AMBIGUOUS');
       held.evidenceObservationPreimageSha256 = null;
+      held.evidenceObservationSha256 = null;
     }
     try {
       await this.stateStore.writeCas(held.fs, read.bytes, envelope);
@@ -528,6 +541,18 @@ export class CommunitiesStagingRoleSplitV3DurableContinuationHost implements Com
     } catch {
       fail('BINDING_INVALID');
     }
+    const evidenceSha256 = communitiesStagingRoleSplitV3AttestedEvidenceSha256({
+      payload: current.envelope.artifacts.payload,
+      marker: current.envelope.artifacts.marker,
+      executionAuthorization: this.config.executionAuthorization,
+      hostAuthorization: this.config.hostAuthorization,
+      evidence,
+    });
+    if (
+      current.envelope.phase === 'EVIDENCED' &&
+      current.envelope.artifacts.attestedEvidenceSha256 !== evidenceSha256
+    )
+      fail('BINDING_INVALID');
     const result = await this.config.observeEvidence(evidence);
     await this.held(lease);
     const confirmed = await this.readContinuation(held);
@@ -538,6 +563,8 @@ export class CommunitiesStagingRoleSplitV3DurableContinuationHost implements Com
     held.evidencePublishPreimageSha256 =
       current.envelope.phase === 'MARKED' && result === 'absent' ? currentSha256 : null;
     held.evidenceObservationPreimageSha256 = result === 'exact' ? currentSha256 : null;
+    held.evidenceObservationSha256 =
+      current.envelope.phase === 'MARKED' && result === 'exact' ? evidenceSha256 : null;
     return result;
   }
   async verifyBindings(

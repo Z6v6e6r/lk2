@@ -1,11 +1,13 @@
-import { chmod, mkdtemp } from 'node:fs/promises';
+import { chmod, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
   advanceCommunitiesStagingRoleSplitV3State,
+  canonicalCommunitiesStagingRoleSplitV3DurableContinuationEnvelope,
   createCommunitiesStagingRoleSplitV3AttestedEvidence,
   createCommunitiesStagingRoleSplitV3MarkerEvidence,
+  communitiesStagingRoleSplitV3AttestedEvidenceSha256,
   communitiesStagingRoleSplitV3ExecutionAuthorizationSha256,
   communitiesStagingRoleSplitV3MarkerPayloadSha256,
   communitiesStagingRoleSplitV3Marker,
@@ -69,6 +71,7 @@ async function hostFixture(options: HostFixtureOptions = {}) {
   await store.release(seed);
   let marker = false;
   let evidence: CommunitiesStagingRoleSplitV3AttestedEvidence | null = null;
+  let evidenceObservations = 0;
   let markerWrites = 0;
   let writes = 0;
   const stateStore =
@@ -135,6 +138,7 @@ async function hostFixture(options: HostFixtureOptions = {}) {
       );
     },
     observeEvidence(candidate) {
+      evidenceObservations += 1;
       return (
         options.observeEvidence?.() ??
         Promise.resolve(
@@ -162,9 +166,11 @@ async function hostFixture(options: HostFixtureOptions = {}) {
     createHost: () => new CommunitiesStagingRoleSplitV3DurableContinuationHost(config),
     config,
     store,
+    directory,
     marker: () => marker,
     markerWrites: () => markerWrites,
     evidence: () => evidence,
+    evidenceObservations: () => evidenceObservations,
   };
 }
 
@@ -247,7 +253,23 @@ describe('V3 durable continuation host', () => {
     });
     expect(result.status).toBe('EVIDENCED');
     expect(prepared.marker()).toBe(true);
-    expect(prepared.evidence()).not.toBeNull();
+    const published = prepared.evidence();
+    expect(published).not.toBeNull();
+    if (published === null) throw new Error('attested evidence missing');
+    const lease = await prepared.store.acquire();
+    const bytes = await prepared.store.read(lease);
+    if (bytes === null) throw new Error('durable continuation missing');
+    const envelope = parseCommunitiesStagingRoleSplitV3DurableContinuationEnvelope(bytes);
+    expect(envelope.artifacts.attestedEvidenceSha256).toBe(
+      communitiesStagingRoleSplitV3AttestedEvidenceSha256({
+        payload: envelope.artifacts.payload,
+        marker: envelope.artifacts.marker,
+        executionAuthorization: fixture.executionAuthorization,
+        hostAuthorization: fixture.hostAuthorization,
+        evidence: published,
+      }),
+    );
+    await prepared.store.release(lease);
   });
 
   it('does not recreate a marker capability after a MARKER_PENDING restart', async () => {
@@ -288,6 +310,57 @@ describe('V3 durable continuation host', () => {
     });
     expect(result.status).toBe('EVIDENCED');
     expect(prepared.markerWrites()).toBe(1);
+  });
+
+  it('rejects a durable EVIDENCED state whose rich evidence digest was replaced', async () => {
+    const prepared = await hostFixture();
+    const first = await runCommunitiesStagingRoleSplitV3ExecutableComposition({
+      mode: 'CONTINUE',
+      request: fixture.request,
+      cloneCreationAuthorization: fixture.cloneCreationAuthorization,
+      hostAuthorization: fixture.hostAuthorization,
+      durableRestoreAuthorization: fixture.durableRestoreAuthorization,
+      authorization: fixture.executionAuthorization,
+      expectedAuthorizationSha256: communitiesStagingRoleSplitV3ExecutionAuthorizationSha256(
+        fixture.executionAuthorization,
+      ),
+      host: prepared.host,
+    });
+    expect(first.status).toBe('EVIDENCED');
+    const lease = await prepared.store.acquire();
+    const bytes = await prepared.store.read(lease);
+    await prepared.store.release(lease);
+    if (bytes === null) throw new Error('durable continuation missing');
+    const envelope = parseCommunitiesStagingRoleSplitV3DurableContinuationEnvelope(bytes);
+    const observationsBeforeRestart = prepared.evidenceObservations();
+    const forged = {
+      ...envelope,
+      artifacts: {
+        ...envelope.artifacts,
+        attestedEvidenceSha256: fixtureSha('forged-attested-evidence'),
+      },
+    };
+    await writeFile(
+      join(prepared.directory, 'v3-durable-state.json'),
+      canonicalCommunitiesStagingRoleSplitV3DurableContinuationEnvelope(forged),
+      'utf8',
+    );
+
+    await expect(
+      runCommunitiesStagingRoleSplitV3ExecutableComposition({
+        mode: 'CONTINUE',
+        request: fixture.request,
+        cloneCreationAuthorization: fixture.cloneCreationAuthorization,
+        hostAuthorization: fixture.hostAuthorization,
+        durableRestoreAuthorization: fixture.durableRestoreAuthorization,
+        authorization: fixture.executionAuthorization,
+        expectedAuthorizationSha256: communitiesStagingRoleSplitV3ExecutionAuthorizationSha256(
+          fixture.executionAuthorization,
+        ),
+        host: prepared.createHost(),
+      }),
+    ).rejects.toMatchObject({ code: 'HOST_OPERATION_FAILED' });
+    expect(prepared.evidenceObservations()).toBe(observationsBeforeRestart);
   });
 
   it('rejects a MARKED CAS until the exact marker was observed', async () => {
@@ -497,6 +570,30 @@ describe('V3 durable continuation host', () => {
     await prepared.host.releaseLease(prepared.lease);
   });
 
+  it('accepts response loss only after the exact attested-evidence digest is durable', async () => {
+    const prepared = await hostFixture({ throwAfterWriteAt: 4 });
+    const result = await runCommunitiesStagingRoleSplitV3ExecutableComposition({
+      mode: 'CONTINUE',
+      request: fixture.request,
+      cloneCreationAuthorization: fixture.cloneCreationAuthorization,
+      hostAuthorization: fixture.hostAuthorization,
+      durableRestoreAuthorization: fixture.durableRestoreAuthorization,
+      authorization: fixture.executionAuthorization,
+      expectedAuthorizationSha256: communitiesStagingRoleSplitV3ExecutionAuthorizationSha256(
+        fixture.executionAuthorization,
+      ),
+      host: prepared.host,
+    });
+    expect(result.status).toBe('EVIDENCED');
+    const lease = await prepared.store.acquire();
+    const bytes = await prepared.store.read(lease);
+    if (bytes === null) throw new Error('durable continuation missing');
+    const envelope = parseCommunitiesStagingRoleSplitV3DurableContinuationEnvelope(bytes);
+    expect(envelope.phase).toBe('EVIDENCED');
+    expect(envelope.artifacts.attestedEvidenceSha256).toMatch(/^[a-f0-9]{64}$/u);
+    await prepared.store.release(lease);
+  });
+
   it('binds exact marker OID and bytes and rejects a mismatched evidence payload', async () => {
     const pending = await pendingMarkerFixture();
     await expect(
@@ -550,7 +647,22 @@ describe('V3 durable continuation host', () => {
       restoreExecutionEvidenceSha256: current.state.restoreExecutionEvidenceSha256!,
       markerPayloadSha256: current.state.markerPayloadSha256!,
     });
-    const next = { ...current, phase: 'EVIDENCED' as const, state: evidenced };
+    const evidence = attestedEvidence(await prepared.config.verifyBindings());
+    const next = {
+      ...current,
+      phase: 'EVIDENCED' as const,
+      state: evidenced,
+      artifacts: {
+        ...current.artifacts,
+        attestedEvidenceSha256: communitiesStagingRoleSplitV3AttestedEvidenceSha256({
+          payload: current.artifacts.payload,
+          marker: current.artifacts.marker,
+          executionAuthorization: fixture.executionAuthorization,
+          hostAuthorization: fixture.hostAuthorization,
+          evidence,
+        }),
+      },
+    };
     await expect(
       prepared.store.writeCas(lease, bytes, {
         ...next,
