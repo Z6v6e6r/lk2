@@ -1,4 +1,4 @@
-import { chmod, mkdtemp, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -72,6 +72,7 @@ async function hostFixture(options: HostFixtureOptions = {}) {
   let marker = false;
   let evidence: CommunitiesStagingRoleSplitV3AttestedEvidence | null = null;
   let evidenceObservations = 0;
+  let evidencePublishes = 0;
   let markerWrites = 0;
   let writes = 0;
   const stateStore =
@@ -156,6 +157,7 @@ async function hostFixture(options: HostFixtureOptions = {}) {
       return options.writeMarker?.() ?? Promise.resolve();
     },
     publishEvidence(candidate) {
+      evidencePublishes += 1;
       evidence = candidate;
       return options.publishEvidence?.() ?? Promise.resolve();
     },
@@ -171,6 +173,7 @@ async function hostFixture(options: HostFixtureOptions = {}) {
     markerWrites: () => markerWrites,
     evidence: () => evidence,
     evidenceObservations: () => evidenceObservations,
+    evidencePublishes: () => evidencePublishes,
   };
 }
 
@@ -362,6 +365,107 @@ describe('V3 durable continuation host', () => {
     ).rejects.toMatchObject({ code: 'HOST_OPERATION_FAILED' });
     expect(prepared.evidenceObservations()).toBe(observationsBeforeRestart);
   });
+
+  it.each([
+    ['RESTORED', 'v3-durable-journal-02-restored-'],
+    ['VERIFIED', 'v3-durable-journal-03-verified-'],
+  ] as const)(
+    'rejects a canonical %s head rollback after EVIDENCED without repeating marker or evidence writes',
+    async (_phase, journalPrefix) => {
+      const prepared = await hostFixture();
+      const result = await runCommunitiesStagingRoleSplitV3ExecutableComposition({
+        mode: 'CONTINUE',
+        request: fixture.request,
+        cloneCreationAuthorization: fixture.cloneCreationAuthorization,
+        hostAuthorization: fixture.hostAuthorization,
+        durableRestoreAuthorization: fixture.durableRestoreAuthorization,
+        authorization: fixture.executionAuthorization,
+        expectedAuthorizationSha256: communitiesStagingRoleSplitV3ExecutionAuthorizationSha256(
+          fixture.executionAuthorization,
+        ),
+        host: prepared.host,
+      });
+      expect(result.status).toBe('EVIDENCED');
+      const journalName = (await readdir(prepared.directory)).find((name) =>
+        name.startsWith(journalPrefix),
+      );
+      if (journalName === undefined) throw new Error('rollback fixture journal entry missing');
+      const oldCanonicalHead = await readFile(join(prepared.directory, journalName), 'utf8');
+      const markerWritesBeforeRestart = prepared.markerWrites();
+      const evidencePublishesBeforeRestart = prepared.evidencePublishes();
+      const evidenceObservationsBeforeRestart = prepared.evidenceObservations();
+      await writeFile(join(prepared.directory, 'v3-durable-state.json'), oldCanonicalHead, 'utf8');
+
+      await expect(
+        runCommunitiesStagingRoleSplitV3ExecutableComposition({
+          mode: 'CONTINUE',
+          request: fixture.request,
+          cloneCreationAuthorization: fixture.cloneCreationAuthorization,
+          hostAuthorization: fixture.hostAuthorization,
+          durableRestoreAuthorization: fixture.durableRestoreAuthorization,
+          authorization: fixture.executionAuthorization,
+          expectedAuthorizationSha256: communitiesStagingRoleSplitV3ExecutionAuthorizationSha256(
+            fixture.executionAuthorization,
+          ),
+          host: prepared.createHost(),
+        }),
+      ).rejects.toMatchObject({ code: 'HOST_OPERATION_FAILED' });
+      expect(prepared.markerWrites()).toBe(markerWritesBeforeRestart);
+      expect(prepared.evidencePublishes()).toBe(evidencePublishesBeforeRestart);
+      expect(prepared.evidenceObservations()).toBe(evidenceObservationsBeforeRestart);
+    },
+  );
+
+  it.each([
+    ['RESTORED', 2, 'v3-durable-journal-02-restored-'],
+    ['VERIFIED', 3, 'v3-durable-journal-03-verified-'],
+  ] as const)(
+    'reconciles an exact external marker/evidence after a full %s journal rollback without repeated writes',
+    async (_phase, retainedIndex, journalPrefix) => {
+      const prepared = await hostFixture();
+      const first = await runCommunitiesStagingRoleSplitV3ExecutableComposition({
+        mode: 'CONTINUE',
+        request: fixture.request,
+        cloneCreationAuthorization: fixture.cloneCreationAuthorization,
+        hostAuthorization: fixture.hostAuthorization,
+        durableRestoreAuthorization: fixture.durableRestoreAuthorization,
+        authorization: fixture.executionAuthorization,
+        expectedAuthorizationSha256: communitiesStagingRoleSplitV3ExecutionAuthorizationSha256(
+          fixture.executionAuthorization,
+        ),
+        host: prepared.host,
+      });
+      expect(first.status).toBe('EVIDENCED');
+      const journalNames = await readdir(prepared.directory);
+      const retainedName = journalNames.find((name) => name.startsWith(journalPrefix));
+      if (retainedName === undefined) throw new Error('rollback fixture journal entry missing');
+      const retainedHead = await readFile(join(prepared.directory, retainedName), 'utf8');
+      for (const name of journalNames) {
+        const match = /^v3-durable-journal-(\d{2})-/u.exec(name);
+        if (match !== null && Number(match[1]) > retainedIndex)
+          await unlink(join(prepared.directory, name));
+      }
+      await writeFile(join(prepared.directory, 'v3-durable-state.json'), retainedHead, 'utf8');
+      const markerWritesBeforeRestart = prepared.markerWrites();
+      const evidencePublishesBeforeRestart = prepared.evidencePublishes();
+
+      const resumed = await runCommunitiesStagingRoleSplitV3ExecutableComposition({
+        mode: 'CONTINUE',
+        request: fixture.request,
+        cloneCreationAuthorization: fixture.cloneCreationAuthorization,
+        hostAuthorization: fixture.hostAuthorization,
+        durableRestoreAuthorization: fixture.durableRestoreAuthorization,
+        authorization: fixture.executionAuthorization,
+        expectedAuthorizationSha256: communitiesStagingRoleSplitV3ExecutionAuthorizationSha256(
+          fixture.executionAuthorization,
+        ),
+        host: prepared.createHost(),
+      });
+      expect(resumed.status).toBe('EVIDENCED');
+      expect(prepared.markerWrites()).toBe(markerWritesBeforeRestart);
+      expect(prepared.evidencePublishes()).toBe(evidencePublishesBeforeRestart);
+    },
+  );
 
   it('rejects a MARKED CAS until the exact marker was observed', async () => {
     const prepared = await hostFixture();

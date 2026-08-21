@@ -313,6 +313,13 @@ contracts, plus the durable continuation host and envelope, without adding a com
 runner wiring, key, credential or connection. The POSIX installer reconstructs the complete
 canonical manifest from its fixed allowlist and control records before accepting the manifest
 digest; freshly pinned policy changes and schema downgrades remain rejected.
+The unwired durable store now records every forward phase in an append-only canonical journal and
+accepts the mutable head only when it equals the latest uninterrupted journal entry. A journal
+entry is published from fsynced temporary bytes by atomic rename; the unique crash state where the
+journal is exactly one phase ahead atomically promotes the head under the held lease/fence. Before a
+`VERIFIED -> MARKER_PENDING` transition can recreate an in-memory dispatch edge, the continuation
+host also reconciles the exact external marker; a previously completed marker therefore cannot be
+written again after a restored older snapshot.
 
 Only `authorizes.installation` is true. The twelve binding codes remain required before execution,
 and every key, staging, database, ceremony, cleanup, role-split, migration, deploy and activation

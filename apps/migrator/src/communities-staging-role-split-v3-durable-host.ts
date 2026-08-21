@@ -8,7 +8,7 @@
  * command entrypoint, installer or live wiring.
  */
 import { constants } from 'node:fs';
-import { lstat, open, rename, unlink } from 'node:fs/promises';
+import { lstat, open, readdir, rename, unlink } from 'node:fs/promises';
 import type { FileHandle } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
@@ -48,8 +48,20 @@ const MODE_0600 = 0o600;
 const MAX_STATE_BYTES = 128 * 1024;
 const STATE_BASENAME = 'v3-durable-state.json';
 const LEASE_BASENAME = 'ceremony.lock';
+const JOURNAL_PREFIX = 'v3-durable-journal';
 const V2_ARTIFACT_BASENAMES = ['ceremony-state.json', 'marker-evidence.json'];
 const sha256Pattern = /^[a-f0-9]{64}$/u;
+const durablePhases = [
+  'OWNED',
+  'RESTORE_PENDING',
+  'RESTORED',
+  'VERIFIED',
+  'MARKER_PENDING',
+  'MARKED',
+  'EVIDENCED',
+] as const;
+const journalNamePattern =
+  /^v3-durable-journal-(\d{2})-(owned|restore_pending|restored|verified|marker_pending|marked|evidenced)-([a-f0-9]{64})\.json$/u;
 
 export class CommunitiesStagingRoleSplitV3DurableHostError extends Error {
   constructor(
@@ -66,6 +78,7 @@ export class CommunitiesStagingRoleSplitV3DurableHostError extends Error {
       | 'LEASE_RELEASE_FAILED'
       | 'STATE_FILE_UNSAFE'
       | 'STATE_CORRUPT'
+      | 'STATE_ROLLBACK_DETECTED'
       | 'STATE_CAS_MISMATCH'
       | 'STATE_WRITE_FAILED'
       | 'ARCHIVE_CUSTODY_INVALID'
@@ -104,11 +117,13 @@ function regular0600(stat: {
   isSymbolicLink(): boolean;
   uid: number;
   mode: number;
+  nlink: number;
 }): boolean {
   return (
     stat.isFile() &&
     !stat.isSymbolicLink() &&
     stat.uid === currentUid() &&
+    stat.nlink === 1 &&
     (stat.mode & 0o777) === MODE_0600
   );
 }
@@ -122,7 +137,7 @@ export type CommunitiesStagingRoleSplitV3DurableStoredEnvelope =
   | CommunitiesStagingRoleSplitV3DurableStateEnvelope
   | CommunitiesStagingRoleSplitV3DurableContinuationEnvelope;
 
-/** Exact-byte, single-directory state store; V2 artifacts and lock namespace are refused. */
+/** Exact-byte state plus exclusive phase journal; V2 artifacts and lock namespace are refused. */
 export class CommunitiesStagingRoleSplitV3DurableStateStore {
   private readonly statePath: string;
   private readonly leasePath: string;
@@ -217,6 +232,190 @@ export class CommunitiesStagingRoleSplitV3DurableStateStore {
       fail('STATE_CORRUPT');
     }
   }
+  private canonical(envelope: CommunitiesStagingRoleSplitV3DurableStoredEnvelope): string {
+    return envelope.schemaVersion ===
+      COMMUNITIES_STAGING_ROLE_SPLIT_V3_DURABLE_CONTINUATION_ENVELOPE_VERSION
+      ? canonicalCommunitiesStagingRoleSplitV3DurableContinuationEnvelope(envelope)
+      : canonicalCommunitiesStagingRoleSplitV3DurableStateEnvelope(envelope);
+  }
+  private digest(envelope: CommunitiesStagingRoleSplitV3DurableStoredEnvelope): string {
+    return envelope.schemaVersion ===
+      COMMUNITIES_STAGING_ROLE_SPLIT_V3_DURABLE_CONTINUATION_ENVELOPE_VERSION
+      ? communitiesStagingRoleSplitV3DurableContinuationEnvelopeSha256(envelope)
+      : communitiesStagingRoleSplitV3DurableStateEnvelopeSha256(envelope);
+  }
+  private transitionAllowed(
+    currentEnvelope: CommunitiesStagingRoleSplitV3DurableStoredEnvelope | null,
+    next: CommunitiesStagingRoleSplitV3DurableStoredEnvelope,
+  ): boolean {
+    if (
+      currentEnvelope !== null &&
+      (currentEnvelope.requestSha256 !== next.requestSha256 ||
+        currentEnvelope.creationReceiptSha256 !== next.creationReceiptSha256 ||
+        currentEnvelope.restoreExecutionEvidenceSha256 !== next.restoreExecutionEvidenceSha256 ||
+        currentEnvelope.cloneDatabaseOid !== next.cloneDatabaseOid)
+    )
+      return false;
+    const currentPhase = currentEnvelope?.phase ?? null;
+    const currentIsContinuation =
+      currentEnvelope?.schemaVersion ===
+      COMMUNITIES_STAGING_ROLE_SPLIT_V3_DURABLE_CONTINUATION_ENVELOPE_VERSION;
+    const nextIsContinuation =
+      next.schemaVersion ===
+      COMMUNITIES_STAGING_ROLE_SPLIT_V3_DURABLE_CONTINUATION_ENVELOPE_VERSION;
+    const continuationBound =
+      currentPhase === 'RESTORED'
+        ? currentEnvelope !== null &&
+          !currentIsContinuation &&
+          nextIsContinuation &&
+          next.restoredEnvelopeSha256 ===
+            communitiesStagingRoleSplitV3DurableStateEnvelopeSha256(currentEnvelope) &&
+          next.previousEnvelopeSha256 ===
+            communitiesStagingRoleSplitV3DurableStateEnvelopeSha256(currentEnvelope)
+        : currentIsContinuation &&
+          nextIsContinuation &&
+          next.restoredEnvelopeSha256 === currentEnvelope.restoredEnvelopeSha256 &&
+          next.previousEnvelopeSha256 === this.digest(currentEnvelope) &&
+          isDeepStrictEqual(next.artifacts.payload, currentEnvelope.artifacts.payload) &&
+          next.artifacts.marker === currentEnvelope.artifacts.marker;
+    return (
+      (currentPhase === null && next.phase === 'OWNED') ||
+      (currentPhase === 'OWNED' && next.phase === 'RESTORE_PENDING') ||
+      (currentPhase === 'RESTORE_PENDING' && next.phase === 'RESTORED') ||
+      (continuationBound &&
+        ((currentPhase === 'RESTORED' && next.phase === 'VERIFIED') ||
+          (currentPhase === 'VERIFIED' && next.phase === 'MARKER_PENDING') ||
+          (currentPhase === 'MARKER_PENDING' && next.phase === 'MARKED') ||
+          (currentPhase === 'MARKED' && next.phase === 'EVIDENCED')))
+    );
+  }
+  private journalName(envelope: CommunitiesStagingRoleSplitV3DurableStoredEnvelope): string {
+    const index = durablePhases.indexOf(envelope.phase);
+    if (index < 0) fail('STATE_CORRUPT');
+    return `${JOURNAL_PREFIX}-${String(index).padStart(2, '0')}-${envelope.phase.toLowerCase()}-${this.digest(envelope)}.json`;
+  }
+  private async readJournal(): Promise<
+    readonly {
+      readonly bytes: string;
+      readonly envelope: CommunitiesStagingRoleSplitV3DurableStoredEnvelope;
+    }[]
+  > {
+    let names: string[];
+    try {
+      names = (await readdir(this.stateDirectory)).filter((name) =>
+        name.startsWith(`${JOURNAL_PREFIX}-`),
+      );
+    } catch {
+      fail('STATE_DIRECTORY_UNSAFE');
+    }
+    if (names.length > durablePhases.length) fail('STATE_ROLLBACK_DETECTED');
+    const byIndex = new Map<number, string>();
+    for (const name of names) {
+      const match = journalNamePattern.exec(name);
+      if (match === null) fail('STATE_ROLLBACK_DETECTED');
+      const index = Number(match[1]);
+      const phase = match[2]?.toUpperCase();
+      if (index >= durablePhases.length || durablePhases[index] !== phase || byIndex.has(index))
+        fail('STATE_ROLLBACK_DETECTED');
+      byIndex.set(index, name);
+    }
+    const journal: Array<{
+      readonly bytes: string;
+      readonly envelope: CommunitiesStagingRoleSplitV3DurableStoredEnvelope;
+    }> = [];
+    for (let index = 0; index < byIndex.size; index += 1) {
+      const name = byIndex.get(index);
+      if (name === undefined) fail('STATE_ROLLBACK_DETECTED');
+      const bytes = await this.readExact(join(this.stateDirectory, name));
+      if (bytes === null) fail('STATE_ROLLBACK_DETECTED');
+      const envelope = this.parse(bytes);
+      if (
+        envelope.phase !== durablePhases[index] ||
+        name !== this.journalName(envelope) ||
+        !this.transitionAllowed(journal.at(-1)?.envelope ?? null, envelope)
+      )
+        fail('STATE_ROLLBACK_DETECTED');
+      journal.push({ bytes, envelope });
+    }
+    return journal;
+  }
+  private async readAlignedState(): Promise<string | null> {
+    const state = await this.readExact(this.statePath);
+    const journal = await this.readJournal();
+    if (state === null && journal.length === 0) return null;
+    if (journal.length === 0) fail('STATE_ROLLBACK_DETECTED');
+    const latest = journal.at(-1)?.bytes;
+    if (latest === undefined) fail('STATE_ROLLBACK_DETECTED');
+    if (state === latest) return state;
+    const penultimate = journal.length === 1 ? null : journal.at(-2)?.bytes;
+    if (state !== penultimate) fail('STATE_ROLLBACK_DETECTED');
+    await this.publishHead(state, latest);
+    return latest;
+  }
+  private async publishHead(expected: string | null, canonical: string): Promise<void> {
+    const temporary = join(
+      this.stateDirectory,
+      `.${STATE_BASENAME}.${randomBytes(16).toString('hex')}.tmp`,
+    );
+    try {
+      const handle = await open(
+        temporary,
+        constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+        MODE_0600,
+      );
+      try {
+        await handle.writeFile(canonical, 'utf8');
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
+      if ((await this.readExact(this.statePath)) !== expected) fail('STATE_CAS_MISMATCH');
+      await rename(temporary, this.statePath);
+      await this.fsyncDirectory();
+      if ((await this.readExact(this.statePath)) !== canonical) fail('STATE_WRITE_FAILED');
+    } catch (error) {
+      await unlink(temporary).catch(() => undefined);
+      if (error instanceof CommunitiesStagingRoleSplitV3DurableHostError) throw error;
+      fail('STATE_WRITE_FAILED');
+    }
+  }
+  private async appendJournal(
+    envelope: CommunitiesStagingRoleSplitV3DurableStoredEnvelope,
+    canonical: string,
+  ): Promise<void> {
+    const journalPath = join(this.stateDirectory, this.journalName(envelope));
+    const temporary = join(
+      this.stateDirectory,
+      `.${this.journalName(envelope)}.${randomBytes(16).toString('hex')}.tmp`,
+    );
+    try {
+      const handle = await open(
+        temporary,
+        constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+        MODE_0600,
+      );
+      try {
+        await handle.writeFile(canonical, 'utf8');
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
+      try {
+        await lstat(journalPath);
+        fail('STATE_ROLLBACK_DETECTED');
+      } catch (error) {
+        if (error instanceof CommunitiesStagingRoleSplitV3DurableHostError) throw error;
+        if ((error as { code?: string }).code !== 'ENOENT') fail('STATE_FILE_UNSAFE');
+      }
+      await rename(temporary, journalPath);
+      await this.fsyncDirectory();
+      if ((await this.readExact(journalPath)) !== canonical) fail('STATE_WRITE_FAILED');
+    } catch (error) {
+      await unlink(temporary).catch(() => undefined);
+      if (error instanceof CommunitiesStagingRoleSplitV3DurableHostError) throw error;
+      fail('STATE_WRITE_FAILED');
+    }
+  }
   private async assertLease(lease: CommunitiesStagingRoleSplitV3DurableStateLease): Promise<void> {
     if (
       lease.requestSha256 !== this.requestSha256 ||
@@ -270,7 +469,7 @@ export class CommunitiesStagingRoleSplitV3DurableStateStore {
   }
   async read(lease: CommunitiesStagingRoleSplitV3DurableStateLease): Promise<string | null> {
     await this.assertLease(lease);
-    const content = await this.readExact(this.statePath);
+    const content = await this.readAlignedState();
     if (content !== null) this.parse(content);
     return content;
   }
@@ -280,86 +479,21 @@ export class CommunitiesStagingRoleSplitV3DurableStateStore {
     next: CommunitiesStagingRoleSplitV3DurableStoredEnvelope,
   ): Promise<string> {
     await this.assertLease(lease);
-    const canonical =
-      next.schemaVersion === COMMUNITIES_STAGING_ROLE_SPLIT_V3_DURABLE_CONTINUATION_ENVELOPE_VERSION
-        ? canonicalCommunitiesStagingRoleSplitV3DurableContinuationEnvelope(next)
-        : canonicalCommunitiesStagingRoleSplitV3DurableStateEnvelope(next);
+    const canonical = this.canonical(next);
     if (
       next.requestSha256 !== this.requestSha256 ||
       next.creationReceiptSha256 !== this.creationReceiptSha256
     )
       fail('STATE_CAS_MISMATCH');
     if (Buffer.byteLength(canonical, 'utf8') > MAX_STATE_BYTES) fail('STATE_WRITE_FAILED');
-    const current = await this.readExact(this.statePath);
+    const current = await this.readAlignedState();
     if (current !== expected) fail('STATE_CAS_MISMATCH');
     const currentEnvelope = current === null ? null : this.parse(current);
-    if (
-      currentEnvelope !== null &&
-      (currentEnvelope.requestSha256 !== next.requestSha256 ||
-        currentEnvelope.creationReceiptSha256 !== next.creationReceiptSha256 ||
-        currentEnvelope.restoreExecutionEvidenceSha256 !== next.restoreExecutionEvidenceSha256 ||
-        currentEnvelope.cloneDatabaseOid !== next.cloneDatabaseOid)
-    )
-      fail('STATE_CAS_MISMATCH');
-    const currentPhase = currentEnvelope?.phase ?? null;
-    const currentIsContinuation =
-      currentEnvelope?.schemaVersion ===
-      COMMUNITIES_STAGING_ROLE_SPLIT_V3_DURABLE_CONTINUATION_ENVELOPE_VERSION;
-    const nextIsContinuation =
-      next.schemaVersion ===
-      COMMUNITIES_STAGING_ROLE_SPLIT_V3_DURABLE_CONTINUATION_ENVELOPE_VERSION;
-    const continuationBound =
-      currentPhase === 'RESTORED'
-        ? currentEnvelope !== null &&
-          !currentIsContinuation &&
-          nextIsContinuation &&
-          next.restoredEnvelopeSha256 ===
-            communitiesStagingRoleSplitV3DurableStateEnvelopeSha256(currentEnvelope) &&
-          next.previousEnvelopeSha256 ===
-            communitiesStagingRoleSplitV3DurableStateEnvelopeSha256(currentEnvelope)
-        : currentIsContinuation &&
-          nextIsContinuation &&
-          next.restoredEnvelopeSha256 === currentEnvelope.restoredEnvelopeSha256 &&
-          next.previousEnvelopeSha256 ===
-            communitiesStagingRoleSplitV3DurableContinuationEnvelopeSha256(currentEnvelope) &&
-          isDeepStrictEqual(next.artifacts.payload, currentEnvelope.artifacts.payload) &&
-          next.artifacts.marker === currentEnvelope.artifacts.marker;
-    const allowed =
-      (currentPhase === null && next.phase === 'OWNED') ||
-      (currentPhase === 'OWNED' && next.phase === 'RESTORE_PENDING') ||
-      (currentPhase === 'RESTORE_PENDING' && next.phase === 'RESTORED') ||
-      (continuationBound &&
-        ((currentPhase === 'RESTORED' && next.phase === 'VERIFIED') ||
-          (currentPhase === 'VERIFIED' && next.phase === 'MARKER_PENDING') ||
-          (currentPhase === 'MARKER_PENDING' && next.phase === 'MARKED') ||
-          (currentPhase === 'MARKED' && next.phase === 'EVIDENCED')));
-    if (!allowed) fail('STATE_CAS_MISMATCH');
-    const temporary = join(
-      this.stateDirectory,
-      `.${STATE_BASENAME}.${randomBytes(16).toString('hex')}.tmp`,
-    );
-    try {
-      const handle = await open(
-        temporary,
-        constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
-        MODE_0600,
-      );
-      try {
-        await handle.writeFile(canonical, 'utf8');
-        await handle.sync();
-      } finally {
-        await handle.close();
-      }
-      if ((await this.readExact(this.statePath)) !== expected) fail('STATE_CAS_MISMATCH');
-      await rename(temporary, this.statePath);
-      await this.fsyncDirectory();
-      if ((await this.readExact(this.statePath)) !== canonical) fail('STATE_WRITE_FAILED');
-      return canonical;
-    } catch (error) {
-      await unlink(temporary).catch(() => undefined);
-      if (error instanceof CommunitiesStagingRoleSplitV3DurableHostError) throw error;
-      fail('STATE_WRITE_FAILED');
-    }
+    if (!this.transitionAllowed(currentEnvelope, next)) fail('STATE_CAS_MISMATCH');
+    await this.appendJournal(next, canonical);
+    await this.publishHead(expected, canonical);
+    if ((await this.readAlignedState()) !== canonical) fail('STATE_WRITE_FAILED');
+    return canonical;
   }
 }
 

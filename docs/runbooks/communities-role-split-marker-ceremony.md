@@ -271,10 +271,12 @@ restore. It accepts only the exact persisted `RESTORED` durable envelope, acquir
 fence before the private filesystem lease, and releases filesystem then DDL on every exit. Every
 state read, CAS recovery read, observation and injected side effect is fenced before and after.
 
-The host creates no durable authorization token. Its marker capability exists solely in memory
-after this invocation has successfully persisted `VERIFIED -> MARKER_PENDING`; it is consumed
-before dispatch. A restarted `MARKER_PENDING` host therefore reconciles only the authoritative
-marker observation and cannot replay a marker write. Similarly, an evidence-publication capability
+The host creates no durable authorization token. Before `VERIFIED -> MARKER_PENDING`, it observes
+the exact external marker while the state and DDL fences remain held. Its marker capability exists
+solely in memory after this invocation has persisted that transition and only when the marker was
+authoritatively absent; it is consumed before dispatch. A restarted or rolled-back host therefore
+reconciles the authoritative marker observation and cannot replay a completed marker write.
+Similarly, an evidence-publication capability
 is minted only after the same invocation observes the exact V3 attested evidence as absent and is
 consumed before publishing. The exact complete attested-evidence digest is persisted in the
 `EVIDENCED` envelope after exact readback and is rechecked before any evidence-sink observation on
@@ -587,6 +589,12 @@ then acquires the existing cluster DDL fence before a private filesystem lease. 
 `ceremony.lock` and artifact namespace, persists only canonical exact bytes through
 `OWNED -> RESTORE_PENDING`, fsyncs and reads back each boundary, and asks an injected custody
 collaborator to attest the archive before minting an opaque one-shot capability.
+Every state CAS first publishes an exclusive phase-indexed canonical journal entry from fsynced
+temporary bytes by atomic rename. A state read is accepted only when the mutable head exactly
+equals the latest uninterrupted journal entry. The single crash-recovery shape with the journal
+exactly one phase ahead atomically republishes that entry as the head under the held lease/fence;
+any larger divergence fails as `STATE_ROLLBACK_DETECTED` before an external observation or side
+effect. The store exposes no journal deletion or rewrite operation.
 
 The capability now has a single same-host consumer. `restore(capability)` accepts only the exact
 WeakMap-owned capability, rechecks the shared DDL fence, exact `RESTORE_PENDING` bytes and archive

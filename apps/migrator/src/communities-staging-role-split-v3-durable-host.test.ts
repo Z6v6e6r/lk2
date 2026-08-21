@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/require-await */
 import { createHash } from 'node:crypto';
-import { chmod, link, mkdtemp, symlink, writeFile } from 'node:fs/promises';
+import { chmod, link, mkdtemp, readFile, symlink, writeFile } from 'node:fs/promises';
 import type { FileHandle } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -118,6 +118,81 @@ describe('CommunitiesStagingRoleSplitV3DurableStateStore', () => {
     );
     const restored = await store.writeCas(lease, pending, envelope('RESTORED', state('RESTORED')));
     expect(await store.read(lease)).toBe(restored);
+    await store.release(lease);
+  });
+
+  it('rejects a canonical older head retained beside a later append-only journal entry', async () => {
+    const { directory, store } = await storeFixture();
+    const lease = await store.acquire();
+    const owned = await store.writeCas(lease, null, envelope('OWNED', state('OWNED')));
+    const pending = await store.writeCas(
+      lease,
+      owned,
+      envelope('RESTORE_PENDING', state('RESTORE_PENDING')),
+    );
+    await store.writeCas(lease, pending, envelope('RESTORED', state('RESTORED')));
+    await writeFile(join(directory, 'v3-durable-state.json'), owned, { mode: 0o600 });
+
+    await expect(store.read(lease)).rejects.toMatchObject({
+      code: 'STATE_ROLLBACK_DETECTED',
+    } satisfies Partial<CommunitiesStagingRoleSplitV3DurableHostError>);
+    await store.release(lease);
+  });
+
+  it('recovers the unique journal-one-ahead crash state by publishing the exact journal head', async () => {
+    const { directory, store } = await storeFixture();
+    const lease = await store.acquire();
+    const owned = await store.writeCas(lease, null, envelope('OWNED', state('OWNED')));
+    const pendingEnvelope = envelope('RESTORE_PENDING', state('RESTORE_PENDING'));
+    const pending = canonicalCommunitiesStagingRoleSplitV3DurableStateEnvelope(pendingEnvelope);
+    const pendingSha256 = communitiesStagingRoleSplitV3DurableStateEnvelopeSha256(pendingEnvelope);
+    await writeFile(
+      join(directory, `v3-durable-journal-01-restore_pending-${pendingSha256}.json`),
+      pending,
+      { mode: 0o600 },
+    );
+    await writeFile(join(directory, '.v3-durable-state.json.crash.tmp'), pending, {
+      mode: 0o600,
+    });
+
+    expect(owned).not.toBe(pending);
+    expect(await store.read(lease)).toBe(pending);
+    expect(await readFile(join(directory, 'v3-durable-state.json'), 'utf8')).toBe(pending);
+    await store.release(lease);
+  });
+
+  it('ignores an unpublished journal temporary file left before atomic rename', async () => {
+    const { directory, store } = await storeFixture();
+    const lease = await store.acquire();
+    const owned = await store.writeCas(lease, null, envelope('OWNED', state('OWNED')));
+    const pendingEnvelope = envelope('RESTORE_PENDING', state('RESTORE_PENDING'));
+    const pending = canonicalCommunitiesStagingRoleSplitV3DurableStateEnvelope(pendingEnvelope);
+    const pendingSha256 = communitiesStagingRoleSplitV3DurableStateEnvelopeSha256(pendingEnvelope);
+    await writeFile(
+      join(directory, `.v3-durable-journal-01-restore_pending-${pendingSha256}.json.crash.tmp`),
+      pending,
+      { mode: 0o600 },
+    );
+
+    expect(await store.read(lease)).toBe(owned);
+    await store.release(lease);
+  });
+
+  it('rejects a malformed published journal file instead of treating it as a crash state', async () => {
+    const { directory, store } = await storeFixture();
+    const lease = await store.acquire();
+    await store.writeCas(lease, null, envelope('OWNED', state('OWNED')));
+    const pendingEnvelope = envelope('RESTORE_PENDING', state('RESTORE_PENDING'));
+    const pendingSha256 = communitiesStagingRoleSplitV3DurableStateEnvelopeSha256(pendingEnvelope);
+    await writeFile(
+      join(directory, `v3-durable-journal-01-restore_pending-${pendingSha256}.json`),
+      '{',
+      { mode: 0o600 },
+    );
+
+    await expect(store.read(lease)).rejects.toMatchObject({
+      code: 'STATE_CORRUPT',
+    } satisfies Partial<CommunitiesStagingRoleSplitV3DurableHostError>);
     await store.release(lease);
   });
 

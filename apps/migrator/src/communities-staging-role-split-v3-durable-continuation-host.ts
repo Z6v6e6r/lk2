@@ -439,6 +439,18 @@ export class CommunitiesStagingRoleSplitV3DurableContinuationHost implements Com
     const held = await this.held(lease);
     const read = await this.readContinuation(held);
     if (!isDeepStrictEqual(read.envelope.state, current)) fail('STATE_AMBIGUOUS');
+    let markerBeforePending: 'absent' | 'exact' | null = null;
+    if (current.phase === 'VERIFIED' && next.phase === 'MARKER_PENDING') {
+      const observation = await this.config.observeMarker(
+        read.envelope.cloneDatabaseOid,
+        read.envelope.artifacts.marker,
+      );
+      await this.held(lease);
+      const confirmed = await this.readContinuation(held);
+      if (confirmed.bytes !== read.bytes || (observation !== 'absent' && observation !== 'exact'))
+        fail('STATE_AMBIGUOUS');
+      markerBeforePending = observation;
+    }
     const markerEvidence =
       next.phase === 'MARKED' && read.envelope.artifacts.markerEvidence === null
         ? createCommunitiesStagingRoleSplitV3MarkerEvidence(
@@ -483,7 +495,9 @@ export class CommunitiesStagingRoleSplitV3DurableContinuationHost implements Com
     await this.held(lease);
     if (current.phase === 'VERIFIED' && next.phase === 'MARKER_PENDING') {
       held.markerDispatchPreimageSha256 =
-        communitiesStagingRoleSplitV3DurableContinuationEnvelopeSha256(envelope);
+        markerBeforePending === 'absent'
+          ? communitiesStagingRoleSplitV3DurableContinuationEnvelopeSha256(envelope)
+          : null;
       held.markerObservationPreimageSha256 = null;
     }
   }

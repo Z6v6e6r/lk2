@@ -5,6 +5,12 @@
 - Upgraded the post-restore continuation envelope to V2 and persisted the exact full V3
   attested-evidence SHA-256 only at `EVIDENCED`; restart readback rejects marker-only or replaced
   evidence before consulting the evidence sink.
+- Added an append-only, phase-indexed canonical journal beside the replaceable durable head. Every
+  read requires the head to equal the latest uninterrupted journal entry; the unique crash state
+  with the journal exactly one phase ahead atomically promotes the head, while larger divergence is
+  rejected. The continuation reconciles the exact external marker before granting any restored
+  marker-dispatch capability. Restart regressions prove zero repeated marker/evidence writes even
+  when a complete older journal snapshot must be reconciled.
 - Added the durable continuation host and envelope to a new immutable V7/V4 disabled candidate.
   The candidate remains unwired and grants no ceremony, database, role-split, migration, deploy or
   activation authority.
