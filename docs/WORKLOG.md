@@ -1,6 +1,6 @@
 # Worklog
 
-## 2026-08-21 — Communities V7 durable continuation evidence
+## 2026-08-21 — Communities V8 durable continuation and executor-source candidate
 
 - Upgraded the post-restore continuation envelope to V2 and persisted the exact full V3
   attested-evidence SHA-256 only at `EVIDENCED`; restart readback rejects marker-only or replaced
@@ -11,12 +11,16 @@
   rejected. The continuation reconciles the exact external marker before granting any restored
   marker-dispatch capability. Restart regressions prove zero repeated marker/evidence writes even
   when a complete older journal snapshot must be reconciled.
-- Added the durable continuation host and envelope to a new immutable V7/V4 disabled candidate.
-  The candidate remains unwired and grants no ceremony, database, role-split, migration, deploy or
-  activation authority.
+- Added both the durable continuation host/envelope and the descriptor-pinned restore executor to
+  a new immutable V8/V5 disabled candidate. The candidate remains source-only and unwired and
+  grants no ceremony, database, role-split, migration, deploy or activation authority.
 - Replaced selective JSON line checks in the POSIX installer with deterministic reconstruction of
   the complete canonical manifest from the fixed allowlist and exact control ledger. Freshly
-  pinned authorization changes and schema downgrade are rejected before target creation.
+  pinned authorization changes and V7 schema downgrade are rejected before target creation.
+- The twenty-six-artifact allowlist, Node verifier, dependency-free shell verifier and installed
+  readback reject added files or empty directories as well as missing, linked, special or modified
+  entries. Building, verifying or installing this disabled version does not authorize ceremony
+  execution or PostgreSQL mutation.
 
 ## 2026-08-21 — Communities V6 disabled V3 source candidate
 

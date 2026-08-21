@@ -13,11 +13,11 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import { fileURLToPath } from 'node:url';
 
 export const INSTALLATION_CANDIDATE_SCHEMA_VERSION =
-  'communities-role-split-installation-candidate-v7';
+  'communities-role-split-installation-candidate-v8';
 export const INSTALLATION_CANDIDATE_DIGEST_VERSION =
-  'PHUB_COMMUNITIES_ROLE_SPLIT_INSTALLATION_CANDIDATE_DIGEST_V7';
+  'PHUB_COMMUNITIES_ROLE_SPLIT_INSTALLATION_CANDIDATE_DIGEST_V8';
 export const INSTALLATION_CANDIDATE_CONTROL_VERSION =
-  'PHUB_COMMUNITIES_ROLE_SPLIT_HOST_INSTALL_CONTROL_V4';
+  'PHUB_COMMUNITIES_ROLE_SPLIT_HOST_INSTALL_CONTROL_V5';
 
 const sha40Pattern = /^[0-9a-f]{40}$/u;
 const sha256Pattern = /^[0-9a-f]{64}$/u;
@@ -206,6 +206,7 @@ const fileDefinitions: readonly CandidateArtifactDefinition[] = [
   ...[
     'communities-staging-role-split-v3-durable-host.ts',
     'communities-staging-role-split-v3-durable-continuation-host.ts',
+    'communities-staging-role-split-v3-pg-restore-executor.ts',
     'communities-staging-role-split-v3-durable-restore-coordinator.ts',
     'communities-staging-role-split-v3-executable-composition.ts',
   ].map((name): CandidateArtifactDefinition => ({
