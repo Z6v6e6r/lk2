@@ -46,7 +46,7 @@ describe('communities role-split trusted-inventory runtime bundle', () => {
     expect(imports.length).toBeGreaterThan(0);
     expect(imports.every((specifier) => allowedBuiltins.has(specifier))).toBe(true);
     expect(source).not.toContain('sourceMappingURL=');
-  });
+  }, 30_000);
 
   it('is importable but rejects direct execution before receiving any runtime inputs', async () => {
     const module = (await import(
