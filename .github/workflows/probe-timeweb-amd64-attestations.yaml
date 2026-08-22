@@ -1,0 +1,391 @@
+name: Probe Timeweb amd64 attestations without publication
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_source_sha:
+        description: Exact reviewed application source SHA
+        required: true
+        type: string
+      expected_probe_sha:
+        description: Exact reviewed main SHA containing this probe workflow
+        required: true
+        type: string
+      confirmation:
+        description: Type PROBE_TIMEWEB_AMD64_ATTESTATIONS_ONLY
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: timeweb-amd64-attestation-probe
+  cancel-in-progress: false
+
+jobs:
+  validate-request:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Validate exact non-publishing request
+        env:
+          ACTOR: ${{ github.actor }}
+          APPROVED_SOURCE_SHA: 35c8312b79cccdd136f2bfd892efbea629b8b919
+          CONFIRMATION: ${{ inputs.confirmation }}
+          EXPECTED_PROBE_SHA: ${{ inputs.expected_probe_sha }}
+          EXPECTED_SOURCE_SHA: ${{ inputs.expected_source_sha }}
+          REPOSITORY: ${{ github.repository }}
+          REQUEST_REF: ${{ github.ref }}
+          REQUEST_SHA: ${{ github.sha }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          test "$REPOSITORY" = Z6v6e6r/lk2
+          test "$RUN_ATTEMPT" = 1
+          test "$ACTOR" = "$TRIGGERING_ACTOR"
+          test "$CONFIRMATION" = PROBE_TIMEWEB_AMD64_ATTESTATIONS_ONLY
+          test "$REQUEST_REF" = refs/heads/main
+          printf '%s' "$EXPECTED_SOURCE_SHA" | grep -Eq '^[0-9a-f]{40}$'
+          printf '%s' "$EXPECTED_PROBE_SHA" | grep -Eq '^[0-9a-f]{40}$'
+          test "$EXPECTED_SOURCE_SHA" = "$APPROVED_SOURCE_SHA"
+          test "$REQUEST_SHA" = "$EXPECTED_PROBE_SHA"
+          test "$WORKFLOW_SHA" = "$EXPECTED_PROBE_SHA"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify exact source ancestry and tree
+        env:
+          EXPECTED_SOURCE_SHA: ${{ inputs.expected_source_sha }}
+          REQUEST_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$REQUEST_SHA"
+          test "$(git rev-parse "$EXPECTED_SOURCE_SHA^{tree}")" = a1b920b8ae4507080789c650b8c16c669e55b477
+          git merge-base --is-ancestor "$EXPECTED_SOURCE_SHA" HEAD
+
+  probe-attestations:
+    needs: validate-request
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      DOCKER_BUILD_RECORD_UPLOAD: false
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [api, web]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ inputs.expected_source_sha }}
+      - name: Verify exact clean source checkout
+        env:
+          EXPECTED_SOURCE_SHA: ${{ inputs.expected_source_sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE_SHA"
+          test -z "$(git status --porcelain)"
+          test "$(git rev-parse 'HEAD^{tree}')" = a1b920b8ae4507080789c650b8c16c669e55b477
+      - id: buildx
+        name: Install the checksum-verified Buildx binary and create the pinned builder
+        env:
+          BUILDX_SHA256: 48af8a397ebd60178778bf63611dbcebe5f5e7a9be90eb9147b24b9587455778
+          BUILDX_VERSION: v0.36.1
+          BUILDKIT_IMAGE: moby/buildkit@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
+        run: |
+          set -euo pipefail
+          download="$RUNNER_TEMP/docker-buildx"
+          plugin="$HOME/.docker/cli-plugins/docker-buildx"
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            --output "$download" \
+            "https://github.com/docker/buildx/releases/download/$BUILDX_VERSION/buildx-$BUILDX_VERSION.linux-amd64"
+          printf '%s  %s\n' "$BUILDX_SHA256" "$download" | sha256sum --check --strict
+          install -D -m 0755 "$download" "$plugin"
+          printf '%s  %s\n' "$BUILDX_SHA256" "$plugin" | sha256sum --check --strict
+          builder_name="phub-timeweb-probe-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          docker buildx create \
+            --name "$builder_name" \
+            --driver docker-container \
+            --driver-opt "image=$BUILDKIT_IMAGE" \
+            --use
+          printf 'name=%s\n' "$builder_name" >> "$GITHUB_OUTPUT"
+      - name: Verify the pinned Buildx and BuildKit runtime
+        env:
+          BUILDER_NAME: ${{ steps.buildx.outputs.name }}
+        run: |
+          set -euo pipefail
+          docker buildx version \
+            | grep -Fx 'github.com/docker/buildx v0.36.1 1d8dde89b8aba914e05e45366770736fea1fd690'
+          docker buildx inspect --bootstrap \
+            | grep -Eq '^BuildKit version:[[:space:]]+v0\.32\.2$'
+          container_id="$(docker ps --filter "name=buildx_buildkit_$BUILDER_NAME" \
+            --format '{{.ID}}')"
+          printf '%s' "$container_id" | grep -Eq '^[0-9a-f]{12,64}$'
+          test "$(docker inspect --format '{{.Config.Image}}' "$container_id")" \
+            = 'moby/buildkit@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8'
+      - name: Verify reviewed base images without registry login
+        env:
+          EXPECTED_NGINX_AMD64_DIGEST: sha256:62223d644fa234c3a1cc785ee14242ec47a77364226f1c811d2f669f96dc2ac8
+          EXPECTED_NGINX_INDEX_DIGEST: sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10
+          EXPECTED_NODE_AMD64_DIGEST: sha256:a17d50af28002a160548bd4225b3cfcb12c5efcb171f79e68758f2885fb1b066
+          EXPECTED_NODE_INDEX_DIGEST: sha256:d649c27dae7ba0137b3cef5dd75baa422c08dc3d9e3fc0c23dfb172dc3cc6436
+          EXPECTED_SBOM_AMD64_DIGEST: sha256:187e1892a7752c9384c59aba9517dd8e40610b748c72773e87b63720514463c2
+          EXPECTED_SBOM_INDEX_DIGEST: sha256:ae4f3b554449e7e25548e7d8ccc029d17357348e30c6e3df01b92bc93654d6a9
+        run: |
+          set -euo pipefail
+          verify_base() {
+            image=$1
+            expected_index_digest=$2
+            expected_amd64_digest=$3
+            manifest_file="$RUNNER_TEMP/$(printf '%s' "$image" | tr '/:' '--').manifest.json"
+            docker buildx imagetools inspect "$image" --format '{{json .Manifest}}' > "$manifest_file"
+            test "$(jq -r '.digest // empty' "$manifest_file")" = "$expected_index_digest"
+            observed_amd64_digest="$(jq -r '
+              [.manifests[] | select(
+                .platform.os == "linux" and
+                .platform.architecture == "amd64" and
+                ((.platform.variant // "") == "")
+              )] | if length == 1 then .[0].digest else empty end
+            ' "$manifest_file")"
+            test "$observed_amd64_digest" = "$expected_amd64_digest"
+          }
+          verify_base node:22-bookworm-slim \
+            "$EXPECTED_NODE_INDEX_DIGEST" "$EXPECTED_NODE_AMD64_DIGEST"
+          verify_base nginx:1.27-alpine \
+            "$EXPECTED_NGINX_INDEX_DIGEST" "$EXPECTED_NGINX_AMD64_DIGEST"
+          verify_base docker/buildkit-syft-scanner@sha256:ae4f3b554449e7e25548e7d8ccc029d17357348e30c6e3df01b92bc93654d6a9 \
+            "$EXPECTED_SBOM_INDEX_DIGEST" "$EXPECTED_SBOM_AMD64_DIGEST"
+      - id: build
+        name: Build exact source into a local OCI archive
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: https://github.com/Z6v6e6r/lk2.git#${{ inputs.expected_source_sha }}
+          file: apps/${{ matrix.service }}/Dockerfile
+          platforms: linux/amd64
+          push: false
+          outputs: type=oci,dest=${{ runner.temp }}/timeweb-${{ matrix.service }}-probe.oci.tar,oci-mediatypes=true
+          build-args: |
+            PHUB_RELEASE=${{ inputs.expected_source_sha }}
+          provenance: mode=max,version=v1
+          sbom: generator=docker/buildkit-syft-scanner@sha256:ae4f3b554449e7e25548e7d8ccc029d17357348e30c6e3df01b92bc93654d6a9
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          path: .phub-probe-control
+          persist-credentials: false
+          ref: ${{ inputs.expected_probe_sha }}
+          sparse-checkout: scripts/extract-verified-oci-layout.sh
+          sparse-checkout-cone-mode: false
+      - id: extract
+        name: Extract non-publishing attestation evidence
+        env:
+          EXPECTED_SOURCE_SHA: ${{ inputs.expected_source_sha }}
+          SERVICE: ${{ matrix.service }}
+        run: |
+          set -euo pipefail
+          mkdir -p attestation-probe/evidence
+          docker buildx version > attestation-probe/evidence/buildx-version.txt
+          docker buildx inspect --bootstrap > attestation-probe/evidence/buildx-inspect.txt
+          bash .phub-probe-control/scripts/extract-verified-oci-layout.sh \
+            "$RUNNER_TEMP/timeweb-$SERVICE-probe.oci.tar" \
+            attestation-probe/layout attestation-probe/evidence
+          cp attestation-probe/layout/index.json attestation-probe/evidence/oci-index.json
+          runtime_digest="$(jq -r '
+            [.manifests[] | select(
+              .platform.os == "linux" and
+              .platform.architecture == "amd64" and
+              ((.platform.variant // "") == "")
+            )] | if length == 1 then .[0].digest else empty end
+          ' attestation-probe/layout/index.json)"
+          printf '%s' "$runtime_digest" | grep -Eq '^sha256:[0-9a-f]{64}$'
+          runtime_size="$(jq -r --arg runtime "$runtime_digest" '
+            [.manifests[] | select(.digest == $runtime)] |
+            if length == 1 then .[0].size else empty end
+          ' attestation-probe/layout/index.json)"
+          attestation_digest="$(jq -r --arg runtime "$runtime_digest" '
+            [.manifests[] | select(
+              .platform.os == "unknown" and
+              .platform.architecture == "unknown" and
+              .annotations["vnd.docker.reference.type"] == "attestation-manifest" and
+              .annotations["vnd.docker.reference.digest"] == $runtime
+            )] | if length == 1 then .[0].digest else empty end
+          ' attestation-probe/layout/index.json)"
+          printf '%s' "$attestation_digest" | grep -Eq '^sha256:[0-9a-f]{64}$'
+          attestation_size="$(jq -r --arg attestation "$attestation_digest" '
+            [.manifests[] | select(.digest == $attestation)] |
+            if length == 1 then .[0].size else empty end
+          ' attestation-probe/layout/index.json)"
+          runtime_sha="${runtime_digest#sha256:}"
+          attestation_sha="${attestation_digest#sha256:}"
+          test "$(stat -c '%s' "attestation-probe/layout/blobs/sha256/$runtime_sha")" \
+            = "$runtime_size"
+          test "$(sha256sum "attestation-probe/layout/blobs/sha256/$runtime_sha" \
+            | awk '{print "sha256:" $1}')" = "$runtime_digest"
+          cp "attestation-probe/layout/blobs/sha256/$runtime_sha" \
+            attestation-probe/evidence/runtime-manifest.json
+          jq -e '
+            .schemaVersion == 2 and
+            .mediaType == "application/vnd.oci.image.manifest.v1+json" and
+            (.config.digest | test("^sha256:[0-9a-f]{64}$")) and
+            (.layers | type == "array" and length > 0)
+          ' attestation-probe/evidence/runtime-manifest.json >/dev/null
+          test "$(stat -c '%s' "attestation-probe/layout/blobs/sha256/$attestation_sha")" \
+            = "$attestation_size"
+          test "$(sha256sum "attestation-probe/layout/blobs/sha256/$attestation_sha" \
+            | awk '{print "sha256:" $1}')" = "$attestation_digest"
+          cp "attestation-probe/layout/blobs/sha256/$attestation_sha" \
+            attestation-probe/evidence/attestation-manifest.json
+          jq -e --arg runtime "$runtime_digest" '
+            .schemaVersion == 2 and
+            .mediaType == "application/vnd.oci.image.manifest.v1+json" and
+            .artifactType == "application/vnd.docker.attestation.manifest.v1+json" and
+            .subject.digest == $runtime and
+            .config.mediaType == "application/vnd.oci.empty.v1+json" and
+            .config.digest == "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a" and
+            .config.size == 2 and
+            .config.data == "e30=" and
+            (.layers | length) == 2 and
+            ([.layers[].annotations["in-toto.io/predicate-type"]] | sort | unique) == [
+              "https://slsa.dev/provenance/v1",
+              "https://spdx.dev/Document"
+            ] and
+            all(.layers[];
+              .mediaType == "application/vnd.in-toto+json" and
+              (.digest | test("^sha256:[0-9a-f]{64}$"))
+            )
+          ' attestation-probe/evidence/attestation-manifest.json >/dev/null
+          jq -r '.layers[] | [.digest, .annotations["in-toto.io/predicate-type"]] | @tsv' \
+            attestation-probe/evidence/attestation-manifest.json | while IFS=$'\t' read -r digest predicate; do
+              statement_sha="${digest#sha256:}"
+              case "$predicate" in
+                https://slsa.dev/provenance/v1) target=provenance-statement.json ;;
+                https://spdx.dev/Document) target=sbom-statement.json ;;
+                *) exit 64 ;;
+              esac
+              test "$(sha256sum "attestation-probe/layout/blobs/sha256/$statement_sha" \
+                | awk '{print "sha256:" $1}')" = "$digest"
+              cp "attestation-probe/layout/blobs/sha256/$statement_sha" \
+                "attestation-probe/evidence/$target"
+            done
+          jq -n \
+            --arg sourceSha "$EXPECTED_SOURCE_SHA" \
+            --arg service "$SERVICE" \
+            --arg runtimeDigest "$runtime_digest" \
+            --arg attestationDigest "$attestation_digest" \
+            --slurpfile provenance attestation-probe/evidence/provenance-statement.json \
+            --slurpfile sbom attestation-probe/evidence/sbom-statement.json \
+            '{
+              schemaVersion: 1,
+              kind: "phub-timeweb-amd64-attestation-probe",
+              service: $service,
+              sourceSha: $sourceSha,
+              platform: "linux/amd64",
+              runtimeDigest: $runtimeDigest,
+              attestationDigest: $attestationDigest,
+              provenanceStatementType: $provenance[0]._type,
+              provenancePredicateType: $provenance[0].predicateType,
+              buildType: $provenance[0].predicate.buildDefinition.buildType,
+              builderId: $provenance[0].predicate.runDetails.builder.id,
+              resolvedDependencies: $provenance[0].predicate.buildDefinition.resolvedDependencies,
+              sbomStatementType: $sbom[0]._type,
+              sbomPredicateType: $sbom[0].predicateType,
+              authorizesPublication: false,
+              authorizesDeploy: false
+            }' > attestation-probe/evidence/probe-summary.json
+          sha256sum attestation-probe/evidence/*.json \
+            > attestation-probe/evidence/checksums.txt
+          echo "runtime_digest=$runtime_digest" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: ${{ always() && steps.build.outcome == 'success' }}
+        with:
+          name: timeweb-amd64-attestation-probe-${{ matrix.service }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: attestation-probe/evidence
+          if-no-files-found: error
+          retention-days: 30
+      - name: Validate the real BuildKit output against the publication contract
+        env:
+          EXPECTED_NGINX_AMD64_DIGEST: sha256:62223d644fa234c3a1cc785ee14242ec47a77364226f1c811d2f669f96dc2ac8
+          EXPECTED_NODE_AMD64_DIGEST: sha256:a17d50af28002a160548bd4225b3cfcb12c5efcb171f79e68758f2885fb1b066
+          EXPECTED_RUNTIME_DIGEST: ${{ steps.extract.outputs.runtime_digest }}
+          EXPECTED_SOURCE_SHA: ${{ inputs.expected_source_sha }}
+          SERVICE: ${{ matrix.service }}
+        run: |
+          set -euo pipefail
+          jq -s -e \
+            --arg runtimeSha "${EXPECTED_RUNTIME_DIGEST#sha256:}" \
+            --arg sourceSha "$EXPECTED_SOURCE_SHA" \
+            --arg service "$SERVICE" \
+            --arg nodeAmd64Sha "${EXPECTED_NODE_AMD64_DIGEST#sha256:}" \
+            --arg nginxAmd64Sha "${EXPECTED_NGINX_AMD64_DIGEST#sha256:}" \
+            --arg builder "https://github.com/Z6v6e6r/lk2/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT" '
+            def reviewed_base($name; $tag; $sha):
+              (.digest |
+                type == "object" and
+                keys == ["sha256"] and
+                .sha256 == $sha
+              ) and
+              (.uri == "pkg:docker/\($name)@\($tag)?platform=linux%2Famd64" or
+               .uri == "pkg:docker/docker.io/library/\($name)@\($tag)?platform=linux%2Famd64");
+            def reviewed_source:
+              .uri == "https://github.com/Z6v6e6r/lk2.git#\($sourceSha)" and
+              (.digest | type == "object" and keys == ["sha1"] and .sha1 == $sourceSha);
+            length == 2 and
+            ([.[].predicateType] | sort | unique) == [
+              "https://slsa.dev/provenance/v1",
+              "https://spdx.dev/Document"
+            ] and
+            all(.[];
+              ._type == "https://in-toto.io/Statement/v1" and
+              (.subject | length) == 1 and
+              (.subject[0].digest | keys) == ["sha256"] and
+              .subject[0].digest.sha256 == $runtimeSha
+            ) and
+            (map(select(.predicateType == "https://slsa.dev/provenance/v1"))[0].predicate) as $provenance |
+            $provenance.buildDefinition.buildType ==
+              "https://github.com/moby/buildkit/blob/master/docs/attestations/slsa-definitions.md" and
+            $provenance.runDetails.builder.id == $builder and
+            $provenance.runDetails.metadata.buildkit_completeness.resolvedDependencies == true and
+            $provenance.buildDefinition.externalParameters.configSource.uri ==
+              "https://github.com/Z6v6e6r/lk2.git#\($sourceSha)" and
+            $provenance.buildDefinition.externalParameters.configSource.digest == {"sha1": $sourceSha} and
+            $provenance.buildDefinition.externalParameters.configSource.path ==
+              "apps/\($service)/Dockerfile" and
+            ($provenance.buildDefinition.resolvedDependencies // []) as $materials |
+            ([$materials[] | select(reviewed_source)] | length) == 1 and
+            ([$materials[] | select(reviewed_base("node"; "22-bookworm-slim"; $nodeAmd64Sha))] |
+              length) == 1 and
+            (if $service == "web" then
+              ($materials | length) == 3 and
+              ([$materials[] | select(reviewed_base("nginx"; "1.27-alpine"; $nginxAmd64Sha))] |
+                length) == 1
+            else
+              ($materials | length) == 2
+            end) and
+            (map(select(.predicateType == "https://spdx.dev/Document"))[0].predicate) as $sbom |
+            $sbom.SPDXID == "SPDXRef-DOCUMENT" and
+            ($sbom.packages | type == "array" and length > 0)
+          ' attestation-probe/evidence/*-statement.json >/dev/null
+      - name: Surface non-authorizing probe result
+        env:
+          EXPECTED_SOURCE_SHA: ${{ inputs.expected_source_sha }}
+          RUNTIME_DIGEST: ${{ steps.extract.outputs.runtime_digest }}
+          SERVICE: ${{ matrix.service }}
+        run: |
+          set -euo pipefail
+          {
+            echo '## Timeweb amd64 BuildKit attestation probe'
+            echo
+            echo "Source SHA: \`$EXPECTED_SOURCE_SHA\`"
+            echo "Service: \`$SERVICE\`"
+            echo "Runtime digest: \`$RUNTIME_DIGEST\`"
+            echo 'Registry login: `false`'
+            echo 'Registry push: `false`'
+            echo 'Authorizes publication: `false`'
+            echo 'Authorizes deploy: `false`'
+          } >> "$GITHUB_STEP_SUMMARY"

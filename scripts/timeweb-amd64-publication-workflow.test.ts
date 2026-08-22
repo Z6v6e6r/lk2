@@ -86,7 +86,21 @@ describe('Timeweb amd64 publication workflow', () => {
     expect(workflow).toContain('platforms: linux/amd64');
     expect(workflow).toContain('push: true');
     expect(workflow).toContain('provenance: mode=max,version=v1');
-    expect(workflow).toContain('sbom: true');
+    expect(workflow).toContain(
+      'sbom: generator=docker/buildkit-syft-scanner@sha256:ae4f3b554449e7e25548e7d8ccc029d17357348e30c6e3df01b92bc93654d6a9',
+    );
+    expect(workflow).toContain('context: https://github.com/Z6v6e6r/lk2.git#');
+    expect(
+      workflow.match(
+        /BUILDX_SHA256: 48af8a397ebd60178778bf63611dbcebe5f5e7a9be90eb9147b24b9587455778/gu,
+      ),
+    ).toHaveLength(2);
+    expect(workflow).toContain(
+      'BUILDKIT_IMAGE: moby/buildkit@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8',
+    );
+    expect(workflow.match(/sha256sum --check --strict/gu)).toHaveLength(4);
+    expect(workflow).not.toContain('docker/setup-buildx-action@');
+    expect(workflow).toContain('DOCKER_BUILD_RECORD_UPLOAD: false');
     expect(workflow).toContain('PHUB_RELEASE=${{ inputs.expected_source_sha }}');
     expect(workflow).toContain('docker pull --platform linux/amd64');
     expect(workflow).toContain('Verify reviewed base-image digests before registry login');
@@ -106,8 +120,8 @@ describe('Timeweb amd64 publication workflow', () => {
     expect(workflow).toContain('test "$observed_amd64_digest" = "$expected_amd64_digest"');
     expect(workflow).toContain('reviewed_base("node"; "22-bookworm-slim"; $nodeAmd64Sha)');
     expect(workflow).toContain('reviewed_base("nginx"; "1.27-alpine"; $nginxAmd64Sha)');
+    expect(workflow).toContain('($materials | length) == 3');
     expect(workflow).toContain('($materials | length) == 2');
-    expect(workflow).toContain('($materials | length) == 1');
     expect(workflow).toContain('pkg:docker/docker.io/library/\\($name)');
     expect(
       workflow.indexOf('Verify reviewed base-image digests before registry login'),
@@ -186,6 +200,7 @@ describe('Timeweb amd64 publication workflow', () => {
           readonly provenanceStatementType?: string;
           readonly sbomStatementType?: string;
           readonly buildType?: string;
+          readonly sourceMaterial?: { readonly uri: string; readonly sha1: string } | null;
         } = {},
       ) => {
         const provenancePath = join(directory, `${service}-provenance-${materials.length}.json`);
@@ -202,13 +217,35 @@ describe('Timeweb amd64 publication workflow', () => {
                 buildType:
                   overrides.buildType ??
                   'https://github.com/moby/buildkit/blob/master/docs/attestations/slsa-definitions.md',
-                externalParameters: { sourceSha },
-                resolvedDependencies: materials.map(({ uri, sha256 }) => ({
-                  uri,
-                  digest: { sha256 },
-                })),
+                externalParameters: {
+                  configSource: {
+                    uri: `https://github.com/Z6v6e6r/lk2.git#${sourceSha}`,
+                    digest: { sha1: sourceSha },
+                    path: `apps/${service}/Dockerfile`,
+                  },
+                  sourceSha,
+                },
+                resolvedDependencies: [
+                  ...(overrides.sourceMaterial === null
+                    ? []
+                    : [
+                        {
+                          uri:
+                            overrides.sourceMaterial?.uri ??
+                            `https://github.com/Z6v6e6r/lk2.git#${sourceSha}`,
+                          digest: { sha1: overrides.sourceMaterial?.sha1 ?? sourceSha },
+                        },
+                      ]),
+                  ...materials.map(({ uri, sha256 }) => ({
+                    uri,
+                    digest: { sha256 },
+                  })),
+                ],
               },
-              runDetails: { builder: { id: builder } },
+              runDetails: {
+                builder: { id: builder },
+                metadata: { buildkit_completeness: { resolvedDependencies: true } },
+              },
             },
           }),
         );
@@ -266,6 +303,17 @@ describe('Timeweb amd64 publication workflow', () => {
       expect((await run('web', [node])).status).not.toBe(0);
       expect((await run('web', [node, nginx, unexpectedNginx])).status).not.toBe(0);
       expect((await run('web', [node, unexpectedNginx])).status).not.toBe(0);
+      expect((await run('api', [node], { sourceMaterial: null })).status).not.toBe(0);
+      expect(
+        (
+          await run('api', [node], {
+            sourceMaterial: {
+              uri: 'https://github.com/Z6v6e6r/lk2.git#wrong',
+              sha1: sourceSha,
+            },
+          })
+        ).status,
+      ).not.toBe(0);
       expect(
         (
           await run('api', [node], {
