@@ -1,0 +1,6 @@
+# Install as /etc/phub/redis/users.acl, owned by root:root and mode 0400.
+# The default user is healthcheck-only. Replace the disabled placeholder with a
+# generated green-only secret and grant the minimum command/key patterns proved
+# by the staging workload before provisioning.
+user default on nopass ~* -@all +ping
+user phub off >replace-with-generated-secret ~* +@read +@write +@connection +@transaction +@pubsub -@admin -@dangerous +eval +evalsha

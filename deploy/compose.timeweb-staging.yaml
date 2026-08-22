@@ -1,0 +1,177 @@
+name: phub-timeweb-staging
+
+x-runtime: &runtime
+  restart: unless-stopped
+  networks: [ingress]
+  pids_limit: 256
+  logging:
+    driver: local
+    options:
+      max-size: 10m
+      max-file: '3'
+  deploy:
+    resources:
+      limits:
+        cpus: '0.50'
+        memory: 512M
+        pids: 256
+
+x-application-runtime: &application-runtime
+  <<: *runtime
+  env_file:
+    - path: ${RUNTIME_ENV_FILE:-/etc/phub/staging.env}
+    - path: ${RUNTIME_AUTH_ENV_FILE:-/opt/phub/staging.auth.env}
+      required: false
+    - path: ${RUNTIME_OVERRIDE_ENV_FILE:-/opt/phub/staging.override.env}
+      required: false
+    - path: ${RUNTIME_GAMES_ENV_FILE:-/opt/phub/staging.games.env}
+      required: false
+    - path: ${RUNTIME_CHAT_PUSH_FOUNDATION_ENV_FILE:-/opt/phub/staging.chat-push-foundation.env}
+      required: false
+
+x-realtime-runtime: &realtime-runtime
+  <<: *runtime
+  env_file:
+    - path: ${REALTIME_RUNTIME_ENV_FILE:-/etc/phub/realtime.env}
+
+x-timeweb-object-storage: &timeweb-object-storage
+  S3_ENDPOINT: https://s3.twcstorage.ru
+  S3_PUBLIC_ENDPOINT: https://s3.twcstorage.ru
+  S3_REGION: ru-1
+  S3_BUCKET: 5daa8b6b-1f31-4279-8141-bc78e63e53d3
+  S3_FORCE_PATH_STYLE: 'true'
+  S3_AUTO_CREATE_BUCKET: 'false'
+
+services:
+  web:
+    <<: *runtime
+    env_file: []
+    image: ${REGISTRY:?REGISTRY is required}/phub-web@${WEB_IMAGE_DIGEST:?WEB_IMAGE_DIGEST is required}
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -q -O /dev/null http://127.0.0.1:8080/healthz']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  api:
+    <<: *runtime
+    env_file:
+      - path: ${RUNTIME_ENV_FILE:-/etc/phub/staging.env}
+      - path: ${RUNTIME_AUTH_ENV_FILE:-/opt/phub/staging.auth.env}
+        required: false
+      - path: ${RUNTIME_OVERRIDE_ENV_FILE:-/opt/phub/staging.override.env}
+        required: false
+      - path: ${RUNTIME_GAMES_ENV_FILE:-/opt/phub/staging.games.env}
+        required: false
+      - path: ${RUNTIME_COMMUNITIES_ENV_FILE:-/opt/phub/staging.communities.env}
+        required: false
+      - path: ${RUNTIME_CHAT_PUSH_FOUNDATION_ENV_FILE:-/opt/phub/staging.chat-push-foundation.env}
+        required: false
+      - path: ${API_S3_ENV_FILE:-/etc/phub/staging.api-s3.env}
+    image: ${REGISTRY:?REGISTRY is required}/phub-api@${API_IMAGE_DIGEST:?API_IMAGE_DIGEST is required}
+    environment:
+      <<: *timeweb-object-storage
+    ports:
+      - '127.0.0.1:3000:3000'
+    networks: [ingress, data, telemetry]
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3000/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: '2.00'
+          memory: 1536M
+          pids: 256
+
+  realtime:
+    <<: *realtime-runtime
+    image: ${REGISTRY:?REGISTRY is required}/phub-realtime@${REALTIME_IMAGE_DIGEST:?REALTIME_IMAGE_DIGEST is required}
+    ports:
+      - '127.0.0.1:3001:3001'
+    networks: [ingress, data, telemetry]
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3001/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: '1.00'
+          memory: 768M
+          pids: 256
+
+  worker:
+    <<: *application-runtime
+    env_file:
+      - path: ${RUNTIME_ENV_FILE:-/etc/phub/staging.env}
+      - path: ${RUNTIME_AUTH_ENV_FILE:-/opt/phub/staging.auth.env}
+        required: false
+      - path: ${RUNTIME_OVERRIDE_ENV_FILE:-/opt/phub/staging.override.env}
+        required: false
+      - path: ${RUNTIME_GAMES_ENV_FILE:-/opt/phub/staging.games.env}
+        required: false
+      - path: ${RUNTIME_CHAT_PUSH_FOUNDATION_ENV_FILE:-/opt/phub/staging.chat-push-foundation.env}
+        required: false
+      - path: ${WORKER_S3_ENV_FILE:-/etc/phub/staging.worker-s3.env}
+    image: ${REGISTRY:?REGISTRY is required}/phub-worker@${WORKER_IMAGE_DIGEST:?WORKER_IMAGE_DIGEST is required}
+    environment:
+      <<: *timeweb-object-storage
+    networks:
+      - data
+      - telemetry
+      - cup-showcase
+    profiles: [worker]
+    deploy:
+      resources:
+        limits:
+          cpus: '2.00'
+          memory: 1536M
+          pids: 256
+
+  migrator:
+    <<: *runtime
+    env_file:
+      - path: ${MIGRATOR_RUNTIME_ENV_FILE:-/etc/phub/staging.migrator.env}
+    image: ${REGISTRY:?REGISTRY is required}/phub-migrator@${MIGRATOR_IMAGE_DIGEST:?MIGRATOR_IMAGE_DIGEST is required}
+    restart: 'no'
+    profiles: [migration]
+    networks: [data]
+    deploy:
+      resources:
+        limits:
+          cpus: '2.00'
+          memory: 2G
+          pids: 256
+
+networks:
+  ingress:
+    external: true
+    name: phub-ingress
+  data:
+    external: true
+    name: phub-data
+  telemetry:
+    external: true
+    name: phub-telemetry
+  cup-showcase:
+    external: true
+    name: phab-showcase_default
