@@ -36,6 +36,7 @@ export interface BookingScreenReadJob {
     'FOR_ME' | 'GROUP_TRAININGS' | 'MY_BOOKINGS' | 'EVENT_CATALOG' | 'ACTIVITY_HISTORY';
   readonly tenantId: string;
   readonly userId: string;
+  readonly sessionId: string;
   readonly createdAt: string;
   readonly expiresAt: string;
   readonly commands: readonly BookingScreenReadCommand[];

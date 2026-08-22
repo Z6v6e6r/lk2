@@ -539,6 +539,7 @@ export class AuthService {
         providerTenantKey: binding.providerTenantKey,
         redirectUri,
         correlationId: input.correlationId,
+        identityMode: pending.recoveryUserId ? 'RECOVERY_SUBJECT_ONLY' : 'STANDARD',
       });
     } catch (error) {
       this.mapProviderError(error);
@@ -1033,8 +1034,6 @@ export class AuthService {
             : {}),
           correlationId: input.correlationId,
         });
-      } else if (challenge.provider === 'VIVA' && this.options.config.HOME_VIVA_SYNC_ENABLED) {
-        throw new AuthServiceError('VIVA_REAUTH_REQUIRED');
       }
     }
     try {

@@ -1297,7 +1297,8 @@ describe('browser auth gateway', () => {
       },
       access: { audience: 'SELF', tier: 'SELF' },
     });
-    expect(fetchImplementation).toHaveBeenCalledTimes(5);
+    // A SUCCESS metric is held until a server-issued booking read job can bind it.
+    expect(fetchImplementation).toHaveBeenCalledTimes(4);
     expect(fetchImplementation.mock.calls[2]?.[0]).toBe(
       'https://api.padlhub.test/user/api/v1/padlhub/auth/viva/access',
     );
@@ -1614,6 +1615,18 @@ describe('browser auth gateway', () => {
     expect(urls.filter((url) => url.startsWith('https://api.vivacrm.invalid/'))).toHaveLength(2);
     expect(urls.filter((url) => url.endsWith('/auth/viva/access'))).toHaveLength(1);
     expect(urls.filter((url) => url.includes('/results/'))).toHaveLength(2);
+    const outcomeCalls = fetchImplementation.mock.calls.filter(([input]) =>
+      requestUrl(input).endsWith('/routing-outcomes'),
+    );
+    expect(outcomeCalls).toHaveLength(2);
+    for (const [, init] of outcomeCalls) {
+      expect(JSON.parse(init?.body as string)).toMatchObject({
+        operation: 'schedule.read',
+        outcome: 'SUCCESS',
+      });
+      expect(JSON.parse(init?.body as string)).not.toHaveProperty('evidenceJobId');
+      expect(new Headers(init?.headers).get('X-Correlation-ID')).toBe(job.jobId);
+    }
     expect(urls).toContain(
       `https://api.padlhub.test/user/api/v1/padlhub/booking-screen-read-jobs/${job.jobId}/complete`,
     );

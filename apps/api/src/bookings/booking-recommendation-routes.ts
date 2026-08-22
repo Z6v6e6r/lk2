@@ -71,10 +71,13 @@ const CLIENT_ASSISTED_DAYS = 7;
 const EVENT_CATALOG_SNAPSHOT_TTL_SECONDS = 600;
 const EVENT_CATALOG_TIMEZONE = 'Europe/Moscow';
 
-function principal(request: FastifyRequest): { tenantId: string; userId: string } | undefined {
+function principal(
+  request: FastifyRequest,
+): { tenantId: string; userId: string; sessionId: string } | undefined {
   const tenantId = request.tenantId;
   const userId = request.padlHubClaims?.sub;
-  return tenantId && userId ? { tenantId, userId } : undefined;
+  const sessionId = request.padlHubClaims?.sid;
+  return tenantId && userId && sessionId ? { tenantId, userId, sessionId } : undefined;
 }
 
 function limitValue(value: unknown): number | undefined {
@@ -130,11 +133,12 @@ function snapshotVersion(value: unknown): string {
 
 function samePrincipal(
   job: BookingScreenReadJob,
-  current: { readonly tenantId: string; readonly userId: string },
+  current: { readonly tenantId: string; readonly userId: string; readonly sessionId: string },
 ): boolean {
   return (
     job.tenantId === current.tenantId &&
     job.userId === current.userId &&
+    job.sessionId === current.sessionId &&
     Date.parse(job.expiresAt) > Date.now()
   );
 }
@@ -430,6 +434,7 @@ export function registerBookingRecommendationRoutes(
         screen,
         tenantId: current.tenantId,
         userId: current.userId,
+        sessionId: current.sessionId,
         createdAt: now.toISOString(),
         expiresAt: new Date(now.getTime() + CLIENT_ASSISTED_JOB_TTL_SECONDS * 1_000).toISOString(),
         ...(catalogQuery ? { catalogQuery } : {}),

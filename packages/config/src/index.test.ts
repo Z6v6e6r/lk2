@@ -47,6 +47,12 @@ describe('loadConfig', () => {
       HOME_VIVA_LEGACY_GAME_BRIDGE_ENABLED: false,
       HOME_VIVA_SYNC_INTERVAL_MS: 120_000,
       HOME_VIVA_SYNC_FAILURE_BACKOFF_MS: 300_000,
+      COMMUNITY_HOME_SYNC_ENABLED: false,
+      COMMUNITY_HOME_SYNC_INTERVAL_MS: 120_000,
+      COMMUNITY_HOME_SYNC_BATCH_SIZE: 20,
+      PLATFORM_HOME_SYNC_ENABLED: false,
+      PLATFORM_HOME_SYNC_INTERVAL_MS: 120_000,
+      PLATFORM_HOME_SYNC_BATCH_SIZE: 20,
       COMMUNITIES_READ_MODE: 'mock',
       COMMUNITY_LEGACY_READ_DETAIL_ENABLED: false,
       COMMUNITY_LEGACY_READ_FEED_ENABLED: false,
@@ -104,6 +110,38 @@ describe('loadConfig', () => {
         COMMUNITY_LEGACY_READ_DETAIL_ENABLED: 'true',
       }),
     ).toThrow('COMMUNITY_LEGACY_READ_*_ENABLED requires COMMUNITIES_READ_MODE=legacy');
+  });
+
+  it('gates Community Home projection independently from retired Viva Home reads', () => {
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        COMMUNITY_HOME_SYNC_ENABLED: 'true',
+      }),
+    ).toThrow('requires COMMUNITIES_READ_MODE=legacy or local');
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        COMMUNITY_HOME_SYNC_ENABLED: 'true',
+        COMMUNITIES_READ_MODE: 'local',
+      }),
+    ).toThrow('COMMUNITY_HOME_SYNC_ENABLED requires media storage');
+    expect(
+      loadConfig({
+        ...validEnvironment,
+        COMMUNITY_HOME_SYNC_ENABLED: 'true',
+        COMMUNITIES_READ_MODE: 'local',
+        S3_ENDPOINT: 'http://minio:9000',
+        S3_PUBLIC_ENDPOINT: 'https://media.example.test',
+        S3_BUCKET: 'phub-media',
+        S3_ACCESS_KEY: 'access',
+        S3_SECRET_KEY: 'secret',
+      }),
+    ).toMatchObject({
+      COMMUNITY_HOME_SYNC_ENABLED: true,
+      HOME_VIVA_SYNC_ENABLED: false,
+      PLATFORM_HOME_SYNC_ENABLED: false,
+    });
   });
 
   it('keeps leased outbox publication explicit, staging-only and lease-safe', () => {
@@ -391,7 +429,7 @@ describe('loadConfig', () => {
         HOME_VIVA_LEGACY_GAME_BRIDGE_ENABLED: 'true',
       }),
     ).toThrow('requires GAMES_READ_ENABLED=true');
-    expect(
+    expect(() =>
       loadConfig({
         ...validEnvironment,
         APP_ENV: 'local',
@@ -407,10 +445,7 @@ describe('loadConfig', () => {
         LEGACY_GAMES_ROSTER_SYNC_SOURCE: 'public',
         LEGACY_GAMES_ROSTER_SYNC_TENANT_KEY: 'local-padel',
       }),
-    ).toMatchObject({
-      HOME_VIVA_LEGACY_GAME_BRIDGE_ENABLED: true,
-      LEGACY_GAMES_ROSTER_SYNC_ENABLED: false,
-    });
+    ).toThrow('HOME_VIVA_SYNC_ENABLED is retired');
     expect(() =>
       loadConfig({
         ...validEnvironment,
@@ -455,14 +490,14 @@ describe('loadConfig', () => {
     });
   });
 
-  it('keeps real Viva Home synchronization explicitly feature-gated', () => {
+  it('rejects the retired real Viva Home server synchronization gate', () => {
     expect(() =>
       loadConfig({
         ...validEnvironment,
         VIVA_MODE: 'sandbox',
         HOME_VIVA_SYNC_ENABLED: 'true',
       }),
-    ).toThrow('HOME_VIVA_SYNC_ENABLED requires VIVA_OAUTH_ENABLED=true');
+    ).toThrow('HOME_VIVA_SYNC_ENABLED is retired');
   });
 
   it('keeps browser Viva reads behind both the real provider and OAuth delegation gates', () => {
@@ -559,7 +594,7 @@ describe('loadConfig', () => {
     }
   });
 
-  it('requires private object storage for the real Home photo projection', () => {
+  it('rejects retired Home sync before evaluating its former storage requirements', () => {
     expect(() =>
       loadConfig(
         {
@@ -573,22 +608,21 @@ describe('loadConfig', () => {
         },
         { profilePhotoStorage: true },
       ),
-    ).toThrow('HOME_VIVA_SYNC_ENABLED requires profile photo storage');
+    ).toThrow('HOME_VIVA_SYNC_ENABLED is retired');
   });
 
-  it('does not expose worker-only storage requirements to API and realtime', () => {
-    const config = loadConfig({
-      ...validEnvironment,
-      VIVA_MODE: 'sandbox',
-      VIVA_OAUTH_ENABLED: 'true',
-      VIVA_OAUTH_REDIRECT_URI: 'https://lk.padlhub.test/oauth/callback',
-      VIVA_OAUTH_SUCCESS_REDIRECT_URL: 'https://lk.padlhub.test/',
-      VIVA_DELEGATION_ENCRYPTION_KEY: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
-      HOME_VIVA_SYNC_ENABLED: 'true',
-    });
-
-    expect(config.HOME_VIVA_SYNC_ENABLED).toBe(true);
-    expect(config.S3_ENDPOINT).toBeUndefined();
+  it('rejects the retired server-side Viva Home synchronization path', () => {
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        VIVA_MODE: 'sandbox',
+        VIVA_OAUTH_ENABLED: 'true',
+        VIVA_OAUTH_REDIRECT_URI: 'https://lk.padlhub.test/oauth/callback',
+        VIVA_OAUTH_SUCCESS_REDIRECT_URL: 'https://lk.padlhub.test/',
+        VIVA_DELEGATION_ENCRYPTION_KEY: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+        HOME_VIVA_SYNC_ENABLED: 'true',
+      }),
+    ).toThrow('HOME_VIVA_SYNC_ENABLED is retired');
   });
 
   it('rejects a Viva delegation key that is not 32-byte base64url', () => {

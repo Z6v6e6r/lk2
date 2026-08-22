@@ -1,3 +1,5 @@
+import { Writable } from 'node:stream';
+
 import { loadConfig } from '@phub/config';
 import type {
   ProfileFriendshipRepository,
@@ -7,11 +9,13 @@ import type {
 import { buildHomeBase } from '@phub/home-projection';
 import { createLogger } from '@phub/observability';
 import { SignJWT } from 'jose';
+import pino from 'pino';
 import type { Pool } from 'pg';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { buildApp, requireIdempotencyKey, sanitizeRequestLogUrl } from './app.js';
 import { AuthServiceError } from './auth/auth-service.js';
+import { MemoryBookingScreenReadJobStore } from './bookings/booking-screen-read-job-store.js';
 import { buildMockHomeDashboard } from './home/home-dashboard.js';
 
 const config = loadConfig({
@@ -260,9 +264,16 @@ describe('health endpoints', () => {
   });
 
   it('accepts only redacted direct Viva outcome metrics', async () => {
+    const logLines: string[] = [];
+    const logDestination = new Writable({
+      write(chunk: Buffer | string, _encoding, callback) {
+        logLines.push(String(chunk));
+        callback();
+      },
+    });
     const app = await buildApp({
       config,
-      logger: createLogger('api-test', 'silent'),
+      logger: pino({ level: 'info' }, logDestination),
       pool: fakePool(),
     });
     apps.push(app);
@@ -279,6 +290,105 @@ describe('health endpoints', () => {
       },
     });
     expect(response.statusCode).toBe(204);
+    const outcomeLog = logLines
+      .flatMap((line) => line.trim().split('\n'))
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .find((line) => line.event === 'direct_viva_read_outcome');
+    expect(outcomeLog).toMatchObject({
+      event: 'direct_viva_read_outcome',
+      tenantId,
+      userId: '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca',
+      sessionId: '55555555-5555-4555-8555-555555555555',
+      operation: 'profile.read',
+      outcome: 'UNAVAILABLE',
+    });
+  });
+
+  it('accepts successful direct Viva evidence only for the same live job session', async () => {
+    const jobStore = new MemoryBookingScreenReadJobStore();
+    const now = Date.now();
+    await jobStore.create(
+      {
+        jobId: '11111111-1111-4111-8111-111111111111',
+        screen: 'FOR_ME',
+        tenantId,
+        userId: '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca',
+        sessionId: '55555555-5555-4555-8555-555555555555',
+        createdAt: new Date(now).toISOString(),
+        expiresAt: new Date(now + 60_000).toISOString(),
+        commands: [
+          {
+            commandId: '22222222-2222-4222-8222-222222222222',
+            operation: 'schedule.read',
+            date: '2026-08-22',
+          },
+        ],
+      },
+      60,
+    );
+    await jobStore.create(
+      {
+        jobId: '33333333-3333-4333-8333-333333333333',
+        screen: 'FOR_ME',
+        tenantId,
+        userId: '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca',
+        sessionId: '66666666-6666-4666-8666-666666666666',
+        createdAt: new Date(now).toISOString(),
+        expiresAt: new Date(now + 60_000).toISOString(),
+        commands: [
+          {
+            commandId: '44444444-4444-4444-8444-444444444444',
+            operation: 'schedule.read',
+            date: '2026-08-22',
+          },
+        ],
+      },
+      60,
+    );
+    const app = await buildApp({
+      config,
+      logger: createLogger('api-test', 'silent'),
+      pool: fakePool(),
+      bookingScreenReadJobStore: jobStore,
+    });
+    apps.push(app);
+    const token = await accessToken();
+    const payload = {
+      operation: 'schedule.read',
+      routingRevision: '7',
+      outcome: 'SUCCESS',
+      durationMs: 120,
+    };
+
+    const unbound = await app.inject({
+      method: 'POST',
+      url: '/user/api/v1/local-padel/routing-outcomes',
+      headers: { authorization: `Bearer ${token}` },
+      payload,
+    });
+    expect(unbound.statusCode).toBe(400);
+
+    const wrongSession = await app.inject({
+      method: 'POST',
+      url: '/user/api/v1/local-padel/routing-outcomes',
+      headers: {
+        authorization: `Bearer ${token}`,
+        'x-correlation-id': '33333333-3333-4333-8333-333333333333',
+      },
+      payload,
+    });
+    expect(wrongSession.statusCode).toBe(400);
+
+    const bound = await app.inject({
+      method: 'POST',
+      url: '/user/api/v1/local-padel/routing-outcomes',
+      headers: {
+        authorization: `Bearer ${token}`,
+        'x-correlation-id': '11111111-1111-4111-8111-111111111111',
+      },
+      payload,
+    });
+    expect(bound.statusCode).toBe(204);
   });
 
   it('fails closed for administrative clients even when the tenant is mixed', async () => {

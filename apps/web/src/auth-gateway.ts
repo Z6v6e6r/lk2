@@ -125,6 +125,7 @@ import {
   createClientTransportExecutor,
   normalizePadlHubUserProfile,
   normalizeVivaUserProfile,
+  type DirectVivaReadMetric,
 } from '@phub/viva-client-adapter';
 
 export interface NormalizedUser {
@@ -551,6 +552,15 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
   let notificationsCacheRevision = 0;
   const publicTournamentSummaryPromises = new Map<string, Promise<PublicTournamentSummary>>();
   let vivaReauthorizationStarted = false;
+  let activeReadEvidenceJob:
+    { readonly jobId: string; readonly generation: number; readonly userId: string } | undefined;
+  let pendingProfileSuccess:
+    | {
+        readonly metric: DirectVivaReadMetric;
+        readonly generation: number;
+        readonly userId: string;
+      }
+    | undefined;
 
   function vivaRecoveryPrincipal(): string | undefined {
     return currentUserId ? `${options.tenantKey}:${currentUserId}` : undefined;
@@ -740,6 +750,8 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       playerProfilePromises.clear();
       vivaReauthorizationStarted = false;
       vivaAccessPromise = undefined;
+      activeReadEvidenceJob = undefined;
+      pendingProfileSuccess = undefined;
       principalGeneration += 1;
     }
     currentUserId = session.context.userId;
@@ -826,6 +838,25 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
         ? client.getUserProfile()
         : Promise.reject(new Error('CLIENT_ASSISTED_READ_HAS_NO_DIRECT_FALLBACK')),
     onMetric: (metric) => {
+      if (metric.operation === 'profile.read' && metric.outcome === 'SUCCESS') {
+        const evidence = activeReadEvidenceJob;
+        if (
+          evidence &&
+          evidence.generation === principalGeneration &&
+          evidence.userId === currentUserId
+        ) {
+          void client
+            .recordDirectVivaReadMetric({ ...metric, evidenceJobId: evidence.jobId })
+            .catch(() => undefined);
+        } else if (currentUserId) {
+          pendingProfileSuccess = {
+            metric,
+            generation: principalGeneration,
+            userId: currentUserId,
+          };
+        }
+        return;
+      }
       void client.recordDirectVivaReadMetric(metric).catch(() => undefined);
     },
     ...(options.fetchImplementation ? { fetchImplementation: options.fetchImplementation } : {}),
@@ -845,10 +876,13 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
         nextIndex += 1;
         if (!command) return;
         try {
-          const payload = await clientTransport.executeClientAssistedScheduleRead({
-            operation: command.operation,
-            date: command.date,
-          });
+          const payload = await clientTransport.executeClientAssistedScheduleRead(
+            {
+              operation: command.operation,
+              date: command.date,
+            },
+            job.jobId,
+          );
           await client.submitBookingScreenReadResult(job.jobId, command.commandId, payload);
         } catch (error) {
           handleDirectVivaError(error, generation, userId);
@@ -861,6 +895,20 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
         worker(),
       ),
     );
+  }
+
+  function bindReadEvidenceJob(job: BookingScreenReadJob): BookingScreenReadJob {
+    const userId = currentUserId;
+    if (!userId) return job;
+    activeReadEvidenceJob = { jobId: job.jobId, generation: principalGeneration, userId };
+    const pending = pendingProfileSuccess;
+    if (pending && pending.generation === principalGeneration && pending.userId === userId) {
+      pendingProfileSuccess = undefined;
+      void client
+        .recordDirectVivaReadMetric({ ...pending.metric, evidenceJobId: job.jobId })
+        .catch(() => undefined);
+    }
+    return job;
   }
 
   async function completeRecommendationJob(
@@ -879,7 +927,7 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     const limit = input.limit ?? 6;
     if (input.cursor) return client.listBookingRecommendations(input);
 
-    const job = await client.startBookingScreenReadJob('FOR_ME');
+    const job = bindReadEvidenceJob(await client.startBookingScreenReadJob('FOR_ME'));
     const commands = job.commands.filter(
       (command): command is BookingScreenScheduleReadCommand =>
         command.operation === 'schedule.read',
@@ -889,7 +937,7 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
   }
 
   async function loadInitialHomeRecommendations(limit: number): Promise<BookingRecommendationPage> {
-    const job = await client.startBookingScreenReadJob('FOR_ME');
+    const job = bindReadEvidenceJob(await client.startBookingScreenReadJob('FOR_ME'));
     const commands = job.commands.filter(
       (command): command is BookingScreenScheduleReadCommand =>
         command.operation === 'schedule.read',
@@ -926,7 +974,7 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
   }
 
   async function loadClientAssistedTrainingSchedule(): Promise<TrainingSchedulePage> {
-    const job = await client.startBookingScreenReadJob('GROUP_TRAININGS');
+    const job = bindReadEvidenceJob(await client.startBookingScreenReadJob('GROUP_TRAININGS'));
     const commands = job.commands.filter(
       (command): command is BookingScreenScheduleReadCommand =>
         command.operation === 'schedule.read',
@@ -942,7 +990,7 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
   async function loadClientAssistedEventCatalog(
     query: EventCatalogQuery,
   ): Promise<EventCatalogPage> {
-    const job = await client.startEventCatalogReadJob(query);
+    const job = bindReadEvidenceJob(await client.startEventCatalogReadJob(query));
     const commands = job.commands.filter(
       (command): command is BookingScreenScheduleReadCommand =>
         command.operation === 'schedule.read',
@@ -965,7 +1013,7 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       // An absent projection is prepared through the client-assisted job below.
     }
     try {
-      const job = await client.startBookingScreenReadJob('MY_BOOKINGS');
+      const job = bindReadEvidenceJob(await client.startBookingScreenReadJob('MY_BOOKINGS'));
       const command = job.commands.find((item) => item.operation === 'bookings.read');
       if (!command) throw new Error('BOOKING_SCREEN_READ_COMMAND_MISSING');
       const generation = principalGeneration;

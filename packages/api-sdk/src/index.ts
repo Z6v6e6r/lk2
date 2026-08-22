@@ -509,12 +509,19 @@ export class PadlHubApiClient {
     readonly outcome: string;
     readonly statusClass?: string;
     readonly durationMs: number;
+    readonly evidenceJobId?: string;
   }): Promise<void> {
-    return this.request<void>('/routing-outcomes', {
-      method: 'POST',
-      retryOnUnauthorized: false,
-      body: jsonRequestBody(input),
-    });
+    const { evidenceJobId, ...body } = input;
+    return this.requestWithPolicy<void>(
+      '/routing-outcomes',
+      {
+        auth: 'required',
+        retryOnUnauthorized: false,
+        requestInit: { method: 'POST', body: jsonRequestBody(body) },
+      },
+      evidenceJobId ?? createCorrelationId(),
+      false,
+    );
   }
 
   public getUserProfile(): Promise<UserProfile> {
