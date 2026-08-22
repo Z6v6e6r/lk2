@@ -304,6 +304,7 @@ if test "$1" = exec; then
   exit 0
 fi
 if test "$1" = logs; then
+  test "\${PHUB_FAKE_LOG_FAILURE:-0}" != 1 || exit 94
   printf '%s\\n' "\${PHUB_FAKE_CONTAINER_LOG:-synthetic container log}"
   exit 0
 fi
@@ -331,7 +332,10 @@ if test "$1" = compose; then
       test "\${PHUB_FAKE_FAIL_DUMP:-0}" != 1 || exit 92
       printf 'synthetic-pg-backup\\n'
       ;;
-    *' exec -T postgres sh -eu -c '*) printf '1\\n' ;;
+    *' exec -T postgres sh -eu -c '*)
+      test "\${PHUB_FAKE_EVIDENCE_FAILURE:-0}" != 1 || exit 95
+      printf '%s\\n' "\${PHUB_FAKE_EVIDENCE_COUNT:-1}"
+      ;;
     *' exec -T postgres pg_restore --list '*) : ;;
     *' up -d '*) : ;;
   esac
@@ -674,6 +678,12 @@ describe('legacy OTP hotfix canary release contract', () => {
       'alter table integration.external_identities rename to external_identity_map',
     );
     expect(controller).toContain('test "$evidence_count" = 1');
+    expect(controller).toContain('emit_otp_stage_diagnostics');
+    expect(controller).toContain('scope=local-padel_api_route');
+    expect(controller).toContain('scope=candidate_api_window attribution=aggregate');
+    expect(controller).toContain(
+      'scope=local-padel_database source=$source operation=session_evidence',
+    );
     expect(controller).toContain(
       'delegation.refresh_expires_at is null or delegation.refresh_expires_at > now()',
     );
@@ -799,6 +809,172 @@ describe('legacy OTP hotfix canary release contract', () => {
     }
   });
 
+  it('emits only fixed redacted OTP stage diagnostics during attestation', () => {
+    const fixture = prepareControllerFixture();
+    const privateMarker = 'PRIVATE_PHONE_TOKEN_CORRELATION_MUST_NOT_ESCAPE';
+    const logs = [
+      JSON.stringify({
+        reqId: privateMarker,
+        req: { method: 'POST', url: '/user/api/v1/local-padel/auth/challenges' },
+        msg: 'incoming request',
+      }),
+      JSON.stringify({
+        reqId: privateMarker,
+        res: { statusCode: 201 },
+        msg: 'request completed',
+      }),
+      JSON.stringify({
+        reqId: 'private-verify-correlation',
+        req: {
+          method: 'POST',
+          url: '/user/api/v1/local-padel/auth/challenges/private-challenge-id/verify',
+        },
+        msg: 'incoming request',
+      }),
+      JSON.stringify({
+        reqId: 'private-verify-correlation',
+        res: { statusCode: 503 },
+        msg: 'request completed',
+      }),
+      JSON.stringify({
+        reqId: 'ignored-get-correlation',
+        req: { method: 'GET', url: '/user/api/v1/local-padel/auth/challenges' },
+        msg: 'incoming request',
+      }),
+      JSON.stringify({
+        reqId: 'ignored-get-correlation',
+        res: { statusCode: 200 },
+        msg: 'request completed',
+      }),
+      JSON.stringify({
+        reqId: 'ignored-multisegment-correlation',
+        req: {
+          method: 'POST',
+          url: '/user/api/v1/local-padel/auth/challenges/extra/segment/verify',
+        },
+        msg: 'incoming request',
+      }),
+      JSON.stringify({
+        reqId: 'ignored-multisegment-correlation',
+        res: { statusCode: 200 },
+        msg: 'request completed',
+      }),
+      JSON.stringify({
+        metric: { operation: 'request_code', outcome: 'success', status: 204 },
+        msg: 'identity provider operation',
+      }),
+      JSON.stringify({
+        metric: { operation: 'request_code', outcome: 'unavailable' },
+        msg: 'identity provider operation',
+      }),
+      JSON.stringify({
+        metric: { operation: 'verify_code', outcome: 'unavailable', status: 200 },
+        msg: 'identity provider operation',
+      }),
+      JSON.stringify({
+        metric: { operation: 'profile_read', outcome: 'unavailable', status: 401 },
+        msg: 'identity provider operation',
+      }),
+      JSON.stringify({
+        metric: {
+          operation: 'profile_read',
+          outcome: 'unavailable',
+          status: 200,
+          accessToken: privateMarker,
+        },
+        msg: 'identity provider operation',
+      }),
+    ].join('\n');
+    try {
+      const opened = runController(fixture, 'start');
+      expect(opened.status, opened.stderr).toBe(0);
+      const result = runController(fixture, 'attest', {
+        PHUB_FAKE_CONTAINER_LOG: logs,
+        PHUB_FAKE_EVIDENCE_COUNT: '0',
+      });
+      expect(result.status).not.toBe(0);
+      expect(result.stdout).toContain(
+        'scope=local-padel_api_route window=tail_5000 source=available operation=padlhub_challenge_create total=1 http_2xx=1',
+      );
+      expect(result.stdout).toContain(
+        'scope=local-padel_api_route window=tail_5000 source=available operation=padlhub_challenge_verify total=1 http_2xx=0 http_3xx=0 http_4xx=0 http_5xx=1',
+      );
+      expect(result.stdout).toContain(
+        'scope=candidate_api_window attribution=aggregate window=tail_5000 source=available operation=request_code total=2 success=1 invalid=0 rate_limited=0 unavailable=1 http_2xx=1',
+      );
+      expect(result.stdout).toContain('failure_request=1 failure_response=0');
+      expect(result.stdout).toContain(
+        'scope=candidate_api_window attribution=aggregate window=tail_5000 coverage=partial source=available operation=verify_code total=1 success=0 invalid=0 rate_limited=0 unavailable=1 http_2xx=1',
+      );
+      expect(result.stdout).toContain(
+        'failure_token_request=0 failure_token_response=0 failure_post_token=1',
+      );
+      expect(result.stdout).toContain(
+        'scope=candidate_api_window attribution=aggregate window=tail_5000 source=available operation=profile_read total=2 success=0 invalid=0 rate_limited=0 unavailable=2 http_2xx=1 http_3xx=0 http_4xx=1',
+      );
+      expect(result.stdout).toContain(
+        'failure_profile_request=0 failure_profile_response=1 failure_profile_payload=1',
+      );
+      expect(result.stdout).toContain(
+        'scope=local-padel_database source=available operation=session_evidence outcome=none',
+      );
+      expect(`${result.stdout}${result.stderr}`).not.toContain(privateMarker);
+      expect(`${result.stdout}${result.stderr}`).not.toContain('private-challenge-id');
+      expect(`${result.stdout}${result.stderr}`).not.toContain('private-verify-correlation');
+      expect(`${result.stdout}${result.stderr}`).not.toContain('ignored-get-correlation');
+      expect(`${result.stdout}${result.stderr}`).not.toContain('ignored-multisegment-correlation');
+      expect(`${result.stdout}${result.stderr}`).not.toContain('accessToken');
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it('fails closed with fixed zeroed diagnostics when candidate API logs are unavailable', () => {
+    const fixture = prepareControllerFixture();
+    try {
+      const opened = runController(fixture, 'start');
+      expect(opened.status, opened.stderr).toBe(0);
+      const result = runController(fixture, 'attest', {
+        PHUB_FAKE_EVIDENCE_COUNT: '0',
+        PHUB_FAKE_LOG_FAILURE: '1',
+      });
+      expect(result.status).not.toBe(0);
+      expect(result.stdout).toContain(
+        'scope=local-padel_api_route window=tail_5000 source=unavailable operation=padlhub_challenge_create total=0',
+      );
+      expect(result.stdout).toContain(
+        'scope=candidate_api_window attribution=aggregate window=tail_5000 source=unavailable operation=profile_read total=0',
+      );
+      expect(result.stdout).toContain(
+        'scope=local-padel_database source=available operation=session_evidence outcome=none',
+      );
+      expect(result.stderr).toContain(
+        'expected exactly one correlation-bound local-padel phone OTP success during the canary window',
+      );
+      const multiple = runController(fixture, 'attest', {
+        PHUB_FAKE_EVIDENCE_COUNT: '2',
+        PHUB_FAKE_LOG_FAILURE: '1',
+      });
+      expect(multiple.status).not.toBe(0);
+      expect(multiple.stdout).toContain(
+        'scope=local-padel_database source=available operation=session_evidence outcome=multiple',
+      );
+      const databaseUnavailable = runController(fixture, 'attest', {
+        PHUB_FAKE_EVIDENCE_FAILURE: '1',
+        PHUB_FAKE_LOG_FAILURE: '1',
+      });
+      expect(databaseUnavailable.status).not.toBe(0);
+      expect(databaseUnavailable.stdout).toContain(
+        'scope=local-padel_database source=unavailable operation=session_evidence outcome=unknown',
+      );
+      expect(databaseUnavailable.stderr).toContain(
+        'correlation-bound local-padel phone OTP evidence query is unavailable',
+      );
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
   it('restores exact e308 after a post-marker failure and retains the marker if rollback fails', () => {
     const restored = prepareControllerFixture();
     try {
@@ -829,8 +1005,12 @@ describe('legacy OTP hotfix canary release contract', () => {
     try {
       const opened = runController(retained, 'start');
       expect(opened.status, opened.stderr).toBe(0);
-      const attested = runController(retained, 'attest');
+      const attested = runController(retained, 'attest', { PHUB_FAKE_LOG_FAILURE: '1' });
       expect(attested.status, attested.stderr).toBe(0);
+      expect(attested.stdout).toContain(
+        'scope=local-padel_database source=available operation=session_evidence outcome=exactly_one',
+      );
+      expect(attested.stdout).not.toContain('scope=candidate_api_window');
       expect(attested.stdout).toContain('otp_canary_evidence=correlation-bound status=passed');
       const result = runController(retained, 'rollback', {
         PHUB_OTP_HOTFIX_FAIL_AFTER: 'restore-release-staged',

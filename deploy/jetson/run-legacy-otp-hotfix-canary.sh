@@ -279,6 +279,133 @@ diagnose_service_readiness() {
     "service_readiness_diagnostic service=$service running=$running health=$health exit_code=$exit_code oom_killed=$oom_killed restart_count=$restart_count live_http=$live_status ready_http=$ready_status log_class=$log_class"
 }
 
+emit_otp_stage_diagnostics() {
+  api_id=$1
+  since=$2
+  log_source=unavailable
+  otp_logs=''
+  if otp_logs=$(bounded_docker logs --since "$since" --tail 5000 "$api_id" 2>/dev/null); then
+    log_source=available
+  fi
+
+  printf '%s\n' "$otp_logs" | awk -v source="$log_source" '
+    function status_bucket(status) {
+      if (status == "") return "no_status"
+      if (status >= 200 && status < 300) return "http_2xx"
+      if (status >= 300 && status < 400) return "http_3xx"
+      if (status >= 400 && status < 500) return "http_4xx"
+      if (status >= 500 && status < 600) return "http_5xx"
+      return "http_other"
+    }
+    function extract_number(field, value) {
+      if (match($0, "\\\"" field "\\\":[0-9]+")) {
+        value = substr($0, RSTART, RLENGTH)
+        sub("^\\\"" field "\\\":", "", value)
+        return value + 0
+      }
+      return ""
+    }
+    function extract_string(field, value) {
+      if (match($0, "\\\"" field "\\\":\\\"[^\\\"]+\\\"")) {
+        value = substr($0, RSTART, RLENGTH)
+        sub("^\\\"" field "\\\":\\\"", "", value)
+        sub("\\\"$", "", value)
+        return value
+      }
+      return ""
+    }
+    function record_route(operation, status, bucket) {
+      route_total[operation] += 1
+      bucket = status_bucket(status)
+      route_status[operation, bucket] += 1
+    }
+    function record_metric(operation, outcome, status, bucket) {
+      metric_total[operation] += 1
+      metric_outcome[operation, outcome] += 1
+      bucket = status_bucket(status)
+      metric_status[operation, bucket] += 1
+      if (outcome != "unavailable") return
+      if (operation == "request_code") {
+        metric_failure[operation, status == "" ? "request" : "response"] += 1
+      } else if (operation == "verify_code") {
+        if (status == "") metric_failure[operation, "token_request"] += 1
+        else if (status >= 200 && status < 300) metric_failure[operation, "post_token"] += 1
+        else metric_failure[operation, "token_response"] += 1
+      } else if (operation == "profile_read") {
+        if (status == "") metric_failure[operation, "profile_request"] += 1
+        else if (status >= 200 && status < 300) metric_failure[operation, "profile_payload"] += 1
+        else metric_failure[operation, "profile_response"] += 1
+      }
+    }
+    {
+      if (index($0, "\"msg\":\"incoming request\"") > 0 && index($0, "\"method\":\"POST\"") > 0) {
+        request_id = extract_string("reqId")
+        if (request_id != "") {
+          if (index($0, "\"url\":\"/user/api/v1/local-padel/auth/challenges\"") > 0) {
+            route_by_request[request_id] = "padlhub_challenge_create"
+          } else if ($0 ~ /\"url\":\"\/user\/api\/v1\/local-padel\/auth\/challenges\/[^\/\"?]+\/verify\"/) {
+            route_by_request[request_id] = "padlhub_challenge_verify"
+          }
+        }
+      }
+      if (index($0, "\"msg\":\"request completed\"") > 0) {
+        status = extract_number("statusCode")
+        request_id = extract_string("reqId")
+        if (index($0, "\"method\":\"POST\"") > 0 && index($0, "\"url\":\"/user/api/v1/local-padel/auth/challenges\"") > 0) {
+          record_route("padlhub_challenge_create", status)
+        } else if (index($0, "\"method\":\"POST\"") > 0 && $0 ~ /\"url\":\"\/user\/api\/v1\/local-padel\/auth\/challenges\/[^\/\"?]+\/verify\"/) {
+          record_route("padlhub_challenge_verify", status)
+        } else if (request_id != "" && route_by_request[request_id] != "") {
+          record_route(route_by_request[request_id], status)
+        }
+        if (request_id != "") delete route_by_request[request_id]
+      }
+      if (index($0, "\"msg\":\"identity provider operation\"") == 0) next
+      operation = ""
+      outcome = ""
+      if (index($0, "\"operation\":\"request_code\"") > 0) operation = "request_code"
+      else if (index($0, "\"operation\":\"verify_code\"") > 0) operation = "verify_code"
+      else if (index($0, "\"operation\":\"profile_read\"") > 0) operation = "profile_read"
+      if (index($0, "\"outcome\":\"success\"") > 0) outcome = "success"
+      else if (index($0, "\"outcome\":\"invalid\"") > 0) outcome = "invalid"
+      else if (index($0, "\"outcome\":\"rate_limited\"") > 0) outcome = "rate_limited"
+      else if (index($0, "\"outcome\":\"unavailable\"") > 0) outcome = "unavailable"
+      if (operation != "" && outcome != "") {
+        record_metric(operation, outcome, extract_number("status"))
+      }
+    }
+    END {
+      for (route_index = 1; route_index <= 2; route_index += 1) {
+        operation = route_index == 1 ? "padlhub_challenge_create" : "padlhub_challenge_verify"
+        printf "legacy_otp_hotfix otp_stage_diagnostic scope=local-padel_api_route window=tail_5000 source=%s operation=%s total=%d http_2xx=%d http_3xx=%d http_4xx=%d http_5xx=%d no_status=%d http_other=%d\n", source, operation, route_total[operation], route_status[operation, "http_2xx"], route_status[operation, "http_3xx"], route_status[operation, "http_4xx"], route_status[operation, "http_5xx"], route_status[operation, "no_status"], route_status[operation, "http_other"]
+      }
+      operation = "request_code"
+      printf "legacy_otp_hotfix otp_stage_diagnostic scope=candidate_api_window attribution=aggregate window=tail_5000 source=%s operation=%s total=%d success=%d invalid=%d rate_limited=%d unavailable=%d http_2xx=%d http_3xx=%d http_4xx=%d http_5xx=%d no_status=%d http_other=%d failure_request=%d failure_response=%d\n", source, operation, metric_total[operation], metric_outcome[operation, "success"], metric_outcome[operation, "invalid"], metric_outcome[operation, "rate_limited"], metric_outcome[operation, "unavailable"], metric_status[operation, "http_2xx"], metric_status[operation, "http_3xx"], metric_status[operation, "http_4xx"], metric_status[operation, "http_5xx"], metric_status[operation, "no_status"], metric_status[operation, "http_other"], metric_failure[operation, "request"], metric_failure[operation, "response"]
+      operation = "verify_code"
+      printf "legacy_otp_hotfix otp_stage_diagnostic scope=candidate_api_window attribution=aggregate window=tail_5000 coverage=partial source=%s operation=%s total=%d success=%d invalid=%d rate_limited=%d unavailable=%d http_2xx=%d http_3xx=%d http_4xx=%d http_5xx=%d no_status=%d http_other=%d failure_token_request=%d failure_token_response=%d failure_post_token=%d\n", source, operation, metric_total[operation], metric_outcome[operation, "success"], metric_outcome[operation, "invalid"], metric_outcome[operation, "rate_limited"], metric_outcome[operation, "unavailable"], metric_status[operation, "http_2xx"], metric_status[operation, "http_3xx"], metric_status[operation, "http_4xx"], metric_status[operation, "http_5xx"], metric_status[operation, "no_status"], metric_status[operation, "http_other"], metric_failure[operation, "token_request"], metric_failure[operation, "token_response"], metric_failure[operation, "post_token"]
+      operation = "profile_read"
+      printf "legacy_otp_hotfix otp_stage_diagnostic scope=candidate_api_window attribution=aggregate window=tail_5000 source=%s operation=%s total=%d success=%d invalid=%d rate_limited=%d unavailable=%d http_2xx=%d http_3xx=%d http_4xx=%d http_5xx=%d no_status=%d http_other=%d failure_profile_request=%d failure_profile_response=%d failure_profile_payload=%d\n", source, operation, metric_total[operation], metric_outcome[operation, "success"], metric_outcome[operation, "invalid"], metric_outcome[operation, "rate_limited"], metric_outcome[operation, "unavailable"], metric_status[operation, "http_2xx"], metric_status[operation, "http_3xx"], metric_status[operation, "http_4xx"], metric_status[operation, "http_5xx"], metric_status[operation, "no_status"], metric_status[operation, "http_other"], metric_failure[operation, "profile_request"], metric_failure[operation, "profile_response"], metric_failure[operation, "profile_payload"]
+    }
+  '
+  unset otp_logs
+}
+
+emit_otp_session_evidence() {
+  source=$1
+  evidence_count=$2
+  if test "$source" != available; then
+    evidence_outcome=unknown
+  else
+    case "$evidence_count" in
+    0) evidence_outcome=none ;;
+    1) evidence_outcome=exactly_one ;;
+    '' | *[!0-9]*) evidence_outcome=unknown ;;
+    *) evidence_outcome=multiple ;;
+    esac
+  fi
+  printf '%s\n' "legacy_otp_hotfix otp_stage_diagnostic scope=local-padel_database source=$source operation=session_evidence outcome=$evidence_outcome"
+}
+
 wait_service() {
   service=$1
   release_file=$2
@@ -441,7 +568,9 @@ if test "$operation" = attest; then
   verify_public_release "$candidate_release"
   test "$candidate_ready_at_epoch" -gt 0 || fail 'candidate-ready evidence is absent'
   candidate_ready_at_iso=$(date -u -d "@$candidate_ready_at_epoch" '+%Y-%m-%dT%H:%M:%SZ')
-  evidence_count=$(infrastructure exec -T postgres sh -eu -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atqc "$1"' sh "
+  evidence_source=unavailable
+  evidence_count=''
+  if evidence_count=$(infrastructure exec -T postgres sh -eu -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atqc "$1"' sh "
     select count(*)
     from (
       select distinct session_audit.correlation_id
@@ -472,10 +601,18 @@ if test "$operation" = attest; then
         and external_identity.last_seen_at >= timestamptz '$candidate_ready_at_iso'
         and delegation.updated_at >= timestamptz '$candidate_ready_at_iso'
     ) evidence
-  ")
-  test "$evidence_count" = 1 || fail 'expected exactly one correlation-bound local-padel phone OTP success during the canary window'
-  printf '%s\n' 'legacy_otp_hotfix otp_canary_evidence=correlation-bound status=passed'
-  exit 0
+  " 2>/dev/null); then
+    evidence_source=available
+  fi
+  if test "$evidence_source" = available && test "$evidence_count" = 1; then
+    emit_otp_session_evidence "$evidence_source" "$evidence_count"
+    printf '%s\n' 'legacy_otp_hotfix otp_canary_evidence=correlation-bound status=passed'
+    exit 0
+  fi
+  emit_otp_stage_diagnostics "$(project_container_id api)" "$candidate_ready_at_iso" || true
+  emit_otp_session_evidence "$evidence_source" "$evidence_count"
+  test "$evidence_source" = available || fail 'correlation-bound local-padel phone OTP evidence query is unavailable'
+  fail 'expected exactly one correlation-bound local-padel phone OTP success during the canary window'
 fi
 
 if test "$operation" = rollback; then

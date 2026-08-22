@@ -318,6 +318,31 @@ enter rollback. Health, manifest and OTP evidence are polled inside the same har
 wall-clock window; the first valid evidence closes the window early and immediately enters
 rollback. The candidate is never kept active for a separate post-window attestation period.
 
+Every unsuccessful attestation poll appends a fixed, redacted `otp_stage_diagnostic` snapshot to
+the workflow evidence artifact. An exactly-one database result emits its fixed session-evidence
+record and returns PASS immediately, without reading API logs, so diagnostics cannot delay valid
+evidence or rollback. A failed PostgreSQL query emits `source=unavailable outcome=unknown`, still
+attempts the advisory API-log snapshot and then fails closed.
+
+The snapshot counts only exact POST `local-padel` PadlHub challenge routes by HTTP status class,
+then aggregates the candidate API's `request_code`, `verify_code` and `profile_read` provider
+metrics by allowlisted outcome and status class. It reads at most the latest 5,000 log records since
+candidate-ready; every record is labelled `window=tail_5000`, and high log volume may truncate the
+earlier part of the canary window. For unavailable operations it reports only an inferred fixed
+failure bucket: provider request/response, token request/response, post-token resolution, or
+profile request/response/payload. The exact candidate can reject JWT claims after a successful
+token response without emitting a `verify_code` unavailable metric, so that record is labelled
+`coverage=partial`; a zero post-token counter does not prove that no such failure occurred. The
+provider metric records are not tenant- or correlation-bound, so they are explicitly labelled
+`attribution=aggregate` and must not be treated as proof that a particular user's provider call
+succeeded.
+
+The correlation-bound PostgreSQL session evidence remains the sole PASS gate. If API logs cannot
+be read within the five-second bound, unsuccessful-poll diagnostics report `source=unavailable`
+with zero counters. Raw logs, URLs, challenge IDs, phone, code, tokens, provider subject, user ID
+and correlation ID are never printed or uploaded. Repeated failure snapshots are expected because
+polling remains inside the same hard 15-minute candidate window.
+
 A failed or interrupted PostgreSQL dump before marker publication removes its exact `.next` and
 final archive paths. Once the marker exists, the completed archive and application bundle are
 retained as protected release evidence under the normal backup retention policy; never publish
