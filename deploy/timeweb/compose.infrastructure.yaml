@@ -1,0 +1,226 @@
+name: phub-timeweb-infrastructure
+
+x-service: &service
+  restart: unless-stopped
+  pids_limit: 256
+  deploy:
+    resources:
+      limits:
+        cpus: '0.50'
+        memory: 512M
+        pids: 256
+  logging:
+    driver: local
+    options:
+      max-size: 10m
+      max-file: '3'
+
+services:
+  nginx:
+    <<: *service
+    image: ${NGINX_IMAGE:?NGINX_IMAGE is required}@${NGINX_IMAGE_DIGEST:?NGINX_IMAGE_DIGEST is required}
+    networks: [ingress]
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -q -O /dev/null http://127.0.0.1/healthz']
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  postgres:
+    <<: *service
+    image: ${POSTGRES_IMAGE:?POSTGRES_IMAGE is required}@${POSTGRES_IMAGE_DIGEST:?POSTGRES_IMAGE_DIGEST is required}
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB is required}
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks: [data]
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          cpus: '2.00'
+          memory: 2G
+          pids: 256
+
+  redis:
+    <<: *service
+    image: ${REDIS_IMAGE:?REDIS_IMAGE is required}@${REDIS_IMAGE_DIGEST:?REDIS_IMAGE_DIGEST is required}
+    command:
+      [
+        'redis-server',
+        '--appendonly',
+        'yes',
+        '--save',
+        '60',
+        '1',
+        '--maxmemory',
+        '512mb',
+        '--maxmemory-policy',
+        'noeviction',
+        '--aclfile',
+        '/usr/local/etc/redis/users.acl',
+      ]
+    volumes:
+      - redis_data:/data
+      - /etc/phub/redis/users.acl:/usr/local/etc/redis/users.acl:ro
+    group_add:
+      - ${REDIS_RUNTIME_GID:?REDIS_RUNTIME_GID is required}
+    networks: [data]
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          cpus: '0.75'
+          memory: 768M
+          pids: 256
+
+  rabbitmq:
+    <<: *service
+    image: ${RABBITMQ_IMAGE:?RABBITMQ_IMAGE is required}@${RABBITMQ_IMAGE_DIGEST:?RABBITMQ_IMAGE_DIGEST is required}
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:?RABBITMQ_USER is required}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?RABBITMQ_PASSWORD is required}
+    ports:
+      - '127.0.0.1:15672:15672'
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    networks: [data]
+    healthcheck:
+      test: ['CMD', 'rabbitmq-diagnostics', '-q', 'ping']
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          cpus: '1.00'
+          memory: 1G
+          pids: 256
+
+  otel-collector:
+    <<: *service
+    image: ${OTEL_IMAGE:?OTEL_IMAGE is required}@${OTEL_IMAGE_DIGEST:?OTEL_IMAGE_DIGEST is required}
+    command: ['--config=/etc/otelcol-contrib/config.yaml']
+    volumes:
+      - ./monitoring/otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro
+    networks: [telemetry]
+    ports:
+      - '127.0.0.1:13133:13133'
+    healthcheck:
+      test: ['CMD', '/otelcol-contrib', 'validate', '--config=/etc/otelcol-contrib/config.yaml']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  prometheus:
+    <<: *service
+    image: ${PROMETHEUS_IMAGE:?PROMETHEUS_IMAGE is required}@${PROMETHEUS_IMAGE_DIGEST:?PROMETHEUS_IMAGE_DIGEST is required}
+    ports:
+      - '127.0.0.1:9090:9090'
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.retention.time=7d'
+      - '--storage.tsdb.retention.size=2GB'
+    volumes:
+      - ../jetson/monitoring/prometheus.yaml:/etc/prometheus/prometheus.yml:ro
+      - ../jetson/monitoring/padlhub-alerts.yaml:/etc/prometheus/rules/padlhub-alerts.yaml:ro
+      - prometheus_data:/prometheus
+    networks: [telemetry]
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -q -O /dev/null http://127.0.0.1:9090/-/ready']
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '1.00'
+          memory: 1536M
+          pids: 256
+
+  grafana:
+    <<: *service
+    image: ${GRAFANA_IMAGE:?GRAFANA_IMAGE is required}@${GRAFANA_IMAGE_DIGEST:?GRAFANA_IMAGE_DIGEST is required}
+    ports:
+      - '127.0.0.1:3101:3000'
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:?GRAFANA_ADMIN_USER is required}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD is required}
+      GF_USERS_ALLOW_SIGN_UP: 'false'
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana-datasources.yaml:/etc/grafana/provisioning/datasources/datasources.yaml:ro
+    networks: [telemetry]
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -q -O /dev/null http://127.0.0.1:3000/api/health']
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  swagger-ui:
+    <<: *service
+    image: ${SWAGGER_UI_IMAGE:?SWAGGER_UI_IMAGE is required}@${SWAGGER_UI_IMAGE_DIGEST:?SWAGGER_UI_IMAGE_DIGEST is required}
+    environment:
+      URL: /spec/user/v1/openapi.yaml
+      TRY_IT_OUT_ENABLED: 'false'
+      SUPPORTED_SUBMIT_METHODS: '[]'
+      PERSIST_AUTHORIZATION: 'false'
+      VALIDATOR_URL: ''
+    ports:
+      - '127.0.0.1:18080:8080'
+    volumes:
+      - ../../contracts/openapi:/usr/share/nginx/html/spec:ro
+    networks: [admin]
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -q -O /dev/null http://127.0.0.1:8080/']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  swagger-editor:
+    <<: *service
+    image: ${SWAGGER_EDITOR_IMAGE:?SWAGGER_EDITOR_IMAGE is required}@${SWAGGER_EDITOR_IMAGE_DIGEST:?SWAGGER_EDITOR_IMAGE_DIGEST is required}
+    ports:
+      - '127.0.0.1:18082:80'
+    volumes:
+      - ../../contracts/openapi:/usr/share/nginx/html/spec:ro
+      - ../jetson/swagger/swagger-editor.conf:/etc/nginx/conf.d/default.conf:ro
+    networks: [admin]
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -q -O /dev/null http://127.0.0.1/']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+networks:
+  ingress:
+    external: true
+    name: phub-ingress
+  data:
+    external: true
+    name: phub-data
+  telemetry:
+    external: true
+    name: phub-telemetry
+  admin:
+    external: true
+    name: phub-admin
+
+volumes:
+  postgres_data:
+  redis_data:
+  rabbitmq_data:
+  prometheus_data:
+  grafana_data:

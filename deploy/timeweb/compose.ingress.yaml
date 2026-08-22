@@ -1,0 +1,43 @@
+name: phub-timeweb-ingress
+
+services:
+  caddy:
+    image: ${CADDY_IMAGE:?CADDY_IMAGE is required}@${CADDY_IMAGE_DIGEST:?CADDY_IMAGE_DIGEST is required}
+    restart: unless-stopped
+    pids_limit: 256
+    environment:
+      PHUB_STAGING_DOMAIN: ${PHUB_STAGING_DOMAIN:?PHUB_STAGING_DOMAIN is required}
+    ports:
+      - '80:80'
+      - '443:443'
+      - '443:443/udp'
+    networks: [ingress]
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -q -O /dev/null http://127.0.0.1:2019/healthz']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: '3'
+    deploy:
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 512M
+          pids: 256
+
+networks:
+  ingress:
+    external: true
+    name: phub-ingress
+
+volumes:
+  caddy_data:
+  caddy_config:
