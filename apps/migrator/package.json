@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "tsup --config tsup.config.ts",
+    "build": "tsup --config tsup.config.ts && tsup --config tsup.anchor-rehearsal.config.ts",
     "start": "node dist/main.js"
   },
   "dependencies": {

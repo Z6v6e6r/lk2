@@ -1,6 +1,15 @@
 import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
-import { chmod, mkdir, mkdtemp, readFile, realpath, stat, writeFile } from 'node:fs/promises';
+import {
+  chmod,
+  copyFile,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  stat,
+  writeFile,
+} from 'node:fs/promises';
 import { promisify } from 'node:util';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -22,7 +31,8 @@ const source = fileURLToPath(
   new URL('./communities-staging-role-split-v3-anchor-rehearsal.ts', import.meta.url),
 );
 const repository = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
-const entrypoint = process.env.PHUB_V10_REHEARSAL_ENTRYPOINT ?? source;
+const builtEntrypoint = process.env.PHUB_V10_REHEARSAL_ENTRYPOINT;
+const entrypoint = builtEntrypoint ?? source;
 const productionArtifact = join(
   repository,
   'deploy/jetson/communities-role-split-v3-production-external-anchor-subject.json',
@@ -177,6 +187,9 @@ describe('V3 external-anchor subject and crash rehearsal', () => {
     });
     const productionPath = join(root, 'production.json');
     const rehearsalPath = join(root, 'rehearsal.json');
+    const isolatedEntrypoint =
+      builtEntrypoint === undefined ? entrypoint : join(root, 'rehearsal.mjs');
+    if (builtEntrypoint !== undefined) await copyFile(builtEntrypoint, isolatedEntrypoint);
     const productionBytes = canonicalCommunitiesStagingRoleSplitV3ExternalAnchorSubject(production);
     const rehearsalBytes = canonicalCommunitiesStagingRoleSplitV3ExternalAnchorSubject(rehearsal);
     await writeFile(productionPath, productionBytes, { mode: 0o600 });
@@ -185,15 +198,14 @@ describe('V3 external-anchor subject and crash rehearsal', () => {
     const { stdout, stderr } = await execFileAsync(
       process.execPath,
       [
-        '--import',
-        'tsx',
-        entrypoint,
+        ...(builtEntrypoint === undefined ? ['--import', 'tsx'] : []),
+        isolatedEntrypoint,
         'run',
         productionPath,
         communitiesStagingRoleSplitV3ExternalAnchorSubjectSha256(production),
         rehearsalPath,
         communitiesStagingRoleSplitV3ExternalAnchorSubjectSha256(rehearsal),
-        entrypoint,
+        isolatedEntrypoint,
       ],
       { cwd: repository, timeout: 30_000, maxBuffer: 64 * 1024 },
     );
