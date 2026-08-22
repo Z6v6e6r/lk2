@@ -1,5 +1,38 @@
 # Worklog
 
+## 2026-08-22 — Communities V10 non-authorizing external-anchor rehearsal readback
+
+- Installed `phub-role-split` V10 input-set candidate
+  `0bd3e73bb31eda2dda77b1419cdd3ac86979d987` on staging as a root-owned, non-authorizing
+  state: `authorizesCeremony=false`, `authorizesDatabaseMutation=false`, and no active link.
+- Recorded immutable pins and runner: `bundle=453c24fbf0403a969fa08b44add03220442e8b8cfe33b588a1ccd4deebc80c1d`,
+  `runner=fe82939e7d60075cb676a978ddfcfdf143e5cdd0f5441fca3b517d845b77ad73`,
+  `node image sha256:80b4f469419504008b350a81108bfb29950fc12b4714fe397eb12096dd124e71`.
+- The corresponding production/rehearsal subjects remain pinned as exact bytes:
+  production `078103b490907098b0815185a2442d5744ecf124c89aa92e103b94aef34dff77`,
+  rehearsal `035f03b71776c475e90236f90f789d44eb491fa4af67a34289ced9833f42e7cb`.
+- V10 rehearsal run with execution candidate `74478e8f2ec91443709159ced1ee123345eb29e6`
+  completed as non-authorizing. Run key
+  `3c7fac6ed955b674af7d2c1ef9e702243d4fad023622fccafc52e1312c477849` was retained
+  root-owned with a one-line canonical JSON report (`764` bytes), SHA-256
+  `3e64dd52cded3a41a4570593e2fd412e7cfc681ddddf31f7fff912fe27721514`.
+- Report evidence fields: `beforeAnchorCrash=RECOVERED_TO_RESTORE_PENDING`,
+  `afterAnchorCrash=RECOVERED_TO_RESTORED`, `completeLocalRollback=STATE_ROLLBACK_DETECTED`,
+  `retainedAnchorPhase=RESTORED`, `wholeHostCrashTested=false`, `productionAnchorTouched=false`,
+  `authorizesCeremony=false`, `authorizesLeaseRemoval=false`,
+  `authorizesDatabaseMutation=false`, `authorizesProductionActivation=false`.
+- A later duplicate invocation was blocked with
+  `COMMUNITIES_ROLE_SPLIT_ANCHOR_REHEARSAL_OUTPUT_ALREADY_PRESENT`; read-only reconciliation
+  confirmed the exact report, `production_anchor=absent`, `container=absent`, and that no retry or
+  cleanup was performed.
+- The earlier first input bundle `e460eac816dfeba41afd2b4ca3b747eedf9a1ae91786a6557462cfe54f29dce9` failed
+  before scenario execution because `pg` remained external to the bundle and was unavailable in
+  the networkless runner container. That failed run remains retained; the production anchor and
+  database were not accessed.
+- V10 gate status: non-authorizing supervision crash rehearsal complete. It validates only
+  `SUPERVISED_WORKER_PROCESS` `SIGKILL` behavior and is not a ceremony, whole-host, or database-mutating
+  rehearsal.
+
 ## 2026-08-21 — Communities V10 external-anchor custody and crash rehearsal gate
 
 - Pinned separate canonical production and rehearsal subjects for candidate

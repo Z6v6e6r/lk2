@@ -660,6 +660,32 @@ mode-0444 source snapshots; there is still no command, executable-composition im
 construction, workflow, environment, key, SSH, Docker or PostgreSQL entrypoint. It therefore does
 not make a restore runnable.
 
+For the completed V10 rehearsal on staging:
+
+- Installed `0bd3e73bb31eda2dda77b1419cdd3ac86979d987` as root-owned non-authorizing input set:
+  `status=non_authorizing`, `authorizes_ceremony=false`, `authorizes_database_mutation=false`,
+  `active_link=false`.
+- Verified immutable subject pins:
+  production `078103b490907098b0815185a2442d5744ecf124c89aa92e103b94aef34dff77`,
+  rehearsal `035f03b71776c475e90236f90f789d44eb491fa4af67a34289ced9833f42e7cb`,
+  `bundle=453c24fbf0403a969fa08b44add03220442e8b8cfe33b588a1ccd4deebc80c1d`,
+  `runner=fe82939e7d60075cb676a978ddfcfdf143e5cdd0f5441fca3b517d845b77ad73`,
+  `node image sha256:80b4f469419504008b350a81108bfb29950fc12b4714fe397eb12096dd124e71`.
+- Completed run candidate `74478e8f2ec91443709159ced1ee123345eb29e6` retained root-owned report
+  `3c7fac6ed955b674af7d2c1ef9e702243d4fad023622fccafc52e1312c477849`
+  with one-line report SHA `3e64dd52cded3a41a4570593e2fd412e7cfc681ddddf31f7fff912fe27721514` (764 bytes).
+- Duplicate run invocation returned
+  `COMMUNITIES_ROLE_SPLIT_ANCHOR_REHEARSAL_OUTPUT_ALREADY_PRESENT`; read-only reconciliation then
+  confirmed the exact report, `production_anchor=absent`, `container=absent`, and that no retry or
+  cleanup was performed.
+- The first V10 bundle attempt
+  (`e460eac816dfeba41afd2b4ca3b747eedf9a1ae91786a6557462cfe54f29dce9`) failed before scenario
+  execution because `pg` remained external to the bundle and was unavailable in the networkless
+  runner container. It is retained and does not represent a successful rehearsal.
+- Report evidence confirms: `RECOVERED_TO_RESTORE_PENDING -> RECOVERED_TO_RESTORED`,
+  `STATE_ROLLBACK_DETECTED`, `retainedAnchorPhase=RESTORED`, `productionAnchorTouched=false`,
+  `wholeHostCrashTested=false`, and all ceremony/lease/database/mutation/activation authority false.
+
 ## Remaining gates before execution
 
 1. The exact disabled V9 candidate at commit
@@ -685,10 +711,14 @@ not make a restore runnable.
    `verify-communities-staging-role-split-inventory-artifact` CLI and its independently supplied
    SHA-256. The local synthetic producer/evaluator gate is catalog proof, not trusted inventory;
    mock rows are not catalog proof.
-5. Independently verify the pinned V10 production/rehearsal subject digests and immutable Node image
-   ID, then run the non-authorizing rehearsal on the target Linux filesystem. Retain its root-owned
-   report and prove the production anchor stayed absent. The gate covers supervised-worker
-   `SIGKILL`, not whole-host recovery or stale-lease removal.
+5. COMPLETE: 2026-08-22 — Pinned V10 production/rehearsal subject digests and immutable Node image
+   ID were independently verified, then the non-authorizing rehearsal was executed on target Linux.
+   The run retained root-owned evidence under
+   `3c7fac6ed955b674af7d2c1ef9e702243d4fad023622fccafc52e1312c477849`,
+   proved `production_anchor=absent`, `container=absent`, and `databaseAccessed=false`; no retry or
+   cleanup was performed.
+   The gate covers supervised-worker `SIGKILL` crash behavior only and does not include whole-host
+   recovery or stale-lease removal rehearsal.
 6. Complete independent security and migration review of the final executor bridge, external
    anchor, any later
    installed adapter/candidate manifest, and the failure matrix. A review-only bridge is not an
@@ -696,6 +726,7 @@ not make a restore runnable.
 7. Obtain separate approvals, in order, for the new disabled installation, execution-authorizing
    candidate, forced-command key, one ceremony run and any later post-marker cleanup.
 
-Until items 2-7 pass, do not create a key, wire a workflow, place requests on staging or run either
-ceremony contour. The currently installed V9 command and existing preparation gate must continue
-to fail with `EXECUTION_NOT_AUTHORIZED` before PostgreSQL or mutable ceremony filesystem access.
+Until every gate that remains open above passes, do not create a key, wire a workflow, place
+requests on staging or run either ceremony contour. The currently installed V9 command and
+existing preparation gate must continue to fail with `EXECUTION_NOT_AUTHORIZED` before PostgreSQL
+or mutable ceremony filesystem access.
