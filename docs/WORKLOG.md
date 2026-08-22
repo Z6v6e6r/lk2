@@ -1,5 +1,23 @@
 # Worklog
 
+## 2026-08-22 — Communities trusted-inventory disabled installation candidate checkpoint
+
+- Bumped the private installation manifest/digest contract to V10 and the dependency-free host
+  control ledger to V7. The exact allowlist now adds only the trusted-inventory canonical contract
+  and host-boundary sources as root-owned mode-0444 snapshots.
+- Added five explicit `REQUIRED_FOR_EXECUTION` bindings for the absent credential FD reader,
+  supervised producer composition, private output custody, marker/evidence/mapping inputs and
+  independent artifact pin. They do not block installation of disabled bytes and cannot grant
+  execution.
+- Updated the Node review helper, POSIX installer/verifier and regression coverage for the exact
+  twenty-nine-artifact candidate and thirty-one-entry installed tree. Installation remains the
+  only true authorization; key/workflow/staging access, trusted designation, database mutation,
+  ceremony, cleanup, role split, migration, deploy and activation all remain false.
+- This checkpoint commits no generated candidate directory, key, workflow, CLI, runtime
+  composition or active link. Local candidate build/verify is evidence only; no SSH, staging
+  access, PostgreSQL access, inventory collection, installation, migration, deploy or activation
+  is performed.
+
 ## 2026-08-22 — Communities trusted INPUT_C custody boundary checkpoint
 
 - Added canonical, fail-closed connection, read-only collection authorization and receipt

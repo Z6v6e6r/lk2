@@ -526,7 +526,7 @@ fails with one fixed public error.
 ## Exact disabled installable candidate
 
 `scripts/prepare-communities-role-split-installation-candidate.ts` now builds and verifies a
-private, deterministic V9 candidate directory from an independently supplied exact Git commit. It
+private, deterministic V10 candidate directory from an independently supplied exact Git commit. It
 reads every artifact from Git objects rather than the mutable worktree, validates each expected Git
 mode, disables Git replacement objects, rejects any replacement ref and requires the raw local repository origin
 to be exactly `https://github.com/Z6v6e6r/lk2.git`, refuses an existing output, and accepts only a
@@ -546,6 +546,9 @@ true authorization. It contains:
 - three additional mode-0444 source snapshots for the canonical inventory-preparation contract,
   its verifier and its CLI. They are deliberately unwired and non-runnable: the candidate contains
   no Node runtime, compiled bundle, credential, preparation envelope or evidence payload.
+- two mode-0444 source snapshots for the trusted-inventory canonical contract and host boundary.
+  They remain source-only: no CLI, supervised producer composition, credential FD reader, private
+  output directory, marker/evidence/mapping inputs or independent artifact pin is included;
 - fourteen additional mode-0444 source snapshots for the reviewed V3 durable host, external
   monotonic phase anchor, continuation host, descriptor-pinned restore executor, restore coordinator, executable composition,
   state/continuation/authorization envelopes and host-bound attested evidence. These
@@ -560,12 +563,12 @@ ledger is independently pinned and binds the fixed artifact paths, target-relati
 byte counts, SHA-256 values and false execution authorizations. The shell verifier reconstructs
 the complete canonical JSON bytes from that fixed policy and the exact control records, then
 requires its SHA-256 to equal both the supplied pin and the candidate file digest. A freshly pinned
-authorization change, added field or V8 downgrade therefore fails before target creation.
-The V9 installed readback requires exactly twenty-seven controlled artifacts plus the source
-directory and immutable receipt (`29` entries total); both install and verify loops require an
-exact count of twenty-seven control records. The fifth controlled artifact is the immutable shared
-DDL-fence source. The host-control version is V6 so a V8 allowlist cannot be accepted with freshly
-pinned V9 digests. Both the Node review helper and dependency-free shell verifier enumerate the
+authorization change, added field or V9 downgrade therefore fails before target creation.
+The V10 installed readback requires exactly twenty-nine controlled artifacts plus the source
+directory and immutable receipt (`31` entries total); both install and verify loops require an
+exact count of twenty-nine control records. The fifth controlled artifact is the immutable shared
+DDL-fence source. The host-control version is V7 so a V9 allowlist cannot be accepted with freshly
+pinned V10 digests. Both the Node review helper and dependency-free shell verifier enumerate the
 complete candidate and installed trees without following symbolic links; additional files, empty
 directories or non-file/non-directory entries fail before a successful verification result.
 The installer accepts independently retained manifest, control and artifact-set SHA-256 values. It installs
@@ -579,9 +582,11 @@ for manual reconciliation and is never deleted or overwritten automatically.
 The manifest still contains no forced command (`command=null`, `commandIncluded=false`), public key,
 cleanup exposure, workflow wiring, staging connection or runtime configuration. Key provisioning,
 staging access, database mutation, ceremony, cleanup, role split, migration, deploy and activation
-are all false. The twelve host-binding codes plus `EXTERNAL_MONOTONIC_PHASE_ANCHOR` remain
-`REQUIRED_FOR_EXECUTION`; their evidence is not needed to install disabled bytes, but no installed
-artifact can consume or replace that evidence.
+are all false. The existing thirteen host-binding codes plus five explicit trusted-inventory
+bindings remain `REQUIRED_FOR_EXECUTION`; their evidence is not needed to install disabled bytes,
+but no installed artifact can consume or replace that evidence. The five new bindings require the
+credential FD reader, supervised producer composition, private output custody,
+marker/evidence/mapping inputs and an independent artifact pin.
 Changing any of those authorizations requires a new reviewed candidate version.
 
 After a checkpoint commit, build and verify only in a fresh private local directory:

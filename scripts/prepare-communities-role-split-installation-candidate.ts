@@ -13,11 +13,11 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import { fileURLToPath } from 'node:url';
 
 export const INSTALLATION_CANDIDATE_SCHEMA_VERSION =
-  'communities-role-split-installation-candidate-v9';
+  'communities-role-split-installation-candidate-v10';
 export const INSTALLATION_CANDIDATE_DIGEST_VERSION =
-  'PHUB_COMMUNITIES_ROLE_SPLIT_INSTALLATION_CANDIDATE_DIGEST_V9';
+  'PHUB_COMMUNITIES_ROLE_SPLIT_INSTALLATION_CANDIDATE_DIGEST_V10';
 export const INSTALLATION_CANDIDATE_CONTROL_VERSION =
-  'PHUB_COMMUNITIES_ROLE_SPLIT_HOST_INSTALL_CONTROL_V6';
+  'PHUB_COMMUNITIES_ROLE_SPLIT_HOST_INSTALL_CONTROL_V7';
 
 const sha40Pattern = /^[0-9a-f]{40}$/u;
 const sha256Pattern = /^[0-9a-f]{64}$/u;
@@ -203,6 +203,29 @@ const fileDefinitions: readonly CandidateArtifactDefinition[] = [
     installMode: '0444',
     purpose: 'disabled preparation CLI source snapshot; Node runtime and execution wiring absent',
   },
+  {
+    sourcePath: 'packages/database/src/communities-staging-role-split-trusted-inventory.ts',
+    sourceGitMode: '100644',
+    artifactPath: 'payload/source/communities-staging-role-split-trusted-inventory-database.ts',
+    targetRelativePath: 'source/communities-staging-role-split-trusted-inventory-database.ts',
+    action: 'INSTALL_NEW',
+    installOwner: 'root',
+    installGroup: 'root',
+    installMode: '0444',
+    purpose: 'trusted-inventory canonical contract snapshot; deliberately unwired and non-runnable',
+  },
+  {
+    sourcePath: 'apps/migrator/src/communities-staging-role-split-trusted-inventory-host.ts',
+    sourceGitMode: '100644',
+    artifactPath: 'payload/source/communities-staging-role-split-trusted-inventory-host.ts',
+    targetRelativePath: 'source/communities-staging-role-split-trusted-inventory-host.ts',
+    action: 'INSTALL_NEW',
+    installOwner: 'root',
+    installGroup: 'root',
+    installMode: '0444',
+    purpose:
+      'trusted-inventory host boundary snapshot; no CLI, producer composition or credential reader',
+  },
   ...[
     'communities-staging-role-split-v3-durable-host.ts',
     'communities-staging-role-split-v3-external-phase-anchor.ts',
@@ -260,6 +283,11 @@ const unresolvedBindingCodes = [
   'RESTORE_LOGIN_ROLE',
   'SOURCE_WRITE_DENIAL_ATTESTATION',
   'STAGING_KNOWN_HOSTS_PIN',
+  'TRUSTED_INVENTORY_CREDENTIAL_FD_READER',
+  'TRUSTED_INVENTORY_INDEPENDENT_ARTIFACT_PIN',
+  'TRUSTED_INVENTORY_MARKER_EVIDENCE_MAPPING_INPUTS',
+  'TRUSTED_INVENTORY_PRIVATE_OUTPUT_CUSTODY',
+  'TRUSTED_INVENTORY_SUPERVISED_PRODUCER_COMPOSITION',
 ] as const;
 
 function fail(code: string): never {

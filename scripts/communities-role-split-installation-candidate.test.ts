@@ -40,6 +40,8 @@ const sourceDefinitions = [
   ['packages/database/src/communities-staging-role-split-inventory-preparation.ts', 0o644],
   ['apps/migrator/src/communities-staging-role-split-inventory-preparation.ts', 0o644],
   ['apps/migrator/src/verify-communities-staging-role-split-inventory-preparation.ts', 0o644],
+  ['packages/database/src/communities-staging-role-split-trusted-inventory.ts', 0o644],
+  ['apps/migrator/src/communities-staging-role-split-trusted-inventory-host.ts', 0o644],
   ['apps/migrator/src/communities-staging-role-split-v3-durable-host.ts', 0o644],
   ['apps/migrator/src/communities-staging-role-split-v3-external-phase-anchor.ts', 0o644],
   ['apps/migrator/src/communities-staging-role-split-v3-durable-continuation-host.ts', 0o644],
@@ -175,7 +177,7 @@ describe('communities role-split installation candidate', () => {
     const manifest = JSON.parse(
       readFileSync(join(first, 'installation-candidate.json'), 'utf8'),
     ) as CommunitiesRoleSplitInstallationCandidate;
-    expect(manifest.schemaVersion).toBe('communities-role-split-installation-candidate-v9');
+    expect(manifest.schemaVersion).toBe('communities-role-split-installation-candidate-v10');
     expect(manifest.status).toBe('INSTALLABLE_DISABLED');
     expect(manifest.installable).toBe(true);
     expect(manifest.reasonCode).toBe('RUNTIME_BINDINGS_REQUIRED');
@@ -223,6 +225,11 @@ describe('communities role-split installation candidate', () => {
       'RESTORE_LOGIN_ROLE',
       'SOURCE_WRITE_DENIAL_ATTESTATION',
       'STAGING_KNOWN_HOSTS_PIN',
+      'TRUSTED_INVENTORY_CREDENTIAL_FD_READER',
+      'TRUSTED_INVENTORY_INDEPENDENT_ARTIFACT_PIN',
+      'TRUSTED_INVENTORY_MARKER_EVIDENCE_MAPPING_INPUTS',
+      'TRUSTED_INVENTORY_PRIVATE_OUTPUT_CUSTODY',
+      'TRUSTED_INVENTORY_SUPERVISED_PRODUCER_COMPOSITION',
     ]);
     expect(manifest.executionBindings.every(({ blocksInstallation }) => !blocksInstallation)).toBe(
       true,
@@ -231,7 +238,7 @@ describe('communities role-split installation candidate', () => {
     expect(
       manifest.artifactFiles.every(({ artifactPath }) => artifactPath.startsWith('payload/')),
     ).toBe(true);
-    expect(manifest.artifactFiles).toHaveLength(27);
+    expect(manifest.artifactFiles).toHaveLength(29);
     const ddlFenceArtifact = manifest.artifactFiles.find(
       ({ sourcePath }) =>
         sourcePath === 'apps/migrator/src/communities-staging-role-split-ddl-fence.ts',
@@ -302,6 +309,31 @@ describe('communities role-split installation candidate', () => {
         installMode: '0444',
       },
     ]);
+    expect(
+      manifest.artifactFiles
+        .slice(13, 15)
+        .map(({ sourcePath, artifactPath, installMode, purpose }) => ({
+          sourcePath,
+          artifactPath,
+          installMode,
+          purpose,
+        })),
+    ).toEqual([
+      {
+        sourcePath: 'packages/database/src/communities-staging-role-split-trusted-inventory.ts',
+        artifactPath: 'payload/source/communities-staging-role-split-trusted-inventory-database.ts',
+        installMode: '0444',
+        purpose:
+          'trusted-inventory canonical contract snapshot; deliberately unwired and non-runnable',
+      },
+      {
+        sourcePath: 'apps/migrator/src/communities-staging-role-split-trusted-inventory-host.ts',
+        artifactPath: 'payload/source/communities-staging-role-split-trusted-inventory-host.ts',
+        installMode: '0444',
+        purpose:
+          'trusted-inventory host boundary snapshot; no CLI, producer composition or credential reader',
+      },
+    ]);
     expect(manifest.installation).toEqual({
       targetRoot: `/usr/local/libexec/phub/communities-role-split/candidates/${candidateSha}`,
       atomicNewVersionOnly: true,
@@ -315,20 +347,22 @@ describe('communities role-split installation candidate', () => {
     const hostInstaller = readFileSync(join(first, 'payload/installer.sh'), 'utf8');
     expect(hostInstaller).toContain('--control-sha256');
     expect(hostInstaller).toContain('/usr/bin/sha256sum');
-    expect(hostInstaller).toContain('PHUB_COMMUNITIES_ROLE_SPLIT_INSTALLATION_CANDIDATE_DIGEST_V9');
-    expect(hostInstaller).toContain('PHUB_COMMUNITIES_ROLE_SPLIT_HOST_INSTALL_CONTROL_V6');
+    expect(hostInstaller).toContain(
+      'PHUB_COMMUNITIES_ROLE_SPLIT_INSTALLATION_CANDIDATE_DIGEST_V10',
+    );
+    expect(hostInstaller).toContain('PHUB_COMMUNITIES_ROLE_SPLIT_HOST_INSTALL_CONTROL_V7');
     expect(hostInstaller).toContain(
       'case "$count" in \'\' | *[!0-9]*) fail FILE_SET_INVALID ;; esac',
     );
     expect(hostInstaller).toContain(
-      '[ "$(walk_count "$candidate")" = 32 ] || fail FILE_SET_INVALID',
+      '[ "$(walk_count "$candidate")" = 34 ] || fail FILE_SET_INVALID',
     );
-    expect(hostInstaller).toContain('read_exact_line CONTROL_INVALID artifactCount=27');
-    expect(hostInstaller).toContain('while [ "$index" -le 27 ]');
+    expect(hostInstaller).toContain('read_exact_line CONTROL_INVALID artifactCount=29');
+    expect(hostInstaller).toContain('while [ "$index" -le 29 ]');
     expect(hostInstaller).toContain(
-      '[ "$(walk_count "$target")" = 29 ] || fail INSTALLED_FILE_SET_INVALID',
+      '[ "$(walk_count "$target")" = 31 ] || fail INSTALLED_FILE_SET_INVALID',
     );
-    expect(hostInstaller).toContain('[ "$index" = 27 ] || fail CONTROL_INVALID');
+    expect(hostInstaller).toContain('[ "$index" = 29 ] || fail CONTROL_INVALID');
     expect(hostInstaller).toContain('expected_manifest_bytes()');
     expect(hostInstaller).toContain(
       'expected_manifest_sha=$(expected_manifest_bytes 2>/dev/null | /usr/bin/sha256sum | /usr/bin/awk',
@@ -360,7 +394,7 @@ describe('communities role-split installation candidate', () => {
     );
     expect(hostInstaller).not.toContain('[ "$(walk_count "$target")" = 11 ]');
     expect(hostInstaller).not.toContain('[ "$index" = 9 ]');
-    expect(manifest.artifactFiles.slice(13).map(({ sourcePath }) => sourcePath)).toEqual([
+    expect(manifest.artifactFiles.slice(15).map(({ sourcePath }) => sourcePath)).toEqual([
       'apps/migrator/src/communities-staging-role-split-v3-durable-host.ts',
       'apps/migrator/src/communities-staging-role-split-v3-external-phase-anchor.ts',
       'apps/migrator/src/communities-staging-role-split-v3-durable-continuation-host.ts',
@@ -386,7 +420,7 @@ describe('communities role-split installation candidate', () => {
         candidatePath: first,
       }),
     ).toEqual(firstResult);
-  });
+  }, 15_000);
 
   it('rejects payload tampering and additional files', () => {
     const parent = privateParent('phub-role-split-installation-tamper-');
@@ -622,7 +656,7 @@ describe('communities role-split installation candidate', () => {
         },
         {
           ...manifest,
-          schemaVersion: 'communities-role-split-installation-candidate-v6',
+          schemaVersion: 'communities-role-split-installation-candidate-v9',
         },
       ]) {
         const forgedBytes = `${JSON.stringify(forged, null, 2)}\n`;
@@ -817,8 +851,8 @@ describe('communities role-split installation candidate', () => {
     ).toThrow('COMMUNITIES_ROLE_SPLIT_CODE_INSTALLATION_MANIFEST_INVALID');
   });
 
-  it('rejects the previous V8 manifest even when its expanded payload is freshly pinned', () => {
-    const parent = privateParent('phub-role-split-installation-v8-');
+  it('rejects the previous V9 manifest even when its expanded payload is freshly pinned', () => {
+    const parent = privateParent('phub-role-split-installation-v9-');
     const candidate = candidatePath(parent, candidateSha);
     const pins = buildCommunitiesRoleSplitInstallationCandidate({
       repositoryRoot: repository,
@@ -830,13 +864,13 @@ describe('communities role-split installation candidate', () => {
     const stale = `${JSON.stringify(
       {
         ...manifest,
-        schemaVersion: 'communities-role-split-installation-candidate-v8',
+        schemaVersion: 'communities-role-split-installation-candidate-v9',
       },
       null,
       2,
     )}\n`;
     writeFileSync(manifestPath, stale, { mode: 0o600 });
-    const installationRoot = privateParent('phub-role-split-installation-v8-root-');
+    const installationRoot = privateParent('phub-role-split-installation-v9-root-');
 
     expect(() =>
       installCommunitiesRoleSplitDisabledCandidate({

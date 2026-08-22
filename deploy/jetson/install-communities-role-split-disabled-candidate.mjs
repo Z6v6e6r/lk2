@@ -22,7 +22,7 @@ import {
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const schemaVersion = 'communities-role-split-installation-candidate-v9';
+const schemaVersion = 'communities-role-split-installation-candidate-v10';
 const sha40 = /^[0-9a-f]{40}$/u;
 const sha256 = /^[0-9a-f]{64}$/u;
 const installPrefix = '/usr/local/libexec/phub/communities-role-split/candidates';
@@ -82,6 +82,20 @@ const expectedArtifacts = [
     targetRelativePath: 'source/verify-communities-staging-role-split-inventory-preparation.ts',
     installMode: '0444',
   },
+  {
+    sourcePath: 'packages/database/src/communities-staging-role-split-trusted-inventory.ts',
+    sourceGitMode: '100644',
+    artifactPath: 'payload/source/communities-staging-role-split-trusted-inventory-database.ts',
+    targetRelativePath: 'source/communities-staging-role-split-trusted-inventory-database.ts',
+    installMode: '0444',
+  },
+  {
+    sourcePath: 'apps/migrator/src/communities-staging-role-split-trusted-inventory-host.ts',
+    sourceGitMode: '100644',
+    artifactPath: 'payload/source/communities-staging-role-split-trusted-inventory-host.ts',
+    targetRelativePath: 'source/communities-staging-role-split-trusted-inventory-host.ts',
+    installMode: '0444',
+  },
   ...[
     'communities-staging-role-split-v3-durable-host.ts',
     'communities-staging-role-split-v3-external-phase-anchor.ts',
@@ -127,6 +141,11 @@ const expectedExecutionBindingCodes = [
   'RESTORE_LOGIN_ROLE',
   'SOURCE_WRITE_DENIAL_ATTESTATION',
   'STAGING_KNOWN_HOSTS_PIN',
+  'TRUSTED_INVENTORY_CREDENTIAL_FD_READER',
+  'TRUSTED_INVENTORY_INDEPENDENT_ARTIFACT_PIN',
+  'TRUSTED_INVENTORY_MARKER_EVIDENCE_MAPPING_INPUTS',
+  'TRUSTED_INVENTORY_PRIVATE_OUTPUT_CUSTODY',
+  'TRUSTED_INVENTORY_SUPERVISED_PRODUCER_COMPOSITION',
 ];
 
 function fail(code) {
