@@ -852,7 +852,7 @@ start_runtime() {
     maybe_fail "$side-$service-ready"
   done
   if test "$side" = candidate; then
-    compose_with "$release_file" create --no-deps --force-recreate --pull never web
+    compose_with "$release_file" up --no-start --no-deps --force-recreate --pull never web
     candidate_web_id=$(project_container_id_any web)
     install_previous_web_assets "$candidate_web_id"
     maybe_fail candidate-web-assets-compatible
