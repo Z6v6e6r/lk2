@@ -49,13 +49,12 @@ bounded expiry. The workflow executes the repository operator inside the digest-
 image so `DATABASE_URL` is never copied to GitHub Actions or printed.
 
 The deploy performs a fresh audited dry-run and apply after image pull, migration, TLS and local
-HomeBase verification. `FULL_LIVE_HOME` then runs `activate-live-home.sh` and requires fresh Viva,
-community, promotion and platform projections. `CLIENT_ASSISTED_VIVA` instead runs
-`activate-client-assisted-viva.sh`: it preserves the current Home read mode, disables blocked
-server-side Viva Home sync and enables only the browser-assisted transport. Both profiles keep the
-global direct-read kill switch and the tenant routing plan as independent rollback controls. Do
-not lengthen the response envelope to hide refresh failures; the routing operator intentionally
-accepts only 30–300 seconds.
+HomeBase verification. `CLIENT_ASSISTED_VIVA` is the only Viva user-data deployment profile. It runs
+`activate-client-assisted-viva.sh`, preserves the current Home read mode, keeps the retired
+server-side Viva Home sync off and enables only browser-assisted transport. The global direct-read
+kill switch and tenant routing plan remain independent rollback controls. `FULL_LIVE_HOME` and
+`activate-live-home.sh` are retired and fail closed. Do not lengthen the response envelope to hide
+refresh failures; the routing operator intentionally accepts only 30–300 seconds.
 
 ## Mixed-mode smoke
 
@@ -93,9 +92,9 @@ Keep `PROFILE_PHOTO_CLIENT_SYNC_ENABLED=false` and
 Keep `COMMUNITY_LOGO_COMPATIBILITY_BACKFILL_ENABLED=false` during normal operation; it is a
 bounded rollback-only maintenance mode.
 `PROFILE_PHOTO_MAINTENANCE_ENABLED` is a separate worker-only lifecycle flag: turn it on before
-client writes and keep it on until pending commands and all object-GC rows are both zero. Existing
-`HOME_VIVA_SYNC_ENABLED=true` workers also continue maintenance for backward compatibility. The order
-is mandatory:
+client writes and keep it on until pending commands and all object-GC rows are both zero.
+`HOME_VIVA_SYNC_ENABLED` is retired and must remain `false`; it is not a maintenance fallback.
+The order is mandatory:
 
 Before using any release artifact that packages `0082` or `0083`, prove from
 `public.schema_migrations` that the protected chat/push foundation migrations
@@ -390,7 +389,8 @@ Normal deploy preflight accepts either the attested pre-cutover state (`false/fa
 state (`true/false`). It always rejects compatibility backfill. Every non-legacy deployment profile
 runs the flag-only postcheck and proves that both API and worker processes received the selected
 stable flag, so a later exact-digest deploy does not silently revert directory/detail responses to
-signed URLs. The fuller real-data verification remains an additional `FULL_LIVE_HOME` gate.
+signed URLs. Viva real-data verification is now performed only through the authenticated
+client-assisted browser smoke; server-side provider reads are not a fallback gate.
 
 The worker revalidates unchanged source URLs conditionally, limits one cycle to 20 source URLs with
 at most four concurrent operations and two bounded HTTP attempts per URL, and processes only the ten

@@ -110,10 +110,7 @@ import {
   PersistentTrainerAvatarMedia,
   type EventAvatarMedia,
 } from './event-avatar-media.js';
-import {
-  registerCoachGameSummaryRoutes,
-  type CoachGameSummarySource,
-} from './coach-games/coach-game-summary-routes.js';
+import { registerCoachGameSummaryRoutes } from './coach-games/coach-game-summary-routes.js';
 import { registerGameRoutes } from './games/game-routes.js';
 import { registerLegacyGameRosterBridgeRoutes } from './games/legacy-game-roster-bridge-routes.js';
 import type { LegacyLkIdentityVerifier } from './games/legacy-lk-identity-verifier.js';
@@ -319,7 +316,6 @@ export interface BuildAppOptions {
   readonly activityHistoryRefresher?: ActivityHistoryRefreshService;
   readonly activityHistoryProjector?: ActivityHistoryProjectionService;
   readonly tournamentSummarySource?: TournamentSummarySource;
-  readonly coachGameSummarySource?: CoachGameSummarySource;
   readonly eventAvatarMedia?: EventAvatarMedia;
   readonly trainerAvatarRepository?: TrainerAvatarRepository;
   readonly trainerAvatarMediaStore?: TrainerAvatarMediaStore;
@@ -996,8 +992,6 @@ export async function buildApp(options: BuildAppOptions) {
     authenticatedTenantHandlers: [authenticate, authorizeGamesPlayer, resolveTenant],
   });
   registerCoachGameSummaryRoutes(app as unknown as FastifyInstance, {
-    ...(options.coachGameSummarySource ? { source: options.coachGameSummarySource } : {}),
-    avatarMedia: eventAvatarMedia,
     publicTenantHandlers: [resolvePublicTenant],
   });
   const bookingRecommendationAuthService = options.authService;

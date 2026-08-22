@@ -30,10 +30,9 @@ const messagingReleaseVerification = repositoryFile(
   'deploy/jetson/verify-messaging-test-release.sh',
 );
 const activation = repositoryFile('deploy/jetson/activate-live-home.sh');
-const liveHomeSourceDiagnostic = repositoryFile(
-  'deploy/jetson/diagnose-live-home-source-failures.sh',
-);
 const workerMain = repositoryFile('apps/worker/src/main.ts');
+const apiMain = repositoryFile('apps/api/src/main.ts');
+const webAuthGateway = repositoryFile('apps/web/src/auth-gateway.ts');
 const communitiesReadOnlyActivation = repositoryFile(
   'deploy/jetson/activate-communities-legacy-read-only.sh',
 );
@@ -152,7 +151,7 @@ describe('Nano presentation release contract', () => {
   it('deploys the messaging test contour without changing the current Home mode', () => {
     expect(stagingWorkflow).toContain('MESSAGING_TEST');
     expect(stagingWorkflow).toContain('CLIENT_ASSISTED_VIVA');
-    expect(stagingWorkflow).toContain("inputs.deployment_profile == 'FULL_LIVE_HOME'");
+    expect(stagingWorkflow).not.toContain('FULL_LIVE_HOME');
     expect(stagingWorkflow).toContain("inputs.deployment_profile == 'MESSAGING_TEST'");
     expect(stagingWorkflow).toContain(
       'Verify messaging test release and preserve the current Home mode',
@@ -404,10 +403,9 @@ describe('Nano presentation release contract', () => {
     expect(communitiesReadOnlyVerification).toContain('authenticated_projection_ok=true');
   });
 
-  it('allows production promotion only from a successful Full Live Home staging gate', () => {
-    expect(stagingWorkflow).toContain("inputs.deployment_profile == 'FULL_LIVE_HOME'");
-    expect(stagingWorkflow).toContain('name: production-promotion-eligibility');
-    expect(stagingWorkflow).toContain('PROFILE=FULL_LIVE_HOME');
+  it('fails closed for production promotion after retiring the server-read staging gate', () => {
+    expect(stagingWorkflow).not.toContain('FULL_LIVE_HOME');
+    expect(stagingWorkflow).not.toContain('name: production-promotion-eligibility');
     expect(productionWorkflow).toContain('name: production-promotion-eligibility');
     expect(productionWorkflow).toContain('Require the full staging promotion profile');
     expect(productionWorkflow).toContain('= FULL_LIVE_HOME');
@@ -506,39 +504,32 @@ describe('Nano presentation release contract', () => {
   });
 
   it('activates browser read jobs only with a usable mixed routing envelope', () => {
-    expect(activation).toContain("printf 'VIVA_DIRECT_READ_ENABLED=true\\n'");
-    expect(activation).toContain("plan.mode = 'MIXED_END_USER_READS'");
-    expect(activation).toContain("plan.direct_read_operations @> array['profile.read']::text[]");
-    expect(activation).toContain("binding.provider = 'VIVA'");
-    expect(verification).toContain('require_value VIVA_DIRECT_READ_ENABLED true');
-    expect(verification).toContain('routing_ready_delegations');
+    expect(clientAssistedActivation).toContain("printf '%s\\n' 'VIVA_DIRECT_READ_ENABLED=true'");
+    expect(clientAssistedActivation).toContain("plan.mode = 'MIXED_END_USER_READS'");
+    expect(clientAssistedActivation).toContain(
+      "plan.direct_read_operations = array['profile.read']::text[]",
+    );
+    expect(clientAssistedActivation).toContain("binding.provider = 'VIVA'");
+    expect(clientAssistedVerification).toContain('require_value VIVA_DIRECT_READ_ENABLED true');
+    expect(clientAssistedVerification).toContain('routing_ready_delegations');
   });
 
-  it('captures redacted candidate-worker evidence before a failed Live Home rollback', () => {
-    const failureGate = activation.slice(
-      activation.indexOf('if test "$projection_ready" -ne 1; then'),
-      activation.indexOf('write_runtime_override projection'),
-    );
-    const restoreOverride = failureGate.indexOf(
-      'write_runtime_override "$previous_home_read_mode"',
-    );
-    const captureEvidence = failureGate.indexOf(
-      'sh /opt/phub/diagnose-live-home-source-failures.sh "$activation_started" worker',
-    );
-    const recreateWorker = failureGate.indexOf('compose up -d --force-recreate worker');
-
-    expect(stagingWorkflow).toContain('scp deploy/jetson/diagnose-live-home-source-failures.sh');
-    expect(restoreOverride).toBeGreaterThan(-1);
-    expect(captureEvidence).toBeGreaterThan(restoreOverride);
-    expect(recreateWorker).toBeGreaterThan(captureEvidence);
-    expect(failureGate).toContain('continuing worker rollback');
-    expect(liveHomeSourceDiagnostic).toContain('timeout 15 docker logs --since="$since"');
-    expect(liveHomeSourceDiagnostic).toContain('Viva Home read operation');
-    expect(liveHomeSourceDiagnostic).toContain('providerTenantKey');
-    expect(workerMain).toContain("logger.info({ metric }, 'Viva Home read operation')");
+  it('retires the legacy server End User activation path', () => {
+    expect(activation).toContain('FULL_LIVE_HOME is retired');
+    expect(activation).toContain('client-assisted browser transport');
+    expect(stagingWorkflow).not.toContain('Activate and verify live Home projection');
+    expect(workerMain).not.toContain('VivaHomeSourceAdapter');
+    expect(workerMain).not.toContain('runVivaHomeSyncCycle');
+    expect(workerMain).not.toContain("logger.info({ metric }, 'Viva Home read operation')");
     expect(workerMain).not.toContain(
       "logger.info({ metric, providerTenantKey }, 'Viva Home read operation')",
     );
+    expect(apiMain).not.toContain('VivaCoachGameSummaryAdapter');
+    expect(apiMain).not.toContain('VivaExerciseRecommendationSourceAdapter');
+    expect(apiMain).not.toContain('VIVA_AUTH_PROFILE_API_URL');
+    expect(webAuthGateway).not.toContain('listPublicCoachGameSummaries');
+    expect(webAuthGateway).toContain('loadClientAssistedEventCatalog');
+    expect(webAuthGateway).toContain("completion.screen !== 'EVENT_CATALOG'");
   });
 
   it('activates Nano client-assisted Viva reads without the blocked server Home sync', () => {
@@ -598,10 +589,12 @@ describe('Nano presentation release contract', () => {
     const routingRefresh = stagingWorkflow.indexOf(
       'Refresh the audited routing plan for browser-assisted Viva reads',
     );
-    const liveHomeActivation = stagingWorkflow.indexOf('Activate and verify live Home projection');
+    const clientAssistedActivationStep = stagingWorkflow.indexOf(
+      'Activate and verify client-assisted Viva reads independently of Home sync',
+    );
     expect(homeBaseGate).toBeGreaterThan(-1);
     expect(routingRefresh).toBeGreaterThan(homeBaseGate);
-    expect(liveHomeActivation).toBeGreaterThan(routingRefresh);
+    expect(clientAssistedActivationStep).toBeGreaterThan(routingRefresh);
     expect(stagingWorkflow).toContain(
       'routing-mixed-deploy-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}',
     );
@@ -609,22 +602,16 @@ describe('Nano presentation release contract', () => {
     expect(stagingWorkflow).toContain('"$reason" true');
   });
 
-  it('bounds communities and activates all four independent CUP placements', () => {
+  it('keeps community and platform scheduling independent from the retired Viva reader', () => {
     for (const capability of ['DETAIL', 'FEED', 'CHAT', 'RATING']) {
-      expect(activation).toContain(`printf 'COMMUNITY_LEGACY_READ_${capability}_ENABLED=true\\n'`);
-      expect(verification).toContain(
-        `require_value COMMUNITY_LEGACY_READ_${capability}_ENABLED true`,
+      expect(communitiesReadOnlyActivation).toContain(
+        `COMMUNITY_LEGACY_READ_${capability}_ENABLED=true`,
       );
-      expect(verification).toContain(`env.COMMUNITY_LEGACY_READ_${capability}_ENABLED !== 'true'`);
     }
-    expect(activation).toContain("printf 'COMMUNITIES_LEGACY_TIMEOUT_MS=2500\\n'");
-    expect(activation).toContain("printf 'COMMUNITIES_LEGACY_MAX_ATTEMPTS=1\\n'");
-    expect(activation).toContain('PROMOTIONS_HERO_PLACEMENT=cabinet_home_top');
-    expect(activation).toContain('PROMOTIONS_RECOMMENDATION_STRIP_PLACEMENT=cabinet_for_me_strip');
-    expect(activation).toContain('PROMOTIONS_RECOMMENDATION_CARD_PLACEMENT=cabinet_for_me_card');
-    expect(verification).toContain("['cabinet_home_top', '/api/advertising/cabinet-home-top']");
-    expect(verification).toContain(
-      "['cabinet_for_me_card', '/api/advertising/cabinet-for-me-card']",
+    expect(workerMain).toContain('config.COMMUNITY_HOME_SYNC_ENABLED');
+    expect(workerMain).toContain('config.PLATFORM_HOME_SYNC_ENABLED');
+    expect(workerMain).not.toContain(
+      'shuttingDown || !config.HOME_VIVA_SYNC_ENABLED || !profilePhotoStore || !communityHome',
     );
   });
 

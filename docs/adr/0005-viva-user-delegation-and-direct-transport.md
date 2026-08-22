@@ -1,9 +1,10 @@
 # ADR 0005: Viva user delegation and direct user transport
 
-- Status: accepted, direct-command portion superseded by ADR 0008
+- Status: accepted, server End User transport superseded by ADR 0023
 - Date: 2026-07-12
 - Extends: [ADR 0004](0004-provider-neutral-authentication.md)
 - Amended by: [ADR 0019](0019-home-base-and-viva-egress-gate.md)
+- Amended by: [ADR 0023](0023-browser-only-viva-end-user-transport.md)
 
 ## Context
 

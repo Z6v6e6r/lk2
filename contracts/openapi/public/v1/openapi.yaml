@@ -563,11 +563,12 @@ paths:
     get:
       tags: [coach-games]
       operationId: listPublicCoachGameSummaries
-      summary: Discover public coach-game summaries
+      summary: Retired public coach-game discovery compatibility route
+      deprecated: true
       description: |
-        Returns at most fifty summary cards for a bounded fifteen-day range. The operation reads one
-        Viva schedule version per date and never returns exercise, studio, court or trainer provider
-        identifiers, trainer media URLs, client arrays or booking credentials.
+        Returns a compatible empty page with `Deprecation: true` and a successor link. Authenticated
+        PadlHub clients use the client-assisted Event Catalog, where Viva End User schedule reads
+        execute in the browser and only normalized results return to PadlHub.
       parameters:
         - name: dateFrom
           in: query
@@ -599,22 +600,25 @@ paths:
             default: 20
       responses:
         '200':
-          description: Bounded coach-game cards without provider identities or client rosters.
+          description: Empty compatibility page; use the linked authenticated Event Catalog.
           headers:
             X-Correlation-ID:
               $ref: ../../common/components.yaml#/components/headers/CorrelationId
+            Deprecation:
+              schema:
+                type: string
+                enum: ['true']
+            Link:
+              schema:
+                type: string
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/PublicCoachGameSummaryPage'
-        '400':
-          $ref: ../../common/components.yaml#/components/responses/BadRequest
         '404':
           $ref: ../../common/components.yaml#/components/responses/NotFound
         '429':
           $ref: ../../common/components.yaml#/components/responses/TooManyRequests
-        '503':
-          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
   /{tenantKey}/coach-games/{summaryId}/trainer-avatar:
     parameters:
       - $ref: ../../common/components.yaml#/components/parameters/TenantKey
@@ -629,27 +633,28 @@ paths:
     get:
       tags: [coach-games]
       operationId: getPublicCoachGameTrainerAvatar
-      summary: Load a locally cached coach avatar
+      summary: Retired public coach avatar compatibility route
+      deprecated: true
       description: |
-        Reads the PadlHub-owned WebP cache first and uses Viva only on a cache miss. The Viva media
-        URL and trainer identifier remain server-side.
+        Returns `204` with `Deprecation: true`. Coach media for authenticated event cards is
+        delivered through the client-assisted Event Catalog contour.
       responses:
-        '200':
-          description: Trainer avatar normalized as WebP.
+        '204':
+          description: Retired media surface; use the linked authenticated Event Catalog.
           headers:
             X-Correlation-ID:
               $ref: ../../common/components.yaml#/components/headers/CorrelationId
-          content:
-            image/webp:
+            Deprecation:
               schema:
                 type: string
-                format: binary
+                enum: ['true']
+            Link:
+              schema:
+                type: string
         '404':
           $ref: ../../common/components.yaml#/components/responses/NotFound
         '429':
           $ref: ../../common/components.yaml#/components/responses/TooManyRequests
-        '503':
-          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
   /{tenantKey}/booking-activities/{activityId}/host-avatar:
     parameters:
       - $ref: ../../common/components.yaml#/components/parameters/TenantKey

@@ -424,7 +424,7 @@ printf ']},"Image":"image-%s"}]\n' "$2"
     expect(deploy).toContain('media-rollout/restore-evidence.txt');
     expect(deploy).toContain('media_shared_migration duration_seconds=');
     expect(deploy).not.toContain('43:community-logo)');
-    expect(deploy).toContain("inputs.deployment_profile == 'FULL_LIVE_HOME'");
+    expect(deploy).not.toContain('FULL_LIVE_HOME');
     expect(deploy).not.toContain(
       "inputs.deployment_profile == 'MEDIA_BINARY_ONLY' || inputs.deployment_profile == 'FULL_LIVE_HOME'",
     );

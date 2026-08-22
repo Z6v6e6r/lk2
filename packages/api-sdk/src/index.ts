@@ -182,9 +182,6 @@ export type PublicTournamentSummaryPage =
   PublicApiComponents['schemas']['PublicTournamentSummaryPage'];
 export type TournamentParticipant = components['schemas']['TournamentParticipant'];
 export type TournamentParticipantRoster = components['schemas']['TournamentParticipantRoster'];
-export type PublicCoachGameSummary = PublicApiComponents['schemas']['PublicCoachGameSummary'];
-export type PublicCoachGameSummaryPage =
-  PublicApiComponents['schemas']['PublicCoachGameSummaryPage'];
 export type PublicGiftCertificateCatalog =
   PublicApiComponents['schemas']['PublicGiftCertificateCatalog'];
 export type CreateGiftCertificateOrderRequest =
@@ -220,8 +217,6 @@ export interface PublicTournamentSummaryRange {
   readonly dateFrom: string;
   readonly dateTo: string;
 }
-
-export type PublicCoachGameFilters = PublicTournamentFilters;
 
 export interface ActivityHistoryFilters {
   readonly kind?: ActivityHistoryKind;
@@ -1044,22 +1039,6 @@ export class PadlHubApiClient {
   public getTournamentParticipants(tournamentId: string): Promise<TournamentParticipantRoster> {
     return this.request<TournamentParticipantRoster>(
       `/tournaments/${encodeURIComponent(tournamentId)}/participants`,
-    );
-  }
-
-  public listPublicCoachGameSummaries(
-    input: PublicCoachGameFilters,
-  ): Promise<PublicCoachGameSummaryPage> {
-    const query = new URLSearchParams({
-      dateFrom: input.dateFrom,
-      dateTo: input.dateTo,
-    });
-    if (input.availability) query.set('availability', input.availability);
-    if (input.limit !== undefined) query.set('limit', String(input.limit));
-    return this.requestFromRoot<PublicCoachGameSummaryPage>(
-      this.publicApiRoot,
-      `/coach-games?${query.toString()}`,
-      { auth: 'none' },
     );
   }
 

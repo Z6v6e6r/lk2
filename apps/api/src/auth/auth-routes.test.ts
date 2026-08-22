@@ -37,7 +37,7 @@ const config = loadConfig({
   JWT_REFRESH_SECRET: 'test-refresh-secret-at-least-32-characters',
 });
 
-function loadPhoneProjectionConfig() {
+function loadVivaPhoneConfig() {
   return loadConfig({
     APP_ENV: 'ci',
     DATABASE_URL: 'postgresql://phub:test@localhost:5432/phub',
@@ -52,7 +52,6 @@ function loadPhoneProjectionConfig() {
     VIVA_OAUTH_REDIRECT_URI: 'https://app.example.test/oauth/callback',
     VIVA_OAUTH_SUCCESS_REDIRECT_URL: 'https://app.example.test/',
     VIVA_DELEGATION_ENCRYPTION_KEY: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
-    HOME_VIVA_SYNC_ENABLED: 'true',
   });
 }
 
@@ -1195,7 +1194,7 @@ describe('provider-neutral authentication routes', () => {
   });
 
   it('persists the server-only Viva refresh delegation from phone authentication', async () => {
-    const phoneProjectionConfig = loadPhoneProjectionConfig();
+    const phoneProjectionConfig = loadVivaPhoneConfig();
     const repository = new FakeRepository();
     const phoneProvider: IdentityProviderPort = {
       key: 'VIVA',
@@ -1249,11 +1248,12 @@ describe('provider-neutral authentication routes', () => {
     expect(verifyResponse.body).not.toContain('server-only-phone-refresh-token');
   });
 
-  it('fails closed when a Viva phone login cannot seed the required Home delegation', async () => {
-    const phoneProjectionConfig = loadPhoneProjectionConfig();
+  it('allows Viva phone login without a delegation and defers reauthorization to browser reads', async () => {
+    const phoneProjectionConfig = loadVivaPhoneConfig();
+    const repository = new FakeRepository();
     const authService = new AuthService({
       config: phoneProjectionConfig,
-      repository: new FakeRepository(),
+      repository,
       challengeStore: new MemoryAuthChallengeStore(),
       providers: new Map([['VIVA', provider]]),
     });
@@ -1281,9 +1281,9 @@ describe('provider-neutral authentication routes', () => {
       },
     });
 
-    expect(verifyResponse.statusCode).toBe(401);
-    expect(verifyResponse.json()).toMatchObject({ code: 'VIVA_REAUTH_REQUIRED' });
-    expect(verifyResponse.headers['set-cookie']).toBeUndefined();
+    expect(verifyResponse.statusCode).toBe(200);
+    expect(repository.hasVivaDelegation).toBe(false);
+    expect(verifyResponse.headers['set-cookie']).toBeDefined();
   });
 
   it('uses the explicit local CUP code without calling Viva sandbox', async () => {

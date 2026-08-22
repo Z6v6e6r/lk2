@@ -1,0 +1,23 @@
+{
+  "source": "successful LK1 SMS login HAR, redacted",
+  "responseStatus": 200,
+  "request": {
+    "phoneNumber": "digits_without_plus",
+    "tenantKey": "string"
+  },
+  "jwt": {
+    "alg": "RS256",
+    "claims": {
+      "azp": "string",
+      "tenant_key": "string",
+      "sub": "string",
+      "phone_number": "digits_without_plus",
+      "phone_number_verified": true,
+      "exp": "number"
+    }
+  },
+  "normalizedPhoneMatchesRequest": true,
+  "containsToken": false,
+  "containsPhone": false,
+  "containsSubject": false
+}

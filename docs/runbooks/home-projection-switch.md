@@ -150,51 +150,13 @@ the OpenAPI contract, API/SDK implementation, database RLS, section-state UI and
 isolation pass together. Roll back the client/API image digest without down-migrating or deleting
 HomeBase rows.
 
-## Enable Viva source producers
+## Viva-owned source refresh
 
-Profile, upcoming Viva bookings and subscriptions can be filled continuously before changing the
-API read mode:
-
-```dotenv
-VIVA_MODE=sandbox
-VIVA_OAUTH_ENABLED=true
-HOME_VIVA_SYNC_ENABLED=true
-HOME_VIVA_LEGACY_GAME_BRIDGE_ENABLED=false
-HOME_VIVA_SYNC_INTERVAL_MS=120000
-HOME_VIVA_SYNC_BATCH_SIZE=20
-HOME_VIVA_SYNC_FAILURE_BACKOFF_MS=300000
-VIVA_END_USER_API_URL=https://api.vivacrm.ru/end-user/api
-S3_ENDPOINT=http://minio:9000
-S3_PUBLIC_ENDPOINT=https://media-staging.padlhub.example
-S3_REGION=us-east-1
-S3_BUCKET=phub-media
-S3_ACCESS_KEY=<secret runtime value>
-S3_SECRET_KEY=<secret runtime value>
-S3_FORCE_PATH_STYLE=true
-S3_AUTO_CREATE_BUCKET=false
-PROFILE_PHOTO_ALLOWED_HOSTS=.selcdn.ru,.selstorage.ru
-PROFILE_PHOTO_MAX_BYTES=8388608
-PROFILE_PHOTO_MAX_DIMENSION=1024
-PROFILE_PHOTO_WEBP_QUALITY=82
-PROFILE_PHOTO_URL_TTL_SECONDS=3600
-```
-
-Set `HOME_VIVA_LEGACY_GAME_BRIDGE_ENABLED=true` only in local/staging when the separately documented
-targeted bridge is required. It may remain enabled while
-`LEGACY_GAMES_ROSTER_SYNC_ENABLED=false`: the bridge evaluates only Viva-proven upcoming exercise
-IDs and uses shared cache/single-flight/circuit protection. Follow
-`docs/runbooks/games-legacy-server-migration.md` for the complete gates and postchecks.
-
-Keep the delegation encryption key only in the secret runtime environment. Recreate the worker so
-Docker applies changed environment values. `S3_PUBLIC_ENDPOINT` must be reachable by the client;
-it is used only to sign GET URLs, while `S3_ENDPOINT` remains the private worker-to-storage address.
-Production bucket provisioning is an infrastructure step and keeps `S3_AUTO_CREATE_BUCKET=false`:
-
-```bash
-docker compose up -d --force-recreate worker
-docker compose exec -T worker node -e \
-  "fetch('http://127.0.0.1:3002/health/ready').then(async r=>{console.log(r.status,await r.text());process.exit(r.ok?0:1)})"
-```
+`HOME_VIVA_SYNC_ENABLED` and the targeted Viva Home Game bridge are retired. Profile, schedule,
+upcoming-booking, subscription and exercise reads use the client-assisted browser jobs described in
+ADR 0023. Do not recreate a worker/server fallback. PadlHub-owned Community and platform producers
+may be enabled separately with `COMMUNITY_HOME_SYNC_ENABLED` and
+`PLATFORM_HOME_SYNC_ENABLED` after their own rollout checks; both default to `false`.
 
 Enable the existing CUP Home advertising placement as an independent producer:
 
@@ -224,14 +186,9 @@ keeps the database source URL constraint aligned with the worker allowlist: HTTP
 for loopback, `host.docker.internal`, or the `phab-showcase` service name. The runtime must still
 list the exact hostname in `PROMOTION_IMAGE_PRIVATE_HTTP_HOSTS`.
 
-For Jetson staging, `deploy/jetson/activate-live-home.sh` replaces the legacy public origin with
-`http://phab-showcase:3000`, maps the Home hero to CUP Block 1 (`cabinet_home_top`) and the standard
-deck to CUP Block 2 (`cabinet_home`), and allowlists
-`phab-showcase` for the staging-only private HTTP media copy. Production rejects any non-empty
-`PROMOTION_IMAGE_PRIVATE_HTTP_HOSTS`. The staging worker is attached to the external
-`phab-showcase_default` network; absence of that network or an invalid
-response from any of the four configured advertising placements is a rollout NO-GO. Do not expose this private HTTP
-origin to web/mobile clients and do not bypass the showcase Basic Auth from a browser.
+The former `deploy/jetson/activate-live-home.sh` path is retired and no longer configures CUP
+placements. Any future staging promotion activation requires its own reviewed profile and must keep
+the private showcase origin out of web/mobile clients.
 
 Recreate only the worker after changing this gate. Verify a `promotion` row for the test user in
 `home.dashboard_components`, then verify that its payload contains only PadlHub UUIDs and signed
@@ -307,24 +264,10 @@ or subscriptions, and no section may silently fall back between PadlHub and Viva
 ### Jetson staging activation
 
 The staging Compose file reads `/etc/phub/staging.env` first and an optional non-secret
-`/opt/phub/staging.override.env` second. The deploy workflow runs
-`deploy/jetson/activate-live-home.sh`, which writes only the Home/community/promotion feature gates
-to that override. Secrets remain exclusively in `/etc/phub/staging.env`.
-
-The activation is deliberately two-phase. It recreates the worker while Home reads stay on mock
-and temporarily raises the promotion batch to 100 so active delegated users are covered within the
-bounded activation window. It then requires every active Viva delegation to receive fresh Viva,
-community and promotion source components, three fresh canonical platform components, a canonical
-locations component and a fresh complete `LOCAL_PROJECTION` snapshot. Only after that database gate
-passes does it write `HOME_READ_MODE=projection` and recreate both API and worker from the persistent
-projection override. If the gate times out, the script prints only aggregate component readiness,
-restores the previous persistent read mode, captures a bounded redacted diagnostic from the still
-running candidate worker, recreates the worker from the restored mode and exits without changing the
-running API mode. From matching log lines, the diagnostic retains the required source operation,
-outcome, attempt, HTTP status and duration evidence; tokens, user/tenant/correlation identifiers and
-the Viva provider tenant key are redacted. Diagnostic failure never prevents worker rollback. This
-evidence distinguishes a provider authorization response such as `403` from transport and schema
-failures, but it does not satisfy the Viva egress gate or authorize another rollout.
+`/opt/phub/staging.override.env` second. `CLIENT_ASSISTED_VIVA` updates only the browser-transport
+gates and preserves `HOME_READ_MODE`; `activate-live-home.sh` fails closed. Community and platform
+projection producers require separate default-off flags and their own rollout evidence. Secrets
+remain exclusively in the protected runtime environment.
 
 ## Failure and rollback
 

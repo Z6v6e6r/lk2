@@ -53,8 +53,6 @@ import type {
   PlayerProfileView,
   PublicGameCardPage,
   PublicGameFilters,
-  PublicCoachGameFilters,
-  PublicCoachGameSummaryPage,
   PublicTournamentFilters,
   PublicTournamentSummary,
   PublicTournamentSummaryRange,
@@ -129,9 +127,6 @@ export type {
   PublicGameCard,
   PublicGameCardPage,
   PublicGameFilters,
-  PublicCoachGameFilters,
-  PublicCoachGameSummary,
-  PublicCoachGameSummaryPage,
   PublicTournamentFilters,
   PublicTournamentSummaryRange,
   PublicTournamentSummary,
@@ -377,9 +372,6 @@ export interface AuthGateway {
   readonly getTournamentParticipants?: (
     tournamentId: string,
   ) => Promise<TournamentParticipantRoster>;
-  readonly listPublicCoachGameSummaries?: (
-    input: PublicCoachGameFilters,
-  ) => Promise<PublicCoachGameSummaryPage>;
   readonly listMyGames: (input?: {
     readonly scope?: 'UPCOMING' | 'HISTORY';
     readonly limit?: number;
@@ -1807,10 +1799,6 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
 
     getTournamentParticipants(tournamentId) {
       return client.getTournamentParticipants(tournamentId);
-    },
-
-    listPublicCoachGameSummaries(input) {
-      return client.listPublicCoachGameSummaries(input);
     },
 
     listMyGames(input = {}) {

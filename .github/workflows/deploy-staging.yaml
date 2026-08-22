@@ -11,12 +11,11 @@ on:
         description: Select an explicitly bounded staging deployment profile
         required: true
         type: choice
-        default: FULL_LIVE_HOME
+        default: CLIENT_ASSISTED_VIVA
         options:
-          - FULL_LIVE_HOME
+          - CLIENT_ASSISTED_VIVA
           - MEDIA_BINARY_ONLY
           - COMMUNITIES_LEGACY_READ_ONLY
-          - CLIENT_ASSISTED_VIVA
           - MESSAGING_TEST
           - CHAT_PUSH_FOUNDATION
           - CHAT_PUSH_FOUNDATION_RECOVERY
@@ -272,7 +271,7 @@ jobs:
             exit 1
           fi
           case "$DEPLOYMENT_PROFILE" in
-            FULL_LIVE_HOME | CLIENT_ASSISTED_VIVA)
+            CLIENT_ASSISTED_VIVA)
               if [ -n "$FOUNDATION_MAINTENANCE_CONFIRMATION$FOUNDATION_EXPECTED_CANDIDATE_SHA$FOUNDATION_EXPECTED_ACTIVE_RELEASE_SHA$FOUNDATION_TENANT_KEYS$FOUNDATION_NO_BOOKING_PRODUCER_CONFIRMATION$FOUNDATION_ORIGINAL_RUN_ID$FOUNDATION_ORIGINAL_RUN_ATTEMPT" ]; then
                 echo '::error::Viva-backed deployment cannot include foundation-maintenance inputs.'
                 exit 1
@@ -1969,7 +1968,7 @@ jobs:
           esac
           printf 'compatibility_floor=%s status=preserved\n' "$EXPECTED_COMPATIBILITY_FLOOR" | tee -a "$attestation"
       - name: Refresh the audited routing plan for browser-assisted Viva reads
-        if: ${{ inputs.deployment_profile == 'FULL_LIVE_HOME' || inputs.deployment_profile == 'CLIENT_ASSISTED_VIVA' }}
+        if: ${{ inputs.deployment_profile == 'CLIENT_ASSISTED_VIVA' }}
         env:
           HOST: ${{ secrets.STAGING_HOST }}
           TENANT_KEY: ${{ inputs.routing_tenant_key }}
@@ -1982,11 +1981,6 @@ jobs:
             "$TENANT_KEY" "$ACTOR_ID" "$operation_id" "$operation_id" "$reason" false
           ssh "phub-deploy@$HOST" /opt/phub/run-client-routing-plan.sh \
             "$TENANT_KEY" "$ACTOR_ID" "$operation_id" "$operation_id" "$reason" true
-      - name: Activate and verify live Home projection
-        if: ${{ inputs.deployment_profile == 'FULL_LIVE_HOME' }}
-        env:
-          HOST: ${{ secrets.STAGING_HOST }}
-        run: ssh "phub-deploy@$HOST" 'sh /opt/phub/activate-live-home.sh'
       - name: Activate and verify Communities legacy read-only projection
         if: ${{ inputs.deployment_profile == 'COMMUNITIES_LEGACY_READ_ONLY' }}
         env:
@@ -2000,16 +1994,6 @@ jobs:
         run: |
           ssh "phub-deploy@$HOST" sh /opt/phub/activate-client-assisted-viva.sh "$TENANT_KEY"
           ssh "phub-deploy@$HOST" sh /opt/phub/verify-client-assisted-viva.sh "$TENANT_KEY"
-      - name: Verify real staging identities and Games
-        if: ${{ inputs.deployment_profile == 'FULL_LIVE_HOME' }}
-        env:
-          HOST: ${{ secrets.STAGING_HOST }}
-        run: ssh "phub-deploy@$HOST" 'sh /opt/phub/verify-live-staging-data.sh'
-      - name: Verify CUP campaigns and notifications binding
-        if: ${{ inputs.deployment_profile == 'FULL_LIVE_HOME' }}
-        env:
-          HOST: ${{ secrets.STAGING_HOST }}
-        run: ssh "phub-deploy@$HOST" 'sh /opt/phub/verify-cup-integrations.sh local-padel'
       - name: Verify messaging test release and preserve the current Home mode
         if: ${{ inputs.deployment_profile == 'MESSAGING_TEST' }}
         env:
@@ -2061,22 +2045,6 @@ jobs:
             media-postdeploy
             media-rollout
           if-no-files-found: ignore
-          retention-days: 30
-      - name: Record production promotion eligibility
-        if: ${{ inputs.deployment_profile == 'FULL_LIVE_HOME' }}
-        run: |
-          install -d -m 700 promotion-eligibility
-          {
-            echo 'PROFILE=FULL_LIVE_HOME'
-            echo "RELEASE=$GITHUB_SHA"
-            echo "STAGING_RUN_ID=$GITHUB_RUN_ID"
-          } > promotion-eligibility/production-promotion-eligibility.env
-          chmod 600 promotion-eligibility/production-promotion-eligibility.env
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        if: ${{ inputs.deployment_profile == 'FULL_LIVE_HOME' }}
-        with:
-          name: production-promotion-eligibility
-          path: promotion-eligibility/production-promotion-eligibility.env
           retention-days: 30
       - name: Contain a failed foundation recovery without starting old writers
         if: ${{ (failure() || cancelled()) && inputs.deployment_profile == 'CHAT_PUSH_FOUNDATION_RECOVERY' }}
