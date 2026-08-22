@@ -1,8 +1,18 @@
+import { lstatSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { defineConfig } from 'tsup';
 
 const outputDirectory = process.env.PHUB_ROLE_SPLIT_RUNTIME_OUT_DIR;
+const repositoryNodeModules = fileURLToPath(new URL('../../node_modules', import.meta.url));
+
+try {
+  const nodeModules = lstatSync(repositoryNodeModules);
+  if (!nodeModules.isDirectory() || nodeModules.isSymbolicLink()) throw new Error();
+} catch {
+  throw new Error('COMMUNITIES_ROLE_SPLIT_RUNTIME_BUNDLE_DEPENDENCY_TREE_INVALID');
+}
 
 export default defineConfig({
   entry: {

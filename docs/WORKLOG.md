@@ -16,6 +16,10 @@
 - This checkpoint performs only local build and verification. It does not generate or install a
   host candidate, access staging or PostgreSQL, collect trusted inventory, run a ceremony, migrate,
   deploy or activate anything. The previously installed immutable V11 candidate remains unchanged.
+- Integration verification found that a worktree-level `node_modules` symlink omitted the locked
+  package-local dependency tree while producing the checked-in runtime bytes. The bundle was
+  regenerated from the physical lockfile installation, and the build now rejects an absent or
+  symlinked repository `node_modules` before `tsup` can emit candidate bytes.
 
 ## 2026-08-22 — Communities trusted-inventory source-only runtime wiring checkpoint
 
