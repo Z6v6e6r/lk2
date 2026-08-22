@@ -22,7 +22,7 @@ import {
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const schemaVersion = 'communities-role-split-installation-candidate-v11';
+const schemaVersion = 'communities-role-split-installation-candidate-v12';
 const sha40 = /^[0-9a-f]{40}$/u;
 const sha256 = /^[0-9a-f]{64}$/u;
 const installPrefix = '/usr/local/libexec/phub/communities-role-split/candidates';
@@ -136,6 +136,24 @@ const expectedArtifacts = [
     targetRelativePath: `source/${name}`,
     installMode: '0444',
   })),
+  ...[
+    'communities-staging-role-split-trusted-inventory-runtime-wiring.ts',
+    'communities-staging-role-split-trusted-inventory-runtime-module.ts',
+  ].map((name) => ({
+    sourcePath: `apps/migrator/src/${name}`,
+    sourceGitMode: '100644',
+    artifactPath: `payload/source/${name}`,
+    targetRelativePath: `source/${name}`,
+    installMode: '0444',
+  })),
+  {
+    sourcePath:
+      'deploy/jetson/generated/communities-staging-role-split-trusted-inventory-runtime.mjs',
+    sourceGitMode: '100644',
+    artifactPath: 'payload/runtime/communities-staging-role-split-trusted-inventory-runtime.mjs',
+    targetRelativePath: 'runtime/communities-staging-role-split-trusted-inventory-runtime.mjs',
+    installMode: '0444',
+  },
 ];
 const expectedExecutionBindingCodes = [
   'BACKUP_CUSTODY_HANDOFF',
@@ -449,6 +467,7 @@ function readAndVerifyCandidate(input) {
   assertDirectory(input.candidatePath, input.expectedUid, 0o700);
   assertDirectory(join(input.candidatePath, 'payload'), input.expectedUid, 0o700);
   assertDirectory(join(input.candidatePath, 'payload/source'), input.expectedUid, 0o700);
+  assertDirectory(join(input.candidatePath, 'payload/runtime'), input.expectedUid, 0o700);
   assertExactTree(
     input.candidatePath,
     [
@@ -585,6 +604,7 @@ export function verifyCommunitiesRoleSplitDisabledInstallation(input) {
   const targetPath = resolveInstalledPath(input.installationRoot, manifest.installation.targetRoot);
   assertDirectory(targetPath, expectedUid, 0o755);
   assertDirectory(join(targetPath, 'source'), expectedUid, 0o755);
+  assertDirectory(join(targetPath, 'runtime'), expectedUid, 0o755);
   assertExactTree(
     targetPath,
     [completeReceiptName, ...expectedArtifacts.map(({ targetRelativePath }) => targetRelativePath)],
