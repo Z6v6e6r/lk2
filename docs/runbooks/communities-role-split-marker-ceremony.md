@@ -459,6 +459,37 @@ absent. A later separately reviewed execution design must define the credential 
 directory, exclusive root-owned output publication, timeout/cancellation, connection read-only
 enforcement and exact readback receipt before any inventory collection can be authorized.
 
+The code-only `communities-staging-role-split-trusted-inventory-host.ts` boundary now specifies that
+later execution design without making it runnable. Its canonical connection descriptor permits
+only the fixed clean-clone contour `postgres:5432/phub_restore_<run>_<attempt>`, password transport
+on borrowed FD 3, `defaultTransactionReadOnly=true`, and the existing producer's fixed application
+name and timeouts. A separate exact authorization must bind the candidate, preparation,
+connection descriptor, producer bytes, private output directory and both output paths. It permits
+only the bounded inventory connection/read and artifact publication; trusted designation and all
+role, ACL, shared-database, migration, deploy and activation authority remain false.
+
+The library revalidates the complete preparation verification result rather than trusting its
+TypeScript shape. On Linux as root it accepts only a root-owned single-link `0400` credential
+descriptor and exact root-owned single-link `0444` producer descriptor, both opened `O_RDONLY`; it
+rechecks them after the collector returns. Collection has a fixed 45-second bound, abort plus
+`SIGTERM`, and a fixed 5-second grace before `SIGKILL`. Output is published only below one pinned
+root-owned mode-0700 directory, through exclusive mode-0400 temporary files, fsync, hard-link
+publication and exact canonical readback. Exact artifact plus receipt replay is reconciled without
+rerunning the collector. One-sided or different output is retained as an ambiguity and collection
+is never retried automatically.
+
+This boundary is intentionally not a `tsup` entry and has no CLI, subprocess composition,
+credential reader, PostgreSQL wiring, installed candidate, key or workflow. Its receipt records
+only that the configured descriptor validator completed; the external composition still has to
+prove that it used the concrete validator and file store. The receipt therefore retains
+`hostCollaboratorCompositionNotAttested=true`,
+`independentArtifactPinNotAttested=true`, organizational/provenance non-attestations and
+`trustedInventoryDesignationNotGranted=true`. A later fresh review must bind a concrete supervised
+producer composition and the three marker/evidence/mapping inputs before this source can collect
+anything. The actual `BEFORE`/`AFTER` INPUT_C artifacts must still be produced from an independently
+sourced clean clone and pinned by a separate custodian; this local checkpoint neither connects to
+PostgreSQL nor closes remaining gate 4.
+
 ## Independently pinned acceptance artifact gate
 
 `apps/migrator/src/verify-communities-role-split-acceptance-artifact.ts` is the local, read-only

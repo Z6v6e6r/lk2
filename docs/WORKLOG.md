@@ -1,5 +1,20 @@
 # Worklog
 
+## 2026-08-22 — Communities trusted INPUT_C custody boundary checkpoint
+
+- Added canonical, fail-closed connection, read-only collection authorization and receipt
+  contracts for a future independently sourced clean-clone INPUT_C run. The receipt never grants
+  trusted designation, role/ACL/shared-database mutation, migration, deploy or activation.
+- Added an unwired host library that binds the complete preparation verification, exact producer
+  and credential descriptors, fixed timeout/termination behavior, exclusive root-owned publication,
+  exact readback, deterministic replay and retained partial-output ambiguity.
+- Added focused tests for canonical contract rejection, authority widening, exact replay without
+  recollection, one-sided response loss, path drift, noncanonical output, timeout escalation and
+  output-directory substitution/custody drift.
+- This checkpoint has no CLI or concrete subprocess/credential/PostgreSQL composition and was not
+  added to the migrator build entries. No SSH, staging access, database connection, inventory
+  collection, role/ACL change, key, workflow, deploy or activation was performed.
+
 ## 2026-08-22 — Communities Gate 6 fail-closed remediation checkpoint
 
 - Reclassified the reported restore-role OID gap against current `main`: the clone preflight already
