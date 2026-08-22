@@ -1,0 +1,669 @@
+name: Publish immutable Timeweb amd64 images
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Check the exact source or perform the separately approved publication
+        required: true
+        type: choice
+        default: source_check_only
+        options:
+          - source_check_only
+          - publish
+      expected_source_sha:
+        description: Exact approved 40-character source SHA to publish
+        required: true
+        type: string
+      expected_workflow_sha:
+        description: Exact reviewed main SHA containing this publication workflow
+        required: true
+        type: string
+      confirmation:
+        description: Leave empty for validation or type PUBLISH_TIMEWEB_AMD64_35C8312
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: timeweb-amd64-image-publication
+  cancel-in-progress: false
+
+jobs:
+  validate-request:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Validate exact first-attempt main request
+        env:
+          ACTOR: ${{ github.actor }}
+          APPROVED_SOURCE_SHA: 35c8312b79cccdd136f2bfd892efbea629b8b919
+          CONFIRMATION: ${{ inputs.confirmation }}
+          EXPECTED_SOURCE_SHA: ${{ inputs.expected_source_sha }}
+          EXPECTED_WORKFLOW_SHA: ${{ inputs.expected_workflow_sha }}
+          OPERATION: ${{ inputs.operation }}
+          REPOSITORY: ${{ github.repository }}
+          REQUEST_REF: ${{ github.ref }}
+          REQUEST_SHA: ${{ github.sha }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          test "$REQUEST_REF" = refs/heads/main || {
+            echo '::error::Image publication is allowed only from the main workflow.'
+            exit 1
+          }
+          test "$WORKFLOW_SHA" = "$REQUEST_SHA" || {
+            echo '::error::The workflow must execute from the current main commit.'
+            exit 1
+          }
+          test "$REPOSITORY" = Z6v6e6r/lk2
+          test "$RUN_ATTEMPT" = 1
+          test "$ACTOR" = "$TRIGGERING_ACTOR"
+          printf '%s' "$EXPECTED_SOURCE_SHA" | grep -Eq '^[0-9a-f]{40}$'
+          printf '%s' "$EXPECTED_WORKFLOW_SHA" | grep -Eq '^[0-9a-f]{40}$'
+          test "$WORKFLOW_SHA" = "$EXPECTED_WORKFLOW_SHA" || {
+            echo '::error::The separately reviewed workflow SHA is required.'
+            exit 1
+          }
+          test "$EXPECTED_SOURCE_SHA" = "$APPROVED_SOURCE_SHA" || {
+            echo '::error::This single-purpose workflow may publish only main@35c8312.'
+            exit 1
+          }
+          case "$OPERATION" in
+            source_check_only)
+              test -z "$CONFIRMATION" || {
+                echo '::error::A source-only check cannot include a publication confirmation.'
+                exit 1
+              }
+              ;;
+            publish)
+              test "$CONFIRMATION" = PUBLISH_TIMEWEB_AMD64_35C8312 || {
+                echo '::error::The exact publication confirmation is required.'
+                exit 1
+              }
+              ;;
+            *) exit 64 ;;
+          esac
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify source ancestry from the reviewed main workflow
+        env:
+          EXPECTED_SOURCE_SHA: ${{ inputs.expected_source_sha }}
+          REQUEST_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$REQUEST_SHA"
+          test "$(git rev-parse "$EXPECTED_SOURCE_SHA^{tree}")" = a1b920b8ae4507080789c650b8c16c669e55b477
+          git merge-base --is-ancestor "$EXPECTED_SOURCE_SHA" HEAD
+
+  verify-source:
+    needs: validate-request
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ inputs.expected_source_sha }}
+      - name: Verify exact clean source checkout
+        env:
+          EXPECTED_SOURCE_SHA: ${{ inputs.expected_source_sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE_SHA"
+          test -z "$(git status --porcelain)"
+          test "$(git rev-parse 'HEAD^{tree}')" = a1b920b8ae4507080789c650b8c16c669e55b477
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run contracts:generate
+      - run: npm run check
+
+  build-and-publish:
+    needs: [validate-request, verify-source]
+    if: ${{ inputs.operation == 'publish' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    environment: timeweb-amd64-publication
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [web, api, worker, realtime, migrator]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ inputs.expected_source_sha }}
+      - name: Verify exact clean source checkout
+        env:
+          EXPECTED_SOURCE_SHA: ${{ inputs.expected_source_sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE_SHA"
+          test -z "$(git status --porcelain)"
+          test "$(git rev-parse 'HEAD^{tree}')" = a1b920b8ae4507080789c650b8c16c669e55b477
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Refuse to overwrite the unique publication tag
+        env:
+          IMAGE_TAG: ghcr.io/z6v6e6r/phub-${{ matrix.service }}:amd64-sha-${{ inputs.expected_source_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          if docker buildx imagetools inspect "$IMAGE_TAG" >/dev/null 2>&1; then
+            echo '::error::The unique publication tag already exists.'
+            exit 1
+          fi
+      - id: image
+        name: Build and publish immutable linux/amd64 image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: apps/${{ matrix.service }}/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ghcr.io/z6v6e6r/phub-${{ matrix.service }}:amd64-sha-${{ inputs.expected_source_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          labels: |
+            org.opencontainers.image.revision=${{ inputs.expected_source_sha }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=amd64-sha-${{ inputs.expected_source_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          build-args: |
+            PHUB_RELEASE=${{ inputs.expected_source_sha }}
+          provenance: mode=max,version=v1
+          sbom: true
+          cache-from: type=gha,scope=timeweb-amd64-${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=timeweb-amd64-${{ matrix.service }}
+      - name: Capture the immediate non-authorizing push receipt
+        if: ${{ steps.image.outputs.digest != '' }}
+        env:
+          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+          IMAGE_REFERENCE: ghcr.io/z6v6e6r/phub-${{ matrix.service }}
+          SERVICE: ${{ matrix.service }}
+          SOURCE_SHA: ${{ inputs.expected_source_sha }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$IMAGE_DIGEST" | grep -Eq '^sha256:[0-9a-f]{64}$'
+          mkdir -p publication-receipt
+          jq -n \
+            --arg service "$SERVICE" \
+            --arg sourceSha "$SOURCE_SHA" \
+            --arg workflowSha "$WORKFLOW_SHA" \
+            --arg repository "$IMAGE_REFERENCE" \
+            --arg indexDigest "$IMAGE_DIGEST" \
+            --arg publicationTag "amd64-sha-$SOURCE_SHA-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
+            --arg runId "$GITHUB_RUN_ID" \
+            --arg runAttempt "$GITHUB_RUN_ATTEMPT" \
+            '{
+              schemaVersion: 1,
+              kind: "phub-timeweb-amd64-immediate-push-receipt",
+              service: $service,
+              sourceSha: $sourceSha,
+              workflowSha: $workflowSha,
+              repository: $repository,
+              indexDigest: $indexDigest,
+              publicationTag: $publicationTag,
+              platform: "linux/amd64",
+              runId: $runId,
+              runAttempt: $runAttempt,
+              verified: false,
+              complete: false,
+              authorizesDeploy: false
+            }' > "publication-receipt/$SERVICE-push-receipt.json"
+      - name: Preserve the immediate non-authorizing push receipt
+        if: ${{ steps.image.outputs.digest != '' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: timeweb-amd64-push-receipt-${{ matrix.service }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: publication-receipt
+          if-no-files-found: error
+          retention-days: 90
+      - name: Verify registry custody and runtime image
+        env:
+          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+          IMAGE_REFERENCE: ghcr.io/z6v6e6r/phub-${{ matrix.service }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SERVICE: ${{ matrix.service }}
+          SOURCE_SHA: ${{ inputs.expected_source_sha }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$IMAGE_DIGEST" | grep -Eq '^sha256:[0-9a-f]{64}$'
+          test "${#IMAGE_DIGEST}" -eq 71
+          mkdir -p publication-evidence
+          docker buildx imagetools inspect "$IMAGE_REFERENCE@$IMAGE_DIGEST" --raw \
+            > "publication-evidence/$SERVICE-oci-index.json"
+          runtime_digest="$(jq -r '
+            [.manifests[] | select(
+              .platform.os == "linux" and
+              .platform.architecture == "amd64" and
+              ((.platform.variant // "") == "")
+            )] | if length == 1 then .[0].digest else empty end
+          ' "publication-evidence/$SERVICE-oci-index.json")"
+          printf '%s' "$runtime_digest" | grep -Eq '^sha256:[0-9a-f]{64}$'
+          attestation_count="$(jq '[.manifests[] | select(
+            .platform.os == "unknown" and
+            .platform.architecture == "unknown" and
+            .annotations["vnd.docker.reference.type"] == "attestation-manifest"
+          )] | length' "publication-evidence/$SERVICE-oci-index.json")"
+          test "$attestation_count" -ge 1
+          mkdir -p "publication-evidence/$SERVICE-attestation-manifests"
+          jq -r --arg runtime "$runtime_digest" '.manifests[] | select(
+            .platform.os == "unknown" and
+            .platform.architecture == "unknown" and
+            .annotations["vnd.docker.reference.type"] == "attestation-manifest" and
+            .annotations["vnd.docker.reference.digest"] == $runtime
+          ) | .digest' "publication-evidence/$SERVICE-oci-index.json" \
+            > "publication-evidence/$SERVICE-attestation-digests.txt"
+          test "$(wc -l < "publication-evidence/$SERVICE-attestation-digests.txt" | tr -d ' ')" -eq "$attestation_count"
+          while IFS= read -r attestation_digest; do
+            printf '%s' "$attestation_digest" | grep -Eq '^sha256:[0-9a-f]{64}$'
+            docker buildx imagetools inspect "$IMAGE_REFERENCE@$attestation_digest" --raw \
+              > "publication-evidence/$SERVICE-attestation-manifests/${attestation_digest#sha256:}.json"
+          done < "publication-evidence/$SERVICE-attestation-digests.txt"
+          jq -s -e '
+            [.[].layers[].annotations["in-toto.io/predicate-type"]] | sort | unique == [
+              "https://spdx.dev/Document",
+              "https://slsa.dev/provenance/v1"
+            ]
+          ' publication-evidence/"$SERVICE"-attestation-manifests/*.json >/dev/null
+          mkdir -p "publication-evidence/$SERVICE-attestation-statements"
+          jq -s -e '
+            [.[].layers[]] as $layers |
+            ($layers | length) == 2 and
+            all($layers[];
+              .mediaType == "application/vnd.in-toto+json" and
+              (.digest | test("^sha256:[0-9a-f]{64}$")) and
+              (.annotations["in-toto.io/predicate-type"] == "https://spdx.dev/Document" or
+               .annotations["in-toto.io/predicate-type"] == "https://slsa.dev/provenance/v1")
+            )
+          ' publication-evidence/"$SERVICE"-attestation-manifests/*.json >/dev/null
+          jq -s -r '.[].layers[] |
+            [.digest, .annotations["in-toto.io/predicate-type"]] | @tsv' \
+            publication-evidence/"$SERVICE"-attestation-manifests/*.json \
+            | sort -u > "publication-evidence/$SERVICE-attestation-layers.tsv"
+          cut -f 1 "publication-evidence/$SERVICE-attestation-layers.tsv" \
+            > "publication-evidence/$SERVICE-attestation-layer-digests.txt"
+          test "$(wc -l < "publication-evidence/$SERVICE-attestation-layer-digests.txt" | tr -d ' ')" -eq 2
+          registry_token="$({
+            printf 'user = "%s:%s"\n' "$GITHUB_ACTOR" "$GITHUB_TOKEN"
+          } | curl --fail --silent --show-error --config - \
+            "https://ghcr.io/token?service=ghcr.io&scope=repository%3Az6v6e6r%2Fphub-$SERVICE%3Apull" \
+            | jq -r '.token // empty')"
+          printf '%s' "$registry_token" | grep -Eq '^[A-Za-z0-9._~+/-]+=*$'
+          while IFS=$'\t' read -r statement_digest predicate_type; do
+            printf '%s' "$statement_digest" | grep -Eq '^sha256:[0-9a-f]{64}$'
+            {
+              printf 'header = "Authorization: Bearer %s"\n' "$registry_token"
+            } | curl --fail --silent --show-error --config - \
+              "https://ghcr.io/v2/z6v6e6r/phub-$SERVICE/blobs/$statement_digest" \
+              --output "publication-evidence/$SERVICE-attestation-statements/${statement_digest#sha256:}.json"
+            test "$(sha256sum "publication-evidence/$SERVICE-attestation-statements/${statement_digest#sha256:}.json" \
+              | awk '{print "sha256:" $1}')" = "$statement_digest"
+            test "$(jq -r '.predicateType' \
+              "publication-evidence/$SERVICE-attestation-statements/${statement_digest#sha256:}.json")" \
+              = "$predicate_type"
+          done < "publication-evidence/$SERVICE-attestation-layers.tsv"
+          unset registry_token
+          jq -s -e --arg runtimeSha "${runtime_digest#sha256:}" --arg sourceSha "$SOURCE_SHA" \
+            --arg builder "https://github.com/Z6v6e6r/lk2/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT" '
+            length == 2 and
+            ([.[].predicateType] | sort | unique) == [
+              "https://spdx.dev/Document",
+              "https://slsa.dev/provenance/v1"
+            ] and
+            all(.[];
+              ._type == "https://in-toto.io/Statement/v0.1" and
+              (.subject | length) == 1 and
+              (.subject[0].digest | keys) == ["sha256"] and
+              .subject[0].digest.sha256 == $runtimeSha
+            ) and
+            (map(select(.predicateType == "https://slsa.dev/provenance/v1"))[0].predicate) as $provenance |
+            $provenance.buildDefinition.buildType == "https://mobyproject.org/buildkit@v1" and
+            $provenance.runDetails.builder.id == $builder and
+            ([$provenance | .. | strings] | any(contains($sourceSha))) and
+            ([$provenance.buildDefinition.resolvedDependencies[]?.digest.sha256 |
+              select(type == "string" and test("^[0-9a-f]{64}$"))] | length) >= 1 and
+            (map(select(.predicateType == "https://spdx.dev/Document"))[0].predicate) as $sbom |
+            $sbom.SPDXID == "SPDXRef-DOCUMENT" and
+            ($sbom.packages | type == "array" and length > 0)
+          ' publication-evidence/"$SERVICE"-attestation-statements/*.json >/dev/null
+          docker buildx imagetools inspect "$IMAGE_REFERENCE@$IMAGE_DIGEST" \
+            --format '{{json .Provenance.SLSA}}' \
+            > "publication-evidence/$SERVICE-provenance.json"
+          docker buildx imagetools inspect "$IMAGE_REFERENCE@$IMAGE_DIGEST" \
+            --format '{{json .SBOM.SPDX}}' \
+            > "publication-evidence/$SERVICE-sbom.spdx.json"
+          jq -e 'type == "object" and (.buildDefinition | type == "object")' \
+            "publication-evidence/$SERVICE-provenance.json" >/dev/null
+          jq -e 'type == "object" and .SPDXID == "SPDXRef-DOCUMENT"' \
+            "publication-evidence/$SERVICE-sbom.spdx.json" >/dev/null
+          jq -s -e '
+            (map(select(.predicateType == "https://slsa.dev/provenance/v1"))[0].predicate) == $provenance[0] and
+            (map(select(.predicateType == "https://spdx.dev/Document"))[0].predicate) == $sbom[0]
+          ' --slurpfile provenance "publication-evidence/$SERVICE-provenance.json" \
+            --slurpfile sbom "publication-evidence/$SERVICE-sbom.spdx.json" \
+            publication-evidence/"$SERVICE"-attestation-statements/*.json >/dev/null
+
+          runtime_reference="$IMAGE_REFERENCE@$runtime_digest"
+          docker buildx imagetools inspect "$runtime_reference" --raw \
+            > "publication-evidence/$SERVICE-runtime-manifest.json"
+          test "$(sha256sum "publication-evidence/$SERVICE-runtime-manifest.json" | awk '{print "sha256:" $1}')" = "$runtime_digest"
+          docker pull --platform linux/amd64 "$runtime_reference"
+          platform="$(docker image inspect "$runtime_reference" --format '{{.Os}}/{{.Architecture}}')"
+          image_id="$(docker image inspect "$runtime_reference" --format '{{.Id}}')"
+          image_user="$(docker image inspect "$runtime_reference" --format '{{.Config.User}}')"
+          revision="$(docker image inspect "$runtime_reference" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')"
+          source="$(docker image inspect "$runtime_reference" --format '{{index .Config.Labels "org.opencontainers.image.source"}}')"
+          test "$platform" = linux/amd64
+          printf '%s' "$image_id" | grep -Eq '^sha256:[0-9a-f]{64}$'
+          test "$revision" = "$SOURCE_SHA"
+          test "$source" = "https://github.com/$GITHUB_REPOSITORY"
+
+          case "$SERVICE" in
+            web)
+              test -z "$image_user"
+              docker run --rm --entrypoint /bin/sh "$runtime_reference" -ec \
+                'test -s /usr/share/nginx/html/index.html && nginx -t'
+              container_id="$(docker run --rm -d -p 127.0.0.1::8080 "$runtime_reference")"
+              trap 'docker rm -f "$container_id" >/dev/null 2>&1 || true' EXIT
+              address="$(docker port "$container_id" 8080/tcp)"
+              port="${address##*:}"
+              printf '%s' "$port" | grep -Eq '^[0-9]+$'
+              for attempt in {1..30}; do
+                if curl --fail --silent --show-error "http://127.0.0.1:$port/healthz" \
+                  | grep --quiet '^ok$'; then
+                  break
+                fi
+                if test "$attempt" -eq 30; then
+                  docker logs "$container_id"
+                  exit 1
+                fi
+                sleep 1
+              done
+              curl --fail --silent --show-error "http://127.0.0.1:$port/" \
+                | grep --quiet '<div id="phub-app"></div>'
+              docker rm -f "$container_id" >/dev/null
+              trap - EXIT
+              ;;
+            api|worker)
+              test "$image_user" = appuser
+              docker run --rm --entrypoint /bin/sh "$runtime_reference" -ec \
+                "test \"\$(id -u)\" = 1001 && test -s /app/apps/$SERVICE/dist/main.js"
+              docker run --rm --entrypoint node "$runtime_reference" \
+                --check "/app/apps/$SERVICE/dist/main.js"
+              docker run --rm --entrypoint node "$runtime_reference" --input-type=module -e \
+                "import sharp from 'sharp';
+                 if (process.platform !== 'linux' || process.arch !== 'x64') process.exit(1);
+                 const output = await sharp({
+                   create: {
+                     width: 1,
+                     height: 1,
+                     channels: 4,
+                     background: { r: 0, g: 0, b: 0, alpha: 1 },
+                   },
+                 }).webp().toBuffer();
+                 if (output.length === 0) process.exit(1);"
+              ;;
+            realtime)
+              test "$image_user" = appuser
+              docker run --rm --entrypoint /bin/sh "$runtime_reference" -ec \
+                'test "$(id -u)" = 1001 && test -s /app/apps/realtime/dist/main.js'
+              docker run --rm --entrypoint node "$runtime_reference" \
+                --check /app/apps/realtime/dist/main.js
+              docker run --rm --entrypoint node "$runtime_reference" -e \
+                "if (process.platform !== 'linux' || process.arch !== 'x64') process.exit(1)"
+              ;;
+            migrator)
+              test "$image_user" = appuser
+              docker run --rm --entrypoint /bin/sh "$runtime_reference" -ec \
+                'test "$(id -u)" = 1001 && test -s /app/apps/migrator/dist/main.js && test -d /app/migrations'
+              docker run --rm --entrypoint node "$runtime_reference" \
+                --check /app/apps/migrator/dist/main.js
+              docker run --rm --entrypoint node "$runtime_reference" -e \
+                "if (process.platform !== 'linux' || process.arch !== 'x64') process.exit(1)"
+              ;;
+            *) exit 64 ;;
+          esac
+
+          git_tree_sha="$(git rev-parse 'HEAD^{tree}')"
+          publication_tag="amd64-sha-$SOURCE_SHA-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          jq -n \
+            --arg service "$SERVICE" \
+            --arg sourceSha "$SOURCE_SHA" \
+            --arg sourceTree "$git_tree_sha" \
+            --arg workflowSha "$WORKFLOW_SHA" \
+            --arg repository "$IMAGE_REFERENCE" \
+            --arg indexDigest "$IMAGE_DIGEST" \
+            --arg runtimeDigest "$runtime_digest" \
+            --arg publicationTag "$publication_tag" \
+            --arg runId "$GITHUB_RUN_ID" \
+            --arg runAttempt "$GITHUB_RUN_ATTEMPT" \
+            '{
+              service: $service,
+              sourceSha: $sourceSha,
+              sourceTree: $sourceTree,
+              workflowSha: $workflowSha,
+              repository: $repository,
+              indexDigest: $indexDigest,
+              runtimeDigest: $runtimeDigest,
+              publicationTag: $publicationTag,
+              platform: "linux/amd64",
+              provenance: "slsa-v1-max",
+              sbom: "spdx",
+              runId: $runId,
+              runAttempt: $runAttempt
+            }' > "publication-evidence/$SERVICE-image.json"
+          find publication-evidence -type f ! -name '*-evidence-checksums.txt' -print0 \
+            | sort -z | xargs -0 sha256sum \
+            > "publication-evidence/$SERVICE-evidence-checksums.txt"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: timeweb-amd64-image-${{ matrix.service }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: publication-evidence
+          if-no-files-found: error
+          retention-days: 90
+  publication-inventory:
+    needs: [validate-request, verify-source, build-and-publish]
+    if: ${{ always() && inputs.operation == 'publish' && needs.validate-request.result == 'success' && needs.verify-source.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Inventory deterministic run tags without granting release authority
+        env:
+          BUILD_RESULT: ${{ needs.build-and-publish.result }}
+          SOURCE_SHA: ${{ inputs.expected_source_sha }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p publication-inventory/indexes publication-inventory/records
+          present=0
+          for service in web api worker realtime migrator; do
+            repository="ghcr.io/z6v6e6r/phub-$service"
+            publication_tag="amd64-sha-$SOURCE_SHA-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+            reference="$repository:$publication_tag"
+            index_path="publication-inventory/indexes/$service-oci-index.json"
+            if docker buildx imagetools inspect "$reference" --raw > "$index_path" 2>/dev/null; then
+              index_digest="$(sha256sum "$index_path" | awk '{print "sha256:" $1}')"
+              status=present
+              present=$((present + 1))
+            else
+              rm -f "$index_path"
+              index_digest=''
+              status=absent
+            fi
+            jq -n \
+              --arg service "$service" \
+              --arg repository "$repository" \
+              --arg publicationTag "$publication_tag" \
+              --arg status "$status" \
+              --arg indexDigest "$index_digest" \
+              '{
+                service: $service,
+                repository: $repository,
+                publicationTag: $publicationTag,
+                status: $status,
+                indexDigest: (if $indexDigest == "" then null else $indexDigest end)
+              }' > "publication-inventory/records/$service.json"
+          done
+          complete=false
+          if test "$BUILD_RESULT" = success && test "$present" -eq 5; then
+            complete=true
+          fi
+          jq -s \
+            --arg sourceSha "$SOURCE_SHA" \
+            --arg workflowSha "$WORKFLOW_SHA" \
+            --arg runId "$GITHUB_RUN_ID" \
+            --arg runAttempt "$GITHUB_RUN_ATTEMPT" \
+            --argjson present "$present" \
+            --argjson complete "$complete" \
+            '{
+              schemaVersion: 1,
+              kind: "phub-timeweb-amd64-registry-inventory",
+              sourceSha: $sourceSha,
+              workflowSha: $workflowSha,
+              platform: "linux/amd64",
+              runId: $runId,
+              runAttempt: $runAttempt,
+              presentImages: $present,
+              expectedImages: 5,
+              complete: $complete,
+              authorizesDeploy: false,
+              images: sort_by(.service)
+            }' publication-inventory/records/*.json \
+            > publication-inventory/timeweb-amd64-registry-inventory.json
+          cat publication-inventory/timeweb-amd64-registry-inventory.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: timeweb-amd64-registry-inventory-${{ github.run_id }}-${{ github.run_attempt }}
+          path: publication-inventory
+          if-no-files-found: error
+          retention-days: 90
+      - name: Refuse a complete release when registry inventory is incomplete
+        if: ${{ needs.build-and-publish.result == 'success' }}
+        run: |
+          set -euo pipefail
+          jq -e '.complete == true and .presentImages == 5' \
+            publication-inventory/timeweb-amd64-registry-inventory.json >/dev/null
+
+  publication-manifest:
+    needs: [validate-request, verify-source, build-and-publish, publication-inventory]
+    if: ${{ inputs.operation == 'publish' && needs.build-and-publish.result == 'success' && needs.publication-inventory.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: timeweb-amd64-image-*-${{ github.run_id }}-${{ github.run_attempt }}
+          path: publication-evidence/images
+          merge-multiple: true
+      - name: Create non-authorizing immutable digest manifest
+        env:
+          SOURCE_SHA: ${{ inputs.expected_source_sha }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          test "$(find publication-evidence/images -maxdepth 1 -type f -name '*-image.json' | wc -l | tr -d ' ')" -eq 5
+          jq -s \
+            --arg sourceSha "$SOURCE_SHA" \
+            --arg workflowSha "$WORKFLOW_SHA" \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg runId "$GITHUB_RUN_ID" \
+            --arg runAttempt "$GITHUB_RUN_ATTEMPT" \
+            '{
+              schemaVersion: 1,
+              kind: "phub-timeweb-amd64-publication",
+              sourceSha: $sourceSha,
+              workflowSha: $workflowSha,
+              repository: $repository,
+              platform: "linux/amd64",
+              runId: $runId,
+              runAttempt: $runAttempt,
+              authorizesDeploy: false,
+              authorizesVpsProvisioning: false,
+              authorizesDatabaseMutation: false,
+              images: sort_by(.service)
+            }' publication-evidence/images/*-image.json \
+            > timeweb-amd64-publication-manifest.json
+          jq -e '
+            .sourceSha == "35c8312b79cccdd136f2bfd892efbea629b8b919" and
+            .platform == "linux/amd64" and
+            .authorizesDeploy == false and
+            .authorizesVpsProvisioning == false and
+            .authorizesDatabaseMutation == false and
+            ([.images[].service] | sort) == ["api", "migrator", "realtime", "web", "worker"] and
+            ([.images[].indexDigest | test("^sha256:[0-9a-f]{64}$")] | all) and
+            ([.images[].runtimeDigest | test("^sha256:[0-9a-f]{64}$")] | all) and
+            ([.images[].platform] | unique) == ["linux/amd64"]
+          ' timeweb-amd64-publication-manifest.json >/dev/null
+          sha256sum timeweb-amd64-publication-manifest.json \
+            publication-evidence/images/*-provenance.json \
+            publication-evidence/images/*-sbom.spdx.json \
+            > timeweb-amd64-publication-checksums.txt
+          cat timeweb-amd64-publication-manifest.json
+      - id: artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: timeweb-amd64-publication-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            timeweb-amd64-publication-manifest.json
+            timeweb-amd64-publication-checksums.txt
+            publication-evidence/images/*-oci-index.json
+            publication-evidence/images/*-runtime-manifest.json
+            publication-evidence/images/*-attestation-digests.txt
+            publication-evidence/images/*-attestation-layer-digests.txt
+            publication-evidence/images/*-attestation-layers.tsv
+            publication-evidence/images/*-attestation-manifests/*.json
+            publication-evidence/images/*-attestation-statements/*.json
+            publication-evidence/images/*-provenance.json
+            publication-evidence/images/*-sbom.spdx.json
+            publication-evidence/images/*-image.json
+            publication-evidence/images/*-evidence-checksums.txt
+          if-no-files-found: error
+          retention-days: 90
+      - name: Surface publication evidence custody
+        env:
+          ARTIFACT_DIGEST: ${{ steps.artifact.outputs.artifact-digest }}
+          ARTIFACT_ID: ${{ steps.artifact.outputs.artifact-id }}
+          SOURCE_SHA: ${{ inputs.expected_source_sha }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$ARTIFACT_DIGEST" | grep -Eq '^[0-9a-f]{64}$'
+          printf '%s' "$ARTIFACT_ID" | grep -Eq '^[0-9]+$'
+          {
+            echo '## Timeweb amd64 image publication'
+            echo
+            echo "Source SHA: \`$SOURCE_SHA\`"
+            echo 'Platform: `linux/amd64`'
+            echo "Evidence artifact ID: \`$ARTIFACT_ID\`"
+            echo "Evidence artifact digest: \`sha256:$ARTIFACT_DIGEST\`"
+            echo 'Authorizes deploy: `false`'
+          } >> "$GITHUB_STEP_SUMMARY"
