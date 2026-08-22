@@ -1,5 +1,21 @@
 # Worklog
 
+## 2026-08-22 — Communities trusted INPUT_C separate-authorization gate checkpoint
+
+- Added a canonical review subject for one future `BEFORE` or `AFTER` trusted INPUT_C collection.
+  It pins the installed-candidate receipt, self-contained runtime bundle, preparation and its
+  review-only verification, connection descriptor, producer executable, descriptor paths,
+  evidence paths, output paths and fixed timeout policy.
+- Added a pure fail-closed verifier that revalidates the complete preparation-verification shape,
+  cross-binds marker/request/mapping content and paths to the connection descriptor and rejects
+  drift, widened keys, path aliases and output-directory substitution.
+- The result is only `READY_FOR_SEPARATE_AUTHORIZATION_REVIEW_ONLY`. Every authorization remains
+  false; preparation-verification provenance, installed-candidate/runtime/descriptor/output
+  custody and independently sourced clone provenance remain explicit non-attestations.
+- The gate has no CLI or build entry and imports no filesystem, PostgreSQL or child-process API.
+  This checkpoint does not create an authorization receipt, credential, descriptor, output,
+  active link, key or workflow and does not access staging or a database.
+
 ## 2026-08-22 — Communities trusted-inventory immutable disabled runtime candidate checkpoint
 
 - Added a dedicated Node 22 ESM build for the reviewed trusted-inventory runtime wiring. The

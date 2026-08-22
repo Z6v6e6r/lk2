@@ -526,6 +526,33 @@ custody or independently retained artifact pin. Therefore
 an independently sourced clean clone and pinned by a separate custodian; this checkpoint does not
 close remaining gate 4.
 
+### Separate-authorization INPUT_C review gate
+
+`communities-staging-role-split-trusted-inventory-gate-v1` is the code-only review subject for one
+future `BEFORE` or `AFTER` collection. It binds the exact installed-candidate receipt and runtime
+bundle digests, canonical preparation and preparation-verification digests, connection descriptor,
+producer executable, credential/producer descriptor paths, marker/request/mapping paths, private
+output directory and artifact/receipt paths. The fixed runtime-wiring version and the 45-second
+collection plus 5-second termination policy are part of the same canonical bytes.
+
+`verifyCommunitiesStagingRoleSplitTrustedInventoryGate` is a pure in-process verifier. It
+revalidates the complete `PREPARATION_VERIFIED_REVIEW_ONLY` shape instead of trusting a TypeScript
+object, recomputes the preparation and connection digests, cross-binds marker/request/mapping
+content and paths, rejects path aliases and requires both outputs directly below the pinned output
+directory. It returns only `READY_FOR_SEPARATE_AUTHORIZATION_REVIEW_ONLY` with every authorization
+literal `false`.
+
+This module has no CLI or `tsup` entry and owns no filesystem, descriptor, PostgreSQL or
+child-process access. Its installed-candidate, runtime, descriptor and output custody fields are
+pins for later review, not custody attestations. The canonical shape of the supplied preparation
+verification is revalidated, but its independent execution provenance is not attested. The gate
+does not create or validate a separately custodied execution authorization, and the current V1
+execution authorization does not bind this new gate digest. Before any host entrypoint can be
+reviewed or invoked, a separately versioned authorization contour must bind the exact gate SHA-256
+and independently verify the installed receipt, runtime bundle, descriptors, private output
+custody and clean-clone provenance. No key, workflow, staging request, database connection or
+INPUT_C output is authorized by this checkpoint.
+
 ## Independently pinned acceptance artifact gate
 
 `apps/migrator/src/verify-communities-role-split-acceptance-artifact.ts` is the local, read-only
