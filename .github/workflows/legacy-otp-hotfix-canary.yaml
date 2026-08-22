@@ -353,7 +353,7 @@ jobs:
           timeout --signal=TERM --kill-after=30s 2400s ssh $SSH_OPTIONS "phub-deploy@$HOST" \
             "sh '$BUNDLE/run-legacy-otp-hotfix-canary.sh' start '$EXPECTED_ACTIVE_RELEASE' '$CANDIDATE_SHA' '$CONTROL_SHA' '$RUN_ID' '$RUN_ATTEMPT' START_LEGACY_OTP_HOTFIX_CANARY '$BUNDLE'" \
             | tee evidence/transition.txt
-      - name: Hold the bounded browser OTP window and require correlation-bound success
+      - name: Hold the bounded browser window and require OTP plus Viva read success
         if: ${{ inputs.operation == 'START' && steps.start.outcome == 'success' }}
         env:
           HOST: ${{ secrets.STAGING_HOST }}
@@ -389,7 +389,7 @@ jobs:
           observation_status=$?
           set -e
           test "$observation_status" -eq 0
-          printf '%s\n' 'legacy_otp_hotfix canary_window_seconds=900 otp_evidence=passed status=completed' | tee -a evidence/observation.txt
+          printf '%s\n' 'legacy_otp_hotfix canary_window_seconds=900 otp_evidence=passed browser_read_evidence=passed status=completed' | tee -a evidence/observation.txt
       - name: Recover the selected interrupted hotfix run
         if: ${{ inputs.operation == 'RECOVER' }}
         env:

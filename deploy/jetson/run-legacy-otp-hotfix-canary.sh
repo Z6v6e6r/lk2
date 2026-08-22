@@ -279,6 +279,137 @@ diagnose_service_readiness() {
     "service_readiness_diagnostic service=$service running=$running health=$health exit_code=$exit_code oom_killed=$oom_killed restart_count=$restart_count live_http=$live_status ready_http=$ready_status log_class=$log_class"
 }
 
+collect_browser_read_evidence() {
+  api_id=$1
+  since=$2
+  browser_logs=''
+  if ! browser_logs=$(bounded_docker logs --since "$since" --tail 5000 "$api_id" 2>/dev/null); then
+    printf '%s\n' 'unavailable - 0 0'
+    return 0
+  fi
+  printf '%s\n' "$browser_logs" | awk '
+    function extract_number(field, value) {
+      if (match($0, "\\\"" field "\\\":[0-9]+")) {
+        value = substr($0, RSTART, RLENGTH)
+        sub("^\\\"" field "\\\":", "", value)
+        return value + 0
+      }
+      return ""
+    }
+    function extract_string(field, value) {
+      if (match($0, "\\\"" field "\\\":\\\"[^\\\"]+\\\"")) {
+        value = substr($0, RSTART, RLENGTH)
+        sub("^\\\"" field "\\\":\\\"", "", value)
+        sub("\\\"$", "", value)
+        return value
+      }
+      return ""
+    }
+    {
+      if (index($0, "\"msg\":\"incoming request\"") > 0 && index($0, "\"method\":\"POST\"") > 0) {
+        request_id = extract_string("reqId")
+        url = extract_string("url")
+        if (request_id != "") {
+          if (url ~ /^\/user\/api\/v1\/local-padel\/booking-screen-read-jobs\/[0-9a-f-]+\/results\/[0-9a-f-]+$/) {
+            split(url, parts, "/")
+            route_by_request[request_id] = "result"
+            job_by_request[request_id] = parts[7]
+          } else if (url ~ /^\/user\/api\/v1\/local-padel\/booking-screen-read-jobs\/[0-9a-f-]+\/complete$/) {
+            split(url, parts, "/")
+            route_by_request[request_id] = "complete"
+            job_by_request[request_id] = parts[7]
+          }
+        }
+      }
+      if (index($0, "\"msg\":\"request completed\"") > 0) {
+        request_id = extract_string("reqId")
+        status = extract_number("statusCode")
+        if (request_id != "" && route_by_request[request_id] != "" && status >= 200 && status < 300) {
+          success[job_by_request[request_id], route_by_request[request_id]] += 1
+        }
+        if (request_id != "") {
+          delete route_by_request[request_id]
+          delete job_by_request[request_id]
+        }
+      }
+    }
+    END {
+      matched_job = "-"
+      matched_result = 0
+      matched_complete = 0
+      for (key in success) {
+        split(key, key_parts, SUBSEP)
+        job_id = key_parts[1]
+        if (success[job_id, "result"] > 0 && success[job_id, "complete"] > 0) {
+          matched_job = job_id
+          matched_result = success[job_id, "result"]
+          matched_complete = success[job_id, "complete"]
+          break
+        }
+      }
+      printf "available %s %d %d\n", matched_job, matched_result, matched_complete
+    }
+  '
+  unset browser_logs
+}
+
+collect_principal_read_outcomes() {
+  api_id=$1
+  since=$2
+  job_id=$3
+  expected_user_id=$4
+  expected_tenant_id=$5
+  expected_session_id=$6
+  outcome_logs=''
+  if ! outcome_logs=$(bounded_docker logs --since "$since" --tail 5000 "$api_id" 2>/dev/null); then
+    printf '%s\n' 'unavailable 0 0'
+    return 0
+  fi
+  printf '%s\n' "$outcome_logs" | awk \
+    -v job="$job_id" \
+    -v user="$expected_user_id" \
+    -v tenant="$expected_tenant_id" \
+    -v session="$expected_session_id" '
+    {
+      bound = index($0, "\"event\":\"direct_viva_read_outcome\"") > 0 &&
+        index($0, "\"outcome\":\"SUCCESS\"") > 0 &&
+        index($0, "\"evidenceJobId\":\"" job "\"") > 0 &&
+        index($0, "\"userId\":\"" user "\"") > 0 &&
+        index($0, "\"tenantId\":\"" tenant "\"") > 0 &&
+        index($0, "\"sessionId\":\"" session "\"") > 0
+      if (bound && index($0, "\"operation\":\"profile.read\"") > 0) profile_success += 1
+      else if (bound && index($0, "\"operation\":\"schedule.read\"") > 0) schedule_success += 1
+    }
+    END { printf "available %d %d\n", profile_success, schedule_success }
+  '
+  unset outcome_logs
+}
+
+verify_browser_job_binding() {
+  job_id=$1
+  expected_user_id=$2
+  expected_tenant_id=$3
+  expected_session_id=$4
+  candidate_ready_iso=$5
+  case "$job_id" in
+    [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[1-8][0-9a-f][0-9a-f][0-9a-f]-[89ab][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
+    *) return 1 ;;
+  esac
+  job_json=$(infrastructure exec -T redis redis-cli --raw GET "phub:booking-screen-read-job:$job_id" 2>/dev/null) || return 1
+  test -n "$job_json" || return 1
+  printf '%s' "$job_json" | grep -Fq "\"jobId\":\"$job_id\"" || return 1
+  printf '%s' "$job_json" | grep -Fq "\"userId\":\"$expected_user_id\"" || return 1
+  printf '%s' "$job_json" | grep -Fq "\"tenantId\":\"$expected_tenant_id\"" || return 1
+  printf '%s' "$job_json" | grep -Fq "\"sessionId\":\"$expected_session_id\"" || return 1
+  created_at=$(printf '%s' "$job_json" | sed -n 's/.*"createdAt":"\([0-9TZ:.-]*\)".*/\1/p')
+  test -n "$created_at" || return 1
+  created_epoch=$(date -u -d "$created_at" +%s 2>/dev/null) || return 1
+  ready_epoch=$(date -u -d "$candidate_ready_iso" +%s 2>/dev/null) || return 1
+  test "$created_epoch" -ge "$ready_epoch" || return 1
+  result_key_count=$(infrastructure exec -T redis redis-cli --raw --scan --pattern "phub:booking-screen-read-result:$job_id:*" 2>/dev/null | awk 'NF { count += 1 } END { print count + 0 }') || return 1
+  test "$result_key_count" -ge 1
+}
+
 emit_otp_stage_diagnostics() {
   api_id=$1
   since=$2
@@ -331,10 +462,6 @@ emit_otp_stage_diagnostics() {
         if (status == "") metric_failure[operation, "token_request"] += 1
         else if (status >= 200 && status < 300) metric_failure[operation, "post_token"] += 1
         else metric_failure[operation, "token_response"] += 1
-      } else if (operation == "profile_read") {
-        if (status == "") metric_failure[operation, "profile_request"] += 1
-        else if (status >= 200 && status < 300) metric_failure[operation, "profile_payload"] += 1
-        else metric_failure[operation, "profile_response"] += 1
       }
     }
     {
@@ -365,7 +492,6 @@ emit_otp_stage_diagnostics() {
       outcome = ""
       if (index($0, "\"operation\":\"request_code\"") > 0) operation = "request_code"
       else if (index($0, "\"operation\":\"verify_code\"") > 0) operation = "verify_code"
-      else if (index($0, "\"operation\":\"profile_read\"") > 0) operation = "profile_read"
       if (index($0, "\"outcome\":\"success\"") > 0) outcome = "success"
       else if (index($0, "\"outcome\":\"invalid\"") > 0) outcome = "invalid"
       else if (index($0, "\"outcome\":\"rate_limited\"") > 0) outcome = "rate_limited"
@@ -383,8 +509,6 @@ emit_otp_stage_diagnostics() {
       printf "legacy_otp_hotfix otp_stage_diagnostic scope=candidate_api_window attribution=aggregate window=tail_5000 source=%s operation=%s total=%d success=%d invalid=%d rate_limited=%d unavailable=%d http_2xx=%d http_3xx=%d http_4xx=%d http_5xx=%d no_status=%d http_other=%d failure_request=%d failure_response=%d\n", source, operation, metric_total[operation], metric_outcome[operation, "success"], metric_outcome[operation, "invalid"], metric_outcome[operation, "rate_limited"], metric_outcome[operation, "unavailable"], metric_status[operation, "http_2xx"], metric_status[operation, "http_3xx"], metric_status[operation, "http_4xx"], metric_status[operation, "http_5xx"], metric_status[operation, "no_status"], metric_status[operation, "http_other"], metric_failure[operation, "request"], metric_failure[operation, "response"]
       operation = "verify_code"
       printf "legacy_otp_hotfix otp_stage_diagnostic scope=candidate_api_window attribution=aggregate window=tail_5000 coverage=partial source=%s operation=%s total=%d success=%d invalid=%d rate_limited=%d unavailable=%d http_2xx=%d http_3xx=%d http_4xx=%d http_5xx=%d no_status=%d http_other=%d failure_token_request=%d failure_token_response=%d failure_post_token=%d\n", source, operation, metric_total[operation], metric_outcome[operation, "success"], metric_outcome[operation, "invalid"], metric_outcome[operation, "rate_limited"], metric_outcome[operation, "unavailable"], metric_status[operation, "http_2xx"], metric_status[operation, "http_3xx"], metric_status[operation, "http_4xx"], metric_status[operation, "http_5xx"], metric_status[operation, "no_status"], metric_status[operation, "http_other"], metric_failure[operation, "token_request"], metric_failure[operation, "token_response"], metric_failure[operation, "post_token"]
-      operation = "profile_read"
-      printf "legacy_otp_hotfix otp_stage_diagnostic scope=candidate_api_window attribution=aggregate window=tail_5000 source=%s operation=%s total=%d success=%d invalid=%d rate_limited=%d unavailable=%d http_2xx=%d http_3xx=%d http_4xx=%d http_5xx=%d no_status=%d http_other=%d failure_profile_request=%d failure_profile_response=%d failure_profile_payload=%d\n", source, operation, metric_total[operation], metric_outcome[operation, "success"], metric_outcome[operation, "invalid"], metric_outcome[operation, "rate_limited"], metric_outcome[operation, "unavailable"], metric_status[operation, "http_2xx"], metric_status[operation, "http_3xx"], metric_status[operation, "http_4xx"], metric_status[operation, "http_5xx"], metric_status[operation, "no_status"], metric_status[operation, "http_other"], metric_failure[operation, "profile_request"], metric_failure[operation, "profile_response"], metric_failure[operation, "profile_payload"]
     }
   '
   unset otp_logs
@@ -445,7 +569,7 @@ assert_flags_disabled() {
   worker=$(project_container_id worker)
   realtime=$(project_container_id realtime)
   for container in "$api" "$worker"; do
-    for key in PROFILE_PHOTO_CLIENT_SYNC_ENABLED COMMUNITY_INVITES_ENABLED COMMUNITIES_REALTIME_ENABLED COMMUNITY_MEDIA_ENABLED COMMUNITY_LOGO_STABLE_DELIVERY_ENABLED COMMUNITY_LOGO_COMPATIBILITY_BACKFILL_ENABLED; do
+    for key in HOME_VIVA_SYNC_ENABLED HOME_VIVA_LEGACY_GAME_BRIDGE_ENABLED COMMUNITY_HOME_SYNC_ENABLED PLATFORM_HOME_SYNC_ENABLED PROFILE_PHOTO_CLIENT_SYNC_ENABLED COMMUNITY_INVITES_ENABLED COMMUNITIES_REALTIME_ENABLED COMMUNITY_MEDIA_ENABLED COMMUNITY_LOGO_STABLE_DELIVERY_ENABLED COMMUNITY_LOGO_COMPATIBILITY_BACKFILL_ENABLED; do
       running_flag_disabled "$container" "$key"
     done
   done
@@ -569,11 +693,13 @@ if test "$operation" = attest; then
   test "$candidate_ready_at_epoch" -gt 0 || fail 'candidate-ready evidence is absent'
   candidate_ready_at_iso=$(date -u -d "@$candidate_ready_at_epoch" '+%Y-%m-%dT%H:%M:%SZ')
   evidence_source=unavailable
-  evidence_count=''
-  if evidence_count=$(infrastructure exec -T postgres sh -eu -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atqc "$1"' sh "
-    select count(*)
+  evidence_row=''
+  if evidence_row=$(infrastructure exec -T postgres sh -eu -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atqc "$1"' sh "
+    select concat(count(*), '|', coalesce(min(actor_id::text), ''), '|',
+                  coalesce(min(tenant_id::text), ''), '|', coalesce(min(resource_id::text), ''))
     from (
-      select distinct session_audit.correlation_id
+      select distinct session_audit.correlation_id, session_audit.actor_id,
+             session_audit.tenant_id, session_audit.resource_id
       from identity.tenants tenant
       join audit.audit_log session_audit
         on session_audit.tenant_id = tenant.id
@@ -604,15 +730,48 @@ if test "$operation" = attest; then
   " 2>/dev/null); then
     evidence_source=available
   fi
-  if test "$evidence_source" = available && test "$evidence_count" = 1; then
+  evidence_count=${evidence_row%%|*}
+  evidence_identity=${evidence_row#*|}
+  evidence_user_id=${evidence_identity%%|*}
+  evidence_tenant_and_session=${evidence_identity#*|}
+  evidence_tenant_id=${evidence_tenant_and_session%%|*}
+  evidence_session_id=${evidence_tenant_and_session#*|}
+  set -- $(collect_browser_read_evidence "$(project_container_id api)" "$candidate_ready_at_iso")
+  browser_evidence_source=$1
+  browser_job_id=$2
+  browser_result_count=$3
+  browser_complete_count=$4
+  browser_job_bound=false
+  if test "$evidence_source" = available && test "$evidence_count" = 1 &&
+    verify_browser_job_binding "$browser_job_id" "$evidence_user_id" "$evidence_tenant_id" "$evidence_session_id" "$candidate_ready_at_iso"; then
+    browser_job_bound=true
+  fi
+  browser_outcome_source=unavailable
+  browser_profile_success=0
+  browser_schedule_success=0
+  if test "$browser_job_bound" = true; then
+    set -- $(collect_principal_read_outcomes "$(project_container_id api)" "$candidate_ready_at_iso" "$browser_job_id" "$evidence_user_id" "$evidence_tenant_id" "$evidence_session_id")
+    browser_outcome_source=$1
+    browser_profile_success=$2
+    browser_schedule_success=$3
+  fi
+  if test "$evidence_source" = available && test "$evidence_count" = 1 &&
+    test "$browser_evidence_source" = available && test "$browser_result_count" -ge 1 &&
+    test "$browser_complete_count" -ge 1 && test "$browser_profile_success" -ge 1 &&
+    test "$browser_schedule_success" -ge 1 && test "$browser_job_bound" = true &&
+    test "$browser_outcome_source" = available; then
     emit_otp_session_evidence "$evidence_source" "$evidence_count"
+    printf '%s\n' "legacy_otp_hotfix browser_read_evidence source=$browser_evidence_source same_job=true principal_bound=true result_2xx=$browser_result_count complete_2xx=$browser_complete_count profile_success=$browser_profile_success schedule_success=$browser_schedule_success outcome=accepted"
     printf '%s\n' 'legacy_otp_hotfix otp_canary_evidence=correlation-bound status=passed'
     exit 0
   fi
   emit_otp_stage_diagnostics "$(project_container_id api)" "$candidate_ready_at_iso" || true
   emit_otp_session_evidence "$evidence_source" "$evidence_count"
+  printf '%s\n' "legacy_otp_hotfix browser_read_evidence source=$browser_evidence_source same_job=$([ "$browser_job_id" != - ] && printf true || printf false) principal_bound=$browser_job_bound result_2xx=$browser_result_count complete_2xx=$browser_complete_count profile_success=$browser_profile_success schedule_success=$browser_schedule_success outcome=insufficient"
   test "$evidence_source" = available || fail 'correlation-bound local-padel phone OTP evidence query is unavailable'
-  fail 'expected exactly one correlation-bound local-padel phone OTP success during the canary window'
+  test "$evidence_count" = 1 || fail 'expected exactly one correlation-bound local-padel phone OTP success during the canary window'
+  test "$browser_evidence_source" = available || fail 'browser-assisted Viva read evidence is unavailable'
+  fail 'expected principal-bound browser Viva profile and booking schedule evidence during the canary window'
 fi
 
 if test "$operation" = rollback; then

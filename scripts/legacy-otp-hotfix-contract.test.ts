@@ -59,6 +59,58 @@ const activeRelease = 'e308181da5222645d9a87d03642923c6841be8d1';
 const candidateRelease = '1'.repeat(40);
 const controlRelease = '2'.repeat(40);
 const composeSha = 'a9227a66be5044d0286592afb27aca073d50aa8d2ff21067504a0ffdb1804c2a';
+const browserJobId = '11111111-1111-4111-8111-111111111111';
+const browserUserId = '33333333-3333-4333-8333-333333333333';
+const browserTenantId = '44444444-4444-4444-8444-444444444444';
+const browserSessionId = '55555555-5555-4555-8555-555555555555';
+const successfulBrowserReadLogs = [
+  JSON.stringify({
+    reqId: 'browser-read-result',
+    req: {
+      method: 'POST',
+      url: `/user/api/v1/local-padel/booking-screen-read-jobs/${browserJobId}/results/22222222-2222-4222-8222-222222222222`,
+    },
+    msg: 'incoming request',
+  }),
+  JSON.stringify({
+    reqId: 'browser-read-result',
+    res: { statusCode: 202 },
+    msg: 'request completed',
+  }),
+  JSON.stringify({
+    reqId: 'browser-read-complete',
+    req: {
+      method: 'POST',
+      url: `/user/api/v1/local-padel/booking-screen-read-jobs/${browserJobId}/complete`,
+    },
+    msg: 'incoming request',
+  }),
+  JSON.stringify({
+    reqId: 'browser-read-complete',
+    res: { statusCode: 200 },
+    msg: 'request completed',
+  }),
+  JSON.stringify({
+    event: 'direct_viva_read_outcome',
+    evidenceJobId: browserJobId,
+    userId: browserUserId,
+    tenantId: browserTenantId,
+    sessionId: browserSessionId,
+    operation: 'profile.read',
+    outcome: 'SUCCESS',
+    msg: 'direct Viva read outcome',
+  }),
+  JSON.stringify({
+    event: 'direct_viva_read_outcome',
+    evidenceJobId: browserJobId,
+    userId: browserUserId,
+    tenantId: browserTenantId,
+    sessionId: browserSessionId,
+    operation: 'schedule.read',
+    outcome: 'SUCCESS',
+    msg: 'direct Viva read outcome',
+  }),
+].join('\n');
 
 function releaseFile(release: string, digestCharacter: string) {
   return [
@@ -334,7 +386,13 @@ if test "$1" = compose; then
       ;;
     *' exec -T postgres sh -eu -c '*)
       test "\${PHUB_FAKE_EVIDENCE_FAILURE:-0}" != 1 || exit 95
-      printf '%s\\n' "\${PHUB_FAKE_EVIDENCE_COUNT:-1}"
+      printf '%s|%s|%s|%s\\n' "\${PHUB_FAKE_EVIDENCE_COUNT:-1}" "\${PHUB_FAKE_EVIDENCE_USER_ID:-${browserUserId}}" "\${PHUB_FAKE_EVIDENCE_TENANT_ID:-${browserTenantId}}" "\${PHUB_FAKE_EVIDENCE_SESSION_ID:-${browserSessionId}}"
+      ;;
+    *' exec -T redis redis-cli --raw GET '*)
+      printf '{"jobId":"%s","screen":"FOR_ME","tenantId":"%s","userId":"%s","sessionId":"%s","createdAt":"%s"}\\n' '${browserJobId}' '${browserTenantId}' '${browserUserId}' "\${PHUB_FAKE_JOB_SESSION_ID:-${browserSessionId}}" "\${PHUB_FAKE_JOB_CREATED_AT:-$(date -u '+%Y-%m-%dT%H:%M:%SZ')}"
+      ;;
+    *' exec -T redis redis-cli --raw --scan --pattern '*)
+      printf 'phub:booking-screen-read-result:%s:22222222-2222-4222-8222-222222222222\\n' '${browserJobId}'
       ;;
     *' exec -T postgres pg_restore --list '*) : ;;
     *' up -d '*) : ;;
@@ -378,7 +436,12 @@ exec "$@"
   executable(
     join(fakeBin, 'date'),
     `#!/bin/sh
-case " $* " in *' -d '*) printf '2026-08-20T12:00:00Z\\n' ;; *) /bin/date "$@" ;; esac
+case " $* " in
+  *' -d 2020-01-01T00:00:00Z +%s '*) printf '1577836800\\n' ;;
+  *' -d '*' +%s '*) printf '1787227200\\n' ;;
+  *' -d '*) printf '2026-08-20T12:00:00Z\\n' ;;
+  *) /bin/date "$@" ;;
+esac
 `,
   );
   executable(
@@ -471,10 +534,10 @@ describe('legacy OTP hotfix canary release contract', () => {
     }
   });
 
-  it('verifies the immutable eight-file child of e308 and protects release inputs', () => {
+  it('verifies the immutable browser-context child of e308 and protects release inputs', () => {
     expect(verifier).toContain('supported_active_release=e308181da5222645d9a87d03642923c6841be8d1');
     expect(verifier).toContain(
-      'supported_patch_sha256=7fe04830af2ba1cc83a9bd2b6440712ed1251f8ecb1066ddde48ad7704b79597',
+      'supported_patch_sha256=515e2fc2062aa20c6ee91199e77c7887769a7e1db0920a8c14a117f398b75012',
     );
     expect(verifier).toContain(
       'test "$(printf \'%s\\n\' "$parent_line" | awk \'{ print NF }\')" -eq 2',
@@ -501,7 +564,17 @@ describe('legacy OTP hotfix canary release contract', () => {
     ]) {
       expect(verifier).toContain(path);
     }
-    expect(verifier).toContain('candidate changed-path set differs from the eight-file allowlist');
+    expect(verifier).toContain('candidate changed-path set differs from the reviewed allowlist');
+    expect(verifier).toContain('candidate runtime still wires a Viva End User reader');
+    expect(verifier).toContain('candidate config does not fail closed for retired Viva Home sync');
+    expect(verifier).toContain('candidate lacks the reviewed recovery-only OAuth boundary');
+    expect(verifier).toContain(
+      'candidate routing outcomes are not bound to the authenticated session',
+    );
+    expect(verifier).toContain('candidate browser transport does not correlate Viva success');
+    expect(verifier).toContain('outside the routing-outcome body contract');
+    expect(verifier).toContain('through X-Correlation-ID');
+    expect(verifier).toContain('paths=34 migrations=unchanged contracts=unchanged');
     expect(verifier).toContain('image copies builder node_modules');
     expect(verifier).toContain('image prunes a copied dependency tree');
     expect(checkout).toContain('checkout-legacy-runtime-secret-bootstrap-candidate.sh');
@@ -624,7 +697,7 @@ describe('legacy OTP hotfix canary release contract', () => {
   it('opens a fixed window only after candidate attestation and always restores e308', () => {
     const start = workflow.indexOf('Open the exact temporary legacy OTP canary window');
     const window = workflow.indexOf(
-      'Hold the bounded browser OTP window and require correlation-bound success',
+      'Hold the bounded browser window and require OTP plus Viva read success',
     );
     const rollback = workflow.indexOf('Always restore the exact e308 runtime after START');
     const observation = workflow.indexOf(
@@ -679,6 +752,16 @@ describe('legacy OTP hotfix canary release contract', () => {
     );
     expect(controller).toContain('test "$evidence_count" = 1');
     expect(controller).toContain('emit_otp_stage_diagnostics');
+    expect(controller).toContain('collect_browser_read_evidence');
+    expect(controller).toContain('verify_browser_job_binding');
+    expect(controller).toContain('booking-screen-read-jobs');
+    expect(controller).not.toContain('(booking-screen|activity-history)-read-jobs');
+    expect(controller).toContain('direct_viva_read_outcome');
+    expect(controller).toContain('collect_principal_read_outcomes');
+    expect(controller).toContain('sessionId');
+    expect(controller).toContain('expected_session_id');
+    expect(controller).toContain('phub:booking-screen-read-job:$job_id');
+    expect(controller).toContain('phub:booking-screen-read-result:$job_id:*');
     expect(controller).toContain('scope=local-padel_api_route');
     expect(controller).toContain('scope=candidate_api_window attribution=aggregate');
     expect(controller).toContain(
@@ -789,6 +872,14 @@ describe('legacy OTP hotfix canary release contract', () => {
     );
     expect(startFunction.indexOf('realtime api worker web')).toBeGreaterThan(0);
     expect(controller).toContain('assert_flags_disabled');
+    for (const flag of [
+      'HOME_VIVA_SYNC_ENABLED',
+      'HOME_VIVA_LEGACY_GAME_BRIDGE_ENABLED',
+      'COMMUNITY_HOME_SYNC_ENABLED',
+      'PLATFORM_HOME_SYNC_ENABLED',
+    ]) {
+      expect(controller).toContain(flag);
+    }
     for (const endpoint of [
       'http://127.0.0.1:3001/health/live',
       'http://127.0.0.1:3001/health/ready',
@@ -871,19 +962,7 @@ describe('legacy OTP hotfix canary release contract', () => {
         metric: { operation: 'verify_code', outcome: 'unavailable', status: 200 },
         msg: 'identity provider operation',
       }),
-      JSON.stringify({
-        metric: { operation: 'profile_read', outcome: 'unavailable', status: 401 },
-        msg: 'identity provider operation',
-      }),
-      JSON.stringify({
-        metric: {
-          operation: 'profile_read',
-          outcome: 'unavailable',
-          status: 200,
-          accessToken: privateMarker,
-        },
-        msg: 'identity provider operation',
-      }),
+      successfulBrowserReadLogs,
     ].join('\n');
     try {
       const opened = runController(fixture, 'start');
@@ -909,11 +988,9 @@ describe('legacy OTP hotfix canary release contract', () => {
       expect(result.stdout).toContain(
         'failure_token_request=0 failure_token_response=0 failure_post_token=1',
       );
+      expect(result.stdout).not.toContain('operation=profile_read');
       expect(result.stdout).toContain(
-        'scope=candidate_api_window attribution=aggregate window=tail_5000 source=available operation=profile_read total=2 success=0 invalid=0 rate_limited=0 unavailable=2 http_2xx=1 http_3xx=0 http_4xx=1',
-      );
-      expect(result.stdout).toContain(
-        'failure_profile_request=0 failure_profile_response=1 failure_profile_payload=1',
+        'browser_read_evidence source=available same_job=true principal_bound=false result_2xx=1 complete_2xx=1 profile_success=0 schedule_success=0 outcome=insufficient',
       );
       expect(result.stdout).toContain(
         'scope=local-padel_database source=available operation=session_evidence outcome=none',
@@ -942,8 +1019,9 @@ describe('legacy OTP hotfix canary release contract', () => {
       expect(result.stdout).toContain(
         'scope=local-padel_api_route window=tail_5000 source=unavailable operation=padlhub_challenge_create total=0',
       );
+      expect(result.stdout).not.toContain('operation=profile_read');
       expect(result.stdout).toContain(
-        'scope=candidate_api_window attribution=aggregate window=tail_5000 source=unavailable operation=profile_read total=0',
+        'browser_read_evidence source=unavailable same_job=false principal_bound=false result_2xx=0 complete_2xx=0 profile_success=0 schedule_success=0 outcome=insufficient',
       );
       expect(result.stdout).toContain(
         'scope=local-padel_database source=available operation=session_evidence outcome=none',
@@ -975,6 +1053,54 @@ describe('legacy OTP hotfix canary release contract', () => {
     }
   }, 30_000);
 
+  it('rejects mixed-principal, unrelated-job, unbound, and stale browser evidence', () => {
+    const fixture = prepareControllerFixture();
+    try {
+      const opened = runController(fixture, 'start');
+      expect(opened.status, opened.stderr).toBe(0);
+      const otherUser = '66666666-6666-4666-8666-666666666666';
+      const otherJob = '77777777-7777-4777-8777-777777777777';
+      const mixedPrincipal = runController(fixture, 'attest', {
+        PHUB_FAKE_CONTAINER_LOG: successfulBrowserReadLogs.replaceAll(browserUserId, otherUser),
+      });
+      expect(mixedPrincipal.status).not.toBe(0);
+      expect(mixedPrincipal.stdout).toContain('principal_bound=true');
+      expect(mixedPrincipal.stdout).toContain('profile_success=0 schedule_success=0');
+
+      const unrelatedJob = runController(fixture, 'attest', {
+        PHUB_FAKE_CONTAINER_LOG: successfulBrowserReadLogs.replaceAll(
+          `"evidenceJobId":"${browserJobId}"`,
+          `"evidenceJobId":"${otherJob}"`,
+        ),
+      });
+      expect(unrelatedJob.status).not.toBe(0);
+      expect(unrelatedJob.stdout).toContain('profile_success=0 schedule_success=0');
+
+      const unboundLogs = successfulBrowserReadLogs
+        .split('\n')
+        .map((line) => {
+          const parsed = JSON.parse(line) as Record<string, unknown>;
+          delete parsed.evidenceJobId;
+          return JSON.stringify(parsed);
+        })
+        .join('\n');
+      const unbound = runController(fixture, 'attest', {
+        PHUB_FAKE_CONTAINER_LOG: unboundLogs,
+      });
+      expect(unbound.status).not.toBe(0);
+      expect(unbound.stdout).toContain('profile_success=0 schedule_success=0');
+
+      const stale = runController(fixture, 'attest', {
+        PHUB_FAKE_CONTAINER_LOG: successfulBrowserReadLogs,
+        PHUB_FAKE_JOB_CREATED_AT: '2020-01-01T00:00:00Z',
+      });
+      expect(stale.status).not.toBe(0);
+      expect(stale.stdout).toContain('principal_bound=false');
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  }, 60_000);
+
   it('restores exact e308 after a post-marker failure and retains the marker if rollback fails', () => {
     const restored = prepareControllerFixture();
     try {
@@ -1005,12 +1131,17 @@ describe('legacy OTP hotfix canary release contract', () => {
     try {
       const opened = runController(retained, 'start');
       expect(opened.status, opened.stderr).toBe(0);
-      const attested = runController(retained, 'attest', { PHUB_FAKE_LOG_FAILURE: '1' });
+      const attested = runController(retained, 'attest', {
+        PHUB_FAKE_CONTAINER_LOG: successfulBrowserReadLogs,
+      });
       expect(attested.status, attested.stderr).toBe(0);
       expect(attested.stdout).toContain(
         'scope=local-padel_database source=available operation=session_evidence outcome=exactly_one',
       );
       expect(attested.stdout).not.toContain('scope=candidate_api_window');
+      expect(attested.stdout).toContain(
+        'browser_read_evidence source=available same_job=true principal_bound=true result_2xx=1 complete_2xx=1 profile_success=1 schedule_success=1 outcome=accepted',
+      );
       expect(attested.stdout).toContain('otp_canary_evidence=correlation-bound status=passed');
       const result = runController(retained, 'rollback', {
         PHUB_OTP_HOTFIX_FAIL_AFTER: 'restore-release-staged',
