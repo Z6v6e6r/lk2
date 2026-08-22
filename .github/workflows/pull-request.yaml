@@ -108,15 +108,114 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        service: [api, worker, realtime, migrator]
+        service: [web, api, worker, realtime, migrator]
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/build-push-action@v6
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           file: apps/${{ matrix.service }}/Dockerfile
+          platforms: linux/amd64
           push: false
+          load: true
           tags: phub-${{ matrix.service }}:pr-${{ github.sha }}
-          cache-from: type=gha,scope=${{ matrix.service }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+          cache-from: type=gha,scope=pr-amd64-${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=pr-amd64-${{ matrix.service }}
+      - name: Verify linux/amd64 runtime image
+        env:
+          BUILD_DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE: phub-${{ matrix.service }}:pr-${{ github.sha }}
+          SERVICE: ${{ matrix.service }}
+        run: |
+          set -euo pipefail
+
+          platform="$(docker image inspect "$IMAGE" --format '{{.Os}}/{{.Architecture}}')"
+          image_id="$(docker image inspect "$IMAGE" --format '{{.Id}}')"
+          image_user="$(docker image inspect "$IMAGE" --format '{{.Config.User}}')"
+          test "$platform" = 'linux/amd64'
+          [[ "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]]
+          if [[ -n "$BUILD_DIGEST" ]]; then
+            [[ "$BUILD_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          fi
+
+          case "$SERVICE" in
+            web)
+              test -z "$image_user"
+              docker run --rm --entrypoint /bin/sh "$IMAGE" -ec \
+                'test -s /usr/share/nginx/html/index.html && nginx -t'
+              container_id="$(docker run --rm -d -p 127.0.0.1::8080 "$IMAGE")"
+              trap 'docker rm -f "$container_id" >/dev/null 2>&1 || true' EXIT
+              address="$(docker port "$container_id" 8080/tcp)"
+              port="${address##*:}"
+              [[ "$port" =~ ^[0-9]+$ ]]
+              for attempt in {1..30}; do
+                if curl --fail --silent --show-error "http://127.0.0.1:$port/healthz" \
+                  | grep --quiet '^ok$'; then
+                  break
+                fi
+                if [[ "$attempt" = 30 ]]; then
+                  docker logs "$container_id"
+                  exit 1
+                fi
+                sleep 1
+              done
+              curl --fail --silent --show-error "http://127.0.0.1:$port/" \
+                | grep --quiet '<div id="phub-app"></div>'
+              docker rm -f "$container_id" >/dev/null
+              trap - EXIT
+              ;;
+            api|worker)
+              test "$image_user" = 'appuser'
+              docker run --rm --entrypoint /bin/sh "$IMAGE" -ec \
+                "test \"\$(id -u)\" = 1001 && test -s /app/apps/$SERVICE/dist/main.js"
+              docker run --rm --entrypoint node "$IMAGE" \
+                --check "/app/apps/$SERVICE/dist/main.js"
+              docker run --rm --entrypoint node "$IMAGE" --input-type=module -e \
+                "import sharp from 'sharp';
+                 if (process.platform !== 'linux' || process.arch !== 'x64') process.exit(1);
+                 const output = await sharp({
+                   create: {
+                     width: 1,
+                     height: 1,
+                     channels: 4,
+                     background: { r: 0, g: 0, b: 0, alpha: 1 },
+                   },
+                 }).webp().toBuffer();
+                 if (output.length === 0) process.exit(1);"
+              ;;
+            realtime)
+              test "$image_user" = 'appuser'
+              docker run --rm --entrypoint /bin/sh "$IMAGE" -ec \
+                'test "$(id -u)" = 1001 && test -s /app/apps/realtime/dist/main.js'
+              docker run --rm --entrypoint node "$IMAGE" \
+                --check /app/apps/realtime/dist/main.js
+              docker run --rm --entrypoint node "$IMAGE" -e \
+                "if (process.platform !== 'linux' || process.arch !== 'x64') process.exit(1)"
+              ;;
+            migrator)
+              test "$image_user" = 'appuser'
+              docker run --rm --entrypoint /bin/sh "$IMAGE" -ec \
+                'test "$(id -u)" = 1001 && test -s /app/apps/migrator/dist/main.js && test -d /app/migrations'
+              docker run --rm --entrypoint node "$IMAGE" \
+                --check /app/apps/migrator/dist/main.js
+              docker run --rm --entrypoint node "$IMAGE" -e \
+                "if (process.platform !== 'linux' || process.arch !== 'x64') process.exit(1)"
+              ;;
+            *)
+              echo "Unsupported service: $SERVICE" >&2
+              exit 1
+              ;;
+          esac
+
+          {
+            echo "### phub-$SERVICE"
+            echo "- platform: \`$platform\`"
+            echo "- image ID: \`$image_id\`"
+            if [[ -n "$BUILD_DIGEST" ]]; then
+              echo "- BuildKit digest (not a published registry digest): \`$BUILD_DIGEST\`"
+            else
+              echo '- BuildKit digest: not emitted by the local Docker exporter'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
