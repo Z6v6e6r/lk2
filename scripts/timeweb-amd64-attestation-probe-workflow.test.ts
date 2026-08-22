@@ -1,5 +1,8 @@
 import { spawnSync } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
@@ -75,7 +78,13 @@ describe('Timeweb amd64 attestation probe workflow', () => {
       'BUILDKIT_IMAGE: moby/buildkit@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8',
     );
     expect(workflow).toContain('scripts/extract-verified-oci-layout.sh');
+    expect(workflow).toContain('scripts/resolve-verified-oci-nested-index.sh');
+    expect(workflow).toContain('attestation-probe/evidence/selected-root-descriptor.json');
+    expect(workflow).toContain('attestation-probe/evidence/runtime-descriptor.json');
+    expect(workflow).toContain('attestation-probe/evidence/attestation-descriptor.json');
     expect(workflow).toContain('attestation-probe/evidence/runtime-manifest.json');
+    expect(workflow).toContain('rootIndexDigest: $rootIndexDigest');
+    expect(workflow).toContain('nestedIndexDigest: $nestedIndexDigest');
     expect(workflow).toContain('= "$runtime_digest"');
     expect(workflow).toContain('= "$attestation_digest"');
     expect(workflow).toContain("if: ${{ always() && steps.build.outcome == 'success' }}");
@@ -126,11 +135,13 @@ describe('Timeweb amd64 attestation probe workflow', () => {
         {
           mediaType: 'application/vnd.in-toto+json',
           digest: `sha256:${'2'.repeat(64)}`,
+          size: 10,
           annotations: { 'in-toto.io/predicate-type': 'https://slsa.dev/provenance/v1' },
         },
         {
           mediaType: 'application/vnd.in-toto+json',
           digest: `sha256:${'3'.repeat(64)}`,
+          size: 20,
           annotations: { 'in-toto.io/predicate-type': 'https://spdx.dev/Document' },
         },
       ],
@@ -148,5 +159,78 @@ describe('Timeweb amd64 attestation probe workflow', () => {
         config: { ...manifest.config, mediaType: 'application/vnd.oci.image.config.v1+json' },
       }).status,
     ).not.toBe(0);
+    expect(
+      evaluate({
+        ...manifest,
+        layers: manifest.layers.map(({ annotations, digest, mediaType }) => ({
+          annotations,
+          digest,
+          mediaType,
+        })),
+      }).status,
+    ).not.toBe(0);
+    expect(
+      evaluate({
+        ...manifest,
+        layers: manifest.layers.map((layer) => ({ ...layer, size: 1.5 })),
+      }).status,
+    ).not.toBe(0);
+  });
+
+  it('rejects a statement blob whose size differs from its attestation descriptor', async () => {
+    const workflow = await readFile(
+      new URL('../.github/workflows/probe-timeweb-amd64-attestations.yaml', import.meta.url),
+      'utf8',
+    );
+    const match = workflow.match(
+      /jq -r '\.layers\[\][\s\S]*?\| while IFS=\$'\\t' read -r digest predicate statement_size; do[\s\S]*?\n\s+done/u,
+    );
+    expect(match?.[0]).toBeDefined();
+    if (!match?.[0]) throw new Error('statement extraction loop was not found');
+
+    const temporary = await mkdtemp(join(tmpdir(), 'phub-attestation-statement-test-'));
+    const evidence = join(temporary, 'attestation-probe', 'evidence');
+    const blobs = join(temporary, 'attestation-probe', 'layout', 'blobs', 'sha256');
+    const provenance = Buffer.from('{"predicateType":"https://slsa.dev/provenance/v1"}');
+    const sbom = Buffer.from('{"predicateType":"https://spdx.dev/Document"}');
+    const sha256 = (body: Buffer) => createHash('sha256').update(body).digest('hex');
+    const manifest = (sizeDelta: number) => ({
+      layers: [
+        {
+          mediaType: 'application/vnd.in-toto+json',
+          digest: `sha256:${sha256(provenance)}`,
+          size: provenance.length + sizeDelta,
+          annotations: { 'in-toto.io/predicate-type': 'https://slsa.dev/provenance/v1' },
+        },
+        {
+          mediaType: 'application/vnd.in-toto+json',
+          digest: `sha256:${sha256(sbom)}`,
+          size: sbom.length,
+          annotations: { 'in-toto.io/predicate-type': 'https://spdx.dev/Document' },
+        },
+      ],
+    });
+    const run = async (sizeDelta: number) => {
+      await writeFile(
+        join(evidence, 'attestation-manifest.json'),
+        JSON.stringify(manifest(sizeDelta)),
+      );
+      return spawnSync('bash', ['-euo', 'pipefail', '-c', match[0]], {
+        cwd: temporary,
+        encoding: 'utf8',
+      });
+    };
+
+    try {
+      await mkdir(evidence, { recursive: true });
+      await mkdir(blobs, { recursive: true });
+      await writeFile(join(blobs, sha256(provenance)), provenance);
+      await writeFile(join(blobs, sha256(sbom)), sbom);
+      const valid = await run(0);
+      expect(valid.status, `${valid.stderr}\n${valid.stdout}`).toBe(0);
+      expect((await run(1)).status).not.toBe(0);
+    } finally {
+      await rm(temporary, { force: true, recursive: true });
+    }
   });
 });
