@@ -49,6 +49,14 @@ marker="$app_root/.legacy-otp-hotfix.transition.env"
 marker_next="$marker.next"
 release_next="$app_root/.legacy-otp-hotfix.release.next"
 lock_path="$app_root/.runtime-secret-isolation.lock"
+previous_web_assets="$bundle_path/previous-web-assets"
+previous_web_assets_next="$bundle_path/previous-web-assets.next"
+candidate_web_assets="$bundle_path/candidate-web-assets"
+merged_web_assets="$bundle_path/merged-web-assets"
+verified_web_assets="$bundle_path/verified-web-assets"
+web_asset_overlay_manifest="$bundle_path/web-asset-overlay.sha256"
+public_web_asset_verify="$bundle_path/public-web-asset.verify"
+required_previous_web_assets='app-DUx85CW8.js chunk-BfVFEYSR.js'
 
 case "$bundle_path" in "$app_root"/legacy-otp-hotfix-candidates/*) ;; *) fail 'bundle path is outside the durable candidate root' ;; esac
 case "$bundle_path" in *'/../'* | *'/..') fail 'bundle path contains traversal' ;; esac
@@ -78,10 +86,24 @@ sync_path() {
 
 require_headroom_kib() {
   required=$1
-  available=$(df -Pk "$app_root" | awk 'NR == 2 { print $4 }')
-  test "$available" -ge "$required" || fail 'application filesystem lacks required free space'
-  test "$(df -Pi "$app_root" | awk 'NR == 2 { print $4 }')" -ge 1024 ||
-    fail 'application filesystem lacks required free inodes'
+  require_path_headroom_kib "$app_root" "$required" application
+}
+
+require_path_headroom_kib() {
+  headroom_path=$1
+  required=$2
+  headroom_scope=$3
+  required_inodes=${4:-1024}
+  available=$(df -Pk "$headroom_path" | awk 'NR == 2 { print $4 }')
+  case "$available" in '' | *[!0-9]*) fail "$headroom_scope filesystem free space is malformed" ;; esac
+  test "$available" -ge "$required" || fail "$headroom_scope filesystem lacks required free space"
+  available_inodes=$(df -Pi "$headroom_path" | awk 'NR == 2 { print $4 }')
+  case "$available_inodes" in '' | *[!0-9]*) fail "$headroom_scope filesystem free inode count is malformed" ;; esac
+  test "$available_inodes" -ge "$required_inodes" || fail "$headroom_scope filesystem lacks required free inodes"
+}
+
+filesystem_device() {
+  df -Pk "$1" | awk 'NR == 2 { print $1 }'
 }
 
 env_value() {
@@ -188,6 +210,13 @@ project_container_id() {
   printf '%s' "$ids"
 }
 
+project_container_id_any() {
+  service=$1
+  ids=$(docker ps -a --filter label=com.docker.compose.project=phub-staging --filter "label=com.docker.compose.service=$service" --format '{{.ID}}')
+  test "$(printf '%s\n' "$ids" | awk 'NF { count += 1 } END { print count + 0 }')" -eq 1 || fail "$service must have exactly one created container"
+  printf '%s' "$ids"
+}
+
 attest_service() {
   service=$1
   release_file=$2
@@ -211,6 +240,10 @@ normalize_health() {
 
 bounded_docker() {
   timeout --signal=TERM --kill-after=1s 5s docker "$@"
+}
+
+bounded_docker_copy() {
+  timeout --signal=TERM --kill-after=5s 60s docker cp "$@"
 }
 
 container_http_status() {
@@ -583,6 +616,166 @@ verify_public_release() {
   test "$actual" = "$expected" || fail 'public manifest release differs'
 }
 
+validate_web_assets() {
+  directory=$1
+  maximum_count=$2
+  maximum_size_kib=$3
+  test -d "$directory" && test ! -L "$directory" || fail 'web asset snapshot is absent or unsafe'
+  test -z "$(find "$directory" -mindepth 2 -print -quit)" ||
+    fail 'web asset snapshot contains nested paths'
+  test -z "$(find "$directory" -mindepth 1 -maxdepth 1 ! -type f -print -quit)" ||
+    fail 'web asset snapshot contains a non-regular file'
+  test -z "$(find "$directory" -mindepth 1 -maxdepth 1 -name '.*' -print -quit)" ||
+    fail 'web asset snapshot contains a hidden file'
+  asset_count=$(find "$directory" -mindepth 1 -maxdepth 1 -type f | wc -l | tr -d ' ')
+  case "$asset_count" in '' | *[!0-9]*) fail 'web asset count is malformed' ;; esac
+  test "$asset_count" -gt 0 && test "$asset_count" -le "$maximum_count" ||
+    fail 'web asset count is outside the bounded range'
+  asset_size_kib=$(du -sk "$directory" | awk '{ print $1 }')
+  case "$asset_size_kib" in '' | *[!0-9]*) fail 'web asset size is malformed' ;; esac
+  test "$asset_size_kib" -le "$maximum_size_kib" || fail 'web assets exceed the bounded size'
+  for asset_path in "$directory"/*; do
+    asset_name=$(basename "$asset_path")
+    case "$asset_name" in '' | *[!A-Za-z0-9._-]*) fail 'web asset name is unsafe' ;; esac
+    test -s "$asset_path" || fail 'web asset is empty'
+  done
+}
+
+web_image_size_kib() {
+  release_file=$1
+  ref=$(image_ref_from "$release_file" web)
+  image_size_bytes=$(docker image inspect --format '{{.Size}}' "$ref")
+  case "$image_size_bytes" in '' | *[!0-9]*) fail 'web image size is malformed' ;; esac
+  image_size_kib=$(((image_size_bytes + 1023) / 1024))
+  test "$image_size_kib" -gt 0 && test "$image_size_kib" -le 1048576 ||
+    fail 'web image size exceeds the one GiB preflight bound'
+  printf '%s' "$image_size_kib"
+}
+
+write_web_asset_manifest() {
+  directory=$1
+  manifest=$2
+  test ! -e "$manifest" && test ! -L "$manifest" || fail 'web asset manifest already exists'
+  (
+    cd "$directory"
+    LC_ALL=C sha256sum ./* | LC_ALL=C sort
+  ) > "$manifest"
+  chmod 400 "$manifest"
+}
+
+capture_previous_web_assets() {
+  test ! -e "$previous_web_assets" && test ! -L "$previous_web_assets" ||
+    fail 'previous web asset snapshot already exists'
+  test ! -e "$previous_web_assets_next" && test ! -L "$previous_web_assets_next" ||
+    fail 'previous web asset staging directory already exists'
+  install -d -m 700 "$previous_web_assets_next"
+  previous_web_ref=$(image_ref_from "$app_root/release.env" web)
+  snapshot_container="phub-legacy-otp-assets-$workflow_run_id-$workflow_run_attempt"
+  test -z "$(docker ps -a --filter "name=^/$snapshot_container$" --format '{{.ID}}')" ||
+    fail 'immutable previous-web snapshot container already exists'
+  docker create --name "$snapshot_container" --pull=never --network none --read-only \
+    --cap-drop ALL --security-opt no-new-privileges:true "$previous_web_ref" >/dev/null
+  snapshot_status=0
+  bounded_docker_copy "$snapshot_container:/usr/share/nginx/html/assets/." "$previous_web_assets_next/" ||
+    snapshot_status=$?
+  bounded_docker rm -f "$snapshot_container" >/dev/null 2>&1 ||
+    fail 'immutable previous-web snapshot container cleanup failed'
+  test "$snapshot_status" -eq 0 || fail 'cannot capture previous assets from the immutable web image'
+  validate_web_assets "$previous_web_assets_next" 2048 1048576
+  for required_asset in $required_previous_web_assets; do
+    test -f "$previous_web_assets_next/$required_asset" && test ! -L "$previous_web_assets_next/$required_asset" ||
+      fail 'incident previous web asset is absent from the immutable image'
+  done
+  chmod 444 "$previous_web_assets_next"/*
+  chmod 700 "$previous_web_assets_next"
+  sync "$previous_web_assets_next"
+  mv "$previous_web_assets_next" "$previous_web_assets"
+  sync "$bundle_path"
+  printf '%s\n' "legacy_otp_hotfix previous_web_assets source=immutable_image count=$asset_count size_kib=$asset_size_kib status=captured"
+}
+
+install_previous_web_assets() {
+  candidate_web_id=$1
+  test "$(docker inspect --format '{{.State.Running}}' "$candidate_web_id")" = false ||
+    fail 'candidate web must remain stopped while previous assets are installed'
+  validate_web_assets "$previous_web_assets" 2048 1048576
+  previous_asset_count=$asset_count
+  for directory in "$candidate_web_assets" "$merged_web_assets" "$verified_web_assets"; do
+    test ! -e "$directory" && test ! -L "$directory" || fail 'temporary web asset directory already exists'
+    install -d -m 700 "$directory"
+  done
+  bounded_docker_copy "$candidate_web_id:/usr/share/nginx/html/assets/." "$candidate_web_assets/" ||
+    fail 'cannot capture candidate assets from the stopped candidate container'
+  validate_web_assets "$candidate_web_assets" 2048 1048576
+  cp "$candidate_web_assets"/* "$merged_web_assets/"
+  installed_count=0
+  reused_count=0
+  for asset_path in "$previous_web_assets"/*; do
+    asset_name=$(basename "$asset_path")
+    merged_path="$merged_web_assets/$asset_name"
+    if test -e "$merged_path" || test -L "$merged_path"; then
+      test -f "$merged_path" && test ! -L "$merged_path" || fail 'candidate web asset collision target is unsafe'
+      previous_hash=$(sha256 "$asset_path")
+      candidate_hash=$(sha256 "$merged_path")
+      test "$candidate_hash" = "$previous_hash" || fail 'candidate web asset hash collision differs'
+      reused_count=$((reused_count + 1))
+    else
+      install -m 444 "$asset_path" "$merged_path"
+      installed_count=$((installed_count + 1))
+    fi
+  done
+  test "$((installed_count + reused_count))" -eq "$previous_asset_count" ||
+    fail 'previous web asset installation count differs'
+  chmod 444 "$merged_web_assets"/*
+  validate_web_assets "$merged_web_assets" 4096 2097152
+  write_web_asset_manifest "$merged_web_assets" "$web_asset_overlay_manifest"
+  bounded_docker_copy "$merged_web_assets/." "$candidate_web_id:/usr/share/nginx/html/assets/" ||
+    fail 'cannot install the merged web asset set into the stopped candidate'
+  bounded_docker_copy "$candidate_web_id:/usr/share/nginx/html/assets/." "$verified_web_assets/" ||
+    fail 'cannot read back the merged web asset set from the stopped candidate'
+  validate_web_assets "$verified_web_assets" 4096 2097152
+  verified_manifest="$web_asset_overlay_manifest.verified"
+  write_web_asset_manifest "$verified_web_assets" "$verified_manifest"
+  cmp -s "$web_asset_overlay_manifest" "$verified_manifest" ||
+    fail 'candidate web asset readback manifest differs'
+  rm -f "$verified_manifest"
+  for directory in "$candidate_web_assets" "$merged_web_assets" "$verified_web_assets"; do
+    remove_web_asset_directory "$directory"
+  done
+  sync "$bundle_path"
+  printf '%s\n' "legacy_otp_hotfix previous_web_assets installed=$installed_count reused=$reused_count overlay_manifest_sha256=$(sha256 "$web_asset_overlay_manifest") status=compatible"
+}
+
+verify_previous_web_assets_public() {
+  for required_asset in $required_previous_web_assets; do
+    test ! -e "$public_web_asset_verify" && test ! -L "$public_web_asset_verify" ||
+      fail 'public web asset verification file already exists'
+    curl --fail --silent --show-error --connect-timeout 3 --max-time 20 \
+      --resolve lk.nano.padlhub.su:443:127.0.0.1 \
+      --output "$public_web_asset_verify" "https://lk.nano.padlhub.su/assets/$required_asset"
+    test -f "$public_web_asset_verify" && test ! -L "$public_web_asset_verify" ||
+      fail 'public previous web asset response is unsafe'
+    test "$(sha256 "$public_web_asset_verify")" = "$(sha256 "$previous_web_assets/$required_asset")" ||
+      fail 'public previous web asset hash differs'
+    rm -f "$public_web_asset_verify"
+  done
+  printf '%s\n' 'legacy_otp_hotfix previous_web_assets ingress_hashes=passed status=served'
+}
+
+remove_web_asset_directory() {
+  directory=$1
+  case "$directory" in "$previous_web_assets" | "$previous_web_assets_next" | "$candidate_web_assets" | "$merged_web_assets" | "$verified_web_assets") ;; *)
+    fail 'web asset cleanup path is outside the bounded bundle'
+    ;;
+  esac
+  if test ! -e "$directory" && test ! -L "$directory"; then
+    return 0
+  fi
+  test -d "$directory" && test ! -L "$directory" || fail 'previous web asset cleanup target is unsafe'
+  rm -rf "$directory"
+  sync "$bundle_path"
+}
+
 stop_runtime() {
   ids=''
   for service in api realtime worker web; do
@@ -653,11 +846,25 @@ validate_marker() {
 start_runtime() {
   release_file=$1
   side=$2
-  for service in realtime api worker web; do
+  for service in realtime api worker; do
     compose_with "$release_file" up -d --no-deps --force-recreate --pull never "$service"
     wait_service "$service" "$release_file"
     maybe_fail "$side-$service-ready"
   done
+  if test "$side" = candidate; then
+    compose_with "$release_file" create --no-deps --force-recreate --pull never web
+    candidate_web_id=$(project_container_id_any web)
+    install_previous_web_assets "$candidate_web_id"
+    maybe_fail candidate-web-assets-compatible
+    compose_with "$release_file" start web
+  else
+    compose_with "$release_file" up -d --no-deps --force-recreate --pull never web
+  fi
+  wait_service web "$release_file"
+  if test "$side" = candidate; then
+    verify_previous_web_assets_public
+  fi
+  maybe_fail "$side-web-ready"
 }
 
 restore_from_marker() {
@@ -669,6 +876,12 @@ restore_from_marker() {
   test "$(env_value "$saved_release" RELEASE)" = "$expected_active_release" || fail 'saved release is not the exact legacy release'
   stop_runtime
   maybe_fail restore-runtime-stopped
+  for directory in "$previous_web_assets_next" "$candidate_web_assets" "$merged_web_assets" "$verified_web_assets" "$previous_web_assets"; do
+    remove_web_asset_directory "$directory"
+  done
+  rm -f "$public_web_asset_verify" "$web_asset_overlay_manifest.verified"
+  sync "$bundle_path"
+  maybe_fail restore-web-assets-cleaned
   atomic_install "$saved_release" "$release_next" "$app_root/release.env" restore-release-staged
   maybe_fail restore-release-installed
   start_runtime "$app_root/release.env" restore
@@ -780,6 +993,10 @@ if test "$operation" = rollback; then
     for service in realtime api worker web; do attest_service "$service" "$app_root/release.env"; done
     assert_flags_disabled
     verify_public_release "$expected_active_release"
+    for directory in "$previous_web_assets_next" "$candidate_web_assets" "$merged_web_assets" "$verified_web_assets" "$previous_web_assets"; do
+      remove_web_asset_directory "$directory"
+    done
+    rm -f "$public_web_asset_verify" "$web_asset_overlay_manifest.verified"
     clear_bounded_next_artifacts
     printf '%s\n' "legacy_otp_hotfix operation=rollback release=$expected_active_release status=already-restored"
     exit 0
@@ -788,7 +1005,7 @@ if test "$operation" = rollback; then
   exit 0
 fi
 
-for path in "$marker" "$marker_next" "$release_next" /etc/phub/.runtime-secret-isolation.transition.json /etc/phub/.runtime-secret-isolation.transition.json.next /etc/phub/.runtime-secret-bootstrap.finalized.json; do
+for path in "$marker" "$marker_next" "$release_next" "$previous_web_assets" "$previous_web_assets_next" "$candidate_web_assets" "$merged_web_assets" "$verified_web_assets" "$web_asset_overlay_manifest" "$web_asset_overlay_manifest.verified" "$public_web_asset_verify" /etc/phub/.runtime-secret-isolation.transition.json /etc/phub/.runtime-secret-isolation.transition.json.next /etc/phub/.runtime-secret-bootstrap.finalized.json; do
   test ! -e "$path" && test ! -L "$path" || fail "unresolved staging transition artifact exists: $path"
 done
 test "$(env_value "$app_root/release.env" RELEASE)" = "$expected_active_release" || fail 'active release differs from the exact legacy base'
@@ -868,6 +1085,10 @@ on_error() {
     fi
   else
     rm -f "$database_tmp" "$database_backup" "$candidate_release_file" "$marker_next" "$release_next"
+    for directory in "$previous_web_assets_next" "$candidate_web_assets" "$merged_web_assets" "$verified_web_assets" "$previous_web_assets"; do
+      remove_web_asset_directory "$directory"
+    done
+    rm -f "$web_asset_overlay_manifest" "$web_asset_overlay_manifest.verified" "$public_web_asset_verify"
   fi
   exit "$status"
 }
@@ -881,6 +1102,22 @@ chmod 600 "$database_tmp"
 sync_path "$database_tmp"
 mv "$database_tmp" "$database_backup"
 sync_path "$database_backup"
+previous_web_image_kib=$(web_image_size_kib "$app_root/release.env")
+candidate_web_image_kib=$(web_image_size_kib "$candidate_release_file")
+combined_web_image_kib=$((previous_web_image_kib + candidate_web_image_kib))
+docker_root_dir=$(docker info --format '{{.DockerRootDir}}')
+case "$docker_root_dir" in /*) ;; *) fail 'Docker root directory is malformed' ;; esac
+test -d "$docker_root_dir" || fail 'Docker root directory is absent'
+app_filesystem_device=$(filesystem_device "$app_root")
+docker_filesystem_device=$(filesystem_device "$docker_root_dir")
+test -n "$app_filesystem_device" && test -n "$docker_filesystem_device" || fail 'asset filesystem device is unavailable'
+if test "$app_filesystem_device" = "$docker_filesystem_device"; then
+  require_path_headroom_kib "$app_root" "$((1048576 + 4 * combined_web_image_kib))" combined-asset 17408
+else
+  require_path_headroom_kib "$app_root" "$((1048576 + 3 * combined_web_image_kib))" application-asset 13312
+  require_path_headroom_kib "$docker_root_dir" "$((1048576 + combined_web_image_kib))" docker-asset 5120
+fi
+capture_previous_web_assets
 
 {
   printf 'VERSION=1\n'

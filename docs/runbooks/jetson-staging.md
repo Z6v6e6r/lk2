@@ -283,6 +283,25 @@ custom-format PostgreSQL archive. After the durable marker, it stops all four ru
 atomically installs only the candidate `release.env`, and starts realtime, API, worker and web in
 that order. Nginx, Caddy and the database are not recreated or migrated.
 
+After the readable database archive and before the marker, the controller bounds both exact web
+image sizes, preserves a one-GiB rollback floor and reserves space for the host copies plus the
+candidate container writable layer on the application and Docker filesystems. It also reserves an
+inode floor plus the maximum 12,288 host files and 4,096 Docker upper-layer files, then captures the flat
+`/usr/share/nginx/html/assets` directory from a never-started container created from the exact e308
+image digest. It rejects nested paths, symlinks, non-regular or empty files, unsafe names, more than
+2,048 entries or more than one GiB, and requires the incident e308 entry and lazy chunk.
+
+After the runtime stop, Compose creates the candidate web container without starting it. The
+controller captures its assets in one bounded batch, merges missing e308 files offline, rejects any
+same-name SHA-256 mismatch, installs the complete merged set into the stopped container in one
+batch and requires a byte-identical full readback manifest. Only then does it start web. Before the
+candidate-ready marker it also fetches the incident entry and lazy chunk through local TLS ingress
+and compares their SHA-256 with the immutable e308 snapshot. This compatibility layer keeps an
+already-loaded e308 browser bundle able to fetch its lazy chunks across the temporary cutover; it
+does not replace candidate files or change the image, Compose or ingress configuration. Rollback
+recreates the exact e308 web container and removes the temporary asset directories; only the small
+redacted overlay manifest remains in the run-owned bundle.
+
 Before any staging Environment, SSH or host write is reachable, a separate secret-free CI job
 pulls the exact pushed ARM64 API, worker, realtime and migrator digests and runs their production
 workspace import probes with no network, mounts or environment injection, a read-only root,
@@ -309,38 +328,45 @@ Viva delegation record; application rollback deliberately does not erase those r
 Before rollback, the workflow requires exactly one new correlation-bound
 `PHONE_OTP_LEGAL_ACCEPTANCE_RECORDED` plus `AUTH_SESSION_CREATED` success for tenant
 `local-padel`, backed by a fresh Viva external identity and active delegation after the durable
-candidate-ready timestamp. That second timestamp advances from zero only after exact candidate
-service/image/public-manifest attestation and is atomically persisted in the marker. It prints only
-a fixed PASS token; phone, provider subject, user ID and
-correlation ID remain inside PostgreSQL. Zero or multiple matching successes fail closed and still
-enter rollback. Health, manifest and OTP evidence are polled inside the same hard 15-minute
-wall-clock window; the first valid evidence closes the window early and immediately enters
-rollback. The candidate is never kept active for a separate post-window attestation period.
+candidate-ready timestamp. It additionally requires one Redis-bound browser read job for that same
+tenant, user and JWT session, successful result and completion requests for that job, and
+`profile.read` plus `schedule.read` success records carrying the same server-derived job identity.
+That second timestamp advances from zero only after exact candidate service/image/public-manifest
+and compatibility-asset attestation and is atomically persisted in the marker. It prints only fixed
+PASS tokens; phone, provider subject, user ID, session ID, job ID and correlation ID remain inside
+PostgreSQL, Redis and redacted server logs. Zero, multiple, stale, cross-principal or unbound
+evidence fails closed and still enters rollback. Health, manifest, OTP and browser evidence are
+polled inside the same hard 15-minute wall-clock window; the first complete evidence set closes the
+window early and immediately enters rollback. The candidate is never kept active for a separate
+post-window attestation period.
 
 Every unsuccessful attestation poll appends a fixed, redacted `otp_stage_diagnostic` snapshot to
 the workflow evidence artifact. An exactly-one database result emits its fixed session-evidence
-record and returns PASS immediately, without reading API logs, so diagnostics cannot delay valid
-evidence or rollback. A failed PostgreSQL query emits `source=unavailable outcome=unknown`, still
-attempts the advisory API-log snapshot and then fails closed.
+record; only the complete matching browser-evidence set then returns PASS without reading API logs,
+so diagnostics cannot delay valid evidence or rollback. A failed PostgreSQL query emits
+`source=unavailable outcome=unknown`, still attempts the advisory API-log snapshot and then fails
+closed.
 
 The snapshot counts only exact POST `local-padel` PadlHub challenge routes by HTTP status class,
-then aggregates the candidate API's `request_code`, `verify_code` and `profile_read` provider
+then aggregates the candidate API's `request_code` and `verify_code` provider
 metrics by allowlisted outcome and status class. It reads at most the latest 5,000 log records since
 candidate-ready; every record is labelled `window=tail_5000`, and high log volume may truncate the
 earlier part of the canary window. For unavailable operations it reports only an inferred fixed
-failure bucket: provider request/response, token request/response, post-token resolution, or
-profile request/response/payload. The exact candidate can reject JWT claims after a successful
+failure bucket: provider request/response, token request/response, or post-token resolution. The
+exact candidate can reject JWT claims after a successful
 token response without emitting a `verify_code` unavailable metric, so that record is labelled
 `coverage=partial`; a zero post-token counter does not prove that no such failure occurred. The
 provider metric records are not tenant- or correlation-bound, so they are explicitly labelled
 `attribution=aggregate` and must not be treated as proof that a particular user's provider call
 succeeded.
 
-The correlation-bound PostgreSQL session evidence remains the sole PASS gate. If API logs cannot
-be read within the five-second bound, unsuccessful-poll diagnostics report `source=unavailable`
-with zero counters. Raw logs, URLs, challenge IDs, phone, code, tokens, provider subject, user ID
-and correlation ID are never printed or uploaded. Repeated failure snapshots are expected because
-polling remains inside the same hard 15-minute candidate window.
+The correlation-bound PostgreSQL session evidence is necessary but not sufficient: PASS also
+requires the principal/session/job-bound browser profile and schedule evidence above. If API logs
+cannot be read within the five-second bound, unsuccessful-poll diagnostics report
+`source=unavailable` with zero counters. Raw logs, URLs, challenge IDs, phone, code, tokens,
+provider subject, user ID, session ID, job ID and correlation ID are never printed or uploaded.
+Repeated failure snapshots are expected because polling remains inside the same hard 15-minute
+candidate window.
 
 A failed or interrupted PostgreSQL dump before marker publication removes its exact `.next` and
 final archive paths. Once the marker exists, the completed archive and application bundle are

@@ -256,9 +256,13 @@ function prepareControllerFixture() {
   const appRoot = join(root, 'app');
   const bundle = join(appRoot, 'legacy-otp-hotfix-candidates', '123-1');
   const fakeBin = join(root, 'bin');
+  const dockerRoot = join(root, 'docker-root');
+  const webAssetOverlayState = join(root, 'web-asset-overlay.state');
+  const webCreatedState = join(root, 'web-created.state');
   mkdirSync(join(appRoot, 'backups', 'releases'), { recursive: true });
   mkdirSync(bundle, { recursive: true });
   mkdirSync(fakeBin);
+  mkdirSync(dockerRoot);
   writeFileSync(join(appRoot, 'compose.yaml'), 'services: {}\n');
   writeFileSync(join(bundle, 'compose.staging.yaml'), 'services: {}\n');
   writeFileSync(join(appRoot, 'release.env'), releaseFile(activeRelease, 'a'));
@@ -302,6 +306,7 @@ if test "$1" = inspect; then
   release=$(sed -n 's/^RELEASE=//p' "$PHUB_APP_ROOT/release.env")
   stopped=false
   if test "\${PHUB_FAKE_STOPPED_SERVICE:-}" = "$service" && test "\${PHUB_FAKE_STOPPED_RELEASE:-}" = "$release"; then stopped=true; fi
+  if test "$service" = web && test -e "$PHUB_FAKE_WEB_CREATED_STATE"; then stopped=true; fi
   case "$format" in
     *State.Running*) if test "$stopped" = true; then printf 'false\\n'; else printf 'true\\n'; fi ;;
     *State.Health.Status* | *'if .State.Health'*)
@@ -327,10 +332,22 @@ if test "$1" = inspect; then
   exit 0
 fi
 if test "$1" = image && test "$2" = inspect; then
-  case " $* " in *' --format {{.Architecture}} '*) printf 'arm64\n' ;; esac
+  case " $* " in
+    *' --format {{.Architecture}} '*) printf 'arm64\n' ;;
+    *' --format {{.Size}} '*) printf '%s\n' "\${PHUB_FAKE_WEB_IMAGE_SIZE_BYTES:-1048576}" ;;
+  esac
+  exit 0
+fi
+if test "$1" = info; then
+  printf '%s\n' "$PHUB_FAKE_DOCKER_ROOT"
   exit 0
 fi
 if test "$1" = pull; then exit 0; fi
+if test "$1" = create; then
+  printf '%s\n' immutable-assets-container-id
+  exit 0
+fi
+if test "$1" = rm; then exit 0; fi
 if test "$1" = run; then
   service=''
   case " $* " in
@@ -341,6 +358,53 @@ if test "$1" = run; then
   esac
   test -z "\${PHUB_FAKE_IMPORT_PROBES:-}" || printf '%s|%s\n' "$service" "$*" >> "$PHUB_FAKE_IMPORT_PROBES"
   test "\${PHUB_FAKE_IMPORT_FAILURE_SERVICE:-}" != "$service" || exit 93
+  exit 0
+fi
+if test "$1" = cp; then
+  case "$2" in
+    phub-legacy-otp-assets-*:/usr/share/nginx/html/assets/.)
+      mkdir -p "$3"
+      if test "\${PHUB_FAKE_WEB_ASSET_MODE:-safe}" = nested; then
+        mkdir -p "$3/nested"
+        printf 'unsafe\n' > "$3/nested/chunk-BfVFEYSR.js"
+      else
+        printf 'old-entry\n' > "$3/app-DUx85CW8.js"
+        if test "\${PHUB_FAKE_WEB_ASSET_MODE:-safe}" != missing-incident; then
+          printf 'old-chunk\n' > "$3/chunk-BfVFEYSR.js"
+        fi
+        if test "\${PHUB_FAKE_WEB_ASSET_MODE:-safe}" = hidden; then
+          printf 'hidden\n' > "$3/.hidden-asset"
+        fi
+      fi
+      ;;
+    web-id:/usr/share/nginx/html/assets/.)
+      mkdir -p "$3"
+      if test -f "$PHUB_FAKE_WEB_ASSET_OVERLAY_STATE"; then
+        overlay_source=$(cat "$PHUB_FAKE_WEB_ASSET_OVERLAY_STATE")
+        cp "$overlay_source"/* "$3/"
+        if test "\${PHUB_FAKE_WEB_ASSET_MODE:-safe}" = readback-mismatch; then
+          rm -f "$3/app-candidate.js"
+          printf 'tampered-readback\n' > "$3/app-candidate.js"
+        fi
+      else
+        printf 'candidate-entry\\n' > "$3/app-candidate.js"
+        printf 'candidate-chunk\\n' > "$3/chunk-candidate.js"
+        printf 'candidate-font\\n' > "$3/font-candidate.woff2"
+        if test "\${PHUB_FAKE_WEB_ASSET_MODE:-safe}" = collision-different; then
+          printf 'different-candidate-content\n' > "$3/app-DUx85CW8.js"
+        fi
+      fi
+      ;;
+    *)
+      case "$3" in
+        web-id:/usr/share/nginx/html/assets/)
+          overlay_source=\${2%/.}
+          printf '%s\n' "$overlay_source" > "$PHUB_FAKE_WEB_ASSET_OVERLAY_STATE"
+          ;;
+        *) exit 1 ;;
+      esac
+      ;;
+  esac
   exit 0
 fi
 if test "$1" = exec; then
@@ -395,6 +459,9 @@ if test "$1" = compose; then
       printf 'phub:booking-screen-read-result:%s:22222222-2222-4222-8222-222222222222\\n' '${browserJobId}'
       ;;
     *' exec -T postgres pg_restore --list '*) : ;;
+    *' create '*' web '*) touch "$PHUB_FAKE_WEB_CREATED_STATE" ;;
+    *' start web '*) rm -f "$PHUB_FAKE_WEB_CREATED_STATE" ;;
+    *' up -d '*' web '*) rm -f "$PHUB_FAKE_WEB_CREATED_STATE" ;;
     *' up -d '*) : ;;
   esac
   exit 0
@@ -406,6 +473,22 @@ exit 1
     join(fakeBin, 'curl'),
     `#!/bin/sh
 set -eu
+output=''
+previous=''
+for argument in "$@"; do
+  if test "$previous" = --output; then output=$argument; fi
+  previous=$argument
+done
+case " $* " in
+  *'/assets/app-DUx85CW8.js'*)
+    if test "\${PHUB_FAKE_WEB_ASSET_MODE:-safe}" = public-mismatch; then content='tampered-public'; else content='old-entry'; fi
+    ;;
+  *'/assets/chunk-BfVFEYSR.js'*) content='old-chunk' ;;
+esac
+if test -n "\${content:-}"; then
+  if test -n "$output"; then printf '%s\\n' "$content" > "$output"; else printf '%s\\n' "$content"; fi
+  exit 0
+fi
 release=$(sed -n 's/^RELEASE=//p' "$PHUB_APP_ROOT/release.env")
 printf '{"release":"%s"}\\n' "$release"
 `,
@@ -413,8 +496,23 @@ printf '{"release":"%s"}\\n' "$release"
   executable(
     join(fakeBin, 'df'),
     `#!/bin/sh
+available=\${PHUB_FAKE_DF_AVAILABLE:-19999999}
+device=fixture
+path=''
+for argument in "$@"; do path=$argument; done
+case " $* " in
+  *' -Pi '*)
+    available=\${PHUB_FAKE_DF_AVAILABLE_INODES:-19999999}
+    if test "\${PHUB_FAKE_SPLIT_DOCKER_FS:-0}" = 1 && test "$path" = "$PHUB_FAKE_DOCKER_ROOT"; then
+      available=\${PHUB_FAKE_DOCKER_DF_AVAILABLE_INODES:-$available}
+    fi
+    ;;
+esac
+if test "\${PHUB_FAKE_SPLIT_DOCKER_FS:-0}" = 1 && test "$path" = "$PHUB_FAKE_DOCKER_ROOT"; then
+  device=docker-fixture
+fi
 printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\\n'
-printf 'fixture 20000000 1 19999999 1%% /fixture\\n'
+printf '%s 20000000 1 %s 1%% /fixture\\n' "$device" "$available"
 `,
   );
   executable(join(fakeBin, 'flock'), '#!/bin/sh\nexit 0\n');
@@ -447,17 +545,29 @@ esac
   executable(
     join(fakeBin, 'sha256sum'),
     `#!/bin/sh
-printf '${composeSha}  %s\\n' "$1"
+for path in "$@"; do
+  case "$path" in
+    */compose.yaml | */compose.staging.yaml) printf '${composeSha}  %s\\n' "$path" ;;
+    *) /usr/bin/shasum -a 256 "$path" ;;
+  esac
+done
 `,
   );
   executable(
     join(fakeBin, 'stat'),
     `#!/bin/sh
-if test "$1" = -c; then printf 'regular file:1:%s:%s:600\\n' "$(id -u)" "$(id -g)"; else /usr/bin/stat "$@"; fi
+if test "$1" = -c; then
+  case "$2" in
+    %a) printf '444\\n' ;;
+    *) printf 'regular file:1:%s:%s:600\\n' "$(id -u)" "$(id -g)" ;;
+  esac
+else
+  /usr/bin/stat "$@"
+fi
 `,
   );
 
-  return { root, appRoot, bundle, fakeBin };
+  return { root, appRoot, bundle, fakeBin, dockerRoot, webAssetOverlayState, webCreatedState };
 }
 
 function runController(
@@ -487,6 +597,9 @@ function runController(
         ...process.env,
         PATH: `${fixture.fakeBin}:${process.env.PATH ?? ''}`,
         PHUB_APP_ROOT: fixture.appRoot,
+        PHUB_FAKE_DOCKER_ROOT: fixture.dockerRoot,
+        PHUB_FAKE_WEB_ASSET_OVERLAY_STATE: fixture.webAssetOverlayState,
+        PHUB_FAKE_WEB_CREATED_STATE: fixture.webCreatedState,
         ...extraEnvironment,
       },
       encoding: 'utf8',
@@ -821,6 +934,194 @@ describe('legacy OTP hotfix canary release contract', () => {
     expect(controller).not.toContain('psql <');
   });
 
+  it('keeps the previous flat hashed assets available in the temporary candidate web container', () => {
+    const capture = controller.indexOf('capture_previous_web_assets\n');
+    const stop = controller.lastIndexOf('stop_runtime\n');
+    const startFunction = controller.slice(
+      controller.indexOf('start_runtime() {'),
+      controller.indexOf('restore_from_marker() {'),
+    );
+    const createWeb = startFunction.indexOf('create --no-deps --force-recreate --pull never web');
+    const install = startFunction.indexOf('install_previous_web_assets "$candidate_web_id"');
+    const startWeb = startFunction.indexOf('start web');
+    const publicRelease = controller.lastIndexOf('verify_public_release "$candidate_release"');
+    expect(capture).toBeGreaterThan(0);
+    expect(capture).toBeLessThan(stop);
+    expect(createWeb).toBeGreaterThan(0);
+    expect(install).toBeGreaterThan(createWeb);
+    expect(startWeb).toBeGreaterThan(install);
+    expect(controller.lastIndexOf('start_runtime "$app_root/release.env" candidate')).toBeLessThan(
+      publicRelease,
+    );
+    expect(controller).toContain('find "$directory" -mindepth 2 -print -quit');
+    expect(controller).toContain('web asset count is outside the bounded range');
+    expect(controller).toContain('web assets exceed the bounded size');
+    expect(controller).toContain(
+      "required_previous_web_assets='app-DUx85CW8.js chunk-BfVFEYSR.js'",
+    );
+    expect(controller).toContain('candidate web asset hash collision differs');
+
+    const fixture = prepareControllerFixture();
+    try {
+      const opened = runController(fixture, 'start');
+      expect(opened.status, opened.stderr).toBe(0);
+      expect(opened.stdout).toContain(
+        'previous_web_assets source=immutable_image count=2 size_kib=',
+      );
+      expect(opened.stdout).toContain(
+        'previous_web_assets installed=2 reused=0 overlay_manifest_sha256=',
+      );
+      expect(opened.stdout).toContain('status=compatible');
+      expect(opened.stdout).toContain('previous_web_assets ingress_hashes=passed status=served');
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  it('rejects a nested previous-asset snapshot before publishing the transition marker', () => {
+    const fixture = prepareControllerFixture();
+    try {
+      const result = runController(fixture, 'start', { PHUB_FAKE_WEB_ASSET_MODE: 'nested' });
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain('web asset snapshot contains nested paths');
+      expect(readFileSync(join(fixture.appRoot, 'release.env'), 'utf8')).toContain(
+        `RELEASE=${activeRelease}`,
+      );
+      for (const name of ['previous-web-assets', 'previous-web-assets.next']) {
+        expect(() => readFileSync(join(fixture.bundle, name))).toThrow();
+      }
+      expect(() =>
+        readFileSync(join(fixture.appRoot, '.legacy-otp-hotfix.transition.env')),
+      ).toThrow();
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  it('rolls back when a same-name candidate asset has different content', () => {
+    const fixture = prepareControllerFixture();
+    try {
+      const result = runController(fixture, 'start', {
+        PHUB_FAKE_WEB_ASSET_MODE: 'collision-different',
+      });
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain('candidate web asset hash collision differs');
+      expect(readFileSync(join(fixture.appRoot, 'release.env'), 'utf8')).toContain(
+        `RELEASE=${activeRelease}`,
+      );
+      expect(() =>
+        readFileSync(join(fixture.appRoot, '.legacy-otp-hotfix.transition.env')),
+      ).toThrow();
+      expect(result.stdout).toContain(`operation=rollback release=${activeRelease} status=passed`);
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  it.each([
+    ['missing-incident', 'incident previous web asset is absent from the immutable image', false],
+    ['hidden', 'web asset snapshot contains a hidden file', false],
+    ['readback-mismatch', 'candidate web asset readback manifest differs', true],
+    ['public-mismatch', 'public previous web asset hash differs', true],
+  ] as const)(
+    'fails closed for %s web asset evidence',
+    (mode, expectedError, keepsManifest) => {
+      const fixture = prepareControllerFixture();
+      try {
+        const result = runController(fixture, 'start', { PHUB_FAKE_WEB_ASSET_MODE: mode });
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain(expectedError);
+        expect(readFileSync(join(fixture.appRoot, 'release.env'), 'utf8')).toContain(
+          `RELEASE=${activeRelease}`,
+        );
+        expect(() =>
+          readFileSync(join(fixture.appRoot, '.legacy-otp-hotfix.transition.env')),
+        ).toThrow();
+        for (const directory of [
+          'previous-web-assets',
+          'previous-web-assets.next',
+          'candidate-web-assets',
+          'merged-web-assets',
+          'verified-web-assets',
+        ]) {
+          expect(() => readdirSync(join(fixture.bundle, directory))).toThrow();
+        }
+        const manifestPath = join(fixture.bundle, 'web-asset-overlay.sha256');
+        if (keepsManifest) {
+          expect(readFileSync(manifestPath, 'utf8')).toContain('./app-candidate.js');
+          expect(readdirSync(fixture.bundle).filter((name) => name.includes('web-asset'))).toEqual([
+            'web-asset-overlay.sha256',
+          ]);
+        } else {
+          expect(() => readFileSync(manifestPath)).toThrow();
+        }
+      } finally {
+        rmSync(fixture.root, { recursive: true, force: true });
+      }
+    },
+    20_000,
+  );
+
+  it('rejects insufficient combined host and Docker asset headroom before snapshot capture', () => {
+    const fixture = prepareControllerFixture();
+    try {
+      const result = runController(fixture, 'start', {
+        PHUB_FAKE_DF_AVAILABLE: '9000000',
+        PHUB_FAKE_WEB_IMAGE_SIZE_BYTES: '1073741824',
+      });
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain('combined-asset filesystem lacks required free space');
+      expect(readFileSync(join(fixture.appRoot, 'release.env'), 'utf8')).toContain(
+        `RELEASE=${activeRelease}`,
+      );
+      expect(() => readdirSync(join(fixture.bundle, 'previous-web-assets'))).toThrow();
+      expect(() =>
+        readFileSync(join(fixture.appRoot, '.legacy-otp-hotfix.transition.env')),
+      ).toThrow();
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  it.each([
+    [
+      'combined',
+      {
+        PHUB_FAKE_DF_AVAILABLE_INODES: '17000',
+      },
+      'combined-asset filesystem lacks required free inodes',
+    ],
+    [
+      'split Docker',
+      {
+        PHUB_FAKE_DF_AVAILABLE_INODES: '20000',
+        PHUB_FAKE_DOCKER_DF_AVAILABLE_INODES: '5000',
+        PHUB_FAKE_SPLIT_DOCKER_FS: '1',
+      },
+      'docker-asset filesystem lacks required free inodes',
+    ],
+  ] as const)(
+    'rejects insufficient %s asset inode headroom before snapshot capture',
+    (_scope, environment, expectedError) => {
+      const fixture = prepareControllerFixture();
+      try {
+        const result = runController(fixture, 'start', environment);
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain(expectedError);
+        expect(readFileSync(join(fixture.appRoot, 'release.env'), 'utf8')).toContain(
+          `RELEASE=${activeRelease}`,
+        );
+        expect(() => readdirSync(join(fixture.bundle, 'previous-web-assets'))).toThrow();
+        expect(() =>
+          readFileSync(join(fixture.appRoot, '.legacy-otp-hotfix.transition.env')),
+        ).toThrow();
+      } finally {
+        rmSync(fixture.root, { recursive: true, force: true });
+      }
+    },
+    15_000,
+  );
+
   it('checks all four candidate Node images offline and rejects failures before marker or backup', () => {
     const fixture = prepareControllerFixture();
     const probeLog = join(fixture.root, 'candidate-import-probes.log');
@@ -870,7 +1171,10 @@ describe('legacy OTP hotfix canary release contract', () => {
       controller.indexOf('start_runtime() {'),
       controller.indexOf('restore_from_marker() {'),
     );
-    expect(startFunction.indexOf('realtime api worker web')).toBeGreaterThan(0);
+    expect(startFunction.indexOf('realtime api worker')).toBeGreaterThan(0);
+    expect(
+      startFunction.indexOf('create --no-deps --force-recreate --pull never web'),
+    ).toBeGreaterThan(0);
     expect(controller).toContain('assert_flags_disabled');
     for (const flag of [
       'HOME_VIVA_SYNC_ENABLED',
@@ -1153,6 +1457,18 @@ describe('legacy OTP hotfix canary release contract', () => {
       expect(
         readFileSync(join(retained.appRoot, '.legacy-otp-hotfix.release.next'), 'utf8'),
       ).toContain(`RELEASE=${activeRelease}`);
+      for (const directory of [
+        'previous-web-assets',
+        'previous-web-assets.next',
+        'candidate-web-assets',
+        'merged-web-assets',
+        'verified-web-assets',
+      ]) {
+        expect(() => readdirSync(join(retained.bundle, directory))).toThrow();
+      }
+      expect(readFileSync(join(retained.bundle, 'web-asset-overlay.sha256'), 'utf8')).toContain(
+        './app-candidate.js',
+      );
       const recovered = runController(retained, 'rollback');
       expect(recovered.status, recovered.stderr).toBe(0);
       expect(readFileSync(join(retained.appRoot, 'release.env'), 'utf8')).toContain(
@@ -1164,6 +1480,15 @@ describe('legacy OTP hotfix canary release contract', () => {
         '.legacy-otp-hotfix.release.next',
       ]) {
         expect(() => readFileSync(join(retained.appRoot, artifact))).toThrow();
+      }
+      for (const directory of [
+        'previous-web-assets',
+        'previous-web-assets.next',
+        'candidate-web-assets',
+        'merged-web-assets',
+        'verified-web-assets',
+      ]) {
+        expect(() => readdirSync(join(retained.bundle, directory))).toThrow();
       }
       expect(runTransitionClear(retained).status).toBe(0);
     } finally {
@@ -1274,7 +1599,7 @@ describe('legacy OTP hotfix canary release contract', () => {
       );
       expect(`${result.stdout}${result.stderr}`).not.toContain('PRIVATE_MARKER');
       expect(`${result.stdout}${result.stderr}`).not.toContain('ERR_MODULE_NOT_FOUND');
-      expect(readFileSync(join(stopped.appRoot, 'release.env'), 'utf8')).toContain(
+      expect(readFileSync(join(stopped.appRoot, 'release.env'), 'utf8'), result.stderr).toContain(
         `RELEASE=${activeRelease}`,
       );
       expect(runTransitionClear(stopped).status).toBe(0);
