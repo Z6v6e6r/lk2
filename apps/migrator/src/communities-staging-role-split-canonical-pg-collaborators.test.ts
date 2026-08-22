@@ -276,13 +276,12 @@ describe('CommunitiesStagingRoleSplitCloneOnlyConnectionFactory', () => {
 });
 
 describe('CommunitiesStagingRoleSplitPgMarkerWriter', () => {
-  it('locks the catalog, validates OID and owner, writes and reads back in one transaction', async () => {
+  it('uses the outer advisory fence, validates OID and owner, writes and reads back in one transaction', async () => {
     const current = sessionFixture([
       [],
       [],
       [],
       [markerIdentity],
-      [],
       [
         {
           oid: '45678',
@@ -292,7 +291,14 @@ describe('CommunitiesStagingRoleSplitPgMarkerWriter', () => {
         },
       ],
       [],
-      [{ marker }],
+      [
+        {
+          marker,
+          owner: request.expectedCloneDatabaseOwner,
+          owner_oid: request.expectedCloneDatabaseOwnerOid,
+          system_identifier: request.systemIdentifier,
+        },
+      ],
       [],
     ]);
     const writer = new CommunitiesStagingRoleSplitPgMarkerWriter(
@@ -308,13 +314,50 @@ describe('CommunitiesStagingRoleSplitPgMarkerWriter', () => {
       "set local lock_timeout = '5s'",
       "set local statement_timeout = '30s'",
       expect.stringContaining('select current_database() as database'),
-      'lock table pg_catalog.pg_database in access exclusive mode',
       expect.stringContaining('from pg_catalog.pg_database'),
       `comment on database "${request.restoreDatabase}" is '${marker}'`,
       expect.stringContaining('select pg_catalog.shobj_description'),
       'commit',
     ]);
+    expect(current.statements.some((sql) => sql.startsWith('lock table pg_catalog'))).toBe(false);
     expect(current.session.close).toHaveBeenCalledOnce();
+  });
+
+  it('rolls back when post-COMMENT owner binding drifts', async () => {
+    const current = sessionFixture([
+      [],
+      [],
+      [],
+      [markerIdentity],
+      [
+        {
+          oid: '45678',
+          owner: request.expectedCloneDatabaseOwner,
+          owner_oid: request.expectedCloneDatabaseOwnerOid,
+          system_identifier: request.systemIdentifier,
+        },
+      ],
+      [],
+      [
+        {
+          marker,
+          owner: 'foreign_owner',
+          owner_oid: '99999',
+          system_identifier: request.systemIdentifier,
+        },
+      ],
+      [],
+    ]);
+    const writer = new CommunitiesStagingRoleSplitPgMarkerWriter(
+      request.markerWriterSha256,
+      cloneOnlyFactory(current.session),
+      10_000,
+    );
+    await expect(
+      writer.write({ request, cloneDatabaseOid: '45678', marker }),
+    ).rejects.toMatchObject({ code: 'MARKER_OUTCOME_AMBIGUOUS' });
+    expect(current.statements).toContain('rollback');
+    expect(current.statements).not.toContain('commit');
   });
 
   it('rolls back without COMMENT when the clone binding differs', async () => {
@@ -323,7 +366,6 @@ describe('CommunitiesStagingRoleSplitPgMarkerWriter', () => {
       [],
       [],
       [markerIdentity],
-      [],
       [
         {
           oid: '99999',
@@ -352,7 +394,6 @@ describe('CommunitiesStagingRoleSplitPgMarkerWriter', () => {
       [],
       [],
       [markerIdentity],
-      [],
       [
         {
           oid: '45678',
@@ -379,7 +420,7 @@ describe('CommunitiesStagingRoleSplitPgMarkerWriter', () => {
     ['database', { ...markerIdentity, database: request.sourceDatabase }],
     ['current role', { ...markerIdentity, current_user: 'postgres', current_user_oid: '10' }],
   ])(
-    'rolls back before catalog lock when the clone session %s differs',
+    'rolls back before marker binding when the clone session %s differs',
     async (_name, identity) => {
       const current = sessionFixture([[], [], [], [identity], []]);
       const writer = new CommunitiesStagingRoleSplitPgMarkerWriter(

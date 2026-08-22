@@ -1,6 +1,7 @@
 /** Unwired Linux-only, descriptor-pinned pg_restore boundary. */
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 import type { FileHandle } from 'node:fs/promises';
 
 const MAX_ARCHIVE_BYTES = 1024 * 1024 * 1024 * 1024;
@@ -76,6 +77,11 @@ function currentUid(): number {
   return process.getuid();
 }
 
+function currentGid(): number {
+  if (process.getgid === undefined) fail('PLATFORM_UNSUPPORTED');
+  return process.getgid();
+}
+
 function assertLinux(): void {
   if (process.platform !== 'linux') fail('PLATFORM_UNSUPPORTED');
 }
@@ -143,6 +149,43 @@ async function descriptorFd(
     fail(code);
   }
   return handle.fd;
+}
+
+/**
+ * The archive descriptor crosses the final trust boundary into pg_restore.
+ * It must be immutable to the non-root runtime for the complete restore, not
+ * merely hash-equal at the instant before dispatch.
+ */
+export async function assertCommunitiesStagingRoleSplitImmutableArchiveDescriptor(
+  handle: FileHandle,
+  expectedBytes?: number,
+): Promise<void> {
+  assertLinux();
+  if (!Number.isSafeInteger(handle.fd) || handle.fd < 0 || currentUid() === 0)
+    fail('ARCHIVE_DESCRIPTOR_INVALID');
+  try {
+    const fdInfo = await readFile(`/proc/self/fdinfo/${handle.fd}`, 'utf8');
+    const flagLines = [...fdInfo.matchAll(/^flags:\s+([0-7]+)$/gmu)];
+    const descriptorFlags =
+      flagLines.length === 1 ? Number.parseInt(flagLines[0]![1]!, 8) : Number.NaN;
+    const stat = await handle.stat();
+    if (
+      !Number.isSafeInteger(descriptorFlags) ||
+      (descriptorFlags & 0o3) !== 0 ||
+      !stat.isFile() ||
+      stat.uid !== 0 ||
+      stat.gid !== currentGid() ||
+      (stat.mode & 0o777) !== 0o440 ||
+      stat.nlink !== 1 ||
+      stat.size <= 0 ||
+      stat.size > MAX_ARCHIVE_BYTES ||
+      (expectedBytes !== undefined && stat.size !== expectedBytes)
+    )
+      fail('ARCHIVE_DESCRIPTOR_INVALID');
+  } catch (error) {
+    if (error instanceof CommunitiesStagingRoleSplitPgRestoreRunnerError) throw error;
+    fail('ARCHIVE_DESCRIPTOR_INVALID');
+  }
 }
 
 async function sha256Handle(handle: FileHandle, maxBytes: number): Promise<string> {
@@ -339,11 +382,8 @@ export async function runCommunitiesStagingRoleSplitPgRestore(
     config.timeoutMs > 30 * 60_000
   )
     fail('TIMEOUT_INVALID');
-  const archiveFd = await descriptorFd(input.archiveFile, 'ARCHIVE_DESCRIPTOR_INVALID', {
-    maxBytes: MAX_ARCHIVE_BYTES,
-    uid: currentUid(),
-    exactMode: 0o600,
-  });
+  await assertCommunitiesStagingRoleSplitImmutableArchiveDescriptor(input.archiveFile);
+  const archiveFd = input.archiveFile.fd;
   const passwordFd = await descriptorFd(input.passwordFile, 'PASSWORD_DESCRIPTOR_INVALID', {
     maxBytes: MAX_PASSWORD_BYTES,
     uid: currentUid(),

@@ -63,7 +63,11 @@ digest. Marker/evidence V1 is not accepted as a compatibility fallback.
   database. It can record only `QUARANTINE_PENDING_RECONCILIATION_REQUIRED` after exact readback.
 - `apps/migrator/src/communities-staging-role-split-pg-restore-runner.ts` is an unwired,
   descriptor-only `pg_restore` library. It takes an already verified archive `FileHandle` as child
-  stdin and an already-open private password-file descriptor as child fd 3; the root-owned reviewed
+  stdin only when the Linux runtime is non-root and that open descriptor identifies a root-owned,
+  single-link `root:<runtime-primary-gid> 0440` regular file. The runtime cannot mutate that inode
+  during restore; `/proc/self/fdinfo/<fd>` must also prove the descriptor itself was opened
+  `O_RDONLY`, so a writable capability retained across privilege change is rejected. It also takes
+  an already-open private password-file descriptor as child fd 3; the root-owned reviewed
   PostgreSQL 16 executable is already-open on child fd 4 and executed only as `/proc/self/fd/4`.
   It never takes or reopens an archive path, executable path, database URL or password string. Its fixed argv is
   custom-format, `--exit-on-error` and `--single-transaction`, without `--no-owner`, `--no-acl`,
@@ -131,8 +135,12 @@ digest. Marker/evidence V1 is not accepted as a compatibility fallback.
   loopback clone-only PostgreSQL connection factory, a dedicated-session two-key advisory DDL
   fence and a marker writer composed only with the authorized clone-only connection factory. The
   writer first verifies `current_database`, `session_user`, `current_user`, both role OIDs and the
-  system identifier inside the transaction, then holds `ACCESS EXCLUSIVE` on
-  `pg_catalog.pg_database`, verifies exact name/OID/owner, writes COMMENT, reads it back and commits.
+  system identifier inside the transaction, verifies exact name/OID/owner, writes `COMMENT ON
+DATABASE` while the canonical host retains the already-held two-key advisory DDL fence, then
+  reads back the exact marker, owner name/OID and system identifier before commit. It does not try
+  to acquire a privileged table lock on `pg_catalog.pg_database`; PostgreSQL supplies the native
+  shared-object lock for `COMMENT`, while the outer advisory fence provides cooperative protocol
+  serialization.
   The advisory fence is deliberately cooperative and therefore still requires the externally
   reviewed cluster-fence evidence binding; it cannot constrain an unrelated DBA session that does
   not participate in the protocol.
@@ -606,11 +614,17 @@ the mutable head. A crash before either of the last two publications has one exa
 A complete rollback of the local head and journal, a rollback of the external anchor, a skipped
 phase or a different envelope digest is terminal `STATE_ROLLBACK_DETECTED`. The reviewed file
 provider requires a distinct non-nested private process-owner custody directory and has no
-reset/delete API. V10 pins the production subject to
+reset/delete API. Gate 6 established that the same-host file provider cannot establish monotonicity
+across a complete whole-host rollback. External-anchor subject V2 therefore permits that provider
+only with `purpose=REHEARSAL`, `executionStatus=REHEARSAL_ONLY` and
+`wholeHostRollbackProtected=false`. Its factory rejects a production subject before accessing a
+custody path. The production subject remains pinned to
 `/var/lib/phub-role-split-external-anchor/74478e8f2ec91443709159ced1ee123345eb29e6/production`,
-owned by `phub-preflight` uid/gid `998:993` beneath a root-owned mode-0700 parent. It also binds the
-existing state root and the distinct `root:993 0750` backup root. The subject and rehearsal runner
-grant no execution authority; the production anchor is not provisioned or mounted by rehearsal.
+but now declares `BLOCKED_EXTERNAL_MONOTONIC_AUTHORITY_REQUIRED`; the local path is evidence only,
+not a production provider. A separately reviewed and provisioned external CAS/WORM/monotonic
+authority is required before an execution-authorizing candidate can exist. The subject and
+rehearsal runner grant no execution authority; the production anchor is not provisioned or mounted
+by rehearsal.
 
 The V10 rehearsal kills only supervised worker children while the root runner retains the exact
 synthetic lease capability. It covers the journal-before-anchor and anchor-before-head windows and
@@ -625,8 +639,8 @@ subject files into one newly created root-owned mode-0700 input directory, and i
 `sha256:<64 hex>` Node image ID. Invoke the root runner with exactly seven arguments in this order:
 bundle path/digest, production-subject path/digest, rehearsal-subject path/digest and image ID. The
 runner itself pins production subject
-`078103b490907098b0815185a2442d5744ecf124c89aa92e103b94aef34dff77` and rehearsal subject
-`035f03b71776c475e90236f90f789d44eb491fa4af67a34289ced9833f42e7cb`; any alternate freshly
+`4a9d8228814a2fcd60865779f3cfc3d22183da86892b230a72e9370d61526091` and rehearsal subject
+`b12f09d1d48627ca1efcc19c1d4dcf21928dc3104f878656104f37596c708eac`; any alternate freshly
 hashed subject is rejected. A successful run retains its isolated root-owned directory and report
 under `/var/lib/phub-role-split-anchor-rehearsals`; do not delete or reuse that directory as a
 production anchor.
@@ -649,7 +663,9 @@ held external DDL-fence lease and three pairwise-distinct borrowed descriptors (
 device/inode). Its independently
 retained execution-authorization digest binds the bridge subject to `runnerAdapterSha256` (not the
 canonical-host adapter), validates the clone-creation/host/durable authorization DAG, verifies the
-archive descriptor's device, inode, size and SHA-256 before and after dispatch, and never closes a
+archive descriptor's root owner, runtime-primary group, exact `0440` mode, single-link identity,
+`O_RDONLY` descriptor access mode, device, inode, size and SHA-256 before and after dispatch, and
+never closes a
 borrowed descriptor or acquires/releases the supplied fence. Once dispatch begins, every runner,
 fence, output, response-loss or archive-observation failure is `RESTORE_OUTCOME_AMBIGUOUS` and the
 instance cannot be reused.
@@ -722,7 +738,9 @@ For the completed V10 rehearsal on staging:
 6. Complete independent security and migration review of the final executor bridge, external
    anchor, any later
    installed adapter/candidate manifest, and the failure matrix. A review-only bridge is not an
-   installable or execution-authorizing artifact.
+   installable or execution-authorizing artifact. The local provider cannot pass this production
+   gate: select, review and provision an external whole-host-rollback-resistant monotonic authority
+   before requesting any execution-authorizing candidate.
 7. Obtain separate approvals, in order, for the new disabled installation, execution-authorizing
    candidate, forced-command key, one ceremony run and any later post-marker cleanup.
 

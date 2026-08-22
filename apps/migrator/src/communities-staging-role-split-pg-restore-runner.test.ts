@@ -8,6 +8,18 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('node:child_process', () => ({ spawn: vi.fn() }));
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown> & { readFile: typeof readFile }>();
+  return {
+    ...actual,
+    readFile: vi.fn((...args: unknown[]) => {
+      const path = args[0];
+      if (typeof path === 'string' && path.startsWith('/proc/self/fdinfo/'))
+        return Promise.resolve('pos:\t0\nflags:\t0100000\n');
+      return actual.readFile(args[0] as never, args[1] as never);
+    }),
+  };
+});
 
 import {
   runCommunitiesStagingRoleSplitPgRestore,
@@ -86,8 +98,18 @@ async function fixture() {
   await writeFile(passwordPath, '127.0.0.1:5432:phub_restore_123_verify:phub_restore_login:x\n');
   await Promise.all([chmod(archivePath, 0o600), chmod(passwordPath, 0o600)]);
   const executablePath = '/usr/bin/true';
+  const archiveFile = await open(archivePath, 'r');
+  const archiveStat = archiveFile.stat.bind(archiveFile);
+  vi.spyOn(archiveFile, 'stat').mockImplementation(async () =>
+    Object.assign(await archiveStat(), {
+      uid: 0,
+      gid: process.getgid?.() ?? -1,
+      mode: 0o100440,
+      nlink: 1,
+    }),
+  );
   return {
-    archiveFile: await open(archivePath, 'r'),
+    archiveFile,
     passwordFile: await open(passwordPath, 'r'),
     executableFile: await open(executablePath, 'r'),
     expectedPgRestoreSha256: createHash('sha256')
@@ -224,6 +246,22 @@ describe('runCommunitiesStagingRoleSplitPgRestore', () => {
       await expect(
         runCommunitiesStagingRoleSplitPgRestore(config('0'.repeat(64)), handles),
       ).rejects.toMatchObject({ code: 'PG_RESTORE_EXECUTABLE_UNSAFE' });
+      expect(spawnMock).not.toHaveBeenCalled();
+    } finally {
+      await handles.archiveFile.close();
+      await handles.passwordFile.close();
+      await handles.executableFile.close();
+    }
+  });
+
+  it('rejects a root-owned archive descriptor opened with write access before spawn', async () => {
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('linux');
+    const handles = await fixture();
+    vi.mocked(readFile).mockResolvedValueOnce('pos:\t0\nflags:\t0100002\n');
+    try {
+      await expect(
+        runCommunitiesStagingRoleSplitPgRestore(config(handles.expectedPgRestoreSha256), handles),
+      ).rejects.toMatchObject({ code: 'ARCHIVE_DESCRIPTOR_INVALID' });
       expect(spawnMock).not.toHaveBeenCalled();
     } finally {
       await handles.archiveFile.close();
@@ -435,9 +473,16 @@ describe('runCommunitiesStagingRoleSplitPgRestore', () => {
 
   it.each([
     [
-      'archive mode',
+      'mutable same-UID archive',
       'archiveFile',
-      { isFile: () => true, uid: process.getuid?.() ?? 0, mode: 0o100644, size: 1 },
+      {
+        isFile: (): boolean => true,
+        uid: process.getuid?.() ?? 0,
+        gid: process.getgid?.() ?? 0,
+        mode: 0o100600,
+        nlink: 1,
+        size: 1,
+      },
       'ARCHIVE_DESCRIPTOR_INVALID',
     ],
     [

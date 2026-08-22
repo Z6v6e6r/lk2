@@ -8,7 +8,7 @@ import {
 } from './communities-staging-role-split-v3-external-phase-anchor.js';
 
 export const COMMUNITIES_STAGING_ROLE_SPLIT_V3_EXTERNAL_ANCHOR_SUBJECT_VERSION =
-  'communities-staging-role-split-v3-external-anchor-subject-v1';
+  'communities-staging-role-split-v3-external-anchor-subject-v2';
 
 export interface CommunitiesStagingRoleSplitV3ExternalAnchorSubject {
   readonly schemaVersion: typeof COMMUNITIES_STAGING_ROLE_SPLIT_V3_EXTERNAL_ANCHOR_SUBJECT_VERSION;
@@ -31,6 +31,8 @@ export interface CommunitiesStagingRoleSplitV3ExternalAnchorSubject {
   readonly backupDirectoryMode: 448 | 488;
   readonly targetFilesystem: 'LINUX_LOCAL';
   readonly crashDomain: 'SUPERVISED_WORKER_PROCESS';
+  readonly executionStatus: 'REHEARSAL_ONLY' | 'BLOCKED_EXTERNAL_MONOTONIC_AUTHORITY_REQUIRED';
+  readonly wholeHostRollbackProtected: false;
   readonly authorizesLeaseRemoval: false;
   readonly authorizesCeremony: false;
   readonly authorizesDatabaseMutation: false;
@@ -59,6 +61,8 @@ const exactKeys = [
   'backupDirectoryMode',
   'targetFilesystem',
   'crashDomain',
+  'executionStatus',
+  'wholeHostRollbackProtected',
   'authorizesLeaseRemoval',
   'authorizesCeremony',
   'authorizesDatabaseMutation',
@@ -72,7 +76,8 @@ export class CommunitiesStagingRoleSplitV3ExternalAnchorSubjectError extends Err
       | 'PATH_INVALID'
       | 'CANONICAL_ENCODING_INVALID'
       | 'DIGEST_MISMATCH'
-      | 'RUNTIME_CUSTODY_INVALID',
+      | 'RUNTIME_CUSTODY_INVALID'
+      | 'PRODUCTION_EXTERNAL_AUTHORITY_REQUIRED',
   ) {
     super(`COMMUNITIES_STAGING_ROLE_SPLIT_V3_EXTERNAL_ANCHOR_SUBJECT_${code}`);
     this.name = 'CommunitiesStagingRoleSplitV3ExternalAnchorSubjectError';
@@ -125,6 +130,10 @@ export function assertCommunitiesStagingRoleSplitV3ExternalAnchorSubject(
     ![0o700, 0o750].includes(value.backupDirectoryMode) ||
     value.targetFilesystem !== 'LINUX_LOCAL' ||
     value.crashDomain !== 'SUPERVISED_WORKER_PROCESS' ||
+    value.wholeHostRollbackProtected !== false ||
+    (value.purpose === 'PRODUCTION' &&
+      value.executionStatus !== 'BLOCKED_EXTERNAL_MONOTONIC_AUTHORITY_REQUIRED') ||
+    (value.purpose === 'REHEARSAL' && value.executionStatus !== 'REHEARSAL_ONLY') ||
     value.authorizesLeaseRemoval !== false ||
     value.authorizesCeremony !== false ||
     value.authorizesDatabaseMutation !== false ||
@@ -167,6 +176,8 @@ export function canonicalCommunitiesStagingRoleSplitV3ExternalAnchorSubject(
     backupDirectoryMode: value.backupDirectoryMode,
     targetFilesystem: value.targetFilesystem,
     crashDomain: value.crashDomain,
+    executionStatus: value.executionStatus,
+    wholeHostRollbackProtected: value.wholeHostRollbackProtected,
     authorizesLeaseRemoval: value.authorizesLeaseRemoval,
     authorizesCeremony: value.authorizesCeremony,
     authorizesDatabaseMutation: value.authorizesDatabaseMutation,
@@ -259,6 +270,13 @@ export async function createCommunitiesStagingRoleSplitV3CustodyBoundFileExterna
   requestSha256: string,
   creationReceiptSha256: string,
 ): Promise<CommunitiesStagingRoleSplitV3FileExternalPhaseAnchor> {
+  assertCommunitiesStagingRoleSplitV3ExternalAnchorSubject(subject);
+  if (
+    subject.purpose !== 'REHEARSAL' ||
+    subject.executionStatus !== 'REHEARSAL_ONLY' ||
+    subject.wholeHostRollbackProtected !== false
+  )
+    fail('PRODUCTION_EXTERNAL_AUTHORITY_REQUIRED');
   await assertCommunitiesStagingRoleSplitV3ExternalAnchorRuntimeCustody(subject);
   return new CommunitiesStagingRoleSplitV3FileExternalPhaseAnchor(
     communitiesStagingRoleSplitV3ExternalAnchorSubjectSha256(subject),

@@ -1,5 +1,27 @@
 # Worklog
 
+## 2026-08-22 — Communities Gate 6 fail-closed remediation checkpoint
+
+- Reclassified the reported restore-role OID gap against current `main`: the clone preflight already
+  binds both login and restore-role names and OIDs, and the focused regression remains in place. No
+  OID-path code change was required.
+- Closed the archive TOCTOU boundary in the descriptor runner and V3 executor. A restore archive is
+  now accepted only by a non-root Linux runtime from an already-open, root-owned, single-link
+  `root:<runtime-primary-gid> 0440` regular file whose Linux descriptor access mode is `O_RDONLY`;
+  exact size and SHA-256 are still checked before and after dispatch. A same-UID mutable `0600`
+  archive or root-opened writable descriptor fails before `pg_restore` spawn.
+- Removed the privileged `LOCK TABLE pg_catalog.pg_database` statement from the clone-owner marker
+  writer. The canonical host's already-held two-key advisory fence remains the cooperative DDL
+  serialization boundary; `COMMENT ON DATABASE` supplies PostgreSQL's object lock, and exact marker,
+  owner name/OID and system identifier are read back before commit.
+- Bumped external-anchor subjects to V2. The Linux-local provider is explicitly
+  `REHEARSAL_ONLY`; the production subject is
+  `BLOCKED_EXTERNAL_MONOTONIC_AUTHORITY_REQUIRED` and the local factory rejects it before custody
+  filesystem access. Whole-host rollback protection remains false and requires a separately chosen,
+  reviewed and provisioned external CAS/WORM/monotonic provider before production execution.
+- This checkpoint is local code and documentation only. It does not install a candidate, change
+  staging, access PostgreSQL, create a key/workflow, authorize a ceremony or mutate a database.
+
 ## 2026-08-22 — Communities V10 non-authorizing external-anchor rehearsal readback
 
 - Installed `phub-role-split` V10 input-set candidate

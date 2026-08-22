@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { chmod, mkdtemp, open, writeFile } from 'node:fs/promises';
+import type { readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -8,11 +9,24 @@ import {
   communitiesStagingRoleSplitV3DurableRestoreAuthorizationSha256,
   communitiesStagingRoleSplitV3ExecutionAuthorizationSha256,
 } from '@phub/database';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('./communities-staging-role-split-pg-restore-runner.js', () => ({
+vi.mock('./communities-staging-role-split-pg-restore-runner.js', async (importOriginal) => ({
+  ...(await importOriginal()),
   runCommunitiesStagingRoleSplitPgRestore: vi.fn(),
 }));
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown> & { readFile: typeof readFile }>();
+  return {
+    ...actual,
+    readFile: vi.fn((...args: unknown[]) => {
+      const path = args[0];
+      if (typeof path === 'string' && path.startsWith('/proc/self/fdinfo/'))
+        return Promise.resolve('pos:\t0\nflags:\t0100000\n');
+      return actual.readFile(args[0] as never, args[1] as never);
+    }),
+  };
+});
 
 import {
   CommunitiesStagingRoleSplitV3PgRestoreExecutor,
@@ -44,6 +58,15 @@ async function fixture() {
     chmod(executablePath, 0o600),
   ]);
   const archiveFile = await open(archivePath, 'r');
+  const archiveStat = archiveFile.stat.bind(archiveFile);
+  vi.spyOn(archiveFile, 'stat').mockImplementation(async () =>
+    Object.assign(await archiveStat(), {
+      uid: 0,
+      gid: process.getgid?.() ?? -1,
+      mode: 0o100440,
+      nlink: 1,
+    }),
+  );
   const passwordFile = await open(passwordPath, 'r');
   const executableFile = await open(executablePath, 'r');
   const calls: string[] = [];
@@ -133,6 +156,10 @@ async function fixture() {
 afterEach(() => {
   vi.restoreAllMocks();
   runner.mockReset();
+});
+
+beforeEach(() => {
+  vi.spyOn(process, 'platform', 'get').mockReturnValue('linux');
 });
 
 describe('CommunitiesStagingRoleSplitV3PgRestoreExecutor', () => {
@@ -321,6 +348,31 @@ describe('CommunitiesStagingRoleSplitV3PgRestoreExecutor', () => {
       });
       await expect(executor.restore(current.input)).rejects.toMatchObject({ code: 'FENCE_LOST' });
       expect(assertions).toEqual(['assert', 'assert']);
+      expect(runner).not.toHaveBeenCalled();
+    } finally {
+      await current.archiveFile.close();
+      await current.passwordFile.close();
+      await current.executableFile.close();
+    }
+  });
+
+  it('rejects a same-UID mutable archive before runner dispatch', async () => {
+    const current = await fixture();
+    const observedArchiveStat = await current.archiveFile.stat();
+    vi.spyOn(current.archiveFile, 'stat').mockResolvedValue(
+      Object.assign(observedArchiveStat, {
+        uid: process.getuid?.() ?? 0,
+        gid: process.getgid?.() ?? -1,
+        mode: 0o100600,
+        nlink: 1,
+      }),
+    );
+    try {
+      const executor = new CommunitiesStagingRoleSplitV3PgRestoreExecutor(current.config);
+      await expect(executor.restore(current.input)).rejects.toMatchObject({
+        code: 'ARCHIVE_CUSTODY_INVALID',
+      });
+      expect(current.calls).toEqual(['assert']);
       expect(runner).not.toHaveBeenCalled();
     } finally {
       await current.archiveFile.close();

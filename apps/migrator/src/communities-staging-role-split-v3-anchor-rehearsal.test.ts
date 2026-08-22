@@ -22,6 +22,7 @@ import {
   COMMUNITIES_STAGING_ROLE_SPLIT_V3_EXTERNAL_ANCHOR_SUBJECT_VERSION,
   canonicalCommunitiesStagingRoleSplitV3ExternalAnchorSubject,
   communitiesStagingRoleSplitV3ExternalAnchorSubjectSha256,
+  createCommunitiesStagingRoleSplitV3CustodyBoundFileExternalPhaseAnchor,
   parseCommunitiesStagingRoleSplitV3ExternalAnchorSubject,
   type CommunitiesStagingRoleSplitV3ExternalAnchorSubject,
 } from './communities-staging-role-split-v3-external-anchor-subject.js';
@@ -77,6 +78,11 @@ function subject(input: {
     backupDirectoryMode: 0o700,
     targetFilesystem: 'LINUX_LOCAL',
     crashDomain: 'SUPERVISED_WORKER_PROCESS',
+    executionStatus:
+      input.purpose === 'REHEARSAL'
+        ? 'REHEARSAL_ONLY'
+        : 'BLOCKED_EXTERNAL_MONOTONIC_AUTHORITY_REQUIRED',
+    wholeHostRollbackProtected: false,
     authorizesLeaseRemoval: false,
     authorizesCeremony: false,
     authorizesDatabaseMutation: false,
@@ -98,10 +104,10 @@ describe('V3 external-anchor subject and crash rehearsal', () => {
     );
 
     expect(sha(productionBytes)).toBe(
-      '078103b490907098b0815185a2442d5744ecf124c89aa92e103b94aef34dff77',
+      '4a9d8228814a2fcd60865779f3cfc3d22183da86892b230a72e9370d61526091',
     );
     expect(sha(rehearsalBytes)).toBe(
-      '035f03b71776c475e90236f90f789d44eb491fa4af67a34289ced9833f42e7cb',
+      'b12f09d1d48627ca1efcc19c1d4dcf21928dc3104f878656104f37596c708eac',
     );
 
     expect(production).toMatchObject({
@@ -112,6 +118,8 @@ describe('V3 external-anchor subject and crash rehearsal', () => {
       backupDirectoryUid: 0,
       backupDirectoryGid: 993,
       backupDirectoryMode: 0o750,
+      executionStatus: 'BLOCKED_EXTERNAL_MONOTONIC_AUTHORITY_REQUIRED',
+      wholeHostRollbackProtected: false,
       anchorDirectory:
         '/var/lib/phub-role-split-external-anchor/74478e8f2ec91443709159ced1ee123345eb29e6/production',
       authorizesCeremony: false,
@@ -123,10 +131,31 @@ describe('V3 external-anchor subject and crash rehearsal', () => {
       anchorDirectory: '/rehearsal/anchor',
       stateDirectory: '/rehearsal/state',
       backupDirectory: '/rehearsal/backup',
+      executionStatus: 'REHEARSAL_ONLY',
+      wholeHostRollbackProtected: false,
     });
     expect(production.anchorDirectory).not.toContain('/var/lib/phub-preflight/');
     expect(production.stateDirectory).toContain('/var/lib/phub-preflight/');
     expect(production.backupDirectory).toContain('/var/lib/phub-preflight/');
+  });
+
+  it('rejects the local file provider for production before any custody path is accessed', async () => {
+    const production = subject({
+      purpose: 'PRODUCTION',
+      anchorDirectory: '/definitely/absent/production-anchor',
+      stateDirectory: '/definitely/absent/production-state',
+      backupDirectory: '/definitely/absent/production-backup',
+      uid: process.getuid!(),
+      gid: process.getgid!(),
+      parentMode: 0o700,
+    });
+    await expect(
+      createCommunitiesStagingRoleSplitV3CustodyBoundFileExternalPhaseAnchor(
+        production,
+        sha('request'),
+        sha('receipt'),
+      ),
+    ).rejects.toMatchObject({ code: 'PRODUCTION_EXTERNAL_AUTHORITY_REQUIRED' });
   });
 
   it('rejects digest drift, non-canonical bytes and overlapping custody paths', async () => {

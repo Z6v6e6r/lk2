@@ -36,6 +36,7 @@ import type {
   CommunitiesStagingRoleSplitV3DurableRestoreExecutorResult,
 } from './communities-staging-role-split-v3-durable-host.js';
 import {
+  assertCommunitiesStagingRoleSplitImmutableArchiveDescriptor,
   runCommunitiesStagingRoleSplitPgRestore,
   type CommunitiesStagingRoleSplitPgRestorePreflightObservation,
   type CommunitiesStagingRoleSplitPgRestoreTarget,
@@ -79,12 +80,11 @@ async function archiveObservation(
     fail('ARCHIVE_CUSTODY_INVALID');
   let stat: Awaited<ReturnType<FileHandle['stat']>>;
   try {
+    await assertCommunitiesStagingRoleSplitImmutableArchiveDescriptor(archiveFile, expected);
     stat = await archiveFile.stat();
   } catch {
     fail('ARCHIVE_CUSTODY_INVALID');
   }
-  if (!stat.isFile() || stat.size !== expected || stat.size > MAX_ARCHIVE_BYTES)
-    fail('ARCHIVE_CUSTODY_INVALID');
   const hash = createHash('sha256');
   const buffer = Buffer.allocUnsafe(64 * 1024);
   let offset = 0;

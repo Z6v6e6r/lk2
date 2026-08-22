@@ -451,7 +451,6 @@ export class CommunitiesStagingRoleSplitPgMarkerWriter implements CommunitiesSta
         identityRow.system_identifier !== input.request.systemIdentifier
       )
         fail('MARKER_BINDING_INVALID');
-      await session.query('lock table pg_catalog.pg_database in access exclusive mode');
       const before = await session.query<{
         readonly oid: string;
         readonly owner: string;
@@ -478,13 +477,28 @@ export class CommunitiesStagingRoleSplitPgMarkerWriter implements CommunitiesSta
       await session.query(
         `comment on database ${quoteIdentifier(input.request.restoreDatabase)} is ${quoteLiteral(input.marker)}`,
       );
-      const after = await session.query<{ readonly marker: string | null }>(
-        `select pg_catalog.shobj_description(d.oid, 'pg_database') as marker
+      const after = await session.query<{
+        readonly marker: string | null;
+        readonly owner: string;
+        readonly owner_oid: string;
+        readonly system_identifier: string;
+      }>(
+        `select pg_catalog.shobj_description(d.oid, 'pg_database') as marker,
+                pg_get_userbyid(d.datdba) as owner,
+                d.datdba::text as owner_oid,
+                (pg_control_system()).system_identifier::text as system_identifier
          from pg_catalog.pg_database d
          where d.oid = $1::oid and d.datname = $2`,
         [input.cloneDatabaseOid, input.request.restoreDatabase],
       );
-      if (after.rows.length !== 1 || after.rows[0]?.marker !== input.marker)
+      const afterRow = after.rows[0];
+      if (
+        after.rows.length !== 1 ||
+        afterRow?.marker !== input.marker ||
+        afterRow.owner !== input.request.expectedCloneDatabaseOwner ||
+        afterRow.owner_oid !== input.request.expectedCloneDatabaseOwnerOid ||
+        afterRow.system_identifier !== input.request.systemIdentifier
+      )
         fail('MARKER_OUTCOME_AMBIGUOUS');
       await session.query('commit');
       transaction = false;

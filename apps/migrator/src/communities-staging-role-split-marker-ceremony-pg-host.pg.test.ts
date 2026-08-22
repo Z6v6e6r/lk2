@@ -33,6 +33,10 @@ import { Client, type QueryResult } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import {
+  CommunitiesStagingRoleSplitCloneOnlyConnectionFactory,
+  CommunitiesStagingRoleSplitPgMarkerWriter,
+} from './communities-staging-role-split-canonical-pg-collaborators.js';
+import {
   CommunitiesStagingRoleSplitMarkerCeremonyPgHost,
   type CommunitiesStagingRoleSplitMarkerCeremonyPgClient,
   type CommunitiesStagingRoleSplitMarkerCeremonyPgHostConfig,
@@ -59,6 +63,7 @@ const SOURCE_DATABASE = 'phub_source_verify';
 const CLONE_DATABASE = 'phub_restore_901_1';
 const OWNER_ROLE = 'phub_owner_verify';
 const READER_ROLE = 'phub_reader_verify';
+const MARKER_WRITER_ROLE = 'phub_marker_owner_verify';
 const ROLE_NAMES = {
   RESTORE_OWNER: OWNER_ROLE,
   RESTORE_EXECUTOR: 'phub_executor_verify',
@@ -694,9 +699,10 @@ describe
         expect.objectContaining({ current_database: ADMIN_DATABASE, major: '16' }),
       ]);
       const roleNames = Object.values(ROLE_NAMES);
+      const reservedRoleNames = [...roleNames, MARKER_WRITER_ROLE];
       const existing = await admin.query<{ database_count: string; role_count: string }>(
         'SELECT (SELECT count(*)::text FROM pg_catalog.pg_database WHERE datname = ANY($1::text[])) AS database_count, (SELECT count(*)::text FROM pg_catalog.pg_roles WHERE rolname = ANY($2::text[])) AS role_count',
-        [[SOURCE_DATABASE, CLONE_DATABASE], roleNames],
+        [[SOURCE_DATABASE, CLONE_DATABASE], reservedRoleNames],
       );
       expect(existing.rows).toEqual([{ database_count: '0', role_count: '0' }]);
 
@@ -708,6 +714,11 @@ describe
               : 'NOLOGIN'
           } NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION`,
         );
+      await admin.query(
+        `CREATE ROLE ${quoteIdentifier(MARKER_WRITER_ROLE)} LOGIN PASSWORD ${quoteLiteral(
+          decodeURIComponent(adminUrl.password),
+        )} NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION`,
+      );
       await admin.query(
         `CREATE DATABASE ${quoteIdentifier(SOURCE_DATABASE)} OWNER ${quoteIdentifier(OWNER_ROLE)}`,
       );
@@ -1005,6 +1016,91 @@ describe
       const prefix = join(tmpdir(), 'phub-pg16-role-split-');
       if (cleanupDirectory?.startsWith(prefix))
         await rm(cleanupDirectory, { recursive: true, force: true });
+    });
+
+    it('writes and exactly reads back a database marker as a non-superuser clone owner', async () => {
+      const restoreDatabase = 'phub_restore_990_1';
+      await fixture.admin.query(
+        `CREATE DATABASE ${quoteIdentifier(restoreDatabase)} OWNER ${quoteIdentifier(
+          MARKER_WRITER_ROLE,
+        )}`,
+      );
+      try {
+        const binding = await fixture.admin.query<{
+          database_oid: string;
+          owner_oid: string;
+          system_identifier: string;
+          owner_is_superuser: boolean;
+          owner_can_create_database: boolean;
+          owner_can_create_role: boolean;
+        }>(
+          `SELECT database.oid::text AS database_oid,
+                  owner.oid::text AS owner_oid,
+                  (pg_control_system()).system_identifier::text AS system_identifier,
+                  owner.rolsuper AS owner_is_superuser,
+                  owner.rolcreatedb AS owner_can_create_database,
+                  owner.rolcreaterole AS owner_can_create_role
+             FROM pg_catalog.pg_database database
+             JOIN pg_catalog.pg_roles owner ON owner.oid = database.datdba
+            WHERE database.datname = $1`,
+          [restoreDatabase],
+        );
+        expect(binding.rows).toEqual([
+          expect.objectContaining({
+            owner_is_superuser: false,
+            owner_can_create_database: false,
+            owner_can_create_role: false,
+          }),
+        ]);
+        const row = binding.rows[0]!;
+        const request = {
+          ...fixture.request,
+          restoreDatabase,
+          expectedCloneDatabaseOwner: MARKER_WRITER_ROLE,
+          expectedCloneDatabaseOwnerOid: row.owner_oid,
+          systemIdentifier: row.system_identifier,
+          restoreRunId: '990',
+        } satisfies CommunitiesStagingRoleSplitRestoreMarkerRequest;
+        const markerWriterUrl = new URL(
+          roleDatabaseUrl(fixture.adminUrl, MARKER_WRITER_ROLE, restoreDatabase),
+        );
+        markerWriterUrl.search = '?sslmode=disable';
+        const factory = new CommunitiesStagingRoleSplitCloneOnlyConnectionFactory(
+          sha('pg16-marker-writer-factory'),
+          markerWriterUrl.toString(),
+          {
+            database: restoreDatabase,
+            host: '127.0.0.1',
+            port: fixture.adminUrl.port,
+            connectionUser: MARKER_WRITER_ROLE,
+            sslMode: 'disable',
+          },
+          5_000,
+          5_000,
+        );
+        const marker = `phub-communities-role-split-clone-v2:${sha('pg16-marker-writer')}`;
+        const writer = new CommunitiesStagingRoleSplitPgMarkerWriter(
+          request.markerWriterSha256,
+          factory,
+          10_000,
+        );
+        await expect(
+          writer.write({ request, cloneDatabaseOid: row.database_oid, marker }),
+        ).resolves.toBeUndefined();
+        const readback = await fixture.admin.query<{
+          marker: string | null;
+          owner_oid: string;
+        }>(
+          `SELECT pg_catalog.shobj_description(database.oid, 'pg_database') AS marker,
+                  database.datdba::text AS owner_oid
+             FROM pg_catalog.pg_database database
+            WHERE database.oid = $1::oid AND database.datname = $2`,
+          [row.database_oid, restoreDatabase],
+        );
+        expect(readback.rows).toEqual([{ marker, owner_oid: row.owner_oid }]);
+      } finally {
+        await fixture.admin.query(`DROP DATABASE ${quoteIdentifier(restoreDatabase)}`);
+      }
     });
 
     it('binds a real PG16 custom archive restore, ledger, ownership, ACL and RLS', async () => {
