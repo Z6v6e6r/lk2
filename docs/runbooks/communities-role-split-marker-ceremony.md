@@ -496,11 +496,12 @@ available only as child FD 4. The child has a fixed password-free environment, `
 read-only `PGOPTIONS`, a dedicated process group, bounded stdout/stderr, single-use state and
 TERM/KILL escalation with post-KILL confirmation.
 
-The composition remains absent from `tsup`, package scripts and the installed V10 candidate. It
-does not attest the current Node runtime, actual credential/evidence/output custody or an
-independently retained output pin, and it does not change the existing receipt limitation. A later
-disabled-candidate checkpoint and independent review must bind those exact bytes and custody
-claims before any execution-authorizing design can consume them. The actual `BEFORE`/`AFTER`
+The composition remains absent from `tsup` and package scripts. The V11 disabled-candidate
+checkpoint binds its exact source bytes only as a mode-0444 snapshot; it adds no Node runtime,
+compiled entrypoint or execution wiring and has not been installed. It does not attest the current
+Node runtime, actual credential/evidence/output custody or an independently retained output pin,
+and it does not change the existing receipt limitation. Independent review must still bind those
+runtime and custody claims before any execution-authorizing design can consume them. The actual `BEFORE`/`AFTER`
 INPUT_C artifacts must still be produced from an independently sourced clean clone and pinned by a
 separate custodian; this local checkpoint neither executes the producer nor connects to PostgreSQL
 and does not close remaining gate 4.
@@ -541,7 +542,7 @@ fails with one fixed public error.
 ## Exact disabled installable candidate
 
 `scripts/prepare-communities-role-split-installation-candidate.ts` now builds and verifies a
-private, deterministic V10 candidate directory from an independently supplied exact Git commit. It
+private, deterministic V11 candidate directory from an independently supplied exact Git commit. It
 reads every artifact from Git objects rather than the mutable worktree, validates each expected Git
 mode, disables Git replacement objects, rejects any replacement ref and requires the raw local repository origin
 to be exactly `https://github.com/Z6v6e6r/lk2.git`, refuses an existing output, and accepts only a
@@ -561,9 +562,10 @@ true authorization. It contains:
 - three additional mode-0444 source snapshots for the canonical inventory-preparation contract,
   its verifier and its CLI. They are deliberately unwired and non-runnable: the candidate contains
   no Node runtime, compiled bundle, credential, preparation envelope or evidence payload.
-- two mode-0444 source snapshots for the trusted-inventory canonical contract and host boundary.
-  They remain source-only: no CLI, supervised producer composition, credential FD reader, private
-  output directory, marker/evidence/mapping inputs or independent artifact pin is included;
+- three mode-0444 source snapshots for the trusted-inventory canonical contract, host boundary and
+  supervised producer composition. They remain source-only: no CLI, Node runtime, compiled
+  entrypoint, credential FD reader, private output directory, marker/evidence/mapping inputs or
+  independent artifact pin is included;
 - fourteen additional mode-0444 source snapshots for the reviewed V3 durable host, external
   monotonic phase anchor, continuation host, descriptor-pinned restore executor, restore coordinator, executable composition,
   state/continuation/authorization envelopes and host-bound attested evidence. These
@@ -578,12 +580,12 @@ ledger is independently pinned and binds the fixed artifact paths, target-relati
 byte counts, SHA-256 values and false execution authorizations. The shell verifier reconstructs
 the complete canonical JSON bytes from that fixed policy and the exact control records, then
 requires its SHA-256 to equal both the supplied pin and the candidate file digest. A freshly pinned
-authorization change, added field or V9 downgrade therefore fails before target creation.
-The V10 installed readback requires exactly twenty-nine controlled artifacts plus the source
-directory and immutable receipt (`31` entries total); both install and verify loops require an
-exact count of twenty-nine control records. The fifth controlled artifact is the immutable shared
-DDL-fence source. The host-control version is V7 so a V9 allowlist cannot be accepted with freshly
-pinned V10 digests. Both the Node review helper and dependency-free shell verifier enumerate the
+authorization change, added field or V10 downgrade therefore fails before target creation.
+The V11 installed readback requires exactly thirty controlled artifacts plus the source directory
+and immutable receipt (`32` entries total); both install and verify loops require an exact count of
+thirty control records. The fifth controlled artifact is the immutable shared DDL-fence source.
+The host-control version is V8 so a V10 allowlist cannot be accepted with freshly pinned V11
+digests. Both the Node review helper and dependency-free shell verifier enumerate the
 complete candidate and installed trees without following symbolic links; additional files, empty
 directories or non-file/non-directory entries fail before a successful verification result.
 The installer accepts independently retained manifest, control and artifact-set SHA-256 values. It installs
@@ -600,10 +602,10 @@ staging access, database mutation, ceremony, cleanup, role split, migration, dep
 are all false. The existing thirteen host-binding codes plus five explicit trusted-inventory
 bindings remain `REQUIRED_FOR_EXECUTION`; their evidence is not needed to install disabled bytes,
 but no installed artifact can consume or replace that evidence. The five new bindings require the
-credential FD reader, supervised producer composition, private output custody,
+credential FD reader, supervised producer runtime wiring, private output custody,
 marker/evidence/mapping inputs and an independent artifact pin.
-The later source-only composition checkpoint does not satisfy the installed V10 binding because
-its bytes, runtime and custody evidence are not part of that immutable candidate.
+The V11 checkpoint binds the composition source bytes but does not satisfy the runtime-wiring or
+custody bindings and is not installed by any earlier immutable receipt.
 Changing any of those authorizations requires a new reviewed candidate version.
 
 After a checkpoint commit, build and verify only in a fresh private local directory:

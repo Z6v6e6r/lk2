@@ -13,11 +13,11 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import { fileURLToPath } from 'node:url';
 
 export const INSTALLATION_CANDIDATE_SCHEMA_VERSION =
-  'communities-role-split-installation-candidate-v10';
+  'communities-role-split-installation-candidate-v11';
 export const INSTALLATION_CANDIDATE_DIGEST_VERSION =
-  'PHUB_COMMUNITIES_ROLE_SPLIT_INSTALLATION_CANDIDATE_DIGEST_V10';
+  'PHUB_COMMUNITIES_ROLE_SPLIT_INSTALLATION_CANDIDATE_DIGEST_V11';
 export const INSTALLATION_CANDIDATE_CONTROL_VERSION =
-  'PHUB_COMMUNITIES_ROLE_SPLIT_HOST_INSTALL_CONTROL_V7';
+  'PHUB_COMMUNITIES_ROLE_SPLIT_HOST_INSTALL_CONTROL_V8';
 
 const sha40Pattern = /^[0-9a-f]{40}$/u;
 const sha256Pattern = /^[0-9a-f]{64}$/u;
@@ -226,6 +226,21 @@ const fileDefinitions: readonly CandidateArtifactDefinition[] = [
     purpose:
       'trusted-inventory host boundary snapshot; no CLI, producer composition or credential reader',
   },
+  {
+    sourcePath:
+      'apps/migrator/src/communities-staging-role-split-trusted-inventory-supervised-producer.ts',
+    sourceGitMode: '100644',
+    artifactPath:
+      'payload/source/communities-staging-role-split-trusted-inventory-supervised-producer.ts',
+    targetRelativePath:
+      'source/communities-staging-role-split-trusted-inventory-supervised-producer.ts',
+    action: 'INSTALL_NEW',
+    installOwner: 'root',
+    installGroup: 'root',
+    installMode: '0444',
+    purpose:
+      'trusted-inventory supervised producer composition snapshot; source-only, deliberately unwired and non-runnable',
+  },
   ...[
     'communities-staging-role-split-v3-durable-host.ts',
     'communities-staging-role-split-v3-external-phase-anchor.ts',
@@ -287,7 +302,7 @@ const unresolvedBindingCodes = [
   'TRUSTED_INVENTORY_INDEPENDENT_ARTIFACT_PIN',
   'TRUSTED_INVENTORY_MARKER_EVIDENCE_MAPPING_INPUTS',
   'TRUSTED_INVENTORY_PRIVATE_OUTPUT_CUSTODY',
-  'TRUSTED_INVENTORY_SUPERVISED_PRODUCER_COMPOSITION',
+  'TRUSTED_INVENTORY_SUPERVISED_PRODUCER_RUNTIME_WIRING',
 ] as const;
 
 function fail(code: string): never {

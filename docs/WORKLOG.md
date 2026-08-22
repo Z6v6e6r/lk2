@@ -1,5 +1,20 @@
 # Worklog
 
+## 2026-08-22 — Communities trusted-inventory composition disabled candidate checkpoint
+
+- Bumped the private installation manifest/digest contract to V11 and the dependency-free host
+  control ledger to V8. The exact allowlist adds the reviewed supervised producer composition only
+  as a root-owned mode-0444 source snapshot.
+- Replaced the now-packaged source-composition binding with the still-absent supervised producer
+  runtime-wiring binding. Credential FD custody, independently pinned output, marker/evidence/mapping
+  inputs and private output custody remain separately required for execution.
+- Updated the Node review helper, POSIX installer/verifier and regression coverage for the exact
+  thirty-artifact candidate and thirty-two-entry installed tree. Installation remains the only true
+  authorization; the candidate contains no Node runtime, compiled entrypoint, credential, key,
+  workflow, active link or database authority.
+- This checkpoint creates no generated candidate directory and performs no installation, SSH,
+  staging access, PostgreSQL access, inventory collection, migration, deploy or activation.
+
 ## 2026-08-22 — Communities trusted-inventory supervised producer composition checkpoint
 
 - Added an unwired source-only composition that connects the existing trusted-inventory host to

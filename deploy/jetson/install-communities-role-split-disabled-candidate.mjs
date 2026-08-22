@@ -22,7 +22,7 @@ import {
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const schemaVersion = 'communities-role-split-installation-candidate-v10';
+const schemaVersion = 'communities-role-split-installation-candidate-v11';
 const sha40 = /^[0-9a-f]{40}$/u;
 const sha256 = /^[0-9a-f]{64}$/u;
 const installPrefix = '/usr/local/libexec/phub/communities-role-split/candidates';
@@ -96,6 +96,16 @@ const expectedArtifacts = [
     targetRelativePath: 'source/communities-staging-role-split-trusted-inventory-host.ts',
     installMode: '0444',
   },
+  {
+    sourcePath:
+      'apps/migrator/src/communities-staging-role-split-trusted-inventory-supervised-producer.ts',
+    sourceGitMode: '100644',
+    artifactPath:
+      'payload/source/communities-staging-role-split-trusted-inventory-supervised-producer.ts',
+    targetRelativePath:
+      'source/communities-staging-role-split-trusted-inventory-supervised-producer.ts',
+    installMode: '0444',
+  },
   ...[
     'communities-staging-role-split-v3-durable-host.ts',
     'communities-staging-role-split-v3-external-phase-anchor.ts',
@@ -145,7 +155,7 @@ const expectedExecutionBindingCodes = [
   'TRUSTED_INVENTORY_INDEPENDENT_ARTIFACT_PIN',
   'TRUSTED_INVENTORY_MARKER_EVIDENCE_MAPPING_INPUTS',
   'TRUSTED_INVENTORY_PRIVATE_OUTPUT_CUSTODY',
-  'TRUSTED_INVENTORY_SUPERVISED_PRODUCER_COMPOSITION',
+  'TRUSTED_INVENTORY_SUPERVISED_PRODUCER_RUNTIME_WIRING',
 ];
 
 function fail(code) {
