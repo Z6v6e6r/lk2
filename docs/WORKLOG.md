@@ -1,5 +1,22 @@
 # Worklog
 
+## 2026-08-22 — Communities trusted-inventory source-only runtime wiring checkpoint
+
+- Added a one-shot source-only runtime boundary that snapshots the canonical preparation,
+  verification, read-only authorization, connection descriptor, evidence paths and output paths
+  before any asynchronous dispatch. It cross-binds their exact digests and preserves the original
+  credential/producer descriptor identities.
+- The boundary accepts only a root Linux process, rejects runtime or descriptor drift, and invokes
+  only the fixed supervised-producer composition. Its input data is recursively frozen and the same
+  wiring object cannot be replayed after success or failure.
+- The module remains absent from `tsup`, package scripts and the installed disabled candidate. It
+  owns no file opening, credential reading, process creation, CLI or workflow, and focused tests
+  mock the fixed composition without connecting to PostgreSQL or publishing an artifact.
+- The previously approved V11 candidate `f5345982e4d6b8024ac814047a236768e7537054` was installed on
+  staging with receipt `c6122e1f20531219e9ed0f406b1b34ef32ef86b2b736186fafece86134598903`;
+  it remains disabled with no active link and no ceremony or database-mutation authority. This new
+  source file is not part of that immutable installation.
+
 ## 2026-08-22 — Communities trusted-inventory composition disabled candidate checkpoint
 
 - Bumped the private installation manifest/digest contract to V11 and the dependency-free host

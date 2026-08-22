@@ -496,15 +496,30 @@ available only as child FD 4. The child has a fixed password-free environment, `
 read-only `PGOPTIONS`, a dedicated process group, bounded stdout/stderr, single-use state and
 TERM/KILL escalation with post-KILL confirmation.
 
-The composition remains absent from `tsup` and package scripts. The V11 disabled-candidate
-checkpoint binds its exact source bytes only as a mode-0444 snapshot; it adds no Node runtime,
-compiled entrypoint or execution wiring and has not been installed. It does not attest the current
-Node runtime, actual credential/evidence/output custody or an independently retained output pin,
-and it does not change the existing receipt limitation. Independent review must still bind those
-runtime and custody claims before any execution-authorizing design can consume them. The actual `BEFORE`/`AFTER`
+The composition remains absent from `tsup` and package scripts. The immutable V11 disabled
+candidate binds its exact source bytes only as a mode-0444 snapshot; it adds no Node runtime,
+compiled entrypoint or execution wiring. V11 candidate
+`f5345982e4d6b8024ac814047a236768e7537054` is installed on staging with exact receipt
+`c6122e1f20531219e9ed0f406b1b34ef32ef86b2b736186fafece86134598903`, but remains disabled with
+no active link, ceremony authority or database-mutation authority.
+
+`communities-staging-role-split-trusted-inventory-runtime-wiring.ts` adds the next source-only
+boundary without changing that immutable installation. It recursively snapshots the complete
+canonical data configuration before asynchronous work, cross-binds preparation, verification,
+authorization, connection and path digests, retains the exact borrowed credential/producer FD
+identities, requires a root Linux runtime and permits a single dispatch to the fixed supervised
+composition. Runtime or descriptor drift consumes the instance and fails closed; callers cannot
+inject a collector, descriptor validator or output store.
+
+The runtime-wiring source owns no file opening, credential reading, child-process creation, CLI,
+package entry, key or workflow and is not present in V11. Its tests mock the fixed composition and
+perform no PostgreSQL or artifact operation. Therefore
+`TRUSTED_INVENTORY_SUPERVISED_PRODUCER_RUNTIME_WIRING` remains unresolved until a separately
+reviewed immutable candidate packages the exact source/runtime bytes and proves their host binding.
+Credential FD reading, actual marker/evidence/mapping inputs, private output custody and an
+independently retained artifact pin remain separate open bindings. The actual `BEFORE`/`AFTER`
 INPUT_C artifacts must still be produced from an independently sourced clean clone and pinned by a
-separate custodian; this local checkpoint neither executes the producer nor connects to PostgreSQL
-and does not close remaining gate 4.
+separate custodian; this checkpoint does not close remaining gate 4.
 
 ## Independently pinned acceptance artifact gate
 
