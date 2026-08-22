@@ -180,7 +180,9 @@ jobs:
           path: .phub-probe-control
           persist-credentials: false
           ref: ${{ inputs.expected_probe_sha }}
-          sparse-checkout: scripts/extract-verified-oci-layout.sh
+          sparse-checkout: |
+            scripts/extract-verified-oci-layout.sh
+            scripts/resolve-verified-oci-nested-index.sh
           sparse-checkout-cone-mode: false
       - id: extract
         name: Extract non-publishing attestation evidence
@@ -196,31 +198,18 @@ jobs:
             "$RUNNER_TEMP/timeweb-$SERVICE-probe.oci.tar" \
             attestation-probe/layout attestation-probe/evidence
           cp attestation-probe/layout/index.json attestation-probe/evidence/oci-index.json
-          runtime_digest="$(jq -r '
-            [.manifests[] | select(
-              .platform.os == "linux" and
-              .platform.architecture == "amd64" and
-              ((.platform.variant // "") == "")
-            )] | if length == 1 then .[0].digest else empty end
-          ' attestation-probe/layout/index.json)"
+          bash .phub-probe-control/scripts/resolve-verified-oci-nested-index.sh \
+            attestation-probe/layout attestation-probe/evidence
+          runtime_digest="$(jq -r '.digest' \
+            attestation-probe/evidence/runtime-descriptor.json)"
           printf '%s' "$runtime_digest" | grep -Eq '^sha256:[0-9a-f]{64}$'
-          runtime_size="$(jq -r --arg runtime "$runtime_digest" '
-            [.manifests[] | select(.digest == $runtime)] |
-            if length == 1 then .[0].size else empty end
-          ' attestation-probe/layout/index.json)"
-          attestation_digest="$(jq -r --arg runtime "$runtime_digest" '
-            [.manifests[] | select(
-              .platform.os == "unknown" and
-              .platform.architecture == "unknown" and
-              .annotations["vnd.docker.reference.type"] == "attestation-manifest" and
-              .annotations["vnd.docker.reference.digest"] == $runtime
-            )] | if length == 1 then .[0].digest else empty end
-          ' attestation-probe/layout/index.json)"
+          runtime_size="$(jq -r '.size' \
+            attestation-probe/evidence/runtime-descriptor.json)"
+          attestation_digest="$(jq -r '.digest' \
+            attestation-probe/evidence/attestation-descriptor.json)"
           printf '%s' "$attestation_digest" | grep -Eq '^sha256:[0-9a-f]{64}$'
-          attestation_size="$(jq -r --arg attestation "$attestation_digest" '
-            [.manifests[] | select(.digest == $attestation)] |
-            if length == 1 then .[0].size else empty end
-          ' attestation-probe/layout/index.json)"
+          attestation_size="$(jq -r '.size' \
+            attestation-probe/evidence/attestation-descriptor.json)"
           runtime_sha="${runtime_digest#sha256:}"
           attestation_sha="${attestation_digest#sha256:}"
           test "$(stat -c '%s' "attestation-probe/layout/blobs/sha256/$runtime_sha")" \
@@ -257,17 +246,22 @@ jobs:
             ] and
             all(.layers[];
               .mediaType == "application/vnd.in-toto+json" and
-              (.digest | test("^sha256:[0-9a-f]{64}$"))
+              (.digest | test("^sha256:[0-9a-f]{64}$")) and
+              (.size | type == "number" and floor == . and . > 0)
             )
           ' attestation-probe/evidence/attestation-manifest.json >/dev/null
-          jq -r '.layers[] | [.digest, .annotations["in-toto.io/predicate-type"]] | @tsv' \
-            attestation-probe/evidence/attestation-manifest.json | while IFS=$'\t' read -r digest predicate; do
+          jq -r '.layers[] |
+            [.digest, .annotations["in-toto.io/predicate-type"], (.size | tostring)] | @tsv' \
+            attestation-probe/evidence/attestation-manifest.json \
+            | while IFS=$'\t' read -r digest predicate statement_size; do
               statement_sha="${digest#sha256:}"
               case "$predicate" in
                 https://slsa.dev/provenance/v1) target=provenance-statement.json ;;
                 https://spdx.dev/Document) target=sbom-statement.json ;;
                 *) exit 64 ;;
               esac
+              test "$(wc -c < "attestation-probe/layout/blobs/sha256/$statement_sha" \
+                | tr -d ' ')" = "$statement_size"
               test "$(sha256sum "attestation-probe/layout/blobs/sha256/$statement_sha" \
                 | awk '{print "sha256:" $1}')" = "$digest"
               cp "attestation-probe/layout/blobs/sha256/$statement_sha" \
@@ -276,6 +270,10 @@ jobs:
           jq -n \
             --arg sourceSha "$EXPECTED_SOURCE_SHA" \
             --arg service "$SERVICE" \
+            --arg rootIndexDigest "$(sha256sum attestation-probe/evidence/oci-index.json \
+              | awk '{print "sha256:" $1}')" \
+            --arg nestedIndexDigest "$(jq -r '.digest' \
+              attestation-probe/evidence/selected-root-descriptor.json)" \
             --arg runtimeDigest "$runtime_digest" \
             --arg attestationDigest "$attestation_digest" \
             --slurpfile provenance attestation-probe/evidence/provenance-statement.json \
@@ -286,6 +284,8 @@ jobs:
               service: $service,
               sourceSha: $sourceSha,
               platform: "linux/amd64",
+              rootIndexDigest: $rootIndexDigest,
+              nestedIndexDigest: $nestedIndexDigest,
               runtimeDigest: $runtimeDigest,
               attestationDigest: $attestationDigest,
               provenanceStatementType: $provenance[0]._type,
