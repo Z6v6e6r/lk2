@@ -1,5 +1,24 @@
 # Worklog
 
+## 2026-08-22 — Communities trusted-inventory supervised producer composition checkpoint
+
+- Added an unwired source-only composition that connects the existing trusted-inventory host to
+  one supervised producer process without adding a CLI or migrator build entry. It executes the
+  exact producer descriptor as an ESM bundle through the current Linux Node runtime, maps the
+  credential descriptor only to child FD 3 and the producer only to child FD 4, disables shell
+  execution and supplies an exact password-free environment with session-level read-only and
+  timeout controls.
+- Bound the three canonical evidence paths to the existing preparation path digests and revalidated
+  the canonical connection descriptor before process creation. The concrete wrapper always selects
+  the canonical descriptor validator and root-custody file output store rather than accepting those
+  collaborators from a caller.
+- Added single-use process state, a dedicated process group, idempotent TERM/KILL signaling, bounded
+  stdout/stderr and post-KILL confirmation. Focused tests use mocked child processes only; they do
+  not execute a producer, open evidence files or connect to PostgreSQL.
+- This checkpoint does not update or install the disabled candidate, add an entrypoint, credential,
+  key, workflow or independent artifact pin, attest the current Node runtime, or grant inventory,
+  trusted designation, ceremony, database mutation, migration, deploy or activation authority.
+
 ## 2026-08-22 — Communities trusted-inventory disabled installation candidate checkpoint
 
 - Bumped the private installation manifest/digest contract to V10 and the dependency-free host

@@ -478,17 +478,32 @@ publication and exact canonical readback. Exact artifact plus receipt replay is 
 rerunning the collector. One-sided or different output is retained as an ambiguity and collection
 is never retried automatically.
 
-This boundary is intentionally not a `tsup` entry and has no CLI, subprocess composition,
-credential reader, PostgreSQL wiring, installed candidate, key or workflow. Its receipt records
-only that the configured descriptor validator completed; the external composition still has to
-prove that it used the concrete validator and file store. The receipt therefore retains
+This boundary is intentionally not a `tsup` entry and has no CLI, credential reader, installed
+candidate, key or workflow. Its receipt records only that the configured descriptor validator
+completed; a reviewed composition still has to prove that it selected the concrete validator and
+file store. The receipt therefore retains
 `hostCollaboratorCompositionNotAttested=true`,
 `independentArtifactPinNotAttested=true`, organizational/provenance non-attestations and
-`trustedInventoryDesignationNotGranted=true`. A later fresh review must bind a concrete supervised
-producer composition and the three marker/evidence/mapping inputs before this source can collect
-anything. The actual `BEFORE`/`AFTER` INPUT_C artifacts must still be produced from an independently
-sourced clean clone and pinned by a separate custodian; this local checkpoint neither connects to
-PostgreSQL nor closes remaining gate 4.
+`trustedInventoryDesignationNotGranted=true`.
+
+`communities-staging-role-split-trusted-inventory-supervised-producer.ts` now provides that exact
+source-only composition without making it an operational entrypoint. It binds the three canonical
+evidence paths to the preparation path digests, revalidates the canonical connection descriptor,
+selects the canonical descriptor validator and root-custody file output store, then supervises one
+producer bundle through the current Linux Node executable at `/proc/self/exe`. The credential is
+available only as child FD 3 through `PGPASSFILE=/proc/self/fd/3`; the pinned producer bundle is
+available only as child FD 4. The child has a fixed password-free environment, `shell=false`, fixed
+read-only `PGOPTIONS`, a dedicated process group, bounded stdout/stderr, single-use state and
+TERM/KILL escalation with post-KILL confirmation.
+
+The composition remains absent from `tsup`, package scripts and the installed V10 candidate. It
+does not attest the current Node runtime, actual credential/evidence/output custody or an
+independently retained output pin, and it does not change the existing receipt limitation. A later
+disabled-candidate checkpoint and independent review must bind those exact bytes and custody
+claims before any execution-authorizing design can consume them. The actual `BEFORE`/`AFTER`
+INPUT_C artifacts must still be produced from an independently sourced clean clone and pinned by a
+separate custodian; this local checkpoint neither executes the producer nor connects to PostgreSQL
+and does not close remaining gate 4.
 
 ## Independently pinned acceptance artifact gate
 
@@ -587,6 +602,8 @@ bindings remain `REQUIRED_FOR_EXECUTION`; their evidence is not needed to instal
 but no installed artifact can consume or replace that evidence. The five new bindings require the
 credential FD reader, supervised producer composition, private output custody,
 marker/evidence/mapping inputs and an independent artifact pin.
+The later source-only composition checkpoint does not satisfy the installed V10 binding because
+its bytes, runtime and custody evidence are not part of that immutable candidate.
 Changing any of those authorizations requires a new reviewed candidate version.
 
 After a checkpoint commit, build and verify only in a fresh private local directory:
