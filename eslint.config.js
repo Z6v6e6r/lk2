@@ -11,6 +11,7 @@ export default tseslint.config(
       '**/coverage/**',
       '**/.worktrees/**',
       '**/*.js',
+      'deploy/jetson/generated/communities-staging-role-split-trusted-inventory-runtime.mjs',
       'packages/api-contracts/src/generated*.ts',
     ],
   },

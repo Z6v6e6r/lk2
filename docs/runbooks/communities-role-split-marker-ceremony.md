@@ -496,9 +496,8 @@ available only as child FD 4. The child has a fixed password-free environment, `
 read-only `PGOPTIONS`, a dedicated process group, bounded stdout/stderr, single-use state and
 TERM/KILL escalation with post-KILL confirmation.
 
-The composition remains absent from `tsup` and package scripts. The immutable V11 disabled
-candidate binds its exact source bytes only as a mode-0444 snapshot; it adds no Node runtime,
-compiled entrypoint or execution wiring. V11 candidate
+The immutable V11 disabled candidate binds the composition's exact source bytes only as a
+mode-0444 snapshot; it adds no Node runtime, compiled entrypoint or execution wiring. V11 candidate
 `f5345982e4d6b8024ac814047a236768e7537054` is installed on staging with exact receipt
 `c6122e1f20531219e9ed0f406b1b34ef32ef86b2b736186fafece86134598903`, but remains disabled with
 no active link, ceremony authority or database-mutation authority.
@@ -512,14 +511,20 @@ composition. Runtime or descriptor drift consumes the instance and fails closed;
 inject a collector, descriptor validator or output store.
 
 The runtime-wiring source owns no file opening, credential reading, child-process creation, CLI,
-package entry, key or workflow and is not present in V11. Its tests mock the fixed composition and
-perform no PostgreSQL or artifact operation. Therefore
-`TRUSTED_INVENTORY_SUPERVISED_PRODUCER_RUNTIME_WIRING` remains unresolved until a separately
-reviewed immutable candidate packages the exact source/runtime bytes and proves their host binding.
-Credential FD reading, actual marker/evidence/mapping inputs, private output custody and an
-independently retained artifact pin remain separate open bindings. The actual `BEFORE`/`AFTER`
-INPUT_C artifacts must still be produced from an independently sourced clean clone and pinned by a
-separate custodian; this checkpoint does not close remaining gate 4.
+key or workflow. V12 adds a dedicated Node 22 ESM build that packages the reviewed wiring and its
+fixed dependency graph, including `pg`, into one immutable mode-0444 bundle. The bundle has no
+package imports or source map and rebuilds byte-for-byte. Importing exposes the construction surface
+only; direct execution without a separately reviewed host entrypoint emits
+`COMMUNITIES_ROLE_SPLIT_EXECUTION_NOT_AUTHORIZED` and exits `78`.
+
+V12 packages the exact runtime source and bundle but deliberately does not claim that operational
+runtime wiring is complete: it contains no runtime configuration, active link, credential reader,
+credential/producer descriptors, preparation or authorization envelopes, evidence paths, output
+custody or independently retained artifact pin. Therefore
+`TRUSTED_INVENTORY_SUPERVISED_PRODUCER_RUNTIME_WIRING` and the related custody/input bindings remain
+`REQUIRED_FOR_EXECUTION`. The actual `BEFORE`/`AFTER` INPUT_C artifacts must still be produced from
+an independently sourced clean clone and pinned by a separate custodian; this checkpoint does not
+close remaining gate 4.
 
 ## Independently pinned acceptance artifact gate
 
@@ -557,7 +562,7 @@ fails with one fixed public error.
 ## Exact disabled installable candidate
 
 `scripts/prepare-communities-role-split-installation-candidate.ts` now builds and verifies a
-private, deterministic V11 candidate directory from an independently supplied exact Git commit. It
+private, deterministic V12 candidate directory from an independently supplied exact Git commit. It
 reads every artifact from Git objects rather than the mutable worktree, validates each expected Git
 mode, disables Git replacement objects, rejects any replacement ref and requires the raw local repository origin
 to be exactly `https://github.com/Z6v6e6r/lk2.git`, refuses an existing output, and accepts only a
@@ -586,6 +591,10 @@ true authorization. It contains:
   state/continuation/authorization envelopes and host-bound attested evidence. These
   are code-only review bytes: the candidate still has no compiled entrypoint, concrete restore
   executor construction, password/executable descriptors, DDL-fence lease wiring or runtime loader.
+- the reviewed trusted-inventory runtime-wiring source, its fail-closed module source and a
+  self-contained Node 22 ESM bundle as three additional mode-0444 artifacts. The bundle is not an
+  active command: direct execution rejects with exit `78`, and the candidate contains none of the
+  configuration or custody inputs required to construct or run the exported wiring.
 
 The host entrypoint is a POSIX shell program bound to the exact GNU coreutils paths present on the
 ARM64 staging node; `/usr/bin/node` is not required. Its file-count validation uses shell numeric
@@ -595,11 +604,12 @@ ledger is independently pinned and binds the fixed artifact paths, target-relati
 byte counts, SHA-256 values and false execution authorizations. The shell verifier reconstructs
 the complete canonical JSON bytes from that fixed policy and the exact control records, then
 requires its SHA-256 to equal both the supplied pin and the candidate file digest. A freshly pinned
-authorization change, added field or V10 downgrade therefore fails before target creation.
-The V11 installed readback requires exactly thirty controlled artifacts plus the source directory
-and immutable receipt (`32` entries total); both install and verify loops require an exact count of
-thirty control records. The fifth controlled artifact is the immutable shared DDL-fence source.
-The host-control version is V8 so a V10 allowlist cannot be accepted with freshly pinned V11
+authorization change, added field or V11 downgrade therefore fails before target creation.
+The V12 installed readback requires exactly thirty-three controlled artifacts plus the source and
+runtime directories and immutable receipt (`36` entries total); both install and verify loops
+require an exact count of thirty-three control records. The fifth controlled artifact is the
+immutable shared DDL-fence source. The host-control version is V9 so a V11 allowlist cannot be
+accepted with freshly pinned V12
 digests. Both the Node review helper and dependency-free shell verifier enumerate the
 complete candidate and installed trees without following symbolic links; additional files, empty
 directories or non-file/non-directory entries fail before a successful verification result.
@@ -619,8 +629,8 @@ bindings remain `REQUIRED_FOR_EXECUTION`; their evidence is not needed to instal
 but no installed artifact can consume or replace that evidence. The five new bindings require the
 credential FD reader, supervised producer runtime wiring, private output custody,
 marker/evidence/mapping inputs and an independent artifact pin.
-The V11 checkpoint binds the composition source bytes but does not satisfy the runtime-wiring or
-custody bindings and is not installed by any earlier immutable receipt.
+The V12 checkpoint binds the runtime source and bundle bytes but does not satisfy operational
+runtime-wiring or custody bindings. It is not installed by the existing V11 receipt.
 Changing any of those authorizations requires a new reviewed candidate version.
 
 After a checkpoint commit, build and verify only in a fresh private local directory:
@@ -774,13 +784,13 @@ For the completed V10 rehearsal on staging:
 
 ## Remaining gates before execution
 
-1. The exact disabled V9 candidate at commit
-   `74478e8f2ec91443709159ced1ee123345eb29e6` has been installed and its disabled readback passed.
-   It has no active link and grants no execution or database authority. The V10 subject and
-   rehearsal bytes remain a later isolated checkpoint and are not installed by that receipt.
+1. The exact disabled V11 candidate at commit
+   `f5345982e4d6b8024ac814047a236768e7537054` has been installed and its disabled readback passed.
+   It has no active link and grants no execution or database authority. The V12 runtime candidate
+   remains a later isolated checkpoint and is not installed by that receipt.
 2. The independent re-review of the exact V3 security-fix range completed with no reportable P0-P2
    findings. V3 evidence V2 binds both attestations to the exact host authorization, and the
-   composition/coordinator retain immutable entry snapshots. V9 packages those reviewed sources,
+   composition/coordinator retain immutable entry snapshots. V11 packages those reviewed sources,
    executor bridge and external anchor only as disabled mode-0444 bytes and adds no key, workflow
    or live configuration. Do not reuse
    the legacy V2 marker/attested-evidence contour, V3 evidence V1 or the permanently disabled
@@ -815,6 +825,6 @@ For the completed V10 rehearsal on staging:
    candidate, forced-command key, one ceremony run and any later post-marker cleanup.
 
 Until every gate that remains open above passes, do not create a key, wire a workflow, place
-requests on staging or run either ceremony contour. The currently installed V9 command and
+requests on staging or run either ceremony contour. The currently installed V11 command and
 existing preparation gate must continue to fail with `EXECUTION_NOT_AUTHORIZED` before PostgreSQL
 or mutable ceremony filesystem access.

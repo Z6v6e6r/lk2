@@ -1,5 +1,22 @@
 # Worklog
 
+## 2026-08-22 — Communities trusted-inventory immutable disabled runtime candidate checkpoint
+
+- Added a dedicated Node 22 ESM build for the reviewed trusted-inventory runtime wiring. The
+  checked-in bundle includes its PostgreSQL client dependency, rebuilds byte-for-byte, has no
+  package imports, and exports only the reviewed construction surface; direct execution emits the
+  fixed `COMMUNITIES_ROLE_SPLIT_EXECUTION_NOT_AUTHORIZED` denial and exits `78`.
+- Bumped the private candidate manifest/digest contract to V12 and the dependency-free host control
+  ledger to V9. Its exact allowlist appends the runtime-wiring source, the fail-closed module source
+  and the self-contained bundle as root-owned mode-0444 bytes.
+- Updated the Node and POSIX installers/verifiers for exactly thirty-three controlled artifacts,
+  including separate immutable `source` and `runtime` directories. Installation remains the only
+  true authorization: no runtime configuration, active link, credential, preparation/evidence
+  input, key, workflow, ceremony or database-mutation authority is present.
+- This checkpoint performs only local build and verification. It does not generate or install a
+  host candidate, access staging or PostgreSQL, collect trusted inventory, run a ceremony, migrate,
+  deploy or activate anything. The previously installed immutable V11 candidate remains unchanged.
+
 ## 2026-08-22 — Communities trusted-inventory source-only runtime wiring checkpoint
 
 - Added a one-shot source-only runtime boundary that snapshots the canonical preparation,

@@ -13,11 +13,11 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import { fileURLToPath } from 'node:url';
 
 export const INSTALLATION_CANDIDATE_SCHEMA_VERSION =
-  'communities-role-split-installation-candidate-v11';
+  'communities-role-split-installation-candidate-v12';
 export const INSTALLATION_CANDIDATE_DIGEST_VERSION =
-  'PHUB_COMMUNITIES_ROLE_SPLIT_INSTALLATION_CANDIDATE_DIGEST_V11';
+  'PHUB_COMMUNITIES_ROLE_SPLIT_INSTALLATION_CANDIDATE_DIGEST_V12';
 export const INSTALLATION_CANDIDATE_CONTROL_VERSION =
-  'PHUB_COMMUNITIES_ROLE_SPLIT_HOST_INSTALL_CONTROL_V8';
+  'PHUB_COMMUNITIES_ROLE_SPLIT_HOST_INSTALL_CONTROL_V9';
 
 const sha40Pattern = /^[0-9a-f]{40}$/u;
 const sha256Pattern = /^[0-9a-f]{64}$/u;
@@ -282,6 +282,45 @@ const fileDefinitions: readonly CandidateArtifactDefinition[] = [
     installMode: '0444',
     purpose: 'reviewed V3 authorization source snapshot; deliberately unwired and non-runnable',
   })),
+  {
+    sourcePath:
+      'apps/migrator/src/communities-staging-role-split-trusted-inventory-runtime-wiring.ts',
+    sourceGitMode: '100644',
+    artifactPath:
+      'payload/source/communities-staging-role-split-trusted-inventory-runtime-wiring.ts',
+    targetRelativePath: 'source/communities-staging-role-split-trusted-inventory-runtime-wiring.ts',
+    action: 'INSTALL_NEW',
+    installOwner: 'root',
+    installGroup: 'root',
+    installMode: '0444',
+    purpose: 'reviewed trusted-inventory runtime wiring source snapshot; execution inputs absent',
+  },
+  {
+    sourcePath:
+      'apps/migrator/src/communities-staging-role-split-trusted-inventory-runtime-module.ts',
+    sourceGitMode: '100644',
+    artifactPath:
+      'payload/source/communities-staging-role-split-trusted-inventory-runtime-module.ts',
+    targetRelativePath: 'source/communities-staging-role-split-trusted-inventory-runtime-module.ts',
+    action: 'INSTALL_NEW',
+    installOwner: 'root',
+    installGroup: 'root',
+    installMode: '0444',
+    purpose: 'fail-closed runtime module source snapshot; direct invocation rejects execution',
+  },
+  {
+    sourcePath:
+      'deploy/jetson/generated/communities-staging-role-split-trusted-inventory-runtime.mjs',
+    sourceGitMode: '100644',
+    artifactPath: 'payload/runtime/communities-staging-role-split-trusted-inventory-runtime.mjs',
+    targetRelativePath: 'runtime/communities-staging-role-split-trusted-inventory-runtime.mjs',
+    action: 'INSTALL_NEW',
+    installOwner: 'root',
+    installGroup: 'root',
+    installMode: '0444',
+    purpose:
+      'self-contained Node 22 runtime bundle; no configuration, activation link or execution authority',
+  },
 ] as const;
 
 const unresolvedBindingCodes = [
