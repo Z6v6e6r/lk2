@@ -26,16 +26,16 @@ export async function runPlatformHomeSyncCycle(input: {
   readonly logger: Logger;
   readonly now?: Date;
 }): Promise<PlatformHomeSyncCycleResult> {
-  if (!input.config.HOME_VIVA_SYNC_ENABLED) return { attempted: 0, synced: 0, failed: 0 };
+  if (!input.config.PLATFORM_HOME_SYNC_ENABLED) return { attempted: 0, synced: 0, failed: 0 };
   const now = input.now ?? new Date();
-  const dueBefore = new Date(now.getTime() - input.config.HOME_VIVA_SYNC_INTERVAL_MS);
+  const dueBefore = new Date(now.getTime() - input.config.PLATFORM_HOME_SYNC_INTERVAL_MS);
   const tenants = await input.pool.query<{ id: string }>(
     'select id from identity.tenants where active = true order by id',
   );
   let attempted = 0;
   let synced = 0;
   let failed = 0;
-  let remaining = input.config.HOME_VIVA_SYNC_BATCH_SIZE;
+  let remaining = input.config.PLATFORM_HOME_SYNC_BATCH_SIZE;
   for (const tenant of tenants.rows) {
     if (remaining <= 0) break;
     const users = await listDuePlatformHomeUsers({

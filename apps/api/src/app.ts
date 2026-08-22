@@ -74,10 +74,7 @@ import {
   PersistentTrainerAvatarMedia,
   type EventAvatarMedia,
 } from './event-avatar-media.js';
-import {
-  registerCoachGameSummaryRoutes,
-  type CoachGameSummarySource,
-} from './coach-games/coach-game-summary-routes.js';
+import { registerCoachGameSummaryRoutes } from './coach-games/coach-game-summary-routes.js';
 import { registerGameRoutes } from './games/game-routes.js';
 import { registerGameResultRoutes } from './games/game-result-routes.js';
 import { registerGameReadRoutes } from './games/game-read-routes.js';
@@ -241,7 +238,6 @@ export interface BuildAppOptions {
   readonly activityHistoryRefresher?: ActivityHistoryRefreshService;
   readonly activityHistoryProjector?: ActivityHistoryProjectionService;
   readonly tournamentSummarySource?: TournamentSummarySource;
-  readonly coachGameSummarySource?: CoachGameSummarySource;
   readonly eventAvatarMedia?: EventAvatarMedia;
   readonly trainerAvatarRepository?: TrainerAvatarRepository;
   readonly trainerAvatarMediaStore?: TrainerAvatarMediaStore;
@@ -735,8 +731,6 @@ export async function buildApp(options: BuildAppOptions) {
     authenticatedTenantHandlers: [authenticate, authorizeGamesPlayer, resolveTenant],
   });
   registerCoachGameSummaryRoutes(app as unknown as FastifyInstance, {
-    ...(options.coachGameSummarySource ? { source: options.coachGameSummarySource } : {}),
-    avatarMedia: eventAvatarMedia,
     publicTenantHandlers: [resolvePublicTenant],
   });
   const bookingRecommendationAuthService = options.authService;
@@ -984,11 +978,48 @@ export async function buildApp(options: BuildAppOptions) {
     '/user/api/v1/:tenantKey/routing-outcomes',
     { preHandler: [authenticate, resolveTenant] },
     async (request, reply) => {
+      const tenantId = request.tenantId;
+      const userId = request.padlHubClaims?.sub;
+      const sessionId = request.padlHubClaims?.sid;
+      if (!tenantId || !userId || !sessionId) {
+        return sendApiError(request, reply, 401, 'AUTH_REQUIRED', 'Требуется авторизация.');
+      }
       const outcome = directVivaOutcomeSchema.safeParse(request.body);
       if (!outcome.success) {
         return sendApiError(request, reply, 400, 'REQUEST_INVALID', 'Некорректный запрос.');
       }
-      request.log.info({ event: 'direct_viva_read_outcome', ...outcome.data });
+      const requiresEvidence =
+        outcome.data.outcome === 'SUCCESS' &&
+        (outcome.data.operation === 'profile.read' || outcome.data.operation === 'schedule.read');
+      const evidenceJobId = requiresEvidence ? request.id : undefined;
+      const evidenceJob = evidenceJobId
+        ? await options.bookingScreenReadJobStore?.get(evidenceJobId)
+        : undefined;
+      const evidenceJobMatches =
+        evidenceJob &&
+        evidenceJob.tenantId === tenantId &&
+        evidenceJob.userId === userId &&
+        evidenceJob.sessionId === sessionId &&
+        Date.parse(evidenceJob.expiresAt) > Date.now() &&
+        (outcome.data.operation !== 'schedule.read' ||
+          evidenceJob.commands.some((command) => command.operation === 'schedule.read'));
+      if (requiresEvidence && !evidenceJobMatches) {
+        return sendApiError(
+          request,
+          reply,
+          400,
+          'REQUEST_INVALID',
+          'Некорректное доказательство чтения.',
+        );
+      }
+      request.log.info({
+        event: 'direct_viva_read_outcome',
+        tenantId,
+        userId,
+        sessionId,
+        ...(evidenceJobId ? { evidenceJobId } : {}),
+        ...outcome.data,
+      });
       return reply.status(204).send();
     },
   );

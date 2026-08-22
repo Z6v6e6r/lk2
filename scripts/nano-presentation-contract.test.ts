@@ -21,6 +21,7 @@ const messagingReleaseVerification = repositoryFile(
   'deploy/jetson/verify-messaging-test-release.sh',
 );
 const activation = repositoryFile('deploy/jetson/activate-live-home.sh');
+const workerMain = repositoryFile('apps/worker/src/main.ts');
 const communitiesReadOnlyActivation = repositoryFile(
   'deploy/jetson/activate-communities-legacy-read-only.sh',
 );
@@ -279,12 +280,16 @@ describe('Nano presentation release contract', () => {
   });
 
   it('activates browser read jobs only with a usable mixed routing envelope', () => {
-    expect(activation).toContain("printf 'VIVA_DIRECT_READ_ENABLED=true\\n'");
-    expect(activation).toContain("plan.mode = 'MIXED_END_USER_READS'");
-    expect(activation).toContain("plan.direct_read_operations @> array['profile.read']::text[]");
-    expect(activation).toContain("binding.provider = 'VIVA'");
-    expect(verification).toContain('require_value VIVA_DIRECT_READ_ENABLED true');
-    expect(verification).toContain('routing_ready_delegations');
+    expect(clientAssistedActivation).toContain("printf '%s\\n' 'VIVA_DIRECT_READ_ENABLED=true'");
+    expect(clientAssistedActivation).toContain("plan.mode = 'MIXED_END_USER_READS'");
+    expect(clientAssistedActivation).toContain(
+      "plan.direct_read_operations = array['profile.read']::text[]",
+    );
+    expect(clientAssistedActivation).toContain("binding.provider = 'VIVA'");
+    expect(clientAssistedVerification).toContain('require_value VIVA_DIRECT_READ_ENABLED true');
+    expect(clientAssistedVerification).toContain('routing_ready_delegations');
+    expect(activation).toContain('FULL_LIVE_HOME is retired');
+    expect(activation).toContain('client-assisted browser transport');
   });
 
   it('activates Nano client-assisted Viva reads without the blocked server Home sync', () => {
@@ -355,22 +360,16 @@ describe('Nano presentation release contract', () => {
     expect(stagingWorkflow).toContain('"$reason" true');
   });
 
-  it('bounds communities and activates all four independent CUP placements', () => {
+  it('keeps community and platform scheduling independent from the retired Viva reader', () => {
     for (const capability of ['DETAIL', 'FEED', 'CHAT', 'RATING']) {
-      expect(activation).toContain(`printf 'COMMUNITY_LEGACY_READ_${capability}_ENABLED=true\\n'`);
-      expect(verification).toContain(
-        `require_value COMMUNITY_LEGACY_READ_${capability}_ENABLED true`,
+      expect(communitiesReadOnlyActivation).toContain(
+        `COMMUNITY_LEGACY_READ_${capability}_ENABLED=true`,
       );
-      expect(verification).toContain(`env.COMMUNITY_LEGACY_READ_${capability}_ENABLED !== 'true'`);
     }
-    expect(activation).toContain("printf 'COMMUNITIES_LEGACY_TIMEOUT_MS=2500\\n'");
-    expect(activation).toContain("printf 'COMMUNITIES_LEGACY_MAX_ATTEMPTS=1\\n'");
-    expect(activation).toContain('PROMOTIONS_HERO_PLACEMENT=cabinet_home_top');
-    expect(activation).toContain('PROMOTIONS_RECOMMENDATION_STRIP_PLACEMENT=cabinet_for_me_strip');
-    expect(activation).toContain('PROMOTIONS_RECOMMENDATION_CARD_PLACEMENT=cabinet_for_me_card');
-    expect(verification).toContain("['cabinet_home_top', '/api/advertising/cabinet-home-top']");
-    expect(verification).toContain(
-      "['cabinet_for_me_card', '/api/advertising/cabinet-for-me-card']",
+    expect(workerMain).toContain('config.COMMUNITY_HOME_SYNC_ENABLED');
+    expect(workerMain).toContain('config.PLATFORM_HOME_SYNC_ENABLED');
+    expect(workerMain).not.toContain(
+      'shuttingDown || !config.HOME_VIVA_SYNC_ENABLED || !profilePhotoStore || !communityHome',
     );
   });
 

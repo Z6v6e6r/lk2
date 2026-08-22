@@ -38,11 +38,7 @@ import {
 } from '@phub/legacy-games-adapter';
 import { createNotificationEndpointCipher } from '@phub/notifications';
 import { createLogger, startTelemetry } from '@phub/observability';
-import {
-  VivaCoachGameSummaryAdapter,
-  VivaExerciseRecommendationSourceAdapter,
-  VivaIdentityProvider,
-} from '@phub/viva-adapter';
+import { VivaIdentityProvider } from '@phub/viva-adapter';
 import Redis from 'ioredis';
 
 import { buildApp } from './app.js';
@@ -91,7 +87,6 @@ const redis = new Redis(config.REDIS_URL, {
 const vivaIdentityProvider = new VivaIdentityProvider({
   mode: config.VIVA_MODE,
   baseUrl: config.VIVA_AUTH_BASE_URL,
-  profileApiBaseUrl: config.VIVA_AUTH_PROFILE_API_URL,
   oauthScopes: config.VIVA_OAUTH_SCOPES,
   realm: config.VIVA_AUTH_REALM,
   clientId: config.VIVA_AUTH_CLIENT_ID,
@@ -128,31 +123,6 @@ const tournamentSummarySource = config.GAMES_READ_ENABLED
       onMetric: (metric) => logger.info({ metric }, 'legacy tournament summary read'),
     })
   : undefined;
-const coachGameSummarySource = config.GAMES_READ_ENABLED
-  ? new VivaCoachGameSummaryAdapter({
-      apiBaseUrl: config.VIVA_END_USER_API_URL,
-      tenantKey: config.VIVA_AUTH_TENANT_KEY,
-      timeoutMs: Math.max(config.VIVA_TIMEOUT_MS, 8_000),
-      freshTtlMs: 60_000,
-      staleTtlMs: 600_000,
-      circuitFailureThreshold: 3,
-      circuitResetMs: 30_000,
-      onMetric: (metric) => logger.info({ metric }, 'Viva coach-game summary read'),
-    })
-  : undefined;
-const exerciseRecommendationSource =
-  config.GAMES_READ_ENABLED && (config.VIVA_MODE === 'sandbox' || config.VIVA_MODE === 'production')
-    ? new VivaExerciseRecommendationSourceAdapter({
-        mode: config.VIVA_MODE,
-        apiBaseUrl: config.VIVA_END_USER_API_URL,
-        providerTenantKey: config.VIVA_AUTH_TENANT_KEY,
-        timeoutMs: config.VIVA_TIMEOUT_MS,
-        maxAttempts: 2,
-        circuitFailureThreshold: 3,
-        circuitResetMs: 30_000,
-        onMetric: (metric) => logger.info({ metric }, 'Viva exercise recommendation read'),
-      })
-    : undefined;
 const profileSummaryRepository = createProfileSummaryRepository(pool);
 const promotionEngagementSink = config.PROMOTIONS_ENGAGEMENT_SECRET
   ? new LegacyPromotionEngagementSink({
@@ -371,8 +341,6 @@ const app = await buildApp({
   ...(activityHistoryProjector ? { activityHistoryProjector } : {}),
   ...(gameReadRepository ? { gameReadRepository } : {}),
   ...(tournamentSummarySource ? { tournamentSummarySource } : {}),
-  ...(coachGameSummarySource ? { coachGameSummarySource } : {}),
-  ...(exerciseRecommendationSource ? { exerciseRecommendationSource } : {}),
   ...(config.GAMES_COMMANDS_ENABLED
     ? {
         gameRosterRepository: createGameRosterRepository(pool),

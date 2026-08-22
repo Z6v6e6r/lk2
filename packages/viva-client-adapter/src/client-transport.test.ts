@@ -1,7 +1,7 @@
 import type { ClientRoutingPlan } from '@phub/domain';
 import { describe, expect, it, vi } from 'vitest';
 
-import { createClientTransportExecutor } from './index.js';
+import { createClientTransportExecutor, type DirectVivaReadMetric } from './index.js';
 
 const operations = [
   'profile.read',
@@ -44,6 +44,7 @@ const identity = (payload: unknown) => payload;
 
 describe('client transport executor', () => {
   it('executes only a fixed server-directed schedule read for immediate relay', async () => {
+    const metrics: DirectVivaReadMetric[] = [];
     const vivaFetch = vi
       .fn<typeof fetch>()
       .mockResolvedValue(Response.json({ content: [{ id: 'provider-id' }] }));
@@ -53,13 +54,17 @@ describe('client transport executor', () => {
       refreshVivaAccessToken: vi.fn(),
       executePadlHub: vi.fn(),
       fetchImplementation: vivaFetch,
+      onMetric: (metric) => metrics.push(metric),
     });
 
     await expect(
-      executor.executeClientAssistedScheduleRead({
-        operation: 'schedule.read',
-        date: '2026-07-30',
-      }),
+      executor.executeClientAssistedScheduleRead(
+        {
+          operation: 'schedule.read',
+          date: '2026-07-30',
+        },
+        '11111111-1111-4111-8111-111111111111',
+      ),
     ).resolves.toEqual({ content: [{ id: 'provider-id' }] });
     const [url, init] = vivaFetch.mock.calls[0] ?? [];
     expect((url as URL).toString()).toBe(
@@ -68,6 +73,13 @@ describe('client transport executor', () => {
     expect(Object.fromEntries(new Headers(init?.headers))).toEqual({
       authorization: 'Bearer user-access-token',
     });
+    expect(metrics).toEqual([
+      expect.objectContaining({
+        operation: 'schedule.read',
+        outcome: 'SUCCESS',
+        evidenceJobId: '11111111-1111-4111-8111-111111111111',
+      }),
+    ]);
   });
 
   it('derives booking detail identifiers only from the active list response', async () => {

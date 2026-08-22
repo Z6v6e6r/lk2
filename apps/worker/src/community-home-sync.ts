@@ -74,14 +74,14 @@ export async function runCommunityHomeSyncCycle(input: {
   readonly now?: Date;
 }): Promise<CommunityHomeSyncCycleResult> {
   const now = input.now ?? new Date();
-  const dueBefore = new Date(now.getTime() - input.config.HOME_VIVA_SYNC_INTERVAL_MS);
+  const dueBefore = new Date(now.getTime() - input.config.COMMUNITY_HOME_SYNC_INTERVAL_MS);
   const tenants = await input.pool.query<{ id: string }>(
     `select id from identity.tenants where active = true order by id`,
   );
   let attempted = 0;
   let synced = 0;
   let failed = 0;
-  let remaining = input.config.HOME_VIVA_SYNC_BATCH_SIZE;
+  let remaining = input.config.COMMUNITY_HOME_SYNC_BATCH_SIZE;
 
   for (const tenant of tenants.rows) {
     if (remaining <= 0) break;
