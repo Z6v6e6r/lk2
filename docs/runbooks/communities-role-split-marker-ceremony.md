@@ -811,15 +811,15 @@ For the completed V10 rehearsal on staging:
 
 ## Remaining gates before execution
 
-1. The exact disabled V11 candidate at commit
-   `f5345982e4d6b8024ac814047a236768e7537054` has been installed and its disabled readback passed.
-   It has no active link and grants no execution or database authority. The V12 runtime candidate
-   remains a later isolated checkpoint and is not installed by that receipt.
+1. COMPLETE: 2026-08-22 — The exact disabled V12 candidate at commit
+   `4f8028e97a28aae32dfedfbd9ac6f4ecbe5fedea` was installed and its exact readback passed with
+   receipt `9e02af1c5dbbb8c8ff8db1c10055cff63f19ba529f005891359c22e0e5b6e5ce`.
+   It remains disabled with no active link and grants no ceremony or database-mutation authority.
 2. The independent re-review of the exact V3 security-fix range completed with no reportable P0-P2
    findings. V3 evidence V2 binds both attestations to the exact host authorization, and the
-   composition/coordinator retain immutable entry snapshots. V11 packages those reviewed sources,
-   executor bridge and external anchor only as disabled mode-0444 bytes and adds no key, workflow
-   or live configuration. Do not reuse
+   composition/coordinator retain immutable entry snapshots. V12 packages those reviewed sources,
+   executor bridge, external anchor and reviewed trusted-inventory runtime only as disabled
+   immutable bytes and adds no key, workflow or live configuration. Do not reuse
    the legacy V2 marker/attested-evidence contour, V3 evidence V1 or the permanently disabled
    reviewed-runner path as a compatibility fallback.
 3. Preserve the completed disposable PostgreSQL 16 response-loss, cleanup-failure and
@@ -852,6 +852,6 @@ For the completed V10 rehearsal on staging:
    candidate, forced-command key, one ceremony run and any later post-marker cleanup.
 
 Until every gate that remains open above passes, do not create a key, wire a workflow, place
-requests on staging or run either ceremony contour. The currently installed V11 command and
+requests on staging or run either ceremony contour. The currently installed V12 command and
 existing preparation gate must continue to fail with `EXECUTION_NOT_AUTHORIZED` before PostgreSQL
 or mutable ceremony filesystem access.

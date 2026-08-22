@@ -16,6 +16,17 @@
   This checkpoint does not create an authorization receipt, credential, descriptor, output,
   active link, key or workflow and does not access staging or a database.
 
+## 2026-08-22 — Communities trusted-inventory V12 disabled staging installation evidence
+
+- The exact V12 candidate at commit `4f8028e97a28aae32dfedfbd9ac6f4ecbe5fedea` was installed on
+  staging and independently read back with receipt
+  `9e02af1c5dbbb8c8ff8db1c10055cff63f19ba529f005891359c22e0e5b6e5ce`.
+- The post-check retained `status=disabled`, `active_link=false`,
+  `authorizes_ceremony=false` and `authorizes_database_mutation=false`. The tar extended-attribute
+  warnings were informational; the exact manifest, control and artifact digest checks passed.
+- This evidence records the completed disabled installation only. It does not authorize an active
+  link, credential, trusted inventory collection, ceremony or database mutation.
+
 ## 2026-08-22 — Communities trusted-inventory immutable disabled runtime candidate checkpoint
 
 - Added a dedicated Node 22 ESM build for the reviewed trusted-inventory runtime wiring. The
