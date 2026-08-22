@@ -3,6 +3,7 @@
 - Status: accepted
 - Date: 2026-07-26
 - Extends: [ADR 0002](0002-viva-boundary.md), [ADR 0010](0010-games-domain-and-card-state-model.md)
+- Amended by: [ADR 0023](0023-browser-only-viva-end-user-transport.md)
 
 ## Context
 
@@ -22,13 +23,10 @@ participant identity, phone, provider identifier, payment data or tournament mec
 renders the organizer with a deterministic local avatar fallback; external trainer photo URLs and
 trainer identifiers are not exposed to the browser.
 
-Viva-primary schedule entries whose normalized exercise type is `Игра+Тренер` are read separately
-through `@phub/viva-adapter` and exposed by
-`GET /public/api/v1/{tenantKey}/coach-games`. They are summary cards, not synthetic Games
-aggregates: the operation does not invent revisions, commands or local ownership for a Viva
-exercise. Provider exercise/studio/court/trainer identifiers and trainer photo URLs remain
-server-side. The browser renders a deterministic local trainer avatar fallback and offers no
-unimplemented signup command.
+Viva-primary `Игра+Тренер` entries are now read through the authenticated client-assisted Event
+Catalog. The former public coach-game route returns a deprecated empty compatibility page and links
+to the browser read-job contract; its avatar route returns `204`. No server coach adapter or
+provider-media fallback remains.
 
 The server-side legacy adapter performs at most one upstream schedule read per date at a time. It
 uses a 60-second fresh cache, a 10-minute stale fallback, bounded response bytes, an eight-second
@@ -46,31 +44,19 @@ roster. If a later detail screen needs a public roster, it must request one sele
 be abortable and no-retry on the client, and use its own backend concurrency, privacy and rate
 limits.
 
-Coach-game schedule reads use the same fifteen-day and fifty-card public bounds, per-date
-single-flight, fresh/stale cache, response-size limit, timeout, circuit breaker, range concurrency
-of two and public HTTP cache policy as tournament discovery.
-
-Trainer media uses a server-owned read-through cache shared by tournament, training and coach-game
-routes. The adapter keeps the Viva trainer identity and source URL inside the integration boundary.
-On media delivery the API resolves `(tenant, provider, provider trainer id)` in
-`integration.trainer_avatar_sync`, reads the normalized WebP object from private storage first and
-contacts the provider only when no local object exists. A successful provider read is normalized,
-stored under `trainer-avatars/{tenantId}/{trainerId}/{sha256}.webp`, and linked to the
-Viva-primary `catalog.trainers` projection. Provider-specific `4xx` responses are recorded for that
-trainer but do not open the shared media circuit breaker. The public DTO and media URL never expose
-the provider trainer id or provider URL.
+Coach-game schedule bounds, normalization and media delivery are owned by the client-assisted Event
+Catalog contract. Tournament discovery and its organizer-media cache remain server-owned and are
+unaffected by this amendment.
 
 ## Consequences
 
-- A thousand viewers of the same schedule share cached per-date reads instead of producing a
-  thousand roster requests.
+- Tournament viewers share cached bounded legacy reads; Viva coach-game reads use each
+  authenticated user's browser context.
 - Tournament cards can display `registered/total`, open places and waitlist count without receiving
   participants.
 - Existing locally owned `COACH_GAME` records remain Games aggregates and keep using the existing
   Games command and detail contracts; Viva schedule summaries do not acquire those semantics.
-- Viva-primary `Игра+Тренер` schedule summaries remain a separate source/version and are never
-  presented as locally writable Games aggregates.
-- Upstream failure can hide tournament summaries while Games remain usable; no client falls back to
-  direct legacy or Viva traffic.
-- A previously cached trainer avatar remains available when the provider URL expires or returns
-  `403`; a trainer never cached successfully continues to use the deterministic UI fallback.
+- Viva-primary `Игра+Тренер` summaries remain a separate source/version and are never presented as
+  locally writable Games aggregates.
+- Upstream failure can hide tournament summaries while Games remain usable; Viva failures remain
+  isolated to the browser-assisted catalog and never trigger server fallback.

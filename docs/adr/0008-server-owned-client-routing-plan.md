@@ -3,6 +3,7 @@
 - Status: accepted, feature-gated
 - Date: 2026-07-15
 - Amends: [ADR 0005](0005-viva-user-delegation-and-direct-transport.md)
+- Amended by: [ADR 0023](0023-browser-only-viva-end-user-transport.md)
 
 ## Context
 

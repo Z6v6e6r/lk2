@@ -208,6 +208,11 @@ booking details, subscriptions and schedule. Commands, unknown operations, CUP/i
 expired plans always use PadlHub APIs. Details, switch semantics and rollback are defined in
 [ADR 0008](../adr/0008-server-owned-client-routing-plan.md).
 
+Viva End User API traffic is browser-only in sandbox and production. API and worker processes may
+exchange and verify Keycloak tokens, retain encrypted refresh delegation and normalize bounded
+client-assisted results, but they never call `/end-user/api/...`. Identity bootstrap and fail-closed
+behavior are defined in [ADR 0023](../adr/0023-browser-only-viva-end-user-transport.md).
+
 ## Reliability and observability
 
 Critical local writes use transactional outbox; consumers use inbox deduplication. External calls have timeouts, bounded retries and a circuit-breaker policy. Push and integration work never runs inside the user's HTTP transaction.

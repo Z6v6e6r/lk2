@@ -206,6 +206,22 @@ const environmentSchema = z.object({
     .min(30_000)
     .max(86_400_000)
     .default(300_000),
+  COMMUNITY_HOME_SYNC_ENABLED: booleanFromEnvironment,
+  COMMUNITY_HOME_SYNC_INTERVAL_MS: z.coerce
+    .number()
+    .int()
+    .min(30_000)
+    .max(3_600_000)
+    .default(120_000),
+  COMMUNITY_HOME_SYNC_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(20),
+  PLATFORM_HOME_SYNC_ENABLED: booleanFromEnvironment,
+  PLATFORM_HOME_SYNC_INTERVAL_MS: z.coerce
+    .number()
+    .int()
+    .min(30_000)
+    .max(3_600_000)
+    .default(120_000),
+  PLATFORM_HOME_SYNC_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(20),
   COMMUNITIES_READ_MODE: z.enum(['mock', 'legacy', 'local']).default('mock'),
   COMMUNITY_LEGACY_READ_DETAIL_ENABLED: booleanFromEnvironment,
   COMMUNITY_LEGACY_READ_FEED_ENABLED: booleanFromEnvironment,
@@ -374,7 +390,6 @@ const environmentSchema = z.object({
   VIVA_TIMEOUT_MS: z.coerce.number().int().positive().max(30_000).default(3000),
   VIVA_DIRECT_READ_ENABLED: booleanFromEnvironment,
   VIVA_AUTH_BASE_URL: z.string().url().default('https://kc.vivacrm.ru'),
-  VIVA_AUTH_PROFILE_API_URL: z.string().url().default('https://api.vivacrm.ru/end-user/api/v1'),
   VIVA_END_USER_API_URL: z.string().url().default('https://api.vivacrm.ru/end-user/api'),
   VIVA_AUTH_REALM: z.string().min(1).default('clients'),
   VIVA_AUTH_CLIENT_ID: z.string().min(1).default('widget'),
@@ -806,16 +821,15 @@ export function loadConfig(
       throw new Error('Viva delegation encryption key must be 32-byte base64url');
     }
   }
-  if (
-    parsed.data.HOME_VIVA_SYNC_ENABLED &&
-    (parsed.data.VIVA_MODE === 'mock' || parsed.data.VIVA_MODE === 'disabled')
-  ) {
-    throw new Error('HOME_VIVA_SYNC_ENABLED requires VIVA_MODE=sandbox or production');
+  if (parsed.data.HOME_VIVA_SYNC_ENABLED) {
+    throw new Error(
+      'HOME_VIVA_SYNC_ENABLED is retired because Viva End User reads require client-assisted browser transport',
+    );
   }
-  if (parsed.data.HOME_VIVA_SYNC_ENABLED && !parsed.data.VIVA_OAUTH_ENABLED) {
-    throw new Error('HOME_VIVA_SYNC_ENABLED requires VIVA_OAUTH_ENABLED=true');
-  }
-  if (parsed.data.HOME_VIVA_SYNC_ENABLED && requirements.profilePhotoStorage) {
+  if (parsed.data.COMMUNITY_HOME_SYNC_ENABLED) {
+    if (parsed.data.COMMUNITIES_READ_MODE === 'mock') {
+      throw new Error('COMMUNITY_HOME_SYNC_ENABLED requires COMMUNITIES_READ_MODE=legacy or local');
+    }
     const missingStorage = [
       ['S3_ENDPOINT', parsed.data.S3_ENDPOINT],
       ['S3_PUBLIC_ENDPOINT', parsed.data.S3_PUBLIC_ENDPOINT],
@@ -827,7 +841,7 @@ export function loadConfig(
       .map(([name]) => name);
     if (missingStorage.length > 0) {
       throw new Error(
-        `HOME_VIVA_SYNC_ENABLED requires profile photo storage: ${missingStorage.join(', ')}`,
+        `COMMUNITY_HOME_SYNC_ENABLED requires media storage: ${missingStorage.join(', ')}`,
       );
     }
   }

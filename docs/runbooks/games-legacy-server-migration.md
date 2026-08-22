@@ -89,33 +89,12 @@ only the sanitized public roster surface. `GAMES_COMMANDS_ENABLED` and
 `ACTIVITY_HISTORY_GAME_BACKFILL_ENABLED` must remain `false`; use the Mongo mirror when private or
 historical roster reconciliation is required.
 
-## Targeted Viva Home Game bridge
+## Retired Viva Home Game bridge
 
-Use this bridge in local or staging when Home must recognize a viewer's upcoming Viva booking as an
-existing canonical Game without enabling the continuous roster-window importer:
-
-```text
-HOME_VIVA_SYNC_ENABLED=true
-HOME_VIVA_LEGACY_GAME_BRIDGE_ENABLED=true
-GAMES_READ_ENABLED=true
-GAMES_COMMANDS_ENABLED=false
-LEGACY_GAMES_ROSTER_SYNC_ENABLED=false
-LEGACY_GAMES_ROSTER_SYNC_SOURCE=public
-LEGACY_GAMES_PUBLIC_BASE_URL=https://padlhub.su
-LEGACY_GAMES_ROSTER_SYNC_TENANT_KEY=<approved-local-or-staging-tenant>
-```
-
-The worker asks the source only for the Viva exercise IDs already proven by the viewer's upcoming
-booking page (at most six per user and at most 25 per bridge call). Public-source requests share one
-bounded available-Games response for 60 seconds through process-local single-flight caching, may
-serve stale data for up to ten minutes after an upstream failure, and stop retrying through a
-circuit breaker after three failures. Therefore concurrent Home projection runs do not translate
-one-for-one into legacy API reads. The client receives only the canonical PadlHub Game UUID and
-opens `/games/{uuid}`; no Viva or legacy identifier enters the Home DTO.
-
-Keep `LEGACY_GAMES_ROSTER_SYNC_ENABLED=false` unless the separately reviewed continuous import is
-required. Recreate only the worker after changing the gate, then verify one canonical Game mapping,
-a fresh Home snapshot, and an authenticated browser transition to the Game page.
+`HOME_VIVA_SYNC_ENABLED` and `HOME_VIVA_LEGACY_GAME_BRIDGE_ENABLED` are retired. Upcoming Viva
+bookings are read through the authenticated browser job and normalized before they enter PadlHub.
+Do not enable the former worker bridge as a fallback. The independent legacy roster importer remains
+separately gated for PadlHub/CUP data and does not authorize Viva End User server traffic.
 
 ## Rollback and repair
 

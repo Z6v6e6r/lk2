@@ -17,9 +17,8 @@ read-only, redacted test-player check. It reports only the masked suffix, PadlHu
 and Viva-delegation status, refresh timestamps/error codes, and Home projection freshness. The
 diagnostic never reads token ciphertext or Viva subject values and forces a read-only PostgreSQL
 transaction.
-Use `deployment_profile=FULL_LIVE_HOME` for the existing routing refresh and guarded Live Home
-activation. Use `deployment_profile=CLIENT_ASSISTED_VIVA` when Viva server-side Home reads remain
-blocked but the browser-origin read-job contract is ready. This profile applies the same audited
+Use `deployment_profile=CLIENT_ASSISTED_VIVA` for Viva user-data reads. `FULL_LIVE_HOME` and its
+server End User activation are retired and fail closed. The client-assisted profile applies the audited
 tenant routing envelope, enables `VIVA_DIRECT_READ_ENABLED`, explicitly disables
 `HOME_VIVA_SYNC_ENABLED` and the legacy Viva Home Game bridge, and preserves the current
 `HOME_READ_MODE`. It then restarts only API and worker, proves the exact Nano-origin Viva CORS
@@ -437,25 +436,18 @@ the new containers start. A release fails if Viva/Home uses mock data, if a loca
 enabled, if API and worker do not share the `phub-media` bucket, or if the worker does not produce
 real canonical Games, card projections and guarded roster-mirror state.
 
-The runtime override contains independent Home-source and browser-transport gates. Full Home sets
-both `HOME_VIVA_SYNC_ENABLED=true` and `VIVA_DIRECT_READ_ENABLED=true` only after every source
-projection becomes fresh. `CLIENT_ASSISTED_VIVA` instead keeps server Home Viva sync off and turns
-on only the browser transport. The staging auth environment explicitly pins
+The runtime override keeps retired server Home Viva sync off and turns on only browser transport.
+The staging auth environment explicitly pins
 `VIVA_END_USER_API_URL=https://api.vivacrm.ru/end-user/api` so the application and the CORS
 preflight verifier use the same provider boundary instead of relying on a package default. Before
-either activation, every target-tenant user with an active
+activation, every target-tenant user with an active
 Viva delegation must have a `MIXED_END_USER_READS` routing plan with `profile.read`, plus a
 non-empty Viva provider tenant binding. Fixed schedule, upcoming-booking and history commands use
 that mixed plan as their transport envelope; they are not added to the general direct-operation
 allowlist. Activation and post-deploy verification fail when an active delegation cannot receive
-the envelope. The full-Home override additionally bounds the synchronous legacy community bridge
-to one 2.5-second attempt and keeps successful pages for two minutes; optional member-rank
-enrichment has a 150 ms response budget. It explicitly enables the four independent, read-only
-legacy community projections (`DETAIL`, `FEED`, `CHAT`, and `RATING`) only during the guarded
-Full Live Home activation. They remain default-off in every other profile. The post-activation
-verifier checks all four values both in the effective runtime files and inside the API container;
-none of these gates enables community commands, media uploads, invites, canonical writes or
-realtime ownership.
+the envelope. Community projections are controlled independently and remain default-off unless
+their own reviewed profile explicitly enables them. No browser-transport gate enables community
+commands, media uploads, invites, canonical writes or realtime ownership.
 
 `COMMUNITIES_LEGACY_READ_ONLY` is a separate, non-promotable preview profile. Its flags live only
 in `/opt/phub/staging.communities.env`, an optional env file attached to API and never to worker,
@@ -520,17 +512,13 @@ stable-logo flags, client profile sync, community media, invites and Communities
 explicitly false, so this profile changes no user-visible media URL. Feature enablement is a later,
 separately approved operation.
 
-Only a successful `FULL_LIVE_HOME` run writes the three-line
-`production-promotion-eligibility.env` artifact bound to its release SHA and workflow run ID.
-Production refuses every staging run without that exact artifact, so this lightweight Communities
-profile can never certify image digests for promotion.
+The retired staging profile no longer writes `production-promotion-eligibility.env`. Production
+therefore fails closed until a separately reviewed browser-assisted promotion gate replaces the old
+server-read evidence contract.
 
-The post-deploy gate also reads the public coach-game and tournament discovery contracts through
-the running API with a six-second deadline. `health/ready` is not evidence for these upstreams:
-coach-game discovery requires the configured Viva end-user schedule source to accept the Nano API
-read, and tournament discovery requires `LEGACY_GAMES_PUBLIC_BASE_URL/api/tournaments` to respond
-within that budget. A `COACH_GAME_DISCOVERY_UNAVAILABLE`, `TOURNAMENT_DISCOVERY_UNAVAILABLE`, HTML
-fallback or timeout fails the release even when the containers remain healthy.
+Public coach-game discovery returns a deprecated empty compatibility page with a successor link.
+The authenticated browser smoke verifies coach games through the client-assisted Event Catalog;
+tournament discovery remains an independent legacy-public provider check.
 
 Every confirmed staging deployment creates a PostgreSQL custom-format archive under
 `/opt/phub/backups/postgres-pre-<release>-<UTC timestamp>.dump`. The workflow

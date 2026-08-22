@@ -51,8 +51,8 @@ describe('chat/push staging foundation release contract', () => {
     const useLines = workflow.split(/\r?\n/).filter((line) => /^\s*(?:-\s*)?uses\s*:/.test(line));
     const thirdPartyUses = useLines.filter((line) => !/^\s*(?:-\s*)?uses\s*:\s*\.\//.test(line));
 
-    expect(useLines).toHaveLength(23);
-    expect(thirdPartyUses).toHaveLength(23);
+    expect(useLines).toHaveLength(22);
+    expect(thirdPartyUses).toHaveLength(22);
     for (const line of thirdPartyUses) {
       expect(line).toMatch(/^\s*(?:-\s*)?uses\s*:\s*[A-Za-z0-9_./-]+@[0-9a-f]{40}\s*(?:#.*)?$/);
     }
@@ -305,7 +305,7 @@ describe('chat/push staging foundation release contract', () => {
     expect(workflow).toContain(
       "if: ${{ inputs.deployment_profile != 'CHAT_PUSH_FOUNDATION' && inputs.deployment_profile != 'CHAT_PUSH_FOUNDATION_RECOVERY' }}",
     );
-    expect(workflow).toContain("if: ${{ inputs.deployment_profile == 'FULL_LIVE_HOME' }}");
+    expect(workflow).not.toContain('FULL_LIVE_HOME');
     expect(workflow).not.toContain(
       "inputs.deployment_profile == 'FULL_LIVE_HOME' || inputs.deployment_profile == 'CHAT_PUSH_FOUNDATION'",
     );

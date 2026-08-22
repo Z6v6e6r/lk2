@@ -1147,8 +1147,6 @@ export class AuthService {
             : {}),
           correlationId: input.correlationId,
         });
-      } else if (challenge.provider === 'VIVA' && this.options.config.HOME_VIVA_SYNC_ENABLED) {
-        throw new AuthServiceError('VIVA_REAUTH_REQUIRED');
       }
     }
     try {

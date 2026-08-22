@@ -22,9 +22,7 @@ import {
 import { LegacyGamesMongoAdapter, LegacyGamesPublicAdapter } from '@phub/legacy-games-adapter';
 import { createNotificationEndpointCipher } from '@phub/notifications';
 import { createLogger, startTelemetry } from '@phub/observability';
-import { VivaHomeSourceAdapter, VivaIdentityProvider } from '@phub/viva-adapter';
 import { connect } from 'amqplib';
-import Redis from 'ioredis';
 
 import { registerHomeProjectorConsumer } from './home-projector-consumer.js';
 import { isCanonicalCommunityWorkerEnabled } from './community-canonical-worker-capability.js';
@@ -68,7 +66,7 @@ import { publishLeasedOutboxBatch } from './leased-outbox-publisher.js';
 import { S3ProfilePhotoObjectStore } from './profile-photo-sync.js';
 import { runPromotionHomeSyncCycle } from './promotion-home-sync.js';
 import { runLegacyGamesRosterSyncCycle } from './legacy-games-roster-sync.js';
-import { runProfilePhotoMaintenanceCycle, runVivaHomeSyncCycle } from './viva-home-sync.js';
+import { runProfilePhotoMaintenanceCycle } from './viva-home-sync.js';
 import { WebPushDeliveryAdapter } from './web-push-adapter.js';
 import { runWebPushDeliveryBatch } from './web-push-delivery.js';
 import { runWebPushTenantCycle } from './web-push-tenant-cycle.js';
@@ -152,7 +150,7 @@ const communityMediaRuntime = config.COMMUNITY_MEDIA_ENABLED
     }
   : undefined;
 const profilePhotoStore =
-  config.HOME_VIVA_SYNC_ENABLED ||
+  config.COMMUNITY_HOME_SYNC_ENABLED ||
   config.PROFILE_PHOTO_CLIENT_SYNC_ENABLED ||
   config.PROFILE_PHOTO_MAINTENANCE_ENABLED ||
   config.COMMUNITY_LOGO_STABLE_DELIVERY_ENABLED ||
@@ -259,9 +257,6 @@ const createLegacyGamesRosterSource = () =>
 const legacyGamesRosterWindowSource = config.LEGACY_GAMES_ROSTER_SYNC_ENABLED
   ? createLegacyGamesRosterSource()
   : undefined;
-const vivaHomeLegacyGameBridgeSource = config.HOME_VIVA_LEGACY_GAME_BRIDGE_ENABLED
-  ? (legacyGamesRosterWindowSource ?? createLegacyGamesRosterSource())
-  : undefined;
 const webPushRuntime =
   config.WEB_PUSH_ENABLED && config.NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS
     ? {
@@ -284,9 +279,6 @@ const webPushRuntime =
         }),
       }
     : undefined;
-const redis = config.HOME_VIVA_SYNC_ENABLED
-  ? new Redis(config.REDIS_URL, { enableOfflineQueue: false, maxRetriesPerRequest: 1 })
-  : undefined;
 const connection = await connect(config.RABBITMQ_URL);
 const channel = await connection.createConfirmChannel();
 const consumerChannel = await connection.createChannel();
@@ -397,16 +389,6 @@ connection.on('close', () => {
 connection.on('error', (error) => {
   handleRabbitFailure('error', error);
 });
-redis?.on('ready', () => {
-  logger.info('Redis connection for Viva Home sync ready');
-});
-redis?.on('close', () => {
-  logger.error('Redis connection for Viva Home sync closed');
-});
-redis?.on('error', () => {
-  logger.error('Redis connection for Viva Home sync failed');
-});
-
 const handleHealthRequest = async (
   request: IncomingMessage,
   response: ServerResponse,
@@ -418,37 +400,29 @@ const handleHealthRequest = async (
     return;
   }
   if (request.url === '/health/ready') {
-    const [databaseReady, vivaSyncReady, communityMediaReady, profileMediaReady] =
-      await Promise.all([
-        checkDatabaseReady(pool),
-        redis
-          ? redis
-              .ping()
-              .then((result) => result === 'PONG')
-              .catch(() => false)
-          : Promise.resolve(true),
-        communityMediaRuntime
-          ? Promise.all([
-              communityMediaRuntime.store.checkReady(),
-              communityMediaRuntime.scanner.checkReady?.() ?? Promise.resolve(),
-            ])
-              .then(() => true)
-              .catch(() => false)
-          : Promise.resolve(true),
-        profilePhotoStore
-          ? profilePhotoStore
-              .checkReady()
-              .then(() => true)
-              .catch(() => false)
-          : Promise.resolve(true),
-      ]);
+    const [databaseReady, communityMediaReady, profileMediaReady] = await Promise.all([
+      checkDatabaseReady(pool),
+      communityMediaRuntime
+        ? Promise.all([
+            communityMediaRuntime.store.checkReady(),
+            communityMediaRuntime.scanner.checkReady?.() ?? Promise.resolve(),
+          ])
+            .then(() => true)
+            .catch(() => false)
+        : Promise.resolve(true),
+      profilePhotoStore
+        ? profilePhotoStore
+            .checkReady()
+            .then(() => true)
+            .catch(() => false)
+        : Promise.resolve(true),
+    ]);
     const forwardProgress = workerForwardProgress.snapshot();
     const webPushProgress = webPushForwardProgress?.snapshot();
     const bookingReminderProgress = bookingReminderForwardProgress?.snapshot();
     const checks = {
       database: databaseReady,
       rabbitmq: rabbitReady,
-      vivaSync: vivaSyncReady,
       communityMedia: communityMediaReady,
       profileMedia: profileMediaReady,
       forwardProgress: forwardProgress.ready,
@@ -920,68 +894,8 @@ const runGiftCertificateDeliveryCycle = async (): Promise<void> => {
   }
 };
 
-const vivaIdentityProvider = new VivaIdentityProvider({
-  mode: config.VIVA_MODE,
-  baseUrl: config.VIVA_AUTH_BASE_URL,
-  profileApiBaseUrl: config.VIVA_AUTH_PROFILE_API_URL,
-  oauthScopes: config.VIVA_OAUTH_SCOPES,
-  realm: config.VIVA_AUTH_REALM,
-  clientId: config.VIVA_AUTH_CLIENT_ID,
-  channel: config.VIVA_AUTH_CHANNEL,
-  timeoutMs: config.VIVA_TIMEOUT_MS,
-  devPhoneE164: config.AUTH_DEV_PHONE_E164,
-  devOtpCode: config.AUTH_DEV_OTP_CODE,
-  onMetric: (metric) => logger.info({ metric }, 'Viva identity operation'),
-});
-const vivaAdapters = new Map<string, VivaHomeSourceAdapter>();
-const getVivaHomeAdapter = (providerTenantKey: string): VivaHomeSourceAdapter => {
-  const existing = vivaAdapters.get(providerTenantKey);
-  if (existing) return existing;
-  const adapter = new VivaHomeSourceAdapter({
-    mode: config.VIVA_MODE,
-    apiBaseUrl: config.VIVA_END_USER_API_URL,
-    tenantKey: providerTenantKey,
-    timeoutMs: config.VIVA_TIMEOUT_MS,
-    onMetric: (metric) => logger.info({ metric }, 'Viva Home read operation'),
-  });
-  vivaAdapters.set(providerTenantKey, adapter);
-  return adapter;
-};
-
-const runVivaSyncCycle = async (): Promise<void> => {
-  if (shuttingDown || !config.HOME_VIVA_SYNC_ENABLED || !redis || !profilePhotoStore) return;
-  try {
-    const result = await runVivaHomeSyncCycle({
-      pool,
-      redis,
-      config,
-      logger,
-      provider: vivaIdentityProvider,
-      getAdapter: getVivaHomeAdapter,
-      profilePhotoStore,
-      ...(vivaHomeLegacyGameBridgeSource
-        ? {
-            legacyGameRosterBridge: {
-              tenantKey: config.LEGACY_GAMES_ROSTER_SYNC_TENANT_KEY as string,
-              source: vivaHomeLegacyGameBridgeSource,
-            },
-          }
-        : {}),
-    });
-    if (result.attempted > 0) logger.info({ result }, 'Viva Home sync cycle completed');
-  } catch (error) {
-    logger.error({ error }, 'Viva Home sync cycle failed');
-  } finally {
-    if (!shuttingDown) setTimeout(() => void runVivaSyncCycle(), config.HOME_VIVA_SYNC_INTERVAL_MS);
-  }
-};
-
 const runProfilePhotoMaintenance = async (): Promise<void> => {
-  if (
-    shuttingDown ||
-    !profilePhotoStore ||
-    (!config.HOME_VIVA_SYNC_ENABLED && !config.PROFILE_PHOTO_MAINTENANCE_ENABLED)
-  ) {
+  if (shuttingDown || !profilePhotoStore || !config.PROFILE_PHOTO_MAINTENANCE_ENABLED) {
     return;
   }
   try {
@@ -1004,7 +918,7 @@ const runProfilePhotoMaintenance = async (): Promise<void> => {
 };
 
 const runCommunitySyncCycle = async (): Promise<void> => {
-  if (shuttingDown || !config.HOME_VIVA_SYNC_ENABLED || !profilePhotoStore || !communityHome) {
+  if (shuttingDown || !config.COMMUNITY_HOME_SYNC_ENABLED || !profilePhotoStore || !communityHome) {
     return;
   }
   try {
@@ -1022,7 +936,7 @@ const runCommunitySyncCycle = async (): Promise<void> => {
     logger.error({ error }, 'community Home sync cycle failed');
   } finally {
     if (!shuttingDown) {
-      setTimeout(() => void runCommunitySyncCycle(), config.HOME_VIVA_SYNC_INTERVAL_MS);
+      setTimeout(() => void runCommunitySyncCycle(), config.COMMUNITY_HOME_SYNC_INTERVAL_MS);
     }
   }
 };
@@ -1059,7 +973,7 @@ const runCommunityLogoCompatibilityCycle = async (): Promise<void> => {
 };
 
 const runPlatformSyncCycle = async (): Promise<void> => {
-  if (shuttingDown || !config.HOME_VIVA_SYNC_ENABLED) return;
+  if (shuttingDown || !config.PLATFORM_HOME_SYNC_ENABLED) return;
   try {
     const result = await runPlatformHomeSyncCycle({ pool, config, logger });
     if (result.attempted > 0) logger.info({ result }, 'platform Home sync cycle completed');
@@ -1067,7 +981,7 @@ const runPlatformSyncCycle = async (): Promise<void> => {
     logger.error({ error }, 'platform Home sync cycle failed');
   } finally {
     if (!shuttingDown) {
-      setTimeout(() => void runPlatformSyncCycle(), config.HOME_VIVA_SYNC_INTERVAL_MS);
+      setTimeout(() => void runPlatformSyncCycle(), config.PLATFORM_HOME_SYNC_INTERVAL_MS);
     }
   }
 };
@@ -1141,7 +1055,6 @@ async function shutdown(signal: string, exitCode = 0): Promise<void> {
     consumerChannel.close(),
     channel.close(),
     connection.close(),
-    redis?.quit().catch(() => redis.disconnect()),
     pool.end(),
     telemetry?.shutdown(),
   ]);
@@ -1158,7 +1071,6 @@ process.once('SIGINT', () => void shutdown('SIGINT'));
 void runCycle();
 void runBookingReminderCycle();
 if (telemetry) void runOperationalMetricsCycle();
-void runVivaSyncCycle();
 void runProfilePhotoMaintenance();
 void runCommunitySyncCycle();
 void runCommunityLogoCompatibilityCycle();

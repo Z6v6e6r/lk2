@@ -97,8 +97,9 @@ gate passes and their separate contract is accepted.
 - An audited dry-run/apply importer provides the initial operational bridge. Continuous production
   freshness is maintained by the event-driven worker once each source domain publishes its
   normalized component event.
-- `HOME_VIVA_SYNC_ENABLED` is an independent feature gate. Enabling source synchronization does not
-  switch Home reads; `HOME_READ_MODE=projection` remains blocked until all nine components are ready.
+- `HOME_VIVA_SYNC_ENABLED` is retired. Viva-owned projections use client-assisted browser reads;
+  Community and PadlHub-platform producers have independent default-off gates. Switching any
+  producer does not change `HOME_READ_MODE`.
 - Any future Home block must first be added to the OpenAPI snapshot and ownership documentation; it
   must not add an independent initial client request.
 
