@@ -133,6 +133,8 @@ jobs:
     if: ${{ inputs.operation == 'publish' }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    env:
+      DOCKER_BUILD_RECORD_UPLOAD: false
     environment: timeweb-amd64-publication
     permissions:
       contents: read
@@ -155,13 +157,51 @@ jobs:
           test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE_SHA"
           test -z "$(git status --porcelain)"
           test "$(git rev-parse 'HEAD^{tree}')" = a1b920b8ae4507080789c650b8c16c669e55b477
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - id: buildx
+        name: Install the checksum-verified Buildx binary and create the pinned builder
+        env:
+          BUILDX_SHA256: 48af8a397ebd60178778bf63611dbcebe5f5e7a9be90eb9147b24b9587455778
+          BUILDX_VERSION: v0.36.1
+          BUILDKIT_IMAGE: moby/buildkit@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
+        run: |
+          set -euo pipefail
+          download="$RUNNER_TEMP/docker-buildx"
+          plugin="$HOME/.docker/cli-plugins/docker-buildx"
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            --output "$download" \
+            "https://github.com/docker/buildx/releases/download/$BUILDX_VERSION/buildx-$BUILDX_VERSION.linux-amd64"
+          printf '%s  %s\n' "$BUILDX_SHA256" "$download" | sha256sum --check --strict
+          install -D -m 0755 "$download" "$plugin"
+          printf '%s  %s\n' "$BUILDX_SHA256" "$plugin" | sha256sum --check --strict
+          builder_name="phub-timeweb-publish-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          docker buildx create \
+            --name "$builder_name" \
+            --driver docker-container \
+            --driver-opt "image=$BUILDKIT_IMAGE" \
+            --use
+          printf 'name=%s\n' "$builder_name" >> "$GITHUB_OUTPUT"
+      - name: Verify the pinned Buildx and BuildKit runtime before registry login
+        env:
+          BUILDER_NAME: ${{ steps.buildx.outputs.name }}
+        run: |
+          set -euo pipefail
+          docker buildx version \
+            | grep -Fx 'github.com/docker/buildx v0.36.1 1d8dde89b8aba914e05e45366770736fea1fd690'
+          docker buildx inspect --bootstrap \
+            | grep -Eq '^BuildKit version:[[:space:]]+v0\.32\.2$'
+          container_id="$(docker ps --filter "name=buildx_buildkit_$BUILDER_NAME" \
+            --format '{{.ID}}')"
+          printf '%s' "$container_id" | grep -Eq '^[0-9a-f]{12,64}$'
+          test "$(docker inspect --format '{{.Config.Image}}' "$container_id")" \
+            = 'moby/buildkit@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8'
       - name: Verify reviewed base-image digests before registry login
         env:
           EXPECTED_NGINX_AMD64_DIGEST: sha256:62223d644fa234c3a1cc785ee14242ec47a77364226f1c811d2f669f96dc2ac8
           EXPECTED_NGINX_INDEX_DIGEST: sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10
           EXPECTED_NODE_AMD64_DIGEST: sha256:a17d50af28002a160548bd4225b3cfcb12c5efcb171f79e68758f2885fb1b066
           EXPECTED_NODE_INDEX_DIGEST: sha256:d649c27dae7ba0137b3cef5dd75baa422c08dc3d9e3fc0c23dfb172dc3cc6436
+          EXPECTED_SBOM_AMD64_DIGEST: sha256:187e1892a7752c9384c59aba9517dd8e40610b748c72773e87b63720514463c2
+          EXPECTED_SBOM_INDEX_DIGEST: sha256:ae4f3b554449e7e25548e7d8ccc029d17357348e30c6e3df01b92bc93654d6a9
         run: |
           set -euo pipefail
           verify_base() {
@@ -185,6 +225,8 @@ jobs:
             "$EXPECTED_NODE_INDEX_DIGEST" "$EXPECTED_NODE_AMD64_DIGEST"
           verify_base nginx:1.27-alpine \
             "$EXPECTED_NGINX_INDEX_DIGEST" "$EXPECTED_NGINX_AMD64_DIGEST"
+          verify_base docker/buildkit-syft-scanner@sha256:ae4f3b554449e7e25548e7d8ccc029d17357348e30c6e3df01b92bc93654d6a9 \
+            "$EXPECTED_SBOM_INDEX_DIGEST" "$EXPECTED_SBOM_AMD64_DIGEST"
       - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
@@ -203,7 +245,7 @@ jobs:
         name: Build and publish immutable linux/amd64 image
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
-          context: .
+          context: https://github.com/Z6v6e6r/lk2.git#${{ inputs.expected_source_sha }}
           file: apps/${{ matrix.service }}/Dockerfile
           platforms: linux/amd64
           push: true
@@ -215,7 +257,7 @@ jobs:
           build-args: |
             PHUB_RELEASE=${{ inputs.expected_source_sha }}
           provenance: mode=max,version=v1
-          sbom: true
+          sbom: generator=docker/buildkit-syft-scanner@sha256:ae4f3b554449e7e25548e7d8ccc029d17357348e30c6e3df01b92bc93654d6a9
           cache-from: type=gha,scope=timeweb-amd64-${{ matrix.service }}
           cache-to: type=gha,mode=max,scope=timeweb-amd64-${{ matrix.service }}
       - name: Capture the immediate non-authorizing push receipt
@@ -365,6 +407,9 @@ jobs:
               ) and
               (.uri == "pkg:docker/\($name)@\($tag)?platform=linux%2Famd64" or
                .uri == "pkg:docker/docker.io/library/\($name)@\($tag)?platform=linux%2Famd64");
+            def reviewed_source:
+              .uri == "https://github.com/Z6v6e6r/lk2.git#\($sourceSha)" and
+              (.digest | type == "object" and keys == ["sha1"] and .sha1 == $sourceSha);
             (map(select(.predicateType == "https://slsa.dev/provenance/v1"))[0].predicate) as $provenance |
             ($provenance.buildDefinition.resolvedDependencies // []) as $materials |
             length == 2 and
@@ -381,16 +426,21 @@ jobs:
             $provenance.buildDefinition.buildType ==
               "https://github.com/moby/buildkit/blob/master/docs/attestations/slsa-definitions.md" and
             $provenance.runDetails.builder.id == $builder and
-            ([$provenance | .. | strings] | any(contains($sourceSha))) and
+            $provenance.runDetails.metadata.buildkit_completeness.resolvedDependencies == true and
+            $provenance.buildDefinition.externalParameters.configSource.uri ==
+              "https://github.com/Z6v6e6r/lk2.git#\($sourceSha)" and
+            $provenance.buildDefinition.externalParameters.configSource.digest == {"sha1": $sourceSha} and
+            $provenance.buildDefinition.externalParameters.configSource.path ==
+              "apps/\($service)/Dockerfile" and
+            ([$materials[] | select(reviewed_source)] | length) == 1 and
+            ([$materials[] | select(reviewed_base("node"; "22-bookworm-slim"; $nodeAmd64Sha))] |
+              length) == 1 and
             (if $service == "web" then
-              ($materials | length) == 2 and
-              ([$materials[] | select(reviewed_base("node"; "22-bookworm-slim"; $nodeAmd64Sha))] |
-                length) == 1 and
+              ($materials | length) == 3 and
               ([$materials[] | select(reviewed_base("nginx"; "1.27-alpine"; $nginxAmd64Sha))] |
                 length) == 1
             else
-              ($materials | length) == 1 and
-              ($materials[0] | reviewed_base("node"; "22-bookworm-slim"; $nodeAmd64Sha))
+              ($materials | length) == 2
             end) and
             (map(select(.predicateType == "https://spdx.dev/Document"))[0].predicate) as $sbom |
             $sbom.SPDXID == "SPDXRef-DOCUMENT" and
@@ -540,7 +590,22 @@ jobs:
       contents: read
       packages: read
     steps:
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Install the checksum-verified Buildx binary
+        env:
+          BUILDX_SHA256: 48af8a397ebd60178778bf63611dbcebe5f5e7a9be90eb9147b24b9587455778
+          BUILDX_VERSION: v0.36.1
+        run: |
+          set -euo pipefail
+          download="$RUNNER_TEMP/docker-buildx"
+          plugin="$HOME/.docker/cli-plugins/docker-buildx"
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            --output "$download" \
+            "https://github.com/docker/buildx/releases/download/$BUILDX_VERSION/buildx-$BUILDX_VERSION.linux-amd64"
+          printf '%s  %s\n' "$BUILDX_SHA256" "$download" | sha256sum --check --strict
+          install -D -m 0755 "$download" "$plugin"
+          printf '%s  %s\n' "$BUILDX_SHA256" "$plugin" | sha256sum --check --strict
+          docker buildx version \
+            | grep -Fx 'github.com/docker/buildx v0.36.1 1d8dde89b8aba914e05e45366770736fea1fd690'
       - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
