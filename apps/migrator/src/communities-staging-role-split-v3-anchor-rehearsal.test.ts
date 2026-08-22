@@ -228,6 +228,11 @@ describe('V3 external-anchor subject and crash rehearsal', () => {
     expect(sourceBytes).toContain('--read-only');
     expect(sourceBytes).toContain('--cap-drop ALL');
     expect(sourceBytes).toContain('--user 998:993');
+    expect(sourceBytes).toContain('[ -x /bin/readlink ] || fail INPUT_CUSTODY_INVALID');
+    expect(sourceBytes).toContain(
+      'INPUT_REAL=$(/bin/readlink -f -- "$INPUT_PATH") || fail INPUT_CUSTODY_INVALID',
+    );
+    expect(sourceBytes).not.toContain('/usr/bin/readlink');
     expect(sourceBytes).toContain('PRODUCTION_ANCHOR_TOUCHED');
     expect(sourceBytes).toContain("'directory|0|0|700'");
     expect(sourceBytes).toContain('authorizes_ceremony=false');

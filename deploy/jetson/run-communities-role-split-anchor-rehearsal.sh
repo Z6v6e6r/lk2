@@ -17,7 +17,7 @@ PROCESS_GID=$(/usr/bin/id -g phub-preflight 2>/dev/null || true)
 [ "$PROCESS_UID" = 998 ] || fail PROCESS_OWNER_INVALID
 [ "$PROCESS_GID" = 993 ] || fail PROCESS_OWNER_INVALID
 [ -x /usr/bin/timeout ] || fail TIMEOUT_UNAVAILABLE
-[ -x /usr/bin/readlink ] || fail INPUT_CUSTODY_INVALID
+[ -x /bin/readlink ] || fail INPUT_CUSTODY_INVALID
 
 BUNDLE=$1
 BUNDLE_SHA256=$2
@@ -50,7 +50,7 @@ assert_root_input() {
   EXPECTED_SHA256=$2
   [ "${INPUT_PATH#/}" != "$INPUT_PATH" ] || fail INPUT_CUSTODY_INVALID
   case "$INPUT_PATH" in *[!A-Za-z0-9_./-]*) fail INPUT_CUSTODY_INVALID ;; esac
-  INPUT_REAL=$(/usr/bin/readlink -f -- "$INPUT_PATH") || fail INPUT_CUSTODY_INVALID
+  INPUT_REAL=$(/bin/readlink -f -- "$INPUT_PATH") || fail INPUT_CUSTODY_INVALID
   [ "$INPUT_REAL" = "$INPUT_PATH" ] || fail INPUT_CUSTODY_INVALID
   INPUT_PARENT=$(/usr/bin/dirname -- "$INPUT_PATH") || fail INPUT_CUSTODY_INVALID
   [ "$(/usr/bin/stat -c '%F|%u|%g|%a' -- "$INPUT_PARENT")" = 'directory|0|0|700' ] || \
