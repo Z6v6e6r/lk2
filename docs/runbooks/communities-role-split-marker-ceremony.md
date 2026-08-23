@@ -577,6 +577,37 @@ ACL/shared-database mutation, migration, deploy and activation cannot be request
 no package export, CLI, `tsup` entry, filesystem/process/PostgreSQL access or installed runtime
 surface. `AUTHORIZATION_REQUEST_VERIFIED_REVIEW_ONLY` does not authorize INPUT_C collection.
 
+### Single-use issuer/loader gate
+
+`communities-staging-role-split-trusted-inventory-authorization-v1` is the code-only V15 contour
+for reviewing how one exact V14 request could later be consumed. Ten canonical
+`INDEPENDENTLY_ATTESTED` envelopes bind the V14 request identity, candidate, phase, gate, derived
+subject, payload and canonical absolute evidence path. The envelopes intentionally do not contain
+the final request digest: V14 already pins each exact envelope digest, so adding the request digest
+back to the envelope would create an unsatisfiable circular hash. The separately retained approval
+binds the final request, its exact V14 re-verification and the ordered evidence-set digest.
+
+The pure issuer re-executes the complete V14 verifier and requires exact caller-supplied request and
+approval pins. It checks all ten evidence bytes and paths, four distinct issuer/approver/clock/ledger
+subjects, a separate attestor, a maximum five-minute window and exactly one attempt. Its serializable
+result is only `ISSUED_PENDING_SINGLE_USE_CONSUMPTION`; every actual authorization remains false.
+
+The unwired loader reads the request, approval, pending authorization and ten evidence files only
+through the existing root-owned, single-link, no-follow custody reader. It snapshots the pinned
+clock and ledger methods, checks the clock before consumption, calls `consumeOnce` exactly once,
+validates the complete canonical all-false receipt and checks the clock again. Only then does it
+return a frozen in-memory capability for inventory connection, inventory read and artifact write.
+An ambiguous ledger response, malformed receipt, replay rejection or post-consumption clock failure
+is terminal and is never retried; a failure after consumption burns the single attempt.
+
+V15 does not supply or select a clock implementation, durable ledger implementation, independent
+approver, attestor or root-owned evidence. Subject digests and an independently supplied approval
+pin bind those external responsibilities but do not cryptographically prove organizational
+independence. The loader has no package export, CLI or `tsup` entry and no PostgreSQL, child-process,
+credential, artifact-publication or runtime-wiring composition. It is not installed by V12 and
+does not authorize trusted-inventory designation, role/ACL/shared-database mutation, migration,
+deploy or activation.
+
 ## Independently pinned acceptance artifact gate
 
 `apps/migrator/src/verify-communities-role-split-acceptance-artifact.ts` is the local, read-only
@@ -857,10 +888,12 @@ For the completed V10 rehearsal on staging:
    Verify each exact canonical artifact with the separately built
    `verify-communities-staging-role-split-inventory-artifact` CLI and its independently supplied
    SHA-256. The local synthetic producer/evaluator gate is catalog proof, not trusted inventory;
-   mock rows are not catalog proof. The V14 request contour can bind the exact V13 review subject
-   and evidence pins, but it neither validates the evidence bytes nor grants collection authority.
-   A separately reviewed issuer/loader with root custody, independent approval, fail-closed time
-   and durable single-use consumption remains required before this step can run.
+   mock rows are not catalog proof. The V15 source-only issuer/loader now defines exact root-custody,
+   approval, fail-closed-time and single-use-consumption contracts, but it supplies no reviewed
+   concrete clock/ledger adapters, independent approval/evidence, runtime entrypoint or installed
+   bytes. Its serialized authorization remains all-false, and no collection can run until those
+   external inputs and adapters are independently reviewed, supplied, pinned and installed through
+   later gates.
 5. COMPLETE: 2026-08-22 — Pinned V10 production/rehearsal subject digests and immutable Node image
    ID were independently verified, then the non-authorizing rehearsal was executed on target Linux.
    The run retained root-owned evidence under

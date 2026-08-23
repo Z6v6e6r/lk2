@@ -1,5 +1,26 @@
 # Worklog
 
+## 2026-08-23 — Communities trusted INPUT_C issuer/loader gate checkpoint
+
+- Added canonical independent evidence, approval, pending-authorization and single-use consumption
+  receipt contracts. Evidence is bound without a circular request digest: the V14 request pins the
+  exact evidence bytes, while approval separately pins the final request, re-verification and full
+  evidence-set digests.
+- Added a source-only issuer that re-executes the V14 verifier, validates all ten exact evidence
+  bytes and canonical absolute paths, requires distinct issuer/approver/clock/ledger subjects and
+  rejects an attestor that aliases any of them. The serialized authorization remains pending and
+  grants no authority.
+- Added an unwired root-custody loader that reads the request, approval, pending authorization and
+  all evidence through the existing root-owned single-link reader. It captures the pinned clock and
+  ledger methods, checks time before and after one `consumeOnce` call and returns only an immutable
+  in-memory inventory connection/read/artifact-write capability after exact receipt validation.
+  Ambiguous ledger results and post-consumption clock failure consume the attempt and are never
+  retried.
+- This checkpoint supplies no concrete clock or durable-ledger adapter, no independent approval or
+  evidence bytes, no package export, CLI, build entry, key, workflow or installed runtime surface.
+  Trusted-inventory designation and every role/ACL/shared-database/migration/deploy/activation
+  authority remain false; no staging or PostgreSQL access was performed.
+
 ## 2026-08-23 — Communities trusted INPUT_C separate-authorization request checkpoint
 
 - Added a canonical review-only authorization request that binds one exact V13 gate and its exact
