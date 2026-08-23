@@ -166,6 +166,9 @@ expected_artifact() {
     37) printf '%s\n' 'payload/source/communities-staging-role-split-trusted-inventory-runtime-wiring.ts|source/communities-staging-role-split-trusted-inventory-runtime-wiring.ts|0444' ;;
     38) printf '%s\n' 'payload/source/communities-staging-role-split-trusted-inventory-runtime-module.ts|source/communities-staging-role-split-trusted-inventory-runtime-module.ts|0444' ;;
     39) printf '%s\n' 'payload/runtime/communities-staging-role-split-trusted-inventory-runtime.mjs|runtime/communities-staging-role-split-trusted-inventory-runtime.mjs|0444' ;;
+    40) printf '%s\n' 'payload/source/communities-staging-role-split-trusted-inventory-gate-preflight.ts|source/communities-staging-role-split-trusted-inventory-gate-preflight.ts|0444' ;;
+    41) printf '%s\n' 'payload/source/verify-communities-staging-role-split-trusted-inventory-gate.ts|source/verify-communities-staging-role-split-trusted-inventory-gate.ts|0444' ;;
+    42) printf '%s\n' 'payload/runtime/verify-communities-staging-role-split-trusted-inventory-gate.mjs|runtime/verify-communities-staging-role-split-trusted-inventory-gate.mjs|0444' ;;
     *) fail CONTROL_INVALID ;;
   esac
 }
@@ -211,6 +214,9 @@ expected_manifest_artifact() {
     37) printf '%s\n' 'apps/migrator/src/communities-staging-role-split-trusted-inventory-runtime-wiring.ts|100644|reviewed trusted-inventory runtime wiring source snapshot; execution inputs absent' ;;
     38) printf '%s\n' 'apps/migrator/src/communities-staging-role-split-trusted-inventory-runtime-module.ts|100644|fail-closed runtime module source snapshot; direct invocation rejects execution' ;;
     39) printf '%s\n' 'deploy/jetson/generated/communities-staging-role-split-trusted-inventory-runtime.mjs|100644|self-contained Node 22 runtime bundle; no configuration, activation link or execution authority' ;;
+    40) printf '%s\n' 'apps/migrator/src/communities-staging-role-split-trusted-inventory-gate-preflight.ts|100644|offline trusted-inventory gate preflight source snapshot; reads only four pinned review inputs' ;;
+    41) printf '%s\n' 'apps/migrator/src/verify-communities-staging-role-split-trusted-inventory-gate.ts|100644|offline trusted-inventory gate preflight CLI source snapshot; invalid input fails closed' ;;
+    42) printf '%s\n' 'deploy/jetson/generated-gate-preflight/verify-communities-staging-role-split-trusted-inventory-gate.mjs|100644|self-contained Node 22 offline preflight bundle; no producer, PostgreSQL or execution authority' ;;
     *) fail MANIFEST_INVALID ;;
   esac
 }
@@ -245,10 +251,10 @@ expected_execution_binding() {
 
 expected_manifest_bytes() {
   exec 3< "$candidate/installation-candidate.control" || fail MANIFEST_INVALID
-  read_exact_line MANIFEST_INVALID PHUB_COMMUNITIES_ROLE_SPLIT_HOST_INSTALL_CONTROL_V10
+  read_exact_line MANIFEST_INVALID PHUB_COMMUNITIES_ROLE_SPLIT_HOST_INSTALL_CONTROL_V11
   read_exact_line MANIFEST_INVALID "candidateCommitSha=$candidate_sha"
   read_exact_line MANIFEST_INVALID "artifactSetSha256=$artifact_set_sha"
-  read_exact_line MANIFEST_INVALID artifactCount=39
+  read_exact_line MANIFEST_INVALID artifactCount=42
   read_exact_line MANIFEST_INVALID installable=true
   read_exact_line MANIFEST_INVALID authorizesInstallation=true
   read_exact_line MANIFEST_INVALID authorizesCeremony=false
@@ -256,7 +262,7 @@ expected_manifest_bytes() {
 
   printf '%s\n' \
     '{' \
-    '  "schemaVersion": "communities-role-split-installation-candidate-v13",' \
+    '  "schemaVersion": "communities-role-split-installation-candidate-v14",' \
     "  \"candidateCommitSha\": \"$candidate_sha\"," \
     '  "sourceRepository": "https://github.com/Z6v6e6r/lk2.git",' \
     '  "status": "INSTALLABLE_DISABLED",' \
@@ -272,7 +278,7 @@ expected_manifest_bytes() {
     '  "artifactFiles": ['
 
   index=1
-  while [ "$index" -le 39 ]
+  while [ "$index" -le 42 ]
   do
     IFS= read -r line <&3 || fail MANIFEST_INVALID
     parse_artifact_line "$line" "$index"
@@ -298,7 +304,7 @@ expected_manifest_bytes() {
       "      \"targetPath\": \"/usr/local/libexec/phub/communities-role-split/candidates/$candidate_sha/$target_relative\"," \
       "      \"bytes\": $artifact_bytes," \
       "      \"sha256\": \"$artifact_sha\""
-    if [ "$index" -lt 39 ]; then printf '%s\n' '    },'; else printf '%s\n' '    }'; fi
+    if [ "$index" -lt 42 ]; then printf '%s\n' '    },'; else printf '%s\n' '    }'; fi
     index=$((index + 1))
   done
   if IFS= read -r line <&3; then fail MANIFEST_INVALID; fi
@@ -391,7 +397,7 @@ walk_count() {
 
 verify_candidate() {
   assert_directory "$candidate" "$expected_uid" "$expected_gid" 700
-  [ "$(walk_count "$candidate")" = 45 ] || fail FILE_SET_INVALID
+  [ "$(walk_count "$candidate")" = 48 ] || fail FILE_SET_INVALID
   assert_directory "$candidate/payload" "$expected_uid" "$expected_gid" 700
   assert_directory "$candidate/payload/source" "$expected_uid" "$expected_gid" 700
   assert_directory "$candidate/payload/runtime" "$expected_uid" "$expected_gid" 700
@@ -408,7 +414,7 @@ verify_candidate() {
   [ "$expected_manifest_sha" = "$manifest_sha" ] || fail MANIFEST_INVALID
 
   exec 3< "$candidate/installation-candidate.sha256" || fail DIGEST_INVALID
-  read_exact_line DIGEST_INVALID PHUB_COMMUNITIES_ROLE_SPLIT_INSTALLATION_CANDIDATE_DIGEST_V13
+  read_exact_line DIGEST_INVALID PHUB_COMMUNITIES_ROLE_SPLIT_INSTALLATION_CANDIDATE_DIGEST_V14
   read_exact_line DIGEST_INVALID "candidateCommitSha=$candidate_sha"
   read_exact_line DIGEST_INVALID "manifestSha256=$manifest_sha"
   read_exact_line DIGEST_INVALID "controlSha256=$control_sha"
@@ -420,16 +426,16 @@ verify_candidate() {
   exec 3<&-
 
   exec 3< "$candidate/installation-candidate.control" || fail CONTROL_INVALID
-  read_exact_line CONTROL_INVALID PHUB_COMMUNITIES_ROLE_SPLIT_HOST_INSTALL_CONTROL_V10
+  read_exact_line CONTROL_INVALID PHUB_COMMUNITIES_ROLE_SPLIT_HOST_INSTALL_CONTROL_V11
   read_exact_line CONTROL_INVALID "candidateCommitSha=$candidate_sha"
   read_exact_line CONTROL_INVALID "artifactSetSha256=$artifact_set_sha"
-  read_exact_line CONTROL_INVALID artifactCount=39
+  read_exact_line CONTROL_INVALID artifactCount=42
   read_exact_line CONTROL_INVALID installable=true
   read_exact_line CONTROL_INVALID authorizesInstallation=true
   read_exact_line CONTROL_INVALID authorizesCeremony=false
   read_exact_line CONTROL_INVALID authorizesDatabaseMutation=false
   index=1
-  while [ "$index" -le 39 ]
+  while [ "$index" -le 42 ]
   do
     IFS= read -r line <&3 || fail CONTROL_INVALID
     parse_artifact_line "$line" "$index"
@@ -475,7 +481,7 @@ receipt_bytes() {
 
 verify_installed() {
   assert_directory "$target" "$expected_uid" "$expected_gid" 755
-  [ "$(walk_count "$target")" = 42 ] || fail INSTALLED_FILE_SET_INVALID
+  [ "$(walk_count "$target")" = 45 ] || fail INSTALLED_FILE_SET_INVALID
   assert_directory "$target/source" "$expected_uid" "$expected_gid" 755
   assert_directory "$target/runtime" "$expected_uid" "$expected_gid" 755
   exec 3< "$candidate/installation-candidate.control" || fail CONTROL_INVALID
@@ -493,7 +499,7 @@ verify_installed() {
     esac
   done
   exec 3<&-
-  [ "$index" = 39 ] || fail CONTROL_INVALID
+  [ "$index" = 42 ] || fail CONTROL_INVALID
   receipt="$target/installation-complete.json"
   assert_file "$receipt" "$expected_uid" "$expected_gid" 444
   expected_receipt_sha=$(receipt_bytes | /usr/bin/sha256sum | /usr/bin/awk '{print $1}') ||
@@ -587,7 +593,7 @@ if [ "$action" = install ]; then
     esac
   done
   exec 3<&-
-  [ "$index" = 39 ] || fail CONTROL_INVALID
+  [ "$index" = 42 ] || fail CONTROL_INVALID
   receipt_bytes > "$incomplete/installation-complete.json" || fail RECEIPT_WRITE_FAILED
   /bin/chmod 444 -- "$incomplete/installation-complete.json" 2>/dev/null || fail RECEIPT_WRITE_FAILED
   /bin/sync -f "$incomplete/installation-complete.json" 2>/dev/null || fail SYNC_FAILED

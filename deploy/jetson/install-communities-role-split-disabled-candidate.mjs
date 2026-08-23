@@ -22,7 +22,7 @@ import {
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const schemaVersion = 'communities-role-split-installation-candidate-v13';
+const schemaVersion = 'communities-role-split-installation-candidate-v14';
 const sha40 = /^[0-9a-f]{40}$/u;
 const sha256 = /^[0-9a-f]{64}$/u;
 const installPrefix = '/usr/local/libexec/phub/communities-role-split/candidates';
@@ -184,6 +184,31 @@ const expectedArtifacts = [
     sourceGitMode: '100644',
     artifactPath: 'payload/runtime/communities-staging-role-split-trusted-inventory-runtime.mjs',
     targetRelativePath: 'runtime/communities-staging-role-split-trusted-inventory-runtime.mjs',
+    installMode: '0444',
+  },
+  {
+    sourcePath:
+      'apps/migrator/src/communities-staging-role-split-trusted-inventory-gate-preflight.ts',
+    sourceGitMode: '100644',
+    artifactPath:
+      'payload/source/communities-staging-role-split-trusted-inventory-gate-preflight.ts',
+    targetRelativePath: 'source/communities-staging-role-split-trusted-inventory-gate-preflight.ts',
+    installMode: '0444',
+  },
+  {
+    sourcePath: 'apps/migrator/src/verify-communities-staging-role-split-trusted-inventory-gate.ts',
+    sourceGitMode: '100644',
+    artifactPath: 'payload/source/verify-communities-staging-role-split-trusted-inventory-gate.ts',
+    targetRelativePath: 'source/verify-communities-staging-role-split-trusted-inventory-gate.ts',
+    installMode: '0444',
+  },
+  {
+    sourcePath:
+      'deploy/jetson/generated-gate-preflight/verify-communities-staging-role-split-trusted-inventory-gate.mjs',
+    sourceGitMode: '100644',
+    artifactPath:
+      'payload/runtime/verify-communities-staging-role-split-trusted-inventory-gate.mjs',
+    targetRelativePath: 'runtime/verify-communities-staging-role-split-trusted-inventory-gate.mjs',
     installMode: '0444',
   },
 ];
