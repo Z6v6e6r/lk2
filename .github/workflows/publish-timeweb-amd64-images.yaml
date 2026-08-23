@@ -418,7 +418,8 @@ jobs:
             rm -f "$temporary"
             {
               printf 'header = "Authorization: Bearer %s"\n' "$registry_token"
-            } | curl --fail --silent --show-error --config - \
+            } | curl --fail --silent --show-error --location --max-redirs 3 \
+              --proto '=https' --proto-redir '=https' --tlsv1.2 --config - \
               "https://ghcr.io/v2/z6v6e6r/phub-$SERVICE/blobs/$statement_digest" \
               --output "$temporary"
             test "$(sha256sum "$temporary" | awk '{print "sha256:" $1}')" = "$statement_digest" || {

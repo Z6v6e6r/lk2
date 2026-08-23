@@ -1,5 +1,6 @@
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -616,6 +617,114 @@ describe('Timeweb amd64 publication workflow', () => {
     );
     expect(uses.length).toBeGreaterThan(0);
     expect(uses.every((value) => /@[0-9a-f]{40}$/u.test(value))).toBe(true);
+  });
+
+  it('uses the same bounded HTTPS-only redirect contract for attestation blobs', async () => {
+    const workflows = await Promise.all(
+      [
+        '../.github/workflows/publish-timeweb-amd64-images.yaml',
+        '../.github/workflows/reconcile-timeweb-amd64-publication.yaml',
+      ].map((path) => readFile(new URL(path, import.meta.url), 'utf8')),
+    );
+
+    for (const workflow of workflows) {
+      const normalized = workflow.replace(/\\\s*/gu, '').replace(/\s+/gu, ' ');
+      expect(normalized).toContain(
+        "curl --fail --silent --show-error --location --max-redirs 3 --proto '=https' --proto-redir '=https' --tlsv1.2 --config -",
+      );
+    }
+  });
+
+  it('follows a bounded registry-style blob redirect without changing the bytes', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'phub-timeweb-blob-redirect-'));
+    const destination = join(directory, 'statement.json');
+    const statement = JSON.stringify({ predicateType: 'https://slsa.dev/provenance/v1' });
+    const requests: string[] = [];
+    let registryAuthorization: string | undefined;
+    let blobAuthorization: string | undefined;
+    const blobServer = createServer((request, response) => {
+      requests.push(`blob:${request.url ?? ''}`);
+      blobAuthorization = request.headers.authorization;
+      if (request.url === '/signed-blob') {
+        response.statusCode = 200;
+        response.setHeader('content-type', 'application/json');
+        response.end(statement);
+        return;
+      }
+      response.statusCode = 404;
+      response.end();
+    });
+    const registryServer = createServer((request, response) => {
+      requests.push(`registry:${request.url ?? ''}`);
+      registryAuthorization = request.headers.authorization;
+      if (request.url === '/blob') {
+        response.statusCode = 307;
+        const address = blobServer.address();
+        if (!address || typeof address === 'string') throw new Error('blob server has no TCP port');
+        response.setHeader('location', `http://127.0.0.1:${address.port}/signed-blob`);
+        response.end();
+        return;
+      }
+      response.statusCode = 404;
+      response.end();
+    });
+
+    try {
+      await new Promise<void>((resolve, reject) => {
+        blobServer.once('error', reject);
+        blobServer.listen(0, '127.0.0.1', resolve);
+      });
+      await new Promise<void>((resolve, reject) => {
+        registryServer.once('error', reject);
+        registryServer.listen(0, '127.0.0.1', resolve);
+      });
+      const address = registryServer.address();
+      if (!address || typeof address === 'string') throw new Error('test server has no TCP port');
+
+      await new Promise<void>((resolve, reject) => {
+        const child = spawn('curl', [
+          '--fail',
+          '--silent',
+          '--show-error',
+          '--location',
+          '--max-redirs',
+          '3',
+          '--proto',
+          '=http,https',
+          '--proto-redir',
+          '=http,https',
+          '--config',
+          '-',
+          `http://127.0.0.1:${address.port}/blob`,
+          '--output',
+          destination,
+        ]);
+        let stderr = '';
+        child.stderr.setEncoding('utf8');
+        child.stderr.on('data', (chunk: string) => {
+          stderr += chunk;
+        });
+        child.once('error', reject);
+        child.once('close', (code) => {
+          if (code === 0) resolve();
+          else reject(new Error(`curl exited with ${String(code)}: ${stderr}`));
+        });
+        child.stdin.end('header = "Authorization: Bearer test-token"\n');
+      });
+
+      expect(requests).toEqual(['registry:/blob', 'blob:/signed-blob']);
+      expect(registryAuthorization).toBe('Bearer test-token');
+      expect(blobAuthorization).toBeUndefined();
+      expect(await readFile(destination, 'utf8')).toBe(statement);
+    } finally {
+      if (registryServer.listening) {
+        await new Promise<void>((resolve) => registryServer.close(() => resolve()));
+      }
+      if (blobServer.listening) {
+        await new Promise<void>((resolve) => blobServer.close(() => resolve()));
+      }
+      await rm(directory, { force: true, recursive: true });
+    }
   });
 
   it('accepts only correctly typed statements bound to the reconciled runtime digest', () => {

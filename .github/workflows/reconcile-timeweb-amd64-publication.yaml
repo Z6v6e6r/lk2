@@ -147,7 +147,7 @@ jobs:
             destination=$2
             temporary="$destination.attempt-$$"
             rm -f "$temporary"
-            { printf 'header = "Authorization: Bearer %s"\n' "$registry_token"; } | curl --fail --silent --show-error --config - "https://ghcr.io/v2/z6v6e6r/phub-$SERVICE/blobs/$digest" --output "$temporary"
+            { printf 'header = "Authorization: Bearer %s"\n' "$registry_token"; } | curl --fail --silent --show-error --location --max-redirs 3 --proto '=https' --proto-redir '=https' --tlsv1.2 --config - "https://ghcr.io/v2/z6v6e6r/phub-$SERVICE/blobs/$digest" --output "$temporary"
             test "sha256:$(sha256sum "$temporary" | awk '{print $1}')" = "$digest" || {
               echo "::error::PHUB_GHCR_CUSTODY_WRONG_BLOB_DIGEST|service=$SERVICE|digest=$digest" >&2
               rm -f "$temporary"
