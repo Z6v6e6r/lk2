@@ -679,7 +679,7 @@ fails with one fixed public error.
 ## Exact disabled installable candidate
 
 `scripts/prepare-communities-role-split-installation-candidate.ts` now builds and verifies a
-private, deterministic V13 candidate directory from an independently supplied exact Git commit. It
+private, deterministic V14 candidate directory from an independently supplied exact Git commit. It
 reads every artifact from Git objects rather than the mutable worktree, validates each expected Git
 mode, disables Git replacement objects, rejects any replacement ref and requires the raw local repository origin
 to be exactly `https://github.com/Z6v6e6r/lk2.git`, refuses an existing output, and accepts only a
@@ -697,17 +697,18 @@ true authorization. It contains:
   factory, DDL fence, marker writer, evidence sink, authorization loader, runner and root-owned
   evidence reader;
 - three additional mode-0444 source snapshots for the canonical inventory-preparation contract,
-  its verifier and its CLI. They are deliberately unwired and non-runnable: the candidate contains
-  no Node runtime, compiled bundle, credential, preparation envelope or evidence payload.
+  its verifier and its CLI. Those preparation artifacts remain unwired and non-runnable: there is
+  no preparation CLI bundle, credential, preparation envelope or evidence payload.
 - three mode-0444 source snapshots for the trusted-inventory canonical contract, host boundary and
-  supervised producer composition. They remain source-only: no CLI, Node runtime, compiled
-  entrypoint, credential FD reader, private output directory, marker/evidence/mapping inputs or
-  independent artifact pin is included;
+  supervised producer composition. That producer contour remains source-only: no producer CLI or
+  compiled entrypoint, credential FD reader, private output directory, marker/evidence/mapping
+  inputs or independent artifact pin is included;
 - fourteen additional mode-0444 source snapshots for the reviewed V3 durable host, external
   monotonic phase anchor, continuation host, descriptor-pinned restore executor, restore coordinator, executable composition,
   state/continuation/authorization envelopes and host-bound attested evidence. These
-  are code-only review bytes: the candidate still has no compiled entrypoint, concrete restore
-  executor construction, password/executable descriptors, DDL-fence lease wiring or runtime loader.
+  are code-only review bytes: the restore contour still has no compiled entrypoint, concrete
+  restore executor construction, password/executable descriptors, DDL-fence lease wiring or
+  runtime loader.
 - six mode-0444 source snapshots for the V13 review gate, V14 authorization request and V15
   single-use authorization contracts/verifiers. The issuer/loader snapshot has no concrete
   independent approval/evidence, fail-closed clock or durable single-use ledger adapter;
@@ -716,6 +717,12 @@ true authorization. It contains:
   active command: direct execution rejects with exit `78`. Importing exposes the reviewed V15
   issuer/loader and existing producer-wiring constructors, but the candidate contains none of the
   external adapters, configuration or custody inputs required to consume or run either surface.
+- the Gate 4 bounded offline reader/verifier source, its CLI source and a separate self-contained
+  Node 22 ESM bundle as three additional mode-0444 artifacts. The bundle imports only Node builtins
+  and reads only the four exact root-owned review inputs after complete canonical arguments and the
+  independent gate digest are supplied. It contains no producer, PostgreSQL client, credential
+  reader, output writer, execution authorization or activation wiring; incomplete invocation fails
+  closed before opening an input.
 
 The host entrypoint is a POSIX shell program bound to the exact GNU coreutils paths present on the
 ARM64 staging node; `/usr/bin/node` is not required. Its file-count validation uses shell numeric
@@ -726,11 +733,11 @@ byte counts, SHA-256 values and false execution authorizations. The shell verifi
 the complete canonical JSON bytes from that fixed policy and the exact control records, then
 requires its SHA-256 to equal both the supplied pin and the candidate file digest. A freshly pinned
 authorization change, added field or V12 downgrade therefore fails before target creation.
-The V13 installed readback requires exactly thirty-nine controlled artifacts plus the source and
-runtime directories and immutable receipt (`42` entries total); both install and verify loops
-require an exact count of thirty-nine control records. The fifth controlled artifact is the
-immutable shared DDL-fence source. The host-control version is V10 so a V12 allowlist cannot be
-accepted with freshly pinned V13
+The V14 installed readback requires exactly forty-two controlled artifacts plus the source and
+runtime directories and immutable receipt (`45` entries total); both install and verify loops
+require an exact count of forty-two control records. The fifth controlled artifact is the
+immutable shared DDL-fence source. The host-control version is V11 so the previous V13 allowlist
+cannot be accepted with freshly pinned V14
 digests. Both the Node review helper and dependency-free shell verifier enumerate the
 complete candidate and installed trees without following symbolic links; additional files, empty
 directories or non-file/non-directory entries fail before a successful verification result.
@@ -759,7 +766,9 @@ The exact checkpoint is now installed only as the immutable disabled V15 candida
 `f19e4a68e25ed72d561d5cd5cf5ccccd114dbd3db282447fee2e7615e8c44c10`, artifacts
 `705fcda61633d91d958b7993b5bde1f8c418e8cd7049e74ea89de551ebd5cd6d` and receipt
 `87c41cdd2e8fbefae85191d2cdf565d75689d1180826ca9c10736cab9cd2839e`.
-It has no active link and grants no ceremony or database-mutation authority.
+It has no active link and grants no ceremony or database-mutation authority. That V13/V15 staging
+installation remains historical evidence; it does not contain the later Gate 4 offline preflight
+bundle introduced by the V14 packaging contract.
 Changing any of those authorizations requires a new reviewed candidate version.
 
 After a checkpoint commit, build and verify only in a fresh private local directory:

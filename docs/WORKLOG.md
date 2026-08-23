@@ -1,5 +1,17 @@
 # Worklog
 
+## 2026-08-23 — Communities Gate 4 offline preflight disabled packaging
+
+- Advanced the immutable disabled installation candidate to schema V14 and host-control V11 with
+  three exact mode-0444 Gate 4 preflight artifacts: the bounded offline reader/verifier source, its
+  CLI source and a deterministic self-contained Node 22 ESM bundle.
+- Kept installation as the only true authorization. The candidate still creates no active link,
+  runtime configuration, key, workflow, credential, request or output directory; ceremony,
+  PostgreSQL access/mutation, role split, migration, deploy and activation remain false.
+- Added byte-for-byte rebuild coverage for the bundle, restricted its imports to Node builtins and
+  required direct execution without the complete pinned review inputs to fail closed. No candidate
+  was built from uncommitted bytes, uploaded, installed or executed on staging in this checkpoint.
+
 ## 2026-08-23 — Communities trusted INPUT_C offline Gate 4 preflight
 
 - Added a buildable fail-closed CLI around the existing V13 pure gate verifier. It accepts one
