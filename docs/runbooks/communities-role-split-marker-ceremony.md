@@ -603,10 +603,13 @@ is terminal and is never retried; a failure after consumption burns the single a
 V15 does not supply or select a clock implementation, durable ledger implementation, independent
 approver, attestor or root-owned evidence. Subject digests and an independently supplied approval
 pin bind those external responsibilities but do not cryptographically prove organizational
-independence. The loader has no package export, CLI or `tsup` entry and no PostgreSQL, child-process,
-credential, artifact-publication or runtime-wiring composition. It is not installed by V12 and
-does not authorize trusted-inventory designation, role/ACL/shared-database mutation, migration,
-deploy or activation.
+independence. The source checkpoint itself had no package export, CLI or `tsup` entry and was not
+installed by V12. The later disabled V13 candidate includes its exact source and exposes the
+issuer/loader API from the immutable runtime module, but still adds no concrete clock/ledger,
+PostgreSQL connection configuration, credential, artifact-publication or producer-wiring
+composition. Neither contour
+authorizes trusted-inventory designation, role/ACL/shared-database mutation, migration, deploy or
+activation.
 
 ## Independently pinned acceptance artifact gate
 
@@ -644,7 +647,7 @@ fails with one fixed public error.
 ## Exact disabled installable candidate
 
 `scripts/prepare-communities-role-split-installation-candidate.ts` now builds and verifies a
-private, deterministic V12 candidate directory from an independently supplied exact Git commit. It
+private, deterministic V13 candidate directory from an independently supplied exact Git commit. It
 reads every artifact from Git objects rather than the mutable worktree, validates each expected Git
 mode, disables Git replacement objects, rejects any replacement ref and requires the raw local repository origin
 to be exactly `https://github.com/Z6v6e6r/lk2.git`, refuses an existing output, and accepts only a
@@ -673,10 +676,14 @@ true authorization. It contains:
   state/continuation/authorization envelopes and host-bound attested evidence. These
   are code-only review bytes: the candidate still has no compiled entrypoint, concrete restore
   executor construction, password/executable descriptors, DDL-fence lease wiring or runtime loader.
+- six mode-0444 source snapshots for the V13 review gate, V14 authorization request and V15
+  single-use authorization contracts/verifiers. The issuer/loader snapshot has no concrete
+  independent approval/evidence, fail-closed clock or durable single-use ledger adapter;
 - the reviewed trusted-inventory runtime-wiring source, its fail-closed module source and a
   self-contained Node 22 ESM bundle as three additional mode-0444 artifacts. The bundle is not an
-  active command: direct execution rejects with exit `78`, and the candidate contains none of the
-  configuration or custody inputs required to construct or run the exported wiring.
+  active command: direct execution rejects with exit `78`. Importing exposes the reviewed V15
+  issuer/loader and existing producer-wiring constructors, but the candidate contains none of the
+  external adapters, configuration or custody inputs required to consume or run either surface.
 
 The host entrypoint is a POSIX shell program bound to the exact GNU coreutils paths present on the
 ARM64 staging node; `/usr/bin/node` is not required. Its file-count validation uses shell numeric
@@ -686,12 +693,12 @@ ledger is independently pinned and binds the fixed artifact paths, target-relati
 byte counts, SHA-256 values and false execution authorizations. The shell verifier reconstructs
 the complete canonical JSON bytes from that fixed policy and the exact control records, then
 requires its SHA-256 to equal both the supplied pin and the candidate file digest. A freshly pinned
-authorization change, added field or V11 downgrade therefore fails before target creation.
-The V12 installed readback requires exactly thirty-three controlled artifacts plus the source and
-runtime directories and immutable receipt (`36` entries total); both install and verify loops
-require an exact count of thirty-three control records. The fifth controlled artifact is the
-immutable shared DDL-fence source. The host-control version is V9 so a V11 allowlist cannot be
-accepted with freshly pinned V12
+authorization change, added field or V12 downgrade therefore fails before target creation.
+The V13 installed readback requires exactly thirty-nine controlled artifacts plus the source and
+runtime directories and immutable receipt (`42` entries total); both install and verify loops
+require an exact count of thirty-nine control records. The fifth controlled artifact is the
+immutable shared DDL-fence source. The host-control version is V10 so a V12 allowlist cannot be
+accepted with freshly pinned V13
 digests. Both the Node review helper and dependency-free shell verifier enumerate the
 complete candidate and installed trees without following symbolic links; additional files, empty
 directories or non-file/non-directory entries fail before a successful verification result.
@@ -706,13 +713,15 @@ for manual reconciliation and is never deleted or overwritten automatically.
 The manifest still contains no forced command (`command=null`, `commandIncluded=false`), public key,
 cleanup exposure, workflow wiring, staging connection or runtime configuration. Key provisioning,
 staging access, database mutation, ceremony, cleanup, role split, migration, deploy and activation
-are all false. The existing thirteen host-binding codes plus five explicit trusted-inventory
+are all false. The existing thirteen host-binding codes plus nine explicit trusted-inventory
 bindings remain `REQUIRED_FOR_EXECUTION`; their evidence is not needed to install disabled bytes,
 but no installed artifact can consume or replace that evidence. The five new bindings require the
 credential FD reader, supervised producer runtime wiring, private output custody,
 marker/evidence/mapping inputs and an independent artifact pin.
-The V12 checkpoint binds the runtime source and bundle bytes but does not satisfy operational
-runtime-wiring or custody bindings. It is not installed by the existing V11 receipt.
+The four additional V13 bindings require independent approval and attested evidence plus a
+fail-closed clock adapter and durable single-use ledger. The V13 checkpoint binds the V15 source
+and bundle bytes but does not satisfy any operational runtime-wiring, approval or custody binding.
+It is not installed by the existing V12 receipt.
 Changing any of those authorizations requires a new reviewed candidate version.
 
 After a checkpoint commit, build and verify only in a fresh private local directory:
@@ -888,12 +897,12 @@ For the completed V10 rehearsal on staging:
    Verify each exact canonical artifact with the separately built
    `verify-communities-staging-role-split-inventory-artifact` CLI and its independently supplied
    SHA-256. The local synthetic producer/evaluator gate is catalog proof, not trusted inventory;
-   mock rows are not catalog proof. The V15 source-only issuer/loader now defines exact root-custody,
-   approval, fail-closed-time and single-use-consumption contracts, but it supplies no reviewed
-   concrete clock/ledger adapters, independent approval/evidence, runtime entrypoint or installed
-   bytes. Its serialized authorization remains all-false, and no collection can run until those
-   external inputs and adapters are independently reviewed, supplied, pinned and installed through
-   later gates.
+   mock rows are not catalog proof. The V15 issuer/loader defines exact root-custody, approval,
+   fail-closed-time and single-use-consumption contracts and the disabled V13 candidate makes those
+   reviewed bytes importable, but it supplies no concrete clock/ledger adapters, independent
+   approval/evidence, activation or host entrypoint. Its serialized authorization remains
+   all-false, and no collection can run until those external inputs and adapters are independently
+   reviewed, supplied, pinned and installed through later gates.
 5. COMPLETE: 2026-08-22 — Pinned V10 production/rehearsal subject digests and immutable Node image
    ID were independently verified, then the non-authorizing rehearsal was executed on target Linux.
    The run retained root-owned evidence under

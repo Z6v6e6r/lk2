@@ -66,6 +66,24 @@ const sourceDefinitions = [
   ],
   ['packages/database/src/communities-staging-role-split-v3-execution-authorization.ts', 0o644],
   ['packages/database/src/communities-staging-role-split-v3-attested-evidence.ts', 0o644],
+  ['packages/database/src/communities-staging-role-split-trusted-inventory-gate.ts', 0o644],
+  ['apps/migrator/src/communities-staging-role-split-trusted-inventory-gate.ts', 0o644],
+  [
+    'packages/database/src/communities-staging-role-split-trusted-inventory-authorization-request.ts',
+    0o644,
+  ],
+  [
+    'apps/migrator/src/communities-staging-role-split-trusted-inventory-authorization-request.ts',
+    0o644,
+  ],
+  [
+    'packages/database/src/communities-staging-role-split-trusted-inventory-authorization.ts',
+    0o644,
+  ],
+  [
+    'apps/migrator/src/communities-staging-role-split-trusted-inventory-authorization-loader.ts',
+    0o644,
+  ],
   ['apps/migrator/src/communities-staging-role-split-trusted-inventory-runtime-wiring.ts', 0o644],
   ['apps/migrator/src/communities-staging-role-split-trusted-inventory-runtime-module.ts', 0o644],
   ['deploy/jetson/generated/communities-staging-role-split-trusted-inventory-runtime.mjs', 0o644],
@@ -192,7 +210,7 @@ describe('communities role-split installation candidate', () => {
     const manifest = JSON.parse(
       readFileSync(join(first, 'installation-candidate.json'), 'utf8'),
     ) as CommunitiesRoleSplitInstallationCandidate;
-    expect(manifest.schemaVersion).toBe('communities-role-split-installation-candidate-v12');
+    expect(manifest.schemaVersion).toBe('communities-role-split-installation-candidate-v13');
     expect(manifest.status).toBe('INSTALLABLE_DISABLED');
     expect(manifest.installable).toBe(true);
     expect(manifest.reasonCode).toBe('RUNTIME_BINDINGS_REQUIRED');
@@ -241,7 +259,11 @@ describe('communities role-split installation candidate', () => {
       'SOURCE_WRITE_DENIAL_ATTESTATION',
       'STAGING_KNOWN_HOSTS_PIN',
       'TRUSTED_INVENTORY_CREDENTIAL_FD_READER',
+      'TRUSTED_INVENTORY_DURABLE_SINGLE_USE_LEDGER',
+      'TRUSTED_INVENTORY_FAIL_CLOSED_CLOCK_ADAPTER',
       'TRUSTED_INVENTORY_INDEPENDENT_ARTIFACT_PIN',
+      'TRUSTED_INVENTORY_INDEPENDENT_ATTESTED_EVIDENCE',
+      'TRUSTED_INVENTORY_INDEPENDENT_APPROVAL',
       'TRUSTED_INVENTORY_MARKER_EVIDENCE_MAPPING_INPUTS',
       'TRUSTED_INVENTORY_PRIVATE_OUTPUT_CUSTODY',
       'TRUSTED_INVENTORY_SUPERVISED_PRODUCER_RUNTIME_WIRING',
@@ -253,7 +275,7 @@ describe('communities role-split installation candidate', () => {
     expect(
       manifest.artifactFiles.every(({ artifactPath }) => artifactPath.startsWith('payload/')),
     ).toBe(true);
-    expect(manifest.artifactFiles).toHaveLength(33);
+    expect(manifest.artifactFiles).toHaveLength(39);
     const ddlFenceArtifact = manifest.artifactFiles.find(
       ({ sourcePath }) =>
         sourcePath === 'apps/migrator/src/communities-staging-role-split-ddl-fence.ts',
@@ -372,21 +394,21 @@ describe('communities role-split installation candidate', () => {
     expect(hostInstaller).toContain('--control-sha256');
     expect(hostInstaller).toContain('/usr/bin/sha256sum');
     expect(hostInstaller).toContain(
-      'PHUB_COMMUNITIES_ROLE_SPLIT_INSTALLATION_CANDIDATE_DIGEST_V12',
+      'PHUB_COMMUNITIES_ROLE_SPLIT_INSTALLATION_CANDIDATE_DIGEST_V13',
     );
-    expect(hostInstaller).toContain('PHUB_COMMUNITIES_ROLE_SPLIT_HOST_INSTALL_CONTROL_V9');
+    expect(hostInstaller).toContain('PHUB_COMMUNITIES_ROLE_SPLIT_HOST_INSTALL_CONTROL_V10');
     expect(hostInstaller).toContain(
       'case "$count" in \'\' | *[!0-9]*) fail FILE_SET_INVALID ;; esac',
     );
     expect(hostInstaller).toContain(
-      '[ "$(walk_count "$candidate")" = 39 ] || fail FILE_SET_INVALID',
+      '[ "$(walk_count "$candidate")" = 45 ] || fail FILE_SET_INVALID',
     );
-    expect(hostInstaller).toContain('read_exact_line CONTROL_INVALID artifactCount=33');
-    expect(hostInstaller).toContain('while [ "$index" -le 33 ]');
+    expect(hostInstaller).toContain('read_exact_line CONTROL_INVALID artifactCount=39');
+    expect(hostInstaller).toContain('while [ "$index" -le 39 ]');
     expect(hostInstaller).toContain(
-      '[ "$(walk_count "$target")" = 36 ] || fail INSTALLED_FILE_SET_INVALID',
+      '[ "$(walk_count "$target")" = 42 ] || fail INSTALLED_FILE_SET_INVALID',
     );
-    expect(hostInstaller).toContain('[ "$index" = 33 ] || fail CONTROL_INVALID');
+    expect(hostInstaller).toContain('[ "$index" = 39 ] || fail CONTROL_INVALID');
     expect(hostInstaller).toContain('expected_manifest_bytes()');
     expect(hostInstaller).toContain(
       'expected_manifest_sha=$(expected_manifest_bytes 2>/dev/null | /usr/bin/sha256sum | /usr/bin/awk',
@@ -444,6 +466,57 @@ describe('communities role-split installation candidate', () => {
           purpose,
         })),
     ).toEqual([
+      {
+        sourcePath:
+          'packages/database/src/communities-staging-role-split-trusted-inventory-gate.ts',
+        artifactPath:
+          'payload/source/communities-staging-role-split-trusted-inventory-gate-database.ts',
+        installMode: '0444',
+        purpose:
+          'trusted-inventory review-gate contract snapshot; no custody or execution authority',
+      },
+      {
+        sourcePath: 'apps/migrator/src/communities-staging-role-split-trusted-inventory-gate.ts',
+        artifactPath: 'payload/source/communities-staging-role-split-trusted-inventory-gate.ts',
+        installMode: '0444',
+        purpose: 'trusted-inventory review-gate verifier snapshot; runtime inputs remain untrusted',
+      },
+      {
+        sourcePath:
+          'packages/database/src/communities-staging-role-split-trusted-inventory-authorization-request.ts',
+        artifactPath:
+          'payload/source/communities-staging-role-split-trusted-inventory-authorization-request-database.ts',
+        installMode: '0444',
+        purpose:
+          'trusted-inventory authorization-request contract snapshot; every granted authority false',
+      },
+      {
+        sourcePath:
+          'apps/migrator/src/communities-staging-role-split-trusted-inventory-authorization-request.ts',
+        artifactPath:
+          'payload/source/communities-staging-role-split-trusted-inventory-authorization-request.ts',
+        installMode: '0444',
+        purpose:
+          'trusted-inventory authorization-request verifier snapshot; evidence remains external',
+      },
+      {
+        sourcePath:
+          'packages/database/src/communities-staging-role-split-trusted-inventory-authorization.ts',
+        artifactPath:
+          'payload/source/communities-staging-role-split-trusted-inventory-authorization-database.ts',
+        installMode: '0444',
+        purpose:
+          'trusted-inventory single-use authorization contract snapshot; serialized authority remains false',
+      },
+      {
+        sourcePath:
+          'apps/migrator/src/communities-staging-role-split-trusted-inventory-authorization-loader.ts',
+        artifactPath:
+          'payload/source/communities-staging-role-split-trusted-inventory-authorization-loader.ts',
+        installMode: '0444',
+        purpose:
+          'trusted-inventory issuer/loader snapshot; concrete clock, ledger, approval and evidence absent',
+      },
       {
         sourcePath:
           'apps/migrator/src/communities-staging-role-split-trusted-inventory-runtime-wiring.ts',
@@ -520,7 +593,7 @@ describe('communities role-split installation candidate', () => {
         candidatePath: candidate,
       }),
     ).toThrow('COMMUNITIES_ROLE_SPLIT_INSTALLATION_CANDIDATE_FILE_SET_INVALID');
-  }, 10_000);
+  }, 20_000);
 
   it('reconstructs the exact canonical manifest with the POSIX verifier policy', () => {
     const parent = privateParent('phub-role-split-posix-manifest-');

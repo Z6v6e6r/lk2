@@ -1,5 +1,20 @@
 # Worklog
 
+## 2026-08-23 — Communities disabled V15 packaging checkpoint
+
+- Advanced the immutable disabled installation candidate to schema V13 and added six exact
+  mode-0444 source snapshots for the V13 gate, V14 request and V15 single-use authorization
+  contracts/verifiers. The fixed POSIX installer reconstructs the exact thirty-nine-artifact
+  policy under host-control V10 and creates no active link or runtime configuration.
+- Advanced the self-contained runtime module to V2 and exposed the reviewed V15 issuer/loader API
+  without composing it with the existing producer wiring. The bundle contains no concrete clock or
+  durable-ledger adapter, approval, attested evidence, credentials, workflow, CLI or host
+  entrypoint; direct execution still exits `78` with `EXECUTION_NOT_AUTHORIZED`.
+- Added explicit unresolved bindings for the independent approval/evidence, fail-closed clock and
+  durable single-use ledger. Installation remains the only true candidate authorization; ceremony,
+  database mutation, role split, migration, deploy and activation remain false. No candidate was
+  built from an uncommitted tree, installed, uploaded or exercised against staging/PostgreSQL.
+
 ## 2026-08-23 — Communities trusted INPUT_C issuer/loader gate checkpoint
 
 - Added canonical independent evidence, approval, pending-authorization and single-use consumption

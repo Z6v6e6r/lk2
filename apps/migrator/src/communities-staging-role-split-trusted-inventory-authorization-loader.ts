@@ -38,6 +38,9 @@ const MAX_APPROVAL_BYTES = 64 * 1024;
 const MAX_AUTHORIZATION_BYTES = 64 * 1024;
 const MAX_EVIDENCE_BYTES = 1024 * 1024;
 
+export const COMMUNITIES_STAGING_ROLE_SPLIT_TRUSTED_INVENTORY_AUTHORIZATION_LOADER_VERSION =
+  'communities-staging-role-split-trusted-inventory-authorization-loader-v1';
+
 type EvidenceCode = CommunitiesStagingRoleSplitTrustedInventoryAuthorizationEvidenceCode;
 type GateInput = Parameters<
   typeof verifyCommunitiesStagingRoleSplitTrustedInventoryAuthorizationRequest

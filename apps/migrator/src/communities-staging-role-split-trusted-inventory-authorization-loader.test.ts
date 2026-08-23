@@ -39,6 +39,7 @@ import {
   type CommunitiesStagingRoleSplitTrustedInventoryAuthorizationRequest,
 } from '../../../packages/database/src/communities-staging-role-split-trusted-inventory-authorization-request.js';
 import {
+  COMMUNITIES_STAGING_ROLE_SPLIT_TRUSTED_INVENTORY_AUTHORIZATION_LOADER_VERSION,
   issueCommunitiesStagingRoleSplitTrustedInventoryAuthorization,
   loadCommunitiesStagingRoleSplitTrustedInventoryAuthorization,
   type CommunitiesStagingRoleSplitTrustedInventoryClock,
@@ -282,6 +283,9 @@ describe('trusted inventory single-use authorization issuer and root-owned loade
   it('issues only a pending all-false artifact after exact evidence and approval binding', () => {
     const value = fixture();
 
+    expect(COMMUNITIES_STAGING_ROLE_SPLIT_TRUSTED_INVENTORY_AUTHORIZATION_LOADER_VERSION).toBe(
+      'communities-staging-role-split-trusted-inventory-authorization-loader-v1',
+    );
     expect(value.authorization.status).toBe('ISSUED_PENDING_SINGLE_USE_CONSUMPTION');
     expect(Object.values(value.authorization.authorizes).every((entry) => entry === false)).toBe(
       true,

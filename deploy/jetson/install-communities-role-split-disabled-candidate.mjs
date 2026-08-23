@@ -22,7 +22,7 @@ import {
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const schemaVersion = 'communities-role-split-installation-candidate-v12';
+const schemaVersion = 'communities-role-split-installation-candidate-v13';
 const sha40 = /^[0-9a-f]{40}$/u;
 const sha256 = /^[0-9a-f]{64}$/u;
 const installPrefix = '/usr/local/libexec/phub/communities-role-split/candidates';
@@ -137,6 +137,38 @@ const expectedArtifacts = [
     installMode: '0444',
   })),
   ...[
+    [
+      'packages/database/src/communities-staging-role-split-trusted-inventory-gate.ts',
+      'communities-staging-role-split-trusted-inventory-gate-database.ts',
+    ],
+    [
+      'apps/migrator/src/communities-staging-role-split-trusted-inventory-gate.ts',
+      'communities-staging-role-split-trusted-inventory-gate.ts',
+    ],
+    [
+      'packages/database/src/communities-staging-role-split-trusted-inventory-authorization-request.ts',
+      'communities-staging-role-split-trusted-inventory-authorization-request-database.ts',
+    ],
+    [
+      'apps/migrator/src/communities-staging-role-split-trusted-inventory-authorization-request.ts',
+      'communities-staging-role-split-trusted-inventory-authorization-request.ts',
+    ],
+    [
+      'packages/database/src/communities-staging-role-split-trusted-inventory-authorization.ts',
+      'communities-staging-role-split-trusted-inventory-authorization-database.ts',
+    ],
+    [
+      'apps/migrator/src/communities-staging-role-split-trusted-inventory-authorization-loader.ts',
+      'communities-staging-role-split-trusted-inventory-authorization-loader.ts',
+    ],
+  ].map(([sourcePath, artifactName]) => ({
+    sourcePath,
+    sourceGitMode: '100644',
+    artifactPath: `payload/source/${artifactName}`,
+    targetRelativePath: `source/${artifactName}`,
+    installMode: '0444',
+  })),
+  ...[
     'communities-staging-role-split-trusted-inventory-runtime-wiring.ts',
     'communities-staging-role-split-trusted-inventory-runtime-module.ts',
   ].map((name) => ({
@@ -170,7 +202,11 @@ const expectedExecutionBindingCodes = [
   'SOURCE_WRITE_DENIAL_ATTESTATION',
   'STAGING_KNOWN_HOSTS_PIN',
   'TRUSTED_INVENTORY_CREDENTIAL_FD_READER',
+  'TRUSTED_INVENTORY_DURABLE_SINGLE_USE_LEDGER',
+  'TRUSTED_INVENTORY_FAIL_CLOSED_CLOCK_ADAPTER',
   'TRUSTED_INVENTORY_INDEPENDENT_ARTIFACT_PIN',
+  'TRUSTED_INVENTORY_INDEPENDENT_ATTESTED_EVIDENCE',
+  'TRUSTED_INVENTORY_INDEPENDENT_APPROVAL',
   'TRUSTED_INVENTORY_MARKER_EVIDENCE_MAPPING_INPUTS',
   'TRUSTED_INVENTORY_PRIVATE_OUTPUT_CUSTODY',
   'TRUSTED_INVENTORY_SUPERVISED_PRODUCER_RUNTIME_WIRING',

@@ -2,6 +2,16 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export {
+  COMMUNITIES_STAGING_ROLE_SPLIT_TRUSTED_INVENTORY_AUTHORIZATION_LOADER_VERSION,
+  CommunitiesStagingRoleSplitTrustedInventoryAuthorizationLoaderError,
+  issueCommunitiesStagingRoleSplitTrustedInventoryAuthorization,
+  loadCommunitiesStagingRoleSplitTrustedInventoryAuthorization,
+  type CommunitiesStagingRoleSplitTrustedInventoryClock,
+  type CommunitiesStagingRoleSplitTrustedInventoryConsumedAuthorization,
+  type CommunitiesStagingRoleSplitTrustedInventoryConsumptionLedger,
+} from './communities-staging-role-split-trusted-inventory-authorization-loader.js';
+
+export {
   COMMUNITIES_STAGING_ROLE_SPLIT_TRUSTED_INVENTORY_RUNTIME_WIRING_VERSION,
   CommunitiesStagingRoleSplitTrustedInventoryRuntimeWiringError,
   createCommunitiesStagingRoleSplitTrustedInventoryRuntimeWiring,
@@ -10,7 +20,7 @@ export {
 } from './communities-staging-role-split-trusted-inventory-runtime-wiring.js';
 
 export const COMMUNITIES_STAGING_ROLE_SPLIT_TRUSTED_INVENTORY_RUNTIME_MODULE_VERSION =
-  'communities-staging-role-split-trusted-inventory-runtime-module-v1';
+  'communities-staging-role-split-trusted-inventory-runtime-module-v2';
 
 function isDirectInvocation(): boolean {
   const entrypoint = process.argv[1];

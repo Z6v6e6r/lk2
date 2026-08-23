@@ -52,15 +52,37 @@ describe('communities role-split trusted-inventory runtime bundle', () => {
     const module = (await import(
       `${pathToFileURL(committedBundlePath).href}?test=${Date.now()}`
     )) as {
+      readonly COMMUNITIES_STAGING_ROLE_SPLIT_TRUSTED_INVENTORY_AUTHORIZATION_LOADER_VERSION: string;
       readonly COMMUNITIES_STAGING_ROLE_SPLIT_TRUSTED_INVENTORY_RUNTIME_MODULE_VERSION: string;
+      readonly issueCommunitiesStagingRoleSplitTrustedInventoryAuthorization: unknown;
+      readonly loadCommunitiesStagingRoleSplitTrustedInventoryAuthorization: unknown;
       readonly createCommunitiesStagingRoleSplitTrustedInventoryRuntimeWiring: unknown;
     };
     expect(module.COMMUNITIES_STAGING_ROLE_SPLIT_TRUSTED_INVENTORY_RUNTIME_MODULE_VERSION).toBe(
-      'communities-staging-role-split-trusted-inventory-runtime-module-v1',
+      'communities-staging-role-split-trusted-inventory-runtime-module-v2',
+    );
+    expect(
+      module.COMMUNITIES_STAGING_ROLE_SPLIT_TRUSTED_INVENTORY_AUTHORIZATION_LOADER_VERSION,
+    ).toBe('communities-staging-role-split-trusted-inventory-authorization-loader-v1');
+    expect(typeof module.issueCommunitiesStagingRoleSplitTrustedInventoryAuthorization).toBe(
+      'function',
+    );
+    expect(typeof module.loadCommunitiesStagingRoleSplitTrustedInventoryAuthorization).toBe(
+      'function',
     );
     expect(typeof module.createCommunitiesStagingRoleSplitTrustedInventoryRuntimeWiring).toBe(
       'function',
     );
+    expect(Object.keys(module).sort()).toEqual([
+      'COMMUNITIES_STAGING_ROLE_SPLIT_TRUSTED_INVENTORY_AUTHORIZATION_LOADER_VERSION',
+      'COMMUNITIES_STAGING_ROLE_SPLIT_TRUSTED_INVENTORY_RUNTIME_MODULE_VERSION',
+      'COMMUNITIES_STAGING_ROLE_SPLIT_TRUSTED_INVENTORY_RUNTIME_WIRING_VERSION',
+      'CommunitiesStagingRoleSplitTrustedInventoryAuthorizationLoaderError',
+      'CommunitiesStagingRoleSplitTrustedInventoryRuntimeWiringError',
+      'createCommunitiesStagingRoleSplitTrustedInventoryRuntimeWiring',
+      'issueCommunitiesStagingRoleSplitTrustedInventoryAuthorization',
+      'loadCommunitiesStagingRoleSplitTrustedInventoryAuthorization',
+    ]);
 
     const direct = spawnSync(process.execPath, [committedBundlePath], {
       encoding: 'utf8',
