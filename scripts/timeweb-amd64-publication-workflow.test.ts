@@ -692,4 +692,31 @@ describe('Timeweb amd64 publication workflow', () => {
       ]).status,
     ).not.toBe(0);
   });
+
+  it('bounds the full PR coverage gate and emits signal-driven hanging handle evidence', async () => {
+    const workflow = await readFile(
+      new URL('../.github/workflows/pull-request.yaml', import.meta.url),
+      'utf8',
+    );
+    const document = parse(workflow) as {
+      readonly jobs?: {
+        readonly quality?: {
+          readonly steps?: readonly {
+            readonly name?: string;
+            readonly run?: string;
+            readonly ['timeout-minutes']?: number;
+          }[];
+        };
+      };
+    };
+    const testStep = document.jobs?.quality?.steps?.find(
+      ({ name }) => name === 'Unit and integration tests',
+    );
+
+    expect(testStep).toEqual({
+      name: 'Unit and integration tests',
+      run: 'timeout --signal=USR1 --kill-after=30s 8m node --require why-is-node-running/include ./node_modules/vitest/vitest.mjs run --coverage --reporter=default --reporter=hanging-process',
+      'timeout-minutes': 10,
+    });
+  });
 });

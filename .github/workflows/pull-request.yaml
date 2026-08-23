@@ -76,7 +76,13 @@ jobs:
       - name: Formatting, lint and type safety
         run: npm run format:check && npm run lint && npm run typecheck
       - name: Unit and integration tests
-        run: npm run test:coverage
+        timeout-minutes: 10
+        run: >-
+          timeout --signal=USR1 --kill-after=30s 8m
+          node --require why-is-node-running/include
+          ./node_modules/vitest/vitest.mjs run --coverage
+          --reporter=default
+          --reporter=hanging-process
       - name: Build all artifacts
         run: npm run build
       - name: Validate local Compose model
