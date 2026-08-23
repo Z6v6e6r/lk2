@@ -63,6 +63,7 @@ jobs:
           CONTROL_SHA: ${{ github.sha }}
           WORKFLOW_SHA: ${{ github.workflow_sha }}
           SUPPORTED_ACTIVE_RELEASE: e308181da5222645d9a87d03642923c6841be8d1
+          SUPPORTED_CANDIDATE_SHA: c4aa5e8106fffc9a4fb8f9fb03efc9a6ba1c3239
         run: |
           set -eu
           require_sha() {
@@ -78,7 +79,7 @@ jobs:
           require_sha "$EXPECTED_ACTIVE_RELEASE"
           require_sha "$CANDIDATE_SHA"
           test "$EXPECTED_ACTIVE_RELEASE" = "$SUPPORTED_ACTIVE_RELEASE"
-          test "$CANDIDATE_SHA" != "$EXPECTED_ACTIVE_RELEASE"
+          test "$CANDIDATE_SHA" = "$SUPPORTED_CANDIDATE_SHA"
           case "$OPERATION:$CONFIRMATION" in
             START:START_LEGACY_OTP_HOTFIX_CANARY)
               test -z "$ORIGINAL_CONTROL_SHA$ORIGINAL_RUN_ID$ORIGINAL_RUN_ATTEMPT"
