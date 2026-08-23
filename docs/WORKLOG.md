@@ -1,5 +1,23 @@
 # Worklog
 
+## 2026-08-24 — Communities Gate 4 external PostgreSQL clock/ledger checkpoint
+
+- Added source-only V15 adapters for two distinct, non-aliased PostgreSQL clock/ledger clients.
+  They bind fixed statements and exact subjects, snapshot query methods, reject widened responses
+  and perform no retry after an unavailable or ambiguous consumption result.
+- Added an unapplied external control-plane SQL contract with an initially absent binding, fixed
+  `SECURITY DEFINER` search paths, revoked public access, a serialized monotonic server-time fence,
+  independently unique authorization/request identities and append-only receipts. It creates no
+  role, credential, grant, provider resource or runtime binding.
+- Added unit coverage and a labelled disposable PostgreSQL 16 harness. The real database checks
+  concurrent double consume, replay/expiry, committed response loss, separated clock/consumer/
+  auditor privileges, immutable receipt denial and clock regression; its exact container is removed
+  after the run.
+- The checkpoint is not exported, built, wired, installed or provisioned. No staging, provider,
+  credential, trusted-inventory producer, clean clone, ceremony or non-disposable database was
+  accessed. Every role/ACL/migration/deploy/activation authority remains false, and Gate 6 still
+  requires a separate whole-host-rollback-resistant monotonic authority.
+
 ## 2026-08-23 — Communities Gate 4 V14 disabled staging installation evidence
 
 - Installed and verified the exact disabled candidate for

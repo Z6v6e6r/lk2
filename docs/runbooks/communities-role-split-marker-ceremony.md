@@ -643,6 +643,54 @@ artifact-publication or producer-wiring composition. Neither contour
 authorizes trusted-inventory designation, role/ACL/shared-database mutation, migration, deploy or
 activation.
 
+### External PostgreSQL Gate 4 clock and ledger checkpoint
+
+`apps/migrator/src/communities-staging-role-split-trusted-inventory-pg-control-plane.ts`
+implements the still-unwired V15 clock and ledger interfaces against one dedicated external
+PostgreSQL control plane. Construction requires two non-aliased query clients and two distinct
+SHA-256 subjects. The clock and ledger use separate fixed, fully qualified statements; no runtime
+identifier or SQL fragment is accepted from configuration. Both query methods are snapshotted at
+construction, every row has an exact key set, and malformed, widened, unavailable or ambiguous
+responses fail closed. The ledger adapter performs exactly one query and never retries it. It
+constructs only the canonical all-false consumption receipt expected by the V15 loader.
+
+`deploy/postgresql/communities-role-split-gate4-control-plane-v1.sql` is the separately reviewed
+server contract for a future dedicated managed PostgreSQL database. It creates no role, credential
+or binding row and grants no caller access. An unapplied or unbound schema therefore cannot answer
+either adapter. Its two `SECURITY DEFINER` functions use a fixed `pg_catalog, pg_temp` search path
+and have `PUBLIC` execution revoked in the same transaction. The required later role split is:
+
+| Role category       | Allowed surface                                         | Direct table access          |
+| ------------------- | ------------------------------------------------------- | ---------------------------- |
+| clock client        | `EXECUTE read_time_v1(text)`                            | none                         |
+| ledger consumer     | `EXECUTE consume_once_v1(text,text,text,text,smallint)` | none                         |
+| independent auditor | `SELECT consumption_receipt_audit_v1`                   | no base-table access         |
+| no-login owner      | owns schema, tables and functions                       | operational break-glass only |
+
+`read_time_v1` serializes on the singleton binding, takes PostgreSQL server time and refuses a
+value behind the durable `last_seen_unix_seconds` fence. `consume_once_v1` takes the same fence in
+one transaction, validates the independently pinned ledger subject, one-attempt policy and expiry,
+then performs one append-only insert. Independent unique constraints on authorization and request
+SHA-256 values make either replay terminal. A trigger rejects receipt update, delete or truncate;
+the consumer has only function execution. A lost response after commit leaves the receipt retained
+and the client never retries, so the attempt remains burned.
+
+The disposable PostgreSQL 16 contract command is:
+
+```sh
+npm run db:communities-role-split:gate4-control-plane:pg16:verify
+```
+
+It proves concurrent single-consumer behavior, replay and expiry rejection, committed-response-loss
+retention, separated role privileges, receipt immutability and clock-regression denial, then removes
+only its exact labelled disposable container. This is local contract evidence only. The adapter has
+no package export, `tsup` entry, connection factory, TLS/CA descriptor, credential reader, provider
+account, configured binding, role grant, host entrypoint, active link or V15 loader composition. It
+does not authorize trusted inventory, staging access, a ceremony or any database mutation outside
+the disposable test. A managed PostgreSQL snapshot can still be administratively restored to an
+older state, so this Gate 4 control plane is not by itself the separate whole-host-rollback-resistant
+monotonic authority required by Gate 6.
+
 ## Independently pinned acceptance artifact gate
 
 `apps/migrator/src/verify-communities-role-split-acceptance-artifact.ts` is the local, read-only
@@ -966,10 +1014,12 @@ For the completed V10 rehearsal on staging:
    SHA-256. The local synthetic producer/evaluator gate is catalog proof, not trusted inventory;
    mock rows are not catalog proof. The V15 issuer/loader defines exact root-custody, approval,
    fail-closed-time and single-use-consumption contracts and the disabled V13 candidate makes those
-   reviewed bytes importable, but it supplies no concrete clock/ledger adapters, independent
-   approval/evidence, activation or host entrypoint. Its serialized authorization remains
-   all-false, and no collection can run until those external inputs and adapters are independently
-   reviewed, supplied, pinned and installed through later gates.
+   reviewed bytes importable. The later source-only PostgreSQL control-plane checkpoint implements
+   the adapter and server contract locally, but it has no provisioned provider, binding row, role
+   grants, TLS/CA descriptor, credentials, independent approval/evidence, package export, installed
+   candidate, activation or host entrypoint. Its serialized authorization remains all-false, and no
+   collection can run until those external inputs and the exact reviewed adapter are independently
+   supplied, pinned, packaged, installed and separately authorized through later gates.
 5. COMPLETE: 2026-08-22 — Pinned V10 production/rehearsal subject digests and immutable Node image
    ID were independently verified, then the non-authorizing rehearsal was executed on target Linux.
    The run retained root-owned evidence under
