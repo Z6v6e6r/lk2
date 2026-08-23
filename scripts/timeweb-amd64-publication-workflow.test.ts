@@ -1,6 +1,5 @@
-import { spawn, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -635,96 +634,26 @@ describe('Timeweb amd64 publication workflow', () => {
     }
   });
 
-  it('follows a bounded registry-style blob redirect without changing the bytes', async () => {
-    const directory = await mkdtemp(join(tmpdir(), 'phub-timeweb-blob-redirect-'));
-    const destination = join(directory, 'statement.json');
+  it('follows a bounded registry-style blob redirect without changing the bytes', () => {
     const statement = JSON.stringify({ predicateType: 'https://slsa.dev/provenance/v1' });
-    const requests: string[] = [];
-    let registryAuthorization: string | undefined;
-    let blobAuthorization: string | undefined;
-    const blobServer = createServer((request, response) => {
-      requests.push(`blob:${request.url ?? ''}`);
-      blobAuthorization = request.headers.authorization;
-      if (request.url === '/signed-blob') {
-        response.statusCode = 200;
-        response.setHeader('content-type', 'application/json');
-        response.end(statement);
-        return;
-      }
-      response.statusCode = 404;
-      response.end();
+    const result = spawnSync(
+      process.execPath,
+      [
+        '--import',
+        'tsx',
+        fileURLToPath(new URL('./timeweb-amd64-blob-redirect.fixture.ts', import.meta.url)),
+      ],
+      { encoding: 'utf8', killSignal: 'SIGTERM', timeout: 15_000 },
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({
+      blobAuthorization: null,
+      bytes: statement,
+      registryAuthorization: 'Bearer test-token',
+      requests: ['registry:/blob', 'blob:/signed-blob'],
     });
-    const registryServer = createServer((request, response) => {
-      requests.push(`registry:${request.url ?? ''}`);
-      registryAuthorization = request.headers.authorization;
-      if (request.url === '/blob') {
-        response.statusCode = 307;
-        const address = blobServer.address();
-        if (!address || typeof address === 'string') throw new Error('blob server has no TCP port');
-        response.setHeader('location', `http://127.0.0.1:${address.port}/signed-blob`);
-        response.end();
-        return;
-      }
-      response.statusCode = 404;
-      response.end();
-    });
-
-    try {
-      await new Promise<void>((resolve, reject) => {
-        blobServer.once('error', reject);
-        blobServer.listen(0, '127.0.0.1', resolve);
-      });
-      await new Promise<void>((resolve, reject) => {
-        registryServer.once('error', reject);
-        registryServer.listen(0, '127.0.0.1', resolve);
-      });
-      const address = registryServer.address();
-      if (!address || typeof address === 'string') throw new Error('test server has no TCP port');
-
-      await new Promise<void>((resolve, reject) => {
-        const child = spawn('curl', [
-          '--fail',
-          '--silent',
-          '--show-error',
-          '--location',
-          '--max-redirs',
-          '3',
-          '--proto',
-          '=http,https',
-          '--proto-redir',
-          '=http,https',
-          '--config',
-          '-',
-          `http://127.0.0.1:${address.port}/blob`,
-          '--output',
-          destination,
-        ]);
-        let stderr = '';
-        child.stderr.setEncoding('utf8');
-        child.stderr.on('data', (chunk: string) => {
-          stderr += chunk;
-        });
-        child.once('error', reject);
-        child.once('close', (code) => {
-          if (code === 0) resolve();
-          else reject(new Error(`curl exited with ${String(code)}: ${stderr}`));
-        });
-        child.stdin.end('header = "Authorization: Bearer test-token"\n');
-      });
-
-      expect(requests).toEqual(['registry:/blob', 'blob:/signed-blob']);
-      expect(registryAuthorization).toBe('Bearer test-token');
-      expect(blobAuthorization).toBeUndefined();
-      expect(await readFile(destination, 'utf8')).toBe(statement);
-    } finally {
-      if (registryServer.listening) {
-        await new Promise<void>((resolve) => registryServer.close(() => resolve()));
-      }
-      if (blobServer.listening) {
-        await new Promise<void>((resolve) => blobServer.close(() => resolve()));
-      }
-      await rm(directory, { force: true, recursive: true });
-    }
   });
 
   it('accepts only correctly typed statements bound to the reconciled runtime digest', () => {
