@@ -367,21 +367,28 @@ jobs:
           set -euo pipefail
           printf '%s\n' 'legacy_otp_hotfix canary_window_seconds=900 status=started' | tee evidence/observation.txt
           set +e
-          timeout --signal=TERM --kill-after=5s 900s sh -eu -c '
-            while :; do
+          timeout --signal=TERM --kill-after=5s 900s sh -u -c '
+            probe_candidate() {
               for path in /healthz /health/live /health/ready; do
-                curl --fail --silent --show-error --connect-timeout 5 --max-time 10 --output /dev/null "https://lk.nano.padlhub.su$path"
+                curl --fail --silent --show-error --connect-timeout 5 --max-time 10 --output /dev/null "https://lk.nano.padlhub.su$path" || return 1
               done
-              curl --fail --silent --show-error --connect-timeout 5 --max-time 10 --output /dev/null https://lk.nano.padlhub.su/realtime/health/ready
-              manifest=$(curl --fail --silent --show-error --connect-timeout 5 --max-time 10 https://lk.nano.padlhub.su/manifest.json)
+              curl --fail --silent --show-error --connect-timeout 5 --max-time 10 --output /dev/null https://lk.nano.padlhub.su/realtime/health/ready || return 1
+              manifest=$(curl --fail --silent --show-error --connect-timeout 5 --max-time 10 https://lk.nano.padlhub.su/manifest.json) || return 1
               printf "%s" "$manifest" | node -e '\''
                 let value=""; process.stdin.on("data", chunk => { value += chunk; });
                 process.stdin.on("end", () => { if (JSON.parse(value).release !== process.env.CANDIDATE_SHA) process.exit(1); });
               '\''
-              if timeout --signal=TERM --kill-after=5s 30s ssh $SSH_OPTIONS "phub-deploy@$HOST" \
-                "sh '$BUNDLE/run-legacy-otp-hotfix-canary.sh' attest '$EXPECTED_ACTIVE_RELEASE' '$CANDIDATE_SHA' '$CONTROL_SHA' '$RUN_ID' '$RUN_ATTEMPT' ATTEST_LEGACY_OTP_HOTFIX_CANARY '$BUNDLE'" \
-                >> evidence/observation.txt; then
-                exit 0
+            }
+            while :; do
+              if probe_candidate; then
+                if timeout --signal=TERM --kill-after=5s 30s ssh $SSH_OPTIONS "phub-deploy@$HOST" \
+                  "sh '$BUNDLE/run-legacy-otp-hotfix-canary.sh' attest '$EXPECTED_ACTIVE_RELEASE' '$CANDIDATE_SHA' '$CONTROL_SHA' '$RUN_ID' '$RUN_ATTEMPT' ATTEST_LEGACY_OTP_HOTFIX_CANARY '$BUNDLE'" \
+                  >> evidence/observation.txt; then
+                  exit 0
+                fi
+                printf "%s\n" "legacy_otp_hotfix otp_attestation=pending status=retrying" >> evidence/observation.txt
+              else
+                printf "%s\n" "legacy_otp_hotfix candidate_public_probe=pending status=retrying" >> evidence/observation.txt
               fi
               sleep 30
             done
