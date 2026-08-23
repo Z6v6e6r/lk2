@@ -318,11 +318,17 @@ jobs:
           WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
           set -euo pipefail
+          # GHCR can expose the pushed root index before its linked attestations.
+          # Retry only exact digest-addressed reads; never substitute a tag or digest.
+          retry_helper="$RUNNER_TEMP/timeweb-amd64-registry-custody-retry.sh"
+          git show "$WORKFLOW_SHA:scripts/timeweb-amd64-registry-custody-retry.sh" > "$retry_helper"
+          source "$retry_helper"
           printf '%s' "$IMAGE_DIGEST" | grep -Eq '^sha256:[0-9a-f]{64}$'
           test "${#IMAGE_DIGEST}" -eq 71
           mkdir -p publication-evidence
-          docker buildx imagetools inspect "$IMAGE_REFERENCE@$IMAGE_DIGEST" --raw \
-            > "publication-evidence/$SERVICE-oci-index.json"
+          phub_ghcr_custody_retry "$SERVICE-root-index" phub_ghcr_custody_read_exact_json \
+            "$IMAGE_REFERENCE@$IMAGE_DIGEST" "$IMAGE_DIGEST" \
+            "publication-evidence/$SERVICE-oci-index.json"
           runtime_digest="$(jq -r '
             [.manifests[] | select(
               .platform.os == "linux" and
@@ -356,8 +362,9 @@ jobs:
           test "$(wc -l < "publication-evidence/$SERVICE-attestation-digests.txt" | tr -d ' ')" -eq "$attestation_count"
           while IFS= read -r attestation_digest; do
             printf '%s' "$attestation_digest" | grep -Eq '^sha256:[0-9a-f]{64}$'
-            docker buildx imagetools inspect "$IMAGE_REFERENCE@$attestation_digest" --raw \
-              > "publication-evidence/$SERVICE-attestation-manifests/${attestation_digest#sha256:}.json"
+            phub_ghcr_custody_retry "$SERVICE-attestation-manifest-${attestation_digest#sha256:}" phub_ghcr_custody_read_exact_json \
+              "$IMAGE_REFERENCE@$attestation_digest" "$attestation_digest" \
+              "publication-evidence/$SERVICE-attestation-manifests/${attestation_digest#sha256:}.json"
           done < "publication-evidence/$SERVICE-attestation-digests.txt"
           jq -s -e --arg runtime "$runtime_digest" --argjson runtimeSize "$runtime_size" '
             length >= 1 and
@@ -404,13 +411,28 @@ jobs:
             "https://ghcr.io/token?service=ghcr.io&scope=repository%3Az6v6e6r%2Fphub-$SERVICE%3Apull" \
             | jq -r '.token // empty')"
           printf '%s' "$registry_token" | grep -Eq '^[A-Za-z0-9._~+/-]+=*$'
-          while IFS=$'\t' read -r statement_digest predicate_type; do
-            printf '%s' "$statement_digest" | grep -Eq '^sha256:[0-9a-f]{64}$'
+          download_attestation_statement() {
+            statement_digest=$1
+            statement_path=$2
+            temporary="$statement_path.attempt-$$"
+            rm -f "$temporary"
             {
               printf 'header = "Authorization: Bearer %s"\n' "$registry_token"
             } | curl --fail --silent --show-error --config - \
               "https://ghcr.io/v2/z6v6e6r/phub-$SERVICE/blobs/$statement_digest" \
-              --output "publication-evidence/$SERVICE-attestation-statements/${statement_digest#sha256:}.json"
+              --output "$temporary"
+            test "$(sha256sum "$temporary" | awk '{print "sha256:" $1}')" = "$statement_digest" || {
+              echo "::error::PHUB_GHCR_CUSTODY_WRONG_BLOB_DIGEST|digest=$statement_digest" >&2
+              rm -f "$temporary"
+              return 1
+            }
+            mv "$temporary" "$statement_path"
+          }
+          while IFS=$'\t' read -r statement_digest predicate_type; do
+            printf '%s' "$statement_digest" | grep -Eq '^sha256:[0-9a-f]{64}$'
+            phub_ghcr_custody_retry "$SERVICE-attestation-statement-${statement_digest#sha256:}" \
+              download_attestation_statement "$statement_digest" \
+              "publication-evidence/$SERVICE-attestation-statements/${statement_digest#sha256:}.json"
             test "$(sha256sum "publication-evidence/$SERVICE-attestation-statements/${statement_digest#sha256:}.json" \
               | awk '{print "sha256:" $1}')" = "$statement_digest"
             test "$(jq -r '.predicateType' \
@@ -482,12 +504,22 @@ jobs:
             $sbom.SPDXID == "SPDXRef-DOCUMENT" and
             ($sbom.packages | type == "array" and length > 0)
           ' publication-evidence/"$SERVICE"-attestation-statements/*.json >/dev/null
-          docker buildx imagetools inspect "$IMAGE_REFERENCE@$IMAGE_DIGEST" \
-            --format '{{json .Provenance.SLSA}}' \
-            > "publication-evidence/$SERVICE-provenance.json"
-          docker buildx imagetools inspect "$IMAGE_REFERENCE@$IMAGE_DIGEST" \
-            --format '{{json .SBOM.SPDX}}' \
-            > "publication-evidence/$SERVICE-sbom.spdx.json"
+          read_buildx_presentation() {
+            template=$1
+            destination=$2
+            temporary="$destination.attempt-$$"
+            rm -f "$temporary"
+            docker buildx imagetools inspect "$IMAGE_REFERENCE@$IMAGE_DIGEST" \
+              --format "$template" > "$temporary"
+            jq -e 'type == "object"' "$temporary" >/dev/null
+            mv "$temporary" "$destination"
+          }
+          phub_ghcr_custody_retry "$SERVICE-buildx-provenance" \
+            read_buildx_presentation '{{json .Provenance.SLSA}}' \
+            "publication-evidence/$SERVICE-provenance.json"
+          phub_ghcr_custody_retry "$SERVICE-buildx-sbom" \
+            read_buildx_presentation '{{json .SBOM.SPDX}}' \
+            "publication-evidence/$SERVICE-sbom.spdx.json"
           jq -e 'type == "object" and (.buildDefinition | type == "object")' \
             "publication-evidence/$SERVICE-provenance.json" >/dev/null
           jq -e 'type == "object" and .SPDXID == "SPDXRef-DOCUMENT"' \
@@ -500,10 +532,12 @@ jobs:
             publication-evidence/"$SERVICE"-attestation-statements/*.json >/dev/null
 
           runtime_reference="$IMAGE_REFERENCE@$runtime_digest"
-          docker buildx imagetools inspect "$runtime_reference" --raw \
-            > "publication-evidence/$SERVICE-runtime-manifest.json"
+          phub_ghcr_custody_retry "$SERVICE-runtime-manifest" phub_ghcr_custody_read_exact_json \
+            "$runtime_reference" "$runtime_digest" \
+            "publication-evidence/$SERVICE-runtime-manifest.json"
           test "$(sha256sum "publication-evidence/$SERVICE-runtime-manifest.json" | awk '{print "sha256:" $1}')" = "$runtime_digest"
-          docker pull --platform linux/amd64 "$runtime_reference"
+          phub_ghcr_custody_retry "$SERVICE-runtime-pull" \
+            docker pull --platform linux/amd64 "$runtime_reference"
           platform="$(docker image inspect "$runtime_reference" --format '{{.Os}}/{{.Architecture}}')"
           image_id="$(docker image inspect "$runtime_reference" --format '{{.Id}}')"
           image_user="$(docker image inspect "$runtime_reference" --format '{{.Config.User}}')"
@@ -611,7 +645,8 @@ jobs:
           find publication-evidence -type f ! -name '*-evidence-checksums.txt' -print0 \
             | sort -z | xargs -0 sha256sum \
             > "publication-evidence/$SERVICE-evidence-checksums.txt"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: timeweb-amd64-image-${{ matrix.service }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: publication-evidence

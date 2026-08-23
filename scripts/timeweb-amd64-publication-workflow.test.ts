@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
@@ -82,6 +83,7 @@ describe('Timeweb amd64 publication workflow', () => {
     expect(workflow).toContain('test "$WORKFLOW_SHA" = "$REQUEST_SHA"');
     expect(workflow).toContain('test "$WORKFLOW_SHA" = "$EXPECTED_WORKFLOW_SHA"');
     expect(workflow).toContain('test "$RUN_ATTEMPT" = 1');
+    expect(workflow).toContain('test "$REPOSITORY" = Z6v6e6r/lk2');
     expect(workflow).toContain('test "$ACTOR" = "$TRIGGERING_ACTOR"');
     expect(workflow).toContain('platforms: linux/amd64');
     expect(workflow).toContain('push: true');
@@ -455,5 +457,201 @@ describe('Timeweb amd64 publication workflow', () => {
     } finally {
       await rm(directory, { force: true, recursive: true });
     }
+  });
+
+  it('retries only bounded transient custody reads and exposes exhaustion markers', async () => {
+    const helper = fileURLToPath(
+      new URL('./timeweb-amd64-registry-custody-retry.sh', import.meta.url),
+    );
+    const succeedAfterTwoFailures = spawnSync(
+      'bash',
+      [
+        '-c',
+        `source "${helper}"; count=0; transient() { count=$((count + 1)); test "$count" -ge 3; }; PHUB_GHCR_CUSTODY_MAX_ATTEMPTS=5 PHUB_GHCR_CUSTODY_INITIAL_DELAY_SECONDS=0 phub_ghcr_custody_retry exact-index transient`,
+      ],
+      { encoding: 'utf8' },
+    );
+    expect(succeedAfterTwoFailures.status, succeedAfterTwoFailures.stderr).toBe(0);
+    expect(succeedAfterTwoFailures.stderr).toContain(
+      'PHUB_GHCR_CUSTODY_RETRY|stage=exact-index|attempt=1',
+    );
+    expect(succeedAfterTwoFailures.stderr).toContain(
+      'PHUB_GHCR_CUSTODY_PASSED|stage=exact-index|attempt=3',
+    );
+
+    const exhausted = spawnSync(
+      'bash',
+      [
+        '-c',
+        `source "${helper}"; always_fail() { return 1; }; PHUB_GHCR_CUSTODY_MAX_ATTEMPTS=3 PHUB_GHCR_CUSTODY_INITIAL_DELAY_SECONDS=0 phub_ghcr_custody_retry exact-attestation always_fail`,
+      ],
+      { encoding: 'utf8' },
+    );
+    expect(exhausted.status).not.toBe(0);
+    expect(exhausted.stderr).toContain(
+      '::error::PHUB_GHCR_CUSTODY_EXHAUSTED|stage=exact-attestation|attempt=3|maxAttempts=3',
+    );
+
+    const directory = await mkdtemp(join(tmpdir(), 'phub-timeweb-exact-digest-'));
+    const accepted = join(directory, 'accepted.json');
+    const rejected = join(directory, 'rejected.json');
+    try {
+      const matching = spawnSync(
+        'bash',
+        [
+          '-c',
+          `source "${helper}"; docker() { printf '{}'; }; phub_ghcr_custody_read_exact_json ghcr.io/example@sha256:test sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a "${accepted}"`,
+        ],
+        { encoding: 'utf8' },
+      );
+      expect(matching.status, matching.stderr).toBe(0);
+      expect(await readFile(accepted, 'utf8')).toBe('{}');
+
+      const mismatching = spawnSync(
+        'bash',
+        [
+          '-c',
+          `source "${helper}"; docker() { printf '{}'; }; phub_ghcr_custody_read_exact_json ghcr.io/example@sha256:test sha256:${'0'.repeat(64)} "${rejected}"`,
+        ],
+        { encoding: 'utf8' },
+      );
+      expect(mismatching.status).not.toBe(0);
+      expect(mismatching.stderr).toContain('PHUB_GHCR_CUSTODY_WRONG_DIGEST');
+      await expect(readFile(rejected, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      await rm(directory, { force: true, recursive: true });
+    }
+  });
+
+  it('keeps reconciliation manual, read-only, hard-pinned and non-authorizing', async () => {
+    const workflow = await readFile(
+      new URL('../.github/workflows/reconcile-timeweb-amd64-publication.yaml', import.meta.url),
+      'utf8',
+    );
+    const document = parse(workflow) as {
+      readonly on: Readonly<Record<string, unknown>>;
+      readonly permissions: Readonly<Record<string, string>>;
+      readonly jobs: Readonly<
+        Record<
+          string,
+          {
+            readonly if?: string;
+            readonly needs?: string | readonly string[];
+            readonly permissions?: Readonly<Record<string, string>>;
+            readonly strategy?: {
+              readonly matrix?: {
+                readonly include?: readonly { readonly service?: string }[];
+              };
+            };
+            readonly steps?: readonly { readonly uses?: string }[];
+          }
+        >
+      >;
+    };
+
+    expect(Object.keys(document.on)).toEqual(['workflow_dispatch']);
+    expect(document.permissions).toEqual({ contents: 'read' });
+    expect(document.jobs['reconcile-custody']?.permissions).toEqual({
+      contents: 'read',
+      packages: 'read',
+    });
+    expect(
+      document.jobs['reconcile-custody']?.strategy?.matrix?.include?.map(({ service }) => service),
+    ).toEqual(['api', 'worker', 'realtime', 'migrator', 'web']);
+    expect(document.jobs['reconciliation-manifest']?.needs).toEqual([
+      'validate-request',
+      'reconcile-custody',
+    ]);
+    expect(document.jobs['reconciliation-manifest']?.if).toBe(
+      "${{ needs.reconcile-custody.result == 'success' }}",
+    );
+    expect(workflow).toContain('RECONCILE_TIMEWEB_AMD64_32625879321');
+    expect(workflow).toContain('test "$RUN_ATTEMPT" = 1');
+    expect(workflow).toContain('test "$ACTOR" = "$TRIGGERING_ACTOR"');
+    expect(workflow).toContain('test "$WORKFLOW_SHA" = "$EXPECTED_WORKFLOW_SHA"');
+    expect(workflow).toContain('amd64-sha-$source_sha-32625879321-1');
+    expect(workflow).toContain(
+      'https://github.com/Z6v6e6r/lk2/actions/runs/32625879321/attempts/1',
+    );
+    for (const digest of [
+      'b75f6a060807095361f796f7550ddd1df989c492510377cb5e171bab75f4e0b7',
+      '81b56b06743e86c5091c59164eaf3d93884d5d35a94636ef3d13bd2b004625cc',
+      'c9e35f58919e0b75a0afd7f7d588fb1f82d4adfbaa6a80f9c45544e9dea9a695',
+      '8cf2ac65f710ddf2df0ea3393dc37088bee02e13842a16920b2534a172489e8a',
+      'ce8f985f70416b9d83ccc2653eaefeb10a9b927418cdfefc17e66ccae4cfd4d0',
+    ]) {
+      expect(workflow).toContain(`sha256:${digest}`);
+    }
+    expect(workflow).toContain('phub_ghcr_custody_read_exact_json');
+    expect(workflow.match(/sha256sum --check --strict/gu)).toHaveLength(2);
+    expect(workflow).toContain(
+      'github.com/docker/buildx v0.36.1 1d8dde89b8aba914e05e45366770736fea1fd690',
+    );
+    expect(workflow).toContain('test "$attestation_count" -ge 1');
+    expect(workflow).toContain('tr -d \' \')" -eq "$attestation_count"');
+    expect(workflow).toContain(
+      'artifactType == "application/vnd.docker.attestation.manifest.v1+json"',
+    );
+    expect(workflow).toContain('($p.buildDefinition.resolvedDependencies | type == "array")');
+    expect(workflow).toContain('docker image inspect "$runtime_reference" --format \'{{.Id}}\'');
+    expect(workflow).toContain('http://127.0.0.1:$port/healthz');
+    expect(workflow).toContain('--slurpfile provenance reconciliation-evidence/provenance.json');
+    expect(workflow).toContain('--slurpfile sbom reconciliation-evidence/sbom.spdx.json');
+    expect(workflow).not.toContain('merge-multiple: true');
+    expect(workflow).toContain('find reconciliation-evidence/images -name image.json | wc -l');
+    expect(workflow).toContain('reconciliation-evidence/images/*/image.json');
+    expect(workflow).toContain(
+      '([.images[].service] | sort) == ["api","migrator","realtime","web","worker"]',
+    );
+    expect(workflow).toContain('([.images[].verified] | all)');
+    expect(workflow).toContain('authorizesDeploy:false');
+    expect(workflow).toContain('authorizesVpsProvisioning:false');
+    expect(workflow).toContain('authorizesDatabaseMutation:false');
+    expect(workflow).toContain('reconciliationWorkflowSha:$reconciliationWorkflowSha');
+    expect(workflow).not.toMatch(
+      /packages:\s*write|push:\s*true|docker\s+push|docker buildx build|docker\/build-push-action@|docker compose|npm run db:migrate|deploy-(?:staging|production)|\b(?:ssh|scp|tailscale)\b/iu,
+    );
+    const uses = Object.values(document.jobs).flatMap(
+      (job) => job.steps?.flatMap((step) => (step.uses ? [step.uses] : [])) ?? [],
+    );
+    expect(uses.length).toBeGreaterThan(0);
+    expect(uses.every((value) => /@[0-9a-f]{40}$/u.test(value))).toBe(true);
+  });
+
+  it('accepts only correctly typed statements bound to the reconciled runtime digest', () => {
+    const runtime = 'a'.repeat(64);
+    const validateStatements = (statements: readonly unknown[]) =>
+      spawnSync(
+        'jq',
+        [
+          '-e',
+          '--arg',
+          'runtime',
+          runtime,
+          'length == 2 and all(.[]; ._type == "https://in-toto.io/Statement/v1" and (.subject | length) == 1 and .subject[0].digest == {"sha256": $runtime})',
+        ],
+        { encoding: 'utf8', input: JSON.stringify(statements) },
+      );
+    const statement = (predicateType: string) => ({
+      _type: 'https://in-toto.io/Statement/v1',
+      predicateType,
+      subject: [{ digest: { sha256: runtime }, name: 'pkg:docker/phub' }],
+    });
+    const valid = [
+      statement('https://slsa.dev/provenance/v1'),
+      statement('https://spdx.dev/Document'),
+    ];
+
+    expect(validateStatements(valid).status).toBe(0);
+    expect(
+      validateStatements([{ ...valid[0], _type: 'https://example.invalid/Statement' }, valid[1]])
+        .status,
+    ).not.toBe(0);
+    expect(
+      validateStatements([
+        { ...valid[0], subject: [{ digest: { sha256: 'b'.repeat(64) } }] },
+        valid[1],
+      ]).status,
+    ).not.toBe(0);
   });
 });
