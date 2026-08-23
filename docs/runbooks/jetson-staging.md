@@ -261,18 +261,25 @@ reprovisioning. `RECOVER` never rotates or requires the smoke credential.
 
 ### Temporary legacy OTP canary
 
-If the exact active `e308181da5222645d9a87d03642923c6841be8d1` API cannot complete the
-Viva client-realm OTP exchange because it sends E.164 `+` on the provider wire, use only the
-dedicated `Legacy staging OTP hotfix canary` workflow. Its candidate must be a reviewed
-single-parent child of e308 whose binary diff changes only the two Viva identity files, the four
-Node production Dockerfiles, and the production-workspace import probe with its test. The candidate
-keeps E.164 internally and removes the leading `+` only in the Viva SMS and token requests. Its Node
-images use a clean production install from the exact lockfile instead of copying and pruning
-builder `node_modules`. Because the public source checkout may be created with a restrictive umask,
-the final image explicitly grants read/traverse (never write) access to application, workspace,
-dependency, probe and migrator files, switches to the non-root `appuser`, and only then executes the
-production import probes. Migrations, contracts, lockfiles, the web Dockerfile and staging Compose
-must remain byte-identical to e308.
+If the exact active `e308181da5222645d9a87d03642923c6841be8d1` API cannot complete the Viva
+client-realm OTP exchange server-to-server, use only the dedicated
+`Legacy staging OTP hotfix canary` workflow. Its candidate must be the reviewed immutable
+single-parent child `c4aa5e8106fffc9a4fb8f9fb03efc9a6ba1c3239` whose exact commit SHA,
+binary patch and 41-path allowlist are pinned by both dispatch authority and the source verifier. In
+addition to the existing browser-context Viva user reads and production-image import hardening, the
+candidate adds the explicit `browser_phone_otp_v1` capability: only the configured first-party web
+Origin may request it, Viva SMS and token requests run once in browser context with credentials
+omitted and a three-second timeout, and PadlHub accepts only a challenge-bound access token proof
+verified server-side. The Viva refresh token is discarded and no Viva delegation is created. The
+reviewed User API v1 OpenAPI file is the only contract change; migrations, lockfiles, the web
+Dockerfile and staging Compose remain byte-identical to e308.
+
+The candidate keeps E.164 internally and removes the leading `+` only in the Viva SMS and token
+requests. Its Node images use a clean production install from the exact lockfile instead of copying
+and pruning builder `node_modules`. Because the public source checkout may be created with a
+restrictive umask, the final image explicitly grants read/traverse (never write) access to
+application, workspace, dependency, probe and migrator files, switches to the non-root `appuser`,
+and only then executes the production import probes.
 
 This is not an API overlay. The workflow builds all five immutable ARM64 images from the same
 candidate SHA, installs web/API/worker/realtime as one coherent temporary release, and builds but
@@ -322,13 +329,16 @@ diagnostics must not delay the rollback budget.
 The public candidate remains available for a hard wall-clock maximum of fifteen minutes for one manually authorized
 browser canary in tenant `local-padel`. The phone and code are entered only in the browser; they
 must not be supplied as workflow inputs, command arguments, logs or artifacts. Do not retry a lost
-provider send or verify response. The canary may create a normal user/session/legal-acceptance and
-Viva delegation record; application rollback deliberately does not erase those records.
+provider send or verify response. The canary may create normal user, session and legal-acceptance
+records; application rollback deliberately does not erase those records. Browser OTP discards the
+Viva refresh token and must not create a Viva delegation record.
 
 Before rollback, the workflow requires exactly one new correlation-bound
 `PHONE_OTP_LEGAL_ACCEPTANCE_RECORDED` plus `AUTH_SESSION_CREATED` success for tenant
-`local-padel`, backed by a fresh Viva external identity and active delegation after the durable
-candidate-ready timestamp. It additionally requires one Redis-bound browser read job for that same
+`local-padel`, backed by a fresh Viva external identity after the durable candidate-ready timestamp.
+The same correlation must have exactly one successful `verify_browser_phone_token`
+identity-provider metric. Attestation does not require a Viva user delegation. It additionally
+requires one Redis-bound browser read job for that same
 tenant, user and JWT session, successful result and completion requests for that job, and
 `profile.read` plus `schedule.read` success records carrying the same server-derived job identity.
 That second timestamp advances from zero only after exact candidate service/image/public-manifest
@@ -348,7 +358,8 @@ so diagnostics cannot delay valid evidence or rollback. A failed PostgreSQL quer
 closed.
 
 The snapshot counts only exact POST `local-padel` PadlHub challenge routes by HTTP status class,
-then aggregates the candidate API's `request_code` and `verify_code` provider
+then aggregates the candidate API's `request_code`, `verify_code` and
+`verify_browser_phone_token` provider
 metrics by allowlisted outcome and status class. It reads at most the latest 5,000 log records since
 candidate-ready; every record is labelled `window=tail_5000`, and high log volume may truncate the
 earlier part of the canary window. For unavailable operations it reports only an inferred fixed
@@ -356,9 +367,11 @@ failure bucket: provider request/response, token request/response, or post-token
 exact candidate can reject JWT claims after a successful
 token response without emitting a `verify_code` unavailable metric, so that record is labelled
 `coverage=partial`; a zero post-token counter does not prove that no such failure occurred. The
-provider metric records are not tenant- or correlation-bound, so they are explicitly labelled
+diagnostic provider counters are not tenant- or correlation-bound, so they are explicitly labelled
 `attribution=aggregate` and must not be treated as proof that a particular user's provider call
-succeeded.
+succeeded. This is distinct from the PASS predicate, which privately matches exactly one
+`verify_browser_phone_token` success to the database session correlation without printing or
+placing that correlation in process arguments.
 
 The correlation-bound PostgreSQL session evidence is necessary but not sufficient: PASS also
 requires the principal/session/job-bound browser profile and schedule evidence above. If API logs

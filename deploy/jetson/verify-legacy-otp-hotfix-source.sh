@@ -3,7 +3,8 @@
 set -eu
 
 supported_active_release=e308181da5222645d9a87d03642923c6841be8d1
-supported_patch_sha256=515e2fc2062aa20c6ee91199e77c7887769a7e1db0920a8c14a117f398b75012
+supported_candidate_sha=c4aa5e8106fffc9a4fb8f9fb03efc9a6ba1c3239
+supported_patch_sha256=399d38e983d6f0dc54c97bda377c12a74357db4c1104a9fa1a32406cac1ed35d
 
 fail() {
   printf '%s\n' "Legacy OTP hotfix source verification refused: $*" >&2
@@ -21,6 +22,7 @@ for value in "$expected_active" "$candidate"; do
   case "$value" in *[!0-9a-f]*) fail 'release inputs must be lowercase hexadecimal SHAs' ;; esac
 done
 test "$expected_active" = "$supported_active_release" || fail 'active release is not the reviewed legacy base'
+test "$candidate" = "$supported_candidate_sha" || fail 'candidate is not the exact reviewed OTP hotfix commit'
 test -d "$candidate_checkout" && git -C "$candidate_checkout" rev-parse --git-dir >/dev/null 2>&1 ||
   fail 'candidate checkout is absent'
 test "$(git -C "$candidate_checkout" rev-parse HEAD)" = "$candidate" || fail 'candidate checkout HEAD differs'
@@ -38,7 +40,9 @@ apps/api/Dockerfile
 apps/api/src/app.test.ts
 apps/api/src/app.ts
 apps/api/src/auth/auth-routes.test.ts
+apps/api/src/auth/auth-routes.ts
 apps/api/src/auth/auth-service.ts
+apps/api/src/auth/challenge-store.ts
 apps/api/src/bookings/activity-history-routes.ts
 apps/api/src/bookings/booking-recommendation-routes.ts
 apps/api/src/bookings/booking-screen-read-job-store.test.ts
@@ -50,12 +54,17 @@ apps/migrator/Dockerfile
 apps/realtime/Dockerfile
 apps/web/src/auth-gateway.test.ts
 apps/web/src/auth-gateway.ts
+apps/web/src/viva-browser-otp.test.ts
+apps/web/src/viva-browser-otp.ts
 apps/worker/Dockerfile
 apps/worker/src/community-home-sync.ts
 apps/worker/src/main.ts
 apps/worker/src/platform-home-sync.test.ts
 apps/worker/src/platform-home-sync.ts
+contracts/openapi/user/v1/openapi.yaml
 deploy/jetson/activate-live-home.sh
+docs/adr/0004-provider-neutral-authentication.md
+docs/adr/0005-viva-user-delegation-and-direct-transport.md
 packages/api-sdk/src/index.ts
 packages/auth/src/index.ts
 packages/config/src/index.test.ts
@@ -70,7 +79,7 @@ scripts/verify-production-workspace-imports.test.ts'
 actual_paths=$(git -C "$candidate_checkout" diff --name-only "$expected_active..$candidate" | LC_ALL=C sort)
 test "$actual_paths" = "$expected_paths" || fail 'candidate changed-path set differs from the reviewed allowlist'
 
-for protected in packages/database/migrations contracts package.json package-lock.json deploy/compose.staging.yaml; do
+for protected in packages/database/migrations package.json package-lock.json deploy/compose.staging.yaml; do
   test -z "$(git -C "$candidate_checkout" diff --name-only "$expected_active..$candidate" -- "$protected")" ||
     fail "candidate changes protected path $protected"
 done
@@ -78,9 +87,9 @@ done
 active_migrations=$(git -C "$candidate_checkout" ls-tree -r "$expected_active" -- packages/database/migrations)
 candidate_migrations=$(git -C "$candidate_checkout" ls-tree -r "$candidate" -- packages/database/migrations)
 test "$active_migrations" = "$candidate_migrations" || fail 'candidate migration tree differs'
-active_contracts=$(git -C "$candidate_checkout" ls-tree -r "$expected_active" -- contracts)
-candidate_contracts=$(git -C "$candidate_checkout" ls-tree -r "$candidate" -- contracts)
-test "$active_contracts" = "$candidate_contracts" || fail 'candidate contract tree differs'
+actual_contract_paths=$(git -C "$candidate_checkout" diff --name-only "$expected_active..$candidate" -- contracts)
+test "$actual_contract_paths" = 'contracts/openapi/user/v1/openapi.yaml' ||
+  fail 'candidate contract changes differ from the reviewed user-v1 OTP contract'
 active_compose=$(git -C "$candidate_checkout" rev-parse "$expected_active:deploy/compose.staging.yaml")
 candidate_compose=$(git -C "$candidate_checkout" rev-parse "$candidate:deploy/compose.staging.yaml")
 test "$active_compose" = "$candidate_compose" || fail 'candidate staging Compose differs'
@@ -109,6 +118,26 @@ printf '%s' "$identity_source" | grep -Fq 'profileApiBaseUrl' &&
 auth_service_source=$(git -C "$candidate_checkout" show "$candidate:apps/api/src/auth/auth-service.ts")
 printf '%s' "$auth_service_source" | grep -Fq "identityMode: pending.recoveryUserId ? 'RECOVERY_SUBJECT_ONLY' : 'STANDARD'" ||
   fail 'candidate recovery-only OAuth mode is not derived from server-held recovery state'
+printf '%s' "$auth_service_source" | grep -Fq "challenge.transport === 'browser_phone_otp_v1'" ||
+  fail 'candidate does not require browser proof for a browser OTP challenge'
+printf '%s' "$auth_service_source" | grep -Fq 'verifyBrowserPhoneAccessToken' ||
+  fail 'candidate does not verify the browser access-token proof server-side'
+
+auth_routes_source=$(git -C "$candidate_checkout" show "$candidate:apps/api/src/auth/auth-routes.ts")
+printf '%s' "$auth_routes_source" | grep -Fq "body.capability === 'browser_phone_otp_v1'" ||
+  fail 'candidate does not require an explicit browser OTP capability'
+printf '%s' "$auth_routes_source" | grep -Fq "request.headers['x-app-platform'] === 'web'" ||
+  fail 'candidate does not restrict browser OTP capability to the web client'
+printf '%s' "$auth_routes_source" | grep -Fq 'hasConfiguredBrowserOrigin(request, config)' ||
+  fail 'candidate does not bind browser OTP to the configured first-party Origin'
+
+browser_otp_source=$(git -C "$candidate_checkout" show "$candidate:apps/web/src/viva-browser-otp.ts")
+printf '%s' "$browser_otp_source" | grep -Fq "credentials: 'omit'" ||
+  fail 'candidate browser OTP transport does not omit browser credentials'
+printf '%s' "$browser_otp_source" | grep -Fq 'VIVA_BROWSER_OTP_TIMEOUT_MS = 3_000' ||
+  fail 'candidate browser OTP transport lacks the reviewed bounded timeout'
+printf '%s' "$browser_otp_source" | grep -Fq 'refresh_token' ||
+  fail 'candidate browser OTP boundary does not explicitly discard the Viva refresh token'
 
 api_app_source=$(git -C "$candidate_checkout" show "$candidate:apps/api/src/app.ts")
 printf '%s' "$api_app_source" | grep -Fq 'evidenceJob.sessionId === sessionId' ||
@@ -178,4 +207,4 @@ printf '%s' "$probe_source" | grep -Fq 'await import(specifier)' ||
 printf '%s' "$probe_source" | grep -Fq "join(applicationRoot, 'dist')" ||
   fail 'candidate import probe does not scan built application output'
 
-printf '%s\n' "legacy_otp_hotfix_source active=$expected_active candidate=$candidate paths=34 migrations=unchanged contracts=unchanged compose=unchanged status=passed"
+printf '%s\n' "legacy_otp_hotfix_source active=$expected_active candidate=$candidate paths=41 migrations=unchanged contracts=user_v1_otp_reviewed compose=unchanged status=passed"

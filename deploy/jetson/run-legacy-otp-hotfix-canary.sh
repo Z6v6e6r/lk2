@@ -418,6 +418,35 @@ collect_principal_read_outcomes() {
   unset outcome_logs
 }
 
+collect_browser_token_verification() {
+  api_id=$1
+  since=$2
+  expected_correlation_id=$3
+  verification_logs=''
+  if ! verification_logs=$(bounded_docker logs --since "$since" --tail 5000 "$api_id" 2>/dev/null); then
+    printf '%s\n' 'unavailable 0'
+    return 0
+  fi
+  {
+    printf '%s\n' "$expected_correlation_id"
+    printf '%s\n' "$verification_logs"
+  } | awk '
+    NR == 1 {
+      correlation = $0
+      next
+    }
+    {
+      if (index($0, "\"msg\":\"identity provider operation\"") == 0) next
+      if (index($0, "\"operation\":\"verify_browser_phone_token\"") == 0) next
+      if (index($0, "\"outcome\":\"success\"") == 0) next
+      if (index($0, "\"correlationId\":\"" correlation "\"") == 0) next
+      success += 1
+    }
+    END { printf "available %d\n", success }
+  '
+  unset verification_logs
+}
+
 verify_browser_job_binding() {
   job_id=$1
   expected_user_id=$2
@@ -525,6 +554,7 @@ emit_otp_stage_diagnostics() {
       outcome = ""
       if (index($0, "\"operation\":\"request_code\"") > 0) operation = "request_code"
       else if (index($0, "\"operation\":\"verify_code\"") > 0) operation = "verify_code"
+      else if (index($0, "\"operation\":\"verify_browser_phone_token\"") > 0) operation = "verify_browser_phone_token"
       if (index($0, "\"outcome\":\"success\"") > 0) outcome = "success"
       else if (index($0, "\"outcome\":\"invalid\"") > 0) outcome = "invalid"
       else if (index($0, "\"outcome\":\"rate_limited\"") > 0) outcome = "rate_limited"
@@ -542,6 +572,8 @@ emit_otp_stage_diagnostics() {
       printf "legacy_otp_hotfix otp_stage_diagnostic scope=candidate_api_window attribution=aggregate window=tail_5000 source=%s operation=%s total=%d success=%d invalid=%d rate_limited=%d unavailable=%d http_2xx=%d http_3xx=%d http_4xx=%d http_5xx=%d no_status=%d http_other=%d failure_request=%d failure_response=%d\n", source, operation, metric_total[operation], metric_outcome[operation, "success"], metric_outcome[operation, "invalid"], metric_outcome[operation, "rate_limited"], metric_outcome[operation, "unavailable"], metric_status[operation, "http_2xx"], metric_status[operation, "http_3xx"], metric_status[operation, "http_4xx"], metric_status[operation, "http_5xx"], metric_status[operation, "no_status"], metric_status[operation, "http_other"], metric_failure[operation, "request"], metric_failure[operation, "response"]
       operation = "verify_code"
       printf "legacy_otp_hotfix otp_stage_diagnostic scope=candidate_api_window attribution=aggregate window=tail_5000 coverage=partial source=%s operation=%s total=%d success=%d invalid=%d rate_limited=%d unavailable=%d http_2xx=%d http_3xx=%d http_4xx=%d http_5xx=%d no_status=%d http_other=%d failure_token_request=%d failure_token_response=%d failure_post_token=%d\n", source, operation, metric_total[operation], metric_outcome[operation, "success"], metric_outcome[operation, "invalid"], metric_outcome[operation, "rate_limited"], metric_outcome[operation, "unavailable"], metric_status[operation, "http_2xx"], metric_status[operation, "http_3xx"], metric_status[operation, "http_4xx"], metric_status[operation, "http_5xx"], metric_status[operation, "no_status"], metric_status[operation, "http_other"], metric_failure[operation, "token_request"], metric_failure[operation, "token_response"], metric_failure[operation, "post_token"]
+      operation = "verify_browser_phone_token"
+      printf "legacy_otp_hotfix otp_stage_diagnostic scope=candidate_api_window attribution=aggregate window=tail_5000 source=%s operation=%s total=%d success=%d invalid=%d rate_limited=%d unavailable=%d no_status=%d\n", source, operation, metric_total[operation], metric_outcome[operation, "success"], metric_outcome[operation, "invalid"], metric_outcome[operation, "rate_limited"], metric_outcome[operation, "unavailable"], metric_status[operation, "no_status"]
     }
   '
   unset otp_logs
@@ -909,7 +941,8 @@ if test "$operation" = attest; then
   evidence_row=''
   if evidence_row=$(infrastructure exec -T postgres sh -eu -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atqc "$1"' sh "
     select concat(count(*), '|', coalesce(min(actor_id::text), ''), '|',
-                  coalesce(min(tenant_id::text), ''), '|', coalesce(min(resource_id::text), ''))
+                  coalesce(min(tenant_id::text), ''), '|', coalesce(min(resource_id::text), ''), '|',
+                  coalesce(min(correlation_id::text), ''))
     from (
       select distinct session_audit.correlation_id, session_audit.actor_id,
              session_audit.tenant_id, session_audit.resource_id
@@ -928,17 +961,10 @@ if test "$operation" = attest; then
         on external_identity.tenant_id = session_audit.tenant_id
        and external_identity.user_id = session_audit.actor_id
        and external_identity.provider = 'VIVA'
-      join integration.user_delegations delegation
-        on delegation.tenant_id = session_audit.tenant_id
-       and delegation.user_id = session_audit.actor_id
-       and delegation.provider = 'VIVA'
-       and delegation.revoked_at is null
-       and (delegation.refresh_expires_at is null or delegation.refresh_expires_at > now())
       where tenant.tenant_key = 'local-padel'
         and session_audit.occurred_at >= timestamptz '$candidate_ready_at_iso'
         and legal_audit.occurred_at >= timestamptz '$candidate_ready_at_iso'
         and external_identity.last_seen_at >= timestamptz '$candidate_ready_at_iso'
-        and delegation.updated_at >= timestamptz '$candidate_ready_at_iso'
     ) evidence
   " 2>/dev/null); then
     evidence_source=available
@@ -948,7 +974,12 @@ if test "$operation" = attest; then
   evidence_user_id=${evidence_identity%%|*}
   evidence_tenant_and_session=${evidence_identity#*|}
   evidence_tenant_id=${evidence_tenant_and_session%%|*}
-  evidence_session_id=${evidence_tenant_and_session#*|}
+  evidence_session_and_correlation=${evidence_tenant_and_session#*|}
+  evidence_session_id=${evidence_session_and_correlation%%|*}
+  evidence_correlation_id=${evidence_session_and_correlation#*|}
+  set -- $(collect_browser_token_verification "$(project_container_id api)" "$candidate_ready_at_iso" "$evidence_correlation_id")
+  browser_token_source=$1
+  browser_token_success=$2
   set -- $(collect_browser_read_evidence "$(project_container_id api)" "$candidate_ready_at_iso")
   browser_evidence_source=$1
   browser_job_id=$2
@@ -969,20 +1000,25 @@ if test "$operation" = attest; then
     browser_schedule_success=$3
   fi
   if test "$evidence_source" = available && test "$evidence_count" = 1 &&
+    test "$browser_token_source" = available && test "$browser_token_success" = 1 &&
     test "$browser_evidence_source" = available && test "$browser_result_count" -ge 1 &&
     test "$browser_complete_count" -ge 1 && test "$browser_profile_success" -ge 1 &&
     test "$browser_schedule_success" -ge 1 && test "$browser_job_bound" = true &&
     test "$browser_outcome_source" = available; then
     emit_otp_session_evidence "$evidence_source" "$evidence_count"
+    printf '%s\n' "legacy_otp_hotfix browser_token_verification source=$browser_token_source success=$browser_token_success outcome=accepted"
     printf '%s\n' "legacy_otp_hotfix browser_read_evidence source=$browser_evidence_source same_job=true principal_bound=true result_2xx=$browser_result_count complete_2xx=$browser_complete_count profile_success=$browser_profile_success schedule_success=$browser_schedule_success outcome=accepted"
     printf '%s\n' 'legacy_otp_hotfix otp_canary_evidence=correlation-bound status=passed'
     exit 0
   fi
   emit_otp_stage_diagnostics "$(project_container_id api)" "$candidate_ready_at_iso" || true
   emit_otp_session_evidence "$evidence_source" "$evidence_count"
+  printf '%s\n' "legacy_otp_hotfix browser_token_verification source=$browser_token_source success=$browser_token_success outcome=insufficient"
   printf '%s\n' "legacy_otp_hotfix browser_read_evidence source=$browser_evidence_source same_job=$([ "$browser_job_id" != - ] && printf true || printf false) principal_bound=$browser_job_bound result_2xx=$browser_result_count complete_2xx=$browser_complete_count profile_success=$browser_profile_success schedule_success=$browser_schedule_success outcome=insufficient"
   test "$evidence_source" = available || fail 'correlation-bound local-padel phone OTP evidence query is unavailable'
   test "$evidence_count" = 1 || fail 'expected exactly one correlation-bound local-padel phone OTP success during the canary window'
+  test "$browser_token_source" = available || fail 'browser phone-token verification evidence is unavailable'
+  test "$browser_token_success" = 1 || fail 'expected exactly one correlation-bound browser phone-token verification during the canary window'
   test "$browser_evidence_source" = available || fail 'browser-assisted Viva read evidence is unavailable'
   fail 'expected principal-bound browser Viva profile and booking schedule evidence during the canary window'
 fi

@@ -38,7 +38,7 @@ const authorityScript = workflow
 const validAuthority = {
   OPERATION: 'RECOVER',
   EXPECTED_ACTIVE_RELEASE: 'e308181da5222645d9a87d03642923c6841be8d1',
-  CANDIDATE_SHA: '1'.repeat(40),
+  CANDIDATE_SHA: 'c4aa5e8106fffc9a4fb8f9fb03efc9a6ba1c3239',
   CONFIRMATION: 'RECOVER_LEGACY_OTP_HOTFIX_CANARY',
   ORIGINAL_CONTROL_SHA: '2'.repeat(40),
   ORIGINAL_RUN_ID: '12345',
@@ -47,6 +47,7 @@ const validAuthority = {
   CONTROL_SHA: '3'.repeat(40),
   WORKFLOW_SHA: '3'.repeat(40),
   SUPPORTED_ACTIVE_RELEASE: 'e308181da5222645d9a87d03642923c6841be8d1',
+  SUPPORTED_CANDIDATE_SHA: 'c4aa5e8106fffc9a4fb8f9fb03efc9a6ba1c3239',
 };
 
 function runAuthority(overrides: Record<string, string>) {
@@ -72,7 +73,16 @@ const browserJobId = '11111111-1111-4111-8111-111111111111';
 const browserUserId = '33333333-3333-4333-8333-333333333333';
 const browserTenantId = '44444444-4444-4444-8444-444444444444';
 const browserSessionId = '55555555-5555-4555-8555-555555555555';
+const browserAuthCorrelationId = '88888888-8888-4888-8888-888888888888';
 const successfulBrowserReadLogs = [
+  JSON.stringify({
+    metric: {
+      operation: 'verify_browser_phone_token',
+      outcome: 'success',
+      correlationId: browserAuthCorrelationId,
+    },
+    msg: 'identity provider operation',
+  }),
   JSON.stringify({
     reqId: 'browser-read-result',
     req: {
@@ -465,7 +475,7 @@ if test "$1" = compose; then
       ;;
     *' exec -T postgres sh -eu -c '*)
       test "\${PHUB_FAKE_EVIDENCE_FAILURE:-0}" != 1 || exit 95
-      printf '%s|%s|%s|%s\\n' "\${PHUB_FAKE_EVIDENCE_COUNT:-1}" "\${PHUB_FAKE_EVIDENCE_USER_ID:-${browserUserId}}" "\${PHUB_FAKE_EVIDENCE_TENANT_ID:-${browserTenantId}}" "\${PHUB_FAKE_EVIDENCE_SESSION_ID:-${browserSessionId}}"
+      printf '%s|%s|%s|%s|%s\\n' "\${PHUB_FAKE_EVIDENCE_COUNT:-1}" "\${PHUB_FAKE_EVIDENCE_USER_ID:-${browserUserId}}" "\${PHUB_FAKE_EVIDENCE_TENANT_ID:-${browserTenantId}}" "\${PHUB_FAKE_EVIDENCE_SESSION_ID:-${browserSessionId}}" "\${PHUB_FAKE_EVIDENCE_CORRELATION_ID:-${browserAuthCorrelationId}}"
       ;;
     *' exec -T redis redis-cli --raw GET '*)
       printf '{"jobId":"%s","screen":"FOR_ME","tenantId":"%s","userId":"%s","sessionId":"%s","createdAt":"%s"}\\n' '${browserJobId}' '${browserTenantId}' '${browserUserId}' "\${PHUB_FAKE_JOB_SESSION_ID:-${browserSessionId}}" "\${PHUB_FAKE_JOB_CREATED_AT:-$(date -u '+%Y-%m-%dT%H:%M:%SZ')}"
@@ -639,6 +649,8 @@ describe('legacy OTP hotfix canary release contract', () => {
     expect(workflow).toContain('cancel-in-progress: false');
     expect(workflow).toContain('test "$REQUEST_REF" = refs/heads/main');
     expect(workflow).toContain('test "$WORKFLOW_SHA" = "$CONTROL_SHA"');
+    expect(workflow).toContain('SUPPORTED_CANDIDATE_SHA: c4aa5e8106fffc9a4fb8f9fb03efc9a6ba1c3239');
+    expect(workflow).toContain('test "$CANDIDATE_SHA" = "$SUPPORTED_CANDIDATE_SHA"');
     expect(workflow).toContain('START:START_LEGACY_OTP_HOTFIX_CANARY');
     expect(workflow).toContain('RECOVER:RECOVER_LEGACY_OTP_HOTFIX_CANARY');
     const uses = workflow
@@ -651,6 +663,7 @@ describe('legacy OTP hotfix canary release contract', () => {
 
   it('rejects multiline and alternate authority values before SSH interpolation', () => {
     expect(runAuthority({}).status).toBe(0);
+    expect(runAuthority({ CANDIDATE_SHA: '1'.repeat(40) }).status).not.toBe(0);
     for (const [key, value] of [
       ['CANDIDATE_SHA', `${'1'.repeat(40)}\n'; touch /tmp/no`],
       ['EXPECTED_ACTIVE_RELEASE', `e308181da5222645d9a87d03642923c6841be8d1\ninvalid`],
@@ -664,14 +677,23 @@ describe('legacy OTP hotfix canary release contract', () => {
 
   it('verifies the immutable browser-context child of e308 and protects release inputs', () => {
     expect(verifier).toContain('supported_active_release=e308181da5222645d9a87d03642923c6841be8d1');
+    expect(verifier).toContain('supported_candidate_sha=c4aa5e8106fffc9a4fb8f9fb03efc9a6ba1c3239');
     expect(verifier).toContain(
-      'supported_patch_sha256=515e2fc2062aa20c6ee91199e77c7887769a7e1db0920a8c14a117f398b75012',
+      'test "$candidate" = "$supported_candidate_sha" || fail \'candidate is not the exact reviewed OTP hotfix commit\'',
+    );
+    expect(verifier).toContain(
+      'supported_patch_sha256=399d38e983d6f0dc54c97bda377c12a74357db4c1104a9fa1a32406cac1ed35d',
     );
     expect(verifier).toContain(
       'test "$(printf \'%s\\n\' "$parent_line" | awk \'{ print NF }\')" -eq 2',
     );
     expect(verifier).toContain('packages/viva-adapter/src/identity.test.ts');
     expect(verifier).toContain('packages/viva-adapter/src/identity.ts');
+    expect(verifier).toContain('apps/api/src/auth/auth-routes.ts');
+    expect(verifier).toContain('apps/api/src/auth/challenge-store.ts');
+    expect(verifier).toContain('apps/web/src/viva-browser-otp.ts');
+    expect(verifier).toContain('apps/web/src/viva-browser-otp.test.ts');
+    expect(verifier).toContain('contracts/openapi/user/v1/openapi.yaml');
     expect(verifier).toContain('scripts/verify-production-workspace-imports.js');
     expect(verifier).toContain('scripts/verify-production-workspace-imports.test.ts');
     for (const service of ['api', 'worker', 'realtime', 'migrator']) {
@@ -697,12 +719,34 @@ describe('legacy OTP hotfix canary release contract', () => {
     expect(verifier).toContain('candidate config does not fail closed for retired Viva Home sync');
     expect(verifier).toContain('candidate lacks the reviewed recovery-only OAuth boundary');
     expect(verifier).toContain(
+      'candidate does not require browser proof for a browser OTP challenge',
+    );
+    expect(verifier).toContain(
+      'candidate does not verify the browser access-token proof server-side',
+    );
+    expect(verifier).toContain('candidate does not require an explicit browser OTP capability');
+    expect(verifier).toContain(
+      'candidate does not restrict browser OTP capability to the web client',
+    );
+    expect(verifier).toContain(
+      'candidate does not bind browser OTP to the configured first-party Origin',
+    );
+    expect(verifier).toContain('candidate browser OTP transport does not omit browser credentials');
+    expect(verifier).toContain(
+      'candidate browser OTP transport lacks the reviewed bounded timeout',
+    );
+    expect(verifier).toContain(
+      'candidate browser OTP boundary does not explicitly discard the Viva refresh token',
+    );
+    expect(verifier).toContain(
       'candidate routing outcomes are not bound to the authenticated session',
     );
     expect(verifier).toContain('candidate browser transport does not correlate Viva success');
     expect(verifier).toContain('outside the routing-outcome body contract');
     expect(verifier).toContain('through X-Correlation-ID');
-    expect(verifier).toContain('paths=34 migrations=unchanged contracts=unchanged');
+    expect(verifier).toContain(
+      'paths=41 migrations=unchanged contracts=user_v1_otp_reviewed compose=unchanged',
+    );
     expect(verifier).toContain('image copies builder node_modules');
     expect(verifier).toContain('image prunes a copied dependency tree');
     expect(checkout).toContain('checkout-legacy-runtime-secret-bootstrap-candidate.sh');
@@ -978,9 +1022,8 @@ esac
     expect(controller).toContain(
       'scope=local-padel_database source=$source operation=session_evidence',
     );
-    expect(controller).toContain(
-      'delegation.refresh_expires_at is null or delegation.refresh_expires_at > now()',
-    );
+    expect(controller).not.toContain('integration.user_delegations');
+    expect(controller).not.toContain('delegation.refresh_expires_at');
     expect(controller).toContain('CANDIDATE_READY_AT_EPOCH=0');
     expect(controller).toContain('test "$candidate_ready_at_epoch" -gt 0');
     const candidatePublic = controller.lastIndexOf('verify_public_release "$candidate_release"');
@@ -1392,6 +1435,9 @@ esac
         'scope=candidate_api_window attribution=aggregate window=tail_5000 coverage=partial source=available operation=verify_code total=1 success=0 invalid=0 rate_limited=0 unavailable=1 http_2xx=1',
       );
       expect(result.stdout).toContain(
+        'scope=candidate_api_window attribution=aggregate window=tail_5000 source=available operation=verify_browser_phone_token total=1 success=1',
+      );
+      expect(result.stdout).toContain(
         'failure_token_request=0 failure_token_response=0 failure_post_token=1',
       );
       expect(result.stdout).not.toContain('operation=profile_read');
@@ -1407,6 +1453,8 @@ esac
       expect(`${result.stdout}${result.stderr}`).not.toContain('ignored-get-correlation');
       expect(`${result.stdout}${result.stderr}`).not.toContain('ignored-multisegment-correlation');
       expect(`${result.stdout}${result.stderr}`).not.toContain('accessToken');
+      expect(`${result.stdout}${result.stderr}`).not.toContain(browserAuthCorrelationId);
+      expect(controller).not.toContain('awk -v correlation=');
     } finally {
       rmSync(fixture.root, { recursive: true, force: true });
     }
@@ -1507,6 +1555,41 @@ esac
     }
   }, 60_000);
 
+  it('requires exactly one browser token verification bound to the session correlation', () => {
+    const fixture = prepareControllerFixture();
+    try {
+      const opened = runController(fixture, 'start');
+      expect(opened.status, opened.stderr).toBe(0);
+      const wrongCorrelation = runController(fixture, 'attest', {
+        PHUB_FAKE_CONTAINER_LOG: successfulBrowserReadLogs.replaceAll(
+          browserAuthCorrelationId,
+          '99999999-9999-4999-8999-999999999999',
+        ),
+      });
+      expect(wrongCorrelation.status).not.toBe(0);
+      expect(wrongCorrelation.stdout).toContain(
+        'browser_token_verification source=available success=0 outcome=insufficient',
+      );
+      expect(wrongCorrelation.stderr).toContain(
+        'expected exactly one correlation-bound browser phone-token verification',
+      );
+
+      const verificationLog = successfulBrowserReadLogs
+        .split('\n')
+        .find((line) => line.includes('verify_browser_phone_token'));
+      expect(verificationLog).toBeDefined();
+      const duplicate = runController(fixture, 'attest', {
+        PHUB_FAKE_CONTAINER_LOG: `${successfulBrowserReadLogs}\n${verificationLog}`,
+      });
+      expect(duplicate.status).not.toBe(0);
+      expect(duplicate.stdout).toContain(
+        'browser_token_verification source=available success=2 outcome=insufficient',
+      );
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  }, 60_000);
+
   it('restores exact e308 after a post-marker failure and retains the marker if rollback fails', () => {
     const restored = prepareControllerFixture();
     try {
@@ -1543,6 +1626,9 @@ esac
       expect(attested.status, attested.stderr).toBe(0);
       expect(attested.stdout).toContain(
         'scope=local-padel_database source=available operation=session_evidence outcome=exactly_one',
+      );
+      expect(attested.stdout).toContain(
+        'browser_token_verification source=available success=1 outcome=accepted',
       );
       expect(attested.stdout).not.toContain('scope=candidate_api_window');
       expect(attested.stdout).toContain(
@@ -1708,5 +1794,5 @@ esac
     } finally {
       rmSync(stopped.root, { recursive: true, force: true });
     }
-  }, 120_000);
+  }, 180_000);
 });
