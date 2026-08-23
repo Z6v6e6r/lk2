@@ -55,6 +55,15 @@ function runAuthority(overrides: Record<string, string>) {
   });
 }
 
+function getWorkflowStepRun(name: string) {
+  const document = parse(workflow) as {
+    jobs?: { operate?: { steps?: Array<{ name?: string; run?: string }> } };
+  };
+  const run = document.jobs?.operate?.steps?.find((step) => step.name === name)?.run;
+  if (!run) throw new Error(`Workflow step not found: ${name}`);
+  return run;
+}
+
 const activeRelease = 'e308181da5222645d9a87d03642923c6841be8d1';
 const candidateRelease = '1'.repeat(40);
 const controlRelease = '2'.repeat(40);
@@ -831,7 +840,10 @@ describe('legacy OTP hotfix canary release contract', () => {
     expect(workflow).toContain('timeout --signal=TERM --kill-after=30s 2400s ssh');
     expect(workflow).toContain('timeout --signal=TERM --kill-after=30s 1800s ssh');
     expect(workflow).toContain('timeout --signal=TERM --kill-after=5s 30s ssh');
-    expect(workflow).toContain('timeout --signal=TERM --kill-after=5s 900s sh -eu -c');
+    expect(workflow).toContain('timeout --signal=TERM --kill-after=5s 900s sh -u -c');
+    expect(workflow).not.toContain('timeout --signal=TERM --kill-after=5s 900s sh -eu -c');
+    expect(workflow).toContain('candidate_public_probe=pending status=retrying');
+    expect(workflow).toContain('otp_attestation=pending status=retrying');
     expect(workflow).toContain('timeout --signal=TERM --kill-after=5s 300s sh -eu -c');
     expect(workflow).toContain('test "$observation_status" -eq 0');
     expect(
@@ -847,6 +859,86 @@ describe('legacy OTP hotfix canary release contract', () => {
     );
     expect(dispatchInputs).not.toMatch(/phone|otp_code|verification_code|refresh_token/i);
     expect(workflow).toContain('ATTEST_LEGACY_OTP_HOTFIX_CANARY');
+  });
+
+  it('retries a transient public probe failure without collapsing the canary window', () => {
+    const root = mkdtempSync(join(tmpdir(), 'phub-legacy-otp-hold-'));
+    const bin = join(root, 'bin');
+    const curlCount = join(root, 'curl-count');
+    mkdirSync(bin);
+    mkdirSync(join(root, 'evidence'));
+
+    const writeExecutable = (name: string, body: string) => {
+      const path = join(bin, name);
+      writeFileSync(path, body);
+      chmodSync(path, 0o755);
+    };
+
+    writeExecutable(
+      'timeout',
+      `#!/bin/sh
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --signal=*|--kill-after=*) shift ;;
+    *s) shift; break ;;
+    *) break ;;
+  esac
+done
+exec "$@"
+`,
+    );
+    writeExecutable(
+      'curl',
+      `#!/bin/sh
+count=0
+if [ -f "$MOCK_CURL_COUNT" ]; then count=$(cat "$MOCK_CURL_COUNT"); fi
+count=$((count + 1))
+printf '%s\n' "$count" > "$MOCK_CURL_COUNT"
+if [ "$count" -eq 1 ]; then exit 28; fi
+case "$*" in
+  *manifest.json*) printf '%s' '{"release":"5e62399b4f923c726c602b2c1bbe6c0b5cb8b0d7"}' ;;
+esac
+`,
+    );
+    writeExecutable('ssh', '#!/bin/sh\nexit 0\n');
+    writeExecutable('sleep', '#!/bin/sh\nexit 0\n');
+
+    try {
+      const result = spawnSync(
+        'bash',
+        [
+          '-c',
+          getWorkflowStepRun(
+            'Hold the bounded browser window and require OTP plus Viva read success',
+          ),
+        ],
+        {
+          cwd: root,
+          encoding: 'utf8',
+          env: {
+            ...process.env,
+            PATH: `${bin}:${process.env.PATH ?? ''}`,
+            MOCK_CURL_COUNT: curlCount,
+            SSH_OPTIONS: '',
+            HOST: 'staging.invalid',
+            BUNDLE: '/tmp/bundle',
+            CONTROL_SHA: '2'.repeat(40),
+            RUN_ID: '12345',
+            RUN_ATTEMPT: '1',
+            EXPECTED_ACTIVE_RELEASE: activeRelease,
+            CANDIDATE_SHA: '5e62399b4f923c726c602b2c1bbe6c0b5cb8b0d7',
+          },
+        },
+      );
+
+      expect(result.status).toBe(0);
+      expect(Number(readFileSync(curlCount, 'utf8').trim())).toBeGreaterThan(5);
+      const evidence = readFileSync(join(root, 'evidence', 'observation.txt'), 'utf8');
+      expect(evidence).toContain('candidate_public_probe=pending status=retrying');
+      expect(evidence).toContain('otp_evidence=passed browser_read_evidence=passed');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('publishes a durable marker before stopping runtime and converges recovery backward', () => {
