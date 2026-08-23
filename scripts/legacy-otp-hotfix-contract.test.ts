@@ -436,6 +436,12 @@ if test "$1" = compose; then
     previous=$argument
   done
   case " $* " in
+    *' create --no-deps '*)
+      printf '%s\\n' 'unknown flag: --no-deps' >&2
+      exit 64
+      ;;
+  esac
+  case " $* " in
     *' config --images '*)
       registry=$(sed -n 's/^REGISTRY=//p' "$release_file")
       for service in web api worker realtime migrator; do
@@ -459,7 +465,7 @@ if test "$1" = compose; then
       printf 'phub:booking-screen-read-result:%s:22222222-2222-4222-8222-222222222222\\n' '${browserJobId}'
       ;;
     *' exec -T postgres pg_restore --list '*) : ;;
-    *' create '*' web '*) touch "$PHUB_FAKE_WEB_CREATED_STATE" ;;
+    *' up --no-start --no-deps --force-recreate --pull never web '*) touch "$PHUB_FAKE_WEB_CREATED_STATE" ;;
     *' start web '*) rm -f "$PHUB_FAKE_WEB_CREATED_STATE" ;;
     *' up -d '*' web '*) rm -f "$PHUB_FAKE_WEB_CREATED_STATE" ;;
     *' up -d '*) : ;;
@@ -941,13 +947,16 @@ describe('legacy OTP hotfix canary release contract', () => {
       controller.indexOf('start_runtime() {'),
       controller.indexOf('restore_from_marker() {'),
     );
-    const createWeb = startFunction.indexOf('create --no-deps --force-recreate --pull never web');
+    const createWeb = startFunction.indexOf(
+      'up --no-start --no-deps --force-recreate --pull never web',
+    );
     const install = startFunction.indexOf('install_previous_web_assets "$candidate_web_id"');
     const startWeb = startFunction.indexOf('start web');
     const publicRelease = controller.lastIndexOf('verify_public_release "$candidate_release"');
     expect(capture).toBeGreaterThan(0);
     expect(capture).toBeLessThan(stop);
     expect(createWeb).toBeGreaterThan(0);
+    expect(startFunction).not.toContain('compose_with "$release_file" create');
     expect(install).toBeGreaterThan(createWeb);
     expect(startWeb).toBeGreaterThan(install);
     expect(controller.lastIndexOf('start_runtime "$app_root/release.env" candidate')).toBeLessThan(
@@ -1173,8 +1182,9 @@ describe('legacy OTP hotfix canary release contract', () => {
     );
     expect(startFunction.indexOf('realtime api worker')).toBeGreaterThan(0);
     expect(
-      startFunction.indexOf('create --no-deps --force-recreate --pull never web'),
+      startFunction.indexOf('up --no-start --no-deps --force-recreate --pull never web'),
     ).toBeGreaterThan(0);
+    expect(startFunction).not.toContain('compose_with "$release_file" create');
     expect(controller).toContain('assert_flags_disabled');
     for (const flag of [
       'HOME_VIVA_SYNC_ENABLED',
