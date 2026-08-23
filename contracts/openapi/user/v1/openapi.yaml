@@ -2445,6 +2445,10 @@ components:
           pattern: '^\+7[0-9]{10}$'
           description: Phone number in E.164 format.
           example: '+79991234567'
+        capability:
+          type: string
+          const: browser_phone_otp_v1
+          description: Optional first-party web capability. When accepted, Viva OTP side effects occur only in the browser.
     AuthChallenge:
       type: object
       additionalProperties: false
@@ -2460,29 +2464,76 @@ components:
           type: integer
           minimum: 0
           maximum: 3600
-    VerifyAuthChallengeRequest:
+        browserTransport:
+          $ref: '#/components/schemas/BrowserPhoneOtpTransport'
+    BrowserPhoneOtpTransport:
       type: object
       additionalProperties: false
-      required: [code]
+      required: [kind, requestCodeUrl, tokenUrl, clientId, channel, providerTenantKey, phoneNumber]
       properties:
-        code:
+        kind:
           type: string
-          pattern: '^[0-9]{4}$'
-          description: One-time code supplied to the user.
-        acceptance:
-          type: object
+          const: browser_phone_otp_v1
+        requestCodeUrl:
+          type: string
+          format: uri
+        tokenUrl:
+          type: string
+          format: uri
+        clientId:
+          type: string
+        channel:
+          type: string
+        providerTenantKey:
+          type: string
+        phoneNumber:
+          type: string
+          pattern: '^[0-9]{11}$'
+    VerifyAuthChallengeRequest:
+      oneOf:
+        - type: object
           additionalProperties: false
-          description: |
-            Required for client sessions and rejected unless both values are true.
-            CUP admin authentication does not create a consumer legal acceptance.
-          required: [publicOfferAccepted, personalDataPolicyAccepted]
+          required: [code]
           properties:
-            publicOfferAccepted:
-              type: boolean
-              const: true
-            personalDataPolicyAccepted:
-              type: boolean
-              const: true
+            code:
+              type: string
+              pattern: '^[0-9]{4}$'
+              description: One-time code supplied to the user.
+            acceptance:
+              $ref: '#/components/schemas/PhoneLegalAcceptance'
+        - type: object
+          additionalProperties: false
+          required: [proof]
+          properties:
+            proof:
+              type: object
+              additionalProperties: false
+              required: [kind, accessToken]
+              description: First-party browser OTP completion proof. Viva refresh credentials are intentionally excluded.
+              properties:
+                kind:
+                  type: string
+                  const: browser_phone_access_token_v1
+                accessToken:
+                  type: string
+                  minLength: 20
+                  maxLength: 16384
+            acceptance:
+              $ref: '#/components/schemas/PhoneLegalAcceptance'
+    PhoneLegalAcceptance:
+      type: object
+      additionalProperties: false
+      description: |
+        Required for client sessions and rejected unless both values are true.
+        CUP admin authentication does not create a consumer legal acceptance.
+      required: [publicOfferAccepted, personalDataPolicyAccepted]
+      properties:
+        publicOfferAccepted:
+          type: boolean
+          const: true
+        personalDataPolicyAccepted:
+          type: boolean
+          const: true
     VivaOAuthAuthorizationRequest:
       type: object
       additionalProperties: false

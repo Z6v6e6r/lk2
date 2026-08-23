@@ -3,6 +3,7 @@ import type {
   VerifiedExternalIdentity,
   VivaOAuthProviderPort,
 } from '@phub/auth';
+import { IdentityProviderError } from '@phub/auth';
 import { loadConfig } from '@phub/config';
 import { createLogger } from '@phub/observability';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -33,7 +34,7 @@ const config = loadConfig({
   JWT_REFRESH_SECRET: 'test-refresh-secret-at-least-32-characters',
 });
 
-function loadPhoneProjectionConfig() {
+function loadVivaPhoneConfig() {
   return loadConfig({
     APP_ENV: 'ci',
     DATABASE_URL: 'postgresql://phub:test@localhost:5432/phub',
@@ -48,7 +49,6 @@ function loadPhoneProjectionConfig() {
     VIVA_OAUTH_REDIRECT_URI: 'https://app.example.test/oauth/callback',
     VIVA_OAUTH_SUCCESS_REDIRECT_URL: 'https://app.example.test/',
     VIVA_DELEGATION_ENCRYPTION_KEY: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
-    HOME_VIVA_SYNC_ENABLED: 'true',
   });
 }
 
@@ -284,6 +284,253 @@ afterEach(async () => {
 });
 
 describe('provider-neutral authentication routes', () => {
+  it('binds browser Viva OTP completion to a deterministic HttpOnly cookie without server OTP calls', async () => {
+    const requestPhoneCode = vi.fn();
+    const verifyPhoneCode = vi.fn();
+    const verifyBrowserPhoneAccessToken = vi.fn().mockResolvedValue({
+      identity: {
+        issuer: 'https://identity.example.test',
+        subject: 'external-user-1',
+        phoneE164: '+79990000001',
+        displayName: user.displayName,
+      },
+      tokenId: 'browser-token-id-1',
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    });
+    const browserProvider: IdentityProviderPort = {
+      key: 'VIVA',
+      requestPhoneCode,
+      verifyPhoneCode,
+      createBrowserPhoneOtpTransport: () =>
+        Promise.resolve({
+          kind: 'browser_phone_otp_v1',
+          requestCodeUrl: 'https://identity.example.test/sms/authentication-code',
+          tokenUrl: 'https://identity.example.test/protocol/openid-connect/token',
+          clientId: 'widget',
+          channel: 'cascade',
+          providerTenantKey: binding.providerTenantKey,
+          phoneNumber: '79990000001',
+        }),
+      verifyBrowserPhoneAccessToken,
+    };
+    const repository = new FakeRepository();
+    const authService = new AuthService({
+      config,
+      repository,
+      challengeStore: new MemoryAuthChallengeStore(),
+      providers: new Map([['VIVA', browserProvider]]),
+    });
+    const app = await buildApp({
+      config,
+      logger: createLogger('api-browser-otp-test', 'silent'),
+      authService,
+    });
+    apps.push(app);
+    const headers = {
+      origin: 'http://localhost:5173',
+      'x-app-platform': 'web',
+      'idempotency-key': 'browser-otp-challenge-0001',
+    };
+
+    const first = await app.inject({
+      method: 'POST',
+      url: '/user/api/v1/local-padel/auth/challenges',
+      headers,
+      payload: { method: 'phone_otp', phone: '+79990000001', capability: 'browser_phone_otp_v1' },
+    });
+    expect(first.statusCode).toBe(202);
+    expect(first.json()).toMatchObject({ browserTransport: { kind: 'browser_phone_otp_v1' } });
+    const challenge = first.json<{ challengeId: string }>();
+    const firstCookie = String(first.headers['set-cookie']);
+    expect(firstCookie).toContain(`phub_otp_browser_${challenge.challengeId}=`);
+    expect(firstCookie).toContain('HttpOnly');
+    expect(firstCookie).toContain('Secure');
+    expect(firstCookie).toContain('SameSite=Lax');
+    expect(firstCookie).toContain(`/auth/challenges/${challenge.challengeId}/verify`);
+    expect(requestPhoneCode).not.toHaveBeenCalled();
+
+    const replay = await app.inject({
+      method: 'POST',
+      url: '/user/api/v1/local-padel/auth/challenges',
+      headers,
+      payload: { method: 'phone_otp', phone: '+79990000001', capability: 'browser_phone_otp_v1' },
+    });
+    expect(replay.statusCode).toBe(202);
+    expect(String(replay.headers['set-cookie']).split(';')[0]).toBe(firstCookie.split(';')[0]);
+
+    const wrongCookie = await app.inject({
+      method: 'POST',
+      url: `/user/api/v1/local-padel/auth/challenges/${challenge.challengeId}/verify`,
+      headers: {
+        origin: 'http://localhost:5173',
+        'x-app-platform': 'web',
+        'idempotency-key': 'browser-otp-wrong-cookie-01',
+        cookie: `phub_otp_browser_${challenge.challengeId}=wrong`,
+      },
+      payload: {
+        proof: {
+          kind: 'browser_phone_access_token_v1',
+          accessToken: 'browser-access-token-for-test',
+        },
+        acceptance: { publicOfferAccepted: true, personalDataPolicyAccepted: true },
+      },
+    });
+    expect(wrongCookie.statusCode).toBe(401);
+    expect(verifyBrowserPhoneAccessToken).not.toHaveBeenCalled();
+
+    const wrongAudience = await app.inject({
+      method: 'POST',
+      url: `/user/api/v1/local-padel/auth/challenges/${challenge.challengeId}/verify`,
+      headers: {
+        'idempotency-key': 'browser-otp-cup-proof-0001',
+        cookie: firstCookie.split(';')[0],
+        'x-app-platform': 'cup-admin',
+      },
+      payload: {
+        proof: {
+          kind: 'browser_phone_access_token_v1',
+          accessToken: 'browser-access-token-for-test',
+        },
+        acceptance: { publicOfferAccepted: true, personalDataPolicyAccepted: true },
+      },
+    });
+    expect(wrongAudience.statusCode).toBe(401);
+    expect(verifyBrowserPhoneAccessToken).not.toHaveBeenCalled();
+
+    const disallowedProofOrigin = await app.inject({
+      method: 'POST',
+      url: `/user/api/v1/local-padel/auth/challenges/${challenge.challengeId}/verify`,
+      headers: {
+        origin: 'https://untrusted.example',
+        'x-app-platform': 'web',
+        'idempotency-key': 'browser-otp-untrusted-proof-1',
+        cookie: firstCookie.split(';')[0],
+      },
+      payload: {
+        proof: {
+          kind: 'browser_phone_access_token_v1',
+          accessToken: 'browser-access-token-for-test',
+        },
+        acceptance: { publicOfferAccepted: true, personalDataPolicyAccepted: true },
+      },
+    });
+    expect(disallowedProofOrigin.statusCode).toBe(401);
+    expect(verifyBrowserPhoneAccessToken).not.toHaveBeenCalled();
+
+    const browserChallengeCode = await app.inject({
+      method: 'POST',
+      url: `/user/api/v1/local-padel/auth/challenges/${challenge.challengeId}/verify`,
+      headers: {
+        'idempotency-key': 'browser-otp-legacy-code-01',
+        cookie: firstCookie.split(';')[0],
+      },
+      payload: {
+        code: '0000',
+        acceptance: { publicOfferAccepted: true, personalDataPolicyAccepted: true },
+      },
+    });
+    expect(browserChallengeCode.statusCode).toBe(401);
+    expect(verifyPhoneCode).not.toHaveBeenCalled();
+
+    const verified = await app.inject({
+      method: 'POST',
+      url: `/user/api/v1/local-padel/auth/challenges/${challenge.challengeId}/verify`,
+      headers: {
+        origin: 'http://localhost:5173',
+        'x-app-platform': 'web',
+        'idempotency-key': 'browser-otp-verify-00001',
+        cookie: firstCookie.split(';')[0],
+      },
+      payload: {
+        proof: {
+          kind: 'browser_phone_access_token_v1',
+          accessToken: 'browser-access-token-for-test',
+        },
+        acceptance: { publicOfferAccepted: true, personalDataPolicyAccepted: true },
+      },
+    });
+    expect(verified.statusCode).toBe(200);
+    expect(verifyBrowserPhoneAccessToken).toHaveBeenCalledTimes(1);
+    expect(verifyPhoneCode).not.toHaveBeenCalled();
+    expect(repository.hasVivaDelegation).toBe(false);
+
+    const invalidCapability = await app.inject({
+      method: 'POST',
+      url: '/user/api/v1/local-padel/auth/challenges',
+      headers: {
+        ...headers,
+        origin: 'https://untrusted.example',
+        'idempotency-key': 'browser-otp-invalid-origin-1',
+      },
+      payload: { method: 'phone_otp', phone: '+79990000001', capability: 'browser_phone_otp_v1' },
+    });
+    expect(invalidCapability.statusCode).toBe(503);
+    expect(requestPhoneCode).not.toHaveBeenCalled();
+
+    const missingOrigin = await app.inject({
+      method: 'POST',
+      url: '/user/api/v1/local-padel/auth/challenges',
+      headers: { 'x-app-platform': 'web', 'idempotency-key': 'browser-otp-missing-origin-1' },
+      payload: { method: 'phone_otp', phone: '+79990000001', capability: 'browser_phone_otp_v1' },
+    });
+    const nonWebPlatform = await app.inject({
+      method: 'POST',
+      url: '/user/api/v1/local-padel/auth/challenges',
+      headers: {
+        origin: 'http://localhost:5173',
+        'x-app-platform': 'mobile',
+        'idempotency-key': 'browser-otp-mobile-platform-1',
+      },
+      payload: { method: 'phone_otp', phone: '+79990000001', capability: 'browser_phone_otp_v1' },
+    });
+    expect(missingOrigin.statusCode).toBe(503);
+    expect(nonWebPlatform.statusCode).toBe(503);
+    expect(requestPhoneCode).not.toHaveBeenCalled();
+  });
+
+  it('does not reserve a challenge cooldown when browser transport cannot be built', async () => {
+    const requestPhoneCode = vi.fn().mockResolvedValue(undefined);
+    const provider: IdentityProviderPort = {
+      key: 'VIVA',
+      requestPhoneCode,
+      verifyPhoneCode: vi.fn(),
+      createBrowserPhoneOtpTransport: () =>
+        Promise.reject(new IdentityProviderError('AUTH_PROVIDER_UNAVAILABLE')),
+    };
+    const authService = new AuthService({
+      config,
+      repository: new FakeRepository(),
+      challengeStore: new MemoryAuthChallengeStore(),
+      providers: new Map([['VIVA', provider]]),
+    });
+    const app = await buildApp({
+      config,
+      logger: createLogger('api-browser-transport-failure', 'silent'),
+      authService,
+    });
+    apps.push(app);
+    const browserHeaders = {
+      origin: 'http://localhost:5173',
+      'x-app-platform': 'web',
+      'idempotency-key': 'browser-transport-failure-1',
+    };
+    const failed = await app.inject({
+      method: 'POST',
+      url: '/user/api/v1/local-padel/auth/challenges',
+      headers: browserHeaders,
+      payload: { method: 'phone_otp', phone: '+79990000001', capability: 'browser_phone_otp_v1' },
+    });
+    const legacy = await app.inject({
+      method: 'POST',
+      url: '/user/api/v1/local-padel/auth/challenges',
+      headers: { 'idempotency-key': 'legacy-after-browser-failure-1' },
+      payload: { method: 'phone_otp', phone: '+79990000001' },
+    });
+    expect(failed.statusCode).toBe(503);
+    expect(legacy.statusCode).toBe(202);
+    expect(requestPhoneCode).toHaveBeenCalledTimes(1);
+  });
+
   it('hands off the initial Viva access token once and refreshes it from encrypted delegation', async () => {
     const oauthConfig = loadConfig({
       APP_ENV: 'ci',
@@ -303,12 +550,15 @@ describe('provider-neutral authentication routes', () => {
     });
     const repository = new FakeRepository();
     const stateStore = new MemoryVivaOAuthStateStore();
+    const exchangeAuthorizationCode = vi.fn<VivaOAuthProviderPort['exchangeAuthorizationCode']>(
+      (input) => oauthProvider.exchangeAuthorizationCode(input),
+    );
     const service = new AuthService({
       config: oauthConfig,
       repository,
       challengeStore: new MemoryAuthChallengeStore(),
       providers: new Map([['VIVA', provider]]),
-      vivaOAuthProvider: oauthProvider,
+      vivaOAuthProvider: { ...oauthProvider, exchangeAuthorizationCode },
       vivaOAuthStateStore: stateStore,
     });
 
@@ -395,6 +645,10 @@ describe('provider-neutral authentication routes', () => {
     expect(completedRecovery.vivaRecovery).toBe(true);
     expect(repository.legalAcceptances).toBe(beforeRecoveryAcceptances);
     expect(repository.identityUpserts).toBe(beforeRecoveryUpserts);
+    expect(exchangeAuthorizationCode.mock.calls[0]?.[0]?.identityMode).toBe('STANDARD');
+    expect(exchangeAuthorizationCode.mock.calls[1]?.[0]?.identityMode).toBe(
+      'RECOVERY_SUBJECT_ONLY',
+    );
 
     const crossBrowserRecovery = await service.startVivaOAuthRecovery({
       tenantKey: binding.tenantKey,
@@ -886,7 +1140,7 @@ describe('provider-neutral authentication routes', () => {
   });
 
   it('persists the server-only Viva refresh delegation from phone authentication', async () => {
-    const phoneProjectionConfig = loadPhoneProjectionConfig();
+    const phoneProjectionConfig = loadVivaPhoneConfig();
     const repository = new FakeRepository();
     const phoneProvider: IdentityProviderPort = {
       key: 'VIVA',
@@ -940,11 +1194,12 @@ describe('provider-neutral authentication routes', () => {
     expect(verifyResponse.body).not.toContain('server-only-phone-refresh-token');
   });
 
-  it('fails closed when a Viva phone login cannot seed the required Home delegation', async () => {
-    const phoneProjectionConfig = loadPhoneProjectionConfig();
+  it('allows Viva phone login without a delegation and defers reauthorization to browser reads', async () => {
+    const phoneProjectionConfig = loadVivaPhoneConfig();
+    const repository = new FakeRepository();
     const authService = new AuthService({
       config: phoneProjectionConfig,
-      repository: new FakeRepository(),
+      repository,
       challengeStore: new MemoryAuthChallengeStore(),
       providers: new Map([['VIVA', provider]]),
     });
@@ -972,9 +1227,9 @@ describe('provider-neutral authentication routes', () => {
       },
     });
 
-    expect(verifyResponse.statusCode).toBe(401);
-    expect(verifyResponse.json()).toMatchObject({ code: 'VIVA_REAUTH_REQUIRED' });
-    expect(verifyResponse.headers['set-cookie']).toBeUndefined();
+    expect(verifyResponse.statusCode).toBe(200);
+    expect(repository.hasVivaDelegation).toBe(false);
+    expect(verifyResponse.headers['set-cookie']).toBeDefined();
   });
 
   it('uses the explicit local CUP code without calling Viva sandbox', async () => {

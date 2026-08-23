@@ -49,13 +49,18 @@ type HistoryCursor =
   | { readonly type: 'ITEM'; readonly occurredAt: string; readonly id: string }
   | { readonly type: 'COVERAGE' };
 
-function principal(request: FastifyRequest): { tenantId: string; userId: string } | undefined {
+function principal(
+  request: FastifyRequest,
+): { tenantId: string; userId: string; sessionId: string } | undefined {
   const current = request as FastifyRequest & {
     readonly tenantId?: string;
-    readonly padlHubClaims?: { readonly sub?: string };
+    readonly padlHubClaims?: { readonly sub?: string; readonly sid?: string };
   };
   const userId = current.padlHubClaims?.sub;
-  return current.tenantId && userId ? { tenantId: current.tenantId, userId } : undefined;
+  const sessionId = current.padlHubClaims?.sid;
+  return current.tenantId && userId && sessionId
+    ? { tenantId: current.tenantId, userId, sessionId }
+    : undefined;
 }
 
 function encodeCursor(value: HistoryCursor): string {
@@ -262,6 +267,7 @@ export function registerActivityHistoryRoutes(
         screen: 'ACTIVITY_HISTORY' as const,
         tenantId: current.tenantId,
         userId: current.userId,
+        sessionId: current.sessionId,
         createdAt: now.toISOString(),
         expiresAt: new Date(now.getTime() + CLIENT_ASSISTED_JOB_TTL_SECONDS * 1_000).toISOString(),
         ...(reason ? { historyReason: reason } : {}),
@@ -329,6 +335,7 @@ export function registerActivityHistoryRoutes(
         job.screen !== 'ACTIVITY_HISTORY' ||
         job.tenantId !== current.tenantId ||
         job.userId !== current.userId ||
+        job.sessionId !== current.sessionId ||
         command?.operation !== 'bookings.history.read'
       ) {
         return sendApiError(
@@ -400,7 +407,8 @@ export function registerActivityHistoryRoutes(
         !job ||
         job.screen !== 'ACTIVITY_HISTORY' ||
         job.tenantId !== current.tenantId ||
-        job.userId !== current.userId
+        job.userId !== current.userId ||
+        job.sessionId !== current.sessionId
       ) {
         return sendApiError(
           request,

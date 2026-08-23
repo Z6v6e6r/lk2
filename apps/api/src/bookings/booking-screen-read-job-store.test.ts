@@ -10,6 +10,7 @@ const job: BookingScreenReadJob = {
   screen: 'FOR_ME',
   tenantId: '20000000-0000-4000-8000-000000000001',
   userId: '30000000-0000-4000-8000-000000000001',
+  sessionId: '50000000-0000-4000-8000-000000000001',
   createdAt: '2026-07-30T09:00:00.000Z',
   expiresAt: '2026-07-30T09:02:00.000Z',
   commands: [

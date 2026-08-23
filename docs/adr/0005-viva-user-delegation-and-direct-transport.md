@@ -152,3 +152,19 @@ unverified command completion.
 The feature remains disabled until a staging preflight proves Viva OAuth PKCE, the provider aliases,
 CORS, token audience and permitted APIs. If any preflight condition fails, the UI must not expose a
 working direct-Viva path; PadlHub remains on its current server-mediated or unavailable policy.
+
+## Browser phone OTP boundary
+
+The `browser_phone_otp_v1` challenge capability is a narrow first-party web exception, not a
+general Viva client. PadlHub selects its public configuration and binds completion to a
+challenge-scoped HttpOnly cookie; the browser cannot select tenant, issuer or provider endpoints.
+The only credential returned to PadlHub is a short-lived Viva access token for signature
+verification. Any Viva refresh credential in the provider response is deliberately ignored. Token
+id replay is atomically bound to one challenge, and metrics contain only the operation,
+correlation-id, outcome and status. There is no refresh-token handoff, delegation persistence or
+permission expansion in this flow.
+
+Before this capability can be enabled in a staging canary, the release preflight must attest Viva
+CORS for the exact cabinet Origin on both the SMS `GET` and token form `POST` endpoints. A failed,
+missing or stale attestation is fail-closed; the web client must not advertise the capability and
+the API must not fall back to a server-side Viva OTP request.

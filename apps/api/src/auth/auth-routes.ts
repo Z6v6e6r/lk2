@@ -1,4 +1,4 @@
-import { createHmac } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 
 import { normalizePhoneE164 } from '@phub/auth';
 import type { AppConfig } from '@phub/config';
@@ -11,20 +11,35 @@ import { AuthServiceError, type AuthService, type AuthSessionResult } from './au
 
 export const REFRESH_COOKIE_NAME = 'phub_refresh';
 export const OAUTH_BROWSER_COOKIE_NAME = 'phub_oauth_browser';
+export const BROWSER_OTP_COOKIE_NAME = 'phub_otp_browser';
 
 const challengeBodySchema = z.object({
   method: z.literal('phone_otp'),
   phone: z.string().min(5).max(32),
+  capability: z.literal('browser_phone_otp_v1').optional(),
 });
-const verifyBodySchema = z.object({
-  code: z.string().regex(/^\d{4}$/),
-  acceptance: z
-    .object({
-      publicOfferAccepted: z.literal(true),
-      personalDataPolicyAccepted: z.literal(true),
-    })
-    .optional(),
-});
+const verifyBodySchema = z
+  .object({
+    code: z
+      .string()
+      .regex(/^\d{4}$/)
+      .optional(),
+    proof: z
+      .object({
+        kind: z.literal('browser_phone_access_token_v1'),
+        accessToken: z.string().min(20).max(16_384),
+      })
+      .optional(),
+    acceptance: z
+      .object({
+        publicOfferAccepted: z.literal(true),
+        personalDataPolicyAccepted: z.literal(true),
+      })
+      .optional(),
+  })
+  .refine((value) => (value.code ? 1 : 0) + (value.proof ? 1 : 0) === 1, {
+    message: 'Provide exactly one phone-code proof',
+  });
 const vivaOAuthStartBodySchema = z.object({
   provider: z.enum(['vkid', 'yandex']),
   acceptance: z.object({
@@ -66,6 +81,10 @@ function isAllowedBrowserOrigin(request: FastifyRequest, config: AppConfig): boo
   return config.CORS_ORIGINS.split(',')
     .map((value) => value.trim())
     .includes(origin);
+}
+
+function hasConfiguredBrowserOrigin(request: FastifyRequest, config: AppConfig): boolean {
+  return typeof request.headers.origin === 'string' && isAllowedBrowserOrigin(request, config);
 }
 
 function errorMessage(code: string): string {
@@ -181,6 +200,47 @@ function setRefreshCookie(
     sameSite: 'lax',
     path: `/user/api/v1/${tenantKey}/auth`,
     maxAge: config.AUTH_REFRESH_TTL_SECONDS,
+  });
+}
+
+function browserOtpCookieName(challengeId: string): string {
+  return `${BROWSER_OTP_COOKIE_NAME}_${challengeId}`;
+}
+
+function browserOtpNonce(config: AppConfig, tenantKey: string, idempotencyKey: string): string {
+  return createHmac('sha256', config.JWT_REFRESH_SECRET)
+    .update('browser-phone-otp-cookie-v1')
+    .update('\0')
+    .update(tenantKey)
+    .update('\0')
+    .update(idempotencyKey)
+    .digest('base64url');
+}
+
+function setBrowserOtpCookie(
+  reply: FastifyReply,
+  tenantKey: string,
+  challengeId: string,
+  nonce: string,
+  ttlSeconds: number,
+): void {
+  reply.setCookie(browserOtpCookieName(challengeId), nonce, {
+    httpOnly: true,
+    // This credential binds a browser-to-provider exchange and must never be
+    // accepted over plaintext, including non-production environments.
+    secure: true,
+    sameSite: 'lax',
+    path: `/user/api/v1/${tenantKey}/auth/challenges/${challengeId}/verify`,
+    maxAge: ttlSeconds,
+  });
+}
+
+function clearBrowserOtpCookie(reply: FastifyReply, tenantKey: string, challengeId: string): void {
+  reply.clearCookie(browserOtpCookieName(challengeId), {
+    httpOnly: true,
+    secure: true,
+    sameSite: 'lax',
+    path: `/user/api/v1/${tenantKey}/auth/challenges/${challengeId}/verify`,
   });
 }
 
@@ -425,13 +485,42 @@ export function registerAuthRoutes(
       try {
         const { tenantKey } = paramsSchema.parse(request.params);
         const body = challengeBodySchema.parse(request.body);
+        const browserPhoneOtp =
+          body.capability === 'browser_phone_otp_v1' &&
+          request.headers['x-app-platform'] === 'web' &&
+          hasConfiguredBrowserOrigin(request, config);
+        if (body.capability === 'browser_phone_otp_v1' && !browserPhoneOtp) {
+          throw new AuthServiceError('AUTH_PROVIDER_UNAVAILABLE');
+        }
+        const requestIdempotencyKey = idempotencyKey(request);
+        const browserNonce = browserPhoneOtp
+          ? browserOtpNonce(config, tenantKey, requestIdempotencyKey)
+          : undefined;
         const challenge = await authService.startPhoneChallenge({
           tenantKey,
           phone: body.phone,
           correlationId: request.id,
-          idempotencyKey: idempotencyKey(request),
+          idempotencyKey: requestIdempotencyKey,
           accessAudience: accessAudience(request),
+          browserPhoneOtp,
+          ...(browserNonce
+            ? {
+                browserNonceHash: createHash('sha256').update(browserNonce).digest('hex'),
+              }
+            : {}),
         });
+        if (challenge.browserTransport) {
+          if (browserNonce && !request.cookies[browserOtpCookieName(challenge.challengeId)]) {
+            setBrowserOtpCookie(
+              reply,
+              tenantKey,
+              challenge.challengeId,
+              browserNonce,
+              Math.max(1, Math.ceil((Date.parse(challenge.expiresAt) - Date.now()) / 1000)),
+            );
+          }
+          preventCredentialCaching(reply);
+        }
         return reply.status(202).send(challenge);
       } catch (error) {
         return handleAuthError(error, request, reply);
@@ -456,16 +545,27 @@ export function registerAuthRoutes(
       try {
         const { tenantKey, challengeId } = verifyParamsSchema.parse(request.params);
         const body = verifyBodySchema.parse(request.body);
+        if (
+          body.proof &&
+          (request.headers['x-app-platform'] !== 'web' ||
+            !hasConfiguredBrowserOrigin(request, config))
+        ) {
+          throw new AuthServiceError('AUTH_CODE_INVALID');
+        }
+        const browserNonce = request.cookies[browserOtpCookieName(challengeId)];
         const session = await authService.verifyPhoneChallenge({
           tenantKey,
           challengeId,
-          code: body.code,
+          ...(body.code ? { code: body.code } : {}),
+          ...(body.proof ? { browserProof: body.proof } : {}),
+          ...(body.proof && typeof browserNonce === 'string' ? { browserNonce } : {}),
           correlationId: request.id,
           idempotencyKey: idempotencyKey(request),
           accessAudience: accessAudience(request),
           ...(body.acceptance ? { acceptance: body.acceptance } : {}),
         });
         setRefreshCookie(reply, config, tenantKey, session);
+        if (body.proof) clearBrowserOtpCookie(reply, tenantKey, challengeId);
         preventCredentialCaching(reply);
         return reply.send(publicSession(session, await resolveRuntimeCapabilities()));
       } catch (error) {

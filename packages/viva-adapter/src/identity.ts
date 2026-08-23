@@ -4,8 +4,11 @@ import {
   IdentityProviderError,
   normalizePhoneE164,
   type IdentityProviderPort,
+  type BrowserPhoneOtpTransport,
+  type VerifiedBrowserPhoneAccessToken,
   type PhoneVerificationResult,
   type VerifiedExternalIdentity,
+  type VivaOAuthIdentityMode,
   type VivaOAuthIdentityResolution,
   type VivaOAuthProvider,
   type VivaOAuthProviderPort,
@@ -19,7 +22,6 @@ export interface VivaIdentityProviderOptions {
   readonly realm: string;
   readonly clientId: string;
   readonly channel: string;
-  readonly profileApiBaseUrl: string;
   readonly oauthScopes: string;
   readonly timeoutMs: number;
   readonly devPhoneE164: string;
@@ -28,10 +30,6 @@ export interface VivaIdentityProviderOptions {
   readonly circuitCooldownMs?: number;
   readonly allowExistingSubjectOAuthBootstrap?: boolean;
   readonly fetchImplementation?: typeof fetch;
-  readonly resolveIdentityFromAccessToken?: (
-    accessToken: string,
-    fallbackPhone: string,
-  ) => Promise<VerifiedExternalIdentity>;
   readonly onMetric?: (metric: VivaIdentityMetric) => void;
 }
 
@@ -41,20 +39,13 @@ export interface VivaIdentityMetric {
     | 'verify_code'
     | 'oauth_token_exchange'
     | 'jwt_verify'
-    | 'profile_read'
+    | 'verify_browser_phone_token'
     | 'oauth_exchange'
     | 'delegation_refresh';
   readonly outcome: 'success' | 'invalid' | 'rate_limited' | 'unavailable';
   readonly status?: number;
   readonly correlationId?: string;
-  readonly failureStage?:
-    | 'token_request'
-    | 'token_payload'
-    | 'refresh_token'
-    | 'access_token'
-    | 'profile_request'
-    | 'profile_response'
-    | 'profile_payload';
+  readonly failureStage?: 'token_request' | 'token_payload' | 'refresh_token' | 'access_token';
   readonly durationMs: number;
   readonly circuitState: 'closed' | 'open';
 }
@@ -71,16 +62,6 @@ class VivaOAuthStageError extends IdentityProviderError {
   }
 }
 
-class VivaProfileReadError extends VivaOAuthStageError {
-  public constructor(
-    status: number | undefined,
-    failureStage: 'profile_request' | 'profile_response' | 'profile_payload',
-  ) {
-    super(failureStage, status);
-    this.name = 'VivaProfileReadError';
-  }
-}
-
 const tokenResponseSchema = z.object({
   access_token: z.string().min(1),
   refresh_token: z.string().optional(),
@@ -89,20 +70,17 @@ const tokenResponseSchema = z.object({
   token_type: z.string().optional(),
 });
 
-const profileResponseSchema = z.object({
-  id: z.union([z.string(), z.number()]).optional(),
-  firstName: z.string().nullish(),
-  lastName: z.string().nullish(),
-  middleName: z.string().nullish(),
-  phone: z.string().nullish(),
-});
-
 function stringClaim(payload: JWTPayload, names: readonly string[]): string | undefined {
   for (const name of names) {
     const value = payload[name];
     if (typeof value === 'string' && value.trim()) return value.trim();
   }
   return undefined;
+}
+
+function toVivaPhoneNumber(phoneE164: string): string {
+  // Viva's client-realm OTP contract uses the canonical digits without the E.164 `+` prefix.
+  return phoneE164.startsWith('+') ? phoneE164.slice(1) : phoneE164;
 }
 
 export class VivaIdentityProvider implements IdentityProviderPort, VivaOAuthProviderPort {
@@ -119,7 +97,11 @@ export class VivaIdentityProvider implements IdentityProviderPort, VivaOAuthProv
     this.jwks = createRemoteJWKSet(new URL(`${this.issuer}/protocol/openid-connect/certs`), {
       timeoutDuration: options.timeoutMs,
       cooldownDuration: 30_000,
-      [customFetch]: (url, init) => this.fetchWithPolicy(new URL(url), init, true),
+      [customFetch]: async (url, init) => {
+        const response = await this.fetchWithPolicy(new URL(url), init, true);
+        if (!response.ok) throw new IdentityProviderError('AUTH_PROVIDER_UNAVAILABLE');
+        return response;
+      },
     });
   }
 
@@ -166,7 +148,7 @@ export class VivaIdentityProvider implements IdentityProviderPort, VivaOAuthProv
 
   /**
    * OTP send/token exchange use one attempt because Viva has not documented
-   * idempotency for those side effects. The profile GET is safe for one retry.
+   * idempotency for those side effects. JWKS reads are safe for one retry.
    */
   private async fetchWithPolicy(
     url: URL,
@@ -199,118 +181,162 @@ export class VivaIdentityProvider implements IdentityProviderPort, VivaOAuthProv
     accessToken: string,
     fallbackPhone: string,
     providerTenantKey: string,
-    correlationId: string,
   ): Promise<VerifiedExternalIdentity> {
-    if (this.options.resolveIdentityFromAccessToken) {
-      return this.options.resolveIdentityFromAccessToken(accessToken, fallbackPhone);
-    }
-
     const { payload } = await jwtVerify(accessToken, this.jwks, {
       issuer: this.issuer,
       algorithms: ['RS256'],
     });
-    if (payload.azp !== this.options.clientId) {
+    if (
+      payload.azp !== this.options.clientId ||
+      stringClaim(payload, ['tenant_key', 'tenantKey']) !== providerTenantKey
+    ) {
       throw new IdentityProviderError('AUTH_PROVIDER_UNAVAILABLE');
     }
     if (typeof payload.sub !== 'string' || !payload.sub) {
       throw new IdentityProviderError('AUTH_PROVIDER_UNAVAILABLE');
     }
 
-    const profile = await this.resolveVivaProfile(accessToken, providerTenantKey, correlationId);
-    const profileName = [profile.firstName, profile.middleName, profile.lastName]
-      .map((part) => part?.trim())
-      .filter(Boolean)
-      .join(' ');
+    const tokenPhone = normalizePhoneE164(
+      stringClaim(payload, ['phone_number', 'phoneNumber', 'phone']) ?? '',
+    );
+    if (payload.phone_number_verified !== true || tokenPhone !== fallbackPhone) {
+      throw new IdentityProviderError('AUTH_PROVIDER_UNAVAILABLE');
+    }
     const tokenName = [stringClaim(payload, ['given_name']), stringClaim(payload, ['family_name'])]
       .filter(Boolean)
       .join(' ');
     const displayName =
-      profileName ||
-      stringClaim(payload, ['name', 'preferred_username']) ||
-      tokenName ||
-      'Игрок ПаделхАБ';
-    const phoneE164 = normalizePhoneE164(profile.phone ?? '') ?? fallbackPhone;
+      stringClaim(payload, ['name', 'preferred_username']) || tokenName || 'Игрок ПадлхАБ';
     return {
       issuer: this.issuer,
       subject: payload.sub,
-      providerUserId: String(profile.id),
-      phoneE164,
+      phoneE164: tokenPhone,
       displayName,
     };
   }
 
-  private async resolveVivaProfile(
-    accessToken: string,
-    providerTenantKey: string,
-    correlationId: string,
-  ): Promise<z.infer<typeof profileResponseSchema> & { readonly id: string | number }> {
+  public createBrowserPhoneOtpTransport(input: {
+    readonly phoneE164: string;
+    readonly providerTenantKey: string;
+  }): Promise<BrowserPhoneOtpTransport> {
+    this.ensureAvailable();
+    if (this.options.mode === 'mock') throw new IdentityProviderError('AUTH_PROVIDER_UNAVAILABLE');
+    return Promise.resolve({
+      kind: 'browser_phone_otp_v1',
+      requestCodeUrl: `${this.issuer}/sms/authentication-code`,
+      tokenUrl: `${this.issuer}/protocol/openid-connect/token`,
+      clientId: this.options.clientId,
+      channel: this.options.channel,
+      providerTenantKey: input.providerTenantKey,
+      phoneNumber: toVivaPhoneNumber(input.phoneE164),
+    });
+  }
+
+  public async verifyBrowserPhoneAccessToken(input: {
+    readonly accessToken: string;
+    readonly phoneE164: string;
+    readonly providerTenantKey: string;
+    readonly challengeCreatedAt: string;
+    readonly correlationId: string;
+  }): Promise<VerifiedBrowserPhoneAccessToken> {
     const startedAt = Date.now();
-    const profileUrl = new URL(
-      `${this.options.profileApiBaseUrl.replace(/\/$/, '')}/${encodeURIComponent(providerTenantKey)}/profile`,
-    );
-    let profileResponse: Response;
+    this.ensureAvailable();
+    let payload: JWTPayload;
     try {
-      profileResponse = await this.fetchWithPolicy(
-        profileUrl,
-        {
-          method: 'GET',
-          headers: {
-            Accept: 'application/json',
-            Authorization: `Bearer ${accessToken}`,
-            'X-Correlation-ID': correlationId,
+      ({ payload } = await jwtVerify(input.accessToken, this.jwks, {
+        issuer: this.issuer,
+        audience: 'account',
+        algorithms: ['RS256'],
+      }));
+    } catch (error) {
+      if (error instanceof IdentityProviderError && error.code === 'AUTH_PROVIDER_UNAVAILABLE') {
+        this.emit(
+          {
+            operation: 'verify_browser_phone_token',
+            outcome: 'unavailable',
+            correlationId: input.correlationId,
           },
-        },
-        true,
-      );
-    } catch {
-      this.emit({ operation: 'profile_read', outcome: 'unavailable', correlationId }, startedAt);
-      throw new VivaProfileReadError(undefined, 'profile_request');
-    }
-    if (!profileResponse.ok) {
-      this.emit(
-        {
-          operation: 'profile_read',
-          outcome: 'unavailable',
-          status: profileResponse.status,
-          correlationId,
-        },
-        startedAt,
-      );
-      throw new VivaProfileReadError(profileResponse.status, 'profile_response');
-    }
-    try {
-      const profile = profileResponseSchema.parse(await profileResponse.json());
-      if (profile.id === undefined) {
-        throw new VivaProfileReadError(profileResponse.status, 'profile_payload');
+          startedAt,
+        );
+        throw error;
       }
       this.emit(
         {
-          operation: 'profile_read',
-          outcome: 'success',
-          status: profileResponse.status,
-          correlationId,
+          operation: 'verify_browser_phone_token',
+          outcome: 'invalid',
+          correlationId: input.correlationId,
         },
         startedAt,
       );
-      return profile as z.infer<typeof profileResponseSchema> & { readonly id: string | number };
-    } catch {
+      throw new IdentityProviderError('AUTH_CODE_INVALID');
+    }
+    const tokenId = stringClaim(payload, ['jti']);
+    const issuedAt = typeof payload.iat === 'number' ? payload.iat * 1000 : undefined;
+    const expiresAt = typeof payload.exp === 'number' ? payload.exp * 1000 : undefined;
+    const challengeCreatedAt = Date.parse(input.challengeCreatedAt);
+    if (
+      !tokenId ||
+      !issuedAt ||
+      !expiresAt ||
+      issuedAt < challengeCreatedAt - 30_000 ||
+      payload.azp !== this.options.clientId ||
+      stringClaim(payload, ['tenant_key', 'tenantKey']) !== input.providerTenantKey
+    ) {
       this.emit(
         {
-          operation: 'profile_read',
-          outcome: 'unavailable',
-          status: profileResponse.status,
-          correlationId,
+          operation: 'verify_browser_phone_token',
+          outcome: 'invalid',
+          correlationId: input.correlationId,
         },
         startedAt,
       );
-      throw new VivaProfileReadError(profileResponse.status, 'profile_payload');
+      throw new IdentityProviderError('AUTH_CODE_INVALID');
     }
+    const tokenPhone = normalizePhoneE164(
+      stringClaim(payload, ['phone_number', 'phoneNumber', 'phone']) ?? '',
+    );
+    if (
+      typeof payload.sub !== 'string' ||
+      !payload.sub ||
+      payload.phone_number_verified !== true ||
+      tokenPhone !== input.phoneE164
+    ) {
+      this.emit(
+        {
+          operation: 'verify_browser_phone_token',
+          outcome: 'invalid',
+          correlationId: input.correlationId,
+        },
+        startedAt,
+      );
+      throw new IdentityProviderError('AUTH_CODE_INVALID');
+    }
+    const tokenName = [stringClaim(payload, ['given_name']), stringClaim(payload, ['family_name'])]
+      .filter(Boolean)
+      .join(' ');
+    const identity: VerifiedExternalIdentity = {
+      issuer: this.issuer,
+      subject: payload.sub,
+      phoneE164: tokenPhone,
+      displayName:
+        stringClaim(payload, ['name', 'preferred_username']) || tokenName || 'Игрок ПадлхАБ',
+    };
+    this.emit(
+      {
+        operation: 'verify_browser_phone_token',
+        outcome: 'success',
+        correlationId: input.correlationId,
+      },
+      startedAt,
+    );
+    return { identity, tokenId, expiresAt: new Date(expiresAt).toISOString() };
   }
 
   private async resolveOAuthIdentity(
     accessToken: string,
     providerTenantKey: string,
     correlationId: string,
+    identityMode: VivaOAuthIdentityMode,
   ): Promise<{
     readonly identity: VerifiedExternalIdentity;
     readonly identityResolution: VivaOAuthIdentityResolution;
@@ -326,60 +352,35 @@ export class VivaIdentityProvider implements IdentityProviderPort, VivaOAuthProv
       this.emit({ operation: 'jwt_verify', outcome: 'unavailable', correlationId }, startedAt);
       throw new VivaOAuthStageError('access_token');
     }
-    if (payload.azp !== this.options.clientId || typeof payload.sub !== 'string' || !payload.sub) {
+    if (
+      payload.azp !== this.options.clientId ||
+      stringClaim(payload, ['tenant_key', 'tenantKey']) !== providerTenantKey ||
+      typeof payload.sub !== 'string' ||
+      !payload.sub
+    ) {
       this.emit({ operation: 'jwt_verify', outcome: 'unavailable', correlationId }, startedAt);
       throw new VivaOAuthStageError('access_token');
     }
     this.emit({ operation: 'jwt_verify', outcome: 'success', correlationId }, startedAt);
-    let profile: Awaited<ReturnType<VivaIdentityProvider['resolveVivaProfile']>>;
-    try {
-      profile = await this.resolveVivaProfile(accessToken, providerTenantKey, correlationId);
-    } catch (error) {
-      if (
-        this.options.allowExistingSubjectOAuthBootstrap &&
-        error instanceof VivaProfileReadError &&
-        error.status === 403
-      ) {
-        const displayName =
-          stringClaim(payload, ['name', 'preferred_username']) ||
-          [stringClaim(payload, ['given_name']), stringClaim(payload, ['family_name'])]
-            .filter(Boolean)
-            .join(' ') ||
-          'Игрок ПадлхАБ';
-        return {
-          identity: {
-            issuer: this.issuer,
-            subject: payload.sub,
-            displayName,
-          },
-          identityResolution: 'EXISTING_SUBJECT',
-        };
-      }
-      throw error;
+    if (
+      identityMode !== 'RECOVERY_SUBJECT_ONLY' &&
+      !this.options.allowExistingSubjectOAuthBootstrap
+    ) {
+      throw new VivaOAuthStageError('access_token');
     }
-    const profileName = [profile.firstName, profile.middleName, profile.lastName]
-      .map((part) => part?.trim())
-      .filter(Boolean)
-      .join(' ');
     const displayName =
-      profileName ||
       stringClaim(payload, ['name', 'preferred_username']) ||
       [stringClaim(payload, ['given_name']), stringClaim(payload, ['family_name'])]
         .filter(Boolean)
         .join(' ') ||
       'Игрок ПадлхАБ';
-    const phoneE164 = normalizePhoneE164(
-      profile.phone ?? stringClaim(payload, ['phone_number', 'phoneNumber', 'phone']) ?? '',
-    );
     return {
       identity: {
         issuer: this.issuer,
         subject: payload.sub,
-        providerUserId: String(profile.id),
         displayName,
-        ...(phoneE164 ? { phoneE164 } : {}),
       },
-      identityResolution: 'CANONICAL_PROFILE',
+      identityResolution: 'EXISTING_SUBJECT',
     };
   }
 
@@ -412,6 +413,7 @@ export class VivaIdentityProvider implements IdentityProviderPort, VivaOAuthProv
     readonly providerTenantKey: string;
     readonly redirectUri: string;
     readonly correlationId: string;
+    readonly identityMode?: VivaOAuthIdentityMode;
   }): Promise<{
     readonly identity: VerifiedExternalIdentity;
     readonly identityResolution: VivaOAuthIdentityResolution;
@@ -518,6 +520,7 @@ export class VivaIdentityProvider implements IdentityProviderPort, VivaOAuthProv
         tokens.access_token,
         input.providerTenantKey,
         input.correlationId,
+        input.identityMode ?? 'STANDARD',
       );
     } catch (error) {
       const stageError = error instanceof VivaOAuthStageError ? error : undefined;
@@ -631,7 +634,7 @@ export class VivaIdentityProvider implements IdentityProviderPort, VivaOAuthProv
     }
 
     const url = new URL(`${this.issuer}/sms/authentication-code`);
-    url.searchParams.set('phoneNumber', input.phoneE164);
+    url.searchParams.set('phoneNumber', toVivaPhoneNumber(input.phoneE164));
     url.searchParams.set('channel', this.options.channel);
     url.searchParams.set('tenantKey', input.providerTenantKey);
     let response: Response;
@@ -700,7 +703,7 @@ export class VivaIdentityProvider implements IdentityProviderPort, VivaOAuthProv
           },
           body: new URLSearchParams({
             grant_type: 'password',
-            phone_number: input.phoneE164,
+            phone_number: toVivaPhoneNumber(input.phoneE164),
             code: input.code,
             client_id: this.options.clientId,
             tenant_key: input.providerTenantKey,
@@ -740,7 +743,6 @@ export class VivaIdentityProvider implements IdentityProviderPort, VivaOAuthProv
         tokens.access_token,
         input.phoneE164,
         input.providerTenantKey,
-        input.correlationId,
       );
       this.emit(
         { operation: 'verify_code', outcome: 'success', status: response.status },

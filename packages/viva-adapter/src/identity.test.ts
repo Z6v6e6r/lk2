@@ -17,7 +17,6 @@ function options() {
     realm: 'clients',
     clientId: 'widget',
     channel: 'cascade',
-    profileApiBaseUrl: 'https://api.vivacrm.invalid/end-user/api/v1',
     oauthScopes: 'openid',
     timeoutMs: 100,
     devPhoneE164: '+79990000001',
@@ -37,8 +36,36 @@ function requestBody(value: BodyInit | null | undefined): string {
   return value;
 }
 
+async function signedAccessToken(claims: Record<string, unknown>, withIssuedAt = false) {
+  const { publicKey, privateKey } = await generateKeyPair('RS256');
+  const jwk = { ...(await exportJWK(publicKey)), kid: 'test-key', use: 'sig', alg: 'RS256' };
+  const builder = new SignJWT({ azp: 'widget', tenant_key: 'iSkq6G', ...claims })
+    .setProtectedHeader({ alg: 'RS256', kid: 'test-key' })
+    .setIssuer('https://kc.vivacrm.invalid/realms/clients')
+    .setSubject('viva-user-42')
+    .setExpirationTime('5m');
+  if (withIssuedAt) builder.setIssuedAt();
+  const accessToken = await builder.sign(privateKey);
+  return { accessToken, jwk };
+}
+
+function tokenAndJwksFetch(accessToken: string, jwk: Record<string, unknown>) {
+  return vi.fn<typeof fetch>((request) => {
+    const url = fetchUrl(request);
+    if (url.pathname.endsWith('/protocol/openid-connect/token')) {
+      return Promise.resolve(
+        Response.json({ access_token: accessToken, refresh_token: 'external-refresh' }),
+      );
+    }
+    if (url.pathname.endsWith('/protocol/openid-connect/certs')) {
+      return Promise.resolve(Response.json({ keys: [jwk] }));
+    }
+    return Promise.resolve(new Response(null, { status: 404 }));
+  });
+}
+
 describe('VivaIdentityProvider', () => {
-  it('supports a deterministic local Viva-mode login without exposing Viva tokens', async () => {
+  it('supports deterministic mock login without exposing Viva tokens', async () => {
     const provider = new VivaIdentityProvider(options());
     const localInput = { ...input, phoneE164: '+79990000001' } as const;
     await expect(provider.requestPhoneCode(localInput)).resolves.toBeUndefined();
@@ -51,7 +78,7 @@ describe('VivaIdentityProvider', () => {
     expect(identity).not.toHaveProperty('refreshToken');
   });
 
-  it('rejects an invalid local code with a stable PadlHub error', async () => {
+  it('rejects an invalid mock code with a stable PadlHub error', async () => {
     const provider = new VivaIdentityProvider(options());
     await expect(provider.verifyPhoneCode({ ...input, code: '1111' })).rejects.toMatchObject({
       code: 'AUTH_CODE_INVALID',
@@ -59,23 +86,30 @@ describe('VivaIdentityProvider', () => {
   });
 
   it('uses the current Viva SMS and token contracts only inside the adapter', async () => {
-    const fetchImplementation = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(new Response(null, { status: 204 }))
-      .mockResolvedValueOnce(
-        Response.json({ access_token: 'external-secret', refresh_token: 'external-refresh' }),
-      );
+    const { accessToken, jwk } = await signedAccessToken({
+      phone_number: '79991234567',
+      phone_number_verified: true,
+      name: 'Алексей',
+    });
+    const fetchImplementation = vi.fn<typeof fetch>((request) => {
+      const url = fetchUrl(request);
+      if (url.pathname.endsWith('/sms/authentication-code')) {
+        return Promise.resolve(new Response(null, { status: 204 }));
+      }
+      if (url.pathname.endsWith('/protocol/openid-connect/token')) {
+        return Promise.resolve(
+          Response.json({ access_token: accessToken, refresh_token: 'external-refresh' }),
+        );
+      }
+      if (url.pathname.endsWith('/protocol/openid-connect/certs')) {
+        return Promise.resolve(Response.json({ keys: [jwk] }));
+      }
+      return Promise.resolve(new Response(null, { status: 404 }));
+    });
     const provider = new VivaIdentityProvider({
       ...options(),
       mode: 'sandbox',
       fetchImplementation,
-      resolveIdentityFromAccessToken: () =>
-        Promise.resolve({
-          issuer: 'https://kc.vivacrm.ru/realms/clients',
-          subject: 'viva-user-42',
-          phoneE164: input.phoneE164,
-          displayName: 'Алексей',
-        }),
     });
 
     await provider.requestPhoneCode(input);
@@ -83,148 +117,325 @@ describe('VivaIdentityProvider', () => {
 
     const sendUrl = fetchUrl(fetchImplementation.mock.calls[0]?.[0]);
     expect(sendUrl.pathname).toBe('/realms/clients/sms/authentication-code');
+    expect(sendUrl.searchParams.get('phoneNumber')).toBe('79991234567');
     expect(sendUrl.searchParams.get('tenantKey')).toBe('iSkq6G');
-    const verifyBody = requestBody(fetchImplementation.mock.calls[1]?.[1]?.body);
-    expect(verifyBody).toContain('grant_type=password');
-    expect(verifyBody).toContain('client_id=widget');
+    const verifyParams = new URLSearchParams(
+      requestBody(fetchImplementation.mock.calls[1]?.[1]?.body),
+    );
+    expect(verifyParams.get('grant_type')).toBe('password');
+    expect(verifyParams.get('phone_number')).toBe('79991234567');
+    expect(verifyParams.get('client_id')).toBe('widget');
+    expect(verifyParams.get('tenant_key')).toBe('iSkq6G');
     expect(verification).toMatchObject({
-      identity: { subject: 'viva-user-42' },
+      identity: { subject: 'viva-user-42', phoneE164: '+79991234567' },
       delegation: { refreshToken: 'external-refresh' },
     });
     expect(verification).not.toHaveProperty('accessToken');
   });
 
-  it('binds OAuth subjects to the stable Viva profile identifier', async () => {
-    const metrics: VivaIdentityMetric[] = [];
-    const { publicKey, privateKey } = await generateKeyPair('RS256');
-    const jwk = { ...(await exportJWK(publicKey)), kid: 'test-key', use: 'sig', alg: 'RS256' };
-    const accessToken = await new SignJWT({
-      azp: 'widget',
-      name: 'Social Account Name',
-    })
-      .setProtectedHeader({ alg: 'RS256', kid: 'test-key' })
-      .setIssuer('https://kc.vivacrm.invalid/realms/clients')
-      .setSubject('provider-specific-subject')
-      .setExpirationTime('5m')
-      .sign(privateKey);
-    const fetchImplementation = vi.fn<typeof fetch>((request) => {
-      const url = fetchUrl(request);
-      if (url.pathname.endsWith('/protocol/openid-connect/token')) {
-        return Promise.resolve(
-          Response.json({ access_token: accessToken, refresh_token: 'external-refresh' }),
-        );
-      }
-      if (url.pathname.endsWith('/protocol/openid-connect/certs')) {
-        return Promise.resolve(Response.json({ keys: [jwk] }));
-      }
-      if (url.pathname.endsWith('/iSkq6G/profile')) {
-        return Promise.resolve(
-          Response.json({
-            id: 'viva-profile-42',
-            firstName: 'Алексей',
-            lastName: 'Сергеев',
-            phone: '+79603073190',
-          }),
-        );
-      }
-      return Promise.resolve(new Response(null, { status: 404 }));
+  it('resolves OTP identity from verified token claims without an End User API request', async () => {
+    const { accessToken, jwk } = await signedAccessToken({
+      phone_number: '79991234567',
+      phone_number_verified: true,
+      name: 'Alexey Sergeev',
     });
+    const fetchImplementation = tokenAndJwksFetch(accessToken, jwk);
     const provider = new VivaIdentityProvider({
       ...options(),
       mode: 'sandbox',
       fetchImplementation,
-      onMetric: (metric) => metrics.push(metric),
     });
 
-    const result = await provider.exchangeAuthorizationCode({
-      code: 'authorization-code',
-      codeVerifier: 'pkce-verifier',
-      providerTenantKey: 'iSkq6G',
-      redirectUri: 'https://app.example.test/callback',
-      correlationId: 'oauth-correlation-123',
-    });
+    const result = await provider.verifyPhoneCode({ ...input, code: '1234' });
 
-    expect(result.identity).toMatchObject({
-      subject: 'provider-specific-subject',
-      providerUserId: 'viva-profile-42',
-      displayName: 'Алексей Сергеев',
-      phoneE164: '+79603073190',
+    expect(result).toMatchObject({
+      identity: {
+        issuer: 'https://kc.vivacrm.invalid/realms/clients',
+        subject: 'viva-user-42',
+        phoneE164: input.phoneE164,
+        displayName: 'Alexey Sergeev',
+      },
+      delegation: { refreshToken: 'external-refresh' },
     });
-    expect(result.identityResolution).toBe('CANONICAL_PROFILE');
-    const profileCall = fetchImplementation.mock.calls.find(([request]) =>
-      fetchUrl(request).pathname.endsWith('/iSkq6G/profile'),
-    );
-    const profileHeaders = new Headers(profileCall?.[1]?.headers);
-    expect(profileHeaders.get('Authorization')).toBe(`Bearer ${accessToken}`);
-    expect(profileHeaders.get('Accept')).toBe('application/json');
-    expect(profileHeaders.get('X-Correlation-ID')).toBe('oauth-correlation-123');
-    expect(
-      metrics.map((metric) => ({
-        operation: metric.operation,
-        outcome: metric.outcome,
-        status: metric.status,
-        correlationId: metric.correlationId,
-      })),
-    ).toEqual([
-      {
-        operation: 'oauth_token_exchange',
-        outcome: 'success',
-        status: 200,
-        correlationId: 'oauth-correlation-123',
-      },
-      {
-        operation: 'jwt_verify',
-        outcome: 'success',
-        status: undefined,
-        correlationId: 'oauth-correlation-123',
-      },
-      {
-        operation: 'profile_read',
-        outcome: 'success',
-        status: 200,
-        correlationId: 'oauth-correlation-123',
-      },
-      {
-        operation: 'oauth_exchange',
-        outcome: 'success',
-        status: 200,
-        correlationId: undefined,
-      },
+    expect(fetchImplementation.mock.calls.map(([request]) => fetchUrl(request).pathname)).toEqual([
+      '/realms/clients/protocol/openid-connect/token',
+      '/realms/clients/protocol/openid-connect/certs',
     ]);
   });
 
-  it('returns a verified existing-subject bootstrap when server profile reads are forbidden', async () => {
-    const { publicKey, privateKey } = await generateKeyPair('RS256');
-    const jwk = { ...(await exportJWK(publicKey)), kid: 'test-key', use: 'sig', alg: 'RS256' };
-    const accessToken = await new SignJWT({
-      azp: 'widget',
-      name: 'Social Account Name',
-    })
-      .setProtectedHeader({ alg: 'RS256', kid: 'test-key' })
-      .setIssuer('https://kc.vivacrm.invalid/realms/clients')
-      .setSubject('already-linked-subject')
-      .setExpirationTime('5m')
-      .sign(privateKey);
-    const fetchImplementation = vi.fn<typeof fetch>((request) => {
-      const url = fetchUrl(request);
-      if (url.pathname.endsWith('/protocol/openid-connect/token')) {
-        return Promise.resolve(
-          Response.json({ access_token: accessToken, refresh_token: 'external-refresh' }),
-        );
-      }
-      if (url.pathname.endsWith('/protocol/openid-connect/certs')) {
-        return Promise.resolve(Response.json({ keys: [jwk] }));
-      }
-      if (url.pathname.endsWith('/iSkq6G/profile')) {
-        return Promise.resolve(new Response(null, { status: 403 }));
-      }
-      return Promise.resolve(new Response(null, { status: 404 }));
+  it('verifies a browser phone access token and emits only safe evidence', async () => {
+    const { accessToken, jwk } = await signedAccessToken(
+      {
+        aud: 'account',
+        jti: 'browser-token-id-1',
+        phone_number: '79991234567',
+        phone_number_verified: true,
+        name: 'Alexey Sergeev',
+      },
+      true,
+    );
+    const metrics: VivaIdentityMetric[] = [];
+    const provider = new VivaIdentityProvider({
+      ...options(),
+      mode: 'sandbox',
+      fetchImplementation: tokenAndJwksFetch(accessToken, jwk),
+      onMetric: (metric) => metrics.push(metric),
     });
+
+    const result = await provider.verifyBrowserPhoneAccessToken({
+      ...input,
+      accessToken,
+      challengeCreatedAt: new Date(Date.now() - 5_000).toISOString(),
+    });
+
+    expect(result).toMatchObject({
+      tokenId: 'browser-token-id-1',
+      identity: { subject: 'viva-user-42', phoneE164: input.phoneE164 },
+    });
+    expect(result).not.toHaveProperty('accessToken');
+    expect(result).not.toHaveProperty('refreshToken');
+    expect(metrics).toEqual([
+      expect.objectContaining({
+        operation: 'verify_browser_phone_token',
+        outcome: 'success',
+        correlationId: input.correlationId,
+      }),
+    ]);
+    expect(JSON.stringify(metrics)).not.toContain(accessToken);
+    expect(JSON.stringify(metrics)).not.toContain('browser-token-id-1');
+  });
+
+  it.each([
+    [
+      'audience',
+      { aud: 'other', jti: 'jti-1', phone_number: '79991234567', phone_number_verified: true },
+      true,
+      -5_000,
+    ],
+    [
+      'authorized party',
+      {
+        aud: 'account',
+        azp: 'other',
+        jti: 'jti-1',
+        phone_number: '79991234567',
+        phone_number_verified: true,
+      },
+      true,
+      -5_000,
+    ],
+    [
+      'tenant',
+      {
+        aud: 'account',
+        jti: 'jti-1',
+        tenant_key: 'other',
+        phone_number: '79991234567',
+        phone_number_verified: true,
+      },
+      true,
+      -5_000,
+    ],
+    [
+      'phone',
+      { aud: 'account', jti: 'jti-1', phone_number: '79990000000', phone_number_verified: true },
+      true,
+      -5_000,
+    ],
+    [
+      'missing jti',
+      { aud: 'account', phone_number: '79991234567', phone_number_verified: true },
+      true,
+      -5_000,
+    ],
+    [
+      'missing iat',
+      { aud: 'account', jti: 'jti-1', phone_number: '79991234567', phone_number_verified: true },
+      false,
+      -5_000,
+    ],
+    [
+      'stale iat',
+      { aud: 'account', jti: 'jti-1', phone_number: '79991234567', phone_number_verified: true },
+      true,
+      60_000,
+    ],
+  ])(
+    'rejects browser phone token with invalid %s',
+    async (_label, claims, issuedAt, challengeOffset) => {
+      const { accessToken, jwk } = await signedAccessToken(claims, issuedAt);
+      const provider = new VivaIdentityProvider({
+        ...options(),
+        mode: 'sandbox',
+        fetchImplementation: tokenAndJwksFetch(accessToken, jwk),
+      });
+
+      await expect(
+        provider.verifyBrowserPhoneAccessToken({
+          ...input,
+          accessToken,
+          challengeCreatedAt: new Date(Date.now() + challengeOffset).toISOString(),
+        }),
+      ).rejects.toMatchObject({ code: 'AUTH_CODE_INVALID' });
+    },
+  );
+
+  it('rejects a browser phone token with an invalid signature', async () => {
+    const { accessToken } = await signedAccessToken(
+      { aud: 'account', jti: 'jti-1', phone_number: '79991234567', phone_number_verified: true },
+      true,
+    );
+    const { jwk } = await signedAccessToken({}, true);
+    const provider = new VivaIdentityProvider({
+      ...options(),
+      mode: 'sandbox',
+      fetchImplementation: tokenAndJwksFetch(accessToken, jwk),
+    });
+
+    await expect(
+      provider.verifyBrowserPhoneAccessToken({
+        ...input,
+        accessToken,
+        challengeCreatedAt: new Date(Date.now() - 5_000).toISOString(),
+      }),
+    ).rejects.toMatchObject({ code: 'AUTH_CODE_INVALID' });
+  });
+
+  it('keeps browser token verification unavailable when JWKS retrieval fails', async () => {
+    const { accessToken } = await signedAccessToken(
+      { aud: 'account', jti: 'jti-1', phone_number: '79991234567', phone_number_verified: true },
+      true,
+    );
+    const metrics: VivaIdentityMetric[] = [];
+    const provider = new VivaIdentityProvider({
+      ...options(),
+      mode: 'sandbox',
+      fetchImplementation: vi.fn<typeof fetch>().mockRejectedValue(new Error('offline')),
+      onMetric: (metric) => metrics.push(metric),
+    });
+
+    await expect(
+      provider.verifyBrowserPhoneAccessToken({
+        ...input,
+        accessToken,
+        challengeCreatedAt: new Date(Date.now() - 5_000).toISOString(),
+      }),
+    ).rejects.toMatchObject({ code: 'AUTH_PROVIDER_UNAVAILABLE' });
+    expect(metrics).toEqual([
+      expect.objectContaining({
+        operation: 'verify_browser_phone_token',
+        outcome: 'unavailable',
+        correlationId: input.correlationId,
+      }),
+    ]);
+  });
+
+  it('keeps browser token verification unavailable when JWKS returns 503', async () => {
+    const { accessToken } = await signedAccessToken(
+      { aud: 'account', jti: 'jti-503', phone_number: '79991234567', phone_number_verified: true },
+      true,
+    );
+    const metrics: VivaIdentityMetric[] = [];
+    const provider = new VivaIdentityProvider({
+      ...options(),
+      mode: 'sandbox',
+      fetchImplementation: vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(new Response(null, { status: 503 })),
+      onMetric: (metric) => metrics.push(metric),
+    });
+
+    await expect(
+      provider.verifyBrowserPhoneAccessToken({
+        ...input,
+        accessToken,
+        challengeCreatedAt: new Date(Date.now() - 5_000).toISOString(),
+      }),
+    ).rejects.toMatchObject({ code: 'AUTH_PROVIDER_UNAVAILABLE' });
+    expect(metrics).toEqual([
+      expect.objectContaining({
+        operation: 'verify_browser_phone_token',
+        outcome: 'unavailable',
+        correlationId: input.correlationId,
+      }),
+    ]);
+  });
+
+  it('returns only public browser phone transport configuration', async () => {
+    const provider = new VivaIdentityProvider({ ...options(), mode: 'sandbox' });
+    await expect(provider.createBrowserPhoneOtpTransport(input)).resolves.toEqual({
+      kind: 'browser_phone_otp_v1',
+      requestCodeUrl: 'https://kc.vivacrm.invalid/realms/clients/sms/authentication-code',
+      tokenUrl: 'https://kc.vivacrm.invalid/realms/clients/protocol/openid-connect/token',
+      clientId: 'widget',
+      channel: 'cascade',
+      providerTenantKey: input.providerTenantKey,
+      phoneNumber: '79991234567',
+    });
+  });
+
+  it.each([
+    ['a mismatched phone', { phone_number: '+79990000000', phone_number_verified: true }],
+    ['an unverified phone', { phone_number: '79991234567', phone_number_verified: false }],
+    [
+      'a mismatched tenant',
+      {
+        phone_number: '79991234567',
+        phone_number_verified: true,
+        tenant_key: 'anotherTenant',
+      },
+    ],
+    [
+      'a mismatched authorized party',
+      {
+        phone_number: '79991234567',
+        phone_number_verified: true,
+        azp: 'another-client',
+      },
+    ],
+  ])('rejects OTP identity with %s', async (_label, claims) => {
+    const { accessToken, jwk } = await signedAccessToken(claims);
+    const provider = new VivaIdentityProvider({
+      ...options(),
+      mode: 'sandbox',
+      fetchImplementation: tokenAndJwksFetch(accessToken, jwk),
+    });
+
+    await expect(provider.verifyPhoneCode({ ...input, code: '1234' })).rejects.toMatchObject({
+      code: 'AUTH_PROVIDER_UNAVAILABLE',
+    });
+  });
+
+  it('rejects an OTP access token with an invalid signature', async () => {
+    const { accessToken } = await signedAccessToken({
+      phone_number: '79991234567',
+      phone_number_verified: true,
+    });
+    const { jwk: unrelatedJwk } = await signedAccessToken({
+      phone_number: '79991234567',
+      phone_number_verified: true,
+    });
+    const provider = new VivaIdentityProvider({
+      ...options(),
+      mode: 'sandbox',
+      fetchImplementation: tokenAndJwksFetch(accessToken, unrelatedJwk),
+    });
+
+    await expect(provider.verifyPhoneCode({ ...input, code: '1234' })).rejects.toMatchObject({
+      code: 'AUTH_PROVIDER_UNAVAILABLE',
+    });
+  });
+
+  it('returns a verified existing subject for OAuth without an End User API request', async () => {
+    const { accessToken, jwk } = await signedAccessToken({ name: 'Social Account Name' });
+    const fetchImplementation = tokenAndJwksFetch(accessToken, jwk);
+    const metrics: VivaIdentityMetric[] = [];
     const provider = new VivaIdentityProvider({
       ...options(),
       mode: 'sandbox',
       allowExistingSubjectOAuthBootstrap: true,
       fetchImplementation,
+      onMetric: (metric) => metrics.push(metric),
     });
 
     const result = await provider.exchangeAuthorizationCode({
@@ -238,42 +449,23 @@ describe('VivaIdentityProvider', () => {
     expect(result.identityResolution).toBe('EXISTING_SUBJECT');
     expect(result.identity).toEqual({
       issuer: 'https://kc.vivacrm.invalid/realms/clients',
-      subject: 'already-linked-subject',
+      subject: 'viva-user-42',
       displayName: 'Social Account Name',
     });
-    expect(result.accessToken).toBe(accessToken);
-    expect(result.refreshToken).toBe('external-refresh');
+    expect(metrics.map((metric) => metric.operation)).toEqual([
+      'oauth_token_exchange',
+      'jwt_verify',
+      'oauth_exchange',
+    ]);
+    expect(fetchImplementation).toHaveBeenCalledTimes(2);
   });
 
-  it('does not use subject-only OAuth bootstrap for non-policy profile failures', async () => {
-    const { publicKey, privateKey } = await generateKeyPair('RS256');
-    const jwk = { ...(await exportJWK(publicKey)), kid: 'test-key', use: 'sig', alg: 'RS256' };
-    const accessToken = await new SignJWT({ azp: 'widget' })
-      .setProtectedHeader({ alg: 'RS256', kid: 'test-key' })
-      .setIssuer('https://kc.vivacrm.invalid/realms/clients')
-      .setSubject('already-linked-subject')
-      .setExpirationTime('5m')
-      .sign(privateKey);
-    const fetchImplementation = vi.fn<typeof fetch>((request) => {
-      const url = fetchUrl(request);
-      if (url.pathname.endsWith('/protocol/openid-connect/token')) {
-        return Promise.resolve(
-          Response.json({ access_token: accessToken, refresh_token: 'external-refresh' }),
-        );
-      }
-      if (url.pathname.endsWith('/protocol/openid-connect/certs')) {
-        return Promise.resolve(Response.json({ keys: [jwk] }));
-      }
-      if (url.pathname.endsWith('/iSkq6G/profile')) {
-        return Promise.resolve(new Response(null, { status: 500 }));
-      }
-      return Promise.resolve(new Response(null, { status: 404 }));
-    });
+  it('fails closed for OAuth when existing-subject bootstrap is disabled', async () => {
+    const { accessToken, jwk } = await signedAccessToken({ name: 'Social Account Name' });
     const provider = new VivaIdentityProvider({
       ...options(),
       mode: 'sandbox',
-      allowExistingSubjectOAuthBootstrap: true,
-      fetchImplementation,
+      fetchImplementation: tokenAndJwksFetch(accessToken, jwk),
     });
 
     await expect(
@@ -282,12 +474,38 @@ describe('VivaIdentityProvider', () => {
         codeVerifier: 'pkce-verifier',
         providerTenantKey: 'iSkq6G',
         redirectUri: 'https://app.example.test/callback',
-        correlationId: 'oauth-non-policy-correlation-123',
+        correlationId: 'oauth-correlation-123',
       }),
     ).rejects.toMatchObject({ code: 'AUTH_PROVIDER_UNAVAILABLE' });
   });
 
-  it('reports the safe OAuth failure stage without logging provider credentials', async () => {
+  it('allows subject-only OAuth recovery when standard bootstrap is disabled', async () => {
+    const { accessToken, jwk } = await signedAccessToken({ name: 'Linked Account Name' });
+    const provider = new VivaIdentityProvider({
+      ...options(),
+      mode: 'sandbox',
+      fetchImplementation: tokenAndJwksFetch(accessToken, jwk),
+    });
+
+    await expect(
+      provider.exchangeAuthorizationCode({
+        code: 'recovery-authorization-code',
+        codeVerifier: 'recovery-pkce-verifier',
+        providerTenantKey: 'iSkq6G',
+        redirectUri: 'https://app.example.test/callback',
+        correlationId: 'oauth-recovery-correlation-123',
+        identityMode: 'RECOVERY_SUBJECT_ONLY',
+      }),
+    ).resolves.toMatchObject({
+      identity: {
+        issuer: 'https://kc.vivacrm.invalid/realms/clients',
+        subject: 'viva-user-42',
+      },
+      identityResolution: 'EXISTING_SUBJECT',
+    });
+  });
+
+  it('reports a safe OAuth failure stage without logging provider credentials', async () => {
     const metrics: unknown[] = [];
     const provider = new VivaIdentityProvider({
       ...options(),

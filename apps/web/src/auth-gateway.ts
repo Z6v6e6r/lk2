@@ -125,7 +125,14 @@ import {
   createClientTransportExecutor,
   normalizePadlHubUserProfile,
   normalizeVivaUserProfile,
+  type DirectVivaReadMetric,
 } from '@phub/viva-client-adapter';
+import {
+  exchangeVivaBrowserPhoneCode,
+  requestVivaBrowserPhoneCode,
+  VivaBrowserOtpError,
+  type VivaBrowserOtpTransport,
+} from './viva-browser-otp.js';
 
 export interface NormalizedUser {
   readonly id: string;
@@ -551,6 +558,15 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
   let notificationsCacheRevision = 0;
   const publicTournamentSummaryPromises = new Map<string, Promise<PublicTournamentSummary>>();
   let vivaReauthorizationStarted = false;
+  let activeReadEvidenceJob:
+    { readonly jobId: string; readonly generation: number; readonly userId: string } | undefined;
+  let pendingProfileSuccess:
+    | {
+        readonly metric: DirectVivaReadMetric;
+        readonly generation: number;
+        readonly userId: string;
+      }
+    | undefined;
 
   function vivaRecoveryPrincipal(): string | undefined {
     return currentUserId ? `${options.tenantKey}:${currentUserId}` : undefined;
@@ -740,6 +756,8 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       playerProfilePromises.clear();
       vivaReauthorizationStarted = false;
       vivaAccessPromise = undefined;
+      activeReadEvidenceJob = undefined;
+      pendingProfileSuccess = undefined;
       principalGeneration += 1;
     }
     currentUserId = session.context.userId;
@@ -826,6 +844,25 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
         ? client.getUserProfile()
         : Promise.reject(new Error('CLIENT_ASSISTED_READ_HAS_NO_DIRECT_FALLBACK')),
     onMetric: (metric) => {
+      if (metric.operation === 'profile.read' && metric.outcome === 'SUCCESS') {
+        const evidence = activeReadEvidenceJob;
+        if (
+          evidence &&
+          evidence.generation === principalGeneration &&
+          evidence.userId === currentUserId
+        ) {
+          void client
+            .recordDirectVivaReadMetric({ ...metric, evidenceJobId: evidence.jobId })
+            .catch(() => undefined);
+        } else if (currentUserId) {
+          pendingProfileSuccess = {
+            metric,
+            generation: principalGeneration,
+            userId: currentUserId,
+          };
+        }
+        return;
+      }
       void client.recordDirectVivaReadMetric(metric).catch(() => undefined);
     },
     ...(options.fetchImplementation ? { fetchImplementation: options.fetchImplementation } : {}),
@@ -845,10 +882,13 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
         nextIndex += 1;
         if (!command) return;
         try {
-          const payload = await clientTransport.executeClientAssistedScheduleRead({
-            operation: command.operation,
-            date: command.date,
-          });
+          const payload = await clientTransport.executeClientAssistedScheduleRead(
+            {
+              operation: command.operation,
+              date: command.date,
+            },
+            job.jobId,
+          );
           await client.submitBookingScreenReadResult(job.jobId, command.commandId, payload);
         } catch (error) {
           handleDirectVivaError(error, generation, userId);
@@ -861,6 +901,20 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
         worker(),
       ),
     );
+  }
+
+  function bindReadEvidenceJob(job: BookingScreenReadJob): BookingScreenReadJob {
+    const userId = currentUserId;
+    if (!userId) return job;
+    activeReadEvidenceJob = { jobId: job.jobId, generation: principalGeneration, userId };
+    const pending = pendingProfileSuccess;
+    if (pending && pending.generation === principalGeneration && pending.userId === userId) {
+      pendingProfileSuccess = undefined;
+      void client
+        .recordDirectVivaReadMetric({ ...pending.metric, evidenceJobId: job.jobId })
+        .catch(() => undefined);
+    }
+    return job;
   }
 
   async function completeRecommendationJob(
@@ -879,7 +933,7 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     const limit = input.limit ?? 6;
     if (input.cursor) return client.listBookingRecommendations(input);
 
-    const job = await client.startBookingScreenReadJob('FOR_ME');
+    const job = bindReadEvidenceJob(await client.startBookingScreenReadJob('FOR_ME'));
     const commands = job.commands.filter(
       (command): command is BookingScreenScheduleReadCommand =>
         command.operation === 'schedule.read',
@@ -889,7 +943,7 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
   }
 
   async function loadInitialHomeRecommendations(limit: number): Promise<BookingRecommendationPage> {
-    const job = await client.startBookingScreenReadJob('FOR_ME');
+    const job = bindReadEvidenceJob(await client.startBookingScreenReadJob('FOR_ME'));
     const commands = job.commands.filter(
       (command): command is BookingScreenScheduleReadCommand =>
         command.operation === 'schedule.read',
@@ -926,7 +980,7 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
   }
 
   async function loadClientAssistedTrainingSchedule(): Promise<TrainingSchedulePage> {
-    const job = await client.startBookingScreenReadJob('GROUP_TRAININGS');
+    const job = bindReadEvidenceJob(await client.startBookingScreenReadJob('GROUP_TRAININGS'));
     const commands = job.commands.filter(
       (command): command is BookingScreenScheduleReadCommand =>
         command.operation === 'schedule.read',
@@ -942,7 +996,7 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
   async function loadClientAssistedEventCatalog(
     query: EventCatalogQuery,
   ): Promise<EventCatalogPage> {
-    const job = await client.startEventCatalogReadJob(query);
+    const job = bindReadEvidenceJob(await client.startEventCatalogReadJob(query));
     const commands = job.commands.filter(
       (command): command is BookingScreenScheduleReadCommand =>
         command.operation === 'schedule.read',
@@ -965,7 +1019,7 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       // An absent projection is prepared through the client-assisted job below.
     }
     try {
-      const job = await client.startBookingScreenReadJob('MY_BOOKINGS');
+      const job = bindReadEvidenceJob(await client.startBookingScreenReadJob('MY_BOOKINGS'));
       const command = job.commands.find((item) => item.operation === 'bookings.read');
       if (!command) throw new Error('BOOKING_SCREEN_READ_COMMAND_MISSING');
       const generation = principalGeneration;
@@ -1067,6 +1121,15 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
   // React StrictMode may subscribe twice during development. Coalescing keeps a
   // rotating refresh cookie from being exchanged twice at startup.
   let restorePromise: Promise<AuthenticatedSession | null> | undefined;
+  const browserOtpTransports = new Map<
+    string,
+    {
+      readonly transport: VivaBrowserOtpTransport;
+      readonly expiresAt: number;
+      accessToken?: string;
+      exchangeAttempted: boolean;
+    }
+  >();
 
   return {
     restoreSession() {
@@ -1075,7 +1138,20 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     },
 
     async requestCode(phoneE164) {
-      const challenge = await client.createAuthChallenge({ method: 'phone_otp', phone: phoneE164 });
+      const challenge = await client.createAuthChallenge({
+        method: 'phone_otp',
+        phone: phoneE164,
+        capability: 'browser_phone_otp_v1',
+      });
+      if (challenge.browserTransport) {
+        const transport = challenge.browserTransport as VivaBrowserOtpTransport;
+        browserOtpTransports.set(challenge.challengeId, {
+          transport,
+          expiresAt: Date.parse(challenge.expiresAt),
+          exchangeAttempted: false,
+        });
+        await requestVivaBrowserPhoneCode(transport);
+      }
       return {
         challengeId: challenge.challengeId,
         maskedPhone: maskPhone(phoneE164),
@@ -1088,13 +1164,48 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       if (!input.acceptance.publicOfferAccepted || !input.acceptance.personalDataPolicyAccepted) {
         throw new Error('Required legal acceptance is missing');
       }
+      const browserOtp = browserOtpTransports.get(input.challengeId);
+      if (browserOtp && browserOtp.expiresAt <= Date.now()) {
+        browserOtpTransports.delete(input.challengeId);
+      }
+      const activeBrowserOtp = browserOtpTransports.get(input.challengeId);
+      let accessToken: string | undefined;
+      if (activeBrowserOtp) {
+        accessToken = activeBrowserOtp.accessToken;
+        if (!accessToken) {
+          if (activeBrowserOtp.exchangeAttempted) {
+            throw new VivaBrowserOtpError('AUTH_PROVIDER_UNAVAILABLE');
+          }
+          activeBrowserOtp.exchangeAttempted = true;
+          try {
+            accessToken = await exchangeVivaBrowserPhoneCode(
+              activeBrowserOtp.transport,
+              input.code,
+            );
+            activeBrowserOtp.accessToken = accessToken;
+          } catch (error) {
+            if (error instanceof VivaBrowserOtpError && error.code === 'AUTH_CODE_INVALID') {
+              activeBrowserOtp.exchangeAttempted = false;
+            }
+            throw error;
+          }
+        }
+      }
       const session = await client.verifyAuthChallenge(input.challengeId, {
-        code: input.code,
+        ...(accessToken
+          ? {
+              proof: {
+                kind: 'browser_phone_access_token_v1' as const,
+                accessToken,
+              },
+            }
+          : { code: input.code }),
         acceptance: {
           publicOfferAccepted: true,
           personalDataPolicyAccepted: true,
         },
       });
+      browserOtpTransports.delete(input.challengeId);
       return normalizeSession(session);
     },
 

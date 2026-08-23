@@ -5,6 +5,7 @@ import {
   normalizePhoneE164,
   type IdentityProviderKey,
   type IdentityProviderPort,
+  type BrowserPhoneOtpTransport,
   type VerifiedPhoneAuthentication,
   type VerifiedExternalIdentity,
   type VivaOAuthProvider,
@@ -313,6 +314,23 @@ export class AuthService {
     return createHash('sha256').update(nonce).digest('hex');
   }
 
+  private browserOtpNonceMatches(
+    expectedHash: string | undefined,
+    nonce: string | undefined,
+  ): boolean {
+    return this.oauthBrowserNonceMatches(expectedHash, nonce);
+  }
+
+  private browserProofHash(issuer: string, tokenId: string): string {
+    return createHmac('sha256', this.options.config.JWT_REFRESH_SECRET)
+      .update('browser-phone-otp-proof')
+      .update('\0')
+      .update(issuer)
+      .update('\0')
+      .update(tokenId)
+      .digest('hex');
+  }
+
   private oauthBrowserNonceMatches(
     expectedHash: string | undefined,
     nonce: string | undefined,
@@ -539,6 +557,7 @@ export class AuthService {
         providerTenantKey: binding.providerTenantKey,
         redirectUri,
         correlationId: input.correlationId,
+        identityMode: pending.recoveryUserId ? 'RECOVERY_SUBJECT_ONLY' : 'STANDARD',
       });
     } catch (error) {
       this.mapProviderError(error);
@@ -803,25 +822,47 @@ export class AuthService {
     readonly correlationId: string;
     readonly idempotencyKey: string;
     readonly accessAudience?: AccessTokenAudience;
-  }): Promise<{ challengeId: string; expiresAt: string; resendAfterSeconds: number }> {
+    readonly browserPhoneOtp?: boolean;
+    readonly browserNonceHash?: string;
+  }): Promise<{
+    challengeId: string;
+    expiresAt: string;
+    resendAfterSeconds: number;
+    browserTransport?: BrowserPhoneOtpTransport;
+  }> {
     const phoneE164 = normalizePhoneE164(input.phone);
     if (!phoneE164) throw new AuthServiceError('AUTH_PHONE_INVALID');
     const binding = await this.binding(input.tenantKey);
     const cupDevAuthentication = this.isCupDevAuthentication(phoneE164, input.accessAudience);
     const now = this.now();
+    const browserTransportRequested =
+      input.browserPhoneOtp === true &&
+      binding.provider === 'VIVA' &&
+      input.accessAudience !== 'admin';
     const challengeId = this.deriveUuid('auth-challenge', [input.tenantKey, input.idempotencyKey]);
     const existing = await this.options.challengeStore.get(challengeId);
     if (existing) {
       if (existing.tenantId !== binding.tenantId || existing.phoneE164 !== phoneE164) {
         throw new AuthServiceError('IDEMPOTENCY_KEY_CONFLICT');
       }
-      return {
+      const response = {
         challengeId: existing.id,
         expiresAt: existing.expiresAt,
         resendAfterSeconds: Math.max(
           0,
           Math.ceil((Date.parse(existing.resendAt) - now.getTime()) / 1000),
         ),
+      };
+      if (existing.transport !== 'browser_phone_otp_v1') return response;
+      const provider = this.provider(binding.provider);
+      if (!provider.createBrowserPhoneOtpTransport)
+        throw new AuthServiceError('AUTH_PROVIDER_UNAVAILABLE');
+      return {
+        ...response,
+        browserTransport: await provider.createBrowserPhoneOtpTransport({
+          phoneE164,
+          providerTenantKey: binding.providerTenantKey,
+        }),
       };
     }
     const challenge: AuthChallenge = {
@@ -838,7 +879,28 @@ export class AuthService {
       resendAt: new Date(
         now.getTime() + this.options.config.AUTH_CHALLENGE_RESEND_SECONDS * 1000,
       ).toISOString(),
+      createdAt: now.toISOString(),
+      transport: browserTransportRequested ? 'browser_phone_otp_v1' : 'server_phone_otp_v1',
+      ...(browserTransportRequested && input.browserNonceHash
+        ? { browserNonceHash: input.browserNonceHash }
+        : {}),
     };
+
+    let browserTransport: BrowserPhoneOtpTransport | undefined;
+    if (browserTransportRequested) {
+      const provider = this.provider(binding.provider);
+      if (!provider.createBrowserPhoneOtpTransport || !input.browserNonceHash) {
+        throw new AuthServiceError('AUTH_PROVIDER_UNAVAILABLE');
+      }
+      try {
+        browserTransport = await provider.createBrowserPhoneOtpTransport({
+          phoneE164,
+          providerTenantKey: binding.providerTenantKey,
+        });
+      } catch (error) {
+        this.mapProviderError(error);
+      }
+    }
 
     const reserved = await this.options.challengeStore.put(
       challenge,
@@ -851,6 +913,14 @@ export class AuthService {
         challengeId: challenge.id,
         expiresAt: challenge.expiresAt,
         resendAfterSeconds: this.options.config.AUTH_CHALLENGE_RESEND_SECONDS,
+      };
+    }
+    if (browserTransportRequested) {
+      return {
+        challengeId: challenge.id,
+        expiresAt: challenge.expiresAt,
+        resendAfterSeconds: this.options.config.AUTH_CHALLENGE_RESEND_SECONDS,
+        browserTransport: browserTransport as BrowserPhoneOtpTransport,
       };
     }
     try {
@@ -876,7 +946,12 @@ export class AuthService {
   public async verifyPhoneChallenge(input: {
     readonly tenantKey: string;
     readonly challengeId: string;
-    readonly code: string;
+    readonly code?: string;
+    readonly browserProof?: {
+      readonly kind: 'browser_phone_access_token_v1';
+      readonly accessToken: string;
+    };
+    readonly browserNonce?: string;
     readonly correlationId: string;
     readonly idempotencyKey: string;
     readonly accessAudience?: AccessTokenAudience;
@@ -885,7 +960,9 @@ export class AuthService {
       readonly personalDataPolicyAccepted: boolean;
     };
   }): Promise<AuthSessionResult> {
-    if (!OTP_PATTERN.test(input.code)) throw new AuthServiceError('AUTH_CODE_INVALID');
+    if (!input.browserProof && (!input.code || !OTP_PATTERN.test(input.code))) {
+      throw new AuthServiceError('AUTH_CODE_INVALID');
+    }
     const audience = input.accessAudience ?? 'client';
     if (
       audience === 'client' &&
@@ -935,6 +1012,22 @@ export class AuthService {
     const claimed = await this.options.challengeStore.claim(challenge.id, claimId, 30);
     if (!claimed) throw new AuthServiceError('AUTH_CHALLENGE_IN_PROGRESS');
 
+    const browserProof = input.browserProof;
+    if (challenge.transport === 'browser_phone_otp_v1' && !browserProof) {
+      await this.options.challengeStore.release(challenge.id, claimId);
+      throw new AuthServiceError('AUTH_CODE_INVALID');
+    }
+    if (browserProof && challenge.transport !== 'browser_phone_otp_v1') {
+      await this.options.challengeStore.release(challenge.id, claimId);
+      throw new AuthServiceError('AUTH_CODE_INVALID');
+    }
+    if (
+      browserProof &&
+      !this.browserOtpNonceMatches(challenge.browserNonceHash, input.browserNonce)
+    ) {
+      await this.options.challengeStore.release(challenge.id, claimId);
+      throw new AuthServiceError('AUTH_CODE_INVALID');
+    }
     const cupDevAuthentication = this.isCupDevAuthentication(
       challenge.phoneE164,
       input.accessAudience,
@@ -963,17 +1056,40 @@ export class AuthService {
     } else {
       let externalIdentity: VerifiedExternalIdentity;
       try {
-        const verification = await this.provider(challenge.provider).verifyPhoneCode({
-          phoneE164: challenge.phoneE164,
-          code: input.code,
-          providerTenantKey: challenge.providerTenantKey,
-          correlationId: input.correlationId,
-        });
-        if ('identity' in verification) {
+        if (browserProof) {
+          const provider = this.provider(challenge.provider);
+          if (!provider.verifyBrowserPhoneAccessToken)
+            throw new IdentityProviderError('AUTH_PROVIDER_UNAVAILABLE');
+          const verification = await provider.verifyBrowserPhoneAccessToken({
+            accessToken: browserProof.accessToken,
+            phoneE164: challenge.phoneE164,
+            providerTenantKey: challenge.providerTenantKey,
+            challengeCreatedAt: challenge.createdAt ?? challenge.expiresAt,
+            correlationId: input.correlationId,
+          });
+          const proofBound = await this.options.challengeStore.bindBrowserProof(
+            challenge.id,
+            this.browserProofHash(verification.identity.issuer, verification.tokenId),
+            Math.max(
+              1,
+              Math.ceil((Date.parse(verification.expiresAt) - this.now().getTime()) / 1000),
+            ),
+          );
+          if (!proofBound) throw new IdentityProviderError('AUTH_CODE_INVALID');
           externalIdentity = verification.identity;
-          phoneDelegation = verification.delegation;
         } else {
-          externalIdentity = verification;
+          const verification = await this.provider(challenge.provider).verifyPhoneCode({
+            phoneE164: challenge.phoneE164,
+            code: input.code as string,
+            providerTenantKey: challenge.providerTenantKey,
+            correlationId: input.correlationId,
+          });
+          if ('identity' in verification) {
+            externalIdentity = verification.identity;
+            phoneDelegation = verification.delegation;
+          } else {
+            externalIdentity = verification;
+          }
         }
       } catch (error) {
         if (error instanceof IdentityProviderError && error.code === 'AUTH_CODE_INVALID') {
@@ -1033,8 +1149,6 @@ export class AuthService {
             : {}),
           correlationId: input.correlationId,
         });
-      } else if (challenge.provider === 'VIVA' && this.options.config.HOME_VIVA_SYNC_ENABLED) {
-        throw new AuthServiceError('VIVA_REAUTH_REQUIRED');
       }
     }
     try {

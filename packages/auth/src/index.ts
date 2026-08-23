@@ -85,6 +85,25 @@ export interface VerifiedPhoneAuthentication {
 
 export type PhoneVerificationResult = VerifiedExternalIdentity | VerifiedPhoneAuthentication;
 
+/** Public, server-selected configuration for the first-party browser OTP transport. */
+export interface BrowserPhoneOtpTransport {
+  readonly kind: 'browser_phone_otp_v1';
+  readonly requestCodeUrl: string;
+  readonly tokenUrl: string;
+  readonly clientId: string;
+  readonly channel: string;
+  readonly providerTenantKey: string;
+  /** Canonical digits only; this is not a secret. */
+  readonly phoneNumber: string;
+}
+
+export interface VerifiedBrowserPhoneAccessToken {
+  readonly identity: VerifiedExternalIdentity;
+  /** Provider token identifier used only for one-time replay protection. */
+  readonly tokenId: string;
+  readonly expiresAt: string;
+}
+
 export interface IdentityProviderPort {
   readonly key: IdentityProviderKey;
   requestPhoneCode(input: {
@@ -98,11 +117,23 @@ export interface IdentityProviderPort {
     readonly providerTenantKey: string;
     readonly correlationId: string;
   }): Promise<PhoneVerificationResult>;
+  createBrowserPhoneOtpTransport?(input: {
+    readonly phoneE164: string;
+    readonly providerTenantKey: string;
+  }): Promise<BrowserPhoneOtpTransport>;
+  verifyBrowserPhoneAccessToken?(input: {
+    readonly accessToken: string;
+    readonly phoneE164: string;
+    readonly providerTenantKey: string;
+    readonly challengeCreatedAt: string;
+    readonly correlationId: string;
+  }): Promise<VerifiedBrowserPhoneAccessToken>;
 }
 
 export type VivaOAuthProvider = 'vkid' | 'yandex';
 
 export type VivaOAuthIdentityResolution = 'CANONICAL_PROFILE' | 'EXISTING_SUBJECT';
+export type VivaOAuthIdentityMode = 'STANDARD' | 'RECOVERY_SUBJECT_ONLY';
 
 export interface VivaOAuthProviderPort {
   createAuthorizationUrl(input: {
@@ -118,6 +149,7 @@ export interface VivaOAuthProviderPort {
     readonly providerTenantKey: string;
     readonly redirectUri: string;
     readonly correlationId: string;
+    readonly identityMode?: VivaOAuthIdentityMode;
   }): Promise<{
     readonly identity: VerifiedExternalIdentity;
     readonly identityResolution: VivaOAuthIdentityResolution;

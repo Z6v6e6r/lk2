@@ -102,3 +102,15 @@ Viva can be replaced per tenant without a UI or public API migration, while Padl
 security from the first vertical. Identity mappings and provider readiness still require an
 explicit migration and reconciliation before a production switch. The home page may consume only
 the normalized authenticated context; schedule remains deliberately absent.
+
+## First-party browser OTP exception
+
+When a first-party web client explicitly advertises `browser_phone_otp_v1`, the tenant binding is
+Viva and the request Origin is configured, PadlHub may return a short-lived, public Viva OTP
+transport with a challenge-bound HttpOnly browser cookie. The browser performs exactly one SMS
+send and one form token exchange with `credentials: omit`; it sends only the resulting access token
+back to the existing PadlHub verification endpoint. The API validates the signed token, issuer,
+audience, authorized party, tenant, verified phone, subject, freshness and one-time token id before
+issuing a PadlHub session. The Viva refresh token is discarded immediately: it is neither sent to
+PadlHub nor persisted, logged or placed in browser storage. Legacy, local and CUP flows stay on
+their existing server verification path.

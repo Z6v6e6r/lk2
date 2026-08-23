@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createBrowserAuthGateway } from './auth-gateway.js';
 
@@ -10,8 +10,182 @@ function requestUrl(input: Parameters<typeof fetch>[0]): string {
   return input.url;
 }
 
+function requestBody(input: RequestInit | undefined): string {
+  if (typeof input?.body !== 'string') throw new Error('Expected string request body');
+  return input.body;
+}
+
 describe('browser auth gateway', () => {
   beforeEach(() => window.sessionStorage.clear());
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('uses browser Viva OTP transport once and falls back to legacy completion after success', async () => {
+    const session = {
+      accessToken: 'short-lived-padlhub-token',
+      tokenType: 'Bearer',
+      expiresAt: '2099-08-23T12:10:00.000Z',
+      user: { id: '00000000-0000-4000-8000-000000000001', displayName: 'Анна' },
+      context: {
+        tenantId: '00000000-0000-4000-8000-000000000002',
+        userId: '00000000-0000-4000-8000-000000000001',
+        displayName: 'Анна',
+        roles: ['client'],
+        permissions: ['profile.read'],
+      },
+    };
+    const apiFetch = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        Response.json({
+          challengeId: '00000000-0000-4000-8000-000000000003',
+          expiresAt: '2099-08-23T12:10:00.000Z',
+          resendAfterSeconds: 30,
+          browserTransport: {
+            kind: 'browser_phone_otp_v1',
+            requestCodeUrl: 'https://kc.example.test/sms/authentication-code',
+            tokenUrl: 'https://kc.example.test/protocol/openid-connect/token',
+            clientId: 'widget',
+            channel: 'cascade',
+            providerTenantKey: 'iSkq6G',
+            phoneNumber: '79990000001',
+          },
+        }),
+      )
+      .mockResolvedValueOnce(Response.json(session))
+      .mockResolvedValueOnce(Response.json(session));
+    const vivaFetch = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(
+        Response.json({ access_token: 'viva-access-token', refresh_token: 'ignored' }),
+      );
+    vi.stubGlobal('fetch', vivaFetch);
+    const gateway = createBrowserAuthGateway({
+      baseUrl: 'https://api.padlhub.test/',
+      tenantKey: 'padlhub',
+      appVersion: 'test',
+      fetchImplementation: apiFetch,
+    });
+
+    const challenge = await gateway.requestCode('+79990000001');
+    await gateway.verifyCode({
+      challengeId: challenge.challengeId,
+      code: '1234',
+      acceptance: { publicOfferAccepted: true, personalDataPolicyAccepted: true },
+    });
+    await gateway.verifyCode({
+      challengeId: challenge.challengeId,
+      code: '1234',
+      acceptance: { publicOfferAccepted: true, personalDataPolicyAccepted: true },
+    });
+
+    expect(vivaFetch).toHaveBeenCalledTimes(2);
+    expect(apiFetch).toHaveBeenCalledTimes(3);
+    expect(requestBody(apiFetch.mock.calls[1]?.[1])).toContain('browser_phone_access_token_v1');
+    expect(requestBody(apiFetch.mock.calls[1]?.[1])).toContain('viva-access-token');
+    expect(requestBody(apiFetch.mock.calls[2]?.[1])).toContain('"code":"1234"');
+  });
+
+  it('reuses a browser access token when PadlHub completion is ambiguous', async () => {
+    const challenge = {
+      challengeId: '00000000-0000-4000-8000-000000000004',
+      expiresAt: '2099-08-23T12:10:00.000Z',
+      resendAfterSeconds: 30,
+      browserTransport: {
+        kind: 'browser_phone_otp_v1',
+        requestCodeUrl: 'https://kc.example.test/sms/authentication-code',
+        tokenUrl: 'https://kc.example.test/protocol/openid-connect/token',
+        clientId: 'widget',
+        channel: 'cascade',
+        providerTenantKey: 'iSkq6G',
+        phoneNumber: '79990000001',
+      },
+    };
+    const session = {
+      accessToken: 'padlhub-token',
+      tokenType: 'Bearer',
+      expiresAt: '2099-08-23T12:10:00.000Z',
+      user: { id: '00000000-0000-4000-8000-000000000001', displayName: 'Анна' },
+      context: {
+        tenantId: '00000000-0000-4000-8000-000000000002',
+        userId: '00000000-0000-4000-8000-000000000001',
+        displayName: 'Анна',
+        roles: ['client'],
+        permissions: ['profile.read'],
+      },
+    };
+    const apiFetch = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json(challenge))
+      .mockRejectedValueOnce(new TypeError('offline'))
+      .mockRejectedValueOnce(new TypeError('offline'))
+      .mockResolvedValueOnce(Response.json(session));
+    const vivaFetch = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(Response.json({ access_token: 'viva-access-token' }));
+    vi.stubGlobal('fetch', vivaFetch);
+    const gateway = createBrowserAuthGateway({
+      baseUrl: 'https://api.padlhub.test/',
+      tenantKey: 'padlhub',
+      appVersion: 'test',
+      fetchImplementation: apiFetch,
+    });
+    await gateway.requestCode('+79990000001');
+    const input = {
+      challengeId: challenge.challengeId,
+      code: '1234',
+      acceptance: { publicOfferAccepted: true, personalDataPolicyAccepted: true },
+    } as const;
+    await expect(gateway.verifyCode(input)).rejects.toBeInstanceOf(TypeError);
+    await expect(gateway.verifyCode(input)).resolves.toBeDefined();
+    expect(vivaFetch).toHaveBeenCalledTimes(2);
+    expect(requestBody(apiFetch.mock.calls[1]?.[1])).toContain('viva-access-token');
+    expect(requestBody(apiFetch.mock.calls[3]?.[1])).toContain('viva-access-token');
+  });
+
+  it('does not repeat an ambiguous Viva token exchange for the same challenge', async () => {
+    const challenge = {
+      challengeId: '00000000-0000-4000-8000-000000000005',
+      expiresAt: '2099-08-23T12:10:00.000Z',
+      resendAfterSeconds: 30,
+      browserTransport: {
+        kind: 'browser_phone_otp_v1',
+        requestCodeUrl: 'https://kc.example.test/sms/authentication-code',
+        tokenUrl: 'https://kc.example.test/protocol/openid-connect/token',
+        clientId: 'widget',
+        channel: 'cascade',
+        providerTenantKey: 'iSkq6G',
+        phoneNumber: '79990000001',
+      },
+    };
+    const apiFetch = vi.fn<typeof fetch>().mockResolvedValue(Response.json(challenge));
+    const vivaFetch = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockRejectedValueOnce(new TypeError('offline'));
+    vi.stubGlobal('fetch', vivaFetch);
+    const gateway = createBrowserAuthGateway({
+      baseUrl: 'https://api.padlhub.test/',
+      tenantKey: 'padlhub',
+      appVersion: 'test',
+      fetchImplementation: apiFetch,
+    });
+    await gateway.requestCode('+79990000001');
+    const input = {
+      challengeId: challenge.challengeId,
+      code: '1234',
+      acceptance: { publicOfferAccepted: true, personalDataPolicyAccepted: true },
+    } as const;
+    await expect(gateway.verifyCode(input)).rejects.toMatchObject({
+      code: 'AUTH_PROVIDER_UNAVAILABLE',
+    });
+    await expect(gateway.verifyCode(input)).rejects.toMatchObject({
+      code: 'AUTH_PROVIDER_UNAVAILABLE',
+    });
+    expect(vivaFetch).toHaveBeenCalledTimes(2);
+    expect(apiFetch).toHaveBeenCalledTimes(1);
+  });
 
   it('coalesces the same tournament detail lookup by id and range until it settles', async () => {
     const summary = {
@@ -1297,7 +1471,8 @@ describe('browser auth gateway', () => {
       },
       access: { audience: 'SELF', tier: 'SELF' },
     });
-    expect(fetchImplementation).toHaveBeenCalledTimes(5);
+    // A SUCCESS metric is held until a server-issued booking read job can bind it.
+    expect(fetchImplementation).toHaveBeenCalledTimes(4);
     expect(fetchImplementation.mock.calls[2]?.[0]).toBe(
       'https://api.padlhub.test/user/api/v1/padlhub/auth/viva/access',
     );
@@ -1614,6 +1789,18 @@ describe('browser auth gateway', () => {
     expect(urls.filter((url) => url.startsWith('https://api.vivacrm.invalid/'))).toHaveLength(2);
     expect(urls.filter((url) => url.endsWith('/auth/viva/access'))).toHaveLength(1);
     expect(urls.filter((url) => url.includes('/results/'))).toHaveLength(2);
+    const outcomeCalls = fetchImplementation.mock.calls.filter(([input]) =>
+      requestUrl(input).endsWith('/routing-outcomes'),
+    );
+    expect(outcomeCalls).toHaveLength(2);
+    for (const [, init] of outcomeCalls) {
+      expect(JSON.parse(init?.body as string)).toMatchObject({
+        operation: 'schedule.read',
+        outcome: 'SUCCESS',
+      });
+      expect(JSON.parse(init?.body as string)).not.toHaveProperty('evidenceJobId');
+      expect(new Headers(init?.headers).get('X-Correlation-ID')).toBe(job.jobId);
+    }
     expect(urls).toContain(
       `https://api.padlhub.test/user/api/v1/padlhub/booking-screen-read-jobs/${job.jobId}/complete`,
     );

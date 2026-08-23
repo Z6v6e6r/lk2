@@ -14,6 +14,9 @@ export interface AuthChallenge {
   readonly attempts: number;
   readonly expiresAt: string;
   readonly resendAt: string;
+  readonly createdAt?: string;
+  readonly transport?: 'server_phone_otp_v1' | 'browser_phone_otp_v1';
+  readonly browserNonceHash?: string;
 }
 
 export interface AuthChallengeStore {
@@ -23,6 +26,7 @@ export interface AuthChallengeStore {
   release(challengeId: string, claimId: string): Promise<void>;
   incrementAttempts(challengeId: string): Promise<number | undefined>;
   delete(challengeId: string): Promise<void>;
+  bindBrowserProof(challengeId: string, proofHash: string, ttlSeconds: number): Promise<boolean>;
 }
 
 const KEY_PREFIX = 'phub:auth:challenge:';
@@ -65,6 +69,11 @@ function parseChallenge(value: Record<string, string>): AuthChallenge | undefine
     attempts,
     expiresAt: value.expiresAt,
     resendAt: value.resendAt,
+    ...(value.createdAt ? { createdAt: value.createdAt } : {}),
+    ...(value.transport === 'browser_phone_otp_v1' || value.transport === 'server_phone_otp_v1'
+      ? { transport: value.transport }
+      : {}),
+    ...(value.browserNonceHash ? { browserNonceHash: value.browserNonceHash } : {}),
   };
 }
 
@@ -93,6 +102,9 @@ export class RedisAuthChallengeStore implements AuthChallengeStore {
           attempts: String(challenge.attempts),
           expiresAt: challenge.expiresAt,
           resendAt: challenge.resendAt,
+          ...(challenge.createdAt ? { createdAt: challenge.createdAt } : {}),
+          ...(challenge.transport ? { transport: challenge.transport } : {}),
+          ...(challenge.browserNonceHash ? { browserNonceHash: challenge.browserNonceHash } : {}),
         })
         .expire(key, ttlSeconds)
         .exec();
@@ -137,12 +149,24 @@ export class RedisAuthChallengeStore implements AuthChallengeStore {
     if (challenge) keys.push(cooldownKey(challenge));
     await this.redis.del(...keys);
   }
+
+  public async bindBrowserProof(
+    challengeId: string,
+    proofHash: string,
+    ttlSeconds: number,
+  ): Promise<boolean> {
+    const key = `${KEY_PREFIX}browser-proof:${proofHash}`;
+    const result = await this.redis.set(key, challengeId, 'EX', ttlSeconds, 'NX');
+    if (result === 'OK') return true;
+    return (await this.redis.get(key)) === challengeId;
+  }
 }
 
 export class MemoryAuthChallengeStore implements AuthChallengeStore {
   private readonly values = new Map<string, AuthChallenge>();
   private readonly cooldowns = new Map<string, number>();
   private readonly claims = new Map<string, { claimId: string; expiresAt: number }>();
+  private readonly browserProofs = new Map<string, { challengeId: string; expiresAt: number }>();
 
   public put(
     challenge: AuthChallenge,
@@ -187,5 +211,18 @@ export class MemoryAuthChallengeStore implements AuthChallengeStore {
     this.values.delete(challengeId);
     this.claims.delete(challengeId);
     return Promise.resolve();
+  }
+
+  public bindBrowserProof(
+    challengeId: string,
+    proofHash: string,
+    ttlSeconds: number,
+  ): Promise<boolean> {
+    const existing = this.browserProofs.get(proofHash);
+    if (existing && existing.expiresAt > Date.now()) {
+      return Promise.resolve(existing.challengeId === challengeId);
+    }
+    this.browserProofs.set(proofHash, { challengeId, expiresAt: Date.now() + ttlSeconds * 1000 });
+    return Promise.resolve(true);
   }
 }

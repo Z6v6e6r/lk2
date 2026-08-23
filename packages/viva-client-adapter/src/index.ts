@@ -323,6 +323,7 @@ export interface DirectVivaReadMetric {
   readonly outcome: 'SUCCESS' | 'UNAVAILABLE' | 'REAUTH_REQUIRED' | 'INVALID' | 'CIRCUIT_OPEN';
   readonly statusClass?: string;
   readonly durationMs: number;
+  readonly evidenceJobId?: string;
 }
 
 export interface ClientReadExecution<TResult> {
@@ -528,6 +529,7 @@ export function createClientTransportExecutor(options: ClientTransportExecutorOp
     request: ReturnType<typeof parseReadRequest>,
     allowTokenRefresh: boolean,
     normalize?: (payload: unknown) => TResult,
+    evidenceJobId?: string,
   ): Promise<TResult> {
     const startedAt = Date.now();
     const currentCircuit = circuit.get(request.operation);
@@ -537,6 +539,7 @@ export function createClientTransportExecutor(options: ClientTransportExecutorOp
         routingRevision: plan.revision,
         outcome: 'CIRCUIT_OPEN',
         durationMs: 0,
+        ...(evidenceJobId ? { evidenceJobId } : {}),
       });
       throw new ClientTransportError('DIRECT_VIVA_UNAVAILABLE', request.operation);
     }
@@ -559,6 +562,7 @@ export function createClientTransportExecutor(options: ClientTransportExecutorOp
         routingRevision: plan.revision,
         outcome: 'SUCCESS',
         durationMs: Date.now() - startedAt,
+        ...(evidenceJobId ? { evidenceJobId } : {}),
       });
       return result;
     } catch (error) {
@@ -584,6 +588,7 @@ export function createClientTransportExecutor(options: ClientTransportExecutorOp
           ? { statusClass: `${Math.floor(transportError.status / 100)}xx` }
           : {}),
         durationMs: Date.now() - startedAt,
+        ...(evidenceJobId ? { evidenceJobId } : {}),
       });
       throw error;
     }
@@ -597,13 +602,14 @@ export function createClientTransportExecutor(options: ClientTransportExecutorOp
      */
     async executeClientAssistedScheduleRead(
       command: ClientAssistedScheduleReadCommand,
+      evidenceJobId?: string,
     ): Promise<unknown> {
       const request = scheduleRequestSchema.parse(command);
       const plan = await effectivePlan(options.getRoutingPlan);
       if (plan?.mode !== 'MIXED_END_USER_READS' || !plan.directViva) {
         throw new ClientTransportError('DIRECT_VIVA_UNAVAILABLE', request.operation);
       }
-      return directRead(plan, request, true);
+      return directRead(plan, request, true, undefined, evidenceJobId);
     },
 
     /**
