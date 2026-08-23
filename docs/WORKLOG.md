@@ -1,5 +1,18 @@
 # Worklog
 
+## 2026-08-23 — Communities trusted INPUT_C offline Gate 4 preflight
+
+- Added a buildable fail-closed CLI around the existing V13 pure gate verifier. It accepts one
+  independently pinned gate and reads only the canonical gate, preparation,
+  preparation-verification and connection-descriptor documents through the root-owned no-follow
+  evidence reader.
+- Bound the actual connection-descriptor file path back to the preparation envelope and rejected
+  non-canonical verification bytes, path aliases and gate-pin drift before any producer, credential
+  descriptor, output path, PostgreSQL connection or child process can be touched.
+- Kept the result review-only: success is `READY_FOR_SEPARATE_AUTHORIZATION_REVIEW_ONLY`, every
+  execution/mutation authority remains false, and Gate 4 still requires separately reviewed V15
+  evidence, approval, clock, ledger, host entrypoint and a separately authorized clean clone.
+
 ## 2026-08-23 — Communities disabled V15 staging installation evidence
 
 - Installed and verified the disabled candidate for `4bb4279b4afddf807b829612fd63922b27e4d0da` on staging.

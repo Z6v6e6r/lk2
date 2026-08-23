@@ -1286,11 +1286,19 @@ describe('Communities role split INPUT_C producer', () => {
       '../dist/verify-communities-staging-role-split-inventory-preparation.js',
       import.meta.url,
     );
+    const trustedInventoryGateVerifier = new URL(
+      '../dist/verify-communities-staging-role-split-trusted-inventory-gate.js',
+      import.meta.url,
+    );
     expect(existsSync(producer)).toBe(true);
     expect(existsSync(comparison)).toBe(true);
     expect(existsSync(artifactVerifier)).toBe(true);
     expect(existsSync(acceptanceArtifactVerifier)).toBe(true);
     expect(existsSync(inventoryPreparationVerifier)).toBe(true);
+    expect(existsSync(trustedInventoryGateVerifier)).toBe(true);
+    expect(readFileSync(trustedInventoryGateVerifier, 'utf8')).not.toMatch(
+      /from ["']pg["']|node:child_process|\b(?:spawn|execFile)\s*\(/u,
+    );
     const smoke = spawnSync(process.execPath, [fileURLToPath(producer)], {
       env: {},
       encoding: 'utf8',
@@ -1337,6 +1345,16 @@ describe('Communities role split INPUT_C producer', () => {
       status: 1,
       stdout: '',
       stderr: 'COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_PREPARATION_INVALID\n',
+    });
+    const trustedInventoryGateVerifierSmoke = spawnSync(
+      process.execPath,
+      [fileURLToPath(trustedInventoryGateVerifier)],
+      { env: {}, encoding: 'utf8' },
+    );
+    expect(trustedInventoryGateVerifierSmoke).toMatchObject({
+      status: 1,
+      stdout: '',
+      stderr: 'COMMUNITIES_STAGING_ROLE_SPLIT_TRUSTED_INVENTORY_GATE_PREFLIGHT_INVALID\n',
     });
   }, 30_000);
 });

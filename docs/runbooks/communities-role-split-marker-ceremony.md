@@ -542,16 +542,43 @@ content and paths, rejects path aliases and requires both outputs directly below
 directory. It returns only `READY_FOR_SEPARATE_AUTHORIZATION_REVIEW_ONLY` with every authorization
 literal `false`.
 
-This module has no CLI or `tsup` entry and owns no filesystem, descriptor, PostgreSQL or
-child-process access. Its installed-candidate, runtime, descriptor and output custody fields are
-pins for later review, not custody attestations. The canonical shape of the supplied preparation
-verification is revalidated, but its independent execution provenance is not attested. The gate
-does not create or validate a separately custodied execution authorization, and the current V1
-execution authorization does not bind this new gate digest. Before any host entrypoint can be
-reviewed or invoked, a separately versioned authorization contour must bind the exact gate SHA-256
-and independently verify the installed receipt, runtime bundle, descriptors, private output
-custody and clean-clone provenance. No key, workflow, staging request, database connection or
-INPUT_C output is authorized by this checkpoint.
+The pure verifier still owns no filesystem, descriptor, PostgreSQL or child-process access.
+`verify-communities-staging-role-split-trusted-inventory-gate` is a separate offline `tsup` entry
+that reads only four canonical root-owned single-link inputs through the bounded no-follow reader:
+the gate, preparation, preparation-verification report and connection descriptor. It checks the
+independently supplied gate SHA-256 before reading dependent inputs, binds the connection file path
+back to the preparation envelope and treats credential/producer/output/marker/mapping arguments
+only as canonical path strings. It does not open those paths, inspect output absence, connect to
+PostgreSQL, spawn the producer or create a report file.
+
+After building `@phub/migrator`, the offline Gate 4 preflight command shape is:
+
+```sh
+node apps/migrator/dist/verify-communities-staging-role-split-trusted-inventory-gate.js \
+  --gate '<root-owned-v13-gate>' \
+  --gate-sha256 '<independently-retained-v13-gate-sha256>' \
+  --preparation '<root-owned-preparation-envelope>' \
+  --preparation-verification '<root-owned-preparation-verification-report>' \
+  --connection-descriptor '<root-owned-canonical-connection-descriptor>' \
+  --credential-descriptor '<planned-unopened-credential-descriptor-path>' \
+  --producer-descriptor '<planned-unopened-producer-descriptor-path>' \
+  --output-directory '<planned-uninspected-private-output-directory>' \
+  --output-artifact '<planned-absent-output-artifact-path>' \
+  --output-receipt '<planned-absent-output-receipt-path>' \
+  --marker-request '<planned-marker-request-path>' \
+  --marker-evidence '<planned-marker-evidence-path>' \
+  --role-mapping '<planned-private-role-mapping-path>'
+```
+
+Success remains only `READY_FOR_SEPARATE_AUTHORIZATION_REVIEW_ONLY` with every authority false.
+The installed-candidate, runtime, descriptor and output custody fields are pins for later review,
+not custody attestations. The canonical shape of the supplied preparation verification is
+revalidated, but its independent execution provenance is not attested. The preflight does not
+create or validate a separately custodied execution authorization. Before any host entrypoint can
+be reviewed or invoked, the V15 authorization contour must bind the exact gate SHA-256 and
+independently verify the installed receipt, runtime bundle, descriptors, private output custody and
+clean-clone provenance. No key, workflow, staging request, database connection or INPUT_C output is
+authorized by this checkpoint.
 
 ### Separate-authorization request contour
 
