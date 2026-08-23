@@ -1,5 +1,24 @@
 # Worklog
 
+## 2026-08-23 — Communities trusted INPUT_C separate-authorization request checkpoint
+
+- Added a canonical review-only authorization request that binds one exact V13 gate and its exact
+  independently pinned verification, plus ten ordered evidence subject/content/path pins for the
+  installed receipt, runtime, preparation provenance, clean clone, descriptors, executable and
+  output custody/absence boundaries.
+- The request fixes a one-shot policy (`maximumAttempts=1`, five-minute validity) and requires a
+  durable consumption ledger, root-owned evidence, an independent approver and a fail-closed clock.
+  Those requirements are policy inputs only; this checkpoint implements none of the four runtime
+  controls and creates no authorization receipt.
+- Added a pure verifier that re-executes the complete V13 gate verification, compares its exact
+  canonical bytes, derives every evidence subject independently and rejects matching evidence,
+  preparation or operational path hashes. Raw filesystem path semantics remain explicitly
+  unattested for the later issuer/loader.
+- Only inventory connection, inventory read and artifact write may be requested. Every actual
+  authorization remains false, including trusted-inventory designation, role/ACL/shared-database
+  mutation, migration, deploy and activation. The modules have no package export, CLI, build entry,
+  filesystem/process/PostgreSQL access or installed runtime surface.
+
 ## 2026-08-22 — Communities trusted INPUT_C separate-authorization gate checkpoint
 
 - Added a canonical review subject for one future `BEFORE` or `AFTER` trusted INPUT_C collection.

@@ -553,6 +553,30 @@ and independently verify the installed receipt, runtime bundle, descriptors, pri
 custody and clean-clone provenance. No key, workflow, staging request, database connection or
 INPUT_C output is authorized by this checkpoint.
 
+### Separate-authorization request contour
+
+`communities-staging-role-split-trusted-inventory-authorization-request-v1` is the code-only
+request subject for one future V13 `BEFORE` or `AFTER` collection authorization. It binds the exact
+V13 gate SHA-256, the exact reverified gate-verification SHA-256 and ten ordered evidence pins:
+clean-clone provenance, connection/credential/producer descriptor custody, installed-candidate
+receipt custody, producer/runtime custody, output-directory custody, output-target absence and
+preparation-verification provenance. Each pin contains a separately retained evidence SHA-256 and
+evidence-path SHA-256; the pure verifier derives the expected subject digest independently and
+rejects a matching evidence/preparation/operational path hash. It does not load raw evidence paths,
+so canonical filesystem path semantics remain explicitly unattested for the later issuer/loader.
+
+The request fixes `singleUse=true`, `maximumAttempts=1`, a five-minute authorization window and
+requires a durable consumption ledger, root-owned evidence, an independent approver and a
+fail-closed clock. These are mandatory requirements for a later issuer/loader, not attestations
+made by this source. The current verifier does not load evidence bytes, evaluate path semantics,
+custody or time, consume a ledger entry or mint an authorization receipt.
+
+The request may ask only for inventory connection, inventory read and artifact write. Its actual
+`authorizes` object remains entirely `false`; trusted-inventory designation, role creation/split,
+ACL/shared-database mutation, migration, deploy and activation cannot be requested. The module has
+no package export, CLI, `tsup` entry, filesystem/process/PostgreSQL access or installed runtime
+surface. `AUTHORIZATION_REQUEST_VERIFIED_REVIEW_ONLY` does not authorize INPUT_C collection.
+
 ## Independently pinned acceptance artifact gate
 
 `apps/migrator/src/verify-communities-role-split-acceptance-artifact.ts` is the local, read-only
@@ -833,7 +857,10 @@ For the completed V10 rehearsal on staging:
    Verify each exact canonical artifact with the separately built
    `verify-communities-staging-role-split-inventory-artifact` CLI and its independently supplied
    SHA-256. The local synthetic producer/evaluator gate is catalog proof, not trusted inventory;
-   mock rows are not catalog proof.
+   mock rows are not catalog proof. The V14 request contour can bind the exact V13 review subject
+   and evidence pins, but it neither validates the evidence bytes nor grants collection authority.
+   A separately reviewed issuer/loader with root custody, independent approval, fail-closed time
+   and durable single-use consumption remains required before this step can run.
 5. COMPLETE: 2026-08-22 — Pinned V10 production/rehearsal subject digests and immutable Node image
    ID were independently verified, then the non-authorizing rehearsal was executed on target Linux.
    The run retained root-owned evidence under
