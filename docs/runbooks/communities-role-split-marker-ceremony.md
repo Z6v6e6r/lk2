@@ -542,16 +542,43 @@ content and paths, rejects path aliases and requires both outputs directly below
 directory. It returns only `READY_FOR_SEPARATE_AUTHORIZATION_REVIEW_ONLY` with every authorization
 literal `false`.
 
-This module has no CLI or `tsup` entry and owns no filesystem, descriptor, PostgreSQL or
-child-process access. Its installed-candidate, runtime, descriptor and output custody fields are
-pins for later review, not custody attestations. The canonical shape of the supplied preparation
-verification is revalidated, but its independent execution provenance is not attested. The gate
-does not create or validate a separately custodied execution authorization, and the current V1
-execution authorization does not bind this new gate digest. Before any host entrypoint can be
-reviewed or invoked, a separately versioned authorization contour must bind the exact gate SHA-256
-and independently verify the installed receipt, runtime bundle, descriptors, private output
-custody and clean-clone provenance. No key, workflow, staging request, database connection or
-INPUT_C output is authorized by this checkpoint.
+The pure verifier still owns no filesystem, descriptor, PostgreSQL or child-process access.
+`verify-communities-staging-role-split-trusted-inventory-gate` is a separate offline `tsup` entry
+that reads only four canonical root-owned single-link inputs through the bounded no-follow reader:
+the gate, preparation, preparation-verification report and connection descriptor. It checks the
+independently supplied gate SHA-256 before reading dependent inputs, binds the connection file path
+back to the preparation envelope and treats credential/producer/output/marker/mapping arguments
+only as canonical path strings. It does not open those paths, inspect output absence, connect to
+PostgreSQL, spawn the producer or create a report file.
+
+After building `@phub/migrator`, the offline Gate 4 preflight command shape is:
+
+```sh
+node apps/migrator/dist/verify-communities-staging-role-split-trusted-inventory-gate.js \
+  --gate '<root-owned-v13-gate>' \
+  --gate-sha256 '<independently-retained-v13-gate-sha256>' \
+  --preparation '<root-owned-preparation-envelope>' \
+  --preparation-verification '<root-owned-preparation-verification-report>' \
+  --connection-descriptor '<root-owned-canonical-connection-descriptor>' \
+  --credential-descriptor '<planned-unopened-credential-descriptor-path>' \
+  --producer-descriptor '<planned-unopened-producer-descriptor-path>' \
+  --output-directory '<planned-uninspected-private-output-directory>' \
+  --output-artifact '<planned-absent-output-artifact-path>' \
+  --output-receipt '<planned-absent-output-receipt-path>' \
+  --marker-request '<planned-marker-request-path>' \
+  --marker-evidence '<planned-marker-evidence-path>' \
+  --role-mapping '<planned-private-role-mapping-path>'
+```
+
+Success remains only `READY_FOR_SEPARATE_AUTHORIZATION_REVIEW_ONLY` with every authority false.
+The installed-candidate, runtime, descriptor and output custody fields are pins for later review,
+not custody attestations. The canonical shape of the supplied preparation verification is
+revalidated, but its independent execution provenance is not attested. The preflight does not
+create or validate a separately custodied execution authorization. Before any host entrypoint can
+be reviewed or invoked, the V15 authorization contour must bind the exact gate SHA-256 and
+independently verify the installed receipt, runtime bundle, descriptors, private output custody and
+clean-clone provenance. No key, workflow, staging request, database connection or INPUT_C output is
+authorized by this checkpoint.
 
 ### Separate-authorization request contour
 
@@ -603,11 +630,16 @@ is terminal and is never retried; a failure after consumption burns the single a
 V15 does not supply or select a clock implementation, durable ledger implementation, independent
 approver, attestor or root-owned evidence. Subject digests and an independently supplied approval
 pin bind those external responsibilities but do not cryptographically prove organizational
-independence. The source checkpoint itself had no package export, CLI or `tsup` entry and was not
-installed by V12. The later disabled V13 candidate includes its exact source and exposes the
-issuer/loader API from the immutable runtime module, but still adds no concrete clock/ledger,
-PostgreSQL connection configuration, credential, artifact-publication or producer-wiring
-composition. Neither contour
+independence. The disabled V15 candidate is now installed on staging at commit
+`4bb4279b4afddf807b829612fd63922b27e4d0da` with exact manifest
+`395b33e8b468a14d4eecb4e14e6e4418b90b8d654fe3af802b2cc96bf90ee768`, control
+`f19e4a68e25ed72d561d5cd5cf5ccccd114dbd3db282447fee2e7615e8c44c10`, artifacts
+`705fcda61633d91d958b7993b5bde1f8c418e8cd7049e74ea89de551ebd5cd6d` and receipt
+`87c41cdd2e8fbefae85191d2cdf565d75689d1180826ca9c10736cab9cd2839e`.
+The source checkpoint itself had no package export, CLI or `tsup` entry. The later disabled V13
+candidate includes its exact source and exposes the issuer/loader API from the immutable runtime
+module, but still adds no concrete clock/ledger, PostgreSQL connection configuration, credential,
+artifact-publication or producer-wiring composition. Neither contour
 authorizes trusted-inventory designation, role/ACL/shared-database mutation, migration, deploy or
 activation.
 
@@ -721,7 +753,13 @@ marker/evidence/mapping inputs and an independent artifact pin.
 The four additional V13 bindings require independent approval and attested evidence plus a
 fail-closed clock adapter and durable single-use ledger. The V13 checkpoint binds the V15 source
 and bundle bytes but does not satisfy any operational runtime-wiring, approval or custody binding.
-It is not installed by the existing V12 receipt.
+The exact checkpoint is now installed only as the immutable disabled V15 candidate at commit
+`4bb4279b4afddf807b829612fd63922b27e4d0da`, with manifest
+`395b33e8b468a14d4eecb4e14e6e4418b90b8d654fe3af802b2cc96bf90ee768`, control
+`f19e4a68e25ed72d561d5cd5cf5ccccd114dbd3db282447fee2e7615e8c44c10`, artifacts
+`705fcda61633d91d958b7993b5bde1f8c418e8cd7049e74ea89de551ebd5cd6d` and receipt
+`87c41cdd2e8fbefae85191d2cdf565d75689d1180826ca9c10736cab9cd2839e`.
+It has no active link and grants no ceremony or database-mutation authority.
 Changing any of those authorizations requires a new reviewed candidate version.
 
 After a checkpoint commit, build and verify only in a fresh private local directory:
@@ -875,13 +913,16 @@ For the completed V10 rehearsal on staging:
 
 ## Remaining gates before execution
 
-1. COMPLETE: 2026-08-22 — The exact disabled V12 candidate at commit
-   `4f8028e97a28aae32dfedfbd9ac6f4ecbe5fedea` was installed and its exact readback passed with
-   receipt `9e02af1c5dbbb8c8ff8db1c10055cff63f19ba529f005891359c22e0e5b6e5ce`.
+1. COMPLETE: 2026-08-23 — The exact disabled V15 candidate at commit
+   `4bb4279b4afddf807b829612fd63922b27e4d0da` was installed and its exact readback passed with
+   manifest `395b33e8b468a14d4eecb4e14e6e4418b90b8d654fe3af802b2cc96bf90ee768`,
+   control `f19e4a68e25ed72d561d5cd5cf5ccccd114dbd3db282447fee2e7615e8c44c10`,
+   artifacts `705fcda61633d91d958b7993b5bde1f8c418e8cd7049e74ea89de551ebd5cd6d`,
+   and receipt `87c41cdd2e8fbefae85191d2cdf565d75689d1180826ca9c10736cab9cd2839e`.
    It remains disabled with no active link and grants no ceremony or database-mutation authority.
 2. The independent re-review of the exact V3 security-fix range completed with no reportable P0-P2
    findings. V3 evidence V2 binds both attestations to the exact host authorization, and the
-   composition/coordinator retain immutable entry snapshots. V12 packages those reviewed sources,
+   composition/coordinator retain immutable entry snapshots. V15 packages those reviewed sources,
    executor bridge, external anchor and reviewed trusted-inventory runtime only as disabled
    immutable bytes and adds no key, workflow or live configuration. Do not reuse
    the legacy V2 marker/attested-evidence contour, V3 evidence V1 or the permanently disabled
@@ -921,6 +962,6 @@ For the completed V10 rehearsal on staging:
    candidate, forced-command key, one ceremony run and any later post-marker cleanup.
 
 Until every gate that remains open above passes, do not create a key, wire a workflow, place
-requests on staging or run either ceremony contour. The currently installed V12 command and
+requests on staging or run either ceremony contour. The currently installed V15 command and
 existing preparation gate must continue to fail with `EXECUTION_NOT_AUTHORIZED` before PostgreSQL
 or mutable ceremony filesystem access.

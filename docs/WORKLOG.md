@@ -1,5 +1,32 @@
 # Worklog
 
+## 2026-08-23 — Communities trusted INPUT_C offline Gate 4 preflight
+
+- Added a buildable fail-closed CLI around the existing V13 pure gate verifier. It accepts one
+  independently pinned gate and reads only the canonical gate, preparation,
+  preparation-verification and connection-descriptor documents through the root-owned no-follow
+  evidence reader.
+- Bound the actual connection-descriptor file path back to the preparation envelope and rejected
+  non-canonical verification bytes, path aliases and gate-pin drift before any producer, credential
+  descriptor, output path, PostgreSQL connection or child process can be touched.
+- Kept the result review-only: success is `READY_FOR_SEPARATE_AUTHORIZATION_REVIEW_ONLY`, every
+  execution/mutation authority remains false, and Gate 4 still requires separately reviewed V15
+  evidence, approval, clock, ledger, host entrypoint and a separately authorized clean clone.
+
+## 2026-08-23 — Communities disabled V15 staging installation evidence
+
+- Installed and verified the disabled candidate for `4bb4279b4afddf807b829612fd63922b27e4d0da` on staging.
+- Exact evidence: manifest `395b33e8b468a14d4eecb4e14e6e4418b90b8d654fe3af802b2cc96bf90ee768`,
+  control `f19e4a68e25ed72d561d5cd5cf5ccccd114dbd3db282447fee2e7615e8c44c10`,
+  artifacts `705fcda61633d91d958b7993b5bde1f8c418e8cd7049e74ea89de551ebd5cd6d`,
+  receipt `87c41cdd2e8fbefae85191d2cdf565d75689d1180826ca9c10736cab9cd2839e`.
+- The embedded installer install+verify flow passed. Independent read-only postcheck confirmed: exact thirty-nine payload files,
+  root-owned installed tree, `active_link_count=0`, runtime bundle bytes match, and disabled command exit code `78`
+  with `EXECUTION_NOT_AUTHORIZED`.
+- `authorizes_ceremony=false`, `authorizes_database_mutation=false`, and no activation, key, workflow,
+  PostgreSQL access, cleanup, ceremony execution, or runtime mutation occurred.
+- No host Node runtime execution was required (`nodeRequired=false`, no installed runtime wiring).
+
 ## 2026-08-23 — Communities disabled V15 packaging checkpoint
 
 - Advanced the immutable disabled installation candidate to schema V13 and added six exact
