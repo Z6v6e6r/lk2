@@ -54,10 +54,34 @@ attestation-manifest runtime subjects, provenance and SBOM statement subjects, a
 source/base-index/scanner material set before producing a complete non-authorizing digest manifest.
 The registry validator intentionally keeps the stricter non-empty runtime subjects on the
 statements; the probe's storage-bound empty-subject exception does not authorize publication.
+Immediately after a push, GHCR may expose the exact root index before every linked attestation
+descriptor is readable. The custody reader therefore retries only bounded, exact digest-addressed
+reads (five attempts with exponential delays) and emits `PHUB_GHCR_CUSTODY_READ`,
+`PHUB_GHCR_CUSTODY_RETRY`, `PHUB_GHCR_CUSTODY_PASSED`, or a fail-closed
+`PHUB_GHCR_CUSTODY_EXHAUSTED` stage marker. Each retry hashes the temporary response against the
+expected root, attestation, statement, or runtime digest before atomically preserving it. A retry
+never falls back to a tag, a different digest, or an unbounded wait.
 
 A partial registry inventory or missing final manifest is `NO-GO` for deployment. Do not retry the
 same publication request blindly: inventory the unique run tags first and prepare a new reviewed
 attempt if required.
+
+## Gate 2a: reconciliation of an already-published interrupted run
+
+If a publication push completed but its custody step was interrupted or failed, do not dispatch the
+publication workflow again. Use the separately reviewed
+`.github/workflows/reconcile-timeweb-amd64-publication.yaml` from exact reviewed `main`, with its
+exact workflow SHA and `RECONCILE_TIMEWEB_AMD64_32625879321` confirmation. This manual workflow is
+read-only (`contents: read`, `packages: read`) and can inspect only the five hard-pinned tags from
+original run `32625879321` / attempt `1`, with their hard-pinned index digests. It validates the
+root index, runtime descriptor, linked attestation manifests, statement blob hashes, runtime
+subjects, provenance/SBOM, source tree, original builder URL, reviewed base/scanner materials and
+the runtime image shape. It emits a retained reconciliation manifest that explicitly leaves deploy,
+VPS provisioning and database mutation unauthorized.
+
+Any tag/digest mismatch, missing linked descriptor, material mismatch, runtime probe failure or
+retry exhaustion is `NO-GO`. The reconciliation workflow does not build, push, overwrite, delete,
+deploy, access VPS hosts, or connect to PostgreSQL.
 
 ## Gate 3: staging deployment
 
