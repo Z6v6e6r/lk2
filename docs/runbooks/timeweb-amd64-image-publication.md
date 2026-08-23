@@ -32,10 +32,13 @@ The retained evidence contains both OCI indexes, the selected root/runtime/attes
 content-hashed runtime and attestation manifests, provenance and SBOM statements, the observed
 Buildx/BuildKit identity, a summary and checksums. The artifact upload uses an explicit failure-safe
 condition after a successful OCI build, so partial diagnostic evidence is retained when extraction
-or contract validation fails. The final step compares the real statements with the publication
-workflow contract: statement and predicate types, runtime subject, exact remote Git config source
-and material digest, builder ID, exact Node/Nginx Package URLs and reviewed `linux/amd64` child
-digests.
+or contract validation fails. For the pinned local OCI exporter, the provenance and SBOM statements
+must have empty subjects. Their runtime custody is instead bound by the content-addressed
+attestation manifest, whose subject must match the exact runtime media type, digest and size. The
+final step also requires the exact statement and predicate types, remote Git config source and
+material, builder ID, Node/Nginx Package URLs with their reviewed multi-platform index digests, and
+the pinned SBOM scanner material. The earlier base-image preflight independently binds each reviewed
+index to its single reviewed `linux/amd64` child digest; the two contracts are not interchangeable.
 
 Any failed or cancelled probe is `NO-GO` for image publication. Inspect the evidence artifact and
 fix the publication validator or pin the observed BuildKit version in a separately reviewed change;
@@ -47,7 +50,10 @@ Only after Gate 1 is green and a separate publication approval is recorded, run
 `.github/workflows/publish-timeweb-amd64-images.yaml` from the exact reviewed `main` SHA with the
 `publish` operation and its exact confirmation input. The publication workflow creates five unique,
 non-`latest` image tags and verifies their registry digests, `linux/amd64` runtime manifests,
-provenance and SBOM evidence before producing a complete non-authorizing digest manifest.
+attestation-manifest runtime subjects, provenance and SBOM statement subjects, and the exact
+source/base-index/scanner material set before producing a complete non-authorizing digest manifest.
+The registry validator intentionally keeps the stricter non-empty runtime subjects on the
+statements; the probe's storage-bound empty-subject exception does not authorize publication.
 
 A partial registry inventory or missing final manifest is `NO-GO` for deployment. Do not retry the
 same publication request blindly: inventory the unique run tags first and prepare a new reviewed

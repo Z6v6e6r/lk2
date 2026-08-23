@@ -59,8 +59,12 @@ describe('Timeweb amd64 attestation probe workflow', () => {
     expect(workflow).toContain(
       'https://github.com/moby/buildkit/blob/master/docs/attestations/slsa-definitions.md',
     );
-    expect(workflow).toContain('reviewed_base("node"; "22-bookworm-slim"; $nodeAmd64Sha)');
-    expect(workflow).toContain('reviewed_base("nginx"; "1.27-alpine"; $nginxAmd64Sha)');
+    expect(workflow).toContain('reviewed_base("node"; "22-bookworm-slim"; $nodeIndexSha)');
+    expect(workflow).toContain('reviewed_base("nginx"; "1.27-alpine"; $nginxIndexSha)');
+    expect(workflow).toContain('reviewed_scanner($scannerIndexSha)');
+    expect(workflow).toContain('.subject == []');
+    expect(workflow).toContain('($materials | length) == 4');
+    expect(workflow).toContain('($materials | length) == 3');
     expect(workflow).toContain('reviewed_source');
     expect(workflow).toContain('authorizesPublication: false');
     expect(workflow).toContain('authorizesDeploy: false');
@@ -113,18 +117,23 @@ describe('Timeweb amd64 attestation probe workflow', () => {
       'utf8',
     );
     const match = workflow.match(
-      /jq -e --arg runtime "\$runtime_digest" '(?<program>[\s\S]*?)' attestation-probe\/evidence\/attestation-manifest\.json/u,
+      /jq -e --arg runtime "\$runtime_digest" --argjson runtimeSize "\$runtime_size" '(?<program>[\s\S]*?)' attestation-probe\/evidence\/attestation-manifest\.json/u,
     );
     const program = match?.groups?.program;
     expect(program).toBeDefined();
     if (!program) throw new Error('attestation manifest jq contract was not found');
 
     const runtime = `sha256:${'1'.repeat(64)}`;
+    const runtimeSize = 1234;
     const manifest = {
       schemaVersion: 2,
       mediaType: 'application/vnd.oci.image.manifest.v1+json',
       artifactType: 'application/vnd.docker.attestation.manifest.v1+json',
-      subject: { digest: runtime },
+      subject: {
+        mediaType: 'application/vnd.oci.image.manifest.v1+json',
+        digest: runtime,
+        size: runtimeSize,
+      },
       config: {
         mediaType: 'application/vnd.oci.empty.v1+json',
         digest: 'sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a',
@@ -147,12 +156,37 @@ describe('Timeweb amd64 attestation probe workflow', () => {
       ],
     };
     const evaluate = (candidate: unknown) =>
-      spawnSync('jq', ['-e', '--arg', 'runtime', runtime, program], {
-        input: JSON.stringify(candidate),
-        encoding: 'utf8',
-      });
+      spawnSync(
+        'jq',
+        [
+          '-e',
+          '--arg',
+          'runtime',
+          runtime,
+          '--argjson',
+          'runtimeSize',
+          String(runtimeSize),
+          program,
+        ],
+        {
+          input: JSON.stringify(candidate),
+          encoding: 'utf8',
+        },
+      );
 
     expect(evaluate(manifest).status).toBe(0);
+    expect(
+      evaluate({
+        ...manifest,
+        subject: { ...manifest.subject, size: runtimeSize + 1 },
+      }).status,
+    ).not.toBe(0);
+    expect(
+      evaluate({
+        ...manifest,
+        subject: { ...manifest.subject, mediaType: 'application/vnd.oci.image.index.v1+json' },
+      }).status,
+    ).not.toBe(0);
     expect(
       evaluate({
         ...manifest,
@@ -231,6 +265,182 @@ describe('Timeweb amd64 attestation probe workflow', () => {
       expect((await run(1)).status).not.toBe(0);
     } finally {
       await rm(temporary, { force: true, recursive: true });
+    }
+  });
+
+  it('accepts only storage-bound empty subjects and the exact index-digest material set', async () => {
+    const workflow = await readFile(
+      new URL('../.github/workflows/probe-timeweb-amd64-attestations.yaml', import.meta.url),
+      'utf8',
+    );
+    const command = workflow.indexOf('      - name: Validate the real BuildKit output');
+    const programStart = workflow.indexOf('            def reviewed_base', command);
+    const programEnd = workflow.indexOf(
+      "\n          ' attestation-probe/evidence/*-statement.json",
+      programStart,
+    );
+    expect(command).toBeGreaterThan(-1);
+    expect(programStart).toBeGreaterThan(command);
+    expect(programEnd).toBeGreaterThan(programStart);
+    const program = workflow.slice(programStart, programEnd);
+
+    const sourceSha = '35c8312b79cccdd136f2bfd892efbea629b8b919';
+    const runtimeSha = '1'.repeat(64);
+    const nodeIndexSha = 'd649c27dae7ba0137b3cef5dd75baa422c08dc3d9e3fc0c23dfb172dc3cc6436';
+    const nginxIndexSha = '65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10';
+    const scannerIndexSha = 'ae4f3b554449e7e25548e7d8ccc029d17357348e30c6e3df01b92bc93654d6a9';
+    const builder = 'https://github.com/Z6v6e6r/lk2/actions/runs/123/attempts/1';
+    const node = {
+      uri: 'pkg:docker/node@22-bookworm-slim?platform=linux%2Famd64',
+      sha256: nodeIndexSha,
+    };
+    const nginx = {
+      uri: 'pkg:docker/nginx@1.27-alpine?platform=linux%2Famd64',
+      sha256: nginxIndexSha,
+    };
+    const scanner = {
+      uri: `pkg:docker/docker/buildkit-syft-scanner?digest=sha256:${scannerIndexSha}&platform=linux%2Famd64`,
+      sha256: scannerIndexSha,
+    };
+    const directory = await mkdtemp(join(tmpdir(), 'phub-timeweb-probe-materials-'));
+    try {
+      const run = async (
+        service: 'api' | 'web',
+        materials: readonly { readonly uri: string; readonly sha256: string }[],
+        options: {
+          readonly subject?: readonly unknown[];
+          readonly sourceMaterial?: boolean;
+          readonly resolvedDependencies?: unknown;
+        } = {},
+      ) => {
+        const subject = options.subject ?? [];
+        const provenancePath = join(directory, `${service}-provenance.json`);
+        const sbomPath = join(directory, `${service}-sbom.json`);
+        await writeFile(
+          provenancePath,
+          JSON.stringify({
+            _type: 'https://in-toto.io/Statement/v1',
+            predicateType: 'https://slsa.dev/provenance/v1',
+            subject,
+            predicate: {
+              buildDefinition: {
+                buildType:
+                  'https://github.com/moby/buildkit/blob/master/docs/attestations/slsa-definitions.md',
+                externalParameters: {
+                  configSource: {
+                    uri: `https://github.com/Z6v6e6r/lk2.git#${sourceSha}`,
+                    digest: { sha1: sourceSha },
+                    path: `apps/${service}/Dockerfile`,
+                  },
+                },
+                resolvedDependencies: options.resolvedDependencies ?? [
+                  ...(options.sourceMaterial === false
+                    ? []
+                    : [
+                        {
+                          uri: `https://github.com/Z6v6e6r/lk2.git#${sourceSha}`,
+                          digest: { sha1: sourceSha },
+                        },
+                      ]),
+                  ...materials.map(({ uri, sha256 }) => ({ uri, digest: { sha256 } })),
+                ],
+              },
+              runDetails: {
+                builder: { id: builder },
+                metadata: { buildkit_completeness: { resolvedDependencies: true } },
+              },
+            },
+          }),
+        );
+        await writeFile(
+          sbomPath,
+          JSON.stringify({
+            _type: 'https://in-toto.io/Statement/v1',
+            predicateType: 'https://spdx.dev/Document',
+            subject,
+            predicate: { SPDXID: 'SPDXRef-DOCUMENT', packages: [{ name: service }] },
+          }),
+        );
+        return spawnSync(
+          'jq',
+          [
+            '-s',
+            '-e',
+            '--arg',
+            'sourceSha',
+            sourceSha,
+            '--arg',
+            'service',
+            service,
+            '--arg',
+            'nodeIndexSha',
+            nodeIndexSha,
+            '--arg',
+            'nginxIndexSha',
+            nginxIndexSha,
+            '--arg',
+            'scannerIndexSha',
+            scannerIndexSha,
+            '--arg',
+            'builder',
+            builder,
+            program,
+            provenancePath,
+            sbomPath,
+          ],
+          { encoding: 'utf8' },
+        );
+      };
+
+      const validApi = await run('api', [node, scanner]);
+      const validWeb = await run('web', [node, nginx, scanner]);
+      expect(validApi.status, `${validApi.stderr}\n${validApi.stdout}`).toBe(0);
+      expect(validWeb.status, `${validWeb.stderr}\n${validWeb.stdout}`).toBe(0);
+      expect(
+        (
+          await run('api', [node, scanner], {
+            subject: [{ digest: { sha256: runtimeSha } }],
+          })
+        ).status,
+      ).not.toBe(0);
+      expect((await run('api', [node])).status).not.toBe(0);
+      expect((await run('api', [node, scanner, scanner])).status).not.toBe(0);
+      expect((await run('api', [node, scanner], { sourceMaterial: false })).status).not.toBe(0);
+      expect(
+        (
+          await run('api', [node, scanner], {
+            resolvedDependencies: {
+              source: {
+                uri: `https://github.com/Z6v6e6r/lk2.git#${sourceSha}`,
+                digest: { sha1: sourceSha },
+              },
+              node: { uri: node.uri, digest: { sha256: node.sha256 } },
+              scanner: { uri: scanner.uri, digest: { sha256: scanner.sha256 } },
+            },
+          })
+        ).status,
+      ).not.toBe(0);
+      expect(
+        (
+          await run('api', [
+            { ...node, sha256: 'a17d50af28002a160548bd4225b3cfcb12c5efcb171f79e68758f2885fb1b066' },
+            scanner,
+          ])
+        ).status,
+      ).not.toBe(0);
+      expect((await run('web', [node, scanner])).status).not.toBe(0);
+      expect(
+        (
+          await run('web', [
+            node,
+            nginx,
+            scanner,
+            { uri: 'pkg:docker/extra', sha256: '4'.repeat(64) },
+          ])
+        ).status,
+      ).not.toBe(0);
+    } finally {
+      await rm(directory, { force: true, recursive: true });
     }
   });
 });

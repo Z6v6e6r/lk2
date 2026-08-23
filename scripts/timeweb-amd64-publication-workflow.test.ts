@@ -118,10 +118,11 @@ describe('Timeweb amd64 publication workflow', () => {
     );
     expect(workflow).toContain('test "$observed_index_digest" = "$expected_index_digest"');
     expect(workflow).toContain('test "$observed_amd64_digest" = "$expected_amd64_digest"');
-    expect(workflow).toContain('reviewed_base("node"; "22-bookworm-slim"; $nodeAmd64Sha)');
-    expect(workflow).toContain('reviewed_base("nginx"; "1.27-alpine"; $nginxAmd64Sha)');
+    expect(workflow).toContain('reviewed_base("node"; "22-bookworm-slim"; $nodeIndexSha)');
+    expect(workflow).toContain('reviewed_base("nginx"; "1.27-alpine"; $nginxIndexSha)');
+    expect(workflow).toContain('reviewed_scanner($scannerIndexSha)');
+    expect(workflow).toContain('($materials | length) == 4');
     expect(workflow).toContain('($materials | length) == 3');
-    expect(workflow).toContain('($materials | length) == 2');
     expect(workflow).toContain('pkg:docker/docker.io/library/\\($name)');
     expect(
       workflow.indexOf('Verify reviewed base-image digests before registry login'),
@@ -162,6 +163,97 @@ describe('Timeweb amd64 publication workflow', () => {
     expect(workflow).not.toMatch(/deploy-staging|deploy-production/u);
   });
 
+  it('binds every registry attestation manifest to the exact runtime descriptor', async () => {
+    const workflow = await readFile(
+      new URL('../.github/workflows/publish-timeweb-amd64-images.yaml', import.meta.url),
+      'utf8',
+    );
+    const match = workflow.match(
+      /jq -s -e --arg runtime "\$runtime_digest" --argjson runtimeSize "\$runtime_size" '(?<program>[\s\S]*?)' publication-evidence\/"\$SERVICE"-attestation-manifests\/\*\.json/u,
+    );
+    const program = match?.groups?.program;
+    expect(program).toBeDefined();
+    if (!program) throw new Error('registry attestation manifest jq contract was not found');
+
+    const runtime = `sha256:${'1'.repeat(64)}`;
+    const runtimeSize = 1234;
+    const manifest = {
+      schemaVersion: 2,
+      mediaType: 'application/vnd.oci.image.manifest.v1+json',
+      artifactType: 'application/vnd.docker.attestation.manifest.v1+json',
+      subject: {
+        mediaType: 'application/vnd.oci.image.manifest.v1+json',
+        digest: runtime,
+        size: runtimeSize,
+      },
+      config: {
+        mediaType: 'application/vnd.oci.empty.v1+json',
+        digest: 'sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a',
+        size: 2,
+        data: 'e30=',
+      },
+      layers: [],
+    };
+    const directory = await mkdtemp(join(tmpdir(), 'phub-timeweb-registry-attestation-'));
+    const candidatePath = join(directory, 'manifest.json');
+    const evaluate = async (candidate: unknown) => {
+      await writeFile(candidatePath, JSON.stringify(candidate));
+      return spawnSync(
+        'jq',
+        [
+          '-s',
+          '-e',
+          '--arg',
+          'runtime',
+          runtime,
+          '--argjson',
+          'runtimeSize',
+          String(runtimeSize),
+          program,
+          candidatePath,
+        ],
+        { encoding: 'utf8' },
+      );
+    };
+
+    try {
+      expect((await evaluate(manifest)).status).toBe(0);
+      expect(
+        (
+          await evaluate({
+            ...manifest,
+            subject: { ...manifest.subject, digest: `sha256:${'2'.repeat(64)}` },
+          })
+        ).status,
+      ).not.toBe(0);
+      expect(
+        (await evaluate({ ...manifest, subject: { ...manifest.subject, size: runtimeSize + 1 } }))
+          .status,
+      ).not.toBe(0);
+      expect(
+        (
+          await evaluate({
+            ...manifest,
+            subject: {
+              ...manifest.subject,
+              mediaType: 'application/vnd.oci.image.index.v1+json',
+            },
+          })
+        ).status,
+      ).not.toBe(0);
+      expect(
+        (
+          await evaluate({
+            ...manifest,
+            config: { ...manifest.config, data: 'e31=' },
+          })
+        ).status,
+      ).not.toBe(0);
+    } finally {
+      await rm(directory, { force: true, recursive: true });
+    }
+  });
+
   it('rejects provenance with an unexpected or incomplete base-image digest set', async () => {
     const workflow = await readFile(
       new URL('../.github/workflows/publish-timeweb-amd64-images.yaml', import.meta.url),
@@ -181,15 +273,20 @@ describe('Timeweb amd64 publication workflow', () => {
     const runtimeSha = '1'.repeat(64);
     const sourceSha = '35c8312b79cccdd136f2bfd892efbea629b8b919';
     const builder = 'https://github.com/Z6v6e6r/lk2/actions/runs/123/attempts/1';
-    const nodeAmd64Sha = 'a17d50af28002a160548bd4225b3cfcb12c5efcb171f79e68758f2885fb1b066';
-    const nginxAmd64Sha = '62223d644fa234c3a1cc785ee14242ec47a77364226f1c811d2f669f96dc2ac8';
+    const nodeIndexSha = 'd649c27dae7ba0137b3cef5dd75baa422c08dc3d9e3fc0c23dfb172dc3cc6436';
+    const nginxIndexSha = '65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10';
+    const scannerIndexSha = 'ae4f3b554449e7e25548e7d8ccc029d17357348e30c6e3df01b92bc93654d6a9';
     const node = {
       uri: 'pkg:docker/node@22-bookworm-slim?platform=linux%2Famd64',
-      sha256: nodeAmd64Sha,
+      sha256: nodeIndexSha,
     };
     const nginx = {
       uri: 'pkg:docker/nginx@1.27-alpine?platform=linux%2Famd64',
-      sha256: nginxAmd64Sha,
+      sha256: nginxIndexSha,
+    };
+    const scanner = {
+      uri: `pkg:docker/docker/buildkit-syft-scanner?digest=sha256:${scannerIndexSha}&platform=linux%2Famd64`,
+      sha256: scannerIndexSha,
     };
     const directory = await mkdtemp(join(tmpdir(), 'phub-timeweb-provenance-'));
     try {
@@ -201,6 +298,7 @@ describe('Timeweb amd64 publication workflow', () => {
           readonly sbomStatementType?: string;
           readonly buildType?: string;
           readonly sourceMaterial?: { readonly uri: string; readonly sha1: string } | null;
+          readonly resolvedDependencies?: unknown;
         } = {},
       ) => {
         const provenancePath = join(directory, `${service}-provenance-${materials.length}.json`);
@@ -225,7 +323,7 @@ describe('Timeweb amd64 publication workflow', () => {
                   },
                   sourceSha,
                 },
-                resolvedDependencies: [
+                resolvedDependencies: overrides.resolvedDependencies ?? [
                   ...(overrides.sourceMaterial === null
                     ? []
                     : [
@@ -273,11 +371,14 @@ describe('Timeweb amd64 publication workflow', () => {
             'service',
             service,
             '--arg',
-            'nodeAmd64Sha',
-            nodeAmd64Sha,
+            'nodeIndexSha',
+            nodeIndexSha,
             '--arg',
-            'nginxAmd64Sha',
-            nginxAmd64Sha,
+            'nginxIndexSha',
+            nginxIndexSha,
+            '--arg',
+            'scannerIndexSha',
+            scannerIndexSha,
             '--arg',
             'builder',
             builder,
@@ -292,21 +393,37 @@ describe('Timeweb amd64 publication workflow', () => {
       const unexpectedNode = { ...node, sha256: '0'.repeat(64) };
       const unexpectedNginx = { ...nginx, sha256: '2'.repeat(64) };
       const wrongIdentity = { ...node, uri: 'pkg:docker/other@22?platform=linux%2Famd64' };
-      const api = await run('api', [node]);
-      const web = await run('web', [node, nginx]);
+      const api = await run('api', [node, scanner]);
+      const web = await run('web', [node, nginx, scanner]);
       expect(api.status, `${api.stderr}\n${api.stdout}`).toBe(0);
       expect(web.status, `${web.stderr}\n${web.stdout}`).toBe(0);
-      expect((await run('api', [unexpectedNode])).status).not.toBe(0);
-      expect((await run('api', [node, unexpectedNode])).status).not.toBe(0);
-      expect((await run('api', [node, node])).status).not.toBe(0);
-      expect((await run('api', [wrongIdentity])).status).not.toBe(0);
-      expect((await run('web', [node])).status).not.toBe(0);
-      expect((await run('web', [node, nginx, unexpectedNginx])).status).not.toBe(0);
-      expect((await run('web', [node, unexpectedNginx])).status).not.toBe(0);
-      expect((await run('api', [node], { sourceMaterial: null })).status).not.toBe(0);
+      expect((await run('api', [unexpectedNode, scanner])).status).not.toBe(0);
+      expect((await run('api', [node, unexpectedNode, scanner])).status).not.toBe(0);
+      expect((await run('api', [node, node, scanner])).status).not.toBe(0);
+      expect((await run('api', [wrongIdentity, scanner])).status).not.toBe(0);
+      expect((await run('api', [node])).status).not.toBe(0);
+      expect((await run('api', [node, scanner, scanner])).status).not.toBe(0);
+      expect((await run('web', [node, scanner])).status).not.toBe(0);
+      expect((await run('web', [node, nginx, unexpectedNginx, scanner])).status).not.toBe(0);
+      expect((await run('web', [node, unexpectedNginx, scanner])).status).not.toBe(0);
+      expect((await run('api', [node, scanner], { sourceMaterial: null })).status).not.toBe(0);
       expect(
         (
-          await run('api', [node], {
+          await run('api', [node, scanner], {
+            resolvedDependencies: {
+              source: {
+                uri: `https://github.com/Z6v6e6r/lk2.git#${sourceSha}`,
+                digest: { sha1: sourceSha },
+              },
+              node: { uri: node.uri, digest: { sha256: node.sha256 } },
+              scanner: { uri: scanner.uri, digest: { sha256: scanner.sha256 } },
+            },
+          })
+        ).status,
+      ).not.toBe(0);
+      expect(
+        (
+          await run('api', [node, scanner], {
             sourceMaterial: {
               uri: 'https://github.com/Z6v6e6r/lk2.git#wrong',
               sha1: sourceSha,
@@ -316,21 +433,21 @@ describe('Timeweb amd64 publication workflow', () => {
       ).not.toBe(0);
       expect(
         (
-          await run('api', [node], {
+          await run('api', [node, scanner], {
             provenanceStatementType: 'https://in-toto.io/Statement/v0.1',
           })
         ).status,
       ).not.toBe(0);
       expect(
         (
-          await run('api', [node], {
+          await run('api', [node, scanner], {
             sbomStatementType: 'https://in-toto.io/Statement/v0.1',
           })
         ).status,
       ).not.toBe(0);
       expect(
         (
-          await run('api', [node], {
+          await run('api', [node, scanner], {
             buildType: 'https://mobyproject.org/buildkit@v1',
           })
         ).status,
