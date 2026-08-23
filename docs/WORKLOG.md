@@ -1,5 +1,27 @@
 # Worklog
 
+## 2026-08-23 — Communities Gate 4 V14 disabled staging installation evidence
+
+- Installed and verified the exact disabled candidate for
+  `cd1cf1301da75b63f494921e21d051aa149b32b2` on `phub-jetson-staging` after the commit was pushed to
+  `origin/main` and the private local candidate verification passed.
+- Exact evidence: manifest `90110dd11f4192a4c379f07c6f2407db62db1c7a0e9a56f23fadfe332b4d4b99`,
+  control `847eb81019105b154cab502a8b7393b15522678dbe7d2704d88f75ea8ac3c5b9`,
+  artifacts `42b2733a0feebf928c63576034d33967aa8700d103e44418b07823d556c09be2`,
+  receipt `c013ff2902a8f2f500b7f589af5a4ed3292208b704ebd5c81c53c6a5e5314e7d` and Gate 4 bundle
+  `8a4aa136f0b5d949f8741b04b1f97d83aeff65478eb68de10785ce26f327eafc`.
+- The dependency-free installer install+verify flow passed. Independent read-only readback confirmed
+  the root-owned installation, exactly 45 installed entries (43 files and two child directories;
+  three directories including the candidate root), no non-file/non-directory entries,
+  `active_links=0`, exact bundle bytes and the mode-0444 single-link installation receipt.
+- The versioned disabled command returned the fixed denial with exit `78`. The Gate 4 preflight bundle
+  itself was not invoked; no review inputs were supplied and no producer, PostgreSQL, ceremony,
+  migration, service restart or activation was performed. `authorizes_ceremony=false` and
+  `authorizes_database_mutation=false` remain exact installed invariants.
+- The user-owned transfer directory and installer wrapper remain under `/home/zver`; no cleanup was
+  authorized or performed. Their later removal is operational housekeeping only and cannot activate
+  the immutable installation.
+
 ## 2026-08-23 — Communities Gate 4 offline preflight disabled packaging
 
 - Advanced the immutable disabled installation candidate to schema V14 and host-control V11 with

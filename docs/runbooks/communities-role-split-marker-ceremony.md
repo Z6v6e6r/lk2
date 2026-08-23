@@ -760,7 +760,7 @@ marker/evidence/mapping inputs and an independent artifact pin.
 The four additional V13 bindings require independent approval and attested evidence plus a
 fail-closed clock adapter and durable single-use ledger. The V13 checkpoint binds the V15 source
 and bundle bytes but does not satisfy any operational runtime-wiring, approval or custody binding.
-The exact checkpoint is now installed only as the immutable disabled V15 candidate at commit
+The earlier exact checkpoint was installed only as the immutable disabled V15 candidate at commit
 `4bb4279b4afddf807b829612fd63922b27e4d0da`, with manifest
 `395b33e8b468a14d4eecb4e14e6e4418b90b8d654fe3af802b2cc96bf90ee768`, control
 `f19e4a68e25ed72d561d5cd5cf5ccccd114dbd3db282447fee2e7615e8c44c10`, artifacts
@@ -769,6 +769,20 @@ The exact checkpoint is now installed only as the immutable disabled V15 candida
 It has no active link and grants no ceremony or database-mutation authority. That V13/V15 staging
 installation remains historical evidence; it does not contain the later Gate 4 offline preflight
 bundle introduced by the V14 packaging contract.
+
+The current exact V14 checkpoint `cd1cf1301da75b63f494921e21d051aa149b32b2` is installed on
+`phub-jetson-staging` as another immutable disabled version, with manifest
+`90110dd11f4192a4c379f07c6f2407db62db1c7a0e9a56f23fadfe332b4d4b99`, control
+`847eb81019105b154cab502a8b7393b15522678dbe7d2704d88f75ea8ac3c5b9`, artifacts
+`42b2733a0feebf928c63576034d33967aa8700d103e44418b07823d556c09be2` and receipt
+`c013ff2902a8f2f500b7f589af5a4ed3292208b704ebd5c81c53c6a5e5314e7d`. Independent readback
+confirmed exactly 45 installed entries, no non-file/non-directory entries, zero active links and
+the exact mode-0444 Gate 4 bundle digest
+`8a4aa136f0b5d949f8741b04b1f97d83aeff65478eb68de10785ce26f327eafc`. The disabled command
+returned the fixed denial with exit `78`. The preflight bundle was not invoked and no review input,
+producer, PostgreSQL connection, service restart, ceremony, migration or activation was supplied or
+performed. The transfer upload and wrapper remain under `/home/zver` pending separately authorized
+housekeeping; they grant no authority and are not linked from the installed runtime.
 Changing any of those authorizations requires a new reviewed candidate version.
 
 After a checkpoint commit, build and verify only in a fresh private local directory:
@@ -922,13 +936,16 @@ For the completed V10 rehearsal on staging:
 
 ## Remaining gates before execution
 
-1. COMPLETE: 2026-08-23 — The exact disabled V15 candidate at commit
-   `4bb4279b4afddf807b829612fd63922b27e4d0da` was installed and its exact readback passed with
-   manifest `395b33e8b468a14d4eecb4e14e6e4418b90b8d654fe3af802b2cc96bf90ee768`,
-   control `f19e4a68e25ed72d561d5cd5cf5ccccd114dbd3db282447fee2e7615e8c44c10`,
-   artifacts `705fcda61633d91d958b7993b5bde1f8c418e8cd7049e74ea89de551ebd5cd6d`,
-   and receipt `87c41cdd2e8fbefae85191d2cdf565d75689d1180826ca9c10736cab9cd2839e`.
-   It remains disabled with no active link and grants no ceremony or database-mutation authority.
+1. COMPLETE: 2026-08-23 — The exact Gate 4 V14 disabled candidate at commit
+   `cd1cf1301da75b63f494921e21d051aa149b32b2` was installed and its exact independent readback
+   passed with manifest `90110dd11f4192a4c379f07c6f2407db62db1c7a0e9a56f23fadfe332b4d4b99`,
+   control `847eb81019105b154cab502a8b7393b15522678dbe7d2704d88f75ea8ac3c5b9`,
+   artifacts `42b2733a0feebf928c63576034d33967aa8700d103e44418b07823d556c09be2`,
+   receipt `c013ff2902a8f2f500b7f589af5a4ed3292208b704ebd5c81c53c6a5e5314e7d` and exact Gate 4 bundle
+   `8a4aa136f0b5d949f8741b04b1f97d83aeff65478eb68de10785ce26f327eafc`. It remains disabled with
+   zero active links; the fixed denial returned exit `78`, and no preflight input, ceremony or
+   database-mutation authority was supplied. The earlier V15 installation remains immutable
+   historical evidence but is not the current Gate 4 bundle installation.
 2. The independent re-review of the exact V3 security-fix range completed with no reportable P0-P2
    findings. V3 evidence V2 binds both attestations to the exact host authorization, and the
    composition/coordinator retain immutable entry snapshots. V15 packages those reviewed sources,
@@ -971,6 +988,6 @@ For the completed V10 rehearsal on staging:
    candidate, forced-command key, one ceremony run and any later post-marker cleanup.
 
 Until every gate that remains open above passes, do not create a key, wire a workflow, place
-requests on staging or run either ceremony contour. The currently installed V15 command and
+requests on staging or run either ceremony contour. The currently installed Gate 4 V14 command and
 existing preparation gate must continue to fail with `EXECUTION_NOT_AUTHORIZED` before PostgreSQL
 or mutable ceremony filesystem access.
