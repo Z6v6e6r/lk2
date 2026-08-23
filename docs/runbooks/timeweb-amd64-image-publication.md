@@ -22,13 +22,20 @@ The reviewed Buildx version, BuildKit image digest, Node/Nginx base-image digest
 digest are pinned identically in the probe and publication workflows. It has no registry login,
 package-write permission, registry push, staging secrets, SSH, deployment or database step.
 
-The retained evidence contains the OCI index, content-hashed runtime and attestation manifests,
-provenance and SBOM statements, the observed Buildx/BuildKit identity, a summary and checksums. The
-artifact upload uses an explicit failure-safe condition after a successful OCI build, so partial
-diagnostic evidence is retained when extraction or contract validation fails. The final step
-compares the real statements with the publication workflow contract: statement and predicate types,
-runtime subject, exact remote Git config source and material digest, builder ID, exact Node/Nginx
-Package URLs and reviewed `linux/amd64` child digests.
+The OCI exporter emits one bounded two-level layout: the root index contains exactly one
+content-addressed nested index, and that nested index contains exactly one `linux/amd64` runtime
+manifest and one linked attestation manifest. The probe rejects direct-root manifests, more than one
+root descriptor, additional nesting, duplicate/extra runtime or attestation descriptors, and any
+digest or size mismatch. It never performs arbitrary recursive traversal.
+
+The retained evidence contains both OCI indexes, the selected root/runtime/attestation descriptors,
+content-hashed runtime and attestation manifests, provenance and SBOM statements, the observed
+Buildx/BuildKit identity, a summary and checksums. The artifact upload uses an explicit failure-safe
+condition after a successful OCI build, so partial diagnostic evidence is retained when extraction
+or contract validation fails. The final step compares the real statements with the publication
+workflow contract: statement and predicate types, runtime subject, exact remote Git config source
+and material digest, builder ID, exact Node/Nginx Package URLs and reviewed `linux/amd64` child
+digests.
 
 Any failed or cancelled probe is `NO-GO` for image publication. Inspect the evidence artifact and
 fix the publication validator or pin the observed BuildKit version in a separately reviewed change;
