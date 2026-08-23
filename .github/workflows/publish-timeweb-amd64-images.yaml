@@ -310,8 +310,9 @@ jobs:
           IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
           IMAGE_REFERENCE: ghcr.io/z6v6e6r/phub-${{ matrix.service }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          EXPECTED_NGINX_AMD64_DIGEST: sha256:62223d644fa234c3a1cc785ee14242ec47a77364226f1c811d2f669f96dc2ac8
-          EXPECTED_NODE_AMD64_DIGEST: sha256:a17d50af28002a160548bd4225b3cfcb12c5efcb171f79e68758f2885fb1b066
+          EXPECTED_NGINX_INDEX_DIGEST: sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10
+          EXPECTED_NODE_INDEX_DIGEST: sha256:d649c27dae7ba0137b3cef5dd75baa422c08dc3d9e3fc0c23dfb172dc3cc6436
+          EXPECTED_SBOM_INDEX_DIGEST: sha256:ae4f3b554449e7e25548e7d8ccc029d17357348e30c6e3df01b92bc93654d6a9
           SERVICE: ${{ matrix.service }}
           SOURCE_SHA: ${{ inputs.expected_source_sha }}
           WORKFLOW_SHA: ${{ github.workflow_sha }}
@@ -330,6 +331,14 @@ jobs:
             )] | if length == 1 then .[0].digest else empty end
           ' "publication-evidence/$SERVICE-oci-index.json")"
           printf '%s' "$runtime_digest" | grep -Eq '^sha256:[0-9a-f]{64}$'
+          runtime_size="$(jq -r '
+            [.manifests[] | select(
+              .platform.os == "linux" and
+              .platform.architecture == "amd64" and
+              ((.platform.variant // "") == "")
+            )] | if length == 1 then .[0].size else empty end
+          ' "publication-evidence/$SERVICE-oci-index.json")"
+          printf '%s' "$runtime_size" | grep -Eq '^[1-9][0-9]*$'
           attestation_count="$(jq '[.manifests[] | select(
             .platform.os == "unknown" and
             .platform.architecture == "unknown" and
@@ -350,6 +359,21 @@ jobs:
             docker buildx imagetools inspect "$IMAGE_REFERENCE@$attestation_digest" --raw \
               > "publication-evidence/$SERVICE-attestation-manifests/${attestation_digest#sha256:}.json"
           done < "publication-evidence/$SERVICE-attestation-digests.txt"
+          jq -s -e --arg runtime "$runtime_digest" --argjson runtimeSize "$runtime_size" '
+            length >= 1 and
+            all(.[];
+              .schemaVersion == 2 and
+              .mediaType == "application/vnd.oci.image.manifest.v1+json" and
+              .artifactType == "application/vnd.docker.attestation.manifest.v1+json" and
+              .subject.mediaType == "application/vnd.oci.image.manifest.v1+json" and
+              .subject.digest == $runtime and
+              .subject.size == $runtimeSize and
+              .config.mediaType == "application/vnd.oci.empty.v1+json" and
+              .config.digest == "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a" and
+              .config.size == 2 and
+              .config.data == "e30="
+            )
+          ' publication-evidence/"$SERVICE"-attestation-manifests/*.json >/dev/null
           jq -s -e '
             [.[].layers[].annotations["in-toto.io/predicate-type"]] | sort | unique == [
               "https://slsa.dev/provenance/v1",
@@ -396,8 +420,9 @@ jobs:
           unset registry_token
           jq -s -e --arg runtimeSha "${runtime_digest#sha256:}" --arg sourceSha "$SOURCE_SHA" \
             --arg service "$SERVICE" \
-            --arg nodeAmd64Sha "${EXPECTED_NODE_AMD64_DIGEST#sha256:}" \
-            --arg nginxAmd64Sha "${EXPECTED_NGINX_AMD64_DIGEST#sha256:}" \
+            --arg nodeIndexSha "${EXPECTED_NODE_INDEX_DIGEST#sha256:}" \
+            --arg nginxIndexSha "${EXPECTED_NGINX_INDEX_DIGEST#sha256:}" \
+            --arg scannerIndexSha "${EXPECTED_SBOM_INDEX_DIGEST#sha256:}" \
             --arg builder "https://github.com/Z6v6e6r/lk2/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT" '
             def reviewed_base($name; $tag; $sha):
               (.digest |
@@ -407,6 +432,14 @@ jobs:
               ) and
               (.uri == "pkg:docker/\($name)@\($tag)?platform=linux%2Famd64" or
                .uri == "pkg:docker/docker.io/library/\($name)@\($tag)?platform=linux%2Famd64");
+            def reviewed_scanner($sha):
+              (.digest |
+                type == "object" and
+                keys == ["sha256"] and
+                .sha256 == $sha
+              ) and
+              (.uri == "pkg:docker/docker/buildkit-syft-scanner?digest=sha256:\($sha)&platform=linux%2Famd64" or
+               .uri == "pkg:docker/docker.io/docker/buildkit-syft-scanner?digest=sha256:\($sha)&platform=linux%2Famd64");
             def reviewed_source:
               .uri == "https://github.com/Z6v6e6r/lk2.git#\($sourceSha)" and
               (.digest | type == "object" and keys == ["sha1"] and .sha1 == $sourceSha);
@@ -432,15 +465,18 @@ jobs:
             $provenance.buildDefinition.externalParameters.configSource.digest == {"sha1": $sourceSha} and
             $provenance.buildDefinition.externalParameters.configSource.path ==
               "apps/\($service)/Dockerfile" and
+            ($materials | type) == "array" and
             ([$materials[] | select(reviewed_source)] | length) == 1 and
-            ([$materials[] | select(reviewed_base("node"; "22-bookworm-slim"; $nodeAmd64Sha))] |
+            ([$materials[] | select(reviewed_base("node"; "22-bookworm-slim"; $nodeIndexSha))] |
+              length) == 1 and
+            ([$materials[] | select(reviewed_scanner($scannerIndexSha))] |
               length) == 1 and
             (if $service == "web" then
-              ($materials | length) == 3 and
-              ([$materials[] | select(reviewed_base("nginx"; "1.27-alpine"; $nginxAmd64Sha))] |
+              ($materials | length) == 4 and
+              ([$materials[] | select(reviewed_base("nginx"; "1.27-alpine"; $nginxIndexSha))] |
                 length) == 1
             else
-              ($materials | length) == 2
+              ($materials | length) == 3
             end) and
             (map(select(.predicateType == "https://spdx.dev/Document"))[0].predicate) as $sbom |
             $sbom.SPDXID == "SPDXRef-DOCUMENT" and
