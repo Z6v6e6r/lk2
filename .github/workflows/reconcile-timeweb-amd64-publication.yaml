@@ -388,7 +388,7 @@ jobs:
               ;;
             *) exit 64 ;;
           esac
-          jq -n --arg service "$SERVICE" --arg repository "$repository" --arg tag "$tag" --arg index "$EXPECTED_INDEX_DIGEST" --arg runtime "$runtime_digest" --arg source "$source_sha" --arg tree "$source_tree" --arg workflow "$original_workflow_sha" --arg builder "$original_builder" '{schemaVersion:1,kind:"phub-timeweb-amd64-reconciliation-image",service:$service,repository:$repository,publicationTag:$tag,indexDigest:$index,runtimeDigest:$runtime,sourceSha:$source,sourceTree:$tree,originalWorkflowSha:$workflow,originalBuilder:$builder,verified:true,authorizesDeploy:false,authorizesVpsProvisioning:false,authorizesDatabaseMutation:false}' > reconciliation-evidence/image.json
+          jq -n --arg service "$SERVICE" --arg repository "$repository" --arg tag "$tag" --arg index "$EXPECTED_INDEX_DIGEST" --arg runtime "$runtime_digest" --arg source "$source_sha" --arg tree "$source_tree" --arg workflow "$original_workflow_sha" --arg builder "$original_builder" '{schemaVersion:1,kind:"phub-timeweb-amd64-reconciliation-image",service:$service,repository:$repository,publicationTag:$tag,indexDigest:$index,runtimeDigest:$runtime,sourceSha:$source,sourceTree:$tree,originalWorkflowSha:$workflow,originalBuilder:$builder,architecture:"amd64",provenanceVerified:true,sbomVerified:true,reconciliationVerified:true,authorizesDeploy:false,authorizesVpsProvisioning:false,authorizesDatabaseMutation:false}' > reconciliation-evidence/image.json
           (
             cd reconciliation-evidence
             find . -type f ! -name '*-checksums.txt' -print0 | sort -z \
@@ -411,6 +411,11 @@ jobs:
       actions: read
       contents: read
     steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5
+        with:
+          ref: ${{ inputs.expected_workflow_sha }}
+          persist-credentials: false
+          fetch-depth: 1
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: timeweb-amd64-reconciliation-*-${{ github.run_id }}-${{ github.run_attempt }}
@@ -441,7 +446,10 @@ jobs:
             .authorizesDatabaseMutation == false and
             ([.images[].service] | sort) == ["api","migrator","realtime","web","worker"] and
             ([.images[].sourceSha] | unique) == ["35c8312b79cccdd136f2bfd892efbea629b8b919"] and
-            ([.images[].verified] | all) and
+            ([.images[].provenanceVerified] | all) and
+            ([.images[].sbomVerified] | all) and
+            ([.images[].reconciliationVerified] | all) and
+            ([.images[].architecture] | unique) == ["amd64"] and
             ([.images[].indexDigest | test("^sha256:[0-9a-f]{64}$")] | all)
           ' timeweb-amd64-publication-reconciliation-manifest.json >/dev/null
           if test -n "$PRIOR_RECONCILIATION_RUN_ID"; then
@@ -460,7 +468,10 @@ jobs:
               .authorizesDeploy == false and
               .authorizesVpsProvisioning == false and
               .authorizesDatabaseMutation == false and
-              ([.images[].verified] | all)
+              ([.images[].provenanceVerified] | all) and
+              ([.images[].sbomVerified] | all) and
+              ([.images[].reconciliationVerified] | all) and
+              ([.images[].architecture] | unique) == ["amd64"]
             ' "$prior_manifest" >/dev/null
             jq -e --slurpfile prior "$prior_manifest" '
               .originalRunId == $prior[0].originalRunId and
@@ -468,32 +479,21 @@ jobs:
               .reconciliationWorkflowSha == $prior[0].reconciliationWorkflowSha and
               .images == $prior[0].images
             ' timeweb-amd64-publication-reconciliation-manifest.json >/dev/null
-            jq --arg priorRunId "$PRIOR_RECONCILIATION_RUN_ID" --arg currentRunId "$GITHUB_RUN_ID" '{
-              schemaVersion: 1,
-              repository: "Z6v6e6r/lk2",
-              gitCommit: .images[0].sourceSha,
-              platform: "linux/amd64",
-              images: (.images | map({key: .service, value: {image: .repository, digest: .indexDigest}}) | from_entries),
-              verification: {provenance: true, sbom: true, reconciliation: true},
-              reconciliationRuns: [$priorRunId, $currentRunId]
-            }' timeweb-amd64-publication-reconciliation-manifest.json > release-manifest.json
-            jq -e --arg priorRunId "$PRIOR_RECONCILIATION_RUN_ID" --arg currentRunId "$GITHUB_RUN_ID" '
-              .schemaVersion == 1 and
-              .repository == "Z6v6e6r/lk2" and
-              .gitCommit == "35c8312b79cccdd136f2bfd892efbea629b8b919" and
-              .platform == "linux/amd64" and
-              (.images | keys | sort) == ["api","migrator","realtime","web","worker"] and
-              all(.images[]; (.image | test("^ghcr\\.io/z6v6e6r/phub-(web|api|worker|realtime|migrator)$")) and (.digest | test("^sha256:[0-9a-f]{64}$"))) and
-              .verification == {provenance:true,sbom:true,reconciliation:true} and
-              .reconciliationRuns == [$priorRunId, $currentRunId] and
-              $priorRunId != $currentRunId
-            ' release-manifest.json >/dev/null
+            node scripts/build-timeweb-release-manifest.js \
+              timeweb-amd64-publication-reconciliation-manifest.json \
+              "$PRIOR_RECONCILIATION_RUN_ID" \
+              "$GITHUB_RUN_ID" \
+              release-manifest.json \
+              release-manifest.sha256
+            node scripts/verify-timeweb-release-manifest.js release-manifest.json
           fi
           {
             printf '%s\0' timeweb-amd64-publication-reconciliation-manifest.json
             find reconciliation-evidence/images -type f -print0
             if test -d prior-reconciliation; then find prior-reconciliation -type f -print0; fi
-            if test -f release-manifest.json; then printf '%s\0' release-manifest.json; fi
+            if test -f release-manifest.json; then
+              printf '%s\0' release-manifest.json release-manifest.sha256
+            fi
           } | sort -z | xargs -0 sha256sum \
             > timeweb-amd64-publication-reconciliation-checksums.txt
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -503,6 +503,7 @@ jobs:
             timeweb-amd64-publication-reconciliation-manifest.json
             timeweb-amd64-publication-reconciliation-checksums.txt
             release-manifest.json
+            release-manifest.sha256
             reconciliation-evidence/images
             prior-reconciliation
           if-no-files-found: error

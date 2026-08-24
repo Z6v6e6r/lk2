@@ -79,6 +79,29 @@ subjects, provenance/SBOM, source tree, original builder URL, reviewed base/scan
 the runtime image shape. It emits a retained reconciliation manifest that explicitly leaves deploy,
 VPS provisioning and database mutation unauthorized.
 
+The first successful reconciliation emits only non-authorizing evidence. A second successful,
+byte-equivalent reconciliation of the same publication emits the deploy-facing pair
+`release-manifest.json` and `release-manifest.sha256`. The JSON has exactly one accepted contract:
+
+- `schemaVersion` is `PHUB_TIMEWEB_RELEASE_MANIFEST_V1`;
+- `repository`, `gitCommit` and `platform` identify `Z6v6e6r/lk2`, the exact selected source commit
+  and `linux/amd64`;
+- `images` is an array containing exactly one entry for each of `web`, `api`, `worker`, `realtime`
+  and `migrator`; every entry carries its real reconciled root/index digest, repository,
+  architecture, source revision and per-image `provenance`, `sbom` and `reconciliation` assertions;
+- `reconciliationRuns` contains the two distinct successful read-back run IDs;
+- `release-manifest.sha256` contains the SHA-256 custody checksum for the exact manifest bytes.
+
+The production producer copies the real index digests and explicit per-image verification results
+from reconciliation evidence, then immediately runs the same strict validator used by deployment
+admission. The validator is invoked with `release-manifest.json` and always requires the adjacent,
+fixed-name `release-manifest.sha256`; the checksum is not optional. Numeric `schemaVersion: 1`, an
+object-valued `images`, top-level `verification`, missing
+per-image verification, missing digests, a stale source commit or an invalid checksum all fail
+closed. Probe, push-receipt, publication and reconciliation manifests retain their own
+`schemaVersion: 1` evidence kinds; they are not alternate deploy-facing release-manifest formats and
+cannot be passed to the release validator.
+
 Any tag/digest mismatch, missing linked descriptor, material mismatch, runtime probe failure or
 retry exhaustion is `NO-GO`. The reconciliation workflow does not build, push, overwrite, delete,
 deploy, access VPS hosts, or connect to PostgreSQL.

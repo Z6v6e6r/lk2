@@ -1,0 +1,62 @@
+{
+  "schemaVersion": "PHUB_TIMEWEB_RELEASE_MANIFEST_V1",
+  "repository": "Z6v6e6r/lk2",
+  "gitCommit": "35c8312b79cccdd136f2bfd892efbea629b8b919",
+  "platform": "linux/amd64",
+  "images": [
+    {
+      "component": "web",
+      "repository": "ghcr.io/z6v6e6r/phub-web",
+      "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "architecture": "amd64",
+      "revision": "35c8312b79cccdd136f2bfd892efbea629b8b919",
+      "provenance": true,
+      "sbom": true,
+      "reconciliation": true
+    },
+    {
+      "component": "api",
+      "repository": "ghcr.io/z6v6e6r/phub-api",
+      "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "architecture": "amd64",
+      "revision": "35c8312b79cccdd136f2bfd892efbea629b8b919",
+      "provenance": true,
+      "sbom": true,
+      "reconciliation": true
+    },
+    {
+      "component": "worker",
+      "repository": "ghcr.io/z6v6e6r/phub-worker",
+      "digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "architecture": "amd64",
+      "revision": "35c8312b79cccdd136f2bfd892efbea629b8b919",
+      "provenance": true,
+      "sbom": true,
+      "reconciliation": true
+    },
+    {
+      "component": "realtime",
+      "repository": "ghcr.io/z6v6e6r/phub-realtime",
+      "digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "architecture": "amd64",
+      "revision": "35c8312b79cccdd136f2bfd892efbea629b8b919",
+      "provenance": true,
+      "sbom": true,
+      "reconciliation": true
+    },
+    {
+      "component": "migrator",
+      "repository": "ghcr.io/z6v6e6r/phub-migrator",
+      "digest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "architecture": "amd64",
+      "revision": "35c8312b79cccdd136f2bfd892efbea629b8b919",
+      "provenance": true,
+      "sbom": true,
+      "reconciliation": true
+    }
+  ],
+  "reconciliationRuns": [
+    "111111",
+    "222222"
+  ]
+}

@@ -674,7 +674,10 @@ describe('Timeweb amd64 publication workflow', () => {
     expect(workflow).toContain(
       '([.images[].service] | sort) == ["api","migrator","realtime","web","worker"]',
     );
-    expect(workflow).toContain('([.images[].verified] | all)');
+    expect(workflow).toContain('([.images[].provenanceVerified] | all)');
+    expect(workflow).toContain('([.images[].sbomVerified] | all)');
+    expect(workflow).toContain('([.images[].reconciliationVerified] | all)');
+    expect(workflow).toContain('([.images[].architecture] | unique) == ["amd64"]');
     expect(workflow).toContain('authorizesDeploy:false');
     expect(workflow).toContain('authorizesVpsProvisioning:false');
     expect(workflow).toContain('authorizesDatabaseMutation:false');
@@ -684,15 +687,15 @@ describe('Timeweb amd64 publication workflow', () => {
       'name: timeweb-amd64-publication-reconciliation-manifest-${{ inputs.prior_reconciliation_run_id }}-1',
     );
     expect(workflow).toContain('.images == $prior[0].images');
-    expect(workflow).toContain('> release-manifest.json');
-    expect(workflow).toContain('repository: "Z6v6e6r/lk2"');
-    expect(workflow).toContain('gitCommit: .images[0].sourceSha');
-    expect(workflow).toContain(
+    expect(workflow).toContain('ref: ${{ inputs.expected_workflow_sha }}');
+    expect(workflow).toContain('node scripts/build-timeweb-release-manifest.js');
+    expect(workflow).toContain('node scripts/verify-timeweb-release-manifest.js');
+    expect(workflow).toContain('release-manifest.sha256');
+    expect(workflow).not.toContain('verified:true');
+    expect(workflow).not.toContain('images: (.images | map({key: .service');
+    expect(workflow).not.toContain(
       'verification: {provenance: true, sbom: true, reconciliation: true}',
     );
-    expect(workflow).toContain('.verification == {provenance:true,sbom:true,reconciliation:true}');
-    expect(workflow).toContain('reconciliationRuns: [$priorRunId, $currentRunId]');
-    expect(workflow).toContain('$priorRunId != $currentRunId');
     expect(workflow).not.toMatch(
       /packages:\s*write|push:\s*true|docker\s+push|docker buildx build|docker\/build-push-action@|docker compose|npm run db:migrate|deploy-(?:staging|production)|\b(?:ssh|scp|tailscale)\b/iu,
     );
