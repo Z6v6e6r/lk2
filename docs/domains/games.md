@@ -57,6 +57,14 @@ A game never stores a Viva identifier as a public or primary identifier. `integr
 PadlHub booking/payment reference to provider identifiers. A game operation reads one consistent
 game version; it never merges a local document with a live Viva response in the request handler.
 
+Provider/payment recovery does not change this ownership. A durable integration intent may project
+a JOIN/PROMOTION or verify a provider-owned payment fact, but an external rejection cannot silently
+reverse the canonical roster. Only an exact, tenant/actor/game/reservation-matched payment fact may
+convert a reservation to participation. Timeout or callback loss is `UNKNOWN` until authoritative
+read-back; callback is acceleration, not the sole truth. The initial recovery implementation is
+synthetic-only/default OFF because the Viva idempotency, callback-authentication and read-back
+contracts are not proven.
+
 ## 3. Aggregate model
 
 ### 3.1 Game aggregate
