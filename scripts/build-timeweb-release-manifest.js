@@ -27,6 +27,7 @@ try {
 
 const COMPONENTS = schema.properties.images.items.properties.component.enum;
 const COMMIT = schema.properties.gitCommit.const;
+const SOURCE_TREE = schema['x-sourceTree'];
 const runIdPattern = new RegExp(schema.properties.reconciliationRuns.items.pattern, 'u');
 if (
   !runIdPattern.test(priorRunId) ||
@@ -57,6 +58,7 @@ for (const image of reconciliation.images) {
   if (
     image.repository !== `ghcr.io/z6v6e6r/phub-${image.service}` ||
     image.sourceSha !== COMMIT ||
+    image.sourceTree !== SOURCE_TREE ||
     image.architecture !== schema.properties.images.items.properties.architecture.const ||
     typeof image.indexDigest !== 'string' ||
     !new RegExp(schema.properties.images.items.properties.digest.pattern, 'u').test(

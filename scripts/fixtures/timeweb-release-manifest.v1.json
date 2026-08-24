@@ -1,7 +1,7 @@
 {
   "schemaVersion": "PHUB_TIMEWEB_RELEASE_MANIFEST_V1",
   "repository": "Z6v6e6r/lk2",
-  "gitCommit": "35c8312b79cccdd136f2bfd892efbea629b8b919",
+  "gitCommit": "595e954bb8f53367baf034d7f39b255af0fda5fd",
   "platform": "linux/amd64",
   "images": [
     {
@@ -9,7 +9,7 @@
       "repository": "ghcr.io/z6v6e6r/phub-web",
       "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "architecture": "amd64",
-      "revision": "35c8312b79cccdd136f2bfd892efbea629b8b919",
+      "revision": "595e954bb8f53367baf034d7f39b255af0fda5fd",
       "provenance": true,
       "sbom": true,
       "reconciliation": true
@@ -19,7 +19,7 @@
       "repository": "ghcr.io/z6v6e6r/phub-api",
       "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
       "architecture": "amd64",
-      "revision": "35c8312b79cccdd136f2bfd892efbea629b8b919",
+      "revision": "595e954bb8f53367baf034d7f39b255af0fda5fd",
       "provenance": true,
       "sbom": true,
       "reconciliation": true
@@ -29,7 +29,7 @@
       "repository": "ghcr.io/z6v6e6r/phub-worker",
       "digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
       "architecture": "amd64",
-      "revision": "35c8312b79cccdd136f2bfd892efbea629b8b919",
+      "revision": "595e954bb8f53367baf034d7f39b255af0fda5fd",
       "provenance": true,
       "sbom": true,
       "reconciliation": true
@@ -39,7 +39,7 @@
       "repository": "ghcr.io/z6v6e6r/phub-realtime",
       "digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
       "architecture": "amd64",
-      "revision": "35c8312b79cccdd136f2bfd892efbea629b8b919",
+      "revision": "595e954bb8f53367baf034d7f39b255af0fda5fd",
       "provenance": true,
       "sbom": true,
       "reconciliation": true
@@ -49,7 +49,7 @@
       "repository": "ghcr.io/z6v6e6r/phub-migrator",
       "digest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
       "architecture": "amd64",
-      "revision": "35c8312b79cccdd136f2bfd892efbea629b8b919",
+      "revision": "595e954bb8f53367baf034d7f39b255af0fda5fd",
       "provenance": true,
       "sbom": true,
       "reconciliation": true

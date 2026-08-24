@@ -18,6 +18,9 @@ const manifestFixture = fileURLToPath(
 const checksumFixture = fileURLToPath(
   new URL('./fixtures/timeweb-release-manifest.v1.sha256', import.meta.url),
 );
+const approvedSourceSha = '595e954bb8f53367baf034d7f39b255af0fda5fd';
+const approvedSourceTree = '3f4c1e63dd30eb60251533b95f1970fd96754a08';
+const supersededSourceSha = '35c8312b79cccdd136f2bfd892efbea629b8b919';
 
 function canonicalManifest() {
   return JSON.parse(readFileSync(manifestFixture, 'utf8')) as Record<string, unknown>;
@@ -93,7 +96,7 @@ describe('Timeweb canonical release manifest contract', () => {
   it('rejects a wrong schema identifier and a missing or wrong release commit', () => {
     const manifest = canonicalManifest();
     expectRejected({ ...manifest, schemaVersion: 1 });
-    expectRejected({ ...manifest, gitCommit: 'a'.repeat(40) });
+    expectRejected({ ...manifest, gitCommit: supersededSourceSha });
     const withoutCommit = structuredClone(manifest);
     delete withoutCommit.gitCommit;
     expectRejected(withoutCommit);
@@ -150,13 +153,26 @@ describe('Timeweb canonical release manifest contract', () => {
     for (const invalid of cases) expectRejected(invalid);
   });
 
-  it('fails the producer closed when reconciliation evidence omits verification or a digest', () => {
-    for (const field of ['provenanceVerified', 'indexDigest']) {
+  it('fails the producer closed for superseded source, wrong tree, omitted verification, or a digest', () => {
+    for (const mutation of [
+      (image: Record<string, unknown>) => {
+        image.sourceSha = supersededSourceSha;
+      },
+      (image: Record<string, unknown>) => {
+        image.sourceTree = 'a'.repeat(40);
+      },
+      (image: Record<string, unknown>) => {
+        delete image.provenanceVerified;
+      },
+      (image: Record<string, unknown>) => {
+        delete image.indexDigest;
+      },
+    ]) {
       const directory = mkdtempSync(join(tmpdir(), 'phub-timeweb-producer-invalid-'));
       const reconciliation = JSON.parse(readFileSync(reconciliationFixture, 'utf8')) as {
         images: Array<Record<string, unknown>>;
       };
-      delete reconciliation.images[0]![field];
+      mutation(reconciliation.images[0]!);
       const inputPath = join(directory, 'reconciliation.json');
       writeFileSync(inputPath, `${JSON.stringify(reconciliation, null, 2)}\n`);
       const result = spawnSync(
@@ -174,5 +190,7 @@ describe('Timeweb canonical release manifest contract', () => {
       expect(result.status).toBe(1);
       expect(result.stderr).toContain('TIMEWEB_RELEASE_MANIFEST_BUILD_FAILED');
     }
+    expect(approvedSourceSha).not.toBe(supersededSourceSha);
+    expect(approvedSourceTree).not.toBe('a'.repeat(40));
   });
 });
