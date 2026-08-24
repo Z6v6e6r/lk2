@@ -44,6 +44,7 @@ export function createSubscriptionRuntimeActorContextRepository(
              and mapping.external_system = 'VIVA'
              and mapping.entity_type = 'viva_profile'
              and mapping.sync_status = 'synced'
+             and mapping.sync_error_code is null
              and mapping.last_synced_at is not null
            where presented.tenant_id = $1
              and presented.id = $2

@@ -33,6 +33,7 @@ describe('subscription runtime actor context repository', () => {
     expect(sql).toContain("mapping.external_system = 'VIVA'");
     expect(sql).toContain("mapping.entity_type = 'viva_profile'");
     expect(sql).toContain("mapping.sync_status = 'synced'");
+    expect(sql).toContain('mapping.sync_error_code is null');
   });
 
   it.each(['missing', 'revoked', 'rotated', 'inactive_user'])(

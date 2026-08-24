@@ -192,7 +192,10 @@ export interface ManagedSubscriptionRuntimeQuoteClientOptions {
   readonly fetchImplementation?: typeof fetch;
 }
 export class ManagedSubscriptionRuntimeQuoteClientError extends Error {
-  public constructor(public readonly code: string) {
+  public constructor(
+    public readonly code: string,
+    public readonly status?: number,
+  ) {
     super(code);
     this.name = 'ManagedSubscriptionRuntimeQuoteClientError';
   }
@@ -557,7 +560,12 @@ export class ManagedSubscriptionRuntimeQuoteClient {
           }),
         },
       );
-      if (!response.ok) invalid('SUBSCRIPTION_RUNTIME_REQUEST_FAILED');
+      if (!response.ok) {
+        throw new ManagedSubscriptionRuntimeQuoteClientError(
+          'SUBSCRIPTION_RUNTIME_REQUEST_FAILED',
+          response.status,
+        );
+      }
       let payload: unknown;
       try {
         payload = await response.json();

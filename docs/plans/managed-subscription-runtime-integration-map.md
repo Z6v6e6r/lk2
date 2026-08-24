@@ -50,7 +50,7 @@ operation references.
 - local writer: `packages/database/src/game-roster-repository.ts`;
 - existing level command boundary:
   `packages/database/src/participation-command-repository.ts`;
-- OpenAPI: `contracts/openapi/user/v1/games.yaml` plus a new additive quote resource;
+- OpenAPI: additive quote resource in `contracts/openapi/user/v1/openapi.yaml`;
 - SDK: `packages/api-sdk/src/index.ts`;
 - Web gateway/action state: `apps/web/src/auth-gateway.ts`, `apps/web/src/GamesPage.tsx`;
 - Mobile consumes the same SDK contract when action screens are introduced.
@@ -71,10 +71,28 @@ policy, discount, final price or counters.
 | BOOK_TOURNAMENT         | Read-only summary      | Blocked                                                              |
 | PURCHASE_ADD_ON_PRODUCT | No domain/writer       | Blocked                                                              |
 
-## First source-only slice
+## Implemented source-only WARN boundary
 
-Define provider-free runtime port/contracts, add a default-off service-authenticated
-client, add quote/operation OpenAPI and generated SDK types, and route only JOIN through
-one orchestrator in SHADOW. Add negative tests for tenant mismatch, stale revision,
-selection required, price change, runtime timeout and redaction. Do not add entitlement
-persistence, migrate a database, call Viva or enable production.
+The additive `POST /user/api/v1/{tenantKey}/subscription-runtime/quote` boundary is
+present in source and defaults to `OFF`. In `WARN`, it accepts only the canonical
+CREATE_GAME/JOIN_GAME quote input. The public caller authenticates with its normal
+PadlHub JWT and supplies an `Idempotency-Key`; actor, active session, tenant and the
+synced VIVA mapping are resolved server-side. LK2 then issues an RS256 single-use
+delegation bound to the recipient, tenant, request digest, correlation ID and
+idempotency-key digest. The fixed internal client sends that delegation to the ph-admin
+verifier and returns only a redacted, non-binding WARN advisory after verification.
+
+Public input cannot carry actor, provider IDs, integration credentials or a delegation.
+The route has no provider, payment, subscription mutation, reservation or business-state
+writer dependency. Recipient verification failure and replay are typed non-2xx errors;
+there is no ENFORCE mode.
+
+This remains source-only and is not an activation approval. Enabling even staging WARN
+requires separately provisioned integration and signing credentials, recipient public-key
+configuration, deploy evidence, served-contract and rendered-consumer checks, and an
+authorized end-to-end read-only rehearsal. Activation also needs an approved maximum-age
+policy for the synced provider mapping; the source-only repository currently rejects missing,
+unsynced and errored mappings but does not invent that product policy. Production remains
+rejected by configuration.
+Reserve/confirm/consume, recovery, provider calls, payments and all subscription mutations
+remain outside this slice and NO-GO.

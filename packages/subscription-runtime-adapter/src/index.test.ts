@@ -197,6 +197,19 @@ describe('ManagedSubscriptionRuntimeQuoteClient', () => {
     expect(fetchImplementation).not.toHaveBeenCalled();
   });
 
+  it('preserves only the upstream status while discarding the remote error body', async () => {
+    const fetchImplementation = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(
+        new Response(JSON.stringify({ secret: 'must-not-cross-the-boundary' }), { status: 409 }),
+      );
+
+    await expect(client(fetchImplementation).quote(quoteRequest, envelope)).rejects.toMatchObject({
+      code: 'SUBSCRIPTION_RUNTIME_REQUEST_FAILED',
+      status: 409,
+    });
+  });
+
   it('accepts an explicit full-price decision without subscription blockers', async () => {
     const fetchImplementation = vi.fn<typeof fetch>().mockResolvedValue(
       new Response(

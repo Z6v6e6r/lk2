@@ -46,6 +46,9 @@ describe('loadConfig', () => {
       HOME_READ_MODE: 'mock',
       GAMES_READ_ENABLED: false,
       GAMES_COMMANDS_ENABLED: false,
+      SUBSCRIPTION_RUNTIME_WARN_MODE: 'OFF',
+      SUBSCRIPTION_RUNTIME_TIMEOUT_MS: 3_000,
+      SUBSCRIPTION_RUNTIME_DELEGATION_TTL_SECONDS: 30,
       GAMES_RESULTS_WRITE_MODE: 'disabled',
       CUP_RATING_CONSUMER_ENABLED: false,
       CUP_PLAYER_LEVEL_PROJECTION_ENABLED: false,
@@ -1336,6 +1339,57 @@ describe('loadConfig', () => {
         PERSONAL_DATA_POLICY_VERSION: '2026-07-18',
       }),
     ).toThrow('COMMUNITIES_READ_MODE=mock is forbidden in production');
+  });
+
+  it('keeps subscription-runtime WARN default-off and rejects non-WARN modes', () => {
+    expect(loadConfig(validEnvironment)).toMatchObject({ SUBSCRIPTION_RUNTIME_WARN_MODE: 'OFF' });
+    expect(() =>
+      loadConfig({ ...validEnvironment, SUBSCRIPTION_RUNTIME_WARN_MODE: 'ENFORCE' }),
+    ).toThrow('Invalid application configuration');
+  });
+
+  it('requires a complete local or staging WARN boundary configuration', () => {
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        APP_ENV: 'local',
+        SUBSCRIPTION_RUNTIME_WARN_MODE: 'WARN',
+      }),
+    ).toThrow('requires complete boundary configuration');
+
+    const warnEnvironment = {
+      ...validEnvironment,
+      APP_ENV: 'staging',
+      SUBSCRIPTION_RUNTIME_WARN_MODE: 'WARN',
+      SUBSCRIPTION_RUNTIME_BASE_URL: 'https://ph-admin.example.test',
+      SUBSCRIPTION_RUNTIME_INTEGRATION_TOKEN: 'x'.repeat(32),
+      SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS: JSON.stringify({
+        'test-key': [
+          ['-----BEGIN', 'PRIVATE KEY-----'].join(' '),
+          'source-only-fixture',
+          ['-----END', 'PRIVATE KEY-----'].join(' '),
+        ].join('\n'),
+      }),
+      SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID: 'test-key',
+      SUBSCRIPTION_RUNTIME_DELEGATION_ISSUER: 'https://api.padlhub.test',
+      SUBSCRIPTION_RUNTIME_DELEGATION_AUDIENCE: 'ph-admin-subscription-runtime',
+    } as const;
+    expect(loadConfig(warnEnvironment)).toMatchObject({
+      SUBSCRIPTION_RUNTIME_WARN_MODE: 'WARN',
+      SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID: 'test-key',
+    });
+    expect(() => loadConfig({ ...warnEnvironment, APP_ENV: 'ci' })).toThrow(
+      'allowed only in local or staging',
+    );
+    expect(() => loadConfig({ ...warnEnvironment, APP_ENV: 'production' })).toThrow(
+      'allowed only in local or staging',
+    );
+    expect(() =>
+      loadConfig({
+        ...warnEnvironment,
+        SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID: 'missing-key',
+      }),
+    ).toThrow('must select a PKCS8 private key');
   });
 
   it('requires a dedicated secret when community invites are enabled', () => {

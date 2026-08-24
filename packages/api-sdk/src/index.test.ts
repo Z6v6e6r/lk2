@@ -118,6 +118,69 @@ describe('PadlHubApiClient authentication boundary', () => {
     );
   });
 
+  it('requests a typed WARN quote without accepting actor, provider or delegation inputs', async () => {
+    const response = {
+      contractVersion: 1,
+      mode: 'WARN',
+      verdict: 'warning',
+      nonBinding: true,
+      requiresReservationRecheck: true,
+      actor: {
+        userId: authenticatedSession.user.id,
+        tenantId: authenticatedSession.context.tenantId,
+        tenantKey: 'local-padel',
+      },
+      request: {
+        correlationId: 'server-correlation-1',
+        idempotencyKeyDigest: `sha256:${'0'.repeat(64)}`,
+      },
+      delegation: {
+        provider: 'VIVA',
+        scope: 'subscription-runtime.quote',
+        recipient: 'ph-admin',
+        singleUse: true,
+        verified: true,
+      },
+      advisory: {
+        outcome: 'FULL_PRICE_ONLY',
+        paymentIntent: 'AUTO_BEST_PRICE',
+        serviceAllowed: true,
+        subscriptionBenefitAllowed: false,
+        blockers: [{ code: 'SUBSCRIPTION_NOT_FOUND' }],
+        warnings: [],
+        expiresAt: '2026-08-24T10:02:00.000Z',
+      },
+    } as const;
+    const fetchImplementation = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(response));
+    const client = createClient(fetchImplementation, {
+      initialAccessToken: authenticatedSession.accessToken,
+    });
+    const request = {
+      action: 'JOIN_GAME',
+      target: { kind: 'GAME', id: 'game-001', expectedRevision: 2 },
+      paymentIntent: 'AUTO_BEST_PRICE',
+    } as const;
+
+    await expect(
+      client.quoteManagedSubscriptionRuntimeWarn(request, {
+        idempotencyKey: 'warn-idempotency-0001',
+      }),
+    ).resolves.toEqual(response);
+
+    const [input, init] = fetchImplementation.mock.calls[0] ?? [];
+    const headers = new Headers(init?.headers);
+    expect(requestUrl(input ?? '')).toBe(
+      'https://api.padlhub.test/user/api/v1/local-padel/subscription-runtime/quote',
+    );
+    expect(init?.method).toBe('POST');
+    expect(init?.cache).toBe('no-store');
+    expect(headers.get('Authorization')).toBe(`Bearer ${authenticatedSession.accessToken}`);
+    expect(headers.get('Idempotency-Key')).toBe('warn-idempotency-0001');
+    expect(headers.get('X-Subscription-Actor-Delegation')).toBeNull();
+    expect(headers.get('X-Subscriptions-Integration-Token')).toBeNull();
+    expect(JSON.parse(stringRequestBody(init?.body))).toEqual(request);
+  });
+
   it('loads one public tournament summary by PadlHub id and bounded date range', async () => {
     const summary = {
       id: '91a1c7c6-73d0-4270-a400-3358873e4d9b',
