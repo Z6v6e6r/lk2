@@ -1200,3 +1200,15 @@
   provider-wide history contract is verified.
 - Expanded authenticated public-game details so a non-participant can open and join a public game;
   private outsider details still fail closed.
+
+## 2026-08-24 — Risk-based Codex delivery workflow
+
+- Replaced universal reversible-stage confirmation stops with R0-R4 Fast, Spark, Main,
+  and Critical lanes.
+- Authorized continuous task-branch work through focused commits, same-branch push,
+  Draft PR, CI readback, and in-scope CI correction.
+- Preserved exact approval gates for merge/protected branches, deploy, migrations, real
+  ACL/RLS/data changes, secrets, routing, payments, external messages, and destructive
+  operations.
+- Replaced universal `npm run check` and generic review with changed-file/risk triggers;
+  the full gate remains mandatory for critical and shared surfaces.
