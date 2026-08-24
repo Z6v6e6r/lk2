@@ -1,6 +1,6 @@
 export const MANAGED_SUBSCRIPTION_RUNTIME_V1_CONTRACT_VERSION = '1';
 export const MANAGED_SUBSCRIPTION_RUNTIME_V1_QUOTE_PATH =
-  '/api/internal/subscription-runtime/quote';
+  '/api/internal/subscription-runtime/lk2/v1/quote';
 
 const actions = [
   'CREATE_GAME',
@@ -131,7 +131,7 @@ export interface ManagedSubscriptionRuntimeV1QuoteRequest {
   readonly paymentIntent: ManagedSubscriptionRuntimeV1PaymentIntent;
 }
 export interface ManagedSubscriptionRuntimeServerEnvelope {
-  readonly authorization: string;
+  readonly actorDelegation: string;
   readonly correlationId: string;
   readonly idempotencyKey: string;
 }
@@ -201,7 +201,7 @@ export class ManagedSubscriptionRuntimeQuoteClientError extends Error {
 const idPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{2,199}$/;
 const headerPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/;
 const digestPattern = /^sha256:[a-f0-9]{64}$/;
-const authorizationPattern = /^Bearer [^\s]{1,4096}$/;
+const actorDelegationPattern = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
 const invalid = (code: string): never => {
   throw new ManagedSubscriptionRuntimeQuoteClientError(code);
 };
@@ -254,8 +254,8 @@ function assertRequest(request: ManagedSubscriptionRuntimeV1QuoteRequest): void 
 function assertEnvelope(envelope: ManagedSubscriptionRuntimeServerEnvelope): void {
   if (
     !record(envelope) ||
-    !exactKeys(envelope, ['authorization', 'correlationId', 'idempotencyKey']) ||
-    !authorizationPattern.test(envelope.authorization) ||
+    !exactKeys(envelope, ['actorDelegation', 'correlationId', 'idempotencyKey']) ||
+    !actorDelegationPattern.test(envelope.actorDelegation) ||
     !headerPattern.test(envelope.correlationId) ||
     !headerPattern.test(envelope.idempotencyKey)
   )
@@ -532,7 +532,7 @@ export class ManagedSubscriptionRuntimeQuoteClient {
           redirect: 'error',
           signal: controller.signal,
           headers: {
-            Authorization: envelope.authorization,
+            'X-Subscription-Actor-Delegation': envelope.actorDelegation,
             'Content-Type': 'application/json',
             'X-Correlation-ID': envelope.correlationId,
             'Idempotency-Key': envelope.idempotencyKey,

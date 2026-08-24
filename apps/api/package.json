@@ -28,6 +28,7 @@
     "@phub/legacy-games-adapter": "0.1.0",
     "@phub/locations": "0.1.0",
     "@phub/observability": "0.1.0",
+    "@phub/subscription-runtime-adapter": "0.1.0",
     "@phub/viva-adapter": "0.1.0",
     "fastify": "5.10.0",
     "ioredis": "5.11.1",
