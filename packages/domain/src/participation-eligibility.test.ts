@@ -60,7 +60,7 @@ describe('evaluateLevelEligibility', () => {
         context({ playerLevel: { ...context().playerLevel!, rank: 3 } }),
         policy,
       ).reasonCode,
-    ).toBe('LEVEL_NOT_ALLOWED');
+    ).toBe('LEVEL_TOO_LOW');
   });
 
   it.each([
@@ -75,6 +75,25 @@ describe('evaluateLevelEligibility', () => {
     );
     expect(actual.outcome).toBe(outcome);
     expect(levelResultAllowsParticipation(actual)).toBe(mode !== 'BLOCK');
+    if (mode === 'SHADOW') expect(actual.metadata).toMatchObject({ wouldBlock: true });
+  });
+
+  it('distinguishes too-low, too-high and stale player decisions', () => {
+    expect(
+      evaluateLevelEligibility(
+        context({ playerLevel: { ...context().playerLevel!, rank: 1 } }),
+        policy,
+      ).reasonCode,
+    ).toBe('LEVEL_TOO_LOW');
+    expect(
+      evaluateLevelEligibility(
+        context({ playerLevel: { ...context().playerLevel!, rank: 9 } }),
+        policy,
+      ).reasonCode,
+    ).toBe('LEVEL_TOO_HIGH');
+    expect(evaluateLevelEligibility(context({ playerLevelStale: true }), policy).reasonCode).toBe(
+      'PLAYER_LEVEL_STALE',
+    );
   });
 
   it('keeps missing and unreadable player levels distinct', () => {

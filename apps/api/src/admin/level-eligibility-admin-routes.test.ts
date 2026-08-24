@@ -91,7 +91,12 @@ function repository() {
     .mockResolvedValue({ outcome: 'applied', policy: { ...policy, version: 2 }, replayed: false });
   return {
     value: {
-      getState: vi.fn().mockResolvedValue({ sportCode: 'PADEL', levels, policies: [policy] }),
+      getState: vi.fn().mockResolvedValue({
+        sportCode: 'PADEL',
+        levels,
+        policies: [policy],
+        readiness: [],
+      }),
       getVersion: vi.fn().mockResolvedValue(policy),
       listHistory: vi.fn().mockResolvedValue([policy]),
       publish,

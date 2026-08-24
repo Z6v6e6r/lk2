@@ -173,6 +173,7 @@ export type WebPushEndpointCommandResult = components['schemas']['WebPushEndpoin
 export type GameCard = components['schemas']['GameCardView'];
 export type GameCardPage = components['schemas']['GameCardPage'];
 export type GameCommandResult = components['schemas']['GameCommandResult'];
+export type ParticipationDecision = components['schemas']['ParticipationDecision'];
 export type SubmitGameResultRequest = components['schemas']['SubmitGameResultRequest'];
 export type DisputeGameResultRequest = components['schemas']['DisputeGameResultRequest'];
 export type PublicGameCard = PublicApiComponents['schemas']['PublicGameCard'];
@@ -375,6 +376,7 @@ export class ApiClientError extends Error {
     public readonly status: number,
     public readonly code: string,
     public readonly correlationId: string,
+    public readonly eligibility?: ParticipationDecision,
   ) {
     super(message);
     this.name = 'ApiClientError';
@@ -2092,6 +2094,7 @@ export class PadlHubApiClient {
           recoveryAction?: string;
           latestSequence?: number;
           retainedFromSequence?: number;
+          eligibility?: ParticipationDecision;
         }
       | undefined;
     const correlationId =
@@ -2117,6 +2120,7 @@ export class PadlHubApiClient {
       response.status,
       body?.code ?? 'UNEXPECTED_API_ERROR',
       correlationId,
+      body?.eligibility,
     );
   }
 }

@@ -11,7 +11,7 @@ import {
 } from './notification-projector-consumer.js';
 
 describe('notification projector topology', () => {
-  it('binds only explicit booking source events and removes the legacy wildcard', async () => {
+  it('binds only explicit notification source events and removes the legacy wildcard', async () => {
     const timeline: string[] = [];
     const channel = {
       assertQueue: vi.fn().mockResolvedValue(undefined),

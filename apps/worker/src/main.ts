@@ -14,6 +14,7 @@ import {
   createCommunityMediaRepository,
   createDatabasePool,
   createGameRepository,
+  createGameRosterRepository,
   createGameResultProjectionRepository,
   createGiftCertificateIssuanceRepository,
   createLocalCommunityDirectoryRepository,
@@ -21,7 +22,7 @@ import {
 } from '@phub/database';
 import { LegacyGamesMongoAdapter, LegacyGamesPublicAdapter } from '@phub/legacy-games-adapter';
 import { createNotificationEndpointCipher } from '@phub/notifications';
-import { createLogger, startTelemetry } from '@phub/observability';
+import { createLogger, recordLevelEligibilityMetrics, startTelemetry } from '@phub/observability';
 import { connect } from 'amqplib';
 
 import { registerHomeProjectorConsumer } from './home-projector-consumer.js';
@@ -37,6 +38,7 @@ import {
 import { runCommunityMediaCycle } from './community-media-worker.js';
 import { registerCoreBrokerTopology } from './broker-topology.js';
 import { runGameLifecycleProcessManagerCycle } from './game-lifecycle-process-manager.js';
+import { runGameRosterProcessManagerCycle } from './game-roster-process-manager.js';
 import { registerGamesCardProjectorConsumer } from './games-card-projector-consumer.js';
 import { registerGameResultProjectorConsumer } from './game-result-projector-consumer.js';
 import { registerCupRatingConsumer } from './cup-rating-consumer.js';
@@ -106,8 +108,36 @@ const workerMetrics = createWorkerMetricRecorder({
 });
 const pool = createDatabasePool(config.DATABASE_URL);
 const gameRepository = createGameRepository(pool);
+const gameRosterRepository = createGameRosterRepository(pool, {
+  onEligibilityDecision: (decision) => {
+    recordLevelEligibilityMetrics({
+      activityType: decision.activityType,
+      action: decision.action,
+      mode: decision.mode,
+      outcome: decision.outcome,
+      reasonCode: decision.reasonCode,
+      wouldBlock: decision.wouldBlock,
+    });
+    logger.info(
+      {
+        eligibility: {
+          decisionId: decision.decisionId,
+          correlationId: decision.correlationId,
+          activityType: decision.activityType,
+          action: decision.action,
+          mode: decision.mode,
+          outcome: decision.outcome,
+          reasonCode: decision.reasonCode,
+          policyVersion: decision.policyVersion,
+        },
+      },
+      'waitlist promotion eligibility evaluated',
+    );
+  },
+});
 const participationCommandRepository = createParticipationCommandRepository(pool);
 const gamesProcessManagerWorkerId = `games-process-manager-${randomUUID()}`;
+const gamesRosterProcessManagerWorkerId = `games-roster-process-manager-${randomUUID()}`;
 const COMMUNITY_DIRECT_INVITE_EXPIRY_INTERVAL_MS = 60_000;
 const COMMUNITY_DIRECT_INVITE_EXPIRY_BATCH_SIZE = 100;
 const COMMUNITY_MEMBER_COUNT_RECONCILIATION_INTERVAL_MS = 60_000;
@@ -517,6 +547,16 @@ const runCycle = async (): Promise<void> => {
             repository: gameRepository,
             tenantId: tenant.id,
             workerId: gamesProcessManagerWorkerId,
+            logger,
+            batchSize: config.OUTBOX_BATCH_SIZE,
+          });
+        }
+        if (config.GAMES_COMMANDS_ENABLED) {
+          await runGameRosterProcessManagerCycle({
+            scheduledCommandRepository: gameRepository,
+            rosterRepository: gameRosterRepository,
+            tenantId: tenant.id,
+            workerId: gamesRosterProcessManagerWorkerId,
             logger,
             batchSize: config.OUTBOX_BATCH_SIZE,
           });

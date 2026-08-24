@@ -38,6 +38,18 @@ const levels = [
     scaleVersion: 1,
   },
 ] as const;
+const readiness = [
+  {
+    activityType: 'GAME' as const,
+    writerAuthoritative: true,
+    playerProjectionReady: false,
+    clientRecoveryReady: true,
+    paymentRecoveryReady: true,
+    readyForBlock: false,
+    missingGates: ['player_projection_ready'],
+    verifiedAt: null,
+  },
+] as const;
 
 function policy(activityType: LevelEligibilityActivityType): LevelEligibilityPolicyAdminView {
   return {
@@ -67,7 +79,9 @@ describe('LevelEligibilityWorkspace', () => {
       replayed: false,
     });
     const client = {
-      getLevelEligibilityState: vi.fn().mockResolvedValue({ sportCode: 'PADEL', levels, policies }),
+      getLevelEligibilityState: vi
+        .fn()
+        .mockResolvedValue({ sportCode: 'PADEL', levels, policies, readiness }),
       getLevelEligibilityImpact: vi.fn().mockResolvedValue({ items: [] }),
       getLevelEligibilityHistory: vi.fn().mockResolvedValue({ items: policies }),
       publishLevelEligibilityPolicy,
@@ -79,9 +93,13 @@ describe('LevelEligibilityWorkspace', () => {
     expect(
       await screen.findByText('Персональное приглашение обходит только ограничение уровня.'),
     ).toBeInTheDocument();
+    expect(screen.getByText(/player_projection_ready/)).toBeInTheDocument();
     const games = screen.getByRole('heading', { name: 'Игры' }).closest('section');
     expect(games).not.toBeNull();
     const controls = within(games!);
+    expect(
+      controls.getByLabelText('Повторная проверка при продвижении обязательна'),
+    ).toBeDisabled();
     const publish = controls.getByRole('button', { name: 'Опубликовать настройки' });
     expect(publish).toBeDisabled();
     fireEvent.change(controls.getByLabelText('Режим'), { target: { value: 'SHADOW' } });

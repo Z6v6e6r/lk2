@@ -7,6 +7,46 @@ const dateTime = z.string().datetime({ offset: true });
 const eventType = z.string().regex(/^[a-z][a-z0-9_.-]+\.v[1-9][0-9]*$/);
 const positiveRevision = z.string().regex(/^[1-9][0-9]*$/);
 
+export const GAME_ELIGIBILITY_NOTIFICATION_EVENT_TYPES = [
+  'game.waitlist.promotion.denied.v1',
+] as const;
+
+export const GAME_ELIGIBILITY_NOTIFICATION_CANONICAL_CONTRACT = {
+  rulesetVersion: 'game-eligibility.ru-ru.v1',
+  template: {
+    version: 1,
+    locale: 'ru-RU',
+    category: 'GAME',
+    deepLink: '/games/{{aggregateId}}',
+    channels: ['IN_APP', 'PUSH'],
+    active: true,
+  },
+  rule: {
+    keySuffix: 'default',
+    audienceSelector: {
+      type: 'EVENT_USER',
+      field: 'userId',
+    },
+    channelOverride: ['IN_APP', 'PUSH'],
+    active: true,
+  },
+  definitions: [
+    {
+      key: 'game.waitlist.promotion-denied',
+      sourceEventType: 'game.waitlist.promotion.denied.v1',
+      title: 'Место в игре не подтверждено',
+      body: 'Ваш уровень больше не соответствует условиям игры.',
+      mandatory: true,
+    },
+  ],
+} as const;
+
+export const GAME_ELIGIBILITY_NOTIFICATION_RULESET_VERSION =
+  GAME_ELIGIBILITY_NOTIFICATION_CANONICAL_CONTRACT.rulesetVersion;
+export const GAME_ELIGIBILITY_NOTIFICATION_REQUEST_HASH = bookingNotificationContractHash(
+  GAME_ELIGIBILITY_NOTIFICATION_CANONICAL_CONTRACT,
+);
+
 export const BOOKING_NOTIFICATION_CANONICAL_CONTRACT = {
   rulesetVersion: 'booking.ru-ru.v3',
   template: {
@@ -113,6 +153,28 @@ const bookingEventEnvelopeBase = z.object({
   occurredAt: dateTime,
   correlationId: z.string().min(8).max(128),
 });
+
+export const gameEligibilityNotificationSourceEventSchema = bookingEventEnvelopeBase
+  .extend({
+    type: z.literal('game.waitlist.promotion.denied.v1'),
+    payload: z
+      .object({
+        gameId: uuid,
+        aggregateRevision: positiveRevision,
+        causationId: uuid,
+        actorUserId: uuid.nullable(),
+        userId: uuid,
+        waitlistEntryId: uuid,
+        decisionId: uuid,
+        reasonCode: z.string().min(1).max(128),
+      })
+      .strict(),
+  })
+  .strict()
+  .refine((event) => event.aggregateId === event.payload.gameId, {
+    path: ['aggregateId'],
+    message: 'aggregateId must match payload.gameId',
+  });
 const bookingEventPayloadBase = {
   bookingId: uuid,
   revision: positiveRevision,
@@ -185,12 +247,16 @@ const genericNotificationSourceEventSchema = z
     (event) =>
       !BOOKING_NOTIFICATION_EVENT_TYPES.includes(
         event.type as (typeof BOOKING_NOTIFICATION_EVENT_TYPES)[number],
+      ) &&
+      !GAME_ELIGIBILITY_NOTIFICATION_EVENT_TYPES.includes(
+        event.type as (typeof GAME_ELIGIBILITY_NOTIFICATION_EVENT_TYPES)[number],
       ),
-    { message: 'Canonical booking events must use the booking notification event contract' },
+    { message: 'Canonical events must use their notification event contract' },
   );
 
 export const notificationSourceEventSchema = z.union([
   bookingNotificationSourceEventSchema,
+  gameEligibilityNotificationSourceEventSchema,
   genericNotificationSourceEventSchema,
 ]);
 

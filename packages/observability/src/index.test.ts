@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { shouldIgnoreUndiciRequestPath } from './index.js';
+import { levelEligibilityMetricAttributes, shouldIgnoreUndiciRequestPath } from './index.js';
 
 describe('telemetry URL privacy', () => {
   it.each([
@@ -17,5 +17,24 @@ describe('telemetry URL privacy', () => {
     '/health/ready',
   ])('keeps safe request paths observable: %s', (path) => {
     expect(shouldIgnoreUndiciRequestPath(path)).toBe(false);
+  });
+});
+
+describe('level eligibility metric privacy', () => {
+  it('uses only bounded allowlisted dimensions', () => {
+    expect(
+      levelEligibilityMetricAttributes({
+        activityType: 'GAME',
+        action: 'JOIN',
+        mode: 'WARN',
+        outcome: 'WARN',
+        reasonCode: 'LEVEL_TOO_LOW',
+      }),
+    ).toEqual({
+      activity_type: 'GAME',
+      action: 'JOIN',
+      mode: 'WARN',
+      reason_code: 'LEVEL_TOO_LOW',
+    });
   });
 });

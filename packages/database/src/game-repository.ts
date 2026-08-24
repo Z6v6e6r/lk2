@@ -200,6 +200,19 @@ export interface GameRepository {
     readonly workerId: string;
     readonly commandId: string;
   }): Promise<boolean>;
+  deferScheduledCommand(input: {
+    readonly tenantId: string;
+    readonly workerId: string;
+    readonly commandId: string;
+    readonly errorCode: string;
+    readonly availableAt: string;
+  }): Promise<boolean>;
+  failScheduledCommand(input: {
+    readonly tenantId: string;
+    readonly workerId: string;
+    readonly commandId: string;
+    readonly errorCode: string;
+  }): Promise<boolean>;
   retryScheduledCommand(input: {
     readonly tenantId: string;
     readonly workerId: string;
@@ -1382,6 +1395,33 @@ export function createGameRepository(pool: Pool): GameRepository {
               set state = 'COMPLETED', completed_at = now(), locked_at = null, locked_by = null
             where tenant_id = $1 and id = $2 and state = 'PROCESSING' and locked_by = $3`,
           [input.tenantId, input.commandId, input.workerId],
+        );
+        return result.rowCount === 1;
+      });
+    },
+
+    deferScheduledCommand(input) {
+      return withTenantTransaction(pool, input.tenantId, async (client) => {
+        const result = await client.query(
+          `update games.scheduled_commands set
+             state = 'FAILED', attempts = greatest(0, attempts - 1),
+             available_at = $4, last_error_code = $5,
+             locked_at = null, locked_by = null
+           where tenant_id = $1 and id = $2 and state = 'PROCESSING' and locked_by = $3`,
+          [input.tenantId, input.commandId, input.workerId, input.availableAt, input.errorCode],
+        );
+        return result.rowCount === 1;
+      });
+    },
+
+    failScheduledCommand(input) {
+      return withTenantTransaction(pool, input.tenantId, async (client) => {
+        const result = await client.query(
+          `update games.scheduled_commands set
+             state = 'FAILED', attempts = 20, available_at = now(), last_error_code = $4,
+             locked_at = null, locked_by = null
+           where tenant_id = $1 and id = $2 and state = 'PROCESSING' and locked_by = $3`,
+          [input.tenantId, input.commandId, input.workerId, input.errorCode],
         );
         return result.rowCount === 1;
       });

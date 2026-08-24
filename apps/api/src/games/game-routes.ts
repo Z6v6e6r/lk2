@@ -5,6 +5,7 @@ import type {
   GameRosterCommandResult,
   GameRosterOperation,
   GameRosterRepository,
+  ParticipationDecision,
 } from '@phub/database';
 import type { FastifyInstance, FastifyReply, FastifyRequest, preHandlerHookHandler } from 'fastify';
 
@@ -42,7 +43,10 @@ const ERROR_MESSAGES: Partial<Record<GameRosterCommandErrorCode, string>> = {
   GAME_NOT_WAITLISTED: 'Вы не состоите в очереди на эту игру.',
   PLAYER_LEVEL_REQUIRED: 'Укажите уровень, чтобы присоединиться.',
   PLAYER_LEVEL_UNKNOWN: 'Не удалось корректно определить ваш уровень.',
+  PLAYER_LEVEL_STALE: 'Обновите уровень, чтобы продолжить.',
   LEVEL_NOT_ALLOWED: 'Эта игра рассчитана на другой уровень.',
+  LEVEL_TOO_LOW: 'Уровень игры выше указанного вами уровня.',
+  LEVEL_TOO_HIGH: 'Уровень игры ниже указанного вами уровня.',
   LEVEL_SPORT_MISMATCH: 'Уровень указан для другого вида спорта.',
   LEVEL_SCALE_VERSION_MISMATCH: 'Версия вашего уровня устарела. Обновите уровень и повторите.',
   ACTIVITY_LEVEL_UNDEFINED: 'Для игры не настроен диапазон уровней.',
@@ -66,7 +70,10 @@ const PUBLIC_ROSTER_ERROR_CODES = new Set<GameRosterCommandErrorCode>([
   'GAME_NOT_WAITLISTED',
   'PLAYER_LEVEL_REQUIRED',
   'PLAYER_LEVEL_UNKNOWN',
+  'PLAYER_LEVEL_STALE',
   'LEVEL_NOT_ALLOWED',
+  'LEVEL_TOO_LOW',
+  'LEVEL_TOO_HIGH',
   'LEVEL_SPORT_MISMATCH',
   'LEVEL_SCALE_VERSION_MISMATCH',
   'ACTIVITY_LEVEL_UNDEFINED',
@@ -156,6 +163,7 @@ function operationBody(
       error: null,
     },
     game: null,
+    ...(result.eligibility ? { eligibility: result.eligibility } : {}),
     replayed,
   };
   assertValidCommandBody(body);
@@ -180,6 +188,7 @@ function failedOperationBody(operation: GameRosterOperation) {
       error: { code: operation.errorCode, message: errorMessage(operation.errorCode) },
     },
     game: null,
+    ...(operation.eligibility ? { eligibility: operation.eligibility } : {}),
     replayed: true,
   };
   assertValidCommandBody(body);
@@ -200,6 +209,7 @@ function assertValidCommandBody(body: {
     readonly error: { readonly code: string; readonly message: string } | null;
   };
   readonly game: null;
+  readonly eligibility?: ParticipationDecision;
   readonly replayed: boolean;
 }): void {
   if (
@@ -243,13 +253,12 @@ function rejected(
   if (!PUBLIC_ROSTER_ERROR_CODES.has(result.code)) {
     throw new Error('GAME_COMMAND_INTERNAL_POLICY_ERROR');
   }
-  return sendApiError(
-    request,
-    reply,
-    result.code === 'GAME_NOT_FOUND' ? 404 : 409,
-    result.code,
-    errorMessage(result.code),
-  );
+  return reply.status(result.code === 'GAME_NOT_FOUND' ? 404 : 409).send({
+    code: result.code,
+    message: errorMessage(result.code),
+    correlationId: request.id,
+    ...(result.eligibility ? { eligibility: result.eligibility } : {}),
+  });
 }
 
 export function registerGameRoutes(

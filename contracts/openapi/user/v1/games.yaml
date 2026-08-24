@@ -1253,6 +1253,8 @@ components:
             - type: 'null'
         replayed:
           type: boolean
+        eligibility:
+          $ref: '#/components/schemas/ParticipationDecision'
     GameOperation:
       type: object
       additionalProperties: false
@@ -1360,6 +1362,53 @@ components:
         correlationId:
           type: string
           pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$'
+        eligibility:
+          $ref: '#/components/schemas/ParticipationDecision'
+    ParticipationDecision:
+      type: object
+      additionalProperties: false
+      required: [allowed, decisionId, mode, code, recoveryAction, retryable, policyVersion]
+      properties:
+        allowed: { type: boolean }
+        decisionId: { type: string, format: uuid }
+        mode: { type: string, enum: [OFF, SHADOW, WARN, BLOCK] }
+        code:
+          $ref: '#/components/schemas/GameEligibilityCode'
+        recoveryAction:
+          type: string
+          enum: [SELECT_LEVEL, COMPLETE_LEVEL_ASSESSMENT, REFRESH_ACTIVITY, CONTACT_SUPPORT, NONE]
+        retryable: { type: boolean }
+        policyVersion: { type: integer, minimum: 0 }
+        wouldBlock: { type: boolean }
+        warning:
+          type: object
+          additionalProperties: false
+          required: [code, message]
+          properties:
+            code:
+              $ref: '#/components/schemas/GameEligibilityCode'
+            message: { type: string, maxLength: 500 }
+    GameEligibilityCode:
+      type: string
+      enum:
+        - LEVEL_RULE_DISABLED
+        - LEVEL_ALLOWED
+        - ACTIVITY_HAS_NO_LEVEL_RESTRICTION
+        - PLAYER_LEVEL_REQUIRED
+        - PLAYER_LEVEL_STALE
+        - PLAYER_LEVEL_UNKNOWN
+        - LEVEL_TOO_LOW
+        - LEVEL_TOO_HIGH
+        - LEVEL_NOT_ALLOWED
+        - LEVEL_SPORT_MISMATCH
+        - LEVEL_SCALE_VERSION_MISMATCH
+        - ACTIVITY_LEVEL_UNDEFINED
+        - ACTIVITY_LEVEL_INVALID
+        - LEVEL_POLICY_MISCONFIGURED
+        - POLICY_UNAVAILABLE
+        - PERSONAL_INVITE_BYPASS
+        - ORGANIZER_CREATION_BYPASS
+        - LEGACY_LEVEL_CONSTRAINT
     GameErrorCode:
       type: string
       enum:
@@ -1386,3 +1435,14 @@ components:
         - GAME_RESULT_NOT_DISPUTABLE
         - GAME_REVISION_CONFLICT
         - GAME_OPERATION_NOT_FOUND
+        - PLAYER_LEVEL_REQUIRED
+        - PLAYER_LEVEL_STALE
+        - PLAYER_LEVEL_UNKNOWN
+        - LEVEL_TOO_LOW
+        - LEVEL_TOO_HIGH
+        - LEVEL_NOT_ALLOWED
+        - LEVEL_SPORT_MISMATCH
+        - LEVEL_SCALE_VERSION_MISMATCH
+        - ACTIVITY_LEVEL_UNDEFINED
+        - ACTIVITY_LEVEL_INVALID
+        - LEVEL_POLICY_MISCONFIGURED

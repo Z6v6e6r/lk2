@@ -468,6 +468,39 @@ describe('PadlHubApiClient authentication boundary', () => {
     );
   });
 
+  it('retains the structured eligibility recovery decision on Games errors', async () => {
+    const eligibility = {
+      allowed: false,
+      decisionId: '95a76d36-d8a7-4ff5-a988-84f33c0fd05a',
+      mode: 'BLOCK',
+      code: 'PLAYER_LEVEL_REQUIRED',
+      recoveryAction: 'SELECT_LEVEL',
+      retryable: true,
+      policyVersion: 3,
+    };
+    const client = createClient(
+      () =>
+        Promise.resolve(
+          jsonResponse(
+            {
+              code: 'PLAYER_LEVEL_REQUIRED',
+              message: 'Укажите уровень.',
+              correlationId: 'games-eligibility-error-1',
+              eligibility,
+            },
+            409,
+          ),
+        ),
+      { initialAccessToken: authenticatedSession.accessToken },
+    );
+
+    await expect(client.joinGame('751fe6a8-b0b1-4b2b-873d-a2d785c4e191', 9)).rejects.toMatchObject({
+      code: 'PLAYER_LEVEL_REQUIRED',
+      correlationId: 'games-eligibility-error-1',
+      eligibility,
+    });
+  });
+
   it('creates a public challenge without forwarding a stored token', async () => {
     const calls: Array<{ input: Parameters<typeof fetch>[0]; init?: RequestInit }> = [];
     const fetchImplementation: typeof fetch = (input, init) => {

@@ -339,6 +339,71 @@ describe('Games roster User API', () => {
     expect(conflictResponse.json()).toMatchObject({ code: 'IDEMPOTENCY_KEY_REUSED' });
   });
 
+  it('adds a client-neutral WARN decision without changing the successful Games envelope', async () => {
+    const eligibility = {
+      allowed: true,
+      decisionId: '95a76d36-d8a7-4ff5-a988-84f33c0fd05a',
+      mode: 'WARN' as const,
+      code: 'LEVEL_TOO_LOW' as const,
+      recoveryAction: 'NONE' as const,
+      retryable: false,
+      policyVersion: 4,
+      warning: {
+        code: 'LEVEL_TOO_LOW' as const,
+        message: 'Уровень игры выше указанного вами уровня.',
+      },
+    };
+    const app = await appWith(
+      repository({ join: vi.fn().mockResolvedValue(applied({ eligibility })) }),
+    );
+    const response = await app.inject({
+      method: 'POST',
+      url: `/user/api/v1/local-padel/games/${gameId}/join`,
+      headers: {
+        authorization: `Bearer ${await accessToken()}`,
+        'idempotency-key': 'games-api-warn-command-0001',
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ eligibility });
+  });
+
+  it('preserves the legacy top-level level code and returns the precise BLOCK decision', async () => {
+    const eligibility = {
+      allowed: false,
+      decisionId: '95a76d36-d8a7-4ff5-a988-84f33c0fd05a',
+      mode: 'BLOCK' as const,
+      code: 'LEVEL_TOO_HIGH' as const,
+      recoveryAction: 'NONE' as const,
+      retryable: false,
+      policyVersion: 5,
+    };
+    const app = await appWith(
+      repository({
+        join: vi.fn().mockResolvedValue({
+          outcome: 'rejected',
+          code: 'LEVEL_NOT_ALLOWED',
+          currentRevision: 7,
+          replayed: false,
+          eligibility,
+        }),
+      }),
+    );
+    const response = await app.inject({
+      method: 'POST',
+      url: `/user/api/v1/local-padel/games/${gameId}/join`,
+      headers: {
+        authorization: `Bearer ${await accessToken()}`,
+        'idempotency-key': 'games-api-block-command-0001',
+      },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({ code: 'LEVEL_NOT_ALLOWED', eligibility });
+    expect(response.json()).not.toHaveProperty('rank');
+  });
+
   it('reads only the authenticated user durable operation', async () => {
     const getOperation = vi.fn().mockResolvedValue({
       commandId,

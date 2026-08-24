@@ -21,14 +21,12 @@ const REDACT_PATHS = [
 ];
 
 export interface LevelEligibilityMetric {
-  readonly tenant: string;
-  readonly sport: string;
   readonly activityType: 'GAME' | 'TOURNAMENT' | 'TRAINING';
   readonly mode: 'OFF' | 'SHADOW' | 'WARN' | 'BLOCK';
   readonly outcome: 'PASS' | 'SKIP' | 'WARN' | 'FAIL' | 'BYPASS';
   readonly reasonCode: string;
-  readonly constraintSource: string;
   readonly action: string;
+  readonly wouldBlock?: boolean;
 }
 
 const eligibilityMeter = metrics.getMeter('phub.eligibility');
@@ -43,21 +41,49 @@ const eligibilityCounters = {
   staffOverride: eligibilityMeter.createCounter('eligibility_staff_override_total'),
   waitlistRecheck: eligibilityMeter.createCounter('eligibility_waitlist_recheck_total'),
   constraintSource: eligibilityMeter.createCounter('level_constraint_source_total'),
+  evaluation: eligibilityMeter.createCounter('participation_eligibility_evaluations_total'),
+  allow: eligibilityMeter.createCounter('participation_eligibility_allow_total'),
+  shadowWouldBlock: eligibilityMeter.createCounter(
+    'participation_eligibility_shadow_would_block_total',
+  ),
+  warn: eligibilityMeter.createCounter('participation_eligibility_warn_total'),
+  block: eligibilityMeter.createCounter('participation_eligibility_block_total'),
+  missingLevel: eligibilityMeter.createCounter('participation_eligibility_missing_level_total'),
+  staleLevel: eligibilityMeter.createCounter('participation_eligibility_stale_level_total'),
+  policyUnavailable: eligibilityMeter.createCounter(
+    'participation_eligibility_policy_unavailable_total',
+  ),
+  deniedWaitlistPromotion: eligibilityMeter.createCounter(
+    'participation_eligibility_denied_waitlist_promotion_total',
+  ),
 };
 
-export function recordLevelEligibilityMetrics(metric: LevelEligibilityMetric): void {
-  const attributes = {
-    tenant: metric.tenant,
-    sport: metric.sport,
+export function levelEligibilityMetricAttributes(metric: LevelEligibilityMetric) {
+  return {
     activity_type: metric.activityType,
+    action: metric.action,
     mode: metric.mode,
-    outcome: metric.outcome,
     reason_code: metric.reasonCode,
-    constraint_source: metric.constraintSource,
-  };
+  } as const;
+}
+
+export function recordLevelEligibilityMetrics(metric: LevelEligibilityMetric): void {
+  const attributes = levelEligibilityMetricAttributes(metric);
   eligibilityCounters.decision.add(1, attributes);
   eligibilityCounters.levelDecision.add(1, attributes);
-  eligibilityCounters.constraintSource.add(1, attributes);
+  eligibilityCounters.evaluation.add(1, attributes);
+  if (metric.outcome !== 'FAIL') eligibilityCounters.allow.add(1, attributes);
+  if (metric.mode === 'SHADOW' && metric.wouldBlock === true) {
+    eligibilityCounters.shadowWouldBlock.add(1, attributes);
+  }
+  if (metric.outcome === 'WARN') eligibilityCounters.warn.add(1, attributes);
+  if (metric.outcome === 'FAIL') eligibilityCounters.block.add(1, attributes);
+  if (metric.reasonCode === 'PLAYER_LEVEL_REQUIRED')
+    eligibilityCounters.missingLevel.add(1, attributes);
+  if (metric.reasonCode === 'PLAYER_LEVEL_STALE') eligibilityCounters.staleLevel.add(1, attributes);
+  if (metric.reasonCode === 'POLICY_UNAVAILABLE') {
+    eligibilityCounters.policyUnavailable.add(1, attributes);
+  }
   if (
     metric.reasonCode === 'PLAYER_LEVEL_UNKNOWN' ||
     metric.reasonCode === 'LEVEL_SCALE_VERSION_MISMATCH'
@@ -70,21 +96,16 @@ export function recordLevelEligibilityMetrics(metric: LevelEligibilityMetric): v
   if (metric.reasonCode === 'ORGANIZER_CREATION_BYPASS')
     eligibilityCounters.organizerBypass.add(1, attributes);
   if (metric.action === 'PROMOTE_WAITLIST') eligibilityCounters.waitlistRecheck.add(1, attributes);
+  if (metric.action === 'PROMOTE_WAITLIST' && metric.outcome === 'FAIL') {
+    eligibilityCounters.deniedWaitlistPromotion.add(1, attributes);
+  }
 }
 
 export function recordLevelEligibilityBoundaryMetric(
   name: 'client_server_mismatch' | 'staff_override',
   metric: LevelEligibilityMetric,
 ): void {
-  const attributes = {
-    tenant: metric.tenant,
-    sport: metric.sport,
-    activity_type: metric.activityType,
-    mode: metric.mode,
-    outcome: metric.outcome,
-    reason_code: metric.reasonCode,
-    constraint_source: metric.constraintSource,
-  };
+  const attributes = levelEligibilityMetricAttributes(metric);
   (name === 'client_server_mismatch'
     ? eligibilityCounters.clientServerMismatch
     : eligibilityCounters.staffOverride

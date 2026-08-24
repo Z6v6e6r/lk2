@@ -67,10 +67,13 @@ function eligibilityFacts(overrides: Readonly<Record<string, unknown>> = {}) {
     player_rank: null,
     player_level_source: null,
     player_scale_version: null,
+    player_level_updated_at: null,
     minimum_level_id: '1dfc1d4a-47cb-4b43-a735-761260a2e986',
     maximum_level_id: '7d7556e6-f30b-48e5-9ff2-c39bdf062ff7',
     minimum_rank: 3,
     maximum_rank: 5,
+    minimum_scale_version: 1,
+    maximum_scale_version: 1,
     constraint_scale_version: 1,
     valid_invitation_id: null,
     ...overrides,
@@ -112,24 +115,16 @@ function baseHandler(
   ) {
     return {
       rows: [
-        {
-          mode: null,
-          lower_tolerance_steps: null,
-          upper_tolerance_steps: null,
-          missing_activity_constraint_action: null,
-          legacy_text_constraint_action: null,
-          policy_version: null,
-          player_level_id: null,
-          player_rank: null,
-          player_level_source: null,
-          player_scale_version: null,
+        eligibilityFacts({
+          mode: 'OFF',
+          missing_activity_constraint_action: 'ALLOW',
+          policy_version: '1',
           minimum_level_id: null,
           maximum_level_id: null,
           minimum_rank: null,
           maximum_rank: null,
           constraint_scale_version: null,
-          valid_invitation_id: null,
-        },
+        }),
       ],
     };
   }
@@ -443,11 +438,19 @@ describe('game roster repository', () => {
       return baseHandler(text, { paymentMode: 'SPLIT' });
     });
 
-    await expect(createGameRosterRepository(pool as never).join(input())).resolves.toEqual({
+    await expect(createGameRosterRepository(pool as never).join(input())).resolves.toMatchObject({
       outcome: 'rejected',
       code: 'PLAYER_LEVEL_REQUIRED',
       currentRevision: 1,
       replayed: false,
+      eligibility: {
+        allowed: false,
+        mode: 'BLOCK',
+        code: 'PLAYER_LEVEL_REQUIRED',
+        recoveryAction: 'SELECT_LEVEL',
+        retryable: true,
+        policyVersion: 3,
+      },
     });
     expect(
       query.mock.calls.some(([text]) => text.includes('insert into eligibility.decisions')),
@@ -458,6 +461,71 @@ describe('game roster repository', () => {
     expect(
       query.mock.calls.some(([text]) => text.includes('insert into eligibility.payment_snapshots')),
     ).toBe(false);
+  });
+
+  it('fails closed when the explicit active GAME policy is unavailable', async () => {
+    const { pool, query } = poolWithHandler((text) => {
+      if (text.includes('eligibility.level_policies')) {
+        return {
+          rows: [eligibilityFacts({ mode: null, policy_version: null })],
+        };
+      }
+      return baseHandler(text);
+    });
+
+    await expect(createGameRosterRepository(pool as never).join(input())).resolves.toMatchObject({
+      outcome: 'rejected',
+      code: 'LEVEL_POLICY_MISCONFIGURED',
+      eligibility: {
+        allowed: false,
+        mode: 'BLOCK',
+        code: 'POLICY_UNAVAILABLE',
+        recoveryAction: 'CONTACT_SUPPORT',
+        retryable: false,
+        policyVersion: 0,
+      },
+    });
+    expect(
+      query.mock.calls.some(([text]) => text.includes('insert into games.participations')),
+    ).toBe(false);
+  });
+
+  it('fails closed instead of comparing ranks across mixed canonical scale versions', async () => {
+    const { pool } = poolWithHandler((text) => {
+      if (text.includes('eligibility.level_policies')) {
+        return {
+          rows: [
+            eligibilityFacts({
+              player_level_id: '8ff9976a-2e2d-4ce7-91c2-15a1d3ff3f89',
+              player_rank: 4,
+              player_level_source: 'SELF_DECLARED',
+              player_scale_version: 2,
+              player_level_updated_at: '2026-08-01T09:00:00.000Z',
+              minimum_scale_version: 1,
+              maximum_scale_version: 2,
+            }),
+          ],
+        };
+      }
+      if (text.includes('from games.games') && text.includes('for update')) {
+        return {
+          rows: [
+            {
+              ...lockedGame(),
+              min_level_id: '1dfc1d4a-47cb-4b43-a735-761260a2e986',
+              max_level_id: '7d7556e6-f30b-48e5-9ff2-c39bdf062ff7',
+            },
+          ],
+        };
+      }
+      return baseHandler(text);
+    });
+
+    await expect(createGameRosterRepository(pool as never).join(input())).resolves.toMatchObject({
+      outcome: 'rejected',
+      code: 'ACTIVITY_LEVEL_INVALID',
+      eligibility: { code: 'ACTIVITY_LEVEL_INVALID' },
+    });
   });
 
   it('accepts only a repository-validated personal invitation and consumes it after the join', async () => {
@@ -542,8 +610,8 @@ describe('game roster repository', () => {
         return {
           rows: [
             eligibilityFacts({
-              mode: null,
-              policy_version: null,
+              mode: 'OFF',
+              policy_version: '1',
               valid_invitation_id: invitationId,
             }),
           ],
@@ -801,6 +869,171 @@ describe('game roster repository', () => {
       'game.participation.confirmed.v1',
       'game.roster.completed.v1',
     ]);
+  });
+
+  it('schedules the next active head when another seat remains after promotion', async () => {
+    const commandId = '5c495f29-c3e6-426f-a855-28301b447152';
+    const nextWaitlistEntryId = '433981b8-145e-4bcb-84fe-53a58067ddad';
+    let capacityReads = 0;
+    const { pool, query } = poolWithHandler((text) => {
+      if (text.includes('active_participant_count') && !text.includes('participation_id')) {
+        capacityReads += 1;
+        return {
+          rows: [
+            { active_participant_count: capacityReads === 1 ? 0 : 1, active_reservation_count: 0 },
+          ],
+        };
+      }
+      if (text.includes('from games.waitlist_entries') && text.includes('min(position)')) {
+        return {
+          rows: [
+            {
+              id: waitlistEntryId,
+              user_id: playerId,
+              position: '1',
+              state: 'ACTIVE',
+              personal_invitation_id: null,
+            },
+          ],
+        };
+      }
+      if (text.includes('from games.waitlist_entries') && text.includes('order by position')) {
+        return { rows: [{ id: nextWaitlistEntryId }] };
+      }
+      if (text.includes('insert into games.participations')) {
+        return { rows: [{ id: participationId }] };
+      }
+      if (text.includes('array_agg(user_id')) return { rows: [{ user_ids: [playerId] }] };
+      return baseHandler(text);
+    });
+
+    await expect(
+      createGameRosterRepository(pool as never).promoteWaitlist({
+        tenantId,
+        gameId,
+        commandId,
+        idempotencyKey: 'games-promote-command-0002',
+        requestHash: 'e'.repeat(64),
+        correlationId: 'corr-games-promote-0002',
+        waitlistEntryId,
+      }),
+    ).resolves.toMatchObject({ outcome: 'applied', revision: 2 });
+
+    const scheduled = query.mock.calls.find(
+      ([text]) => text.includes("'game.waitlist.promote.v1'") && text.includes('where not exists'),
+    );
+    expect(scheduled?.[1]).toEqual([
+      tenantId,
+      gameId,
+      2,
+      JSON.stringify({ waitlistEntryId: nextWaitlistEntryId }),
+      nextWaitlistEntryId,
+    ]);
+  });
+
+  it('emits a durable denial signal and advances the queue after promotion eligibility fails', async () => {
+    const commandId = '5c495f29-c3e6-426f-a855-28301b447152';
+    const nextWaitlistEntryId = '433981b8-145e-4bcb-84fe-53a58067ddad';
+    const { pool, query } = poolWithHandler((text) => {
+      if (text.includes('eligibility.level_policies')) return { rows: [eligibilityFacts()] };
+      if (text.includes('from games.games') && text.includes('for update')) {
+        return {
+          rows: [
+            {
+              ...lockedGame(),
+              min_level_id: '1dfc1d4a-47cb-4b43-a735-761260a2e986',
+              max_level_id: '7d7556e6-f30b-48e5-9ff2-c39bdf062ff7',
+            },
+          ],
+        };
+      }
+      if (text.includes('active_participant_count') && !text.includes('participation_id')) {
+        return { rows: [{ active_participant_count: 0, active_reservation_count: 0 }] };
+      }
+      if (text.includes('from games.waitlist_entries') && text.includes('min(position)')) {
+        return {
+          rows: [
+            {
+              id: waitlistEntryId,
+              user_id: playerId,
+              position: '1',
+              state: 'ACTIVE',
+              personal_invitation_id: null,
+            },
+          ],
+        };
+      }
+      if (text.includes('from games.waitlist_entries') && text.includes('order by position')) {
+        return { rows: [{ id: nextWaitlistEntryId }] };
+      }
+      return baseHandler(text);
+    });
+
+    await expect(
+      createGameRosterRepository(pool as never).promoteWaitlist({
+        tenantId,
+        gameId,
+        commandId,
+        idempotencyKey: 'games-promote-command-0003',
+        requestHash: 'f'.repeat(64),
+        correlationId: 'corr-games-promote-0003',
+        waitlistEntryId,
+      }),
+    ).resolves.toMatchObject({ outcome: 'applied', revision: 2 });
+
+    expect(
+      query.mock.calls.some(
+        ([text, values]) =>
+          text.includes('insert into audit.outbox_events') &&
+          values?.[2] === 'game.waitlist.promotion.denied.v1',
+      ),
+    ).toBe(true);
+    expect(
+      query.mock.calls.some(
+        ([text, values]) =>
+          text.includes("'game.waitlist.promote.v1'") && values?.includes(nextWaitlistEntryId),
+      ),
+    ).toBe(true);
+  });
+
+  it('keeps the waitlist entry active when promotion policy facts are unavailable', async () => {
+    const commandId = '5c495f29-c3e6-426f-a855-28301b447152';
+    const { pool, query } = poolWithHandler((text) => {
+      if (text.includes('eligibility.level_policies')) {
+        return { rows: [eligibilityFacts({ mode: null, policy_version: null })] };
+      }
+      if (text.includes('active_participant_count') && !text.includes('participation_id')) {
+        return { rows: [{ active_participant_count: 0, active_reservation_count: 0 }] };
+      }
+      if (text.includes('from games.waitlist_entries') && text.includes('min(position)')) {
+        return {
+          rows: [
+            {
+              id: waitlistEntryId,
+              user_id: playerId,
+              position: '1',
+              state: 'ACTIVE',
+              personal_invitation_id: null,
+            },
+          ],
+        };
+      }
+      return baseHandler(text);
+    });
+
+    await expect(
+      createGameRosterRepository(pool as never).promoteWaitlist({
+        tenantId,
+        gameId,
+        commandId,
+        idempotencyKey: 'games-promote-command-0004',
+        requestHash: '1'.repeat(64),
+        correlationId: 'corr-games-promote-0004',
+        waitlistEntryId,
+      }),
+    ).rejects.toThrow('GAME_WAITLIST_PROMOTION_ELIGIBILITY_UNAVAILABLE');
+    expect(query.mock.calls.some(([text]) => text.includes("set state = 'EXPIRED'"))).toBe(false);
+    expect(query).toHaveBeenCalledWith('rollback');
   });
 
   it('loads a durable user operation only through tenant and actor ownership', async () => {

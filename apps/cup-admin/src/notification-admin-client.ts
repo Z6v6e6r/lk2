@@ -94,6 +94,18 @@ export interface LevelEligibilityPolicyState {
   readonly sportCode: string;
   readonly levels: readonly CanonicalLevelAdminView[];
   readonly policies: readonly LevelEligibilityPolicyAdminView[];
+  readonly readiness: readonly LevelEligibilityReadinessAdminView[];
+}
+
+export interface LevelEligibilityReadinessAdminView {
+  readonly activityType: LevelEligibilityActivityType;
+  readonly writerAuthoritative: boolean;
+  readonly playerProjectionReady: boolean;
+  readonly clientRecoveryReady: boolean;
+  readonly paymentRecoveryReady: boolean;
+  readonly readyForBlock: boolean;
+  readonly missingGates: readonly string[];
+  readonly verifiedAt: string | null;
 }
 
 export interface LevelEligibilityImpactAdminView {

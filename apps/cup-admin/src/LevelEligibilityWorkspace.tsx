@@ -261,6 +261,15 @@ export function LevelEligibilityWorkspace({
 
       {tab === 'rules' && state ? (
         <div className="level-policy-grid">
+          <section className="panel level-policy-card">
+            <h2>Готовность BLOCK</h2>
+            {state.readiness.map((item) => (
+              <p key={item.activityType}>
+                {activities.find((activity) => activity.id === item.activityType)?.title}:{' '}
+                {item.readyForBlock ? 'готово' : `заблокировано (${item.missingGates.join(', ')})`}
+              </p>
+            ))}
+          </section>
           {activities.map((activity) => {
             const policy = policyByType.get(activity.id);
             const input = drafts[activity.id];
@@ -337,12 +346,15 @@ export function LevelEligibilityWorkspace({
                 <label className="checkbox-row">
                   <input
                     type="checkbox"
-                    checked={input.recheckWaitlistPromotion}
+                    checked={activity.id === 'GAME' ? true : input.recheckWaitlistPromotion}
+                    disabled={activity.id === 'GAME'}
                     onChange={(event) =>
                       change(activity.id, { recheckWaitlistPromotion: event.target.checked })
                     }
                   />
-                  Повторять проверку при продвижении из очереди
+                  {activity.id === 'GAME'
+                    ? 'Повторная проверка при продвижении обязательна'
+                    : 'Повторять проверку при продвижении из очереди'}
                 </label>
                 <label>
                   Комментарий к публикации

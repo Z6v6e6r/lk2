@@ -37,7 +37,7 @@ The current CUP Mongo rating ledger remains an upstream operational source durin
 
 ### Policy
 
-Policy key: tenant + sport + activity type (GAME, TOURNAMENT, TRAINING). Fields include mode, asymmetric tolerance, missing/legacy actions and waitlist recheck. Bounds are inclusive:
+Policy key: tenant + sport + activity type (GAME, TOURNAMENT, TRAINING). Fields include mode, asymmetric tolerance, missing/legacy actions and waitlist recheck. GAME promotion recheck is always true; CUP presents it as a read-only invariant. Bounds are inclusive:
 
 ```text
 effectiveMinRank = minRank - lowerToleranceSteps
@@ -51,7 +51,11 @@ Publishing is explicit, versioned, optimistic, idempotent and audited. Rollback 
 
 - Missing assignment: `PLAYER_LEVEL_REQUIRED`.
 - Expected but unparseable/unmappable assignment: `PLAYER_LEVEL_UNKNOWN`.
-- Valid known level outside effective range: `LEVEL_NOT_ALLOWED`.
+- A projection classified stale by an approved source-specific freshness contract:
+  `PLAYER_LEVEL_STALE`. The evaluator supports this fail-closed fact, but no universal TTL is inferred
+  from `updated_at`; WARN/BLOCK remain prohibited until that product/operational contract exists.
+- Valid known level outside effective range: precise `LEVEL_TOO_LOW` or `LEVEL_TOO_HIGH`, mapped to legacy top-level `LEVEL_NOT_ALLOWED` for old Games clients.
+- Missing active policy: `POLICY_UNAVAILABLE`; absence never synthesizes OFF.
 
 The LK must offer SELF_DECLARED and ONBOARDING flows and preserve the activity return context. That UX is an activation dependency, not a reason to weaken the server rule.
 
@@ -120,7 +124,7 @@ Game rows gain sport and canonical range IDs. Roster rows reference their decisi
 
 ## Observability
 
-Every evaluated rule persists a decision and emits structured telemetry. OTEL counters use bounded labels only: tenant, sport, activity type, mode, outcome, reason and constraint source. Player/activity IDs are structured-log fields, not metric labels.
+Every evaluated rule persists a decision and emits structured telemetry. OTEL counters use only bounded activity type, action, mode and reason labels. Tenant, sport, player, game, invitation and arbitrary error values are forbidden metric labels. Structured logs keep decision and correlation IDs without player, activity or invitation identifiers.
 
 ## Consequences
 

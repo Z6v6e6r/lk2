@@ -376,6 +376,52 @@ describe('game repository', () => {
     ).toBe(true);
   });
 
+  it('defers a claimed command without consuming its attempt and terminally fails invalid commands', async () => {
+    const commandId = '0ef0247c-cae5-4e38-b4bf-1caf19e66746';
+    const { pool, query } = poolWithHandler((text) =>
+      text.includes('update games.scheduled_commands') ? { rowCount: 1 } : { rows: [] },
+    );
+    const repository = createGameRepository(pool as never);
+
+    await expect(
+      repository.deferScheduledCommand({
+        tenantId,
+        workerId: 'worker-games-1',
+        commandId,
+        errorCode: 'GAME_ROSTER_COMMAND_NOT_DUE',
+        availableAt: '2026-08-01T10:15:00.000Z',
+      }),
+    ).resolves.toBe(true);
+    await expect(
+      repository.failScheduledCommand({
+        tenantId,
+        workerId: 'worker-games-1',
+        commandId,
+        errorCode: 'GAME_ROSTER_COMMAND_PAYLOAD_INVALID',
+      }),
+    ).resolves.toBe(true);
+
+    const deferCall = query.mock.calls.find(([text]) =>
+      text.includes('attempts = greatest(0, attempts - 1)'),
+    );
+    expect(deferCall?.[0]).toContain("state = 'FAILED'");
+    expect(deferCall?.[1]).toEqual([
+      tenantId,
+      commandId,
+      'worker-games-1',
+      '2026-08-01T10:15:00.000Z',
+      'GAME_ROSTER_COMMAND_NOT_DUE',
+    ]);
+    const terminalCall = query.mock.calls.find(([text]) => text.includes('attempts = 20'));
+    expect(terminalCall?.[0]).toContain("state = 'FAILED'");
+    expect(terminalCall?.[1]).toEqual([
+      tenantId,
+      commandId,
+      'worker-games-1',
+      'GAME_ROSTER_COMMAND_PAYLOAD_INVALID',
+    ]);
+  });
+
   it('applies a claimed lifecycle command, audit and outbox event atomically', async () => {
     const commandId = '0ef0247c-cae5-4e38-b4bf-1caf19e66746';
     const occurredAt = new Date('2026-07-20T16:00:01.000Z');

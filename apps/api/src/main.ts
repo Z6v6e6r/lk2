@@ -168,32 +168,56 @@ const gameRosterRepository = config.GAMES_COMMANDS_ENABLED
   ? createGameRosterRepository(pool, {
       onEligibilityDecision: (decision) => {
         recordLevelEligibilityMetrics({
-          tenant: decision.tenantId,
-          sport: decision.sportId,
           activityType: decision.activityType,
           mode: decision.mode,
           outcome: decision.outcome,
           reasonCode: decision.reasonCode,
-          constraintSource: decision.constraintSource,
           action: decision.action,
+          wouldBlock: decision.wouldBlock,
         });
-        logger.info({ eligibility: decision }, 'participation eligibility evaluated');
+        logger.info(
+          {
+            eligibility: {
+              decisionId: decision.decisionId,
+              correlationId: decision.correlationId,
+              activityType: decision.activityType,
+              action: decision.action,
+              mode: decision.mode,
+              outcome: decision.outcome,
+              reasonCode: decision.reasonCode,
+              policyVersion: decision.policyVersion,
+            },
+          },
+          'participation eligibility evaluated',
+        );
       },
     })
   : undefined;
 const participationCommandRepository = createParticipationCommandRepository(pool, {
   onDecision: (decision) => {
     recordLevelEligibilityMetrics({
-      tenant: decision.tenantId,
-      sport: decision.sportId,
       activityType: decision.activityType,
       mode: decision.mode,
       outcome: decision.outcome,
       reasonCode: decision.reasonCode,
-      constraintSource: decision.constraintSource,
       action: decision.action,
+      wouldBlock: decision.wouldBlock,
     });
-    logger.info({ eligibility: decision }, 'participation command eligibility evaluated');
+    logger.info(
+      {
+        eligibility: {
+          commandId: decision.commandId,
+          correlationId: decision.correlationId,
+          activityType: decision.activityType,
+          action: decision.action,
+          mode: decision.mode,
+          outcome: decision.outcome,
+          reasonCode: decision.reasonCode,
+          policyVersion: decision.policyVersion,
+        },
+      },
+      'participation command eligibility evaluated',
+    );
   },
 });
 const legacyLkIdentityVerifier = config.LEGACY_GAME_COMMAND_BRIDGE_ENABLED

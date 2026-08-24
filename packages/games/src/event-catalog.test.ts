@@ -111,6 +111,13 @@ const eventPayloads: Readonly<Record<GameDomainEventType, Readonly<Record<string
     targetRelation: 'SEAT_RESERVED',
     targetId: IDS.reservation,
   },
+  'game.waitlist.promotion.denied.v1': {
+    ...eventPayloadBase,
+    userId: IDS.player,
+    waitlistEntryId: IDS.waitlist,
+    decisionId: IDS.event,
+    reasonCode: 'LEVEL_TOO_LOW',
+  },
   'game.roster.completed.v1': {
     ...eventPayloadBase,
     participantUserIds: [IDS.actor, IDS.player],

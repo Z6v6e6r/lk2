@@ -36,6 +36,7 @@ export interface ParticipationCommandDecisionView {
   readonly ruleCode: 'LEVEL_RANGE';
   readonly outcome: EligibilityRuleResult['outcome'];
   readonly reasonCode: EligibilityRuleResult['reasonCode'];
+  readonly wouldBlock?: boolean;
   readonly policyVersion: number;
   readonly levelScaleVersion: number | null;
   readonly constraintSource: string;
@@ -112,6 +113,7 @@ export interface ParticipationCommandTelemetry {
   readonly mode: LevelEligibilityPolicy['mode'];
   readonly outcome: EligibilityRuleResult['outcome'];
   readonly reasonCode: EligibilityRuleResult['reasonCode'];
+  readonly wouldBlock: boolean;
   readonly policyVersion: number;
   readonly levelScaleVersion: number | null;
   readonly constraintSource: string;
@@ -503,6 +505,7 @@ export function createParticipationCommandRepository(
           ruleCode: eligibility.ruleCode,
           outcome: eligibility.outcome,
           reasonCode: eligibility.reasonCode,
+          wouldBlock: eligibility.metadata?.wouldBlock === true,
           policyVersion: effectivePolicy.version,
           levelScaleVersion:
             activity.scale_version === null && !effectivePlayerLevel
@@ -634,6 +637,7 @@ export function createParticipationCommandRepository(
           mode: effectivePolicy.mode,
           outcome: eligibility.outcome,
           reasonCode: eligibility.reasonCode,
+          wouldBlock: eligibility.metadata?.wouldBlock === true,
           policyVersion: effectivePolicy.version,
           levelScaleVersion: decision.levelScaleVersion,
           constraintSource: activity.constraint_source,

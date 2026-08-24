@@ -1192,6 +1192,7 @@ export const GAME_DOMAIN_EVENT_TYPES = [
   'game.waitlist.joined.v1',
   'game.waitlist.left.v1',
   'game.waitlist.promoted.v1',
+  'game.waitlist.promotion.denied.v1',
   'game.roster.completed.v1',
   'game.roster.reopened.v1',
   'game.started.v1',
@@ -1350,6 +1351,21 @@ const gameWaitlistPromotedEventSchema = eventEnvelopeBase
   })
   .strict();
 
+const gameWaitlistPromotionDeniedEventSchema = eventEnvelopeBase
+  .extend({
+    type: z.literal('game.waitlist.promotion.denied.v1'),
+    payload: z
+      .object({
+        ...gameEventPayloadBase,
+        userId: uuid,
+        waitlistEntryId: uuid,
+        decisionId: uuid,
+        reasonCode: z.string().min(1).max(128),
+      })
+      .strict(),
+  })
+  .strict();
+
 function rosterEventSchema(type: 'game.roster.completed.v1' | 'game.roster.reopened.v1') {
   return eventEnvelopeBase
     .extend({
@@ -1439,6 +1455,7 @@ export const gameDomainEventSchema = z
     waitlistEventSchema('game.waitlist.joined.v1'),
     waitlistEventSchema('game.waitlist.left.v1'),
     gameWaitlistPromotedEventSchema,
+    gameWaitlistPromotionDeniedEventSchema,
     rosterEventSchema('game.roster.completed.v1'),
     rosterEventSchema('game.roster.reopened.v1'),
     lifecycleEventSchema('game.started.v1'),
@@ -1572,6 +1589,7 @@ const EVENT_CONSUMER_ROUTES: Readonly<Record<GameDomainEventType, readonly GameE
     'notifications-rules',
     'realtime-invalidation',
   ],
+  'game.waitlist.promotion.denied.v1': ['notifications-rules', 'realtime-invalidation'],
   'game.roster.completed.v1': [
     'games-card-projector',
     'notifications-rules',

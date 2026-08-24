@@ -226,11 +226,35 @@ LevelEligibilityPolicyAdminView:
 LevelEligibilityPolicyState:
   type: object
   additionalProperties: false
-  required: [sportCode, levels, policies]
+  required: [sportCode, levels, policies, readiness]
   properties:
     sportCode: { type: string }
     levels: { type: array, items: { $ref: '#/CanonicalLevelAdminView' } }
     policies: { type: array, items: { $ref: '#/LevelEligibilityPolicyAdminView' } }
+    readiness: { type: array, items: { $ref: '#/LevelEligibilityReadinessAdminView' } }
+LevelEligibilityReadinessAdminView:
+  type: object
+  additionalProperties: false
+  required:
+    [
+      activityType,
+      writerAuthoritative,
+      playerProjectionReady,
+      clientRecoveryReady,
+      paymentRecoveryReady,
+      readyForBlock,
+      missingGates,
+      verifiedAt,
+    ]
+  properties:
+    activityType: { $ref: '#/ActivityTypeValue' }
+    writerAuthoritative: { type: boolean }
+    playerProjectionReady: { type: boolean }
+    clientRecoveryReady: { type: boolean }
+    paymentRecoveryReady: { type: boolean }
+    readyForBlock: { type: boolean }
+    missingGates: { type: array, items: { type: string } }
+    verifiedAt: { type: [string, 'null'], format: date-time }
 LevelEligibilityPolicyFields:
   type: object
   additionalProperties: false

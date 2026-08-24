@@ -33,6 +33,18 @@ export interface LevelEligibilityPolicyState {
   readonly sportCode: string;
   readonly levels: readonly CanonicalLevelView[];
   readonly policies: readonly LevelEligibilityPolicyView[];
+  readonly readiness: readonly LevelEligibilityReadinessView[];
+}
+
+export interface LevelEligibilityReadinessView {
+  readonly activityType: ParticipationActivityType;
+  readonly writerAuthoritative: boolean;
+  readonly playerProjectionReady: boolean;
+  readonly clientRecoveryReady: boolean;
+  readonly paymentRecoveryReady: boolean;
+  readonly readyForBlock: boolean;
+  readonly missingGates: readonly string[];
+  readonly verifiedAt: string | null;
 }
 
 export interface LevelEligibilityPolicyPublishInput {
@@ -119,6 +131,35 @@ interface LevelRow extends QueryResultRow {
   readonly scale_version: number | string;
 }
 
+interface ReadinessRow extends QueryResultRow {
+  readonly activity_type: ParticipationActivityType;
+  readonly writer_authoritative: boolean;
+  readonly player_projection_ready: boolean;
+  readonly client_recovery_ready: boolean;
+  readonly payment_recovery_ready: boolean;
+  readonly verified_at: string | null;
+}
+
+function readinessView(row: ReadinessRow): LevelEligibilityReadinessView {
+  const gates = [
+    ['writer_authoritative', row.writer_authoritative],
+    ['player_projection_ready', row.player_projection_ready],
+    ['client_recovery_ready', row.client_recovery_ready],
+    ['payment_recovery_ready', row.payment_recovery_ready],
+  ] as const;
+  const missingGates = gates.filter(([, ready]) => !ready).map(([gate]) => gate);
+  return {
+    activityType: row.activity_type,
+    writerAuthoritative: row.writer_authoritative,
+    playerProjectionReady: row.player_projection_ready,
+    clientRecoveryReady: row.client_recovery_ready,
+    paymentRecoveryReady: row.payment_recovery_ready,
+    readyForBlock: missingGates.length === 0,
+    missingGates,
+    verifiedAt: row.verified_at ? new Date(row.verified_at).toISOString() : null,
+  };
+}
+
 function numberValue(value: number | string): number {
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed)) throw new Error('LEVEL_ELIGIBILITY_INTEGER_INVALID');
@@ -169,7 +210,7 @@ export function createLevelEligibilityPolicyRepository(
   return {
     getState(tenantId, sportCode) {
       return withTenantTransaction(pool, tenantId, async (client) => {
-        const [levels, policies] = await Promise.all([
+        const [levels, policies, readiness] = await Promise.all([
           client.query<LevelRow>(
             `select id, sport_code, code, title, rank, sort_order, aliases, active, scale_version
                from eligibility.canonical_levels
@@ -184,11 +225,21 @@ export function createLevelEligibilityPolicyRepository(
               order by activity_type`,
             [tenantId, sportCode],
           ),
+          client.query<ReadinessRow>(
+            `select activity_type, writer_authoritative, player_projection_ready,
+                    client_recovery_ready, payment_recovery_ready,
+                    verified_at::text as verified_at
+               from eligibility.activation_readiness
+              where tenant_id = $1 and sport_code = $2
+              order by activity_type`,
+            [tenantId, sportCode],
+          ),
         ]);
         return {
           sportCode,
           levels: levels.rows.map(levelView),
           policies: policies.rows.map(policyView),
+          readiness: readiness.rows.map(readinessView),
         };
       });
     },
@@ -323,7 +374,7 @@ export function createLevelEligibilityPolicyRepository(
             input.upperToleranceSteps,
             input.missingActivityConstraintAction,
             input.legacyTextConstraintAction,
-            input.recheckWaitlistPromotion,
+            input.activityType === 'GAME' ? true : input.recheckWaitlistPromotion,
             currentVersion + 1,
             input.changeComment,
             input.actorUserId,

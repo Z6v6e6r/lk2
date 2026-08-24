@@ -465,6 +465,7 @@ components:
         - game.waitlist.joined.v1
         - game.waitlist.left.v1
         - game.waitlist.promoted.v1
+        - game.waitlist.promotion.denied.v1
         - game.roster.completed.v1
         - game.roster.reopened.v1
         - game.started.v1

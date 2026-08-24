@@ -7,6 +7,7 @@ import {
   canonicalWebPushSubscription,
   createNotificationEndpointCipher,
   isWebPushEndpointOriginAllowed,
+  gameEligibilityNotificationSourceEventSchema,
   notificationAudienceSelectorSchema,
   notificationSourceEventSchema,
   renderNotificationTemplate,
@@ -128,6 +129,38 @@ describe('Web Push endpoint protection', () => {
 });
 
 describe('notification domain contracts', () => {
+  it('validates the waitlist promotion denial notification contract', () => {
+    const gameId = '22222222-2222-4222-8222-222222222222';
+    const parsed = gameEligibilityNotificationSourceEventSchema.parse({
+      id: '11111111-1111-4111-8111-111111111111',
+      type: 'game.waitlist.promotion.denied.v1',
+      aggregateId: gameId,
+      tenantId: '33333333-3333-4333-8333-333333333333',
+      occurredAt: '2026-08-24T12:00:00.000Z',
+      correlationId: 'eligibility-notification-test',
+      payload: {
+        gameId,
+        aggregateRevision: '4',
+        causationId: '44444444-4444-4444-8444-444444444444',
+        actorUserId: null,
+        userId: '55555555-5555-4555-8555-555555555555',
+        waitlistEntryId: '66666666-6666-4666-8666-666666666666',
+        decisionId: '77777777-7777-4777-8777-777777777777',
+        reasonCode: 'LEVEL_TOO_LOW',
+      },
+    });
+
+    expect(resolveNotificationRecipients(parsed, { type: 'EVENT_USER', field: 'userId' })).toEqual([
+      parsed.payload.userId,
+    ]);
+    expect(() =>
+      notificationSourceEventSchema.parse({
+        ...parsed,
+        aggregateId: '88888888-8888-4888-8888-888888888888',
+      }),
+    ).toThrow();
+  });
+
   it('keeps MAX messenger delivery outside the push platform contract', async () => {
     const port: NotificationMessengerDeliveryPort = {
       connector: 'MAX',

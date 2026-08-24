@@ -58,6 +58,47 @@ function pool(query: ReturnType<typeof vi.fn>) {
 }
 
 describe('level eligibility policy repository', () => {
+  it('exposes per-activity BLOCK readiness and exact missing gates', async () => {
+    const query = vi.fn((text: string, _values?: readonly unknown[]) => {
+      void _values;
+      if (text === 'begin' || text === 'commit' || text === 'rollback') {
+        return Promise.resolve({ rows: [] });
+      }
+      if (text.includes("set_config('app.tenant_id'")) return Promise.resolve({ rows: [] });
+      if (text.includes('from eligibility.canonical_levels')) return Promise.resolve({ rows: [] });
+      if (text.includes('from eligibility.level_policies')) {
+        return Promise.resolve({ rows: [current] });
+      }
+      if (text.includes('from eligibility.activation_readiness')) {
+        return Promise.resolve({
+          rows: [
+            {
+              activity_type: 'GAME',
+              writer_authoritative: true,
+              player_projection_ready: false,
+              client_recovery_ready: true,
+              payment_recovery_ready: true,
+              verified_at: null,
+            },
+          ],
+        });
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+
+    await expect(
+      createLevelEligibilityPolicyRepository(pool(query) as never).getState(tenantId, 'PADEL'),
+    ).resolves.toMatchObject({
+      readiness: [
+        {
+          activityType: 'GAME',
+          readyForBlock: false,
+          missingGates: ['player_projection_ready'],
+        },
+      ],
+    });
+  });
+
   it('publishes one immutable version and records old/new audit plus idempotency', async () => {
     const query = vi.fn((text: string) => {
       if (text === 'begin' || text === 'commit' || text === 'rollback')
@@ -89,6 +130,38 @@ describe('level eligibility policy repository', () => {
       query.mock.calls.some(([text]) => text.includes('insert into eligibility.policy_commands')),
     ).toBe(true);
     expect(query.mock.calls.some(([text]) => text.includes('pg_advisory_xact_lock'))).toBe(true);
+  });
+
+  it('stores GAME waitlist promotion recheck as an immutable true invariant', async () => {
+    const query = vi.fn((text: string, _values?: readonly unknown[]) => {
+      void _values;
+      if (text === 'begin' || text === 'commit' || text === 'rollback') {
+        return Promise.resolve({ rows: [] });
+      }
+      if (text.includes("set_config('app.tenant_id'")) return Promise.resolve({ rows: [] });
+      if (text.includes('pg_advisory_xact_lock')) return Promise.resolve({ rows: [] });
+      if (text.includes('from eligibility.policy_commands')) return Promise.resolve({ rows: [] });
+      if (text.includes('count(*)::integer as count')) {
+        return Promise.resolve({ rows: [{ count: 7 }] });
+      }
+      if (text.includes('from eligibility.level_policies') && text.includes('for update')) {
+        return Promise.resolve({ rows: [current] });
+      }
+      if (text.includes('insert into eligibility.level_policies')) {
+        return Promise.resolve({ rows: [next] });
+      }
+      return Promise.resolve({ rows: [], rowCount: 1 });
+    });
+
+    await createLevelEligibilityPolicyRepository(pool(query) as never).publish({
+      ...input(),
+      recheckWaitlistPromotion: false,
+    });
+
+    const insert = query.mock.calls.find(([text]) =>
+      text.includes('insert into eligibility.level_policies'),
+    );
+    expect(insert?.[1]?.[8]).toBe(true);
   });
 
   it('replays the stored policy only for the same request hash', async () => {

@@ -1,5 +1,6 @@
 import {
   BOOKING_NOTIFICATION_EVENT_TYPES,
+  GAME_ELIGIBILITY_NOTIFICATION_EVENT_TYPES,
   notificationSourceEventSchema,
 } from '@phub/notifications';
 import type { Channel, ConsumeMessage } from 'amqplib';
@@ -9,7 +10,10 @@ import type { Pool } from 'pg';
 import { applyNotificationSourceEvent } from './notification-projector.js';
 
 export const NOTIFICATION_PROJECTOR_QUEUE = 'phub.notification-intent-projector.v1';
-export const NOTIFICATION_SOURCE_ROUTING_KEYS = BOOKING_NOTIFICATION_EVENT_TYPES;
+export const NOTIFICATION_SOURCE_ROUTING_KEYS = [
+  ...BOOKING_NOTIFICATION_EVENT_TYPES,
+  ...GAME_ELIGIBILITY_NOTIFICATION_EVENT_TYPES,
+] as const;
 
 async function handleMessage(options: {
   readonly channel: Channel;

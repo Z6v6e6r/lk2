@@ -12,13 +12,17 @@ export const LEVEL_ELIGIBILITY_REASON_CODES = [
   'LEVEL_ALLOWED',
   'ACTIVITY_HAS_NO_LEVEL_RESTRICTION',
   'PLAYER_LEVEL_REQUIRED',
+  'PLAYER_LEVEL_STALE',
   'PLAYER_LEVEL_UNKNOWN',
+  'LEVEL_TOO_LOW',
+  'LEVEL_TOO_HIGH',
   'LEVEL_NOT_ALLOWED',
   'LEVEL_SPORT_MISMATCH',
   'LEVEL_SCALE_VERSION_MISMATCH',
   'ACTIVITY_LEVEL_UNDEFINED',
   'ACTIVITY_LEVEL_INVALID',
   'LEVEL_POLICY_MISCONFIGURED',
+  'POLICY_UNAVAILABLE',
   'PERSONAL_INVITE_BYPASS',
   'ORGANIZER_CREATION_BYPASS',
   'LEGACY_LEVEL_CONSTRAINT',
@@ -77,6 +81,7 @@ export interface LevelEligibilityContext {
   readonly sportId: string;
   readonly playerId: string;
   readonly playerLevel?: PlayerSportLevel | null;
+  readonly playerLevelStale?: boolean;
   readonly playerLevelUnknown?: boolean;
   readonly activityLevelConstraint: ActivityLevelConstraint;
   readonly validPersonalInvitationId?: string;
@@ -111,6 +116,17 @@ function nonMatchingOutcome(mode: LevelEligibilityMode): EligibilityRuleOutcome 
   return 'FAIL';
 }
 
+function nonMatchingResult(
+  mode: LevelEligibilityMode,
+  reasonCode: LevelEligibilityReasonCode,
+  metadata?: Readonly<Record<string, unknown>>,
+): EligibilityRuleResult {
+  return result(nonMatchingOutcome(mode), reasonCode, {
+    ...(metadata ?? {}),
+    ...(mode === 'SHADOW' ? { wouldBlock: true } : {}),
+  });
+}
+
 function missingConstraint(policy: LevelEligibilityPolicy): EligibilityRuleResult {
   if (policy.missingActivityConstraintAction === 'ALLOW') {
     return result('PASS', 'ACTIVITY_LEVEL_UNDEFINED');
@@ -118,10 +134,7 @@ function missingConstraint(policy: LevelEligibilityPolicy): EligibilityRuleResul
   if (policy.missingActivityConstraintAction === 'WARN') {
     return result('WARN', 'ACTIVITY_LEVEL_UNDEFINED');
   }
-  return result(
-    policy.mode === 'BLOCK' ? 'FAIL' : nonMatchingOutcome(policy.mode),
-    'ACTIVITY_LEVEL_UNDEFINED',
-  );
+  return nonMatchingResult(policy.mode, 'ACTIVITY_LEVEL_UNDEFINED');
 }
 
 export function evaluateLevelEligibility(
@@ -154,26 +167,20 @@ export function evaluateLevelEligibility(
   ) {
     return result('BYPASS', 'ORGANIZER_CREATION_BYPASS');
   }
+  if (context.playerLevelStale) {
+    return nonMatchingResult(policy.mode, 'PLAYER_LEVEL_STALE');
+  }
   if (context.playerLevelUnknown) {
-    return result(nonMatchingOutcome(policy.mode), 'PLAYER_LEVEL_UNKNOWN');
+    return nonMatchingResult(policy.mode, 'PLAYER_LEVEL_UNKNOWN');
   }
   if (!context.playerLevel) {
-    return result(nonMatchingOutcome(policy.mode), 'PLAYER_LEVEL_REQUIRED');
+    return nonMatchingResult(policy.mode, 'PLAYER_LEVEL_REQUIRED');
   }
   if (context.playerLevel.sportId !== context.sportId) {
-    return result(nonMatchingOutcome(policy.mode), 'LEVEL_SPORT_MISMATCH');
+    return nonMatchingResult(policy.mode, 'LEVEL_SPORT_MISMATCH');
   }
 
   const constraint = context.activityLevelConstraint;
-  if (
-    constraint.scaleVersion !== undefined &&
-    context.playerLevel.scaleVersion !== constraint.scaleVersion
-  ) {
-    return result(nonMatchingOutcome(policy.mode), 'LEVEL_SCALE_VERSION_MISMATCH', {
-      playerScaleVersion: context.playerLevel.scaleVersion,
-      constraintScaleVersion: constraint.scaleVersion,
-    });
-  }
   if (
     constraint.dataQuality === 'MISSING' ||
     constraint.minRank === undefined ||
@@ -187,7 +194,16 @@ export function evaluateLevelEligibility(
     !Number.isSafeInteger(constraint.maxRank) ||
     constraint.minRank > constraint.maxRank
   ) {
-    return result(nonMatchingOutcome(policy.mode), 'ACTIVITY_LEVEL_INVALID');
+    return nonMatchingResult(policy.mode, 'ACTIVITY_LEVEL_INVALID');
+  }
+  if (
+    constraint.scaleVersion !== undefined &&
+    context.playerLevel.scaleVersion !== constraint.scaleVersion
+  ) {
+    return nonMatchingResult(policy.mode, 'LEVEL_SCALE_VERSION_MISMATCH', {
+      playerScaleVersion: context.playerLevel.scaleVersion,
+      constraintScaleVersion: constraint.scaleVersion,
+    });
   }
   if (constraint.source === 'LEGACY_TEXT_FALLBACK') {
     return result(
@@ -212,7 +228,11 @@ export function evaluateLevelEligibility(
   ) {
     return result('PASS', 'LEVEL_ALLOWED', metadata);
   }
-  return result(nonMatchingOutcome(policy.mode), 'LEVEL_NOT_ALLOWED', metadata);
+  return nonMatchingResult(
+    policy.mode,
+    context.playerLevel.rank < effectiveMinRank ? 'LEVEL_TOO_LOW' : 'LEVEL_TOO_HIGH',
+    metadata,
+  );
 }
 
 export function levelResultAllowsParticipation(resultValue: EligibilityRuleResult): boolean {

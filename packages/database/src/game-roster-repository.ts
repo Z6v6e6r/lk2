@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 import {
   GameDomainError,
@@ -35,6 +35,24 @@ export type GameRosterCommandErrorCode =
   | 'GAME_RESERVATION_EXPIRED'
   | 'GAME_RESERVATION_NOT_FOUND';
 
+export type ParticipationRecoveryAction =
+  'SELECT_LEVEL' | 'COMPLETE_LEVEL_ASSESSMENT' | 'REFRESH_ACTIVITY' | 'CONTACT_SUPPORT' | 'NONE';
+
+export interface ParticipationDecision {
+  readonly allowed: boolean;
+  readonly decisionId: string;
+  readonly mode: LevelEligibilityPolicy['mode'];
+  readonly code: LevelEligibilityReasonCode;
+  readonly recoveryAction: ParticipationRecoveryAction;
+  readonly retryable: boolean;
+  readonly policyVersion: number;
+  readonly wouldBlock?: boolean;
+  readonly warning?: {
+    readonly code: LevelEligibilityReasonCode;
+    readonly message: string;
+  };
+}
+
 export type GameRosterCommandResult =
   | {
       readonly outcome: 'applied';
@@ -49,12 +67,14 @@ export type GameRosterCommandResult =
       readonly expiresAt?: string;
       readonly committedAt: string;
       readonly replayed: boolean;
+      readonly eligibility?: ParticipationDecision;
     }
   | {
       readonly outcome: 'rejected';
       readonly code: GameRosterCommandErrorCode;
       readonly currentRevision?: number;
       readonly replayed: boolean;
+      readonly eligibility?: ParticipationDecision;
     }
   | { readonly outcome: 'idempotency_conflict' };
 
@@ -112,6 +132,7 @@ export interface LevelEligibilityDecisionTelemetry {
   readonly mode: LevelEligibilityPolicy['mode'];
   readonly outcome: ReturnType<typeof evaluateLevelEligibility>['outcome'];
   readonly reasonCode: ReturnType<typeof evaluateLevelEligibility>['reasonCode'];
+  readonly wouldBlock: boolean;
   readonly policyVersion: number;
   readonly levelScaleVersion: number | null;
   readonly constraintSource: string;
@@ -162,6 +183,7 @@ export interface GameRosterOperation {
   readonly committedAt: string;
   readonly result?: Extract<GameRosterCommandResult, { outcome: 'applied' }>;
   readonly errorCode?: GameRosterCommandErrorCode;
+  readonly eligibility?: ParticipationDecision;
 }
 
 interface CommandRow extends QueryResultRow {
@@ -279,12 +301,107 @@ interface EligibilityFactsRow extends QueryResultRow {
   readonly player_rank: number | null;
   readonly player_level_source: string | null;
   readonly player_scale_version: number | null;
+  readonly player_level_updated_at: Date | string | null;
   readonly minimum_level_id: string | null;
   readonly maximum_level_id: string | null;
   readonly minimum_rank: number | null;
   readonly maximum_rank: number | null;
+  readonly minimum_scale_version: number | null;
+  readonly maximum_scale_version: number | null;
   readonly constraint_scale_version: number | null;
   readonly valid_invitation_id: string | null;
+}
+
+const ELIGIBILITY_PUBLIC_MESSAGES: Partial<Record<LevelEligibilityReasonCode, string>> = {
+  PLAYER_LEVEL_REQUIRED: 'Укажите уровень, чтобы присоединиться к игре.',
+  PLAYER_LEVEL_STALE: 'Обновите уровень, чтобы продолжить.',
+  PLAYER_LEVEL_UNKNOWN: 'Не удалось корректно определить ваш уровень.',
+  LEVEL_TOO_LOW: 'Уровень игры выше указанного вами уровня.',
+  LEVEL_TOO_HIGH: 'Уровень игры ниже указанного вами уровня.',
+  LEVEL_SPORT_MISMATCH: 'Уровень указан для другого вида спорта.',
+  LEVEL_SCALE_VERSION_MISMATCH: 'Версия уровня устарела. Обновите уровень и повторите.',
+  ACTIVITY_LEVEL_UNDEFINED: 'Для игры не настроен диапазон уровней.',
+  ACTIVITY_LEVEL_INVALID: 'Диапазон уровней игры настроен некорректно.',
+  LEVEL_POLICY_MISCONFIGURED: 'Правило допуска временно настроено некорректно.',
+  POLICY_UNAVAILABLE: 'Правило допуска временно недоступно.',
+};
+
+function recoveryAction(code: LevelEligibilityReasonCode): ParticipationRecoveryAction {
+  if (code === 'PLAYER_LEVEL_REQUIRED') return 'SELECT_LEVEL';
+  if (
+    code === 'PLAYER_LEVEL_STALE' ||
+    code === 'PLAYER_LEVEL_UNKNOWN' ||
+    code === 'LEVEL_SCALE_VERSION_MISMATCH'
+  ) {
+    return 'COMPLETE_LEVEL_ASSESSMENT';
+  }
+  if (code === 'ACTIVITY_LEVEL_UNDEFINED' || code === 'ACTIVITY_LEVEL_INVALID') {
+    return 'REFRESH_ACTIVITY';
+  }
+  if (code === 'LEVEL_POLICY_MISCONFIGURED' || code === 'POLICY_UNAVAILABLE') {
+    return 'CONTACT_SUPPORT';
+  }
+  return 'NONE';
+}
+
+function safeDecision(
+  decisionId: string,
+  mode: LevelEligibilityPolicy['mode'],
+  policyVersion: number,
+  decision: ReturnType<typeof evaluateLevelEligibility>,
+): ParticipationDecision {
+  const action = recoveryAction(decision.reasonCode);
+  const message = ELIGIBILITY_PUBLIC_MESSAGES[decision.reasonCode];
+  return {
+    allowed: decision.outcome !== 'FAIL',
+    decisionId,
+    mode,
+    code: decision.reasonCode,
+    recoveryAction: action,
+    retryable: action !== 'NONE' && action !== 'CONTACT_SUPPORT',
+    policyVersion,
+    ...(decision.metadata?.wouldBlock === true ? { wouldBlock: true } : {}),
+    ...(decision.outcome === 'WARN' && message
+      ? { warning: { code: decision.reasonCode, message } }
+      : {}),
+  };
+}
+
+function compatibleRosterErrorCode(code: LevelEligibilityReasonCode): LevelEligibilityReasonCode {
+  if (code === 'LEVEL_TOO_LOW' || code === 'LEVEL_TOO_HIGH') return 'LEVEL_NOT_ALLOWED';
+  if (code === 'PLAYER_LEVEL_STALE') return 'PLAYER_LEVEL_UNKNOWN';
+  if (code === 'POLICY_UNAVAILABLE') return 'LEVEL_POLICY_MISCONFIGURED';
+  return code;
+}
+
+function isPromotionSystemFailure(code: LevelEligibilityReasonCode): boolean {
+  return [
+    'POLICY_UNAVAILABLE',
+    'LEVEL_POLICY_MISCONFIGURED',
+    'ACTIVITY_LEVEL_UNDEFINED',
+    'ACTIVITY_LEVEL_INVALID',
+  ].includes(code);
+}
+
+interface ParticipationEligibilityGateway {
+  evaluate(
+    client: PoolClient,
+    input: {
+      readonly tenantId: string;
+      readonly gameId: string;
+      readonly playerId: string;
+      readonly invitationId?: string;
+      readonly action: 'JOIN' | 'JOIN_WAITLIST' | 'PROMOTE_WAITLIST';
+      readonly correlationId: string;
+    },
+    game: LockedGameRow,
+    onEligibilityDecision?: (event: LevelEligibilityDecisionTelemetry) => void,
+  ): Promise<{
+    readonly decisionId: string;
+    readonly deniedCode?: LevelEligibilityReasonCode;
+    readonly validatedInvitationId?: string;
+    readonly decision: ParticipationDecision;
+  }>;
 }
 
 interface CapacityRow extends QueryResultRow {
@@ -368,9 +485,17 @@ function replayCommand(
     return { outcome: 'idempotency_conflict' };
   }
   if (row.state === 'FAILED' && row.error_code) {
+    const stored =
+      row.result_payload &&
+      typeof row.result_payload === 'object' &&
+      !Array.isArray(row.result_payload)
+        ? (row.result_payload as Partial<Extract<GameRosterCommandResult, { outcome: 'rejected' }>>)
+        : undefined;
     return {
       outcome: 'rejected',
       code: row.error_code as GameRosterCommandErrorCode,
+      ...(stored?.currentRevision === undefined ? {} : { currentRevision: stored.currentRevision }),
+      ...(stored?.eligibility ? { eligibility: stored.eligibility } : {}),
       replayed: true,
     };
   }
@@ -605,6 +730,7 @@ async function evaluateGameParticipationEligibility(
   readonly decisionId: string;
   readonly deniedCode?: LevelEligibilityReasonCode;
   readonly validatedInvitationId?: string;
+  readonly decision: ParticipationDecision;
 }> {
   const facts = await queryOne<EligibilityFactsRow>(
     client,
@@ -619,10 +745,13 @@ async function evaluateGameParticipationEligibility(
        player_level.rank as player_rank,
        player.source as player_level_source,
        player.scale_version as player_scale_version,
+       player.updated_at as player_level_updated_at,
        minimum.id as minimum_level_id,
        maximum.id as maximum_level_id,
        minimum.rank as minimum_rank,
        maximum.rank as maximum_rank,
+       minimum.scale_version as minimum_scale_version,
+       maximum.scale_version as maximum_scale_version,
        greatest(minimum.scale_version, maximum.scale_version) as constraint_scale_version,
        invitation.id as valid_invitation_id
       from (values (1)) source(marker)
@@ -632,9 +761,15 @@ async function evaluateGameParticipationEligibility(
           from eligibility.level_policies
          where tenant_id = $1 and sport_code = $3 and activity_type = 'GAME' and active
          limit 1
+         for share
       ) policy on true
-      left join eligibility.player_sport_levels player
-        on player.tenant_id = $1 and player.player_id = $2 and player.sport_code = $3
+      left join lateral (
+        select tenant_id, sport_code, level_id, source, scale_version, updated_at
+          from eligibility.player_sport_levels
+         where tenant_id = $1 and player_id = $2 and sport_code = $3
+         limit 1
+         for share
+      ) player on true
       left join eligibility.canonical_levels player_level
         on player_level.tenant_id = player.tenant_id
        and player_level.sport_code = player.sport_code
@@ -695,7 +830,7 @@ async function evaluateGameParticipationEligibility(
         version: Number(facts.policy_version),
       }
     : {
-        mode: 'OFF',
+        mode: 'BLOCK',
         lowerToleranceSteps: 0,
         upperToleranceSteps: 0,
         missingActivityConstraintAction: 'ALLOW',
@@ -711,53 +846,85 @@ async function evaluateGameParticipationEligibility(
     facts.minimum_level_id !== null &&
     facts.maximum_level_id !== null &&
     facts.minimum_rank !== null &&
-    facts.maximum_rank !== null;
+    facts.maximum_rank !== null &&
+    facts.minimum_scale_version !== null &&
+    facts.minimum_scale_version === facts.maximum_scale_version;
   const source = game.min_level_id && game.max_level_id ? 'CANONICAL' : 'LEGACY_GAME_SETTINGS';
-  const decision = evaluateLevelEligibility(
-    {
-      action: input.action,
-      activityType: 'GAME',
-      activityId: input.gameId,
-      sportId: game.sport_code,
-      playerId: input.playerId,
-      playerLevel:
-        facts.player_level_id && facts.player_rank !== null && facts.player_level_source
-          ? {
-              playerId: input.playerId,
-              sportId: game.sport_code,
-              levelId: facts.player_level_id,
-              rank: Number(facts.player_rank),
-              source: facts.player_level_source as NonNullable<
-                LevelEligibilityContext['playerLevel']
-              >['source'],
-              scaleVersion: Number(facts.player_scale_version),
-            }
-          : null,
-      activityLevelConstraint: !hasDeclaredRange
-        ? { mode: 'NONE', source, dataQuality: 'VALID' }
-        : {
-            mode: 'RANGE',
-            ...(facts.minimum_level_id ? { minLevelId: facts.minimum_level_id } : {}),
-            ...(facts.maximum_level_id ? { maxLevelId: facts.maximum_level_id } : {}),
-            ...(facts.minimum_rank === null ? {} : { minRank: Number(facts.minimum_rank) }),
-            ...(facts.maximum_rank === null ? {} : { maxRank: Number(facts.maximum_rank) }),
-            source,
-            dataQuality: hasCompleteCanonicalRange ? 'VALID' : 'INVALID',
-            ...(facts.constraint_scale_version === null
-              ? {}
-              : { scaleVersion: Number(facts.constraint_scale_version) }),
-          },
-      ...(facts.valid_invitation_id
-        ? { validPersonalInvitationId: facts.valid_invitation_id }
-        : {}),
-    },
-    policy,
-  );
+  const decision = facts.mode
+    ? evaluateLevelEligibility(
+        {
+          action: input.action,
+          activityType: 'GAME',
+          activityId: input.gameId,
+          sportId: game.sport_code,
+          playerId: input.playerId,
+          playerLevel:
+            facts.player_level_id && facts.player_rank !== null && facts.player_level_source
+              ? {
+                  playerId: input.playerId,
+                  sportId: game.sport_code,
+                  levelId: facts.player_level_id,
+                  rank: Number(facts.player_rank),
+                  source: facts.player_level_source as NonNullable<
+                    LevelEligibilityContext['playerLevel']
+                  >['source'],
+                  scaleVersion: Number(facts.player_scale_version),
+                }
+              : null,
+          activityLevelConstraint: !hasDeclaredRange
+            ? { mode: 'NONE', source, dataQuality: 'VALID' }
+            : {
+                mode: 'RANGE',
+                ...(facts.minimum_level_id ? { minLevelId: facts.minimum_level_id } : {}),
+                ...(facts.maximum_level_id ? { maxLevelId: facts.maximum_level_id } : {}),
+                ...(facts.minimum_rank === null ? {} : { minRank: Number(facts.minimum_rank) }),
+                ...(facts.maximum_rank === null ? {} : { maxRank: Number(facts.maximum_rank) }),
+                source,
+                dataQuality: hasCompleteCanonicalRange ? 'VALID' : 'INVALID',
+                ...(facts.constraint_scale_version === null
+                  ? {}
+                  : { scaleVersion: Number(facts.constraint_scale_version) }),
+              },
+          ...(facts.valid_invitation_id
+            ? { validPersonalInvitationId: facts.valid_invitation_id }
+            : {}),
+        },
+        policy,
+      )
+    : {
+        ruleCode: 'LEVEL_RANGE' as const,
+        outcome: 'FAIL' as const,
+        reasonCode: 'POLICY_UNAVAILABLE' as const,
+        publicMessageKey: 'eligibility.policy_unavailable',
+      };
   const decisionId = randomUUID();
   const usedInvitationId =
     decision.reasonCode === 'PERSONAL_INVITE_BYPASS' ? facts.valid_invitation_id : null;
   const status =
     decision.outcome === 'FAIL' ? 'DENIED' : decision.outcome === 'WARN' ? 'WARNING' : 'ALLOWED';
+  const decisionFacts = {
+    activityRevision: positiveInteger(game.revision),
+    playerLevelUpdatedAt:
+      facts.player_level_updated_at === null ? null : timestamp(facts.player_level_updated_at),
+    playerLevelId: facts.player_level_id,
+    playerRank: facts.player_rank,
+    playerScaleVersion: facts.player_scale_version,
+    minimumLevelId: facts.minimum_level_id,
+    minimumRank: facts.minimum_rank,
+    minimumScaleVersion: facts.minimum_scale_version,
+    maximumLevelId: facts.maximum_level_id,
+    maximumRank: facts.maximum_rank,
+    maximumScaleVersion: facts.maximum_scale_version,
+    policy: {
+      mode: policy.mode,
+      lowerToleranceSteps: policy.lowerToleranceSteps,
+      upperToleranceSteps: policy.upperToleranceSteps,
+      missingActivityConstraintAction: policy.missingActivityConstraintAction,
+      legacyTextConstraintAction: policy.legacyTextConstraintAction,
+      version: policy.version,
+    },
+  };
+  const factsHash = createHash('sha256').update(JSON.stringify(decisionFacts)).digest('hex');
   await client.query(
     `insert into eligibility.decisions (
        tenant_id, id, player_id, activity_type, activity_id, action, status,
@@ -778,7 +945,14 @@ async function evaluateGameParticipationEligibility(
       facts.constraint_scale_version ?? facts.player_scale_version,
       source,
       usedInvitationId,
-      JSON.stringify({ ...decision.metadata, correlationId: input.correlationId }),
+      JSON.stringify({
+        ...decision.metadata,
+        correlationId: input.correlationId,
+        activityRevision: decisionFacts.activityRevision,
+        playerLevelUpdatedAt: decisionFacts.playerLevelUpdatedAt,
+        facts: decisionFacts,
+        factsHash,
+      }),
     ],
   );
   try {
@@ -794,6 +968,7 @@ async function evaluateGameParticipationEligibility(
       mode: policy.mode,
       outcome: decision.outcome,
       reasonCode: decision.reasonCode,
+      wouldBlock: decision.metadata?.wouldBlock === true,
       policyVersion: policy.version,
       levelScaleVersion:
         facts.constraint_scale_version === null && facts.player_scale_version === null
@@ -808,6 +983,7 @@ async function evaluateGameParticipationEligibility(
   }
   return {
     decisionId,
+    decision: safeDecision(decisionId, policy.mode, policy.version, decision),
     ...(decision.outcome === 'FAIL' ? { deniedCode: decision.reasonCode } : {}),
     ...(usedInvitationId ? { validatedInvitationId: usedInvitationId } : {}),
   };
@@ -909,12 +1085,13 @@ async function storeRejected(
   code: GameRosterCommandErrorCode,
   aggregateExists: boolean,
   currentRevision?: number,
+  eligibility?: ParticipationDecision,
 ): Promise<GameRosterCommandResult> {
   await client.query(
     `insert into games.command_idempotency (
        tenant_id, id, actor_user_id, principal_key, idempotency_key,
-       command_type, request_hash, aggregate_id, state, error_code, completed_at
-     ) values ($1, $2, $3, $4, $5, $6, $7, $8, 'FAILED', $9, now())`,
+       command_type, request_hash, aggregate_id, state, error_code, result_payload, completed_at
+     ) values ($1, $2, $3, $4, $5, $6, $7, $8, 'FAILED', $9, $10::jsonb, now())`,
     [
       input.tenantId,
       commandId,
@@ -925,6 +1102,12 @@ async function storeRejected(
       input.requestHash,
       aggregateExists ? input.gameId : null,
       code,
+      JSON.stringify({
+        outcome: 'rejected',
+        code,
+        ...(currentRevision === undefined ? {} : { currentRevision }),
+        ...(eligibility ? { eligibility } : {}),
+      }),
     ],
   );
   await client.query(
@@ -946,6 +1129,7 @@ async function storeRejected(
     outcome: 'rejected',
     code,
     ...(currentRevision === undefined ? {} : { currentRevision }),
+    ...(eligibility ? { eligibility } : {}),
     replayed: false,
   };
 }
@@ -1152,9 +1336,36 @@ async function scheduleWaitlistPromotion(
   await client.query(
     `insert into games.scheduled_commands (
        tenant_id, game_id, command_type, due_at, expected_revision, payload
-     ) values ($1, $2, 'game.waitlist.promote.v1', now(), $3, $4::jsonb)`,
-    [input.tenantId, input.gameId, revision, JSON.stringify({ waitlistEntryId: entry.id })],
+     ) select $1, $2, 'game.waitlist.promote.v1', now(), $3, $4::jsonb
+        where not exists (
+          select 1 from games.scheduled_commands command
+           where command.tenant_id = $1 and command.game_id = $2
+             and command.command_type = 'game.waitlist.promote.v1'
+             and command.payload->>'waitlistEntryId' = $5
+             and (command.state in ('PENDING', 'PROCESSING')
+                  or (command.state = 'FAILED' and command.attempts < 20))
+        )`,
+    [
+      input.tenantId,
+      input.gameId,
+      revision,
+      JSON.stringify({ waitlistEntryId: entry.id }),
+      entry.id,
+    ],
   );
+}
+
+async function scheduleWaitlistPromotionIfCapacity(
+  client: PoolClient,
+  input: Pick<GameRosterUserCommandInput, 'tenantId' | 'gameId'>,
+  game: Pick<LockedGameRow, 'capacity' | 'lifecycle_state'>,
+  revision: number,
+): Promise<void> {
+  if (game.lifecycle_state !== 'SCHEDULED') return;
+  const capacity = await loadCapacity(client, input.tenantId, input.gameId);
+  if (capacity.active_participant_count + capacity.active_reservation_count >= game.capacity)
+    return;
+  await scheduleWaitlistPromotion(client, input, revision);
 }
 
 export function createGameRosterRepository(
@@ -1163,6 +1374,9 @@ export function createGameRosterRepository(
     readonly onEligibilityDecision?: (event: LevelEligibilityDecisionTelemetry) => void;
   } = {},
 ): GameRosterRepository {
+  const participationEligibilityGateway: ParticipationEligibilityGateway = {
+    evaluate: evaluateGameParticipationEligibility,
+  };
   return {
     join(input) {
       const commandType = 'game.join.v1';
@@ -1180,7 +1394,7 @@ export function createGameRosterRepository(
         );
         if (rejected) return rejected;
 
-        const eligibility = await evaluateGameParticipationEligibility(
+        const eligibility = await participationEligibilityGateway.evaluate(
           client,
           {
             tenantId: input.tenantId,
@@ -1199,9 +1413,10 @@ export function createGameRosterRepository(
             input,
             commandType,
             prepared.commandId,
-            eligibility.deniedCode,
+            compatibleRosterErrorCode(eligibility.deniedCode),
             true,
             positiveInteger(prepared.game.revision),
+            eligibility.decision,
           );
         }
 
@@ -1245,6 +1460,7 @@ export function createGameRosterRepository(
             expiresAt,
             committedAt: now,
             replayed: false,
+            eligibility: eligibility.decision,
           };
           await client.query(
             `insert into games.scheduled_commands (
@@ -1296,6 +1512,7 @@ export function createGameRosterRepository(
           participationId: participation.id,
           committedAt: now,
           replayed: false,
+          eligibility: eligibility.decision,
         };
         const base = eventBase(input, prepared.commandId, revision, now);
         await appendEvent(client, {
@@ -1605,7 +1822,7 @@ export function createGameRosterRepository(
           () => assertCanJoinWaitlistFacts(commandFacts(prepared.game, prepared.facts), now),
         );
         if (rejected) return rejected;
-        const eligibility = await evaluateGameParticipationEligibility(
+        const eligibility = await participationEligibilityGateway.evaluate(
           client,
           {
             tenantId: input.tenantId,
@@ -1624,9 +1841,10 @@ export function createGameRosterRepository(
             input,
             commandType,
             prepared.commandId,
-            eligibility.deniedCode,
+            compatibleRosterErrorCode(eligibility.deniedCode),
             true,
             positiveInteger(prepared.game.revision),
+            eligibility.decision,
           );
         }
         const entry = await queryOne<WaitlistRow>(
@@ -1659,6 +1877,7 @@ export function createGameRosterRepository(
           position,
           committedAt: now,
           replayed: false,
+          eligibility: eligibility.decision,
         };
         const base = eventBase(input, prepared.commandId, revision, now);
         await appendEvent(client, {
@@ -1903,6 +2122,7 @@ export function createGameRosterRepository(
           !entry ||
           entry.state !== 'ACTIVE'
         ) {
+          await scheduleWaitlistPromotionIfCapacity(client, input, game, currentRevision);
           const result = {
             outcome: 'no_op' as const,
             commandId: input.commandId,
@@ -1914,7 +2134,7 @@ export function createGameRosterRepository(
           return result;
         }
 
-        const eligibility = await evaluateGameParticipationEligibility(
+        const eligibility = await participationEligibilityGateway.evaluate(
           client,
           {
             tenantId: input.tenantId,
@@ -1928,6 +2148,9 @@ export function createGameRosterRepository(
           options.onEligibilityDecision,
         );
         if (eligibility.deniedCode) {
+          if (isPromotionSystemFailure(eligibility.deniedCode)) {
+            throw new Error('GAME_WAITLIST_PROMOTION_ELIGIBILITY_UNAVAILABLE');
+          }
           await client.query(
             `update games.waitlist_entries
                 set state = 'EXPIRED', terminal_at = now(), updated_at = now(),
@@ -1936,7 +2159,19 @@ export function createGameRosterRepository(
             [input.tenantId, input.gameId, entry.id, eligibility.decisionId ?? null],
           );
           const revision = await bumpRevision(client, input);
-          await scheduleWaitlistPromotion(client, input, revision);
+          const denied = processEventBase(input, revision, timestamp(game.database_now));
+          await appendEvent(client, {
+            ...denied,
+            type: 'game.waitlist.promotion.denied.v1',
+            payload: {
+              ...denied.payload,
+              userId: entry.user_id,
+              waitlistEntryId: entry.id,
+              decisionId: eligibility.decisionId,
+              reasonCode: eligibility.deniedCode,
+            },
+          });
+          await scheduleWaitlistPromotionIfCapacity(client, input, game, revision);
           const result = {
             outcome: 'applied' as const,
             commandId: input.commandId,
@@ -2058,6 +2293,7 @@ export function createGameRosterRepository(
             });
           }
         }
+        await scheduleWaitlistPromotionIfCapacity(client, input, game, revision);
         const result = {
           outcome: 'applied' as const,
           commandId: input.commandId,
@@ -2086,6 +2322,14 @@ export function createGameRosterRepository(
         const committedAt = timestamp(row.completed_at);
         if (row.state === 'FAILED') {
           if (!row.error_code) throw new Error('GAME_OPERATION_ERROR_MISSING');
+          const stored =
+            row.result_payload &&
+            typeof row.result_payload === 'object' &&
+            !Array.isArray(row.result_payload)
+              ? (row.result_payload as Partial<
+                  Extract<GameRosterCommandResult, { outcome: 'rejected' }>
+                >)
+              : undefined;
           return {
             commandId: row.id,
             commandType: row.command_type,
@@ -2093,6 +2337,7 @@ export function createGameRosterRepository(
             state: 'FAILED',
             committedAt,
             errorCode: row.error_code as GameRosterCommandErrorCode,
+            ...(stored?.eligibility ? { eligibility: stored.eligibility } : {}),
           };
         }
         const result = parseAppliedResult(row.result_payload);
