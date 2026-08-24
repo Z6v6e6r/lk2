@@ -399,7 +399,7 @@ jobs:
             )
           ' publication-evidence/"$SERVICE"-attestation-manifests/*.json >/dev/null
           jq -s -r '.[].layers[] |
-            [.digest, .annotations["in-toto.io/predicate-type"]] | @tsv' \
+            [.digest, .annotations["in-toto.io/predicate-type"], .size, .mediaType] | @tsv' \
             publication-evidence/"$SERVICE"-attestation-manifests/*.json \
             | sort -u > "publication-evidence/$SERVICE-attestation-layers.tsv"
           cut -f 1 "publication-evidence/$SERVICE-attestation-layers.tsv" \
@@ -411,27 +411,12 @@ jobs:
             "https://ghcr.io/token?service=ghcr.io&scope=repository%3Az6v6e6r%2Fphub-$SERVICE%3Apull" \
             | jq -r '.token // empty')"
           printf '%s' "$registry_token" | grep -Eq '^[A-Za-z0-9._~+/-]+=*$'
-          download_attestation_statement() {
-            statement_digest=$1
-            statement_path=$2
-            temporary="$statement_path.attempt-$$"
-            rm -f "$temporary"
-            {
-              printf 'header = "Authorization: Bearer %s"\n' "$registry_token"
-            } | curl --fail --silent --show-error --config - \
-              "https://ghcr.io/v2/z6v6e6r/phub-$SERVICE/blobs/$statement_digest" \
-              --output "$temporary"
-            test "$(sha256sum "$temporary" | awk '{print "sha256:" $1}')" = "$statement_digest" || {
-              echo "::error::PHUB_GHCR_CUSTODY_WRONG_BLOB_DIGEST|digest=$statement_digest" >&2
-              rm -f "$temporary"
-              return 1
-            }
-            mv "$temporary" "$statement_path"
-          }
-          while IFS=$'\t' read -r statement_digest predicate_type; do
+          while IFS=$'\t' read -r statement_digest predicate_type statement_size statement_media_type; do
             printf '%s' "$statement_digest" | grep -Eq '^sha256:[0-9a-f]{64}$'
             phub_ghcr_custody_retry "$SERVICE-attestation-statement-${statement_digest#sha256:}" \
-              download_attestation_statement "$statement_digest" \
+              phub_ghcr_custody_fetch_exact_statement_blob \
+              "$SERVICE" "$statement_digest" "$statement_size" "$statement_media_type" \
+              "$registry_token" \
               "publication-evidence/$SERVICE-attestation-statements/${statement_digest#sha256:}.json"
             test "$(sha256sum "publication-evidence/$SERVICE-attestation-statements/${statement_digest#sha256:}.json" \
               | awk '{print "sha256:" $1}')" = "$statement_digest"
