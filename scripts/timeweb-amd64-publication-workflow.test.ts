@@ -867,4 +867,246 @@ describe('Timeweb amd64 publication workflow', () => {
       ]).status,
     ).not.toBe(0);
   });
+
+  it('bounds the full PR coverage gate and emits signal-driven hanging handle evidence', async () => {
+    const workflow = await readFile(
+      new URL('../.github/workflows/pull-request.yaml', import.meta.url),
+      'utf8',
+    );
+    const diagnosticsRunner = await readFile(
+      new URL('./run-ci-tests-with-diagnostics.sh', import.meta.url),
+      'utf8',
+    );
+    const document = parse(workflow) as {
+      readonly jobs?: {
+        readonly quality?: {
+          readonly steps?: readonly {
+            readonly if?: string;
+            readonly name?: string;
+            readonly run?: string;
+            readonly ['timeout-minutes']?: number;
+            readonly uses?: string;
+            readonly with?: {
+              readonly ['if-no-files-found']?: string;
+              readonly path?: string;
+            };
+          }[];
+        };
+        readonly ['secret-scan']?: {
+          readonly permissions?: Readonly<Record<string, string>>;
+          readonly steps?: readonly {
+            readonly if?: string;
+            readonly name?: string;
+            readonly run?: string;
+            readonly uses?: string;
+            readonly with?: {
+              readonly ['if-no-files-found']?: string;
+              readonly path?: string;
+              readonly ['retention-days']?: number;
+            };
+          }[];
+        };
+      };
+    };
+    const testStep = document.jobs?.quality?.steps?.find(
+      ({ name }) => name === 'Unit and integration tests',
+    );
+    const artifactStep = document.jobs?.quality?.steps?.find(
+      ({ name }) => name === 'Upload test and coverage diagnostics',
+    );
+    const secretScanJob = document.jobs?.['secret-scan'];
+    const secretRange = secretScanJob?.steps?.find(
+      ({ name }) => name === 'Resolve the complete pull request range',
+    );
+    const secretScan = secretScanJob?.steps?.find(
+      ({ name }) => name === 'Scan complete pull request graph for secrets',
+    );
+    const secretArtifact = secretScanJob?.steps?.find(
+      ({ name }) => name === 'Upload secret-scan diagnostics',
+    );
+
+    expect(testStep).toEqual({
+      name: 'Unit and integration tests',
+      run: 'scripts/run-ci-tests-with-diagnostics.sh',
+      'timeout-minutes': 10,
+    });
+    expect(artifactStep).toMatchObject({
+      if: '${{ always() }}',
+      name: 'Upload test and coverage diagnostics',
+      uses: 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02',
+      with: {
+        'if-no-files-found': 'error',
+        path: '.ci-artifacts/test-and-coverage\ncoverage\n',
+      },
+    });
+    expect(secretScanJob?.permissions).toEqual({
+      contents: 'read',
+      'pull-requests': 'read',
+    });
+    expect(secretScanJob?.steps?.[0]?.uses).toBe(
+      'actions/checkout@11d5960a326750d5838078e36cf38b85af677262',
+    );
+    expect(secretRange?.run).toContain('case "$GITHUB_EVENT_NAME" in');
+    expect(secretRange?.run).toContain('base_sha="$(git merge-base "$base_tip_sha" "$head_sha")"');
+    expect(secretRange?.run).toContain('git cat-file -e "$head_sha^{commit}"');
+    expect(secretScan?.run).toContain('docker pull "$GITLEAKS_IMAGE"');
+    expect(secretScan?.run).toContain(
+      'octopus_merges="$(git rev-list --min-parents=3 "$BASE_SHA..$HEAD_SHA")"',
+    );
+    expect(secretScan?.run).toContain('if [[ -n "$octopus_merges" ]]');
+    expect(secretScan?.run).toContain('git clone --bare --no-local "$PWD" "$scan_repository"');
+    expect(secretScan?.run).toContain('--volume "$RUNNER_TEMP/gitleaks:/workspace"');
+    expect(secretScan?.run).toContain('--source=/workspace/repository.git');
+    expect(secretScan?.run).not.toContain('--volume "$PWD:/repo:ro"');
+    expect(secretScan?.run).toContain('--log-opts="--diff-merges=remerge $BASE_SHA..$HEAD_SHA"');
+    expect(secretScan?.run).not.toContain('--first-parent');
+    expect(secretScan?.run).not.toContain('--no-merges');
+    expect(secretArtifact).toMatchObject({
+      if: '${{ always() }}',
+      uses: 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02',
+      with: {
+        'if-no-files-found': 'error',
+        path: '${{ runner.temp }}/gitleaks/results.sarif',
+        'retention-days': 90,
+      },
+    });
+    expect(workflow).toContain('test "$head_sha" = "$GITHUB_SHA"');
+    expect(workflow).toContain('git merge-base --is-ancestor "$base_sha" "$head_sha"');
+    expect(workflow).not.toContain('gitleaks/gitleaks-action@');
+    expect(workflow).toContain(
+      'ghcr.io/gitleaks/gitleaks@sha256:e1b35e12a8c6fa8901f060459cfb6b2fc4c484d3afbe3b029733a3bbfab07055',
+    );
+    expect(diagnosticsRunner).toContain('set -uo pipefail');
+    expect(diagnosticsRunner).toContain('reason=watchdog_deadline signal=USR1');
+    expect(diagnosticsRunner).toContain('reason=watchdog_grace_expired signal=KILL');
+    expect(diagnosticsRunner).toContain('finalize "$status" "external_signal_$signal_name" true');
+    expect(diagnosticsRunner).toContain('stop_helper "$watchdog_pid"');
+    expect(diagnosticsRunner).toContain('stop_helper "$monitor_pid"');
+    expect(diagnosticsRunner).toContain('/proc/$helper_pid/task/$helper_pid/children');
+    expect(diagnosticsRunner).toContain('kill -KILL "$helper_child_pid"');
+    expect(diagnosticsRunner).toContain('kill -0 -- "-$test_pgid"');
+    expect(diagnosticsRunner).toContain('reason=residual_process_group_after_leader_exit');
+    expect(diagnosticsRunner).toContain('residual_process_group_after_success');
+    expect(diagnosticsRunner).toContain('registration_in_progress');
+    expect(diagnosticsRunner).toContain('handle_pending_external_signal');
+    expect(diagnosticsRunner).toContain('memory.current');
+    expect(diagnosticsRunner).toContain('etime,comm --forest');
+    expect(diagnosticsRunner).not.toContain('etime,args --forest');
+    expect(diagnosticsRunner).toContain('--reporter=junit');
+    expect(diagnosticsRunner).toContain('--reporter=./scripts/vitest-ci-diagnostics-reporter.ts');
+    expect(diagnosticsRunner).toContain('exit "$test_status"');
+    expect(diagnosticsRunner).not.toContain('continue-on-error');
+  });
+
+  it('scans candidate commits and merge resolutions without replaying an updated base', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'phub-secret-scan-graph-'));
+    const git = (args: readonly string[]): string => {
+      const result = spawnSync('git', args, { cwd: directory, encoding: 'utf8' });
+      if (result.status !== 0) {
+        throw new Error(`git ${args.join(' ')} failed: ${result.stderr}`);
+      }
+      return result.stdout.trim();
+    };
+
+    try {
+      git(['init', '--initial-branch=main']);
+      git(['config', 'user.email', 'ci-graph@example.invalid']);
+      git(['config', 'user.name', 'CI Graph Test']);
+      await writeFile(join(directory, 'base.txt'), 'base\n');
+      await writeFile(join(directory, 'conflict.txt'), 'base conflict value\n');
+      git(['add', 'base.txt', 'conflict.txt']);
+      git(['commit', '-m', 'base']);
+      const baseSha = git(['rev-parse', 'HEAD']);
+
+      git(['checkout', '-b', 'candidate']);
+      await writeFile(join(directory, 'candidate.txt'), 'candidate commit marker\n');
+      await writeFile(join(directory, 'conflict.txt'), 'candidate conflict value\n');
+      git(['add', 'candidate.txt', 'conflict.txt']);
+      git(['commit', '-m', 'candidate']);
+      const candidateSha = git(['rev-parse', 'HEAD']);
+
+      git(['checkout', '-b', 'candidate-side', baseSha]);
+      await writeFile(join(directory, 'side.txt'), 'candidate side-branch marker\n');
+      git(['add', 'side.txt']);
+      git(['commit', '-m', 'candidate side branch']);
+      const sideSha = git(['rev-parse', 'HEAD']);
+
+      git(['checkout', 'candidate']);
+      git(['merge', '--no-ff', 'candidate-side', '-m', 'merge candidate side branch']);
+
+      git(['checkout', 'main']);
+      await writeFile(join(directory, 'updated-base.txt'), 'updated-base-only marker\n');
+      await writeFile(join(directory, 'conflict.txt'), 'updated base conflict value\n');
+      git(['add', 'updated-base.txt', 'conflict.txt']);
+      git(['commit', '-m', 'update base']);
+      const updatedBaseSha = git(['rev-parse', 'HEAD']);
+
+      git(['checkout', 'candidate']);
+      const conflictedMerge = spawnSync('git', ['merge', '--no-ff', 'main'], {
+        cwd: directory,
+        encoding: 'utf8',
+      });
+      expect(conflictedMerge.status).toBe(1);
+      await writeFile(join(directory, 'conflict.txt'), 'merge-resolution-only-marker\n');
+      git(['add', 'conflict.txt']);
+      git(['commit', '-m', 'merge updated base with resolution']);
+      const headSha = git(['rev-parse', 'HEAD']);
+
+      const completeRange = git(['rev-list', `${updatedBaseSha}..${headSha}`]).split('\n');
+      expect(completeRange).toContain(candidateSha);
+      expect(completeRange).toContain(sideSha);
+      expect(completeRange).not.toContain(updatedBaseSha);
+      const plainPatch = git(['log', '-p', '--format=', `${updatedBaseSha}..${headSha}`]);
+      const unsafeFirstParentPatch = git([
+        'log',
+        '-p',
+        '--format=',
+        '--diff-merges=first-parent',
+        `${updatedBaseSha}..${headSha}`,
+      ]);
+      const mergeAwarePatch = git([
+        'log',
+        '-p',
+        '--format=',
+        '--diff-merges=remerge',
+        `${updatedBaseSha}..${headSha}`,
+      ]);
+      expect(plainPatch).not.toContain('merge-resolution-only-marker');
+      expect(unsafeFirstParentPatch).toContain('updated-base-only marker');
+      expect(mergeAwarePatch).toContain('candidate commit marker');
+      expect(mergeAwarePatch).toContain('candidate side-branch marker');
+      expect(mergeAwarePatch).toContain('merge-resolution-only-marker');
+      expect(mergeAwarePatch).not.toContain('updated-base-only marker');
+
+      await writeFile(join(directory, 'octopus.txt'), 'octopus-tree-only marker\n');
+      git(['add', 'octopus.txt']);
+      const octopusTreeSha = git(['write-tree']);
+      const octopusSha = git([
+        'commit-tree',
+        octopusTreeSha,
+        '-p',
+        candidateSha,
+        '-p',
+        sideSha,
+        '-p',
+        updatedBaseSha,
+        '-m',
+        'synthetic octopus merge',
+      ]);
+      const octopusMerges = git(['rev-list', '--min-parents=3', `${baseSha}..${octopusSha}`]).split(
+        '\n',
+      );
+      const skippedOctopusPatch = git([
+        'log',
+        '-p',
+        '--format=',
+        '--diff-merges=remerge',
+        `${baseSha}..${octopusSha}`,
+      ]);
+      expect(octopusMerges).toContain(octopusSha);
+      expect(skippedOctopusPatch).not.toContain('octopus-tree-only marker');
+    } finally {
+      await rm(directory, { force: true, recursive: true });
+    }
+  });
 });
