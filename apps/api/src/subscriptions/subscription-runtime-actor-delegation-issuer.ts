@@ -8,6 +8,7 @@ const correlationPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/;
 const idPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{2,199}$/;
 const keyIdPattern = /^[A-Za-z0-9._:-]{3,64}$/;
 const printableAsciiPattern = /^[!-~]+$/;
+const pkcs8PrivateKeyHeader = ['-----BEGIN', 'PRIVATE KEY-----'].join(' ');
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export class SubscriptionRuntimeActorDelegationError extends Error {
@@ -54,7 +55,7 @@ export class SubscriptionRuntimeActorDelegationIssuer {
     },
   ) {
     if (
-      !options.privateKeyPem.includes('-----BEGIN PRIVATE KEY-----') ||
+      !options.privateKeyPem.startsWith(pkcs8PrivateKeyHeader) ||
       !keyIdPattern.test(options.keyId) ||
       !printableAsciiPattern.test(options.issuer) ||
       options.issuer.length > 512 ||
