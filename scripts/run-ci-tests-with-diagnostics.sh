@@ -102,9 +102,22 @@ capture_snapshot() {
 
 stop_helper() {
   local helper_pid="$1"
+  local helper_children=''
+  local helper_child_pid
   if [[ -n "$helper_pid" ]]; then
+    if [[ -r "/proc/$helper_pid/task/$helper_pid/children" ]]; then
+      helper_children="$(<"/proc/$helper_pid/task/$helper_pid/children")"
+    fi
     kill "$helper_pid" 2>/dev/null || true
+    for helper_child_pid in $helper_children; do
+      kill "$helper_child_pid" 2>/dev/null || true
+    done
     wait "$helper_pid" 2>/dev/null || true
+    for helper_child_pid in $helper_children; do
+      if kill -0 "$helper_child_pid" 2>/dev/null; then
+        kill -KILL "$helper_child_pid" 2>/dev/null || true
+      fi
+    done
   fi
 }
 

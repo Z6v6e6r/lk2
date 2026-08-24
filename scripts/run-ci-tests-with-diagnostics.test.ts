@@ -51,6 +51,19 @@ function parsePidFile(contents: string): readonly number[] {
     .filter(Number.isSafeInteger);
 }
 
+async function readChildPids(pid: number): Promise<readonly number[]> {
+  try {
+    return (await readFile(`/proc/${pid}/task/${pid}/children`, 'utf8'))
+      .trim()
+      .split(/\s+/u)
+      .filter(Boolean)
+      .map(Number);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw error;
+  }
+}
+
 async function expectProcessGone(pid: number, timeoutMilliseconds = 2_000): Promise<void> {
   const deadline = Date.now() + timeoutMilliseconds;
   while (Date.now() < deadline) {
@@ -219,6 +232,9 @@ describe.sequential('CI test diagnostics supervisor', () => {
 
         const testPid = Number((await waitForFile(join(directory, 'test.pid'))).trim());
         const helperPids = parsePidFile(await waitForFile(join(directory, 'helper-pids.txt')));
+        const helperChildPids = (
+          await Promise.all(helperPids.map(async (helperPid) => await readChildPids(helperPid)))
+        ).flat();
         const descendantPid = Number((await waitForFile(join(directory, 'descendant.pid'))).trim());
         child.kill(signal);
         const result = await waitForExit(child);
@@ -233,6 +249,9 @@ describe.sequential('CI test diagnostics supervisor', () => {
         await expectProcessGone(testPid);
         await expectProcessGone(descendantPid);
         for (const helperPid of helperPids) await expectProcessGone(helperPid);
+        for (const helperChildPid of helperChildPids) {
+          await expectProcessGone(helperChildPid);
+        }
       },
       15_000,
     );
