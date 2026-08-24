@@ -7,6 +7,10 @@ import { fileURLToPath } from 'node:url';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 
+const approvedSourceSha = '595e954bb8f53367baf034d7f39b255af0fda5fd';
+const approvedSourceTree = '3f4c1e63dd30eb60251533b95f1970fd96754a08';
+const supersededSourceSha = '35c8312b79cccdd136f2bfd892efbea629b8b919';
+
 interface BlobFetchRequestObservation {
   readonly authorization: string | null;
   readonly cookie: string | null;
@@ -123,12 +127,15 @@ describe('Timeweb amd64 publication workflow', () => {
 
     expect(workflow).toContain('default: source_check_only');
     expect(workflow).toContain("inputs.operation == 'publish'");
-    expect(workflow).toContain('PUBLISH_TIMEWEB_AMD64_35C8312');
-    expect(workflow).toContain('35c8312b79cccdd136f2bfd892efbea629b8b919');
-    expect(workflow).toContain('a1b920b8ae4507080789c650b8c16c669e55b477');
+    expect(workflow).toContain('PUBLISH_TIMEWEB_AMD64_595E954');
+    expect(workflow).toContain(approvedSourceSha);
+    expect(workflow).toContain(approvedSourceTree);
+    expect(workflow).not.toContain(supersededSourceSha);
     expect(workflow).toContain('test "$REQUEST_REF" = refs/heads/main');
     expect(workflow).toContain('test "$WORKFLOW_SHA" = "$REQUEST_SHA"');
     expect(workflow).toContain('test "$WORKFLOW_SHA" = "$EXPECTED_WORKFLOW_SHA"');
+    expect(workflow).toContain(`APPROVED_SOURCE_SHA: ${approvedSourceSha}`);
+    expect(workflow).toContain('test "$EXPECTED_SOURCE_SHA" = "$APPROVED_SOURCE_SHA"');
     expect(workflow).toContain('test "$RUN_ATTEMPT" = 1');
     expect(workflow).toContain('test "$REPOSITORY" = Z6v6e6r/lk2');
     expect(workflow).toContain('test "$ACTOR" = "$TRIGGERING_ACTOR"');
@@ -210,6 +217,224 @@ describe('Timeweb amd64 publication workflow', () => {
     expect(workflow).not.toMatch(/\b(?:ssh|scp|tailscale)\b/iu);
     expect(workflow).not.toMatch(/docker compose|npm run db:migrate(?:\s|$)/u);
     expect(workflow).not.toMatch(/deploy-staging|deploy-production/u);
+  });
+
+  it('binds request, publication, reconciliation and release manifests to one approved source', async () => {
+    const publicationWorkflow = await readFile(
+      new URL('../.github/workflows/publish-timeweb-amd64-images.yaml', import.meta.url),
+      'utf8',
+    );
+    const reconciliationWorkflow = await readFile(
+      new URL('../.github/workflows/reconcile-timeweb-amd64-publication.yaml', import.meta.url),
+      'utf8',
+    );
+    const publicationDocument = parse(publicationWorkflow) as {
+      readonly jobs: Readonly<
+        Record<
+          string,
+          {
+            readonly steps?: readonly {
+              readonly env?: Readonly<Record<string, string>>;
+              readonly name?: string;
+              readonly run?: string;
+            }[];
+          }
+        >
+      >;
+    };
+    const validationStep = publicationDocument.jobs['validate-request']?.steps?.find(
+      ({ name }) => name === 'Validate exact first-attempt main request',
+    );
+    expect(validationStep?.env?.APPROVED_SOURCE_SHA).toBe(approvedSourceSha);
+    const validationScript = validationStep?.run;
+    expect(validationScript).toBeDefined();
+    if (!validationScript) throw new Error('publication request validator was not found');
+    const requestEnvironment = {
+      ACTOR: 'release-actor',
+      APPROVED_SOURCE_SHA: approvedSourceSha,
+      CONFIRMATION: '',
+      EXPECTED_SOURCE_SHA: approvedSourceSha,
+      EXPECTED_WORKFLOW_SHA: 'f'.repeat(40),
+      OPERATION: 'source_check_only',
+      REPOSITORY: 'Z6v6e6r/lk2',
+      REQUEST_REF: 'refs/heads/main',
+      REQUEST_SHA: 'f'.repeat(40),
+      RUN_ATTEMPT: '1',
+      TRIGGERING_ACTOR: 'release-actor',
+      WORKFLOW_SHA: 'f'.repeat(40),
+    };
+    const validateRequest = (expectedSourceSha: string) =>
+      spawnSync('bash', ['-c', validationScript], {
+        encoding: 'utf8',
+        env: { ...process.env, ...requestEnvironment, EXPECTED_SOURCE_SHA: expectedSourceSha },
+      });
+    expect(validateRequest(approvedSourceSha).status).toBe(0);
+    expect(validateRequest(supersededSourceSha).status).not.toBe(0);
+
+    const extractProgram = (workflow: string, prefix: string, suffix: string): string => {
+      const start = workflow.indexOf(prefix);
+      const end = workflow.indexOf(suffix, start + prefix.length);
+      expect(start).toBeGreaterThan(-1);
+      expect(end).toBeGreaterThan(start);
+      return workflow.slice(start + prefix.length, end);
+    };
+    const runJq = (program: string, input: unknown, args: readonly string[]) =>
+      spawnSync('jq', ['-e', ...args, program], {
+        encoding: 'utf8',
+        input: JSON.stringify(input),
+      });
+    const services = ['api', 'migrator', 'realtime', 'web', 'worker'] as const;
+    const digest = `sha256:${'a'.repeat(64)}`;
+    const images = services.map((service) => ({
+      indexDigest: digest,
+      platform: 'linux/amd64',
+      runtimeDigest: digest,
+      service,
+      sourceSha: approvedSourceSha,
+      verified: true,
+    }));
+    const publicationManifest = {
+      authorizesDatabaseMutation: false,
+      authorizesDeploy: false,
+      authorizesVpsProvisioning: false,
+      images,
+      platform: 'linux/amd64',
+      sourceSha: approvedSourceSha,
+    };
+    const publicationProgram = extractProgram(
+      publicationWorkflow,
+      'jq -e --arg sourceSha "$SOURCE_SHA" \'\n',
+      "\n          ' timeweb-amd64-publication-manifest.json >/dev/null",
+    );
+    expect(
+      runJq(publicationProgram, publicationManifest, ['--arg', 'sourceSha', approvedSourceSha])
+        .status,
+    ).toBe(0);
+    expect(
+      runJq(publicationProgram, { ...publicationManifest, sourceSha: supersededSourceSha }, [
+        '--arg',
+        'sourceSha',
+        approvedSourceSha,
+      ]).status,
+    ).not.toBe(0);
+    expect(
+      runJq(
+        publicationProgram,
+        {
+          ...publicationManifest,
+          images: images.map((image, index) =>
+            index === 0 ? { ...image, sourceSha: supersededSourceSha } : image,
+          ),
+        },
+        ['--arg', 'sourceSha', approvedSourceSha],
+      ).status,
+    ).not.toBe(0);
+    expect(
+      runJq(
+        publicationProgram,
+        {
+          ...publicationManifest,
+          images: images.map((image, index) =>
+            index === 0 ? { ...image, indexDigest: '' } : image,
+          ),
+        },
+        ['--arg', 'sourceSha', approvedSourceSha],
+      ).status,
+    ).not.toBe(0);
+
+    const reconciliationProgram = extractProgram(
+      reconciliationWorkflow,
+      'jq -e --arg sourceSha "$EXPECTED_SOURCE_SHA" \'\n',
+      "\n          ' timeweb-amd64-publication-reconciliation-manifest.json >/dev/null",
+    );
+    const reconciliationManifest = {
+      authorizesDatabaseMutation: false,
+      authorizesDeploy: false,
+      authorizesVpsProvisioning: false,
+      images,
+    };
+    expect(
+      runJq(reconciliationProgram, reconciliationManifest, [
+        '--arg',
+        'sourceSha',
+        approvedSourceSha,
+      ]).status,
+    ).toBe(0);
+    expect(
+      runJq(
+        reconciliationProgram,
+        {
+          ...reconciliationManifest,
+          images: images.map((image, index) =>
+            index === 0 ? { ...image, sourceSha: supersededSourceSha } : image,
+          ),
+        },
+        ['--arg', 'sourceSha', approvedSourceSha],
+      ).status,
+    ).not.toBe(0);
+    expect(
+      runJq(
+        reconciliationProgram,
+        {
+          ...reconciliationManifest,
+          images: images.map((image, index) =>
+            index === 0 ? { ...image, verified: false } : image,
+          ),
+        },
+        ['--arg', 'sourceSha', approvedSourceSha],
+      ).status,
+    ).not.toBe(0);
+
+    const releaseProgram = extractProgram(
+      reconciliationWorkflow,
+      'jq -e --arg priorRunId "$PRIOR_RECONCILIATION_RUN_ID" --arg currentRunId "$GITHUB_RUN_ID" --arg sourceSha "$EXPECTED_SOURCE_SHA" \'\n',
+      "\n            ' release-manifest.json >/dev/null",
+    );
+    const releaseImages = Object.fromEntries(
+      services.map((service) => [service, { digest, image: `ghcr.io/z6v6e6r/phub-${service}` }]),
+    );
+    const releaseManifest = {
+      gitCommit: approvedSourceSha,
+      images: releaseImages,
+      platform: 'linux/amd64',
+      reconciliationRuns: ['101', '102'],
+      repository: 'Z6v6e6r/lk2',
+      schemaVersion: 1,
+      verification: { provenance: true, reconciliation: true, sbom: true },
+    };
+    const releaseArgs = [
+      '--arg',
+      'priorRunId',
+      '101',
+      '--arg',
+      'currentRunId',
+      '102',
+      '--arg',
+      'sourceSha',
+      approvedSourceSha,
+    ];
+    expect(runJq(releaseProgram, releaseManifest, releaseArgs).status).toBe(0);
+    expect(
+      runJq(releaseProgram, { ...releaseManifest, gitCommit: supersededSourceSha }, releaseArgs)
+        .status,
+    ).not.toBe(0);
+    expect(
+      runJq(
+        releaseProgram,
+        { ...releaseManifest, verification: { ...releaseManifest.verification, sbom: false } },
+        releaseArgs,
+      ).status,
+    ).not.toBe(0);
+    expect(
+      runJq(
+        releaseProgram,
+        {
+          ...releaseManifest,
+          images: { ...releaseImages, web: { ...releaseImages.web, digest: '' } },
+        },
+        releaseArgs,
+      ).status,
+    ).not.toBe(0);
   });
 
   it('binds every registry attestation manifest to the exact runtime descriptor', async () => {
@@ -320,7 +545,7 @@ describe('Timeweb amd64 publication workflow', () => {
     const program = workflow.slice(programStart, programEnd);
 
     const runtimeSha = '1'.repeat(64);
-    const sourceSha = '35c8312b79cccdd136f2bfd892efbea629b8b919';
+    const sourceSha = approvedSourceSha;
     const builder = 'https://github.com/Z6v6e6r/lk2/actions/runs/123/attempts/1';
     const nodeIndexSha = 'd649c27dae7ba0137b3cef5dd75baa422c08dc3d9e3fc0c23dfb172dc3cc6436';
     const nginxIndexSha = '65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10';
@@ -629,6 +854,12 @@ describe('Timeweb amd64 publication workflow', () => {
     expect(workflow).toContain('test "$RUN_ATTEMPT" = 1');
     expect(workflow).toContain('test "$ACTOR" = "$TRIGGERING_ACTOR"');
     expect(workflow).toContain('test "$WORKFLOW_SHA" = "$EXPECTED_WORKFLOW_SHA"');
+    expect(workflow).toContain('expected_source_sha:');
+    expect(workflow).toContain(`APPROVED_SOURCE_SHA: ${approvedSourceSha}`);
+    expect(workflow).toContain('test "$EXPECTED_SOURCE_SHA" = "$APPROVED_SOURCE_SHA"');
+    expect(workflow).toContain('source_sha="$EXPECTED_SOURCE_SHA"');
+    expect(workflow).toContain(`source_tree=${approvedSourceTree}`);
+    expect(workflow).not.toContain(supersededSourceSha);
     expect(workflow).toContain("printf '%s' \"$PUBLICATION_RUN_ID\" | grep -Eq '^[1-9][0-9]*$'");
     expect(workflow).toContain('publication_workflow_sha:');
     expect(workflow).toContain('prior_reconciliation_run_id:');
@@ -687,6 +918,7 @@ describe('Timeweb amd64 publication workflow', () => {
     expect(workflow).toContain('> release-manifest.json');
     expect(workflow).toContain('repository: "Z6v6e6r/lk2"');
     expect(workflow).toContain('gitCommit: .images[0].sourceSha');
+    expect(workflow).toContain('.gitCommit == $sourceSha');
     expect(workflow).toContain(
       'verification: {provenance: true, sbom: true, reconciliation: true}',
     );

@@ -7,6 +7,10 @@ on:
         description: Exact reviewed main SHA containing this reconciliation workflow
         required: true
         type: string
+      expected_source_sha:
+        description: Exact approved source SHA contained in the immutable publication artifact
+        required: true
+        type: string
       publication_run_id:
         description: Exact successful publication run ID to read back from GHCR
         required: true
@@ -49,7 +53,9 @@ jobs:
       - name: Validate exact first-attempt reconciliation request
         env:
           ACTOR: ${{ github.actor }}
+          APPROVED_SOURCE_SHA: 595e954bb8f53367baf034d7f39b255af0fda5fd
           CONFIRMATION: ${{ inputs.confirmation }}
+          EXPECTED_SOURCE_SHA: ${{ inputs.expected_source_sha }}
           EXPECTED_WORKFLOW_SHA: ${{ inputs.expected_workflow_sha }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PRIOR_RECONCILIATION_RUN_ID: ${{ inputs.prior_reconciliation_run_id }}
@@ -70,9 +76,11 @@ jobs:
           test "$RUN_ATTEMPT" = 1
           test "$ACTOR" = "$TRIGGERING_ACTOR"
           test "$CONFIRMATION" = RECONCILE_TIMEWEB_AMD64_PUBLICATION
+          printf '%s' "$EXPECTED_SOURCE_SHA" | grep -Eq '^[0-9a-f]{40}$'
           printf '%s' "$EXPECTED_WORKFLOW_SHA" | grep -Eq '^[0-9a-f]{40}$'
           printf '%s' "$PUBLICATION_WORKFLOW_SHA" | grep -Eq '^[0-9a-f]{40}$'
           printf '%s' "$PUBLICATION_RUN_ID" | grep -Eq '^[1-9][0-9]*$'
+          test "$EXPECTED_SOURCE_SHA" = "$APPROVED_SOURCE_SHA"
           if test -n "$PRIOR_RECONCILIATION_RUN_ID"; then
             printf '%s' "$PRIOR_RECONCILIATION_RUN_ID" | grep -Eq '^[1-9][0-9]*$'
             test "$PRIOR_RECONCILIATION_RUN_ID" != "$GITHUB_RUN_ID"
@@ -150,6 +158,7 @@ jobs:
       - id: publication
         name: Bind reconciliation inputs to the immutable publication artifact
         env:
+          EXPECTED_SOURCE_SHA: ${{ inputs.expected_source_sha }}
           PUBLICATION_RUN_ID: ${{ inputs.publication_run_id }}
           PUBLICATION_WORKFLOW_SHA: ${{ inputs.publication_workflow_sha }}
         run: |
@@ -157,10 +166,10 @@ jobs:
           cd publication-reference
           sha256sum --check --strict timeweb-amd64-publication-checksums.txt
           manifest=timeweb-amd64-publication-manifest.json
-          jq -e --arg runId "$PUBLICATION_RUN_ID" --arg workflowSha "$PUBLICATION_WORKFLOW_SHA" '
+          jq -e --arg runId "$PUBLICATION_RUN_ID" --arg sourceSha "$EXPECTED_SOURCE_SHA" --arg workflowSha "$PUBLICATION_WORKFLOW_SHA" '
             .schemaVersion == 1 and
             .kind == "phub-timeweb-amd64-publication" and
-            .sourceSha == "35c8312b79cccdd136f2bfd892efbea629b8b919" and
+            .sourceSha == $sourceSha and
             .workflowSha == $workflowSha and
             .repository == "Z6v6e6r/lk2" and
             .platform == "linux/amd64" and
@@ -171,12 +180,12 @@ jobs:
             .authorizesDatabaseMutation == false and
             ([.images[].service] | sort) == ["api","migrator","realtime","web","worker"] and
             all(.images[];
-              .sourceSha == "35c8312b79cccdd136f2bfd892efbea629b8b919" and
+              .sourceSha == $sourceSha and
               .workflowSha == $workflowSha and
               .platform == "linux/amd64" and
               .runId == $runId and .runAttempt == "1" and
               .repository == ("ghcr.io/z6v6e6r/phub-" + .service) and
-              .publicationTag == ("amd64-sha-35c8312b79cccdd136f2bfd892efbea629b8b919-" + $runId + "-1") and
+              .publicationTag == ("amd64-sha-" + $sourceSha + "-" + $runId + "-1") and
               (.indexDigest | test("^sha256:[0-9a-f]{64}$"))
             )
           ' "$manifest" >/dev/null
@@ -233,6 +242,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Reconcile only the exact existing tag and index digest
         env:
+          EXPECTED_SOURCE_SHA: ${{ inputs.expected_source_sha }}
           EXPECTED_INDEX_DIGEST: ${{ matrix.index_digest }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PUBLICATION_RUN_ID: ${{ inputs.publication_run_id }}
@@ -241,8 +251,8 @@ jobs:
         run: |
           set -euo pipefail
           source scripts/timeweb-amd64-registry-custody-retry.sh
-          source_sha=35c8312b79cccdd136f2bfd892efbea629b8b919
-          source_tree=a1b920b8ae4507080789c650b8c16c669e55b477
+          source_sha="$EXPECTED_SOURCE_SHA"
+          source_tree=3f4c1e63dd30eb60251533b95f1970fd96754a08
           original_builder="https://github.com/Z6v6e6r/lk2/actions/runs/$PUBLICATION_RUN_ID/attempts/1"
           original_workflow_sha="$PUBLICATION_WORKFLOW_SHA"
           test "$(git rev-parse "$source_sha^{tree}")" = "$source_tree"
@@ -424,6 +434,7 @@ jobs:
           run-id: ${{ inputs.prior_reconciliation_run_id }}
       - name: Emit non-authorizing reconciliation manifest
         env:
+          EXPECTED_SOURCE_SHA: ${{ inputs.expected_source_sha }}
           PRIOR_RECONCILIATION_RUN_ID: ${{ inputs.prior_reconciliation_run_id }}
           PUBLICATION_RUN_ID: ${{ inputs.publication_run_id }}
           PUBLICATION_WORKFLOW_SHA: ${{ inputs.publication_workflow_sha }}
@@ -435,12 +446,12 @@ jobs:
             (cd "$(dirname "$checksum")" && sha256sum --check --strict evidence-checksums.txt)
           done < <(find reconciliation-evidence/images -name evidence-checksums.txt | sort)
           jq -s --arg originalRunId "$PUBLICATION_RUN_ID" --arg publicationWorkflowSha "$PUBLICATION_WORKFLOW_SHA" --arg reconciliationWorkflowSha "$RECONCILIATION_WORKFLOW_SHA" --arg reconciliationRunId "$GITHUB_RUN_ID" --arg reconciliationRunAttempt "$GITHUB_RUN_ATTEMPT" '{schemaVersion:1,kind:"phub-timeweb-amd64-publication-reconciliation",originalRunId:$originalRunId,originalRunAttempt:"1",publicationWorkflowSha:$publicationWorkflowSha,reconciliationWorkflowSha:$reconciliationWorkflowSha,reconciliationRunId:$reconciliationRunId,reconciliationRunAttempt:$reconciliationRunAttempt,authorizesDeploy:false,authorizesVpsProvisioning:false,authorizesDatabaseMutation:false,images:sort_by(.service)}' reconciliation-evidence/images/*/image.json > timeweb-amd64-publication-reconciliation-manifest.json
-          jq -e '
+          jq -e --arg sourceSha "$EXPECTED_SOURCE_SHA" '
             .authorizesDeploy == false and
             .authorizesVpsProvisioning == false and
             .authorizesDatabaseMutation == false and
             ([.images[].service] | sort) == ["api","migrator","realtime","web","worker"] and
-            ([.images[].sourceSha] | unique) == ["35c8312b79cccdd136f2bfd892efbea629b8b919"] and
+            ([.images[].sourceSha] | unique) == [$sourceSha] and
             ([.images[].verified] | all) and
             ([.images[].indexDigest | test("^sha256:[0-9a-f]{64}$")] | all)
           ' timeweb-amd64-publication-reconciliation-manifest.json >/dev/null
@@ -450,7 +461,7 @@ jobs:
               sha256sum --check --strict timeweb-amd64-publication-reconciliation-checksums.txt
             )
             prior_manifest=prior-reconciliation/timeweb-amd64-publication-reconciliation-manifest.json
-            jq -e --arg priorRunId "$PRIOR_RECONCILIATION_RUN_ID" --arg publicationRunId "$PUBLICATION_RUN_ID" --arg publicationWorkflowSha "$PUBLICATION_WORKFLOW_SHA" --arg reconciliationWorkflowSha "$RECONCILIATION_WORKFLOW_SHA" '
+            jq -e --arg priorRunId "$PRIOR_RECONCILIATION_RUN_ID" --arg publicationRunId "$PUBLICATION_RUN_ID" --arg publicationWorkflowSha "$PUBLICATION_WORKFLOW_SHA" --arg reconciliationWorkflowSha "$RECONCILIATION_WORKFLOW_SHA" --arg sourceSha "$EXPECTED_SOURCE_SHA" '
               .schemaVersion == 1 and
               .kind == "phub-timeweb-amd64-publication-reconciliation" and
               .originalRunId == $publicationRunId and .originalRunAttempt == "1" and
@@ -460,6 +471,7 @@ jobs:
               .authorizesDeploy == false and
               .authorizesVpsProvisioning == false and
               .authorizesDatabaseMutation == false and
+              ([.images[].sourceSha] | unique) == [$sourceSha] and
               ([.images[].verified] | all)
             ' "$prior_manifest" >/dev/null
             jq -e --slurpfile prior "$prior_manifest" '
@@ -477,10 +489,10 @@ jobs:
               verification: {provenance: true, sbom: true, reconciliation: true},
               reconciliationRuns: [$priorRunId, $currentRunId]
             }' timeweb-amd64-publication-reconciliation-manifest.json > release-manifest.json
-            jq -e --arg priorRunId "$PRIOR_RECONCILIATION_RUN_ID" --arg currentRunId "$GITHUB_RUN_ID" '
+            jq -e --arg priorRunId "$PRIOR_RECONCILIATION_RUN_ID" --arg currentRunId "$GITHUB_RUN_ID" --arg sourceSha "$EXPECTED_SOURCE_SHA" '
               .schemaVersion == 1 and
               .repository == "Z6v6e6r/lk2" and
-              .gitCommit == "35c8312b79cccdd136f2bfd892efbea629b8b919" and
+              .gitCommit == $sourceSha and
               .platform == "linux/amd64" and
               (.images | keys | sort) == ["api","migrator","realtime","web","worker"] and
               all(.images[]; (.image | test("^ghcr\\.io/z6v6e6r/phub-(web|api|worker|realtime|migrator)$")) and (.digest | test("^sha256:[0-9a-f]{64}$"))) and
