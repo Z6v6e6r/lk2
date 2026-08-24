@@ -10,6 +10,12 @@ import { parse } from 'yaml';
 const approvedSourceSha = '595e954bb8f53367baf034d7f39b255af0fda5fd';
 const approvedSourceTree = '3f4c1e63dd30eb60251533b95f1970fd96754a08';
 const supersededSourceSha = '35c8312b79cccdd136f2bfd892efbea629b8b919';
+const releaseManifestProducer = fileURLToPath(
+  new URL('./build-timeweb-release-manifest.js', import.meta.url),
+);
+const releaseManifestValidator = fileURLToPath(
+  new URL('./verify-timeweb-release-manifest.js', import.meta.url),
+);
 
 interface BlobFetchRequestObservation {
   readonly authorization: string | null;
@@ -28,6 +34,11 @@ interface BlobFetchScenarioResult {
   readonly markers: readonly string[];
   readonly requests: readonly BlobFetchRequestObservation[];
   readonly status: number | null;
+}
+
+interface ProducedReleaseManifest {
+  readonly gitCommit: string;
+  readonly images: readonly { readonly digest: string }[];
 }
 
 describe('Timeweb amd64 publication workflow', () => {
@@ -286,11 +297,17 @@ describe('Timeweb amd64 publication workflow', () => {
     const services = ['api', 'migrator', 'realtime', 'web', 'worker'] as const;
     const digest = `sha256:${'a'.repeat(64)}`;
     const images = services.map((service) => ({
+      architecture: 'amd64',
       indexDigest: digest,
       platform: 'linux/amd64',
+      provenanceVerified: true,
+      reconciliationVerified: true,
+      repository: `ghcr.io/z6v6e6r/phub-${service}`,
       runtimeDigest: digest,
+      sbomVerified: true,
       service,
       sourceSha: approvedSourceSha,
+      sourceTree: approvedSourceTree,
       verified: true,
     }));
     const publicationManifest = {
@@ -378,63 +395,68 @@ describe('Timeweb amd64 publication workflow', () => {
         {
           ...reconciliationManifest,
           images: images.map((image, index) =>
-            index === 0 ? { ...image, verified: false } : image,
+            index === 0 ? { ...image, provenanceVerified: false } : image,
           ),
         },
         ['--arg', 'sourceSha', approvedSourceSha],
       ).status,
     ).not.toBe(0);
 
-    const releaseProgram = extractProgram(
-      reconciliationWorkflow,
-      'jq -e --arg priorRunId "$PRIOR_RECONCILIATION_RUN_ID" --arg currentRunId "$GITHUB_RUN_ID" --arg sourceSha "$EXPECTED_SOURCE_SHA" \'\n',
-      "\n            ' release-manifest.json >/dev/null",
-    );
-    const releaseImages = Object.fromEntries(
-      services.map((service) => [service, { digest, image: `ghcr.io/z6v6e6r/phub-${service}` }]),
-    );
-    const releaseManifest = {
-      gitCommit: approvedSourceSha,
-      images: releaseImages,
-      platform: 'linux/amd64',
-      reconciliationRuns: ['101', '102'],
-      repository: 'Z6v6e6r/lk2',
+    const producerInput = {
+      ...reconciliationManifest,
+      kind: 'phub-timeweb-amd64-publication-reconciliation',
+      reconciliationRunAttempt: '1',
+      reconciliationRunId: '102',
       schemaVersion: 1,
-      verification: { provenance: true, reconciliation: true, sbom: true },
     };
-    const releaseArgs = [
-      '--arg',
-      'priorRunId',
-      '101',
-      '--arg',
-      'currentRunId',
-      '102',
-      '--arg',
-      'sourceSha',
-      approvedSourceSha,
-    ];
-    expect(runJq(releaseProgram, releaseManifest, releaseArgs).status).toBe(0);
-    expect(
-      runJq(releaseProgram, { ...releaseManifest, gitCommit: supersededSourceSha }, releaseArgs)
-        .status,
-    ).not.toBe(0);
-    expect(
-      runJq(
-        releaseProgram,
-        { ...releaseManifest, verification: { ...releaseManifest.verification, sbom: false } },
-        releaseArgs,
-      ).status,
-    ).not.toBe(0);
-    expect(
-      runJq(
-        releaseProgram,
-        {
-          ...releaseManifest,
-          images: { ...releaseImages, web: { ...releaseImages.web, digest: '' } },
-        },
-        releaseArgs,
-      ).status,
-    ).not.toBe(0);
+    const produce = async (input: unknown) => {
+      const directory = await mkdtemp(join(tmpdir(), 'phub-timeweb-source-binding-'));
+      const inputPath = join(directory, 'reconciliation.json');
+      const manifestPath = join(directory, 'release-manifest.json');
+      const checksumPath = join(directory, 'release-manifest.sha256');
+      try {
+        await writeFile(inputPath, `${JSON.stringify(input, null, 2)}\n`);
+        const result = spawnSync(
+          process.execPath,
+          [releaseManifestProducer, inputPath, '101', '102', manifestPath, checksumPath],
+          { encoding: 'utf8' },
+        );
+        const validation =
+          result.status === 0
+            ? spawnSync(process.execPath, [releaseManifestValidator, manifestPath], {
+                encoding: 'utf8',
+              })
+            : undefined;
+        const manifest =
+          result.status === 0
+            ? (JSON.parse(await readFile(manifestPath, 'utf8')) as ProducedReleaseManifest)
+            : undefined;
+        return { manifest, result, validation };
+      } finally {
+        await rm(directory, { force: true, recursive: true });
+      }
+    };
+    const produced = await produce(producerInput);
+    expect(produced.result.status, produced.result.stderr).toBe(0);
+    expect(produced.validation?.status, produced.validation?.stderr).toBe(0);
+    expect(produced.manifest).toBeDefined();
+    if (!produced.manifest) throw new Error('canonical release manifest was not produced');
+    expect(produced.manifest.gitCommit).toBe(approvedSourceSha);
+    expect(produced.manifest.images).toHaveLength(5);
+    expect(produced.manifest.images.every((image) => image.digest === digest)).toBe(true);
+
+    for (const sourceIdentity of [
+      { sourceSha: supersededSourceSha, sourceTree: approvedSourceTree },
+      { sourceSha: approvedSourceSha, sourceTree: 'b'.repeat(40) },
+    ]) {
+      const rejected = await produce({
+        ...producerInput,
+        images: images.map((image, index) =>
+          index === 0 ? { ...image, ...sourceIdentity } : image,
+        ),
+      });
+      expect(rejected.result.status).not.toBe(0);
+    }
   });
 
   it('binds every registry attestation manifest to the exact runtime descriptor', async () => {
@@ -905,7 +927,10 @@ describe('Timeweb amd64 publication workflow', () => {
     expect(workflow).toContain(
       '([.images[].service] | sort) == ["api","migrator","realtime","web","worker"]',
     );
-    expect(workflow).toContain('([.images[].verified] | all)');
+    expect(workflow).toContain('([.images[].provenanceVerified] | all)');
+    expect(workflow).toContain('([.images[].sbomVerified] | all)');
+    expect(workflow).toContain('([.images[].reconciliationVerified] | all)');
+    expect(workflow).toContain('([.images[].architecture] | unique) == ["amd64"]');
     expect(workflow).toContain('authorizesDeploy:false');
     expect(workflow).toContain('authorizesVpsProvisioning:false');
     expect(workflow).toContain('authorizesDatabaseMutation:false');
@@ -915,16 +940,15 @@ describe('Timeweb amd64 publication workflow', () => {
       'name: timeweb-amd64-publication-reconciliation-manifest-${{ inputs.prior_reconciliation_run_id }}-1',
     );
     expect(workflow).toContain('.images == $prior[0].images');
-    expect(workflow).toContain('> release-manifest.json');
-    expect(workflow).toContain('repository: "Z6v6e6r/lk2"');
-    expect(workflow).toContain('gitCommit: .images[0].sourceSha');
-    expect(workflow).toContain('.gitCommit == $sourceSha');
-    expect(workflow).toContain(
+    expect(workflow).toContain('ref: ${{ inputs.expected_workflow_sha }}');
+    expect(workflow).toContain('node scripts/build-timeweb-release-manifest.js');
+    expect(workflow).toContain('node scripts/verify-timeweb-release-manifest.js');
+    expect(workflow).toContain('release-manifest.sha256');
+    expect(workflow).not.toContain('verified:true');
+    expect(workflow).not.toContain('images: (.images | map({key: .service');
+    expect(workflow).not.toContain(
       'verification: {provenance: true, sbom: true, reconciliation: true}',
     );
-    expect(workflow).toContain('.verification == {provenance:true,sbom:true,reconciliation:true}');
-    expect(workflow).toContain('reconciliationRuns: [$priorRunId, $currentRunId]');
-    expect(workflow).toContain('$priorRunId != $currentRunId');
     expect(workflow).not.toMatch(
       /packages:\s*write|push:\s*true|docker\s+push|docker buildx build|docker\/build-push-action@|docker compose|npm run db:migrate|deploy-(?:staging|production)|\b(?:ssh|scp|tailscale)\b/iu,
     );
