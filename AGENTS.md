@@ -44,7 +44,7 @@ in-scope CI failures. Do not pause merely because one reversible step completed.
 
 Human approval remains mandatory before merge, direct push to `main` or another protected
 branch, force push, deploy, migration/backfill execution, live/shared data mutation,
-secret/key changes, permissions/RLS/ACL changes on a real target, DNS/ingress/routing,
+credential or signing-material changes, permissions/RLS/ACL changes on a real target, DNS/ingress/routing,
 payment/refund, external messages, or destructive rollback. A Draft PR, green CI, local
 PostgreSQL rehearsal, or staging artifact never authorizes those actions.
 
