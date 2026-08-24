@@ -121,6 +121,12 @@ const environmentSchema = z.object({
   HOME_READ_MODE: z.enum(['mock', 'projection']).default('mock'),
   GAMES_READ_ENABLED: booleanFromEnvironment,
   GAMES_COMMANDS_ENABLED: booleanFromEnvironment,
+  GAME_PROVIDER_RECOVERY_MODE: z.enum(['disabled', 'synthetic']).default('disabled'),
+  GAME_PROVIDER_WRITER_ENABLED: booleanFromEnvironment,
+  GAME_PROVIDER_READBACK_ENABLED: booleanFromEnvironment,
+  GAME_PROVIDER_CALLBACK_RECONCILIATION_ENABLED: booleanFromEnvironment,
+  GAME_PROVIDER_PAYMENT_CONVERGENCE_ENABLED: booleanFromEnvironment,
+  GAME_PROVIDER_PROMOTION_RECOVERY_ENABLED: booleanFromEnvironment,
   MESSAGING_USER_BLOCK_COMMANDS_ENABLED: booleanFromEnvironment,
   GAMES_RESULTS_WRITE_MODE: z
     .enum(['disabled', 'shadow_compare', 'local_primary'])
@@ -583,6 +589,42 @@ export function loadConfig(
     throw new Error(
       'GAMES_COMMANDS_ENABLED is staging-only until the Games production gate passes',
     );
+  }
+  const providerRecoveryEnabled =
+    parsed.data.GAME_PROVIDER_WRITER_ENABLED ||
+    parsed.data.GAME_PROVIDER_READBACK_ENABLED ||
+    parsed.data.GAME_PROVIDER_CALLBACK_RECONCILIATION_ENABLED ||
+    parsed.data.GAME_PROVIDER_PAYMENT_CONVERGENCE_ENABLED ||
+    parsed.data.GAME_PROVIDER_PROMOTION_RECOVERY_ENABLED;
+  if (providerRecoveryEnabled) {
+    if (!['local', 'ci'].includes(parsed.data.APP_ENV)) {
+      throw new Error('Game provider recovery is synthetic-only and allowed only in local or ci');
+    }
+    if (parsed.data.GAME_PROVIDER_RECOVERY_MODE !== 'synthetic') {
+      throw new Error('Game provider recovery gates require GAME_PROVIDER_RECOVERY_MODE=synthetic');
+    }
+    if (!parsed.data.GAMES_COMMANDS_ENABLED || !parsed.data.GAMES_READ_ENABLED) {
+      throw new Error(
+        'Game provider recovery requires GAMES_COMMANDS_ENABLED and GAMES_READ_ENABLED',
+      );
+    }
+  }
+  if (parsed.data.GAME_PROVIDER_CALLBACK_RECONCILIATION_ENABLED) {
+    throw new Error(
+      'Callback reconciliation cannot be enabled until an authenticated callback consumer exists',
+    );
+  }
+  if (
+    parsed.data.GAME_PROVIDER_PAYMENT_CONVERGENCE_ENABLED &&
+    (!parsed.data.GAME_PROVIDER_WRITER_ENABLED || !parsed.data.GAME_PROVIDER_READBACK_ENABLED)
+  ) {
+    throw new Error('Payment convergence requires writer and read-back gates');
+  }
+  if (
+    parsed.data.GAME_PROVIDER_PROMOTION_RECOVERY_ENABLED &&
+    !parsed.data.GAME_PROVIDER_PAYMENT_CONVERGENCE_ENABLED
+  ) {
+    throw new Error('Promotion provider recovery requires payment convergence');
   }
   if (parsed.data.LEGACY_GAME_COMMAND_BRIDGE_ENABLED) {
     if (parsed.data.APP_ENV !== 'local' && parsed.data.APP_ENV !== 'staging') {

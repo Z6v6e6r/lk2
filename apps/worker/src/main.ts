@@ -14,12 +14,14 @@ import {
   createCommunityMediaRepository,
   createDatabasePool,
   createGameRepository,
+  createGameProviderOperationRepository,
   createGameRosterRepository,
   createGameResultProjectionRepository,
   createGiftCertificateIssuanceRepository,
   createLocalCommunityDirectoryRepository,
   createParticipationCommandRepository,
 } from '@phub/database';
+import { createSyntheticGameProviderAdapter } from '@phub/games';
 import { LegacyGamesMongoAdapter, LegacyGamesPublicAdapter } from '@phub/legacy-games-adapter';
 import { createNotificationEndpointCipher } from '@phub/notifications';
 import { createLogger, recordLevelEligibilityMetrics, startTelemetry } from '@phub/observability';
@@ -39,6 +41,10 @@ import { runCommunityMediaCycle } from './community-media-worker.js';
 import { registerCoreBrokerTopology } from './broker-topology.js';
 import { runGameLifecycleProcessManagerCycle } from './game-lifecycle-process-manager.js';
 import { runGameRosterProcessManagerCycle } from './game-roster-process-manager.js';
+import {
+  recordGameProviderRecoveryMetric,
+  runGameProviderRecoveryCycle,
+} from './game-provider-recovery.js';
 import { registerGamesCardProjectorConsumer } from './games-card-projector-consumer.js';
 import { registerGameResultProjectorConsumer } from './game-result-projector-consumer.js';
 import { registerCupRatingConsumer } from './cup-rating-consumer.js';
@@ -109,6 +115,11 @@ const workerMetrics = createWorkerMetricRecorder({
 const pool = createDatabasePool(config.DATABASE_URL);
 const gameRepository = createGameRepository(pool);
 const gameRosterRepository = createGameRosterRepository(pool, {
+  providerRecovery: {
+    enabled:
+      config.GAME_PROVIDER_READBACK_ENABLED || config.GAME_PROVIDER_PAYMENT_CONVERGENCE_ENABLED,
+    promotionEnabled: config.GAME_PROVIDER_PROMOTION_RECOVERY_ENABLED,
+  },
   onEligibilityDecision: (decision) => {
     recordLevelEligibilityMetrics({
       activityType: decision.activityType,
@@ -134,6 +145,10 @@ const gameRosterRepository = createGameRosterRepository(pool, {
       'waitlist promotion eligibility evaluated',
     );
   },
+});
+const gameProviderOperationRepository = createGameProviderOperationRepository(pool);
+const syntheticGameProviderAdapter = createSyntheticGameProviderAdapter({
+  submitBehavior: 'ACCEPT',
 });
 const participationCommandRepository = createParticipationCommandRepository(pool);
 const gamesProcessManagerWorkerId = `games-process-manager-${randomUUID()}`;
@@ -559,6 +574,19 @@ const runCycle = async (): Promise<void> => {
             workerId: gamesRosterProcessManagerWorkerId,
             logger,
             batchSize: config.OUTBOX_BATCH_SIZE,
+          });
+        }
+        if (config.GAME_PROVIDER_WRITER_ENABLED || config.GAME_PROVIDER_READBACK_ENABLED) {
+          await runGameProviderRecoveryCycle({
+            tenantId: tenant.id,
+            repository: gameProviderOperationRepository,
+            adapter: syntheticGameProviderAdapter,
+            submitEnabled: config.GAME_PROVIDER_WRITER_ENABLED,
+            readBackEnabled: config.GAME_PROVIDER_READBACK_ENABLED,
+            onMetric: (metric) => {
+              recordGameProviderRecoveryMetric(metric);
+              logger.info({ metric }, 'synthetic game provider recovery');
+            },
           });
         }
         publishedCount += await publishConfiguredOutboxBatch(tenant.id);

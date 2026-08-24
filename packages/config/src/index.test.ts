@@ -46,6 +46,12 @@ describe('loadConfig', () => {
       HOME_READ_MODE: 'mock',
       GAMES_READ_ENABLED: false,
       GAMES_COMMANDS_ENABLED: false,
+      GAME_PROVIDER_RECOVERY_MODE: 'disabled',
+      GAME_PROVIDER_WRITER_ENABLED: false,
+      GAME_PROVIDER_READBACK_ENABLED: false,
+      GAME_PROVIDER_CALLBACK_RECONCILIATION_ENABLED: false,
+      GAME_PROVIDER_PAYMENT_CONVERGENCE_ENABLED: false,
+      GAME_PROVIDER_PROMOTION_RECOVERY_ENABLED: false,
       GAMES_RESULTS_WRITE_MODE: 'disabled',
       CUP_RATING_CONSUMER_ENABLED: false,
       CUP_PLAYER_LEVEL_PROJECTION_ENABLED: false,
@@ -132,6 +138,61 @@ describe('loadConfig', () => {
       CUP_DEV_AUTH_ENABLED: false,
       VIVA_OAUTH_EXISTING_SUBJECT_BOOTSTRAP_ENABLED: false,
     });
+  });
+
+  it('keeps every provider recovery gate off and rejects non-synthetic or deployed activation', () => {
+    const enabled = {
+      ...validEnvironment,
+      GAMES_READ_ENABLED: 'true',
+      GAMES_COMMANDS_ENABLED: 'true',
+      GAME_PROVIDER_RECOVERY_MODE: 'synthetic',
+      GAME_PROVIDER_WRITER_ENABLED: 'true',
+      GAME_PROVIDER_READBACK_ENABLED: 'true',
+      GAME_PROVIDER_PAYMENT_CONVERGENCE_ENABLED: 'true',
+    } as const;
+    expect(loadConfig(enabled)).toMatchObject({
+      GAME_PROVIDER_RECOVERY_MODE: 'synthetic',
+      GAME_PROVIDER_WRITER_ENABLED: true,
+      GAME_PROVIDER_READBACK_ENABLED: true,
+      GAME_PROVIDER_PAYMENT_CONVERGENCE_ENABLED: true,
+    });
+    expect(() => loadConfig({ ...enabled, APP_ENV: 'staging' })).toThrow('synthetic-only');
+    expect(() => loadConfig({ ...enabled, GAME_PROVIDER_RECOVERY_MODE: 'disabled' })).toThrow(
+      'GAME_PROVIDER_RECOVERY_MODE=synthetic',
+    );
+    expect(
+      loadConfig({
+        ...enabled,
+        GAME_PROVIDER_WRITER_ENABLED: 'false',
+        GAME_PROVIDER_PAYMENT_CONVERGENCE_ENABLED: 'false',
+      }),
+    ).toMatchObject({
+      GAME_PROVIDER_WRITER_ENABLED: false,
+      GAME_PROVIDER_READBACK_ENABLED: true,
+      GAME_PROVIDER_PAYMENT_CONVERGENCE_ENABLED: false,
+    });
+  });
+
+  it('keeps callback reconciliation impossible and requires writer for payment convergence', () => {
+    const base = {
+      ...validEnvironment,
+      GAMES_READ_ENABLED: 'true',
+      GAMES_COMMANDS_ENABLED: 'true',
+      GAME_PROVIDER_RECOVERY_MODE: 'synthetic',
+    } as const;
+    expect(() =>
+      loadConfig({
+        ...base,
+        GAME_PROVIDER_CALLBACK_RECONCILIATION_ENABLED: 'true',
+      }),
+    ).toThrow('authenticated callback consumer');
+    expect(() =>
+      loadConfig({
+        ...base,
+        GAME_PROVIDER_PAYMENT_CONVERGENCE_ENABLED: 'true',
+        GAME_PROVIDER_READBACK_ENABLED: 'true',
+      }),
+    ).toThrow('requires writer and read-back');
   });
 
   it('requires a server token and exact tenant scope when CUP player level projection ingestion is enabled', () => {

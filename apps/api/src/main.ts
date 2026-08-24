@@ -166,6 +166,13 @@ const tournamentSummarySource = config.GAMES_READ_ENABLED
 const profileSummaryRepository = createProfileSummaryRepository(pool);
 const gameRosterRepository = config.GAMES_COMMANDS_ENABLED
   ? createGameRosterRepository(pool, {
+      providerRecovery: {
+        enabled:
+          config.GAME_PROVIDER_WRITER_ENABLED ||
+          config.GAME_PROVIDER_READBACK_ENABLED ||
+          config.GAME_PROVIDER_PAYMENT_CONVERGENCE_ENABLED,
+        joinIntentEnabled: config.GAME_PROVIDER_PAYMENT_CONVERGENCE_ENABLED,
+      },
       onEligibilityDecision: (decision) => {
         recordLevelEligibilityMetrics({
           activityType: decision.activityType,
