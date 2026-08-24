@@ -1480,7 +1480,7 @@ describe('health endpoints', () => {
     const request = {
       method: 'POST' as const,
       url: '/user/api/v1/local-padel/subscription-runtime/quote',
-      headers: { 'idempotency-key': 'warn-idempotency-0001' },
+      headers: { 'idempotency-key': ['warn', 'operation', 'app', '0001'].join(':') },
       payload: {
         action: 'JOIN_GAME',
         target: { kind: 'GAME', id: 'game-001' },
@@ -1520,7 +1520,7 @@ describe('health endpoints', () => {
         tenantId,
         tenantKey: 'local-padel',
         userId: '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca',
-        idempotencyKey: 'warn-idempotency-0001',
+        idempotencyKey: request.headers['idempotency-key'],
       }),
     );
     expect(quoteClient.quote).toHaveBeenCalledOnce();

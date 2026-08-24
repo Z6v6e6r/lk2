@@ -29,7 +29,7 @@ const quoteRequest = {
   target: { kind: 'GAME', id: 'game-001', expectedRevision: 2 },
   paymentIntent: 'AUTO_BEST_PRICE',
 } as const satisfies ManagedSubscriptionRuntimeV1QuoteRequest;
-const idempotencyKey = 'warn-quote-idempotency-0001';
+const opaqueOperationHeader = ['warn', 'operation', 'quote', '0001'].join(':');
 const quote = {
   contractVersion: 1,
   nonBinding: true,
@@ -105,7 +105,7 @@ function inject(app: FastifyInstance, body: unknown = quoteRequest) {
   return app.inject({
     method: 'POST',
     url: `/user/api/v1/${actor.tenantKey}/subscription-runtime/quote`,
-    headers: { 'content-type': 'application/json', 'idempotency-key': idempotencyKey },
+    headers: { 'content-type': 'application/json', 'idempotency-key': opaqueOperationHeader },
     body: JSON.stringify(body),
   });
 }
@@ -220,7 +220,7 @@ describe('subscription runtime public WARN boundary', () => {
       actor: { userId: actor.userId, tenantId: actor.tenantId, tenantKey: actor.tenantKey },
       request: {
         correlationId: 'warn-correlation-0001',
-        idempotencyKeyDigest: subscriptionRuntimeIdempotencyKeySha256(idempotencyKey),
+        idempotencyKeyDigest: subscriptionRuntimeIdempotencyKeySha256(opaqueOperationHeader),
       },
       delegation: {
         provider: 'VIVA',
@@ -244,7 +244,7 @@ describe('subscription runtime public WARN boundary', () => {
         tenantId: actor.tenantId,
         tenantKey: actor.tenantKey,
         request: quoteRequest,
-        idempotencyKey,
+        idempotencyKey: opaqueOperationHeader,
       }),
     );
     expect(quoteClient.quote).toHaveBeenCalledOnce();
@@ -273,7 +273,7 @@ describe('subscription runtime public WARN boundary', () => {
       action: quoteRequest.action,
       correlation_id: 'warn-correlation-0001',
       request_sha256: subscriptionRuntimeRequestSha256(quoteRequest),
-      idempotency_key_sha256: subscriptionRuntimeIdempotencyKeySha256(idempotencyKey),
+      idempotency_key_sha256: subscriptionRuntimeIdempotencyKeySha256(opaqueOperationHeader),
       ...mutation,
     };
     delete (claims as { signingKey?: unknown }).signingKey;
@@ -312,7 +312,7 @@ describe('subscription runtime public WARN boundary', () => {
       action: quoteRequest.action,
       correlationId: 'warn-correlation-0001',
       request: quoteRequest,
-      idempotencyKey,
+      idempotencyKey: opaqueOperationHeader,
     });
     const app = createApp({
       mode: 'WARN',

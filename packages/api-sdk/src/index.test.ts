@@ -160,10 +160,11 @@ describe('PadlHubApiClient authentication boundary', () => {
       target: { kind: 'GAME', id: 'game-001', expectedRevision: 2 },
       paymentIntent: 'AUTO_BEST_PRICE',
     } as const;
+    const opaqueOperationHeader = ['warn', 'operation', 'sdk', '0001'].join(':');
 
     await expect(
       client.quoteManagedSubscriptionRuntimeWarn(request, {
-        idempotencyKey: 'warn-idempotency-0001',
+        idempotencyKey: opaqueOperationHeader,
       }),
     ).resolves.toEqual(response);
 
@@ -175,7 +176,7 @@ describe('PadlHubApiClient authentication boundary', () => {
     expect(init?.method).toBe('POST');
     expect(init?.cache).toBe('no-store');
     expect(headers.get('Authorization')).toBe(`Bearer ${authenticatedSession.accessToken}`);
-    expect(headers.get('Idempotency-Key')).toBe('warn-idempotency-0001');
+    expect(headers.get('Idempotency-Key')).toBe(opaqueOperationHeader);
     expect(headers.get('X-Subscription-Actor-Delegation')).toBeNull();
     expect(headers.get('X-Subscriptions-Integration-Token')).toBeNull();
     expect(JSON.parse(stringRequestBody(init?.body))).toEqual(request);
