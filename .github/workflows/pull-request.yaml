@@ -106,13 +106,84 @@ jobs:
 
   secret-scan:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v2
+      - name: Resolve the complete pull request range
+        id: secret-range
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          case "$GITHUB_EVENT_NAME" in
+            pull_request)
+              base_tip_sha="$EVENT_BASE_SHA"
+              head_sha="$EVENT_HEAD_SHA"
+              ;;
+            workflow_dispatch)
+              pulls_json="$(gh api --method GET "repos/$GITHUB_REPOSITORY/pulls" \
+                -f state=open \
+                -f head="$GITHUB_REPOSITORY_OWNER:$GITHUB_REF_NAME" \
+                -f per_page=100)"
+              matching_count="$(jq 'length' <<<"$pulls_json")"
+              if [[ "$matching_count" -ne 1 ]]; then
+                echo "Expected exactly one open pull request for $GITHUB_REF_NAME, found $matching_count" >&2
+                exit 1
+              fi
+              base_tip_sha="$(jq -r '.[0].base.sha' <<<"$pulls_json")"
+              head_sha="$(jq -r '.[0].head.sha' <<<"$pulls_json")"
+              test "$head_sha" = "$GITHUB_SHA"
+              ;;
+            *)
+              echo "Unsupported secret-scan event: $GITHUB_EVENT_NAME" >&2
+              exit 1
+              ;;
+          esac
+          [[ "$base_tip_sha" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$head_sha" =~ ^[0-9a-f]{40}$ ]]
+          git cat-file -e "$base_tip_sha^{commit}"
+          git cat-file -e "$head_sha^{commit}"
+          base_sha="$(git merge-base "$base_tip_sha" "$head_sha")"
+          [[ "$base_sha" =~ ^[0-9a-f]{40}$ ]]
+          git merge-base --is-ancestor "$base_sha" "$head_sha"
+          printf 'base_sha=%s\n' "$base_sha" >>"$GITHUB_OUTPUT"
+          printf 'head_sha=%s\n' "$head_sha" >>"$GITHUB_OUTPUT"
+      - name: Scan complete pull request graph for secrets
+        env:
+          BASE_SHA: ${{ steps.secret-range.outputs.base_sha }}
+          HEAD_SHA: ${{ steps.secret-range.outputs.head_sha }}
+          GITLEAKS_IMAGE: ghcr.io/gitleaks/gitleaks@sha256:e1b35e12a8c6fa8901f060459cfb6b2fc4c484d3afbe3b029733a3bbfab07055
+        run: |
+          set -euo pipefail
+          docker pull "$GITLEAKS_IMAGE"
+          test "$(docker image inspect "$GITLEAKS_IMAGE" --format '{{index .RepoDigests 0}}')" = "$GITLEAKS_IMAGE"
+          mkdir -p "$RUNNER_TEMP/gitleaks"
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            --volume "$PWD:/repo:ro" \
+            --volume "$RUNNER_TEMP/gitleaks:/out" \
+            "$GITLEAKS_IMAGE" detect \
+            --source=/repo \
+            --redact \
+            --verbose \
+            --exit-code=2 \
+            --report-format=sarif \
+            --report-path=/out/results.sarif \
+            --log-opts="--diff-merges=first-parent $BASE_SHA..$HEAD_SHA"
+      - name: Upload secret-scan diagnostics
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: secret-scan-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/gitleaks/results.sarif
+          if-no-files-found: error
+          retention-days: 90
 
   docker-build:
     runs-on: ubuntu-latest

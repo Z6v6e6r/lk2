@@ -717,6 +717,20 @@ describe('Timeweb amd64 publication workflow', () => {
             };
           }[];
         };
+        readonly ['secret-scan']?: {
+          readonly permissions?: Readonly<Record<string, string>>;
+          readonly steps?: readonly {
+            readonly if?: string;
+            readonly name?: string;
+            readonly run?: string;
+            readonly uses?: string;
+            readonly with?: {
+              readonly ['if-no-files-found']?: string;
+              readonly path?: string;
+              readonly ['retention-days']?: number;
+            };
+          }[];
+        };
       };
     };
     const testStep = document.jobs?.quality?.steps?.find(
@@ -724,6 +738,16 @@ describe('Timeweb amd64 publication workflow', () => {
     );
     const artifactStep = document.jobs?.quality?.steps?.find(
       ({ name }) => name === 'Upload test and coverage diagnostics',
+    );
+    const secretScanJob = document.jobs?.['secret-scan'];
+    const secretRange = secretScanJob?.steps?.find(
+      ({ name }) => name === 'Resolve the complete pull request range',
+    );
+    const secretScan = secretScanJob?.steps?.find(
+      ({ name }) => name === 'Scan complete pull request graph for secrets',
+    );
+    const secretArtifact = secretScanJob?.steps?.find(
+      ({ name }) => name === 'Upload secret-scan diagnostics',
     );
 
     expect(testStep).toEqual({
@@ -740,6 +764,37 @@ describe('Timeweb amd64 publication workflow', () => {
         path: '.ci-artifacts/test-and-coverage\ncoverage\n',
       },
     });
+    expect(secretScanJob?.permissions).toEqual({
+      contents: 'read',
+      'pull-requests': 'read',
+    });
+    expect(secretScanJob?.steps?.[0]?.uses).toBe(
+      'actions/checkout@11d5960a326750d5838078e36cf38b85af677262',
+    );
+    expect(secretRange?.run).toContain('case "$GITHUB_EVENT_NAME" in');
+    expect(secretRange?.run).toContain('base_sha="$(git merge-base "$base_tip_sha" "$head_sha")"');
+    expect(secretRange?.run).toContain('git cat-file -e "$head_sha^{commit}"');
+    expect(secretScan?.run).toContain('docker pull "$GITLEAKS_IMAGE"');
+    expect(secretScan?.run).toContain(
+      '--log-opts="--diff-merges=first-parent $BASE_SHA..$HEAD_SHA"',
+    );
+    expect(secretScan?.run).not.toContain('--first-parent');
+    expect(secretScan?.run).not.toContain('--no-merges');
+    expect(secretArtifact).toMatchObject({
+      if: '${{ always() }}',
+      uses: 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02',
+      with: {
+        'if-no-files-found': 'error',
+        path: '${{ runner.temp }}/gitleaks/results.sarif',
+        'retention-days': 90,
+      },
+    });
+    expect(workflow).toContain('test "$head_sha" = "$GITHUB_SHA"');
+    expect(workflow).toContain('git merge-base --is-ancestor "$base_sha" "$head_sha"');
+    expect(workflow).not.toContain('gitleaks/gitleaks-action@');
+    expect(workflow).toContain(
+      'ghcr.io/gitleaks/gitleaks@sha256:e1b35e12a8c6fa8901f060459cfb6b2fc4c484d3afbe3b029733a3bbfab07055',
+    );
     expect(diagnosticsRunner).toContain('set -uo pipefail');
     expect(diagnosticsRunner).toContain('reason=watchdog_deadline signal=USR1');
     expect(diagnosticsRunner).toContain('reason=watchdog_grace_expired signal=KILL');
@@ -760,5 +815,71 @@ describe('Timeweb amd64 publication workflow', () => {
     expect(diagnosticsRunner).toContain('--reporter=./scripts/vitest-ci-diagnostics-reporter.ts');
     expect(diagnosticsRunner).toContain('exit "$test_status"');
     expect(diagnosticsRunner).not.toContain('continue-on-error');
+  });
+
+  it('includes merged side-branch commits in the secret-scan range', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'phub-secret-scan-graph-'));
+    const git = (args: readonly string[]): string => {
+      const result = spawnSync('git', args, { cwd: directory, encoding: 'utf8' });
+      if (result.status !== 0) {
+        throw new Error(`git ${args.join(' ')} failed: ${result.stderr}`);
+      }
+      return result.stdout.trim();
+    };
+
+    try {
+      git(['init', '--initial-branch=main']);
+      git(['config', 'user.email', 'ci-graph@example.invalid']);
+      git(['config', 'user.name', 'CI Graph Test']);
+      await writeFile(join(directory, 'base.txt'), 'base\n');
+      await writeFile(join(directory, 'conflict.txt'), 'base conflict value\n');
+      git(['add', 'base.txt', 'conflict.txt']);
+      git(['commit', '-m', 'base']);
+      const baseSha = git(['rev-parse', 'HEAD']);
+
+      git(['checkout', '-b', 'side']);
+      await writeFile(join(directory, 'side.txt'), 'side branch marker\n');
+      await writeFile(join(directory, 'conflict.txt'), 'side conflict value\n');
+      git(['add', 'side.txt', 'conflict.txt']);
+      git(['commit', '-m', 'side']);
+      const sideSha = git(['rev-parse', 'HEAD']);
+
+      git(['checkout', 'main']);
+      await writeFile(join(directory, 'feature.txt'), 'feature branch marker\n');
+      await writeFile(join(directory, 'conflict.txt'), 'main conflict value\n');
+      git(['add', 'feature.txt', 'conflict.txt']);
+      git(['commit', '-m', 'feature']);
+      const conflictedMerge = spawnSync('git', ['merge', '--no-ff', 'side'], {
+        cwd: directory,
+        encoding: 'utf8',
+      });
+      expect(conflictedMerge.status).toBe(1);
+      await writeFile(join(directory, 'conflict.txt'), 'merge-resolution-only-marker\n');
+      git(['add', 'conflict.txt']);
+      git(['commit', '-m', 'merge side with resolution']);
+      const headSha = git(['rev-parse', 'HEAD']);
+
+      const completeRange = git(['rev-list', `${baseSha}..${headSha}`]).split('\n');
+      const firstParentWithoutMerges = git([
+        'rev-list',
+        '--no-merges',
+        '--first-parent',
+        `${baseSha}..${headSha}`,
+      ]).split('\n');
+      expect(completeRange).toContain(sideSha);
+      expect(firstParentWithoutMerges).not.toContain(sideSha);
+      const plainPatch = git(['log', '-p', '--format=', `${baseSha}..${headSha}`]);
+      const mergeAwarePatch = git([
+        'log',
+        '-p',
+        '--format=',
+        '--diff-merges=first-parent',
+        `${baseSha}..${headSha}`,
+      ]);
+      expect(plainPatch).not.toContain('merge-resolution-only-marker');
+      expect(mergeAwarePatch).toContain('merge-resolution-only-marker');
+    } finally {
+      await rm(directory, { force: true, recursive: true });
+    }
   });
 });
