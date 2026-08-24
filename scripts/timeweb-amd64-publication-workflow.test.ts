@@ -698,13 +698,23 @@ describe('Timeweb amd64 publication workflow', () => {
       new URL('../.github/workflows/pull-request.yaml', import.meta.url),
       'utf8',
     );
+    const diagnosticsRunner = await readFile(
+      new URL('./run-ci-tests-with-diagnostics.sh', import.meta.url),
+      'utf8',
+    );
     const document = parse(workflow) as {
       readonly jobs?: {
         readonly quality?: {
           readonly steps?: readonly {
+            readonly if?: string;
             readonly name?: string;
             readonly run?: string;
             readonly ['timeout-minutes']?: number;
+            readonly uses?: string;
+            readonly with?: {
+              readonly ['if-no-files-found']?: string;
+              readonly path?: string;
+            };
           }[];
         };
       };
@@ -712,11 +722,31 @@ describe('Timeweb amd64 publication workflow', () => {
     const testStep = document.jobs?.quality?.steps?.find(
       ({ name }) => name === 'Unit and integration tests',
     );
+    const artifactStep = document.jobs?.quality?.steps?.find(
+      ({ name }) => name === 'Upload test and coverage diagnostics',
+    );
 
     expect(testStep).toEqual({
       name: 'Unit and integration tests',
-      run: 'timeout --signal=USR1 --kill-after=30s 8m node --require why-is-node-running/include ./node_modules/vitest/vitest.mjs run --coverage --reporter=default --reporter=hanging-process',
+      run: 'scripts/run-ci-tests-with-diagnostics.sh',
       'timeout-minutes': 10,
     });
+    expect(artifactStep).toMatchObject({
+      if: '${{ always() }}',
+      name: 'Upload test and coverage diagnostics',
+      uses: 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02',
+      with: {
+        'if-no-files-found': 'error',
+        path: '.ci-artifacts/test-and-coverage\ncoverage\n',
+      },
+    });
+    expect(diagnosticsRunner).toContain('set -uo pipefail');
+    expect(diagnosticsRunner).toContain('reason=watchdog_deadline signal=USR1');
+    expect(diagnosticsRunner).toContain('reason=watchdog_grace_expired signal=KILL');
+    expect(diagnosticsRunner).toContain('memory.current');
+    expect(diagnosticsRunner).toContain('--reporter=junit');
+    expect(diagnosticsRunner).toContain('--reporter=./scripts/vitest-ci-diagnostics-reporter.ts');
+    expect(diagnosticsRunner).toContain('exit "$test_status"');
+    expect(diagnosticsRunner).not.toContain('continue-on-error');
   });
 });

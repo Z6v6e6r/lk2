@@ -77,12 +77,17 @@ jobs:
         run: npm run format:check && npm run lint && npm run typecheck
       - name: Unit and integration tests
         timeout-minutes: 10
-        run: >-
-          timeout --signal=USR1 --kill-after=30s 8m
-          node --require why-is-node-running/include
-          ./node_modules/vitest/vitest.mjs run --coverage
-          --reporter=default
-          --reporter=hanging-process
+        run: scripts/run-ci-tests-with-diagnostics.sh
+      - name: Upload test and coverage diagnostics
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: quality-test-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .ci-artifacts/test-and-coverage
+            coverage
+          if-no-files-found: error
+          retention-days: 14
       - name: Build all artifacts
         run: npm run build
       - name: Validate local Compose model
