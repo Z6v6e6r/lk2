@@ -264,6 +264,8 @@ describe('Timeweb deterministic release controls', () => {
     expect(executorSource).toContain('PHUB_TIMEWEB_ROOT_AUTHORIZATION_V1');
     expect(executorSource).toContain('flock -n 9');
     expect(executorSource).toContain('audit_event AUTHORIZED');
+    expect(executorSource).toContain('terminal_audit');
+    expect(executorSource).toContain('audit_event FAILED');
     expect(executorSource).toContain('authorization_replayed');
     expect(executorSource).toContain(
       'app_compose --profile worker --profile migration config --quiet',

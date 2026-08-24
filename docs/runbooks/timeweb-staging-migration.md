@@ -241,6 +241,22 @@ Before any start, require:
 sudo -n /usr/local/sbin/phub-timeweb-root-executor preflight
 ```
 
+The publication/reconciliation workflow must supply a machine-readable release manifest before any
+image pull or start. Validate the downloaded artifact locally before it is admitted to a root-owned
+release directory:
+
+```sh
+node scripts/verify-timeweb-release-manifest.js /path/to/release-manifest.json
+```
+
+The validator is deliberately pinned to the selected application SHA and checks the schemaVersion,
+repository, linux/amd64 platform, exact five-component set, component repository names, immutable
+`sha256` digests, source revision, and the required provenance/SBOM/reconciliation assertions. A
+boolean assertion in the manifest is not independent attestation evidence: the publication gate
+must also retain and verify the corresponding provenance and SBOM artifacts. Until that workflow
+publishes a successful machine manifest, image pull, migration, application start and ingress remain
+blocked. Do not synthesize the manifest from partial job receipts or copy digests from prose.
+
 This rechecks the installed release's file manifest, root metadata, isolated env contract and all
 three rendered Compose documents without printing secret values. It also reuses the established
 API/realtime secret-isolation verifier and rejects non-root or permissive metadata on every present

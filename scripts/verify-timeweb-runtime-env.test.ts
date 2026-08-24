@@ -1,4 +1,4 @@
-import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -11,11 +11,15 @@ const script = fileURLToPath(new URL('./verify-timeweb-runtime-env.sh', import.m
 function fixture(overrides: Record<string, string> = {}) {
   const directory = mkdtempSync(join(tmpdir(), 'phub-timeweb-env-'));
   mkdirSync(join(directory, 'redis'));
+  mkdirSync(join(directory, 'optional'));
   const files = {
-    'staging.env': 'DATABASE_URL=postgres://phub_runtime:redacted@postgres/phub\n',
+    'staging.env':
+      'DATABASE_URL=postgres://phub_runtime:redacted@postgres/phub\nREDIS_URL=redis://phub:redacted@redis/0\nRABBITMQ_URL=amqp://phub:redacted@rabbitmq/phub_staging\nAPP_ENV=staging\nVIVA_MODE=disabled\nVIVA_OAUTH_ENABLED=false\nVIVA_DIRECT_READ_ENABLED=false\nVIVA_OAUTH_EXISTING_SUBJECT_BOOTSTRAP_ENABLED=false\nWEB_PUSH_ENABLED=false\nBOOKING_REMINDER_SCHEDULER_ENABLED=false\nGIFT_CERTIFICATE_PAYMENT_MODE=disabled\nGIFT_CERTIFICATE_DELIVERY_MODE=disabled\nGAMES_COMMANDS_ENABLED=false\nGAMES_RESULTS_WRITE_MODE=disabled\nLEGACY_GAME_COMMAND_BRIDGE_ENABLED=false\nPARTICIPATION_COMMANDS_ENABLED=false\nCUP_RATING_CONSUMER_ENABLED=false\nHOME_VIVA_SYNC_ENABLED=false\nACTIVITY_HISTORY_SYNC_ENABLED=false\nCUP_PLAYER_LEVEL_PROJECTION_ENABLED=false\n',
     'staging.api-s3.env': 'S3_ACCESS_KEY=api-key\nS3_SECRET_KEY=api-secret\n',
     'staging.worker-s3.env': 'S3_ACCESS_KEY=worker-key\nS3_SECRET_KEY=worker-secret\n',
     'staging.migrator.env': 'DATABASE_URL=postgres://phub_migrator:redacted@postgres/phub\n',
+    'realtime.env':
+      'DATABASE_URL=postgres://phub_runtime:redacted@postgres/phub\nREDIS_URL=redis://phub:redacted@redis/0\nRABBITMQ_URL=amqp://phub:redacted@rabbitmq/phub_staging\nCOMMUNITIES_REALTIME_ENABLED=false\nJWT_REALTIME_SECRET=test-fixture-randomized-1234567890\n',
     'redis/users.acl':
       'user default on nopass ~* -@all +ping\nuser phub on >test-fixture-randomized-1234567890 ~* +@read +@write +@connection +@transaction +@pubsub -@admin -@dangerous +eval +evalsha\n',
     ...overrides,
@@ -42,7 +46,12 @@ describe('Timeweb runtime env isolation verifier', () => {
   });
 
   it('rejects S3 credentials in the shared runtime contour', () => {
-    const result = verify(fixture({ 'staging.env': 'S3_ACCESS_KEY=leaked\n' }));
+    const result = verify(
+      fixture({
+        'staging.env':
+          'DATABASE_URL=postgres://phub_runtime:redacted@postgres/phub\nREDIS_URL=redis://phub:redacted@redis/0\nRABBITMQ_URL=amqp://phub:redacted@rabbitmq/phub_staging\nAPP_ENV=staging\nVIVA_MODE=disabled\nVIVA_OAUTH_ENABLED=false\nVIVA_DIRECT_READ_ENABLED=false\nVIVA_OAUTH_EXISTING_SUBJECT_BOOTSTRAP_ENABLED=false\nWEB_PUSH_ENABLED=false\nBOOKING_REMINDER_SCHEDULER_ENABLED=false\nGIFT_CERTIFICATE_PAYMENT_MODE=disabled\nGIFT_CERTIFICATE_DELIVERY_MODE=disabled\nGAMES_COMMANDS_ENABLED=false\nGAMES_RESULTS_WRITE_MODE=disabled\nLEGACY_GAME_COMMAND_BRIDGE_ENABLED=false\nPARTICIPATION_COMMANDS_ENABLED=false\nCUP_RATING_CONSUMER_ENABLED=false\nHOME_VIVA_SYNC_ENABLED=false\nACTIVITY_HISTORY_SYNC_ENABLED=false\nCUP_PLAYER_LEVEL_PROJECTION_ENABLED=false\nS3_ACCESS_KEY=leaked\n',
+      }),
+    );
     expect(result.status).toBe(1);
     expect(result.stderr).toContain('s3_credentials_in_shared_runtime');
   });
@@ -107,7 +116,7 @@ describe('Timeweb runtime env isolation verifier', () => {
       }),
     );
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain('unexpected_key_set');
+    expect(result.stderr).toContain('duplicate_assignment');
   });
 
   it('rejects a second shared runtime database URL', () => {
@@ -118,7 +127,7 @@ describe('Timeweb runtime env isolation verifier', () => {
       }),
     );
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain('runtime_database_identity');
+    expect(result.stderr).toContain('duplicate_assignment');
   });
 
   it('rejects the public Redis placeholder even if the account is enabled', () => {
@@ -130,5 +139,88 @@ describe('Timeweb runtime env isolation verifier', () => {
     );
     expect(result.status).toBe(1);
     expect(result.stderr).toContain('redis_acl_placeholder');
+  });
+
+  it('rejects production-facing and file-path override values without printing them', () => {
+    const result = verify(
+      fixture({
+        'staging.env':
+          'DATABASE_URL=postgres://phub_runtime:redacted@postgres/phub\nREDIS_URL=redis://phub:redacted@redis/0\nRABBITMQ_URL=amqp://phub:redacted@rabbitmq/phub_staging\nAPP_ENV=staging\nVIVA_MODE=disabled\nVIVA_OAUTH_ENABLED=false\nVIVA_DIRECT_READ_ENABLED=false\nVIVA_OAUTH_EXISTING_SUBJECT_BOOTSTRAP_ENABLED=false\nWEB_PUSH_ENABLED=false\nBOOKING_REMINDER_SCHEDULER_ENABLED=false\nGIFT_CERTIFICATE_PAYMENT_MODE=disabled\nGIFT_CERTIFICATE_DELIVERY_MODE=disabled\nGAMES_COMMANDS_ENABLED=false\nGAMES_RESULTS_WRITE_MODE=disabled\nLEGACY_GAME_COMMAND_BRIDGE_ENABLED=false\nPARTICIPATION_COMMANDS_ENABLED=false\nCUP_RATING_CONSUMER_ENABLED=false\nHOME_VIVA_SYNC_ENABLED=false\nACTIVITY_HISTORY_SYNC_ENABLED=false\nCUP_PLAYER_LEVEL_PROJECTION_ENABLED=false\nVIVA_API_KEY=production-secret\n',
+      }),
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('unsafe_runtime_override');
+    expect(`${result.stdout}${result.stderr}`).not.toContain('production-secret');
+  });
+
+  it('rejects a production target in the realtime-only contour without printing it', () => {
+    const result = verify(
+      fixture({
+        'realtime.env':
+          'DATABASE_URL=postgres://prod:secret@production.example/phub\nREDIS_URL=redis://phub:redacted@redis/0\nRABBITMQ_URL=amqp://phub:redacted@rabbitmq/phub_staging\nCOMMUNITIES_REALTIME_ENABLED=false\nJWT_REALTIME_SECRET=test-fixture-randomized-1234567890\n',
+      }),
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('realtime_target_identity');
+    expect(`${result.stdout}${result.stderr}`).not.toContain('production.example');
+  });
+
+  it('rejects a kill-switch shadow in an optional contour', () => {
+    const directory = fixture();
+    writeFileSync(
+      join(directory, 'optional', 'staging.games.env'),
+      'GAMES_COMMANDS_ENABLED=true\n',
+    );
+    const result = verify(directory);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('optional_contour_shadowing');
+  });
+
+  it('rejects every noncanonical assignment form before value checks', () => {
+    for (const assignment of [
+      ' GAMES_COMMANDS_ENABLED=true\n',
+      'GAMES_COMMANDS_ENABLED =true\n',
+      'export GAMES_COMMANDS_ENABLED=true\n',
+    ]) {
+      const directory = fixture();
+      const basePath = join(directory, 'staging.env');
+      writeFileSync(basePath, `${readFileSync(basePath, 'utf8')}${assignment}`);
+      const result = verify(directory);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain('noncanonical_assignment');
+    }
+  });
+
+  it('rejects alternate assignment syntax in every optional contour', () => {
+    for (const name of [
+      'staging.auth.env',
+      'staging.override.env',
+      'staging.games.env',
+      'staging.communities.env',
+      'staging.chat-push-foundation.env',
+    ]) {
+      const directory = fixture();
+      writeFileSync(join(directory, 'optional', name), 'export GAMES_COMMANDS_ENABLED=true\n');
+      const result = verify(directory);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain('noncanonical_assignment');
+    }
+  });
+
+  it('rejects duplicate normalized keys in base, realtime, and optional contours', () => {
+    const cases = [
+      ['staging.env', 'GAMES_COMMANDS_ENABLED=false\n'],
+      ['realtime.env', 'DATABASE_URL=postgres://phub_runtime:redacted@postgres/phub\n'],
+      ['optional/staging.games.env', 'FEATURE_MODE=safe\nFEATURE_MODE=unsafe\n'],
+    ] as const;
+    for (const [name, assignment] of cases) {
+      const directory = fixture();
+      const path = join(directory, name);
+      const current = name.startsWith('optional/') ? '' : readFileSync(path, 'utf8');
+      writeFileSync(path, `${current}${assignment}`);
+      const result = verify(directory);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain('duplicate_assignment');
+    }
   });
 });

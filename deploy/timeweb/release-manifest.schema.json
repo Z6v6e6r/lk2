@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PadlHub Timeweb staging machine release manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "repository", "gitCommit", "platform", "images"],
+  "properties": {
+    "schemaVersion": { "const": "PHUB_TIMEWEB_RELEASE_MANIFEST_V1" },
+    "repository": { "const": "Z6v6e6r/lk2" },
+    "gitCommit": { "const": "35c8312b79cccdd136f2bfd892efbea629b8b919" },
+    "platform": { "const": "linux/amd64" },
+    "images": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 5,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "component",
+          "repository",
+          "digest",
+          "architecture",
+          "revision",
+          "provenance",
+          "sbom",
+          "reconciliation"
+        ],
+        "properties": {
+          "component": { "enum": ["web", "api", "worker", "realtime", "migrator"] },
+          "repository": {
+            "pattern": "^ghcr\\.io/z6v6e6r/phub-(web|api|worker|realtime|migrator)$"
+          },
+          "digest": { "pattern": "^sha256:[a-f0-9]{64}$" },
+          "architecture": { "const": "amd64" },
+          "revision": { "const": "35c8312b79cccdd136f2bfd892efbea629b8b919" },
+          "provenance": { "const": true },
+          "sbom": { "const": true },
+          "reconciliation": { "const": true }
+        }
+      }
+    }
+  }
+}

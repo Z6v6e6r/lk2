@@ -58,6 +58,17 @@ audit_event() {
     "$authorization_nonce" "$audit_outcome" >> "$audit_file" || fail audit_write
 }
 
+terminal_result=
+terminal_audit() {
+  terminal_status=$?
+  trap - EXIT
+  if [ -n "${authorized_operation:-}" ] && [ "$terminal_result" != PASSED ]; then
+    audit_event FAILED
+  fi
+  exit "$terminal_status"
+}
+trap terminal_audit EXIT
+
 authorize_operation() {
   requested_operation=$1
   requested_ops_sha=$2
@@ -93,6 +104,7 @@ authorize_operation() {
 
 complete_authorized_operation() {
   audit_event PASSED
+  terminal_result=PASSED
 }
 
 verify_release_files() {
@@ -363,7 +375,6 @@ case "$operation" in
       [ -z "$running_ids" ] || rollback_failed=1
     done
     if [ "$rollback_failed" -ne 0 ]; then
-      audit_event FAILED
       fail rollback_incomplete
     fi
     complete_authorized_operation

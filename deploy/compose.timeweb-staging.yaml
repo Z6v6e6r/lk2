@@ -19,20 +19,20 @@ x-runtime: &runtime
 x-application-runtime: &application-runtime
   <<: *runtime
   env_file:
-    - path: ${RUNTIME_ENV_FILE:-/etc/phub/staging.env}
-    - path: ${RUNTIME_AUTH_ENV_FILE:-/opt/phub/staging.auth.env}
+    - path: /etc/phub/staging.env
+    - path: /opt/phub/staging.auth.env
       required: false
-    - path: ${RUNTIME_OVERRIDE_ENV_FILE:-/opt/phub/staging.override.env}
+    - path: /opt/phub/staging.override.env
       required: false
-    - path: ${RUNTIME_GAMES_ENV_FILE:-/opt/phub/staging.games.env}
+    - path: /opt/phub/staging.games.env
       required: false
-    - path: ${RUNTIME_CHAT_PUSH_FOUNDATION_ENV_FILE:-/opt/phub/staging.chat-push-foundation.env}
+    - path: /opt/phub/staging.chat-push-foundation.env
       required: false
 
 x-realtime-runtime: &realtime-runtime
   <<: *runtime
   env_file:
-    - path: ${REALTIME_RUNTIME_ENV_FILE:-/etc/phub/realtime.env}
+    - path: /etc/phub/realtime.env
 
 x-timeweb-object-storage: &timeweb-object-storage
   S3_ENDPOINT: https://s3.twcstorage.ru
@@ -57,18 +57,18 @@ services:
   api:
     <<: *runtime
     env_file:
-      - path: ${RUNTIME_ENV_FILE:-/etc/phub/staging.env}
-      - path: ${RUNTIME_AUTH_ENV_FILE:-/opt/phub/staging.auth.env}
+      - path: /etc/phub/staging.env
+      - path: /opt/phub/staging.auth.env
         required: false
-      - path: ${RUNTIME_OVERRIDE_ENV_FILE:-/opt/phub/staging.override.env}
+      - path: /opt/phub/staging.override.env
         required: false
-      - path: ${RUNTIME_GAMES_ENV_FILE:-/opt/phub/staging.games.env}
+      - path: /opt/phub/staging.games.env
         required: false
-      - path: ${RUNTIME_COMMUNITIES_ENV_FILE:-/opt/phub/staging.communities.env}
+      - path: /opt/phub/staging.communities.env
         required: false
-      - path: ${RUNTIME_CHAT_PUSH_FOUNDATION_ENV_FILE:-/opt/phub/staging.chat-push-foundation.env}
+      - path: /opt/phub/staging.chat-push-foundation.env
         required: false
-      - path: ${API_S3_ENV_FILE:-/etc/phub/staging.api-s3.env}
+      - path: /etc/phub/staging.api-s3.env
     image: ${REGISTRY:?REGISTRY is required}/phub-api@${API_IMAGE_DIGEST:?API_IMAGE_DIGEST is required}
     environment:
       <<: *timeweb-object-storage
@@ -122,16 +122,16 @@ services:
   worker:
     <<: *application-runtime
     env_file:
-      - path: ${RUNTIME_ENV_FILE:-/etc/phub/staging.env}
-      - path: ${RUNTIME_AUTH_ENV_FILE:-/opt/phub/staging.auth.env}
+      - path: /etc/phub/staging.env
+      - path: /opt/phub/staging.auth.env
         required: false
-      - path: ${RUNTIME_OVERRIDE_ENV_FILE:-/opt/phub/staging.override.env}
+      - path: /opt/phub/staging.override.env
         required: false
-      - path: ${RUNTIME_GAMES_ENV_FILE:-/opt/phub/staging.games.env}
+      - path: /opt/phub/staging.games.env
         required: false
-      - path: ${RUNTIME_CHAT_PUSH_FOUNDATION_ENV_FILE:-/opt/phub/staging.chat-push-foundation.env}
+      - path: /opt/phub/staging.chat-push-foundation.env
         required: false
-      - path: ${WORKER_S3_ENV_FILE:-/etc/phub/staging.worker-s3.env}
+      - path: /etc/phub/staging.worker-s3.env
     image: ${REGISTRY:?REGISTRY is required}/phub-worker@${WORKER_IMAGE_DIGEST:?WORKER_IMAGE_DIGEST is required}
     environment:
       <<: *timeweb-object-storage
@@ -150,7 +150,7 @@ services:
   migrator:
     <<: *runtime
     env_file:
-      - path: ${MIGRATOR_RUNTIME_ENV_FILE:-/etc/phub/staging.migrator.env}
+      - path: /etc/phub/staging.migrator.env
     image: ${REGISTRY:?REGISTRY is required}/phub-migrator@${MIGRATOR_IMAGE_DIGEST:?MIGRATOR_IMAGE_DIGEST is required}
     restart: 'no'
     profiles: [migration]

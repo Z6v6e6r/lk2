@@ -105,15 +105,11 @@ describe('Timeweb staging Compose contract', () => {
     expect(applicationSource).not.toContain('MINIO_');
     expect(applicationSource).not.toContain('S3_ACCESS_KEY:');
     expect(applicationSource).not.toContain('S3_SECRET_KEY:');
-    expect(compose.services['api']?.env_file?.at(-1)?.path).toBe(
-      '${API_S3_ENV_FILE:-/etc/phub/staging.api-s3.env}',
-    );
+    expect(compose.services['api']?.env_file?.at(-1)?.path).toBe('/etc/phub/staging.api-s3.env');
     expect(compose.services['worker']?.env_file?.at(-1)?.path).toBe(
-      '${WORKER_S3_ENV_FILE:-/etc/phub/staging.worker-s3.env}',
+      '/etc/phub/staging.worker-s3.env',
     );
-    expect(compose.services['realtime']?.env_file).toEqual([
-      { path: '${REALTIME_RUNTIME_ENV_FILE:-/etc/phub/realtime.env}' },
-    ]);
+    expect(compose.services['realtime']?.env_file).toEqual([{ path: '/etc/phub/realtime.env' }]);
     expect(compose.networks['ingress']).toEqual({ external: true, name: 'phub-ingress' });
     expect(compose.networks['data']).toEqual({ external: true, name: 'phub-data' });
     expect(compose.networks['telemetry']).toEqual({ external: true, name: 'phub-telemetry' });
@@ -138,9 +134,7 @@ describe('Timeweb staging Compose contract', () => {
     };
     const migrator = compose.services['migrator'];
 
-    expect(migrator?.env_file).toEqual([
-      { path: '${MIGRATOR_RUNTIME_ENV_FILE:-/etc/phub/staging.migrator.env}' },
-    ]);
+    expect(migrator?.env_file).toEqual([{ path: '/etc/phub/staging.migrator.env' }]);
     expect(migrator?.environment).toBeUndefined();
     expect(migrator?.networks).toEqual(['data']);
     for (const forbidden of ['staging.env', 'staging.auth.env', 'api-s3', 'worker-s3']) {
