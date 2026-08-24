@@ -13,6 +13,7 @@ readonly heartbeat_seconds="${CI_TEST_HEARTBEAT_SECONDS:-15}"
 readonly watchdog_seconds="${CI_TEST_WATCHDOG_SECONDS:-480}"
 readonly kill_after_seconds="${CI_TEST_KILL_AFTER_SECONDS:-30}"
 readonly external_kill_after_seconds="${CI_TEST_EXTERNAL_KILL_AFTER_SECONDS:-2}"
+readonly residual_process_group_status=125
 
 mkdir -p "$diagnostics_dir"
 : >"$stdout_log"
@@ -29,6 +30,9 @@ monitor_pid=''
 watchdog_pid=''
 launcher_pid=''
 finalized=0
+registration_in_progress=0
+pending_signal_name=''
+pending_signal_status=''
 
 log_watchdog_event() {
   printf 'timestamp=%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" | tee -a "$watchdog_log"
@@ -104,12 +108,15 @@ stop_helper() {
   fi
 }
 
+process_group_alive() {
+  [[ -n "$test_pgid" ]] && kill -0 -- "-$test_pgid" 2>/dev/null
+}
+
 terminate_test_group() {
-  local live_pid="${test_pid:-$launcher_pid}"
-  if [[ -n "$test_pgid" && -n "$live_pid" ]] && kill -0 "$live_pid" 2>/dev/null; then
+  if process_group_alive; then
     kill -TERM -- "-$test_pgid" 2>/dev/null || true
     sleep "$external_kill_after_seconds"
-    if kill -0 "$live_pid" 2>/dev/null; then
+    if process_group_alive; then
       kill -KILL -- "-$test_pgid" 2>/dev/null || true
     fi
   fi
@@ -164,9 +171,20 @@ finalize() {
 terminate_for_external_signal() {
   local signal_name="$1"
   local status="$2"
+  if [[ "$registration_in_progress" -eq 1 ]]; then
+    pending_signal_name="$signal_name"
+    pending_signal_status="$status"
+    return
+  fi
   log_watchdog_event "reason=external_termination signal=$signal_name target_pgid=${test_pgid:-unavailable}"
   finalize "$status" "external_signal_$signal_name" true
   exit "$status"
+}
+
+handle_pending_external_signal() {
+  if [[ -n "$pending_signal_name" ]]; then
+    terminate_for_external_signal "$pending_signal_name" "$pending_signal_status"
+  fi
 }
 
 trap 'terminate_for_external_signal TERM 143' TERM
@@ -200,12 +218,15 @@ if [[ "$#" -gt 0 ]]; then
   test_command=("$@")
 fi
 
+registration_in_progress=1
 setsid bash -c 'printf "%s\n" "$$" >"$1"; shift; exec "$@"' bash "$test_pid_file" \
   "${test_command[@]}" \
   > >(tee -a "$stdout_log") \
   2> >(tee -a "$stderr_log" >&2) &
 launcher_pid=$!
 test_pgid="$launcher_pid"
+registration_in_progress=0
+handle_pending_external_signal
 
 for _attempt in {1..100}; do
   if [[ -s "$test_pid_file" ]]; then
@@ -220,6 +241,7 @@ done
 
 log_watchdog_event "reason=started launcher_pid=$launcher_pid test_pid=${test_pid:-unavailable} test_pgid=${test_pgid:-unavailable}"
 
+registration_in_progress=1
 (
   while kill -0 "$launcher_pid" 2>/dev/null; do
     capture_snapshot running
@@ -227,20 +249,27 @@ log_watchdog_event "reason=started launcher_pid=$launcher_pid test_pid=${test_pi
   done
 ) &
 monitor_pid=$!
+registration_in_progress=0
+handle_pending_external_signal
 
+registration_in_progress=1
 (
   sleep "$watchdog_seconds"
-  if kill -0 "$test_pid" 2>/dev/null; then
-    log_watchdog_event "reason=watchdog_deadline signal=USR1 target_pid=$test_pid"
-    kill -USR1 "$test_pid" 2>/dev/null || true
+  if process_group_alive; then
+    log_watchdog_event "reason=watchdog_deadline signal=USR1 target_pid=${test_pid:-unavailable} target_pgid=$test_pgid"
+    if [[ -n "$test_pid" ]] && kill -0 "$test_pid" 2>/dev/null; then
+      kill -USR1 "$test_pid" 2>/dev/null || true
+    fi
     sleep "$kill_after_seconds"
-    if kill -0 "$test_pid" 2>/dev/null; then
+    if process_group_alive; then
       log_watchdog_event "reason=watchdog_grace_expired signal=KILL target_pgid=$test_pgid"
       kill -KILL -- "-$test_pgid" 2>/dev/null || true
     fi
   fi
 ) &
 watchdog_pid=$!
+registration_in_progress=0
+handle_pending_external_signal
 {
   printf 'monitor_pid=%s\n' "$monitor_pid"
   printf 'watchdog_pid=%s\n' "$watchdog_pid"
@@ -248,8 +277,19 @@ watchdog_pid=$!
 
 wait "$launcher_pid"
 test_status=$?
-if [[ "$test_status" -eq 137 ]] && grep -q 'reason=watchdog_grace_expired' "$watchdog_log"; then
+residual_process_group=false
+if process_group_alive; then
+  residual_process_group=true
+  log_watchdog_event "reason=residual_process_group_after_leader_exit target_pgid=$test_pgid leader_status=$test_status"
+  terminate_test_group
+fi
+if [[ "$test_status" -eq 0 && "$residual_process_group" == true ]]; then
+  test_status="$residual_process_group_status"
+  termination_reason='residual_process_group_after_success'
+elif [[ "$test_status" -eq 137 ]] && grep -q 'reason=watchdog_grace_expired' "$watchdog_log"; then
   termination_reason='watchdog_sigkill'
+elif [[ "$residual_process_group" == true ]]; then
+  termination_reason="test_exit_${test_status}_with_residual_process_group"
 elif [[ "$test_status" -ge 128 ]]; then
   termination_reason="signal_$((test_status - 128))"
 else

@@ -51,8 +51,18 @@ function parsePidFile(contents: string): readonly number[] {
     .filter(Number.isSafeInteger);
 }
 
-function expectProcessGone(pid: number): void {
-  expect(() => process.kill(pid, 0)).toThrow();
+async function expectProcessGone(pid: number, timeoutMilliseconds = 2_000): Promise<void> {
+  const deadline = Date.now() + timeoutMilliseconds;
+  while (Date.now() < deadline) {
+    try {
+      process.kill(pid, 0);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ESRCH') return;
+      throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(`Process ${pid} survived supervisor finalization`);
 }
 
 async function waitForExit(child: ReturnType<typeof spawn>): Promise<{
@@ -110,12 +120,51 @@ describe.sequential('CI test diagnostics supervisor', () => {
   });
 
   it.runIf(linuxOnly)(
+    'fails a successful command that leaves a stubborn process-group descendant',
+    async () => {
+      const directory = await createDiagnosticsDirectory();
+      const result = spawnSync(
+        diagnosticsRunner,
+        [
+          '/bin/sh',
+          '-c',
+          '(trap "" TERM; while :; do sleep 1; done) & echo $! > "$CI_TEST_DIAGNOSTICS_DIR/descendant.pid"; exit 0',
+        ],
+        {
+          cwd: repositoryRoot,
+          encoding: 'utf8',
+          env: testEnvironment(directory),
+          timeout: 10_000,
+        },
+      );
+
+      expect(result.error).toBeUndefined();
+      expect(result.status).toBe(125);
+      expect(await readFile(join(directory, 'status.txt'), 'utf8')).toContain(
+        'exit_status=125\ntermination=residual_process_group_after_success\n',
+      );
+      expect(await readFile(join(directory, 'watchdog-events.log'), 'utf8')).toContain(
+        'reason=residual_process_group_after_leader_exit',
+      );
+      const descendantPid = Number(
+        (await readFile(join(directory, 'descendant.pid'), 'utf8')).trim(),
+      );
+      await expectProcessGone(descendantPid);
+    },
+    15_000,
+  );
+
+  it.runIf(linuxOnly)(
     'kills the full test process group after the watchdog grace period',
     async () => {
       const directory = await createDiagnosticsDirectory();
       const result = spawnSync(
         diagnosticsRunner,
-        ['/bin/sh', '-c', 'trap "" USR1; while :; do sleep 1; done'],
+        [
+          '/bin/sh',
+          '-c',
+          '(trap "" TERM USR1; while :; do sleep 1; done) & echo $! > "$CI_TEST_DIAGNOSTICS_DIR/descendant.pid"; trap "" USR1; while :; do sleep 1; done',
+        ],
         {
           cwd: repositoryRoot,
           encoding: 'utf8',
@@ -133,11 +182,15 @@ describe.sequential('CI test diagnostics supervisor', () => {
         'reason=watchdog_grace_expired signal=KILL',
       );
       const testPid = Number((await readFile(join(directory, 'test.pid'), 'utf8')).trim());
-      expectProcessGone(testPid);
+      const descendantPid = Number(
+        (await readFile(join(directory, 'descendant.pid'), 'utf8')).trim(),
+      );
+      await expectProcessGone(testPid);
+      await expectProcessGone(descendantPid);
       for (const helperPid of parsePidFile(
         await readFile(join(directory, 'helper-pids.txt'), 'utf8'),
       )) {
-        expectProcessGone(helperPid);
+        await expectProcessGone(helperPid);
       }
     },
   );
@@ -152,7 +205,11 @@ describe.sequential('CI test diagnostics supervisor', () => {
         const directory = await createDiagnosticsDirectory();
         const child = spawn(
           diagnosticsRunner,
-          ['/bin/sh', '-c', 'trap "" TERM INT; while :; do sleep 1; done'],
+          [
+            '/bin/sh',
+            '-c',
+            '(trap "" TERM INT; while :; do sleep 1; done) & echo $! > "$CI_TEST_DIAGNOSTICS_DIR/descendant.pid"; trap "" TERM INT; while :; do sleep 1; done',
+          ],
           {
             cwd: repositoryRoot,
             env: testEnvironment(directory),
@@ -162,6 +219,7 @@ describe.sequential('CI test diagnostics supervisor', () => {
 
         const testPid = Number((await waitForFile(join(directory, 'test.pid'))).trim());
         const helperPids = parsePidFile(await waitForFile(join(directory, 'helper-pids.txt')));
+        const descendantPid = Number((await waitForFile(join(directory, 'descendant.pid'))).trim());
         child.kill(signal);
         const result = await waitForExit(child);
 
@@ -172,8 +230,9 @@ describe.sequential('CI test diagnostics supervisor', () => {
         expect(await readFile(join(directory, 'resource-samples.log'), 'utf8')).toContain(
           'phase=final',
         );
-        expectProcessGone(testPid);
-        for (const helperPid of helperPids) expectProcessGone(helperPid);
+        await expectProcessGone(testPid);
+        await expectProcessGone(descendantPid);
+        for (const helperPid of helperPids) await expectProcessGone(helperPid);
       },
       15_000,
     );

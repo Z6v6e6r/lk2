@@ -746,6 +746,11 @@ describe('Timeweb amd64 publication workflow', () => {
     expect(diagnosticsRunner).toContain('finalize "$status" "external_signal_$signal_name" true');
     expect(diagnosticsRunner).toContain('stop_helper "$watchdog_pid"');
     expect(diagnosticsRunner).toContain('stop_helper "$monitor_pid"');
+    expect(diagnosticsRunner).toContain('kill -0 -- "-$test_pgid"');
+    expect(diagnosticsRunner).toContain('reason=residual_process_group_after_leader_exit');
+    expect(diagnosticsRunner).toContain('residual_process_group_after_success');
+    expect(diagnosticsRunner).toContain('registration_in_progress');
+    expect(diagnosticsRunner).toContain('handle_pending_external_signal');
     expect(diagnosticsRunner).toContain('memory.current');
     expect(diagnosticsRunner).toContain('etime,comm --forest');
     expect(diagnosticsRunner).not.toContain('etime,args --forest');
