@@ -21,6 +21,68 @@
       "type": "array",
       "minItems": 5,
       "maxItems": 5,
+      "allOf": [
+        {
+          "contains": {
+            "type": "object",
+            "required": ["component", "repository"],
+            "properties": {
+              "component": { "const": "web" },
+              "repository": { "const": "ghcr.io/z6v6e6r/phub-web" }
+            }
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "type": "object",
+            "required": ["component", "repository"],
+            "properties": {
+              "component": { "const": "api" },
+              "repository": { "const": "ghcr.io/z6v6e6r/phub-api" }
+            }
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "type": "object",
+            "required": ["component", "repository"],
+            "properties": {
+              "component": { "const": "worker" },
+              "repository": { "const": "ghcr.io/z6v6e6r/phub-worker" }
+            }
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "type": "object",
+            "required": ["component", "repository"],
+            "properties": {
+              "component": { "const": "realtime" },
+              "repository": { "const": "ghcr.io/z6v6e6r/phub-realtime" }
+            }
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "type": "object",
+            "required": ["component", "repository"],
+            "properties": {
+              "component": { "const": "migrator" },
+              "repository": { "const": "ghcr.io/z6v6e6r/phub-migrator" }
+            }
+          },
+          "minContains": 1,
+          "maxContains": 1
+        }
+      ],
       "items": {
         "type": "object",
         "additionalProperties": false,

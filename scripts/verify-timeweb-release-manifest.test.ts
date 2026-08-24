@@ -18,6 +18,9 @@ const manifestFixture = fileURLToPath(
 const checksumFixture = fileURLToPath(
   new URL('./fixtures/timeweb-release-manifest.v1.sha256', import.meta.url),
 );
+const schemaPath = fileURLToPath(
+  new URL('../deploy/timeweb/release-manifest.schema.json', import.meta.url),
+);
 const approvedSourceSha = '595e954bb8f53367baf034d7f39b255af0fda5fd';
 const approvedSourceTree = '3f4c1e63dd30eb60251533b95f1970fd96754a08';
 const supersededSourceSha = '35c8312b79cccdd136f2bfd892efbea629b8b919';
@@ -47,6 +50,44 @@ function expectRejected(value: unknown, checksumOverride?: string) {
 }
 
 describe('Timeweb canonical release manifest contract', () => {
+  it('binds the JSON schema to the approved source tree and exact component repositories', () => {
+    const schema = JSON.parse(readFileSync(schemaPath, 'utf8')) as {
+      readonly 'x-sourceTree': string;
+      readonly properties: {
+        readonly gitCommit: { readonly const: string };
+        readonly images: {
+          readonly allOf: readonly {
+            readonly contains: {
+              readonly properties: {
+                readonly component: { readonly const: string };
+                readonly repository: { readonly const: string };
+              };
+            };
+            readonly maxContains: number;
+            readonly minContains: number;
+          }[];
+        };
+      };
+    };
+    expect(schema.properties.gitCommit.const).toBe(approvedSourceSha);
+    expect(schema['x-sourceTree']).toBe(approvedSourceTree);
+    expect(
+      schema.properties.images.allOf.map(({ contains, maxContains, minContains }) => ({
+        component: contains.properties.component.const,
+        maxContains,
+        minContains,
+        repository: contains.properties.repository.const,
+      })),
+    ).toEqual(
+      ['web', 'api', 'worker', 'realtime', 'migrator'].map((component) => ({
+        component,
+        maxContains: 1,
+        minContains: 1,
+        repository: `ghcr.io/z6v6e6r/phub-${component}`,
+      })),
+    );
+  });
+
   it('runs the production producer into the canonical fixture and validator end to end', () => {
     const directory = mkdtempSync(join(tmpdir(), 'phub-timeweb-producer-'));
     const manifestPath = join(directory, 'release-manifest.json');
@@ -146,6 +187,10 @@ describe('Timeweb canonical release manifest contract', () => {
       { ...valid, platform: 'linux/arm64' },
       {
         ...valid,
+        images: [{ ...validImages[0], architecture: 'arm64' }, ...validImages.slice(1)],
+      },
+      {
+        ...valid,
         images: [{ ...validImages[0], revision: 'a'.repeat(40) }, ...validImages.slice(1)],
       },
       { ...valid, reconciliationRuns: ['111111', '111111'] },
@@ -190,7 +235,5 @@ describe('Timeweb canonical release manifest contract', () => {
       expect(result.status).toBe(1);
       expect(result.stderr).toContain('TIMEWEB_RELEASE_MANIFEST_BUILD_FAILED');
     }
-    expect(approvedSourceSha).not.toBe(supersededSourceSha);
-    expect(approvedSourceTree).not.toBe('a'.repeat(40));
   });
 });
