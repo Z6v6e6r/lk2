@@ -35,47 +35,36 @@ The current release-evidence sequence is:
 Publication and both reconciliations must succeed for the same source and publication run. Their
 artifacts are evidence only; they do not authorize deployment.
 
+The first successful reconciliation emits only non-authorizing evidence. A second successful,
+byte-equivalent reconciliation of the same publication emits the deploy-facing pair
+`release-manifest.json` and `release-manifest.sha256`. The JSON has exactly one accepted contract:
+
+- `schemaVersion` is `PHUB_TIMEWEB_RELEASE_MANIFEST_V1`;
+- `repository`, `gitCommit` and `platform` identify `Z6v6e6r/lk2`, the exact selected source commit
+  and `linux/amd64`;
+- `images` is an array containing exactly one entry for each of `web`, `api`, `worker`, `realtime`
+  and `migrator`; every entry carries its real reconciled root/index digest, repository,
+  architecture, source revision and per-image `provenance`, `sbom` and `reconciliation` assertions;
+- `reconciliationRuns` contains the two distinct successful read-back run IDs;
+- `release-manifest.sha256` contains the SHA-256 custody checksum for the exact manifest bytes.
+
+The production producer copies the real index digests and explicit per-image verification results
+from reconciliation evidence, then immediately runs the same strict validator used by deployment
+admission. The validator is invoked with `release-manifest.json` and always requires the adjacent,
+fixed-name `release-manifest.sha256`; the checksum is not optional. Numeric `schemaVersion: 1`, an
+object-valued `images`, top-level `verification`, missing per-image verification, missing digests, a
+stale source commit or an invalid checksum all fail closed. Probe, push-receipt, publication and
+reconciliation manifests retain their own `schemaVersion: 1` evidence kinds; they are not alternate
+deploy-facing release-manifest formats and cannot be passed to the release validator.
+
 ## Historical appendix: superseded non-publishing BuildKit attestation probe
 
-The procedure below is retained only to explain the earlier `35c8312...` evidence. It is not Gate 1
-for source `595e954...` and must not be dispatched or cited as current release evidence.
-
-First merge the probe workflow to the default branch through its separately reviewed, green PR. A
-new `workflow_dispatch` file cannot be run before it exists on the default branch. Then run
-`.github/workflows/probe-timeweb-amd64-attestations.yaml` from the exact reviewed merge commit on
-`main`. Dispatch with the branch ref `main` only after verifying that its current tip equals the
-reviewed SHA; the dispatch API does not accept a raw commit SHA as `ref`. Use these dispatch inputs:
-
-- `expected_source_sha`: `35c8312b79cccdd136f2bfd892efbea629b8b919`;
-- `expected_probe_sha`: the exact reviewed `main` commit containing the probe workflow;
-- `confirmation`: `PROBE_TIMEWEB_AMD64_ATTESTATIONS_ONLY`.
-
-The workflow has only `contents: read`. It verifies the exact application source/tree, then builds
-the API and Web Dockerfiles from an exact remote Git commit context into separate local OCI archives.
-The reviewed Buildx version, BuildKit image digest, Node/Nginx base-image digests and SBOM scanner
-digest are pinned identically in the probe and publication workflows. It has no registry login,
-package-write permission, registry push, staging secrets, SSH, deployment or database step.
-
-The OCI exporter emits one bounded two-level layout: the root index contains exactly one
-content-addressed nested index, and that nested index contains exactly one `linux/amd64` runtime
-manifest and one linked attestation manifest. The probe rejects direct-root manifests, more than one
-root descriptor, additional nesting, duplicate/extra runtime or attestation descriptors, and any
-digest or size mismatch. It never performs arbitrary recursive traversal.
-
-The retained evidence contains both OCI indexes, the selected root/runtime/attestation descriptors,
-content-hashed runtime and attestation manifests, provenance and SBOM statements, the observed
-Buildx/BuildKit identity, a summary and checksums. The artifact upload uses an explicit failure-safe
-condition after a successful OCI build, so partial diagnostic evidence is retained when extraction
-or contract validation fails. For the pinned local OCI exporter, the provenance and SBOM statements
-must have empty subjects. Their runtime custody is instead bound by the content-addressed
-attestation manifest, whose subject must match the exact runtime media type, digest and size. The
-final step also requires the exact statement and predicate types, remote Git config source and
-material, builder ID, Node/Nginx Package URLs with their reviewed multi-platform index digests, and
-the pinned SBOM scanner material. The earlier base-image preflight independently binds each reviewed
-index to its single reviewed `linux/amd64` child digest; the two contracts are not interchangeable.
-
-For that superseded procedure, any failed or cancelled probe was `NO-GO` for image publication. Its
-result remains historical evidence only and cannot satisfy the current exact-source contract.
+The earlier probe for application source
+`35c8312b79cccdd136f2bfd892efbea629b8b919` produced non-authorizing local OCI evidence only. Its
+workflow has been removed from the active GitHub Actions set, so it cannot be dispatched to mint new
+evidence for the superseded source. The original implementation and retained artifacts remain in Git
+and Actions history for audit purposes; neither can satisfy the current `595e954...` publication or
+deployment gates.
 
 ## Current Gate 1: immutable image publication
 

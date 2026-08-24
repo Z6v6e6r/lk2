@@ -13,3 +13,4 @@ deploy/jetson/communities-role-split-v3-production-external-anchor-subject.json
 deploy/jetson/communities-role-split-v3-anchor-rehearsal-subject.json
 deploy/jetson/generated/communities-staging-role-split-trusted-inventory-runtime.mjs
 deploy/jetson/generated-gate-preflight/verify-communities-staging-role-split-trusted-inventory-gate.mjs
+scripts/fixtures/timeweb-release-manifest.v1.json
