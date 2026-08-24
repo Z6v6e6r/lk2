@@ -93,6 +93,20 @@ jobs:
       - run: npm ci
       - run: npm audit --omit=dev --audit-level=high
 
+  eligibility-browser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Install Chromium for eligibility tests
+        run: npx playwright install --with-deps chromium
+      - name: Test eligibility browser recovery
+        run: npm run test:browser:eligibility
+
   secret-scan:
     runs-on: ubuntu-latest
     steps:

@@ -34,6 +34,7 @@
     "lint": "eslint . && node --check apps/web/public/loader.js && node --check apps/web/public/phub-notification-sw.js",
     "typecheck": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.web-app.json --noEmit && tsc -p tsconfig.mobile.json --noEmit && tsc -p tsconfig.cup.json --noEmit && tsc -p tsconfig.tools.json --noEmit",
     "test": "vitest run",
+    "test:browser:eligibility": "playwright test --config playwright.config.ts apps/web/e2e/level-eligibility.spec.ts",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "check": "npm run format:check && npm run lint && npm run typecheck && npm run contracts:lint && npm test && npm run build && npm run runtime:imports",
@@ -56,6 +57,7 @@
     "notifications:runtime:set": "node --env-file-if-exists=.env --import tsx scripts/set-notification-runtime.ts",
     "messaging:runtime:set": "node --env-file-if-exists=.env --import tsx scripts/set-messaging-runtime.ts",
     "notifications:booking:provision": "node --env-file-if-exists=.env --import tsx scripts/provision-booking-notifications.ts",
+    "notifications:game-eligibility:provision": "node --env-file-if-exists=.env --import tsx scripts/provision-game-eligibility-notifications.ts",
     "notifications:web-push:provider:set": "node --env-file-if-exists=.env --import tsx scripts/configure-web-push-provider.ts",
     "notifications:web-push:secrets:provision": "node --import tsx scripts/provision-local-web-push-secrets.ts",
     "notifications:web-push:live-smoke": "node --env-file-if-exists=.env --import tsx scripts/verify-live-web-push-sandbox.ts",
@@ -85,6 +87,7 @@
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
+    "@playwright/test": "1.62.1",
     "@redocly/cli": "2.38.0",
     "@testing-library/jest-dom": "6.9.1",
     "@testing-library/react": "16.3.2",

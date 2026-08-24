@@ -170,7 +170,11 @@ function gateway(): AuthGateway {
   } as unknown as AuthGateway;
 }
 
-afterEach(() => cleanup());
+afterEach(() => {
+  cleanup();
+  window.sessionStorage.clear();
+  window.history.replaceState({}, '', '/');
+});
 
 describe('GamesPage discovery', () => {
   it('opens a client-assisted booking deep-link as the selected game card', async () => {
@@ -381,6 +385,46 @@ describe('GamesPage discovery', () => {
     expect(await screen.findByText(/Вы в игре/)).toBeInTheDocument();
   });
 
+  it('permits WARN and shows the server-authored eligibility warning', async () => {
+    const api = gateway();
+    vi.mocked(api.joinGame).mockResolvedValueOnce({
+      commandId: 'c3889c99-b0e3-4a3d-b3e8-a5c99af730ea',
+      operation: {
+        id: 'c3889c99-b0e3-4a3d-b3e8-a5c99af730ea',
+        type: 'JOIN_GAME',
+        status: 'SUCCEEDED',
+        gameId: null,
+        aggregateRevision: 8,
+        createdAt: '2026-07-18T10:00:00.000Z',
+        updatedAt: '2026-07-18T10:00:00.000Z',
+        nextAction: { type: 'NONE' },
+        error: null,
+      },
+      game: null,
+      eligibility: {
+        allowed: true,
+        decisionId: '95a76d36-d8a7-4ff5-a988-84f33c0fd05a',
+        mode: 'WARN',
+        code: 'LEVEL_TOO_LOW',
+        recoveryAction: 'NONE',
+        retryable: false,
+        policyVersion: 4,
+        warning: {
+          code: 'LEVEL_TOO_LOW',
+          message: 'Уровень игры выше указанного вами уровня.',
+        },
+      },
+      replayed: false,
+    });
+    const user = userEvent.setup();
+    render(<GamesPage gateway={api} />);
+
+    await user.click(await screen.findByRole('button', { name: 'Вступить в игру' }));
+
+    expect(await screen.findByText('Уровень игры выше указанного вами уровня.')).toBeVisible();
+    expect(api.joinGame).toHaveBeenCalledOnce();
+  });
+
   it('saves a self-declared canonical level and resumes the interrupted join', async () => {
     const levelId = '95a76d36-d8a7-4ff5-a988-84f33c0fd05a';
     const api: AuthGateway = {
@@ -453,6 +497,46 @@ describe('GamesPage discovery', () => {
     await waitFor(() => expect(api.setOwnPlayerLevel).toHaveBeenCalledWith(levelId, 'PADEL'));
     await waitFor(() => expect(api.joinGame).toHaveBeenCalledTimes(2));
     expect(await screen.findByText(/Вы в игре/)).toBeVisible();
+  });
+
+  it('restores the exact interrupted action after a browser refresh', async () => {
+    const levelId = '95a76d36-d8a7-4ff5-a988-84f33c0fd05a';
+    window.history.replaceState({}, '', `/games/${game.id}`);
+    window.sessionStorage.setItem(
+      'phub.pending-level-recovery.v1',
+      JSON.stringify({ action: 'JOIN', gameId: game.id, returnPath: `/games/${game.id}` }),
+    );
+    const api: AuthGateway = {
+      ...gateway(),
+      getGame: vi.fn().mockResolvedValue({ ...game, viewerRelation: 'NONE' }),
+      getOwnPlayerLevel: vi.fn().mockResolvedValue({
+        sportCode: 'PADEL',
+        scaleVersion: 1,
+        currentLevel: null,
+        levels: [
+          {
+            id: levelId,
+            sportCode: 'PADEL',
+            code: 'C+',
+            title: 'C+',
+            rank: 4,
+            sortOrder: 4,
+            aliases: ['C+'],
+            active: true,
+            scaleVersion: 1,
+          },
+        ],
+      }),
+      setOwnPlayerLevel: vi.fn(),
+    };
+
+    render(<GamesPage gateway={api} gameId={game.id} />);
+
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Укажите уровень, чтобы присоединиться',
+    });
+    expect(within(dialog).getByRole('button', { name: 'Знаю свой уровень' })).toBeVisible();
+    expect(api.getOwnPlayerLevel).toHaveBeenCalledWith('PADEL');
   });
 
   it('completes the server-owned assessment and resumes the interrupted join', async () => {

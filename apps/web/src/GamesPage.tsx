@@ -59,6 +59,49 @@ const dayFormatter = new Intl.DateTimeFormat('ru-RU', { day: '2-digit' });
 const LEVEL_RECOVERY_STORAGE_KEY = 'phub.pending-level-recovery.v1';
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+interface StoredLevelRecovery {
+  readonly action: 'JOIN' | 'JOIN_WAITLIST';
+  readonly gameId: string;
+  readonly returnPath: string;
+  readonly invitationId?: string;
+}
+
+function readPendingLevelRecovery(game: ViewerGameCard): StoredLevelRecovery | undefined {
+  if (typeof window === 'undefined') return undefined;
+  try {
+    const parsed = JSON.parse(
+      window.sessionStorage.getItem(LEVEL_RECOVERY_STORAGE_KEY) ?? 'null',
+    ) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined;
+    const candidate = parsed as Readonly<Record<string, unknown>>;
+    const currentPath = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    if (
+      candidate.gameId !== game.id ||
+      candidate.returnPath !== currentPath ||
+      (candidate.action !== 'JOIN' && candidate.action !== 'JOIN_WAITLIST') ||
+      !game.allowedActions.includes(candidate.action)
+    ) {
+      return undefined;
+    }
+    if (
+      candidate.invitationId !== undefined &&
+      (typeof candidate.invitationId !== 'string' || !UUID_PATTERN.test(candidate.invitationId))
+    ) {
+      return undefined;
+    }
+    return {
+      action: candidate.action,
+      gameId: game.id,
+      returnPath: currentPath,
+      ...(typeof candidate.invitationId === 'string'
+        ? { invitationId: candidate.invitationId }
+        : {}),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 function clearPendingLevelRecovery(): void {
   if (typeof window === 'undefined') return;
   try {
@@ -214,6 +257,12 @@ function errorMessage(error: unknown): string {
         return 'Игра больше недоступна.';
       case 'LEVEL_NOT_ALLOWED':
         return 'Эта игра рассчитана на другой уровень.';
+      case 'LEVEL_TOO_LOW':
+        return 'Уровень игры выше указанного вами уровня.';
+      case 'LEVEL_TOO_HIGH':
+        return 'Уровень игры ниже указанного вами уровня.';
+      case 'PLAYER_LEVEL_STALE':
+        return 'Обновите уровень и повторите действие.';
       case 'PLAYER_LEVEL_UNKNOWN':
       case 'LEVEL_SCALE_VERSION_MISMATCH':
         return 'Не удалось подтвердить актуальный уровень. Обновите профиль и повторите.';
@@ -234,6 +283,20 @@ function errorCode(error: unknown): string | undefined {
   if (typeof error !== 'object' || error === null || !('code' in error)) return undefined;
   const code = (error as { readonly code?: unknown }).code;
   return typeof code === 'string' ? code : undefined;
+}
+
+function eligibilityRecoveryAction(error: unknown): string | undefined {
+  if (typeof error !== 'object' || error === null || !('eligibility' in error)) return undefined;
+  const eligibility = (error as { readonly eligibility?: unknown }).eligibility;
+  if (
+    typeof eligibility !== 'object' ||
+    eligibility === null ||
+    !('recoveryAction' in eligibility)
+  ) {
+    return undefined;
+  }
+  const action = (eligibility as { readonly recoveryAction?: unknown }).recoveryAction;
+  return typeof action === 'string' ? action : undefined;
 }
 
 function initialDetailTab(game: ViewerGameCard): GameDetailTab {
@@ -287,6 +350,7 @@ export function GamesPage({ gateway, gameId, eventId }: GamesPageProps): React.J
   >({});
   const [assessmentIndex, setAssessmentIndex] = useState(0);
   const pendingViewerGame = useRef<ViewerGameCard | null>(null);
+  const rosterActionInFlight = useRef(false);
   const invitationId = useMemo(() => {
     if (typeof window === 'undefined' || !gameId) return undefined;
     const candidate = new URLSearchParams(window.location.search).get('invitationId')?.trim();
@@ -415,6 +479,25 @@ export function GamesPage({ gateway, gameId, eventId }: GamesPageProps): React.J
           setDetail(game);
           setDetailTab(initialDetailTab(game));
           setLoading(false);
+          const pending = readPendingLevelRecovery(game);
+          if (!pending || !gateway.getOwnPlayerLevel || !gateway.setOwnPlayerLevel) return;
+          setLevelRecovery({ action: pending.action, game });
+          setLevelRecoveryMode('choice');
+          setLevelRecoveryError(null);
+          setLevelRecoveryBusy('loading');
+          void gateway.getOwnPlayerLevel('PADEL').then(
+            (state) => {
+              if (!active) return;
+              setLevelState(state);
+              setSelectedLevelId(state.currentLevel?.levelId ?? state.levels[0]?.id ?? '');
+              setLevelRecoveryBusy(null);
+            },
+            () => {
+              if (!active) return;
+              setLevelRecoveryError('Не удалось загрузить шкалу уровней. Повторите позже.');
+              setLevelRecoveryBusy(null);
+            },
+          );
         },
         (cause: unknown) => {
           if (!active) return;
@@ -699,8 +782,13 @@ export function GamesPage({ gateway, gameId, eventId }: GamesPageProps): React.J
       }
       return;
     }
-    if (!['JOIN', 'JOIN_WAITLIST', 'LEAVE_WAITLIST', 'LEAVE'].includes(action) || busyGameId)
+    if (
+      !['JOIN', 'JOIN_WAITLIST', 'LEAVE_WAITLIST', 'LEAVE'].includes(action) ||
+      busyGameId ||
+      rosterActionInFlight.current
+    )
       return;
+    rosterActionInFlight.current = true;
     setBusyGameId(game.id);
     setError(null);
     setNotice(null);
@@ -729,6 +817,7 @@ export function GamesPage({ gateway, gameId, eventId }: GamesPageProps): React.J
       if (result.operation.status === 'FAILED') {
         throw Object.assign(new Error(result.operation.error?.message ?? 'Game command failed'), {
           code: result.operation.error?.code,
+          eligibility: result.eligibility,
         });
       }
       if (['ACCEPTED', 'PROCESSING'].includes(result.operation.status)) {
@@ -756,11 +845,12 @@ export function GamesPage({ gateway, gameId, eventId }: GamesPageProps): React.J
         return;
       }
       setNotice(
-        action === 'JOIN'
-          ? 'Вы в игре. Состав и доступные действия обновлены.'
-          : action === 'JOIN_WAITLIST'
-            ? 'Вы добавлены в лист ожидания.'
-            : 'Участие обновлено.',
+        result.eligibility?.warning?.message ??
+          (action === 'JOIN'
+            ? 'Вы в игре. Состав и доступные действия обновлены.'
+            : action === 'JOIN_WAITLIST'
+              ? 'Вы добавлены в лист ожидания.'
+              : 'Участие обновлено.'),
       );
       if (!gameId && (action === 'JOIN' || action === 'JOIN_WAITLIST')) {
         pendingViewerGame.current = result.game;
@@ -772,7 +862,10 @@ export function GamesPage({ gateway, gameId, eventId }: GamesPageProps): React.J
       clearPendingLevelRecovery();
     } catch (cause) {
       if (
-        errorCode(cause) === 'PLAYER_LEVEL_REQUIRED' &&
+        (errorCode(cause) === 'PLAYER_LEVEL_REQUIRED' ||
+          ['SELECT_LEVEL', 'COMPLETE_LEVEL_ASSESSMENT'].includes(
+            eligibilityRecoveryAction(cause) ?? '',
+          )) &&
         (action === 'JOIN' || action === 'JOIN_WAITLIST')
       ) {
         await openLevelRecovery(action, game);
@@ -781,6 +874,7 @@ export function GamesPage({ gateway, gameId, eventId }: GamesPageProps): React.J
       setError(errorMessage(cause));
       setReloadToken((current) => current + 1);
     } finally {
+      rosterActionInFlight.current = false;
       setBusyGameId(null);
     }
   }
