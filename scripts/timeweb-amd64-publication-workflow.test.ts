@@ -743,7 +743,12 @@ describe('Timeweb amd64 publication workflow', () => {
     expect(diagnosticsRunner).toContain('set -uo pipefail');
     expect(diagnosticsRunner).toContain('reason=watchdog_deadline signal=USR1');
     expect(diagnosticsRunner).toContain('reason=watchdog_grace_expired signal=KILL');
+    expect(diagnosticsRunner).toContain('finalize "$status" "external_signal_$signal_name" true');
+    expect(diagnosticsRunner).toContain('stop_helper "$watchdog_pid"');
+    expect(diagnosticsRunner).toContain('stop_helper "$monitor_pid"');
     expect(diagnosticsRunner).toContain('memory.current');
+    expect(diagnosticsRunner).toContain('etime,comm --forest');
+    expect(diagnosticsRunner).not.toContain('etime,args --forest');
     expect(diagnosticsRunner).toContain('--reporter=junit');
     expect(diagnosticsRunner).toContain('--reporter=./scripts/vitest-ci-diagnostics-reporter.ts');
     expect(diagnosticsRunner).toContain('exit "$test_status"');

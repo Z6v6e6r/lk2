@@ -8,9 +8,11 @@ readonly stderr_log="$diagnostics_dir/stderr.log"
 readonly resource_log="$diagnostics_dir/resource-samples.log"
 readonly watchdog_log="$diagnostics_dir/watchdog-events.log"
 readonly test_pid_file="$diagnostics_dir/test.pid"
+readonly helper_pid_file="$diagnostics_dir/helper-pids.txt"
 readonly heartbeat_seconds="${CI_TEST_HEARTBEAT_SECONDS:-15}"
 readonly watchdog_seconds="${CI_TEST_WATCHDOG_SECONDS:-480}"
 readonly kill_after_seconds="${CI_TEST_KILL_AFTER_SECONDS:-30}"
+readonly external_kill_after_seconds="${CI_TEST_EXTERNAL_KILL_AFTER_SECONDS:-2}"
 
 mkdir -p "$diagnostics_dir"
 : >"$stdout_log"
@@ -25,6 +27,8 @@ test_pid=''
 test_pgid=''
 monitor_pid=''
 watchdog_pid=''
+launcher_pid=''
+finalized=0
 
 log_watchdog_event() {
   printf 'timestamp=%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" | tee -a "$watchdog_log"
@@ -86,21 +90,82 @@ capture_snapshot() {
     df -h . || true
     df -i . || true
     if [[ -n "$test_pgid" ]]; then
-      ps -eo pid,ppid,pgid,stat,pcpu,pmem,rss,vsz,etime,args --forest \
+      ps -eo pid,ppid,pgid,stat,pcpu,pmem,rss,vsz,etime,comm --forest \
         | awk -v pgid="$test_pgid" 'NR == 1 || $3 == pgid' || true
     fi
   } >>"$resource_log" 2>&1
+}
+
+stop_helper() {
+  local helper_pid="$1"
+  if [[ -n "$helper_pid" ]]; then
+    kill "$helper_pid" 2>/dev/null || true
+    wait "$helper_pid" 2>/dev/null || true
+  fi
+}
+
+terminate_test_group() {
+  local live_pid="${test_pid:-$launcher_pid}"
+  if [[ -n "$test_pgid" && -n "$live_pid" ]] && kill -0 "$live_pid" 2>/dev/null; then
+    kill -TERM -- "-$test_pgid" 2>/dev/null || true
+    sleep "$external_kill_after_seconds"
+    if kill -0 "$live_pid" 2>/dev/null; then
+      kill -KILL -- "-$test_pgid" 2>/dev/null || true
+    fi
+  fi
+  if [[ -n "$launcher_pid" ]]; then
+    wait "$launcher_pid" 2>/dev/null || true
+  fi
+}
+
+write_final_evidence() {
+  local status="$1"
+  local termination_reason="$2"
+  local ended_at
+  local ended_epoch
+
+  capture_snapshot final
+  ended_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  ended_epoch="$(date +%s)"
+  {
+    printf 'started_at=%s\n' "$started_at"
+    printf 'ended_at=%s\n' "$ended_at"
+    printf 'duration_seconds=%s\n' "$((ended_epoch - started_epoch))"
+    printf 'test_pid=%s\n' "${test_pid:-unavailable}"
+    printf 'test_pgid=%s\n' "${test_pgid:-unavailable}"
+    printf 'exit_status=%s\n' "$status"
+    printf 'termination=%s\n' "$termination_reason"
+  } >"$diagnostics_dir/status.txt"
+
+  if command -v dmesg >/dev/null 2>&1; then
+    dmesg --color=never 2>&1 | grep -Eai 'oom|out of memory|killed process' | tail -n 100 \
+      >"$diagnostics_dir/kernel-oom-evidence.log" || true
+  fi
+}
+
+finalize() {
+  local status="$1"
+  local termination_reason="$2"
+  local terminate_group="${3:-false}"
+
+  if [[ "$finalized" -eq 1 ]]; then
+    return
+  fi
+  finalized=1
+  trap - TERM INT
+  stop_helper "$watchdog_pid"
+  stop_helper "$monitor_pid"
+  if [[ "$terminate_group" == true ]]; then
+    terminate_test_group
+  fi
+  write_final_evidence "$status" "$termination_reason"
 }
 
 terminate_for_external_signal() {
   local signal_name="$1"
   local status="$2"
   log_watchdog_event "reason=external_termination signal=$signal_name target_pgid=${test_pgid:-unavailable}"
-  if [[ -n "$test_pgid" ]]; then
-    kill -TERM -- "-$test_pgid" 2>/dev/null || true
-    sleep 2
-    kill -KILL -- "-$test_pgid" 2>/dev/null || true
-  fi
+  finalize "$status" "external_signal_$signal_name" true
   exit "$status"
 }
 
@@ -122,17 +187,25 @@ trap 'terminate_for_external_signal INT 130' INT
 
 capture_snapshot preflight
 
+test_command=(
+  node --require why-is-node-running/include ./node_modules/vitest/vitest.mjs run
+  --coverage
+  --reporter=default
+  --reporter=hanging-process
+  --reporter=junit
+  --reporter=./scripts/vitest-ci-diagnostics-reporter.ts
+  --outputFile.junit="$diagnostics_dir/junit.xml"
+)
+if [[ "$#" -gt 0 ]]; then
+  test_command=("$@")
+fi
+
 setsid bash -c 'printf "%s\n" "$$" >"$1"; shift; exec "$@"' bash "$test_pid_file" \
-  node --require why-is-node-running/include ./node_modules/vitest/vitest.mjs run \
-  --coverage \
-  --reporter=default \
-  --reporter=hanging-process \
-  --reporter=junit \
-  --reporter=./scripts/vitest-ci-diagnostics-reporter.ts \
-  --outputFile.junit="$diagnostics_dir/junit.xml" \
+  "${test_command[@]}" \
   > >(tee -a "$stdout_log") \
   2> >(tee -a "$stderr_log" >&2) &
 launcher_pid=$!
+test_pgid="$launcher_pid"
 
 for _attempt in {1..100}; do
   if [[ -s "$test_pid_file" ]]; then
@@ -145,9 +218,6 @@ for _attempt in {1..100}; do
   sleep 0.1
 done
 
-if [[ -n "$test_pid" ]]; then
-  test_pgid="$(ps -o pgid= -p "$test_pid" 2>/dev/null | awk '{ print $1 }')"
-fi
 log_watchdog_event "reason=started launcher_pid=$launcher_pid test_pid=${test_pid:-unavailable} test_pgid=${test_pgid:-unavailable}"
 
 (
@@ -171,34 +241,20 @@ monitor_pid=$!
   fi
 ) &
 watchdog_pid=$!
+{
+  printf 'monitor_pid=%s\n' "$monitor_pid"
+  printf 'watchdog_pid=%s\n' "$watchdog_pid"
+} >"$helper_pid_file"
 
 wait "$launcher_pid"
 test_status=$?
-kill "$watchdog_pid" "$monitor_pid" 2>/dev/null || true
-wait "$watchdog_pid" "$monitor_pid" 2>/dev/null || true
-
-capture_snapshot final
-ended_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-ended_epoch="$(date +%s)"
-{
-  printf 'started_at=%s\n' "$started_at"
-  printf 'ended_at=%s\n' "$ended_at"
-  printf 'duration_seconds=%s\n' "$((ended_epoch - started_epoch))"
-  printf 'test_pid=%s\n' "${test_pid:-unavailable}"
-  printf 'test_pgid=%s\n' "${test_pgid:-unavailable}"
-  printf 'exit_status=%s\n' "$test_status"
-  if [[ "$test_status" -eq 137 ]]; then
-    printf 'termination=SIGKILL\n'
-  elif [[ "$test_status" -ge 128 ]]; then
-    printf 'termination=signal_%s\n' "$((test_status - 128))"
-  else
-    printf 'termination=normal_exit\n'
-  fi
-} >"$diagnostics_dir/status.txt"
-
-if command -v dmesg >/dev/null 2>&1; then
-  dmesg --color=never 2>&1 | grep -Eai 'oom|out of memory|killed process' | tail -n 100 \
-    >"$diagnostics_dir/kernel-oom-evidence.log" || true
+if [[ "$test_status" -eq 137 ]] && grep -q 'reason=watchdog_grace_expired' "$watchdog_log"; then
+  termination_reason='watchdog_sigkill'
+elif [[ "$test_status" -ge 128 ]]; then
+  termination_reason="signal_$((test_status - 128))"
+else
+  termination_reason='normal_exit'
 fi
+finalize "$test_status" "$termination_reason"
 
 exit "$test_status"
