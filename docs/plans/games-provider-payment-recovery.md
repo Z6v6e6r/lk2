@@ -1,7 +1,7 @@
 # Native Games provider/payment recovery plan
 
-Status: source implementation, synthetic-only, every runtime gate default OFF  
-Date: 2026-08-24  
+Status: source implementation, synthetic-only, every runtime gate default OFF
+Date: 2026-08-24
 Stacked base: `94264e8cecfd0dc5a13639fef1ef049e3fac23be` (Draft PR #116)
 
 ## Decision and boundary
