@@ -163,6 +163,11 @@ jobs:
           set -euo pipefail
           docker pull "$GITLEAKS_IMAGE"
           test "$(docker image inspect "$GITLEAKS_IMAGE" --format '{{index .RepoDigests 0}}')" = "$GITLEAKS_IMAGE"
+          octopus_merges="$(git rev-list --min-parents=3 "$BASE_SHA..$HEAD_SHA")"
+          if [[ -n "$octopus_merges" ]]; then
+            printf 'Octopus merges are not supported by the exact secret scan:\n%s\n' "$octopus_merges" >&2
+            exit 1
+          fi
           mkdir -p "$RUNNER_TEMP/gitleaks"
           scan_repository="$RUNNER_TEMP/gitleaks/repository.git"
           git clone --bare --no-local "$PWD" "$scan_repository"

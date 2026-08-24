@@ -950,6 +950,10 @@ describe('Timeweb amd64 publication workflow', () => {
     expect(secretRange?.run).toContain('base_sha="$(git merge-base "$base_tip_sha" "$head_sha")"');
     expect(secretRange?.run).toContain('git cat-file -e "$head_sha^{commit}"');
     expect(secretScan?.run).toContain('docker pull "$GITLEAKS_IMAGE"');
+    expect(secretScan?.run).toContain(
+      'octopus_merges="$(git rev-list --min-parents=3 "$BASE_SHA..$HEAD_SHA")"',
+    );
+    expect(secretScan?.run).toContain('if [[ -n "$octopus_merges" ]]');
     expect(secretScan?.run).toContain('git clone --bare --no-local "$PWD" "$scan_repository"');
     expect(secretScan?.run).toContain('--volume "$RUNNER_TEMP/gitleaks:/workspace"');
     expect(secretScan?.run).toContain('--source=/workspace/repository.git');
@@ -1073,6 +1077,34 @@ describe('Timeweb amd64 publication workflow', () => {
       expect(mergeAwarePatch).toContain('candidate side-branch marker');
       expect(mergeAwarePatch).toContain('merge-resolution-only-marker');
       expect(mergeAwarePatch).not.toContain('updated-base-only marker');
+
+      await writeFile(join(directory, 'octopus.txt'), 'octopus-tree-only marker\n');
+      git(['add', 'octopus.txt']);
+      const octopusTreeSha = git(['write-tree']);
+      const octopusSha = git([
+        'commit-tree',
+        octopusTreeSha,
+        '-p',
+        candidateSha,
+        '-p',
+        sideSha,
+        '-p',
+        updatedBaseSha,
+        '-m',
+        'synthetic octopus merge',
+      ]);
+      const octopusMerges = git(['rev-list', '--min-parents=3', `${baseSha}..${octopusSha}`]).split(
+        '\n',
+      );
+      const skippedOctopusPatch = git([
+        'log',
+        '-p',
+        '--format=',
+        '--diff-merges=remerge',
+        `${baseSha}..${octopusSha}`,
+      ]);
+      expect(octopusMerges).toContain(octopusSha);
+      expect(skippedOctopusPatch).not.toContain('octopus-tree-only marker');
     } finally {
       await rm(directory, { force: true, recursive: true });
     }
