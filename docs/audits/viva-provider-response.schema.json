@@ -1,0 +1,419 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://padlhub.invalid/schemas/viva-provider-response-v1.schema.json",
+  "title": "Viva Provider Clarification Response Package",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "templateStatus",
+    "sourceAudit",
+    "provenance",
+    "gateReview",
+    "questions"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "1.0.0" },
+    "templateStatus": {
+      "enum": ["UNANSWERED_TEMPLATE", "RECEIVED_UNREVIEWED", "EVIDENCE_REVIEWED"]
+    },
+    "sourceAudit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pullRequest", "commit", "catalog"],
+      "properties": {
+        "pullRequest": { "const": 123 },
+        "commit": { "const": "7593288932c66678311cf3ceeef791ada386ca3b" },
+        "catalog": { "const": "docs/audits/viva-provider-clarification-catalog.json" }
+      }
+    },
+    "provenance": { "$ref": "#/$defs/provenance" },
+    "gateReview": {
+      "type": "array",
+      "minItems": 9,
+      "maxItems": 9,
+      "items": { "$ref": "#/$defs/gateReview" }
+    },
+    "questions": {
+      "type": "array",
+      "minItems": 12,
+      "maxItems": 12,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/questionResponse" }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "templateStatus": { "const": "UNANSWERED_TEMPLATE" } },
+        "required": ["templateStatus"]
+      },
+      "then": {
+        "properties": {
+          "provenance": {
+            "properties": {
+              "receivedAt": { "type": "null" },
+              "receivedChannel": { "const": "NOT_RECEIVED" },
+              "answeringPerson": {
+                "properties": {
+                  "name": { "type": "null" },
+                  "role": { "type": "null" },
+                  "team": { "type": "null" }
+                }
+              },
+              "answerDate": { "type": "null" },
+              "productApiVersion": { "type": "null" },
+              "environment": { "const": "UNKNOWN" },
+              "originalMessageSha256": { "type": "null" },
+              "preservedOriginalReference": { "type": "null" },
+              "attachments": { "maxItems": 0 }
+            }
+          },
+          "questions": {
+            "items": {
+              "properties": {
+                "providerAnswer": { "type": "null" },
+                "answerStatus": { "const": "NO_RESPONSE" },
+                "evidenceBasis": { "const": "NONE" },
+                "evidenceReviewerConclusion": { "const": "NOT_REVIEWED" },
+                "mappedRequirementStatus": { "type": "null" }
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "questionId": {
+      "enum": [
+        "VIVA-Q-01",
+        "VIVA-Q-02",
+        "VIVA-Q-03",
+        "VIVA-Q-04",
+        "VIVA-Q-05",
+        "VIVA-Q-06",
+        "VIVA-Q-07",
+        "VIVA-Q-08",
+        "VIVA-Q-09",
+        "VIVA-Q-10",
+        "VIVA-Q-11",
+        "VIVA-Q-12"
+      ]
+    },
+    "requirementId": {
+      "enum": [
+        "ID-01",
+        "ID-02",
+        "ID-03",
+        "ID-04",
+        "ID-05",
+        "IDEM-01",
+        "IDEM-02",
+        "IDEM-03",
+        "IDEM-04",
+        "IDEM-05",
+        "RB-01",
+        "RB-02",
+        "RB-03",
+        "RB-04",
+        "RB-05",
+        "CB-00",
+        "CB-01",
+        "CB-02",
+        "CB-03",
+        "CB-04",
+        "CB-05",
+        "SEC-01",
+        "PAY-01",
+        "PAY-02",
+        "PAY-03",
+        "PAY-04",
+        "PAY-05",
+        "PAY-06",
+        "PAY-07",
+        "PAY-08",
+        "VER-01",
+        "ENV-01",
+        "OPS-01",
+        "OBS-01"
+      ]
+    },
+    "gateId": {
+      "enum": [
+        "realProviderWriter",
+        "realProviderReadBack",
+        "publicCallbackRoute",
+        "callbackAsAccelerationOnly",
+        "providerNativeAmountCurrencyVerification",
+        "livePaymentConvergence",
+        "SHADOW",
+        "WARN",
+        "BLOCK"
+      ]
+    },
+    "answerStatus": {
+      "enum": [
+        "ANSWERED_WITH_VERSIONED_EVIDENCE",
+        "ANSWERED_WITHOUT_SUFFICIENT_EVIDENCE",
+        "PARTIALLY_ANSWERED",
+        "NOT_SUPPORTED",
+        "UNKNOWN",
+        "NO_RESPONSE"
+      ]
+    },
+    "environment": { "enum": ["PRODUCTION", "DEMO", "SANDBOX", "MULTIPLE", "OTHER", "UNKNOWN"] },
+    "evidenceBasis": {
+      "enum": [
+        "OFFICIAL_WRITTEN_VERSIONED",
+        "OFFICIAL_WRITTEN_UNVERSIONED",
+        "ORAL_ONLY",
+        "MARKETING_ONLY",
+        "UI_OBSERVATION_ONLY",
+        "NONE"
+      ]
+    },
+    "reviewerConclusion": {
+      "enum": [
+        "NOT_REVIEWED",
+        "INSUFFICIENT",
+        "PARTIAL",
+        "CANDIDATE_FOR_PROVEN",
+        "CONTRADICTED",
+        "SUPPORT_REQUIRED"
+      ]
+    },
+    "nullableNonEmptyString": { "type": ["string", "null"], "minLength": 1 },
+    "nullableDate": { "type": ["string", "null"], "format": "date" },
+    "answeringPerson": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "role", "team"],
+      "properties": {
+        "name": { "$ref": "#/$defs/nullableNonEmptyString" },
+        "role": { "$ref": "#/$defs/nullableNonEmptyString" },
+        "team": { "$ref": "#/$defs/nullableNonEmptyString" }
+      }
+    },
+    "attachment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["documentIdentifier", "fileName", "sha256", "authoritative"],
+      "properties": {
+        "documentIdentifier": { "type": "string", "minLength": 1 },
+        "fileName": { "type": "string", "minLength": 1 },
+        "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "authoritative": { "type": "boolean" }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider",
+        "receivedAt",
+        "receivedChannel",
+        "answeringPerson",
+        "answerDate",
+        "productApiVersion",
+        "environment",
+        "originalMessageSha256",
+        "preservedOriginalReference",
+        "attachments"
+      ],
+      "properties": {
+        "provider": { "const": "Viva CRM" },
+        "receivedAt": { "type": ["string", "null"], "format": "date-time" },
+        "receivedChannel": {
+          "enum": [
+            "OFFICIAL_EMAIL",
+            "SIGNED_DOCUMENT",
+            "VERSIONED_PORTAL",
+            "SUPPORT_TICKET_EXPORT",
+            "ORAL_SUMMARY",
+            "NOT_RECEIVED"
+          ]
+        },
+        "answeringPerson": { "$ref": "#/$defs/answeringPerson" },
+        "answerDate": { "$ref": "#/$defs/nullableDate" },
+        "productApiVersion": { "$ref": "#/$defs/nullableNonEmptyString" },
+        "environment": { "$ref": "#/$defs/environment" },
+        "originalMessageSha256": { "type": ["string", "null"], "pattern": "^[a-f0-9]{64}$" },
+        "preservedOriginalReference": { "$ref": "#/$defs/nullableNonEmptyString" },
+        "attachments": { "type": "array", "items": { "$ref": "#/$defs/attachment" } }
+      }
+    },
+    "gateReview": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["gateId", "currentDecision", "reviewedDecision", "automaticTransition"],
+      "properties": {
+        "gateId": { "$ref": "#/$defs/gateId" },
+        "currentDecision": { "const": "NO-GO" },
+        "reviewedDecision": { "const": "NO-GO" },
+        "automaticTransition": { "const": false }
+      }
+    },
+    "mappedRequirementStatus": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["requirementId", "sourceStatus", "reviewedStatus", "rationale"],
+        "properties": {
+          "requirementId": { "$ref": "#/$defs/requirementId" },
+          "sourceStatus": {
+            "enum": ["PROVEN", "PARTIAL", "UNPROVEN", "CONTRADICTED", "SUPPORT_REQUIRED"]
+          },
+          "reviewedStatus": {
+            "enum": ["PROVEN", "PARTIAL", "UNPROVEN", "CONTRADICTED", "SUPPORT_REQUIRED"]
+          },
+          "rationale": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "questionResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "questionId",
+        "questionEn",
+        "questionRu",
+        "requirementIds",
+        "gateIds",
+        "providerAnswer",
+        "answerStatus",
+        "answeringPerson",
+        "answerDate",
+        "productApiVersion",
+        "environment",
+        "authoritativeDocumentUrls",
+        "attachedDocumentIdentifiers",
+        "exactEndpointMethod",
+        "exactRequestHeadersFields",
+        "exactResponseFieldsStatusCodes",
+        "retentionConsistencyRetryWindows",
+        "securityMechanism",
+        "limitationsExceptions",
+        "evidenceBasis",
+        "contradictoryStatements",
+        "evidenceReviewerConclusion",
+        "mappedRequirementStatus",
+        "mappedGateImpact"
+      ],
+      "properties": {
+        "questionId": { "$ref": "#/$defs/questionId" },
+        "questionEn": { "type": "string", "minLength": 1 },
+        "questionRu": { "type": "string", "minLength": 1 },
+        "requirementIds": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/requirementId" }
+        },
+        "gateIds": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/gateId" }
+        },
+        "providerAnswer": { "$ref": "#/$defs/nullableNonEmptyString" },
+        "answerStatus": { "$ref": "#/$defs/answerStatus" },
+        "answeringPerson": { "$ref": "#/$defs/answeringPerson" },
+        "answerDate": { "$ref": "#/$defs/nullableDate" },
+        "productApiVersion": { "$ref": "#/$defs/nullableNonEmptyString" },
+        "environment": { "$ref": "#/$defs/environment" },
+        "authoritativeDocumentUrls": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "format": "uri", "pattern": "^https://" }
+        },
+        "attachedDocumentIdentifiers": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "exactEndpointMethod": { "$ref": "#/$defs/nullableNonEmptyString" },
+        "exactRequestHeadersFields": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "exactResponseFieldsStatusCodes": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "retentionConsistencyRetryWindows": { "$ref": "#/$defs/nullableNonEmptyString" },
+        "securityMechanism": { "$ref": "#/$defs/nullableNonEmptyString" },
+        "limitationsExceptions": { "$ref": "#/$defs/nullableNonEmptyString" },
+        "evidenceBasis": { "$ref": "#/$defs/evidenceBasis" },
+        "contradictoryStatements": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "evidenceReviewerConclusion": { "$ref": "#/$defs/reviewerConclusion" },
+        "mappedRequirementStatus": {
+          "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/mappedRequirementStatus" }]
+        },
+        "mappedGateImpact": { "const": "NO_CHANGE_NO_GO" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "answerStatus": { "const": "ANSWERED_WITH_VERSIONED_EVIDENCE" } },
+            "required": ["answerStatus"]
+          },
+          "then": {
+            "properties": {
+              "providerAnswer": { "type": "string", "minLength": 1 },
+              "answerDate": { "type": "string", "format": "date" },
+              "productApiVersion": { "type": "string", "minLength": 1 },
+              "environment": { "enum": ["PRODUCTION", "DEMO", "SANDBOX", "MULTIPLE", "OTHER"] },
+              "evidenceBasis": { "const": "OFFICIAL_WRITTEN_VERSIONED" },
+              "evidenceReviewerConclusion": {
+                "enum": [
+                  "INSUFFICIENT",
+                  "PARTIAL",
+                  "CANDIDATE_FOR_PROVEN",
+                  "CONTRADICTED",
+                  "SUPPORT_REQUIRED"
+                ]
+              },
+              "mappedRequirementStatus": { "$ref": "#/$defs/mappedRequirementStatus" }
+            },
+            "anyOf": [
+              { "properties": { "authoritativeDocumentUrls": { "minItems": 1 } } },
+              { "properties": { "attachedDocumentIdentifiers": { "minItems": 1 } } }
+            ]
+          }
+        },
+        {
+          "if": {
+            "not": {
+              "properties": {
+                "answerStatus": { "const": "ANSWERED_WITH_VERSIONED_EVIDENCE" }
+              },
+              "required": ["answerStatus"]
+            }
+          },
+          "then": {
+            "properties": {
+              "evidenceReviewerConclusion": {
+                "enum": [
+                  "NOT_REVIEWED",
+                  "INSUFFICIENT",
+                  "PARTIAL",
+                  "CONTRADICTED",
+                  "SUPPORT_REQUIRED"
+                ]
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

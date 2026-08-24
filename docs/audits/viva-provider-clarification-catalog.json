@@ -1,0 +1,302 @@
+{
+  "schemaVersion": "1.0.0",
+  "sourceAudit": {
+    "pullRequest": 123,
+    "commit": "7593288932c66678311cf3ceeef791ada386ca3b",
+    "markdown": "docs/audits/viva-provider-contract-evidence.md",
+    "json": "docs/audits/viva-provider-contract-evidence.json",
+    "questionTextParity": "SEMANTIC_PARITY_TEXTUALLY_EXPANDED_IN_MARKDOWN"
+  },
+  "questions": [
+    {
+      "questionId": "VIVA-Q-01",
+      "sourceAuditQuestion": "After the exact create request is accepted but its response body is lost, which merchant-controlled pre-write value retrieves precisely that object without repeating create?",
+      "questionEn": "After the exact create-booking/create-transaction/payment request is accepted, but the TCP/TLS connection closes before PadlHub receives the response body, which merchant-controlled value supplied before that request retrieves precisely that object without repeating the create command?",
+      "questionRu": "После того как точный запрос create-booking/create-transaction/payment принят, но TCP/TLS-соединение закрывается до получения PadlHub тела ответа, какое управляемое мерчантом значение, переданное до запроса, позволяет получить именно созданный объект без повторения команды create?",
+      "requirementIds": ["ID-01", "ID-05", "IDEM-05"],
+      "gateIds": ["realProviderWriter", "realProviderReadBack"],
+      "criticalReason": "Lost-response recovery requires a stable value created before egress; otherwise a retry may duplicate a booking or payment effect.",
+      "minimumAcceptableAnswer": "Name the exact request field or header, its format and scope, and the exact production lookup operation that returns one matching object after an accepted-but-unanswered request.",
+      "requiredEvidence": [
+        "Versioned production API schema for the create operation",
+        "Versioned production API schema for lookup by the pre-write value",
+        "Written cardinality and retention guarantees"
+      ],
+      "insufficientAnswers": [
+        "A generic statement that duplicate prevention is supported",
+        "A provider-generated identifier available only in the lost response",
+        "A UI/report search or an undocumented example"
+      ],
+      "noResponseDecision": "Keep the writer and authoritative read-back gates NO-GO; keep ambiguous transport outcomes UNKNOWN and do not repeat create."
+    },
+    {
+      "questionId": "VIVA-Q-02",
+      "sourceAuditQuestion": "For the exact create operation, what is the idempotency key location, uniqueness scope, retention, same-payload replay, changed-payload behavior, timeout/reset behavior and post-retention behavior?",
+      "questionEn": "For that exact create operation, what is the idempotency header or field, uniqueness scope and retention; what happens for same key/same payload, same key/changed payload, timeout/reset, and a retry after the retention window?",
+      "questionRu": "Для этой точной операции create укажите header или field идемпотентности, область уникальности и срок хранения; что происходит при одинаковом ключе и payload, одинаковом ключе и изменённом payload, timeout/reset и повторе после окончания срока хранения?",
+      "requirementIds": ["IDEM-01", "IDEM-02", "IDEM-03", "IDEM-04", "IDEM-05"],
+      "gateIds": ["realProviderWriter"],
+      "criticalReason": "Exact-operation replay semantics are required to prevent a duplicate side effect after an ambiguous transport result.",
+      "minimumAcceptableAnswer": "Document the exact operation, key location, uniqueness scope, TTL, replay response, changed-payload conflict and no-extra-effect guarantees for timeout/reset and post-retention retry.",
+      "requiredEvidence": [
+        "Versioned OpenAPI or API reference for the exact create operation",
+        "Written idempotency and retention semantics",
+        "Exact status codes and response bodies for replay and conflict"
+      ],
+      "insufficientAnswers": [
+        "An unqualified yes",
+        "Client-side deduplication only",
+        "A sample request without retention or changed-payload semantics"
+      ],
+      "noResponseDecision": "Keep realProviderWriter NO-GO and prohibit blind retry after timeout or connection reset."
+    },
+    {
+      "questionId": "VIVA-Q-03",
+      "sourceAuditQuestion": "Which current production read endpoint looks up by the merchant-controlled value, what is its cardinality, how are never-created, not-yet-visible, deleted, expired and rejected distinguished, and what are the consistency window, history retention and rate limits?",
+      "questionEn": "Which current production read endpoint looks up the object by that merchant-controlled value; can it return multiple matches; and how are never-created, not-yet-visible, deleted, expired and rejected distinguished? State the consistency window, history retention and rate limits.",
+      "questionRu": "Какой текущий production read endpoint ищет объект по этому управляемому мерчантом значению; может ли он вернуть несколько совпадений; как различаются never-created, not-yet-visible, deleted, expired и rejected? Укажите окно консистентности, срок хранения истории и rate limits.",
+      "requirementIds": ["ID-05", "RB-01", "RB-02", "RB-05", "PAY-08"],
+      "gateIds": ["realProviderWriter", "realProviderReadBack", "SHADOW", "WARN", "BLOCK"],
+      "criticalReason": "A report, UI event or generic NOT_FOUND cannot establish an authoritative negative lookup or justify a second mutation.",
+      "minimumAcceptableAnswer": "Provide the exact production GET/search operation, lookup field, auth scope, cardinality, status/error model, visibility bound, retention and rate-limit contract.",
+      "requiredEvidence": [
+        "Versioned production read schema",
+        "Written negative-result and consistency semantics",
+        "Rate-limit and history-retention documentation"
+      ],
+      "insufficientAnswers": [
+        "A transaction report or dashboard screenshot",
+        "A 404 without documented negative semantics",
+        "Widget success/failure telemetry"
+      ],
+      "noResponseDecision": "Keep NOT_FOUND and delayed provider appearance UNKNOWN; keep writer, read-back, SHADOW, WARN and BLOCK NO-GO."
+    },
+    {
+      "questionId": "VIVA-Q-04",
+      "sourceAuditQuestion": "List every order, booking, payment and transaction identifier, its first availability, scope, retention, reuse and production/demo differences.",
+      "questionEn": "List every provider-generated order, booking, payment and transaction identifier, when it first exists, where it appears in create response/read-back/callback, its scope, reuse rules and production/demo differences.",
+      "questionRu": "Перечислите все генерируемые провайдером идентификаторы order, booking, payment и transaction: когда каждый впервые появляется, где присутствует в create response/read-back/callback, его область, правила повторного использования и различия production/demo.",
+      "requirementIds": ["ID-02", "ID-04", "ENV-01"],
+      "gateIds": ["realProviderWriter", "realProviderReadBack", "WARN"],
+      "criticalReason": "PadlHub must bind one tenant operation to immutable provider objects without assuming that a transaction ID is a reservation key.",
+      "minimumAcceptableAnswer": "Supply a field-by-field identifier lifecycle and uniqueness matrix for production and demo, including create, read-back and callback availability.",
+      "requiredEvidence": [
+        "Versioned request/response/callback schemas",
+        "Written identifier uniqueness, scope, retention and reuse rules",
+        "Production/demo identifier parity statement"
+      ],
+      "insufficientAnswers": [
+        "A list of example IDs without lifecycle guarantees",
+        "A statement that IDs are unique without scope",
+        "Treating one transaction ID as one booking without allocation evidence"
+      ],
+      "noResponseDecision": "Keep identifier binding UNPROVEN and the affected gates NO-GO."
+    },
+    {
+      "questionId": "VIVA-Q-05",
+      "sourceAuditQuestion": "Provide the current production booking/payment state machine and identify terminal and reversible statuses.",
+      "questionEn": "Provide the current production state machine and identify terminal/reversible statuses for accepted, rejected, failed, cancelled, expired, authorized, captured, settled, refunded, partially refunded, reversed and charged back.",
+      "questionRu": "Предоставьте текущую production state machine и укажите terminal/reversible статусы для accepted, rejected, failed, cancelled, expired, authorized, captured, settled, refunded, partially refunded, reversed и charged back.",
+      "requirementIds": ["RB-03", "PAY-03", "PAY-07"],
+      "gateIds": ["realProviderReadBack", "livePaymentConvergence"],
+      "criticalReason": "Paid facts may later be partially or fully refunded, so a single visible status cannot safely drive convergence.",
+      "minimumAcceptableAnswer": "Provide a versioned state and transition table with terminality, reversibility, ordering, timestamps and rules for partial refund, reversal and chargeback.",
+      "requiredEvidence": [
+        "Versioned production state-machine documentation",
+        "API enum/status definitions",
+        "Ordering and reversal/refund lifecycle guarantees"
+      ],
+      "insufficientAnswers": [
+        "UI status labels",
+        "A list of statuses without transitions",
+        "An assertion that PAID is final without refund/reversal semantics"
+      ],
+      "noResponseDecision": "Keep provider state mapping and livePaymentConvergence NO-GO."
+    },
+    {
+      "questionId": "VIVA-Q-06",
+      "sourceAuditQuestion": "Which immutable read-back fields bind merchant, actor, exercise, booking/order/payment, merchant reference and provider transaction?",
+      "questionEn": "Which immutable read-back fields bind merchant/tenant, actor/client, exercise/game, booking/order/payment, merchant reference and provider transaction to the same operation?",
+      "questionRu": "Какие неизменяемые поля read-back связывают merchant/tenant, actor/client, exercise/game, booking/order/payment, merchant reference и provider transaction с одной и той же операцией?",
+      "requirementIds": ["RB-04", "PAY-05"],
+      "gateIds": [
+        "realProviderReadBack",
+        "providerNativeAmountCurrencyVerification",
+        "livePaymentConvergence"
+      ],
+      "criticalReason": "Acceptance requires an exact immutable match; otherwise another client, booking or payment may be confirmed.",
+      "minimumAcceptableAnswer": "Identify the authoritative immutable fields and exact response locations that jointly bind tenant, actor, business object, merchant reference and provider transaction.",
+      "requiredEvidence": [
+        "Versioned read-back response schema",
+        "Written immutability and ownership guarantees",
+        "Exact field mapping for one operation"
+      ],
+      "insufficientAnswers": [
+        "Matching by amount or timestamp alone",
+        "A mutable display name or phone number",
+        "A generic transaction ID without booking allocation"
+      ],
+      "noResponseDecision": "Do not accept provider read-back as confirmation; keep the three affected gates NO-GO."
+    },
+    {
+      "questionId": "VIVA-Q-07",
+      "sourceAuditQuestion": "Specify authoritative amount unit, scale, rounding and currency representation plus lifecycle, partial, fee, net, tip, reversal and chargeback facts.",
+      "sourceQuestionEn": "Specify amount unit/scale/rounding and authoritative currency representation in write, read-back and callback. Explain authorized, captured, settled, refunded, fee, net, tip, reversal/chargeback and multiple-transaction fields.",
+      "questionEn": "Specify amount unit/scale/rounding and authoritative currency representation in write, read-back and callback. Explain authorized, captured, settled, refunded, fee, net, tip, reversal/chargeback and multiple-transaction fields. State whether one transaction or payment can cover multiple positions or bookings, and identify the stable per-position or per-booking allocation ID.",
+      "questionRu": "Укажите единицу, scale и rounding суммы, а также authoritative представление currency в write, read-back и callback. Объясните поля authorized, captured, settled, refunded, fee, net, tip, reversal/chargeback и multiple-transaction. Укажите, может ли одна transaction или payment покрывать несколько positions или bookings, и назовите стабильный per-position или per-booking allocation ID.",
+      "requirementIds": ["PAY-01", "PAY-02", "PAY-03", "PAY-04", "PAY-06", "PAY-07"],
+      "gateIds": ["providerNativeAmountCurrencyVerification", "livePaymentConvergence"],
+      "criticalReason": "Transaction totals may cover multiple positions, and refunds or fees may alter displayed values; exact amount/currency allocation is required.",
+      "minimumAcceptableAnswer": "Provide versioned field definitions, units, ISO currency representation, rounding rules and allocation/lifecycle semantics for write, read-back and callback.",
+      "requiredEvidence": [
+        "Versioned money-field schemas",
+        "Written rounding and ISO currency rules",
+        "Per-position/per-booking allocation and refund/reversal model"
+      ],
+      "insufficientAnswers": [
+        "A RUB-labeled report",
+        "Transaction total equality",
+        "Examples without unit, rounding or allocation guarantees"
+      ],
+      "noResponseDecision": "Keep amount/currency verification and live convergence NO-GO."
+    },
+    {
+      "questionId": "VIVA-Q-08",
+      "sourceAuditQuestion": "Provide callback signature/authentication, canonical payload, covered headers, timestamp/nonce, replay window, key rotation, environment separation and signed merchant/reference fields.",
+      "sourceQuestionEn": "Provide the production callback authentication/integrity contract: signature algorithm, canonical payload, covered headers, timestamp/nonce, allowed replay window, key distribution and rotation, environment separation, and signed merchant/reference fields.",
+      "questionEn": "First confirm whether Viva provides a distinct production payment-event callback/channel rather than only a generic notification webhook. If it does, provide its authentication/integrity contract: signature algorithm, canonical payload, covered headers, timestamp/nonce, allowed replay window, key distribution and rotation, environment separation, and signed merchant/reference fields.",
+      "questionRu": "Сначала подтвердите, предоставляет ли Viva отдельный production payment-event callback/channel, а не только generic notification webhook. Если предоставляет, опишите его contract аутентификации и целостности: алгоритм подписи, canonical payload, покрываемые headers, timestamp/nonce, допустимое replay window, распространение и rotation ключей, разделение окружений и подписанные merchant/reference fields.",
+      "requirementIds": ["CB-00", "CB-01", "CB-02", "CB-03", "CB-05", "ENV-01"],
+      "gateIds": ["publicCallbackRoute", "callbackAsAccelerationOnly"],
+      "criticalReason": "A generic webhook transport is not a secure payment callback; integrity, tenant binding and replay resistance must be independently verifiable.",
+      "minimumAcceptableAnswer": "State whether a distinct production payment-event channel exists and, if so, provide the exact verification algorithm, signed bytes/headers, key lifecycle, timestamp/nonce checks, environment separation and signed tenant/object fields.",
+      "requiredEvidence": [
+        "Versioned callback security specification",
+        "Canonicalization and signature-verification procedure",
+        "Key distribution/rotation and replay-window documentation"
+      ],
+      "insufficientAnswers": [
+        "IP allowlisting alone",
+        "TLS transport alone",
+        "An unsigned example payload or a generic webhook page"
+      ],
+      "noResponseDecision": "Do not create a public callback route; keep callback gates NO-GO."
+    },
+    {
+      "questionId": "VIVA-Q-09",
+      "sourceAuditQuestion": "Provide callback event-ID scope, retries, duplicate/order guarantees, old-after-new behavior, acknowledgement and non-2xx handling.",
+      "questionEn": "Provide callback event-ID scope, retry schedule, duplicate/order guarantees, old-after-new behavior, acknowledgement status/body and non-2xx handling.",
+      "questionRu": "Укажите область callback event ID, расписание retry, гарантии duplicate/order, поведение old-after-new, acknowledgement status/body и обработку non-2xx.",
+      "requirementIds": ["ID-03", "CB-04"],
+      "gateIds": ["publicCallbackRoute", "callbackAsAccelerationOnly"],
+      "criticalReason": "Reliable observation requires deterministic dedupe, stale-event handling and bounded delivery semantics.",
+      "minimumAcceptableAnswer": "Document the unique event ID, its scope/retention, complete retry schedule, duplicate/order model, ACK contract and non-2xx behavior.",
+      "requiredEvidence": [
+        "Versioned callback delivery contract",
+        "Event ID field and uniqueness/retention guarantee",
+        "Retry, ordering and acknowledgement specification"
+      ],
+      "insufficientAnswers": [
+        "A statement that callbacks may be retried",
+        "Business-object ID used as an undocumented delivery ID",
+        "An example delivery without duplicate/order guarantees"
+      ],
+      "noResponseDecision": "Keep callback consumption and callback acceleration NO-GO."
+    },
+    {
+      "questionId": "VIVA-Q-10",
+      "sourceAuditQuestion": "Provide current production OpenAPI/reference and changelog URLs, supported version, deprecation policy and written demo/production parity.",
+      "questionEn": "Provide current production OpenAPI/API-reference and changelog URLs, exact supported version, deprecation policy, and written confirmation of demo/sandbox versus production parity.",
+      "questionRu": "Предоставьте текущие production URL OpenAPI/API reference и changelog, точную поддерживаемую версию, deprecation policy и письменное подтверждение parity между demo/sandbox и production.",
+      "requirementIds": ["VER-01", "ENV-01"],
+      "gateIds": [
+        "realProviderWriter",
+        "realProviderReadBack",
+        "publicCallbackRoute",
+        "callbackAsAccelerationOnly",
+        "providerNativeAmountCurrencyVerification",
+        "livePaymentConvergence",
+        "SHADOW",
+        "WARN",
+        "BLOCK"
+      ],
+      "criticalReason": "Unversioned or demo-only material cannot establish the contract used by the production merchant account.",
+      "minimumAcceptableAnswer": "Identify the authoritative production contract version, environment applicability, changelog and deprecation timeline, with accessible versioned documents or attachments.",
+      "requiredEvidence": [
+        "Production-current OpenAPI/Swagger/Postman or equivalent reference",
+        "Version and changelog",
+        "Written demo/sandbox/production parity matrix"
+      ],
+      "insufficientAnswers": [
+        "Marketing documentation",
+        "An undated API example",
+        "HTTP 401 or 404 observations",
+        "A generic statement that environments are similar"
+      ],
+      "noResponseDecision": "Keep every provider-connected gate NO-GO."
+    },
+    {
+      "questionId": "VIVA-Q-11",
+      "sourceAuditQuestion": "Define production connect/request timeout expectations, 429 and Retry-After, retryable versus nonretryable status and transport classes, rate-limit scope, maximum retry rate and horizon, backoff and jitter, circuit-breaker trip/half-open/recovery probes, read-after-write consistency, maintenance behavior and provider SLOs.",
+      "questionEn": "Define production connect/request timeout expectations; 429 and Retry-After; retryable versus nonretryable HTTP/provider/transport classes; rate-limit scope; maximum retry rate and horizon; required exponential backoff/jitter; circuit-breaker trip, half-open and recovery probes; read-after-write consistency; maintenance behavior; and provider SLOs.",
+      "questionRu": "Определите production ожидания для connect/request timeout; 429 и Retry-After; retryable и nonretryable классы HTTP/provider/transport; область rate limit; максимальную частоту и горизонт retry; обязательные exponential backoff/jitter; circuit-breaker trip, half-open и recovery probes; read-after-write consistency; поведение при maintenance и provider SLO.",
+      "requirementIds": ["OPS-01", "RB-05"],
+      "gateIds": [
+        "realProviderWriter",
+        "realProviderReadBack",
+        "publicCallbackRoute",
+        "callbackAsAccelerationOnly",
+        "providerNativeAmountCurrencyVerification",
+        "livePaymentConvergence",
+        "SHADOW",
+        "WARN",
+        "BLOCK"
+      ],
+      "criticalReason": "Timeout, retry and consistency policy must be provider-valid; otherwise recovery can amplify failures or create duplicate effects.",
+      "minimumAcceptableAnswer": "Provide production operational limits, error taxonomy, retry and breaker policy, consistency windows, maintenance behavior and SLOs with exact version/environment scope.",
+      "requiredEvidence": [
+        "Official production operational/API policy",
+        "Rate-limit and Retry-After contract",
+        "Error taxonomy, consistency and maintenance/SLO documentation"
+      ],
+      "insufficientAnswers": [
+        "Use standard retries",
+        "Undocumented observed timing",
+        "A quota without scope or recovery horizon"
+      ],
+      "noResponseDecision": "Do not schedule real or shadow provider traffic; keep all gates NO-GO."
+    },
+    {
+      "questionId": "VIVA-Q-12",
+      "sourceAuditQuestion": "Define permitted provider correlation values in logs/traces, retention and redaction, forbidden merchant/reference/client/body fields, allowed low-cardinality metric labels and failure/rate-limit/circuit isolation per tenant, merchant and acquiring integration.",
+      "questionEn": "Define which provider correlation values may appear in logs/traces, their retention and redaction; which merchant/reference/client/body fields are forbidden; allowed low-cardinality metric labels; and how failure/rate-limit/circuit state is isolated per tenant, merchant and acquiring integration.",
+      "questionRu": "Определите, какие provider correlation values могут присутствовать в logs/traces, их retention и redaction; какие merchant/reference/client/body fields запрещены; допустимые low-cardinality metric labels; и как failure/rate-limit/circuit state изолируется по tenant, merchant и acquiring integration.",
+      "requirementIds": ["OBS-01", "SEC-01"],
+      "gateIds": [
+        "realProviderWriter",
+        "realProviderReadBack",
+        "publicCallbackRoute",
+        "callbackAsAccelerationOnly",
+        "providerNativeAmountCurrencyVerification",
+        "livePaymentConvergence",
+        "SHADOW",
+        "WARN",
+        "BLOCK"
+      ],
+      "criticalReason": "Provider payloads may contain client PII; observability must remain redacted, bounded and isolated without raw callback bodies.",
+      "minimumAcceptableAnswer": "Provide an official data-classification and observability policy covering permitted correlation fields, forbidden PII/body fields, retention/redaction and tenant/merchant/acquirer isolation.",
+      "requiredEvidence": [
+        "Official provider data-classification or integration-security policy",
+        "Field-level logging and retention rules",
+        "Operational isolation and low-cardinality metric guidance"
+      ],
+      "insufficientAnswers": [
+        "Log what is needed",
+        "An oral assurance",
+        "Raw callback-body retention",
+        "IP allowlisting presented as message integrity"
+      ],
+      "noResponseDecision": "Keep raw-body storage prohibited and all provider-connected gates NO-GO."
+    }
+  ]
+}
