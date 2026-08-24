@@ -134,6 +134,76 @@ describe('browser auth gateway', () => {
     expect(new Headers(refreshInit?.headers).has('Authorization')).toBe(false);
   });
 
+  it.each([
+    ['before provider acknowledgement after a user switch', undefined, 'USER'],
+    [
+      'during operation reconciliation after a tenant switch',
+      'c3889c99-b0e3-4a3d-b3e8-a5c99af730ea',
+      'TENANT',
+    ],
+    ['for the same principal after reload', 'c3889c99-b0e3-4a3d-b3e8-a5c99af730ea', 'NONE'],
+  ])(
+    'scopes pending Games recovery to the authenticated principal %s',
+    async (_label, operationId, principalChange) => {
+      const session = (userId: string, tenantId: string, displayName: string) => ({
+        accessToken: `token-${userId}`,
+        tokenType: 'Bearer',
+        expiresAt: '2099-07-11T12:10:00.000Z',
+        user: { id: userId, displayName },
+        context: {
+          userId,
+          tenantId,
+          displayName,
+          phoneLast4: '0001',
+          roles: ['client'],
+          permissions: ['profile.read'],
+        },
+      });
+      const first = session(
+        '00000000-0000-4000-8000-000000000001',
+        '00000000-0000-4000-8000-000000000002',
+        'Анна',
+      );
+      const second =
+        principalChange === 'USER'
+          ? session('00000000-0000-4000-8000-000000000003', first.context.tenantId, 'Борис')
+          : principalChange === 'TENANT'
+            ? session(first.context.userId, '00000000-0000-4000-8000-000000000004', 'Анна')
+            : first;
+      const firstGateway = createBrowserAuthGateway({
+        baseUrl: 'https://api.padlhub.test/',
+        tenantKey: 'padlhub',
+        appVersion: 'test',
+        fetchImplementation: vi.fn<typeof fetch>().mockResolvedValueOnce(Response.json(first)),
+      });
+      await firstGateway.restoreSession();
+      window.sessionStorage.setItem(
+        'phub.pending-game-command.v1',
+        JSON.stringify({
+          action: 'JOIN',
+          gameId: '11111111-1111-4111-8111-111111111111',
+          idempotencyKey: 'pending-cross-account-command',
+          expectedRevision: 7,
+          ...(operationId ? { operationId } : {}),
+        }),
+      );
+
+      const gatewayAfterReload = createBrowserAuthGateway({
+        baseUrl: 'https://api.padlhub.test/',
+        tenantKey: 'padlhub',
+        appVersion: 'test',
+        fetchImplementation: vi.fn<typeof fetch>().mockResolvedValueOnce(Response.json(second)),
+      });
+      await gatewayAfterReload.restoreSession();
+
+      if (principalChange !== 'NONE') {
+        expect(window.sessionStorage.getItem('phub.pending-game-command.v1')).toBeNull();
+      } else {
+        expect(window.sessionStorage.getItem('phub.pending-game-command.v1')).not.toBeNull();
+      }
+    },
+  );
+
   it('issues a no-store realtime ticket through the authenticated PadlHub client', async () => {
     const session = {
       accessToken: 'short-lived-padlhub-token',
@@ -622,8 +692,10 @@ describe('browser auth gateway', () => {
     });
 
     await gateway.restoreSession();
+    window.sessionStorage.setItem('phub.pending-game-command.v1', '{"action":"JOIN"}');
     const access = gateway.refreshVivaAccessToken();
     await gateway.logout();
+    expect(window.sessionStorage.getItem('phub.pending-game-command.v1')).toBeNull();
     resolveAccess?.(
       Response.json({
         accessToken: 'late-user-a-token',

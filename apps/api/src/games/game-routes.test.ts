@@ -432,4 +432,45 @@ describe('Games roster User API', () => {
       operationId: commandId,
     });
   });
+
+  it.each([
+    ['UNKNOWN', 'PROCESSING', 'UNKNOWN', false],
+    ['RECONCILING', 'PROCESSING', 'RECONCILING', false],
+    ['MANUAL_REVIEW', 'PROCESSING', 'MANUAL_REVIEW', true],
+    ['REJECTED', 'FAILED', 'REJECTED', false],
+  ] as const)(
+    'maps provider recovery %s without exposing provider references',
+    async (providerRecoveryState, status, phase, automaticRetryExhausted) => {
+      const getOperation = vi.fn().mockResolvedValue({
+        commandId,
+        commandType: 'game.join.v1',
+        gameId,
+        state: 'COMPLETED',
+        committedAt,
+        updatedAt: '2026-08-24T18:00:05.000Z',
+        result: applied({
+          viewerRelation: 'SEAT_RESERVED',
+          omitParticipation: true,
+          reservationId: '238df6f5-fec4-44dd-ad8c-39e98ade8366',
+          providerRecoveryState,
+        }),
+      });
+      const app = await appWith(repository({ getOperation }));
+      const response = await app.inject({
+        method: 'GET',
+        url: `/user/api/v1/local-padel/game-operations/${commandId}`,
+        headers: { authorization: `Bearer ${await accessToken()}` },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        operation: {
+          status,
+          createdAt: committedAt,
+          updatedAt: '2026-08-24T18:00:05.000Z',
+          recovery: { phase, automaticRetryExhausted },
+        },
+      });
+      expect(JSON.stringify(response.json())).not.toContain('synthetic:');
+    },
+  );
 });

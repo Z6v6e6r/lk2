@@ -383,6 +383,7 @@ export interface AuthGateway {
     gameId: string,
     expectedRevision?: number,
     invitationId?: string,
+    idempotencyKey?: string,
   ) => Promise<GameCommandResult>;
   readonly leaveGame: (gameId: string) => Promise<GameCommandResult>;
   readonly joinGameWaitlist: (gameId: string, invitationId?: string) => Promise<GameCommandResult>;
@@ -539,6 +540,8 @@ const HOME_INITIAL_SCHEDULE_DAYS = 3;
 const NOTIFICATION_CACHE_TTL_MS = 2_000;
 const VIVA_REAUTH_RETURN_PATH_STORAGE_KEY = 'phub.viva-reauth-return-path.v1';
 const VIVA_REAUTH_ATTEMPT_STORAGE_KEY = 'phub.viva-reauth-attempt.v1';
+const GAME_COMMAND_RECOVERY_STORAGE_KEY = 'phub.pending-game-command.v1';
+const GAME_COMMAND_RECOVERY_PRINCIPAL_STORAGE_KEY = 'phub.pending-game-command-principal.v1';
 const VIVA_REAUTH_ATTEMPT_TTL_MS = 10 * 60 * 1_000;
 const SELF_PROFILE_CACHE_TTL_MS = 60 * 1_000;
 const PROFILE_PHOTO_SYNC_RETRY_MAX_MS = 30 * 60 * 1_000;
@@ -909,6 +912,27 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
   }
 
   function normalizeSession(session: ApiAuthenticatedSession): AuthenticatedSession {
+    try {
+      if (typeof window !== 'undefined') {
+        const recoveryPrincipal = JSON.stringify({
+          tenantId: session.context.tenantId,
+          userId: session.context.userId,
+        });
+        if (
+          window.sessionStorage.getItem(GAME_COMMAND_RECOVERY_STORAGE_KEY) !== null &&
+          window.sessionStorage.getItem(GAME_COMMAND_RECOVERY_PRINCIPAL_STORAGE_KEY) !==
+            recoveryPrincipal
+        ) {
+          window.sessionStorage.removeItem(GAME_COMMAND_RECOVERY_STORAGE_KEY);
+        }
+        window.sessionStorage.setItem(
+          GAME_COMMAND_RECOVERY_PRINCIPAL_STORAGE_KEY,
+          recoveryPrincipal,
+        );
+      }
+    } catch {
+      // Browser storage is only a recovery aid; backend ownership remains authoritative.
+    }
     if (
       currentUserId &&
       (currentUserId !== session.context.userId || currentTenantId !== session.context.tenantId)
@@ -1813,8 +1837,8 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       return client.getGame(gameId);
     },
 
-    joinGame(gameId, expectedRevision, invitationId) {
-      return client.joinGame(gameId, expectedRevision, invitationId);
+    joinGame(gameId, expectedRevision, invitationId, idempotencyKey) {
+      return client.joinGame(gameId, expectedRevision, invitationId, idempotencyKey);
     },
 
     leaveGame(gameId) {
@@ -2151,6 +2175,8 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       try {
         window.sessionStorage.removeItem(VIVA_REAUTH_RETURN_PATH_STORAGE_KEY);
         window.sessionStorage.removeItem(VIVA_REAUTH_ATTEMPT_STORAGE_KEY);
+        window.sessionStorage.removeItem(GAME_COMMAND_RECOVERY_STORAGE_KEY);
+        window.sessionStorage.removeItem(GAME_COMMAND_RECOVERY_PRINCIPAL_STORAGE_KEY);
       } catch {
         // Logout remains valid when browser storage is unavailable.
       }

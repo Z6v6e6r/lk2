@@ -448,6 +448,32 @@ describe('PadlHubApiClient authentication boundary', () => {
     });
   });
 
+  it('reuses a caller-persisted Games idempotency key after a lost response', async () => {
+    const calls: Array<{ input: Parameters<typeof fetch>[0]; init?: RequestInit }> = [];
+    const fetchImplementation: typeof fetch = (input, init) => {
+      calls.push({ input, ...(init === undefined ? {} : { init }) });
+      if (calls.length === 1) return Promise.reject(new TypeError('response lost'));
+      return Promise.resolve(
+        jsonResponse({
+          commandId: 'c3889c99-b0e3-4a3d-b3e8-a5c99af730ea',
+          operation: { status: 'PROCESSING' },
+          game: null,
+          replayed: true,
+        }),
+      );
+    };
+    const client = createClient(fetchImplementation, {
+      initialAccessToken: authenticatedSession.accessToken,
+    });
+    const key = 'persisted-games-join-command-0001';
+    await client.joinGame('751fe6a8-b0b1-4b2b-873d-a2d785c4e191', 9, undefined, key);
+    expect(calls).toHaveLength(2);
+    expect(calls.map((call) => new Headers(call.init?.headers).get('Idempotency-Key'))).toEqual([
+      key,
+      key,
+    ]);
+  });
+
   it('reads a Games operation from the authenticated user boundary', async () => {
     const calls: Array<{ input: Parameters<typeof fetch>[0]; init?: RequestInit }> = [];
     const fetchImplementation: typeof fetch = (input, init) => {

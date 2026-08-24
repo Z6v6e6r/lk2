@@ -57,6 +57,7 @@ const levelRangeLabels: Readonly<Record<GameLevelRangeFilter, string>> = {
 const weekdayFormatter = new Intl.DateTimeFormat('ru-RU', { weekday: 'short' });
 const dayFormatter = new Intl.DateTimeFormat('ru-RU', { day: '2-digit' });
 const LEVEL_RECOVERY_STORAGE_KEY = 'phub.pending-level-recovery.v1';
+const GAME_COMMAND_RECOVERY_STORAGE_KEY = 'phub.pending-game-command.v1';
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 interface StoredLevelRecovery {
@@ -64,6 +65,61 @@ interface StoredLevelRecovery {
   readonly gameId: string;
   readonly returnPath: string;
   readonly invitationId?: string;
+}
+
+interface StoredGameCommandRecovery {
+  readonly action: 'JOIN';
+  readonly gameId: string;
+  readonly idempotencyKey: string;
+  readonly expectedRevision: number;
+  readonly invitationId?: string;
+  readonly operationId?: string;
+}
+
+function readPendingGameCommand(): StoredGameCommandRecovery | undefined {
+  if (typeof window === 'undefined') return undefined;
+  try {
+    const parsed = JSON.parse(
+      window.sessionStorage.getItem(GAME_COMMAND_RECOVERY_STORAGE_KEY) ?? 'null',
+    ) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined;
+    const value = parsed as Record<string, unknown>;
+    if (
+      value.action !== 'JOIN' ||
+      typeof value.gameId !== 'string' ||
+      !UUID_PATTERN.test(value.gameId) ||
+      typeof value.idempotencyKey !== 'string' ||
+      value.idempotencyKey.length < 16 ||
+      typeof value.expectedRevision !== 'number' ||
+      !Number.isSafeInteger(value.expectedRevision) ||
+      (value.operationId !== undefined &&
+        (typeof value.operationId !== 'string' || !UUID_PATTERN.test(value.operationId))) ||
+      (value.invitationId !== undefined &&
+        (typeof value.invitationId !== 'string' || !UUID_PATTERN.test(value.invitationId)))
+    )
+      return undefined;
+    return value as unknown as StoredGameCommandRecovery;
+  } catch {
+    return undefined;
+  }
+}
+
+function storePendingGameCommand(value: StoredGameCommandRecovery): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.sessionStorage.setItem(GAME_COMMAND_RECOVERY_STORAGE_KEY, JSON.stringify(value));
+  } catch {
+    // The server-side idempotency contract remains authoritative when storage is unavailable.
+  }
+}
+
+function clearPendingGameCommand(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.sessionStorage.removeItem(GAME_COMMAND_RECOVERY_STORAGE_KEY);
+  } catch {
+    // Cleanup does not change the durable operation result.
+  }
 }
 
 function readPendingLevelRecovery(game: ViewerGameCard): StoredLevelRecovery | undefined {
@@ -285,6 +341,33 @@ function errorCode(error: unknown): string | undefined {
   return typeof code === 'string' ? code : undefined;
 }
 
+const DEFINITIVE_GAME_COMMAND_ERROR_CODES = new Set([
+  'GAME_ALREADY_JOINED',
+  'GAME_FULL',
+  'GAME_JOIN_CUTOFF_PASSED',
+  'GAME_NOT_FOUND',
+  'GAME_NOT_JOINABLE',
+  'GAME_OPERATION_NOT_FOUND',
+  'GAME_REVISION_CONFLICT',
+  'LEVEL_NOT_ALLOWED',
+  'LEVEL_SCALE_VERSION_MISMATCH',
+  'LEVEL_TOO_HIGH',
+  'LEVEL_TOO_LOW',
+  'PLAYER_LEVEL_REQUIRED',
+  'PLAYER_LEVEL_STALE',
+  'PLAYER_LEVEL_UNKNOWN',
+]);
+
+function isDefinitiveGameCommandError(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false;
+  const status = 'status' in error ? (error as { readonly status?: unknown }).status : undefined;
+  if (typeof status === 'number') {
+    return status >= 400 && status < 500 && ![408, 425, 429].includes(status);
+  }
+  const code = errorCode(error);
+  return code !== undefined && DEFINITIVE_GAME_COMMAND_ERROR_CODES.has(code);
+}
+
 function eligibilityRecoveryAction(error: unknown): string | undefined {
   if (typeof error !== 'object' || error === null || !('eligibility' in error)) return undefined;
   const eligibility = (error as { readonly eligibility?: unknown }).eligibility;
@@ -351,6 +434,7 @@ export function GamesPage({ gateway, gameId, eventId }: GamesPageProps): React.J
   const [assessmentIndex, setAssessmentIndex] = useState(0);
   const pendingViewerGame = useRef<ViewerGameCard | null>(null);
   const rosterActionInFlight = useRef(false);
+  const pendingCommandRecoveryStarted = useRef(false);
   const invitationId = useMemo(() => {
     if (typeof window === 'undefined' || !gameId) return undefined;
     const candidate = new URLSearchParams(window.location.search).get('invitationId')?.trim();
@@ -372,6 +456,77 @@ export function GamesPage({ gateway, gameId, eventId }: GamesPageProps): React.J
       }),
     ];
   }, [assessmentAnswers, assessmentDefinition]);
+
+  useEffect(() => {
+    const pending = readPendingGameCommand();
+    if (!pending || pendingCommandRecoveryStarted.current) return;
+    pendingCommandRecoveryStarted.current = true;
+    if (!pending.operationId) {
+      let cancelled = false;
+      queueMicrotask(() => {
+        if (!cancelled)
+          setNotice(
+            'Предыдущее присоединение не подтверждено. Нажмите «Вступить», чтобы повторить его безопасно.',
+          );
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
+    const operationId = pending.operationId;
+    let active = true;
+    rosterActionInFlight.current = true;
+    const recover = async (): Promise<void> => {
+      await Promise.resolve();
+      if (!active) return;
+      setBusyGameId(pending.gameId);
+      let result = await gateway.getGameOperation(operationId);
+      storePendingGameCommand({ ...pending, operationId: result.operation.id });
+      for (
+        let attempt = 0;
+        attempt < 8 &&
+        ['ACCEPTED', 'PROCESSING'].includes(result.operation.status) &&
+        result.operation.recovery?.phase !== 'MANUAL_REVIEW';
+        attempt += 1
+      ) {
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        result = await gateway.getGameOperation(result.operation.id);
+      }
+      if (!active) return;
+      if (result.operation.recovery?.phase === 'MANUAL_REVIEW') {
+        setNotice(
+          `Автоматическая проверка завершена. Обратитесь в поддержку с номером операции ${result.operation.id}.`,
+        );
+      } else if (result.operation.status === 'FAILED') {
+        clearPendingGameCommand();
+        setError(result.operation.error?.message ?? 'Операция отклонена.');
+      } else if (['ACCEPTED', 'PROCESSING'].includes(result.operation.status)) {
+        setNotice('Проверяем состояние. Не повторяйте действие.');
+      } else {
+        clearPendingGameCommand();
+        setNotice('Операция восстановлена. Состав игры обновлён.');
+        setReloadToken((current) => current + 1);
+      }
+    };
+    void recover()
+      .catch((cause: unknown) => {
+        if (!active) return;
+        if (isDefinitiveGameCommandError(cause)) {
+          clearPendingGameCommand();
+          setError(errorMessage(cause));
+        } else {
+          setNotice('Проверяем ранее отправленное действие. Не повторяйте его.');
+        }
+      })
+      .finally(() => {
+        if (!active) return;
+        rosterActionInFlight.current = false;
+        setBusyGameId(null);
+      });
+    return () => {
+      active = false;
+    };
+  }, [gateway]);
   const currentAssessmentQuestion = assessmentQuestions[assessmentIndex];
 
   const days = useMemo(
@@ -793,12 +948,31 @@ export function GamesPage({ gateway, gameId, eventId }: GamesPageProps): React.J
     setError(null);
     setNotice(null);
     try {
+      const storedPendingJoin = action === 'JOIN' ? readPendingGameCommand() : undefined;
+      if (storedPendingJoin?.operationId) {
+        setNotice('Предыдущее присоединение ещё проверяется. Не повторяйте действие.');
+        return;
+      }
+      const pendingJoin =
+        action === 'JOIN'
+          ? storedPendingJoin?.gameId === game.id
+            ? storedPendingJoin
+            : {
+                action: 'JOIN' as const,
+                gameId: game.id,
+                idempotencyKey: crypto.randomUUID(),
+                expectedRevision: game.revision,
+                ...(game.id === gameId && invitationId ? { invitationId } : {}),
+              }
+          : undefined;
+      if (pendingJoin) storePendingGameCommand(pendingJoin);
       const submitted =
         action === 'JOIN'
           ? await gateway.joinGame(
               game.id,
-              game.revision,
-              game.id === gameId ? invitationId : undefined,
+              pendingJoin?.expectedRevision ?? game.revision,
+              pendingJoin?.invitationId ?? (game.id === gameId ? invitationId : undefined),
+              pendingJoin?.idempotencyKey,
             )
           : action === 'JOIN_WAITLIST'
             ? await gateway.joinGameWaitlist(game.id, game.id === gameId ? invitationId : undefined)
@@ -806,15 +980,26 @@ export function GamesPage({ gateway, gameId, eventId }: GamesPageProps): React.J
               ? await gateway.leaveGameWaitlist(game.id)
               : await gateway.leaveGame(game.id);
       let result = submitted;
+      if (pendingJoin)
+        storePendingGameCommand({ ...pendingJoin, operationId: result.operation.id });
       for (
         let attempt = 0;
-        attempt < 8 && ['ACCEPTED', 'PROCESSING'].includes(result.operation.status);
+        attempt < 8 &&
+        ['ACCEPTED', 'PROCESSING'].includes(result.operation.status) &&
+        result.operation.recovery?.phase !== 'MANUAL_REVIEW';
         attempt += 1
       ) {
         await new Promise((resolve) => setTimeout(resolve, 250));
         result = await gateway.getGameOperation(result.operation.id);
       }
+      if (result.operation.recovery?.phase === 'MANUAL_REVIEW') {
+        setNotice(
+          `Автоматическая проверка завершена. Обратитесь в поддержку с номером операции ${result.operation.id}.`,
+        );
+        return;
+      }
       if (result.operation.status === 'FAILED') {
+        clearPendingGameCommand();
         throw Object.assign(new Error(result.operation.error?.message ?? 'Game command failed'), {
           code: result.operation.error?.code,
           eligibility: result.eligibility,
@@ -825,6 +1010,7 @@ export function GamesPage({ gateway, gameId, eventId }: GamesPageProps): React.J
         setReloadToken((current) => current + 1);
         return;
       }
+      clearPendingGameCommand();
       if (!result.game && result.operation.gameId) {
         result = {
           ...result,
@@ -861,6 +1047,7 @@ export function GamesPage({ gateway, gameId, eventId }: GamesPageProps): React.J
       }
       clearPendingLevelRecovery();
     } catch (cause) {
+      if (action === 'JOIN' && isDefinitiveGameCommandError(cause)) clearPendingGameCommand();
       if (
         (errorCode(cause) === 'PLAYER_LEVEL_REQUIRED' ||
           ['SELECT_LEVEL', 'COMPLETE_LEVEL_ASSESSMENT'].includes(

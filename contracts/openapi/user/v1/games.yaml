@@ -1306,6 +1306,18 @@ components:
           oneOf:
             - $ref: '#/components/schemas/GameOperationError'
             - type: 'null'
+        recovery:
+          $ref: '#/components/schemas/GameProviderRecovery'
+    GameProviderRecovery:
+      type: object
+      additionalProperties: false
+      required: [phase, automaticRetryExhausted]
+      properties:
+        phase:
+          type: string
+          enum: [PENDING, SUBMITTING, UNKNOWN, RECONCILING, COMPLETED, REJECTED, MANUAL_REVIEW]
+        automaticRetryExhausted:
+          type: boolean
     GameNextAction:
       oneOf:
         - $ref: '#/components/schemas/GameNextActionNone'

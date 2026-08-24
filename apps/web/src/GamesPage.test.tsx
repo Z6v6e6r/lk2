@@ -381,7 +381,12 @@ describe('GamesPage discovery', () => {
     );
 
     await user.click(screen.getByRole('button', { name: 'Вступить в игру' }));
-    expect(api.joinGame).toHaveBeenCalledWith(game.id, game.revision, undefined);
+    expect(api.joinGame).toHaveBeenCalledWith(
+      game.id,
+      game.revision,
+      undefined,
+      expect.stringMatching(/^[0-9a-f-]{36}$/),
+    );
     expect(await screen.findByText(/Вы в игре/)).toBeInTheDocument();
   });
 
@@ -908,5 +913,171 @@ describe('GamesPage discovery', () => {
       expect(api.getGameOperation).toHaveBeenCalledWith('c3889c99-b0e3-4a3d-b3e8-a5c99af730ea'),
     );
     expect(await screen.findByText(/Вы в игре/)).toBeInTheDocument();
+  });
+
+  it('replays the persisted logical JOIN only after user confirmation following refresh', async () => {
+    const api = gateway();
+    const key = 'persisted-games-join-command-0001';
+    window.sessionStorage.setItem(
+      'phub.pending-game-command.v1',
+      JSON.stringify({ action: 'JOIN', gameId: game.id, idempotencyKey: key, expectedRevision: 7 }),
+    );
+    const user = userEvent.setup();
+    render(<GamesPage gateway={api} />);
+    expect(await screen.findByText(/Нажмите «Вступить»/)).toBeInTheDocument();
+    expect(api.joinGame).not.toHaveBeenCalled();
+    await user.click(await screen.findByRole('button', { name: 'Вступить в игру' }));
+    await waitFor(() => expect(api.joinGame).toHaveBeenCalledWith(game.id, 7, undefined, key));
+    expect(await screen.findByText(/Вы в игре/)).toBeInTheDocument();
+    expect(window.sessionStorage.getItem('phub.pending-game-command.v1')).toBeNull();
+  });
+
+  it('resumes a reconciling operation after refresh without submitting a duplicate JOIN', async () => {
+    const api = gateway();
+    const operationId = 'c3889c99-b0e3-4a3d-b3e8-a5c99af730ea';
+    window.sessionStorage.setItem(
+      'phub.pending-game-command.v1',
+      JSON.stringify({
+        action: 'JOIN',
+        gameId: game.id,
+        idempotencyKey: 'persisted-games-join-command-0002',
+        expectedRevision: 7,
+        operationId,
+      }),
+    );
+    vi.mocked(api.getGameOperation).mockResolvedValue({
+      commandId: operationId,
+      operation: {
+        id: operationId,
+        type: 'JOIN_GAME',
+        status: 'PROCESSING',
+        gameId: game.id,
+        aggregateRevision: 8,
+        createdAt: '2026-07-18T10:00:00.000Z',
+        updatedAt: '2026-07-18T10:00:00.000Z',
+        nextAction: { type: 'NONE' },
+        error: null,
+        recovery: { phase: 'RECONCILING', automaticRetryExhausted: false },
+      },
+      game: null,
+      replayed: true,
+    });
+    render(<GamesPage gateway={api} />);
+    expect(
+      await screen.findByText(/Не повторяйте действие/, {}, { timeout: 5_000 }),
+    ).toBeInTheDocument();
+    expect(api.joinGame).not.toHaveBeenCalled();
+    expect(api.getGameOperation).toHaveBeenCalledWith(operationId);
+    expect(window.sessionStorage.getItem('phub.pending-game-command.v1')).not.toBeNull();
+  }, 10_000);
+
+  it('keeps the operation reference and renders manual review after recovery exhaustion', async () => {
+    const api = gateway();
+    const operationId = 'c3889c99-b0e3-4a3d-b3e8-a5c99af730ea';
+    window.sessionStorage.setItem(
+      'phub.pending-game-command.v1',
+      JSON.stringify({
+        action: 'JOIN',
+        gameId: game.id,
+        idempotencyKey: 'persisted-games-join-command-0003',
+        expectedRevision: 7,
+        operationId,
+      }),
+    );
+    vi.mocked(api.getGameOperation).mockResolvedValue({
+      commandId: operationId,
+      operation: {
+        id: operationId,
+        type: 'JOIN_GAME',
+        status: 'PROCESSING',
+        gameId: game.id,
+        aggregateRevision: 8,
+        createdAt: '2026-07-18T10:00:00.000Z',
+        updatedAt: '2026-07-18T10:05:00.000Z',
+        nextAction: { type: 'NONE' },
+        error: null,
+        recovery: { phase: 'MANUAL_REVIEW', automaticRetryExhausted: true },
+      },
+      game: null,
+      replayed: true,
+    });
+    render(<GamesPage gateway={api} />);
+    expect(await screen.findByText(new RegExp(operationId))).toHaveTextContent(
+      'Обратитесь в поддержку',
+    );
+    expect(window.sessionStorage.getItem('phub.pending-game-command.v1')).not.toBeNull();
+  });
+
+  it('clears a definitive unknown-operation recovery instead of blocking future JOINs', async () => {
+    const api = gateway();
+    const operationId = 'c3889c99-b0e3-4a3d-b3e8-a5c99af730ea';
+    window.sessionStorage.setItem(
+      'phub.pending-game-command.v1',
+      JSON.stringify({
+        action: 'JOIN',
+        gameId: game.id,
+        idempotencyKey: 'persisted-games-join-command-0004',
+        expectedRevision: 7,
+        operationId,
+      }),
+    );
+    vi.mocked(api.getGameOperation).mockRejectedValue(
+      Object.assign(new Error('not found'), { code: 'GAME_OPERATION_NOT_FOUND' }),
+    );
+    render(<GamesPage gateway={api} />);
+    await waitFor(() =>
+      expect(window.sessionStorage.getItem('phub.pending-game-command.v1')).toBeNull(),
+    );
+    expect(api.joinGame).not.toHaveBeenCalled();
+  });
+
+  it('clears persisted JOIN recovery after a definitive domain rejection', async () => {
+    const api = gateway();
+    vi.mocked(api.joinGame).mockRejectedValue(
+      Object.assign(new Error('revision conflict'), { code: 'GAME_REVISION_CONFLICT' }),
+    );
+    const user = userEvent.setup();
+    render(<GamesPage gateway={api} />);
+    await user.click(await screen.findByRole('button', { name: 'Вступить в игру' }));
+    await waitFor(() =>
+      expect(window.sessionStorage.getItem('phub.pending-game-command.v1')).toBeNull(),
+    );
+  });
+
+  it('retains the JOIN key after a retryable 503 submission failure', async () => {
+    const api = gateway();
+    vi.mocked(api.joinGame).mockRejectedValue(
+      Object.assign(new Error('temporarily unavailable'), { code: 'INTERNAL_ERROR', status: 503 }),
+    );
+    const user = userEvent.setup();
+    render(<GamesPage gateway={api} />);
+    await user.click(await screen.findByRole('button', { name: 'Вступить в игру' }));
+    await waitFor(() =>
+      expect(window.sessionStorage.getItem('phub.pending-game-command.v1')).not.toBeNull(),
+    );
+  });
+
+  it('retains the operation reference after a retryable 503 read-back failure', async () => {
+    const api = gateway();
+    const operationId = 'c3889c99-b0e3-4a3d-b3e8-a5c99af730ea';
+    window.sessionStorage.setItem(
+      'phub.pending-game-command.v1',
+      JSON.stringify({
+        action: 'JOIN',
+        gameId: game.id,
+        idempotencyKey: 'persisted-games-join-command-0005',
+        expectedRevision: 7,
+        operationId,
+      }),
+    );
+    vi.mocked(api.getGameOperation).mockRejectedValue(
+      Object.assign(new Error('temporarily unavailable'), { code: 'INTERNAL_ERROR', status: 503 }),
+    );
+
+    render(<GamesPage gateway={api} />);
+
+    expect(await screen.findByText(/Проверяем ранее отправленное действие/)).toBeInTheDocument();
+    expect(window.sessionStorage.getItem('phub.pending-game-command.v1')).not.toBeNull();
+    expect(api.joinGame).not.toHaveBeenCalled();
   });
 });

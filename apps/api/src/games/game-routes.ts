@@ -147,20 +147,53 @@ function operationBody(
   result: Extract<GameRosterCommandResult, { outcome: 'applied' }>,
   type: UserRosterCommand,
   replayed = result.replayed,
+  updatedAt = result.committedAt,
 ) {
-  const processing = result.viewerRelation === 'SEAT_RESERVED';
+  const recoveryState = result.providerRecoveryState;
+  const providerRejected = recoveryState === 'REJECTED';
+  const processing =
+    !providerRejected &&
+    (result.viewerRelation === 'SEAT_RESERVED' ||
+      recoveryState === 'READY' ||
+      recoveryState === 'SUBMITTING' ||
+      recoveryState === 'UNKNOWN' ||
+      recoveryState === 'RECONCILING' ||
+      recoveryState === 'MANUAL_REVIEW');
+  const recovery = recoveryState
+    ? {
+        phase:
+          recoveryState === 'READY'
+            ? ('PENDING' as const)
+            : recoveryState === 'CONFIRMED'
+              ? ('COMPLETED' as const)
+              : recoveryState,
+        automaticRetryExhausted: recoveryState === 'MANUAL_REVIEW',
+      }
+    : undefined;
   const body = {
     commandId: result.commandId,
     operation: {
       id: result.commandId,
       type,
-      status: processing ? ('PROCESSING' as const) : ('SUCCEEDED' as const),
+      status: providerRejected
+        ? ('FAILED' as const)
+        : processing
+          ? ('PROCESSING' as const)
+          : ('SUCCEEDED' as const),
       gameId: result.gameId,
       aggregateRevision: result.revision,
       createdAt: result.committedAt,
-      updatedAt: result.committedAt,
+      updatedAt,
       nextAction: { type: 'NONE' as const },
-      error: null,
+      error: providerRejected
+        ? {
+            // Keep the v1 enum stable for older sealed native clients. The message
+            // provides the provider-specific explanation without a new error code.
+            code: 'GAME_NOT_JOINABLE' as const,
+            message: 'Внешний сервис отклонил операцию.',
+          }
+        : null,
+      ...(recovery ? { recovery } : {}),
     },
     game: null,
     ...(result.eligibility ? { eligibility: result.eligibility } : {}),
@@ -207,6 +240,17 @@ function assertValidCommandBody(body: {
     readonly updatedAt: string;
     readonly nextAction: { readonly type: 'NONE' };
     readonly error: { readonly code: string; readonly message: string } | null;
+    readonly recovery?: {
+      readonly phase:
+        | 'PENDING'
+        | 'SUBMITTING'
+        | 'UNKNOWN'
+        | 'RECONCILING'
+        | 'COMPLETED'
+        | 'REJECTED'
+        | 'MANUAL_REVIEW';
+      readonly automaticRetryExhausted: boolean;
+    };
   };
   readonly game: null;
   readonly eligibility?: ParticipationDecision;
@@ -377,7 +421,12 @@ export function registerGameRoutes(
       }
       if (operation.state === 'FAILED') return failedOperationBody(operation);
       if (!operation.result) throw new Error('GAME_OPERATION_RESULT_MISSING');
-      return operationBody(operation.result, COMMAND_TYPE[operation.commandType], true);
+      return operationBody(
+        operation.result,
+        COMMAND_TYPE[operation.commandType],
+        true,
+        operation.updatedAt,
+      );
     },
   );
 }

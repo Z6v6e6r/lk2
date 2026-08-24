@@ -1191,8 +1191,15 @@ export class PadlHubApiClient {
     gameId: string,
     expectedRevision?: number,
     invitationId?: string,
+    idempotencyKey?: string,
   ): Promise<GameCommandResult> {
-    return this.gameCommand(gameId, '/join', 'POST', { expectedRevision, invitationId });
+    return this.gameCommand(
+      gameId,
+      '/join',
+      'POST',
+      { expectedRevision, invitationId },
+      idempotencyKey,
+    );
   }
 
   public leaveGame(gameId: string): Promise<GameCommandResult> {
@@ -1961,8 +1968,9 @@ export class PadlHubApiClient {
     suffix: string,
     method: 'POST' | 'DELETE',
     body?: unknown,
+    requestedIdempotencyKey?: string,
   ): Promise<GameCommandResult> {
-    const idempotencyKey = createCorrelationId();
+    const idempotencyKey = requestedIdempotencyKey ?? createCorrelationId();
     return this.retryOnceOnNetworkFailure(() =>
       this.request<GameCommandResult>(`/games/${encodeURIComponent(gameId)}${suffix}`, {
         method,
