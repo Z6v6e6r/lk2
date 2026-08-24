@@ -950,9 +950,11 @@ describe('Timeweb amd64 publication workflow', () => {
     expect(secretRange?.run).toContain('base_sha="$(git merge-base "$base_tip_sha" "$head_sha")"');
     expect(secretRange?.run).toContain('git cat-file -e "$head_sha^{commit}"');
     expect(secretScan?.run).toContain('docker pull "$GITLEAKS_IMAGE"');
-    expect(secretScan?.run).toContain(
-      '--log-opts="--diff-merges=first-parent $BASE_SHA..$HEAD_SHA"',
-    );
+    expect(secretScan?.run).toContain('git clone --bare --no-local "$PWD" "$scan_repository"');
+    expect(secretScan?.run).toContain('--volume "$RUNNER_TEMP/gitleaks:/workspace"');
+    expect(secretScan?.run).toContain('--source=/workspace/repository.git');
+    expect(secretScan?.run).not.toContain('--volume "$PWD:/repo:ro"');
+    expect(secretScan?.run).toContain('--log-opts="--diff-merges=remerge $BASE_SHA..$HEAD_SHA"');
     expect(secretScan?.run).not.toContain('--first-parent');
     expect(secretScan?.run).not.toContain('--no-merges');
     expect(secretArtifact).toMatchObject({
@@ -992,7 +994,7 @@ describe('Timeweb amd64 publication workflow', () => {
     expect(diagnosticsRunner).not.toContain('continue-on-error');
   });
 
-  it('includes merged side-branch commits in the secret-scan range', async () => {
+  it('scans candidate commits and merge resolutions without replaying an updated base', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'phub-secret-scan-graph-'));
     const git = (args: readonly string[]): string => {
       const result = spawnSync('git', args, { cwd: directory, encoding: 'utf8' });
@@ -1012,47 +1014,65 @@ describe('Timeweb amd64 publication workflow', () => {
       git(['commit', '-m', 'base']);
       const baseSha = git(['rev-parse', 'HEAD']);
 
-      git(['checkout', '-b', 'side']);
-      await writeFile(join(directory, 'side.txt'), 'side branch marker\n');
-      await writeFile(join(directory, 'conflict.txt'), 'side conflict value\n');
-      git(['add', 'side.txt', 'conflict.txt']);
-      git(['commit', '-m', 'side']);
+      git(['checkout', '-b', 'candidate']);
+      await writeFile(join(directory, 'candidate.txt'), 'candidate commit marker\n');
+      await writeFile(join(directory, 'conflict.txt'), 'candidate conflict value\n');
+      git(['add', 'candidate.txt', 'conflict.txt']);
+      git(['commit', '-m', 'candidate']);
+      const candidateSha = git(['rev-parse', 'HEAD']);
+
+      git(['checkout', '-b', 'candidate-side', baseSha]);
+      await writeFile(join(directory, 'side.txt'), 'candidate side-branch marker\n');
+      git(['add', 'side.txt']);
+      git(['commit', '-m', 'candidate side branch']);
       const sideSha = git(['rev-parse', 'HEAD']);
 
+      git(['checkout', 'candidate']);
+      git(['merge', '--no-ff', 'candidate-side', '-m', 'merge candidate side branch']);
+
       git(['checkout', 'main']);
-      await writeFile(join(directory, 'feature.txt'), 'feature branch marker\n');
-      await writeFile(join(directory, 'conflict.txt'), 'main conflict value\n');
-      git(['add', 'feature.txt', 'conflict.txt']);
-      git(['commit', '-m', 'feature']);
-      const conflictedMerge = spawnSync('git', ['merge', '--no-ff', 'side'], {
+      await writeFile(join(directory, 'updated-base.txt'), 'updated-base-only marker\n');
+      await writeFile(join(directory, 'conflict.txt'), 'updated base conflict value\n');
+      git(['add', 'updated-base.txt', 'conflict.txt']);
+      git(['commit', '-m', 'update base']);
+      const updatedBaseSha = git(['rev-parse', 'HEAD']);
+
+      git(['checkout', 'candidate']);
+      const conflictedMerge = spawnSync('git', ['merge', '--no-ff', 'main'], {
         cwd: directory,
         encoding: 'utf8',
       });
       expect(conflictedMerge.status).toBe(1);
       await writeFile(join(directory, 'conflict.txt'), 'merge-resolution-only-marker\n');
       git(['add', 'conflict.txt']);
-      git(['commit', '-m', 'merge side with resolution']);
+      git(['commit', '-m', 'merge updated base with resolution']);
       const headSha = git(['rev-parse', 'HEAD']);
 
-      const completeRange = git(['rev-list', `${baseSha}..${headSha}`]).split('\n');
-      const firstParentWithoutMerges = git([
-        'rev-list',
-        '--no-merges',
-        '--first-parent',
-        `${baseSha}..${headSha}`,
-      ]).split('\n');
+      const completeRange = git(['rev-list', `${updatedBaseSha}..${headSha}`]).split('\n');
+      expect(completeRange).toContain(candidateSha);
       expect(completeRange).toContain(sideSha);
-      expect(firstParentWithoutMerges).not.toContain(sideSha);
-      const plainPatch = git(['log', '-p', '--format=', `${baseSha}..${headSha}`]);
-      const mergeAwarePatch = git([
+      expect(completeRange).not.toContain(updatedBaseSha);
+      const plainPatch = git(['log', '-p', '--format=', `${updatedBaseSha}..${headSha}`]);
+      const unsafeFirstParentPatch = git([
         'log',
         '-p',
         '--format=',
         '--diff-merges=first-parent',
-        `${baseSha}..${headSha}`,
+        `${updatedBaseSha}..${headSha}`,
+      ]);
+      const mergeAwarePatch = git([
+        'log',
+        '-p',
+        '--format=',
+        '--diff-merges=remerge',
+        `${updatedBaseSha}..${headSha}`,
       ]);
       expect(plainPatch).not.toContain('merge-resolution-only-marker');
+      expect(unsafeFirstParentPatch).toContain('updated-base-only marker');
+      expect(mergeAwarePatch).toContain('candidate commit marker');
+      expect(mergeAwarePatch).toContain('candidate side-branch marker');
       expect(mergeAwarePatch).toContain('merge-resolution-only-marker');
+      expect(mergeAwarePatch).not.toContain('updated-base-only marker');
     } finally {
       await rm(directory, { force: true, recursive: true });
     }
