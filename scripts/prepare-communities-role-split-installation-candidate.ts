@@ -13,11 +13,11 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import { fileURLToPath } from 'node:url';
 
 export const INSTALLATION_CANDIDATE_SCHEMA_VERSION =
-  'communities-role-split-installation-candidate-v13';
+  'communities-role-split-installation-candidate-v14';
 export const INSTALLATION_CANDIDATE_DIGEST_VERSION =
-  'PHUB_COMMUNITIES_ROLE_SPLIT_INSTALLATION_CANDIDATE_DIGEST_V13';
+  'PHUB_COMMUNITIES_ROLE_SPLIT_INSTALLATION_CANDIDATE_DIGEST_V14';
 export const INSTALLATION_CANDIDATE_CONTROL_VERSION =
-  'PHUB_COMMUNITIES_ROLE_SPLIT_HOST_INSTALL_CONTROL_V10';
+  'PHUB_COMMUNITIES_ROLE_SPLIT_HOST_INSTALL_CONTROL_V11';
 
 const sha40Pattern = /^[0-9a-f]{40}$/u;
 const sha256Pattern = /^[0-9a-f]{64}$/u;
@@ -371,6 +371,46 @@ const fileDefinitions: readonly CandidateArtifactDefinition[] = [
     installMode: '0444',
     purpose:
       'self-contained Node 22 runtime bundle; no configuration, activation link or execution authority',
+  },
+  {
+    sourcePath:
+      'apps/migrator/src/communities-staging-role-split-trusted-inventory-gate-preflight.ts',
+    sourceGitMode: '100644',
+    artifactPath:
+      'payload/source/communities-staging-role-split-trusted-inventory-gate-preflight.ts',
+    targetRelativePath: 'source/communities-staging-role-split-trusted-inventory-gate-preflight.ts',
+    action: 'INSTALL_NEW',
+    installOwner: 'root',
+    installGroup: 'root',
+    installMode: '0444',
+    purpose:
+      'offline trusted-inventory gate preflight source snapshot; reads only four pinned review inputs',
+  },
+  {
+    sourcePath: 'apps/migrator/src/verify-communities-staging-role-split-trusted-inventory-gate.ts',
+    sourceGitMode: '100644',
+    artifactPath: 'payload/source/verify-communities-staging-role-split-trusted-inventory-gate.ts',
+    targetRelativePath: 'source/verify-communities-staging-role-split-trusted-inventory-gate.ts',
+    action: 'INSTALL_NEW',
+    installOwner: 'root',
+    installGroup: 'root',
+    installMode: '0444',
+    purpose:
+      'offline trusted-inventory gate preflight CLI source snapshot; invalid input fails closed',
+  },
+  {
+    sourcePath:
+      'deploy/jetson/generated-gate-preflight/verify-communities-staging-role-split-trusted-inventory-gate.mjs',
+    sourceGitMode: '100644',
+    artifactPath:
+      'payload/runtime/verify-communities-staging-role-split-trusted-inventory-gate.mjs',
+    targetRelativePath: 'runtime/verify-communities-staging-role-split-trusted-inventory-gate.mjs',
+    action: 'INSTALL_NEW',
+    installOwner: 'root',
+    installGroup: 'root',
+    installMode: '0444',
+    purpose:
+      'self-contained Node 22 offline preflight bundle; no producer, PostgreSQL or execution authority',
   },
 ] as const;
 

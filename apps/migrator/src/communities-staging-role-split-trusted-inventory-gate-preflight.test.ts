@@ -1,28 +1,33 @@
 import { createHash } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
 
 import {
   COMMUNITIES_STAGING_ROLE_SPLIT_INVENTORY_PREPARATION_INPUT_CODES,
+  canonicalCommunitiesStagingRoleSplitInventoryPreparation,
+  canonicalCommunitiesStagingRoleSplitTrustedInventoryConnectionDescriptor,
   communitiesRoleSplitCanonicalJson,
   communitiesStagingRoleSplitInventoryPreparationSha256,
   communitiesStagingRoleSplitTrustedInventoryConnectionDescriptorSha256,
   type CommunitiesStagingRoleSplitInventoryPreparation,
   type CommunitiesStagingRoleSplitTrustedInventoryConnectionDescriptor,
 } from '@phub/database';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
+  canonicalCommunitiesStagingRoleSplitTrustedInventoryGate,
   communitiesStagingRoleSplitTrustedInventoryGateSha256,
   type CommunitiesStagingRoleSplitTrustedInventoryGate,
 } from '../../../packages/database/src/communities-staging-role-split-trusted-inventory-gate.js';
 import type { CommunitiesStagingRoleSplitInventoryPreparationVerification } from './communities-staging-role-split-inventory-preparation.js';
-import {
-  communitiesStagingRoleSplitTrustedInventoryGateVerificationText,
-  verifyCommunitiesStagingRoleSplitTrustedInventoryGate,
-} from './communities-staging-role-split-trusted-inventory-gate.js';
+import { runCommunitiesStagingRoleSplitTrustedInventoryGatePreflight } from './communities-staging-role-split-trusted-inventory-gate-preflight.js';
 
-const sha256 = (value: string): string => createHash('sha256').update(value, 'utf8').digest('hex');
+const sha256 = (value: Buffer | string): string => createHash('sha256').update(value).digest('hex');
 const candidateCommitSha = 'a'.repeat(40);
+const filePaths = {
+  gate: '/root/gate.json',
+  preparation: '/root/preparation.json',
+  preparationVerification: '/root/preparation-verification.json',
+  connectionDescriptor: '/evidence/connection.json',
+} as const;
 const paths = {
   credentialDescriptorPath: '/inputs/credential.pgpass',
   producerDescriptorPath: '/inputs/producer.js',
@@ -59,7 +64,7 @@ function preparation(): CommunitiesStagingRoleSplitInventoryPreparation {
     MARKER_EVIDENCE: paths.markerEvidencePath,
     ROLE_MAPPING: paths.roleMappingPath,
     INDEPENDENT_SOURCE_PROVENANCE: '/evidence/source-provenance.json',
-    CONNECTION_DESCRIPTOR: '/evidence/connection.json',
+    CONNECTION_DESCRIPTOR: filePaths.connectionDescriptor,
     CREDENTIAL_CUSTODY: '/evidence/credential-custody.json',
     EXECUTABLE_CUSTODY: '/evidence/executable-custody.json',
     OUTPUT_CUSTODY: '/evidence/output-custody.json',
@@ -197,89 +202,154 @@ function fixture() {
       activation: false,
     },
   } as const satisfies CommunitiesStagingRoleSplitTrustedInventoryGate;
-  return {
-    gate,
-    expectedGateSha256: communitiesStagingRoleSplitTrustedInventoryGateSha256(gate),
-    preparation: prepared,
-    preparationVerification: verification,
-    connectionDescriptor,
-    paths,
-  };
+  const gateSha256 = communitiesStagingRoleSplitTrustedInventoryGateSha256(gate);
+  const arguments_ = [
+    '--gate',
+    filePaths.gate,
+    '--gate-sha256',
+    gateSha256,
+    '--preparation',
+    filePaths.preparation,
+    '--preparation-verification',
+    filePaths.preparationVerification,
+    '--connection-descriptor',
+    filePaths.connectionDescriptor,
+    '--credential-descriptor',
+    paths.credentialDescriptorPath,
+    '--producer-descriptor',
+    paths.producerDescriptorPath,
+    '--output-directory',
+    paths.outputDirectoryPath,
+    '--output-artifact',
+    paths.outputArtifactPath,
+    '--output-receipt',
+    paths.outputReceiptPath,
+    '--marker-request',
+    paths.markerRequestPath,
+    '--marker-evidence',
+    paths.markerEvidencePath,
+    '--role-mapping',
+    paths.roleMappingPath,
+  ];
+  const bytes = new Map<string, Buffer>([
+    [filePaths.gate, Buffer.from(canonicalCommunitiesStagingRoleSplitTrustedInventoryGate(gate))],
+    [
+      filePaths.preparation,
+      Buffer.from(canonicalCommunitiesStagingRoleSplitInventoryPreparation(prepared)),
+    ],
+    [
+      filePaths.preparationVerification,
+      Buffer.from(`${communitiesRoleSplitCanonicalJson(verification)}\n`),
+    ],
+    [
+      filePaths.connectionDescriptor,
+      Buffer.from(
+        canonicalCommunitiesStagingRoleSplitTrustedInventoryConnectionDescriptor(
+          connectionDescriptor,
+        ),
+      ),
+    ],
+  ]);
+  return { arguments_, bytes };
 }
 
-describe('trusted INPUT_C inventory separate-authorization gate', () => {
-  it('cross-binds the complete review subject while retaining every authority false', () => {
-    const result = verifyCommunitiesStagingRoleSplitTrustedInventoryGate(fixture());
+describe('trusted INPUT_C gate offline preflight', () => {
+  it('reads only four pinned review documents and retains every authority false', async () => {
+    const target = fixture();
+    const read = vi.fn((path: string) => {
+      const bytes = target.bytes.get(path);
+      if (!bytes) throw new Error('unexpected read');
+      return Promise.resolve(bytes);
+    });
+
+    const result = JSON.parse(
+      await runCommunitiesStagingRoleSplitTrustedInventoryGatePreflight(target.arguments_, {
+        readRootOwnedEvidence: read,
+      }),
+    ) as {
+      readonly status: string;
+      readonly limitations: Readonly<Record<string, boolean>>;
+      readonly authorizes: Readonly<Record<string, boolean>>;
+    };
 
     expect(result.status).toBe('READY_FOR_SEPARATE_AUTHORIZATION_REVIEW_ONLY');
-    expect(Object.values(result.bindings).every(Boolean)).toBe(true);
     expect(Object.values(result.limitations).every(Boolean)).toBe(true);
     expect(Object.values(result.authorizes).every((value) => value === false)).toBe(true);
-    expect(
-      JSON.parse(communitiesStagingRoleSplitTrustedInventoryGateVerificationText(result)),
-    ).toEqual(result);
-  });
-
-  it('rejects pin, preparation, connection and path drift', () => {
-    const wrongPin = fixture();
-    wrongPin.expectedGateSha256 = sha256('wrong');
-    expect(() => verifyCommunitiesStagingRoleSplitTrustedInventoryGate(wrongPin)).toThrow(
-      /TRUSTED_INVENTORY_GATE_INVALID/u,
-    );
-
-    const widenedVerification = fixture();
-    (widenedVerification.preparationVerification as unknown as Record<string, unknown>).unexpected =
-      true;
-    expect(() =>
-      verifyCommunitiesStagingRoleSplitTrustedInventoryGate(widenedVerification),
-    ).toThrow(/TRUSTED_INVENTORY_GATE_INVALID/u);
-
-    const changedConnection = fixture();
-    (
-      changedConnection.connectionDescriptor as unknown as { markerRequestSha256: string }
-    ).markerRequestSha256 = sha256('different');
-    expect(() => verifyCommunitiesStagingRoleSplitTrustedInventoryGate(changedConnection)).toThrow(
-      /TRUSTED_INVENTORY_GATE_INVALID/u,
-    );
-
-    const aliasedPath = fixture();
-    (aliasedPath.paths as unknown as { producerDescriptorPath: string }).producerDescriptorPath =
-      paths.credentialDescriptorPath;
-    expect(() => verifyCommunitiesStagingRoleSplitTrustedInventoryGate(aliasedPath)).toThrow(
-      /TRUSTED_INVENTORY_GATE_INVALID/u,
-    );
-
-    const evidenceAlias = fixture();
-    const sourceProvenance = evidenceAlias.preparation.inputs.find(
-      (entry) => entry.code === 'INDEPENDENT_SOURCE_PROVENANCE',
-    )!;
-    (
-      evidenceAlias.gate as unknown as { credentialDescriptorPathSha256: string }
-    ).credentialDescriptorPathSha256 = sourceProvenance.pathSha256;
-    evidenceAlias.expectedGateSha256 = communitiesStagingRoleSplitTrustedInventoryGateSha256(
-      evidenceAlias.gate,
-    );
-    expect(() => verifyCommunitiesStagingRoleSplitTrustedInventoryGate(evidenceAlias)).toThrow(
-      /TRUSTED_INVENTORY_GATE_INVALID/u,
-    );
-  });
-
-  it('keeps the pure verifier out of CLI, filesystem and child-process execution surfaces', async () => {
-    const [source, rootPackage, tsupConfig] = await Promise.all([
-      readFile(
-        new URL('./communities-staging-role-split-trusted-inventory-gate.ts', import.meta.url),
-        'utf8',
-      ),
-      readFile(new URL('../../../package.json', import.meta.url), 'utf8'),
-      readFile(new URL('../tsup.config.ts', import.meta.url), 'utf8'),
+    expect(read.mock.calls).toEqual([
+      [filePaths.gate, 128 * 1024],
+      [filePaths.preparation, 128 * 1024],
+      [filePaths.preparationVerification, 128 * 1024],
+      [filePaths.connectionDescriptor, 64 * 1024],
     ]);
-    const basename = 'communities-staging-role-split-trusted-inventory-gate';
+  });
 
-    expect(rootPackage).not.toContain(basename);
-    expect(tsupConfig).not.toContain(
-      "'src/communities-staging-role-split-trusted-inventory-gate.ts'",
+  it('rejects malformed arguments before evidence access', async () => {
+    const read = vi.fn();
+    await expect(
+      runCommunitiesStagingRoleSplitTrustedInventoryGatePreflight([], {
+        readRootOwnedEvidence: read,
+      }),
+    ).rejects.toThrow(/GATE_PREFLIGHT_INVALID/u);
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it('rejects a gate pin mismatch before reading dependent documents', async () => {
+    const target = fixture();
+    target.arguments_[3] = sha256('different');
+    const read = vi.fn((path: string) => Promise.resolve(target.bytes.get(path)!));
+    await expect(
+      runCommunitiesStagingRoleSplitTrustedInventoryGatePreflight(target.arguments_, {
+        readRootOwnedEvidence: read,
+      }),
+    ).rejects.toThrow(/GATE_PREFLIGHT_INVALID/u);
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects non-canonical verification bytes and connection path drift', async () => {
+    const nonCanonical = fixture();
+    nonCanonical.bytes.set(
+      filePaths.preparationVerification,
+      Buffer.from(
+        ` ${nonCanonical.bytes.get(filePaths.preparationVerification)!.toString('utf8')}`,
+      ),
     );
-    expect(source).not.toMatch(/node:fs|node:child_process|\bfrom ['"]pg['"]|process\.argv/u);
-    expect(source).not.toMatch(/\b(?:open|readFile|spawn|execFile|connect)\s*\(/u);
+    await expect(
+      runCommunitiesStagingRoleSplitTrustedInventoryGatePreflight(nonCanonical.arguments_, {
+        readRootOwnedEvidence: (path) => Promise.resolve(nonCanonical.bytes.get(path)!),
+      }),
+    ).rejects.toThrow(/GATE_PREFLIGHT_INVALID/u);
+
+    const changedPath = fixture();
+    changedPath.arguments_[9] = '/evidence/copied-connection.json';
+    changedPath.bytes.set(
+      '/evidence/copied-connection.json',
+      changedPath.bytes.get(filePaths.connectionDescriptor)!,
+    );
+    await expect(
+      runCommunitiesStagingRoleSplitTrustedInventoryGatePreflight(changedPath.arguments_, {
+        readRootOwnedEvidence: (path) => Promise.resolve(changedPath.bytes.get(path)!),
+      }),
+    ).rejects.toThrow(/GATE_PREFLIGHT_INVALID/u);
+  });
+
+  it('rejects path aliases before reading any review document', async () => {
+    const target = fixture();
+    target.arguments_[13] = paths.credentialDescriptorPath;
+    const read = vi.fn();
+    await expect(
+      runCommunitiesStagingRoleSplitTrustedInventoryGatePreflight(target.arguments_, {
+        readRootOwnedEvidence: read,
+      }),
+    ).rejects.toThrow(/GATE_PREFLIGHT_INVALID/u);
+    expect(read).not.toHaveBeenCalled();
+
+    const controlled = fixture();
+    controlled.arguments_[1] = '/root/gate.json\n';
+    await expect(
+      runCommunitiesStagingRoleSplitTrustedInventoryGatePreflight(controlled.arguments_, {
+        readRootOwnedEvidence: read,
+      }),
+    ).rejects.toThrow(/GATE_PREFLIGHT_INVALID/u);
+    expect(read).not.toHaveBeenCalled();
   });
 });

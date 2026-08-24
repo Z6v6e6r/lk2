@@ -2,17 +2,18 @@ import { createHash } from 'node:crypto';
 import { dirname, isAbsolute, resolve } from 'node:path';
 
 import {
-  communitiesRoleSplitCanonicalJson,
-  communitiesStagingRoleSplitInventoryPreparationSha256,
-  communitiesStagingRoleSplitTrustedInventoryConnectionDescriptorSha256,
-  type CommunitiesStagingRoleSplitInventoryPreparation,
-  type CommunitiesStagingRoleSplitTrustedInventoryConnectionDescriptor,
-} from '@phub/database';
-
-import {
   communitiesStagingRoleSplitTrustedInventoryGateSha256,
   type CommunitiesStagingRoleSplitTrustedInventoryGate,
 } from '../../../packages/database/src/communities-staging-role-split-trusted-inventory-gate.js';
+import { communitiesRoleSplitCanonicalJson } from '../../../packages/database/src/communities-role-split-input-c.js';
+import {
+  communitiesStagingRoleSplitInventoryPreparationSha256,
+  type CommunitiesStagingRoleSplitInventoryPreparation,
+} from '../../../packages/database/src/communities-staging-role-split-inventory-preparation.js';
+import {
+  communitiesStagingRoleSplitTrustedInventoryConnectionDescriptorSha256,
+  type CommunitiesStagingRoleSplitTrustedInventoryConnectionDescriptor,
+} from '../../../packages/database/src/communities-staging-role-split-trusted-inventory.js';
 import type { CommunitiesStagingRoleSplitInventoryPreparationVerification } from './communities-staging-role-split-inventory-preparation.js';
 
 const SHA256 = /^[a-f0-9]{64}$/u;

@@ -1,5 +1,84 @@
 # Worklog
 
+## 2026-08-24 — Communities Gate 4 external PostgreSQL clock/ledger checkpoint
+
+- Added source-only V15 adapters for two distinct, non-aliased PostgreSQL clock/ledger clients.
+  They bind fixed statements and exact subjects, snapshot query methods, reject widened responses
+  and perform no retry after an unavailable or ambiguous consumption result.
+- Added an unapplied external control-plane SQL contract with an initially absent binding, fixed
+  `SECURITY DEFINER` search paths, revoked public access, a serialized monotonic server-time fence,
+  independently unique authorization/request identities and append-only receipts. It creates no
+  role, credential, grant, provider resource or runtime binding.
+- Added unit coverage and a labelled disposable PostgreSQL 16 harness. The real database checks
+  concurrent double consume, replay/expiry, committed response loss, separated clock/consumer/
+  auditor privileges, immutable receipt denial and clock regression; its exact container is removed
+  after the run.
+- The checkpoint is not exported, built, wired, installed or provisioned. No staging, provider,
+  credential, trusted-inventory producer, clean clone, ceremony or non-disposable database was
+  accessed. Every role/ACL/migration/deploy/activation authority remains false, and Gate 6 still
+  requires a separate whole-host-rollback-resistant monotonic authority.
+
+## 2026-08-23 — Communities Gate 4 V14 disabled staging installation evidence
+
+- Installed and verified the exact disabled candidate for
+  `cd1cf1301da75b63f494921e21d051aa149b32b2` on `phub-jetson-staging` after the commit was pushed to
+  `origin/main` and the private local candidate verification passed.
+- Exact evidence: manifest `90110dd11f4192a4c379f07c6f2407db62db1c7a0e9a56f23fadfe332b4d4b99`,
+  control `847eb81019105b154cab502a8b7393b15522678dbe7d2704d88f75ea8ac3c5b9`,
+  artifacts `42b2733a0feebf928c63576034d33967aa8700d103e44418b07823d556c09be2`,
+  receipt `c013ff2902a8f2f500b7f589af5a4ed3292208b704ebd5c81c53c6a5e5314e7d` and Gate 4 bundle
+  `8a4aa136f0b5d949f8741b04b1f97d83aeff65478eb68de10785ce26f327eafc`.
+- The dependency-free installer install+verify flow passed. Independent read-only readback confirmed
+  the root-owned installation, exactly 45 installed entries (43 files and two child directories;
+  three directories including the candidate root), no non-file/non-directory entries,
+  `active_links=0`, exact bundle bytes and the mode-0444 single-link installation receipt.
+- The versioned disabled command returned the fixed denial with exit `78`. The Gate 4 preflight bundle
+  itself was not invoked; no review inputs were supplied and no producer, PostgreSQL, ceremony,
+  migration, service restart or activation was performed. `authorizes_ceremony=false` and
+  `authorizes_database_mutation=false` remain exact installed invariants.
+- The user-owned transfer directory and installer wrapper remain under `/home/zver`; no cleanup was
+  authorized or performed. Their later removal is operational housekeeping only and cannot activate
+  the immutable installation.
+
+## 2026-08-23 — Communities Gate 4 offline preflight disabled packaging
+
+- Advanced the immutable disabled installation candidate to schema V14 and host-control V11 with
+  three exact mode-0444 Gate 4 preflight artifacts: the bounded offline reader/verifier source, its
+  CLI source and a deterministic self-contained Node 22 ESM bundle.
+- Kept installation as the only true authorization. The candidate still creates no active link,
+  runtime configuration, key, workflow, credential, request or output directory; ceremony,
+  PostgreSQL access/mutation, role split, migration, deploy and activation remain false.
+- Added byte-for-byte rebuild coverage for the bundle, restricted its imports to Node builtins and
+  required direct execution without the complete pinned review inputs to fail closed. No candidate
+  was built from uncommitted bytes, uploaded, installed or executed on staging in this checkpoint.
+
+## 2026-08-23 — Communities trusted INPUT_C offline Gate 4 preflight
+
+- Added a buildable fail-closed CLI around the existing V13 pure gate verifier. It accepts one
+  independently pinned gate and reads only the canonical gate, preparation,
+  preparation-verification and connection-descriptor documents through the root-owned no-follow
+  evidence reader.
+- Bound the actual connection-descriptor file path back to the preparation envelope and rejected
+  non-canonical verification bytes, path aliases and gate-pin drift before any producer, credential
+  descriptor, output path, PostgreSQL connection or child process can be touched.
+- Kept the result review-only: success is `READY_FOR_SEPARATE_AUTHORIZATION_REVIEW_ONLY`, every
+  execution/mutation authority remains false, and Gate 4 still requires separately reviewed V15
+  evidence, approval, clock, ledger, host entrypoint and a separately authorized clean clone.
+
+## 2026-08-23 — Communities disabled V15 staging installation evidence
+
+- Installed and verified the disabled candidate for `4bb4279b4afddf807b829612fd63922b27e4d0da` on staging.
+- Exact evidence: manifest `395b33e8b468a14d4eecb4e14e6e4418b90b8d654fe3af802b2cc96bf90ee768`,
+  control `f19e4a68e25ed72d561d5cd5cf5ccccd114dbd3db282447fee2e7615e8c44c10`,
+  artifacts `705fcda61633d91d958b7993b5bde1f8c418e8cd7049e74ea89de551ebd5cd6d`,
+  receipt `87c41cdd2e8fbefae85191d2cdf565d75689d1180826ca9c10736cab9cd2839e`.
+- The embedded installer install+verify flow passed. Independent read-only postcheck confirmed: exact thirty-nine payload files,
+  root-owned installed tree, `active_link_count=0`, runtime bundle bytes match, and disabled command exit code `78`
+  with `EXECUTION_NOT_AUTHORIZED`.
+- `authorizes_ceremony=false`, `authorizes_database_mutation=false`, and no activation, key, workflow,
+  PostgreSQL access, cleanup, ceremony execution, or runtime mutation occurred.
+- No host Node runtime execution was required (`nodeRequired=false`, no installed runtime wiring).
+
 ## 2026-08-23 — Communities disabled V15 packaging checkpoint
 
 - Advanced the immutable disabled installation candidate to schema V13 and added six exact
@@ -1121,3 +1200,15 @@
   provider-wide history contract is verified.
 - Expanded authenticated public-game details so a non-participant can open and join a public game;
   private outsider details still fail closed.
+
+## 2026-08-24 — Risk-based Codex delivery workflow
+
+- Replaced universal reversible-stage confirmation stops with R0-R4 Fast, Spark, Main,
+  and Critical lanes.
+- Authorized continuous task-branch work through focused commits, same-branch push,
+  Draft PR, CI readback, and in-scope CI correction.
+- Preserved exact approval gates for merge/protected branches, deploy, migrations, real
+  ACL/RLS/data changes, secrets, routing, payments, external messages, and destructive
+  operations.
+- Replaced universal `npm run check` and generic review with changed-file/risk triggers;
+  the full gate remains mandatory for critical and shared surfaces.

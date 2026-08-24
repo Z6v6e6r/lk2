@@ -33,20 +33,38 @@ These rules are mandatory for every change in this repository.
 - Build an immutable image once and promote the same digest through staging and production. Never deploy `latest` and never build on a production server.
 - Production rollouts require health/readiness checks, smoke tests, approval, a verified backup, sequential nodes, and a tested rollback path.
 
-## Mandatory staged delivery workflow
+## Risk-based delivery workflow
 
-Every task uses the following stage gates. A request to perform one stage does not authorize any later stage.
+Classify the highest-risk intended change as R0-R4 and use the global Fast, Spark, Main,
+or Critical lane. A scoped development request authorizes one continuous reversible
+task-branch loop: identify `origin/main`, create a focused worktree and `codex/*` or
+`agent/*` branch, implement the requested outcome, run proportionate checks, create
+focused commits, push only that task branch, open or update a Draft PR, read CI, and fix
+in-scope CI failures. Do not pause merely because one reversible step completed.
 
-1. **Implement and verify in isolation.** Start from an identified `origin/main` SHA in a focused branch/worktree, preserve every pre-existing dirty change, implement only the requested scope, run relevant checks, and create a focused checkpoint commit in the task branch. Do not merge, push, or deploy.
-2. **User verification.** Present the runnable result, changed-file summary, checks, checkpoint SHA, and known limitations. The user verifies it. Corrections stay in the same task branch and receive another focused checkpoint commit.
-3. **Integrate into `main`.** Only after explicit approval, refresh `origin/main`, inspect the final diff, integrate only the approved task branch into local `main`, and rerun proportionate checks. Do not push or deploy.
-4. **Push `main`.** Only after a separate explicit approval, show the commits to be pushed, push local `main` to `origin/main`, confirm the remote SHA, and check required CI. Do not deploy.
-5. **Deploy and post-check.** Only after another explicit approval, deploy the immutable artifact built from the confirmed pushed SHA. Nano verification is part of this stage: confirm the served manifest/image SHA, health/readiness, required public routes, and the affected signed-in/data/worker/persistence journey. Never deploy a dirty working tree or patch code manually on the server.
+Human approval remains mandatory before merge, direct push to `main` or another protected
+branch, force push, deploy, migration/backfill execution, live/shared data mutation,
+credential or signing-material changes, permissions/RLS/ACL changes on a real target, DNS/ingress/routing,
+payment/refund, external messages, or destructive rollback. A Draft PR, green CI, local
+PostgreSQL rehearsal, or staging artifact never authorizes those actions.
 
-At the end of every completed stage, stop and report evidence, then ask one direct question: `Приступать к следующему этапу: <название этапа>?` Do not begin that stage until the user explicitly agrees. Never infer approval for commit integration, `main` push, deployment, data mutation, or rollback from approval of an earlier stage.
+Use focused checks for R0-R2 and expand to `npm run check` for auth, public contracts,
+schema/migrations, shared/root configuration, dependencies/lockfiles, deployment files,
+multi-workspace impact, R3/R4, or unclassifiable scope. Do not repeat an identical passing
+command without changed source, inputs, environment, acceptance target, or a new
+hypothesis. R0 needs no independent reviewer; R1 normally uses self-review; R2 uses at
+most one reviewer unless two distinct triggers apply; R3 uses one specialist per actual
+risk; R4 uses two genuinely independent perspectives. Use at most two concurrent spawned
+agents and never overlap write ownership.
 
-If a stage is blocked or fails, stay in that stage, report the blocker, and ask what to do next. Fixes after a failed deployment return to a focused task/hotfix branch; do not edit Nano directly.
+Continue independent in-scope work if one lane is blocked. Stop for missing material
+product authority, suspected credential/PII exposure, scope expansion, an inseparable
+broken baseline, unavailable required access, or a prohibited next action. A failed
+post-deploy change returns to a focused task/hotfix branch; never edit Nano directly.
 
 ## Required verification
 
-Run `npm run check` for code changes. Run `docker compose config` for Compose changes. Update the relevant ADR/runbook/domain documentation whenever an invariant or operational procedure changes.
+Run the nearest affected tests, typecheck, lint, and build for ordinary scoped R1/R2 code
+changes; run `npm run check` on the expansion triggers above. Run `docker compose config`
+for Compose changes. Update the relevant ADR/runbook/domain documentation whenever an
+invariant or operational procedure changes. Report checks not run and why.

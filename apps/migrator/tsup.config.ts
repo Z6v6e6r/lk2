@@ -17,6 +17,7 @@ export default defineConfig({
     'src/verify-communities-staging-role-split-inventory-artifact.ts',
     'src/verify-communities-role-split-acceptance-artifact.ts',
     'src/verify-communities-staging-role-split-inventory-preparation.ts',
+    'src/verify-communities-staging-role-split-trusted-inventory-gate.ts',
     'src/communities-staging-role-split-v3-executable-composition.ts',
     'src/verify-eligibility-payment-runtime-role.ts',
     'src/provision-eligibility-payment-cup-projection-acl.ts',
