@@ -1200,6 +1200,7 @@
   provider-wide history contract is verified.
 - Expanded authenticated public-game details so a non-participant can open and join a public game;
   private outsider details still fail closed.
+
 ## 2026-08-24 — Risk-based Codex delivery workflow
 
 - Replaced universal reversible-stage confirmation stops with R0-R4 Fast, Spark, Main,
