@@ -1308,8 +1308,11 @@ describe('Timeweb amd64 publication workflow', () => {
         },
       });
       const outputs: Record<string, string> = {};
-      if (result.status === 0) {
-        const output = await readFile(outputPath, 'utf8');
+      const output = await readFile(outputPath, 'utf8').catch((error: NodeJS.ErrnoException) => {
+        if (error.code === 'ENOENT') return '';
+        throw error;
+      });
+      if (output.length > 0) {
         for (const line of output.trim().split('\n')) {
           const separator = line.indexOf('=');
           outputs[line.slice(0, separator)] = line.slice(separator + 1);
