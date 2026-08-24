@@ -155,6 +155,7 @@ describe('ManagedSubscriptionRuntimeQuoteClient', () => {
       'X-Subscriptions-Integration-Token': 'test-integration-token-20260824-safe',
       'X-Subscription-Runtime-Contract-Version': '1',
     });
+    expect(init?.redirect).toBe('error');
     expect(typeof init?.body).toBe('string');
     const requestBody = typeof init?.body === 'string' ? init.body : '';
     expect(JSON.parse(requestBody)).toEqual(quoteRequest);

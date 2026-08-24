@@ -529,6 +529,7 @@ export class ManagedSubscriptionRuntimeQuoteClient {
         new URL(MANAGED_SUBSCRIPTION_RUNTIME_V1_QUOTE_PATH, options.baseUrl),
         {
           method: 'POST',
+          redirect: 'error',
           signal: controller.signal,
           headers: {
             Authorization: envelope.authorization,
