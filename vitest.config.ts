@@ -9,6 +9,7 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json-summary', 'html'],
+      exclude: ['deploy/jetson/generated/**'],
       thresholds: {
         lines: 70,
         functions: 70,

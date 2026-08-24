@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "build": "tsup --config tsup.config.ts && tsup --config tsup.anchor-rehearsal.config.ts",
+    "build:trusted-inventory-gate-preflight": "tsup --config tsup.trusted-inventory-gate-preflight.config.ts",
+    "build:trusted-inventory-runtime": "tsup --config tsup.trusted-inventory-runtime.config.ts",
     "start": "node dist/main.js"
   },
   "dependencies": {

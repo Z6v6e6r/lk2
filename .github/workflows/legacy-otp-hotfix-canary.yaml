@@ -63,6 +63,7 @@ jobs:
           CONTROL_SHA: ${{ github.sha }}
           WORKFLOW_SHA: ${{ github.workflow_sha }}
           SUPPORTED_ACTIVE_RELEASE: e308181da5222645d9a87d03642923c6841be8d1
+          SUPPORTED_CANDIDATE_SHA: c4aa5e8106fffc9a4fb8f9fb03efc9a6ba1c3239
         run: |
           set -eu
           require_sha() {
@@ -78,7 +79,7 @@ jobs:
           require_sha "$EXPECTED_ACTIVE_RELEASE"
           require_sha "$CANDIDATE_SHA"
           test "$EXPECTED_ACTIVE_RELEASE" = "$SUPPORTED_ACTIVE_RELEASE"
-          test "$CANDIDATE_SHA" != "$EXPECTED_ACTIVE_RELEASE"
+          test "$CANDIDATE_SHA" = "$SUPPORTED_CANDIDATE_SHA"
           case "$OPERATION:$CONFIRMATION" in
             START:START_LEGACY_OTP_HOTFIX_CANARY)
               test -z "$ORIGINAL_CONTROL_SHA$ORIGINAL_RUN_ID$ORIGINAL_RUN_ATTEMPT"
@@ -367,21 +368,28 @@ jobs:
           set -euo pipefail
           printf '%s\n' 'legacy_otp_hotfix canary_window_seconds=900 status=started' | tee evidence/observation.txt
           set +e
-          timeout --signal=TERM --kill-after=5s 900s sh -eu -c '
-            while :; do
+          timeout --signal=TERM --kill-after=5s 900s sh -u -c '
+            probe_candidate() {
               for path in /healthz /health/live /health/ready; do
-                curl --fail --silent --show-error --connect-timeout 5 --max-time 10 --output /dev/null "https://lk.nano.padlhub.su$path"
+                curl --fail --silent --show-error --connect-timeout 5 --max-time 10 --output /dev/null "https://lk.nano.padlhub.su$path" || return 1
               done
-              curl --fail --silent --show-error --connect-timeout 5 --max-time 10 --output /dev/null https://lk.nano.padlhub.su/realtime/health/ready
-              manifest=$(curl --fail --silent --show-error --connect-timeout 5 --max-time 10 https://lk.nano.padlhub.su/manifest.json)
+              curl --fail --silent --show-error --connect-timeout 5 --max-time 10 --output /dev/null https://lk.nano.padlhub.su/realtime/health/ready || return 1
+              manifest=$(curl --fail --silent --show-error --connect-timeout 5 --max-time 10 https://lk.nano.padlhub.su/manifest.json) || return 1
               printf "%s" "$manifest" | node -e '\''
                 let value=""; process.stdin.on("data", chunk => { value += chunk; });
                 process.stdin.on("end", () => { if (JSON.parse(value).release !== process.env.CANDIDATE_SHA) process.exit(1); });
               '\''
-              if timeout --signal=TERM --kill-after=5s 30s ssh $SSH_OPTIONS "phub-deploy@$HOST" \
-                "sh '$BUNDLE/run-legacy-otp-hotfix-canary.sh' attest '$EXPECTED_ACTIVE_RELEASE' '$CANDIDATE_SHA' '$CONTROL_SHA' '$RUN_ID' '$RUN_ATTEMPT' ATTEST_LEGACY_OTP_HOTFIX_CANARY '$BUNDLE'" \
-                >> evidence/observation.txt; then
-                exit 0
+            }
+            while :; do
+              if probe_candidate; then
+                if timeout --signal=TERM --kill-after=5s 30s ssh $SSH_OPTIONS "phub-deploy@$HOST" \
+                  "sh '$BUNDLE/run-legacy-otp-hotfix-canary.sh' attest '$EXPECTED_ACTIVE_RELEASE' '$CANDIDATE_SHA' '$CONTROL_SHA' '$RUN_ID' '$RUN_ATTEMPT' ATTEST_LEGACY_OTP_HOTFIX_CANARY '$BUNDLE'" \
+                  >> evidence/observation.txt; then
+                  exit 0
+                fi
+                printf "%s\n" "legacy_otp_hotfix otp_attestation=pending status=retrying" >> evidence/observation.txt
+              else
+                printf "%s\n" "legacy_otp_hotfix candidate_public_probe=pending status=retrying" >> evidence/observation.txt
               fi
               sleep 30
             done

@@ -1,5 +1,219 @@
 # Worklog
 
+## 2026-08-24 — Communities Gate 4 external PostgreSQL clock/ledger checkpoint
+
+- Added source-only V15 adapters for two distinct, non-aliased PostgreSQL clock/ledger clients.
+  They bind fixed statements and exact subjects, snapshot query methods, reject widened responses
+  and perform no retry after an unavailable or ambiguous consumption result.
+- Added an unapplied external control-plane SQL contract with an initially absent binding, fixed
+  `SECURITY DEFINER` search paths, revoked public access, a serialized monotonic server-time fence,
+  independently unique authorization/request identities and append-only receipts. It creates no
+  role, credential, grant, provider resource or runtime binding.
+- Added unit coverage and a labelled disposable PostgreSQL 16 harness. The real database checks
+  concurrent double consume, replay/expiry, committed response loss, separated clock/consumer/
+  auditor privileges, immutable receipt denial and clock regression; its exact container is removed
+  after the run.
+- The checkpoint is not exported, built, wired, installed or provisioned. No staging, provider,
+  credential, trusted-inventory producer, clean clone, ceremony or non-disposable database was
+  accessed. Every role/ACL/migration/deploy/activation authority remains false, and Gate 6 still
+  requires a separate whole-host-rollback-resistant monotonic authority.
+
+## 2026-08-23 — Communities Gate 4 V14 disabled staging installation evidence
+
+- Installed and verified the exact disabled candidate for
+  `cd1cf1301da75b63f494921e21d051aa149b32b2` on `phub-jetson-staging` after the commit was pushed to
+  `origin/main` and the private local candidate verification passed.
+- Exact evidence: manifest `90110dd11f4192a4c379f07c6f2407db62db1c7a0e9a56f23fadfe332b4d4b99`,
+  control `847eb81019105b154cab502a8b7393b15522678dbe7d2704d88f75ea8ac3c5b9`,
+  artifacts `42b2733a0feebf928c63576034d33967aa8700d103e44418b07823d556c09be2`,
+  receipt `c013ff2902a8f2f500b7f589af5a4ed3292208b704ebd5c81c53c6a5e5314e7d` and Gate 4 bundle
+  `8a4aa136f0b5d949f8741b04b1f97d83aeff65478eb68de10785ce26f327eafc`.
+- The dependency-free installer install+verify flow passed. Independent read-only readback confirmed
+  the root-owned installation, exactly 45 installed entries (43 files and two child directories;
+  three directories including the candidate root), no non-file/non-directory entries,
+  `active_links=0`, exact bundle bytes and the mode-0444 single-link installation receipt.
+- The versioned disabled command returned the fixed denial with exit `78`. The Gate 4 preflight bundle
+  itself was not invoked; no review inputs were supplied and no producer, PostgreSQL, ceremony,
+  migration, service restart or activation was performed. `authorizes_ceremony=false` and
+  `authorizes_database_mutation=false` remain exact installed invariants.
+- The user-owned transfer directory and installer wrapper remain under `/home/zver`; no cleanup was
+  authorized or performed. Their later removal is operational housekeeping only and cannot activate
+  the immutable installation.
+
+## 2026-08-23 — Communities Gate 4 offline preflight disabled packaging
+
+- Advanced the immutable disabled installation candidate to schema V14 and host-control V11 with
+  three exact mode-0444 Gate 4 preflight artifacts: the bounded offline reader/verifier source, its
+  CLI source and a deterministic self-contained Node 22 ESM bundle.
+- Kept installation as the only true authorization. The candidate still creates no active link,
+  runtime configuration, key, workflow, credential, request or output directory; ceremony,
+  PostgreSQL access/mutation, role split, migration, deploy and activation remain false.
+- Added byte-for-byte rebuild coverage for the bundle, restricted its imports to Node builtins and
+  required direct execution without the complete pinned review inputs to fail closed. No candidate
+  was built from uncommitted bytes, uploaded, installed or executed on staging in this checkpoint.
+
+## 2026-08-23 — Communities trusted INPUT_C offline Gate 4 preflight
+
+- Added a buildable fail-closed CLI around the existing V13 pure gate verifier. It accepts one
+  independently pinned gate and reads only the canonical gate, preparation,
+  preparation-verification and connection-descriptor documents through the root-owned no-follow
+  evidence reader.
+- Bound the actual connection-descriptor file path back to the preparation envelope and rejected
+  non-canonical verification bytes, path aliases and gate-pin drift before any producer, credential
+  descriptor, output path, PostgreSQL connection or child process can be touched.
+- Kept the result review-only: success is `READY_FOR_SEPARATE_AUTHORIZATION_REVIEW_ONLY`, every
+  execution/mutation authority remains false, and Gate 4 still requires separately reviewed V15
+  evidence, approval, clock, ledger, host entrypoint and a separately authorized clean clone.
+
+## 2026-08-23 — Communities disabled V15 staging installation evidence
+
+- Installed and verified the disabled candidate for `4bb4279b4afddf807b829612fd63922b27e4d0da` on staging.
+- Exact evidence: manifest `395b33e8b468a14d4eecb4e14e6e4418b90b8d654fe3af802b2cc96bf90ee768`,
+  control `f19e4a68e25ed72d561d5cd5cf5ccccd114dbd3db282447fee2e7615e8c44c10`,
+  artifacts `705fcda61633d91d958b7993b5bde1f8c418e8cd7049e74ea89de551ebd5cd6d`,
+  receipt `87c41cdd2e8fbefae85191d2cdf565d75689d1180826ca9c10736cab9cd2839e`.
+- The embedded installer install+verify flow passed. Independent read-only postcheck confirmed: exact thirty-nine payload files,
+  root-owned installed tree, `active_link_count=0`, runtime bundle bytes match, and disabled command exit code `78`
+  with `EXECUTION_NOT_AUTHORIZED`.
+- `authorizes_ceremony=false`, `authorizes_database_mutation=false`, and no activation, key, workflow,
+  PostgreSQL access, cleanup, ceremony execution, or runtime mutation occurred.
+- No host Node runtime execution was required (`nodeRequired=false`, no installed runtime wiring).
+
+## 2026-08-23 — Communities disabled V15 packaging checkpoint
+
+- Advanced the immutable disabled installation candidate to schema V13 and added six exact
+  mode-0444 source snapshots for the V13 gate, V14 request and V15 single-use authorization
+  contracts/verifiers. The fixed POSIX installer reconstructs the exact thirty-nine-artifact
+  policy under host-control V10 and creates no active link or runtime configuration.
+- Advanced the self-contained runtime module to V2 and exposed the reviewed V15 issuer/loader API
+  without composing it with the existing producer wiring. The bundle contains no concrete clock or
+  durable-ledger adapter, approval, attested evidence, credentials, workflow, CLI or host
+  entrypoint; direct execution still exits `78` with `EXECUTION_NOT_AUTHORIZED`.
+- Added explicit unresolved bindings for the independent approval/evidence, fail-closed clock and
+  durable single-use ledger. Installation remains the only true candidate authorization; ceremony,
+  database mutation, role split, migration, deploy and activation remain false. No candidate was
+  built from an uncommitted tree, installed, uploaded or exercised against staging/PostgreSQL.
+
+## 2026-08-23 — Communities trusted INPUT_C issuer/loader gate checkpoint
+
+- Added canonical independent evidence, approval, pending-authorization and single-use consumption
+  receipt contracts. Evidence is bound without a circular request digest: the V14 request pins the
+  exact evidence bytes, while approval separately pins the final request, re-verification and full
+  evidence-set digests.
+- Added a source-only issuer that re-executes the V14 verifier, validates all ten exact evidence
+  bytes and canonical absolute paths, requires distinct issuer/approver/clock/ledger subjects and
+  rejects an attestor that aliases any of them. The serialized authorization remains pending and
+  grants no authority.
+- Added an unwired root-custody loader that reads the request, approval, pending authorization and
+  all evidence through the existing root-owned single-link reader. It captures the pinned clock and
+  ledger methods, checks time before and after one `consumeOnce` call and returns only an immutable
+  in-memory inventory connection/read/artifact-write capability after exact receipt validation.
+  Ambiguous ledger results and post-consumption clock failure consume the attempt and are never
+  retried.
+- This checkpoint supplies no concrete clock or durable-ledger adapter, no independent approval or
+  evidence bytes, no package export, CLI, build entry, key, workflow or installed runtime surface.
+  Trusted-inventory designation and every role/ACL/shared-database/migration/deploy/activation
+  authority remain false; no staging or PostgreSQL access was performed.
+
+## 2026-08-23 — Communities trusted INPUT_C separate-authorization request checkpoint
+
+- Added a canonical review-only authorization request that binds one exact V13 gate and its exact
+  independently pinned verification, plus ten ordered evidence subject/content/path pins for the
+  installed receipt, runtime, preparation provenance, clean clone, descriptors, executable and
+  output custody/absence boundaries.
+- The request fixes a one-shot policy (`maximumAttempts=1`, five-minute validity) and requires a
+  durable consumption ledger, root-owned evidence, an independent approver and a fail-closed clock.
+  Those requirements are policy inputs only; this checkpoint implements none of the four runtime
+  controls and creates no authorization receipt.
+- Added a pure verifier that re-executes the complete V13 gate verification, compares its exact
+  canonical bytes, derives every evidence subject independently and rejects matching evidence,
+  preparation or operational path hashes. Raw filesystem path semantics remain explicitly
+  unattested for the later issuer/loader.
+- Only inventory connection, inventory read and artifact write may be requested. Every actual
+  authorization remains false, including trusted-inventory designation, role/ACL/shared-database
+  mutation, migration, deploy and activation. The modules have no package export, CLI, build entry,
+  filesystem/process/PostgreSQL access or installed runtime surface.
+
+## 2026-08-22 — Communities trusted INPUT_C separate-authorization gate checkpoint
+
+- Added a canonical review subject for one future `BEFORE` or `AFTER` trusted INPUT_C collection.
+  It pins the installed-candidate receipt, self-contained runtime bundle, preparation and its
+  review-only verification, connection descriptor, producer executable, descriptor paths,
+  evidence paths, output paths and fixed timeout policy.
+- Added a pure fail-closed verifier that revalidates the complete preparation-verification shape,
+  cross-binds marker/request/mapping content and paths to the connection descriptor and rejects
+  drift, widened keys, path aliases and output-directory substitution.
+- The result is only `READY_FOR_SEPARATE_AUTHORIZATION_REVIEW_ONLY`. Every authorization remains
+  false; preparation-verification provenance, installed-candidate/runtime/descriptor/output
+  custody and independently sourced clone provenance remain explicit non-attestations.
+- The gate has no CLI or build entry and imports no filesystem, PostgreSQL or child-process API.
+  This checkpoint does not create an authorization receipt, credential, descriptor, output,
+  active link, key or workflow and does not access staging or a database.
+
+## 2026-08-22 — Communities trusted-inventory V12 disabled staging installation evidence
+
+- The exact V12 candidate at commit `4f8028e97a28aae32dfedfbd9ac6f4ecbe5fedea` was installed on
+  staging and independently read back with receipt
+  `9e02af1c5dbbb8c8ff8db1c10055cff63f19ba529f005891359c22e0e5b6e5ce`.
+- The post-check retained `status=disabled`, `active_link=false`,
+  `authorizes_ceremony=false` and `authorizes_database_mutation=false`. The tar extended-attribute
+  warnings were informational; the exact manifest, control and artifact digest checks passed.
+- This evidence records the completed disabled installation only. It does not authorize an active
+  link, credential, trusted inventory collection, ceremony or database mutation.
+
+## 2026-08-22 — Communities trusted-inventory immutable disabled runtime candidate checkpoint
+
+- Added a dedicated Node 22 ESM build for the reviewed trusted-inventory runtime wiring. The
+  checked-in bundle includes its PostgreSQL client dependency, rebuilds byte-for-byte, has no
+  package imports, and exports only the reviewed construction surface; direct execution emits the
+  fixed `COMMUNITIES_ROLE_SPLIT_EXECUTION_NOT_AUTHORIZED` denial and exits `78`.
+- Bumped the private candidate manifest/digest contract to V12 and the dependency-free host control
+  ledger to V9. Its exact allowlist appends the runtime-wiring source, the fail-closed module source
+  and the self-contained bundle as root-owned mode-0444 bytes.
+- Updated the Node and POSIX installers/verifiers for exactly thirty-three controlled artifacts,
+  including separate immutable `source` and `runtime` directories. Installation remains the only
+  true authorization: no runtime configuration, active link, credential, preparation/evidence
+  input, key, workflow, ceremony or database-mutation authority is present.
+- This checkpoint performs only local build and verification. It does not generate or install a
+  host candidate, access staging or PostgreSQL, collect trusted inventory, run a ceremony, migrate,
+  deploy or activate anything. The previously installed immutable V11 candidate remains unchanged.
+- Integration verification found that a worktree-level `node_modules` symlink omitted the locked
+  package-local dependency tree while producing the checked-in runtime bytes. The bundle was
+  regenerated from the physical lockfile installation, and the build now rejects an absent or
+  symlinked repository `node_modules` before `tsup` can emit candidate bytes.
+
+## 2026-08-22 — Communities trusted-inventory source-only runtime wiring checkpoint
+
+- Added a one-shot source-only runtime boundary that snapshots the canonical preparation,
+  verification, read-only authorization, connection descriptor, evidence paths and output paths
+  before any asynchronous dispatch. It cross-binds their exact digests and preserves the original
+  credential/producer descriptor identities.
+- The boundary accepts only a root Linux process, rejects runtime or descriptor drift, and invokes
+  only the fixed supervised-producer composition. Its input data is recursively frozen and the same
+  wiring object cannot be replayed after success or failure.
+- The module remains absent from `tsup`, package scripts and the installed disabled candidate. It
+  owns no file opening, credential reading, process creation, CLI or workflow, and focused tests
+  mock the fixed composition without connecting to PostgreSQL or publishing an artifact.
+- The previously approved V11 candidate `f5345982e4d6b8024ac814047a236768e7537054` was installed on
+  staging with receipt `c6122e1f20531219e9ed0f406b1b34ef32ef86b2b736186fafece86134598903`;
+  it remains disabled with no active link and no ceremony or database-mutation authority. This new
+  source file is not part of that immutable installation.
+
+## 2026-08-22 — Communities trusted-inventory composition disabled candidate checkpoint
+
+- Bumped the private installation manifest/digest contract to V11 and the dependency-free host
+  control ledger to V8. The exact allowlist adds the reviewed supervised producer composition only
+  as a root-owned mode-0444 source snapshot.
+- Replaced the now-packaged source-composition binding with the still-absent supervised producer
+  runtime-wiring binding. Credential FD custody, independently pinned output, marker/evidence/mapping
+  inputs and private output custody remain separately required for execution.
+- Updated the Node review helper, POSIX installer/verifier and regression coverage for the exact
+  thirty-artifact candidate and thirty-two-entry installed tree. Installation remains the only true
+  authorization; the candidate contains no Node runtime, compiled entrypoint, credential, key,
+  workflow, active link or database authority.
+- This checkpoint creates no generated candidate directory and performs no installation, SSH,
+  staging access, PostgreSQL access, inventory collection, migration, deploy or activation.
+
 ## 2026-08-22 — Communities trusted-inventory supervised producer composition checkpoint
 
 - Added an unwired source-only composition that connects the existing trusted-inventory host to
@@ -986,3 +1200,15 @@
   provider-wide history contract is verified.
 - Expanded authenticated public-game details so a non-participant can open and join a public game;
   private outsider details still fail closed.
+
+## 2026-08-24 — Risk-based Codex delivery workflow
+
+- Replaced universal reversible-stage confirmation stops with R0-R4 Fast, Spark, Main,
+  and Critical lanes.
+- Authorized continuous task-branch work through focused commits, same-branch push,
+  Draft PR, CI readback, and in-scope CI correction.
+- Preserved exact approval gates for merge/protected branches, deploy, migrations, real
+  ACL/RLS/data changes, secrets, routing, payments, external messages, and destructive
+  operations.
+- Replaced universal `npm run check` and generic review with changed-file/risk triggers;
+  the full gate remains mandatory for critical and shared surfaces.

@@ -22,7 +22,7 @@ import {
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const schemaVersion = 'communities-role-split-installation-candidate-v10';
+const schemaVersion = 'communities-role-split-installation-candidate-v14';
 const sha40 = /^[0-9a-f]{40}$/u;
 const sha256 = /^[0-9a-f]{64}$/u;
 const installPrefix = '/usr/local/libexec/phub/communities-role-split/candidates';
@@ -96,6 +96,16 @@ const expectedArtifacts = [
     targetRelativePath: 'source/communities-staging-role-split-trusted-inventory-host.ts',
     installMode: '0444',
   },
+  {
+    sourcePath:
+      'apps/migrator/src/communities-staging-role-split-trusted-inventory-supervised-producer.ts',
+    sourceGitMode: '100644',
+    artifactPath:
+      'payload/source/communities-staging-role-split-trusted-inventory-supervised-producer.ts',
+    targetRelativePath:
+      'source/communities-staging-role-split-trusted-inventory-supervised-producer.ts',
+    installMode: '0444',
+  },
   ...[
     'communities-staging-role-split-v3-durable-host.ts',
     'communities-staging-role-split-v3-external-phase-anchor.ts',
@@ -126,6 +136,81 @@ const expectedArtifacts = [
     targetRelativePath: `source/${name}`,
     installMode: '0444',
   })),
+  ...[
+    [
+      'packages/database/src/communities-staging-role-split-trusted-inventory-gate.ts',
+      'communities-staging-role-split-trusted-inventory-gate-database.ts',
+    ],
+    [
+      'apps/migrator/src/communities-staging-role-split-trusted-inventory-gate.ts',
+      'communities-staging-role-split-trusted-inventory-gate.ts',
+    ],
+    [
+      'packages/database/src/communities-staging-role-split-trusted-inventory-authorization-request.ts',
+      'communities-staging-role-split-trusted-inventory-authorization-request-database.ts',
+    ],
+    [
+      'apps/migrator/src/communities-staging-role-split-trusted-inventory-authorization-request.ts',
+      'communities-staging-role-split-trusted-inventory-authorization-request.ts',
+    ],
+    [
+      'packages/database/src/communities-staging-role-split-trusted-inventory-authorization.ts',
+      'communities-staging-role-split-trusted-inventory-authorization-database.ts',
+    ],
+    [
+      'apps/migrator/src/communities-staging-role-split-trusted-inventory-authorization-loader.ts',
+      'communities-staging-role-split-trusted-inventory-authorization-loader.ts',
+    ],
+  ].map(([sourcePath, artifactName]) => ({
+    sourcePath,
+    sourceGitMode: '100644',
+    artifactPath: `payload/source/${artifactName}`,
+    targetRelativePath: `source/${artifactName}`,
+    installMode: '0444',
+  })),
+  ...[
+    'communities-staging-role-split-trusted-inventory-runtime-wiring.ts',
+    'communities-staging-role-split-trusted-inventory-runtime-module.ts',
+  ].map((name) => ({
+    sourcePath: `apps/migrator/src/${name}`,
+    sourceGitMode: '100644',
+    artifactPath: `payload/source/${name}`,
+    targetRelativePath: `source/${name}`,
+    installMode: '0444',
+  })),
+  {
+    sourcePath:
+      'deploy/jetson/generated/communities-staging-role-split-trusted-inventory-runtime.mjs',
+    sourceGitMode: '100644',
+    artifactPath: 'payload/runtime/communities-staging-role-split-trusted-inventory-runtime.mjs',
+    targetRelativePath: 'runtime/communities-staging-role-split-trusted-inventory-runtime.mjs',
+    installMode: '0444',
+  },
+  {
+    sourcePath:
+      'apps/migrator/src/communities-staging-role-split-trusted-inventory-gate-preflight.ts',
+    sourceGitMode: '100644',
+    artifactPath:
+      'payload/source/communities-staging-role-split-trusted-inventory-gate-preflight.ts',
+    targetRelativePath: 'source/communities-staging-role-split-trusted-inventory-gate-preflight.ts',
+    installMode: '0444',
+  },
+  {
+    sourcePath: 'apps/migrator/src/verify-communities-staging-role-split-trusted-inventory-gate.ts',
+    sourceGitMode: '100644',
+    artifactPath: 'payload/source/verify-communities-staging-role-split-trusted-inventory-gate.ts',
+    targetRelativePath: 'source/verify-communities-staging-role-split-trusted-inventory-gate.ts',
+    installMode: '0444',
+  },
+  {
+    sourcePath:
+      'deploy/jetson/generated-gate-preflight/verify-communities-staging-role-split-trusted-inventory-gate.mjs',
+    sourceGitMode: '100644',
+    artifactPath:
+      'payload/runtime/verify-communities-staging-role-split-trusted-inventory-gate.mjs',
+    targetRelativePath: 'runtime/verify-communities-staging-role-split-trusted-inventory-gate.mjs',
+    installMode: '0444',
+  },
 ];
 const expectedExecutionBindingCodes = [
   'BACKUP_CUSTODY_HANDOFF',
@@ -142,10 +227,14 @@ const expectedExecutionBindingCodes = [
   'SOURCE_WRITE_DENIAL_ATTESTATION',
   'STAGING_KNOWN_HOSTS_PIN',
   'TRUSTED_INVENTORY_CREDENTIAL_FD_READER',
+  'TRUSTED_INVENTORY_DURABLE_SINGLE_USE_LEDGER',
+  'TRUSTED_INVENTORY_FAIL_CLOSED_CLOCK_ADAPTER',
   'TRUSTED_INVENTORY_INDEPENDENT_ARTIFACT_PIN',
+  'TRUSTED_INVENTORY_INDEPENDENT_ATTESTED_EVIDENCE',
+  'TRUSTED_INVENTORY_INDEPENDENT_APPROVAL',
   'TRUSTED_INVENTORY_MARKER_EVIDENCE_MAPPING_INPUTS',
   'TRUSTED_INVENTORY_PRIVATE_OUTPUT_CUSTODY',
-  'TRUSTED_INVENTORY_SUPERVISED_PRODUCER_COMPOSITION',
+  'TRUSTED_INVENTORY_SUPERVISED_PRODUCER_RUNTIME_WIRING',
 ];
 
 function fail(code) {
@@ -439,6 +528,7 @@ function readAndVerifyCandidate(input) {
   assertDirectory(input.candidatePath, input.expectedUid, 0o700);
   assertDirectory(join(input.candidatePath, 'payload'), input.expectedUid, 0o700);
   assertDirectory(join(input.candidatePath, 'payload/source'), input.expectedUid, 0o700);
+  assertDirectory(join(input.candidatePath, 'payload/runtime'), input.expectedUid, 0o700);
   assertExactTree(
     input.candidatePath,
     [
@@ -575,6 +665,7 @@ export function verifyCommunitiesRoleSplitDisabledInstallation(input) {
   const targetPath = resolveInstalledPath(input.installationRoot, manifest.installation.targetRoot);
   assertDirectory(targetPath, expectedUid, 0o755);
   assertDirectory(join(targetPath, 'source'), expectedUid, 0o755);
+  assertDirectory(join(targetPath, 'runtime'), expectedUid, 0o755);
   assertExactTree(
     targetPath,
     [completeReceiptName, ...expectedArtifacts.map(({ targetRelativePath }) => targetRelativePath)],

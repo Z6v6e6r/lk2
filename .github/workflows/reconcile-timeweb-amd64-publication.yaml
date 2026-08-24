@@ -1,0 +1,300 @@
+name: Reconcile existing immutable Timeweb amd64 publication
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_workflow_sha:
+        description: Exact reviewed main SHA containing this reconciliation workflow
+        required: true
+        type: string
+      confirmation:
+        description: Type RECONCILE_TIMEWEB_AMD64_32625879321 to inspect only the existing five tags
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: timeweb-amd64-publication-reconciliation-32625879321
+  cancel-in-progress: false
+
+jobs:
+  validate-request:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Validate exact first-attempt reconciliation request
+        env:
+          ACTOR: ${{ github.actor }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+          EXPECTED_WORKFLOW_SHA: ${{ inputs.expected_workflow_sha }}
+          REPOSITORY: ${{ github.repository }}
+          REQUEST_REF: ${{ github.ref }}
+          REQUEST_SHA: ${{ github.sha }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          test "$REQUEST_REF" = refs/heads/main
+          test "$REPOSITORY" = Z6v6e6r/lk2
+          test "$WORKFLOW_SHA" = "$REQUEST_SHA"
+          test "$WORKFLOW_SHA" = "$EXPECTED_WORKFLOW_SHA"
+          test "$RUN_ATTEMPT" = 1
+          test "$ACTOR" = "$TRIGGERING_ACTOR"
+          test "$CONFIRMATION" = RECONCILE_TIMEWEB_AMD64_32625879321
+          printf '%s' "$EXPECTED_WORKFLOW_SHA" | grep -Eq '^[0-9a-f]{40}$'
+
+  reconcile-custody:
+    needs: validate-request
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      packages: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: api
+            index_digest: sha256:b75f6a060807095361f796f7550ddd1df989c492510377cb5e171bab75f4e0b7
+          - service: worker
+            index_digest: sha256:81b56b06743e86c5091c59164eaf3d93884d5d35a94636ef3d13bd2b004625cc
+          - service: realtime
+            index_digest: sha256:c9e35f58919e0b75a0afd7f7d588fb1f82d4adfbaa6a80f9c45544e9dea9a695
+          - service: migrator
+            index_digest: sha256:8cf2ac65f710ddf2df0ea3393dc37088bee02e13842a16920b2534a172489e8a
+          - service: web
+            index_digest: sha256:ce8f985f70416b9d83ccc2653eaefeb10a9b927418cdfefc17e66ccae4cfd4d0
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install checksum-verified Buildx reader
+        env:
+          BUILDX_SHA256: 48af8a397ebd60178778bf63611dbcebe5f5e7a9be90eb9147b24b9587455778
+          BUILDX_VERSION: v0.36.1
+        run: |
+          set -euo pipefail
+          download="$RUNNER_TEMP/docker-buildx"
+          plugin="$HOME/.docker/cli-plugins/docker-buildx"
+          curl --fail --location --proto '=https' --tlsv1.2 --output "$download" \
+            "https://github.com/docker/buildx/releases/download/$BUILDX_VERSION/buildx-$BUILDX_VERSION.linux-amd64"
+          printf '%s  %s\n' "$BUILDX_SHA256" "$download" | sha256sum --check --strict
+          install -D -m 0755 "$download" "$plugin"
+          printf '%s  %s\n' "$BUILDX_SHA256" "$plugin" | sha256sum --check --strict
+          docker buildx version \
+            | grep -Fx 'github.com/docker/buildx v0.36.1 1d8dde89b8aba914e05e45366770736fea1fd690'
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Reconcile only the exact existing tag and index digest
+        env:
+          EXPECTED_INDEX_DIGEST: ${{ matrix.index_digest }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SERVICE: ${{ matrix.service }}
+        run: |
+          set -euo pipefail
+          source scripts/timeweb-amd64-registry-custody-retry.sh
+          source_sha=35c8312b79cccdd136f2bfd892efbea629b8b919
+          source_tree=a1b920b8ae4507080789c650b8c16c669e55b477
+          original_builder='https://github.com/Z6v6e6r/lk2/actions/runs/32625879321/attempts/1'
+          original_workflow_sha=2bf84ae0d81a9a99ab38137c73dd7d76d9db3bf4
+          test "$(git rev-parse "$source_sha^{tree}")" = "$source_tree"
+          tag="amd64-sha-$source_sha-32625879321-1"
+          repository="ghcr.io/z6v6e6r/phub-$SERVICE"
+          mkdir -p reconciliation-evidence/attestations reconciliation-evidence/statements
+          phub_ghcr_custody_retry "$SERVICE-root-index" phub_ghcr_custody_read_exact_json "$repository:$tag" "$EXPECTED_INDEX_DIGEST" reconciliation-evidence/oci-index.json
+          runtime_digest="$(jq -r '[.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64" and ((.platform.variant // "") == ""))] | if length == 1 then .[0].digest else empty end' reconciliation-evidence/oci-index.json)"
+          runtime_size="$(jq -r '[.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64" and ((.platform.variant // "") == ""))] | if length == 1 then .[0].size else empty end' reconciliation-evidence/oci-index.json)"
+          printf '%s' "$runtime_digest" | grep -Eq '^sha256:[0-9a-f]{64}$'
+          printf '%s' "$runtime_size" | grep -Eq '^[1-9][0-9]*$'
+          attestation_count="$(jq '[.manifests[] | select(.platform.os == "unknown" and .platform.architecture == "unknown" and .annotations["vnd.docker.reference.type"] == "attestation-manifest")] | length' reconciliation-evidence/oci-index.json)"
+          test "$attestation_count" -ge 1
+          jq -r --arg runtime "$runtime_digest" '.manifests[] | select(.platform.os == "unknown" and .platform.architecture == "unknown" and .annotations["vnd.docker.reference.type"] == "attestation-manifest" and .annotations["vnd.docker.reference.digest"] == $runtime) | .digest' reconciliation-evidence/oci-index.json \
+            > reconciliation-evidence/attestation-digests.txt
+          test "$(wc -l < reconciliation-evidence/attestation-digests.txt | tr -d ' ')" -eq "$attestation_count"
+          while IFS= read -r digest; do
+            printf '%s' "$digest" | grep -Eq '^sha256:[0-9a-f]{64}$'
+            phub_ghcr_custody_retry "$SERVICE-attestation-manifest-${digest#sha256:}" phub_ghcr_custody_read_exact_json "$repository@$digest" "$digest" "reconciliation-evidence/attestations/${digest#sha256:}.json"
+          done < reconciliation-evidence/attestation-digests.txt
+          jq -s -e --arg runtime "$runtime_digest" --argjson runtimeSize "$runtime_size" '
+            length >= 1 and all(.[];
+              .schemaVersion == 2 and
+              .mediaType == "application/vnd.oci.image.manifest.v1+json" and
+              .artifactType == "application/vnd.docker.attestation.manifest.v1+json" and
+              .subject.mediaType == "application/vnd.oci.image.manifest.v1+json" and
+              .subject.digest == $runtime and .subject.size == $runtimeSize and
+              .config.mediaType == "application/vnd.oci.empty.v1+json" and
+              .config.digest == "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a" and
+              .config.size == 2 and .config.data == "e30="
+            ) and
+            ([.[].layers[]] | length == 2) and
+            all(.[].layers[]; .mediaType == "application/vnd.in-toto+json" and (.digest | test("^sha256:[0-9a-f]{64}$"))) and
+            ([.[].layers[].annotations["in-toto.io/predicate-type"]] | sort == ["https://slsa.dev/provenance/v1", "https://spdx.dev/Document"])
+          ' reconciliation-evidence/attestations/*.json >/dev/null
+          jq -s -r '.[].layers[] | [.digest, .annotations["in-toto.io/predicate-type"]] | @tsv' reconciliation-evidence/attestations/*.json \
+            | sort -u > reconciliation-evidence/attestation-layers.tsv
+          test "$(wc -l < reconciliation-evidence/attestation-layers.tsv | tr -d ' ')" -eq 2
+          registry_token="$({ printf 'user = "%s:%s"\n' "$GITHUB_ACTOR" "$GITHUB_TOKEN"; } | curl --fail --silent --show-error --config - "https://ghcr.io/token?service=ghcr.io&scope=repository%3Az6v6e6r%2Fphub-$SERVICE%3Apull" | jq -r '.token // empty')"
+          printf '%s' "$registry_token" | grep -Eq '^[A-Za-z0-9._~+/-]+=*$'
+          download_statement() {
+            digest=$1
+            destination=$2
+            temporary="$destination.attempt-$$"
+            rm -f "$temporary"
+            { printf 'header = "Authorization: Bearer %s"\n' "$registry_token"; } | curl --fail --silent --show-error --config - "https://ghcr.io/v2/z6v6e6r/phub-$SERVICE/blobs/$digest" --output "$temporary"
+            test "sha256:$(sha256sum "$temporary" | awk '{print $1}')" = "$digest" || {
+              echo "::error::PHUB_GHCR_CUSTODY_WRONG_BLOB_DIGEST|service=$SERVICE|digest=$digest" >&2
+              rm -f "$temporary"
+              return 1
+            }
+            mv "$temporary" "$destination"
+          }
+          while IFS=$'\t' read -r digest predicate; do
+            phub_ghcr_custody_retry "$SERVICE-attestation-statement-${digest#sha256:}" download_statement "$digest" "reconciliation-evidence/statements/${digest#sha256:}.json"
+            test "$(jq -r '.predicateType' "reconciliation-evidence/statements/${digest#sha256:}.json")" = "$predicate"
+          done < reconciliation-evidence/attestation-layers.tsv
+          unset registry_token
+          jq -s -e --arg runtime "${runtime_digest#sha256:}" --arg source "$source_sha" --arg service "$SERVICE" --arg builder "$original_builder" '
+            def reviewed_base($name; $tag; $sha):
+              (.digest | type == "object" and keys == ["sha256"] and .sha256 == $sha) and
+              (.uri == "pkg:docker/\($name)@\($tag)?platform=linux%2Famd64" or .uri == "pkg:docker/docker.io/library/\($name)@\($tag)?platform=linux%2Famd64");
+            def reviewed_scanner($sha):
+              (.digest | type == "object" and keys == ["sha256"] and .sha256 == $sha) and
+              (.uri == "pkg:docker/docker/buildkit-syft-scanner?digest=sha256:\($sha)&platform=linux%2Famd64" or .uri == "pkg:docker/docker.io/docker/buildkit-syft-scanner?digest=sha256:\($sha)&platform=linux%2Famd64");
+            length == 2 and ([.[].predicateType] | sort) == ["https://slsa.dev/provenance/v1", "https://spdx.dev/Document"] and
+            all(.[]; ._type == "https://in-toto.io/Statement/v1" and (.subject | length) == 1 and .subject[0].digest == {"sha256": $runtime}) and
+            (map(select(.predicateType == "https://slsa.dev/provenance/v1"))[0].predicate) as $p |
+            $p.buildDefinition.buildType == "https://github.com/moby/buildkit/blob/master/docs/attestations/slsa-definitions.md" and
+            $p.runDetails.builder.id == $builder and
+            $p.runDetails.metadata.buildkit_completeness.resolvedDependencies == true and
+            $p.buildDefinition.externalParameters.configSource.uri == "https://github.com/Z6v6e6r/lk2.git#\($source)" and
+            $p.buildDefinition.externalParameters.configSource.digest == {"sha1": $source} and
+            $p.buildDefinition.externalParameters.configSource.path == "apps/\($service)/Dockerfile" and
+            ($p.buildDefinition.resolvedDependencies | type == "array") and
+            ([$p.buildDefinition.resolvedDependencies[] | select(.uri == "https://github.com/Z6v6e6r/lk2.git#\($source)" and .digest == {"sha1": $source})] | length) == 1 and
+            ([$p.buildDefinition.resolvedDependencies[] | select(reviewed_base("node"; "22-bookworm-slim"; "d649c27dae7ba0137b3cef5dd75baa422c08dc3d9e3fc0c23dfb172dc3cc6436"))] | length) == 1 and
+            ([$p.buildDefinition.resolvedDependencies[] | select(reviewed_scanner("ae4f3b554449e7e25548e7d8ccc029d17357348e30c6e3df01b92bc93654d6a9"))] | length) == 1 and
+            (if $service == "web" then
+              ($p.buildDefinition.resolvedDependencies | length) == 4 and
+              ([$p.buildDefinition.resolvedDependencies[] | select(reviewed_base("nginx"; "1.27-alpine"; "65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10"))] | length) == 1
+            else ($p.buildDefinition.resolvedDependencies | length) == 3 end) and
+            (map(select(.predicateType == "https://spdx.dev/Document"))[0].predicate.packages | type == "array" and length > 0)
+          ' reconciliation-evidence/statements/*.json >/dev/null
+          read_buildx_presentation() {
+            template=$1
+            destination=$2
+            temporary="$destination.attempt-$$"
+            rm -f "$temporary"
+            docker buildx imagetools inspect "$repository@$EXPECTED_INDEX_DIGEST" \
+              --format "$template" > "$temporary"
+            jq -e 'type == "object"' "$temporary" >/dev/null
+            mv "$temporary" "$destination"
+          }
+          phub_ghcr_custody_retry "$SERVICE-buildx-provenance" \
+            read_buildx_presentation '{{json .Provenance.SLSA}}' \
+            reconciliation-evidence/provenance.json
+          phub_ghcr_custody_retry "$SERVICE-buildx-sbom" \
+            read_buildx_presentation '{{json .SBOM.SPDX}}' \
+            reconciliation-evidence/sbom.spdx.json
+          jq -e 'type == "object" and (.buildDefinition | type == "object")' \
+            reconciliation-evidence/provenance.json >/dev/null
+          jq -e 'type == "object" and .SPDXID == "SPDXRef-DOCUMENT"' \
+            reconciliation-evidence/sbom.spdx.json >/dev/null
+          jq -s -e '
+            (map(select(.predicateType == "https://slsa.dev/provenance/v1"))[0].predicate) == $provenance[0] and
+            (map(select(.predicateType == "https://spdx.dev/Document"))[0].predicate) == $sbom[0]
+          ' --slurpfile provenance reconciliation-evidence/provenance.json \
+            --slurpfile sbom reconciliation-evidence/sbom.spdx.json \
+            reconciliation-evidence/statements/*.json >/dev/null
+          phub_ghcr_custody_retry "$SERVICE-runtime-manifest" phub_ghcr_custody_read_exact_json "$repository@$runtime_digest" "$runtime_digest" reconciliation-evidence/runtime-manifest.json
+          runtime_reference="$repository@$runtime_digest"
+          phub_ghcr_custody_retry "$SERVICE-runtime-pull" docker pull --platform linux/amd64 "$runtime_reference"
+          test "$(docker image inspect "$runtime_reference" --format '{{.Os}}/{{.Architecture}}')" = linux/amd64
+          printf '%s' "$(docker image inspect "$runtime_reference" --format '{{.Id}}')" | grep -Eq '^sha256:[0-9a-f]{64}$'
+          test "$(docker image inspect "$runtime_reference" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$source_sha"
+          test "$(docker image inspect "$runtime_reference" --format '{{index .Config.Labels "org.opencontainers.image.source"}}')" = https://github.com/Z6v6e6r/lk2
+          image_user="$(docker image inspect "$runtime_reference" --format '{{.Config.User}}')"
+          case "$SERVICE" in
+            web)
+              test -z "$image_user"
+              docker run --rm --entrypoint /bin/sh "$runtime_reference" -ec 'test -s /usr/share/nginx/html/index.html && nginx -t'
+              container_id="$(docker run --rm -d -p 127.0.0.1::8080 "$runtime_reference")"
+              trap 'docker rm -f "$container_id" >/dev/null 2>&1 || true' EXIT
+              port="$(docker port "$container_id" 8080/tcp | sed -n 's/.*://p')"
+              printf '%s' "$port" | grep -Eq '^[0-9]+$'
+              for attempt in {1..30}; do
+                if curl --fail --silent --show-error "http://127.0.0.1:$port/healthz" | grep --quiet '^ok$'; then break; fi
+                test "$attempt" -lt 30 || { docker logs "$container_id"; exit 1; }
+                sleep 1
+              done
+              curl --fail --silent --show-error "http://127.0.0.1:$port/" | grep --quiet '<div id="phub-app"></div>'
+              docker rm -f "$container_id" >/dev/null
+              trap - EXIT
+              ;;
+            api|worker)
+              test "$image_user" = appuser
+              docker run --rm --entrypoint /bin/sh "$runtime_reference" -ec "test \"\$(id -u)\" = 1001 && test -s /app/apps/$SERVICE/dist/main.js"
+              docker run --rm --entrypoint node "$runtime_reference" --check "/app/apps/$SERVICE/dist/main.js"
+              docker run --rm --entrypoint node "$runtime_reference" --input-type=module -e "import sharp from 'sharp'; if (process.platform !== 'linux' || process.arch !== 'x64') process.exit(1); const output = await sharp({create:{width:1,height:1,channels:4,background:{r:0,g:0,b:0,alpha:1}}}).webp().toBuffer(); if (output.length === 0) process.exit(1);"
+              ;;
+            realtime)
+              test "$image_user" = appuser
+              docker run --rm --entrypoint /bin/sh "$runtime_reference" -ec 'test "$(id -u)" = 1001 && test -s /app/apps/realtime/dist/main.js'
+              docker run --rm --entrypoint node "$runtime_reference" --check /app/apps/realtime/dist/main.js
+              docker run --rm --entrypoint node "$runtime_reference" -e "if (process.platform !== 'linux' || process.arch !== 'x64') process.exit(1)"
+              ;;
+            migrator)
+              test "$image_user" = appuser
+              docker run --rm --entrypoint /bin/sh "$runtime_reference" -ec 'test "$(id -u)" = 1001 && test -s /app/apps/migrator/dist/main.js && test -d /app/migrations'
+              docker run --rm --entrypoint node "$runtime_reference" --check /app/apps/migrator/dist/main.js
+              docker run --rm --entrypoint node "$runtime_reference" -e "if (process.platform !== 'linux' || process.arch !== 'x64') process.exit(1)"
+              ;;
+            *) exit 64 ;;
+          esac
+          jq -n --arg service "$SERVICE" --arg repository "$repository" --arg tag "$tag" --arg index "$EXPECTED_INDEX_DIGEST" --arg runtime "$runtime_digest" --arg source "$source_sha" --arg tree "$source_tree" --arg workflow "$original_workflow_sha" --arg builder "$original_builder" '{schemaVersion:1,kind:"phub-timeweb-amd64-reconciliation-image",service:$service,repository:$repository,publicationTag:$tag,indexDigest:$index,runtimeDigest:$runtime,sourceSha:$source,sourceTree:$tree,originalWorkflowSha:$workflow,originalBuilder:$builder,verified:true,authorizesDeploy:false,authorizesVpsProvisioning:false,authorizesDatabaseMutation:false}' > reconciliation-evidence/image.json
+          find reconciliation-evidence -type f ! -name '*-checksums.txt' -print0 | sort -z | xargs -0 sha256sum > reconciliation-evidence/evidence-checksums.txt
+      - if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: timeweb-amd64-reconciliation-${{ matrix.service }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: reconciliation-evidence
+          if-no-files-found: error
+          retention-days: 90
+
+  reconciliation-manifest:
+    needs: [validate-request, reconcile-custody]
+    if: ${{ needs.reconcile-custody.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: timeweb-amd64-reconciliation-*-${{ github.run_id }}-${{ github.run_attempt }}
+          path: reconciliation-evidence/images
+      - name: Emit non-authorizing reconciliation manifest
+        env:
+          RECONCILIATION_WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          test "$(find reconciliation-evidence/images -name image.json | wc -l | tr -d ' ')" -eq 5
+          jq -s --arg reconciliationWorkflowSha "$RECONCILIATION_WORKFLOW_SHA" --arg reconciliationRunId "$GITHUB_RUN_ID" --arg reconciliationRunAttempt "$GITHUB_RUN_ATTEMPT" '{schemaVersion:1,kind:"phub-timeweb-amd64-publication-reconciliation",originalRunId:"32625879321",originalRunAttempt:"1",reconciliationWorkflowSha:$reconciliationWorkflowSha,reconciliationRunId:$reconciliationRunId,reconciliationRunAttempt:$reconciliationRunAttempt,authorizesDeploy:false,authorizesVpsProvisioning:false,authorizesDatabaseMutation:false,images:sort_by(.service)}' reconciliation-evidence/images/*/image.json > timeweb-amd64-publication-reconciliation-manifest.json
+          jq -e '.authorizesDeploy == false and .authorizesVpsProvisioning == false and .authorizesDatabaseMutation == false and ([.images[].service] | sort) == ["api","migrator","realtime","web","worker"] and ([.images[].verified] | all)' timeweb-amd64-publication-reconciliation-manifest.json >/dev/null
+          sha256sum timeweb-amd64-publication-reconciliation-manifest.json reconciliation-evidence/images/*/evidence-checksums.txt > timeweb-amd64-publication-reconciliation-checksums.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: timeweb-amd64-publication-reconciliation-manifest-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            timeweb-amd64-publication-reconciliation-manifest.json
+            timeweb-amd64-publication-reconciliation-checksums.txt
+            reconciliation-evidence/images
+          if-no-files-found: error
+          retention-days: 90

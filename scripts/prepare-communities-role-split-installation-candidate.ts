@@ -13,11 +13,11 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import { fileURLToPath } from 'node:url';
 
 export const INSTALLATION_CANDIDATE_SCHEMA_VERSION =
-  'communities-role-split-installation-candidate-v10';
+  'communities-role-split-installation-candidate-v14';
 export const INSTALLATION_CANDIDATE_DIGEST_VERSION =
-  'PHUB_COMMUNITIES_ROLE_SPLIT_INSTALLATION_CANDIDATE_DIGEST_V10';
+  'PHUB_COMMUNITIES_ROLE_SPLIT_INSTALLATION_CANDIDATE_DIGEST_V14';
 export const INSTALLATION_CANDIDATE_CONTROL_VERSION =
-  'PHUB_COMMUNITIES_ROLE_SPLIT_HOST_INSTALL_CONTROL_V7';
+  'PHUB_COMMUNITIES_ROLE_SPLIT_HOST_INSTALL_CONTROL_V11';
 
 const sha40Pattern = /^[0-9a-f]{40}$/u;
 const sha256Pattern = /^[0-9a-f]{64}$/u;
@@ -226,6 +226,21 @@ const fileDefinitions: readonly CandidateArtifactDefinition[] = [
     purpose:
       'trusted-inventory host boundary snapshot; no CLI, producer composition or credential reader',
   },
+  {
+    sourcePath:
+      'apps/migrator/src/communities-staging-role-split-trusted-inventory-supervised-producer.ts',
+    sourceGitMode: '100644',
+    artifactPath:
+      'payload/source/communities-staging-role-split-trusted-inventory-supervised-producer.ts',
+    targetRelativePath:
+      'source/communities-staging-role-split-trusted-inventory-supervised-producer.ts',
+    action: 'INSTALL_NEW',
+    installOwner: 'root',
+    installGroup: 'root',
+    installMode: '0444',
+    purpose:
+      'trusted-inventory supervised producer composition snapshot; source-only, deliberately unwired and non-runnable',
+  },
   ...[
     'communities-staging-role-split-v3-durable-host.ts',
     'communities-staging-role-split-v3-external-phase-anchor.ts',
@@ -267,6 +282,136 @@ const fileDefinitions: readonly CandidateArtifactDefinition[] = [
     installMode: '0444',
     purpose: 'reviewed V3 authorization source snapshot; deliberately unwired and non-runnable',
   })),
+  ...[
+    {
+      sourcePath: 'packages/database/src/communities-staging-role-split-trusted-inventory-gate.ts',
+      artifactName: 'communities-staging-role-split-trusted-inventory-gate-database.ts',
+      purpose: 'trusted-inventory review-gate contract snapshot; no custody or execution authority',
+    },
+    {
+      sourcePath: 'apps/migrator/src/communities-staging-role-split-trusted-inventory-gate.ts',
+      artifactName: 'communities-staging-role-split-trusted-inventory-gate.ts',
+      purpose: 'trusted-inventory review-gate verifier snapshot; runtime inputs remain untrusted',
+    },
+    {
+      sourcePath:
+        'packages/database/src/communities-staging-role-split-trusted-inventory-authorization-request.ts',
+      artifactName:
+        'communities-staging-role-split-trusted-inventory-authorization-request-database.ts',
+      purpose:
+        'trusted-inventory authorization-request contract snapshot; every granted authority false',
+    },
+    {
+      sourcePath:
+        'apps/migrator/src/communities-staging-role-split-trusted-inventory-authorization-request.ts',
+      artifactName: 'communities-staging-role-split-trusted-inventory-authorization-request.ts',
+      purpose:
+        'trusted-inventory authorization-request verifier snapshot; evidence remains external',
+    },
+    {
+      sourcePath:
+        'packages/database/src/communities-staging-role-split-trusted-inventory-authorization.ts',
+      artifactName: 'communities-staging-role-split-trusted-inventory-authorization-database.ts',
+      purpose:
+        'trusted-inventory single-use authorization contract snapshot; serialized authority remains false',
+    },
+    {
+      sourcePath:
+        'apps/migrator/src/communities-staging-role-split-trusted-inventory-authorization-loader.ts',
+      artifactName: 'communities-staging-role-split-trusted-inventory-authorization-loader.ts',
+      purpose:
+        'trusted-inventory issuer/loader snapshot; concrete clock, ledger, approval and evidence absent',
+    },
+  ].map(({ sourcePath, artifactName, purpose }): CandidateArtifactDefinition => ({
+    sourcePath,
+    sourceGitMode: '100644',
+    artifactPath: `payload/source/${artifactName}`,
+    targetRelativePath: `source/${artifactName}`,
+    action: 'INSTALL_NEW',
+    installOwner: 'root',
+    installGroup: 'root',
+    installMode: '0444',
+    purpose,
+  })),
+  {
+    sourcePath:
+      'apps/migrator/src/communities-staging-role-split-trusted-inventory-runtime-wiring.ts',
+    sourceGitMode: '100644',
+    artifactPath:
+      'payload/source/communities-staging-role-split-trusted-inventory-runtime-wiring.ts',
+    targetRelativePath: 'source/communities-staging-role-split-trusted-inventory-runtime-wiring.ts',
+    action: 'INSTALL_NEW',
+    installOwner: 'root',
+    installGroup: 'root',
+    installMode: '0444',
+    purpose: 'reviewed trusted-inventory runtime wiring source snapshot; execution inputs absent',
+  },
+  {
+    sourcePath:
+      'apps/migrator/src/communities-staging-role-split-trusted-inventory-runtime-module.ts',
+    sourceGitMode: '100644',
+    artifactPath:
+      'payload/source/communities-staging-role-split-trusted-inventory-runtime-module.ts',
+    targetRelativePath: 'source/communities-staging-role-split-trusted-inventory-runtime-module.ts',
+    action: 'INSTALL_NEW',
+    installOwner: 'root',
+    installGroup: 'root',
+    installMode: '0444',
+    purpose: 'fail-closed runtime module source snapshot; direct invocation rejects execution',
+  },
+  {
+    sourcePath:
+      'deploy/jetson/generated/communities-staging-role-split-trusted-inventory-runtime.mjs',
+    sourceGitMode: '100644',
+    artifactPath: 'payload/runtime/communities-staging-role-split-trusted-inventory-runtime.mjs',
+    targetRelativePath: 'runtime/communities-staging-role-split-trusted-inventory-runtime.mjs',
+    action: 'INSTALL_NEW',
+    installOwner: 'root',
+    installGroup: 'root',
+    installMode: '0444',
+    purpose:
+      'self-contained Node 22 runtime bundle; no configuration, activation link or execution authority',
+  },
+  {
+    sourcePath:
+      'apps/migrator/src/communities-staging-role-split-trusted-inventory-gate-preflight.ts',
+    sourceGitMode: '100644',
+    artifactPath:
+      'payload/source/communities-staging-role-split-trusted-inventory-gate-preflight.ts',
+    targetRelativePath: 'source/communities-staging-role-split-trusted-inventory-gate-preflight.ts',
+    action: 'INSTALL_NEW',
+    installOwner: 'root',
+    installGroup: 'root',
+    installMode: '0444',
+    purpose:
+      'offline trusted-inventory gate preflight source snapshot; reads only four pinned review inputs',
+  },
+  {
+    sourcePath: 'apps/migrator/src/verify-communities-staging-role-split-trusted-inventory-gate.ts',
+    sourceGitMode: '100644',
+    artifactPath: 'payload/source/verify-communities-staging-role-split-trusted-inventory-gate.ts',
+    targetRelativePath: 'source/verify-communities-staging-role-split-trusted-inventory-gate.ts',
+    action: 'INSTALL_NEW',
+    installOwner: 'root',
+    installGroup: 'root',
+    installMode: '0444',
+    purpose:
+      'offline trusted-inventory gate preflight CLI source snapshot; invalid input fails closed',
+  },
+  {
+    sourcePath:
+      'deploy/jetson/generated-gate-preflight/verify-communities-staging-role-split-trusted-inventory-gate.mjs',
+    sourceGitMode: '100644',
+    artifactPath:
+      'payload/runtime/verify-communities-staging-role-split-trusted-inventory-gate.mjs',
+    targetRelativePath: 'runtime/verify-communities-staging-role-split-trusted-inventory-gate.mjs',
+    action: 'INSTALL_NEW',
+    installOwner: 'root',
+    installGroup: 'root',
+    installMode: '0444',
+    purpose:
+      'self-contained Node 22 offline preflight bundle; no producer, PostgreSQL or execution authority',
+  },
 ] as const;
 
 const unresolvedBindingCodes = [
@@ -284,10 +429,14 @@ const unresolvedBindingCodes = [
   'SOURCE_WRITE_DENIAL_ATTESTATION',
   'STAGING_KNOWN_HOSTS_PIN',
   'TRUSTED_INVENTORY_CREDENTIAL_FD_READER',
+  'TRUSTED_INVENTORY_DURABLE_SINGLE_USE_LEDGER',
+  'TRUSTED_INVENTORY_FAIL_CLOSED_CLOCK_ADAPTER',
   'TRUSTED_INVENTORY_INDEPENDENT_ARTIFACT_PIN',
+  'TRUSTED_INVENTORY_INDEPENDENT_ATTESTED_EVIDENCE',
+  'TRUSTED_INVENTORY_INDEPENDENT_APPROVAL',
   'TRUSTED_INVENTORY_MARKER_EVIDENCE_MAPPING_INPUTS',
   'TRUSTED_INVENTORY_PRIVATE_OUTPUT_CUSTODY',
-  'TRUSTED_INVENTORY_SUPERVISED_PRODUCER_COMPOSITION',
+  'TRUSTED_INVENTORY_SUPERVISED_PRODUCER_RUNTIME_WIRING',
 ] as const;
 
 function fail(code: string): never {

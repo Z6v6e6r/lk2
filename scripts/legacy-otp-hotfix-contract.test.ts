@@ -38,7 +38,7 @@ const authorityScript = workflow
 const validAuthority = {
   OPERATION: 'RECOVER',
   EXPECTED_ACTIVE_RELEASE: 'e308181da5222645d9a87d03642923c6841be8d1',
-  CANDIDATE_SHA: '1'.repeat(40),
+  CANDIDATE_SHA: 'c4aa5e8106fffc9a4fb8f9fb03efc9a6ba1c3239',
   CONFIRMATION: 'RECOVER_LEGACY_OTP_HOTFIX_CANARY',
   ORIGINAL_CONTROL_SHA: '2'.repeat(40),
   ORIGINAL_RUN_ID: '12345',
@@ -47,12 +47,22 @@ const validAuthority = {
   CONTROL_SHA: '3'.repeat(40),
   WORKFLOW_SHA: '3'.repeat(40),
   SUPPORTED_ACTIVE_RELEASE: 'e308181da5222645d9a87d03642923c6841be8d1',
+  SUPPORTED_CANDIDATE_SHA: 'c4aa5e8106fffc9a4fb8f9fb03efc9a6ba1c3239',
 };
 
 function runAuthority(overrides: Record<string, string>) {
   return spawnSync('sh', ['-c', authorityScript], {
     env: { ...process.env, GITHUB_OUTPUT: '/dev/null', ...validAuthority, ...overrides },
   });
+}
+
+function getWorkflowStepRun(name: string) {
+  const document = parse(workflow) as {
+    jobs?: { operate?: { steps?: Array<{ name?: string; run?: string }> } };
+  };
+  const run = document.jobs?.operate?.steps?.find((step) => step.name === name)?.run;
+  if (!run) throw new Error(`Workflow step not found: ${name}`);
+  return run;
 }
 
 const activeRelease = 'e308181da5222645d9a87d03642923c6841be8d1';
@@ -63,7 +73,16 @@ const browserJobId = '11111111-1111-4111-8111-111111111111';
 const browserUserId = '33333333-3333-4333-8333-333333333333';
 const browserTenantId = '44444444-4444-4444-8444-444444444444';
 const browserSessionId = '55555555-5555-4555-8555-555555555555';
+const browserAuthCorrelationId = '88888888-8888-4888-8888-888888888888';
 const successfulBrowserReadLogs = [
+  JSON.stringify({
+    metric: {
+      operation: 'verify_browser_phone_token',
+      outcome: 'success',
+      correlationId: browserAuthCorrelationId,
+    },
+    msg: 'identity provider operation',
+  }),
   JSON.stringify({
     reqId: 'browser-read-result',
     req: {
@@ -256,9 +275,13 @@ function prepareControllerFixture() {
   const appRoot = join(root, 'app');
   const bundle = join(appRoot, 'legacy-otp-hotfix-candidates', '123-1');
   const fakeBin = join(root, 'bin');
+  const dockerRoot = join(root, 'docker-root');
+  const webAssetOverlayState = join(root, 'web-asset-overlay.state');
+  const webCreatedState = join(root, 'web-created.state');
   mkdirSync(join(appRoot, 'backups', 'releases'), { recursive: true });
   mkdirSync(bundle, { recursive: true });
   mkdirSync(fakeBin);
+  mkdirSync(dockerRoot);
   writeFileSync(join(appRoot, 'compose.yaml'), 'services: {}\n');
   writeFileSync(join(bundle, 'compose.staging.yaml'), 'services: {}\n');
   writeFileSync(join(appRoot, 'release.env'), releaseFile(activeRelease, 'a'));
@@ -302,6 +325,7 @@ if test "$1" = inspect; then
   release=$(sed -n 's/^RELEASE=//p' "$PHUB_APP_ROOT/release.env")
   stopped=false
   if test "\${PHUB_FAKE_STOPPED_SERVICE:-}" = "$service" && test "\${PHUB_FAKE_STOPPED_RELEASE:-}" = "$release"; then stopped=true; fi
+  if test "$service" = web && test -e "$PHUB_FAKE_WEB_CREATED_STATE"; then stopped=true; fi
   case "$format" in
     *State.Running*) if test "$stopped" = true; then printf 'false\\n'; else printf 'true\\n'; fi ;;
     *State.Health.Status* | *'if .State.Health'*)
@@ -327,10 +351,22 @@ if test "$1" = inspect; then
   exit 0
 fi
 if test "$1" = image && test "$2" = inspect; then
-  case " $* " in *' --format {{.Architecture}} '*) printf 'arm64\n' ;; esac
+  case " $* " in
+    *' --format {{.Architecture}} '*) printf 'arm64\n' ;;
+    *' --format {{.Size}} '*) printf '%s\n' "\${PHUB_FAKE_WEB_IMAGE_SIZE_BYTES:-1048576}" ;;
+  esac
+  exit 0
+fi
+if test "$1" = info; then
+  printf '%s\n' "$PHUB_FAKE_DOCKER_ROOT"
   exit 0
 fi
 if test "$1" = pull; then exit 0; fi
+if test "$1" = create; then
+  printf '%s\n' immutable-assets-container-id
+  exit 0
+fi
+if test "$1" = rm; then exit 0; fi
 if test "$1" = run; then
   service=''
   case " $* " in
@@ -341,6 +377,53 @@ if test "$1" = run; then
   esac
   test -z "\${PHUB_FAKE_IMPORT_PROBES:-}" || printf '%s|%s\n' "$service" "$*" >> "$PHUB_FAKE_IMPORT_PROBES"
   test "\${PHUB_FAKE_IMPORT_FAILURE_SERVICE:-}" != "$service" || exit 93
+  exit 0
+fi
+if test "$1" = cp; then
+  case "$2" in
+    phub-legacy-otp-assets-*:/usr/share/nginx/html/assets/.)
+      mkdir -p "$3"
+      if test "\${PHUB_FAKE_WEB_ASSET_MODE:-safe}" = nested; then
+        mkdir -p "$3/nested"
+        printf 'unsafe\n' > "$3/nested/chunk-BfVFEYSR.js"
+      else
+        printf 'old-entry\n' > "$3/app-DUx85CW8.js"
+        if test "\${PHUB_FAKE_WEB_ASSET_MODE:-safe}" != missing-incident; then
+          printf 'old-chunk\n' > "$3/chunk-BfVFEYSR.js"
+        fi
+        if test "\${PHUB_FAKE_WEB_ASSET_MODE:-safe}" = hidden; then
+          printf 'hidden\n' > "$3/.hidden-asset"
+        fi
+      fi
+      ;;
+    web-id:/usr/share/nginx/html/assets/.)
+      mkdir -p "$3"
+      if test -f "$PHUB_FAKE_WEB_ASSET_OVERLAY_STATE"; then
+        overlay_source=$(cat "$PHUB_FAKE_WEB_ASSET_OVERLAY_STATE")
+        cp "$overlay_source"/* "$3/"
+        if test "\${PHUB_FAKE_WEB_ASSET_MODE:-safe}" = readback-mismatch; then
+          rm -f "$3/app-candidate.js"
+          printf 'tampered-readback\n' > "$3/app-candidate.js"
+        fi
+      else
+        printf 'candidate-entry\\n' > "$3/app-candidate.js"
+        printf 'candidate-chunk\\n' > "$3/chunk-candidate.js"
+        printf 'candidate-font\\n' > "$3/font-candidate.woff2"
+        if test "\${PHUB_FAKE_WEB_ASSET_MODE:-safe}" = collision-different; then
+          printf 'different-candidate-content\n' > "$3/app-DUx85CW8.js"
+        fi
+      fi
+      ;;
+    *)
+      case "$3" in
+        web-id:/usr/share/nginx/html/assets/)
+          overlay_source=\${2%/.}
+          printf '%s\n' "$overlay_source" > "$PHUB_FAKE_WEB_ASSET_OVERLAY_STATE"
+          ;;
+        *) exit 1 ;;
+      esac
+      ;;
+  esac
   exit 0
 fi
 if test "$1" = exec; then
@@ -372,6 +455,12 @@ if test "$1" = compose; then
     previous=$argument
   done
   case " $* " in
+    *' create --no-deps '*)
+      printf '%s\\n' 'unknown flag: --no-deps' >&2
+      exit 64
+      ;;
+  esac
+  case " $* " in
     *' config --images '*)
       registry=$(sed -n 's/^REGISTRY=//p' "$release_file")
       for service in web api worker realtime migrator; do
@@ -386,7 +475,7 @@ if test "$1" = compose; then
       ;;
     *' exec -T postgres sh -eu -c '*)
       test "\${PHUB_FAKE_EVIDENCE_FAILURE:-0}" != 1 || exit 95
-      printf '%s|%s|%s|%s\\n' "\${PHUB_FAKE_EVIDENCE_COUNT:-1}" "\${PHUB_FAKE_EVIDENCE_USER_ID:-${browserUserId}}" "\${PHUB_FAKE_EVIDENCE_TENANT_ID:-${browserTenantId}}" "\${PHUB_FAKE_EVIDENCE_SESSION_ID:-${browserSessionId}}"
+      printf '%s|%s|%s|%s|%s\\n' "\${PHUB_FAKE_EVIDENCE_COUNT:-1}" "\${PHUB_FAKE_EVIDENCE_USER_ID:-${browserUserId}}" "\${PHUB_FAKE_EVIDENCE_TENANT_ID:-${browserTenantId}}" "\${PHUB_FAKE_EVIDENCE_SESSION_ID:-${browserSessionId}}" "\${PHUB_FAKE_EVIDENCE_CORRELATION_ID:-${browserAuthCorrelationId}}"
       ;;
     *' exec -T redis redis-cli --raw GET '*)
       printf '{"jobId":"%s","screen":"FOR_ME","tenantId":"%s","userId":"%s","sessionId":"%s","createdAt":"%s"}\\n' '${browserJobId}' '${browserTenantId}' '${browserUserId}' "\${PHUB_FAKE_JOB_SESSION_ID:-${browserSessionId}}" "\${PHUB_FAKE_JOB_CREATED_AT:-$(date -u '+%Y-%m-%dT%H:%M:%SZ')}"
@@ -395,6 +484,9 @@ if test "$1" = compose; then
       printf 'phub:booking-screen-read-result:%s:22222222-2222-4222-8222-222222222222\\n' '${browserJobId}'
       ;;
     *' exec -T postgres pg_restore --list '*) : ;;
+    *' up --no-start --no-deps --force-recreate --pull never web '*) touch "$PHUB_FAKE_WEB_CREATED_STATE" ;;
+    *' start web '*) rm -f "$PHUB_FAKE_WEB_CREATED_STATE" ;;
+    *' up -d '*' web '*) rm -f "$PHUB_FAKE_WEB_CREATED_STATE" ;;
     *' up -d '*) : ;;
   esac
   exit 0
@@ -406,6 +498,22 @@ exit 1
     join(fakeBin, 'curl'),
     `#!/bin/sh
 set -eu
+output=''
+previous=''
+for argument in "$@"; do
+  if test "$previous" = --output; then output=$argument; fi
+  previous=$argument
+done
+case " $* " in
+  *'/assets/app-DUx85CW8.js'*)
+    if test "\${PHUB_FAKE_WEB_ASSET_MODE:-safe}" = public-mismatch; then content='tampered-public'; else content='old-entry'; fi
+    ;;
+  *'/assets/chunk-BfVFEYSR.js'*) content='old-chunk' ;;
+esac
+if test -n "\${content:-}"; then
+  if test -n "$output"; then printf '%s\\n' "$content" > "$output"; else printf '%s\\n' "$content"; fi
+  exit 0
+fi
 release=$(sed -n 's/^RELEASE=//p' "$PHUB_APP_ROOT/release.env")
 printf '{"release":"%s"}\\n' "$release"
 `,
@@ -413,8 +521,23 @@ printf '{"release":"%s"}\\n' "$release"
   executable(
     join(fakeBin, 'df'),
     `#!/bin/sh
+available=\${PHUB_FAKE_DF_AVAILABLE:-19999999}
+device=fixture
+path=''
+for argument in "$@"; do path=$argument; done
+case " $* " in
+  *' -Pi '*)
+    available=\${PHUB_FAKE_DF_AVAILABLE_INODES:-19999999}
+    if test "\${PHUB_FAKE_SPLIT_DOCKER_FS:-0}" = 1 && test "$path" = "$PHUB_FAKE_DOCKER_ROOT"; then
+      available=\${PHUB_FAKE_DOCKER_DF_AVAILABLE_INODES:-$available}
+    fi
+    ;;
+esac
+if test "\${PHUB_FAKE_SPLIT_DOCKER_FS:-0}" = 1 && test "$path" = "$PHUB_FAKE_DOCKER_ROOT"; then
+  device=docker-fixture
+fi
 printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\\n'
-printf 'fixture 20000000 1 19999999 1%% /fixture\\n'
+printf '%s 20000000 1 %s 1%% /fixture\\n' "$device" "$available"
 `,
   );
   executable(join(fakeBin, 'flock'), '#!/bin/sh\nexit 0\n');
@@ -447,17 +570,29 @@ esac
   executable(
     join(fakeBin, 'sha256sum'),
     `#!/bin/sh
-printf '${composeSha}  %s\\n' "$1"
+for path in "$@"; do
+  case "$path" in
+    */compose.yaml | */compose.staging.yaml) printf '${composeSha}  %s\\n' "$path" ;;
+    *) /usr/bin/shasum -a 256 "$path" ;;
+  esac
+done
 `,
   );
   executable(
     join(fakeBin, 'stat'),
     `#!/bin/sh
-if test "$1" = -c; then printf 'regular file:1:%s:%s:600\\n' "$(id -u)" "$(id -g)"; else /usr/bin/stat "$@"; fi
+if test "$1" = -c; then
+  case "$2" in
+    %a) printf '444\\n' ;;
+    *) printf 'regular file:1:%s:%s:600\\n' "$(id -u)" "$(id -g)" ;;
+  esac
+else
+  /usr/bin/stat "$@"
+fi
 `,
   );
 
-  return { root, appRoot, bundle, fakeBin };
+  return { root, appRoot, bundle, fakeBin, dockerRoot, webAssetOverlayState, webCreatedState };
 }
 
 function runController(
@@ -487,6 +622,9 @@ function runController(
         ...process.env,
         PATH: `${fixture.fakeBin}:${process.env.PATH ?? ''}`,
         PHUB_APP_ROOT: fixture.appRoot,
+        PHUB_FAKE_DOCKER_ROOT: fixture.dockerRoot,
+        PHUB_FAKE_WEB_ASSET_OVERLAY_STATE: fixture.webAssetOverlayState,
+        PHUB_FAKE_WEB_CREATED_STATE: fixture.webCreatedState,
         ...extraEnvironment,
       },
       encoding: 'utf8',
@@ -511,6 +649,8 @@ describe('legacy OTP hotfix canary release contract', () => {
     expect(workflow).toContain('cancel-in-progress: false');
     expect(workflow).toContain('test "$REQUEST_REF" = refs/heads/main');
     expect(workflow).toContain('test "$WORKFLOW_SHA" = "$CONTROL_SHA"');
+    expect(workflow).toContain('SUPPORTED_CANDIDATE_SHA: c4aa5e8106fffc9a4fb8f9fb03efc9a6ba1c3239');
+    expect(workflow).toContain('test "$CANDIDATE_SHA" = "$SUPPORTED_CANDIDATE_SHA"');
     expect(workflow).toContain('START:START_LEGACY_OTP_HOTFIX_CANARY');
     expect(workflow).toContain('RECOVER:RECOVER_LEGACY_OTP_HOTFIX_CANARY');
     const uses = workflow
@@ -523,6 +663,7 @@ describe('legacy OTP hotfix canary release contract', () => {
 
   it('rejects multiline and alternate authority values before SSH interpolation', () => {
     expect(runAuthority({}).status).toBe(0);
+    expect(runAuthority({ CANDIDATE_SHA: '1'.repeat(40) }).status).not.toBe(0);
     for (const [key, value] of [
       ['CANDIDATE_SHA', `${'1'.repeat(40)}\n'; touch /tmp/no`],
       ['EXPECTED_ACTIVE_RELEASE', `e308181da5222645d9a87d03642923c6841be8d1\ninvalid`],
@@ -536,14 +677,23 @@ describe('legacy OTP hotfix canary release contract', () => {
 
   it('verifies the immutable browser-context child of e308 and protects release inputs', () => {
     expect(verifier).toContain('supported_active_release=e308181da5222645d9a87d03642923c6841be8d1');
+    expect(verifier).toContain('supported_candidate_sha=c4aa5e8106fffc9a4fb8f9fb03efc9a6ba1c3239');
     expect(verifier).toContain(
-      'supported_patch_sha256=515e2fc2062aa20c6ee91199e77c7887769a7e1db0920a8c14a117f398b75012',
+      'test "$candidate" = "$supported_candidate_sha" || fail \'candidate is not the exact reviewed OTP hotfix commit\'',
+    );
+    expect(verifier).toContain(
+      'supported_patch_sha256=399d38e983d6f0dc54c97bda377c12a74357db4c1104a9fa1a32406cac1ed35d',
     );
     expect(verifier).toContain(
       'test "$(printf \'%s\\n\' "$parent_line" | awk \'{ print NF }\')" -eq 2',
     );
     expect(verifier).toContain('packages/viva-adapter/src/identity.test.ts');
     expect(verifier).toContain('packages/viva-adapter/src/identity.ts');
+    expect(verifier).toContain('apps/api/src/auth/auth-routes.ts');
+    expect(verifier).toContain('apps/api/src/auth/challenge-store.ts');
+    expect(verifier).toContain('apps/web/src/viva-browser-otp.ts');
+    expect(verifier).toContain('apps/web/src/viva-browser-otp.test.ts');
+    expect(verifier).toContain('contracts/openapi/user/v1/openapi.yaml');
     expect(verifier).toContain('scripts/verify-production-workspace-imports.js');
     expect(verifier).toContain('scripts/verify-production-workspace-imports.test.ts');
     for (const service of ['api', 'worker', 'realtime', 'migrator']) {
@@ -569,12 +719,34 @@ describe('legacy OTP hotfix canary release contract', () => {
     expect(verifier).toContain('candidate config does not fail closed for retired Viva Home sync');
     expect(verifier).toContain('candidate lacks the reviewed recovery-only OAuth boundary');
     expect(verifier).toContain(
+      'candidate does not require browser proof for a browser OTP challenge',
+    );
+    expect(verifier).toContain(
+      'candidate does not verify the browser access-token proof server-side',
+    );
+    expect(verifier).toContain('candidate does not require an explicit browser OTP capability');
+    expect(verifier).toContain(
+      'candidate does not restrict browser OTP capability to the web client',
+    );
+    expect(verifier).toContain(
+      'candidate does not bind browser OTP to the configured first-party Origin',
+    );
+    expect(verifier).toContain('candidate browser OTP transport does not omit browser credentials');
+    expect(verifier).toContain(
+      'candidate browser OTP transport lacks the reviewed bounded timeout',
+    );
+    expect(verifier).toContain(
+      'candidate browser OTP boundary does not explicitly discard the Viva refresh token',
+    );
+    expect(verifier).toContain(
       'candidate routing outcomes are not bound to the authenticated session',
     );
     expect(verifier).toContain('candidate browser transport does not correlate Viva success');
     expect(verifier).toContain('outside the routing-outcome body contract');
     expect(verifier).toContain('through X-Correlation-ID');
-    expect(verifier).toContain('paths=34 migrations=unchanged contracts=unchanged');
+    expect(verifier).toContain(
+      'paths=41 migrations=unchanged contracts=user_v1_otp_reviewed compose=unchanged',
+    );
     expect(verifier).toContain('image copies builder node_modules');
     expect(verifier).toContain('image prunes a copied dependency tree');
     expect(checkout).toContain('checkout-legacy-runtime-secret-bootstrap-candidate.sh');
@@ -712,7 +884,10 @@ describe('legacy OTP hotfix canary release contract', () => {
     expect(workflow).toContain('timeout --signal=TERM --kill-after=30s 2400s ssh');
     expect(workflow).toContain('timeout --signal=TERM --kill-after=30s 1800s ssh');
     expect(workflow).toContain('timeout --signal=TERM --kill-after=5s 30s ssh');
-    expect(workflow).toContain('timeout --signal=TERM --kill-after=5s 900s sh -eu -c');
+    expect(workflow).toContain('timeout --signal=TERM --kill-after=5s 900s sh -u -c');
+    expect(workflow).not.toContain('timeout --signal=TERM --kill-after=5s 900s sh -eu -c');
+    expect(workflow).toContain('candidate_public_probe=pending status=retrying');
+    expect(workflow).toContain('otp_attestation=pending status=retrying');
     expect(workflow).toContain('timeout --signal=TERM --kill-after=5s 300s sh -eu -c');
     expect(workflow).toContain('test "$observation_status" -eq 0');
     expect(
@@ -728,6 +903,86 @@ describe('legacy OTP hotfix canary release contract', () => {
     );
     expect(dispatchInputs).not.toMatch(/phone|otp_code|verification_code|refresh_token/i);
     expect(workflow).toContain('ATTEST_LEGACY_OTP_HOTFIX_CANARY');
+  });
+
+  it('retries a transient public probe failure without collapsing the canary window', () => {
+    const root = mkdtempSync(join(tmpdir(), 'phub-legacy-otp-hold-'));
+    const bin = join(root, 'bin');
+    const curlCount = join(root, 'curl-count');
+    mkdirSync(bin);
+    mkdirSync(join(root, 'evidence'));
+
+    const writeExecutable = (name: string, body: string) => {
+      const path = join(bin, name);
+      writeFileSync(path, body);
+      chmodSync(path, 0o755);
+    };
+
+    writeExecutable(
+      'timeout',
+      `#!/bin/sh
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --signal=*|--kill-after=*) shift ;;
+    *s) shift; break ;;
+    *) break ;;
+  esac
+done
+exec "$@"
+`,
+    );
+    writeExecutable(
+      'curl',
+      `#!/bin/sh
+count=0
+if [ -f "$MOCK_CURL_COUNT" ]; then count=$(cat "$MOCK_CURL_COUNT"); fi
+count=$((count + 1))
+printf '%s\n' "$count" > "$MOCK_CURL_COUNT"
+if [ "$count" -eq 1 ]; then exit 28; fi
+case "$*" in
+  *manifest.json*) printf '%s' '{"release":"5e62399b4f923c726c602b2c1bbe6c0b5cb8b0d7"}' ;;
+esac
+`,
+    );
+    writeExecutable('ssh', '#!/bin/sh\nexit 0\n');
+    writeExecutable('sleep', '#!/bin/sh\nexit 0\n');
+
+    try {
+      const result = spawnSync(
+        'bash',
+        [
+          '-c',
+          getWorkflowStepRun(
+            'Hold the bounded browser window and require OTP plus Viva read success',
+          ),
+        ],
+        {
+          cwd: root,
+          encoding: 'utf8',
+          env: {
+            ...process.env,
+            PATH: `${bin}:${process.env.PATH ?? ''}`,
+            MOCK_CURL_COUNT: curlCount,
+            SSH_OPTIONS: '',
+            HOST: 'staging.invalid',
+            BUNDLE: '/tmp/bundle',
+            CONTROL_SHA: '2'.repeat(40),
+            RUN_ID: '12345',
+            RUN_ATTEMPT: '1',
+            EXPECTED_ACTIVE_RELEASE: activeRelease,
+            CANDIDATE_SHA: '5e62399b4f923c726c602b2c1bbe6c0b5cb8b0d7',
+          },
+        },
+      );
+
+      expect(result.status).toBe(0);
+      expect(Number(readFileSync(curlCount, 'utf8').trim())).toBeGreaterThan(5);
+      const evidence = readFileSync(join(root, 'evidence', 'observation.txt'), 'utf8');
+      expect(evidence).toContain('candidate_public_probe=pending status=retrying');
+      expect(evidence).toContain('otp_evidence=passed browser_read_evidence=passed');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('publishes a durable marker before stopping runtime and converges recovery backward', () => {
@@ -767,9 +1022,8 @@ describe('legacy OTP hotfix canary release contract', () => {
     expect(controller).toContain(
       'scope=local-padel_database source=$source operation=session_evidence',
     );
-    expect(controller).toContain(
-      'delegation.refresh_expires_at is null or delegation.refresh_expires_at > now()',
-    );
+    expect(controller).not.toContain('integration.user_delegations');
+    expect(controller).not.toContain('delegation.refresh_expires_at');
     expect(controller).toContain('CANDIDATE_READY_AT_EPOCH=0');
     expect(controller).toContain('test "$candidate_ready_at_epoch" -gt 0');
     const candidatePublic = controller.lastIndexOf('verify_public_release "$candidate_release"');
@@ -821,6 +1075,197 @@ describe('legacy OTP hotfix canary release contract', () => {
     expect(controller).not.toContain('psql <');
   });
 
+  it('keeps the previous flat hashed assets available in the temporary candidate web container', () => {
+    const capture = controller.indexOf('capture_previous_web_assets\n');
+    const stop = controller.lastIndexOf('stop_runtime\n');
+    const startFunction = controller.slice(
+      controller.indexOf('start_runtime() {'),
+      controller.indexOf('restore_from_marker() {'),
+    );
+    const createWeb = startFunction.indexOf(
+      'up --no-start --no-deps --force-recreate --pull never web',
+    );
+    const install = startFunction.indexOf('install_previous_web_assets "$candidate_web_id"');
+    const startWeb = startFunction.indexOf('start web');
+    const publicRelease = controller.lastIndexOf('verify_public_release "$candidate_release"');
+    expect(capture).toBeGreaterThan(0);
+    expect(capture).toBeLessThan(stop);
+    expect(createWeb).toBeGreaterThan(0);
+    expect(startFunction).not.toContain('compose_with "$release_file" create');
+    expect(install).toBeGreaterThan(createWeb);
+    expect(startWeb).toBeGreaterThan(install);
+    expect(controller.lastIndexOf('start_runtime "$app_root/release.env" candidate')).toBeLessThan(
+      publicRelease,
+    );
+    expect(controller).toContain('find "$directory" -mindepth 2 -print -quit');
+    expect(controller).toContain('web asset count is outside the bounded range');
+    expect(controller).toContain('web assets exceed the bounded size');
+    expect(controller).toContain(
+      "required_previous_web_assets='app-DUx85CW8.js chunk-BfVFEYSR.js'",
+    );
+    expect(controller).toContain('candidate web asset hash collision differs');
+
+    const fixture = prepareControllerFixture();
+    try {
+      const opened = runController(fixture, 'start');
+      expect(opened.status, opened.stderr).toBe(0);
+      expect(opened.stdout).toContain(
+        'previous_web_assets source=immutable_image count=2 size_kib=',
+      );
+      expect(opened.stdout).toContain(
+        'previous_web_assets installed=2 reused=0 overlay_manifest_sha256=',
+      );
+      expect(opened.stdout).toContain('status=compatible');
+      expect(opened.stdout).toContain('previous_web_assets ingress_hashes=passed status=served');
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  it('rejects a nested previous-asset snapshot before publishing the transition marker', () => {
+    const fixture = prepareControllerFixture();
+    try {
+      const result = runController(fixture, 'start', { PHUB_FAKE_WEB_ASSET_MODE: 'nested' });
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain('web asset snapshot contains nested paths');
+      expect(readFileSync(join(fixture.appRoot, 'release.env'), 'utf8')).toContain(
+        `RELEASE=${activeRelease}`,
+      );
+      for (const name of ['previous-web-assets', 'previous-web-assets.next']) {
+        expect(() => readFileSync(join(fixture.bundle, name))).toThrow();
+      }
+      expect(() =>
+        readFileSync(join(fixture.appRoot, '.legacy-otp-hotfix.transition.env')),
+      ).toThrow();
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  it('rolls back when a same-name candidate asset has different content', () => {
+    const fixture = prepareControllerFixture();
+    try {
+      const result = runController(fixture, 'start', {
+        PHUB_FAKE_WEB_ASSET_MODE: 'collision-different',
+      });
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain('candidate web asset hash collision differs');
+      expect(readFileSync(join(fixture.appRoot, 'release.env'), 'utf8')).toContain(
+        `RELEASE=${activeRelease}`,
+      );
+      expect(() =>
+        readFileSync(join(fixture.appRoot, '.legacy-otp-hotfix.transition.env')),
+      ).toThrow();
+      expect(result.stdout).toContain(`operation=rollback release=${activeRelease} status=passed`);
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  it.each([
+    ['missing-incident', 'incident previous web asset is absent from the immutable image', false],
+    ['hidden', 'web asset snapshot contains a hidden file', false],
+    ['readback-mismatch', 'candidate web asset readback manifest differs', true],
+    ['public-mismatch', 'public previous web asset hash differs', true],
+  ] as const)(
+    'fails closed for %s web asset evidence',
+    (mode, expectedError, keepsManifest) => {
+      const fixture = prepareControllerFixture();
+      try {
+        const result = runController(fixture, 'start', { PHUB_FAKE_WEB_ASSET_MODE: mode });
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain(expectedError);
+        expect(readFileSync(join(fixture.appRoot, 'release.env'), 'utf8')).toContain(
+          `RELEASE=${activeRelease}`,
+        );
+        expect(() =>
+          readFileSync(join(fixture.appRoot, '.legacy-otp-hotfix.transition.env')),
+        ).toThrow();
+        for (const directory of [
+          'previous-web-assets',
+          'previous-web-assets.next',
+          'candidate-web-assets',
+          'merged-web-assets',
+          'verified-web-assets',
+        ]) {
+          expect(() => readdirSync(join(fixture.bundle, directory))).toThrow();
+        }
+        const manifestPath = join(fixture.bundle, 'web-asset-overlay.sha256');
+        if (keepsManifest) {
+          expect(readFileSync(manifestPath, 'utf8')).toContain('./app-candidate.js');
+          expect(readdirSync(fixture.bundle).filter((name) => name.includes('web-asset'))).toEqual([
+            'web-asset-overlay.sha256',
+          ]);
+        } else {
+          expect(() => readFileSync(manifestPath)).toThrow();
+        }
+      } finally {
+        rmSync(fixture.root, { recursive: true, force: true });
+      }
+    },
+    20_000,
+  );
+
+  it('rejects insufficient combined host and Docker asset headroom before snapshot capture', () => {
+    const fixture = prepareControllerFixture();
+    try {
+      const result = runController(fixture, 'start', {
+        PHUB_FAKE_DF_AVAILABLE: '9000000',
+        PHUB_FAKE_WEB_IMAGE_SIZE_BYTES: '1073741824',
+      });
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain('combined-asset filesystem lacks required free space');
+      expect(readFileSync(join(fixture.appRoot, 'release.env'), 'utf8')).toContain(
+        `RELEASE=${activeRelease}`,
+      );
+      expect(() => readdirSync(join(fixture.bundle, 'previous-web-assets'))).toThrow();
+      expect(() =>
+        readFileSync(join(fixture.appRoot, '.legacy-otp-hotfix.transition.env')),
+      ).toThrow();
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  it.each([
+    [
+      'combined',
+      {
+        PHUB_FAKE_DF_AVAILABLE_INODES: '17000',
+      },
+      'combined-asset filesystem lacks required free inodes',
+    ],
+    [
+      'split Docker',
+      {
+        PHUB_FAKE_DF_AVAILABLE_INODES: '20000',
+        PHUB_FAKE_DOCKER_DF_AVAILABLE_INODES: '5000',
+        PHUB_FAKE_SPLIT_DOCKER_FS: '1',
+      },
+      'docker-asset filesystem lacks required free inodes',
+    ],
+  ] as const)(
+    'rejects insufficient %s asset inode headroom before snapshot capture',
+    (_scope, environment, expectedError) => {
+      const fixture = prepareControllerFixture();
+      try {
+        const result = runController(fixture, 'start', environment);
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain(expectedError);
+        expect(readFileSync(join(fixture.appRoot, 'release.env'), 'utf8')).toContain(
+          `RELEASE=${activeRelease}`,
+        );
+        expect(() => readdirSync(join(fixture.bundle, 'previous-web-assets'))).toThrow();
+        expect(() =>
+          readFileSync(join(fixture.appRoot, '.legacy-otp-hotfix.transition.env')),
+        ).toThrow();
+      } finally {
+        rmSync(fixture.root, { recursive: true, force: true });
+      }
+    },
+    15_000,
+  );
+
   it('checks all four candidate Node images offline and rejects failures before marker or backup', () => {
     const fixture = prepareControllerFixture();
     const probeLog = join(fixture.root, 'candidate-import-probes.log');
@@ -870,7 +1315,11 @@ describe('legacy OTP hotfix canary release contract', () => {
       controller.indexOf('start_runtime() {'),
       controller.indexOf('restore_from_marker() {'),
     );
-    expect(startFunction.indexOf('realtime api worker web')).toBeGreaterThan(0);
+    expect(startFunction.indexOf('realtime api worker')).toBeGreaterThan(0);
+    expect(
+      startFunction.indexOf('up --no-start --no-deps --force-recreate --pull never web'),
+    ).toBeGreaterThan(0);
+    expect(startFunction).not.toContain('compose_with "$release_file" create');
     expect(controller).toContain('assert_flags_disabled');
     for (const flag of [
       'HOME_VIVA_SYNC_ENABLED',
@@ -986,6 +1435,9 @@ describe('legacy OTP hotfix canary release contract', () => {
         'scope=candidate_api_window attribution=aggregate window=tail_5000 coverage=partial source=available operation=verify_code total=1 success=0 invalid=0 rate_limited=0 unavailable=1 http_2xx=1',
       );
       expect(result.stdout).toContain(
+        'scope=candidate_api_window attribution=aggregate window=tail_5000 source=available operation=verify_browser_phone_token total=1 success=1',
+      );
+      expect(result.stdout).toContain(
         'failure_token_request=0 failure_token_response=0 failure_post_token=1',
       );
       expect(result.stdout).not.toContain('operation=profile_read');
@@ -1001,6 +1453,8 @@ describe('legacy OTP hotfix canary release contract', () => {
       expect(`${result.stdout}${result.stderr}`).not.toContain('ignored-get-correlation');
       expect(`${result.stdout}${result.stderr}`).not.toContain('ignored-multisegment-correlation');
       expect(`${result.stdout}${result.stderr}`).not.toContain('accessToken');
+      expect(`${result.stdout}${result.stderr}`).not.toContain(browserAuthCorrelationId);
+      expect(controller).not.toContain('awk -v correlation=');
     } finally {
       rmSync(fixture.root, { recursive: true, force: true });
     }
@@ -1101,6 +1555,41 @@ describe('legacy OTP hotfix canary release contract', () => {
     }
   }, 60_000);
 
+  it('requires exactly one browser token verification bound to the session correlation', () => {
+    const fixture = prepareControllerFixture();
+    try {
+      const opened = runController(fixture, 'start');
+      expect(opened.status, opened.stderr).toBe(0);
+      const wrongCorrelation = runController(fixture, 'attest', {
+        PHUB_FAKE_CONTAINER_LOG: successfulBrowserReadLogs.replaceAll(
+          browserAuthCorrelationId,
+          '99999999-9999-4999-8999-999999999999',
+        ),
+      });
+      expect(wrongCorrelation.status).not.toBe(0);
+      expect(wrongCorrelation.stdout).toContain(
+        'browser_token_verification source=available success=0 outcome=insufficient',
+      );
+      expect(wrongCorrelation.stderr).toContain(
+        'expected exactly one correlation-bound browser phone-token verification',
+      );
+
+      const verificationLog = successfulBrowserReadLogs
+        .split('\n')
+        .find((line) => line.includes('verify_browser_phone_token'));
+      expect(verificationLog).toBeDefined();
+      const duplicate = runController(fixture, 'attest', {
+        PHUB_FAKE_CONTAINER_LOG: `${successfulBrowserReadLogs}\n${verificationLog}`,
+      });
+      expect(duplicate.status).not.toBe(0);
+      expect(duplicate.stdout).toContain(
+        'browser_token_verification source=available success=2 outcome=insufficient',
+      );
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  }, 60_000);
+
   it('restores exact e308 after a post-marker failure and retains the marker if rollback fails', () => {
     const restored = prepareControllerFixture();
     try {
@@ -1138,6 +1627,9 @@ describe('legacy OTP hotfix canary release contract', () => {
       expect(attested.stdout).toContain(
         'scope=local-padel_database source=available operation=session_evidence outcome=exactly_one',
       );
+      expect(attested.stdout).toContain(
+        'browser_token_verification source=available success=1 outcome=accepted',
+      );
       expect(attested.stdout).not.toContain('scope=candidate_api_window');
       expect(attested.stdout).toContain(
         'browser_read_evidence source=available same_job=true principal_bound=true result_2xx=1 complete_2xx=1 profile_success=1 schedule_success=1 outcome=accepted',
@@ -1153,6 +1645,18 @@ describe('legacy OTP hotfix canary release contract', () => {
       expect(
         readFileSync(join(retained.appRoot, '.legacy-otp-hotfix.release.next'), 'utf8'),
       ).toContain(`RELEASE=${activeRelease}`);
+      for (const directory of [
+        'previous-web-assets',
+        'previous-web-assets.next',
+        'candidate-web-assets',
+        'merged-web-assets',
+        'verified-web-assets',
+      ]) {
+        expect(() => readdirSync(join(retained.bundle, directory))).toThrow();
+      }
+      expect(readFileSync(join(retained.bundle, 'web-asset-overlay.sha256'), 'utf8')).toContain(
+        './app-candidate.js',
+      );
       const recovered = runController(retained, 'rollback');
       expect(recovered.status, recovered.stderr).toBe(0);
       expect(readFileSync(join(retained.appRoot, 'release.env'), 'utf8')).toContain(
@@ -1164,6 +1668,15 @@ describe('legacy OTP hotfix canary release contract', () => {
         '.legacy-otp-hotfix.release.next',
       ]) {
         expect(() => readFileSync(join(retained.appRoot, artifact))).toThrow();
+      }
+      for (const directory of [
+        'previous-web-assets',
+        'previous-web-assets.next',
+        'candidate-web-assets',
+        'merged-web-assets',
+        'verified-web-assets',
+      ]) {
+        expect(() => readdirSync(join(retained.bundle, directory))).toThrow();
       }
       expect(runTransitionClear(retained).status).toBe(0);
     } finally {
@@ -1274,12 +1787,12 @@ describe('legacy OTP hotfix canary release contract', () => {
       );
       expect(`${result.stdout}${result.stderr}`).not.toContain('PRIVATE_MARKER');
       expect(`${result.stdout}${result.stderr}`).not.toContain('ERR_MODULE_NOT_FOUND');
-      expect(readFileSync(join(stopped.appRoot, 'release.env'), 'utf8')).toContain(
+      expect(readFileSync(join(stopped.appRoot, 'release.env'), 'utf8'), result.stderr).toContain(
         `RELEASE=${activeRelease}`,
       );
       expect(runTransitionClear(stopped).status).toBe(0);
     } finally {
       rmSync(stopped.root, { recursive: true, force: true });
     }
-  }, 120_000);
+  }, 180_000);
 });
