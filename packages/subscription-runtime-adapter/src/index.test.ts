@@ -12,7 +12,7 @@ const quoteRequest = {
   paymentIntent: 'USE_SUBSCRIPTION',
 } as const;
 const envelope = {
-  authorization: 'Bearer user-runtime-token',
+  actorDelegation: 'eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJhY3RvciJ9.signature',
   correlationId: 'correlation:123',
   idempotencyKey: 'idempotency:123',
 } as const;
@@ -149,7 +149,7 @@ describe('ManagedSubscriptionRuntimeQuoteClient', () => {
       `https://subscription-runtime.example.test${MANAGED_SUBSCRIPTION_RUNTIME_V1_QUOTE_PATH}`,
     );
     expect(init?.headers).toMatchObject({
-      Authorization: envelope.authorization,
+      'X-Subscription-Actor-Delegation': envelope.actorDelegation,
       'X-Correlation-ID': envelope.correlationId,
       'Idempotency-Key': envelope.idempotencyKey,
       'X-Subscriptions-Integration-Token': 'test-integration-token-20260824-safe',
@@ -159,7 +159,8 @@ describe('ManagedSubscriptionRuntimeQuoteClient', () => {
     expect(typeof init?.body).toBe('string');
     const requestBody = typeof init?.body === 'string' ? init.body : '';
     expect(JSON.parse(requestBody)).toEqual(quoteRequest);
-    expect(requestBody).not.toContain(envelope.authorization);
+    expect(requestBody).not.toContain(envelope.actorDelegation);
+    expect(init?.headers).not.toHaveProperty('Authorization');
     expect(init?.headers).not.toHaveProperty('X-Tenant-ID');
     expect(init?.headers).not.toHaveProperty('X-Actor-Ref-Hash');
   });
@@ -173,7 +174,10 @@ describe('ManagedSubscriptionRuntimeQuoteClient', () => {
       ),
     ).rejects.toMatchObject({ code: 'SUBSCRIPTION_RUNTIME_QUOTE_REQUEST_INVALID' });
     await expect(
-      client(fetchImplementation).quote(quoteRequest, { ...envelope, authorization: 'not bearer' }),
+      client(fetchImplementation).quote(quoteRequest, {
+        ...envelope,
+        actorDelegation: 'not-a-jwt',
+      }),
     ).rejects.toMatchObject({ code: 'SUBSCRIPTION_RUNTIME_SERVER_ENVELOPE_INVALID' });
     await expect(
       client(fetchImplementation).quote(
@@ -353,7 +357,10 @@ describe('ManagedSubscriptionRuntimeQuoteClient', () => {
   it('does not include a forwarded user authorization token in errors', async () => {
     const authorization = 'Bearer user-token-not-for-errors';
     await expect(
-      client(vi.fn<typeof fetch>()).quote(quoteRequest, { ...envelope, authorization: 'invalid' }),
+      client(vi.fn<typeof fetch>()).quote(quoteRequest, {
+        ...envelope,
+        actorDelegation: 'invalid',
+      }),
     ).rejects.not.toThrow(authorization);
   });
 });
