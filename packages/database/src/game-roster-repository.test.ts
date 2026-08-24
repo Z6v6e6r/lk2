@@ -813,6 +813,58 @@ describe('game roster repository', () => {
     ).toBe(true);
   });
 
+  it('holds an expired reservation while provider payment truth remains unknown', async () => {
+    const { pool, query } = poolWithHandler((text) => {
+      if (text.includes('from integration.game_provider_operations')) {
+        return {
+          rows: [
+            {
+              id: '750209e0-6097-4bd2-8cba-6ac203829e41',
+              state: 'UNKNOWN',
+              last_error_class: 'AMBIGUOUS_EGRESS',
+            },
+          ],
+        };
+      }
+      if (text.includes('from games.seat_reservations') && text.includes('for update')) {
+        return {
+          rows: [
+            {
+              id: reservationId,
+              user_id: playerId,
+              state: 'ACTIVE',
+              expires_at: '2026-08-01T09:59:00.000Z',
+            },
+          ],
+        };
+      }
+      return baseHandler(text, { paymentMode: 'SPLIT' });
+    });
+
+    await expect(
+      createGameRosterRepository(pool as never, {
+        providerRecovery: { enabled: true },
+      }).expireReservation({
+        tenantId,
+        gameId,
+        commandId: '312b2311-8f7a-43f0-9c5f-13fef4c73884',
+        idempotencyKey: 'games-expiry-provider-hold-0001',
+        requestHash: 'c'.repeat(64),
+        correlationId: 'corr-games-expiry-provider-hold-0001',
+        reservationId,
+      }),
+    ).resolves.toMatchObject({ outcome: 'not_due' });
+    expect(query.mock.calls.some(([text]) => text.includes("set state = 'EXPIRED'"))).toBe(false);
+    const providerLockIndex = query.mock.calls.findIndex(([text]) =>
+      text.includes('from integration.game_provider_operations'),
+    );
+    const reservationLockIndex = query.mock.calls.findIndex(([text]) =>
+      text.includes('from games.seat_reservations'),
+    );
+    expect(providerLockIndex).toBeGreaterThan(-1);
+    expect(reservationLockIndex).toBeGreaterThan(providerLockIndex);
+  });
+
   it('promotes only the selected first waitlist entry into the available seat', async () => {
     const commandId = '5c495f29-c3e6-426f-a855-28301b447152';
     const { pool, query } = poolWithHandler((text) => {
@@ -1084,5 +1136,58 @@ describe('game roster repository', () => {
         ([text, values]) => text.includes('actor_user_id = $3') && values?.includes(playerId),
       ),
     ).toBe(true);
+  });
+
+  it('returns the recovery-applied revision and transition timestamp after confirmation', async () => {
+    const stored = {
+      outcome: 'applied',
+      commandId: 'd39e4287-e65c-4e75-88e4-4447e4c91ddb',
+      gameId,
+      revision: 8,
+      viewerRelation: 'SEAT_RESERVED',
+      reservationId,
+      committedAt: '2026-08-01T10:00:00.000Z',
+    };
+    const recoveryUpdatedAt = '2026-08-01T10:00:05.000Z';
+    const { pool } = poolWithHandler((text) =>
+      text.includes('from games.command_idempotency')
+        ? {
+            rows: [
+              {
+                id: stored.commandId,
+                command_type: 'game.join.v1',
+                request_hash: 'a'.repeat(64),
+                state: 'COMPLETED',
+                result_payload: stored,
+                error_code: null,
+                aggregate_id: gameId,
+                completed_at: stored.committedAt,
+                provider_recovery_state: 'CONFIRMED',
+                provider_recovery_updated_at: recoveryUpdatedAt,
+                provider_local_revision: 9,
+                recovered_participation_id: participationId,
+              },
+            ],
+          }
+        : { rows: [] },
+    );
+    await expect(
+      createGameRosterRepository(pool as never, {
+        providerRecovery: { enabled: true },
+      }).getOperation({
+        tenantId,
+        actorUserId: playerId,
+        operationId: stored.commandId,
+      }),
+    ).resolves.toMatchObject({
+      committedAt: stored.committedAt,
+      updatedAt: recoveryUpdatedAt,
+      result: {
+        revision: 9,
+        providerRecoveryState: 'CONFIRMED',
+        viewerRelation: 'PARTICIPANT',
+        participationId,
+      },
+    });
   });
 });

@@ -1,6 +1,8 @@
 import { PROFILE_PHOTO_DELIVERY_PATH_PATTERN } from '@phub/domain';
 import { z } from 'zod';
 
+export * from './provider-recovery.js';
+
 export const GAME_LIFECYCLE_STATES = [
   'DRAFT',
   'PROVISIONING',

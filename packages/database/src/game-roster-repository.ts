@@ -11,6 +11,7 @@ import {
   type GameLifecycleState,
   type GameRosterCommandFacts,
   type GameViewerRelation,
+  type GameProviderOperationState,
 } from '@phub/games';
 import {
   evaluateLevelEligibility,
@@ -22,6 +23,7 @@ import type { Pool, PoolClient, QueryResultRow } from 'pg';
 
 import { queryOne, withTenantTransaction } from './connection.js';
 import type { GamePaymentMode } from './game-repository.js';
+import { createGameProviderIntent } from './game-provider-operation-repository.js';
 
 export type GameRosterCommandErrorCode =
   | GameDomainErrorCode
@@ -68,6 +70,7 @@ export type GameRosterCommandResult =
       readonly committedAt: string;
       readonly replayed: boolean;
       readonly eligibility?: ParticipationDecision;
+      readonly providerRecoveryState?: GameProviderOperationState;
     }
   | {
       readonly outcome: 'rejected';
@@ -181,6 +184,7 @@ export interface GameRosterOperation {
   readonly gameId: string | null;
   readonly state: 'COMPLETED' | 'FAILED';
   readonly committedAt: string;
+  readonly updatedAt?: string;
   readonly result?: Extract<GameRosterCommandResult, { outcome: 'applied' }>;
   readonly errorCode?: GameRosterCommandErrorCode;
   readonly eligibility?: ParticipationDecision;
@@ -198,6 +202,10 @@ interface CommandRow extends QueryResultRow {
 interface OperationRow extends CommandRow {
   readonly aggregate_id: string | null;
   readonly completed_at: Date | string;
+  readonly provider_recovery_state: GameProviderOperationState | null;
+  readonly provider_recovery_updated_at: Date | string | null;
+  readonly provider_local_revision: string | number | null;
+  readonly recovered_participation_id: string | null;
 }
 
 interface LockedGameRow extends QueryResultRow {
@@ -1372,6 +1380,11 @@ export function createGameRosterRepository(
   pool: Pool,
   options: {
     readonly onEligibilityDecision?: (event: LevelEligibilityDecisionTelemetry) => void;
+    readonly providerRecovery?: {
+      readonly enabled: boolean;
+      readonly joinIntentEnabled?: boolean;
+      readonly promotionEnabled?: boolean;
+    };
   } = {},
 ): GameRosterRepository {
   const participationEligibilityGateway: ParticipationEligibilityGateway = {
@@ -1490,6 +1503,21 @@ export function createGameRosterRepository(
             eligibility.validatedInvitationId,
           );
           await recordSuccess(client, input, commandType, result);
+          if (options.providerRecovery?.joinIntentEnabled) {
+            await createGameProviderIntent(client, {
+              tenantId: input.tenantId,
+              sourceCommandId: prepared.commandId,
+              action: 'JOIN_PAYMENT',
+              actorUserId: input.actorUserId,
+              gameId: input.gameId,
+              reservationId: reservation.id,
+              eligibilityDecisionId: eligibility.decisionId,
+              paymentSnapshotOperationId: prepared.commandId,
+              paymentMode: prepared.game.payment_mode,
+              correlationId: input.correlationId,
+            });
+            return { ...result, providerRecoveryState: 'READY' };
+          }
           return result;
         }
 
@@ -2022,6 +2050,22 @@ export function createGameRosterRepository(
         if (replay) return replay;
         const game = await lockProcessGame(client, input);
         if (!game) throw new Error('GAME_NOT_FOUND');
+        const providerOperation = options.providerRecovery?.enabled
+          ? await queryOne<
+              QueryResultRow & {
+                id: string;
+                state: string;
+                last_error_class: string | null;
+              }
+            >(
+              client,
+              `select id, state, last_error_class
+                 from integration.game_provider_operations
+                where tenant_id = $1 and game_id = $2 and reservation_id = $3
+                for update`,
+              [input.tenantId, input.gameId, input.reservationId],
+            )
+          : undefined;
         const reservation = await queryOne<ExpirableReservationRow>(
           client,
           `select id, user_id, state, expires_at::text as expires_at
@@ -2046,6 +2090,32 @@ export function createGameRosterRepository(
         const now = timestamp(game.database_now);
         if (Date.parse(expiresAt) > Date.parse(now)) {
           return { outcome: 'not_due' as const, availableAt: expiresAt };
+        }
+        if (providerOperation?.state === 'READY') {
+          await client.query(
+            `update integration.game_provider_operations
+                set state = 'MANUAL_REVIEW', resolution = 'UNKNOWN', terminal_at = now(),
+                    last_error_class = 'NOT_SENT', next_attempt_at = now(),
+                    version = version + 1, updated_at = now()
+              where tenant_id = $1 and id = $2 and state = 'READY'`,
+            [input.tenantId, providerOperation.id],
+          );
+        } else if (
+          providerOperation &&
+          ['SUBMITTING', 'UNKNOWN', 'RECONCILING', 'CONFIRMED'].includes(providerOperation.state)
+        ) {
+          return {
+            outcome: 'not_due' as const,
+            availableAt: new Date(Date.parse(now) + 5 * 60_000).toISOString(),
+          };
+        } else if (
+          providerOperation?.state === 'MANUAL_REVIEW' &&
+          providerOperation.last_error_class !== 'NOT_SENT'
+        ) {
+          return {
+            outcome: 'not_due' as const,
+            availableAt: new Date(Date.parse(now) + 5 * 60_000).toISOString(),
+          };
         }
         const before = await loadCapacity(client, input.tenantId, input.gameId);
         await client.query(
@@ -2302,20 +2372,56 @@ export function createGameRosterRepository(
           replayed: false,
         };
         await storeProcessResult(client, input, commandType, result);
+        if (options.providerRecovery?.promotionEnabled && targetRelation === 'SEAT_RESERVED') {
+          await createGameProviderIntent(client, {
+            tenantId: input.tenantId,
+            sourceCommandId: input.commandId,
+            action: 'PROMOTION_PAYMENT',
+            actorUserId: entry.user_id,
+            gameId: input.gameId,
+            reservationId: targetId,
+            waitlistEntryId: entry.id,
+            eligibilityDecisionId: eligibility.decisionId,
+            paymentSnapshotOperationId: input.commandId,
+            paymentMode: game.payment_mode as 'SPLIT' | 'SUBSCRIPTION',
+            correlationId: input.correlationId,
+          });
+        }
         return result;
       });
     },
 
     getOperation(input) {
       return withTenantTransaction(pool, input.tenantId, async (client) => {
+        const recoverySelect = options.providerRecovery?.enabled
+          ? `recovery.state as provider_recovery_state,
+             recovery.updated_at as provider_recovery_updated_at,
+             recovery.local_aggregate_revision as provider_local_revision,
+             participation.id as recovered_participation_id`
+          : `null::text as provider_recovery_state,
+             null::timestamptz as provider_recovery_updated_at,
+             null::bigint as provider_local_revision,
+             null::uuid as recovered_participation_id`;
+        const recoveryJoins = options.providerRecovery?.enabled
+          ? `left join integration.game_provider_operations recovery
+               on recovery.tenant_id = command.tenant_id and recovery.source_command_id = command.id
+             left join games.participations participation
+               on participation.tenant_id = command.tenant_id
+              and participation.game_id = command.aggregate_id
+              and participation.user_id = command.actor_user_id
+              and participation.state = 'ACTIVE'`
+          : '';
         const row = await queryOne<OperationRow>(
           client,
-          `select id, command_type, request_hash, state, result_payload, error_code,
-                  aggregate_id, completed_at::text as completed_at
-             from games.command_idempotency
-            where tenant_id = $1 and id = $2 and actor_user_id = $3
-              and command_type = any($4::text[])
-              and state in ('COMPLETED', 'FAILED')`,
+          `select command.id, command.command_type, command.request_hash, command.state,
+                  command.result_payload, command.error_code, command.aggregate_id,
+                  command.completed_at::text as completed_at,
+                  ${recoverySelect}
+             from games.command_idempotency command
+             ${recoveryJoins}
+            where command.tenant_id = $1 and command.id = $2 and command.actor_user_id = $3
+              and command.command_type = any($4::text[])
+              and command.state in ('COMPLETED', 'FAILED')`,
           [input.tenantId, input.operationId, input.actorUserId, USER_ROSTER_COMMAND_TYPES],
         );
         if (!row || !isUserRosterCommandType(row.command_type)) return undefined;
@@ -2340,14 +2446,32 @@ export function createGameRosterRepository(
             ...(stored?.eligibility ? { eligibility: stored.eligibility } : {}),
           };
         }
-        const result = parseAppliedResult(row.result_payload);
-        if (!result) throw new Error('GAME_OPERATION_RESULT_INVALID');
+        const storedResult = parseAppliedResult(row.result_payload);
+        if (!storedResult) throw new Error('GAME_OPERATION_RESULT_INVALID');
+        const result = row.provider_recovery_state
+          ? {
+              ...storedResult,
+              ...(row.provider_local_revision
+                ? { revision: positiveInteger(row.provider_local_revision) }
+                : {}),
+              providerRecoveryState: row.provider_recovery_state,
+              ...(row.provider_recovery_state === 'CONFIRMED' && row.recovered_participation_id
+                ? {
+                    viewerRelation: 'PARTICIPANT' as const,
+                    participationId: row.recovered_participation_id,
+                  }
+                : {}),
+            }
+          : storedResult;
         return {
           commandId: row.id,
           commandType: row.command_type,
           gameId: row.aggregate_id,
           state: 'COMPLETED',
           committedAt,
+          ...(row.provider_recovery_updated_at
+            ? { updatedAt: timestamp(row.provider_recovery_updated_at) }
+            : {}),
           result,
         };
       });
