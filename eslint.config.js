@@ -12,6 +12,7 @@ export default tseslint.config(
       '**/.worktrees/**',
       '**/*.js',
       'deploy/jetson/generated/communities-staging-role-split-trusted-inventory-runtime.mjs',
+      'deploy/jetson/generated-gate-preflight/verify-communities-staging-role-split-trusted-inventory-gate.mjs',
       'packages/api-contracts/src/generated*.ts',
     ],
   },

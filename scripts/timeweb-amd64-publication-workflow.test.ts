@@ -4,10 +4,57 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 
+interface BlobFetchRequestObservation {
+  readonly authorization: string | null;
+  readonly cookie: string | null;
+  readonly hasExpiryQuery: boolean;
+  readonly hasSignatureQuery: boolean;
+  readonly path: string;
+  readonly server: 'blob' | 'registry';
+}
+
+interface BlobFetchScenarioResult {
+  readonly bytesMatch: boolean;
+  readonly destinationExists: boolean;
+  readonly leakedSignature: boolean;
+  readonly leakedToken: boolean;
+  readonly markers: readonly string[];
+  readonly requests: readonly BlobFetchRequestObservation[];
+  readonly status: number | null;
+}
+
 describe('Timeweb amd64 publication workflow', () => {
+  let blobFetchResults: Record<
+    string,
+    BlobFetchScenarioResult | readonly BlobFetchScenarioResult[]
+  >;
+
+  beforeAll(() => {
+    const fixture = fileURLToPath(
+      new URL('./timeweb-amd64-blob-fetch.fixture.ts', import.meta.url),
+    );
+    const helper = fileURLToPath(
+      new URL('./timeweb-amd64-registry-custody-retry.sh', import.meta.url),
+    );
+    const result = spawnSync(process.execPath, ['--import', 'tsx', fixture, helper], {
+      encoding: 'utf8',
+      killSignal: 'SIGTERM',
+      timeout: 30_000,
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stderr).toBe(0);
+    blobFetchResults = JSON.parse(result.stdout) as typeof blobFetchResults;
+  }, 35_000);
+
+  const scenario = (name: string): BlobFetchScenarioResult => {
+    const result = blobFetchResults[name];
+    if (!result || Array.isArray(result)) throw new Error(`missing blob fetch scenario: ${name}`);
+    return result as BlobFetchScenarioResult;
+  };
+
   it('is manual, exact-source, immutable and non-deploying', async () => {
     const workflow = await readFile(
       new URL('../.github/workflows/publish-timeweb-amd64-images.yaml', import.meta.url),
@@ -297,15 +344,17 @@ describe('Timeweb amd64 publication workflow', () => {
         materials: readonly { readonly uri: string; readonly sha256: string }[],
         overrides: {
           readonly provenanceStatementType?: string;
+          readonly sbomPackages?: unknown;
           readonly sbomStatementType?: string;
           readonly buildType?: string;
           readonly sourceMaterial?: { readonly uri: string; readonly sha1: string } | null;
           readonly resolvedDependencies?: unknown;
+          readonly subjectSha?: string;
         } = {},
       ) => {
         const provenancePath = join(directory, `${service}-provenance-${materials.length}.json`);
         const sbomPath = join(directory, `${service}-sbom-${materials.length}.json`);
-        const subject = [{ name: service, digest: { sha256: runtimeSha } }];
+        const subject = [{ name: service, digest: { sha256: overrides.subjectSha ?? runtimeSha } }];
         await writeFile(
           provenancePath,
           JSON.stringify({
@@ -355,7 +404,10 @@ describe('Timeweb amd64 publication workflow', () => {
             _type: overrides.sbomStatementType ?? 'https://in-toto.io/Statement/v1',
             predicateType: 'https://spdx.dev/Document',
             subject,
-            predicate: { SPDXID: 'SPDXRef-DOCUMENT', packages: [{ name: service }] },
+            predicate: {
+              SPDXID: 'SPDXRef-DOCUMENT',
+              packages: overrides.sbomPackages ?? [{ name: service }],
+            },
           }),
         );
         return spawnSync(
@@ -454,6 +506,10 @@ describe('Timeweb amd64 publication workflow', () => {
           })
         ).status,
       ).not.toBe(0);
+      expect((await run('api', [node, scanner], { sbomPackages: [] })).status).not.toBe(0);
+      expect((await run('api', [node, scanner], { subjectSha: 'b'.repeat(64) })).status).not.toBe(
+        0,
+      );
     } finally {
       await rm(directory, { force: true, recursive: true });
     }
@@ -551,6 +607,10 @@ describe('Timeweb amd64 publication workflow', () => {
 
     expect(Object.keys(document.on)).toEqual(['workflow_dispatch']);
     expect(document.permissions).toEqual({ contents: 'read' });
+    expect(document.jobs['validate-request']?.permissions).toEqual({
+      actions: 'read',
+      contents: 'read',
+    });
     expect(document.jobs['reconcile-custody']?.permissions).toEqual({
       contents: 'read',
       packages: 'read',
@@ -565,25 +625,36 @@ describe('Timeweb amd64 publication workflow', () => {
     expect(document.jobs['reconciliation-manifest']?.if).toBe(
       "${{ needs.reconcile-custody.result == 'success' }}",
     );
-    expect(workflow).toContain('RECONCILE_TIMEWEB_AMD64_32625879321');
+    expect(workflow).toContain('RECONCILE_TIMEWEB_AMD64_PUBLICATION');
     expect(workflow).toContain('test "$RUN_ATTEMPT" = 1');
     expect(workflow).toContain('test "$ACTOR" = "$TRIGGERING_ACTOR"');
     expect(workflow).toContain('test "$WORKFLOW_SHA" = "$EXPECTED_WORKFLOW_SHA"');
-    expect(workflow).toContain('amd64-sha-$source_sha-32625879321-1');
+    expect(workflow).toContain("printf '%s' \"$PUBLICATION_RUN_ID\" | grep -Eq '^[1-9][0-9]*$'");
+    expect(workflow).toContain('publication_workflow_sha:');
+    expect(workflow).toContain('prior_reconciliation_run_id:');
+    expect(workflow).toContain('.path == ".github/workflows/publish-timeweb-amd64-images.yaml"');
+    expect(workflow).toContain('.head_sha == $workflowSha');
+    expect(workflow).toContain('.conclusion == "success"');
+    expect(workflow).toContain('amd64-sha-$source_sha-$PUBLICATION_RUN_ID-1');
     expect(workflow).toContain(
-      'https://github.com/Z6v6e6r/lk2/actions/runs/32625879321/attempts/1',
+      'https://github.com/Z6v6e6r/lk2/actions/runs/$PUBLICATION_RUN_ID/attempts/1',
     );
-    for (const digest of [
-      'b75f6a060807095361f796f7550ddd1df989c492510377cb5e171bab75f4e0b7',
-      '81b56b06743e86c5091c59164eaf3d93884d5d35a94636ef3d13bd2b004625cc',
-      'c9e35f58919e0b75a0afd7f7d588fb1f82d4adfbaa6a80f9c45544e9dea9a695',
-      '8cf2ac65f710ddf2df0ea3393dc37088bee02e13842a16920b2534a172489e8a',
-      'ce8f985f70416b9d83ccc2653eaefeb10a9b927418cdfefc17e66ccae4cfd4d0',
-    ]) {
-      expect(workflow).toContain(`sha256:${digest}`);
+    for (const service of ['web', 'api', 'worker', 'realtime', 'migrator']) {
+      expect(workflow).toContain(`${service}_index_digest:`);
+      expect(workflow).toContain(
+        `index_digest: \${{ needs.validate-request.outputs.${service}_index_digest }}`,
+      );
+      expect(workflow).not.toContain(`inputs.${service}_index_digest`);
     }
+    expect(workflow).toContain(
+      'name: timeweb-amd64-publication-${{ inputs.publication_run_id }}-1',
+    );
+    expect(workflow).toContain(
+      'sha256sum --check --strict timeweb-amd64-publication-checksums.txt',
+    );
+    expect(workflow).toContain('Bind reconciliation inputs to the immutable publication artifact');
     expect(workflow).toContain('phub_ghcr_custody_read_exact_json');
-    expect(workflow.match(/sha256sum --check --strict/gu)).toHaveLength(2);
+    expect(workflow.match(/sha256sum --check --strict/gu)?.length ?? 0).toBeGreaterThanOrEqual(3);
     expect(workflow).toContain(
       'github.com/docker/buildx v0.36.1 1d8dde89b8aba914e05e45366770736fea1fd690',
     );
@@ -608,6 +679,20 @@ describe('Timeweb amd64 publication workflow', () => {
     expect(workflow).toContain('authorizesVpsProvisioning:false');
     expect(workflow).toContain('authorizesDatabaseMutation:false');
     expect(workflow).toContain('reconciliationWorkflowSha:$reconciliationWorkflowSha');
+    expect(workflow).toContain('if test -n "$PRIOR_RECONCILIATION_RUN_ID"; then');
+    expect(workflow).toContain(
+      'name: timeweb-amd64-publication-reconciliation-manifest-${{ inputs.prior_reconciliation_run_id }}-1',
+    );
+    expect(workflow).toContain('.images == $prior[0].images');
+    expect(workflow).toContain('> release-manifest.json');
+    expect(workflow).toContain('repository: "Z6v6e6r/lk2"');
+    expect(workflow).toContain('gitCommit: .images[0].sourceSha');
+    expect(workflow).toContain(
+      'verification: {provenance: true, sbom: true, reconciliation: true}',
+    );
+    expect(workflow).toContain('.verification == {provenance:true,sbom:true,reconciliation:true}');
+    expect(workflow).toContain('reconciliationRuns: [$priorRunId, $currentRunId]');
+    expect(workflow).toContain('$priorRunId != $currentRunId');
     expect(workflow).not.toMatch(
       /packages:\s*write|push:\s*true|docker\s+push|docker buildx build|docker\/build-push-action@|docker compose|npm run db:migrate|deploy-(?:staging|production)|\b(?:ssh|scp|tailscale)\b/iu,
     );
@@ -618,7 +703,7 @@ describe('Timeweb amd64 publication workflow', () => {
     expect(uses.every((value) => /@[0-9a-f]{40}$/u.test(value))).toBe(true);
   });
 
-  it('uses the same bounded HTTPS-only redirect contract for attestation blobs', async () => {
+  it('uses the same shared bounded HTTPS-only fetch contract for attestation blobs', async () => {
     const workflows = await Promise.all(
       [
         '../.github/workflows/publish-timeweb-amd64-images.yaml',
@@ -627,33 +712,120 @@ describe('Timeweb amd64 publication workflow', () => {
     );
 
     for (const workflow of workflows) {
-      const normalized = workflow.replace(/\\\s*/gu, '').replace(/\s+/gu, ' ');
-      expect(normalized).toContain(
-        "curl --fail --silent --show-error --location --max-redirs 3 --proto '=https' --proto-redir '=https' --tlsv1.2 --config -",
-      );
+      expect(workflow).toContain('phub_ghcr_custody_fetch_exact_statement_blob');
+      expect(workflow).toContain('statement_size statement_media_type');
+      expect(workflow).not.toContain('download_attestation_statement()');
+      expect(workflow).not.toContain('download_statement()');
+    }
+    const helper = await readFile(
+      new URL('./timeweb-amd64-registry-custody-retry.sh', import.meta.url),
+      'utf8',
+    );
+    expect(helper).toContain("--proto '=https' --proto-redir '=https' --tlsv1.2");
+    expect(helper).toContain('curl --disable --fail');
+    expect(helper).toContain('--max-redirs "$maximum_redirects"');
+    expect(helper).toContain('--connect-timeout "$connect_timeout_seconds"');
+    expect(helper).toContain('--max-time "$maximum_time_seconds"');
+    expect(helper).toContain('--speed-time "$low_speed_time_seconds"');
+    expect(helper).toContain('--speed-limit "$low_speed_limit_bytes"');
+    expect(helper).toContain('--max-filesize "$expected_size"');
+    expect(helper).toContain('--remove-on-error');
+    expect(helper).not.toContain('--location-trusted');
+  });
+
+  it('accepts a direct response, one relative redirect and three redirects at the limit', () => {
+    for (const name of ['direct', 'one-relative-redirect', 'three-redirects']) {
+      expect(scenario(name)).toMatchObject({
+        bytesMatch: true,
+        destinationExists: true,
+        leakedSignature: false,
+        leakedToken: false,
+        status: 0,
+      });
+    }
+    expect(scenario('one-relative-redirect').requests.at(-1)).toMatchObject({
+      hasExpiryQuery: true,
+      hasSignatureQuery: true,
+    });
+  });
+
+  it('rejects a redirect loop, a fourth redirect, and missing or invalid Location', () => {
+    for (const name of [
+      'redirect-loop',
+      'too-many-redirects',
+      'missing-location',
+      'invalid-location',
+    ]) {
+      expect(scenario(name).status).not.toBe(0);
+      expect(scenario(name).destinationExists).toBe(false);
     }
   });
 
-  it('follows a bounded registry-style blob redirect without changing the bytes', () => {
-    const statement = JSON.stringify({ predicateType: 'https://slsa.dev/provenance/v1' });
-    const result = spawnSync(
-      process.execPath,
-      [
-        '--import',
-        'tsx',
-        fileURLToPath(new URL('./timeweb-amd64-blob-redirect.fixture.ts', import.meta.url)),
-      ],
-      { encoding: 'utf8', killSignal: 'SIGTERM', timeout: 15_000 },
-    );
-
-    expect(result.error).toBeUndefined();
-    expect(result.status, result.stderr).toBe(0);
-    expect(JSON.parse(result.stdout)).toEqual({
-      blobAuthorization: null,
-      bytes: statement,
-      registryAuthorization: 'Bearer test-token',
-      requests: ['registry:/blob', 'blob:/signed-blob'],
+  it('rejects HTTPS downgrade and strips credentials on a cross-origin signed redirect', () => {
+    expect(scenario('https-downgrade').status).not.toBe(0);
+    const crossOrigin = scenario('cross-origin-signed');
+    expect(crossOrigin.status).toBe(0);
+    expect(crossOrigin.requests).toHaveLength(2);
+    expect(crossOrigin.requests[0]).toMatchObject({
+      authorization: 'Bearer fixture-registry-token',
+      server: 'registry',
     });
+    expect(crossOrigin.requests[1]).toMatchObject({
+      authorization: null,
+      cookie: null,
+      hasExpiryQuery: true,
+      hasSignatureQuery: true,
+      server: 'blob',
+    });
+  });
+
+  it('fails closed for 401, 403, 404, 429 and 5xx responses', () => {
+    for (const status of [401, 403, 404, 429, 500, 503]) {
+      const result = scenario(`status-${status}`);
+      expect(result.status).not.toBe(0);
+      expect(result.destinationExists).toBe(false);
+      expect(result.markers).toContain('PHUB_GHCR_CUSTODY_BLOB_FETCH_FAILED');
+    }
+  });
+
+  it('fails closed on connection reset and timeout', () => {
+    for (const name of ['reset', 'timeout', 'slow-body', 'oversized']) {
+      expect(scenario(name).status).not.toBe(0);
+      expect(scenario(name).destinationExists).toBe(false);
+      expect(scenario(name).markers).toContain('PHUB_GHCR_CUSTODY_BLOB_FETCH_FAILED');
+    }
+  });
+
+  it('rejects empty, HTML, invalid JSON and digest-mismatched bodies', () => {
+    expect(scenario('empty').markers).toContain('PHUB_GHCR_CUSTODY_EMPTY_BLOB');
+    expect(scenario('html').markers).toContain('PHUB_GHCR_CUSTODY_UNEXPECTED_BLOB_MEDIA_TYPE');
+    expect(scenario('invalid-json').markers).toContain('PHUB_GHCR_CUSTODY_INVALID_BLOB_JSON');
+    expect(scenario('digest-mismatch').markers).toContain('PHUB_GHCR_CUSTODY_WRONG_BLOB_DIGEST');
+    for (const name of ['empty', 'html', 'invalid-json', 'digest-mismatch']) {
+      expect(scenario(name).status).not.toBe(0);
+      expect(scenario(name).destinationExists).toBe(false);
+    }
+  });
+
+  it('is repeatable and never logs the registry token or signed query value', () => {
+    const repeated = blobFetchResults.repeated;
+    expect(Array.isArray(repeated)).toBe(true);
+    if (!Array.isArray(repeated)) throw new Error('repeated result is missing');
+    const repeatedResults = repeated as readonly BlobFetchScenarioResult[];
+    expect(repeatedResults).toHaveLength(2);
+    expect(repeatedResults.every((result) => result.status === 0 && result.bytesMatch)).toBe(true);
+    const allResults: BlobFetchScenarioResult[] = [];
+    for (const value of Object.values(blobFetchResults)) {
+      if (Array.isArray(value)) {
+        allResults.push(...(value as readonly BlobFetchScenarioResult[]));
+      } else {
+        allResults.push(value as BlobFetchScenarioResult);
+      }
+    }
+    for (const result of allResults) {
+      expect(result.leakedToken).toBe(false);
+      expect(result.leakedSignature).toBe(false);
+    }
   });
 
   it('accepts only correctly typed statements bound to the reconciled runtime digest', () => {
@@ -666,7 +838,7 @@ describe('Timeweb amd64 publication workflow', () => {
           '--arg',
           'runtime',
           runtime,
-          'length == 2 and all(.[]; ._type == "https://in-toto.io/Statement/v1" and (.subject | length) == 1 and .subject[0].digest == {"sha256": $runtime})',
+          'length == 2 and ([.[].predicateType] | sort) == ["https://slsa.dev/provenance/v1", "https://spdx.dev/Document"] and all(.[]; ._type == "https://in-toto.io/Statement/v1" and (.subject | length) == 1 and .subject[0].digest == {"sha256": $runtime})',
         ],
         { encoding: 'utf8', input: JSON.stringify(statements) },
       );
@@ -681,6 +853,9 @@ describe('Timeweb amd64 publication workflow', () => {
     ];
 
     expect(validateStatements(valid).status).toBe(0);
+    expect(validateStatements([]).status).not.toBe(0);
+    expect(validateStatements([valid[0]]).status).not.toBe(0);
+    expect(validateStatements([valid[0], valid[0]]).status).not.toBe(0);
     expect(
       validateStatements([{ ...valid[0], _type: 'https://example.invalid/Statement' }, valid[1]])
         .status,
