@@ -64,6 +64,19 @@ async function readChildPids(pid: number): Promise<readonly number[]> {
   }
 }
 
+async function waitForChildPids(
+  pid: number,
+  timeoutMilliseconds = 2_000,
+): Promise<readonly number[]> {
+  const deadline = Date.now() + timeoutMilliseconds;
+  while (Date.now() < deadline) {
+    const childPids = await readChildPids(pid);
+    if (childPids.length > 0) return childPids;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(`Timed out waiting for helper ${pid} to start a child process`);
+}
+
 async function expectProcessGone(pid: number, timeoutMilliseconds = 2_000): Promise<void> {
   const deadline = Date.now() + timeoutMilliseconds;
   while (Date.now() < deadline) {
@@ -233,7 +246,7 @@ describe.sequential('CI test diagnostics supervisor', () => {
         const testPid = Number((await waitForFile(join(directory, 'test.pid'))).trim());
         const helperPids = parsePidFile(await waitForFile(join(directory, 'helper-pids.txt')));
         const helperChildPids = (
-          await Promise.all(helperPids.map(async (helperPid) => await readChildPids(helperPid)))
+          await Promise.all(helperPids.map(async (helperPid) => await waitForChildPids(helperPid)))
         ).flat();
         const descendantPid = Number((await waitForFile(join(directory, 'descendant.pid'))).trim());
         child.kill(signal);
