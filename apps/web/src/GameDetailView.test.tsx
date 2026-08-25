@@ -59,6 +59,31 @@ afterEach(() => {
 });
 
 describe('GameDetailView', () => {
+  it('shows the existing seat price before the player joins', () => {
+    render(
+      <GameDetailView
+        activeTab="GAME"
+        busy={false}
+        game={{
+          ...game,
+          surface: 'DISCOVER',
+          displayState: 'FINDING_PLAYERS',
+          priceSummary: { amountMinor: 230000, currency: 'RUB' },
+          viewerRelation: 'NONE',
+          viewerPaymentState: 'NOT_REQUIRED',
+          allowedActions: ['OPEN_DETAILS', 'JOIN'],
+        }}
+        onAction={vi.fn()}
+        onChatOpen={vi.fn()}
+        onSubmit={vi.fn().mockResolvedValue(undefined)}
+        onTabChange={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByLabelText('Стоимость места: 2 300 ₽')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Вступить в игру' })).toBeVisible();
+  });
+
   it('keeps the match overview and result entry in two explicit tabs', async () => {
     const user = userEvent.setup();
     function Harness() {
@@ -81,6 +106,7 @@ describe('GameDetailView', () => {
     expect(screen.getByRole('tab', { name: 'Игра' })).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByRole('heading', { name: 'Вечерний матч' })).toBeInTheDocument();
     expect(screen.getByText('Игра на рейтинг')).toBeInTheDocument();
+    expect(screen.queryByLabelText(/Стоимость места:/)).toBeNull();
     expect(screen.queryByText(/Внести счёт/i)).toBeNull();
     expect(screen.getByRole('img', { name: 'Анна, уровень C, прогресс 42%' })).toBeInTheDocument();
     expect(screen.queryByText(/Уровень:/)).toBeNull();
