@@ -193,14 +193,18 @@ jobs:
           fi
           mkdir -p "$RUNNER_TEMP/gitleaks"
           scan_repository="$RUNNER_TEMP/gitleaks/repository.git"
+          ignore_file="$RUNNER_TEMP/gitleaks/.gitleaksignore"
           git clone --bare --no-local "$PWD" "$scan_repository"
           git --git-dir="$scan_repository" cat-file -e "$BASE_SHA^{commit}"
           git --git-dir="$scan_repository" cat-file -e "$HEAD_SHA^{commit}"
+          git show "$HEAD_SHA:.gitleaksignore" >"$ignore_file"
+          test -s "$ignore_file"
           docker run --rm \
             --user "$(id -u):$(id -g)" \
             --volume "$RUNNER_TEMP/gitleaks:/workspace" \
             "$GITLEAKS_IMAGE" detect \
             --source=/workspace/repository.git \
+            --gitleaks-ignore-path=/workspace/.gitleaksignore \
             --redact \
             --verbose \
             --exit-code=2 \
