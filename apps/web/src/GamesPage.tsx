@@ -28,6 +28,9 @@ type GamesTab = 'DISCOVER' | 'UPCOMING';
 type GameKindFilter = 'GAME' | 'COACH_GAME' | 'TOURNAMENT';
 type GameLevelRangeFilter = 'ALL' | 'D_C_PLUS' | 'C_C_PLUS' | 'C_B_PLUS' | 'B_A';
 type GameStartAfterFilter = 'ALL' | '18:00';
+type CatalogLevel = NonNullable<EventCatalogQuery['levelFrom']>;
+
+const catalogLevels: readonly CatalogLevel[] = ['D', 'D+', 'C', 'C+', 'B', 'B+', 'A'];
 
 const gameKindOptions: readonly {
   readonly value: GameKindFilter;
@@ -58,6 +61,10 @@ const weekdayFormatter = new Intl.DateTimeFormat('ru-RU', { weekday: 'short' });
 const dayFormatter = new Intl.DateTimeFormat('ru-RU', { day: '2-digit' });
 const LEVEL_RECOVERY_STORAGE_KEY = 'phub.pending-level-recovery.v1';
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function isCatalogLevel(value: string): value is CatalogLevel {
+  return catalogLevels.some((level) => level === value);
+}
 
 function clearPendingLevelRecovery(): void {
   if (typeof window === 'undefined') return;
@@ -254,6 +261,8 @@ export function GamesPage({ gateway, gameId, eventId }: GamesPageProps): React.J
     readonly { readonly id: string; readonly name: string }[]
   >([]);
   const [levelRange, setLevelRange] = useState<GameLevelRangeFilter>('ALL');
+  const [ownLevelFilter, setOwnLevelFilter] = useState<CatalogLevel | null>(null);
+  const [ownLevelFilterLoading, setOwnLevelFilterLoading] = useState(false);
   const [startsAfter, setStartsAfter] = useState<GameStartAfterFilter>('ALL');
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [selectedDate, setSelectedDate] = useState<string | null>(() => dateKey(new Date()));
@@ -327,7 +336,9 @@ export function GamesPage({ gateway, gameId, eventId }: GamesPageProps): React.J
 
   const catalogEnabled = !gameId && !eventId && tab === 'DISCOVER';
   const catalogQuery = useMemo<GamesCatalogQuery>(() => {
-    const selectedRange = levelRangeFilters[levelRange];
+    const selectedRange = ownLevelFilter
+      ? { from: ownLevelFilter, to: ownLevelFilter }
+      : levelRangeFilters[levelRange];
     return {
       surface: 'GAMES',
       localDates: selectedDate ? [selectedDate] : days.map((day) => day.key),
@@ -338,7 +349,16 @@ export function GamesPage({ gateway, gameId, eventId }: GamesPageProps): React.J
       ...(startsAfter === 'ALL' ? {} : { startsAfterLocal: startsAfter }),
       limit: 20,
     };
-  }, [days, includeFull, levelRange, selectedDate, selectedKinds, selectedStationIds, startsAfter]);
+  }, [
+    days,
+    includeFull,
+    levelRange,
+    ownLevelFilter,
+    selectedDate,
+    selectedKinds,
+    selectedStationIds,
+    startsAfter,
+  ]);
   const catalogQueryKey = useMemo(
     () =>
       `${catalogEnabled ? 'active' : 'inactive'}:${reloadToken}:${JSON.stringify(catalogQuery)}`,
@@ -533,6 +553,7 @@ export function GamesPage({ gateway, gameId, eventId }: GamesPageProps): React.J
     Number(selectedStationIds.length > 0) +
     Number(includeFull) +
     Number(levelRange !== 'ALL') +
+    Number(ownLevelFilter !== null) +
     Number(startsAfter !== 'ALL');
   const kindSummary =
     selectedKinds.length === 0
@@ -570,6 +591,31 @@ export function GamesPage({ gateway, gameId, eventId }: GamesPageProps): React.J
     });
   }
 
+  async function toggleOwnLevelFilter(): Promise<void> {
+    beginFilterChange();
+    if (ownLevelFilter) {
+      setOwnLevelFilter(null);
+      return;
+    }
+    if (!gateway.getOwnPlayerLevel || ownLevelFilterLoading) return;
+
+    setOwnLevelFilterLoading(true);
+    try {
+      const state = await gateway.getOwnPlayerLevel('PADEL');
+      const code = state.currentLevel?.code;
+      if (!code || !isCatalogLevel(code)) {
+        setError('Сначала укажите уровень в профиле, чтобы найти подходящие события.');
+        return;
+      }
+      setLevelRange('ALL');
+      setOwnLevelFilter(code);
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      setOwnLevelFilterLoading(false);
+    }
+  }
+
   function resetFilters(): void {
     if (activeFilterCount === 0) return;
     beginFilterChange();
@@ -577,6 +623,7 @@ export function GamesPage({ gateway, gameId, eventId }: GamesPageProps): React.J
     setSelectedStationIds([]);
     setIncludeFull(false);
     setLevelRange('ALL');
+    setOwnLevelFilter(null);
     setStartsAfter('ALL');
   }
 
@@ -1255,6 +1302,21 @@ export function GamesPage({ gateway, gameId, eventId }: GamesPageProps): React.J
               </div>
 
               <div className="games-filter-actions">
+                {gateway.getOwnPlayerLevel ? (
+                  <button
+                    className="games-filter-more"
+                    type="button"
+                    aria-pressed={ownLevelFilter !== null}
+                    disabled={ownLevelFilterLoading}
+                    onClick={() => void toggleOwnLevelFilter()}
+                  >
+                    {ownLevelFilterLoading
+                      ? 'Определяем уровень…'
+                      : ownLevelFilter
+                        ? `Мой уровень · ${ownLevelFilter}`
+                        : 'Под мой уровень'}
+                  </button>
+                ) : null}
                 <button
                   className="games-filter-more"
                   type="button"
@@ -1303,6 +1365,7 @@ export function GamesPage({ gateway, gameId, eventId }: GamesPageProps): React.J
                       <select
                         aria-label="Уровень игроков"
                         value={levelRange}
+                        disabled={ownLevelFilter !== null}
                         onChange={(event) => {
                           beginFilterChange();
                           setLevelRange(event.target.value as GameLevelRangeFilter);
@@ -1383,7 +1446,18 @@ export function GamesPage({ gateway, gameId, eventId }: GamesPageProps): React.J
                       После 18:00 <span>×</span>
                     </button>
                   ) : null}
-                  {levelRange !== 'ALL' ? (
+                  {ownLevelFilter ? (
+                    <button
+                      type="button"
+                      aria-label={`Убрать фильтр Мой уровень ${ownLevelFilter}`}
+                      onClick={() => {
+                        beginFilterChange();
+                        setOwnLevelFilter(null);
+                      }}
+                    >
+                      Мой уровень {ownLevelFilter} <span>×</span>
+                    </button>
+                  ) : levelRange !== 'ALL' ? (
                     <button
                       type="button"
                       aria-label={`Убрать фильтр Уровень ${levelRangeLabels[levelRange]}`}
@@ -1444,7 +1518,7 @@ export function GamesPage({ gateway, gameId, eventId }: GamesPageProps): React.J
             <h2>{tab === 'DISCOVER' ? 'Подходящих событий пока нет' : 'Здесь пока пусто'}</h2>
             <p>
               {tab === 'DISCOVER'
-                ? 'Смените дату, тип события или покажите события без свободных мест.'
+                ? 'Смените дату, тип события, уровень или покажите события без свободных мест.'
                 : 'После записи игра появится в этом разделе.'}
             </p>
           </div>

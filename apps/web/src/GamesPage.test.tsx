@@ -13,6 +13,7 @@ import type {
   EventCatalogPage,
   EventCatalogQuery,
   GameCard as ViewerGameCard,
+  PlayerLevelState,
   PublicGameCard,
   PublicTournamentSummary,
 } from './auth-gateway.js';
@@ -53,6 +54,26 @@ const game: PublicGameCard = {
   allowedActions: ['OPEN_DETAILS', 'JOIN'],
   deepLink: '/games/751fe6a8-b0b1-4b2b-873d-a2d785c4e191',
 };
+
+function playerLevelState(code: string, rank: number): PlayerLevelState {
+  return {
+    sportCode: 'PADEL',
+    scaleVersion: 1,
+    levels: [],
+    currentLevel: {
+      playerId: '11111111-1111-4111-8111-111111111111',
+      sportCode: 'PADEL',
+      levelId: '22222222-2222-4222-8222-222222222222',
+      code,
+      title: code,
+      rank,
+      source: 'SELF_DECLARED',
+      numericValue: null,
+      scaleVersion: 1,
+      updatedAt: '2026-08-25T10:00:00.000Z',
+    },
+  };
+}
 
 const tournament: PublicTournamentSummary = {
   id: '99999999-9999-4999-8999-999999999999',
@@ -723,6 +744,53 @@ describe('GamesPage discovery', () => {
       expect(filters).not.toHaveProperty('levelTo');
     });
     expect(screen.getByRole('checkbox', { name: 'Не показывать набранные' })).toBeChecked();
+  });
+
+  it('filters the catalog to the current player level with one action', async () => {
+    const api: AuthGateway = {
+      ...gateway(),
+      getOwnPlayerLevel: vi.fn().mockResolvedValue(playerLevelState('C+', 4)),
+    };
+    const user = userEvent.setup();
+    render(<GamesPage gateway={api} />);
+    await screen.findByText(game.title);
+
+    await user.click(screen.getByRole('button', { name: 'Под мой уровень' }));
+
+    await waitFor(() => expect(api.getOwnPlayerLevel).toHaveBeenCalledWith('PADEL'));
+    await waitFor(() =>
+      expect(api.listEventCatalog).toHaveBeenLastCalledWith(
+        expect.objectContaining({ levelFrom: 'C+', levelTo: 'C+' }),
+      ),
+    );
+    expect(screen.getByRole('button', { name: 'Мой уровень · C+' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    expect(screen.getByRole('button', { name: 'Убрать фильтр Мой уровень C+' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Вступить в игру' })).toBeVisible();
+  });
+
+  it('shows the useful empty state after the current-level filter finds no events', async () => {
+    const api: AuthGateway = {
+      ...gateway(),
+      getOwnPlayerLevel: vi.fn().mockResolvedValue(playerLevelState('B', 5)),
+    };
+    vi.mocked(api.listEventCatalog)
+      .mockResolvedValueOnce(catalogPage([{ kind: 'GAME', game }]))
+      .mockResolvedValueOnce(catalogPage([]));
+    const user = userEvent.setup();
+    render(<GamesPage gateway={api} />);
+    await screen.findByText(game.title);
+
+    await user.click(screen.getByRole('button', { name: 'Под мой уровень' }));
+
+    expect(await screen.findByText('Подходящих событий пока нет')).toBeVisible();
+    expect(
+      screen.getByText(
+        'Смените дату, тип события, уровень или покажите события без свободных мест.',
+      ),
+    ).toBeVisible();
   });
 
   it('continues the mixed catalog through its opaque cursor', async () => {
