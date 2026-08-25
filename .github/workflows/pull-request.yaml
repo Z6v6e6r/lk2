@@ -4,7 +4,6 @@ on:
   pull_request:
   push:
     branches: [main]
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -122,7 +121,6 @@ jobs:
           EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           EVENT_BEFORE_SHA: ${{ github.event.before }}
           EVENT_AFTER_SHA: ${{ github.event.after }}
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           range_mode=merge_base
@@ -135,20 +133,6 @@ jobs:
               range_mode=exact_push
               base_tip_sha="$EVENT_BEFORE_SHA"
               head_sha="$EVENT_AFTER_SHA"
-              ;;
-            workflow_dispatch)
-              pulls_json="$(gh api --method GET "repos/$GITHUB_REPOSITORY/pulls" \
-                -f state=open \
-                -f head="$GITHUB_REPOSITORY_OWNER:$GITHUB_REF_NAME" \
-                -f per_page=100)"
-              matching_count="$(jq 'length' <<<"$pulls_json")"
-              if [[ "$matching_count" -ne 1 ]]; then
-                echo "Expected exactly one open pull request for $GITHUB_REF_NAME, found $matching_count" >&2
-                exit 1
-              fi
-              base_tip_sha="$(jq -r '.[0].base.sha' <<<"$pulls_json")"
-              head_sha="$(jq -r '.[0].head.sha' <<<"$pulls_json")"
-              test "$head_sha" = "$GITHUB_SHA"
               ;;
             *)
               echo "Unsupported secret-scan event: $GITHUB_EVENT_NAME" >&2
