@@ -143,6 +143,15 @@ function gameKindLabel(kind: GameCard['kind']): string {
   }
 }
 
+function priceLabel(game: GameCard): string | null {
+  if (!game.priceSummary) return null;
+  return new Intl.NumberFormat('ru-RU', {
+    style: 'currency',
+    currency: game.priceSummary.currency,
+    maximumFractionDigits: 0,
+  }).format(game.priceSummary.amountMinor / 100);
+}
+
 function participantName(game: GameCard, userId: string): string {
   return (
     game.participants.find((participant) => participant.userId === userId)?.displayName ?? 'Игрок'
@@ -252,6 +261,7 @@ function ResultSetTeam(props: {
 function GameSummary({ game }: { readonly game: GameCard }): React.JSX.Element {
   const gameSchedule = schedule(game);
   const gameType = game.kind === 'RATING' ? 'rating' : 'friendly';
+  const price = priceLabel(game);
   return (
     <section className="game-match-summary" aria-label="Основная информация об игре">
       <span className={`fh-event__tag is-${gameType} game-match-summary__tag`}>
@@ -273,6 +283,14 @@ function GameSummary({ game }: { readonly game: GameCard }): React.JSX.Element {
             {game.court?.name ? ` · ${game.court.name}` : ''}
           </span>
         </span>
+        {price ? (
+          <span className="activity-card-metadata-row" aria-label={`Стоимость места: ${price}`}>
+            <span aria-hidden="true">₽</span>
+            <span>
+              <strong>Стоимость места:</strong> {price}
+            </span>
+          </span>
+        ) : null}
       </div>
       <span className="game-match-summary__divider" aria-hidden="true" />
     </section>
