@@ -19,7 +19,7 @@ const quoteRequestSchema = z.strictObject({
   target: z.strictObject({
     kind: z.literal('GAME'),
     id: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{2,199}$/),
-    expectedRevision: z.number().int().positive().optional(),
+    expectedRevision: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(),
   }),
   preferredSubscriptionInstanceId: z
     .string()

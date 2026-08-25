@@ -80,7 +80,11 @@ PadlHub JWT and supplies an `Idempotency-Key`; actor, active session, tenant and
 synced VIVA mapping are resolved server-side. LK2 then issues an RS256 single-use
 delegation bound to the recipient, tenant, request digest, correlation ID and
 idempotency-key digest. The fixed internal client sends that delegation to the ph-admin
-verifier and returns only a redacted, non-binding WARN advisory after verification.
+verifier and returns only a redacted, non-binding WARN advisory after verification. That
+single-use call has `maxAttempts=1`, a bounded timeout, redirect rejection, a bounded
+circuit breaker and redacted outcome/duration/status-class metrics. A caller retry keeps
+the public idempotency key but mints a new delegation/JTI; LK2 never retries one consumed
+delegation internally.
 
 Public input cannot carry actor, provider IDs, integration credentials or a delegation.
 The route has no provider, payment, subscription mutation, reservation or business-state

@@ -403,7 +403,11 @@ const subscriptionRuntimeWarnBoundary = (() => {
       baseUrl: config.SUBSCRIPTION_RUNTIME_BASE_URL as string,
       integrationToken: config.SUBSCRIPTION_RUNTIME_INTEGRATION_TOKEN as string,
       timeoutMs: config.SUBSCRIPTION_RUNTIME_TIMEOUT_MS,
+      circuitFailureThreshold: config.SUBSCRIPTION_RUNTIME_CIRCUIT_FAILURE_THRESHOLD,
+      circuitResetMs: config.SUBSCRIPTION_RUNTIME_CIRCUIT_RESET_MS,
       environment: config.APP_ENV === 'local' ? 'development' : 'production',
+      onMetric: (metric) =>
+        logger.info({ metric }, 'subscription runtime quote boundary operation'),
     }),
   };
 })();

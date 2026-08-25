@@ -122,6 +122,20 @@ describe('ManagedSubscriptionRuntimeQuoteClient', () => {
         integrationToken: 'x'.repeat(32),
         timeoutMs: 250,
       },
+      {
+        enabled: true,
+        baseUrl: 'https://subscription-runtime.example.test',
+        integrationToken: 'x'.repeat(32),
+        timeoutMs: 250,
+        circuitFailureThreshold: 0,
+      },
+      {
+        enabled: true,
+        baseUrl: 'https://subscription-runtime.example.test',
+        integrationToken: 'x'.repeat(32),
+        timeoutMs: 250,
+        circuitResetMs: 999,
+      },
     ]) {
       await expect(
         new ManagedSubscriptionRuntimeQuoteClient({ ...options, fetchImplementation }).quote(
@@ -187,6 +201,15 @@ describe('ManagedSubscriptionRuntimeQuoteClient', () => {
     ).rejects.toMatchObject({ code: 'SUBSCRIPTION_RUNTIME_QUOTE_REQUEST_INVALID' });
     await expect(
       client(fetchImplementation).quote(
+        {
+          ...quoteRequest,
+          target: { ...quoteRequest.target, expectedRevision: Number.MAX_SAFE_INTEGER + 1 },
+        },
+        envelope,
+      ),
+    ).rejects.toMatchObject({ code: 'SUBSCRIPTION_RUNTIME_QUOTE_REQUEST_INVALID' });
+    await expect(
+      client(fetchImplementation).quote(
         { ...quoteRequest, target: { ...quoteRequest.target, kind: 'TOURNAMENT' } },
         envelope,
       ),
@@ -195,6 +218,21 @@ describe('ManagedSubscriptionRuntimeQuoteClient', () => {
       client(fetchImplementation).quote({ ...quoteRequest, ignored: true } as never, envelope),
     ).rejects.toMatchObject({ code: 'SUBSCRIPTION_RUNTIME_QUOTE_REQUEST_INVALID' });
     expect(fetchImplementation).not.toHaveBeenCalled();
+  });
+
+  it('accepts the recipient maximum safe revision', async () => {
+    const fetchImplementation = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response(JSON.stringify(fullPriceOnly), { status: 200 }));
+    await expect(
+      client(fetchImplementation).quote(
+        {
+          ...quoteRequest,
+          target: { ...quoteRequest.target, expectedRevision: Number.MAX_SAFE_INTEGER },
+        },
+        envelope,
+      ),
+    ).resolves.toMatchObject({ outcome: 'FULL_PRICE_ONLY' });
   });
 
   it('preserves only the upstream status while discarding the remote error body', async () => {
@@ -302,6 +340,17 @@ describe('ManagedSubscriptionRuntimeQuoteClient', () => {
       'SUBSCRIPTION_RUNTIME_RESPONSE_INVALID',
     ],
     [
+      'unsafe response integer',
+      new Response(
+        JSON.stringify({
+          ...fullPriceOnly,
+          price: { ...fullPriceOnly.price, basePriceMinor: Number.MAX_SAFE_INTEGER + 1 },
+        }),
+        { status: 200 },
+      ),
+      'SUBSCRIPTION_RUNTIME_RESPONSE_INVALID',
+    ],
+    [
       'duplicate reasons',
       new Response(
         JSON.stringify({
@@ -350,6 +399,64 @@ describe('ManagedSubscriptionRuntimeQuoteClient', () => {
     await expect(
       client(fetchImplementation, { timeoutMs: 100 }).quote(quoteRequest, envelope),
     ).rejects.toMatchObject({ code: 'SUBSCRIPTION_RUNTIME_TIMEOUT' });
+  });
+
+  it('opens, rejects and resets a single-attempt circuit with redacted metrics', async () => {
+    let now = 1_000;
+    const metrics: unknown[] = [];
+    const fetchImplementation = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response('{}', { status: 503 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(fullPriceOnly), { status: 200 }));
+    const quoteClient = client(fetchImplementation, {
+      circuitFailureThreshold: 1,
+      circuitResetMs: 1_000,
+      now: () => now,
+      onMetric: (metric: unknown) => metrics.push(metric),
+    });
+
+    await expect(quoteClient.quote(quoteRequest, envelope)).rejects.toMatchObject({
+      code: 'SUBSCRIPTION_RUNTIME_REQUEST_FAILED',
+      status: 503,
+    });
+    await expect(quoteClient.quote(quoteRequest, envelope)).rejects.toMatchObject({
+      code: 'SUBSCRIPTION_RUNTIME_CIRCUIT_OPEN',
+    });
+    expect(fetchImplementation).toHaveBeenCalledOnce();
+
+    now += 1_000;
+    await expect(quoteClient.quote(quoteRequest, envelope)).resolves.toMatchObject({
+      outcome: 'FULL_PRICE_ONLY',
+    });
+    expect(fetchImplementation).toHaveBeenCalledTimes(2);
+    expect(metrics).toEqual([
+      {
+        operation: 'subscription_runtime_quote',
+        outcome: 'failure',
+        durationMs: 0,
+        statusClass: '5xx',
+      },
+      {
+        operation: 'subscription_runtime_quote',
+        outcome: 'circuit_open',
+        durationMs: 0,
+      },
+      {
+        operation: 'subscription_runtime_quote',
+        outcome: 'success',
+        durationMs: 0,
+        statusClass: '2xx',
+      },
+    ]);
+    const serializedMetrics = JSON.stringify(metrics);
+    for (const secret of [
+      envelope.actorDelegation,
+      envelope.correlationId,
+      envelope.idempotencyKey,
+      'test-integration-token-20260824-safe',
+    ]) {
+      expect(serializedMetrics).not.toContain(secret);
+    }
   });
 
   it('does not expose implementation errors as contract errors', () => {

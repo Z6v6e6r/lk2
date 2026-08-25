@@ -355,6 +355,33 @@ describe('subscription runtime public WARN boundary', () => {
     expect(quoteClient.quote).not.toHaveBeenCalled();
   });
 
+  it('matches the recipient safe-integer revision boundary', async () => {
+    const { issuer, contextRepository, quoteClient } = await fixture();
+    const app = createApp({
+      mode: 'WARN',
+      actorContextRepository: contextRepository,
+      delegationIssuer: issuer,
+      quoteClient,
+      commandHandlers: [actorPreHandler],
+    });
+
+    expect(
+      (
+        await inject(app, {
+          ...quoteRequest,
+          target: { ...quoteRequest.target, expectedRevision: Number.MAX_SAFE_INTEGER },
+        })
+      ).statusCode,
+    ).toBe(200);
+    const rejected = await inject(app, {
+      ...quoteRequest,
+      target: { ...quoteRequest.target, expectedRevision: Number.MAX_SAFE_INTEGER + 1 },
+    });
+    expect(rejected.statusCode).toBe(400);
+    expect(errorCode(rejected)).toBe('SUBSCRIPTION_RUNTIME_QUOTE_REQUEST_INVALID');
+    expect(quoteClient.quote).toHaveBeenCalledOnce();
+  });
+
   it.each([
     [401, 401, 'SUBSCRIPTION_RUNTIME_DELEGATION_REJECTED'],
     [403, 403, 'SUBSCRIPTION_RUNTIME_DELEGATION_FORBIDDEN'],

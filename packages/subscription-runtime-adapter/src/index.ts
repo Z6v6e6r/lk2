@@ -188,8 +188,18 @@ export interface ManagedSubscriptionRuntimeQuoteClientOptions {
   readonly baseUrl?: string;
   readonly integrationToken?: string;
   readonly timeoutMs?: number;
+  readonly circuitFailureThreshold?: number;
+  readonly circuitResetMs?: number;
   readonly environment?: 'production' | 'development' | 'test';
   readonly fetchImplementation?: typeof fetch;
+  readonly now?: () => number;
+  readonly onMetric?: (metric: ManagedSubscriptionRuntimeQuoteMetric) => void;
+}
+export interface ManagedSubscriptionRuntimeQuoteMetric {
+  readonly operation: 'subscription_runtime_quote';
+  readonly outcome: 'success' | 'rejected' | 'failure' | 'timeout' | 'circuit_open';
+  readonly durationMs: number;
+  readonly statusClass?: '2xx' | '3xx' | '4xx' | '5xx';
 }
 export class ManagedSubscriptionRuntimeQuoteClientError extends Error {
   public constructor(
@@ -219,9 +229,9 @@ const oneOf = (value: unknown, values: readonly string[]): value is string =>
   typeof value === 'string' && values.includes(value);
 const id = (value: unknown): value is string => typeof value === 'string' && idPattern.test(value);
 const nonNegative = (value: unknown): value is number =>
-  typeof value === 'number' && Number.isInteger(value) && value >= 0;
+  typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 const positive = (value: unknown): value is number =>
-  typeof value === 'number' && Number.isInteger(value) && value > 0;
+  typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
 const instant = (value: unknown): value is string =>
   typeof value === 'string' &&
   Number.isFinite(Date.parse(value)) &&
@@ -268,10 +278,14 @@ function configuration(options: ManagedSubscriptionRuntimeQuoteClientOptions): {
   readonly baseUrl: URL;
   readonly integrationToken: string;
   readonly timeoutMs: number;
+  readonly circuitFailureThreshold: number;
+  readonly circuitResetMs: number;
 } {
   if (!options.enabled) invalid('SUBSCRIPTION_RUNTIME_DISABLED');
   const token = options.integrationToken?.trim();
   const timeoutMs = options.timeoutMs;
+  const circuitFailureThreshold = options.circuitFailureThreshold ?? 3;
+  const circuitResetMs = options.circuitResetMs ?? 30_000;
   const baseUrlInput = options.baseUrl;
   if (
     baseUrlInput === undefined ||
@@ -280,7 +294,12 @@ function configuration(options: ManagedSubscriptionRuntimeQuoteClientOptions): {
     timeoutMs === undefined ||
     !positive(timeoutMs) ||
     timeoutMs < 100 ||
-    timeoutMs > 10_000
+    timeoutMs > 10_000 ||
+    !positive(circuitFailureThreshold) ||
+    circuitFailureThreshold > 100 ||
+    !positive(circuitResetMs) ||
+    circuitResetMs < 1_000 ||
+    circuitResetMs > 300_000
   )
     invalid('SUBSCRIPTION_RUNTIME_CONFIGURATION_INVALID');
   const configuredBaseUrl = baseUrlInput ?? invalid('SUBSCRIPTION_RUNTIME_CONFIGURATION_INVALID');
@@ -304,7 +323,13 @@ function configuration(options: ManagedSubscriptionRuntimeQuoteClientOptions): {
     baseUrl.pathname !== '/'
   )
     invalid('SUBSCRIPTION_RUNTIME_CONFIGURATION_INVALID');
-  return { baseUrl, integrationToken: configuredToken, timeoutMs: configuredTimeoutMs };
+  return {
+    baseUrl,
+    integrationToken: configuredToken,
+    timeoutMs: configuredTimeoutMs,
+    circuitFailureThreshold,
+    circuitResetMs,
+  };
 }
 function reasons(
   value: unknown,
@@ -515,9 +540,79 @@ function assertQuoteResponse(
 }
 export class ManagedSubscriptionRuntimeQuoteClient {
   private readonly fetchImplementation: typeof fetch;
+  private readonly now: () => number;
+  private consecutiveFailures = 0;
+  private circuitOpenUntil = 0;
+  private probeInFlight = false;
+  private failureVersion = 0;
+
   public constructor(private readonly options: ManagedSubscriptionRuntimeQuoteClientOptions) {
     this.fetchImplementation = options.fetchImplementation ?? globalThis.fetch;
+    this.now = options.now ?? Date.now;
   }
+
+  private emit(metric: ManagedSubscriptionRuntimeQuoteMetric): void {
+    try {
+      this.options.onMetric?.(metric);
+    } catch {
+      // Telemetry must not change boundary behavior.
+    }
+  }
+
+  private statusClass(
+    status: number,
+  ): NonNullable<ManagedSubscriptionRuntimeQuoteMetric['statusClass']> {
+    if (status >= 200 && status < 300) return '2xx';
+    if (status >= 300 && status < 400) return '3xx';
+    if (status >= 400 && status < 500) return '4xx';
+    return '5xx';
+  }
+
+  private circuitAttempt(): { readonly halfOpen: boolean; readonly failureVersion: number } {
+    const now = this.now();
+    if (this.circuitOpenUntil > now || this.probeInFlight) {
+      this.emit({
+        operation: 'subscription_runtime_quote',
+        outcome: 'circuit_open',
+        durationMs: 0,
+      });
+      invalid('SUBSCRIPTION_RUNTIME_CIRCUIT_OPEN');
+    }
+    const halfOpen = this.circuitOpenUntil > 0;
+    if (halfOpen) this.probeInFlight = true;
+    return { halfOpen, failureVersion: this.failureVersion };
+  }
+
+  private resetCircuitIfUnchanged(failureVersion: number): void {
+    if (this.failureVersion !== failureVersion) return;
+    this.consecutiveFailures = 0;
+    this.circuitOpenUntil = 0;
+  }
+
+  private recordFailure(input: {
+    readonly halfOpen: boolean;
+    readonly circuitFailureThreshold: number;
+    readonly circuitResetMs: number;
+  }): void {
+    this.consecutiveFailures += 1;
+    this.failureVersion += 1;
+    if (input.halfOpen || this.consecutiveFailures >= input.circuitFailureThreshold) {
+      this.circuitOpenUntil = this.now() + input.circuitResetMs;
+    }
+  }
+
+  private isCircuitFailure(error: ManagedSubscriptionRuntimeQuoteClientError): boolean {
+    return (
+      error.code === 'SUBSCRIPTION_RUNTIME_TIMEOUT' ||
+      error.code === 'SUBSCRIPTION_RUNTIME_RESPONSE_INVALID' ||
+      (error.code === 'SUBSCRIPTION_RUNTIME_REQUEST_FAILED' &&
+        (error.status === undefined ||
+          error.status === 408 ||
+          error.status === 429 ||
+          error.status >= 500))
+    );
+  }
+
   public async quote(
     request: ManagedSubscriptionRuntimeV1QuoteRequest,
     envelope: ManagedSubscriptionRuntimeServerEnvelope,
@@ -525,6 +620,8 @@ export class ManagedSubscriptionRuntimeQuoteClient {
     const options = configuration(this.options);
     assertRequest(request);
     assertEnvelope(envelope);
+    const circuit = this.circuitAttempt();
+    const startedAt = this.now();
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), options.timeoutMs);
     try {
@@ -573,14 +670,47 @@ export class ManagedSubscriptionRuntimeQuoteClient {
         return invalid('SUBSCRIPTION_RUNTIME_RESPONSE_INVALID');
       }
       assertQuoteResponse(payload);
+      this.resetCircuitIfUnchanged(circuit.failureVersion);
+      this.emit({
+        operation: 'subscription_runtime_quote',
+        outcome: 'success',
+        durationMs: Math.max(0, this.now() - startedAt),
+        statusClass: '2xx',
+      });
       return payload;
     } catch (error) {
-      if (error instanceof ManagedSubscriptionRuntimeQuoteClientError) throw error;
-      if (controller.signal.aborted || (error instanceof Error && error.name === 'AbortError'))
-        invalid('SUBSCRIPTION_RUNTIME_TIMEOUT');
-      return invalid('SUBSCRIPTION_RUNTIME_REQUEST_FAILED');
+      const boundaryError =
+        error instanceof ManagedSubscriptionRuntimeQuoteClientError
+          ? error
+          : controller.signal.aborted || (error instanceof Error && error.name === 'AbortError')
+            ? new ManagedSubscriptionRuntimeQuoteClientError('SUBSCRIPTION_RUNTIME_TIMEOUT')
+            : new ManagedSubscriptionRuntimeQuoteClientError('SUBSCRIPTION_RUNTIME_REQUEST_FAILED');
+      if (this.isCircuitFailure(boundaryError)) {
+        this.recordFailure({
+          halfOpen: circuit.halfOpen,
+          circuitFailureThreshold: options.circuitFailureThreshold,
+          circuitResetMs: options.circuitResetMs,
+        });
+      } else {
+        this.resetCircuitIfUnchanged(circuit.failureVersion);
+      }
+      this.emit({
+        operation: 'subscription_runtime_quote',
+        outcome:
+          boundaryError.code === 'SUBSCRIPTION_RUNTIME_TIMEOUT'
+            ? 'timeout'
+            : boundaryError.status !== undefined && boundaryError.status < 500
+              ? 'rejected'
+              : 'failure',
+        durationMs: Math.max(0, this.now() - startedAt),
+        ...(boundaryError.status === undefined
+          ? {}
+          : { statusClass: this.statusClass(boundaryError.status) }),
+      });
+      throw boundaryError;
     } finally {
       clearTimeout(timeout);
+      if (circuit.halfOpen) this.probeInFlight = false;
     }
   }
 }

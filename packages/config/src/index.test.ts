@@ -1376,6 +1376,8 @@ describe('loadConfig', () => {
     } as const;
     expect(loadConfig(warnEnvironment)).toMatchObject({
       SUBSCRIPTION_RUNTIME_WARN_MODE: 'WARN',
+      SUBSCRIPTION_RUNTIME_CIRCUIT_FAILURE_THRESHOLD: 3,
+      SUBSCRIPTION_RUNTIME_CIRCUIT_RESET_MS: 30_000,
       SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID: 'test-key',
     });
     expect(() => loadConfig({ ...warnEnvironment, APP_ENV: 'ci' })).toThrow(
@@ -1390,6 +1392,18 @@ describe('loadConfig', () => {
         SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID: 'missing-key',
       }),
     ).toThrow('must select a PKCS8 private key');
+    expect(() =>
+      loadConfig({
+        ...warnEnvironment,
+        SUBSCRIPTION_RUNTIME_CIRCUIT_FAILURE_THRESHOLD: '0',
+      }),
+    ).toThrow('Invalid application configuration');
+    expect(() =>
+      loadConfig({
+        ...warnEnvironment,
+        SUBSCRIPTION_RUNTIME_CIRCUIT_RESET_MS: '999',
+      }),
+    ).toThrow('Invalid application configuration');
   });
 
   it('requires a dedicated secret when community invites are enabled', () => {

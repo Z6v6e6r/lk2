@@ -126,6 +126,18 @@ const environmentSchema = z.object({
   SUBSCRIPTION_RUNTIME_BASE_URL: z.string().url().optional(),
   SUBSCRIPTION_RUNTIME_INTEGRATION_TOKEN: z.string().min(32).optional(),
   SUBSCRIPTION_RUNTIME_TIMEOUT_MS: z.coerce.number().int().min(100).max(10_000).default(3_000),
+  SUBSCRIPTION_RUNTIME_CIRCUIT_FAILURE_THRESHOLD: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(100)
+    .default(3),
+  SUBSCRIPTION_RUNTIME_CIRCUIT_RESET_MS: z.coerce
+    .number()
+    .int()
+    .min(1_000)
+    .max(300_000)
+    .default(30_000),
   SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS: z.string().min(1).optional(),
   SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID: z
     .string()
