@@ -2,13 +2,15 @@ name: Pull request checks
 
 on:
   pull_request:
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: pr-${{ github.event.pull_request.number || github.ref }}
+  group: pr-${{ github.event.pull_request.number || (github.event_name == 'push' && github.run_id) || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -113,18 +115,26 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
-      - name: Resolve the complete pull request range
+      - name: Resolve the exact secret-scan range
         id: secret-range
         env:
           EVENT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          EVENT_BEFORE_SHA: ${{ github.event.before }}
+          EVENT_AFTER_SHA: ${{ github.event.after }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          range_mode=merge_base
           case "$GITHUB_EVENT_NAME" in
             pull_request)
               base_tip_sha="$EVENT_BASE_SHA"
               head_sha="$EVENT_HEAD_SHA"
+              ;;
+            push)
+              range_mode=exact_push
+              base_tip_sha="$EVENT_BEFORE_SHA"
+              head_sha="$EVENT_AFTER_SHA"
               ;;
             workflow_dispatch)
               pulls_json="$(gh api --method GET "repos/$GITHUB_REPOSITORY/pulls" \
@@ -149,12 +159,25 @@ jobs:
           [[ "$head_sha" =~ ^[0-9a-f]{40}$ ]]
           git cat-file -e "$base_tip_sha^{commit}"
           git cat-file -e "$head_sha^{commit}"
-          base_sha="$(git merge-base "$base_tip_sha" "$head_sha")"
-          [[ "$base_sha" =~ ^[0-9a-f]{40}$ ]]
-          git merge-base --is-ancestor "$base_sha" "$head_sha"
+          if [[ "$range_mode" = exact_push ]]; then
+            zero_sha=0000000000000000000000000000000000000000
+            test "$GITHUB_REF" = refs/heads/main
+            test "$base_tip_sha" != "$zero_sha"
+            test "$head_sha" != "$zero_sha"
+            test "$base_tip_sha" != "$head_sha"
+            test "$head_sha" = "$GITHUB_SHA"
+            git merge-base --is-ancestor "$base_tip_sha" "$head_sha"
+            base_sha="$base_tip_sha"
+            range_commit_count="$(git rev-list --count "$base_sha..$head_sha")"
+            [[ "$range_commit_count" =~ ^[1-9][0-9]*$ ]]
+          else
+            base_sha="$(git merge-base "$base_tip_sha" "$head_sha")"
+            [[ "$base_sha" =~ ^[0-9a-f]{40}$ ]]
+            git merge-base --is-ancestor "$base_sha" "$head_sha"
+          fi
           printf 'base_sha=%s\n' "$base_sha" >>"$GITHUB_OUTPUT"
           printf 'head_sha=%s\n' "$head_sha" >>"$GITHUB_OUTPUT"
-      - name: Scan complete pull request graph for secrets
+      - name: Scan exact range for secrets
         env:
           BASE_SHA: ${{ steps.secret-range.outputs.base_sha }}
           HEAD_SHA: ${{ steps.secret-range.outputs.head_sha }}

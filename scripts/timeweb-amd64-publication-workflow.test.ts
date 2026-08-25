@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -1134,9 +1134,12 @@ describe('Timeweb amd64 publication workflow', () => {
       'utf8',
     );
     const document = parse(workflow) as {
+      readonly concurrency?: { readonly group?: string };
+      readonly on?: Readonly<Record<string, unknown>>;
       readonly jobs?: {
         readonly quality?: {
           readonly steps?: readonly {
+            readonly env?: Readonly<Record<string, string>>;
             readonly if?: string;
             readonly name?: string;
             readonly run?: string;
@@ -1151,6 +1154,7 @@ describe('Timeweb amd64 publication workflow', () => {
         readonly ['secret-scan']?: {
           readonly permissions?: Readonly<Record<string, string>>;
           readonly steps?: readonly {
+            readonly env?: Readonly<Record<string, string>>;
             readonly if?: string;
             readonly name?: string;
             readonly run?: string;
@@ -1172,10 +1176,10 @@ describe('Timeweb amd64 publication workflow', () => {
     );
     const secretScanJob = document.jobs?.['secret-scan'];
     const secretRange = secretScanJob?.steps?.find(
-      ({ name }) => name === 'Resolve the complete pull request range',
+      ({ name }) => name === 'Resolve the exact secret-scan range',
     );
     const secretScan = secretScanJob?.steps?.find(
-      ({ name }) => name === 'Scan complete pull request graph for secrets',
+      ({ name }) => name === 'Scan exact range for secrets',
     );
     const secretArtifact = secretScanJob?.steps?.find(
       ({ name }) => name === 'Upload secret-scan diagnostics',
@@ -1199,12 +1203,30 @@ describe('Timeweb amd64 publication workflow', () => {
       contents: 'read',
       'pull-requests': 'read',
     });
+    expect(document.on).toEqual({
+      pull_request: null,
+      push: { branches: ['main'] },
+      workflow_dispatch: null,
+    });
+    expect(document.concurrency?.group).toBe(
+      "pr-${{ github.event.pull_request.number || (github.event_name == 'push' && github.run_id) || github.ref }}",
+    );
+    expect(document.concurrency?.group).not.toContain('github.sha');
     expect(secretScanJob?.steps?.[0]?.uses).toBe(
       'actions/checkout@11d5960a326750d5838078e36cf38b85af677262',
     );
+    expect(secretRange?.env).toMatchObject({
+      EVENT_AFTER_SHA: '${{ github.event.after }}',
+      EVENT_BASE_SHA: '${{ github.event.pull_request.base.sha }}',
+      EVENT_BEFORE_SHA: '${{ github.event.before }}',
+      EVENT_HEAD_SHA: '${{ github.event.pull_request.head.sha }}',
+    });
     expect(secretRange?.run).toContain('case "$GITHUB_EVENT_NAME" in');
     expect(secretRange?.run).toContain('base_sha="$(git merge-base "$base_tip_sha" "$head_sha")"');
+    expect(secretRange?.run).toContain('base_sha="$base_tip_sha"');
+    expect(secretRange?.run).toContain('git rev-list --count "$base_sha..$head_sha"');
     expect(secretRange?.run).toContain('git cat-file -e "$head_sha^{commit}"');
+    expect(secretScan?.if).toBeUndefined();
     expect(secretScan?.run).toContain('docker pull "$GITLEAKS_IMAGE"');
     expect(secretScan?.run).toContain(
       'octopus_merges="$(git rev-list --min-parents=3 "$BASE_SHA..$HEAD_SHA")"',
@@ -1252,6 +1274,161 @@ describe('Timeweb amd64 publication workflow', () => {
     expect(diagnosticsRunner).toContain('--reporter=./scripts/vitest-ci-diagnostics-reporter.ts');
     expect(diagnosticsRunner).toContain('exit "$test_status"');
     expect(diagnosticsRunner).not.toContain('continue-on-error');
+  });
+
+  it('resolves PR merge-base and exact push ranges while failing closed for malformed pushes', async () => {
+    const workflow = await readFile(
+      new URL('../.github/workflows/pull-request.yaml', import.meta.url),
+      'utf8',
+    );
+    const document = parse(workflow) as {
+      readonly jobs?: {
+        readonly ['secret-scan']?: {
+          readonly steps?: readonly { readonly id?: string; readonly run?: string }[];
+        };
+      };
+    };
+    const resolver = document.jobs?.['secret-scan']?.steps?.find(
+      ({ id }) => id === 'secret-range',
+    )?.run;
+    expect(resolver).toBeTruthy();
+
+    const directory = await mkdtemp(join(tmpdir(), 'phub-secret-range-resolver-'));
+    const git = (args: readonly string[]): string => {
+      const result = spawnSync('git', args, { cwd: directory, encoding: 'utf8' });
+      if (result.status !== 0) {
+        throw new Error(`git ${args.join(' ')} failed: ${result.stderr}`);
+      }
+      return result.stdout.trim();
+    };
+
+    let execution = 0;
+    const runResolver = async (
+      overrides: Readonly<Record<string, string>>,
+    ): Promise<{
+      readonly outputs: Readonly<Record<string, string>>;
+      readonly status: number | null;
+      readonly stderr: string;
+    }> => {
+      const outputPath = join(directory, `github-output-${execution++}.txt`);
+      const result = spawnSync('bash', ['-c', resolver ?? 'exit 99'], {
+        cwd: directory,
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          EVENT_AFTER_SHA: '',
+          EVENT_BASE_SHA: '',
+          EVENT_BEFORE_SHA: '',
+          EVENT_HEAD_SHA: '',
+          GH_TOKEN: 'not-used',
+          GITHUB_EVENT_NAME: 'push',
+          GITHUB_OUTPUT: outputPath,
+          GITHUB_REF: 'refs/heads/main',
+          GITHUB_REF_NAME: 'main',
+          GITHUB_REPOSITORY: 'Z6v6e6r/lk2',
+          GITHUB_REPOSITORY_OWNER: 'Z6v6e6r',
+          GITHUB_SHA: '',
+          ...overrides,
+        },
+      });
+      const outputs: Record<string, string> = {};
+      const output = await readFile(outputPath, 'utf8').catch((error: NodeJS.ErrnoException) => {
+        if (error.code === 'ENOENT') return '';
+        throw error;
+      });
+      if (output.length > 0) {
+        for (const line of output.trim().split('\n')) {
+          const separator = line.indexOf('=');
+          outputs[line.slice(0, separator)] = line.slice(separator + 1);
+        }
+      }
+      return { outputs, status: result.status, stderr: result.stderr };
+    };
+
+    try {
+      git(['init', '--initial-branch=main']);
+      git(['config', 'user.email', 'ci-range@example.invalid']);
+      git(['config', 'user.name', 'CI Range Test']);
+      await writeFile(join(directory, 'root.txt'), 'root\n');
+      git(['add', 'root.txt']);
+      git(['commit', '-m', 'root']);
+      const rootSha = git(['rev-parse', 'HEAD']);
+
+      git(['checkout', '-b', 'candidate']);
+      await writeFile(join(directory, 'candidate.txt'), 'candidate\n');
+      git(['add', 'candidate.txt']);
+      git(['commit', '-m', 'candidate']);
+      const candidateSha = git(['rev-parse', 'HEAD']);
+
+      git(['checkout', 'main']);
+      await writeFile(join(directory, 'before.txt'), 'before\n');
+      git(['add', 'before.txt']);
+      git(['commit', '-m', 'before']);
+      const beforeSha = git(['rev-parse', 'HEAD']);
+      await writeFile(join(directory, 'after.txt'), 'after\n');
+      git(['add', 'after.txt']);
+      git(['commit', '-m', 'after']);
+      const afterSha = git(['rev-parse', 'HEAD']);
+
+      const pullRequest = await runResolver({
+        EVENT_BASE_SHA: afterSha,
+        EVENT_HEAD_SHA: candidateSha,
+        GITHUB_EVENT_NAME: 'pull_request',
+        GITHUB_REF: 'refs/pull/123/merge',
+        GITHUB_REF_NAME: '123/merge',
+        GITHUB_SHA: candidateSha,
+      });
+      expect(pullRequest.status, pullRequest.stderr).toBe(0);
+      expect(pullRequest.outputs).toEqual({ base_sha: rootSha, head_sha: candidateSha });
+
+      const fakeBin = join(directory, 'fake-bin');
+      const ghMarker = join(directory, 'gh-was-called');
+      await mkdir(fakeBin);
+      const fakeGh = join(fakeBin, 'gh');
+      await writeFile(fakeGh, '#!/bin/sh\nprintf invoked >"$GH_CALLED_FILE"\nexit 97\n');
+      await chmod(fakeGh, 0o755);
+      const push = await runResolver({
+        EVENT_AFTER_SHA: afterSha,
+        EVENT_BEFORE_SHA: beforeSha,
+        GH_CALLED_FILE: ghMarker,
+        GITHUB_SHA: afterSha,
+        PATH: `${fakeBin}:${process.env.PATH ?? ''}`,
+      });
+      expect(push.status, push.stderr).toBe(0);
+      expect(push.outputs).toEqual({ base_sha: beforeSha, head_sha: afterSha });
+      await expect(access(ghMarker)).rejects.toMatchObject({ code: 'ENOENT' });
+
+      const zeroSha = '0'.repeat(40);
+      const malformedPushes: readonly Readonly<Record<string, string>>[] = [
+        { EVENT_BEFORE_SHA: '', GITHUB_SHA: afterSha },
+        { EVENT_BEFORE_SHA: 'not-a-sha', GITHUB_SHA: afterSha },
+        { EVENT_BEFORE_SHA: zeroSha, GITHUB_SHA: afterSha },
+        { EVENT_AFTER_SHA: '', EVENT_BEFORE_SHA: beforeSha, GITHUB_SHA: afterSha },
+        { EVENT_AFTER_SHA: 'not-a-sha', EVENT_BEFORE_SHA: beforeSha, GITHUB_SHA: afterSha },
+        { EVENT_AFTER_SHA: zeroSha, EVENT_BEFORE_SHA: beforeSha, GITHUB_SHA: zeroSha },
+        { EVENT_AFTER_SHA: beforeSha, EVENT_BEFORE_SHA: beforeSha, GITHUB_SHA: beforeSha },
+        { EVENT_AFTER_SHA: afterSha, EVENT_BEFORE_SHA: candidateSha, GITHUB_SHA: afterSha },
+        { EVENT_AFTER_SHA: afterSha, EVENT_BEFORE_SHA: beforeSha, GITHUB_SHA: beforeSha },
+        {
+          EVENT_AFTER_SHA: afterSha,
+          EVENT_BEFORE_SHA: beforeSha,
+          GITHUB_REF: 'refs/heads/not-main',
+          GITHUB_SHA: afterSha,
+        },
+      ];
+      for (const malformedPush of malformedPushes) {
+        const result = await runResolver({
+          EVENT_AFTER_SHA: afterSha,
+          EVENT_BEFORE_SHA: beforeSha,
+          GITHUB_SHA: afterSha,
+          ...malformedPush,
+        });
+        expect(result.status).not.toBe(0);
+        expect(result.outputs).toEqual({});
+      }
+    } finally {
+      await rm(directory, { force: true, recursive: true });
+    }
   });
 
   it('scans candidate commits and merge resolutions without replaying an updated base', async () => {
