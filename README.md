@@ -88,12 +88,17 @@ docs/        architecture, ADRs, domain ownership and runbooks
 scripts/     migration checks, smoke tests, backup check and rollback guard
 ```
 
-## Quality gates
+## Full repository and release gates
 
 ```bash
 npm run check
+# For Compose changes only:
 docker compose config
 ```
+
+Daily development uses the risk-based FAST/SAFE/CRITICAL workflow in [AGENTS.md](AGENTS.md): run
+focused affected checks by default and use the full gate only when the changed dependency closure or
+CRITICAL boundary requires it. LOCAL, CI, STAGING, PROVIDER and PRODUCTION evidence are distinct.
 
 The original `openapi.yaml` is preserved byte-for-byte under `contracts/imported/`; the root file is the lintable working draft. See [the contract gap](docs/api/imported-contract-gap.md) and [migration map](contracts/migration-map.yaml) before implementing its mutation endpoints.
 
