@@ -19,13 +19,8 @@ on:
         description: Exact main SHA that executed the successful publication workflow
         required: true
         type: string
-      prior_reconciliation_run_id:
-        description: Leave empty for the first read-back; use its successful run ID for the second
-        required: false
-        default: ''
-        type: string
       confirmation:
-        description: Type RECONCILE_TIMEWEB_AMD64_PUBLICATION to inspect only the exact five images
+        description: Type RECONCILE_TIMEWEB_AMD64_PUBLICATION for optional recovery read-back only
         required: true
         type: string
 
@@ -58,7 +53,6 @@ jobs:
           EXPECTED_SOURCE_SHA: ${{ inputs.expected_source_sha }}
           EXPECTED_WORKFLOW_SHA: ${{ inputs.expected_workflow_sha }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PRIOR_RECONCILIATION_RUN_ID: ${{ inputs.prior_reconciliation_run_id }}
           PUBLICATION_RUN_ID: ${{ inputs.publication_run_id }}
           PUBLICATION_WORKFLOW_SHA: ${{ inputs.publication_workflow_sha }}
           REPOSITORY: ${{ github.repository }}
@@ -81,10 +75,6 @@ jobs:
           printf '%s' "$PUBLICATION_WORKFLOW_SHA" | grep -Eq '^[0-9a-f]{40}$'
           printf '%s' "$PUBLICATION_RUN_ID" | grep -Eq '^[1-9][0-9]*$'
           test "$EXPECTED_SOURCE_SHA" = "$APPROVED_SOURCE_SHA"
-          if test -n "$PRIOR_RECONCILIATION_RUN_ID"; then
-            printf '%s' "$PRIOR_RECONCILIATION_RUN_ID" | grep -Eq '^[1-9][0-9]*$'
-            test "$PRIOR_RECONCILIATION_RUN_ID" != "$GITHUB_RUN_ID"
-          fi
           publication_run="$RUNNER_TEMP/timeweb-amd64-publication-run.json"
           { printf 'header = "Authorization: Bearer %s"\n' "$GITHUB_TOKEN"; } \
             | curl --disable --fail --silent --show-error \
@@ -116,39 +106,6 @@ jobs:
               (.digest | test("^sha256:[0-9a-f]{64}$"))
             )] | length == 1
           ' "$publication_artifacts" >/dev/null
-          if test -n "$PRIOR_RECONCILIATION_RUN_ID"; then
-            prior_run="$RUNNER_TEMP/timeweb-amd64-prior-reconciliation-run.json"
-            { printf 'header = "Authorization: Bearer %s"\n' "$GITHUB_TOKEN"; } \
-              | curl --disable --fail --silent --show-error \
-                --connect-timeout 10 --max-time 30 --proto '=https' --tlsv1.2 \
-                --config - \
-                "https://api.github.com/repos/Z6v6e6r/lk2/actions/runs/$PRIOR_RECONCILIATION_RUN_ID" \
-                --output "$prior_run"
-            jq -e --arg workflowSha "$EXPECTED_WORKFLOW_SHA" '
-              .repository.full_name == "Z6v6e6r/lk2" and
-              .path == ".github/workflows/reconcile-timeweb-amd64-publication.yaml" and
-              .event == "workflow_dispatch" and
-              .head_branch == "main" and
-              .head_sha == $workflowSha and
-              .run_attempt == 1 and
-              .status == "completed" and
-              .conclusion == "success"
-            ' "$prior_run" >/dev/null
-            prior_artifacts="$RUNNER_TEMP/timeweb-amd64-prior-reconciliation-artifacts.json"
-            { printf 'header = "Authorization: Bearer %s"\n' "$GITHUB_TOKEN"; } \
-              | curl --disable --fail --silent --show-error \
-                --connect-timeout 10 --max-time 30 --proto '=https' --tlsv1.2 \
-                --config - \
-                "https://api.github.com/repos/Z6v6e6r/lk2/actions/runs/$PRIOR_RECONCILIATION_RUN_ID/artifacts?per_page=100" \
-                --output "$prior_artifacts"
-            jq -e --arg name "timeweb-amd64-publication-reconciliation-manifest-$PRIOR_RECONCILIATION_RUN_ID-1" '
-              [.artifacts[] | select(
-                .name == $name and
-                .expired == false and
-                (.digest | test("^sha256:[0-9a-f]{64}$"))
-              )] | length == 1
-            ' "$prior_artifacts" >/dev/null
-          fi
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: timeweb-amd64-publication-${{ inputs.publication_run_id }}-1
@@ -430,17 +387,9 @@ jobs:
         with:
           pattern: timeweb-amd64-reconciliation-*-${{ github.run_id }}-${{ github.run_attempt }}
           path: reconciliation-evidence/images
-      - if: ${{ inputs.prior_reconciliation_run_id != '' }}
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: timeweb-amd64-publication-reconciliation-manifest-${{ inputs.prior_reconciliation_run_id }}-1
-          path: prior-reconciliation
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          run-id: ${{ inputs.prior_reconciliation_run_id }}
-      - name: Emit non-authorizing reconciliation manifest
+      - name: Emit optional non-authorizing recovery read-back manifest
         env:
           EXPECTED_SOURCE_SHA: ${{ inputs.expected_source_sha }}
-          PRIOR_RECONCILIATION_RUN_ID: ${{ inputs.prior_reconciliation_run_id }}
           PUBLICATION_RUN_ID: ${{ inputs.publication_run_id }}
           PUBLICATION_WORKFLOW_SHA: ${{ inputs.publication_workflow_sha }}
           RECONCILIATION_WORKFLOW_SHA: ${{ github.workflow_sha }}
@@ -463,49 +412,9 @@ jobs:
             ([.images[].architecture] | unique) == ["amd64"] and
             ([.images[].indexDigest | test("^sha256:[0-9a-f]{64}$")] | all)
           ' timeweb-amd64-publication-reconciliation-manifest.json >/dev/null
-          if test -n "$PRIOR_RECONCILIATION_RUN_ID"; then
-            (
-              cd prior-reconciliation
-              sha256sum --check --strict timeweb-amd64-publication-reconciliation-checksums.txt
-            )
-            prior_manifest=prior-reconciliation/timeweb-amd64-publication-reconciliation-manifest.json
-            jq -e --arg priorRunId "$PRIOR_RECONCILIATION_RUN_ID" --arg publicationRunId "$PUBLICATION_RUN_ID" --arg publicationWorkflowSha "$PUBLICATION_WORKFLOW_SHA" --arg reconciliationWorkflowSha "$RECONCILIATION_WORKFLOW_SHA" --arg sourceSha "$EXPECTED_SOURCE_SHA" '
-              .schemaVersion == 1 and
-              .kind == "phub-timeweb-amd64-publication-reconciliation" and
-              .originalRunId == $publicationRunId and .originalRunAttempt == "1" and
-              .publicationWorkflowSha == $publicationWorkflowSha and
-              .reconciliationWorkflowSha == $reconciliationWorkflowSha and
-              .reconciliationRunId == $priorRunId and .reconciliationRunAttempt == "1" and
-              .authorizesDeploy == false and
-              .authorizesVpsProvisioning == false and
-              .authorizesDatabaseMutation == false and
-              ([.images[].sourceSha] | unique) == [$sourceSha] and
-              ([.images[].provenanceVerified] | all) and
-              ([.images[].sbomVerified] | all) and
-              ([.images[].reconciliationVerified] | all) and
-              ([.images[].architecture] | unique) == ["amd64"]
-            ' "$prior_manifest" >/dev/null
-            jq -e --slurpfile prior "$prior_manifest" '
-              .originalRunId == $prior[0].originalRunId and
-              .publicationWorkflowSha == $prior[0].publicationWorkflowSha and
-              .reconciliationWorkflowSha == $prior[0].reconciliationWorkflowSha and
-              .images == $prior[0].images
-            ' timeweb-amd64-publication-reconciliation-manifest.json >/dev/null
-            node scripts/build-timeweb-release-manifest.js \
-              timeweb-amd64-publication-reconciliation-manifest.json \
-              "$PRIOR_RECONCILIATION_RUN_ID" \
-              "$GITHUB_RUN_ID" \
-              release-manifest.json \
-              release-manifest.sha256
-            node scripts/verify-timeweb-release-manifest.js release-manifest.json
-          fi
           {
             printf '%s\0' timeweb-amd64-publication-reconciliation-manifest.json
             find reconciliation-evidence/images -type f -print0
-            if test -d prior-reconciliation; then find prior-reconciliation -type f -print0; fi
-            if test -f release-manifest.json; then
-              printf '%s\0' release-manifest.json release-manifest.sha256
-            fi
           } | sort -z | xargs -0 sha256sum \
             > timeweb-amd64-publication-reconciliation-checksums.txt
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -514,9 +423,6 @@ jobs:
           path: |
             timeweb-amd64-publication-reconciliation-manifest.json
             timeweb-amd64-publication-reconciliation-checksums.txt
-            release-manifest.json
-            release-manifest.sha256
             reconciliation-evidence/images
-            prior-reconciliation
           if-no-files-found: error
           retention-days: 90

@@ -753,20 +753,29 @@ jobs:
       actions: read
       contents: read
     steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.workflow_sha }}
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: timeweb-amd64-image-*-${{ github.run_id }}-${{ github.run_attempt }}
           path: publication-evidence/images
           merge-multiple: true
-      - name: Create non-authorizing immutable digest manifest
+      - name: Create and validate internal and canonical publication manifests
         env:
           SOURCE_SHA: ${{ inputs.expected_source_sha }}
           WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
           set -euo pipefail
+          node scripts/verify-timeweb-publication-evidence-checksums.js publication-evidence/images
           test "$(find publication-evidence/images -maxdepth 1 -type f -name '*-image.json' | wc -l | tr -d ' ')" -eq 5
+          source_tree="$(git rev-parse --verify "$SOURCE_SHA^{tree}")"
+          test "$source_tree" = 3f4c1e63dd30eb60251533b95f1970fd96754a08
           jq -s \
             --arg sourceSha "$SOURCE_SHA" \
+            --arg sourceTree "$source_tree" \
             --arg workflowSha "$WORKFLOW_SHA" \
             --arg repository "$GITHUB_REPOSITORY" \
             --arg runId "$GITHUB_RUN_ID" \
@@ -775,6 +784,7 @@ jobs:
               schemaVersion: 1,
               kind: "phub-timeweb-amd64-publication",
               sourceSha: $sourceSha,
+              sourceTree: $sourceTree,
               workflowSha: $workflowSha,
               repository: $repository,
               platform: "linux/amd64",
@@ -786,21 +796,45 @@ jobs:
               images: sort_by(.service)
             }' publication-evidence/images/*-image.json \
             > timeweb-amd64-publication-manifest.json
-          jq -e --arg sourceSha "$SOURCE_SHA" '
+          jq -e --arg sourceSha "$SOURCE_SHA" --arg sourceTree "$source_tree" --arg workflowSha "$WORKFLOW_SHA" --arg runId "$GITHUB_RUN_ID" --arg runAttempt "$GITHUB_RUN_ATTEMPT" '
             .sourceSha == $sourceSha and
+            .sourceTree == $sourceTree and
+            .workflowSha == $workflowSha and
+            .repository == "Z6v6e6r/lk2" and
             .platform == "linux/amd64" and
+            .runId == $runId and .runAttempt == $runAttempt and
             .authorizesDeploy == false and
             .authorizesVpsProvisioning == false and
             .authorizesDatabaseMutation == false and
             ([.images[].service] | sort) == ["api", "migrator", "realtime", "web", "worker"] and
             ([.images[].indexDigest | test("^sha256:[0-9a-f]{64}$")] | all) and
             ([.images[].runtimeDigest | test("^sha256:[0-9a-f]{64}$")] | all) and
-            all(.images[]; .sourceSha == $sourceSha and .platform == "linux/amd64")
+            all(.images[];
+              .sourceSha == $sourceSha and
+              .sourceTree == $sourceTree and
+              .workflowSha == $workflowSha and
+              .repository == ("ghcr.io/z6v6e6r/phub-" + .service) and
+              .publicationTag == ("amd64-sha-" + $sourceSha + "-" + $runId + "-" + $runAttempt) and
+              .platform == "linux/amd64" and
+              .provenance == "slsa-v1-max" and
+              .sbom == "spdx" and
+              .runId == $runId and .runAttempt == $runAttempt
+            )
           ' timeweb-amd64-publication-manifest.json >/dev/null
           sha256sum timeweb-amd64-publication-manifest.json \
             publication-evidence/images/*-provenance.json \
             publication-evidence/images/*-sbom.spdx.json \
             > timeweb-amd64-publication-checksums.txt
+          node scripts/build-timeweb-release-manifest.js \
+            timeweb-amd64-publication-manifest.json \
+            release-manifest.json \
+            release-manifest.sha256
+          node scripts/verify-timeweb-release-manifest.js \
+            release-manifest.json \
+            --expected-publication-workflow-sha "$WORKFLOW_SHA" \
+            --expected-publication-run-id "$GITHUB_RUN_ID" \
+            --expected-publication-run-attempt "$GITHUB_RUN_ATTEMPT"
+          sha256sum --check --strict release-manifest.sha256
           cat timeweb-amd64-publication-manifest.json
       - id: artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -822,15 +856,29 @@ jobs:
             publication-evidence/images/*-evidence-checksums.txt
           if-no-files-found: error
           retention-days: 90
+      - id: canonical
+        name: Preserve same-run canonical publication evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: timeweb-amd64-canonical-release-${{ inputs.expected_source_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            release-manifest.json
+            release-manifest.sha256
+          if-no-files-found: error
+          retention-days: 90
       - name: Surface publication evidence custody
         env:
           ARTIFACT_DIGEST: ${{ steps.artifact.outputs.artifact-digest }}
           ARTIFACT_ID: ${{ steps.artifact.outputs.artifact-id }}
+          CANONICAL_ARTIFACT_DIGEST: ${{ steps.canonical.outputs.artifact-digest }}
+          CANONICAL_ARTIFACT_ID: ${{ steps.canonical.outputs.artifact-id }}
           SOURCE_SHA: ${{ inputs.expected_source_sha }}
         run: |
           set -euo pipefail
           printf '%s' "$ARTIFACT_DIGEST" | grep -Eq '^[0-9a-f]{64}$'
           printf '%s' "$ARTIFACT_ID" | grep -Eq '^[0-9]+$'
+          printf '%s' "$CANONICAL_ARTIFACT_DIGEST" | grep -Eq '^[0-9a-f]{64}$'
+          printf '%s' "$CANONICAL_ARTIFACT_ID" | grep -Eq '^[0-9]+$'
           {
             echo '## Timeweb amd64 image publication'
             echo
@@ -838,5 +886,7 @@ jobs:
             echo 'Platform: `linux/amd64`'
             echo "Evidence artifact ID: \`$ARTIFACT_ID\`"
             echo "Evidence artifact digest: \`sha256:$ARTIFACT_DIGEST\`"
+            echo "Canonical artifact ID: \`$CANONICAL_ARTIFACT_ID\`"
+            echo "Canonical artifact digest: \`sha256:$CANONICAL_ARTIFACT_DIGEST\`"
             echo 'Authorizes deploy: `false`'
           } >> "$GITHUB_STEP_SUMMARY"
