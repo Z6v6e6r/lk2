@@ -1376,8 +1376,8 @@ describe('Timeweb amd64 publication workflow', () => {
     expect(document.on).toEqual({
       pull_request: null,
       push: { branches: ['main'] },
-      workflow_dispatch: null,
     });
+    expect(workflow).not.toContain('workflow_dispatch');
     expect(document.concurrency?.group).toBe(
       "pr-${{ github.event.pull_request.number || (github.event_name == 'push' && github.run_id) || github.ref }}",
     );
