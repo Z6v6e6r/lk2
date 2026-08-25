@@ -150,13 +150,115 @@ implementation contradicts current state, or the requested outcome is technicall
 Main drift, an unrelated PR, imperfect neighboring architecture, absent production evidence,
 technical debt or a potentially better architecture are not independent stop reasons.
 
-For ordinary drift: refresh -> integrate/rebase safely -> run relevant affected checks -> continue.
+For ordinary drift that does not require branch synchronization: refresh -> run relevant affected
+checks -> continue. If integration with a newer `main` is required, the task must first acquire
+merge ownership under the rules below. The merge-owner uses merge-from-main by default; rebase is
+allowed only when the task explicitly permits it.
 Repeat a successful check only when relevant source, dependencies, command, environment, inputs or
 acceptance target changed, or a new hypothesis requires it. Do not restart a full certification
 cycle merely because the SHA/tree moved.
 
 Continue independent in-scope work if one boundary is blocked. A failed post-deploy change returns
 to a focused task/hotfix branch; never edit Nano directly.
+
+## Concurrent development and exclusive merge ownership
+
+This section is the repository-wide authority for parallel task coordination. The `merge-owner` is
+an organizationally exclusive role, not a GitHub lock or other technical enforcement. Multiple
+implementation tasks may run in parallel, but only one active task may own this repository's merge
+contour at a time. The practical checklist is in
+[the merge ownership runbook](docs/runbooks/merge-ownership.md).
+
+### Parallel implementation is allowed
+
+Parallel tasks may perform read-only research, work in separate clean worktrees, commit and push
+their own feature branches, create or update their own Draft PRs, and run local or automatic PR
+checks. Each implementation task must:
+
+- start with a fresh fetch and record its starting `origin/main` SHA;
+- use only its own branch and separate clean worktree;
+- leave other tasks' branches unchanged and never use a dirty user checkout;
+- revalidate an old baseline before treating it as current.
+
+These actions do not grant merge ownership and do not authorize a Ready transition or merge.
+
+### Only one task may be merge-owner
+
+Only the active merge-owner may:
+
+- merge fresh `main` into a PR branch or perform a task-authorized restack;
+- change a PR base branch;
+- move a PR from Draft to Ready or back;
+- close or reopen a PR;
+- perform a separately authorized controlled merge into `main`;
+- coordinate the sequential merge of stacked PRs;
+- confirm post-merge CI and the final `main` identity.
+
+Merge ownership alone never authorizes workflow dispatch or rerun, deploy, publication,
+reconciliation, migration apply, activation, provider or production mutation, force-push, rebase,
+or branch deletion. Each such operation needs its own explicit authorization. Rebase remains
+prohibited unless the task specifically permits it; ordinary merge-from-main is the default.
+
+While a merge-owner is active, every other implementation task must not synchronize its branch
+with a newer `main`, merge-from-main, rebase, change its own or another PR's base or lifecycle,
+close a PR, move a PR to Ready, merge, update stacked bases, or trigger manual CI actions. It may
+continue independent implementation and automatic PR checks as long as it does not enter the merge
+contour or change `main`.
+
+### Acquiring merge ownership
+
+Before its first merge-related mutation, the prospective merge-owner must:
+
+1. perform a fresh fetch;
+2. inventory every open PR;
+3. record the fresh `main` SHA and tree;
+4. record the target PR head SHA;
+5. verify mergeability, unresolved review threads, and CI;
+6. confirm that no other active task owns the merge contour;
+7. declare in its task report the repository, merge-owner task, frozen `main`, frozen PR head,
+   allowed operations, and prohibited live operations.
+
+Ownership is limited to that declared task. It does not transfer automatically to another task.
+
+### Frozen merge window and drift
+
+Immediately before a controlled merge, the merge-owner must freeze the pre-merge `main` SHA and
+tree, PR head SHA and tree, merge-base, exact-head CI identity, PR state, and mergeability. Any
+unknown change to `main`, PR head, PR base, required checks, review state, or an applicable workflow
+definition stops the current merge procedure. Stale evidence must never authorize a merge.
+
+Unknown drift stops only the current controlled merge, the affected PR, and any dependent stacked
+merge sequence. It does not automatically stop read-only research, independent work in other
+branches, local tests, or work in other repositories. A global writer freeze is allowed only for a
+task that explicitly requires full queue cleanup or mass PR restructuring.
+
+If an unknown PR appears after a frozen inventory during cleanup or mass merge work, do not close
+or merge it automatically. Record its number, head SHA, and discovery time, and stop the bulk
+operation as `EXTERNAL DRIFT`. Independent implementation may continue unless the task explicitly
+established a global writer freeze.
+
+### Stacked PRs
+
+A dependent PR stack has one merge-owner for the entire stack. Merge from the bottom up. After each
+merge, synchronize the next PR with the new `main`; its old CI is no longer valid after the base or
+effective merge input changes. Every resulting exact head must receive its own CI. Parallel merges
+of different levels in one stack are prohibited.
+
+### Releasing merge ownership
+
+In the normal successful path, the merge-owner releases the merge contour only after successful
+post-merge CI, a final fresh fetch, confirmation of the final `main` SHA and tree, a new open-PR
+inventory, a record of every performed mutation, and confirmation that no unknown drift remains.
+It must explicitly announce the release; only then may another task acquire merge ownership.
+
+If the task aborts before a merge, it may release ownership as `ABORTED` only after confirming that
+no merge-related mutation is in flight, fresh-fetching current identity, inventorying open PRs, and
+recording the drift and any mutations already performed. If a completed merge has failed or blocked
+post-merge CI and the owner cannot continue, it must fresh-fetch, inventory current open PRs, and
+record `BLOCKED_POST_MERGE`, the current `main` SHA/tree, target PR identity, failed checks, known
+drift, all mutations, and the absence of in-flight actions before an explicit release or handoff.
+It must not claim a successful release. Any successor acquires ownership from scratch and
+revalidates every field; ownership is never transferred implicitly.
 
 ## Repository autonomy and human boundaries
 

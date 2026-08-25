@@ -27,6 +27,14 @@ boundary is untouched, regardless of the highest tier.
 List only evidence actually obtained and label it `LOCAL`, `CI`, `STAGING`, `PROVIDER` or
 `PRODUCTION`. Missing STAGING/PRODUCTION evidence does not block a FAST/SAFE implementation PR.
 
+## Coordination
+
+- Merge owner: `NONE` / `<task identifier>`
+- Based on fresh `origin/main`: `<SHA>`
+- This PR may be developed in parallel: `YES` / `NO`
+- Merge-from-main, PR base/lifecycle changes, Ready transition, and merge are reserved for the
+  active merge-owner.
+
 ## Live actions
 
 State whether merge, deploy, migration apply, activation, provider write or production mutation
