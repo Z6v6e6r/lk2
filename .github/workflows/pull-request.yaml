@@ -220,12 +220,55 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
-  docker-build:
+  docker-selection:
+    name: docker-selection
+    runs-on: ubuntu-latest
+    outputs:
+      services: ${{ steps.select.outputs.services }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - name: Select affected Docker services
+        id: select
+        env:
+          EVENT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          all_services='["web","api","worker","realtime","migrator"]'
+
+          if [[ "$GITHUB_EVENT_NAME" = pull_request ]]; then
+            [[ "$EVENT_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+            [[ "$EVENT_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
+            git cat-file -e "$EVENT_BASE_SHA^{commit}"
+            git cat-file -e "$EVENT_HEAD_SHA^{commit}"
+            base_sha="$(git merge-base "$EVENT_BASE_SHA" "$EVENT_HEAD_SHA")"
+            services="$(
+              git diff --no-renames --name-only -z "$base_sha" "$EVENT_HEAD_SHA" \
+                | node scripts/select-pr-docker-services.js
+            )"
+          else
+            services="$all_services"
+          fi
+
+          jq -e '
+            type == "array"
+            and all(.[]; . == "web" or . == "api" or . == "worker" or . == "realtime" or . == "migrator")
+            and length == (unique | length)
+          ' <<<"$services" >/dev/null
+          printf 'services=%s\n' "$services" >>"$GITHUB_OUTPUT"
+          printf 'Selected Docker services: `%s`\n' "$services" >>"$GITHUB_STEP_SUMMARY"
+
+  docker-image:
+    name: docker-build (${{ matrix.service }})
+    needs: docker-selection
+    if: ${{ needs.docker-selection.result == 'success' && needs.docker-selection.outputs.services != '[]' }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        service: [web, api, worker, realtime, migrator]
+        service: ${{ fromJSON(needs.docker-selection.outputs.services) }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
@@ -336,3 +379,23 @@ jobs:
               echo '- BuildKit digest: not emitted by the local Docker exporter'
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+
+  docker-build:
+    name: docker-build
+    needs: [docker-selection, docker-image]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify Docker selection and builds
+        env:
+          BUILD_RESULT: ${{ needs.docker-image.result }}
+          SELECTED_SERVICES: ${{ needs.docker-selection.outputs.services }}
+          SELECTION_RESULT: ${{ needs.docker-selection.result }}
+        run: |
+          set -euo pipefail
+          test "$SELECTION_RESULT" = success
+          if [[ "$SELECTED_SERVICES" = '[]' ]]; then
+            test "$BUILD_RESULT" = skipped
+          else
+            test "$BUILD_RESULT" = success
+          fi
