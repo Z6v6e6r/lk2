@@ -55,6 +55,7 @@ import type {
   RealtimeAuthorizationRepository,
   TrainerAvatarRepository,
   UpcomingBookingsRepository,
+  SubscriptionRuntimeActorContextRepository,
 } from '@phub/database';
 import {
   DIRECT_VIVA_READ_OPERATIONS,
@@ -65,6 +66,7 @@ import {
 import { homeBaseSchema, normalizeHomeBaseFreshness, type HomeBase } from '@phub/home-projection';
 import type { NotificationEndpointCipher } from '@phub/notifications';
 import type { VivaExerciseRecommendationSourceAdapter } from '@phub/viva-adapter';
+import type { ManagedSubscriptionRuntimeQuoteClient } from '@phub/subscription-runtime-adapter';
 import type { Logger } from 'pino';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import type Redis from 'ioredis';
@@ -158,6 +160,8 @@ import {
   registerTournamentSummaryRoutes,
   type TournamentSummarySource,
 } from './tournaments/tournament-summary-routes.js';
+import type { SubscriptionRuntimeActorDelegationIssuer } from './subscriptions/subscription-runtime-actor-delegation-issuer.js';
+import { registerSubscriptionRuntimeWarnRoutes } from './subscriptions/subscription-runtime-warn-routes.js';
 
 interface PadlHubClaims extends JWTPayload {
   readonly sub: string;
@@ -334,6 +338,15 @@ export interface BuildAppOptions {
     >;
   readonly rateLimitRedis?: Redis;
   readonly realtimeAuthorizationRepository?: RealtimeAuthorizationRepository;
+  readonly subscriptionRuntimeActorContextRepository?: Pick<
+    SubscriptionRuntimeActorContextRepository,
+    'resolve'
+  >;
+  readonly subscriptionRuntimeDelegationIssuer?: Pick<
+    SubscriptionRuntimeActorDelegationIssuer,
+    'issue'
+  >;
+  readonly subscriptionRuntimeQuoteClient?: Pick<ManagedSubscriptionRuntimeQuoteClient, 'quote'>;
 }
 
 function clientPlatform(request: FastifyRequest): ClientPlatform {
@@ -918,6 +931,19 @@ export async function buildApp(options: BuildAppOptions) {
   registerGameRoutes(app as unknown as FastifyInstance, {
     ...(options.gameRosterRepository ? { repository: options.gameRosterRepository } : {}),
     authenticatedTenantHandlers: [authenticate, authorizeGamesPlayer, resolveTenant],
+    commandHandlers: [authenticate, authorizeGamesPlayer, resolveTenant, requireIdempotencyKey],
+  });
+  registerSubscriptionRuntimeWarnRoutes(app as unknown as FastifyInstance, {
+    mode: options.config.SUBSCRIPTION_RUNTIME_WARN_MODE,
+    ...(options.subscriptionRuntimeActorContextRepository
+      ? { actorContextRepository: options.subscriptionRuntimeActorContextRepository }
+      : {}),
+    ...(options.subscriptionRuntimeDelegationIssuer
+      ? { delegationIssuer: options.subscriptionRuntimeDelegationIssuer }
+      : {}),
+    ...(options.subscriptionRuntimeQuoteClient
+      ? { quoteClient: options.subscriptionRuntimeQuoteClient }
+      : {}),
     commandHandlers: [authenticate, authorizeGamesPlayer, resolveTenant, requireIdempotencyKey],
   });
   registerLegacyGameRosterBridgeRoutes(app as unknown as FastifyInstance, {

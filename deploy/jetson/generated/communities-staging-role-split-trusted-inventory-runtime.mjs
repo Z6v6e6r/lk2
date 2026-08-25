@@ -37540,6 +37540,9 @@ init_esm_shims();
 // ../../packages/database/src/upcoming-bookings-repository.ts
 init_esm_shims();
 
+// ../../packages/database/src/subscription-runtime-actor-context-repository.ts
+init_esm_shims();
+
 // src/communities-staging-role-split-trusted-inventory-gate.ts
 init_esm_shims();
 import { createHash as createHash31 } from "crypto";

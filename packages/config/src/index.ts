@@ -13,6 +13,7 @@ const booleanFromEnvironmentDefaultTrue = z
   .enum(['true', 'false'])
   .default('true')
   .transform((value) => value === 'true');
+const pkcs8PrivateKeyHeader = ['-----BEGIN', 'PRIVATE KEY-----'].join(' ');
 
 const environmentSchema = z.object({
   APP_ENV: z.enum(['local', 'ci', 'staging', 'production']).default('local'),
@@ -121,6 +122,30 @@ const environmentSchema = z.object({
   HOME_READ_MODE: z.enum(['mock', 'projection']).default('mock'),
   GAMES_READ_ENABLED: booleanFromEnvironment,
   GAMES_COMMANDS_ENABLED: booleanFromEnvironment,
+  SUBSCRIPTION_RUNTIME_WARN_MODE: z.enum(['OFF', 'WARN']).default('OFF'),
+  SUBSCRIPTION_RUNTIME_BASE_URL: z.string().url().optional(),
+  SUBSCRIPTION_RUNTIME_INTEGRATION_TOKEN: z.string().min(32).optional(),
+  SUBSCRIPTION_RUNTIME_TIMEOUT_MS: z.coerce.number().int().min(100).max(10_000).default(3_000),
+  SUBSCRIPTION_RUNTIME_CIRCUIT_FAILURE_THRESHOLD: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(100)
+    .default(3),
+  SUBSCRIPTION_RUNTIME_CIRCUIT_RESET_MS: z.coerce
+    .number()
+    .int()
+    .min(1_000)
+    .max(300_000)
+    .default(30_000),
+  SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS: z.string().min(1).optional(),
+  SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID: z
+    .string()
+    .regex(/^[A-Za-z0-9._:-]{3,64}$/)
+    .optional(),
+  SUBSCRIPTION_RUNTIME_DELEGATION_ISSUER: z.string().min(1).max(512).optional(),
+  SUBSCRIPTION_RUNTIME_DELEGATION_AUDIENCE: z.string().min(1).max(256).optional(),
+  SUBSCRIPTION_RUNTIME_DELEGATION_TTL_SECONDS: z.coerce.number().int().min(10).max(60).default(30),
   MESSAGING_USER_BLOCK_COMMANDS_ENABLED: booleanFromEnvironment,
   GAMES_RESULTS_WRITE_MODE: z
     .enum(['disabled', 'shadow_compare', 'local_primary'])
@@ -533,6 +558,16 @@ export function loadConfig(
       'LEGACY_GAME_IDENTITY_VERIFY_TOKEN',
       'LEGACY_GAME_IDENTITY_VERIFY_TOKEN_FILE',
     ),
+    SUBSCRIPTION_RUNTIME_INTEGRATION_TOKEN: materializeFileSecret(
+      environment,
+      'SUBSCRIPTION_RUNTIME_INTEGRATION_TOKEN',
+      'SUBSCRIPTION_RUNTIME_INTEGRATION_TOKEN_FILE',
+    ),
+    SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS: materializeFileSecret(
+      environment,
+      'SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS',
+      'SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS_FILE',
+    ),
   };
   const parsed = environmentSchema.safeParse(resolvedEnvironment);
   if (!parsed.success) {
@@ -583,6 +618,43 @@ export function loadConfig(
     throw new Error(
       'GAMES_COMMANDS_ENABLED is staging-only until the Games production gate passes',
     );
+  }
+  if (parsed.data.SUBSCRIPTION_RUNTIME_WARN_MODE === 'WARN') {
+    if (parsed.data.APP_ENV !== 'local' && parsed.data.APP_ENV !== 'staging') {
+      throw new Error('SUBSCRIPTION_RUNTIME_WARN_MODE=WARN is allowed only in local or staging');
+    }
+    if (
+      !parsed.data.SUBSCRIPTION_RUNTIME_BASE_URL ||
+      !parsed.data.SUBSCRIPTION_RUNTIME_INTEGRATION_TOKEN ||
+      !parsed.data.SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS ||
+      !parsed.data.SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID ||
+      !parsed.data.SUBSCRIPTION_RUNTIME_DELEGATION_ISSUER ||
+      !parsed.data.SUBSCRIPTION_RUNTIME_DELEGATION_AUDIENCE
+    ) {
+      throw new Error(
+        'SUBSCRIPTION_RUNTIME_WARN_MODE=WARN requires complete boundary configuration',
+      );
+    }
+    let privateKeys: Record<string, unknown>;
+    try {
+      const candidate: unknown = JSON.parse(
+        parsed.data.SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS,
+      );
+      if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate))
+        throw new Error();
+      privateKeys = candidate as Record<string, unknown>;
+    } catch {
+      throw new Error('SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS must be a JSON object');
+    }
+    const activePrivateKey = privateKeys[parsed.data.SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID];
+    if (
+      typeof activePrivateKey !== 'string' ||
+      !activePrivateKey.startsWith(pkcs8PrivateKeyHeader)
+    ) {
+      throw new Error(
+        'SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID must select a PKCS8 private key',
+      );
+    }
   }
   if (parsed.data.LEGACY_GAME_COMMAND_BRIDGE_ENABLED) {
     if (parsed.data.APP_ENV !== 'local' && parsed.data.APP_ENV !== 'staging') {
