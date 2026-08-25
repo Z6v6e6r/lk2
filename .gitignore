@@ -28,9 +28,16 @@ npm-debug.log*
 playwright-report/
 test-results/
 
-# Mobile generated platforms and signing material
-apps/mobile/android/
-apps/mobile/ios/
+# Mobile build output, machine-local state and signing material
+apps/mobile/android/.gradle/
+apps/mobile/android/local.properties
+apps/mobile/android/**/build/
+apps/mobile/android/captures/
+apps/mobile/ios/App/DerivedData/
+apps/mobile/ios/App/Pods/
+apps/mobile/ios/App/App.xcodeproj/xcuserdata/
+apps/mobile/ios/App/App.xcworkspace/xcuserdata/
+**/xcuserdata/
 *.keystore
 *.jks
 *.p12

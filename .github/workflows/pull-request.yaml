@@ -65,6 +65,13 @@ jobs:
       - run: npm ci
       - name: Generate API contract types
         run: npm run contracts:generate
+      - name: Verify reproducible mobile native projects
+        run: |
+          npm run mobile:native:verify:test
+          npm run mobile:native:verify
+          npm run mobile:native:prepare
+          git diff --exit-code
+          test -z "$(git status --porcelain --untracked-files=all)"
       - name: Verify immutable import and OpenAPI
         run: npm run contracts:lint
       - name: Check migration safety
@@ -103,6 +110,36 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm audit --omit=dev --audit-level=high
+
+  mobile-android-debug:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+      - run: npm ci
+      - name: Verify runner Android SDK contract
+        run: |
+          test -d "$ANDROID_SDK_ROOT/platforms/android-36"
+          test -d "$ANDROID_SDK_ROOT/build-tools/36.0.0"
+      - name: Build mobile web assets and sync Android
+        run: |
+          npm run contracts:generate
+          npm run build -w @phub/mobile
+          npm run mobile:android:sync
+          npm run mobile:native:verify
+      - name: Build debug APK without release signing
+        run: |
+          npm run mobile:android:build:debug
+          test -s apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk
+          sha256sum apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk
 
   secret-scan:
     runs-on: ubuntu-latest

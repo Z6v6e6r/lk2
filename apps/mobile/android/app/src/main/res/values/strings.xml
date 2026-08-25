@@ -1,0 +1,6 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">PadlHub</string>
+    <string name="title_activity_main">PadlHub</string>
+    <string name="package_name">ru.padlhub.app</string>
+</resources>
