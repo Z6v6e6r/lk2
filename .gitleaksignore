@@ -1,0 +1,6 @@
+# Synthetic idempotency fixtures in aa105bd are not credentials. Keep these
+# commit-scoped fingerprints narrow because the published commit is immutable.
+aa105bd26d2aeb3d66a18df12a95fdff200947b9:packages/api-sdk/src/index.test.ts:generic-api-key:166
+aa105bd26d2aeb3d66a18df12a95fdff200947b9:apps/api/src/app.test.ts:generic-api-key:1483
+aa105bd26d2aeb3d66a18df12a95fdff200947b9:apps/api/src/app.test.ts:generic-api-key:1523
+aa105bd26d2aeb3d66a18df12a95fdff200947b9:apps/api/src/subscriptions/subscription-runtime-warn-routes.test.ts:generic-api-key:32

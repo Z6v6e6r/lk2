@@ -29,7 +29,68 @@ tags:
     description: Authenticated canonical community membership reads and commands.
   - name: realtime
     description: Short-lived one-time tickets for the PadlHub WebSocket gateway.
+  - name: subscriptions
+    description: Non-binding WARN-only subscription-runtime checks through a server-owned actor delegation.
 paths:
+  /{tenantKey}/subscription-runtime/quote:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/IdempotencyKey'
+    post:
+      tags: [subscriptions]
+      operationId: quoteManagedSubscriptionRuntimeWarn
+      summary: Evaluate a non-binding managed-subscription advisory in WARN mode
+      description: |
+        Authenticates the caller with the PadlHub user JWT, resolves tenant membership and the
+        active PadlHub session server-side, then resolves the server-owned synced VIVA identity
+        mapping. LK2 signs a short-lived single-use actor delegation bound to the tenant, canonical
+        request digest, X-Correlation-ID and Idempotency-Key digest. Only the internal ph-admin
+        recipient receives and verifies that delegation; public clients MUST NOT send delegation,
+        provider identifiers, integration credentials or actor fields.
+
+        A successful response proves that the recipient accepted the signature, claims and all
+        bindings. Recipient-side replay protection rejects reuse of the same delegation. Retrying
+        this public operation must preserve the Idempotency-Key, but LK2 may mint a fresh short-lived
+        delegation for the retry. The result is advisory and non-binding: this endpoint never
+        reserves entitlement, creates payment, changes a subscription, calls VIVA, or enables
+        enforcement. Rejected verification is returned as a typed 401, 403 or 409 error rather than
+        as a successful WARN response.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ManagedSubscriptionWarnQuoteRequest'
+      responses:
+        '200':
+          description: Verified, non-binding WARN-only advisory.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+            Cache-Control:
+              description: This actor-bound advisory must not be stored.
+              schema:
+                type: string
+                const: no-store
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagedSubscriptionWarnQuoteResponse'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: '#/components/responses/SubscriptionRuntimeDelegationRejected'
+        '403':
+          $ref: '#/components/responses/SubscriptionRuntimeDelegationForbidden'
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/SubscriptionRuntimeDelegationConflict'
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
   /{tenantKey}/messaging/realtime-ticket:
     parameters:
       - $ref: ../../common/components.yaml#/components/parameters/TenantKey
@@ -3916,6 +3977,224 @@ paths:
           $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
 components:
   schemas:
+    ManagedSubscriptionWarnQuoteRequest:
+      type: object
+      additionalProperties: false
+      required: [action, target, paymentIntent]
+      properties:
+        action:
+          type: string
+          enum: [CREATE_GAME, JOIN_GAME]
+        target:
+          type: object
+          additionalProperties: false
+          required: [kind, id]
+          properties:
+            kind:
+              type: string
+              const: GAME
+            id:
+              type: string
+              minLength: 3
+              maxLength: 200
+              pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]+$'
+            expectedRevision:
+              type: integer
+              minimum: 1
+              maximum: 9007199254740991
+        preferredSubscriptionInstanceId:
+          type: string
+          minLength: 3
+          maxLength: 200
+          pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]+$'
+        paymentIntent:
+          type: string
+          enum: [AUTO_BEST_PRICE, PAY_FULL_PRICE, USE_SUBSCRIPTION]
+    ManagedSubscriptionWarnReason:
+      type: object
+      additionalProperties: false
+      required: [code]
+      properties:
+        code:
+          type: string
+          enum:
+            - SERVICE_UNAVAILABLE
+            - SUBSCRIPTION_NOT_FOUND
+            - SUBSCRIPTION_SELECTION_REQUIRED
+            - SUBSCRIPTION_NOT_OWNED_BY_ACTOR
+            - SUBSCRIPTION_TYPE_MISMATCH
+            - SUBSCRIPTION_PENDING_ACTIVATION
+            - SUBSCRIPTION_INACTIVE
+            - SUBSCRIPTION_FROZEN
+            - SUBSCRIPTION_EXPIRED
+            - SUBSCRIPTION_CANCELLED
+            - SUBSCRIPTION_REFUNDED
+            - SUBSCRIPTION_REVOKED
+            - SUBSCRIPTION_INSTANCE_STALE
+            - PROVIDER_IDENTITY_UNAVAILABLE
+            - PROVIDER_STATE_MISMATCH
+            - POLICY_UNAVAILABLE
+            - POLICY_NOT_PUBLISHED
+            - POLICY_NOT_EFFECTIVE
+            - POLICY_STALE
+            - POLICY_VERSION_MISMATCH
+            - POLICY_DIGEST_MISMATCH
+            - POLICY_MAPPING_UNVERIFIED
+            - POLICY_ACTION_DISABLED
+            - TARGET_NOT_FOUND
+            - TARGET_NOT_SERVER_RESOLVED
+            - TARGET_STALE
+            - TARGET_REVISION_MISMATCH
+            - PRICE_UNAVAILABLE
+            - PRICE_STALE
+            - PRICE_REVISION_MISMATCH
+            - CURRENCY_UNSUPPORTED
+            - EVENT_NOT_INCLUDED
+            - PRODUCT_NOT_INCLUDED
+            - DURATION_NOT_ALLOWED
+            - STATION_NOT_ALLOWED
+            - STATION_RULE_AMBIGUOUS
+            - BOOKING_WINDOW_EXCEEDED
+            - BLACKOUT_DATE
+            - ACTIVE_SERVICES_LIMIT_REACHED
+            - ACTIVE_SERVICES_LIMIT_UNAVAILABLE
+            - DAILY_LIMIT_REACHED
+            - WEEKLY_LIMIT_REACHED
+            - MONTHLY_LIMIT_REACHED
+            - FUTURE_BOOKINGS_LIMIT_REACHED
+            - MIN_INTERVAL_NOT_MET
+            - UNITS_EXHAUSTED
+            - USAGE_SNAPSHOT_STALE
+            - USAGE_SNAPSHOT_INVALID
+            - BENEFIT_NOT_APPLICABLE
+            - DISCOUNT_DISABLED
+            - PRICE_CALCULATION_INVALID
+            - PRICE_CHANGED
+            - PRICE_CONFIRMATION_REQUIRED
+            - RESERVATION_CONFLICT
+            - RESERVATION_EXPIRED
+            - RESERVATION_NOT_OWNED_BY_ACTOR
+            - IDEMPOTENCY_CONFLICT
+            - PROVIDER_UNAVAILABLE
+            - PROVIDER_REJECTED
+            - PROVIDER_TIMEOUT_AFTER_ACCEPT
+            - PROVIDER_READBACK_MISMATCH
+            - RECONCILIATION_REQUIRED
+            - CROSS_TENANT_REJECTED
+            - LEGACY_FLOW_NOT_MANAGED
+    ManagedSubscriptionWarnQuoteResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - contractVersion
+        - mode
+        - verdict
+        - nonBinding
+        - requiresReservationRecheck
+        - actor
+        - request
+        - delegation
+        - advisory
+      properties:
+        contractVersion:
+          type: integer
+          const: 1
+        mode:
+          type: string
+          const: WARN
+        verdict:
+          type: string
+          enum: [accepted, warning]
+          description: Rejected verification is represented by a non-2xx API error.
+        nonBinding:
+          type: boolean
+          const: true
+        requiresReservationRecheck:
+          type: boolean
+          const: true
+        actor:
+          type: object
+          additionalProperties: false
+          required: [userId, tenantId, tenantKey]
+          properties:
+            userId:
+              type: string
+              format: uuid
+            tenantId:
+              type: string
+              format: uuid
+            tenantKey:
+              type: string
+        request:
+          type: object
+          additionalProperties: false
+          required: [correlationId, idempotencyKeyDigest]
+          properties:
+            correlationId:
+              type: string
+            idempotencyKeyDigest:
+              type: string
+              pattern: '^sha256:[a-f0-9]{64}$'
+        delegation:
+          type: object
+          additionalProperties: false
+          required: [provider, scope, recipient, singleUse, verified]
+          properties:
+            provider:
+              type: string
+              const: VIVA
+            scope:
+              type: string
+              const: subscription-runtime.quote
+            recipient:
+              type: string
+              const: ph-admin
+            singleUse:
+              type: boolean
+              const: true
+            verified:
+              type: boolean
+              const: true
+        advisory:
+          type: object
+          additionalProperties: false
+          required:
+            - outcome
+            - paymentIntent
+            - serviceAllowed
+            - subscriptionBenefitAllowed
+            - blockers
+            - warnings
+            - expiresAt
+          properties:
+            outcome:
+              type: string
+              enum:
+                - ENTITLEMENT_APPLIED
+                - FULL_PRICE_ONLY
+                - SUBSCRIPTION_SELECTION_REQUIRED
+                - PRICE_CONFIRMATION_REQUIRED
+                - SERVICE_BLOCKED
+                - RETRY_LATER
+                - RECONCILIATION_REQUIRED
+            paymentIntent:
+              type: string
+              enum: [AUTO_BEST_PRICE, PAY_FULL_PRICE, USE_SUBSCRIPTION]
+            serviceAllowed:
+              type: boolean
+            subscriptionBenefitAllowed:
+              type: boolean
+            blockers:
+              type: array
+              items:
+                $ref: '#/components/schemas/ManagedSubscriptionWarnReason'
+            warnings:
+              type: array
+              items:
+                $ref: '#/components/schemas/ManagedSubscriptionWarnReason'
+            expiresAt:
+              type: string
+              format: date-time
     TournamentParticipantRoster:
       type: object
       additionalProperties: false
@@ -7546,6 +7825,33 @@ components:
         type: string
         const: no-store
   responses:
+    SubscriptionRuntimeDelegationRejected:
+      description: The PadlHub session is invalid or the recipient rejected the delegation signature, expiry, required claims, request/idempotency binding or replay.
+      headers:
+        X-Correlation-ID:
+          $ref: ../../common/components.yaml#/components/headers/CorrelationId
+      content:
+        application/json:
+          schema:
+            $ref: ../../common/components.yaml#/components/schemas/ApiError
+    SubscriptionRuntimeDelegationForbidden:
+      description: The user lacks permission or the recipient rejected actor or tenant binding.
+      headers:
+        X-Correlation-ID:
+          $ref: ../../common/components.yaml#/components/headers/CorrelationId
+      content:
+        application/json:
+          schema:
+            $ref: ../../common/components.yaml#/components/schemas/ApiError
+    SubscriptionRuntimeDelegationConflict:
+      description: The recipient reported an idempotency-key conflict for a different canonical request.
+      headers:
+        X-Correlation-ID:
+          $ref: ../../common/components.yaml#/components/headers/CorrelationId
+      content:
+        application/json:
+          schema:
+            $ref: ../../common/components.yaml#/components/schemas/ApiError
     AuthIdentityConflict:
       description: The OAuth identity belongs to a different PadlHub user.
       headers:

@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PadlHub Timeweb staging machine release manifest",
+  "x-sourceTree": "3f4c1e63dd30eb60251533b95f1970fd96754a08",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "repository",
+    "gitCommit",
+    "platform",
+    "images",
+    "reconciliationRuns"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "PHUB_TIMEWEB_RELEASE_MANIFEST_V1" },
+    "repository": { "const": "Z6v6e6r/lk2" },
+    "gitCommit": { "const": "595e954bb8f53367baf034d7f39b255af0fda5fd" },
+    "platform": { "const": "linux/amd64" },
+    "images": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 5,
+      "allOf": [
+        {
+          "contains": {
+            "type": "object",
+            "required": ["component", "repository"],
+            "properties": {
+              "component": { "const": "web" },
+              "repository": { "const": "ghcr.io/z6v6e6r/phub-web" }
+            }
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "type": "object",
+            "required": ["component", "repository"],
+            "properties": {
+              "component": { "const": "api" },
+              "repository": { "const": "ghcr.io/z6v6e6r/phub-api" }
+            }
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "type": "object",
+            "required": ["component", "repository"],
+            "properties": {
+              "component": { "const": "worker" },
+              "repository": { "const": "ghcr.io/z6v6e6r/phub-worker" }
+            }
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "type": "object",
+            "required": ["component", "repository"],
+            "properties": {
+              "component": { "const": "realtime" },
+              "repository": { "const": "ghcr.io/z6v6e6r/phub-realtime" }
+            }
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "type": "object",
+            "required": ["component", "repository"],
+            "properties": {
+              "component": { "const": "migrator" },
+              "repository": { "const": "ghcr.io/z6v6e6r/phub-migrator" }
+            }
+          },
+          "minContains": 1,
+          "maxContains": 1
+        }
+      ],
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "component",
+          "repository",
+          "digest",
+          "architecture",
+          "revision",
+          "provenance",
+          "sbom",
+          "reconciliation"
+        ],
+        "properties": {
+          "component": {
+            "type": "string",
+            "enum": ["web", "api", "worker", "realtime", "migrator"]
+          },
+          "repository": {
+            "type": "string",
+            "pattern": "^ghcr\\.io/z6v6e6r/phub-(web|api|worker|realtime|migrator)$"
+          },
+          "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+          "architecture": { "const": "amd64" },
+          "revision": { "const": "595e954bb8f53367baf034d7f39b255af0fda5fd" },
+          "provenance": { "const": true },
+          "sbom": { "const": true },
+          "reconciliation": { "const": true }
+        }
+      }
+    },
+    "reconciliationRuns": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^[1-9][0-9]*$" }
+    }
+  }
+}

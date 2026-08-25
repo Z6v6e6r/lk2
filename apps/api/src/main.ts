@@ -37,6 +37,7 @@ import {
   createRealtimeAuthorizationRepository,
   createTrainerAvatarRepository,
   createUpcomingBookingsRepository,
+  createSubscriptionRuntimeActorContextRepository,
   projectHomeBaseUser,
 } from '@phub/database';
 import {
@@ -47,6 +48,7 @@ import {
 import { createNotificationEndpointCipher } from '@phub/notifications';
 import { createLogger, recordLevelEligibilityMetrics, startTelemetry } from '@phub/observability';
 import { VivaIdentityProvider } from '@phub/viva-adapter';
+import { ManagedSubscriptionRuntimeQuoteClient } from '@phub/subscription-runtime-adapter';
 import Redis from 'ioredis';
 
 import { buildApp } from './app.js';
@@ -83,6 +85,7 @@ import {
 import { PostgresAuthRepository } from './auth/postgres-auth-repository.js';
 import { LegacyPromotionEngagementSink } from './promotions/legacy-promotion-engagement-sink.js';
 import { S3TrainerAvatarMediaStore } from './trainer-avatar-media-store.js';
+import { SubscriptionRuntimeActorDelegationIssuer } from './subscriptions/subscription-runtime-actor-delegation-issuer.js';
 
 const config = loadConfig();
 const runtimeContourAttestation = config.LOCAL_RUNTIME_CONTOUR_ATTESTATION
@@ -404,12 +407,48 @@ const communityMediaObjectStore = config.COMMUNITY_MEDIA_ENABLED
 const communityMediaRuntime = communityMediaObjectStore
   ? createCommunityMediaRuntime({ config, pool, objectStore: communityMediaObjectStore })
   : undefined;
+const subscriptionRuntimeWarnBoundary = (() => {
+  if (config.SUBSCRIPTION_RUNTIME_WARN_MODE !== 'WARN') return undefined;
+  const privateKeys = JSON.parse(
+    config.SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS as string,
+  ) as Record<string, string>;
+  const activeKeyId = config.SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID as string;
+  return {
+    actorContextRepository: createSubscriptionRuntimeActorContextRepository(pool),
+    delegationIssuer: new SubscriptionRuntimeActorDelegationIssuer({
+      privateKeyPem: privateKeys[activeKeyId] as string,
+      keyId: activeKeyId,
+      issuer: config.SUBSCRIPTION_RUNTIME_DELEGATION_ISSUER as string,
+      audience: config.SUBSCRIPTION_RUNTIME_DELEGATION_AUDIENCE as string,
+      ttlSeconds: config.SUBSCRIPTION_RUNTIME_DELEGATION_TTL_SECONDS,
+    }),
+    quoteClient: new ManagedSubscriptionRuntimeQuoteClient({
+      enabled: true,
+      baseUrl: config.SUBSCRIPTION_RUNTIME_BASE_URL as string,
+      integrationToken: config.SUBSCRIPTION_RUNTIME_INTEGRATION_TOKEN as string,
+      timeoutMs: config.SUBSCRIPTION_RUNTIME_TIMEOUT_MS,
+      circuitFailureThreshold: config.SUBSCRIPTION_RUNTIME_CIRCUIT_FAILURE_THRESHOLD,
+      circuitResetMs: config.SUBSCRIPTION_RUNTIME_CIRCUIT_RESET_MS,
+      environment: config.APP_ENV === 'local' ? 'development' : 'production',
+      onMetric: (metric) =>
+        logger.info({ metric }, 'subscription runtime quote boundary operation'),
+    }),
+  };
+})();
 const app = await buildApp({
   config,
   logger,
   pool,
   ...(runtimeContourAttestation ? { runtimeContourAttestation } : {}),
   authService,
+  ...(subscriptionRuntimeWarnBoundary
+    ? {
+        subscriptionRuntimeActorContextRepository:
+          subscriptionRuntimeWarnBoundary.actorContextRepository,
+        subscriptionRuntimeDelegationIssuer: subscriptionRuntimeWarnBoundary.delegationIssuer,
+        subscriptionRuntimeQuoteClient: subscriptionRuntimeWarnBoundary.quoteClient,
+      }
+    : {}),
   communityDirectory: createCommunityDirectoryRuntime({ config, pool, logger }),
   ...(communityReadExperienceService ? { communityReadExperienceService } : {}),
   ...(communityCreateService ? { communityCreateService } : {}),
