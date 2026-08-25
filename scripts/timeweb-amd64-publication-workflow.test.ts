@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { access, chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -15,6 +16,9 @@ const releaseManifestProducer = fileURLToPath(
 );
 const releaseManifestValidator = fileURLToPath(
   new URL('./verify-timeweb-release-manifest.js', import.meta.url),
+);
+const publicationEvidenceValidator = fileURLToPath(
+  new URL('./verify-timeweb-publication-evidence-checksums.js', import.meta.url),
 );
 
 interface BlobFetchRequestObservation {
@@ -38,7 +42,13 @@ interface BlobFetchScenarioResult {
 
 interface ProducedReleaseManifest {
   readonly gitCommit: string;
+  readonly gitTree: string;
   readonly images: readonly { readonly digest: string }[];
+  readonly publication: {
+    readonly runAttempt: string;
+    readonly runId: string;
+    readonly workflowSha: string;
+  };
 }
 
 describe('Timeweb amd64 publication workflow', () => {
@@ -83,10 +93,18 @@ describe('Timeweb amd64 publication workflow', () => {
           string,
           {
             readonly environment?: unknown;
+            readonly if?: string;
             readonly needs?: string | readonly string[];
             readonly permissions?: Readonly<Record<string, string>>;
             readonly strategy?: { readonly matrix?: { readonly service?: readonly string[] } };
-            readonly steps?: readonly { readonly uses?: string }[];
+            readonly steps?: readonly {
+              readonly 'continue-on-error'?: boolean;
+              readonly id?: string;
+              readonly if?: string;
+              readonly name?: string;
+              readonly uses?: string;
+              readonly with?: Readonly<Record<string, unknown>>;
+            }[];
           }
         >
       >;
@@ -112,6 +130,9 @@ describe('Timeweb amd64 publication workflow', () => {
       'build-and-publish',
       'publication-inventory',
     ]);
+    expect(document.jobs['publication-manifest']?.if).toBe(
+      "${{ inputs.operation == 'publish' && needs.build-and-publish.result == 'success' && needs.publication-inventory.result == 'success' }}",
+    );
     expect(document.jobs['build-and-publish']?.permissions).toEqual({
       contents: 'read',
       packages: 'write',
@@ -135,6 +156,37 @@ describe('Timeweb amd64 publication workflow', () => {
     expect(document.jobs['verify-source']?.environment).toBeUndefined();
     expect(document.jobs['build-and-publish']?.environment).toBe('timeweb-amd64-publication');
     expect(document.jobs['publication-manifest']?.environment).toBeUndefined();
+
+    const publicationSteps = document.jobs['publication-manifest']?.steps ?? [];
+    const evidenceDownload = publicationSteps.find(
+      ({ uses }) => uses === 'actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093',
+    );
+    expect(evidenceDownload?.with).toEqual({
+      pattern: 'timeweb-amd64-image-*-${{ github.run_id }}-${{ github.run_attempt }}',
+      path: 'publication-evidence/images',
+      'merge-multiple': true,
+    });
+    expect(evidenceDownload?.with).not.toHaveProperty('run-id');
+    expect(evidenceDownload?.with).not.toHaveProperty('github-token');
+
+    const generationIndex = publicationSteps.findIndex(
+      ({ name }) => name === 'Create and validate internal and canonical publication manifests',
+    );
+    const canonicalIndex = publicationSteps.findIndex(({ id }) => id === 'canonical');
+    const canonicalStep = publicationSteps[canonicalIndex];
+    expect(generationIndex).toBeGreaterThan(-1);
+    expect(canonicalIndex).toBeGreaterThan(generationIndex);
+    expect(canonicalStep?.uses).toBe(
+      'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02',
+    );
+    expect(canonicalStep?.with).toEqual({
+      name: 'timeweb-amd64-canonical-release-${{ inputs.expected_source_sha }}-${{ github.run_id }}-${{ github.run_attempt }}',
+      path: 'release-manifest.json\nrelease-manifest.sha256\n',
+      'if-no-files-found': 'error',
+      'retention-days': 90,
+    });
+    expect(canonicalStep?.if).toBeUndefined();
+    expect(canonicalStep?.['continue-on-error']).toBeUndefined();
 
     expect(workflow).toContain('default: source_check_only');
     expect(workflow).toContain("inputs.operation == 'publish'");
@@ -165,7 +217,7 @@ describe('Timeweb amd64 publication workflow', () => {
     expect(workflow).toContain(
       'BUILDKIT_IMAGE: moby/buildkit@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8',
     );
-    expect(workflow.match(/sha256sum --check --strict/gu)).toHaveLength(4);
+    expect(workflow.match(/sha256sum --check --strict/gu)).toHaveLength(5);
     expect(workflow).not.toContain('docker/setup-buildx-action@');
     expect(workflow).toContain('DOCKER_BUILD_RECORD_UPLOAD: false');
     expect(workflow).toContain('PHUB_RELEASE=${{ inputs.expected_source_sha }}');
@@ -199,6 +251,25 @@ describe('Timeweb amd64 publication workflow', () => {
     expect(workflow).toContain('authorizesVpsProvisioning: false');
     expect(workflow).toContain('authorizesDatabaseMutation: false');
     expect(workflow).toContain('timeweb-amd64-publication-manifest.json');
+    expect(workflow).toContain('node scripts/build-timeweb-release-manifest.js');
+    expect(workflow).toContain('node scripts/verify-timeweb-release-manifest.js');
+    expect(workflow).toContain(
+      'node scripts/verify-timeweb-publication-evidence-checksums.js publication-evidence/images',
+    );
+    expect(workflow).toContain(
+      'name: timeweb-amd64-canonical-release-${{ inputs.expected_source_sha }}-${{ github.run_id }}-${{ github.run_attempt }}',
+    );
+    expect(workflow).toContain('release-manifest.json\n            release-manifest.sha256');
+    expect(workflow).not.toContain('prior_reconciliation_run_id');
+    expect(workflow.indexOf('node scripts/build-timeweb-release-manifest.js')).toBeLessThan(
+      workflow.indexOf('node scripts/verify-timeweb-release-manifest.js'),
+    );
+    expect(
+      workflow.indexOf('node scripts/verify-timeweb-publication-evidence-checksums.js'),
+    ).toBeLessThan(workflow.indexOf('node scripts/build-timeweb-release-manifest.js'));
+    expect(workflow.indexOf('node scripts/verify-timeweb-release-manifest.js')).toBeLessThan(
+      workflow.indexOf('name: Preserve same-run canonical publication evidence'),
+    );
     expect(workflow).toContain('phub-timeweb-amd64-immediate-push-receipt');
     expect(workflow).toContain('phub-timeweb-amd64-registry-inventory');
     expect(workflow).toContain('$SERVICE-attestation-layer-digests.txt');
@@ -296,54 +367,76 @@ describe('Timeweb amd64 publication workflow', () => {
       });
     const services = ['api', 'migrator', 'realtime', 'web', 'worker'] as const;
     const digest = `sha256:${'a'.repeat(64)}`;
-    const images = services.map((service) => ({
-      architecture: 'amd64',
+    const publicationImages = services.map((service) => ({
       indexDigest: digest,
       platform: 'linux/amd64',
-      provenanceVerified: true,
-      reconciliationVerified: true,
+      provenance: 'slsa-v1-max',
+      publicationTag: `amd64-sha-${approvedSourceSha}-101-1`,
       repository: `ghcr.io/z6v6e6r/phub-${service}`,
+      runAttempt: '1',
+      runId: '101',
       runtimeDigest: digest,
-      sbomVerified: true,
+      sbom: 'spdx',
       service,
       sourceSha: approvedSourceSha,
       sourceTree: approvedSourceTree,
-      verified: true,
+      workflowSha: 'f'.repeat(40),
     }));
     const publicationManifest = {
       authorizesDatabaseMutation: false,
       authorizesDeploy: false,
       authorizesVpsProvisioning: false,
-      images,
+      images: publicationImages,
+      kind: 'phub-timeweb-amd64-publication',
       platform: 'linux/amd64',
+      repository: 'Z6v6e6r/lk2',
+      runAttempt: '1',
+      runId: '101',
+      schemaVersion: 1,
       sourceSha: approvedSourceSha,
+      sourceTree: approvedSourceTree,
+      workflowSha: 'f'.repeat(40),
     };
     const publicationProgram = extractProgram(
       publicationWorkflow,
-      'jq -e --arg sourceSha "$SOURCE_SHA" \'\n',
+      'jq -e --arg sourceSha "$SOURCE_SHA" --arg sourceTree "$source_tree" --arg workflowSha "$WORKFLOW_SHA" --arg runId "$GITHUB_RUN_ID" --arg runAttempt "$GITHUB_RUN_ATTEMPT" \'\n',
       "\n          ' timeweb-amd64-publication-manifest.json >/dev/null",
     );
+    const publicationArguments = [
+      '--arg',
+      'sourceSha',
+      approvedSourceSha,
+      '--arg',
+      'sourceTree',
+      approvedSourceTree,
+      '--arg',
+      'workflowSha',
+      'f'.repeat(40),
+      '--arg',
+      'runId',
+      '101',
+      '--arg',
+      'runAttempt',
+      '1',
+    ];
+    expect(runJq(publicationProgram, publicationManifest, publicationArguments).status).toBe(0);
     expect(
-      runJq(publicationProgram, publicationManifest, ['--arg', 'sourceSha', approvedSourceSha])
-        .status,
-    ).toBe(0);
-    expect(
-      runJq(publicationProgram, { ...publicationManifest, sourceSha: supersededSourceSha }, [
-        '--arg',
-        'sourceSha',
-        approvedSourceSha,
-      ]).status,
+      runJq(
+        publicationProgram,
+        { ...publicationManifest, sourceSha: supersededSourceSha },
+        publicationArguments,
+      ).status,
     ).not.toBe(0);
     expect(
       runJq(
         publicationProgram,
         {
           ...publicationManifest,
-          images: images.map((image, index) =>
+          images: publicationImages.map((image, index) =>
             index === 0 ? { ...image, sourceSha: supersededSourceSha } : image,
           ),
         },
-        ['--arg', 'sourceSha', approvedSourceSha],
+        publicationArguments,
       ).status,
     ).not.toBe(0);
     expect(
@@ -351,13 +444,27 @@ describe('Timeweb amd64 publication workflow', () => {
         publicationProgram,
         {
           ...publicationManifest,
-          images: images.map((image, index) =>
+          images: publicationImages.map((image, index) =>
             index === 0 ? { ...image, indexDigest: '' } : image,
           ),
         },
-        ['--arg', 'sourceSha', approvedSourceSha],
+        publicationArguments,
       ).status,
     ).not.toBe(0);
+
+    const reconciliationImages = publicationImages.map((image) => ({
+      architecture: 'amd64',
+      indexDigest: image.indexDigest,
+      provenanceVerified: true,
+      reconciliationVerified: true,
+      repository: image.repository,
+      runtimeDigest: image.runtimeDigest,
+      sbomVerified: true,
+      service: image.service,
+      sourceSha: image.sourceSha,
+      sourceTree: image.sourceTree,
+      verified: true,
+    }));
 
     const reconciliationProgram = extractProgram(
       reconciliationWorkflow,
@@ -368,7 +475,7 @@ describe('Timeweb amd64 publication workflow', () => {
       authorizesDatabaseMutation: false,
       authorizesDeploy: false,
       authorizesVpsProvisioning: false,
-      images,
+      images: reconciliationImages,
     };
     expect(
       runJq(reconciliationProgram, reconciliationManifest, [
@@ -382,7 +489,7 @@ describe('Timeweb amd64 publication workflow', () => {
         reconciliationProgram,
         {
           ...reconciliationManifest,
-          images: images.map((image, index) =>
+          images: reconciliationImages.map((image, index) =>
             index === 0 ? { ...image, sourceSha: supersededSourceSha } : image,
           ),
         },
@@ -394,7 +501,7 @@ describe('Timeweb amd64 publication workflow', () => {
         reconciliationProgram,
         {
           ...reconciliationManifest,
-          images: images.map((image, index) =>
+          images: reconciliationImages.map((image, index) =>
             index === 0 ? { ...image, provenanceVerified: false } : image,
           ),
         },
@@ -402,30 +509,37 @@ describe('Timeweb amd64 publication workflow', () => {
       ).status,
     ).not.toBe(0);
 
-    const producerInput = {
-      ...reconciliationManifest,
-      kind: 'phub-timeweb-amd64-publication-reconciliation',
-      reconciliationRunAttempt: '1',
-      reconciliationRunId: '102',
-      schemaVersion: 1,
-    };
+    const producerInput = publicationManifest;
     const produce = async (input: unknown) => {
       const directory = await mkdtemp(join(tmpdir(), 'phub-timeweb-source-binding-'));
-      const inputPath = join(directory, 'reconciliation.json');
+      const inputPath = join(directory, 'timeweb-amd64-publication-manifest.json');
       const manifestPath = join(directory, 'release-manifest.json');
       const checksumPath = join(directory, 'release-manifest.sha256');
       try {
         await writeFile(inputPath, `${JSON.stringify(input, null, 2)}\n`);
         const result = spawnSync(
           process.execPath,
-          [releaseManifestProducer, inputPath, '101', '102', manifestPath, checksumPath],
+          [releaseManifestProducer, inputPath, manifestPath, checksumPath],
           { encoding: 'utf8' },
         );
         const validation =
           result.status === 0
-            ? spawnSync(process.execPath, [releaseManifestValidator, manifestPath], {
-                encoding: 'utf8',
-              })
+            ? spawnSync(
+                process.execPath,
+                [
+                  releaseManifestValidator,
+                  manifestPath,
+                  '--expected-publication-workflow-sha',
+                  'f'.repeat(40),
+                  '--expected-publication-run-id',
+                  '101',
+                  '--expected-publication-run-attempt',
+                  '1',
+                ],
+                {
+                  encoding: 'utf8',
+                },
+              )
             : undefined;
         const manifest =
           result.status === 0
@@ -442,6 +556,13 @@ describe('Timeweb amd64 publication workflow', () => {
     expect(produced.manifest).toBeDefined();
     if (!produced.manifest) throw new Error('canonical release manifest was not produced');
     expect(produced.manifest.gitCommit).toBe(approvedSourceSha);
+    expect(produced.manifest.gitTree).toBe(approvedSourceTree);
+    expect(produced.manifest.publication).toEqual({
+      runAttempt: '1',
+      runId: '101',
+      workflow: '.github/workflows/publish-timeweb-amd64-images.yaml',
+      workflowSha: 'f'.repeat(40),
+    });
     expect(produced.manifest.images).toHaveLength(5);
     expect(produced.manifest.images.every((image) => image.digest === digest)).toBe(true);
 
@@ -451,7 +572,7 @@ describe('Timeweb amd64 publication workflow', () => {
     ]) {
       const rejected = await produce({
         ...producerInput,
-        images: images.map((image, index) =>
+        images: publicationImages.map((image, index) =>
           index === 0 ? { ...image, ...sourceIdentity } : image,
         ),
       });
@@ -826,6 +947,58 @@ describe('Timeweb amd64 publication workflow', () => {
     }
   });
 
+  it('rejects tampered, path-substituted, or unreferenced downloaded publication evidence', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'phub-timeweb-publication-evidence-'));
+    const imagesDirectory = join(directory, 'images');
+    await mkdir(imagesDirectory);
+    const components = ['web', 'api', 'worker', 'realtime', 'migrator'];
+    const originals = new Map<string, string>();
+    try {
+      for (const component of components) {
+        const lines: string[] = [];
+        for (const suffix of ['image.json', 'provenance.json', 'sbom.spdx.json']) {
+          const name = `${component}-${suffix}`;
+          const contents = `${component}:${suffix}\n`;
+          originals.set(name, contents);
+          await writeFile(join(imagesDirectory, name), contents);
+          const digest = createHash('sha256').update(contents).digest('hex');
+          lines.push(`${digest}  publication-evidence/${name}`);
+        }
+        await writeFile(
+          join(imagesDirectory, `${component}-evidence-checksums.txt`),
+          `${lines.join('\n')}\n`,
+        );
+      }
+
+      const verify = () =>
+        spawnSync(process.execPath, [publicationEvidenceValidator, imagesDirectory], {
+          encoding: 'utf8',
+        });
+      expect(verify().status).toBe(0);
+
+      await writeFile(join(imagesDirectory, 'api-image.json'), 'tampered\n');
+      expect(verify().status).not.toBe(0);
+      await writeFile(join(imagesDirectory, 'api-image.json'), originals.get('api-image.json')!);
+
+      const apiSidecar = join(imagesDirectory, 'api-evidence-checksums.txt');
+      const validSidecar = await readFile(apiSidecar, 'utf8');
+      await writeFile(
+        apiSidecar,
+        validSidecar.replace(
+          'publication-evidence/api-image.json',
+          'publication-evidence/api-shadow/../api-image.json',
+        ),
+      );
+      expect(verify().status).not.toBe(0);
+      await writeFile(apiSidecar, validSidecar);
+
+      await writeFile(join(imagesDirectory, 'web-unreferenced.json'), '{}\n');
+      expect(verify().status).not.toBe(0);
+    } finally {
+      await rm(directory, { force: true, recursive: true });
+    }
+  });
+
   it('keeps reconciliation manual, read-only, hard-pinned and non-authorizing', async () => {
     const workflow = await readFile(
       new URL('../.github/workflows/reconcile-timeweb-amd64-publication.yaml', import.meta.url),
@@ -884,7 +1057,7 @@ describe('Timeweb amd64 publication workflow', () => {
     expect(workflow).not.toContain(supersededSourceSha);
     expect(workflow).toContain("printf '%s' \"$PUBLICATION_RUN_ID\" | grep -Eq '^[1-9][0-9]*$'");
     expect(workflow).toContain('publication_workflow_sha:');
-    expect(workflow).toContain('prior_reconciliation_run_id:');
+    expect(workflow).not.toContain('prior_reconciliation_run_id:');
     expect(workflow).toContain('.path == ".github/workflows/publish-timeweb-amd64-images.yaml"');
     expect(workflow).toContain('.head_sha == $workflowSha');
     expect(workflow).toContain('.conclusion == "success"');
@@ -935,15 +1108,12 @@ describe('Timeweb amd64 publication workflow', () => {
     expect(workflow).toContain('authorizesVpsProvisioning:false');
     expect(workflow).toContain('authorizesDatabaseMutation:false');
     expect(workflow).toContain('reconciliationWorkflowSha:$reconciliationWorkflowSha');
-    expect(workflow).toContain('if test -n "$PRIOR_RECONCILIATION_RUN_ID"; then');
-    expect(workflow).toContain(
-      'name: timeweb-amd64-publication-reconciliation-manifest-${{ inputs.prior_reconciliation_run_id }}-1',
-    );
-    expect(workflow).toContain('.images == $prior[0].images');
+    expect(workflow).not.toContain('PRIOR_RECONCILIATION_RUN_ID');
+    expect(workflow).not.toContain('prior-reconciliation');
     expect(workflow).toContain('ref: ${{ inputs.expected_workflow_sha }}');
-    expect(workflow).toContain('node scripts/build-timeweb-release-manifest.js');
-    expect(workflow).toContain('node scripts/verify-timeweb-release-manifest.js');
-    expect(workflow).toContain('release-manifest.sha256');
+    expect(workflow).not.toContain('node scripts/build-timeweb-release-manifest.js');
+    expect(workflow).not.toContain('node scripts/verify-timeweb-release-manifest.js');
+    expect(workflow).not.toContain('release-manifest.sha256');
     expect(workflow).not.toContain('verified:true');
     expect(workflow).not.toContain('images: (.images | map({key: .service');
     expect(workflow).not.toContain(

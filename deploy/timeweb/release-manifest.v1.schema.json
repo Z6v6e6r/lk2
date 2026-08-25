@@ -1,38 +1,22 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "PadlHub Timeweb staging machine canonical publication release manifest V2",
-  "x-applicationSource": {
-    "commit": "595e954bb8f53367baf034d7f39b255af0fda5fd",
-    "tree": "3f4c1e63dd30eb60251533b95f1970fd96754a08"
-  },
+  "title": "PadlHub Timeweb staging machine legacy release manifest V1",
+  "x-sourceTree": "3f4c1e63dd30eb60251533b95f1970fd96754a08",
   "type": "object",
   "additionalProperties": false,
   "required": [
     "schemaVersion",
     "repository",
     "gitCommit",
-    "gitTree",
     "platform",
-    "publication",
-    "images"
+    "images",
+    "reconciliationRuns"
   ],
   "properties": {
-    "schemaVersion": { "const": "PHUB_TIMEWEB_RELEASE_MANIFEST_V2" },
+    "schemaVersion": { "const": "PHUB_TIMEWEB_RELEASE_MANIFEST_V1" },
     "repository": { "const": "Z6v6e6r/lk2" },
     "gitCommit": { "const": "595e954bb8f53367baf034d7f39b255af0fda5fd" },
-    "gitTree": { "const": "3f4c1e63dd30eb60251533b95f1970fd96754a08" },
     "platform": { "const": "linux/amd64" },
-    "publication": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["workflow", "workflowSha", "runId", "runAttempt"],
-      "properties": {
-        "workflow": { "const": ".github/workflows/publish-timeweb-amd64-images.yaml" },
-        "workflowSha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
-        "runId": { "type": "string", "pattern": "^[1-9][0-9]*$" },
-        "runAttempt": { "const": "1" }
-      }
-    },
     "images": {
       "type": "array",
       "minItems": 5,
@@ -106,12 +90,11 @@
           "component",
           "repository",
           "digest",
-          "runtimeDigest",
           "architecture",
           "revision",
           "provenance",
           "sbom",
-          "publication"
+          "reconciliation"
         ],
         "properties": {
           "component": {
@@ -123,14 +106,20 @@
             "pattern": "^ghcr\\.io/z6v6e6r/phub-(web|api|worker|realtime|migrator)$"
           },
           "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
-          "runtimeDigest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
           "architecture": { "const": "amd64" },
           "revision": { "const": "595e954bb8f53367baf034d7f39b255af0fda5fd" },
           "provenance": { "const": true },
           "sbom": { "const": true },
-          "publication": { "const": true }
+          "reconciliation": { "const": true }
         }
       }
+    },
+    "reconciliationRuns": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^[1-9][0-9]*$" }
     }
   }
 }
