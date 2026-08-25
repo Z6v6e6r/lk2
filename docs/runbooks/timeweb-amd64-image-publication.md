@@ -99,25 +99,32 @@ A partial registry inventory or missing final manifest is `NO-GO` for deployment
 same publication request blindly: inventory the unique run tags first and prepare a new reviewed
 attempt if required.
 
-## Historical appendix: superseded interrupted-run reconciliation
+## Current Gate 2: optional read-only reconciliation
 
-The procedure below describes only original run `32625879321`. Its fixed confirmation and digests
-are not accepted by the current workflow and are not evidence for source `595e954...`.
+If a successful publication push needs independent recovery or read-back, do not dispatch the
+publication workflow again. After a separate reconciliation approval, run
+`.github/workflows/reconcile-timeweb-amd64-publication.yaml` from exact reviewed `main` with:
 
-If a publication push completed but its custody step was interrupted or failed, do not dispatch the
-publication workflow again. Use the separately reviewed
-`.github/workflows/reconcile-timeweb-amd64-publication.yaml` from exact reviewed `main`, with its
-exact workflow SHA and `RECONCILE_TIMEWEB_AMD64_32625879321` confirmation. This manual workflow is
-read-only (`contents: read`, `packages: read`) and can inspect only the five hard-pinned tags from
-original run `32625879321` / attempt `1`, with their hard-pinned index digests. It validates the
-root index, runtime descriptor, linked attestation manifests, statement blob hashes, runtime
-subjects, provenance/SBOM, source tree, original builder URL, reviewed base/scanner materials and
-the runtime image shape. It emits a retained reconciliation manifest that explicitly leaves deploy,
-VPS provisioning and database mutation unauthorized.
+- `expected_workflow_sha`: the exact reviewed `main` SHA containing the reconciliation workflow;
+- `expected_source_sha`: the approved source SHA `595e954bb8f53367baf034d7f39b255af0fda5fd`;
+- `publication_run_id`: the exact successful first-attempt publication run to read back;
+- `publication_workflow_sha`: the exact `main` SHA that executed that publication run;
+- `confirmation`: `RECONCILE_TIMEWEB_AMD64_PUBLICATION`.
+
+The workflow is read-only (`contents: read`, `packages: read`). It first binds those inputs to the
+immutable publication artifact from the named run, then validates the five recorded tags and index
+digests, root indexes, runtime descriptors, linked attestation manifests, statement blob hashes,
+runtime subjects, provenance/SBOM, source tree, original builder URL, reviewed base/scanner
+materials and runtime image shape. It emits a retained reconciliation manifest that explicitly
+leaves deploy, VPS provisioning and database mutation unauthorized.
 
 Any tag/digest mismatch, missing linked descriptor, material mismatch, runtime probe failure or
 retry exhaustion is `NO-GO`. The reconciliation workflow does not build, push, overwrite, delete,
 deploy, access VPS hosts, or connect to PostgreSQL.
+
+Historical run `32625879321`, its fixed digests and confirmation
+`RECONCILE_TIMEWEB_AMD64_32625879321` are retained only in Git and Actions history. They are not
+accepted by the current workflow and are not evidence for source `595e954...`.
 
 ## Current Gate 3: staging deployment
 
