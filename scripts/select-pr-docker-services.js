@@ -13,7 +13,7 @@ const APP_SERVICE_PREFIXES = new Map([
 ]);
 
 const CRITICAL_PATH_FRAGMENT =
-  /acl|auth|booking|capacity|deploy|discount|identity|migrat|oauth|payment|pii|provider|rating|refund|release|rls|roster|security|secret|session|signup|subscription|tenant|tournament|viva/i;
+  /acl|auth|booking|capacity|deploy|discount|identity|migrat|oauth|payment|pii|provider|rating|rbac|refund|release|rls|roster|schema|security|secret|session|signup|subscription|tenant|tournament|viva/i;
 
 function isDocumentationOnly(path) {
   return (

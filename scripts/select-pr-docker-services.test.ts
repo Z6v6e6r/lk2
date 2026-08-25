@@ -53,6 +53,8 @@ describe('PR Docker service selection', () => {
     'apps/web/src/TournamentDetailPage.tsx',
     'apps/api/src/paymentService.ts',
     'apps/api/src/providerClient.ts',
+    'apps/api/src/rbacPolicy.ts',
+    'apps/api/src/schema.ts',
   ])('fails closed for CRITICAL leaf path %s', (path) => {
     expect(select([path])).toEqual(all);
   });
