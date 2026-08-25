@@ -15,47 +15,58 @@ separately reviewed exact `main` workflow SHA, with:
 - `expected_workflow_sha`: the exact reviewed `main` commit containing the workflow;
 - `confirmation`: `PUBLISH_TIMEWEB_AMD64_595E954` for the publishing operation.
 
-Each reconciliation dispatch must pass the same `expected_source_sha`, the exact successful
-publication run ID and publication workflow SHA. The workflow rejects a publication artifact, image
-record, source tree, immutable tag or final `release-manifest.gitCommit` that does not resolve to the
-approved source. Historical run `32625879321` and its digests are not fresh evidence for this
-contract.
+The publication workflow resolves the application tree from `expected_source_sha` with Git. It
+rejects a publication artifact, image record, source tree, immutable tag or final
+`release-manifest.gitCommit`/`gitTree` pair that does not resolve to the approved source. Historical
+run `32625879321` and its digests are not fresh evidence for this contract.
 
-The current release-evidence sequence is:
+The normal release-evidence sequence is:
 
 1. Dispatch `publish-timeweb-amd64-images.yaml` with the exact inputs above and retain its complete
-   five-image publication artifact.
-2. Dispatch `reconcile-timeweb-amd64-publication.yaml` with `expected_source_sha`, the successful
-   `publication_run_id`, its exact `publication_workflow_sha`, and confirmation
-   `RECONCILE_TIMEWEB_AMD64_PUBLICATION`.
-3. After the first reconciliation succeeds, dispatch the same reconciliation workflow again with
-   the same publication inputs plus `prior_reconciliation_run_id` set to the first successful
-   reconciliation run. Only this second identical read-back can produce `release-manifest.json`.
+   five-image publication artifact and same-run canonical artifact.
+2. Verify that the one publication run succeeded only after all five publish, digest, platform,
+   provenance, SBOM, internal manifest, canonical manifest, checksum and artifact-upload gates.
 
-Publication and both reconciliations must succeed for the same source and publication run. Their
-artifacts are evidence only; they do not authorize deployment.
+No reconciliation run ID, later workflow artifact or second manual dispatch is part of this normal
+path. The artifacts are evidence only; they do not authorize deployment.
 
-The first successful reconciliation emits only non-authorizing evidence. A second successful,
-byte-equivalent reconciliation of the same publication emits the deploy-facing pair
-`release-manifest.json` and `release-manifest.sha256`. The JSON has exactly one accepted contract:
+The publication run keeps two artifact classes deliberately separate:
 
-- `schemaVersion` is `PHUB_TIMEWEB_RELEASE_MANIFEST_V1`;
-- `repository`, `gitCommit` and `platform` identify `Z6v6e6r/lk2`, the exact selected source commit
-  and `linux/amd64`;
+- `timeweb-amd64-publication-<run-id>-1` is the internal, detailed custody artifact containing
+  `timeweb-amd64-publication-manifest.json`, registry records and attestation evidence;
+- `timeweb-amd64-canonical-release-<source-sha>-<run-id>-1` is the canonical artifact and contains
+  exactly `release-manifest.json` and `release-manifest.sha256`.
+
+The current canonical JSON contract is an explicit incompatible transition to
+`PHUB_TIMEWEB_RELEASE_MANIFEST_V2`:
+
+- `repository`, `gitCommit`, literal `gitTree` and `platform` identify `Z6v6e6r/lk2`, the exact
+  selected application commit and resolved tree, and `linux/amd64`;
+- `publication` binds the manifest to the publication workflow path, exact workflow SHA, same run ID
+  and first run attempt;
 - `images` is an array containing exactly one entry for each of `web`, `api`, `worker`, `realtime`
-  and `migrator`; every entry carries its real reconciled root/index digest, repository,
-  architecture, source revision and per-image `provenance`, `sbom` and `reconciliation` assertions;
-- `reconciliationRuns` contains the two distinct successful read-back run IDs;
+  and `migrator`; every entry carries its immutable root/index digest, immutable runtime digest,
+  repository, architecture, source revision and per-image `provenance`, `sbom` and `publication`
+  assertions;
 - `release-manifest.sha256` contains the SHA-256 custody checksum for the exact manifest bytes.
 
-The production producer copies the real index digests and explicit per-image verification results
-from reconciliation evidence, then immediately runs the same strict validator used by deployment
-admission. The validator is invoked with `release-manifest.json` and always requires the adjacent,
-fixed-name `release-manifest.sha256`; the checksum is not optional. Numeric `schemaVersion: 1`, an
-object-valued `images`, top-level `verification`, missing per-image verification, missing digests, a
-stale source commit or an invalid checksum all fail closed. Probe, push-receipt, publication and
-reconciliation manifests retain their own `schemaVersion: 1` evidence kinds; they are not alternate
-deploy-facing release-manifest formats and cannot be passed to the release validator.
+The shared production contract code resolves the Git tree, copies only complete five-image
+publication evidence into the canonical manifest and immediately validates the exact JSON and
+sidecar that will be uploaded. Same-run validation also supplies the expected workflow SHA, run ID
+and run attempt. Missing or duplicate components, mutable-only references, missing digests,
+incorrect platform or source identity, missing provenance/SBOM, publication identity drift, altered
+bytes or sidecar filename all fail closed.
+
+Historical `PHUB_TIMEWEB_RELEASE_MANIFEST_V1` artifacts remain readable through the legacy schema
+for audit compatibility. They keep their two reconciliation run IDs and do not acquire a fabricated
+tree or publication identity. V1 cannot satisfy V2 same-publication-run validation. Probe,
+push-receipt, internal publication and recovery reconciliation manifests retain their own numeric
+`schemaVersion: 1` evidence kinds; they are not alternate deploy-facing release-manifest formats.
+
+`reconcile-timeweb-amd64-publication.yaml` remains a separately authorized, optional read-only
+recovery/read-back workflow. It no longer accepts `prior_reconciliation_run_id` and never produces
+the canonical pair, so it cannot replace or contradict the canonical artifact from the publication
+run.
 
 ## Historical appendix: superseded non-publishing BuildKit attestation probe
 
@@ -88,25 +99,32 @@ A partial registry inventory or missing final manifest is `NO-GO` for deployment
 same publication request blindly: inventory the unique run tags first and prepare a new reviewed
 attempt if required.
 
-## Historical appendix: superseded interrupted-run reconciliation
+## Current Gate 2: optional read-only reconciliation
 
-The procedure below describes only original run `32625879321`. Its fixed confirmation and digests
-are not accepted by the current workflow and are not evidence for source `595e954...`.
+If a successful publication push needs independent recovery or read-back, do not dispatch the
+publication workflow again. After a separate reconciliation approval, run
+`.github/workflows/reconcile-timeweb-amd64-publication.yaml` from exact reviewed `main` with:
 
-If a publication push completed but its custody step was interrupted or failed, do not dispatch the
-publication workflow again. Use the separately reviewed
-`.github/workflows/reconcile-timeweb-amd64-publication.yaml` from exact reviewed `main`, with its
-exact workflow SHA and `RECONCILE_TIMEWEB_AMD64_32625879321` confirmation. This manual workflow is
-read-only (`contents: read`, `packages: read`) and can inspect only the five hard-pinned tags from
-original run `32625879321` / attempt `1`, with their hard-pinned index digests. It validates the
-root index, runtime descriptor, linked attestation manifests, statement blob hashes, runtime
-subjects, provenance/SBOM, source tree, original builder URL, reviewed base/scanner materials and
-the runtime image shape. It emits a retained reconciliation manifest that explicitly leaves deploy,
-VPS provisioning and database mutation unauthorized.
+- `expected_workflow_sha`: the exact reviewed `main` SHA containing the reconciliation workflow;
+- `expected_source_sha`: the approved source SHA `595e954bb8f53367baf034d7f39b255af0fda5fd`;
+- `publication_run_id`: the exact successful first-attempt publication run to read back;
+- `publication_workflow_sha`: the exact `main` SHA that executed that publication run;
+- `confirmation`: `RECONCILE_TIMEWEB_AMD64_PUBLICATION`.
+
+The workflow is read-only (`contents: read`, `packages: read`). It first binds those inputs to the
+immutable publication artifact from the named run, then validates the five recorded tags and index
+digests, root indexes, runtime descriptors, linked attestation manifests, statement blob hashes,
+runtime subjects, provenance/SBOM, source tree, original builder URL, reviewed base/scanner
+materials and runtime image shape. It emits a retained reconciliation manifest that explicitly
+leaves deploy, VPS provisioning and database mutation unauthorized.
 
 Any tag/digest mismatch, missing linked descriptor, material mismatch, runtime probe failure or
 retry exhaustion is `NO-GO`. The reconciliation workflow does not build, push, overwrite, delete,
 deploy, access VPS hosts, or connect to PostgreSQL.
+
+Historical run `32625879321`, its fixed digests and confirmation
+`RECONCILE_TIMEWEB_AMD64_32625879321` are retained only in Git and Actions history. They are not
+accepted by the current workflow and are not evidence for source `595e954...`.
 
 ## Current Gate 3: staging deployment
 

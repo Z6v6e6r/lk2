@@ -9,27 +9,76 @@ import { describe, expect, it } from 'vitest';
 
 const producer = fileURLToPath(new URL('./build-timeweb-release-manifest.js', import.meta.url));
 const validator = fileURLToPath(new URL('./verify-timeweb-release-manifest.js', import.meta.url));
-const reconciliationFixture = fileURLToPath(
-  new URL('./fixtures/timeweb-release-reconciliation.v1.json', import.meta.url),
-);
-const manifestFixture = fileURLToPath(
+const legacyManifestFixture = fileURLToPath(
   new URL('./fixtures/timeweb-release-manifest.v1.json', import.meta.url),
 );
-const checksumFixture = fileURLToPath(
+const legacyChecksumFixture = fileURLToPath(
   new URL('./fixtures/timeweb-release-manifest.v1.sha256', import.meta.url),
 );
 const schemaPath = fileURLToPath(
   new URL('../deploy/timeweb/release-manifest.schema.json', import.meta.url),
 );
+const legacySchemaPath = fileURLToPath(
+  new URL('../deploy/timeweb/release-manifest.v1.schema.json', import.meta.url),
+);
 const approvedSourceSha = '595e954bb8f53367baf034d7f39b255af0fda5fd';
 const approvedSourceTree = '3f4c1e63dd30eb60251533b95f1970fd96754a08';
-const supersededSourceSha = '35c8312b79cccdd136f2bfd892efbea629b8b919';
+const workflowSha = 'f'.repeat(40);
+const runId = '111111';
+const runAttempt = '1';
+const components = ['web', 'api', 'worker', 'realtime', 'migrator'] as const;
 
-function canonicalManifest() {
-  return JSON.parse(readFileSync(manifestFixture, 'utf8')) as Record<string, unknown>;
+type JsonRecord = Record<string, unknown>;
+
+function publicationEvidence(): JsonRecord {
+  return {
+    schemaVersion: 1,
+    kind: 'phub-timeweb-amd64-publication',
+    sourceSha: approvedSourceSha,
+    sourceTree: approvedSourceTree,
+    workflowSha,
+    repository: 'Z6v6e6r/lk2',
+    platform: 'linux/amd64',
+    runId,
+    runAttempt,
+    authorizesDeploy: false,
+    authorizesVpsProvisioning: false,
+    authorizesDatabaseMutation: false,
+    images: components.map((service, index) => ({
+      service,
+      sourceSha: approvedSourceSha,
+      sourceTree: approvedSourceTree,
+      workflowSha,
+      repository: `ghcr.io/z6v6e6r/phub-${service}`,
+      indexDigest: `sha256:${String(index + 1).repeat(64)}`,
+      runtimeDigest: `sha256:${String((index + 6) % 10).repeat(64)}`,
+      publicationTag: `amd64-sha-${approvedSourceSha}-${runId}-${runAttempt}`,
+      platform: 'linux/amd64',
+      provenance: 'slsa-v1-max',
+      sbom: 'spdx',
+      runId,
+      runAttempt,
+    })),
+  };
 }
 
-function verify(value: unknown, checksumOverride?: string) {
+function produce(evidence: unknown) {
+  const directory = mkdtempSync(join(tmpdir(), 'phub-timeweb-producer-'));
+  const inputPath = join(directory, 'timeweb-amd64-publication-manifest.json');
+  const manifestPath = join(directory, 'release-manifest.json');
+  const checksumPath = join(directory, 'release-manifest.sha256');
+  writeFileSync(inputPath, `${JSON.stringify(evidence, null, 2)}\n`);
+  const result = spawnSync('node', [producer, inputPath, manifestPath, checksumPath], {
+    encoding: 'utf8',
+  });
+  const manifest =
+    result.status === 0
+      ? (JSON.parse(readFileSync(manifestPath, 'utf8')) as JsonRecord)
+      : undefined;
+  return { checksumPath, directory, manifest, manifestPath, result };
+}
+
+function verify(value: unknown, checksumOverride?: string, options: readonly string[] = []) {
   const directory = mkdtempSync(join(tmpdir(), 'phub-timeweb-manifest-'));
   const manifestPath = join(directory, 'release-manifest.json');
   const checksumPath = join(directory, 'release-manifest.sha256');
@@ -40,200 +89,218 @@ function verify(value: unknown, checksumOverride?: string) {
     checksumOverride ??
       `${createHash('sha256').update(contents).digest('hex')}  release-manifest.json\n`,
   );
-  return spawnSync('node', [validator, manifestPath], { encoding: 'utf8' });
+  return spawnSync('node', [validator, manifestPath, ...options], { encoding: 'utf8' });
 }
 
-function expectRejected(value: unknown, checksumOverride?: string) {
-  const result = verify(value, checksumOverride);
+function expectRejected(
+  value: unknown,
+  checksumOverride?: string,
+  options: readonly string[] = [],
+) {
+  const result = verify(value, checksumOverride, options);
   expect(result.status).toBe(1);
   expect(result.stderr).toContain('TIMEWEB_RELEASE_MANIFEST_FAILED');
 }
 
 describe('Timeweb canonical release manifest contract', () => {
-  it('binds the JSON schema to the approved source tree and exact component repositories', () => {
-    const schema = JSON.parse(readFileSync(schemaPath, 'utf8')) as {
-      readonly 'x-sourceTree': string;
-      readonly properties: {
-        readonly gitCommit: { readonly const: string };
-        readonly images: {
-          readonly allOf: readonly {
-            readonly contains: {
-              readonly properties: {
-                readonly component: { readonly const: string };
-                readonly repository: { readonly const: string };
-              };
-            };
-            readonly maxContains: number;
-            readonly minContains: number;
-          }[];
-        };
-      };
-    };
-    expect(schema.properties.gitCommit.const).toBe(approvedSourceSha);
-    expect(schema['x-sourceTree']).toBe(approvedSourceTree);
-    expect(
-      schema.properties.images.allOf.map(({ contains, maxContains, minContains }) => ({
-        component: contains.properties.component.const,
-        maxContains,
-        minContains,
-        repository: contains.properties.repository.const,
-      })),
-    ).toEqual(
-      ['web', 'api', 'worker', 'realtime', 'migrator'].map((component) => ({
-        component,
-        maxContains: 1,
-        minContains: 1,
-        repository: `ghcr.io/z6v6e6r/phub-${component}`,
-      })),
-    );
+  it('publishes an explicit V2 commit/tree contract while retaining V1 as legacy only', () => {
+    const schema = JSON.parse(readFileSync(schemaPath, 'utf8')) as JsonRecord;
+    const legacySchema = JSON.parse(readFileSync(legacySchemaPath, 'utf8')) as JsonRecord;
+    expect((schema.properties as JsonRecord).schemaVersion).toEqual({
+      const: 'PHUB_TIMEWEB_RELEASE_MANIFEST_V2',
+    });
+    expect((schema.properties as JsonRecord).gitCommit).toEqual({ const: approvedSourceSha });
+    expect((schema.properties as JsonRecord).gitTree).toEqual({ const: approvedSourceTree });
+    expect(schema.required).toContain('publication');
+    expect(schema.required).not.toContain('reconciliationRuns');
+    expect((legacySchema.properties as JsonRecord).schemaVersion).toEqual({
+      const: 'PHUB_TIMEWEB_RELEASE_MANIFEST_V1',
+    });
+    expect(legacySchema.required).toContain('reconciliationRuns');
   });
 
-  it('runs the production producer into the canonical fixture and validator end to end', () => {
-    const directory = mkdtempSync(join(tmpdir(), 'phub-timeweb-producer-'));
-    const manifestPath = join(directory, 'release-manifest.json');
-    const checksumPath = join(directory, 'release-manifest.sha256');
-    const produced = spawnSync(
+  it('produces and validates the same-run canonical pair without reconciliation', () => {
+    const produced = produce(publicationEvidence());
+    expect(produced.result.status, produced.result.stderr).toBe(0);
+    expect(produced.result.stdout).toContain('TIMEWEB_RELEASE_MANIFEST_BUILT');
+    expect(produced.manifest).toMatchObject({
+      schemaVersion: 'PHUB_TIMEWEB_RELEASE_MANIFEST_V2',
+      repository: 'Z6v6e6r/lk2',
+      gitCommit: approvedSourceSha,
+      gitTree: approvedSourceTree,
+      platform: 'linux/amd64',
+      publication: {
+        workflow: '.github/workflows/publish-timeweb-amd64-images.yaml',
+        workflowSha,
+        runId,
+        runAttempt,
+      },
+    });
+    expect(produced.manifest).not.toHaveProperty('reconciliationRuns');
+    expect(produced.manifest?.images).toHaveLength(5);
+
+    const validated = spawnSync(
       'node',
-      [producer, reconciliationFixture, '111111', '222222', manifestPath, checksumPath],
+      [
+        validator,
+        produced.manifestPath,
+        '--expected-publication-workflow-sha',
+        workflowSha,
+        '--expected-publication-run-id',
+        runId,
+        '--expected-publication-run-attempt',
+        runAttempt,
+      ],
       { encoding: 'utf8' },
     );
-    expect(produced.status).toBe(0);
-    expect(produced.stdout).toContain('TIMEWEB_RELEASE_MANIFEST_BUILT');
-    expect(readFileSync(manifestPath, 'utf8')).toBe(readFileSync(manifestFixture, 'utf8'));
-    expect(readFileSync(checksumPath, 'utf8')).toBe(readFileSync(checksumFixture, 'utf8'));
-
-    const validated = spawnSync('node', [validator, manifestPath], {
-      encoding: 'utf8',
-    });
-    expect(validated.status).toBe(0);
+    expect(validated.status, validated.stderr).toBe(0);
     expect(validated.stdout).toContain('TIMEWEB_RELEASE_MANIFEST_PASSED');
-    expect(`${validated.stdout}${validated.stderr}`).not.toContain('sha256:');
+    const sidecar = readFileSync(produced.checksumPath, 'utf8');
+    expect(sidecar).toMatch(/^[a-f0-9]{64} {2}release-manifest\.json\n$/u);
+  });
 
-    const imageLines = spawnSync('node', [validator, manifestPath, '--image-lines'], {
+  it('keeps historical V1 files readable but does not accept publication expectations for them', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'phub-timeweb-v1-'));
+    const manifestPath = join(directory, 'release-manifest.json');
+    const checksumPath = join(directory, 'release-manifest.sha256');
+    writeFileSync(manifestPath, readFileSync(legacyManifestFixture));
+    writeFileSync(checksumPath, readFileSync(legacyChecksumFixture));
+    expect(spawnSync('node', [validator, manifestPath], { encoding: 'utf8' }).status).toBe(0);
+    expect(
+      spawnSync(
+        'node',
+        [
+          validator,
+          manifestPath,
+          '--expected-publication-workflow-sha',
+          workflowSha,
+          '--expected-publication-run-id',
+          runId,
+          '--expected-publication-run-attempt',
+          runAttempt,
+        ],
+        { encoding: 'utf8' },
+      ).status,
+    ).toBe(1);
+  });
+
+  it('resolves the application tree from Git and rejects missing, malformed, or mismatched trees', () => {
+    for (const tree of [undefined, 'bad-tree', 'a'.repeat(40)]) {
+      const evidence = publicationEvidence();
+      if (tree === undefined) delete evidence.sourceTree;
+      else evidence.sourceTree = tree;
+      expect(produce(evidence).result.status).toBe(1);
+    }
+    const valid = produce(publicationEvidence()).manifest;
+    expect(valid).toBeDefined();
+    const withoutTree = structuredClone(valid!);
+    delete withoutTree.gitTree;
+    expectRejected(withoutTree);
+    expectRejected({ ...valid, gitTree: 'a'.repeat(40) });
+    expectRejected({ ...valid, gitCommit: 'a'.repeat(40) });
+  });
+
+  it('rejects altered JSON, altered sidecars, wrong filenames, and output path substitution', () => {
+    const produced = produce(publicationEvidence());
+    const manifest = produced.manifest;
+    expect(manifest).toBeDefined();
+    writeFileSync(
+      produced.manifestPath,
+      `${JSON.stringify({ ...manifest, platform: 'linux/arm64' }, null, 2)}\n`,
+    );
+    const byteTamper = spawnSync('node', [validator, produced.manifestPath], {
       encoding: 'utf8',
     });
-    expect(imageLines.status).toBe(0);
-    expect(imageLines.stdout.trim().split('\n')).toHaveLength(5);
-  });
-
-  it('rejects the legacy top-level verification and object-form images', () => {
-    const manifest = canonicalManifest();
-    const legacyImages = Object.fromEntries(
-      (manifest.images as Array<Record<string, unknown>>).map((image) => [
-        image.component,
-        { image: image.repository, digest: image.digest },
-      ]),
-    ) as Record<string, unknown>;
-    expectRejected({
-      ...manifest,
-      verification: { provenance: true, sbom: true, reconciliation: true },
-    });
-    expectRejected({
-      ...manifest,
-      images: legacyImages,
-    });
-  });
-
-  it('rejects a wrong schema identifier and a missing or wrong release commit', () => {
-    const manifest = canonicalManifest();
-    expectRejected({ ...manifest, schemaVersion: 1 });
-    expectRejected({ ...manifest, gitCommit: supersededSourceSha });
-    const withoutCommit = structuredClone(manifest);
-    delete withoutCommit.gitCommit;
-    expectRejected(withoutCommit);
-  });
-
-  it('rejects missing per-image verification and missing digests', () => {
-    for (const field of ['provenance', 'sbom', 'reconciliation', 'digest']) {
-      const manifest = canonicalManifest();
-      const images = manifest.images as Array<Record<string, unknown>>;
-      delete images[0]![field];
-      expectRejected(manifest);
-    }
-    const manifest = canonicalManifest();
-    const images = manifest.images as Array<Record<string, unknown>>;
-    images[0]!.provenance = false;
-    expectRejected(manifest);
-  });
-
-  it('rejects missing, malformed, and mismatched checksum sidecars', () => {
-    const manifest = canonicalManifest();
+    expect(byteTamper.status).toBe(1);
+    expect(byteTamper.stderr).toContain('reason=checksum_mismatch');
+    expectRejected({ ...manifest, platform: 'linux/arm64' });
     expectRejected(manifest, `${'0'.repeat(64)}  release-manifest.json\n`);
     expectRejected(manifest, `${'a'.repeat(64)}  other.json\n`);
 
-    const directory = mkdtempSync(join(tmpdir(), 'phub-timeweb-no-checksum-'));
-    const manifestPath = join(directory, 'release-manifest.json');
-    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
-    const result = spawnSync('node', [validator, manifestPath], {
-      encoding: 'utf8',
-    });
+    const directory = mkdtempSync(join(tmpdir(), 'phub-timeweb-output-path-'));
+    const inputPath = join(directory, 'timeweb-amd64-publication-manifest.json');
+    writeFileSync(inputPath, JSON.stringify(publicationEvidence()));
+    const result = spawnSync(
+      'node',
+      [
+        producer,
+        inputPath,
+        join(directory, 'other.json'),
+        join(directory, 'release-manifest.sha256'),
+      ],
+      { encoding: 'utf8' },
+    );
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain('TIMEWEB_RELEASE_MANIFEST_FAILED');
-  });
-
-  it('rejects duplicate or missing components, wrong repositories, platforms, revisions, and runs', () => {
-    const valid = canonicalManifest();
-    const validImages = valid.images as Array<Record<string, unknown>>;
-    const cases: Array<Record<string, unknown>> = [
-      { ...valid, images: validImages.slice(0, 4) },
-      { ...valid, images: [{ ...validImages[0] }, ...validImages.slice(0, 4)] },
-      {
-        ...valid,
-        images: [
-          { ...validImages[0], repository: 'ghcr.io/z6v6e6r/phub-api' },
-          ...validImages.slice(1),
-        ],
-      },
-      { ...valid, platform: 'linux/arm64' },
-      {
-        ...valid,
-        images: [{ ...validImages[0], architecture: 'arm64' }, ...validImages.slice(1)],
-      },
-      {
-        ...valid,
-        images: [{ ...validImages[0], revision: 'a'.repeat(40) }, ...validImages.slice(1)],
-      },
-      { ...valid, reconciliationRuns: ['111111', '111111'] },
-    ];
-    for (const invalid of cases) expectRejected(invalid);
-  });
-
-  it('fails the producer closed for superseded source, wrong tree, omitted verification, or a digest', () => {
-    for (const mutation of [
-      (image: Record<string, unknown>) => {
-        image.sourceSha = supersededSourceSha;
-      },
-      (image: Record<string, unknown>) => {
-        image.sourceTree = 'a'.repeat(40);
-      },
-      (image: Record<string, unknown>) => {
-        delete image.provenanceVerified;
-      },
-      (image: Record<string, unknown>) => {
-        delete image.indexDigest;
-      },
-    ]) {
-      const directory = mkdtempSync(join(tmpdir(), 'phub-timeweb-producer-invalid-'));
-      const reconciliation = JSON.parse(readFileSync(reconciliationFixture, 'utf8')) as {
-        images: Array<Record<string, unknown>>;
-      };
-      mutation(reconciliation.images[0]!);
-      const inputPath = join(directory, 'reconciliation.json');
-      writeFileSync(inputPath, `${JSON.stringify(reconciliation, null, 2)}\n`);
-      const result = spawnSync(
+    const substitutedInput = join(directory, 'substituted-publication.json');
+    writeFileSync(substitutedInput, JSON.stringify(publicationEvidence()));
+    expect(
+      spawnSync(
         'node',
         [
           producer,
-          inputPath,
-          '111111',
-          '222222',
+          substitutedInput,
           join(directory, 'release-manifest.json'),
           join(directory, 'release-manifest.sha256'),
         ],
         { encoding: 'utf8' },
-      );
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain('TIMEWEB_RELEASE_MANIFEST_BUILD_FAILED');
+      ).status,
+    ).toBe(1);
+  });
+
+  it('fails closed for missing or duplicate components and missing or mutable-only digests', () => {
+    const missing = publicationEvidence();
+    (missing.images as JsonRecord[]).pop();
+    expect(produce(missing).result.status).toBe(1);
+
+    const duplicate = publicationEvidence();
+    const duplicateImages = duplicate.images as JsonRecord[];
+    duplicateImages[4] = { ...duplicateImages[0] };
+    expect(produce(duplicate).result.status).toBe(1);
+
+    for (const field of ['indexDigest', 'runtimeDigest']) {
+      const evidence = publicationEvidence();
+      delete (evidence.images as JsonRecord[])[0]![field];
+      expect(produce(evidence).result.status).toBe(1);
     }
+    const mutable = publicationEvidence();
+    (mutable.images as JsonRecord[])[0]!.indexDigest = 'ghcr.io/z6v6e6r/phub-web:latest';
+    expect(produce(mutable).result.status).toBe(1);
+  });
+
+  it('rejects invalid platform and missing provenance or SBOM evidence', () => {
+    const wrongPlatform = publicationEvidence();
+    (wrongPlatform.images as JsonRecord[])[0]!.platform = 'linux/arm64';
+    expect(produce(wrongPlatform).result.status).toBe(1);
+    const missingPlatform = publicationEvidence();
+    delete (missingPlatform.images as JsonRecord[])[0]!.platform;
+    expect(produce(missingPlatform).result.status).toBe(1);
+
+    for (const field of ['provenance', 'sbom']) {
+      const evidence = publicationEvidence();
+      delete (evidence.images as JsonRecord[])[0]![field];
+      expect(produce(evidence).result.status).toBe(1);
+    }
+    const falseSbom = publicationEvidence();
+    (falseSbom.images as JsonRecord[])[0]!.sbom = 'cyclonedx';
+    expect(produce(falseSbom).result.status).toBe(1);
+    const manifest = produce(publicationEvidence()).manifest;
+    expect(manifest).toBeDefined();
+    const images = structuredClone(manifest!.images) as JsonRecord[];
+    images[0]!.provenance = false;
+    expectRejected({ ...manifest, images });
+  });
+
+  it('rejects a canonical manifest bound to a different publication run identity', () => {
+    const manifest = produce(publicationEvidence()).manifest;
+    expect(manifest).toBeDefined();
+    const expectedOptions = [
+      '--expected-publication-workflow-sha',
+      workflowSha,
+      '--expected-publication-run-id',
+      '222222',
+      '--expected-publication-run-attempt',
+      runAttempt,
+    ];
+    expectRejected(manifest, undefined, expectedOptions);
   });
 });
