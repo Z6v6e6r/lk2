@@ -1446,6 +1446,86 @@ describe('health endpoints', () => {
     expect(accepted.statusCode).toBe(200);
   });
 
+  it('composes the WARN quote behind user auth, games permission, tenant and idempotency gates', async () => {
+    const actorContextRepository = {
+      resolve: vi.fn().mockResolvedValue({
+        outcome: 'ok',
+        providerClientId: 'viva-client-opaque',
+        providerMappingId: '44444444-4444-4444-8444-444444444444',
+      }),
+    };
+    const delegationIssuer = {
+      issue: vi.fn().mockResolvedValue('header.payload.signature'),
+    };
+    const quoteClient = {
+      quote: vi.fn().mockResolvedValue({
+        outcome: 'FULL_PRICE_ONLY',
+        paymentIntent: 'AUTO_BEST_PRICE',
+        serviceAllowed: true,
+        subscriptionBenefitAllowed: false,
+        blockers: [{ code: 'SUBSCRIPTION_NOT_FOUND' }],
+        warnings: [],
+        expiresAt: '2026-08-24T10:02:00.000Z',
+      }),
+    };
+    const app = await buildApp({
+      config: { ...config, SUBSCRIPTION_RUNTIME_WARN_MODE: 'WARN' },
+      logger: createLogger('api-test', 'silent'),
+      pool: fakePool(),
+      subscriptionRuntimeActorContextRepository: actorContextRepository,
+      subscriptionRuntimeDelegationIssuer: delegationIssuer,
+      subscriptionRuntimeQuoteClient: quoteClient,
+    });
+    apps.push(app);
+    const request = {
+      method: 'POST' as const,
+      url: '/user/api/v1/local-padel/subscription-runtime/quote',
+      headers: { 'idempotency-key': ['warn', 'operation', 'app', '0001'].join(':') },
+      payload: {
+        action: 'JOIN_GAME',
+        target: { kind: 'GAME', id: 'game-001' },
+        paymentIntent: 'AUTO_BEST_PRICE',
+      },
+    };
+
+    expect((await app.inject(request)).statusCode).toBe(401);
+    expect(
+      (
+        await app.inject({
+          ...request,
+          headers: {
+            ...request.headers,
+            authorization: `Bearer ${await accessToken()}`,
+          },
+        })
+      ).statusCode,
+    ).toBe(403);
+    const accepted = await app.inject({
+      ...request,
+      headers: {
+        ...request.headers,
+        authorization: `Bearer ${await accessToken([tenantId], ['games.play'])}`,
+      },
+    });
+
+    expect(accepted.statusCode).toBe(200);
+    expect(accepted.json()).toMatchObject({ mode: 'WARN', verdict: 'warning' });
+    expect(actorContextRepository.resolve).toHaveBeenCalledWith({
+      tenantId,
+      userId: '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca',
+      sessionId: '55555555-5555-4555-8555-555555555555',
+    });
+    expect(delegationIssuer.issue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tenantId,
+        tenantKey: 'local-padel',
+        userId: '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca',
+        idempotencyKey: request.headers['idempotency-key'],
+      }),
+    );
+    expect(quoteClient.quote).toHaveBeenCalledOnce();
+  });
+
   it('uses the standardized error envelope', async () => {
     const app = await buildApp({ config, logger: createLogger('api-test', 'silent') });
     apps.push(app);

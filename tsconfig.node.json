@@ -15,6 +15,7 @@
     "packages/locations/**/*.ts",
     "packages/notifications/**/*.ts",
     "packages/observability/**/*.ts",
+    "packages/subscription-runtime-adapter/**/*.ts",
     "packages/viva-adapter/**/*.ts"
   ],
   "exclude": ["node_modules", "**/dist/**"]

@@ -174,6 +174,10 @@ export type GameCard = components['schemas']['GameCardView'];
 export type GameCardPage = components['schemas']['GameCardPage'];
 export type GameCommandResult = components['schemas']['GameCommandResult'];
 export type ParticipationDecision = components['schemas']['ParticipationDecision'];
+export type ManagedSubscriptionWarnQuoteRequest =
+  components['schemas']['ManagedSubscriptionWarnQuoteRequest'];
+export type ManagedSubscriptionWarnQuoteResponse =
+  components['schemas']['ManagedSubscriptionWarnQuoteResponse'];
 export type SubmitGameResultRequest = components['schemas']['SubmitGameResultRequest'];
 export type DisputeGameResultRequest = components['schemas']['DisputeGameResultRequest'];
 export type PublicGameCard = PublicApiComponents['schemas']['PublicGameCard'];
@@ -1179,6 +1183,22 @@ export class PadlHubApiClient {
     if (input.cursor) query.set('cursor', input.cursor);
     const suffix = query.size > 0 ? `?${query.toString()}` : '';
     return this.request<GameCardPage>(`/games${suffix}`);
+  }
+
+  public quoteManagedSubscriptionRuntimeWarn(
+    input: ManagedSubscriptionWarnQuoteRequest,
+    options: { readonly idempotencyKey?: string } = {},
+  ): Promise<ManagedSubscriptionWarnQuoteResponse> {
+    const idempotencyKey = options.idempotencyKey ?? createCorrelationId();
+    return this.retryOnceOnNetworkFailure(() =>
+      this.request<ManagedSubscriptionWarnQuoteResponse>('/subscription-runtime/quote', {
+        method: 'POST',
+        auth: 'required',
+        cache: 'no-store',
+        idempotencyKey,
+        body: jsonRequestBody(input),
+      }),
+    );
   }
 
   public getGame(gameId: string): Promise<GameCard> {

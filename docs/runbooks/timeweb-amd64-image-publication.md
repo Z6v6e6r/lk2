@@ -1,52 +1,74 @@
 # Timeweb amd64 image publication gates
 
-This runbook covers the one-time immutable `linux/amd64` publication contour for application
-source `35c8312b79cccdd136f2bfd892efbea629b8b919`. It does not authorize deployment, VPS
-provisioning, database access or database mutation.
+This runbook retains the historical one-time `linux/amd64` probe and interrupted-publication
+evidence for application source `35c8312b79cccdd136f2bfd892efbea629b8b919`. That evidence does
+not authorize a new release, deployment, VPS provisioning, database access or database mutation.
 
-## Gate 1: non-publishing BuildKit attestation probe
+## Current exact-source publication contract
 
-First merge the probe workflow to the default branch through its separately reviewed, green PR. A
-new `workflow_dispatch` file cannot be run before it exists on the default branch. Then run
-`.github/workflows/probe-timeweb-amd64-attestations.yaml` from the exact reviewed merge commit on
-`main`. Dispatch with the branch ref `main` only after verifying that its current tip equals the
-reviewed SHA; the dispatch API does not accept a raw commit SHA as `ref`. Use these dispatch inputs:
+The current publication target is source
+`595e954bb8f53367baf034d7f39b255af0fda5fd`, with immutable Git tree
+`3f4c1e63dd30eb60251533b95f1970fd96754a08`. Dispatch the publication workflow only from its
+separately reviewed exact `main` workflow SHA, with:
 
-- `expected_source_sha`: `35c8312b79cccdd136f2bfd892efbea629b8b919`;
-- `expected_probe_sha`: the exact reviewed `main` commit containing the probe workflow;
-- `confirmation`: `PROBE_TIMEWEB_AMD64_ATTESTATIONS_ONLY`.
+- `expected_source_sha`: `595e954bb8f53367baf034d7f39b255af0fda5fd`;
+- `expected_workflow_sha`: the exact reviewed `main` commit containing the workflow;
+- `confirmation`: `PUBLISH_TIMEWEB_AMD64_595E954` for the publishing operation.
 
-The workflow has only `contents: read`. It verifies the exact application source/tree, then builds
-the API and Web Dockerfiles from an exact remote Git commit context into separate local OCI archives.
-The reviewed Buildx version, BuildKit image digest, Node/Nginx base-image digests and SBOM scanner
-digest are pinned identically in the probe and publication workflows. It has no registry login,
-package-write permission, registry push, staging secrets, SSH, deployment or database step.
+Each reconciliation dispatch must pass the same `expected_source_sha`, the exact successful
+publication run ID and publication workflow SHA. The workflow rejects a publication artifact, image
+record, source tree, immutable tag or final `release-manifest.gitCommit` that does not resolve to the
+approved source. Historical run `32625879321` and its digests are not fresh evidence for this
+contract.
 
-The OCI exporter emits one bounded two-level layout: the root index contains exactly one
-content-addressed nested index, and that nested index contains exactly one `linux/amd64` runtime
-manifest and one linked attestation manifest. The probe rejects direct-root manifests, more than one
-root descriptor, additional nesting, duplicate/extra runtime or attestation descriptors, and any
-digest or size mismatch. It never performs arbitrary recursive traversal.
+The current release-evidence sequence is:
 
-The retained evidence contains both OCI indexes, the selected root/runtime/attestation descriptors,
-content-hashed runtime and attestation manifests, provenance and SBOM statements, the observed
-Buildx/BuildKit identity, a summary and checksums. The artifact upload uses an explicit failure-safe
-condition after a successful OCI build, so partial diagnostic evidence is retained when extraction
-or contract validation fails. For the pinned local OCI exporter, the provenance and SBOM statements
-must have empty subjects. Their runtime custody is instead bound by the content-addressed
-attestation manifest, whose subject must match the exact runtime media type, digest and size. The
-final step also requires the exact statement and predicate types, remote Git config source and
-material, builder ID, Node/Nginx Package URLs with their reviewed multi-platform index digests, and
-the pinned SBOM scanner material. The earlier base-image preflight independently binds each reviewed
-index to its single reviewed `linux/amd64` child digest; the two contracts are not interchangeable.
+1. Dispatch `publish-timeweb-amd64-images.yaml` with the exact inputs above and retain its complete
+   five-image publication artifact.
+2. Dispatch `reconcile-timeweb-amd64-publication.yaml` with `expected_source_sha`, the successful
+   `publication_run_id`, its exact `publication_workflow_sha`, and confirmation
+   `RECONCILE_TIMEWEB_AMD64_PUBLICATION`.
+3. After the first reconciliation succeeds, dispatch the same reconciliation workflow again with
+   the same publication inputs plus `prior_reconciliation_run_id` set to the first successful
+   reconciliation run. Only this second identical read-back can produce `release-manifest.json`.
 
-Any failed or cancelled probe is `NO-GO` for image publication. Inspect the evidence artifact and
-fix the publication validator or pin the observed BuildKit version in a separately reviewed change;
-do not dispatch publication merely because the OCI build itself succeeded.
+Publication and both reconciliations must succeed for the same source and publication run. Their
+artifacts are evidence only; they do not authorize deployment.
 
-## Gate 2: immutable image publication
+The first successful reconciliation emits only non-authorizing evidence. A second successful,
+byte-equivalent reconciliation of the same publication emits the deploy-facing pair
+`release-manifest.json` and `release-manifest.sha256`. The JSON has exactly one accepted contract:
 
-Only after Gate 1 is green and a separate publication approval is recorded, run
+- `schemaVersion` is `PHUB_TIMEWEB_RELEASE_MANIFEST_V1`;
+- `repository`, `gitCommit` and `platform` identify `Z6v6e6r/lk2`, the exact selected source commit
+  and `linux/amd64`;
+- `images` is an array containing exactly one entry for each of `web`, `api`, `worker`, `realtime`
+  and `migrator`; every entry carries its real reconciled root/index digest, repository,
+  architecture, source revision and per-image `provenance`, `sbom` and `reconciliation` assertions;
+- `reconciliationRuns` contains the two distinct successful read-back run IDs;
+- `release-manifest.sha256` contains the SHA-256 custody checksum for the exact manifest bytes.
+
+The production producer copies the real index digests and explicit per-image verification results
+from reconciliation evidence, then immediately runs the same strict validator used by deployment
+admission. The validator is invoked with `release-manifest.json` and always requires the adjacent,
+fixed-name `release-manifest.sha256`; the checksum is not optional. Numeric `schemaVersion: 1`, an
+object-valued `images`, top-level `verification`, missing per-image verification, missing digests, a
+stale source commit or an invalid checksum all fail closed. Probe, push-receipt, publication and
+reconciliation manifests retain their own `schemaVersion: 1` evidence kinds; they are not alternate
+deploy-facing release-manifest formats and cannot be passed to the release validator.
+
+## Historical appendix: superseded non-publishing BuildKit attestation probe
+
+The earlier probe for application source
+`35c8312b79cccdd136f2bfd892efbea629b8b919` produced non-authorizing local OCI evidence only. Its
+workflow has been removed from the active GitHub Actions set, so it cannot be dispatched to mint new
+evidence for the superseded source. The original implementation and retained artifacts remain in Git
+and Actions history for audit purposes; neither can satisfy the current `595e954...` publication or
+deployment gates.
+
+## Current Gate 1: immutable image publication
+
+After a separate publication approval is recorded, run
 `.github/workflows/publish-timeweb-amd64-images.yaml` from the exact reviewed `main` SHA with the
 `publish` operation and its exact confirmation input. The publication workflow creates five unique,
 non-`latest` image tags and verifies their registry digests, `linux/amd64` runtime manifests,
@@ -66,7 +88,10 @@ A partial registry inventory or missing final manifest is `NO-GO` for deployment
 same publication request blindly: inventory the unique run tags first and prepare a new reviewed
 attempt if required.
 
-## Gate 2a: reconciliation of an already-published interrupted run
+## Historical appendix: superseded interrupted-run reconciliation
+
+The procedure below describes only original run `32625879321`. Its fixed confirmation and digests
+are not accepted by the current workflow and are not evidence for source `595e954...`.
 
 If a publication push completed but its custody step was interrupted or failed, do not dispatch the
 publication workflow again. Use the separately reviewed
@@ -83,7 +108,7 @@ Any tag/digest mismatch, missing linked descriptor, material mismatch, runtime p
 retry exhaustion is `NO-GO`. The reconciliation workflow does not build, push, overwrite, delete,
 deploy, access VPS hosts, or connect to PostgreSQL.
 
-## Gate 3: staging deployment
+## Current Gate 3: staging deployment
 
 Publication evidence never authorizes deployment. Transfer of runtime secrets, database bootstrap,
 migration, routing changes, application activation and Jetson retirement remain separate approvals

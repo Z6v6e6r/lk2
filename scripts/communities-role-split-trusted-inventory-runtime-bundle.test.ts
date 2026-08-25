@@ -1,4 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { readFileSync, realpathSync, rmSync, mkdtempSync } from 'node:fs';
 import { builtinModules } from 'node:module';
 import { tmpdir } from 'node:os';
@@ -13,6 +14,7 @@ const committedBundlePath = join(
   'deploy/jetson/generated/communities-staging-role-split-trusted-inventory-runtime.mjs',
 );
 const bundleName = 'communities-staging-role-split-trusted-inventory-runtime.mjs';
+const sha256 = (value: Uint8Array): string => createHash('sha256').update(value).digest('hex');
 
 describe('communities role-split trusted-inventory runtime bundle', () => {
   const temporaryRoots: string[] = [];
@@ -36,7 +38,7 @@ describe('communities role-split trusted-inventory runtime bundle', () => {
 
     const committed = readFileSync(committedBundlePath);
     const rebuilt = readFileSync(join(outputDirectory, bundleName));
-    expect(rebuilt).toEqual(committed);
+    expect(sha256(rebuilt)).toBe(sha256(committed));
 
     const source = committed.toString('utf8');
     const allowedBuiltins = new Set(builtinModules.flatMap((name) => [name, `node:${name}`]));

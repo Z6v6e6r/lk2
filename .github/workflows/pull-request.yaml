@@ -2,13 +2,15 @@ name: Pull request checks
 
 on:
   pull_request:
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: pr-${{ github.event.pull_request.number || github.ref }}
+  group: pr-${{ github.event.pull_request.number || (github.event_name == 'push' && github.run_id) || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -76,7 +78,18 @@ jobs:
       - name: Formatting, lint and type safety
         run: npm run format:check && npm run lint && npm run typecheck
       - name: Unit and integration tests
-        run: npm run test:coverage
+        timeout-minutes: 10
+        run: scripts/run-ci-tests-with-diagnostics.sh
+      - name: Upload test and coverage diagnostics
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: quality-test-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .ci-artifacts/test-and-coverage
+            coverage
+          if-no-files-found: error
+          retention-days: 14
       - name: Build all artifacts
         run: npm run build
       - name: Validate local Compose model
@@ -109,13 +122,117 @@ jobs:
 
   secret-scan:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v2
+      - name: Resolve the exact secret-scan range
+        id: secret-range
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          EVENT_BEFORE_SHA: ${{ github.event.before }}
+          EVENT_AFTER_SHA: ${{ github.event.after }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          range_mode=merge_base
+          case "$GITHUB_EVENT_NAME" in
+            pull_request)
+              base_tip_sha="$EVENT_BASE_SHA"
+              head_sha="$EVENT_HEAD_SHA"
+              ;;
+            push)
+              range_mode=exact_push
+              base_tip_sha="$EVENT_BEFORE_SHA"
+              head_sha="$EVENT_AFTER_SHA"
+              ;;
+            workflow_dispatch)
+              pulls_json="$(gh api --method GET "repos/$GITHUB_REPOSITORY/pulls" \
+                -f state=open \
+                -f head="$GITHUB_REPOSITORY_OWNER:$GITHUB_REF_NAME" \
+                -f per_page=100)"
+              matching_count="$(jq 'length' <<<"$pulls_json")"
+              if [[ "$matching_count" -ne 1 ]]; then
+                echo "Expected exactly one open pull request for $GITHUB_REF_NAME, found $matching_count" >&2
+                exit 1
+              fi
+              base_tip_sha="$(jq -r '.[0].base.sha' <<<"$pulls_json")"
+              head_sha="$(jq -r '.[0].head.sha' <<<"$pulls_json")"
+              test "$head_sha" = "$GITHUB_SHA"
+              ;;
+            *)
+              echo "Unsupported secret-scan event: $GITHUB_EVENT_NAME" >&2
+              exit 1
+              ;;
+          esac
+          [[ "$base_tip_sha" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$head_sha" =~ ^[0-9a-f]{40}$ ]]
+          git cat-file -e "$base_tip_sha^{commit}"
+          git cat-file -e "$head_sha^{commit}"
+          if [[ "$range_mode" = exact_push ]]; then
+            zero_sha=0000000000000000000000000000000000000000
+            test "$GITHUB_REF" = refs/heads/main
+            test "$base_tip_sha" != "$zero_sha"
+            test "$head_sha" != "$zero_sha"
+            test "$base_tip_sha" != "$head_sha"
+            test "$head_sha" = "$GITHUB_SHA"
+            git merge-base --is-ancestor "$base_tip_sha" "$head_sha"
+            base_sha="$base_tip_sha"
+            range_commit_count="$(git rev-list --count "$base_sha..$head_sha")"
+            [[ "$range_commit_count" =~ ^[1-9][0-9]*$ ]]
+          else
+            base_sha="$(git merge-base "$base_tip_sha" "$head_sha")"
+            [[ "$base_sha" =~ ^[0-9a-f]{40}$ ]]
+            git merge-base --is-ancestor "$base_sha" "$head_sha"
+          fi
+          printf 'base_sha=%s\n' "$base_sha" >>"$GITHUB_OUTPUT"
+          printf 'head_sha=%s\n' "$head_sha" >>"$GITHUB_OUTPUT"
+      - name: Scan exact range for secrets
+        env:
+          BASE_SHA: ${{ steps.secret-range.outputs.base_sha }}
+          HEAD_SHA: ${{ steps.secret-range.outputs.head_sha }}
+          GITLEAKS_IMAGE: ghcr.io/gitleaks/gitleaks@sha256:e1b35e12a8c6fa8901f060459cfb6b2fc4c484d3afbe3b029733a3bbfab07055
+        run: |
+          set -euo pipefail
+          docker pull "$GITLEAKS_IMAGE"
+          test "$(docker image inspect "$GITLEAKS_IMAGE" --format '{{index .RepoDigests 0}}')" = "$GITLEAKS_IMAGE"
+          octopus_merges="$(git rev-list --min-parents=3 "$BASE_SHA..$HEAD_SHA")"
+          if [[ -n "$octopus_merges" ]]; then
+            printf 'Octopus merges are not supported by the exact secret scan:\n%s\n' "$octopus_merges" >&2
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/gitleaks"
+          scan_repository="$RUNNER_TEMP/gitleaks/repository.git"
+          ignore_file="$RUNNER_TEMP/gitleaks/.gitleaksignore"
+          git clone --bare --no-local "$PWD" "$scan_repository"
+          git --git-dir="$scan_repository" cat-file -e "$BASE_SHA^{commit}"
+          git --git-dir="$scan_repository" cat-file -e "$HEAD_SHA^{commit}"
+          git show "$HEAD_SHA:.gitleaksignore" >"$ignore_file"
+          test -s "$ignore_file"
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            --volume "$RUNNER_TEMP/gitleaks:/workspace" \
+            "$GITLEAKS_IMAGE" detect \
+            --source=/workspace/repository.git \
+            --gitleaks-ignore-path=/workspace/.gitleaksignore \
+            --redact \
+            --verbose \
+            --exit-code=2 \
+            --report-format=sarif \
+            --report-path=/workspace/results.sarif \
+            --log-opts="--diff-merges=remerge $BASE_SHA..$HEAD_SHA"
+      - name: Upload secret-scan diagnostics
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: secret-scan-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/gitleaks/results.sarif
+          if-no-files-found: error
+          retention-days: 90
 
   docker-build:
     runs-on: ubuntu-latest

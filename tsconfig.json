@@ -32,6 +32,7 @@
       "@phub/locations": ["packages/locations/src/index.ts"],
       "@phub/notifications": ["packages/notifications/src/index.ts"],
       "@phub/observability": ["packages/observability/src/index.ts"],
+      "@phub/subscription-runtime-adapter": ["packages/subscription-runtime-adapter/src/index.ts"],
       "@phub/testing": ["packages/testing/src/index.ts"],
       "@phub/ui": ["packages/ui/src/index.tsx"],
       "@phub/viva-adapter": ["packages/viva-adapter/src/index.ts"],
