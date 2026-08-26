@@ -1616,10 +1616,10 @@ export function createGameRepository(pool: Pool): GameRepository {
             `update games.scheduled_commands
                 set state = 'FAILED', due_at = $4,
                     available_at = greatest($4::timestamptz, $5::timestamptz),
-                    expected_revision = $6,
+                    expected_revision = $6::bigint,
                     payload = jsonb_build_object(
                       'gameId', game_id,
-                      'expectedRevision', $6::text
+                      'expectedRevision', $6::bigint::text
                     ),
                     locked_at = null, locked_by = null,
                     last_error_code = 'GAME_COMMAND_RESCHEDULED'

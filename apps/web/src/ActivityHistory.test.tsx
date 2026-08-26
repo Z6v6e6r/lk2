@@ -148,6 +148,7 @@ describe('ActivityHistoryPanel', () => {
       startsAt: '2026-07-23T06:00:00.000Z',
       endsAt: '2026-07-23T07:00:00.000Z',
       venue: 'Тестовая станция',
+      result: '6:4',
     };
 
     render(
@@ -157,6 +158,8 @@ describe('ActivityHistoryPanel', () => {
     expect(await screen.findByText('Открытая игра')).toBeVisible();
     expect(screen.queryByText(duplicateSubtitle)).not.toBeInTheDocument();
     expect(screen.getByText('Тестовая станция')).toBeVisible();
+    expect(screen.getByText('Результат')).toBeVisible();
+    expect(screen.getByText('6:4')).toBeVisible();
   });
 
   it('loads the next cursor and offers a retry without dropping the first page', async () => {

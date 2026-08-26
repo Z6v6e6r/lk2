@@ -664,6 +664,13 @@ describe('game repository', () => {
       expectedRevision: 5,
     });
     expect(query.mock.calls.some(([text]) => text.includes('update games.games'))).toBe(false);
+    const reschedule = query.mock.calls.find(
+      ([text]) =>
+        text.includes('update games.scheduled_commands') &&
+        text.includes("last_error_code = 'GAME_COMMAND_RESCHEDULED'"),
+    );
+    expect(reschedule?.[0]).toContain('expected_revision = $6::bigint');
+    expect(reschedule?.[0]).toContain("'expectedRevision', $6::bigint::text");
     expect(query).toHaveBeenCalledWith('commit');
   });
 });
