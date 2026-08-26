@@ -1,0 +1,117 @@
+name: phub-timeweb-beta
+
+x-runtime: &runtime
+  restart: unless-stopped
+  networks:
+    beta:
+  logging:
+    driver: local
+    options:
+      max-size: 20m
+      max-file: '5'
+
+services:
+  web:
+    <<: *runtime
+    image: ghcr.io/z6v6e6r/phub-web@${WEB_IMAGE_DIGEST:?WEB_IMAGE_DIGEST is required}
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -q -O /dev/null http://127.0.0.1:8080/healthz']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      beta:
+        ipv4_address: 172.30.26.11
+
+  api:
+    <<: *runtime
+    image: ghcr.io/z6v6e6r/phub-api@${API_IMAGE_DIGEST:?API_IMAGE_DIGEST is required}
+    env_file:
+      - path: ${TIMEWEB_RUNTIME_ENV_ROOT:?TIMEWEB_RUNTIME_ENV_ROOT is required}/api.env
+        required: true
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3000/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    stop_grace_period: 30s
+    networks:
+      beta:
+        ipv4_address: 172.30.26.12
+
+  realtime:
+    <<: *runtime
+    image: ghcr.io/z6v6e6r/phub-realtime@${REALTIME_IMAGE_DIGEST:?REALTIME_IMAGE_DIGEST is required}
+    env_file:
+      - path: ${TIMEWEB_RUNTIME_ENV_ROOT:?TIMEWEB_RUNTIME_ENV_ROOT is required}/realtime.env
+        required: true
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3001/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    stop_grace_period: 30s
+    networks:
+      beta:
+        ipv4_address: 172.30.26.13
+
+  worker:
+    <<: *runtime
+    profiles: [background]
+    image: ghcr.io/z6v6e6r/phub-worker@${WORKER_IMAGE_DIGEST:?WORKER_IMAGE_DIGEST is required}
+    env_file:
+      - path: ${TIMEWEB_RUNTIME_ENV_ROOT:?TIMEWEB_RUNTIME_ENV_ROOT is required}/worker.env
+        required: true
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3002/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    stop_grace_period: 60s
+    networks:
+      beta:
+        ipv4_address: 172.30.26.14
+
+  migrator:
+    image: ghcr.io/z6v6e6r/phub-migrator@${MIGRATOR_IMAGE_DIGEST:?MIGRATOR_IMAGE_DIGEST is required}
+    restart: 'no'
+    profiles: [migration]
+    env_file:
+      - path: ${TIMEWEB_RUNTIME_ENV_ROOT:?TIMEWEB_RUNTIME_ENV_ROOT is required}/migrator.env
+        required: true
+    healthcheck:
+      test:
+        ['CMD', 'node', '-e', "require('node:fs').accessSync('/app/apps/migrator/dist/main.js')"]
+      interval: 30s
+      timeout: 5s
+      retries: 1
+    networks:
+      beta:
+        ipv4_address: 172.30.26.15
+
+networks:
+  beta:
+    external: true
+    name: phub-timeweb-beta

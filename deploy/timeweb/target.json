@@ -1,0 +1,73 @@
+{
+  "schema": "PHUB_TIMEWEB_TARGET_V1",
+  "hostname": "lk2.padlhub.su",
+  "ipv4": "103.88.243.171",
+  "dns": {
+    "aExpected": true,
+    "aaaaExpected": false,
+    "cnameExpected": false,
+    "ttl": 300
+  },
+  "platform": {
+    "os": "linux",
+    "architecture": "amd64",
+    "hostArchitecture": "x86_64"
+  },
+  "provider": {
+    "name": "Timeweb",
+    "serverName": "Cute Hoopoe",
+    "serverId": 8886471,
+    "projectId": 262717
+  },
+  "management": {
+    "requiredInterface": "tailscale0",
+    "ssh": {
+      "hostKeyAlgorithm": "ssh-ed25519",
+      "pinnedFingerprint": "SHA256:zjTqV+Aj8BvvdK1/HZ8TmMs6OO3zdoORiB96uODoRUw"
+    }
+  },
+  "network": {
+    "name": "phub-timeweb-beta",
+    "external": true,
+    "subnet": "172.30.26.0/24",
+    "ingressAddress": "172.30.26.10",
+    "applicationAddresses": {
+      "web": "172.30.26.11",
+      "api": "172.30.26.12",
+      "realtime": "172.30.26.13",
+      "worker": "172.30.26.14",
+      "migrator": "172.30.26.15"
+    }
+  },
+  "ingress": {
+    "ports": [80, 443],
+    "onlyIngressMayBindHostPorts": true,
+    "caddy": {
+      "repository": "caddy",
+      "indexDigest": "sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648",
+      "linuxAmd64ManifestDigest": "sha256:98eb57d882ccd5213d1688764db10c1ca2c58a1ca3a6717a3411ad798f7a423a",
+      "linuxAmd64ConfigDigest": "sha256:af555904a0961945f16bb323a501457b13a4f7e9bde969b145b97da80b38ecbe",
+      "version": "v2.11.4",
+      "adaptedJsonSha256": "afdc50d2324f94760c2630f78e5da0ade3f72589efbdec7e175cf476d516f21b"
+    }
+  },
+  "release": {
+    "root": "/opt/phub/timeweb-beta/releases",
+    "historicalEvidence": [
+      {
+        "path": "/opt/phub/timeweb-beta/staging/ac8f0aad-contract5004571-20260826T133721Z",
+        "immutableEvidence": true,
+        "validReleaseDirectory": false,
+        "validActivationInput": false,
+        "validRollbackInputForFutureRelease": false
+      },
+      {
+        "path": "/opt/phub/timeweb-beta/rollback/ac8f0aad-contract5004571-20260826T133721Z",
+        "immutableEvidence": true,
+        "validReleaseDirectory": false,
+        "validActivationInput": false,
+        "validRollbackInputForFutureRelease": false
+      }
+    ]
+  }
+}

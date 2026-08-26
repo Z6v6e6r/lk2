@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -21,9 +21,17 @@ const schemaPath = fileURLToPath(
 const legacySchemaPath = fileURLToPath(
   new URL('../deploy/timeweb/release-manifest.v1.schema.json', import.meta.url),
 );
-const approvedSourceSha = '595e954bb8f53367baf034d7f39b255af0fda5fd';
-const approvedSourceTree = '3f4c1e63dd30eb60251533b95f1970fd96754a08';
-const workflowSha = 'f'.repeat(40);
+const lockPath = fileURLToPath(new URL('../deploy/timeweb/base-images.lock.json', import.meta.url));
+const repositoryRoot = fileURLToPath(new URL('..', import.meta.url));
+const approvedSourceSha = execFileSync('git', ['rev-parse', 'HEAD'], {
+  cwd: repositoryRoot,
+  encoding: 'utf8',
+}).trim();
+const approvedSourceTree = execFileSync('git', ['rev-parse', 'HEAD^{tree}'], {
+  cwd: repositoryRoot,
+  encoding: 'utf8',
+}).trim();
+const workflowSha = approvedSourceSha;
 const runId = '111111';
 const runAttempt = '1';
 const components = ['web', 'api', 'worker', 'realtime', 'migrator'] as const;
@@ -31,6 +39,21 @@ const components = ['web', 'api', 'worker', 'realtime', 'migrator'] as const;
 type JsonRecord = Record<string, unknown>;
 
 function publicationEvidence(): JsonRecord {
+  const base = JSON.parse(
+    spawnSync(
+      'node',
+      [
+        fileURLToPath(new URL('./verify-timeweb-base-images.js', import.meta.url)),
+        'static',
+        '--lock',
+        lockPath,
+        '--repo-root',
+        repositoryRoot,
+        '--evidence-json',
+      ],
+      { encoding: 'utf8' },
+    ).stdout,
+  ) as JsonRecord;
   return {
     schemaVersion: 1,
     kind: 'phub-timeweb-amd64-publication',
@@ -44,6 +67,8 @@ function publicationEvidence(): JsonRecord {
     authorizesDeploy: false,
     authorizesVpsProvisioning: false,
     authorizesDatabaseMutation: false,
+    baseLock: base.baseLock,
+    baseImages: base.baseImages,
     images: components.map((service, index) => ({
       service,
       sourceSha: approvedSourceSha,
@@ -55,7 +80,10 @@ function publicationEvidence(): JsonRecord {
       publicationTag: `amd64-sha-${approvedSourceSha}-${runId}-${runAttempt}`,
       platform: 'linux/amd64',
       provenance: 'slsa-v1-max',
+      provenanceSubject: `sha256:${String((index + 6) % 10).repeat(64)}`,
       sbom: 'spdx',
+      sbomSubject: `sha256:${String((index + 6) % 10).repeat(64)}`,
+      sourceMaterialSha: approvedSourceSha,
       runId,
       runAttempt,
     })),
@@ -68,7 +96,7 @@ function produce(evidence: unknown) {
   const manifestPath = join(directory, 'release-manifest.json');
   const checksumPath = join(directory, 'release-manifest.sha256');
   writeFileSync(inputPath, `${JSON.stringify(evidence, null, 2)}\n`);
-  const result = spawnSync('node', [producer, inputPath, manifestPath, checksumPath], {
+  const result = spawnSync('node', [producer, inputPath, manifestPath, checksumPath, lockPath], {
     encoding: 'utf8',
   });
   const manifest =
@@ -89,7 +117,13 @@ function verify(value: unknown, checksumOverride?: string, options: readonly str
     checksumOverride ??
       `${createHash('sha256').update(contents).digest('hex')}  release-manifest.json\n`,
   );
-  return spawnSync('node', [validator, manifestPath, ...options], { encoding: 'utf8' });
+  return spawnSync(
+    'node',
+    [validator, manifestPath, '--expected-base-lock', lockPath, ...options],
+    {
+      encoding: 'utf8',
+    },
+  );
 }
 
 function expectRejected(
@@ -109,9 +143,17 @@ describe('Timeweb canonical release manifest contract', () => {
     expect((schema.properties as JsonRecord).schemaVersion).toEqual({
       const: 'PHUB_TIMEWEB_RELEASE_MANIFEST_V2',
     });
-    expect((schema.properties as JsonRecord).gitCommit).toEqual({ const: approvedSourceSha });
-    expect((schema.properties as JsonRecord).gitTree).toEqual({ const: approvedSourceTree });
+    expect((schema.properties as JsonRecord).gitCommit).toEqual({
+      type: 'string',
+      pattern: '^[0-9a-f]{40}$',
+    });
+    expect((schema.properties as JsonRecord).gitTree).toEqual({
+      type: 'string',
+      pattern: '^[0-9a-f]{40}$',
+    });
     expect(schema.required).toContain('publication');
+    expect(schema.required).toContain('baseLock');
+    expect(schema.required).toContain('baseImages');
     expect(schema.required).not.toContain('reconciliationRuns');
     expect((legacySchema.properties as JsonRecord).schemaVersion).toEqual({
       const: 'PHUB_TIMEWEB_RELEASE_MANIFEST_V1',
@@ -144,6 +186,8 @@ describe('Timeweb canonical release manifest contract', () => {
       [
         validator,
         produced.manifestPath,
+        '--expected-base-lock',
+        lockPath,
         '--expected-publication-workflow-sha',
         workflowSha,
         '--expected-publication-run-id',
@@ -227,6 +271,7 @@ describe('Timeweb canonical release manifest contract', () => {
         inputPath,
         join(directory, 'other.json'),
         join(directory, 'release-manifest.sha256'),
+        lockPath,
       ],
       { encoding: 'utf8' },
     );
@@ -241,6 +286,7 @@ describe('Timeweb canonical release manifest contract', () => {
           substitutedInput,
           join(directory, 'release-manifest.json'),
           join(directory, 'release-manifest.sha256'),
+          lockPath,
         ],
         { encoding: 'utf8' },
       ).status,
@@ -302,5 +348,35 @@ describe('Timeweb canonical release manifest contract', () => {
       runAttempt,
     ];
     expectRejected(manifest, undefined, expectedOptions);
+  });
+
+  it('rejects a canonical manifest whose publication workflow SHA differs from gitCommit', () => {
+    const manifest = produce(publicationEvidence()).manifest;
+    expect(manifest).toBeDefined();
+    expectRejected({
+      ...manifest,
+      publication: { ...(manifest!.publication as JsonRecord), workflowSha: '8'.repeat(40) },
+    });
+  });
+
+  it('rejects wrong, missing, duplicate, or unknown base custody evidence', () => {
+    const manifest = produce(publicationEvidence()).manifest;
+    expect(manifest).toBeDefined();
+    const baseImages = structuredClone(manifest!.baseImages) as JsonRecord[];
+
+    expectRejected({
+      ...manifest,
+      baseLock: { ...(manifest!.baseLock as JsonRecord), sha256: '0'.repeat(64) },
+    });
+    expectRejected({ ...manifest, baseImages: baseImages.slice(1) });
+    expectRejected({ ...manifest, baseImages: [baseImages[0], baseImages[0], baseImages[2]] });
+    expectRejected({
+      ...manifest,
+      baseImages: [{ ...baseImages[0], id: 'unknown-base' }, ...baseImages.slice(1)],
+    });
+    expectRejected({
+      ...manifest,
+      baseImages: [{ ...baseImages[0], tag: 'moved-tag' }, ...baseImages.slice(1)],
+    });
   });
 });
