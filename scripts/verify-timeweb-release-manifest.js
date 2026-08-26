@@ -19,6 +19,7 @@ if (basename(manifestPath) !== 'release-manifest.json') fail('manifest_name');
 
 let outputMode;
 const expectedPublication = {};
+let expectedBaseLockPath;
 for (let index = 0; index < options.length; index += 1) {
   const option = options[index];
   if (option === '--image-lines' && outputMode === undefined) {
@@ -30,6 +31,7 @@ for (let index = 0; index < options.length; index += 1) {
   if (option === '--expected-publication-workflow-sha') expectedPublication.workflowSha = value;
   else if (option === '--expected-publication-run-id') expectedPublication.runId = value;
   else if (option === '--expected-publication-run-attempt') expectedPublication.runAttempt = value;
+  else if (option === '--expected-base-lock') expectedBaseLockPath = value;
   else fail('usage');
   index += 1;
 }
@@ -68,6 +70,7 @@ try {
 try {
   validateCanonicalManifest(manifest, {
     expectedPublication: expectationKeys.length === 3 ? expectedPublication : undefined,
+    expectedBaseLockPath,
   });
 } catch (error) {
   if (error instanceof ReleaseManifestContractError) fail(error.reason);

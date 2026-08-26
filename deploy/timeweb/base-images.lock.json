@@ -1,0 +1,63 @@
+{
+  "schema": "PHUB_TIMEWEB_BASE_IMAGES_V2",
+  "images": [
+    {
+      "id": "node-runtime-build-base",
+      "registry": "docker.io",
+      "repository": "library/node",
+      "tag": "22-bookworm-slim",
+      "indexDigest": "sha256:d649c27dae7ba0137b3cef5dd75baa422c08dc3d9e3fc0c23dfb172dc3cc6436",
+      "platform": {
+        "os": "linux",
+        "architecture": "amd64",
+        "variant": "",
+        "manifestDigest": "sha256:a17d50af28002a160548bd4225b3cfcb12c5efcb171f79e68758f2885fb1b066"
+      },
+      "consumers": [
+        { "service": "api", "stage": "build" },
+        { "service": "api", "stage": "production" },
+        { "service": "migrator", "stage": "build" },
+        { "service": "migrator", "stage": "production" },
+        { "service": "realtime", "stage": "build" },
+        { "service": "realtime", "stage": "production" },
+        { "service": "web", "stage": "build" },
+        { "service": "worker", "stage": "build" },
+        { "service": "worker", "stage": "production" }
+      ]
+    },
+    {
+      "id": "nginx-web-runtime",
+      "registry": "docker.io",
+      "repository": "library/nginx",
+      "tag": "1.27-alpine",
+      "indexDigest": "sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10",
+      "platform": {
+        "os": "linux",
+        "architecture": "amd64",
+        "variant": "",
+        "manifestDigest": "sha256:62223d644fa234c3a1cc785ee14242ec47a77364226f1c811d2f669f96dc2ac8"
+      },
+      "consumers": [{ "service": "web", "stage": "runtime" }]
+    },
+    {
+      "id": "buildkit-syft-scanner",
+      "registry": "docker.io",
+      "repository": "docker/buildkit-syft-scanner",
+      "tag": "stable-1",
+      "indexDigest": "sha256:ae4f3b554449e7e25548e7d8ccc029d17357348e30c6e3df01b92bc93654d6a9",
+      "platform": {
+        "os": "linux",
+        "architecture": "amd64",
+        "variant": "",
+        "manifestDigest": "sha256:187e1892a7752c9384c59aba9517dd8e40610b748c72773e87b63720514463c2"
+      },
+      "consumers": [
+        { "service": "api", "stage": "sbom-generator" },
+        { "service": "migrator", "stage": "sbom-generator" },
+        { "service": "realtime", "stage": "sbom-generator" },
+        { "service": "web", "stage": "sbom-generator" },
+        { "service": "worker", "stage": "sbom-generator" }
+      ]
+    }
+  ]
+}
