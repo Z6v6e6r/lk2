@@ -2,6 +2,7 @@ import gameHeroUrl from './assets/recommendation-cards/game-hero.webp';
 import tournamentHeroUrl from './assets/recommendation-cards/tournament-hero.webp';
 import trainingHeroUrl from './assets/recommendation-cards/training-hero.webp';
 import type { BookingRecommendationPage } from './auth-gateway.js';
+import { CreateGameButtonIcon } from './CreateGameButtonIcon.js';
 import { gamePrimaryAction } from './game-card-policy.js';
 import {
   ParticipantAvatarStack,
@@ -28,6 +29,11 @@ interface RecommendationGridPresentation {
   readonly stationCourtLabel: string;
   readonly levelHostLabel?: string;
   readonly participants: readonly ParticipantAvatarStackItem[];
+  readonly participantCapacity: number;
+  readonly activityHost?: ParticipantAvatarStackItem;
+  readonly activityHostLabel?: 'Тренер' | 'Организатор';
+  readonly activityOpenSlotCount: number;
+  readonly activityOpenSlotLabel?: string;
   readonly availabilityLabel: string;
   readonly actionLabel: string;
   readonly actionDisabled: boolean;
@@ -151,6 +157,25 @@ function gamePresentation(
   const game = item.game;
   const action = gameActionPresentation(item);
   const level = levelRangeLabel(game.levelRange);
+  const participants = game.participants.slice(0, 4).map((participant, index) => ({
+    key:
+      'userId' in participant && typeof participant.userId === 'string'
+        ? participant.userId
+        : `${participant.displayName}-${index}`,
+    displayName: participant.displayName,
+    avatarUrl: participant.avatarUrl,
+    level: participant.level,
+    ...('levelValue' in participant && typeof participant.levelValue === 'number'
+      ? { levelValue: participant.levelValue }
+      : {}),
+    ...('userId' in participant && typeof participant.userId === 'string'
+      ? { href: `/profile/${encodeURIComponent(participant.userId)}` }
+      : {}),
+  }));
+  const participantCapacity = Math.min(
+    4,
+    participants.length + Math.max(0, game.capacity.open ?? 0),
+  );
   return {
     id: `game-${game.id}`,
     title: game.title,
@@ -162,21 +187,9 @@ function gamePresentation(
     heroUrl: gameHeroUrl,
     stationCourtLabel: `${game.station.name}${game.court?.name ? ` · ${game.court.name}` : ''}`,
     ...(level ? { levelHostLabel: level } : {}),
-    participants: game.participants.slice(0, 4).map((participant, index) => ({
-      key:
-        'userId' in participant && typeof participant.userId === 'string'
-          ? participant.userId
-          : `${participant.displayName}-${index}`,
-      displayName: participant.displayName,
-      avatarUrl: participant.avatarUrl,
-      level: participant.level,
-      ...('levelValue' in participant && typeof participant.levelValue === 'number'
-        ? { levelValue: participant.levelValue }
-        : {}),
-      ...('userId' in participant && typeof participant.userId === 'string'
-        ? { href: `/profile/${encodeURIComponent(participant.userId)}` }
-        : {}),
-    })),
+    participants,
+    participantCapacity,
+    activityOpenSlotCount: 0,
     availabilityLabel: occupancyLabel({
       total: game.capacity.total,
       open: game.capacity.open,
@@ -197,6 +210,15 @@ function activityPresentation(
   const levelHostLabel = [level, host].filter(Boolean).join(' · ') || undefined;
   const isSoldOut = activity.capacity.open === 0;
   const kindLabel = activity.kind === 'TOURNAMENT' ? 'Турнир' : 'Тренировка';
+  const activityHostLabel =
+    activity.host?.role === 'TRAINER' ? 'Тренер' : activity.host ? 'Организатор' : undefined;
+  const activityHost = activity.host
+    ? {
+        key: `${activity.kind}-${activity.id}-host`,
+        displayName: activity.host.displayName,
+        avatarUrl: activity.host.avatarUrl,
+      }
+    : undefined;
   return {
     id: `${activity.kind.toLowerCase()}-${activity.id}`,
     title: activity.title,
@@ -211,6 +233,14 @@ function activityPresentation(
     // The recommendation contract exposes an activity host, not its participant roster.
     // Keep the host in metadata and do not present them as a booked participant.
     participants: [],
+    participantCapacity: 0,
+    ...(activityHost ? { activityHost } : {}),
+    ...(activityHostLabel ? { activityHostLabel } : {}),
+    activityOpenSlotCount: Math.min(3, Math.max(0, activity.capacity.open ?? 0)),
+    activityOpenSlotLabel:
+      activity.capacity.open === null
+        ? 'Количество свободных мест неизвестно'
+        : `Свободных мест: ${Math.max(0, activity.capacity.open)}`,
     availabilityLabel: occupancyLabel({
       total: activity.capacity.total,
       open: activity.capacity.open,
@@ -231,7 +261,9 @@ export function RecommendationGridCard({
 }): React.JSX.Element {
   const presentation = item.kind === 'GAME' ? gamePresentation(item) : activityPresentation(item);
   const titleId = `recommendation-card-title-${presentation.id}`;
-  const visibleAvatarCount = Math.min(4, presentation.participants.length);
+  const hasActivityRoster =
+    presentation.activityHost !== undefined || presentation.activityOpenSlotCount > 0;
+  const hasVisualAvailability = presentation.participantCapacity > 0 || hasActivityRoster;
 
   return (
     <article
@@ -266,26 +298,72 @@ export function RecommendationGridCard({
             <span title={presentation.levelHostLabel}>{presentation.levelHostLabel}</span>
           ) : null}
         </div>
-        <div className="recommendation-grid-card__social">
-          {visibleAvatarCount > 0 ? (
-            <ParticipantAvatarStack
-              ariaLabel="Участники события"
-              capacity={visibleAvatarCount}
-              participants={presentation.participants}
-              showLevelRing={false}
-            />
-          ) : null}
-          <span>{presentation.availabilityLabel}</span>
+        <div className="recommendation-grid-card__footer">
+          <div className="recommendation-grid-card__social">
+            {hasActivityRoster ? (
+              <span
+                className="booking-activity-card__host-roster"
+                aria-label={`${presentation.activityHostLabel ?? 'Организатор'} и свободные места`}
+              >
+                {presentation.activityHost ? (
+                  <span className="booking-activity-card__host-avatar">
+                    <ParticipantAvatarStack
+                      ariaLabel={presentation.activityHostLabel ?? 'Организатор'}
+                      capacity={1}
+                      participants={[presentation.activityHost]}
+                      showLevelRing={false}
+                    />
+                  </span>
+                ) : null}
+                {presentation.activityOpenSlotCount > 0 ? (
+                  <span
+                    className="booking-activity-card__open-slots"
+                    aria-label={presentation.activityOpenSlotLabel}
+                  >
+                    <ParticipantAvatarStack
+                      ariaLabel="Свободные места"
+                      capacity={presentation.activityOpenSlotCount}
+                      participants={[]}
+                      showLevelRing={false}
+                    />
+                  </span>
+                ) : null}
+              </span>
+            ) : presentation.participantCapacity > 0 ? (
+              <ParticipantAvatarStack
+                ariaLabel="Участники события"
+                capacity={presentation.participantCapacity}
+                participants={presentation.participants}
+                showLevelRing={false}
+              />
+            ) : null}
+            <span
+              className={
+                hasVisualAvailability ? 'sr-only' : 'recommendation-grid-card__availability'
+              }
+            >
+              {presentation.availabilityLabel}
+            </span>
+          </div>
+          {presentation.actionDisabled ? (
+            <button
+              className="recommendation-grid-card__action is-disabled"
+              type="button"
+              aria-label={presentation.actionLabel}
+              disabled
+            >
+              <CreateGameButtonIcon fill="#6A5AF9" />
+            </button>
+          ) : (
+            <a
+              className="recommendation-grid-card__action"
+              href={presentation.route}
+              aria-label={presentation.actionLabel}
+            >
+              <CreateGameButtonIcon fill="#6A5AF9" />
+            </a>
+          )}
         </div>
-        {presentation.actionDisabled ? (
-          <span className="recommendation-grid-card__action is-disabled" aria-disabled="true">
-            {presentation.actionLabel}
-          </span>
-        ) : (
-          <a className="recommendation-grid-card__action" href={presentation.route}>
-            {presentation.actionLabel}
-          </a>
-        )}
       </div>
     </article>
   );

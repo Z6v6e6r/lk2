@@ -96,16 +96,18 @@ describe('Home V3 recommendation photo grid', () => {
     );
     expect(card.getByText('Сколково · Корт №6')).toBeInTheDocument();
     expect(card.getByText('D+–C')).toBeInTheDocument();
-    expect(card.getByText('1 из 4 мест')).toBeInTheDocument();
-    expect(card.getByRole('link', { name: /Вступить · 800\s₽/ })).toHaveAttribute(
-      'href',
-      `/games/${game.id}`,
-    );
+    expect(card.getByText('1 из 4 мест')).toHaveClass('sr-only');
+    const action = card.getByRole('link', { name: /Вступить · 800\s₽/ });
+    expect(action).toHaveAttribute('href', `/games/${game.id}`);
+    expect(action).toHaveTextContent('');
+    expect(action.querySelector('svg')).toHaveAttribute('viewBox', '0 0 88 72');
+    expect(action.querySelector('rect')).toHaveAttribute('fill', '#6A5AF9');
     expect(card.getByRole('link', { name: `Открыть: ${game.title}` })).toHaveAttribute(
       'href',
       `/games/${game.id}`,
     );
     expect(card.getByRole('img', { name: /Анна Петрова/ })).toBeInTheDocument();
+    expect(card.getAllByLabelText('Свободное место')).toHaveLength(3);
     expect(section?.querySelector('.recommendation-grid-card__hero img')).toHaveAttribute(
       'src',
       expect.stringMatching(/game-hero\.webp$/),
@@ -153,11 +155,14 @@ describe('Home V3 recommendation photo grid', () => {
     );
     expect(within(card).getByText(game.station.name)).toHaveAttribute('title', game.station.name);
     expect(within(card).getAllByRole('img', { name: /\u0418грок/ })).toHaveLength(4);
-    expect(within(card).getByText('Осталось 1 место')).toBeInTheDocument();
-    expect(within(card).getByRole('link', { name: 'Вступить · Бесплатно' })).toBeInTheDocument();
+    expect(within(card).getByText('Осталось 1 место')).toHaveClass('sr-only');
+    expect(within(card).queryByLabelText('Свободное место')).not.toBeInTheDocument();
+    const action = within(card).getByRole('link', { name: 'Вступить · Бесплатно' });
+    expect(action).toHaveTextContent('');
+    expect(action.querySelector('rect')).toHaveAttribute('fill', '#6A5AF9');
   });
 
-  it('omits unavailable level, trainer and recommendation data from a training card', () => {
+  it('separates a training host from the free participant slots', () => {
     const page = recommendationPage([
       {
         kind: 'TRAINING',
@@ -176,7 +181,11 @@ describe('Home V3 recommendation photo grid', () => {
           court: null,
           levelRange: null,
           capacity: { total: 3, open: 2 },
-          host: null,
+          host: {
+            displayName: 'Александр',
+            avatarUrl: null,
+            role: 'TRAINER',
+          },
           route: '/trainings?event=50000000-0000-4000-8000-000000000001',
         },
         reasons: [],
@@ -188,14 +197,22 @@ describe('Home V3 recommendation photo grid', () => {
     const card = container.querySelector('.recommendation-grid-card') as HTMLElement;
 
     expect(within(card).getByText('Тренировка')).toBeInTheDocument();
-    expect(within(card).getByText('1 из 3 мест')).toBeInTheDocument();
-    expect(within(card).queryByText(/\u0422ренер/)).not.toBeInTheDocument();
+    expect(within(card).getByText('1 из 3 мест')).toHaveClass('sr-only');
+    expect(within(card).getByText('Тренер Александр')).toBeInTheDocument();
     expect(within(card).queryByText(/\u0423ровень/)).not.toBeInTheDocument();
+    const roster = within(card).getByLabelText('Тренер и свободные места');
+    expect(within(roster).getByLabelText('Тренер')).toBeInTheDocument();
+    expect(within(roster).getByLabelText('Свободных мест: 2')).toBeInTheDocument();
+    expect(within(roster).getByRole('img', { name: 'Александр' })).toBeInTheDocument();
+    expect(within(roster).getAllByLabelText('Свободное место')).toHaveLength(2);
     expect(within(card).queryByLabelText('Участники события')).not.toBeInTheDocument();
-    expect(within(card).getByRole('link', { name: 'Записаться' })).toHaveAttribute(
+    const action = within(card).getByRole('link', { name: 'Записаться' });
+    expect(action).toHaveAttribute(
       'href',
       page.items[0]?.kind === 'TRAINING' ? page.items[0].activity.route : '',
     );
+    expect(action).toHaveTextContent('');
+    expect(action.querySelector('rect')).toHaveAttribute('fill', '#6A5AF9');
     expect(card.querySelector('.recommendation-grid-card__hero img')).toHaveAttribute(
       'src',
       expect.stringMatching(/training-hero\.webp$/),
@@ -239,17 +256,20 @@ describe('Home V3 recommendation photo grid', () => {
     );
     const card = container.querySelector('.recommendation-grid-card') as HTMLElement;
 
-    expect(
-      within(card).getByText('Мест нет', { selector: '.recommendation-grid-card__social > span' }),
-    ).toBeInTheDocument();
-    expect(
-      within(card).getByText('Мест нет', { selector: '.recommendation-grid-card__action' }),
-    ).toHaveAttribute('aria-disabled', 'true');
+    expect(within(card).getByText('Мест нет')).toHaveClass('sr-only');
+    const disabledAction = within(card).getByRole('button', { name: 'Мест нет' });
+    expect(disabledAction).toBeDisabled();
+    expect(disabledAction).toHaveClass('recommendation-grid-card__action', 'is-disabled');
+    expect(disabledAction.querySelector('rect')).toHaveAttribute('fill', '#6A5AF9');
     expect(within(card).queryByRole('link', { name: 'Мест нет' })).not.toBeInTheDocument();
     expect(within(card).getByRole('link', { name: 'Вечерний турнир' })).toHaveAttribute(
       'href',
       route,
     );
+    const roster = within(card).getByLabelText('Организатор и свободные места');
+    expect(within(roster).getByLabelText('Организатор')).toBeInTheDocument();
+    expect(within(roster).getByRole('img', { name: 'Илья Соколов' })).toBeInTheDocument();
+    expect(within(roster).queryByLabelText('Свободное место')).not.toBeInTheDocument();
     expect(within(card).queryByLabelText('Участники события')).not.toBeInTheDocument();
     expect(card.querySelector('.recommendation-grid-card__hero img')).toHaveAttribute(
       'src',
