@@ -8,12 +8,8 @@ import { fileURLToPath } from 'node:url';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 
-const approvedSourceSha = spawnSync('git', ['rev-parse', 'HEAD'], {
-  encoding: 'utf8',
-}).stdout.trim();
-const approvedSourceTree = spawnSync('git', ['rev-parse', 'HEAD^{tree}'], {
-  encoding: 'utf8',
-}).stdout.trim();
+const approvedSourceSha = '595e954bb8f53367baf034d7f39b255af0fda5fd';
+const approvedSourceTree = '3f4c1e63dd30eb60251533b95f1970fd96754a08';
 const supersededSourceSha = '35c8312b79cccdd136f2bfd892efbea629b8b919';
 const releaseManifestProducer = fileURLToPath(
   new URL('./build-timeweb-release-manifest.js', import.meta.url),
@@ -194,18 +190,15 @@ describe('Timeweb amd64 publication workflow', () => {
 
     expect(workflow).toContain('default: source_check_only');
     expect(workflow).toContain("inputs.operation == 'publish'");
-    expect(workflow).toContain('PUBLISH_TIMEWEB_AMD64_<FIRST_12_SHA_UPPERCASE>');
-    expect(workflow).not.toContain(approvedSourceSha);
-    expect(workflow).not.toContain(approvedSourceTree);
+    expect(workflow).toContain('PUBLISH_TIMEWEB_AMD64_595E954');
+    expect(workflow).toContain(approvedSourceSha);
+    expect(workflow).toContain(approvedSourceTree);
     expect(workflow).not.toContain(supersededSourceSha);
     expect(workflow).toContain('test "$REQUEST_REF" = refs/heads/main');
     expect(workflow).toContain('test "$WORKFLOW_SHA" = "$REQUEST_SHA"');
     expect(workflow).toContain('test "$WORKFLOW_SHA" = "$EXPECTED_WORKFLOW_SHA"');
-    expect(workflow).not.toContain('APPROVED_SOURCE_SHA');
-    expect(workflow).toContain('test "$EXPECTED_SOURCE_SHA" = "$WORKFLOW_SHA"');
-    expect(workflow).toContain(
-      'expected_confirmation="PUBLISH_TIMEWEB_AMD64_$confirmation_suffix"',
-    );
+    expect(workflow).toContain(`APPROVED_SOURCE_SHA: ${approvedSourceSha}`);
+    expect(workflow).toContain('test "$EXPECTED_SOURCE_SHA" = "$APPROVED_SOURCE_SHA"');
     expect(workflow).toContain('test "$RUN_ATTEMPT" = 1');
     expect(workflow).toContain('test "$REPOSITORY" = Z6v6e6r/lk2');
     expect(workflow).toContain('test "$ACTOR" = "$TRIGGERING_ACTOR"');
@@ -334,22 +327,23 @@ describe('Timeweb amd64 publication workflow', () => {
     const validationStep = publicationDocument.jobs['validate-request']?.steps?.find(
       ({ name }) => name === 'Validate exact first-attempt main request',
     );
-    expect(validationStep?.env).not.toHaveProperty('APPROVED_SOURCE_SHA');
+    expect(validationStep?.env?.APPROVED_SOURCE_SHA).toBe(approvedSourceSha);
     const validationScript = validationStep?.run;
     expect(validationScript).toBeDefined();
     if (!validationScript) throw new Error('publication request validator was not found');
     const requestEnvironment = {
       ACTOR: 'release-actor',
+      APPROVED_SOURCE_SHA: approvedSourceSha,
       CONFIRMATION: '',
       EXPECTED_SOURCE_SHA: approvedSourceSha,
-      EXPECTED_WORKFLOW_SHA: approvedSourceSha,
+      EXPECTED_WORKFLOW_SHA: 'f'.repeat(40),
       OPERATION: 'source_check_only',
       REPOSITORY: 'Z6v6e6r/lk2',
       REQUEST_REF: 'refs/heads/main',
-      REQUEST_SHA: approvedSourceSha,
+      REQUEST_SHA: 'f'.repeat(40),
       RUN_ATTEMPT: '1',
       TRIGGERING_ACTOR: 'release-actor',
-      WORKFLOW_SHA: approvedSourceSha,
+      WORKFLOW_SHA: 'f'.repeat(40),
     };
     const validateRequest = (expectedSourceSha: string) =>
       spawnSync('bash', ['-c', validationScript], {
@@ -386,7 +380,7 @@ describe('Timeweb amd64 publication workflow', () => {
       service,
       sourceSha: approvedSourceSha,
       sourceTree: approvedSourceTree,
-      workflowSha: approvedSourceSha,
+      workflowSha: 'f'.repeat(40),
     }));
     const publicationManifest = {
       authorizesDatabaseMutation: false,
@@ -401,7 +395,7 @@ describe('Timeweb amd64 publication workflow', () => {
       schemaVersion: 1,
       sourceSha: approvedSourceSha,
       sourceTree: approvedSourceTree,
-      workflowSha: approvedSourceSha,
+      workflowSha: 'f'.repeat(40),
     };
     const publicationProgram = extractProgram(
       publicationWorkflow,
@@ -417,7 +411,7 @@ describe('Timeweb amd64 publication workflow', () => {
       approvedSourceTree,
       '--arg',
       'workflowSha',
-      approvedSourceSha,
+      'f'.repeat(40),
       '--arg',
       'runId',
       '101',
@@ -536,7 +530,7 @@ describe('Timeweb amd64 publication workflow', () => {
                   releaseManifestValidator,
                   manifestPath,
                   '--expected-publication-workflow-sha',
-                  approvedSourceSha,
+                  'f'.repeat(40),
                   '--expected-publication-run-id',
                   '101',
                   '--expected-publication-run-attempt',
@@ -567,7 +561,7 @@ describe('Timeweb amd64 publication workflow', () => {
       runAttempt: '1',
       runId: '101',
       workflow: '.github/workflows/publish-timeweb-amd64-images.yaml',
-      workflowSha: approvedSourceSha,
+      workflowSha: 'f'.repeat(40),
     });
     expect(produced.manifest.images).toHaveLength(5);
     expect(produced.manifest.images.every((image) => image.digest === digest)).toBe(true);
@@ -1056,10 +1050,10 @@ describe('Timeweb amd64 publication workflow', () => {
     expect(workflow).toContain('test "$ACTOR" = "$TRIGGERING_ACTOR"');
     expect(workflow).toContain('test "$WORKFLOW_SHA" = "$EXPECTED_WORKFLOW_SHA"');
     expect(workflow).toContain('expected_source_sha:');
-    expect(workflow).not.toContain('APPROVED_SOURCE_SHA');
-    expect(workflow).toContain('test "$EXPECTED_SOURCE_SHA" = "$PUBLICATION_WORKFLOW_SHA"');
+    expect(workflow).toContain(`APPROVED_SOURCE_SHA: ${approvedSourceSha}`);
+    expect(workflow).toContain('test "$EXPECTED_SOURCE_SHA" = "$APPROVED_SOURCE_SHA"');
     expect(workflow).toContain('source_sha="$EXPECTED_SOURCE_SHA"');
-    expect(workflow).toContain('source_tree="${{ needs.validate-request.outputs.source_tree }}"');
+    expect(workflow).toContain(`source_tree=${approvedSourceTree}`);
     expect(workflow).not.toContain(supersededSourceSha);
     expect(workflow).toContain("printf '%s' \"$PUBLICATION_RUN_ID\" | grep -Eq '^[1-9][0-9]*$'");
     expect(workflow).toContain('publication_workflow_sha:');

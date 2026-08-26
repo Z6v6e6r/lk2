@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -21,11 +21,9 @@ const schemaPath = fileURLToPath(
 const legacySchemaPath = fileURLToPath(
   new URL('../deploy/timeweb/release-manifest.v1.schema.json', import.meta.url),
 );
-const approvedSourceSha = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
-const approvedSourceTree = execFileSync('git', ['rev-parse', 'HEAD^{tree}'], {
-  encoding: 'utf8',
-}).trim();
-const workflowSha = approvedSourceSha;
+const approvedSourceSha = '595e954bb8f53367baf034d7f39b255af0fda5fd';
+const approvedSourceTree = '3f4c1e63dd30eb60251533b95f1970fd96754a08';
+const workflowSha = 'f'.repeat(40);
 const runId = '111111';
 const runAttempt = '1';
 const components = ['web', 'api', 'worker', 'realtime', 'migrator'] as const;
@@ -105,20 +103,14 @@ function expectRejected(
 }
 
 describe('Timeweb canonical release manifest contract', () => {
-  it('publishes a dynamically source-bound V2 contract while retaining V1 as legacy only', () => {
+  it('publishes an explicit V2 commit/tree contract while retaining V1 as legacy only', () => {
     const schema = JSON.parse(readFileSync(schemaPath, 'utf8')) as JsonRecord;
     const legacySchema = JSON.parse(readFileSync(legacySchemaPath, 'utf8')) as JsonRecord;
     expect((schema.properties as JsonRecord).schemaVersion).toEqual({
       const: 'PHUB_TIMEWEB_RELEASE_MANIFEST_V2',
     });
-    expect((schema.properties as JsonRecord).gitCommit).toEqual({
-      type: 'string',
-      pattern: '^[0-9a-f]{40}$',
-    });
-    expect((schema.properties as JsonRecord).gitTree).toEqual({
-      type: 'string',
-      pattern: '^[0-9a-f]{40}$',
-    });
+    expect((schema.properties as JsonRecord).gitCommit).toEqual({ const: approvedSourceSha });
+    expect((schema.properties as JsonRecord).gitTree).toEqual({ const: approvedSourceTree });
     expect(schema.required).toContain('publication');
     expect(schema.required).not.toContain('reconciliationRuns');
     expect((legacySchema.properties as JsonRecord).schemaVersion).toEqual({
@@ -310,11 +302,5 @@ describe('Timeweb canonical release manifest contract', () => {
       runAttempt,
     ];
     expectRejected(manifest, undefined, expectedOptions);
-  });
-
-  it('rejects publication evidence whose source differs from the workflow main commit', () => {
-    const evidence = publicationEvidence();
-    evidence.workflowSha = 'f'.repeat(40);
-    expect(produce(evidence).result.status).toBe(1);
   });
 });

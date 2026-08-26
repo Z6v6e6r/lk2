@@ -1,7 +1,10 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "PadlHub Timeweb staging machine canonical publication release manifest V2",
-  "x-sourceBinding": "gitCommit and gitTree are resolved from the exact main workflow commit and verified against same-run publication evidence",
+  "x-applicationSource": {
+    "commit": "595e954bb8f53367baf034d7f39b255af0fda5fd",
+    "tree": "3f4c1e63dd30eb60251533b95f1970fd96754a08"
+  },
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -16,8 +19,8 @@
   "properties": {
     "schemaVersion": { "const": "PHUB_TIMEWEB_RELEASE_MANIFEST_V2" },
     "repository": { "const": "Z6v6e6r/lk2" },
-    "gitCommit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
-    "gitTree": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "gitCommit": { "const": "595e954bb8f53367baf034d7f39b255af0fda5fd" },
+    "gitTree": { "const": "3f4c1e63dd30eb60251533b95f1970fd96754a08" },
     "platform": { "const": "linux/amd64" },
     "publication": {
       "type": "object",
@@ -122,7 +125,7 @@
           "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
           "runtimeDigest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
           "architecture": { "const": "amd64" },
-          "revision": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+          "revision": { "const": "595e954bb8f53367baf034d7f39b255af0fda5fd" },
           "provenance": { "const": true },
           "sbom": { "const": true },
           "publication": { "const": true }
