@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 
-import { loadConfig, runtimeContourTargetFingerprint } from '@phub/config';
+import { loadWorkerConfig, runtimeContourTargetFingerprint } from '@phub/config';
 import {
   LegacyCommunityReadRepository,
   type CommunityDirectoryRepository,
@@ -77,7 +77,7 @@ import {
   WorkerForwardProgressTracker,
 } from './worker-runtime-health.js';
 
-const config = loadConfig(process.env, { profilePhotoStorage: true });
+const config = loadWorkerConfig();
 const clientMediaRollbackCapability = 'phub.client-media-rollback.v1';
 const communityLogoRollbackCapability = 'phub.community-logo-rollback.v1';
 const runtimeContourAttestation = config.LOCAL_RUNTIME_CONTOUR_ATTESTATION

@@ -27,8 +27,8 @@ export const legacyV1Schema = readSchema('../deploy/timeweb/release-manifest.v1.
 const CURRENT_VERSION = currentSchema.properties.schemaVersion.const;
 const LEGACY_VERSION = legacyV1Schema.properties.schemaVersion.const;
 const COMPONENTS = currentSchema.properties.images.items.properties.component.enum;
-const COMMIT = currentSchema.properties.gitCommit.const;
-const TREE = currentSchema.properties.gitTree.const;
+const COMMIT_PATTERN = new RegExp(currentSchema.properties.gitCommit.pattern, 'u');
+const TREE_PATTERN = new RegExp(currentSchema.properties.gitTree.pattern, 'u');
 const DIGEST_PATTERN = new RegExp(
   currentSchema.properties.images.items.properties.digest.pattern,
   'u',
@@ -50,7 +50,7 @@ function hasExactKeys(value, expected) {
   return Object.keys(value).sort().join(',') === [...expected].sort().join(',');
 }
 
-function validateImages(images, schema, version) {
+function validateImages(images, schema, version, expectedRevision) {
   if (!Array.isArray(images) || images.length !== COMPONENTS.length) reject('component_set');
   const itemSchema = schema.properties.images.items;
   const imageKeys = itemSchema.required;
@@ -64,7 +64,7 @@ function validateImages(images, schema, version) {
     if (typeof image.digest !== 'string' || !DIGEST_PATTERN.test(image.digest)) reject('digest');
     if (
       image.architecture !== itemSchema.properties.architecture.const ||
-      image.revision !== itemSchema.properties.revision.const ||
+      image.revision !== expectedRevision ||
       image.provenance !== true ||
       image.sbom !== true
     )
@@ -80,14 +80,14 @@ function validateImages(images, schema, version) {
   if (COMPONENTS.some((component) => !seen.has(component))) reject('component_set');
 }
 
-export function resolveApplicationTree(commit = COMMIT) {
-  if (typeof commit !== 'string' || !/^[0-9a-f]{40}$/u.test(commit)) reject('git_commit');
+export function resolveApplicationTree(commit) {
+  if (typeof commit !== 'string' || !COMMIT_PATTERN.test(commit)) reject('git_commit');
   try {
     const tree = execFileSync('git', ['rev-parse', '--verify', `${commit}^{tree}`], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
     }).trim();
-    if (!/^[0-9a-f]{40}$/u.test(tree)) reject('git_tree');
+    if (!TREE_PATTERN.test(tree)) reject('git_tree');
     return tree;
   } catch (error) {
     if (error instanceof ReleaseManifestContractError) throw error;
@@ -113,12 +113,12 @@ export function buildCurrentManifest(evidence) {
     'images',
   ];
   if (!hasExactKeys(evidence, requiredEvidenceKeys)) reject('publication_keys');
-  const resolvedTree = resolveApplicationTree(COMMIT);
-  if (resolvedTree !== TREE) reject('schema_tree_mismatch');
+  const commit = evidence.sourceSha;
+  const resolvedTree = resolveApplicationTree(commit);
   if (
     evidence.schemaVersion !== 1 ||
     evidence.kind !== 'phub-timeweb-amd64-publication' ||
-    evidence.sourceSha !== COMMIT ||
+    evidence.sourceSha !== evidence.workflowSha ||
     evidence.sourceTree !== resolvedTree ||
     evidence.repository !== currentSchema.properties.repository.const ||
     evidence.platform !== currentSchema.properties.platform.const ||
@@ -141,11 +141,11 @@ export function buildCurrentManifest(evidence) {
     if (!COMPONENTS.includes(image.service) || byComponent.has(image.service))
       reject('component_set');
     if (
-      image.sourceSha !== COMMIT ||
+      image.sourceSha !== commit ||
       image.sourceTree !== resolvedTree ||
       image.workflowSha !== evidence.workflowSha ||
       image.repository !== `ghcr.io/z6v6e6r/phub-${image.service}` ||
-      image.publicationTag !== `amd64-sha-${COMMIT}-${evidence.runId}-${evidence.runAttempt}` ||
+      image.publicationTag !== `amd64-sha-${commit}-${evidence.runId}-${evidence.runAttempt}` ||
       image.platform !== currentSchema.properties.platform.const ||
       image.runId !== evidence.runId ||
       image.runAttempt !== evidence.runAttempt ||
@@ -164,7 +164,7 @@ export function buildCurrentManifest(evidence) {
   return {
     schemaVersion: CURRENT_VERSION,
     repository: currentSchema.properties.repository.const,
-    gitCommit: COMMIT,
+    gitCommit: commit,
     gitTree: resolvedTree,
     platform: currentSchema.properties.platform.const,
     publication: {
@@ -181,7 +181,7 @@ export function buildCurrentManifest(evidence) {
         digest: image.indexDigest,
         runtimeDigest: image.runtimeDigest,
         architecture: currentSchema.properties.images.items.properties.architecture.const,
-        revision: COMMIT,
+        revision: commit,
         provenance: true,
         sbom: true,
         publication: true,
@@ -195,8 +195,10 @@ function validateCurrent(manifest, expectedPublication) {
   const resolvedTree = resolveApplicationTree(manifest.gitCommit);
   if (
     manifest.repository !== currentSchema.properties.repository.const ||
-    manifest.gitCommit !== COMMIT ||
-    manifest.gitTree !== TREE ||
+    typeof manifest.gitCommit !== 'string' ||
+    !COMMIT_PATTERN.test(manifest.gitCommit) ||
+    typeof manifest.gitTree !== 'string' ||
+    !TREE_PATTERN.test(manifest.gitTree) ||
     manifest.gitTree !== resolvedTree ||
     manifest.platform !== currentSchema.properties.platform.const
   )
@@ -211,7 +213,8 @@ function validateCurrent(manifest, expectedPublication) {
     !SHA_PATTERN.test(publication.workflowSha) ||
     typeof publication.runId !== 'string' ||
     !RUN_ID_PATTERN.test(publication.runId) ||
-    publication.runAttempt !== publicationSchema.properties.runAttempt.const
+    publication.runAttempt !== publicationSchema.properties.runAttempt.const ||
+    publication.workflowSha !== manifest.gitCommit
   )
     reject('publication_identity');
   if (
@@ -221,7 +224,7 @@ function validateCurrent(manifest, expectedPublication) {
       publication.runAttempt !== expectedPublication.runAttempt)
   )
     reject('publication_identity_mismatch');
-  validateImages(manifest.images, currentSchema, CURRENT_VERSION);
+  validateImages(manifest.images, currentSchema, CURRENT_VERSION, manifest.gitCommit);
 }
 
 function validateLegacyV1(manifest, expectedPublication) {
@@ -233,7 +236,12 @@ function validateLegacyV1(manifest, expectedPublication) {
     manifest.platform !== legacyV1Schema.properties.platform.const
   )
     reject('header');
-  validateImages(manifest.images, legacyV1Schema, LEGACY_VERSION);
+  validateImages(
+    manifest.images,
+    legacyV1Schema,
+    LEGACY_VERSION,
+    legacyV1Schema.properties.images.items.properties.revision.const,
+  );
   const reconciliationSchema = legacyV1Schema.properties.reconciliationRuns;
   const runIdPattern = new RegExp(reconciliationSchema.items.pattern, 'u');
   if (
