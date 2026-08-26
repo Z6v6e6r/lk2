@@ -500,9 +500,172 @@ jobs:
             test "$BUILD_RESULT" = success
           fi
 
+  timeweb-provenance-probe:
+    name: timeweb-provenance-probe (${{ matrix.service }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [web, api]
+    env:
+      DOCKER_BUILD_RECORD_UPLOAD: false
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+      - id: source
+        name: Bind the no-push probe to the exact head and base lock
+        env:
+          EXPECTED_HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          SERVICE: ${{ matrix.service }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD_SHA"
+          test -z "$(git status --porcelain)"
+          mkdir -p "$RUNNER_TEMP/timeweb-provenance-probe/artifacts"
+          jq -n --arg service "$SERVICE" --arg head "$EXPECTED_HEAD_SHA" '{
+            schemaVersion: 1,
+            kind: "phub-timeweb-pr-provenance-probe",
+            service: $service,
+            exactHeadSha: $head,
+            reason: "probe_not_completed",
+            verified: false,
+            pushed: false,
+            authorizesPublication: false,
+            authorizesDeploy: false
+          }' > "$RUNNER_TEMP/timeweb-provenance-probe/artifacts/$SERVICE-probe.json"
+          node scripts/verify-timeweb-base-images.js static \
+            --lock deploy/timeweb/base-images.lock.json \
+            --repo-root . \
+            --github-output "$GITHUB_OUTPUT"
+          printf 'expected_head_sha=%s\n' "$EXPECTED_HEAD_SHA" >> "$GITHUB_OUTPUT"
+      - id: buildx
+        name: Install pinned Buildx v0.36.1 and create pinned BuildKit v0.32.2 builder
+        env:
+          BUILDX_SHA256: 48af8a397ebd60178778bf63611dbcebe5f5e7a9be90eb9147b24b9587455778
+          BUILDX_VERSION: v0.36.1
+          BUILDKIT_IMAGE: moby/buildkit@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
+        run: |
+          set -euo pipefail
+          download="$RUNNER_TEMP/docker-buildx"
+          plugin="$HOME/.docker/cli-plugins/docker-buildx"
+          curl --fail --location --proto '=https' --tlsv1.2 --output "$download" \
+            "https://github.com/docker/buildx/releases/download/$BUILDX_VERSION/buildx-$BUILDX_VERSION.linux-amd64"
+          printf '%s  %s\n' "$BUILDX_SHA256" "$download" | sha256sum --check --strict
+          install -D -m 0755 "$download" "$plugin"
+          printf '%s  %s\n' "$BUILDX_SHA256" "$plugin" | sha256sum --check --strict
+          builder="phub-timeweb-pr-provenance-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-${{ matrix.service }}"
+          docker buildx create --name "$builder" --driver docker-container \
+            --driver-opt "image=$BUILDKIT_IMAGE" --use
+          printf 'name=%s\n' "$builder" >> "$GITHUB_OUTPUT"
+          docker buildx version \
+            | grep -Fx 'github.com/docker/buildx v0.36.1 1d8dde89b8aba914e05e45366770736fea1fd690'
+          docker buildx inspect --bootstrap | grep -Eq '^BuildKit version:[[:space:]]+v0\.32\.2$'
+          container_id="$(docker ps --filter "name=buildx_buildkit_$builder" --format '{{.ID}}')"
+          [[ "$container_id" =~ ^[0-9a-f]{12,64}$ ]]
+          test "$(docker inspect --format '{{.Config.Image}}' "$container_id")" = "$BUILDKIT_IMAGE"
+      - id: build
+        name: Build exact-head OCI provenance without push (${{ matrix.service }})
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          builder: ${{ steps.buildx.outputs.name }}
+          context: https://github.com/Z6v6e6r/lk2.git#${{ steps.source.outputs.expected_head_sha }}
+          file: apps/${{ matrix.service }}/Dockerfile
+          platforms: linux/amd64
+          push: false
+          outputs: type=oci,dest=${{ runner.temp }}/timeweb-provenance-probe/${{ matrix.service }}.tar
+          tags: ghcr.io/z6v6e6r/phub-${{ matrix.service }}:provenance-probe-${{ steps.source.outputs.expected_head_sha }}
+          labels: |
+            org.opencontainers.image.revision=${{ steps.source.outputs.expected_head_sha }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          build-args: |
+            PHUB_RELEASE=${{ steps.source.outputs.expected_head_sha }}
+          provenance: mode=max,version=v1
+          sbom: generator=${{ steps.source.outputs.scanner_immutable_reference }}
+          cache-from: type=gha,scope=timeweb-provenance-probe-${{ matrix.service }}
+      - id: provenance
+        name: Verify exact emitted canonical BuildKit PURLs
+        env:
+          EXPECTED_HEAD_SHA: ${{ steps.source.outputs.expected_head_sha }}
+          SERVICE: ${{ matrix.service }}
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/timeweb-provenance-probe/$SERVICE.tar"
+          layout="$RUNNER_TEMP/timeweb-provenance-probe/$SERVICE-layout"
+          statement="$RUNNER_TEMP/timeweb-provenance-probe/$SERVICE-statement.json"
+          test -s "$archive"
+          mkdir -m 0700 "$layout"
+          tar --extract --file "$archive" --directory "$layout" --no-same-owner --no-same-permissions
+          node scripts/extract-timeweb-oci-provenance.js extract \
+            --layout "$layout" \
+            --statement "$statement" \
+            --github-output "$GITHUB_OUTPUT"
+          runtime_digest="$(sed -n 's/^runtime_digest=//p' "$GITHUB_OUTPUT")"
+          [[ "$runtime_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          node scripts/verify-timeweb-provenance-materials.js verify \
+            --statement "$statement" \
+            --service "$SERVICE" \
+            --source-sha "$EXPECTED_HEAD_SHA" \
+            --builder-id "https://github.com/Z6v6e6r/lk2/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT" \
+            --runtime-digest "$runtime_digest" \
+            --dockerfile-path "apps/$SERVICE/Dockerfile" \
+            --repository "$GITHUB_REPOSITORY" \
+            --base-lock deploy/timeweb/base-images.lock.json \
+            --diagnostic "$RUNNER_TEMP/timeweb-provenance-probe/artifacts/$SERVICE-material-diagnostic.json"
+          jq --arg service "$SERVICE" --arg head "$EXPECTED_HEAD_SHA" --arg runtime "$runtime_digest" '{
+            schemaVersion: 1,
+            kind: "phub-timeweb-pr-provenance-probe",
+            service: $service,
+            exactHeadSha: $head,
+            runtimeDigest: $runtime,
+            builderId: .predicate.runDetails.builder.id,
+            dockerfilePath: .predicate.buildDefinition.externalParameters.configSource.path,
+            materials: [.predicate.buildDefinition.resolvedDependencies[] | {uri, digest}],
+            buildxVersion: "v0.36.1",
+            buildkitVersion: "v0.32.2",
+            verified: true,
+            pushed: false,
+            authorizesPublication: false,
+            authorizesDeploy: false
+          }' "$statement" > "$RUNNER_TEMP/timeweb-provenance-probe/artifacts/$SERVICE-probe.json"
+      - name: Remove the ephemeral BuildKit builder
+        if: ${{ always() }}
+        env:
+          BUILDER_NAME: ${{ steps.buildx.outputs.name }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$BUILDER_NAME" ]]; then
+            docker buildx rm "$BUILDER_NAME"
+          fi
+      - name: Upload sanitized no-push provenance evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: timeweb-provenance-probe-${{ matrix.service }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/timeweb-provenance-probe/artifacts
+          if-no-files-found: error
+          retention-days: 14
+
   pull-request-gate:
     name: pull-request-gate
-    needs: [quality, dependency-security, secret-scan, deployment-contract, docker-build]
+    needs:
+      [
+        quality,
+        dependency-security,
+        secret-scan,
+        deployment-contract,
+        docker-build,
+        timeweb-provenance-probe,
+      ]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
@@ -511,6 +674,7 @@ jobs:
           DEPENDENCY_SECURITY_RESULT: ${{ needs.dependency-security.result }}
           DEPLOYMENT_CONTRACT_RESULT: ${{ needs.deployment-contract.result }}
           DOCKER_BUILD_RESULT: ${{ needs.docker-build.result }}
+          TIMEWEB_PROVENANCE_RESULT: ${{ needs.timeweb-provenance-probe.result }}
           QUALITY_RESULT: ${{ needs.quality.result }}
           SECRET_SCAN_RESULT: ${{ needs.secret-scan.result }}
         run: |
@@ -520,3 +684,4 @@ jobs:
           test "$SECRET_SCAN_RESULT" = success
           test "$DEPLOYMENT_CONTRACT_RESULT" = success
           test "$DOCKER_BUILD_RESULT" = success
+          test "$TIMEWEB_PROVENANCE_RESULT" = success

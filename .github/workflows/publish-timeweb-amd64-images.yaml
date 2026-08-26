@@ -158,6 +158,21 @@ jobs:
           test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE_SHA"
           test -z "$(git status --porcelain)"
           test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$EXPECTED_SOURCE_SHA"
+      - name: Prepare non-authorizing provenance diagnostics
+        env:
+          SERVICE: ${{ matrix.service }}
+        run: |
+          set -euo pipefail
+          mkdir -p publication-evidence
+          jq -n --arg service "$SERVICE" '{
+            schemaVersion: 1,
+            kind: "phub-timeweb-provenance-material-diagnostic",
+            service: $service,
+            reason: "verification_not_completed",
+            verified: false,
+            authorizesPublication: false,
+            authorizesDeploy: false
+          }' > "publication-evidence/$SERVICE-provenance-material-diagnostic.json"
       - id: base
         name: Verify the V2 base lock and all production Dockerfiles before registry login
         run: |
@@ -292,9 +307,6 @@ jobs:
           IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
           IMAGE_REFERENCE: ghcr.io/z6v6e6r/phub-${{ matrix.service }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          EXPECTED_NGINX_INDEX_DIGEST: ${{ steps.base.outputs.nginx_index_digest }}
-          EXPECTED_NODE_INDEX_DIGEST: ${{ steps.base.outputs.node_index_digest }}
-          EXPECTED_SBOM_INDEX_DIGEST: ${{ steps.base.outputs.scanner_index_digest }}
           SERVICE: ${{ matrix.service }}
           SOURCE_SHA: ${{ inputs.expected_source_sha }}
           WORKFLOW_SHA: ${{ github.workflow_sha }}
@@ -407,37 +419,7 @@ jobs:
               = "$predicate_type"
           done < "publication-evidence/$SERVICE-attestation-layers.tsv"
           unset registry_token
-          node_repository="$(jq -er '.images[] | select(.id == "node-runtime-build-base") | .repository' deploy/timeweb/base-images.lock.json)"
-          node_tag="$(jq -er '.images[] | select(.id == "node-runtime-build-base") | .tag' deploy/timeweb/base-images.lock.json)"
-          nginx_repository="$(jq -er '.images[] | select(.id == "nginx-web-runtime") | .repository' deploy/timeweb/base-images.lock.json)"
-          nginx_tag="$(jq -er '.images[] | select(.id == "nginx-web-runtime") | .tag' deploy/timeweb/base-images.lock.json)"
-          scanner_repository="$(jq -er '.images[] | select(.id == "buildkit-syft-scanner") | .repository' deploy/timeweb/base-images.lock.json)"
-          scanner_tag="$(jq -er '.images[] | select(.id == "buildkit-syft-scanner") | .tag' deploy/timeweb/base-images.lock.json)"
-          jq -s -e --arg runtimeSha "${runtime_digest#sha256:}" --arg sourceSha "$SOURCE_SHA" \
-            --arg service "$SERVICE" \
-            --arg nodeRepository "$node_repository" --arg nodeTag "$node_tag" \
-            --arg nginxRepository "$nginx_repository" --arg nginxTag "$nginx_tag" \
-            --arg scannerRepository "$scanner_repository" --arg scannerTag "$scanner_tag" \
-            --arg nodeIndexSha "${EXPECTED_NODE_INDEX_DIGEST#sha256:}" \
-            --arg nginxIndexSha "${EXPECTED_NGINX_INDEX_DIGEST#sha256:}" \
-            --arg scannerIndexSha "${EXPECTED_SBOM_INDEX_DIGEST#sha256:}" \
-            --arg builder "https://github.com/Z6v6e6r/lk2/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT" '
-            def reviewed_base($repository; $tag; $sha):
-              ($repository | split("/") | last) as $name |
-              (.digest |
-                type == "object" and
-                keys == ["sha256"] and
-                .sha256 == $sha
-              ) and
-              (.uri == "pkg:docker/\($name)@\($tag)?platform=linux%2Famd64" or
-               .uri == "pkg:docker/docker.io/\($repository)@\($tag)?platform=linux%2Famd64" or
-               .uri == "pkg:docker/\($repository)?digest=sha256:\($sha)&platform=linux%2Famd64" or
-               .uri == "pkg:docker/docker.io/\($repository)?digest=sha256:\($sha)&platform=linux%2Famd64");
-            def reviewed_source:
-              .uri == "https://github.com/Z6v6e6r/lk2.git#\($sourceSha)" and
-              (.digest | type == "object" and keys == ["sha1"] and .sha1 == $sourceSha);
-            (map(select(.predicateType == "https://slsa.dev/provenance/v1"))[0].predicate) as $provenance |
-            ($provenance.buildDefinition.resolvedDependencies // []) as $materials |
+          jq -s -e --arg runtimeSha "${runtime_digest#sha256:}" '
             length == 2 and
             ([.[].predicateType] | sort | unique) == [
               "https://slsa.dev/provenance/v1",
@@ -449,32 +431,28 @@ jobs:
               (.subject[0].digest | keys) == ["sha256"] and
               .subject[0].digest.sha256 == $runtimeSha
             ) and
-            $provenance.buildDefinition.buildType ==
-              "https://github.com/moby/buildkit/blob/master/docs/attestations/slsa-definitions.md" and
-            $provenance.runDetails.builder.id == $builder and
-            $provenance.runDetails.metadata.buildkit_completeness.resolvedDependencies == true and
-            $provenance.buildDefinition.externalParameters.configSource.uri ==
-              "https://github.com/Z6v6e6r/lk2.git#\($sourceSha)" and
-            $provenance.buildDefinition.externalParameters.configSource.digest == {"sha1": $sourceSha} and
-            $provenance.buildDefinition.externalParameters.configSource.path ==
-              "apps/\($service)/Dockerfile" and
-            ($materials | type) == "array" and
-            ([$materials[] | select(reviewed_source)] | length) == 1 and
-            ([$materials[] | select(reviewed_base($nodeRepository; $nodeTag; $nodeIndexSha))] |
-              length) == 1 and
-            ([$materials[] | select(reviewed_base($scannerRepository; $scannerTag; $scannerIndexSha))] |
-              length) == 1 and
-            (if $service == "web" then
-              ($materials | length) == 4 and
-              ([$materials[] | select(reviewed_base($nginxRepository; $nginxTag; $nginxIndexSha))] |
-                length) == 1
-            else
-              ($materials | length) == 3
-            end) and
             (map(select(.predicateType == "https://spdx.dev/Document"))[0].predicate) as $sbom |
             $sbom.SPDXID == "SPDXRef-DOCUMENT" and
             ($sbom.packages | type == "array" and length > 0)
           ' publication-evidence/"$SERVICE"-attestation-statements/*.json >/dev/null
+          mapfile -t provenance_statements < <(
+            for statement in publication-evidence/"$SERVICE"-attestation-statements/*.json; do
+              if jq -e '.predicateType == "https://slsa.dev/provenance/v1"' "$statement" >/dev/null; then
+                printf '%s\n' "$statement"
+              fi
+            done
+          )
+          test "${#provenance_statements[@]}" -eq 1
+          node scripts/verify-timeweb-provenance-materials.js verify \
+            --statement "${provenance_statements[0]}" \
+            --service "$SERVICE" \
+            --source-sha "$SOURCE_SHA" \
+            --builder-id "https://github.com/Z6v6e6r/lk2/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT" \
+            --runtime-digest "$runtime_digest" \
+            --dockerfile-path "apps/$SERVICE/Dockerfile" \
+            --repository "$GITHUB_REPOSITORY" \
+            --base-lock deploy/timeweb/base-images.lock.json \
+            --diagnostic "publication-evidence/$SERVICE-provenance-material-diagnostic.json"
           read_buildx_presentation() {
             template=$1
             destination=$2

@@ -1,0 +1,185 @@
+{
+  "schemaVersion": 1,
+  "kind": "phub-timeweb-provenance-incident-fixture",
+  "incident": {
+    "runId": 33011023879,
+    "runAttempt": 1,
+    "event": "workflow_dispatch",
+    "sourceSha": "5a7d3c14c8c413f7243da9772b00b5ded6cdf81b",
+    "workflowSha": "5a7d3c14c8c413f7243da9772b00b5ded6cdf81b",
+    "conclusion": "failure",
+    "publicationArtifactPresent": false,
+    "canonicalArtifactPresent": false,
+    "authorizesPublication": false,
+    "authorizesDeploy": false
+  },
+  "partialRegistryIdentities": [
+    {
+      "service": "web",
+      "tag": "amd64-sha-5a7d3c14c8c413f7243da9772b00b5ded6cdf81b-33011023879-1",
+      "indexDigest": "sha256:df72cf2b983a0fff437a579af5d2de11b4ef7bdfe3bd6572c8500f066c911863"
+    },
+    {
+      "service": "api",
+      "tag": "amd64-sha-5a7d3c14c8c413f7243da9772b00b5ded6cdf81b-33011023879-1",
+      "indexDigest": "sha256:7bedf0bf5ab46ab268d74ec05bcd15d01324bd9d81419059663684c26ab2c8c1"
+    },
+    {
+      "service": "worker",
+      "tag": "amd64-sha-5a7d3c14c8c413f7243da9772b00b5ded6cdf81b-33011023879-1",
+      "indexDigest": "sha256:359f21e80ede16d9349fc33ac02acecd5ad4df50657b883f53bd5b131ca9d236"
+    },
+    {
+      "service": "realtime",
+      "tag": "amd64-sha-5a7d3c14c8c413f7243da9772b00b5ded6cdf81b-33011023879-1",
+      "indexDigest": "sha256:784c4b90009ac91934dc1b67c02e98e59b8e83965099a3201f13b67d347a093b"
+    },
+    {
+      "service": "migrator",
+      "tag": "amd64-sha-5a7d3c14c8c413f7243da9772b00b5ded6cdf81b-33011023879-1",
+      "indexDigest": "sha256:dd784b0ff72c23c17f11316faac71d5d48660346a3f4694717f0595ae3fa8f86"
+    }
+  ],
+  "serviceEvidence": {
+    "web": {
+      "runtimeDigest": "sha256:f217381229a5a1969e59cb72eb7ced479fdec62437c5d8f8ad0520b97cca657a",
+      "subjectName": "pkg:docker/ghcr.io/z6v6e6r/phub-web@amd64-sha-5a7d3c14c8c413f7243da9772b00b5ded6cdf81b-33011023879-1?platform=linux%2Famd64",
+      "dockerfilePath": "apps/web/Dockerfile",
+      "materialCount": 4
+    },
+    "api": {
+      "runtimeDigest": "sha256:1b890b510466631179355ccbd517bc1882c8355c0fd61270752c7af28fe017a9",
+      "subjectName": "pkg:docker/ghcr.io/z6v6e6r/phub-api@amd64-sha-5a7d3c14c8c413f7243da9772b00b5ded6cdf81b-33011023879-1?platform=linux%2Famd64",
+      "dockerfilePath": "apps/api/Dockerfile",
+      "materialCount": 3
+    },
+    "worker": {
+      "runtimeDigest": "sha256:98d7b7b4d9e09335bc624f1a4fb721ca3157224694662cdd7768a0200a18e0d7",
+      "subjectName": "pkg:docker/ghcr.io/z6v6e6r/phub-worker@amd64-sha-5a7d3c14c8c413f7243da9772b00b5ded6cdf81b-33011023879-1?platform=linux%2Famd64",
+      "dockerfilePath": "apps/worker/Dockerfile",
+      "materialCount": 3
+    },
+    "realtime": {
+      "runtimeDigest": "sha256:3f72759f29efcc99d9c2038fc09b7b03a9a3b76cf7cfae9055ee929dadecabfe",
+      "subjectName": "pkg:docker/ghcr.io/z6v6e6r/phub-realtime@amd64-sha-5a7d3c14c8c413f7243da9772b00b5ded6cdf81b-33011023879-1?platform=linux%2Famd64",
+      "dockerfilePath": "apps/realtime/Dockerfile",
+      "materialCount": 3
+    },
+    "migrator": {
+      "runtimeDigest": "sha256:7f82a90219925f51d3893819957a90b06e3e0c1b38bec440cb501eb6b44ac540",
+      "subjectName": "pkg:docker/ghcr.io/z6v6e6r/phub-migrator@amd64-sha-5a7d3c14c8c413f7243da9772b00b5ded6cdf81b-33011023879-1?platform=linux%2Famd64",
+      "dockerfilePath": "apps/migrator/Dockerfile",
+      "materialCount": 3
+    }
+  },
+  "cases": {
+    "web": {
+      "runtimeDigest": "sha256:f217381229a5a1969e59cb72eb7ced479fdec62437c5d8f8ad0520b97cca657a",
+      "statement": {
+        "_type": "https://in-toto.io/Statement/v1",
+        "predicateType": "https://slsa.dev/provenance/v1",
+        "subject": [
+          {
+            "name": "pkg:docker/ghcr.io/z6v6e6r/phub-web@amd64-sha-5a7d3c14c8c413f7243da9772b00b5ded6cdf81b-33011023879-1?platform=linux%2Famd64",
+            "digest": {
+              "sha256": "f217381229a5a1969e59cb72eb7ced479fdec62437c5d8f8ad0520b97cca657a"
+            }
+          }
+        ],
+        "predicate": {
+          "buildDefinition": {
+            "buildType": "https://github.com/moby/buildkit/blob/master/docs/attestations/slsa-definitions.md",
+            "resolvedDependencies": [
+              {
+                "uri": "pkg:docker/docker/buildkit-syft-scanner@stable-1?digest=sha256:ae4f3b554449e7e25548e7d8ccc029d17357348e30c6e3df01b92bc93654d6a9&platform=linux%2Famd64",
+                "digest": {
+                  "sha256": "ae4f3b554449e7e25548e7d8ccc029d17357348e30c6e3df01b92bc93654d6a9"
+                }
+              },
+              {
+                "uri": "pkg:docker/nginx@1.27-alpine?digest=sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10&platform=linux%2Famd64",
+                "digest": {
+                  "sha256": "65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10"
+                }
+              },
+              {
+                "uri": "pkg:docker/node@22-bookworm-slim?digest=sha256:d649c27dae7ba0137b3cef5dd75baa422c08dc3d9e3fc0c23dfb172dc3cc6436&platform=linux%2Famd64",
+                "digest": {
+                  "sha256": "d649c27dae7ba0137b3cef5dd75baa422c08dc3d9e3fc0c23dfb172dc3cc6436"
+                }
+              },
+              {
+                "uri": "https://github.com/Z6v6e6r/lk2.git#5a7d3c14c8c413f7243da9772b00b5ded6cdf81b",
+                "digest": { "sha1": "5a7d3c14c8c413f7243da9772b00b5ded6cdf81b" }
+              }
+            ],
+            "externalParameters": {
+              "configSource": {
+                "uri": "https://github.com/Z6v6e6r/lk2.git#5a7d3c14c8c413f7243da9772b00b5ded6cdf81b",
+                "digest": { "sha1": "5a7d3c14c8c413f7243da9772b00b5ded6cdf81b" },
+                "path": "apps/web/Dockerfile"
+              }
+            }
+          },
+          "runDetails": {
+            "builder": {
+              "id": "https://github.com/Z6v6e6r/lk2/actions/runs/33011023879/attempts/1"
+            },
+            "metadata": { "buildkit_completeness": { "resolvedDependencies": true } }
+          }
+        }
+      }
+    },
+    "api": {
+      "runtimeDigest": "sha256:1b890b510466631179355ccbd517bc1882c8355c0fd61270752c7af28fe017a9",
+      "statement": {
+        "_type": "https://in-toto.io/Statement/v1",
+        "predicateType": "https://slsa.dev/provenance/v1",
+        "subject": [
+          {
+            "name": "pkg:docker/ghcr.io/z6v6e6r/phub-api@amd64-sha-5a7d3c14c8c413f7243da9772b00b5ded6cdf81b-33011023879-1?platform=linux%2Famd64",
+            "digest": {
+              "sha256": "1b890b510466631179355ccbd517bc1882c8355c0fd61270752c7af28fe017a9"
+            }
+          }
+        ],
+        "predicate": {
+          "buildDefinition": {
+            "buildType": "https://github.com/moby/buildkit/blob/master/docs/attestations/slsa-definitions.md",
+            "resolvedDependencies": [
+              {
+                "uri": "pkg:docker/docker/buildkit-syft-scanner@stable-1?digest=sha256:ae4f3b554449e7e25548e7d8ccc029d17357348e30c6e3df01b92bc93654d6a9&platform=linux%2Famd64",
+                "digest": {
+                  "sha256": "ae4f3b554449e7e25548e7d8ccc029d17357348e30c6e3df01b92bc93654d6a9"
+                }
+              },
+              {
+                "uri": "pkg:docker/node@22-bookworm-slim?digest=sha256:d649c27dae7ba0137b3cef5dd75baa422c08dc3d9e3fc0c23dfb172dc3cc6436&platform=linux%2Famd64",
+                "digest": {
+                  "sha256": "d649c27dae7ba0137b3cef5dd75baa422c08dc3d9e3fc0c23dfb172dc3cc6436"
+                }
+              },
+              {
+                "uri": "https://github.com/Z6v6e6r/lk2.git#5a7d3c14c8c413f7243da9772b00b5ded6cdf81b",
+                "digest": { "sha1": "5a7d3c14c8c413f7243da9772b00b5ded6cdf81b" }
+              }
+            ],
+            "externalParameters": {
+              "configSource": {
+                "uri": "https://github.com/Z6v6e6r/lk2.git#5a7d3c14c8c413f7243da9772b00b5ded6cdf81b",
+                "digest": { "sha1": "5a7d3c14c8c413f7243da9772b00b5ded6cdf81b" },
+                "path": "apps/api/Dockerfile"
+              }
+            }
+          },
+          "runDetails": {
+            "builder": {
+              "id": "https://github.com/Z6v6e6r/lk2/actions/runs/33011023879/attempts/1"
+            },
+            "metadata": { "buildkit_completeness": { "resolvedDependencies": true } }
+          }
+        }
+      }
+    }
+  }
+}

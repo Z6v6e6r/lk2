@@ -18,6 +18,14 @@ immutable tag or final
 `release-manifest.gitCommit`/`gitTree` pair that does not resolve to the approved source. Historical
 run `32625879321` and its digests are not fresh evidence for this contract.
 
+Run `33011023879` attempt 1 is a failed partial publication for exact source/workflow
+`5a7d3c14c8c413f7243da9772b00b5ded6cdf81b`. All five unique tags reached GHCR, but the former
+inline provenance matcher rejected BuildKit v0.32.2's canonical combined material PURL
+`pkg:docker/<normalized-package>@<locked-tag>?digest=sha256:<locked-index>&platform=linux%2Famd64`.
+The run has no complete publication artifact and no same-run canonical V2 artifact. It must never be
+rerun, reconciled, retagged, deleted, copied into another release identity or used by deployment.
+Its partial tags and digests remain immutable non-authorizing incident evidence.
+
 The normal release-evidence sequence is:
 
 1. Dispatch `publish-timeweb-amd64-images.yaml` with the exact inputs above and retain its complete
@@ -57,6 +65,22 @@ sidecar that will be uploaded. Same-run validation also supplies the expected wo
 and run attempt. Missing or duplicate components, mutable-only references, missing digests,
 incorrect platform or source identity, missing provenance/SBOM subjects, base-lock or base-identity
 drift, altered bytes or sidecar filename all fail closed.
+
+Publication and optional reconciliation use the same semantic provenance-material verifier. It
+normalizes only the explicitly reviewed Docker package aliases (`node`/`docker.io/library/node`,
+`nginx`/`docker.io/library/nginx`, and `docker/buildkit-syft-scanner` with or without the
+`docker.io/` prefix), then requires the locked version, digest qualifier, `linux/amd64` platform,
+matching statement digest object, exact source material, exact Dockerfile, exact builder attempt and
+the complete service closure. Tag-only, digest-only, malformed, double-encoded, duplicate, unknown,
+substituted or extra material forms fail closed. Diagnostic records always keep
+`authorizesPublication=false` and `authorizesDeploy=false`.
+
+Pull-request CI also builds no-push OCI outputs for `web` and `api` with Buildx v0.36.1, BuildKit
+v0.32.2 and the locked scanner. It extracts the actual max-mode provenance and runs that same
+verifier at the exact PR head. The probe has `contents: read`, no GHCR login, no package write,
+publication tag, environment approval, host port or long-lived builder, and uploads only sanitized
+non-authorizing material diagnostics. It supplements rather than replaces the existing five
+exact-head no-push AMD64 image builds.
 
 Historical `PHUB_TIMEWEB_RELEASE_MANIFEST_V1` artifacts remain readable through the legacy schema
 for audit compatibility. They keep their two reconciliation run IDs and do not acquire a fabricated
@@ -106,8 +130,9 @@ The annotation tags are human context only: tag movement neither fails immutable
 authorizes a replacement digest.
 
 A partial registry inventory or missing final manifest is `NO-GO` for deployment. Do not retry the
-same publication request blindly: inventory the unique run tags first and prepare a new reviewed
-attempt if required.
+same publication request blindly. Run `33011023879` is permanently non-repeatable and
+non-reconcilable; any future publication requires a different exact-current-main identity and a
+separate explicit authorization after the source fix is merged and its exact-head CI is green.
 
 ## Current Gate 2: optional read-only reconciliation
 
