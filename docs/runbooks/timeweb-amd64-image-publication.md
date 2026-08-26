@@ -6,25 +6,24 @@ not authorize a new release, deployment, VPS provisioning, database access or da
 
 ## Current exact-source publication contract
 
-The publication target is always the exact fetched `origin/main` commit that contains the reviewed
-workflow. Freeze that commit as `SOURCE_SHA`, resolve its immutable tree as `SOURCE_TREE`, and
-dispatch the workflow only from that same commit, with:
+The current publication target is source
+`595e954bb8f53367baf034d7f39b255af0fda5fd`, with immutable Git tree
+`3f4c1e63dd30eb60251533b95f1970fd96754a08`. Dispatch the publication workflow only from its
+separately reviewed exact `main` workflow SHA, with:
 
-- `expected_source_sha`: `SOURCE_SHA`;
-- `expected_workflow_sha`: the same `SOURCE_SHA`;
-- `confirmation`: `PUBLISH_TIMEWEB_AMD64_<FIRST_12_SOURCE_SHA_CHARACTERS_IN_UPPERCASE>`.
+- `expected_source_sha`: `595e954bb8f53367baf034d7f39b255af0fda5fd`;
+- `expected_workflow_sha`: the exact reviewed `main` commit containing the workflow;
+- `confirmation`: `PUBLISH_TIMEWEB_AMD64_595E954` for the publishing operation.
 
-The publication workflow rejects a dispatch when its workflow SHA, the freshly fetched
-`origin/main`, and `expected_source_sha` are not identical. It resolves the application tree with
-Git and rejects an artifact, image record, source tree, immutable tag or final
-`release-manifest.gitCommit`/`gitTree` pair that does not resolve to that commit. Historical run
-`32625879321` and its digests are not fresh evidence for a later commit.
+The publication workflow resolves the application tree from `expected_source_sha` with Git. It
+rejects a publication artifact, image record, source tree, immutable tag or final
+`release-manifest.gitCommit`/`gitTree` pair that does not resolve to the approved source. Historical
+run `32625879321` and its digests are not fresh evidence for this contract.
 
 The normal release-evidence sequence is:
 
 1. Dispatch `publish-timeweb-amd64-images.yaml` with the exact inputs above and retain its complete
-   five-image publication artifact and same-run canonical artifact. A rerun attempt is invalid;
-   prepare a fresh reviewed first attempt instead.
+   five-image publication artifact and same-run canonical artifact.
 2. Verify that the one publication run succeeded only after all five publish, digest, platform,
    provenance, SBOM, internal manifest, canonical manifest, checksum and artifact-upload gates.
 
@@ -75,8 +74,8 @@ The earlier probe for application source
 `35c8312b79cccdd136f2bfd892efbea629b8b919` produced non-authorizing local OCI evidence only. Its
 workflow has been removed from the active GitHub Actions set, so it cannot be dispatched to mint new
 evidence for the superseded source. The original implementation and retained artifacts remain in Git
-and Actions history for audit purposes; neither can satisfy a current exact-main publication or
-deployment gate.
+and Actions history for audit purposes; neither can satisfy the current `595e954...` publication or
+deployment gates.
 
 ## Current Gate 1: immutable image publication
 
@@ -107,7 +106,7 @@ publication workflow again. After a separate reconciliation approval, run
 `.github/workflows/reconcile-timeweb-amd64-publication.yaml` from exact reviewed `main` with:
 
 - `expected_workflow_sha`: the exact reviewed `main` SHA containing the reconciliation workflow;
-- `expected_source_sha`: the source SHA recorded by the original publication artifact;
+- `expected_source_sha`: the approved source SHA `595e954bb8f53367baf034d7f39b255af0fda5fd`;
 - `publication_run_id`: the exact successful first-attempt publication run to read back;
 - `publication_workflow_sha`: the exact `main` SHA that executed that publication run;
 - `confirmation`: `RECONCILE_TIMEWEB_AMD64_PUBLICATION`.
@@ -125,9 +124,10 @@ deploy, access VPS hosts, or connect to PostgreSQL.
 
 Historical run `32625879321`, its fixed digests and confirmation
 `RECONCILE_TIMEWEB_AMD64_32625879321` are retained only in Git and Actions history. They are not
-accepted by the current workflow and are not evidence for a current exact-main release.
+accepted by the current workflow and are not evidence for source `595e954...`.
 
 ## Current Gate 3: staging deployment
 
-Publication evidence never authorizes deployment. Use `timeweb-lk2-beta.md` for the independent
-host, database, secrets, TLS, activation, rollback and post-deploy gates.
+Publication evidence never authorizes deployment. Transfer of runtime secrets, database bootstrap,
+migration, routing changes, application activation and Jetson retirement remain separate approvals
+with their own backup, rollback and post-deploy checks.

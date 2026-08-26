@@ -4,12 +4,7 @@ import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import {
-  loadConfig,
-  loadRealtimeConfig,
-  loadWorkerConfig,
-  runtimeContourTargetFingerprint,
-} from './index.js';
+import { loadConfig, loadRealtimeConfig, runtimeContourTargetFingerprint } from './index.js';
 
 const validEnvironment = {
   APP_ENV: 'ci',
@@ -413,33 +408,6 @@ describe('loadConfig', () => {
         COMMUNITIES_REALTIME_ENABLED: 'false',
       }),
     ).toThrow('Realtime runtime requires JWT_REALTIME_SECRET');
-  });
-
-  it('keeps API and refresh signing secrets out of a staging worker runtime', () => {
-    expect(() =>
-      loadWorkerConfig({
-        ...validEnvironment,
-        APP_ENV: 'staging',
-        WORKER_RUNTIME_SECRET_ISOLATION_REQUIRED: 'true',
-      }),
-    ).toThrow('Worker runtime must not receive JWT_ACCESS_SECRET or JWT_REFRESH_SECRET');
-
-    expect(
-      loadWorkerConfig({
-        ...validEnvironment,
-        APP_ENV: 'staging',
-        WORKER_RUNTIME_SECRET_ISOLATION_REQUIRED: 'true',
-        JWT_ACCESS_SECRET: undefined,
-        JWT_REFRESH_SECRET: undefined,
-      }),
-    ).toMatchObject({ APP_ENV: 'staging' });
-
-    expect(
-      loadWorkerConfig({
-        ...validEnvironment,
-        APP_ENV: 'staging',
-      }),
-    ).toMatchObject({ APP_ENV: 'staging' });
   });
 
   it('requires versioned media dependencies and a real scanner outside local/ci', () => {

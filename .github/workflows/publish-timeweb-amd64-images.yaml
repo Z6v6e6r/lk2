@@ -20,7 +20,7 @@ on:
         required: true
         type: string
       confirmation:
-        description: Leave empty for validation or type PUBLISH_TIMEWEB_AMD64_<FIRST_12_SHA_UPPERCASE>
+        description: Leave empty for validation or type PUBLISH_TIMEWEB_AMD64_595E954
         required: false
         type: string
 
@@ -39,6 +39,7 @@ jobs:
       - name: Validate exact first-attempt main request
         env:
           ACTOR: ${{ github.actor }}
+          APPROVED_SOURCE_SHA: 595e954bb8f53367baf034d7f39b255af0fda5fd
           CONFIRMATION: ${{ inputs.confirmation }}
           EXPECTED_SOURCE_SHA: ${{ inputs.expected_source_sha }}
           EXPECTED_WORKFLOW_SHA: ${{ inputs.expected_workflow_sha }}
@@ -68,12 +69,10 @@ jobs:
             echo '::error::The separately reviewed workflow SHA is required.'
             exit 1
           }
-          test "$EXPECTED_SOURCE_SHA" = "$WORKFLOW_SHA" || {
-            echo '::error::Publication source must be the exact current main workflow commit.'
+          test "$EXPECTED_SOURCE_SHA" = "$APPROVED_SOURCE_SHA" || {
+            echo '::error::This single-purpose workflow may publish only source@595e954.'
             exit 1
           }
-          confirmation_suffix="$(printf '%.12s' "$EXPECTED_SOURCE_SHA" | tr '[:lower:]' '[:upper:]')"
-          expected_confirmation="PUBLISH_TIMEWEB_AMD64_$confirmation_suffix"
           case "$OPERATION" in
             source_check_only)
               test -z "$CONFIRMATION" || {
@@ -82,7 +81,7 @@ jobs:
               }
               ;;
             publish)
-              test "$CONFIRMATION" = "$expected_confirmation" || {
+              test "$CONFIRMATION" = PUBLISH_TIMEWEB_AMD64_595E954 || {
                 echo '::error::The exact publication confirmation is required.'
                 exit 1
               }
@@ -93,15 +92,15 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Verify source identity from the reviewed main workflow
+      - name: Verify source ancestry from the reviewed main workflow
         env:
           EXPECTED_SOURCE_SHA: ${{ inputs.expected_source_sha }}
           REQUEST_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$REQUEST_SHA"
-          test "$EXPECTED_SOURCE_SHA" = "$REQUEST_SHA"
-          git rev-parse "$EXPECTED_SOURCE_SHA^{tree}" | grep -Eq '^[0-9a-f]{40}$'
+          test "$(git rev-parse "$EXPECTED_SOURCE_SHA^{tree}")" = 3f4c1e63dd30eb60251533b95f1970fd96754a08
+          git merge-base --is-ancestor "$EXPECTED_SOURCE_SHA" HEAD
 
   verify-source:
     needs: validate-request
@@ -120,7 +119,7 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE_SHA"
           test -z "$(git status --porcelain)"
-          git rev-parse 'HEAD^{tree}' | grep -Eq '^[0-9a-f]{40}$'
+          test "$(git rev-parse 'HEAD^{tree}')" = 3f4c1e63dd30eb60251533b95f1970fd96754a08
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
@@ -157,7 +156,7 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE_SHA"
           test -z "$(git status --porcelain)"
-          git rev-parse 'HEAD^{tree}' | grep -Eq '^[0-9a-f]{40}$'
+          test "$(git rev-parse 'HEAD^{tree}')" = 3f4c1e63dd30eb60251533b95f1970fd96754a08
       - id: buildx
         name: Install the checksum-verified Buildx binary and create the pinned builder
         env:
@@ -773,8 +772,7 @@ jobs:
           node scripts/verify-timeweb-publication-evidence-checksums.js publication-evidence/images
           test "$(find publication-evidence/images -maxdepth 1 -type f -name '*-image.json' | wc -l | tr -d ' ')" -eq 5
           source_tree="$(git rev-parse --verify "$SOURCE_SHA^{tree}")"
-          printf '%s' "$source_tree" | grep -Eq '^[0-9a-f]{40}$'
-          test "$SOURCE_SHA" = "$WORKFLOW_SHA"
+          test "$source_tree" = 3f4c1e63dd30eb60251533b95f1970fd96754a08
           jq -s \
             --arg sourceSha "$SOURCE_SHA" \
             --arg sourceTree "$source_tree" \
