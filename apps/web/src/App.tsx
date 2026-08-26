@@ -1978,7 +1978,7 @@ export function App({
         layoutVariant={
           protectedRoute.kind === 'home-v2'
             ? 'v2'
-            : protectedRoute.kind === 'home'
+            : protectedRoute.kind === 'home-v3'
               ? 'v3'
               : 'default'
         }

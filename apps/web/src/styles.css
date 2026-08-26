@@ -13580,7 +13580,7 @@ button.participant-avatar-stack__open-slot:focus-visible {
 }
 
 .figma-home-shell.is-home-v3 .fh-for-me .booking-recommendations.is-photo-grid {
-  grid-auto-rows: 248px;
+  grid-auto-rows: minmax(264px, auto);
   padding-right: 0;
   margin-right: 0;
   gap: 8px;
@@ -13649,7 +13649,8 @@ button.participant-avatar-stack__open-slot:focus-visible {
 .recommendation-grid-card__body {
   display: flex;
   min-width: 0;
-  min-height: 174px;
+  min-height: 190px;
+  box-sizing: border-box;
   padding: 9px 9px 8px;
   flex: 1;
   flex-direction: column;
@@ -13685,13 +13686,15 @@ button.participant-avatar-stack__open-slot:focus-visible {
 .recommendation-grid-card__title {
   display: -webkit-box;
   min-width: 0;
+  min-height: 2.56em;
   margin-top: 5px;
   overflow: hidden;
+  flex-shrink: 0;
   color: #1f1e20;
   font-family: 'RF Dewi', 'Inter Display', sans-serif;
   font-size: 13px;
   font-weight: 600;
-  line-height: 1.16;
+  line-height: 1.28;
   text-decoration: none;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
@@ -13701,6 +13704,7 @@ button.participant-avatar-stack__open-slot:focus-visible {
   display: grid;
   min-width: 0;
   margin-top: 7px;
+  flex-shrink: 0;
   color: #747276;
   font-size: 10px;
   line-height: 1.25;
@@ -13720,6 +13724,7 @@ button.participant-avatar-stack__open-slot:focus-visible {
   align-items: center;
   justify-content: space-between;
   margin-top: auto;
+  flex-shrink: 0;
   padding-top: 9px;
   color: #68666b;
   font-size: 9px;
@@ -13767,6 +13772,7 @@ button.participant-avatar-stack__open-slot:focus-visible {
   justify-content: center;
   padding: 7px 6px;
   margin-top: 8px;
+  flex-shrink: 0;
   border-radius: 8px;
   background: #6c49dd;
   color: #fff;
@@ -13795,7 +13801,7 @@ button.participant-avatar-stack__open-slot:focus-visible {
   }
 
   .figma-home-shell.is-home-v3 .fh-for-me .booking-recommendations.is-photo-grid {
-    grid-auto-rows: 256px;
+    grid-auto-rows: minmax(280px, auto);
     gap: 12px;
   }
 
@@ -13805,7 +13811,7 @@ button.participant-avatar-stack__open-slot:focus-visible {
   }
 
   .recommendation-grid-card__body {
-    min-height: 178px;
+    min-height: 202px;
     padding: 10px 10px 9px;
   }
 
@@ -13833,13 +13839,13 @@ button.participant-avatar-stack__open-slot:focus-visible {
   }
 
   .recommendation-grid-card__body {
-    min-height: 170px;
+    min-height: 186px;
     padding-right: 8px;
     padding-left: 8px;
   }
 
   .figma-home-shell.is-home-v3 .fh-for-me .booking-recommendations.is-photo-grid {
-    grid-auto-rows: 244px;
+    grid-auto-rows: minmax(260px, auto);
   }
 
   .recommendation-grid-card__title {

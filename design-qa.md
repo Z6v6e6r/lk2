@@ -130,3 +130,53 @@ final result: passed
 - Replace category fallback media with event-specific photos if and when the existing recommendation contract adds them.
 
 final result: passed
+
+---
+
+# Follow-up QA — separate Home V3 route and title spacing (2026-08-26)
+
+**Comparison target**
+
+- Source visual truth: `/Users/zver/.codex/generated_images/01a03d3f-0665-7a40-8864-dbdc2a1b6d9d/exec-7cf9ce4d-a124-4971-937c-831afd6bb2f6.png` (853 × 1844 px).
+- Browser-rendered implementation: `http://127.0.0.1:5175/frame.html?width=375` and `?width=430`.
+- Implementation screenshots: `/private/tmp/recommendation-card-qa/v3-after-375.jpg` (375 × 940 px) and `/private/tmp/recommendation-card-qa/v3-after-430.jpg` (430 × 940 px).
+- Focused same-input comparison: `/private/tmp/recommendation-card-qa/v3-focused-comparison-430.png` (860 × 350 px).
+- State: synthetic recommendation page, light theme, initial card grid. Browser density is 1 CSS px per captured pixel.
+
+**Findings**
+
+- No actionable P0/P1/P2 mismatch remains.
+- The reported title collision is resolved: every title reserves two 1.28-line-height rows and cannot shrink under the metadata block. Browser geometry reports a stable 7 px gap between title and metadata for every card.
+- The photo remains deliberately short: 72 px through 412 px and 76 px at 430 px.
+- The redesign is isolated to `/home-v3`. `/` retains the original Home and `/home-v2` retains Home V2.
+
+**Required fidelity surfaces**
+
+- Fonts and typography: `RF Dewi`/`Inter Display` remain unchanged. Titles clamp to two lines, use `line-height: 1.28`, and reserve `2.56em`; the following metadata never crosses the title box.
+- Spacing and layout rhythm: 360/375/390/412/430 px were measured. Inner card widths are 162/169.5/176/187/191 px, card heights are 258/262/262/262/278 px, and grid gaps are 8/8/10/10/12 px. There is no card or grid overflow.
+- Colors and visual tokens: no visual-token changes were introduced by this follow-up.
+- Image quality and asset fidelity: existing WebP category fallbacks and crops are unchanged.
+- Copy and content: the title, venue, level/trainer, availability, and CTA continue to use the existing recommendation model.
+
+**Comparison history**
+
+1. The previous fixed-height row allowed flex children to shrink, visually crowding the one-line `Открытая игра` title with the metadata below.
+2. Fixed by reserving the full two-line title block, preventing title/metadata/social/CTA shrink, and allowing responsive grid rows to grow from a minimum instead of enforcing a smaller fixed height.
+3. Post-fix evidence: `gap = 7`, `scrollHeight = clientHeight`, and no horizontal overflow at all five requested widths.
+4. The new photo cards previously replaced the primary `/` route. The route mapping now keeps versions 1 and 2 unchanged and exposes the redesign only at `/home-v3`.
+
+**Open questions**
+
+- P3 remains unchanged: repeated category fallback photos may feel templated until the existing API exposes event-specific media.
+- Full authenticated `/home-v3` data was not available in the synthetic fixture; route isolation is covered by App tests and card rendering by browser evidence.
+
+**Implementation checklist**
+
+- [x] Preserve `/` as Home V1.
+- [x] Preserve `/home-v2` as Home V2.
+- [x] Expose the photo-grid redesign at `/home-v3`.
+- [x] Prevent title/metadata overlap.
+- [x] Keep the reduced 72/76 px hero.
+- [x] Verify 360/375/390/412/430 px without overflow.
+
+final result: passed
