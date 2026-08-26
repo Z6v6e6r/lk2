@@ -219,6 +219,10 @@ function errorMessage(error: unknown): string {
         return 'Состав изменился. Проверьте актуальные места и повторите.';
       case 'GAME_NOT_FOUND':
         return 'Игра больше недоступна.';
+      case 'GAME_NOT_CANCELLABLE':
+        return 'Игру уже нельзя отменить. Обновили её состояние.';
+      case 'GAME_PAYMENT_REQUIRED':
+        return 'Для этой игры требуется отдельный платёжный сценарий.';
       case 'LEVEL_NOT_ALLOWED':
         return 'Эта игра рассчитана на другой уровень.';
       case 'PLAYER_LEVEL_UNKNOWN':
@@ -429,11 +433,31 @@ export function GamesPage({ gateway, gameId, eventId }: GamesPageProps): React.J
     let active = true;
 
     if (gameId) {
-      void gateway.getGame(gameId).then(
+      const waitForCreatedProjection =
+        typeof window !== 'undefined' &&
+        new URLSearchParams(window.location.search).get('created') === '1';
+      const loadDetail = async (): Promise<ViewerGameCard> => {
+        for (let attempt = 0; ; attempt += 1) {
+          try {
+            return await gateway.getGame(gameId);
+          } catch (cause) {
+            if (
+              !waitForCreatedProjection ||
+              errorCode(cause) !== 'GAME_NOT_FOUND' ||
+              attempt >= 11
+            ) {
+              throw cause;
+            }
+            await new Promise((resolve) => setTimeout(resolve, 250));
+          }
+        }
+      };
+      void loadDetail().then(
         (game) => {
           if (!active) return;
           setDetail(game);
           setDetailTab(initialDetailTab(game));
+          setError(null);
           setLoading(false);
         },
         (cause: unknown) => {
@@ -746,8 +770,12 @@ export function GamesPage({ gateway, gameId, eventId }: GamesPageProps): React.J
       }
       return;
     }
-    if (!['JOIN', 'JOIN_WAITLIST', 'LEAVE_WAITLIST', 'LEAVE'].includes(action) || busyGameId)
+    if (
+      !['JOIN', 'JOIN_WAITLIST', 'LEAVE_WAITLIST', 'LEAVE', 'CANCEL'].includes(action) ||
+      busyGameId
+    )
       return;
+    if (action === 'CANCEL' && !window.confirm('Отменить игру для всех участников?')) return;
     setBusyGameId(game.id);
     setError(null);
     setNotice(null);
@@ -763,7 +791,9 @@ export function GamesPage({ gateway, gameId, eventId }: GamesPageProps): React.J
             ? await gateway.joinGameWaitlist(game.id, game.id === gameId ? invitationId : undefined)
             : action === 'LEAVE_WAITLIST'
               ? await gateway.leaveGameWaitlist(game.id)
-              : await gateway.leaveGame(game.id);
+              : action === 'CANCEL'
+                ? await gateway.cancelGame(game.id, { reasonCode: 'ORGANIZER_REQUEST' })
+                : await gateway.leaveGame(game.id);
       let result = submitted;
       for (
         let attempt = 0;
@@ -807,7 +837,9 @@ export function GamesPage({ gateway, gameId, eventId }: GamesPageProps): React.J
           ? 'Вы в игре. Состав и доступные действия обновлены.'
           : action === 'JOIN_WAITLIST'
             ? 'Вы добавлены в лист ожидания.'
-            : 'Участие обновлено.',
+            : action === 'CANCEL'
+              ? 'Игра отменена. Статус и состав обновлены.'
+              : 'Участие обновлено.',
       );
       if (!gameId && (action === 'JOIN' || action === 'JOIN_WAITLIST')) {
         pendingViewerGame.current = result.game;
@@ -1133,9 +1165,21 @@ export function GamesPage({ gateway, gameId, eventId }: GamesPageProps): React.J
           </div>
         ) : null}
         {error ? (
-          <p className="games-message is-error" role="alert">
-            {error}
-          </p>
+          <div className="games-message is-error" role="alert">
+            <p>{error}</p>
+            {!detail ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setLoading(true);
+                  setError(null);
+                  setReloadToken((current) => current + 1);
+                }}
+              >
+                Повторить загрузку
+              </button>
+            ) : null}
+          </div>
         ) : null}
         {notice ? (
           <p className="games-message" role="status">

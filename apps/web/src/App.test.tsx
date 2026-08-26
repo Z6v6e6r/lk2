@@ -374,6 +374,8 @@ function createGateway(overrides: Partial<AuthGateway> = {}): AuthGateway {
       generatedAt: '2026-07-21T09:00:00.000Z',
     }),
     getGame: vi.fn().mockRejectedValue(new Error('GAME_NOT_FOUND')),
+    createGame: vi.fn().mockRejectedValue(new Error('GAME_COMMAND_NOT_CONFIGURED')),
+    cancelGame: vi.fn().mockRejectedValue(new Error('GAME_COMMAND_NOT_CONFIGURED')),
     joinGame: vi.fn().mockRejectedValue(new Error('GAME_COMMAND_NOT_CONFIGURED')),
     leaveGame: vi.fn().mockRejectedValue(new Error('GAME_COMMAND_NOT_CONFIGURED')),
     joinGameWaitlist: vi.fn().mockRejectedValue(new Error('GAME_COMMAND_NOT_CONFIGURED')),
@@ -623,6 +625,37 @@ describe('PadlHub web authentication', () => {
     await vi.waitFor(() => expect(gateway.getUpcomingBookings).toHaveBeenCalledOnce());
     expect(gateway.getHomeDashboard).not.toHaveBeenCalled();
     expect(gateway.listNotifications).toHaveBeenCalledOnce();
+  });
+
+  it('opens the real free-game form from the protected /games/new route', async () => {
+    window.history.replaceState({}, '', '/games/new');
+    const listLocations = vi.fn<AuthGateway['listLocations']>().mockResolvedValue({
+      items: [
+        {
+          id: 'a8df730b-6a67-41a5-8772-48bca84f73bc',
+          title: 'Селигерская',
+          city: 'Москва',
+          courtCount: 3,
+          coverImageUrl: null,
+          route: '/locations/a8df730b-6a67-41a5-8772-48bca84f73bc',
+        },
+      ],
+    });
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue(session),
+      listLocations,
+    });
+
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+
+    expect(await screen.findByRole('heading', { name: 'Создать игру' })).toBeVisible();
+    expect(screen.getByText('Стоимость: бесплатно')).toBeVisible();
+    await waitFor(() =>
+      expect(screen.getByRole('combobox', { name: 'Станция' })).toHaveValue(
+        'a8df730b-6a67-41a5-8772-48bca84f73bc',
+      ),
+    );
+    expect(listLocations).toHaveBeenCalledOnce();
   });
 
   it('keeps local Home Base visible when profile and upcoming reads are unavailable', async () => {

@@ -512,6 +512,85 @@ describe('PadlHubApiClient authentication boundary', () => {
     });
   });
 
+  it('reuses one idempotency key when a free create is retried after a network failure', async () => {
+    const calls: Array<{ input: Parameters<typeof fetch>[0]; init?: RequestInit }> = [];
+    const fetchImplementation: typeof fetch = (input, init) => {
+      calls.push({ input, ...(init === undefined ? {} : { init }) });
+      if (calls.length === 1) return Promise.reject(new TypeError('network disconnected'));
+      return Promise.resolve(
+        jsonResponse(
+          {
+            commandId: 'c3889c99-b0e3-4a3d-b3e8-a5c99af730ea',
+            operation: {
+              id: 'c3889c99-b0e3-4a3d-b3e8-a5c99af730ea',
+              type: 'CREATE_GAME',
+              status: 'SUCCEEDED',
+              gameId: '751fe6a8-b0b1-4b2b-873d-a2d785c4e191',
+            },
+            game: null,
+            replayed: true,
+          },
+          202,
+        ),
+      );
+    };
+    const client = createClient(fetchImplementation, {
+      initialAccessToken: authenticatedSession.accessToken,
+    });
+    const input = {
+      title: 'Открытая игра',
+      kind: 'FRIENDLY' as const,
+      visibility: 'PUBLIC' as const,
+      stationId: '11111111-1111-4111-8111-111111111111',
+      startsAt: '2027-08-15T15:00:00.000Z',
+      endsAt: '2027-08-15T16:30:00.000Z',
+      timezone: 'Europe/Moscow',
+      capacity: 4 as const,
+      levelRange: null,
+      paymentMode: 'NO_PAYMENT' as const,
+      waitlistEnabled: true,
+    };
+
+    await client.createGame(input);
+
+    expect(calls).toHaveLength(2);
+    expect(calls.map(({ input: request }) => requestUrl(request))).toEqual([
+      'https://api.padlhub.test/user/api/v1/local-padel/games',
+      'https://api.padlhub.test/user/api/v1/local-padel/games',
+    ]);
+    const keys = calls.map(({ init }) => new Headers(init?.headers).get('Idempotency-Key'));
+    expect(keys[0]).toBeTruthy();
+    expect(keys[1]).toBe(keys[0]);
+    expect(calls.map(({ init }) => JSON.parse(stringRequestBody(init?.body)) as unknown)).toEqual([
+      input,
+      input,
+    ]);
+  });
+
+  it('sends free-game cancellation through the authenticated idempotent command boundary', async () => {
+    const calls: Array<{ input: Parameters<typeof fetch>[0]; init?: RequestInit }> = [];
+    const fetchImplementation: typeof fetch = (input, init) => {
+      calls.push({ input, ...(init === undefined ? {} : { init }) });
+      return Promise.resolve(jsonResponse({ operation: { status: 'SUCCEEDED' } }));
+    };
+    const client = createClient(fetchImplementation, {
+      initialAccessToken: authenticatedSession.accessToken,
+    });
+
+    await client.cancelGame('751fe6a8-b0b1-4b2b-873d-a2d785c4e191', {
+      reasonCode: 'ORGANIZER_REQUEST',
+    });
+
+    expect(requestUrl(calls[0]?.input ?? '')).toBe(
+      'https://api.padlhub.test/user/api/v1/local-padel/games/751fe6a8-b0b1-4b2b-873d-a2d785c4e191/cancel',
+    );
+    expect(calls[0]?.init?.method).toBe('POST');
+    expect(new Headers(calls[0]?.init?.headers).get('Idempotency-Key')).toBeTruthy();
+    expect(JSON.parse(stringRequestBody(calls[0]?.init?.body))).toEqual({
+      reasonCode: 'ORGANIZER_REQUEST',
+    });
+  });
+
   it('reads a Games operation from the authenticated user boundary', async () => {
     const calls: Array<{ input: Parameters<typeof fetch>[0]; init?: RequestInit }> = [];
     const fetchImplementation: typeof fetch = (input, init) => {

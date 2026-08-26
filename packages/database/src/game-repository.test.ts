@@ -118,7 +118,7 @@ describe('game repository', () => {
 
     const gameInsert = query.mock.calls.find(([text]) => text.includes('insert into games.games'));
     expect(gameInsert?.[0]).toContain('min_level_id, max_level_id');
-    expect(gameInsert?.[1]?.slice(-4)).toEqual(['C', 'B', levelCId, levelBId]);
+    expect(gameInsert?.[1]?.slice(-5)).toEqual(['C', 'B', levelCId, levelBId, 'PROVISIONING']);
     const auditInsert = query.mock.calls.find(([text]) => text.includes('audit.audit_log'));
     expect(JSON.parse(String(auditInsert?.[1]?.[4]))).toMatchObject({
       participationEligibility: {
@@ -137,6 +137,124 @@ describe('game repository', () => {
       'game.provisioning.requested.v1',
     ]);
     expect(query).toHaveBeenCalledWith('commit');
+  });
+
+  it('schedules a no-payment game without a provider provisioning command', async () => {
+    const { pool, query } = poolWithHandler((text) => {
+      if (text.includes('from eligibility.canonical_levels')) {
+        return {
+          rows: [
+            { id: levelCId, code: 'C', rank: 3, scale_version: 1 },
+            { id: levelBId, code: 'B', rank: 5, scale_version: 1 },
+          ],
+        };
+      }
+      if (text.includes('insert into games.games')) {
+        return {
+          rows: [{ ...gameRow, lifecycle_state: 'SCHEDULED', payment_mode: 'NO_PAYMENT' }],
+        };
+      }
+      return { rows: [] };
+    });
+
+    await expect(
+      createGameRepository(pool as never).create({ ...createInput(), paymentMode: 'NO_PAYMENT' }),
+    ).resolves.toMatchObject({ outcome: 'applied', gameId, revision: 1 });
+
+    const scheduled = query.mock.calls.find(([text]) => text.includes("'game.lifecycle.start.v1'"));
+    expect(scheduled?.[0]).toContain("'game.lifecycle.finish.v1'");
+    expect(query.mock.calls.some(([text]) => text.includes("'game.provisioning.advance.v1'"))).toBe(
+      false,
+    );
+    const operation = query.mock.calls.find(([text]) =>
+      text.includes('insert into games.operations'),
+    );
+    expect(operation?.[1]).toContain('SUCCEEDED');
+    const idempotency = query.mock.calls.find(([text]) =>
+      text.includes('insert into games.command_idempotency'),
+    );
+    expect(idempotency?.[1]?.[1]).toBe(operation?.[1]?.[1]);
+    expect(
+      query.mock.calls
+        .filter(([text]) => text.includes('insert into audit.outbox_events'))
+        .map((call) => call[1]?.[2]),
+    ).toEqual(['game.created.v1', 'game.scheduled.v1', 'game.published.v1']);
+  });
+
+  it('cancels only the organizer-owned no-payment game and emits one durable event', async () => {
+    const scheduledGame = {
+      ...gameRow,
+      lifecycle_state: 'SCHEDULED',
+      payment_mode: 'NO_PAYMENT',
+    } as const;
+    const { pool, query } = poolWithHandler((text) => {
+      if (text.includes('from games.games') && text.includes('for update')) {
+        return { rows: [scheduledGame] };
+      }
+      if (text.includes('update games.games') && text.includes("lifecycle_state = 'CANCELLED'")) {
+        return { rows: [{ revision: '2' }] };
+      }
+      if (text.includes('select user_id from games.participations')) {
+        return { rows: [{ user_id: actorUserId }] };
+      }
+      return { rows: [] };
+    });
+
+    await expect(
+      createGameRepository(pool as never).cancel({
+        tenantId,
+        actorUserId,
+        gameId,
+        idempotencyKey: 'cancel-game-key-0001',
+        requestHash: 'c'.repeat(64),
+        correlationId: 'cancel-game-correlation-0001',
+        reasonCode: 'ORGANIZER_REQUEST',
+      }),
+    ).resolves.toMatchObject({ outcome: 'applied', gameId, revision: 2, replayed: false });
+
+    const outbox = query.mock.calls.find(([text]) =>
+      text.includes('insert into audit.outbox_events'),
+    );
+    expect(outbox?.[1]?.[2]).toBe('game.cancelled.v1');
+    expect(JSON.parse(String(outbox?.[1]?.[5]))).toMatchObject({
+      participantUserIds: [actorUserId],
+      reasonCode: 'ORGANIZER_REQUEST',
+    });
+  });
+
+  it('rejects cancellation by a non-organizer before changing the aggregate', async () => {
+    const { pool, query } = poolWithHandler((text) =>
+      text.includes('from games.games') && text.includes('for update')
+        ? {
+            rows: [
+              {
+                ...gameRow,
+                lifecycle_state: 'SCHEDULED',
+                payment_mode: 'NO_PAYMENT',
+                organizer_user_id: '11111111-1111-4111-8111-111111111111',
+              },
+            ],
+          }
+        : { rows: [] },
+    );
+
+    await expect(
+      createGameRepository(pool as never).cancel({
+        tenantId,
+        actorUserId,
+        gameId,
+        idempotencyKey: 'cancel-game-key-0002',
+        requestHash: 'd'.repeat(64),
+        correlationId: 'cancel-game-correlation-0002',
+        reasonCode: 'ORGANIZER_REQUEST',
+      }),
+    ).resolves.toEqual({
+      outcome: 'rejected',
+      code: 'GAME_NOT_CANCELLABLE',
+      currentRevision: 1,
+      replayed: false,
+    });
+    expect(query.mock.calls.some(([text]) => text.includes('update games.games'))).toBe(false);
   });
 
   it('rejects an unmapped or reversed canonical range before creating aggregate state', async () => {
@@ -163,7 +281,7 @@ describe('game repository', () => {
     expect(query).toHaveBeenCalledWith('rollback');
   });
 
-  it('replays the original completed result without writing aggregate state again', async () => {
+  it('replays a legacy completed result using the durable command timestamp', async () => {
     const { pool, query } = poolWithHandler((text) => {
       if (text.includes('from games.command_idempotency')) {
         return {
@@ -172,6 +290,7 @@ describe('game repository', () => {
               command_type: 'game.create.v1',
               request_hash: 'a'.repeat(64),
               state: 'COMPLETED',
+              completed_at: '2026-07-17T12:00:00.000Z',
               result_payload: {
                 outcome: 'applied',
                 gameId,
@@ -190,9 +309,53 @@ describe('game repository', () => {
       gameId,
       operationId,
       revision: 1,
+      committedAt: '2026-07-17T12:00:00.000Z',
       replayed: true,
     });
     expect(query.mock.calls.some(([text]) => text.includes('insert into games.games'))).toBe(false);
+  });
+
+  it('reads an actor-owned create operation by the returned durable operation id', async () => {
+    const { pool } = poolWithHandler((text, values) => {
+      if (text.includes("command_type in ('game.create.v1', 'game.cancel.v1')")) {
+        expect(values).toEqual([tenantId, operationId, actorUserId]);
+        return {
+          rows: [
+            {
+              command_type: 'game.create.v1',
+              request_hash: 'a'.repeat(64),
+              state: 'COMPLETED',
+              completed_at: '2026-07-17T12:00:00.000Z',
+              result_payload: {
+                outcome: 'applied',
+                gameId,
+                operationId,
+                revision: 1,
+              },
+            },
+          ],
+        };
+      }
+      return { rows: [] };
+    });
+
+    await expect(
+      createGameRepository(pool as never).getManagementOperation({
+        tenantId,
+        actorUserId,
+        operationId,
+      }),
+    ).resolves.toEqual({
+      commandType: 'game.create.v1',
+      result: {
+        outcome: 'applied',
+        gameId,
+        operationId,
+        revision: 1,
+        committedAt: '2026-07-17T12:00:00.000Z',
+        replayed: true,
+      },
+    });
   });
 
   it('rejects idempotency key reuse with another request hash', async () => {

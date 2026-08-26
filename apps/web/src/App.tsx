@@ -75,6 +75,9 @@ const CommunityInvitePage = lazy(() =>
 const GamesPage = lazy(() =>
   import('./GamesPage.js').then((module) => ({ default: module.GamesPage })),
 );
+const CreateGamePage = lazy(() =>
+  import('./CreateGamePage.js').then((module) => ({ default: module.CreateGamePage })),
+);
 const GiftCertificatesPage = lazy(() =>
   import('./GiftCertificatesPage.js').then((module) => ({ default: module.GiftCertificatesPage })),
 );
@@ -127,6 +130,7 @@ type ProtectedRoute =
   | { readonly kind: 'locations' }
   | { readonly kind: 'location'; readonly locationId: string }
   | { readonly kind: 'games' }
+  | { readonly kind: 'game-create' }
   | { readonly kind: 'game'; readonly gameId: string }
   | { readonly kind: 'trainings' }
   | { readonly kind: 'tournaments' }
@@ -174,10 +178,10 @@ function resolveProtectedRoute(pathname: string): ProtectedRoute {
   );
   if (locationMatch?.[1]) return { kind: 'location', locationId: locationMatch[1] };
   if (normalizedPath === '/games') return { kind: 'games' };
+  if (normalizedPath === '/games/new') return { kind: 'game-create' };
   if (normalizedPath === '/trainings') return { kind: 'trainings' };
   if (normalizedPath === '/tournaments') return { kind: 'tournaments' };
   if (normalizedPath === '/gift-certificates') return { kind: 'gift-certificates' };
-  if (normalizedPath === '/games/new') return { kind: 'section', title: 'Создание игры' };
   const gameMatch = normalizedPath.match(
     /^\/games\/([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i,
   );
@@ -1887,6 +1891,9 @@ export function App({
           {...(eventId ? { eventId } : {})}
         />
       );
+    }
+    if (protectedRoute.kind === 'game-create') {
+      return <CreateGamePage gateway={gateway} />;
     }
     if (protectedRoute.kind === 'trainings') {
       return <TrainingsPage gateway={gateway} />;

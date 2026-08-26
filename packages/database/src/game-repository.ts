@@ -15,6 +15,8 @@ import type { Pool, PoolClient, QueryResultRow } from 'pg';
 import { queryOne, withTenantTransaction } from './connection.js';
 
 export type GamePaymentMode = 'ORGANIZER_PAYS' | 'SPLIT' | 'SUBSCRIPTION' | 'NO_PAYMENT';
+export type GameCancellationReason =
+  'ORGANIZER_REQUEST' | 'VENUE_UNAVAILABLE' | 'WEATHER' | 'SAFETY' | 'OTHER';
 
 export interface StoredGame {
   readonly id: string;
@@ -136,9 +138,48 @@ export type CreateStoredGameResult =
       readonly gameId: string;
       readonly operationId: string;
       readonly revision: number;
+      readonly committedAt: string;
       readonly replayed: boolean;
     }
   | { readonly outcome: 'idempotency_conflict' };
+
+export interface CancelStoredGameInput {
+  readonly tenantId: string;
+  readonly actorUserId: string;
+  readonly gameId: string;
+  readonly idempotencyKey: string;
+  readonly requestHash: string;
+  readonly correlationId: string;
+  readonly reasonCode: GameCancellationReason;
+  readonly note?: string | null;
+}
+
+export type CancelStoredGameResult =
+  | {
+      readonly outcome: 'applied';
+      readonly commandId: string;
+      readonly gameId: string;
+      readonly revision: number;
+      readonly committedAt: string;
+      readonly replayed: boolean;
+    }
+  | {
+      readonly outcome: 'rejected';
+      readonly code: 'GAME_NOT_FOUND' | 'GAME_NOT_CANCELLABLE' | 'GAME_PAYMENT_REQUIRED';
+      readonly currentRevision?: number;
+      readonly replayed: boolean;
+    }
+  | { readonly outcome: 'idempotency_conflict' };
+
+export type GameManagementOperation =
+  | {
+      readonly commandType: 'game.create.v1';
+      readonly result: Extract<CreateStoredGameResult, { readonly outcome: 'applied' }>;
+    }
+  | {
+      readonly commandType: 'game.cancel.v1';
+      readonly result: Extract<CancelStoredGameResult, { readonly outcome: 'applied' }>;
+    };
 
 type StoredCreateAppliedResult = Omit<
   Extract<CreateStoredGameResult, { readonly outcome: 'applied' }>,
@@ -148,6 +189,12 @@ type StoredCreateAppliedResult = Omit<
 export interface GameRepository {
   get(tenantId: string, gameId: string): Promise<StoredGame | undefined>;
   create(input: CreateStoredGameInput): Promise<CreateStoredGameResult>;
+  cancel(input: CancelStoredGameInput): Promise<CancelStoredGameResult>;
+  getManagementOperation(input: {
+    readonly tenantId: string;
+    readonly actorUserId: string;
+    readonly operationId: string;
+  }): Promise<GameManagementOperation | undefined>;
   upsertCardProjection(input: {
     readonly tenantId: string;
     readonly projectionRevision: number;
@@ -241,6 +288,7 @@ interface IdempotencyRow extends QueryResultRow {
   readonly request_hash: string;
   readonly state: 'IN_PROGRESS' | 'COMPLETED' | 'FAILED';
   readonly result_payload: unknown;
+  readonly completed_at: Date | string | null;
 }
 
 interface CanonicalGameLevelRow extends QueryResultRow {
@@ -419,7 +467,10 @@ function resultRoster(value: unknown): readonly string[] {
     : [];
 }
 
-function storedCreateResult(value: unknown): StoredCreateAppliedResult | undefined {
+function storedCreateResult(
+  value: unknown,
+  fallbackCommittedAt?: string,
+): StoredCreateAppliedResult | undefined {
   if (typeof value !== 'object' || value === null) return undefined;
   const candidate = value as Record<string, unknown>;
   if (
@@ -432,11 +483,17 @@ function storedCreateResult(value: unknown): StoredCreateAppliedResult | undefin
   ) {
     return undefined;
   }
+  const committedAt =
+    typeof candidate.committedAt === 'string' && !Number.isNaN(Date.parse(candidate.committedAt))
+      ? candidate.committedAt
+      : fallbackCommittedAt;
+  if (!committedAt || Number.isNaN(Date.parse(committedAt))) return undefined;
   return {
     outcome: 'applied',
     gameId: candidate.gameId,
     operationId: candidate.operationId,
     revision: candidate.revision,
+    committedAt,
   };
 }
 
@@ -446,7 +503,7 @@ async function existingCommand(
 ): Promise<IdempotencyRow | undefined> {
   return queryOne<IdempotencyRow>(
     client,
-    `select command_type, request_hash, state, result_payload
+    `select command_type, request_hash, state, result_payload, completed_at
        from games.command_idempotency
       where tenant_id = $1 and principal_key = $2 and idempotency_key = $3
       for update`,
@@ -466,9 +523,73 @@ function replayCreate(
   ) {
     return { outcome: 'idempotency_conflict' };
   }
-  const stored = storedCreateResult(row.result_payload);
+  const stored = storedCreateResult(
+    row.result_payload,
+    row.completed_at == null ? undefined : timestamp(row.completed_at),
+  );
   if (!stored) throw new Error('GAME_IDEMPOTENCY_RESULT_INVALID');
   return { ...stored, replayed: true };
+}
+
+function storedCancelResult(
+  value: unknown,
+): Exclude<CancelStoredGameResult, { outcome: 'idempotency_conflict' }> | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+  const candidate = value as Record<string, unknown>;
+  if (candidate.outcome === 'rejected') {
+    if (
+      !['GAME_NOT_FOUND', 'GAME_NOT_CANCELLABLE', 'GAME_PAYMENT_REQUIRED'].includes(
+        String(candidate.code),
+      )
+    ) {
+      return undefined;
+    }
+    return {
+      outcome: 'rejected',
+      code: candidate.code as Extract<CancelStoredGameResult, { outcome: 'rejected' }>['code'],
+      ...(typeof candidate.currentRevision === 'number'
+        ? { currentRevision: candidate.currentRevision }
+        : {}),
+      replayed: true,
+    };
+  }
+  if (
+    candidate.outcome !== 'applied' ||
+    typeof candidate.commandId !== 'string' ||
+    typeof candidate.gameId !== 'string' ||
+    typeof candidate.revision !== 'number' ||
+    !Number.isSafeInteger(candidate.revision) ||
+    candidate.revision <= 0 ||
+    typeof candidate.committedAt !== 'string' ||
+    Number.isNaN(Date.parse(candidate.committedAt))
+  ) {
+    return undefined;
+  }
+  return {
+    outcome: 'applied',
+    commandId: candidate.commandId,
+    gameId: candidate.gameId,
+    revision: candidate.revision,
+    committedAt: candidate.committedAt,
+    replayed: true,
+  };
+}
+
+function replayCancel(
+  row: IdempotencyRow | undefined,
+  requestHash: string,
+): CancelStoredGameResult | undefined {
+  if (!row) return undefined;
+  if (
+    row.command_type !== 'game.cancel.v1' ||
+    row.request_hash !== requestHash ||
+    row.state !== 'COMPLETED'
+  ) {
+    return { outcome: 'idempotency_conflict' };
+  }
+  const stored = storedCancelResult(row.result_payload);
+  if (!stored) throw new Error('GAME_IDEMPOTENCY_RESULT_INVALID');
+  return stored;
 }
 
 async function insertOutboxEvent(client: PoolClient, rawEvent: unknown): Promise<void> {
@@ -532,8 +653,9 @@ export function createGameRepository(pool: Pool): GameRepository {
         const replay = replayCreate(await existingCommand(client, input), input.requestHash);
         if (replay) return replay;
 
-        const commandId = randomUUID();
         const operationId = randomUUID();
+        const commandId = operationId;
+        const immediateSchedule = input.paymentMode === 'NO_PAYMENT';
         if (Boolean(input.levelFrom) !== Boolean(input.levelTo)) {
           throw new Error('GAME_CREATE_LEVEL_RANGE_INVALID');
         }
@@ -577,7 +699,7 @@ export function createGameRepository(pool: Pool): GameRepository {
              waitlist_enabled, join_cutoff_at, payment_mode, level_from, level_to,
              sport_code, min_level_id, max_level_id
            ) values (
-             $1, $2, $3, $4, $5, 'PROVISIONING', $6, $7, $8, $9, $10, $11,
+             $1, $2, $3, $4, $5, $19, $6, $7, $8, $9, $10, $11,
              $12, $13, $14, $15, $16, 'PADEL', $17, $18
            ) returning ${GAME_COLUMNS}`,
           [
@@ -599,6 +721,7 @@ export function createGameRepository(pool: Pool): GameRepository {
             input.levelTo ?? null,
             minimumLevelId,
             maximumLevelId,
+            immediateSchedule ? 'SCHEDULED' : 'PROVISIONING',
           ],
         );
         if (!created) throw new Error('GAME_CREATE_WRITE_LOST');
@@ -612,22 +735,49 @@ export function createGameRepository(pool: Pool): GameRepository {
         );
         await client.query(
           `insert into games.operations (
-             tenant_id, id, game_id, kind, state, requested_by_user_id
-           ) values ($1, $2, $3, 'CREATE_GAME', 'PENDING', $4)`,
-          [input.tenantId, operationId, game.id, input.actorUserId],
+             tenant_id, id, game_id, kind, state, requested_by_user_id, completed_at
+           ) values ($1, $2, $3, 'CREATE_GAME', $5, $4,
+             case when $5 = 'SUCCEEDED' then now() else null end)`,
+          [
+            input.tenantId,
+            operationId,
+            game.id,
+            input.actorUserId,
+            immediateSchedule ? 'SUCCEEDED' : 'PENDING',
+          ],
         );
-        await client.query(
-          `insert into games.scheduled_commands (
-             tenant_id, game_id, command_type, due_at, expected_revision, payload
-           ) values ($1, $2, 'game.provisioning.advance.v1', now(), $3, $4::jsonb)`,
-          [input.tenantId, game.id, game.revision, JSON.stringify({ operationId })],
-        );
+        if (immediateSchedule) {
+          await client.query(
+            `insert into games.scheduled_commands (
+               tenant_id, game_id, command_type, due_at, expected_revision, payload
+             ) values
+               ($1, $2, 'game.lifecycle.start.v1', $3, $5, $6::jsonb),
+               ($1, $2, 'game.lifecycle.finish.v1', $4, $5, $6::jsonb)`,
+            [
+              input.tenantId,
+              game.id,
+              game.startsAt,
+              game.endsAt,
+              game.revision,
+              JSON.stringify({ gameId: game.id, expectedRevision: String(game.revision) }),
+            ],
+          );
+        } else {
+          await client.query(
+            `insert into games.scheduled_commands (
+               tenant_id, game_id, command_type, due_at, expected_revision, payload
+             ) values ($1, $2, 'game.provisioning.advance.v1', now(), $3, $4::jsonb)`,
+            [input.tenantId, game.id, game.revision, JSON.stringify({ operationId })],
+          );
+        }
 
+        const occurredAt = new Date().toISOString();
         const result = {
           outcome: 'applied' as const,
           gameId: game.id,
           operationId,
           revision: game.revision,
+          committedAt: occurredAt,
         };
         await client.query(
           `insert into games.command_idempotency (
@@ -670,7 +820,6 @@ export function createGameRepository(pool: Pool): GameRepository {
           ],
         );
 
-        const occurredAt = new Date().toISOString();
         const eventBase = {
           aggregateId: game.id,
           tenantId: input.tenantId,
@@ -694,13 +843,213 @@ export function createGameRepository(pool: Pool): GameRepository {
             visibility: input.visibility,
           },
         });
+        if (immediateSchedule) {
+          await insertOutboxEvent(client, {
+            ...eventBase,
+            id: randomUUID(),
+            type: 'game.scheduled.v1',
+            payload: { ...payloadBase, organizerUserId: input.actorUserId },
+          });
+          if (input.visibility === 'PUBLIC') {
+            await insertOutboxEvent(client, {
+              ...eventBase,
+              id: randomUUID(),
+              type: 'game.published.v1',
+              payload: { ...payloadBase, visibility: input.visibility },
+            });
+          }
+        } else {
+          await insertOutboxEvent(client, {
+            ...eventBase,
+            id: randomUUID(),
+            type: 'game.provisioning.requested.v1',
+            payload: { ...payloadBase, operationId },
+          });
+        }
+        return { ...result, replayed: false };
+      });
+    },
+
+    cancel(input) {
+      return withTenantTransaction(pool, input.tenantId, async (client) => {
+        const principalKey = `user:${input.actorUserId}`;
+        await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
+          `game-command:${input.tenantId}:${principalKey}:${input.idempotencyKey}`,
+        ]);
+        const replay = replayCancel(await existingCommand(client, input), input.requestHash);
+        if (replay) return replay;
+
+        const commandId = randomUUID();
+        const gameRow = await queryOne<GameRow>(
+          client,
+          `select ${GAME_COLUMNS}
+             from games.games
+            where tenant_id = $1 and id = $2
+            for update`,
+          [input.tenantId, input.gameId],
+        );
+        const game = gameRow ? mapGame(gameRow) : undefined;
+        const rejectionCode = !game
+          ? ('GAME_NOT_FOUND' as const)
+          : game.organizerUserId !== input.actorUserId ||
+              !['PROVISIONING', 'SCHEDULED'].includes(game.lifecycleState)
+            ? ('GAME_NOT_CANCELLABLE' as const)
+            : game.paymentMode !== 'NO_PAYMENT'
+              ? ('GAME_PAYMENT_REQUIRED' as const)
+              : undefined;
+        if (rejectionCode) {
+          const rejected = {
+            outcome: 'rejected' as const,
+            code: rejectionCode,
+            ...(game ? { currentRevision: game.revision } : {}),
+          };
+          await client.query(
+            `insert into games.command_idempotency (
+               tenant_id, id, actor_user_id, principal_key, idempotency_key,
+               command_type, request_hash, aggregate_id, state, result_payload, completed_at
+             ) values ($1, $2, $3, $4, $5, 'game.cancel.v1', $6, $7,
+               'COMPLETED', $8::jsonb, now())`,
+            [
+              input.tenantId,
+              commandId,
+              input.actorUserId,
+              principalKey,
+              input.idempotencyKey,
+              input.requestHash,
+              game?.id ?? null,
+              JSON.stringify(rejected),
+            ],
+          );
+          return { ...rejected, replayed: false };
+        }
+        if (!game) throw new Error('GAME_CANCEL_STATE_INVALID');
+
+        const committedAt = new Date().toISOString();
+        const updated = await queryOne<{ revision: string | number } & QueryResultRow>(
+          client,
+          `update games.games set
+             revision = revision + 1,
+             lifecycle_state = 'CANCELLED',
+             cancellation_reason_code = $4,
+             cancelled_by_user_id = $3,
+             cancelled_at = $5,
+             updated_at = $5
+           where tenant_id = $1 and id = $2
+             and organizer_user_id = $3
+             and lifecycle_state in ('PROVISIONING', 'SCHEDULED')
+             and payment_mode = 'NO_PAYMENT'
+           returning revision`,
+          [input.tenantId, game.id, input.actorUserId, input.reasonCode, committedAt],
+        );
+        if (!updated) throw new Error('GAME_CANCEL_WRITE_LOST');
+        const revision = positiveInteger(updated.revision);
+        const participants = await client.query<{ user_id: string } & QueryResultRow>(
+          `select user_id from games.participations
+            where tenant_id = $1 and game_id = $2 and state = 'ACTIVE'
+            order by user_id`,
+          [input.tenantId, game.id],
+        );
+        const result = {
+          outcome: 'applied' as const,
+          commandId,
+          gameId: game.id,
+          revision,
+          committedAt,
+        };
+        await client.query(
+          `insert into games.operations (
+             tenant_id, id, game_id, kind, state, requested_by_user_id, completed_at
+           ) values ($1, $2, $3, 'CANCEL_GAME', 'SUCCEEDED', $4, $5)`,
+          [input.tenantId, commandId, game.id, input.actorUserId, committedAt],
+        );
+        await client.query(
+          `insert into games.command_idempotency (
+             tenant_id, id, actor_user_id, principal_key, idempotency_key,
+             command_type, request_hash, aggregate_id, state, result_payload, completed_at
+           ) values ($1, $2, $3, $4, $5, 'game.cancel.v1', $6, $7,
+             'COMPLETED', $8::jsonb, $9)`,
+          [
+            input.tenantId,
+            commandId,
+            input.actorUserId,
+            principalKey,
+            input.idempotencyKey,
+            input.requestHash,
+            game.id,
+            JSON.stringify(result),
+            committedAt,
+          ],
+        );
+        await client.query(
+          `insert into audit.audit_log (
+             tenant_id, actor_id, action, resource_type, resource_id,
+             result, correlation_id, old_value, new_value
+           ) values ($1, $2, 'GAME_CANCELLED', 'GAME', $3, 'SUCCESS', $4, $5::jsonb, $6::jsonb)`,
+          [
+            input.tenantId,
+            input.actorUserId,
+            game.id,
+            input.correlationId,
+            JSON.stringify({ revision: game.revision, lifecycleState: game.lifecycleState }),
+            JSON.stringify({
+              revision,
+              lifecycleState: 'CANCELLED',
+              reasonCode: input.reasonCode,
+              noteProvided: Boolean(input.note),
+            }),
+          ],
+        );
         await insertOutboxEvent(client, {
-          ...eventBase,
           id: randomUUID(),
-          type: 'game.provisioning.requested.v1',
-          payload: { ...payloadBase, operationId },
+          type: 'game.cancelled.v1',
+          aggregateId: game.id,
+          tenantId: input.tenantId,
+          occurredAt: committedAt,
+          correlationId: input.correlationId,
+          payload: {
+            gameId: game.id,
+            aggregateRevision: String(revision),
+            causationId: commandId,
+            actorUserId: input.actorUserId,
+            participantUserIds: participants.rows.map((row) => row.user_id),
+            reasonCode: input.reasonCode,
+          },
         });
         return { ...result, replayed: false };
+      });
+    },
+
+    getManagementOperation(input) {
+      return withTenantTransaction(pool, input.tenantId, async (client) => {
+        const row = await queryOne<IdempotencyRow>(
+          client,
+          `select command_type, request_hash, state, result_payload, completed_at
+             from games.command_idempotency
+            where tenant_id = $1 and id = $2 and actor_user_id = $3
+              and command_type in ('game.create.v1', 'game.cancel.v1')
+              and state = 'COMPLETED'`,
+          [input.tenantId, input.operationId, input.actorUserId],
+        );
+        if (!row) return undefined;
+        if (row.command_type === 'game.create.v1') {
+          const stored = storedCreateResult(
+            row.result_payload,
+            row.completed_at == null ? undefined : timestamp(row.completed_at),
+          );
+          if (!stored) throw new Error('GAME_OPERATION_RESULT_INVALID');
+          return {
+            commandType: row.command_type,
+            result: { ...stored, replayed: true },
+          };
+        }
+        if (row.command_type === 'game.cancel.v1') {
+          const stored = storedCancelResult(row.result_payload);
+          if (!stored || stored.outcome !== 'applied') {
+            throw new Error('GAME_OPERATION_RESULT_INVALID');
+          }
+          return { commandType: row.command_type, result: stored };
+        }
+        return undefined;
       });
     },
 

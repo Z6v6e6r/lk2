@@ -191,7 +191,10 @@ function gateway(): AuthGateway {
   } as unknown as AuthGateway;
 }
 
-afterEach(() => cleanup());
+afterEach(() => {
+  cleanup();
+  window.history.replaceState({}, '', '/');
+});
 
 describe('GamesPage discovery', () => {
   it('opens a client-assisted booking deep-link as the selected game card', async () => {
@@ -275,6 +278,120 @@ describe('GamesPage discovery', () => {
       'true',
     );
     expect(screen.getByRole('heading', { name: 'Пары и счёт по сетам' })).toBeInTheDocument();
+  });
+
+  it('waits for the created projection before rendering the durable detail', async () => {
+    const viewerGame = {
+      ...game,
+      levelRange: game.levelRange ?? null,
+      priceSummary: null,
+      participants: game.participants.map((participant, index) => ({
+        ...participant,
+        userId: `00000000-0000-4000-8000-00000000000${index}`,
+      })),
+      viewerRelation: 'ORGANIZER',
+      viewerPaymentState: 'NOT_REQUIRED',
+      resultSummary: null,
+      conversation: null,
+    } as ViewerGameCard;
+    const notProjected = Object.assign(new Error('not projected'), { code: 'GAME_NOT_FOUND' });
+    const getGame = vi
+      .fn<AuthGateway['getGame']>()
+      .mockRejectedValueOnce(notProjected)
+      .mockRejectedValueOnce(notProjected)
+      .mockResolvedValue(viewerGame);
+    const api: AuthGateway = { ...gateway(), getGame };
+    window.history.replaceState({}, '', `/games/${game.id}?created=1`);
+
+    render(<GamesPage gateway={api} gameId={game.id} />);
+
+    expect(await screen.findByText(game.title, {}, { timeout: 2_000 })).toBeVisible();
+    expect(getGame).toHaveBeenCalledTimes(3);
+  });
+
+  it('offers a user-controlled detail retry after projection loading fails', async () => {
+    const viewerGame = {
+      ...game,
+      levelRange: game.levelRange ?? null,
+      priceSummary: null,
+      participants: game.participants.map((participant, index) => ({
+        ...participant,
+        userId: `00000000-0000-4000-8000-00000000000${index}`,
+      })),
+      viewerRelation: 'ORGANIZER',
+      viewerPaymentState: 'NOT_REQUIRED',
+      resultSummary: null,
+      conversation: null,
+    } as ViewerGameCard;
+    const getGame = vi
+      .fn<AuthGateway['getGame']>()
+      .mockRejectedValueOnce(Object.assign(new Error('not projected'), { code: 'GAME_NOT_FOUND' }))
+      .mockResolvedValue(viewerGame);
+    const api: AuthGateway = { ...gateway(), getGame };
+    const user = userEvent.setup();
+
+    render(<GamesPage gateway={api} gameId={game.id} />);
+    await user.click(await screen.findByRole('button', { name: 'Повторить загрузку' }));
+
+    expect(await screen.findByText(game.title)).toBeVisible();
+    expect(getGame).toHaveBeenCalledTimes(2);
+  });
+
+  it('lets the organizer cancel a free game and refreshes the persisted status', async () => {
+    const organizerGame: ViewerGameCard = {
+      ...game,
+      surface: 'MY_UPCOMING',
+      startsAt: '2099-07-20T15:00:00.000Z',
+      endsAt: '2099-07-20T16:00:00.000Z',
+      levelRange: game.levelRange ?? null,
+      priceSummary: null,
+      capacity: { ...game.capacity, total: 4 },
+      participants: game.participants.map((participant, index) => ({
+        ...participant,
+        userId: `00000000-0000-4000-8000-00000000000${index}`,
+      })),
+      viewerRelation: 'ORGANIZER',
+      viewerPaymentState: 'NOT_REQUIRED',
+      resultSummary: null,
+      allowedActions: ['OPEN_DETAILS', 'CANCEL'],
+      conversation: null,
+    };
+    const cancelledGame: ViewerGameCard = {
+      ...organizerGame,
+      revision: organizerGame.revision + 1,
+      displayState: 'CANCELLED',
+      allowedActions: ['OPEN_DETAILS'],
+    };
+    const cancelGame = vi.fn<AuthGateway['cancelGame']>().mockResolvedValue({
+      commandId: 'c3889c99-b0e3-4a3d-b3e8-a5c99af730ea',
+      operation: {
+        id: 'c3889c99-b0e3-4a3d-b3e8-a5c99af730ea',
+        type: 'CANCEL_GAME',
+        status: 'SUCCEEDED',
+        gameId: game.id,
+        aggregateRevision: cancelledGame.revision,
+        createdAt: '2026-08-26T10:00:00.000Z',
+        updatedAt: '2026-08-26T10:00:00.000Z',
+        nextAction: { type: 'NONE' },
+        error: null,
+      },
+      game: cancelledGame,
+      replayed: false,
+    });
+    const getGame = vi.fn().mockResolvedValueOnce(organizerGame).mockResolvedValue(cancelledGame);
+    const api: AuthGateway = { ...gateway(), getGame, cancelGame };
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const user = userEvent.setup();
+
+    render(<GamesPage gateway={api} gameId={organizerGame.id} />);
+    await user.click(await screen.findByRole('button', { name: 'Отменить игру' }));
+
+    expect(window.confirm).toHaveBeenCalledWith('Отменить игру для всех участников?');
+    expect(cancelGame).toHaveBeenCalledWith(organizerGame.id, {
+      reasonCode: 'ORGANIZER_REQUEST',
+    });
+    expect(await screen.findByText('Игра отменена. Статус и состав обновлены.')).toBeVisible();
+    expect(await screen.findByText('Игра отменена')).toBeVisible();
   });
 
   it('requests the game chat with the canonical detail id and no user-entered identifier', async () => {

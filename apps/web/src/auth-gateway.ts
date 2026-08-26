@@ -34,6 +34,8 @@ import type {
   CommunityDirectInvitePage,
   CommunityDirectInviteState,
   CommunityOwnMembershipState,
+  CreateGameRequest,
+  CancelGameRequest,
   GameCard,
   GameCardPage,
   GameCommandResult,
@@ -108,6 +110,8 @@ export type {
   CommunityDirectInvitePage,
   CommunityDirectInviteState,
   CommunityOwnMembershipState,
+  CreateGameRequest,
+  CancelGameRequest,
   GameCard,
   GameCardPage,
   GameCommandResult,
@@ -379,6 +383,8 @@ export interface AuthGateway {
   }) => Promise<GameCardPage>;
   readonly getActivityHistory: (input?: ActivityHistoryQuery) => Promise<ActivityHistoryPage>;
   readonly getGame: (gameId: string) => Promise<GameCard>;
+  readonly createGame: (input: CreateGameRequest) => Promise<GameCommandResult>;
+  readonly cancelGame: (gameId: string, input: CancelGameRequest) => Promise<GameCommandResult>;
   readonly joinGame: (
     gameId: string,
     expectedRevision?: number,
@@ -1811,6 +1817,14 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
 
     getGame(gameId) {
       return client.getGame(gameId);
+    },
+
+    createGame(input) {
+      return client.createGame(input);
+    },
+
+    cancelGame(gameId, input) {
+      return client.cancelGame(gameId, input);
     },
 
     joinGame(gameId, expectedRevision, invitationId) {

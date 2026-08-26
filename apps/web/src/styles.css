@@ -2928,6 +2928,81 @@
   line-height: 1.35;
 }
 
+.games-page--create {
+  padding-bottom: 112px;
+}
+
+.game-create-form {
+  display: grid;
+  padding: 18px 20px 28px;
+  gap: 16px;
+}
+
+.game-create-form label,
+.game-create-form fieldset {
+  display: grid;
+  min-width: 0;
+  padding: 0;
+  gap: 7px;
+  border: 0;
+}
+
+.game-create-form label > span,
+.game-create-form legend {
+  color: var(--games-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.game-create-form input:not([type='checkbox']),
+.game-create-form select {
+  width: 100%;
+  min-width: 0;
+  min-height: 46px;
+  padding: 0 12px;
+  border: 1px solid #ded8ea;
+  border-radius: 12px;
+  color: var(--games-ink);
+  background: var(--games-card);
+  font: inherit;
+}
+
+.game-create-form__row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.game-create-form__summary {
+  display: grid;
+  padding: 14px;
+  gap: 4px;
+  border-radius: 12px;
+  color: #3f326b;
+  background: #eee9ff;
+}
+
+.game-create-form__summary span {
+  font-size: 11px;
+}
+
+.game-create-form .game-create-form__check {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.game-create-form__check input {
+  width: 20px;
+  height: 20px;
+}
+
+@media (max-width: 390px) {
+  .game-create-form__row {
+    grid-template-columns: 1fr;
+  }
+}
+
 .games-filters {
   margin: 18px -20px 0;
   overflow-x: clip;
@@ -13550,7 +13625,8 @@ button.participant-avatar-stack__open-slot:focus-visible {
 }
 
 @media (max-width: 374px) {
-  .profile-page .fh-bottom-nav {
+  .profile-page .fh-bottom-nav,
+  .games-page .fh-bottom-nav {
     left: 0;
     width: 100%;
   }
