@@ -1310,6 +1310,37 @@ export function loadConfig(
 
 const REALTIME_ACCESS_SECRET_SENTINEL = 'x'.repeat(32);
 const REALTIME_REFRESH_SECRET_SENTINEL = 'y'.repeat(32);
+const WORKER_ACCESS_SECRET_SENTINEL = 'w'.repeat(32);
+const WORKER_REFRESH_SECRET_SENTINEL = 'z'.repeat(32);
+
+/**
+ * Background workers never mint user sessions. New isolated contours opt in to rejecting API
+ * access/refresh signing keys; private sentinels satisfy the shared schema. Existing contours keep
+ * accepting their current shared env until their independently guarded secret split is complete.
+ */
+export function loadWorkerConfig(environment: NodeJS.ProcessEnv = process.env): AppConfig {
+  if (
+    environment.WORKER_RUNTIME_SECRET_ISOLATION_REQUIRED !== undefined &&
+    environment.WORKER_RUNTIME_SECRET_ISOLATION_REQUIRED !== 'true' &&
+    environment.WORKER_RUNTIME_SECRET_ISOLATION_REQUIRED !== 'false'
+  ) {
+    throw new Error('WORKER_RUNTIME_SECRET_ISOLATION_REQUIRED must be true or false');
+  }
+  if (
+    environment.WORKER_RUNTIME_SECRET_ISOLATION_REQUIRED === 'true' &&
+    (environment.JWT_ACCESS_SECRET || environment.JWT_REFRESH_SECRET)
+  ) {
+    throw new Error('Worker runtime must not receive JWT_ACCESS_SECRET or JWT_REFRESH_SECRET');
+  }
+  return loadConfig(
+    {
+      ...environment,
+      JWT_ACCESS_SECRET: environment.JWT_ACCESS_SECRET || WORKER_ACCESS_SECRET_SENTINEL,
+      JWT_REFRESH_SECRET: environment.JWT_REFRESH_SECRET || WORKER_REFRESH_SECRET_SENTINEL,
+    },
+    { profilePhotoStorage: true },
+  );
+}
 
 /**
  * Realtime validates tickets with its dedicated key and must not receive API or refresh signing

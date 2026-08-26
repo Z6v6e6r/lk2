@@ -1,0 +1,41 @@
+{
+	admin off
+	log {
+		output stdout
+		format json
+	}
+}
+
+{$LK2_BETA_HOST} {
+	encode zstd gzip
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "SAMEORIGIN"
+		Referrer-Policy "same-origin"
+		-Server
+	}
+
+	@api path /health/* /public/api/* /user/api/*
+	handle @api {
+		reverse_proxy api:3000
+	}
+
+	handle /realtime/health/live {
+		rewrite * /health/live
+		reverse_proxy realtime:3001
+	}
+
+	handle /realtime/health/ready {
+		rewrite * /health/ready
+		reverse_proxy realtime:3001
+	}
+
+	handle /realtime/* {
+		reverse_proxy realtime:3001
+	}
+
+	handle {
+		reverse_proxy web:8080
+	}
+}

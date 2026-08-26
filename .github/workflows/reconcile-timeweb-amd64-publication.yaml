@@ -41,6 +41,7 @@ jobs:
       realtime_index_digest: ${{ steps.publication.outputs.realtime_index_digest }}
       web_index_digest: ${{ steps.publication.outputs.web_index_digest }}
       worker_index_digest: ${{ steps.publication.outputs.worker_index_digest }}
+      source_tree: ${{ steps.publication.outputs.source_tree }}
     permissions:
       actions: read
       contents: read
@@ -48,7 +49,6 @@ jobs:
       - name: Validate exact first-attempt reconciliation request
         env:
           ACTOR: ${{ github.actor }}
-          APPROVED_SOURCE_SHA: 595e954bb8f53367baf034d7f39b255af0fda5fd
           CONFIRMATION: ${{ inputs.confirmation }}
           EXPECTED_SOURCE_SHA: ${{ inputs.expected_source_sha }}
           EXPECTED_WORKFLOW_SHA: ${{ inputs.expected_workflow_sha }}
@@ -74,7 +74,7 @@ jobs:
           printf '%s' "$EXPECTED_WORKFLOW_SHA" | grep -Eq '^[0-9a-f]{40}$'
           printf '%s' "$PUBLICATION_WORKFLOW_SHA" | grep -Eq '^[0-9a-f]{40}$'
           printf '%s' "$PUBLICATION_RUN_ID" | grep -Eq '^[1-9][0-9]*$'
-          test "$EXPECTED_SOURCE_SHA" = "$APPROVED_SOURCE_SHA"
+          test "$EXPECTED_SOURCE_SHA" = "$PUBLICATION_WORKFLOW_SHA"
           publication_run="$RUNNER_TEMP/timeweb-amd64-publication-run.json"
           { printf 'header = "Authorization: Bearer %s"\n' "$GITHUB_TOKEN"; } \
             | curl --disable --fail --silent --show-error \
@@ -123,10 +123,12 @@ jobs:
           cd publication-reference
           sha256sum --check --strict timeweb-amd64-publication-checksums.txt
           manifest=timeweb-amd64-publication-manifest.json
-          jq -e --arg runId "$PUBLICATION_RUN_ID" --arg sourceSha "$EXPECTED_SOURCE_SHA" --arg workflowSha "$PUBLICATION_WORKFLOW_SHA" '
+          source_tree="$(jq -er '.sourceTree' "$manifest")"
+          jq -e --arg runId "$PUBLICATION_RUN_ID" --arg sourceSha "$EXPECTED_SOURCE_SHA" --arg sourceTree "$source_tree" --arg workflowSha "$PUBLICATION_WORKFLOW_SHA" '
             .schemaVersion == 1 and
             .kind == "phub-timeweb-amd64-publication" and
             .sourceSha == $sourceSha and
+            (.sourceTree | test("^[0-9a-f]{40}$")) and
             .workflowSha == $workflowSha and
             .repository == "Z6v6e6r/lk2" and
             .platform == "linux/amd64" and
@@ -138,6 +140,7 @@ jobs:
             ([.images[].service] | sort) == ["api","migrator","realtime","web","worker"] and
             all(.images[];
               .sourceSha == $sourceSha and
+              .sourceTree == $sourceTree and
               .workflowSha == $workflowSha and
               .platform == "linux/amd64" and
               .runId == $runId and .runAttempt == "1" and
@@ -146,6 +149,7 @@ jobs:
               (.indexDigest | test("^sha256:[0-9a-f]{64}$"))
             )
           ' "$manifest" >/dev/null
+          printf 'source_tree=%s\n' "$source_tree" >> "$GITHUB_OUTPUT"
           for service in web api worker realtime migrator; do
             digest="$(jq -er --arg service "$service" '.images[] | select(.service == $service) | .indexDigest' "$manifest")"
             printf '%s_index_digest=%s\n' "$service" "$digest" >> "$GITHUB_OUTPUT"
@@ -209,7 +213,7 @@ jobs:
           set -euo pipefail
           source scripts/timeweb-amd64-registry-custody-retry.sh
           source_sha="$EXPECTED_SOURCE_SHA"
-          source_tree=3f4c1e63dd30eb60251533b95f1970fd96754a08
+          source_tree="${{ needs.validate-request.outputs.source_tree }}"
           original_builder="https://github.com/Z6v6e6r/lk2/actions/runs/$PUBLICATION_RUN_ID/attempts/1"
           original_workflow_sha="$PUBLICATION_WORKFLOW_SHA"
           test "$(git rev-parse "$source_sha^{tree}")" = "$source_tree"
