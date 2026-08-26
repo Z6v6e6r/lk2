@@ -1058,9 +1058,13 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
 
     sendMessage(input) {
       return withTenantTransaction(pool, input.tenantId, async (client) => {
-        const locked = await queryOne<{ next_sequence: number | string; kind: 'DIRECT' | 'GAME' }>(
+        const locked = await queryOne<{
+          next_sequence: number | string;
+          kind: 'DIRECT' | 'GAME';
+          context_id: string | null;
+        }>(
           client,
-          `select next_sequence, kind
+          `select next_sequence, kind, context_id
              from messaging.conversations
             where tenant_id = $1
               and id = $2
@@ -1084,6 +1088,31 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
           ]);
         }
 
+        if (locked.kind === 'GAME') {
+          if (!locked.context_id) return { outcome: 'not_found' };
+          const game = await queryOne<{ id: string }>(
+            client,
+            `select id
+               from games.games
+              where tenant_id = $1 and id = $2
+              for key share`,
+            [input.tenantId, locked.context_id],
+          );
+          if (!game) return { outcome: 'not_found' };
+          const participation = await queryOne<{ id: string }>(
+            client,
+            `select id
+               from games.participations
+              where tenant_id = $1
+                and game_id = $2
+                and user_id = $3
+                and state = 'ACTIVE'
+              for share`,
+            [input.tenantId, locked.context_id, input.userId],
+          );
+          if (!participation) return { outcome: 'not_found' };
+        }
+
         // Re-evaluate the authoritative access source after serializing on the conversation.
         // GAME access is never inferred from the possibly stale messaging member row.
         const member = await getAuthorizedMember(
@@ -1094,6 +1123,12 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
         );
         if (!member) return { outcome: 'not_found' };
 
+        await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
+          `${input.tenantId}:MESSAGE_COMMAND:${input.userId}:${input.idempotencyKey}`,
+        ]);
+        await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
+          `${input.tenantId}:MESSAGE_CLIENT:${input.userId}:${input.clientMessageId}`,
+        ]);
         const previous = await queryOne<MessageRow>(
           client,
           `select message.id, message.conversation_id, message.sequence,
@@ -1110,12 +1145,13 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
                on summary.tenant_id = sender.tenant_id
               and summary.user_id = sender.user_id
             where message.tenant_id = $1
-              and message.conversation_id = $2
+              and sender.user_id = $2
               and (message.idempotency_key = $3 or message.client_message_id = $4)`,
-          [input.tenantId, input.conversationId, input.idempotencyKey, input.clientMessageId],
+          [input.tenantId, input.userId, input.idempotencyKey, input.clientMessageId],
         );
         if (previous) {
           if (
+            previous.conversation_id !== input.conversationId ||
             previous.sender_user_id !== input.userId ||
             previous.idempotency_key !== input.idempotencyKey ||
             previous.client_message_id !== input.clientMessageId ||
@@ -1415,10 +1451,6 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
         ) {
           return { outcome: 'disabled' };
         }
-        const allowedPermissions = [
-          ...(settings.direct_enabled ? ['chat.direct.create'] : []),
-          ...(settings.contextual_enabled ? ['games.play'] : []),
-        ];
         const authorized = await queryOne<{ authorized: boolean }>(
           client,
           `select true as authorized
@@ -1430,7 +1462,20 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
              join identity.user_access_profiles current_access
                on current_access.tenant_id = viewer_user.tenant_id
               and current_access.user_id = viewer_user.id
-              and current_access.permissions && $4::text[]
+              and (
+                ($4::boolean and 'chat.direct.create' = any(current_access.permissions))
+                or (
+                  $5::boolean
+                  and 'games.play' = any(current_access.permissions)
+                  and exists (
+                    select 1
+                      from games.participations participation
+                     where participation.tenant_id = viewer_user.tenant_id
+                       and participation.user_id = viewer_user.id
+                       and participation.state = 'ACTIVE'
+                  )
+                )
+              )
             where presented.tenant_id = $1
               and presented.id = $2
               and presented.user_id = $3
@@ -1443,7 +1488,13 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
                    and active_session.rotated_at is null
                    and active_session.expires_at > now()
               )`,
-          [input.tenantId, input.sessionId, input.userId, allowedPermissions],
+          [
+            input.tenantId,
+            input.sessionId,
+            input.userId,
+            settings.direct_enabled,
+            settings.contextual_enabled,
+          ],
         );
         return authorized ? { outcome: 'ok' } : { outcome: 'revoked' };
       });

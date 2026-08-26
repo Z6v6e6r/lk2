@@ -6104,6 +6104,9 @@ components:
           minLength: 16
           maxLength: 128
           pattern: '^[A-Za-z0-9._:-]+$'
+          description: |
+            Stable identifier for this authenticated tenant user. An exact retry in the same
+            conversation is idempotent; reuse for another conversation is rejected.
         body:
           type: string
           minLength: 1

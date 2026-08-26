@@ -462,8 +462,10 @@ describe('messaging repository', () => {
         });
       }
       if (text.includes('from identity.refresh_sessions presented')) {
-        expect(values?.[3]).toEqual(['games.play']);
-        expect(text).toContain('current_access.permissions && $4::text[]');
+        expect(values?.slice(3)).toEqual([false, true]);
+        expect(text).toContain("'games.play' = any(current_access.permissions)");
+        expect(text).toContain('from games.participations participation');
+        expect(text).toContain("participation.state = 'ACTIVE'");
         return Promise.resolve({ rows: [{ authorized: true }], rowCount: 1 });
       }
       throw new Error(`Unexpected query: ${text}`);
@@ -590,6 +592,9 @@ describe('messaging repository', () => {
       }
       if (text.includes('message.idempotency_key = $3')) {
         return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('pg_advisory_xact_lock')) {
+        return Promise.resolve({ rows: [], rowCount: 1 });
       }
       if (text.includes('select next_sequence')) {
         return Promise.resolve({ rows: [{ next_sequence: '1' }], rowCount: 1 });
@@ -1020,6 +1025,9 @@ describe('messaging repository', () => {
       if (text.includes('select next_sequence')) {
         return Promise.resolve({ rows: [{ next_sequence: '2' }], rowCount: 1 });
       }
+      if (text.includes('pg_advisory_xact_lock')) {
+        return Promise.resolve({ rows: [], rowCount: 1 });
+      }
       if (text.includes('message.client_message_id = $4')) {
         return Promise.resolve({
           rows: [
@@ -1054,6 +1062,107 @@ describe('messaging repository', () => {
         correlationId: 'message-correlation-0002',
       }),
     ).resolves.toEqual({ outcome: 'idempotency_conflict' });
+  });
+
+  it('serializes and rejects clientMessageId reuse across conversations for the same user', async () => {
+    const otherConversationId = '99999999-9999-4999-8999-999999999999';
+    const gameId = '88888888-8888-4888-8888-888888888888';
+    const queryOrder: string[] = [];
+    const query = vi.fn((text: string, values?: readonly unknown[]) => {
+      if (text === 'begin' || text === 'commit' || text.includes("set_config('app.tenant_id'")) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('member.id as member_id')) {
+        queryOrder.push('authorize');
+        return Promise.resolve({
+          rows: [{ member_id: memberId, last_read_sequence: '0', last_sequence: '1' }],
+          rowCount: 1,
+        });
+      }
+      if (text.includes('select next_sequence')) {
+        return Promise.resolve({
+          rows: [{ next_sequence: '2', kind: 'GAME', context_id: gameId }],
+          rowCount: 1,
+        });
+      }
+      if (text.includes('from games.games')) {
+        queryOrder.push('lock-game');
+        expect(text).toContain('for key share');
+        expect(values).toEqual([tenantId, gameId]);
+        return Promise.resolve({ rows: [{ id: gameId }], rowCount: 1 });
+      }
+      if (text.includes('from games.participations')) {
+        queryOrder.push('lock-participation');
+        expect(text).toContain('for share');
+        expect(values).toEqual([tenantId, gameId, userId]);
+        return Promise.resolve({ rows: [{ id: memberId }], rowCount: 1 });
+      }
+      if (text.includes('pg_advisory_xact_lock')) {
+        const lockKey = String(values?.[0]);
+        if (lockKey.includes(':MESSAGE_COMMAND:')) {
+          queryOrder.push('lock-message-command');
+          expect(lockKey).toBe(
+            `${tenantId}:MESSAGE_COMMAND:${userId}:message-command-cross-conversation-0001`,
+          );
+        } else {
+          queryOrder.push('lock-client-message');
+          expect(lockKey).toBe(
+            `${tenantId}:MESSAGE_CLIENT:${userId}:client-message-cross-conversation-0001`,
+          );
+        }
+        return Promise.resolve({ rows: [], rowCount: 1 });
+      }
+      if (text.includes('message.client_message_id = $4')) {
+        queryOrder.push('lookup-client-message');
+        expect(text).toContain('message.tenant_id = $1');
+        expect(text).toContain('sender.user_id = $2');
+        expect(text).not.toContain('message.conversation_id = $2');
+        return Promise.resolve({
+          rows: [
+            {
+              id: messageId,
+              conversation_id: otherConversationId,
+              sequence: '8',
+              sender_user_id: userId,
+              sender_display_name: 'Анна',
+              message_type: 'TEXT',
+              body: 'Исходное сообщение',
+              created_at: '2026-08-03 12:00:00.000000+00',
+              client_message_id: 'client-message-cross-conversation-0001',
+              idempotency_key: 'message-command-cross-conversation-0001',
+            },
+          ],
+          rowCount: 1,
+        });
+      }
+      throw new Error(`Cross-conversation replay must not mutate state: ${text}`);
+    });
+    const repository = createMessagingRepository(poolWithQuery(query) as never);
+
+    await expect(
+      repository.sendMessage({
+        tenantId,
+        userId,
+        conversationId,
+        clientMessageId: 'client-message-cross-conversation-0001',
+        idempotencyKey: 'message-command-cross-conversation-0001',
+        body: 'Исходное сообщение',
+        correlationId: 'message-correlation-cross-conversation-0001',
+      }),
+    ).resolves.toEqual({ outcome: 'idempotency_conflict' });
+    expect(queryOrder).toEqual([
+      'lock-game',
+      'lock-participation',
+      'authorize',
+      'lock-message-command',
+      'lock-client-message',
+      'lookup-client-message',
+    ]);
+    expect(
+      query.mock.calls.some(([text]) =>
+        /insert into messaging\.messages|insert into audit\.outbox_events/.test(String(text)),
+      ),
+    ).toBe(false);
   });
 
   it('does not reveal a conversation to a non-member', async () => {
@@ -1162,7 +1271,7 @@ describe('messaging repository', () => {
         });
       }
       if (text.includes('from identity.refresh_sessions presented')) {
-        expect(values?.[3]).toEqual(['chat.direct.create']);
+        expect(values?.slice(3)).toEqual([true, false]);
         return Promise.resolve({ rows: [{ authorized: true }], rowCount: 1 });
       }
       throw new Error(`Unexpected query: ${text}`);
@@ -1181,7 +1290,7 @@ describe('messaging repository', () => {
         String(text).includes('from identity.refresh_sessions presented'),
       )?.[0],
     );
-    expect(authorizationSql).toContain('current_access.permissions && $4::text[]');
+    expect(authorizationSql).toContain("'chat.direct.create' = any(current_access.permissions)");
     expect(authorizationSql).toContain('active_session.revoked_at is null');
     expect(authorizationSql).toContain('active_session.rotated_at is null');
     expect(authorizationSql).toContain('active_session.family_id = presented.family_id');
