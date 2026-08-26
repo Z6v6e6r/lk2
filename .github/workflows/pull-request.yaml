@@ -59,6 +59,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -98,6 +99,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -114,6 +117,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
       - name: Resolve the exact secret-scan range
         id: secret-range
         env:
@@ -204,6 +208,107 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
+  deployment-contract:
+    name: deployment-contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+      - name: Verify exact deployment-contract source
+        env:
+          EXPECTED_HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD_SHA"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Verify deployment target, Caddy, Compose and historical exclusions
+        run: |
+          set -euo pipefail
+          node scripts/verify-timeweb-deployment-contract.js \
+            --diagnostic "$RUNNER_TEMP/timeweb-deployment-diagnostic.json"
+          npx vitest run scripts/verify-timeweb-deployment-contract.test.ts
+      - name: Resolve immutable Caddy identity
+        id: caddy-identity
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE' >>"$GITHUB_OUTPUT"
+          import { readFileSync } from 'node:fs';
+          import { parseStrictJson } from './scripts/strict-json.js';
+          const target = parseStrictJson(readFileSync('deploy/timeweb/target.json'));
+          process.stdout.write(`image=${target.ingress.caddy.repository}@${target.ingress.caddy.indexDigest}\n`);
+          process.stdout.write(`config_digest=${target.ingress.caddy.linuxAmd64ConfigDigest}\n`);
+          process.stdout.write(`version=${target.ingress.caddy.version}\n`);
+          process.stdout.write(`adapted_sha256=${target.ingress.caddy.adaptedJsonSha256}\n`);
+          NODE
+      - name: Validate and adapt Caddy offline
+        env:
+          ADAPTED_SHA256: ${{ steps.caddy-identity.outputs.adapted_sha256 }}
+          CADDY_CONFIG_DIGEST: ${{ steps.caddy-identity.outputs.config_digest }}
+          CADDY_IMAGE: ${{ steps.caddy-identity.outputs.image }}
+          CADDY_VERSION: ${{ steps.caddy-identity.outputs.version }}
+          LK2_BETA_HOST: lk2.padlhub.su
+        run: |
+          set -euo pipefail
+          docker pull --platform linux/amd64 "$CADDY_IMAGE"
+          test "$(docker image inspect "$CADDY_IMAGE" --format '{{.Os}}/{{.Architecture}}')" = linux/amd64
+          test "$(docker image inspect "$CADDY_IMAGE" --format '{{.Id}}')" = "$CADDY_CONFIG_DIGEST"
+          docker run --rm --network none "$CADDY_IMAGE" caddy version \
+            | grep --quiet "^$CADDY_VERSION "
+          docker run --rm --network none \
+            --volume "$PWD/deploy/timeweb/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            "$CADDY_IMAGE" caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+          docker run --rm --network none \
+            --volume "$PWD/deploy/timeweb/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            "$CADDY_IMAGE" caddy adapt --pretty --config /etc/caddy/Caddyfile --adapter caddyfile \
+            >"$RUNNER_TEMP/caddy-adapted.json"
+          printf '%s  %s\n' "$ADAPTED_SHA256" "$RUNNER_TEMP/caddy-adapted.json" \
+            >"$RUNNER_TEMP/caddy-adapted.sha256"
+          sha256sum --check --strict "$RUNNER_TEMP/caddy-adapted.sha256"
+      - name: Validate ingress and application Compose with synthetic non-secret env
+        env:
+          API_IMAGE_DIGEST: sha256:1111111111111111111111111111111111111111111111111111111111111111
+          MIGRATOR_IMAGE_DIGEST: sha256:2222222222222222222222222222222222222222222222222222222222222222
+          REALTIME_IMAGE_DIGEST: sha256:3333333333333333333333333333333333333333333333333333333333333333
+          WEB_IMAGE_DIGEST: sha256:4444444444444444444444444444444444444444444444444444444444444444
+          WORKER_IMAGE_DIGEST: sha256:5555555555555555555555555555555555555555555555555555555555555555
+        run: |
+          set -euo pipefail
+          docker compose -f deploy/timeweb/compose.ingress.yaml config --quiet
+          missing_root="$RUNNER_TEMP/timeweb-missing-env"
+          if TIMEWEB_RUNTIME_ENV_ROOT="$missing_root" \
+            docker compose -f deploy/timeweb/compose.beta.yaml --profile background --profile migration \
+            config --quiet; then
+            echo 'Compose accepted missing required env files' >&2
+            exit 1
+          fi
+          synthetic_root="$RUNNER_TEMP/timeweb-synthetic-env"
+          install -d -m 0700 "$synthetic_root"
+          for service in api worker realtime migrator; do
+            printf 'SYNTHETIC_NON_SECRET=true\n' >"$synthetic_root/$service.env"
+            chmod 0600 "$synthetic_root/$service.env"
+          done
+          TIMEWEB_RUNTIME_ENV_ROOT="$synthetic_root" \
+            docker compose -f deploy/timeweb/compose.beta.yaml --profile background --profile migration \
+            config --quiet
+      - name: Upload deployment-contract diagnostics
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: deployment-contract-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/timeweb-deployment-diagnostic.json
+            ${{ runner.temp }}/caddy-adapted.json
+            ${{ runner.temp }}/caddy-adapted.sha256
+          if-no-files-found: error
+          retention-days: 90
+
   docker-selection:
     name: docker-selection
     runs-on: ubuntu-latest
@@ -213,6 +318,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
       - name: Select affected Docker services
         id: select
         env:
@@ -393,3 +499,24 @@ jobs:
           else
             test "$BUILD_RESULT" = success
           fi
+
+  pull-request-gate:
+    name: pull-request-gate
+    needs: [quality, dependency-security, secret-scan, deployment-contract, docker-build]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every exact-head gate
+        env:
+          DEPENDENCY_SECURITY_RESULT: ${{ needs.dependency-security.result }}
+          DEPLOYMENT_CONTRACT_RESULT: ${{ needs.deployment-contract.result }}
+          DOCKER_BUILD_RESULT: ${{ needs.docker-build.result }}
+          QUALITY_RESULT: ${{ needs.quality.result }}
+          SECRET_SCAN_RESULT: ${{ needs.secret-scan.result }}
+        run: |
+          set -euo pipefail
+          test "$QUALITY_RESULT" = success
+          test "$DEPENDENCY_SECURITY_RESULT" = success
+          test "$SECRET_SCAN_RESULT" = success
+          test "$DEPLOYMENT_CONTRACT_RESULT" = success
+          test "$DOCKER_BUILD_RESULT" = success
