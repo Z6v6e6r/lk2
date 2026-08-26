@@ -443,6 +443,138 @@ describe('messaging repository', () => {
     );
   });
 
+  it('issues a realtime authority result for a contextual-only games.play session', async () => {
+    const query = vi.fn((text: string, values?: readonly unknown[]) => {
+      if (text === 'begin' || text === 'commit' || text.includes("set_config('app.tenant_id'")) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('from messaging.tenant_runtime_settings')) {
+        return Promise.resolve({
+          rows: [
+            {
+              http_enabled: true,
+              direct_enabled: false,
+              realtime_enabled: true,
+              contextual_enabled: true,
+            },
+          ],
+          rowCount: 1,
+        });
+      }
+      if (text.includes('from identity.refresh_sessions presented')) {
+        expect(values?.[3]).toEqual(['games.play']);
+        expect(text).toContain('current_access.permissions && $4::text[]');
+        return Promise.resolve({ rows: [{ authorized: true }], rowCount: 1 });
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const repository = createMessagingRepository(poolWithQuery(query) as never);
+
+    await expect(
+      repository.authorizeRealtimeConnection({
+        tenantId,
+        userId,
+        sessionId: '55555555-5555-4555-8555-555555555555',
+      }),
+    ).resolves.toEqual({ outcome: 'ok' });
+  });
+
+  it('authorizes GAME realtime subscription through the same current roster rule as HTTP', async () => {
+    const query = vi.fn((text: string) => {
+      if (text === 'begin' || text === 'commit' || text.includes("set_config('app.tenant_id'")) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('from messaging.tenant_runtime_settings')) {
+        return Promise.resolve({
+          rows: [
+            {
+              http_enabled: true,
+              direct_enabled: false,
+              realtime_enabled: true,
+              contextual_enabled: true,
+            },
+          ],
+          rowCount: 1,
+        });
+      }
+      if (text.includes('member.id as member_id')) {
+        expect(text).toContain("conversation.kind = 'GAME'");
+        expect(text).toContain("participation.state = 'ACTIVE'");
+        expect(text).toContain("'games.play' = any(current_access.permissions)");
+        return Promise.resolve({
+          rows: [{ member_id: memberId, last_read_sequence: '3', last_sequence: '7' }],
+          rowCount: 1,
+        });
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const repository = createMessagingRepository(poolWithQuery(query) as never);
+
+    await expect(
+      repository.authorizeRealtimeSubscription({ tenantId, userId, conversationId }),
+    ).resolves.toEqual({ outcome: 'ok', latestSequence: 7 });
+  });
+
+  it('denies GAME realtime subscription after the participant leaves or is removed', async () => {
+    const query = vi.fn((text: string) => {
+      if (text === 'begin' || text === 'commit' || text.includes("set_config('app.tenant_id'")) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('from messaging.tenant_runtime_settings')) {
+        return Promise.resolve({
+          rows: [
+            {
+              http_enabled: true,
+              direct_enabled: false,
+              realtime_enabled: true,
+              contextual_enabled: true,
+            },
+          ],
+          rowCount: 1,
+        });
+      }
+      if (text.includes('member.id as member_id')) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const repository = createMessagingRepository(poolWithQuery(query) as never);
+
+    await expect(
+      repository.authorizeRealtimeSubscription({ tenantId, userId, conversationId }),
+    ).resolves.toEqual({ outcome: 'not_found' });
+  });
+
+  it('fans out GAME realtime hints only to current active roster members', async () => {
+    const query = vi.fn((text: string) => {
+      if (text === 'begin' || text === 'commit' || text.includes("set_config('app.tenant_id'")) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('select member.user_id')) {
+        expect(text).toContain("conversation.kind in ('DIRECT', 'GAME')");
+        expect(text).toContain('settings.contextual_enabled = true');
+        expect(text).toContain("participation.state = 'ACTIVE'");
+        expect(text).toContain("'games.play' = any(current_access.permissions)");
+        expect(text).toContain("coalesce(target_privacy.chat_policy, 'AUTHORIZED') = 'AUTHORIZED'");
+        return Promise.resolve({
+          rows: [{ user_id: userId }, { user_id: otherUserId }],
+          rowCount: 2,
+        });
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const repository = createMessagingRepository(poolWithQuery(query) as never);
+
+    await expect(
+      repository.listRealtimeRecipientUserIds({
+        tenantId,
+        conversationId,
+        messageId,
+        sequence: 7,
+      }),
+    ).resolves.toEqual([userId, otherUserId]);
+  });
+
   it('allocates one sequence and emits only identifiers to the outbox', async () => {
     const body = 'Секретный текст сообщения';
     const query = vi.fn((text: string, values?: readonly unknown[]) => {
@@ -1012,7 +1144,7 @@ describe('messaging repository', () => {
   });
 
   it('authorizes realtime only while the tenant gate, permission and session family are active', async () => {
-    const query = vi.fn((text: string) => {
+    const query = vi.fn((text: string, values?: readonly unknown[]) => {
       if (text === 'begin' || text === 'commit' || text.includes("set_config('app.tenant_id'")) {
         return Promise.resolve({ rows: [], rowCount: 0 });
       }
@@ -1030,6 +1162,7 @@ describe('messaging repository', () => {
         });
       }
       if (text.includes('from identity.refresh_sessions presented')) {
+        expect(values?.[3]).toEqual(['chat.direct.create']);
         return Promise.resolve({ rows: [{ authorized: true }], rowCount: 1 });
       }
       throw new Error(`Unexpected query: ${text}`);
@@ -1048,7 +1181,7 @@ describe('messaging repository', () => {
         String(text).includes('from identity.refresh_sessions presented'),
       )?.[0],
     );
-    expect(authorizationSql).toContain("'chat.direct.create' = any(current_access.permissions)");
+    expect(authorizationSql).toContain('current_access.permissions && $4::text[]');
     expect(authorizationSql).toContain('active_session.revoked_at is null');
     expect(authorizationSql).toContain('active_session.rotated_at is null');
     expect(authorizationSql).toContain('active_session.family_id = presented.family_id');
@@ -1072,8 +1205,11 @@ describe('messaging repository', () => {
           rowCount: 1,
         });
       }
-      if (text.includes('conversation.next_sequence - 1 as latest_sequence')) {
-        return Promise.resolve({ rows: [{ latest_sequence: '7' }], rowCount: 1 });
+      if (text.includes('member.id as member_id')) {
+        return Promise.resolve({
+          rows: [{ member_id: memberId, last_read_sequence: '0', last_sequence: '7' }],
+          rowCount: 1,
+        });
       }
       throw new Error(`Unexpected query: ${text}`);
     });
@@ -1083,9 +1219,7 @@ describe('messaging repository', () => {
       repository.authorizeRealtimeSubscription({ tenantId, userId, conversationId }),
     ).resolves.toEqual({ outcome: 'ok', latestSequence: 7 });
     const membershipSql = String(
-      query.mock.calls.find(([text]) =>
-        String(text).includes('conversation.next_sequence - 1 as latest_sequence'),
-      )?.[0],
+      query.mock.calls.find(([text]) => String(text).includes('member.id as member_id'))?.[0],
     );
     expect(membershipSql).toContain("member.state = 'ACTIVE'");
     expect(membershipSql).toContain("conversation.kind = 'DIRECT'");
@@ -1117,7 +1251,7 @@ describe('messaging repository', () => {
           rowCount: 1,
         });
       }
-      if (text.includes('conversation.next_sequence - 1 as latest_sequence')) {
+      if (text.includes('member.id as member_id')) {
         return Promise.resolve({ rows: [], rowCount: 0 });
       }
       throw new Error(`Unexpected query: ${text}`);
@@ -1137,9 +1271,7 @@ describe('messaging repository', () => {
     ).resolves.toEqual([]);
 
     const subscriptionSql = String(
-      query.mock.calls.find(([text]) =>
-        String(text).includes('conversation.next_sequence - 1 as latest_sequence'),
-      )?.[0],
+      query.mock.calls.find(([text]) => String(text).includes('member.id as member_id'))?.[0],
     );
     const fanoutSql = String(
       query.mock.calls.find(([text]) => String(text).includes('select member.user_id'))?.[0],

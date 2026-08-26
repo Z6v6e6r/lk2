@@ -1,14 +1,17 @@
-# ADR 0022: Recoverable direct-chat realtime
+# ADR 0022: Recoverable direct and game-chat realtime
 
 Status: Accepted
 
 ## Decision
 
-Direct-chat realtime is an optional, tenant-gated delivery hint over the authoritative HTTP and
-PostgreSQL history. API issues a 30-second one-time JWT ticket bound to tenant, user and refresh
-session family. The ticket is sent in the first WebSocket frame, never in a URL. API and realtime
-both revalidate current gates, user permission and session authority; subscription and every
-fanout revalidate active conversation membership.
+Direct and GAME-chat realtime is an optional, tenant-gated delivery hint over the authoritative
+HTTP and PostgreSQL history. API issues a 30-second one-time JWT ticket bound to tenant, user and
+refresh session family. The ticket is sent in the first WebSocket frame, never in a URL. API and
+realtime both revalidate current gates, user permission and session authority; subscription and
+every fanout revalidate active conversation membership. DIRECT keeps its current bidirectional
+block, target privacy and `chat.direct.create` checks. GAME separately requires the contextual
+gate, `games.play` and current `games.participations.state='ACTIVE'`; a stale messaging membership
+never grants subscription or fanout.
 
 RabbitMQ events contain only tenant, conversation, message and sequence identifiers. Each realtime
 instance owns an exclusive fanout queue so every node can reach its local sockets; `prefetch(1)`
@@ -27,5 +30,5 @@ Commands remain HTTP-only. The existing five-second polling loop stays active as
 - Logout, permission removal and membership removal terminate or deny realtime without waiting for
   JWT expiry; idle sockets are rechecked periodically.
 - Realtime can be rolled back with only its tenant gate while HTTP chat remains available.
-- Presence, typing, edits/deletes and contextual chats need separate contracts and are not implied
-  by this decision.
+- Presence, typing, edits/deletes and contextual chat kinds other than GAME need separate contracts
+  and are not implied by this decision.

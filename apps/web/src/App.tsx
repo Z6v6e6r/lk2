@@ -7,8 +7,10 @@ import padlHubLogoUrl from './assets/padlhub-logo.svg';
 import vkIconUrl from './assets/vk-auth.svg';
 import yandexIconUrl from './assets/yandex-auth.svg';
 import { connectChatRealtime } from './chat-realtime-client.js';
-import type { ChatUiError } from './ChatsPage.js';
+import type { ChatRealtimeConnectionState } from './chat-realtime-client.js';
+import type { ChatRealtimeUiState, ChatUiError, PendingChatMessage } from './ChatsPage.js';
 import { consumeCommunityInviteToken } from './community-invite-token.js';
+import { consumeGameChatNavigation, type GameChatNavigationHint } from './game-chat-navigation.js';
 import {
   createCommunityRealtimeTransport,
   type CommunityRealtimeSocket,
@@ -362,8 +364,7 @@ function chatUiError(error: unknown, operation: ChatOperation): ChatUiError {
   ) {
     return {
       kind: 'FEATURE_UNAVAILABLE',
-      message:
-        'Контур личных чатов ещё не включён для этой организации. Остальные разделы работают.',
+      message: 'Контур чатов ещё не включён для этой организации. Остальные разделы работают.',
     };
   }
   if (status === 404 || code === 'CONVERSATION_NOT_FOUND' || code === 'USER_NOT_FOUND') {
@@ -508,6 +509,7 @@ const HOME_REFRESH_INTERVAL_MS = 30_000;
 const NOTIFICATIONS_REFRESH_INTERVAL_MS = 15_000;
 const CHATS_REFRESH_INTERVAL_MS = 5_000;
 const CHAT_GAP_PAGE_LIMIT = 20;
+const CHAT_HISTORY_PAGE_SIZE = 100;
 const HOME_INITIAL_RETRY_DELAYS_MS = [
   400, 1_000, 2_000, 5_000, 10_000, 20_000, 30_000, 30_000, 30_000,
 ] as const;
@@ -583,14 +585,18 @@ export function App({
     [],
   );
   const [chatsError, setChatsError] = useState<ChatUiError | null>(null);
-  const [chatsBusy, setChatsBusy] = useState<'create' | 'send' | 'refresh' | null>(null);
+  const [chatsBusy, setChatsBusy] = useState<'create' | 'send' | 'refresh' | 'load-earlier' | null>(
+    null,
+  );
   const [chatsReloadToken, setChatsReloadToken] = useState(0);
-  const [loadedDirectConversationId, setLoadedDirectConversationId] = useState<string | null>(null);
-  const [failedChatMessage, setFailedChatMessage] = useState<{
-    readonly conversationId: string;
-    readonly clientMessageId: string;
-    readonly body: string;
-  } | null>(null);
+  const [loadedRealtimeConversationId, setLoadedRealtimeConversationId] = useState<string | null>(
+    null,
+  );
+  const [pendingChatMessage, setPendingChatMessage] = useState<
+    (PendingChatMessage & { readonly conversationId: string }) | null
+  >(null);
+  const [chatRealtimeState, setChatRealtimeState] = useState<ChatRealtimeUiState | null>(null);
+  const [hasEarlierChatMessages, setHasEarlierChatMessages] = useState(false);
   const [notifications, setNotifications] = useState<NotificationInboxPage | null>(null);
   const [webPushConfiguration, setWebPushConfiguration] = useState<WebPushConfiguration | null>(
     null,
@@ -631,6 +637,15 @@ export function App({
   const chatRefreshInFlightRef = useRef(false);
   const chatRefreshPendingRef = useRef(false);
   const chatRefreshRef = useRef<() => void>(() => undefined);
+  const chatEarlierAfterSequenceRef = useRef(0);
+  const chatGameNavigationRef = useRef<{
+    readonly tenantKey: string;
+    readonly userId: string;
+    readonly hint: GameChatNavigationHint;
+  } | null>(null);
+  const chatPendingMessageRef = useRef<
+    (PendingChatMessage & { readonly conversationId: string }) | null
+  >(null);
   const chatCreateCommandRef = useRef<{
     readonly recipientUserId: string;
     readonly idempotencyKey: string;
@@ -920,6 +935,31 @@ export function App({
       chatReadThroughRef.current = 0;
       chatRefreshInFlightRef.current = false;
       chatRefreshPendingRef.current = false;
+      chatEarlierAfterSequenceRef.current = 0;
+      const previousPendingMessage = chatPendingMessageRef.current;
+      const preservedFailedMessage =
+        previousPendingMessage?.state === 'failed' &&
+        previousPendingMessage.conversationId === requestedConversationId
+          ? previousPendingMessage
+          : null;
+      chatPendingMessageRef.current = preservedFailedMessage;
+      const chatNavigationUserId = state.session.context.user.id;
+      const cachedGameChatNavigation = chatGameNavigationRef.current;
+      const gameChatNavigation =
+        requestedConversationId &&
+        cachedGameChatNavigation?.tenantKey === tenantKey &&
+        cachedGameChatNavigation.userId === chatNavigationUserId &&
+        cachedGameChatNavigation.hint.conversationId === requestedConversationId
+          ? cachedGameChatNavigation.hint
+          : requestedConversationId
+            ? consumeGameChatNavigation(
+                { tenantKey, userId: chatNavigationUserId },
+                requestedConversationId,
+              )
+            : undefined;
+      chatGameNavigationRef.current = gameChatNavigation
+        ? { tenantKey, userId: chatNavigationUserId, hint: gameChatNavigation }
+        : null;
       let initialHistoryOutcome: 'pending' | 'loaded' | 'failed' = requestedConversationId
         ? 'pending'
         : 'loaded';
@@ -952,8 +992,43 @@ export function App({
           (page) => ({ status: 'fulfilled' as const, page }),
           (error: unknown) => ({ status: 'rejected' as const, error }),
         );
+        const navigationConversation: ConversationPage['items'][number] | undefined =
+          gameChatNavigation
+            ? {
+                id: gameChatNavigation.conversationId,
+                kind: 'GAME' as const,
+                contextId: gameChatNavigation.contextId,
+                title: gameChatNavigation.title,
+                unreadCount: 0,
+                updatedAt: gameChatNavigation.updatedAt,
+              }
+            : undefined;
+        const effectiveConversationPage =
+          listResult.status === 'fulfilled' &&
+          navigationConversation &&
+          !listResult.page.items.some(
+            (conversation) => conversation.id === navigationConversation.id,
+          )
+            ? { items: [navigationConversation, ...listResult.page.items] }
+            : listResult.status === 'fulfilled'
+              ? listResult.page
+              : undefined;
+        const selectedConversation = requestedConversationId
+          ? effectiveConversationPage?.items.find(
+              (conversation) => conversation.id === requestedConversationId,
+            )
+          : undefined;
+        const initialAfterSequence =
+          initialHistoryOutcome === 'pending' && chatLastSequenceRef.current === 0
+            ? Math.max(
+                0,
+                (selectedConversation?.lastMessage?.sequence ??
+                  gameChatNavigation?.lastSequence ??
+                  0) - CHAT_HISTORY_PAGE_SIZE,
+              )
+            : chatLastSequenceRef.current;
         const historyResult = requestedConversationId
-          ? await readMessageGap(requestedConversationId, chatLastSequenceRef.current).then(
+          ? await readMessageGap(requestedConversationId, initialAfterSequence).then(
               (messages) => ({ status: 'fulfilled' as const, messages }),
               (error: unknown) => ({ status: 'rejected' as const, error }),
             )
@@ -968,34 +1043,40 @@ export function App({
         if (listResult.status === 'fulfilled') setConversations(listResult.page);
         else {
           setConversations(null);
-          setLoadedDirectConversationId(null);
+          setLoadedRealtimeConversationId(null);
           setChatsError(chatUiError(listResult.error, 'list'));
-          setChatsBusy(null);
+          setChatsBusy((current) => (current === 'refresh' ? null : current));
           return;
         }
 
         if (historyResult.status === 'rejected') {
           if (initialHistoryOutcome === 'pending') {
             initialHistoryOutcome = 'failed';
-            setLoadedDirectConversationId(null);
+            setLoadedRealtimeConversationId(null);
           }
           setChatsError(chatUiError(historyResult.error, 'history'));
-          setChatsBusy(null);
+          setChatsBusy((current) => (current === 'refresh' ? null : current));
           return;
         }
         if (historyResult.status === 'fulfilled') {
-          const selectedDirect = Boolean(
-            requestedConversationId &&
-            listResult.page.items.some(
-              (conversation) =>
-                conversation.id === requestedConversationId && conversation.kind === 'DIRECT',
-            ),
-          );
-          if (requestedConversationId && selectedDirect && initialHistoryOutcome === 'pending') {
+          setConversations(effectiveConversationPage ?? listResult.page);
+          const loadingInitialHistory = initialHistoryOutcome === 'pending';
+          const pending = chatPendingMessageRef.current;
+          if (
+            pending &&
+            historyResult.messages.some(
+              (message) => message.clientMessageId === pending.clientMessageId,
+            )
+          ) {
+            chatPendingMessageRef.current = null;
+            setPendingChatMessage(null);
+            setChatsBusy((current) => (current === 'send' ? null : current));
+          }
+          if (requestedConversationId && initialHistoryOutcome === 'pending') {
             initialHistoryOutcome = 'loaded';
-            setLoadedDirectConversationId(requestedConversationId);
-          } else if (!selectedDirect || initialHistoryOutcome === 'failed') {
-            setLoadedDirectConversationId(null);
+            setLoadedRealtimeConversationId(requestedConversationId);
+          } else if (initialHistoryOutcome === 'failed') {
+            setLoadedRealtimeConversationId(null);
           }
           const newestSequence = historyResult.messages.at(-1)?.sequence;
           if (newestSequence !== undefined) {
@@ -1003,6 +1084,10 @@ export function App({
             setConversationMessages((current) =>
               mergeConversationMessages(current, historyResult.messages),
             );
+            if (loadingInitialHistory) {
+              chatEarlierAfterSequenceRef.current = initialAfterSequence;
+              setHasEarlierChatMessages(initialAfterSequence > 0);
+            }
             if (
               requestedConversationId &&
               chatLastSequenceRef.current > chatReadThroughRef.current
@@ -1024,13 +1109,17 @@ export function App({
           }
         }
         setChatsError(null);
-        setChatsBusy(null);
+        setChatsBusy((current) => (current === 'refresh' ? null : current));
       };
       chatRefreshRef.current = () => void refreshChats();
 
       void Promise.resolve().then(() => {
         if (!active) return;
+        setLoadedRealtimeConversationId(null);
+        setChatRealtimeState(requestedConversationId && !realtimeBaseUrl ? 'polling' : null);
         setConversationMessages([]);
+        setHasEarlierChatMessages(false);
+        setPendingChatMessage(preservedFailedMessage);
         setChatsError(null);
         void refreshChats();
       });
@@ -1043,7 +1132,8 @@ export function App({
         chatRefreshInFlightRef.current = false;
         chatRefreshPendingRef.current = false;
         chatRefreshRef.current = () => undefined;
-        setLoadedDirectConversationId(null);
+        setLoadedRealtimeConversationId(null);
+        setChatRealtimeState(null);
         window.clearInterval(refreshInterval);
       };
     }
@@ -1200,18 +1290,20 @@ export function App({
     gateway,
     chatsReloadToken,
     protectedRoute.kind,
+    realtimeBaseUrl,
     requestedConversationId,
     requestedLocationId,
     requestedProfileUserId,
     homeReloadToken,
     state.session,
     state.view,
+    tenantKey,
   ]);
 
   useEffect(() => {
     if (
-      !loadedDirectConversationId ||
-      loadedDirectConversationId !== requestedConversationId ||
+      !loadedRealtimeConversationId ||
+      loadedRealtimeConversationId !== requestedConversationId ||
       !realtimeBaseUrl
     ) {
       return;
@@ -1219,20 +1311,26 @@ export function App({
     const realtime = connectChatRealtime({
       baseUrl: realtimeBaseUrl,
       tenantKey,
-      conversationId: loadedDirectConversationId,
+      conversationId: loadedRealtimeConversationId,
       getTicket: () => gateway.createRealtimeTicket(),
       getAfterSequence: () => chatLastSequenceRef.current,
       onRecoveryRequired: (afterSequence) => {
         if (afterSequence < chatLastSequenceRef.current) {
           chatLastSequenceRef.current = afterSequence;
           chatReadThroughRef.current = Math.min(chatReadThroughRef.current, afterSequence);
-          if (afterSequence === 0) setConversationMessages([]);
+          if (afterSequence === 0) {
+            setConversationMessages([]);
+            setHasEarlierChatMessages(false);
+            chatEarlierAfterSequenceRef.current = 0;
+          }
         }
         chatRefreshRef.current();
       },
+      onConnectionStateChange: (connectionState: ChatRealtimeConnectionState) =>
+        setChatRealtimeState(connectionState),
     });
     return () => realtime.stop();
-  }, [gateway, loadedDirectConversationId, realtimeBaseUrl, requestedConversationId, tenantKey]);
+  }, [gateway, loadedRealtimeConversationId, realtimeBaseUrl, requestedConversationId, tenantKey]);
 
   useEffect(() => {
     if (state.busy) return;
@@ -1363,9 +1461,13 @@ export function App({
           setBookingsError(null);
           setConversations(null);
           setConversationMessages([]);
+          setHasEarlierChatMessages(false);
           setChatsError(null);
           setChatsBusy(null);
-          setFailedChatMessage(null);
+          setPendingChatMessage(null);
+          chatPendingMessageRef.current = null;
+          chatGameNavigationRef.current = null;
+          setChatRealtimeState(null);
           chatCreateCommandRef.current = null;
           setNotifications(null);
           setWebPushConfiguration(null);
@@ -1412,6 +1514,9 @@ export function App({
   }): void {
     setChatsBusy('send');
     setChatsError(null);
+    const sendingMessage = { ...command, state: 'sending' as const };
+    chatPendingMessageRef.current = sendingMessage;
+    setPendingChatMessage(sendingMessage);
     void gateway
       .sendConversationMessage(command.conversationId, {
         clientMessageId: command.clientMessageId,
@@ -1419,6 +1524,7 @@ export function App({
       })
       .then(
         (result) => {
+          if (chatPendingMessageRef.current?.clientMessageId !== command.clientMessageId) return;
           setConversationMessages((current) =>
             mergeConversationMessages(current, [result.message]),
           );
@@ -1426,13 +1532,17 @@ export function App({
             chatLastSequenceRef.current,
             result.message.sequence,
           );
-          setFailedChatMessage(null);
+          chatPendingMessageRef.current = null;
+          setPendingChatMessage(null);
           setChatsBusy(null);
           setChatsError(null);
-          setChatsReloadToken((token) => token + 1);
+          chatRefreshRef.current();
         },
         (error: unknown) => {
-          setFailedChatMessage(command);
+          if (chatPendingMessageRef.current?.clientMessageId !== command.clientMessageId) return;
+          const failedMessage = { ...command, state: 'failed' as const };
+          chatPendingMessageRef.current = failedMessage;
+          setPendingChatMessage(failedMessage);
           setChatsError(chatUiError(error, 'send'));
           setChatsBusy(null);
         },
@@ -1446,18 +1556,43 @@ export function App({
       clientMessageId: createMessagingCommandId(),
       body,
     };
-    setFailedChatMessage(null);
     sendChatCommand(command);
   }
 
   function handleRetryConversationMessage(): void {
-    if (failedChatMessage) sendChatCommand(failedChatMessage);
+    if (pendingChatMessage?.state === 'failed') sendChatCommand(pendingChatMessage);
   }
 
   function handleRefreshChats(): void {
     setChatsBusy('refresh');
     setChatsError(null);
     setChatsReloadToken((token) => token + 1);
+  }
+
+  function handleLoadEarlierChatMessages(): void {
+    if (!requestedConversationId) return;
+    const earliestSequence = conversationMessages[0]?.sequence;
+    const earlierCursor = chatEarlierAfterSequenceRef.current;
+    if (!earliestSequence || earlierCursor <= 0) {
+      setHasEarlierChatMessages(false);
+      return;
+    }
+    const afterSequence = Math.max(0, earlierCursor - CHAT_HISTORY_PAGE_SIZE);
+    setChatsBusy('load-earlier');
+    setChatsError(null);
+    void gateway.listConversationMessages(requestedConversationId, afterSequence).then(
+      (page) => {
+        const earlier = page.messages.filter((message) => message.sequence < earliestSequence);
+        setConversationMessages((current) => mergeConversationMessages(current, earlier));
+        chatEarlierAfterSequenceRef.current = afterSequence;
+        setHasEarlierChatMessages(afterSequence > 0);
+        setChatsBusy(null);
+      },
+      (error: unknown) => {
+        setChatsError(chatUiError(error, 'history'));
+        setChatsBusy(null);
+      },
+    );
   }
 
   function handleEnableWebPush(): void {
@@ -1705,14 +1840,22 @@ export function App({
           currentUserId={context.user.id}
           busy={chatsBusy}
           error={chatsError}
+          pendingMessage={
+            pendingChatMessage?.conversationId === requestedConversationId
+              ? pendingChatMessage
+              : null
+          }
+          realtimeState={requestedConversationId ? chatRealtimeState : null}
+          hasEarlierMessages={hasEarlierChatMessages}
           canRetrySend={
-            Boolean(failedChatMessage) &&
-            failedChatMessage?.conversationId === requestedConversationId
+            pendingChatMessage?.state === 'failed' &&
+            pendingChatMessage.conversationId === requestedConversationId
           }
           onCreateDirect={handleCreateDirectConversation}
           onSendMessage={handleSendConversationMessage}
           onRetrySend={handleRetryConversationMessage}
           onRefresh={handleRefreshChats}
+          onLoadEarlier={handleLoadEarlierChatMessages}
         />
       );
     }
@@ -1883,6 +2026,7 @@ export function App({
       return (
         <GamesPage
           gateway={gateway}
+          chatNavigationScope={{ tenantKey, userId: context.user.id }}
           {...(protectedRoute.kind === 'game' ? { gameId: protectedRoute.gameId } : {})}
           {...(eventId ? { eventId } : {})}
         />

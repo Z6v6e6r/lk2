@@ -4,6 +4,8 @@ export interface ChatRealtimeClient {
   stop(): void;
 }
 
+export type ChatRealtimeConnectionState = 'connecting' | 'connected' | 'reconnecting';
+
 function realtimeUrl(baseUrl: string, tenantKey: string): string {
   const url = new URL(`/realtime/v1/${encodeURIComponent(tenantKey)}`, baseUrl);
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -17,6 +19,7 @@ export function connectChatRealtime(options: {
   readonly getTicket: () => Promise<MessagingRealtimeTicket>;
   readonly getAfterSequence: () => number;
   readonly onRecoveryRequired: (afterSequence: number) => void;
+  readonly onConnectionStateChange?: (state: ChatRealtimeConnectionState) => void;
   readonly createSocket?: (url: string) => WebSocket;
 }): ChatRealtimeClient {
   const createSocket = options.createSocket ?? ((url: string) => new WebSocket(url));
@@ -34,6 +37,8 @@ export function connectChatRealtime(options: {
   const scheduleReconnect = (): void => {
     if (stopped || reconnectTimer !== undefined) return;
     clearHeartbeat();
+    options.onConnectionStateChange?.('reconnecting');
+    options.onRecoveryRequired(options.getAfterSequence());
     const delay = reconnectDelays[Math.min(reconnectAttempt, reconnectDelays.length - 1)] ?? 15_000;
     reconnectAttempt += 1;
     reconnectTimer = window.setTimeout(() => {
@@ -43,6 +48,7 @@ export function connectChatRealtime(options: {
   };
   const connect = async (): Promise<void> => {
     if (stopped) return;
+    options.onConnectionStateChange?.(reconnectAttempt > 0 ? 'reconnecting' : 'connecting');
     try {
       const issued = await options.getTicket();
       if (stopped) return;
@@ -62,6 +68,7 @@ export function connectChatRealtime(options: {
         if (typeof message !== 'object' || message === null || !('type' in message)) return;
         if (message.type === 'connection.ready') {
           reconnectAttempt = 0;
+          options.onConnectionStateChange?.('connected');
           nextSocket.send(
             JSON.stringify({
               type: 'conversation.subscribe',

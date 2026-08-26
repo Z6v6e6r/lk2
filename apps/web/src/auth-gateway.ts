@@ -237,6 +237,7 @@ export interface ConversationMessage {
   readonly id: string;
   readonly conversationId: string;
   readonly sequence: number;
+  readonly clientMessageId?: string;
   readonly sender: MessagingParticipant;
   readonly messageType: 'TEXT';
   readonly body: string;

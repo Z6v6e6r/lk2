@@ -22,6 +22,7 @@ vi.mock('./chat-realtime-client.js', () => ({ connectChatRealtime: realtimeMocks
 
 import { App } from './App.js';
 import { consumeCommunityInviteToken } from './community-invite-token.js';
+import { rememberGameChatNavigation } from './game-chat-navigation.js';
 import type {
   AuthGateway,
   AuthenticatedSession,
@@ -500,6 +501,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   realtimeMocks.connect.mockClear();
   vi.useRealTimers();
+  window.sessionStorage.clear();
   window.history.replaceState({}, '', '/');
 });
 
@@ -1665,7 +1667,7 @@ describe('PadlHub web authentication', () => {
     await waitFor(() => expect(listConversationMessages).toHaveBeenCalledWith(conversationId, 0));
   });
 
-  it('does not request a realtime ticket or socket for a selected GAME conversation', async () => {
+  it('opens the existing recoverable realtime path for a loaded GAME conversation', async () => {
     const gameConversation = {
       id: '22222222-2222-4222-8222-222222222222',
       kind: 'GAME' as const,
@@ -1675,24 +1677,112 @@ describe('PadlHub web authentication', () => {
       updatedAt: '2026-08-03T10:00:00.000Z',
     };
     window.history.replaceState({}, '', `/chats/${gameConversation.id}`);
-    const createRealtimeTicket = vi.fn();
     const gateway = createGateway({
       restoreSession: vi.fn().mockResolvedValue(session),
       listConversations: vi.fn().mockResolvedValue({ items: [gameConversation] }),
       listConversationMessages: vi.fn().mockResolvedValue({ messages: [] }),
-      createRealtimeTicket,
     });
 
     render(<App gateway={gateway} tenantKey="padlhub" realtimeBaseUrl="wss://realtime.example" />);
 
     await waitFor(() =>
-      expect(gateway.listConversationMessages).toHaveBeenCalledWith(gameConversation.id, 0),
+      expect(realtimeMocks.connect).toHaveBeenCalledWith(
+        expect.objectContaining({ conversationId: gameConversation.id }),
+      ),
     );
-    expect(realtimeMocks.connect).not.toHaveBeenCalled();
-    expect(createRealtimeTicket).not.toHaveBeenCalled();
   });
 
-  it('keeps GAME polling HTTP-only across timer refreshes', async () => {
+  it('uses the server-returned GAME navigation hint when the selected chat is outside list limit', async () => {
+    const conversationId = '22222222-2222-4222-8222-222222222222';
+    const gameConversation = {
+      id: conversationId,
+      kind: 'GAME' as const,
+      contextId: '11111111-1111-4111-8111-111111111111',
+      title: 'Игра вне первых 50 диалогов',
+      unreadCount: 0,
+      updatedAt: '2026-08-26T09:00:00.000Z',
+      lastMessage: {
+        sequence: 2_501,
+        body: 'Последнее сообщение',
+        createdAt: '2026-08-26T09:00:00.000Z',
+      },
+    };
+    const latestMessage = {
+      id: '33333333-3333-4333-8333-333333333333',
+      conversationId,
+      sequence: 2_501,
+      sender: { userId: '11111111-1111-4111-8111-111111111111', displayName: 'Борис' },
+      messageType: 'TEXT' as const,
+      body: 'Последнее сообщение',
+      createdAt: '2026-08-26T09:00:00.000Z',
+    };
+    rememberGameChatNavigation(
+      { tenantKey: 'padlhub', userId: session.context.user.id },
+      gameConversation,
+    );
+    window.history.replaceState({}, '', `/chats/${conversationId}`);
+    const listConversationMessages = vi
+      .fn<AuthGateway['listConversationMessages']>()
+      .mockResolvedValue({ messages: [latestMessage] });
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue(session),
+      listConversations: vi.fn().mockResolvedValue({ items: [] }),
+      listConversationMessages,
+    });
+    const user = userEvent.setup();
+
+    render(<App gateway={gateway} tenantKey="padlhub" realtimeBaseUrl="wss://realtime.example" />);
+
+    expect(await screen.findByRole('heading', { name: gameConversation.title })).toBeVisible();
+    expect(listConversationMessages).toHaveBeenCalledWith(conversationId, 2_401);
+    await waitFor(() =>
+      expect(realtimeMocks.connect).toHaveBeenCalledWith(
+        expect.objectContaining({ conversationId }),
+      ),
+    );
+    await user.click(screen.getByRole('button', { name: 'Обновить' }));
+    await waitFor(() => expect(listConversationMessages).toHaveBeenCalledTimes(2));
+    expect(listConversationMessages.mock.calls).toEqual([
+      [conversationId, 2_401],
+      [conversationId, 2_401],
+    ]);
+  });
+
+  it('does not render a GAME navigation hint before current HTTP authorization succeeds', async () => {
+    const conversationId = '22222222-2222-4222-8222-222222222222';
+    const gameConversation = {
+      id: conversationId,
+      kind: 'GAME' as const,
+      contextId: '11111111-1111-4111-8111-111111111111',
+      title: 'Приватная игра предыдущей сессии',
+      unreadCount: 0,
+      updatedAt: '2026-08-26T09:00:00.000Z',
+      lastMessage: {
+        sequence: 2_501,
+        body: 'Приватный текст',
+        createdAt: '2026-08-26T09:00:00.000Z',
+      },
+    };
+    rememberGameChatNavigation(
+      { tenantKey: 'padlhub', userId: session.context.user.id },
+      gameConversation,
+    );
+    window.history.replaceState({}, '', `/chats/${conversationId}`);
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue(session),
+      listConversations: vi.fn().mockResolvedValue({ items: [] }),
+      listConversationMessages: vi.fn().mockRejectedValue(new Error('not authorized')),
+    });
+
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+
+    expect(await screen.findByText('Проверьте соединение и повторите запрос.')).toBeVisible();
+    expect(screen.queryByText(gameConversation.title)).toBeNull();
+    expect(screen.queryByText(gameConversation.lastMessage.body)).toBeNull();
+    expect(window.sessionStorage.getItem('phub.game-chat-navigation.v1')).toBeNull();
+  });
+
+  it('keeps HTTP polling as a GAME fallback while realtime is connected', async () => {
     vi.useFakeTimers();
     const gameConversation = {
       id: '22222222-2222-4222-8222-222222222222',
@@ -1703,13 +1793,11 @@ describe('PadlHub web authentication', () => {
       updatedAt: '2026-08-03T10:00:00.000Z',
     };
     window.history.replaceState({}, '', `/chats/${gameConversation.id}`);
-    const createRealtimeTicket = vi.fn();
     const listConversationMessages = vi.fn().mockResolvedValue({ messages: [] });
     const gateway = createGateway({
       restoreSession: vi.fn().mockResolvedValue(session),
       listConversations: vi.fn().mockResolvedValue({ items: [gameConversation] }),
       listConversationMessages,
-      createRealtimeTicket,
     });
 
     render(<App gateway={gateway} tenantKey="padlhub" realtimeBaseUrl="wss://realtime.example" />);
@@ -1722,8 +1810,7 @@ describe('PadlHub web authentication', () => {
     });
 
     expect(listConversationMessages.mock.calls.length).toBeGreaterThan(1);
-    expect(realtimeMocks.connect).not.toHaveBeenCalled();
-    expect(createRealtimeTicket).not.toHaveBeenCalled();
+    expect(realtimeMocks.connect).toHaveBeenCalledOnce();
   });
 
   it('waits for the initial DIRECT history before opening realtime', async () => {
@@ -1836,12 +1923,17 @@ describe('PadlHub web authentication', () => {
     expect(realtimeMocks.connect).toHaveBeenCalledOnce();
   });
 
-  it('recovers a DIRECT sequence gap over paged HTTP without duplicate rendering', async () => {
+  it('recovers a GAME sequence gap over paged HTTP without duplicate rendering', async () => {
     const conversationId = '22222222-2222-4222-8222-222222222222';
-    const directConversation = {
+    const otherParticipant = {
+      userId: '11111111-1111-4111-8111-111111111111',
+      displayName: 'Борис',
+    };
+    const gameConversation = {
       id: conversationId,
-      kind: 'DIRECT' as const,
-      participant: { userId: '11111111-1111-4111-8111-111111111111', displayName: 'Борис' },
+      kind: 'GAME' as const,
+      contextId: '11111111-1111-4111-8111-111111111112',
+      title: 'Игра в среду',
       unreadCount: 0,
       updatedAt: '2026-08-03T10:00:00.000Z',
     };
@@ -1850,7 +1942,7 @@ describe('PadlHub web authentication', () => {
         id: '33333333-3333-4333-8333-333333333331',
         conversationId,
         sequence: 1,
-        sender: directConversation.participant,
+        sender: otherParticipant,
         messageType: 'TEXT' as const,
         body: 'Первое',
         createdAt: '2026-08-03T10:01:00.000Z',
@@ -1859,7 +1951,7 @@ describe('PadlHub web authentication', () => {
         id: '33333333-3333-4333-8333-333333333332',
         conversationId,
         sequence: 2,
-        sender: directConversation.participant,
+        sender: otherParticipant,
         messageType: 'TEXT' as const,
         body: 'Второе',
         createdAt: '2026-08-03T10:02:00.000Z',
@@ -1868,7 +1960,7 @@ describe('PadlHub web authentication', () => {
         id: '33333333-3333-4333-8333-333333333333',
         conversationId,
         sequence: 3,
-        sender: directConversation.participant,
+        sender: otherParticipant,
         messageType: 'TEXT' as const,
         body: 'Третье',
         createdAt: '2026-08-03T10:03:00.000Z',
@@ -1888,7 +1980,7 @@ describe('PadlHub web authentication', () => {
     });
     const gateway = createGateway({
       restoreSession: vi.fn().mockResolvedValue(session),
-      listConversations: vi.fn().mockResolvedValue({ items: [directConversation] }),
+      listConversations: vi.fn().mockResolvedValue({ items: [gameConversation] }),
       listConversationMessages,
       markConversationRead,
     });
@@ -1926,6 +2018,169 @@ describe('PadlHub web authentication', () => {
     await waitFor(() =>
       expect(markConversationRead).toHaveBeenCalledWith(conversationId, 3, expect.any(String)),
     );
+  });
+
+  it('reconciles a GAME optimistic send with an early realtime echo by clientMessageId', async () => {
+    const conversationId = '22222222-2222-4222-8222-222222222222';
+    const clientMessageId = 'client-message-echo-0001';
+    const gameConversation = {
+      id: conversationId,
+      kind: 'GAME' as const,
+      contextId: '11111111-1111-4111-8111-111111111112',
+      title: 'Игра в среду',
+      unreadCount: 0,
+      updatedAt: '2026-08-03T10:00:00.000Z',
+    };
+    const durableMessage = {
+      id: '33333333-3333-4333-8333-333333333333',
+      conversationId,
+      sequence: 1,
+      clientMessageId,
+      sender: { userId: session.context.user.id, displayName: 'Анна' },
+      messageType: 'TEXT' as const,
+      body: 'Буду через пять минут',
+      createdAt: '2026-08-03T10:01:00.000Z',
+    };
+    let resolveSend:
+      ((value: Awaited<ReturnType<AuthGateway['sendConversationMessage']>>) => void) | undefined;
+    const sendResult = new Promise<Awaited<ReturnType<AuthGateway['sendConversationMessage']>>>(
+      (resolve) => {
+        resolveSend = resolve;
+      },
+    );
+    const listConversationMessages = vi
+      .fn<AuthGateway['listConversationMessages']>()
+      .mockResolvedValueOnce({ messages: [] })
+      .mockResolvedValueOnce({ messages: [] })
+      .mockResolvedValue({ messages: [durableMessage] });
+    const sendConversationMessage = vi
+      .fn<AuthGateway['sendConversationMessage']>()
+      .mockReturnValue(sendResult);
+    window.history.replaceState({}, '', `/chats/${conversationId}`);
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue(session),
+      listConversations: vi.fn().mockResolvedValue({ items: [gameConversation] }),
+      listConversationMessages,
+      sendConversationMessage,
+    });
+    const user = userEvent.setup();
+
+    render(<App gateway={gateway} tenantKey="padlhub" realtimeBaseUrl="wss://realtime.example" />);
+    await waitFor(() => expect(realtimeMocks.connect).toHaveBeenCalledOnce());
+    await user.type(screen.getByLabelText('Сообщение'), durableMessage.body);
+    await user.click(screen.getByRole('button', { name: 'Отправить' }));
+    expect(screen.getByText('Отправляется…')).toBeVisible();
+    const command = sendConversationMessage.mock.calls[0]?.[1];
+    durableMessage.clientMessageId = command?.clientMessageId ?? clientMessageId;
+
+    const connection = (
+      realtimeMocks.connect.mock.calls as unknown as readonly [
+        { readonly onRecoveryRequired: (afterSequence: number) => void },
+      ][]
+    )[0]?.[0];
+    act(() => connection?.onRecoveryRequired(0));
+
+    await waitFor(() => expect(listConversationMessages).toHaveBeenCalledTimes(2));
+    expect(screen.getByLabelText('Сообщение')).toBeDisabled();
+    act(() => connection?.onRecoveryRequired(0));
+
+    await waitFor(() => expect(screen.getByText('Отправлено')).toBeVisible());
+    expect(screen.getByLabelText('Сообщение')).toBeEnabled();
+    expect(screen.getAllByText(durableMessage.body)).toHaveLength(1);
+    act(() => resolveSend?.({ outcome: 'ok', message: durableMessage, replayed: false }));
+    await waitFor(() => expect(sendConversationMessage).toHaveBeenCalledOnce());
+    expect(screen.getAllByText(durableMessage.body)).toHaveLength(1);
+  });
+
+  it('opens a GAME thread on its newest page and loads older history without boundary duplicates', async () => {
+    const conversationId = '22222222-2222-4222-8222-222222222222';
+    const message = (sequence: number) => ({
+      id: `33333333-3333-4333-8333-${String(sequence).padStart(12, '0')}`,
+      conversationId,
+      sequence,
+      sender: { userId: '11111111-1111-4111-8111-111111111111', displayName: 'Борис' },
+      messageType: 'TEXT' as const,
+      body: `Сообщение ${sequence}`,
+      createdAt: '2026-08-03T10:01:00.000Z',
+    });
+    const gameConversation = {
+      id: conversationId,
+      kind: 'GAME' as const,
+      contextId: '11111111-1111-4111-8111-111111111112',
+      title: 'Длинная история',
+      unreadCount: 0,
+      updatedAt: '2026-08-03T10:00:00.000Z',
+      lastMessage: {
+        sequence: 250,
+        body: 'Сообщение 250',
+        createdAt: '2026-08-03T10:01:00.000Z',
+      },
+    };
+    const listConversationMessages = vi
+      .fn<AuthGateway['listConversationMessages']>()
+      .mockResolvedValueOnce({ messages: [message(151), message(250)] })
+      .mockResolvedValueOnce({ messages: [message(51), message(150)] });
+    window.history.replaceState({}, '', `/chats/${conversationId}`);
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue(session),
+      listConversations: vi.fn().mockResolvedValue({ items: [gameConversation] }),
+      listConversationMessages,
+    });
+    const user = userEvent.setup();
+
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+    await waitFor(() => expect(listConversationMessages).toHaveBeenCalledWith(conversationId, 150));
+    await user.click(screen.getByRole('button', { name: 'Показать предыдущие сообщения' }));
+    await waitFor(() => expect(listConversationMessages).toHaveBeenCalledWith(conversationId, 50));
+    expect(screen.getAllByText('Сообщение 150')).toHaveLength(1);
+    expect(screen.getAllByText('Сообщение 151')).toHaveLength(1);
+  });
+
+  it('advances older-history probing across a fully deleted sequence window', async () => {
+    const conversationId = '22222222-2222-4222-8222-222222222222';
+    const message = (sequence: number) => ({
+      id: `33333333-3333-4333-8333-${String(sequence).padStart(12, '0')}`,
+      conversationId,
+      sequence,
+      sender: { userId: '11111111-1111-4111-8111-111111111111', displayName: 'Борис' },
+      messageType: 'TEXT' as const,
+      body: `Сообщение ${sequence}`,
+      createdAt: '2026-08-03T10:01:00.000Z',
+    });
+    const gameConversation = {
+      id: conversationId,
+      kind: 'GAME' as const,
+      contextId: '11111111-1111-4111-8111-111111111112',
+      title: 'История с удалённым окном',
+      unreadCount: 0,
+      updatedAt: '2026-08-03T10:00:00.000Z',
+      lastMessage: {
+        sequence: 250,
+        body: 'Сообщение 250',
+        createdAt: '2026-08-03T10:01:00.000Z',
+      },
+    };
+    const listConversationMessages = vi
+      .fn<AuthGateway['listConversationMessages']>()
+      .mockResolvedValueOnce({ messages: [message(151), message(250)] })
+      .mockResolvedValueOnce({ messages: [message(151), message(250)] })
+      .mockResolvedValueOnce({ messages: [message(1), message(50)] });
+    window.history.replaceState({}, '', `/chats/${conversationId}`);
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue(session),
+      listConversations: vi.fn().mockResolvedValue({ items: [gameConversation] }),
+      listConversationMessages,
+    });
+    const user = userEvent.setup();
+
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+    await user.click(await screen.findByRole('button', { name: 'Показать предыдущие сообщения' }));
+    await waitFor(() => expect(listConversationMessages).toHaveBeenCalledWith(conversationId, 50));
+    await user.click(screen.getByRole('button', { name: 'Показать предыдущие сообщения' }));
+
+    await waitFor(() => expect(listConversationMessages).toHaveBeenCalledWith(conversationId, 0));
+    expect(screen.getByText('Сообщение 1')).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Показать предыдущие сообщения' })).toBeNull();
   });
 
   it('runs one pending recovery after a realtime hint arrives during an HTTP refresh', async () => {
@@ -2045,10 +2300,11 @@ describe('PadlHub web authentication', () => {
           replayed: true,
         }),
       );
+    const listConversationMessages = vi.fn().mockResolvedValue({ messages: [] });
     const gateway = createGateway({
       restoreSession: vi.fn().mockResolvedValue(session),
       listConversations: vi.fn().mockResolvedValue({ items: [conversation] }),
-      listConversationMessages: vi.fn().mockResolvedValue({ messages: [] }),
+      listConversationMessages,
       sendConversationMessage,
     });
     const user = userEvent.setup();
@@ -2056,6 +2312,10 @@ describe('PadlHub web authentication', () => {
     render(<App gateway={gateway} tenantKey="padlhub" />);
     await user.type(await screen.findByLabelText('Сообщение'), 'Привет');
     await user.click(screen.getByRole('button', { name: 'Отправить' }));
+    await user.click(await screen.findByRole('button', { name: 'Обновить' }));
+    await waitFor(() => expect(listConversationMessages.mock.calls.length).toBeGreaterThan(1));
+    expect(screen.getByRole('button', { name: 'Повторить отправку' })).toBeVisible();
+    expect(screen.getAllByText('Привет')).toHaveLength(1);
     await user.click(await screen.findByRole('button', { name: 'Повторить отправку' }));
 
     await waitFor(() => expect(sendConversationMessage).toHaveBeenCalledTimes(2));

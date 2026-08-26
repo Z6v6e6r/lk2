@@ -15,10 +15,18 @@ history/send/read/realtime в обе стороны, но не удаляет и
 `MESSAGING_USER_BLOCK_COMMANDS_ENABLED=false`, пока все API/realtime readers не обновлены.
 Tournament/station contextual chats, attachments, edit/delete, connectors и moderation в M1/M2 не
 входят. Realtime M2 добавляет одноразовый session-bound ticket, повторную проверку сессии/прав/
-membership/active target/privacy, identifier-only fanout и HTTP gap recovery. Web подключает realtime только для
-загруженного DIRECT; GAME остаётся на HTTP polling. Все команды и каноническая история остаются в
-HTTP/PostgreSQL. Durable booking reminder scheduler реализован отдельно и default-off; он не
+membership/active target/privacy, identifier-only fanout и HTTP gap recovery. Web подключает
+realtime для загруженных DIRECT и GAME; GAME subscription/fanout дополнительно перепроверяют
+`games.play` и текущую `ACTIVE` participation, а 5-секундный HTTP polling остаётся fallback. Все
+команды и каноническая история остаются в HTTP/PostgreSQL. Durable booking reminder scheduler
+реализован отдельно и default-off; он не
 заменяет отсутствующий authoritative booking event producer и сам по себе не разрешает активацию.
+
+Переход из Games в GAME chat переносит только одноразовую, tenant/user-bound подсказку позиции
+истории без body сообщения; Web использует её лишь после успешной текущей HTTP-авторизации.
+Холодный bookmark очень старого диалога, отсутствующего в первых 50 summaries, не имеет
+authoritative newest-sequence lookup в текущем контракте и остаётся вне beta closure до появления
+backward/selected-summary API.
 
 Следующий feature-gated slice реализует только `GAME`: canonical `games.games.id`, актуальная
 `games.participations(state='ACTIVE')` и `games.play` повторно проверяются перед list/history/send/
@@ -469,8 +477,8 @@ p95 < 2 s после commit; 99.9% intent либо доставлен хотя �
 2. **Direct + contextual read/write:** direct HTTP list/create/history/send/read cursor и directed
    block policy реализованы за tenant gates; GAME использует current roster, а tournament/community
    membership остаются следующими подэтапами.
-3. **Realtime:** DIRECT tickets, subscriptions, sequence-gap recovery; HTTP остаётся fallback и
-   единственным live-refresh transport для GAME в текущем срезе.
+3. **Realtime:** DIRECT и GAME используют session-bound tickets, авторизованные subscriptions и
+   sequence-gap recovery; HTTP остаётся канонической историей и fallback.
 4. **CUP support + один connector:** inbound/outbound dedupe, assignment, retry/DLQ.
 5. **In-app notifications:** templates, rules, intents, preferences и inbox. Пользовательский срез
    и ручная отправка из ЦУП реализованы и закрыты tenant/admin gates; управление версиями

@@ -421,11 +421,18 @@ afterward; the verifier itself does not delete those records.
 закрывается; снятие membership запрещает subscribe/fanout; разрыв Rabbit даёт
 readiness 503 до повторной регистрации consumer; после reconnect клиент забирает gap через
 HTTP. В логах, Rabbit и quarantine не должно быть body сообщения.
-Web создаёт ticket/socket только для загруженного DIRECT. Для GAME проверьте отсутствие ticket и
-reconnect loop при сохранённом 5-секундном HTTP polling.
+Web создаёт ticket/socket только после успешной загрузки выбранного DIRECT или GAME conversation.
+Для GAME subscription и каждый fanout должны повторно подтвердить `games.play`, текущую
+`games.participations.state='ACTIVE'` и contextual gate. При disconnect клиент показывает
+reconnect-состояние, сразу запускает HTTP gap recovery и сохраняет 5-секундный polling fallback.
+Проверка Games → Chat должна использовать server-returned, одноразовую tenant/user-bound navigation
+подсказку без message body и подтверждать, что она не отображается при отказе HTTP history.
+Холодный bookmark GAME conversation вне первых 50 summaries не является beta acceptance path до
+появления отдельного authoritative newest/selected-summary контракта.
 
-Rollback: сначала `--realtime=off` с теми же `http/direct=on`; поллинг остаётся
-рабочим. При инциденте HTTP/direct выключаются отдельно. Схему и Rabbit queues не удалять.
+Rollback: сначала `--realtime=off` с теми же `http/direct/contextual=on`; поллинг остаётся
+рабочим. При инциденте HTTP direct/contextual gates выключаются отдельно. Схему и Rabbit queues не
+удалять.
 
 ### In-app runtime gate
 
@@ -1156,8 +1163,9 @@ rollback.
 - Revoke `chat.direct.create` in the database while retaining the previously issued test JWT;
   confirm DIRECT list omits previews and block/unblock returns `CHAT_PERMISSION_REQUIRED` without a
   command, block, audit or outbox write. Repeat with an inactive actor and `chatPolicy=NOBODY` target.
-- Open a GAME conversation and confirm the Web client uses HTTP polling without issuing a realtime
-  ticket; repeat a DIRECT conversation and confirm ticket/socket recovery still works.
+- Open a GAME conversation and confirm one-time ticket/socket subscription, identifier-only fanout,
+  duplicate-event reconciliation and reconnect HTTP gap recovery; repeat a DIRECT conversation and
+  confirm its privacy/block authorization remains unchanged.
 - Remove a test member and confirm both HTTP history and WebSocket subscribe reject access.
 - Submit the same connector webhook twice and confirm one canonical message/external mapping.
 - Register, rotate and invalidate one Web Push subscription, APNs token and FCM token. Confirm a
