@@ -41,14 +41,20 @@ jobs:
       realtime_index_digest: ${{ steps.publication.outputs.realtime_index_digest }}
       web_index_digest: ${{ steps.publication.outputs.web_index_digest }}
       worker_index_digest: ${{ steps.publication.outputs.worker_index_digest }}
+      source_tree: ${{ steps.publication.outputs.source_tree }}
+      base_lock_sha256: ${{ steps.source_base.outputs.base_lock_sha256 }}
+      node_index_digest: ${{ steps.source_base.outputs.node_index_digest }}
+      nginx_index_digest: ${{ steps.source_base.outputs.nginx_index_digest }}
+      scanner_index_digest: ${{ steps.source_base.outputs.scanner_index_digest }}
+      canonical_exists: ${{ steps.request.outputs.canonical_exists }}
     permissions:
       actions: read
       contents: read
     steps:
-      - name: Validate exact first-attempt reconciliation request
+      - id: request
+        name: Validate exact successful first-attempt publication run
         env:
           ACTOR: ${{ github.actor }}
-          APPROVED_SOURCE_SHA: 595e954bb8f53367baf034d7f39b255af0fda5fd
           CONFIRMATION: ${{ inputs.confirmation }}
           EXPECTED_SOURCE_SHA: ${{ inputs.expected_source_sha }}
           EXPECTED_WORKFLOW_SHA: ${{ inputs.expected_workflow_sha }}
@@ -74,7 +80,7 @@ jobs:
           printf '%s' "$EXPECTED_WORKFLOW_SHA" | grep -Eq '^[0-9a-f]{40}$'
           printf '%s' "$PUBLICATION_WORKFLOW_SHA" | grep -Eq '^[0-9a-f]{40}$'
           printf '%s' "$PUBLICATION_RUN_ID" | grep -Eq '^[1-9][0-9]*$'
-          test "$EXPECTED_SOURCE_SHA" = "$APPROVED_SOURCE_SHA"
+          test "$EXPECTED_SOURCE_SHA" = "$PUBLICATION_WORKFLOW_SHA"
           publication_run="$RUNNER_TEMP/timeweb-amd64-publication-run.json"
           { printf 'header = "Authorization: Bearer %s"\n' "$GITHUB_TOKEN"; } \
             | curl --disable --fail --silent --show-error \
@@ -88,6 +94,8 @@ jobs:
             .event == "workflow_dispatch" and
             .head_branch == "main" and
             .head_sha == $workflowSha and
+            (.actor.login | type == "string" and length > 0) and
+            (.triggering_actor.login // .actor.login) == .actor.login and
             .run_attempt == 1 and
             .status == "completed" and
             .conclusion == "success"
@@ -106,6 +114,35 @@ jobs:
               (.digest | test("^sha256:[0-9a-f]{64}$"))
             )] | length == 1
           ' "$publication_artifacts" >/dev/null
+          canonical_name="timeweb-amd64-canonical-release-$EXPECTED_SOURCE_SHA-$PUBLICATION_RUN_ID-1"
+          canonical_count="$(jq --arg name "$canonical_name" '[.artifacts[] | select(
+            .name == $name and .expired == false and (.digest | test("^sha256:[0-9a-f]{64}$"))
+          )] | length' "$publication_artifacts")"
+          test "$canonical_count" -le 1
+          if test "$canonical_count" -eq 1; then
+            echo 'canonical_exists=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'canonical_exists=false' >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          ref: ${{ inputs.expected_source_sha }}
+          path: publication-source
+      - id: source_base
+        name: Verify the publication-source lock and Dockerfiles
+        env:
+          EXPECTED_SOURCE_SHA: ${{ inputs.expected_source_sha }}
+        run: |
+          set -euo pipefail
+          test "$(git -C publication-source rev-parse HEAD)" = "$EXPECTED_SOURCE_SHA"
+          test -z "$(git -C publication-source status --porcelain)"
+          node publication-source/scripts/verify-timeweb-base-images.js static \
+            --lock publication-source/deploy/timeweb/base-images.lock.json \
+            --repo-root publication-source \
+            --github-output "$GITHUB_OUTPUT" \
+            --evidence-json > publication-source/base-images-evidence.json
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: timeweb-amd64-publication-${{ inputs.publication_run_id }}-1
@@ -123,10 +160,12 @@ jobs:
           cd publication-reference
           sha256sum --check --strict timeweb-amd64-publication-checksums.txt
           manifest=timeweb-amd64-publication-manifest.json
-          jq -e --arg runId "$PUBLICATION_RUN_ID" --arg sourceSha "$EXPECTED_SOURCE_SHA" --arg workflowSha "$PUBLICATION_WORKFLOW_SHA" '
+          source_tree="$(git -C ../publication-source rev-parse 'HEAD^{tree}')"
+          jq -e --arg runId "$PUBLICATION_RUN_ID" --arg sourceSha "$EXPECTED_SOURCE_SHA" --arg sourceTree "$source_tree" --arg workflowSha "$PUBLICATION_WORKFLOW_SHA" --slurpfile expected ../publication-source/base-images-evidence.json '
             .schemaVersion == 1 and
             .kind == "phub-timeweb-amd64-publication" and
             .sourceSha == $sourceSha and
+            .sourceTree == $sourceTree and
             .workflowSha == $workflowSha and
             .repository == "Z6v6e6r/lk2" and
             .platform == "linux/amd64" and
@@ -135,17 +174,24 @@ jobs:
             .authorizesDeploy == false and
             .authorizesVpsProvisioning == false and
             .authorizesDatabaseMutation == false and
+            .baseLock == $expected[0].baseLock and
+            .baseImages == $expected[0].baseImages and
             ([.images[].service] | sort) == ["api","migrator","realtime","web","worker"] and
             all(.images[];
               .sourceSha == $sourceSha and
+              .sourceTree == $sourceTree and
               .workflowSha == $workflowSha and
               .platform == "linux/amd64" and
               .runId == $runId and .runAttempt == "1" and
               .repository == ("ghcr.io/z6v6e6r/phub-" + .service) and
               .publicationTag == ("amd64-sha-" + $sourceSha + "-" + $runId + "-1") and
-              (.indexDigest | test("^sha256:[0-9a-f]{64}$"))
+              (.indexDigest | test("^sha256:[0-9a-f]{64}$")) and
+              .provenanceSubject == .runtimeDigest and
+              .sbomSubject == .runtimeDigest and
+              .sourceMaterialSha == $sourceSha
             )
           ' "$manifest" >/dev/null
+          printf 'source_tree=%s\n' "$source_tree" >> "$GITHUB_OUTPUT"
           for service in web api worker realtime migrator; do
             digest="$(jq -er --arg service "$service" '.images[] | select(.service == $service) | .indexDigest' "$manifest")"
             printf '%s_index_digest=%s\n' "$service" "$digest" >> "$GITHUB_OUTPUT"
@@ -177,6 +223,35 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+          ref: ${{ inputs.expected_workflow_sha }}
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          ref: ${{ inputs.expected_source_sha }}
+          path: publication-source
+      - name: Revalidate the publication-source base contract before GHCR login
+        env:
+          EXPECTED_BASE_LOCK_SHA256: ${{ needs.validate-request.outputs.base_lock_sha256 }}
+          EXPECTED_NGINX_INDEX_DIGEST: ${{ needs.validate-request.outputs.nginx_index_digest }}
+          EXPECTED_NODE_INDEX_DIGEST: ${{ needs.validate-request.outputs.node_index_digest }}
+          EXPECTED_SCANNER_INDEX_DIGEST: ${{ needs.validate-request.outputs.scanner_index_digest }}
+          EXPECTED_SOURCE_SHA: ${{ inputs.expected_source_sha }}
+          EXPECTED_SOURCE_TREE: ${{ needs.validate-request.outputs.source_tree }}
+        run: |
+          set -euo pipefail
+          test "$(git -C publication-source rev-parse HEAD)" = "$EXPECTED_SOURCE_SHA"
+          test "$(git -C publication-source rev-parse 'HEAD^{tree}')" = "$EXPECTED_SOURCE_TREE"
+          source_outputs="$RUNNER_TEMP/publication-source-base-$RUNNER_TRACKING_ID.txt"
+          : > "$source_outputs"
+          node publication-source/scripts/verify-timeweb-base-images.js static \
+            --lock publication-source/deploy/timeweb/base-images.lock.json \
+            --repo-root publication-source \
+            --github-output "$source_outputs"
+          grep -Fx "base_lock_sha256=$EXPECTED_BASE_LOCK_SHA256" "$source_outputs"
+          grep -Fx "node_index_digest=$EXPECTED_NODE_INDEX_DIGEST" "$source_outputs"
+          grep -Fx "nginx_index_digest=$EXPECTED_NGINX_INDEX_DIGEST" "$source_outputs"
+          grep -Fx "scanner_index_digest=$EXPECTED_SCANNER_INDEX_DIGEST" "$source_outputs"
       - name: Install checksum-verified Buildx reader
         env:
           BUILDX_SHA256: 48af8a397ebd60178778bf63611dbcebe5f5e7a9be90eb9147b24b9587455778
@@ -209,14 +284,16 @@ jobs:
           set -euo pipefail
           source scripts/timeweb-amd64-registry-custody-retry.sh
           source_sha="$EXPECTED_SOURCE_SHA"
-          source_tree=3f4c1e63dd30eb60251533b95f1970fd96754a08
+          source_tree="${{ needs.validate-request.outputs.source_tree }}"
           original_builder="https://github.com/Z6v6e6r/lk2/actions/runs/$PUBLICATION_RUN_ID/attempts/1"
           original_workflow_sha="$PUBLICATION_WORKFLOW_SHA"
-          test "$(git rev-parse "$source_sha^{tree}")" = "$source_tree"
+          test "$(git -C publication-source rev-parse 'HEAD^{tree}')" = "$source_tree"
           tag="amd64-sha-$source_sha-$PUBLICATION_RUN_ID-1"
           repository="ghcr.io/z6v6e6r/phub-$SERVICE"
           mkdir -p reconciliation-evidence/attestations reconciliation-evidence/statements
-          phub_ghcr_custody_retry "$SERVICE-root-index" phub_ghcr_custody_read_exact_json "$repository:$tag" "$EXPECTED_INDEX_DIGEST" reconciliation-evidence/oci-index.json
+          phub_ghcr_custody_retry "$SERVICE-unique-tag-index" phub_ghcr_custody_read_exact_json "$repository:$tag" "$EXPECTED_INDEX_DIGEST" reconciliation-evidence/tag-oci-index.json
+          phub_ghcr_custody_retry "$SERVICE-root-index" phub_ghcr_custody_read_exact_json "$repository@$EXPECTED_INDEX_DIGEST" "$EXPECTED_INDEX_DIGEST" reconciliation-evidence/oci-index.json
+          cmp --silent reconciliation-evidence/tag-oci-index.json reconciliation-evidence/oci-index.json
           runtime_digest="$(jq -r '[.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64" and ((.platform.variant // "") == ""))] | if length == 1 then .[0].digest else empty end' reconciliation-evidence/oci-index.json)"
           runtime_size="$(jq -r '[.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64" and ((.platform.variant // "") == ""))] | if length == 1 then .[0].size else empty end' reconciliation-evidence/oci-index.json)"
           printf '%s' "$runtime_digest" | grep -Eq '^sha256:[0-9a-f]{64}$'
@@ -258,13 +335,26 @@ jobs:
             test "$(jq -r '.predicateType' "reconciliation-evidence/statements/${digest#sha256:}.json")" = "$predicate"
           done < reconciliation-evidence/attestation-layers.tsv
           unset registry_token
-          jq -s -e --arg runtime "${runtime_digest#sha256:}" --arg source "$source_sha" --arg service "$SERVICE" --arg builder "$original_builder" '
-            def reviewed_base($name; $tag; $sha):
+          node_repository="$(jq -er '.images[] | select(.id == "node-runtime-build-base") | .repository' publication-source/deploy/timeweb/base-images.lock.json)"
+          node_tag="$(jq -er '.images[] | select(.id == "node-runtime-build-base") | .tag' publication-source/deploy/timeweb/base-images.lock.json)"
+          node_index_sha="$(jq -er '.images[] | select(.id == "node-runtime-build-base") | .indexDigest | sub("^sha256:"; "")' publication-source/deploy/timeweb/base-images.lock.json)"
+          nginx_repository="$(jq -er '.images[] | select(.id == "nginx-web-runtime") | .repository' publication-source/deploy/timeweb/base-images.lock.json)"
+          nginx_tag="$(jq -er '.images[] | select(.id == "nginx-web-runtime") | .tag' publication-source/deploy/timeweb/base-images.lock.json)"
+          nginx_index_sha="$(jq -er '.images[] | select(.id == "nginx-web-runtime") | .indexDigest | sub("^sha256:"; "")' publication-source/deploy/timeweb/base-images.lock.json)"
+          scanner_repository="$(jq -er '.images[] | select(.id == "buildkit-syft-scanner") | .repository' publication-source/deploy/timeweb/base-images.lock.json)"
+          scanner_tag="$(jq -er '.images[] | select(.id == "buildkit-syft-scanner") | .tag' publication-source/deploy/timeweb/base-images.lock.json)"
+          scanner_index_sha="$(jq -er '.images[] | select(.id == "buildkit-syft-scanner") | .indexDigest | sub("^sha256:"; "")' publication-source/deploy/timeweb/base-images.lock.json)"
+          jq -s -e --arg runtime "${runtime_digest#sha256:}" --arg source "$source_sha" --arg service "$SERVICE" --arg builder "$original_builder" \
+            --arg nodeRepository "$node_repository" --arg nodeTag "$node_tag" --arg nodeSha "$node_index_sha" \
+            --arg nginxRepository "$nginx_repository" --arg nginxTag "$nginx_tag" --arg nginxSha "$nginx_index_sha" \
+            --arg scannerRepository "$scanner_repository" --arg scannerTag "$scanner_tag" --arg scannerSha "$scanner_index_sha" '
+            def reviewed_base($repository; $tag; $sha):
+              ($repository | split("/") | last) as $name |
               (.digest | type == "object" and keys == ["sha256"] and .sha256 == $sha) and
-              (.uri == "pkg:docker/\($name)@\($tag)?platform=linux%2Famd64" or .uri == "pkg:docker/docker.io/library/\($name)@\($tag)?platform=linux%2Famd64");
-            def reviewed_scanner($sha):
-              (.digest | type == "object" and keys == ["sha256"] and .sha256 == $sha) and
-              (.uri == "pkg:docker/docker/buildkit-syft-scanner?digest=sha256:\($sha)&platform=linux%2Famd64" or .uri == "pkg:docker/docker.io/docker/buildkit-syft-scanner?digest=sha256:\($sha)&platform=linux%2Famd64");
+              (.uri == "pkg:docker/\($name)@\($tag)?platform=linux%2Famd64" or
+               .uri == "pkg:docker/docker.io/\($repository)@\($tag)?platform=linux%2Famd64" or
+               .uri == "pkg:docker/\($repository)?digest=sha256:\($sha)&platform=linux%2Famd64" or
+               .uri == "pkg:docker/docker.io/\($repository)?digest=sha256:\($sha)&platform=linux%2Famd64");
             length == 2 and ([.[].predicateType] | sort) == ["https://slsa.dev/provenance/v1", "https://spdx.dev/Document"] and
             all(.[]; ._type == "https://in-toto.io/Statement/v1" and (.subject | length) == 1 and .subject[0].digest == {"sha256": $runtime}) and
             (map(select(.predicateType == "https://slsa.dev/provenance/v1"))[0].predicate) as $p |
@@ -276,11 +366,11 @@ jobs:
             $p.buildDefinition.externalParameters.configSource.path == "apps/\($service)/Dockerfile" and
             ($p.buildDefinition.resolvedDependencies | type == "array") and
             ([$p.buildDefinition.resolvedDependencies[] | select(.uri == "https://github.com/Z6v6e6r/lk2.git#\($source)" and .digest == {"sha1": $source})] | length) == 1 and
-            ([$p.buildDefinition.resolvedDependencies[] | select(reviewed_base("node"; "22-bookworm-slim"; "d649c27dae7ba0137b3cef5dd75baa422c08dc3d9e3fc0c23dfb172dc3cc6436"))] | length) == 1 and
-            ([$p.buildDefinition.resolvedDependencies[] | select(reviewed_scanner("ae4f3b554449e7e25548e7d8ccc029d17357348e30c6e3df01b92bc93654d6a9"))] | length) == 1 and
+            ([$p.buildDefinition.resolvedDependencies[] | select(reviewed_base($nodeRepository; $nodeTag; $nodeSha))] | length) == 1 and
+            ([$p.buildDefinition.resolvedDependencies[] | select(reviewed_base($scannerRepository; $scannerTag; $scannerSha))] | length) == 1 and
             (if $service == "web" then
               ($p.buildDefinition.resolvedDependencies | length) == 4 and
-              ([$p.buildDefinition.resolvedDependencies[] | select(reviewed_base("nginx"; "1.27-alpine"; "65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10"))] | length) == 1
+              ([$p.buildDefinition.resolvedDependencies[] | select(reviewed_base($nginxRepository; $nginxTag; $nginxSha))] | length) == 1
             else ($p.buildDefinition.resolvedDependencies | length) == 3 end) and
             (map(select(.predicateType == "https://spdx.dev/Document"))[0].predicate.packages | type == "array" and length > 0)
           ' reconciliation-evidence/statements/*.json >/dev/null
@@ -383,11 +473,25 @@ jobs:
           ref: ${{ inputs.expected_workflow_sha }}
           persist-credentials: false
           fetch-depth: 1
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5
+        with:
+          ref: ${{ inputs.expected_source_sha }}
+          persist-credentials: false
+          fetch-depth: 1
+          path: publication-source
+      - if: ${{ needs.validate-request.outputs.canonical_exists == 'true' }}
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: timeweb-amd64-canonical-release-${{ inputs.expected_source_sha }}-${{ inputs.publication_run_id }}-1
+          path: original-canonical
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ inputs.publication_run_id }}
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: timeweb-amd64-reconciliation-*-${{ github.run_id }}-${{ github.run_attempt }}
           path: reconciliation-evidence/images
       - name: Emit optional non-authorizing recovery read-back manifest
+        if: ${{ needs.validate-request.outputs.canonical_exists == 'false' }}
         env:
           EXPECTED_SOURCE_SHA: ${{ inputs.expected_source_sha }}
           PUBLICATION_RUN_ID: ${{ inputs.publication_run_id }}
@@ -399,11 +503,18 @@ jobs:
           while IFS= read -r checksum; do
             (cd "$(dirname "$checksum")" && sha256sum --check --strict evidence-checksums.txt)
           done < <(find reconciliation-evidence/images -name evidence-checksums.txt | sort)
-          jq -s --arg originalRunId "$PUBLICATION_RUN_ID" --arg publicationWorkflowSha "$PUBLICATION_WORKFLOW_SHA" --arg reconciliationWorkflowSha "$RECONCILIATION_WORKFLOW_SHA" --arg reconciliationRunId "$GITHUB_RUN_ID" --arg reconciliationRunAttempt "$GITHUB_RUN_ATTEMPT" '{schemaVersion:1,kind:"phub-timeweb-amd64-publication-reconciliation",originalRunId:$originalRunId,originalRunAttempt:"1",publicationWorkflowSha:$publicationWorkflowSha,reconciliationWorkflowSha:$reconciliationWorkflowSha,reconciliationRunId:$reconciliationRunId,reconciliationRunAttempt:$reconciliationRunAttempt,authorizesDeploy:false,authorizesVpsProvisioning:false,authorizesDatabaseMutation:false,images:sort_by(.service)}' reconciliation-evidence/images/*/image.json > timeweb-amd64-publication-reconciliation-manifest.json
+          node publication-source/scripts/verify-timeweb-base-images.js static \
+            --lock publication-source/deploy/timeweb/base-images.lock.json \
+            --repo-root publication-source \
+            --evidence-json > publication-source/base-images-evidence.json
+          jq -s --arg originalRunId "$PUBLICATION_RUN_ID" --arg publicationWorkflowSha "$PUBLICATION_WORKFLOW_SHA" --arg reconciliationWorkflowSha "$RECONCILIATION_WORKFLOW_SHA" --arg reconciliationRunId "$GITHUB_RUN_ID" --arg reconciliationRunAttempt "$GITHUB_RUN_ATTEMPT" --slurpfile base publication-source/base-images-evidence.json '{schemaVersion:"PHUB_TIMEWEB_RECONCILIATION_EVIDENCE_V1",kind:"phub-timeweb-amd64-publication-reconciliation",originalRunId:$originalRunId,originalRunAttempt:"1",publicationWorkflowSha:$publicationWorkflowSha,reconciliationWorkflowSha:$reconciliationWorkflowSha,reconciliationRunId:$reconciliationRunId,reconciliationRunAttempt:$reconciliationRunAttempt,baseLock:$base[0].baseLock,baseImages:$base[0].baseImages,authorizesDeploy:false,authorizesPublication:false,authorizesVpsProvisioning:false,authorizesDatabaseMutation:false,notCanonical:true,originalCanonicalArtifactAbsent:true,images:sort_by(.service)}' reconciliation-evidence/images/*/image.json > timeweb-amd64-publication-reconciliation-manifest.json
           jq -e --arg sourceSha "$EXPECTED_SOURCE_SHA" '
             .authorizesDeploy == false and
+            .authorizesPublication == false and
             .authorizesVpsProvisioning == false and
             .authorizesDatabaseMutation == false and
+            .notCanonical == true and
+            .originalCanonicalArtifactAbsent == true and
             ([.images[].service] | sort) == ["api","migrator","realtime","web","worker"] and
             ([.images[].sourceSha] | unique) == [$sourceSha] and
             ([.images[].provenanceVerified] | all) and
@@ -417,7 +528,28 @@ jobs:
             find reconciliation-evidence/images -type f -print0
           } | sort -z | xargs -0 sha256sum \
             > timeweb-amd64-publication-reconciliation-checksums.txt
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - name: Revalidate the original same-run canonical V2 artifact
+        if: ${{ needs.validate-request.outputs.canonical_exists == 'true' }}
+        env:
+          PUBLICATION_RUN_ID: ${{ inputs.publication_run_id }}
+          PUBLICATION_WORKFLOW_SHA: ${{ inputs.publication_workflow_sha }}
+        run: |
+          set -euo pipefail
+          test "$(git -C publication-source rev-parse HEAD)" = "$PUBLICATION_WORKFLOW_SHA"
+          node publication-source/scripts/verify-timeweb-base-images.js static \
+            --lock publication-source/deploy/timeweb/base-images.lock.json \
+            --repo-root publication-source
+          (
+            cd publication-source
+            node scripts/verify-timeweb-release-manifest.js \
+              ../original-canonical/release-manifest.json \
+              --expected-base-lock deploy/timeweb/base-images.lock.json \
+              --expected-publication-workflow-sha "$PUBLICATION_WORKFLOW_SHA" \
+              --expected-publication-run-id "$PUBLICATION_RUN_ID" \
+              --expected-publication-run-attempt 1
+          )
+      - if: ${{ needs.validate-request.outputs.canonical_exists == 'false' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: timeweb-amd64-publication-reconciliation-manifest-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
