@@ -281,6 +281,34 @@ describe('Home layout scroll contract', () => {
     );
   });
 
+  it('uses compact photo-grid proportions without recommendation-card decoration', () => {
+    const gridRule = ruleBody(
+      '.figma-home-shell.is-home-v3 .fh-for-me .booking-recommendations.is-photo-grid',
+    );
+    const heroRule = ruleBody('.recommendation-grid-card__hero');
+    const bodyRule = ruleBody('.recommendation-grid-card__body');
+    const titleRule = ruleBody('.recommendation-grid-card__title');
+    const socialRule = ruleBody('.recommendation-grid-card__social');
+    const actionRule = ruleBody('.recommendation-grid-card__action');
+
+    expect(gridRule).toMatch(/grid-auto-rows:\s*248px\s*;/);
+    expect(gridRule).toMatch(/padding-right:\s*0\s*;/);
+    expect(gridRule).toMatch(/margin-right:\s*0\s*;/);
+    expect(gridRule).toMatch(/gap:\s*8px\s*;/);
+    expect(heroRule).toMatch(/height:\s*72px\s*;/);
+    expect(heroRule).toMatch(/flex:\s*0 0 72px\s*;/);
+    expect(bodyRule).toMatch(/min-height:\s*174px\s*;/);
+    expect(bodyRule).toMatch(/flex:\s*1\s*;/);
+    expect(titleRule).toMatch(/-webkit-line-clamp:\s*2\s*;/);
+    expect(socialRule).toMatch(/margin-top:\s*auto\s*;/);
+    expect(actionRule).toMatch(/min-height:\s*38px\s*;/);
+    expect(actionRule).toMatch(/background:\s*#6c49dd\s*;/);
+    expect(actionRule).not.toMatch(/gradient/i);
+    expect(styles).toMatch(
+      /@media \(min-width: 413px\)[\s\S]*?--sheet-padding-x:\s*16px[\s\S]*?\.booking-recommendations\.is-photo-grid\s*\{[\s\S]*?grid-auto-rows:\s*256px[\s\S]*?gap:\s*12px[\s\S]*?\.recommendation-grid-card__hero\s*\{[\s\S]*?height:\s*76px/,
+    );
+  });
+
   it('matches training and tournament type typography to game type tags', () => {
     const activityKindRule = ruleBody('.booking-activity-card__kind');
     const trainingKindRule = ruleBody('.booking-activity-card__kind--training');

@@ -55,3 +55,78 @@
 - [x] V2 regression verified.
 
 final result: passed
+
+---
+
+# Design QA — recommendation cards (2026-08-26)
+
+**Comparison target**
+
+- Source visual truth: `/Users/zver/.codex/generated_images/01a03d3f-0665-7a40-8864-dbdc2a1b6d9d/exec-7cf9ce4d-a124-4971-937c-831afd6bb2f6.png`
+- Browser-rendered implementation: `http://127.0.0.1:5175/frame.html?width=375` and `?width=430`
+- Implementation screenshots:
+  - `/private/tmp/recommendation-card-qa/cards-area-375-exact.png`
+  - `/private/tmp/recommendation-card-qa/cards-area-430-exact.png`
+- Combined comparison: `/private/tmp/recommendation-card-qa/design-qa-comparison-cards.png`
+- Viewports: 360, 375, 390, 412, and 430 CSS px; synthetic recommendation data; light theme; default state.
+- Source pixels: 853 × 1844. Implementation evidence: 375 × 505 and 430 × 505. The focused comparison normalizes the source to 375 CSS px and crops both images to the same 375 × 505 content region. Browser density is 1 CSS px per captured pixel.
+
+**Findings**
+
+- No actionable P0/P1/P2 visual mismatch remains in the recommendation-card scope.
+- [P3] Category fallback photography can still feel generated when the same event type repeats.
+  Location: hero images in `RecommendationGridCard`.
+  Evidence: the visual target uses event-specific photos, while the current recommendation API exposes no event image field. The implementation therefore uses one local fallback per event category.
+  Impact: repeated cards of the same category may look templated even though the surrounding UI is restrained.
+  Fix: keep the fallback for this frontend-only change; replace it with event-specific media only after an existing API contract exposes a safe image URL.
+- [P3] Favorite control from the visual target is intentionally absent.
+  Location: hero zone.
+  Evidence: the existing recommendation item model and event actions expose no favorite state or favorite mutation; adding the heart would create fake behavior.
+  Impact: this is a visible difference from the target, but preserves the real data and interaction boundary.
+  Fix: none in this branch; add only with a proven existing event-favorite contract.
+
+**Required fidelity surfaces**
+
+- Fonts and typography: existing LK2 `RF Dewi`/`Inter Display` families are reused. Event titles remain the primary text and clamp at two lines; metadata truncates rather than shrinking below the compact LK2 scale.
+- Spacing and layout rhythm: two-column measurements match the selected direction. At 375 px the grid is 12 / 171.5 / 8 / 171.5 / 12. At 430 px it is 16 / 193 / 12 / 193 / 16. Card heights are 248 and 256 px; hero heights are deliberately reduced to 72 and 76 px.
+- Colors and visual tokens: white surfaces, a thin neutral border, existing purple action color, and semantic type text colors. No new card gradient, glow, shadow stack, pastel container, or recommendation pill.
+- Image quality and asset fidelity: three category-specific WebP fallbacks are correctly cropped with `object-fit: cover`; no placeholder boxes, CSS drawings, emoji, inline SVG hero art, or stretched source imagery.
+- Copy and content: real recommendation fields drive time, title, venue/court, level/trainer, availability, price, and CTA. Recommendation reason copy is intentionally removed per the final user direction.
+
+**Focused region evidence**
+
+- A focused card-region comparison was required because the full Home shell includes the existing LK2 hero/background and is not owned by this task.
+- The combined 375 px crop shows image proportion, title wrapping, metadata density, availability, avatar stack, and CTA alignment at readable size.
+- Browser DOM measurement confirmed zero horizontal overflow inside the card grid at all five requested widths. The existing clipped Home decorative layer is outside this component-level claim.
+
+**Comparison history**
+
+1. Initial browser pass found a P2 containment mismatch: auto-sized grid tracks were shorter than the fixed card body, clipping CTA content inside the recommendation wrapper.
+2. Fixed by assigning responsive row heights that match the measured card composition: 244 px at 360, 248 px at 375–412, and 256 px at 430.
+3. The same pass found that an activity host was being visually announced as a participant even though the contract exposes a host, not a participant roster. The host now remains in metadata and the participant stack is omitted for activities without roster data.
+4. Post-fix browser evidence shows `scrollHeight <= card height`, aligned CTAs, and zero card-grid horizontal overflow at 360/375/390/412/430.
+
+**Product Design audit: what still looks AI-generated?**
+
+- No pill explosion, nested cards, arbitrary pastels, glass, glow, layered shadows, oversized radius, decorative icons, or gradient buttons remain.
+- The only remaining AI-like signal is the repeated synthetic category photography described as P3 above; it is an explicit fallback for a missing contract field, not a production-data substitute.
+
+**Open questions**
+
+- Human visual review should confirm whether the 72/76 px hero is short enough on real devices and whether repeated category fallbacks are acceptable until event media exists.
+- Full authenticated Home, loading/empty/error states, and live API data were not available in the local visual fixture; behavior checks use the focused component tests and synthetic recommendation page.
+
+**Implementation checklist**
+
+- [x] Remove recommendation badge/reason.
+- [x] Reduce hero height.
+- [x] Preserve existing details and CTA routes.
+- [x] Avoid modifying the shared `GameCard`.
+- [x] Verify 360/375/390/412/430 px without overflow.
+- [x] Verify focused tests, lint, typecheck, and web build.
+
+**Follow-up polish**
+
+- Replace category fallback media with event-specific photos if and when the existing recommendation contract adds them.
+
+final result: passed

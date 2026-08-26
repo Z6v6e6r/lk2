@@ -13563,3 +13563,294 @@ button.participant-avatar-stack__open-slot:focus-visible {
     grid-template-columns: 1fr 54px auto 54px 28px;
   }
 }
+
+/* Home V3 recommendation cards: compact, image-led and isolated from shared GameCard. */
+.figma-home-shell.is-home-v3 .figma-home,
+.figma-home-shell.is-home-v3 .fh-main-box,
+.figma-home-shell.is-home-v3 .fh-bookings,
+.figma-home-shell.is-home-v3 .fh-for-me,
+.figma-home-shell.is-home-v3 .fh-bookings-footer,
+.figma-home-shell.is-home-v3 .fh-bookings-footer-action,
+.figma-home-shell.is-home-v3 .fh-divider {
+  width: min(100vw, 430px);
+}
+
+.figma-home-shell.is-home-v3 .figma-home {
+  --sheet-padding-x: 12px;
+}
+
+.figma-home-shell.is-home-v3 .fh-for-me .booking-recommendations.is-photo-grid {
+  grid-auto-rows: 248px;
+  padding-right: 0;
+  margin-right: 0;
+  gap: 8px;
+}
+
+.figma-home-shell.is-home-v3 .fh-for-me .booking-recommendation.is-photo-grid-card {
+  min-width: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid #ededed;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: none;
+  contain: layout paint style;
+}
+
+.recommendation-grid-card {
+  display: flex;
+  min-width: 0;
+  height: 100%;
+  flex-direction: column;
+  color: #1f1e20;
+  background: #fff;
+}
+
+.recommendation-grid-card__hero {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 72px;
+  flex: 0 0 72px;
+  overflow: hidden;
+  color: #fff;
+  text-decoration: none;
+}
+
+.recommendation-grid-card__hero img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+}
+
+.recommendation-grid-card__hero time {
+  position: absolute;
+  top: 7px;
+  left: 7px;
+  padding: 3px 5px;
+  border-radius: 4px;
+  background: rgb(20 20 21 / 62%);
+  color: #fff;
+  font-family: 'RF Dewi', 'Inter Display', sans-serif;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.recommendation-grid-card__hero:focus-visible,
+.recommendation-grid-card__title:focus-visible,
+.recommendation-grid-card__action:focus-visible {
+  outline: 2px solid #353436;
+  outline-offset: -2px;
+}
+
+.recommendation-grid-card__body {
+  display: flex;
+  min-width: 0;
+  min-height: 174px;
+  padding: 9px 9px 8px;
+  flex: 1;
+  flex-direction: column;
+}
+
+.recommendation-grid-card__kind {
+  overflow: hidden;
+  color: #4f8d62;
+  font-family: 'Inter Display', sans-serif;
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recommendation-grid-card[data-recommendation-kind='training'] .recommendation-grid-card__kind {
+  color: #4f72bd;
+}
+
+.recommendation-grid-card[data-recommendation-kind='tournament'] .recommendation-grid-card__kind {
+  color: #b55b35;
+}
+
+.recommendation-grid-card__time {
+  margin-top: 5px;
+  color: #5e5c61;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.2;
+}
+
+.recommendation-grid-card__title {
+  display: -webkit-box;
+  min-width: 0;
+  margin-top: 5px;
+  overflow: hidden;
+  color: #1f1e20;
+  font-family: 'RF Dewi', 'Inter Display', sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.16;
+  text-decoration: none;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.recommendation-grid-card__metadata {
+  display: grid;
+  min-width: 0;
+  margin-top: 7px;
+  color: #747276;
+  font-size: 10px;
+  line-height: 1.25;
+  gap: 3px;
+}
+
+.recommendation-grid-card__metadata > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recommendation-grid-card__social {
+  display: flex;
+  min-width: 0;
+  min-height: 28px;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: auto;
+  padding-top: 9px;
+  color: #68666b;
+  font-size: 9px;
+  line-height: 1.15;
+  gap: 5px;
+}
+
+.figma-home-shell.is-home-v3 .recommendation-grid-card__social .participant-avatar-stack {
+  width: auto;
+  height: 28px;
+  min-width: 0;
+  flex: 0 1 auto;
+  padding: 0 4px;
+}
+
+.figma-home-shell.is-home-v3 .recommendation-grid-card__social .participant-avatar-stack__item {
+  width: 26px;
+  height: 28px;
+  flex-basis: 26px;
+  margin: 0 -4px;
+}
+
+.figma-home-shell.is-home-v3
+  .recommendation-grid-card__social
+  .participant-avatar-stack__item
+  > [data-player-level-avatar] {
+  transform: scale(0.5416667);
+}
+
+.recommendation-grid-card__social > span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-left: auto;
+}
+
+.recommendation-grid-card__action {
+  display: flex;
+  width: 100%;
+  min-height: 38px;
+  box-sizing: border-box;
+  align-items: center;
+  justify-content: center;
+  padding: 7px 6px;
+  margin-top: 8px;
+  border-radius: 8px;
+  background: #6c49dd;
+  color: #fff;
+  font-family: 'Inter Display', sans-serif;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.15;
+  text-align: center;
+  text-decoration: none;
+}
+
+.recommendation-grid-card__action.is-disabled {
+  background: #f1f1f1;
+  color: #888889;
+}
+
+@media (min-width: 390px) and (max-width: 412px) {
+  .figma-home-shell.is-home-v3 .fh-for-me .booking-recommendations.is-photo-grid {
+    gap: 10px;
+  }
+}
+
+@media (min-width: 413px) {
+  .figma-home-shell.is-home-v3 .figma-home {
+    --sheet-padding-x: 16px;
+  }
+
+  .figma-home-shell.is-home-v3 .fh-for-me .booking-recommendations.is-photo-grid {
+    grid-auto-rows: 256px;
+    gap: 12px;
+  }
+
+  .recommendation-grid-card__hero {
+    height: 76px;
+    flex-basis: 76px;
+  }
+
+  .recommendation-grid-card__body {
+    min-height: 178px;
+    padding: 10px 10px 9px;
+  }
+
+  .recommendation-grid-card__title {
+    font-size: 14px;
+  }
+
+  .recommendation-grid-card__time,
+  .recommendation-grid-card__action {
+    font-size: 12px;
+  }
+
+  .recommendation-grid-card__metadata {
+    font-size: 11px;
+  }
+
+  .recommendation-grid-card__action {
+    min-height: 40px;
+  }
+}
+
+@media (max-width: 374px) {
+  .figma-home-shell.is-home-v3 {
+    width: 100%;
+  }
+
+  .recommendation-grid-card__body {
+    min-height: 170px;
+    padding-right: 8px;
+    padding-left: 8px;
+  }
+
+  .figma-home-shell.is-home-v3 .fh-for-me .booking-recommendations.is-photo-grid {
+    grid-auto-rows: 244px;
+  }
+
+  .recommendation-grid-card__title {
+    font-size: 12px;
+  }
+
+  .recommendation-grid-card__metadata {
+    font-size: 9px;
+  }
+
+  .recommendation-grid-card__action {
+    font-size: 10px;
+  }
+}

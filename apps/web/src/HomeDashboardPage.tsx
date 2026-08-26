@@ -1573,6 +1573,7 @@ export function HomeDashboardPage({
                     compactActionVariant={usesV3RecommendationCards ? 'mini-create' : 'default'}
                     compactMetadataVariant={usesV3RecommendationCards ? 'station-time' : 'default'}
                     compactRosterVariant={usesV3RecommendationCards ? 'host-slots' : 'default'}
+                    compactVisualVariant={usesV3RecommendationCards ? 'photo-grid' : 'default'}
                     showCompactReasonBadges={!usesV3RecommendationCards}
                     hasMore={Boolean(bookingRecommendations.nextCursor)}
                     loadingMore={bookingRecommendationsLoadingMore}
