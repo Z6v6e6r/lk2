@@ -79,6 +79,10 @@ describe('PR Docker service selection', () => {
       readonly jobs?: Readonly<Record<string, unknown>>;
     };
     const jobs = workflow.jobs as {
+      readonly ['ci-plan']?: {
+        readonly outputs?: Readonly<Record<string, string>>;
+        readonly steps?: readonly { readonly id?: string; readonly run?: string }[];
+      };
       readonly ['docker-selection']?: {
         readonly outputs?: Readonly<Record<string, string>>;
         readonly steps?: readonly { readonly id?: string; readonly run?: string }[];
@@ -97,17 +101,21 @@ describe('PR Docker service selection', () => {
       };
     };
 
+    const plan = jobs['ci-plan'];
+    const planner = plan?.steps?.find(({ id }) => id === 'plan');
     const selection = jobs['docker-selection'];
     const selector = selection?.steps?.find(({ id }) => id === 'select');
     const image = jobs['docker-image'];
     const aggregate = jobs['docker-build'];
 
-    expect(selection?.outputs?.services).toBe('${{ steps.select.outputs.services }}');
-    expect(selector?.run).toContain('git merge-base "$EVENT_BASE_SHA" "$EVENT_HEAD_SHA"');
-    expect(selector?.run).toContain(
+    expect(plan?.outputs?.services).toBe('${{ steps.plan.outputs.services }}');
+    expect(planner?.run).toContain('git merge-base "$EVENT_BASE_SHA" "$EVENT_HEAD_SHA"');
+    expect(planner?.run).toContain(
       'git diff --no-renames --name-only -z "$base_sha" "$EVENT_HEAD_SHA"',
     );
-    expect(selector?.run).toContain('node scripts/select-pr-docker-services.js');
+    expect(planner?.run).toContain('node scripts/select-pr-ci-profile.js');
+    expect(selection?.outputs?.services).toBe('${{ steps.select.outputs.services }}');
+    expect(selector?.run).toContain('PLANNED_SERVICES');
     expect(image).toMatchObject({
       if: "${{ needs.docker-selection.result == 'success' && needs.docker-selection.outputs.services != '[]' }}",
       name: 'docker-build (${{ matrix.service }})',

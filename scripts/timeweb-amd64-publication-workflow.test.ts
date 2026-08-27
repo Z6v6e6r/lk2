@@ -9,6 +9,8 @@ import { fileURLToPath } from 'node:url';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 
+import { validateProvenanceMaterials } from './verify-timeweb-provenance-materials.js';
+
 const repositoryRoot = fileURLToPath(new URL('..', import.meta.url));
 const currentSourceSha = spawnSync('git', ['rev-parse', 'HEAD'], {
   cwd: repositoryRoot,
@@ -260,18 +262,13 @@ describe('Timeweb amd64 publication workflow', () => {
       'Verify immutable index, AMD64 child and config custody before registry login',
     );
     expect(workflow).toContain('node scripts/verify-timeweb-base-images.js registry');
-    expect(workflow).toContain(
-      'EXPECTED_NODE_INDEX_DIGEST: ${{ steps.base.outputs.node_index_digest }}',
-    );
-    expect(workflow).toContain(
-      'EXPECTED_NGINX_INDEX_DIGEST: ${{ steps.base.outputs.nginx_index_digest }}',
-    );
-    expect(workflow).toContain('reviewed_base($nodeRepository; $nodeTag; $nodeIndexSha)');
-    expect(workflow).toContain('reviewed_base($nginxRepository; $nginxTag; $nginxIndexSha)');
-    expect(workflow).toContain('reviewed_base($scannerRepository; $scannerTag; $scannerIndexSha)');
-    expect(workflow).toContain('($materials | length) == 4');
-    expect(workflow).toContain('($materials | length) == 3');
-    expect(workflow).toContain('pkg:docker/docker.io/\\($repository)');
+    expect(
+      workflow.match(/node scripts\/verify-timeweb-provenance-materials\.js verify/gu),
+    ).toHaveLength(1);
+    expect(workflow).not.toContain('def reviewed_base');
+    expect(workflow).toContain('--base-lock deploy/timeweb/base-images.lock.json');
+    expect(workflow).toContain('$SERVICE-provenance-material-diagnostic.json');
+    expect(workflow).toContain('authorizesPublication: false');
     expect(
       workflow.indexOf(
         'Verify immutable index, AMD64 child and config custody before registry login',
@@ -714,7 +711,7 @@ describe('Timeweb amd64 publication workflow', () => {
       'utf8',
     );
     const command = workflow.indexOf('jq -s -e --arg runtimeSha');
-    const programStart = workflow.indexOf('            def reviewed_base', command);
+    const programStart = workflow.indexOf('            length == 2', command);
     const programEnd = workflow.indexOf(
       '\n          \' publication-evidence/"$SERVICE"-attestation-statements',
       programStart,
@@ -734,15 +731,15 @@ describe('Timeweb amd64 publication workflow', () => {
     const nginxIndexSha = nginxImage.indexDigest.slice('sha256:'.length);
     const scannerIndexSha = scannerImage.indexDigest.slice('sha256:'.length);
     const node = {
-      uri: `pkg:docker/node@${nodeImage.tag}?platform=linux%2Famd64`,
+      uri: `pkg:docker/node@${nodeImage.tag}?digest=${nodeImage.indexDigest}&platform=linux%2Famd64`,
       sha256: nodeIndexSha,
     };
     const nginx = {
-      uri: `pkg:docker/nginx@${nginxImage.tag}?platform=linux%2Famd64`,
+      uri: `pkg:docker/nginx@${nginxImage.tag}?digest=${nginxImage.indexDigest}&platform=linux%2Famd64`,
       sha256: nginxIndexSha,
     };
     const scanner = {
-      uri: `pkg:docker/${scannerImage.repository}?digest=sha256:${scannerIndexSha}&platform=linux%2Famd64`,
+      uri: `pkg:docker/docker/buildkit-syft-scanner@${scannerImage.tag}?digest=${scannerImage.indexDigest}&platform=linux%2Famd64`,
       sha256: scannerIndexSha,
     };
     const directory = await mkdtemp(join(tmpdir(), 'phub-timeweb-provenance-'));
@@ -763,49 +760,47 @@ describe('Timeweb amd64 publication workflow', () => {
         const provenancePath = join(directory, `${service}-provenance-${materials.length}.json`);
         const sbomPath = join(directory, `${service}-sbom-${materials.length}.json`);
         const subject = [{ name: service, digest: { sha256: overrides.subjectSha ?? runtimeSha } }];
-        await writeFile(
-          provenancePath,
-          JSON.stringify({
-            _type: overrides.provenanceStatementType ?? 'https://in-toto.io/Statement/v1',
-            predicateType: 'https://slsa.dev/provenance/v1',
-            subject,
-            predicate: {
-              buildDefinition: {
-                buildType:
-                  overrides.buildType ??
-                  'https://github.com/moby/buildkit/blob/master/docs/attestations/slsa-definitions.md',
-                externalParameters: {
-                  configSource: {
-                    uri: `https://github.com/Z6v6e6r/lk2.git#${sourceSha}`,
-                    digest: { sha1: sourceSha },
-                    path: `apps/${service}/Dockerfile`,
-                  },
-                  sourceSha,
+        const provenanceStatement = {
+          _type: overrides.provenanceStatementType ?? 'https://in-toto.io/Statement/v1',
+          predicateType: 'https://slsa.dev/provenance/v1',
+          subject,
+          predicate: {
+            buildDefinition: {
+              buildType:
+                overrides.buildType ??
+                'https://github.com/moby/buildkit/blob/master/docs/attestations/slsa-definitions.md',
+              externalParameters: {
+                configSource: {
+                  uri: `https://github.com/Z6v6e6r/lk2.git#${sourceSha}`,
+                  digest: { sha1: sourceSha },
+                  path: `apps/${service}/Dockerfile`,
                 },
-                resolvedDependencies: overrides.resolvedDependencies ?? [
-                  ...(overrides.sourceMaterial === null
-                    ? []
-                    : [
-                        {
-                          uri:
-                            overrides.sourceMaterial?.uri ??
-                            `https://github.com/Z6v6e6r/lk2.git#${sourceSha}`,
-                          digest: { sha1: overrides.sourceMaterial?.sha1 ?? sourceSha },
-                        },
-                      ]),
-                  ...materials.map(({ uri, sha256 }) => ({
-                    uri,
-                    digest: { sha256 },
-                  })),
-                ],
+                sourceSha,
               },
-              runDetails: {
-                builder: { id: builder },
-                metadata: { buildkit_completeness: { resolvedDependencies: true } },
-              },
+              resolvedDependencies: overrides.resolvedDependencies ?? [
+                ...(overrides.sourceMaterial === null
+                  ? []
+                  : [
+                      {
+                        uri:
+                          overrides.sourceMaterial?.uri ??
+                          `https://github.com/Z6v6e6r/lk2.git#${sourceSha}`,
+                        digest: { sha1: overrides.sourceMaterial?.sha1 ?? sourceSha },
+                      },
+                    ]),
+                ...materials.map(({ uri, sha256 }) => ({
+                  uri,
+                  digest: { sha256 },
+                })),
+              ],
             },
-          }),
-        );
+            runDetails: {
+              builder: { id: builder },
+              metadata: { buildkit_completeness: { resolvedDependencies: true } },
+            },
+          },
+        };
+        await writeFile(provenancePath, JSON.stringify(provenanceStatement));
         await writeFile(
           sbomPath,
           JSON.stringify({
@@ -818,56 +813,33 @@ describe('Timeweb amd64 publication workflow', () => {
             },
           }),
         );
-        return spawnSync(
+        const statementContract = spawnSync(
           'jq',
-          [
-            '-s',
-            '-e',
-            '--arg',
-            'runtimeSha',
-            runtimeSha,
-            '--arg',
-            'sourceSha',
-            sourceSha,
-            '--arg',
-            'service',
-            service,
-            '--arg',
-            'nodeRepository',
-            nodeImage.repository,
-            '--arg',
-            'nodeTag',
-            nodeImage.tag,
-            '--arg',
-            'nginxRepository',
-            nginxImage.repository,
-            '--arg',
-            'nginxTag',
-            nginxImage.tag,
-            '--arg',
-            'scannerRepository',
-            scannerImage.repository,
-            '--arg',
-            'scannerTag',
-            scannerImage.tag,
-            '--arg',
-            'nodeIndexSha',
-            nodeIndexSha,
-            '--arg',
-            'nginxIndexSha',
-            nginxIndexSha,
-            '--arg',
-            'scannerIndexSha',
-            scannerIndexSha,
-            '--arg',
-            'builder',
-            builder,
-            program,
-            provenancePath,
-            sbomPath,
-          ],
+          ['-s', '-e', '--arg', 'runtimeSha', runtimeSha, program, provenancePath, sbomPath],
           { encoding: 'utf8' },
         );
+        if (statementContract.status !== 0) return statementContract;
+        try {
+          validateProvenanceMaterials({
+            statement: provenanceStatement,
+            service,
+            sourceSha,
+            builderId: builder,
+            runtimeDigest: `sha256:${runtimeSha}`,
+            dockerfilePath: `apps/${service}/Dockerfile`,
+            repository: 'Z6v6e6r/lk2',
+            baseLock: structuredClone(baseLock) as Parameters<
+              typeof validateProvenanceMaterials
+            >[0]['baseLock'],
+          });
+          return statementContract;
+        } catch (error) {
+          return {
+            ...statementContract,
+            status: 1,
+            stderr: `${statementContract.stderr}${String(error)}`,
+          };
+        }
       };
 
       const unexpectedNode = { ...node, sha256: '0'.repeat(64) };
@@ -1161,7 +1133,15 @@ describe('Timeweb amd64 publication workflow', () => {
     expect(workflow).toContain(
       'artifactType == "application/vnd.docker.attestation.manifest.v1+json"',
     );
-    expect(workflow).toContain('($p.buildDefinition.resolvedDependencies | type == "array")');
+    expect(workflow).toContain('node scripts/verify-timeweb-provenance-materials.js verify');
+    expect(workflow).not.toContain('def reviewed_base');
+    expect(workflow).toContain(
+      '--base-lock publication-source/deploy/timeweb/base-images.lock.json',
+    );
+    expect(workflow).toContain('.conclusion == "success"');
+    expect(workflow.indexOf('.conclusion == "success"')).toBeLessThan(
+      workflow.indexOf('docker/login-action@'),
+    );
     expect(workflow).toContain('docker image inspect "$runtime_reference" --format \'{{.Id}}\'');
     expect(workflow).toContain('http://127.0.0.1:$port/healthz');
     expect(workflow).toContain('--slurpfile provenance reconciliation-evidence/provenance.json');
@@ -1408,7 +1388,7 @@ describe('Timeweb amd64 publication workflow', () => {
       readonly concurrency?: { readonly group?: string };
       readonly on?: Readonly<Record<string, unknown>>;
       readonly jobs?: {
-        readonly quality?: {
+        readonly ['quality-full']?: {
           readonly steps?: readonly {
             readonly env?: Readonly<Record<string, string>>;
             readonly if?: string;
@@ -1437,12 +1417,15 @@ describe('Timeweb amd64 publication workflow', () => {
             };
           }[];
         };
+        readonly ['pr-gate']?: {
+          readonly needs?: readonly string[];
+        };
       };
     };
-    const testStep = document.jobs?.quality?.steps?.find(
+    const testStep = document.jobs?.['quality-full']?.steps?.find(
       ({ name }) => name === 'Unit and integration tests',
     );
-    const artifactStep = document.jobs?.quality?.steps?.find(
+    const artifactStep = document.jobs?.['quality-full']?.steps?.find(
       ({ name }) => name === 'Upload test and coverage diagnostics',
     );
     const secretScanJob = document.jobs?.['secret-scan'];
@@ -1476,7 +1459,7 @@ describe('Timeweb amd64 publication workflow', () => {
     });
     expect(document.on).toEqual({
       pull_request: null,
-      push: { branches: ['main'] },
+      push: { branches: ['main', 'integration/**'] },
     });
     expect(workflow).not.toContain('workflow_dispatch');
     expect(document.concurrency?.group).toBe(
@@ -1536,6 +1519,44 @@ describe('Timeweb amd64 publication workflow', () => {
     expect(workflow).toContain(
       "tags: phub-${{ matrix.service }}:pr-${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}",
     );
+    const probeStart = workflow.indexOf('  timeweb-provenance-probe:');
+    const gateStart = workflow.indexOf('  pr-gate:', probeStart);
+    expect(probeStart).toBeGreaterThan(-1);
+    expect(gateStart).toBeGreaterThan(probeStart);
+    const probe = workflow.slice(probeStart, gateStart);
+    expect(probe).toContain('service: [web, api]');
+    expect(probe).toContain('contents: read');
+    expect(probe).not.toContain('packages: write');
+    expect(probe).not.toContain('docker/login-action@');
+    expect(probe).not.toContain('environment:');
+    expect(probe).not.toContain('-p 127.0.0.1');
+    expect(probe).toContain('push: false');
+    expect(probe).not.toContain('push: true');
+    expect(probe).toContain('outputs: type=oci,dest=');
+    expect(probe).toContain('provenance: mode=max,version=v1');
+    expect(probe).toContain(
+      'sbom: generator=${{ steps.source.outputs.scanner_immutable_reference }}',
+    );
+    expect(probe).toContain('BUILDX_VERSION: v0.36.1');
+    expect(probe).toContain(
+      'BUILDKIT_IMAGE: moby/buildkit@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8',
+    );
+    expect(probe).toContain('node scripts/extract-timeweb-oci-provenance.js extract');
+    expect(probe).toContain('node scripts/verify-timeweb-provenance-materials.js verify');
+    expect(probe).toContain('authorizesPublication: false');
+    expect(probe).toContain('authorizesDeploy: false');
+    expect(probe).toContain('docker buildx rm "$BUILDER_NAME"');
+    expect(document.jobs?.['pr-gate']?.needs).toEqual(
+      expect.arrayContaining([
+        'quality',
+        'dependency-security',
+        'secret-scan',
+        'deployment-contract',
+        'docker-build',
+        'timeweb-provenance-probe',
+      ]),
+    );
+    expect(workflow).toContain('node scripts/verify-ci-plan.js conditional provenanceProbe');
     expect(diagnosticsRunner).toContain('set -uo pipefail');
     expect(diagnosticsRunner).toContain('reason=watchdog_deadline signal=USR1');
     expect(diagnosticsRunner).toContain('reason=watchdog_grace_expired signal=KILL');
@@ -1651,6 +1672,14 @@ describe('Timeweb amd64 publication workflow', () => {
       git(['add', 'after.txt']);
       git(['commit', '-m', 'after']);
       const afterSha = git(['rev-parse', 'HEAD']);
+      git(['remote', 'add', 'origin', directory]);
+
+      git(['checkout', '-b', 'integration/lk2-beta-test']);
+      await writeFile(join(directory, 'integration.txt'), 'integration\n');
+      git(['add', 'integration.txt']);
+      git(['commit', '-m', 'integration']);
+      const integrationSha = git(['rev-parse', 'HEAD']);
+      git(['checkout', 'main']);
 
       const pullRequest = await runResolver({
         EVENT_BASE_SHA: afterSha,
@@ -1681,6 +1710,19 @@ describe('Timeweb amd64 publication workflow', () => {
       await expect(access(ghMarker)).rejects.toMatchObject({ code: 'ENOENT' });
 
       const zeroSha = '0'.repeat(40);
+      const firstIntegrationPush = await runResolver({
+        EVENT_AFTER_SHA: integrationSha,
+        EVENT_BEFORE_SHA: zeroSha,
+        GITHUB_REF: 'refs/heads/integration/lk2-beta-test',
+        GITHUB_REF_NAME: 'integration/lk2-beta-test',
+        GITHUB_SHA: integrationSha,
+      });
+      expect(firstIntegrationPush.status, firstIntegrationPush.stderr).toBe(0);
+      expect(firstIntegrationPush.outputs).toEqual({
+        base_sha: afterSha,
+        head_sha: integrationSha,
+      });
+
       const malformedPushes: readonly Readonly<Record<string, string>>[] = [
         { EVENT_BEFORE_SHA: '', GITHUB_SHA: afterSha },
         { EVENT_BEFORE_SHA: 'not-a-sha', GITHUB_SHA: afterSha },
