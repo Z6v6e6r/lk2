@@ -70,6 +70,12 @@ export function validateTimewebFrozenSourceObservation(observation, expected) {
   if (!SHA_PATTERN.test(expected?.sourceSha ?? '') || !SHA_PATTERN.test(expected?.sourceTree ?? ''))
     fail('frozen_source_expected_identity');
   if (
+    observation?.head !== expected.sourceSha ||
+    observation?.tree !== expected.sourceTree ||
+    observation?.topLevel !== REPOSITORY_ROOT
+  )
+    fail('frozen_source_identity');
+  if (
     observation?.repositoryRoot !== REPOSITORY_ROOT ||
     observation?.repositoryRootSecure !== true ||
     observation?.protectedFilesSecure !== true ||
@@ -78,12 +84,6 @@ export function validateTimewebFrozenSourceObservation(observation, expected) {
     observation?.releaseSourcePathSecure !== true
   )
     fail('frozen_source_path_security');
-  if (
-    observation.head !== expected.sourceSha ||
-    observation.tree !== expected.sourceTree ||
-    observation.topLevel !== REPOSITORY_ROOT
-  )
-    fail('frozen_source_identity');
 }
 
 export function runTimewebSourceGit(args) {
