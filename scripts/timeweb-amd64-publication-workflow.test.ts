@@ -1567,9 +1567,25 @@ describe('Timeweb amd64 publication workflow', () => {
     expect(diagnosticsRunner).toContain('finalize "$status" "external_signal_$signal_name" true');
     expect(diagnosticsRunner).toContain('stop_helper "$watchdog_pid"');
     expect(diagnosticsRunner).toContain('stop_helper "$monitor_pid"');
-    expect(diagnosticsRunner).toContain('/proc/$helper_pid/task/$helper_pid/children');
-    expect(diagnosticsRunner).toContain('kill -KILL "$helper_child_pid"');
-    expect(diagnosticsRunner).toContain('kill -0 -- "-$test_pgid"');
+    expect(diagnosticsRunner).toContain('setsid bash -c');
+    expect(diagnosticsRunner).toContain('/proc/$helper_pid/stat');
+    expect(diagnosticsRunner).toContain('timeout --signal=KILL "$process_group_probe_timeout"');
+    expect(diagnosticsRunner).toContain('kill -TERM -- "-$helper_pid"');
+    expect(diagnosticsRunner).toContain('kill -KILL -- "-$helper_pid"');
+    expect(diagnosticsRunner).toContain('reason=finalization_budget_exceeded');
+    expect(diagnosticsRunner).toContain('child_exit_captured');
+    expect(diagnosticsRunner).toContain('supervisor_cleanup_status=126');
+    expect(diagnosticsRunner).toContain('watchdog_exit_guard');
+    expect(diagnosticsRunner).toContain('watchdog_unexpected_exit');
+    expect(diagnosticsRunner).not.toContain('wait -n -p first_completed_pid');
+    expect(diagnosticsRunner).toContain(
+      'while helper_pid_is_running "$launcher_pid" && helper_pid_is_running "$watchdog_pid"',
+    );
+    expect(diagnosticsRunner).toContain('wait "$watchdog_pid" 2>/dev/null');
+    expect(diagnosticsRunner).toContain('wait "$launcher_pid" 2>/dev/null');
+    expect(diagnosticsRunner).toContain('>"$stdout_log"');
+    expect(diagnosticsRunner).toContain('2>"$stderr_log"');
+    expect(diagnosticsRunner).not.toContain('> >(tee');
     expect(diagnosticsRunner).toContain('reason=residual_process_group_after_leader_exit');
     expect(diagnosticsRunner).toContain('residual_process_group_after_success');
     expect(diagnosticsRunner).toContain('registration_in_progress');
@@ -1579,7 +1595,7 @@ describe('Timeweb amd64 publication workflow', () => {
     expect(diagnosticsRunner).not.toContain('etime,args --forest');
     expect(diagnosticsRunner).toContain('--reporter=junit');
     expect(diagnosticsRunner).toContain('--reporter=./scripts/vitest-ci-diagnostics-reporter.ts');
-    expect(diagnosticsRunner).toContain('exit "$test_status"');
+    expect(diagnosticsRunner).toContain('exit "$final_status"');
     expect(diagnosticsRunner).not.toContain('continue-on-error');
   });
 
