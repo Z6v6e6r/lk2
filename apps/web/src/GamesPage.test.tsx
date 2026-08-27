@@ -301,11 +301,12 @@ describe('GamesPage discovery', () => {
       .mockRejectedValueOnce(notProjected)
       .mockResolvedValue(viewerGame);
     const api: AuthGateway = { ...gateway(), getGame };
-    window.history.replaceState({}, '', `/games/${game.id}?created=1`);
+    window.history.replaceState({}, '', `/games/${game.id}?created=1&recovered=1`);
 
     render(<GamesPage gateway={api} gameId={game.id} />);
 
     expect(await screen.findByText(game.title, {}, { timeout: 2_000 })).toBeVisible();
+    expect(screen.getByText(/Игра успешно восстановлена/)).toBeVisible();
     expect(getGame).toHaveBeenCalledTimes(3);
   });
 

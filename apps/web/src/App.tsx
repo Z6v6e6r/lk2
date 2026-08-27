@@ -1893,7 +1893,17 @@ export function App({
       );
     }
     if (protectedRoute.kind === 'game-create') {
-      return <CreateGamePage gateway={gateway} />;
+      const createGamePrincipal = {
+        tenantId: state.session.context.tenant.id,
+        userId: state.session.context.user.id,
+      };
+      return (
+        <CreateGamePage
+          key={`${createGamePrincipal.tenantId}:${createGamePrincipal.userId}`}
+          gateway={gateway}
+          principal={createGamePrincipal}
+        />
+      );
     }
     if (protectedRoute.kind === 'trainings') {
       return <TrainingsPage gateway={gateway} />;

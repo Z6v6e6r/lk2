@@ -383,7 +383,10 @@ export interface AuthGateway {
   }) => Promise<GameCardPage>;
   readonly getActivityHistory: (input?: ActivityHistoryQuery) => Promise<ActivityHistoryPage>;
   readonly getGame: (gameId: string) => Promise<GameCard>;
-  readonly createGame: (input: CreateGameRequest) => Promise<GameCommandResult>;
+  readonly createGame: (
+    input: CreateGameRequest,
+    options?: { readonly idempotencyKey?: string },
+  ) => Promise<GameCommandResult>;
   readonly cancelGame: (gameId: string, input: CancelGameRequest) => Promise<GameCommandResult>;
   readonly joinGame: (
     gameId: string,
@@ -1819,8 +1822,8 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       return client.getGame(gameId);
     },
 
-    createGame(input) {
-      return client.createGame(input);
+    createGame(input, options) {
+      return client.createGame(input, options);
     },
 
     cancelGame(gameId, input) {

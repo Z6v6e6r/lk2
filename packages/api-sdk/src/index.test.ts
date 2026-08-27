@@ -567,6 +567,41 @@ describe('PadlHubApiClient authentication boundary', () => {
     ]);
   });
 
+  it('keeps a caller-owned create key across transport retry and later replay', async () => {
+    const calls: Array<{ input: Parameters<typeof fetch>[0]; init?: RequestInit }> = [];
+    const fetchImplementation: typeof fetch = (input, init) => {
+      calls.push({ input, ...(init === undefined ? {} : { init }) });
+      if (calls.length === 1) return Promise.reject(new TypeError('response lost'));
+      return Promise.resolve(jsonResponse({ operation: { status: 'SUCCEEDED' } }));
+    };
+    const client = createClient(fetchImplementation, {
+      initialAccessToken: authenticatedSession.accessToken,
+    });
+    const input = {
+      title: 'Открытая игра',
+      kind: 'FRIENDLY' as const,
+      visibility: 'PUBLIC' as const,
+      stationId: '11111111-1111-4111-8111-111111111111',
+      startsAt: '2027-08-15T15:00:00.000Z',
+      endsAt: '2027-08-15T16:30:00.000Z',
+      timezone: 'Europe/Moscow',
+      capacity: 4 as const,
+      levelRange: null,
+      paymentMode: 'NO_PAYMENT' as const,
+      waitlistEnabled: true,
+    };
+
+    await client.createGame(input, { idempotencyKey: 'create-logical-attempt-key-0001' });
+    await client.createGame(input, { idempotencyKey: 'create-logical-attempt-key-0001' });
+
+    expect(calls).toHaveLength(3);
+    expect(calls.map(({ init }) => new Headers(init?.headers).get('Idempotency-Key'))).toEqual([
+      'create-logical-attempt-key-0001',
+      'create-logical-attempt-key-0001',
+      'create-logical-attempt-key-0001',
+    ]);
+  });
+
   it('sends free-game cancellation through the authenticated idempotent command boundary', async () => {
     const calls: Array<{ input: Parameters<typeof fetch>[0]; init?: RequestInit }> = [];
     const fetchImplementation: typeof fetch = (input, init) => {

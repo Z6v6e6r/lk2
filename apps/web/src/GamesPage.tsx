@@ -305,6 +305,10 @@ export function GamesPage({ gateway, gameId, eventId }: GamesPageProps): React.J
     const candidate = new URLSearchParams(window.location.search).get('invitationId')?.trim();
     return candidate && UUID_PATTERN.test(candidate) ? candidate : undefined;
   }, [gameId]);
+  const recoveredCreate = useMemo(() => {
+    if (typeof window === 'undefined' || !gameId) return false;
+    return new URLSearchParams(window.location.search).get('recovered') === '1';
+  }, [gameId]);
   const assessmentQuestions = useMemo(() => {
     if (!assessmentDefinition) return [];
     const base = assessmentDefinition.questions.find(
@@ -1184,6 +1188,11 @@ export function GamesPage({ gateway, gameId, eventId }: GamesPageProps): React.J
         {notice ? (
           <p className="games-message" role="status">
             {notice}
+          </p>
+        ) : null}
+        {detail && recoveredCreate ? (
+          <p className="games-message" role="status">
+            Игра успешно восстановлена после незавершённой попытки. Повторная игра не создавалась.
           </p>
         ) : null}
         {detail ? (

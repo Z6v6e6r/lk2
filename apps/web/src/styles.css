@@ -2967,6 +2967,11 @@
   font: inherit;
 }
 
+.game-create-form select:focus-visible {
+  outline: 3px solid #255d32;
+  outline-offset: 3px;
+}
+
 .game-create-form__row {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

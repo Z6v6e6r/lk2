@@ -1207,8 +1207,11 @@ export class PadlHubApiClient {
     );
   }
 
-  public createGame(input: CreateGameRequest): Promise<GameCommandResult> {
-    const idempotencyKey = createCorrelationId();
+  public createGame(
+    input: CreateGameRequest,
+    options: { readonly idempotencyKey?: string } = {},
+  ): Promise<GameCommandResult> {
+    const idempotencyKey = options.idempotencyKey ?? createCorrelationId();
     return this.retryOnceOnNetworkFailure(() =>
       this.request<GameCommandResult>('/games', {
         method: 'POST',

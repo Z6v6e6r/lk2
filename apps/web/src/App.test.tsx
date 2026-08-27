@@ -22,6 +22,7 @@ vi.mock('./chat-realtime-client.js', () => ({ connectChatRealtime: realtimeMocks
 
 import { App } from './App.js';
 import { consumeCommunityInviteToken } from './community-invite-token.js';
+import { prepareCreateGameAttempt } from './create-game-attempt.js';
 import type {
   AuthGateway,
   AuthenticatedSession,
@@ -502,6 +503,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   realtimeMocks.connect.mockClear();
   vi.useRealTimers();
+  window.localStorage.clear();
   window.history.replaceState({}, '', '/');
 });
 
@@ -656,6 +658,73 @@ describe('PadlHub web authentication', () => {
       ),
     );
     expect(listLocations).toHaveBeenCalledOnce();
+  });
+
+  it('scopes the create recovery form to the restored tenant and actor', async () => {
+    window.history.replaceState({}, '', '/games/new');
+    const stationId = 'a8df730b-6a67-41a5-8772-48bca84f73bc';
+    await prepareCreateGameAttempt(
+      { tenantId: session.context.tenant.id, userId: session.context.user.id },
+      {
+        title: 'Черновик только Анны',
+        kind: 'FRIENDLY',
+        visibility: 'PRIVATE',
+        stationId,
+        startsAt: '2027-08-15T15:00:00.000Z',
+        endsAt: '2027-08-15T16:30:00.000Z',
+        timezone: 'Europe/Moscow',
+        capacity: 4,
+        levelRange: null,
+        paymentMode: 'NO_PAYMENT',
+        waitlistEnabled: true,
+      },
+      window.localStorage,
+      { request: (_name, _options, callback) => Promise.resolve().then(callback) },
+      { createIdempotencyKey: () => 'create-logical-attempt-key-0001' },
+    );
+    const listLocations = vi.fn<AuthGateway['listLocations']>().mockResolvedValue({
+      items: [
+        {
+          id: stationId,
+          title: 'Селигерская',
+          city: 'Москва',
+          courtCount: 3,
+          coverImageUrl: null,
+          route: `/locations/${stationId}`,
+        },
+      ],
+    });
+    const otherSession: AuthenticatedSession = {
+      context: {
+        ...session.context,
+        user: { ...session.context.user, id: '99999999-9999-4999-8999-999999999999' },
+      },
+    };
+    const otherView = render(
+      <App
+        gateway={createGateway({
+          restoreSession: vi.fn().mockResolvedValue(otherSession),
+          listLocations,
+        })}
+        tenantKey="padlhub"
+      />,
+    );
+
+    expect(await screen.findByDisplayValue('Открытая игра')).toBeVisible();
+    expect(screen.queryByDisplayValue('Черновик только Анны')).not.toBeInTheDocument();
+    otherView.unmount();
+
+    render(
+      <App
+        gateway={createGateway({
+          restoreSession: vi.fn().mockResolvedValue(session),
+          listLocations,
+        })}
+        tenantKey="padlhub"
+      />,
+    );
+    expect(await screen.findByDisplayValue('Черновик только Анны')).toBeVisible();
+    expect(screen.getByText(/Найдена незавершённая попытка/)).toBeVisible();
   });
 
   it('keeps local Home Base visible when profile and upcoming reads are unavailable', async () => {
