@@ -11,6 +11,7 @@ import styles from './PlayerLevelAvatar.module.css';
 export interface PlayerLevelAvatarProps {
   readonly src?: string | null;
   readonly alt: string;
+  readonly accessibleLabel?: string;
   readonly level?: string | null;
 
   /** Заполненность текущего уровня от 0 до 100. */
@@ -120,6 +121,7 @@ function partialRingSegmentPath(
 export function PlayerLevelAvatar({
   src,
   alt,
+  accessibleLabel,
   level = '',
   progress = 0,
   size = BASE_SIZE,
@@ -175,7 +177,9 @@ export function PlayerLevelAvatar({
       data-progress={normalizedProgress}
       data-size={normalizedSize}
       role="img"
-      aria-label={`${alt}, уровень ${level}, прогресс ${Math.round(normalizedProgress)}%`}
+      aria-label={
+        accessibleLabel ?? `${alt}, уровень ${level}, прогресс ${Math.round(normalizedProgress)}%`
+      }
       style={rootStyle}
     >
       {showLevelRing ? (
