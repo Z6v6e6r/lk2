@@ -24,7 +24,9 @@ function testEnvironment(directory: string): NodeJS.ProcessEnv {
     ...process.env,
     CI_TEST_DIAGNOSTICS_DIR: directory,
     CI_TEST_EXTERNAL_KILL_AFTER_SECONDS: '0.1',
-    CI_TEST_HEARTBEAT_SECONDS: '1',
+    // Keep helper sleeps longer than spawnSync timeouts. Fast-command tests
+    // therefore prove that finalization interrupts helper children before wait.
+    CI_TEST_HEARTBEAT_SECONDS: '30',
     CI_TEST_KILL_AFTER_SECONDS: '1',
     CI_TEST_WATCHDOG_SECONDS: '30',
   };
