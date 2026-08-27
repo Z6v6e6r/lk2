@@ -122,12 +122,15 @@ traversal fail closed.
 All privileged activation-input tools run only from the exact clean Git checkout at
 `/opt/phub/timeweb-beta/releases/<source-sha>-<run-id>-1/source`. The checkout, its Git directory,
 every path to the protected controller/contract files and those files themselves must be owned by
-root, must not be symlinks and must not be group/other-writable. `HEAD`, `HEAD^{tree}` and an empty
-`git status --porcelain=v1 --untracked-files=all` must match the canonical source identity. The tools
-repeat that check before provisioning/rendering and before every Docker stage. A later checkout,
-dirty/untracked source, non-root-writable source, missing `.git`, git-free archive or caller-authored
-checksum is a STOP. Git-free bundles remain unsupported until a separately authenticated same-run
-controller artifact binds their exact bytes.
+root, must not be symlinks and must not be group/other-writable. The `.git` pointer, Git/common
+directories, config, HEAD and exact commit/tree/blob object storage must have the same custody;
+alternates are forbidden. Fixed `/usr/bin/git` runs with system/global config, replace objects, lazy
+fetch, hooks and fsmonitor disabled. `HEAD`/`HEAD^{tree}` must match the canonical identity, and every
+protected controller/Compose/contract byte is hashed as a Git blob and compared with that exact
+tree before provisioning/rendering and before every Docker stage. A later checkout, changed
+protected source, unsafe Git metadata, missing `.git`, git-free archive or caller-authored checksum
+is a STOP. Git-free bundles remain unsupported until a separately authenticated same-run controller
+artifact binds their exact bytes.
 
 Never launch these privileged tools through project `npm`, `.npmrc`, a PATH lookup or a preserved
 caller environment. The only supported launcher is fixed `/usr/bin/node` under `env -i`; if that
@@ -295,8 +298,8 @@ pair. Five tags or inventory from failed run `33011023879` are never release inp
    Docker network/volume creation, firewall/TLS/ingress, database migration, Realtime Rabbit topology,
    Worker activation and public beta activation. Authority for one does not authorize another.
 7. Under separately approved host/file authority, create the release directory and install an exact
-   clean root-owned Git checkout at `<release-dir>/source`; prove its SHA/tree, empty tracked/untracked
-   status, ownership and non-writable path custody. Then, under secret-mutation authority, run the
+   clean root-owned Git checkout at `<release-dir>/source`; prove its SHA/tree, exact protected-tree
+   bytes, Git metadata ownership and non-writable path custody. Then, under secret-mutation authority, run the
    metadata-only provisioner dry-run, inspect its plan, provision the exact release secret set and
    read back only marker/path/owner/mode metadata.
 8. From that same frozen checkout through fixed `/usr/bin/node` under `env -i`, render `release.env`,

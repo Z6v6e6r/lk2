@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   assertExactTimewebFrozenSource,
+  runTimewebSourceGit,
   validateTimewebFrozenSourceObservation,
 } from './verify-timeweb-frozen-source.js';
 
@@ -15,11 +16,12 @@ const exactObservation = {
   repositoryRoot,
   repositoryRootSecure: true,
   protectedFilesSecure: true,
-  gitDirectorySecure: true,
+  gitMetadataSecure: true,
+  protectedFilesMatchTree: true,
+  releaseSourcePathSecure: true,
   topLevel: repositoryRoot,
   head: sourceSha,
   tree: sourceTree,
-  status: '',
 };
 
 describe('Timeweb frozen source authority', () => {
@@ -32,7 +34,16 @@ describe('Timeweb frozen source authority', () => {
     ).toMatchObject({ sourceSha, sourceTree });
   });
 
-  it('rejects later source, wrong tree, dirty/untracked state, and unsafe paths', () => {
+  it('does not expose Git commands that can invoke repository hooks, filters, or fsmonitor', () => {
+    expect(() => runTimewebSourceGit(['status', '--porcelain=v1'])).toThrow(
+      'frozen_source_git_command',
+    );
+    expect(() => runTimewebSourceGit(['config', '--local', '--list'])).toThrow(
+      'frozen_source_git_command',
+    );
+  });
+
+  it('rejects later source, wrong tree, unbound protected bytes, and unsafe paths', () => {
     expect(() =>
       validateTimewebFrozenSourceObservation(
         { ...exactObservation, head: 'f'.repeat(40) },
@@ -47,16 +58,16 @@ describe('Timeweb frozen source authority', () => {
     ).toThrow('frozen_source_identity');
     expect(() =>
       validateTimewebFrozenSourceObservation(
-        { ...exactObservation, status: ' M deploy/timeweb/compose.beta.yaml' },
+        { ...exactObservation, protectedFilesMatchTree: false },
         { sourceSha, sourceTree },
       ),
-    ).toThrow('frozen_source_dirty');
+    ).toThrow('frozen_source_path_security');
     expect(() =>
       validateTimewebFrozenSourceObservation(
-        { ...exactObservation, status: '?? scripts/untracked-controller.js' },
+        { ...exactObservation, gitMetadataSecure: false },
         { sourceSha, sourceTree },
       ),
-    ).toThrow('frozen_source_dirty');
+    ).toThrow('frozen_source_path_security');
     expect(() =>
       validateTimewebFrozenSourceObservation(
         { ...exactObservation, protectedFilesSecure: false },

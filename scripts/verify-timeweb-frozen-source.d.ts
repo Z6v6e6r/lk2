@@ -13,11 +13,12 @@ export function validateTimewebFrozenSourceObservation(
     repositoryRoot: string;
     repositoryRootSecure: boolean;
     protectedFilesSecure: boolean;
-    gitDirectorySecure: boolean;
+    gitMetadataSecure: boolean;
+    protectedFilesMatchTree: boolean;
+    releaseSourcePathSecure: boolean;
     topLevel: string;
     head: string;
     tree: string;
-    status: string;
   },
   expected: { sourceSha: string; sourceTree: string },
 ): void;
@@ -26,6 +27,8 @@ export function assertExactTimewebFrozenSource(options: {
   expectedSourceSha: string;
   expectedSourceTree: string;
 }): TimewebFrozenSourceAuthority;
+
+export function runTimewebSourceGit(args: string[]): string;
 
 export function requireExactTimewebFrozenSourceAuthority(
   authority: TimewebFrozenSourceAuthority,

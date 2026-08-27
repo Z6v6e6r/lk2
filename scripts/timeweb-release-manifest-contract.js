@@ -1,4 +1,3 @@
-import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 
 import {
@@ -6,6 +5,7 @@ import {
   parseBaseImageLock,
   validateBaseImageLock,
 } from './verify-timeweb-base-images.js';
+import { runTimewebSourceGit } from './verify-timeweb-frozen-source.js';
 
 export class ReleaseManifestContractError extends Error {
   constructor(reason) {
@@ -95,10 +95,7 @@ function validateImages(images, schema, version) {
 export function resolveApplicationTree(commit) {
   if (typeof commit !== 'string' || !/^[0-9a-f]{40}$/u.test(commit)) reject('git_commit');
   try {
-    const tree = execFileSync('git', ['rev-parse', '--verify', `${commit}^{tree}`], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim();
+    const tree = runTimewebSourceGit(['rev-parse', '--verify', `${commit}^{tree}`]);
     if (!/^[0-9a-f]{40}$/u.test(tree)) reject('git_tree');
     return tree;
   } catch (error) {
