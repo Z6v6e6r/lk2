@@ -141,6 +141,7 @@ export type CreateStoredGameResult =
       readonly committedAt: string;
       readonly replayed: boolean;
     }
+  | { readonly outcome: 'rejected'; readonly code: 'GAME_START_TIME_PASSED' }
   | { readonly outcome: 'idempotency_conflict' };
 
 export interface CancelStoredGameInput {
@@ -652,6 +653,16 @@ export function createGameRepository(pool: Pool): GameRepository {
         ]);
         const replay = replayCreate(await existingCommand(client, input), input.requestHash);
         if (replay) return replay;
+
+        const admission = await queryOne<{ readonly admissible: boolean }>(
+          client,
+          'select $1::timestamptz > clock_timestamp() as admissible',
+          [input.startsAt],
+        );
+        if (!admission) throw new Error('GAME_CREATE_ADMISSION_CHECK_LOST');
+        if (!admission.admissible) {
+          return { outcome: 'rejected', code: 'GAME_START_TIME_PASSED' };
+        }
 
         const operationId = randomUUID();
         const commandId = operationId;

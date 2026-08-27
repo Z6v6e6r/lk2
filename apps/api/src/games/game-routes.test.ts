@@ -202,6 +202,86 @@ describe('Games management User API', () => {
     expect(input?.requestHash).toMatch(/^[0-9a-f]{64}$/);
   });
 
+  it('reaches durable replay for a past start and returns the original game', async () => {
+    const create = vi.fn().mockResolvedValue({
+      outcome: 'applied',
+      gameId,
+      operationId: commandId,
+      revision: 1,
+      committedAt,
+      replayed: true,
+    });
+    const app = await appWith(repository(), managementRepository({ create }));
+    const response = await app.inject({
+      method: 'POST',
+      url: '/user/api/v1/local-padel/games',
+      headers: {
+        authorization: `Bearer ${await accessToken()}`,
+        'idempotency-key': 'games-api-create-replay-past-0001',
+      },
+      payload: {
+        title: 'Уже начавшаяся игра',
+        kind: 'FRIENDLY',
+        visibility: 'PUBLIC',
+        stationId: '11111111-1111-4111-8111-111111111111',
+        startsAt: '2026-01-15T15:00:00.000Z',
+        endsAt: '2026-01-15T16:30:00.000Z',
+        timezone: 'Europe/Moscow',
+        capacity: 4,
+        levelRange: null,
+        paymentMode: 'NO_PAYMENT',
+        waitlistEnabled: true,
+      },
+    });
+
+    expect(response.statusCode).toBe(202);
+    expect(response.json()).toMatchObject({
+      operation: { gameId },
+      replayed: true,
+    });
+    expect(create).toHaveBeenCalledOnce();
+  });
+
+  it('maps post-lookup temporal rejection while preserving idempotency conflict precedence', async () => {
+    const pastPayload = {
+      title: 'Новая прошедшая игра',
+      kind: 'FRIENDLY',
+      visibility: 'PUBLIC',
+      stationId: '11111111-1111-4111-8111-111111111111',
+      startsAt: '2026-01-15T15:00:00.000Z',
+      endsAt: '2026-01-15T16:30:00.000Z',
+      timezone: 'Europe/Moscow',
+      capacity: 4,
+      levelRange: null,
+      paymentMode: 'NO_PAYMENT',
+      waitlistEnabled: true,
+    } as const;
+    const create = vi
+      .fn()
+      .mockResolvedValueOnce({ outcome: 'rejected', code: 'GAME_START_TIME_PASSED' })
+      .mockResolvedValueOnce({ outcome: 'idempotency_conflict' });
+    const app = await appWith(repository(), managementRepository({ create }));
+    const authorization = `Bearer ${await accessToken()}`;
+
+    const rejected = await app.inject({
+      method: 'POST',
+      url: '/user/api/v1/local-padel/games',
+      headers: { authorization, 'idempotency-key': 'games-api-create-past-new-0001' },
+      payload: pastPayload,
+    });
+    expect(rejected.statusCode).toBe(400);
+    expect(rejected.json()).toMatchObject({ code: 'INVALID_REQUEST' });
+
+    const conflict = await app.inject({
+      method: 'POST',
+      url: '/user/api/v1/local-padel/games',
+      headers: { authorization, 'idempotency-key': 'games-api-create-past-conflict-0001' },
+      payload: { ...pastPayload, title: 'Изменённая прошедшая игра' },
+    });
+    expect(conflict.statusCode).toBe(409);
+    expect(conflict.json()).toMatchObject({ code: 'IDEMPOTENCY_KEY_REUSED' });
+  });
+
   it('rejects paid or caller-extended create payloads before persistence', async () => {
     const create = vi.fn();
     const app = await appWith(repository(), managementRepository({ create }));

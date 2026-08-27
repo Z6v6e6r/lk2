@@ -65,8 +65,12 @@ function poolWithHandler(
     text: string,
     values: readonly unknown[],
   ) => { rows?: readonly unknown[]; rowCount?: number },
+  createAdmissible = true,
 ) {
   const query = vi.fn((text: string, values: readonly unknown[] = []) => {
+    if (text.includes('$1::timestamptz > clock_timestamp() as admissible')) {
+      return Promise.resolve({ rows: [{ admissible: createAdmissible }], rowCount: 1 });
+    }
     const result = handler(text, values);
     return Promise.resolve({
       rows: result.rows ?? [],
@@ -107,6 +111,7 @@ describe('game repository', () => {
     expect(query).toHaveBeenCalledWith('begin');
     expect(query).toHaveBeenCalledWith("select set_config('app.tenant_id', $1, true)", [tenantId]);
     expect(query.mock.calls.some(([text]) => text.includes('for update'))).toBe(true);
+    expect(query.mock.calls.some(([text]) => text.includes('clock_timestamp()'))).toBe(true);
     expect(query.mock.calls.some(([text]) => text.includes('games.participations'))).toBe(true);
     expect(query.mock.calls.some(([text]) => text.includes('games.operations'))).toBe(true);
     expect(query.mock.calls.some(([text]) => text.includes('games.scheduled_commands'))).toBe(true);
@@ -136,6 +141,37 @@ describe('game repository', () => {
       'game.created.v1',
       'game.provisioning.requested.v1',
     ]);
+    expect(query).toHaveBeenCalledWith('commit');
+  });
+
+  it('rejects a new past-start command after replay lookup with zero durable side effects', async () => {
+    const { pool, query } = poolWithHandler(() => ({ rows: [] }), false);
+
+    await expect(createGameRepository(pool as never).create(createInput())).resolves.toEqual({
+      outcome: 'rejected',
+      code: 'GAME_START_TIME_PASSED',
+    });
+
+    const sql = query.mock.calls.map(([text]) => String(text));
+    const lockIndex = sql.findIndex((text) => text.includes('pg_advisory_xact_lock'));
+    const lookupIndex = sql.findIndex((text) => text.includes('from games.command_idempotency'));
+    const admissionIndex = sql.findIndex((text) => text.includes('clock_timestamp()'));
+    expect(lockIndex).toBeGreaterThan(-1);
+    expect(lookupIndex).toBeGreaterThan(lockIndex);
+    expect(admissionIndex).toBeGreaterThan(lookupIndex);
+    expect(
+      sql.some((text) =>
+        [
+          'insert into games.games',
+          'insert into games.participations',
+          'insert into games.operations',
+          'insert into games.scheduled_commands',
+          'insert into games.command_idempotency',
+          'insert into audit.audit_log',
+          'insert into audit.outbox_events',
+        ].some((needle) => text.includes(needle)),
+      ),
+    ).toBe(false);
     expect(query).toHaveBeenCalledWith('commit');
   });
 
@@ -281,7 +317,7 @@ describe('game repository', () => {
     expect(query).toHaveBeenCalledWith('rollback');
   });
 
-  it('replays a legacy completed result using the durable command timestamp', async () => {
+  it('replays a completed create after its start has passed without temporal admission', async () => {
     const { pool, query } = poolWithHandler((text) => {
       if (text.includes('from games.command_idempotency')) {
         return {
@@ -313,6 +349,7 @@ describe('game repository', () => {
       replayed: true,
     });
     expect(query.mock.calls.some(([text]) => text.includes('insert into games.games'))).toBe(false);
+    expect(query.mock.calls.some(([text]) => text.includes('clock_timestamp()'))).toBe(false);
   });
 
   it('reads an actor-owned create operation by the returned durable operation id', async () => {
@@ -358,8 +395,8 @@ describe('game repository', () => {
     });
   });
 
-  it('rejects idempotency key reuse with another request hash', async () => {
-    const { pool } = poolWithHandler((text) =>
+  it('rejects idempotency key reuse with another request hash before temporal admission', async () => {
+    const { pool, query } = poolWithHandler((text) =>
       text.includes('from games.command_idempotency')
         ? {
             rows: [
@@ -377,6 +414,7 @@ describe('game repository', () => {
     await expect(createGameRepository(pool as never).create(createInput())).resolves.toEqual({
       outcome: 'idempotency_conflict',
     });
+    expect(query.mock.calls.some(([text]) => text.includes('clock_timestamp()'))).toBe(false);
   });
 
   it('uses monotonic keyset order for public projections', async () => {

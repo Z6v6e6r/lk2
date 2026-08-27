@@ -209,7 +209,6 @@ function parseCreateBody(
       (typeof body.courtId !== 'string' || !UUID_PATTERN.test(body.courtId))) ||
     !Number.isFinite(startsAtMs) ||
     !Number.isFinite(endsAtMs) ||
-    startsAtMs <= Date.now() ||
     endsAtMs <= startsAtMs ||
     !validTimezone ||
     ![2, 4].includes(Number(body.capacity)) ||
@@ -471,6 +470,15 @@ export function registerGameRoutes(
           409,
           'IDEMPOTENCY_KEY_REUSED',
           'Idempotency-Key уже использован для другой команды.',
+        );
+      }
+      if (result.outcome === 'rejected') {
+        return sendApiError(
+          request,
+          reply,
+          400,
+          'INVALID_REQUEST',
+          'Время начала игры должно быть в будущем.',
         );
       }
       return reply.status(202).send(managementOperationBody(result, 'CREATE_GAME'));
