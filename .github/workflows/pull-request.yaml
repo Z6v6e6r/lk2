@@ -714,6 +714,8 @@ jobs:
           BUILDX_SHA256: 48af8a397ebd60178778bf63611dbcebe5f5e7a9be90eb9147b24b9587455778
           BUILDX_VERSION: v0.36.1
           BUILDKIT_IMAGE: moby/buildkit@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
+          BUILDKIT_VERSION: v0.32.2
+          SERVICE: ${{ matrix.service }}
         run: |
           set -euo pipefail
           download="$RUNNER_TEMP/docker-buildx"
@@ -729,10 +731,12 @@ jobs:
           printf 'name=%s\n' "$builder" >> "$GITHUB_OUTPUT"
           docker buildx version \
             | grep -Fx 'github.com/docker/buildx v0.36.1 1d8dde89b8aba914e05e45366770736fea1fd690'
-          docker buildx inspect --bootstrap | grep -Eq '^BuildKit version:[[:space:]]+v0\.32\.2$'
-          container_id="$(docker ps --filter "name=buildx_buildkit_$builder" --format '{{.ID}}')"
-          [[ "$container_id" =~ ^[0-9a-f]{12,64}$ ]]
-          test "$(docker inspect --format '{{.Config.Image}}' "$container_id")" = "$BUILDKIT_IMAGE"
+          node scripts/verify-pinned-buildkit-bootstrap.js \
+            --service "$SERVICE" \
+            --builder "$builder" \
+            --image "$BUILDKIT_IMAGE" \
+            --version "$BUILDKIT_VERSION" \
+            --diagnostic "$RUNNER_TEMP/timeweb-provenance-probe/artifacts/$SERVICE-buildkit-bootstrap.json"
       - id: build
         name: Build exact-head OCI provenance without push (${{ matrix.service }})
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
