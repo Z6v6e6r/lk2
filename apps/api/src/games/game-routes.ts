@@ -477,7 +477,7 @@ export function registerGameRoutes(
           request,
           reply,
           400,
-          'INVALID_REQUEST',
+          'GAME_START_TIME_PASSED',
           'Время начала игры должно быть в будущем.',
         );
       }

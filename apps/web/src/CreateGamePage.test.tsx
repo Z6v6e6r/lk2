@@ -225,7 +225,7 @@ describe('CreateGamePage durable create recovery', () => {
   it('clears a terminal no-commit rejection and labels it as not created', async () => {
     const createGame = vi
       .fn<AuthGateway['createGame']>()
-      .mockRejectedValue(Object.assign(new Error('rejected'), { code: 'INVALID_REQUEST' }));
+      .mockRejectedValue(Object.assign(new Error('rejected'), { code: 'GAME_START_TIME_PASSED' }));
     const user = userEvent.setup();
     page(createGame);
 
@@ -236,6 +236,31 @@ describe('CreateGamePage durable create recovery', () => {
     expect(screen.getByRole('alert')).not.toHaveTextContent('результат неизвестен');
     expect(window.localStorage.getItem(createGameAttemptStorageKey(principal))).toBeNull();
     expect(screen.getByRole('button', { name: 'Создать игру' })).toBeEnabled();
+  });
+
+  it('retains K1 when an old or pre-lookup API returns generic INVALID_REQUEST', async () => {
+    const createGame = vi
+      .fn<AuthGateway['createGame']>()
+      .mockRejectedValueOnce(
+        Object.assign(new Error('old route rejection'), { code: 'INVALID_REQUEST' }),
+      )
+      .mockResolvedValueOnce(result({ replayed: true }));
+    const navigate = vi.fn();
+    const user = userEvent.setup();
+    page(createGame, { navigate });
+
+    await screen.findByRole('option', { name: 'Селигерская' });
+    await user.click(screen.getByRole('button', { name: 'Создать игру' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('результат неизвестен');
+    const firstKey = createGame.mock.calls[0]?.[1]?.idempotencyKey;
+    expect(window.localStorage.getItem(createGameAttemptStorageKey(principal))).toContain(firstKey);
+
+    await user.click(screen.getByRole('button', { name: 'Создать игру' }));
+    await waitFor(() => expect(createGame).toHaveBeenCalledTimes(2));
+    expect(createGame.mock.calls[1]?.[1]?.idempotencyKey).toBe(firstKey);
+    await waitFor(() =>
+      expect(navigate).toHaveBeenCalledWith(`/games/${gameId}?created=1&recovered=1`),
+    );
   });
 
   it('retains the attempt and distinct copy for an idempotency conflict', async () => {

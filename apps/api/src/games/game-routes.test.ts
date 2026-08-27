@@ -270,7 +270,7 @@ describe('Games management User API', () => {
       payload: pastPayload,
     });
     expect(rejected.statusCode).toBe(400);
-    expect(rejected.json()).toMatchObject({ code: 'INVALID_REQUEST' });
+    expect(rejected.json()).toMatchObject({ code: 'GAME_START_TIME_PASSED' });
 
     const conflict = await app.inject({
       method: 'POST',

@@ -41,6 +41,7 @@ function commandError(error: unknown): string {
   if (typeof error === 'object' && error !== null && 'code' in error) {
     const code = (error as { readonly code?: unknown }).code;
     if (code === 'GAME_PAYMENT_REQUIRED') return 'Сейчас можно создать только бесплатную игру.';
+    if (code === 'GAME_START_TIME_PASSED') return 'Время начала уже прошло.';
     if (code === 'IDEMPOTENCY_KEY_REUSED') {
       return 'Ключ незавершённой попытки уже связан с другими параметрами. Новая команда не отправлена; обратитесь в поддержку.';
     }
@@ -56,7 +57,7 @@ function errorCode(error: unknown): unknown {
 }
 
 function isTerminalNoCommitError(error: unknown): boolean {
-  return ['INVALID_REQUEST', 'GAME_PAYMENT_REQUIRED'].includes(String(errorCode(error)));
+  return errorCode(error) === 'GAME_START_TIME_PASSED';
 }
 
 function browserAttemptStorage(): Storage | undefined {
