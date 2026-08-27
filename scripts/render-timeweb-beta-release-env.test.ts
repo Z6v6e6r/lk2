@@ -25,6 +25,7 @@ import {
   verifyCanonicalGitHubRunAuthority,
   writeTimewebBetaReleaseEnvironment,
 } from './render-timeweb-beta-release-env.js';
+import { assertExactTimewebFrozenSource } from './verify-timeweb-frozen-source.js';
 import {
   canonicalManifest,
   canonicalRunEvidence,
@@ -44,8 +45,13 @@ const roots: string[] = [];
 const uid = process.getuid?.() ?? 0;
 const gid = process.getgid?.() ?? 0;
 let trustedAuthority: Awaited<ReturnType<typeof verifyCanonicalGitHubRunAuthority>>;
+let sourceAuthority: ReturnType<typeof assertExactTimewebFrozenSource>;
 
 beforeAll(async () => {
+  sourceAuthority = assertExactTimewebFrozenSource({
+    expectedSourceSha: sourceSha,
+    expectedSourceTree: sourceTree,
+  });
   const secrets = createSecretFixture();
   roots.push(secrets.root);
   const artifactDir = join(secrets.root, 'trusted-artifact');
@@ -86,6 +92,8 @@ function fixture() {
     host,
     tenantKey,
     releaseId,
+    expectedSourceSha: sourceSha,
+    expectedSourceTree: sourceTree,
     expectedUid: uid,
     expectedGid: gid,
   });
@@ -111,6 +119,7 @@ const expected = (runtimeEnvRoot: string, checksum: string) => {
     runEvidence: trustedAuthority.evidence,
     runEvidenceChecksum: trustedAuthority.checksum,
     runtimeEnvRoot,
+    sourceAuthority,
   };
 };
 
@@ -145,6 +154,20 @@ async function verifyFixtureAuthority(
 }
 
 describe('Timeweb beta release.env renderer', () => {
+  it('requires opaque exact-local-source authority before trusting rendered deployment input', () => {
+    const value = fixture();
+    expect(() =>
+      renderTimewebBetaReleaseEnvironment(canonicalManifest(), {
+        ...expected(value.secrets.targetDir, value.pair.checksum),
+        // @ts-expect-error Caller-authored source authority must fail at runtime.
+        sourceAuthority: {
+          sourceSha,
+          sourceTree,
+        },
+      }),
+    ).toThrow('frozen_source_authority');
+  });
+
   it('accepts only the canonical pair and atomically renders root-only disabled profiles', () => {
     const value = fixture();
     const pair = readCanonicalTimewebReleasePair(value.pair.manifestPath, value.pair.checksum);

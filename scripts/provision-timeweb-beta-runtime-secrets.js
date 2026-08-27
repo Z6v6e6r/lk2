@@ -23,6 +23,11 @@ import {
 } from 'node:fs';
 import { basename, dirname, isAbsolute, join, normalize, relative, sep } from 'node:path';
 
+import {
+  assertExactTimewebFrozenSource,
+  requireExactTimewebFrozenSourceAuthority,
+} from './verify-timeweb-frozen-source.js';
+
 const TARGET_DIR = '/etc/phub/timeweb-beta';
 const BACKUP_ROOT = '/etc/phub/timeweb-beta-backups';
 const CONTRACT_PATH = new URL(
@@ -484,6 +489,8 @@ export function provisionTimewebBetaRuntimeSecrets({
   host,
   tenantKey,
   releaseId,
+  expectedSourceSha,
+  expectedSourceTree,
   expectedCurrentReleaseId = null,
   targetDir = TARGET_DIR,
   backupRoot = BACKUP_ROOT,
@@ -492,7 +499,16 @@ export function provisionTimewebBetaRuntimeSecrets({
   dryRun = false,
   failAfter,
 }) {
+  const sourceAuthority = assertExactTimewebFrozenSource({
+    expectedSourceSha,
+    expectedSourceTree,
+  });
+  requireExactTimewebFrozenSourceAuthority(sourceAuthority, {
+    sourceSha: expectedSourceSha,
+    sourceTree: expectedSourceTree,
+  });
   assertReleaseId(releaseId);
+  if (!releaseId.startsWith(`${expectedSourceSha}-`)) fail('release_source_identity');
   if (expectedCurrentReleaseId !== null)
     assertReleaseId(expectedCurrentReleaseId, 'expected_current_identity');
   for (const [path, reason] of [
@@ -657,10 +673,19 @@ function parseArguments(argv) {
     '--host',
     '--tenant-key',
     '--release-id',
+    '--expected-source-sha',
+    '--expected-source-tree',
     '--expected-current-release-id',
   ]);
   if (Object.keys(values).some((key) => !allowed.has(key))) fail('usage');
-  for (const key of ['--source-dir', '--host', '--tenant-key', '--release-id']) {
+  for (const key of [
+    '--source-dir',
+    '--host',
+    '--tenant-key',
+    '--release-id',
+    '--expected-source-sha',
+    '--expected-source-tree',
+  ]) {
     if (!values[key]) fail('usage');
   }
   return { values, dryRun };
@@ -674,6 +699,8 @@ function main() {
     host: values['--host'],
     tenantKey: values['--tenant-key'],
     releaseId: values['--release-id'],
+    expectedSourceSha: values['--expected-source-sha'],
+    expectedSourceTree: values['--expected-source-tree'],
     expectedCurrentReleaseId: values['--expected-current-release-id'] ?? null,
     dryRun,
   });

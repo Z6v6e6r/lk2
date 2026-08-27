@@ -16,6 +16,8 @@ export function provisionTimewebBetaRuntimeSecrets(options: {
   host: string;
   tenantKey: string;
   releaseId: string;
+  expectedSourceSha: string;
+  expectedSourceTree: string;
   expectedCurrentReleaseId?: string | null;
   targetDir?: string;
   backupRoot?: string;

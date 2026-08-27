@@ -27,6 +27,7 @@ import {
   releaseId,
   safeRuntimeEnvironments,
   sourceSha,
+  sourceTree,
   tenantKey,
 } from './timeweb-beta-activation-inputs.fixture.js';
 
@@ -40,6 +41,8 @@ const options = (fixture: ReturnType<typeof createSecretFixture>, overrides = {}
   host,
   tenantKey,
   releaseId,
+  expectedSourceSha: sourceSha,
+  expectedSourceTree: sourceTree,
   expectedUid: uid,
   expectedGid: gid,
   ...overrides,
@@ -70,6 +73,29 @@ function installedReleaseId(targetDir: string): string {
 }
 
 describe('Timeweb beta runtime secret provisioner', () => {
+  it('rejects a release not bound to the exact local source before creating a target', () => {
+    const value = fixture();
+    const wrongSource = 'f'.repeat(40);
+    expect(() =>
+      provisionTimewebBetaRuntimeSecrets(
+        options(value, {
+          releaseId: `${wrongSource}-12345678901-1`,
+          expectedSourceSha: wrongSource,
+        }),
+      ),
+    ).toThrow('frozen_source_identity');
+    expect(existsSync(value.targetParent)).toBe(false);
+
+    expect(() =>
+      provisionTimewebBetaRuntimeSecrets(
+        options(value, {
+          expectedSourceTree: 'e'.repeat(40),
+        }),
+      ),
+    ).toThrow('frozen_source_identity');
+    expect(existsSync(value.targetParent)).toBe(false);
+  });
+
   it('dry-runs without writes or secret values, then atomically provisions 0700/0600 files', () => {
     const value = fixture();
     const plan = provisionTimewebBetaRuntimeSecrets({ ...options(value), dryRun: true });

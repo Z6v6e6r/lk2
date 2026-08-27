@@ -119,15 +119,33 @@ default-off keys come from `deploy/timeweb/runtime-environment.contract.json`. S
 devices, FIFOs, sockets, unexpected files/keys, historical `staging`/`rollback` paths and path
 traversal fail closed.
 
+All privileged activation-input tools run only from the exact clean Git checkout at
+`/opt/phub/timeweb-beta/releases/<source-sha>-<run-id>-1/source`. The checkout, its Git directory,
+every path to the protected controller/contract files and those files themselves must be owned by
+root, must not be symlinks and must not be group/other-writable. `HEAD`, `HEAD^{tree}` and an empty
+`git status --porcelain=v1 --untracked-files=all` must match the canonical source identity. The tools
+repeat that check before provisioning/rendering and before every Docker stage. A later checkout,
+dirty/untracked source, non-root-writable source, missing `.git`, git-free archive or caller-authored
+checksum is a STOP. Git-free bundles remain unsupported until a separately authenticated same-run
+controller artifact binds their exact bytes.
+
+Never launch these privileged tools through project `npm`, `.npmrc`, a PATH lookup or a preserved
+caller environment. The only supported launcher is fixed `/usr/bin/node` under `env -i`; if that
+binary is unavailable or unsuitable, activation remains STOP until the source contract is revised
+and reviewed.
+
 The metadata-only dry-run performs the same source and current-release validation without creating
 `/etc/phub` or writing a target:
 
 ```sh
-sudo --preserve-env=PATH npm run timeweb:beta:secrets:provision -- \
+sudo -- /usr/bin/env -i PATH=/usr/bin:/bin HOME=/root \
+  /usr/bin/node '/opt/phub/timeweb-beta/releases/<source-sha>-<successful-run-id>-1/source/scripts/provision-timeweb-beta-runtime-secrets.js' \
   --source-dir /root/lk2-beta-secret-input \
   --host lk2.padlhub.su \
   --tenant-key '<exact-tenant-key>' \
   --release-id '<source-sha>-<successful-run-id>-1' \
+  --expected-source-sha '<exact-source-sha>' \
+  --expected-source-tree '<exact-source-tree>' \
   --dry-run
 ```
 
@@ -174,8 +192,8 @@ writes `release.env` through a private exclusive staging file, then `fsync` and 
 never overwrites an existing output.
 
 ```sh
-env -u COMPOSE_FILE -u COMPOSE_PROFILES -u COMPOSE_PROJECT_NAME \
-sudo --preserve-env=PATH npm run timeweb:beta:release-env:render -- \
+sudo -- /usr/bin/env -i PATH=/usr/bin:/bin HOME=/root \
+  /usr/bin/node '/opt/phub/timeweb-beta/releases/<source-sha>-<successful-run-id>-1/source/scripts/render-timeweb-beta-release-env.js' \
   --manifest '<canonical-artifact-dir>/release-manifest.json' \
   --expected-manifest-sha256 '<release-manifest-json-sha256>' \
   --github-token-file '<root-owned-read-only-github-token-file>' \
@@ -201,7 +219,8 @@ scrubs ambient `COMPOSE_*`, performs a default-service preflight before every st
 or `--profile`, and has no Worker/Migrator stage:
 
 ```sh
-sudo npm run timeweb:beta:release-env:render -- \
+sudo -- /usr/bin/env -i PATH=/usr/bin:/bin HOME=/root \
+  /usr/bin/node '/opt/phub/timeweb-beta/releases/<source-sha>-<successful-run-id>-1/source/scripts/render-timeweb-beta-release-env.js' \
   --compose-stage preflight \
   --release-env '<exact-release-dir>/release.env' \
   --manifest '<canonical-artifact-dir>/release-manifest.json' \
@@ -218,8 +237,9 @@ sudo npm run timeweb:beta:release-env:render -- \
 # repeat with pull-realtime, then up-realtime only after the Rabbit gate
 ```
 
-Every stage repeats authenticated GitHub run/artifact/GHCR verification and compares the root-only
-`release.env` byte-for-byte with the newly rendered canonical content before invoking Docker.
+Every stage repeats exact clean root-owned local source verification, authenticated GitHub
+run/artifact/GHCR verification and compares the root-only `release.env` byte-for-byte with the newly
+rendered canonical content before invoking Docker.
 Any ambient `DOCKER_*` variable is a hard STOP before execution. The controller supplies Docker a
 minimal fixed environment only: `/usr/bin:/bin`, `/root`, `/root/.docker`, empty Compose profiles and
 the root-owned local Unix socket `/var/run/docker.sock`; remote/context-selected daemons are not a
@@ -274,11 +294,14 @@ pair. Five tags or inventory from failed run `33011023879` are never release inp
 6. Obtain separate authority for each required live transition: host/file provisioning, secret copy,
    Docker network/volume creation, firewall/TLS/ingress, database migration, Realtime Rabbit topology,
    Worker activation and public beta activation. Authority for one does not authorize another.
-7. Under secret-mutation authority, run the metadata-only provisioner dry-run, inspect its plan, then
-   provision the exact release secret set. Read back only marker/path/owner/mode metadata.
-8. Create the new release directory from the frozen source bundle, render `release.env`, render
-   Compose with no ambient overrides, and verify all five immutable digests. Worker and Migrator stay
-   disabled.
+7. Under separately approved host/file authority, create the release directory and install an exact
+   clean root-owned Git checkout at `<release-dir>/source`; prove its SHA/tree, empty tracked/untracked
+   status, ownership and non-writable path custody. Then, under secret-mutation authority, run the
+   metadata-only provisioner dry-run, inspect its plan, provision the exact release secret set and
+   read back only marker/path/owner/mode metadata.
+8. From that same frozen checkout through fixed `/usr/bin/node` under `env -i`, render `release.env`,
+   render Compose with no ambient overrides, and verify all five immutable digests. Worker and
+   Migrator stay disabled.
 9. Keep Migrator disabled until a separate migration gate proves pending expand-compatible changes,
    lock budget, old/new coexistence, backup and rollback. Apply nothing during readiness review.
 10. Under deployment authority, scrub every ambient `COMPOSE_*`, pass no `--profile`, and install/start

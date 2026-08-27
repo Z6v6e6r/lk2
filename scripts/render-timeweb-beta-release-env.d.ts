@@ -1,3 +1,5 @@
+import type { TimewebFrozenSourceAuthority } from './verify-timeweb-frozen-source.js';
+
 export class TimewebReleaseEnvironmentError extends Error {
   readonly reason: string;
 }
@@ -121,6 +123,7 @@ export function renderTimewebBetaReleaseEnvironment(
     runEvidence: TimewebVerifiedCanonicalRunEvidence;
     runEvidenceChecksum: string;
     runtimeEnvRoot: string;
+    sourceAuthority: TimewebFrozenSourceAuthority;
     previousReleaseId?: string;
     baseLockPath?: string | URL;
   },
@@ -136,6 +139,7 @@ export function writeTimewebBetaReleaseEnvironment(options: {
   canonicalManifestChecksum: string;
   runEvidence: TimewebVerifiedCanonicalRunEvidence;
   runEvidenceChecksum: string;
+  sourceAuthority: TimewebFrozenSourceAuthority;
   runtimeEnvRoot?: string;
   previousReleaseId?: string;
   releaseRoot?: string;

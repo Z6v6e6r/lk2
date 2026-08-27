@@ -27,6 +27,10 @@ import {
   ReleaseManifestContractError,
   validateCanonicalManifest,
 } from './timeweb-release-manifest-contract.js';
+import {
+  assertExactTimewebFrozenSource,
+  requireExactTimewebFrozenSourceAuthority,
+} from './verify-timeweb-frozen-source.js';
 
 const BASE_LOCK_PATH = fileURLToPath(
   new URL('../deploy/timeweb/base-images.lock.json', import.meta.url),
@@ -695,6 +699,14 @@ export function runTimewebInitialBetaComposeStage(
   assertNoAmbientDockerOverrides(process.env);
   const authority = verifiedRenderedEnvironments.get(rendered);
   if (!authority) fail('untrusted_rendered_environment');
+  const currentSourceAuthority = assertExactTimewebFrozenSource({
+    expectedSourceSha: authority.sourceSha,
+    expectedSourceTree: authority.sourceTree,
+  });
+  requireExactTimewebFrozenSourceAuthority(currentSourceAuthority, {
+    sourceSha: authority.sourceSha,
+    sourceTree: authority.sourceTree,
+  });
   assertSafeAbsolutePath(releaseEnvPath, 'release_env_path');
   if (
     dirname(dirname(releaseEnvPath)) !== RELEASE_ROOT ||
@@ -772,6 +784,7 @@ export function renderTimewebBetaReleaseEnvironment(
     runEvidence,
     runEvidenceChecksum,
     runtimeEnvRoot,
+    sourceAuthority,
     previousReleaseId = 'NONE',
     baseLockPath = BASE_LOCK_PATH,
   },
@@ -783,6 +796,7 @@ export function renderTimewebBetaReleaseEnvironment(
     runId: expectedRunId,
     runAttempt: expectedRunAttempt,
   };
+  requireExactTimewebFrozenSourceAuthority(sourceAuthority, expected);
   validateExpectedIdentity(manifest, expected, baseLockPath);
   if (!CHECKSUM_PATTERN.test(canonicalManifestChecksum)) fail('expected_checksum');
   validateCanonicalRunEvidence(
@@ -838,6 +852,8 @@ export function renderTimewebBetaReleaseEnvironment(
   verifiedRenderedEnvironments.set(rendered, {
     releaseId,
     runtimeEnvRoot,
+    sourceSha: expected.sourceSha,
+    sourceTree: expected.sourceTree,
     contentsChecksum: createHash('sha256').update(rendered.contents).digest('hex'),
   });
   return rendered;
@@ -854,6 +870,7 @@ export function writeTimewebBetaReleaseEnvironment({
   runEvidence,
   runEvidenceChecksum,
   runtimeEnvRoot = RUNTIME_ENV_ROOT,
+  sourceAuthority,
   previousReleaseId = 'NONE',
   releaseRoot = RELEASE_ROOT,
   releaseDir,
@@ -874,6 +891,7 @@ export function writeTimewebBetaReleaseEnvironment({
     runEvidence,
     runEvidenceChecksum,
     runtimeEnvRoot,
+    sourceAuthority,
     previousReleaseId,
     baseLockPath,
   });
@@ -1004,6 +1022,10 @@ function parseComposeArguments(argv) {
 }
 
 async function readVerifiedReleaseInputs(values) {
+  const sourceAuthority = assertExactTimewebFrozenSource({
+    expectedSourceSha: values['--expected-source-sha'],
+    expectedSourceTree: values['--expected-source-tree'],
+  });
   const pair = readCanonicalTimewebReleasePair(
     values['--manifest'],
     values['--expected-manifest-sha256'],
@@ -1020,7 +1042,7 @@ async function readVerifiedReleaseInputs(values) {
     expectedRunAttempt: values['--expected-run-attempt'],
     githubTokenFile: values['--github-token-file'],
   });
-  return { pair, runEvidence };
+  return { pair, runEvidence, sourceAuthority };
 }
 
 async function main() {
@@ -1028,7 +1050,7 @@ async function main() {
   const argv = process.argv.slice(2);
   if (argv.includes('--compose-stage')) {
     const values = parseComposeArguments(argv);
-    const { pair, runEvidence } = await readVerifiedReleaseInputs(values);
+    const { pair, runEvidence, sourceAuthority } = await readVerifiedReleaseInputs(values);
     const rendered = renderTimewebBetaReleaseEnvironment(pair.manifest, {
       expectedSourceSha: values['--expected-source-sha'],
       expectedSourceTree: values['--expected-source-tree'],
@@ -1039,6 +1061,7 @@ async function main() {
       runEvidence: runEvidence.evidence,
       runEvidenceChecksum: runEvidence.checksum,
       runtimeEnvRoot: RUNTIME_ENV_ROOT,
+      sourceAuthority,
       previousReleaseId: 'NONE',
     });
     const result = runTimewebInitialBetaComposeStage(
@@ -1052,7 +1075,7 @@ async function main() {
     return;
   }
   const values = parseArguments(argv);
-  const { pair, runEvidence } = await readVerifiedReleaseInputs(values);
+  const { pair, runEvidence, sourceAuthority } = await readVerifiedReleaseInputs(values);
   const result = writeTimewebBetaReleaseEnvironment({
     manifest: pair.manifest,
     expectedSourceSha: values['--expected-source-sha'],
@@ -1063,6 +1086,7 @@ async function main() {
     canonicalManifestChecksum: pair.checksum,
     runEvidence: runEvidence.evidence,
     runEvidenceChecksum: runEvidence.checksum,
+    sourceAuthority,
     previousReleaseId: 'NONE',
     releaseDir: values['--release-dir'],
   });
