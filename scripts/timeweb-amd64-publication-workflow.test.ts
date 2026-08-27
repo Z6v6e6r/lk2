@@ -1541,6 +1541,10 @@ describe('Timeweb amd64 publication workflow', () => {
     expect(probe).toContain(
       'BUILDKIT_IMAGE: moby/buildkit@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8',
     );
+    expect(probe).toContain('BUILDKIT_VERSION: v0.32.2');
+    expect(probe).toContain('node scripts/verify-pinned-buildkit-bootstrap.js');
+    expect(probe).toContain('$SERVICE-buildkit-bootstrap.json');
+    expect(probe).not.toContain('docker buildx inspect --bootstrap | grep');
     expect(probe).toContain('node scripts/extract-timeweb-oci-provenance.js extract');
     expect(probe).toContain('node scripts/verify-timeweb-provenance-materials.js verify');
     expect(probe).toContain('authorizesPublication: false');

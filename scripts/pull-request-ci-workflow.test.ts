@@ -71,6 +71,14 @@ describe('pull request CI profiles and stable gates', () => {
     expect(source).toContain('node scripts/verify-ci-plan.js conditional provenanceProbe');
   });
 
+  it('uses bounded pinned BuildKit readiness diagnostics without publication authority', () => {
+    expect(source).toContain('node scripts/verify-pinned-buildkit-bootstrap.js');
+    expect(source).toContain('--version "$BUILDKIT_VERSION"');
+    expect(source).toContain('$SERVICE-buildkit-bootstrap.json');
+    expect(source).toContain('push: false');
+    expect(source).not.toContain('docker buildx inspect --bootstrap | grep');
+  });
+
   it('fails the final aggregate on missing, failed or cancelled stable results', () => {
     expect(source).toContain('node scripts/verify-ci-plan.js gate');
     expect(source).toContain('"ci-plan":"${{ needs.ci-plan.result }}"');

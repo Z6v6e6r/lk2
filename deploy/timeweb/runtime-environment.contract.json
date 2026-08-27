@@ -190,6 +190,7 @@
         "DATABASE_URL",
         "REDIS_URL",
         "RABBITMQ_URL",
+        "REALTIME_EXPECTED_REPLICAS",
         "JWT_ISSUER",
         "JWT_AUDIENCE",
         "JWT_REALTIME_AUDIENCE",
