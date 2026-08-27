@@ -610,8 +610,18 @@ handle_pending_external_signal
 mv "$helper_pid_file.tmp.$$" "$helper_pid_file"
 
 first_completed_pid=''
-wait -n -p first_completed_pid "$launcher_pid" "$watchdog_pid"
-first_completed_status=$?
+while helper_pid_is_running "$launcher_pid" && helper_pid_is_running "$watchdog_pid"; do
+  sleep 0.05
+done
+if ! helper_pid_is_running "$watchdog_pid"; then
+  first_completed_pid="$watchdog_pid"
+  wait "$watchdog_pid" 2>/dev/null
+  first_completed_status=$?
+else
+  first_completed_pid="$launcher_pid"
+  wait "$launcher_pid" 2>/dev/null
+  first_completed_status=$?
+fi
 if [[ "$first_completed_pid" == "$watchdog_pid" ]]; then
   if [[ ! -s "$watchdog_completed_file" && ! -s "$watchdog_failure_file" ]]; then
     printf '%s\n' watchdog_unexpected_exit >"$watchdog_failure_file.tmp.$$"
