@@ -88,6 +88,7 @@ export function ParticipantAvatarStack({
         const avatar = (
           <PlayerLevelAvatar
             alt={participant.displayName}
+            {...(participant.level ? {} : { accessibleLabel: participant.displayName })}
             accentColor={participantAccent(participant.level)}
             level={participant.level ?? ''}
             progress={participantLevelProgress(participant.levelValue)}

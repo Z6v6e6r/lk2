@@ -1,12 +1,16 @@
 import { useId } from 'react';
 
-export function CreateGameButtonIcon(): React.JSX.Element {
+export function CreateGameButtonIcon({
+  fill = '#8766EB',
+}: {
+  readonly fill?: string;
+} = {}): React.JSX.Element {
   const filterId = `create-game-shadow-${useId().replace(/:/g, '')}`;
 
   return (
     <svg width="88" height="72" viewBox="0 0 88 72" fill="none" aria-hidden="true">
       <g filter={`url(#${filterId})`}>
-        <rect x="16" y="16" width="56" height="40" rx="16" fill="#8766EB" />
+        <rect x="16" y="16" width="56" height="40" rx="16" fill={fill} />
         <g className="fh-create-cross">
           <path
             d="M41.75 36.75H38C37.5858 36.75 37.25 36.4142 37.25 36C37.25 35.5858 37.5858 35.25 38 35.25H41.75V36.75Z"
