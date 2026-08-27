@@ -1388,7 +1388,7 @@ describe('Timeweb amd64 publication workflow', () => {
       readonly concurrency?: { readonly group?: string };
       readonly on?: Readonly<Record<string, unknown>>;
       readonly jobs?: {
-        readonly quality?: {
+        readonly ['quality-full']?: {
           readonly steps?: readonly {
             readonly env?: Readonly<Record<string, string>>;
             readonly if?: string;
@@ -1417,15 +1417,15 @@ describe('Timeweb amd64 publication workflow', () => {
             };
           }[];
         };
-        readonly ['pull-request-gate']?: {
+        readonly ['pr-gate']?: {
           readonly needs?: readonly string[];
         };
       };
     };
-    const testStep = document.jobs?.quality?.steps?.find(
+    const testStep = document.jobs?.['quality-full']?.steps?.find(
       ({ name }) => name === 'Unit and integration tests',
     );
-    const artifactStep = document.jobs?.quality?.steps?.find(
+    const artifactStep = document.jobs?.['quality-full']?.steps?.find(
       ({ name }) => name === 'Upload test and coverage diagnostics',
     );
     const secretScanJob = document.jobs?.['secret-scan'];
@@ -1459,7 +1459,7 @@ describe('Timeweb amd64 publication workflow', () => {
     });
     expect(document.on).toEqual({
       pull_request: null,
-      push: { branches: ['main'] },
+      push: { branches: ['main', 'integration/**'] },
     });
     expect(workflow).not.toContain('workflow_dispatch');
     expect(document.concurrency?.group).toBe(
@@ -1520,7 +1520,7 @@ describe('Timeweb amd64 publication workflow', () => {
       "tags: phub-${{ matrix.service }}:pr-${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}",
     );
     const probeStart = workflow.indexOf('  timeweb-provenance-probe:');
-    const gateStart = workflow.indexOf('  pull-request-gate:', probeStart);
+    const gateStart = workflow.indexOf('  pr-gate:', probeStart);
     expect(probeStart).toBeGreaterThan(-1);
     expect(gateStart).toBeGreaterThan(probeStart);
     const probe = workflow.slice(probeStart, gateStart);
@@ -1546,7 +1546,7 @@ describe('Timeweb amd64 publication workflow', () => {
     expect(probe).toContain('authorizesPublication: false');
     expect(probe).toContain('authorizesDeploy: false');
     expect(probe).toContain('docker buildx rm "$BUILDER_NAME"');
-    expect(document.jobs?.['pull-request-gate']?.needs).toEqual(
+    expect(document.jobs?.['pr-gate']?.needs).toEqual(
       expect.arrayContaining([
         'quality',
         'dependency-security',
@@ -1556,7 +1556,7 @@ describe('Timeweb amd64 publication workflow', () => {
         'timeweb-provenance-probe',
       ]),
     );
-    expect(workflow).toContain('test "$TIMEWEB_PROVENANCE_RESULT" = success');
+    expect(workflow).toContain('node scripts/verify-ci-plan.js conditional provenanceProbe');
     expect(diagnosticsRunner).toContain('set -uo pipefail');
     expect(diagnosticsRunner).toContain('reason=watchdog_deadline signal=USR1');
     expect(diagnosticsRunner).toContain('reason=watchdog_grace_expired signal=KILL');
@@ -1672,6 +1672,14 @@ describe('Timeweb amd64 publication workflow', () => {
       git(['add', 'after.txt']);
       git(['commit', '-m', 'after']);
       const afterSha = git(['rev-parse', 'HEAD']);
+      git(['remote', 'add', 'origin', directory]);
+
+      git(['checkout', '-b', 'integration/lk2-beta-test']);
+      await writeFile(join(directory, 'integration.txt'), 'integration\n');
+      git(['add', 'integration.txt']);
+      git(['commit', '-m', 'integration']);
+      const integrationSha = git(['rev-parse', 'HEAD']);
+      git(['checkout', 'main']);
 
       const pullRequest = await runResolver({
         EVENT_BASE_SHA: afterSha,
@@ -1702,6 +1710,19 @@ describe('Timeweb amd64 publication workflow', () => {
       await expect(access(ghMarker)).rejects.toMatchObject({ code: 'ENOENT' });
 
       const zeroSha = '0'.repeat(40);
+      const firstIntegrationPush = await runResolver({
+        EVENT_AFTER_SHA: integrationSha,
+        EVENT_BEFORE_SHA: zeroSha,
+        GITHUB_REF: 'refs/heads/integration/lk2-beta-test',
+        GITHUB_REF_NAME: 'integration/lk2-beta-test',
+        GITHUB_SHA: integrationSha,
+      });
+      expect(firstIntegrationPush.status, firstIntegrationPush.stderr).toBe(0);
+      expect(firstIntegrationPush.outputs).toEqual({
+        base_sha: afterSha,
+        head_sha: integrationSha,
+      });
+
       const malformedPushes: readonly Readonly<Record<string, string>>[] = [
         { EVENT_BEFORE_SHA: '', GITHUB_SHA: afterSha },
         { EVENT_BEFORE_SHA: 'not-a-sha', GITHUB_SHA: afterSha },

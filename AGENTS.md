@@ -44,6 +44,42 @@ These rules are mandatory for every change in this repository.
 - Build an immutable image once and promote the same digest through staging and production. Never deploy `latest` and never build on a production server.
 - Production rollouts require health/readiness checks, smoke tests, approval, a verified backup, sequential nodes, and a tested rollback path.
 
+## Parallel development and delivery ownership
+
+Up to four independent task branches may be active in this repository at once. This repository
+portfolio limit is separate from the limit of two read-only subagents inside one complex task. Each
+task owner owns only its branch, clean worktree and Draft PR. Task owners may fetch, safely update
+their own branch and resolve their own conflicts, but they do not own another task branch,
+integration batch, release publication or deploy.
+
+Only one active platform/release task may change `.github/workflows/**`, `deploy/**`, the root
+dependency graph or release scripts at a time. Parallel task owners must not independently change
+the same public contract, migration chain, auth boundary or release workflow. Overlapping UI entry
+points are allowed when the PRs declare an integration order and defer cross-PR conflict resolution
+to one integration batch.
+
+Ordinary `main` drift does not require every task branch to synchronize or repeat certification.
+Synchronize when relevant source or dependencies overlap, a real conflict appears, an input or
+environment changes, or immediately before common integration. Repeat a successful check only when
+its code, dependencies, command, environment, inputs, acceptance target or tested hypothesis
+changed. Draft to Ready is a lifecycle transition, not a security boundary; automated gates and
+explicit live boundaries carry the security contract.
+
+The delivery roles are distinct:
+
+- A task owner produces one focused task head and proportionate evidence.
+- An integration owner appears only for a batch of two to four ready task heads, owns one temporary
+  `integration/**` branch and resolves cross-PR conflicts there once. The integration owner runs the
+  full integration contour but does not publish or deploy.
+- A release owner freezes one green integration source and, only with separate authority, publishes
+  one immutable set of images and one canonical manifest. Publication is never a PR Docker build.
+- A deploy owner accepts only the immutable manifest, pulls by digest and separately executes
+  backup, readiness, smoke and rollback gates. Timeweb never rebuilds release images.
+
+Exclusive ownership applies to the temporary integration branch, release publication and live
+boundary being executed. It does not make one merge owner responsible for synchronizing every task
+branch. See [temporary integration batches](docs/runbooks/delivery-batches.md).
+
 ## Risk-based delivery policy
 
 ### Separate product risk from execution route
@@ -150,7 +186,7 @@ implementation contradicts current state, or the requested outcome is technicall
 Main drift, an unrelated PR, imperfect neighboring architecture, absent production evidence,
 technical debt or a potentially better architecture are not independent stop reasons.
 
-For ordinary drift: refresh -> integrate/rebase safely -> run relevant affected checks -> continue.
+For relevant drift: refresh -> integrate/rebase safely -> run relevant affected checks -> continue.
 Repeat a successful check only when relevant source, dependencies, command, environment, inputs or
 acceptance target changed, or a new hypothesis requires it. Do not restart a full certification
 cycle merely because the SHA/tree moved.
@@ -172,7 +208,8 @@ signing-material changes, permissions/RLS/ACL changes on a real target, DNS/ingr
 payment/refund, external messages or destructive rollback. A Draft PR, green CI, local PostgreSQL
 rehearsal or staging artifact never authorizes those actions.
 
-Use at most two concurrent spawned agents and never overlap write ownership. FAST normally needs
+Use at most two read-only subagents inside one complex task and never overlap write ownership. This
+does not reduce the repository portfolio limit of four independent task branches. FAST normally needs
 self-review only. SAFE uses at most one reviewer when the affected boundary or diff warrants it.
 CRITICAL uses one specialist per actual risk; R4 uses two genuinely independent perspectives.
 

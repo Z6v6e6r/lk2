@@ -108,10 +108,13 @@ stop_helper() {
     if [[ -r "/proc/$helper_pid/task/$helper_pid/children" ]]; then
       helper_children="$(<"/proc/$helper_pid/task/$helper_pid/children")"
     fi
-    kill "$helper_pid" 2>/dev/null || true
+    # A helper shell can remain blocked waiting for its sleep child after TERM.
+    # Reap the captured children before waiting for the shell so finalization is
+    # bounded by the configured kill grace, not the heartbeat/watchdog interval.
     for helper_child_pid in $helper_children; do
       kill "$helper_child_pid" 2>/dev/null || true
     done
+    kill "$helper_pid" 2>/dev/null || true
     wait "$helper_pid" 2>/dev/null || true
     for helper_child_pid in $helper_children; do
       if kill -0 "$helper_child_pid" 2>/dev/null; then

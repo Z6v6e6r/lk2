@@ -3,7 +3,9 @@ name: Pull request checks
 on:
   pull_request:
   push:
-    branches: [main]
+    branches:
+      - main
+      - integration/**
 
 permissions:
   contents: read
@@ -13,7 +15,125 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  quality:
+  ci-plan:
+    name: ci-plan
+    runs-on: ubuntu-latest
+    outputs:
+      plan: ${{ steps.plan.outputs.plan }}
+      profile: ${{ steps.plan.outputs.profile }}
+      full_quality: ${{ steps.plan.outputs.full_quality }}
+      web_quality: ${{ steps.plan.outputs.web_quality }}
+      docs_quality: ${{ steps.plan.outputs.docs_quality }}
+      deployment_contract: ${{ steps.plan.outputs.deployment_contract }}
+      provenance_probe: ${{ steps.plan.outputs.provenance_probe }}
+      policy_validation: ${{ steps.plan.outputs.policy_validation }}
+      services: ${{ steps.plan.outputs.services }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+      - id: plan
+        name: Select fail-closed CI profile
+        env:
+          EVENT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          plan_file="$RUNNER_TEMP/ci-plan.json"
+          if [[ "$GITHUB_EVENT_NAME" = pull_request ]]; then
+            [[ "$EVENT_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+            [[ "$EVENT_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
+            git cat-file -e "$EVENT_BASE_SHA^{commit}"
+            git cat-file -e "$EVENT_HEAD_SHA^{commit}"
+            base_sha="$(git merge-base "$EVENT_BASE_SHA" "$EVENT_HEAD_SHA")"
+            git diff --no-renames --name-only -z "$base_sha" "$EVENT_HEAD_SHA" \
+              | node scripts/select-pr-ci-profile.js \
+                  --event "$GITHUB_EVENT_NAME" --ref "$GITHUB_REF" >"$plan_file"
+          else
+            printf '' | node scripts/select-pr-ci-profile.js \
+              --event "$GITHUB_EVENT_NAME" --ref "$GITHUB_REF" >"$plan_file"
+          fi
+          node scripts/verify-ci-plan.js plan --file "$plan_file"
+          plan="$(jq -c . "$plan_file")"
+          printf 'plan=%s\n' "$plan" >>"$GITHUB_OUTPUT"
+          printf 'profile=%s\n' "$(jq -r .profile "$plan_file")" >>"$GITHUB_OUTPUT"
+          printf 'full_quality=%s\n' "$(jq -r .fullQuality "$plan_file")" >>"$GITHUB_OUTPUT"
+          printf 'web_quality=%s\n' "$(jq -r .webQuality "$plan_file")" >>"$GITHUB_OUTPUT"
+          printf 'docs_quality=%s\n' "$(jq -r .docsQuality "$plan_file")" >>"$GITHUB_OUTPUT"
+          printf 'deployment_contract=%s\n' "$(jq -r .deploymentContract "$plan_file")" >>"$GITHUB_OUTPUT"
+          printf 'provenance_probe=%s\n' "$(jq -r .provenanceProbe "$plan_file")" >>"$GITHUB_OUTPUT"
+          printf 'policy_validation=%s\n' "$(jq -r .policyValidation "$plan_file")" >>"$GITHUB_OUTPUT"
+          printf 'services=%s\n' "$(jq -c .dockerServices "$plan_file")" >>"$GITHUB_OUTPUT"
+          profile="$(jq -r .profile "$plan_file")"
+          services="$(jq -c .dockerServices "$plan_file")"
+          reason="$(jq -r .reason "$plan_file")"
+          {
+            echo '### CI plan'
+            echo "- profile: \`$profile\`"
+            echo "- Docker services: \`$services\`"
+            echo "- reason: $reason"
+          } >>"$GITHUB_STEP_SUMMARY"
+
+  quality-docs:
+    name: quality-docs
+    needs: ci-plan
+    if: ${{ needs.ci-plan.result == 'success' && needs.ci-plan.outputs.docs_quality == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Check documentation and policy formatting
+        run: npx prettier --check AGENTS.md .github/PULL_REQUEST_TEMPLATE.md docs/**/*.md
+      - name: Check policy, planner and aggregate contracts
+        run: >-
+          npx vitest run
+          scripts/delivery-policy.test.ts
+          scripts/select-pr-ci-profile.test.ts
+          scripts/verify-ci-plan.test.ts
+      - name: Check exact diff whitespace
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          merge_base="$(git merge-base "$BASE_SHA" "$HEAD_SHA")"
+          git diff --check "$merge_base" "$HEAD_SHA"
+
+  quality-web:
+    name: quality-web
+    needs: ci-plan
+    if: ${{ needs.ci-plan.result == 'success' && needs.ci-plan.outputs.web_quality == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run contracts:generate
+      - name: Web tests, lint and type safety
+        run: |
+          npx vitest run apps/web/src
+          npx eslint apps/web/src packages/api-sdk/src packages/ui/src
+          npx tsc -p tsconfig.web-app.json --noEmit
+      - name: Build Web production artifact
+        run: npm run build -w @phub/web
+
+  quality-full:
+    name: quality-full
+    needs: ci-plan
+    if: ${{ needs.ci-plan.result == 'success' && needs.ci-plan.outputs.full_quality == 'true' }}
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -56,11 +176,11 @@ jobs:
       JWT_REFRESH_SECRET: ci-refresh-secret-at-least-32-characters
       VIVA_MODE: mock
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: npm
@@ -95,20 +215,49 @@ jobs:
       - name: Validate local Compose model
         run: cp .env.example .env && docker compose config --quiet
 
-  dependency-security:
+  quality:
+    name: quality
+    needs: [ci-plan, quality-docs, quality-web, quality-full]
+    if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
-      - uses: actions/setup-node@v4
+      - name: Require the planned quality closure
+        env:
+          PLAN_JSON: ${{ needs.ci-plan.outputs.plan }}
+          DOCS_RESULT: ${{ needs.quality-docs.result }}
+          WEB_RESULT: ${{ needs.quality-web.result }}
+          FULL_RESULT: ${{ needs.quality-full.result }}
+        run: node scripts/verify-ci-plan.js quality
+
+  dependency-security:
+    name: dependency-security
+    needs: ci-plan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        if: ${{ needs.ci-plan.outputs.full_quality == 'true' }}
         with:
           node-version: 22
           cache: npm
-      - run: npm ci
-      - run: npm audit --omit=dev --audit-level=high
+      - if: ${{ needs.ci-plan.outputs.full_quality == 'true' }}
+        run: npm ci
+      - if: ${{ needs.ci-plan.outputs.full_quality == 'true' }}
+        run: npm audit --omit=dev --audit-level=high
+      - name: Confirm dependency audit is not applicable
+        if: ${{ needs.ci-plan.outputs.full_quality != 'true' }}
+        run: |
+          set -euo pipefail
+          test '${{ needs.ci-plan.outputs.profile }}' = docs -o '${{ needs.ci-plan.outputs.profile }}' = leaf-web
+          echo 'Planner proved that package manifests, lockfiles and shared dependency inputs are unchanged.'
 
   secret-scan:
+    name: secret-scan
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -145,20 +294,36 @@ jobs:
           esac
           [[ "$base_tip_sha" =~ ^[0-9a-f]{40}$ ]]
           [[ "$head_sha" =~ ^[0-9a-f]{40}$ ]]
-          git cat-file -e "$base_tip_sha^{commit}"
           git cat-file -e "$head_sha^{commit}"
           if [[ "$range_mode" = exact_push ]]; then
             zero_sha=0000000000000000000000000000000000000000
-            test "$GITHUB_REF" = refs/heads/main
-            test "$base_tip_sha" != "$zero_sha"
+            case "$GITHUB_REF" in
+              refs/heads/main|refs/heads/integration/*) ;;
+              *) echo "Unsupported push ref for exact secret scan: $GITHUB_REF" >&2; exit 1 ;;
+            esac
             test "$head_sha" != "$zero_sha"
-            test "$base_tip_sha" != "$head_sha"
             test "$head_sha" = "$GITHUB_SHA"
-            git merge-base --is-ancestor "$base_tip_sha" "$head_sha"
-            base_sha="$base_tip_sha"
+            if [[ "$base_tip_sha" = "$zero_sha" ]]; then
+              case "$GITHUB_REF" in
+                refs/heads/integration/*) ;;
+                *) echo 'A zero before SHA is allowed only for a new integration branch.' >&2; exit 1 ;;
+              esac
+              git fetch --no-tags origin main:refs/remotes/origin/main
+              main_sha="$(git rev-parse refs/remotes/origin/main)"
+              [[ "$main_sha" =~ ^[0-9a-f]{40}$ ]]
+              git cat-file -e "$main_sha^{commit}"
+              base_sha="$(git merge-base "$main_sha" "$head_sha")"
+            else
+              git cat-file -e "$base_tip_sha^{commit}"
+              test "$base_tip_sha" != "$head_sha"
+              git merge-base --is-ancestor "$base_tip_sha" "$head_sha"
+              base_sha="$base_tip_sha"
+            fi
+            test "$base_sha" != "$head_sha"
             range_commit_count="$(git rev-list --count "$base_sha..$head_sha")"
             [[ "$range_commit_count" =~ ^[1-9][0-9]*$ ]]
           else
+            git cat-file -e "$base_tip_sha^{commit}"
             base_sha="$(git merge-base "$base_tip_sha" "$head_sha")"
             [[ "$base_sha" =~ ^[0-9a-f]{40}$ ]]
             git merge-base --is-ancestor "$base_sha" "$head_sha"
@@ -210,6 +375,7 @@ jobs:
 
   deployment-contract:
     name: deployment-contract
+    needs: ci-plan
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -224,17 +390,21 @@ jobs:
           [[ "$EXPECTED_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD_SHA"
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        if: ${{ needs.ci-plan.outputs.deployment_contract == 'true' }}
         with:
           node-version: 22
           cache: npm
-      - run: npm ci
+      - if: ${{ needs.ci-plan.outputs.deployment_contract == 'true' }}
+        run: npm ci
       - name: Verify deployment target, Caddy, Compose and historical exclusions
+        if: ${{ needs.ci-plan.outputs.deployment_contract == 'true' }}
         run: |
           set -euo pipefail
           node scripts/verify-timeweb-deployment-contract.js \
             --diagnostic "$RUNNER_TEMP/timeweb-deployment-diagnostic.json"
           npx vitest run scripts/verify-timeweb-deployment-contract.test.ts
       - name: Resolve immutable Caddy identity
+        if: ${{ needs.ci-plan.outputs.deployment_contract == 'true' }}
         id: caddy-identity
         run: |
           set -euo pipefail
@@ -248,6 +418,7 @@ jobs:
           process.stdout.write(`adapted_sha256=${target.ingress.caddy.adaptedJsonSha256}\n`);
           NODE
       - name: Validate and adapt Caddy offline
+        if: ${{ needs.ci-plan.outputs.deployment_contract == 'true' }}
         env:
           ADAPTED_SHA256: ${{ steps.caddy-identity.outputs.adapted_sha256 }}
           CADDY_CONFIG_DIGEST: ${{ steps.caddy-identity.outputs.config_digest }}
@@ -272,6 +443,7 @@ jobs:
             >"$RUNNER_TEMP/caddy-adapted.sha256"
           sha256sum --check --strict "$RUNNER_TEMP/caddy-adapted.sha256"
       - name: Validate ingress and application Compose with synthetic non-secret env
+        if: ${{ needs.ci-plan.outputs.deployment_contract == 'true' }}
         env:
           API_IMAGE_DIGEST: sha256:1111111111111111111111111111111111111111111111111111111111111111
           MIGRATOR_IMAGE_DIGEST: sha256:2222222222222222222222222222222222222222222222222222222222222222
@@ -297,8 +469,11 @@ jobs:
           TIMEWEB_RUNTIME_ENV_ROOT="$synthetic_root" \
             docker compose -f deploy/timeweb/compose.beta.yaml --profile background --profile migration \
             config --quiet
+      - name: Confirm deployment contract is not applicable
+        if: ${{ needs.ci-plan.outputs.deployment_contract != 'true' }}
+        run: echo 'CI planner marked the Timeweb deployment contract N/A for this exact change.'
       - name: Upload deployment-contract diagnostics
-        if: ${{ always() }}
+        if: ${{ always() && needs.ci-plan.outputs.deployment_contract == 'true' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: deployment-contract-${{ github.run_id }}-${{ github.run_attempt }}
@@ -311,44 +486,27 @@ jobs:
 
   docker-selection:
     name: docker-selection
+    needs: ci-plan
     runs-on: ubuntu-latest
     outputs:
       services: ${{ steps.select.outputs.services }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          fetch-depth: 0
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
-      - name: Select affected Docker services
+      - name: Validate planned Docker services
         id: select
         env:
-          EVENT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PLANNED_SERVICES: ${{ needs.ci-plan.outputs.services }}
         run: |
           set -euo pipefail
-          all_services='["web","api","worker","realtime","migrator"]'
-
-          if [[ "$GITHUB_EVENT_NAME" = pull_request ]]; then
-            [[ "$EVENT_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
-            [[ "$EVENT_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
-            git cat-file -e "$EVENT_BASE_SHA^{commit}"
-            git cat-file -e "$EVENT_HEAD_SHA^{commit}"
-            base_sha="$(git merge-base "$EVENT_BASE_SHA" "$EVENT_HEAD_SHA")"
-            services="$(
-              git diff --no-renames --name-only -z "$base_sha" "$EVENT_HEAD_SHA" \
-                | node scripts/select-pr-docker-services.js
-            )"
-          else
-            services="$all_services"
-          fi
-
           jq -e '
             type == "array"
             and all(.[]; . == "web" or . == "api" or . == "worker" or . == "realtime" or . == "migrator")
             and length == (unique | length)
-          ' <<<"$services" >/dev/null
-          printf 'services=%s\n' "$services" >>"$GITHUB_OUTPUT"
-          printf 'Selected Docker services: `%s`\n' "$services" >>"$GITHUB_STEP_SUMMARY"
+          ' <<<"$PLANNED_SERVICES" >/dev/null
+          printf 'services=%s\n' "$PLANNED_SERVICES" >>"$GITHUB_OUTPUT"
+          printf 'Selected Docker services: `%s`\n' "$PLANNED_SERVICES" >>"$GITHUB_STEP_SUMMARY"
 
   docker-image:
     name: docker-build (${{ matrix.service }})
@@ -502,6 +660,8 @@ jobs:
 
   timeweb-provenance-probe:
     name: timeweb-provenance-probe (${{ matrix.service }})
+    needs: ci-plan
+    if: ${{ needs.ci-plan.result == 'success' && needs.ci-plan.outputs.provenance_probe == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
@@ -655,10 +815,11 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-  pull-request-gate:
-    name: pull-request-gate
+  pr-gate:
+    name: pr-gate
     needs:
       [
+        ci-plan,
         quality,
         dependency-security,
         secret-scan,
@@ -669,19 +830,21 @@ jobs:
     if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
       - name: Require every exact-head gate
         env:
-          DEPENDENCY_SECURITY_RESULT: ${{ needs.dependency-security.result }}
-          DEPLOYMENT_CONTRACT_RESULT: ${{ needs.deployment-contract.result }}
-          DOCKER_BUILD_RESULT: ${{ needs.docker-build.result }}
-          TIMEWEB_PROVENANCE_RESULT: ${{ needs.timeweb-provenance-probe.result }}
-          QUALITY_RESULT: ${{ needs.quality.result }}
-          SECRET_SCAN_RESULT: ${{ needs.secret-scan.result }}
+          PLAN_JSON: ${{ needs.ci-plan.outputs.plan }}
+          ACTUAL_RESULT: ${{ needs.timeweb-provenance-probe.result }}
+          GATE_RESULTS: >-
+            {"ci-plan":"${{ needs.ci-plan.result }}",
+            "quality":"${{ needs.quality.result }}",
+            "dependency-security":"${{ needs.dependency-security.result }}",
+            "secret-scan":"${{ needs.secret-scan.result }}",
+            "deployment-contract":"${{ needs.deployment-contract.result }}",
+            "docker-build":"${{ needs.docker-build.result }}"}
         run: |
           set -euo pipefail
-          test "$QUALITY_RESULT" = success
-          test "$DEPENDENCY_SECURITY_RESULT" = success
-          test "$SECRET_SCAN_RESULT" = success
-          test "$DEPLOYMENT_CONTRACT_RESULT" = success
-          test "$DOCKER_BUILD_RESULT" = success
-          test "$TIMEWEB_PROVENANCE_RESULT" = success
+          node scripts/verify-ci-plan.js conditional provenanceProbe
+          node scripts/verify-ci-plan.js gate
