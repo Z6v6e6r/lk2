@@ -535,27 +535,38 @@ describe.sequential('CI test diagnostics supervisor', () => {
     'persists the child status before deliberately slow helper cleanup completes',
     async () => {
       const directory = await createDiagnosticsDirectory();
+      const monitorReleaseFile = join(directory, 'release-monitor');
       const monitorCommand = await createExecutable(
         directory,
         'slow-monitor.sh',
-        'trap "" TERM\nwhile :; do sleep 30; done',
+        'trap "" TERM\nwhile [[ ! -e "$CI_TEST_MONITOR_RELEASE_FILE" ]]; do sleep 0.05; done',
       );
       const child = spawn(diagnosticsRunner, ['/bin/sh', '-c', 'exit 7'], {
         cwd: repositoryRoot,
         env: {
           ...testEnvironment(directory),
-          CI_TEST_HELPER_SHUTDOWN_SECONDS: '3',
+          CI_TEST_HELPER_SHUTDOWN_SECONDS: '10',
           CI_TEST_MONITOR_HELPER_COMMAND: monitorCommand,
+          CI_TEST_MONITOR_RELEASE_FILE: monitorReleaseFile,
         },
         stdio: 'ignore',
       });
+      const childExit = waitForExit(child);
 
-      const earlyStatus = await waitForFile(join(directory, 'status.txt'));
-      expect(earlyStatus).toContain(
+      const observation = await (async () => {
+        try {
+          const earlyStatus = await waitForFile(join(directory, 'status.txt'));
+          return { earlyStatus, childExitCodeBeforeRelease: child.exitCode };
+        } finally {
+          await writeFile(monitorReleaseFile, 'release\n', 'utf8');
+          await childExit;
+        }
+      })();
+      expect(observation.earlyStatus).toContain(
         'child_exit_status=7\nexit_status=7\ntermination=pending_finalization\nfinalization=child_exit_captured\n',
       );
-      expect(child.exitCode).toBeNull();
-      expect(await waitForExit(child)).toEqual({ code: 7, signal: null });
+      expect(observation.childExitCodeBeforeRelease).toBeNull();
+      expect(await childExit).toEqual({ code: 7, signal: null });
     },
     15_000,
   );
