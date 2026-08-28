@@ -55,6 +55,36 @@ async function waitForFile(path: string, timeoutMilliseconds = 5_000): Promise<s
   throw new Error(`Timed out waiting for ${path}`);
 }
 
+async function waitForFileContents(
+  path: string,
+  predicate: (contents: string) => boolean,
+  timeoutMilliseconds = 5_000,
+): Promise<string> {
+  const deadline = Date.now() + timeoutMilliseconds;
+  let lastContents: string | undefined;
+  while (Date.now() < deadline) {
+    try {
+      lastContents = await readFile(path, 'utf8');
+      if (predicate(lastContents)) return lastContents;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(
+    `Timed out waiting for matching contents in ${path}; last observed contents:\n${lastContents ?? '<file absent>'}`,
+  );
+}
+
+async function readFileIfPresent(path: string): Promise<string | undefined> {
+  try {
+    return await readFile(path, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw error;
+  }
+}
+
 function parsePidFile(contents: string): readonly number[] {
   return contents
     .trim()
@@ -164,6 +194,26 @@ async function waitForExit(child: ReturnType<typeof spawn>): Promise<{
   return await new Promise((resolve, reject) => {
     child.once('error', reject);
     child.once('close', (code, signal) => resolve({ code, signal }));
+  });
+}
+
+async function waitForExitWithCleanupBudget(
+  child: ReturnType<typeof spawn>,
+  childExit: ReturnType<typeof waitForExit>,
+  timeoutMilliseconds = 5_000,
+): ReturnType<typeof waitForExit> {
+  return await new Promise((resolve, reject) => {
+    const terminateTimer = setTimeout(() => child.kill('SIGTERM'), timeoutMilliseconds);
+    const killTimer = setTimeout(() => child.kill('SIGKILL'), timeoutMilliseconds + 2_000);
+    const rejectionTimer = setTimeout(
+      () => reject(new Error(`Supervisor did not exit within cleanup budget (pid=${child.pid})`)),
+      timeoutMilliseconds + 4_000,
+    );
+    childExit.then(resolve, reject).finally(() => {
+      clearTimeout(terminateTimer);
+      clearTimeout(killTimer);
+      clearTimeout(rejectionTimer);
+    });
   });
 }
 
@@ -532,43 +582,102 @@ describe.sequential('CI test diagnostics supervisor', () => {
   );
 
   it.runIf(linuxOnly)(
-    'persists the child status before deliberately slow helper cleanup completes',
+    'persists resolved child status while slow helper cleanup remains in progress',
     async () => {
       const directory = await createDiagnosticsDirectory();
+      const monitorBlockReadyFile = join(directory, 'monitor-block-ready');
       const monitorReleaseFile = join(directory, 'release-monitor');
       const monitorCommand = await createExecutable(
         directory,
         'slow-monitor.sh',
-        'trap "" TERM\nwhile [[ ! -e "$CI_TEST_MONITOR_RELEASE_FILE" ]]; do sleep 0.05; done',
+        [
+          'release_monitor() {',
+          '  while [[ ! -e "$CI_TEST_MONITOR_RELEASE_FILE" ]]; do sleep 0.05; done',
+          '  exit 0',
+          '}',
+          'trap release_monitor TERM INT',
+          'printf "ready\\n" >"$CI_TEST_MONITOR_BLOCK_READY_FILE.tmp.$$"',
+          'mv "$CI_TEST_MONITOR_BLOCK_READY_FILE.tmp.$$" "$CI_TEST_MONITOR_BLOCK_READY_FILE"',
+          'while :; do sleep 30; done',
+        ].join('\n'),
       );
-      const child = spawn(diagnosticsRunner, ['/bin/sh', '-c', 'exit 7'], {
-        cwd: repositoryRoot,
-        env: {
-          ...testEnvironment(directory),
-          CI_TEST_HELPER_SHUTDOWN_SECONDS: '10',
-          CI_TEST_MONITOR_HELPER_COMMAND: monitorCommand,
-          CI_TEST_MONITOR_RELEASE_FILE: monitorReleaseFile,
+      const child = spawn(
+        diagnosticsRunner,
+        [
+          '/bin/sh',
+          '-c',
+          'while [ ! -e "$CI_TEST_MONITOR_BLOCK_READY_FILE" ]; do sleep 0.05; done; exit 7',
+        ],
+        {
+          cwd: repositoryRoot,
+          env: {
+            ...testEnvironment(directory),
+            CI_TEST_HELPER_SHUTDOWN_SECONDS: '10',
+            CI_TEST_MONITOR_BLOCK_READY_FILE: monitorBlockReadyFile,
+            CI_TEST_MONITOR_HELPER_COMMAND: monitorCommand,
+            CI_TEST_MONITOR_RELEASE_FILE: monitorReleaseFile,
+          },
+          stdio: 'ignore',
         },
-        stdio: 'ignore',
-      });
-      const childExit = waitForExit(child);
-
-      const observation = await (async () => {
-        try {
-          const earlyStatus = await waitForFile(join(directory, 'status.txt'));
-          return { earlyStatus, childExitCodeBeforeRelease: child.exitCode };
-        } finally {
-          await writeFile(monitorReleaseFile, 'release\n', 'utf8');
-          await childExit;
-        }
-      })();
-      expect(observation.earlyStatus).toContain(
-        'child_exit_status=7\nexit_status=7\ntermination=pending_finalization\nfinalization=child_exit_captured\n',
       );
-      expect(observation.childExitCodeBeforeRelease).toBeNull();
-      expect(await childExit).toEqual({ code: 7, signal: null });
+      const childExit = waitForExit(child);
+      let supervisorResult:
+        { readonly code: number | null; readonly signal: NodeJS.Signals | null } | undefined;
+
+      let preCleanupStatus: string;
+      let monitorReady: string;
+      let helperPids: readonly number[] = [];
+      let testPid: number | undefined;
+      try {
+        monitorReady = await waitForFile(monitorBlockReadyFile, 3_000);
+        helperPids = await waitForHelperPids(join(directory, 'helper-pids.txt'), 3_000);
+        testPid = await waitForPositivePid(join(directory, 'test.pid'), 3_000);
+        preCleanupStatus = await waitForFileContents(join(directory, 'status.txt'), (contents) =>
+          contents.includes(
+            'child_exit_status=7\nexit_status=7\ntermination=normal_exit\nfinalization=child_exit_captured\ncleanup_failure_phase=none\n',
+          ),
+        );
+
+        expect(monitorReady).toBe('ready\n');
+        expect(preCleanupStatus).not.toContain('finalization=complete');
+        expect(child.exitCode).toBeNull();
+        await expect(readFile(monitorReleaseFile, 'utf8')).rejects.toMatchObject({
+          code: 'ENOENT',
+        });
+      } finally {
+        try {
+          await Promise.all([
+            writeFile(monitorBlockReadyFile, 'cleanup-release\n', 'utf8'),
+            writeFile(monitorReleaseFile, 'release\n', 'utf8'),
+          ]);
+        } finally {
+          supervisorResult = await waitForExitWithCleanupBudget(child, childExit);
+        }
+        if (helperPids.length === 0) {
+          const helperPidContents = await readFileIfPresent(join(directory, 'helper-pids.txt'));
+          if (helperPidContents !== undefined) helperPids = parsePidFile(helperPidContents);
+        }
+        if (testPid === undefined) {
+          const testPidContents = await readFileIfPresent(join(directory, 'test.pid'));
+          if (testPidContents !== undefined) {
+            const observedTestPid = Number(testPidContents.trim());
+            if (Number.isSafeInteger(observedTestPid) && observedTestPid > 0) {
+              testPid = observedTestPid;
+            }
+          }
+        }
+        await Promise.all(helperPids.map((pid) => expectProcessGone(pid)));
+        if (testPid !== undefined) await expectProcessGroupGone(testPid);
+      }
+
+      expect(supervisorResult).toEqual({ code: 7, signal: null });
+      const finalStatus = await readFile(join(directory, 'status.txt'), 'utf8');
+      expect(finalStatus).toContain(
+        'child_exit_status=7\nexit_status=7\ntermination=normal_exit\nfinalization=complete\ncleanup_failure_phase=none\n',
+      );
+      expect(finalStatus).not.toContain('termination=pending_finalization');
     },
-    15_000,
+    20_000,
   );
 
   it.runIf(linuxOnly)(
