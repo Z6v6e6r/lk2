@@ -135,9 +135,11 @@ describe('Timeweb amd64 publication workflow', () => {
             readonly strategy?: { readonly matrix?: { readonly service?: readonly string[] } };
             readonly steps?: readonly {
               readonly 'continue-on-error'?: boolean;
+              readonly env?: Readonly<Record<string, string>>;
               readonly id?: string;
               readonly if?: string;
               readonly name?: string;
+              readonly run?: string;
               readonly uses?: string;
               readonly with?: Readonly<Record<string, unknown>>;
             }[];
@@ -194,9 +196,22 @@ describe('Timeweb amd64 publication workflow', () => {
     expect(document.jobs['publication-manifest']?.environment).toBeUndefined();
 
     const publicationSteps = document.jobs['publication-manifest']?.steps ?? [];
+    const cleanSourceIndex = publicationSteps.findIndex(
+      ({ name }) => name === 'Verify exact clean manifest source checkout',
+    );
+    const cleanSourceStep = publicationSteps[cleanSourceIndex];
+    const evidenceDownloadIndex = publicationSteps.findIndex(
+      ({ uses }) => uses === 'actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093',
+    );
     const evidenceDownload = publicationSteps.find(
       ({ uses }) => uses === 'actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093',
     );
+    expect(cleanSourceIndex).toBeGreaterThan(-1);
+    expect(evidenceDownloadIndex).toBeGreaterThan(cleanSourceIndex);
+    expect(cleanSourceStep?.env).toEqual({
+      EXPECTED_SOURCE_SHA: '${{ inputs.expected_source_sha }}',
+    });
+    expect(cleanSourceStep?.run).toContain('test -z "$(git status --porcelain)"');
     expect(evidenceDownload?.with).toEqual({
       pattern: 'timeweb-amd64-image-*-${{ github.run_id }}-${{ github.run_attempt }}',
       path: 'publication-evidence/images',
@@ -208,9 +223,15 @@ describe('Timeweb amd64 publication workflow', () => {
     const generationIndex = publicationSteps.findIndex(
       ({ name }) => name === 'Create and validate internal and canonical publication manifests',
     );
+    const generationStep = publicationSteps[generationIndex];
     const canonicalIndex = publicationSteps.findIndex(({ id }) => id === 'canonical');
     const canonicalStep = publicationSteps[canonicalIndex];
     expect(generationIndex).toBeGreaterThan(-1);
+    expect(generationIndex).toBeGreaterThan(evidenceDownloadIndex);
+    expect(generationStep?.run).toContain(
+      'test -z "$(git status --porcelain --untracked-files=no)"',
+    );
+    expect(generationStep?.run).not.toContain('test -z "$(git status --porcelain)"');
     expect(canonicalIndex).toBeGreaterThan(generationIndex);
     expect(canonicalStep?.uses).toBe(
       'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02',
