@@ -553,21 +553,20 @@ describe.sequential('CI test diagnostics supervisor', () => {
       });
       const childExit = waitForExit(child);
 
-      let earlyStatus = '';
-      let childExitCodeBeforeRelease: number | null = null;
-      let childResult: Awaited<ReturnType<typeof waitForExit>> | undefined;
-      try {
-        earlyStatus = await waitForFile(join(directory, 'status.txt'));
-        childExitCodeBeforeRelease = child.exitCode;
-      } finally {
-        await writeFile(monitorReleaseFile, 'release\n', 'utf8');
-        childResult = await childExit;
-      }
-      expect(earlyStatus).toContain(
+      const observation = await (async () => {
+        try {
+          const earlyStatus = await waitForFile(join(directory, 'status.txt'));
+          return { earlyStatus, childExitCodeBeforeRelease: child.exitCode };
+        } finally {
+          await writeFile(monitorReleaseFile, 'release\n', 'utf8');
+          await childExit;
+        }
+      })();
+      expect(observation.earlyStatus).toContain(
         'child_exit_status=7\nexit_status=7\ntermination=pending_finalization\nfinalization=child_exit_captured\n',
       );
-      expect(childExitCodeBeforeRelease).toBeNull();
-      expect(childResult).toEqual({ code: 7, signal: null });
+      expect(observation.childExitCodeBeforeRelease).toBeNull();
+      expect(await childExit).toEqual({ code: 7, signal: null });
     },
     15_000,
   );
