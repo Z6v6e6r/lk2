@@ -196,6 +196,60 @@ describe('Timeweb amd64 publication workflow', () => {
     expect(document.jobs['publication-manifest']?.environment).toBeUndefined();
 
     const publicationSteps = document.jobs['publication-manifest']?.steps ?? [];
+    const imagePublicationSteps = document.jobs['build-and-publish']?.steps ?? [];
+    const buildxStep = imagePublicationSteps.find(({ id }) => id === 'buildx');
+    const readinessIndex = imagePublicationSteps.findIndex(
+      ({ name }) => name === 'Verify the pinned Buildx and BuildKit runtime before registry login',
+    );
+    const readinessStep = imagePublicationSteps[readinessIndex];
+    const registryLoginIndex = imagePublicationSteps.findIndex(
+      ({ uses }) => uses === 'docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9',
+    );
+    expect(buildxStep?.env).toEqual({
+      BUILDX_SHA256: '48af8a397ebd60178778bf63611dbcebe5f5e7a9be90eb9147b24b9587455778',
+      BUILDX_VERSION: 'v0.36.1',
+      BUILDKIT_IMAGE:
+        'moby/buildkit@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8',
+    });
+    expect(buildxStep?.run).toContain(
+      'builder_name="phub-timeweb-publish-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"',
+    );
+    expect(buildxStep?.run).toContain('--name "$builder_name"');
+    expect(readinessIndex).toBeGreaterThan(-1);
+    expect(registryLoginIndex).toBeGreaterThan(readinessIndex);
+    expect(readinessStep?.env).toEqual({
+      BUILDER_NAME: '${{ steps.buildx.outputs.name }}',
+      BUILDKIT_IMAGE:
+        'moby/buildkit@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8',
+      BUILDKIT_VERSION: 'v0.32.2',
+      SERVICE: '${{ matrix.service }}',
+    });
+    expect(readinessStep?.run).toContain(
+      "grep -Fx 'github.com/docker/buildx v0.36.1 1d8dde89b8aba914e05e45366770736fea1fd690'",
+    );
+    expect(readinessStep?.run).toContain('bash scripts/timeweb-buildkit-bootstrap-readiness.sh');
+    expect(readinessStep?.run).toContain('--builder "$BUILDER_NAME"');
+    expect(readinessStep?.['continue-on-error']).toBeUndefined();
+
+    const readinessHelper = await readFile(
+      new URL('./timeweb-buildkit-bootstrap-readiness.sh', import.meta.url),
+      'utf8',
+    );
+    expect(readinessHelper).toContain('readonly MAX_ATTEMPTS=5');
+    expect(readinessHelper).toContain('readonly TOTAL_RETRY_BUDGET_SECONDS=29');
+    expect(readinessHelper).toContain('readonly KILL_AFTER_SECONDS=1');
+    expect(readinessHelper.match(/--kill-after="\$\{KILL_AFTER_SECONDS\}s"/gu)).toHaveLength(3);
+    expect(readinessHelper).toContain('docker buildx inspect "$builder_name" --bootstrap');
+    expect(readinessHelper).toContain('buildkit_version_mismatch');
+    expect(readinessHelper).toContain('matching_container_count_mismatch');
+    expect(readinessHelper).toContain('container_running" != true');
+    expect(readinessHelper).toContain('container_image" != "$expected_image');
+    expect(readinessHelper).not.toContain('continue-on-error');
+    expect(readinessHelper).not.toContain('|| true');
+    expect(readinessHelper).not.toContain(':latest');
+    expect(readinessHelper).not.toContain('setup-buildx-action');
+    expect(readinessHelper).not.toContain('fallback');
+
     const cleanSourceIndex = publicationSteps.findIndex(
       ({ name }) => name === 'Verify exact clean manifest source checkout',
     );
