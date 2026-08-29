@@ -243,9 +243,10 @@ unexpected index target, and uses that same snapshot for exact simulation, URI s
 download. Lifecycle-bearing maintainer scripts are rejected. The lists, packages and atomic `0600`
 plan are published as one directory rename; the plan binds the plan ID, source/list/simulation
 checksums and every payload and control-metadata SHA-256. Stop for separate authority naming that
-plan ID before `apply`. A prior rollback receipt, including a dangling symlink at its fixed path,
-blocks both planning and the apply recheck; historical evidence must never be overwritten or
-discovered only after package mutation.
+plan ID before `apply`. Any existing or dangling-symlink bundle, transaction, install receipt or
+rollback receipt blocks planning before the state root can be created. Apply rechecks the persistent
+markers before package work; historical evidence must never be overwritten or discovered only
+after package mutation.
 
 ```sh
 sudo -- /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin HOME=/root LC_ALL=C \

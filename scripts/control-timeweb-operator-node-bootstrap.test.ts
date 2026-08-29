@@ -673,7 +673,7 @@ describe('Timeweb operator Node bootstrap controller', () => {
     });
   });
 
-  it('rejects a stale normal rollback receipt before any rollback mutation', () => {
+  it('rejects stale or dangling persistent state before any lifecycle mutation', () => {
     const directory = temporaryDirectory();
     const contractPath = join(directory, 'contract.json');
     const transactionPath = join(directory, 'transaction.json');
@@ -702,21 +702,40 @@ describe('Timeweb operator Node bootstrap controller', () => {
       'module.transaction_write = lambda *_args: events.append("transaction")',
       'module.create_policy_guard = lambda *_args: events.append("guard")',
       'module.purge_command = lambda *_args: events.append("purge")',
-      'def assert_rejected():',
+      'module.create_state_root = lambda *_args: events.append("state_root")',
+      'def assert_stop(call, code):',
       '    try:',
-      '        module.rollback_mode(contract, "a" * 40, "b" * 40)',
+      '        call()',
       '    except module.Stop as error:',
-      '        assert str(error) == "rollback_receipt_present"',
+      '        assert str(error) == code',
       '    else:',
-      '        raise AssertionError("stale rollback receipt accepted")',
+      '        raise AssertionError("persistent marker accepted: " + code)',
       '    assert events == []',
       '    assert not transaction_path.exists()',
       '    assert not policy_path.exists() and not policy_pending_path.exists()',
       'rollback_receipt_path.write_text("{}\\n")',
-      'assert_rejected()',
+      'assert_stop(lambda: module.rollback_mode(contract, "a" * 40, "b" * 40), "rollback_receipt_present")',
       'rollback_receipt_path.unlink()',
       'rollback_receipt_path.symlink_to(rollback_receipt_path.parent / "missing-receipt")',
-      'assert_rejected()',
+      'assert_stop(lambda: module.rollback_mode(contract, "a" * 40, "b" * 40), "rollback_receipt_present")',
+      'rollback_receipt_path.unlink()',
+      'transaction_path.symlink_to(transaction_path.parent / "missing-transaction")',
+      'assert_stop(lambda: module.apply_mode(contract, "a" * 40, "b" * 40), "transaction_present_use_recover")',
+      'assert_stop(lambda: module.verify_mode(contract, "a" * 40, "b" * 40), "transaction_present_use_recover")',
+      'assert_stop(lambda: module.rollback_mode(contract, "a" * 40, "b" * 40), "transaction_present")',
+      'assert transaction_path.is_symlink()',
+      'transaction_path.unlink()',
+      'receipt_path.symlink_to(receipt_path.parent / "missing-receipt")',
+      'assert_stop(lambda: module.apply_mode(contract, "a" * 40, "b" * 40), "receipt_present")',
+      'assert receipt_path.is_symlink()',
+      'receipt_path.unlink()',
+      'bundle_path = transaction_path.parent / "bundle"',
+      'contract["state"]["bundleDirectory"] = str(bundle_path)',
+      'for marker in (bundle_path, transaction_path, receipt_path):',
+      '    marker.symlink_to(marker.parent / ("missing-" + marker.name))',
+      '    assert_stop(lambda: module.plan_mode(contract, "a" * 40, "b" * 40), "existing_bootstrap_state")',
+      '    assert marker.is_symlink()',
+      '    marker.unlink()',
     ].join('\n');
     const result = spawnSync(
       'python3',

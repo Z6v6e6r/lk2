@@ -1255,9 +1255,9 @@
   latest subset hashes, and immutable receipt read-back before interrupted cleanup can continue.
 - Applied the same transaction-persisted completion time and exact receipt read-back protocol to
   normal install and rollback, including separate full-authorization and latest retry evidence.
-- Required the fixed rollback-receipt path to be absent during planning, apply revalidation and
-  fresh normal rollback, so stale or symlinked audit evidence stops before transaction, guard or
-  package mutation.
+- Required every persistent bundle, transaction and receipt marker to be absent during its relevant
+  planning, apply, verify or fresh rollback preflight, so stale or dangling-symlink evidence stops
+  before state-root creation, transaction, guard or package mutation.
 - Isolated Python startup from checkout/site shadowing, required a clean frozen Git tree, populated a
   root-only authenticated apt index snapshot from the pinned Ubuntu source/keyring, and atomically
   published that snapshot, the verified package payloads and their accepted plan as one bundle.

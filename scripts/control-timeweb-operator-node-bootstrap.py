@@ -916,18 +916,25 @@ def create_state_root(contract: dict[str, Any]) -> Path:
     return root
 
 
+def path_present(path: Path) -> bool:
+    return path.exists() or path.is_symlink()
+
+
 def require_rollback_receipt_absent(contract: dict[str, Any]) -> None:
     path = Path(contract["state"]["rollbackReceiptPath"])
-    if path.exists() or path.is_symlink():
+    if path_present(path):
         stop("rollback_receipt_present")
 
 
 def plan_mode(contract: dict[str, Any], source_sha: str, source_tree: str) -> dict[str, Any]:
     state = contract["state"]
     require_rollback_receipt_absent(contract)
-    root = create_state_root(contract)
-    if any(Path(state[key]).exists() for key in ("bundleDirectory", "transactionPath", "receiptPath")):
+    if any(
+        path_present(Path(state[key]))
+        for key in ("bundleDirectory", "transactionPath", "receiptPath")
+    ):
         stop("existing_bootstrap_state")
+    root = create_state_root(contract)
     pending = Path(state["pendingDirectory"])
     if pending.exists() or pending.is_symlink():
         require_secure_directory(pending, 0o700, "pending_plan_security")
@@ -1318,10 +1325,10 @@ def finalize_apply(contract: dict[str, Any], plan: dict[str, Any], transaction: 
 
 def apply_mode(contract: dict[str, Any], source_sha: str, source_tree: str) -> dict[str, Any]:
     transaction_path = Path(contract["state"]["transactionPath"])
-    if transaction_path.exists():
+    if path_present(transaction_path):
         stop("transaction_present_use_recover")
     receipt_path = Path(contract["state"]["receiptPath"])
-    if receipt_path.exists() or receipt_path.is_symlink():
+    if path_present(receipt_path):
         stop("receipt_present")
     require_policy_paths_absent(contract)
     plan = load_plan(contract, source_sha, source_tree)
@@ -1346,7 +1353,7 @@ def apply_mode(contract: dict[str, Any], source_sha: str, source_tree: str) -> d
     except Stop as error:
         transaction["phase"] = (
             "cleanup_required"
-            if Path(contract["state"]["receiptPath"]).exists()
+            if path_present(Path(contract["state"]["receiptPath"]))
             else "postcondition_failed"
         )
         transaction["failureReason"] = str(error)
@@ -1553,10 +1560,8 @@ def failed_apply_rollback_mode(
     receipt_path = Path(contract["state"]["receiptPath"])
     rollback_receipt_path = Path(contract["state"]["rollbackReceiptPath"])
     if (
-        receipt_path.exists()
-        or receipt_path.is_symlink()
-        or rollback_receipt_path.exists()
-        or rollback_receipt_path.is_symlink()
+        path_present(receipt_path)
+        or path_present(rollback_receipt_path)
     ):
         stop("failed_apply_receipt_present")
     recover_policy_guard(contract)
@@ -1617,7 +1622,7 @@ def recover_mode(contract: dict[str, Any], source_sha: str, source_tree: str) ->
         except Stop as error:
             transaction["phase"] = (
                 "cleanup_required"
-                if Path(contract["state"]["receiptPath"]).exists()
+                if path_present(Path(contract["state"]["receiptPath"]))
                 else "postcondition_failed"
             )
             transaction["failureReason"] = str(error)
@@ -1655,7 +1660,7 @@ def recover_mode(contract: dict[str, Any], source_sha: str, source_tree: str) ->
 
 
 def verify_mode(contract: dict[str, Any], source_sha: str, source_tree: str) -> dict[str, Any]:
-    if Path(contract["state"]["transactionPath"]).exists():
+    if path_present(Path(contract["state"]["transactionPath"])):
         stop("transaction_present_use_recover")
     receipt = read_json(Path(contract["state"]["receiptPath"]), "receipt_read", secure=True)
     if not isinstance(receipt, dict) or receipt.get("schema") != RECEIPT_SCHEMA or receipt.get("status") != "INSTALLED":
@@ -1678,7 +1683,7 @@ def rollback_mode(
 ) -> dict[str, Any]:
     if recover_failed_apply:
         return failed_apply_rollback_mode(contract, source_sha, source_tree)
-    if Path(contract["state"]["transactionPath"]).exists():
+    if path_present(Path(contract["state"]["transactionPath"])):
         stop("transaction_present")
     require_rollback_receipt_absent(contract)
     require_policy_paths_absent(contract)
