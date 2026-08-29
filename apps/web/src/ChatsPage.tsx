@@ -1,7 +1,11 @@
 import { useState } from 'react';
-import type { FormEvent } from 'react';
 
+import { MainBottomNavigation } from './HomeDashboardPage.js';
 import type { ConversationMessage, ConversationPage } from './auth-gateway.js';
+import { ChatFilters, type ChatFilter } from './chats-ui/ChatFilters.js';
+import { ChatList } from './chats-ui/ChatList.js';
+import { ChatThread } from './chats-ui/ChatThread.js';
+import styles from './chats-ui/ChatsUi.module.css';
 
 export type ChatRouteMode = 'list' | 'new' | 'thread';
 
@@ -10,6 +14,14 @@ export interface ChatUiError {
   readonly message: string;
 }
 
+export interface PendingChatMessage {
+  readonly clientMessageId: string;
+  readonly body: string;
+  readonly state: 'sending' | 'failed';
+}
+
+export type ChatRealtimeUiState = 'connecting' | 'connected' | 'reconnecting' | 'polling';
+
 interface ChatsPageProps {
   readonly page: ConversationPage | null;
   readonly messages: readonly ConversationMessage[];
@@ -17,13 +29,32 @@ interface ChatsPageProps {
   readonly selectedConversationId?: string;
   readonly hasExplicitRecipient: boolean;
   readonly currentUserId: string;
-  readonly busy: 'create' | 'send' | 'refresh' | null;
+  readonly busy: 'create' | 'send' | 'refresh' | 'load-earlier' | null;
   readonly error: ChatUiError | null;
   readonly canRetrySend: boolean;
+  readonly pendingMessage?: PendingChatMessage | null;
+  readonly realtimeState?: ChatRealtimeUiState | null;
+  readonly hasEarlierMessages?: boolean;
   readonly onCreateDirect: () => void;
   readonly onSendMessage: (body: string) => void;
   readonly onRetrySend: () => void;
   readonly onRefresh: () => void;
+  readonly onLoadEarlier?: () => void;
+}
+
+function errorTitle(kind: ChatUiError['kind']): string {
+  if (kind === 'FEATURE_UNAVAILABLE') return 'Чаты пока недоступны';
+  if (kind === 'AUTH') return 'Нужно войти снова';
+  if (kind === 'FORBIDDEN') return 'Нет доступа к диалогу';
+  if (kind === 'NOT_FOUND') return 'Диалог не найден';
+  return 'Не удалось обновить чаты';
+}
+
+function realtimeLabel(state: ChatRealtimeUiState | null | undefined): string | null {
+  if (state === 'connecting') return 'Подключаем онлайн-доставку…';
+  if (state === 'reconnecting') return 'Связь восстанавливается · HTTP-история доступна';
+  if (state === 'polling') return 'Обновляется через защищённый HTTP';
+  return null;
 }
 
 export function ChatsPage({
@@ -36,45 +67,55 @@ export function ChatsPage({
   busy,
   error,
   canRetrySend,
+  pendingMessage,
+  realtimeState,
+  hasEarlierMessages,
   onCreateDirect,
   onSendMessage,
   onRetrySend,
   onRefresh,
+  onLoadEarlier,
 }: ChatsPageProps): React.JSX.Element {
-  const [draft, setDraft] = useState('');
+  const [filter, setFilter] = useState<ChatFilter>('ALL');
+  const [query, setQuery] = useState('');
   const selected = page?.items.find((conversation) => conversation.id === selectedConversationId);
-  const orderedMessages = [...messages].sort((left, right) => left.sequence - right.sequence);
 
-  function sendMessage(event: FormEvent<HTMLFormElement>): void {
-    event.preventDefault();
-    const normalized = draft.trim();
-    if (!normalized) return;
-    onSendMessage(normalized);
-    setDraft('');
+  if (mode === 'new') {
+    return (
+      <main className={styles.page}>
+        <section className={styles.directStart} aria-labelledby="chat-direct-start-title">
+          <a href="/chats">← К диалогам</a>
+          <h1 id="chat-direct-start-title">Новый личный чат</h1>
+          {hasExplicitRecipient ? (
+            <>
+              <p>
+                Получатель выбран безопасной ссылкой ПадлХАБ. Контактные идентификаторы остаются
+                скрыты.
+              </p>
+              <button type="button" disabled={busy !== null} onClick={onCreateDirect}>
+                {busy === 'create' ? 'Открываем диалог…' : 'Начать диалог'}
+              </button>
+            </>
+          ) : (
+            <div role="note">
+              <strong>Получатель не выбран</strong>
+              <p>Откройте чат из профиля игрока по поддерживаемой безопасной ссылке.</p>
+            </div>
+          )}
+        </section>
+        <MainBottomNavigation communicationsDestination="chats" active="chats" />
+      </main>
+    );
   }
 
   return (
-    <main className="chats-page">
-      <header className="chats-toolbar">
-        <a href="/">Главная</a>
-        <h1>Чаты</h1>
-        <p>Сообщения ПадлХАБ · защищённая HTTP-история</p>
-      </header>
-
+    <main className={styles.page}>
       {error ? (
-        <section className={`chats-error is-${error.kind.toLowerCase()}`} role="alert">
-          <strong>
-            {error.kind === 'FEATURE_UNAVAILABLE'
-              ? 'Чаты пока недоступны'
-              : error.kind === 'AUTH'
-                ? 'Нужно войти снова'
-                : error.kind === 'FORBIDDEN'
-                  ? 'Нет доступа к диалогу'
-                  : error.kind === 'NOT_FOUND'
-                    ? 'Диалог не найден'
-                    : 'Не удалось обновить чаты'}
-          </strong>
-          <span>{error.message}</span>
+        <section className={styles.errorBanner} role="alert">
+          <span>
+            <strong>{errorTitle(error.kind)}</strong>
+            <small>{error.message}</small>
+          </span>
           {error.kind === 'AUTH' ? (
             <a href="/">Перейти ко входу</a>
           ) : error.kind === 'FEATURE_UNAVAILABLE' ? null : (
@@ -84,151 +125,55 @@ export function ChatsPage({
           )}
         </section>
       ) : null}
-
-      {mode === 'new' ? (
-        <section className="chat-direct-start" aria-labelledby="chat-direct-start-title">
-          <a href="/chats">← К диалогам</a>
-          <h2 id="chat-direct-start-title">Новый личный чат</h2>
-          {hasExplicitRecipient ? (
-            <>
-              <p>
-                Получатель выбран безопасной ссылкой ПадлХАБ. Его внутренние и внешние контактные
-                идентификаторы не показываются.
-              </p>
-              <button
-                type="button"
-                disabled={busy !== null || error?.kind === 'FEATURE_UNAVAILABLE'}
-                onClick={onCreateDirect}
-              >
-                {busy === 'create' ? 'Открываем диалог…' : 'Начать диалог'}
-              </button>
-            </>
-          ) : (
-            <div className="chat-product-blocker" role="note">
-              <strong>Получатель не выбран</strong>
-              <p>
-                В M1 чат создаётся только по явной ссылке с PadlHub UUID. Каталог или поиск игроков
-                ещё не определён продуктом, поэтому ввод произвольного идентификатора здесь закрыт.
-              </p>
-              <a href="/chats">Вернуться к диалогам</a>
-            </div>
-          )}
-        </section>
-      ) : (
-        <section className="chats-layout">
-          <aside className="chat-list" aria-label="Диалоги">
-            <div className="chat-list-heading">
-              <strong>Диалоги</strong>
-              <small>Direct и Game</small>
-            </div>
-            {!page && !error ? (
-              <p className="chat-empty" role="status">
-                Загружаем диалоги…
-              </p>
-            ) : page?.items.length === 0 ? (
-              <div className="chat-empty">
-                <strong>Диалогов пока нет</strong>
-                <p>Новый чат откроется по безопасной ссылке из поддерживаемого профиля.</p>
-              </div>
-            ) : (
-              <ul>
-                {page?.items.map((conversation) => (
-                  <li key={conversation.id}>
-                    <a
-                      href={`/chats/${conversation.id}`}
-                      aria-current={conversation.id === selectedConversationId ? 'page' : undefined}
-                    >
-                      <strong>
-                        {conversation.kind === 'DIRECT'
-                          ? conversation.participant.displayName
-                          : conversation.title}
-                      </strong>
-                      <span>{conversation.lastMessage?.body ?? 'Новый диалог'}</span>
-                      {conversation.unreadCount > 0 ? (
-                        <small aria-label={`Непрочитанных: ${conversation.unreadCount}`}>
-                          {conversation.unreadCount}
-                        </small>
-                      ) : null}
-                    </a>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </aside>
-
-          <section className="chat-thread" aria-label="История сообщений">
-            {mode !== 'thread' || !selectedConversationId ? (
-              <div className="chat-empty chat-empty-thread">
-                <h2>Выберите диалог</h2>
-                <p>Здесь появится упорядоченная история сообщений.</p>
-              </div>
-            ) : (
-              <>
-                <header>
-                  <div>
-                    <small>{selected?.kind === 'GAME' ? 'Чат игры' : 'Личный чат'}</small>
-                    <h2>
-                      {selected?.kind === 'DIRECT'
-                        ? selected.participant.displayName
-                        : (selected?.title ?? 'Диалог')}
-                    </h2>
-                  </div>
-                  <button type="button" disabled={busy !== null} onClick={onRefresh}>
-                    {busy === 'refresh' ? 'Обновляем…' : 'Обновить'}
-                  </button>
-                </header>
-                <ol className="chat-messages">
-                  {orderedMessages.length > 0 ? (
-                    orderedMessages.map((message) => (
-                      <li
-                        key={message.id}
-                        className={
-                          message.sender.userId === currentUserId ? 'chat-message-own' : ''
-                        }
-                      >
-                        <strong>{message.sender.displayName}</strong>
-                        <p>{message.body}</p>
-                        <time dateTime={message.createdAt}>
-                          {new Intl.DateTimeFormat('ru-RU', {
-                            hour: '2-digit',
-                            minute: '2-digit',
-                          }).format(new Date(message.createdAt))}
-                        </time>
-                      </li>
-                    ))
-                  ) : (
-                    <li className="chat-empty">Сообщений пока нет.</li>
-                  )}
-                </ol>
-                {canRetrySend ? (
-                  <div className="chat-send-retry" role="status">
-                    <span>Сообщение не подтверждено сервером.</span>
-                    <button type="button" disabled={busy !== null} onClick={onRetrySend}>
-                      Повторить отправку
-                    </button>
-                  </div>
-                ) : null}
-                <form className="chat-send-form" onSubmit={sendMessage}>
-                  <label className="sr-only" htmlFor="chat-message-body">
-                    Сообщение
-                  </label>
-                  <textarea
-                    id="chat-message-body"
-                    value={draft}
-                    onChange={(event) => setDraft(event.target.value)}
-                    placeholder="Напишите сообщение"
-                    maxLength={8000}
-                    disabled={busy !== null || error?.kind === 'FORBIDDEN'}
-                  />
-                  <button type="submit" disabled={busy !== null || !draft.trim()}>
-                    {busy === 'send' ? 'Отправляем…' : 'Отправить'}
-                  </button>
-                </form>
-              </>
-            )}
+      <section
+        className={`${styles.shell} ${mode === 'thread' ? styles.threadMode : styles.listMode}`}
+        aria-label="Чаты"
+      >
+        <aside className={styles.listPane} aria-label="Список чатов">
+          <header className={styles.listHeader}>
+            <h1>Чаты</h1>
+            <a className={styles.notificationsShortcut} href="/notifications">
+              События
+            </a>
+          </header>
+          <ChatFilters
+            filter={filter}
+            query={query}
+            onFilterChange={setFilter}
+            onQueryChange={setQuery}
+          />
+          <ChatList
+            page={page}
+            error={Boolean(error)}
+            filter={filter}
+            query={query}
+            {...(selectedConversationId ? { selectedConversationId } : {})}
+          />
+        </aside>
+        {mode === 'thread' && selectedConversationId ? (
+          <ChatThread
+            conversation={selected}
+            messages={messages}
+            currentUserId={currentUserId}
+            busy={busy}
+            forbidden={error?.kind === 'FORBIDDEN'}
+            pendingMessage={pendingMessage}
+            connectionStatus={realtimeLabel(realtimeState)}
+            hasEarlierMessages={hasEarlierMessages}
+            canRetrySend={canRetrySend}
+            onSendMessage={onSendMessage}
+            onRetrySend={onRetrySend}
+            onRefresh={onRefresh}
+            onLoadEarlier={onLoadEarlier}
+          />
+        ) : (
+          <section className={styles.threadPlaceholder} aria-label="История сообщений">
+            <h2>Выберите диалог</h2>
+            <p>История откроется здесь, а на мобильном — на отдельном экране.</p>
           </section>
-        </section>
-      )}
+        )}
+      </section>
+      <MainBottomNavigation communicationsDestination="chats" active="chats" />
     </main>
   );
 }

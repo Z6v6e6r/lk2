@@ -319,19 +319,23 @@ function BottomNavIcon({ name }: { readonly name: BottomNavIconName }): React.JS
   }
 }
 
-export type MainNavigationSection = 'home' | 'games' | 'notifications' | 'profile';
+export type MainNavigationSection = 'home' | 'games' | 'chats' | 'notifications' | 'profile';
 
 interface MainBottomNavigationProps {
   readonly active?: MainNavigationSection;
   readonly gamesDestination?: 'bookings' | 'games';
+  readonly communicationsDestination?: 'chats' | 'notifications';
 }
 
 export function MainBottomNavigation({
   active,
   gamesDestination = 'bookings',
+  communicationsDestination = 'notifications',
 }: MainBottomNavigationProps): React.JSX.Element {
   const gamesHref = gamesDestination === 'games' ? '/games' : '/bookings';
   const gamesLabel = gamesDestination === 'games' ? 'Игры' : 'Записи';
+  const communicationsHref = communicationsDestination === 'chats' ? '/chats' : '/notifications';
+  const communicationsLabel = communicationsDestination === 'chats' ? 'Чаты' : 'Оповещения';
 
   return (
     <nav className="fh-bottom-nav" aria-label="Основная навигация">
@@ -351,9 +355,9 @@ export function MainBottomNavigation({
         </span>
       </a>
       <a
-        href="/notifications"
-        aria-current={active === 'notifications' ? 'page' : undefined}
-        aria-label="Оповещения"
+        href={communicationsHref}
+        aria-current={active === communicationsDestination ? 'page' : undefined}
+        aria-label={communicationsLabel}
       >
         <BottomNavIcon name="chat" />
       </a>
