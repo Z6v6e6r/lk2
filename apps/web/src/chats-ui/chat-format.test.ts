@@ -8,14 +8,14 @@ import {
 } from './chat-format.js';
 
 describe('chat formatting', () => {
-  const now = new Date('2026-08-29T15:40:00+03:00');
+  const now = new Date('2026-08-29T15:40:00');
 
   it('formats today, yesterday, recent days, and older dates for ru-RU', () => {
-    expect(formatConversationTimestamp('2026-08-29T11:32:00+03:00', now)).toBe('11:32');
-    expect(formatConversationTimestamp('2026-08-28T11:32:00+03:00', now)).toBe('Вчера');
-    expect(formatConversationTimestamp('2026-08-26T11:32:00+03:00', now)).toMatch(/ср/u);
-    expect(formatConversationTimestamp('2026-07-26T11:32:00+03:00', now)).toMatch(/26 июл/u);
-    expect(formatMessageDay('2026-08-29T11:32:00+03:00', now)).toBe('Сегодня');
+    expect(formatConversationTimestamp('2026-08-29T11:32:00', now)).toBe('11:32');
+    expect(formatConversationTimestamp('2026-08-28T11:32:00', now)).toBe('Вчера');
+    expect(formatConversationTimestamp('2026-08-26T11:32:00', now)).toMatch(/ср/u);
+    expect(formatConversationTimestamp('2026-07-26T11:32:00', now)).toMatch(/26 июл/u);
+    expect(formatMessageDay('2026-08-29T11:32:00', now)).toBe('Сегодня');
   });
 
   it('caps unread labels without hiding the accessible source count', () => {
