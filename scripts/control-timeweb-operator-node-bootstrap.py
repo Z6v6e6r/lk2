@@ -434,7 +434,7 @@ def parse_install_subset(
         configure = SIMULATED_CONFIGURE.match(line)
         if configure:
             name, version = configure.groups()
-            if name in installed or name in configured:
+            if name in configured:
                 stop("recovery_apply_simulation")
             configured[name] = version
         removal = SIMULATED_REMOVE.match(line)
@@ -445,6 +445,7 @@ def parse_install_subset(
     if (
         removed
         or not absent.issubset(installed)
+        or set(configured) != required
         or actions != required
         or any(expected.get(name, {}).get("version") != version for name, version in installed.items())
         or any(expected.get(name, {}).get("version") != version for name, version in configured.items())

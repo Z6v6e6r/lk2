@@ -254,17 +254,14 @@ describe('Timeweb operator Node bootstrap controller', () => {
     expect(result.stdout.trim()).toBe('RECOVERED');
   });
 
-  it('accepts only an exact partial-install recovery simulation', () => {
+  it('accepts only realistic exact full and partial recovery simulations', () => {
     const directory = temporaryDirectory();
     const contractPath = join(directory, 'contract.json');
     const simulationPath = join(directory, 'simulation.txt');
     writeFileSync(contractPath, contractSource);
     const absent = contract.apt.packages.slice(0, 2);
     const partial = contract.apt.packages.slice(2, 3);
-    writeFileSync(
-      simulationPath,
-      `${absent.map(({ name, version }) => `Inst ${name} (${version} Ubuntu:26.04/resolute [amd64])`).join('\n')}\nConf ${partial[0]!.name} (${partial[0]!.version} Ubuntu:26.04/resolute [amd64])\n0 upgraded, 2 newly installed, 0 to remove and 16 not upgraded.\n`,
-    );
+    const configured = [...absent, ...partial];
     const program = [
       'import importlib.util, pathlib, sys',
       'spec = importlib.util.spec_from_file_location("controller", sys.argv[1])',
@@ -272,9 +269,33 @@ describe('Timeweb operator Node bootstrap controller', () => {
       'spec.loader.exec_module(module)',
       'contract = module.validate_contract(module.read_json(pathlib.Path(sys.argv[2]), "contract"))',
       'contents = pathlib.Path(sys.argv[3]).read_text()',
-      'module.parse_install_subset(contents, contract, set(sys.argv[4].split(",")), set(sys.argv[5].split(",")))',
+      'module.parse_install_subset(contents, contract, set(filter(None, sys.argv[4].split(","))), set(filter(None, sys.argv[5].split(","))))',
       'print("VALID")',
     ].join('\n');
+    const fullTranscript = `${contract.apt.packages.map(({ name, version }) => `Inst ${name} (${version} Ubuntu:26.04/resolute [amd64])`).join('\n')}\n${contract.apt.packages.map(({ name, version }) => `Conf ${name} (${version} Ubuntu:26.04/resolute [amd64])`).join('\n')}\n0 upgraded, 20 newly installed, 0 to remove and 16 not upgraded.\n`;
+    writeFileSync(simulationPath, fullTranscript);
+    const full = spawnSync(
+      'python3',
+      [
+        '-I',
+        '-S',
+        '-B',
+        '-c',
+        program,
+        resolve(controller),
+        contractPath,
+        simulationPath,
+        contract.apt.packages.map(({ name }) => name).join(','),
+        '',
+      ],
+      { encoding: 'utf8', env: { PATH: process.env.PATH ?? '/usr/bin:/bin' } },
+    );
+    expect(full.status, full.stderr).toBe(0);
+
+    writeFileSync(
+      simulationPath,
+      `${absent.map(({ name, version }) => `Inst ${name} (${version} Ubuntu:26.04/resolute [amd64])`).join('\n')}\n${configured.map(({ name, version }) => `Conf ${name} (${version} Ubuntu:26.04/resolute [amd64])`).join('\n')}\n0 upgraded, 2 newly installed, 0 to remove and 16 not upgraded.\n`,
+    );
     const accepted = spawnSync(
       'python3',
       [
