@@ -261,7 +261,9 @@ an existing file and recovers either crash point of the pending-to-final hard-li
 atomic metadata-only receipt is
 `/opt/phub/timeweb-beta/operator/node-bootstrap-receipt.json`; it contains no credential or package
 payload. `verify` independently reads back the complete dpkg closure, `/usr/bin/node` owner, resolved
-file SHA-256, version, executable path, platform and architecture.
+file SHA-256, version, executable path, platform and architecture. Apply and rollback completion
+timestamps are first persisted in `transaction.json`; recovery accepts an existing receipt only when
+it exactly matches that deterministic transaction evidence.
 
 If `transaction.json` remains after an interrupted apply or rollback, do not delete it or the
 temporary lifecycle guard. Run only deterministic recovery from the same frozen source and plan.
@@ -300,7 +302,9 @@ authority, do not run the flag, delete the marker or guard, or execute manual pa
 Keep Node installed through the application rollback window. Removing it is a separate live
 host-package authority. The controller first proves the original receipt and simulates an exact
 purge; any reverse dependency or additional removal is a STOP. The actual removal uses fixed
-`dpkg --purge` package names so a resolver cannot expand it. It never runs `autoremove`:
+`dpkg --purge` package names so a resolver cannot expand it. Its receipt records the immutable
+authorized full-closure simulation separately from the latest remaining-subset retry. It never runs
+`autoremove`:
 
 ```sh
 sudo -- /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin HOME=/root LC_ALL=C \

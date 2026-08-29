@@ -1253,6 +1253,8 @@
   root-only completion receipt before releasing the lifecycle guard.
 - Added removal-specific dpkg state validation, bounded retry evidence with separate authorized and
   latest subset hashes, and immutable receipt read-back before interrupted cleanup can continue.
+- Applied the same transaction-persisted completion time and exact receipt read-back protocol to
+  normal install and rollback, including separate full-authorization and latest retry evidence.
 - Isolated Python startup from checkout/site shadowing, required a clean frozen Git tree, populated a
   root-only authenticated apt index snapshot from the pinned Ubuntu source/keyring, and atomically
   published that snapshot, the verified package payloads and their accepted plan as one bundle.
