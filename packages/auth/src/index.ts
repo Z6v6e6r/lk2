@@ -102,7 +102,8 @@ export interface IdentityProviderPort {
 
 export type VivaOAuthProvider = 'vkid' | 'yandex';
 
-export type VivaOAuthIdentityResolution = 'CANONICAL_PROFILE' | 'EXISTING_SUBJECT';
+export type VivaOAuthIdentityResolution =
+  'CANONICAL_PROFILE' | 'SUBJECT_PROVISIONING' | 'EXISTING_SUBJECT';
 
 export type VivaOAuthIdentityMode = 'STANDARD' | 'RECOVERY_SUBJECT_ONLY';
 
@@ -117,7 +118,7 @@ export type VivaOAuthExchangeResult = VivaOAuthTokens &
   (
     | {
         readonly identity: VerifiedExternalIdentity;
-        readonly identityResolution: 'CANONICAL_PROFILE';
+        readonly identityResolution: 'CANONICAL_PROFILE' | 'SUBJECT_PROVISIONING';
       }
     | {
         readonly identity: Pick<VerifiedExternalIdentity, 'issuer' | 'subject'>;
@@ -134,6 +135,7 @@ export interface VivaOAuthProviderPort {
     readonly codeChallenge: string;
   }): string;
   exchangeAuthorizationCode(input: {
+    readonly provider: VivaOAuthProvider;
     readonly code: string;
     readonly codeVerifier: string;
     readonly providerTenantKey: string;

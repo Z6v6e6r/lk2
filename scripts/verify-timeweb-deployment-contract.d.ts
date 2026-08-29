@@ -71,6 +71,8 @@ export interface TimewebRuntimeEnvironmentContract {
 export interface TimewebDeploymentContractPaths {
   target: string;
   caddyfile: string;
+  publicBetaCaddyfile: string;
+  publicBetaIngress: string;
   ingress: string;
   application: string;
   runtime: string;
@@ -102,6 +104,14 @@ export function validateHistoricalEvidenceInput(
   role: TimewebHistoricalInputRole,
 ): string;
 export function validateCaddyfile(contents: string, target: TimewebTargetContract): void;
+export function validateYandexPublicBetaCaddyfile(
+  contents: string,
+  target: TimewebTargetContract,
+): void;
+export function validateYandexPublicBetaIngressContract(
+  contract: unknown,
+  target: TimewebTargetContract,
+): Record<string, unknown>;
 export function validateIngressCompose(
   contents: string,
   target: TimewebTargetContract,

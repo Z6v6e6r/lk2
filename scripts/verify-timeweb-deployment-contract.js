@@ -11,6 +11,8 @@ const repositoryRoot = fileURLToPath(new URL('..', import.meta.url));
 const DEFAULT_PATHS = Object.freeze({
   target: resolve(repositoryRoot, 'deploy/timeweb/target.json'),
   caddyfile: resolve(repositoryRoot, 'deploy/timeweb/Caddyfile'),
+  publicBetaCaddyfile: resolve(repositoryRoot, 'deploy/timeweb/Caddyfile.yandex-public-beta'),
+  publicBetaIngress: resolve(repositoryRoot, 'deploy/timeweb/yandex-public-beta-ingress.json'),
   ingress: resolve(repositoryRoot, 'deploy/timeweb/compose.ingress.yaml'),
   application: resolve(repositoryRoot, 'deploy/timeweb/compose.beta.yaml'),
   runtime: resolve(repositoryRoot, 'deploy/timeweb/runtime-environment.contract.json'),
@@ -327,6 +329,154 @@ export function validateCaddyfile(contents, target) {
   );
 }
 
+export function validateYandexPublicBetaCaddyfile(contents, target) {
+  if (!/^\{[\s\S]*?\badmin off\b[\s\S]*?output stdout[\s\S]*?format json[\s\S]*?\}/u.test(contents))
+    reject('public_caddy_global');
+  if (!contents.includes(`\n${target.hostname} {`)) reject('public_caddy_hostname');
+  if (/\{\$LK2_BETA_HOST\}|https?:\/\/|\badmin\s+(?:localhost|0\.0\.0\.0|:)/u.test(contents))
+    reject('public_caddy_host_or_admin');
+  if (
+    /\/(?:internal|admin)\/api|Authorization|Cookie|X-Api-Key|basic_auth|basicauth/iu.test(contents)
+  )
+    reject('public_caddy_exposure_or_secret');
+
+  exactArray(
+    contents
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean),
+    [
+      '{',
+      'admin off',
+      'log {',
+      'output stdout',
+      'format json',
+      '}',
+      '}',
+      `${target.hostname} {`,
+      'encode zstd gzip',
+      'header {',
+      'Strict-Transport-Security "max-age=31536000"',
+      'X-Content-Type-Options "nosniff"',
+      'X-Frame-Options "SAMEORIGIN"',
+      'Referrer-Policy "same-origin"',
+      '-Server',
+      '}',
+      '@api_read {',
+      'method GET HEAD',
+      'path /health/* /public/api/* /user/api/*',
+      '}',
+      'handle @api_read {',
+      'reverse_proxy api:3000',
+      '}',
+      '@auth_post {',
+      'method POST',
+      'path /user/api/v1/*/auth/viva/authorize /user/api/v1/*/auth/viva/reauthorize /user/api/v1/*/auth/viva/access /user/api/v1/*/auth/session/refresh',
+      '}',
+      'handle @auth_post {',
+      'reverse_proxy api:3000',
+      '}',
+      '@auth_logout {',
+      'method DELETE',
+      'path /user/api/v1/*/auth/session',
+      '}',
+      'handle @auth_logout {',
+      'reverse_proxy api:3000',
+      '}',
+      '@api_denied path /health/* /public/api/* /user/api/*',
+      'handle @api_denied {',
+      'respond "Method Not Allowed" 405',
+      '}',
+      'handle /realtime/health/live {',
+      'rewrite * /health/live',
+      'reverse_proxy realtime:3001',
+      '}',
+      'handle /realtime/health/ready {',
+      'rewrite * /health/ready',
+      'reverse_proxy realtime:3001',
+      '}',
+      'handle /realtime/* {',
+      'reverse_proxy realtime:3001',
+      '}',
+      'handle {',
+      'reverse_proxy web:8080',
+      '}',
+      '}',
+    ],
+    'public_caddy_exact_policy',
+  );
+
+  const exactLines = new Set(contents.split('\n').map((line) => line.trim()));
+  for (const requiredLine of [
+    'method GET HEAD',
+    'path /health/* /public/api/* /user/api/*',
+    'method POST',
+    'path /user/api/v1/*/auth/viva/authorize /user/api/v1/*/auth/viva/reauthorize /user/api/v1/*/auth/viva/access /user/api/v1/*/auth/session/refresh',
+    'method DELETE',
+    'path /user/api/v1/*/auth/session',
+    '@api_denied path /health/* /public/api/* /user/api/*',
+    'respond "Method Not Allowed" 405',
+  ]) {
+    if (!exactLines.has(requiredLine)) reject('public_caddy_required_contract');
+  }
+
+  const siteAddresses = [...contents.matchAll(/^([^\s{}][^{}]*)\s*\{$/gmu)].map((match) =>
+    match[1].trim(),
+  );
+  exactArray(siteAddresses, [target.hostname], 'public_caddy_unrelated_site');
+  const namedMatchers = contents
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => /^@\w+/u.test(line))
+    .map((line) => line.replace(/\s+\{$/u, ''));
+  exactArray(
+    namedMatchers,
+    [
+      '@api_read',
+      '@auth_post',
+      '@auth_logout',
+      '@api_denied path /health/* /public/api/* /user/api/*',
+    ],
+    'public_caddy_matchers',
+  );
+  const selectors = [...contents.matchAll(/^\s*handle(?:\s+([^\s{]+))?\s*\{/gmu)].map(
+    (match) => match[1] ?? '<default>',
+  );
+  exactArray(
+    selectors,
+    [
+      '@api_read',
+      '@auth_post',
+      '@auth_logout',
+      '@api_denied',
+      '/realtime/health/live',
+      '/realtime/health/ready',
+      '/realtime/*',
+      '<default>',
+    ],
+    'public_caddy_unexpected_route',
+  );
+}
+
+export function validateYandexPublicBetaIngressContract(contract, target) {
+  const value = object(contract, 'public_ingress_contract');
+  exactKeys(
+    value,
+    ['schema', 'hostname', 'caddyfile', 'adaptedJsonSha256'],
+    'public_ingress_contract_keys',
+  );
+  if (
+    value.schema !== 'PHUB_TIMEWEB_YANDEX_PUBLIC_INGRESS_V1' ||
+    value.hostname !== target.hostname ||
+    value.caddyfile !== 'deploy/timeweb/Caddyfile.yandex-public-beta' ||
+    typeof value.adaptedJsonSha256 !== 'string' ||
+    !/^[0-9a-f]{64}$/u.test(value.adaptedJsonSha256)
+  ) {
+    reject('public_ingress_contract_identity');
+  }
+  return value;
+}
+
 function validateLogging(logging, expectedSize, expectedFiles, code) {
   exactKeys(logging, ['driver', 'options'], code);
   exactKeys(logging.options, ['max-size', 'max-file'], code);
@@ -413,12 +563,13 @@ export function validateApplicationCompose(contents, target) {
     )
       reject('application_env_file');
     const expectedKeys = {
-      web: ['restart', 'networks', 'logging', 'image', 'healthcheck'],
+      web: ['restart', 'networks', 'logging', 'image', 'labels', 'healthcheck'],
       api: [
         'restart',
         'networks',
         'logging',
         'image',
+        'labels',
         'env_file',
         'healthcheck',
         'stop_grace_period',
@@ -450,6 +601,13 @@ export function validateApplicationCompose(contents, target) {
       JSON.stringify([...expectedKeys[serviceName]].sort())
     )
       reject('application_escape');
+    if (serviceName === 'api' || serviceName === 'web') {
+      exactKeys(service.labels, ['phub.release-id'], 'application_release_attestation');
+      if (service.labels['phub.release-id'] !== '${PHUB_RELEASE_ID:?PHUB_RELEASE_ID is required}')
+        reject('application_release_attestation');
+    } else if (Object.hasOwn(service, 'labels')) {
+      reject('application_release_attestation');
+    }
     const variable = `${serviceName.toUpperCase()}_IMAGE_DIGEST`;
     const expected = `ghcr.io/z6v6e6r/phub-${serviceName}@\${${variable}:?${variable} is required}`;
     if (service.image !== expected) reject('application_image');
@@ -661,7 +819,11 @@ export function validateRuntimeEnvironments(environments, contract, target) {
     environments.api.CORS_ORIGINS !== `https://${target.hostname}` ||
     environments.api.TRUSTED_PROXY_CIDRS !== `${target.network.ingressAddress}/32` ||
     environments.api.AUTH_COOKIE_SECURE !== 'true' ||
-    environments.api.VIVA_MODE !== 'production'
+    environments.api.VIVA_MODE !== 'production' ||
+    environments.api.VIVA_OAUTH_ALLOWED_PROVIDERS !== 'yandex' ||
+    environments.api.VIVA_OAUTH_SUBJECT_PROVISIONING_ENABLED !== 'true' ||
+    environments.api.PUBLIC_OFFER_VERSION === 'pending' ||
+    environments.api.PERSONAL_DATA_POLICY_VERSION === 'pending'
   )
     reject('env_api_target');
   for (const key of [
@@ -786,6 +948,8 @@ export function validateDeploymentInputPaths(target, runtime, paths) {
     [paths.runtime, ['secretsSource']],
     [paths.caddyfile, ['mountSource']],
     [dirname(paths.caddyfile), ['caddyWorkingDirectory']],
+    [paths.publicBetaCaddyfile, ['mountSource']],
+    [paths.publicBetaIngress, ['activationInput']],
     [paths.ingress, ['activationInput']],
     [dirname(paths.ingress), ['composeWorkingDirectory']],
     [paths.application, ['activationInput']],
@@ -853,6 +1017,11 @@ export function verifyDeploymentContract(paths = DEFAULT_PATHS) {
   const runtime = validateRuntimeContract(strictJsonFile(paths.runtime, 'runtime_json'));
   validateDeploymentInputPaths(target, runtime, paths);
   validateCaddyfile(readFileSync(paths.caddyfile, 'utf8'), target);
+  validateYandexPublicBetaCaddyfile(readFileSync(paths.publicBetaCaddyfile, 'utf8'), target);
+  validateYandexPublicBetaIngressContract(
+    strictJsonFile(paths.publicBetaIngress, 'public_ingress_json'),
+    target,
+  );
   validateIngressCompose(readFileSync(paths.ingress, 'utf8'), target);
   validateApplicationCompose(readFileSync(paths.application, 'utf8'), target);
   validateRunbook(readFileSync(paths.runbook, 'utf8'), target);

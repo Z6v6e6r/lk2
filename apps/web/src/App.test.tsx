@@ -2091,7 +2091,7 @@ describe('PadlHub web authentication', () => {
       screen.queryByRole('button', { name: 'Войти по номеру телефона' }),
     ).not.toBeInTheDocument();
     expect(gateway.startVivaOAuth).not.toHaveBeenCalled();
-    expect(screen.getByRole('button', { name: 'VK ID или Mail.ru' })).toHaveAttribute(
+    expect(screen.getByRole('button', { name: 'Yandex' })).toHaveAttribute(
       'aria-describedby',
       'ios-oauth-guidance',
     );
@@ -2102,16 +2102,16 @@ describe('PadlHub web authentication', () => {
     const user = userEvent.setup();
     render(<App gateway={gateway} tenantKey="padlhub" />);
 
-    const vkButton = await screen.findByRole('button', { name: 'VK ID или Mail.ru' });
-    await user.click(vkButton);
+    const yandexButton = await screen.findByRole('button', { name: 'Yandex' });
+    await user.click(yandexButton);
     expect(await screen.findByRole('alert')).toHaveTextContent('Подтвердите публичную оферту');
     expect(gateway.startVivaOAuth).not.toHaveBeenCalled();
 
     await user.click(screen.getByRole('checkbox', { name: /публичной оферты/i }));
     await user.click(screen.getByRole('checkbox', { name: /обработку персональных данных/i }));
-    await user.click(vkButton);
+    await user.click(yandexButton);
     expect(gateway.startVivaOAuth).toHaveBeenCalledWith({
-      provider: 'vkid',
+      provider: 'yandex',
       acceptance: { publicOfferAccepted: true, personalDataPolicyAccepted: true },
     });
   });

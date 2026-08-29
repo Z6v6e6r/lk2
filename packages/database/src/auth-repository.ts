@@ -127,6 +127,15 @@ interface AuthUserRow extends QueryResultRow {
   readonly phone_last_4: string | null;
 }
 
+interface AuthUserStatusRow extends AuthUserRow {
+  readonly status: 'ACTIVE' | 'DISABLED';
+}
+
+interface AuthUserWithStatus {
+  readonly user: AuthUser;
+  readonly status: AuthUserStatusRow['status'];
+}
+
 interface RefreshSessionRow extends QueryResultRow {
   readonly id: string;
   readonly tenant_id: string;
@@ -239,13 +248,14 @@ async function writeSecurityAudit(
 async function selectExternalUserForUpdate(
   client: PoolClient,
   input: Pick<UpsertExternalUserInput, 'tenantId' | 'provider' | 'issuer' | 'subject'>,
-): Promise<AuthUser | undefined> {
-  const row = await queryOne<AuthUserRow>(
+): Promise<AuthUserWithStatus | undefined> {
+  const row = await queryOne<AuthUserStatusRow>(
     client,
     `
       select
         u.id,
         u.tenant_id,
+        u.status,
         p.display_name,
         case when p.phone_e164 is null then null else right(p.phone_e164, 4) end as phone_last_4
       from integration.external_identity_map e
@@ -257,25 +267,25 @@ async function selectExternalUserForUpdate(
         and e.provider = $2
         and e.issuer = $3
         and e.subject = $4
-        and u.status = 'ACTIVE'
       for update of e, u, p
     `,
     [input.tenantId, input.provider, input.issuer, input.subject],
   );
-  return row ? mapAuthUser(row) : undefined;
+  return row ? { user: mapAuthUser(row), status: row.status } : undefined;
 }
 
 async function selectCanonicalProviderUserForUpdate(
   client: PoolClient,
   input: UpsertExternalUserInput,
-): Promise<AuthUser | undefined> {
+): Promise<AuthUserWithStatus | undefined> {
   if (!input.providerUserId) return undefined;
-  const row = await queryOne<AuthUserRow>(
+  const row = await queryOne<AuthUserStatusRow>(
     client,
     `
       select
         u.id,
         u.tenant_id,
+        u.status,
         p.display_name,
         case when p.phone_e164 is null then null else right(p.phone_e164, 4) end as phone_last_4
       from integration.external_entity_map e
@@ -287,12 +297,11 @@ async function selectCanonicalProviderUserForUpdate(
         and e.external_system = $2
         and e.entity_type = 'viva_profile'
         and e.external_id = $3
-        and u.status = 'ACTIVE'
       for update of e, u, p
     `,
     [input.tenantId, input.provider, input.providerUserId],
   );
-  return row ? mapAuthUser(row) : undefined;
+  return row ? { user: mapAuthUser(row), status: row.status } : undefined;
 }
 
 async function linkExternalIdentity(
@@ -300,16 +309,19 @@ async function linkExternalIdentity(
   input: UpsertExternalUserInput,
   userId: string,
 ): Promise<void> {
-  await client.query(
+  const row = await queryOne<{ user_id: string } & QueryResultRow>(
+    client,
     `
       insert into integration.external_identity_map (
         tenant_id, user_id, provider, issuer, subject
       ) values ($1, $2, $3, $4, $5)
       on conflict (tenant_id, issuer, subject)
       do update set provider = excluded.provider, last_seen_at = now()
+      returning user_id
     `,
     [input.tenantId, userId, input.provider, input.issuer, input.subject],
   );
+  if (!row || row.user_id !== userId) throw new Error('AUTH_CANONICAL_IDENTITY_CONFLICT');
 }
 
 async function ensureCanonicalProviderMapping(
@@ -371,8 +383,10 @@ export function createIdentityAuthRepository(pool: Pool): IdentityAuthRepository
         await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
           `${input.tenantId}\u001f${input.issuer}\u001f${input.subject}`,
         ]);
-        const user = await selectExternalUserForUpdate(client, input);
-        if (!user) return undefined;
+        const identity = await selectExternalUserForUpdate(client, input);
+        if (!identity) return undefined;
+        if (identity.status !== 'ACTIVE') throw new Error('AUTH_USER_NOT_ACTIVE');
+        const { user } = identity;
         await client.query(
           `
             update integration.external_identity_map
@@ -405,10 +419,16 @@ export function createIdentityAuthRepository(pool: Pool): IdentityAuthRepository
 
         const identityUser = await selectExternalUserForUpdate(client, input);
         const canonicalUser = await selectCanonicalProviderUserForUpdate(client, input);
-        if (identityUser && canonicalUser && identityUser.id !== canonicalUser.id) {
+        if (identityUser && identityUser.status !== 'ACTIVE') {
+          throw new Error('AUTH_USER_NOT_ACTIVE');
+        }
+        if (canonicalUser && canonicalUser.status !== 'ACTIVE') {
+          throw new Error('AUTH_USER_NOT_ACTIVE');
+        }
+        if (identityUser && canonicalUser && identityUser.user.id !== canonicalUser.user.id) {
           throw new Error('AUTH_CANONICAL_IDENTITY_CONFLICT');
         }
-        const existing = canonicalUser ?? identityUser;
+        const existing = (canonicalUser ?? identityUser)?.user;
         if (existing) {
           await linkExternalIdentity(client, input, existing.id);
           await ensureCanonicalProviderMapping(client, input, existing.id);

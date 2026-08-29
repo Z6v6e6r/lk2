@@ -988,6 +988,70 @@ describe('loadConfig', () => {
     });
   });
 
+  it('gates Yandex-only subject provisioning behind an explicit real-provider contour', () => {
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        VIVA_OAUTH_SUBJECT_PROVISIONING_ENABLED: 'true',
+      }),
+    ).toThrow('VIVA_OAUTH_SUBJECT_PROVISIONING_ENABLED requires VIVA_MODE=sandbox or production');
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        VIVA_MODE: 'sandbox',
+        VIVA_OAUTH_SUBJECT_PROVISIONING_ENABLED: 'true',
+      }),
+    ).toThrow('VIVA_OAUTH_SUBJECT_PROVISIONING_ENABLED requires VIVA_OAUTH_ENABLED=true');
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        VIVA_MODE: 'sandbox',
+        VIVA_OAUTH_ENABLED: 'true',
+        VIVA_OAUTH_REDIRECT_URI:
+          'https://api.example.test/user/api/v1/local-padel/auth/viva/callback',
+        VIVA_OAUTH_SUCCESS_REDIRECT_URL: 'https://app.example.test/',
+        VIVA_DELEGATION_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString('base64url'),
+        VIVA_OAUTH_SUBJECT_PROVISIONING_ENABLED: 'true',
+        PUBLIC_OFFER_VERSION: '2026-07-18',
+        PERSONAL_DATA_POLICY_VERSION: '2026-07-18',
+      }),
+    ).toThrow(
+      'VIVA_OAUTH_SUBJECT_PROVISIONING_ENABLED requires VIVA_OAUTH_ALLOWED_PROVIDERS=yandex',
+    );
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        VIVA_MODE: 'sandbox',
+        VIVA_OAUTH_ENABLED: 'true',
+        VIVA_OAUTH_ALLOWED_PROVIDERS: 'yandex',
+        VIVA_OAUTH_REDIRECT_URI:
+          'https://api.example.test/user/api/v1/local-padel/auth/viva/callback',
+        VIVA_OAUTH_SUCCESS_REDIRECT_URL: 'https://app.example.test/',
+        VIVA_DELEGATION_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString('base64url'),
+        VIVA_OAUTH_SUBJECT_PROVISIONING_ENABLED: 'true',
+      }),
+    ).toThrow('Published legal document versions are required for OAuth subject provisioning');
+    expect(
+      loadConfig({
+        ...validEnvironment,
+        VIVA_MODE: 'sandbox',
+        VIVA_OAUTH_ENABLED: 'true',
+        VIVA_OAUTH_ALLOWED_PROVIDERS: 'yandex',
+        VIVA_OAUTH_REDIRECT_URI:
+          'https://api.example.test/user/api/v1/local-padel/auth/viva/callback',
+        VIVA_OAUTH_SUCCESS_REDIRECT_URL: 'https://app.example.test/',
+        VIVA_DELEGATION_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString('base64url'),
+        VIVA_OAUTH_SUBJECT_PROVISIONING_ENABLED: 'true',
+        PUBLIC_OFFER_VERSION: '2026-07-18',
+        PERSONAL_DATA_POLICY_VERSION: '2026-07-18',
+      }),
+    ).toMatchObject({
+      VIVA_OAUTH_ALLOWED_PROVIDERS: 'yandex',
+      VIVA_OAUTH_SUBJECT_PROVISIONING_ENABLED: true,
+      VIVA_OAUTH_EXISTING_SUBJECT_BOOTSTRAP_ENABLED: false,
+    });
+  });
+
   it('requires complete VAPID and endpoint encryption secrets when Web Push is enabled', () => {
     expect(() => loadConfig({ ...validEnvironment, WEB_PUSH_ENABLED: 'true' })).toThrow(
       'WEB_PUSH_ENABLED requires runtime secrets',

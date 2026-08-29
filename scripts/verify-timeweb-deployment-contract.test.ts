@@ -20,6 +20,8 @@ import {
   parseEnvironment,
   validateApplicationCompose,
   validateCaddyfile,
+  validateYandexPublicBetaCaddyfile,
+  validateYandexPublicBetaIngressContract,
   validateDeploymentInputPaths,
   validateFutureReleaseDirectory,
   validateHistoricalEvidenceInput,
@@ -71,6 +73,10 @@ interface PullRequestWorkflow {
 const targetSource = readFileSync('deploy/timeweb/target.json', 'utf8');
 const runtimeSource = readFileSync('deploy/timeweb/runtime-environment.contract.json', 'utf8');
 const caddyfile = readFileSync('deploy/timeweb/Caddyfile', 'utf8');
+const publicBetaCaddyfile = readFileSync('deploy/timeweb/Caddyfile.yandex-public-beta', 'utf8');
+const publicBetaIngress = parseStrictJson<unknown>(
+  readFileSync('deploy/timeweb/yandex-public-beta-ingress.json', 'utf8'),
+);
 const ingressCompose = readFileSync('deploy/timeweb/compose.ingress.yaml', 'utf8');
 const applicationCompose = readFileSync('deploy/timeweb/compose.beta.yaml', 'utf8');
 const runbook = readFileSync('docs/runbooks/timeweb-lk2-beta.md', 'utf8');
@@ -125,6 +131,8 @@ function syntheticEnvironments(): Record<string, Record<string, string>> {
     CORS_ORIGINS: `https://${target.hostname}`,
     TRUSTED_PROXY_CIDRS: `${target.network.ingressAddress}/32`,
     VIVA_MODE: 'production',
+    VIVA_OAUTH_ALLOWED_PROVIDERS: 'yandex',
+    VIVA_OAUTH_SUBJECT_PROVISIONING_ENABLED: 'true',
     VIVA_OAUTH_REDIRECT_URI: `https://${target.hostname}/user/api/v1/padlhub/auth/viva/callback`,
     VIVA_OAUTH_SUCCESS_REDIRECT_URL: `https://${target.hostname}/`,
   });
@@ -206,9 +214,36 @@ describe('Timeweb deployment contract', () => {
   });
 
   it('11. rejects a missing API route', () => {
-    expect(() => validateCaddyfile(caddyfile.replace('/user/api/*', ''), target)).toThrow(
-      'caddy_required_contract',
-    );
+    expect(() => validateCaddyfile(caddyfile.replaceAll('/user/api/*', ''), target)).toThrow();
+  });
+
+  it.each([
+    ['read method fence', 'method GET HEAD', 'method GET HEAD POST'],
+    ['Yandex authorize route', '/auth/viva/authorize', '/auth/viva/authorize-disabled'],
+    ['session refresh route', '/auth/session/refresh', '/auth/session/refresh-disabled'],
+    ['logout method fence', 'method DELETE', 'method POST'],
+    ['API deny response', 'respond "Method Not Allowed" 405', 'respond "OK" 200'],
+  ])('rejects a Caddyfile with a widened or missing %s', (_label, current, replacement) => {
+    expect(() =>
+      validateYandexPublicBetaCaddyfile(publicBetaCaddyfile.replace(current, replacement), target),
+    ).toThrow();
+  });
+
+  it('accepts the source-controlled Yandex public-beta Caddy policy', () => {
+    expect(() => validateYandexPublicBetaCaddyfile(publicBetaCaddyfile, target)).not.toThrow();
+    expect(validateYandexPublicBetaIngressContract(publicBetaIngress, target)).toMatchObject({
+      hostname: target.hostname,
+      caddyfile: 'deploy/timeweb/Caddyfile.yandex-public-beta',
+    });
+  });
+
+  it('rejects drift in the Yandex public-beta ingress identity', () => {
+    expect(() =>
+      validateYandexPublicBetaIngressContract(
+        { ...(publicBetaIngress as Record<string, unknown>), hostname: 'lk.padlhub.su' },
+        target,
+      ),
+    ).toThrow('public_ingress_contract_identity');
   });
 
   it('12. rejects a missing realtime route', () => {
@@ -509,6 +544,8 @@ describe('Timeweb deployment contract', () => {
     const paths = {
       target: resolve('deploy/timeweb/target.json'),
       caddyfile: resolve('deploy/timeweb/Caddyfile'),
+      publicBetaCaddyfile: resolve('deploy/timeweb/Caddyfile.yandex-public-beta'),
+      publicBetaIngress: resolve('deploy/timeweb/yandex-public-beta-ingress.json'),
       ingress: resolve('deploy/timeweb/compose.ingress.yaml'),
       application: resolve('deploy/timeweb/compose.beta.yaml'),
       runtime: resolve('deploy/timeweb/runtime-environment.contract.json'),
@@ -518,6 +555,8 @@ describe('Timeweb deployment contract', () => {
     for (const key of [
       'target',
       'caddyfile',
+      'publicBetaCaddyfile',
+      'publicBetaIngress',
       'ingress',
       'application',
       'runtime',
@@ -577,6 +616,8 @@ describe('Timeweb deployment contract', () => {
     const paths = {
       target: resolve('deploy/timeweb/target.json'),
       caddyfile: resolve('deploy/timeweb/Caddyfile'),
+      publicBetaCaddyfile: resolve('deploy/timeweb/Caddyfile.yandex-public-beta'),
+      publicBetaIngress: resolve('deploy/timeweb/yandex-public-beta-ingress.json'),
       ingress: resolve('deploy/timeweb/compose.ingress.yaml'),
       application: resolve('deploy/timeweb/compose.beta.yaml'),
       runtime: resolve('deploy/timeweb/runtime-environment.contract.json'),
@@ -646,6 +687,9 @@ describe('Timeweb deployment contract', () => {
       /docker compose -f deploy\/timeweb\/compose\.beta\.yaml[\s\\]*--profile background --profile migration[\s\\]*config --quiet/u,
     );
     expect(workflow).toContain('SYNTHETIC_NON_SECRET');
+    expect(workflow).toContain(
+      'PHUB_RELEASE_ID: 1111111111111111111111111111111111111111-12345678901-1',
+    );
   });
 
   it('40. contains no Timeweb Compose activation command', () => {
@@ -680,6 +724,18 @@ describe('Timeweb deployment contract', () => {
     const input = syntheticEnvironments();
     input.worker!.GAMES_COMMANDS_ENABLED = 'true';
     expect(() => validateRuntimeEnvironments(input, runtime, target)).toThrow('env_worker_flag');
+  });
+
+  it.each([
+    ['VIVA_OAUTH_ALLOWED_PROVIDERS', undefined],
+    ['VIVA_OAUTH_ALLOWED_PROVIDERS', 'vkid,yandex'],
+    ['VIVA_OAUTH_SUBJECT_PROVISIONING_ENABLED', undefined],
+    ['VIVA_OAUTH_SUBJECT_PROVISIONING_ENABLED', 'false'],
+  ])('rejects an API runtime with %s=%s', (key, value) => {
+    const input = syntheticEnvironments();
+    if (value === undefined) delete input.api![key];
+    else input.api![key] = value;
+    expect(() => validateRuntimeEnvironments(input, runtime, target)).toThrow();
   });
 
   it('rejects unknown enabled flags, duplicate env keys, and empty required values', () => {

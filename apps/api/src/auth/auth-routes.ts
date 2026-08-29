@@ -46,14 +46,16 @@ const verifyParamsSchema = paramsSchema.extend({ challengeId: z.string().uuid() 
 function protectedRateKey(
   request: FastifyRequest,
   config: AppConfig,
-  operation: 'challenge' | 'verify',
+  operation: 'challenge' | 'verify' | 'viva-authorize',
 ): string {
   const params = request.params as { tenantKey?: string; challengeId?: string };
   const body = request.body as { phone?: unknown } | undefined;
   const discriminator =
     operation === 'challenge'
       ? (normalizePhoneE164(typeof body?.phone === 'string' ? body.phone : '') ?? 'invalid-phone')
-      : (params.challengeId ?? 'invalid-challenge');
+      : operation === 'verify'
+        ? (params.challengeId ?? 'invalid-challenge')
+        : 'oauth-start';
   const digest = createHmac('sha256', config.JWT_REFRESH_SECRET)
     .update(discriminator)
     .digest('base64url');
@@ -277,7 +279,17 @@ export function registerAuthRoutes(
   });
   app.post(
     '/user/api/v1/:tenantKey/auth/viva/authorize',
-    { preHandler: requireAuthIdempotency },
+    {
+      config: {
+        rateLimit: {
+          max: 5,
+          timeWindow: '1 minute',
+          groupId: 'auth-viva-authorize',
+          keyGenerator: (request) => protectedRateKey(request, config, 'viva-authorize'),
+        },
+      },
+      preHandler: requireAuthIdempotency,
+    },
     async (request, reply) => {
       try {
         const { tenantKey } = paramsSchema.parse(request.params);

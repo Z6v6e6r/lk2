@@ -14,6 +14,8 @@ services:
   web:
     <<: *runtime
     image: ghcr.io/z6v6e6r/phub-web@${WEB_IMAGE_DIGEST:?WEB_IMAGE_DIGEST is required}
+    labels:
+      phub.release-id: ${PHUB_RELEASE_ID:?PHUB_RELEASE_ID is required}
     healthcheck:
       test: ['CMD-SHELL', 'wget -q -O /dev/null http://127.0.0.1:8080/healthz']
       interval: 10s
@@ -27,6 +29,8 @@ services:
   api:
     <<: *runtime
     image: ghcr.io/z6v6e6r/phub-api@${API_IMAGE_DIGEST:?API_IMAGE_DIGEST is required}
+    labels:
+      phub.release-id: ${PHUB_RELEASE_ID:?PHUB_RELEASE_ID is required}
     env_file:
       - path: ${TIMEWEB_RUNTIME_ENV_ROOT:?TIMEWEB_RUNTIME_ENV_ROOT is required}/api.env
         required: true

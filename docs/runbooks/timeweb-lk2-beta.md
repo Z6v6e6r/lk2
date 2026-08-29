@@ -87,6 +87,84 @@ The default application model contains only web, API, and realtime. Worker is ga
 service. Only ingress may bind host ports. Publication, deployment, Caddy activation, migration,
 worker activation, OAuth/provider changes, and any live write each require a later explicit gate.
 
+For the authorized public Yandex beta, the API runtime must additionally contain
+`VIVA_OAUTH_ALLOWED_PROVIDERS=yandex` and
+`VIVA_OAUTH_SUBJECT_PROVISIONING_ENABLED=true`. The latter remains a required true flag in the
+Timeweb runtime contract and cannot be combined with existing-subject bootstrap. The runtime must
+also supply non-`pending` `PUBLIC_OFFER_VERSION` and `PERSONAL_DATA_POLICY_VERSION` values that map
+to the published documents linked by Web. Keycloak must emit signed broker provenance
+`identity_provider=yandex` or `identityProvider=yandex`; do not remove Basic Auth if that claim is
+absent or user-editable.
+
+Removing the operator Basic Auth gate is a controlled ingress activation after the new API/Web pair
+is ready. Use only `deploy/timeweb/Caddyfile.yandex-public-beta`, whose adapted JSON hash is frozen in
+`deploy/timeweb/yandex-public-beta-ingress.json`. The policy allows read-only GET/HEAD routes, the
+four required OAuth/session POST routes and logout DELETE, then returns `405` for every other API
+method. Do not replace it with the broader canonical Caddyfile and do not edit either artifact on the
+host.
+
+The noncanonical current fast-beta rollback floor is frozen in
+`deploy/timeweb/yandex-public-beta-rollback-floor.json`. Failed run `33168712014` is provenance only
+and authorizes neither publication nor deployment. After publication and secret provisioning,
+create a root-only operation-input JSON under `/opt/phub/timeweb-beta/` containing the exact
+candidate source SHA/tree, release ID, canonical runtime root `/etc/phub/timeweb-beta`, canonical
+rendered `release.env`, active
+Caddyfile, Compose, backup, receipt and rollback-env paths. API/Web digests are read only from that
+root-owned canonical environment and are not accepted as operator-authored input. Then run from the
+exact clean candidate checkout:
+
+```sh
+sudo -- /usr/bin/env -i PATH=/usr/bin:/bin HOME=/root \
+  /usr/bin/node scripts/control-timeweb-yandex-public-beta.js --mode prepare \
+  --input /opt/phub/timeweb-beta/operator/yandex-public-operation.json
+```
+
+`prepare` refuses a dirty or different source, wrong running or unavailable local images, unsafe
+paths/modes, a Caddy preimage without both Basic and `405`, or a mismatched runtime release identity.
+It writes the Basic preimage backup first and the complete root-only receipt last. It logs no Caddy
+bytes, environment values or credentials.
+
+Start the candidate API behind Basic through the exact rendered `release.env` and canonical
+`compose.beta.yaml`, prove readiness, then start Web the same way. Compose stamps both containers
+with the non-secret exact `phub.release-id` label. Public ingress is last:
+
+```sh
+sudo -- /usr/bin/env -i PATH=/usr/bin:/bin HOME=/root \
+  /usr/bin/node scripts/control-timeweb-yandex-public-beta.js --mode activate-ingress \
+  --receipt /opt/phub/timeweb-beta/backups/yandex-public/receipt.json
+```
+
+The controller rechecks the frozen source, canonical root-only `release.env`, receipt, candidate
+API/Web container images, exact release labels, runtime release identity and both Caddy hashes. The
+active Caddyfile must be exactly the `./Caddyfile` mounted beside the validated ingress Compose; an
+operator-supplied alternate path is rejected. It validates the
+prospective file offline with the already-local pinned Caddy image, atomically installs it, then
+force-recreates only Caddy so the single-file bind mount receives the new inode. The recreated
+container must use the exact pinned image, be running and adapt the mounted file to the receipt-bound
+hash. Offline validation streams root-read bytes over stdin to a non-root, read-only, networkless
+container, so the root-only `0600` Basic backup is never exposed through a file bind mount. A
+loopback TLS smoke then proves HTTP redirect, Web `200`, API readiness `200` and a denied
+non-allowlisted POST `405`, without credentials or provider mutation. Any
+validation/recreate/verification/smoke failure restores Basic through that same sequence and proves
+unauthenticated `401` responses for the HTTPS root, OAuth authorize, public API read, user API write
+and realtime health paths before returning failure. `caddy reload` is
+intentionally forbidden because both artifacts set `admin off`.
+
+Rollback is executable and ordered, never prose-only:
+
+```sh
+sudo -- /usr/bin/env -i PATH=/usr/bin:/bin HOME=/root \
+  /usr/bin/node scripts/control-timeweb-yandex-public-beta.js --mode rollback \
+  --receipt /opt/phub/timeweb-beta/backups/yandex-public/receipt.json
+```
+
+It restores, validates, force-recreates and verifies Basic first; only then does it restore the locally retained prior
+API, wait for health, restore Web and wait for health. It never pulls, migrates, deletes identity rows
+or touches secrets. Rollback does not depend on the candidate runtime secret directory or its release
+marker. Preserve the receipt and backup after success or partial failure. Users first
+provisioned through Yandex may be unavailable during rollback, but their identity, legal-acceptance
+and delegation rows remain intact.
+
 Realtime is not a read-only process at startup: it asserts RabbitMQ exchanges, queues and bindings
 and starts consumers. Starting Realtime therefore requires a separately approved RabbitMQ topology
 gate even while Worker is disabled. Worker-disabled operation is safe only for an explicitly bounded

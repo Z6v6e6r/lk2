@@ -9,7 +9,11 @@ const REPOSITORY_ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const SHA_PATTERN = /^[0-9a-f]{40}$/u;
 const EXPECTED_UID = process.getuid?.() ?? -1;
 const PROTECTED_PATHS = Object.freeze([
+  '.github/workflows/pull-request.yaml',
   'scripts/provision-timeweb-beta-runtime-secrets.js',
+  'scripts/control-timeweb-yandex-public-beta.js',
+  'scripts/control-timeweb-yandex-public-beta.d.ts',
+  'scripts/control-timeweb-yandex-public-beta.test.ts',
   'scripts/render-timeweb-beta-release-env.js',
   'scripts/timeweb-release-manifest-contract.js',
   'scripts/verify-timeweb-base-images.js',
@@ -18,12 +22,15 @@ const PROTECTED_PATHS = Object.freeze([
   'scripts/verify-timeweb-frozen-source.js',
   'deploy/timeweb/base-images.lock.json',
   'deploy/timeweb/Caddyfile',
+  'deploy/timeweb/Caddyfile.yandex-public-beta',
   'deploy/timeweb/compose.beta.yaml',
   'deploy/timeweb/compose.ingress.yaml',
   'deploy/timeweb/release-manifest.schema.json',
   'deploy/timeweb/release-manifest.v1.schema.json',
   'deploy/timeweb/runtime-environment.contract.json',
   'deploy/timeweb/target.json',
+  'deploy/timeweb/yandex-public-beta-ingress.json',
+  'deploy/timeweb/yandex-public-beta-rollback-floor.json',
   'docs/runbooks/timeweb-lk2-beta.md',
 ]);
 const trustedAuthorities = new WeakSet();
