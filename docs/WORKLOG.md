@@ -1251,6 +1251,8 @@
 - Added an explicit, separately authorized `rollback --recover-failed-apply` state transition that
   binds the observed exact subset, survives interruption, rejects scope growth and emits a distinct
   root-only completion receipt before releasing the lifecycle guard.
+- Added removal-specific dpkg state validation, bounded retry evidence with separate authorized and
+  latest subset hashes, and immutable receipt read-back before interrupted cleanup can continue.
 - Isolated Python startup from checkout/site shadowing, required a clean frozen Git tree, populated a
   root-only authenticated apt index snapshot from the pinned Ubuntu source/keyring, and atomically
   published that snapshot, the verified package payloads and their accepted plan as one bundle.

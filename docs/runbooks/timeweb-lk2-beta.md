@@ -292,8 +292,10 @@ present closure subset, rejects every expanded removal or configuration action, 
 transaction to a resumable failed-apply rollback before fixed-name `dpkg --purge`. It removes the
 lifecycle guard only after the entire closure is absent and the protected runtime snapshots still
 match. Its metadata-only receipt has status `FAILED_APPLY_ROLLED_BACK`. `recover` resumes this exact
-authorized rollback after interruption. Without that live authority, do not run the flag, delete
-the marker or guard, or execute manual package commands.
+authorized rollback after interruption, accepts only enumerated error-free dpkg removal states, and
+records the immutable authorized simulation separately from the latest remaining-subset simulation.
+An existing completion receipt must match byte-for-byte before guard cleanup. Without that live
+authority, do not run the flag, delete the marker or guard, or execute manual package commands.
 
 Keep Node installed through the application rollback window. Removing it is a separate live
 host-package authority. The controller first proves the original receipt and simulates an exact

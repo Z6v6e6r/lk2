@@ -173,6 +173,8 @@ describe('Timeweb operator Node bootstrap controller', () => {
       '--recover-failed-apply',
       'FAILED_APPLY_ROLLED_BACK',
       'failed_apply_rollback_scope_drift',
+      'RECOVERABLE_REMOVAL_STATUSES',
+      'recovery_removal_state',
       'transaction_phase',
       'package_lifecycle_script',
       'package_service_payload',
@@ -368,6 +370,7 @@ describe('Timeweb operator Node bootstrap controller', () => {
       'module.load_plan = lambda *_args: {"planId": "plan"}',
       'module.verify_artifacts = lambda *_args: []',
       'module.recoverable_present_packages = lambda *_args: set(names[:2])',
+      'module.recoverable_removal_present_packages = lambda *_args: set(names[:2])',
       'module.removal_simulation = lambda _contract, packages: "\\n".join("Purg " + name for name in sorted(packages)) + "\\n"',
       'writes = []',
       'purges = []',
@@ -378,16 +381,34 @@ describe('Timeweb operator Node bootstrap controller', () => {
       'assert result == {"status": "FAILED_APPLY_ROLLED_BACK", "phase": "removed", "authorized": sorted(names[:2])}',
       'assert [value["phase"] for value in writes] == ["prepared", "removing", "removed"]',
       'assert purges == [sorted(names[:2])]',
+      'initial_phases = [value["phase"] for value in writes]',
+      'initial_purges = list(purges)',
+      'resumed = dict(transaction)',
+      'resumed["phase"] = "removing"',
+      'writes.clear()',
+      'purges.clear()',
+      'module.recoverable_removal_present_packages = lambda *_args: {names[1]}',
+      'resumed_result = module.continue_failed_apply_rollback(contract, resumed)',
+      'assert resumed_result["phase"] == "removed"',
+      'assert [value["phase"] for value in writes] == ["removing", "removed"]',
+      'assert purges == [[names[1]]]',
+      'completed = dict(resumed)',
+      'completed["phase"] = "removed"',
+      'writes.clear()',
+      'purges.clear()',
+      'module.recoverable_removal_present_packages = lambda *_args: (_ for _ in ()).throw(AssertionError("removed phase inspected dpkg"))',
+      'completed_result = module.continue_failed_apply_rollback(contract, completed)',
+      'assert completed_result["phase"] == "removed" and not writes and not purges',
       'drifted = dict(transaction)',
-      'drifted.update({"operation": "failed_apply_rollback", "phase": "removing", "authorizedPackages": [names[0]], "originalFailureReason": "node_identity"})',
-      'module.recoverable_present_packages = lambda *_args: set(names[:2])',
+      'drifted.update({"operation": "failed_apply_rollback", "phase": "removing", "authorizedPackages": [names[0]], "latestSimulationPackages": [names[0]], "originalFailureReason": "node_identity"})',
+      'module.recoverable_removal_present_packages = lambda *_args: set(names[:2])',
       'try:',
       '    module.continue_failed_apply_rollback(contract, drifted)',
       'except module.Stop as error:',
       '    assert str(error) == "failed_apply_rollback_scope_drift"',
       'else:',
       '    raise AssertionError("expanded rollback scope accepted")',
-      'print(json.dumps({"status": result["status"], "phases": [value["phase"] for value in writes], "purges": purges}))',
+      'print(json.dumps({"status": result["status"], "phases": initial_phases, "purges": initial_purges}))',
     ].join('\n');
     const result = spawnSync(
       'python3',
@@ -421,5 +442,116 @@ describe('Timeweb operator Node bootstrap controller', () => {
 
     expect(result.status).toBe(2);
     expect(result.stderr).toContain('STOP live_override_forbidden');
+  });
+
+  it('accepts only exact safe dpkg removal-intermediate states', () => {
+    const directory = temporaryDirectory();
+    const contractPath = join(directory, 'contract.json');
+    writeFileSync(contractPath, contractSource);
+    const program = [
+      'import importlib.util, json, pathlib, sys',
+      'spec = importlib.util.spec_from_file_location("controller", sys.argv[1])',
+      'module = importlib.util.module_from_spec(spec)',
+      'spec.loader.exec_module(module)',
+      'contract = module.validate_contract(module.read_json(pathlib.Path(sys.argv[2]), "contract"))',
+      'packages = contract["apt"]["packages"]',
+      'def value(item, status):',
+      '    return {"status": status, "version": item["version"], "architecture": item["architecture"]}',
+      'state = {item["name"]: None for item in packages}',
+      'state[packages[0]["name"]] = value(packages[0], "ii ")',
+      'state[packages[1]["name"]] = value(packages[1], "pi ")',
+      'state[packages[2]["name"]] = value(packages[2], "rc ")',
+      'module.installed_state = lambda *_args: state',
+      'present = module.recoverable_removal_present_packages(contract)',
+      'assert present == {packages[0]["name"], packages[1]["name"], packages[2]["name"]}',
+      'state[packages[1]["name"]] = value(packages[1], "piR")',
+      'try:',
+      '    module.recoverable_removal_present_packages(contract)',
+      'except module.Stop as error:',
+      '    assert str(error) == "recovery_removal_state"',
+      'else:',
+      '    raise AssertionError("dpkg error state accepted")',
+      'state[packages[1]["name"]] = value(packages[1], "pi ")',
+      'state[packages[1]["name"]]["version"] = "unexpected"',
+      'try:',
+      '    module.recoverable_removal_present_packages(contract)',
+      'except module.Stop as error:',
+      '    assert str(error) == "recovery_removal_state"',
+      'else:',
+      '    raise AssertionError("version drift accepted")',
+      'print(json.dumps(sorted(present)))',
+    ].join('\n');
+    const result = spawnSync(
+      'python3',
+      ['-I', '-S', '-B', '-c', program, resolve(controller), contractPath],
+      { encoding: 'utf8', env: { PATH: process.env.PATH ?? '/usr/bin:/bin' } },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual(
+      contract.apt.packages
+        .slice(0, 3)
+        .map(({ name }) => name)
+        .sort(),
+    );
+  });
+
+  it('persists the failed-apply rollback receipt before guard cleanup', () => {
+    const directory = temporaryDirectory();
+    const contractPath = join(directory, 'contract.json');
+    const transactionPath = join(directory, 'transaction.json');
+    const receiptPath = join(directory, 'rollback-receipt.json');
+    writeFileSync(contractPath, contractSource);
+    writeFileSync(transactionPath, '{}\n');
+    const program = [
+      'import importlib.util, json, pathlib, sys',
+      'spec = importlib.util.spec_from_file_location("controller", sys.argv[1])',
+      'module = importlib.util.module_from_spec(spec)',
+      'spec.loader.exec_module(module)',
+      'contract = module.validate_contract(module.read_json(pathlib.Path(sys.argv[2]), "contract"))',
+      'contract["state"]["transactionPath"] = sys.argv[3]',
+      'contract["state"]["rollbackReceiptPath"] = sys.argv[4]',
+      'contract["node"]["path"] = str(pathlib.Path(sys.argv[3]).parent / "absent-node")',
+      'module.require_secure_directory = lambda *_args: None',
+      'module.installed_state = lambda value: {item["name"]: None for item in value["apt"]["packages"]}',
+      'module.service_snapshot = lambda *_args: {"units": {}, "listenersSha256": "0" * 64}',
+      'module.reboot_state = lambda *_args: False',
+      'events = []',
+      'module.remove_policy_guard = lambda *_args: events.append("guard_removed")',
+      'transaction = {"planId": "plan", "sourceSha": "a" * 40, "sourceTree": "b" * 40, "originalFailureReason": "node_identity", "authorizedSimulationSha256": "c" * 64, "authorizedPackages": [contract["apt"]["packages"][0]["name"]], "latestSimulationSha256": "d" * 64, "latestSimulationPackages": [contract["apt"]["packages"][0]["name"]], "simulationAttemptCount": 2, "protectedServices": {"units": {}, "listenersSha256": "0" * 64}, "rebootRequired": False}',
+      'result = module.finalize_failed_apply_rollback(contract, transaction)',
+      'receipt = module.read_json(pathlib.Path(sys.argv[4]), "receipt")',
+      'assert receipt["status"] == "FAILED_APPLY_ROLLED_BACK"',
+      'assert receipt["authorizedPackages"] == transaction["authorizedPackages"]',
+      'assert receipt["authorizedSimulationSha256"] == "c" * 64',
+      'assert receipt["latestSimulationSha256"] == "d" * 64',
+      'assert receipt["latestSimulationPackages"] == transaction["authorizedPackages"]',
+      'assert receipt["simulationAttemptCount"] == 2',
+      'assert events == ["guard_removed"]',
+      'assert not pathlib.Path(sys.argv[3]).exists()',
+      'print(json.dumps(result))',
+    ].join('\n');
+    const result = spawnSync(
+      'python3',
+      [
+        '-I',
+        '-S',
+        '-B',
+        '-c',
+        program,
+        resolve(controller),
+        contractPath,
+        transactionPath,
+        receiptPath,
+      ],
+      { encoding: 'utf8', env: { PATH: process.env.PATH ?? '/usr/bin:/bin' } },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({
+      status: 'FAILED_APPLY_ROLLED_BACK',
+      planId: 'plan',
+      packageCount: 1,
+    });
   });
 });
