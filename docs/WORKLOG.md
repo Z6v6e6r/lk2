@@ -1244,5 +1244,8 @@
 - Bound apply to locally staged and hashed `.deb` payloads with network download disabled, rejected
   lifecycle-bearing maintainer scripts and apt config hooks, and protected active units/listeners
   with a temporary lifecycle guard and before/after evidence.
+- Isolated Python startup from checkout/site shadowing, required a clean frozen Git tree, populated a
+  root-only authenticated apt index snapshot from the pinned Ubuntu source/keyring, and atomically
+  published that snapshot, the verified package payloads and their accepted plan as one bundle.
 - Kept container wrappers and third-party installers forbidden, preserved every secret/deploy/ingress
   gate and required atomic root-only metadata receipts without secret or package payload content.

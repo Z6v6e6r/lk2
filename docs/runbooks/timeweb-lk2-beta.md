@@ -226,26 +226,31 @@ and the exact 20-package new-install closure. Third-party or `Trusted=yes` sourc
 snippets, pre-existing closure packages, upgrades, removals, downgrades, extra packages, global npm,
 downloaded installers and container launchers are all a STOP.
 
-The controller reduces the procedure to five commands. Every live command uses the exact root-owned
-release checkout and clean launcher environment shown here; replace only the two identity values:
+The controller reduces the procedure to five commands. Every live command uses an absolute path in
+the exact root-owned, unmodified and untracked-file-free release checkout. Python isolated mode,
+disabled `site` loading and disabled bytecode writes prevent sibling or site import shadowing before
+the controller proves that checkout. Replace only the release path and two identity values:
 
 ```sh
 sudo -- /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin HOME=/root LC_ALL=C \
-  /usr/bin/python3 scripts/control-timeweb-operator-node-bootstrap.py plan --expected-source-sha '<source-sha>' --expected-source-tree '<source-tree>'
+  /usr/bin/python3 -I -S -B '<release-source>/scripts/control-timeweb-operator-node-bootstrap.py' plan --expected-source-sha '<source-sha>' --expected-source-tree '<source-tree>'
 ```
 
 `plan` does not install a package. It verifies the frozen Git blobs, OS, launcher custody, source,
-keyring, apt lists, empty `dpkg --audit`, absent pre-state and exact simulation; downloads the exact
-`.deb` closure into root-only staging; rejects lifecycle commands in maintainer scripts; and writes
-an atomic `0600` plan containing the plan ID, simulation/source/list checksums and every payload and
-control-metadata SHA-256. Stop for separate authority naming that plan ID before `apply`.
+keyring, empty `dpkg --audit` and absent pre-state. It then runs authenticated `apt-get update` into
+an isolated root-only lists directory using only the frozen source and keyring, rejects every
+unexpected index target, and uses that same snapshot for exact simulation, URI selection and `.deb`
+download. Lifecycle-bearing maintainer scripts are rejected. The lists, packages and atomic `0600`
+plan are published as one directory rename; the plan binds the plan ID, source/list/simulation
+checksums and every payload and control-metadata SHA-256. Stop for separate authority naming that
+plan ID before `apply`.
 
 ```sh
 sudo -- /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin HOME=/root LC_ALL=C \
-  /usr/bin/python3 scripts/control-timeweb-operator-node-bootstrap.py apply --expected-source-sha '<source-sha>' --expected-source-tree '<source-tree>'
+  /usr/bin/python3 -I -S -B '<release-source>/scripts/control-timeweb-operator-node-bootstrap.py' apply --expected-source-sha '<source-sha>' --expected-source-tree '<source-tree>'
 
 sudo -- /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin HOME=/root LC_ALL=C \
-  /usr/bin/python3 scripts/control-timeweb-operator-node-bootstrap.py verify --expected-source-sha '<source-sha>' --expected-source-tree '<source-tree>'
+  /usr/bin/python3 -I -S -B '<release-source>/scripts/control-timeweb-operator-node-bootstrap.py' verify --expected-source-sha '<source-sha>' --expected-source-tree '<source-tree>'
 ```
 
 `apply` rechecks the plan, trust inputs, apt-list checksum, simulation and every `.deb`, then installs
@@ -257,12 +262,20 @@ payload. `verify` independently reads back the complete dpkg closure, `/usr/bin/
 file SHA-256, version, executable path, platform and architecture.
 
 If `transaction.json` remains after an interrupted apply or rollback, do not delete it or the
-temporary lifecycle guard. Run only deterministic recovery from the same frozen source and plan:
+temporary lifecycle guard. Run only deterministic recovery from the same frozen source and plan.
+It completes an interrupted exact install/removal or receipt cleanup, re-simulates partial rollback
+and rejects any newly expanded removal set:
 
 ```sh
 sudo -- /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin HOME=/root LC_ALL=C \
-  /usr/bin/python3 scripts/control-timeweb-operator-node-bootstrap.py recover --expected-source-sha '<source-sha>' --expected-source-tree '<source-tree>'
+  /usr/bin/python3 -I -S -B '<release-source>/scripts/control-timeweb-operator-node-bootstrap.py' recover --expected-source-sha '<source-sha>' --expected-source-tree '<source-tree>'
 ```
+
+If the transaction phase is `postcondition_failed`, `recover` stops without repeating apt. That
+state means the exact packages may be present but a Node/service/listener/reboot invariant did not
+pass. Preserve the transaction and lifecycle guard. Package removal from this failed-apply state is
+a destructive rollback boundary and requires separate exact authority before the controller may
+gain such a mode; do not delete the marker or run manual apt commands.
 
 Keep Node installed through the application rollback window. Removing it is a separate live
 host-package authority. The controller first proves the original receipt and simulates an exact
@@ -270,7 +283,7 @@ purge; any reverse dependency or additional removal is a STOP. It never runs `au
 
 ```sh
 sudo -- /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin HOME=/root LC_ALL=C \
-  /usr/bin/python3 scripts/control-timeweb-operator-node-bootstrap.py rollback --expected-source-sha '<source-sha>' --expected-source-tree '<source-tree>'
+  /usr/bin/python3 -I -S -B '<release-source>/scripts/control-timeweb-operator-node-bootstrap.py' rollback --expected-source-sha '<source-sha>' --expected-source-tree '<source-tree>'
 ```
 
 A controller STOP never permits an alternate launcher, manual package command, marker deletion,

@@ -10,7 +10,8 @@
   "launcher": {
     "path": "/usr/bin/python3",
     "packageOwner": "python3-minimal",
-    "major": 3
+    "major": 3,
+    "flags": ["-I", "-S", "-B"]
   },
   "apt": {
     "binary": "/usr/bin/apt-get",
@@ -79,8 +80,11 @@
   },
   "state": {
     "root": "/opt/phub/timeweb-beta/operator/node-bootstrap",
-    "planPath": "/opt/phub/timeweb-beta/operator/node-bootstrap/plan.json",
-    "packageDirectory": "/opt/phub/timeweb-beta/operator/node-bootstrap/packages",
+    "pendingDirectory": "/opt/phub/timeweb-beta/operator/node-bootstrap/pending",
+    "bundleDirectory": "/opt/phub/timeweb-beta/operator/node-bootstrap/accepted",
+    "planPath": "/opt/phub/timeweb-beta/operator/node-bootstrap/accepted/plan.json",
+    "packageDirectory": "/opt/phub/timeweb-beta/operator/node-bootstrap/accepted/packages",
+    "listsDirectory": "/opt/phub/timeweb-beta/operator/node-bootstrap/accepted/lists",
     "transactionPath": "/opt/phub/timeweb-beta/operator/node-bootstrap/transaction.json",
     "receiptPath": "/opt/phub/timeweb-beta/operator/node-bootstrap-receipt.json",
     "rollbackReceiptPath": "/opt/phub/timeweb-beta/operator/node-bootstrap-rollback-receipt.json"

@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -26,8 +26,8 @@ function temporaryDirectory(): string {
   return path;
 }
 
-function invoke(args: string[]) {
-  return spawnSync('python3', [controller, ...args], {
+function invoke(args: string[], script = controller) {
+  return spawnSync('python3', ['-I', '-S', '-B', script, ...args], {
     cwd: process.cwd(),
     encoding: 'utf8',
     env: { PATH: process.env.PATH ?? '/usr/bin:/bin' },
@@ -148,14 +148,32 @@ describe('Timeweb operator Node bootstrap controller', () => {
     for (const required of [
       'Dir::Etc::main=/dev/null',
       'Dir::Etc::parts=-',
+      'Dir::State::lists=',
       'Acquire::AllowInsecureRepositories=false',
-      'Debug::NoLocking=1',
+      '"--yes", "update"',
+      'DPkg::Lock::Timeout=30',
       'NEEDRESTART_SUSPEND',
       'POLICY_BYTES',
       '--no-download',
       'package_lifecycle_script',
+      'package_service_payload',
+      'source_not_clean',
     ]) {
       expect(source).toContain(required);
     }
+    expect(source).not.toContain('Debug::NoLocking');
+  });
+
+  it('does not import a shadow standard-library module beside the controller', () => {
+    const directory = temporaryDirectory();
+    const copiedController = join(directory, 'control.py');
+    const contractPath = join(directory, 'contract.json');
+    copyFileSync(controller, copiedController);
+    writeFileSync(contractPath, contractSource);
+    writeFileSync(join(directory, 'json.py'), 'raise RuntimeError("shadow module executed")\n');
+
+    const result = invoke(['validate-contract', '--contract', contractPath], copiedController);
+    expect(result.status).toBe(0);
+    expect(result.stderr).not.toContain('shadow module executed');
   });
 });

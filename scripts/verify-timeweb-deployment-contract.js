@@ -285,11 +285,12 @@ export function validateOperatorNodeBootstrapContract(contract, target) {
     value.platform.hostArchitecture !== target.platform.hostArchitecture
   )
     reject('node_bootstrap_platform');
-  exactKeys(value.launcher, ['path', 'packageOwner', 'major'], 'node_bootstrap_launcher');
+  exactKeys(value.launcher, ['path', 'packageOwner', 'major', 'flags'], 'node_bootstrap_launcher');
   if (
     value.launcher.path !== target.operatorRuntime.node.launcherPath ||
     value.launcher.packageOwner !== target.operatorRuntime.node.launcherPackage ||
-    value.launcher.major !== 3
+    value.launcher.major !== 3 ||
+    JSON.stringify(value.launcher.flags) !== JSON.stringify(['-I', '-S', '-B'])
   )
     reject('node_bootstrap_launcher');
   exactKeys(
@@ -410,8 +411,11 @@ export function validateOperatorNodeBootstrapContract(contract, target) {
     value.state,
     [
       'root',
+      'pendingDirectory',
+      'bundleDirectory',
       'planPath',
       'packageDirectory',
+      'listsDirectory',
       'transactionPath',
       'receiptPath',
       'rollbackReceiptPath',
@@ -421,8 +425,11 @@ export function validateOperatorNodeBootstrapContract(contract, target) {
   const stateRoot = '/opt/phub/timeweb-beta/operator/node-bootstrap';
   if (
     value.state.root !== stateRoot ||
-    value.state.planPath !== `${stateRoot}/plan.json` ||
-    value.state.packageDirectory !== `${stateRoot}/packages` ||
+    value.state.pendingDirectory !== `${stateRoot}/pending` ||
+    value.state.bundleDirectory !== `${stateRoot}/accepted` ||
+    value.state.planPath !== `${stateRoot}/accepted/plan.json` ||
+    value.state.packageDirectory !== `${stateRoot}/accepted/packages` ||
+    value.state.listsDirectory !== `${stateRoot}/accepted/lists` ||
     value.state.transactionPath !== `${stateRoot}/transaction.json` ||
     value.state.receiptPath !== target.operatorRuntime.node.receiptPath ||
     value.state.rollbackReceiptPath !==

@@ -247,8 +247,13 @@ def validate_contract(value: Any) -> dict[str, Any]:
     }:
         stop("contract_platform")
 
-    launcher = exact_keys(contract["launcher"], {"path", "packageOwner", "major"}, "contract_launcher")
-    if launcher != {"path": "/usr/bin/python3", "packageOwner": "python3-minimal", "major": 3}:
+    launcher = exact_keys(
+        contract["launcher"], {"path", "packageOwner", "major", "flags"}, "contract_launcher"
+    )
+    if launcher != {
+        "path": "/usr/bin/python3", "packageOwner": "python3-minimal", "major": 3,
+        "flags": ["-I", "-S", "-B"],
+    }:
         stop("contract_launcher")
 
     apt = exact_keys(
@@ -333,14 +338,20 @@ def validate_contract(value: Any) -> dict[str, Any]:
 
     state = exact_keys(
         contract["state"],
-        {"root", "planPath", "packageDirectory", "transactionPath", "receiptPath", "rollbackReceiptPath"},
+        {
+            "root", "pendingDirectory", "bundleDirectory", "planPath", "packageDirectory",
+            "listsDirectory", "transactionPath", "receiptPath", "rollbackReceiptPath",
+        },
         "contract_state",
     )
     root = "/opt/phub/timeweb-beta/operator/node-bootstrap"
     if state != {
         "root": root,
-        "planPath": f"{root}/plan.json",
-        "packageDirectory": f"{root}/packages",
+        "pendingDirectory": f"{root}/pending",
+        "bundleDirectory": f"{root}/accepted",
+        "planPath": f"{root}/accepted/plan.json",
+        "packageDirectory": f"{root}/accepted/packages",
+        "listsDirectory": f"{root}/accepted/lists",
         "transactionPath": f"{root}/transaction.json",
         "receiptPath": "/opt/phub/timeweb-beta/operator/node-bootstrap-receipt.json",
         "rollbackReceiptPath": "/opt/phub/timeweb-beta/operator/node-bootstrap-rollback-receipt.json",
@@ -378,6 +389,23 @@ def parse_simulation(contents: str, contract: dict[str, Any], action: str) -> li
     if installed or removed != set(expected):
         stop("rollback_simulation_closure")
     return [expected[name] for name in sorted(expected)]
+
+
+def parse_removal_subset(
+    contents: str, contract: dict[str, Any], expected_removed: set[str]
+) -> None:
+    allowed = {item["name"] for item in contract["apt"]["packages"]}
+    installed: set[str] = set()
+    removed: set[str] = set()
+    for line in contents.splitlines():
+        install = SIMULATED_INSTALL.match(line)
+        if install:
+            installed.add(install.group(1))
+        removal = SIMULATED_REMOVE.match(line)
+        if removal:
+            removed.add(removal.group(1))
+    if installed or not removed.issubset(allowed) or removed != expected_removed:
+        stop("recovery_rollback_simulation")
 
 
 def parse_os_release() -> dict[str, str]:
@@ -452,6 +480,8 @@ def validate_frozen_source(source_sha: str, source_tree: str) -> None:
         stop("source_head")
     if git(["rev-parse", "--verify", "HEAD^{tree}"]) != source_tree:
         stop("source_tree")
+    if git(["status", "--porcelain=v1", "-z", "--untracked-files=all"]):
+        stop("source_not_clean")
     object_ids = [source_sha, source_tree]
     for relative in PROTECTED_PATHS:
         path = REPOSITORY_ROOT / relative
@@ -489,6 +519,13 @@ def validate_launcher(contract: dict[str, Any]) -> None:
     launcher = contract["launcher"]
     if Path(sys.executable) != Path(launcher["path"]) or sys.version_info.major != launcher["major"]:
         stop("launcher_identity")
+    if (
+        sys.flags.isolated != 1
+        or sys.flags.no_site != 1
+        or sys.flags.dont_write_bytecode != 1
+        or getattr(sys.flags, "safe_path", 0) != 1
+    ):
+        stop("launcher_flags")
     path = Path(launcher["path"])
     try:
         link = path.lstat()
@@ -510,14 +547,23 @@ def validate_live_environment() -> None:
         stop("clean_environment_required")
 
 
-def apt_options(contract: dict[str, Any], package_directory: Path | None = None) -> list[str]:
+def apt_options(
+    contract: dict[str, Any],
+    package_directory: Path | None = None,
+    lists_directory: Path | None = None,
+) -> list[str]:
     apt = contract["apt"]
+    selected_lists = lists_directory or Path(contract["state"]["listsDirectory"])
     result = [
         "-o", "Dir::Etc::main=/dev/null",
         "-o", "Dir::Etc::parts=-",
         "-o", f"Dir::Etc::sourcelist={apt['sourceList']}",
         "-o", f"Dir::Etc::sourceparts={apt['sourceParts']}",
-        "-o", "Debug::NoLocking=1",
+        "-o", f"Dir::State::lists={selected_lists}",
+        "-o", "DPkg::Lock::Timeout=30",
+        "-o", "Acquire::Languages=none",
+        "-o", "Acquire::IndexTargets::deb::DEP-11::DefaultEnabled=false",
+        "-o", "Acquire::IndexTargets::deb::CNF::DefaultEnabled=false",
         "-o", "APT::Get::AllowUnauthenticated=false",
         "-o", "Acquire::AllowInsecureRepositories=false",
         "-o", "Acquire::AllowDowngradeToInsecureRepositories=false",
@@ -552,20 +598,39 @@ def validate_apt_trust(contract: dict[str, Any]) -> dict[str, str]:
     return {"sourceSha256": sha256_file(source), "keyringSha256": sha256_file(keyring)}
 
 
-def apt_lists_hash(contract: dict[str, Any]) -> str:
-    accepted = ("archive.ubuntu.com_ubuntu_dists_resolute", "security.ubuntu.com_ubuntu_dists_resolute")
-    files = sorted(
-        path for path in Path("/var/lib/apt/lists").iterdir()
-        if path.is_file() and path.name.startswith(accepted)
+def apt_lists_snapshot(directory: Path) -> list[dict[str, Any]]:
+    require_secure_directory(directory, 0o700, "apt_lists_security")
+    accepted_prefixes = (
+        "archive.ubuntu.com_ubuntu_dists_resolute",
+        "security.ubuntu.com_ubuntu_dists_resolute-security",
     )
-    if not files:
-        stop("apt_lists_missing")
-    digest = hashlib.sha256()
-    for path in files:
-        require_secure_file(path, None, "apt_lists_security")
-        digest.update(path.name.encode() + b"\0")
-        digest.update(bytes.fromhex(sha256_file(path)))
-    return digest.hexdigest()
+    result: list[dict[str, Any]] = []
+    inrelease = 0
+    packages = 0
+    for path in sorted(directory.iterdir()):
+        if path.name in {"partial", "auxfiles"}:
+            require_secure_directory(path, None, "apt_lists_auxiliary")
+            if any(path.iterdir()):
+                stop("apt_lists_auxiliary")
+            continue
+        if path.name == "lock":
+            value = require_secure_file(path, None, "apt_lists_lock")
+            if value.st_size != 0:
+                stop("apt_lists_lock")
+            continue
+        if not path.name.startswith(accepted_prefixes):
+            stop("apt_lists_unexpected")
+        if path.name.endswith("_InRelease"):
+            inrelease += 1
+        elif "_binary-amd64_Packages" in path.name:
+            packages += 1
+        else:
+            stop("apt_lists_target")
+        value = require_secure_file(path, None, "apt_lists_security")
+        result.append({"file": path.name, "size": value.st_size, "sha256": sha256_file(path)})
+    if inrelease != 4 or packages < 4:
+        stop("apt_lists_incomplete")
+    return result
 
 
 def expected_pins(contract: dict[str, Any]) -> list[str]:
@@ -631,8 +696,15 @@ def reboot_state(contract: dict[str, Any]) -> bool:
     return Path(contract["lifecycle"]["rebootRequiredPath"]).exists()
 
 
-def simulation(contract: dict[str, Any], package_directory: Path | None = None, *, local: bool = False) -> str:
-    arguments = [contract["apt"]["binary"], *apt_options(contract, package_directory), "--simulate", "install", "--no-install-recommends"]
+def simulation(
+    contract: dict[str, Any], package_directory: Path | None = None,
+    lists_directory: Path | None = None, *, local: bool = False
+) -> str:
+    arguments = [
+        contract["apt"]["binary"],
+        *apt_options(contract, package_directory, lists_directory),
+        "--simulate", "install", "--no-install-recommends",
+    ]
     if local:
         arguments.extend(str(path) for path in package_files(contract, package_directory or Path("/invalid")))
     else:
@@ -666,9 +738,20 @@ def validate_uri_plan(contents: str, contract: dict[str, Any]) -> None:
 def package_files(contract: dict[str, Any], directory: Path) -> list[Path]:
     require_secure_directory(directory, 0o700, "package_directory_security")
     entries = sorted(directory.iterdir())
-    if any(not path.name.endswith(".deb") or not path.is_file() for path in entries):
-        stop("package_artifact_unexpected")
-    paths = entries
+    paths: list[Path] = []
+    for path in entries:
+        if path.name.endswith(".deb"):
+            paths.append(path)
+        elif path.name == "lock":
+            value = require_secure_file(path, None, "package_lock_security")
+            if value.st_size != 0:
+                stop("package_lock_security")
+        elif path.name == "partial":
+            require_secure_directory(path, None, "package_partial_security")
+            if any(path.iterdir()):
+                stop("package_partial_security")
+        else:
+            stop("package_artifact_unexpected")
     if len(paths) != len(contract["apt"]["packages"]):
         stop("package_artifact_count")
     return paths
@@ -689,6 +772,12 @@ def inspect_artifacts(contract: dict[str, Any], directory: Path) -> list[dict[st
             "name": name, "version": version, "architecture": architecture
         }:
             stop("package_artifact_metadata")
+        payload_listing = run([contract["apt"]["dpkgDebBinary"], "--contents", str(path)])
+        if re.search(
+            r"\s\./(?:etc/(?:init\.d|systemd)/|lib/systemd/system/|usr/lib/systemd/system/)",
+            payload_listing,
+        ):
+            stop("package_service_payload")
         with tempfile.TemporaryDirectory(prefix=".control-", dir=directory.parent) as control_name:
             control_directory = Path(control_name)
             os.chmod(control_directory, 0o700)
@@ -710,6 +799,7 @@ def inspect_artifacts(contract: dict[str, Any], directory: Path) -> list[dict[st
             "name": name, "version": version, "architecture": architecture,
             "file": path.name, "sha256": sha256_file(path),
             "controlSha256": control_digest.hexdigest(),
+            "payloadTreeSha256": sha256_bytes(payload_listing.encode()),
         }
     if set(artifacts) != set(expected):
         stop("package_artifact_closure")
@@ -741,38 +831,56 @@ def create_state_root(contract: dict[str, Any]) -> Path:
 def plan_mode(contract: dict[str, Any], source_sha: str, source_tree: str) -> dict[str, Any]:
     state = contract["state"]
     root = create_state_root(contract)
-    if any(Path(state[key]).exists() for key in ("planPath", "packageDirectory", "transactionPath", "receiptPath")):
+    if any(Path(state[key]).exists() for key in ("bundleDirectory", "transactionPath", "receiptPath")):
         stop("existing_bootstrap_state")
+    pending = Path(state["pendingDirectory"])
+    if pending.exists() or pending.is_symlink():
+        require_secure_directory(pending, 0o700, "pending_plan_security")
+        for child in pending.rglob("*"):
+            value = child.lstat()
+            if value.st_uid != 0 or value.st_mode & 0o022 or stat.S_ISLNK(value.st_mode):
+                stop("pending_plan_security")
+        shutil.rmtree(pending)
     trust = validate_apt_trust(contract)
     audit = dpkg_audit(contract)
     if audit:
         stop("dpkg_audit")
     before = installed_state(contract)
     require_absent_closure(before)
-    lists_sha = apt_lists_hash(contract)
-    accepted_simulation = simulation(contract)
+    node_path = Path(contract["node"]["path"])
+    if node_path.exists() or node_path.is_symlink():
+        stop("node_preexisting")
     snapshot = service_snapshot(contract)
-    temporary = Path(tempfile.mkdtemp(prefix=".plan-", dir=root))
-    os.chmod(temporary, 0o700)
-    package_stage = temporary / "packages"
+    pending.mkdir(mode=0o700)
+    package_stage = pending / "packages"
+    lists_stage = pending / "lists"
     package_stage.mkdir(mode=0o700)
     (package_stage / "partial").mkdir(mode=0o700)
+    lists_stage.mkdir(mode=0o700)
+    (lists_stage / "partial").mkdir(mode=0o700)
     try:
+        run([
+            contract["apt"]["binary"], *apt_options(contract, package_stage, lists_stage),
+            "--yes", "update",
+        ])
+        lists_snapshot = apt_lists_snapshot(lists_stage)
+        lists_sha = sha256_bytes(canonical_bytes(lists_snapshot))
+        accepted_simulation = simulation(contract, lists_directory=lists_stage)
         uri_output = run([
-            contract["apt"]["binary"], *apt_options(contract, package_stage), "--print-uris",
+            contract["apt"]["binary"], *apt_options(contract, package_stage, lists_stage), "--print-uris",
             "--yes", "--download-only", "install", "--no-install-recommends", *expected_pins(contract),
         ])
         validate_uri_plan(uri_output, contract)
         run([
-            contract["apt"]["binary"], *apt_options(contract, package_stage), "--yes",
+            contract["apt"]["binary"], *apt_options(contract, package_stage, lists_stage), "--yes",
             "--download-only", "install", "--no-install-recommends", *expected_pins(contract),
         ])
         for path in package_stage.iterdir():
             if path.name == "partial":
                 continue
             if path.is_file():
+                os.chown(path, 0, 0)
                 os.chmod(path, 0o600)
-        (package_stage / "partial").rmdir()
         artifacts = inspect_artifacts(contract, package_stage)
         plan: dict[str, Any] = {
             "schema": PLAN_SCHEMA,
@@ -782,6 +890,7 @@ def plan_mode(contract: dict[str, Any], source_sha: str, source_tree: str) -> di
             "contractSha256": sha256_file(CONTRACT_PATH),
             "aptTrust": trust,
             "aptListsSha256": lists_sha,
+            "aptLists": lists_snapshot,
             "simulationSha256": sha256_bytes(accepted_simulation.encode()),
             "uriPlanSha256": sha256_bytes(uri_output.encode()),
             "preinstalled": before,
@@ -791,12 +900,22 @@ def plan_mode(contract: dict[str, Any], source_sha: str, source_tree: str) -> di
             "artifacts": artifacts,
         }
         plan["planId"] = sha256_bytes(canonical_bytes(plan))
-        os.replace(package_stage, Path(state["packageDirectory"]))
-        atomic_json(Path(state["planPath"]), plan)
+        atomic_json(pending / "plan.json", plan)
+        pending_descriptor = os.open(pending, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(pending_descriptor)
+        finally:
+            os.close(pending_descriptor)
+        os.replace(pending, Path(state["bundleDirectory"]))
+        root_descriptor = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(root_descriptor)
+        finally:
+            os.close(root_descriptor)
         return {"status": "PLANNED", "planId": plan["planId"], "packageCount": len(artifacts)}
     finally:
-        if temporary.exists():
-            shutil.rmtree(temporary)
+        if pending.exists():
+            shutil.rmtree(pending)
 
 
 def load_plan(contract: dict[str, Any], source_sha: str, source_tree: str) -> dict[str, Any]:
@@ -817,7 +936,11 @@ def load_plan(contract: dict[str, Any], source_sha: str, source_tree: str) -> di
 def revalidate_plan(contract: dict[str, Any], plan: dict[str, Any], *, require_absent: bool) -> None:
     if validate_apt_trust(contract) != plan.get("aptTrust"):
         stop("plan_apt_trust_drift")
-    if apt_lists_hash(contract) != plan.get("aptListsSha256"):
+    lists_snapshot = apt_lists_snapshot(Path(contract["state"]["listsDirectory"]))
+    if (
+        lists_snapshot != plan.get("aptLists")
+        or sha256_bytes(canonical_bytes(lists_snapshot)) != plan.get("aptListsSha256")
+    ):
         stop("plan_apt_lists_drift")
     accepted = simulation(contract)
     if sha256_bytes(accepted.encode()) != plan.get("simulationSha256"):
@@ -897,6 +1020,12 @@ def apply_command(contract: dict[str, Any], paths: list[Path]) -> None:
 def finalize_apply(contract: dict[str, Any], plan: dict[str, Any], transaction: dict[str, Any]) -> dict[str, Any]:
     installed = require_installed_closure(contract)
     node = node_observation(contract)
+    lists_snapshot = apt_lists_snapshot(Path(contract["state"]["listsDirectory"]))
+    if (
+        lists_snapshot != plan.get("aptLists")
+        or sha256_bytes(canonical_bytes(lists_snapshot)) != plan.get("aptListsSha256")
+    ):
+        stop("apt_lists_post_apply_drift")
     if service_snapshot(contract) != transaction["protectedServices"]:
         stop("protected_service_drift")
     if reboot_state(contract) != transaction["rebootRequired"]:
@@ -911,6 +1040,7 @@ def finalize_apply(contract: dict[str, Any], plan: dict[str, Any], transaction: 
         "contractSha256": plan["contractSha256"],
         "aptTrust": plan["aptTrust"],
         "aptListsSha256": plan["aptListsSha256"],
+        "aptLists": plan["aptLists"],
         "simulationSha256": plan["simulationSha256"],
         "uriPlanSha256": plan["uriPlanSha256"],
         "artifacts": plan["artifacts"],
@@ -946,7 +1076,17 @@ def apply_mode(contract: dict[str, Any], source_sha: str, source_tree: str) -> d
     apply_command(contract, paths)
     transaction["phase"] = "installed"
     transaction_write(contract, transaction)
-    return finalize_apply(contract, plan, transaction)
+    try:
+        return finalize_apply(contract, plan, transaction)
+    except Stop as error:
+        transaction["phase"] = (
+            "cleanup_required"
+            if Path(contract["state"]["receiptPath"]).exists()
+            else "postcondition_failed"
+        )
+        transaction["failureReason"] = str(error)
+        transaction_write(contract, transaction)
+        stop(str(error))
 
 
 def finalize_rollback(
@@ -989,19 +1129,40 @@ def recover_mode(contract: dict[str, Any], source_sha: str, source_tree: str) ->
     else:
         create_policy_guard(contract)
     if transaction.get("operation") == "apply":
+        if transaction.get("phase") == "postcondition_failed":
+            stop("failed_apply_rollback_authority_required")
         plan = load_plan(contract, source_sha, source_tree)
         if transaction.get("planId") != plan.get("planId"):
             stop("transaction_plan")
+        if transaction.get("phase") == "cleanup_required":
+            return finalize_apply(contract, plan, transaction)
         paths = verify_artifacts(contract, plan)
         apply_command(contract, paths)
         transaction["phase"] = "installed"
         transaction_write(contract, transaction)
-        return finalize_apply(contract, plan, transaction)
+        try:
+            return finalize_apply(contract, plan, transaction)
+        except Stop as error:
+            transaction["phase"] = (
+                "cleanup_required"
+                if Path(contract["state"]["receiptPath"]).exists()
+                else "postcondition_failed"
+            )
+            transaction["failureReason"] = str(error)
+            transaction_write(contract, transaction)
+            stop(str(error))
     if transaction.get("operation") == "rollback":
         receipt = read_json(Path(contract["state"]["receiptPath"]), "receipt_read", secure=True)
         if not isinstance(receipt, dict) or receipt.get("schema") != RECEIPT_SCHEMA or receipt.get("planId") != transaction.get("planId"):
             stop("transaction_receipt")
         packages = [item["name"] for item in contract["apt"]["packages"]]
+        present = {name for name, value in installed_state(contract).items() if value is not None}
+        simulated = run([
+            contract["apt"]["binary"], *apt_options(contract), "--simulate", "purge", *packages
+        ])
+        parse_removal_subset(simulated, contract, present)
+        transaction["rollbackSimulationSha256"] = sha256_bytes(simulated.encode())
+        transaction_write(contract, transaction)
         run([
             contract["apt"]["binary"], *apt_options(contract), "--yes", "purge", *packages
         ], extra_environment={"DEBIAN_FRONTEND": "noninteractive", "NEEDRESTART_MODE": "l", "NEEDRESTART_SUSPEND": "1"})
