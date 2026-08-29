@@ -578,7 +578,7 @@ describe('PadlHub web authentication', () => {
     const bottomNavigationLinks = within(bottomNavigation).getAllByRole('link');
     expect(bottomNavigationLinks).toHaveLength(5);
     expect(bottomNavigationLinks[2]).toHaveAccessibleName('Создать игру');
-    expect(bottomNavigationLinks[2]).toHaveAttribute('href', '/games/new');
+    expect(bottomNavigationLinks[2]).toHaveAttribute('href', '/games/new?new=1');
     expect(bottomNavigationLinks[2]?.querySelector('.fh-create-button svg')).toHaveAttribute(
       'viewBox',
       '0 0 88 72',

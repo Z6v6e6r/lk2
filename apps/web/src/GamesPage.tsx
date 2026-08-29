@@ -1283,7 +1283,7 @@ export function GamesPage({ gateway, gameId, eventId }: GamesPageProps): React.J
 
       {tab === 'DISCOVER' ? (
         <>
-          <a className="games-create-hero" href="/games/new" aria-label="Создать игру">
+          <a className="games-create-hero" href="/games/new?new=1" aria-label="Создать игру">
             <strong>Создать игру</strong>
             <span>Выберите станцию, время и собери свою игру</span>
           </a>

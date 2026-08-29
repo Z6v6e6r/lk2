@@ -9,7 +9,9 @@ import { CreateGamePage } from './CreateGamePage.js';
 import type { AuthGateway, GameCommandResult } from './auth-gateway.js';
 import {
   createGameAttemptStorageKey,
+  loadCreateGameAttemptLedger,
   prepareCreateGameAttempt,
+  resolveCreateGameAttempt,
   type CreateGameAttemptLockManager,
   type CreateGameAttemptPrincipal,
 } from './create-game-attempt.js';
@@ -79,6 +81,22 @@ function locks(): CreateGameAttemptLockManager {
   };
 }
 
+function savedPayload(title = 'Открытая игра') {
+  return {
+    title,
+    kind: 'FRIENDLY' as const,
+    visibility: 'PUBLIC' as const,
+    stationId,
+    startsAt: '2027-08-15T15:00:00.000Z',
+    endsAt: '2027-08-15T16:30:00.000Z',
+    timezone: 'Europe/Moscow',
+    capacity: 4 as const,
+    levelRange: null,
+    paymentMode: 'NO_PAYMENT' as const,
+    waitlistEnabled: true,
+  };
+}
+
 function page(
   createGame: AuthGateway['createGame'],
   options: {
@@ -101,10 +119,11 @@ function page(
 afterEach(() => {
   cleanup();
   window.localStorage.clear();
+  window.history.replaceState({}, '', '/games/new');
 });
 
 describe('CreateGamePage durable create recovery', () => {
-  it('submits once, clears the attempt and opens a normally created game', async () => {
+  it('submits once, resolves the attempt and opens a normally created game', async () => {
     const command = deferred<GameCommandResult>();
     const createGame = vi.fn<AuthGateway['createGame']>().mockReturnValue(command.promise);
     const navigate = vi.fn();
@@ -131,7 +150,14 @@ describe('CreateGamePage durable create recovery', () => {
 
     command.resolve(result());
     await waitFor(() => expect(navigate).toHaveBeenCalledWith(`/games/${gameId}?created=1`));
-    expect(window.localStorage.getItem(createGameAttemptStorageKey(principal))).toBeNull();
+    const ledger = loadCreateGameAttemptLedger(principal, window.localStorage);
+    expect(ledger.activeAttempt).toBeUndefined();
+    expect(ledger.resolvedAttempts).toMatchObject([
+      { state: 'RESOLVED', gameId, idempotencyKey: createGame.mock.calls[0]?.[1]?.idempotencyKey },
+    ]);
+    expect(window.localStorage.getItem(createGameAttemptStorageKey(principal))).not.toContain(
+      '"payload":',
+    );
   });
 
   it('retains one key after lost responses and uses it for manual replay recovery', async () => {
@@ -151,11 +177,114 @@ describe('CreateGamePage durable create recovery', () => {
     expect(window.localStorage.getItem(createGameAttemptStorageKey(principal))).toContain(firstKey);
 
     await user.click(screen.getByRole('button', { name: 'Создать игру' }));
+    await waitFor(() => expect(createGame).toHaveBeenCalledTimes(2));
     expect(createGame.mock.calls[1]?.[1]?.idempotencyKey).toBe(firstKey);
     await waitFor(() =>
       expect(navigate).toHaveBeenCalledWith(`/games/${gameId}?created=1&recovered=1`),
     );
-    expect(window.localStorage.getItem(createGameAttemptStorageKey(principal))).toBeNull();
+    const ledger = loadCreateGameAttemptLedger(principal, window.localStorage);
+    expect(ledger.activeAttempt).toBeUndefined();
+    expect(ledger.resolvedAttempts).toMatchObject([{ gameId, idempotencyKey: firstKey }]);
+  });
+
+  it('does not allocate K2 when another tab resolves mounted K1 before manual retry', async () => {
+    const pending = await prepareCreateGameAttempt(
+      principal,
+      savedPayload(),
+      window.localStorage,
+      locks(),
+      {
+        createAttemptId: () => 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        createIdempotencyKey: () => 'create-logical-attempt-key-0001',
+      },
+    );
+    expect(pending.state).toBe('PENDING');
+    if (pending.state !== 'PENDING') throw new Error('expected pending attempt');
+    const createGame = vi
+      .fn<AuthGateway['createGame']>()
+      .mockRejectedValue(new TypeError('response lost'));
+    const navigate = vi.fn();
+    const user = userEvent.setup();
+    page(createGame, { navigate });
+
+    await screen.findByRole('option', { name: 'Селигерская' });
+    await user.click(screen.getByRole('button', { name: 'Создать игру' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('результат неизвестен');
+    expect(createGame).toHaveBeenCalledOnce();
+
+    await resolveCreateGameAttempt(principal, pending, gameId, window.localStorage, locks());
+    await user.click(screen.getByRole('button', { name: 'Создать игру' }));
+
+    await waitFor(() =>
+      expect(navigate).toHaveBeenCalledWith(`/games/${gameId}?created=1&recovered=1`),
+    );
+    expect(createGame).toHaveBeenCalledOnce();
+    const ledger = loadCreateGameAttemptLedger(principal, window.localStorage);
+    expect(ledger.activeAttempt).toBeUndefined();
+    expect(ledger.resolvedAttempts).toMatchObject([
+      { gameId, idempotencyKey: 'create-logical-attempt-key-0001' },
+    ]);
+  });
+
+  it('reopens a resolved direct route at G1 without sending another create command', async () => {
+    const pending = await prepareCreateGameAttempt(
+      principal,
+      savedPayload(),
+      window.localStorage,
+      locks(),
+      {
+        createAttemptId: () => 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        createIdempotencyKey: () => 'create-logical-attempt-key-0001',
+      },
+    );
+    if (pending.state !== 'PENDING') throw new Error('expected pending attempt');
+    await resolveCreateGameAttempt(principal, pending, gameId, window.localStorage, locks());
+    const createGame = vi.fn<AuthGateway['createGame']>();
+    const navigate = vi.fn();
+
+    page(createGame, { navigate });
+
+    await waitFor(() =>
+      expect(navigate).toHaveBeenCalledWith(`/games/${gameId}?created=1&recovered=1`),
+    );
+    expect(createGame).not.toHaveBeenCalled();
+  });
+
+  it('allocates K2 only for an explicit new intent and preserves resolved K1', async () => {
+    const pending = await prepareCreateGameAttempt(
+      principal,
+      savedPayload(),
+      window.localStorage,
+      locks(),
+      {
+        createAttemptId: () => 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        createIdempotencyKey: () => 'create-logical-attempt-key-0001',
+      },
+    );
+    if (pending.state !== 'PENDING') throw new Error('expected pending attempt');
+    await resolveCreateGameAttempt(principal, pending, gameId, window.localStorage, locks());
+    window.history.replaceState({}, '', '/games/new?new=1');
+    const secondGameId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    const createGame = vi
+      .fn<AuthGateway['createGame']>()
+      .mockResolvedValue(result({ operation: { ...result().operation, gameId: secondGameId } }));
+    const navigate = vi.fn();
+    const user = userEvent.setup();
+    page(createGame, { navigate });
+
+    await screen.findByRole('option', { name: 'Селигерская' });
+    await user.click(screen.getByRole('button', { name: 'Создать игру' }));
+    await waitFor(() => expect(createGame).toHaveBeenCalledOnce());
+
+    const secondKey = createGame.mock.calls[0]?.[1]?.idempotencyKey;
+    expect(secondKey).toBeTruthy();
+    expect(secondKey).not.toBe(pending.idempotencyKey);
+    expect(loadCreateGameAttemptLedger(principal, window.localStorage).resolvedAttempts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ gameId, idempotencyKey: pending.idempotencyKey }),
+        expect.objectContaining({ gameId: secondGameId, idempotencyKey: secondKey }),
+      ]),
+    );
   });
 
   it('restores exact fields and key after unmount plus tab-close style reopen', async () => {
@@ -170,6 +299,7 @@ describe('CreateGamePage durable create recovery', () => {
     await user.clear(screen.getByLabelText('Название'));
     await user.type(screen.getByLabelText('Название'), 'Восстановим меня');
     await user.click(screen.getByRole('button', { name: 'Создать игру' }));
+    await screen.findByRole('alert');
     const firstKey = createGame.mock.calls[0]?.[1]?.idempotencyKey;
     first.unmount();
 
@@ -234,7 +364,9 @@ describe('CreateGamePage durable create recovery', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Игра не создана');
     expect(screen.getByRole('alert')).not.toHaveTextContent('результат неизвестен');
-    expect(window.localStorage.getItem(createGameAttemptStorageKey(principal))).toBeNull();
+    const ledger = loadCreateGameAttemptLedger(principal, window.localStorage);
+    expect(ledger.activeAttempt).toBeUndefined();
+    expect(ledger.resolvedAttempts).toEqual([]);
     expect(screen.getByRole('button', { name: 'Создать игру' })).toBeEnabled();
   });
 
@@ -313,6 +445,43 @@ describe('CreateGamePage durable create recovery', () => {
     page(createGame);
     expect(await screen.findByDisplayValue('Секретный черновик A')).toBeVisible();
     expect(screen.getByText(/Найдена незавершённая попытка/)).toBeVisible();
+  });
+
+  it('does not expose another principal resolved game and recovers it on return', async () => {
+    const otherPrincipal = {
+      tenantId: principal.tenantId,
+      userId: '44444444-4444-4444-8444-444444444444',
+    };
+    const pending = await prepareCreateGameAttempt(
+      principal,
+      savedPayload('Только для владельца'),
+      window.localStorage,
+      locks(),
+      {
+        createAttemptId: () => 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        createIdempotencyKey: () => 'create-logical-attempt-key-0001',
+      },
+    );
+    if (pending.state !== 'PENDING') throw new Error('expected pending attempt');
+    await resolveCreateGameAttempt(principal, pending, gameId, window.localStorage, locks());
+    const createGame = vi.fn<AuthGateway['createGame']>();
+    const otherNavigate = vi.fn();
+    const otherView = page(createGame, {
+      currentPrincipal: otherPrincipal,
+      navigate: otherNavigate,
+    });
+
+    expect(await screen.findByDisplayValue('Открытая игра')).toBeVisible();
+    expect(otherNavigate).not.toHaveBeenCalled();
+    expect(createGame).not.toHaveBeenCalled();
+    otherView.unmount();
+
+    const ownerNavigate = vi.fn();
+    page(createGame, { navigate: ownerNavigate });
+    await waitFor(() =>
+      expect(ownerNavigate).toHaveBeenCalledWith(`/games/${gameId}?created=1&recovered=1`),
+    );
+    expect(createGame).not.toHaveBeenCalled();
   });
 
   it('fails closed with actionable copy for malformed persisted state', async () => {

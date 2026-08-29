@@ -8,6 +8,7 @@ import {
   CreateGameAttemptError,
   loadCreateGameAttempt,
   prepareCreateGameAttempt,
+  resolveCreateGameAttempt,
   type CreateGameAttemptLockManager,
   type CreateGameAttemptPrincipal,
   type PendingCreateGameAttempt,
@@ -90,6 +91,12 @@ export function CreateGamePage({
     () => attemptLockManager ?? browserCreateGameAttemptLockManager(),
     [attemptLockManager],
   );
+  const explicitNewIntent = useMemo(
+    () =>
+      typeof window !== 'undefined' &&
+      new URLSearchParams(window.location.search).get('new') === '1',
+    [],
+  );
   const restored = useMemo(() => {
     if (!storage) {
       return {
@@ -103,7 +110,9 @@ export function CreateGamePage({
       return { attempt: null, error: error as Error };
     }
   }, [scopedPrincipal, storage]);
-  const restoredPayload = restored.attempt?.payload;
+  const restoredPending = restored.attempt?.state === 'PENDING' ? restored.attempt : null;
+  const restoredResolved = restored.attempt?.state === 'RESOLVED' ? restored.attempt : null;
+  const restoredPayload = restoredPending?.payload;
   const defaults = useMemo(() => {
     if (!restoredPayload) return initialTimes();
     return {
@@ -127,17 +136,22 @@ export function CreateGamePage({
   const [levelTo, setLevelTo] = useState(restoredPayload?.levelRange?.to ?? '');
   const [waitlistEnabled, setWaitlistEnabled] = useState(restoredPayload?.waitlistEnabled ?? true);
   const [activeAttempt, setActiveAttempt] = useState<PendingCreateGameAttempt | null>(
-    restored.attempt,
+    restoredPending,
   );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(
     restored.error ? commandError(restored.error) : null,
   );
   const [notice, setNotice] = useState<string | null>(
-    restored.attempt
+    restoredPending
       ? 'Найдена незавершённая попытка. Проверьте сохранённые параметры и повторите восстановление тем же ключом.'
       : null,
   );
+
+  useEffect(() => {
+    if (!restoredResolved || explicitNewIntent) return;
+    navigate(`/games/${encodeURIComponent(restoredResolved.gameId)}?created=1&recovered=1`);
+  }, [explicitNewIntent, navigate, restoredResolved]);
 
   useEffect(() => {
     let active = true;
@@ -227,8 +241,24 @@ export function CreateGamePage({
     setBusy(true);
     let attempt: PendingCreateGameAttempt | undefined;
     try {
-      attempt = await prepareCreateGameAttempt(scopedPrincipal, input, storage, lockManager);
-      setActiveAttempt(attempt);
+      const prepared = await prepareCreateGameAttempt(
+        scopedPrincipal,
+        input,
+        storage,
+        lockManager,
+        {
+          mountedAttempt: activeAttempt,
+          allowNewIntent: explicitNewIntent,
+        },
+      );
+      if (prepared.state === 'RESOLVED') {
+        setActiveAttempt(null);
+        navigate(`/games/${encodeURIComponent(prepared.gameId)}?created=1&recovered=1`);
+        setBusy(false);
+        return;
+      }
+      attempt = prepared;
+      setActiveAttempt(prepared);
       const result = await gateway.createGame(attempt.payload, {
         idempotencyKey: attempt.idempotencyKey,
       });
@@ -260,7 +290,13 @@ export function CreateGamePage({
         setBusy(false);
         return;
       }
-      await clearCreateGameAttempt(scopedPrincipal, attempt, storage, lockManager);
+      await resolveCreateGameAttempt(
+        scopedPrincipal,
+        attempt,
+        result.operation.gameId,
+        storage,
+        lockManager,
+      );
       setActiveAttempt(null);
       const recovered = result.replayed ? '&recovered=1' : '';
       navigate(`/games/${encodeURIComponent(result.operation.gameId)}?created=1${recovered}`);

@@ -449,12 +449,12 @@ describe('GamesPage discovery', () => {
     );
     expect(within(navigation).getByRole('link', { name: 'Создать игру' })).toHaveAttribute(
       'href',
-      '/games/new',
+      '/games/new?new=1',
     );
 
     const createDescription = screen.getByText('Выберите станцию, время и собери свою игру');
     expect(createDescription.closest('a')).toHaveClass('games-create-hero');
-    expect(createDescription.closest('a')).toHaveAttribute('href', '/games/new');
+    expect(createDescription.closest('a')).toHaveAttribute('href', '/games/new?new=1');
     expect(document.querySelector('.games-header a[aria-label="Создать игру"]')).toBeNull();
     expect(document.querySelector('.games-bottom-nav')).toBeNull();
   });
