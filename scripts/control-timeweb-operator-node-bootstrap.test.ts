@@ -157,6 +157,9 @@ describe('Timeweb operator Node bootstrap controller', () => {
       'os.link(pending, path, follow_symlinks=False)',
       'policyRcPendingPath',
       '--no-download',
+      '--no-remove',
+      '--no-upgrade',
+      'transaction_phase',
       'package_lifecycle_script',
       'package_service_payload',
       'source_not_clean',
@@ -249,5 +252,65 @@ describe('Timeweb operator Node bootstrap controller', () => {
 
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout.trim()).toBe('RECOVERED');
+  });
+
+  it('accepts only an exact partial-install recovery simulation', () => {
+    const directory = temporaryDirectory();
+    const contractPath = join(directory, 'contract.json');
+    const simulationPath = join(directory, 'simulation.txt');
+    writeFileSync(contractPath, contractSource);
+    const absent = contract.apt.packages.slice(0, 2);
+    const partial = contract.apt.packages.slice(2, 3);
+    writeFileSync(
+      simulationPath,
+      `${absent.map(({ name, version }) => `Inst ${name} (${version} Ubuntu:26.04/resolute [amd64])`).join('\n')}\nConf ${partial[0]!.name} (${partial[0]!.version} Ubuntu:26.04/resolute [amd64])\n0 upgraded, 2 newly installed, 0 to remove and 16 not upgraded.\n`,
+    );
+    const program = [
+      'import importlib.util, pathlib, sys',
+      'spec = importlib.util.spec_from_file_location("controller", sys.argv[1])',
+      'module = importlib.util.module_from_spec(spec)',
+      'spec.loader.exec_module(module)',
+      'contract = module.validate_contract(module.read_json(pathlib.Path(sys.argv[2]), "contract"))',
+      'contents = pathlib.Path(sys.argv[3]).read_text()',
+      'module.parse_install_subset(contents, contract, set(sys.argv[4].split(",")), set(sys.argv[5].split(",")))',
+      'print("VALID")',
+    ].join('\n');
+    const accepted = spawnSync(
+      'python3',
+      [
+        '-I',
+        '-S',
+        '-B',
+        '-c',
+        program,
+        resolve(controller),
+        contractPath,
+        simulationPath,
+        absent.map(({ name }) => name).join(','),
+        partial.map(({ name }) => name).join(','),
+      ],
+      { encoding: 'utf8', env: { PATH: process.env.PATH ?? '/usr/bin:/bin' } },
+    );
+    expect(accepted.status, accepted.stderr).toBe(0);
+
+    writeFileSync(simulationPath, `${readFileSync(simulationPath, 'utf8')}Remv openssh-server\n`);
+    const rejected = spawnSync(
+      'python3',
+      [
+        '-I',
+        '-S',
+        '-B',
+        '-c',
+        program,
+        resolve(controller),
+        contractPath,
+        simulationPath,
+        absent.map(({ name }) => name).join(','),
+        partial.map(({ name }) => name).join(','),
+      ],
+      { encoding: 'utf8', env: { PATH: process.env.PATH ?? '/usr/bin:/bin' } },
+    );
+    expect(rejected.status).not.toBe(0);
+    expect(rejected.stderr).toContain('recovery_apply_simulation');
   });
 });

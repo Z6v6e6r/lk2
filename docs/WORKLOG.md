@@ -1246,6 +1246,8 @@
   with a temporary lifecycle guard and before/after evidence.
 - Published the lifecycle guard through a fixed pending path and no-replace hard link, with
   directory `fsync` and deterministic recovery for both interrupted publication states.
+- Added fresh exact partial-closure simulation before resumed installs, prohibited APT upgrades and
+  removals during install, validated recovery phases, and made purge mutation a fixed dpkg subset.
 - Isolated Python startup from checkout/site shadowing, required a clean frozen Git tree, populated a
   root-only authenticated apt index snapshot from the pinned Ubuntu source/keyring, and atomically
   published that snapshot, the verified package payloads and their accepted plan as one bundle.

@@ -254,7 +254,7 @@ sudo -- /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin HOME=/root LC_ALL=C \
 ```
 
 `apply` rechecks the plan, trust inputs, apt-list checksum, simulation and every `.deb`, then installs
-only those local payloads with `--no-download`. A temporary exact `policy-rc.d`, disabled apt config
+only those local payloads with `--no-download`, `--no-remove` and `--no-upgrade`. A temporary exact `policy-rc.d`, disabled apt config
 snippets, noninteractive/list-only `needrestart`, and before/after unit/listener/reboot snapshots
 fail closed around service lifecycle changes. The controller publishes that guard without replacing
 an existing file and recovers either crash point of the pending-to-final hard-link handoff. The
@@ -266,7 +266,9 @@ file SHA-256, version, executable path, platform and architecture.
 If `transaction.json` remains after an interrupted apply or rollback, do not delete it or the
 temporary lifecycle guard. Run only deterministic recovery from the same frozen source and plan.
 It completes an interrupted exact install/removal or receipt cleanup, re-simulates partial rollback
-and rejects any newly expanded removal set:
+and rejects any newly expanded removal set. Resumed apply also re-simulates the observed exact
+partial closure and rejects every extra install, configure, upgrade, downgrade or removal before
+APT is allowed to continue:
 
 ```sh
 sudo -- /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin HOME=/root LC_ALL=C \
@@ -281,7 +283,8 @@ gain such a mode; do not delete the marker or run manual apt commands.
 
 Keep Node installed through the application rollback window. Removing it is a separate live
 host-package authority. The controller first proves the original receipt and simulates an exact
-purge; any reverse dependency or additional removal is a STOP. It never runs `autoremove`:
+purge; any reverse dependency or additional removal is a STOP. The actual removal uses fixed
+`dpkg --purge` package names so a resolver cannot expand it. It never runs `autoremove`:
 
 ```sh
 sudo -- /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin HOME=/root LC_ALL=C \

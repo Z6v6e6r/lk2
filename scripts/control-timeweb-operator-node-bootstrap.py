@@ -43,6 +43,8 @@ SHA40 = re.compile(r"^[0-9a-f]{40}$")
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 PACKAGE_NAME = re.compile(r"^[a-z0-9][a-z0-9+.-]+$")
 SIMULATED_INSTALL = re.compile(r"^Inst\s+(\S+?)(?::\S+)?(?:\s+\[[^]]+\])?\s+\((\S+)")
+SIMULATED_UPGRADE = re.compile(r"^Inst\s+\S+(?::\S+)?\s+\[[^]]+\]\s+\(")
+SIMULATED_CONFIGURE = re.compile(r"^Conf\s+(\S+?)(?::\S+)?\s+\((\S+)")
 SIMULATED_REMOVE = re.compile(r"^(?:Remv|Purg)\s+(\S+?)(?::\S+)?(?:\s|$)")
 POLICY_BYTES = b"#!/bin/sh\nexit 101\n"
 SAFE_LIVE_ENVIRONMENT = {
@@ -412,6 +414,47 @@ def parse_removal_subset(
         stop("recovery_rollback_simulation")
 
 
+def parse_install_subset(
+    contents: str,
+    contract: dict[str, Any],
+    absent: set[str],
+    partial: set[str],
+) -> None:
+    expected = {item["name"]: item for item in contract["apt"]["packages"]}
+    installed: dict[str, str] = {}
+    configured: dict[str, str] = {}
+    removed: set[str] = set()
+    for line in contents.splitlines():
+        install = SIMULATED_INSTALL.match(line)
+        if install:
+            name, version = install.groups()
+            if name in installed or name in configured or SIMULATED_UPGRADE.match(line):
+                stop("recovery_apply_simulation")
+            installed[name] = version
+        configure = SIMULATED_CONFIGURE.match(line)
+        if configure:
+            name, version = configure.groups()
+            if name in installed or name in configured:
+                stop("recovery_apply_simulation")
+            configured[name] = version
+        removal = SIMULATED_REMOVE.match(line)
+        if removal:
+            removed.add(removal.group(1))
+    actions = set(installed) | set(configured)
+    required = absent | partial
+    if (
+        removed
+        or not absent.issubset(installed)
+        or actions != required
+        or any(expected.get(name, {}).get("version") != version for name, version in installed.items())
+        or any(expected.get(name, {}).get("version") != version for name, version in configured.items())
+        or not re.search(
+            rf"(?:^|\n)0 upgraded, {len(absent)} newly installed, 0 to remove", contents
+        )
+    ):
+        stop("recovery_apply_simulation")
+
+
 def parse_os_release() -> dict[str, str]:
     result: dict[str, str] = {}
     try:
@@ -677,6 +720,26 @@ def require_installed_closure(contract: dict[str, Any]) -> dict[str, dict[str, s
         }:
             stop("installed_closure")
     return state  # type: ignore[return-value]
+
+
+def recoverable_apply_state(contract: dict[str, Any]) -> tuple[set[str], set[str]]:
+    state = installed_state(contract)
+    expected = {item["name"]: item for item in contract["apt"]["packages"]}
+    absent: set[str] = set()
+    partial: set[str] = set()
+    for name, value in state.items():
+        if value is None:
+            absent.add(name)
+            continue
+        if (
+            value["version"] != expected[name]["version"]
+            or value["architecture"] != expected[name]["architecture"]
+            or not value["status"].startswith("i")
+        ):
+            stop("recovery_apply_state")
+        if value["status"] != "ii ":
+            partial.add(name)
+    return absent, partial
 
 
 def dpkg_audit(contract: dict[str, Any]) -> str:
@@ -1096,8 +1159,35 @@ def node_observation(contract: dict[str, Any]) -> dict[str, Any]:
 def apply_command(contract: dict[str, Any], paths: list[Path]) -> None:
     run([
         contract["apt"]["binary"], *apt_options(contract, Path(contract["state"]["packageDirectory"])),
-        "--no-download", "--yes", "install", "--no-install-recommends", *(str(path) for path in paths),
+        "--no-download", "--no-remove", "--no-upgrade", "--yes", "install",
+        "--no-install-recommends", *(str(path) for path in paths),
     ], extra_environment={"DEBIAN_FRONTEND": "noninteractive", "NEEDRESTART_MODE": "l", "NEEDRESTART_SUSPEND": "1"})
+
+
+def recovery_apply_simulation(
+    contract: dict[str, Any], paths: list[Path], *, require_fully_absent: bool = False
+) -> str:
+    absent, partial = recoverable_apply_state(contract)
+    expected = {item["name"] for item in contract["apt"]["packages"]}
+    if require_fully_absent and (absent != expected or partial):
+        stop("apply_state_drift")
+    if not absent and not partial:
+        return ""
+    output = run([
+        contract["apt"]["binary"],
+        *apt_options(contract, Path(contract["state"]["packageDirectory"])),
+        "--simulate", "--no-remove", "--no-upgrade", "install", "--no-install-recommends",
+        *(str(path) for path in paths),
+    ])
+    parse_install_subset(output, contract, absent, partial)
+    return output
+
+
+def purge_command(contract: dict[str, Any], packages: set[str]) -> None:
+    if packages:
+        run([
+            contract["apt"]["dpkgBinary"], "--purge", *sorted(packages)
+        ], extra_environment={"DEBIAN_FRONTEND": "noninteractive", "NEEDRESTART_MODE": "l", "NEEDRESTART_SUSPEND": "1"})
 
 
 def finalize_apply(contract: dict[str, Any], plan: dict[str, Any], transaction: dict[str, Any]) -> dict[str, Any]:
@@ -1155,6 +1245,8 @@ def apply_mode(contract: dict[str, Any], source_sha: str, source_tree: str) -> d
     }
     transaction_write(contract, transaction)
     create_policy_guard(contract)
+    execution_simulation = recovery_apply_simulation(contract, paths, require_fully_absent=True)
+    transaction["executionSimulationSha256"] = sha256_bytes(execution_simulation.encode())
     transaction["phase"] = "installing"
     transaction_write(contract, transaction)
     apply_command(contract, paths)
@@ -1209,6 +1301,10 @@ def recover_mode(contract: dict[str, Any], source_sha: str, source_tree: str) ->
         stop("transaction_source")
     recover_policy_guard(contract)
     if transaction.get("operation") == "apply":
+        if transaction.get("phase") not in {
+            "prepared", "installing", "installed", "cleanup_required", "postcondition_failed"
+        }:
+            stop("transaction_phase")
         if transaction.get("phase") == "postcondition_failed":
             stop("failed_apply_rollback_authority_required")
         plan = load_plan(contract, source_sha, source_tree)
@@ -1217,7 +1313,13 @@ def recover_mode(contract: dict[str, Any], source_sha: str, source_tree: str) ->
         if transaction.get("phase") == "cleanup_required":
             return finalize_apply(contract, plan, transaction)
         paths = verify_artifacts(contract, plan)
-        apply_command(contract, paths)
+        execution_simulation = recovery_apply_simulation(
+            contract, paths, require_fully_absent=transaction["phase"] == "prepared"
+        )
+        transaction["executionSimulationSha256"] = sha256_bytes(execution_simulation.encode())
+        transaction_write(contract, transaction)
+        if execution_simulation:
+            apply_command(contract, paths)
         transaction["phase"] = "installed"
         transaction_write(contract, transaction)
         try:
@@ -1232,6 +1334,8 @@ def recover_mode(contract: dict[str, Any], source_sha: str, source_tree: str) ->
             transaction_write(contract, transaction)
             stop(str(error))
     if transaction.get("operation") == "rollback":
+        if transaction.get("phase") not in {"prepared", "removing", "removed"}:
+            stop("transaction_phase")
         receipt = read_json(Path(contract["state"]["receiptPath"]), "receipt_read", secure=True)
         if not isinstance(receipt, dict) or receipt.get("schema") != RECEIPT_SCHEMA or receipt.get("planId") != transaction.get("planId"):
             stop("transaction_receipt")
@@ -1243,9 +1347,7 @@ def recover_mode(contract: dict[str, Any], source_sha: str, source_tree: str) ->
         parse_removal_subset(simulated, contract, present)
         transaction["rollbackSimulationSha256"] = sha256_bytes(simulated.encode())
         transaction_write(contract, transaction)
-        run([
-            contract["apt"]["binary"], *apt_options(contract), "--yes", "purge", *packages
-        ], extra_environment={"DEBIAN_FRONTEND": "noninteractive", "NEEDRESTART_MODE": "l", "NEEDRESTART_SUSPEND": "1"})
+        purge_command(contract, present)
         transaction["phase"] = "removed"
         transaction_write(contract, transaction)
         return finalize_rollback(contract, receipt, transaction)
@@ -1295,9 +1397,7 @@ def rollback_mode(contract: dict[str, Any], source_sha: str, source_tree: str) -
     create_policy_guard(contract)
     transaction["phase"] = "removing"
     transaction_write(contract, transaction)
-    run([
-        contract["apt"]["binary"], *apt_options(contract), "--yes", "purge", *packages
-    ], extra_environment={"DEBIAN_FRONTEND": "noninteractive", "NEEDRESTART_MODE": "l", "NEEDRESTART_SUSPEND": "1"})
+    purge_command(contract, set(packages))
     transaction["phase"] = "removed"
     transaction_write(contract, transaction)
     return finalize_rollback(contract, receipt, transaction)
