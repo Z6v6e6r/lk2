@@ -17,6 +17,17 @@ export interface TimewebTargetContract {
     ttl: number;
   };
   platform: { os: string; architecture: string; hostArchitecture: string };
+  operatorRuntime: {
+    node: {
+      path: string;
+      major: number;
+      packageManager: string;
+      package: string;
+      architecture: string;
+      packageSource: string;
+      receiptPath: string;
+    };
+  };
   provider: { name: string; serverName: string; serverId: number; projectId: number };
   management: {
     requiredInterface: string;

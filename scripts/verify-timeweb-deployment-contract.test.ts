@@ -180,6 +180,29 @@ describe('Timeweb deployment contract', () => {
     expect(() => validateTargetContract(input)).toThrow('target_management_interface');
   });
 
+  it('rejects an unapproved operator Node launcher or package source', () => {
+    const input: TimewebTargetContract = structuredClone(target);
+    input.operatorRuntime.node.path = '/usr/local/bin/node';
+    expect(() => validateTargetContract(input)).toThrow('target_operator_node');
+
+    input.operatorRuntime.node.path = '/usr/bin/node';
+    input.operatorRuntime.node.packageSource = 'third-party-repository';
+    expect(() => validateTargetContract(input)).toThrow('target_operator_node');
+  });
+
+  it('documents the bounded operator Node bootstrap contract', () => {
+    expect(runbook).toContain('## Operator Node bootstrap');
+    for (const value of [
+      target.operatorRuntime.node.path,
+      `major ${target.operatorRuntime.node.major}`,
+      target.operatorRuntime.node.package,
+      target.operatorRuntime.node.packageSource,
+      target.operatorRuntime.node.receiptPath,
+    ]) {
+      expect(runbook).toContain(value);
+    }
+  });
+
   it('6. rejects a wrong network name', () => {
     const input: TimewebTargetContract = structuredClone(target);
     input.network.name = 'default';

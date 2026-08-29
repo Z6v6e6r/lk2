@@ -210,10 +210,49 @@ protected source, unsafe Git metadata, missing `.git`, git-free archive or calle
 is a STOP. Git-free bundles remain unsupported until a separately authenticated same-run controller
 artifact binds their exact bytes.
 
-Never launch these privileged tools through project `npm`, `.npmrc`, a PATH lookup or a preserved
-caller environment. The only supported launcher is fixed `/usr/bin/node` under `env -i`; if that
-binary is unavailable or unsuitable, activation remains STOP until the source contract is revised
-and reviewed.
+Never launch these privileged tools through project `npm`, `.npmrc`, a PATH lookup, a container
+wrapper or a preserved caller environment. The only supported launcher is fixed `/usr/bin/node`
+under `env -i`. `deploy/timeweb/target.json` permits the bounded host bootstrap below when that
+binary is absent; once this contract is part of the frozen candidate, the bootstrap does not require
+another source revision. It remains a separately authorized host-package mutation and never
+authorizes secret provisioning, image pull, service restart or ingress activation.
+
+## Operator Node bootstrap
+
+The only supported bootstrap installs the Ubuntu `nodejs` package for `amd64` from the
+`ubuntu-signed-archive` already configured on the host. The selected package must provide Node
+major 22 at `/usr/bin/node`. Third-party repositories, `curl | sh`, downloaded archives, global npm
+installs and containerized launchers are forbidden.
+
+Before installation, record the host identity, Ubuntu release, apt source files and keyring
+metadata, `dpkg --audit`, the absence or current package owner of `/usr/bin/node`, free disk/inodes
+and `apt-cache policy nodejs`. Select the exact candidate version, then run an exact-version
+`apt-get --simulate install --no-install-recommends`. Stop on any package removal, downgrade,
+service restart, reboot requirement, unexpected dependency or repository drift.
+
+After separate authority for that exact version and dependency closure, install only what the
+accepted simulation showed:
+
+```sh
+sudo -- /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin HOME=/root \
+  /usr/bin/apt-get install --yes --no-install-recommends \
+  'nodejs=<exact-version-from-the-accepted-simulation>'
+```
+
+Read back the installed package/version/architecture through `dpkg-query`; require a root-owned,
+non-group/other-writable `/usr/bin/node`; record its SHA-256; and run it under the exact clean
+launcher environment to require `process.execPath === '/usr/bin/node'`,
+`process.platform === 'linux'`, `process.arch === 'x64'` and major 22. The metadata-only root-owned
+`0600` receipt at
+`/opt/phub/timeweb-beta/operator/node-bootstrap-receipt.txt` records the selected apt source,
+exact package/dependency closure, accepted simulation checksum, before/after dpkg state, Node
+stat/hash/version and whether apt reported a restart or reboot requirement. It contains no token,
+credential, environment value or package-manager cache bytes.
+
+Keep Node installed through the application rollback window because the supported controller and
+rollback path require it. Later removal is a separate host-package rollback: remove only the exact
+recorded bootstrap closure, never broad `autoremove`, then prove `/usr/bin/node` absent and recheck
+services/listeners. A failed bootstrap never grants permission to use another launcher.
 
 The metadata-only dry-run performs the same source and current-release validation without creating
 `/etc/phub` or writing a target:

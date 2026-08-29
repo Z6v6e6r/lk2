@@ -92,6 +92,7 @@ export function validateTargetContract(target) {
       'ipv4',
       'dns',
       'platform',
+      'operatorRuntime',
       'provider',
       'management',
       'network',
@@ -120,6 +121,24 @@ export function validateTargetContract(target) {
     target.platform.hostArchitecture !== 'x86_64'
   )
     reject('target_platform');
+
+  exactKeys(target.operatorRuntime, ['node'], 'target_operator_runtime');
+  exactKeys(
+    target.operatorRuntime.node,
+    ['path', 'major', 'packageManager', 'package', 'architecture', 'packageSource', 'receiptPath'],
+    'target_operator_node',
+  );
+  if (
+    target.operatorRuntime.node.path !== '/usr/bin/node' ||
+    target.operatorRuntime.node.major !== 22 ||
+    target.operatorRuntime.node.packageManager !== 'apt' ||
+    target.operatorRuntime.node.package !== 'nodejs' ||
+    target.operatorRuntime.node.architecture !== 'amd64' ||
+    target.operatorRuntime.node.packageSource !== 'ubuntu-signed-archive' ||
+    target.operatorRuntime.node.receiptPath !==
+      '/opt/phub/timeweb-beta/operator/node-bootstrap-receipt.txt'
+  )
+    reject('target_operator_node');
 
   exactKeys(target.provider, ['name', 'serverName', 'serverId', 'projectId'], 'target_provider');
   if (

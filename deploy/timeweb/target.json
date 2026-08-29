@@ -13,6 +13,17 @@
     "architecture": "amd64",
     "hostArchitecture": "x86_64"
   },
+  "operatorRuntime": {
+    "node": {
+      "path": "/usr/bin/node",
+      "major": 22,
+      "packageManager": "apt",
+      "package": "nodejs",
+      "architecture": "amd64",
+      "packageSource": "ubuntu-signed-archive",
+      "receiptPath": "/opt/phub/timeweb-beta/operator/node-bootstrap-receipt.txt"
+    }
+  },
   "provider": {
     "name": "Timeweb",
     "serverName": "Cute Hoopoe",

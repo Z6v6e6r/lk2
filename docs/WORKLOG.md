@@ -1233,3 +1233,12 @@
   operations.
 - Replaced universal `npm run check` and generic review with changed-file/risk triggers;
   the full gate remains mandatory for critical and shared surfaces.
+
+## 2026-08-29 — Timeweb operator Node bootstrap contract
+
+- Added a machine-readable operator runtime contract for fixed `/usr/bin/node`, Node major 22 and
+  the Ubuntu `nodejs` package from the signed system archive.
+- Replaced the repeated source-revision stop for a missing host Node binary with one bounded,
+  separately authorized apt bootstrap using exact-version simulation and readback.
+- Kept container wrappers and third-party installers forbidden, retained every secret/deploy/ingress
+  gate and required a metadata-only root-owned bootstrap receipt plus an exact package rollback.
