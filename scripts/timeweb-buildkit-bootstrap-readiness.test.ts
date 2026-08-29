@@ -22,6 +22,7 @@ interface InspectResult {
 
 interface Scenario {
   readonly containerIds?: readonly string[];
+  readonly containerIdsByAttempt?: readonly (readonly string[])[];
   readonly containerImage?: string;
   readonly containerRunning?: boolean;
   readonly containerState?: string;
@@ -59,6 +60,13 @@ if [[ "\${1:-}" = buildx && "\${2:-}" = inspect ]]; then
   exit "$(<"$state_dir/inspect-$selected.status")"
 fi
 if [[ "\${1:-}" = ps ]]; then
+  if [[ -f "$state_dir/inspect-count" ]]; then
+    selected="$(<"$state_dir/inspect-count")"
+    if [[ -f "$state_dir/container-observations-$selected.txt" ]]; then
+      cat "$state_dir/container-observations-$selected.txt"
+      exit 0
+    fi
+  fi
   cat "$state_dir/container-observations.txt"
   exit 0
 fi
@@ -144,6 +152,16 @@ async function prepareScenario(scenario: Scenario): Promise<Execution> {
     `${(scenario.containerIds ?? ['abc123def456'])
       .map((id) => `${id}|buildx_buildkit_phub-timeweb-publish-123-10`)
       .join('\n')}${(scenario.containerIds ?? ['abc123def456']).length === 0 ? '' : '\n'}`,
+  );
+  await Promise.all(
+    (scenario.containerIdsByAttempt ?? []).map((containerIds, index) =>
+      writeFile(
+        join(stateDirectory, `container-observations-${index + 1}.txt`),
+        `${containerIds
+          .map((id) => `${id}|buildx_buildkit_phub-timeweb-publish-123-10`)
+          .join('\n')}${containerIds.length === 0 ? '' : '\n'}`,
+      ),
+    ),
   );
   await writeFile(
     join(stateDirectory, 'container-observation.txt'),
@@ -293,24 +311,57 @@ describe('Timeweb publication BuildKit readiness helper', () => {
     expect(await readSummary(execution)).toContain('reason=buildkit_readiness_exhausted\n');
   }, 30_000);
 
-  it.each([
-    ['missing', []],
-    ['duplicate', ['abc123def456', 'def456abc123']],
-  ])(
-    'fails immediately for a %s matching container set',
-    async (_name, containerIds) => {
-      const execution = await prepareScenario({
-        containerIds,
-        inspections: [{ status: 255 }],
-      });
+  it('retries a cold bootstrap until the exact container and version become observable', async () => {
+    const execution = await prepareScenario({
+      containerIdsByAttempt: [[], [], ['abc123def456']],
+      inspections: [{ status: 124 }, { status: 124 }, { status: 0, version: expectedVersion }],
+    });
 
-      expect(execution.status).toBe(1);
-      expect(await commandCount(execution, 'buildx inspect ')).toBe(1);
-      expect(await sleepCount(execution)).toBe(0);
-      expect(await readSummary(execution)).toContain('reason=matching_container_count_mismatch\n');
-    },
-    30_000,
-  );
+    expect(execution.status, execution.stderr).toBe(0);
+    expect(await commandCount(execution, 'buildx inspect ')).toBe(3);
+    expect(await sleepCount(execution)).toBe(2);
+    expect(await readSummary(execution)).toContain('verified=true\nreason=verified\n');
+  }, 30_000);
+
+  it('exhausts the bounded retries when a cold bootstrap container never appears', async () => {
+    const execution = await prepareScenario({
+      containerIds: [],
+      inspections: Array.from({ length: 5 }, () => ({ status: 124 })),
+    });
+
+    expect(execution.status).toBe(1);
+    expect(await commandCount(execution, 'buildx inspect ')).toBe(5);
+    expect(await sleepCount(execution)).toBe(4);
+    const summary = await readSummary(execution);
+    expect(summary).toContain('attempt_count=5\n');
+    expect(summary).toContain('matching_container_count=0\n');
+    expect(summary).toContain('container_state=unknown\n');
+    expect(summary).toContain('reason=buildkit_readiness_exhausted\n');
+  }, 30_000);
+
+  it('fails immediately when inspect succeeds but its BuildKit container is absent', async () => {
+    const execution = await prepareScenario({
+      containerIds: [],
+      inspections: [{ status: 0, version: expectedVersion }],
+    });
+
+    expect(execution.status).toBe(1);
+    expect(await commandCount(execution, 'buildx inspect ')).toBe(1);
+    expect(await sleepCount(execution)).toBe(0);
+    expect(await readSummary(execution)).toContain('reason=matching_container_count_mismatch\n');
+  }, 30_000);
+
+  it('fails immediately for duplicate matching BuildKit containers', async () => {
+    const execution = await prepareScenario({
+      containerIds: ['abc123def456', 'def456abc123'],
+      inspections: [{ status: 255 }],
+    });
+
+    expect(execution.status).toBe(1);
+    expect(await commandCount(execution, 'buildx inspect ')).toBe(1);
+    expect(await sleepCount(execution)).toBe(0);
+    expect(await readSummary(execution)).toContain('reason=matching_container_count_mismatch\n');
+  }, 30_000);
 
   it('fails immediately when the running container uses any other image', async () => {
     const execution = await prepareScenario({

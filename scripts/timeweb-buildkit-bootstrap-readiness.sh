@@ -192,10 +192,32 @@ for ((attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1)); do
   fi
   container_count="$(printf '%s\n' "$container_ids" | awk 'NF {count += 1} END {print count + 0}')"
   last_container_count="$container_count"
-  if [[ "$container_count" -ne 1 ]]; then
+  if [[ "$container_count" -gt 1 ]]; then
     hard_fail \
       matching_container_count_mismatch "$attempt" "$inspect_status" "$container_count" unknown \
       "$attempt_stderr"
+  fi
+  if [[ "$container_count" -eq 0 ]]; then
+    last_container_state=unknown
+    if [[ "$inspect_status" -eq 0 || "$version_count" -ne 0 ]]; then
+      hard_fail \
+        matching_container_count_mismatch "$attempt" "$inspect_status" "$container_count" unknown \
+        "$attempt_stderr"
+    fi
+    write_summary \
+      bootstrap_container_pending false "$attempt" "$inspect_status" "$container_count" unknown \
+      "$attempt_stderr"
+    if [[ "$attempt" -lt "$MAX_ATTEMPTS" ]]; then
+      remaining_seconds=$((readiness_deadline_seconds - SECONDS))
+      if [[ "$remaining_seconds" -le "$RETRY_DELAY_SECONDS" ]]; then
+        hard_fail \
+          readiness_budget_exhausted "$attempt" "$inspect_status" "$container_count" unknown \
+          "$attempt_stderr"
+      fi
+      sleep "$RETRY_DELAY_SECONDS"
+      continue
+    fi
+    break
   fi
   container_id="$(printf '%s\n' "$container_ids" | awk 'NF {print; exit}')"
 
