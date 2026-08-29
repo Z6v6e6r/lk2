@@ -672,4 +672,71 @@ describe('Timeweb operator Node bootstrap controller', () => {
       guardCalls: 2,
     });
   });
+
+  it('rejects a stale normal rollback receipt before any rollback mutation', () => {
+    const directory = temporaryDirectory();
+    const contractPath = join(directory, 'contract.json');
+    const transactionPath = join(directory, 'transaction.json');
+    const receiptPath = join(directory, 'receipt.json');
+    const rollbackReceiptPath = join(directory, 'rollback-receipt.json');
+    const policyPath = join(directory, 'policy-rc.d');
+    const policyPendingPath = join(directory, 'policy-rc.d.pending');
+    writeFileSync(contractPath, contractSource);
+    const program = [
+      'import importlib.util, pathlib, sys',
+      'spec = importlib.util.spec_from_file_location("controller", sys.argv[1])',
+      'module = importlib.util.module_from_spec(spec)',
+      'spec.loader.exec_module(module)',
+      'contract = module.validate_contract(module.read_json(pathlib.Path(sys.argv[2]), "contract"))',
+      'transaction_path = pathlib.Path(sys.argv[3])',
+      'receipt_path = pathlib.Path(sys.argv[4])',
+      'rollback_receipt_path = pathlib.Path(sys.argv[5])',
+      'policy_path = pathlib.Path(sys.argv[6])',
+      'policy_pending_path = pathlib.Path(sys.argv[7])',
+      'contract["state"]["transactionPath"] = str(transaction_path)',
+      'contract["state"]["receiptPath"] = str(receipt_path)',
+      'contract["state"]["rollbackReceiptPath"] = str(rollback_receipt_path)',
+      'contract["lifecycle"]["policyRcPath"] = str(policy_path)',
+      'contract["lifecycle"]["policyRcPendingPath"] = str(policy_pending_path)',
+      'events = []',
+      'module.transaction_write = lambda *_args: events.append("transaction")',
+      'module.create_policy_guard = lambda *_args: events.append("guard")',
+      'module.purge_command = lambda *_args: events.append("purge")',
+      'def assert_rejected():',
+      '    try:',
+      '        module.rollback_mode(contract, "a" * 40, "b" * 40)',
+      '    except module.Stop as error:',
+      '        assert str(error) == "rollback_receipt_present"',
+      '    else:',
+      '        raise AssertionError("stale rollback receipt accepted")',
+      '    assert events == []',
+      '    assert not transaction_path.exists()',
+      '    assert not policy_path.exists() and not policy_pending_path.exists()',
+      'rollback_receipt_path.write_text("{}\\n")',
+      'assert_rejected()',
+      'rollback_receipt_path.unlink()',
+      'rollback_receipt_path.symlink_to(rollback_receipt_path.parent / "missing-receipt")',
+      'assert_rejected()',
+    ].join('\n');
+    const result = spawnSync(
+      'python3',
+      [
+        '-I',
+        '-S',
+        '-B',
+        '-c',
+        program,
+        resolve(controller),
+        contractPath,
+        transactionPath,
+        receiptPath,
+        rollbackReceiptPath,
+        policyPath,
+        policyPendingPath,
+      ],
+      { encoding: 'utf8', env: { PATH: process.env.PATH ?? '/usr/bin:/bin' } },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+  });
 });

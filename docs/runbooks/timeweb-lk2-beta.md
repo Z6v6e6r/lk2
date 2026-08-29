@@ -243,7 +243,9 @@ unexpected index target, and uses that same snapshot for exact simulation, URI s
 download. Lifecycle-bearing maintainer scripts are rejected. The lists, packages and atomic `0600`
 plan are published as one directory rename; the plan binds the plan ID, source/list/simulation
 checksums and every payload and control-metadata SHA-256. Stop for separate authority naming that
-plan ID before `apply`.
+plan ID before `apply`. A prior rollback receipt, including a dangling symlink at its fixed path,
+blocks both planning and the apply recheck; historical evidence must never be overwritten or
+discovered only after package mutation.
 
 ```sh
 sudo -- /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin HOME=/root LC_ALL=C \
@@ -304,7 +306,8 @@ host-package authority. The controller first proves the original receipt and sim
 purge; any reverse dependency or additional removal is a STOP. The actual removal uses fixed
 `dpkg --purge` package names so a resolver cannot expand it. Its receipt records the immutable
 authorized full-closure simulation separately from the latest remaining-subset retry. It never runs
-`autoremove`:
+`autoremove`. A fresh rollback also requires its fixed rollback-receipt path to be absent before the
+transaction, lifecycle guard, or purge can begin; an existing file or symlink is a fail-closed STOP:
 
 ```sh
 sudo -- /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin HOME=/root LC_ALL=C \

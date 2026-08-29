@@ -916,8 +916,15 @@ def create_state_root(contract: dict[str, Any]) -> Path:
     return root
 
 
+def require_rollback_receipt_absent(contract: dict[str, Any]) -> None:
+    path = Path(contract["state"]["rollbackReceiptPath"])
+    if path.exists() or path.is_symlink():
+        stop("rollback_receipt_present")
+
+
 def plan_mode(contract: dict[str, Any], source_sha: str, source_tree: str) -> dict[str, Any]:
     state = contract["state"]
+    require_rollback_receipt_absent(contract)
     root = create_state_root(contract)
     if any(Path(state[key]).exists() for key in ("bundleDirectory", "transactionPath", "receiptPath")):
         stop("existing_bootstrap_state")
@@ -1022,6 +1029,7 @@ def load_plan(contract: dict[str, Any], source_sha: str, source_tree: str) -> di
 
 
 def revalidate_plan(contract: dict[str, Any], plan: dict[str, Any], *, require_absent: bool) -> None:
+    require_rollback_receipt_absent(contract)
     if validate_apt_trust(contract) != plan.get("aptTrust"):
         stop("plan_apt_trust_drift")
     lists_snapshot = apt_lists_snapshot(Path(contract["state"]["listsDirectory"]))
@@ -1312,7 +1320,8 @@ def apply_mode(contract: dict[str, Any], source_sha: str, source_tree: str) -> d
     transaction_path = Path(contract["state"]["transactionPath"])
     if transaction_path.exists():
         stop("transaction_present_use_recover")
-    if Path(contract["state"]["receiptPath"]).exists():
+    receipt_path = Path(contract["state"]["receiptPath"])
+    if receipt_path.exists() or receipt_path.is_symlink():
         stop("receipt_present")
     require_policy_paths_absent(contract)
     plan = load_plan(contract, source_sha, source_tree)
@@ -1541,9 +1550,13 @@ def failed_apply_rollback_mode(
         or transaction.get("sourceTree") != source_tree
     ):
         stop("failed_apply_transaction_identity")
+    receipt_path = Path(contract["state"]["receiptPath"])
+    rollback_receipt_path = Path(contract["state"]["rollbackReceiptPath"])
     if (
-        Path(contract["state"]["receiptPath"]).exists()
-        or Path(contract["state"]["rollbackReceiptPath"]).exists()
+        receipt_path.exists()
+        or receipt_path.is_symlink()
+        or rollback_receipt_path.exists()
+        or rollback_receipt_path.is_symlink()
     ):
         stop("failed_apply_receipt_present")
     recover_policy_guard(contract)
@@ -1667,6 +1680,7 @@ def rollback_mode(
         return failed_apply_rollback_mode(contract, source_sha, source_tree)
     if Path(contract["state"]["transactionPath"]).exists():
         stop("transaction_present")
+    require_rollback_receipt_absent(contract)
     require_policy_paths_absent(contract)
     receipt = read_json(Path(contract["state"]["receiptPath"]), "receipt_read", secure=True)
     if not isinstance(receipt, dict) or receipt.get("schema") != RECEIPT_SCHEMA or receipt.get("status") != "INSTALLED":
