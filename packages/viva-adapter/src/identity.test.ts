@@ -297,6 +297,66 @@ describe('VivaIdentityProvider', () => {
   });
 
   it.each([
+    ['email', 'person@example.test'],
+    ['phone', '+7 (999) 000-00-01'],
+  ])(
+    'does not persist a %s-shaped preferred username as a public display name',
+    async (_, value) => {
+      const { accessToken, jwk } = await signedAccessToken({
+        name: null,
+        given_name: null,
+        family_name: null,
+        preferred_username: value,
+      });
+      const provider = new VivaIdentityProvider({
+        ...options(),
+        mode: 'sandbox',
+        allowSubjectOAuthProvisioning: true,
+        fetchImplementation: tokenAndJwksFetch(accessToken, jwk),
+      });
+
+      const result = await provider.exchangeAuthorizationCode({
+        provider: 'yandex',
+        code: 'authorization-code',
+        codeVerifier: 'pkce-verifier',
+        providerTenantKey: 'iSkq6G',
+        redirectUri: 'https://app.example.test/callback',
+        correlationId: 'oauth-private-username-correlation-123',
+        identityMode: 'STANDARD',
+      });
+
+      expect(result.identity).toMatchObject({ displayName: 'Игрок ПадлхАБ' });
+    },
+  );
+
+  it('prefers a signed personal name over preferred username', async () => {
+    const { accessToken, jwk } = await signedAccessToken({
+      name: null,
+      given_name: 'Анна',
+      family_name: 'Падел',
+      preferred_username: 'person@example.test',
+    });
+    const provider = new VivaIdentityProvider({
+      ...options(),
+      mode: 'sandbox',
+      allowSubjectOAuthProvisioning: true,
+      fetchImplementation: tokenAndJwksFetch(accessToken, jwk),
+    });
+
+    const result = await provider.exchangeAuthorizationCode({
+      provider: 'yandex',
+      code: 'authorization-code',
+      codeVerifier: 'pkce-verifier',
+      providerTenantKey: 'iSkq6G',
+      redirectUri: 'https://app.example.test/callback',
+      correlationId: 'oauth-personal-name-correlation-123',
+      identityMode: 'STANDARD',
+    });
+
+    expect(result.identity).toMatchObject({ displayName: 'Анна Падел' });
+  });
+
+  it.each([
     ['a missing provider claim', null],
     ['a different upstream provider', 'vkid'],
   ])('rejects Yandex provisioning with %s', async (_label, identityProvider) => {

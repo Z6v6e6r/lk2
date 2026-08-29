@@ -90,13 +90,24 @@ function oauthDisplayName(payload: JWTPayload): string {
   const compoundName = [stringClaim(payload, ['given_name']), stringClaim(payload, ['family_name'])]
     .filter(Boolean)
     .join(' ');
-  const candidate =
-    stringClaim(payload, ['name', 'preferred_username']) || compoundName || 'Игрок ПадлхАБ';
-  const normalized = candidate
-    .replace(/[\p{Cc}\p{Cf}]+/gu, ' ')
-    .replace(/\s+/gu, ' ')
-    .trim();
-  return normalized.slice(0, 120) || 'Игрок ПадлхАБ';
+  for (const candidate of [
+    stringClaim(payload, ['name']),
+    compoundName,
+    stringClaim(payload, ['preferred_username']),
+  ]) {
+    const normalized = candidate
+      ?.replace(/[\p{Cc}\p{Cf}]+/gu, ' ')
+      .replace(/\s+/gu, ' ')
+      .trim()
+      .slice(0, 120);
+    if (
+      normalized &&
+      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(normalized) &&
+      !/^\+?[0-9][0-9 ()-]{7,}$/u.test(normalized)
+    )
+      return normalized;
+  }
+  return 'Игрок ПадлхАБ';
 }
 
 function toVivaPhoneNumber(phoneE164: string): string {
