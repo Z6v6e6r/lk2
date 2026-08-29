@@ -26,6 +26,7 @@ import {
   validateFutureReleaseDirectory,
   validateHistoricalEvidenceInput,
   validateIngressCompose,
+  validateOperatorNodeBootstrapContract,
   validateRuntimeContract,
   validateRuntimeEnvironmentRoot,
   validateRuntimeEnvironments,
@@ -72,6 +73,7 @@ interface PullRequestWorkflow {
 
 const targetSource = readFileSync('deploy/timeweb/target.json', 'utf8');
 const runtimeSource = readFileSync('deploy/timeweb/runtime-environment.contract.json', 'utf8');
+const nodeBootstrapSource = readFileSync('deploy/timeweb/operator-node-bootstrap.v1.json', 'utf8');
 const caddyfile = readFileSync('deploy/timeweb/Caddyfile', 'utf8');
 const publicBetaCaddyfile = readFileSync('deploy/timeweb/Caddyfile.yandex-public-beta', 'utf8');
 const publicBetaIngress = parseStrictJson<unknown>(
@@ -83,6 +85,10 @@ const runbook = readFileSync('docs/runbooks/timeweb-lk2-beta.md', 'utf8');
 const workflow = readFileSync('.github/workflows/pull-request.yaml', 'utf8');
 const verifierSource = readFileSync('scripts/verify-timeweb-deployment-contract.js', 'utf8');
 const target = validateTargetContract(parseStrictJson<unknown>(targetSource));
+const nodeBootstrap = validateOperatorNodeBootstrapContract(
+  parseStrictJson<unknown>(nodeBootstrapSource),
+  target,
+);
 const runtime = validateRuntimeContract(parseStrictJson<unknown>(runtimeSource));
 
 function mutatedApplication(mutator: (compose: MutableApplicationCompose) => void): string {
@@ -178,6 +184,42 @@ describe('Timeweb deployment contract', () => {
     const input: TimewebTargetContract = structuredClone(target);
     input.management.requiredInterface = 'eth0';
     expect(() => validateTargetContract(input)).toThrow('target_management_interface');
+  });
+
+  it('rejects an unapproved operator Node launcher or package source', () => {
+    const input: TimewebTargetContract = structuredClone(target);
+    input.operatorRuntime.node.path = '/usr/local/bin/node';
+    expect(() => validateTargetContract(input)).toThrow('target_operator_node');
+
+    input.operatorRuntime.node.path = '/usr/bin/node';
+    input.operatorRuntime.node.launcherPath = '/usr/local/bin/python3';
+    expect(() => validateTargetContract(input)).toThrow('target_operator_node');
+  });
+
+  it('rejects drift in the operator Node apt source, keyring or exact closure', () => {
+    const input = structuredClone(nodeBootstrap);
+    input.apt.sourceListSha256 = '0'.repeat(64);
+    expect(() => validateOperatorNodeBootstrapContract(input, target)).toThrow(
+      'node_bootstrap_apt_hashes',
+    );
+    input.apt.sourceListSha256 = nodeBootstrap.apt.sourceListSha256;
+    input.apt.packages[0]!.version = 'unexpected';
+    expect(() => validateOperatorNodeBootstrapContract(input, target)).toThrow(
+      'node_bootstrap_packages',
+    );
+  });
+
+  it('documents the bounded operator Node bootstrap contract', () => {
+    expect(runbook).toContain('## Operator Node bootstrap');
+    for (const value of [
+      target.operatorRuntime.node.path,
+      `major ${target.operatorRuntime.node.major}`,
+      target.operatorRuntime.node.controllerPath,
+      target.operatorRuntime.node.contractPath,
+      target.operatorRuntime.node.receiptPath,
+    ]) {
+      expect(runbook).toContain(value);
+    }
   });
 
   it('6. rejects a wrong network name', () => {
@@ -549,6 +591,7 @@ describe('Timeweb deployment contract', () => {
       ingress: resolve('deploy/timeweb/compose.ingress.yaml'),
       application: resolve('deploy/timeweb/compose.beta.yaml'),
       runtime: resolve('deploy/timeweb/runtime-environment.contract.json'),
+      nodeBootstrap: resolve('deploy/timeweb/operator-node-bootstrap.v1.json'),
       runbook: resolve('docs/runbooks/timeweb-lk2-beta.md'),
     };
     const historical = target.release.historicalEvidence[0]!.path;
@@ -621,6 +664,7 @@ describe('Timeweb deployment contract', () => {
       ingress: resolve('deploy/timeweb/compose.ingress.yaml'),
       application: resolve('deploy/timeweb/compose.beta.yaml'),
       runtime: resolve('deploy/timeweb/runtime-environment.contract.json'),
+      nodeBootstrap: resolve('deploy/timeweb/operator-node-bootstrap.v1.json'),
       runbook: resolve('docs/runbooks/timeweb-lk2-beta.md'),
     };
     try {
