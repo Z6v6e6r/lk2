@@ -2,6 +2,7 @@
 
 import '@testing-library/jest-dom/vitest';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ChatsPage } from './ChatsPage.js';
@@ -185,6 +186,53 @@ describe('ChatsPage', () => {
     expect(screen.queryByText('Мария Петрова')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Очистить' }));
     expect(screen.getByText('Мария Петрова')).toBeVisible();
+  });
+
+  it('keeps search and type filters reachable in a keyboard-only flow', async () => {
+    const user = userEvent.setup();
+    render(
+      <ChatsPage
+        {...defaultProps}
+        mode="list"
+        hasExplicitRecipient={false}
+        page={{
+          items: [
+            {
+              id: '11111111-1111-4111-8111-111111111111',
+              kind: 'DIRECT',
+              participant: { userId: conversationId, displayName: 'Мария Петрова' },
+              unreadCount: 0,
+              updatedAt: '2026-08-29T11:32:00+03:00',
+            },
+            {
+              id: conversationId,
+              kind: 'GAME',
+              contextId: '33333333-3333-4333-8333-333333333333',
+              title: 'Игра · Хаб Селигерская',
+              unreadCount: 0,
+              updatedAt: '2026-08-29T11:32:00+03:00',
+            },
+          ],
+        }}
+      />,
+    );
+
+    await user.tab();
+    expect(screen.getByRole('link', { name: 'События' })).toHaveFocus();
+    await user.tab();
+    const search = screen.getByRole('searchbox', { name: 'Поиск по чатам' });
+    expect(search).toHaveFocus();
+    await user.type(search, 'мария');
+    await user.tab();
+    expect(screen.getByRole('button', { name: 'Очистить' })).toHaveFocus();
+    await user.tab();
+    expect(screen.getByRole('button', { name: 'Все' })).toHaveFocus();
+    await user.tab();
+    const directFilter = screen.getByRole('button', { name: 'Личные' });
+    expect(directFilter).toHaveFocus();
+    await user.keyboard('{Enter}');
+    expect(screen.getByText('Мария Петрова')).toBeVisible();
+    expect(screen.queryByText('Игра · Хаб Селигерская')).not.toBeInTheDocument();
   });
 
   it('caps large unread counts, preserves hrefs, and marks the active conversation', () => {

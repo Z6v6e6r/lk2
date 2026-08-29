@@ -344,7 +344,7 @@
   min-height: 74px;
   padding: 10px 16px;
   align-items: center;
-  grid-template-columns: auto 44px minmax(0, 1fr) auto;
+  grid-template-columns: 44px minmax(0, 1fr) auto;
   gap: 10px;
   border-bottom: 1px solid var(--comms-line);
 }
@@ -699,6 +699,18 @@
     background: #fff;
   }
 
+  .threadPage {
+    padding-bottom: 0;
+  }
+
+  .threadPage .shell {
+    height: 100dvh;
+  }
+
+  .threadPage :global(.fh-bottom-nav) {
+    display: none;
+  }
+
   .page :global(.fh-bottom-nav) {
     right: 0;
     left: 0;
@@ -733,6 +745,7 @@
   .threadHeader {
     min-height: calc(68px + env(safe-area-inset-top));
     padding-top: max(10px, env(safe-area-inset-top));
+    grid-template-columns: 44px 44px minmax(0, 1fr) 66px;
   }
 
   .backLink {
@@ -740,15 +753,9 @@
   }
 
   .refreshButton {
-    width: 44px;
-    padding: 0;
-    overflow: hidden;
-    color: transparent;
-  }
-
-  .refreshButton::after {
+    width: 66px;
+    padding: 0 6px;
     color: var(--comms-accent);
-    content: 'Обн.';
     font-size: 10px;
   }
 
@@ -778,6 +785,14 @@
 }
 
 @media (min-width: 768px) {
+  .page {
+    padding-bottom: 20px;
+  }
+
+  .shell {
+    height: calc(100dvh - 40px);
+  }
+
   .page :global(.fh-bottom-nav) {
     display: none;
   }

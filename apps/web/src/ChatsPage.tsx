@@ -109,7 +109,7 @@ export function ChatsPage({
   }
 
   return (
-    <main className={styles.page}>
+    <main className={`${styles.page} ${mode === 'thread' ? styles.threadPage : ''}`}>
       {error ? (
         <section className={styles.errorBanner} role="alert">
           <span>

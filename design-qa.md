@@ -416,3 +416,49 @@ final result: passed
 - [x] Verify focused tests, lint, typecheck, formatting, diff whitespace, and browser console.
 
 final result: passed
+
+---
+
+# Communications UI reference QA (2026-08-29)
+
+**Comparison target**
+
+- User-supplied visual reference: `/var/folders/8c/gdhtwlnn3cn6k90ylgk3bn880000gn/T/codex-clipboard-2c13807f-ea5d-4327-96e3-3dbf523beec2.png` (1641 × 958 px).
+- Browser-rendered implementation: `http://127.0.0.1:4173/communications-preview.html?view=desktop`, built from the actual `ChatsPage` and `NotificationsPage` components with deterministic synthetic data and no API mutation.
+- Mobile implementation screenshots: `/private/tmp/lk2-comms-ui-evidence-20260829.3akvs7/chats-list-390x844.png`, `game-thread-390x844.png`, and `notifications-390x844.png`.
+- Desktop split-view screenshot: `/private/tmp/lk2-comms-ui-evidence-20260829.3akvs7/chats-desktop-1440x900.png`.
+- Same-input comparison: `/private/tmp/lk2-comms-ui-evidence-20260829.3akvs7/reference-vs-implementation.png`; each row places the normalized reference crop on the left and the implementation at the same 390 × 844 target on the right.
+
+**Findings**
+
+- No actionable P0/P1/P2 fidelity, behavior, accessibility, or responsiveness mismatch remains in the requested communications scope.
+- [P3] The live conversation and notification contracts expose names and categories, but no participant avatar URL. The UI therefore uses deterministic initials or the existing chat icon instead of inventing people or importing remote imagery. Replace these fallbacks only after an existing safe media contract is available.
+- The reference shows reaction, attachment, microphone, promotion, invitation, and tournament controls that are not present in the proven frontend contract. They remain intentionally absent rather than presenting fake actions or fabricated notification categories.
+- The game context card contains only the proven game title, PadlHub context identifier route, and conversation kind. Court, level, payment, and participant facts from the visual reference are not invented.
+
+**Required fidelity surfaces**
+
+- Fonts and typography: existing RF Dewi and Inter Display assets are reused; headings, compact metadata, timestamps, unread counters, group sender labels, and bubble copy preserve the reference hierarchy without cramped wrapping.
+- Spacing and layout: mobile list, full-screen thread, notification feed, and desktop split-view retain independent list/message scrolling, 44 px minimum controls, safe-area padding, restrained 12–22 px radii, and no decorative card stack.
+- Colors and tokens: the current PadlHub purple remains the sole primary accent; pale-purple selected/context surfaces, neutral dividers, muted metadata, and disabled states match the source intent without gradients, glows, or glass effects.
+- Icons and imagery: existing product navigation/chat icons are reused. No inline SVG illustration, emoji control, CSS hero art, or fake product image was added.
+- Copy and content: only real DIRECT/GAME conversation kinds and GAME/BOOKING/BOOKING_REMINDER/ADMIN_MESSAGE notification categories receive dedicated labels. Unknown notification categories remain neutral and visible only under `Все`.
+
+**Interaction, accessibility, and runtime evidence**
+
+- Search matched Cyrillic titles and previews; clear-search restored results; DIRECT/GAME filters updated the loaded list without network behavior.
+- Keyboard-only component coverage verifies focus order from the notifications shortcut through search, clear, and type filters. Composer coverage verifies Enter send, Shift+Enter newline, and IME-safe Enter handling.
+- Notification category filtering and `Прочитать все` updated visible unread semantics. Safe internal deep links were preserved and external/protocol-relative links were rejected by focused tests.
+- Responsive browser checks passed at 360 × 800, 390 × 844, 430 × 932, 768 × 1024, 1024 × 768, and 1440 × 900 with `body.scrollWidth = body.clientWidth`. A 200%-equivalent 1440 × 900 reflow check at 720 × 450 passed for both list and thread without horizontal overflow.
+- The first visual pass exposed an empty-looking mobile refresh control; the final control is visibly labelled `Обновить`. The desktop pass exposed an incorrect four-column header assignment; the final title and refresh control occupy stable independent columns. The mobile thread now ends with the composer and hides the unrelated bottom navigation, matching the reference journey.
+- Final static preview console check: zero warnings and zero errors.
+
+**Implementation checklist**
+
+- [x] Chats list, local search, DIRECT/GAME filters, unread indicators, and empty/error/loading surfaces.
+- [x] Direct and game thread presentation, safe game context, day separators, own/foreign bubbles, and keyboard composer behavior.
+- [x] Notification inbox, real category mapping, unread semantics, safe deep links, mark-all-read, and Web Push controls.
+- [x] Mobile full-screen states plus desktop split-view and independent scrolling.
+- [x] Same-input reference comparison, required responsive sizes, 200%-equivalent reflow, keyboard coverage, and console review.
+
+final result: passed

@@ -335,7 +335,7 @@ export function MainBottomNavigation({
   const gamesHref = gamesDestination === 'games' ? '/games' : '/bookings';
   const gamesLabel = gamesDestination === 'games' ? 'Игры' : 'Записи';
   const communicationsHref = communicationsDestination === 'chats' ? '/chats' : '/notifications';
-  const communicationsLabel = communicationsDestination === 'chats' ? 'Чаты' : 'Оповещения';
+  const communicationsLabel = communicationsDestination === 'chats' ? 'Чаты' : 'Уведомления';
 
   return (
     <nav className="fh-bottom-nav" aria-label="Основная навигация">
