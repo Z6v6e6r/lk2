@@ -1,6 +1,6 @@
 import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 import { afterEach, describe, expect, it } from 'vitest';
@@ -175,5 +175,29 @@ describe('Timeweb operator Node bootstrap controller', () => {
     const result = invoke(['validate-contract', '--contract', contractPath], copiedController);
     expect(result.status).toBe(0);
     expect(result.stderr).not.toContain('shadow module executed');
+  });
+
+  it('creates and verifies the lifecycle guard as 0755 under umask 077', () => {
+    const directory = temporaryDirectory();
+    const guard = join(directory, 'policy-rc.d');
+    const program = [
+      'import importlib.util, os, pathlib, sys',
+      'spec = importlib.util.spec_from_file_location("controller", sys.argv[1])',
+      'module = importlib.util.module_from_spec(spec)',
+      'spec.loader.exec_module(module)',
+      'os.umask(0o077)',
+      'contract = {"lifecycle": {"policyRcPath": sys.argv[2]}}',
+      'module.create_policy_guard(contract)',
+      'print(oct(pathlib.Path(sys.argv[2]).stat().st_mode & 0o777))',
+      'pathlib.Path(sys.argv[2]).unlink()',
+    ].join('; ');
+    const result = spawnSync(
+      'python3',
+      ['-I', '-S', '-B', '-c', program, resolve(controller), guard],
+      { encoding: 'utf8', env: { PATH: process.env.PATH ?? '/usr/bin:/bin' } },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout.trim()).toBe('0o755');
   });
 });

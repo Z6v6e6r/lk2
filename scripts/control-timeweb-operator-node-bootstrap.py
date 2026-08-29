@@ -960,6 +960,7 @@ def create_policy_guard(contract: dict[str, Any]) -> None:
         stop("policy_rc_preexisting")
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o755)
     with os.fdopen(descriptor, "wb", closefd=True) as handle:
+        os.fchmod(handle.fileno(), 0o755)
         handle.write(POLICY_BYTES)
         handle.flush()
         os.fsync(handle.fileno())
